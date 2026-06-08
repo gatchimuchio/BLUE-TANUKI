@@ -54,6 +54,7 @@
 - Added repository health phase 4 final commissioning with AST-based repo-health import graph checks, safe malformed-inbound fallback content, extracted release bundle install/build/doctor/repo-health verification, core-release preview absence handling, docs alignment, and abnormal regression tests.
 - Added BLUE-TANUKI development practice guidance adapted from GUI-Shell, covering evidence source classification, contract-to-runtime coverage, production path minimization, mutation verification, and release-claim separation.
 - Aligned `AGENTS.md` with the GUI-Shell common development discipline while preserving BLUE-TANUKI HDS-BRAIN authority, backup branch, validation, and release-gate rules.
+- Added GUI Shell responsibility-substrate strategy docs and updated the WebChat Control Center with owner-operation screens for dashboard, tasks, approvals, activity/audit, memory, skills, channels, doctor, settings, and developer evidence.
 
 ## 0.1.0 - 2026-05-06
 

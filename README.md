@@ -6,6 +6,8 @@ BLUE-TANUKI treats LLMs, tools, cron, and channels as *downstream devices*. The 
 
 Current state: **1.0.0-rc.1 technical release candidate**. GA and public complete-superiority claims remain blocked until the GA Bar passes and the owner gives explicit GO.
 
+Development strategy: GUI Shell is a reference LLM-readable responsibility substrate, not a dependency to modify. BLUE-TANUKI is the target resident control plane extended under that responsibility method: LLM implementation agents may build bounded changes, but HDS-BRAIN and the human owner remain the authority boundaries.
+
 ---
 
 ## TL;DR
@@ -56,6 +58,7 @@ See [QUICKSTART.md](QUICKSTART.md).
 ## Release Candidate Surface
 
 * **WebChat Control Center** at `/` and `/app`
+* **Owner-operation GUI screens** for Home, Tasks, Approvals, Activity / Audit, Memory, Skills, Channels, Doctor, Settings, and Developer / Evidence
 * **Runtime snapshot** at `/runtime/snapshot`
 * **HDS-BRAIN** standalone authority core
 * **Approval Gate** with L1/L2/L3 `ApprovalLevel` and non-bypassable final-review boundary
@@ -197,6 +200,15 @@ The authority core never consumes downstream session history to make decisions. 
 * [docs/v1.0-ga-promotion-review.md](docs/v1.0-ga-promotion-review.md) — GA promotion pre-GO review
 * [docs/v1.0-security-and-permanent-use-review.md](docs/v1.0-security-and-permanent-use-review.md) — security and permanent-use review
 * [docs/DEVELOPMENT_PRACTICE.md](docs/DEVELOPMENT_PRACTICE.md) — development practice and evidence discipline
+* [docs/LLM_EXTENSION_SURFACE.md](docs/LLM_EXTENSION_SURFACE.md) — LLM-safe extension surface
+* [docs/RESPONSIBILITY_SUBSTRATE_MAPPING.md](docs/RESPONSIBILITY_SUBSTRATE_MAPPING.md) — GUI Shell responsibility mapping
+* [docs/BLUE_TANUKI_AUTHORITY_MODEL.md](docs/BLUE_TANUKI_AUTHORITY_MODEL.md) — authority model
+* [docs/CONFORMANCE_TARGETS.md](docs/CONFORMANCE_TARGETS.md) — negative conformance targets
+* [docs/GUI_PRODUCT_SPEC.md](docs/GUI_PRODUCT_SPEC.md) — Control Center product role
+* [docs/GUI_SCREEN_MAP.md](docs/GUI_SCREEN_MAP.md) — GUI screen inventory
+* [docs/GUI_STATE_MODEL.md](docs/GUI_STATE_MODEL.md) — GUI state and redaction model
+* [docs/GUI_APPROVAL_UX.md](docs/GUI_APPROVAL_UX.md) — approval UX boundary
+* [docs/GUI_AUDIT_UX.md](docs/GUI_AUDIT_UX.md) — audit UX boundary
 
 ---
 

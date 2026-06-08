@@ -5,6 +5,8 @@
 - [README](../README.md) - product surface, boundaries, and local quickstart
 - [Quickstart](../QUICKSTART.md) - shortest local startup path
 - [Strategy Frame](STRATEGY_FRAME.md) - Layer A/B, OpenClaw two-dimensional position, and Stage 1 strategy
+- [Responsibility Substrate Mapping](RESPONSIBILITY_SUBSTRATE_MAPPING.md) - GUI Shell responsibility mapping for BLUE-TANUKI
+- [BLUE-TANUKI Authority Model](BLUE_TANUKI_AUTHORITY_MODEL.md) - HDS-BRAIN and owner authority boundary
 - [GA Bar Definition](GA_BAR_DEFINITION.md) - RC-to-GA promotion bar and public claim eligibility
 - [First-Run Checklist](FIRST_RUN_CHECKLIST.md) - first successful local operation
 - [Permanent-Use Checklist](PERMANENT_USE_CHECKLIST.md) - long-running owner operation
@@ -61,8 +63,18 @@
 - [Adapter Contract](ADAPTER_CONTRACT.md)
 - [LLM Development Guide](LLM_DEVELOPMENT_GUIDE.md)
 - [Development Practice](DEVELOPMENT_PRACTICE.md)
+- [LLM Extension Surface](LLM_EXTENSION_SURFACE.md)
+- [Conformance Targets](CONFORMANCE_TARGETS.md)
 - [Phase 11-S12 Plugin Review Gate Implementation](phase11-s12-plugin-review-gate-implementation.md)
 - [Phase 11-S13 v1.0 GA Promotion Execution](phase11-s13-v1-ga-promotion-execution.md)
+
+## GUI / Control Center
+
+- [GUI Product Spec](GUI_PRODUCT_SPEC.md)
+- [GUI Screen Map](GUI_SCREEN_MAP.md)
+- [GUI State Model](GUI_STATE_MODEL.md)
+- [GUI Approval UX](GUI_APPROVAL_UX.md)
+- [GUI Audit UX](GUI_AUDIT_UX.md)
 
 ## Operation
 

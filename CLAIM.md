@@ -16,6 +16,8 @@ The core claim is:
 No black box in BLUE-TANUKI's HDS authority path.
 ```
 
+Development-method note: BLUE-TANUKI may use GUI Shell as a reference LLM-readable responsibility substrate for implementation strategy and GUI design. This is not a claim that GUI Shell is a production dependency, an authority source, or a BLUE-TANUKI runtime component.
+
 Meaning:
 
 - actor is resolved as structured data
@@ -37,6 +39,7 @@ BLUE-TANUKI does not claim that the following are internally transparent:
 - browser engines
 - external APIs
 - user-provided tools
+- GUI Shell
 
 The transparency claim is limited to BLUE-TANUKI's own authority path.
 

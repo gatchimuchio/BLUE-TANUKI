@@ -68,7 +68,30 @@ The rule is: if the platform boundary is opened later, it breaks later. Therefor
 
 This document declares that strategy. Detailed Layer B specification is handled by the Phase 11-S5 platform extension surface documents.
 
-## 6. Strategic Sequence
+## 6. GUI Shell Responsibility Substrate Strategy
+
+GUI Shell is a reference implementation and LLM-readable responsibility substrate. BLUE-TANUKI does not modify GUI Shell, depend on GUI Shell at runtime, or outsource authority to GUI Shell.
+
+The BLUE-TANUKI development strategy is:
+
+```txt
+GUI Shell responsibility structure
+  -> LLM implementation agent reads it
+  -> maps authority / approval / audit / recovery / evidence boundaries
+  -> implements bounded BLUE-TANUKI changes under HDS-BRAIN authority
+```
+
+This turns BLUE-TANUKI into the target product that demonstrates LLM-assisted extension under an explicit responsibility substrate. LLM agents may implement and validate bounded changes, but they remain non-authority. HDS-BRAIN owns BLUE-TANUKI internal authority, and the human owner retains final approval, recovery, release, and responsibility authority.
+
+Primary mapping documents:
+
+- [LLM Extension Surface](LLM_EXTENSION_SURFACE.md)
+- [Responsibility Substrate Mapping](RESPONSIBILITY_SUBSTRATE_MAPPING.md)
+- [BLUE-TANUKI Authority Model](BLUE_TANUKI_AUTHORITY_MODEL.md)
+- [Conformance Targets](CONFORMANCE_TARGETS.md)
+- [GUI Product Spec](GUI_PRODUCT_SPEC.md)
+
+## 7. Strategic Sequence
 
 Stage 1 - BLUE-TANUKI: proof that the owner can use LLMs completely as tools under HDS authority.
 
@@ -78,7 +101,7 @@ Stage 3 - self-contained AI without LLM dependency.
 
 BLUE-TANUKI v1.0 GA is the Stage 1 artifact. OSS release is how Stage 1 is shown. Publishing GA before the bar is met damages the trust base needed for Stage 2 and Stage 3.
 
-## 7. Non-Goals of This Document
+## 8. Non-Goals of This Document
 
 This document does not define:
 
@@ -88,7 +111,7 @@ This document does not define:
 - external launch copy
 - implementation details for operator surfaces or plugin review
 
-## 8. Cross-References
+## 9. Cross-References
 
 - [AGENTS.md](../AGENTS.md)
 - [Roadmap](ROADMAP.md)
@@ -97,4 +120,7 @@ This document does not define:
 - [Non-Goals](NON_GOALS.md)
 - [Capability Envelope](CAPABILITY_ENVELOPE.md)
 - [Conformance](CONFORMANCE.md)
+- [LLM Extension Surface](LLM_EXTENSION_SURFACE.md)
+- [Responsibility Substrate Mapping](RESPONSIBILITY_SUBSTRATE_MAPPING.md)
+- [GUI Product Spec](GUI_PRODUCT_SPEC.md)
 - [v1.0 Release Candidate](v1.0-release-candidate.md)

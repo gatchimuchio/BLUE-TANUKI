@@ -11,6 +11,8 @@ Do not treat this repository as a normal app scaffold.
 BLUE-TANUKI is an HDS-BRAIN upstream control-plane project.
 HDS-BRAIN owns authority. LLMs, channels, plugins, operators, installers, external tools, memory, history, UI, schedulers, and downstream automation are downstream only.
 
+GUI Shell is a reference LLM-readable responsibility substrate for development method and GUI responsibility structure. Do not modify GUI Shell for BLUE-TANUKI work, do not make GUI Shell a production dependency, and do not outsource BLUE-TANUKI authority to GUI Shell. LLM agents may read GUI Shell's contracts and operation surfaces, then map those responsibilities into BLUE-TANUKI under HDS-BRAIN authority and human owner final responsibility.
+
 ## Rule Precedence
 
 Apply rules in this order:

@@ -8,18 +8,20 @@ export function renderControlCenterHtml(): string {
     <style>
       :root {
         color-scheme: dark;
-        --bg: #0c1118;
-        --panel: #141b24;
-        --panel-2: #19222d;
-        --panel-3: #202b38;
-        --line: #314052;
-        --text: #f3f6fa;
-        --muted: #9facbd;
-        --good: #5fe0a5;
-        --warn: #ffd166;
-        --bad: #ff6f7d;
-        --review: #d7a7ff;
-        --accent: #74b9ff;
+        --bg: #11110f;
+        --panel: #181715;
+        --panel-2: #211f1a;
+        --panel-3: #2a281f;
+        --line: #464135;
+        --text: #f7f3ea;
+        --muted: #b5ad9d;
+        --good: #54d79b;
+        --warn: #f2bf5d;
+        --bad: #ff766f;
+        --review: #caa6ff;
+        --accent: #66d1c1;
+        --accent-2: #f0a94a;
+        --ink: #0f1210;
       }
 
       * {
@@ -56,7 +58,48 @@ export function renderControlCenterHtml(): string {
         gap: 16px;
         padding: 14px 20px;
         border-bottom: 1px solid var(--line);
-        background: #111820;
+        background: #15130f;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .tanuki-mark {
+        width: 42px;
+        height: 42px;
+        flex: 0 0 auto;
+      }
+
+      .screen-tabs {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 8px;
+        min-width: 0;
+        padding: 10px 14px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        background: #15130f;
+        overflow: visible;
+      }
+
+      button.screen-tab {
+        min-width: 0;
+        min-height: 32px;
+        padding: 6px 10px;
+        border-radius: 8px;
+        color: var(--muted);
+      }
+
+      button.screen-tab.active,
+      button.screen-tab[aria-selected="true"] {
+        border-color: rgba(102, 209, 193, 0.65);
+        background: #19302c;
+        color: var(--accent);
       }
 
       h1,
@@ -96,7 +139,7 @@ export function renderControlCenterHtml(): string {
       .shell {
         display: grid;
         grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(320px, 430px);
-        min-height: calc(100vh - 58px);
+        min-height: calc(100vh - 110px);
       }
 
       nav,
@@ -134,6 +177,99 @@ export function renderControlCenterHtml(): string {
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--panel);
+      }
+
+      [data-screen-group][hidden] {
+        display: none;
+      }
+
+      .dashboard-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+        gap: 12px;
+        align-items: stretch;
+      }
+
+      .hero-copy {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        justify-content: center;
+        gap: 10px;
+      }
+
+      .hero-title {
+        font-size: 24px;
+        line-height: 1.18;
+      }
+
+      .tanuki-panel {
+        display: grid;
+        min-height: 170px;
+        place-items: center;
+        border: 1px solid #5a4d35;
+        border-radius: 8px;
+        background:
+          linear-gradient(135deg, rgba(84, 215, 155, 0.14), rgba(240, 169, 74, 0.12)),
+          #17150f;
+      }
+
+      .tanuki-panel svg {
+        width: min(180px, 72%);
+        height: auto;
+      }
+
+      .screen-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .screen-card {
+        display: grid;
+        gap: 8px;
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid #383428;
+        border-radius: 8px;
+        background: var(--panel-2);
+      }
+
+      .lane-board {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .lane {
+        display: grid;
+        gap: 8px;
+        min-height: 126px;
+        padding: 10px;
+        border: 1px solid #383428;
+        border-radius: 8px;
+        background: #141813;
+      }
+
+      .map-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .map-node {
+        min-width: 0;
+        padding: 9px;
+        border: 1px solid #3a4538;
+        border-radius: 8px;
+        background: #151d17;
+        text-align: center;
+        overflow-wrap: anywhere;
+      }
+
+      .readonly-note {
+        border-color: rgba(84, 215, 155, 0.45);
+        color: var(--good);
       }
 
       .stack {
@@ -352,6 +488,11 @@ export function renderControlCenterHtml(): string {
           grid-template-columns: minmax(210px, 270px) minmax(0, 1fr);
         }
 
+        .dashboard-hero,
+        .lane-board {
+          grid-template-columns: 1fr;
+        }
+
         aside {
           grid-column: 1 / -1;
           border-left: 0;
@@ -362,7 +503,7 @@ export function renderControlCenterHtml(): string {
       @media (max-width: 760px) {
         header,
         .shell,
-        nav,
+        .shell > nav,
         main,
         aside {
           display: block;
@@ -372,7 +513,7 @@ export function renderControlCenterHtml(): string {
           padding: 12px;
         }
 
-        nav,
+        .shell > nav,
         main,
         aside {
           padding: 12px;
@@ -380,12 +521,21 @@ export function renderControlCenterHtml(): string {
           border-right: 0;
         }
 
-        nav,
+        .screen-tabs {
+          display: flex;
+        }
+
+        .shell > nav,
         main {
           border-bottom: 1px solid var(--line);
         }
 
         .status-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .screen-grid,
+        .map-grid {
           grid-template-columns: 1fr;
         }
 
@@ -397,12 +547,39 @@ export function renderControlCenterHtml(): string {
   </head>
   <body>
     <header>
-      <div class="row">
-        <h1>BLUE-TANUKI Control Center</h1>
+      <div class="brand">
+        <svg class="tanuki-mark" viewBox="0 0 120 120" aria-hidden="true">
+          <circle cx="60" cy="62" r="42" fill="#d6a35b" />
+          <path d="M25 40 L42 13 L55 39 Z" fill="#7a5330" />
+          <path d="M95 40 L78 13 L65 39 Z" fill="#7a5330" />
+          <ellipse cx="42" cy="58" rx="17" ry="14" fill="#2c2117" />
+          <ellipse cx="78" cy="58" rx="17" ry="14" fill="#2c2117" />
+          <circle cx="45" cy="56" r="5" fill="#f7f3ea" />
+          <circle cx="75" cy="56" r="5" fill="#f7f3ea" />
+          <ellipse cx="60" cy="73" rx="12" ry="9" fill="#2c2117" />
+          <path d="M48 88 Q60 98 72 88" fill="none" stroke="#2c2117" stroke-width="5" stroke-linecap="round" />
+        </svg>
+        <div>
+          <h1>BLUE-TANUKI Control Center</h1>
+          <p class="muted">owner-facing resident AI operations console</p>
+        </div>
         <span id="header-status" class="badge warn">not loaded</span>
       </div>
-      <span class="badge">HDS resident console</span>
+      <span class="badge">HDS-BRAIN owns authority</span>
     </header>
+
+    <nav class="screen-tabs" aria-label="Owner operation screens">
+      <button class="screen-tab active" data-screen="home" aria-selected="true">Home</button>
+      <button class="screen-tab" data-screen="tasks" aria-selected="false">Tasks</button>
+      <button class="screen-tab" data-screen="approvals" aria-selected="false">Approvals</button>
+      <button class="screen-tab" data-screen="activity" aria-selected="false">Activity / Audit</button>
+      <button class="screen-tab" data-screen="memory" aria-selected="false">Memory</button>
+      <button class="screen-tab" data-screen="skills" aria-selected="false">Skills</button>
+      <button class="screen-tab" data-screen="channels" aria-selected="false">Channels</button>
+      <button class="screen-tab" data-screen="doctor" aria-selected="false">Doctor</button>
+      <button class="screen-tab" data-screen="settings" aria-selected="false">Settings</button>
+      <button class="screen-tab" data-screen="developer" aria-selected="false">Developer / Evidence</button>
+    </nav>
 
     <div class="shell">
       <nav aria-label="Control Center status">
@@ -454,7 +631,141 @@ export function renderControlCenterHtml(): string {
       </nav>
 
       <main>
-        <section class="log" aria-live="polite">
+        <section class="card dashboard-hero" data-screen-group="home">
+          <div class="hero-copy">
+            <span class="badge good">GUI Shell responsibility substrate mapped to BLUE-TANUKI</span>
+            <h2 class="hero-title">Tanuki Dashboard</h2>
+            <p class="muted">This console turns HDS-BRAIN decisions, approvals, audit evidence, recovery hints, channels, memory, and operator surfaces into owner-visible state. UI state is display and intent only; it never becomes authority.</p>
+            <div class="policy-row">
+              <span class="badge readonly-note">UI state is not authority</span>
+              <span class="badge readonly-note">LLM output is not authority</span>
+              <span class="badge readonly-note">Memory is not authority</span>
+              <span class="badge readonly-note">Channel metadata is not authority</span>
+            </div>
+          </div>
+          <div class="tanuki-panel" aria-label="BLUE-TANUKI mascot panel">
+            <svg viewBox="0 0 240 190" role="img" aria-label="BLUE-TANUKI operations mascot">
+              <rect x="16" y="116" width="212" height="42" rx="8" fill="#252116" />
+              <circle cx="120" cy="82" r="58" fill="#d9a95f" />
+              <path d="M60 48 L83 10 L103 55 Z" fill="#7b542e" />
+              <path d="M180 48 L157 10 L137 55 Z" fill="#7b542e" />
+              <ellipse cx="91" cy="76" rx="29" ry="21" fill="#2a2118" />
+              <ellipse cx="149" cy="76" rx="29" ry="21" fill="#2a2118" />
+              <circle cx="96" cy="72" r="8" fill="#f7f3ea" />
+              <circle cx="144" cy="72" r="8" fill="#f7f3ea" />
+              <ellipse cx="120" cy="99" rx="18" ry="13" fill="#2a2118" />
+              <path d="M101 121 Q120 136 139 121" fill="none" stroke="#2a2118" stroke-width="8" stroke-linecap="round" />
+              <path d="M52 154 H188" stroke="#66d1c1" stroke-width="7" stroke-linecap="round" />
+              <circle cx="64" cy="154" r="6" fill="#54d79b" />
+              <circle cx="120" cy="154" r="6" fill="#f2bf5d" />
+              <circle cx="176" cy="154" r="6" fill="#caa6ff" />
+            </svg>
+          </div>
+        </section>
+
+        <section class="card" data-screen-group="home developer">
+          <h2>Responsibility Map</h2>
+          <div class="map-grid">
+            <div class="map-node">Runtime</div>
+            <div class="map-node">Capability</div>
+            <div class="map-node">Approval</div>
+            <div class="map-node">Audit</div>
+            <div class="map-node">Recovery</div>
+          </div>
+          <p class="muted">Sensitive actions must remain mapped across capability, approval state, audit event, and recovery action before execution.</p>
+        </section>
+
+        <section class="card" data-screen-group="tasks">
+          <div class="row">
+            <h2>Tasks</h2>
+            <span class="badge review">state model</span>
+          </div>
+          <div class="lane-board">
+            <div class="lane"><h3>Pending / Waiting Approval</h3><p class="muted">Commands waiting for owner review, schedule approval, or final-review confirmation.</p><span class="badge review">approval-gated</span></div>
+            <div class="lane"><h3>Running / Blocked</h3><p class="muted">Runtime work that is executing, suspended, failed, or waiting on recovery preconditions.</p><span class="badge warn">observed only</span></div>
+            <div class="lane"><h3>Completed / Audited</h3><p class="muted">Finished work is shown with digest, command id, audit state, and replay metadata.</p><span class="badge good">evidence only</span></div>
+          </div>
+        </section>
+
+        <section class="card" data-screen-group="memory">
+          <div class="row">
+            <h2>Memory</h2>
+            <span class="badge good">reference only</span>
+          </div>
+          <div class="screen-grid">
+            <div class="screen-card"><h3>Long-term Memory</h3><p class="muted">Preferences, summaries, and F-reference hints may be displayed as context, not authority.</p></div>
+            <div class="screen-card"><h3>Complete History</h3><p class="muted">Replay entries expose digests and metadata only. Raw payloads and rendered output are not projected.</p></div>
+            <div class="screen-card"><h3>Deletion / Forgetting</h3><p class="muted">Future deletion operations are sensitive and must pass policy, approval, audit, and recovery mapping.</p></div>
+            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Memory hits cannot grant permission, infer consent, or resume suspended work.</p></div>
+          </div>
+        </section>
+
+        <section class="card" data-screen-group="skills">
+          <div class="row">
+            <h2>Skills</h2>
+            <span class="badge warn">review-gated</span>
+          </div>
+          <div class="screen-grid">
+            <div class="screen-card"><h3>Installed</h3><p class="muted">Bundled operator surfaces load only after manifest and Plugin Review Gate checks.</p></div>
+            <div class="screen-card"><h3>Under Review</h3><p class="muted">Third-party Layer B submissions require declared capabilities, conformance evidence, and no authority bypass.</p></div>
+            <div class="screen-card"><h3>Disabled / Quarantined</h3><p class="muted">Unsafe or incomplete surfaces remain preview, disabled, or rejected.</p></div>
+            <div class="screen-card"><h3>Forbidden Shortcut</h3><p class="muted">Skill metadata cannot become authority or silently widen permissions.</p></div>
+          </div>
+        </section>
+
+        <section class="card" data-screen-group="channels">
+          <div class="row">
+            <h2>Channels</h2>
+            <span class="badge good">input/output surfaces</span>
+          </div>
+          <div class="screen-grid">
+            <div class="screen-card"><h3>First-party</h3><p class="muted">WebChat and Telegram are selected owner-operation channels.</p></div>
+            <div class="screen-card"><h3>Preview</h3><p class="muted">Slack, Discord, Teams, and LINE require owner evidence before promotion.</p></div>
+            <div class="screen-card"><h3>Reserved Third-party</h3><p class="muted">WhatsApp remains outside first-party core.</p></div>
+            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Channel metadata is normalized and cannot escalate permission.</p></div>
+          </div>
+        </section>
+
+        <section class="card" data-screen-group="doctor">
+          <div class="row">
+            <h2>Doctor</h2>
+            <span class="badge warn">next-action loop</span>
+          </div>
+          <div class="screen-grid">
+            <div class="screen-card"><h3>Setup Checks</h3><p class="muted">Node, pnpm, tokens, ports, provider config, channel credentials, and root paths are checked by doctor.</p></div>
+            <div class="screen-card"><h3>Safe Failure</h3><p class="muted">Required credential errors are not safe to ignore. Missing optional preview credentials remain warnings.</p></div>
+            <div class="screen-card"><h3>Recovery</h3><p class="muted">Each failure should answer what failed, why, safety impact, next action, retryability, and changed state.</p></div>
+            <div class="screen-card"><h3>Evidence Scope</h3><p class="muted">Doctor output is diagnostic evidence, not release readiness by itself.</p></div>
+          </div>
+        </section>
+
+        <section class="card" data-screen-group="settings">
+          <div class="row">
+            <h2>Settings</h2>
+            <span class="badge review">mutation requires gate</span>
+          </div>
+          <div class="screen-grid">
+            <div class="screen-card"><h3>LLM Provider</h3><p class="muted">Provider verification is non-mutating unless explicit save is requested through the settings surface.</p></div>
+            <div class="screen-card"><h3>Approval Mode</h3><p class="muted">Full access may allow L1/L2, but never L3 final-review operations.</p></div>
+            <div class="screen-card"><h3>Memory Policy</h3><p class="muted">Policy changes are sensitive and must not be inferred from UI state.</p></div>
+            <div class="screen-card"><h3>Credential Handling</h3><p class="muted">Tokens are not displayed, copied into history, or saved by mock UI state.</p></div>
+          </div>
+        </section>
+
+        <section class="card" data-screen-group="developer">
+          <div class="row">
+            <h2>Developer / Evidence</h2>
+            <span class="badge good">validation surface</span>
+          </div>
+          <div class="screen-grid">
+            <div class="screen-card"><h3>Repo Health</h3><p class="muted">Import graph and release-path purity checks protect production runtime boundaries.</p></div>
+            <div class="screen-card"><h3>Conformance</h3><p class="muted">Negative tests prove metadata, memory, UI state, and LLM output cannot create authority.</p></div>
+            <div class="screen-card"><h3>Release Gates</h3><p class="muted">GA requires technical validation plus explicit owner GO; pre-GO public claim remains false.</p></div>
+            <div class="screen-card"><h3>Evidence Source</h3><p class="muted">CONFIG, INTERNAL_STATE, LIVE_RUNTIME, EXTERNAL_EVIDENCE, and FIXTURE must not be conflated.</p></div>
+          </div>
+        </section>
+
+        <section class="log" data-screen-group="home" aria-live="polite">
           <article class="msg system">
             <h2>System</h2>
             <p class="muted">Resident status, approval gates, schedule state, authority trace, and audit chain are surfaced without command content or credential values.</p>
@@ -465,7 +776,7 @@ export function renderControlCenterHtml(): string {
           </article>
         </section>
 
-        <section class="card">
+        <section class="card" data-screen-group="home">
           <div class="row">
             <h2>Notification Center</h2>
             <span id="notification-summary" class="badge warn">not loaded</span>
@@ -475,7 +786,7 @@ export function renderControlCenterHtml(): string {
           <div id="notification-list" class="notification-list"></div>
         </section>
 
-        <section class="card">
+        <section class="card" data-screen-group="approvals">
           <div class="row">
             <h2>Approval Queue</h2>
             <span id="approval-summary" class="badge warn">not loaded</span>
@@ -491,7 +802,7 @@ export function renderControlCenterHtml(): string {
           <div id="approval-list" class="queue-list"></div>
         </section>
 
-        <section class="card">
+        <section class="card" data-screen-group="tasks">
           <div class="row">
             <h2>Runtime Schedules</h2>
             <span id="schedule-summary" class="badge warn">not loaded</span>
@@ -499,7 +810,7 @@ export function renderControlCenterHtml(): string {
           <div id="runtime-schedule-list" class="schedule-list"></div>
         </section>
 
-        <section class="card">
+        <section class="card" data-screen-group="activity memory">
           <div class="row">
             <h2>Complete History / Replay</h2>
             <span id="history-summary" class="badge warn">not loaded</span>
@@ -519,7 +830,7 @@ export function renderControlCenterHtml(): string {
           <pre id="history-json">not loaded</pre>
         </section>
 
-        <section class="card">
+        <section class="card" data-screen-group="developer activity">
           <div class="row">
             <h2>Authority Trace</h2>
             <span id="authority-summary" class="badge warn">not loaded</span>
@@ -588,6 +899,7 @@ export function renderControlCenterHtml(): string {
         notificationsToken: sessionStorage.getItem("bt.notificationsToken") || "",
         historyToken: sessionStorage.getItem("bt.historyToken") || "",
         historyKind: sessionStorage.getItem("bt.historyKind") || "",
+        activeScreen: sessionStorage.getItem("bt.activeScreen") || "home",
         approvalTokens: Object.create(null)
       };
 
@@ -672,6 +984,21 @@ export function renderControlCenterHtml(): string {
 
       function authHeaders(token) {
         return token ? { Authorization: "Bearer " + token } : {};
+      }
+
+      function setActiveScreen(screen) {
+        const selected = screen || "home";
+        state.activeScreen = selected;
+        sessionStorage.setItem("bt.activeScreen", selected);
+        document.querySelectorAll("[data-screen-group]").forEach(function (node) {
+          const groups = String(node.getAttribute("data-screen-group") || "").split(/\\s+/);
+          node.hidden = !groups.includes(selected);
+        });
+        document.querySelectorAll("button.screen-tab").forEach(function (button) {
+          const active = button.getAttribute("data-screen") === selected;
+          button.classList.toggle("active", active);
+          button.setAttribute("aria-selected", active ? "true" : "false");
+        });
       }
 
       async function fetchJson(path, token) {
@@ -825,7 +1152,7 @@ export function renderControlCenterHtml(): string {
                 '<dt>command</dt><dd class="mono">' + escapeHtml(item.command_id || "unknown") + '</dd>' +
                 '<dt>request</dt><dd class="mono">' + escapeHtml(item.request_id || "unknown") + '</dd>' +
                 '<dt>risk</dt><dd>' + badge(item.risk || "unknown", riskTone) + '</dd>' +
-                '<dt>ApprovalLevel</dt><dd>' + badge(level, level === "L3" ? "review" : "good") + '</dd>' +
+              '<dt>ApprovalLevel</dt><dd>' + badge(level, level === "L3_final_review" ? "review" : "good") + '</dd>' +
                 '<dt>expires</dt><dd>' + escapeHtml(formatDate(item.approval_token_expires_at_ms)) + '</dd>' +
                 '<dt>reason</dt><dd>' + escapeHtml(item.reason || "not recorded") + '</dd>' +
                 '</dl>' +
@@ -1127,6 +1454,11 @@ export function renderControlCenterHtml(): string {
       document.addEventListener("click", async (event) => {
         const target = event.target;
         if (!(target instanceof HTMLButtonElement)) return;
+        const screen = target.dataset.screen;
+        if (screen) {
+          setActiveScreen(screen);
+          return;
+        }
         const verdict = target.dataset.verdict;
         if (!verdict) return;
         target.disabled = true;
@@ -1149,6 +1481,7 @@ export function renderControlCenterHtml(): string {
       byId("load-history").addEventListener("click", loadHistory);
 
       syncInputs();
+      setActiveScreen(state.activeScreen);
     </script>
   </body>
 </html>`;

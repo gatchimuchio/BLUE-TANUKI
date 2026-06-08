@@ -156,6 +156,8 @@
 - Preview quarantine rule
 - Main release gate rule
 
+Canonical negative target catalogue: [Conformance Targets](CONFORMANCE_TARGETS.md).
+
 ## Evidence Discipline
 
 conformance は completion claim の一部だが、単独では release readiness ではない。各 gate は、観測している evidence source を明確にする。
