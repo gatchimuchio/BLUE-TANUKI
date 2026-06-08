@@ -60,6 +60,7 @@
 - [Skill Loader Contract](SKILL_LOADER_CONTRACT.md)
 - [Adapter Contract](ADAPTER_CONTRACT.md)
 - [LLM Development Guide](LLM_DEVELOPMENT_GUIDE.md)
+- [Development Practice](DEVELOPMENT_PRACTICE.md)
 - [Phase 11-S12 Plugin Review Gate Implementation](phase11-s12-plugin-review-gate-implementation.md)
 - [Phase 11-S13 v1.0 GA Promotion Execution](phase11-s13-v1-ga-promotion-execution.md)
 

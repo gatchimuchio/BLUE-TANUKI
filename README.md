@@ -4,7 +4,7 @@ A local-resident AI control plane where **authority lives in HDS-BRAIN, not the 
 
 BLUE-TANUKI treats LLMs, tools, cron, and channels as *downstream devices*. The HDS-BRAIN core decides actor, process, memory, approval, and execution upstream — and it never calls an LLM to do it. Every authority decision is structured, inspectable, and written to a hash-chain audit.
 
-This is **v0.1**: an owner-operated local control plane with a WebChat Control Center, a deterministic memory trace, an approval gate with a final-review boundary, and Telegram / Slack / Discord channels.
+Current state: **1.0.0-rc.1 technical release candidate**. GA and public complete-superiority claims remain blocked until the GA Bar passes and the owner gives explicit GO.
 
 ---
 
@@ -53,24 +53,27 @@ See [QUICKSTART.md](QUICKSTART.md).
 
 ---
 
-## v0.1 Completed Surface
+## Release Candidate Surface
 
 * **WebChat Control Center** at `/` and `/app`
 * **Runtime snapshot** at `/runtime/snapshot`
-* **HDS** Process / Memory / Authority closure
-* **Deterministic `MemoryTrace`** with `used_for_authority=false`
-* **Approval Gate** with final-review boundary
-* **Hash-chain audit logs**
-* **Telegram** Bot API channel
-* **Slack / Discord** adapters with silent fallback when credentials are absent
+* **HDS-BRAIN** standalone authority core
+* **Approval Gate** with L1/L2/L3 `ApprovalLevel` and non-bypassable final-review boundary
+* **Hash-chain audit**, output audit, complete history, and Runtime Invariants evidence
+* **Writing / Daily / Developer Operator** first-party surfaces
+* **WebChat / Telegram** first-party channels
+* **Slack / Discord / Teams / LINE** first-party-preview adapters gated by owner evidence
 * **Daily Brief** scheduled-message smoke via internal cron
+* **GitHub / Google / browser automation** downstream tools behind capability, approval, preview, and audit boundaries
+* **Installer / resident app / update-rollback** documentation and validation gates
 
-## v0.1 Explicit Boundaries
+## Explicit Boundaries
 
-* **WhatsApp** is not completion-quality in v0.1; use later experimental integration.
-* **Gmail / Google Calendar / Drive** are not read by v0.1 Daily Brief.
-* **Voice / Mobile / rich Canvas** are deferred to v0.2+.
+* **WhatsApp** remains `reserved-third-party` and is not first-party core.
+* Preview adapters and tools are not promoted to first-party without owner-run evidence.
+* **Voice / Mobile / rich Canvas** are outside the current GA bar.
 * **Public third-party Skill registry** is intentionally excluded.
+* External GA/public superiority claims remain blocked until `pnpm validate:ga` and owner GO allow them.
 
 ---
 
@@ -96,11 +99,11 @@ export BLUE_TANUKI_DAILY_BRIEF_ENABLED=1
 export BLUE_TANUKI_DAILY_BRIEF_CHANNEL=telegram
 export BLUE_TANUKI_DAILY_BRIEF_TARGET="<telegram-chat-id>"
 export BLUE_TANUKI_DAILY_BRIEF_TIME="07:00"
-export BLUE_TANUKI_DAILY_BRIEF_CONTENT="Daily Brief: scheduled smoke from BLUE-TANUKI v0.1"
+export BLUE_TANUKI_DAILY_BRIEF_CONTENT="Daily Brief: scheduled smoke from BLUE-TANUKI"
 pnpm gateway:serve
 ```
 
-v0.1 Daily Brief is a scheduled `channel_send` smoke. A real Gmail / GCal / Drive-backed brief is v0.2+.
+Daily Brief is a scheduled `channel_send` smoke. Google read/write integrations remain bounded downstream tools with credential readiness, Approval Gate, and audit requirements.
 
 ---
 
@@ -119,6 +122,7 @@ Expected invariants:
   "process_policy_enforced": true,
   "external_metadata_can_escalate_authority": false,
   "memory_used_for_authority": false,
+  "complete_history_used_for_authority": false,
   "final_review_boundary_enforced_by_approval_gate": true
 }
 ```
@@ -180,6 +184,19 @@ The authority core never consumes downstream session history to make decisions. 
 * [AUDIT.md](AUDIT.md) — hash-chain audit and runtime snapshot
 * [CONFIG.md](CONFIG.md) — environment variables
 * [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — operational fixes
+* [docs/INDEX.md](docs/INDEX.md) — full documentation index
+* [docs/FIRST_RUN_CHECKLIST.md](docs/FIRST_RUN_CHECKLIST.md) — first successful local operation
+* [docs/PERMANENT_USE_CHECKLIST.md](docs/PERMANENT_USE_CHECKLIST.md) — permanent owner operation
+* [docs/CHANNEL_READINESS_MATRIX.md](docs/CHANNEL_READINESS_MATRIX.md) — channel status and evidence
+* [docs/CHANNEL_PROMOTION_GATE.md](docs/CHANNEL_PROMOTION_GATE.md) — preview-to-first-party promotion gate
+* [docs/CREDENTIAL_READINESS_MATRIX.md](docs/CREDENTIAL_READINESS_MATRIX.md) — credential requirements and safe skips
+* [docs/PLUGIN_REVIEW_GATE.md](docs/PLUGIN_REVIEW_GATE.md) — Layer B review gate
+* [docs/UPDATE_ROLLBACK_RUNBOOK.md](docs/UPDATE_ROLLBACK_RUNBOOK.md) — update, rollback, and recovery path
+* [docs/v1.0-release-candidate.md](docs/v1.0-release-candidate.md) — release-candidate boundary
+* [docs/v1.0-post-rc-closure-review.md](docs/v1.0-post-rc-closure-review.md) — post-RC closure status
+* [docs/v1.0-ga-promotion-review.md](docs/v1.0-ga-promotion-review.md) — GA promotion pre-GO review
+* [docs/v1.0-security-and-permanent-use-review.md](docs/v1.0-security-and-permanent-use-review.md) — security and permanent-use review
+* [docs/DEVELOPMENT_PRACTICE.md](docs/DEVELOPMENT_PRACTICE.md) — development practice and evidence discipline
 
 ---
 

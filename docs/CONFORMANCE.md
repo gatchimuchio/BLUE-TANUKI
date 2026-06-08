@@ -156,6 +156,47 @@
 - Preview quarantine rule
 - Main release gate rule
 
+## Evidence Discipline
+
+conformance は completion claim の一部だが、単独では release readiness ではない。各 gate は、観測している evidence source を明確にする。
+
+- `CONFIG`: manifest、compatibility matrix、package metadata、docs。
+- `INTERNAL_STATE`: generated snapshot、local store、runtime object。
+- `LIVE_RUNTIME`: 起動中の gateway / HDS-BRAIN / channel / resident process。
+- `EXTERNAL_EVIDENCE`: GitHub Actions、extracted release bundle、installed path、credentialed live smoke。
+- `FIXTURE`: mock、negative fixture、unit fixture。
+
+`CONFIG` / `INTERNAL_STATE` / `FIXTURE` の成功を `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` の成功として報告してはならない。release path の変更は extracted bundle verification と GitHub Actions green なしに release-ready と扱わない。
+
+## Contract-to-Runtime Coverage
+
+contract、policy、manifest、capability、audit record、Runtime Invariants evidence を追加または変更する conformance は、次を示す。
+
+- consuming production / runtime / validator path
+- positive path
+- negative path
+- fail-closed / SUSPEND / audit behavior
+- HDS-BRAIN standalone boundary preservation
+- downstream UI / adapter / plugin が authority を作らないこと
+
+contract が存在するだけでは conformance complete ではない。実際に governed path が consume し、失敗 path が検出される必要がある。
+
+## Mutation Verification
+
+safety-critical な conformance が tautology になる危険がある場合は、必要に応じて mutation verification を行う。
+
+対象例:
+
+- final-review operation single source
+- Approval Gate bypass prevention
+- full access L3 containment
+- channel / plugin metadata authority escalation prevention
+- Runtime Invariants evidence generation
+- complete history raw-payload stripping
+- release bundle secret exclusion
+
+mutation verification を実施した場合は、mutation target、expected failure、observed failure、revert confirmation、final validation result を記録する。破壊用 mutation code は commit しない。
+
 ## Adapter Conformance Tests
 
 adapter は以下を test で示す。

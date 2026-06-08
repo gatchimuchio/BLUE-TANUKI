@@ -52,6 +52,7 @@
 - Added Phase 12-S7 Detector Lifecycle and Unknown Pattern Escalation with lifecycle traces, fail-closed detector errors, invalid pattern suspension, and detector conflict coverage.
 - Added Phase 12-S8 HDS-BRAIN Fail-safe / Self-health Policy with executable self-health preconditions, command-emission blocking, non-resumable fail-safe suspension, and audit-visible failed preconditions.
 - Added repository health phase 4 final commissioning with AST-based repo-health import graph checks, safe malformed-inbound fallback content, extracted release bundle install/build/doctor/repo-health verification, core-release preview absence handling, docs alignment, and abnormal regression tests.
+- Added BLUE-TANUKI development practice guidance adapted from GUI-Shell, covering evidence source classification, contract-to-runtime coverage, production path minimization, mutation verification, and release-claim separation.
 
 ## 0.1.0 - 2026-05-06
 

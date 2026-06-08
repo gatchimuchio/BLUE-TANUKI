@@ -20,13 +20,26 @@ All errors must map to typed recoverable / non-recoverable errors.
 ## Recommended Workflow
 
 1. `AGENTS.md` を読む。
-2. `docs/ROADMAP.md` の Sacred Constraints を確認する。
-3. `docs/ADAPTER_CONTRACT.md` で adapter boundary を確認する。
-4. `docs/PLUGIN_REVIEW_GATE.md` / `docs/PLUGIN_HIG.md` / `docs/SKILL_LOADER_CONTRACT.md` で Layer B review boundary を確認する。
-5. manifest に capability を宣言する。
-6. adapter / plugin / skill を preview として実装する。
-7. `docs/CONFORMANCE.md` に沿って tests を追加する。
-8. main release gate を通るまで first-party main として扱わない。
+2. `docs/DEVELOPMENT_PRACTICE.md` で path classification、evidence source、contract-to-runtime 接続を確認する。
+3. `docs/ROADMAP.md` の Sacred Constraints を確認する。
+4. `docs/ADAPTER_CONTRACT.md` で adapter boundary を確認する。
+5. `docs/PLUGIN_REVIEW_GATE.md` / `docs/PLUGIN_HIG.md` / `docs/SKILL_LOADER_CONTRACT.md` で Layer B review boundary を確認する。
+6. manifest に capability を宣言する。
+7. adapter / plugin / skill を preview として実装する。
+8. `docs/CONFORMANCE.md` に沿って tests を追加する。
+9. main release gate を通るまで first-party main として扱わない。
+
+## Evidence and Completion Discipline
+
+LLM / Codex は、実装完了を主張する前に次を区別する。
+
+- `CONFIG`: env、manifest、matrix、docs の整合。
+- `INTERNAL_STATE`: snapshot、store、in-memory state。
+- `LIVE_RUNTIME`: 起動中 gateway、HDS-BRAIN、channel、resident process の実動作。
+- `EXTERNAL_EVIDENCE`: CI、extracted bundle、installed path、credentialed live smoke。
+- `FIXTURE`: unit fixture、mock、negative sample。
+
+`CONFIG`、`INTERNAL_STATE`、`FIXTURE` は production success や release readiness の代わりにならない。contract を追加した場合は、どの production / runtime / validator path が consume し、どの failure case が reject / audit / suspend されるかを報告する。
 
 ## Prohibited Shortcuts
 
