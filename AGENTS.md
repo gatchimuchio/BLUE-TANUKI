@@ -11,13 +11,197 @@ Do not treat this repository as a normal app scaffold.
 BLUE-TANUKI is an HDS-BRAIN upstream control-plane project.
 HDS-BRAIN owns authority. LLMs, channels, plugins, operators, installers, external tools, memory, history, UI, schedulers, and downstream automation are downstream only.
 
+## Rule Precedence
+
+Apply rules in this order:
+
+1. Explicit owner/user instruction for the current task, unless it weakens safety, HDS-BRAIN authority, Approval Gate, audit, recovery, release-gate, owner GO, public-claim, or operator-safety boundaries
+2. Common Development Discipline in this `AGENTS.md`
+3. BLUE-TANUKI repository extension rules in this `AGENTS.md`
+4. Active implementation instruction / roadmap / phase document
+5. Repository contracts, policies, manifests, tests, validation scripts, and existing implementation patterns
+
+When rules appear to conflict, apply the stricter interpretation that preserves HDS-BRAIN authority, release integrity, auditability, recovery, and operator safety.
+
 ## Non-Negotiable Priorities
 
 1. Safety
 2. Robustness
-3. UX / operator clarity
-4. Features
-5. Convenience
+3. UX / operator clarity / auditability
+4. Contract and runtime integrity
+5. Features
+6. Convenience
+
+Feature completion never outranks safety, authority boundaries, auditability, recovery, validation evidence, or contract/runtime integrity.
+
+Convenience never justifies hidden authority, false completion claims, unverified runtime guarantees, unexplained workarounds, or weakened failure handling.
+
+## Common Development Discipline
+
+This section is the BLUE-TANUKI version of the shared GUI-Shell development discipline. It applies to all work in this repository unless a stricter BLUE-TANUKI rule appears later in this file.
+
+### Bounded Implementation
+
+Do not treat a broad specification as permission for broad generation.
+
+For every task:
+
+- inspect existing files, contracts, tests, validation commands, and relevant documentation before editing;
+- implement the smallest maintainable change that satisfies the task;
+- preserve HDS-BRAIN, Approval Gate, audit, Runtime Invariants, capability envelope, and Layer A / Layer B boundaries;
+- do not perform opportunistic refactors;
+- do not add speculative features;
+- do not broaden permissions, authority, runtime reachability, dependencies, toolchains, or environment assumptions without explicit requirement;
+- remove debris, stale TODOs, abandoned partial paths, and temporary implementation residue introduced by the task before reporting completion.
+
+A large amount of generated structure is not evidence of completeness.
+
+### Completion Evidence
+
+A completion claim is not evidence.
+
+Before reporting a work block as complete, identify:
+
+- the behavior implemented;
+- the production, runtime, contract, authority, audit, or validation path that exercises it;
+- the exact validation commands actually run;
+- the exact results;
+- validation that was not run;
+- remaining stubs, mocks, placeholders, TODOs, unconnected contracts, environment limitations, or known limitations.
+
+Documentation, manifest presence, schema presence, mock success, fixture success, or unit-test success alone must not be reported as proof that a production path or product behavior is complete.
+
+For security-critical, authority-critical, audit-critical, recovery-critical, release-critical, or operator-safety-critical changes, state what evidence demonstrates that the real governed path is exercised.
+
+For any repository-state-modifying task, completion also requires repository-state closure under the Git Operation Policy unless the owner explicitly limits the task to local-only, audit-only, review-only, or no-commit/no-push work.
+
+### Evidence Source / No Ghost Invariants
+
+Do not report runtime health, authority integrity, Runtime Invariants, security invariants, release readiness, or GA readiness based only on:
+
+- configuration validation;
+- schema or manifest validation;
+- self-generated state objects;
+- mocked runtime state;
+- fixture-only results;
+- static object or dictionary consistency checks.
+
+When adding or modifying a health check, invariant check, conformance check, integrity report, doctor check, release gate, or claim review, classify its evidence source as one or more of:
+
+- `CONFIG`
+- `INTERNAL_STATE`
+- `LIVE_RUNTIME`
+- `EXTERNAL_EVIDENCE`
+- `FIXTURE`
+
+Each evidence class proves only the scope it actually observes. `CONFIG`, `INTERNAL_STATE`, or `FIXTURE` results must not be promoted into live-runtime, installed-path, external-integrity, or release-readiness guarantees without corresponding evidence.
+
+If required evidence is unavailable, report the limitation, classify the release impact, or return `SUSPEND` where the repository contract requires fail-closed behavior.
+
+### Trust Boundary and Input Verification
+
+Do not assume inbound data is safe merely because it is structured, parsed, schema-shaped, or supplied by another component.
+
+For any input that may affect authority, permission, execution, approval, audit identity, workspace scope, command scope, content visibility, recovery, release behavior, or operator-visible output, the responsible boundary must explicitly account for the applicable parts of:
+
+- raw input retention for HDS-BRAIN fail-closed audit when applicable;
+- canonicalization / normalization;
+- schema or structural validation;
+- origin or source validation;
+- integrity or tamper checks;
+- replay protection;
+- authority or execution-eligibility evaluation;
+- audit emission;
+- fail-closed or `SUSPEND` behavior.
+
+External data, UI state, adapter metadata, channel metadata, plugin metadata, previous state, memory, complete history, diagnostics, tool output, and LLM output must not create, escalate, replace, or bypass authority.
+
+### Active Production Path Minimization
+
+Keep the normal production or runtime execution path minimal and responsibility-bounded.
+
+Do not silently mix ordinary runtime behavior with:
+
+- diagnostic functionality;
+- setup / installer tooling;
+- repair or recovery tooling;
+- migrations;
+- release-only verification;
+- development-only fixtures;
+- bootstrap-only tooling;
+- administrative commands.
+
+When adding privileged or operational functionality, classify it as one of:
+
+- runtime path;
+- control path;
+- diagnostic path;
+- repair / recovery path;
+- build / release path;
+- development-only path.
+
+If non-runtime functionality must be reachable from an ordinary runtime path, document why, identify its authority and audit consequences, and validate that it does not expand hidden execution power.
+
+### Wrapper / Workaround Accountability
+
+Do not introduce wrapper scripts, shims, custom execution layers, alternate build paths, environment bypasses, or host-specific workaround logic merely to make a failing task appear complete.
+
+If such a mechanism is required and not prohibited by this file, document:
+
+- the original failure;
+- the root cause;
+- why the native or existing repository mechanism is insufficient;
+- the exact responsibility of the added mechanism;
+- the environments in which it applies;
+- validation performed;
+- whether it is temporary or permanent;
+- its removal condition or formalization condition.
+
+A deliberate, tested, bounded, documented normalization mechanism may be acceptable. An unexplained, unbounded, or symptom-hiding workaround is not acceptable.
+
+### Environment and Product-Proof Separation
+
+Keep development environment, CI environment, validation environment, release-proof environment, and target product environment conceptually separate.
+
+Do not report success in one environment as proof of success in another environment unless the repository explicitly defines that equivalence and evidence supports it.
+
+When validation is blocked or distorted by host environment limitations:
+
+- identify the environment limitation;
+- distinguish it from a product regression;
+- do not modify product architecture merely to hide the host failure;
+- report what remains unverified in the target environment.
+
+Local development convenience must not silently become permanent product architecture or release evidence.
+
+### Contract-to-Runtime Connection
+
+A schema, interface, protocol object, adapter contract, capability, manifest, policy, audit contract, invariant contract, fixture, or success profile is not complete merely because it exists.
+
+When adding or modifying a contract intended to affect real behavior, identify:
+
+- its consuming production, runtime, validator, or governed execution path;
+- the validation or conformance path that exercises it;
+- the negative or failure case that must be rejected, blocked, audited, or suspended;
+- any part that remains intentionally unconnected or deferred.
+
+Do not claim behavioral completion for contracts that are defined but not exercised by the intended governed path.
+
+### Audit Outcome and Reporting
+
+Every completed work report must distinguish:
+
+- observed implementation facts;
+- validation actually executed;
+- unverified claims;
+- environment-limited checks;
+- remaining risks;
+- intentionally deferred scope;
+- repository-specific release blockers.
+
+Where a safety-critical, authority-critical, execution-critical, audit-critical, or release-critical requirement cannot be verified, do not infer success. Report `SUSPEND`, blocker, or the repository-specific equivalent.
+
+For detailed examples and the GUI-Shell-derived mapping, see `docs/DEVELOPMENT_PRACTICE.md`.
 
 ## Forbidden Patterns
 
@@ -77,9 +261,15 @@ Every change report must include:
 1. Summary
 2. Changed files
 3. Risk classification
-4. Validation results
-5. Remaining risks
-6. Commit hash
+4. Path classification and evidence source class
+5. Contract-to-runtime / authority-boundary impact
+6. Validation results
+7. Release-gate classification
+8. Remaining risks
+9. Working branch
+10. Commit hash
+11. Push result and remote HEAD verification
+12. Backup generation refs and rollback point
 
 ## Purpose
 
@@ -297,15 +487,18 @@ Priority order is immutable:
 
 1. Safety
 2. Robustness
-3. UX / operator clarity
-4. Feature coverage / channel coverage / extensibility
-5. Convenience
+3. UX / operator clarity / auditability
+4. Contract and runtime integrity
+5. Feature coverage / channel coverage / extensibility
+6. Convenience
 
 If a requested change improves feature coverage but weakens safety or robustness, reject it or isolate it behind a disabled preview boundary.
 
 Feature coverage never outranks safety.
 
-Convenience never outranks UX / operator clarity, and UX / operator clarity is mandatory only after safety and robustness are preserved.
+Convenience never outranks UX / operator clarity / auditability, and UX / operator clarity / auditability is mandatory only after safety and robustness are preserved.
+
+Contract and runtime integrity are required before feature coverage is treated as complete.
 
 ---
 
