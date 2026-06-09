@@ -89,7 +89,7 @@ a stop-ship event and inspect the workspace before distributing an archive.
 | `WEBCHAT_RESUME_TOKEN`      | `serve`      | Separate Bearer token for `/resume`; must differ from `WEBCHAT_TOKEN` | none (hard error)  |
 | `WEBCHAT_PORT`              | `serve`      | HTTP/WS listen port                                   | `8787`             |
 | `WEBCHAT_HOST`              | `serve`      | HTTP/WS bind host                                     | `127.0.0.1`        |
-| `LLM_BACKEND`               | all modes    | Default LLM provider: `stub`, `anthropic`, `openai`, or `openai-compatible` | `stub` |
+| `LLM_BACKEND`               | all modes    | Default LLM provider: `stub`, `anthropic`, `openai`, `openai-compatible`, or `openrouter` | `stub` |
 | `LLM_DEFAULT_BACKEND`       | optional     | Fallback default provider name when `LLM_BACKEND` is unset | none |
 | `LLM_ENDPOINT`              | optional     | Generic OpenAI-compatible endpoint                    | none               |
 | `LLM_MODEL`                 | optional     | Generic default model name                            | none               |
@@ -106,6 +106,13 @@ a stop-ship event and inspect the workspace before distributing an archive.
 | `OPENAI_COMPAT_MODEL`       | `openai-compatible` | Model for the compatible endpoint              | none               |
 | `OPENAI_COMPAT_API_KEY`     | optional     | Bearer token for compatible endpoint                  | none               |
 | `OPENAI_COMPAT_HEADERS_JSON` | optional    | Extra compatible-provider headers as a JSON object    | none               |
+| `OPENROUTER_API_KEY`        | `openrouter` | API key when `LLM_BACKEND=openrouter`                 | none               |
+| `OPENROUTER_MODEL`          | `openrouter` | Model when `LLM_BACKEND=openrouter`                   | none               |
+| `OPENROUTER_SITE_URL`       | optional     | Optional OpenRouter `HTTP-Referer` metadata           | none               |
+| `OPENROUTER_APP_TITLE`      | optional     | Optional OpenRouter `X-Title` metadata                | none               |
+| `COMPOSIO_API_KEY`          | optional     | Optional Composio connector key                       | none               |
+| `COMPOSIO_ALLOWED_TOOLKITS` | optional     | Comma/space-separated Composio toolkit allowlist      | none               |
+| `COMPOSIO_DRY_RUN`          | optional     | Composio connector dry-run mode                       | `true`             |
 | `SLACK_BOT_TOKEN`           | optional     | Slack inbound/outbound (silent stub if unset)         | none               |
 | `SLACK_APP_TOKEN`           | optional     | Slack Socket Mode app token                           | none               |
 | `SLACK_LIVE_TARGET`         | live smoke   | Slack channel/DM id for `pnpm smoke:live`             | none               |
@@ -172,6 +179,13 @@ registered for offline development. `anthropic` registers when configured with
 `ANTHROPIC_API_KEY`; `openai-compatible` registers when an endpoint and model
 are configured. The `openai` alias uses the same compatible adapter with the
 standard OpenAI chat-completions endpoint unless overridden.
+`openrouter` registers when `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` are
+configured, or fails closed if selected without them.
+
+OpenRouter is an optional convenience model adapter. It does not replace native
+OpenAI, Anthropic, OpenAI-compatible, local, or `LLM_PROVIDERS_JSON` routes.
+Composio is an optional convenience external tool adapter. It does not replace
+native/local tools and currently remains dry-run only.
 
 For multiple arbitrary LLM APIs, set `LLM_PROVIDERS_JSON` to an array (or
 `{"providers":[...]}`) of named OpenAI-compatible providers:

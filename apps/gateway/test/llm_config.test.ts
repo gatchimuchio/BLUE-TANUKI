@@ -6,6 +6,8 @@ import {
   describeLLMCommandRoute,
   describeLLMConfig,
 } from "../src/llm_config.js";
+import { approvalContextFromCommand } from "@blue-tanuki/hds-brain";
+import type { ExecuteCommand } from "@blue-tanuki/protocol";
 
 describe("buildLLMBackendFromEnv", () => {
   it("defaults to an offline stub registry", async () => {
@@ -27,6 +29,34 @@ describe("buildLLMBackendFromEnv", () => {
     const registry = llm as LLMRegistry;
     expect(registry.list()).toEqual(["openai-compatible", "stub"]);
     expect(registry.resolve("openai").name).toBe("openai-compatible");
+  });
+
+  it("registers OpenRouter as an optional model provider without replacing stub", () => {
+    const llm = buildLLMBackendFromEnv({
+      LLM_BACKEND: "stub",
+      OPENROUTER_API_KEY: "openrouter-secret",
+      OPENROUTER_MODEL: "openrouter/model",
+      OPENROUTER_SITE_URL: "https://blue-tanuki.local",
+      OPENROUTER_APP_TITLE: "BLUE-TANUKI",
+    });
+    const registry = llm as LLMRegistry;
+
+    expect(registry.list()).toEqual(["openrouter", "stub"]);
+    expect(registry.resolve().name).toBe("stub");
+    expect(registry.resolve("openrouter").name).toBe("openrouter");
+    expect(describeLLMConfig({
+      OPENROUTER_API_KEY: "openrouter-secret",
+      OPENROUTER_MODEL: "openrouter/model",
+    }).openrouter_configured).toBe(true);
+  });
+
+  it("fails closed when OpenRouter is selected without an API key", () => {
+    expect(() =>
+      buildLLMBackendFromEnv({
+        LLM_BACKEND: "openrouter",
+        OPENROUTER_MODEL: "openrouter/model",
+      }),
+    ).toThrow(/OPENROUTER_API_KEY/);
   });
 
   it("fails closed when the default backend is requested but incomplete", () => {
@@ -103,5 +133,28 @@ describe("buildLLMBackendFromEnv", () => {
         BLUE_TANUKI_LLM_MAX_TOKENS: "0",
       }),
     ).toThrow(/MAX_TOKENS/);
+  });
+
+  it("keeps provider routing hints out of authority policy", () => {
+    const command: ExecuteCommand = {
+      id: "cmd-openrouter",
+      type: "llm_call",
+      payload: {
+        backend_hint: "openrouter",
+        model: "openrouter/model",
+        messages: [{ role: "user", content: "hello" }],
+      },
+      constraints: {},
+      upstream_decision: {
+        frame_goal: "chat",
+        model_abstraction: "llm",
+        commit_hash: "abc123",
+        commit_decision: "ASSERT",
+      },
+    };
+
+    const ctx = approvalContextFromCommand(command);
+    expect(ctx.operation).toBe("llm.call");
+    expect(ctx.risk).toBe("low");
   });
 });

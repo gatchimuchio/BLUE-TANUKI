@@ -57,6 +57,7 @@
 - Added GUI Shell responsibility-substrate strategy docs and updated the WebChat Control Center with owner-operation screens for dashboard, tasks, approvals, activity/audit, memory, skills, channels, doctor, settings, and developer evidence.
 - Added unsigned Windows installer package generation with bundled Windows Node runtime, Start Menu shortcuts, current-user uninstall registration, Windows package verification, installed-app smoke script, and Windows first-run/uninstall docs.
 - Added a functional Conversation / WebChat Control Center panel using `/ws-ticket`, WebSocket, and `/inbound`, plus live Doctor / Health runtime status fields for installed GUI use.
+- Added optional OpenRouter LLM backend support and optional Composio dry-run connector support while preserving native-first configuration, HDS-BRAIN authority, Approval Gate, audit, and Windows user-data settings boundaries.
 
 ## 0.1.0 - 2026-05-06
 

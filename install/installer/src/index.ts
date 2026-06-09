@@ -18,11 +18,12 @@ function parseProvider(raw: string): SetupProviderKind {
     raw === "stub" ||
     raw === "anthropic" ||
     raw === "openai" ||
-    raw === "openai-compatible"
+    raw === "openai-compatible" ||
+    raw === "openrouter"
   ) {
     return raw;
   }
-  throw new Error("--provider must be stub | anthropic | openai | openai-compatible");
+  throw new Error("--provider must be stub | anthropic | openai | openai-compatible | openrouter");
 }
 
 function parsePositiveInt(raw: string, flag: string): number {

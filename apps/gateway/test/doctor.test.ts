@@ -377,6 +377,11 @@ describe("runDoctor — happy paths", () => {
         MICROSOFT_GRAPH_ACCESS_TOKEN: "microsoft-graph-token",
         LINE_CHANNEL_ACCESS_TOKEN: "line-channel-token",
         ANTHROPIC_API_KEY: "sk-ant-abcdefghijkl",
+        OPENROUTER_API_KEY: "sk-or-doctor-token",
+        OPENROUTER_MODEL: "openrouter/model",
+        COMPOSIO_API_KEY: "composio-doctor-token",
+        COMPOSIO_ALLOWED_TOOLKITS: "github,gmail",
+        COMPOSIO_DRY_RUN: "true",
         GITHUB_TOKEN: "ghp-doctor-token",
         BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki",
       },
@@ -403,6 +408,9 @@ describe("runDoctor — happy paths", () => {
         "env:DISCORD_BOT_TOKEN",
         "env:MICROSOFT_GRAPH_ACCESS_TOKEN",
         "env:LINE_CHANNEL_ACCESS_TOKEN",
+        "env:OPENROUTER_API_KEY",
+        "env:COMPOSIO_API_KEY",
+        "composio_connector",
       ]),
     );
   });
@@ -636,6 +644,19 @@ describe("runDoctor — error paths", () => {
     });
     expect(r.exit_code).toBe(2);
     expect(r.checks.find((c) => c.id === "llm_backend")?.level).toBe("error");
+  });
+
+  it("exit_code=2 when LLM_BACKEND=openrouter but no key", async () => {
+    const env = { ...baseEnv(), LLM_BACKEND: "openrouter", OPENROUTER_MODEL: "openrouter/model" };
+    const r = await runDoctor({
+      env,
+      probe_port: false,
+      node_version: "22.14.0",
+    });
+    expect(r.exit_code).toBe(2);
+    expect(r.checks.find((c) => c.id === "llm_backend")?.detail).toContain(
+      "OPENROUTER_API_KEY",
+    );
   });
 
   it("exit_code=2 on unknown LLM_BACKEND value", async () => {

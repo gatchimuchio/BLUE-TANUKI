@@ -789,6 +789,8 @@ export function renderControlCenterHtml(): string {
           </div>
           <div class="screen-grid">
             <div class="screen-card"><h3>LLM Provider</h3><p class="muted">Provider verification is non-mutating unless explicit save is requested through the settings surface.</p></div>
+            <div class="screen-card"><h3>OpenRouter</h3><p class="muted">Optional model provider adapter; native/direct providers remain canonical.</p></div>
+            <div class="screen-card"><h3>Composio</h3><p class="muted">Optional dry-run external tool connector; metadata and connection state are not authority.</p></div>
             <div class="screen-card"><h3>Approval Mode</h3><p class="muted">Full access may allow L1/L2, but never L3 final-review operations.</p></div>
             <div class="screen-card"><h3>Memory Policy</h3><p class="muted">Policy changes are sensitive and must not be inferred from UI state.</p></div>
             <div class="screen-card"><h3>Credential Handling</h3><p class="muted">Tokens are not displayed, copied into history, or saved by mock UI state.</p></div>

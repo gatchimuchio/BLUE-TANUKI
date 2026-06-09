@@ -85,12 +85,13 @@ function parseProvider(value: string): SetupProviderKind {
     provider === "stub" ||
     provider === "anthropic" ||
     provider === "openai" ||
-    provider === "openai-compatible"
+    provider === "openai-compatible" ||
+    provider === "openrouter"
   ) {
     return provider;
   }
   throw new Error(
-    "--provider must be stub | anthropic | openai | openai-compatible",
+    "--provider must be stub | anthropic | openai | openai-compatible | openrouter",
   );
 }
 
@@ -258,7 +259,7 @@ async function promptForConfig(
   try {
     const providerAnswer = await ask(
       rl,
-      "LLM provider (stub/openai/anthropic/openai-compatible)",
+      "LLM provider (stub/openai/anthropic/openai-compatible/openrouter)",
       opts.provider ?? "stub",
     );
     config.llm.provider = parseProvider(providerAnswer);
@@ -285,6 +286,12 @@ async function promptForConfig(
       config.llm.api_key =
         (opts.api_key ?? (await ask(rl, "API key (blank if not required)", ""))) ||
         undefined;
+    } else if (config.llm.provider === "openrouter") {
+      config.llm.model = await ask(rl, "OpenRouter model", opts.model ?? "");
+      config.llm.endpoint =
+        (await ask(rl, "OpenRouter endpoint", opts.endpoint ?? "")) || undefined;
+      config.llm.api_key =
+        (opts.api_key ?? (await ask(rl, "OpenRouter API key", ""))) || undefined;
     }
 
     const host = await ask(rl, "WebChat host", opts.host ?? config.webchat.host);

@@ -65,6 +65,9 @@
 - [Development Practice](DEVELOPMENT_PRACTICE.md)
 - [LLM Extension Surface](LLM_EXTENSION_SURFACE.md)
 - [Conformance Targets](CONFORMANCE_TARGETS.md)
+- [OpenRouter Backend](OPENROUTER_BACKEND.md)
+- [Composio Connector](COMPOSIO_CONNECTOR.md)
+- [External Tool Authority Boundary](EXTERNAL_TOOL_AUTHORITY_BOUNDARY.md)
 - [Phase 11-S12 Plugin Review Gate Implementation](phase11-s12-plugin-review-gate-implementation.md)
 - [Phase 11-S13 v1.0 GA Promotion Execution](phase11-s13-v1-ga-promotion-execution.md)
 

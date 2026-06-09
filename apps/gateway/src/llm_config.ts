@@ -145,6 +145,9 @@ function wantsBackend(env: Env, name: string): boolean {
     .toLowerCase() === name;
 }
 
+const OPENROUTER_DEFAULT_ENDPOINT =
+  "https://openrouter.ai/api/v1/chat/completions";
+
 function parsePositiveIntEnv(
   env: Env,
   name: string,
@@ -226,6 +229,34 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
     );
   }
 
+  const openrouterModel = envValue(env, "OPENROUTER_MODEL", "LLM_MODEL");
+  const openrouterKey = envValue(env, "OPENROUTER_API_KEY");
+  const openrouterEndpoint = envValue(env, "OPENROUTER_ENDPOINT") ?? OPENROUTER_DEFAULT_ENDPOINT;
+  const openrouterSelected = wantsBackend(env, "openrouter");
+  const wantsOpenRouter = openrouterSelected || Boolean(openrouterKey && openrouterModel);
+  if (wantsOpenRouter) {
+    if (!openrouterModel) {
+      throw new Error("openrouter requires OPENROUTER_MODEL or LLM_MODEL");
+    }
+    if (!openrouterKey) {
+      throw new Error("openrouter requires OPENROUTER_API_KEY");
+    }
+    const openrouterHeaders: Record<string, string> = {};
+    const siteUrl = envValue(env, "OPENROUTER_SITE_URL");
+    const appTitle = envValue(env, "OPENROUTER_APP_TITLE");
+    if (siteUrl) openrouterHeaders["HTTP-Referer"] = siteUrl;
+    if (appTitle) openrouterHeaders["X-Title"] = appTitle;
+    registry.register(
+      new OpenAICompatibleBackend({
+        name: "openrouter",
+        endpoint: openrouterEndpoint,
+        defaultModel: openrouterModel,
+        apiKey: openrouterKey,
+        headers: openrouterHeaders,
+      }),
+    );
+  }
+
   for (const provider of parseProvidersJson(envValue(env, "LLM_PROVIDERS_JSON"), env)) {
     registry.register(
       new OpenAICompatibleBackend({
@@ -291,6 +322,13 @@ export function listConfiguredLLMProviders(env: Env = process.env): string[] {
   ) {
     names.add("openai-compatible");
   }
+  if (
+    (envValue(env, "OPENROUTER_API_KEY") &&
+      envValue(env, "OPENROUTER_MODEL", "LLM_MODEL")) ||
+    wantsBackend(env, "openrouter")
+  ) {
+    names.add("openrouter");
+  }
   for (const provider of parseProvidersJson(envValue(env, "LLM_PROVIDERS_JSON"), env)) {
     names.add(provider.name);
     for (const alias of provider.aliases) {
@@ -304,6 +342,7 @@ export function describeLLMConfig(env: Env = process.env): {
   default_backend: string;
   openai_compatible_configured: boolean;
   anthropic_configured: boolean;
+  openrouter_configured: boolean;
   configured_providers: string[];
 } {
   return {
@@ -314,6 +353,10 @@ export function describeLLMConfig(env: Env = process.env): {
         envValue(env, "OPENAI_COMPAT_MODEL", "OPENAI_MODEL", "LLM_MODEL"),
     ),
     anthropic_configured: Boolean(envValue(env, "ANTHROPIC_API_KEY")),
+    openrouter_configured: Boolean(
+      envValue(env, "OPENROUTER_API_KEY") &&
+        envValue(env, "OPENROUTER_MODEL", "LLM_MODEL"),
+    ),
     configured_providers: listConfiguredLLMProviders(env),
   };
 }

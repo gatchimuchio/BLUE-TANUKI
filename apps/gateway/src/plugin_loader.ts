@@ -69,6 +69,8 @@ const BUILTIN_TOOL_PERMISSIONS = [
   "tool:gmail.write",
   "tool:google.calendar.write",
   "tool:google.drive.write",
+  "tool:composio.search",
+  "tool:composio.execute",
   "tool:browser.read",
   "tool:browser.snapshot",
   "tool:browser.automation",
@@ -78,7 +80,9 @@ const BUILTIN_TOOL_PERMISSIONS = [
   "network:http",
   "network:github.com",
   "network:googleapis.com",
+  "network:composio.dev",
   "secrets:GITHUB_TOKEN",
+  "secrets:COMPOSIO_API_KEY",
   "secrets:GOOGLE_ACCESS_TOKEN",
   "secrets:GMAIL_ACCESS_TOKEN",
   "secrets:GOOGLE_CALENDAR_ACCESS_TOKEN",
@@ -435,6 +439,8 @@ export class PluginRuntime {
         "OPENAI_API_KEY",
         "OPENAI_COMPAT_API_KEY",
         "LLM_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_MODEL",
         "OPENAI_COMPAT_ENDPOINT",
         "OPENAI_ENDPOINT",
         "LLM_ENDPOINT",
@@ -456,6 +462,10 @@ export class PluginRuntime {
       "LLM_API_KEY",
       "OPENAI_COMPAT_HEADERS_JSON",
       "LLM_HEADERS_JSON",
+      "OPENROUTER_API_KEY",
+      "OPENROUTER_MODEL",
+      "OPENROUTER_SITE_URL",
+      "OPENROUTER_APP_TITLE",
     ].filter((name) => envValue(env, name));
 
     for (const name of providerSecretEnvNames(env)) {

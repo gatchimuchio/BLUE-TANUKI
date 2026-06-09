@@ -38,6 +38,21 @@ ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
 ```
 
+`openrouter` is an optional convenience model adapter, not authority and not a
+required dependency:
+
+```bash
+LLM_BACKEND=openrouter
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=openrouter/model-name
+OPENROUTER_SITE_URL=https://example.com
+OPENROUTER_APP_TITLE=BLUE-TANUKI
+```
+
+Native/direct providers remain canonical. Missing OpenRouter must not break
+`stub`, `openai`, `anthropic`, `openai-compatible`, local endpoints, or
+`LLM_PROVIDERS_JSON`.
+
 ## Telegram
 
 ```bash
@@ -226,6 +241,29 @@ tool:github.write operation=issue.update owner=gatchimuchio repo=blue-tanuki num
 tool:github.write operation=pr.create owner=gatchimuchio repo=blue-tanuki title="Change" head=feature base=main draft=true
 tool:github.write operation=pr.comment.create owner=gatchimuchio repo=blue-tanuki number=1 body="review note"
 ```
+
+## Composio connector
+
+Composio is an optional convenience external tool/API adapter. It does not
+replace native/local tools and is not authority.
+
+```bash
+COMPOSIO_API_KEY=...
+COMPOSIO_ALLOWED_TOOLKITS=github,gmail,calendar,drive,slack
+COMPOSIO_DRY_RUN=true
+```
+
+`COMPOSIO_DRY_RUN` defaults to `true`. Live execution is not implemented in the
+current phase; `composio.execute` returns dry-run evidence or fails closed.
+
+```text
+tool:composio.search toolkit=github query=issues
+tool:composio.execute toolkit=github tool=issues.create payload="{\"title\":\"hello\"}"
+```
+
+Composio metadata, connected-account status, tool schemas, and tool results do
+not grant authority. External write/send/delete/create/update actions must pass
+through capability envelope, Approval Gate, and audit.
 
 ## Google tools and Daily Brief source
 

@@ -49,6 +49,11 @@ describe("settings surface", () => {
         OPENAI_COMPAT_ENDPOINT: "http://localhost:11434/v1",
         OPENAI_COMPAT_MODEL: "local-model",
         OPENAI_COMPAT_API_KEY: "local-super-secret-xyz",
+        OPENROUTER_API_KEY: "openrouter-super-secret-xyz",
+        OPENROUTER_MODEL: "openrouter/model",
+        COMPOSIO_API_KEY: "composio-super-secret-xyz",
+        COMPOSIO_ALLOWED_TOOLKITS: "github,gmail",
+        COMPOSIO_DRY_RUN: "true",
         WEBCHAT_TOKEN: "webchat-token-123456",
         WEBCHAT_RESUME_TOKEN: "resume-token-123456",
         BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
@@ -60,7 +65,14 @@ describe("settings surface", () => {
     );
     expect(snapshot.llm.provider).toBe("openai-compatible");
     expect(snapshot.llm.api_key_set).toBe(true);
+    expect(snapshot.integrations.openrouter.configured).toBe(true);
+    expect(snapshot.integrations.openrouter.used_for_authority).toBe(false);
+    expect(snapshot.integrations.composio.configured).toBe(true);
+    expect(snapshot.integrations.composio.dry_run).toBe(true);
+    expect(snapshot.integrations.composio.used_for_authority).toBe(false);
     expect(JSON.stringify(snapshot)).not.toContain("local-super-secret-xyz");
+    expect(JSON.stringify(snapshot)).not.toContain("openrouter-super-secret-xyz");
+    expect(JSON.stringify(snapshot)).not.toContain("composio-super-secret-xyz");
     expect(snapshot.plugins[0]?.permissions).toContain(
       "secrets:BLUE_TANUKI_SETTINGS_TOKEN",
     );
@@ -76,11 +88,17 @@ describe("settings surface", () => {
       const result = await updateSettingsEnvFile(
         {
           llm: {
-            provider: "openai-compatible",
-            endpoint: "http://localhost:11434/v1",
-            model: "llama-local",
-            api_key: "local-secret",
+            provider: "openrouter",
+            model: "openrouter/model",
+            api_key: "openrouter-secret",
+            site_url: "https://blue-tanuki.local",
+            app_title: "BLUE-TANUKI",
             max_tokens: "512",
+          },
+          composio: {
+            api_key: "composio-secret",
+            allowed_toolkits: "github,gmail",
+            dry_run: "true",
           },
           webchat: { host: "127.0.0.1", port: "8877" },
           paths: { file_root: path.join(dir, "files") },
@@ -91,9 +109,14 @@ describe("settings surface", () => {
       expect(result.restart_required).toBe(true);
       expect(result.backup_path).toBeTruthy();
       const raw = await fs.readFile(envFile, "utf8");
-      expect(raw).toContain("LLM_BACKEND=openai-compatible");
-      expect(raw).toContain("OPENAI_COMPAT_MODEL=llama-local");
-      expect(raw).toContain("OPENAI_COMPAT_API_KEY=local-secret");
+      expect(raw).toContain("LLM_BACKEND=openrouter");
+      expect(raw).toContain("OPENROUTER_MODEL=openrouter/model");
+      expect(raw).toContain("OPENROUTER_API_KEY=openrouter-secret");
+      expect(raw).toContain("OPENROUTER_SITE_URL=https://blue-tanuki.local");
+      expect(raw).toContain("OPENROUTER_APP_TITLE=BLUE-TANUKI");
+      expect(raw).toContain("COMPOSIO_API_KEY=composio-secret");
+      expect(raw).toContain("COMPOSIO_ALLOWED_TOOLKITS=github,gmail");
+      expect(raw).toContain("COMPOSIO_DRY_RUN=true");
       expect(raw).toContain("WEBCHAT_PORT=8877");
       const backupRaw = await fs.readFile(result.backup_path!, "utf8");
       expect(backupRaw).toContain("LLM_BACKEND=stub");

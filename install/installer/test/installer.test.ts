@@ -51,6 +51,11 @@ describe("guided installer", () => {
       "--max-tokens",
       "256",
     ]);
+    expect(llmSetupArgs({
+      provider: "openrouter",
+      model: "openrouter/auto",
+      api_key: "openrouter-secret",
+    })).toContain("openrouter");
   });
 
   it("preflight reports missing repository roots with owner next action", async () => {

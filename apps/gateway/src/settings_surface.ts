@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { composioStatus } from "@blue-tanuki/core";
 import type { WebChatSettingsSurface } from "@blue-tanuki/channel-webchat";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
 import {
@@ -38,8 +39,24 @@ export interface SettingsSnapshot {
     temperature: number | null;
     max_tokens: number | null;
     timeout_ms: number | null;
+    site_url: string | null;
+    app_title: string | null;
     configured_providers: string[];
     command_route: ReturnType<typeof describeLLMCommandRoute>;
+  };
+  integrations: {
+    native_first: true;
+    openrouter: {
+      configured: boolean;
+      api_key_set: boolean;
+      model: string | null;
+      site_url: string | null;
+      app_title: string | null;
+      used_for_authority: false;
+    };
+    composio: ReturnType<typeof composioStatus> & {
+      last_tool_call: null;
+    };
   };
   webchat: {
     host: string;
@@ -116,6 +133,9 @@ function apiKeySet(env: Env, provider: SetupProviderKind): boolean {
       ),
     );
   }
+  if (provider === "openrouter") {
+    return Boolean(envValue(env, "OPENROUTER_API_KEY"));
+  }
   return false;
 }
 
@@ -136,8 +156,28 @@ export function buildSettingsSnapshot(
       temperature: config.llm.temperature ?? null,
       max_tokens: config.llm.max_tokens ?? null,
       timeout_ms: config.llm.timeout_ms ?? null,
+      site_url: config.llm.site_url ?? null,
+      app_title: config.llm.app_title ?? null,
       configured_providers: describeLLMConfig(env).configured_providers,
       command_route: describeLLMCommandRoute(env),
+    },
+    integrations: {
+      native_first: true,
+      openrouter: {
+        configured: Boolean(
+          envValue(env, "OPENROUTER_API_KEY") &&
+            envValue(env, "OPENROUTER_MODEL", "LLM_MODEL"),
+        ),
+        api_key_set: Boolean(envValue(env, "OPENROUTER_API_KEY")),
+        model: envValue(env, "OPENROUTER_MODEL", "LLM_MODEL") ?? null,
+        site_url: envValue(env, "OPENROUTER_SITE_URL") ?? null,
+        app_title: envValue(env, "OPENROUTER_APP_TITLE") ?? null,
+        used_for_authority: false,
+      },
+      composio: {
+        ...composioStatus(env),
+        last_tool_call: null,
+      },
     },
     webchat: {
       host: config.webchat.host,
@@ -432,6 +472,7 @@ export function renderSettingsHtml(): string {
     <div class="layout">
       <nav aria-label="Settings sections">
         <button type="button" data-tab="llm" aria-selected="true">LLM</button>
+        <button type="button" data-tab="connections" aria-selected="false">Connections</button>
         <button type="button" data-tab="paths" aria-selected="false">Paths</button>
         <button type="button" data-tab="plugins" aria-selected="false">Plugins</button>
       </nav>
@@ -445,6 +486,7 @@ export function renderSettingsHtml(): string {
                 <option value="openai">openai</option>
                 <option value="anthropic">anthropic</option>
                 <option value="openai-compatible">openai-compatible</option>
+                <option value="openrouter">openrouter</option>
               </select>
             </label>
             <label>Model
@@ -464,6 +506,38 @@ export function renderSettingsHtml(): string {
             </label>
             <label>Timeout ms
               <input id="llm-timeout-ms" type="number" min="1" step="1">
+            </label>
+            <label>OpenRouter site URL
+              <input id="llm-site-url" autocomplete="off">
+            </label>
+            <label>OpenRouter app title
+              <input id="llm-app-title" autocomplete="off">
+            </label>
+          </div>
+        </section>
+        <section id="tab-connections">
+          <h2>Connections</h2>
+          <div class="grid">
+            <label>Composio API key
+              <input id="composio-api-key" type="password" autocomplete="new-password" placeholder="unchanged">
+            </label>
+            <label>Composio allowed toolkits
+              <input id="composio-allowed-toolkits" autocomplete="off" placeholder="github,gmail,calendar">
+            </label>
+            <label>Composio dry-run
+              <select id="composio-dry-run">
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </label>
+            <label>Composio status
+              <input id="composio-status" readonly>
+            </label>
+            <label>OpenRouter configured
+              <input id="openrouter-status" readonly>
+            </label>
+            <label>Native-first policy
+              <input id="native-first-status" readonly>
             </label>
           </div>
         </section>
@@ -514,6 +588,14 @@ export function renderSettingsHtml(): string {
       temperature: document.querySelector("#llm-temperature"),
       maxTokens: document.querySelector("#llm-max-tokens"),
       timeoutMs: document.querySelector("#llm-timeout-ms"),
+      siteUrl: document.querySelector("#llm-site-url"),
+      appTitle: document.querySelector("#llm-app-title"),
+      composioApiKey: document.querySelector("#composio-api-key"),
+      composioAllowedToolkits: document.querySelector("#composio-allowed-toolkits"),
+      composioDryRun: document.querySelector("#composio-dry-run"),
+      composioStatus: document.querySelector("#composio-status"),
+      openrouterStatus: document.querySelector("#openrouter-status"),
+      nativeFirstStatus: document.querySelector("#native-first-status"),
       host: document.querySelector("#webchat-host"),
       port: document.querySelector("#webchat-port"),
       fileRoot: document.querySelector("#path-file-root"),
@@ -564,6 +646,19 @@ export function renderSettingsHtml(): string {
       fields.temperature.value = snapshot.llm.temperature ?? "";
       fields.maxTokens.value = snapshot.llm.max_tokens ?? "";
       fields.timeoutMs.value = snapshot.llm.timeout_ms ?? "";
+      fields.siteUrl.value = snapshot.llm.site_url || "";
+      fields.appTitle.value = snapshot.llm.app_title || "";
+      fields.composioApiKey.value = "";
+      fields.composioApiKey.placeholder = snapshot.integrations.composio.configured ? "configured" : "not set";
+      fields.composioAllowedToolkits.value = snapshot.integrations.composio.allowed_toolkits.join(",");
+      fields.composioDryRun.value = String(snapshot.integrations.composio.dry_run);
+      fields.composioStatus.value =
+        (snapshot.integrations.composio.configured ? "configured" : "missing") +
+        "; dry_run=" + snapshot.integrations.composio.dry_run;
+      fields.openrouterStatus.value =
+        (snapshot.integrations.openrouter.configured ? "configured" : "missing") +
+        "; key=" + (snapshot.integrations.openrouter.api_key_set ? "set" : "missing");
+      fields.nativeFirstStatus.value = snapshot.integrations.native_first ? "native/direct paths remain canonical" : "invalid";
       fields.host.value = snapshot.webchat.host;
       fields.port.value = snapshot.webchat.port;
       fields.fileRoot.value = snapshot.paths.file_root;
@@ -611,8 +706,16 @@ export function renderSettingsHtml(): string {
         timeout_ms: fields.timeoutMs.value
       };
       if (fields.apiKey.value.trim()) llm.api_key = fields.apiKey.value.trim();
+      if (fields.siteUrl.value.trim()) llm.site_url = fields.siteUrl.value.trim();
+      if (fields.appTitle.value.trim()) llm.app_title = fields.appTitle.value.trim();
+      const composio = {
+        allowed_toolkits: fields.composioAllowedToolkits.value,
+        dry_run: fields.composioDryRun.value
+      };
+      if (fields.composioApiKey.value.trim()) composio.api_key = fields.composioApiKey.value.trim();
       return {
         llm,
+        composio,
         webchat: { host: fields.host.value, port: fields.port.value },
         paths: {
           file_root: fields.fileRoot.value,

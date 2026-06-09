@@ -303,6 +303,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Channels");
       expect(html).toContain("Doctor");
       expect(html).toContain("Settings");
+      expect(html).toContain("OpenRouter");
+      expect(html).toContain("Composio");
       expect(html).toContain("Developer / Evidence");
       expect(html).toContain("GUI Shell responsibility substrate mapped to BLUE-TANUKI");
       expect(html).toContain("UI state is not authority");

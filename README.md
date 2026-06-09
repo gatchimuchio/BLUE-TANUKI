@@ -86,6 +86,8 @@ See [QUICKSTART.md](QUICKSTART.md).
 * **Slack / Discord / Teams / LINE** first-party-preview adapters gated by owner evidence
 * **Daily Brief** scheduled-message smoke via internal cron
 * **GitHub / Google / browser automation** downstream tools behind capability, approval, preview, and audit boundaries
+* **OpenRouter** optional LLM provider adapter, separate from native/direct providers
+* **Composio** optional dry-run external tool connector behind allowlist, capability, approval, and audit boundaries
 * **Unsigned Windows installer package**, portable installer / resident app / update-rollback documentation, and validation gates
 
 ## Explicit Boundaries
@@ -95,6 +97,7 @@ See [QUICKSTART.md](QUICKSTART.md).
 * **Voice / Mobile / rich Canvas** are outside the current GA bar.
 * **Public third-party Skill registry** is intentionally excluded.
 * External GA/public superiority claims remain blocked until `pnpm validate:ga` and owner GO allow them.
+* OpenRouter and Composio are optional convenience adapters, not mandatory infrastructure or authority sources.
 
 ---
 

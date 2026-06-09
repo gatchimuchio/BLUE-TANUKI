@@ -40,6 +40,8 @@ export async function probeGatewaySelfHealth(
       { name: "discord_preview", available: Boolean(env.DISCORD_BOT_TOKEN) },
       { name: "teams_preview", available: Boolean(env.MICROSOFT_GRAPH_ACCESS_TOKEN) },
       { name: "line_preview", available: Boolean(env.LINE_CHANNEL_ACCESS_TOKEN) },
+      { name: "openrouter", available: Boolean(env.OPENROUTER_API_KEY && (env.OPENROUTER_MODEL || env.LLM_MODEL)) },
+      { name: "composio", available: Boolean(env.COMPOSIO_API_KEY && env.COMPOSIO_ALLOWED_TOOLKITS) },
     ],
   };
 }

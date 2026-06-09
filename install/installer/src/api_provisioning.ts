@@ -27,5 +27,6 @@ export function llmSetupArgs(opts: InstallerLlmOptions): string[] {
 export function defaultModelForProvider(provider: SetupProviderKind | undefined): string | undefined {
   if (provider === "openai") return "gpt-4.1-mini";
   if (provider === "anthropic") return "claude-opus-4-7";
+  if (provider === "openrouter") return "openrouter/auto";
   return undefined;
 }

@@ -5,7 +5,8 @@ export type SetupProviderKind =
   | "stub"
   | "anthropic"
   | "openai"
-  | "openai-compatible";
+  | "openai-compatible"
+  | "openrouter";
 
 export interface SetupLlmConfig {
   provider: SetupProviderKind;
@@ -14,6 +15,8 @@ export interface SetupLlmConfig {
   api_key?: string;
   api_key_env?: string;
   backend_hint?: string;
+  site_url?: string;
+  app_title?: string;
   temperature?: number;
   max_tokens?: number;
   timeout_ms?: number;
@@ -35,6 +38,11 @@ export interface SetupPathConfig {
 export interface BlueTanukiSetupConfig {
   schema_version: 1;
   llm: SetupLlmConfig;
+  composio: {
+    api_key?: string;
+    allowed_toolkits?: string;
+    dry_run: boolean;
+  };
   webchat: SetupWebChatConfig;
   paths: SetupPathConfig;
   settings: {
@@ -64,12 +72,13 @@ function normalizeProvider(provider: string): SetupProviderKind {
     normalized === "stub" ||
     normalized === "anthropic" ||
     normalized === "openai" ||
-    normalized === "openai-compatible"
+    normalized === "openai-compatible" ||
+    normalized === "openrouter"
   ) {
     return normalized;
   }
   throw new Error(
-    "llm.provider must be one of stub | anthropic | openai | openai-compatible",
+    "llm.provider must be one of stub | anthropic | openai | openai-compatible | openrouter",
   );
 }
 
@@ -132,6 +141,9 @@ export function createDefaultSetupConfig(
     llm: {
       provider: "stub",
     },
+    composio: {
+      dry_run: true,
+    },
     webchat: {
       host: "127.0.0.1",
       port: 8787,
@@ -161,6 +173,8 @@ export function validateSetupConfig(
 
   const provider = normalizeProvider(config.llm.provider);
   config.llm.provider = provider;
+  config.composio ??= { dry_run: true };
+  config.composio.dry_run = config.composio.dry_run !== false;
   validateOptionalTemperature(config.llm.temperature);
   validateOptionalPositiveInt(config.llm.max_tokens, "llm.max_tokens");
   validateOptionalPositiveInt(config.llm.timeout_ms, "llm.timeout_ms");
@@ -189,6 +203,15 @@ export function validateSetupConfig(
     }
     if (!isNonEmptyString(config.llm.model)) {
       throw new Error("openai-compatible setup requires llm.model");
+    }
+  }
+
+  if (provider === "openrouter") {
+    if (!isNonEmptyString(config.llm.api_key_env) && !isNonEmptyString(config.llm.api_key)) {
+      throw new Error("openrouter setup requires llm.api_key or llm.api_key_env");
+    }
+    if (!isNonEmptyString(config.llm.model)) {
+      throw new Error("openrouter setup requires llm.model");
     }
   }
 
@@ -229,8 +252,9 @@ export function setupConfigFromEnv(
     .trim()
     .toLowerCase();
   config.llm.provider = normalizeProvider(
-    backend === "openai-compatible" || backend === "openai" ||
-      backend === "anthropic"
+      backend === "openai-compatible" || backend === "openai" ||
+      backend === "anthropic" ||
+      backend === "openrouter"
       ? backend
       : "stub",
   );
@@ -249,6 +273,12 @@ export function setupConfigFromEnv(
       env.OPENAI_COMPAT_ENDPOINT ?? env.OPENAI_ENDPOINT ?? env.LLM_ENDPOINT;
     config.llm.api_key =
       env.OPENAI_COMPAT_API_KEY ?? env.OPENAI_API_KEY ?? env.LLM_API_KEY;
+  } else if (config.llm.provider === "openrouter") {
+    config.llm.model = env.OPENROUTER_MODEL ?? env.LLM_MODEL;
+    config.llm.endpoint = env.OPENROUTER_ENDPOINT;
+    config.llm.api_key = env.OPENROUTER_API_KEY;
+    config.llm.site_url = env.OPENROUTER_SITE_URL;
+    config.llm.app_title = env.OPENROUTER_APP_TITLE;
   }
   config.llm.backend_hint = env.BLUE_TANUKI_LLM_BACKEND_HINT;
   config.llm.temperature = parseOptionalNumber(env.BLUE_TANUKI_LLM_TEMPERATURE);
@@ -268,6 +298,9 @@ export function setupConfigFromEnv(
     env.BLUE_TANUKI_AUDIT_DIR ?? config.paths.audit_dir;
   config.settings.token =
     env.BLUE_TANUKI_SETTINGS_TOKEN ?? config.settings.token;
+  config.composio.api_key = env.COMPOSIO_API_KEY;
+  config.composio.allowed_toolkits = env.COMPOSIO_ALLOWED_TOOLKITS;
+  config.composio.dry_run = parseOptionalBool(env.COMPOSIO_DRY_RUN) ?? true;
 
   return validateSetupConfig(config);
 }
@@ -321,6 +354,15 @@ export function setupConfigToEnv(
     if (apiKey) env.OPENAI_COMPAT_API_KEY = apiKey;
   }
 
+  if (config.llm.provider === "openrouter") {
+    env.LLM_BACKEND = "openrouter";
+    if (config.llm.model) env.OPENROUTER_MODEL = config.llm.model;
+    if (config.llm.endpoint) env.OPENROUTER_ENDPOINT = config.llm.endpoint;
+    if (apiKey) env.OPENROUTER_API_KEY = apiKey;
+    if (config.llm.site_url) env.OPENROUTER_SITE_URL = config.llm.site_url;
+    if (config.llm.app_title) env.OPENROUTER_APP_TITLE = config.llm.app_title;
+  }
+
   if (config.llm.backend_hint) {
     env.BLUE_TANUKI_LLM_BACKEND_HINT = config.llm.backend_hint;
   }
@@ -336,6 +378,13 @@ export function setupConfigToEnv(
   if (config.llm.timeout_ms !== undefined) {
     env.BLUE_TANUKI_LLM_TIMEOUT_MS = String(config.llm.timeout_ms);
   }
+  if (config.composio.api_key) {
+    env.COMPOSIO_API_KEY = config.composio.api_key;
+  }
+  if (config.composio.allowed_toolkits) {
+    env.COMPOSIO_ALLOWED_TOOLKITS = config.composio.allowed_toolkits;
+  }
+  env.COMPOSIO_DRY_RUN = config.composio.dry_run ? "true" : "false";
 
   return env;
 }
@@ -362,6 +411,11 @@ export function renderSetupEnvFile(
     "OPENAI_COMPAT_MODEL",
     "OPENAI_COMPAT_ENDPOINT",
     "OPENAI_COMPAT_API_KEY",
+    "OPENROUTER_MODEL",
+    "OPENROUTER_ENDPOINT",
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_SITE_URL",
+    "OPENROUTER_APP_TITLE",
     "BLUE_TANUKI_LLM_BACKEND_HINT",
     "BLUE_TANUKI_LLM_MODEL",
     "BLUE_TANUKI_LLM_TEMPERATURE",
@@ -375,6 +429,9 @@ export function renderSetupEnvFile(
     "BLUE_TANUKI_FILE_ROOT",
     "BLUE_TANUKI_SESSION_DIR",
     "BLUE_TANUKI_AUDIT_DIR",
+    "COMPOSIO_API_KEY",
+    "COMPOSIO_ALLOWED_TOOLKITS",
+    "COMPOSIO_DRY_RUN",
   ]) {
     addEnvLine(lines, key, env[key]);
   }
@@ -391,4 +448,12 @@ function parseOptionalNumber(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
   const value = Number(raw);
   return Number.isFinite(value) ? value : undefined;
+}
+
+function parseOptionalBool(raw: string | undefined): boolean | undefined {
+  if (!raw) return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return undefined;
 }

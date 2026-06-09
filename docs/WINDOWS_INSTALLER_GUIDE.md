@@ -53,6 +53,7 @@ an automatic updater, and not a GA public-claim artifact.
 | Start Menu | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\BLUE-TANUKI` |
 
 Secrets must remain under the user data path, not the install directory.
+This includes OpenRouter and Composio API keys.
 
 ## Included Shortcuts
 

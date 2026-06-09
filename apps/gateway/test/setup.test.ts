@@ -28,6 +28,21 @@ describe("setup CLI", () => {
     expect(opts.max_tokens).toBe(512);
   });
 
+  it("parses OpenRouter provider options", () => {
+    const opts = parseSetupArgs([
+      "--setup",
+      "--yes",
+      "--provider=openrouter",
+      "--model",
+      "openrouter/auto",
+      "--api-key",
+      "openrouter-secret",
+    ]);
+    expect(opts.provider).toBe("openrouter");
+    expect(opts.model).toBe("openrouter/auto");
+    expect(opts.api_key).toBe("openrouter-secret");
+  });
+
   it("builds setup config from flags", () => {
     const config = buildSetupConfigFromOptions({
       yes: true,

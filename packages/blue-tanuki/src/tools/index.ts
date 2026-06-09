@@ -6,6 +6,19 @@ export {
   type ToolContext,
 } from "./registry.js";
 export {
+  composioAllowedToolkits,
+  composioDryRun,
+  composioStatus,
+  classifyComposioAction,
+  composioSearchTool,
+  composioExecuteTool,
+  invokeComposioSearch,
+  invokeComposioExecute,
+  type ComposioActionIntent,
+  type ComposioConnectorStatus,
+  type ComposioOptions,
+} from "./composio.js";
+export {
   fileSearchTool,
   fileWriteTool,
   fileEditTool,

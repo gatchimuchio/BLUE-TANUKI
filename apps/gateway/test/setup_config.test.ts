@@ -50,6 +50,32 @@ describe("setup_config", () => {
     expect(file).toContain("BLUE_TANUKI_SETTINGS_TOKEN=");
   });
 
+  it("renders OpenRouter and Composio settings into runtime env", () => {
+    const config = createDefaultSetupConfig();
+    config.llm = {
+      provider: "openrouter",
+      model: "openrouter/model",
+      api_key: "openrouter-secret",
+      site_url: "https://blue-tanuki.local",
+      app_title: "BLUE-TANUKI",
+    };
+    config.composio = {
+      api_key: "composio-secret",
+      allowed_toolkits: "github,gmail",
+      dry_run: true,
+    };
+
+    const env = setupConfigToEnv(config);
+    expect(env.LLM_BACKEND).toBe("openrouter");
+    expect(env.OPENROUTER_MODEL).toBe("openrouter/model");
+    expect(env.OPENROUTER_API_KEY).toBe("openrouter-secret");
+    expect(env.OPENROUTER_SITE_URL).toBe("https://blue-tanuki.local");
+    expect(env.OPENROUTER_APP_TITLE).toBe("BLUE-TANUKI");
+    expect(env.COMPOSIO_API_KEY).toBe("composio-secret");
+    expect(env.COMPOSIO_ALLOWED_TOOLKITS).toBe("github,gmail");
+    expect(env.COMPOSIO_DRY_RUN).toBe("true");
+  });
+
   it("builds setup config from runtime env", () => {
     const config = setupConfigFromEnv({
       LLM_BACKEND: "openai-compatible",
@@ -65,6 +91,30 @@ describe("setup_config", () => {
     expect(config.llm.provider).toBe("openai-compatible");
     expect(config.llm.model).toBe("model-a");
     expect(config.settings.token).toBe("settings-token-123456");
+  });
+
+  it("builds OpenRouter and Composio setup config from runtime env", () => {
+    const config = setupConfigFromEnv({
+      LLM_BACKEND: "openrouter",
+      OPENROUTER_API_KEY: "openrouter-secret",
+      OPENROUTER_MODEL: "openrouter/model",
+      OPENROUTER_SITE_URL: "https://blue-tanuki.local",
+      OPENROUTER_APP_TITLE: "BLUE-TANUKI",
+      COMPOSIO_API_KEY: "composio-secret",
+      COMPOSIO_ALLOWED_TOOLKITS: "github,gmail",
+      COMPOSIO_DRY_RUN: "true",
+      WEBCHAT_TOKEN: "webchat-token-123456",
+      WEBCHAT_RESUME_TOKEN: "resume-token-123456",
+      BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
+    });
+    expect(config.llm.provider).toBe("openrouter");
+    expect(config.llm.model).toBe("openrouter/model");
+    expect(config.llm.site_url).toBe("https://blue-tanuki.local");
+    expect(config.composio).toEqual({
+      api_key: "composio-secret",
+      allowed_toolkits: "github,gmail",
+      dry_run: true,
+    });
   });
 
   it("resolves api_key_env from the supplied source env", () => {

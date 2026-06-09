@@ -82,11 +82,12 @@ function normalizeProvider(value: string): SetupProviderKind {
     normalized === "stub" ||
     normalized === "anthropic" ||
     normalized === "openai" ||
-    normalized === "openai-compatible"
+    normalized === "openai-compatible" ||
+    normalized === "openrouter"
   ) {
     return normalized;
   }
-  throw new Error("provider must be stub | anthropic | openai | openai-compatible");
+  throw new Error("provider must be stub | anthropic | openai | openai-compatible | openrouter");
 }
 
 export function applySettingsPatch(
@@ -103,6 +104,10 @@ export function applySettingsPatch(
     if (endpoint !== undefined) config.llm.endpoint = endpoint;
     const apiKey = optionalStringField(llm, "api_key");
     if (apiKey !== undefined) config.llm.api_key = apiKey;
+    const siteUrl = optionalStringField(llm, "site_url");
+    if (siteUrl !== undefined) config.llm.site_url = siteUrl;
+    const appTitle = optionalStringField(llm, "app_title");
+    if (appTitle !== undefined) config.llm.app_title = appTitle;
     const temperature = optionalNumberField(llm, "temperature");
     if (temperature !== undefined) config.llm.temperature = temperature;
     const maxTokens = optionalIntField(llm, "max_tokens");
@@ -126,6 +131,26 @@ export function applySettingsPatch(
     const auditDir = optionalStringField(paths, "audit_dir");
     if (auditDir !== undefined) config.paths.audit_dir = auditDir;
   }
+  if (isRecord(body.composio)) {
+    const composio = body.composio;
+    const apiKey = optionalStringField(composio, "api_key");
+    if (apiKey !== undefined) config.composio.api_key = apiKey;
+    const allowedToolkits = optionalStringField(composio, "allowed_toolkits");
+    if (allowedToolkits !== undefined) config.composio.allowed_toolkits = allowedToolkits;
+    const dryRun = composio.dry_run;
+    if (dryRun !== undefined && dryRun !== null && dryRun !== "") {
+      if (typeof dryRun === "boolean") {
+        config.composio.dry_run = dryRun;
+      } else if (typeof dryRun === "string") {
+        const normalized = dryRun.trim().toLowerCase();
+        if (["1", "true", "yes", "on"].includes(normalized)) config.composio.dry_run = true;
+        else if (["0", "false", "no", "off"].includes(normalized)) config.composio.dry_run = false;
+        else throw new Error("dry_run must be a boolean");
+      } else {
+        throw new Error("dry_run must be a boolean");
+      }
+    }
+  }
   setupConfigToEnv(config);
   return config;
 }
@@ -141,7 +166,9 @@ function redactKnownSecretValues(message: string, env: Env): string {
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
     "OPENAI_COMPAT_API_KEY",
+    "OPENROUTER_API_KEY",
     "LLM_API_KEY",
+    "COMPOSIO_API_KEY",
   ]) {
     const value = env[key];
     if (value && value.length >= 6) {

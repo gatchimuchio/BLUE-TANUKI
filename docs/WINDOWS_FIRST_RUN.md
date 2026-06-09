@@ -60,6 +60,16 @@ Use Settings to verify non-stub LLM provider configuration before saving. API
 keys must not appear in logs, audit, runtime snapshot, or Control Center
 projections.
 
+Optional adapters can also be configured here:
+
+- OpenRouter as a model provider (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`).
+- Composio as an external tool connector (`COMPOSIO_API_KEY`,
+  `COMPOSIO_ALLOWED_TOOLKITS`, `COMPOSIO_DRY_RUN=true`).
+
+These are convenience adapters. Native/direct providers and native/local tools
+remain canonical. Missing OpenRouter or Composio settings are non-fatal for
+stub-mode first-run.
+
 ## Stop / Restart
 
 Use Start Menu shortcuts:

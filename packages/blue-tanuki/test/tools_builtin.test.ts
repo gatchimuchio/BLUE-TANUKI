@@ -60,6 +60,8 @@ describe("built-in tools", () => {
     expect(registry.get("browser.snapshot")).toBeDefined();
     expect(registry.get("browser.automation")).toBeDefined();
     expect(registry.get("shell.exec")).toBeDefined();
+    expect(registry.get("composio.search")).toBeDefined();
+    expect(registry.get("composio.execute")).toBeDefined();
     expect(registry.listCapabilities()).toEqual([
       "browser:act",
       "browser:snapshot",
@@ -76,9 +78,11 @@ describe("built-in tools", () => {
       "google:drive.write",
       "google:gmail.read",
       "google:gmail.write",
+      "network:composio.dev",
       "network:github.com",
       "network:googleapis.com",
       "network:http",
+      "secrets:COMPOSIO_API_KEY",
       "secrets:GITHUB_TOKEN",
       "secrets:GMAIL_ACCESS_TOKEN",
       "secrets:GOOGLE_ACCESS_TOKEN",
@@ -88,6 +92,8 @@ describe("built-in tools", () => {
       "tool:browser.automation",
       "tool:browser.read",
       "tool:browser.snapshot",
+      "tool:composio.execute",
+      "tool:composio.search",
       "tool:echo",
       "tool:file.edit",
       "tool:file.search",

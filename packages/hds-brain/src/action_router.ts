@@ -122,6 +122,23 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
     ],
     timeout_ms: 15_000,
   },
+  "composio.search": {
+    allowed_capabilities: [
+      "tool:composio.search",
+      "network:composio.dev",
+      "secrets:COMPOSIO_API_KEY",
+    ],
+    timeout_ms: 15_000,
+  },
+  "composio.execute": {
+    allowed_capabilities: [
+      "tool:composio.execute",
+      "network:composio.dev",
+      "secrets:COMPOSIO_API_KEY",
+      "external:send",
+    ],
+    timeout_ms: 15_000,
+  },
   "browser.read": {
     allowed_capabilities: ["tool:browser.read", "network:http"],
     timeout_ms: 15_000,
@@ -173,6 +190,8 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
  *   - tool:gmail.write operation=draft.create to=owner@example.com subject="hello" body_text="draft"
  *   - tool:google.calendar.write operation=event.create calendar_id=primary summary="Standup" start=2026-05-12T09:00:00Z end=2026-05-12T09:15:00Z
  *   - tool:google.drive.write operation=file.create name=notes.txt content="hello"
+ *   - tool:composio.search toolkit=github query=issues
+ *   - tool:composio.execute toolkit=github tool=issues.search payload="{...}"
  *   - tool:browser.read url=https://example.com max_chars=4000
  *   - tool:browser.snapshot url=https://example.com max_chars=4000
  *   - tool:browser.automation action=smoke

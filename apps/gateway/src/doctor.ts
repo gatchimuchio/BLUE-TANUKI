@@ -32,7 +32,7 @@ import { parseGoogleServices } from "./google_daily_brief.js";
  *   - Optional env: WEBHOOK_TOKEN separation when /webhook is enabled
  *   - Optional env: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, DISCORD_BOT_TOKEN,
  *                   MICROSOFT_GRAPH_ACCESS_TOKEN, LINE_CHANNEL_ACCESS_TOKEN,
- *                   ANTHROPIC_API_KEY, GITHUB_TOKEN,
+ *                   ANTHROPIC_API_KEY, OPENROUTER_API_KEY, COMPOSIO_API_KEY, GITHUB_TOKEN,
  *                   BLUE_TANUKI_GITHUB_REPOS (presence only)
  *   - Optional Google read source config for Daily Brief
  *   - WEBCHAT_PORT is bindable (probe by binding then closing)
@@ -40,7 +40,7 @@ import { parseGoogleServices } from "./google_daily_brief.js";
  *   - BLUE_TANUKI_AUDIT_DIR   (if set) is writable / can be created
  *   - BLUE_TANUKI_FILE_ROOT and BLUE_TANUKI_SHELL_ROOT (if set) are directories
  *   - BLUE_TANUKI_SCHEDULES_JSON parses as scheduled-message config
- *   - LLM_BACKEND consistency (stub / anthropic / openai-compatible)
+ *   - LLM_BACKEND consistency (stub / anthropic / openai-compatible / openrouter)
  *   - Distribution readiness docs, release-bundle gates, channel promotion,
  *     and plugin review gates are present
  *
@@ -670,6 +670,32 @@ function checkLlmBackend(env: NodeJS.ProcessEnv): CheckDraft {
           : "openai-compatible with model/endpoint present",
     };
   }
+  if (backend === "openrouter") {
+    const model = envValue(env, "OPENROUTER_MODEL", "LLM_MODEL");
+    const key = envValue(env, "OPENROUTER_API_KEY");
+    if (!model) {
+      return {
+        id: "llm_backend",
+        level: "error",
+        label: "LLM_BACKEND",
+        detail: "openrouter but no model is set (OPENROUTER_MODEL/LLM_MODEL)",
+      };
+    }
+    if (!key) {
+      return {
+        id: "llm_backend",
+        level: "error",
+        label: "LLM_BACKEND",
+        detail: "openrouter but OPENROUTER_API_KEY is unset",
+      };
+    }
+    return {
+      id: "llm_backend",
+      level: "ok",
+      label: "LLM_BACKEND",
+      detail: "openrouter with model/API key present",
+    };
+  }
   if (configuredProviders.includes(backend)) {
     return {
       id: "llm_backend",
@@ -682,7 +708,7 @@ function checkLlmBackend(env: NodeJS.ProcessEnv): CheckDraft {
     id: "llm_backend",
     level: "error",
     label: "LLM_BACKEND",
-    detail: `unknown value '${backend}' (expected stub | anthropic | openai | openai-compatible | LLM_PROVIDERS_JSON name/alias)`,
+    detail: `unknown value '${backend}' (expected stub | anthropic | openai | openai-compatible | openrouter | LLM_PROVIDERS_JSON name/alias)`,
   };
 }
 
@@ -719,6 +745,34 @@ function checkLlmCommandRoute(env: NodeJS.ProcessEnv): CheckDraft {
       detail: e instanceof Error ? e.message : String(e),
     };
   }
+}
+
+function checkComposioConnector(env: NodeJS.ProcessEnv): CheckDraft {
+  const key = envValue(env, "COMPOSIO_API_KEY");
+  const allowed = envValue(env, "COMPOSIO_ALLOWED_TOOLKITS");
+  const dryRun = (env.COMPOSIO_DRY_RUN ?? "true").trim().toLowerCase();
+  if (!key) {
+    return {
+      id: "composio_connector",
+      level: "warn",
+      label: "Composio connector",
+      detail: "COMPOSIO_API_KEY unset (optional; connector disabled)",
+    };
+  }
+  if (!allowed) {
+    return {
+      id: "composio_connector",
+      level: "warn",
+      label: "Composio connector",
+      detail: "COMPOSIO_API_KEY present but COMPOSIO_ALLOWED_TOOLKITS unset; connector will fail closed",
+    };
+  }
+  return {
+    id: "composio_connector",
+    level: "ok",
+    label: "Composio connector",
+    detail: `configured; dry_run=${dryRun === "false" ? "false" : "true"}; allowed_toolkits=${allowed}`,
+  };
 }
 
 async function probePort(port: number, host: string): Promise<CheckDraft> {
@@ -1393,6 +1447,8 @@ function remediationFor(check: CheckDraft): Remediation {
     check.id === "env:MICROSOFT_GRAPH_ACCESS_TOKEN" ||
     check.id === "env:LINE_CHANNEL_ACCESS_TOKEN" ||
     check.id === "env:ANTHROPIC_API_KEY" ||
+    check.id === "env:OPENROUTER_API_KEY" ||
+    check.id === "env:COMPOSIO_API_KEY" ||
     check.id === "env:GITHUB_TOKEN" ||
     check.id === "env:BLUE_TANUKI_GITHUB_REPOS"
   ) {
@@ -1413,6 +1469,16 @@ function remediationFor(check: CheckDraft): Remediation {
       next_action: "Use LLM_BACKEND=stub for offline mode, or fix the configured provider/model/endpoint/key.",
       doc_ref: "CONFIG.md#Optional-LLM",
       safe_to_ignore: false,
+    };
+  }
+
+  if (check.id === "composio_connector") {
+    return {
+      cause: check.detail,
+      impact: "Composio tools remain unavailable or dry-run only; local/native tools and HDS authority remain usable.",
+      next_action: "Leave Composio unset if unused, or set COMPOSIO_API_KEY and COMPOSIO_ALLOWED_TOOLKITS in the user env file.",
+      doc_ref: "docs/COMPOSIO_CONNECTOR.md",
+      safe_to_ignore: check.level === "warn",
     };
   }
 
@@ -1542,10 +1608,13 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorReport>
   draftChecks.push(checkOptionalEnv(env, "MICROSOFT_GRAPH_ACCESS_TOKEN", { required: previewRequired }));
   draftChecks.push(checkOptionalEnv(env, "LINE_CHANNEL_ACCESS_TOKEN", { required: previewRequired }));
   draftChecks.push(checkOptionalEnv(env, "ANTHROPIC_API_KEY", { required: strictRequired }));
+  draftChecks.push(checkOptionalEnv(env, "OPENROUTER_API_KEY", { required: strictRequired }));
+  draftChecks.push(checkOptionalEnv(env, "COMPOSIO_API_KEY", { required: strictRequired }));
   draftChecks.push(checkOptionalEnv(env, "GITHUB_TOKEN", { required: strictRequired }));
   draftChecks.push(checkOptionalEnv(env, "BLUE_TANUKI_GITHUB_REPOS", { required: strictRequired }));
   draftChecks.push(checkLlmBackend(env));
   draftChecks.push(checkLlmCommandRoute(env));
+  draftChecks.push(checkComposioConnector(env));
   draftChecks.push(checkCronSchedules(env));
   draftChecks.push(checkGoogleDailyBriefSource(env));
   draftChecks.push(await checkSessionDir(env));
