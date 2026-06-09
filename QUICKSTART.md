@@ -5,7 +5,39 @@ v1.0 RC の最短経路は **WebChat Control Center + HDS Approval/Audit** で�
 
 v1.0 RC provides a guided first-run path, not a verified 5-minute beginner guarantee. 詳細な手順は [docs/FIRST_RUN_CHECKLIST.md](./docs/FIRST_RUN_CHECKLIST.md)、常駐運用の確認は [docs/PERMANENT_USE_CHECKLIST.md](./docs/PERMANENT_USE_CHECKLIST.md) を使う。
 
-## 1. Install
+## 1. Windows installer package
+
+Windows 一般ユーザー向けの経路は source/dev run ではなく installer-first である。
+
+開発側で package を作る:
+
+```bash
+pnpm build
+pnpm package:windows
+pnpm package:windows:verify
+```
+
+ユーザー側:
+
+```text
+1. release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip を展開
+2. BlueTanukiSetup.cmd を double-click
+3. Start Menu から BLUE-TANUKI を起動
+4. http://127.0.0.1:8787/app の Control Center で Conversation / WebChat を使う
+```
+
+この package は bundled Windows Node runtime を含む。ユーザーに Node.js、
+pnpm、Git、PowerShell setup script、repository commands を要求しない。
+現時点では unsigned zip-delivered installer package であり、signed MSI/EXE
+ではない。
+
+詳細:
+
+- [docs/WINDOWS_INSTALLER_GUIDE.md](./docs/WINDOWS_INSTALLER_GUIDE.md)
+- [docs/WINDOWS_FIRST_RUN.md](./docs/WINDOWS_FIRST_RUN.md)
+- [docs/WINDOWS_UNINSTALL.md](./docs/WINDOWS_UNINSTALL.md)
+
+## 2. Source install
 
 ```bash
 pnpm install
@@ -15,7 +47,7 @@ pnpm build
 pnpm validate:repo-health
 ```
 
-## 2. Guided first-run
+## 3. Guided source first-run
 
 Recommended:
 
@@ -37,7 +69,7 @@ guarantee.
 Use `Verify LLM` in Settings before saving a non-stub provider, endpoint, model,
 or API key.
 
-## 3. Local setup
+## 4. Local setup
 
 推奨:
 
@@ -61,7 +93,7 @@ Open:
 http://127.0.0.1:8787/
 ```
 
-## 4. First WebChat message
+## 5. First WebChat message
 
 Control Center から短いメッセージを送る。HTTP で直接確認する場合:
 
@@ -72,7 +104,7 @@ curl -X POST http://127.0.0.1:8787/inbound \
   -d '{"user":"local-user","content":"hello blue-tanuki"}'
 ```
 
-## 5. Telegram
+## 6. Telegram
 
 ```bash
 export TELEGRAM_BOT_TOKEN="123456:telegram-bot-token"
@@ -81,7 +113,7 @@ pnpm gateway:serve
 
 Telegram inbound uses Bot API long polling. Outbound target is `chat_id`.
 
-## 6. Daily Brief smoke
+## 7. Daily Brief smoke
 
 Daily Brief is a scheduled `channel_send` smoke by default. Gmail/GCal/Drive can be enabled as an optional read-only source after the basic smoke works.
 
@@ -108,7 +140,7 @@ export BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES="gmail,calendar,drive"
 export GOOGLE_ACCESS_TOKEN="<read-only-google-oauth-token>"
 ```
 
-## 7. Boot-time scheduled-message smoke
+## 8. Boot-time scheduled-message smoke
 
 ```bash
 export BLUE_TANUKI_SCHEDULES_JSON='[
@@ -125,7 +157,7 @@ pnpm gateway:serve
 
 Boot-time schedules enter HDS-BRAIN as `cron.process` and share the same cron lane as approved runtime schedules.
 
-## 8. Runtime schedules
+## 9. Runtime schedules
 
 Runtime schedule creation is enabled in v1.0 RC through `tool:schedule.*`. Listing is L1. Create/update/delete are L3 final-review operations and do not run until approved.
 
@@ -138,7 +170,7 @@ tool:schedule.delete id=<id>
 
 Pending, rejected, or timed-out schedule requests do not fire. Runtime snapshots expose ids, counts, timing metadata, and payload hashes, never schedule content.
 
-## 9. Runtime snapshot
+## 10. Runtime snapshot
 
 ```bash
 curl -H "Authorization: Bearer $WEBCHAT_TOKEN" \
@@ -147,9 +179,13 @@ curl -H "Authorization: Bearer $WEBCHAT_TOKEN" \
 
 The snapshot exposes HDS state, audit chain validity, memory count, pending approvals, safe scheduled-task metadata, and authority-path invariants.
 
-## 10. Next documents
+## 11. Next documents
 
 - [docs/INSTALLER_GUIDE.md](./docs/INSTALLER_GUIDE.md)
+- [docs/WINDOWS_INSTALLER_GUIDE.md](./docs/WINDOWS_INSTALLER_GUIDE.md)
+- [docs/WINDOWS_FIRST_RUN.md](./docs/WINDOWS_FIRST_RUN.md)
+- [docs/WINDOWS_PACKAGING_AUDIT.md](./docs/WINDOWS_PACKAGING_AUDIT.md)
+- [docs/WINDOWS_UNINSTALL.md](./docs/WINDOWS_UNINSTALL.md)
 - [docs/FIRST_RUN_CHECKLIST.md](./docs/FIRST_RUN_CHECKLIST.md)
 - [docs/PERMANENT_USE_CHECKLIST.md](./docs/PERMANENT_USE_CHECKLIST.md)
 - [docs/CHANNEL_READINESS_MATRIX.md](./docs/CHANNEL_READINESS_MATRIX.md)

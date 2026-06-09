@@ -8,7 +8,28 @@ through Control Center verification. It coordinates setup, doctor, and Control
 Center handoff while preserving the existing HDS authority, Approval Gate,
 audit, and runtime invariant boundaries.
 
-This is not a signed native installer and not an automatic updater.
+This guided source/bundle installer is not a signed native installer and not an automatic updater.
+
+## Windows Product Installer Package
+
+The Windows GUI product path is separate from `pnpm installer:run`.
+
+```bash
+pnpm build
+pnpm package:windows
+pnpm package:windows:verify
+```
+
+This creates an unsigned Windows installer package under `release/windows/`.
+It bundles Windows Node.js and installs BLUE-TANUKI without asking the end user
+to run Node.js, pnpm, Git, PowerShell setup scripts, or repository commands.
+
+See:
+
+- [WINDOWS_INSTALLER_GUIDE.md](WINDOWS_INSTALLER_GUIDE.md)
+- [WINDOWS_FIRST_RUN.md](WINDOWS_FIRST_RUN.md)
+- [WINDOWS_PACKAGING_AUDIT.md](WINDOWS_PACKAGING_AUDIT.md)
+- [WINDOWS_UNINSTALL.md](WINDOWS_UNINSTALL.md)
 
 ## Guided First-Run
 
@@ -92,6 +113,9 @@ provider, endpoint, model, and API key, then verify again.
 - The installer does not provide an automatic updater.
 - The installer is a guided first-run path, not a verified 5-minute setup
   guarantee.
+- The Windows package is unsigned and zip-delivered. It is not a signed MSI/EXE,
+  but it does provide bundled runtime install, Start Menu shortcuts, Control
+  Center launch, Doctor shortcut, logs shortcut, and current-user uninstall.
 
 ## Cross-References
 

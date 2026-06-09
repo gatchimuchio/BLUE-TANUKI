@@ -1,0 +1,74 @@
+# Windows First Run
+
+This first-run path is for the unsigned Windows installer package, not source
+development.
+
+## First Launch
+
+1. Install with `BlueTanukiSetup.cmd`.
+2. Start `BLUE-TANUKI` from the Start Menu.
+3. The launcher starts the local resident gateway.
+4. The browser opens `http://127.0.0.1:8787/app`.
+
+The Control Center must expose:
+
+- Home / Tanuki Dashboard,
+- Conversation / WebChat,
+- Approvals,
+- Activity / Audit,
+- Doctor / Health,
+- Settings,
+- Logs / Developer Evidence.
+
+## Stub Mode
+
+The generated env file defaults to stub LLM mode. This means the first
+conversation can run without external API credentials.
+
+Use the `Conversation / WebChat` panel:
+
+1. Paste the WebChat token from `%APPDATA%\BlueTanuki\blue-tanuki.env`.
+2. Click `Connect`.
+3. Send a short message.
+4. Confirm a `channel_send` response or a clear backend error.
+
+The token is browser session UI state only. It is not authority and is not a
+permission grant.
+
+## Doctor / Health
+
+The `Doctor` screen shows live runtime health from the existing runtime snapshot
+surface. The Start Menu `BLUE-TANUKI Doctor` shortcut runs the full Doctor and
+writes:
+
+```text
+%APPDATA%\BlueTanuki\logs\doctor.json
+```
+
+Doctor output is diagnostic evidence. It does not grant authority, approve
+actions, or certify GA release readiness.
+
+## Settings
+
+Settings are stored in:
+
+```text
+%APPDATA%\BlueTanuki\blue-tanuki.env
+```
+
+Use Settings to verify non-stub LLM provider configuration before saving. API
+keys must not appear in logs, audit, runtime snapshot, or Control Center
+projections.
+
+## Stop / Restart
+
+Use Start Menu shortcuts:
+
+- `BLUE-TANUKI Stop`
+- `BLUE-TANUKI`
+
+The launcher stores runtime logs under:
+
+```text
+%APPDATA%\BlueTanuki\logs
+```

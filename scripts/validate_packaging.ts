@@ -53,6 +53,35 @@ function main(): void {
     installReadme,
     "does not build signed native packages yet",
   );
+  requireIncludes("install/README.md", installReadme, "pnpm package:windows");
+  requireIncludes("install/README.md", installReadme, "bundles Windows Node.js");
+  requireIncludes("install/README.md", installReadme, "Start Menu shortcuts");
+  requireIncludes("install/README.md", installReadme, "does not silently enable autostart");
+
+  const windowsInstallerGuide = read("docs/WINDOWS_INSTALLER_GUIDE.md");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "pnpm package:windows");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "BlueTanukiSetup.cmd");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "%LOCALAPPDATA%\\Programs\\BlueTanuki");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "%APPDATA%\\BlueTanuki");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Autostart is not enabled");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "not a signed MSI/EXE");
+
+  const windowsFirstRun = read("docs/WINDOWS_FIRST_RUN.md");
+  requireIncludes("docs/WINDOWS_FIRST_RUN.md", windowsFirstRun, "Conversation / WebChat");
+  requireIncludes("docs/WINDOWS_FIRST_RUN.md", windowsFirstRun, "stub LLM mode");
+  requireIncludes("docs/WINDOWS_FIRST_RUN.md", windowsFirstRun, "Doctor / Health");
+  requireIncludes("docs/WINDOWS_FIRST_RUN.md", windowsFirstRun, "%APPDATA%\\BlueTanuki\\logs");
+
+  const windowsPackagingAudit = read("docs/WINDOWS_PACKAGING_AUDIT.md");
+  requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "bundled Windows Node runtime");
+  requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "GUI Shell not modified");
+  requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "HDS authority not modified");
+  requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "Windows runtime install smoke must be run on Windows");
+
+  const windowsUninstall = read("docs/WINDOWS_UNINSTALL.md");
+  requireIncludes("docs/WINDOWS_UNINSTALL.md", windowsUninstall, "Uninstall\\BlueTanuki");
+  requireIncludes("docs/WINDOWS_UNINSTALL.md", windowsUninstall, "User data retained");
+  requireIncludes("docs/WINDOWS_UNINSTALL.md", windowsUninstall, "PurgeData");
 
   const guidedInstallerReadme = read("install/installer/README.md");
   requireIncludes("install/installer/README.md", guidedInstallerReadme, "guided first-run");
@@ -120,6 +149,39 @@ function main(): void {
   requireIncludes("install/windows/uninstall.ps1", winUninstall, "resident-autostart-disable");
   requireIncludes("install/windows/uninstall.ps1", winUninstall, "Data retained");
 
+  const winProductSetup = read("install/windows/product/BlueTanukiSetup.ps1");
+  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Start Menu");
+  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Register-Uninstaller");
+  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Autostart: not enabled by installer");
+  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "post-install doctor");
+  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Expand-Archive");
+
+  const winProductLauncher = read("install/windows/product/BlueTanukiLauncher.ps1");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "http://127.0.0.1:8787/app");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Start-Resident");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Run-Doctor");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "bundled node.exe");
+
+  const winProductUninstall = read("install/windows/product/BlueTanukiUninstall.ps1");
+  requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "PurgeData");
+  requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "User data retained");
+  requireIncludes("install/windows/product/BlueTanukiUninstall.ps1", winProductUninstall, "Assert-SafeTarget");
+
+  const packageWindows = read("scripts/package_windows.ts");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "windows-x64-zip-installer");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "win-x64.zip");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "requires_node_pnpm_git_from_user: false");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "installer_autostart: false");
+
+  const verifyWindowsPackage = read("scripts/verify_windows_package.ts");
+  requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "verifyWindowsPackage");
+  requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "GUI-Shell");
+  requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "Start Menu");
+
+  const smokeWindowsInstalled = read("scripts/smoke_windows_installed.ts");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "windows_runtime_smoke=skipped");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "first_message_result=pass");
+
   const macInstall = read("install/macos/install.sh");
   requireIncludes("install/macos/install.sh", macInstall, "Node.js 22.14.0");
   requireIncludes("install/macos/install.sh", macInstall, "pnpm@");
@@ -178,6 +240,10 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "docs/phase11-s13-v1-ga-promotion-execution.md");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/linux/install.sh");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/linux/uninstall.sh");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/windows/product");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/windows/product/BlueTanukiSetup.ps1");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/package_windows.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "docs/WINDOWS_INSTALLER_GUIDE.md");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"install/installer\"");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, ".sha256");
@@ -205,6 +271,9 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/v1.0-ga-promotion-review.md");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/phase11-s13-v1-ga-promotion-execution.md");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/linux/uninstall.sh");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/windows/product/BlueTanukiSetup.ps1");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/verify_windows_package.ts");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/WINDOWS_PACKAGING_AUDIT.md");
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"install/installer\"");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "isForbiddenFileName");
@@ -255,6 +324,11 @@ function main(): void {
   const packageJson = read("package.json");
   requireIncludes("package.json", packageJson, "\"installer:run\"");
   requireIncludes("package.json", packageJson, "\"installer:verify\"");
+  requireIncludes("package.json", packageJson, "\"package:windows\"");
+  requireIncludes("package.json", packageJson, "\"package:windows:verify\"");
+  requireIncludes("package.json", packageJson, "\"installer:windows\"");
+  requireIncludes("package.json", packageJson, "\"installer:windows:verify\"");
+  requireIncludes("package.json", packageJson, "\"smoke:windows-installed\"");
   requireIncludes("package.json", packageJson, "\"validate:repo-health\"");
   requireIncludes("package.json", packageJson, "\"validate:channels\"");
   requireIncludes("package.json", packageJson, "\"validate:ga\"");

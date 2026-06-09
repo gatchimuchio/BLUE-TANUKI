@@ -20,7 +20,25 @@ Development strategy: GUI Shell is a reference LLM-readable responsibility subst
 
 ## Quick Start
 
-### 1. Install and build
+### Windows installer package
+
+For Windows users who should not touch Node.js, pnpm, Git, PowerShell setup
+scripts, or repository layout:
+
+```
+pnpm build
+pnpm package:windows
+pnpm package:windows:verify
+```
+
+This produces an unsigned Windows installer package under `release/windows/`.
+The user extracts it and double-clicks `BlueTanukiSetup.cmd`; the installed app
+uses a bundled Windows Node runtime, creates Start Menu shortcuts, opens the
+Control Center, and preserves user data under `%APPDATA%\BlueTanuki`.
+
+See [docs/WINDOWS_INSTALLER_GUIDE.md](docs/WINDOWS_INSTALLER_GUIDE.md).
+
+### Source/dev run
 
 ```
 pnpm install
@@ -58,7 +76,7 @@ See [QUICKSTART.md](QUICKSTART.md).
 ## Release Candidate Surface
 
 * **WebChat Control Center** at `/` and `/app`
-* **Owner-operation GUI screens** for Home, Tasks, Approvals, Activity / Audit, Memory, Skills, Channels, Doctor, Settings, and Developer / Evidence
+* **Owner-operation GUI screens** for Home, Conversation / WebChat, Tasks, Approvals, Activity / Audit, Memory, Skills, Channels, Doctor, Settings, and Developer / Evidence
 * **Runtime snapshot** at `/runtime/snapshot`
 * **HDS-BRAIN** standalone authority core
 * **Approval Gate** with L1/L2/L3 `ApprovalLevel` and non-bypassable final-review boundary
@@ -68,7 +86,7 @@ See [QUICKSTART.md](QUICKSTART.md).
 * **Slack / Discord / Teams / LINE** first-party-preview adapters gated by owner evidence
 * **Daily Brief** scheduled-message smoke via internal cron
 * **GitHub / Google / browser automation** downstream tools behind capability, approval, preview, and audit boundaries
-* **Installer / resident app / update-rollback** documentation and validation gates
+* **Unsigned Windows installer package**, portable installer / resident app / update-rollback documentation, and validation gates
 
 ## Explicit Boundaries
 
@@ -195,6 +213,10 @@ The authority core never consumes downstream session history to make decisions. 
 * [docs/CREDENTIAL_READINESS_MATRIX.md](docs/CREDENTIAL_READINESS_MATRIX.md) — credential requirements and safe skips
 * [docs/PLUGIN_REVIEW_GATE.md](docs/PLUGIN_REVIEW_GATE.md) — Layer B review gate
 * [docs/UPDATE_ROLLBACK_RUNBOOK.md](docs/UPDATE_ROLLBACK_RUNBOOK.md) — update, rollback, and recovery path
+* [docs/WINDOWS_INSTALLER_GUIDE.md](docs/WINDOWS_INSTALLER_GUIDE.md) — unsigned Windows installer package
+* [docs/WINDOWS_FIRST_RUN.md](docs/WINDOWS_FIRST_RUN.md) — installed Windows first run
+* [docs/WINDOWS_PACKAGING_AUDIT.md](docs/WINDOWS_PACKAGING_AUDIT.md) — Windows packaging evidence
+* [docs/WINDOWS_UNINSTALL.md](docs/WINDOWS_UNINSTALL.md) — Windows uninstall and data preservation
 * [docs/v1.0-release-candidate.md](docs/v1.0-release-candidate.md) — release-candidate boundary
 * [docs/v1.0-post-rc-closure-review.md](docs/v1.0-post-rc-closure-review.md) — post-RC closure status
 * [docs/v1.0-ga-promotion-review.md](docs/v1.0-ga-promotion-review.md) — GA promotion pre-GO review
@@ -214,7 +236,7 @@ The authority core never consumes downstream session history to make decisions. 
 
 ## Release Boundary
 
-Release archives are source bundles, not standalone binaries. They intentionally exclude `node_modules`, local `.env` files, audit/session data, and secret-like backups.
+Release archives are source bundles, not standalone binaries. The Windows installer package is a separate unsigned zip-delivered installer package with a bundled Windows Node runtime. It is not a signed MSI/EXE yet. Release artifacts intentionally exclude local `.env` files, audit/session data, and secret-like backups.
 
 ---
 

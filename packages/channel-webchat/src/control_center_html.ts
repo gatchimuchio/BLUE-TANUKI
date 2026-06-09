@@ -47,7 +47,8 @@ export function renderControlCenterHtml(): string {
       }
 
       button,
-      input {
+      input,
+      textarea {
         font: inherit;
       }
 
@@ -374,7 +375,8 @@ export function renderControlCenterHtml(): string {
       }
 
       input[type="password"],
-      input[type="text"] {
+      input[type="text"],
+      textarea {
         width: 100%;
         min-height: 36px;
         border: 1px solid var(--line);
@@ -382,6 +384,11 @@ export function renderControlCenterHtml(): string {
         background: #0e141c;
         color: var(--text);
         padding: 8px 10px;
+      }
+
+      textarea {
+        min-height: 74px;
+        resize: vertical;
       }
 
       button {
@@ -427,6 +434,7 @@ export function renderControlCenterHtml(): string {
       }
 
       .queue-list,
+      .chat-log,
       .notification-list,
       .schedule-list,
       .history-list,
@@ -437,6 +445,7 @@ export function renderControlCenterHtml(): string {
       }
 
       .queue-item,
+      .chat-item,
       .notification-item,
       .schedule-item,
       .history-item,
@@ -449,6 +458,11 @@ export function renderControlCenterHtml(): string {
         border: 1px solid #2b394a;
         border-radius: 8px;
         background: #111923;
+      }
+
+      .chat-log {
+        max-height: 360px;
+        overflow: auto;
       }
 
       .kv {
@@ -570,6 +584,7 @@ export function renderControlCenterHtml(): string {
 
     <nav class="screen-tabs" aria-label="Owner operation screens">
       <button class="screen-tab active" data-screen="home" aria-selected="true">Home</button>
+      <button class="screen-tab" data-screen="conversation" aria-selected="false">Conversation / WebChat</button>
       <button class="screen-tab" data-screen="tasks" aria-selected="false">Tasks</button>
       <button class="screen-tab" data-screen="approvals" aria-selected="false">Approvals</button>
       <button class="screen-tab" data-screen="activity" aria-selected="false">Activity / Audit</button>
@@ -663,6 +678,26 @@ export function renderControlCenterHtml(): string {
           </div>
         </section>
 
+        <section class="card" data-screen-group="home conversation">
+          <div class="row">
+            <h2>Conversation / WebChat</h2>
+            <span id="chat-status" class="badge warn">not connected</span>
+          </div>
+          <div class="status-grid">
+            <input id="chat-token" type="password" autocomplete="off" placeholder="webchat token" />
+            <input id="chat-user" type="text" autocomplete="off" placeholder="user" />
+          </div>
+          <textarea id="chat-content" autocomplete="off" placeholder="message"></textarea>
+          <div class="action-row">
+            <button id="connect-chat" class="primary">Connect</button>
+            <button id="send-chat" class="primary">Send</button>
+            <button id="disconnect-chat">Disconnect</button>
+          </div>
+          <div id="chat-log" class="chat-log">
+            <article class="chat-item muted">no conversation messages yet</article>
+          </div>
+        </section>
+
         <section class="card" data-screen-group="home developer">
           <h2>Responsibility Map</h2>
           <div class="map-grid">
@@ -730,6 +765,14 @@ export function renderControlCenterHtml(): string {
           <div class="row">
             <h2>Doctor</h2>
             <span class="badge warn">next-action loop</span>
+          </div>
+          <div class="status-grid">
+            <div class="metric"><span>Runtime</span><span id="doctor-runtime-status">not loaded</span></div>
+            <div class="metric"><span>WebChat</span><span id="doctor-webchat-ready">not loaded</span></div>
+            <div class="metric"><span>LLM backend</span><span id="doctor-llm-backend">stub available</span></div>
+            <div class="metric"><span>Audit</span><span id="doctor-audit-status">not loaded</span></div>
+            <div class="metric"><span>Installer mode</span><span id="doctor-installer-mode">source or package</span></div>
+            <div class="metric"><span>Next action</span><span id="doctor-next-action">not loaded</span></div>
           </div>
           <div class="screen-grid">
             <div class="screen-card"><h3>Setup Checks</h3><p class="muted">Node, pnpm, tokens, ports, provider config, channel credentials, and root paths are checked by doctor.</p></div>
@@ -899,7 +942,10 @@ export function renderControlCenterHtml(): string {
         notificationsToken: sessionStorage.getItem("bt.notificationsToken") || "",
         historyToken: sessionStorage.getItem("bt.historyToken") || "",
         historyKind: sessionStorage.getItem("bt.historyKind") || "",
+        chatToken: sessionStorage.getItem("bt.chatToken") || "",
+        chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
         activeScreen: sessionStorage.getItem("bt.activeScreen") || "home",
+        chatSocket: null,
         approvalTokens: Object.create(null)
       };
 
@@ -1007,6 +1053,88 @@ export function renderControlCenterHtml(): string {
         return response.json();
       }
 
+      async function postJson(path, token, body) {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) throw new Error(path + " failed: HTTP " + response.status);
+        return response.json();
+      }
+
+      function appendChat(kind, text) {
+        const log = byId("chat-log");
+        const item = document.createElement("article");
+        item.className = "chat-item";
+        item.innerHTML = '<div class="row"><h3>' + escapeHtml(kind) + '</h3><span class="badge good">WebChat</span></div><p>' + escapeHtml(text) + '</p>';
+        if (log.querySelector(".muted")) log.innerHTML = "";
+        log.appendChild(item);
+        log.scrollTop = log.scrollHeight;
+      }
+
+      function setChatStatus(value, tone) {
+        setText("chat-status", value);
+        byId("chat-status").className = "badge " + (tone || "warn");
+      }
+
+      function disconnectChat() {
+        if (state.chatSocket) {
+          try { state.chatSocket.close(); } catch (_) { /* ignore */ }
+        }
+        state.chatSocket = null;
+        setChatStatus("not connected", "warn");
+      }
+
+      async function connectChat() {
+        state.chatToken = byId("chat-token").value.trim();
+        state.chatUser = byId("chat-user").value.trim() || "owner";
+        sessionStorage.setItem("bt.chatToken", state.chatToken);
+        sessionStorage.setItem("bt.chatUser", state.chatUser);
+        if (!state.chatToken) throw new Error("webchat token is required");
+        disconnectChat();
+        const ticket = await postJson("/ws-ticket", state.chatToken, { user: state.chatUser });
+        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+        const ws = new WebSocket(protocol + "://" + window.location.host + "/ws?ticket=" + encodeURIComponent(ticket.ticket));
+        state.chatSocket = ws;
+        setChatStatus("connecting", "warn");
+        ws.addEventListener("open", function () {
+          setChatStatus("connected", "good");
+        });
+        ws.addEventListener("message", function (event) {
+          let frame = null;
+          try { frame = JSON.parse(event.data); } catch (_) { frame = { kind: "message", content: String(event.data) }; }
+          if (frame.kind === "hello") {
+            appendChat("system", "connected as " + (frame.user || state.chatUser));
+            return;
+          }
+          appendChat(frame.kind || "message", frame.content || compactJson(redactRuntimeValue(frame)));
+        });
+        ws.addEventListener("close", function () {
+          if (state.chatSocket === ws) {
+            state.chatSocket = null;
+            setChatStatus("closed", "warn");
+          }
+        });
+        ws.addEventListener("error", function () {
+          setChatStatus("socket error", "bad");
+        });
+      }
+
+      async function sendChat() {
+        state.chatToken = byId("chat-token").value.trim();
+        state.chatUser = byId("chat-user").value.trim() || "owner";
+        const content = byId("chat-content").value.trim();
+        sessionStorage.setItem("bt.chatToken", state.chatToken);
+        sessionStorage.setItem("bt.chatUser", state.chatUser);
+        if (!state.chatToken) throw new Error("webchat token is required");
+        if (!content) throw new Error("message is required");
+        appendChat("owner", content);
+        const result = await postJson("/inbound", state.chatToken, { user: state.chatUser, content });
+        byId("chat-content").value = "";
+        appendChat("accepted", result.request_id || "request accepted");
+      }
+
       function syncInputs() {
         byId("runtime-token").value = state.runtimeToken;
         byId("approval-token").value = state.approvalToken;
@@ -1015,6 +1143,8 @@ export function renderControlCenterHtml(): string {
         byId("notifications-token").value = state.notificationsToken;
         byId("history-token").value = state.historyToken;
         byId("history-kind").value = state.historyKind;
+        byId("chat-token").value = state.chatToken;
+        byId("chat-user").value = state.chatUser;
       }
 
       function severityTone(severity) {
@@ -1106,6 +1236,11 @@ export function renderControlCenterHtml(): string {
         setText("runtime-invariant", labelForBoolean(invariantOk));
         setText("runtime-audit", labelForBoolean(auditOk));
         setText("first-run-next-action", body.next_recommended_action || "none");
+        setText("doctor-runtime-status", body.gateway_status || "unknown");
+        setText("doctor-webchat-ready", labelForBoolean(body.webchat_ready));
+        setText("doctor-audit-status", labelForBoolean(auditOk));
+        setText("doctor-next-action", body.next_recommended_action || "none");
+        setText("doctor-installer-mode", body.webchat_ready ? "runtime ready" : "setup incomplete");
         setText("runtime-json", compactJson(redactRuntimeValue(body)));
         setText("header-status", body.gateway_status || "loaded");
         byId("header-status").className = "badge " + (body.gateway_status === "ready" ? "good" : "warn");
@@ -1479,6 +1614,19 @@ export function renderControlCenterHtml(): string {
       byId("verify-audit").addEventListener("click", verifyAudit);
       byId("load-authority").addEventListener("click", loadAuthorityTrace);
       byId("load-history").addEventListener("click", loadHistory);
+      byId("connect-chat").addEventListener("click", function () {
+        connectChat().catch(function (error) {
+          setChatStatus("error", "bad");
+          appendChat("error", error.message);
+        });
+      });
+      byId("send-chat").addEventListener("click", function () {
+        sendChat().catch(function (error) {
+          setChatStatus("error", "bad");
+          appendChat("error", error.message);
+        });
+      });
+      byId("disconnect-chat").addEventListener("click", disconnectChat);
 
       syncInputs();
       setActiveScreen(state.activeScreen);

@@ -1,8 +1,16 @@
 # BLUE-TANUKI portable installers
 
-These scripts are the Phase 6-S3 installer layer. They do not build signed
-native packages yet; they install a portable BLUE-TANUKI app directory, run the
-existing setup flow, and create a launcher.
+These scripts and package builders are the installer layer.
+
+There are three distinct paths:
+
+1. source/dev run from the repository,
+2. portable platform scripts that still require a local Node/pnpm-capable environment,
+3. unsigned Windows installer package for users who should not run Node, pnpm,
+   Git, PowerShell setup scripts, or repository commands manually.
+
+The repository does not build signed native packages yet. The Windows product
+package is an unsigned zip-delivered installer package, not a signed MSI/EXE.
 
 ## Distribution readiness
 
@@ -12,6 +20,51 @@ before release. This is an operator-safety gate, not a claim that BLUE-TANUKI
 ships as a signed native product or has an automatic updater.
 The portable installer does not build signed native packages yet.
 Use the uninstall dry-run option before destructive removal when available.
+
+## Windows installer package
+
+Build from a prepared development workspace:
+
+```bash
+pnpm build
+pnpm package:windows
+pnpm package:windows:verify
+```
+
+Artifact:
+
+```text
+release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
+```
+
+User flow:
+
+```text
+1. Extract the zip.
+2. Double-click BlueTanukiSetup.cmd.
+3. Start BLUE-TANUKI from the Start Menu.
+4. Use Conversation / WebChat in the Control Center.
+```
+
+The package bundles Windows Node.js `22.14.0`, installs to
+`%LOCALAPPDATA%\Programs\BlueTanuki`, stores env/settings/logs under
+`%APPDATA%\BlueTanuki`, creates Start Menu shortcuts, and registers current-user
+uninstall. Desktop shortcut creation is optional via `-DesktopShortcut`.
+
+The installer runs first-run setup in stub mode and post-install doctor. The
+installer does not silently enable autostart and does not change HDS-BRAIN
+authority, Approval Gate, audit, capability envelope, or Plugin Review Gate.
+
+Windows installed-app smoke:
+
+```bash
+pnpm smoke:windows-installed
+```
+
+On non-Windows hosts this verifies package structure and reports the runtime
+smoke as skipped. On Windows it installs into temporary locations, launches the
+bundled runtime, sends one stub WebChat message, runs Doctor, stops the runtime,
+and uninstalls.
 
 ## Guided first-run installer
 

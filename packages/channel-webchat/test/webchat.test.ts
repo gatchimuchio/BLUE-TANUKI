@@ -295,6 +295,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("BLUE-TANUKI Control Center");
       expect(html).toContain("Tanuki Dashboard");
       expect(html).toContain("Owner operation screens");
+      expect(html).toContain("Conversation / WebChat");
       expect(html).toContain("Tasks");
       expect(html).toContain("Activity / Audit");
       expect(html).toContain("Memory");
@@ -318,6 +319,12 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Scheduled Tasks");
       expect(html).toContain("Permanent-Use Status");
       expect(html).toContain("First-Run Next Action");
+      expect(html).toContain("chat-token");
+      expect(html).toContain("connect-chat");
+      expect(html).toContain("send-chat");
+      expect(html).toContain("doctor-runtime-status");
+      expect(html).toContain("doctor-webchat-ready");
+      expect(html).toContain("doctor-next-action");
       expect(html).toContain("ApprovalLevel");
       expect(html).toContain("Final Review");
       expect(html).toContain("Notification Center");

@@ -82,6 +82,10 @@
 - [Troubleshooting](../TROUBLESHOOTING.md)
 - [Installer Guide](INSTALLER_GUIDE.md)
 - [Resident App Guide](RESIDENT_APP_GUIDE.md)
+- [Windows Installer Guide](WINDOWS_INSTALLER_GUIDE.md)
+- [Windows First Run](WINDOWS_FIRST_RUN.md)
+- [Windows Packaging Audit](WINDOWS_PACKAGING_AUDIT.md)
+- [Windows Uninstall](WINDOWS_UNINSTALL.md)
 - [Credential Readiness Matrix](CREDENTIAL_READINESS_MATRIX.md)
 - [Channel Readiness Matrix](CHANNEL_READINESS_MATRIX.md)
 - [Channel Promotion Gate](CHANNEL_PROMOTION_GATE.md)
@@ -96,6 +100,9 @@
 ## Distribution
 
 - [Portable Installer Guide](../install/README.md)
+- [Windows Installer Guide](WINDOWS_INSTALLER_GUIDE.md)
+- [Windows Packaging Audit](WINDOWS_PACKAGING_AUDIT.md)
+- [Windows Uninstall](WINDOWS_UNINSTALL.md)
 - [Phase 11-S9 Installer and Setup UX](phase11-s9-installer-setup-ux.md)
 - [Phase 11-S10 Resident Application Integration](phase11-s10-resident-application-integration.md)
 - [Phase 11-S11 Channel First-Party Promotion](phase11-s11-channel-first-party-promotion.md)

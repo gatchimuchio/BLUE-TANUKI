@@ -31,6 +31,7 @@ const INCLUDED_PATHS = [
   "docker-compose.yml",
   "docs",
   "install/linux",
+  "install/windows/product",
   "install/README.md",
   "package.json",
   "pnpm-lock.yaml",
@@ -44,6 +45,9 @@ const REQUIRED_PATHS = [
   "install/README.md",
   "install/linux/install.sh",
   "install/linux/uninstall.sh",
+  "install/windows/product/BlueTanukiSetup.ps1",
+  "install/windows/product/BlueTanukiLauncher.ps1",
+  "install/windows/product/BlueTanukiUninstall.ps1",
   "apps/gateway/dist/main.js",
   "packages/channel-webchat/dist/webchat.js",
   "packages/channel-telegram/dist/telegram.js",
@@ -61,11 +65,22 @@ const REQUIRED_PATHS = [
   "scripts/ga_promotion_gate.ts",
   "docs/v1.0-ga-promotion-review.md",
   "docs/phase11-s13-v1-ga-promotion-execution.md",
+  "docs/WINDOWS_INSTALLER_GUIDE.md",
+  "docs/WINDOWS_FIRST_RUN.md",
+  "docs/WINDOWS_PACKAGING_AUDIT.md",
+  "docs/WINDOWS_UNINSTALL.md",
+  "scripts/package_windows.ts",
+  "scripts/verify_windows_package.ts",
+  "scripts/smoke_windows_installed.ts",
 ] as const;
 
 const INSTALLER_PATHS = [
   "install/linux/install.sh",
   "install/linux/uninstall.sh",
+  "install/windows/product/BlueTanukiSetup.cmd",
+  "install/windows/product/BlueTanukiSetup.ps1",
+  "install/windows/product/BlueTanukiLauncher.ps1",
+  "install/windows/product/BlueTanukiUninstall.ps1",
 ] as const;
 
 const CORE_ROOT_TSCONFIG_REFERENCES = [

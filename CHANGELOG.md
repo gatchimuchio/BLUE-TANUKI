@@ -55,6 +55,8 @@
 - Added BLUE-TANUKI development practice guidance adapted from GUI-Shell, covering evidence source classification, contract-to-runtime coverage, production path minimization, mutation verification, and release-claim separation.
 - Aligned `AGENTS.md` with the GUI-Shell common development discipline while preserving BLUE-TANUKI HDS-BRAIN authority, backup branch, validation, and release-gate rules.
 - Added GUI Shell responsibility-substrate strategy docs and updated the WebChat Control Center with owner-operation screens for dashboard, tasks, approvals, activity/audit, memory, skills, channels, doctor, settings, and developer evidence.
+- Added unsigned Windows installer package generation with bundled Windows Node runtime, Start Menu shortcuts, current-user uninstall registration, Windows package verification, installed-app smoke script, and Windows first-run/uninstall docs.
+- Added a functional Conversation / WebChat Control Center panel using `/ws-ticket`, WebSocket, and `/inbound`, plus live Doctor / Health runtime status fields for installed GUI use.
 
 ## 0.1.0 - 2026-05-06
 
