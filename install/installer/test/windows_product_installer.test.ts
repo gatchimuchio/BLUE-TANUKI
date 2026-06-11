@@ -33,8 +33,12 @@ describe("Windows product installer package", () => {
     expect(uninstall).toContain("User data retained");
     expect(uninstall).toContain("Assert-SafeTarget");
     expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
+    expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_TEMP_SCRIPT");
+    expect(uninstallCmd).toContain("EnableDelayedExpansion");
     expect(uninstallCmd).toContain("copy /Y");
+    expect(uninstallCmd).toContain("cd /d \"%TEMP%\"");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
+    expect(uninstallCmd).toContain("exit /b !ERRORLEVEL!");
   });
 
   it("declares real package, verify, installer, and installed smoke scripts", () => {

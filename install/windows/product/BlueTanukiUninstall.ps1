@@ -131,3 +131,10 @@ if ($PurgeData) {
     Write-Host "Run UninstallBlueTanuki.cmd -PurgeData to remove env, logs, audit, session, and local data."
   }
 }
+
+if ($env:BLUE_TANUKI_UNINSTALL_TEMP_SCRIPT) {
+  $tempScript = Normalize-Path $env:BLUE_TANUKI_UNINSTALL_TEMP_SCRIPT
+  if ($tempScript -eq (Normalize-Path $PSCommandPath)) {
+    Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue
+  }
+}
