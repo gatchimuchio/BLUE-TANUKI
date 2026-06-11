@@ -23,6 +23,7 @@ function defaultArtifact(): string {
 function run(command: string, args: readonly string[], cwd: string): void {
   const result = spawnSync(command, [...args], {
     cwd,
+    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
     stdio: "inherit",
     encoding: "utf8",
   });
@@ -34,6 +35,7 @@ function run(command: string, args: readonly string[], cwd: string): void {
 function runAllowing(command: string, args: readonly string[], cwd: string, allowedStatuses: readonly number[]): void {
   const result = spawnSync(command, [...args], {
     cwd,
+    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
     stdio: "inherit",
     encoding: "utf8",
   });

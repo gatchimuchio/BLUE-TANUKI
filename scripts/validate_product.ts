@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   mkdir,
@@ -80,6 +80,7 @@ export interface ProductValidationOptions {
   runner?: CommandRunner;
   checks?: readonly ProductCheck[];
   now?: Date;
+  progress?: (line: string) => void;
 }
 
 export interface CheckRunRecord {
@@ -221,6 +222,7 @@ export async function runProductValidation(
   const timeoutMs = opts.timeoutMs ?? timeoutFromEnv(process.env);
   const evidenceDir = path.resolve(opts.evidenceDir ?? defaultEvidenceDir(rootDir, opts.now));
   const runner = opts.runner ?? defaultCommandRunner;
+  const progress = opts.progress;
   const shared = new Map<string, unknown>();
   const ctx: CheckContext = {
     rootDir,
@@ -237,6 +239,7 @@ export async function runProductValidation(
 
   const records: CheckRunRecord[] = [];
   for (const check of checks) {
+    progress?.(`[product] START ${check.id}`);
     const started = Date.now();
     const phaseReached = phaseIndex(check.phase) <= phaseIndex(phase);
     const platformMatches = check.platform === "any" || check.platform === platform;
@@ -281,6 +284,7 @@ export async function runProductValidation(
       ...(result.details ? { details: result.details } : {}),
       log_file: logFile,
     });
+    progress?.(`[product] END ${check.id} status=${result.status} duration_ms=${durationMs}`);
   }
 
   await writeFile(
@@ -367,18 +371,10 @@ export async function defaultCommandRunner(
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // ignore
-      }
+      terminateProcessTree(child, "SIGTERM");
       setTimeout(() => {
         if (!settled) {
-          try {
-            child.kill("SIGKILL");
-          } catch {
-            // ignore
-          }
+          terminateProcessTree(child, "SIGKILL");
         }
       }, 2_000).unref();
     }, timeoutMs);
@@ -415,6 +411,31 @@ export async function defaultCommandRunner(
       });
     });
   });
+}
+
+function terminateProcessTree(
+  child: ChildProcessWithoutNullStreams,
+  signal: NodeJS.Signals,
+): void {
+  if (process.platform === "win32" && child.pid) {
+    try {
+      const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.on("error", () => {
+        // best-effort timeout cleanup
+      });
+      killer.unref();
+    } catch {
+      // fall through to direct kill
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // best-effort timeout cleanup
+  }
 }
 
 function timeoutFromEnv(env: NodeJS.ProcessEnv): number {
@@ -969,6 +990,7 @@ async function main(): Promise<void> {
   const result = await runProductValidation({
     phase: args.phase,
     evidenceDir: args.evidenceDir,
+    progress: (line) => process.stdout.write(`${line}\n`),
   });
   for (const record of result.checks) {
     process.stdout.write(
