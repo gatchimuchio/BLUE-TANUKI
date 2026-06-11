@@ -2,7 +2,7 @@
 param(
   [string]$Command = "open",
   [Parameter(ValueFromRemainingArguments = $true)]
-  [string[]]$RemainingArgs
+  [string[]]$RemainingArgs = @()
 )
 
 Set-StrictMode -Version Latest
@@ -125,7 +125,10 @@ function Start-Resident {
   New-Item -ItemType Directory -Force -Path $dataRoot, $dataDir, $logDir | Out-Null
   $nodeExe = Find-NodeExe
   $env:BLUE_TANUKI_ENV_FILE = $envFile
-  $rawArgs = @("apps/gateway/dist/main.js", "--serve", "--env-file", $envFile) + $RemainingArgs
+  $rawArgs = @("apps/gateway/dist/main.js", "--serve", "--env-file", $envFile)
+  if ($RemainingArgs) {
+    $rawArgs += $RemainingArgs
+  }
   $processArgs = @($rawArgs | ForEach-Object { Quote-Arg $_ })
   $process = Start-Process -FilePath $nodeExe -ArgumentList $processArgs -WorkingDirectory $installRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
   Set-Content -LiteralPath $pidFile -Value $process.Id -Encoding ASCII
