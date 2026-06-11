@@ -86,7 +86,13 @@ function Resolve-DataRoot($InstallRootResolved, $DataRootArg) {
   return "$env:APPDATA\BlueTanuki"
 }
 
-$installRootInput = if ($InstallRoot) { $InstallRoot } else { Split-Path -Parent $PSCommandPath }
+$installRootInput = if ($InstallRoot) {
+  $InstallRoot
+} elseif ($env:BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT) {
+  $env:BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT
+} else {
+  Split-Path -Parent $PSCommandPath
+}
 $installRootResolved = Assert-SafeTarget $installRootInput "InstallRoot"
 $dataRootResolved = Assert-SafeTarget (Resolve-DataRoot $installRootResolved $DataRoot) "DataRoot"
 $launcher = Join-Path $installRootResolved "BlueTanukiLauncher.ps1"

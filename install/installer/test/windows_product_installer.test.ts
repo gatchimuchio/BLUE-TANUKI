@@ -24,6 +24,7 @@ describe("Windows product installer package", () => {
   it("exposes launcher lifecycle, doctor, logs, and uninstall without authority shortcuts", () => {
     const launcher = read("install/windows/product/BlueTanukiLauncher.ps1");
     const uninstall = read("install/windows/product/BlueTanukiUninstall.ps1");
+    const uninstallCmd = read("install/windows/product/UninstallBlueTanuki.cmd");
     expect(launcher).toContain("Start-Resident");
     expect(launcher).toContain("Run-Doctor");
     expect(launcher).toContain("http://127.0.0.1:8787/app");
@@ -31,6 +32,9 @@ describe("Windows product installer package", () => {
     expect(uninstall).toContain("PurgeData");
     expect(uninstall).toContain("User data retained");
     expect(uninstall).toContain("Assert-SafeTarget");
+    expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
+    expect(uninstallCmd).toContain("copy /Y");
+    expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
   });
 
   it("declares real package, verify, installer, and installed smoke scripts", () => {

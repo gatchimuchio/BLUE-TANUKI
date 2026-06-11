@@ -259,6 +259,11 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
     "Assert-SafeTarget",
     "blue-tanuki-install.json",
     "Split-Path -Parent $PSCommandPath",
+    "BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT",
+  ]);
+  requireSourceText("install/windows/product/UninstallBlueTanuki.cmd", [
+    "copy /Y",
+    "BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT",
   ]);
 
   console.log(`windows_installer_verified=${archive}`);
