@@ -146,6 +146,20 @@ async function waitFor(url: string, timeoutMs: number): Promise<boolean> {
   return false;
 }
 
+async function waitForStopped(url: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetchWithTimeout(url, undefined, 1_000, "stopped healthz probe");
+      if (!response.ok) return true;
+    } catch {
+      return true;
+    }
+    await sleep(250);
+  }
+  return false;
+}
+
 async function receiveFirstMessage(
   wsUrl: string,
   token: string,
@@ -282,14 +296,14 @@ async function main(): Promise<void> {
       throw new Error(`first message smoke failed hello=${firstMessage.hello} channel_send=${firstMessage.channelSend}`);
     }
 
-    runAllowing("powershell.exe", [
+    run("powershell.exe", [
       "-NoProfile",
       "-ExecutionPolicy",
       "Bypass",
       "-File",
       launcher,
-      "doctor",
-    ], installRoot, [0, 1], "launcher doctor", 120_000);
+      "status",
+    ], installRoot, "launcher status running", 60_000);
     run("powershell.exe", [
       "-NoProfile",
       "-ExecutionPolicy",
@@ -299,6 +313,45 @@ async function main(): Promise<void> {
       "stop",
     ], installRoot, "launcher stop", 60_000);
     stopped = true;
+    const stoppedReady = await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000);
+    if (!stoppedReady) throw new Error("installed gateway healthz stayed reachable after launcher stop");
+    console.log("stop_result=pass");
+
+    runAllowing("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      launcher,
+      "doctor",
+    ], installRoot, [0, 1], "launcher doctor", 120_000);
+    console.log("doctor_result=pass");
+
+    run("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      launcher,
+      "restart",
+    ], installRoot, "launcher restart", 120_000);
+    stopped = false;
+    logStep("wait installed gateway healthz after restart");
+    const restartHealthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
+    if (!restartHealthReady) throw new Error("installed gateway healthz did not become ready after restart");
+    logStep("done installed gateway healthz after restart");
+    console.log("restart_result=pass");
+    run("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      launcher,
+      "stop",
+    ], installRoot, "launcher final stop", 60_000);
+    stopped = true;
+    const finalStoppedReady = await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000);
+    if (!finalStoppedReady) throw new Error("installed gateway healthz stayed reachable after launcher final stop");
     run("cmd.exe", [
       "/d",
       "/s",
@@ -306,7 +359,7 @@ async function main(): Promise<void> {
       path.join(installRoot, "UninstallBlueTanuki.cmd"),
       "-PurgeData",
       "-Quiet",
-    ], installRoot, "installer uninstall", 120_000);
+    ], work, "installer uninstall", 120_000);
     uninstalled = true;
 
     console.log("windows_installed_smoke=pass");
@@ -314,7 +367,6 @@ async function main(): Promise<void> {
     console.log("launch_result=pass");
     console.log("gui_result=pass");
     console.log("first_message_result=pass");
-    console.log("doctor_result=pass");
     console.log("uninstall_result=pass");
   } finally {
     if (process.platform === "win32") {
@@ -341,7 +393,7 @@ async function main(): Promise<void> {
             path.join(installRoot, "UninstallBlueTanuki.cmd"),
             "-PurgeData",
             "-Quiet",
-          ], installRoot, [0, 1], "cleanup installer uninstall", 120_000);
+          ], work, [0, 1], "cleanup installer uninstall", 120_000);
         } catch (error) {
           console.error(`[windows-smoke] cleanup installer uninstall failed: ${errorMessage(error)}`);
         }

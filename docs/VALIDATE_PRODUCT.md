@@ -54,7 +54,7 @@ P3 checks are registered as Windows-target checks. Linux runs report them as `sk
 | ID | evidence source | 内容 |
 |---|---|---|
 | `p3.package_windows_verify` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/package_windows.ts` を実行してWindows installer zipを生成し、`scripts/verify_windows_package.ts` でmanifest、sha256、zip contents、secret exclusion、authority boundary metadataを検証する |
-| `p3.windows_installed_smoke` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/smoke_windows_installed.ts` をWindows上で実行し、install→常駐起動→GUI/WebChat first message→doctor→stop→uninstallを検証する |
+| `p3.windows_installed_smoke` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/smoke_windows_installed.ts` をWindows上で実行し、install→常駐起動→GUI/WebChat first message→stop→doctor→restart→stop→uninstallを検証する |
 
 ## Incremental Registration
 
