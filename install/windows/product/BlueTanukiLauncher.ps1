@@ -41,8 +41,6 @@ $pidFile = Join-Path $dataRoot "blue-tanuki.pid"
 $stdoutLog = Join-Path $logDir "blue-tanuki.out.log"
 $stderrLog = Join-Path $logDir "blue-tanuki.err.log"
 $doctorLog = Join-Path $logDir "doctor.json"
-$controlCenterUrl = "http://127.0.0.1:8787/app"
-$healthUrl = "http://127.0.0.1:8787/healthz"
 
 function Find-NodeExe {
   $runtimeRoot = Join-Path $installRoot "runtime"
@@ -69,6 +67,63 @@ function Read-ResidentPid {
   return $null
 }
 
+function Parse-EnvValue($RawValue) {
+  $trimmed = $RawValue.Trim()
+  if ($trimmed.StartsWith('"')) {
+    try {
+      return [string]($trimmed | ConvertFrom-Json)
+    } catch {
+      return $trimmed.Trim('"')
+    }
+  }
+  if ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'") -and $trimmed.Length -ge 2) {
+    return $trimmed.Substring(1, $trimmed.Length - 2)
+  }
+  return $trimmed
+}
+
+function Get-EnvFileValue($Name, $DefaultValue) {
+  if (-not (Test-Path -LiteralPath $envFile)) {
+    return $DefaultValue
+  }
+  foreach ($line in Get-Content -LiteralPath $envFile -ErrorAction SilentlyContinue) {
+    $trimmed = $line.Trim()
+    if (-not $trimmed -or $trimmed.StartsWith("#")) {
+      continue
+    }
+    $idx = $trimmed.IndexOf("=")
+    if ($idx -le 0) {
+      continue
+    }
+    $key = $trimmed.Substring(0, $idx).Trim()
+    if ($key -eq $Name) {
+      return Parse-EnvValue $trimmed.Substring($idx + 1)
+    }
+  }
+  return $DefaultValue
+}
+
+function Get-WebHost {
+  return Get-EnvFileValue "WEBCHAT_HOST" "127.0.0.1"
+}
+
+function Get-WebPort {
+  $rawPort = Get-EnvFileValue "WEBCHAT_PORT" "8787"
+  $port = 8787
+  if ([int]::TryParse($rawPort, [ref]$port) -and $port -gt 0 -and $port -lt 65536) {
+    return $port
+  }
+  return 8787
+}
+
+function Get-ControlCenterUrl {
+  return "http://$(Get-WebHost):$(Get-WebPort)/app"
+}
+
+function Get-HealthUrl {
+  return "http://$(Get-WebHost):$(Get-WebPort)/healthz"
+}
+
 function Test-ResidentRunning {
   $pidValue = Read-ResidentPid
   if (-not $pidValue) {
@@ -84,11 +139,46 @@ function Quote-Arg($Value) {
   return $Value
 }
 
+function Resolve-ListenAddress($HostName) {
+  $address = [System.Net.IPAddress]::Loopback
+  if ([System.Net.IPAddress]::TryParse($HostName, [ref]$address)) {
+    return $address
+  }
+  if ($HostName -eq "localhost") {
+    return [System.Net.IPAddress]::Loopback
+  }
+  return [System.Net.IPAddress]::Loopback
+}
+
+function Test-PortBindable($HostName, $Port) {
+  $listener = $null
+  try {
+    $address = Resolve-ListenAddress $HostName
+    $listener = [System.Net.Sockets.TcpListener]::new($address, $Port)
+    $listener.Start()
+    return $true
+  } catch {
+    return $false
+  } finally {
+    if ($listener) {
+      $listener.Stop()
+    }
+  }
+}
+
+function Assert-PortAvailable {
+  $hostName = Get-WebHost
+  $port = Get-WebPort
+  if (-not (Test-PortBindable $hostName $port)) {
+    Fail "port_conflict=${hostName}:$port. Stop the process using this port, change WEBCHAT_PORT in $envFile, or launch BLUE-TANUKI Safe Mode after repair. Logs: $logDir"
+  }
+}
+
 function Wait-Health($TimeoutMs) {
   $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
   while ((Get-Date) -lt $deadline) {
     try {
-      $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
+      $response = Invoke-WebRequest -UseBasicParsing -Uri (Get-HealthUrl) -TimeoutSec 2
       if ($response.StatusCode -eq 200) {
         return $true
       }
@@ -116,11 +206,35 @@ function Ensure-EnvFile {
   }
 }
 
-function Start-Resident {
+function Set-SafeModeEnvironment {
+  $env:BLUE_TANUKI_SAFE_MODE = "1"
+  $env:LLM_BACKEND = "stub"
+  $env:ANTHROPIC_API_KEY = ""
+  $env:OPENAI_API_KEY = ""
+  $env:OPENAI_COMPAT_API_KEY = ""
+  $env:OPENROUTER_API_KEY = ""
+  $env:TELEGRAM_BOT_TOKEN = ""
+  $env:SLACK_BOT_TOKEN = ""
+  $env:SLACK_APP_TOKEN = ""
+  $env:DISCORD_BOT_TOKEN = ""
+  $env:MICROSOFT_GRAPH_ACCESS_TOKEN = ""
+  $env:LINE_CHANNEL_ACCESS_TOKEN = ""
+  $env:COMPOSIO_API_KEY = ""
+  $env:COMPOSIO_DRY_RUN = "true"
+  $env:BLUE_TANUKI_DAILY_BRIEF_ENABLED = "0"
+  $env:BLUE_TANUKI_SCHEDULES_JSON = ""
+}
+
+function Start-Resident($SafeMode = $false) {
   Ensure-EnvFile
   if (Test-ResidentRunning) {
     Write-Host "resident_status=running pid=$(Read-ResidentPid)"
     return
+  }
+  Assert-PortAvailable
+  if ($SafeMode) {
+    Set-SafeModeEnvironment
+    Write-Host "safe_mode=enabled"
   }
   New-Item -ItemType Directory -Force -Path $dataRoot, $dataDir, $logDir | Out-Null
   $nodeExe = Find-NodeExe
@@ -137,7 +251,7 @@ function Start-Resident {
   } else {
     Write-Warning "resident started but health did not become ready within timeout. Logs: $logDir"
   }
-  Write-Host "control_center=$controlCenterUrl"
+  Write-Host "control_center=$(Get-ControlCenterUrl)"
   Write-Host "logs=$logDir"
 }
 
@@ -163,14 +277,19 @@ function Show-Status {
   } else {
     Write-Host "resident_status=stopped"
   }
-  Write-Host "control_center=$controlCenterUrl"
+  Write-Host "control_center=$(Get-ControlCenterUrl)"
   Write-Host "env_file=$envFile"
   Write-Host "logs=$logDir"
 }
 
 function Open-ControlCenter {
-  Start-Resident
-  Start-Process $controlCenterUrl
+  Start-Resident $false
+  Start-Process (Get-ControlCenterUrl)
+}
+
+function Start-SafeMode {
+  Stop-Resident
+  Start-Resident $true
 }
 
 function Run-Doctor($OpenLog) {
@@ -201,11 +320,13 @@ function Open-Logs {
 
 switch ($Command.ToLowerInvariant()) {
   "open" { Open-ControlCenter }
-  "start" { Start-Resident }
-  "resident-start" { Start-Resident }
+  "start" { Start-Resident $false }
+  "resident-start" { Start-Resident $false }
+  "safe-mode" { Start-SafeMode }
+  "resident-safe-mode" { Start-SafeMode }
   "stop" { Stop-Resident }
   "resident-stop" { Stop-Resident }
-  "restart" { Stop-Resident; Start-Resident }
+  "restart" { Stop-Resident; Start-Resident $false }
   "status" { Show-Status }
   "resident-status" { Show-Status }
   "doctor" { Run-Doctor $false }
@@ -213,7 +334,7 @@ switch ($Command.ToLowerInvariant()) {
   "logs" { Open-Logs }
   "resident-logs" { Open-Logs }
   "help" {
-    Write-Host "Usage: BlueTanukiLauncher.ps1 [open|start|stop|restart|status|doctor|doctor-open|logs|help]"
+    Write-Host "Usage: BlueTanukiLauncher.ps1 [open|start|safe-mode|stop|restart|status|doctor|doctor-open|logs|help]"
     Write-Host "Autostart is opt-in only and is not enabled by this Windows installer package."
   }
   default { Fail "unknown command: $Command" }

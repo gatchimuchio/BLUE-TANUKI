@@ -766,11 +766,13 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
     log.includes("stop_result=pass") &&
     log.includes("doctor_result=pass") &&
     log.includes("restart_result=pass") &&
+    log.includes("port_conflict_result=pass") &&
+    log.includes("safe_mode_result=pass") &&
     log.includes("uninstall_result=pass");
   return {
     status: pass ? "pass" : "fail",
     summary: pass
-      ? "Windows installed-app smoke passed install/start/gui/message/stop/doctor/restart/uninstall"
+      ? "Windows installed-app smoke passed install/port-conflict/start/gui/message/stop/doctor/restart/safe-mode/uninstall"
       : `Windows installed-app smoke failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
     raw_log: log,
     log_excerpt: excerpt(log),
@@ -784,6 +786,8 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
       stop_result: log.includes("stop_result=pass"),
       doctor_result: log.includes("doctor_result=pass"),
       restart_result: log.includes("restart_result=pass"),
+      port_conflict_result: log.includes("port_conflict_result=pass"),
+      safe_mode_result: log.includes("safe_mode_result=pass"),
       uninstall_result: log.includes("uninstall_result=pass"),
     },
   };

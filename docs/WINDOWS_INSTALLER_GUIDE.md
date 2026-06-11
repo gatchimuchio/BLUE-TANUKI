@@ -60,8 +60,23 @@ This includes OpenRouter and Composio API keys.
 - `BLUE-TANUKI` opens the Control Center.
 - `BLUE-TANUKI Doctor` runs Doctor and opens the doctor log.
 - `BLUE-TANUKI Logs` opens the logs folder.
+- `BLUE-TANUKI Safe Mode` starts the Control Center with external LLM
+  providers, channel tokens, Composio, and schedules disabled for recovery.
 - `BLUE-TANUKI Stop` stops the resident runtime.
 - `Uninstall BLUE-TANUKI` removes the app while preserving user data by default.
+
+## Port Conflicts and Safe Mode
+
+The launcher reads `WEBCHAT_HOST` and `WEBCHAT_PORT` from
+`%APPDATA%\BlueTanuki\blue-tanuki.env` before starting the resident runtime.
+If the configured local port is already in use, startup fails before spawning a
+resident process and prints a `port_conflict=<host>:<port>` message with the env
+file and log locations.
+
+To recover, stop the process using the port or change `WEBCHAT_PORT` in the env
+file, then start BLUE-TANUKI again. Use `BLUE-TANUKI Safe Mode` when you need
+the Control Center and Doctor without external providers, connector calls,
+channel connections, or schedules.
 
 ## Installer UX Boundary
 

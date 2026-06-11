@@ -162,6 +162,7 @@ function Install-Shortcuts($InstallRootResolved, $DesktopShortcutEnabled) {
   New-Shortcut (Join-Path $programs "BLUE-TANUKI.lnk") $ps "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcher`" open" $InstallRootResolved "Open BLUE-TANUKI Control Center" $icon
   New-Shortcut (Join-Path $programs "BLUE-TANUKI Doctor.lnk") $ps "-NoProfile -ExecutionPolicy Bypass -File `"$launcher`" doctor-open" $InstallRootResolved "Run BLUE-TANUKI Doctor" $icon
   New-Shortcut (Join-Path $programs "BLUE-TANUKI Logs.lnk") $ps "-NoProfile -ExecutionPolicy Bypass -File `"$launcher`" logs" $InstallRootResolved "Open BLUE-TANUKI logs" $icon
+  New-Shortcut (Join-Path $programs "BLUE-TANUKI Safe Mode.lnk") $ps "-NoProfile -ExecutionPolicy Bypass -File `"$launcher`" safe-mode" $InstallRootResolved "Start BLUE-TANUKI with external providers and connectors disabled" $icon
   New-Shortcut (Join-Path $programs "BLUE-TANUKI Stop.lnk") $ps "-NoProfile -ExecutionPolicy Bypass -File `"$launcher`" stop" $InstallRootResolved "Stop BLUE-TANUKI resident runtime" $icon
   New-Shortcut (Join-Path $programs "Uninstall BLUE-TANUKI.lnk") $uninstaller "" $InstallRootResolved "Uninstall BLUE-TANUKI" $icon
   if ($DesktopShortcutEnabled) {

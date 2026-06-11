@@ -49,6 +49,7 @@ const REQUIRED_ENTRIES = [
   "launcher/BlueTanukiDoctor.cmd",
   "launcher/BlueTanukiLogs.cmd",
   "launcher/BlueTanukiRestart.cmd",
+  "launcher/BlueTanukiSafeMode.cmd",
   "launcher/BlueTanukiStop.cmd",
   "launcher/UninstallBlueTanuki.cmd",
   "app/package.json",
@@ -245,8 +246,12 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
     "data_root",
   ]);
   requireSourceText("install/windows/product/BlueTanukiLauncher.ps1", [
-    "http://127.0.0.1:8787/app",
+    "Get-ControlCenterUrl",
     "Start-Resident",
+    "Assert-PortAvailable",
+    "port_conflict=",
+    "safe-mode",
+    "BLUE_TANUKI_SAFE_MODE",
     "Run-Doctor",
     "bundled node.exe",
     "blue-tanuki-install.json",

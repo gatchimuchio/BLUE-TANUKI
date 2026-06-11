@@ -16,6 +16,7 @@ Portable installers create a `blue-tanuki` launcher. The resident commands are:
 
 ```bash
 blue-tanuki resident-start
+blue-tanuki resident-safe-mode
 blue-tanuki resident-status
 blue-tanuki resident-stop
 blue-tanuki resident-open
@@ -35,6 +36,9 @@ powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuk
 
 - `resident-start` starts `apps/gateway/dist/main.js --serve` in the background
   with the generated env file.
+- `resident-safe-mode` starts the same gateway with external providers,
+  connector credentials, channel tokens, daily brief, and schedules disabled for
+  recovery.
 - `resident-status` reports the resident process state, env file path, log
   directory, and Control Center URL.
 - `resident-stop` stops only the recorded resident Gateway process.

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import * as net from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { WebSocket } from "ws";
@@ -86,6 +87,36 @@ function runAllowing(
     throw new Error(`${label} failed with exit ${result.status} signal=${result.signal ?? "none"}`);
   }
   logStep(`done ${label} status=${result.status ?? "null"}`);
+}
+
+function runExpectingStatus(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  expectedStatus: number,
+  label: string,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+  extraEnv: Record<string, string> = {},
+): string {
+  logStep(`start ${label}`);
+  const result = spawnSync(command, [...args], {
+    cwd,
+    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
+    stdio: "pipe",
+    encoding: "utf8",
+    timeout: timeoutMs,
+    windowsHide: true,
+  });
+  const output = [result.stdout ?? "", result.stderr ?? ""].join("\n");
+  if (output.trim()) process.stdout.write(output);
+  if (result.error) {
+    throw new Error(`${label} failed: ${result.error.message}`);
+  }
+  if (result.status !== expectedStatus) {
+    throw new Error(`${label} expected exit ${expectedStatus} but got ${result.status} signal=${result.signal ?? "none"}`);
+  }
+  logStep(`done ${label} status=${result.status}`);
+  return output;
 }
 
 function expandArchive(artifact: string, destination: string): void {
@@ -179,6 +210,33 @@ async function waitForFileText(file: string, timeoutMs: number): Promise<string 
     await sleep(250);
   }
   return existsSync(file) ? readFileSync(file, "utf8") : undefined;
+}
+
+async function holdLoopbackPort(port: number): Promise<net.Server> {
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error): void => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = (): void => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, "127.0.0.1");
+  });
+  return server;
+}
+
+async function closeServer(server: net.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 async function receiveFirstMessage(
@@ -277,6 +335,30 @@ async function main(): Promise<void> {
     setupComplete = true;
 
     launcher = path.join(installRoot, "BlueTanukiLauncher.ps1");
+    const env = parseEnvFile(path.join(dataRoot, "blue-tanuki.env"));
+    const port = env.WEBCHAT_PORT ?? "8787";
+    const portNumber = Number.parseInt(port, 10);
+    if (!Number.isInteger(portNumber) || portNumber <= 0) {
+      throw new Error(`WEBCHAT_PORT is invalid in installed env file: ${port}`);
+    }
+    const blocker = await holdLoopbackPort(portNumber);
+    try {
+      const conflictOutput = runExpectingStatus("powershell.exe", [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        launcher,
+        "start",
+      ], installRoot, 2, "launcher port conflict", 60_000);
+      if (!conflictOutput.includes(`port_conflict=127.0.0.1:${port}`)) {
+        throw new Error("launcher port conflict output did not include expected port_conflict marker");
+      }
+      console.log("port_conflict_result=pass");
+    } finally {
+      await closeServer(blocker);
+    }
+
     run("powershell.exe", [
       "-NoProfile",
       "-ExecutionPolicy",
@@ -286,8 +368,6 @@ async function main(): Promise<void> {
       "start",
     ], installRoot, "launcher start", 120_000);
 
-    const env = parseEnvFile(path.join(dataRoot, "blue-tanuki.env"));
-    const port = env.WEBCHAT_PORT ?? "8787";
     const token = env.WEBCHAT_TOKEN;
     if (!token) throw new Error("WEBCHAT_TOKEN missing from installed env file");
     logStep("wait installed gateway healthz");
@@ -374,6 +454,29 @@ async function main(): Promise<void> {
     stopped = true;
     const finalStoppedReady = await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000);
     if (!finalStoppedReady) throw new Error("installed gateway healthz stayed reachable after launcher final stop");
+    run("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      launcher,
+      "safe-mode",
+    ], installRoot, "launcher safe mode", 120_000);
+    stopped = false;
+    const safeModeHealthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
+    if (!safeModeHealthReady) throw new Error("installed gateway healthz did not become ready in safe mode");
+    console.log("safe_mode_result=pass");
+    run("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      launcher,
+      "stop",
+    ], installRoot, "launcher safe mode stop", 60_000);
+    stopped = true;
+    const safeModeStoppedReady = await waitForStopped(`http://127.0.0.1:${port}/healthz`, 10_000);
+    if (!safeModeStoppedReady) throw new Error("installed gateway healthz stayed reachable after launcher safe mode stop");
     run("cmd.exe", [
       "/d",
       "/s",
@@ -403,6 +506,8 @@ async function main(): Promise<void> {
     console.log("launch_result=pass");
     console.log("gui_result=pass");
     console.log("first_message_result=pass");
+    console.log("port_conflict_result=pass");
+    console.log("safe_mode_result=pass");
     console.log("uninstall_result=pass");
   } finally {
     if (process.platform === "win32") {

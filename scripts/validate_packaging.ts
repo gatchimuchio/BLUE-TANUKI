@@ -155,10 +155,15 @@ function main(): void {
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Autostart: not enabled by installer");
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "post-install doctor");
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Expand-Archive");
+  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "BLUE-TANUKI Safe Mode");
 
   const winProductLauncher = read("install/windows/product/BlueTanukiLauncher.ps1");
-  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "http://127.0.0.1:8787/app");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Get-ControlCenterUrl");
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Start-Resident");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Assert-PortAvailable");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "port_conflict=");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "safe-mode");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "BLUE_TANUKI_SAFE_MODE");
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Run-Doctor");
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "bundled node.exe");
 

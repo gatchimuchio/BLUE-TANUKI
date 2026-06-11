@@ -27,8 +27,13 @@ describe("Windows product installer package", () => {
     const uninstallCmd = read("install/windows/product/UninstallBlueTanuki.cmd");
     expect(launcher).toContain("Start-Resident");
     expect(launcher).toContain("Run-Doctor");
-    expect(launcher).toContain("http://127.0.0.1:8787/app");
+    expect(launcher).toContain("Get-ControlCenterUrl");
+    expect(launcher).toContain("Assert-PortAvailable");
+    expect(launcher).toContain("port_conflict=");
+    expect(launcher).toContain("safe-mode");
+    expect(launcher).toContain("BLUE_TANUKI_SAFE_MODE");
     expect(launcher).toContain("Autostart is opt-in only");
+    expect(read("install/windows/product/BlueTanukiSafeMode.cmd")).toContain("safe-mode");
     expect(uninstall).toContain("PurgeData");
     expect(uninstall).toContain("User data retained");
     expect(uninstall).toContain("Assert-SafeTarget");
@@ -53,5 +58,7 @@ describe("Windows product installer package", () => {
     expect(read("scripts/package_windows.ts")).toContain("windows-x64-zip-installer");
     expect(read("scripts/verify_windows_package.ts")).toContain("verifyWindowsPackage");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("windows_runtime_smoke=skipped");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("port_conflict_result=pass");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("safe_mode_result=pass");
   });
 });

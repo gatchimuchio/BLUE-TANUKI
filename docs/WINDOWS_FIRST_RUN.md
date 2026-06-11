@@ -75,6 +75,7 @@ stub-mode first-run.
 Use Start Menu shortcuts:
 
 - `BLUE-TANUKI Stop`
+- `BLUE-TANUKI Safe Mode`
 - `BLUE-TANUKI`
 
 The launcher stores runtime logs under:
@@ -82,3 +83,11 @@ The launcher stores runtime logs under:
 ```text
 %APPDATA%\BlueTanuki\logs
 ```
+
+If first launch reports `port_conflict=<host>:<port>`, another local process is
+using the configured WebChat port. Stop that process or change `WEBCHAT_PORT` in
+`%APPDATA%\BlueTanuki\blue-tanuki.env`, then start BLUE-TANUKI again.
+
+Use `BLUE-TANUKI Safe Mode` for recovery. It starts the local Control Center
+with stub LLM mode and disables external provider keys, connector keys,
+channel tokens, daily brief, and schedules for that launch.
