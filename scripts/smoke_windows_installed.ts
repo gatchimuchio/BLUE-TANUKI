@@ -527,6 +527,7 @@ async function main(): Promise<void> {
       }
       if (setupComplete && !uninstalled) {
         try {
+          const cleanupStatusFile = path.join(work, "cleanup-uninstall.status");
           runAllowing("cmd.exe", [
             "/d",
             "/s",
@@ -535,8 +536,11 @@ async function main(): Promise<void> {
             "-PurgeData",
             "-Quiet",
           ], work, [0, 1], "cleanup installer uninstall", 120_000, {
-            BLUE_TANUKI_UNINSTALL_STATUS_FILE: path.join(work, "cleanup-uninstall.status"),
+            BLUE_TANUKI_UNINSTALL_STATUS_FILE: cleanupStatusFile,
           });
+          await waitForFileText(cleanupStatusFile, 10_000);
+          await waitForAbsent(installRoot, 10_000);
+          await waitForAbsent(dataRoot, 10_000);
         } catch (error) {
           console.error(`[windows-smoke] cleanup installer uninstall failed: ${errorMessage(error)}`);
         }
