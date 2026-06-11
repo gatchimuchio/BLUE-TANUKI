@@ -15,6 +15,7 @@
     "validate:repo-health": "node node_modules/tsx/dist/cli.mjs scripts/repo_health_gate.ts",
     "validate:channels": "node node_modules/tsx/dist/cli.mjs scripts/channel_promotion_gate.ts",
     "validate:ga": "node node_modules/tsx/dist/cli.mjs scripts/ga_promotion_gate.ts",
+    "validate:product": "node node_modules/tsx/dist/cli.mjs scripts/validate_product.ts",
     "plugin:review": "node node_modules/tsx/dist/cli.mjs scripts/plugin_review_gate.ts",
     "gateway": "pnpm --filter @blue-tanuki/gateway run start",
     "gateway:dev": "pnpm --filter @blue-tanuki/gateway run dev",

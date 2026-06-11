@@ -42,6 +42,7 @@ jobs:
       - run: pnpm validate:channels
       - run: pnpm plugin:review -- --package packages/channel-slack --bundled
       - run: pnpm validate:ga
+      - run: pnpm validate:product
       - run: pnpm smoke:serve
       - run: pnpm smoke:resume
       - run: pnpm smoke:live

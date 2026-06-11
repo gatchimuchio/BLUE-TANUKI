@@ -97,6 +97,7 @@
 - [Update / Rollback / Recovery Runbook](UPDATE_ROLLBACK_RUNBOOK.md)
 - [Known Environment Failures](known-environment-failures.md)
 - [Doctor Output](doctor-output.md)
+- [Validate Product](VALIDATE_PRODUCT.md)
 - [Repository Health Inventory](repository-health-inventory.md)
 - [Repository Health Phase 4 Final Commissioning](repository-health-phase4-final-commissioning.md)
 - [Production Import Graph](production-import-graph.md)
