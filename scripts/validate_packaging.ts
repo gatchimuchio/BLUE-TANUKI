@@ -166,6 +166,8 @@ function main(): void {
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Start-Resident");
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Assert-PortAvailable");
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "port_conflict=");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Start-Watchdog");
+  requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "watchdog_restarted=pass");
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "safe-mode");
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "BLUE_TANUKI_SAFE_MODE");
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Run-Doctor");
@@ -191,6 +193,7 @@ function main(): void {
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "windows_runtime_smoke=skipped");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "first_message_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "repair_install_result=pass");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "crash_recovery_result=pass");
 
   const macInstall = read("install/macos/install.sh");
   requireIncludes("install/macos/install.sh", macInstall, "Node.js 22.14.0");

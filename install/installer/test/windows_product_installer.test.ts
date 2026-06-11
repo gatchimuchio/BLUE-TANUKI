@@ -30,6 +30,8 @@ describe("Windows product installer package", () => {
     expect(launcher).toContain("Get-ControlCenterUrl");
     expect(launcher).toContain("Assert-PortAvailable");
     expect(launcher).toContain("port_conflict=");
+    expect(launcher).toContain("Start-Watchdog");
+    expect(launcher).toContain("watchdog_restarted=pass");
     expect(launcher).toContain("safe-mode");
     expect(launcher).toContain("BLUE_TANUKI_SAFE_MODE");
     expect(launcher).toContain("Autostart is opt-in only");
@@ -60,6 +62,7 @@ describe("Windows product installer package", () => {
     expect(read("scripts/smoke_windows_installed.ts")).toContain("windows_runtime_smoke=skipped");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("port_conflict_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("repair_install_result=pass");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("crash_recovery_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("safe_mode_result=pass");
   });
 });

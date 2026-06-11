@@ -250,6 +250,8 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
     "Start-Resident",
     "Assert-PortAvailable",
     "port_conflict=",
+    "Start-Watchdog",
+    "watchdog_restarted=pass",
     "safe-mode",
     "BLUE_TANUKI_SAFE_MODE",
     "Run-Doctor",

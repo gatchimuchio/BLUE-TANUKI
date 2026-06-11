@@ -48,6 +48,12 @@ powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuk
 The resident process is still the normal Gateway serve process. It emits the
 same audit records and uses the same Approval Gate as foreground `start`.
 
+The Windows product launcher also starts a watchdog process for crash recovery.
+The watchdog observes only the recorded resident process and restarts the same
+Gateway serve command if that process exits unexpectedly. It is lifecycle glue:
+it does not approve actions, alter HDS-BRAIN policy, bypass Approval Gate, or
+create a second authority path.
+
 ## Autostart
 
 Autostart is opt-in only. Installers do not enable autostart during setup.

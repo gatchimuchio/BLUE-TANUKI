@@ -11,6 +11,7 @@ const GATEWAY_READY_TIMEOUT_MS = 30_000;
 const FETCH_TIMEOUT_MS = 10_000;
 const WEBSOCKET_OPEN_TIMEOUT_MS = 10_000;
 const FIRST_MESSAGE_TIMEOUT_MS = 10_000;
+const CRASH_RECOVERY_TIMEOUT_MS = 60_000;
 const UNINSTALL_TIMEOUT_MS = 60_000;
 
 function argValue(name: string): string | undefined {
@@ -225,6 +226,24 @@ async function waitForFileText(file: string, timeoutMs: number): Promise<string 
   return existsSync(file) ? readFileSync(file, "utf8") : undefined;
 }
 
+function readPidFile(file: string): number | undefined {
+  if (!existsSync(file)) return undefined;
+  const raw = readFileSync(file, "utf8").trim();
+  const pid = Number.parseInt(raw, 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+async function waitForPidChange(file: string, previousPid: number, timeoutMs: number): Promise<number | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const pid = readPidFile(file);
+    if (pid && pid !== previousPid) return pid;
+    await sleep(500);
+  }
+  const pid = readPidFile(file);
+  return pid && pid !== previousPid ? pid : undefined;
+}
+
 async function holdLoopbackPort(port: number): Promise<net.Server> {
   const server = net.createServer();
   await new Promise<void>((resolve, reject) => {
@@ -430,6 +449,20 @@ async function main(): Promise<void> {
       throw new Error(`first message smoke failed hello=${firstMessage.hello} channel_send=${firstMessage.channelSend}`);
     }
 
+    const pidFile = path.join(dataRoot, "blue-tanuki.pid");
+    const originalPid = readPidFile(pidFile);
+    if (!originalPid) throw new Error("resident pid file was not written before crash recovery probe");
+    run("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `Stop-Process -Id ${originalPid} -Force`,
+    ], installRoot, "simulate resident crash", 60_000);
+    const recoveredPid = await waitForPidChange(pidFile, originalPid, CRASH_RECOVERY_TIMEOUT_MS);
+    if (!recoveredPid) throw new Error("resident watchdog did not write a recovered pid after simulated crash");
+    const recoveredHealthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
+    if (!recoveredHealthReady) throw new Error("installed gateway healthz did not recover after simulated resident crash");
+    console.log("crash_recovery_result=pass");
+
     run("powershell.exe", [
       "-NoProfile",
       "-ExecutionPolicy",
@@ -540,6 +573,7 @@ async function main(): Promise<void> {
     console.log("first_message_result=pass");
     console.log("repair_install_result=pass");
     console.log("port_conflict_result=pass");
+    console.log("crash_recovery_result=pass");
     console.log("safe_mode_result=pass");
     console.log("uninstall_result=pass");
   } finally {

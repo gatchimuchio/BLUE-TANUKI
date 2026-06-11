@@ -115,6 +115,18 @@ file, then start BLUE-TANUKI again. Use `BLUE-TANUKI Safe Mode` when you need
 the Control Center and Doctor without external providers, connector calls,
 channel connections, or schedules.
 
+## Crash Recovery
+
+`BLUE-TANUKI` start launches a small Windows watchdog alongside the resident
+Gateway process. If the recorded resident process exits unexpectedly, the
+watchdog restarts the same `apps/gateway/dist/main.js --serve` command with the
+same env file and writes `watchdog_restarted=pass` to the watchdog log.
+
+`BLUE-TANUKI Stop` stops the watchdog before stopping the resident process, so
+manual stop and uninstall do not trigger automatic restart. The watchdog is
+lifecycle glue only; it does not approve actions, change HDS-BRAIN policy,
+change Approval Gate behavior, or create a second authority path.
+
 ## Installer UX Boundary
 
 The installer may create shortcuts and an uninstall registration. It must not:

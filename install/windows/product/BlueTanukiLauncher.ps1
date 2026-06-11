@@ -38,8 +38,11 @@ $envFile = Join-Path $dataRoot "blue-tanuki.env"
 $dataDir = Join-Path $dataRoot "data"
 $logDir = Join-Path $dataRoot "logs"
 $pidFile = Join-Path $dataRoot "blue-tanuki.pid"
+$watchdogPidFile = Join-Path $dataRoot "blue-tanuki-watchdog.pid"
 $stdoutLog = Join-Path $logDir "blue-tanuki.out.log"
 $stderrLog = Join-Path $logDir "blue-tanuki.err.log"
+$watchdogLog = Join-Path $logDir "blue-tanuki-watchdog.out.log"
+$watchdogErrLog = Join-Path $logDir "blue-tanuki-watchdog.err.log"
 $doctorLog = Join-Path $logDir "doctor.json"
 
 function Find-NodeExe {
@@ -126,6 +129,29 @@ function Get-HealthUrl {
 
 function Test-ResidentRunning {
   $pidValue = Read-ResidentPid
+  if (-not $pidValue) {
+    return $false
+  }
+  return [bool](Get-Process -Id $pidValue -ErrorAction SilentlyContinue)
+}
+
+function Read-WatchdogPid {
+  if (-not (Test-Path -LiteralPath $watchdogPidFile)) {
+    return $null
+  }
+  $raw = Get-Content -LiteralPath $watchdogPidFile -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $raw) {
+    return $null
+  }
+  $pidValue = 0
+  if ([int]::TryParse($raw.Trim(), [ref]$pidValue)) {
+    return $pidValue
+  }
+  return $null
+}
+
+function Test-WatchdogRunning {
+  $pidValue = Read-WatchdogPid
   if (-not $pidValue) {
     return $false
   }
@@ -225,12 +251,8 @@ function Set-SafeModeEnvironment {
   $env:BLUE_TANUKI_SCHEDULES_JSON = ""
 }
 
-function Start-Resident($SafeMode = $false) {
+function Start-ResidentProcess($SafeMode = $false, $Reason = "manual") {
   Ensure-EnvFile
-  if (Test-ResidentRunning) {
-    Write-Host "resident_status=running pid=$(Read-ResidentPid)"
-    return
-  }
   Assert-PortAvailable
   if ($SafeMode) {
     Set-SafeModeEnvironment
@@ -246,6 +268,42 @@ function Start-Resident($SafeMode = $false) {
   $processArgs = @($rawArgs | ForEach-Object { Quote-Arg $_ })
   $process = Start-Process -FilePath $nodeExe -ArgumentList $processArgs -WorkingDirectory $installRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
   Set-Content -LiteralPath $pidFile -Value $process.Id -Encoding ASCII
+  Write-Host "resident_launch_reason=$Reason pid=$($process.Id)"
+  return $process
+}
+
+function Start-Watchdog($SafeMode = $false) {
+  if (Test-WatchdogRunning) {
+    Write-Host "watchdog_status=running pid=$(Read-WatchdogPid)"
+    return
+  }
+  New-Item -ItemType Directory -Force -Path $dataRoot, $logDir | Out-Null
+  $watchdogCommand = "watchdog"
+  if ($SafeMode) {
+    $watchdogCommand = "watchdog-safe-mode"
+  }
+  $watchdogArgs = @(
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    (Quote-Arg $PSCommandPath),
+    $watchdogCommand
+  )
+  $process = Start-Process -FilePath "powershell.exe" -ArgumentList $watchdogArgs -WorkingDirectory $installRoot -WindowStyle Hidden -RedirectStandardOutput $watchdogLog -RedirectStandardError $watchdogErrLog -PassThru
+  Set-Content -LiteralPath $watchdogPidFile -Value $process.Id -Encoding ASCII
+  Write-Host "watchdog_status=started pid=$($process.Id)"
+}
+
+function Start-Resident($SafeMode = $false) {
+  Ensure-EnvFile
+  if (Test-ResidentRunning) {
+    Write-Host "resident_status=running pid=$(Read-ResidentPid)"
+    Start-Watchdog $SafeMode
+    return
+  }
+  $process = Start-ResidentProcess $SafeMode "manual"
+  Start-Watchdog $SafeMode
   if (Wait-Health 15000) {
     Write-Host "resident_status=started pid=$($process.Id)"
   } else {
@@ -255,7 +313,25 @@ function Start-Resident($SafeMode = $false) {
   Write-Host "logs=$logDir"
 }
 
+function Stop-Watchdog {
+  $pidValue = Read-WatchdogPid
+  if (-not $pidValue) {
+    return
+  }
+  if ($pidValue -ne $PID) {
+    $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+    if ($process) {
+      Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
+      Write-Host "watchdog_status=stopped pid=$pidValue"
+    } else {
+      Write-Host "watchdog_status=stale pid=$pidValue"
+    }
+  }
+  Remove-Item -LiteralPath $watchdogPidFile -Force -ErrorAction SilentlyContinue
+}
+
 function Stop-Resident {
+  Stop-Watchdog
   $pidValue = Read-ResidentPid
   if (-not $pidValue) {
     Write-Host "resident_status=stopped"
@@ -277,9 +353,33 @@ function Show-Status {
   } else {
     Write-Host "resident_status=stopped"
   }
+  if (Test-WatchdogRunning) {
+    Write-Host "watchdog_status=running pid=$(Read-WatchdogPid)"
+  } else {
+    Write-Host "watchdog_status=stopped"
+  }
   Write-Host "control_center=$(Get-ControlCenterUrl)"
   Write-Host "env_file=$envFile"
   Write-Host "logs=$logDir"
+}
+
+function Run-Watchdog($SafeMode = $false) {
+  Ensure-EnvFile
+  New-Item -ItemType Directory -Force -Path $dataRoot, $dataDir, $logDir | Out-Null
+  Set-Content -LiteralPath $watchdogPidFile -Value $PID -Encoding ASCII
+  Write-Host "watchdog_status=running pid=$PID safe_mode=$SafeMode"
+  while ($true) {
+    if (-not (Test-ResidentRunning)) {
+      Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+      try {
+        $process = Start-ResidentProcess $SafeMode "watchdog"
+        Write-Host "watchdog_restarted=pass pid=$($process.Id)"
+      } catch {
+        Write-Warning "watchdog restart deferred: $($_.Exception.Message)"
+      }
+    }
+    Start-Sleep -Seconds 5
+  }
 }
 
 function Open-ControlCenter {
@@ -324,6 +424,8 @@ switch ($Command.ToLowerInvariant()) {
   "resident-start" { Start-Resident $false }
   "safe-mode" { Start-SafeMode }
   "resident-safe-mode" { Start-SafeMode }
+  "watchdog" { Run-Watchdog $false }
+  "watchdog-safe-mode" { Run-Watchdog $true }
   "stop" { Stop-Resident }
   "resident-stop" { Stop-Resident }
   "restart" { Stop-Resident; Start-Resident $false }
