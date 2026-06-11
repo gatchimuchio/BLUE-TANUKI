@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-  [string]$InstallRoot = "$env:LOCALAPPDATA\Programs\BlueTanuki",
-  [string]$DataRoot = "$env:APPDATA\BlueTanuki",
+  [string]$InstallRoot = "",
+  [string]$DataRoot = "",
   [switch]$PurgeData,
   [switch]$Quiet,
   [switch]$DryRun
@@ -65,8 +65,30 @@ function Remove-Shortcut($Path) {
   }
 }
 
-$installRootResolved = Assert-SafeTarget $InstallRoot "InstallRoot"
-$dataRootResolved = Assert-SafeTarget $DataRoot "DataRoot"
+function Resolve-DataRoot($InstallRootResolved, $DataRootArg) {
+  if ($DataRootArg) {
+    return $DataRootArg
+  }
+  $metadataPath = Join-Path $InstallRootResolved "blue-tanuki-install.json"
+  if (Test-Path -LiteralPath $metadataPath) {
+    try {
+      $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+      if ($metadata.PSObject.Properties.Name -contains "data_root") {
+        $value = [string]$metadata.data_root
+        if ($value) {
+          return $value
+        }
+      }
+    } catch {
+      if (-not $Quiet) { Write-Warning "install metadata could not be read; falling back to default data root: $($_.Exception.Message)" }
+    }
+  }
+  return "$env:APPDATA\BlueTanuki"
+}
+
+$installRootInput = if ($InstallRoot) { $InstallRoot } else { Split-Path -Parent $PSCommandPath }
+$installRootResolved = Assert-SafeTarget $installRootInput "InstallRoot"
+$dataRootResolved = Assert-SafeTarget (Resolve-DataRoot $installRootResolved $DataRoot) "DataRoot"
 $launcher = Join-Path $installRootResolved "BlueTanukiLauncher.ps1"
 
 if (Test-Path -LiteralPath $launcher) {

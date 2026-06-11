@@ -14,7 +14,26 @@ function Fail($Message) {
 }
 
 $installRoot = Split-Path -Parent $PSCommandPath
-$dataRoot = "$env:APPDATA\BlueTanuki"
+$installMetadataPath = Join-Path $installRoot "blue-tanuki-install.json"
+
+function Resolve-DataRoot {
+  if (Test-Path -LiteralPath $installMetadataPath) {
+    try {
+      $metadata = Get-Content -LiteralPath $installMetadataPath -Raw | ConvertFrom-Json
+      if ($metadata.PSObject.Properties.Name -contains "data_root") {
+        $value = [string]$metadata.data_root
+        if ($value) {
+          return [System.IO.Path]::GetFullPath($value)
+        }
+      }
+    } catch {
+      Write-Warning "install metadata could not be read; falling back to default data root: $($_.Exception.Message)"
+    }
+  }
+  return [System.IO.Path]::GetFullPath("$env:APPDATA\BlueTanuki")
+}
+
+$dataRoot = Resolve-DataRoot
 $envFile = Join-Path $dataRoot "blue-tanuki.env"
 $dataDir = Join-Path $dataRoot "data"
 $logDir = Join-Path $dataRoot "logs"

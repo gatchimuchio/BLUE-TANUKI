@@ -83,3 +83,10 @@ jobs:
       - run: pnpm build
       - name: package:windows -> smoke:windows-installed product gate
         run: pnpm validate:product -- --phase P3 --evidence .codex-tmp/validate-product-windows
+      - name: Upload Windows product evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-product-windows-evidence
+          path: .codex-tmp/validate-product-windows
+          if-no-files-found: ignore

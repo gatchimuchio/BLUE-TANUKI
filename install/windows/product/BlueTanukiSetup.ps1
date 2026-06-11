@@ -186,6 +186,17 @@ function Register-Uninstaller($InstallRootResolved, $DataRootResolved, $Version)
   New-ItemProperty -Path $key -Name "BlueTanukiDataRoot" -Value $DataRootResolved -PropertyType String -Force | Out-Null
 }
 
+function Write-InstallMetadata($InstallRootResolved, $DataRootResolved, $Version) {
+  $metadata = [ordered]@{
+    schema_version = 1
+    install_root = $InstallRootResolved
+    data_root = $DataRootResolved
+    version = $Version
+  }
+  $metadataPath = Join-Path $InstallRootResolved "blue-tanuki-install.json"
+  $metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding UTF8
+}
+
 $packageRoot = Split-Path -Parent $PSCommandPath
 $sourceApp = Join-Path $packageRoot "app"
 $sourceLaunchers = Join-Path $packageRoot "launcher"
@@ -214,6 +225,7 @@ New-Item -ItemType Directory -Force -Path $installRootResolved, $dataRootResolve
 Copy-DirectoryContents $sourceApp $installRootResolved
 Expand-BundledNode $packageRoot $installRootResolved
 Copy-DirectoryContents $sourceLaunchers $installRootResolved
+Write-InstallMetadata $installRootResolved $dataRootResolved $version
 
 $nodeExe = Find-NodeExe $installRootResolved
 Invoke-BundledSetup $nodeExe $installRootResolved $envFile $dataDir

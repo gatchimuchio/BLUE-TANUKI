@@ -241,18 +241,24 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
     "Autostart: not enabled by installer",
     "Expand-Archive",
     "post-install doctor",
+    "blue-tanuki-install.json",
+    "data_root",
   ]);
   requireSourceText("install/windows/product/BlueTanukiLauncher.ps1", [
     "http://127.0.0.1:8787/app",
     "Start-Resident",
     "Run-Doctor",
     "bundled node.exe",
+    "blue-tanuki-install.json",
+    "Resolve-DataRoot",
   ]);
   requireSourceText("install/windows/product/BlueTanukiUninstall.ps1", [
     "PurgeData",
     "User data retained",
     "Uninstall\\BlueTanuki",
     "Assert-SafeTarget",
+    "blue-tanuki-install.json",
+    "Split-Path -Parent $PSCommandPath",
   ]);
 
   console.log(`windows_installer_verified=${archive}`);

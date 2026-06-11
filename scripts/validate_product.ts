@@ -974,6 +974,9 @@ async function main(): Promise<void> {
     process.stdout.write(
       `[product] ${record.status.toUpperCase()} ${record.id} duration_ms=${record.duration_ms} ${record.summary}\n`,
     );
+    if (record.status === "fail" && record.log_excerpt.trim()) {
+      process.stderr.write(`[product] LOG ${record.id}\n${record.log_excerpt}\n`);
+    }
   }
   process.stdout.write(`${productSummaryLine(result)}\n`);
   process.stdout.write(`[product] evidence=${result.evidence_dir}\n`);
