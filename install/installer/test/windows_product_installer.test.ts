@@ -34,10 +34,13 @@ describe("Windows product installer package", () => {
     expect(uninstall).toContain("Assert-SafeTarget");
     expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
     expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_TEMP_SCRIPT");
+    expect(uninstall).toContain("BLUE_TANUKI_UNINSTALL_PRESERVE_WRAPPER");
+    expect(uninstall).toContain("Remove-InstalledApp");
     expect(uninstallCmd).toContain("EnableDelayedExpansion");
     expect(uninstallCmd).toContain("copy /Y");
     expect(uninstallCmd).toContain("cd /d \"%TEMP%\"");
     expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT");
+    expect(uninstallCmd).toContain("BLUE_TANUKI_UNINSTALL_WRAPPER_PATH");
     expect(uninstallCmd).toContain("exit /b !ERRORLEVEL!");
   });
 

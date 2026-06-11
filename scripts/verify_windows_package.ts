@@ -261,12 +261,15 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
     "Split-Path -Parent $PSCommandPath",
     "BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT",
     "BLUE_TANUKI_UNINSTALL_TEMP_SCRIPT",
+    "BLUE_TANUKI_UNINSTALL_PRESERVE_WRAPPER",
+    "Remove-InstalledApp",
   ]);
   requireSourceText("install/windows/product/UninstallBlueTanuki.cmd", [
     "EnableDelayedExpansion",
     "copy /Y",
     "cd /d \"%TEMP%\"",
     "BLUE_TANUKI_UNINSTALL_DEFAULT_INSTALL_ROOT",
+    "BLUE_TANUKI_UNINSTALL_WRAPPER_PATH",
     "exit /b !ERRORLEVEL!",
   ]);
 

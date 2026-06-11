@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { WebSocket } from "ws";
@@ -360,6 +360,8 @@ async function main(): Promise<void> {
       "-PurgeData",
       "-Quiet",
     ], work, "installer uninstall", 120_000);
+    if (existsSync(installRoot)) throw new Error("install root still exists after uninstall");
+    if (existsSync(dataRoot)) throw new Error("data root still exists after purge uninstall");
     uninstalled = true;
 
     console.log("windows_installed_smoke=pass");

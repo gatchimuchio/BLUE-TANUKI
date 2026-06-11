@@ -55,6 +55,30 @@ function Remove-Target($Target, $Label) {
   if (-not $Quiet) { Write-Host "Removed ${Label}: $Target" }
 }
 
+function Remove-InstalledApp($InstallRootResolved) {
+  if (($env:BLUE_TANUKI_UNINSTALL_PRESERVE_WRAPPER -ne "1") -or (-not $env:BLUE_TANUKI_UNINSTALL_WRAPPER_PATH)) {
+    Remove-Target $InstallRootResolved "installed app"
+    return
+  }
+  if (-not (Test-Path -LiteralPath $InstallRootResolved)) {
+    if (-not $Quiet) { Write-Host "Skip missing installed app: $InstallRootResolved" }
+    return
+  }
+  if ($DryRun) {
+    Write-Host "Would remove installed app contents except uninstall wrapper: $InstallRootResolved"
+    return
+  }
+  $wrapperPath = Normalize-Path $env:BLUE_TANUKI_UNINSTALL_WRAPPER_PATH
+  foreach ($item in Get-ChildItem -LiteralPath $InstallRootResolved -Force) {
+    $itemPath = Normalize-Path $item.FullName
+    if ([StringComparer]::OrdinalIgnoreCase.Equals($itemPath, $wrapperPath)) {
+      continue
+    }
+    Remove-Item -LiteralPath $item.FullName -Recurse -Force
+  }
+  if (-not $Quiet) { Write-Host "Removed installed app contents: $InstallRootResolved" }
+}
+
 function Remove-Shortcut($Path) {
   if (Test-Path -LiteralPath $Path) {
     if ($DryRun) {
@@ -120,7 +144,7 @@ if ($DryRun) {
   Remove-Item -Path $key -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Remove-Target $installRootResolved "installed app"
+Remove-InstalledApp $installRootResolved
 
 if ($PurgeData) {
   Remove-Target $dataRootResolved "user data"
