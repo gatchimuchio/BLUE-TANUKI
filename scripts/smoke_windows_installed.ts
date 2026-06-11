@@ -386,7 +386,8 @@ async function main(): Promise<void> {
     });
     const uninstallStatus = await waitForFileText(uninstallStatusFile, UNINSTALL_TIMEOUT_MS);
     if (!uninstallStatus) throw new Error("uninstall status file was not written");
-    if (!/^exit_code=0\b/m.test(uninstallStatus)) {
+    const normalizedUninstallStatus = uninstallStatus.replace(/^\uFEFF/, "");
+    if (!/^exit_code=0\b/m.test(normalizedUninstallStatus)) {
       throw new Error(`uninstall status was not successful: ${uninstallStatus.trim()}`);
     }
     if (!(await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS))) {

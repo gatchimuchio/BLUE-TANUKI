@@ -17,7 +17,7 @@ function Normalize-Path($Path) {
 function Write-UninstallStatus($ExitCode) {
   if ($env:BLUE_TANUKI_UNINSTALL_STATUS_FILE) {
     try {
-      "exit_code=$ExitCode" | Set-Content -LiteralPath $env:BLUE_TANUKI_UNINSTALL_STATUS_FILE -Encoding UTF8
+      "exit_code=$ExitCode" | Set-Content -LiteralPath $env:BLUE_TANUKI_UNINSTALL_STATUS_FILE -Encoding ASCII
     } catch {
       # Status files are diagnostic evidence only; uninstall behavior remains authoritative.
     }
