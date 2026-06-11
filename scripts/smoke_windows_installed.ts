@@ -10,6 +10,7 @@ const GATEWAY_READY_TIMEOUT_MS = 30_000;
 const FETCH_TIMEOUT_MS = 10_000;
 const WEBSOCKET_OPEN_TIMEOUT_MS = 10_000;
 const FIRST_MESSAGE_TIMEOUT_MS = 10_000;
+const UNINSTALL_TIMEOUT_MS = 60_000;
 
 function argValue(name: string): string | undefined {
   const prefix = `${name}=`;
@@ -40,11 +41,12 @@ function run(
   cwd: string,
   label: string,
   timeoutMs = COMMAND_TIMEOUT_MS,
+  extraEnv: Record<string, string> = {},
 ): void {
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
+    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
     stdio: "inherit",
     encoding: "utf8",
     timeout: timeoutMs,
@@ -66,11 +68,12 @@ function runAllowing(
   allowedStatuses: readonly number[],
   label: string,
   timeoutMs = COMMAND_TIMEOUT_MS,
+  extraEnv: Record<string, string> = {},
 ): void {
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
+    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1", ...extraEnv },
     stdio: "inherit",
     encoding: "utf8",
     timeout: timeoutMs,
@@ -160,6 +163,24 @@ async function waitForStopped(url: string, timeoutMs: number): Promise<boolean> 
   return false;
 }
 
+async function waitForAbsent(target: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!existsSync(target)) return true;
+    await sleep(250);
+  }
+  return !existsSync(target);
+}
+
+async function waitForFileText(file: string, timeoutMs: number): Promise<string | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(file)) return readFileSync(file, "utf8");
+    await sleep(250);
+  }
+  return existsSync(file) ? readFileSync(file, "utf8") : undefined;
+}
+
 async function receiveFirstMessage(
   wsUrl: string,
   token: string,
@@ -235,6 +256,7 @@ async function main(): Promise<void> {
   const packageDir = path.join(work, "package");
   const installRoot = path.join(work, "InstallRoot");
   const dataRoot = path.join(work, "DataRoot");
+  const uninstallStatusFile = path.join(work, "uninstall.status");
   let launcher: string | undefined;
   let setupComplete = false;
   let stopped = false;
@@ -359,9 +381,20 @@ async function main(): Promise<void> {
       path.join(installRoot, "UninstallBlueTanuki.cmd"),
       "-PurgeData",
       "-Quiet",
-    ], work, "installer uninstall", 120_000);
-    if (existsSync(installRoot)) throw new Error("install root still exists after uninstall");
-    if (existsSync(dataRoot)) throw new Error("data root still exists after purge uninstall");
+    ], work, "installer uninstall", 120_000, {
+      BLUE_TANUKI_UNINSTALL_STATUS_FILE: uninstallStatusFile,
+    });
+    const uninstallStatus = await waitForFileText(uninstallStatusFile, UNINSTALL_TIMEOUT_MS);
+    if (!uninstallStatus) throw new Error("uninstall status file was not written");
+    if (!/^exit_code=0\b/m.test(uninstallStatus)) {
+      throw new Error(`uninstall status was not successful: ${uninstallStatus.trim()}`);
+    }
+    if (!(await waitForAbsent(installRoot, UNINSTALL_TIMEOUT_MS))) {
+      throw new Error("install root still exists after uninstall");
+    }
+    if (!(await waitForAbsent(dataRoot, UNINSTALL_TIMEOUT_MS))) {
+      throw new Error("data root still exists after purge uninstall");
+    }
     uninstalled = true;
 
     console.log("windows_installed_smoke=pass");
@@ -395,7 +428,9 @@ async function main(): Promise<void> {
             path.join(installRoot, "UninstallBlueTanuki.cmd"),
             "-PurgeData",
             "-Quiet",
-          ], work, [0, 1], "cleanup installer uninstall", 120_000);
+          ], work, [0, 1], "cleanup installer uninstall", 120_000, {
+            BLUE_TANUKI_UNINSTALL_STATUS_FILE: path.join(work, "cleanup-uninstall.status"),
+          });
         } catch (error) {
           console.error(`[windows-smoke] cleanup installer uninstall failed: ${errorMessage(error)}`);
         }
