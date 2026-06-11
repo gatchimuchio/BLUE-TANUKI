@@ -1,5 +1,7 @@
 # BLUE-TANUKI Roadmap v9
 
+製品完成スコープは `docs/PRODUCT_ROADMAP.md`（P1〜P13）が本書のBand記述を上書きする。Band A–F / Phase X-SY の記述は履歴・参照として保持する。
+
 この文書は `docs/IMPLEMENTATION_INSTRUCTIONS.md` と同じ実行順序を示す圧縮ロードマップである。
 実装時の source of truth は常に `docs/IMPLEMENTATION_INSTRUCTIONS.md` と `AGENTS.md`。この文書は人間が全体像を素早く確認するための案内であり、詳細な phase 要件、検証コマンド、acceptance criteria は active instruction file を参照する。
 
@@ -142,10 +144,10 @@ Codex must proceed sequentially unless explicitly instructed otherwise.
 ## 3. Current Active Phase
 
 ```txt
-Phase 11-S13 Owner GO Decision / v1.0.0 Promotion
+Phase P2-S1 — validate:product 骨格＋Linux検査セット＋evidence pack
 ```
 
-Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion is blocked until explicit owner GO.
+旧 `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` はD2によりP13へ吸収。Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion is blocked until explicit owner GO.
 
 ## 4. Completed Phase Summaries
 

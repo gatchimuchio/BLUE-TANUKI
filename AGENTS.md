@@ -58,6 +58,10 @@ For every task:
 
 A large amount of generated structure is not evidence of completeness.
 
+### P-Series Baseline Freeze
+
+本日時点のCI構成（ci.ymlのジョブ・コマンド列、validate系gate、smoke系）をP基準面として凍結する。基準面の変更（追加を含む）はP-Phase指示経由のみ。検査の削除・弱体化はowner承認必須。
+
 ### Completion Evidence
 
 A completion claim is not evidence.

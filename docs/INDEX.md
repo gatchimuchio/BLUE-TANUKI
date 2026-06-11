@@ -5,6 +5,8 @@
 - [README](../README.md) - product surface, boundaries, and local quickstart
 - [Quickstart](../QUICKSTART.md) - shortest local startup path
 - [Strategy Frame](STRATEGY_FRAME.md) - Layer A/B, OpenClaw two-dimensional position, and Stage 1 strategy
+- [Product Roadmap](PRODUCT_ROADMAP.md) - P1-P13 product-completion roadmap and validate:product gate plan
+- [Product Owner Decisions](product-owner-decisions.md) - owner decision ledger for D1-D7 and P13 absorption of old Bar G GO
 - [Responsibility Substrate Mapping](RESPONSIBILITY_SUBSTRATE_MAPPING.md) - GUI Shell responsibility mapping for BLUE-TANUKI
 - [BLUE-TANUKI Authority Model](BLUE_TANUKI_AUTHORITY_MODEL.md) - HDS-BRAIN and owner authority boundary
 - [GA Bar Definition](GA_BAR_DEFINITION.md) - RC-to-GA promotion bar and public claim eligibility

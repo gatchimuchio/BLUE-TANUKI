@@ -16,6 +16,19 @@ If `docs/ROADMAP.md` conflicts with this file, treat `docs/ROADMAP.md` as contex
 
 ---
 
+# P-Series Product Completion Roadmap
+
+The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROADMAP.md`.
+
+- Product phases are named `Phase Pn-SY`.
+- P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
+- The active instruction is `Phase P2-S1 — validate:product 骨格＋Linux検査セット＋evidence pack`.
+- The Universal Phase Template below continues to apply to P-series phase instructions.
+- Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
+- Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
+
+---
+
 # 0. Product Definition
 
 BLUE-TANUKI is a local owner-operated resident AI control plane.
@@ -2728,7 +2741,7 @@ Do not claim completion unless acceptance criteria are satisfied.
 The active next phase is:
 
 ```txt
-Phase 11-S13 Owner GO Decision / v1.0.0 Promotion
+Phase P2-S1 — validate:product 骨格＋Linux検査セット＋evidence pack
 ```
 
-Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion is blocked until explicit owner GO.
+Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision. Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion remains blocked until explicit owner GO.
