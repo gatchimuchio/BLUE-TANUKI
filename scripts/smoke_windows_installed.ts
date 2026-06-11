@@ -5,6 +5,12 @@ import * as path from "node:path";
 import { WebSocket } from "ws";
 import { verifyWindowsPackage } from "./verify_windows_package.ts";
 
+const COMMAND_TIMEOUT_MS = 120_000;
+const GATEWAY_READY_TIMEOUT_MS = 30_000;
+const FETCH_TIMEOUT_MS = 10_000;
+const WEBSOCKET_OPEN_TIMEOUT_MS = 10_000;
+const FIRST_MESSAGE_TIMEOUT_MS = 10_000;
+
 function argValue(name: string): string | undefined {
   const prefix = `${name}=`;
   for (let i = 2; i < process.argv.length; i += 1) {
@@ -20,28 +26,63 @@ function defaultArtifact(): string {
   return path.join(process.cwd(), "release/windows", `blue-tanuki-${pkg.version}-windows-x64-installer.zip`);
 }
 
-function run(command: string, args: readonly string[], cwd: string): void {
-  const result = spawnSync(command, [...args], {
-    cwd,
-    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
-    stdio: "inherit",
-    encoding: "utf8",
-  });
-  if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed with exit ${result.status}`);
-  }
+function logStep(message: string): void {
+  console.log(`[windows-smoke] ${message}`);
 }
 
-function runAllowing(command: string, args: readonly string[], cwd: string, allowedStatuses: readonly number[]): void {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function run(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  label: string,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+): void {
+  logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
     env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
     stdio: "inherit",
     encoding: "utf8",
+    timeout: timeoutMs,
+    windowsHide: true,
   });
-  if (!allowedStatuses.includes(result.status ?? -1)) {
-    throw new Error(`${command} ${args.join(" ")} failed with exit ${result.status}: ${result.stderr || result.stdout}`);
+  if (result.error) {
+    throw new Error(`${label} failed: ${result.error.message}`);
   }
+  if (result.status !== 0) {
+    throw new Error(`${label} failed with exit ${result.status} signal=${result.signal ?? "none"}`);
+  }
+  logStep(`done ${label}`);
+}
+
+function runAllowing(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  allowedStatuses: readonly number[],
+  label: string,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+): void {
+  logStep(`start ${label}`);
+  const result = spawnSync(command, [...args], {
+    cwd,
+    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
+    stdio: "inherit",
+    encoding: "utf8",
+    timeout: timeoutMs,
+    windowsHide: true,
+  });
+  if (result.error) {
+    throw new Error(`${label} failed: ${result.error.message}`);
+  }
+  if (!allowedStatuses.includes(result.status ?? -1)) {
+    throw new Error(`${label} failed with exit ${result.status} signal=${result.signal ?? "none"}`);
+  }
+  logStep(`done ${label} status=${result.status ?? "null"}`);
 }
 
 function expandArchive(artifact: string, destination: string): void {
@@ -49,7 +90,7 @@ function expandArchive(artifact: string, destination: string): void {
     "-NoProfile",
     "-Command",
     `Expand-Archive -LiteralPath ${JSON.stringify(artifact)} -DestinationPath ${JSON.stringify(destination)} -Force`,
-  ], process.cwd());
+  ], process.cwd(), "expand installer archive");
 }
 
 function parseEnvFile(file: string): Record<string, string> {
@@ -70,16 +111,37 @@ function parseEnvFile(file: string): Record<string, string> {
   return out;
 }
 
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+  label: string,
+): Promise<Response> {
+  const started = Date.now();
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    throw new Error(`${label} failed after ${Date.now() - started}ms: ${errorMessage(error)}`);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function waitFor(url: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url);
+      const response = await fetchWithTimeout(url, undefined, 2_000, "healthz probe");
       if (response.ok) return true;
     } catch {
       // not ready
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await sleep(250);
   }
   return false;
 }
@@ -90,6 +152,7 @@ async function receiveFirstMessage(
   port: string,
 ): Promise<{ hello: boolean; channelSend: boolean }> {
   const messages: Array<Record<string, unknown>> = [];
+  logStep("start websocket first-message probe");
   const ws = new WebSocket(wsUrl);
   ws.on("message", (data) => {
     try {
@@ -99,30 +162,44 @@ async function receiveFirstMessage(
     }
   });
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("websocket open timeout")), 5000);
-    ws.once("open", () => {
+    let settled = false;
+    let timer: NodeJS.Timeout;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      resolve();
+      if (error) reject(error);
+      else resolve();
+    };
+    timer = setTimeout(() => {
+      ws.terminate();
+      finish(new Error("websocket open timeout"));
+    }, WEBSOCKET_OPEN_TIMEOUT_MS);
+    ws.once("open", () => {
+      finish();
     });
     ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      finish(error instanceof Error ? error : new Error(String(error)));
     });
   });
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  const response = await fetch(`http://127.0.0.1:${port}/inbound`, {
+  await sleep(250);
+  const response = await fetchWithTimeout(`http://127.0.0.1:${port}/inbound`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ user: "windows-smoke", content: "Hello BLUE-TANUKI Windows installer smoke" }),
-  });
+  }, FETCH_TIMEOUT_MS, "first message POST");
   if (!response.ok) {
     throw new Error(`first message POST failed: ${response.status} ${await response.text()}`);
   }
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  const deadline = Date.now() + FIRST_MESSAGE_TIMEOUT_MS;
+  while (!messages.some((message) => message.kind === "channel_send") && Date.now() < deadline) {
+    await sleep(250);
+  }
   ws.close();
+  logStep("done websocket first-message probe");
   return {
     hello: messages.some((message) => message.kind === "hello"),
     channelSend: messages.some((message) => message.kind === "channel_send"),
@@ -131,7 +208,9 @@ async function receiveFirstMessage(
 
 async function main(): Promise<void> {
   const artifact = path.resolve(argValue("--artifact") ?? defaultArtifact());
+  logStep("verify installer package");
   verifyWindowsPackage(artifact);
+  logStep("done verify installer package");
   if (process.platform !== "win32") {
     console.log(`windows_runtime_smoke=skipped platform=${process.platform}`);
     console.log("artifact_structure_smoke=pass");
@@ -142,6 +221,10 @@ async function main(): Promise<void> {
   const packageDir = path.join(work, "package");
   const installRoot = path.join(work, "InstallRoot");
   const dataRoot = path.join(work, "DataRoot");
+  let launcher: string | undefined;
+  let setupComplete = false;
+  let stopped = false;
+  let uninstalled = false;
   try {
     expandArchive(artifact, packageDir);
     run("cmd.exe", [
@@ -154,9 +237,10 @@ async function main(): Promise<void> {
       "-DataRoot",
       dataRoot,
       "-NoLaunch",
-    ], packageDir);
+    ], packageDir, "installer setup", 180_000);
+    setupComplete = true;
 
-    const launcher = path.join(installRoot, "BlueTanukiLauncher.ps1");
+    launcher = path.join(installRoot, "BlueTanukiLauncher.ps1");
     run("powershell.exe", [
       "-NoProfile",
       "-ExecutionPolicy",
@@ -164,26 +248,30 @@ async function main(): Promise<void> {
       "-File",
       launcher,
       "start",
-    ], installRoot);
+    ], installRoot, "launcher start", 120_000);
 
     const env = parseEnvFile(path.join(dataRoot, "blue-tanuki.env"));
     const port = env.WEBCHAT_PORT ?? "8787";
     const token = env.WEBCHAT_TOKEN;
     if (!token) throw new Error("WEBCHAT_TOKEN missing from installed env file");
-    const healthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, 15000);
+    logStep("wait installed gateway healthz");
+    const healthReady = await waitFor(`http://127.0.0.1:${port}/healthz`, GATEWAY_READY_TIMEOUT_MS);
     if (!healthReady) throw new Error("installed gateway healthz did not become ready");
+    logStep("done installed gateway healthz");
 
-    const ticketResponse = await fetch(`http://127.0.0.1:${port}/ws-ticket`, {
+    logStep("request websocket ticket");
+    const ticketResponse = await fetchWithTimeout(`http://127.0.0.1:${port}/ws-ticket`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ user: "windows-smoke" }),
-    });
+    }, FETCH_TIMEOUT_MS, "ws-ticket POST");
     if (!ticketResponse.ok) {
       throw new Error(`ws-ticket failed: ${ticketResponse.status} ${await ticketResponse.text()}`);
     }
+    logStep("done websocket ticket");
     const ticket = ((await ticketResponse.json()) as { ticket: string }).ticket;
     const firstMessage = await receiveFirstMessage(
       `ws://127.0.0.1:${port}/ws?ticket=${encodeURIComponent(ticket)}`,
@@ -201,7 +289,7 @@ async function main(): Promise<void> {
       "-File",
       launcher,
       "doctor",
-    ], installRoot, [0, 1]);
+    ], installRoot, [0, 1], "launcher doctor", 120_000);
     run("powershell.exe", [
       "-NoProfile",
       "-ExecutionPolicy",
@@ -209,7 +297,8 @@ async function main(): Promise<void> {
       "-File",
       launcher,
       "stop",
-    ], installRoot);
+    ], installRoot, "launcher stop", 60_000);
+    stopped = true;
     run("cmd.exe", [
       "/d",
       "/s",
@@ -217,7 +306,8 @@ async function main(): Promise<void> {
       path.join(installRoot, "UninstallBlueTanuki.cmd"),
       "-PurgeData",
       "-Quiet",
-    ], installRoot);
+    ], installRoot, "installer uninstall", 120_000);
+    uninstalled = true;
 
     console.log("windows_installed_smoke=pass");
     console.log("install_result=pass");
@@ -227,6 +317,37 @@ async function main(): Promise<void> {
     console.log("doctor_result=pass");
     console.log("uninstall_result=pass");
   } finally {
+    if (process.platform === "win32") {
+      if (launcher && !stopped) {
+        try {
+          runAllowing("powershell.exe", [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            launcher,
+            "stop",
+          ], installRoot, [0, 1], "cleanup launcher stop", 60_000);
+        } catch (error) {
+          console.error(`[windows-smoke] cleanup launcher stop failed: ${errorMessage(error)}`);
+        }
+      }
+      if (setupComplete && !uninstalled) {
+        try {
+          runAllowing("cmd.exe", [
+            "/d",
+            "/s",
+            "/c",
+            path.join(installRoot, "UninstallBlueTanuki.cmd"),
+            "-PurgeData",
+            "-Quiet",
+          ], installRoot, [0, 1], "cleanup installer uninstall", 120_000);
+        } catch (error) {
+          console.error(`[windows-smoke] cleanup installer uninstall failed: ${errorMessage(error)}`);
+        }
+      }
+    }
+    logStep("cleanup temporary install tree");
     rmSync(work, { recursive: true, force: true });
   }
 }

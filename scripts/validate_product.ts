@@ -369,6 +369,12 @@ export async function defaultCommandRunner(
     let stderr = "";
     let settled = false;
     let timedOut = false;
+    const settle = (result: CommandRunResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
       terminateProcessTree(child, "SIGTERM");
@@ -377,6 +383,13 @@ export async function defaultCommandRunner(
           terminateProcessTree(child, "SIGKILL");
         }
       }, 2_000).unref();
+      settle({
+        exit_code: null,
+        stdout,
+        stderr,
+        timed_out: true,
+        duration_ms: Date.now() - started,
+      });
     }, timeoutMs);
     timer.unref();
 
@@ -387,10 +400,7 @@ export async function defaultCommandRunner(
       stderr += chunk.toString();
     });
     child.on("error", (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({
+      settle({
         exit_code: null,
         stdout,
         stderr: `${stderr}${stderr ? "\n" : ""}${error.message}`,
@@ -399,10 +409,7 @@ export async function defaultCommandRunner(
       });
     });
     child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({
+      settle({
         exit_code: code,
         stdout,
         stderr,
