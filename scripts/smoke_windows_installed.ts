@@ -145,6 +145,19 @@ function parseEnvFile(file: string): Record<string, string> {
   return out;
 }
 
+function assertEnvValuesRetained(
+  before: Record<string, string>,
+  after: Record<string, string>,
+  keys: readonly string[],
+): void {
+  for (const key of keys) {
+    if (!before[key]) throw new Error(`repair install baseline is missing ${key}`);
+    if (after[key] !== before[key]) {
+      throw new Error(`repair install did not retain ${key}`);
+    }
+  }
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit | undefined,
@@ -335,7 +348,26 @@ async function main(): Promise<void> {
     setupComplete = true;
 
     launcher = path.join(installRoot, "BlueTanukiLauncher.ps1");
-    const env = parseEnvFile(path.join(dataRoot, "blue-tanuki.env"));
+    const envFile = path.join(dataRoot, "blue-tanuki.env");
+    const envBeforeRepair = parseEnvFile(envFile);
+    run("cmd.exe", [
+      "/d",
+      "/s",
+      "/c",
+      path.join(packageDir, "BlueTanukiSetup.cmd"),
+      "-InstallRoot",
+      installRoot,
+      "-DataRoot",
+      dataRoot,
+      "-NoLaunch",
+    ], packageDir, "installer repair install", 180_000);
+    const env = parseEnvFile(envFile);
+    assertEnvValuesRetained(envBeforeRepair, env, [
+      "WEBCHAT_TOKEN",
+      "WEBCHAT_RESUME_TOKEN",
+      "BLUE_TANUKI_SETTINGS_TOKEN",
+    ]);
+    console.log("repair_install_result=pass");
     const port = env.WEBCHAT_PORT ?? "8787";
     const portNumber = Number.parseInt(port, 10);
     if (!Number.isInteger(portNumber) || portNumber <= 0) {
@@ -506,6 +538,7 @@ async function main(): Promise<void> {
     console.log("launch_result=pass");
     console.log("gui_result=pass");
     console.log("first_message_result=pass");
+    console.log("repair_install_result=pass");
     console.log("port_conflict_result=pass");
     console.log("safe_mode_result=pass");
     console.log("uninstall_result=pass");

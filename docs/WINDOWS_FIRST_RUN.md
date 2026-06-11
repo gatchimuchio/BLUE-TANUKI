@@ -3,6 +3,19 @@
 This first-run path is for the unsigned Windows installer package, not source
 development.
 
+## Before Install
+
+The Windows package is unsigned. Before running `BlueTanukiSetup.cmd`, verify the
+zip digest against the release `.sha256` sidecar:
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
+Get-Content .\blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.sha256
+```
+
+If SmartScreen warns, continue only after the SHA-256 digest matches the
+sidecar. A mismatch means the package must not be run.
+
 ## First Launch
 
 1. Install with `BlueTanukiSetup.cmd`.

@@ -59,6 +59,7 @@ describe("Windows product installer package", () => {
     expect(read("scripts/verify_windows_package.ts")).toContain("verifyWindowsPackage");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("windows_runtime_smoke=skipped");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("port_conflict_result=pass");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("repair_install_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("safe_mode_result=pass");
   });
 });

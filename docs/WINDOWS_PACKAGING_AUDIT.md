@@ -8,6 +8,8 @@ This audit records the current Windows packaging boundary.
 
 ```text
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
+release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.sha256
+release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.manifest.json
 ```
 
 The package contains:
@@ -28,6 +30,7 @@ The package contains:
 - required runtime package entries,
 - bundled Node runtime declaration,
 - Start Menu and uninstall registration source text,
+- SHA-256 sidecar and manifest availability,
 - no `.env`, `.npmrc`, private key, `.blue-tanuki`, `.git`, or `GUI-Shell` entries,
 - manifest boundaries:
   - unsigned installer,
@@ -67,6 +70,8 @@ intent only.
 ## Known Limitations
 
 - The package is unsigned.
+- SmartScreen continuation requires operator-side SHA-256 verification against
+  the `.sha256` sidecar.
 - It is a zip-delivered installer package, not a signed MSI/EXE.
 - Windows runtime install smoke must be run on Windows.
 - Automatic update is not implemented.

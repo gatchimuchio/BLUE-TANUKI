@@ -65,18 +65,22 @@ function main(): void {
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "%APPDATA%\\BlueTanuki");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Autostart is not enabled");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "not a signed MSI/EXE");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Get-FileHash");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Repair / Reinstall");
 
   const windowsFirstRun = read("docs/WINDOWS_FIRST_RUN.md");
   requireIncludes("docs/WINDOWS_FIRST_RUN.md", windowsFirstRun, "Conversation / WebChat");
   requireIncludes("docs/WINDOWS_FIRST_RUN.md", windowsFirstRun, "stub LLM mode");
   requireIncludes("docs/WINDOWS_FIRST_RUN.md", windowsFirstRun, "Doctor / Health");
   requireIncludes("docs/WINDOWS_FIRST_RUN.md", windowsFirstRun, "%APPDATA%\\BlueTanuki\\logs");
+  requireIncludes("docs/WINDOWS_FIRST_RUN.md", windowsFirstRun, "Get-FileHash");
 
   const windowsPackagingAudit = read("docs/WINDOWS_PACKAGING_AUDIT.md");
   requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "bundled Windows Node runtime");
   requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "GUI Shell not modified");
   requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "HDS authority not modified");
   requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "Windows runtime install smoke must be run on Windows");
+  requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, ".sha256");
 
   const windowsUninstall = read("docs/WINDOWS_UNINSTALL.md");
   requireIncludes("docs/WINDOWS_UNINSTALL.md", windowsUninstall, "Uninstall\\BlueTanuki");
@@ -186,6 +190,7 @@ function main(): void {
   const smokeWindowsInstalled = read("scripts/smoke_windows_installed.ts");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "windows_runtime_smoke=skipped");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "first_message_result=pass");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "repair_install_result=pass");
 
   const macInstall = read("install/macos/install.sh");
   requireIncludes("install/macos/install.sh", macInstall, "Node.js 22.14.0");

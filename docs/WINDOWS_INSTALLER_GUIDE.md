@@ -16,6 +16,13 @@ The package artifact is:
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
 ```
 
+The package build also emits:
+
+```text
+release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.sha256
+release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.manifest.json
+```
+
 ## Scope
 
 The Windows package is installer-first for a normal Windows user:
@@ -31,6 +38,23 @@ The Windows package is installer-first for a normal Windows user:
 
 This does not build signed native packages yet. It is not a signed MSI/EXE, not
 an automatic updater, and not a GA public-claim artifact.
+
+## Unsigned Package / SmartScreen / SHA-256
+
+The v1 Windows package is unsigned. If Microsoft Defender SmartScreen shows a
+warning, verify the package hash before continuing.
+
+From PowerShell in the folder containing the zip:
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
+Get-Content .\blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.sha256
+```
+
+Proceed only when the displayed SHA-256 digest matches the `.sha256` sidecar
+provided with the same release. After verification, use SmartScreen's
+`More info` and `Run anyway` path only for the verified package. Do not bypass a
+hash mismatch.
 
 ## User Flow
 
@@ -54,6 +78,19 @@ an automatic updater, and not a GA public-claim artifact.
 
 Secrets must remain under the user data path, not the install directory.
 This includes OpenRouter and Composio API keys.
+
+## Repair / Reinstall
+
+Re-running `BlueTanukiSetup.cmd` with the same install and data locations
+repairs the install files and keeps the existing env/settings file by default:
+
+```text
+%APPDATA%\BlueTanuki\blue-tanuki.env
+```
+
+Use `-ResetConfig` only when the owner intentionally wants to regenerate the env
+file. A normal repair install must not rotate `WEBCHAT_TOKEN`,
+`WEBCHAT_RESUME_TOKEN`, or `BLUE_TANUKI_SETTINGS_TOKEN`.
 
 ## Included Shortcuts
 
