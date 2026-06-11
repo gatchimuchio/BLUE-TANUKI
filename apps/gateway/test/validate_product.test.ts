@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  PRODUCT_CHECKS,
   exitCodeFromProductValidation,
   filterProductChecks,
   listProductChecks,
@@ -174,5 +175,7 @@ describe("validate_product gate", () => {
 
   it("lists registered product checks with id and phase metadata", () => {
     expect(listProductChecks([check("p2.list")])).toContain("p2.list\tphase=P2\tplatform=any\trequired=true");
+    expect(listProductChecks(PRODUCT_CHECKS)).toContain("p3.package_windows_verify\tphase=P3\tplatform=win32\trequired=true");
+    expect(listProductChecks(PRODUCT_CHECKS)).toContain("p3.windows_installed_smoke\tphase=P3\tplatform=win32\trequired=true");
   });
 });

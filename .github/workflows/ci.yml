@@ -64,3 +64,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t blue-tanuki:ci .
+
+  windows-product:
+    runs-on: windows-latest
+    needs: verify
+    env:
+      BLUE_TANUKI_VALIDATE_TIMEOUT_MS: "300000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: package:windows -> smoke:windows-installed product gate
+        run: pnpm validate:product -- --phase P3 --evidence .codex-tmp/validate-product-windows

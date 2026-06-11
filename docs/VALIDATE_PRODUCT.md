@@ -9,6 +9,7 @@
 ```bash
 pnpm validate:product
 pnpm validate:product -- --phase P2
+pnpm validate:product -- --phase P3
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -45,6 +46,15 @@ BLUE_TANUKI_VALIDATE_TIMEOUT_MS=120000
 | `p2.suspend_dynamic` | `LIVE_RUNTIME` / `INTERNAL_STATE` | fail-safe 6条件をin-memoryで注入し、SUSPEND発火とhuman resume不可を確認する |
 | `p2.approval_bypass_dynamic` | `LIVE_RUNTIME` / `INTERNAL_STATE` | `full_access` でもfinal-review operationがallowにならないこと、外部metadataでcapabilityが昇格しないことを確認する |
 | `p2.audit_chain_verify` | `LIVE_RUNTIME` / `INTERNAL_STATE` | `smoke_serve` のaudit-dump成功を確認し、さらに既存 `runAuditVerify` 経路で永続audit hash-chainを機械検証する |
+
+## P3 Checks
+
+P3 checks are registered as Windows-target checks. Linux runs report them as `skipped`; the `windows-latest` CI job runs them through `pnpm validate:product -- --phase P3`.
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p3.package_windows_verify` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/package_windows.ts` を実行してWindows installer zipを生成し、`scripts/verify_windows_package.ts` でmanifest、sha256、zip contents、secret exclusion、authority boundary metadataを検証する |
+| `p3.windows_installed_smoke` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/smoke_windows_installed.ts` をWindows上で実行し、install→常駐起動→GUI/WebChat first message→doctor→stop→uninstallを検証する |
 
 ## Incremental Registration
 

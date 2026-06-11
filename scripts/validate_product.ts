@@ -171,6 +171,20 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     required: true,
     run: runAuditChainVerify,
   },
+  {
+    id: "p3.package_windows_verify",
+    phase: "P3",
+    platform: "win32",
+    required: true,
+    run: runWindowsPackageVerify,
+  },
+  {
+    id: "p3.windows_installed_smoke",
+    phase: "P3",
+    platform: "win32",
+    required: true,
+    run: runWindowsInstalledSmoke,
+  },
 ];
 
 export function parseProductPhase(value: string | undefined): ProductPhase {
@@ -675,6 +689,66 @@ async function runAuditChainVerify(ctx: CheckContext): Promise<CheckResult> {
       status: report.status,
       entry_count: report.entry_count,
       smoke_serve_audit_dump_verified: smokeServeVerified,
+    },
+  };
+}
+
+async function runWindowsPackageVerify(ctx: CheckContext): Promise<CheckResult> {
+  const packageRun = await runNodeScript(ctx, "scripts/package_windows.ts");
+  const verifyRun = packageRun.exit_code === 0
+    ? await runNodeScript(ctx, "scripts/verify_windows_package.ts")
+    : null;
+  const log = [
+    "[package_windows]",
+    commandLog(packageRun),
+    "[verify_windows_package]",
+    verifyRun ? commandLog(verifyRun) : "skipped because package_windows failed",
+  ].join("\n");
+  const pass =
+    packageRun.exit_code === 0 &&
+    verifyRun?.exit_code === 0 &&
+    packageRun.stdout.includes("windows_installer=") &&
+    verifyRun.stdout.includes("windows_installer_verified=");
+  return {
+    status: pass ? "pass" : "fail",
+    summary: pass
+      ? "Windows installer package created and verified"
+      : `Windows package verification failed package_exit=${String(packageRun.exit_code)} verify_exit=${String(verifyRun?.exit_code)}`,
+    raw_log: log,
+    log_excerpt: excerpt(log),
+    details: {
+      package_exit_code: packageRun.exit_code,
+      verify_exit_code: verifyRun?.exit_code ?? null,
+      package_timed_out: packageRun.timed_out,
+      verify_timed_out: verifyRun?.timed_out ?? null,
+    },
+  };
+}
+
+async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult> {
+  const run = await runNodeScript(ctx, "scripts/smoke_windows_installed.ts");
+  const log = commandLog(run);
+  const pass =
+    run.exit_code === 0 &&
+    log.includes("windows_installed_smoke=pass") &&
+    log.includes("install_result=pass") &&
+    log.includes("uninstall_result=pass");
+  return {
+    status: pass ? "pass" : "fail",
+    summary: pass
+      ? "Windows installed-app smoke passed install/start/gui/message/doctor/stop/uninstall"
+      : `Windows installed-app smoke failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
+    raw_log: log,
+    log_excerpt: excerpt(log),
+    details: {
+      exit_code: run.exit_code,
+      timed_out: run.timed_out,
+      install_result: log.includes("install_result=pass"),
+      launch_result: log.includes("launch_result=pass"),
+      gui_result: log.includes("gui_result=pass"),
+      first_message_result: log.includes("first_message_result=pass"),
+      doctor_result: log.includes("doctor_result=pass"),
+      uninstall_result: log.includes("uninstall_result=pass"),
     },
   };
 }
