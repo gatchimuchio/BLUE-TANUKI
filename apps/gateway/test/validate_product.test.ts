@@ -8,6 +8,7 @@ import {
   exitCodeFromProductValidation,
   filterProductChecks,
   listProductChecks,
+  pnpmCommandSpec,
   productSummaryLine,
   runProductValidation,
   type CommandRunner,
@@ -178,5 +179,18 @@ describe("validate_product gate", () => {
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p2.test_suite\tphase=P2\tplatform=any\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p3.package_windows_verify\tphase=P3\tplatform=win32\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p3.windows_installed_smoke\tphase=P3\tplatform=win32\trequired=true");
+  });
+
+  it("builds a Windows-safe pnpm command spec without relying on extension resolution", () => {
+    expect(pnpmCommandSpec(["test"], root, {}, "win32")).toMatchObject({
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", "pnpm", "test"],
+      cwd: root,
+    });
+    expect(pnpmCommandSpec(["test"], root, { npm_execpath: "C:\\pnpm\\pnpm.cjs" }, "win32")).toMatchObject({
+      command: process.execPath,
+      args: ["C:\\pnpm\\pnpm.cjs", "test"],
+      cwd: root,
+    });
   });
 });

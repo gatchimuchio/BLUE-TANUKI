@@ -493,12 +493,10 @@ async function runSmokeServe(ctx: CheckContext): Promise<CheckResult> {
 }
 
 async function runTestSuite(ctx: CheckContext): Promise<CheckResult> {
-  const run = await ctx.runner({
-    command: "pnpm",
-    args: ["test"],
-    cwd: ctx.rootDir,
-    env: { ...process.env },
-  }, ctx.timeoutMs);
+  const run = await ctx.runner(
+    pnpmCommandSpec(["test"], ctx.rootDir, { ...process.env }),
+    ctx.timeoutMs,
+  );
   const log = commandLog(run);
   const pass = run.exit_code === 0;
   return {
@@ -928,12 +926,10 @@ async function writeEnvironmentEvidence(
   ctx: CheckContext,
   runner: CommandRunner,
 ): Promise<void> {
-  const pnpm = await safeShortCommand(runner, {
-    command: "pnpm",
-    args: ["--version"],
-    cwd: ctx.rootDir,
-    env: { ...process.env },
-  });
+  const pnpm = await safeShortCommand(
+    runner,
+    pnpmCommandSpec(["--version"], ctx.rootDir, { ...process.env }),
+  );
   const gitRev = await safeShortCommand(runner, {
     command: "git",
     args: ["rev-parse", "HEAD"],
@@ -966,6 +962,37 @@ async function safeShortCommand(runner: CommandRunner, spec: CommandSpec): Promi
     // best effort environment metadata
   }
   return "";
+}
+
+export function pnpmCommandSpec(
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): CommandSpec {
+  const npmExecPath = env.npm_execpath;
+  if (npmExecPath && /pnpm/i.test(npmExecPath)) {
+    return {
+      command: process.execPath,
+      args: [npmExecPath, ...args],
+      cwd,
+      env,
+    };
+  }
+  if (platform === "win32") {
+    return {
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", "pnpm", ...args],
+      cwd,
+      env,
+    };
+  }
+  return {
+    command: "pnpm",
+    args,
+    cwd,
+    env,
+  };
 }
 
 async function listFiles(dir: string): Promise<string[]> {
