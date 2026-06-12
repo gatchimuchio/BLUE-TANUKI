@@ -131,6 +131,13 @@ const upstream = {
 
 export const PRODUCT_CHECKS: readonly ProductCheck[] = [
   {
+    id: "p2.test_suite",
+    phase: "P2",
+    platform: "any",
+    required: true,
+    run: runTestSuite,
+  },
+  {
     id: "p2.smoke_serve",
     phase: "P2",
     platform: "any",
@@ -481,6 +488,29 @@ async function runSmokeServe(ctx: CheckContext): Promise<CheckResult> {
       timed_out: run.timed_out,
       audit_dump_verified: log.includes("audit-dump OK"),
       audit_raw_verified: log.includes("audit raw OK"),
+    },
+  };
+}
+
+async function runTestSuite(ctx: CheckContext): Promise<CheckResult> {
+  const run = await ctx.runner({
+    command: "pnpm",
+    args: ["test"],
+    cwd: ctx.rootDir,
+    env: { ...process.env },
+  }, ctx.timeoutMs);
+  const log = commandLog(run);
+  const pass = run.exit_code === 0;
+  return {
+    status: pass ? "pass" : "fail",
+    summary: pass
+      ? "pnpm test PASS"
+      : `pnpm test failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
+    raw_log: log,
+    log_excerpt: excerpt(log),
+    details: {
+      exit_code: run.exit_code,
+      timed_out: run.timed_out,
     },
   };
 }

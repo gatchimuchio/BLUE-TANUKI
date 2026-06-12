@@ -40,6 +40,7 @@ BLUE_TANUKI_VALIDATE_TIMEOUT_MS=120000
 
 | ID | evidence source | 内容 |
 |---|---|---|
+| `p2.test_suite` | `FIXTURE` / `INTERNAL_STATE` | `pnpm test` を子プロセス実行し、既存の自動テスト一式がPASSすることを確認する。この結果だけでlive runtimeの健全性は主張しない |
 | `p2.smoke_serve` | `LIVE_RUNTIME` | `scripts/smoke_serve.ts` を子プロセス実行し、gateway起動、WebChat往復、audit persistence、audit-dump検証がPASSすることを確認する |
 | `p2.smoke_resume` | `LIVE_RUNTIME` | `scripts/smoke_resume.ts` を子プロセス実行し、SUSPEND→human RESUME→実行結果echoがPASSすることを確認する |
 | `p2.hds_standalone` | `LIVE_RUNTIME` | `examples/hds-brain-standalone.ts` のstdoutをJSON parseし、runtime invariants `all_ok` と `audit_chain_valid` を確認する |
