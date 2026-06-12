@@ -55,6 +55,7 @@ import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime }
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createWebChatSettingsSurface } from "./settings_surface.js";
 import { buildAboutSnapshot } from "./about_surface.js";
+import { buildRecoverySnapshot } from "./recovery_surface.js";
 import { CronSchedulerChannel, cronSchedulesFromEnv } from "./cron_channel.js";
 import { googleDailyBriefProviderFromEnv } from "./google_daily_brief.js";
 import {
@@ -751,6 +752,9 @@ export async function serve(): Promise<ServeShutdown> {
       },
       about: {
         getSnapshot: async () => buildAboutSnapshot(),
+      },
+      recovery: {
+        getSnapshot: async () => buildRecoverySnapshot(process.env),
       },
       operators: {
         daily: {

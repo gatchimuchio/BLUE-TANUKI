@@ -246,6 +246,11 @@ export interface WebChatAboutSurface {
   getSnapshot: () => Promise<unknown>;
 }
 
+export interface WebChatRecoverySurface {
+  /** Return read-only recovery readiness and backup inventory metadata. */
+  getSnapshot: () => Promise<unknown>;
+}
+
 export interface WebChatOperatorSurfaces {
   writing?: WebChatOperatorSurface;
   daily?: WebChatOperatorSurface;
@@ -322,6 +327,8 @@ export interface WebChatOptions {
   history?: WebChatHistorySurface;
   /** Optional read-only product About surface. Uses the normal inbound bearer token. */
   about?: WebChatAboutSurface;
+  /** Optional read-only recovery readiness surface. Uses the normal inbound bearer token. */
+  recovery?: WebChatRecoverySurface;
   /** Optional first-party operator endpoints. Uses the normal inbound bearer token. */
   operators?: WebChatOperatorSurfaces;
   /**
@@ -727,6 +734,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     if (url.pathname === "/app/about") {
       await this.handleAbout(req, res);
+      return;
+    }
+
+    if (url.pathname === "/recovery/snapshot") {
+      await this.handleRecovery(req, res);
       return;
     }
 
@@ -1351,6 +1363,33 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
     const snapshot = await this.opts.about.getSnapshot();
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    });
+    res.end(JSON.stringify(snapshot));
+  }
+
+  private async handleRecovery(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (!this.opts.recovery) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "recovery_not_configured" }));
+      return;
+    }
+    if (!this.checkAuth(req, "inbound")) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (req.method !== "GET") {
+      res.writeHead(405, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    const snapshot = await this.opts.recovery.getSnapshot();
     res.writeHead(200, {
       "content-type": "application/json",
       "cache-control": "no-store",

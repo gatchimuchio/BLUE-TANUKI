@@ -20,6 +20,7 @@ export {
   type WebChatHistorySnapshot,
   type WebChatHistorySurface,
   type WebChatAboutSurface,
+  type WebChatRecoverySurface,
   type WebChatOperatorSurface,
   type WebChatOperatorSurfaces,
 } from "./webchat.js";

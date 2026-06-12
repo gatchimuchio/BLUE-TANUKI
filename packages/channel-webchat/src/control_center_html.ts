@@ -598,6 +598,7 @@ export function renderControlCenterHtml(): string {
       <button class="screen-tab" data-screen="doctor" aria-selected="false">Doctor</button>
       <button class="screen-tab" data-screen="settings" aria-selected="false">Settings</button>
       <button class="screen-tab" data-screen="about" aria-selected="false">About</button>
+      <button class="screen-tab" data-screen="recovery" aria-selected="false">Backup / Restore</button>
       <button class="screen-tab" data-screen="developer" aria-selected="false">Developer / Evidence</button>
     </nav>
 
@@ -895,6 +896,34 @@ export function renderControlCenterHtml(): string {
           </div>
         </section>
 
+        <section class="card" data-screen-group="recovery">
+          <div class="row">
+            <h2>Backup / Restore</h2>
+            <span id="recovery-boundary-status" class="badge warn">not loaded</span>
+          </div>
+          <div class="status-grid">
+            <input id="recovery-token" type="password" autocomplete="off" placeholder="webchat token" />
+            <button id="load-recovery" class="primary" type="button">Load Recovery</button>
+          </div>
+          <div class="status-grid">
+            <div class="metric"><span>Env file</span><span id="recovery-env-file-status">not loaded</span></div>
+            <div class="metric"><span>Env backups</span><span id="recovery-env-backup-count">not loaded</span></div>
+            <div class="metric"><span>Latest backup</span><span id="recovery-latest-backup">not loaded</span></div>
+            <div class="metric"><span>Restore</span><span id="recovery-restore-status">not loaded</span></div>
+            <div class="metric"><span>Factory reset</span><span id="recovery-factory-reset-status">not loaded</span></div>
+            <div class="metric"><span>Authority</span><span id="recovery-authority-status">display only</span></div>
+            <div class="metric"><span>Next action</span><span id="recovery-next-action">not loaded</span></div>
+          </div>
+          <div id="recovery-path-list" class="status-grid"></div>
+          <pre id="recovery-json">not loaded</pre>
+          <div class="screen-grid">
+            <div class="screen-card"><h3>Read-only</h3><p class="muted">This panel inventories backup readiness and persistent paths; it does not execute restore or repair.</p></div>
+            <div class="screen-card"><h3>Secret-bearing</h3><p class="muted">Env files and env backups may contain credentials. Only paths and counts are displayed here.</p></div>
+            <div class="screen-card"><h3>P10 Boundary</h3><p class="muted">Restore, reset, and destructive repair remain blocked until the later recovery phase validates the full round trip.</p></div>
+            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Recovery metadata is evidence only and cannot approve, resume, or execute commands.</p></div>
+          </div>
+        </section>
+
         <section class="card" data-screen-group="developer">
           <div class="row">
             <h2>Developer / Evidence</h2>
@@ -1045,6 +1074,7 @@ export function renderControlCenterHtml(): string {
         settingsToken: sessionStorage.getItem("bt.settingsToken") || "",
         connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
         aboutToken: sessionStorage.getItem("bt.aboutToken") || "",
+        recoveryToken: sessionStorage.getItem("bt.recoveryToken") || "",
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
         activeScreen: sessionStorage.getItem("bt.activeScreen") || "home",
@@ -1249,6 +1279,7 @@ export function renderControlCenterHtml(): string {
         byId("settings-token").value = state.settingsToken;
         byId("connectors-token").value = state.connectorsToken || state.settingsToken;
         byId("about-token").value = state.aboutToken || state.chatToken;
+        byId("recovery-token").value = state.recoveryToken || state.chatToken;
         byId("chat-token").value = state.chatToken;
         byId("chat-user").value = state.chatUser;
       }
@@ -1615,6 +1646,37 @@ export function renderControlCenterHtml(): string {
         setText("about-json", compactJson(redactRuntimeValue(snapshot)));
       }
 
+      function renderRecoverySnapshot(snapshot) {
+        const envFile = snapshot.env_file || {};
+        const restore = snapshot.restore || {};
+        const authority = snapshot.authority_boundary || {};
+        const paths = snapshot.runtime_paths || {};
+        setText("recovery-env-file-status", envFile.exists ? "present" : envFile.configured ? "missing" : "not configured");
+        setText("recovery-env-backup-count", envFile.backup_count ?? 0);
+        setText("recovery-latest-backup", envFile.latest_backup_path || "none");
+        setText("recovery-restore-status", restore.execution_available ? "available" : "blocked");
+        setText("recovery-factory-reset-status", restore.factory_reset_available ? "available" : "blocked");
+        setText("recovery-authority-status", authority.used_for_authority === true ? "unsafe" : "display only");
+        setText("recovery-next-action", snapshot.next_safe_action || "review recovery readiness");
+        setText("recovery-boundary-status", snapshot.mode || "read only");
+        byId("recovery-boundary-status").className = "badge " + (restore.execution_available ? "bad" : "good");
+        byId("recovery-restore-status").className = "badge " + (restore.execution_available ? "bad" : "good");
+        byId("recovery-factory-reset-status").className = "badge " + (restore.factory_reset_available ? "bad" : "good");
+        byId("recovery-authority-status").className = "badge " + (authority.used_for_authority === true ? "bad" : "good");
+        setHtml(
+          "recovery-path-list",
+          Object.keys(paths)
+            .map(function (key) {
+              const item = paths[key] || {};
+              const state = item.exists ? item.kind || "present" : item.configured ? "missing" : "unset";
+              const tone = item.exists ? "good" : item.configured ? "warn" : "warn";
+              return '<div class="metric"><span>' + escapeHtml(key) + '</span><span>' + badge(state, tone) + '</span></div>';
+            })
+            .join("")
+        );
+        setText("recovery-json", compactJson(redactRuntimeValue(snapshot)));
+      }
+
       function settingsPayload() {
         const llm = {
           provider: byId("settings-provider").value,
@@ -1684,6 +1746,20 @@ export function renderControlCenterHtml(): string {
           setText("about-release-status", "error");
           byId("about-release-status").className = "badge bad";
           setText("about-json", error.message);
+        }
+      }
+
+      async function loadRecovery() {
+        const token = byId("recovery-token").value.trim();
+        state.recoveryToken = token;
+        sessionStorage.setItem("bt.recoveryToken", token);
+        try {
+          const body = await fetchJson("/recovery/snapshot", token);
+          renderRecoverySnapshot(body);
+        } catch (error) {
+          setText("recovery-boundary-status", "error");
+          byId("recovery-boundary-status").className = "badge bad";
+          setText("recovery-json", error.message);
         }
       }
 
@@ -1900,6 +1976,7 @@ export function renderControlCenterHtml(): string {
       byId("load-connectors").addEventListener("click", loadConnectors);
       byId("save-connectors").addEventListener("click", saveConnectors);
       byId("load-about").addEventListener("click", loadAbout);
+      byId("load-recovery").addEventListener("click", loadRecovery);
       byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
       byId("save-settings").addEventListener("click", saveSettings);
       byId("connect-chat").addEventListener("click", function () {

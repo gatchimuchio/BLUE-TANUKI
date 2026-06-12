@@ -22,32 +22,32 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P4-S3 — Control Center About panel integration`.
+- The active instruction is `Phase P4-S4 — Control Center Backup/Restore readiness panel`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P4-S3 — Control Center About panel integration
+# Phase P4-S4 — Control Center Backup/Restore readiness panel
 
 ## Objective
 
-Expose version, claim boundary, license, and release-readiness state inside the main Control Center and extend the P4 `validate:product` API smoke.
+Expose recovery readiness, env backup inventory, persistent data paths, and restore boundaries inside the main Control Center without enabling destructive restore actions.
 
 ## Scope
 
-- Add an About screen to the Control Center.
-- Add a read-only WebChat `/app/about` JSON endpoint.
-- Wire the gateway production WebChat surface to package/claim/license metadata.
-- Extend the P4 product check to exercise the About API over loopback HTTP.
+- Add a Backup / Restore screen to the Control Center.
+- Add a read-only WebChat `/recovery/snapshot` JSON endpoint.
+- Wire the gateway production WebChat surface to env backup and runtime-path metadata.
+- Extend the P4 product check to exercise the recovery readiness API over loopback HTTP.
 - Update tests and P-series docs.
 
 ## Non-Goals
 
-- Do not promote the package version to `1.0.0`.
-- Do not activate GA/public claim language.
-- Do not implement Backup/Restore or Update panels in this phase.
+- Do not execute restore, factory reset, provider reset, connector reset, or destructive repair actions.
+- Do not implement the Update panel in this phase.
+- Do not claim P10 complete; backup→破壊→restore往復 remains later P10 work.
 - Do not change HDS-BRAIN authority, Approval Gate policy, executor behavior, provider runtime semantics, or credential storage.
 - Do not claim P4 complete; Windows real-device rendering remains a later evidence item.
 
@@ -55,39 +55,41 @@ Expose version, claim boundary, license, and release-readiness state inside the 
 
 ```bash
 git status --short
-rg -n "About|about|CLAIM|license|public_claim_allowed|renderControlCenterHtml" packages/channel-webchat apps/gateway docs scripts
+rg -n "Backup|Restore|backup|restore|BLUE_TANUKI_ENV_FILE|backupEnvFileIfExists|renderControlCenterHtml" packages/channel-webchat apps/gateway docs scripts
 rg -n "validate:product|PRODUCT_CHECKS|P4" scripts docs apps/gateway/test
 ```
 
 ## Implementation Requirements
 
-- About data must be read-only and must not accept mutation.
-- The About API must be protected by the normal WebChat bearer token.
-- The About panel must show `public_claim_allowed=false` before owner GO.
-- The About response must state that UI and claim data are not authority.
+- Recovery data must be read-only and must not accept mutation.
+- The recovery API must be protected by the normal WebChat bearer token.
+- The response must classify env backups as secret-bearing.
+- The response must explicitly state that restore execution, factory reset, and destructive repair are unavailable in this phase.
 - `validate:product -- --phase P4` must include the new P4 check while keeping P2/P3 behavior intact.
 
 ## Safety Requirements
 
 - Control Center UI state remains display/intent only and must not become authority.
-- About/claim metadata is display evidence only and must not become authority.
+- Recovery metadata is display evidence only and must not become authority.
+- Restore/reset/repair actions must not be reachable from this phase.
 - HDS-BRAIN and Approval Gate remain upstream; the UI must not approve, execute, or infer consent.
 
 ## Operator Usability Requirements
 
-- Version, license, release stage, owner GO state, public-claim boundary, signing/updater boundary, and authority boundary must be reachable inside the main Control Center About tab.
-- About loading must be a separate read-only action.
+- Env file presence, env backup count, latest backup path, and persistent audit/session/memory/schedule path configuration must be reachable inside the main Control Center Backup / Restore tab.
+- Backup / Restore loading must be a separate read-only action.
+- The panel must show the next safe action instead of exposing unsafe buttons.
 
 ## Audit Requirements
 
 - This phase adds product validation evidence only; it does not append to the HDS runtime audit chain.
-- Evidence source class for the P4 check is `LIVE_RUNTIME` / `CONFIG`.
+- Evidence source class for the P4 check is `LIVE_RUNTIME` / `CONFIG` / `EXTERNAL_EVIDENCE`.
 
 ## Tests
 
-- Control Center HTML test must confirm the About controls are present.
-- WebChat endpoint tests must confirm `/app/about` requires the WebChat token and is read-only.
-- The P4 product check must confirm version, license, pre-GO claim boundary, and non-authority flags.
+- Control Center HTML test must confirm the Backup / Restore controls are present.
+- WebChat endpoint tests must confirm `/recovery/snapshot` requires the WebChat token and is read-only.
+- The P4 product check must confirm env backup inventory, restore-disabled flags, and non-authority flags.
 
 ## Docs
 
@@ -114,10 +116,11 @@ pnpm validate:product -- --phase P4 --evidence .codex-tmp/validate-product-p4-co
 Start gateway, open `/app`, enter settings token, load settings, verify LLM, and save a stub provider in a disposable env-file environment.
 Then open Connectors, enter settings token, load connector state, set Composio allowed toolkits with dry-run enabled, and save in a disposable env-file environment.
 Then open About, enter the WebChat token, and load the read-only About snapshot.
+Then open Backup / Restore, enter the WebChat token, and load the read-only recovery snapshot.
 
 ## Permanent-Use Check
 
-The main Control Center exposes product identity, release boundary, claim boundary, license, and authority caveats without directing the owner to inspect repository files. This does not complete Windows real-device UI evidence.
+The main Control Center exposes recovery readiness and backup/restore boundaries without directing the owner to inspect repository files. This does not complete P10 restore execution or Windows real-device UI evidence.
 
 ## Acceptance Criteria
 

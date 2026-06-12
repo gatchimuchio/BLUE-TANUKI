@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  rm,
   writeFile,
 } from "node:fs/promises";
 import * as os from "node:os";
@@ -21,6 +22,7 @@ import {
 } from "../packages/hds-brain/src/index.js";
 import { AUDIT_FILENAME } from "../apps/gateway/src/audit_config.js";
 import { buildAboutSnapshot } from "../apps/gateway/src/about_surface.js";
+import { buildRecoverySnapshot } from "../apps/gateway/src/recovery_surface.js";
 import { runAuditVerify } from "../apps/gateway/src/audit_verify.js";
 import { WebChatChannel } from "../packages/channel-webchat/src/index.js";
 
@@ -842,6 +844,22 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
   const settingsToken = "product-settings-token-1234";
   const updates: unknown[] = [];
   const verifications: unknown[] = [];
+  const recoveryRoot = await mkdtemp(path.join(os.tmpdir(), "bt-product-recovery-"));
+  const recoveryEnvFile = path.join(recoveryRoot, "product.env");
+  const recoveryAuditDir = path.join(recoveryRoot, "audit");
+  const recoverySessionDir = path.join(recoveryRoot, "sessions");
+  const recoveryMemoryDir = path.join(recoveryRoot, "memory");
+  const recoveryFailureMemoryDir = path.join(recoveryRoot, "failure-memory");
+  const recoverySchedulesDir = path.join(recoveryRoot, "schedules");
+  const recoveryFileRoot = path.join(recoveryRoot, "files");
+  await mkdir(recoveryAuditDir);
+  await mkdir(recoverySessionDir);
+  await mkdir(recoveryMemoryDir);
+  await mkdir(recoveryFailureMemoryDir);
+  await mkdir(recoverySchedulesDir);
+  await mkdir(recoveryFileRoot);
+  await writeFile(recoveryEnvFile, "LLM_BACKEND=stub\nLLM_API_KEY=product-secret\n", "utf8");
+  await writeFile(`${recoveryEnvFile}.2026-06-13T00-00-00-000Z.101.settings.bak`, "backup\n", "utf8");
   const channel = new WebChatChannel({
     port,
     host: "127.0.0.1",
@@ -933,6 +951,17 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     about: {
       getSnapshot: async () => buildAboutSnapshot(ctx.rootDir),
     },
+    recovery: {
+      getSnapshot: async () => buildRecoverySnapshot({
+        BLUE_TANUKI_ENV_FILE: recoveryEnvFile,
+        BLUE_TANUKI_AUDIT_DIR: recoveryAuditDir,
+        BLUE_TANUKI_SESSION_DIR: recoverySessionDir,
+        BLUE_TANUKI_MEMORY_DIR: recoveryMemoryDir,
+        BLUE_TANUKI_FAILURE_MEMORY_DIR: recoveryFailureMemoryDir,
+        BLUE_TANUKI_SCHEDULES_DIR: recoverySchedulesDir,
+        BLUE_TANUKI_FILE_ROOT: recoveryFileRoot,
+      }),
+    },
   });
 
   const log: string[] = [];
@@ -948,9 +977,11 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     assertCheck(html.includes("composio-allowed-toolkits"), "Control Center HTML missing Composio toolkit allowlist field");
     assertCheck(html.includes("about-token"), "Control Center HTML missing About token field");
     assertCheck(html.includes("/app/about"), "Control Center HTML missing About route");
+    assertCheck(html.includes("recovery-token"), "Control Center HTML missing Recovery token field");
+    assertCheck(html.includes("/recovery/snapshot"), "Control Center HTML missing Recovery route");
     assertCheck(html.includes("/settings/config"), "Control Center HTML missing settings config route");
     assertCheck(html.includes("/settings/llm/verify"), "Control Center HTML missing LLM verify route");
-    log.push("/app: control center settings, connectors, and about forms rendered");
+    log.push("/app: control center settings, connectors, about, and recovery forms rendered");
 
     const unauth = await fetch(`${base}/settings/config`);
     assertCheck(unauth.status === 401, `/settings/config without token returned ${unauth.status}`);
@@ -984,6 +1015,32 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     assertCheck(about.authority_boundary?.claim_metadata_used_for_authority === false, "About snapshot made claim metadata authority");
     assertCheck(about.authority_boundary?.used_for_authority === false, "About snapshot authority flag mismatch");
     log.push("/app/about: read-only pre-GO claim/license boundary loaded through webchat token gate");
+
+    const recoveryUnauth = await fetch(`${base}/recovery/snapshot`);
+    assertCheck(recoveryUnauth.status === 401, `/recovery/snapshot without token returned ${recoveryUnauth.status}`);
+    const recoveryWrongToken = await fetch(`${base}/recovery/snapshot`, {
+      headers: { authorization: `Bearer ${settingsToken}` },
+    });
+    assertCheck(recoveryWrongToken.status === 401, `/recovery/snapshot with settings token returned ${recoveryWrongToken.status}`);
+    const recoveryPost = await fetch(`${base}/recovery/snapshot`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${webchatToken}` },
+    });
+    assertCheck(recoveryPost.status === 405, `/recovery/snapshot POST returned ${recoveryPost.status}`);
+    const recovery = await settingsRequest(base, webchatToken, "GET", "/recovery/snapshot");
+    assertCheck(recovery.surface === "recovery", "Recovery snapshot surface mismatch");
+    assertCheck(recovery.mode === "read_only", "Recovery snapshot was not read-only");
+    assertCheck(recovery.env_file?.exists === true, "Recovery snapshot env file missing");
+    assertCheck(recovery.env_file?.backup_count >= 1, "Recovery snapshot did not report env backup inventory");
+    assertCheck(recovery.env_file?.secret_material === true, "Recovery snapshot did not mark env backups secret-bearing");
+    assertCheck(recovery.restore?.execution_available === false, "Recovery snapshot unexpectedly exposed restore execution");
+    assertCheck(recovery.restore?.factory_reset_available === false, "Recovery snapshot unexpectedly exposed factory reset");
+    assertCheck(recovery.restore?.destructive_repair_available === false, "Recovery snapshot unexpectedly exposed destructive repair");
+    assertCheck(recovery.authority_boundary?.ui_used_for_authority === false, "Recovery snapshot made UI authority");
+    assertCheck(recovery.authority_boundary?.recovery_metadata_used_for_authority === false, "Recovery snapshot made recovery metadata authority");
+    assertCheck(recovery.authority_boundary?.used_for_authority === false, "Recovery snapshot authority flag mismatch");
+    assertCheck(recovery.runtime_paths?.audit_dir?.exists === true, "Recovery snapshot audit dir missing");
+    log.push("/recovery/snapshot: read-only backup inventory loaded through webchat token gate");
 
     const snapshot = await settingsRequest(base, settingsToken, "GET", "/settings/config");
     const snapshotText = JSON.stringify(snapshot);
@@ -1025,7 +1082,7 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
 
     return {
       status: "pass",
-      summary: "Control Center settings/connectors/about API smoke passed token-gated load/verify/save boundaries",
+      summary: "Control Center settings/connectors/about/recovery API smoke passed token-gated load/verify/save boundaries",
       raw_log: log.join("\n"),
       details: {
         app_rendered: true,
@@ -1035,12 +1092,16 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
         composio_live_execution_available: false,
         about_public_claim_allowed: false,
         about_non_authority: true,
+        recovery_restore_available: false,
+        recovery_env_backup_count: recovery.env_file?.backup_count ?? 0,
+        recovery_non_authority: true,
         verify_calls: verifications.length,
         update_calls: updates.length,
       },
     };
   } finally {
     await channel.stop();
+    await rm(recoveryRoot, { recursive: true, force: true });
   }
 }
 

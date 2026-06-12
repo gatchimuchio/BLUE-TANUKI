@@ -14,6 +14,7 @@ import {
   type WebChatNotificationSurface,
   type WebChatHistorySurface,
   type WebChatAboutSurface,
+  type WebChatRecoverySurface,
   type WebChatOperatorSurfaces,
   type WebChatRuntimeSurface,
   type WebChatSettingsSurface,
@@ -65,6 +66,7 @@ async function setup(
       notifications?: WebChatNotificationSurface;
       history?: WebChatHistorySurface;
       about?: WebChatAboutSurface;
+      recovery?: WebChatRecoverySurface;
       operators?: WebChatOperatorSurfaces;
     }
   > = {},
@@ -90,6 +92,7 @@ async function setup(
     notifications: opts.notifications,
     history: opts.history,
     about: opts.about,
+    recovery: opts.recovery,
     operators: opts.operators,
     // Default: disable rate limiting in legacy tests so existing flows
     // keep working without thinking about bursts. Rate-limit behavior is
@@ -320,6 +323,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Doctor");
       expect(html).toContain("Settings");
       expect(html).toContain("About");
+      expect(html).toContain("Backup / Restore");
       expect(html).toContain("OpenRouter");
       expect(html).toContain("Composio");
       expect(html).toContain("connectors-token");
@@ -337,6 +341,10 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("load-about");
       expect(html).toContain("/app/about");
       expect(html).toContain("public claim");
+      expect(html).toContain("recovery-token");
+      expect(html).toContain("load-recovery");
+      expect(html).toContain("/recovery/snapshot");
+      expect(html).toContain("bt.recoveryToken");
       expect(html).toContain("/settings/config");
       expect(html).toContain("/settings/llm/verify");
       expect(html).toContain("bt.settingsToken");
@@ -372,6 +380,88 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("runtime-schedule-list");
       expect(html).toContain("authority-trace-list");
       expect(html).toContain("redactRuntimeValue");
+    } finally {
+      await ctx.teardown();
+    }
+  });
+});
+
+describe("WebChatChannel — Recovery surface", () => {
+  it("serves read-only recovery readiness only with the inbound token", async () => {
+    const ctx = await setup({
+      recovery: {
+        getSnapshot: async () => ({
+          schema_version: 1,
+          surface: "recovery",
+          mode: "read_only",
+          env_file: {
+            configured: true,
+            path: "/tmp/product.env",
+            exists: true,
+            backup_count: 2,
+            latest_backup_path: "/tmp/product.env.2026.settings.bak",
+            backup_pattern: "/tmp/product.env.*.bak",
+            secret_material: true,
+          },
+          runtime_paths: {
+            audit_dir: {
+              configured: true,
+              path: "/tmp/audit",
+              exists: true,
+              kind: "directory",
+              backup_required: true,
+            },
+          },
+          restore: {
+            execution_available: false,
+            factory_reset_available: false,
+            provider_reset_available: false,
+            connector_reset_available: false,
+            destructive_repair_available: false,
+          },
+          authority_boundary: {
+            ui_used_for_authority: false,
+            recovery_metadata_used_for_authority: false,
+            used_for_authority: false,
+          },
+          next_safe_action: "Review backup inventory.",
+          evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+        }),
+      },
+    });
+    try {
+      await ctx.ch.start(async () => {});
+
+      expect((await getRaw(ctx.port, "/recovery/snapshot")).status).toBe(401);
+
+      const ok = await getRaw(ctx.port, "/recovery/snapshot", {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(ok.status).toBe(200);
+      expect(JSON.parse(ok.text)).toMatchObject({
+        surface: "recovery",
+        mode: "read_only",
+        env_file: {
+          exists: true,
+          backup_count: 2,
+          secret_material: true,
+        },
+        restore: {
+          execution_available: false,
+          factory_reset_available: false,
+          destructive_repair_available: false,
+        },
+        authority_boundary: {
+          ui_used_for_authority: false,
+          recovery_metadata_used_for_authority: false,
+          used_for_authority: false,
+        },
+      });
+
+      const post = await postJson(ctx.port, "/recovery/snapshot", {}, {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(post.status).toBe(405);
     } finally {
       await ctx.teardown();
     }
