@@ -48,6 +48,7 @@ export function renderControlCenterHtml(): string {
 
       button,
       input,
+      select,
       textarea {
         font: inherit;
       }
@@ -376,6 +377,8 @@ export function renderControlCenterHtml(): string {
 
       input[type="password"],
       input[type="text"],
+      input[type="number"],
+      select,
       textarea {
         width: 100%;
         min-height: 36px;
@@ -787,6 +790,36 @@ export function renderControlCenterHtml(): string {
             <h2>Settings</h2>
             <span class="badge review">mutation requires gate</span>
           </div>
+          <div class="status-grid">
+            <input id="settings-token" type="password" autocomplete="current-password" placeholder="settings token" />
+            <select id="settings-provider" aria-label="LLM provider">
+              <option value="stub">stub</option>
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+              <option value="openai-compatible">openai-compatible</option>
+              <option value="openrouter">openrouter</option>
+            </select>
+            <input id="settings-model" type="text" autocomplete="off" placeholder="model" />
+            <input id="settings-endpoint" type="text" autocomplete="off" placeholder="endpoint" />
+            <input id="settings-api-key" type="password" autocomplete="new-password" placeholder="API key unchanged" />
+            <input id="settings-site-url" type="text" autocomplete="off" placeholder="OpenRouter site URL" />
+            <input id="settings-app-title" type="text" autocomplete="off" placeholder="OpenRouter app title" />
+            <input id="settings-max-tokens" type="number" min="1" step="1" placeholder="max tokens" />
+          </div>
+          <div class="action-row">
+            <button id="load-settings" class="primary" type="button">Load Settings</button>
+            <button id="verify-llm-settings" type="button">Verify LLM</button>
+            <button id="save-settings" class="primary" type="button">Save Settings</button>
+          </div>
+          <div class="status-grid">
+            <div class="metric"><span>Provider</span><span id="settings-provider-status">not loaded</span></div>
+            <div class="metric"><span>Model</span><span id="settings-model-status">not loaded</span></div>
+            <div class="metric"><span>Writable</span><span id="settings-writable-status">not loaded</span></div>
+            <div class="metric"><span>LLM key</span><span id="settings-key-status">not loaded</span></div>
+            <div class="metric"><span>OpenRouter</span><span id="settings-openrouter-status">not loaded</span></div>
+            <div class="metric"><span>Verify</span><span id="settings-verify-status">not run</span></div>
+          </div>
+          <pre id="settings-json">not loaded</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>LLM Provider</h3><p class="muted">Provider verification is non-mutating unless explicit save is requested through the settings surface.</p></div>
             <div class="screen-card"><h3>OpenRouter</h3><p class="muted">Optional model provider adapter; native/direct providers remain canonical.</p></div>
@@ -944,6 +977,7 @@ export function renderControlCenterHtml(): string {
         notificationsToken: sessionStorage.getItem("bt.notificationsToken") || "",
         historyToken: sessionStorage.getItem("bt.historyToken") || "",
         historyKind: sessionStorage.getItem("bt.historyKind") || "",
+        settingsToken: sessionStorage.getItem("bt.settingsToken") || "",
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
         activeScreen: sessionStorage.getItem("bt.activeScreen") || "home",
@@ -1145,6 +1179,7 @@ export function renderControlCenterHtml(): string {
         byId("notifications-token").value = state.notificationsToken;
         byId("history-token").value = state.historyToken;
         byId("history-kind").value = state.historyKind;
+        byId("settings-token").value = state.settingsToken;
         byId("chat-token").value = state.chatToken;
         byId("chat-user").value = state.chatUser;
       }
@@ -1459,6 +1494,89 @@ export function renderControlCenterHtml(): string {
         setText("history-json", compactJson(redactRuntimeValue(history)));
       }
 
+      function renderSettingsSnapshot(snapshot) {
+        const llm = snapshot.llm || {};
+        const openrouter = snapshot.integrations && snapshot.integrations.openrouter ? snapshot.integrations.openrouter : {};
+        byId("settings-provider").value = llm.provider || "stub";
+        byId("settings-model").value = llm.model || "";
+        byId("settings-endpoint").value = llm.endpoint || "";
+        byId("settings-api-key").value = "";
+        byId("settings-api-key").placeholder = llm.api_key_set ? "configured" : "not set";
+        byId("settings-site-url").value = llm.site_url || "";
+        byId("settings-app-title").value = llm.app_title || "";
+        byId("settings-max-tokens").value = llm.max_tokens || "";
+        setText("settings-provider-status", llm.provider || "stub");
+        setText("settings-model-status", llm.model || "(provider default)");
+        setText("settings-writable-status", snapshot.writable ? "writable" : "read only");
+        setText("settings-key-status", llm.api_key_set ? "set" : "missing");
+        setText("settings-openrouter-status", openrouter.configured ? "configured" : "not configured");
+        setText("settings-json", compactJson(redactRuntimeValue(snapshot)));
+      }
+
+      function settingsPayload() {
+        const llm = {
+          provider: byId("settings-provider").value,
+          model: byId("settings-model").value,
+          endpoint: byId("settings-endpoint").value,
+          site_url: byId("settings-site-url").value,
+          app_title: byId("settings-app-title").value,
+          max_tokens: byId("settings-max-tokens").value
+        };
+        const apiKey = byId("settings-api-key").value.trim();
+        if (apiKey) llm.api_key = apiKey;
+        return { llm };
+      }
+
+      async function loadSettings() {
+        const token = byId("settings-token").value.trim();
+        state.settingsToken = token;
+        sessionStorage.setItem("bt.settingsToken", token);
+        try {
+          const body = await fetchJson("/settings/config", token);
+          renderSettingsSnapshot(body);
+          setText("settings-verify-status", "not run");
+        } catch (error) {
+          setText("settings-json", error.message);
+          setText("settings-verify-status", "error");
+          byId("settings-verify-status").className = "badge bad";
+        }
+      }
+
+      async function verifyLlmSettings() {
+        const token = byId("settings-token").value.trim();
+        state.settingsToken = token;
+        sessionStorage.setItem("bt.settingsToken", token);
+        try {
+          const body = await postJson("/settings/llm/verify", token, settingsPayload());
+          const result = body.result || body;
+          const status = result.status || "unknown";
+          setText("settings-verify-status", status + ": " + (result.detail || result.next_action || "done"));
+          byId("settings-verify-status").className = "badge " + (status === "pass" ? "good" : "bad");
+          setText("settings-json", compactJson(redactRuntimeValue(body)));
+        } catch (error) {
+          setText("settings-verify-status", "error");
+          byId("settings-verify-status").className = "badge bad";
+          setText("settings-json", error.message);
+        }
+      }
+
+      async function saveSettings() {
+        const token = byId("settings-token").value.trim();
+        state.settingsToken = token;
+        sessionStorage.setItem("bt.settingsToken", token);
+        try {
+          const body = await postJson("/settings/config", token, settingsPayload());
+          setText("settings-verify-status", "saved; restart required");
+          byId("settings-verify-status").className = "badge warn";
+          setText("settings-json", compactJson(redactRuntimeValue(body)));
+          await loadSettings();
+        } catch (error) {
+          setText("settings-verify-status", "error");
+          byId("settings-verify-status").className = "badge bad";
+          setText("settings-json", error.message);
+        }
+      }
+
       async function loadRuntime() {
         const token = byId("runtime-token").value.trim();
         state.runtimeToken = token;
@@ -1616,6 +1734,9 @@ export function renderControlCenterHtml(): string {
       byId("verify-audit").addEventListener("click", verifyAudit);
       byId("load-authority").addEventListener("click", loadAuthorityTrace);
       byId("load-history").addEventListener("click", loadHistory);
+      byId("load-settings").addEventListener("click", loadSettings);
+      byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
+      byId("save-settings").addEventListener("click", saveSettings);
       byId("connect-chat").addEventListener("click", function () {
         connectChat().catch(function (error) {
           setChatStatus("error", "bad");

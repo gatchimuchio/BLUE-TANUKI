@@ -179,6 +179,7 @@ describe("validate_product gate", () => {
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p2.test_suite\tphase=P2\tplatform=linux\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p3.package_windows_verify\tphase=P3\tplatform=win32\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p3.windows_installed_smoke\tphase=P3\tplatform=win32\trequired=true");
+    expect(listProductChecks(PRODUCT_CHECKS)).toContain("p4.control_center_settings_api\tphase=P4\tplatform=any\trequired=true");
   });
 
   it("builds a Windows-safe pnpm command spec without relying on extension resolution", () => {

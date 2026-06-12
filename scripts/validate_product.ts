@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
+import * as net from "node:net";
 import {
   mkdir,
   mkdtemp,
@@ -20,6 +21,7 @@ import {
 } from "../packages/hds-brain/src/index.js";
 import { AUDIT_FILENAME } from "../apps/gateway/src/audit_config.js";
 import { runAuditVerify } from "../apps/gateway/src/audit_verify.js";
+import { WebChatChannel } from "../packages/channel-webchat/src/index.js";
 
 export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P10" | "P11";
 export type ProductPlatform = "linux" | "win32" | "any";
@@ -192,6 +194,13 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "win32",
     required: true,
     run: runWindowsInstalledSmoke,
+  },
+  {
+    id: "p4.control_center_settings_api",
+    phase: "P4",
+    platform: "any",
+    required: true,
+    run: runControlCenterSettingsApiSmoke,
   },
 ];
 
@@ -825,6 +834,164 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
   };
 }
 
+async function runControlCenterSettingsApiSmoke(_ctx: CheckContext): Promise<CheckResult> {
+  const port = await allocateLoopbackPort();
+  const webchatToken = "product-webchat-token-1234";
+  const resumeToken = "product-resume-token-1234";
+  const settingsToken = "product-settings-token-1234";
+  const updates: unknown[] = [];
+  const verifications: unknown[] = [];
+  const channel = new WebChatChannel({
+    port,
+    host: "127.0.0.1",
+    token: webchatToken,
+    resume_token: resumeToken,
+    rate_limits: false,
+    settings: {
+      token: settingsToken,
+      html: "<!doctype html><title>Product Settings</title>",
+      getSnapshot: async () => ({
+        schema_version: 1,
+        env_file: "product.env",
+        writable: true,
+        llm: {
+          provider: "stub",
+          model: null,
+          endpoint: null,
+          api_key_set: false,
+          temperature: null,
+          max_tokens: null,
+          timeout_ms: null,
+          site_url: null,
+          app_title: null,
+          configured_providers: ["stub"],
+          command_route: {
+            backend_hint: "(provider default)",
+            model: "(provider default)",
+            temperature: "(provider default)",
+            max_tokens: "(provider default)",
+            timeout_ms: "(provider default)",
+          },
+        },
+        integrations: {
+          native_first: true,
+          openrouter: {
+            configured: false,
+            api_key_set: false,
+            model: null,
+            site_url: null,
+            app_title: null,
+            used_for_authority: false,
+          },
+          composio: {
+            configured: false,
+            dry_run: true,
+            live_execution_available: false,
+            allowed_toolkits: [],
+            toolkit_count: 0,
+            used_for_authority: false,
+            last_tool_call: null,
+          },
+        },
+        webchat: {
+          host: "127.0.0.1",
+          port,
+          token_set: true,
+          resume_token_set: true,
+          settings_token_set: true,
+        },
+        paths: {
+          file_root: "sandbox",
+          session_dir: "sessions",
+          audit_dir: "audit",
+        },
+        plugins: [],
+      }),
+      update: async (body) => {
+        updates.push(body);
+        return {
+          output_path: "product.env",
+          restart_required: true,
+          env_keys: ["LLM_BACKEND"],
+        };
+      },
+      verifyLlm: async (body) => {
+        verifications.push(body);
+        return {
+          status: "pass",
+          changed: false,
+          safe: true,
+          secret_exposed: false,
+          provider: "stub",
+          model: "stub-v0",
+          detail: "stub provider does not require external credentials",
+          next_action: "Save settings only if stub is desired.",
+        };
+      },
+    },
+  });
+
+  const log: string[] = [];
+  try {
+    await channel.start(async () => undefined);
+    const base = `http://127.0.0.1:${port}`;
+    const app = await fetch(`${base}/app`);
+    const html = await app.text();
+    assertCheck(app.status === 200, `Control Center /app returned ${app.status}`);
+    assertCheck(html.includes("BLUE-TANUKI Control Center"), "Control Center HTML missing title");
+    assertCheck(html.includes("settings-provider"), "Control Center HTML missing settings provider field");
+    assertCheck(html.includes("/settings/config"), "Control Center HTML missing settings config route");
+    assertCheck(html.includes("/settings/llm/verify"), "Control Center HTML missing LLM verify route");
+    log.push("/app: control center settings form rendered");
+
+    const unauth = await fetch(`${base}/settings/config`);
+    assertCheck(unauth.status === 401, `/settings/config without token returned ${unauth.status}`);
+    const wrongToken = await fetch(`${base}/settings/config`, {
+      headers: { authorization: `Bearer ${webchatToken}` },
+    });
+    assertCheck(wrongToken.status === 401, `/settings/config with webchat token returned ${wrongToken.status}`);
+    log.push("/settings/config: dedicated token required");
+
+    const snapshot = await settingsRequest(base, settingsToken, "GET", "/settings/config");
+    const snapshotText = JSON.stringify(snapshot);
+    assertCheck(snapshot.llm?.provider === "stub", "settings snapshot did not expose stub provider");
+    assertCheck(!snapshotText.includes(settingsToken), "settings snapshot exposed settings token");
+    log.push("/settings/config: redacted snapshot loaded");
+
+    const verify = await settingsRequest(base, settingsToken, "POST", "/settings/llm/verify", {
+      llm: { provider: "stub", api_key: "candidate-secret-value" },
+    });
+    assertCheck(verify.ok === true, "settings LLM verify did not return ok");
+    assertCheck(verify.result?.status === "pass", "settings LLM verify did not pass");
+    assertCheck(verifications.length === 1, "settings LLM verify handler was not called once");
+    assertCheck(!JSON.stringify(verify).includes("candidate-secret-value"), "settings LLM verify response exposed candidate secret");
+    log.push("/settings/llm/verify: non-mutating verification passed");
+
+    const save = await settingsRequest(base, settingsToken, "POST", "/settings/config", {
+      llm: { provider: "stub", model: "" },
+    });
+    assertCheck(save.ok === true, "settings save did not return ok");
+    assertCheck(save.result?.restart_required === true, "settings save did not report restart_required");
+    assertCheck(updates.length === 1, "settings update handler was not called once");
+    log.push("/settings/config: explicit save routed to settings update handler");
+
+    return {
+      status: "pass",
+      summary: "Control Center settings API smoke passed load/verify/save through dedicated token gate",
+      raw_log: log.join("\n"),
+      details: {
+        app_rendered: true,
+        settings_token_required: true,
+        snapshot_redacted: true,
+        verify_calls: verifications.length,
+        update_calls: updates.length,
+      },
+    };
+  } finally {
+    await channel.stop();
+  }
+}
+
 async function runNodeScript(ctx: CheckContext, scriptRel: string): Promise<CommandRunResult> {
   return ctx.runner({
     command: process.execPath,
@@ -832,6 +999,44 @@ async function runNodeScript(ctx: CheckContext, scriptRel: string): Promise<Comm
     cwd: ctx.rootDir,
     env: { ...process.env },
   }, ctx.timeoutMs);
+}
+
+async function allocateLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close((error) => {
+        if (error) reject(error);
+        else if (port > 0) resolve(port);
+        else reject(new Error("failed to allocate loopback port"));
+      });
+    });
+  });
+}
+
+async function settingsRequest(
+  base: string,
+  token: string,
+  method: "GET" | "POST",
+  route: string,
+  body?: Record<string, unknown>,
+): Promise<Record<string, any>> {
+  const response = await fetch(`${base}${route}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${token}`,
+      ...(method === "POST" ? { "content-type": "application/json" } : {}),
+    },
+    ...(method === "POST" ? { body: JSON.stringify(body ?? {}) } : {}),
+  });
+  const text = await response.text();
+  const parsed = text ? JSON.parse(text) : {};
+  assertCheck(response.ok, `${route} ${method} returned HTTP ${response.status}: ${text}`);
+  assertCheck(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed), `${route} did not return JSON object`);
+  return parsed as Record<string, any>;
 }
 
 function commandLog(run: CommandRunResult): string {

@@ -10,6 +10,7 @@
 pnpm validate:product
 pnpm validate:product -- --phase P2
 pnpm validate:product -- --phase P3
+pnpm validate:product -- --phase P4
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -60,6 +61,12 @@ only console output.
 |---|---|---|
 | `p3.package_windows_verify` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/package_windows.ts` を実行してWindows installer zipを生成し、`scripts/verify_windows_package.ts` でmanifest、sha256、zip contents、secret exclusion、authority boundary metadataを検証する |
 | `p3.windows_installed_smoke` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/smoke_windows_installed.ts` をWindows上で実行し、install→repair install設定保持→port競合検出→常駐起動→GUI/WebChat first message→resident kill→watchdog crash recovery→stop→doctor→restart→safe mode→stop→uninstallを検証する |
+
+## P4 Checks
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p4.control_center_settings_api` | `LIVE_RUNTIME` / `INTERNAL_STATE` | WebChat Control Centerをloopback上で起動し、`/app` のSettingsフォーム描画、`/settings/config` の専用settings token必須性、redacted snapshot、`/settings/llm/verify` の非mutating検証、`/settings/config` POSTの明示save経路をAPI経由で検証する |
 
 ## Incremental Registration
 

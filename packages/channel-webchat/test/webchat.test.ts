@@ -305,6 +305,14 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Settings");
       expect(html).toContain("OpenRouter");
       expect(html).toContain("Composio");
+      expect(html).toContain("settings-token");
+      expect(html).toContain("settings-provider");
+      expect(html).toContain("load-settings");
+      expect(html).toContain("verify-llm-settings");
+      expect(html).toContain("save-settings");
+      expect(html).toContain("/settings/config");
+      expect(html).toContain("/settings/llm/verify");
+      expect(html).toContain("bt.settingsToken");
       expect(html).toContain("Developer / Evidence");
       expect(html).toContain("GUI Shell responsibility substrate mapped to BLUE-TANUKI");
       expect(html).toContain("UI state is not authority");

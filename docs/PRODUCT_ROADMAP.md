@@ -101,10 +101,9 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: Windows上で製品として導入・常駐・停止・削除できる。
 
-現状（実測）: **実装大部分done**。`BlueTanukiSetup.cmd/ps1`、`%LOCALAPPDATA%\Programs\BlueTanuki`＋`%APPDATA%\BlueTanuki`配置、Start Menu・ショートカット登録、Launcher（open/start/stop/restart/status/doctor/logs/safe-mode）、`BlueTanukiDoctor.cmd`、Uninstall 2系統、**Node公式ランタイム同梱**（package_windows.tsがnodejs.org公式zipをbundle。installer testで「end-user pnpm/node/git不要」を検証済）、`package:windows`＋verify、`smoke:windows-installed`、port競合検出、watchdog crash recovery、repair install設定保持、safe mode起動、SmartScreen/SHA-256手順文書化、windows-latest `validate:product --phase P3` job、Windows evidence artifact保持が実装済み。
+現状（実測）: **実装大部分done**。`BlueTanukiSetup.cmd/ps1`、`%LOCALAPPDATA%\Programs\BlueTanuki`＋`%APPDATA%\BlueTanuki`配置、Start Menu・ショートカット登録、Launcher（open/start/stop/restart/status/doctor/logs/safe-mode）、`BlueTanukiDoctor.cmd`、Uninstall 2系統、**Node公式ランタイム同梱**（package_windows.tsがnodejs.org公式zipをbundle。installer testで「end-user pnpm/node/git不要」を検証済）、`package:windows`＋verify、`smoke:windows-installed`、port競合検出、watchdog crash recovery、repair install設定保持、safe mode起動、SmartScreen/SHA-256手順文書化、windows-latest `validate:product --phase P3` job、Windows evidence artifact保持、CI上のP3 evidence artifact確認が実装済み。
 
 残差:
-- GitHub Actions `windows-product` job のP3 evidence artifact確認（CI実行証跡）
 - GO前のowner Windows実機E2E evidence pack（D4）
 
 完了条件: 実機またはwindows-latest上で install→常駐→stop/restart/logs→uninstall がE2E PASSし、evidence取得。CLIなし導入が成立。
@@ -117,10 +116,9 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: BLUE-TANUKIを「リポジトリ」ではなく「アプリ」として操作完結させる。
 
-現状（実測）: **partial（高進捗）**。実装方式は確定済み——gatewayが配信するweb UI（`control_center_html.ts` 約1,600行）。ネイティブアプリ化はしない（GUI-Shellは別製品であり本書スコープ外）。既存panel: Dashboard / Conversation(WebChat) / Approval Policy / Approval Queue / Approval Model / Authority Trace / Authority Audit / Runtime Snapshot / Runtime Schedules / Tasks / Memory / Skills / Channels / Doctor / Settings / Developer-Evidence / Notification Center / Complete History-Replay / System / First-Run Next Action / Permanent-Use Status 等。加えてsetupページ（api_settings: provider/model/endpoint/key設定）。GUI仕様書5本（GUI_PRODUCT_SPEC等）も既存。
+現状（実測）: **partial（高進捗）**。実装方式は確定済み——gatewayが配信するweb UI（`control_center_html.ts` 約1,600行）。ネイティブアプリ化はしない（GUI-Shellは別製品であり本書スコープ外）。既存panel: Dashboard / Conversation(WebChat) / Approval Policy / Approval Queue / Approval Model / Authority Trace / Authority Audit / Runtime Snapshot / Runtime Schedules / Tasks / Memory / Skills / Channels / Doctor / Settings / Developer-Evidence / Notification Center / Complete History-Replay / System / First-Run Next Action / Permanent-Use Status 等。LLM provider設定はControl Center本体のSettingsタブから既存settings token gate経由でload / verify / save可能。GUI仕様書5本（GUI_PRODUCT_SPEC等）も既存。
 
 残差:
-- LLM Providersのsetupページ機能をCC本体パネルへ統合（手env編集ゼロ化の完了）
 - Connectors（Composio）パネル
 - Backup/Restore パネル（P10連動）
 - Update パネル（P11連動）
