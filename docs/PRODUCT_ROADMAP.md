@@ -86,15 +86,12 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: 台帳PASSではなく実動作PASSで製品判定する。
 
-現状（実測）: validate:product自体は**none**。ただし素材は揃っている（smoke群、各gate、hds:standalone、audit-dump CLI）。
+現状（実測）: **done**。`scripts/validate_product.ts`、増分登録、`--evidence` evidence pack、P2 Linux系check、CI `pnpm validate:product` 組込み済み。
 
 残差:
-- `scripts/validate_product.ts` 新設（増分登録機構＋`--evidence`でevidence pack出力）
-- SUSPEND「挙動」の動的検証（fail-safe 6条件の実発火→SUSPEND→human resume不可、をゲート内で実行）
-- approval bypass不能性の動的検証（既存bypass検出テストのゲート組込み）
-- CIへの `pnpm validate:product` 追加
+- P2内の実装残差なし。P13までに増分項目が追加されるたびに `validate:product` へ登録する。
 
-完了条件: §4のP2行がLinux上でPASS。「文書に書いてある」ではなく「実際に動いた」で判定できる。
+完了条件: §4のP2行がLinux上でPASS。「文書に書いてある」ではなく「実際に動いた」で判定できる。2026-06-12時点のローカル検証では `p2.test_suite` を含む required 7件PASS。
 
 確信度: 95%
 
@@ -104,15 +101,11 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: Windows上で製品として導入・常駐・停止・削除できる。
 
-現状（実測）: **大部分done**。`BlueTanukiSetup.cmd/ps1`、`%LOCALAPPDATA%\Programs\BlueTanuki`＋`%APPDATA%\BlueTanuki`配置、Start Menu・ショートカット登録、Launcher（open/start/stop/restart/status/doctor/logs）、`BlueTanukiDoctor.cmd`、Uninstall 2系統、**Node公式ランタイム同梱**（package_windows.tsがnodejs.org公式zipをbundle。installer testで「end-user pnpm/node/git不要」を検証済）、`package:windows`＋verify、`smoke:windows-installed`。
+現状（実測）: **実装大部分done**。`BlueTanukiSetup.cmd/ps1`、`%LOCALAPPDATA%\Programs\BlueTanuki`＋`%APPDATA%\BlueTanuki`配置、Start Menu・ショートカット登録、Launcher（open/start/stop/restart/status/doctor/logs/safe-mode）、`BlueTanukiDoctor.cmd`、Uninstall 2系統、**Node公式ランタイム同梱**（package_windows.tsがnodejs.org公式zipをbundle。installer testで「end-user pnpm/node/git不要」を検証済）、`package:windows`＋verify、`smoke:windows-installed`、port競合検出、watchdog crash recovery、repair install設定保持、safe mode起動、SmartScreen/SHA-256手順文書化、windows-latest `validate:product --phase P3` job、Windows evidence artifact保持が実装済み。
 
-残差（実測で不在を確認）:
-- port競合検出（既定port使用中の検出と案内）
-- crash自動復帰（常駐プロセス異常終了時の再起動方針）
-- repair install / 再インストール時の設定保持検証
-- safe mode起動
-- SmartScreen対応（D3の決定反映: 非署名なら通過手順＋sha256検証手順を初回起動文書に組込み）
-- Windows実機E2E（D4基盤で実施）
+残差:
+- GitHub Actions `windows-product` job のP3 evidence artifact確認（CI実行証跡）
+- GO前のowner Windows実機E2E evidence pack（D4）
 
 完了条件: 実機またはwindows-latest上で install→常駐→stop/restart/logs→uninstall がE2E PASSし、evidence取得。CLIなし導入が成立。
 
@@ -319,8 +312,8 @@ P12 → P13
 | P | 名称 | 現状 | 主な残差 |
 |---|---|---|---|
 | P1 | Linux基準面固定 | done（CI自動化済） | 凍結宣言のみ |
-| P2 | validate:product新設 | none（素材は既存） | ゲート実装・動的SUSPEND/bypass検証・evidence |
-| P3 | Windows導入 | 大部分done | port競合・crash復帰・repair・safe mode・SmartScreen・実機E2E |
+| P2 | validate:product新設 | done | P13までの増分登録継続 |
+| P3 | Windows導入 | 実装大部分done | Windows CI evidence確認・GO前owner実機E2E |
 | P4 | Control Center | partial高 | Providers統合・Connectors・Backup・Update・About・実機品質 |
 | P5 | LLM実運用 | partial | retry/fallback/health・DPAPI鍵保護・live証跡 |
 | P6 | Authority閉包 | コアdone | emergency stop・revoke GUI・mode初回選択 |

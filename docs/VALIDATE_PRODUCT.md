@@ -51,6 +51,10 @@ BLUE_TANUKI_VALIDATE_TIMEOUT_MS=120000
 ## P3 Checks
 
 P3 checks are registered as Windows-target checks. Linux runs report them as `skipped`; the `windows-latest` CI job runs them through `pnpm validate:product -- --phase P3`.
+The `windows-product` CI job uploads `.codex-tmp/validate-product-windows`
+as the `validate-product-windows-evidence` artifact on both success and
+failure, so a passing Windows product gate leaves an evidence pack rather than
+only console output.
 
 | ID | evidence source | 内容 |
 |---|---|---|

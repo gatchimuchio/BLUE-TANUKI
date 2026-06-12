@@ -58,6 +58,13 @@ function main(): void {
   requireIncludes("install/README.md", installReadme, "Start Menu shortcuts");
   requireIncludes("install/README.md", installReadme, "does not silently enable autostart");
 
+  const windowsWorkflow = read(".github/workflows/ci.yml");
+  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "windows-product");
+  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "pnpm validate:product -- --phase P3");
+  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "Upload Windows product evidence");
+  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "if: always()");
+  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "validate-product-windows-evidence");
+
   const windowsInstallerGuide = read("docs/WINDOWS_INSTALLER_GUIDE.md");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "pnpm package:windows");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "BlueTanukiSetup.cmd");

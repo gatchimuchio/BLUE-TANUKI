@@ -144,7 +144,7 @@ Codex must proceed sequentially unless explicitly instructed otherwise.
 ## 3. Current Active Phase
 
 ```txt
-Phase P2-S1 — validate:product 骨格＋Linux検査セット＋evidence pack
+Phase P3-S1 — Windows product gate evidence retention
 ```
 
 旧 `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` はD2によりP13へ吸収。Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion is blocked until explicit owner GO.

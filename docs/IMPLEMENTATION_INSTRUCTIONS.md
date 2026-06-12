@@ -22,7 +22,7 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P2-S1 — validate:product 骨格＋Linux検査セット＋evidence pack`.
+- The active instruction is `Phase P3-S1 — Windows product gate evidence retention`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
@@ -2741,7 +2741,14 @@ Do not claim completion unless acceptance criteria are satisfied.
 The active next phase is:
 
 ```txt
-Phase P2-S1 — validate:product 骨格＋Linux検査セット＋evidence pack
+Phase P3-S1 — Windows product gate evidence retention
 ```
+
+Scope: preserve the P3 Windows product gate evidence pack from the
+`windows-product` GitHub Actions job, keep `validate:product --phase P3` as the
+machine path for Windows installer verification, and document the remaining
+owner実機E2E requirement without claiming GA or product completion. This phase
+does not modify HDS-BRAIN authority, Approval Gate behavior, runtime policy, or
+public claim eligibility.
 
 Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision. Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion remains blocked until explicit owner GO.
