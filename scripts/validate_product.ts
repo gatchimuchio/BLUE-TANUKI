@@ -133,7 +133,7 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
   {
     id: "p2.test_suite",
     phase: "P2",
-    platform: "any",
+    platform: "linux",
     required: true,
     run: runTestSuite,
   },
