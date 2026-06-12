@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import * as net from "node:net";
 import { WebSocket } from "ws";
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import type { SendMeta } from "@blue-tanuki/channel-base";
@@ -17,9 +18,20 @@ import {
   type WebChatSettingsSurface,
 } from "../src/index.js";
 
-let port = 41200;
-function nextPort(): number {
-  return port++;
+async function allocateTestPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close((error) => {
+        if (error) reject(error);
+        else if (port > 0) resolve(port);
+        else reject(new Error("failed to allocate test port"));
+      });
+    });
+  });
 }
 
 const TOKEN = "test-token-1234";
@@ -33,7 +45,7 @@ interface Ctx {
   received: InboundRequest[];
 }
 
-function setup(
+async function setup(
   opts: Partial<
     Ctx & {
       onResume?: (id: string, v: string, ctx: { actor: string; token_kind: "resume" }) => Promise<unknown>;
@@ -54,8 +66,8 @@ function setup(
       operators?: WebChatOperatorSurfaces;
     }
   > = {},
-): Ctx & { teardown: () => Promise<void> } {
-  const p = opts.port ?? nextPort();
+): Promise<Ctx & { teardown: () => Promise<void> }> {
+  const p = opts.port ?? await allocateTestPort();
   const received: InboundRequest[] = [];
   const ch = new WebChatChannel({
     port: p,
@@ -285,7 +297,7 @@ describe("WebChatChannel — construction", () => {
 
 describe("WebChatChannel — Control Center shell", () => {
   it("serves the local resident app shell at /app", async () => {
-    const ctx = setup();
+    const ctx = await setup();
     try {
       await ctx.ch.start(async () => undefined);
       const r = await fetch(`http://127.0.0.1:${ctx.port}/app`);
@@ -355,7 +367,7 @@ describe("WebChatChannel — HTTP inbound", () => {
   let ctx: Awaited<ReturnType<typeof setup>>;
 
   beforeEach(async () => {
-    ctx = setup();
+    ctx = await setup();
     await ctx.ch.start(async (req) => {
       ctx.received.push(req);
     });
@@ -406,7 +418,7 @@ describe("WebChatChannel — HTTP inbound", () => {
 
 describe("WebChatChannel - HTTP webhook inbound", () => {
   it("keeps /webhook disabled unless a dedicated token is configured", async () => {
-    const ctx = setup();
+    const ctx = await setup();
     try {
       await ctx.ch.start(async () => undefined);
       const r = await postJson(
@@ -423,7 +435,7 @@ describe("WebChatChannel - HTTP webhook inbound", () => {
   });
 
   it("rejects /webhook without the webhook token", async () => {
-    const ctx = setup({ webhook_token: WEBHOOK_TOKEN });
+    const ctx = await setup({ webhook_token: WEBHOOK_TOKEN });
     try {
       await ctx.ch.start(async () => undefined);
       expect((await postJson(ctx.port, "/webhook", { content: "x" })).status).toBe(401);
@@ -453,7 +465,7 @@ describe("WebChatChannel - HTTP webhook inbound", () => {
   });
 
   it("normalizes webhook content without accepting authority metadata", async () => {
-    const ctx = setup({ webhook_token: WEBHOOK_TOKEN });
+    const ctx = await setup({ webhook_token: WEBHOOK_TOKEN });
     try {
       await ctx.ch.start(async (req) => {
         ctx.received.push(req);
@@ -491,7 +503,7 @@ describe("WebChatChannel - HTTP webhook inbound", () => {
   });
 
   it("can turn a JSON event into canonical inbound content", async () => {
-    const ctx = setup({ webhook_token: WEBHOOK_TOKEN });
+    const ctx = await setup({ webhook_token: WEBHOOK_TOKEN });
     try {
       await ctx.ch.start(async (req) => {
         ctx.received.push(req);
@@ -520,7 +532,7 @@ describe("WebChatChannel — /ws-ticket", () => {
   let ctx: Awaited<ReturnType<typeof setup>>;
 
   beforeEach(async () => {
-    ctx = setup();
+    ctx = await setup();
     await ctx.ch.start(async () => {});
   });
 
@@ -577,7 +589,7 @@ describe("WebChatChannel — /ws-ticket", () => {
 
 describe("WebChatChannel — settings surface", () => {
   it("serves /settings without exposing config JSON", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       settings: {
         token: SETTINGS_TOKEN,
         html: "<!doctype html><title>Settings</title>",
@@ -592,7 +604,7 @@ describe("WebChatChannel — settings surface", () => {
   });
 
   it("requires the dedicated settings token for /settings/config", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       settings: {
         token: SETTINGS_TOKEN,
         html: "<!doctype html>",
@@ -617,7 +629,7 @@ describe("WebChatChannel — settings surface", () => {
 
   it("routes POST /settings/config to the settings update handler", async () => {
     const updates: unknown[] = [];
-    const ctx = setup({
+    const ctx = await setup({
       settings: {
         token: SETTINGS_TOKEN,
         html: "<!doctype html>",
@@ -646,7 +658,7 @@ describe("WebChatChannel — settings surface", () => {
 
   it("routes POST /settings/llm/verify to the non-mutating verify handler", async () => {
     const verifyBodies: unknown[] = [];
-    const ctx = setup({
+    const ctx = await setup({
       settings: {
         token: SETTINGS_TOKEN,
         html: "<!doctype html>",
@@ -680,7 +692,7 @@ describe("WebChatChannel — settings surface", () => {
 
 describe("WebChatChannel — audit dump API", () => {
   it("serves read-only audit dump only with the inbound token", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       audit: {
         dump: async (format) => ({
           content_type:
@@ -720,7 +732,7 @@ describe("WebChatChannel — audit dump API", () => {
   });
 
   it("does not accept POST /audit/dump", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       audit: {
         dump: async () => ({
           content_type: "application/json",
@@ -745,7 +757,7 @@ describe("WebChatChannel — audit dump API", () => {
 
 describe("WebChatChannel — runtime snapshot API", () => {
   it("serves safe first-run status only with the inbound token", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       runtime: {
         getSnapshot: async () => ({
           gateway_status: "running",
@@ -794,7 +806,7 @@ describe("WebChatChannel — runtime snapshot API", () => {
   });
 
   it("does not accept POST /runtime/snapshot", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       runtime: {
         getSnapshot: async () => ({ gateway_status: "running" }),
       },
@@ -816,7 +828,7 @@ describe("WebChatChannel — runtime snapshot API", () => {
 
 describe("WebChatChannel — authority trace API", () => {
   it("serves read-only authority trace only with the inbound token", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       authority: {
         trace: async () => [
           {
@@ -863,7 +875,7 @@ describe("WebChatChannel — authority trace API", () => {
   });
 
   it("does not accept POST /authority/trace", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       authority: {
         trace: async () => [],
       },
@@ -885,7 +897,7 @@ describe("WebChatChannel — authority trace API", () => {
 
 describe("WebChatChannel — approval API", () => {
   it("lists pending approvals only with the resume token", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       approval: {
         list: async () => [
           {
@@ -930,7 +942,7 @@ describe("WebChatChannel — approval API", () => {
 
   it("routes POST /approval/:id through the same one-time resume approval gate", async () => {
     const calls: unknown[] = [];
-    const ctx = setup({
+    const ctx = await setup({
       onResume: async (id, verdict, resumeCtx) => {
         calls.push({ id, verdict, resumeCtx });
         return { handled: true };
@@ -983,7 +995,7 @@ describe("WebChatChannel — WS upgrade with ticket", () => {
   let ctx: Awaited<ReturnType<typeof setup>>;
 
   beforeEach(async () => {
-    ctx = setup();
+    ctx = await setup();
     await ctx.ch.start(async () => {});
   });
 
@@ -1029,7 +1041,7 @@ describe("WebChatChannel — WS upgrade with ticket", () => {
   });
 
   it("expired ticket is rejected", async () => {
-    const shortCtx = setup({ ws_ticket_ttl_ms: 1000 });
+    const shortCtx = await setup({ ws_ticket_ttl_ms: 1000 });
     await shortCtx.ch.start(async () => {});
     const ticket = await getTicket(shortCtx.port, "alice");
     // Wait for expiry.
@@ -1059,7 +1071,7 @@ describe("WebChatChannel — outbound over WS", () => {
   let ctx: Awaited<ReturnType<typeof setup>>;
 
   beforeEach(async () => {
-    ctx = setup();
+    ctx = await setup();
     await ctx.ch.start(async () => {});
   });
 
@@ -1108,7 +1120,7 @@ describe("WebChatChannel — outbound over WS", () => {
 
 describe("WebChatChannel — POST /resume", () => {
   it("returns 501 when onResume not configured", async () => {
-    const ctx = setup();
+    const ctx = await setup();
     await ctx.ch.start(async () => {});
     const r = await postJson(
       ctx.port,
@@ -1121,7 +1133,7 @@ describe("WebChatChannel — POST /resume", () => {
   });
 
   it("rejects /resume with inbound token", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       onResume: async () => ({ ok: true }),
     });
     await ctx.ch.start(async () => {});
@@ -1137,7 +1149,7 @@ describe("WebChatChannel — POST /resume", () => {
 
   it("forwards to onResume and echoes result", async () => {
     const calls: Array<{ id: string; v: string; actor: string; token_kind: string }> = [];
-    const ctx = setup({
+    const ctx = await setup({
       onResume: async (id, v, resumeCtx) => {
         calls.push({ id, v, actor: resumeCtx.actor, token_kind: resumeCtx.token_kind });
         return { decision: v === "approve" ? "ASSERT" : "FAIL" };
@@ -1168,7 +1180,7 @@ describe("WebChatChannel — POST /resume", () => {
 
   it("requires a request-bound one-time approval token", async () => {
     const calls: string[] = [];
-    const ctx = setup({
+    const ctx = await setup({
       onResume: async (id) => {
         calls.push(id);
         return { ok: true };
@@ -1213,7 +1225,7 @@ describe("WebChatChannel — POST /resume", () => {
   });
 
   it("consumes approval tokens exactly once", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       onResume: async () => ({ ok: true }),
     });
     await ctx.ch.start(async () => {});
@@ -1237,7 +1249,7 @@ describe("WebChatChannel — POST /resume", () => {
 
 describe("WebChatChannel — rate limiting", () => {
   it("/inbound returns 429 with Retry-After when capacity is exceeded", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       rate_limits: {
         // capacity 2, refill very slow → 3rd call gets 429 deterministically.
         inbound: { capacity: 2, refill_per_sec: 0.001 },
@@ -1276,7 +1288,7 @@ describe("WebChatChannel — rate limiting", () => {
   });
 
   it("/inbound rate limit is per-user (independent buckets)", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       rate_limits: {
         inbound: { capacity: 1, refill_per_sec: 0.001 },
       },
@@ -1310,7 +1322,7 @@ describe("WebChatChannel — rate limiting", () => {
   });
 
   it("/ws-ticket returns 429 when capacity is exceeded", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       rate_limits: {
         ws_ticket: { capacity: 1, refill_per_sec: 0.001 },
       },
@@ -1335,7 +1347,7 @@ describe("WebChatChannel — rate limiting", () => {
   });
 
   it("/resume rate-limit uses a single global bucket", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       onResume: async () => ({ ok: true }),
       rate_limits: {
         resume: { capacity: 1, refill_per_sec: 0.001 },
@@ -1363,7 +1375,7 @@ describe("WebChatChannel — rate limiting", () => {
   });
 
   it("rate_limits: false fully disables limiting", async () => {
-    const ctx = setup({ rate_limits: false });
+    const ctx = await setup({ rate_limits: false });
     await ctx.ch.start(async () => {});
     const auth = { authorization: `Bearer ${TOKEN}` };
     // Hammer /ws-ticket far above any default capacity.
@@ -1380,7 +1392,7 @@ describe("WebChatChannel — rate limiting", () => {
   });
 
   it("Retry-After header is present and positive on 429", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       rate_limits: {
         ws_ticket: { capacity: 1, refill_per_sec: 0.5 },
       },
@@ -1417,7 +1429,7 @@ describe("WebChatChannel — TicketStore injection", () => {
       },
       size: () => inner.size(),
     };
-    const ctx = setup({ ticket_store: wrapped });
+    const ctx = await setup({ ticket_store: wrapped });
     await ctx.ch.start(async () => {});
 
     const ticket = await getTicket(ctx.port, "alice");
@@ -1433,7 +1445,7 @@ describe("WebChatChannel — TicketStore injection", () => {
 
 describe("WebChatChannel — rate-limit prune", () => {
   it("periodically drops idle full buckets", async () => {
-    const p = nextPort();
+    const p = await allocateTestPort();
     const ch = new WebChatChannel({
       port: p,
       token: TOKEN,
@@ -1475,7 +1487,7 @@ describe("WebChatChannel — rate-limit prune", () => {
   });
 
   it("does not start a prune timer when interval is 0", async () => {
-    const p = nextPort();
+    const p = await allocateTestPort();
     const ch = new WebChatChannel({
       port: p,
       token: TOKEN,
@@ -1491,7 +1503,7 @@ describe("WebChatChannel — rate-limit prune", () => {
 
 describe("WebChatChannel - resident notifications API", () => {
   it("serves display-only notifications only with the inbound token", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       notifications: {
         list: async () => [
           {
@@ -1542,7 +1554,7 @@ describe("WebChatChannel - resident notifications API", () => {
   });
 
   it("does not accept POST /notifications", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       notifications: {
         list: async () => [],
       },
@@ -1565,7 +1577,7 @@ describe("WebChatChannel - resident notifications API", () => {
 describe("WebChatChannel - complete history replay API", () => {
   it("serves read-only replay metadata only with the inbound token", async () => {
     const filters: unknown[] = [];
-    const ctx = setup({
+    const ctx = await setup({
       history: {
         replay: async (filter) => {
           filters.push(filter);
@@ -1634,7 +1646,7 @@ describe("WebChatChannel - complete history replay API", () => {
   });
 
   it("does not accept POST /history/replay", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       history: {
         replay: async () => ({
           entries_count: 0,
@@ -1662,7 +1674,7 @@ describe("WebChatChannel - complete history replay API", () => {
 
 describe("WebChatChannel - Writing Operator API", () => {
   it("serves Writing Operator snapshot only with the inbound token", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       operators: {
         writing: {
           getSnapshot: async () => ({
@@ -1699,7 +1711,7 @@ describe("WebChatChannel - Writing Operator API", () => {
   });
 
   it("invokes Writing Operator through the existing inbound handler with surface metadata", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       operators: {
         writing: {
           getSnapshot: async () => ({ surface: "writing" }),
@@ -1732,7 +1744,7 @@ describe("WebChatChannel - Writing Operator API", () => {
 
 describe("WebChatChannel - Daily Operator API", () => {
   it("serves Daily Operator snapshot only with the inbound token", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       operators: {
         daily: {
           getSnapshot: async () => ({
@@ -1769,7 +1781,7 @@ describe("WebChatChannel - Daily Operator API", () => {
   });
 
   it("invokes Daily Operator through the existing inbound handler with surface metadata", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       operators: {
         daily: {
           getSnapshot: async () => ({ surface: "daily" }),
@@ -1802,7 +1814,7 @@ describe("WebChatChannel - Daily Operator API", () => {
 
 describe("WebChatChannel - Developer Operator API", () => {
   it("serves Developer Operator snapshot only with the inbound token", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       operators: {
         developer: {
           getSnapshot: async () => ({
@@ -1839,7 +1851,7 @@ describe("WebChatChannel - Developer Operator API", () => {
   });
 
   it("invokes Developer Operator through the existing inbound handler with surface metadata", async () => {
-    const ctx = setup({
+    const ctx = await setup({
       operators: {
         developer: {
           getSnapshot: async () => ({ surface: "developer" }),
