@@ -19,6 +19,7 @@ export {
   type WebChatHistoryReplayFilter,
   type WebChatHistorySnapshot,
   type WebChatHistorySurface,
+  type WebChatAboutSurface,
   type WebChatOperatorSurface,
   type WebChatOperatorSurfaces,
 } from "./webchat.js";

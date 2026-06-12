@@ -54,6 +54,7 @@ import { renderCommandOutput } from "./result_render.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createWebChatSettingsSurface } from "./settings_surface.js";
+import { buildAboutSnapshot } from "./about_surface.js";
 import { CronSchedulerChannel, cronSchedulesFromEnv } from "./cron_channel.js";
 import { googleDailyBriefProviderFromEnv } from "./google_daily_brief.js";
 import {
@@ -747,6 +748,9 @@ export async function serve(): Promise<ServeShutdown> {
       },
       history: {
         replay: async (filter: WebChatHistoryReplayFilter) => completeHistorySnapshot(filter),
+      },
+      about: {
+        getSnapshot: async () => buildAboutSnapshot(),
       },
       operators: {
         daily: {

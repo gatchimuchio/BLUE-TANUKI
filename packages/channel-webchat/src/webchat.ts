@@ -241,6 +241,11 @@ export interface WebChatHistorySurface {
   replay: (filter: WebChatHistoryReplayFilter) => Promise<WebChatHistorySnapshot>;
 }
 
+export interface WebChatAboutSurface {
+  /** Return read-only product identity, claim-boundary, and release-boundary metadata. */
+  getSnapshot: () => Promise<unknown>;
+}
+
 export interface WebChatOperatorSurfaces {
   writing?: WebChatOperatorSurface;
   daily?: WebChatOperatorSurface;
@@ -315,6 +320,8 @@ export interface WebChatOptions {
   notifications?: WebChatNotificationSurface;
   /** Optional read-only complete-history replay surface. Uses the normal inbound bearer token. */
   history?: WebChatHistorySurface;
+  /** Optional read-only product About surface. Uses the normal inbound bearer token. */
+  about?: WebChatAboutSurface;
   /** Optional first-party operator endpoints. Uses the normal inbound bearer token. */
   operators?: WebChatOperatorSurfaces;
   /**
@@ -715,6 +722,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         "cache-control": "no-store",
       });
       res.end(renderControlCenterHtml());
+      return;
+    }
+
+    if (url.pathname === "/app/about") {
+      await this.handleAbout(req, res);
       return;
     }
 
@@ -1317,6 +1329,33 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       "cache-control": "no-store",
     });
     res.end(html);
+  }
+
+  private async handleAbout(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (!this.opts.about) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "about_not_configured" }));
+      return;
+    }
+    if (!this.checkAuth(req, "inbound")) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (req.method !== "GET") {
+      res.writeHead(405, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    const snapshot = await this.opts.about.getSnapshot();
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    });
+    res.end(JSON.stringify(snapshot));
   }
 
   private async handleSettingsConfig(

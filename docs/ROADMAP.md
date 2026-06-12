@@ -144,7 +144,7 @@ Codex must proceed sequentially unless explicitly instructed otherwise.
 ## 3. Current Active Phase
 
 ```txt
-Phase P4-S2 — Control Center Connectors panel integration
+Phase P4-S3 — Control Center About panel integration
 ```
 
 旧 `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` はD2によりP13へ吸収。Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion is blocked until explicit owner GO.

@@ -597,6 +597,7 @@ export function renderControlCenterHtml(): string {
       <button class="screen-tab" data-screen="connectors" aria-selected="false">Connectors</button>
       <button class="screen-tab" data-screen="doctor" aria-selected="false">Doctor</button>
       <button class="screen-tab" data-screen="settings" aria-selected="false">Settings</button>
+      <button class="screen-tab" data-screen="about" aria-selected="false">About</button>
       <button class="screen-tab" data-screen="developer" aria-selected="false">Developer / Evidence</button>
     </nav>
 
@@ -866,6 +867,34 @@ export function renderControlCenterHtml(): string {
           </div>
         </section>
 
+        <section class="card" data-screen-group="about">
+          <div class="row">
+            <h2>About</h2>
+            <span id="about-release-status" class="badge warn">not loaded</span>
+          </div>
+          <div class="status-grid">
+            <input id="about-token" type="password" autocomplete="off" placeholder="webchat token" />
+            <button id="load-about" class="primary" type="button">Load About</button>
+          </div>
+          <div class="status-grid">
+            <div class="metric"><span>Product</span><span id="about-product-name">not loaded</span></div>
+            <div class="metric"><span>Version</span><span id="about-version">not loaded</span></div>
+            <div class="metric"><span>License</span><span id="about-license">not loaded</span></div>
+            <div class="metric"><span>Owner GO</span><span id="about-owner-go">not loaded</span></div>
+            <div class="metric"><span>Public claim</span><span id="about-public-claim">not loaded</span></div>
+            <div class="metric"><span>Signed installer</span><span id="about-signed-installer">not loaded</span></div>
+            <div class="metric"><span>Automatic updater</span><span id="about-automatic-updater">not loaded</span></div>
+            <div class="metric"><span>Authority</span><span id="about-authority">HDS-BRAIN</span></div>
+          </div>
+          <pre id="about-json">not loaded</pre>
+          <div class="screen-grid">
+            <div class="screen-card"><h3>Release Boundary</h3><p class="muted">RC remains pre-GO until owner decision and validate:ga permit public claim activation.</p></div>
+            <div class="screen-card"><h3>Claim Boundary</h3><p class="muted">This panel displays claim metadata; it is not release approval or authority.</p></div>
+            <div class="screen-card"><h3>Distribution Boundary</h3><p class="muted">Unsigned installer and automatic updater status are shown from claim metadata.</p></div>
+            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">HDS-BRAIN remains the only authority owner; UI state and claims are evidence only.</p></div>
+          </div>
+        </section>
+
         <section class="card" data-screen-group="developer">
           <div class="row">
             <h2>Developer / Evidence</h2>
@@ -1015,6 +1044,7 @@ export function renderControlCenterHtml(): string {
         historyKind: sessionStorage.getItem("bt.historyKind") || "",
         settingsToken: sessionStorage.getItem("bt.settingsToken") || "",
         connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
+        aboutToken: sessionStorage.getItem("bt.aboutToken") || "",
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
         activeScreen: sessionStorage.getItem("bt.activeScreen") || "home",
@@ -1218,6 +1248,7 @@ export function renderControlCenterHtml(): string {
         byId("history-kind").value = state.historyKind;
         byId("settings-token").value = state.settingsToken;
         byId("connectors-token").value = state.connectorsToken || state.settingsToken;
+        byId("about-token").value = state.aboutToken || state.chatToken;
         byId("chat-token").value = state.chatToken;
         byId("chat-user").value = state.chatUser;
       }
@@ -1566,6 +1597,24 @@ export function renderControlCenterHtml(): string {
         })));
       }
 
+      function renderAboutSnapshot(snapshot) {
+        const release = snapshot.release || {};
+        const claim = snapshot.claim_boundary || {};
+        const authority = snapshot.authority_boundary || {};
+        const pkg = snapshot.package || {};
+        setText("about-product-name", snapshot.product_name || "BLUE-TANUKI");
+        setText("about-version", pkg.version || "unknown");
+        setText("about-license", pkg.license || "unknown");
+        setText("about-owner-go", release.owner_go || "unknown");
+        setText("about-public-claim", release.public_claim_allowed ? "allowed" : "blocked");
+        setText("about-signed-installer", claim.signed_native_installer || "unknown");
+        setText("about-automatic-updater", claim.automatic_updater || "unknown");
+        setText("about-authority", authority.hds_brain_owns_authority ? "HDS-BRAIN owns authority" : "unknown");
+        setText("about-release-status", release.stage || "unknown");
+        byId("about-release-status").className = "badge " + (release.public_claim_allowed ? "good" : "warn");
+        setText("about-json", compactJson(redactRuntimeValue(snapshot)));
+      }
+
       function settingsPayload() {
         const llm = {
           provider: byId("settings-provider").value,
@@ -1621,6 +1670,20 @@ export function renderControlCenterHtml(): string {
           setText("connectors-json", error.message);
           setText("composio-save-status", "error");
           byId("composio-save-status").className = "badge bad";
+        }
+      }
+
+      async function loadAbout() {
+        const token = byId("about-token").value.trim();
+        state.aboutToken = token;
+        sessionStorage.setItem("bt.aboutToken", token);
+        try {
+          const body = await fetchJson("/app/about", token);
+          renderAboutSnapshot(body);
+        } catch (error) {
+          setText("about-release-status", "error");
+          byId("about-release-status").className = "badge bad";
+          setText("about-json", error.message);
         }
       }
 
@@ -1836,6 +1899,7 @@ export function renderControlCenterHtml(): string {
       byId("load-settings").addEventListener("click", loadSettings);
       byId("load-connectors").addEventListener("click", loadConnectors);
       byId("save-connectors").addEventListener("click", saveConnectors);
+      byId("load-about").addEventListener("click", loadAbout);
       byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
       byId("save-settings").addEventListener("click", saveSettings);
       byId("connect-chat").addEventListener("click", function () {

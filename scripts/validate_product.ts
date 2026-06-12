@@ -20,6 +20,7 @@ import {
   type DecisionLog,
 } from "../packages/hds-brain/src/index.js";
 import { AUDIT_FILENAME } from "../apps/gateway/src/audit_config.js";
+import { buildAboutSnapshot } from "../apps/gateway/src/about_surface.js";
 import { runAuditVerify } from "../apps/gateway/src/audit_verify.js";
 import { WebChatChannel } from "../packages/channel-webchat/src/index.js";
 
@@ -834,7 +835,7 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
   };
 }
 
-async function runControlCenterSettingsApiSmoke(_ctx: CheckContext): Promise<CheckResult> {
+async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<CheckResult> {
   const port = await allocateLoopbackPort();
   const webchatToken = "product-webchat-token-1234";
   const resumeToken = "product-resume-token-1234";
@@ -929,6 +930,9 @@ async function runControlCenterSettingsApiSmoke(_ctx: CheckContext): Promise<Che
         };
       },
     },
+    about: {
+      getSnapshot: async () => buildAboutSnapshot(ctx.rootDir),
+    },
   });
 
   const log: string[] = [];
@@ -942,9 +946,11 @@ async function runControlCenterSettingsApiSmoke(_ctx: CheckContext): Promise<Che
     assertCheck(html.includes("settings-provider"), "Control Center HTML missing settings provider field");
     assertCheck(html.includes("connectors-token"), "Control Center HTML missing connectors token field");
     assertCheck(html.includes("composio-allowed-toolkits"), "Control Center HTML missing Composio toolkit allowlist field");
+    assertCheck(html.includes("about-token"), "Control Center HTML missing About token field");
+    assertCheck(html.includes("/app/about"), "Control Center HTML missing About route");
     assertCheck(html.includes("/settings/config"), "Control Center HTML missing settings config route");
     assertCheck(html.includes("/settings/llm/verify"), "Control Center HTML missing LLM verify route");
-    log.push("/app: control center settings and connectors forms rendered");
+    log.push("/app: control center settings, connectors, and about forms rendered");
 
     const unauth = await fetch(`${base}/settings/config`);
     assertCheck(unauth.status === 401, `/settings/config without token returned ${unauth.status}`);
@@ -953,6 +959,31 @@ async function runControlCenterSettingsApiSmoke(_ctx: CheckContext): Promise<Che
     });
     assertCheck(wrongToken.status === 401, `/settings/config with webchat token returned ${wrongToken.status}`);
     log.push("/settings/config: dedicated token required");
+
+    const aboutUnauth = await fetch(`${base}/app/about`);
+    assertCheck(aboutUnauth.status === 401, `/app/about without token returned ${aboutUnauth.status}`);
+    const aboutWrongToken = await fetch(`${base}/app/about`, {
+      headers: { authorization: `Bearer ${settingsToken}` },
+    });
+    assertCheck(aboutWrongToken.status === 401, `/app/about with settings token returned ${aboutWrongToken.status}`);
+    const aboutPost = await fetch(`${base}/app/about`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${webchatToken}` },
+    });
+    assertCheck(aboutPost.status === 405, `/app/about POST returned ${aboutPost.status}`);
+    const about = await settingsRequest(base, webchatToken, "GET", "/app/about");
+    assertCheck(about.product_name === "BLUE-TANUKI", "About snapshot product name mismatch");
+    assertCheck(about.package?.version === "1.0.0-rc.1", "About snapshot version mismatch");
+    assertCheck(about.package?.license === "MIT", "About snapshot license mismatch");
+    assertCheck(about.release?.owner_go === "pending", "About snapshot owner GO state mismatch");
+    assertCheck(about.release?.public_claim_allowed === false, "About snapshot unexpectedly allowed public claim");
+    assertCheck(about.claim_boundary?.signed_native_installer === "not shipped", "About snapshot signed installer boundary mismatch");
+    assertCheck(about.claim_boundary?.automatic_updater === "not shipped", "About snapshot updater boundary mismatch");
+    assertCheck(about.authority_boundary?.hds_brain_owns_authority === true, "About snapshot missing HDS authority boundary");
+    assertCheck(about.authority_boundary?.ui_used_for_authority === false, "About snapshot made UI authority");
+    assertCheck(about.authority_boundary?.claim_metadata_used_for_authority === false, "About snapshot made claim metadata authority");
+    assertCheck(about.authority_boundary?.used_for_authority === false, "About snapshot authority flag mismatch");
+    log.push("/app/about: read-only pre-GO claim/license boundary loaded through webchat token gate");
 
     const snapshot = await settingsRequest(base, settingsToken, "GET", "/settings/config");
     const snapshotText = JSON.stringify(snapshot);
@@ -994,7 +1025,7 @@ async function runControlCenterSettingsApiSmoke(_ctx: CheckContext): Promise<Che
 
     return {
       status: "pass",
-      summary: "Control Center settings/connectors API smoke passed load/verify/save through dedicated token gate",
+      summary: "Control Center settings/connectors/about API smoke passed token-gated load/verify/save boundaries",
       raw_log: log.join("\n"),
       details: {
         app_rendered: true,
@@ -1002,6 +1033,8 @@ async function runControlCenterSettingsApiSmoke(_ctx: CheckContext): Promise<Che
         snapshot_redacted: true,
         composio_non_authority: true,
         composio_live_execution_available: false,
+        about_public_claim_allowed: false,
+        about_non_authority: true,
         verify_calls: verifications.length,
         update_calls: updates.length,
       },

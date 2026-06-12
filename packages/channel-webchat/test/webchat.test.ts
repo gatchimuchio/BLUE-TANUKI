@@ -13,6 +13,7 @@ import {
   type WebChatAuthoritySurface,
   type WebChatNotificationSurface,
   type WebChatHistorySurface,
+  type WebChatAboutSurface,
   type WebChatOperatorSurfaces,
   type WebChatRuntimeSurface,
   type WebChatSettingsSurface,
@@ -63,6 +64,7 @@ async function setup(
       authority?: WebChatAuthoritySurface;
       notifications?: WebChatNotificationSurface;
       history?: WebChatHistorySurface;
+      about?: WebChatAboutSurface;
       operators?: WebChatOperatorSurfaces;
     }
   > = {},
@@ -87,6 +89,7 @@ async function setup(
     authority: opts.authority,
     notifications: opts.notifications,
     history: opts.history,
+    about: opts.about,
     operators: opts.operators,
     // Default: disable rate limiting in legacy tests so existing flows
     // keep working without thinking about bursts. Rate-limit behavior is
@@ -316,6 +319,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Connectors");
       expect(html).toContain("Doctor");
       expect(html).toContain("Settings");
+      expect(html).toContain("About");
       expect(html).toContain("OpenRouter");
       expect(html).toContain("Composio");
       expect(html).toContain("connectors-token");
@@ -329,6 +333,10 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("load-settings");
       expect(html).toContain("verify-llm-settings");
       expect(html).toContain("save-settings");
+      expect(html).toContain("about-token");
+      expect(html).toContain("load-about");
+      expect(html).toContain("/app/about");
+      expect(html).toContain("public claim");
       expect(html).toContain("/settings/config");
       expect(html).toContain("/settings/llm/verify");
       expect(html).toContain("bt.settingsToken");
@@ -367,6 +375,62 @@ describe("WebChatChannel — Control Center shell", () => {
     } finally {
       await ctx.teardown();
     }
+  });
+});
+
+describe("WebChatChannel — About surface", () => {
+  it("serves read-only About metadata only with the inbound token", async () => {
+    const ctx = await setup({
+      about: {
+        getSnapshot: async () => ({
+          schema_version: 1,
+          product_name: "BLUE-TANUKI",
+          package: {
+            name: "blue-tanuki-workspace",
+            version: "1.0.0-rc.1",
+            license: "MIT",
+            private: true,
+          },
+          release: {
+            stage: "rc",
+            owner_go: "pending",
+            public_claim_allowed: false,
+            validate_ga_remains_required: true,
+          },
+          authority_boundary: {
+            hds_brain_owns_authority: true,
+            ui_used_for_authority: false,
+            claim_metadata_used_for_authority: false,
+            used_for_authority: false,
+          },
+        }),
+      },
+    });
+    await ctx.ch.start(async () => {});
+
+    expect((await getRaw(ctx.port, "/app/about")).status).toBe(401);
+
+    const ok = await getRaw(ctx.port, "/app/about", {
+      authorization: `Bearer ${TOKEN}`,
+    });
+    expect(ok.status).toBe(200);
+    expect(JSON.parse(ok.text)).toMatchObject({
+      product_name: "BLUE-TANUKI",
+      package: { version: "1.0.0-rc.1", license: "MIT" },
+      release: { owner_go: "pending", public_claim_allowed: false },
+      authority_boundary: {
+        hds_brain_owns_authority: true,
+        ui_used_for_authority: false,
+        claim_metadata_used_for_authority: false,
+        used_for_authority: false,
+      },
+    });
+
+    const post = await postJson(ctx.port, "/app/about", {}, {
+      authorization: `Bearer ${TOKEN}`,
+    });
+    expect(post.status).toBe(405);
+    await ctx.teardown();
   });
 });
 
