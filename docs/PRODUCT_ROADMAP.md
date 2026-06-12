@@ -116,10 +116,9 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: BLUE-TANUKIを「リポジトリ」ではなく「アプリ」として操作完結させる。
 
-現状（実測）: **partial（高進捗）**。実装方式は確定済み——gatewayが配信するweb UI（`control_center_html.ts` 約1,600行）。ネイティブアプリ化はしない（GUI-Shellは別製品であり本書スコープ外）。既存panel: Dashboard / Conversation(WebChat) / Approval Policy / Approval Queue / Approval Model / Authority Trace / Authority Audit / Runtime Snapshot / Runtime Schedules / Tasks / Memory / Skills / Channels / Doctor / Settings / Developer-Evidence / Notification Center / Complete History-Replay / System / First-Run Next Action / Permanent-Use Status 等。LLM provider設定はControl Center本体のSettingsタブから既存settings token gate経由でload / verify / save可能。GUI仕様書5本（GUI_PRODUCT_SPEC等）も既存。
+現状（実測）: **partial（高進捗）**。実装方式は確定済み——gatewayが配信するweb UI（`control_center_html.ts` 約1,600行）。ネイティブアプリ化はしない（GUI-Shellは別製品であり本書スコープ外）。既存panel: Dashboard / Conversation(WebChat) / Approval Policy / Approval Queue / Approval Model / Authority Trace / Authority Audit / Runtime Snapshot / Runtime Schedules / Tasks / Memory / Skills / Channels / Connectors / Doctor / Settings / Developer-Evidence / Notification Center / Complete History-Replay / System / First-Run Next Action / Permanent-Use Status 等。LLM provider設定はControl Center本体のSettingsタブから既存settings token gate経由でload / verify / save可能。Composio connector設定はControl Center本体のConnectorsタブから同じsettings token gate経由でload / save可能（live実行は未解放）。GUI仕様書5本（GUI_PRODUCT_SPEC等）も既存。
 
 残差:
-- Connectors（Composio）パネル
 - Backup/Restore パネル（P10連動）
 - Update パネル（P11連動）
 - About（version/claim/license表示）
@@ -193,13 +192,13 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: 便利API統合をHDS承認・監査の内側でlive化する。
 
-現状（実測）: **段階1〜4相当done**。dry-run実装済（`live_execution_available: false` 固定）、approval request生成、toolkit/action discovery、metadata権限非昇格のauthorityテスト、github.write / google.write等のL3境界。
+現状（実測）: **段階1〜4相当done**。dry-run実装済（`live_execution_available: false` 固定）、approval request生成、toolkit/action discovery、metadata権限非昇格のauthorityテスト、github.write / google.write等のL3境界。CCのConnectorsパネルはP4で設定表示・保存導線まで実装済み。
 
 残差:
 - allowlist／scope管理／revoke
 - execution auditの拡充（実行前後トレース）
 - live実行解放。**前提条件: P6完了＋validate:productのapproval系PASS。liveはHDS承認経由以外で到達不能であることをゲートで実証してから解放**
-- CCのConnectorsパネル（P4と連動）
+- live解放後のCC上の接続解除・実行監査表示
 
 完了条件: live実行が必ずHDS承認を通る／allowlist外は実行不可／接続解除可／前後監査可／GUIから操作可。
 
@@ -312,7 +311,7 @@ P12 → P13
 | P1 | Linux基準面固定 | done（CI自動化済） | 凍結宣言のみ |
 | P2 | validate:product新設 | done | P13までの増分登録継続 |
 | P3 | Windows導入 | 実装大部分done | Windows CI evidence確認・GO前owner実機E2E |
-| P4 | Control Center | partial高 | Providers統合・Connectors・Backup・Update・About・実機品質 |
+| P4 | Control Center | partial高 | Backup・Update・About・実機品質 |
 | P5 | LLM実運用 | partial | retry/fallback/health・DPAPI鍵保護・live証跡 |
 | P6 | Authority閉包 | コアdone | emergency stop・revoke GUI・mode初回選択 |
 | P7 | Audit製品化 | partial | 横断redaction・可読report・retention・evidence GUI |

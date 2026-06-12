@@ -22,29 +22,31 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P4-S1 — Control Center LLM settings integration and product smoke`.
+- The active instruction is `Phase P4-S2 — Control Center Connectors panel integration`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P4-S1 — Control Center LLM settings integration and product smoke
+# Phase P4-S2 — Control Center Connectors panel integration
 
 ## Objective
 
-Move the existing token-gated LLM provider setup surface into the main Control Center and register the first P4 `validate:product` API smoke.
+Move the existing token-gated Composio connector settings into the main Control Center and extend the P4 `validate:product` API smoke.
 
 ## Scope
 
-- Add LLM provider load / verify / save controls to the Control Center Settings screen.
-- Reuse the existing `/settings/config` and `/settings/llm/verify` endpoints and `BLUE_TANUKI_SETTINGS_TOKEN` boundary.
-- Add a P4 product check that exercises Control Center settings API behavior over loopback HTTP.
+- Add a Connectors screen to the Control Center.
+- Add Composio API key, toolkit allowlist, and dry-run controls to that screen.
+- Reuse the existing `/settings/config` endpoint and `BLUE_TANUKI_SETTINGS_TOKEN` boundary.
+- Extend the P4 product check to exercise the Composio settings path over loopback HTTP.
 - Update tests and P-series docs.
 
 ## Non-Goals
 
-- Do not implement Connectors, Backup/Restore, Update, or About panels in this phase.
+- Do not enable live Composio execution.
+- Do not implement Backup/Restore, Update, or About panels in this phase.
 - Do not change HDS-BRAIN authority, Approval Gate policy, executor behavior, provider runtime semantics, or credential storage.
 - Do not claim P4 complete; Windows real-device rendering remains a later evidence item.
 
@@ -52,27 +54,28 @@ Move the existing token-gated LLM provider setup surface into the main Control C
 
 ```bash
 git status --short
-rg -n "settings|/settings/config|/settings/llm/verify|renderControlCenterHtml" packages/channel-webchat apps/gateway
+rg -n "Composio|composio|Connectors|/settings/config|renderControlCenterHtml" packages/channel-webchat apps/gateway
 rg -n "validate:product|PRODUCT_CHECKS|P4" scripts docs apps/gateway/test
 ```
 
 ## Implementation Requirements
 
 - The Control Center must not expose stored API key values.
-- LLM verification must remain non-mutating.
-- Settings writes must remain explicit POSTs to the existing settings update handler.
+- Composio settings writes must remain explicit POSTs to the existing settings update handler.
+- Composio live execution must remain unavailable in this phase.
 - `validate:product -- --phase P4` must include the new P4 check while keeping P2/P3 behavior intact.
 
 ## Safety Requirements
 
 - Control Center UI state remains display/intent only and must not become authority.
 - Settings API access continues to require the dedicated settings token.
+- Composio toolkit metadata, connection state, and tool results must remain downstream evidence only.
 - HDS-BRAIN and Approval Gate remain upstream; the UI must not approve, execute, or infer consent.
 
 ## Operator Usability Requirements
 
-- LLM provider controls must be reachable inside the main Control Center Settings tab.
-- Load, verify, and save must be separate actions.
+- Composio connector controls must be reachable inside the main Control Center Connectors tab.
+- Load and save must be separate actions.
 - Secret fields must be blank on load and only sent when explicitly entered.
 
 ## Audit Requirements
@@ -82,8 +85,8 @@ rg -n "validate:product|PRODUCT_CHECKS|P4" scripts docs apps/gateway/test
 
 ## Tests
 
-- Control Center HTML test must confirm the Settings controls and routes are present.
-- `validate_product` registration test must include the P4 check.
+- Control Center HTML test must confirm the Connectors controls are present.
+- The P4 product check must confirm Composio remains non-authority and live execution unavailable.
 
 ## Docs
 
@@ -108,10 +111,11 @@ pnpm validate:product -- --phase P4 --evidence .codex-tmp/validate-product-p4-co
 ## Manual Smoke
 
 Start gateway, open `/app`, enter settings token, load settings, verify LLM, and save a stub provider in a disposable env-file environment.
+Then open Connectors, enter settings token, load connector state, set Composio allowed toolkits with dry-run enabled, and save in a disposable env-file environment.
 
 ## Permanent-Use Check
 
-The main Control Center can configure LLM provider state without directing the owner to edit env files by hand. This does not complete Windows real-device UI evidence.
+The main Control Center can configure LLM provider and Composio connector state without directing the owner to edit env files by hand. This does not complete Windows real-device UI evidence or live Composio release.
 
 ## Acceptance Criteria
 

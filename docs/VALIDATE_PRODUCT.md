@@ -66,7 +66,7 @@ only console output.
 
 | ID | evidence source | 内容 |
 |---|---|---|
-| `p4.control_center_settings_api` | `LIVE_RUNTIME` / `INTERNAL_STATE` | WebChat Control Centerをloopback上で起動し、`/app` のSettingsフォーム描画、`/settings/config` の専用settings token必須性、redacted snapshot、`/settings/llm/verify` の非mutating検証、`/settings/config` POSTの明示save経路をAPI経由で検証する |
+| `p4.control_center_settings_api` | `LIVE_RUNTIME` / `INTERNAL_STATE` | WebChat Control Centerをloopback上で起動し、`/app` のSettings / Connectorsフォーム描画、`/settings/config` の専用settings token必須性、redacted snapshot、`/settings/llm/verify` の非mutating検証、LLM設定save、Composio allowlist / dry-run save、Composio non-authority / live unavailable境界をAPI経由で検証する |
 
 ## Incremental Registration
 

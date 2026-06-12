@@ -594,6 +594,7 @@ export function renderControlCenterHtml(): string {
       <button class="screen-tab" data-screen="memory" aria-selected="false">Memory</button>
       <button class="screen-tab" data-screen="skills" aria-selected="false">Skills</button>
       <button class="screen-tab" data-screen="channels" aria-selected="false">Channels</button>
+      <button class="screen-tab" data-screen="connectors" aria-selected="false">Connectors</button>
       <button class="screen-tab" data-screen="doctor" aria-selected="false">Doctor</button>
       <button class="screen-tab" data-screen="settings" aria-selected="false">Settings</button>
       <button class="screen-tab" data-screen="developer" aria-selected="false">Developer / Evidence</button>
@@ -761,6 +762,41 @@ export function renderControlCenterHtml(): string {
             <div class="screen-card"><h3>Preview</h3><p class="muted">Slack, Discord, Teams, and LINE require owner evidence before promotion.</p></div>
             <div class="screen-card"><h3>Reserved Third-party</h3><p class="muted">WhatsApp remains outside first-party core.</p></div>
             <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Channel metadata is normalized and cannot escalate permission.</p></div>
+          </div>
+        </section>
+
+        <section class="card" data-screen-group="connectors">
+          <div class="row">
+            <h2>Connectors</h2>
+            <span class="badge review">downstream only</span>
+          </div>
+          <div class="status-grid">
+            <input id="connectors-token" type="password" autocomplete="current-password" placeholder="settings token" />
+            <input id="composio-api-key" type="password" autocomplete="new-password" placeholder="Composio API key unchanged" />
+            <input id="composio-allowed-toolkits" type="text" autocomplete="off" placeholder="github,gmail,calendar" />
+            <select id="composio-dry-run" aria-label="Composio dry-run">
+              <option value="true">dry-run true</option>
+              <option value="false">dry-run false</option>
+            </select>
+          </div>
+          <div class="action-row">
+            <button id="load-connectors" class="primary" type="button">Load Connectors</button>
+            <button id="save-connectors" class="primary" type="button">Save Composio</button>
+          </div>
+          <div class="status-grid">
+            <div class="metric"><span>Composio</span><span id="composio-configured-status">not loaded</span></div>
+            <div class="metric"><span>Dry-run</span><span id="composio-dry-run-status">not loaded</span></div>
+            <div class="metric"><span>Live execution</span><span id="composio-live-status">not loaded</span></div>
+            <div class="metric"><span>Authority</span><span id="composio-authority-status">not authority</span></div>
+            <div class="metric"><span>Toolkits</span><span id="composio-toolkits-status">not loaded</span></div>
+            <div class="metric"><span>Save</span><span id="composio-save-status">not saved</span></div>
+          </div>
+          <pre id="connectors-json">not loaded</pre>
+          <div class="screen-grid">
+            <div class="screen-card"><h3>Dry-run Boundary</h3><p class="muted">Composio remains dry-run and downstream until later live execution gates prove HDS approval coverage.</p></div>
+            <div class="screen-card"><h3>Allowlist</h3><p class="muted">Toolkits are explicit operator configuration, not permission escalation or authority.</p></div>
+            <div class="screen-card"><h3>Secret Update</h3><p class="muted">Leave the API key blank to keep the existing secret; enter a new key only when rotating it.</p></div>
+            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Connected account metadata, toolkit discovery, and tool results remain evidence only.</p></div>
           </div>
         </section>
 
@@ -978,6 +1014,7 @@ export function renderControlCenterHtml(): string {
         historyToken: sessionStorage.getItem("bt.historyToken") || "",
         historyKind: sessionStorage.getItem("bt.historyKind") || "",
         settingsToken: sessionStorage.getItem("bt.settingsToken") || "",
+        connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
         activeScreen: sessionStorage.getItem("bt.activeScreen") || "home",
@@ -1180,6 +1217,7 @@ export function renderControlCenterHtml(): string {
         byId("history-token").value = state.historyToken;
         byId("history-kind").value = state.historyKind;
         byId("settings-token").value = state.settingsToken;
+        byId("connectors-token").value = state.connectorsToken || state.settingsToken;
         byId("chat-token").value = state.chatToken;
         byId("chat-user").value = state.chatUser;
       }
@@ -1497,6 +1535,8 @@ export function renderControlCenterHtml(): string {
       function renderSettingsSnapshot(snapshot) {
         const llm = snapshot.llm || {};
         const openrouter = snapshot.integrations && snapshot.integrations.openrouter ? snapshot.integrations.openrouter : {};
+        const composio = snapshot.integrations && snapshot.integrations.composio ? snapshot.integrations.composio : {};
+        const toolkits = Array.isArray(composio.allowed_toolkits) ? composio.allowed_toolkits : [];
         byId("settings-provider").value = llm.provider || "stub";
         byId("settings-model").value = llm.model || "";
         byId("settings-endpoint").value = llm.endpoint || "";
@@ -1511,6 +1551,19 @@ export function renderControlCenterHtml(): string {
         setText("settings-key-status", llm.api_key_set ? "set" : "missing");
         setText("settings-openrouter-status", openrouter.configured ? "configured" : "not configured");
         setText("settings-json", compactJson(redactRuntimeValue(snapshot)));
+        byId("composio-api-key").value = "";
+        byId("composio-api-key").placeholder = composio.configured ? "configured" : "not set";
+        byId("composio-allowed-toolkits").value = toolkits.join(",");
+        byId("composio-dry-run").value = String(composio.dry_run !== false);
+        setText("composio-configured-status", composio.configured ? "configured" : "not configured");
+        setText("composio-dry-run-status", composio.dry_run === false ? "false" : "true");
+        setText("composio-live-status", composio.live_execution_available ? "available" : "blocked");
+        setText("composio-authority-status", composio.used_for_authority === true ? "unsafe" : "not authority");
+        setText("composio-toolkits-status", toolkits.length > 0 ? toolkits.join(", ") : "none");
+        setText("connectors-json", compactJson(redactRuntimeValue({
+          native_first: snapshot.integrations ? snapshot.integrations.native_first : true,
+          composio
+        })));
       }
 
       function settingsPayload() {
@@ -1527,6 +1580,16 @@ export function renderControlCenterHtml(): string {
         return { llm };
       }
 
+      function connectorsPayload() {
+        const composio = {
+          allowed_toolkits: byId("composio-allowed-toolkits").value,
+          dry_run: byId("composio-dry-run").value
+        };
+        const apiKey = byId("composio-api-key").value.trim();
+        if (apiKey) composio.api_key = apiKey;
+        return { composio };
+      }
+
       async function loadSettings() {
         const token = byId("settings-token").value.trim();
         state.settingsToken = token;
@@ -1539,6 +1602,42 @@ export function renderControlCenterHtml(): string {
           setText("settings-json", error.message);
           setText("settings-verify-status", "error");
           byId("settings-verify-status").className = "badge bad";
+        }
+      }
+
+      async function loadConnectors(options) {
+        const preserveSaveStatus = options && options.preserveSaveStatus === true;
+        const token = byId("connectors-token").value.trim();
+        state.connectorsToken = token;
+        sessionStorage.setItem("bt.connectorsToken", token);
+        try {
+          const body = await fetchJson("/settings/config", token);
+          renderSettingsSnapshot(body);
+          if (!preserveSaveStatus) {
+            setText("composio-save-status", "not saved");
+            byId("composio-save-status").className = "badge warn";
+          }
+        } catch (error) {
+          setText("connectors-json", error.message);
+          setText("composio-save-status", "error");
+          byId("composio-save-status").className = "badge bad";
+        }
+      }
+
+      async function saveConnectors() {
+        const token = byId("connectors-token").value.trim();
+        state.connectorsToken = token;
+        sessionStorage.setItem("bt.connectorsToken", token);
+        try {
+          const body = await postJson("/settings/config", token, connectorsPayload());
+          setText("connectors-json", compactJson(redactRuntimeValue(body)));
+          await loadConnectors({ preserveSaveStatus: true });
+          setText("composio-save-status", "saved; restart required");
+          byId("composio-save-status").className = "badge warn";
+        } catch (error) {
+          setText("composio-save-status", "error");
+          byId("composio-save-status").className = "badge bad";
+          setText("connectors-json", error.message);
         }
       }
 
@@ -1735,6 +1834,8 @@ export function renderControlCenterHtml(): string {
       byId("load-authority").addEventListener("click", loadAuthorityTrace);
       byId("load-history").addEventListener("click", loadHistory);
       byId("load-settings").addEventListener("click", loadSettings);
+      byId("load-connectors").addEventListener("click", loadConnectors);
+      byId("save-connectors").addEventListener("click", saveConnectors);
       byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
       byId("save-settings").addEventListener("click", saveSettings);
       byId("connect-chat").addEventListener("click", function () {

@@ -940,9 +940,11 @@ async function runControlCenterSettingsApiSmoke(_ctx: CheckContext): Promise<Che
     assertCheck(app.status === 200, `Control Center /app returned ${app.status}`);
     assertCheck(html.includes("BLUE-TANUKI Control Center"), "Control Center HTML missing title");
     assertCheck(html.includes("settings-provider"), "Control Center HTML missing settings provider field");
+    assertCheck(html.includes("connectors-token"), "Control Center HTML missing connectors token field");
+    assertCheck(html.includes("composio-allowed-toolkits"), "Control Center HTML missing Composio toolkit allowlist field");
     assertCheck(html.includes("/settings/config"), "Control Center HTML missing settings config route");
     assertCheck(html.includes("/settings/llm/verify"), "Control Center HTML missing LLM verify route");
-    log.push("/app: control center settings form rendered");
+    log.push("/app: control center settings and connectors forms rendered");
 
     const unauth = await fetch(`${base}/settings/config`);
     assertCheck(unauth.status === 401, `/settings/config without token returned ${unauth.status}`);
@@ -955,6 +957,8 @@ async function runControlCenterSettingsApiSmoke(_ctx: CheckContext): Promise<Che
     const snapshot = await settingsRequest(base, settingsToken, "GET", "/settings/config");
     const snapshotText = JSON.stringify(snapshot);
     assertCheck(snapshot.llm?.provider === "stub", "settings snapshot did not expose stub provider");
+    assertCheck(snapshot.integrations?.composio?.used_for_authority === false, "Composio snapshot did not preserve non-authority flag");
+    assertCheck(snapshot.integrations?.composio?.live_execution_available === false, "Composio snapshot unexpectedly exposed live execution");
     assertCheck(!snapshotText.includes(settingsToken), "settings snapshot exposed settings token");
     log.push("/settings/config: redacted snapshot loaded");
 
@@ -975,14 +979,29 @@ async function runControlCenterSettingsApiSmoke(_ctx: CheckContext): Promise<Che
     assertCheck(updates.length === 1, "settings update handler was not called once");
     log.push("/settings/config: explicit save routed to settings update handler");
 
+    const connectorSave = await settingsRequest(base, settingsToken, "POST", "/settings/config", {
+      composio: {
+        api_key: "composio-candidate-secret",
+        allowed_toolkits: "github,gmail",
+        dry_run: "true",
+      },
+    });
+    assertCheck(connectorSave.ok === true, "Composio save did not return ok");
+    assertCheck(connectorSave.result?.restart_required === true, "Composio save did not report restart_required");
+    assertCheck(updates.length === 2, "Composio settings update handler was not called");
+    assertCheck(!JSON.stringify(connectorSave).includes("composio-candidate-secret"), "Composio save response exposed candidate secret");
+    log.push("/settings/config: Composio allowlist/dry-run save routed through settings token gate");
+
     return {
       status: "pass",
-      summary: "Control Center settings API smoke passed load/verify/save through dedicated token gate",
+      summary: "Control Center settings/connectors API smoke passed load/verify/save through dedicated token gate",
       raw_log: log.join("\n"),
       details: {
         app_rendered: true,
         settings_token_required: true,
         snapshot_redacted: true,
+        composio_non_authority: true,
+        composio_live_execution_available: false,
         verify_calls: verifications.length,
         update_calls: updates.length,
       },
