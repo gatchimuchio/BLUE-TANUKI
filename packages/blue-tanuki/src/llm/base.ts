@@ -34,3 +34,64 @@ export interface LLMBackend {
   readonly name: string;
   call(req: LLMRequest): Promise<LLMResponse>;
 }
+
+export type LLMErrorKind =
+  | "rate_limited"
+  | "temporary_network"
+  | "remote_service_unavailable"
+  | "auth"
+  | "bad_request"
+  | "bad_response"
+  | "timeout"
+  | "unknown";
+
+export interface LLMErrorClassification {
+  kind: LLMErrorKind;
+  retryable: boolean;
+  status?: number;
+  retry_after_ms?: number;
+}
+
+export interface LLMProviderErrorOptions extends LLMErrorClassification {
+  provider: string;
+  cause?: unknown;
+}
+
+export class LLMProviderError extends Error {
+  readonly provider: string;
+  readonly kind: LLMErrorKind;
+  readonly retryable: boolean;
+  readonly status?: number;
+  readonly retry_after_ms?: number;
+  readonly used_for_authority = false;
+
+  constructor(message: string, options: LLMProviderErrorOptions) {
+    super(message);
+    this.name = "LLMProviderError";
+    this.provider = options.provider;
+    this.kind = options.kind;
+    this.retryable = options.retryable;
+    this.status = options.status;
+    this.retry_after_ms = options.retry_after_ms;
+    if (options.cause !== undefined) {
+      this.cause = options.cause;
+    }
+  }
+}
+
+export function classifyLLMError(error: unknown): LLMErrorClassification {
+  if (error instanceof LLMProviderError) {
+    return {
+      kind: error.kind,
+      retryable: error.retryable,
+      ...(error.status !== undefined ? { status: error.status } : {}),
+      ...(error.retry_after_ms !== undefined
+        ? { retry_after_ms: error.retry_after_ms }
+        : {}),
+    };
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return { kind: "timeout", retryable: true };
+  }
+  return { kind: "unknown", retryable: false };
+}

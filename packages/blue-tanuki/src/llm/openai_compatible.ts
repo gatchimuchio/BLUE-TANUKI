@@ -1,4 +1,10 @@
-import type { LLMBackend, LLMMessage, LLMRequest, LLMResponse } from "./base.js";
+import {
+  LLMProviderError,
+  type LLMBackend,
+  type LLMMessage,
+  type LLMRequest,
+  type LLMResponse,
+} from "./base.js";
 
 type OpenAIContentPart = {
   type?: string;
@@ -57,6 +63,29 @@ function tokenCount(data: OpenAICompatibleAPIResponse): number {
   return (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
 }
 
+function retryAfterMs(headers: Headers): number | undefined {
+  const raw = headers.get("retry-after");
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
+  return undefined;
+}
+
+function errorKindForStatus(status: number): {
+  kind: LLMProviderError["kind"];
+  retryable: boolean;
+} {
+  if (status === 429) return { kind: "rate_limited", retryable: true };
+  if (status === 408 || status === 500 || status === 502 || status === 503 || status === 504) {
+    return { kind: "remote_service_unavailable", retryable: true };
+  }
+  if (status === 401 || status === 403) return { kind: "auth", retryable: false };
+  if (status >= 400 && status < 500) return { kind: "bad_request", retryable: false };
+  return { kind: "unknown", retryable: false };
+}
+
 /**
  * Backend for OpenAI-compatible chat completion APIs.
  *
@@ -101,20 +130,47 @@ export class OpenAICompatibleBackend implements LLMBackend {
     if (req.max_tokens !== undefined) body.max_tokens = req.max_tokens;
     if (req.temperature !== undefined) body.temperature = req.temperature;
 
-    const res = await fetch(this.endpoint, {
-      method: "POST",
-      headers: this.headers,
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(this.endpoint, {
+        method: "POST",
+        headers: this.headers,
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      throw new LLMProviderError(`${this.name}: network error`, {
+        provider: this.name,
+        kind: "temporary_network",
+        retryable: true,
+        cause: error,
+      });
+    }
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(
-        `${this.name}: API error ${res.status}: ${errText}`,
+      const classified = errorKindForStatus(res.status);
+      throw new LLMProviderError(
+        `${this.name}: API error ${res.status}: ${errText.slice(0, 500)}`,
+        {
+          provider: this.name,
+          status: res.status,
+          retry_after_ms: retryAfterMs(res.headers),
+          ...classified,
+        },
       );
     }
 
-    const data = (await res.json()) as OpenAICompatibleAPIResponse;
+    let data: OpenAICompatibleAPIResponse;
+    try {
+      data = (await res.json()) as OpenAICompatibleAPIResponse;
+    } catch (error) {
+      throw new LLMProviderError(`${this.name}: invalid JSON response`, {
+        provider: this.name,
+        kind: "bad_response",
+        retryable: false,
+        cause: error,
+      });
+    }
     return {
       content: extractText(data.choices?.[0]),
       tokens_used: tokenCount(data),

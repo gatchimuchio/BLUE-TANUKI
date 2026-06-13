@@ -4,6 +4,7 @@ import {
   OpenAICompatibleBackend,
   StubBackend,
   type LLMBackend,
+  type LLMRetryPolicy,
 } from "@blue-tanuki/core";
 import type { LLMCommandRoute } from "@blue-tanuki/hds-brain";
 
@@ -161,6 +162,14 @@ function parsePositiveIntEnv(
   return value;
 }
 
+function buildLLMRetryPolicyFromEnv(env: Env): LLMRetryPolicy {
+  return {
+    max_attempts: parsePositiveIntEnv(env, "BLUE_TANUKI_LLM_RETRY_ATTEMPTS") ?? 1,
+    base_delay_ms: parsePositiveIntEnv(env, "BLUE_TANUKI_LLM_RETRY_BASE_MS") ?? 250,
+    max_delay_ms: parsePositiveIntEnv(env, "BLUE_TANUKI_LLM_RETRY_MAX_MS") ?? 2_000,
+  };
+}
+
 function parseTemperatureEnv(env: Env): number | undefined {
   const raw = envValue(env, "BLUE_TANUKI_LLM_TEMPERATURE");
   if (!raw) return undefined;
@@ -172,7 +181,9 @@ function parseTemperatureEnv(env: Env): number | undefined {
 }
 
 export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
-  const registry = new LLMRegistry();
+  const registry = new LLMRegistry({
+    retry: buildLLMRetryPolicyFromEnv(env),
+  });
   registry.register(new StubBackend());
 
   const anthropicKey = envValue(env, "ANTHROPIC_API_KEY");
@@ -273,6 +284,7 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
   const defaultBackend =
     envValue(env, "LLM_BACKEND", "LLM_DEFAULT_BACKEND") ?? "stub";
   registry.setDefault(defaultBackend);
+  registry.setFallback(envValue(env, "BLUE_TANUKI_LLM_FALLBACK_BACKEND"));
   return registry;
 }
 
@@ -344,6 +356,12 @@ export function describeLLMConfig(env: Env = process.env): {
   anthropic_configured: boolean;
   openrouter_configured: boolean;
   configured_providers: string[];
+  resilience: {
+    retry_policy: LLMRetryPolicy;
+    fallback_backend: string | null;
+    used_for_authority: false;
+    evidence_source: readonly ["CONFIG"];
+  };
 } {
   return {
     default_backend:
@@ -358,5 +376,11 @@ export function describeLLMConfig(env: Env = process.env): {
         envValue(env, "OPENROUTER_MODEL", "LLM_MODEL"),
     ),
     configured_providers: listConfiguredLLMProviders(env),
+    resilience: {
+      retry_policy: buildLLMRetryPolicyFromEnv(env),
+      fallback_backend: envValue(env, "BLUE_TANUKI_LLM_FALLBACK_BACKEND") ?? null,
+      used_for_authority: false,
+      evidence_source: ["CONFIG"],
+    },
   };
 }

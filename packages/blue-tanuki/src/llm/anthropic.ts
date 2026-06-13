@@ -1,9 +1,37 @@
-import type { LLMBackend, LLMRequest, LLMResponse } from "./base.js";
+import {
+  LLMProviderError,
+  type LLMBackend,
+  type LLMRequest,
+  type LLMResponse,
+} from "./base.js";
 
 interface AnthropicAPIResponse {
   content: Array<{ type: string; text?: string }>;
   usage: { input_tokens: number; output_tokens: number };
   model: string;
+}
+
+function retryAfterMs(headers: Headers): number | undefined {
+  const raw = headers.get("retry-after");
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
+  return undefined;
+}
+
+function errorKindForStatus(status: number): {
+  kind: LLMProviderError["kind"];
+  retryable: boolean;
+} {
+  if (status === 429) return { kind: "rate_limited", retryable: true };
+  if (status === 408 || status === 500 || status === 502 || status === 503 || status === 504) {
+    return { kind: "remote_service_unavailable", retryable: true };
+  }
+  if (status === 401 || status === 403) return { kind: "auth", retryable: false };
+  if (status >= 400 && status < 500) return { kind: "bad_request", retryable: false };
+  return { kind: "unknown", retryable: false };
 }
 
 /**
@@ -38,22 +66,51 @@ export class AnthropicBackend implements LLMBackend {
     if (system) body.system = system;
     if (req.temperature !== undefined) body.temperature = req.temperature;
 
-    const res = await fetch(this.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.apiKey,
-        "anthropic-version": this.apiVersion,
-      },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(this.endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": this.apiKey,
+          "anthropic-version": this.apiVersion,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      throw new LLMProviderError("AnthropicBackend: network error", {
+        provider: this.name,
+        kind: "temporary_network",
+        retryable: true,
+        cause: error,
+      });
+    }
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`AnthropicBackend: API error ${res.status}: ${errText}`);
+      const classified = errorKindForStatus(res.status);
+      throw new LLMProviderError(
+        `AnthropicBackend: API error ${res.status}: ${errText.slice(0, 500)}`,
+        {
+          provider: this.name,
+          status: res.status,
+          retry_after_ms: retryAfterMs(res.headers),
+          ...classified,
+        },
+      );
     }
 
-    const data = (await res.json()) as AnthropicAPIResponse;
+    let data: AnthropicAPIResponse;
+    try {
+      data = (await res.json()) as AnthropicAPIResponse;
+    } catch (error) {
+      throw new LLMProviderError("AnthropicBackend: invalid JSON response", {
+        provider: this.name,
+        kind: "bad_response",
+        retryable: false,
+        cause: error,
+      });
+    }
     const text = data.content
       .filter((c) => c.type === "text" && typeof c.text === "string")
       .map((c) => c.text!)

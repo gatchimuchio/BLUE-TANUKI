@@ -95,6 +95,42 @@ describe("buildLLMBackendFromEnv", () => {
     ]);
   });
 
+  it("configures explicit LLM retry and fallback without making health authority", () => {
+    const llm = buildLLMBackendFromEnv({
+      LLM_BACKEND: "openai-compatible",
+      LLM_ENDPOINT: "http://localhost:11434/v1",
+      LLM_MODEL: "local-model",
+      BLUE_TANUKI_LLM_FALLBACK_BACKEND: "stub",
+      BLUE_TANUKI_LLM_RETRY_ATTEMPTS: "3",
+      BLUE_TANUKI_LLM_RETRY_BASE_MS: "10",
+      BLUE_TANUKI_LLM_RETRY_MAX_MS: "50",
+    });
+    const registry = llm as LLMRegistry;
+
+    expect(registry.healthSnapshot()).toMatchObject({
+      fallback_backend: "stub",
+      retry_policy: {
+        max_attempts: 3,
+        base_delay_ms: 10,
+        max_delay_ms: 50,
+      },
+      authority_boundary: {
+        llm_output_used_for_authority: false,
+        provider_metadata_used_for_authority: false,
+        health_metadata_used_for_authority: false,
+        used_for_authority: false,
+      },
+    });
+    expect(describeLLMConfig({
+      BLUE_TANUKI_LLM_FALLBACK_BACKEND: "stub",
+      BLUE_TANUKI_LLM_RETRY_ATTEMPTS: "3",
+    }).resilience).toMatchObject({
+      fallback_backend: "stub",
+      retry_policy: { max_attempts: 3 },
+      used_for_authority: false,
+    });
+  });
+
   it("rejects malformed provider catalog entries", () => {
     expect(() =>
       buildLLMBackendFromEnv({

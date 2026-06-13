@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { LLMProviderError } from "../src/llm/base.js";
 import { OpenAICompatibleBackend } from "../src/llm/openai_compatible.js";
 
 const originalFetch = globalThis.fetch;
@@ -69,5 +70,29 @@ describe("OpenAICompatibleBackend", () => {
     await expect(
       backend.call({ messages: [{ role: "user", content: "ping" }] }),
     ).rejects.toThrow(/API error 400/);
+  });
+
+  it("classifies rate limits as retryable non-authority provider errors", async () => {
+    globalThis.fetch = (async () =>
+      new Response("slow down", {
+        status: 429,
+        headers: { "retry-after": "2" },
+      })) as typeof fetch;
+
+    const backend = new OpenAICompatibleBackend({
+      endpoint: "http://localhost:11434/v1",
+      defaultModel: "local-model",
+    });
+
+    await expect(
+      backend.call({ messages: [{ role: "user", content: "ping" }] }),
+    ).rejects.toMatchObject({
+      name: "LLMProviderError",
+      kind: "rate_limited",
+      retryable: true,
+      status: 429,
+      retry_after_ms: 2000,
+      used_for_authority: false,
+    } satisfies Partial<LLMProviderError>);
   });
 });

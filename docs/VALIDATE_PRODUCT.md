@@ -11,6 +11,7 @@ pnpm validate:product
 pnpm validate:product -- --phase P2
 pnpm validate:product -- --phase P3
 pnpm validate:product -- --phase P4
+pnpm validate:product -- --phase P5
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -68,6 +69,12 @@ only console output.
 |---|---|---|
 | `p4.control_center_settings_api` | `LIVE_RUNTIME` / `INTERNAL_STATE` / `CONFIG` / `EXTERNAL_EVIDENCE` | WebChat Control Centerをloopback上で起動し、`/app` のSettings / Connectors / About / Backup-Restoreフォーム描画、`/settings/config` の専用settings token必須性、redacted snapshot、`/settings/llm/verify` の非mutating検証、LLM設定save、Composio allowlist / dry-run save、Composio non-authority / live unavailable境界、`/app/about` のWebChat token必須性・read-only性・version/license/claim boundary/public_claim_allowed=false/non-authority境界、`/recovery/snapshot` のWebChat token必須性・read-only性・env backup inventory・secret-bearing分類・restore/factory reset/destructive repair未解放・non-authority境界をAPI経由で検証する |
 
+## P5 Checks
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p5.llm_resilience_health` | `INTERNAL_STATE` / `FIXTURE` | LLM registryのretry、明示fallback、typed provider error分類、health snapshot、LLM output/provider metadata/health metadataのnon-authority境界をfixtureで検証する。owner資格情報を使うlive LLM smokeとOS秘密保存検査は後続証跡として残る |
+
 ## Incremental Registration
 
 | 追加Phase | 検査項目 |
@@ -75,7 +82,7 @@ only console output.
 | P2 | ゲート骨格＋Linux系: test一式 / smoke:serve / smoke:resume / hds:standalone / SUSPEND実発火（動的） / approval bypass不能（動的） / audit chain verify / evidence pack生成 |
 | P3 | package:windows verify / smoke:windows-installed（win環境） / install→常駐→stop/restart/logs→uninstall往復 |
 | P4 | Control Center操作スモーク（API経由） |
-| P5 | live LLM smoke（owner資格情報、opt-in→P13でrequired化） / 鍵保護検査 |
+| P5 | LLM resilience health fixture / live LLM smoke（owner資格情報、opt-in→P13でrequired化） / 鍵保護検査 |
 | P6 | approval allow・ask・deny・revoke・emergency stopの動的検証 |
 | P7 | evidence pack内容検査＋secret redaction検査 |
 | P8 | composio dry-run整合（live解放後はlive監査整合） |

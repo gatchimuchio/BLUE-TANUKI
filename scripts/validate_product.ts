@@ -25,6 +25,13 @@ import { buildAboutSnapshot } from "../apps/gateway/src/about_surface.js";
 import { buildRecoverySnapshot } from "../apps/gateway/src/recovery_surface.js";
 import { runAuditVerify } from "../apps/gateway/src/audit_verify.js";
 import { WebChatChannel } from "../packages/channel-webchat/src/index.js";
+import {
+  LLMProviderError,
+  LLMRegistry,
+  type LLMBackend,
+  type LLMRequest,
+  type LLMResponse,
+} from "../packages/blue-tanuki/src/index.js";
 
 export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P10" | "P11";
 export type ProductPlatform = "linux" | "win32" | "any";
@@ -204,6 +211,13 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "any",
     required: true,
     run: runControlCenterSettingsApiSmoke,
+  },
+  {
+    id: "p5.llm_resilience_health",
+    phase: "P5",
+    platform: "any",
+    required: true,
+    run: runLLMResilienceHealth,
   },
 ];
 
@@ -1103,6 +1117,102 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     await channel.stop();
     await rm(recoveryRoot, { recursive: true, force: true });
   }
+}
+
+async function runLLMResilienceHealth(): Promise<CheckResult> {
+  class FixtureBackend implements LLMBackend {
+    readonly seen: LLMRequest[] = [];
+
+    constructor(
+      readonly name: string,
+      private failuresRemaining: number,
+    ) {}
+
+    async call(req: LLMRequest): Promise<LLMResponse> {
+      this.seen.push(req);
+      if (this.failuresRemaining > 0) {
+        this.failuresRemaining -= 1;
+        throw new LLMProviderError(`${this.name} synthetic 503`, {
+          provider: this.name,
+          kind: "remote_service_unavailable",
+          retryable: true,
+          status: 503,
+        });
+      }
+      return {
+        content: `fixture:${this.name}`,
+        tokens_used: 1,
+        model: this.name,
+      };
+    }
+  }
+
+  const retryBackend = new FixtureBackend("primary", 1);
+  const retryRegistry = new LLMRegistry({
+    retry: { max_attempts: 2, base_delay_ms: 0, max_delay_ms: 0 },
+    sleep: async () => undefined,
+    now: () => Date.parse("2026-06-13T00:00:00.000Z"),
+  }).register(retryBackend);
+  const retryResponse = await retryRegistry.call({
+    messages: [{ role: "user", content: "fixture retry" }],
+  });
+  const retryHealth = retryRegistry.healthSnapshot();
+  assertCheck(retryResponse.content === "fixture:primary", "LLM retry fixture did not return primary response");
+  assertCheck(retryBackend.seen.length === 2, "LLM retry fixture did not retry exactly once");
+  assertCheck(retryHealth.providers[0]?.state === "pass", "LLM retry health did not record pass");
+  assertCheck(
+    retryHealth.authority_boundary.used_for_authority === false,
+    "LLM retry health became authority",
+  );
+
+  const fallbackPrimary = new FixtureBackend("primary", 1);
+  const fallbackBackend = new FixtureBackend("stub", 0);
+  const fallbackRegistry = new LLMRegistry({
+    retry: { max_attempts: 1, base_delay_ms: 0, max_delay_ms: 0 },
+    sleep: async () => undefined,
+    now: () => Date.parse("2026-06-13T00:00:01.000Z"),
+  })
+    .register(fallbackPrimary)
+    .register(fallbackBackend)
+    .setDefault("primary")
+    .setFallback("stub");
+  const fallbackResponse = await fallbackRegistry.call({
+    messages: [{ role: "user", content: "fixture fallback" }],
+  });
+  const fallbackHealth = fallbackRegistry.healthSnapshot();
+  const primaryHealth = fallbackHealth.providers.find((provider) => provider.name === "primary");
+  const stubHealth = fallbackHealth.providers.find((provider) => provider.name === "stub");
+  assertCheck(fallbackResponse.content === "fixture:stub", "LLM fallback fixture did not use fallback");
+  assertCheck(fallbackPrimary.seen.length === 1, "LLM fallback primary call count mismatch");
+  assertCheck(fallbackBackend.seen.length === 1, "LLM fallback backend call count mismatch");
+  assertCheck(primaryHealth?.state === "fail", "LLM fallback health did not record primary failure");
+  assertCheck(stubHealth?.state === "pass", "LLM fallback health did not record fallback pass");
+  assertCheck(stubHealth?.used_for_authority === false, "LLM fallback health became authority");
+  assertCheck(
+    fallbackHealth.authority_boundary.provider_metadata_used_for_authority === false,
+    "LLM provider metadata became authority",
+  );
+
+  return {
+    status: "pass",
+    summary: "LLM retry/fallback/error classification health fixture passed",
+    raw_log: [
+      "retry: remote_service_unavailable retried once and recovered",
+      "fallback: explicit fallback backend used after retryable default backend failure",
+      "authority: LLM output/provider/health metadata used_for_authority=false",
+    ].join("\n"),
+    details: {
+      retry_attempts: retryBackend.seen.length,
+      fallback_primary_attempts: fallbackPrimary.seen.length,
+      fallback_backend_attempts: fallbackBackend.seen.length,
+      fallback_backend: fallbackHealth.fallback_backend,
+      retry_policy_max_attempts: retryHealth.retry_policy.max_attempts,
+      llm_output_used_for_authority: false,
+      provider_metadata_used_for_authority: false,
+      health_metadata_used_for_authority: false,
+      evidence_source: ["INTERNAL_STATE", "FIXTURE"],
+    },
+  };
 }
 
 async function runNodeScript(ctx: CheckContext, scriptRel: string): Promise<CommandRunResult> {

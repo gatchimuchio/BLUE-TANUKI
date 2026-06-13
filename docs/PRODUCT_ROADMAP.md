@@ -133,10 +133,9 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: stub依存から脱却し、実LLMで製品として使える。
 
-現状（実測）: **partial**。provider registry（anthropic / openai_compatible / OpenRouter既定endpoint / stub）、CCからのkey・model・endpoint設定、live smoke（`smoke:live`: 実応答 "BLUE-TANUKI-LIVE-OK" 検証、timeout付、資格情報なければskip）。
+現状（実測）: **partial（進捗）**。provider registry（anthropic / openai_compatible / OpenRouter既定endpoint / stub）、CCからのkey・model・endpoint設定、live smoke（`smoke:live`: 実応答 "BLUE-TANUKI-LIVE-OK" 検証、timeout付、資格情報なければskip）。LLM層にはtyped provider error分類、明示retry/fallback設定、non-authority health snapshot、`validate:product` P5 fixture checkが追加済み。
 
 残差（実測で不在を確認）:
-- retry / rate-limit対応 / fallback / 常設health check / エラー分類（llm層にretry・fallbackのコードなし）
 - **Windows秘密保存**: 現状はconfigファイル保存＋UI maskのみ。DPAPI等のOS保護への移行（方式決定含む）
 - owner資格情報でのlive smoke PASS証跡（Linux・Windows両方）
 

@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { LLMRegistry } from "../src/llm/registry.js";
-import type { LLMBackend, LLMRequest, LLMResponse } from "../src/llm/base.js";
+import {
+  LLMProviderError,
+  type LLMBackend,
+  type LLMRequest,
+  type LLMResponse,
+} from "../src/llm/base.js";
 
 class NamedBackend implements LLMBackend {
   readonly seen: LLMRequest[] = [];
@@ -14,6 +19,52 @@ class NamedBackend implements LLMBackend {
       tokens_used: 0,
       model: this.name,
     };
+  }
+}
+
+class FlakyBackend implements LLMBackend {
+  readonly seen: LLMRequest[] = [];
+
+  constructor(
+    readonly name: string,
+    private failuresRemaining: number,
+  ) {}
+
+  async call(req: LLMRequest): Promise<LLMResponse> {
+    this.seen.push(req);
+    if (this.failuresRemaining > 0) {
+      this.failuresRemaining -= 1;
+      throw new LLMProviderError(`${this.name} unavailable`, {
+        provider: this.name,
+        kind: "remote_service_unavailable",
+        retryable: true,
+        status: 503,
+      });
+    }
+    return {
+      content: `from:${this.name}`,
+      tokens_used: 1,
+      model: this.name,
+    };
+  }
+}
+
+class FailingBackend implements LLMBackend {
+  readonly seen: LLMRequest[] = [];
+
+  constructor(
+    readonly name: string,
+    private readonly kind: LLMProviderError["kind"],
+    private readonly retryable: boolean,
+  ) {}
+
+  async call(req: LLMRequest): Promise<LLMResponse> {
+    this.seen.push(req);
+    throw new LLMProviderError(`${this.name} failed`, {
+      provider: this.name,
+      kind: this.kind,
+      retryable: this.retryable,
+    });
   }
 }
 
@@ -58,5 +109,90 @@ describe("LLMRegistry", () => {
         messages: [{ role: "user", content: "hi" }],
       }),
     ).rejects.toThrow(/missing/);
+  });
+
+  it("retries retryable provider errors and records non-authority health", async () => {
+    const fast = new FlakyBackend("fast", 1);
+    const registry = new LLMRegistry({
+      retry: { max_attempts: 2, base_delay_ms: 0, max_delay_ms: 0 },
+      sleep: async () => undefined,
+      now: () => Date.parse("2026-06-13T00:00:00.000Z"),
+    }).register(fast);
+
+    const res = await registry.call({
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    expect(res.content).toBe("from:fast");
+    expect(fast.seen).toHaveLength(2);
+    expect(registry.healthSnapshot()).toMatchObject({
+      surface: "llm_registry_health",
+      retry_policy: { max_attempts: 2 },
+      authority_boundary: {
+        llm_output_used_for_authority: false,
+        provider_metadata_used_for_authority: false,
+        health_metadata_used_for_authority: false,
+        used_for_authority: false,
+      },
+      providers: [
+        {
+          name: "fast",
+          state: "pass",
+          consecutive_failures: 0,
+          used_for_authority: false,
+        },
+      ],
+    });
+  });
+
+  it("uses an explicit fallback only for default routing", async () => {
+    const primary = new FlakyBackend("primary", 2);
+    const fallback = new NamedBackend("stub");
+    const registry = new LLMRegistry({
+      retry: { max_attempts: 1 },
+      sleep: async () => undefined,
+    })
+      .register(primary)
+      .register(fallback)
+      .setDefault("primary")
+      .setFallback("stub");
+
+    const res = await registry.call({
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(res.content).toBe("from:stub");
+    expect(primary.seen).toHaveLength(1);
+    expect(fallback.seen).toHaveLength(1);
+
+    await expect(
+      registry.call({
+        backend_hint: "primary",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    ).rejects.toThrow(/primary unavailable/);
+    expect(fallback.seen).toHaveLength(1);
+  });
+
+  it("does not hide non-retryable credential failures behind fallback", async () => {
+    const primary = new FailingBackend("primary", "auth", false);
+    const fallback = new NamedBackend("stub");
+    const registry = new LLMRegistry({
+      retry: { max_attempts: 1 },
+      sleep: async () => undefined,
+    })
+      .register(primary)
+      .register(fallback)
+      .setDefault("primary")
+      .setFallback("stub");
+
+    await expect(
+      registry.call({
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    ).rejects.toMatchObject({
+      kind: "auth",
+      retryable: false,
+    });
+    expect(fallback.seen).toHaveLength(0);
   });
 });

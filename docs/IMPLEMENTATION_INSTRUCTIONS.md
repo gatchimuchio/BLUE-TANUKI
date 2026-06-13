@@ -22,74 +22,75 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P4-S4 — Control Center Backup/Restore readiness panel`.
+- The active instruction is `Phase P5-S1 — LLM provider resilience and health evidence`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P4-S4 — Control Center Backup/Restore readiness panel
+# Phase P5-S1 — LLM provider resilience and health evidence
 
 ## Objective
 
-Expose recovery readiness, env backup inventory, persistent data paths, and restore boundaries inside the main Control Center without enabling destructive restore actions.
+Make LLM provider runtime behavior more robust by adding typed provider errors, explicit retry/fallback support, and non-authority health evidence without moving authority into LLM output or provider metadata.
 
 ## Scope
 
-- Add a Backup / Restore screen to the Control Center.
-- Add a read-only WebChat `/recovery/snapshot` JSON endpoint.
-- Wire the gateway production WebChat surface to env backup and runtime-path metadata.
-- Extend the P4 product check to exercise the recovery readiness API over loopback HTTP.
+- Add typed LLM provider error classification for retryable and non-retryable failures.
+- Add explicit LLM retry and fallback configuration in the gateway LLM registry path.
+- Add LLM registry health snapshots that classify evidence as internal state and non-authority metadata.
+- Extend `validate:product -- --phase P5` with a fixture-backed resilience/health check.
 - Update tests and P-series docs.
 
 ## Non-Goals
 
-- Do not execute restore, factory reset, provider reset, connector reset, or destructive repair actions.
-- Do not implement the Update panel in this phase.
-- Do not claim P10 complete; backup→破壊→restore往復 remains later P10 work.
-- Do not change HDS-BRAIN authority, Approval Gate policy, executor behavior, provider runtime semantics, or credential storage.
-- Do not claim P4 complete; Windows real-device rendering remains a later evidence item.
+- Do not add owner credentials or run external live LLM calls in CI.
+- Do not claim P5 complete; owner credentialed live smoke on Linux/Windows and OS-protected secret storage remain later evidence items.
+- Do not implement Windows DPAPI or other OS secret storage in this phase.
+- Do not make retry/fallback metadata authoritative.
+- Do not change HDS-BRAIN authority, Approval Gate policy, executor authority semantics, provider credential storage, or final-review behavior.
 
 ## Inspect First
 
 ```bash
 git status --short
-rg -n "Backup|Restore|backup|restore|BLUE_TANUKI_ENV_FILE|backupEnvFileIfExists|renderControlCenterHtml" packages/channel-webchat apps/gateway docs scripts
-rg -n "validate:product|PRODUCT_CHECKS|P4" scripts docs apps/gateway/test
+rg -n "LLM|OpenRouter|openai_compatible|smoke:live|retry|rate|fallback|health|P5" packages/blue-tanuki apps/gateway scripts docs package.json
+rg -n "LLMRegistry|LLMBackend|OpenAICompatibleBackend|AnthropicBackend|describeLLMConfig|validate:product|PRODUCT_CHECKS" packages/blue-tanuki apps/gateway scripts docs
 ```
 
 ## Implementation Requirements
 
-- Recovery data must be read-only and must not accept mutation.
-- The recovery API must be protected by the normal WebChat bearer token.
-- The response must classify env backups as secret-bearing.
-- The response must explicitly state that restore execution, factory reset, and destructive repair are unavailable in this phase.
-- `validate:product -- --phase P4` must include the new P4 check while keeping P2/P3 behavior intact.
+- Provider errors must distinguish rate limit, transient network/service failures, auth failures, bad requests, bad responses, timeouts, and unknown failures.
+- Retry must only apply to retryable provider errors and must be bounded.
+- Fallback must be explicit configuration, not silent hidden authority.
+- Health snapshots must include non-authority flags and evidence source classification.
+- `validate:product -- --phase P5` must include the new P5 check while keeping P2/P3/P4 behavior intact.
 
 ## Safety Requirements
 
-- Control Center UI state remains display/intent only and must not become authority.
-- Recovery metadata is display evidence only and must not become authority.
-- Restore/reset/repair actions must not be reachable from this phase.
-- HDS-BRAIN and Approval Gate remain upstream; the UI must not approve, execute, or infer consent.
+- LLM output remains downstream only and must not become authority.
+- Provider metadata, retry metadata, fallback metadata, and health metadata must not become authority.
+- Retry/fallback must not approve commands, classify risk, bypass final review, infer consent, or alter HDS-BRAIN decisions.
+- HDS-BRAIN and Approval Gate remain upstream.
 
 ## Operator Usability Requirements
 
-- Env file presence, env backup count, latest backup path, and persistent audit/session/memory/schedule path configuration must be reachable inside the main Control Center Backup / Restore tab.
-- Backup / Restore loading must be a separate read-only action.
-- The panel must show the next safe action instead of exposing unsafe buttons.
+- Retry and fallback configuration must be visible in machine-readable config evidence.
+- Health evidence must explain whether a provider is untested, passing, or failing.
+- Missing owner live credentials must remain a later evidence limitation, not a false product completion claim.
 
 ## Audit Requirements
 
 - This phase adds product validation evidence only; it does not append to the HDS runtime audit chain.
-- Evidence source class for the P4 check is `LIVE_RUNTIME` / `CONFIG` / `EXTERNAL_EVIDENCE`.
+- Evidence source class for the P5 resilience check is `INTERNAL_STATE` / `FIXTURE`.
 
 ## Tests
 
-- Control Center HTML test must confirm the Backup / Restore controls are present.
-- WebChat endpoint tests must confirm `/recovery/snapshot` requires the WebChat token and is read-only.
-- The P4 product check must confirm env backup inventory, restore-disabled flags, and non-authority flags.
+- LLM registry tests must cover retry, explicit fallback, and non-authority health metadata.
+- Provider tests must cover rate-limit classification.
+- Gateway LLM config tests must cover retry/fallback env configuration.
+- The P5 product check must confirm retry, fallback, error classification, and non-authority flags without external credentials.
 
 ## Docs
 
@@ -108,24 +109,21 @@ pnpm docs:check
 pnpm validate:repo-health
 pnpm validate:packaging
 pnpm validate:ga
-pnpm validate:product -- --phase P4 --evidence .codex-tmp/validate-product-p4-control-center-local
+pnpm validate:product -- --phase P5 --evidence .codex-tmp/validate-product-p5-llm-resilience-local
 ```
 
 ## Manual Smoke
 
-Start gateway, open `/app`, enter settings token, load settings, verify LLM, and save a stub provider in a disposable env-file environment.
-Then open Connectors, enter settings token, load connector state, set Composio allowed toolkits with dry-run enabled, and save in a disposable env-file environment.
-Then open About, enter the WebChat token, and load the read-only About snapshot.
-Then open Backup / Restore, enter the WebChat token, and load the read-only recovery snapshot.
+Run `pnpm smoke:live` when owner credentials are available. Without owner credentials, confirm the safe skip path and do not claim credentialed live evidence.
 
 ## Permanent-Use Check
 
-The main Control Center exposes recovery readiness and backup/restore boundaries without directing the owner to inspect repository files. This does not complete P10 restore execution or Windows real-device UI evidence.
+LLM provider failures are classified and can be retried or explicitly routed to fallback without creating hidden authority. This does not complete OS-protected secret storage or owner credentialed live smoke evidence.
 
 ## Acceptance Criteria
 
 - Local validation passes.
-- `validate:product -- --phase P4` passes on Linux.
+- `validate:product -- --phase P5` passes on Linux.
 - Release claim remains pre-GO with `public_claim_allowed=false`.
 
 ## Final Report Format
