@@ -363,7 +363,8 @@ export function renderControlCenterHtml(): string {
         gap: 8px;
       }
 
-      label.policy {
+      label.policy,
+      label.check {
         display: flex;
         align-items: center;
         gap: 8px;
@@ -378,6 +379,7 @@ export function renderControlCenterHtml(): string {
       input[type="password"],
       input[type="text"],
       input[type="number"],
+      input[type="url"],
       select,
       textarea {
         width: 100%;
@@ -775,11 +777,20 @@ export function renderControlCenterHtml(): string {
           <div class="status-grid">
             <input id="connectors-token" type="password" autocomplete="current-password" placeholder="settings token" />
             <input id="composio-api-key" type="password" autocomplete="new-password" placeholder="Composio API key unchanged" />
+            <input id="composio-user-id" type="text" autocomplete="off" placeholder="Composio user id" />
             <input id="composio-allowed-toolkits" type="text" autocomplete="off" placeholder="github,gmail,calendar" />
+            <input id="composio-allowed-actions" type="text" autocomplete="off" placeholder="github:GITHUB_CREATE_AN_ISSUE" />
+            <input id="composio-revoked-actions" type="text" autocomplete="off" placeholder="revoked action scopes" />
+            <input id="composio-api-base-url" type="url" autocomplete="off" placeholder="https://backend.composio.dev" />
             <select id="composio-dry-run" aria-label="Composio dry-run">
               <option value="true">dry-run true</option>
               <option value="false">dry-run false</option>
             </select>
+            <select id="composio-live-execution" aria-label="Composio live execution">
+              <option value="false">live execution disabled</option>
+              <option value="true">live execution enabled</option>
+            </select>
+            <label class="check"><input id="composio-clear-api-key" type="checkbox" /> clear Composio API key</label>
           </div>
           <div class="action-row">
             <button id="load-connectors" class="primary" type="button">Load Connectors</button>
@@ -788,14 +799,19 @@ export function renderControlCenterHtml(): string {
           <div class="status-grid">
             <div class="metric"><span>Composio</span><span id="composio-configured-status">not loaded</span></div>
             <div class="metric"><span>Dry-run</span><span id="composio-dry-run-status">not loaded</span></div>
+            <div class="metric"><span>Live opt-in</span><span id="composio-live-opt-in-status">not loaded</span></div>
             <div class="metric"><span>Live execution</span><span id="composio-live-status">not loaded</span></div>
             <div class="metric"><span>Authority</span><span id="composio-authority-status">not authority</span></div>
             <div class="metric"><span>Toolkits</span><span id="composio-toolkits-status">not loaded</span></div>
+            <div class="metric"><span>Actions</span><span id="composio-actions-status">not loaded</span></div>
+            <div class="metric"><span>Revoked</span><span id="composio-revoked-status">not loaded</span></div>
+            <div class="metric"><span>User</span><span id="composio-user-status">not loaded</span></div>
+            <div class="metric"><span>Disconnect</span><span id="composio-disconnect-status">not loaded</span></div>
             <div class="metric"><span>Save</span><span id="composio-save-status">not saved</span></div>
           </div>
           <pre id="connectors-json">not loaded</pre>
           <div class="screen-grid">
-            <div class="screen-card"><h3>Dry-run Boundary</h3><p class="muted">Composio remains dry-run and downstream until later live execution gates prove HDS approval coverage.</p></div>
+            <div class="screen-card"><h3>Live Boundary</h3><p class="muted">Composio live execution opens only when dry-run is disabled, live execution is enabled, user id exists, and toolkit/action allowlists pass HDS approval.</p></div>
             <div class="screen-card"><h3>Allowlist</h3><p class="muted">Toolkits are explicit operator configuration, not permission escalation or authority.</p></div>
             <div class="screen-card"><h3>Secret Update</h3><p class="muted">Leave the API key blank to keep the existing secret; enter a new key only when rotating it.</p></div>
             <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Connected account metadata, toolkit discovery, and tool results remain evidence only.</p></div>
@@ -867,7 +883,7 @@ export function renderControlCenterHtml(): string {
           <div class="screen-grid">
             <div class="screen-card"><h3>LLM Provider</h3><p class="muted">Provider verification is non-mutating unless explicit save is requested through the settings surface.</p></div>
             <div class="screen-card"><h3>OpenRouter</h3><p class="muted">Optional model provider adapter; native/direct providers remain canonical.</p></div>
-            <div class="screen-card"><h3>Composio</h3><p class="muted">Optional dry-run external tool connector; metadata and connection state are not authority.</p></div>
+            <div class="screen-card"><h3>Composio</h3><p class="muted">Optional external tool connector; live execution stays gated by opt-in, allowlists, and HDS approval.</p></div>
             <div class="screen-card"><h3>Approval Mode</h3><p class="muted">Full access may allow L1/L2, but never L3 final-review operations.</p></div>
             <div class="screen-card"><h3>Memory Policy</h3><p class="muted">Policy changes are sensitive and must not be inferred from UI state.</p></div>
             <div class="screen-card"><h3>Credential Handling</h3><p class="muted">Tokens are not displayed, copied into history, or saved by mock UI state.</p></div>
@@ -1747,6 +1763,8 @@ export function renderControlCenterHtml(): string {
         const openrouter = snapshot.integrations && snapshot.integrations.openrouter ? snapshot.integrations.openrouter : {};
         const composio = snapshot.integrations && snapshot.integrations.composio ? snapshot.integrations.composio : {};
         const toolkits = Array.isArray(composio.allowed_toolkits) ? composio.allowed_toolkits : [];
+        const actions = Array.isArray(composio.allowed_actions) ? composio.allowed_actions : [];
+        const revoked = Array.isArray(composio.revoked_actions) ? composio.revoked_actions : [];
         byId("settings-provider").value = llm.provider || "stub";
         byId("settings-model").value = llm.model || "";
         byId("settings-endpoint").value = llm.endpoint || "";
@@ -1765,13 +1783,25 @@ export function renderControlCenterHtml(): string {
         setText("settings-json", compactJson(redactRuntimeValue(snapshot)));
         byId("composio-api-key").value = "";
         byId("composio-api-key").placeholder = composio.configured ? "configured" : "not set";
+        byId("composio-user-id").value = "";
+        byId("composio-user-id").placeholder = composio.user_id_set ? "configured" : "not set";
         byId("composio-allowed-toolkits").value = toolkits.join(",");
+        byId("composio-allowed-actions").value = actions.join(",");
+        byId("composio-revoked-actions").value = revoked.join(",");
+        byId("composio-api-base-url").value = composio.api_base_url || "";
         byId("composio-dry-run").value = String(composio.dry_run !== false);
+        byId("composio-live-execution").value = String(composio.live_execution_enabled === true);
+        byId("composio-clear-api-key").checked = false;
         setText("composio-configured-status", composio.configured ? "configured" : "not configured");
         setText("composio-dry-run-status", composio.dry_run === false ? "false" : "true");
+        setText("composio-live-opt-in-status", composio.live_execution_enabled ? "enabled" : "disabled");
         setText("composio-live-status", composio.live_execution_available ? "available" : "blocked");
         setText("composio-authority-status", composio.used_for_authority === true ? "unsafe" : "not authority");
         setText("composio-toolkits-status", toolkits.length > 0 ? toolkits.join(", ") : "none");
+        setText("composio-actions-status", actions.length > 0 ? actions.join(", ") : "none");
+        setText("composio-revoked-status", revoked.length > 0 ? revoked.join(", ") : "none");
+        setText("composio-user-status", composio.user_id_set ? "configured" : "missing");
+        setText("composio-disconnect-status", composio.connection_revoke_available ? "available" : "not configured");
         setText("connectors-json", compactJson(redactRuntimeValue({
           native_first: snapshot.integrations ? snapshot.integrations.native_first : true,
           composio
@@ -1843,9 +1873,15 @@ export function renderControlCenterHtml(): string {
 
       function connectorsPayload() {
         const composio = {
+          user_id: byId("composio-user-id").value,
           allowed_toolkits: byId("composio-allowed-toolkits").value,
-          dry_run: byId("composio-dry-run").value
+          allowed_actions: byId("composio-allowed-actions").value,
+          revoked_actions: byId("composio-revoked-actions").value,
+          api_base_url: byId("composio-api-base-url").value,
+          dry_run: byId("composio-dry-run").value,
+          live_execution: byId("composio-live-execution").value
         };
+        if (byId("composio-clear-api-key").checked) composio.clear_api_key = true;
         const apiKey = byId("composio-api-key").value.trim();
         if (apiKey) composio.api_key = apiKey;
         return { composio };

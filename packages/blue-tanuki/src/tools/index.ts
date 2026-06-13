@@ -7,7 +7,11 @@ export {
 } from "./registry.js";
 export {
   composioAllowedToolkits,
+  composioAllowedActions,
+  composioRevokedActions,
   composioDryRun,
+  composioLiveExecutionEnabled,
+  composioApiBaseUrl,
   composioStatus,
   classifyComposioAction,
   composioSearchTool,
@@ -16,6 +20,8 @@ export {
   invokeComposioExecute,
   type ComposioActionIntent,
   type ComposioConnectorStatus,
+  type ComposioExecuteResponse,
+  type ComposioExecuteTarget,
   type ComposioOptions,
 } from "./composio.js";
 export {

@@ -46,7 +46,12 @@ export interface BlueTanukiSetupConfig {
   composio: {
     api_key?: string;
     allowed_toolkits?: string;
+    allowed_actions?: string;
+    revoked_actions?: string;
+    user_id?: string;
+    api_base_url?: string;
     dry_run: boolean;
+    live_execution: boolean;
   };
   webchat: SetupWebChatConfig;
   paths: SetupPathConfig;
@@ -165,6 +170,7 @@ export function createDefaultSetupConfig(
     },
     composio: {
       dry_run: true,
+      live_execution: false,
     },
     webchat: {
       host: "127.0.0.1",
@@ -197,8 +203,9 @@ export function validateSetupConfig(
   config.llm.provider = provider;
   config.approval ??= { mode: "full_access" };
   config.approval.mode = normalizeApprovalMode(config.approval.mode);
-  config.composio ??= { dry_run: true };
+  config.composio ??= { dry_run: true, live_execution: false };
   config.composio.dry_run = config.composio.dry_run !== false;
+  config.composio.live_execution = config.composio.live_execution === true;
   validateOptionalTemperature(config.llm.temperature);
   validateOptionalPositiveInt(config.llm.max_tokens, "llm.max_tokens");
   validateOptionalPositiveInt(config.llm.timeout_ms, "llm.timeout_ms");
@@ -344,7 +351,12 @@ export function setupConfigFromEnv(
     env.BLUE_TANUKI_SETTINGS_TOKEN ?? config.settings.token;
   config.composio.api_key = env.COMPOSIO_API_KEY;
   config.composio.allowed_toolkits = env.COMPOSIO_ALLOWED_TOOLKITS;
+  config.composio.allowed_actions = env.COMPOSIO_ALLOWED_ACTIONS;
+  config.composio.revoked_actions = env.COMPOSIO_REVOKED_ACTIONS;
+  config.composio.user_id = env.COMPOSIO_USER_ID;
+  config.composio.api_base_url = env.COMPOSIO_API_BASE_URL;
   config.composio.dry_run = parseOptionalBool(env.COMPOSIO_DRY_RUN) ?? true;
+  config.composio.live_execution = parseOptionalBool(env.COMPOSIO_LIVE_EXECUTION) ?? false;
 
   return validateSetupConfig(config);
 }
@@ -433,7 +445,20 @@ export function setupConfigToEnv(
   if (config.composio.allowed_toolkits) {
     env.COMPOSIO_ALLOWED_TOOLKITS = config.composio.allowed_toolkits;
   }
+  if (config.composio.allowed_actions) {
+    env.COMPOSIO_ALLOWED_ACTIONS = config.composio.allowed_actions;
+  }
+  if (config.composio.revoked_actions) {
+    env.COMPOSIO_REVOKED_ACTIONS = config.composio.revoked_actions;
+  }
+  if (config.composio.user_id) {
+    env.COMPOSIO_USER_ID = config.composio.user_id;
+  }
+  if (config.composio.api_base_url) {
+    env.COMPOSIO_API_BASE_URL = config.composio.api_base_url;
+  }
   env.COMPOSIO_DRY_RUN = config.composio.dry_run ? "true" : "false";
+  env.COMPOSIO_LIVE_EXECUTION = config.composio.live_execution ? "true" : "false";
 
   return env;
 }
@@ -485,7 +510,12 @@ export function renderSetupEnvFile(
     "BLUE_TANUKI_AUDIT_DIR",
     "COMPOSIO_API_KEY",
     "COMPOSIO_ALLOWED_TOOLKITS",
+    "COMPOSIO_ALLOWED_ACTIONS",
+    "COMPOSIO_REVOKED_ACTIONS",
+    "COMPOSIO_USER_ID",
+    "COMPOSIO_API_BASE_URL",
     "COMPOSIO_DRY_RUN",
+    "COMPOSIO_LIVE_EXECUTION",
   ]) {
     addEnvLine(lines, key, env[key]);
   }

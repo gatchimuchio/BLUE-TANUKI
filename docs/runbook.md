@@ -112,7 +112,11 @@ a stop-ship event and inspect the workspace before distributing an archive.
 | `OPENROUTER_APP_TITLE`      | optional     | Optional OpenRouter `X-Title` metadata                | none               |
 | `COMPOSIO_API_KEY`          | optional     | Optional Composio connector key                       | none               |
 | `COMPOSIO_ALLOWED_TOOLKITS` | optional     | Comma/space-separated Composio toolkit allowlist      | none               |
+| `COMPOSIO_ALLOWED_ACTIONS`  | live connector | Comma/space-separated toolkit/action allowlist      | none               |
+| `COMPOSIO_REVOKED_ACTIONS`  | optional     | Comma/space-separated toolkit/action denylist         | none               |
+| `COMPOSIO_USER_ID`          | live connector | Composio user/account scope id                       | none               |
 | `COMPOSIO_DRY_RUN`          | optional     | Composio connector dry-run mode                       | `true`             |
+| `COMPOSIO_LIVE_EXECUTION`   | optional     | Explicit live connector opt-in                        | `false`            |
 | `SLACK_BOT_TOKEN`           | optional     | Slack inbound/outbound (silent stub if unset)         | none               |
 | `SLACK_APP_TOKEN`           | optional     | Slack Socket Mode app token                           | none               |
 | `SLACK_LIVE_TARGET`         | live smoke   | Slack channel/DM id for `pnpm smoke:live`             | none               |
@@ -185,7 +189,9 @@ configured, or fails closed if selected without them.
 OpenRouter is an optional convenience model adapter. It does not replace native
 OpenAI, Anthropic, OpenAI-compatible, local, or `LLM_PROVIDERS_JSON` routes.
 Composio is an optional convenience external tool adapter. It does not replace
-native/local tools and currently remains dry-run only.
+native/local tools. Live execution stays closed unless dry-run is disabled,
+`COMPOSIO_LIVE_EXECUTION=true`, `COMPOSIO_USER_ID`, toolkit/action allowlists,
+and HDS L3 final review all pass.
 
 For multiple arbitrary LLM APIs, set `LLM_PROVIDERS_JSON` to an array (or
 `{"providers":[...]}`) of named OpenAI-compatible providers:

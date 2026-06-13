@@ -53,7 +53,11 @@ describe("settings surface", () => {
         OPENROUTER_MODEL: "openrouter/model",
         COMPOSIO_API_KEY: "composio-super-secret-xyz",
         COMPOSIO_ALLOWED_TOOLKITS: "github,gmail",
-        COMPOSIO_DRY_RUN: "true",
+        COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+        COMPOSIO_REVOKED_ACTIONS: "github:GITHUB_DELETE_REPO",
+        COMPOSIO_USER_ID: "owner-local",
+        COMPOSIO_DRY_RUN: "false",
+        COMPOSIO_LIVE_EXECUTION: "true",
         WEBCHAT_TOKEN: "webchat-token-123456",
         WEBCHAT_RESUME_TOKEN: "resume-token-123456",
         BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
@@ -80,7 +84,13 @@ describe("settings surface", () => {
     expect(snapshot.integrations.openrouter.configured).toBe(true);
     expect(snapshot.integrations.openrouter.used_for_authority).toBe(false);
     expect(snapshot.integrations.composio.configured).toBe(true);
-    expect(snapshot.integrations.composio.dry_run).toBe(true);
+    expect(snapshot.integrations.composio.dry_run).toBe(false);
+    expect(snapshot.integrations.composio.live_execution_enabled).toBe(true);
+    expect(snapshot.integrations.composio.live_execution_available).toBe(true);
+    expect(snapshot.integrations.composio.user_id_set).toBe(true);
+    expect(snapshot.integrations.composio.connection_revoke_available).toBe(true);
+    expect(snapshot.integrations.composio.allowed_actions).toEqual(["github:github_create_an_issue"]);
+    expect(snapshot.integrations.composio.revoked_actions).toEqual(["github:github_delete_repo"]);
     expect(snapshot.integrations.composio.used_for_authority).toBe(false);
     expect(JSON.stringify(snapshot)).not.toContain("local-super-secret-xyz");
     expect(JSON.stringify(snapshot)).not.toContain("openrouter-super-secret-xyz");
@@ -110,7 +120,11 @@ describe("settings surface", () => {
           composio: {
             api_key: "composio-secret",
             allowed_toolkits: "github,gmail",
-            dry_run: "true",
+            allowed_actions: "github:GITHUB_CREATE_AN_ISSUE",
+            revoked_actions: "github:GITHUB_DELETE_REPO",
+            user_id: "owner-local",
+            dry_run: "false",
+            live_execution: "true",
           },
           webchat: { host: "127.0.0.1", port: "8877" },
           approval: { mode: "ask_every_time" },
@@ -135,11 +149,50 @@ describe("settings surface", () => {
       expect(raw).toContain("OPENROUTER_APP_TITLE=BLUE-TANUKI");
       expect(raw).toContain("COMPOSIO_API_KEY=composio-secret");
       expect(raw).toContain("COMPOSIO_ALLOWED_TOOLKITS=github,gmail");
-      expect(raw).toContain("COMPOSIO_DRY_RUN=true");
+      expect(raw).toContain("COMPOSIO_ALLOWED_ACTIONS=github:GITHUB_CREATE_AN_ISSUE");
+      expect(raw).toContain("COMPOSIO_REVOKED_ACTIONS=github:GITHUB_DELETE_REPO");
+      expect(raw).toContain("COMPOSIO_USER_ID=owner-local");
+      expect(raw).toContain("COMPOSIO_DRY_RUN=false");
+      expect(raw).toContain("COMPOSIO_LIVE_EXECUTION=true");
       expect(raw).toContain("WEBCHAT_PORT=8877");
       expect(raw).toContain("BLUE_TANUKI_APPROVAL_MODE=ask_every_time");
       const backupRaw = await fs.readFile(result.backup_path!, "utf8");
       expect(backupRaw).toContain("LLM_BACKEND=stub");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears Composio connection material and closes live execution", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-settings-"));
+    try {
+      const envFile = path.join(dir, "blue-tanuki.env");
+      const config = createDefaultSetupConfig({ base_dir: path.join(dir, "data") });
+      config.composio = {
+        api_key: "composio-secret",
+        allowed_toolkits: "github",
+        allowed_actions: "github:GITHUB_CREATE_AN_ISSUE",
+        user_id: "owner-local",
+        dry_run: false,
+        live_execution: true,
+      };
+      await fs.writeFile(envFile, renderSetupEnvFile(config), "utf8");
+
+      await updateSettingsEnvFile(
+        {
+          composio: {
+            clear_api_key: true,
+            live_execution: "true",
+            dry_run: "false",
+          },
+        },
+        { BLUE_TANUKI_ENV_FILE: envFile },
+      );
+
+      const raw = await fs.readFile(envFile, "utf8");
+      expect(raw).not.toContain("COMPOSIO_API_KEY=");
+      expect(raw).toContain("COMPOSIO_DRY_RUN=true");
+      expect(raw).toContain("COMPOSIO_LIVE_EXECUTION=false");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

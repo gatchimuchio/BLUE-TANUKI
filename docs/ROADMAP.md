@@ -144,7 +144,7 @@ Codex must proceed sequentially unless explicitly instructed otherwise.
 ## 3. Current Active Phase
 
 ```txt
-Phase P7 — Audit / Evidence 製品化
+Phase P8 — Composio / 外部API連携の安全閉包
 ```
 
 旧 `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` はD2によりP13へ吸収。Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion is blocked until explicit owner GO.

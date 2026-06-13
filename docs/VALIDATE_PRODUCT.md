@@ -14,6 +14,7 @@ pnpm validate:product -- --phase P4
 pnpm validate:product -- --phase P5
 pnpm validate:product -- --phase P6
 pnpm validate:product -- --phase P7
+pnpm validate:product -- --phase P8
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -89,6 +90,12 @@ only console output.
 |---|---|---|
 | `p7.evidence_pack_redaction` | `LIVE_RUNTIME` / `INTERNAL_STATE` / `EXTERNAL_EVIDENCE` / `FIXTURE` | Gateway evidence pack exporterをfixture audit / complete-historyで実行し、manifest、human-readable report、hash-chain検証結果、retention、secret redaction、raw payload非露出、`used_for_authority=false` を検証する |
 
+## P8 Checks
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p8.composio_safety_closure` | `INTERNAL_STATE` / `FIXTURE` | Composio live availabilityがAPI key / user id / dry-run false / live opt-in / toolkit allowlist / action allowlistの全条件でのみ開くこと、dry-runが外部requestを呼ばないこと、revoked actionが外部request前にblockされること、HDS routeが`composio.execute`をL3 final-review askに止めること、承認済みfixture commandがExecutor経由でComposio v3.1 execute endpointへ到達すること、pre/post authority eventとexecutor feedbackがaudit hash-chainで検証できること、API keyがfeedback/evidenceに露出しないことを確認する。実Composio資格情報でのlive smokeはP13前の外部証跡として別途必要 |
+
 ## Incremental Registration
 
 | 追加Phase | 検査項目 |
@@ -99,7 +106,7 @@ only console output.
 | P5 | LLM resilience health fixture / LLM secret-ref fixture / live LLM smoke（owner資格情報、opt-in→P13でrequired化） / 鍵保護検査 |
 | P6 | approval allow・ask・deny・remembered grant・revoke・emergency stop・L3 final-review non-bypassの動的検証 |
 | P7 | Control Center evidence export / evidence pack内容検査 / human-readable report / retention / secret redaction検査 |
-| P8 | composio dry-run整合（live解放後はlive監査整合） |
+| P8 | Composio dry-run no-call / live opt-in / toolkit+action allowlist / action revoke / L3 final-review non-bypass / fixture live execution / pre-post audit |
 | P10 | backup→破壊→restore往復 |
 | P11 | release bundle verify＋update失敗rollback |
 

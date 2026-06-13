@@ -28,9 +28,14 @@ import { WebChatChannel } from "../packages/channel-webchat/src/index.js";
 import {
   LLMProviderError,
   LLMRegistry,
+  Executor,
+  ToolRegistry,
+  composioStatus,
+  invokeComposioExecute,
   type LLMBackend,
   type LLMRequest,
   type LLMResponse,
+  type ComposioExecuteTarget,
 } from "../packages/blue-tanuki/src/index.js";
 import {
   resolveLLMSecretRefs,
@@ -234,6 +239,13 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "any",
     required: true,
     run: runEvidencePackRedaction,
+  },
+  {
+    id: "p8.composio_safety_closure",
+    phase: "P8",
+    platform: "any",
+    required: true,
+    run: runComposioSafetyClosure,
   },
 ];
 
@@ -907,10 +919,20 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
           composio: {
             configured: false,
             dry_run: true,
+            live_execution_enabled: false,
             live_execution_available: false,
             allowed_toolkits: [],
+            allowed_actions: [],
+            revoked_actions: [],
+            user_id_set: false,
+            api_base_url: "https://backend.composio.dev",
+            connection_revoke_available: false,
             toolkit_count: 0,
+            action_scope_count: 0,
+            revoked_action_count: 0,
             used_for_authority: false,
+            metadata_used_for_authority: false,
+            live_execution_used_for_authority: false,
             last_tool_call: null,
           },
         },
@@ -977,6 +999,10 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     assertCheck(html.includes("settings-provider"), "Control Center HTML missing settings provider field");
     assertCheck(html.includes("connectors-token"), "Control Center HTML missing connectors token field");
     assertCheck(html.includes("composio-allowed-toolkits"), "Control Center HTML missing Composio toolkit allowlist field");
+    assertCheck(html.includes("composio-allowed-actions"), "Control Center HTML missing Composio action allowlist field");
+    assertCheck(html.includes("composio-revoked-actions"), "Control Center HTML missing Composio revoke field");
+    assertCheck(html.includes("composio-live-execution"), "Control Center HTML missing Composio live execution field");
+    assertCheck(html.includes("composio-clear-api-key"), "Control Center HTML missing Composio disconnect field");
     assertCheck(html.includes("about-token"), "Control Center HTML missing About token field");
     assertCheck(html.includes("/app/about"), "Control Center HTML missing About route");
     assertCheck(html.includes("recovery-token"), "Control Center HTML missing Recovery token field");
@@ -1073,7 +1099,11 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
       composio: {
         api_key: "composio-candidate-secret",
         allowed_toolkits: "github,gmail",
-        dry_run: "true",
+        allowed_actions: "github:GITHUB_CREATE_AN_ISSUE",
+        revoked_actions: "github:GITHUB_DELETE_REPO",
+        user_id: "owner-local",
+        dry_run: "false",
+        live_execution: "true",
       },
     });
     assertCheck(connectorSave.ok === true, "Composio save did not return ok");
@@ -1619,6 +1649,163 @@ async function runEvidencePackRedaction(ctx: CheckContext): Promise<CheckResult>
       evidence_source: pack.evidence_source,
       used_for_authority: pack.used_for_authority,
       hds_brain_remains_authority: pack.hds_brain_remains_authority,
+    },
+  };
+}
+
+async function runComposioSafetyClosure(): Promise<CheckResult> {
+  const log: string[] = [];
+  const env = {
+    COMPOSIO_API_KEY: "composio-product-secret",
+    COMPOSIO_ALLOWED_TOOLKITS: "github",
+    COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+    COMPOSIO_USER_ID: "owner-local",
+    COMPOSIO_DRY_RUN: "false",
+    COMPOSIO_LIVE_EXECUTION: "true",
+  };
+  const status = composioStatus(env);
+  assertCheck(status.live_execution_available === true, "Composio status did not expose live availability after explicit gates");
+  assertCheck(status.used_for_authority === false, "Composio status became authority");
+  assertCheck(status.metadata_used_for_authority === false, "Composio metadata became authority");
+  assertCheck(status.live_execution_used_for_authority === false, "Composio live status became authority");
+  assertCheck(!JSON.stringify(status).includes("composio-product-secret"), "Composio status exposed API key");
+  log.push("status: live execution available only after api key, user id, dry-run false, live opt-in, toolkit/action allowlists");
+
+  let dryRunRequestCalled = false;
+  const dryRunResult = await invokeComposioExecute(
+    { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", payload: { title: "dry run" } },
+    {
+      env: { ...env, COMPOSIO_DRY_RUN: "true" },
+      request: async () => {
+        dryRunRequestCalled = true;
+        throw new Error("dry-run must not call external request");
+      },
+    },
+  ) as Record<string, unknown>;
+  assertCheck(dryRunResult.external_call_performed === false, "Composio dry-run performed external call");
+  assertCheck(dryRunRequestCalled === false, "Composio dry-run reached request adapter");
+  log.push("dry-run: explicit action allowlist still produced external_call_performed=false");
+
+  let revokedBlocked = false;
+  try {
+    await invokeComposioExecute(
+      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", payload: { title: "blocked" } },
+      {
+        env: {
+          ...env,
+          COMPOSIO_REVOKED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+        },
+      },
+    );
+  } catch (error) {
+    revokedBlocked = /revoked/.test(error instanceof Error ? error.message : String(error));
+  }
+  assertCheck(revokedBlocked, "Composio revoked action was not blocked");
+  log.push("revoke: action denylist blocked before external request");
+
+  const hds = new HDSUpperController();
+  const { log: decisionLog, command } = hds.decide(
+    inbound(
+      'tool:composio.execute toolkit=github tool=GITHUB_CREATE_AN_ISSUE payload="{\\"title\\":\\"hello\\"}"',
+      "p8-composio-live",
+    ),
+  );
+  assertCheck(command?.type === "tool_call", "Composio HDS route did not emit tool_call");
+  assertCheck(command.payload.tool_name === "composio.execute", "Composio HDS route emitted wrong tool");
+  const approval = evaluateApproval(command, [], {
+    actor: "owner",
+    default_mode: "full_access",
+    now: 1,
+  });
+  assertCheck(approval.approval_level === "L3_final_review", "Composio execute was not L3 final review");
+  assertCheck(approval.final_review_required === true, "Composio execute did not require final review");
+  assertCheck(approval.decision === "ask", "Composio execute bypassed final review under full_access");
+  hds.onApprovalEvaluation(approval, { request_id: decisionLog.request_id });
+  log.push("approval: HDS route required L3 final review and did not auto-allow");
+
+  let seen: ComposioExecuteTarget | null = null;
+  const tools = new ToolRegistry();
+  tools.register({
+    name: "composio.execute",
+    description: "product validation Composio fixture",
+    required_capabilities: [
+      "tool:composio.execute",
+      "network:composio.dev",
+      "secrets:COMPOSIO_API_KEY",
+      "external:send",
+    ],
+    invoke: async (args) => invokeComposioExecute(args, {
+      env,
+      request: async (target) => {
+        seen = target;
+        return {
+          status: 200,
+          ok: true,
+          content_type: "application/json",
+          body: JSON.stringify({ data: { id: "issue-fixture", status: "ok" }, log_id: "log_product" }),
+          truncated: false,
+          request_id: "req_product",
+        };
+      },
+    }),
+  });
+  const llm: LLMBackend = {
+    async call(): Promise<LLMResponse> {
+      return { content: "unused", model: "fixture", tokens_used: 0 };
+    },
+  };
+  const executor = new Executor({ llm, tools });
+
+  hds.onAuthorityEvent("composio_execution_requested", {
+    request_id: decisionLog.request_id,
+    command_id: command.id,
+    actor: "owner",
+    reason: "validate_product_p8_pre_executor",
+    evaluation: approval,
+  });
+  const feedback = await executor.execute(command);
+  hds.onAuthorityEvent("composio_execution_completed", {
+    request_id: decisionLog.request_id,
+    command_id: command.id,
+    actor: "owner",
+    reason: `validate_product_p8_post_executor:${feedback.status}`,
+    evaluation: approval,
+  });
+  hds.onFeedback(feedback);
+
+  assertCheck(feedback.status === "success", `Composio fixture execution failed: ${feedback.error ?? "unknown"}`);
+  assertCheck(seen?.path === "/api/v3.1/tools/execute/GITHUB_CREATE_AN_ISSUE", "Composio execute endpoint mismatch");
+  assertCheck(seen?.body.user_id === "owner-local", "Composio execute body missing user_id");
+  assertCheck(JSON.stringify(feedback).includes("issue-fixture"), "Composio fixture result missing");
+  assertCheck(!JSON.stringify(feedback).includes("composio-product-secret"), "Composio feedback exposed API key");
+
+  const auditEvents = hds.getAudit().list().map((entry) => {
+    const item = entry.log as { kind?: string; event?: string };
+    return item.kind === "authority_event" ? item.event : item.kind;
+  });
+  assertCheck(auditEvents.includes("approval_gate"), "Composio approval gate audit missing");
+  assertCheck(auditEvents.includes("composio_execution_requested"), "Composio pre-execution audit missing");
+  assertCheck(auditEvents.includes("composio_execution_completed"), "Composio post-execution audit missing");
+  assertCheck(hds.getAudit().verify() === true, "Composio audit chain did not verify");
+  log.push("executor: approved fixture command reached Composio adapter and emitted pre/post audit events");
+
+  return {
+    status: "pass",
+    summary: "Composio dry-run/live gates, allowlist/revoke, L3 approval boundary, and execution audit passed",
+    raw_log: log.join("\n"),
+    details: {
+      live_execution_available: status.live_execution_available,
+      dry_run_external_call_performed: dryRunResult.external_call_performed,
+      revoked_blocked: revokedBlocked,
+      approval_level: approval.approval_level,
+      final_review_required: approval.final_review_required,
+      full_access_auto_allowed: approval.decision === "allow",
+      execute_endpoint: seen?.path,
+      audit_events: auditEvents,
+      audit_chain_valid: hds.getAudit().verify(),
+      evidence_source: ["INTERNAL_STATE", "FIXTURE"],
+      used_for_authority: false,
+      hds_brain_remains_authority: true,
     },
   };
 }

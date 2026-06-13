@@ -22,79 +22,81 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P7 — Audit / Evidence 製品化`.
+- The active instruction is `Phase P8 — Composio / 外部API連携の安全閉包`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P7 — Audit / Evidence 製品化
+# Phase P8 — Composio / 外部API連携の安全閉包
 
 ## Objective
 
-Make audit and evidence export product-facing and verifiable. Control Center must be able to export sanitized evidence packs with manifests, human-readable reports, retention, and secret redaction while preserving HDS-BRAIN as the sole authority source.
+Make Composio / external API execution available only inside HDS approval and audit boundaries. Live execution must require explicit operator opt-in, toolkit/action allowlists, user scoping, and revocation/disconnect controls while preserving HDS-BRAIN as the sole authority source.
 
 ## Scope
 
-- Add a Control Center/WebChat evidence export surface for sanitized diagnostic evidence packs.
-- Add a shared evidence manifest writer and shared evidence redaction utility.
-- Export audit and complete-history evidence as digest/metadata-only summaries plus a human-readable report.
-- Add evidence retention policy for generated packs.
-- Extend `validate:product -- --phase P7` with evidence pack / redaction / retention checks.
+- Replace dry-run-only Composio execution with a bounded live adapter behind explicit opt-in.
+- Add toolkit allowlist, action-scope allowlist, action revoke, user id, API endpoint, and disconnect controls to settings/Control Center.
+- Add pre/post Composio execution audit events in the HDS audit hash-chain.
+- Keep Composio metadata, search results, settings snapshot, and execution results non-authority.
+- Extend `validate:product -- --phase P8` with Composio dry-run/live/allowlist/revoke/approval/audit checks.
 - Update tests and P-series docs.
 
 ## Non-Goals
 
-- Do not export raw command payloads, conversation content, rendered output, tokens, API keys, or credentials.
-- Do not make evidence packs authority, approval, risk classification, release GO, or final-review substitutes.
-- Do not run release validation or product validation from the normal runtime path.
-- Do not accept arbitrary filesystem paths from WebChat or UI for evidence export.
-- Do not implement restore / reset / rollback execution; those remain P10/P11.
+- Do not make Composio, connector metadata, connected-account metadata, tool discovery, or execution result an authority source.
+- Do not let dry-run=false alone open live execution.
+- Do not execute allowlist-excluded or revoked actions.
+- Do not add preview SDK packages as gateway hard dependencies.
+- Do not add automatic file upload/download handling or raw local file exfiltration paths.
+- Do not implement general connector reset/factory reset beyond Composio disconnect; broader reset remains P10.
 
 ## Inspect First
 
 ```bash
 git status --short
-rg -n "audit|evidence|redact|redaction|retention|export|evidence pack|validate:product|P7|secret|payload_hash|payload_digest|complete_history" packages apps scripts docs
-rg -n "WebChatHistorySurface|auditDumpReportFromLog|formatAuditTextReport|writeEvidenceManifest|redactEvidence|CompleteHistoryStore|/evidence/export" packages/channel-webchat packages/hds-brain apps/gateway scripts
+rg -n "composio|connector|connectors|external.send|live_execution|dry_run|allowlist|allowed_actions|revoked_actions|validate:product|P8" packages apps scripts docs
+rg -n "invokeComposioExecute|composioStatus|ComposioConnectorStatus|composio.execute|AuthorityEventKind|executeAndEcho|settings/config|connectorsPayload" packages/blue-tanuki packages/hds-brain apps/gateway packages/channel-webchat scripts
 ```
 
 ## Implementation Requirements
 
-- Evidence export must be a diagnostic path and must not import or run `scripts/validate_product.ts` from runtime.
-- Evidence export must not accept a request-supplied output path.
-- Evidence pack files must include a sha256 manifest, digest-only audit summary, digest-only complete-history summary, and human-readable report.
-- Secret redaction must be shared between product validation logs and evidence pack export.
-- Retention must bound generated evidence pack count.
-- `validate:product -- --phase P7` must verify export, manifest, report, retention, redaction, and non-authority flags.
+- Composio live execution must require all of: `COMPOSIO_API_KEY`, `COMPOSIO_USER_ID`, `COMPOSIO_ALLOWED_TOOLKITS`, `COMPOSIO_ALLOWED_ACTIONS`, `COMPOSIO_DRY_RUN=false`, and `COMPOSIO_LIVE_EXECUTION=true`.
+- Action allowlist and revoke checks must happen before any external request.
+- Live execution must call the Composio v3.1 tool execution API with bounded response reading and without logging API key material.
+- Control Center must show configured/dry-run/live opt-in/live availability/toolkit/action/revoked/user/disconnect status.
+- Disconnect must clear Composio API key material and close live execution back to dry-run.
+- `validate:product -- --phase P8` must verify dry-run no-call, revoke block, L3 final-review non-bypass, approved fixture execution, and pre/post audit events.
 
 ## Safety Requirements
 
 - HDS-BRAIN remains the only authority source.
-- Evidence pack metadata, UI state, audit views, complete history, and validation output remain non-authority.
-- Evidence export cannot approve, execute, classify risk, infer consent, rewrite policy, or release public claims.
-- Raw payloads, rendered output, command content, tokens, API keys, and secret values must not be serialized into UI/API/export evidence.
-- Audit hash-chain and complete-history verification must remain externally inspectable.
+- Composio settings, metadata, discovery, and execution results remain downstream evidence only.
+- Composio cannot approve, classify risk, infer consent, rewrite policy, bypass final review, or release public claims.
+- Live execution cannot occur through dry-run, missing opt-in, missing user id, missing action allowlist, or revoked action scopes.
+- API keys and secret values must not be serialized into UI/API/product validation evidence.
+- HDS approval, authority events, executor feedback, and output audit remain externally inspectable.
 
 ## Operator Usability Requirements
 
-- The Control Center Developer / Evidence screen must expose evidence export status and generated pack metadata.
-- Evidence export results must show pack path, manifest files, audit chain validity, complete-history chain validity, redaction status, and authority flag.
-- Failure output must tell the operator whether redaction, audit chain, complete-history chain, or export failed.
+- The Control Center Connectors screen must expose Composio API key rotation, user id, toolkit allowlist, action allowlist, revoked actions, dry-run, live opt-in, API endpoint, and disconnect.
+- The screen must show whether live execution is available or blocked and which gate is configured.
+- Failure output must make clear whether configuration, allowlist, revoke, approval, external API, or audit failed.
 
 ## Audit Requirements
 
-- Evidence export request/export events must append audit evidence without making the event authority.
-- Evidence summaries must keep `used_for_authority=false` and `complete_history_used_for_authority=false`.
-- Evidence source class for the P7 product check is `LIVE_RUNTIME` / `INTERNAL_STATE` / `EXTERNAL_EVIDENCE` / `FIXTURE`.
+- Composio execution request/completion/failure events must append audit evidence without making the event authority.
+- Execution history and product validation evidence must keep `used_for_authority=false`.
+- Evidence source class for the P8 product check is `INTERNAL_STATE` / `FIXTURE`; real owner credential live smoke remains separate external evidence before P13.
 
 ## Tests
 
-- WebChat tests must cover token-gated `/evidence/export` and method rejection.
-- Evidence pack tests must cover manifest, report, redaction, retention, and non-authority flags.
-- Product validation must cover P7 evidence pack export and redaction.
-- Existing audit, history, approval, and product validation tests must remain green.
+- Composio connector tests must cover dry-run, live opt-in, action allowlist, action revoke, bounded fixture execution, and secret non-exposure.
+- Settings/Control Center tests must cover new Composio fields and disconnect behavior.
+- Product validation must cover P8 Composio safety closure.
+- Existing audit, evidence, approval, settings, and product validation tests must remain green.
 
 ## Docs
 
@@ -113,21 +115,21 @@ pnpm docs:check
 pnpm validate:repo-health
 pnpm validate:packaging
 pnpm validate:ga
-pnpm validate:product -- --phase P7 --evidence .codex-tmp/validate-product-p7-audit-evidence-local
+pnpm validate:product -- --phase P8 --evidence .codex-tmp/validate-product-p8-composio-local
 ```
 
 ## Manual Smoke
 
-Open Control Center, use the Developer / Evidence screen with the WebChat token, export evidence, confirm pack path, manifest files, audit chain status, complete-history status, redaction status, and display-only authority status are visible. Do not treat evidence export as release GO or authority.
+Open Control Center, use the Connectors screen with the settings token, load/save Composio settings, confirm dry-run/live opt-in/live availability/toolkit/action/revoked/user/disconnect status are visible, and confirm disconnect clears live execution. With owner Composio credentials, submit a Composio action and verify it reaches pending L3 approval before any live execution.
 
 ## Permanent-Use Check
 
-The owner can export evidence from the GUI, inspect a human-readable report, verify digest-only summaries, and keep generated packs bounded by retention without exposing raw payloads or credentials.
+The owner can configure Composio from the GUI, keep live execution closed by default, open it only with explicit action scope, revoke specific actions, disconnect the connector, and inspect pre/post audit evidence without exposing API keys.
 
 ## Acceptance Criteria
 
 - Local validation passes.
-- `validate:product -- --phase P7` passes on Linux.
+- `validate:product -- --phase P8` passes on Linux.
 - Release claim remains pre-GO with `public_claim_allowed=false`.
 
 ## Final Report Format

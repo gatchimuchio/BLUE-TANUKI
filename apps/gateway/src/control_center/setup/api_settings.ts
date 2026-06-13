@@ -92,6 +92,21 @@ function optionalIntField(
   return value;
 }
 
+function optionalBooleanField(
+  obj: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const value = obj[key];
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+  }
+  throw new Error(`${key} must be a boolean`);
+}
+
 function normalizeProvider(value: string): SetupProviderKind {
   const normalized = value.trim().toLowerCase();
   if (
@@ -166,10 +181,19 @@ export function applySettingsPatch(
   }
   if (isRecord(body.composio)) {
     const composio = body.composio;
+    const clearApiKey = optionalBooleanField(composio, "clear_api_key");
     const apiKey = optionalStringField(composio, "api_key");
-    if (apiKey !== undefined) config.composio.api_key = apiKey;
+    if (apiKey !== undefined && clearApiKey !== true) config.composio.api_key = apiKey;
     const allowedToolkits = optionalStringField(composio, "allowed_toolkits");
     if (allowedToolkits !== undefined) config.composio.allowed_toolkits = allowedToolkits;
+    const allowedActions = optionalStringField(composio, "allowed_actions");
+    if (allowedActions !== undefined) config.composio.allowed_actions = allowedActions;
+    const revokedActions = optionalStringField(composio, "revoked_actions");
+    if (revokedActions !== undefined) config.composio.revoked_actions = revokedActions;
+    const userId = optionalStringField(composio, "user_id");
+    if (userId !== undefined) config.composio.user_id = userId;
+    const apiBaseUrl = optionalStringField(composio, "api_base_url");
+    if (apiBaseUrl !== undefined) config.composio.api_base_url = apiBaseUrl;
     const dryRun = composio.dry_run;
     if (dryRun !== undefined && dryRun !== null && dryRun !== "") {
       if (typeof dryRun === "boolean") {
@@ -182,6 +206,24 @@ export function applySettingsPatch(
       } else {
         throw new Error("dry_run must be a boolean");
       }
+    }
+    const liveExecution = composio.live_execution;
+    if (liveExecution !== undefined && liveExecution !== null && liveExecution !== "") {
+      if (typeof liveExecution === "boolean") {
+        config.composio.live_execution = liveExecution;
+      } else if (typeof liveExecution === "string") {
+        const normalized = liveExecution.trim().toLowerCase();
+        if (["1", "true", "yes", "on"].includes(normalized)) config.composio.live_execution = true;
+        else if (["0", "false", "no", "off"].includes(normalized)) config.composio.live_execution = false;
+        else throw new Error("live_execution must be a boolean");
+      } else {
+        throw new Error("live_execution must be a boolean");
+      }
+    }
+    if (clearApiKey === true) {
+      config.composio.api_key = undefined;
+      config.composio.dry_run = true;
+      config.composio.live_execution = false;
     }
   }
   setupConfigToEnv(config);

@@ -5,6 +5,7 @@ import {
   invokeComposioSearch,
   registerBuiltinTools,
   ToolRegistry,
+  type ComposioExecuteTarget,
 } from "../src/tools/index.js";
 
 describe("Composio connector", () => {
@@ -14,9 +15,13 @@ describe("Composio connector", () => {
       configured: false,
       dry_run: true,
       allowed_toolkits: [],
+      allowed_actions: [],
+      revoked_actions: [],
+      live_execution_enabled: false,
       live_execution_available: false,
       used_for_authority: false,
       metadata_used_for_authority: false,
+      live_execution_used_for_authority: false,
     });
   });
 
@@ -74,12 +79,13 @@ describe("Composio connector", () => {
     const result = await invokeComposioExecute(
       { toolkit: "github", tool: "issues.create", payload: { title: "hello" } },
       {
-        env: {
-          COMPOSIO_API_KEY: "composio-secret-value",
-          COMPOSIO_ALLOWED_TOOLKITS: "github",
+          env: {
+            COMPOSIO_API_KEY: "composio-secret-value",
+            COMPOSIO_ALLOWED_TOOLKITS: "github",
+            COMPOSIO_ALLOWED_ACTIONS: "github:issues.create",
+          },
         },
-      },
-    );
+      );
 
     expect(result).toMatchObject({
       provider: "composio",
@@ -90,13 +96,14 @@ describe("Composio connector", () => {
       dry_run: true,
       executed: false,
       external_mutation_sent: false,
+      external_call_performed: false,
       approval_required: true,
       used_for_authority: false,
     });
     expect(JSON.stringify(result)).not.toContain("composio-secret-value");
   });
 
-  it("does not perform live execution in this phase", async () => {
+  it("requires explicit live execution opt-in before external calls", async () => {
     await expect(
       invokeComposioExecute(
         { toolkit: "github", tool: "issues.create", payload: { title: "hello" } },
@@ -104,11 +111,89 @@ describe("Composio connector", () => {
           env: {
             COMPOSIO_API_KEY: "composio-secret-value",
             COMPOSIO_ALLOWED_TOOLKITS: "github",
+            COMPOSIO_ALLOWED_ACTIONS: "github:issues.create",
             COMPOSIO_DRY_RUN: "false",
           },
         },
       ),
-    ).rejects.toThrow(/live execution is not implemented/);
+    ).rejects.toThrow(/COMPOSIO_LIVE_EXECUTION/);
+  });
+
+  it("blocks revoked action scopes before live execution", async () => {
+    await expect(
+      invokeComposioExecute(
+        { toolkit: "github", tool: "issues.create", payload: { title: "hello" } },
+        {
+          env: {
+            COMPOSIO_API_KEY: "composio-secret-value",
+            COMPOSIO_ALLOWED_TOOLKITS: "github",
+            COMPOSIO_ALLOWED_ACTIONS: "github:issues.create",
+            COMPOSIO_REVOKED_ACTIONS: "github:issues.create",
+            COMPOSIO_USER_ID: "owner-local",
+            COMPOSIO_DRY_RUN: "false",
+            COMPOSIO_LIVE_EXECUTION: "true",
+          },
+        },
+      ),
+    ).rejects.toThrow(/revoked/);
+  });
+
+  it("executes live through the bounded Composio API adapter when all gates are explicit", async () => {
+    let seen: ComposioExecuteTarget | null = null;
+    const result = await invokeComposioExecute(
+      {
+        toolkit: "github",
+        tool: "GITHUB_CREATE_AN_ISSUE",
+        payload: { title: "hello" },
+      },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+          COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+          COMPOSIO_USER_ID: "owner-local",
+          COMPOSIO_DRY_RUN: "false",
+          COMPOSIO_LIVE_EXECUTION: "true",
+        },
+        request: async (target) => {
+          seen = target;
+          return {
+            status: 200,
+            ok: true,
+            content_type: "application/json",
+            body: JSON.stringify({ data: { id: 123, status: "ok" }, log_id: "log_fixture" }),
+            truncated: false,
+            request_id: "req_fixture",
+          };
+        },
+      },
+    );
+
+    expect(seen).toMatchObject({
+      api_base_url: "https://backend.composio.dev",
+      path: "/api/v3.1/tools/execute/GITHUB_CREATE_AN_ISSUE",
+      user_id: "owner-local",
+      body: {
+        user_id: "owner-local",
+        arguments: { title: "hello" },
+      },
+    });
+    expect(result).toMatchObject({
+      provider: "composio",
+      operation: "execute",
+      toolkit: "github",
+      tool: "GITHUB_CREATE_AN_ISSUE",
+      dry_run: false,
+      live_execution_enabled: true,
+      executed: true,
+      external_call_performed: true,
+      external_mutation_sent: true,
+      mutation_status: "confirmed",
+      used_for_authority: false,
+      metadata_used_for_authority: false,
+      live_execution_used_for_authority: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("composio-secret-value");
   });
 
   it("registers Composio tools and their capability envelopes", () => {

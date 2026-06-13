@@ -222,6 +222,9 @@ export type AuthorityEventKind =
   | "emergency_stop_blocked"
   | "evidence_pack_export_requested"
   | "evidence_pack_exported"
+  | "composio_execution_requested"
+  | "composio_execution_completed"
+  | "composio_execution_failed"
   | "approval_asked"
   | "approval_allowed"
   | "approval_denied";

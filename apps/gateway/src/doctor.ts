@@ -1475,7 +1475,7 @@ function remediationFor(check: CheckDraft): Remediation {
   if (check.id === "composio_connector") {
     return {
       cause: check.detail,
-      impact: "Composio tools remain unavailable or dry-run only; local/native tools and HDS authority remain usable.",
+      impact: "Composio tools remain unavailable or fail closed; live execution also requires explicit user id, toolkit/action allowlists, live opt-in, and HDS final review. Local/native tools and HDS authority remain usable.",
       next_action: "Leave Composio unset if unused, or set COMPOSIO_API_KEY and COMPOSIO_ALLOWED_TOOLKITS in the user env file.",
       doc_ref: "docs/COMPOSIO_CONNECTOR.md",
       safe_to_ignore: check.level === "warn",

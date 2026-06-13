@@ -563,14 +563,35 @@ export function renderSettingsHtml(): string {
             <label>Composio API key
               <input id="composio-api-key" type="password" autocomplete="new-password" placeholder="unchanged">
             </label>
+            <label>Composio user id
+              <input id="composio-user-id" autocomplete="off" placeholder="unchanged">
+            </label>
             <label>Composio allowed toolkits
               <input id="composio-allowed-toolkits" autocomplete="off" placeholder="github,gmail,calendar">
+            </label>
+            <label>Composio allowed actions
+              <input id="composio-allowed-actions" autocomplete="off" placeholder="github:GITHUB_CREATE_AN_ISSUE">
+            </label>
+            <label>Composio revoked actions
+              <input id="composio-revoked-actions" autocomplete="off" placeholder="github:GITHUB_DELETE_REPO">
+            </label>
+            <label>Composio API base URL
+              <input id="composio-api-base-url" autocomplete="off" placeholder="https://backend.composio.dev">
             </label>
             <label>Composio dry-run
               <select id="composio-dry-run">
                 <option value="true">true</option>
                 <option value="false">false</option>
               </select>
+            </label>
+            <label>Composio live execution
+              <select id="composio-live-execution">
+                <option value="false">false</option>
+                <option value="true">true</option>
+              </select>
+            </label>
+            <label>Composio disconnect
+              <input id="composio-clear-api-key" type="checkbox">
             </label>
             <label>Composio status
               <input id="composio-status" readonly>
@@ -634,8 +655,14 @@ export function renderSettingsHtml(): string {
       appTitle: document.querySelector("#llm-app-title"),
       approvalMode: document.querySelector("#approval-mode"),
       composioApiKey: document.querySelector("#composio-api-key"),
+      composioUserId: document.querySelector("#composio-user-id"),
       composioAllowedToolkits: document.querySelector("#composio-allowed-toolkits"),
+      composioAllowedActions: document.querySelector("#composio-allowed-actions"),
+      composioRevokedActions: document.querySelector("#composio-revoked-actions"),
+      composioApiBaseUrl: document.querySelector("#composio-api-base-url"),
       composioDryRun: document.querySelector("#composio-dry-run"),
+      composioLiveExecution: document.querySelector("#composio-live-execution"),
+      composioClearApiKey: document.querySelector("#composio-clear-api-key"),
       composioStatus: document.querySelector("#composio-status"),
       openrouterStatus: document.querySelector("#openrouter-status"),
       nativeFirstStatus: document.querySelector("#native-first-status"),
@@ -694,11 +721,19 @@ export function renderSettingsHtml(): string {
       fields.approvalMode.value = snapshot.approval?.mode || "full_access";
       fields.composioApiKey.value = "";
       fields.composioApiKey.placeholder = snapshot.integrations.composio.configured ? "configured" : "not set";
+      fields.composioUserId.value = "";
+      fields.composioUserId.placeholder = snapshot.integrations.composio.user_id_set ? "configured" : "not set";
       fields.composioAllowedToolkits.value = snapshot.integrations.composio.allowed_toolkits.join(",");
+      fields.composioAllowedActions.value = snapshot.integrations.composio.allowed_actions.join(",");
+      fields.composioRevokedActions.value = snapshot.integrations.composio.revoked_actions.join(",");
+      fields.composioApiBaseUrl.value = snapshot.integrations.composio.api_base_url || "";
       fields.composioDryRun.value = String(snapshot.integrations.composio.dry_run);
+      fields.composioLiveExecution.value = String(snapshot.integrations.composio.live_execution_enabled);
+      fields.composioClearApiKey.checked = false;
       fields.composioStatus.value =
         (snapshot.integrations.composio.configured ? "configured" : "missing") +
-        "; dry_run=" + snapshot.integrations.composio.dry_run;
+        "; dry_run=" + snapshot.integrations.composio.dry_run +
+        "; live=" + snapshot.integrations.composio.live_execution_available;
       fields.openrouterStatus.value =
         (snapshot.integrations.openrouter.configured ? "configured" : "missing") +
         "; key=" + (snapshot.integrations.openrouter.api_key_set ? "set" : "missing");
@@ -753,10 +788,16 @@ export function renderSettingsHtml(): string {
       if (fields.siteUrl.value.trim()) llm.site_url = fields.siteUrl.value.trim();
       if (fields.appTitle.value.trim()) llm.app_title = fields.appTitle.value.trim();
       const composio = {
+        user_id: fields.composioUserId.value,
         allowed_toolkits: fields.composioAllowedToolkits.value,
-        dry_run: fields.composioDryRun.value
+        allowed_actions: fields.composioAllowedActions.value,
+        revoked_actions: fields.composioRevokedActions.value,
+        api_base_url: fields.composioApiBaseUrl.value,
+        dry_run: fields.composioDryRun.value,
+        live_execution: fields.composioLiveExecution.value
       };
       if (fields.composioApiKey.value.trim()) composio.api_key = fields.composioApiKey.value.trim();
+      if (fields.composioClearApiKey.checked) composio.clear_api_key = true;
       return {
         llm,
         approval: { mode: fields.approvalMode.value },

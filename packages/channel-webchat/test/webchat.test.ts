@@ -331,8 +331,14 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Composio");
       expect(html).toContain("connectors-token");
       expect(html).toContain("composio-api-key");
+      expect(html).toContain("composio-user-id");
       expect(html).toContain("composio-allowed-toolkits");
+      expect(html).toContain("composio-allowed-actions");
+      expect(html).toContain("composio-revoked-actions");
+      expect(html).toContain("composio-api-base-url");
       expect(html).toContain("composio-dry-run");
+      expect(html).toContain("composio-live-execution");
+      expect(html).toContain("composio-clear-api-key");
       expect(html).toContain("load-connectors");
       expect(html).toContain("save-connectors");
       expect(html).toContain("settings-token");

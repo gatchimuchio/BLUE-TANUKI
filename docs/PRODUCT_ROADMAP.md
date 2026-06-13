@@ -58,7 +58,7 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 | P5 | live LLM smoke（owner資格情報、opt-in→P13でrequired化） / 鍵保護検査 |
 | P6 | approval allow・ask・deny・revoke・emergency stopの動的検証 |
 | P7 | evidence pack内容検査＋secret redaction検査 |
-| P8 | composio dry-run整合（live解放後はlive監査整合） |
+| P8 | Composio dry-run no-call / live opt-in / toolkit+action allowlist / action revoke / L3 final-review non-bypass / fixture live execution / pre-post audit |
 | P10 | backup→破壊→restore往復 |
 | P11 | release bundle verify＋update失敗rollback |
 
@@ -187,17 +187,16 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: 便利API統合をHDS承認・監査の内側でlive化する。
 
-現状（実測）: **段階1〜4相当done**。dry-run実装済（`live_execution_available: false` 固定）、approval request生成、toolkit/action discovery、metadata権限非昇格のauthorityテスト、github.write / google.write等のL3境界。CCのConnectorsパネルはP4で設定表示・保存導線まで実装済み。
+現状（実測）: **実装done（Linux fixture / HDS route evidence）**。dry-run実装、approval request生成、toolkit/action discovery、metadata権限非昇格のauthorityテスト、github.write / google.write等のL3境界に加えて、Composio live execution adapter（公式v3.1 tool execution API）、`COMPOSIO_DRY_RUN=false` + `COMPOSIO_LIVE_EXECUTION=true` + `COMPOSIO_USER_ID` + toolkit/action allowlist必須化、action revoke、Control Center Connectors上のuser id / toolkit allowlist / action allowlist / revoked actions / API endpoint / live opt-in / disconnect表示と保存、disconnect時のAPI key clear + dry-run復帰、gatewayのComposio実行pre/post authority event、`validate:product` P8動的checkを追加済み。
 
 残差:
-- allowlist／scope管理／revoke
-- execution auditの拡充（実行前後トレース）
-- live実行解放。**前提条件: P6完了＋validate:productのapproval系PASS。liveはHDS承認経由以外で到達不能であることをゲートで実証してから解放**
-- live解放後のCC上の接続解除・実行監査表示
+- owner資格情報・実Composio接続アカウントでのlive smoke PASS証跡（Linux・Windows）
+- Windows実機でのControl Center Connectors設定・disconnect手動証跡
+- Composio側scope / connected-account運用手順の最終文書化（P12）
 
 完了条件: live実行が必ずHDS承認を通る／allowlist外は実行不可／接続解除可／前後監査可／GUIから操作可。
 
-確信度: 88%
+確信度: 92%
 
 ---
 
@@ -291,8 +290,8 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 ```
 P1(凍結宣言) → P2(ゲート骨格)
 P2後、着手順自由: P3 / P4 / P5 / P7前半
-P6(UI残差) は P4 と連動、P8 live解放の前提
-P8 live は P6 完了後
+P6(UI残差) は P4 と連動、P8 live解放の前提（Linux fixtureではP8で再確認済み）
+P8 live は P6 完了後（コード解放済み。owner資格情報live smokeはP13前証跡）
 P9 / P10 / P11 は P3〜P8 の残差確定後（着手順自由）
 P12 → P13
 ```
@@ -309,8 +308,8 @@ P12 → P13
 | P4 | Control Center | partial高 | Backup/Restore実行・Update・実機品質 |
 | P5 | LLM実運用 | partial高 | Windows実機DPAPI証跡・Linux/macOS keychain・live証跡 |
 | P6 | Authority閉包 | 実装done | Windows実機GUI証跡 |
-| P7 | Audit製品化 | partial | 横断redaction・可読report・retention・evidence GUI |
-| P8 | Composio閉包 | dry-run done | allowlist/scope/revoke・live解放（P6前提） |
+| P7 | Audit製品化 | 実装done | Windows実機GUI証跡・owner資格情報環境でのredaction再確認 |
+| P8 | Composio閉包 | 実装done | owner資格情報live smoke・Windows実機GUI証跡・scope運用文書 |
 | P9 | Channel/Operator整理 | チャネルdone | operator三点一致・plugin面宣言 |
 | P10 | Recovery/Backup | partial | backup/restore/factory reset/safe mode |
 | P11 | Update/Release | partial | CC更新導線・migration・rollback |

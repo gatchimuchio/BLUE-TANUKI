@@ -183,6 +183,7 @@ describe("validate_product gate", () => {
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p5.llm_resilience_health\tphase=P5\tplatform=any\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p6.approval_authority_controls\tphase=P6\tplatform=any\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p7.evidence_pack_redaction\tphase=P7\tplatform=any\trequired=true");
+    expect(listProductChecks(PRODUCT_CHECKS)).toContain("p8.composio_safety_closure\tphase=P8\tplatform=any\trequired=true");
   });
 
   it("builds a Windows-safe pnpm command spec without relying on extension resolution", () => {

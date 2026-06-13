@@ -83,7 +83,12 @@ describe("setup_config", () => {
     config.composio = {
       api_key: "composio-secret",
       allowed_toolkits: "github,gmail",
+      allowed_actions: "github:GITHUB_CREATE_AN_ISSUE",
+      revoked_actions: "github:GITHUB_DELETE_REPO",
+      user_id: "owner-local",
+      api_base_url: "https://backend.composio.dev",
       dry_run: true,
+      live_execution: false,
     };
 
     const env = setupConfigToEnv(config);
@@ -94,7 +99,12 @@ describe("setup_config", () => {
     expect(env.OPENROUTER_APP_TITLE).toBe("BLUE-TANUKI");
     expect(env.COMPOSIO_API_KEY).toBe("composio-secret");
     expect(env.COMPOSIO_ALLOWED_TOOLKITS).toBe("github,gmail");
+    expect(env.COMPOSIO_ALLOWED_ACTIONS).toBe("github:GITHUB_CREATE_AN_ISSUE");
+    expect(env.COMPOSIO_REVOKED_ACTIONS).toBe("github:GITHUB_DELETE_REPO");
+    expect(env.COMPOSIO_USER_ID).toBe("owner-local");
+    expect(env.COMPOSIO_API_BASE_URL).toBe("https://backend.composio.dev");
     expect(env.COMPOSIO_DRY_RUN).toBe("true");
+    expect(env.COMPOSIO_LIVE_EXECUTION).toBe("false");
   });
 
   it("renders LLM secret references without raw API key material", () => {
@@ -154,7 +164,12 @@ describe("setup_config", () => {
       OPENROUTER_APP_TITLE: "BLUE-TANUKI",
       COMPOSIO_API_KEY: "composio-secret",
       COMPOSIO_ALLOWED_TOOLKITS: "github,gmail",
-      COMPOSIO_DRY_RUN: "true",
+      COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+      COMPOSIO_REVOKED_ACTIONS: "github:GITHUB_DELETE_REPO",
+      COMPOSIO_USER_ID: "owner-local",
+      COMPOSIO_API_BASE_URL: "https://backend.composio.dev",
+      COMPOSIO_DRY_RUN: "false",
+      COMPOSIO_LIVE_EXECUTION: "true",
       WEBCHAT_TOKEN: "webchat-token-123456",
       WEBCHAT_RESUME_TOKEN: "resume-token-123456",
       BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
@@ -165,7 +180,12 @@ describe("setup_config", () => {
     expect(config.composio).toEqual({
       api_key: "composio-secret",
       allowed_toolkits: "github,gmail",
-      dry_run: true,
+      allowed_actions: "github:GITHUB_CREATE_AN_ISSUE",
+      revoked_actions: "github:GITHUB_DELETE_REPO",
+      user_id: "owner-local",
+      api_base_url: "https://backend.composio.dev",
+      dry_run: false,
+      live_execution: true,
     });
   });
 

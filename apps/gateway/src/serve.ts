@@ -627,9 +627,10 @@ export async function serve(): Promise<ServeShutdown> {
     cmd: ExecuteCommand,
     log: DecisionLog,
     origin: InboundRequest,
-    opts: { skip_approval?: boolean; actor?: string } = {},
+    opts: { skip_approval?: boolean; actor?: string; approval_evaluation?: ApprovalEvaluation } = {},
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
+    let executionEvaluation = opts.approval_evaluation ?? null;
     if (emergencyStop.active) {
       hds.onAuthorityEvent("emergency_stop_blocked", {
         request_id: log.request_id,
@@ -684,6 +685,7 @@ export async function serve(): Promise<ServeShutdown> {
     }
     if (!opts.skip_approval) {
       const evaluation = approval.evaluate(cmd, actor);
+      executionEvaluation = evaluation;
       hds.onApprovalEvaluation(evaluation, { request_id: log.request_id });
       recordApprovalHistory("policy_evaluation", cmd, log, origin, actor, evaluation);
       if (evaluation.decision === "deny") {
@@ -750,7 +752,60 @@ export async function serve(): Promise<ServeShutdown> {
       hds.onCommandLifecycle(cmd.id, "approval_approved", { actor, reason: evaluation.reason });
       recordApprovalHistory("approval_approved", cmd, log, origin, actor, evaluation);
     }
+    if (isComposioExecuteCommand(cmd)) {
+      hds.onAuthorityEvent("composio_execution_requested", {
+        request_id: log.request_id,
+        command_id: cmd.id,
+        actor,
+        reason: "composio_execute_pre_executor",
+        evaluation: executionEvaluation ?? undefined,
+      });
+      recordCompleteHistory({
+        kind: "audit_history",
+        request_id: log.request_id,
+        command_id: cmd.id,
+        actor,
+        source: "composio_execution",
+        timestamp: Date.now(),
+        payload: {
+          event: "composio_execution_requested",
+          command: commandHistoryDescriptor(cmd),
+          approval_level: executionEvaluation?.approval_level ?? null,
+          final_review_required: executionEvaluation?.final_review_required ?? true,
+          used_for_authority: false,
+        },
+      });
+    }
     const fb = await executor.execute(cmd);
+    if (isComposioExecuteCommand(cmd)) {
+      hds.onAuthorityEvent(
+        fb.status === "success" ? "composio_execution_completed" : "composio_execution_failed",
+        {
+          request_id: log.request_id,
+          command_id: cmd.id,
+          actor,
+          reason: `composio_execute_post_executor:${fb.status}`,
+          evaluation: executionEvaluation ?? undefined,
+        },
+      );
+      recordCompleteHistory({
+        kind: "audit_history",
+        request_id: log.request_id,
+        command_id: cmd.id,
+        actor,
+        source: "composio_execution",
+        timestamp: Date.now(),
+        payload: {
+          event: fb.status === "success" ? "composio_execution_completed" : "composio_execution_failed",
+          command: commandHistoryDescriptor(cmd),
+          status: fb.status,
+          result_present: fb.result !== undefined,
+          result_digest: fb.result === undefined ? undefined : digestValue(fb.result),
+          error: fb.error,
+          used_for_authority: false,
+        },
+      });
+    }
     hds.onFeedback(fb);
     const executionHistory = recordExecutionHistory(cmd, log, origin, actor, fb);
     if (fb.status === "failed") {
@@ -845,7 +900,11 @@ export async function serve(): Promise<ServeShutdown> {
       token_kind: ctx.token_kind,
       remember_requested: Boolean(ctx.approval?.remember || ctx.approval?.mode),
     });
-    const r = await executeAndEcho(pending.command, pending.log, pending.origin, { skip_approval: true, actor: ctx.actor });
+    const r = await executeAndEcho(pending.command, pending.log, pending.origin, {
+      skip_approval: true,
+      actor: ctx.actor,
+      approval_evaluation: pending.evaluation,
+    });
     return { approval: "approve", executed: true, status: r.status };
   }
 
@@ -1595,6 +1654,10 @@ function commandOperation(command: ExecuteCommand): string {
   if (command.type === "llm_call") return "llm_call";
   if (command.type === "channel_send") return `channel_send:${command.payload.channel}`;
   return "noop";
+}
+
+function isComposioExecuteCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "composio.execute";
 }
 
 const COMPLETE_HISTORY_KINDS: readonly CompleteHistoryKind[] = [
