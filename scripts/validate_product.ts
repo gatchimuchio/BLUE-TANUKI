@@ -1,10 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash } from "node:crypto";
 import * as net from "node:net";
 import {
   mkdir,
   mkdtemp,
-  readdir,
   readFile,
   rm,
   writeFile,
@@ -16,6 +14,7 @@ import type { ExecuteCommand } from "../packages/protocol/src/index.js";
 import {
   AuditLog,
   HDSUpperController,
+  CompleteHistoryStore,
   buildRuntimeInvariantEvidence,
   buildApprovalGrant,
   evaluateApproval,
@@ -40,6 +39,12 @@ import {
   type SecretProtector,
 } from "../apps/gateway/src/secret_store.js";
 import { buildApprovalRuntime } from "../apps/gateway/src/approval_runtime.js";
+import { createGatewayEvidencePack } from "../apps/gateway/src/evidence_pack.js";
+import { writeEvidenceManifest } from "../apps/gateway/src/evidence_manifest.js";
+import {
+  redactEvidenceText,
+  scanEvidenceForSecrets,
+} from "../apps/gateway/src/evidence_redaction.js";
 
 export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P10" | "P11";
 export type ProductPlatform = "linux" | "win32" | "any";
@@ -125,17 +130,6 @@ export interface ProductValidationResult {
   failed: number;
   skipped: number;
   checks: CheckRunRecord[];
-}
-
-export interface EvidenceManifest {
-  schema_version: 1;
-  generated_at: string;
-  manifest_excludes_self: true;
-  files: Array<{
-    path: string;
-    sha256: string;
-    bytes: number;
-  }>;
 }
 
 const PHASE_ORDER: ProductPhase[] = ["P2", "P3", "P4", "P5", "P6", "P7", "P8", "P10", "P11"];
@@ -233,6 +227,13 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "any",
     required: true,
     run: runApprovalAuthorityControls,
+  },
+  {
+    id: "p7.evidence_pack_redaction",
+    phase: "P7",
+    platform: "any",
+    required: true,
+    run: runEvidencePackRedaction,
   },
 ];
 
@@ -361,34 +362,6 @@ export async function runProductValidation(
 
 function phaseIndex(phase: ProductPhase): number {
   return PHASE_ORDER.indexOf(phase);
-}
-
-export async function writeEvidenceManifest(evidenceDir: string): Promise<EvidenceManifest> {
-  const files = await listFiles(evidenceDir);
-  const entries: EvidenceManifest["files"] = [];
-  for (const file of files) {
-    const rel = path.relative(evidenceDir, file).replace(/\\/g, "/");
-    if (rel === "manifest.json") continue;
-    const buf = await readFile(file);
-    entries.push({
-      path: rel,
-      sha256: createHash("sha256").update(buf).digest("hex"),
-      bytes: buf.byteLength,
-    });
-  }
-  entries.sort((a, b) => a.path.localeCompare(b.path));
-  const manifest: EvidenceManifest = {
-    schema_version: 1,
-    generated_at: new Date().toISOString(),
-    manifest_excludes_self: true,
-    files: entries,
-  };
-  await writeFile(
-    path.join(evidenceDir, "manifest.json"),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    "utf8",
-  );
-  return manifest;
 }
 
 export function productSummaryLine(result: ProductValidationResult): string {
@@ -1549,6 +1522,107 @@ async function runApprovalAuthorityControls(): Promise<CheckResult> {
   }
 }
 
+async function runEvidencePackRedaction(ctx: CheckContext): Promise<CheckResult> {
+  const evidenceRoot = path.join(ctx.evidenceDir, "p7-runtime-evidence-root");
+  await mkdir(path.join(evidenceRoot, "evidence-2026-01-01T00.00.00.000Z"), { recursive: true });
+  await mkdir(path.join(evidenceRoot, "evidence-2026-01-02T00.00.00.000Z"), { recursive: true });
+  await mkdir(path.join(evidenceRoot, "evidence-2026-01-03T00.00.00.000Z"), { recursive: true });
+
+  const hds = new HDSUpperController();
+  const decision = hds.decide(inbound("p7 fixture content with product-secret-value", "p7-evidence-request"));
+  hds.onRuntimeInvariantsEvidence({ request_id: decision.log.request_id, reason: "p7_product_validation" });
+  const completeHistory = new CompleteHistoryStore();
+  completeHistory.append({
+    kind: "user_input",
+    request_id: "p7-evidence-request",
+    actor: "owner",
+    source: "product-validation-fixture",
+    payload: {
+      content: "raw user payload product-secret-value",
+      token: "product-token-value",
+      api_key: "product-api-key-value",
+    },
+    timestamp: Date.parse("2026-06-14T00:00:00.000Z"),
+  });
+  completeHistory.append({
+    kind: "final_output",
+    request_id: "p7-evidence-request",
+    command_id: decision.command?.id ?? null,
+    actor: "owner",
+    source: "product-validation-fixture",
+    payload: {
+      rendered_output: "visible output product-secret-value",
+      result: { secret: "product-secret-value" },
+    },
+    timestamp: Date.parse("2026-06-14T00:00:01.000Z"),
+  });
+
+  const pack = await createGatewayEvidencePack({
+    rootDir: ctx.rootDir,
+    env: {
+      BLUE_TANUKI_EVIDENCE_DIR: evidenceRoot,
+      BLUE_TANUKI_EVIDENCE_RETENTION_MAX_PACKS: "2",
+      WEBCHAT_TOKEN: "product-token-value",
+      OPENROUTER_API_KEY: "product-api-key-value",
+      PRODUCT_SECRET_FIXTURE: "product-secret-value",
+    },
+    audit: hds.getAudit(),
+    completeHistory,
+    now: new Date("2026-06-14T00:00:02.000Z"),
+    requested_by: "product-validation",
+    source: "product_validation_fixture",
+  });
+
+  assertCheck(pack.used_for_authority === false, "evidence pack became authority");
+  assertCheck(pack.hds_brain_remains_authority === true, "evidence pack did not preserve HDS authority flag");
+  assertCheck(pack.audit_chain_valid === true, "evidence pack audit chain was invalid");
+  assertCheck(pack.complete_history_chain_valid === true, "evidence pack complete-history chain was invalid");
+  assertCheck(pack.secret_redaction.scan_ok === true, `evidence pack secret scan failed: ${pack.secret_redaction.findings.join(",")}`);
+  assertCheck(pack.retention.max_packs === 2, "evidence retention max did not apply");
+  assertCheck(pack.retention.removed_packs.length === 2, "evidence retention did not remove old packs");
+
+  const requiredFiles = ["summary.json", "audit-summary.json", "complete-history-summary.json", "report.txt"];
+  for (const rel of requiredFiles) {
+    assertCheck(pack.manifest.files.some((file) => file.path === rel), `manifest missing ${rel}`);
+  }
+  const fileTexts = await Promise.all(
+    [...requiredFiles, "manifest.json"].map((rel) => readFile(path.join(pack.pack_dir, rel), "utf8")),
+  );
+  const joined = fileTexts.join("\n");
+  const scan = scanEvidenceForSecrets(joined, [
+    "product-secret-value",
+    "product-token-value",
+    "product-api-key-value",
+  ]);
+  assertCheck(scan.ok, `exported evidence leaked secret material: ${scan.findings.join(",")}`);
+  assertCheck(joined.includes("BLUE-TANUKI Evidence Pack"), "human-readable evidence report missing title");
+  assertCheck(joined.includes("complete_history_used_for_authority"), "history authority flag missing from evidence");
+  assertCheck(!joined.includes("raw user payload product-secret-value"), "raw complete-history payload leaked");
+
+  return {
+    status: "pass",
+    summary: "evidence pack export, retention, human report, manifest, and secret redaction passed",
+    raw_log: [
+      `pack_dir=${pack.pack_dir}`,
+      `files=${pack.manifest.files.map((file) => file.path).join(",")}`,
+      `removed=${pack.retention.removed_packs.join(",")}`,
+      `secret_scan_ok=${pack.secret_redaction.scan_ok}`,
+      `used_for_authority=${pack.used_for_authority}`,
+    ].join("\n"),
+    details: {
+      pack_dir: pack.pack_dir,
+      manifest_files: pack.manifest.files.map((file) => file.path),
+      removed_packs: pack.retention.removed_packs,
+      audit_chain_valid: pack.audit_chain_valid,
+      complete_history_chain_valid: pack.complete_history_chain_valid,
+      secret_redaction_scan_ok: pack.secret_redaction.scan_ok,
+      evidence_source: pack.evidence_source,
+      used_for_authority: pack.used_for_authority,
+      hds_brain_remains_authority: pack.hds_brain_remains_authority,
+    },
+  };
+}
+
 async function runNodeScript(ctx: CheckContext, scriptRel: string): Promise<CommandRunResult> {
   return ctx.runner({
     command: process.execPath,
@@ -1677,11 +1751,7 @@ function excerpt(value: string, maxLength = 2_000): string {
 }
 
 export function redactForEvidence(value: string): string {
-  return value
-    .replace(/(authorization["']?\s*[:=]\s*["']?Bearer\s+)[^"',\s]+/gi, "$1[redacted]")
-    .replace(/((?:token|secret|password|api[_-]?key)["']?\s*[:=]\s*["']?)[^"',\s]+/gi, "$1[redacted]")
-    .replace(/("(?:content|rendered_output|raw_output|payload|messages)"\s*:\s*)"([^"\\]|\\.)*"/gi, "$1\"[redacted]\"")
-    .replace(/("(?:result)"\s*:\s*)\{[^}\n]*\}/gi, "$1\"[redacted]\"");
+  return redactEvidenceText(value);
 }
 
 async function writeEnvironmentEvidence(
@@ -1755,20 +1825,6 @@ export function pnpmCommandSpec(
     cwd,
     env,
   };
-}
-
-async function listFiles(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await listFiles(full));
-    } else if (entry.isFile()) {
-      files.push(full);
-    }
-  }
-  return files;
 }
 
 function safeFileName(value: string): string {

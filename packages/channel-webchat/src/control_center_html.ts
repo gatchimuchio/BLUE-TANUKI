@@ -933,8 +933,20 @@ export function renderControlCenterHtml(): string {
         <section class="card" data-screen-group="developer">
           <div class="row">
             <h2>Developer / Evidence</h2>
-            <span class="badge good">validation surface</span>
+            <span id="evidence-export-status" class="badge warn">not exported</span>
           </div>
+          <div class="status-grid">
+            <input id="evidence-token" type="password" autocomplete="off" placeholder="webchat token" />
+            <button id="export-evidence" class="primary" type="button">Export Evidence</button>
+          </div>
+          <div class="status-grid">
+            <div class="metric"><span>Pack</span><span id="evidence-pack-path">not exported</span></div>
+            <div class="metric"><span>Audit chain</span><span id="evidence-audit-chain">not exported</span></div>
+            <div class="metric"><span>History chain</span><span id="evidence-history-chain">not exported</span></div>
+            <div class="metric"><span>Redaction</span><span id="evidence-redaction-status">not exported</span></div>
+            <div class="metric"><span>Authority</span><span id="evidence-authority-status">display only</span></div>
+          </div>
+          <pre id="evidence-json">not exported</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Repo Health</h3><p class="muted">Import graph and release-path purity checks protect production runtime boundaries.</p></div>
             <div class="screen-card"><h3>Conformance</h3><p class="muted">Negative tests prove metadata, memory, UI state, and LLM output cannot create authority.</p></div>
@@ -1089,6 +1101,7 @@ export function renderControlCenterHtml(): string {
         notificationsToken: sessionStorage.getItem("bt.notificationsToken") || "",
         historyToken: sessionStorage.getItem("bt.historyToken") || "",
         historyKind: sessionStorage.getItem("bt.historyKind") || "",
+        evidenceToken: sessionStorage.getItem("bt.evidenceToken") || "",
         settingsToken: sessionStorage.getItem("bt.settingsToken") || "",
         connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
         aboutToken: sessionStorage.getItem("bt.aboutToken") || "",
@@ -1294,6 +1307,7 @@ export function renderControlCenterHtml(): string {
         byId("notifications-token").value = state.notificationsToken;
         byId("history-token").value = state.historyToken;
         byId("history-kind").value = state.historyKind;
+        byId("evidence-token").value = state.evidenceToken || state.chatToken;
         byId("settings-token").value = state.settingsToken;
         byId("connectors-token").value = state.connectorsToken || state.settingsToken;
         byId("about-token").value = state.aboutToken || state.chatToken;
@@ -1698,6 +1712,36 @@ export function renderControlCenterHtml(): string {
         setText("history-json", compactJson(redactRuntimeValue(history)));
       }
 
+      function renderEvidenceExport(body) {
+        const evidence = body.evidence || body;
+        const redaction = evidence.secret_redaction || {};
+        const manifestFiles = evidence.manifest && Array.isArray(evidence.manifest.files)
+          ? evidence.manifest.files.map(function (file) { return file.path; })
+          : evidence.files || [];
+        const auditOk = evidence.audit_chain_valid === true;
+        const historyOk = evidence.complete_history_chain_valid === true;
+        const redactionOk = redaction.scan_ok === true;
+        const authorityOk = evidence.used_for_authority === false && evidence.hds_brain_remains_authority === true;
+
+        setText("evidence-pack-path", evidence.pack_dir || "not exported");
+        setText("evidence-audit-chain", labelForBoolean(auditOk));
+        setText("evidence-history-chain", labelForBoolean(historyOk));
+        setText("evidence-redaction-status", redactionOk ? "redacted" : "review");
+        setText("evidence-authority-status", authorityOk ? "display only" : "unsafe");
+        setText("evidence-export-status", manifestFiles.length + " files");
+        byId("evidence-export-status").className = "badge " + (auditOk && historyOk && redactionOk && authorityOk ? "good" : "bad");
+        setText("evidence-json", compactJson(redactRuntimeValue({
+          pack_dir: evidence.pack_dir,
+          files: manifestFiles,
+          audit_chain_valid: evidence.audit_chain_valid,
+          complete_history_chain_valid: evidence.complete_history_chain_valid,
+          retention: evidence.retention,
+          secret_redaction: evidence.secret_redaction,
+          used_for_authority: evidence.used_for_authority,
+          hds_brain_remains_authority: evidence.hds_brain_remains_authority
+        })));
+      }
+
       function renderSettingsSnapshot(snapshot) {
         const llm = snapshot.llm || {};
         const openrouter = snapshot.integrations && snapshot.integrations.openrouter ? snapshot.integrations.openrouter : {};
@@ -1866,6 +1910,20 @@ export function renderControlCenterHtml(): string {
           setText("recovery-boundary-status", "error");
           byId("recovery-boundary-status").className = "badge bad";
           setText("recovery-json", error.message);
+        }
+      }
+
+      async function exportEvidence() {
+        const token = byId("evidence-token").value.trim();
+        state.evidenceToken = token;
+        sessionStorage.setItem("bt.evidenceToken", token);
+        try {
+          const body = await postJson("/evidence/export", token, { actor: state.chatUser || "owner" });
+          renderEvidenceExport(body);
+        } catch (error) {
+          setText("evidence-export-status", "error");
+          byId("evidence-export-status").className = "badge bad";
+          setText("evidence-json", error.message);
         }
       }
 
@@ -2136,6 +2194,7 @@ export function renderControlCenterHtml(): string {
       byId("verify-audit").addEventListener("click", verifyAudit);
       byId("load-authority").addEventListener("click", loadAuthorityTrace);
       byId("load-history").addEventListener("click", loadHistory);
+      byId("export-evidence").addEventListener("click", exportEvidence);
       byId("load-settings").addEventListener("click", loadSettings);
       byId("load-connectors").addEventListener("click", loadConnectors);
       byId("save-connectors").addEventListener("click", saveConnectors);

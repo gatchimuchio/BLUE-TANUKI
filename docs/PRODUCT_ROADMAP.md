@@ -171,17 +171,15 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: 「安全です」ではなく「検証できます」。
 
-現状（実測）: **partial**。hash-chain audit＋verify、audit-dump CLI、runtime/invariant snapshot（payload_hashのみでcontent非露出）、CC内のAuthority Audit / Complete History / Replay panel。
+現状（実測）: **実装done（Linux fixture / live route evidence）**。hash-chain audit＋verify、audit-dump CLI、runtime/invariant snapshot（payload_hashのみでcontent非露出）、CC内のAuthority Audit / Complete History / Replay panelに加えて、Control Center起点のsanitized evidence pack export、manifest sha256一覧、human-readable report、横断secret redaction、evidence retention policy、`validate:product` P7動的checkを追加済み。
 
 残差:
-- audit/logパイプラインの体系的secret redaction（現状はUI maskと一部のみ。横断的redactionモジュールは実測で不在）
-- human-readable report出力
-- retention policy
-- GUIからのevidence pack出力（P2のevidence生成と接続）
+- Windows実機でのControl Center evidence export手動証跡
+- P13前に、owner資格情報を含む環境でsecret redaction scanを再確認
 
 完了条件: export / verify / tamper検知 / redaction / evidence packがGUI起点で成立。製品主張と証跡が一致。
 
-確信度: 90%
+確信度: 94%
 
 ---
 

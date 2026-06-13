@@ -13,6 +13,7 @@ import {
   type WebChatAuthoritySurface,
   type WebChatNotificationSurface,
   type WebChatHistorySurface,
+  type WebChatEvidenceSurface,
   type WebChatAboutSurface,
   type WebChatRecoverySurface,
   type WebChatOperatorSurfaces,
@@ -65,6 +66,7 @@ async function setup(
       authority?: WebChatAuthoritySurface;
       notifications?: WebChatNotificationSurface;
       history?: WebChatHistorySurface;
+      evidence?: WebChatEvidenceSurface;
       about?: WebChatAboutSurface;
       recovery?: WebChatRecoverySurface;
       operators?: WebChatOperatorSurfaces;
@@ -91,6 +93,7 @@ async function setup(
     authority: opts.authority,
     notifications: opts.notifications,
     history: opts.history,
+    evidence: opts.evidence,
     about: opts.about,
     recovery: opts.recovery,
     operators: opts.operators,
@@ -349,6 +352,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("/settings/llm/verify");
       expect(html).toContain("bt.settingsToken");
       expect(html).toContain("Developer / Evidence");
+      expect(html).toContain("evidence-token");
+      expect(html).toContain("export-evidence");
+      expect(html).toContain("/evidence/export");
       expect(html).toContain("GUI Shell responsibility substrate mapped to BLUE-TANUKI");
       expect(html).toContain("UI state is not authority");
       expect(html).toContain("LLM output is not authority");
@@ -1972,6 +1978,71 @@ describe("WebChatChannel - complete history replay API", () => {
         { authorization: `Bearer ${TOKEN}` },
       );
       expect(r.status).toBe(405);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+});
+
+describe("WebChatChannel - evidence export API", () => {
+  it("exports sanitized evidence only through the inbound token gate", async () => {
+    const calls: unknown[] = [];
+    const ctx = await setup({
+      evidence: {
+        exportPack: async (controlCtx) => {
+          calls.push(controlCtx);
+          return {
+            schema_version: 1,
+            pack_dir: "/tmp/blue-tanuki/evidence/evidence-test",
+            files: ["summary.json", "report.txt"],
+            used_for_authority: false,
+            hds_brain_remains_authority: true,
+            secret_redaction: {
+              applied: true,
+              scan_ok: true,
+              findings: [],
+            },
+          };
+        },
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      expect((await postJson(ctx.port, "/evidence/export", {})).status).toBe(401);
+      expect(
+        (await postJson(
+          ctx.port,
+          "/evidence/export",
+          {},
+          { authorization: `Bearer ${RESUME_TOKEN}` },
+        )).status,
+      ).toBe(401);
+
+      const get = await getRaw(ctx.port, "/evidence/export", {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(get.status).toBe(405);
+
+      const ok = await postJson(
+        ctx.port,
+        "/evidence/export",
+        { actor: "alice", path: "/not/accepted" },
+        { authorization: `Bearer ${TOKEN}` },
+      );
+      expect(ok.status).toBe(200);
+      expect(ok.body).toMatchObject({
+        ok: true,
+        evidence: {
+          used_for_authority: false,
+          hds_brain_remains_authority: true,
+          secret_redaction: {
+            applied: true,
+            scan_ok: true,
+          },
+        },
+      });
+      expect(calls).toEqual([{ actor: "alice", token_kind: "inbound" }]);
+      expect(JSON.stringify(ok.body)).not.toContain("/not/accepted");
     } finally {
       await ctx.teardown();
     }

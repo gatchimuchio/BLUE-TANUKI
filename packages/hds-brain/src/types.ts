@@ -220,6 +220,8 @@ export type AuthorityEventKind =
   | "emergency_stop_activated"
   | "emergency_stop_cleared"
   | "emergency_stop_blocked"
+  | "evidence_pack_export_requested"
+  | "evidence_pack_exported"
   | "approval_asked"
   | "approval_allowed"
   | "approval_denied";

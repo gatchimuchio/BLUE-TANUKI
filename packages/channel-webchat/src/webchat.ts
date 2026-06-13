@@ -312,6 +312,16 @@ export interface WebChatHistorySurface {
   replay: (filter: WebChatHistoryReplayFilter) => Promise<WebChatHistorySnapshot>;
 }
 
+export interface WebChatEvidenceControlContext {
+  actor: string;
+  token_kind: "inbound";
+}
+
+export interface WebChatEvidenceSurface {
+  /** Export a sanitized diagnostic evidence pack; no request path is accepted. */
+  exportPack: (context: WebChatEvidenceControlContext) => Promise<unknown>;
+}
+
 export interface WebChatAboutSurface {
   /** Return read-only product identity, claim-boundary, and release-boundary metadata. */
   getSnapshot: () => Promise<unknown>;
@@ -396,6 +406,8 @@ export interface WebChatOptions {
   notifications?: WebChatNotificationSurface;
   /** Optional read-only complete-history replay surface. Uses the normal inbound bearer token. */
   history?: WebChatHistorySurface;
+  /** Optional diagnostic evidence export surface. Uses the normal inbound bearer token. */
+  evidence?: WebChatEvidenceSurface;
   /** Optional read-only product About surface. Uses the normal inbound bearer token. */
   about?: WebChatAboutSurface;
   /** Optional read-only recovery readiness surface. Uses the normal inbound bearer token. */
@@ -457,6 +469,7 @@ const RESUME_GLOBAL_KEY = "*";
  *   GET  /notifications auth:Bearer inbound-token
  *   GET  /history auth:Bearer inbound-token
  *   GET  /history/replay auth:Bearer inbound-token
+ *   POST /evidence/export body:{actor?} auth:Bearer inbound-token
  *   GET  /operators/writing auth:Bearer inbound-token
  *   POST /operators/writing/invoke body:{user,content} auth:Bearer inbound-token
  *   GET  /operators/daily auth:Bearer inbound-token
@@ -866,6 +879,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     if (url.pathname === "/history" || url.pathname === "/history/replay") {
       await this.handleHistory(req, res, url);
+      return;
+    }
+
+    if (url.pathname === "/evidence/export") {
+      await this.handleEvidenceExport(req, res);
       return;
     }
 
@@ -1459,6 +1477,35 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     res.end(JSON.stringify({ history }));
   }
 
+  private async handleEvidenceExport(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (!this.opts.evidence) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "evidence_not_configured" }));
+      return;
+    }
+    if (!this.checkAuth(req, "inbound")) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (req.method !== "POST") {
+      res.writeHead(405, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    if (!this.rateLimitOr429(this.buckets.inbound, "evidence-export", res)) return;
+    const body = await readJson(req);
+    const evidence = await this.opts.evidence.exportPack(readEvidenceControlContext(body));
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    });
+    res.end(JSON.stringify({ ok: true, evidence }));
+  }
+
   private async handleOperator(
     req: IncomingMessage,
     res: ServerResponse,
@@ -1730,6 +1777,14 @@ function readHistoryReplayFilter(url: URL): WebChatHistoryReplayFilter {
     filter.limit = Math.min(500, Math.max(1, Number(limitRaw)));
   }
   return filter;
+}
+
+function readEvidenceControlContext(body: Record<string, unknown> | null): WebChatEvidenceControlContext {
+  const actor =
+    typeof body?.actor === "string" && body.actor.trim().length > 0
+      ? body.actor.trim()
+      : "webchat-human";
+  return { actor, token_kind: "inbound" };
 }
 
 function sanitizeHistorySnapshot(snapshot: WebChatHistorySnapshot): WebChatHistorySnapshot {

@@ -50,6 +50,7 @@ import type {
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
   WebChatAuthorityTraceItem,
+  WebChatEvidenceControlContext,
   WebChatHistoryEntry,
   WebChatHistoryReplayFilter,
   WebChatHistorySnapshot,
@@ -61,6 +62,7 @@ import { loadPluginRuntime } from "./plugin_loader.js";
 import { createWebChatSettingsSurface } from "./settings_surface.js";
 import { buildAboutSnapshot } from "./about_surface.js";
 import { buildRecoverySnapshot } from "./recovery_surface.js";
+import { createGatewayEvidencePack } from "./evidence_pack.js";
 import { CronSchedulerChannel, cronSchedulesFromEnv } from "./cron_channel.js";
 import { googleDailyBriefProviderFromEnv } from "./google_daily_brief.js";
 import {
@@ -958,6 +960,41 @@ export async function serve(): Promise<ServeShutdown> {
       },
       history: {
         replay: async (filter: WebChatHistoryReplayFilter) => completeHistorySnapshot(filter),
+      },
+      evidence: {
+        exportPack: async (ctx: WebChatEvidenceControlContext) => {
+          hds.onAuthorityEvent("evidence_pack_export_requested", {
+            actor: ctx.actor,
+            reason: "control_center_evidence_export",
+          });
+          const result = await createGatewayEvidencePack({
+            rootDir: process.cwd(),
+            env: process.env,
+            audit: hds.getAudit(),
+            completeHistory,
+            requested_by: ctx.actor,
+            source: "control_center",
+          });
+          hds.onAuthorityEvent("evidence_pack_exported", {
+            actor: ctx.actor,
+            reason: "control_center_evidence_export",
+          });
+          recordCompleteHistory({
+            kind: "audit_history",
+            actor: ctx.actor,
+            source: "evidence_pack",
+            timestamp: Date.now(),
+            payload: {
+              event: "evidence_pack_exported",
+              pack_dir: result.pack_dir,
+              files: result.manifest.files.map((file) => file.path),
+              audit_chain_valid: result.audit_chain_valid,
+              complete_history_chain_valid: result.complete_history_chain_valid,
+              used_for_authority: false,
+            },
+          });
+          return result;
+        },
       },
       about: {
         getSnapshot: async () => buildAboutSnapshot(),

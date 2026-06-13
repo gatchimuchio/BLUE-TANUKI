@@ -13,6 +13,7 @@ pnpm validate:product -- --phase P3
 pnpm validate:product -- --phase P4
 pnpm validate:product -- --phase P5
 pnpm validate:product -- --phase P6
+pnpm validate:product -- --phase P7
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -82,6 +83,12 @@ only console output.
 |---|---|---|
 | `p6.approval_authority_controls` | `INTERNAL_STATE` / `LIVE_RUNTIME` / `FIXTURE` | Approval Gateのallow / ask / deny / remembered grant / revoke / L3 final-review non-bypassを動的評価し、WebChat approval APIをloopback上で起動してresume-token必須性、grant revoke、approval historyのnon-authority flag、owner emergency stop activate/clear、emergency stop中のdownstream execution block fixtureを検証する |
 
+## P7 Checks
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p7.evidence_pack_redaction` | `LIVE_RUNTIME` / `INTERNAL_STATE` / `EXTERNAL_EVIDENCE` / `FIXTURE` | Gateway evidence pack exporterをfixture audit / complete-historyで実行し、manifest、human-readable report、hash-chain検証結果、retention、secret redaction、raw payload非露出、`used_for_authority=false` を検証する |
+
 ## Incremental Registration
 
 | 追加Phase | 検査項目 |
@@ -91,7 +98,7 @@ only console output.
 | P4 | Control Center操作スモーク（API経由） |
 | P5 | LLM resilience health fixture / LLM secret-ref fixture / live LLM smoke（owner資格情報、opt-in→P13でrequired化） / 鍵保護検査 |
 | P6 | approval allow・ask・deny・remembered grant・revoke・emergency stop・L3 final-review non-bypassの動的検証 |
-| P7 | evidence pack内容検査＋secret redaction検査 |
+| P7 | Control Center evidence export / evidence pack内容検査 / human-readable report / retention / secret redaction検査 |
 | P8 | composio dry-run整合（live解放後はlive監査整合） |
 | P10 | backup→破壊→restore往復 |
 | P11 | release bundle verify＋update失敗rollback |
@@ -107,6 +114,8 @@ only console output.
 | `checks.json` | check id、status、duration、summary、ログ抜粋、details |
 | `logs/*.log` | 各checkのredacted raw log |
 | `environment.json` | node、pnpm、git rev、platform、env key一覧。env値は記録しない |
+| `p7-runtime-evidence-root/evidence-*/summary.json` | P7 exporterが生成するdigest-only evidence summary |
+| `p7-runtime-evidence-root/evidence-*/report.txt` | P7 exporterが生成するhuman-readable report |
 | `manifest.json` | evidence fileのsha256一覧。self-hash不可能性のためmanifest自身は対象外 |
 
 `validate:product` は証跡を生成するだけで、製品完成claimを解禁しない。P13のowner GOまでは `public_claim_allowed=false` を維持する。

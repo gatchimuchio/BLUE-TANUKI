@@ -23,6 +23,8 @@ export {
   type WebChatHistoryReplayFilter,
   type WebChatHistorySnapshot,
   type WebChatHistorySurface,
+  type WebChatEvidenceControlContext,
+  type WebChatEvidenceSurface,
   type WebChatAboutSurface,
   type WebChatRecoverySurface,
   type WebChatOperatorSurface,

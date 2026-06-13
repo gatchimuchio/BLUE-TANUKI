@@ -22,81 +22,79 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P6 — Approval / Permission / Authority 閉包`.
+- The active instruction is `Phase P7 — Audit / Evidence 製品化`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P6 — Approval / Permission / Authority 閉包
+# Phase P7 — Audit / Evidence 製品化
 
 ## Objective
 
-Close the product-facing approval, permission, revoke, history, and owner emergency-stop paths while preserving HDS-BRAIN as the sole authority source. Approval UI and runtime control paths must allow stopping and revoking; they must not approve, classify risk, infer consent, or bypass final review.
+Make audit and evidence export product-facing and verifiable. Control Center must be able to export sanitized evidence packs with manifests, human-readable reports, retention, and secret redaction while preserving HDS-BRAIN as the sole authority source.
 
 ## Scope
 
-- Add owner-initiated emergency stop to the Control Center approval surface and WebChat approval API.
-- Block downstream execution while emergency stop is active without creating a second authority path.
-- Add reusable approval grant listing and revoke through the resume-token-gated approval surface.
-- Add sanitized approval history to the Approval UI.
-- Add explicit first-run / settings ApprovalMode selection that writes `BLUE_TANUKI_APPROVAL_MODE`.
-- Extend `validate:product -- --phase P6` with dynamic allow / ask / deny / revoke / emergency-stop checks.
+- Add a Control Center/WebChat evidence export surface for sanitized diagnostic evidence packs.
+- Add a shared evidence manifest writer and shared evidence redaction utility.
+- Export audit and complete-history evidence as digest/metadata-only summaries plus a human-readable report.
+- Add evidence retention policy for generated packs.
+- Extend `validate:product -- --phase P7` with evidence pack / redaction / retention checks.
 - Update tests and P-series docs.
 
 ## Non-Goals
 
-- Do not weaken `FINAL_REVIEW_OPERATION_LIST` or allow reusable grants to bypass L3 final review.
-- Do not move authority into Control Center, WebChat, settings, complete history, UI state, or approval history.
-- Do not implement external API live execution.
-- Do not change the default architecture claim `authority_model="owner_operated_full_access"`.
-- Do not add broad recovery/reset features; those remain P10.
+- Do not export raw command payloads, conversation content, rendered output, tokens, API keys, or credentials.
+- Do not make evidence packs authority, approval, risk classification, release GO, or final-review substitutes.
+- Do not run release validation or product validation from the normal runtime path.
+- Do not accept arbitrary filesystem paths from WebChat or UI for evidence export.
+- Do not implement restore / reset / rollback execution; those remain P10/P11.
 
 ## Inspect First
 
 ```bash
 git status --short
-rg -n "ApprovalMode|ApprovalLevel|approval|grant|revoke|emergency|resume|final_review|BLUE_TANUKI_APPROVAL_MODE|validate:product|P6" packages apps scripts docs
-rg -n "WebChatApprovalSurface|pendingApprovals|buildApprovalRuntime|evaluateApproval|FINAL_REVIEW_OPERATION_LIST|setupConfigToEnv|applySettingsPatch" packages/channel-webchat packages/hds-brain apps/gateway scripts
+rg -n "audit|evidence|redact|redaction|retention|export|evidence pack|validate:product|P7|secret|payload_hash|payload_digest|complete_history" packages apps scripts docs
+rg -n "WebChatHistorySurface|auditDumpReportFromLog|formatAuditTextReport|writeEvidenceManifest|redactEvidence|CompleteHistoryStore|/evidence/export" packages/channel-webchat packages/hds-brain apps/gateway scripts
 ```
 
 ## Implementation Requirements
 
-- Emergency stop must be owner-initiated through the resume-token-gated approval control path.
-- Emergency stop must fail closed by blocking downstream execution and pending approval execution while active.
-- Revoke must remove only revocable human grants; system grants remain visible and non-revocable.
-- Approval history returned to the UI must be sanitized metadata and digests only, not raw command payloads or content.
-- ApprovalMode settings must be explicit in setup/settings and persist to `BLUE_TANUKI_APPROVAL_MODE`.
-- `validate:product -- --phase P6` must include dynamic allow, ask, deny, revoke, emergency-stop, and final-review non-bypass checks.
+- Evidence export must be a diagnostic path and must not import or run `scripts/validate_product.ts` from runtime.
+- Evidence export must not accept a request-supplied output path.
+- Evidence pack files must include a sha256 manifest, digest-only audit summary, digest-only complete-history summary, and human-readable report.
+- Secret redaction must be shared between product validation logs and evidence pack export.
+- Retention must bound generated evidence pack count.
+- `validate:product -- --phase P7` must verify export, manifest, report, retention, redaction, and non-authority flags.
 
 ## Safety Requirements
 
 - HDS-BRAIN remains the only authority source.
-- UI state, WebChat route state, approval history, complete history, and emergency-stop metadata remain non-authority.
-- Emergency stop can block execution but cannot approve, execute, classify risk, infer consent, or rewrite policy.
-- Full access and reusable grants cannot bypass L3 final review.
-- Unknown, high-risk, approval/policy/history updates, and external write operations remain final-review gated.
+- Evidence pack metadata, UI state, audit views, complete history, and validation output remain non-authority.
+- Evidence export cannot approve, execute, classify risk, infer consent, rewrite policy, or release public claims.
+- Raw payloads, rendered output, command content, tokens, API keys, and secret values must not be serialized into UI/API/export evidence.
+- Audit hash-chain and complete-history verification must remain externally inspectable.
 
 ## Operator Usability Requirements
 
-- The Approval screen must show pending approvals, reusable grants, revoke controls, approval history, and emergency-stop status in one place.
-- Emergency stop activation and clearing must be explicit actions, not implicit toggles.
-- ApprovalMode selection must be visible in settings and first-run config.
-- Revoked grants must disappear from the grants list and subsequent evaluations must return to ask/deny behavior.
+- The Control Center Developer / Evidence screen must expose evidence export status and generated pack metadata.
+- Evidence export results must show pack path, manifest files, audit chain validity, complete-history chain validity, redaction status, and authority flag.
+- Failure output must tell the operator whether redaction, audit chain, complete-history chain, or export failed.
 
 ## Audit Requirements
 
-- Emergency-stop activation, clearing, blocking, and grant revoke must append authority/audit evidence without making the event authority.
-- Approval history projected to the UI must keep `used_for_authority=false`.
-- Evidence source class for the P6 product check is `INTERNAL_STATE` / `LIVE_RUNTIME` / `FIXTURE`.
+- Evidence export request/export events must append audit evidence without making the event authority.
+- Evidence summaries must keep `used_for_authority=false` and `complete_history_used_for_authority=false`.
+- Evidence source class for the P7 product check is `LIVE_RUNTIME` / `INTERNAL_STATE` / `EXTERNAL_EVIDENCE` / `FIXTURE`.
 
 ## Tests
 
-- WebChat tests must cover resume-token-gated grants/history/emergency-stop endpoints.
-- Setup/settings tests must cover ApprovalMode round-trip and settings save.
-- Product validation must cover allow, ask, deny, revoke, emergency stop, and final-review non-bypass.
-- Existing approval policy tests must remain green.
+- WebChat tests must cover token-gated `/evidence/export` and method rejection.
+- Evidence pack tests must cover manifest, report, redaction, retention, and non-authority flags.
+- Product validation must cover P7 evidence pack export and redaction.
+- Existing audit, history, approval, and product validation tests must remain green.
 
 ## Docs
 
@@ -115,21 +113,21 @@ pnpm docs:check
 pnpm validate:repo-health
 pnpm validate:packaging
 pnpm validate:ga
-pnpm validate:product -- --phase P6 --evidence .codex-tmp/validate-product-p6-approval-authority-local
+pnpm validate:product -- --phase P7 --evidence .codex-tmp/validate-product-p7-audit-evidence-local
 ```
 
 ## Manual Smoke
 
-Open Control Center, load the Approval screen with the resume token, confirm pending approvals, grants, history, emergency stop activation, and emergency stop clearing are visible and token-gated. Do not use emergency stop to claim HDS authority; it is a fail-closed runtime control.
+Open Control Center, use the Developer / Evidence screen with the WebChat token, export evidence, confirm pack path, manifest files, audit chain status, complete-history status, redaction status, and display-only authority status are visible. Do not treat evidence export as release GO or authority.
 
 ## Permanent-Use Check
 
-The owner can understand and operate approval state, revoke remembered permissions, select approval mode, and trigger an immediate stop without weakening final review or moving authority into UI state.
+The owner can export evidence from the GUI, inspect a human-readable report, verify digest-only summaries, and keep generated packs bounded by retention without exposing raw payloads or credentials.
 
 ## Acceptance Criteria
 
 - Local validation passes.
-- `validate:product -- --phase P6` passes on Linux.
+- `validate:product -- --phase P7` passes on Linux.
 - Release claim remains pre-GO with `public_claim_allowed=false`.
 
 ## Final Report Format
