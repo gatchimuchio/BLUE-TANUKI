@@ -57,6 +57,7 @@ describe("settings surface", () => {
         WEBCHAT_TOKEN: "webchat-token-123456",
         WEBCHAT_RESUME_TOKEN: "resume-token-123456",
         BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
+        BLUE_TANUKI_APPROVAL_MODE: "remember_this_decision",
         BLUE_TANUKI_FILE_ROOT: "sandbox",
         BLUE_TANUKI_SESSION_DIR: "sessions",
         BLUE_TANUKI_AUDIT_DIR: "audit",
@@ -64,6 +65,11 @@ describe("settings surface", () => {
       runtime(),
     );
     expect(snapshot.llm.provider).toBe("openai-compatible");
+    expect(snapshot.approval).toMatchObject({
+      mode: "remember_this_decision",
+      final_review_remains_required: true,
+      used_for_authority: false,
+    });
     expect(snapshot.llm.api_key_set).toBe(true);
     expect(snapshot.llm.secret_storage).toMatchObject({
       configured_key: "OPENAI_COMPAT_API_KEY",
@@ -107,6 +113,7 @@ describe("settings surface", () => {
             dry_run: "true",
           },
           webchat: { host: "127.0.0.1", port: "8877" },
+          approval: { mode: "ask_every_time" },
           paths: { file_root: path.join(dir, "files") },
         },
         { BLUE_TANUKI_ENV_FILE: envFile },
@@ -130,6 +137,7 @@ describe("settings surface", () => {
       expect(raw).toContain("COMPOSIO_ALLOWED_TOOLKITS=github,gmail");
       expect(raw).toContain("COMPOSIO_DRY_RUN=true");
       expect(raw).toContain("WEBCHAT_PORT=8877");
+      expect(raw).toContain("BLUE_TANUKI_APPROVAL_MODE=ask_every_time");
       const backupRaw = await fs.readFile(result.backup_path!, "utf8");
       expect(backupRaw).toContain("LLM_BACKEND=stub");
     } finally {

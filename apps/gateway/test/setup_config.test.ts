@@ -20,6 +20,7 @@ describe("setup_config", () => {
 
     const env = setupConfigToEnv(config);
     expect(env.LLM_BACKEND).toBe("stub");
+    expect(env.BLUE_TANUKI_APPROVAL_MODE).toBe("full_access");
     expect(env.BLUE_TANUKI_FILE_ROOT).toBe(path.resolve("local-data", "files"));
     expect(env.WEBCHAT_TOKEN).toBe(config.webchat.token);
     expect(env.BLUE_TANUKI_SETTINGS_TOKEN).toBe(config.settings.token);
@@ -48,6 +49,26 @@ describe("setup_config", () => {
     expect(file).toContain("OPENAI_COMPAT_ENDPOINT=http://localhost:11434/v1");
     expect(file).toContain("WEBCHAT_RESUME_TOKEN=");
     expect(file).toContain("BLUE_TANUKI_SETTINGS_TOKEN=");
+    expect(file).toContain("BLUE_TANUKI_APPROVAL_MODE=full_access");
+  });
+
+  it("round-trips explicit first-run approval mode", () => {
+    const config = createDefaultSetupConfig();
+    config.approval.mode = "ask_every_time";
+
+    const env = setupConfigToEnv(config);
+    expect(env.BLUE_TANUKI_APPROVAL_MODE).toBe("ask_every_time");
+
+    const parsed = setupConfigFromEnv({
+      BLUE_TANUKI_APPROVAL_MODE: "remember_this_decision",
+      WEBCHAT_TOKEN: "webchat-token-123456",
+      WEBCHAT_RESUME_TOKEN: "resume-token-123456",
+      BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
+    });
+    expect(parsed.approval.mode).toBe("remember_this_decision");
+
+    config.approval.mode = "invalid" as never;
+    expect(() => validateSetupConfig(config)).toThrow(/approval.mode/);
   });
 
   it("renders OpenRouter and Composio settings into runtime env", () => {

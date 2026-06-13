@@ -106,6 +106,18 @@ function normalizeProvider(value: string): SetupProviderKind {
   throw new Error("provider must be stub | anthropic | openai | openai-compatible | openrouter");
 }
 
+function normalizeApprovalMode(value: string): BlueTanukiSetupConfig["approval"]["mode"] {
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "ask_every_time" ||
+    normalized === "remember_this_decision" ||
+    normalized === "full_access"
+  ) {
+    return normalized;
+  }
+  throw new Error("approval.mode must be ask_every_time | remember_this_decision | full_access");
+}
+
 export function applySettingsPatch(
   config: BlueTanukiSetupConfig,
   body: Record<string, unknown>,
@@ -130,6 +142,11 @@ export function applySettingsPatch(
     if (maxTokens !== undefined) config.llm.max_tokens = maxTokens;
     const timeoutMs = optionalIntField(llm, "timeout_ms");
     if (timeoutMs !== undefined) config.llm.timeout_ms = timeoutMs;
+  }
+  if (isRecord(body.approval)) {
+    const approval = body.approval;
+    const mode = optionalStringField(approval, "mode");
+    if (mode !== undefined) config.approval.mode = normalizeApprovalMode(mode);
   }
   if (isRecord(body.webchat)) {
     const webchat = body.webchat;

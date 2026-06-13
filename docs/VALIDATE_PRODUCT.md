@@ -12,6 +12,7 @@ pnpm validate:product -- --phase P2
 pnpm validate:product -- --phase P3
 pnpm validate:product -- --phase P4
 pnpm validate:product -- --phase P5
+pnpm validate:product -- --phase P6
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -75,6 +76,12 @@ only console output.
 |---|---|---|
 | `p5.llm_resilience_health` | `INTERNAL_STATE` / `FIXTURE` | LLM registryのretry、明示fallback、typed provider error分類、health snapshot、LLM API key secret-ref round trip、LLM output/provider metadata/health metadata/secret metadataのnon-authority境界をfixtureで検証する。owner資格情報を使うlive LLM smokeとWindows実機DPAPI証跡は後続証跡として残る |
 
+## P6 Checks
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p6.approval_authority_controls` | `INTERNAL_STATE` / `LIVE_RUNTIME` / `FIXTURE` | Approval Gateのallow / ask / deny / remembered grant / revoke / L3 final-review non-bypassを動的評価し、WebChat approval APIをloopback上で起動してresume-token必須性、grant revoke、approval historyのnon-authority flag、owner emergency stop activate/clear、emergency stop中のdownstream execution block fixtureを検証する |
+
 ## Incremental Registration
 
 | 追加Phase | 検査項目 |
@@ -83,7 +90,7 @@ only console output.
 | P3 | package:windows verify / smoke:windows-installed（win環境） / install→常駐→stop/restart/logs→uninstall往復 |
 | P4 | Control Center操作スモーク（API経由） |
 | P5 | LLM resilience health fixture / LLM secret-ref fixture / live LLM smoke（owner資格情報、opt-in→P13でrequired化） / 鍵保護検査 |
-| P6 | approval allow・ask・deny・revoke・emergency stopの動的検証 |
+| P6 | approval allow・ask・deny・remembered grant・revoke・emergency stop・L3 final-review non-bypassの動的検証 |
 | P7 | evidence pack内容検査＋secret redaction検査 |
 | P8 | composio dry-run整合（live解放後はlive監査整合） |
 | P10 | backup→破壊→restore往復 |

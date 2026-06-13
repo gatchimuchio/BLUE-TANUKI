@@ -843,6 +843,11 @@ export function renderControlCenterHtml(): string {
             <input id="settings-site-url" type="text" autocomplete="off" placeholder="OpenRouter site URL" />
             <input id="settings-app-title" type="text" autocomplete="off" placeholder="OpenRouter app title" />
             <input id="settings-max-tokens" type="number" min="1" step="1" placeholder="max tokens" />
+            <select id="settings-approval-mode" aria-label="Approval mode">
+              <option value="ask_every_time">ask_every_time</option>
+              <option value="remember_this_decision">remember_this_decision</option>
+              <option value="full_access">full_access</option>
+            </select>
           </div>
           <div class="action-row">
             <button id="load-settings" class="primary" type="button">Load Settings</button>
@@ -854,6 +859,7 @@ export function renderControlCenterHtml(): string {
             <div class="metric"><span>Model</span><span id="settings-model-status">not loaded</span></div>
             <div class="metric"><span>Writable</span><span id="settings-writable-status">not loaded</span></div>
             <div class="metric"><span>LLM key</span><span id="settings-key-status">not loaded</span></div>
+            <div class="metric"><span>Approval mode</span><span id="settings-approval-mode-status">not loaded</span></div>
             <div class="metric"><span>OpenRouter</span><span id="settings-openrouter-status">not loaded</span></div>
             <div class="metric"><span>Verify</span><span id="settings-verify-status">not run</span></div>
           </div>
@@ -968,10 +974,22 @@ export function renderControlCenterHtml(): string {
             <div class="metric"><span>Final Review</span><span id="approval-final-review-count">not loaded</span></div>
             <div class="metric"><span>ApprovalLevel</span><span id="approval-level-scope">not loaded</span></div>
             <div class="metric"><span>Token expiry</span><span id="approval-token-expiry">not loaded</span></div>
+            <div class="metric"><span>Emergency stop</span><span id="approval-emergency-status">not loaded</span></div>
+            <div class="metric"><span>Reusable grants</span><span id="approval-grant-count">not loaded</span></div>
+            <div class="metric"><span>History</span><span id="approval-history-count">not loaded</span></div>
           </div>
           <input id="approval-token" type="password" autocomplete="off" placeholder="resume token" />
-          <button id="load-approvals" class="primary">Load</button>
+          <input id="approval-emergency-reason" type="text" autocomplete="off" placeholder="emergency stop reason" />
+          <div class="action-row">
+            <button id="load-approvals" class="primary">Load</button>
+            <button id="activate-emergency-stop" class="danger" type="button">Emergency Stop</button>
+            <button id="clear-emergency-stop" type="button">Clear Stop</button>
+          </div>
           <div id="approval-list" class="queue-list"></div>
+          <h2>Reusable Grants</h2>
+          <div id="approval-grant-list" class="queue-list"></div>
+          <h2>Approval History</h2>
+          <div id="approval-history-list" class="history-list"></div>
         </section>
 
         <section class="card" data-screen-group="tasks">
@@ -1386,7 +1404,10 @@ export function renderControlCenterHtml(): string {
       }
 
       function renderApprovals(body) {
-        const pending = Array.isArray(body.pending) ? body.pending : [];
+        const pending = Array.isArray(body.pending_approvals) ? body.pending_approvals : Array.isArray(body.pending) ? body.pending : [];
+        const grants = Array.isArray(body.grants) ? body.grants : [];
+        const approvalHistory = Array.isArray(body.approval_history) ? body.approval_history : [];
+        const emergencyStop = body.emergency_stop || null;
         const finalReviewCount = pending.filter((item) => item.final_review_required).length;
         const levels = Array.from(new Set(pending.map((item) => item.approval_level || "unknown")));
         const expiries = pending
@@ -1400,7 +1421,13 @@ export function renderControlCenterHtml(): string {
         setText("approval-token-expiry", expiries.length > 0 ? formatDate(expiries[0]) : "not set");
         setText("approval-summary", String(pending.length) + " pending");
         byId("approval-summary").className = "badge " + (pending.length > 0 ? "review" : "good");
+        setText("approval-emergency-status", emergencyStop && emergencyStop.active ? "active" : "clear");
+        byId("approval-emergency-status").className = "badge " + (emergencyStop && emergencyStop.active ? "bad" : "good");
+        setText("approval-grant-count", grants.length);
+        setText("approval-history-count", approvalHistory.length);
         state.approvalTokens = Object.create(null);
+        renderApprovalGrants(grants);
+        renderApprovalHistory(approvalHistory);
 
         if (pending.length === 0) {
           setHtml("approval-list", '<div class="queue-item muted">no pending approvals</div>');
@@ -1435,6 +1462,83 @@ export function renderControlCenterHtml(): string {
                 '<button class="danger" data-verdict="block" data-command="' + escapeHtml(item.command_id || "") + '">Block</button>' +
                 '</div>' +
                 '</article>';
+            })
+            .join("")
+        );
+      }
+
+      function renderApprovalGrants(grants) {
+        if (!Array.isArray(grants) || grants.length === 0) {
+          setHtml("approval-grant-list", '<div class="queue-item muted">no reusable grants</div>');
+          return;
+        }
+        setHtml(
+          "approval-grant-list",
+          grants
+            .map(function (grant) {
+              const revocable = grant.revocable === true;
+              const revokeButton = revocable
+                ? '<button class="danger" data-revoke-grant="' + escapeHtml(grant.id || "") + '">Revoke</button>'
+                : badge("system", "good");
+              const fields = [
+                ["id", grant.id || "unknown"],
+                ["mode", grant.mode || "unknown"],
+                ["decision", grant.decision || "unknown"],
+                ["operation", grant.operation || "unknown"],
+                ["scope", grant.target_scope || "unknown"],
+                ["target", grant.target || grant.path_pattern || grant.channel || "any"],
+                ["risk", grant.risk || "unknown"],
+                ["actor", grant.actor || "unknown"],
+                ["created_by", grant.created_by || "unknown"],
+                ["expires", formatDate(grant.expires_at)]
+              ];
+              return '<article class="queue-item">' +
+                '<div class="row"><h3>' + escapeHtml(grant.operation || "approval grant") + '</h3><span>' + (revocable ? badge("revocable", "review") : badge("fixed", "good")) + '</span></div>' +
+                '<dl class="kv">' +
+                fields
+                  .map(function (field) {
+                    return '<dt>' + escapeHtml(field[0]) + '</dt><dd>' + escapeHtml(field[1]) + '</dd>';
+                  })
+                  .join("") +
+                '</dl><div class="action-row">' + revokeButton + '</div></article>';
+            })
+            .join("")
+        );
+      }
+
+      function renderApprovalHistory(history) {
+        if (!Array.isArray(history) || history.length === 0) {
+          setHtml("approval-history-list", '<div class="history-item muted">no approval history</div>');
+          return;
+        }
+        setHtml(
+          "approval-history-list",
+          history
+            .slice(-12)
+            .reverse()
+            .map(function (entry) {
+              const fields = [
+                ["event", entry.event || "unknown"],
+                ["request", entry.request_id || "none"],
+                ["command", entry.command_id || "none"],
+                ["grant", entry.grant_id || "none"],
+                ["actor", entry.actor || "unknown"],
+                ["decision", entry.decision || "none"],
+                ["operation", entry.operation || "none"],
+                ["risk", entry.risk || "none"],
+                ["ApprovalLevel", entry.approval_level || "none"],
+                ["reason", entry.reason || "none"],
+                ["payload", entry.payload_digest || "not recorded"],
+                ["authority", entry.used_for_authority === false ? "false" : "unsafe"],
+                ["time", formatDate(entry.timestamp)]
+              ];
+              return '<article class="history-item"><dl class="kv">' +
+                fields
+                  .map(function (field) {
+                    return '<dt>' + escapeHtml(field[0]) + '</dt><dd>' + escapeHtml(field[1]) + '</dd>';
+                  })
+                  .join("") +
+                '</dl></article>';
             })
             .join("")
         );
@@ -1607,10 +1711,12 @@ export function renderControlCenterHtml(): string {
         byId("settings-site-url").value = llm.site_url || "";
         byId("settings-app-title").value = llm.app_title || "";
         byId("settings-max-tokens").value = llm.max_tokens || "";
+        byId("settings-approval-mode").value = (snapshot.approval && snapshot.approval.mode) || "full_access";
         setText("settings-provider-status", llm.provider || "stub");
         setText("settings-model-status", llm.model || "(provider default)");
         setText("settings-writable-status", snapshot.writable ? "writable" : "read only");
         setText("settings-key-status", llm.api_key_set ? "set" : "missing");
+        setText("settings-approval-mode-status", (snapshot.approval && snapshot.approval.mode) || "full_access");
         setText("settings-openrouter-status", openrouter.configured ? "configured" : "not configured");
         setText("settings-json", compactJson(redactRuntimeValue(snapshot)));
         byId("composio-api-key").value = "";
@@ -1688,7 +1794,7 @@ export function renderControlCenterHtml(): string {
         };
         const apiKey = byId("settings-api-key").value.trim();
         if (apiKey) llm.api_key = apiKey;
-        return { llm };
+        return { llm, approval: { mode: byId("settings-approval-mode").value } };
       }
 
       function connectorsPayload() {
@@ -1874,6 +1980,42 @@ export function renderControlCenterHtml(): string {
         await loadApprovals();
       }
 
+      async function revokeApprovalGrant(grantId) {
+        const token = byId("approval-token").value.trim();
+        const reason = byId("approval-emergency-reason").value.trim() || "operator revoked reusable grant";
+        const response = await fetch("/approval/grants/" + encodeURIComponent(grantId) + "/revoke", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...authHeaders(token)
+          },
+          body: JSON.stringify({ actor: "webchat-human", reason: reason })
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error("grant revoke failed: HTTP " + response.status + " " + text);
+        }
+        await loadApprovals();
+      }
+
+      async function setEmergencyStop(action) {
+        const token = byId("approval-token").value.trim();
+        const reason = byId("approval-emergency-reason").value.trim() || (action === "activate" ? "owner emergency stop" : "owner emergency stop cleared");
+        const response = await fetch("/approval/emergency-stop", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...authHeaders(token)
+          },
+          body: JSON.stringify({ action: action, actor: "webchat-human", reason: reason })
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error("emergency stop failed: HTTP " + response.status + " " + text);
+        }
+        await loadApprovals();
+      }
+
       async function loadAuditText() {
         const token = byId("audit-token").value.trim();
         state.auditToken = token;
@@ -1953,6 +2095,18 @@ export function renderControlCenterHtml(): string {
           return;
         }
         const verdict = target.dataset.verdict;
+        const revokeGrantId = target.dataset.revokeGrant;
+        if (revokeGrantId) {
+          target.disabled = true;
+          try {
+            await revokeApprovalGrant(revokeGrantId);
+          } catch (error) {
+            alert(error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
         if (!verdict) return;
         target.disabled = true;
         try {
@@ -1968,6 +2122,16 @@ export function renderControlCenterHtml(): string {
       byId("load-runtime").addEventListener("click", loadRuntime);
       byId("load-notifications").addEventListener("click", loadNotifications);
       byId("load-approvals").addEventListener("click", loadApprovals);
+      byId("activate-emergency-stop").addEventListener("click", function () {
+        setEmergencyStop("activate").catch(function (error) {
+          alert(error.message);
+        });
+      });
+      byId("clear-emergency-stop").addEventListener("click", function () {
+        setEmergencyStop("clear").catch(function (error) {
+          alert(error.message);
+        });
+      });
       byId("load-audit").addEventListener("click", loadAuditText);
       byId("verify-audit").addEventListener("click", verifyAudit);
       byId("load-authority").addEventListener("click", loadAuthorityTrace);

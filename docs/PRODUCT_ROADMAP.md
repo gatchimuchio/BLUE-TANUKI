@@ -155,13 +155,11 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 - ApprovalMode = **ask_every_time / remember_this_decision / full_access**（既定: full_access）
 - v1ロードマップの「L1=毎回確認／L2=条件付き恒久承認」はModeの記述でありLevelではない。混同禁止。
 
-現状（実測）: **コアdone**。5軸policy（operation×scope×risk×actor×capabilities）、final-review境界（FINAL_REVIEW_OPERATION_LIST）、AuthorityTransparencyTrace、approval bypass検出テスト、composio metadata権限非昇格テスト、CC上のApproval Queue / Policy / Model / Authority Trace / Audit panel。自動SUSPEND（fail-safe 6条件、human resume不可）も既存。
+現状（実測）: **実装done（Linux fixture / live route evidence）**。5軸policy（operation×scope×risk×actor×capabilities）、final-review境界（FINAL_REVIEW_OPERATION_LIST）、AuthorityTransparencyTrace、approval bypass検出テスト、composio metadata権限非昇格テスト、CC上のApproval Queue / Policy / Model / Authority Trace / Audit panel。自動SUSPEND（fail-safe 6条件、human resume不可）に加えて、Control Center Approvals上のowner emergency stop、resume-token-gated grant revoke、sanitized approval history、settings / first-run ApprovalMode選択、`validate:product` P6動的checkを追加済み。
 
 残差:
-- **owner起動のemergency stop**（人為的即時停止導線。実測で不在——既存SUSPENDは自動発火のみ）
-- grant取消（revoke）と権限履歴のGUI完結性の確認・補完
-- D5反映: first-runでのmode明示選択
-- approval bypass不能の動的検証をvalidate:productへ（P2と連動）
+- Windows実機でのControl Center approval/emergency-stop手動証跡
+- P8 live外部実行解放前に、P6 `validate:product` PASSを前提条件として再確認
 
 完了条件: 許可・拒否・取消・履歴・緊急停止がGUIで完結。HDS-BRAIN以外がauthority sourceにならないことを動的実証。
 
@@ -312,7 +310,7 @@ P12 → P13
 | P3 | Windows導入 | 実装大部分done | Windows CI evidence確認・GO前owner実機E2E |
 | P4 | Control Center | partial高 | Backup/Restore実行・Update・実機品質 |
 | P5 | LLM実運用 | partial高 | Windows実機DPAPI証跡・Linux/macOS keychain・live証跡 |
-| P6 | Authority閉包 | コアdone | emergency stop・revoke GUI・mode初回選択 |
+| P6 | Authority閉包 | 実装done | Windows実機GUI証跡 |
 | P7 | Audit製品化 | partial | 横断redaction・可読report・retention・evidence GUI |
 | P8 | Composio閉包 | dry-run done | allowlist/scope/revoke・live解放（P6前提） |
 | P9 | Channel/Operator整理 | チャネルdone | operator三点一致・plugin面宣言 |

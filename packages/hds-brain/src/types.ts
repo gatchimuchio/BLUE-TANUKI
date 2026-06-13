@@ -215,7 +215,11 @@ export type AuthorityEventKind =
   | "grant_created"
   | "grant_used"
   | "grant_revoked"
+  | "grant_revoke_failed"
   | "grant_expired"
+  | "emergency_stop_activated"
+  | "emergency_stop_cleared"
+  | "emergency_stop_blocked"
   | "approval_asked"
   | "approval_allowed"
   | "approval_denied";

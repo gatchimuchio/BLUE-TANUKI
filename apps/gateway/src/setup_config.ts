@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
+import type { ApprovalMode } from "@blue-tanuki/hds-brain";
 
 export type SetupProviderKind =
   | "stub"
@@ -39,6 +40,9 @@ export interface SetupPathConfig {
 export interface BlueTanukiSetupConfig {
   schema_version: 1;
   llm: SetupLlmConfig;
+  approval: {
+    mode: ApprovalMode;
+  };
   composio: {
     api_key?: string;
     allowed_toolkits?: string;
@@ -80,6 +84,20 @@ function normalizeProvider(provider: string): SetupProviderKind {
   }
   throw new Error(
     "llm.provider must be one of stub | anthropic | openai | openai-compatible | openrouter",
+  );
+}
+
+function normalizeApprovalMode(mode: string): ApprovalMode {
+  const normalized = mode.trim().toLowerCase();
+  if (
+    normalized === "ask_every_time" ||
+    normalized === "remember_this_decision" ||
+    normalized === "full_access"
+  ) {
+    return normalized;
+  }
+  throw new Error(
+    "approval.mode must be one of ask_every_time | remember_this_decision | full_access",
   );
 }
 
@@ -142,6 +160,9 @@ export function createDefaultSetupConfig(
     llm: {
       provider: "stub",
     },
+    approval: {
+      mode: "full_access",
+    },
     composio: {
       dry_run: true,
     },
@@ -174,6 +195,8 @@ export function validateSetupConfig(
 
   const provider = normalizeProvider(config.llm.provider);
   config.llm.provider = provider;
+  config.approval ??= { mode: "full_access" };
+  config.approval.mode = normalizeApprovalMode(config.approval.mode);
   config.composio ??= { dry_run: true };
   config.composio.dry_run = config.composio.dry_run !== false;
   validateOptionalTemperature(config.llm.temperature);
@@ -302,6 +325,9 @@ export function setupConfigFromEnv(
   config.llm.temperature = parseOptionalNumber(env.BLUE_TANUKI_LLM_TEMPERATURE);
   config.llm.max_tokens = parseOptionalInt(env.BLUE_TANUKI_LLM_MAX_TOKENS);
   config.llm.timeout_ms = parseOptionalInt(env.BLUE_TANUKI_LLM_TIMEOUT_MS);
+  config.approval.mode = normalizeApprovalMode(
+    env.BLUE_TANUKI_APPROVAL_MODE ?? config.approval.mode,
+  );
 
   config.webchat.host = env.WEBCHAT_HOST ?? "127.0.0.1";
   config.webchat.port = parseOptionalInt(env.WEBCHAT_PORT) ?? 8787;
@@ -345,6 +371,7 @@ export function setupConfigToEnv(
     BLUE_TANUKI_SESSION_DIR: path.resolve(config.paths.session_dir),
     BLUE_TANUKI_AUDIT_DIR: path.resolve(config.paths.audit_dir),
     LLM_BACKEND: config.llm.provider,
+    BLUE_TANUKI_APPROVAL_MODE: config.approval.mode,
   };
 
   if (config.llm.provider === "stub") {
@@ -447,6 +474,7 @@ export function renderSetupEnvFile(
     "BLUE_TANUKI_LLM_TEMPERATURE",
     "BLUE_TANUKI_LLM_MAX_TOKENS",
     "BLUE_TANUKI_LLM_TIMEOUT_MS",
+    "BLUE_TANUKI_APPROVAL_MODE",
     "WEBCHAT_HOST",
     "WEBCHAT_PORT",
     "WEBCHAT_TOKEN",

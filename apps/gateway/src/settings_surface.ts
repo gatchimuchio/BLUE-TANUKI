@@ -34,6 +34,11 @@ export interface SettingsSnapshot {
   schema_version: 1;
   env_file: string | null;
   writable: boolean;
+  approval: {
+    mode: ReturnType<typeof setupConfigFromEnv>["approval"]["mode"];
+    final_review_remains_required: true;
+    used_for_authority: false;
+  };
   llm: {
     provider: SetupProviderKind;
     model: string | null;
@@ -165,6 +170,11 @@ export function buildSettingsSnapshot(
     schema_version: 1,
     env_file: envFilePath(env) ?? null,
     writable: Boolean(envFilePath(env)),
+    approval: {
+      mode: config.approval.mode,
+      final_review_remains_required: true,
+      used_for_authority: false,
+    },
     llm: {
       provider: config.llm.provider,
       model: config.llm.model ?? null,
@@ -538,6 +548,13 @@ export function renderSettingsHtml(): string {
             <label>OpenRouter app title
               <input id="llm-app-title" autocomplete="off">
             </label>
+            <label>Approval mode
+              <select id="approval-mode">
+                <option value="ask_every_time">ask_every_time</option>
+                <option value="remember_this_decision">remember_this_decision</option>
+                <option value="full_access">full_access</option>
+              </select>
+            </label>
           </div>
         </section>
         <section id="tab-connections">
@@ -615,6 +632,7 @@ export function renderSettingsHtml(): string {
       timeoutMs: document.querySelector("#llm-timeout-ms"),
       siteUrl: document.querySelector("#llm-site-url"),
       appTitle: document.querySelector("#llm-app-title"),
+      approvalMode: document.querySelector("#approval-mode"),
       composioApiKey: document.querySelector("#composio-api-key"),
       composioAllowedToolkits: document.querySelector("#composio-allowed-toolkits"),
       composioDryRun: document.querySelector("#composio-dry-run"),
@@ -673,6 +691,7 @@ export function renderSettingsHtml(): string {
       fields.timeoutMs.value = snapshot.llm.timeout_ms ?? "";
       fields.siteUrl.value = snapshot.llm.site_url || "";
       fields.appTitle.value = snapshot.llm.app_title || "";
+      fields.approvalMode.value = snapshot.approval?.mode || "full_access";
       fields.composioApiKey.value = "";
       fields.composioApiKey.placeholder = snapshot.integrations.composio.configured ? "configured" : "not set";
       fields.composioAllowedToolkits.value = snapshot.integrations.composio.allowed_toolkits.join(",");
@@ -740,6 +759,7 @@ export function renderSettingsHtml(): string {
       if (fields.composioApiKey.value.trim()) composio.api_key = fields.composioApiKey.value.trim();
       return {
         llm,
+        approval: { mode: fields.approvalMode.value },
         composio,
         webchat: { host: fields.host.value, port: fields.port.value },
         paths: {

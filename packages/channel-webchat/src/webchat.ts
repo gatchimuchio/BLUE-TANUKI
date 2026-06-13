@@ -105,9 +105,80 @@ export interface WebChatApprovalQueueItem {
   authority_trace?: unknown;
 }
 
+export interface WebChatApprovalGrantItem {
+  id: string;
+  mode: string;
+  decision: string;
+  operation: string;
+  target_scope: string;
+  target?: string;
+  path_pattern?: string;
+  channel?: string;
+  risk: string;
+  actor: string;
+  created_by: string;
+  created_at: number;
+  expires_at: number | null;
+  revocable: boolean;
+  note?: string;
+}
+
+export interface WebChatApprovalHistoryItem {
+  index: number;
+  event: string;
+  request_id: string | null;
+  command_id: string | null;
+  grant_id?: string;
+  actor?: string;
+  decision?: string | null;
+  operation?: string | null;
+  risk?: string | null;
+  approval_level?: string | null;
+  final_review_required?: boolean;
+  reason?: string | null;
+  timestamp: number;
+  payload_digest: string;
+  used_for_authority: false;
+}
+
+export interface WebChatEmergencyStopSnapshot {
+  active: boolean;
+  activated_at: number | null;
+  activated_by: string | null;
+  reason: string | null;
+  cleared_at: number | null;
+  cleared_by: string | null;
+  clear_reason: string | null;
+  execution_blocked: boolean;
+  hds_brain_remains_authority: true;
+  used_for_authority: false;
+  evidence_source: readonly ("INTERNAL_STATE" | "LIVE_RUNTIME")[];
+}
+
+export interface WebChatApprovalControlContext {
+  actor: string;
+  token_kind: "resume";
+  reason?: string;
+}
+
 export interface WebChatApprovalSurface {
   /** Return pending human approval work for the local console. */
   list: () => Promise<readonly WebChatApprovalQueueItem[]>;
+  /** Return reusable approval grants, including non-revocable system grants. */
+  grants?: () => Promise<readonly WebChatApprovalGrantItem[]>;
+  /** Revoke a reusable human approval grant. */
+  revokeGrant?: (
+    grant_id: string,
+    context: WebChatApprovalControlContext,
+  ) => Promise<unknown>;
+  /** Return sanitized approval history metadata. */
+  history?: () => Promise<readonly WebChatApprovalHistoryItem[]>;
+  /** Return owner emergency-stop state. */
+  emergencyStop?: {
+    getSnapshot: () => Promise<WebChatEmergencyStopSnapshot>;
+    activate: (context: WebChatApprovalControlContext) => Promise<unknown>;
+    clear: (context: WebChatApprovalControlContext) => Promise<unknown>;
+  };
 }
 
 export interface WebChatAuditSurface {
@@ -376,6 +447,11 @@ const RESUME_GLOBAL_KEY = "*";
  *   POST /resume     body:{request_id, verdict, approval_token}  auth:Bearer  rate-limited (global)
  *   GET  /approval   auth:Bearer resume-token
  *   POST /approval/:id body:{verdict, approval_token} auth:Bearer resume-token
+ *   GET  /approval/grants auth:Bearer resume-token
+ *   POST /approval/grants/:id/revoke body:{actor?,reason?} auth:Bearer resume-token
+ *   GET  /approval/history auth:Bearer resume-token
+ *   GET  /approval/emergency-stop auth:Bearer resume-token
+ *   POST /approval/emergency-stop body:{action,actor?,reason?} auth:Bearer resume-token
  *   GET  /audit/dump auth:Bearer inbound-token
  *   GET  /authority/trace auth:Bearer inbound-token
  *   GET  /notifications auth:Bearer inbound-token
@@ -1032,11 +1108,139 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       const pending_approvals = await this.opts.approval.list();
+      const grants = this.opts.approval.grants
+        ? await this.opts.approval.grants()
+        : undefined;
+      const approval_history = this.opts.approval.history
+        ? await this.opts.approval.history()
+        : undefined;
+      const emergency_stop = this.opts.approval.emergencyStop
+        ? await this.opts.approval.emergencyStop.getSnapshot()
+        : undefined;
       res.writeHead(200, {
         "content-type": "application/json",
         "cache-control": "no-store",
       });
-      res.end(JSON.stringify({ pending_approvals }));
+      res.end(JSON.stringify({
+        pending_approvals,
+        ...(grants ? { grants } : {}),
+        ...(approval_history ? { approval_history } : {}),
+        ...(emergency_stop ? { emergency_stop } : {}),
+      }));
+      return;
+    }
+
+    if (url.pathname === "/approval/grants") {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.opts.approval?.grants) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "approval_grants_not_configured" }));
+        return;
+      }
+      const grants = await this.opts.approval.grants();
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify({ grants }));
+      return;
+    }
+
+    if (url.pathname.startsWith("/approval/grants/") && url.pathname.endsWith("/revoke")) {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.opts.approval?.revokeGrant) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "approval_revoke_not_configured" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res))
+        return;
+      const encoded = url.pathname.slice("/approval/grants/".length, -"/revoke".length);
+      const grant_id = decodeURIComponent(encoded);
+      if (!grant_id) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "grant_id required" }));
+        return;
+      }
+      const body = await readJson(req);
+      const result = await this.opts.approval.revokeGrant(
+        grant_id,
+        readApprovalControlContext(body),
+      );
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify({ ok: true, result }));
+      return;
+    }
+
+    if (url.pathname === "/approval/history") {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.opts.approval?.history) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "approval_history_not_configured" }));
+        return;
+      }
+      const approval_history = await this.opts.approval.history();
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify({ approval_history }));
+      return;
+    }
+
+    if (url.pathname === "/approval/emergency-stop") {
+      if (!this.opts.approval?.emergencyStop) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "emergency_stop_not_configured" }));
+        return;
+      }
+      if (req.method === "GET") {
+        const emergency_stop = await this.opts.approval.emergencyStop.getSnapshot();
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        });
+        res.end(JSON.stringify({ emergency_stop }));
+        return;
+      }
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res))
+        return;
+      const body = await readJson(req);
+      const action = body?.action;
+      if (action !== "activate" && action !== "clear") {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "action (activate|clear) required" }));
+        return;
+      }
+      const context = readApprovalControlContext(body);
+      const result = action === "activate"
+        ? await this.opts.approval.emergencyStop.activate(context)
+        : await this.opts.approval.emergencyStop.clear(context);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify({ ok: true, result }));
       return;
     }
 
@@ -1495,6 +1699,18 @@ function readResumeApprovalOptions(body: Record<string, unknown> | null): WebCha
   else if (typeof durationRaw === "string" && /^\d+$/.test(durationRaw)) duration_ms = Math.floor(Number(durationRaw));
   if (!remember && !mode && duration_ms === undefined) return undefined;
   return { remember, mode, duration_ms };
+}
+
+function readApprovalControlContext(body: Record<string, unknown> | null): WebChatApprovalControlContext {
+  const actor =
+    typeof body?.actor === "string" && body.actor.trim().length > 0
+      ? body.actor.trim()
+      : "webchat-human";
+  const reason =
+    typeof body?.reason === "string" && body.reason.trim().length > 0
+      ? body.reason.trim()
+      : undefined;
+  return { actor, token_kind: "resume", reason };
 }
 
 function readHistoryReplayFilter(url: URL): WebChatHistoryReplayFilter {

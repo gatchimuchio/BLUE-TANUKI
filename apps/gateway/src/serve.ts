@@ -8,6 +8,7 @@ import {
 } from "@blue-tanuki/hds-brain";
 import type {
   ApprovalEvaluation,
+  ApprovalGrant,
   CompleteHistoryAppendInput,
   CompleteHistoryEntry,
   CompleteHistoryKind,
@@ -44,6 +45,10 @@ import { parseInboundRequestAtBoundary } from "@blue-tanuki/protocol";
 import type {
   WebChatChannel,
   WebChatApprovalQueueItem,
+  WebChatApprovalGrantItem,
+  WebChatApprovalHistoryItem,
+  WebChatEmergencyStopSnapshot,
+  WebChatApprovalControlContext,
   WebChatAuthorityTraceItem,
   WebChatHistoryEntry,
   WebChatHistoryReplayFilter,
@@ -164,6 +169,16 @@ interface PendingApproval {
   evaluation: ApprovalEvaluation;
   approval_token?: string;
   approval_token_expires_at_ms?: number;
+}
+
+interface EmergencyStopState {
+  active: boolean;
+  activated_at: number | null;
+  activated_by: string | null;
+  reason: string | null;
+  cleared_at: number | null;
+  cleared_by: string | null;
+  clear_reason: string | null;
 }
 
 type OperatorSnapshot = Record<string, unknown>;
@@ -303,6 +318,15 @@ export async function serve(): Promise<ServeShutdown> {
   for (const tool of runtimeSchedules.tools()) tools.register(tool);
   const approval = buildApprovalRuntime(process.env);
   const pendingApprovals = new Map<string, PendingApproval>();
+  const emergencyStop: EmergencyStopState = {
+    active: false,
+    activated_at: null,
+    activated_by: null,
+    reason: null,
+    cleared_at: null,
+    cleared_by: null,
+    clear_reason: null,
+  };
   const router = new InboundRouter();
   const dispatcher = new OutboundDispatcher();
 
@@ -423,6 +447,115 @@ export async function serve(): Promise<ServeShutdown> {
     });
   }
 
+  function recordApprovalControlHistory(
+    event: string,
+    actor: string,
+    extra: Record<string, unknown> = {},
+  ): void {
+    recordCompleteHistory({
+      kind: "approval_history",
+      request_id: typeof extra.request_id === "string" ? extra.request_id : null,
+      command_id: typeof extra.command_id === "string" ? extra.command_id : null,
+      actor,
+      source: "approval_control",
+      timestamp: Date.now(),
+      payload: {
+        event,
+        final_review_required: false,
+        used_for_authority: false,
+        ...extra,
+      },
+    });
+  }
+
+  function emergencyStopSnapshot(): WebChatEmergencyStopSnapshot {
+    return {
+      active: emergencyStop.active,
+      activated_at: emergencyStop.activated_at,
+      activated_by: emergencyStop.activated_by,
+      reason: emergencyStop.reason,
+      cleared_at: emergencyStop.cleared_at,
+      cleared_by: emergencyStop.cleared_by,
+      clear_reason: emergencyStop.clear_reason,
+      execution_blocked: emergencyStop.active,
+      hds_brain_remains_authority: true,
+      used_for_authority: false,
+      evidence_source: ["INTERNAL_STATE", "LIVE_RUNTIME"],
+    };
+  }
+
+  function activateEmergencyStop(ctx: WebChatApprovalControlContext): WebChatEmergencyStopSnapshot {
+    emergencyStop.active = true;
+    emergencyStop.activated_at = Date.now();
+    emergencyStop.activated_by = ctx.actor;
+    emergencyStop.reason = ctx.reason ?? "owner emergency stop";
+    hds.onAuthorityEvent("emergency_stop_activated", {
+      actor: ctx.actor,
+      reason: emergencyStop.reason,
+    });
+    recordApprovalControlHistory("emergency_stop_activated", ctx.actor, {
+      reason: emergencyStop.reason,
+      token_kind: ctx.token_kind,
+      execution_blocked: true,
+    });
+    return emergencyStopSnapshot();
+  }
+
+  function clearEmergencyStop(ctx: WebChatApprovalControlContext): WebChatEmergencyStopSnapshot {
+    emergencyStop.active = false;
+    emergencyStop.cleared_at = Date.now();
+    emergencyStop.cleared_by = ctx.actor;
+    emergencyStop.clear_reason = ctx.reason ?? "owner emergency stop cleared";
+    hds.onAuthorityEvent("emergency_stop_cleared", {
+      actor: ctx.actor,
+      reason: emergencyStop.clear_reason,
+    });
+    recordApprovalControlHistory("emergency_stop_cleared", ctx.actor, {
+      reason: emergencyStop.clear_reason,
+      token_kind: ctx.token_kind,
+      execution_blocked: false,
+    });
+    return emergencyStopSnapshot();
+  }
+
+  function approvalGrantsSnapshot(): WebChatApprovalGrantItem[] {
+    return approval.listGrants().map(projectApprovalGrant);
+  }
+
+  function revokeApprovalGrant(grant_id: string, ctx: WebChatApprovalControlContext): {
+    grant_id: string;
+    revoked: boolean;
+    emergency_stop: WebChatEmergencyStopSnapshot;
+  } {
+    const before = approval.listGrants().find((grant) => grant.id === grant_id);
+    const revoked = approval.revoke(grant_id);
+    hds.onAuthorityEvent(revoked ? "grant_revoked" : "grant_revoke_failed", {
+      grant_id,
+      actor: ctx.actor,
+      reason: revoked
+        ? ctx.reason ?? `reusable approval grant revoked:${grant_id}`
+        : `grant revoke failed:${grant_id}`,
+    });
+    recordApprovalControlHistory("grant_revoked", ctx.actor, {
+      grant_id,
+      revoked,
+      mode: before?.mode ?? null,
+      decision: before?.decision ?? null,
+      operation: before?.operation ?? null,
+      risk: before?.risk ?? null,
+      reason: ctx.reason ?? null,
+      token_kind: ctx.token_kind,
+    });
+    return { grant_id, revoked, emergency_stop: emergencyStopSnapshot() };
+  }
+
+  function approvalHistorySnapshot(limit = 50): WebChatApprovalHistoryItem[] {
+    return completeHistory
+      .replay({ kind: "approval_history" })
+      .slice(-limit)
+      .map(projectApprovalHistoryEntry);
+  }
+
   function recordExecutionHistory(
     cmd: ExecuteCommand,
     log: DecisionLog,
@@ -495,6 +628,34 @@ export async function serve(): Promise<ServeShutdown> {
     opts: { skip_approval?: boolean; actor?: string } = {},
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
+    if (emergencyStop.active) {
+      hds.onAuthorityEvent("emergency_stop_blocked", {
+        request_id: log.request_id,
+        command_id: cmd.id,
+        actor,
+        reason: emergencyStop.reason ?? "owner emergency stop active",
+      });
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
+        actor,
+        reason: "emergency_stop_active",
+      });
+      recordApprovalHistory("emergency_stop_blocked", cmd, log, origin, actor, null, {
+        emergency_stop_active: true,
+        emergency_stop_reason: emergencyStop.reason,
+      });
+      await dispatcher.dispatch(
+        {
+          channel: origin.channel,
+          target: replyTarget(origin),
+          content: `[emergency-stop-active] command_id=${cmd.id} executed=false next_action=Clear emergency stop from Control Center approvals only after reviewing the stop reason.`,
+        },
+        {
+          command_id: `emergency-stop-blocked-${cmd.id}`,
+          upstream_commit_hash: log.commit.hash,
+        },
+      );
+      return { status: "emergency_stop_blocked" };
+    }
     const failureGate = failureMemory.evaluateCommandGate(cmd, {
       actor,
       channel: origin.channel,
@@ -608,6 +769,42 @@ export async function serve(): Promise<ServeShutdown> {
   async function resumePendingApproval(command_id: string, verdict: "approve" | "reject" | "block", ctx: WebChatResumeContext): Promise<unknown> {
     const pending = pendingApprovals.get(command_id);
     if (!pending) return null;
+    if (verdict === "approve" && emergencyStop.active) {
+      const issued = await webchat.issueResumeApprovalToken(command_id);
+      pendingApprovals.set(command_id, {
+        ...pending,
+        approval_token: issued?.token,
+        approval_token_expires_at_ms: issued?.expires_at_ms,
+      });
+      hds.onAuthorityEvent("emergency_stop_blocked", {
+        request_id: pending.log.request_id,
+        command_id,
+        actor: ctx.actor,
+        reason: emergencyStop.reason ?? "owner emergency stop active",
+      });
+      recordApprovalHistory("emergency_stop_blocked_approval", pending.command, pending.log, pending.origin, ctx.actor, pending.evaluation, {
+        verdict,
+        token_kind: ctx.token_kind,
+        approval_token_reissued: Boolean(issued?.token),
+        approval_token_expires_at_ms: issued?.expires_at_ms,
+        emergency_stop_reason: emergencyStop.reason,
+      });
+      await dispatcher.dispatch({
+        channel: pending.origin.channel,
+        target: replyTarget(pending.origin),
+        content: `[emergency-stop-active] command_id=${command_id} approval=approve executed=false pending=true next_action=Clear emergency stop only after reviewing the stop reason, then reload approvals for a fresh token.`,
+      }, {
+        command_id: `emergency-stop-approval-blocked-${command_id}`,
+        upstream_commit_hash: pending.log.commit.hash,
+      });
+      return {
+        approval: "approve",
+        executed: false,
+        status: "emergency_stop_active",
+        pending: true,
+        approval_token_reissued: Boolean(issued?.token),
+      };
+    }
     pendingApprovals.delete(command_id);
     if (verdict !== "approve") {
       runtimeSchedules.rejectPending(command_id, ctx.actor, `human_approval:${verdict}`);
@@ -684,6 +881,7 @@ export async function serve(): Promise<ServeShutdown> {
               pending_schedule_approvals_count: pendingScheduleApprovalsCount,
             }),
             hds: hdsSnapshot,
+            emergency_stop: emergencyStopSnapshot(),
             pending_approvals: pendingApprovals,
             scheduled_tasks: scheduledTasks,
             operator_surfaces: {
@@ -703,6 +901,17 @@ export async function serve(): Promise<ServeShutdown> {
       },
       approval: {
         list: async () => pendingApprovalSnapshot(),
+        grants: async () => approvalGrantsSnapshot(),
+        revokeGrant: async (grant_id: string, ctx: WebChatApprovalControlContext) =>
+          revokeApprovalGrant(grant_id, ctx),
+        history: async () => approvalHistorySnapshot(),
+        emergencyStop: {
+          getSnapshot: async () => emergencyStopSnapshot(),
+          activate: async (ctx: WebChatApprovalControlContext) =>
+            activateEmergencyStop(ctx),
+          clear: async (ctx: WebChatApprovalControlContext) =>
+            clearEmergencyStop(ctx),
+        },
       },
       audit: {
         dump: async (format: "json" | "text") => {
@@ -1381,6 +1590,58 @@ function projectCompleteHistoryEntry(entry: CompleteHistoryEntry): WebChatHistor
     prev_hash: entry.prev_hash,
     entry_hash: entry.entry_hash,
   };
+}
+
+function projectApprovalGrant(grant: ApprovalGrant): WebChatApprovalGrantItem {
+  return {
+    id: grant.id,
+    mode: grant.mode,
+    decision: grant.decision,
+    operation: grant.operation,
+    target_scope: grant.target_scope,
+    target: grant.target,
+    path_pattern: grant.path_pattern,
+    channel: grant.channel,
+    risk: grant.risk,
+    actor: grant.actor,
+    created_by: grant.created_by,
+    created_at: grant.created_at,
+    expires_at: grant.expires_at,
+    revocable: grant.revocable,
+    note: grant.note,
+  };
+}
+
+function projectApprovalHistoryEntry(entry: CompleteHistoryEntry): WebChatApprovalHistoryItem {
+  const payload = isRecord(entry.payload) ? entry.payload : {};
+  return {
+    index: entry.index,
+    event: stringValue(payload.event) ?? "approval_history",
+    request_id: entry.request_id,
+    command_id: entry.command_id,
+    grant_id: stringValue(payload.grant_id),
+    actor: entry.actor,
+    decision: stringValue(payload.decision) ?? null,
+    operation: stringValue(payload.operation) ?? null,
+    risk: stringValue(payload.risk) ?? null,
+    approval_level: stringValue(payload.approval_level) ?? null,
+    final_review_required:
+      typeof payload.final_review_required === "boolean"
+        ? payload.final_review_required
+        : undefined,
+    reason: stringValue(payload.reason) ?? null,
+    timestamp: entry.timestamp,
+    payload_digest: entry.payload_digest,
+    used_for_authority: false,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function digestString(value: string): string {

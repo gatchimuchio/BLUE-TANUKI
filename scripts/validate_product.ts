@@ -17,6 +17,7 @@ import {
   AuditLog,
   HDSUpperController,
   buildRuntimeInvariantEvidence,
+  buildApprovalGrant,
   evaluateApproval,
   type DecisionLog,
 } from "../packages/hds-brain/src/index.js";
@@ -38,6 +39,7 @@ import {
   storeLlmApiKeySecret,
   type SecretProtector,
 } from "../apps/gateway/src/secret_store.js";
+import { buildApprovalRuntime } from "../apps/gateway/src/approval_runtime.js";
 
 export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P10" | "P11";
 export type ProductPlatform = "linux" | "win32" | "any";
@@ -224,6 +226,13 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "any",
     required: true,
     run: runLLMResilienceHealth,
+  },
+  {
+    id: "p6.approval_authority_controls",
+    phase: "P6",
+    platform: "any",
+    required: true,
+    run: runApprovalAuthorityControls,
   },
 ];
 
@@ -1262,6 +1271,281 @@ async function runLLMResilienceHealth(): Promise<CheckResult> {
     };
   } finally {
     await rm(secretRoot, { recursive: true, force: true });
+  }
+}
+
+async function runApprovalAuthorityControls(): Promise<CheckResult> {
+  const log: string[] = [];
+  const runtime = buildApprovalRuntime({
+    BLUE_TANUKI_APPROVAL_MODE: "ask_every_time",
+  });
+
+  const fileWrite = toolCommand(
+    "file.write",
+    { path: "docs/product-validation.md", content: "fixture" },
+    ["tool:file.write", "fs:write"],
+  );
+  const defaultAllow = evaluateApproval(fileWrite, [], {
+    actor: "owner",
+    default_mode: "full_access",
+    now: 1,
+  });
+  assertCheck(defaultAllow.decision === "allow", "full_access did not allow non-final-review L2 operation");
+  assertCheck(defaultAllow.approval_level === "L2_operate", "file.write was not L2");
+  log.push("allow: full_access permitted L2 file.write without final-review bypass");
+
+  const scheduleCreate = toolCommand(
+    "schedule.create",
+    {
+      channel: "webchat",
+      target: "owner",
+      content: "product validation",
+      interval_ms: 120000,
+    },
+    ["tool:schedule.create", "schedule:create"],
+  );
+  const finalReviewAsk = evaluateApproval(scheduleCreate, [], {
+    actor: "owner",
+    default_mode: "full_access",
+    now: 1,
+  });
+  assertCheck(finalReviewAsk.decision === "ask", "full_access allowed L3 schedule.create");
+  assertCheck(finalReviewAsk.final_review_required === true, "schedule.create final review was not required");
+  assertCheck(finalReviewAsk.approval_level === "L3_final_review", "schedule.create was not L3");
+  log.push("ask: L3 schedule.create remained final-review ask under full_access");
+
+  runtime.store.add(buildApprovalGrant({
+    mode: "remember_this_decision",
+    decision: "deny",
+    operation: "tool.file.write",
+    target_scope: "file",
+    target: "docs/product-validation.md",
+    path_pattern: "docs/product-validation.md",
+    risk: "medium",
+    actor: "owner",
+    created_by: "product-validation",
+    created_at: 1,
+    expires_at: null,
+  }));
+  const denied = runtime.evaluate(fileWrite, "owner");
+  assertCheck(denied.decision === "deny", "explicit deny grant did not deny file.write");
+  log.push("deny: explicit deny grant overrode ask/full-access paths");
+
+  const rememberRuntime = buildApprovalRuntime({
+    BLUE_TANUKI_APPROVAL_MODE: "ask_every_time",
+  });
+  const rememberedEval = rememberRuntime.evaluate(fileWrite, "owner");
+  assertCheck(rememberedEval.decision === "ask", "ask_every_time did not ask before remembering");
+  const rememberedGrant = rememberRuntime.remember(rememberedEval, {
+    actor: "owner",
+    mode: "remember_this_decision",
+    duration_ms: null,
+    note: "product validation remembered grant",
+  });
+  const rememberedAllow = rememberRuntime.evaluate(fileWrite, "owner");
+  assertCheck(rememberedAllow.decision === "allow", "remembered grant did not allow matching L2 operation");
+  assertCheck(rememberRuntime.revoke(rememberedGrant.id) === true, "remembered grant revoke returned false");
+  const afterRevoke = rememberRuntime.evaluate(fileWrite, "owner");
+  assertCheck(afterRevoke.decision === "ask", "revoked grant still allowed matching operation");
+  log.push("revoke: remembered L2 grant allowed then reverted to ask after revoke");
+
+  const fullAccessGrant = buildApprovalGrant({
+    mode: "full_access",
+    decision: "allow",
+    operation: "*",
+    target_scope: "*",
+    risk: "*",
+    actor: "*",
+    created_by: "product-validation",
+    created_at: 1,
+    expires_at: null,
+  });
+  const fullAccessFinalReview = evaluateApproval(scheduleCreate, [fullAccessGrant], {
+    actor: "owner",
+    default_mode: "full_access",
+    now: 1,
+  });
+  assertCheck(fullAccessFinalReview.decision === "ask", "full_access grant bypassed L3 final review");
+  log.push("bypass: reusable full_access grant could not bypass L3 final review");
+
+  const port = await allocateLoopbackPort();
+  const webchatToken = "p6-webchat-token-1234";
+  const resumeToken = "p6-resume-token-1234";
+  let emergencyActive = false;
+  let executedInbound = 0;
+  let blockedInbound = 0;
+  let revokedGrant = false;
+  const channel = new WebChatChannel({
+    port,
+    host: "127.0.0.1",
+    token: webchatToken,
+    resume_token: resumeToken,
+    rate_limits: false,
+    approval: {
+      list: async () => [],
+      grants: async () => [
+        {
+          id: "p6-grant",
+          mode: "remember_this_decision",
+          decision: "allow",
+          operation: "tool.file.write",
+          target_scope: "file",
+          target: "docs/product-validation.md",
+          risk: "medium",
+          actor: "owner",
+          created_by: "product-validation",
+          created_at: 1,
+          expires_at: null,
+          revocable: true,
+        },
+      ].filter(() => !revokedGrant),
+      revokeGrant: async (grant_id, controlCtx) => {
+        assertCheck(grant_id === "p6-grant", "unexpected grant id routed to revoke");
+        assertCheck(controlCtx.token_kind === "resume", "revoke was not resume-token context");
+        revokedGrant = true;
+        return {
+          grant_id,
+          revoked: true,
+          used_for_authority: false,
+        };
+      },
+      history: async () => [
+        {
+          index: 1,
+          event: revokedGrant ? "grant_revoked" : "policy_evaluation",
+          request_id: null,
+          command_id: null,
+          grant_id: revokedGrant ? "p6-grant" : undefined,
+          actor: "owner",
+          decision: revokedGrant ? "allow" : "ask",
+          operation: "tool.file.write",
+          risk: "medium",
+          approval_level: "L2_operate",
+          final_review_required: false,
+          reason: "product validation",
+          timestamp: 1,
+          payload_digest: "p6-digest",
+          used_for_authority: false,
+        },
+      ],
+      emergencyStop: {
+        getSnapshot: async () => ({
+          active: emergencyActive,
+          activated_at: emergencyActive ? 2 : null,
+          activated_by: emergencyActive ? "owner" : null,
+          reason: emergencyActive ? "product validation stop" : null,
+          cleared_at: emergencyActive ? null : 3,
+          cleared_by: emergencyActive ? null : "owner",
+          clear_reason: emergencyActive ? null : "product validation clear",
+          execution_blocked: emergencyActive,
+          hds_brain_remains_authority: true,
+          used_for_authority: false,
+          evidence_source: ["INTERNAL_STATE", "LIVE_RUNTIME"],
+        }),
+        activate: async (controlCtx) => {
+          assertCheck(controlCtx.token_kind === "resume", "emergency activate was not resume-token context");
+          emergencyActive = true;
+          return { active: true, used_for_authority: false };
+        },
+        clear: async (controlCtx) => {
+          assertCheck(controlCtx.token_kind === "resume", "emergency clear was not resume-token context");
+          emergencyActive = false;
+          return { active: false, used_for_authority: false };
+        },
+      },
+    },
+  });
+
+  try {
+    await channel.start(async () => {
+      if (emergencyActive) {
+        blockedInbound += 1;
+        return;
+      }
+      executedInbound += 1;
+    });
+    const base = `http://127.0.0.1:${port}`;
+
+    const approvalWrongToken = await fetch(`${base}/approval`, {
+      headers: { authorization: `Bearer ${webchatToken}` },
+    });
+    assertCheck(approvalWrongToken.status === 401, `/approval accepted webchat token: ${approvalWrongToken.status}`);
+
+    const approvalRoot = await settingsRequest(base, resumeToken, "GET", "/approval");
+    assertCheck(Array.isArray(approvalRoot.pending_approvals), "/approval did not return pending_approvals");
+    assertCheck(approvalRoot.grants?.[0]?.id === "p6-grant", "/approval did not expose reusable grant");
+    assertCheck(approvalRoot.approval_history?.[0]?.used_for_authority === false, "/approval history became authority");
+    assertCheck(approvalRoot.emergency_stop?.used_for_authority === false, "/approval emergency stop became authority");
+
+    const inboundBeforeStop = await fetch(`${base}/inbound`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${webchatToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ user: "owner", content: "hello before stop" }),
+    });
+    assertCheck(inboundBeforeStop.status === 202, `/inbound before stop returned ${inboundBeforeStop.status}`);
+    assertCheck(executedInbound === 1, "inbound before emergency stop did not reach handler");
+
+    const stop = await settingsRequest(base, resumeToken, "POST", "/approval/emergency-stop", {
+      action: "activate",
+      actor: "owner",
+      reason: "product validation stop",
+    });
+    assertCheck(stop.ok === true, "emergency stop activation did not return ok");
+    assertCheck(stop.result?.active === true, "emergency stop did not activate");
+
+    const inboundDuringStop = await fetch(`${base}/inbound`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${webchatToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ user: "owner", content: "hello during stop" }),
+    });
+    assertCheck(inboundDuringStop.status === 202, `/inbound during stop returned ${inboundDuringStop.status}`);
+    assertCheck(executedInbound === 1, "emergency stop fixture allowed execution handler path");
+    assertCheck(blockedInbound === 1, "emergency stop fixture did not block handler path");
+
+    const revoke = await settingsRequest(base, resumeToken, "POST", "/approval/grants/p6-grant/revoke", {
+      actor: "owner",
+      reason: "product validation revoke",
+    });
+    assertCheck(revoke.ok === true, "grant revoke did not return ok");
+    assertCheck(revokedGrant === true, "grant revoke handler did not run");
+    const grantsAfterRevoke = await settingsRequest(base, resumeToken, "GET", "/approval/grants");
+    assertCheck(grantsAfterRevoke.grants.length === 0, "revoked grant still listed");
+
+    const clear = await settingsRequest(base, resumeToken, "POST", "/approval/emergency-stop", {
+      action: "clear",
+      actor: "owner",
+      reason: "product validation clear",
+    });
+    assertCheck(clear.ok === true, "emergency stop clear did not return ok");
+    assertCheck(clear.result?.active === false, "emergency stop did not clear");
+    log.push("live-route: resume-token gated grant revoke and emergency stop endpoints passed");
+
+    return {
+      status: "pass",
+      summary: "approval allow/ask/deny/revoke/emergency-stop dynamic controls passed",
+      raw_log: log.join("\n"),
+      details: {
+        allow_decision: defaultAllow.decision,
+        ask_decision: finalReviewAsk.decision,
+        deny_decision: denied.decision,
+        revoke_returned_to: afterRevoke.decision,
+        final_review_bypass_allowed: false,
+        webchat_resume_token_required: true,
+        emergency_stop_blocked_inbound: blockedInbound,
+        execution_count_after_stop: executedInbound,
+        grant_revoked: revokedGrant,
+        evidence_source: ["INTERNAL_STATE", "LIVE_RUNTIME", "FIXTURE"],
+        hds_brain_remains_authority: true,
+      },
+    };
+  } finally {
+    await channel.stop();
   }
 }
 

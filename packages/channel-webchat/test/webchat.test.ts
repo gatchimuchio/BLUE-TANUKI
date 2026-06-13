@@ -1150,6 +1150,151 @@ describe("WebChatChannel — approval API", () => {
       await ctx.teardown();
     }
   });
+
+  it("exposes grants, approval history, and emergency stop through the resume-token gate", async () => {
+    const calls: unknown[] = [];
+    const ctx = await setup({
+      approval: {
+        list: async () => [],
+        grants: async () => [
+          {
+            id: "grant-1",
+            mode: "remember_this_decision",
+            decision: "allow",
+            operation: "tool.file.write",
+            target_scope: "file",
+            target: "docs/a.md",
+            risk: "medium",
+            actor: "alice",
+            created_by: "alice",
+            created_at: 1,
+            expires_at: null,
+            revocable: true,
+          },
+        ],
+        revokeGrant: async (grant_id, controlCtx) => {
+          calls.push({ kind: "revoke", grant_id, controlCtx });
+          return { revoked: true };
+        },
+        history: async () => [
+          {
+            index: 1,
+            event: "grant_revoked",
+            request_id: null,
+            command_id: null,
+            grant_id: "grant-1",
+            actor: "alice",
+            decision: "allow",
+            operation: "tool.file.write",
+            risk: "medium",
+            approval_level: "L2_operate",
+            final_review_required: false,
+            reason: "test",
+            timestamp: 2,
+            payload_digest: "digest",
+            used_for_authority: false,
+          },
+        ],
+        emergencyStop: {
+          getSnapshot: async () => ({
+            active: false,
+            activated_at: null,
+            activated_by: null,
+            reason: null,
+            cleared_at: null,
+            cleared_by: null,
+            clear_reason: null,
+            execution_blocked: false,
+            hds_brain_remains_authority: true,
+            used_for_authority: false,
+            evidence_source: ["INTERNAL_STATE", "LIVE_RUNTIME"],
+          }),
+          activate: async (controlCtx) => {
+            calls.push({ kind: "activate", controlCtx });
+            return { active: true };
+          },
+          clear: async (controlCtx) => {
+            calls.push({ kind: "clear", controlCtx });
+            return { active: false };
+          },
+        },
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      const root = await getRaw(ctx.port, "/approval", {
+        authorization: `Bearer ${RESUME_TOKEN}`,
+      });
+      expect(root.status).toBe(200);
+      const rootBody = JSON.parse(root.text);
+      expect(rootBody.grants).toHaveLength(1);
+      expect(rootBody.approval_history).toHaveLength(1);
+      expect(rootBody.emergency_stop).toMatchObject({
+        active: false,
+        used_for_authority: false,
+      });
+
+      const grants = await getRaw(ctx.port, "/approval/grants", {
+        authorization: `Bearer ${RESUME_TOKEN}`,
+      });
+      expect(grants.status).toBe(200);
+      expect(JSON.parse(grants.text).grants[0].id).toBe("grant-1");
+
+      const revoke = await postJson(
+        ctx.port,
+        "/approval/grants/grant-1/revoke",
+        { actor: "alice", reason: "not needed" },
+        { authorization: `Bearer ${RESUME_TOKEN}` },
+      );
+      expect(revoke.status).toBe(200);
+
+      const stop = await postJson(
+        ctx.port,
+        "/approval/emergency-stop",
+        { action: "activate", actor: "alice", reason: "stop now" },
+        { authorization: `Bearer ${RESUME_TOKEN}` },
+      );
+      expect(stop.status).toBe(200);
+
+      const clear = await postJson(
+        ctx.port,
+        "/approval/emergency-stop",
+        { action: "clear", actor: "alice", reason: "reviewed" },
+        { authorization: `Bearer ${RESUME_TOKEN}` },
+      );
+      expect(clear.status).toBe(200);
+
+      expect(calls).toEqual([
+        {
+          kind: "revoke",
+          grant_id: "grant-1",
+          controlCtx: {
+            actor: "alice",
+            token_kind: "resume",
+            reason: "not needed",
+          },
+        },
+        {
+          kind: "activate",
+          controlCtx: {
+            actor: "alice",
+            token_kind: "resume",
+            reason: "stop now",
+          },
+        },
+        {
+          kind: "clear",
+          controlCtx: {
+            actor: "alice",
+            token_kind: "resume",
+            reason: "reviewed",
+          },
+        },
+      ]);
+    } finally {
+      await ctx.teardown();
+    }
+  });
 });
 
 describe("WebChatChannel — WS upgrade with ticket", () => {

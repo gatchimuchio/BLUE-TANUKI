@@ -16,8 +16,10 @@ export interface ApprovalRuntime {
   default_mode: ApprovalMode;
   store: ApprovalGrantStore;
   system_grants: readonly ApprovalGrant[];
+  listGrants(): readonly ApprovalGrant[];
   evaluate(command: ExecuteCommand, actor: string): ApprovalEvaluation;
   remember(evaluation: ApprovalEvaluation, opts: RememberApprovalOptions): ApprovalGrant;
+  revoke(id: string): boolean;
 }
 export interface RememberApprovalOptions { actor: string; mode?: "remember_this_decision" | "full_access"; duration_ms?: number | null; note?: string; }
 type Env = Record<string, string | undefined>;
@@ -30,12 +32,17 @@ export function buildApprovalRuntime(env: Env = process.env): ApprovalRuntime {
     default_mode,
     store,
     system_grants,
+    listGrants() { store.clearExpired(); return [...system_grants, ...store.list()]; },
     evaluate(command, actor) { store.clearExpired(); return evaluateApproval(command, [...system_grants, ...store.list()], { actor, default_mode }); },
     remember(evaluation, opts) {
       const mode = opts.mode ?? "remember_this_decision";
       const expires_at = opts.duration_ms === null ? null : typeof opts.duration_ms === "number" && opts.duration_ms > 0 ? Date.now() + Math.floor(opts.duration_ms) : null;
       const grant = approvalGrantFromEvaluation(evaluation, { created_by: opts.actor, mode, expires_at, widen_to_full_access: mode === "full_access", note: opts.note ?? "created from human approval" });
       return store.add(grant);
+    },
+    revoke(id) {
+      store.clearExpired();
+      return store.revoke(id);
     },
   };
 }

@@ -22,82 +22,81 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P5 — LLM Provider 実運用化`.
+- The active instruction is `Phase P6 — Approval / Permission / Authority 閉包`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P5 — LLM Provider 実運用化
+# Phase P6 — Approval / Permission / Authority 閉包
 
 ## Objective
 
-Make non-stub LLM providers usable as a product path by adding typed provider failures, explicit retry/fallback, non-authority health evidence, and Windows OS-protected LLM API key storage without moving authority into LLM output or provider metadata.
+Close the product-facing approval, permission, revoke, history, and owner emergency-stop paths while preserving HDS-BRAIN as the sole authority source. Approval UI and runtime control paths must allow stopping and revoking; they must not approve, classify risk, infer consent, or bypass final review.
 
 ## Scope
 
-- Add typed LLM provider error classification for retryable and non-retryable failures.
-- Add explicit LLM retry and fallback configuration in the gateway LLM registry path.
-- Add LLM registry health snapshots that classify evidence as internal state and non-authority metadata.
-- Add Windows DPAPI CurrentUser storage references for LLM provider API keys saved through settings.
-- Resolve LLM API key secret references at runtime while preserving plugin secret permission enforcement.
-- Extend `validate:product -- --phase P5` with fixture-backed resilience/health/secret-ref checks.
+- Add owner-initiated emergency stop to the Control Center approval surface and WebChat approval API.
+- Block downstream execution while emergency stop is active without creating a second authority path.
+- Add reusable approval grant listing and revoke through the resume-token-gated approval surface.
+- Add sanitized approval history to the Approval UI.
+- Add explicit first-run / settings ApprovalMode selection that writes `BLUE_TANUKI_APPROVAL_MODE`.
+- Extend `validate:product -- --phase P6` with dynamic allow / ask / deny / revoke / emergency-stop checks.
 - Update tests and P-series docs.
 
 ## Non-Goals
 
-- Do not add owner credentials or run external live LLM calls in CI.
-- Do not claim P5 complete; owner credentialed live smoke on Linux/Windows and Windows real-device DPAPI verification remain later evidence items.
-- Do not implement Linux/macOS keychain storage in this phase.
-- Do not make retry/fallback metadata authoritative.
-- Do not change HDS-BRAIN authority, Approval Gate policy, executor authority semantics, or final-review behavior.
+- Do not weaken `FINAL_REVIEW_OPERATION_LIST` or allow reusable grants to bypass L3 final review.
+- Do not move authority into Control Center, WebChat, settings, complete history, UI state, or approval history.
+- Do not implement external API live execution.
+- Do not change the default architecture claim `authority_model="owner_operated_full_access"`.
+- Do not add broad recovery/reset features; those remain P10.
 
 ## Inspect First
 
 ```bash
 git status --short
-rg -n "LLM|OpenRouter|openai_compatible|smoke:live|retry|rate|fallback|health|P5|secret|DPAPI|credential" packages/blue-tanuki apps/gateway scripts docs package.json
-rg -n "LLMRegistry|LLMBackend|OpenAICompatibleBackend|AnthropicBackend|describeLLMConfig|setupConfigToEnv|validate:product|PRODUCT_CHECKS" packages/blue-tanuki apps/gateway scripts docs
+rg -n "ApprovalMode|ApprovalLevel|approval|grant|revoke|emergency|resume|final_review|BLUE_TANUKI_APPROVAL_MODE|validate:product|P6" packages apps scripts docs
+rg -n "WebChatApprovalSurface|pendingApprovals|buildApprovalRuntime|evaluateApproval|FINAL_REVIEW_OPERATION_LIST|setupConfigToEnv|applySettingsPatch" packages/channel-webchat packages/hds-brain apps/gateway scripts
 ```
 
 ## Implementation Requirements
 
-- Provider errors must distinguish rate limit, transient network/service failures, auth failures, bad requests, bad responses, timeouts, and unknown failures.
-- Retry must only apply to retryable provider errors and must be bounded.
-- Fallback must be explicit configuration, not silent hidden authority.
-- Health snapshots must include non-authority flags and evidence source classification.
-- On Windows, settings-saved LLM API keys must be stored as DPAPI CurrentUser secret references instead of raw env-file values.
-- Secret references must fail closed on unsupported platforms and must not be treated as authority.
-- `validate:product -- --phase P5` must include the new P5 check while keeping P2/P3/P4 behavior intact.
+- Emergency stop must be owner-initiated through the resume-token-gated approval control path.
+- Emergency stop must fail closed by blocking downstream execution and pending approval execution while active.
+- Revoke must remove only revocable human grants; system grants remain visible and non-revocable.
+- Approval history returned to the UI must be sanitized metadata and digests only, not raw command payloads or content.
+- ApprovalMode settings must be explicit in setup/settings and persist to `BLUE_TANUKI_APPROVAL_MODE`.
+- `validate:product -- --phase P6` must include dynamic allow, ask, deny, revoke, emergency-stop, and final-review non-bypass checks.
 
 ## Safety Requirements
 
-- LLM output remains downstream only and must not become authority.
-- Provider metadata, retry metadata, fallback metadata, and health metadata must not become authority.
-- Secret reference metadata must not become authority.
-- Retry/fallback must not approve commands, classify risk, bypass final review, infer consent, or alter HDS-BRAIN decisions.
-- HDS-BRAIN and Approval Gate remain upstream.
+- HDS-BRAIN remains the only authority source.
+- UI state, WebChat route state, approval history, complete history, and emergency-stop metadata remain non-authority.
+- Emergency stop can block execution but cannot approve, execute, classify risk, infer consent, or rewrite policy.
+- Full access and reusable grants cannot bypass L3 final review.
+- Unknown, high-risk, approval/policy/history updates, and external write operations remain final-review gated.
 
 ## Operator Usability Requirements
 
-- Retry and fallback configuration must be visible in machine-readable config evidence.
-- Health evidence must explain whether a provider is untested, passing, or failing.
-- Settings save responses must report whether LLM API key material was OS-protected or fell back to env-file material.
-- Missing owner live credentials must remain a later evidence limitation, not a false product completion claim.
+- The Approval screen must show pending approvals, reusable grants, revoke controls, approval history, and emergency-stop status in one place.
+- Emergency stop activation and clearing must be explicit actions, not implicit toggles.
+- ApprovalMode selection must be visible in settings and first-run config.
+- Revoked grants must disappear from the grants list and subsequent evaluations must return to ask/deny behavior.
 
 ## Audit Requirements
 
-- This phase adds product validation evidence only; it does not append to the HDS runtime audit chain.
-- Evidence source class for the P5 resilience check is `INTERNAL_STATE` / `FIXTURE`.
+- Emergency-stop activation, clearing, blocking, and grant revoke must append authority/audit evidence without making the event authority.
+- Approval history projected to the UI must keep `used_for_authority=false`.
+- Evidence source class for the P6 product check is `INTERNAL_STATE` / `LIVE_RUNTIME` / `FIXTURE`.
 
 ## Tests
 
-- LLM registry tests must cover retry, explicit fallback, and non-authority health metadata.
-- Provider tests must cover rate-limit classification.
-- Gateway LLM config tests must cover retry/fallback env configuration.
-- Secret store tests must cover secret ref creation, resolution, unsupported platform fail-closed behavior, and non-authority flags.
-- The P5 product check must confirm retry, fallback, error classification, secret-ref behavior, and non-authority flags without external credentials.
+- WebChat tests must cover resume-token-gated grants/history/emergency-stop endpoints.
+- Setup/settings tests must cover ApprovalMode round-trip and settings save.
+- Product validation must cover allow, ask, deny, revoke, emergency stop, and final-review non-bypass.
+- Existing approval policy tests must remain green.
 
 ## Docs
 
@@ -116,21 +115,21 @@ pnpm docs:check
 pnpm validate:repo-health
 pnpm validate:packaging
 pnpm validate:ga
-pnpm validate:product -- --phase P5 --evidence .codex-tmp/validate-product-p5-llm-resilience-local
+pnpm validate:product -- --phase P6 --evidence .codex-tmp/validate-product-p6-approval-authority-local
 ```
 
 ## Manual Smoke
 
-Run `pnpm smoke:live` when owner credentials are available. Without owner credentials, confirm the safe skip path and do not claim credentialed live evidence.
+Open Control Center, load the Approval screen with the resume token, confirm pending approvals, grants, history, emergency stop activation, and emergency stop clearing are visible and token-gated. Do not use emergency stop to claim HDS authority; it is a fail-closed runtime control.
 
 ## Permanent-Use Check
 
-LLM provider failures are classified and can be retried or explicitly routed to fallback without creating hidden authority. Windows settings-saved LLM API keys are represented as DPAPI CurrentUser secret references. This does not complete Linux/macOS keychain storage or owner credentialed live smoke evidence.
+The owner can understand and operate approval state, revoke remembered permissions, select approval mode, and trigger an immediate stop without weakening final review or moving authority into UI state.
 
 ## Acceptance Criteria
 
 - Local validation passes.
-- `validate:product -- --phase P5` passes on Linux.
+- `validate:product -- --phase P6` passes on Linux.
 - Release claim remains pre-GO with `public_claim_allowed=false`.
 
 ## Final Report Format
