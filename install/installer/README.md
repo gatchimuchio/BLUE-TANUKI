@@ -45,7 +45,9 @@ If an existing env file is overwritten with `--force`, setup creates a `.bak` fi
 ## Boundaries
 
 - No 5-minute setup guarantee is claimed.
-- API key values are written only to the env file and are not printed by the installer.
+- On Windows, settings-saved LLM API keys are stored as DPAPI CurrentUser secret references.
+- On other platforms, API key values remain env-file material until a later keychain phase.
+- API key values are not printed by the installer.
 - LLM providers remain downstream devices under HDS-BRAIN authority.
 - The guided installer does not modify Approval Gate, audit, runtime invariants, or Layer A / Layer B authority boundaries.
 - Starting the Control Center is process launch only; it does not create a second authority path.

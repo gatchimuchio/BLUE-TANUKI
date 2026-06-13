@@ -269,6 +269,24 @@ describe("plugin loader", () => {
     ).toThrow(/secrets:CUSTOM_LLM_KEY/);
   });
 
+  it("requires base secret permission when LLM API key is supplied through a secret ref", async () => {
+    await writePackage("packages/core", {
+      name: "@blue-tanuki/core",
+      exports: { tools: "registerBuiltinTools" },
+      permissions: ["network:llm-provider", "secrets:OPENROUTER_MODEL"],
+      module: "export function registerBuiltinTools() {}\n",
+    });
+
+    const runtime = await loadPluginRuntime({ root });
+    expect(() =>
+      runtime.enforceLLMConfig({
+        LLM_BACKEND: "openrouter",
+        OPENROUTER_MODEL: "openrouter/model",
+        OPENROUTER_API_KEY_REF: "win32-dpapi-current-user:file:abc",
+      }),
+    ).toThrow(/secrets:OPENROUTER_API_KEY/);
+  });
+
   it("rejects manifest drift from package metadata", async () => {
     await writePackage("packages/core", {
       name: "@blue-tanuki/core",

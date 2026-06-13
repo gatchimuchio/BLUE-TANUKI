@@ -79,7 +79,9 @@ setup, runs `doctor`, and opens the path toward the Control Center settings UI.
 It is a guided first-run accelerator, not a verified 5-minute setup guarantee.
 
 Use the Control Center Settings page and the `Verify LLM` action before saving
-LLM provider changes. API key values are written only to the env file and are
+LLM provider changes. On Windows, settings-saved LLM API keys are stored as
+DPAPI CurrentUser secret references next to the env file; on other platforms
+they remain env-file material until a later keychain phase. API key values are
 not printed by the installer, doctor, runtime snapshot, or audit output.
 
 For a non-serving setup pass:

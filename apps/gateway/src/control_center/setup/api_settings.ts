@@ -4,6 +4,12 @@ import {
 } from "../../llm_config.js";
 import type { PluginRuntime } from "../../plugin_loader.js";
 import {
+  llmApiKeyForProvider,
+  secretRefKey,
+  storeLlmApiKeySecret,
+  type LlmSecretStoreResult,
+} from "../../secret_store.js";
+import {
   setupConfigFromEnv,
   setupConfigToEnv,
   type BlueTanukiSetupConfig,
@@ -22,6 +28,16 @@ export interface LlmProvisioningVerifyResult {
   duration_ms: number;
   detail: string;
   next_action: string;
+}
+
+export interface SettingsSecretStorageResult {
+  status: "not_supplied" | "stored" | "plaintext_env_fallback";
+  key: string | null;
+  storage: "win32_dpapi_current_user" | "env_file" | "unavailable";
+  os_protected: boolean;
+  used_for_authority: false;
+  evidence_source: readonly ("CONFIG" | "EXTERNAL_EVIDENCE")[];
+  detail: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -153,6 +169,61 @@ export function applySettingsPatch(
   }
   setupConfigToEnv(config);
   return config;
+}
+
+export function protectLlmApiKeyForEnvFile(
+  config: BlueTanukiSetupConfig,
+  envFilePath: string,
+  env: Env,
+  platform: NodeJS.Platform = process.platform,
+): SettingsSecretStorageResult {
+  const key = llmApiKeyForProvider(config.llm.provider);
+  if (!key || !config.llm.api_key) {
+    return {
+      status: "not_supplied",
+      key: key ?? null,
+      storage: "unavailable",
+      os_protected: false,
+      used_for_authority: false,
+      evidence_source: ["CONFIG"],
+      detail: "No new LLM API key was supplied in this settings update.",
+    };
+  }
+  if (platform !== "win32") {
+    return {
+      status: "plaintext_env_fallback",
+      key,
+      storage: "env_file",
+      os_protected: false,
+      used_for_authority: false,
+      evidence_source: ["CONFIG"],
+      detail: "OS-protected LLM secret storage is available only on Windows in this release.",
+    };
+  }
+  let stored: LlmSecretStoreResult;
+  try {
+    stored = storeLlmApiKeySecret(key, config.llm.api_key, {
+      envFilePath,
+      env,
+    });
+  } catch (error) {
+    throw new Error(
+      `Windows LLM secret storage failed; refusing to write plaintext ${key}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  delete config.llm.api_key;
+  config.llm.api_key_ref = stored.ref;
+  return {
+    status: "stored",
+    key,
+    storage: stored.storage,
+    os_protected: true,
+    used_for_authority: false,
+    evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+    detail: `${key} stored via ${secretRefKey(key)} using Windows DPAPI CurrentUser.`,
+  };
 }
 
 function candidateEnvFromBody(body: Record<string, unknown>, env: Env): Env {

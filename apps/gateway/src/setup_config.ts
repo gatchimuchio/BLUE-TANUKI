@@ -13,6 +13,7 @@ export interface SetupLlmConfig {
   model?: string;
   endpoint?: string;
   api_key?: string;
+  api_key_ref?: string;
   api_key_env?: string;
   backend_hint?: string;
   site_url?: string;
@@ -180,7 +181,11 @@ export function validateSetupConfig(
   validateOptionalPositiveInt(config.llm.timeout_ms, "llm.timeout_ms");
 
   if (provider === "anthropic") {
-    if (!isNonEmptyString(config.llm.api_key_env) && !isNonEmptyString(config.llm.api_key)) {
+    if (
+      !isNonEmptyString(config.llm.api_key_env) &&
+      !isNonEmptyString(config.llm.api_key_ref) &&
+      !isNonEmptyString(config.llm.api_key)
+    ) {
       throw new Error("anthropic setup requires llm.api_key or llm.api_key_env");
     }
     if (!isNonEmptyString(config.llm.model)) {
@@ -189,7 +194,11 @@ export function validateSetupConfig(
   }
 
   if (provider === "openai") {
-    if (!isNonEmptyString(config.llm.api_key_env) && !isNonEmptyString(config.llm.api_key)) {
+    if (
+      !isNonEmptyString(config.llm.api_key_env) &&
+      !isNonEmptyString(config.llm.api_key_ref) &&
+      !isNonEmptyString(config.llm.api_key)
+    ) {
       throw new Error("openai setup requires llm.api_key or llm.api_key_env");
     }
     if (!isNonEmptyString(config.llm.model)) {
@@ -207,7 +216,11 @@ export function validateSetupConfig(
   }
 
   if (provider === "openrouter") {
-    if (!isNonEmptyString(config.llm.api_key_env) && !isNonEmptyString(config.llm.api_key)) {
+    if (
+      !isNonEmptyString(config.llm.api_key_env) &&
+      !isNonEmptyString(config.llm.api_key_ref) &&
+      !isNonEmptyString(config.llm.api_key)
+    ) {
       throw new Error("openrouter setup requires llm.api_key or llm.api_key_env");
     }
     if (!isNonEmptyString(config.llm.model)) {
@@ -262,10 +275,12 @@ export function setupConfigFromEnv(
     config.llm.model = env.ANTHROPIC_MODEL ?? env.LLM_MODEL;
     config.llm.endpoint = env.ANTHROPIC_ENDPOINT;
     config.llm.api_key = env.ANTHROPIC_API_KEY;
+    config.llm.api_key_ref = env.ANTHROPIC_API_KEY_REF;
   } else if (config.llm.provider === "openai") {
     config.llm.model = env.OPENAI_MODEL ?? env.LLM_MODEL;
     config.llm.endpoint = env.OPENAI_ENDPOINT;
     config.llm.api_key = env.OPENAI_API_KEY ?? env.LLM_API_KEY;
+    config.llm.api_key_ref = env.OPENAI_API_KEY_REF ?? env.LLM_API_KEY_REF;
   } else if (config.llm.provider === "openai-compatible") {
     config.llm.model =
       env.OPENAI_COMPAT_MODEL ?? env.OPENAI_MODEL ?? env.LLM_MODEL;
@@ -273,10 +288,13 @@ export function setupConfigFromEnv(
       env.OPENAI_COMPAT_ENDPOINT ?? env.OPENAI_ENDPOINT ?? env.LLM_ENDPOINT;
     config.llm.api_key =
       env.OPENAI_COMPAT_API_KEY ?? env.OPENAI_API_KEY ?? env.LLM_API_KEY;
+    config.llm.api_key_ref =
+      env.OPENAI_COMPAT_API_KEY_REF ?? env.OPENAI_API_KEY_REF ?? env.LLM_API_KEY_REF;
   } else if (config.llm.provider === "openrouter") {
     config.llm.model = env.OPENROUTER_MODEL ?? env.LLM_MODEL;
     config.llm.endpoint = env.OPENROUTER_ENDPOINT;
     config.llm.api_key = env.OPENROUTER_API_KEY;
+    config.llm.api_key_ref = env.OPENROUTER_API_KEY_REF;
     config.llm.site_url = env.OPENROUTER_SITE_URL;
     config.llm.app_title = env.OPENROUTER_APP_TITLE;
   }
@@ -338,6 +356,7 @@ export function setupConfigToEnv(
     if (config.llm.model) env.ANTHROPIC_MODEL = config.llm.model;
     if (config.llm.endpoint) env.ANTHROPIC_ENDPOINT = config.llm.endpoint;
     if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+    else if (config.llm.api_key_ref) env.ANTHROPIC_API_KEY_REF = config.llm.api_key_ref;
   }
 
   if (config.llm.provider === "openai") {
@@ -345,6 +364,7 @@ export function setupConfigToEnv(
     if (config.llm.model) env.OPENAI_MODEL = config.llm.model;
     if (config.llm.endpoint) env.OPENAI_ENDPOINT = config.llm.endpoint;
     if (apiKey) env.OPENAI_API_KEY = apiKey;
+    else if (config.llm.api_key_ref) env.OPENAI_API_KEY_REF = config.llm.api_key_ref;
   }
 
   if (config.llm.provider === "openai-compatible") {
@@ -352,6 +372,7 @@ export function setupConfigToEnv(
     if (config.llm.model) env.OPENAI_COMPAT_MODEL = config.llm.model;
     if (config.llm.endpoint) env.OPENAI_COMPAT_ENDPOINT = config.llm.endpoint;
     if (apiKey) env.OPENAI_COMPAT_API_KEY = apiKey;
+    else if (config.llm.api_key_ref) env.OPENAI_COMPAT_API_KEY_REF = config.llm.api_key_ref;
   }
 
   if (config.llm.provider === "openrouter") {
@@ -359,6 +380,7 @@ export function setupConfigToEnv(
     if (config.llm.model) env.OPENROUTER_MODEL = config.llm.model;
     if (config.llm.endpoint) env.OPENROUTER_ENDPOINT = config.llm.endpoint;
     if (apiKey) env.OPENROUTER_API_KEY = apiKey;
+    else if (config.llm.api_key_ref) env.OPENROUTER_API_KEY_REF = config.llm.api_key_ref;
     if (config.llm.site_url) env.OPENROUTER_SITE_URL = config.llm.site_url;
     if (config.llm.app_title) env.OPENROUTER_APP_TITLE = config.llm.app_title;
   }
@@ -405,15 +427,19 @@ export function renderSetupEnvFile(
     "ANTHROPIC_MODEL",
     "ANTHROPIC_ENDPOINT",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_API_KEY_REF",
     "OPENAI_MODEL",
     "OPENAI_ENDPOINT",
     "OPENAI_API_KEY",
+    "OPENAI_API_KEY_REF",
     "OPENAI_COMPAT_MODEL",
     "OPENAI_COMPAT_ENDPOINT",
     "OPENAI_COMPAT_API_KEY",
+    "OPENAI_COMPAT_API_KEY_REF",
     "OPENROUTER_MODEL",
     "OPENROUTER_ENDPOINT",
     "OPENROUTER_API_KEY",
+    "OPENROUTER_API_KEY_REF",
     "OPENROUTER_SITE_URL",
     "OPENROUTER_APP_TITLE",
     "BLUE_TANUKI_LLM_BACKEND_HINT",

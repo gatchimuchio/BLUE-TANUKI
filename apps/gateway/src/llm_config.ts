@@ -7,6 +7,11 @@ import {
   type LLMRetryPolicy,
 } from "@blue-tanuki/core";
 import type { LLMCommandRoute } from "@blue-tanuki/hds-brain";
+import {
+  hasLLMSecretMaterial,
+  resolveLLMSecretRefs,
+  secretRefKey,
+} from "./secret_store.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -181,48 +186,60 @@ function parseTemperatureEnv(env: Env): number | undefined {
 }
 
 export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
+  const resolvedEnv = resolveLLMSecretRefs(env);
   const registry = new LLMRegistry({
-    retry: buildLLMRetryPolicyFromEnv(env),
+    retry: buildLLMRetryPolicyFromEnv(resolvedEnv),
   });
   registry.register(new StubBackend());
 
-  const anthropicKey = envValue(env, "ANTHROPIC_API_KEY");
-  if (anthropicKey || wantsBackend(env, "anthropic") || wantsBackend(env, "claude")) {
+  const anthropicKey = envValue(resolvedEnv, "ANTHROPIC_API_KEY");
+  if (
+    anthropicKey ||
+    wantsBackend(resolvedEnv, "anthropic") ||
+    wantsBackend(resolvedEnv, "claude")
+  ) {
     registry.register(
       new AnthropicBackend(
         anthropicKey ?? "",
-        envValue(env, "ANTHROPIC_MODEL", "LLM_MODEL") ?? "claude-opus-4-7",
-        envValue(env, "ANTHROPIC_ENDPOINT") ??
+        envValue(resolvedEnv, "ANTHROPIC_MODEL", "LLM_MODEL") ??
+          "claude-opus-4-7",
+        envValue(resolvedEnv, "ANTHROPIC_ENDPOINT") ??
           "https://api.anthropic.com/v1/messages",
-        envValue(env, "ANTHROPIC_API_VERSION") ?? "2023-06-01",
+        envValue(resolvedEnv, "ANTHROPIC_API_VERSION") ?? "2023-06-01",
       ),
       ["claude"],
     );
   }
 
   const openaiEndpoint = envValue(
-    env,
+    resolvedEnv,
     "OPENAI_COMPAT_ENDPOINT",
     "OPENAI_ENDPOINT",
     "LLM_ENDPOINT",
   );
   const openaiModel = envValue(
-    env,
+    resolvedEnv,
     "OPENAI_COMPAT_MODEL",
     "OPENAI_MODEL",
     "LLM_MODEL",
   );
   const openaiKey = envValue(
-    env,
+    resolvedEnv,
     "OPENAI_COMPAT_API_KEY",
     "OPENAI_API_KEY",
     "LLM_API_KEY",
   );
   const wantsNativeOpenAI =
-    wantsBackend(env, "openai") || Boolean(envValue(env, "OPENAI_API_KEY"));
+    wantsBackend(resolvedEnv, "openai") ||
+    Boolean(envValue(resolvedEnv, "OPENAI_API_KEY"));
   const wantsOpenAICompatible =
-    wantsBackend(env, "openai-compatible") || wantsBackend(env, "openai");
-  if ((openaiEndpoint && openaiModel) || (openaiKey && openaiModel) || wantsOpenAICompatible) {
+    wantsBackend(resolvedEnv, "openai-compatible") ||
+    wantsBackend(resolvedEnv, "openai");
+  if (
+    (openaiEndpoint && openaiModel) ||
+    (openaiKey && openaiModel) ||
+    wantsOpenAICompatible
+  ) {
     const endpoint =
       openaiEndpoint ??
       (wantsNativeOpenAI ? "https://api.openai.com/v1/chat/completions" : "");
@@ -233,17 +250,22 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
         defaultModel: openaiModel ?? "",
         apiKey: openaiKey,
         headers: parseHeadersJson(
-          envValue(env, "OPENAI_COMPAT_HEADERS_JSON", "LLM_HEADERS_JSON"),
+          envValue(
+            resolvedEnv,
+            "OPENAI_COMPAT_HEADERS_JSON",
+            "LLM_HEADERS_JSON",
+          ),
         ),
       }),
       ["openai"],
     );
   }
 
-  const openrouterModel = envValue(env, "OPENROUTER_MODEL", "LLM_MODEL");
-  const openrouterKey = envValue(env, "OPENROUTER_API_KEY");
-  const openrouterEndpoint = envValue(env, "OPENROUTER_ENDPOINT") ?? OPENROUTER_DEFAULT_ENDPOINT;
-  const openrouterSelected = wantsBackend(env, "openrouter");
+  const openrouterModel = envValue(resolvedEnv, "OPENROUTER_MODEL", "LLM_MODEL");
+  const openrouterKey = envValue(resolvedEnv, "OPENROUTER_API_KEY");
+  const openrouterEndpoint =
+    envValue(resolvedEnv, "OPENROUTER_ENDPOINT") ?? OPENROUTER_DEFAULT_ENDPOINT;
+  const openrouterSelected = wantsBackend(resolvedEnv, "openrouter");
   const wantsOpenRouter = openrouterSelected || Boolean(openrouterKey && openrouterModel);
   if (wantsOpenRouter) {
     if (!openrouterModel) {
@@ -253,8 +275,8 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
       throw new Error("openrouter requires OPENROUTER_API_KEY");
     }
     const openrouterHeaders: Record<string, string> = {};
-    const siteUrl = envValue(env, "OPENROUTER_SITE_URL");
-    const appTitle = envValue(env, "OPENROUTER_APP_TITLE");
+    const siteUrl = envValue(resolvedEnv, "OPENROUTER_SITE_URL");
+    const appTitle = envValue(resolvedEnv, "OPENROUTER_APP_TITLE");
     if (siteUrl) openrouterHeaders["HTTP-Referer"] = siteUrl;
     if (appTitle) openrouterHeaders["X-Title"] = appTitle;
     registry.register(
@@ -268,7 +290,10 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
     );
   }
 
-  for (const provider of parseProvidersJson(envValue(env, "LLM_PROVIDERS_JSON"), env)) {
+  for (const provider of parseProvidersJson(
+    envValue(resolvedEnv, "LLM_PROVIDERS_JSON"),
+    resolvedEnv,
+  )) {
     registry.register(
       new OpenAICompatibleBackend({
         name: provider.name,
@@ -282,9 +307,9 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
   }
 
   const defaultBackend =
-    envValue(env, "LLM_BACKEND", "LLM_DEFAULT_BACKEND") ?? "stub";
+    envValue(resolvedEnv, "LLM_BACKEND", "LLM_DEFAULT_BACKEND") ?? "stub";
   registry.setDefault(defaultBackend);
-  registry.setFallback(envValue(env, "BLUE_TANUKI_LLM_FALLBACK_BACKEND"));
+  registry.setFallback(envValue(resolvedEnv, "BLUE_TANUKI_LLM_FALLBACK_BACKEND"));
   return registry;
 }
 
@@ -320,7 +345,7 @@ export function describeLLMCommandRoute(env: Env = process.env): {
 
 export function listConfiguredLLMProviders(env: Env = process.env): string[] {
   const names = new Set<string>(["stub"]);
-  if (envValue(env, "ANTHROPIC_API_KEY") || wantsBackend(env, "anthropic")) {
+  if (hasLLMSecretMaterial(env, "ANTHROPIC_API_KEY") || wantsBackend(env, "anthropic")) {
     names.add("anthropic");
   }
   const openaiConfigured = Boolean(
@@ -335,7 +360,7 @@ export function listConfiguredLLMProviders(env: Env = process.env): string[] {
     names.add("openai-compatible");
   }
   if (
-    (envValue(env, "OPENROUTER_API_KEY") &&
+    ((hasLLMSecretMaterial(env, "OPENROUTER_API_KEY")) &&
       envValue(env, "OPENROUTER_MODEL", "LLM_MODEL")) ||
     wantsBackend(env, "openrouter")
   ) {
@@ -354,7 +379,9 @@ export function describeLLMConfig(env: Env = process.env): {
   default_backend: string;
   openai_compatible_configured: boolean;
   anthropic_configured: boolean;
+  anthropic_secret_ref_configured: boolean;
   openrouter_configured: boolean;
+  openrouter_secret_ref_configured: boolean;
   configured_providers: string[];
   resilience: {
     retry_policy: LLMRetryPolicy;
@@ -370,10 +397,20 @@ export function describeLLMConfig(env: Env = process.env): {
       envValue(env, "OPENAI_COMPAT_ENDPOINT", "OPENAI_ENDPOINT", "LLM_ENDPOINT") &&
         envValue(env, "OPENAI_COMPAT_MODEL", "OPENAI_MODEL", "LLM_MODEL"),
     ),
-    anthropic_configured: Boolean(envValue(env, "ANTHROPIC_API_KEY")),
+    anthropic_configured: Boolean(
+      envValue(env, "ANTHROPIC_API_KEY") ||
+        envValue(env, secretRefKey("ANTHROPIC_API_KEY")),
+    ),
+    anthropic_secret_ref_configured: Boolean(
+      envValue(env, secretRefKey("ANTHROPIC_API_KEY")),
+    ),
     openrouter_configured: Boolean(
-      envValue(env, "OPENROUTER_API_KEY") &&
+      (envValue(env, "OPENROUTER_API_KEY") ||
+        envValue(env, secretRefKey("OPENROUTER_API_KEY"))) &&
         envValue(env, "OPENROUTER_MODEL", "LLM_MODEL"),
+    ),
+    openrouter_secret_ref_configured: Boolean(
+      envValue(env, secretRefKey("OPENROUTER_API_KEY")),
     ),
     configured_providers: listConfiguredLLMProviders(env),
     resilience: {

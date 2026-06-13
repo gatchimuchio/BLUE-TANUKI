@@ -16,9 +16,12 @@ import {
 import type { PluginRuntime } from "./plugin_loader.js";
 import {
   applySettingsPatch,
+  protectLlmApiKeyForEnvFile,
+  type SettingsSecretStorageResult,
   verifyLlmProvisioning,
 } from "./control_center/setup/api_settings.js";
 import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
+import { llmSecretStorageStatus } from "./secret_store.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -36,6 +39,7 @@ export interface SettingsSnapshot {
     model: string | null;
     endpoint: string | null;
     api_key_set: boolean;
+    secret_storage: ReturnType<typeof llmSecretStorageStatus>;
     temperature: number | null;
     max_tokens: number | null;
     timeout_ms: number | null;
@@ -119,22 +123,35 @@ function envFilePath(env: Env): string | undefined {
 }
 
 function apiKeySet(env: Env, provider: SetupProviderKind): boolean {
-  if (provider === "anthropic") return Boolean(envValue(env, "ANTHROPIC_API_KEY"));
+  if (provider === "anthropic") {
+    return Boolean(envValue(env, "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_REF"));
+  }
   if (provider === "openai") {
-    return Boolean(envValue(env, "OPENAI_API_KEY", "LLM_API_KEY"));
+    return Boolean(
+      envValue(
+        env,
+        "OPENAI_API_KEY",
+        "OPENAI_API_KEY_REF",
+        "LLM_API_KEY",
+        "LLM_API_KEY_REF",
+      ),
+    );
   }
   if (provider === "openai-compatible") {
     return Boolean(
       envValue(
         env,
         "OPENAI_COMPAT_API_KEY",
+        "OPENAI_COMPAT_API_KEY_REF",
         "OPENAI_API_KEY",
+        "OPENAI_API_KEY_REF",
         "LLM_API_KEY",
+        "LLM_API_KEY_REF",
       ),
     );
   }
   if (provider === "openrouter") {
-    return Boolean(envValue(env, "OPENROUTER_API_KEY"));
+    return Boolean(envValue(env, "OPENROUTER_API_KEY", "OPENROUTER_API_KEY_REF"));
   }
   return false;
 }
@@ -153,6 +170,7 @@ export function buildSettingsSnapshot(
       model: config.llm.model ?? null,
       endpoint: config.llm.endpoint ?? null,
       api_key_set: apiKeySet(env, config.llm.provider),
+      secret_storage: llmSecretStorageStatus(env, config.llm.provider),
       temperature: config.llm.temperature ?? null,
       max_tokens: config.llm.max_tokens ?? null,
       timeout_ms: config.llm.timeout_ms ?? null,
@@ -207,6 +225,9 @@ export async function updateSettingsEnvFile(
   backup_path?: string;
   restart_required: true;
   env_keys: string[];
+  secret_storage: {
+    llm_api_key: SettingsSecretStorageResult;
+  };
 }> {
   const target = envFilePath(env);
   if (!target) {
@@ -215,6 +236,7 @@ export async function updateSettingsEnvFile(
   const fileEnv = await readEnvFileEnv(target);
   const baseEnv = { ...env, ...fileEnv };
   const nextConfig = applySettingsPatch(setupConfigFromEnv(baseEnv), body);
+  const secretStorage = protectLlmApiKeyForEnvFile(nextConfig, target, baseEnv);
   const writeResult = await writeEnvFileAtomic(target, renderSetupEnvFile(nextConfig), {
     mode: 0o600,
     backup: true,
@@ -225,6 +247,9 @@ export async function updateSettingsEnvFile(
     backup_path: writeResult.backup_path,
     restart_required: true,
     env_keys: Object.keys(setupConfigToEnv(nextConfig)).sort(),
+    secret_storage: {
+      llm_api_key: secretStorage,
+    },
   };
 }
 

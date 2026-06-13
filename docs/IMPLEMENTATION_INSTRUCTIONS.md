@@ -22,41 +22,43 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P5-S1 — LLM provider resilience and health evidence`.
+- The active instruction is `Phase P5 — LLM Provider 実運用化`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P5-S1 — LLM provider resilience and health evidence
+# Phase P5 — LLM Provider 実運用化
 
 ## Objective
 
-Make LLM provider runtime behavior more robust by adding typed provider errors, explicit retry/fallback support, and non-authority health evidence without moving authority into LLM output or provider metadata.
+Make non-stub LLM providers usable as a product path by adding typed provider failures, explicit retry/fallback, non-authority health evidence, and Windows OS-protected LLM API key storage without moving authority into LLM output or provider metadata.
 
 ## Scope
 
 - Add typed LLM provider error classification for retryable and non-retryable failures.
 - Add explicit LLM retry and fallback configuration in the gateway LLM registry path.
 - Add LLM registry health snapshots that classify evidence as internal state and non-authority metadata.
-- Extend `validate:product -- --phase P5` with a fixture-backed resilience/health check.
+- Add Windows DPAPI CurrentUser storage references for LLM provider API keys saved through settings.
+- Resolve LLM API key secret references at runtime while preserving plugin secret permission enforcement.
+- Extend `validate:product -- --phase P5` with fixture-backed resilience/health/secret-ref checks.
 - Update tests and P-series docs.
 
 ## Non-Goals
 
 - Do not add owner credentials or run external live LLM calls in CI.
-- Do not claim P5 complete; owner credentialed live smoke on Linux/Windows and OS-protected secret storage remain later evidence items.
-- Do not implement Windows DPAPI or other OS secret storage in this phase.
+- Do not claim P5 complete; owner credentialed live smoke on Linux/Windows and Windows real-device DPAPI verification remain later evidence items.
+- Do not implement Linux/macOS keychain storage in this phase.
 - Do not make retry/fallback metadata authoritative.
-- Do not change HDS-BRAIN authority, Approval Gate policy, executor authority semantics, provider credential storage, or final-review behavior.
+- Do not change HDS-BRAIN authority, Approval Gate policy, executor authority semantics, or final-review behavior.
 
 ## Inspect First
 
 ```bash
 git status --short
-rg -n "LLM|OpenRouter|openai_compatible|smoke:live|retry|rate|fallback|health|P5" packages/blue-tanuki apps/gateway scripts docs package.json
-rg -n "LLMRegistry|LLMBackend|OpenAICompatibleBackend|AnthropicBackend|describeLLMConfig|validate:product|PRODUCT_CHECKS" packages/blue-tanuki apps/gateway scripts docs
+rg -n "LLM|OpenRouter|openai_compatible|smoke:live|retry|rate|fallback|health|P5|secret|DPAPI|credential" packages/blue-tanuki apps/gateway scripts docs package.json
+rg -n "LLMRegistry|LLMBackend|OpenAICompatibleBackend|AnthropicBackend|describeLLMConfig|setupConfigToEnv|validate:product|PRODUCT_CHECKS" packages/blue-tanuki apps/gateway scripts docs
 ```
 
 ## Implementation Requirements
@@ -65,12 +67,15 @@ rg -n "LLMRegistry|LLMBackend|OpenAICompatibleBackend|AnthropicBackend|describeL
 - Retry must only apply to retryable provider errors and must be bounded.
 - Fallback must be explicit configuration, not silent hidden authority.
 - Health snapshots must include non-authority flags and evidence source classification.
+- On Windows, settings-saved LLM API keys must be stored as DPAPI CurrentUser secret references instead of raw env-file values.
+- Secret references must fail closed on unsupported platforms and must not be treated as authority.
 - `validate:product -- --phase P5` must include the new P5 check while keeping P2/P3/P4 behavior intact.
 
 ## Safety Requirements
 
 - LLM output remains downstream only and must not become authority.
 - Provider metadata, retry metadata, fallback metadata, and health metadata must not become authority.
+- Secret reference metadata must not become authority.
 - Retry/fallback must not approve commands, classify risk, bypass final review, infer consent, or alter HDS-BRAIN decisions.
 - HDS-BRAIN and Approval Gate remain upstream.
 
@@ -78,6 +83,7 @@ rg -n "LLMRegistry|LLMBackend|OpenAICompatibleBackend|AnthropicBackend|describeL
 
 - Retry and fallback configuration must be visible in machine-readable config evidence.
 - Health evidence must explain whether a provider is untested, passing, or failing.
+- Settings save responses must report whether LLM API key material was OS-protected or fell back to env-file material.
 - Missing owner live credentials must remain a later evidence limitation, not a false product completion claim.
 
 ## Audit Requirements
@@ -90,7 +96,8 @@ rg -n "LLMRegistry|LLMBackend|OpenAICompatibleBackend|AnthropicBackend|describeL
 - LLM registry tests must cover retry, explicit fallback, and non-authority health metadata.
 - Provider tests must cover rate-limit classification.
 - Gateway LLM config tests must cover retry/fallback env configuration.
-- The P5 product check must confirm retry, fallback, error classification, and non-authority flags without external credentials.
+- Secret store tests must cover secret ref creation, resolution, unsupported platform fail-closed behavior, and non-authority flags.
+- The P5 product check must confirm retry, fallback, error classification, secret-ref behavior, and non-authority flags without external credentials.
 
 ## Docs
 
@@ -118,7 +125,7 @@ Run `pnpm smoke:live` when owner credentials are available. Without owner creden
 
 ## Permanent-Use Check
 
-LLM provider failures are classified and can be retried or explicitly routed to fallback without creating hidden authority. This does not complete OS-protected secret storage or owner credentialed live smoke evidence.
+LLM provider failures are classified and can be retried or explicitly routed to fallback without creating hidden authority. Windows settings-saved LLM API keys are represented as DPAPI CurrentUser secret references. This does not complete Linux/macOS keychain storage or owner credentialed live smoke evidence.
 
 ## Acceptance Criteria
 

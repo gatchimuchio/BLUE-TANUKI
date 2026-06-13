@@ -65,6 +65,12 @@ describe("settings surface", () => {
     );
     expect(snapshot.llm.provider).toBe("openai-compatible");
     expect(snapshot.llm.api_key_set).toBe(true);
+    expect(snapshot.llm.secret_storage).toMatchObject({
+      configured_key: "OPENAI_COMPAT_API_KEY",
+      raw_env_present: true,
+      os_protected: false,
+      used_for_authority: false,
+    });
     expect(snapshot.integrations.openrouter.configured).toBe(true);
     expect(snapshot.integrations.openrouter.used_for_authority).toBe(false);
     expect(snapshot.integrations.composio.configured).toBe(true);
@@ -108,6 +114,12 @@ describe("settings surface", () => {
 
       expect(result.restart_required).toBe(true);
       expect(result.backup_path).toBeTruthy();
+      expect(result.secret_storage.llm_api_key).toMatchObject({
+        status: "plaintext_env_fallback",
+        key: "OPENROUTER_API_KEY",
+        os_protected: false,
+        used_for_authority: false,
+      });
       const raw = await fs.readFile(envFile, "utf8");
       expect(raw).toContain("LLM_BACKEND=openrouter");
       expect(raw).toContain("OPENROUTER_MODEL=openrouter/model");

@@ -32,6 +32,12 @@ import {
   type LLMRequest,
   type LLMResponse,
 } from "../packages/blue-tanuki/src/index.js";
+import {
+  resolveLLMSecretRefs,
+  secretRefKey,
+  storeLlmApiKeySecret,
+  type SecretProtector,
+} from "../apps/gateway/src/secret_store.js";
 
 export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P10" | "P11";
 export type ProductPlatform = "linux" | "win32" | "any";
@@ -1120,6 +1126,16 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
 }
 
 async function runLLMResilienceHealth(): Promise<CheckResult> {
+  const secretRoot = await mkdtemp(path.join(os.tmpdir(), "bt-product-llm-secret-"));
+  const fakeProtector: SecretProtector = {
+    protect: (plaintext) => Buffer.from(`protected:${plaintext}`, "utf8").toString("base64url"),
+    unprotect: (protectedValue) => {
+      const decoded = Buffer.from(protectedValue, "base64url").toString("utf8");
+      if (!decoded.startsWith("protected:")) throw new Error("bad product secret fixture");
+      return decoded.slice("protected:".length);
+    },
+  };
+
   class FixtureBackend implements LLMBackend {
     readonly seen: LLMRequest[] = [];
 
@@ -1147,72 +1163,106 @@ async function runLLMResilienceHealth(): Promise<CheckResult> {
     }
   }
 
-  const retryBackend = new FixtureBackend("primary", 1);
-  const retryRegistry = new LLMRegistry({
-    retry: { max_attempts: 2, base_delay_ms: 0, max_delay_ms: 0 },
-    sleep: async () => undefined,
-    now: () => Date.parse("2026-06-13T00:00:00.000Z"),
-  }).register(retryBackend);
-  const retryResponse = await retryRegistry.call({
-    messages: [{ role: "user", content: "fixture retry" }],
-  });
-  const retryHealth = retryRegistry.healthSnapshot();
-  assertCheck(retryResponse.content === "fixture:primary", "LLM retry fixture did not return primary response");
-  assertCheck(retryBackend.seen.length === 2, "LLM retry fixture did not retry exactly once");
-  assertCheck(retryHealth.providers[0]?.state === "pass", "LLM retry health did not record pass");
-  assertCheck(
-    retryHealth.authority_boundary.used_for_authority === false,
-    "LLM retry health became authority",
-  );
+  try {
+    const retryBackend = new FixtureBackend("primary", 1);
+    const retryRegistry = new LLMRegistry({
+      retry: { max_attempts: 2, base_delay_ms: 0, max_delay_ms: 0 },
+      sleep: async () => undefined,
+      now: () => Date.parse("2026-06-13T00:00:00.000Z"),
+    }).register(retryBackend);
+    const retryResponse = await retryRegistry.call({
+      messages: [{ role: "user", content: "fixture retry" }],
+    });
+    const retryHealth = retryRegistry.healthSnapshot();
+    assertCheck(retryResponse.content === "fixture:primary", "LLM retry fixture did not return primary response");
+    assertCheck(retryBackend.seen.length === 2, "LLM retry fixture did not retry exactly once");
+    assertCheck(retryHealth.providers[0]?.state === "pass", "LLM retry health did not record pass");
+    assertCheck(
+      retryHealth.authority_boundary.used_for_authority === false,
+      "LLM retry health became authority",
+    );
 
-  const fallbackPrimary = new FixtureBackend("primary", 1);
-  const fallbackBackend = new FixtureBackend("stub", 0);
-  const fallbackRegistry = new LLMRegistry({
-    retry: { max_attempts: 1, base_delay_ms: 0, max_delay_ms: 0 },
-    sleep: async () => undefined,
-    now: () => Date.parse("2026-06-13T00:00:01.000Z"),
-  })
-    .register(fallbackPrimary)
-    .register(fallbackBackend)
-    .setDefault("primary")
-    .setFallback("stub");
-  const fallbackResponse = await fallbackRegistry.call({
-    messages: [{ role: "user", content: "fixture fallback" }],
-  });
-  const fallbackHealth = fallbackRegistry.healthSnapshot();
-  const primaryHealth = fallbackHealth.providers.find((provider) => provider.name === "primary");
-  const stubHealth = fallbackHealth.providers.find((provider) => provider.name === "stub");
-  assertCheck(fallbackResponse.content === "fixture:stub", "LLM fallback fixture did not use fallback");
-  assertCheck(fallbackPrimary.seen.length === 1, "LLM fallback primary call count mismatch");
-  assertCheck(fallbackBackend.seen.length === 1, "LLM fallback backend call count mismatch");
-  assertCheck(primaryHealth?.state === "fail", "LLM fallback health did not record primary failure");
-  assertCheck(stubHealth?.state === "pass", "LLM fallback health did not record fallback pass");
-  assertCheck(stubHealth?.used_for_authority === false, "LLM fallback health became authority");
-  assertCheck(
-    fallbackHealth.authority_boundary.provider_metadata_used_for_authority === false,
-    "LLM provider metadata became authority",
-  );
+    const fallbackPrimary = new FixtureBackend("primary", 1);
+    const fallbackBackend = new FixtureBackend("stub", 0);
+    const fallbackRegistry = new LLMRegistry({
+      retry: { max_attempts: 1, base_delay_ms: 0, max_delay_ms: 0 },
+      sleep: async () => undefined,
+      now: () => Date.parse("2026-06-13T00:00:01.000Z"),
+    })
+      .register(fallbackPrimary)
+      .register(fallbackBackend)
+      .setDefault("primary")
+      .setFallback("stub");
+    const fallbackResponse = await fallbackRegistry.call({
+      messages: [{ role: "user", content: "fixture fallback" }],
+    });
+    const fallbackHealth = fallbackRegistry.healthSnapshot();
+    const primaryHealth = fallbackHealth.providers.find((provider) => provider.name === "primary");
+    const stubHealth = fallbackHealth.providers.find((provider) => provider.name === "stub");
+    assertCheck(fallbackResponse.content === "fixture:stub", "LLM fallback fixture did not use fallback");
+    assertCheck(fallbackPrimary.seen.length === 1, "LLM fallback primary call count mismatch");
+    assertCheck(fallbackBackend.seen.length === 1, "LLM fallback backend call count mismatch");
+    assertCheck(primaryHealth?.state === "fail", "LLM fallback health did not record primary failure");
+    assertCheck(stubHealth?.state === "pass", "LLM fallback health did not record fallback pass");
+    assertCheck(stubHealth?.used_for_authority === false, "LLM fallback health became authority");
+    assertCheck(
+      fallbackHealth.authority_boundary.provider_metadata_used_for_authority === false,
+      "LLM provider metadata became authority",
+    );
 
-  return {
-    status: "pass",
-    summary: "LLM retry/fallback/error classification health fixture passed",
-    raw_log: [
-      "retry: remote_service_unavailable retried once and recovered",
-      "fallback: explicit fallback backend used after retryable default backend failure",
-      "authority: LLM output/provider/health metadata used_for_authority=false",
-    ].join("\n"),
-    details: {
-      retry_attempts: retryBackend.seen.length,
-      fallback_primary_attempts: fallbackPrimary.seen.length,
-      fallback_backend_attempts: fallbackBackend.seen.length,
-      fallback_backend: fallbackHealth.fallback_backend,
-      retry_policy_max_attempts: retryHealth.retry_policy.max_attempts,
-      llm_output_used_for_authority: false,
-      provider_metadata_used_for_authority: false,
-      health_metadata_used_for_authority: false,
-      evidence_source: ["INTERNAL_STATE", "FIXTURE"],
-    },
-  };
+    const storedSecret = storeLlmApiKeySecret(
+      "OPENROUTER_API_KEY",
+      "product-openrouter-secret",
+      {
+        envFilePath: path.join(secretRoot, "blue-tanuki.env"),
+        platform: "linux",
+        protector: fakeProtector,
+      },
+    );
+    const resolvedSecretEnv = resolveLLMSecretRefs(
+      { [secretRefKey("OPENROUTER_API_KEY")]: storedSecret.ref },
+      { platform: "linux", protector: fakeProtector },
+    );
+    assertCheck(
+      storedSecret.os_protected === true && storedSecret.used_for_authority === false,
+      "LLM secret ref fixture did not preserve non-authority protected metadata",
+    );
+    assertCheck(
+      resolvedSecretEnv.OPENROUTER_API_KEY === "product-openrouter-secret",
+      "LLM secret ref fixture did not resolve secret material",
+    );
+    assertCheck(
+      !storedSecret.ref.includes("product-openrouter-secret"),
+      "LLM secret ref exposed secret material",
+    );
+
+    return {
+      status: "pass",
+      summary: "LLM retry/fallback/error classification/secret-ref health fixture passed",
+      raw_log: [
+        "retry: remote_service_unavailable retried once and recovered",
+        "fallback: explicit fallback backend used after retryable default backend failure",
+        "secret-ref: LLM API key ref round-trip verified with fixture protector",
+        "authority: LLM output/provider/health/secret metadata used_for_authority=false",
+      ].join("\n"),
+      details: {
+        retry_attempts: retryBackend.seen.length,
+        fallback_primary_attempts: fallbackPrimary.seen.length,
+        fallback_backend_attempts: fallbackBackend.seen.length,
+        fallback_backend: fallbackHealth.fallback_backend,
+        retry_policy_max_attempts: retryHealth.retry_policy.max_attempts,
+        secret_ref_key: storedSecret.ref_key,
+        secret_ref_os_protected: storedSecret.os_protected,
+        llm_output_used_for_authority: false,
+        provider_metadata_used_for_authority: false,
+        health_metadata_used_for_authority: false,
+        secret_metadata_used_for_authority: false,
+        evidence_source: ["INTERNAL_STATE", "FIXTURE"],
+      },
+    };
+  } finally {
+    await rm(secretRoot, { recursive: true, force: true });
+  }
 }
 
 async function runNodeScript(ctx: CheckContext, scriptRel: string): Promise<CommandRunResult> {

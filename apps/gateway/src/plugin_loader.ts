@@ -440,6 +440,11 @@ export class PluginRuntime {
         "OPENAI_COMPAT_API_KEY",
         "LLM_API_KEY",
         "OPENROUTER_API_KEY",
+        "ANTHROPIC_API_KEY_REF",
+        "OPENAI_API_KEY_REF",
+        "OPENAI_COMPAT_API_KEY_REF",
+        "LLM_API_KEY_REF",
+        "OPENROUTER_API_KEY_REF",
         "OPENROUTER_MODEL",
         "OPENAI_COMPAT_ENDPOINT",
         "OPENAI_ENDPOINT",
@@ -455,18 +460,24 @@ export class PluginRuntime {
       );
     }
 
-    const secretNames = [
+    const baseSecretNames = [
       "ANTHROPIC_API_KEY",
       "OPENAI_API_KEY",
       "OPENAI_COMPAT_API_KEY",
       "LLM_API_KEY",
+      "OPENROUTER_API_KEY",
+    ].filter((name) => envValue(env, name, `${name}_REF`));
+    const metadataSecretNames = [
       "OPENAI_COMPAT_HEADERS_JSON",
       "LLM_HEADERS_JSON",
-      "OPENROUTER_API_KEY",
       "OPENROUTER_MODEL",
       "OPENROUTER_SITE_URL",
       "OPENROUTER_APP_TITLE",
     ].filter((name) => envValue(env, name));
+    const secretNames = [
+      ...baseSecretNames,
+      ...metadataSecretNames,
+    ];
 
     for (const name of providerSecretEnvNames(env)) {
       secretNames.push(name);

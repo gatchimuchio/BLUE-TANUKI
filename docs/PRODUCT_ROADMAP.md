@@ -133,10 +133,11 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: stub依存から脱却し、実LLMで製品として使える。
 
-現状（実測）: **partial（進捗）**。provider registry（anthropic / openai_compatible / OpenRouter既定endpoint / stub）、CCからのkey・model・endpoint設定、live smoke（`smoke:live`: 実応答 "BLUE-TANUKI-LIVE-OK" 検証、timeout付、資格情報なければskip）。LLM層にはtyped provider error分類、明示retry/fallback設定、non-authority health snapshot、`validate:product` P5 fixture checkが追加済み。
+現状（実測）: **partial（高進捗）**。provider registry（anthropic / openai_compatible / OpenRouter既定endpoint / stub）、CCからのkey・model・endpoint設定、live smoke（`smoke:live`: 実応答 "BLUE-TANUKI-LIVE-OK" 検証、timeout付、資格情報なければskip）。LLM層にはtyped provider error分類、明示retry/fallback設定、non-authority health snapshot、Windows DPAPI CurrentUser secret ref保存、runtime secret ref解決、`validate:product` P5 fixture checkが追加済み。
 
 残差（実測で不在を確認）:
-- **Windows秘密保存**: 現状はconfigファイル保存＋UI maskのみ。DPAPI等のOS保護への移行（方式決定含む）
+- Windows実機でのDPAPI保存→restart→会話成立 evidence
+- Linux/macOS keychain保存（必要性・方式決定含む）
 - owner資格情報でのlive smoke PASS証跡（Linux・Windows両方）
 
 完了条件: 両OSでlive smoke PASS。CCから設定→会話成立。鍵がOS保護下にある。
@@ -310,7 +311,7 @@ P12 → P13
 | P2 | validate:product新設 | done | P13までの増分登録継続 |
 | P3 | Windows導入 | 実装大部分done | Windows CI evidence確認・GO前owner実機E2E |
 | P4 | Control Center | partial高 | Backup/Restore実行・Update・実機品質 |
-| P5 | LLM実運用 | partial | retry/fallback/health・DPAPI鍵保護・live証跡 |
+| P5 | LLM実運用 | partial高 | Windows実機DPAPI証跡・Linux/macOS keychain・live証跡 |
 | P6 | Authority閉包 | コアdone | emergency stop・revoke GUI・mode初回選択 |
 | P7 | Audit製品化 | partial | 横断redaction・可読report・retention・evidence GUI |
 | P8 | Composio閉包 | dry-run done | allowlist/scope/revoke・live解放（P6前提） |

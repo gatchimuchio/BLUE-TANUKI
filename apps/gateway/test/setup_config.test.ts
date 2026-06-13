@@ -76,6 +76,37 @@ describe("setup_config", () => {
     expect(env.COMPOSIO_DRY_RUN).toBe("true");
   });
 
+  it("renders LLM secret references without raw API key material", () => {
+    const config = createDefaultSetupConfig();
+    config.llm = {
+      provider: "openrouter",
+      model: "openrouter/model",
+      api_key_ref: "win32-dpapi-current-user:file:abc",
+    };
+
+    const env = setupConfigToEnv(config);
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+    expect(env.OPENROUTER_API_KEY_REF).toBe("win32-dpapi-current-user:file:abc");
+
+    const file = renderSetupEnvFile(config);
+    expect(file).not.toContain("OPENROUTER_API_KEY=");
+    expect(file).toContain("OPENROUTER_API_KEY_REF=win32-dpapi-current-user:file:abc");
+  });
+
+  it("builds setup config from LLM secret references", () => {
+    const config = setupConfigFromEnv({
+      LLM_BACKEND: "openrouter",
+      OPENROUTER_API_KEY_REF: "win32-dpapi-current-user:file:abc",
+      OPENROUTER_MODEL: "openrouter/model",
+      WEBCHAT_TOKEN: "webchat-token-123456",
+      WEBCHAT_RESUME_TOKEN: "resume-token-123456",
+      BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
+    });
+    expect(config.llm.provider).toBe("openrouter");
+    expect(config.llm.api_key).toBeUndefined();
+    expect(config.llm.api_key_ref).toBe("win32-dpapi-current-user:file:abc");
+  });
+
   it("builds setup config from runtime env", () => {
     const config = setupConfigFromEnv({
       LLM_BACKEND: "openai-compatible",
