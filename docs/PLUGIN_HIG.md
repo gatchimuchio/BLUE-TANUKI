@@ -105,7 +105,15 @@ Names must be explicit:
 
 Do not use marketing names for privileged operations.
 
-## 10. Cross-References
+## 10. v1.0 HIG Stability Boundary
+
+This HIG is contract-stable for v1.0 RC.
+
+For v1.0, "stable" means reviewers, Codex, and the owner can rely on the readability, type visibility, side-effect declaration, authority-boundary comment, owner-next-action, and conformance expectations in this document when applying Plugin Review Gate. It does not mean plugin behavior is authority, that preview support status is promoted, or that third-party code is trusted after review.
+
+Any post-v1 expansion that weakens these requirements, adds hot reload, allows external dynamic import, accepts opaque capability blobs, or treats plugin metadata as authority requires a dedicated security phase.
+
+## 11. Cross-References
 
 - [Plugin Review Gate](PLUGIN_REVIEW_GATE.md)
 - [Skill Loader Contract](SKILL_LOADER_CONTRACT.md)

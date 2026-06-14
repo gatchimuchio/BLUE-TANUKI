@@ -22,87 +22,89 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P8 — Composio / 外部API連携の安全閉包`.
+- The active instruction is `Phase P9 — Channel / Operator / 拡張面の整理`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P8 — Composio / 外部API連携の安全閉包
+# Phase P9 — Channel / Operator / 拡張面の整理
 
 ## Objective
 
-Make Composio / external API execution available only inside HDS approval and audit boundaries. Live execution must require explicit operator opt-in, toolkit/action allowlists, user scoping, and revocation/disconnect controls while preserving HDS-BRAIN as the sole authority source.
+Make channel, operator, plugin, and skill extension claims match the actual product surface. P9 closes D7 operator first-party alignment and D6 Layer B v1 contract-stability alignment without promoting preview channels or weakening HDS-BRAIN authority.
 
 ## Scope
 
-- Replace dry-run-only Composio execution with a bounded live adapter behind explicit opt-in.
-- Add toolkit allowlist, action-scope allowlist, action revoke, user id, API endpoint, and disconnect controls to settings/Control Center.
-- Add pre/post Composio execution audit events in the HDS audit hash-chain.
-- Keep Composio metadata, search results, settings snapshot, and execution results non-authority.
-- Extend `validate:product -- --phase P8` with Composio dry-run/live/allowlist/revoke/approval/audit checks.
+- Align CLAIM, package metadata, manifests, repository health inventory, preview scope, source release bundle, and Windows package behavior for Writing / Daily / Developer Operator as first-party Layer A surfaces.
+- Keep operator packages plugin-loader discovered and permission-checked; do not add hard Gateway dependencies or a new authority path.
+- Preserve WebChat / Telegram as first-party channels, Slack / Discord / Teams / LINE as first-party-preview, and WhatsApp as reserved-third-party-only.
+- Declare Plugin Review Gate / Plugin HIG / Skill Loader Contract as v1.0 contract-stable Layer B boundaries.
+- Extend `validate:product -- --phase P9` with channel/operator/plugin-skill claim, packaging, review, plugin-loader, and non-authority checks.
 - Update tests and P-series docs.
 
 ## Non-Goals
 
-- Do not make Composio, connector metadata, connected-account metadata, tool discovery, or execution result an authority source.
-- Do not let dry-run=false alone open live execution.
-- Do not execute allowlist-excluded or revoked actions.
-- Do not add preview SDK packages as gateway hard dependencies.
-- Do not add automatic file upload/download handling or raw local file exfiltration paths.
-- Do not implement general connector reset/factory reset beyond Composio disconnect; broader reset remains P10.
+- Do not promote Slack / Discord / Teams / LINE to first-party without owner-run credentialed live-smoke evidence and `validate:channels` promotion evidence.
+- Do not implement WhatsApp first-party support.
+- Do not add public third-party Skill registry, plugin marketplace, hot reload, or automatic plugin installation.
+- Do not make Plugin Review Gate, plugin metadata, skill metadata, channel metadata, or operator surface metadata authority.
+- Do not add Gateway hard dependencies on preview channel packages.
+- Do not move HDS-BRAIN authority into operators, plugins, skills, channels, or UI.
 
 ## Inspect First
 
 ```bash
 git status --short
-rg -n "composio|connector|connectors|external.send|live_execution|dry_run|allowlist|allowed_actions|revoked_actions|validate:product|P8" packages apps scripts docs
-rg -n "invokeComposioExecute|composioStatus|ComposioConnectorStatus|composio.execute|AuthorityEventKind|executeAndEcho|settings/config|connectorsPayload" packages/blue-tanuki packages/hds-brain apps/gateway packages/channel-webchat scripts
+rg -n "First-party|first-party|Operator|operator|channel|first-party-preview|reserved-third-party|WhatsApp|plugin:review|Skill Loader|PLUGIN_HIG|validate:channels|validate:product|P9" CLAIM.md README.md package.json packages apps scripts docs
+rg -n "CORE_RELEASE_PATHS|RUNTIME_PACKAGES|CORE_RELEASE_ALLOWLIST|PREVIEW_PACKAGE_PATHS|operator-writing|operator-daily|operator-developer|CHANNEL_PROMOTION_GATE|PLUGIN_REVIEW_GATE|SKILL_LOADER_CONTRACT" scripts apps/gateway docs packages
 ```
 
 ## Implementation Requirements
 
-- Composio live execution must require all of: `COMPOSIO_API_KEY`, `COMPOSIO_USER_ID`, `COMPOSIO_ALLOWED_TOOLKITS`, `COMPOSIO_ALLOWED_ACTIONS`, `COMPOSIO_DRY_RUN=false`, and `COMPOSIO_LIVE_EXECUTION=true`.
-- Action allowlist and revoke checks must happen before any external request.
-- Live execution must call the Composio v3.1 tool execution API with bounded response reading and without logging API key material.
-- Control Center must show configured/dry-run/live opt-in/live availability/toolkit/action/revoked/user/disconnect status.
-- Disconnect must clear Composio API key material and close live execution back to dry-run.
-- `validate:product -- --phase P8` must verify dry-run no-call, revoke block, L3 final-review non-bypass, approved fixture execution, and pre/post audit events.
+- `CLAIM.md` must explicitly list Writing / Daily / Developer Operator as first-party Layer A surfaces.
+- Operator package descriptions, `blue-tanuki.plugin.json` manifests, docs, release bundle allowlist, Windows package allowlist, and repo-health inventory must agree.
+- Operator surfaces must remain plugin-loader discovered, bundled-review-checked, permission-enforced, and downstream-only.
+- `docs/preview-scope.md` must classify operator packages as core first-party and Slack / Discord / Teams / LINE as preview.
+- `docs/PLUGIN_REVIEW_GATE.md`, `docs/PLUGIN_HIG.md`, and `docs/SKILL_LOADER_CONTRACT.md` must declare the v1.0 contract-stable Layer B boundary and non-authority limits.
+- `validate:product -- --phase P9` must run `validate:channels`, bundled `plugin:review` for operator packages, plugin-loader surface checks, preview/core package classification checks, and operator non-authority checks.
 
 ## Safety Requirements
 
 - HDS-BRAIN remains the only authority source.
-- Composio settings, metadata, discovery, and execution results remain downstream evidence only.
-- Composio cannot approve, classify risk, infer consent, rewrite policy, bypass final review, or release public claims.
-- Live execution cannot occur through dry-run, missing opt-in, missing user id, missing action allowlist, or revoked action scopes.
-- API keys and secret values must not be serialized into UI/API/product validation evidence.
-- HDS approval, authority events, executor feedback, and output audit remain externally inspectable.
+- Operators, channels, plugins, skills, package metadata, review output, and support status remain downstream metadata/evidence only.
+- Plugin Review Gate cannot approve, execute, classify risk, substitute HDS-BRAIN, bypass Approval Gate, or promote public claims.
+- Preview channels cannot become first-party by wording drift.
+- WhatsApp must remain reserved-third-party-only.
+- Gateway hard dependencies must not expand to preview channel packages.
+- Release bundle / Windows package inclusion must not introduce secret files or GUI Shell dependencies.
 
 ## Operator Usability Requirements
 
-- The Control Center Connectors screen must expose Composio API key rotation, user id, toolkit allowlist, action allowlist, revoked actions, dry-run, live opt-in, API endpoint, and disconnect.
-- The screen must show whether live execution is available or blocked and which gate is configured.
-- Failure output must make clear whether configuration, allowlist, revoke, approval, external API, or audit failed.
+- Product docs and claim boundary must make clear which channels are first-party, preview, or reserved-third-party.
+- Operator surfaces must be visible as first-party Layer A surfaces without implying that they own authority.
+- Layer B docs must make clear what is contract-stable and what is intentionally not shipped.
 
 ## Audit Requirements
 
-- Composio execution request/completion/failure events must append audit evidence without making the event authority.
-- Execution history and product validation evidence must keep `used_for_authority=false`.
-- Evidence source class for the P8 product check is `INTERNAL_STATE` / `FIXTURE`; real owner credential live smoke remains separate external evidence before P13.
+- P9 product validation evidence must keep `used_for_authority=false`.
+- Evidence source class for P9 is `CONFIG` / `INTERNAL_STATE` / `FIXTURE`.
+- Channel promotion live-smoke evidence remains separate `EXTERNAL_EVIDENCE` and is not generated by P9.
 
 ## Tests
 
-- Composio connector tests must cover dry-run, live opt-in, action allowlist, action revoke, bounded fixture execution, and secret non-exposure.
-- Settings/Control Center tests must cover new Composio fields and disconnect behavior.
-- Product validation must cover P8 Composio safety closure.
-- Existing audit, evidence, approval, settings, and product validation tests must remain green.
+- Product validation must cover P9 channel/operator/extension-boundary closure.
+- Repo-health and packaging tests must remain green after operator core release classification.
+- Release bundle and Windows package verification must require first-party operator packages.
+- Existing channel promotion, plugin review, operator surface, plugin loader, and product validation tests must remain green.
 
 ## Docs
 
 - Update `docs/VALIDATE_PRODUCT.md`.
 - Update `docs/PRODUCT_ROADMAP.md`.
 - Keep `docs/ROADMAP.md` active phase pointer aligned.
+- Update claim / preview / release-candidate / plugin-skill boundary docs as needed.
 
 ## Validation Commands
 
@@ -115,21 +117,30 @@ pnpm docs:check
 pnpm validate:repo-health
 pnpm validate:packaging
 pnpm validate:ga
-pnpm validate:product -- --phase P8 --evidence .codex-tmp/validate-product-p8-composio-local
+pnpm validate:product -- --phase P9 --evidence .codex-tmp/validate-product-p9-extension-local
+pnpm validate:channels
+pnpm plugin:review -- --package packages/operator-writing --bundled
+pnpm plugin:review -- --package packages/operator-daily --bundled
+pnpm plugin:review -- --package packages/operator-developer --bundled
+pnpm package:windows
+pnpm package:windows:verify
+pnpm release:bundle
+pnpm release:verify
 ```
 
 ## Manual Smoke
 
-Open Control Center, use the Connectors screen with the settings token, load/save Composio settings, confirm dry-run/live opt-in/live availability/toolkit/action/revoked/user/disconnect status are visible, and confirm disconnect clears live execution. With owner Composio credentials, submit a Composio action and verify it reaches pending L3 approval before any live execution.
+Open Control Center, confirm Writing / Daily / Developer Operator panels remain visible and token-gated, confirm Channel / About / Skills surfaces do not present preview channels or Layer B submissions as first-party authority, and confirm plugin review / channel promotion commands remain operator-visible CLI gates. Owner credentialed preview-channel smoke remains a later promotion evidence task.
 
 ## Permanent-Use Check
 
-The owner can configure Composio from the GUI, keep live execution closed by default, open it only with explicit action scope, revoke specific actions, disconnect the connector, and inspect pre/post audit evidence without exposing API keys.
+The owner can tell which channels are supported, preview, or reserved; which operator surfaces are first-party; and which plugin/skill extension promises are stable without mistaking any downstream surface for authority.
 
 ## Acceptance Criteria
 
 - Local validation passes.
-- `validate:product -- --phase P8` passes on Linux.
+- `validate:product -- --phase P9` passes on Linux.
+- `validate:channels`, bundled operator `plugin:review`, Windows package verify, and release verify pass.
 - Release claim remains pre-GO with `public_claim_allowed=false`.
 
 ## Final Report Format
@@ -2850,14 +2861,13 @@ Do not claim completion unless acceptance criteria are satisfied.
 The active next phase is:
 
 ```txt
-Phase P3-S1 — Windows product gate evidence retention
+Phase P9 — Channel / Operator / 拡張面の整理
 ```
 
-Scope: preserve the P3 Windows product gate evidence pack from the
-`windows-product` GitHub Actions job, keep `validate:product --phase P3` as the
-machine path for Windows installer verification, and document the remaining
-owner実機E2E requirement without claiming GA or product completion. This phase
-does not modify HDS-BRAIN authority, Approval Gate behavior, runtime policy, or
-public claim eligibility.
+Scope: align channel, operator, plugin, skill, package, release-bundle, and
+claim boundaries so first-party / preview / reserved-third-party statements
+match the actual product surface. This phase does not promote preview channels,
+open a public third-party Skill registry, move authority out of HDS-BRAIN, or
+change public claim eligibility.
 
 Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision. Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion remains blocked until explicit owner GO.

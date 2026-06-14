@@ -18,6 +18,9 @@ const CORE_RELEASE_PATHS = [
   "packages/channel-base",
   "packages/channel-webchat",
   "packages/channel-telegram",
+  "packages/operator-writing",
+  "packages/operator-daily",
+  "packages/operator-developer",
 ] as const;
 
 const INCLUDED_PATHS = [
@@ -51,6 +54,9 @@ const REQUIRED_PATHS = [
   "apps/gateway/dist/main.js",
   "packages/channel-webchat/dist/webchat.js",
   "packages/channel-telegram/dist/telegram.js",
+  "packages/operator-writing/dist/index.js",
+  "packages/operator-daily/dist/index.js",
+  "packages/operator-developer/dist/index.js",
   "apps/gateway/dist/approval_runtime.js",
   "packages/hds-brain/dist/approval_store.js",
   "docs/history/phase7-s2-approval-gate-execution-bridge.md",
@@ -90,6 +96,9 @@ const CORE_ROOT_TSCONFIG_REFERENCES = [
   "./packages/blue-tanuki",
   "./packages/channel-webchat",
   "./packages/channel-telegram",
+  "./packages/operator-writing",
+  "./packages/operator-daily",
+  "./packages/operator-developer",
   "./apps/gateway",
 ] as const;
 

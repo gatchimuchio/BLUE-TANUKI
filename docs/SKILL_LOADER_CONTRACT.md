@@ -111,7 +111,17 @@ No hot reload is allowed in v1.0 GA because runtime replacement of executable ex
 
 Changing this policy requires a standalone security phase.
 
-## 10. Cross-References
+## 10. v1.0 Skill Loader Stability Boundary
+
+This Skill Loader Contract is contract-stable for v1.0 RC.
+
+The stable v1.0 scope is discovery from approved workspace package roots or explicitly configured repository-local skill paths, static manifest parsing, capability comparison against the capability envelope, Plugin Review Gate evidence for Layer B submissions, boot-time loading only, disable / revoke reporting, and fail-closed behavior.
+
+The contract does not include a public third-party Skill registry, automatic network installation, runtime hot reload, external npm dynamic import, or any path where skill output, skill metadata, or review metadata can become authority. Skills remain downstream devices; HDS-BRAIN, Approval Gate, audit, and final-review remain the authority/control boundaries.
+
+Changing this boundary after v1.0 RC requires a dedicated phase because it can alter supply-chain, permission, and runtime replacement guarantees.
+
+## 11. Cross-References
 
 - [Plugin Review Gate](PLUGIN_REVIEW_GATE.md)
 - [Plugin HIG](PLUGIN_HIG.md)

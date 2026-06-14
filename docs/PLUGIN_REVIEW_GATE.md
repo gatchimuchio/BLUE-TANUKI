@@ -152,7 +152,27 @@ The implementation rejects wildcard capabilities, package/manifest drift, lifecy
 
 Plugin Review Gate result is review evidence only. Results carry `used_for_authority=false` and `layer_b_review_used_for_authority=false`; they do not approve, execute, classify risk, substitute HDS-BRAIN, bypass Approval Gate, or promote preview support status.
 
-## 11. Cross-References
+## 11. v1.0 Layer B Stability Boundary
+
+API stability: contract-stable for v1.0 RC.
+
+The v1.0 Layer B scope is deliberately limited to:
+
+- static manifest review;
+- bundled package review before workspace plugin loading;
+- Layer B submission review through `blue-tanuki.review.json`;
+- skill loader contract enforcement;
+- capability declaration checks;
+- no external npm dynamic import at runtime;
+- no hot reload;
+- disable / revoke evidence requirements;
+- explicit preview / first-party-preview / first-party support status review.
+
+The v1.0 boundary is not a public marketplace promise. It does not claim a public third-party Skill registry, automatic plugin installation, automatic promotion, hot runtime replacement, or review results as authority. HDS-BRAIN, Approval Gate, audit, final-review, and Runtime Invariants remain Layer A authority/control boundaries.
+
+Changing this contract after v1.0 RC requires a dedicated phase because it can alter extension supply-chain, permission, and audit expectations.
+
+## 12. Cross-References
 
 - [Plugin HIG](PLUGIN_HIG.md)
 - [Skill Loader Contract](SKILL_LOADER_CONTRACT.md)

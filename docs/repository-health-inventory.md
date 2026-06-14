@@ -17,9 +17,9 @@
 | `packages/channel-discord` | PREVIEW | first-party-preview channel; not core release blocker |
 | `packages/channel-teams` | PREVIEW | first-party-preview channel; not core release blocker |
 | `packages/channel-line` | PREVIEW | first-party-preview channel; not core release blocker |
-| `packages/operator-daily` | PREVIEW | operator expansion surface after safety/release path closure |
-| `packages/operator-developer` | PREVIEW | operator expansion surface after safety/release path closure |
-| `packages/operator-writing` | PREVIEW | operator expansion surface after safety/release path closure |
+| `packages/operator-daily` | CORE | first-party Layer A Daily Operator surface; plugin-loader discovered downstream package |
+| `packages/operator-developer` | CORE | first-party Layer A Developer Operator surface; plugin-loader discovered downstream package |
+| `packages/operator-writing` | CORE | first-party Layer A Writing Operator surface; plugin-loader discovered downstream package |
 | `install/linux` | CORE | supported native Linux / WSL guided install surface |
 | `install/macos` | PREVIEW | supported later as platform surface; not used as WSL baseline |
 | `install/windows` | PREVIEW | no new Windows-native bypasses in this health phase |
@@ -67,8 +67,8 @@
 
 - tsconfig references include CORE and PREVIEW packages so typecheck covers the full repository.
 - core release path is CORE-first; PREVIEW package type/test coverage may remain in validation without becoming release scope.
-- `apps/gateway` hard dependencies are core-only. Preview adapters and operator packages are discovered through plugin manifests in the full workspace and skipped when absent from the extracted core release bundle.
-- core release bundle allowlist is declared as `CORE_RELEASE_PATHS` in `scripts/create_release_bundle.ts`; preview packages, operator packages, installer/resident helpers, Windows/macOS installers, and credential-dependent live smoke are excluded from that allowlist.
+- `apps/gateway` hard dependencies are core-only. Preview adapters are discovered through plugin manifests in the full workspace and skipped when absent from the extracted core release bundle. Operator packages are first-party Layer A core release packages, but still load through plugin manifests and permission checks rather than hard Gateway imports.
+- core release bundle allowlist is declared as `CORE_RELEASE_PATHS` in `scripts/create_release_bundle.ts`; preview channel packages, installer/resident helpers, Windows/macOS installers, and credential-dependent live smoke are excluded from that allowlist.
 
 ## Health Phase Decisions
 

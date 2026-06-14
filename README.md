@@ -87,7 +87,7 @@ See [QUICKSTART.md](QUICKSTART.md).
 * **Daily Brief** scheduled-message smoke via internal cron
 * **GitHub / Google / browser automation** downstream tools behind capability, approval, preview, and audit boundaries
 * **OpenRouter** optional LLM provider adapter, separate from native/direct providers
-* **Composio** optional dry-run external tool connector behind allowlist, capability, approval, and audit boundaries
+* **Composio** optional live-gated external tool connector behind dry-run default, allowlist, capability, approval, and audit boundaries
 * **Unsigned Windows installer package**, portable installer / resident app / update-rollback documentation, and validation gates
 
 ## Explicit Boundaries

@@ -50,8 +50,9 @@ import {
   redactEvidenceText,
   scanEvidenceForSecrets,
 } from "../apps/gateway/src/evidence_redaction.js";
+import { loadPluginRuntime } from "../apps/gateway/src/plugin_loader.js";
 
-export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P10" | "P11";
+export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P9" | "P10" | "P11";
 export type ProductPlatform = "linux" | "win32" | "any";
 export type ProductCheckStatus = "pass" | "fail" | "skipped";
 
@@ -137,7 +138,7 @@ export interface ProductValidationResult {
   checks: CheckRunRecord[];
 }
 
-const PHASE_ORDER: ProductPhase[] = ["P2", "P3", "P4", "P5", "P6", "P7", "P8", "P10", "P11"];
+const PHASE_ORDER: ProductPhase[] = ["P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11"];
 const DEFAULT_TIMEOUT_MS = 120_000;
 const TSX = "node_modules/tsx/dist/cli.mjs";
 
@@ -246,6 +247,13 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "any",
     required: true,
     run: runComposioSafetyClosure,
+  },
+  {
+    id: "p9.channel_operator_extension_boundary",
+    phase: "P9",
+    platform: "any",
+    required: true,
+    run: runChannelOperatorExtensionBoundary,
   },
 ];
 
@@ -1804,6 +1812,176 @@ async function runComposioSafetyClosure(): Promise<CheckResult> {
       audit_events: auditEvents,
       audit_chain_valid: hds.getAudit().verify(),
       evidence_source: ["INTERNAL_STATE", "FIXTURE"],
+      used_for_authority: false,
+      hds_brain_remains_authority: true,
+    },
+  };
+}
+
+async function runChannelOperatorExtensionBoundary(ctx: CheckContext): Promise<CheckResult> {
+  const log: string[] = [];
+  const claim = await readFile(path.join(ctx.rootDir, "CLAIM.md"), "utf8");
+  const pluginReviewGate = await readFile(path.join(ctx.rootDir, "docs", "PLUGIN_REVIEW_GATE.md"), "utf8");
+  const pluginHig = await readFile(path.join(ctx.rootDir, "docs", "PLUGIN_HIG.md"), "utf8");
+  const skillContract = await readFile(path.join(ctx.rootDir, "docs", "SKILL_LOADER_CONTRACT.md"), "utf8");
+  const previewScope = await readFile(path.join(ctx.rootDir, "docs", "preview-scope.md"), "utf8");
+  const inventory = await readFile(path.join(ctx.rootDir, "docs", "repository-health-inventory.md"), "utf8");
+  const releaseBundle = await readFile(path.join(ctx.rootDir, "scripts", "create_release_bundle.ts"), "utf8");
+  const windowsPackage = await readFile(path.join(ctx.rootDir, "scripts", "package_windows.ts"), "utf8");
+  const compatibilityMatrix = JSON.parse(
+    await readFile(path.join(ctx.rootDir, "docs", "compatibility-matrix.json"), "utf8"),
+  ) as {
+    channels?: Record<string, { status?: unknown; target_release?: unknown; core_supported?: unknown; warranty?: unknown }>;
+  };
+
+  assertCheck(
+    claim.includes("Writing / Daily / Developer Operator: first-party Layer A operator surfaces"),
+    "CLAIM.md does not explicitly list first-party operator surfaces",
+  );
+  assertCheck(
+    claim.includes("Plugin API / Skill loader: v1.0 contract-stable Layer B boundary"),
+    "CLAIM.md does not declare the plugin/skill v1 scope",
+  );
+  assertCheck(
+    pluginReviewGate.includes("v1.0 Layer B Stability Boundary") &&
+      pluginReviewGate.includes("API stability: contract-stable for v1.0 RC"),
+    "Plugin Review Gate does not declare v1 Layer B stability",
+  );
+  assertCheck(
+    pluginHig.includes("v1.0 HIG Stability Boundary") &&
+      pluginHig.includes("contract-stable for v1.0 RC"),
+    "Plugin HIG does not declare v1 stability",
+  );
+  assertCheck(
+    skillContract.includes("v1.0 Skill Loader Stability Boundary") &&
+      skillContract.includes("contract-stable for v1.0 RC"),
+    "Skill Loader Contract does not declare v1 stability",
+  );
+  log.push("claim/docs: operator first-party and Layer B v1 stability declarations present");
+
+  const expectedChannels: Record<string, { status: string; target_release: string | null }> = {
+    webchat: { status: "first-party", target_release: "v1.0" },
+    telegram: { status: "first-party", target_release: "v1.0" },
+    slack: { status: "first-party-preview", target_release: "v1.0-preview" },
+    discord: { status: "first-party-preview", target_release: "v1.0-preview" },
+    teams: { status: "first-party-preview", target_release: "v1.0-preview" },
+    line: { status: "first-party-preview", target_release: "v1.0-preview" },
+    whatsapp: { status: "reserved-third-party", target_release: null },
+  };
+  for (const [channel, expected] of Object.entries(expectedChannels)) {
+    const actual = compatibilityMatrix.channels?.[channel];
+    assertCheck(actual?.status === expected.status, `${channel}: expected status ${expected.status}`);
+    assertCheck(actual?.target_release === expected.target_release, `${channel}: expected target_release ${String(expected.target_release)}`);
+  }
+  assertCheck(compatibilityMatrix.channels?.whatsapp?.core_supported === false, "WhatsApp core support was not false");
+  assertCheck(compatibilityMatrix.channels?.whatsapp?.warranty === "none", "WhatsApp warranty was not none");
+  const channelsRun = await ctx.runner(
+    pnpmCommandSpec(["validate:channels"], ctx.rootDir, { ...process.env }),
+    ctx.timeoutMs,
+  );
+  const channelsLog = commandLog(channelsRun);
+  assertCheck(channelsRun.exit_code === 0, `validate:channels failed: ${excerpt(channelsLog)}`);
+  assertCheck(channelsLog.includes("[channels] PASS"), "validate:channels did not report PASS");
+  log.push("channels: WebChat/Telegram first-party, Slack/Discord/Teams/LINE preview, WhatsApp reserved-third-party gate passed");
+
+  const operatorPackages = [
+    {
+      rel: "packages/operator-writing",
+      name: "@blue-tanuki/operator-writing",
+      label: "Writing Operator",
+      surface: "writing",
+      required: ["tool:file.search", "fs:read", "tool:file.write", "tool:file.edit", "fs:write"],
+    },
+    {
+      rel: "packages/operator-daily",
+      name: "@blue-tanuki/operator-daily",
+      label: "Daily Operator",
+      surface: "daily",
+      required: ["tool:schedule.list", "schedule:read", "tool:schedule.create", "schedule:create"],
+    },
+    {
+      rel: "packages/operator-developer",
+      name: "@blue-tanuki/operator-developer",
+      label: "Developer Operator",
+      surface: "developer",
+      required: ["tool:file.search", "fs:read", "tool:github.write", "tool:shell.exec", "shell:exec"],
+    },
+  ] as const;
+
+  const runtime = await loadPluginRuntime({
+    root: ctx.rootDir,
+    import_modules: true,
+    allow_ts_fallback: true,
+  });
+  for (const operator of operatorPackages) {
+    const pkg = JSON.parse(
+      await readFile(path.join(ctx.rootDir, operator.rel, "package.json"), "utf8"),
+    ) as { name?: unknown; description?: unknown; version?: unknown };
+    const manifest = runtime.get(operator.name).manifest;
+    assertCheck(pkg.name === operator.name, `${operator.label}: package name mismatch`);
+    assertCheck(typeof pkg.description === "string" && pkg.description.includes("First-party"), `${operator.label}: package description does not say First-party`);
+    assertCheck(manifest.kind === "core", `${operator.label}: manifest kind is not core`);
+    assertCheck(manifest.description?.includes("Layer A"), `${operator.label}: manifest does not declare Layer A`);
+    assertCheck(manifest.description?.includes("does not add authority") || manifest.description?.includes("without adding authority"), `${operator.label}: manifest authority boundary missing`);
+    assertCheck(manifest.exports.surface !== undefined, `${operator.label}: manifest surface export missing`);
+    assertCheck(inventory.includes(`| \`${operator.rel}\` | CORE |`), `${operator.label}: repository inventory does not classify package as CORE`);
+    assertCheck(previewScope.includes(operator.rel), `${operator.label}: preview scope does not document first-party include`);
+    assertCheck(releaseBundle.includes(`"${operator.rel}"`), `${operator.label}: release bundle core paths do not include operator`);
+    assertCheck(windowsPackage.includes(`rel: "${operator.rel}"`), `${operator.label}: Windows package runtime list does not include operator`);
+
+    const reviewRun = await ctx.runner(
+      pnpmCommandSpec(["plugin:review", "--", "--package", operator.rel, "--bundled"], ctx.rootDir, { ...process.env }),
+      ctx.timeoutMs,
+    );
+    const reviewLog = commandLog(reviewRun);
+    assertCheck(reviewRun.exit_code === 0, `${operator.label}: bundled plugin review failed: ${excerpt(reviewLog)}`);
+    assertCheck(reviewLog.includes("[plugin-review] PASS"), `${operator.label}: bundled plugin review did not report PASS`);
+
+    const surfaceFn = runtime.getSurface<(input?: Record<string, unknown>) => Record<string, unknown>>({
+      package_name: operator.name,
+      required_permissions: operator.required,
+      action: `validate ${operator.label} first-party surface`,
+    });
+    const snapshot = surfaceFn({});
+    const operations = Array.isArray(snapshot.operations) ? snapshot.operations as Array<Record<string, unknown>> : [];
+    assertCheck(snapshot.surface === operator.surface, `${operator.label}: surface snapshot mismatch`);
+    assertCheck(snapshot.layer === "A", `${operator.label}: surface layer was not A`);
+    assertCheck(snapshot.authority === "hds_brain_downstream_device", `${operator.label}: authority boundary mismatch`);
+    assertCheck(snapshot.replaces_authority === false, `${operator.label}: surface replaced authority`);
+    assertCheck(snapshot.raw_authority_added === false, `${operator.label}: raw authority was added`);
+    assertCheck(operations.length > 0, `${operator.label}: no operations declared`);
+    for (const operation of operations) {
+      const capabilities = Array.isArray(operation.capabilities) ? operation.capabilities : [];
+      assertCheck(!capabilities.includes("authority:write"), `${operator.label}: authority:write capability present`);
+      assertCheck(!capabilities.includes("hds:bypass"), `${operator.label}: hds:bypass capability present`);
+      if (operation.final_review_required === true) {
+        assertCheck(operation.approval_level === "L3_final_review", `${operator.label}: final-review operation was not L3`);
+      }
+    }
+  }
+  log.push("operators: package metadata, manifests, bundled review, plugin-loader surfaces, and non-authority snapshots passed");
+
+  return {
+    status: "pass",
+    summary: "channel/operator/plugin-skill claim, packaging, review, and downstream authority boundaries passed",
+    raw_log: log.join("\n"),
+    details: {
+      channels: Object.fromEntries(
+        Object.entries(expectedChannels).map(([channel, expected]) => [
+          channel,
+          {
+            expected,
+            actual: compatibilityMatrix.channels?.[channel],
+          },
+        ]),
+      ),
+      operators: operatorPackages.map((operator) => operator.name),
+      release_bundle_operator_included: true,
+      windows_package_operator_included: true,
+      validate_channels_passed: true,
+      bundled_plugin_review_passed: true,
+      plugin_skill_contract_stable_v1: true,
+      evidence_source: ["CONFIG", "INTERNAL_STATE", "FIXTURE"],
       used_for_authority: false,
       hds_brain_remains_authority: true,
     },

@@ -59,6 +59,7 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 | P6 | approval allow・ask・deny・revoke・emergency stopの動的検証 |
 | P7 | evidence pack内容検査＋secret redaction検査 |
 | P8 | Composio dry-run no-call / live opt-in / toolkit+action allowlist / action revoke / L3 final-review non-bypass / fixture live execution / pre-post audit |
+| P9 | channel/operator/package/claim整合 / bundled plugin review / plugin-loader operator surface / Layer B v1 contract-stable境界 |
 | P10 | backup→破壊→restore往復 |
 | P11 | release bundle verify＋update失敗rollback |
 
@@ -204,12 +205,12 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: 製品主張と実体を一致させる。
 
-現状（実測）: チャネル区分は**CLAIM.mdと一致済み（done相当）**——WebChat・Telegram正式／Slack・Discord・Teams・LINE preview（silent fallback付）／WhatsApp reserved-third-party-only明記。channel-teamsパッケージ実在。validate:channels（昇格ゲート）、plugin:review gate、SKILL_LOADER_CONTRACT、PLUGIN_HIG既存。
+現状（実測）: **実装done（Linux CONFIG / INTERNAL_STATE / FIXTURE evidence）**。チャネル区分はCLAIM.md・compatibility matrix・`validate:channels`で一致済み——WebChat・Telegram正式／Slack・Discord・Teams・LINE preview（silent fallback付）／WhatsApp reserved-third-party-only。D7反映としてWriting / Daily / Developer Operatorはpackage metadata・manifest・CLAIM・repository inventory・source release bundle・Windows packageでfirst-party Layer A core release surfaceとして一致済み。operator三種はGateway hard dependencyではなく、bundled Plugin Review Gateとplugin-loader manifest permission checkを通って読み込まれる。D6反映としてPlugin Review Gate / Plugin HIG / Skill Loader Contractにv1.0 contract-stable Layer B境界を明記し、`validate:product` P9がchannel/operator/plugin-skill境界を検査する。
 
 残差:
-- D7反映: operator表記の三点一致（package.jsonは "First-party" 自称⇔CLAIM.mdにoperator記載なし、のdrift解消）
-- D6反映: plugin/skill面のv1スコープ宣言（契約文書＋review gateの整合確認とAPI安定度宣言）
-- preview機能を正式機能と誤認させない最終文言整理
+- owner-run credentialed live smoke evidenceがないSlack / Discord / Teams / LINEは引き続きfirst-party-preview
+- future Layer B third-party submissionの実案件review evidence
+- P12での最終support boundary / claims文言総点検
 
 完了条件: CLAIM・package.json・実装の三点一致。channel/operatorごとに承認・監査・停止導線がある。
 
@@ -292,7 +293,7 @@ P1(凍結宣言) → P2(ゲート骨格)
 P2後、着手順自由: P3 / P4 / P5 / P7前半
 P6(UI残差) は P4 と連動、P8 live解放の前提（Linux fixtureではP8で再確認済み）
 P8 live は P6 完了後（コード解放済み。owner資格情報live smokeはP13前証跡）
-P9 / P10 / P11 は P3〜P8 の残差確定後（着手順自由）
+P9 は実装済み。P10 / P11 は P3〜P9 の残差確定後（着手順自由）
 P12 → P13
 ```
 
@@ -310,7 +311,7 @@ P12 → P13
 | P6 | Authority閉包 | 実装done | Windows実機GUI証跡 |
 | P7 | Audit製品化 | 実装done | Windows実機GUI証跡・owner資格情報環境でのredaction再確認 |
 | P8 | Composio閉包 | 実装done | owner資格情報live smoke・Windows実機GUI証跡・scope運用文書 |
-| P9 | Channel/Operator整理 | チャネルdone | operator三点一致・plugin面宣言 |
+| P9 | Channel/Operator整理 | 実装done | owner-run channel promotion evidence・future Layer B submission evidence |
 | P10 | Recovery/Backup | partial | backup/restore/factory reset/safe mode |
 | P11 | Update/Release | partial | CC更新導線・migration・rollback |
 | P12 | Docs/Claims | 充実 | 残差反映・最終整合 |

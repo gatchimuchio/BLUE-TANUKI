@@ -51,10 +51,12 @@ The transparency claim is limited to BLUE-TANUKI's own authority path.
 - hash-chain audit
 - runtime snapshot
 - Telegram channel
+- Writing / Daily / Developer Operator: first-party Layer A operator surfaces
 - Slack / Discord preview adapters with silent fallback
 - Teams / LINE preview adapters with silent fallback
 - Daily Brief and generic scheduled-message smoke with optional read-only Google source
 - GitHub and Google downstream write tools with L3 final-review
+- Plugin API / Skill loader: v1.0 contract-stable Layer B boundary with Plugin Review Gate evidence; no public third-party Skill registry is claimed
 - Distribution readiness gate, update/rollback runbook, and release bundle verification
 - v1.0 security and permanent-use review closure
 
@@ -69,3 +71,4 @@ The transparency claim is limited to BLUE-TANUKI's own authority path.
 - Voice / Mobile: interface/design only, real product quality v0.2+
 - Rich Canvas / A2UI: v0.2+
 - third-party Skill registry: intentionally excluded
+- Layer B plugin / skill review results: non-authority evidence only. They cannot approve, execute, classify risk, promote support status, or bypass HDS-BRAIN.

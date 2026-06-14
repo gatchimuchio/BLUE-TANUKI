@@ -46,6 +46,9 @@ const manifestPackages = [
   ["packages/channel-telegram", "@blue-tanuki/channel-telegram"],
   ["packages/channel-teams", "@blue-tanuki/channel-teams"],
   ["packages/channel-line", "@blue-tanuki/channel-line"],
+  ["packages/operator-daily", "@blue-tanuki/operator-daily"],
+  ["packages/operator-developer", "@blue-tanuki/operator-developer"],
+  ["packages/operator-writing", "@blue-tanuki/operator-writing"],
 ] as const;
 
 async function writeManifestFixture(root: string): Promise<void> {
@@ -944,7 +947,7 @@ describe("runDoctor — bundled manifests", () => {
     });
     const c = r.checks.find((x) => x.id === "manifests");
     expect(c?.level).toBe("ok");
-    expect(c?.detail).toContain("10 manifests valid");
+    expect(c?.detail).toContain("13 manifests valid");
   });
 
   it("validates manifest schemas from an explicit root", async () => {

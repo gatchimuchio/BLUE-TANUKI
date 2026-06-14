@@ -54,6 +54,9 @@ const RUNTIME_PACKAGES = [
   { rel: "packages/channel-base", module: "@blue-tanuki/channel-base" },
   { rel: "packages/channel-webchat", module: "@blue-tanuki/channel-webchat" },
   { rel: "packages/channel-telegram", module: "@blue-tanuki/channel-telegram" },
+  { rel: "packages/operator-writing", module: "@blue-tanuki/operator-writing" },
+  { rel: "packages/operator-daily", module: "@blue-tanuki/operator-daily" },
+  { rel: "packages/operator-developer", module: "@blue-tanuki/operator-developer" },
 ] as const;
 
 const ROOT_TEXT_FILES = [
@@ -78,6 +81,9 @@ const REQUIRED_BUILT_FILES = [
   "packages/channel-base/dist/index.js",
   "packages/channel-webchat/dist/index.js",
   "packages/channel-telegram/dist/index.js",
+  "packages/operator-writing/dist/index.js",
+  "packages/operator-daily/dist/index.js",
+  "packages/operator-developer/dist/index.js",
 ] as const;
 
 function argValue(name: string): string | undefined {

@@ -123,6 +123,9 @@ const CORE_MANIFEST_PACKAGES = [
   "packages/channel-base",
   "packages/channel-webchat",
   "packages/channel-telegram",
+  "packages/operator-daily",
+  "packages/operator-developer",
+  "packages/operator-writing",
 ] as const;
 
 const PREVIEW_MANIFEST_PACKAGES = [

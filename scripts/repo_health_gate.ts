@@ -52,6 +52,9 @@ export const CORE_RELEASE_ALLOWLIST = [
   "packages/channel-base",
   "packages/channel-webchat",
   "packages/channel-telegram",
+  "packages/operator-daily",
+  "packages/operator-developer",
+  "packages/operator-writing",
   "apps/gateway",
 ] as const;
 
@@ -60,9 +63,6 @@ export const PREVIEW_PACKAGE_PATHS = [
   "packages/channel-discord",
   "packages/channel-teams",
   "packages/channel-line",
-  "packages/operator-daily",
-  "packages/operator-developer",
-  "packages/operator-writing",
   "install/installer",
   "install/resident",
   "install/windows",
@@ -203,9 +203,6 @@ function assertGatewayCoreDependenciesOnly(root: string): void {
     "@blue-tanuki/channel-discord",
     "@blue-tanuki/channel-teams",
     "@blue-tanuki/channel-line",
-    "@blue-tanuki/operator-daily",
-    "@blue-tanuki/operator-developer",
-    "@blue-tanuki/operator-writing",
   ];
   for (const dep of forbidden) {
     if (deps.includes(dep)) fail(`apps/gateway has hard preview dependency: ${dep}`);

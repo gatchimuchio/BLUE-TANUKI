@@ -11,6 +11,9 @@
 - `packages/channel-base`
 - `packages/channel-webchat`
 - `packages/channel-telegram`
+- `packages/operator-writing`
+- `packages/operator-daily`
+- `packages/operator-developer`
 - `install/linux`
 - core validation scripts and active docs
 
@@ -20,9 +23,6 @@
 - `packages/channel-discord`
 - `packages/channel-teams`
 - `packages/channel-line`
-- `packages/operator-daily`
-- `packages/operator-developer`
-- `packages/operator-writing`
 - `install/installer`
 - `install/resident`
 - `install/windows`
@@ -32,7 +32,9 @@
 
 Preview items remain downstream-only. Missing preview credentials are WARN in core doctor and do not fail core health. `doctor --preview` validates preview channel readiness; `doctor --strict` validates all optional surfaces strictly.
 
-`apps/gateway` does not carry hard workspace dependencies on preview channel or operator packages. In the full workspace those packages are discovered through plugin manifests; in the extracted core release bundle they are absent and skipped. Core doctor treats that absence as an intentional preview limitation, not as a product regression.
+Writing / Daily / Developer Operator packages are Layer A first-party core release packages. They remain plugin-loader discovered downstream surfaces rather than hard Gateway dependencies, so package presence, manifest review, and permission enforcement are visible before the surface is loaded.
+
+`apps/gateway` does not carry hard workspace dependencies on preview channel packages. In the full workspace those packages are discovered through plugin manifests; in the extracted core release bundle preview channels are absent and skipped. Core doctor treats that absence as an intentional preview limitation, not as a product regression.
 
 ## Regression Gate
 

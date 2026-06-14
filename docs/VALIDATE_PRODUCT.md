@@ -15,6 +15,7 @@ pnpm validate:product -- --phase P5
 pnpm validate:product -- --phase P6
 pnpm validate:product -- --phase P7
 pnpm validate:product -- --phase P8
+pnpm validate:product -- --phase P9
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -96,6 +97,12 @@ only console output.
 |---|---|---|
 | `p8.composio_safety_closure` | `INTERNAL_STATE` / `FIXTURE` | Composio live availabilityがAPI key / user id / dry-run false / live opt-in / toolkit allowlist / action allowlistの全条件でのみ開くこと、dry-runが外部requestを呼ばないこと、revoked actionが外部request前にblockされること、HDS routeが`composio.execute`をL3 final-review askに止めること、承認済みfixture commandがExecutor経由でComposio v3.1 execute endpointへ到達すること、pre/post authority eventとexecutor feedbackがaudit hash-chainで検証できること、API keyがfeedback/evidenceに露出しないことを確認する。実Composio資格情報でのlive smokeはP13前の外部証跡として別途必要 |
 
+## P9 Checks
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p9.channel_operator_extension_boundary` | `CONFIG` / `INTERNAL_STATE` / `FIXTURE` | CLAIM・package metadata・operator manifest・release bundle・Windows package・preview/core scope文書の三点一致を確認し、`pnpm validate:channels` でWebChat/Telegram first-party、Slack/Discord/Teams/LINE first-party-preview、WhatsApp reserved-third-partyを検査する。Writing / Daily / Developer Operatorはbundled `plugin:review` とplugin-loader surface読込でLayer A / downstream / non-authority / L3 final-review境界を確認する。Plugin Review Gate / Plugin HIG / Skill Loader Contractはv1.0 contract-stable Layer B境界を宣言していることを確認する。owner-run channel promotion smokeや第三者plugin live実行は主張しない |
+
 ## Incremental Registration
 
 | 追加Phase | 検査項目 |
@@ -107,6 +114,7 @@ only console output.
 | P6 | approval allow・ask・deny・remembered grant・revoke・emergency stop・L3 final-review non-bypassの動的検証 |
 | P7 | Control Center evidence export / evidence pack内容検査 / human-readable report / retention / secret redaction検査 |
 | P8 | Composio dry-run no-call / live opt-in / toolkit+action allowlist / action revoke / L3 final-review non-bypass / fixture live execution / pre-post audit |
+| P9 | channel claim matrix / operator first-party package-manifest-release整合 / bundled plugin review / plugin-loader surface / Layer B contract-stable宣言 |
 | P10 | backup→破壊→restore往復 |
 | P11 | release bundle verify＋update失敗rollback |
 
