@@ -26,6 +26,7 @@ export {
   type WebChatEvidenceControlContext,
   type WebChatEvidenceSurface,
   type WebChatAboutSurface,
+  type WebChatUpdateSurface,
   type WebChatRecoverySurface,
   type WebChatOperatorSurface,
   type WebChatOperatorSurfaces,

@@ -235,14 +235,13 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: 配布・更新・検証可能な製品にする。
 
-現状（実測）: **partial**。release:bundle / release:verify 既存、**.sha256＋.manifest.json生成済**、CI組込済。署名・自動更新は「可能性」ではなく**CLAIM.mdに "not shipped" と明記済（確認済事実）**。
+現状（実測）: **実装done（Linux WebChat control path / release sidecar fixture evidence）**。release:bundle / release:verify 既存、**.sha256＋.manifest.json生成済**、CI組込済。Control Center Update panel、WebChat token-gated `/update/snapshot` / `/update/verify` / `/update/prepare` を追加済み。P11 update surfaceは候補release bundleのsha256 sidecarとmanifestを検証し、manifest境界（unsigned source bundle / secrets excluded / external dynamic imports excluded）とcompatibility schemaを確認する。Prepare UpdateはP10 recovery backupをpre-update backupとして作成し、current version / git head / candidate digest / backup id / manual app restore requiredを含むrollback planを生成する。release notes `docs/release-notes/1.0.0-rc.1.md` を追加済み。署名・自動更新は「可能性」ではなく**CLAIM.mdに "not shipped" と明記済（確認済事実）**のまま。
 
 残差:
-- manual update導線（CC Updateパネル: 新版検出→backup→適用→検証）
-- compatibility / migration check（versioned data schema）
-- update失敗時rollback
+- Windows実機GUIでのmanual update / rollback証跡
+- actual manual replacement after prepared update（operator-run手順。runtime auto-applyは非目標）
+- migrationが必要になる将来schemaでのmigration実装
 - D3=署名する場合のみ: 署名パイプライン（owner調達タスクと分離）
-- release notes生成
 
 完了条件: 配布物が検証可能／更新で既存設定が壊れない／失敗時に戻せる／release claimとartifactが一致。
 
@@ -292,7 +291,7 @@ P1(凍結宣言) → P2(ゲート骨格)
 P2後、着手順自由: P3 / P4 / P5 / P7前半
 P6(UI残差) は P4 と連動、P8 live解放の前提（Linux fixtureではP8で再確認済み）
 P8 live は P6 完了後（コード解放済み。owner資格情報live smokeはP13前証跡）
-P9 / P10 は実装済み。P11 はP10 recovery基盤を使ってupdate前backup / rollbackを閉じる。
+P9 / P10 / P11 は実装済み。P12はP3〜P11の残差反映とclaim/support境界の最終整合を閉じる。
 P12 → P13
 ```
 
@@ -312,7 +311,7 @@ P12 → P13
 | P8 | Composio閉包 | 実装done | owner資格情報live smoke・Windows実機GUI証跡・scope運用文書 |
 | P9 | Channel/Operator整理 | 実装done | owner-run channel promotion evidence・future Layer B submission evidence |
 | P10 | Recovery/Backup | 実装done | Windows実機GUI証跡・safe mode/repair UX・P11 update rollback連動 |
-| P11 | Update/Release | partial | CC更新導線・migration・rollback |
+| P11 | Update/Release | 実装done | Windows実機GUI証跡・将来migration・署名判断はowner task |
 | P12 | Docs/Claims | 充実 | 残差反映・最終整合 |
 | P13 | Owner GO | — | 新基準で判定 |
 

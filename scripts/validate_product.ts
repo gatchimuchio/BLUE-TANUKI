@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as net from "node:net";
 import {
   mkdir,
@@ -31,6 +32,11 @@ import {
   resetRecoveryProvider,
   restoreRecoveryBackup,
 } from "../apps/gateway/src/recovery_surface.js";
+import {
+  buildUpdateSnapshot,
+  prepareManualUpdate,
+  verifyUpdateCandidate,
+} from "../apps/gateway/src/update_surface.js";
 import { runAuditVerify } from "../apps/gateway/src/audit_verify.js";
 import { WebChatChannel } from "../packages/channel-webchat/src/index.js";
 import {
@@ -269,6 +275,13 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "any",
     required: true,
     run: runRecoveryBackupRestoreControl,
+  },
+  {
+    id: "p11.update_release_rollback",
+    phase: "P11",
+    platform: "any",
+    required: true,
+    run: runUpdateReleaseRollbackControl,
   },
 ];
 
@@ -1028,13 +1041,17 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     assertCheck(html.includes("composio-clear-api-key"), "Control Center HTML missing Composio disconnect field");
     assertCheck(html.includes("about-token"), "Control Center HTML missing About token field");
     assertCheck(html.includes("/app/about"), "Control Center HTML missing About route");
+    assertCheck(html.includes("update-token"), "Control Center HTML missing Update token field");
+    assertCheck(html.includes("/update/snapshot"), "Control Center HTML missing Update snapshot route");
+    assertCheck(html.includes("/update/verify"), "Control Center HTML missing Update verify route");
+    assertCheck(html.includes("/update/prepare"), "Control Center HTML missing Update prepare route");
     assertCheck(html.includes("recovery-token"), "Control Center HTML missing Recovery token field");
     assertCheck(html.includes("/recovery/snapshot"), "Control Center HTML missing Recovery route");
     assertCheck(html.includes("/recovery/backup"), "Control Center HTML missing Recovery backup route");
     assertCheck(html.includes("/recovery/factory-reset"), "Control Center HTML missing Recovery factory reset route");
     assertCheck(html.includes("/settings/config"), "Control Center HTML missing settings config route");
     assertCheck(html.includes("/settings/llm/verify"), "Control Center HTML missing LLM verify route");
-    log.push("/app: control center settings, connectors, about, and recovery forms rendered");
+    log.push("/app: control center settings, connectors, about, update, and recovery forms rendered");
 
     const unauth = await fetch(`${base}/settings/config`);
     assertCheck(unauth.status === 401, `/settings/config without token returned ${unauth.status}`);
@@ -1350,6 +1367,198 @@ async function runRecoveryBackupRestoreControl(): Promise<CheckResult> {
         factory_reset_non_authority: factory.result?.authority_boundary?.used_for_authority === false,
         audit_preserved: await pathExists(auditDir),
         recovery_preserved: await pathExists(recoveryDir),
+        evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
+        used_for_authority: false,
+      },
+    };
+  } finally {
+    await channel.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+async function writeProductReleaseCandidate(root: string, version: string): Promise<string> {
+  const releaseDir = path.join(root, "release");
+  await mkdir(releaseDir, { recursive: true });
+  const archivePath = path.join(releaseDir, `blue-tanuki-${version}-source-bundle.tar.gz`);
+  await writeFile(archivePath, "product-release-candidate\n", "utf8");
+  const bytes = await readFile(archivePath);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const base = archivePath.slice(0, -".tar.gz".length);
+  const shaPath = `${base}.sha256`;
+  const manifestPath = `${base}.manifest.json`;
+  await writeFile(shaPath, `${sha256}  ${path.basename(archivePath)}\n`, "utf8");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify({
+      schema_version: 1,
+      name: "blue-tanuki",
+      version,
+      archive: {
+        file: path.basename(archivePath),
+        size_bytes: bytes.length,
+        sha256,
+      },
+      sha256_file: path.basename(shaPath),
+      core_release_paths: [
+        "packages/hds-brain",
+        "packages/protocol",
+        "packages/blue-tanuki",
+        "packages/channel-base",
+        "packages/channel-webchat",
+        "packages/channel-telegram",
+        "packages/operator-writing",
+        "packages/operator-daily",
+        "packages/operator-developer",
+        "apps/gateway",
+      ],
+      boundaries: {
+        unsigned_source_bundle: true,
+        secrets_included: false,
+        external_dynamic_imports_included: false,
+      },
+    }, null, 2)}\n`,
+    "utf8",
+  );
+  return archivePath;
+}
+
+async function runUpdateReleaseRollbackControl(ctx: CheckContext): Promise<CheckResult> {
+  const port = await allocateLoopbackPort();
+  const webchatToken = "product-update-webchat-token-1234";
+  const resumeToken = "product-update-resume-token-1234";
+  const root = await mkdtemp(path.join(os.tmpdir(), "bt-product-p11-update-"));
+  const version = "1.0.0-rc.1";
+  const envFile = path.join(root, "product.env");
+  const auditDir = path.join(root, "audit");
+  const sessionDir = path.join(root, "sessions");
+  const updateDir = path.join(root, "update");
+  const recoveryDir = path.join(root, "recovery");
+  const updateSecret = "p11-update-secret-value";
+  const pathExists = async (value: string): Promise<boolean> =>
+    stat(value)
+      .then(() => true)
+      .catch(() => false);
+
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ version }), "utf8");
+  await mkdir(path.join(root, ".git", "refs", "heads"), { recursive: true });
+  await writeFile(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+  await writeFile(path.join(root, ".git", "refs", "heads", "main"), `${"2".repeat(40)}\n`, "utf8");
+  const archivePath = await writeProductReleaseCandidate(root, version);
+  await mkdir(auditDir);
+  await mkdir(sessionDir);
+  await writeFile(path.join(auditDir, "audit.jsonl"), "{}\n", "utf8");
+  await writeFile(path.join(sessionDir, "session.jsonl"), "session-before\n", "utf8");
+  await writeFile(envFile, `LLM_BACKEND=stub\nLLM_API_KEY=${updateSecret}\n`, "utf8");
+  const releaseNotes = await readFile(
+    path.join(ctx.rootDir, "docs", "release-notes", "1.0.0-rc.1.md"),
+    "utf8",
+  );
+  assertCheck(releaseNotes.includes("not GA"), "P11 release notes do not preserve RC boundary");
+  assertCheck(releaseNotes.includes("Automatic updater or runtime app-file replacement"), "P11 release notes do not mention updater boundary");
+  assertCheck(releaseNotes.includes("used_for_authority=false"), "P11 release notes do not preserve non-authority boundary");
+
+  const updateEnv: NodeJS.ProcessEnv = {
+    BLUE_TANUKI_ENV_FILE: envFile,
+    BLUE_TANUKI_AUDIT_DIR: auditDir,
+    BLUE_TANUKI_SESSION_DIR: sessionDir,
+    BLUE_TANUKI_UPDATE_DIR: updateDir,
+    BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+    BLUE_TANUKI_UPDATE_BUNDLE: archivePath,
+  };
+
+  const channel = new WebChatChannel({
+    port,
+    host: "127.0.0.1",
+    token: webchatToken,
+    resume_token: resumeToken,
+    rate_limits: false,
+    update: {
+      getSnapshot: async () => buildUpdateSnapshot(root, updateEnv),
+      verifyCandidate: async () => verifyUpdateCandidate(root, updateEnv),
+      prepareUpdate: async (body) =>
+        prepareManualUpdate(root, updateEnv, {
+          confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+        }),
+    },
+  });
+
+  const log: string[] = [];
+  try {
+    await channel.start(async () => undefined);
+    const base = `http://127.0.0.1:${port}`;
+    const unauth = await fetch(`${base}/update/snapshot`);
+    assertCheck(unauth.status === 401, `/update/snapshot without token returned ${unauth.status}`);
+    const postSnapshot = await fetch(`${base}/update/snapshot`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${webchatToken}` },
+    });
+    assertCheck(postSnapshot.status === 405, `/update/snapshot POST returned ${postSnapshot.status}`);
+
+    const snapshot = await settingsRequest(base, webchatToken, "GET", "/update/snapshot");
+    assertCheck(snapshot.surface === "update", "P11 update snapshot surface mismatch");
+    assertCheck(snapshot.mode === "manual_control", "P11 update snapshot mode mismatch");
+    assertCheck(snapshot.candidate?.verification_status === "pass", "P11 release candidate did not verify");
+    assertCheck(snapshot.candidate?.sha256_matches === true, "P11 release candidate sha mismatch");
+    assertCheck(snapshot.candidate?.manifest_matches === true, "P11 release candidate manifest mismatch");
+    assertCheck(snapshot.distribution_boundary?.automatic_updater_shipped === false, "P11 unexpectedly shipped automatic updater");
+    assertCheck(snapshot.distribution_boundary?.runtime_auto_apply_available === false, "P11 unexpectedly exposed runtime auto apply");
+    assertCheck(snapshot.authority_boundary?.used_for_authority === false, "P11 update snapshot became authority");
+    log.push("/update/snapshot: manual update readiness and release sidecars verified through token gate");
+
+    const verify = await settingsRequest(base, webchatToken, "POST", "/update/verify");
+    assertCheck(verify.result?.candidate?.verification_status === "pass", "P11 update verify did not pass");
+    assertCheck(verify.result?.used_for_authority === false, "P11 update verify result became authority");
+    assertCheck(!JSON.stringify(verify).includes(updateSecret), "P11 update verify response exposed env secret");
+    log.push("/update/verify: release sidecar verification passed without secret echo");
+
+    const prepareMissingConfirm = await fetch(`${base}/update/prepare`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${webchatToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    assertCheck(prepareMissingConfirm.status === 400, `/update/prepare without confirmation returned ${prepareMissingConfirm.status}`);
+
+    const prepared = await settingsRequest(base, webchatToken, "POST", "/update/prepare", {
+      confirm: "PRE_UPDATE_BACKUP",
+    });
+    assertCheck(prepared.result?.action === "prepare_update", "P11 prepare update action mismatch");
+    assertCheck(typeof prepared.result?.pre_update_backup_id === "string", "P11 pre-update backup id missing");
+    assertCheck(typeof prepared.result?.rollback_plan_path === "string", "P11 rollback plan path missing");
+    assertCheck(await pathExists(prepared.result.rollback_plan_path), "P11 rollback plan file missing");
+    assertCheck(prepared.result?.authority_boundary?.used_for_authority === false, "P11 prepare result became authority");
+    assertCheck(!JSON.stringify(prepared).includes(updateSecret), "P11 prepare response exposed env secret");
+
+    const planText = await readFile(prepared.result.rollback_plan_path, "utf8");
+    const plan = JSON.parse(planText) as {
+      candidate_verified?: boolean;
+      pre_update_backup_id?: string;
+      rollback_requires_manual_app_restore?: boolean;
+      authority_boundary?: { used_for_authority?: boolean };
+    };
+    assertCheck(plan.candidate_verified === true, "P11 rollback plan did not record verified candidate");
+    assertCheck(plan.pre_update_backup_id === prepared.result.pre_update_backup_id, "P11 rollback plan backup id mismatch");
+    assertCheck(plan.rollback_requires_manual_app_restore === true, "P11 rollback plan did not require manual app restore");
+    assertCheck(plan.authority_boundary?.used_for_authority === false, "P11 rollback plan became authority");
+    assertCheck(!planText.includes(updateSecret), "P11 rollback plan exposed env secret");
+    log.push("/update/prepare: pre-update recovery backup and rollback plan recorded");
+    log.push("release notes: 1.0.0-rc.1 RC/non-updater/non-authority boundaries present");
+
+    return {
+      status: "pass",
+      summary: "Manual update readiness, release sidecar verification, pre-update backup, and rollback plan passed",
+      raw_log: log.join("\n"),
+      details: {
+        candidate_verified: true,
+        pre_update_backup_id: prepared.result.pre_update_backup_id,
+        rollback_plan_id: prepared.result.rollback_plan_id,
+        automatic_updater_shipped: false,
+        runtime_auto_apply_available: false,
+        update_non_authority: true,
+        release_notes_present: true,
         evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
         used_for_authority: false,
       },

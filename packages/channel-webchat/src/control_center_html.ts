@@ -600,6 +600,7 @@ export function renderControlCenterHtml(): string {
       <button class="screen-tab" data-screen="doctor" aria-selected="false">Doctor</button>
       <button class="screen-tab" data-screen="settings" aria-selected="false">Settings</button>
       <button class="screen-tab" data-screen="about" aria-selected="false">About</button>
+      <button class="screen-tab" data-screen="update" aria-selected="false">Update</button>
       <button class="screen-tab" data-screen="recovery" aria-selected="false">Backup / Restore</button>
       <button class="screen-tab" data-screen="developer" aria-selected="false">Developer / Evidence</button>
     </nav>
@@ -918,6 +919,39 @@ export function renderControlCenterHtml(): string {
           </div>
         </section>
 
+        <section class="card" data-screen-group="update">
+          <div class="row">
+            <h2>Update</h2>
+            <span id="update-boundary-status" class="badge warn">not loaded</span>
+          </div>
+          <div class="status-grid">
+            <input id="update-token" type="password" autocomplete="off" placeholder="webchat token" />
+            <button id="load-update" class="primary" type="button">Load Update</button>
+            <button id="verify-update" type="button">Verify Bundle</button>
+            <button id="prepare-update" type="button">Prepare Update</button>
+          </div>
+          <div class="status-grid">
+            <div class="metric"><span>Current version</span><span id="update-current-version">not loaded</span></div>
+            <div class="metric"><span>Candidate</span><span id="update-candidate-status">not loaded</span></div>
+            <div class="metric"><span>Candidate version</span><span id="update-candidate-version">not loaded</span></div>
+            <div class="metric"><span>SHA256</span><span id="update-sha-status">not loaded</span></div>
+            <div class="metric"><span>Manifest</span><span id="update-manifest-status">not loaded</span></div>
+            <div class="metric"><span>Compatibility</span><span id="update-compatibility-status">not loaded</span></div>
+            <div class="metric"><span>Rollback plan</span><span id="update-rollback-status">not loaded</span></div>
+            <div class="metric"><span>Automatic updater</span><span id="update-auto-status">not shipped</span></div>
+            <div class="metric"><span>Authority</span><span id="update-authority-status">display only</span></div>
+            <div class="metric"><span>Last action</span><span id="update-action-status">not run</span></div>
+            <div class="metric"><span>Next safe action</span><span id="update-next-action-status">not loaded</span></div>
+          </div>
+          <pre id="update-json">not loaded</pre>
+          <div class="screen-grid">
+            <div class="screen-card"><h3>Manual Update</h3><p class="muted">The runtime verifies release sidecars and prepares rollback evidence; it does not replace app files automatically.</p></div>
+            <div class="screen-card"><h3>Pre-update Backup</h3><p class="muted">Prepare Update creates a recovery backup and rollback plan before manual replacement.</p></div>
+            <div class="screen-card"><h3>Compatibility</h3><p class="muted">Manifest schema and release boundaries must match before update is treated as ready.</p></div>
+            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Update metadata cannot approve commands, alter HDS policy, or bypass final review.</p></div>
+          </div>
+        </section>
+
         <section class="card" data-screen-group="recovery">
           <div class="row">
             <h2>Backup / Restore</h2>
@@ -1131,6 +1165,7 @@ export function renderControlCenterHtml(): string {
         settingsToken: sessionStorage.getItem("bt.settingsToken") || "",
         connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
         aboutToken: sessionStorage.getItem("bt.aboutToken") || "",
+        updateToken: sessionStorage.getItem("bt.updateToken") || "",
         recoveryToken: sessionStorage.getItem("bt.recoveryToken") || "",
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
@@ -1337,6 +1372,7 @@ export function renderControlCenterHtml(): string {
         byId("settings-token").value = state.settingsToken;
         byId("connectors-token").value = state.connectorsToken || state.settingsToken;
         byId("about-token").value = state.aboutToken || state.chatToken;
+        byId("update-token").value = state.updateToken || state.chatToken;
         byId("recovery-token").value = state.recoveryToken || state.chatToken;
         byId("chat-token").value = state.chatToken;
         byId("chat-user").value = state.chatUser;
@@ -1836,6 +1872,42 @@ export function renderControlCenterHtml(): string {
         setText("about-json", compactJson(redactRuntimeValue(snapshot)));
       }
 
+      function renderUpdateSnapshot(snapshot) {
+        const candidate = snapshot.candidate || {};
+        const compat = snapshot.compatibility || {};
+        const rollback = snapshot.rollback || {};
+        const dist = snapshot.distribution_boundary || {};
+        const authority = snapshot.authority_boundary || {};
+        const pkg = snapshot.package || {};
+        setText("update-current-version", pkg.current_version || "unknown");
+        setText("update-candidate-status", candidate.verification_status || "unknown");
+        setText("update-candidate-version", candidate.version || "unknown");
+        setText("update-sha-status", candidate.sha256_matches ? "match" : candidate.sha256_exists ? "mismatch" : "missing");
+        setText("update-manifest-status", candidate.manifest_matches ? "match" : candidate.manifest_exists ? "mismatch" : "missing");
+        setText("update-compatibility-status", compat.status || "unknown");
+        setText("update-rollback-status", rollback.latest_plan_id || "not prepared");
+        setText("update-auto-status", dist.automatic_updater_shipped ? "shipped" : "not shipped");
+        setText("update-authority-status", authority.used_for_authority === true ? "unsafe" : "display only");
+        setText("update-next-action-status", snapshot.next_safe_action || "not loaded");
+        setText("update-boundary-status", snapshot.mode || "manual");
+        byId("update-boundary-status").className = "badge " + (candidate.verification_status === "pass" ? "good" : "warn");
+        byId("update-candidate-status").className = "badge " + (candidate.verification_status === "pass" ? "good" : candidate.verification_status === "fail" ? "bad" : "warn");
+        byId("update-sha-status").className = "badge " + (candidate.sha256_matches ? "good" : "warn");
+        byId("update-manifest-status").className = "badge " + (candidate.manifest_matches ? "good" : "warn");
+        byId("update-compatibility-status").className = "badge " + (compat.status === "pass" ? "good" : compat.status === "blocked" ? "bad" : "warn");
+        byId("update-auto-status").className = "badge " + (dist.automatic_updater_shipped ? "bad" : "good");
+        byId("update-authority-status").className = "badge " + (authority.used_for_authority === true ? "bad" : "good");
+        setText("update-json", compactJson(redactRuntimeValue(snapshot)));
+      }
+
+      function renderUpdateActionResult(body) {
+        const result = body.result || body;
+        setText("update-action-status", result.action ? result.action + " completed" : "completed");
+        setText("update-next-action-status", result.next_safe_action || "not loaded");
+        byId("update-action-status").className = "badge review";
+        setText("update-json", compactJson(redactRuntimeValue(result)));
+      }
+
       function renderRecoverySnapshot(snapshot) {
         const envFile = snapshot.env_file || {};
         const packs = snapshot.recovery_backups || {};
@@ -1953,6 +2025,44 @@ export function renderControlCenterHtml(): string {
           byId("about-release-status").className = "badge bad";
           setText("about-json", error.message);
         }
+      }
+
+      async function loadUpdate() {
+        const token = byId("update-token").value.trim();
+        state.updateToken = token;
+        sessionStorage.setItem("bt.updateToken", token);
+        try {
+          const body = await fetchJson("/update/snapshot", token);
+          renderUpdateSnapshot(body);
+        } catch (error) {
+          setText("update-boundary-status", "error");
+          byId("update-boundary-status").className = "badge bad";
+          setText("update-json", error.message);
+        }
+      }
+
+      async function runUpdateAction(route, body) {
+        const token = byId("update-token").value.trim();
+        state.updateToken = token;
+        sessionStorage.setItem("bt.updateToken", token);
+        try {
+          const result = await postJson(route, token, body || {});
+          await loadUpdate();
+          renderUpdateActionResult(result);
+        } catch (error) {
+          setText("update-action-status", "error");
+          byId("update-action-status").className = "badge bad";
+          setText("update-json", error.message);
+        }
+      }
+
+      async function verifyUpdate() {
+        await runUpdateAction("/update/verify", {});
+      }
+
+      async function prepareUpdate() {
+        if (!window.confirm("Create a pre-update backup and rollback plan?")) return;
+        await runUpdateAction("/update/prepare", { confirm: "PRE_UPDATE_BACKUP" });
       }
 
       async function loadRecovery() {
@@ -2297,6 +2407,21 @@ export function renderControlCenterHtml(): string {
       byId("load-connectors").addEventListener("click", loadConnectors);
       byId("save-connectors").addEventListener("click", saveConnectors);
       byId("load-about").addEventListener("click", loadAbout);
+      byId("load-update").addEventListener("click", loadUpdate);
+      byId("verify-update").addEventListener("click", function () {
+        verifyUpdate().catch(function (error) {
+          setText("update-action-status", "error");
+          byId("update-action-status").className = "badge bad";
+          setText("update-json", error.message);
+        });
+      });
+      byId("prepare-update").addEventListener("click", function () {
+        prepareUpdate().catch(function (error) {
+          setText("update-action-status", "error");
+          byId("update-action-status").className = "badge bad";
+          setText("update-json", error.message);
+        });
+      });
       byId("load-recovery").addEventListener("click", loadRecovery);
       byId("create-recovery-backup").addEventListener("click", function () {
         createRecoveryBackup().catch(function (error) {

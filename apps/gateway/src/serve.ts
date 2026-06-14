@@ -69,6 +69,11 @@ import {
   resetRecoveryProvider,
   restoreRecoveryBackup,
 } from "./recovery_surface.js";
+import {
+  buildUpdateSnapshot,
+  prepareManualUpdate,
+  verifyUpdateCandidate,
+} from "./update_surface.js";
 import { createGatewayEvidencePack } from "./evidence_pack.js";
 import { CronSchedulerChannel, cronSchedulesFromEnv } from "./cron_channel.js";
 import { googleDailyBriefProviderFromEnv } from "./google_daily_brief.js";
@@ -1064,6 +1069,14 @@ export async function serve(): Promise<ServeShutdown> {
       },
       about: {
         getSnapshot: async () => buildAboutSnapshot(),
+      },
+      update: {
+        getSnapshot: async () => buildUpdateSnapshot(process.cwd(), process.env),
+        verifyCandidate: async () => verifyUpdateCandidate(process.cwd(), process.env),
+        prepareUpdate: async (body: Record<string, unknown>) =>
+          prepareManualUpdate(process.cwd(), process.env, {
+            confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+          }),
       },
       recovery: {
         getSnapshot: async () => buildRecoverySnapshot(process.env),

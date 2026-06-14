@@ -15,6 +15,7 @@ import {
   type WebChatHistorySurface,
   type WebChatEvidenceSurface,
   type WebChatAboutSurface,
+  type WebChatUpdateSurface,
   type WebChatRecoverySurface,
   type WebChatOperatorSurfaces,
   type WebChatRuntimeSurface,
@@ -68,6 +69,7 @@ async function setup(
       history?: WebChatHistorySurface;
       evidence?: WebChatEvidenceSurface;
       about?: WebChatAboutSurface;
+      update?: WebChatUpdateSurface;
       recovery?: WebChatRecoverySurface;
       operators?: WebChatOperatorSurfaces;
     }
@@ -95,6 +97,7 @@ async function setup(
     history: opts.history,
     evidence: opts.evidence,
     about: opts.about,
+    update: opts.update,
     recovery: opts.recovery,
     operators: opts.operators,
     // Default: disable rate limiting in legacy tests so existing flows
@@ -326,6 +329,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Doctor");
       expect(html).toContain("Settings");
       expect(html).toContain("About");
+      expect(html).toContain("Update");
       expect(html).toContain("Backup / Restore");
       expect(html).toContain("OpenRouter");
       expect(html).toContain("Composio");
@@ -350,6 +354,13 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("load-about");
       expect(html).toContain("/app/about");
       expect(html).toContain("public claim");
+      expect(html).toContain("update-token");
+      expect(html).toContain("load-update");
+      expect(html).toContain("update-next-action-status");
+      expect(html).toContain("/update/snapshot");
+      expect(html).toContain("/update/verify");
+      expect(html).toContain("/update/prepare");
+      expect(html).toContain("bt.updateToken");
       expect(html).toContain("recovery-token");
       expect(html).toContain("load-recovery");
       expect(html).toContain("/recovery/snapshot");
@@ -605,6 +616,142 @@ describe("WebChatChannel — About surface", () => {
     });
     expect(post.status).toBe(405);
     await ctx.teardown();
+  });
+});
+
+describe("WebChatChannel — Update surface", () => {
+  it("serves manual update readiness and prepare controls only with the inbound token", async () => {
+    const actions: string[] = [];
+    const ctx = await setup({
+      update: {
+        getSnapshot: async () => ({
+          schema_version: 1,
+          surface: "update",
+          mode: "manual_control",
+          package: {
+            current_version: "1.0.0-rc.1",
+            current_git_head: "0".repeat(40),
+          },
+          candidate: {
+            configured: true,
+            archive_path: "/tmp/release/blue-tanuki.tar.gz",
+            exists: true,
+            sha256_path: "/tmp/release/blue-tanuki.sha256",
+            sha256_exists: true,
+            manifest_path: "/tmp/release/blue-tanuki.manifest.json",
+            manifest_exists: true,
+            archive_sha256: "a".repeat(64),
+            sha256_matches: true,
+            manifest_matches: true,
+            version: "1.0.0-rc.1",
+            verification_status: "pass",
+            failure_reason: null,
+            secret_material: false,
+          },
+          compatibility: {
+            current_data_schema_version: 1,
+            minimum_supported_data_schema_version: 1,
+            candidate_manifest_schema_version: 1,
+            migration_required: false,
+            migration_supported: true,
+            status: "pass",
+          },
+          rollback: {
+            pre_update_backup_available: true,
+            latest_plan_path: null,
+            latest_plan_id: null,
+            rollback_requires_manual_app_restore: true,
+          },
+          distribution_boundary: {
+            signed_native_installer_shipped: false,
+            automatic_updater_shipped: false,
+            runtime_auto_apply_available: false,
+            manual_update_only: true,
+          },
+          authority_boundary: {
+            ui_used_for_authority: false,
+            update_metadata_used_for_authority: false,
+            rollback_plan_used_for_authority: false,
+            recovery_backup_used_for_authority: false,
+            used_for_authority: false,
+          },
+          next_safe_action: "Create a pre-update backup.",
+          evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
+        }),
+        verifyCandidate: async () => {
+          actions.push("verify");
+          return { action: "verify_candidate", used_for_authority: false };
+        },
+        prepareUpdate: async (body) => {
+          actions.push(`prepare:${String(body.confirm)}`);
+          return {
+            action: "prepare_update",
+            pre_update_backup_id: "backup-fixture",
+            rollback_plan_id: "rollback-fixture",
+            used_for_authority: false,
+          };
+        },
+      },
+    });
+    try {
+      await ctx.ch.start(async () => {});
+
+      expect((await getRaw(ctx.port, "/update/snapshot")).status).toBe(401);
+
+      const ok = await getRaw(ctx.port, "/update/snapshot", {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(ok.status).toBe(200);
+      expect(JSON.parse(ok.text)).toMatchObject({
+        surface: "update",
+        mode: "manual_control",
+        candidate: {
+          verification_status: "pass",
+          sha256_matches: true,
+          manifest_matches: true,
+          secret_material: false,
+        },
+        distribution_boundary: {
+          automatic_updater_shipped: false,
+          runtime_auto_apply_available: false,
+          manual_update_only: true,
+        },
+        authority_boundary: {
+          update_metadata_used_for_authority: false,
+          rollback_plan_used_for_authority: false,
+          used_for_authority: false,
+        },
+      });
+
+      const snapshotPost = await postJson(ctx.port, "/update/snapshot", {}, {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(snapshotPost.status).toBe(405);
+
+      expect((await postJson(ctx.port, "/update/verify", {})).status).toBe(401);
+      const verify = await postJson(ctx.port, "/update/verify", {}, {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(verify.status).toBe(200);
+      expect(verify.body).toMatchObject({ ok: true, result: { action: "verify_candidate", used_for_authority: false } });
+
+      const prepare = await postJson(ctx.port, "/update/prepare", { confirm: "PRE_UPDATE_BACKUP" }, {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(prepare.status).toBe(200);
+      expect(prepare.body).toMatchObject({
+        ok: true,
+        result: {
+          action: "prepare_update",
+          pre_update_backup_id: "backup-fixture",
+          rollback_plan_id: "rollback-fixture",
+          used_for_authority: false,
+        },
+      });
+      expect(actions).toEqual(["verify", "prepare:PRE_UPDATE_BACKUP"]);
+    } finally {
+      await ctx.teardown();
+    }
   });
 });
 

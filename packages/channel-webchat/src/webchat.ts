@@ -327,6 +327,15 @@ export interface WebChatAboutSurface {
   getSnapshot: () => Promise<unknown>;
 }
 
+export interface WebChatUpdateSurface {
+  /** Return manual update readiness, release sidecar status, and rollback metadata. */
+  getSnapshot: () => Promise<unknown>;
+  /** Verify the configured release bundle sidecars without applying an update. */
+  verifyCandidate?: () => Promise<unknown>;
+  /** Create a pre-update backup and rollback plan. */
+  prepareUpdate?: (body: Record<string, unknown>) => Promise<unknown>;
+}
+
 export interface WebChatRecoverySurface {
   /** Return recovery readiness and backup inventory metadata. */
   getSnapshot: () => Promise<unknown>;
@@ -420,7 +429,9 @@ export interface WebChatOptions {
   evidence?: WebChatEvidenceSurface;
   /** Optional read-only product About surface. Uses the normal inbound bearer token. */
   about?: WebChatAboutSurface;
-  /** Optional read-only recovery readiness surface. Uses the normal inbound bearer token. */
+  /** Optional manual update readiness surface. Uses the normal inbound bearer token. */
+  update?: WebChatUpdateSurface;
+  /** Optional recovery readiness surface. Uses the normal inbound bearer token. */
   recovery?: WebChatRecoverySurface;
   /** Optional first-party operator endpoints. Uses the normal inbound bearer token. */
   operators?: WebChatOperatorSurfaces;
@@ -833,6 +844,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     if (url.pathname === "/app/about") {
       await this.handleAbout(req, res);
+      return;
+    }
+
+    if (url.pathname.startsWith("/update/")) {
+      await this.handleUpdate(req, res, url.pathname);
       return;
     }
 
@@ -1629,6 +1645,73 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       "cache-control": "no-store",
     });
     res.end(JSON.stringify(snapshot));
+  }
+
+  private async handleUpdate(
+    req: IncomingMessage,
+    res: ServerResponse,
+    route: string,
+  ): Promise<void> {
+    if (!this.opts.update) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "update_not_configured" }));
+      return;
+    }
+    if (!this.checkAuth(req, "inbound")) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (route === "/update/snapshot") {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      const snapshot = await this.opts.update.getSnapshot();
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify(snapshot));
+      return;
+    }
+    if (req.method !== "POST") {
+      res.writeHead(405, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    try {
+      let result: unknown;
+      if (route === "/update/verify") {
+        if (!this.opts.update.verifyCandidate) {
+          res.writeHead(501, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "update_action_not_configured" }));
+          return;
+        }
+        result = await this.opts.update.verifyCandidate();
+      } else if (route === "/update/prepare") {
+        if (!this.opts.update.prepareUpdate) {
+          res.writeHead(501, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "update_action_not_configured" }));
+          return;
+        }
+        const body = (await readJson(req)) ?? {};
+        result = await this.opts.update.prepareUpdate(body);
+      } else {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "update_action_not_found" }));
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify({ ok: true, result }));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : "update_action_failed" }));
+    }
   }
 
   private async handleRecovery(

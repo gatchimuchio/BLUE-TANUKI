@@ -13,6 +13,7 @@
 - [First-Run Checklist](FIRST_RUN_CHECKLIST.md) - first successful local operation
 - [Permanent-Use Checklist](PERMANENT_USE_CHECKLIST.md) - long-running owner operation
 - [v1.0 Release Candidate](v1.0-release-candidate.md) - release-candidate claim, validation, support boundary, and upgrade notes
+- [1.0.0-rc.1 Release Notes](release-notes/1.0.0-rc.1.md) - RC scope, shipped surfaces, non-shipped boundaries, and validation expectations
 - [v1.0 Post-RC Closure Review](v1.0-post-rc-closure-review.md) - post-RC bundle, smoke, live-smoke, preview-promotion, installer, and updater decisions
 - [v1.0 GA Promotion Review](v1.0-ga-promotion-review.md) - GA bar evidence, pre-GO state, and owner decision boundary
 

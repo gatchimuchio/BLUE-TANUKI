@@ -81,9 +81,38 @@ node apps/gateway/dist/main.js --audit-verify
 
 If audit verification fails, stop the update and handle audit recovery first.
 
-P10 does not implement automatic update-before-backup. For update work, create a
-Control Center backup pack or manual backup before replacing files. P11 owns
-automatic update rollback.
+P10 does not implement update-before-backup. P11 adds manual update readiness,
+pre-update recovery backup, and rollback-plan evidence. It still does not
+implement automatic update rollback.
+
+P11 keeps update manual-only. The Control Center Update screen verifies a
+configured release bundle sidecar set and records rollback evidence, but it does
+not replace app files, download updates, run a background updater, or provide a
+signed native installer.
+
+## Control Center update controls
+
+Use the Update screen when the gateway is healthy enough to serve WebChat:
+
+1. Generate or place a release bundle with matching `.sha256` and
+   `.manifest.json` sidecars.
+2. Optionally point `BLUE_TANUKI_UPDATE_BUNDLE` at that archive. If unset,
+   BLUE-TANUKI checks the default `release/blue-tanuki-<version>-source-bundle`
+   archive for the current platform.
+3. Open Control Center, enter the WebChat token, and run `Load Update`.
+4. Run `Verify Bundle`. The archive sha256, sha sidecar, manifest, unsigned
+   source bundle boundary, no-secret boundary, and core release paths must match.
+5. Run `Prepare Update`. This requires explicit confirmation, creates a P10
+   recovery backup, and writes a rollback plan under `BLUE_TANUKI_UPDATE_DIR` or
+   `BLUE_TANUKI_FILE_ROOT/update`.
+6. Stop BLUE-TANUKI before replacing app files.
+7. Apply the source or release-bundle update manually.
+8. Restart and run doctor, audit verification, and release verification.
+
+If post-update validation fails, restore the previous app directory or source
+commit and restore the recorded recovery backup. The rollback plan is evidence
+only and has `used_for_authority=false`; it cannot approve commands or bypass
+HDS-BRAIN.
 
 ## 2. Source Install Update
 

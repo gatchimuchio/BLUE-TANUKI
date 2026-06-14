@@ -17,6 +17,7 @@ pnpm validate:product -- --phase P7
 pnpm validate:product -- --phase P8
 pnpm validate:product -- --phase P9
 pnpm validate:product -- --phase P10
+pnpm validate:product -- --phase P11
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -110,6 +111,12 @@ only console output.
 |---|---|---|
 | `p10.recovery_backup_restore` | `CONFIG` / `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | WebChat recovery control pathをloopback上で起動し、`/recovery/snapshot` のcontrol availabilityとnon-authority境界、`/recovery/backup` のtoken gateとsecret非露出、破壊後の`/recovery/restore`によるenv/session復元、`/recovery/reset-provider`によるstub復帰、`/recovery/reset-connector`によるComposio dry-run/live disabled復帰、`/recovery/factory-reset`によるsession/memory/schedule/log削除とaudit/recovery root保持を実ファイルで検証する |
 
+## P11 Checks
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p11.update_release_rollback` | `CONFIG` / `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | WebChat update control pathをloopback上で起動し、`/update/snapshot` のtoken gate、manual update mode、release bundle sha256 sidecar / manifest verification、unsigned/no-secret/no-dynamic-import境界、automatic updater未出荷、runtime auto-apply未解放、non-authority境界を検証する。`/update/verify` はsecret非露出で候補bundleを検証し、`/update/prepare` は明示confirmationなしでfail-closed、confirmationありでP10 recovery backupとrollback planを生成し、rollback planがmanual app restore必須・non-authority・secret非露出であることを実ファイルで確認する。release notes `docs/release-notes/1.0.0-rc.1.md` の存在とpre-GO境界も検査する |
+
 ## Incremental Registration
 
 | 追加Phase | 検査項目 |
@@ -123,7 +130,7 @@ only console output.
 | P8 | Composio dry-run no-call / live opt-in / toolkit+action allowlist / action revoke / L3 final-review non-bypass / fixture live execution / pre-post audit |
 | P9 | channel claim matrix / operator first-party package-manifest-release整合 / bundled plugin review / plugin-loader surface / Layer B contract-stable宣言 |
 | P10 | Control Center/WebChat経由のbackup→破壊→restore往復、provider reset、connector reset、audit保持factory reset |
-| P11 | release bundle verify＋update失敗rollback |
+| P11 | release sidecar verify＋pre-update backup＋rollback plan＋release notes |
 
 ## Evidence Pack
 

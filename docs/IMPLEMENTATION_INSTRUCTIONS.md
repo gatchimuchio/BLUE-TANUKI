@@ -1,4 +1,4 @@
-# BLUE-TANUKI Implementation Instructions v10
+# BLUE-TANUKI Implementation Instructions v11
 
 ## Role of This File
 
@@ -22,88 +22,86 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P10 — Recovery / Backup / Rollback`.
+- The active instruction is `Phase P11 — Update / Release / Signing`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P10 — Recovery / Backup / Rollback
+# Phase P11 — Update / Release / Signing
 
 ## Objective
 
-Control Centerから、ローカル設定・ログ・永続状態をバックアップし、意図的に壊した状態から復元できる最小のP10回復経路を実装する。provider reset / connector reset / factory reset はHDS-BRAIN authorityを代替せず、WebChat token-gated control pathとして実行する。
+配布物の検証、手動更新のpre-update backup、rollback plan、release notesをP11のcontrol pathとして閉じる。署名native installerとautomatic updaterは未出荷のまま明示し、runtimeからアプリ本体を自動置換しない。
 
 ## Scope
 
-- Add local recovery backup packs with manifest, copied env/config/runtime paths, digests, and secret-bearing classification.
-- Expose `/recovery/backup`, `/recovery/restore`, `/recovery/reset-provider`, `/recovery/reset-connector`, and `/recovery/factory-reset` through WebChat inbound token gate.
-- Add Control Center Backup / Restore controls that call those routes and reload snapshot state.
-- Reset provider settings to offline `LLM_BACKEND=stub`.
-- Reset connector settings to Composio dry-run with live execution disabled.
-- Factory reset local runtime state while preserving audit and recovery backup roots.
-- Extend `validate:product -- --phase P10` with WebChat control-path backup / restore / reset / factory-reset verification.
-- Update recovery / rollback runbook and validation docs.
+- Add an update surface that verifies configured release bundle `.sha256` and `.manifest.json` sidecars.
+- Add WebChat token-gated `/update/snapshot`, `/update/verify`, and `/update/prepare` routes.
+- Add a Control Center Update panel for candidate verification, pre-update backup, rollback plan status, and distribution boundary.
+- `prepare update` must create a P10 recovery backup and write a rollback plan before manual app replacement.
+- Add a versioned release notes document for `1.0.0-rc.1`.
+- Extend `validate:product -- --phase P11` with update readiness, release sidecar verification, pre-update backup, rollback plan, release-note, and non-authority checks.
 
 ## Non-Goals
 
-- Do not implement automatic updater or update-before-backup; P11 owns update failure rollback.
-- Do not implement destructive audit purge. Audit is preserved by factory reset.
-- Do not make recovery metadata, recovery action result, Control Center UI state, or backup manifest authority.
-- Do not bypass Approval Gate for HDS command execution. Recovery controls are local control-path operations, not command approvals.
-- Do not expose raw env contents, credentials, payload bodies, command content, or rendered output in recovery API responses.
+- Do not implement automatic update, runtime app-file replacement, background download, signed installer, or signing pipeline.
+- Do not static-import release scripts into production runtime.
+- Do not make update metadata, rollback plans, release notes, Control Center UI state, or bundle manifests authority.
+- Do not expose env content, credentials, tokens, command content, or rendered output in update API responses.
+- Do not claim GA or public completion; owner GO remains required.
 - Do not add GUI Shell dependency or broaden gateway hard dependencies.
 
 ## Inspect First
 
 ```bash
 git status --short
-rg -n "Recovery|recovery|Backup|Restore|factory reset|provider reset|connector reset|BLUE_TANUKI_RECOVERY|validate:product|P10" apps packages scripts docs
-rg -n "BLUE_TANUKI_ENV_FILE|BLUE_TANUKI_AUDIT_DIR|BLUE_TANUKI_SESSION_DIR|BLUE_TANUKI_MEMORY|BLUE_TANUKI_SCHEDULES_DIR|BLUE_TANUKI_LOG_DIR|COMPOSIO|OPENROUTER|LLM_BACKEND" apps/gateway packages scripts docs
+rg -n "Update|update|release:|release bundle|rollback|migration|versioned|compatibility|automatic updater|signed|P11|validate:product" apps packages scripts docs package.json
+rg -n "release:bundle|release:verify|sha256|manifest|public_claim_allowed|owner_go|BLUE_TANUKI_UPDATE|BLUE_TANUKI_RECOVERY" apps packages scripts docs
 ```
 
 ## Implementation Requirements
 
-- `apps/gateway/src/recovery_surface.ts` owns recovery snapshot and action implementation.
-- Recovery backup packs must include a manifest and copied configured paths without returning raw secret content through API.
-- Manifest/action results must include `used_for_authority=false`, HDS authority preservation metadata, and evidence source classes.
-- Restore must create a pre-restore backup before overwriting current state.
-- Reset operations must create a recovery backup before mutating env.
-- Factory reset must preserve audit and recovery backup roots.
-- WebChat routes must require the inbound WebChat bearer token and explicit confirmation for restore/reset/factory reset.
-- `validate:product -- --phase P10` must exercise WebChat route-level backup / restore / reset / factory reset with actual filesystem state.
+- `apps/gateway/src/update_surface.ts` owns update snapshot and action implementation.
+- Candidate verification must compute archive sha256 and compare it to sidecar and manifest.
+- Candidate manifest must preserve unsigned-source-bundle / no-secrets / no-external-dynamic-import boundaries.
+- Compatibility check must report schema status without inventing migration success beyond observed manifest schema.
+- Prepare update must require explicit confirmation and create a pre-update P10 recovery backup.
+- Rollback plan must include current version, git head when available, candidate digest, backup id, manual restore requirement, and non-authority flags.
+- WebChat routes must require inbound WebChat bearer token.
+- Control Center must show manual-only update status and must not offer runtime auto-apply.
+- `validate:product -- --phase P11` must exercise WebChat route-level update verification and rollback preparation with actual filesystem state.
 
 ## Safety Requirements
 
 - HDS-BRAIN remains the only authority source.
-- Recovery metadata/action results cannot approve, execute HDS commands, classify risk, substitute HDS-BRAIN, infer consent, resume suspended commands, or bypass final review.
-- Raw invalid input must not enter execution paths; route bodies only select bounded recovery operations.
-- Env files and backup packs are secret-bearing; API responses must not echo secret values.
-- Audit evidence must be preserved on factory reset.
-- Restore and reset must fail closed without required token/confirmation.
-- `destructive_repair_available` remains false.
+- Update metadata/action results cannot approve, execute HDS commands, classify risk, substitute HDS-BRAIN, infer consent, resume suspended commands, or bypass final review.
+- Runtime auto-apply remains unavailable.
+- Release sidecar mismatch must fail closed before update.
+- Pre-update backup must happen before any manual replacement recommendation.
+- Rollback plan and update API responses must not echo secret values.
+- Signing and automatic updater claims must remain `not shipped`.
 
 ## Operator Usability Requirements
 
-- Control Center must show current env backup inventory, recovery pack inventory, latest backup id, available controls, and next safe action.
-- Backup / restore controls must be reachable from the first-party Control Center, not only CLI.
-- Reset wording must make clear that restart/doctor verification is still required after mutation.
-- Recovery path must preserve settings by default and provide rollback evidence before mutation.
+- Control Center must show current version, candidate verification status, sha/manifest status, compatibility status, rollback plan status, automatic updater boundary, and next safe action.
+- Operator must be able to prepare update rollback from GUI before manually replacing files.
+- Release notes must summarize shipped scope, boundaries, validation expectations, and remaining GO blockers.
 
 ## Audit Requirements
 
-- P10 product validation evidence must keep `used_for_authority=false`.
-- Evidence source class for P10 is `CONFIG` / `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE`.
-- Recovery backup manifests and action results are audit/recovery evidence only, not authority.
-- If required recovery evidence cannot be produced, report SUSPEND/blocker rather than inferring recovery readiness.
+- P11 product validation evidence must keep `used_for_authority=false`.
+- Evidence source class for P11 is `CONFIG` / `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE`.
+- Release bundle manifest, rollback plan, update snapshot, and release notes are evidence only, not authority.
+- If release sidecar evidence is unavailable or mismatched, report blocked readiness rather than inferring update readiness.
 
 ## Tests
 
-- Unit tests must cover backup inventory, backup pack creation, restore, provider reset, connector reset, factory reset, secret non-exposure, audit preservation, and non-authority flags.
-- WebChat tests must cover snapshot token gate, action token gate, route wiring, snapshot POST 405, and non-authority action results.
-- Product validation must cover P10 route-level recovery through WebChat.
-- Existing P2-P9 gates must remain green.
+- Unit tests must cover update snapshot, release sidecar pass/fail, pre-update backup, rollback plan, secret non-exposure, and non-authority flags.
+- WebChat tests must cover update snapshot token gate, verify/prepare action token gate, snapshot POST 405, and non-authority action results.
+- Product validation must cover P11 route-level update readiness through WebChat.
+- Existing P2-P10 gates must remain green.
 
 ## Docs
 
@@ -111,6 +109,7 @@ rg -n "BLUE_TANUKI_ENV_FILE|BLUE_TANUKI_AUDIT_DIR|BLUE_TANUKI_SESSION_DIR|BLUE_T
 - Update `docs/PRODUCT_ROADMAP.md`.
 - Keep `docs/ROADMAP.md` active phase pointer aligned.
 - Update `docs/UPDATE_ROLLBACK_RUNBOOK.md`.
+- Add release notes for `1.0.0-rc.1`.
 
 ## Validation Commands
 
@@ -123,25 +122,26 @@ pnpm docs:check
 pnpm validate:repo-health
 pnpm validate:packaging
 pnpm validate:ga
-pnpm validate:product -- --phase P10 --evidence .codex-tmp/validate-product-p10-recovery-local
+pnpm validate:product -- --phase P11 --evidence .codex-tmp/validate-product-p11-update-local
 pnpm release:bundle
 pnpm release:verify
 ```
 
 ## Manual Smoke
 
-Open Control Center, load Backup / Restore with WebChat token, run Backup Now, intentionally change a disposable env/session fixture, restore the selected backup, then run provider reset / connector reset / factory reset on a disposable setup. Confirm audit and recovery roots remain, restart, run doctor/audit verification, and confirm no recovery response displays secret values.
+Open Control Center, load Update with WebChat token, verify the configured release bundle, prepare update, confirm rollback plan and pre-update backup are created, then follow the runbook for manual app replacement and post-update doctor/audit/release verification. Confirm no runtime auto-apply button exists.
 
 ## Permanent-Use Check
 
-The owner can recover from a broken provider, broken connector, local runtime-state corruption, or an accidental settings change from Control Center without deleting audit evidence or mistaking recovery metadata for authority.
+The owner can verify a release candidate, create rollback evidence before update, understand that update is manual-only, and recover from failed manual update without losing settings or audit evidence.
 
 ## Acceptance Criteria
 
 - Local validation passes.
-- `validate:product -- --phase P10` passes on Linux.
-- Recovery route responses remain redacted and non-authority.
-- Factory reset preserves audit and recovery roots.
+- `validate:product -- --phase P11` passes on Linux.
+- Update route responses and rollback plan remain redacted and non-authority.
+- Release sidecar mismatch blocks readiness.
+- Runtime automatic update remains unavailable.
 - Release claim remains pre-GO with `public_claim_allowed=false`.
 
 ## Final Report Format
@@ -2862,12 +2862,12 @@ Do not claim completion unless acceptance criteria are satisfied.
 The active next phase is:
 
 ```txt
-Phase P10 — Recovery / Backup / Rollback
+Phase P11 — Update / Release / Signing
 ```
 
-Scope: implement token-gated Control Center backup / restore / provider reset /
-connector reset / factory reset for local recovery. This phase preserves audit
-and recovery backup roots, keeps recovery metadata/action results non-authority,
-and does not implement automatic update rollback or destructive audit purge.
+Scope: implement token-gated Control Center manual update readiness, release
+sidecar verification, pre-update recovery backup, rollback plan generation, and
+release notes while keeping signed native installer and automatic updater
+unshipped.
 
 Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision. Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion remains blocked until explicit owner GO.
