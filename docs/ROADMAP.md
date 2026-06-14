@@ -144,10 +144,10 @@ Codex must proceed sequentially unless explicitly instructed otherwise.
 ## 3. Current Active Phase
 
 ```txt
-Phase P11 — Update / Release / Signing
+Phase P12 — Docs / Support Boundary / Claims
 ```
 
-旧 `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` はD2によりP13へ吸収。Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion is blocked until explicit owner GO.
+P12はP3〜P11の残差反映、support boundary、known limitations、release claim整合を閉じる。旧 `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` はD2によりP13へ吸収。Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion is blocked until explicit owner GO.
 
 ## 4. Completed Phase Summaries
 

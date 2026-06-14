@@ -253,9 +253,9 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: 製品責任範囲を固定する。
 
-現状（実測）: **充実**。QUICKSTART / INSTALLER_GUIDE / WINDOWS_INSTALLER_GUIDE / WINDOWS_FIRST_RUN / WINDOWS_UNINSTALL / RESIDENT_APP_GUIDE / OPENROUTER_BACKEND / COMPOSIO_CONNECTOR / SECURITY / TROUBLESHOOTING / NON_GOALS / CLAIM / GA_BAR_DEFINITION / PLUGIN_HIG / SKILL_LOADER_CONTRACT / AGENTS.md 等、docs:checkでCI照合済。
+現状（実測）: **実装done**。QUICKSTART / INSTALLER_GUIDE / WINDOWS_INSTALLER_GUIDE / WINDOWS_FIRST_RUN / WINDOWS_UNINSTALL / RESIDENT_APP_GUIDE / OPENROUTER_BACKEND / COMPOSIO_CONNECTOR / SECURITY / TROUBLESHOOTING / NON_GOALS / CLAIM / GA_BAR_DEFINITION / PLUGIN_HIG / SKILL_LOADER_CONTRACT / AGENTS.md 等に加え、P12で `docs/SUPPORT_BOUNDARY.md` と `docs/KNOWN_LIMITATIONS.md` を追加し、README / QUICKSTART / CLAIM / RC docs / release notes / docs indexから参照した。`validate:product` は `p12.docs_support_claims` でsupport boundary、known limitations、preview quarantine、public claim alignmentを検査する。
 
-残差: P3〜P11の残差実装の文書反映、Release Claims最終整合、Known Limitations更新、サポート境界の明文化、preview誤認防止の最終化。
+残差: P13 owner GO判定、Windows実機E2E evidence、owner credentialed live smoke、実機manual update/rollback rehearsal、D1〜D7の最終decision確認。
 
 完了条件: 何ができるか・できないかが分かる。public claimと証跡が一致する。
 
@@ -291,7 +291,7 @@ P1(凍結宣言) → P2(ゲート骨格)
 P2後、着手順自由: P3 / P4 / P5 / P7前半
 P6(UI残差) は P4 と連動、P8 live解放の前提（Linux fixtureではP8で再確認済み）
 P8 live は P6 完了後（コード解放済み。owner資格情報live smokeはP13前証跡）
-P9 / P10 / P11 は実装済み。P12はP3〜P11の残差反映とclaim/support境界の最終整合を閉じる。
+P9 / P10 / P11 / P12 は実装済み。P13はowner GOと製品release判定を閉じる。
 P12 → P13
 ```
 
@@ -312,7 +312,7 @@ P12 → P13
 | P9 | Channel/Operator整理 | 実装done | owner-run channel promotion evidence・future Layer B submission evidence |
 | P10 | Recovery/Backup | 実装done | Windows実機GUI証跡・safe mode/repair UX・P11 update rollback連動 |
 | P11 | Update/Release | 実装done | Windows実機GUI証跡・将来migration・署名判断はowner task |
-| P12 | Docs/Claims | 充実 | 残差反映・最終整合 |
+| P12 | Docs/Claims | 実装done | P13 owner GO前の最終decision/evidence確認 |
 | P13 | Owner GO | — | 新基準で判定 |
 
 ## 8. 最終確定方針

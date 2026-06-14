@@ -1,4 +1,4 @@
-# BLUE-TANUKI Implementation Instructions v11
+# BLUE-TANUKI Implementation Instructions v12
 
 ## Role of This File
 
@@ -22,94 +22,87 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P11 — Update / Release / Signing`.
+- The active instruction is `Phase P12 — Docs / Support Boundary / Claims`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P11 — Update / Release / Signing
+# Phase P12 — Docs / Support Boundary / Claims
 
 ## Objective
 
-配布物の検証、手動更新のpre-update backup、rollback plan、release notesをP11のcontrol pathとして閉じる。署名native installerとautomatic updaterは未出荷のまま明示し、runtimeからアプリ本体を自動置換しない。
+製品責任範囲、known limitations、release claim、preview/no-support境界をP12で固定する。P3〜P11の残差を文書とproduct gateに反映し、public claimと実証済み証跡がズレない状態にする。
 
 ## Scope
 
-- Add an update surface that verifies configured release bundle `.sha256` and `.manifest.json` sidecars.
-- Add WebChat token-gated `/update/snapshot`, `/update/verify`, and `/update/prepare` routes.
-- Add a Control Center Update panel for candidate verification, pre-update backup, rollback plan status, and distribution boundary.
-- `prepare update` must create a P10 recovery backup and write a rollback plan before manual app replacement.
-- Add a versioned release notes document for `1.0.0-rc.1`.
-- Extend `validate:product -- --phase P11` with update readiness, release sidecar verification, pre-update backup, rollback plan, release-note, and non-authority checks.
+- Add a support boundary document that distinguishes supported first-party RC surface, preview/no-support, reserved-third-party, and not-shipped scope.
+- Add a known limitations document that records P3-P11 residual evidence gaps and deferred surfaces.
+- Align README / QUICKSTART / CLAIM / RC docs / release notes / docs index with the support boundary.
+- Extend `docs:check` so support boundary and known limitations stay in the release documentation set.
+- Extend `validate:product -- --phase P12` with docs/support/claim alignment checks.
+- Keep `public_claim_allowed=false` and owner GO pending.
 
 ## Non-Goals
 
-- Do not implement automatic update, runtime app-file replacement, background download, signed installer, or signing pipeline.
-- Do not static-import release scripts into production runtime.
-- Do not make update metadata, rollback plans, release notes, Control Center UI state, or bundle manifests authority.
-- Do not expose env content, credentials, tokens, command content, or rendered output in update API responses.
+- Do not implement product features, installer signing, automatic updater, Windows E2E execution, live external credential smoke, or manual app replacement.
+- Do not promote Slack / Discord / Teams / LINE from preview.
+- Do not promote WhatsApp from `reserved-third-party`.
 - Do not claim GA or public completion; owner GO remains required.
-- Do not add GUI Shell dependency or broaden gateway hard dependencies.
+- Do not add GUI Shell dependency, new runtime dependency, or new authority path.
 
 ## Inspect First
 
 ```bash
 git status --short
-rg -n "Update|update|release:|release bundle|rollback|migration|versioned|compatibility|automatic updater|signed|P11|validate:product" apps packages scripts docs package.json
-rg -n "release:bundle|release:verify|sha256|manifest|public_claim_allowed|owner_go|BLUE_TANUKI_UPDATE|BLUE_TANUKI_RECOVERY" apps packages scripts docs
+rg -n "claim|public_claim_allowed|owner GO|support boundary|known limitation|preview|not shipped|automatic updater|signed|WhatsApp|P12|validate:product" README.md QUICKSTART.md CLAIM.md docs scripts package.json
+rg -n "p11.update_release_rollback|PRODUCT_CHECKS|ProductPhase|PHASE_ORDER|docs:check|currentReleaseDocs" scripts apps/gateway/test docs
 ```
 
 ## Implementation Requirements
 
-- `apps/gateway/src/update_surface.ts` owns update snapshot and action implementation.
-- Candidate verification must compute archive sha256 and compare it to sidecar and manifest.
-- Candidate manifest must preserve unsigned-source-bundle / no-secrets / no-external-dynamic-import boundaries.
-- Compatibility check must report schema status without inventing migration success beyond observed manifest schema.
-- Prepare update must require explicit confirmation and create a pre-update P10 recovery backup.
-- Rollback plan must include current version, git head when available, candidate digest, backup id, manual restore requirement, and non-authority flags.
-- WebChat routes must require inbound WebChat bearer token.
-- Control Center must show manual-only update status and must not offer runtime auto-apply.
-- `validate:product -- --phase P11` must exercise WebChat route-level update verification and rollback preparation with actual filesystem state.
+- `docs/SUPPORT_BOUNDARY.md` must define supported first-party RC surface, preview/no-support, reserved-third-party, not-shipped scope, and support escalation classes.
+- `docs/KNOWN_LIMITATIONS.md` must record GA claim, platform evidence, credentialed external surfaces, update/rollback, preview/reserved limitations, and support boundary routing.
+- README / QUICKSTART / CLAIM / `docs/v1.0-release-candidate.md` / `docs/v1.0-post-rc-closure-review.md` / release notes / docs index must link or reflect the new boundary.
+- `scripts/check_docs.mjs` must require the new support/limitations docs in current release docs.
+- `scripts/validate_product.ts` must register `p12.docs_support_claims` and verify claim/support boundary consistency.
+- `apps/gateway/test/validate_product.test.ts` must assert P12 registration.
 
 ## Safety Requirements
 
 - HDS-BRAIN remains the only authority source.
-- Update metadata/action results cannot approve, execute HDS commands, classify risk, substitute HDS-BRAIN, infer consent, resume suspended commands, or bypass final review.
-- Runtime auto-apply remains unavailable.
-- Release sidecar mismatch must fail closed before update.
-- Pre-update backup must happen before any manual replacement recommendation.
-- Rollback plan and update API responses must not echo secret values.
-- Signing and automatic updater claims must remain `not shipped`.
+- Support boundary, known limitations, claim documents, docs index, and product validation evidence remain `used_for_authority=false`.
+- Public claim remains blocked with `public_claim_allowed=false`.
+- Preview status cannot be promoted by wording, Control Center state, plugin review evidence, or channel metadata.
+- Signed native installer, automatic updater, runtime auto-apply, and WhatsApp first-party support remain not shipped.
 
 ## Operator Usability Requirements
 
-- Control Center must show current version, candidate verification status, sha/manifest status, compatibility status, rollback plan status, automatic updater boundary, and next safe action.
-- Operator must be able to prepare update rollback from GUI before manually replacing files.
-- Release notes must summarize shipped scope, boundaries, validation expectations, and remaining GO blockers.
+- An operator must be able to tell what is supported, preview, reserved-third-party, or not shipped.
+- Known limitations must identify what remains unverified, environment-limited, owner-run, or future-scope.
+- Release notes and claim docs must point to the support boundary instead of implying broader support.
 
 ## Audit Requirements
 
-- P11 product validation evidence must keep `used_for_authority=false`.
-- Evidence source class for P11 is `CONFIG` / `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE`.
-- Release bundle manifest, rollback plan, update snapshot, and release notes are evidence only, not authority.
-- If release sidecar evidence is unavailable or mismatched, report blocked readiness rather than inferring update readiness.
+- P12 product validation evidence must keep `used_for_authority=false`.
+- Evidence source class for P12 is `CONFIG` / `EXTERNAL_EVIDENCE`.
+- Documentation and claim alignment are release evidence only, not runtime authority.
 
 ## Tests
 
-- Unit tests must cover update snapshot, release sidecar pass/fail, pre-update backup, rollback plan, secret non-exposure, and non-authority flags.
-- WebChat tests must cover update snapshot token gate, verify/prepare action token gate, snapshot POST 405, and non-authority action results.
-- Product validation must cover P11 route-level update readiness through WebChat.
-- Existing P2-P10 gates must remain green.
+- Unit tests must cover P12 product-check registration.
+- Product validation must cover P12 support/claim alignment.
+- Existing P2-P11 gates must remain green.
 
 ## Docs
 
+- Add `docs/SUPPORT_BOUNDARY.md`.
+- Add `docs/KNOWN_LIMITATIONS.md`.
 - Update `docs/VALIDATE_PRODUCT.md`.
 - Update `docs/PRODUCT_ROADMAP.md`.
 - Keep `docs/ROADMAP.md` active phase pointer aligned.
-- Update `docs/UPDATE_ROLLBACK_RUNBOOK.md`.
-- Add release notes for `1.0.0-rc.1`.
+- Update README / QUICKSTART / CLAIM / RC docs / release notes / docs index.
 
 ## Validation Commands
 
@@ -122,26 +115,25 @@ pnpm docs:check
 pnpm validate:repo-health
 pnpm validate:packaging
 pnpm validate:ga
-pnpm validate:product -- --phase P11 --evidence .codex-tmp/validate-product-p11-update-local
+pnpm validate:product -- --phase P12 --evidence .codex-tmp/validate-product-p12-support-local
 pnpm release:bundle
 pnpm release:verify
 ```
 
 ## Manual Smoke
 
-Open Control Center, load Update with WebChat token, verify the configured release bundle, prepare update, confirm rollback plan and pre-update backup are created, then follow the runbook for manual app replacement and post-update doctor/audit/release verification. Confirm no runtime auto-apply button exists.
+Open README / QUICKSTART / CLAIM / docs index / support boundary / known limitations / release notes and confirm the support boundary is reachable from normal operator reading paths. Confirm no text claims GA, signed native installer, automatic updater, or first-party WhatsApp support.
 
 ## Permanent-Use Check
 
-The owner can verify a release candidate, create rollback evidence before update, understand that update is manual-only, and recover from failed manual update without losing settings or audit evidence.
+The owner can identify supported RC surfaces, preview surfaces, not-shipped surfaces, remaining evidence gaps, and the exact owner-GO boundary before making release or support claims.
 
 ## Acceptance Criteria
 
 - Local validation passes.
-- `validate:product -- --phase P11` passes on Linux.
-- Update route responses and rollback plan remain redacted and non-authority.
-- Release sidecar mismatch blocks readiness.
-- Runtime automatic update remains unavailable.
+- `validate:product -- --phase P12` passes on Linux.
+- Support boundary and known limitations are indexed, linked, and checked by docs/product gates.
+- Preview and reserved-third-party boundaries remain unchanged.
 - Release claim remains pre-GO with `public_claim_allowed=false`.
 
 ## Final Report Format
@@ -2862,12 +2854,11 @@ Do not claim completion unless acceptance criteria are satisfied.
 The active next phase is:
 
 ```txt
-Phase P11 — Update / Release / Signing
+Phase P12 — Docs / Support Boundary / Claims
 ```
 
-Scope: implement token-gated Control Center manual update readiness, release
-sidecar verification, pre-update recovery backup, rollback plan generation, and
-release notes while keeping signed native installer and automatic updater
-unshipped.
+Scope: fix support boundary, known limitations, release-claim alignment, and
+preview/no-support wording while keeping public claim activation blocked until
+owner GO.
 
 Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision. Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion remains blocked until explicit owner GO.

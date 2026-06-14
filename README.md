@@ -6,6 +6,8 @@ BLUE-TANUKI treats LLMs, tools, cron, and channels as *downstream devices*. The 
 
 Current state: **1.0.0-rc.1 technical release candidate**. GA and public complete-superiority claims remain blocked until the GA Bar passes and the owner gives explicit GO.
 
+P12 fixes the RC support boundary: see [docs/SUPPORT_BOUNDARY.md](docs/SUPPORT_BOUNDARY.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) before treating any surface as supported or release-claimable.
+
 Development strategy: GUI Shell is a reference LLM-readable responsibility substrate, not a dependency to modify. BLUE-TANUKI is the target resident control plane extended under that responsibility method: LLM implementation agents may build bounded changes, but HDS-BRAIN and the human owner remain the authority boundaries.
 
 ---
@@ -98,6 +100,7 @@ See [QUICKSTART.md](QUICKSTART.md).
 * **Public third-party Skill registry** is intentionally excluded.
 * External GA/public superiority claims remain blocked until `pnpm validate:ga` and owner GO allow them.
 * OpenRouter and Composio are optional convenience adapters, not mandatory infrastructure or authority sources.
+* Support scope and known limitations are fixed in [docs/SUPPORT_BOUNDARY.md](docs/SUPPORT_BOUNDARY.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ---
 
@@ -211,6 +214,8 @@ The authority core never consumes downstream session history to make decisions. 
 * [docs/INDEX.md](docs/INDEX.md) — full documentation index
 * [docs/FIRST_RUN_CHECKLIST.md](docs/FIRST_RUN_CHECKLIST.md) — first successful local operation
 * [docs/PERMANENT_USE_CHECKLIST.md](docs/PERMANENT_USE_CHECKLIST.md) — permanent owner operation
+* [docs/SUPPORT_BOUNDARY.md](docs/SUPPORT_BOUNDARY.md) — supported, preview, reserved, and not-shipped boundary
+* [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) — RC limitations and remaining evidence gaps
 * [docs/CHANNEL_READINESS_MATRIX.md](docs/CHANNEL_READINESS_MATRIX.md) — channel status and evidence
 * [docs/CHANNEL_PROMOTION_GATE.md](docs/CHANNEL_PROMOTION_GATE.md) — preview-to-first-party promotion gate
 * [docs/CREDENTIAL_READINESS_MATRIX.md](docs/CREDENTIAL_READINESS_MATRIX.md) — credential requirements and safe skips

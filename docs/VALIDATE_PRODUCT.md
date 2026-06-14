@@ -18,6 +18,7 @@ pnpm validate:product -- --phase P8
 pnpm validate:product -- --phase P9
 pnpm validate:product -- --phase P10
 pnpm validate:product -- --phase P11
+pnpm validate:product -- --phase P12
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -117,6 +118,12 @@ only console output.
 |---|---|---|
 | `p11.update_release_rollback` | `CONFIG` / `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | WebChat update control pathをloopback上で起動し、`/update/snapshot` のtoken gate、manual update mode、release bundle sha256 sidecar / manifest verification、unsigned/no-secret/no-dynamic-import境界、automatic updater未出荷、runtime auto-apply未解放、non-authority境界を検証する。`/update/verify` はsecret非露出で候補bundleを検証し、`/update/prepare` は明示confirmationなしでfail-closed、confirmationありでP10 recovery backupとrollback planを生成し、rollback planがmanual app restore必須・non-authority・secret非露出であることを実ファイルで確認する。release notes `docs/release-notes/1.0.0-rc.1.md` の存在とpre-GO境界も検査する |
 
+## P12 Checks
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p12.docs_support_claims` | `CONFIG` / `EXTERNAL_EVIDENCE` | `docs/SUPPORT_BOUNDARY.md` と `docs/KNOWN_LIMITATIONS.md` が存在し、README / QUICKSTART / CLAIM / RC docs / release notes / docs indexから参照されることを確認する。`public_claim_allowed=false`、`used_for_authority=false`、HDS-BRAIN authority、first-party support surface、preview/no-support boundary、reserved/not-shipped boundary、Slack / Discord / Teams / LINE preview、WhatsApp reserved-third-party、signed installer未出荷、automatic updater未出荷、Windows実機証跡・credentialed live smoke・manual update replacement・future migration schema等の残差が文書化され、compatibility matrixのchannel statusと矛盾しないことを検査する |
+
 ## Incremental Registration
 
 | 追加Phase | 検査項目 |
@@ -131,6 +138,7 @@ only console output.
 | P9 | channel claim matrix / operator first-party package-manifest-release整合 / bundled plugin review / plugin-loader surface / Layer B contract-stable宣言 |
 | P10 | Control Center/WebChat経由のbackup→破壊→restore往復、provider reset、connector reset、audit保持factory reset |
 | P11 | release sidecar verify＋pre-update backup＋rollback plan＋release notes |
+| P12 | support boundary＋known limitations＋release claim alignment |
 
 ## Evidence Pack
 

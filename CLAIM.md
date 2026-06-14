@@ -4,6 +4,11 @@ GA promotion note: `pnpm validate:ga` currently treats the repository as
 pre-GO ready only. `public_claim_allowed=false` until explicit owner GO is
 recorded.
 
+Support note: P12 fixes the RC support boundary in
+`docs/SUPPORT_BOUNDARY.md` and the remaining evidence gaps in
+`docs/KNOWN_LIMITATIONS.md`. Those documents are claim-boundary evidence only:
+`used_for_authority=false`.
+
 ## Claim
 
 BLUE-TANUKI v1.0 RC is a local, owner-operated resident control plane built around **HDS-BRAIN**.
@@ -72,3 +77,4 @@ The transparency claim is limited to BLUE-TANUKI's own authority path.
 - Rich Canvas / A2UI: v0.2+
 - third-party Skill registry: intentionally excluded
 - Layer B plugin / skill review results: non-authority evidence only. They cannot approve, execute, classify risk, promote support status, or bypass HDS-BRAIN.
+- Support boundary and known limitation documents: non-authority evidence only. They cannot activate GA claims, promote preview support, or bypass owner GO.

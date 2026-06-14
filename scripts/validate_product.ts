@@ -66,7 +66,7 @@ import {
 } from "../apps/gateway/src/evidence_redaction.js";
 import { loadPluginRuntime } from "../apps/gateway/src/plugin_loader.js";
 
-export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P9" | "P10" | "P11";
+export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P9" | "P10" | "P11" | "P12";
 export type ProductPlatform = "linux" | "win32" | "any";
 export type ProductCheckStatus = "pass" | "fail" | "skipped";
 
@@ -152,7 +152,7 @@ export interface ProductValidationResult {
   checks: CheckRunRecord[];
 }
 
-const PHASE_ORDER: ProductPhase[] = ["P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11"];
+const PHASE_ORDER: ProductPhase[] = ["P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12"];
 const DEFAULT_TIMEOUT_MS = 120_000;
 const TSX = "node_modules/tsx/dist/cli.mjs";
 
@@ -282,6 +282,13 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "any",
     required: true,
     run: runUpdateReleaseRollbackControl,
+  },
+  {
+    id: "p12.docs_support_claims",
+    phase: "P12",
+    platform: "any",
+    required: true,
+    run: runDocsSupportClaimsBoundary,
   },
 ];
 
@@ -1567,6 +1574,123 @@ async function runUpdateReleaseRollbackControl(ctx: CheckContext): Promise<Check
     await channel.stop();
     await rm(root, { recursive: true, force: true });
   }
+}
+
+async function runDocsSupportClaimsBoundary(ctx: CheckContext): Promise<CheckResult> {
+  const readDoc = async (rel: string): Promise<string> =>
+    readFile(path.join(ctx.rootDir, rel), "utf8");
+  const mustInclude = (rel: string, text: string, needle: string): void =>
+    assertCheck(text.includes(needle), `${rel} missing required P12 text: ${needle}`);
+
+  const docs = Object.fromEntries(
+    await Promise.all(
+      [
+        "README.md",
+        "QUICKSTART.md",
+        "CLAIM.md",
+        "docs/SUPPORT_BOUNDARY.md",
+        "docs/KNOWN_LIMITATIONS.md",
+        "docs/NON_GOALS.md",
+        "docs/INDEX.md",
+        "docs/VALIDATE_PRODUCT.md",
+        "docs/PRODUCT_ROADMAP.md",
+        "docs/v1.0-release-candidate.md",
+        "docs/v1.0-post-rc-closure-review.md",
+        "docs/v1.0-ga-promotion-review.md",
+        "docs/release-notes/1.0.0-rc.1.md",
+      ].map(async (rel) => [rel, await readDoc(rel)] as const),
+    ),
+  ) as Record<string, string>;
+  const pkg = JSON.parse(await readDoc("package.json")) as { version?: unknown };
+  const compatibilityMatrix = JSON.parse(
+    await readDoc("docs/compatibility-matrix.json"),
+  ) as {
+    channels?: Record<string, { status?: unknown; target_release?: unknown; core_supported?: unknown; warranty?: unknown }>;
+  };
+
+  assertCheck(pkg.version === "1.0.0-rc.1", "package.json version is no longer the RC boundary");
+  mustInclude("README.md", docs["README.md"]!, "docs/SUPPORT_BOUNDARY.md");
+  mustInclude("README.md", docs["README.md"]!, "docs/KNOWN_LIMITATIONS.md");
+  mustInclude("QUICKSTART.md", docs["QUICKSTART.md"]!, "docs/SUPPORT_BOUNDARY.md");
+  mustInclude("QUICKSTART.md", docs["QUICKSTART.md"]!, "docs/KNOWN_LIMITATIONS.md");
+  mustInclude("docs/INDEX.md", docs["docs/INDEX.md"]!, "Support Boundary");
+  mustInclude("docs/INDEX.md", docs["docs/INDEX.md"]!, "Known Limitations");
+
+  const support = docs["docs/SUPPORT_BOUNDARY.md"]!;
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "P12 Support Boundary");
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "public_claim_allowed=false");
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "used_for_authority=false");
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "HDS-BRAIN remains authority");
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "Supported First-Party RC Surface");
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "Preview / No-Support Boundary");
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "Reserved / Not Shipped");
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "Slack / Discord / Teams / LINE remain `first-party-preview`");
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "WhatsApp first-party core support");
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "Signed native installer");
+  mustInclude("docs/SUPPORT_BOUNDARY.md", support, "Automatic updater");
+
+  const limitations = docs["docs/KNOWN_LIMITATIONS.md"]!;
+  mustInclude("docs/KNOWN_LIMITATIONS.md", limitations, "public_claim_allowed=false");
+  mustInclude("docs/KNOWN_LIMITATIONS.md", limitations, "Windows installed-app smoke");
+  mustInclude("docs/KNOWN_LIMITATIONS.md", limitations, "credentialed live smoke");
+  mustInclude("docs/KNOWN_LIMITATIONS.md", limitations, "Actual manual replacement after prepared update");
+  mustInclude("docs/KNOWN_LIMITATIONS.md", limitations, "Automatic updater is not shipped");
+  mustInclude("docs/KNOWN_LIMITATIONS.md", limitations, "Runtime app-file replacement / runtime auto-apply update is not shipped");
+  mustInclude("docs/KNOWN_LIMITATIONS.md", limitations, "Future migration schema support is not implemented");
+  mustInclude("docs/KNOWN_LIMITATIONS.md", limitations, "Signed native installer and signing pipeline are not shipped");
+  mustInclude("docs/KNOWN_LIMITATIONS.md", limitations, "WhatsApp remains `reserved-third-party`");
+  mustInclude("docs/KNOWN_LIMITATIONS.md", limitations, "SUPPORT_BOUNDARY.md");
+
+  mustInclude("CLAIM.md", docs["CLAIM.md"]!, "docs/SUPPORT_BOUNDARY.md");
+  mustInclude("CLAIM.md", docs["CLAIM.md"]!, "docs/KNOWN_LIMITATIONS.md");
+  mustInclude("CLAIM.md", docs["CLAIM.md"]!, "used_for_authority=false");
+  mustInclude("docs/v1.0-release-candidate.md", docs["docs/v1.0-release-candidate.md"]!, "SUPPORT_BOUNDARY.md");
+  mustInclude("docs/v1.0-release-candidate.md", docs["docs/v1.0-release-candidate.md"]!, "KNOWN_LIMITATIONS.md");
+  mustInclude("docs/v1.0-post-rc-closure-review.md", docs["docs/v1.0-post-rc-closure-review.md"]!, "P12 Support Boundary Closure");
+  mustInclude("docs/release-notes/1.0.0-rc.1.md", docs["docs/release-notes/1.0.0-rc.1.md"]!, "P12 support boundary and known limitations documents");
+  mustInclude("docs/NON_GOALS.md", docs["docs/NON_GOALS.md"]!, "No GA/public complete-superiority claim before owner GO");
+  mustInclude("docs/VALIDATE_PRODUCT.md", docs["docs/VALIDATE_PRODUCT.md"]!, "p12.docs_support_claims");
+  mustInclude("docs/PRODUCT_ROADMAP.md", docs["docs/PRODUCT_ROADMAP.md"]!, "P12 Docs / Support Boundary / Claims");
+  mustInclude("docs/v1.0-ga-promotion-review.md", docs["docs/v1.0-ga-promotion-review.md"]!, "public_claim_allowed=false");
+
+  const expectedChannels: Record<string, { status: string; target_release: string | null }> = {
+    webchat: { status: "first-party", target_release: "v1.0" },
+    telegram: { status: "first-party", target_release: "v1.0" },
+    slack: { status: "first-party-preview", target_release: "v1.0-preview" },
+    discord: { status: "first-party-preview", target_release: "v1.0-preview" },
+    teams: { status: "first-party-preview", target_release: "v1.0-preview" },
+    line: { status: "first-party-preview", target_release: "v1.0-preview" },
+    whatsapp: { status: "reserved-third-party", target_release: null },
+  };
+  for (const [channel, expected] of Object.entries(expectedChannels)) {
+    const actual = compatibilityMatrix.channels?.[channel];
+    assertCheck(actual?.status === expected.status, `${channel}: P12 support boundary status drifted`);
+    assertCheck(actual?.target_release === expected.target_release, `${channel}: P12 target_release drifted`);
+  }
+  assertCheck(compatibilityMatrix.channels?.whatsapp?.core_supported === false, "WhatsApp core support drifted from false");
+  assertCheck(compatibilityMatrix.channels?.whatsapp?.warranty === "none", "WhatsApp warranty drifted from none");
+
+  return {
+    status: "pass",
+    summary: "P12 support boundary, known limitations, preview quarantine, and public-claim alignment passed",
+    raw_log: [
+      "support docs: SUPPORT_BOUNDARY and KNOWN_LIMITATIONS are indexed and linked",
+      "claim docs: RC/public_claim_allowed=false boundary preserved",
+      "preview docs: Slack/Discord/Teams/LINE preview and WhatsApp reserved-third-party preserved",
+      "limitations: Windows evidence, credentialed live smoke, manual update replacement, migration, signing, and updater residuals recorded",
+    ].join("\n"),
+    details: {
+      version: pkg.version,
+      public_claim_allowed: false,
+      support_boundary_present: true,
+      known_limitations_present: true,
+      preview_quarantine_preserved: true,
+      whatsapp_reserved_third_party: true,
+      evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+      used_for_authority: false,
+      hds_brain_remains_authority: true,
+    },
+  };
 }
 
 async function runLLMResilienceHealth(): Promise<CheckResult> {

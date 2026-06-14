@@ -12,6 +12,8 @@
 - [GA Bar Definition](GA_BAR_DEFINITION.md) - RC-to-GA promotion bar and public claim eligibility
 - [First-Run Checklist](FIRST_RUN_CHECKLIST.md) - first successful local operation
 - [Permanent-Use Checklist](PERMANENT_USE_CHECKLIST.md) - long-running owner operation
+- [Support Boundary](SUPPORT_BOUNDARY.md) - supported first-party, preview, reserved, and not-shipped boundary
+- [Known Limitations](KNOWN_LIMITATIONS.md) - RC evidence gaps and deferred surfaces
 - [v1.0 Release Candidate](v1.0-release-candidate.md) - release-candidate claim, validation, support boundary, and upgrade notes
 - [1.0.0-rc.1 Release Notes](release-notes/1.0.0-rc.1.md) - RC scope, shipped surfaces, non-shipped boundaries, and validation expectations
 - [v1.0 Post-RC Closure Review](v1.0-post-rc-closure-review.md) - post-RC bundle, smoke, live-smoke, preview-promotion, installer, and updater decisions
@@ -88,6 +90,8 @@
 - [Troubleshooting](../TROUBLESHOOTING.md)
 - [Installer Guide](INSTALLER_GUIDE.md)
 - [Resident App Guide](RESIDENT_APP_GUIDE.md)
+- [Support Boundary](SUPPORT_BOUNDARY.md)
+- [Known Limitations](KNOWN_LIMITATIONS.md)
 - [Windows Installer Guide](WINDOWS_INSTALLER_GUIDE.md)
 - [Windows First Run](WINDOWS_FIRST_RUN.md)
 - [Windows Packaging Audit](WINDOWS_PACKAGING_AUDIT.md)
