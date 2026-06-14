@@ -16,6 +16,7 @@ pnpm validate:product -- --phase P6
 pnpm validate:product -- --phase P7
 pnpm validate:product -- --phase P8
 pnpm validate:product -- --phase P9
+pnpm validate:product -- --phase P10
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -71,7 +72,7 @@ only console output.
 
 | ID | evidence source | 内容 |
 |---|---|---|
-| `p4.control_center_settings_api` | `LIVE_RUNTIME` / `INTERNAL_STATE` / `CONFIG` / `EXTERNAL_EVIDENCE` | WebChat Control Centerをloopback上で起動し、`/app` のSettings / Connectors / About / Backup-Restoreフォーム描画、`/settings/config` の専用settings token必須性、redacted snapshot、`/settings/llm/verify` の非mutating検証、LLM設定save、Composio allowlist / dry-run save、Composio non-authority / live unavailable境界、`/app/about` のWebChat token必須性・read-only性・version/license/claim boundary/public_claim_allowed=false/non-authority境界、`/recovery/snapshot` のWebChat token必須性・read-only性・env backup inventory・secret-bearing分類・restore/factory reset/destructive repair未解放・non-authority境界をAPI経由で検証する |
+| `p4.control_center_settings_api` | `LIVE_RUNTIME` / `INTERNAL_STATE` / `CONFIG` / `EXTERNAL_EVIDENCE` | WebChat Control Centerをloopback上で起動し、`/app` のSettings / Connectors / About / Backup-Restoreフォーム描画、`/settings/config` の専用settings token必須性、redacted snapshot、`/settings/llm/verify` の非mutating検証、LLM設定save、Composio allowlist / dry-run save、Composio non-authority / live unavailable境界、`/app/about` のWebChat token必須性・read-only性・version/license/claim boundary/public_claim_allowed=false/non-authority境界、`/recovery/snapshot` のWebChat token必須性・env backup inventory・recovery pack inventory・secret-bearing分類・backup/reset control availability・destructive repair未解放・non-authority境界をAPI経由で検証する |
 
 ## P5 Checks
 
@@ -103,6 +104,12 @@ only console output.
 |---|---|---|
 | `p9.channel_operator_extension_boundary` | `CONFIG` / `INTERNAL_STATE` / `FIXTURE` | CLAIM・package metadata・operator manifest・release bundle・Windows package・preview/core scope文書の三点一致を確認し、`pnpm validate:channels` でWebChat/Telegram first-party、Slack/Discord/Teams/LINE first-party-preview、WhatsApp reserved-third-partyを検査する。Writing / Daily / Developer Operatorはbundled `plugin:review` とplugin-loader surface読込でLayer A / downstream / non-authority / L3 final-review境界を確認する。Plugin Review Gate / Plugin HIG / Skill Loader Contractはv1.0 contract-stable Layer B境界を宣言していることを確認する。owner-run channel promotion smokeや第三者plugin live実行は主張しない |
 
+## P10 Checks
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p10.recovery_backup_restore` | `CONFIG` / `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | WebChat recovery control pathをloopback上で起動し、`/recovery/snapshot` のcontrol availabilityとnon-authority境界、`/recovery/backup` のtoken gateとsecret非露出、破壊後の`/recovery/restore`によるenv/session復元、`/recovery/reset-provider`によるstub復帰、`/recovery/reset-connector`によるComposio dry-run/live disabled復帰、`/recovery/factory-reset`によるsession/memory/schedule/log削除とaudit/recovery root保持を実ファイルで検証する |
+
 ## Incremental Registration
 
 | 追加Phase | 検査項目 |
@@ -115,7 +122,7 @@ only console output.
 | P7 | Control Center evidence export / evidence pack内容検査 / human-readable report / retention / secret redaction検査 |
 | P8 | Composio dry-run no-call / live opt-in / toolkit+action allowlist / action revoke / L3 final-review non-bypass / fixture live execution / pre-post audit |
 | P9 | channel claim matrix / operator first-party package-manifest-release整合 / bundled plugin review / plugin-loader surface / Layer B contract-stable宣言 |
-| P10 | backup→破壊→restore往復 |
+| P10 | Control Center/WebChat経由のbackup→破壊→restore往復、provider reset、connector reset、audit保持factory reset |
 | P11 | release bundle verify＋update失敗rollback |
 
 ## Evidence Pack

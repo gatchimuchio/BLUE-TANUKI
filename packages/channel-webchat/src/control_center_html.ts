@@ -928,20 +928,30 @@ export function renderControlCenterHtml(): string {
             <button id="load-recovery" class="primary" type="button">Load Recovery</button>
           </div>
           <div class="status-grid">
+            <input id="recovery-backup-id" type="text" autocomplete="off" placeholder="backup id or latest" />
+            <button id="create-recovery-backup" type="button">Backup Now</button>
+            <button id="restore-recovery-backup" type="button">Restore</button>
+            <button id="reset-recovery-provider" type="button">Reset Provider</button>
+            <button id="reset-recovery-connector" type="button">Reset Connector</button>
+            <button id="factory-reset-recovery" type="button">Factory Reset</button>
+          </div>
+          <div class="status-grid">
             <div class="metric"><span>Env file</span><span id="recovery-env-file-status">not loaded</span></div>
             <div class="metric"><span>Env backups</span><span id="recovery-env-backup-count">not loaded</span></div>
+            <div class="metric"><span>Recovery packs</span><span id="recovery-pack-count">not loaded</span></div>
             <div class="metric"><span>Latest backup</span><span id="recovery-latest-backup">not loaded</span></div>
             <div class="metric"><span>Restore</span><span id="recovery-restore-status">not loaded</span></div>
             <div class="metric"><span>Factory reset</span><span id="recovery-factory-reset-status">not loaded</span></div>
+            <div class="metric"><span>Last action</span><span id="recovery-action-status">not run</span></div>
             <div class="metric"><span>Authority</span><span id="recovery-authority-status">display only</span></div>
             <div class="metric"><span>Next action</span><span id="recovery-next-action">not loaded</span></div>
           </div>
           <div id="recovery-path-list" class="status-grid"></div>
           <pre id="recovery-json">not loaded</pre>
           <div class="screen-grid">
-            <div class="screen-card"><h3>Read-only</h3><p class="muted">This panel inventories backup readiness and persistent paths; it does not execute restore or repair.</p></div>
+            <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls, not command approval or authority.</p></div>
             <div class="screen-card"><h3>Secret-bearing</h3><p class="muted">Env files and env backups may contain credentials. Only paths and counts are displayed here.</p></div>
-            <div class="screen-card"><h3>P10 Boundary</h3><p class="muted">Restore, reset, and destructive repair remain blocked until the later recovery phase validates the full round trip.</p></div>
+            <div class="screen-card"><h3>P10 Boundary</h3><p class="muted">Destructive repair remains blocked. Factory reset preserves audit and recovery backup roots.</p></div>
             <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Recovery metadata is evidence only and cannot approve, resume, or execute commands.</p></div>
           </div>
         </section>
@@ -1828,20 +1838,23 @@ export function renderControlCenterHtml(): string {
 
       function renderRecoverySnapshot(snapshot) {
         const envFile = snapshot.env_file || {};
+        const packs = snapshot.recovery_backups || {};
         const restore = snapshot.restore || {};
         const authority = snapshot.authority_boundary || {};
         const paths = snapshot.runtime_paths || {};
         setText("recovery-env-file-status", envFile.exists ? "present" : envFile.configured ? "missing" : "not configured");
         setText("recovery-env-backup-count", envFile.backup_count ?? 0);
-        setText("recovery-latest-backup", envFile.latest_backup_path || "none");
+        setText("recovery-pack-count", packs.backup_count ?? 0);
+        setText("recovery-latest-backup", packs.latest_backup_id || envFile.latest_backup_path || "none");
+        if (packs.latest_backup_id) byId("recovery-backup-id").placeholder = packs.latest_backup_id;
         setText("recovery-restore-status", restore.execution_available ? "available" : "blocked");
         setText("recovery-factory-reset-status", restore.factory_reset_available ? "available" : "blocked");
         setText("recovery-authority-status", authority.used_for_authority === true ? "unsafe" : "display only");
         setText("recovery-next-action", snapshot.next_safe_action || "review recovery readiness");
         setText("recovery-boundary-status", snapshot.mode || "read only");
-        byId("recovery-boundary-status").className = "badge " + (restore.execution_available ? "bad" : "good");
-        byId("recovery-restore-status").className = "badge " + (restore.execution_available ? "bad" : "good");
-        byId("recovery-factory-reset-status").className = "badge " + (restore.factory_reset_available ? "bad" : "good");
+        byId("recovery-boundary-status").className = "badge " + (snapshot.mode === "control_available" ? "review" : "good");
+        byId("recovery-restore-status").className = "badge " + (restore.execution_available ? "review" : "warn");
+        byId("recovery-factory-reset-status").className = "badge " + (restore.factory_reset_available ? "review" : "warn");
         byId("recovery-authority-status").className = "badge " + (authority.used_for_authority === true ? "bad" : "good");
         setHtml(
           "recovery-path-list",
@@ -1855,6 +1868,13 @@ export function renderControlCenterHtml(): string {
             .join("")
         );
         setText("recovery-json", compactJson(redactRuntimeValue(snapshot)));
+      }
+
+      function renderRecoveryActionResult(body) {
+        const result = body.result || body;
+        setText("recovery-action-status", result.action ? result.action + " completed" : "completed");
+        byId("recovery-action-status").className = "badge review";
+        setText("recovery-json", compactJson(redactRuntimeValue(result)));
       }
 
       function settingsPayload() {
@@ -1947,6 +1967,48 @@ export function renderControlCenterHtml(): string {
           byId("recovery-boundary-status").className = "badge bad";
           setText("recovery-json", error.message);
         }
+      }
+
+      async function runRecoveryAction(route, body) {
+        const token = byId("recovery-token").value.trim();
+        state.recoveryToken = token;
+        sessionStorage.setItem("bt.recoveryToken", token);
+        try {
+          const result = await postJson(route, token, body || {});
+          await loadRecovery();
+          renderRecoveryActionResult(result);
+        } catch (error) {
+          setText("recovery-action-status", "error");
+          byId("recovery-action-status").className = "badge bad";
+          setText("recovery-json", error.message);
+        }
+      }
+
+      async function createRecoveryBackup() {
+        await runRecoveryAction("/recovery/backup", {});
+      }
+
+      async function restoreRecoveryBackup() {
+        if (!window.confirm("Restore from the selected recovery backup?")) return;
+        const backupId = byId("recovery-backup-id").value.trim();
+        const body = { confirm: "RESTORE" };
+        if (backupId) body.backup_id = backupId;
+        await runRecoveryAction("/recovery/restore", body);
+      }
+
+      async function resetRecoveryProvider() {
+        if (!window.confirm("Reset provider configuration to stub mode?")) return;
+        await runRecoveryAction("/recovery/reset-provider", { confirm: "RESET_PROVIDER" });
+      }
+
+      async function resetRecoveryConnector() {
+        if (!window.confirm("Reset connector credentials and live execution settings?")) return;
+        await runRecoveryAction("/recovery/reset-connector", { confirm: "RESET_CONNECTOR" });
+      }
+
+      async function factoryResetRecovery() {
+        if (!window.confirm("Factory reset local runtime state while preserving audit and backups?")) return;
+        await runRecoveryAction("/recovery/factory-reset", { confirm: "FACTORY_RESET" });
       }
 
       async function exportEvidence() {
@@ -2236,6 +2298,41 @@ export function renderControlCenterHtml(): string {
       byId("save-connectors").addEventListener("click", saveConnectors);
       byId("load-about").addEventListener("click", loadAbout);
       byId("load-recovery").addEventListener("click", loadRecovery);
+      byId("create-recovery-backup").addEventListener("click", function () {
+        createRecoveryBackup().catch(function (error) {
+          setText("recovery-action-status", "error");
+          byId("recovery-action-status").className = "badge bad";
+          setText("recovery-json", error.message);
+        });
+      });
+      byId("restore-recovery-backup").addEventListener("click", function () {
+        restoreRecoveryBackup().catch(function (error) {
+          setText("recovery-action-status", "error");
+          byId("recovery-action-status").className = "badge bad";
+          setText("recovery-json", error.message);
+        });
+      });
+      byId("reset-recovery-provider").addEventListener("click", function () {
+        resetRecoveryProvider().catch(function (error) {
+          setText("recovery-action-status", "error");
+          byId("recovery-action-status").className = "badge bad";
+          setText("recovery-json", error.message);
+        });
+      });
+      byId("reset-recovery-connector").addEventListener("click", function () {
+        resetRecoveryConnector().catch(function (error) {
+          setText("recovery-action-status", "error");
+          byId("recovery-action-status").className = "badge bad";
+          setText("recovery-json", error.message);
+        });
+      });
+      byId("factory-reset-recovery").addEventListener("click", function () {
+        factoryResetRecovery().catch(function (error) {
+          setText("recovery-action-status", "error");
+          byId("recovery-action-status").className = "badge bad";
+          setText("recovery-json", error.message);
+        });
+      });
       byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
       byId("save-settings").addEventListener("click", saveSettings);
       byId("connect-chat").addEventListener("click", function () {

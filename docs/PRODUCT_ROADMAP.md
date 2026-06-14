@@ -117,10 +117,9 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: BLUE-TANUKIを「リポジトリ」ではなく「アプリ」として操作完結させる。
 
-現状（実測）: **partial（高進捗）**。実装方式は確定済み——gatewayが配信するweb UI（`control_center_html.ts` 約1,600行）。ネイティブアプリ化はしない（GUI-Shellは別製品であり本書スコープ外）。既存panel: Dashboard / Conversation(WebChat) / Approval Policy / Approval Queue / Approval Model / Authority Trace / Authority Audit / Runtime Snapshot / Runtime Schedules / Tasks / Memory / Skills / Channels / Connectors / Doctor / Settings / About / Backup / Restore readiness / Developer-Evidence / Notification Center / Complete History-Replay / System / First-Run Next Action / Permanent-Use Status 等。LLM provider設定はControl Center本体のSettingsタブから既存settings token gate経由でload / verify / save可能。Composio connector設定はControl Center本体のConnectorsタブから同じsettings token gate経由でload / save可能（live実行は未解放）。AboutはWebChat token gate付きread-only `/app/about` 経由でversion / claim boundary / license / signed installer / automatic updater / authority boundaryを表示可能。Backup / Restore readinessはWebChat token gate付きread-only `/recovery/snapshot` 経由でenv file・env backup inventory・persistent data path・restore/factory reset未解放・non-authority境界を表示可能。GUI仕様書5本（GUI_PRODUCT_SPEC等）も既存。
+現状（実測）: **partial（高進捗）**。実装方式は確定済み——gatewayが配信するweb UI（`control_center_html.ts` 約1,600行）。ネイティブアプリ化はしない（GUI-Shellは別製品であり本書スコープ外）。既存panel: Dashboard / Conversation(WebChat) / Approval Policy / Approval Queue / Approval Model / Authority Trace / Authority Audit / Runtime Snapshot / Runtime Schedules / Tasks / Memory / Skills / Channels / Connectors / Doctor / Settings / About / Backup / Restore / Developer-Evidence / Notification Center / Complete History-Replay / System / First-Run Next Action / Permanent-Use Status 等。LLM provider設定はControl Center本体のSettingsタブから既存settings token gate経由でload / verify / save可能。Composio connector設定はControl Center本体のConnectorsタブから同じsettings token gate経由でload / save可能（live実行は未解放）。AboutはWebChat token gate付きread-only `/app/about` 経由でversion / claim boundary / license / signed installer / automatic updater / authority boundaryを表示可能。Backup / RestoreはWebChat token gate付き`/recovery/snapshot` / `/recovery/backup` / `/recovery/restore` / `/recovery/reset-provider` / `/recovery/reset-connector` / `/recovery/factory-reset` 経由でenv backup inventory・recovery pack・persistent data path・restore/reset/factory reset control・non-authority境界を表示/実行可能。GUI仕様書5本（GUI_PRODUCT_SPEC等）も既存。
 
 残差:
-- Backup/Restore 実行（restore / factory reset / provider reset / connector reset。P10連動）
 - Update パネル（P11連動）
 - Windows実機での描画品質確認
 
@@ -222,9 +221,9 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: 壊れても戻せる運用製品にする。
 
-現状（実測）: **partial**。Doctor（CLI＋CC panel＋「資格情報なしでfail-closed」のCI検証）、UPDATE_ROLLBACK_RUNBOOK（手順書）、env/settings書出し基盤、Control Centerのread-only Backup / Restore readinessパネル（env backup inventory / persistent path / restore未解放境界の表示）。
+現状（実測）: **実装done（Linux WebChat control path / 実ファイルfixture evidence）**。Doctor（CLI＋CC panel＋「資格情報なしでfail-closed」のCI検証）、UPDATE_ROLLBACK_RUNBOOK（手順書）、env/settings atomic write + `.bak` 基盤、Control Center Backup / Restore panel、WebChat token-gated `/recovery/backup` / `/recovery/restore` / `/recovery/reset-provider` / `/recovery/reset-connector` / `/recovery/factory-reset` を実装済み。Recovery packはmanifest＋コピー済み設定/永続path＋digestを持ち、API responseはsecret値を返さない。restoreはpre-restore backupを作成してから復元し、provider resetは`LLM_BACKEND=stub`へ戻し、connector resetはComposio dry-run / live disabledへ戻す。factory resetはsession / memory / failure-memory / schedules / logsを消去し、audit rootとrecovery backup rootを保持する。`validate:product` P10はWebChat経由でbackup→破壊→restore、provider reset、connector reset、factory resetを検証する。
 
-残差（実測で不在を確認）: 自動config/log backup、restore、reset provider / reset connector、factory reset、safe mode、repair（P3と連動）、update前backup自動化（P11と連動）、CC起点の実restore / reset / factory reset操作（P4 readinessパネルはread-only）。
+残差（実測で不在を確認）: Windows実機GUIでの「壊す→GUIから復旧」証跡、safe mode/repairとの統合UX強化（P3 launcherと連動）、update前backup自動化とupdate失敗rollback（P11）、audit破損時のguided repair UI。破壊的audit purgeは非目標のまま。
 
 完了条件: 「壊す→GUIから復旧」をWindows実機で実証。設定を失わず修復でき、更新失敗時に戻せる。
 
@@ -293,7 +292,7 @@ P1(凍結宣言) → P2(ゲート骨格)
 P2後、着手順自由: P3 / P4 / P5 / P7前半
 P6(UI残差) は P4 と連動、P8 live解放の前提（Linux fixtureではP8で再確認済み）
 P8 live は P6 完了後（コード解放済み。owner資格情報live smokeはP13前証跡）
-P9 は実装済み。P10 / P11 は P3〜P9 の残差確定後（着手順自由）
+P9 / P10 は実装済み。P11 はP10 recovery基盤を使ってupdate前backup / rollbackを閉じる。
 P12 → P13
 ```
 
@@ -306,13 +305,13 @@ P12 → P13
 | P1 | Linux基準面固定 | done（CI自動化済） | 凍結宣言のみ |
 | P2 | validate:product新設 | done | P13までの増分登録継続 |
 | P3 | Windows導入 | 実装大部分done | Windows CI evidence確認・GO前owner実機E2E |
-| P4 | Control Center | partial高 | Backup/Restore実行・Update・実機品質 |
+| P4 | Control Center | partial高 | Update・実機品質 |
 | P5 | LLM実運用 | partial高 | Windows実機DPAPI証跡・Linux/macOS keychain・live証跡 |
 | P6 | Authority閉包 | 実装done | Windows実機GUI証跡 |
 | P7 | Audit製品化 | 実装done | Windows実機GUI証跡・owner資格情報環境でのredaction再確認 |
 | P8 | Composio閉包 | 実装done | owner資格情報live smoke・Windows実機GUI証跡・scope運用文書 |
 | P9 | Channel/Operator整理 | 実装done | owner-run channel promotion evidence・future Layer B submission evidence |
-| P10 | Recovery/Backup | partial | backup/restore/factory reset/safe mode |
+| P10 | Recovery/Backup | 実装done | Windows実機GUI証跡・safe mode/repair UX・P11 update rollback連動 |
 | P11 | Update/Release | partial | CC更新導線・migration・rollback |
 | P12 | Docs/Claims | 充実 | 残差反映・最終整合 |
 | P13 | Owner GO | — | 新基準で判定 |

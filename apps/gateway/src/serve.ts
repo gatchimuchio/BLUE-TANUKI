@@ -61,7 +61,14 @@ import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime }
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createWebChatSettingsSurface } from "./settings_surface.js";
 import { buildAboutSnapshot } from "./about_surface.js";
-import { buildRecoverySnapshot } from "./recovery_surface.js";
+import {
+  buildRecoverySnapshot,
+  createRecoveryBackup,
+  factoryResetRecovery,
+  resetRecoveryConnector,
+  resetRecoveryProvider,
+  restoreRecoveryBackup,
+} from "./recovery_surface.js";
 import { createGatewayEvidencePack } from "./evidence_pack.js";
 import { CronSchedulerChannel, cronSchedulesFromEnv } from "./cron_channel.js";
 import { googleDailyBriefProviderFromEnv } from "./google_daily_brief.js";
@@ -1060,6 +1067,24 @@ export async function serve(): Promise<ServeShutdown> {
       },
       recovery: {
         getSnapshot: async () => buildRecoverySnapshot(process.env),
+        createBackup: async () => createRecoveryBackup(process.env),
+        restoreBackup: async (body: Record<string, unknown>) =>
+          restoreRecoveryBackup(process.env, {
+            backup_id: typeof body.backup_id === "string" ? body.backup_id : undefined,
+            confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+          }),
+        resetProvider: async (body: Record<string, unknown>) =>
+          resetRecoveryProvider(process.env, {
+            confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+          }),
+        resetConnector: async (body: Record<string, unknown>) =>
+          resetRecoveryConnector(process.env, {
+            confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+          }),
+        factoryReset: async (body: Record<string, unknown>) =>
+          factoryResetRecovery(process.env, {
+            confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+          }),
       },
       operators: {
         daily: {

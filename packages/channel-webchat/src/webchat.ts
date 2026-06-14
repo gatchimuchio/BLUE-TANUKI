@@ -328,8 +328,18 @@ export interface WebChatAboutSurface {
 }
 
 export interface WebChatRecoverySurface {
-  /** Return read-only recovery readiness and backup inventory metadata. */
+  /** Return recovery readiness and backup inventory metadata. */
   getSnapshot: () => Promise<unknown>;
+  /** Create a local recovery backup pack. */
+  createBackup?: () => Promise<unknown>;
+  /** Restore from a selected or latest local recovery backup pack. */
+  restoreBackup?: (body: Record<string, unknown>) => Promise<unknown>;
+  /** Reset LLM provider configuration to offline stub mode. */
+  resetProvider?: (body: Record<string, unknown>) => Promise<unknown>;
+  /** Reset connector credentials/allowlists to dry-run. */
+  resetConnector?: (body: Record<string, unknown>) => Promise<unknown>;
+  /** Reset local runtime state while preserving audit and recovery backup roots. */
+  factoryReset?: (body: Record<string, unknown>) => Promise<unknown>;
 }
 
 export interface WebChatOperatorSurfaces {
@@ -826,8 +836,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
-    if (url.pathname === "/recovery/snapshot") {
-      await this.handleRecovery(req, res);
+    if (url.pathname.startsWith("/recovery/")) {
+      await this.handleRecovery(req, res, url.pathname);
       return;
     }
 
@@ -1624,6 +1634,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
   private async handleRecovery(
     req: IncomingMessage,
     res: ServerResponse,
+    route: string,
   ): Promise<void> {
     if (!this.opts.recovery) {
       res.writeHead(404, { "content-type": "application/json" });
@@ -1635,17 +1646,77 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
-    if (req.method !== "GET") {
+    if (route === "/recovery/snapshot") {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      const snapshot = await this.opts.recovery.getSnapshot();
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify(snapshot));
+      return;
+    }
+    if (req.method !== "POST") {
       res.writeHead(405, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "method_not_allowed" }));
       return;
     }
-    const snapshot = await this.opts.recovery.getSnapshot();
-    res.writeHead(200, {
-      "content-type": "application/json",
-      "cache-control": "no-store",
-    });
-    res.end(JSON.stringify(snapshot));
+    try {
+      const body = (await readJson(req)) ?? {};
+      let result: unknown;
+      if (route === "/recovery/backup") {
+        if (!this.opts.recovery.createBackup) {
+          res.writeHead(501, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "recovery_action_not_configured" }));
+          return;
+        }
+        result = await this.opts.recovery.createBackup();
+      } else if (route === "/recovery/restore") {
+        if (!this.opts.recovery.restoreBackup) {
+          res.writeHead(501, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "recovery_action_not_configured" }));
+          return;
+        }
+        result = await this.opts.recovery.restoreBackup(body);
+      } else if (route === "/recovery/reset-provider") {
+        if (!this.opts.recovery.resetProvider) {
+          res.writeHead(501, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "recovery_action_not_configured" }));
+          return;
+        }
+        result = await this.opts.recovery.resetProvider(body);
+      } else if (route === "/recovery/reset-connector") {
+        if (!this.opts.recovery.resetConnector) {
+          res.writeHead(501, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "recovery_action_not_configured" }));
+          return;
+        }
+        result = await this.opts.recovery.resetConnector(body);
+      } else if (route === "/recovery/factory-reset") {
+        if (!this.opts.recovery.factoryReset) {
+          res.writeHead(501, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "recovery_action_not_configured" }));
+          return;
+        }
+        result = await this.opts.recovery.factoryReset(body);
+      } else {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "recovery_action_not_found" }));
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify({ ok: true, result }));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : "recovery_action_failed" }));
+    }
   }
 
   private async handleSettingsConfig(

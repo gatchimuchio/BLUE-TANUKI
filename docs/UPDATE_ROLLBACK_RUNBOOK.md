@@ -22,6 +22,32 @@ pnpm installer:run -- --no-serve
 Use the Control Center Settings `Verify LLM` action before saving any provider,
 endpoint, model, or API key change after update.
 
+## Control Center recovery controls
+
+P10 adds token-gated local recovery controls to the WebChat Control Center
+Backup / Restore screen:
+
+- `Load Recovery` calls `GET /recovery/snapshot` and shows env backup inventory,
+  recovery pack inventory, persistent runtime paths, and non-authority flags.
+- `Backup Now` calls `POST /recovery/backup` and creates a recovery pack under
+  `BLUE_TANUKI_RECOVERY_DIR`, or under `BLUE_TANUKI_FILE_ROOT/recovery` when the
+  recovery dir is unset.
+- `Restore` calls `POST /recovery/restore` with explicit confirmation and creates
+  a pre-restore backup before overwriting current files.
+- `Reset Provider` clears LLM provider key/config material and writes
+  `LLM_BACKEND=stub`.
+- `Reset Connector` clears Composio key/allowlist/user config and writes
+  `COMPOSIO_DRY_RUN=true` plus `COMPOSIO_LIVE_EXECUTION=false`.
+- `Factory Reset` clears local session, memory, failure-memory, schedules, and
+  logs, while preserving `BLUE_TANUKI_AUDIT_DIR` and the recovery backup root.
+
+Recovery metadata, backup manifests, and action results are evidence only:
+`used_for_authority=false`. They cannot approve commands, resume suspended HDS
+work, classify risk, or bypass final review.
+
+Env files and recovery packs are secret-bearing. Do not upload or paste recovery
+pack contents into issue trackers or chat logs.
+
 Phase 11-S10 resident launcher commands are part of the distribution surface.
 Before replacing an installed app directory, stop the resident gateway and record
 autostart state:
@@ -38,6 +64,8 @@ blue-tanuki resident-stop
    - Portable resident users should run `blue-tanuki resident-stop`.
 2. Record the current commit or release bundle name.
 3. Back up local config and data:
+   - Prefer Control Center `Backup Now` when the gateway is healthy enough to
+     serve the WebChat UI.
    - env file
    - env `.bak` files
    - `BLUE_TANUKI_AUDIT_DIR`
@@ -52,6 +80,10 @@ node apps/gateway/dist/main.js --audit-verify
 ```
 
 If audit verification fails, stop the update and handle audit recovery first.
+
+P10 does not implement automatic update-before-backup. For update work, create a
+Control Center backup pack or manual backup before replacing files. P11 owns
+automatic update rollback.
 
 ## 2. Source Install Update
 
@@ -148,6 +180,25 @@ pnpm run doctor
 6. Start gateway.
 
 Rollback must not silently reset tokens or delete audit evidence.
+
+### Control Center restore / reset
+
+Use these controls when the gateway still starts and WebChat token access is
+available:
+
+1. Open Control Center.
+2. Go to Backup / Restore.
+3. Enter the WebChat token and load recovery state.
+4. Run `Backup Now` before any reset.
+5. Use `Restore` with the selected recovery pack id for accidental config/data
+   corruption.
+6. Use `Reset Provider` when provider credentials, endpoint, or model config
+   prevents normal operation.
+7. Use `Reset Connector` when Composio credentials/allowlists/live execution
+   settings are broken or should be disconnected.
+8. Use `Factory Reset` only when local runtime state should be cleared. Audit and
+   recovery roots are preserved; this is not an audit purge.
+9. Restart the gateway, run `doctor`, and run audit verification.
 
 ## 7. Recovery: Audit Chain Broken
 

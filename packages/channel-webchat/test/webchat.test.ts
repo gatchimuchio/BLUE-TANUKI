@@ -399,13 +399,14 @@ describe("WebChatChannel — Control Center shell", () => {
 });
 
 describe("WebChatChannel — Recovery surface", () => {
-  it("serves read-only recovery readiness only with the inbound token", async () => {
+  it("serves token-gated recovery readiness and control actions with non-authority metadata", async () => {
+    const actions: string[] = [];
     const ctx = await setup({
       recovery: {
         getSnapshot: async () => ({
           schema_version: 1,
           surface: "recovery",
-          mode: "read_only",
+          mode: "control_available",
           env_file: {
             configured: true,
             path: "/tmp/product.env",
@@ -413,6 +414,16 @@ describe("WebChatChannel — Recovery surface", () => {
             backup_count: 2,
             latest_backup_path: "/tmp/product.env.2026.settings.bak",
             backup_pattern: "/tmp/product.env.*.bak",
+            secret_material: true,
+          },
+          recovery_backups: {
+            configured: true,
+            path: "/tmp/recovery",
+            exists: true,
+            backup_count: 1,
+            latest_backup_id: "2026-06-14T00-00-00-000Z.backup.fixture",
+            latest_manifest_path: "/tmp/recovery/2026-06-14T00-00-00-000Z.backup.fixture/manifest.json",
+            backup_pattern: "/tmp/recovery/*/manifest.json",
             secret_material: true,
           },
           runtime_paths: {
@@ -425,20 +436,44 @@ describe("WebChatChannel — Recovery surface", () => {
             },
           },
           restore: {
-            execution_available: false,
-            factory_reset_available: false,
-            provider_reset_available: false,
-            connector_reset_available: false,
+            execution_available: true,
+            backup_available: true,
+            latest_backup_id: "2026-06-14T00-00-00-000Z.backup.fixture",
+            factory_reset_available: true,
+            provider_reset_available: true,
+            connector_reset_available: true,
             destructive_repair_available: false,
+            confirmation_required: true,
           },
           authority_boundary: {
             ui_used_for_authority: false,
             recovery_metadata_used_for_authority: false,
+            recovery_action_used_for_authority: false,
             used_for_authority: false,
           },
           next_safe_action: "Review backup inventory.",
-          evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+          evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
         }),
+        createBackup: async () => {
+          actions.push("backup");
+          return { action: "backup", used_for_authority: false };
+        },
+        restoreBackup: async (body) => {
+          actions.push(`restore:${String(body.confirm)}`);
+          return { action: "restore", backup_id: body.backup_id, used_for_authority: false };
+        },
+        resetProvider: async (body) => {
+          actions.push(`provider:${String(body.confirm)}`);
+          return { action: "provider_reset", used_for_authority: false };
+        },
+        resetConnector: async (body) => {
+          actions.push(`connector:${String(body.confirm)}`);
+          return { action: "connector_reset", used_for_authority: false };
+        },
+        factoryReset: async (body) => {
+          actions.push(`factory:${String(body.confirm)}`);
+          return { action: "factory_reset", used_for_authority: false };
+        },
       },
     });
     try {
@@ -452,20 +487,25 @@ describe("WebChatChannel — Recovery surface", () => {
       expect(ok.status).toBe(200);
       expect(JSON.parse(ok.text)).toMatchObject({
         surface: "recovery",
-        mode: "read_only",
+        mode: "control_available",
         env_file: {
           exists: true,
           backup_count: 2,
           secret_material: true,
         },
+        recovery_backups: {
+          backup_count: 1,
+          latest_backup_id: "2026-06-14T00-00-00-000Z.backup.fixture",
+        },
         restore: {
-          execution_available: false,
-          factory_reset_available: false,
+          execution_available: true,
+          factory_reset_available: true,
           destructive_repair_available: false,
         },
         authority_boundary: {
           ui_used_for_authority: false,
           recovery_metadata_used_for_authority: false,
+          recovery_action_used_for_authority: false,
           used_for_authority: false,
         },
       });
@@ -474,6 +514,38 @@ describe("WebChatChannel — Recovery surface", () => {
         authorization: `Bearer ${TOKEN}`,
       });
       expect(post.status).toBe(405);
+
+      expect((await postJson(ctx.port, "/recovery/backup", {})).status).toBe(401);
+      const backup = await postJson(ctx.port, "/recovery/backup", {}, {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(backup.status).toBe(200);
+      expect(backup.body).toMatchObject({ ok: true, result: { action: "backup", used_for_authority: false } });
+
+      const restore = await postJson(ctx.port, "/recovery/restore", {
+        backup_id: "2026-06-14T00-00-00-000Z.backup.fixture",
+        confirm: "RESTORE",
+      }, {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(restore.status).toBe(200);
+
+      await postJson(ctx.port, "/recovery/reset-provider", { confirm: "RESET_PROVIDER" }, {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      await postJson(ctx.port, "/recovery/reset-connector", { confirm: "RESET_CONNECTOR" }, {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      await postJson(ctx.port, "/recovery/factory-reset", { confirm: "FACTORY_RESET" }, {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(actions).toEqual([
+        "backup",
+        "restore:RESTORE",
+        "provider:RESET_PROVIDER",
+        "connector:RESET_CONNECTOR",
+        "factory:FACTORY_RESET",
+      ]);
     } finally {
       await ctx.teardown();
     }

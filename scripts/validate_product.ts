@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import * as os from "node:os";
@@ -22,7 +23,14 @@ import {
 } from "../packages/hds-brain/src/index.js";
 import { AUDIT_FILENAME } from "../apps/gateway/src/audit_config.js";
 import { buildAboutSnapshot } from "../apps/gateway/src/about_surface.js";
-import { buildRecoverySnapshot } from "../apps/gateway/src/recovery_surface.js";
+import {
+  buildRecoverySnapshot,
+  createRecoveryBackup,
+  factoryResetRecovery,
+  resetRecoveryConnector,
+  resetRecoveryProvider,
+  restoreRecoveryBackup,
+} from "../apps/gateway/src/recovery_surface.js";
 import { runAuditVerify } from "../apps/gateway/src/audit_verify.js";
 import { WebChatChannel } from "../packages/channel-webchat/src/index.js";
 import {
@@ -254,6 +262,13 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "any",
     required: true,
     run: runChannelOperatorExtensionBoundary,
+  },
+  {
+    id: "p10.recovery_backup_restore",
+    phase: "P10",
+    platform: "any",
+    required: true,
+    run: runRecoveryBackupRestoreControl,
   },
 ];
 
@@ -1015,6 +1030,8 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     assertCheck(html.includes("/app/about"), "Control Center HTML missing About route");
     assertCheck(html.includes("recovery-token"), "Control Center HTML missing Recovery token field");
     assertCheck(html.includes("/recovery/snapshot"), "Control Center HTML missing Recovery route");
+    assertCheck(html.includes("/recovery/backup"), "Control Center HTML missing Recovery backup route");
+    assertCheck(html.includes("/recovery/factory-reset"), "Control Center HTML missing Recovery factory reset route");
     assertCheck(html.includes("/settings/config"), "Control Center HTML missing settings config route");
     assertCheck(html.includes("/settings/llm/verify"), "Control Center HTML missing LLM verify route");
     log.push("/app: control center settings, connectors, about, and recovery forms rendered");
@@ -1065,18 +1082,23 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     assertCheck(recoveryPost.status === 405, `/recovery/snapshot POST returned ${recoveryPost.status}`);
     const recovery = await settingsRequest(base, webchatToken, "GET", "/recovery/snapshot");
     assertCheck(recovery.surface === "recovery", "Recovery snapshot surface mismatch");
-    assertCheck(recovery.mode === "read_only", "Recovery snapshot was not read-only");
+    assertCheck(recovery.mode === "control_available", "Recovery snapshot was not control-available");
     assertCheck(recovery.env_file?.exists === true, "Recovery snapshot env file missing");
     assertCheck(recovery.env_file?.backup_count >= 1, "Recovery snapshot did not report env backup inventory");
     assertCheck(recovery.env_file?.secret_material === true, "Recovery snapshot did not mark env backups secret-bearing");
+    assertCheck(recovery.recovery_backups?.secret_material === true, "Recovery snapshot did not classify recovery packs as secret-bearing");
     assertCheck(recovery.restore?.execution_available === false, "Recovery snapshot unexpectedly exposed restore execution");
-    assertCheck(recovery.restore?.factory_reset_available === false, "Recovery snapshot unexpectedly exposed factory reset");
+    assertCheck(recovery.restore?.backup_available === true, "Recovery snapshot did not expose backup availability");
+    assertCheck(recovery.restore?.factory_reset_available === true, "Recovery snapshot did not expose factory reset control");
+    assertCheck(recovery.restore?.provider_reset_available === true, "Recovery snapshot did not expose provider reset control");
+    assertCheck(recovery.restore?.connector_reset_available === true, "Recovery snapshot did not expose connector reset control");
     assertCheck(recovery.restore?.destructive_repair_available === false, "Recovery snapshot unexpectedly exposed destructive repair");
     assertCheck(recovery.authority_boundary?.ui_used_for_authority === false, "Recovery snapshot made UI authority");
     assertCheck(recovery.authority_boundary?.recovery_metadata_used_for_authority === false, "Recovery snapshot made recovery metadata authority");
+    assertCheck(recovery.authority_boundary?.recovery_action_used_for_authority === false, "Recovery snapshot made recovery actions authority");
     assertCheck(recovery.authority_boundary?.used_for_authority === false, "Recovery snapshot authority flag mismatch");
     assertCheck(recovery.runtime_paths?.audit_dir?.exists === true, "Recovery snapshot audit dir missing");
-    log.push("/recovery/snapshot: read-only backup inventory loaded through webchat token gate");
+    log.push("/recovery/snapshot: backup inventory and recovery controls loaded through webchat token gate");
 
     const snapshot = await settingsRequest(base, settingsToken, "GET", "/settings/config");
     const snapshotText = JSON.stringify(snapshot);
@@ -1142,6 +1164,199 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
   } finally {
     await channel.stop();
     await rm(recoveryRoot, { recursive: true, force: true });
+  }
+}
+
+async function runRecoveryBackupRestoreControl(): Promise<CheckResult> {
+  const port = await allocateLoopbackPort();
+  const webchatToken = "product-recovery-webchat-token-1234";
+  const resumeToken = "product-recovery-resume-token-1234";
+  const root = await mkdtemp(path.join(os.tmpdir(), "bt-product-p10-recovery-"));
+  const envFile = path.join(root, "product.env");
+  const auditDir = path.join(root, "audit");
+  const sessionDir = path.join(root, "sessions");
+  const sessionFile = path.join(sessionDir, "session.jsonl");
+  const memoryDir = path.join(root, "memory");
+  const memoryFile = path.join(memoryDir, "memory.jsonl");
+  const failureMemoryDir = path.join(root, "failure-memory");
+  const schedulesDir = path.join(root, "schedules");
+  const logDir = path.join(root, "logs");
+  const fileRoot = path.join(root, "files");
+  const recoveryDir = path.join(root, "recovery");
+  const providerSecret = "p10-provider-secret-value";
+  const connectorSecret = "p10-connector-secret-value";
+  const pathExists = async (value: string): Promise<boolean> =>
+    stat(value)
+      .then(() => true)
+      .catch(() => false);
+
+  await mkdir(auditDir);
+  await mkdir(sessionDir);
+  await mkdir(memoryDir);
+  await mkdir(failureMemoryDir);
+  await mkdir(schedulesDir);
+  await mkdir(logDir);
+  await mkdir(fileRoot);
+  await writeFile(path.join(auditDir, "audit.jsonl"), "{}\n", "utf8");
+  await writeFile(sessionFile, "session-before\n", "utf8");
+  await writeFile(memoryFile, "memory-before\n", "utf8");
+  await writeFile(path.join(failureMemoryDir, "failure.jsonl"), "failure-before\n", "utf8");
+  await writeFile(path.join(schedulesDir, "jobs.json"), "[]\n", "utf8");
+  await writeFile(path.join(logDir, "gateway.log"), "log-before\n", "utf8");
+  await writeFile(
+    envFile,
+    [
+      "LLM_BACKEND=openrouter",
+      `OPENROUTER_API_KEY=${providerSecret}`,
+      "OPENROUTER_MODEL=openrouter/model",
+      `COMPOSIO_API_KEY=${connectorSecret}`,
+      "COMPOSIO_ALLOWED_TOOLKITS=github",
+      "COMPOSIO_ALLOWED_ACTIONS=github:GITHUB_CREATE_AN_ISSUE",
+      "COMPOSIO_DRY_RUN=false",
+      "COMPOSIO_LIVE_EXECUTION=true",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const recoveryEnv: NodeJS.ProcessEnv = {
+    BLUE_TANUKI_ENV_FILE: envFile,
+    BLUE_TANUKI_AUDIT_DIR: auditDir,
+    BLUE_TANUKI_SESSION_DIR: sessionDir,
+    BLUE_TANUKI_MEMORY_FILE: memoryFile,
+    BLUE_TANUKI_MEMORY_DIR: memoryDir,
+    BLUE_TANUKI_FAILURE_MEMORY_DIR: failureMemoryDir,
+    BLUE_TANUKI_SCHEDULES_DIR: schedulesDir,
+    BLUE_TANUKI_LOG_DIR: logDir,
+    BLUE_TANUKI_FILE_ROOT: fileRoot,
+    BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+  };
+
+  const channel = new WebChatChannel({
+    port,
+    host: "127.0.0.1",
+    token: webchatToken,
+    resume_token: resumeToken,
+    rate_limits: false,
+    recovery: {
+      getSnapshot: async () => buildRecoverySnapshot(recoveryEnv),
+      createBackup: async () => createRecoveryBackup(recoveryEnv),
+      restoreBackup: async (body) =>
+        restoreRecoveryBackup(recoveryEnv, {
+          backup_id: typeof body.backup_id === "string" ? body.backup_id : undefined,
+          confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+        }),
+      resetProvider: async (body) =>
+        resetRecoveryProvider(recoveryEnv, {
+          confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+        }),
+      resetConnector: async (body) =>
+        resetRecoveryConnector(recoveryEnv, {
+          confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+        }),
+      factoryReset: async (body) =>
+        factoryResetRecovery(recoveryEnv, {
+          confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+        }),
+    },
+  });
+
+  const log: string[] = [];
+  try {
+    await channel.start(async () => undefined);
+    const base = `http://127.0.0.1:${port}`;
+    const unauth = await fetch(`${base}/recovery/backup`, { method: "POST" });
+    assertCheck(unauth.status === 401, `/recovery/backup without token returned ${unauth.status}`);
+
+    const snapshot = await settingsRequest(base, webchatToken, "GET", "/recovery/snapshot");
+    assertCheck(snapshot.mode === "control_available", "P10 recovery snapshot not control-available");
+    assertCheck(snapshot.restore?.backup_available === true, "P10 recovery backup control unavailable");
+    assertCheck(snapshot.restore?.provider_reset_available === true, "P10 provider reset unavailable");
+    assertCheck(snapshot.restore?.connector_reset_available === true, "P10 connector reset unavailable");
+    assertCheck(snapshot.restore?.factory_reset_available === true, "P10 factory reset unavailable");
+    assertCheck(snapshot.authority_boundary?.used_for_authority === false, "P10 recovery snapshot became authority");
+    log.push("/recovery/snapshot: control availability visible through webchat token gate");
+
+    const backup = await settingsRequest(base, webchatToken, "POST", "/recovery/backup");
+    const backupId = backup.result?.backup_id;
+    assertCheck(typeof backupId === "string" && backupId.length > 0, "P10 backup did not return backup id");
+    assertCheck(!JSON.stringify(backup).includes(providerSecret), "P10 backup response exposed provider secret");
+    assertCheck(!JSON.stringify(backup).includes(connectorSecret), "P10 backup response exposed connector secret");
+    log.push("/recovery/backup: backup pack created without secret echo");
+
+    await writeFile(envFile, "LLM_BACKEND=broken\n", "utf8");
+    await writeFile(sessionFile, "session-after\n", "utf8");
+    const restore = await settingsRequest(base, webchatToken, "POST", "/recovery/restore", {
+      backup_id: backupId,
+      confirm: "RESTORE",
+    });
+    assertCheck(restore.result?.restored_items_count > 0, "P10 restore did not restore any items");
+    assertCheck((await readFile(envFile, "utf8")).includes(providerSecret), "P10 restore did not restore env file");
+    assertCheck((await readFile(sessionFile, "utf8")) === "session-before\n", "P10 restore did not restore session file");
+    assertCheck(!JSON.stringify(restore).includes(providerSecret), "P10 restore response exposed provider secret");
+    log.push("/recovery/restore: selected backup restored env/session after pre-restore backup");
+
+    const providerReset = await settingsRequest(base, webchatToken, "POST", "/recovery/reset-provider", {
+      confirm: "RESET_PROVIDER",
+    });
+    const providerEnv = await readFile(envFile, "utf8");
+    assertCheck(providerEnv.includes("LLM_BACKEND=stub"), "P10 provider reset did not set stub backend");
+    assertCheck(!providerEnv.includes(providerSecret), "P10 provider reset left provider secret in env file");
+    assertCheck(providerReset.result?.used_for_authority === false, "P10 provider reset result became authority");
+    log.push("/recovery/reset-provider: provider credentials cleared and stub mode restored");
+
+    const connectorReset = await settingsRequest(base, webchatToken, "POST", "/recovery/reset-connector", {
+      confirm: "RESET_CONNECTOR",
+    });
+    const connectorEnv = await readFile(envFile, "utf8");
+    assertCheck(connectorEnv.includes("COMPOSIO_DRY_RUN=true"), "P10 connector reset did not set dry-run true");
+    assertCheck(connectorEnv.includes("COMPOSIO_LIVE_EXECUTION=false"), "P10 connector reset did not disable live execution");
+    assertCheck(!connectorEnv.includes(connectorSecret), "P10 connector reset left connector secret in env file");
+    assertCheck(connectorReset.result?.used_for_authority === false, "P10 connector reset result became authority");
+    log.push("/recovery/reset-connector: connector secret cleared and live execution disabled");
+
+    await mkdir(sessionDir, { recursive: true });
+    await mkdir(memoryDir, { recursive: true });
+    await mkdir(failureMemoryDir, { recursive: true });
+    await mkdir(schedulesDir, { recursive: true });
+    await mkdir(logDir, { recursive: true });
+    await writeFile(sessionFile, "session-reset\n", "utf8");
+    await writeFile(memoryFile, "memory-reset\n", "utf8");
+    await writeFile(path.join(schedulesDir, "jobs.json"), "[]\n", "utf8");
+    await writeFile(path.join(logDir, "gateway.log"), "log-reset\n", "utf8");
+
+    const factory = await settingsRequest(base, webchatToken, "POST", "/recovery/factory-reset", {
+      confirm: "FACTORY_RESET",
+    });
+    assertCheck(factory.result?.action === "factory_reset", "P10 factory reset result mismatch");
+    assertCheck(await pathExists(auditDir), "P10 factory reset removed audit dir");
+    assertCheck(await pathExists(recoveryDir), "P10 factory reset removed recovery dir");
+    assertCheck(!(await pathExists(sessionDir)), "P10 factory reset left session dir");
+    assertCheck(!(await pathExists(memoryDir)), "P10 factory reset left memory dir");
+    assertCheck(!(await pathExists(schedulesDir)), "P10 factory reset left schedules dir");
+    assertCheck(!(await pathExists(logDir)), "P10 factory reset left log dir");
+    assertCheck(factory.result?.authority_boundary?.used_for_authority === false, "P10 factory reset result became authority");
+    log.push("/recovery/factory-reset: runtime state cleared while audit/recovery roots were preserved");
+
+    return {
+      status: "pass",
+      summary: "Recovery backup/restore/provider reset/connector reset/factory reset passed through WebChat control path",
+      raw_log: log.join("\n"),
+      details: {
+        backup_id: backupId,
+        restore_items: restore.result?.restored_items_count,
+        provider_reset_non_authority: providerReset.result?.used_for_authority === false,
+        connector_reset_non_authority: connectorReset.result?.used_for_authority === false,
+        factory_reset_non_authority: factory.result?.authority_boundary?.used_for_authority === false,
+        audit_preserved: await pathExists(auditDir),
+        recovery_preserved: await pathExists(recoveryDir),
+        evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
+        used_for_authority: false,
+      },
+    };
+  } finally {
+    await channel.stop();
+    await rm(root, { recursive: true, force: true });
   }
 }
 
@@ -2202,7 +2417,7 @@ async function printUsageAndExit(exitCode: 0 | 1): Promise<never> {
     "Usage: pnpm validate:product -- [--phase P2] [--evidence <dir>] [--list]",
     "",
     "Options:",
-    "  --phase <P2|P3|P4|P5|P6|P7|P8|P10|P11>",
+    "  --phase <P2|P3|P4|P5|P6|P7|P8|P9|P10|P11>",
     "  --evidence <dir>",
     "  --list",
     "",

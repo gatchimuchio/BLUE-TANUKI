@@ -144,7 +144,7 @@ Codex must proceed sequentially unless explicitly instructed otherwise.
 ## 3. Current Active Phase
 
 ```txt
-Phase P9 — Channel / Operator / 拡張面の整理
+Phase P10 — Recovery / Backup / Rollback
 ```
 
 旧 `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` はD2によりP13へ吸収。Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion is blocked until explicit owner GO.

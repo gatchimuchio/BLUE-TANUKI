@@ -1,4 +1,4 @@
-# BLUE-TANUKI Implementation Instructions v9
+# BLUE-TANUKI Implementation Instructions v10
 
 ## Role of This File
 
@@ -22,89 +22,95 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P9 — Channel / Operator / 拡張面の整理`.
+- The active instruction is `Phase P10 — Recovery / Backup / Rollback`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P9 — Channel / Operator / 拡張面の整理
+# Phase P10 — Recovery / Backup / Rollback
 
 ## Objective
 
-Make channel, operator, plugin, and skill extension claims match the actual product surface. P9 closes D7 operator first-party alignment and D6 Layer B v1 contract-stability alignment without promoting preview channels or weakening HDS-BRAIN authority.
+Control Centerから、ローカル設定・ログ・永続状態をバックアップし、意図的に壊した状態から復元できる最小のP10回復経路を実装する。provider reset / connector reset / factory reset はHDS-BRAIN authorityを代替せず、WebChat token-gated control pathとして実行する。
 
 ## Scope
 
-- Align CLAIM, package metadata, manifests, repository health inventory, preview scope, source release bundle, and Windows package behavior for Writing / Daily / Developer Operator as first-party Layer A surfaces.
-- Keep operator packages plugin-loader discovered and permission-checked; do not add hard Gateway dependencies or a new authority path.
-- Preserve WebChat / Telegram as first-party channels, Slack / Discord / Teams / LINE as first-party-preview, and WhatsApp as reserved-third-party-only.
-- Declare Plugin Review Gate / Plugin HIG / Skill Loader Contract as v1.0 contract-stable Layer B boundaries.
-- Extend `validate:product -- --phase P9` with channel/operator/plugin-skill claim, packaging, review, plugin-loader, and non-authority checks.
-- Update tests and P-series docs.
+- Add local recovery backup packs with manifest, copied env/config/runtime paths, digests, and secret-bearing classification.
+- Expose `/recovery/backup`, `/recovery/restore`, `/recovery/reset-provider`, `/recovery/reset-connector`, and `/recovery/factory-reset` through WebChat inbound token gate.
+- Add Control Center Backup / Restore controls that call those routes and reload snapshot state.
+- Reset provider settings to offline `LLM_BACKEND=stub`.
+- Reset connector settings to Composio dry-run with live execution disabled.
+- Factory reset local runtime state while preserving audit and recovery backup roots.
+- Extend `validate:product -- --phase P10` with WebChat control-path backup / restore / reset / factory-reset verification.
+- Update recovery / rollback runbook and validation docs.
 
 ## Non-Goals
 
-- Do not promote Slack / Discord / Teams / LINE to first-party without owner-run credentialed live-smoke evidence and `validate:channels` promotion evidence.
-- Do not implement WhatsApp first-party support.
-- Do not add public third-party Skill registry, plugin marketplace, hot reload, or automatic plugin installation.
-- Do not make Plugin Review Gate, plugin metadata, skill metadata, channel metadata, or operator surface metadata authority.
-- Do not add Gateway hard dependencies on preview channel packages.
-- Do not move HDS-BRAIN authority into operators, plugins, skills, channels, or UI.
+- Do not implement automatic updater or update-before-backup; P11 owns update failure rollback.
+- Do not implement destructive audit purge. Audit is preserved by factory reset.
+- Do not make recovery metadata, recovery action result, Control Center UI state, or backup manifest authority.
+- Do not bypass Approval Gate for HDS command execution. Recovery controls are local control-path operations, not command approvals.
+- Do not expose raw env contents, credentials, payload bodies, command content, or rendered output in recovery API responses.
+- Do not add GUI Shell dependency or broaden gateway hard dependencies.
 
 ## Inspect First
 
 ```bash
 git status --short
-rg -n "First-party|first-party|Operator|operator|channel|first-party-preview|reserved-third-party|WhatsApp|plugin:review|Skill Loader|PLUGIN_HIG|validate:channels|validate:product|P9" CLAIM.md README.md package.json packages apps scripts docs
-rg -n "CORE_RELEASE_PATHS|RUNTIME_PACKAGES|CORE_RELEASE_ALLOWLIST|PREVIEW_PACKAGE_PATHS|operator-writing|operator-daily|operator-developer|CHANNEL_PROMOTION_GATE|PLUGIN_REVIEW_GATE|SKILL_LOADER_CONTRACT" scripts apps/gateway docs packages
+rg -n "Recovery|recovery|Backup|Restore|factory reset|provider reset|connector reset|BLUE_TANUKI_RECOVERY|validate:product|P10" apps packages scripts docs
+rg -n "BLUE_TANUKI_ENV_FILE|BLUE_TANUKI_AUDIT_DIR|BLUE_TANUKI_SESSION_DIR|BLUE_TANUKI_MEMORY|BLUE_TANUKI_SCHEDULES_DIR|BLUE_TANUKI_LOG_DIR|COMPOSIO|OPENROUTER|LLM_BACKEND" apps/gateway packages scripts docs
 ```
 
 ## Implementation Requirements
 
-- `CLAIM.md` must explicitly list Writing / Daily / Developer Operator as first-party Layer A surfaces.
-- Operator package descriptions, `blue-tanuki.plugin.json` manifests, docs, release bundle allowlist, Windows package allowlist, and repo-health inventory must agree.
-- Operator surfaces must remain plugin-loader discovered, bundled-review-checked, permission-enforced, and downstream-only.
-- `docs/preview-scope.md` must classify operator packages as core first-party and Slack / Discord / Teams / LINE as preview.
-- `docs/PLUGIN_REVIEW_GATE.md`, `docs/PLUGIN_HIG.md`, and `docs/SKILL_LOADER_CONTRACT.md` must declare the v1.0 contract-stable Layer B boundary and non-authority limits.
-- `validate:product -- --phase P9` must run `validate:channels`, bundled `plugin:review` for operator packages, plugin-loader surface checks, preview/core package classification checks, and operator non-authority checks.
+- `apps/gateway/src/recovery_surface.ts` owns recovery snapshot and action implementation.
+- Recovery backup packs must include a manifest and copied configured paths without returning raw secret content through API.
+- Manifest/action results must include `used_for_authority=false`, HDS authority preservation metadata, and evidence source classes.
+- Restore must create a pre-restore backup before overwriting current state.
+- Reset operations must create a recovery backup before mutating env.
+- Factory reset must preserve audit and recovery backup roots.
+- WebChat routes must require the inbound WebChat bearer token and explicit confirmation for restore/reset/factory reset.
+- `validate:product -- --phase P10` must exercise WebChat route-level backup / restore / reset / factory reset with actual filesystem state.
 
 ## Safety Requirements
 
 - HDS-BRAIN remains the only authority source.
-- Operators, channels, plugins, skills, package metadata, review output, and support status remain downstream metadata/evidence only.
-- Plugin Review Gate cannot approve, execute, classify risk, substitute HDS-BRAIN, bypass Approval Gate, or promote public claims.
-- Preview channels cannot become first-party by wording drift.
-- WhatsApp must remain reserved-third-party-only.
-- Gateway hard dependencies must not expand to preview channel packages.
-- Release bundle / Windows package inclusion must not introduce secret files or GUI Shell dependencies.
+- Recovery metadata/action results cannot approve, execute HDS commands, classify risk, substitute HDS-BRAIN, infer consent, resume suspended commands, or bypass final review.
+- Raw invalid input must not enter execution paths; route bodies only select bounded recovery operations.
+- Env files and backup packs are secret-bearing; API responses must not echo secret values.
+- Audit evidence must be preserved on factory reset.
+- Restore and reset must fail closed without required token/confirmation.
+- `destructive_repair_available` remains false.
 
 ## Operator Usability Requirements
 
-- Product docs and claim boundary must make clear which channels are first-party, preview, or reserved-third-party.
-- Operator surfaces must be visible as first-party Layer A surfaces without implying that they own authority.
-- Layer B docs must make clear what is contract-stable and what is intentionally not shipped.
+- Control Center must show current env backup inventory, recovery pack inventory, latest backup id, available controls, and next safe action.
+- Backup / restore controls must be reachable from the first-party Control Center, not only CLI.
+- Reset wording must make clear that restart/doctor verification is still required after mutation.
+- Recovery path must preserve settings by default and provide rollback evidence before mutation.
 
 ## Audit Requirements
 
-- P9 product validation evidence must keep `used_for_authority=false`.
-- Evidence source class for P9 is `CONFIG` / `INTERNAL_STATE` / `FIXTURE`.
-- Channel promotion live-smoke evidence remains separate `EXTERNAL_EVIDENCE` and is not generated by P9.
+- P10 product validation evidence must keep `used_for_authority=false`.
+- Evidence source class for P10 is `CONFIG` / `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE`.
+- Recovery backup manifests and action results are audit/recovery evidence only, not authority.
+- If required recovery evidence cannot be produced, report SUSPEND/blocker rather than inferring recovery readiness.
 
 ## Tests
 
-- Product validation must cover P9 channel/operator/extension-boundary closure.
-- Repo-health and packaging tests must remain green after operator core release classification.
-- Release bundle and Windows package verification must require first-party operator packages.
-- Existing channel promotion, plugin review, operator surface, plugin loader, and product validation tests must remain green.
+- Unit tests must cover backup inventory, backup pack creation, restore, provider reset, connector reset, factory reset, secret non-exposure, audit preservation, and non-authority flags.
+- WebChat tests must cover snapshot token gate, action token gate, route wiring, snapshot POST 405, and non-authority action results.
+- Product validation must cover P10 route-level recovery through WebChat.
+- Existing P2-P9 gates must remain green.
 
 ## Docs
 
 - Update `docs/VALIDATE_PRODUCT.md`.
 - Update `docs/PRODUCT_ROADMAP.md`.
 - Keep `docs/ROADMAP.md` active phase pointer aligned.
-- Update claim / preview / release-candidate / plugin-skill boundary docs as needed.
+- Update `docs/UPDATE_ROLLBACK_RUNBOOK.md`.
 
 ## Validation Commands
 
@@ -117,30 +123,25 @@ pnpm docs:check
 pnpm validate:repo-health
 pnpm validate:packaging
 pnpm validate:ga
-pnpm validate:product -- --phase P9 --evidence .codex-tmp/validate-product-p9-extension-local
-pnpm validate:channels
-pnpm plugin:review -- --package packages/operator-writing --bundled
-pnpm plugin:review -- --package packages/operator-daily --bundled
-pnpm plugin:review -- --package packages/operator-developer --bundled
-pnpm package:windows
-pnpm package:windows:verify
+pnpm validate:product -- --phase P10 --evidence .codex-tmp/validate-product-p10-recovery-local
 pnpm release:bundle
 pnpm release:verify
 ```
 
 ## Manual Smoke
 
-Open Control Center, confirm Writing / Daily / Developer Operator panels remain visible and token-gated, confirm Channel / About / Skills surfaces do not present preview channels or Layer B submissions as first-party authority, and confirm plugin review / channel promotion commands remain operator-visible CLI gates. Owner credentialed preview-channel smoke remains a later promotion evidence task.
+Open Control Center, load Backup / Restore with WebChat token, run Backup Now, intentionally change a disposable env/session fixture, restore the selected backup, then run provider reset / connector reset / factory reset on a disposable setup. Confirm audit and recovery roots remain, restart, run doctor/audit verification, and confirm no recovery response displays secret values.
 
 ## Permanent-Use Check
 
-The owner can tell which channels are supported, preview, or reserved; which operator surfaces are first-party; and which plugin/skill extension promises are stable without mistaking any downstream surface for authority.
+The owner can recover from a broken provider, broken connector, local runtime-state corruption, or an accidental settings change from Control Center without deleting audit evidence or mistaking recovery metadata for authority.
 
 ## Acceptance Criteria
 
 - Local validation passes.
-- `validate:product -- --phase P9` passes on Linux.
-- `validate:channels`, bundled operator `plugin:review`, Windows package verify, and release verify pass.
+- `validate:product -- --phase P10` passes on Linux.
+- Recovery route responses remain redacted and non-authority.
+- Factory reset preserves audit and recovery roots.
 - Release claim remains pre-GO with `public_claim_allowed=false`.
 
 ## Final Report Format
@@ -2861,13 +2862,12 @@ Do not claim completion unless acceptance criteria are satisfied.
 The active next phase is:
 
 ```txt
-Phase P9 — Channel / Operator / 拡張面の整理
+Phase P10 — Recovery / Backup / Rollback
 ```
 
-Scope: align channel, operator, plugin, skill, package, release-bundle, and
-claim boundaries so first-party / preview / reserved-third-party statements
-match the actual product surface. This phase does not promote preview channels,
-open a public third-party Skill registry, move authority out of HDS-BRAIN, or
-change public claim eligibility.
+Scope: implement token-gated Control Center backup / restore / provider reset /
+connector reset / factory reset for local recovery. This phase preserves audit
+and recovery backup roots, keeps recovery metadata/action results non-authority,
+and does not implement automatic update rollback or destructive audit purge.
 
 Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision. Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion remains blocked until explicit owner GO.
