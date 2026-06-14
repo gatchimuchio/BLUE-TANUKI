@@ -65,8 +65,12 @@ import {
   scanEvidenceForSecrets,
 } from "../apps/gateway/src/evidence_redaction.js";
 import { loadPluginRuntime } from "../apps/gateway/src/plugin_loader.js";
+import {
+  readGaPromotionFiles,
+  validateGaPromotionGate,
+} from "./ga_promotion_gate.ts";
 
-export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P9" | "P10" | "P11" | "P12";
+export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P9" | "P10" | "P11" | "P12" | "P13";
 export type ProductPlatform = "linux" | "win32" | "any";
 export type ProductCheckStatus = "pass" | "fail" | "skipped";
 
@@ -152,7 +156,7 @@ export interface ProductValidationResult {
   checks: CheckRunRecord[];
 }
 
-const PHASE_ORDER: ProductPhase[] = ["P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12"];
+const PHASE_ORDER: ProductPhase[] = ["P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12", "P13"];
 const DEFAULT_TIMEOUT_MS = 120_000;
 const TSX = "node_modules/tsx/dist/cli.mjs";
 
@@ -289,6 +293,13 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "any",
     required: true,
     run: runDocsSupportClaimsBoundary,
+  },
+  {
+    id: "p13.owner_go_release_boundary",
+    phase: "P13",
+    platform: "any",
+    required: true,
+    run: runOwnerGoReleaseBoundary,
   },
 ];
 
@@ -1686,6 +1697,82 @@ async function runDocsSupportClaimsBoundary(ctx: CheckContext): Promise<CheckRes
       known_limitations_present: true,
       preview_quarantine_preserved: true,
       whatsapp_reserved_third_party: true,
+      evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+      used_for_authority: false,
+      hds_brain_remains_authority: true,
+    },
+  };
+}
+
+async function runOwnerGoReleaseBoundary(ctx: CheckContext): Promise<CheckResult> {
+  const readDoc = async (rel: string): Promise<string> =>
+    readFile(path.join(ctx.rootDir, rel), "utf8");
+  const mustInclude = (rel: string, text: string, needle: string): void =>
+    assertCheck(text.includes(needle), `${rel} missing required P13 text: ${needle}`);
+
+  const files = readGaPromotionFiles(ctx.rootDir);
+  const preGo = validateGaPromotionGate(files);
+  const requireGo = validateGaPromotionGate(files, { require_owner_go: true });
+  assertCheck(preGo.ok === true, `P13 pre-GO validation was not ready: ${preGo.failures.join("; ")}`);
+  assertCheck(preGo.status === "pre_go_ready", `P13 status was ${preGo.status}`);
+  assertCheck(preGo.owner_go === false, "P13 unexpectedly observed owner GO");
+  assertCheck(preGo.public_claim_allowed === false, "P13 unexpectedly allowed public claim");
+  assertCheck(preGo.package_version === "1.0.0-rc.1", "P13 package version is not the RC boundary");
+  assertCheck(preGo.bar_results.G === "pending_owner_go", "P13 Bar G was not pending owner GO");
+  assertCheck(requireGo.ok === false, "P13 require-owner-go mode unexpectedly passed without owner GO");
+  assertCheck(
+    requireGo.failures.some((failure) => failure.includes("owner GO decision is required")),
+    "P13 require-owner-go failure did not identify owner GO",
+  );
+
+  const ownerDecisions = await readDoc("docs/product-owner-decisions.md");
+  for (const decision of ["D1", "D2", "D3", "D4", "D5", "D6", "D7"]) {
+    mustInclude("docs/product-owner-decisions.md", ownerDecisions, `| ${decision} |`);
+  }
+  mustInclude("docs/product-owner-decisions.md", ownerDecisions, "P13基準に吸収");
+  mustInclude("docs/product-owner-decisions.md", ownerDecisions, "GO前にowner実機E2E");
+
+  const readiness = await readDoc("docs/P13_OWNER_GO_READINESS.md");
+  mustInclude("docs/P13_OWNER_GO_READINESS.md", readiness, "PENDING_OWNER_GO");
+  mustInclude("docs/P13_OWNER_GO_READINESS.md", readiness, "public_claim_allowed=false");
+  mustInclude("docs/P13_OWNER_GO_READINESS.md", readiness, "docs/ga-owner-decision.json");
+  mustInclude("docs/P13_OWNER_GO_READINESS.md", readiness, "Windows実機E2E");
+  mustInclude("docs/P13_OWNER_GO_READINESS.md", readiness, "pnpm validate:ga -- --require-owner-go");
+  mustInclude("docs/P13_OWNER_GO_READINESS.md", readiness, "used_for_authority=false");
+
+  const roadmap = await readDoc("docs/PRODUCT_ROADMAP.md");
+  mustInclude("docs/PRODUCT_ROADMAP.md", roadmap, "P13 Owner GO / Product Release");
+  mustInclude("docs/PRODUCT_ROADMAP.md", roadmap, "owner decision記録");
+  mustInclude("docs/PRODUCT_ROADMAP.md", roadmap, "Windows実機E2E PASS");
+
+  const gaReview = await readDoc("docs/v1.0-ga-promotion-review.md");
+  mustInclude("docs/v1.0-ga-promotion-review.md", gaReview, "PENDING_OWNER_GO");
+  mustInclude("docs/v1.0-ga-promotion-review.md", gaReview, "public_claim_allowed=false");
+  mustInclude("docs/v1.0-ga-promotion-review.md", gaReview, "docs/ga-owner-decision.json");
+  mustInclude("docs/v1.0-ga-promotion-review.md", gaReview, "pnpm validate:ga -- --require-owner-go");
+
+  const releaseNotes = await readDoc("docs/release-notes/1.0.0-rc.1.md");
+  mustInclude("docs/release-notes/1.0.0-rc.1.md", releaseNotes, "release candidate, not GA");
+  mustInclude("docs/release-notes/1.0.0-rc.1.md", releaseNotes, "owner GO");
+
+  return {
+    status: "pass",
+    summary: "P13 owner-GO release boundary stayed pre-GO and fail-closed without owner decision",
+    raw_log: [
+      "ga gate: pre_go_ready with public_claim_allowed=false",
+      "ga gate require-owner-go: blocked without owner decision",
+      "owner decisions: D1-D7 present and P13 absorption recorded",
+      "readiness docs: PENDING_OWNER_GO and Windows/owner evidence blockers recorded",
+    ].join("\n"),
+    details: {
+      ga_status: preGo.status,
+      package_version: preGo.package_version,
+      owner_go: preGo.owner_go,
+      public_claim_allowed: preGo.public_claim_allowed,
+      bar_results: preGo.bar_results,
+      require_owner_go_blocked: true,
+      owner_decisions_present: ["D1", "D2", "D3", "D4", "D5", "D6", "D7"],
+      p13_actual_release_blocked: true,
       evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
       used_for_authority: false,
       hds_brain_remains_authority: true,

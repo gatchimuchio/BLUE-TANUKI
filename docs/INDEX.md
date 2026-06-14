@@ -18,6 +18,7 @@
 - [1.0.0-rc.1 Release Notes](release-notes/1.0.0-rc.1.md) - RC scope, shipped surfaces, non-shipped boundaries, and validation expectations
 - [v1.0 Post-RC Closure Review](v1.0-post-rc-closure-review.md) - post-RC bundle, smoke, live-smoke, preview-promotion, installer, and updater decisions
 - [v1.0 GA Promotion Review](v1.0-ga-promotion-review.md) - GA bar evidence, pre-GO state, and owner decision boundary
+- [P13 Owner GO Readiness](P13_OWNER_GO_READINESS.md) - product-release decision boundary and pre-GO blockers
 
 ## First-Party Surfaces
 
@@ -103,6 +104,7 @@
 - [Known Environment Failures](known-environment-failures.md)
 - [Doctor Output](doctor-output.md)
 - [Validate Product](VALIDATE_PRODUCT.md)
+- [P13 Owner GO Readiness](P13_OWNER_GO_READINESS.md)
 - [Repository Health Inventory](repository-health-inventory.md)
 - [Repository Health Phase 4 Final Commissioning](repository-health-phase4-final-commissioning.md)
 - [Production Import Graph](production-import-graph.md)

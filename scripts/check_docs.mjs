@@ -20,6 +20,7 @@ const requiredDocs = [
   "docs/v1.0-release-candidate.md",
   "docs/v1.0-post-rc-closure-review.md",
   "docs/v1.0-ga-promotion-review.md",
+  "docs/P13_OWNER_GO_READINESS.md",
   "docs/phase11-s12-plugin-review-gate-implementation.md",
   "docs/phase11-s13-v1-ga-promotion-execution.md",
 ];
@@ -66,6 +67,7 @@ const currentReleaseDocs = [
   "docs/v1.0-release-candidate.md",
   "docs/v1.0-post-rc-closure-review.md",
   "docs/v1.0-ga-promotion-review.md",
+  "docs/P13_OWNER_GO_READINESS.md",
   "docs/v1.0-security-and-permanent-use-review.md",
 ];
 
@@ -83,6 +85,7 @@ for (const rel of [
   "docs/v1.0-release-candidate.md",
   "docs/v1.0-post-rc-closure-review.md",
   "docs/v1.0-ga-promotion-review.md",
+  "docs/P13_OWNER_GO_READINESS.md",
   "docs/v1.0-security-and-permanent-use-review.md",
 ]) {
   const basename = path.basename(rel);

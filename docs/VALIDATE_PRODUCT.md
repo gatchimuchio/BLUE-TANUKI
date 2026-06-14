@@ -19,6 +19,7 @@ pnpm validate:product -- --phase P9
 pnpm validate:product -- --phase P10
 pnpm validate:product -- --phase P11
 pnpm validate:product -- --phase P12
+pnpm validate:product -- --phase P13
 pnpm validate:product -- --evidence .codex-tmp/vp-accept
 pnpm validate:product -- --list
 ```
@@ -124,6 +125,12 @@ only console output.
 |---|---|---|
 | `p12.docs_support_claims` | `CONFIG` / `EXTERNAL_EVIDENCE` | `docs/SUPPORT_BOUNDARY.md` と `docs/KNOWN_LIMITATIONS.md` が存在し、README / QUICKSTART / CLAIM / RC docs / release notes / docs indexから参照されることを確認する。`public_claim_allowed=false`、`used_for_authority=false`、HDS-BRAIN authority、first-party support surface、preview/no-support boundary、reserved/not-shipped boundary、Slack / Discord / Teams / LINE preview、WhatsApp reserved-third-party、signed installer未出荷、automatic updater未出荷、Windows実機証跡・credentialed live smoke・manual update replacement・future migration schema等の残差が文書化され、compatibility matrixのchannel statusと矛盾しないことを検査する |
 
+## P13 Checks
+
+| ID | evidence source | 内容 |
+|---|---|---|
+| `p13.owner_go_release_boundary` | `CONFIG` / `EXTERNAL_EVIDENCE` | `validate:ga` のpre-GO結果が `status=pre_go_ready` / `owner_go=pending` / `public_claim_allowed=false` / `package_version=1.0.0-rc.1` を保ち、`require-owner-go` modeがowner decisionなしでfail-closedすることを確認する。D1-D7 decision ledger、P13 readiness doc、GA promotion review、release notesがowner GO、Windows実機E2E、release bundle verification、`docs/ga-owner-decision.json`、public claim boundaryを矛盾なく記録していることを検査する。このcheckはGA解禁ではなく、GOなしにreleaseしない境界の検査である |
+
 ## Incremental Registration
 
 | 追加Phase | 検査項目 |
@@ -139,6 +146,7 @@ only console output.
 | P10 | Control Center/WebChat経由のbackup→破壊→restore往復、provider reset、connector reset、audit保持factory reset |
 | P11 | release sidecar verify＋pre-update backup＋rollback plan＋release notes |
 | P12 | support boundary＋known limitations＋release claim alignment |
+| P13 | owner GO release boundary＋pre-GO fail-closed verification |
 
 ## Evidence Pack
 

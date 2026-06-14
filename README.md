@@ -228,6 +228,7 @@ The authority core never consumes downstream session history to make decisions. 
 * [docs/v1.0-release-candidate.md](docs/v1.0-release-candidate.md) — release-candidate boundary
 * [docs/v1.0-post-rc-closure-review.md](docs/v1.0-post-rc-closure-review.md) — post-RC closure status
 * [docs/v1.0-ga-promotion-review.md](docs/v1.0-ga-promotion-review.md) — GA promotion pre-GO review
+* [docs/P13_OWNER_GO_READINESS.md](docs/P13_OWNER_GO_READINESS.md) — P13 owner-GO release boundary
 * [docs/v1.0-security-and-permanent-use-review.md](docs/v1.0-security-and-permanent-use-review.md) — security and permanent-use review
 * [docs/DEVELOPMENT_PRACTICE.md](docs/DEVELOPMENT_PRACTICE.md) — development practice and evidence discipline
 * [docs/LLM_EXTENSION_SURFACE.md](docs/LLM_EXTENSION_SURFACE.md) — LLM-safe extension surface

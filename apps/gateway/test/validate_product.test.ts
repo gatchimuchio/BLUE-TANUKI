@@ -188,6 +188,7 @@ describe("validate_product gate", () => {
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p10.recovery_backup_restore\tphase=P10\tplatform=any\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p11.update_release_rollback\tphase=P11\tplatform=any\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p12.docs_support_claims\tphase=P12\tplatform=any\trequired=true");
+    expect(listProductChecks(PRODUCT_CHECKS)).toContain("p13.owner_go_release_boundary\tphase=P13\tplatform=any\trequired=true");
   });
 
   it("builds a Windows-safe pnpm command spec without relying on extension resolution", () => {

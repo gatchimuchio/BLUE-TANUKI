@@ -267,6 +267,8 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: 製品主張の解禁。
 
+現状（実測）: **pre-GO boundary実装**。`docs/P13_OWNER_GO_READINESS.md` を追加し、`validate:product` に `p13.owner_go_release_boundary` を登録。現在は `validate:ga` が `pre_go_ready` / `owner_go=pending` / `public_claim_allowed=false` を返し、`validate:ga -- --require-owner-go` はowner decisionなしでfail-closedすることを検査する。実際のGA releaseは未実行。
+
 判定基準（旧Bar Gを置換）:
 1. Linux CI full green
 2. validate:product full PASS（増分項目すべてrequired）
@@ -277,6 +279,8 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 7. owner decision記録 → public_claim_allowed=true
 8. version確定（D2に従う）
 9. release notes公開
+
+残差: owner GO、Windows実機E2E evidence pack、owner credentialed live smoke / redaction evidence review、最終version promotion、public claim activation、final release bundle regeneration。
 
 完了条件: owner GOなしに製品完成を名乗らない。public claimと実体が一致。導入・運用・復旧・削除までWindowsで閉じている。
 
@@ -313,7 +317,7 @@ P12 → P13
 | P10 | Recovery/Backup | 実装done | Windows実機GUI証跡・safe mode/repair UX・P11 update rollback連動 |
 | P11 | Update/Release | 実装done | Windows実機GUI証跡・将来migration・署名判断はowner task |
 | P12 | Docs/Claims | 実装done | P13 owner GO前の最終decision/evidence確認 |
-| P13 | Owner GO | — | 新基準で判定 |
+| P13 | Owner GO | pre-GO boundary実装 | owner GO / Windows実機E2E / final promotion |
 
 ## 8. 最終確定方針
 

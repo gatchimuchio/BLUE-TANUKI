@@ -1,4 +1,4 @@
-# BLUE-TANUKI Implementation Instructions v12
+# BLUE-TANUKI Implementation Instructions v13
 
 ## Role of This File
 
@@ -22,87 +22,89 @@ The product-completion roadmap is now the P-series defined in `docs/PRODUCT_ROAD
 
 - Product phases are named `Phase Pn-SY`.
 - P-series names must not collide with the existing `Phase X-SY` / Band A-F history.
-- The active instruction is `Phase P12 — Docs / Support Boundary / Claims`.
+- The active instruction is `Phase P13 — Owner GO / Product Release Boundary`.
 - The Universal Phase Template below continues to apply to P-series phase instructions.
 - Detailed phase scope and dependencies are referenced from `docs/PRODUCT_ROADMAP.md`.
 - Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision.
 
 ## Active P-Series Phase Detail
 
-# Phase P12 — Docs / Support Boundary / Claims
+# Phase P13 — Owner GO / Product Release Boundary
 
 ## Objective
 
-製品責任範囲、known limitations、release claim、preview/no-support境界をP12で固定する。P3〜P11の残差を文書とproduct gateに反映し、public claimと実証済み証跡がズレない状態にする。
+P13の製品release decision境界を固定する。owner GO、Windows実機E2E、version promotion、public claim activationが揃わない限りGAへ進まないことをproduct gateと文書で検査できる状態にする。
 
 ## Scope
 
-- Add a support boundary document that distinguishes supported first-party RC surface, preview/no-support, reserved-third-party, and not-shipped scope.
-- Add a known limitations document that records P3-P11 residual evidence gaps and deferred surfaces.
-- Align README / QUICKSTART / CLAIM / RC docs / release notes / docs index with the support boundary.
-- Extend `docs:check` so support boundary and known limitations stay in the release documentation set.
-- Extend `validate:product -- --phase P12` with docs/support/claim alignment checks.
-- Keep `public_claim_allowed=false` and owner GO pending.
+- Add P13 owner-GO readiness documentation that records current pre-GO state and release blockers.
+- Extend `validate:product -- --phase P13` with an owner-GO release-boundary check.
+- Verify `validate:ga` pre-GO result stays `public_claim_allowed=false`.
+- Verify `validate:ga -- --require-owner-go` remains blocked without owner decision.
+- Keep package version `1.0.0-rc.1` and public claim inactive.
+- Align docs index, release notes, roadmap, and validation docs with P13 boundary.
 
 ## Non-Goals
 
-- Do not implement product features, installer signing, automatic updater, Windows E2E execution, live external credential smoke, or manual app replacement.
+- Do not create `docs/ga-owner-decision.json`.
+- Do not promote package version to `1.0.0`.
+- Do not activate public GA / complete-superiority claims.
+- Do not implement installer signing, automatic updater, Windows E2E execution, live external credential smoke, or manual app replacement.
 - Do not promote Slack / Discord / Teams / LINE from preview.
 - Do not promote WhatsApp from `reserved-third-party`.
-- Do not claim GA or public completion; owner GO remains required.
 - Do not add GUI Shell dependency, new runtime dependency, or new authority path.
 
 ## Inspect First
 
 ```bash
 git status --short
-rg -n "claim|public_claim_allowed|owner GO|support boundary|known limitation|preview|not shipped|automatic updater|signed|WhatsApp|P12|validate:product" README.md QUICKSTART.md CLAIM.md docs scripts package.json
-rg -n "p11.update_release_rollback|PRODUCT_CHECKS|ProductPhase|PHASE_ORDER|docs:check|currentReleaseDocs" scripts apps/gateway/test docs
+rg -n "owner GO|ga-owner-decision|public_claim_allowed|require-owner-go|P13|validate:product|validate:ga|Windows実機E2E|1.0.0-rc.1" README.md QUICKSTART.md CLAIM.md docs scripts package.json apps
+rg -n "PRODUCT_CHECKS|ProductPhase|PHASE_ORDER|p12.docs_support_claims|validateGaPromotionGate|OWNER_DECISION_PATH" scripts apps/gateway/test docs
 ```
 
 ## Implementation Requirements
 
-- `docs/SUPPORT_BOUNDARY.md` must define supported first-party RC surface, preview/no-support, reserved-third-party, not-shipped scope, and support escalation classes.
-- `docs/KNOWN_LIMITATIONS.md` must record GA claim, platform evidence, credentialed external surfaces, update/rollback, preview/reserved limitations, and support boundary routing.
-- README / QUICKSTART / CLAIM / `docs/v1.0-release-candidate.md` / `docs/v1.0-post-rc-closure-review.md` / release notes / docs index must link or reflect the new boundary.
-- `scripts/check_docs.mjs` must require the new support/limitations docs in current release docs.
-- `scripts/validate_product.ts` must register `p12.docs_support_claims` and verify claim/support boundary consistency.
-- `apps/gateway/test/validate_product.test.ts` must assert P12 registration.
+- `docs/P13_OWNER_GO_READINESS.md` must record current pre-GO state, P13 criteria, GO blockers, and fail-closed rule.
+- `scripts/validate_product.ts` must register `p13.owner_go_release_boundary`.
+- The P13 check must assert pre-GO readiness, `owner_go=false`, `public_claim_allowed=false`, RC version, Bar G pending, and `require-owner-go` blocking without owner decision.
+- The P13 check must assert D1-D7 decision ledger presence and P13 readiness/GA review/release notes consistency.
+- `scripts/check_docs.mjs` and README / docs index must include the P13 readiness document.
+- `apps/gateway/test/validate_product.test.ts` must assert P13 registration.
 
 ## Safety Requirements
 
 - HDS-BRAIN remains the only authority source.
-- Support boundary, known limitations, claim documents, docs index, and product validation evidence remain `used_for_authority=false`.
+- P13 readiness docs and product validation evidence remain `used_for_authority=false`.
 - Public claim remains blocked with `public_claim_allowed=false`.
-- Preview status cannot be promoted by wording, Control Center state, plugin review evidence, or channel metadata.
-- Signed native installer, automatic updater, runtime auto-apply, and WhatsApp first-party support remain not shipped.
+- Owner GO cannot be inferred from validation success, bundle generation, docs presence, CI status, or LLM output.
+- Preview status cannot be promoted by wording, Control Center state, plugin review evidence, channel metadata, or release readiness docs.
+- Signed native installer, automatic updater, runtime auto-apply, and WhatsApp first-party support remain not shipped unless a future owner-scoped phase changes them.
 
 ## Operator Usability Requirements
 
-- An operator must be able to tell what is supported, preview, reserved-third-party, or not shipped.
-- Known limitations must identify what remains unverified, environment-limited, owner-run, or future-scope.
-- Release notes and claim docs must point to the support boundary instead of implying broader support.
+- The owner must be able to see why P13 is still `PENDING_OWNER_GO`.
+- The owner must be able to see which evidence is still required before actual GO.
+- The owner must be able to run `validate:product -- --phase P13` and observe that the release boundary is fail-closed without owner decision.
 
 ## Audit Requirements
 
-- P12 product validation evidence must keep `used_for_authority=false`.
-- Evidence source class for P12 is `CONFIG` / `EXTERNAL_EVIDENCE`.
-- Documentation and claim alignment are release evidence only, not runtime authority.
+- P13 product validation evidence must keep `used_for_authority=false`.
+- Evidence source class for P13 is `CONFIG` / `EXTERNAL_EVIDENCE`.
+- Owner-GO readiness evidence is release evidence only, not runtime authority.
 
 ## Tests
 
-- Unit tests must cover P12 product-check registration.
-- Product validation must cover P12 support/claim alignment.
-- Existing P2-P11 gates must remain green.
+- Unit tests must cover P13 product-check registration.
+- Product validation must cover P13 owner-GO release boundary.
+- Existing P2-P12 gates must remain green.
 
 ## Docs
 
-- Add `docs/SUPPORT_BOUNDARY.md`.
-- Add `docs/KNOWN_LIMITATIONS.md`.
+- Add `docs/P13_OWNER_GO_READINESS.md`.
 - Update `docs/VALIDATE_PRODUCT.md`.
 - Update `docs/PRODUCT_ROADMAP.md`.
 - Keep `docs/ROADMAP.md` active phase pointer aligned.
-- Update README / QUICKSTART / CLAIM / RC docs / release notes / docs index.
+- Update README / docs index / GA promotion review / release notes as needed.
 
 ## Validation Commands
 
@@ -115,25 +117,26 @@ pnpm docs:check
 pnpm validate:repo-health
 pnpm validate:packaging
 pnpm validate:ga
-pnpm validate:product -- --phase P12 --evidence .codex-tmp/validate-product-p12-support-local
+pnpm validate:product -- --phase P13 --evidence .codex-tmp/validate-product-p13-owner-go-local
 pnpm release:bundle
 pnpm release:verify
 ```
 
 ## Manual Smoke
 
-Open README / QUICKSTART / CLAIM / docs index / support boundary / known limitations / release notes and confirm the support boundary is reachable from normal operator reading paths. Confirm no text claims GA, signed native installer, automatic updater, or first-party WhatsApp support.
+Open P13 readiness, GA promotion review, release notes, and validate product docs. Confirm they state `PENDING_OWNER_GO`, `public_claim_allowed=false`, owner decision required, Windows実機E2E required, and no actual GA claim.
 
 ## Permanent-Use Check
 
-The owner can identify supported RC surfaces, preview surfaces, not-shipped surfaces, remaining evidence gaps, and the exact owner-GO boundary before making release or support claims.
+The owner can identify the exact remaining release blockers and cannot accidentally interpret passed validation as owner GO.
 
 ## Acceptance Criteria
 
 - Local validation passes.
-- `validate:product -- --phase P12` passes on Linux.
-- Support boundary and known limitations are indexed, linked, and checked by docs/product gates.
-- Preview and reserved-third-party boundaries remain unchanged.
+- `validate:product -- --phase P13` passes on Linux as a pre-GO fail-closed boundary check.
+- `validate:ga` remains pre-GO with `public_claim_allowed=false`.
+- `validate:ga -- --require-owner-go` remains blocked without owner decision.
+- P13 readiness document is indexed, linked, and checked by docs/product gates.
 - Release claim remains pre-GO with `public_claim_allowed=false`.
 
 ## Final Report Format
@@ -2854,11 +2857,10 @@ Do not claim completion unless acceptance criteria are satisfied.
 The active next phase is:
 
 ```txt
-Phase P12 — Docs / Support Boundary / Claims
+Phase P13 — Owner GO / Product Release Boundary
 ```
 
-Scope: fix support boundary, known limitations, release-claim alignment, and
-preview/no-support wording while keeping public claim activation blocked until
-owner GO.
+Scope: fix the owner-GO release decision boundary, record P13 readiness, and
+keep actual GA promotion fail-closed until owner GO and required evidence exist.
 
 Former `Phase 11-S13 Owner GO Decision / v1.0.0 Promotion` is no longer active; D2 absorbs the old Bar G GO into the P13 product-release decision. Phase 11-S13 pre-GO gate is complete. Actual v1.0.0 promotion remains blocked until explicit owner GO.
