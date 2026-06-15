@@ -133,7 +133,7 @@ Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでイン�
 
 目的: stub依存から脱却し、実LLMで製品として使える。
 
-現状（実測）: **partial（高進捗）**。provider registry（anthropic / openai_compatible / OpenRouter既定endpoint / stub）、CCからのkey・model・endpoint設定、live smoke（`smoke:live`: 実応答 "BLUE-TANUKI-LIVE-OK" 検証、timeout付、資格情報なければskip）。LLM層にはtyped provider error分類、明示retry/fallback設定、non-authority health snapshot、Windows DPAPI CurrentUser secret ref保存、runtime secret ref解決、`validate:product` P5 fixture checkが追加済み。
+現状（実測）: **partial（高進捗）**。provider registry（anthropic / openai_compatible / OpenRouter既定endpoint / stub）、CCからのkey・model・endpoint設定、live smoke（`smoke:live`: 実応答 "BLUE-TANUKI-LIVE-OK" 検証、timeout付、資格情報なければskip）。LLM層にはtyped provider error分類、明示retry/fallback設定、non-authority health snapshot、Windows DPAPI CurrentUser secret ref保存、runtime secret ref解決、`validate:product` P5の実HTTP abort timeout / settings verify timeout / Windows DPAPI connector secret roundtrip checkが追加済み。
 
 残差（実測で不在を確認）:
 - Windows実機でのDPAPI保存→restart→会話成立 evidence
@@ -309,7 +309,7 @@ P12 → P13
 | P2 | validate:product新設 | done | P13までの増分登録継続 |
 | P3 | Windows導入 | 実装大部分done | Windows CI evidence確認・GO前owner実機E2E |
 | P4 | Control Center | partial高 | Update・実機品質 |
-| P5 | LLM実運用 | partial高 | Windows実機DPAPI証跡・Linux/macOS keychain・live証跡 |
+| P5 | LLM実運用 | partial高 | Windows実機DPAPI restart→会話成立証跡・Linux/macOS keychain・live証跡 |
 | P6 | Authority閉包 | 実装done | Windows実機GUI証跡 |
 | P7 | Audit製品化 | 実装done | Windows実機GUI証跡・owner資格情報環境でのredaction再確認 |
 | P8 | Composio閉包 | 実装done | owner資格情報live smoke・Windows実機GUI証跡・scope運用文書 |

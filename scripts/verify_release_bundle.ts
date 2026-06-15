@@ -344,8 +344,25 @@ function extractArchive(archiveFile: string, destination: string): void {
   throw new Error(`unsupported archive extension: ${archiveFile}`);
 }
 
+export function resolveExtractedRoot(destination: string): string {
+  if (existsSync(path.join(destination, "package.json"))) {
+    return destination;
+  }
+  const nested = path.join(destination, "blue-tanuki");
+  if (existsSync(path.join(nested, "package.json"))) {
+    return nested;
+  }
+  throw new Error("extracted release bundle missing package.json");
+}
+
 function runInExtractedBundle(step: ExtractedReleaseCommand, cwd: string): void {
-  const result = spawnSync(step.command, [...step.args], {
+  const command =
+    process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : step.command;
+  const args =
+    process.platform === "win32"
+      ? ["/d", "/s", "/c", step.command, ...step.args]
+      : [...step.args];
+  const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
     env: {
@@ -355,9 +372,10 @@ function runInExtractedBundle(step: ExtractedReleaseCommand, cwd: string): void 
     },
   });
   if (result.status !== 0) {
+    const diagnostic = result.error?.message ?? `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
     throw new Error(
       `extracted release command failed: ${step.command} ${step.args.join(" ")}\n` +
-        `${result.stdout}\n${result.stderr}`.trim(),
+        diagnostic,
     );
   }
   console.log(`[release:verify] extracted PASS ${step.command} ${step.args.join(" ")}`);
@@ -365,10 +383,7 @@ function runInExtractedBundle(step: ExtractedReleaseCommand, cwd: string): void 
 
 function assertExtractedInstallability(archiveFile: string): void {
   extractArchive(archiveFile, VERIFY_WORK_DIR);
-  const extractedRoot = path.join(VERIFY_WORK_DIR, "blue-tanuki");
-  if (!existsSync(path.join(extractedRoot, "package.json"))) {
-    throw new Error("extracted release bundle missing package.json");
-  }
+  const extractedRoot = resolveExtractedRoot(VERIFY_WORK_DIR);
   for (const step of EXTRACTED_RELEASE_COMMANDS) {
     runInExtractedBundle(step, extractedRoot);
   }

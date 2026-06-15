@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import * as net from "node:net";
 import {
   mkdir,
@@ -38,11 +39,13 @@ import {
   prepareManualUpdate,
   verifyUpdateCandidate,
 } from "../apps/gateway/src/update_surface.js";
+import { verifyLlmProvisioning } from "../apps/gateway/src/control_center/setup/api_settings.js";
 import { runAuditVerify } from "../apps/gateway/src/audit_verify.js";
 import { WebChatChannel } from "../packages/channel-webchat/src/index.js";
 import {
   LLMProviderError,
   LLMRegistry,
+  OpenAICompatibleBackend,
   Executor,
   ToolRegistry,
   createExecutorApprovalAuthority,
@@ -55,8 +58,11 @@ import {
 } from "../packages/blue-tanuki/src/index.js";
 import {
   resolveLLMSecretRefs,
+  resolveConnectorSecretRefs,
   secretRefKey,
+  storeBlueTanukiSecret,
   storeLlmApiKeySecret,
+  connectorSecretStorageStatus,
   type SecretProtector,
 } from "../apps/gateway/src/secret_store.js";
 import { buildApprovalRuntime } from "../apps/gateway/src/approval_runtime.js";
@@ -159,7 +165,7 @@ export interface ProductValidationResult {
 }
 
 const PHASE_ORDER: ProductPhase[] = ["P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12", "P13"];
-const DEFAULT_TIMEOUT_MS = 120_000;
+export const DEFAULT_VALIDATE_TIMEOUT_MS = 600_000;
 const TSX_CLI_REL = path.join("node_modules", "tsx", "dist", "cli.mjs");
 
 const upstream = {
@@ -255,6 +261,20 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     run: runLLMResilienceHealth,
   },
   {
+    id: "p5.llm_fetch_abort_timeout",
+    phase: "P5",
+    platform: "any",
+    required: true,
+    run: runLLMFetchAbortTimeout,
+  },
+  {
+    id: "p5.windows_dpapi_secret_roundtrip",
+    phase: "P5",
+    platform: "win32",
+    required: true,
+    run: runWindowsDpapiSecretRoundtrip,
+  },
+  {
     id: "p6.approval_authority_controls",
     phase: "P6",
     platform: "any",
@@ -318,7 +338,8 @@ export function parseProductPhase(value: string | undefined): ProductPhase {
 }
 
 export function defaultEvidenceDir(rootDir: string, now = new Date()): string {
-  return path.join(rootDir, ".codex-tmp", "validate-product-evidence", now.toISOString());
+  const timestamp = now.toISOString().replace(/:/g, ".");
+  return path.join(rootDir, ".codex-tmp", "validate-product-evidence", timestamp);
 }
 
 export function filterProductChecks(
@@ -543,9 +564,9 @@ function terminateProcessTree(
 
 function timeoutFromEnv(env: NodeJS.ProcessEnv): number {
   const raw = env.BLUE_TANUKI_VALIDATE_TIMEOUT_MS;
-  if (!raw) return DEFAULT_TIMEOUT_MS;
+  if (!raw) return DEFAULT_VALIDATE_TIMEOUT_MS;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_VALIDATE_TIMEOUT_MS;
 }
 
 function maxRegisteredPhase(checks: readonly ProductCheck[]): ProductPhase {
@@ -909,7 +930,13 @@ async function runActorEscalationMutation(_ctx: CheckContext): Promise<CheckResu
   return {
     status: "pass",
     summary: `actor/process escalation mutation probes passed (${observations.length} cases)`,
-    raw_log: JSON.stringify(observations, null, 2),
+    raw_log: [
+      "reserved_metadata_strip_result=pass",
+      "reserved_metadata_nfkc_strip_result=pass",
+      "reserved_metadata_nested_strip_result=pass",
+      "external_metadata_no_escalation_result=pass",
+      JSON.stringify(observations, null, 2),
+    ].join("\n"),
     details: {
       cases: observations,
       evidence_source: ["LIVE_RUNTIME", "INTERNAL_STATE"],
@@ -2039,6 +2066,217 @@ async function runLLMResilienceHealth(): Promise<CheckResult> {
       },
     };
   } finally {
+    await rm(secretRoot, { recursive: true, force: true });
+  }
+}
+
+async function runLLMFetchAbortTimeout(ctx: CheckContext): Promise<CheckResult> {
+  const serverState = {
+    requestSeen: false,
+    requestAborted: false,
+    socketClosed: false,
+  };
+  const server = createServer((req) => {
+    req.on("aborted", () => {
+      serverState.requestAborted = true;
+    });
+    req.socket.on("close", () => {
+      serverState.socketClosed = true;
+    });
+    serverState.requestSeen = true;
+    // Intentionally never respond. The provider fetch must abort itself.
+  });
+
+  try {
+    const port = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("timeout fixture did not bind to a TCP port"));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+    const endpoint = `http://127.0.0.1:${port}/v1`;
+    const backend = new OpenAICompatibleBackend({
+      endpoint,
+      defaultModel: "timeout-fixture",
+      name: "timeout-fixture",
+    });
+
+    const directStarted = Date.now();
+    let directTimeout = false;
+    try {
+      await backend.call({
+        messages: [{ role: "user", content: "timeout probe" }],
+        timeout_ms: 50,
+      });
+    } catch (error) {
+      directTimeout =
+        error instanceof LLMProviderError &&
+        error.kind === "timeout" &&
+        error.retryable === true &&
+        error.used_for_authority === false;
+    }
+    const directDurationMs = Date.now() - directStarted;
+    assertCheck(directTimeout, "OpenAI-compatible backend did not classify fetch abort as timeout");
+    assertCheck(serverState.requestSeen, "OpenAI-compatible backend did not reach local timeout fixture");
+    assertCheck(directDurationMs < 2_000, `OpenAI-compatible timeout took too long: ${directDurationMs}ms`);
+
+    const runtime = await loadPluginRuntime({
+      root: ctx.rootDir,
+      import_modules: false,
+    });
+    const verifyStarted = Date.now();
+    const verify = await verifyLlmProvisioning(
+      {
+        llm: {
+          provider: "openai-compatible",
+          endpoint,
+          model: "timeout-fixture",
+          timeout_ms: 50,
+        },
+      },
+      {
+        WEBCHAT_TOKEN: "product-webchat-token-1234",
+        WEBCHAT_RESUME_TOKEN: "product-resume-token-1234",
+        BLUE_TANUKI_SETTINGS_TOKEN: "product-settings-token-1234",
+      },
+      runtime,
+    );
+    const verifyDurationMs = Date.now() - verifyStarted;
+    assertCheck(verify.status === "fail", "settings verify unexpectedly passed against a hanging provider");
+    assertCheck(verify.safe === true && verify.changed === false, "settings verify timeout was not safe/non-mutating");
+    assertCheck(verify.secret_exposed === false, "settings verify timeout exposed secret material");
+    assertCheck(verifyDurationMs < 2_000, `settings verify timeout took too long: ${verifyDurationMs}ms`);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assertCheck(serverState.requestAborted || serverState.socketClosed, "timeout fixture request/socket did not close after abort");
+
+    return {
+      status: "pass",
+      summary: "LLM provider fetch and settings verify timeout paths abort without hanging",
+      raw_log: [
+        "llm_fetch_abort_timeout_result=pass",
+        "llm_fetch_no_hanging_request_result=pass",
+        "llm_settings_verify_timeout_result=pass",
+        `direct_duration_ms=${directDurationMs}`,
+        `settings_verify_duration_ms=${verifyDurationMs}`,
+      ].join("\n"),
+      details: {
+        direct_timeout: directTimeout,
+        request_seen: serverState.requestSeen,
+        request_aborted_or_socket_closed: serverState.requestAborted || serverState.socketClosed,
+        direct_duration_ms: directDurationMs,
+        settings_verify_status: verify.status,
+        settings_verify_safe: verify.safe,
+        settings_verify_changed: verify.changed,
+        settings_verify_secret_exposed: verify.secret_exposed,
+        settings_verify_duration_ms: verifyDurationMs,
+        evidence_source: ["LIVE_RUNTIME", "INTERNAL_STATE"],
+        used_for_authority: false,
+      },
+    };
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      if (!server.listening) {
+        resolve();
+        return;
+      }
+      server.close(() => resolve());
+    });
+  }
+}
+
+async function runWindowsDpapiSecretRoundtrip(ctx: CheckContext): Promise<CheckResult> {
+  const secretRoot = await mkdtemp(path.join(ctx.evidenceDir, "dpapi-"));
+  const envFile = path.join(secretRoot, "blue-tanuki.env");
+  const secretPath = path.join(secretRoot, "secrets", "composio_api_key.dpapi");
+  const plaintext = "product-dpapi-composio-roundtrip-value";
+  const originalPowershell = process.env.BLUE_TANUKI_POWERSHELL;
+  try {
+    const stored = storeBlueTanukiSecret("COMPOSIO_API_KEY", plaintext, {
+      envFilePath: envFile,
+      platform: "win32",
+    });
+    await writeFile(envFile, `${stored.ref_key}=${stored.ref}\n`, "utf8");
+
+    const envText = await readFile(envFile, "utf8");
+    const secretText = await readFile(secretPath, "utf8");
+    const secretStat = await stat(secretPath);
+    const refEnv = { [stored.ref_key]: stored.ref };
+    const storage = connectorSecretStorageStatus(refEnv, "COMPOSIO_API_KEY", "win32");
+    const resolved = resolveConnectorSecretRefs(refEnv, { platform: "win32" });
+
+    assertCheck(stored.ref_key === "COMPOSIO_API_KEY_REF", "DPAPI store returned unexpected ref key");
+    assertCheck(stored.ref.startsWith("win32-dpapi-current-user:file:"), "DPAPI ref prefix mismatch");
+    assertCheck(envText.includes("COMPOSIO_API_KEY_REF="), "DPAPI env ref missing");
+    assertCheck(!envText.includes("COMPOSIO_API_KEY="), "DPAPI env retained plaintext key");
+    assertCheck(!envText.includes(plaintext), "DPAPI env exposed plaintext value");
+    assertCheck(secretStat.isFile(), "DPAPI secret file was not created");
+    assertCheck(!secretText.includes(plaintext), "DPAPI secret file exposed plaintext value");
+    assertCheck(resolved.COMPOSIO_API_KEY === plaintext, "DPAPI resolved plaintext did not match original value");
+    assertCheck(storage.os_protected === true, "DPAPI storage status did not report os_protected=true");
+    assertCheck(storage.raw_env_present === false, "DPAPI storage status reported raw env secret");
+    assertCheck(storage.secret_ref_present === true, "DPAPI storage status did not report secret ref");
+
+    const tampered = secretText.replace(/[0-9a-fA-F]/, "X");
+    await writeFile(secretPath, tampered, "utf8");
+    let tamperRejected = false;
+    try {
+      resolveConnectorSecretRefs(refEnv, { platform: "win32" });
+    } catch {
+      tamperRejected = true;
+    }
+    assertCheck(tamperRejected, "DPAPI tampered secret resolved successfully");
+    await writeFile(secretPath, secretText, "utf8");
+
+    process.env.BLUE_TANUKI_POWERSHELL = path.join(secretRoot, "missing-powershell.exe");
+    let invalidPowershellRejected = false;
+    try {
+      resolveConnectorSecretRefs(refEnv, { platform: "win32" });
+    } catch {
+      invalidPowershellRejected = true;
+    }
+    assertCheck(invalidPowershellRejected, "invalid BLUE_TANUKI_POWERSHELL did not fail closed");
+
+    return {
+      status: "pass",
+      summary: "Windows DPAPI connector secret roundtrip, tamper rejection, and fail-closed PowerShell path passed",
+      raw_log: [
+        "dpapi_secret_roundtrip_result=pass",
+        "dpapi_secret_no_plaintext_result=pass",
+        "dpapi_secret_tamper_result=pass",
+        "dpapi_secret_fail_closed_result=pass",
+        "os_protected=true",
+      ].join("\n"),
+      details: {
+        key: "COMPOSIO_API_KEY",
+        ref_key: stored.ref_key,
+        ref_prefix: "win32-dpapi-current-user:file:",
+        secret_file_created: true,
+        plaintext_in_env: false,
+        plaintext_in_secret_file: false,
+        roundtrip_matched: true,
+        tamper_rejected: tamperRejected,
+        invalid_powershell_rejected: invalidPowershellRejected,
+        os_protected: storage.os_protected,
+        raw_env_present: storage.raw_env_present,
+        secret_ref_present: storage.secret_ref_present,
+        evidence_source: ["LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
+        used_for_authority: false,
+      },
+    };
+  } finally {
+    if (originalPowershell === undefined) {
+      delete process.env.BLUE_TANUKI_POWERSHELL;
+    } else {
+      process.env.BLUE_TANUKI_POWERSHELL = originalPowershell;
+    }
     await rm(secretRoot, { recursive: true, force: true });
   }
 }

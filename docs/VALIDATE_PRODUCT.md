@@ -35,8 +35,10 @@ pnpm validate:product -- --list
 追加ENV:
 
 ```bash
-BLUE_TANUKI_VALIDATE_TIMEOUT_MS=120000
+BLUE_TANUKI_VALIDATE_TIMEOUT_MS=600000
 ```
+
+無指定時の既定値も 600000ms である。Windows installed smoke は installer setup / repair / launch / uninstall まで実行するため、120000ms では実機で不足する場合がある。
 
 ## PASS / FAIL / skipped
 
@@ -81,7 +83,9 @@ only console output.
 
 | ID | evidence source | 内容 |
 |---|---|---|
-| `p5.llm_resilience_health` | `INTERNAL_STATE` / `FIXTURE` | LLM registryのretry、明示fallback、typed provider error分類、health snapshot、LLM API key secret-ref round trip、LLM output/provider metadata/health metadata/secret metadataのnon-authority境界をfixtureで検証する。owner資格情報を使うlive LLM smokeとWindows実機DPAPI証跡は後続証跡として残る |
+| `p5.llm_resilience_health` | `INTERNAL_STATE` / `FIXTURE` | LLM registryのretry、明示fallback、typed provider error分類、health snapshot、LLM API key secret-ref round trip、LLM output/provider metadata/health metadata/secret metadataのnon-authority境界をfixtureで検証する。owner資格情報を使うlive LLM smokeはP13前の外部証跡として別途必要 |
+| `p5.llm_fetch_abort_timeout` | `LIVE_RUNTIME` / `INTERNAL_STATE` | 応答しないloopback OpenAI-compatible endpointに対して `timeout_ms=50` を渡し、provider fetchが `kind=timeout` でabortされ、request/socketが残留せず、settings verify経路もsafe/non-mutating failureとしてtimeoutすることを検証する |
+| `p5.windows_dpapi_secret_roundtrip` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | Windows上で `COMPOSIO_API_KEY` をDPAPI CurrentUser refとして保存し、envに平文が残らず、secret fileが作成され、復号値が一致し、secret file改竄と `BLUE_TANUKI_POWERSHELL` 不正pathがfail-closedすることを検証する。Windows以外ではplatform skip |
 
 ## P6 Checks
 
@@ -138,7 +142,7 @@ only console output.
 | P2 | ゲート骨格＋Linux系: test一式 / smoke:serve / smoke:resume / hds:standalone / SUSPEND実発火（動的） / approval bypass不能（動的） / audit chain verify / evidence pack生成 |
 | P3 | package:windows verify / smoke:windows-installed（win環境） / install→常駐→stop/restart/logs→uninstall往復 |
 | P4 | Control Center操作スモーク（API経由） |
-| P5 | LLM resilience health fixture / LLM secret-ref fixture / live LLM smoke（owner資格情報、opt-in→P13でrequired化） / 鍵保護検査 |
+| P5 | LLM resilience health fixture / LLM secret-ref fixture / 実HTTP abort timeout / settings verify timeout / Windows DPAPI connector secret roundtrip / live LLM smoke（owner資格情報、opt-in→P13でrequired化） |
 | P6 | approval allow・ask・deny・remembered grant・revoke・emergency stop・L3 final-review non-bypassの動的検証 |
 | P7 | Control Center evidence export / evidence pack内容検査 / human-readable report / retention / secret redaction検査 |
 | P8 | Composio dry-run no-call / live opt-in / toolkit+action allowlist / action revoke / L3 final-review non-bypass / fixture live execution / pre-post audit |
@@ -150,7 +154,8 @@ only console output.
 
 ## Evidence Pack
 
-`--evidence <dir>` を指定しない場合、`.codex-tmp/validate-product-evidence/<UTC ISO timestamp>/` に出力する。
+`--evidence <dir>` を指定しない場合、`.codex-tmp/validate-product-evidence/<Windows-safe UTC timestamp>/` に出力する。
+timestamp は `2026-06-15T13.40.21.589Z` のように、Windows path で使えない `:` を含まない。
 
 内容:
 

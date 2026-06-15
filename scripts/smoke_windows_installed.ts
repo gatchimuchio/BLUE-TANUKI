@@ -293,6 +293,21 @@ async function waitForFileText(file: string, timeoutMs: number): Promise<string 
   return existsSync(file) ? readFileSync(file, "utf8") : undefined;
 }
 
+async function removeTreeBestEffort(target: string): Promise<void> {
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    try {
+      rmSync(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt < 6) {
+        await sleep(500);
+        continue;
+      }
+      console.error(`[windows-smoke] cleanup temporary install tree failed: ${errorMessage(error)}`);
+    }
+  }
+}
+
 function readPidFile(file: string): number | undefined {
   if (!existsSync(file)) return undefined;
   const raw = readFileSync(file, "utf8").trim();
@@ -803,7 +818,7 @@ async function main(): Promise<void> {
       }
     }
     logStep("cleanup temporary install tree");
-    rmSync(work, { recursive: true, force: true });
+    await removeTreeBestEffort(work);
   }
 }
 

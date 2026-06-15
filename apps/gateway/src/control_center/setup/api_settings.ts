@@ -374,6 +374,7 @@ export async function verifyLlmProvisioning(
 
     const route = buildLLMCommandRouteFromEnv(candidateEnv);
     const backend = buildLLMBackendFromEnv(candidateEnv);
+    const verifyTimeoutMs = positiveInt(candidateEnv.BLUE_TANUKI_LLM_TIMEOUT_MS, 30_000);
     const response = await withTimeout(
       "LLM provisioning check",
       backend.call({
@@ -381,12 +382,13 @@ export async function verifyLlmProvisioning(
         model: route.model,
         max_tokens: Math.min(route.max_tokens ?? 24, 24),
         temperature: 0,
+        timeout_ms: verifyTimeoutMs,
         messages: [
           { role: "system", content: "Reply with exactly: BLUE-TANUKI-SETUP-OK" },
           { role: "user", content: "setup check" },
         ],
       }),
-      positiveInt(candidateEnv.BLUE_TANUKI_LLM_TIMEOUT_MS, 30_000),
+      verifyTimeoutMs,
     );
     return {
       status: "pass",

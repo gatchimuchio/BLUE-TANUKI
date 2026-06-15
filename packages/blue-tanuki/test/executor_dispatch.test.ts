@@ -237,6 +237,24 @@ describe("Executor.executeToolCall - permission envelope", () => {
     expect(fb.error).toMatch(/approval authority mismatch/);
   });
 
+  it("rejects approval proof with a forged upstream commit hash before execution branding", () => {
+    const command = channelSendCmd("legacy-commit-mismatch");
+
+    expect(() =>
+      executorApproval.approve(command, {
+        source: "approval_gate",
+        decision: "allow",
+        approved_by: "test-owner",
+        approved_at_ms: 1,
+        upstream_commit_hash: "forged-hash",
+        operation: "channel_send",
+        risk: "medium",
+        final_review_required: false,
+        reason: "forged commit hash",
+      }),
+    ).toThrow(/commit hash does not match/);
+  });
+
   it("re-verifies human final-review proof for high-risk tools", async () => {
     const exec = new Executor({
       approval_authority: executorApproval,

@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   PRODUCT_CHECKS,
+  DEFAULT_VALIDATE_TIMEOUT_MS,
+  defaultEvidenceDir,
   exitCodeFromProductValidation,
   filterProductChecks,
   listProductChecks,
@@ -134,6 +136,17 @@ describe("validate_product gate", () => {
     expect(checksEntry?.sha256).toBe(createHash("sha256").update(checksBytes).digest("hex"));
   });
 
+  it("uses a Windows-safe default evidence timestamp", () => {
+    const evidenceDir = defaultEvidenceDir(root, new Date("2026-06-15T13:40:21.589Z"));
+
+    expect(path.basename(evidenceDir)).toBe("2026-06-15T13.40.21.589Z");
+    expect(path.basename(evidenceDir)).not.toContain(":");
+  });
+
+  it("sets a default validation timeout long enough for Windows installed smoke", () => {
+    expect(DEFAULT_VALIDATE_TIMEOUT_MS).toBe(600_000);
+  });
+
   it("keeps child process execution mockable through CheckContext.runner", async () => {
     const checks: ProductCheck[] = [
       {
@@ -182,6 +195,8 @@ describe("validate_product gate", () => {
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p3.windows_installed_smoke\tphase=P3\tplatform=win32\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p4.control_center_settings_api\tphase=P4\tplatform=any\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p5.llm_resilience_health\tphase=P5\tplatform=any\trequired=true");
+    expect(listProductChecks(PRODUCT_CHECKS)).toContain("p5.llm_fetch_abort_timeout\tphase=P5\tplatform=any\trequired=true");
+    expect(listProductChecks(PRODUCT_CHECKS)).toContain("p5.windows_dpapi_secret_roundtrip\tphase=P5\tplatform=win32\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p6.approval_authority_controls\tphase=P6\tplatform=any\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p7.evidence_pack_redaction\tphase=P7\tplatform=any\trequired=true");
     expect(listProductChecks(PRODUCT_CHECKS)).toContain("p8.composio_safety_closure\tphase=P8\tplatform=any\trequired=true");

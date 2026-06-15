@@ -47,6 +47,22 @@ function runtime(): PluginRuntime {
         ],
       },
     },
+    {
+      package_dir: "/tmp/blue-tanuki/packages/blue-tanuki",
+      package_json: {
+        name: "@blue-tanuki/core",
+        version: "0.0.2",
+        main: "./dist/index.js",
+      },
+      manifest: {
+        name: "@blue-tanuki/core",
+        version: "0.0.2",
+        kind: "core",
+        entry: "./dist/index.js",
+        exports: {},
+        permissions: ["network:llm-provider"],
+      },
+    },
   ]);
 }
 
@@ -283,6 +299,45 @@ describe("settings surface", () => {
     expect(result.safe).toBe(true);
     expect(result.detail).not.toContain("candidate-secret-123456");
     expect(result.next_action).toContain("Check provider");
+  });
+
+  it("passes candidate timeout_ms into the LLM provider verification fetch", async () => {
+    const originalFetch = globalThis.fetch;
+    let providerSignalSeen = false;
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      providerSignalSeen = init?.signal instanceof AbortSignal;
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      });
+    }) as typeof fetch;
+    try {
+      const result = await verifyLlmProvisioning(
+        {
+          llm: {
+            provider: "openai-compatible",
+            model: "timeout-model",
+            endpoint: "https://example.test/v1",
+            timeout_ms: 20,
+          },
+        },
+        {
+          WEBCHAT_TOKEN: "webchat-token-123456",
+          WEBCHAT_RESUME_TOKEN: "resume-token-123456",
+          BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
+        },
+        runtime(),
+      );
+
+      expect(result.status).toBe("fail");
+      expect(result.changed).toBe(false);
+      expect(result.safe).toBe(true);
+      expect(result.secret_exposed).toBe(false);
+      expect(providerSignalSeen).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("exposes settings surface only when a settings token is configured", () => {
