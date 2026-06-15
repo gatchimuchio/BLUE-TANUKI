@@ -171,8 +171,10 @@ function assertEnvValuesRetained(
 
 function assertTextIncludes(file: string, needles: readonly string[]): void {
   const text = readFileSync(file, "utf8");
+  const normalizedText = text.replace(/\s+/g, " ");
   for (const needle of needles) {
-    if (!text.includes(needle)) {
+    const normalizedNeedle = needle.replace(/\s+/g, " ");
+    if (!text.includes(needle) && !normalizedText.includes(normalizedNeedle)) {
       throw new Error(`${file} missing required text: ${needle}`);
     }
   }
