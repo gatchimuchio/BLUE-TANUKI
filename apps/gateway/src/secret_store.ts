@@ -149,16 +149,34 @@ function powershellCommand(): string {
   return process.env.BLUE_TANUKI_POWERSHELL ?? "powershell.exe";
 }
 
+function powershellDpapiEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  // pwsh-launched CI can pass a PSModulePath that breaks Windows PowerShell module loading.
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === "psmodulepath") delete env[key];
+  }
+  return env;
+}
+
+function dpapiScript(commands: readonly string[]): string {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "Import-Module Microsoft.PowerShell.Security -ErrorAction Stop",
+    ...commands,
+  ].join("; ");
+}
+
 function protectWithDpapi(plaintext: string): string {
-  const script = [
+  const script = dpapiScript([
     "$plain = [Console]::In.ReadToEnd()",
     "$secure = ConvertTo-SecureString -String $plain -AsPlainText -Force",
     "ConvertFrom-SecureString -SecureString $secure",
-  ].join("; ");
+  ]);
   const result = spawnSync(
     powershellCommand(),
     ["-NoProfile", "-NonInteractive", "-Command", script],
     {
+      env: powershellDpapiEnv(),
       input: plaintext,
       encoding: "utf8",
       windowsHide: true,
@@ -175,16 +193,17 @@ function protectWithDpapi(plaintext: string): string {
 }
 
 function unprotectWithDpapi(protectedValue: string): string {
-  const script = [
+  const script = dpapiScript([
     "$cipher = [Console]::In.ReadToEnd()",
     "$secure = ConvertTo-SecureString -String $cipher",
     "$credential = New-Object System.Management.Automation.PSCredential('blue-tanuki', $secure)",
     "$credential.GetNetworkCredential().Password",
-  ].join("; ");
+  ]);
   const result = spawnSync(
     powershellCommand(),
     ["-NoProfile", "-NonInteractive", "-Command", script],
     {
+      env: powershellDpapiEnv(),
       input: protectedValue,
       encoding: "utf8",
       windowsHide: true,

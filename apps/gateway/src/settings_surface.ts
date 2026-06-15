@@ -17,6 +17,7 @@ import type { PluginRuntime } from "./plugin_loader.js";
 import {
   applySettingsPatch,
   protectLlmApiKeyForEnvFile,
+  type SettingsSecretStorageOptions,
   type SettingsSecretStorageResult,
   verifyLlmProvisioning,
 } from "./control_center/setup/api_settings.js";
@@ -29,6 +30,8 @@ export interface SettingsSurfaceOptions {
   env?: NodeJS.ProcessEnv;
   plugins: PluginRuntime;
 }
+
+export interface SettingsEnvFileUpdateOptions extends SettingsSecretStorageOptions {}
 
 export interface SettingsSnapshot {
   schema_version: 1;
@@ -234,6 +237,7 @@ export function buildSettingsSnapshot(
 export async function updateSettingsEnvFile(
   body: Record<string, unknown>,
   env: Env,
+  opts: SettingsEnvFileUpdateOptions = {},
 ): Promise<{
   output_path: string;
   backup_path?: string;
@@ -250,7 +254,7 @@ export async function updateSettingsEnvFile(
   const fileEnv = await readEnvFileEnv(target);
   const baseEnv = { ...env, ...fileEnv };
   const nextConfig = applySettingsPatch(setupConfigFromEnv(baseEnv), body);
-  const secretStorage = protectLlmApiKeyForEnvFile(nextConfig, target, baseEnv);
+  const secretStorage = protectLlmApiKeyForEnvFile(nextConfig, target, baseEnv, opts);
   const writeResult = await writeEnvFileAtomic(target, renderSetupEnvFile(nextConfig), {
     mode: 0o600,
     backup: true,

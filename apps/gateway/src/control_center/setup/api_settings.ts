@@ -7,6 +7,7 @@ import {
   llmApiKeyForProvider,
   secretRefKey,
   storeLlmApiKeySecret,
+  type SecretProtector,
   type LlmSecretStoreResult,
 } from "../../secret_store.js";
 import {
@@ -38,6 +39,11 @@ export interface SettingsSecretStorageResult {
   used_for_authority: false;
   evidence_source: readonly ("CONFIG" | "EXTERNAL_EVIDENCE")[];
   detail: string;
+}
+
+export interface SettingsSecretStorageOptions {
+  platform?: NodeJS.Platform;
+  protector?: SecretProtector;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -234,8 +240,10 @@ export function protectLlmApiKeyForEnvFile(
   config: BlueTanukiSetupConfig,
   envFilePath: string,
   env: Env,
-  platform: NodeJS.Platform = process.platform,
+  opts: SettingsSecretStorageOptions | NodeJS.Platform = {},
 ): SettingsSecretStorageResult {
+  const options = typeof opts === "string" ? { platform: opts } : opts;
+  const platform = options.platform ?? process.platform;
   const key = llmApiKeyForProvider(config.llm.provider);
   if (!key || !config.llm.api_key) {
     return {
@@ -264,6 +272,8 @@ export function protectLlmApiKeyForEnvFile(
     stored = storeLlmApiKeySecret(key, config.llm.api_key, {
       envFilePath,
       env,
+      platform,
+      protector: options.protector,
     });
   } catch (error) {
     throw new Error(

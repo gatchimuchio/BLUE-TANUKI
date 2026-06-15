@@ -268,6 +268,11 @@ async function resolveManifestEntry(
   throw new Error(`${manifest.name}: entry not found at ${entry}`);
 }
 
+async function importPluginModule(entry: string): Promise<PluginModule> {
+  const importEntry = process.platform === "win32" ? await fs.realpath(entry) : entry;
+  return await import(/* @vite-ignore */ pathToFileURL(importEntry).href) as PluginModule;
+}
+
 function verifyExportBindings(plugin: WorkspacePlugin): void {
   if (!plugin.module) return;
   for (const [key, exportName] of Object.entries(plugin.manifest.exports)) {
@@ -315,7 +320,7 @@ export async function loadWorkspacePlugins(
         manifest,
         opts.allow_ts_fallback ?? true,
       );
-      plugin.module = await import(pathToFileURL(entry).href) as PluginModule;
+      plugin.module = await importPluginModule(entry);
     }
     verifyExportBindings(plugin);
     plugins.push(plugin);

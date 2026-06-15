@@ -15,6 +15,15 @@ import {
   renderSetupEnvFile,
 } from "../src/setup_config.js";
 
+const fakeSecretProtector = {
+  protect: (plaintext: string) => Buffer.from(`protected:${plaintext}`, "utf8").toString("base64url"),
+  unprotect: (protectedValue: string) => {
+    const decoded = Buffer.from(protectedValue, "base64url").toString("utf8");
+    if (!decoded.startsWith("protected:")) throw new Error("bad test secret");
+    return decoded.slice("protected:".length);
+  },
+};
+
 function runtime(): PluginRuntime {
   return new PluginRuntime("/tmp/blue-tanuki", [
     {
@@ -131,6 +140,7 @@ describe("settings surface", () => {
           paths: { file_root: path.join(dir, "files") },
         },
         { BLUE_TANUKI_ENV_FILE: envFile },
+        { platform: "linux" },
       );
 
       expect(result.restart_required).toBe(true);
@@ -158,6 +168,44 @@ describe("settings surface", () => {
       expect(raw).toContain("BLUE_TANUKI_APPROVAL_MODE=ask_every_time");
       const backupRaw = await fs.readFile(result.backup_path!, "utf8");
       expect(backupRaw).toContain("LLM_BACKEND=stub");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stores Windows LLM settings secrets as refs without plaintext fallback", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-settings-secret-"));
+    try {
+      const envFile = path.join(dir, "blue-tanuki.env");
+      const config = createDefaultSetupConfig({ base_dir: path.join(dir, "data") });
+      await fs.writeFile(envFile, renderSetupEnvFile(config), "utf8");
+
+      const result = await updateSettingsEnvFile(
+        {
+          llm: {
+            provider: "openrouter",
+            model: "openrouter/model",
+            api_key: "openrouter-secret",
+          },
+        },
+        { BLUE_TANUKI_ENV_FILE: envFile },
+        { platform: "win32", protector: fakeSecretProtector },
+      );
+
+      expect(result.secret_storage.llm_api_key).toMatchObject({
+        status: "stored",
+        key: "OPENROUTER_API_KEY",
+        storage: "win32_dpapi_current_user",
+        os_protected: true,
+        used_for_authority: false,
+      });
+      const raw = await fs.readFile(envFile, "utf8");
+      expect(raw).toContain("OPENROUTER_API_KEY_REF=win32-dpapi-current-user:file:");
+      expect(raw).not.toContain("OPENROUTER_API_KEY=openrouter-secret");
+      expect(raw).not.toContain("openrouter-secret");
+
+      const secretRaw = await fs.readFile(path.join(dir, "secrets", "openrouter_api_key.dpapi"), "utf8");
+      expect(secretRaw).not.toContain("openrouter-secret");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

@@ -1280,7 +1280,9 @@ describe("built-in tools", () => {
 
       expect(result.cwd).toBe(".");
       expect(result.exit_code).toBe(0);
-      expect(result.stdout.replace(/\\/g, "/")).toContain(dir.replace(/\\/g, "/"));
+      expect(result.stdout.replace(/\\/g, "/")).toContain(
+        (await fs.realpath(dir)).replace(/\\/g, "/"),
+      );
       expect(result.stderr).toContain("warn");
       expect(result.timed_out).toBe(false);
     } finally {
