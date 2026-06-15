@@ -16,6 +16,9 @@ It is evidence only; it does not activate GA, public claims, or authority.
 `scripts/smoke_windows_installed.ts` must emit these markers on Windows:
 
 - `install_result=pass`
+- `source_tree_setup_guidance_result=pass`
+- `root_source_entrypoint_result=pass`
+- `installer_zip_setup_result=pass`
 - `launch_result=pass`
 - `gui_result=pass`
 - `first_message_result=pass`
@@ -44,6 +47,12 @@ setup still must not enable autostart by default.
 The Defender / SmartScreen check verifies packaged SHA-256 and unsigned-package
 guidance. It does not claim Microsoft SmartScreen reputation, code signing, or a
 signed native installer.
+
+The source-tree guidance check verifies that direct execution of
+`install/windows/product/BlueTanukiSetup.cmd` from source does not expose raw
+package-layout errors and points the operator to root `INSTALL_WINDOWS.cmd`.
+The root entrypoint check verifies that source zip users have a build/package
+fallback path when no installer zip is present.
 
 The approval flow check verifies installed WebChat approval API token separation.
 It does not make the UI an authority path.

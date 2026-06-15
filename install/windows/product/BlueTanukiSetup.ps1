@@ -12,8 +12,58 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Fail($Message) {
-  Write-Error $Message
+  Write-Host ""
+  Write-Host "BLUE-TANUKI setup failed." -ForegroundColor Red
+  Write-Host $Message
   exit 1
+}
+
+function Fail-SourceTreeSetup($MissingEntries) {
+  Write-Host ""
+  Write-Host "This setup script must be run from the packaged Windows installer zip."
+  Write-Host "You appear to be running it from the source tree or an incomplete package."
+  Write-Host ""
+  if ($MissingEntries.Count -gt 0) {
+    Write-Host "Missing packaged installer entries:"
+    foreach ($entry in $MissingEntries) {
+      Write-Host "  - $entry"
+    }
+    Write-Host ""
+  }
+  Write-Host "Recommended:"
+  Write-Host "  Run INSTALL_WINDOWS.cmd from the repository root."
+  Write-Host ""
+  Write-Host "Or build the installer:"
+  Write-Host "  corepack enable"
+  Write-Host "  corepack prepare pnpm@9.12.0 --activate"
+  Write-Host "  pnpm install --frozen-lockfile"
+  Write-Host "  pnpm build"
+  Write-Host "  pnpm package:windows"
+  Write-Host ""
+  Write-Host "Then extract:"
+  Write-Host "  release/windows/blue-tanuki-*-windows-x64-installer.zip"
+  Write-Host ""
+  Write-Host "and run:"
+  Write-Host "  BlueTanukiSetup.cmd"
+  exit 1
+}
+
+function Assert-PackagedInstallerRoot($PackageRoot) {
+  $requiredEntries = @(
+    "app",
+    "runtime",
+    "launcher",
+    "windows-installer-manifest.json"
+  )
+  $missing = @()
+  foreach ($entry in $requiredEntries) {
+    if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $entry))) {
+      $missing += $entry
+    }
+  }
+  if ($missing.Count -gt 0) {
+    Fail-SourceTreeSetup $missing
+  }
 }
 
 function Normalize-Path($Path) {
@@ -66,7 +116,7 @@ function Stop-ExistingResident($Root) {
 
 function Copy-DirectoryContents($Source, $Destination) {
   if (-not (Test-Path -LiteralPath $Source)) {
-    Fail "required package directory missing: $Source"
+    Fail "Packaged installer content is incomplete. Missing directory: $Source"
   }
   New-Item -ItemType Directory -Force -Path $Destination | Out-Null
   Get-ChildItem -Force -LiteralPath $Source | ForEach-Object {
@@ -201,12 +251,13 @@ function Write-InstallMetadata($InstallRootResolved, $DataRootResolved, $Version
 $packageRoot = Split-Path -Parent $PSCommandPath
 $sourceApp = Join-Path $packageRoot "app"
 $sourceLaunchers = Join-Path $packageRoot "launcher"
+$manifestPath = Join-Path $packageRoot "windows-installer-manifest.json"
+Assert-PackagedInstallerRoot $packageRoot
 $installRootResolved = Assert-SafeTarget $InstallRoot "InstallRoot"
 $dataRootResolved = Assert-SafeTarget $DataRoot "DataRoot"
 $envFile = Join-Path $dataRootResolved "blue-tanuki.env"
 $dataDir = Join-Path $dataRootResolved "data"
 $logDir = Join-Path $dataRootResolved "logs"
-$manifestPath = Join-Path $packageRoot "windows-installer-manifest.json"
 $version = "unknown"
 if (Test-Path -LiteralPath $manifestPath) {
   $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json

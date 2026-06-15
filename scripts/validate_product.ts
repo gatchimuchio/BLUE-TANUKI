@@ -1009,6 +1009,9 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
   const pass =
     run.exit_code === 0 &&
     log.includes("windows_installed_smoke=pass") &&
+    log.includes("source_tree_setup_guidance_result=pass") &&
+    log.includes("root_source_entrypoint_result=pass") &&
+    log.includes("installer_zip_setup_result=pass") &&
     log.includes("install_result=pass") &&
     log.includes("launch_result=pass") &&
     log.includes("gui_result=pass") &&
@@ -1028,7 +1031,7 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
   return {
     status: pass ? "pass" : "fail",
     summary: pass
-      ? "Windows installed-app smoke passed install/repair/reboot-persistence/port-conflict/start/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/SmartScreen-guidance/uninstall"
+      ? "Windows installed-app smoke passed source-tree guidance/root entrypoint/installer setup/install/repair/reboot-persistence/port-conflict/start/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/SmartScreen-guidance/uninstall"
       : `Windows installed-app smoke failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
     raw_log: log,
     log_excerpt: excerpt(log),

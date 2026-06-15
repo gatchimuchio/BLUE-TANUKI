@@ -434,6 +434,55 @@ async function main(): Promise<void> {
   let stopped = false;
   let uninstalled = false;
   try {
+    const sourceTreeGuidance = runExpectingStatus("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(process.cwd(), "install/windows/product/BlueTanukiSetup.ps1"),
+      "-InstallRoot",
+      path.join(work, "BadSourceInstallRoot"),
+      "-DataRoot",
+      path.join(work, "BadSourceDataRoot"),
+      "-NoLaunch",
+    ], process.cwd(), 1, "source-tree product setup guidance", 60_000);
+    if (!sourceTreeGuidance.includes("This setup script must be run from the packaged Windows installer zip.")) {
+      throw new Error("source-tree product setup did not explain packaged-installer requirement");
+    }
+    if (!sourceTreeGuidance.includes("INSTALL_WINDOWS.cmd")) {
+      throw new Error("source-tree product setup did not point to root INSTALL_WINDOWS.cmd");
+    }
+    if (sourceTreeGuidance.includes("required package directory missing")) {
+      throw new Error("source-tree product setup exposed raw missing package directory error");
+    }
+    console.log("source_tree_setup_guidance_result=pass");
+
+    const emptyReleaseDir = path.join(work, "empty-release");
+    mkdirSync(emptyReleaseDir, { recursive: true });
+    const rootEntrypointDryRun = runExpectingStatus("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(process.cwd(), "INSTALL_WINDOWS.ps1"),
+      "-DryRun",
+      "-ReleaseDir",
+      emptyReleaseDir,
+      "-WorkRoot",
+      path.join(work, "entrypoint-dry-run"),
+      "-NoLaunch",
+    ], process.cwd(), 0, "root source entrypoint dry-run", 60_000);
+    if (!rootEntrypointDryRun.includes("would_build_installer=true")) {
+      throw new Error("root source entrypoint did not choose build/package path when installer zip was absent");
+    }
+    if (!rootEntrypointDryRun.includes("would_run=pnpm package:windows")) {
+      throw new Error("root source entrypoint did not include package:windows in dry-run build path");
+    }
+    if (!rootEntrypointDryRun.includes("root_source_entrypoint_dry_run=pass")) {
+      throw new Error("root source entrypoint dry-run marker missing");
+    }
+    console.log("root_source_entrypoint_result=pass");
+
     expandArchive(artifact, packageDir);
     assertTextIncludes(path.join(packageDir, "app", "docs", "WINDOWS_INSTALLER_GUIDE.md"), [
       "Microsoft Defender SmartScreen",
@@ -459,6 +508,7 @@ async function main(): Promise<void> {
       "-NoLaunch",
     ], packageDir, "installer setup", 180_000);
     setupComplete = true;
+    console.log("installer_zip_setup_result=pass");
 
     launcher = path.join(installRoot, "BlueTanukiLauncher.ps1");
     const envFile = path.join(dataRoot, "blue-tanuki.env");
@@ -767,6 +817,9 @@ async function main(): Promise<void> {
     uninstalled = true;
 
     console.log("windows_installed_smoke=pass");
+    console.log("source_tree_setup_guidance_result=pass");
+    console.log("root_source_entrypoint_result=pass");
+    console.log("installer_zip_setup_result=pass");
     console.log("install_result=pass");
     console.log("launch_result=pass");
     console.log("gui_result=pass");

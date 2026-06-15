@@ -104,10 +104,6 @@ function defaultArtifact(): string {
   return path.join(root, "release/windows", `blue-tanuki-${pkg.version}-windows-x64-installer.zip`);
 }
 
-function artifactBase(file: string): string {
-  return file.slice(0, -path.extname(file).length);
-}
-
 function sha256File(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
@@ -225,15 +221,28 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
   if (!existsSync(archive)) {
     throw new Error(`missing Windows installer artifact: ${archive}`);
   }
-  const base = artifactBase(archive);
-  const shaFile = `${base}.sha256`;
-  const manifestFile = `${base}.manifest.json`;
+  const shaFile = `${archive}.sha256`;
+  const manifestFile = `${archive}.manifest.json`;
+  const installReadmeFile = path.join(path.dirname(archive), "README_INSTALL_WINDOWS.txt");
   if (!existsSync(shaFile)) throw new Error(`missing sha256 sidecar: ${shaFile}`);
   if (!existsSync(manifestFile)) throw new Error(`missing manifest sidecar: ${manifestFile}`);
+  if (!existsSync(installReadmeFile)) throw new Error(`missing Windows install README: ${installReadmeFile}`);
   const actualSha = sha256File(archive);
   const sidecarSha = readFileSync(shaFile, "utf8").trim().split(/\s+/)[0];
   if (sidecarSha !== actualSha) throw new Error("sha256 sidecar does not match artifact");
   assertManifest(readManifest(manifestFile), archive, actualSha);
+  const installReadme = readFileSync(installReadmeFile, "utf8");
+  for (const needle of [
+    "Extract the installer zip",
+    "Run BlueTanukiSetup.cmd",
+    "Do not run install/windows/product/BlueTanukiSetup.cmd from the source tree",
+    "SHA-256",
+    "Run anyway",
+  ]) {
+    if (!installReadme.includes(needle)) {
+      throw new Error(`README_INSTALL_WINDOWS.txt missing required text: ${needle}`);
+    }
+  }
 
   const entries = listZipEntries(archive);
   const entrySet = new Set(entries);
@@ -253,6 +262,8 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
     "post-install doctor",
     "blue-tanuki-install.json",
     "data_root",
+    "This setup script must be run from the packaged Windows installer zip.",
+    "INSTALL_WINDOWS.cmd",
   ]);
   requireSourceText("install/windows/product/BlueTanukiLauncher.ps1", [
     "Get-ControlCenterUrl",

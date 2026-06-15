@@ -311,6 +311,22 @@ function sha256File(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
+function windowsReadmeInstallText(version: string): string {
+  const archive = `blue-tanuki-${version}-windows-x64-installer.zip`;
+  return [
+    "BLUE-TANUKI Windows install",
+    "",
+    "1. Extract the installer zip.",
+    "2. Run BlueTanukiSetup.cmd from the extracted installer folder.",
+    "3. Do not run install/windows/product/BlueTanukiSetup.cmd from the source tree.",
+    "4. If Microsoft Defender SmartScreen appears, verify the SHA-256 sidecar first, then choose More info > Run anyway only when the hash matches.",
+    "",
+    `Installer zip: ${archive}`,
+    `SHA-256 sidecar: ${archive}.sha256`,
+    "",
+  ].join("\n");
+}
+
 async function main(): Promise<void> {
   const pkg = readPackage();
   const nodeVersion = argValue("--node-version") ?? DEFAULT_NODE_VERSION;
@@ -372,10 +388,14 @@ async function main(): Promise<void> {
   zipDirectory(packageRoot, outFile);
   const sha256 = sha256File(outFile);
   const archiveStat = await stat(outFile);
-  const base = outFile.slice(0, -".zip".length);
-  await writeFile(`${base}.sha256`, `${sha256}  ${path.basename(outFile)}\n`, "utf8");
+  const legacyBase = outFile.slice(0, -".zip".length);
+  const shaFile = `${outFile}.sha256`;
+  const manifestFile = `${outFile}.manifest.json`;
+  await rm(`${legacyBase}.sha256`, { force: true });
+  await rm(`${legacyBase}.manifest.json`, { force: true });
+  await writeFile(shaFile, `${sha256}  ${path.basename(outFile)}\n`, "utf8");
   await writeFile(
-    `${base}.manifest.json`,
+    manifestFile,
     `${JSON.stringify({
       ...manifest,
       archive: {
@@ -383,12 +403,17 @@ async function main(): Promise<void> {
         size_bytes: archiveStat.size,
         sha256,
       },
-      sha256_file: `${path.basename(base)}.sha256`,
+      sha256_file: `${path.basename(outFile)}.sha256`,
     }, null, 2)}\n`,
     "utf8",
   );
+  const readmeInstall = path.join(path.dirname(outFile), "README_INSTALL_WINDOWS.txt");
+  await writeFile(readmeInstall, windowsReadmeInstallText(pkg.version), "utf8");
   console.log(`windows_installer=${outFile}`);
   console.log(`sha256=${sha256}`);
+  console.log(`sha256_file=${shaFile}`);
+  console.log(`manifest_file=${manifestFile}`);
+  console.log(`windows_install_readme=${readmeInstall}`);
   console.log("unsigned_installer=true");
   console.log("bundled_node_runtime=true");
   console.log("user_requires_node_pnpm_git=false");

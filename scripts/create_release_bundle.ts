@@ -29,6 +29,8 @@ const INCLUDED_PATHS = [
   ".gitignore",
   "CHANGELOG.md",
   "Dockerfile",
+  "INSTALL_WINDOWS.cmd",
+  "INSTALL_WINDOWS.ps1",
   "README.md",
   "deploy",
   "docker-compose.yml",
@@ -46,6 +48,8 @@ const INCLUDED_PATHS = [
 
 const REQUIRED_PATHS = [
   "install/README.md",
+  "INSTALL_WINDOWS.cmd",
+  "INSTALL_WINDOWS.ps1",
   "install/linux/install.sh",
   "install/linux/uninstall.sh",
   "install/windows/product/BlueTanukiSetup.ps1",
@@ -81,6 +85,8 @@ const REQUIRED_PATHS = [
 ] as const;
 
 const INSTALLER_PATHS = [
+  "INSTALL_WINDOWS.cmd",
+  "INSTALL_WINDOWS.ps1",
   "install/linux/install.sh",
   "install/linux/uninstall.sh",
   "install/windows/product/BlueTanukiSetup.cmd",

@@ -8,7 +8,31 @@ Support scope and remaining RC limitations are fixed in [docs/SUPPORT_BOUNDARY.m
 
 ## 1. Windows installer package
 
-Windows 一般ユーザー向けの経路は source/dev run ではなく installer-first である。
+Windows 一般ユーザー向けの経路は installer-first である。source tree 内の
+`install/windows/product/BlueTanukiSetup.cmd` は直接実行しない。
+
+導線A: ビルド済み installer zip を使う
+
+```text
+1. blue-tanuki-*-windows-x64-installer.zip を取得
+2. zip を展開
+3. 展開先直下の BlueTanukiSetup.cmd を double-click
+4. Start Menu から BLUE-TANUKI を起動
+5. http://127.0.0.1:8787/app の Control Center で Conversation / WebChat を使う
+```
+
+導線B: source zip から使う
+
+```text
+1. source zip を展開
+2. root の INSTALL_WINDOWS.cmd を double-click
+```
+
+`INSTALL_WINDOWS.cmd` は `release/windows/*windows-x64-installer.zip` があれば
+それを展開して packaged setup を実行する。zip がなければ Corepack/pnpm
+準備、install、build、package、verify を行い、生成された installer zip を
+展開して setup に進む。失敗時は `.codex-tmp/windows-install-entrypoint/install.log`
+を案内する。
 
 開発側で package を作る:
 
@@ -16,15 +40,6 @@ Windows 一般ユーザー向けの経路は source/dev run ではなく install
 pnpm build
 pnpm package:windows
 pnpm package:windows:verify
-```
-
-ユーザー側:
-
-```text
-1. release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip を展開
-2. BlueTanukiSetup.cmd を double-click
-3. Start Menu から BLUE-TANUKI を起動
-4. http://127.0.0.1:8787/app の Control Center で Conversation / WebChat を使う
 ```
 
 この package は bundled Windows Node runtime を含む。ユーザーに Node.js、

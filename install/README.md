@@ -46,6 +46,10 @@ User flow:
 4. Use Conversation / WebChat in the Control Center.
 ```
 
+Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree.
+For a source zip, run root `INSTALL_WINDOWS.cmd`; it uses an existing installer
+zip or builds `package:windows` and then runs the packaged setup.
+
 The package bundles Windows Node.js `22.14.0`, installs to
 `%LOCALAPPDATA%\Programs\BlueTanuki`, stores env/settings/logs under
 `%APPDATA%\BlueTanuki`, creates Start Menu shortcuts, and registers current-user

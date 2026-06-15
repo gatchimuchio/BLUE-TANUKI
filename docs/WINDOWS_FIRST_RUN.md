@@ -5,7 +5,8 @@ development.
 
 ## Before Install
 
-The Windows package is unsigned. Before running `BlueTanukiSetup.cmd`, verify the
+The Windows package is unsigned. Before running `BlueTanukiSetup.cmd` from the
+extracted installer folder, verify the
 zip digest against the release `.sha256` sidecar:
 
 ```powershell
@@ -18,7 +19,7 @@ sidecar. A mismatch means the package must not be run.
 
 ## First Launch
 
-1. Install with `BlueTanukiSetup.cmd`.
+1. Install with `BlueTanukiSetup.cmd` from the extracted installer folder.
 2. Start `BLUE-TANUKI` from the Start Menu.
 3. The launcher starts the local resident gateway.
 4. The browser opens `http://127.0.0.1:8787/app`.

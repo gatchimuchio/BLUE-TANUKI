@@ -22,10 +22,31 @@ Development strategy: GUI Shell is a reference LLM-readable responsibility subst
 
 ## Quick Start
 
-### Windows installer package
+### Windows users
 
-For Windows users who should not touch Node.js, pnpm, Git, PowerShell setup
-scripts, or repository layout:
+Do not run `install/windows/product/BlueTanukiSetup.cmd` directly from a source
+tree. That script is the payload entrypoint inside the packaged installer zip.
+
+Path A: prebuilt installer zip
+
+1. Get `blue-tanuki-*-windows-x64-installer.zip` from the GitHub Release or
+   `release/windows/`.
+2. Extract the zip.
+3. Run `BlueTanukiSetup.cmd` from the extracted installer folder.
+
+Path B: source zip
+
+1. Extract the source zip.
+2. Run `INSTALL_WINDOWS.cmd` from the repository root.
+
+`INSTALL_WINDOWS.cmd` uses an existing `release/windows/*windows-x64-installer.zip`
+when present. If no installer zip exists, it enables Corepack, prepares
+`pnpm@9.12.0`, installs dependencies, builds, packages, verifies, extracts the
+generated installer zip, and runs `BlueTanukiSetup.cmd`.
+
+### Build a Windows installer package
+
+For developers preparing the Windows artifact:
 
 ```
 pnpm build
@@ -33,8 +54,8 @@ pnpm package:windows
 pnpm package:windows:verify
 ```
 
-This produces an unsigned Windows installer package under `release/windows/`.
-The user extracts it and double-clicks `BlueTanukiSetup.cmd`; the installed app
+This produces an unsigned Windows installer package and sidecars under
+`release/windows/`, including `README_INSTALL_WINDOWS.txt`. The installed app
 uses a bundled Windows Node runtime, creates Start Menu shortcuts, opens the
 Control Center, and preserves user data under `%APPDATA%\BlueTanuki`.
 

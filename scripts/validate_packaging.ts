@@ -57,6 +57,20 @@ function main(): void {
   requireIncludes("install/README.md", installReadme, "bundles Windows Node.js");
   requireIncludes("install/README.md", installReadme, "Start Menu shortcuts");
   requireIncludes("install/README.md", installReadme, "does not silently enable autostart");
+  requireIncludes("install/README.md", installReadme, "INSTALL_WINDOWS.cmd");
+  requireIncludes("install/README.md", installReadme, "Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree");
+
+  const rootWindowsCmd = read("INSTALL_WINDOWS.cmd");
+  requireIncludes("INSTALL_WINDOWS.cmd", rootWindowsCmd, "INSTALL_WINDOWS.ps1");
+
+  const rootWindowsPs = read("INSTALL_WINDOWS.ps1");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "blue-tanuki-*-windows-x64-installer.zip");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "corepack");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "pnpm install");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "pnpm package:windows");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "pnpm package:windows:verify");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "root_source_entrypoint_dry_run=pass");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Log:");
 
   const windowsWorkflow = read(".github/workflows/ci.yml");
   requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "windows-product");
@@ -74,6 +88,11 @@ function main(): void {
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "not a signed MSI/EXE");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Get-FileHash");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Repair / Reinstall");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "INSTALL_WINDOWS.cmd");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "README_INSTALL_WINDOWS.txt");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "GitHub Release Artifact Policy");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "GitHub source zip is developer source");
+  requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree");
 
   const windowsFirstRun = read("docs/WINDOWS_FIRST_RUN.md");
   requireIncludes("docs/WINDOWS_FIRST_RUN.md", windowsFirstRun, "Conversation / WebChat");
@@ -88,6 +107,8 @@ function main(): void {
   requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "HDS authority not modified");
   requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "Windows runtime install smoke must be run on Windows");
   requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, ".sha256");
+  requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "README_INSTALL_WINDOWS.txt");
+  requireIncludes("docs/WINDOWS_PACKAGING_AUDIT.md", windowsPackagingAudit, "Source zip is developer source");
 
   const windowsUninstall = read("docs/WINDOWS_UNINSTALL.md");
   requireIncludes("docs/WINDOWS_UNINSTALL.md", windowsUninstall, "Uninstall\\BlueTanuki");
@@ -167,6 +188,9 @@ function main(): void {
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "post-install doctor");
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Expand-Archive");
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "BLUE-TANUKI Safe Mode");
+  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "This setup script must be run from the packaged Windows installer zip.");
+  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Run INSTALL_WINDOWS.cmd from the repository root.");
+  requireNotIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "required package directory missing");
 
   const winProductLauncher = read("install/windows/product/BlueTanukiLauncher.ps1");
   requireIncludes("install/windows/product/BlueTanukiLauncher.ps1", winProductLauncher, "Get-ControlCenterUrl");
@@ -190,14 +214,21 @@ function main(): void {
   requireIncludes("scripts/package_windows.ts", packageWindows, "win-x64.zip");
   requireIncludes("scripts/package_windows.ts", packageWindows, "requires_node_pnpm_git_from_user: false");
   requireIncludes("scripts/package_windows.ts", packageWindows, "installer_autostart: false");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "README_INSTALL_WINDOWS.txt");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "const shaFile = `${outFile}.sha256`");
 
   const verifyWindowsPackage = read("scripts/verify_windows_package.ts");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "verifyWindowsPackage");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "GUI-Shell");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "Start Menu");
+  requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "README_INSTALL_WINDOWS.txt");
+  requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "const shaFile = `${archive}.sha256`");
 
   const smokeWindowsInstalled = read("scripts/smoke_windows_installed.ts");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "windows_runtime_smoke=skipped");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "source_tree_setup_guidance_result=pass");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "root_source_entrypoint_result=pass");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "installer_zip_setup_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "first_message_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "repair_install_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "crash_recovery_result=pass");
@@ -246,6 +277,8 @@ function main(): void {
 
   const releaseBundle = read("scripts/create_release_bundle.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "CORE_RELEASE_PATHS");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.cmd");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.ps1");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/hds-brain");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/channel-webchat");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/channel-telegram");
@@ -275,6 +308,8 @@ function main(): void {
 
   const releaseVerify = read("scripts/verify_release_bundle.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "sha256");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_WINDOWS.cmd");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_WINDOWS.ps1");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "manifest");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "core_release_paths");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "EXTRACTED_RELEASE_COMMANDS");

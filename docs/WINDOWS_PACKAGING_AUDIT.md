@@ -10,6 +10,7 @@ This audit records the current Windows packaging boundary.
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.sha256
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.manifest.json
+release/windows/README_INSTALL_WINDOWS.txt
 ```
 
 The package contains:
@@ -32,6 +33,7 @@ The package contains:
 - Start Menu and uninstall registration source text,
 - explicit owner autostart commands and default-disabled autostart boundary,
 - SHA-256 sidecar and manifest availability,
+- `README_INSTALL_WINDOWS.txt` availability and source-tree warning,
 - no `.env`, `.npmrc`, private key, `.blue-tanuki`, `.git`, or `GUI-Shell` entries,
 - manifest boundaries:
   - unsigned installer,
@@ -63,6 +65,11 @@ The user does not run:
 - repository PowerShell setup scripts,
 - Node.js installers.
 
+Source zip is developer source. End users should receive the installer zip from
+GitHub Releases or `release/windows/`. Do not run `install/windows/product/BlueTanukiSetup.cmd`
+from the source tree; run root `INSTALL_WINDOWS.cmd` instead when starting from
+source.
+
 ## Security / Authority
 
 Packaging does not alter:
@@ -84,5 +91,8 @@ intent only.
   the `.sha256` sidecar.
 - It is a zip-delivered installer package, not a signed MSI/EXE.
 - Windows runtime install smoke must be run on Windows.
+- GitHub Releases for Windows users must attach the installer zip, `.sha256`,
+  and `README_INSTALL_WINDOWS.txt`; source zip alone is not the end-user
+  Windows artifact.
 - Automatic update is not implemented.
 - Desktop shortcut is optional through installer argument, not a GUI checkbox.

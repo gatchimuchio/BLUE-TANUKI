@@ -54,6 +54,8 @@ export const EXTRACTED_RELEASE_COMMANDS: readonly ExtractedReleaseCommand[] = [
 ] as const;
 
 const REQUIRED_ARCHIVE_PATHS = [
+  "INSTALL_WINDOWS.cmd",
+  "INSTALL_WINDOWS.ps1",
   "install/README.md",
   "install/linux/install.sh",
   "install/linux/uninstall.sh",

@@ -21,7 +21,30 @@ The package build also emits:
 ```text
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.sha256
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.manifest.json
+release/windows/README_INSTALL_WINDOWS.txt
 ```
+
+## User Entry Points
+
+Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree.
+That file is copied to the root of the packaged installer zip and expects the
+packaged `app/`, `runtime/`, `launcher/`, and manifest entries next to it.
+
+Path A: use the built installer zip.
+
+1. Download or receive `blue-tanuki-*-windows-x64-installer.zip`.
+2. Extract the zip.
+3. Run `BlueTanukiSetup.cmd` from the extracted installer folder.
+
+Path B: use a source zip.
+
+1. Extract the source zip.
+2. Run root `INSTALL_WINDOWS.cmd`.
+
+The root entrypoint uses an existing `release/windows/*windows-x64-installer.zip`
+when present. If no installer zip exists, it runs Corepack/pnpm install, build,
+`package:windows`, `package:windows:verify`, then extracts the generated
+installer zip and runs packaged setup.
 
 ## Scope
 
@@ -168,3 +191,15 @@ pnpm smoke:windows-installed
 `smoke:windows-installed` performs artifact structure verification on non-Windows
 hosts and full installed-app smoke on Windows. The Windows evidence markers are
 defined in [WINDOWS_EVIDENCE_PACK.md](WINDOWS_EVIDENCE_PACK.md).
+
+## GitHub Release Artifact Policy
+
+GitHub source zip is developer source. End users should use the Windows
+installer zip. Every GitHub Release intended for Windows users must attach:
+
+- `blue-tanuki-*-windows-x64-installer.zip`,
+- `blue-tanuki-*-windows-x64-installer.zip.sha256`,
+- `README_INSTALL_WINDOWS.txt`.
+
+The manifest sidecar remains release evidence. Public GA claims still require
+owner GO and must remain blocked before that decision.

@@ -70,8 +70,8 @@ only console output.
 
 | ID | evidence source | 内容 |
 |---|---|---|
-| `p3.package_windows_verify` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/package_windows.ts` を実行してWindows installer zipを生成し、`scripts/verify_windows_package.ts` でmanifest、sha256、zip contents、secret exclusion、authority boundary metadataを検証する |
-| `p3.windows_installed_smoke` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/smoke_windows_installed.ts` をWindows上で実行し、install→repair install設定保持→明示autostart/HKCU Run entryによるreboot persistence→port競合検出→常駐起動→GUI/WebChat first message→approval API token separation→audit tamper検出→resident kill→watchdog crash recovery→stop→doctor→restart→safe mode→stop→Defender/SmartScreen向けSHA-256 guidance同梱→uninstallを検証する。marker一覧は `docs/WINDOWS_EVIDENCE_PACK.md` に固定する |
+| `p3.package_windows_verify` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/package_windows.ts` を実行してWindows installer zip、sha256、manifest、`README_INSTALL_WINDOWS.txt`を生成し、`scripts/verify_windows_package.ts` でmanifest、sha256、README、zip contents、secret exclusion、authority boundary metadataを検証する |
+| `p3.windows_installed_smoke` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/smoke_windows_installed.ts` をWindows上で実行し、source tree product setup誤起動時のfriendly guidance、root `INSTALL_WINDOWS.ps1` dry-run build/package導線、installer zip展開後の`BlueTanukiSetup.cmd` install、repair install設定保持、明示autostart/HKCU Run entryによるreboot persistence、port競合検出、常駐起動、GUI/WebChat first message、approval API token separation、audit tamper検出、resident kill、watchdog crash recovery、stop、doctor、restart、safe mode、Defender/SmartScreen向けSHA-256 guidance同梱、uninstallを検証する。marker一覧は `docs/WINDOWS_EVIDENCE_PACK.md` に固定する |
 
 ## P4 Checks
 
