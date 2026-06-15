@@ -34,6 +34,12 @@ export interface ExecutorDeps {
   llm: LLMBackend;
   tools: ToolRegistry;
   /**
+   * Required authority instance for approving commands for this Executor.
+   * A proof object alone is not execution authority; the command must be
+   * branded by the same authority instance captured here.
+   */
+  approval_authority: ExecutorApprovalAuthority;
+  /**
    * Optional. When omitted, channel_send falls back to console.log
    * (Phase 0/1 behavior). When present, channel_send is routed via the
    * dispatcher and translates the result into ExecuteFeedback.
@@ -58,6 +64,7 @@ export interface ExecutorDeps {
 }
 
 const APPROVED_COMMAND_BRAND: unique symbol = Symbol("blue_tanuki.executor.approved_command.v1");
+const APPROVAL_AUTHORITY_IDS = new WeakMap<ExecutorApprovalAuthority, symbol>();
 
 export type ExecutorApprovalSource = "approval_gate" | "human_final_review";
 export type ExecutorApprovalDecision = "allow" | "approve";
@@ -74,13 +81,34 @@ export interface ExecutorApprovalProof {
   reason: string;
 }
 
+interface ApprovedCommandRecord {
+  proof: ExecutorApprovalProof;
+  authority_id: symbol;
+}
+
 export type ApprovedCommand = ExecuteCommand & {
-  readonly [APPROVED_COMMAND_BRAND]: ExecutorApprovalProof;
+  readonly [APPROVED_COMMAND_BRAND]: ApprovedCommandRecord;
 };
 
-export function approveCommandForExecution(
+export interface ExecutorApprovalAuthority {
+  approve(command: ExecuteCommand, proof: ExecutorApprovalProof): ApprovedCommand;
+}
+
+export function createExecutorApprovalAuthority(): ExecutorApprovalAuthority {
+  const authorityId = Symbol("blue_tanuki.executor.approval_authority.instance");
+  const authority = Object.freeze({
+    approve(command: ExecuteCommand, proof: ExecutorApprovalProof): ApprovedCommand {
+      return approveCommandForExecution(command, proof, authorityId);
+    },
+  });
+  APPROVAL_AUTHORITY_IDS.set(authority, authorityId);
+  return authority;
+}
+
+function approveCommandForExecution(
   command: ExecuteCommand,
   proof: ExecutorApprovalProof,
+  authority_id: symbol,
 ): ApprovedCommand {
   if (proof.upstream_commit_hash !== command.upstream_decision.commit_hash) {
     throw new Error("approval proof commit hash does not match command upstream decision");
@@ -96,7 +124,7 @@ export function approveCommandForExecution(
   }
   const approved = command as ApprovedCommand;
   Object.defineProperty(approved, APPROVED_COMMAND_BRAND, {
-    value: { ...proof },
+    value: { proof: { ...proof }, authority_id },
     enumerable: false,
     configurable: false,
     writable: false,
@@ -336,10 +364,14 @@ export class Executor {
   }
 
   private assertExecutionApproved(cmd: ApprovedCommand): void {
-    const proof = approvalProofFromCommand(cmd);
-    if (!proof) {
+    const record = approvalProofFromCommand(cmd);
+    if (!record) {
       throw new Error("Executor rejected unapproved command: ApprovedCommand proof is required");
     }
+    if (record.authority_id !== authorityIdFor(this.deps.approval_authority)) {
+      throw new Error("Executor rejected command: approval authority mismatch");
+    }
+    const { proof } = record;
     if (proof.upstream_commit_hash !== cmd.upstream_decision.commit_hash) {
       throw new Error("Executor rejected command: approval proof commit hash mismatch");
     }
@@ -359,9 +391,17 @@ export class Executor {
   }
 }
 
-function approvalProofFromCommand(command: ExecuteCommand): ExecutorApprovalProof | null {
-  const proof = (command as { [APPROVED_COMMAND_BRAND]?: ExecutorApprovalProof })[APPROVED_COMMAND_BRAND];
+function approvalProofFromCommand(command: ExecuteCommand): ApprovedCommandRecord | null {
+  const proof = (command as { [APPROVED_COMMAND_BRAND]?: ApprovedCommandRecord })[APPROVED_COMMAND_BRAND];
   return proof ?? null;
+}
+
+function authorityIdFor(authority: ExecutorApprovalAuthority): symbol {
+  const id = APPROVAL_AUTHORITY_IDS.get(authority);
+  if (!id) {
+    throw new Error("Executor approval authority was not created by createExecutorApprovalAuthority");
+  }
+  return id;
 }
 
 function commandRequiresHumanFinalReview(command: ExecuteCommand): boolean {

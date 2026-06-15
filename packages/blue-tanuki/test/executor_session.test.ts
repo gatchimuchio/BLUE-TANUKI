@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
-import { Executor, approveCommandForExecution } from "../src/executor.js";
+import { Executor, createExecutorApprovalAuthority } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { MemorySessionStore } from "../src/sessions/index.js";
@@ -12,6 +12,8 @@ const stubUpstream = {
   commit_hash: "h",
   commit_decision: "ASSERT" as const,
 };
+
+const executorApproval = createExecutorApprovalAuthority();
 
 function llmCmd(content: string, session_id?: string): ExecuteCommand {
   return {
@@ -40,7 +42,7 @@ function llmCmdWithBackendHint(backend_hint: string): ExecuteCommand {
 }
 
 function approved(command: ExecuteCommand) {
-  return approveCommandForExecution(command, {
+  return executorApproval.approve(command, {
     source: "approval_gate",
     decision: "allow",
     approved_by: "test-owner",
@@ -77,7 +79,7 @@ class CapturingBackend implements LLMBackend {
 describe("Executor — SessionStore integration", () => {
   it("no session_store: payload passes through unchanged (back-compat)", async () => {
     const llm = new CapturingBackend();
-    const exec = new Executor({ llm, tools: new ToolRegistry() });
+    const exec = new Executor({ approval_authority: executorApproval, llm, tools: new ToolRegistry() });
     await exec.execute(approved(llmCmd("hello")));
     expect(llm.seen).toHaveLength(1);
     expect(llm.seen[0].messages).toEqual([{ role: "user", content: "hello" }]);
@@ -86,7 +88,7 @@ describe("Executor — SessionStore integration", () => {
   it("session_store but no session_id: payload passes through unchanged", async () => {
     const llm = new CapturingBackend();
     const store = new MemorySessionStore();
-    const exec = new Executor({ llm, tools: new ToolRegistry(), session_store: store });
+    const exec = new Executor({ approval_authority: executorApproval, llm, tools: new ToolRegistry(), session_store: store });
     await exec.execute(approved(llmCmd("hi")));
     expect(llm.seen[0].messages).toEqual([{ role: "user", content: "hi" }]);
     expect(await store.size()).toBe(0);
@@ -95,7 +97,7 @@ describe("Executor — SessionStore integration", () => {
   it("session_id with empty history: prepends nothing, appends user+assistant", async () => {
     const llm = new CapturingBackend();
     const store = new MemorySessionStore();
-    const exec = new Executor({ llm, tools: new ToolRegistry(), session_store: store });
+    const exec = new Executor({ approval_authority: executorApproval, llm, tools: new ToolRegistry(), session_store: store });
     await exec.execute(approved(llmCmd("first", "webchat:bob")));
     expect(llm.seen[0].messages).toEqual([{ role: "user", content: "first" }]);
     const hist = await store.getMessages("webchat:bob");
@@ -108,7 +110,7 @@ describe("Executor — SessionStore integration", () => {
   it("second turn: prepends history before the new user message", async () => {
     const llm = new CapturingBackend();
     const store = new MemorySessionStore();
-    const exec = new Executor({ llm, tools: new ToolRegistry(), session_store: store });
+    const exec = new Executor({ approval_authority: executorApproval, llm, tools: new ToolRegistry(), session_store: store });
 
     await exec.execute(approved(llmCmd("first", "s")));
     await exec.execute(approved(llmCmd("second", "s")));
@@ -133,6 +135,7 @@ describe("Executor — SessionStore integration", () => {
     const llm = new CapturingBackend();
     const store = new MemorySessionStore();
     const exec = new Executor({
+      approval_authority: executorApproval,
       llm,
       tools: new ToolRegistry(),
       session_store: store,
@@ -165,7 +168,7 @@ describe("Executor — SessionStore integration", () => {
       },
     };
     const store = new MemorySessionStore();
-    const exec = new Executor({ llm: failing, tools: new ToolRegistry(), session_store: store });
+    const exec = new Executor({ approval_authority: executorApproval, llm: failing, tools: new ToolRegistry(), session_store: store });
     const fb = await exec.execute(approved(llmCmd("never-persist", "s")));
     expect(fb.status).toBe("failed");
     expect(await store.getMessages("s")).toEqual([]);
@@ -174,6 +177,7 @@ describe("Executor — SessionStore integration", () => {
   it("StubBackend output is captured under session history", async () => {
     const store = new MemorySessionStore();
     const exec = new Executor({
+      approval_authority: executorApproval,
       llm: new StubBackend(),
       tools: new ToolRegistry(),
       session_store: store,
@@ -188,7 +192,7 @@ describe("Executor — SessionStore integration", () => {
 
   it("passes backend_hint/model/temperature through to the LLM boundary", async () => {
     const llm = new CapturingBackend();
-    const exec = new Executor({ llm, tools: new ToolRegistry() });
+    const exec = new Executor({ approval_authority: executorApproval, llm, tools: new ToolRegistry() });
     await exec.execute(approved(llmCmdWithBackendHint("openai-compatible")));
 
     expect(llm.seen[0]!).toMatchObject({

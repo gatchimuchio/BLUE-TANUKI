@@ -11,7 +11,7 @@ import {
   ToolRegistry,
   MemorySessionStore,
   JsonFileSessionStore,
-  approveCommandForExecution,
+  createExecutorApprovalAuthority,
   createLogger,
   type SessionStore,
 } from "@blue-tanuki/core";
@@ -119,7 +119,8 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   });
   const failureMemory = buildFailureMemoryStore(process.env);
   const approval = buildApprovalRuntime(process.env);
-  const executor = new Executor({ llm, tools, session_store });
+  const executorApproval = createExecutorApprovalAuthority();
+  const executor = new Executor({ llm, tools, approval_authority: executorApproval, session_store });
 
   const inbound: InboundRequest = normalizeInboundRequestForAuthority({
     id: randomUUID(),
@@ -216,7 +217,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   }
   hds.onCommandLifecycle(command.id, "approval_approved", { actor: inbound.user, reason: approvalEval.reason });
 
-  const approvedCommand = approveCommandForExecution(command, {
+  const approvedCommand = executorApproval.approve(command, {
     source: "approval_gate",
     decision: "allow",
     approved_by: inbound.user,

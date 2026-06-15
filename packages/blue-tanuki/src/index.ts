@@ -3,8 +3,9 @@ export * from "./tools/index.js";
 export * from "./sessions/index.js";
 export {
   Executor,
-  approveCommandForExecution,
+  createExecutorApprovalAuthority,
   type ApprovedCommand,
+  type ExecutorApprovalAuthority,
   type ExecutorDeps,
   type ExecutorApprovalProof,
   type ChannelDispatcher,

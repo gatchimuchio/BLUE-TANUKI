@@ -3,7 +3,7 @@ import path from "node:path";
 
 const ROOTS = ["apps", "packages", "install"];
 const MIN_TEST_FILES = 50;
-const MIN_TEST_CASES = 400;
+const MIN_TEST_CASES = 650;
 
 function walk(dir) {
   try {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
-import { Executor, approveCommandForExecution, type ChannelDispatcher } from "../src/executor.js";
+import { Executor, createExecutorApprovalAuthority, type ChannelDispatcher } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
 import { ToolRegistry, echoTool } from "../src/tools/registry.js";
 
@@ -10,6 +10,8 @@ const stubUpstream = {
   commit_hash: "hash-123",
   commit_decision: "ASSERT" as const,
 };
+
+const executorApproval = createExecutorApprovalAuthority();
 
 function channelSendCmd(channel: string, content = "hi"): ExecuteCommand {
   return {
@@ -46,7 +48,7 @@ function shellExecCmd(): ExecuteCommand {
 }
 
 function approved(command: ExecuteCommand, risk: "low" | "medium" | "high" = "low") {
-  return approveCommandForExecution(command, {
+  return executorApproval.approve(command, {
     source: risk === "high" ? "human_final_review" : "approval_gate",
     decision: risk === "high" ? "approve" : "allow",
     approved_by: "test-owner",
@@ -69,6 +71,7 @@ describe("Executor.executeChannelSend — dispatcher path", () => {
       },
     };
     const exec = new Executor({
+      approval_authority: executorApproval,
       llm: new StubBackend(),
       tools: new ToolRegistry(),
       dispatcher,
@@ -94,6 +97,7 @@ describe("Executor.executeChannelSend — dispatcher path", () => {
       },
     };
     const exec = new Executor({
+      approval_authority: executorApproval,
       llm: new StubBackend(),
       tools: new ToolRegistry(),
       dispatcher,
@@ -118,6 +122,7 @@ describe("Executor.executeChannelSend — dispatcher path", () => {
     };
     try {
       const exec = new Executor({
+        approval_authority: executorApproval,
         llm: new StubBackend(),
         tools: new ToolRegistry(),
       });
@@ -135,6 +140,7 @@ describe("Executor.executeToolCall - permission envelope", () => {
     const tools = new ToolRegistry();
     tools.register(echoTool);
     const exec = new Executor({
+      approval_authority: executorApproval,
       llm: new StubBackend(),
       tools,
     });
@@ -150,6 +156,7 @@ describe("Executor.executeToolCall - permission envelope", () => {
     const tools = new ToolRegistry();
     tools.register(echoTool);
     const exec = new Executor({
+      approval_authority: executorApproval,
       llm: new StubBackend(),
       tools,
     });
@@ -170,6 +177,7 @@ describe("Executor.executeToolCall - permission envelope", () => {
     const tools = new ToolRegistry();
     tools.register(echoTool);
     const exec = new Executor({
+      approval_authority: executorApproval,
       llm: new StubBackend(),
       tools,
     });
@@ -189,6 +197,7 @@ describe("Executor.executeToolCall - permission envelope", () => {
     const tools = new ToolRegistry();
     tools.register(echoTool);
     const exec = new Executor({
+      approval_authority: executorApproval,
       llm: new StubBackend(),
       tools,
     });
@@ -202,13 +211,40 @@ describe("Executor.executeToolCall - permission envelope", () => {
     expect(fb.error).toMatch(/ApprovedCommand proof is required/);
   });
 
+  it("fails closed when approval proof was minted by a different authority", async () => {
+    const otherApproval = createExecutorApprovalAuthority();
+    const exec = new Executor({
+      approval_authority: executorApproval,
+      llm: new StubBackend(),
+      tools: new ToolRegistry(),
+    });
+    const command = channelSendCmd("legacy-authority-mismatch");
+    const foreignApproved = otherApproval.approve(command, {
+      source: "approval_gate",
+      decision: "allow",
+      approved_by: "test-owner",
+      approved_at_ms: 1,
+      upstream_commit_hash: command.upstream_decision.commit_hash,
+      operation: "channel_send",
+      risk: "medium",
+      final_review_required: false,
+      reason: "foreign authority",
+    });
+
+    const fb = await exec.execute(foreignApproved);
+
+    expect(fb.status).toBe("failed");
+    expect(fb.error).toMatch(/approval authority mismatch/);
+  });
+
   it("re-verifies human final-review proof for high-risk tools", async () => {
     const exec = new Executor({
+      approval_authority: executorApproval,
       llm: new StubBackend(),
       tools: new ToolRegistry(),
     });
     const command = shellExecCmd();
-    const brandedButNotHumanReviewed = approveCommandForExecution(command, {
+    const brandedButNotHumanReviewed = executorApproval.approve(command, {
       source: "approval_gate",
       decision: "allow",
       approved_by: "test-owner",

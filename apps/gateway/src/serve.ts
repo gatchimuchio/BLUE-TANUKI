@@ -18,7 +18,7 @@ import type {
 import {
   Executor,
   ToolRegistry,
-  approveCommandForExecution,
+  createExecutorApprovalAuthority,
   createLogger,
 } from "@blue-tanuki/core";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
@@ -97,6 +97,11 @@ import {
   projectApprovalHistoryEntry,
   projectCompleteHistoryEntry,
 } from "./serve_projection.js";
+import {
+  DAILY_OPERATOR_REQUIRED_PERMISSIONS,
+  DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS,
+  WRITING_OPERATOR_REQUIRED_PERMISSIONS,
+} from "./serve_operator_permissions.js";
 
 /**
  * Gateway serve mode.
@@ -119,75 +124,6 @@ const teamsLog = createLogger({ scope: "teams" });
 const lineLog = createLogger({ scope: "line" });
 const telegramLog = createLogger({ scope: "telegram" });
 const cronLog = createLogger({ scope: "cron" });
-
-const DAILY_OPERATOR_REQUIRED_PERMISSIONS = [
-  "tool:schedule.list",
-  "tool:schedule.create",
-  "tool:schedule.update",
-  "tool:schedule.delete",
-  "schedule:read",
-  "schedule:create",
-  "schedule:update",
-  "schedule:delete",
-  "tool:gmail.read",
-  "tool:google.calendar.read",
-  "tool:google.drive.read",
-  "tool:gmail.write",
-  "tool:google.calendar.write",
-  "tool:google.drive.write",
-  "network:googleapis.com",
-  "secrets:GOOGLE_ACCESS_TOKEN",
-  "secrets:GMAIL_ACCESS_TOKEN",
-  "secrets:GOOGLE_CALENDAR_ACCESS_TOKEN",
-  "secrets:GOOGLE_DRIVE_ACCESS_TOKEN",
-  "google:gmail.read",
-  "google:calendar.read",
-  "google:drive.read",
-  "google:gmail.write",
-  "google:calendar.write",
-  "google:drive.write",
-  "channel:send",
-  "external:send",
-  "email:send",
-] as const;
-const DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS = [
-  "tool:file.search",
-  "fs:read",
-  "tool:file.write",
-  "tool:file.edit",
-  "fs:write",
-  "tool:github.read",
-  "tool:github.write",
-  "network:github.com",
-  "secrets:GITHUB_TOKEN",
-  "github:issue.write",
-  "github:pr.write",
-  "github:comment.write",
-  "tool:browser.snapshot",
-  "tool:browser.automation",
-  "browser:snapshot",
-  "browser:act",
-  "network:http",
-  "tool:shell.exec",
-  "shell:exec",
-] as const;
-const WRITING_OPERATOR_REQUIRED_PERMISSIONS = [
-  "tool:file.search",
-  "fs:read",
-  "tool:file.write",
-  "tool:file.edit",
-  "fs:write",
-  "tool:gmail.write",
-  "tool:google.drive.write",
-  "network:googleapis.com",
-  "secrets:GOOGLE_ACCESS_TOKEN",
-  "secrets:GMAIL_ACCESS_TOKEN",
-  "secrets:GOOGLE_DRIVE_ACCESS_TOKEN",
-  "google:gmail.write",
-  "google:drive.write",
-  "external:send",
-  "email:send",
-] as const;
 
 interface PendingApproval {
   command: ExecuteCommand;
@@ -405,6 +341,7 @@ export async function serve(): Promise<ServeShutdown> {
   // Forward declarations: resume/approval closures resolve at call time.
   // eslint-disable-next-line prefer-const
   let executor: Executor;
+  const executorApproval = createExecutorApprovalAuthority();
   let webchat: WebChatChannel;
 
   function recordCompleteHistory(input: CompleteHistoryAppendInput): CompleteHistoryEntry | null {
@@ -805,7 +742,7 @@ export async function serve(): Promise<ServeShutdown> {
     if (!executionEvaluation) {
       throw new Error("approval evaluation proof is required before executor execution");
     }
-    const approvedCommand = approveCommandForExecution(cmd, {
+    const approvedCommand = executorApproval.approve(cmd, {
       source: opts.skip_approval ? "human_final_review" : "approval_gate",
       decision: opts.skip_approval ? "approve" : "allow",
       approved_by: actor,
@@ -1487,6 +1424,7 @@ export async function serve(): Promise<ServeShutdown> {
   executor = new Executor({
     llm,
     tools,
+    approval_authority: executorApproval,
     dispatcher,
     session_store: buildSessionStore(plugins),
   });

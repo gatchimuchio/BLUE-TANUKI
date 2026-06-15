@@ -45,7 +45,7 @@ import {
   LLMRegistry,
   Executor,
   ToolRegistry,
-  approveCommandForExecution,
+  createExecutorApprovalAuthority,
   composioStatus,
   invokeComposioExecute,
   type LLMBackend,
@@ -2520,7 +2520,8 @@ async function runComposioSafetyClosure(): Promise<CheckResult> {
       return { content: "unused", model: "fixture", tokens_used: 0 };
     },
   };
-  const executor = new Executor({ llm, tools });
+  const executorApproval = createExecutorApprovalAuthority();
+  const executor = new Executor({ llm, tools, approval_authority: executorApproval });
 
   hds.onAuthorityEvent("composio_execution_requested", {
     request_id: decisionLog.request_id,
@@ -2529,7 +2530,7 @@ async function runComposioSafetyClosure(): Promise<CheckResult> {
     reason: "validate_product_p8_pre_executor",
     evaluation: approval,
   });
-  const approvedCommand = approveCommandForExecution(command, {
+  const approvedCommand = executorApproval.approve(command, {
     source: "human_final_review",
     decision: "approve",
     approved_by: "owner",
