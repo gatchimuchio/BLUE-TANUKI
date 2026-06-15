@@ -223,6 +223,7 @@ The authority core never consumes downstream session history to make decisions. 
 * [docs/UPDATE_ROLLBACK_RUNBOOK.md](docs/UPDATE_ROLLBACK_RUNBOOK.md) — update, rollback, and recovery path
 * [docs/WINDOWS_INSTALLER_GUIDE.md](docs/WINDOWS_INSTALLER_GUIDE.md) — unsigned Windows installer package
 * [docs/WINDOWS_FIRST_RUN.md](docs/WINDOWS_FIRST_RUN.md) — installed Windows first run
+* [docs/WINDOWS_EVIDENCE_PACK.md](docs/WINDOWS_EVIDENCE_PACK.md) — Windows installed-app evidence markers
 * [docs/WINDOWS_PACKAGING_AUDIT.md](docs/WINDOWS_PACKAGING_AUDIT.md) — Windows packaging evidence
 * [docs/WINDOWS_UNINSTALL.md](docs/WINDOWS_UNINSTALL.md) — Windows uninstall and data preservation
 * [docs/v1.0-release-candidate.md](docs/v1.0-release-candidate.md) — release-candidate boundary

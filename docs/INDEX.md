@@ -95,6 +95,7 @@
 - [Known Limitations](KNOWN_LIMITATIONS.md)
 - [Windows Installer Guide](WINDOWS_INSTALLER_GUIDE.md)
 - [Windows First Run](WINDOWS_FIRST_RUN.md)
+- [Windows Evidence Pack](WINDOWS_EVIDENCE_PACK.md)
 - [Windows Packaging Audit](WINDOWS_PACKAGING_AUDIT.md)
 - [Windows Uninstall](WINDOWS_UNINSTALL.md)
 - [Credential Readiness Matrix](CREDENTIAL_READINESS_MATRIX.md)
@@ -114,6 +115,7 @@
 
 - [Portable Installer Guide](../install/README.md)
 - [Windows Installer Guide](WINDOWS_INSTALLER_GUIDE.md)
+- [Windows Evidence Pack](WINDOWS_EVIDENCE_PACK.md)
 - [Windows Packaging Audit](WINDOWS_PACKAGING_AUDIT.md)
 - [Windows Uninstall](WINDOWS_UNINSTALL.md)
 - [Phase 11-S9 Installer and Setup UX](phase11-s9-installer-setup-ux.md)

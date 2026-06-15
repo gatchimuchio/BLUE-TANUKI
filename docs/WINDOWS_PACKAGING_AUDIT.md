@@ -30,14 +30,24 @@ The package contains:
 - required runtime package entries,
 - bundled Node runtime declaration,
 - Start Menu and uninstall registration source text,
+- explicit owner autostart commands and default-disabled autostart boundary,
 - SHA-256 sidecar and manifest availability,
 - no `.env`, `.npmrc`, private key, `.blue-tanuki`, `.git`, or `GUI-Shell` entries,
 - manifest boundaries:
   - unsigned installer,
   - secrets excluded,
   - GUI Shell not modified,
-  - HDS authority not modified,
-  - autostart disabled by default.
+- HDS authority not modified,
+- autostart disabled by default.
+
+## Installed-App Evidence
+
+`pnpm smoke:windows-installed` verifies the installed app on Windows and emits
+the evidence markers listed in `docs/WINDOWS_EVIDENCE_PACK.md`, including
+install, launch, GUI first message, repair retention, explicit HKCU Run-entry
+reboot persistence, port conflict, approval API token separation, audit tamper
+failure, watchdog crash recovery, stop/doctor/restart, safe mode, SmartScreen
+guidance, and purge uninstall.
 
 ## Runtime Bundling
 

@@ -1,5 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import * as net from "node:net";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -157,6 +167,61 @@ function assertEnvValuesRetained(
       throw new Error(`repair install did not retain ${key}`);
     }
   }
+}
+
+function assertTextIncludes(file: string, needles: readonly string[]): void {
+  const text = readFileSync(file, "utf8");
+  for (const needle of needles) {
+    if (!text.includes(needle)) {
+      throw new Error(`${file} missing required text: ${needle}`);
+    }
+  }
+}
+
+function findBundledNode(installRoot: string): string {
+  const runtimeRoot = path.join(installRoot, "runtime");
+  const stack = [runtimeRoot];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    for (const entry of readdirSync(current)) {
+      const full = path.join(current, entry);
+      const stat = statSync(full);
+      if (stat.isDirectory()) {
+        stack.push(full);
+      } else if (entry.toLowerCase() === "node.exe") {
+        return full;
+      }
+    }
+  }
+  throw new Error(`bundled node.exe not found under ${runtimeRoot}`);
+}
+
+function writeTamperedAuditEnv(
+  sourceEnvFile: string,
+  sourceAuditDir: string,
+  targetRoot: string,
+): string {
+  const tamperAuditDir = path.join(targetRoot, "TamperedAudit");
+  mkdirSync(tamperAuditDir, { recursive: true });
+  const sourceAuditFile = path.join(sourceAuditDir, "audit.jsonl");
+  const targetAuditFile = path.join(tamperAuditDir, "audit.jsonl");
+  if (!existsSync(sourceAuditFile)) {
+    throw new Error(`audit file missing before tamper probe: ${sourceAuditFile}`);
+  }
+  copyFileSync(sourceAuditFile, targetAuditFile);
+  writeFileSync(targetAuditFile, `${readFileSync(targetAuditFile, "utf8")}\n{"tampered":true}\n`, "utf8");
+  const tamperEnvFile = path.join(targetRoot, "tampered-audit.env");
+  const escapedAuditDir = tamperAuditDir.replace(/\\/g, "\\\\");
+  const source = readFileSync(sourceEnvFile, "utf8");
+  const next = source.replace(
+    /^BLUE_TANUKI_AUDIT_DIR=.*$/m,
+    `BLUE_TANUKI_AUDIT_DIR="${escapedAuditDir}"`,
+  );
+  if (next === source) {
+    throw new Error("BLUE_TANUKI_AUDIT_DIR missing from installed env file");
+  }
+  writeFileSync(tamperEnvFile, next, "utf8");
+  return tamperEnvFile;
 }
 
 async function fetchWithTimeout(
@@ -353,6 +418,18 @@ async function main(): Promise<void> {
   let uninstalled = false;
   try {
     expandArchive(artifact, packageDir);
+    assertTextIncludes(path.join(packageDir, "app", "docs", "WINDOWS_INSTALLER_GUIDE.md"), [
+      "Microsoft Defender SmartScreen",
+      "SHA-256",
+      "Run anyway",
+      "Do not bypass a hash mismatch",
+    ]);
+    assertTextIncludes(path.join(packageDir, "app", "docs", "WINDOWS_PACKAGING_AUDIT.md"), [
+      "The package is unsigned",
+      "SmartScreen continuation requires operator-side SHA-256 verification",
+    ]);
+    console.log("defender_smartscreen_guidance_result=pass");
+
     run("cmd.exe", [
       "/d",
       "/s",
@@ -387,6 +464,66 @@ async function main(): Promise<void> {
       "BLUE_TANUKI_SETTINGS_TOKEN",
     ]);
     console.log("repair_install_result=pass");
+    const autostartEnv = {
+      BLUE_TANUKI_AUTOSTART_RUN_NAME: `BLUE-TANUKI-SMOKE-${process.pid}`,
+    };
+    const autostartInitial = runExpectingStatus("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      launcher,
+      "resident-autostart-status",
+    ], installRoot, 0, "launcher autostart status initial", 60_000, autostartEnv);
+    if (!autostartInitial.includes("autostart_status=disabled")) {
+      throw new Error("autostart should be disabled before explicit owner opt-in");
+    }
+    try {
+      const autostartEnabled = runExpectingStatus("powershell.exe", [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        launcher,
+        "resident-autostart-enable",
+      ], installRoot, 0, "launcher autostart enable", 60_000, autostartEnv);
+      if (!autostartEnabled.includes("autostart_status=enabled")) {
+        throw new Error("autostart enable output did not confirm enabled status");
+      }
+      const autostartStatus = runExpectingStatus("powershell.exe", [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        launcher,
+        "resident-autostart-status",
+      ], installRoot, 0, "launcher autostart status enabled", 60_000, autostartEnv);
+      if (!autostartStatus.includes("autostart_status=enabled")) {
+        throw new Error("autostart status did not observe HKCU Run entry");
+      }
+    } finally {
+      runExpectingStatus("powershell.exe", [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        launcher,
+        "resident-autostart-disable",
+      ], installRoot, 0, "launcher autostart disable", 60_000, autostartEnv);
+    }
+    const autostartDisabled = runExpectingStatus("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      launcher,
+      "resident-autostart-status",
+    ], installRoot, 0, "launcher autostart status disabled", 60_000, autostartEnv);
+    if (!autostartDisabled.includes("autostart_status=disabled")) {
+      throw new Error("autostart disable did not remove HKCU Run entry");
+    }
+    console.log("reboot_persistence_result=pass");
+
     const port = env.WEBCHAT_PORT ?? "8787";
     const portNumber = Number.parseInt(port, 10);
     if (!Number.isInteger(portNumber) || portNumber <= 0) {
@@ -448,6 +585,52 @@ async function main(): Promise<void> {
     if (!firstMessage.hello || !firstMessage.channelSend) {
       throw new Error(`first message smoke failed hello=${firstMessage.hello} channel_send=${firstMessage.channelSend}`);
     }
+    const resumeToken = env.WEBCHAT_RESUME_TOKEN;
+    if (!resumeToken) throw new Error("WEBCHAT_RESUME_TOKEN missing from installed env file");
+    const approvalWrongToken = await fetchWithTimeout(`http://127.0.0.1:${port}/approval`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+    }, FETCH_TIMEOUT_MS, "approval wrong-token GET");
+    if (approvalWrongToken.status !== 401) {
+      throw new Error(`/approval accepted inbound token: ${approvalWrongToken.status}`);
+    }
+    const approvalOk = await fetchWithTimeout(`http://127.0.0.1:${port}/approval`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${resumeToken}` },
+    }, FETCH_TIMEOUT_MS, "approval resume-token GET");
+    if (!approvalOk.ok) {
+      throw new Error(`/approval rejected resume token: ${approvalOk.status} ${await approvalOk.text()}`);
+    }
+    const approvalBody = await approvalOk.json() as { pending_approvals?: unknown };
+    if (!Array.isArray(approvalBody.pending_approvals)) {
+      throw new Error("/approval response did not include pending_approvals array");
+    }
+    console.log("approval_flow_result=pass");
+
+    const nodeExe = findBundledNode(installRoot);
+    run(nodeExe, [
+      "apps/gateway/dist/main.js",
+      "--audit-verify",
+      "--env-file",
+      envFile,
+    ], installRoot, "installed audit verify", 60_000);
+    const auditDir = env.BLUE_TANUKI_AUDIT_DIR;
+    if (!auditDir) throw new Error("BLUE_TANUKI_AUDIT_DIR missing from installed env file");
+    const tamperEnvFile = writeTamperedAuditEnv(envFile, auditDir, work);
+    const tamperOutput = runExpectingStatus(nodeExe, [
+      "apps/gateway/dist/main.js",
+      "--audit-verify",
+      "--env-file",
+      tamperEnvFile,
+    ], installRoot, 1, "installed audit tamper verify", 60_000);
+    if (
+      !tamperOutput.includes("BROKEN") &&
+      !tamperOutput.includes("chain_valid: false") &&
+      !tamperOutput.includes("invalid_entry_shape")
+    ) {
+      throw new Error("audit tamper verification did not report a broken chain");
+    }
+    console.log("audit_tamper_result=pass");
 
     const pidFile = path.join(dataRoot, "blue-tanuki.pid");
     const originalPid = readPidFile(pidFile);
@@ -572,9 +755,13 @@ async function main(): Promise<void> {
     console.log("gui_result=pass");
     console.log("first_message_result=pass");
     console.log("repair_install_result=pass");
+    console.log("reboot_persistence_result=pass");
     console.log("port_conflict_result=pass");
+    console.log("approval_flow_result=pass");
+    console.log("audit_tamper_result=pass");
     console.log("crash_recovery_result=pass");
     console.log("safe_mode_result=pass");
+    console.log("defender_smartscreen_guidance_result=pass");
     console.log("uninstall_result=pass");
   } finally {
     if (process.platform === "win32") {

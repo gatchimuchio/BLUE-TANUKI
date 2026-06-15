@@ -44,6 +44,8 @@ $stderrLog = Join-Path $logDir "blue-tanuki.err.log"
 $watchdogLog = Join-Path $logDir "blue-tanuki-watchdog.out.log"
 $watchdogErrLog = Join-Path $logDir "blue-tanuki-watchdog.err.log"
 $doctorLog = Join-Path $logDir "doctor.json"
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$runName = if ($env:BLUE_TANUKI_AUTOSTART_RUN_NAME) { $env:BLUE_TANUKI_AUTOSTART_RUN_NAME } else { "BLUE-TANUKI" }
 
 function Find-NodeExe {
   $runtimeRoot = Join-Path $installRoot "runtime"
@@ -418,6 +420,28 @@ function Open-Logs {
   Start-Process $logDir
 }
 
+function Enable-Autostart {
+  New-Item -Path $runKey -Force | Out-Null
+  $value = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" resident-start"
+  New-ItemProperty -Path $runKey -Name $runName -Value $value -PropertyType String -Force | Out-Null
+  Write-Host "autostart_status=enabled"
+  Write-Host "autostart_entry=HKCU\Software\Microsoft\Windows\CurrentVersion\Run\$runName"
+}
+
+function Disable-Autostart {
+  Remove-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue
+  Write-Host "autostart_status=disabled"
+}
+
+function Show-AutostartStatus {
+  $entry = Get-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue
+  if ($entry) {
+    Write-Host "autostart_status=enabled"
+  } else {
+    Write-Host "autostart_status=disabled"
+  }
+}
+
 switch ($Command.ToLowerInvariant()) {
   "open" { Open-ControlCenter }
   "start" { Start-Resident $false }
@@ -435,9 +459,15 @@ switch ($Command.ToLowerInvariant()) {
   "doctor-open" { Run-Doctor $true }
   "logs" { Open-Logs }
   "resident-logs" { Open-Logs }
+  "autostart-enable" { Enable-Autostart }
+  "resident-autostart-enable" { Enable-Autostart }
+  "autostart-disable" { Disable-Autostart }
+  "resident-autostart-disable" { Disable-Autostart }
+  "autostart-status" { Show-AutostartStatus }
+  "resident-autostart-status" { Show-AutostartStatus }
   "help" {
-    Write-Host "Usage: BlueTanukiLauncher.ps1 [open|start|safe-mode|stop|restart|status|doctor|doctor-open|logs|help]"
-    Write-Host "Autostart is opt-in only and is not enabled by this Windows installer package."
+    Write-Host "Usage: BlueTanukiLauncher.ps1 [open|start|safe-mode|stop|restart|status|doctor|doctor-open|logs|autostart-enable|autostart-disable|autostart-status|help]"
+    Write-Host "Autostart is opt-in only and is not enabled by install/setup."
   }
   default { Fail "unknown command: $Command" }
 }

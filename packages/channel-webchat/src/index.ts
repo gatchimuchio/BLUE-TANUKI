@@ -1,5 +1,7 @@
 export {
   WebChatChannel,
+} from "./webchat.js";
+export {
   type WebChatOptions,
   type WebChatRateLimits,
   type WebChatResumeContext,
@@ -30,7 +32,7 @@ export {
   type WebChatRecoverySurface,
   type WebChatOperatorSurface,
   type WebChatOperatorSurfaces,
-} from "./webchat.js";
+} from "./webchat_types.js";
 export {
   MemoryResumeApprovalTokenStore,
   type ResumeApprovalTokenStore,

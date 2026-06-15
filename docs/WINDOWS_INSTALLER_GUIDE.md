@@ -102,6 +102,20 @@ file. A normal repair install must not rotate `WEBCHAT_TOKEN`,
 - `BLUE-TANUKI Stop` stops the resident runtime.
 - `Uninstall BLUE-TANUKI` removes the app while preserving user data by default.
 
+## Explicit Autostart / Reboot Persistence
+
+Install and setup never enable autostart. Reboot persistence is available only
+after an explicit owner action through the launcher:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\BlueTanukiLauncher.ps1 resident-autostart-status
+powershell -ExecutionPolicy Bypass -File .\BlueTanukiLauncher.ps1 resident-autostart-enable
+powershell -ExecutionPolicy Bypass -File .\BlueTanukiLauncher.ps1 resident-autostart-disable
+```
+
+The Windows installed-app smoke uses a temporary Run-entry name and verifies the
+enable/status/disable loop before reporting `reboot_persistence_result=pass`.
+
 ## Port Conflicts and Safe Mode
 
 The launcher reads `WEBCHAT_HOST` and `WEBCHAT_PORT` from
@@ -152,4 +166,5 @@ pnpm smoke:windows-installed
 ```
 
 `smoke:windows-installed` performs artifact structure verification on non-Windows
-hosts and full installed-app smoke on Windows.
+hosts and full installed-app smoke on Windows. The Windows evidence markers are
+defined in [WINDOWS_EVIDENCE_PACK.md](WINDOWS_EVIDENCE_PACK.md).

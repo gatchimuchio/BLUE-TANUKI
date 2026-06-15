@@ -991,13 +991,17 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
     log.includes("doctor_result=pass") &&
     log.includes("restart_result=pass") &&
     log.includes("port_conflict_result=pass") &&
+    log.includes("reboot_persistence_result=pass") &&
+    log.includes("approval_flow_result=pass") &&
+    log.includes("audit_tamper_result=pass") &&
     log.includes("crash_recovery_result=pass") &&
     log.includes("safe_mode_result=pass") &&
+    log.includes("defender_smartscreen_guidance_result=pass") &&
     log.includes("uninstall_result=pass");
   return {
     status: pass ? "pass" : "fail",
     summary: pass
-      ? "Windows installed-app smoke passed install/repair/port-conflict/start/gui/message/crash-recovery/stop/doctor/restart/safe-mode/uninstall"
+      ? "Windows installed-app smoke passed install/repair/reboot-persistence/port-conflict/start/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/SmartScreen-guidance/uninstall"
       : `Windows installed-app smoke failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
     raw_log: log,
     log_excerpt: excerpt(log),
@@ -1013,8 +1017,12 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
       doctor_result: log.includes("doctor_result=pass"),
       restart_result: log.includes("restart_result=pass"),
       port_conflict_result: log.includes("port_conflict_result=pass"),
+      reboot_persistence_result: log.includes("reboot_persistence_result=pass"),
+      approval_flow_result: log.includes("approval_flow_result=pass"),
+      audit_tamper_result: log.includes("audit_tamper_result=pass"),
       crash_recovery_result: log.includes("crash_recovery_result=pass"),
       safe_mode_result: log.includes("safe_mode_result=pass"),
+      defender_smartscreen_guidance_result: log.includes("defender_smartscreen_guidance_result=pass"),
       uninstall_result: log.includes("uninstall_result=pass"),
     },
   };
