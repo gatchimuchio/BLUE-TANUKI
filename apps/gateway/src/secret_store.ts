@@ -142,7 +142,15 @@ function pathFromRef(ref: string): string {
   if (!ref.startsWith(SECRET_REF_PREFIX)) {
     throw new Error("unsupported secret ref format");
   }
-  return path.resolve(decodePath(ref.slice(SECRET_REF_PREFIX.length)));
+  const encoded = ref.slice(SECRET_REF_PREFIX.length);
+  if (!/^[A-Za-z0-9_-]+$/.test(encoded)) {
+    throw new Error("unsupported secret ref format");
+  }
+  const decoded = decodePath(encoded);
+  if (!path.isAbsolute(decoded)) {
+    throw new Error("unsupported secret ref path");
+  }
+  return path.resolve(decoded);
 }
 
 function powershellCommand(): string {

@@ -160,7 +160,7 @@ export interface ProductValidationResult {
 
 const PHASE_ORDER: ProductPhase[] = ["P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12", "P13"];
 const DEFAULT_TIMEOUT_MS = 120_000;
-const TSX = process.env.TSX_BIN ?? (process.platform === "win32" ? "tsx.cmd" : "tsx");
+const TSX_CLI_REL = path.join("node_modules", "tsx", "dist", "cli.mjs");
 
 const upstream = {
   frame_goal: "product-validation",
@@ -2759,8 +2759,8 @@ async function runChannelOperatorExtensionBoundary(ctx: CheckContext): Promise<C
 
 async function runNodeScript(ctx: CheckContext, scriptRel: string): Promise<CommandRunResult> {
   return ctx.runner({
-    command: TSX,
-    args: [scriptRel],
+    command: process.execPath,
+    args: [path.join(ctx.rootDir, TSX_CLI_REL), scriptRel],
     cwd: ctx.rootDir,
     env: { ...process.env },
   }, ctx.timeoutMs);

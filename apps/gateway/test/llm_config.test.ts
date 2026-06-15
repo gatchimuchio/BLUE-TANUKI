@@ -50,7 +50,7 @@ describe("buildLLMBackendFromEnv", () => {
     }).openrouter_configured).toBe(true);
   });
 
-  it("reports OpenRouter secret refs and refuses to resolve them off Windows", () => {
+  it("reports OpenRouter secret refs and refuses unsupported secret refs", () => {
     const cfg = describeLLMConfig({
       LLM_BACKEND: "openrouter",
       OPENROUTER_API_KEY_REF: "win32-dpapi-current-user:file:abc",
@@ -64,7 +64,7 @@ describe("buildLLMBackendFromEnv", () => {
         OPENROUTER_API_KEY_REF: "win32-dpapi-current-user:file:abc",
         OPENROUTER_MODEL: "openrouter/model",
       }),
-    ).toThrow(/Windows DPAPI/);
+    ).toThrow(process.platform === "win32" ? /unsupported secret ref path/ : /Windows DPAPI/);
   });
 
   it("fails closed when OpenRouter is selected without an API key", () => {
