@@ -5,7 +5,39 @@ const DangerousObjectKeySchema = z.string().refine(
   "dangerous object key is not allowed",
 );
 
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue | undefined };
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue | undefined };
+export type MetadataObject = Record<string, JsonValue | undefined>;
+
+const GATEWAY_INTERNAL_AUTHORITY_BRAND: unique symbol = Symbol("blue_tanuki.gateway_internal_authority.v1");
+
+export const RESERVED_EXTERNAL_METADATA_KEYS = [
+  "blue_tanuki.authority_context",
+  "blue_tanuki.actor_kind",
+  "blue_tanuki.trust_level",
+  "blue_tanuki.process_kind",
+  "blue_tanuki.operator_surface",
+  "blue_tanuki.channel_send",
+  "actor_kind",
+  "trust_level",
+  "process_kind",
+] as const;
+
+const RESERVED_EXTERNAL_METADATA_KEY_SET = new Set<string>(RESERVED_EXTERNAL_METADATA_KEYS);
+
+export interface GatewayInternalAuthorityMetadata extends MetadataObject {
+  "blue_tanuki.authority_context": "gateway_internal_v1";
+  "blue_tanuki.actor_kind"?: "owner" | "user" | "system" | "webhook" | "cron";
+  "blue_tanuki.trust_level"?: "owner" | "trusted" | "limited" | "untrusted";
+  "blue_tanuki.process_kind"?: "chat" | "tool" | "approval" | "cron" | "webhook" | "system";
+  "blue_tanuki.operator_surface"?: "writing" | "daily" | "developer";
+  "blue_tanuki.channel_send.channel"?: string;
+  "blue_tanuki.channel_send.target"?: string;
+  "blue_tanuki.channel_send.content"?: string;
+}
+
+export interface GatewayInternalInboundRequestInput extends Omit<InboundRequest, "metadata"> {
+  metadata: GatewayInternalAuthorityMetadata;
+}
 
 const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
@@ -221,7 +253,9 @@ export function parseInboundRequestAtBoundary(raw: unknown): InboundRequestBound
   try {
     return {
       ok: true,
-      request: normalizeInboundRequestForAuthority(parsed.data),
+      request: normalizeInboundRequestForAuthority(parsed.data, {
+        internal_authority_metadata: isGatewayInternalInboundRequest(raw),
+      }),
     };
   } catch (error) {
     return {
@@ -232,15 +266,50 @@ export function parseInboundRequestAtBoundary(raw: unknown): InboundRequestBound
   }
 }
 
-export function normalizeInboundRequestForAuthority(request: InboundRequest): InboundRequest {
-  return {
+export function normalizeInboundRequestForAuthority(
+  request: InboundRequest,
+  opts: { internal_authority_metadata?: boolean } = {},
+): InboundRequest {
+  const metadata = request.metadata
+    ? canonicalJsonObject(request.metadata, {
+        stripReservedAuthorityMetadata: opts.internal_authority_metadata !== true,
+      })
+    : undefined;
+  const normalized: InboundRequest = {
     id: normalizeScalar(request.id, "id"),
     channel: normalizeScalar(request.channel, "channel"),
     user: normalizeScalar(request.user, "user"),
     content: request.content.normalize("NFKC"),
     timestamp: request.timestamp,
-    ...(request.metadata ? { metadata: canonicalJsonObject(request.metadata) } : {}),
+    ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
+  return opts.internal_authority_metadata === true
+    ? markGatewayInternalInboundRequest(normalized)
+    : normalized;
+}
+
+export function createGatewayInternalInboundRequest(
+  request: GatewayInternalInboundRequestInput,
+): InboundRequest {
+  return normalizeInboundRequestForAuthority(request, {
+    internal_authority_metadata: true,
+  });
+}
+
+export function isGatewayInternalInboundRequest(value: unknown): boolean {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      (value as { [GATEWAY_INTERNAL_AUTHORITY_BRAND]?: unknown })[GATEWAY_INTERNAL_AUTHORITY_BRAND] === true,
+  );
+}
+
+export function metadataKeyReservedForInternalAuthority(key: string): boolean {
+  const normalized = key.normalize("NFKC").trim();
+  return (
+    RESERVED_EXTERNAL_METADATA_KEY_SET.has(normalized) ||
+    normalized.startsWith("blue_tanuki.channel_send.")
+  );
 }
 
 function normalizeScalar(value: string, field: string): string {
@@ -254,20 +323,26 @@ function normalizeScalar(value: string, field: string): string {
   return normalized;
 }
 
-function canonicalJsonObject(value: Record<string, JsonValue | undefined>): Record<string, JsonValue> {
+function canonicalJsonObject(
+  value: MetadataObject,
+  opts: { stripReservedAuthorityMetadata: boolean },
+): Record<string, JsonValue> {
   const out: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
   for (const [key, item] of Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) {
     if (item === undefined) continue;
     const normalizedKey = normalizeMetadataKey(key);
-    out[normalizedKey] = canonicalJsonValue(item);
+    if (opts.stripReservedAuthorityMetadata && metadataKeyReservedForInternalAuthority(normalizedKey)) {
+      continue;
+    }
+    out[normalizedKey] = canonicalJsonValue(item, opts);
   }
   return out;
 }
 
-function canonicalJsonValue(value: JsonValue): JsonValue {
+function canonicalJsonValue(value: JsonValue, opts: { stripReservedAuthorityMetadata: boolean }): JsonValue {
   if (typeof value === "string") return value.normalize("NFKC");
-  if (Array.isArray(value)) return value.map((item) => canonicalJsonValue(item));
-  if (value && typeof value === "object") return canonicalJsonObject(value);
+  if (Array.isArray(value)) return value.map((item) => canonicalJsonValue(item, opts));
+  if (value && typeof value === "object") return canonicalJsonObject(value, opts);
   return value;
 }
 
@@ -280,4 +355,14 @@ function normalizeMetadataKey(key: string): string {
     throw new Error(`metadata key is not allowed: ${normalized}`);
   }
   return normalized;
+}
+
+function markGatewayInternalInboundRequest(request: InboundRequest): InboundRequest {
+  Object.defineProperty(request, GATEWAY_INTERNAL_AUTHORITY_BRAND, {
+    value: true,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return request;
 }

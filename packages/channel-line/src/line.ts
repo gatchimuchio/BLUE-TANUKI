@@ -38,6 +38,8 @@ export interface LineOptions {
   transport?: LineTransport;
   /** Fetch injection for the built-in Messaging API transport. */
   fetch?: LineFetch;
+  /** Per-request Messaging API HTTP timeout. Default: 15000ms. */
+  request_timeout_ms?: number;
   retry?: LineRetryConfig | false;
   log?: (line: string) => void;
 }
@@ -82,6 +84,7 @@ export class LineChannel implements InboundChannel, OutboundChannel {
       this.transport = new LineMessagingTransport({
         channel_access_token: this.opts.channel_access_token,
         fetch: this.opts.fetch,
+        request_timeout_ms: this.opts.request_timeout_ms,
       });
     } else {
       this.silent = true;

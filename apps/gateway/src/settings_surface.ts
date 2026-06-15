@@ -166,6 +166,8 @@ export function buildSettingsSnapshot(
   plugins: PluginRuntime,
 ): SettingsSnapshot {
   const config = setupConfigFromEnv(env);
+  const composio = composioStatus(env);
+  const composioKeyConfigured = composio.configured || Boolean(envValue(env, "COMPOSIO_API_KEY_REF"));
   return {
     schema_version: 1,
     env_file: envFilePath(env) ?? null,
@@ -193,17 +195,19 @@ export function buildSettingsSnapshot(
       native_first: true,
       openrouter: {
         configured: Boolean(
-          envValue(env, "OPENROUTER_API_KEY") &&
+          envValue(env, "OPENROUTER_API_KEY", "OPENROUTER_API_KEY_REF") &&
             envValue(env, "OPENROUTER_MODEL", "LLM_MODEL"),
         ),
-        api_key_set: Boolean(envValue(env, "OPENROUTER_API_KEY")),
+        api_key_set: Boolean(envValue(env, "OPENROUTER_API_KEY", "OPENROUTER_API_KEY_REF")),
         model: envValue(env, "OPENROUTER_MODEL", "LLM_MODEL") ?? null,
         site_url: envValue(env, "OPENROUTER_SITE_URL") ?? null,
         app_title: envValue(env, "OPENROUTER_APP_TITLE") ?? null,
         used_for_authority: false,
       },
       composio: {
-        ...composioStatus(env),
+        ...composio,
+        configured: composioKeyConfigured,
+        connection_revoke_available: composio.connection_revoke_available || composioKeyConfigured,
         last_tool_call: null,
       },
     },

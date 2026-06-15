@@ -309,11 +309,12 @@ Google tokens fail before a request is sent.
 headless Chromium automation backend; it fetches public pages through
 `http.fetch` guards and returns bounded title/text/link extraction.
 
-`shell.exec` runs a bounded non-shell command (`cmd` plus `args[]`) under
+`shell.exec` runs a cwd-bounded non-shell spawn (`cmd` plus `args[]`) under
 `BLUE_TANUKI_SHELL_ROOT`. It is a final-review operation because it carries
 `shell:exec`; full access and reusable grants cannot bypass owner confirmation.
-The root constrains cwd resolution, not the operating system's full process
-authority.
+The root constrains cwd resolution only. It is not OS isolation and does not
+prevent the spawned process from reading cwd-external paths such as
+`/etc/passwd` unless a separate OS sandbox enforces that boundary.
 
 Detector input is normalized immediately before scoring. HDS-BRAIN keeps raw
 request content in the audit trace while scoring against NFKC-normalized content

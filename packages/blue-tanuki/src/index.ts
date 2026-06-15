@@ -3,7 +3,10 @@ export * from "./tools/index.js";
 export * from "./sessions/index.js";
 export {
   Executor,
+  approveCommandForExecution,
+  type ApprovedCommand,
   type ExecutorDeps,
+  type ExecutorApprovalProof,
   type ChannelDispatcher,
 } from "./executor.js";
 export {

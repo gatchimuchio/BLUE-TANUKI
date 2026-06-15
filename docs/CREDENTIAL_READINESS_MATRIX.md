@@ -2,6 +2,13 @@
 
 Secret values must never be printed in docs, logs, doctor output, runtime snapshots, or audit summaries. Length/status/digest-only reporting is acceptable where already implemented.
 
+Windows credential storage may use `*_REF` secret-store references for LLM and
+connector secrets, including OpenRouter, Composio, GitHub, Google, Telegram,
+Slack, Discord, Teams, and LINE credentials. The gateway resolves these refs at
+startup and fails closed if a ref cannot be unprotected. Raw env values remain
+supported for compatibility, but refs are the preferred storage path for
+connector credentials on Windows.
+
 | Credential / env | Required for | Secret class | Setup source | Current doctor check | Safe missing behavior | Failure message / symptom | Rotation notes |
 |---|---|---|---|---|---|---|---|
 | `WEBCHAT_TOKEN` | WebChat inbound, `/ws-ticket`, read-only Control Center APIs | bearer secret | `pnpm setup` or manual env | required, length-only | no | `WEBCHAT_TOKEN is required for serve mode` | rotate with restart; must differ from resume token |

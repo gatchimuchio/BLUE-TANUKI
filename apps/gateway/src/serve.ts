@@ -20,6 +20,7 @@ import type {
 import {
   Executor,
   ToolRegistry,
+  approveCommandForExecution,
   createLogger,
 } from "@blue-tanuki/core";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
@@ -84,6 +85,7 @@ import {
 import { buildRuntimeStatusSnapshot } from "./runtime_status.js";
 import { buildResidentNotificationsSnapshot } from "./resident_notifications.js";
 import { probeGatewaySelfHealth } from "./runtime_health.js";
+import { resolveAllSecretRefs } from "./secret_store.js";
 
 /**
  * Gateway serve mode.
@@ -266,6 +268,7 @@ function unavailableOperatorSurface(surface: "daily" | "developer" | "writing"):
 }
 
 export async function serve(): Promise<ServeShutdown> {
+  Object.assign(process.env, resolveAllSecretRefs(process.env));
   const plugins = await loadPluginRuntime();
   plugins.enforceLLMConfig(process.env);
   plugins.enforceSessionConfig(process.env);
@@ -788,7 +791,21 @@ export async function serve(): Promise<ServeShutdown> {
         },
       });
     }
-    const fb = await executor.execute(cmd);
+    if (!executionEvaluation) {
+      throw new Error("approval evaluation proof is required before executor execution");
+    }
+    const approvedCommand = approveCommandForExecution(cmd, {
+      source: opts.skip_approval ? "human_final_review" : "approval_gate",
+      decision: opts.skip_approval ? "approve" : "allow",
+      approved_by: actor,
+      approved_at_ms: Date.now(),
+      upstream_commit_hash: cmd.upstream_decision.commit_hash,
+      operation: executionEvaluation.context.operation,
+      risk: executionEvaluation.risk,
+      final_review_required: executionEvaluation.final_review_required,
+      reason: executionEvaluation.reason,
+    });
+    const fb = await executor.execute(approvedCommand);
     if (isComposioExecuteCommand(cmd)) {
       hds.onAuthorityEvent(
         fb.status === "success" ? "composio_execution_completed" : "composio_execution_failed",

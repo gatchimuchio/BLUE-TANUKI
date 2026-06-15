@@ -6,7 +6,7 @@
   "type": "module",
   "description": "Guided first-run wrapper for BLUE-TANUKI portable source bundles",
   "scripts": {
-    "start": "node ../../node_modules/tsx/dist/cli.mjs src/index.ts",
-    "verify": "node ../../node_modules/tsx/dist/cli.mjs src/verify.ts"
+    "start": "tsx src/index.ts",
+    "verify": "tsx src/verify.ts"
   }
 }

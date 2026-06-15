@@ -11,6 +11,7 @@ import {
   ToolRegistry,
   MemorySessionStore,
   JsonFileSessionStore,
+  approveCommandForExecution,
   createLogger,
   type SessionStore,
 } from "@blue-tanuki/core";
@@ -27,6 +28,7 @@ import { approvalDeniedFeedback, buildApprovalRuntime } from "./approval_runtime
 import { loadPluginRuntime, type PluginRuntime } from "./plugin_loader.js";
 import { stripEnvFileArgs } from "./env_file.js";
 import { RuntimeScheduleManager } from "./runtime_schedule.js";
+import { resolveAllSecretRefs } from "./secret_store.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -79,6 +81,7 @@ export function buildSessionStore(
 }
 
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  Object.assign(process.env, resolveAllSecretRefs(process.env));
   const userInput = stripEnvFileArgs([...argv])
     .filter(
       (a) =>
@@ -213,7 +216,18 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   }
   hds.onCommandLifecycle(command.id, "approval_approved", { actor: inbound.user, reason: approvalEval.reason });
 
-  const feedback = await executor.execute(command);
+  const approvedCommand = approveCommandForExecution(command, {
+    source: "approval_gate",
+    decision: "allow",
+    approved_by: inbound.user,
+    approved_at_ms: Date.now(),
+    upstream_commit_hash: command.upstream_decision.commit_hash,
+    operation: approvalEval.context.operation,
+    risk: approvalEval.risk,
+    final_review_required: approvalEval.final_review_required,
+    reason: approvalEval.reason,
+  });
+  const feedback = await executor.execute(approvedCommand);
   if (feedback.status === "failed") {
     for (const signature of extractFailureSignatures({ kind: "command_result", command, feedback })) {
       failureMemory.upsertSignature(signature);

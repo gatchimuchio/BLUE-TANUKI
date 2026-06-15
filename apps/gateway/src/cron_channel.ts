@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { InboundRequest } from "@blue-tanuki/protocol";
+import {
+  createGatewayInternalInboundRequest,
+  metadataKeyReservedForInternalAuthority,
+  type GatewayInternalAuthorityMetadata,
+  type InboundRequest,
+} from "@blue-tanuki/protocol";
 import type { InboundChannel, InboundHandler } from "@blue-tanuki/channel-base";
 
 export interface CronTaskOptions {
@@ -218,30 +223,32 @@ export class CronSchedulerChannel implements InboundChannel {
     const task = runtime.task;
     runtime.lastFireAtMs = this.nowMs();
     const resolved = await this.resolveContent(task);
-    const resolvedMetadata = resolved.metadata ?? {};
+    const resolvedMetadata = safeCronProviderMetadata(resolved.metadata ?? {});
     const payloadHash = cronPayloadHash({ ...task, content: resolved.content });
     this.onFire?.(this.snapshotForRuntime(runtime, payloadHash));
-    const inbound: InboundRequest = {
+    const metadata: GatewayInternalAuthorityMetadata = {
+      ...resolvedMetadata,
+      "blue_tanuki.authority_context": "gateway_internal_v1",
+      "blue_tanuki.actor_kind": "cron",
+      "blue_tanuki.trust_level": "trusted",
+      "blue_tanuki.process_kind": "cron",
+      ...(task.name === "daily_brief" ? { "blue_tanuki.operator_surface": "daily" as const } : {}),
+      "blue_tanuki.cron.task_id": task.id,
+      "blue_tanuki.cron.origin": task.origin,
+      "blue_tanuki.cron.payload_hash": payloadHash,
+      "blue_tanuki.cron.content_source": resolvedMetadata["blue_tanuki.cron.content_source"] ?? "static",
+      "blue_tanuki.channel_send.channel": task.channel,
+      "blue_tanuki.channel_send.target": task.target,
+      "blue_tanuki.channel_send.content": resolved.content,
+    };
+    const inbound: InboundRequest = createGatewayInternalInboundRequest({
       id: randomUUID(),
       channel: "cron",
       user: "blue-tanuki-cron",
       content: resolved.content,
       timestamp: runtime.lastFireAtMs,
-      metadata: {
-        "blue_tanuki.authority_context": "gateway_internal_v1",
-        "blue_tanuki.actor_kind": "cron",
-        "blue_tanuki.trust_level": "trusted",
-        "blue_tanuki.process_kind": "cron",
-        "blue_tanuki.cron.task_id": task.id,
-        "blue_tanuki.cron.origin": task.origin,
-        "blue_tanuki.cron.payload_hash": payloadHash,
-        "blue_tanuki.cron.content_source": resolvedMetadata["blue_tanuki.cron.content_source"] ?? "static",
-        "blue_tanuki.channel_send.channel": task.channel,
-        "blue_tanuki.channel_send.target": task.target,
-        "blue_tanuki.channel_send.content": resolved.content,
-        ...resolvedMetadata,
-      },
-    };
+      metadata,
+    });
     this.log(`[cron] firing task id=${task.id} channel=${task.channel} target=${task.target}`);
     await handler(inbound);
   }
@@ -325,6 +332,15 @@ export class CronSchedulerChannel implements InboundChannel {
       last_fire_at_ms: runtime.lastFireAtMs,
     };
   }
+}
+
+function safeCronProviderMetadata(metadata: Record<string, string>): Record<string, string> {
+  const safe: Record<string, string> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (metadataKeyReservedForInternalAuthority(key)) continue;
+    safe[key.normalize("NFKC").trim()] = value.normalize("NFKC");
+  }
+  return safe;
 }
 
 export class DailyBriefCronChannel implements InboundChannel {

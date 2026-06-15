@@ -3,10 +3,15 @@ import type {
   InboundRequest,
   ExecuteCommand,
   ExecuteFeedback,
+  GatewayInternalAuthorityMetadata,
   UpstreamDecision,
   LLMCallPayload,
 } from "@blue-tanuki/protocol";
-import { parseInboundRequestAtBoundary } from "@blue-tanuki/protocol";
+import {
+  createGatewayInternalInboundRequest,
+  isGatewayInternalInboundRequest,
+  parseInboundRequestAtBoundary,
+} from "@blue-tanuki/protocol";
 import type {
   ApprovalGateLog,
   AuthorityEventLog,
@@ -227,7 +232,9 @@ function commandExecutionPolicyViolation(command: ExecuteCommand, process: Decis
   return null;
 }
 
-function trustedChannelSendFromMetadata(meta: Record<string, unknown>): import("@blue-tanuki/protocol").ChannelSendPayload | null {
+function trustedChannelSendFromMetadata(req: InboundRequest): import("@blue-tanuki/protocol").ChannelSendPayload | null {
+  const meta = req.metadata ?? {};
+  if (!isGatewayInternalInboundRequest(req)) return null;
   if (meta["blue_tanuki.authority_context"] !== "gateway_internal_v1") return null;
   const channel = stringMeta(meta, "blue_tanuki.channel_send.channel");
   const target = stringMeta(meta, "blue_tanuki.channel_send.target");
@@ -351,10 +358,7 @@ export class HDSUpperController {
     }
     const req = boundary.request;
     const input = normalizeForDetection(req.content);
-    const authorityReq: InboundRequest = {
-      ...req,
-      content: input.normalized_content,
-    };
+    const authorityReq = requestWithNormalizedContent(req, input.normalized_content);
     const f = frame(authorityReq, {
       default_policy: this.policy,
       memory_reader: this.memory,
@@ -885,7 +889,7 @@ export class HDSUpperController {
       };
     }
 
-    const scheduledSend = trustedChannelSendFromMetadata(req.metadata ?? {});
+    const scheduledSend = trustedChannelSendFromMetadata(req);
     if (scheduledSend) {
       return {
         id: randomUUID(),
@@ -926,6 +930,23 @@ export class HDSUpperController {
       upstream_decision,
     };
   }
+}
+
+function requestWithNormalizedContent(req: InboundRequest, content: string): InboundRequest {
+  if (
+    isGatewayInternalInboundRequest(req) &&
+    req.metadata?.["blue_tanuki.authority_context"] === "gateway_internal_v1"
+  ) {
+    return createGatewayInternalInboundRequest({
+      ...req,
+      content,
+      metadata: req.metadata as GatewayInternalAuthorityMetadata,
+    });
+  }
+  return {
+    ...req,
+    content,
+  };
 }
 
 function selfHealthModel(frameResult: DecisionLog["frame"], health: HDSBrainHealth): ModelResult {

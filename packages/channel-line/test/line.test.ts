@@ -115,7 +115,7 @@ describe("LineChannel", () => {
   });
 
   it("Messaging API transport uses fixed push endpoint", async () => {
-    const calls: Array<{ url: string; body: unknown; auth: string | null }> = [];
+    const calls: Array<{ url: string; body: unknown; auth: string | null; has_signal: boolean }> = [];
     const channel = new LineChannel({
       channel_access_token: "secret-line-token",
       log: () => undefined,
@@ -124,6 +124,7 @@ describe("LineChannel", () => {
           url: String(input),
           body: init?.body ? JSON.parse(String(init.body)) : null,
           auth: new Headers(init?.headers).get("authorization"),
+          has_signal: init?.signal instanceof AbortSignal,
         });
         return new Response("{}", {
           status: 200,
@@ -143,9 +144,41 @@ describe("LineChannel", () => {
           url: "https://api.line.me/v2/bot/message/push",
           body: { to: "U123", messages: [{ type: "text", text: "hello" }] },
           auth: "Bearer secret-line-token",
+          has_signal: true,
         },
       ]);
       expect(JSON.stringify(channel.getHistory())).not.toContain("secret-line-token");
+    } finally {
+      await channel.stop();
+    }
+  });
+
+  it("classifies Messaging API HTTP timeout as recoverable", async () => {
+    const channel = new LineChannel({
+      channel_access_token: "secret-line-token",
+      request_timeout_ms: 1,
+      retry: false,
+      log: () => undefined,
+      fetch: async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          });
+        }),
+    });
+    await channel.start(async () => undefined);
+    try {
+      const result = await channel.send(
+        { channel: "line", target: "U123", content: "hello" },
+        { command_id: "cmd", upstream_commit_hash: "hash" },
+      );
+      expect(result).toMatchObject({
+        delivered: false,
+        error_kind: "recoverable",
+        error_code: "line_timeout",
+      });
     } finally {
       await channel.stop();
     }

@@ -10,14 +10,14 @@
     "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
     "typecheck": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "start": "node ./dist/main.js",
-    "dev": "node ../../node_modules/tsx/dist/cli.mjs ./src/main.ts",
+    "dev": "tsx ./src/main.ts",
     "serve": "node ./dist/main.js --serve",
-    "serve:dev": "node ../../node_modules/tsx/dist/cli.mjs ./src/main.ts --serve",
-    "setup": "node ../../node_modules/tsx/dist/cli.mjs ./src/setup.ts",
+    "serve:dev": "tsx ./src/main.ts --serve",
+    "setup": "tsx ./src/setup.ts",
     "setup:dist": "node ./dist/main.js --setup",
     "doctor": "node ./dist/main.js --doctor",
-    "doctor:dev": "node ../../node_modules/tsx/dist/cli.mjs ./src/main.ts --doctor",
-    "test": "node ../../node_modules/vitest/vitest.mjs run --passWithNoTests"
+    "doctor:dev": "tsx ./src/main.ts --doctor",
+    "test": "node ../../node_modules/vitest/vitest.mjs run"
   },
   "dependencies": {
     "@blue-tanuki/protocol": "workspace:*",

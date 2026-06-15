@@ -28,7 +28,7 @@ async function writeRepoHealthFixture(opts: {
     JSON.stringify({
       name: "repo-health-fixture",
       scripts: opts.packageScripts ?? {
-        "validate:repo-health": "node node_modules/tsx/dist/cli.mjs scripts/repo_health_gate.ts",
+        "validate:repo-health": "tsx scripts/repo_health_gate.ts",
       },
     }, null, 2),
   );
@@ -135,6 +135,16 @@ describe("repo health gate", () => {
     expect(() => validateRepoHealthGate(root)).toThrow(/custom pnpm wrapper/);
   });
 
+  it("rejects passWithNoTests in package scripts", async () => {
+    await writeRepoHealthFixture({
+      packageScripts: {
+        test: "node node_modules/vitest/vitest.mjs run --passWithNoTests",
+      },
+    });
+
+    expect(() => validateRepoHealthGate(root)).toThrow(/passWithNoTests/);
+  });
+
   it("rejects hard preview dependencies from the gateway package", async () => {
     await writeRepoHealthFixture({
       gatewayDependencies: {
@@ -144,5 +154,33 @@ describe("repo health gate", () => {
     });
 
     expect(() => validateRepoHealthGate(root)).toThrow(/hard preview dependency/);
+  });
+
+  it("rejects production fetch calls without an AbortController signal", async () => {
+    await writeRepoHealthFixture();
+    await writeFile(
+      "packages/example/src/external.ts",
+      [
+        "export async function callExternal(): Promise<Response> {",
+        '  return await fetch("https://example.test/api", { method: "GET" });',
+        "}",
+      ].join("\n"),
+    );
+
+    expect(() => validateRepoHealthGate(root)).toThrow(/fetch calls without AbortController signal/);
+  });
+
+  it("accepts production fetch calls with an AbortController signal", async () => {
+    await writeRepoHealthFixture();
+    await writeFile(
+      "packages/example/src/external.ts",
+      [
+        "export async function callExternal(signal: AbortSignal): Promise<Response> {",
+        '  return await fetch("https://example.test/api", { method: "GET", signal });',
+        "}",
+      ].join("\n"),
+    );
+
+    expect(() => validateRepoHealthGate(root)).not.toThrow();
   });
 });

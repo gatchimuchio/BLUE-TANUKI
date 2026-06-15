@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createGatewayInternalInboundRequest } from "@blue-tanuki/protocol";
 import { frame } from "../src/frame.js";
 import { DEFAULT_POLICY } from "../src/policy.js";
 
@@ -41,7 +42,7 @@ describe("operator surface framing", () => {
     expect(untrusted.operator_surface).toBeUndefined();
 
     const trusted = frame(
-      {
+      createGatewayInternalInboundRequest({
         id: "req-3",
         channel: "webchat",
         user: "alice",
@@ -51,7 +52,7 @@ describe("operator surface framing", () => {
           "blue_tanuki.authority_context": "gateway_internal_v1",
           "blue_tanuki.operator_surface": "writing",
         },
-      },
+      }),
       { default_policy: DEFAULT_POLICY },
     );
     expect(trusted.operator_surface?.source).toBe("gateway_internal_metadata");
@@ -72,7 +73,7 @@ describe("operator surface framing", () => {
     expect(prefixed.process.process_kind).toBe("chat");
 
     const trusted = frame(
-      {
+      createGatewayInternalInboundRequest({
         id: "req-5",
         channel: "webchat",
         user: "alice",
@@ -82,7 +83,7 @@ describe("operator surface framing", () => {
           "blue_tanuki.authority_context": "gateway_internal_v1",
           "blue_tanuki.operator_surface": "daily",
         },
-      },
+      }),
       { default_policy: DEFAULT_POLICY },
     );
     expect(trusted.operator_surface).toEqual({
@@ -109,7 +110,7 @@ describe("operator surface framing", () => {
     expect(prefixed.world_closure.x).toContain("surface:developer");
 
     const trusted = frame(
-      {
+      createGatewayInternalInboundRequest({
         id: "req-7",
         channel: "webchat",
         user: "alice",
@@ -119,7 +120,7 @@ describe("operator surface framing", () => {
           "blue_tanuki.authority_context": "gateway_internal_v1",
           "blue_tanuki.operator_surface": "developer",
         },
-      },
+      }),
       { default_policy: DEFAULT_POLICY },
     );
     expect(trusted.operator_surface).toEqual({

@@ -21,6 +21,11 @@ export interface LLMRequest {
   max_tokens?: number;
   temperature?: number;
   model?: string;
+  /**
+   * HTTP provider timeout for a single downstream request. The executor may
+   * still enforce a separate overall command timeout around the backend call.
+   */
+  timeout_ms?: number;
 }
 
 export interface LLMResponse {

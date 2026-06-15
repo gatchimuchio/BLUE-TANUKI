@@ -81,6 +81,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - name: Windows core unit tests
+        run: |
+          pnpm --filter @blue-tanuki/protocol run test
+          pnpm --filter @blue-tanuki/hds-brain run test
+          pnpm --filter @blue-tanuki/gateway run test
+          pnpm --filter @blue-tanuki/core run test
       - name: package:windows -> smoke:windows-installed product gate
         run: pnpm validate:product -- --phase P3 --evidence .codex-tmp/validate-product-windows
       - name: Upload Windows product evidence

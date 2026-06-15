@@ -4,6 +4,7 @@ import type {
   LLMCallPayload,
   ToolCallPayload,
   ChannelSendPayload,
+  ToolCapability,
 } from "@blue-tanuki/protocol";
 import type { LLMBackend } from "./llm/base.js";
 import type { ToolRegistry } from "./tools/registry.js";
@@ -56,6 +57,53 @@ export interface ExecutorDeps {
   history_limit?: number;
 }
 
+const APPROVED_COMMAND_BRAND: unique symbol = Symbol("blue_tanuki.executor.approved_command.v1");
+
+export type ExecutorApprovalSource = "approval_gate" | "human_final_review";
+export type ExecutorApprovalDecision = "allow" | "approve";
+
+export interface ExecutorApprovalProof {
+  source: ExecutorApprovalSource;
+  decision: ExecutorApprovalDecision;
+  approved_by: string;
+  approved_at_ms: number;
+  upstream_commit_hash: string;
+  operation: string;
+  risk: "low" | "medium" | "high";
+  final_review_required: boolean;
+  reason: string;
+}
+
+export type ApprovedCommand = ExecuteCommand & {
+  readonly [APPROVED_COMMAND_BRAND]: ExecutorApprovalProof;
+};
+
+export function approveCommandForExecution(
+  command: ExecuteCommand,
+  proof: ExecutorApprovalProof,
+): ApprovedCommand {
+  if (proof.upstream_commit_hash !== command.upstream_decision.commit_hash) {
+    throw new Error("approval proof commit hash does not match command upstream decision");
+  }
+  if (command.upstream_decision.commit_decision !== "ASSERT") {
+    throw new Error(`approval proof cannot execute upstream decision ${command.upstream_decision.commit_decision}`);
+  }
+  if (!proof.approved_by.trim()) {
+    throw new Error("approval proof approved_by is required");
+  }
+  if (!Number.isFinite(proof.approved_at_ms) || proof.approved_at_ms <= 0) {
+    throw new Error("approval proof approved_at_ms must be a positive timestamp");
+  }
+  const approved = command as ApprovedCommand;
+  Object.defineProperty(approved, APPROVED_COMMAND_BRAND, {
+    value: { ...proof },
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return approved;
+}
+
 /**
  * Executor: the top-level dispatcher for BLUE-TANUKI.
  *
@@ -69,9 +117,10 @@ export interface ExecutorDeps {
 export class Executor {
   constructor(private readonly deps: ExecutorDeps) {}
 
-  async execute(cmd: ExecuteCommand): Promise<ExecuteFeedback> {
+  async execute(cmd: ApprovedCommand): Promise<ExecuteFeedback> {
     const start = Date.now();
     try {
+      this.assertExecutionApproved(cmd);
       switch (cmd.type) {
         case "llm_call":
           return await this.executeLLMCall(cmd.id, cmd.payload, cmd.constraints, start);
@@ -132,6 +181,7 @@ export class Executor {
         model: payload.model,
         temperature: payload.temperature,
         max_tokens: constraints?.max_tokens,
+        timeout_ms: constraints?.timeout_ms,
       }),
       constraints?.timeout_ms,
     );
@@ -284,4 +334,82 @@ export class Executor {
       ),
     ]);
   }
+
+  private assertExecutionApproved(cmd: ApprovedCommand): void {
+    const proof = approvalProofFromCommand(cmd);
+    if (!proof) {
+      throw new Error("Executor rejected unapproved command: ApprovedCommand proof is required");
+    }
+    if (proof.upstream_commit_hash !== cmd.upstream_decision.commit_hash) {
+      throw new Error("Executor rejected command: approval proof commit hash mismatch");
+    }
+    if (cmd.upstream_decision.commit_decision !== "ASSERT") {
+      throw new Error(`Executor rejected command: upstream decision is ${cmd.upstream_decision.commit_decision}`);
+    }
+    if (proof.decision !== "allow" && proof.decision !== "approve") {
+      throw new Error("Executor rejected command: approval proof decision is not executable");
+    }
+    if (commandRequiresHumanFinalReview(cmd)) {
+      if (proof.source !== "human_final_review" || proof.final_review_required !== true || proof.risk !== "high") {
+        throw new Error(
+          `Executor rejected high-risk command ${commandOperationLabel(cmd)}: human final-review proof is required`,
+        );
+      }
+    }
+  }
+}
+
+function approvalProofFromCommand(command: ExecuteCommand): ExecutorApprovalProof | null {
+  const proof = (command as { [APPROVED_COMMAND_BRAND]?: ExecutorApprovalProof })[APPROVED_COMMAND_BRAND];
+  return proof ?? null;
+}
+
+function commandRequiresHumanFinalReview(command: ExecuteCommand): boolean {
+  if (command.type !== "tool_call") return false;
+  const tool = command.payload.tool_name;
+  if (
+    tool === "shell.exec" ||
+    tool === "github.write" ||
+    tool === "gmail.write" ||
+    tool === "google.calendar.write" ||
+    tool === "google.drive.write" ||
+    tool === "composio.execute" ||
+    tool === "browser.automation" ||
+    tool === "schedule.create" ||
+    tool === "schedule.update" ||
+    tool === "schedule.delete"
+  ) {
+    return true;
+  }
+  const caps = command.constraints?.allowed_capabilities ?? [];
+  return hasAnyCapability(caps, [
+    "shell:exec",
+    "process:exec",
+    "settings:write",
+    "schedule:create",
+    "schedule:update",
+    "schedule:delete",
+    "automation:create",
+    "automation:update",
+    "automation:delete",
+    "tool:github.write",
+    "tool:gmail.write",
+    "tool:google.calendar.write",
+    "tool:google.drive.write",
+    "tool:composio.execute",
+    "tool:browser.automation",
+    "browser:act",
+    "external:send",
+    "email:send",
+  ]);
+}
+
+function hasAnyCapability(caps: readonly ToolCapability[], expected: readonly string[]): boolean {
+  const set = new Set(caps);
+  return expected.some((cap) => set.has(cap));
+}
+
+function commandOperationLabel(command: ExecuteCommand): string {
+  if (command.type === "tool_call") return command.payload.tool_name;
+  return command.type;
 }

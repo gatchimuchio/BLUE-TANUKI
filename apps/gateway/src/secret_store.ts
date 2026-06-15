@@ -11,13 +11,29 @@ export type LlmSecretKey =
   | "LLM_API_KEY"
   | "OPENROUTER_API_KEY";
 
+export type ConnectorSecretKey =
+  | "COMPOSIO_API_KEY"
+  | "GITHUB_TOKEN"
+  | "GOOGLE_ACCESS_TOKEN"
+  | "GMAIL_ACCESS_TOKEN"
+  | "GOOGLE_CALENDAR_ACCESS_TOKEN"
+  | "GOOGLE_DRIVE_ACCESS_TOKEN"
+  | "SLACK_BOT_TOKEN"
+  | "SLACK_APP_TOKEN"
+  | "DISCORD_BOT_TOKEN"
+  | "TELEGRAM_BOT_TOKEN"
+  | "MICROSOFT_GRAPH_ACCESS_TOKEN"
+  | "LINE_CHANNEL_ACCESS_TOKEN";
+
+export type BlueTanukiSecretKey = LlmSecretKey | ConnectorSecretKey;
+
 export interface SecretProtector {
   protect(plaintext: string): string;
   unprotect(protectedValue: string): string;
 }
 
 export interface LlmSecretStorageStatus {
-  configured_key: LlmSecretKey | null;
+  configured_key: BlueTanukiSecretKey | null;
   raw_env_present: boolean;
   secret_ref_present: boolean;
   os_protected: boolean;
@@ -28,7 +44,7 @@ export interface LlmSecretStorageStatus {
 }
 
 export interface LlmSecretStoreResult {
-  key: LlmSecretKey;
+  key: BlueTanukiSecretKey;
   ref_key: string;
   ref: string;
   storage: "win32_dpapi_current_user";
@@ -59,6 +75,26 @@ export const LLM_SECRET_KEYS: readonly LlmSecretKey[] = [
   "OPENROUTER_API_KEY",
 ];
 
+export const CONNECTOR_SECRET_KEYS: readonly ConnectorSecretKey[] = [
+  "COMPOSIO_API_KEY",
+  "GITHUB_TOKEN",
+  "GOOGLE_ACCESS_TOKEN",
+  "GMAIL_ACCESS_TOKEN",
+  "GOOGLE_CALENDAR_ACCESS_TOKEN",
+  "GOOGLE_DRIVE_ACCESS_TOKEN",
+  "SLACK_BOT_TOKEN",
+  "SLACK_APP_TOKEN",
+  "DISCORD_BOT_TOKEN",
+  "TELEGRAM_BOT_TOKEN",
+  "MICROSOFT_GRAPH_ACCESS_TOKEN",
+  "LINE_CHANNEL_ACCESS_TOKEN",
+];
+
+export const BLUE_TANUKI_SECRET_KEYS: readonly BlueTanukiSecretKey[] = [
+  ...LLM_SECRET_KEYS,
+  ...CONNECTOR_SECRET_KEYS,
+];
+
 export function llmApiKeyForProvider(provider: string): LlmSecretKey | undefined {
   const normalized = provider.trim().toLowerCase();
   if (normalized === "anthropic") return "ANTHROPIC_API_KEY";
@@ -68,11 +104,15 @@ export function llmApiKeyForProvider(provider: string): LlmSecretKey | undefined
   return undefined;
 }
 
-export function secretRefKey(key: LlmSecretKey): string {
+export function secretRefKey(key: BlueTanukiSecretKey): string {
   return `${key}_REF`;
 }
 
 export function hasLLMSecretMaterial(env: Env, key: LlmSecretKey): boolean {
+  return hasSecretMaterial(env, key);
+}
+
+export function hasSecretMaterial(env: Env, key: BlueTanukiSecretKey): boolean {
   return Boolean(env[key] || env[secretRefKey(key)]);
 }
 
@@ -90,7 +130,7 @@ function secretDirForEnvFile(envFilePath: string, env: Env): string {
   return path.join(path.dirname(path.resolve(envFilePath)), "secrets");
 }
 
-function secretPathForKey(envFilePath: string, key: LlmSecretKey, env: Env): string {
+function secretPathForKey(envFilePath: string, key: BlueTanukiSecretKey, env: Env): string {
   return path.join(secretDirForEnvFile(envFilePath, env), `${key.toLowerCase()}.dpapi`);
 }
 
@@ -172,9 +212,17 @@ export function storeLlmApiKeySecret(
   plaintext: string,
   opts: StoreOptions,
 ): LlmSecretStoreResult {
+  return storeBlueTanukiSecret(key, plaintext, opts);
+}
+
+export function storeBlueTanukiSecret(
+  key: BlueTanukiSecretKey,
+  plaintext: string,
+  opts: StoreOptions,
+): LlmSecretStoreResult {
   const platform = opts.platform ?? process.platform;
   if (platform !== "win32" && !opts.protector) {
-    throw new Error("OS-protected LLM secret storage is only available on Windows in this release");
+    throw new Error("OS-protected BLUE-TANUKI secret storage is only available on Windows in this release");
   }
   const protector = opts.protector ?? defaultProtector();
   const secretPath = secretPathForKey(opts.envFilePath, key, opts.env ?? {});
@@ -203,10 +251,32 @@ export function resolveLLMSecretRefs(
   env: Env,
   opts: ResolveOptions = {},
 ): Env {
+  return resolveSecretRefs(env, opts, LLM_SECRET_KEYS);
+}
+
+export function resolveConnectorSecretRefs(
+  env: Env,
+  opts: ResolveOptions = {},
+): Env {
+  return resolveSecretRefs(env, opts, CONNECTOR_SECRET_KEYS);
+}
+
+export function resolveAllSecretRefs(
+  env: Env,
+  opts: ResolveOptions = {},
+): Env {
+  return resolveSecretRefs(env, opts, BLUE_TANUKI_SECRET_KEYS);
+}
+
+function resolveSecretRefs(
+  env: Env,
+  opts: ResolveOptions,
+  keys: readonly BlueTanukiSecretKey[],
+): Env {
   const platform = opts.platform ?? process.platform;
   const protector = opts.protector ?? (platform === "win32" ? defaultProtector() : undefined);
   const next: Env = { ...env };
-  for (const key of LLM_SECRET_KEYS) {
+  for (const key of keys) {
     if (next[key]) continue;
     const ref = next[secretRefKey(key)];
     if (!ref) continue;
@@ -245,6 +315,32 @@ export function llmSecretStorageStatus(
       : ref
       ? "LLM API key reference is present but this platform cannot verify DPAPI protection"
       : "No LLM API key material is configured for this provider",
+    used_for_authority: false,
+    evidence_source: ["CONFIG"],
+  };
+}
+
+export function connectorSecretStorageStatus(
+  env: Env,
+  key: ConnectorSecretKey,
+  platform: NodeJS.Platform = process.platform,
+): LlmSecretStorageStatus {
+  const raw = Boolean(env[key]);
+  const ref = Boolean(env[secretRefKey(key)]);
+  const dpapi = ref && platform === "win32";
+  return {
+    configured_key: key,
+    raw_env_present: raw,
+    secret_ref_present: ref,
+    os_protected: dpapi,
+    storage: dpapi ? "win32_dpapi_current_user" : raw ? "env_file" : ref ? "unknown" : "unavailable",
+    reason: dpapi
+      ? `${key} is stored as a Windows DPAPI CurrentUser secret reference`
+      : raw
+      ? `${key} is present in process/env-file material`
+      : ref
+      ? `${key} reference is present but this platform cannot verify DPAPI protection`
+      : `${key} is not configured`,
     used_for_authority: false,
     evidence_source: ["CONFIG"],
   };

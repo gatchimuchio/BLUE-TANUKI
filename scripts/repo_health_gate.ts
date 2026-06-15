@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -185,12 +185,38 @@ function assertNoForbiddenProductionImports(root: string): void {
 }
 
 function assertPackageScriptsUseNativePnpm(root: string): void {
-  const pkg = JSON.parse(read(root, "package.json")) as { scripts?: Record<string, string> };
-  for (const [name, script] of Object.entries(pkg.scripts ?? {})) {
-    if (/pnpm[_-]?exec|scripts\/pnpm/i.test(script)) {
-      fail(`package script ${name} uses a custom pnpm wrapper`);
+  for (const rel of packageJsonFiles(root)) {
+    const pkg = JSON.parse(read(root, rel)) as { scripts?: Record<string, string> };
+    for (const [name, script] of Object.entries(pkg.scripts ?? {})) {
+      if (/pnpm[_-]?exec|scripts\/pnpm/i.test(script)) {
+        fail(`${rel} script ${name} uses a custom pnpm wrapper`);
+      }
+      if (script.includes("--passWithNoTests")) {
+        fail(`${rel} script ${name} uses forbidden --passWithNoTests`);
+      }
     }
   }
+}
+
+function packageJsonFiles(root: string): string[] {
+  return [
+    ...(existsSync(path.join(root, "package.json")) ? ["package.json"] : []),
+    ...walkPackageJsonFiles(root, "apps"),
+    ...walkPackageJsonFiles(root, "packages"),
+    ...walkPackageJsonFiles(root, "install"),
+  ];
+}
+
+function walkPackageJsonFiles(root: string, rel: string): string[] {
+  const full = path.join(root, rel);
+  if (!existsSync(full)) return [];
+  const stat = statSync(full);
+  if (stat.isFile()) return rel.endsWith("package.json") ? [rel] : [];
+  return readdirSync(full).flatMap((entry) => {
+    if (entry === "node_modules" || entry === "dist") return [];
+    const childRel = path.join(rel, entry).replace(/\\/g, "/");
+    return walkPackageJsonFiles(root, childRel);
+  });
 }
 
 function assertGatewayCoreDependenciesOnly(root: string): void {
@@ -234,6 +260,63 @@ function assertReleaseBundleDeclaresCoreBoundary(root: string): void {
   }
 }
 
+function sourceTsFiles(root: string, rel: string): string[] {
+  const full = path.join(root, rel);
+  if (!existsSync(full)) return [];
+  const stat = statSync(full);
+  if (stat.isFile()) return rel.endsWith(".ts") ? [rel] : [];
+  return readdirSync(full).flatMap((entry) => {
+    const childRel = path.join(rel, entry).replace(/\\/g, "/");
+    const childFull = path.join(root, childRel);
+    const childStat = statSync(childFull);
+    if (childStat.isDirectory()) {
+      if (entry === "dist" || entry === "node_modules") return [];
+      return sourceTsFiles(root, childRel);
+    }
+    return childRel.endsWith(".ts") ? [childRel] : [];
+  });
+}
+
+function objectLiteralHasSignal(node: ts.Node | undefined): boolean {
+  if (!node || !ts.isObjectLiteralExpression(node)) return false;
+  return node.properties.some((property) => {
+    if (ts.isSpreadAssignment(property)) return false;
+    const name = property.name;
+    return (
+      (ts.isIdentifier(name) && name.text === "signal") ||
+      (ts.isStringLiteral(name) && name.text === "signal")
+    );
+  });
+}
+
+function assertProductionFetchCallsHaveAbortSignal(root: string): void {
+  const files = [
+    ...sourceTsFiles(root, "apps/gateway/src"),
+    ...sourceTsFiles(root, "packages"),
+  ].filter((rel) => rel.includes("/src/"));
+  const violations: string[] = [];
+  for (const rel of files) {
+    const text = read(root, rel);
+    const source = ts.createSourceFile(rel, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const expression = node.expression;
+        const called =
+          ts.isIdentifier(expression) &&
+          (expression.text === "fetch" || expression.text === "fetchImpl");
+        if (called && !objectLiteralHasSignal(node.arguments[1])) {
+          violations.push(`${rel}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}`);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  if (violations.length > 0) {
+    fail(`external fetch calls without AbortController signal: ${violations.join(", ")}`);
+  }
+}
+
 export function validateRepoHealthGate(rootDir = process.cwd()): void {
   const root = path.resolve(rootDir);
   assertForbiddenFilesAbsent(root);
@@ -242,6 +325,7 @@ export function validateRepoHealthGate(rootDir = process.cwd()): void {
   assertGatewayCoreDependenciesOnly(root);
   assertPreviewScopeDocumented(root);
   assertReleaseBundleDeclaresCoreBoundary(root);
+  assertProductionFetchCallsHaveAbortSignal(root);
 }
 
 function main(): void {

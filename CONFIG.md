@@ -249,12 +249,30 @@ replace native/local tools and is not authority.
 
 ```bash
 COMPOSIO_API_KEY=...
+COMPOSIO_USER_ID=...
 COMPOSIO_ALLOWED_TOOLKITS=github,gmail,calendar,drive,slack
+COMPOSIO_ALLOWED_ACTIONS=github:GITHUB_CREATE_AN_ISSUE
 COMPOSIO_DRY_RUN=true
+COMPOSIO_LIVE_EXECUTION=false
 ```
 
-`COMPOSIO_DRY_RUN` defaults to `true`. Live execution is not implemented in the
-current phase; `composio.execute` returns dry-run evidence or fails closed.
+`COMPOSIO_DRY_RUN` defaults to `true`, so `composio.execute` returns dry-run
+evidence and sends no external request by default.
+
+Live execution is available only as an explicit opt-in and remains downstream:
+
+- set `COMPOSIO_DRY_RUN=false`;
+- set `COMPOSIO_LIVE_EXECUTION=true`;
+- set `COMPOSIO_USER_ID`;
+- explicitly allow the toolkit with `COMPOSIO_ALLOWED_TOOLKITS`;
+- explicitly allow the toolkit/action pair with `COMPOSIO_ALLOWED_ACTIONS`;
+- keep unwanted actions in `COMPOSIO_REVOKED_ACTIONS` when needed;
+- pass HDS-BRAIN capability routing, Approval Gate L3 final review, executor
+  approval proof, timeout, and audit.
+
+Live `composio.execute` uses the Composio v3.1 execution API with a bounded
+timeout. Pre/post authority events and executor feedback are recorded in the
+HDS audit chain, and Composio metadata/results remain `used_for_authority=false`.
 
 ```text
 tool:composio.search toolkit=github query=issues
@@ -264,6 +282,27 @@ tool:composio.execute toolkit=github tool=issues.create payload="{\"title\":\"he
 Composio metadata, connected-account status, tool schemas, and tool results do
 not grant authority. External write/send/delete/create/update actions must pass
 through capability envelope, Approval Gate, and audit.
+
+### Secret-store refs for external connectors
+
+External connector credentials may be supplied as secret-store references instead
+of raw env values. The gateway resolves refs at startup and fails closed when a
+reference cannot be unprotected.
+
+Supported ref forms include:
+
+```bash
+OPENROUTER_API_KEY_REF=win32-dpapi-current-user:file:...
+COMPOSIO_API_KEY_REF=win32-dpapi-current-user:file:...
+GITHUB_TOKEN_REF=win32-dpapi-current-user:file:...
+GOOGLE_ACCESS_TOKEN_REF=win32-dpapi-current-user:file:...
+GMAIL_ACCESS_TOKEN_REF=win32-dpapi-current-user:file:...
+GOOGLE_CALENDAR_ACCESS_TOKEN_REF=win32-dpapi-current-user:file:...
+GOOGLE_DRIVE_ACCESS_TOKEN_REF=win32-dpapi-current-user:file:...
+```
+
+Raw env values remain supported for compatibility, but refs are the preferred
+storage path for connector credentials on Windows.
 
 ## Google tools and Daily Brief source
 
@@ -364,8 +403,14 @@ Policy:
 BLUE_TANUKI_SHELL_ROOT=/path/to/workspace
 ```
 
-`shell.exec` runs a non-shell command (`cmd` + `args[]`) with its working
-directory fixed under this root. It is always a final-review operation.
+`shell.exec` runs a cwd-bounded non-shell spawn (`cmd` + `args[]`) with its
+working directory resolved under this root. It is always a final-review
+operation.
+
+This is not an OS sandbox. The cwd boundary prevents BLUE-TANUKI from choosing
+an outside working directory, but it does not stop the spawned program from
+reading cwd-external paths such as `/etc/passwd` unless the operating system or
+an external sandbox separately enforces that isolation.
 
 ```text
 tool:shell.exec {"cmd":"git","args":["status","-sb"],"cwd":"."}

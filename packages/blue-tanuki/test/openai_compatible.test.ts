@@ -95,4 +95,35 @@ describe("OpenAICompatibleBackend", () => {
       used_for_authority: false,
     } satisfies Partial<LLMProviderError>);
   });
+
+  it("passes timeout_ms to fetch and classifies AbortError as timeout", async () => {
+    let signalSeen = false;
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      signalSeen = signal instanceof AbortSignal;
+      return await new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      });
+    }) as typeof fetch;
+
+    const backend = new OpenAICompatibleBackend({
+      endpoint: "https://example.test/v1",
+      defaultModel: "configured-model",
+    });
+
+    await expect(
+      backend.call({
+        messages: [{ role: "user", content: "ping" }],
+        timeout_ms: 1,
+      }),
+    ).rejects.toMatchObject({
+      name: "LLMProviderError",
+      kind: "timeout",
+      retryable: true,
+      used_for_authority: false,
+    } satisfies Partial<LLMProviderError>);
+    expect(signalSeen).toBe(true);
+  });
 });

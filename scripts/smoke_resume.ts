@@ -18,7 +18,7 @@ const PORT = 41000 + Math.floor(Math.random() * 1000);
 const TOKEN = "smoke-token-1234";
 const RESUME_TOKEN = "smoke-resume-token-1234";
 const PNPM = process.env.PNPM_BIN;
-const TSX = process.env.TSX_BIN ?? "node_modules/tsx/dist/cli.mjs";
+const TSX = process.env.TSX_BIN ?? "tsx";
 
 function spawnPnpm(args: string[], options: Parameters<typeof spawn>[2]) {
   if (process.platform === "win32") {
@@ -31,7 +31,7 @@ function spawnGateway(options: Parameters<typeof spawn>[2]) {
   if (PNPM) {
     return spawnPnpm(["--filter", "@blue-tanuki/gateway", "serve:dev"], options);
   }
-  return spawn(process.execPath, [TSX, "apps/gateway/src/main.ts", "--serve"], options);
+  return spawn(TSX, ["apps/gateway/src/main.ts", "--serve"], options);
 }
 
 async function waitForHealth(

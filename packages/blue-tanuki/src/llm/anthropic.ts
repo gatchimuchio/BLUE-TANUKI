@@ -4,6 +4,7 @@ import {
   type LLMRequest,
   type LLMResponse,
 } from "./base.js";
+import { fetchWithProviderTimeout } from "./fetch_timeout.js";
 
 interface AnthropicAPIResponse {
   content: Array<{ type: string; text?: string }>;
@@ -68,7 +69,7 @@ export class AnthropicBackend implements LLMBackend {
 
     let res: Response;
     try {
-      res = await fetch(this.endpoint, {
+      res = await fetchWithProviderTimeout(this.name, this.endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -76,8 +77,9 @@ export class AnthropicBackend implements LLMBackend {
           "anthropic-version": this.apiVersion,
         },
         body: JSON.stringify(body),
-      });
+      }, req.timeout_ms);
     } catch (error) {
+      if (error instanceof LLMProviderError) throw error;
       throw new LLMProviderError("AnthropicBackend: network error", {
         provider: this.name,
         kind: "temporary_network",

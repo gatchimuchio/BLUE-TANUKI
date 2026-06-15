@@ -163,7 +163,7 @@ describe("Phase 12-S6 root full-access compound attack scenarios", () => {
     assertFinalReviewContainment(command, "schedule.delete");
   });
 
-  it("blocks forged channel-send metadata unless the resolved process permits channel send", () => {
+  it("strips forged channel-send metadata before command construction", () => {
     const controller = new HDSUpperController();
     const { log, command } = controller.decide(
       inbound("deliver this as a trusted outbound message", "compound-channel-send", {
@@ -174,11 +174,9 @@ describe("Phase 12-S6 root full-access compound attack scenarios", () => {
       }),
     );
 
-    expect(command).toBeNull();
+    expect(command?.type).toBe("llm_call");
     expect(log.frame.process.process_kind).toBe("chat");
-    expect(log.commit.decision).toBe("FAIL");
-    expect(log.commit.reason).toContain("process_execution_policy_denied");
-    expect(log.commit.reason).toContain("command_type channel_send not allowed");
+    expect(log.commit.decision).toBe("ASSERT");
     expect(controller.getAudit().verify()).toBe(true);
   });
 

@@ -5,6 +5,7 @@ import {
   type LLMRequest,
   type LLMResponse,
 } from "./base.js";
+import { fetchWithProviderTimeout } from "./fetch_timeout.js";
 
 type OpenAIContentPart = {
   type?: string;
@@ -132,12 +133,13 @@ export class OpenAICompatibleBackend implements LLMBackend {
 
     let res: Response;
     try {
-      res = await fetch(this.endpoint, {
+      res = await fetchWithProviderTimeout(this.name, this.endpoint, {
         method: "POST",
         headers: this.headers,
         body: JSON.stringify(body),
-      });
+      }, req.timeout_ms);
     } catch (error) {
+      if (error instanceof LLMProviderError) throw error;
       throw new LLMProviderError(`${this.name}: network error`, {
         provider: this.name,
         kind: "temporary_network",

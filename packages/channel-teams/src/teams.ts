@@ -41,6 +41,8 @@ export interface TeamsOptions {
   transport?: TeamsTransport;
   /** Fetch injection for the built-in Graph transport. */
   fetch?: TeamsFetch;
+  /** Per-request Microsoft Graph HTTP timeout. Default: 15000ms. */
+  request_timeout_ms?: number;
   retry?: TeamsRetryConfig | false;
   log?: (line: string) => void;
 }
@@ -85,6 +87,7 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
       this.transport = new TeamsGraphTransport({
         access_token: this.opts.access_token,
         fetch: this.opts.fetch,
+        request_timeout_ms: this.opts.request_timeout_ms,
       });
     } else {
       this.silent = true;

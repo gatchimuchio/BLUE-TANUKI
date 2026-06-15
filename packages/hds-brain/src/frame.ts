@@ -1,4 +1,4 @@
-import type { InboundRequest } from "@blue-tanuki/protocol";
+import { isGatewayInternalInboundRequest, type InboundRequest } from "@blue-tanuki/protocol";
 import type { ActorRef, FrameResult, HDSProcessDefinition, MemoryTrace, OperatorSurfaceRef, PolicyConfig } from "./types.js";
 import { resolveActor, resolveProcess } from "./process.js";
 import { buildMemoryTrace, type MemoryReaderPort } from "./memory_trace.js";
@@ -114,6 +114,7 @@ function resolveOperatorSurface(req: InboundRequest): OperatorSurfaceRef | undef
 
   const meta = req.metadata ?? {};
   if (
+    isGatewayInternalInboundRequest(req) &&
     meta["blue_tanuki.authority_context"] === "gateway_internal_v1" &&
     (meta["blue_tanuki.operator_surface"] === "writing" ||
       meta["blue_tanuki.operator_surface"] === "daily" ||

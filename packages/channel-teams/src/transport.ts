@@ -35,6 +35,7 @@ export interface TeamsTransport {
 interface TeamsGraphTransportOptions {
   access_token: string;
   fetch?: TeamsFetch;
+  request_timeout_ms?: number;
 }
 
 interface ParsedTeamsTarget {
@@ -46,6 +47,7 @@ interface ParsedTeamsTarget {
 }
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
+const DEFAULT_TEAMS_REQUEST_TIMEOUT_MS = 15_000;
 
 export class TeamsGraphTransport implements TeamsTransport {
   constructor(private readonly opts: TeamsGraphTransportOptions) {}
@@ -78,20 +80,39 @@ export class TeamsGraphTransport implements TeamsTransport {
         error_code: "fetch_unavailable",
       };
     }
-    const res = await fetchImpl(`${GRAPH_ROOT}${path}`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.opts.access_token}`,
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify({
-        body: {
-          contentType: "text",
-          content: args.text,
+    const timeoutMs = this.opts.request_timeout_ms ?? DEFAULT_TEAMS_REQUEST_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetchImpl(`${GRAPH_ROOT}${path}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.opts.access_token}`,
+          "content-type": "application/json",
+          accept: "application/json",
         },
-      }),
-    });
+        body: JSON.stringify({
+          body: {
+            contentType: "text",
+            content: args.text,
+          },
+        }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (isAbortError(error)) {
+        return {
+          ok: false,
+          error: `teams_timeout_${timeoutMs}ms`,
+          error_kind: "recoverable",
+          error_code: "teams_timeout",
+        };
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
     const text = await res.text();
     const parsed = parseJsonObject(text);
     const requestId =
@@ -230,4 +251,13 @@ function readString(obj: Record<string, unknown>, key: string): string | undefin
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isAbortError(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "name" in error &&
+      (error as { name?: unknown }).name === "AbortError",
+  );
 }

@@ -1,4 +1,4 @@
-import type { InboundRequest } from "@blue-tanuki/protocol";
+import { isGatewayInternalInboundRequest, type InboundRequest } from "@blue-tanuki/protocol";
 import { finalReviewOperationList } from "./approval_policy.js";
 import type {
   ActorKind,
@@ -35,7 +35,7 @@ const LOW_TRUST_MEMORY_POLICY: MemoryReadPolicy = {
 
 export function resolveActor(req: InboundRequest): ActorRef {
   const meta = req.metadata ?? {};
-  const trustedAuthorityContext = isTrustedAuthorityContext(meta);
+  const trustedAuthorityContext = isTrustedAuthorityContext(req);
   const explicitKind = trustedAuthorityContext
     ? stringField(meta, "blue_tanuki.actor_kind") ?? stringField(meta, "actor_kind")
     : undefined;
@@ -55,7 +55,7 @@ export function resolveActor(req: InboundRequest): ActorRef {
 
 export function resolveProcess(req: InboundRequest, actor: ActorRef): HDSProcessDefinition {
   const meta = req.metadata ?? {};
-  const trustedAuthorityContext = isTrustedAuthorityContext(meta);
+  const trustedAuthorityContext = isTrustedAuthorityContext(req);
   const explicitKind = trustedAuthorityContext
     ? stringField(meta, "blue_tanuki.process_kind") ?? stringField(meta, "process_kind")
     : undefined;
@@ -95,7 +95,7 @@ export function resolveProcess(req: InboundRequest, actor: ActorRef): HDSProcess
 
 function inferActorKind(req: InboundRequest): ActorKind {
   const meta = req.metadata ?? {};
-  const trigger = isTrustedAuthorityContext(meta) ? stringField(meta, "trigger_kind") : undefined;
+  const trigger = isTrustedAuthorityContext(req) ? stringField(meta, "trigger_kind") : undefined;
   if (trigger === "cron" || req.channel === "cron") return "cron";
   if (trigger === "webhook" || req.channel === "webhook") return "webhook";
   if (req.channel === "system") return "system";
@@ -116,7 +116,7 @@ function inferProcessKind(req: InboundRequest, actor: ActorRef): ProcessKind {
   if (actor.actor_kind === "cron") return "cron";
   if (actor.actor_kind === "webhook") return "webhook";
   if (trimmed.startsWith("tool:") || trimmed.startsWith("/tool") || req.metadata?.["blue_tanuki.tool_call"] || req.metadata?.tool_call) return "tool";
-  if (isTrustedAuthorityContext(req.metadata ?? {}) && (req.metadata?.["blue_tanuki.resume"] || req.metadata?.resume)) return "approval";
+  if (isTrustedAuthorityContext(req) && (req.metadata?.["blue_tanuki.resume"] || req.metadata?.resume)) return "approval";
   return "chat";
 }
 
@@ -294,6 +294,9 @@ function isProcessKind(value: string | undefined): value is ProcessKind {
  * request payloads, but it must not be allowed to upgrade actor/process
  * authority. Only gateway-internal normalization code may set this marker.
  */
-function isTrustedAuthorityContext(meta: Record<string, unknown>): boolean {
-  return meta["blue_tanuki.authority_context"] === "gateway_internal_v1";
+function isTrustedAuthorityContext(req: InboundRequest): boolean {
+  return (
+    isGatewayInternalInboundRequest(req) &&
+    req.metadata?.["blue_tanuki.authority_context"] === "gateway_internal_v1"
+  );
 }

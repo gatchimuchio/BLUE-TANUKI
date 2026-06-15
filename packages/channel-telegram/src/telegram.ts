@@ -13,6 +13,8 @@ export interface TelegramOptions {
   poll_timeout_sec?: number;
   /** Dependency injection for tests. Default global fetch. */
   fetch?: TelegramFetch;
+  /** Per-request HTTP timeout. Defaults to long-poll timeout + 5s for polling and 15s for sends. */
+  request_timeout_ms?: number;
   log?: (line: string) => void;
 }
 
@@ -173,11 +175,29 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     const fetchImpl = this.opts.fetch ?? globalThis.fetch;
     if (!fetchImpl) throw new Error("fetch is not available in this runtime");
     const url = `https://api.telegram.org/bot${token}/${method}`;
-    const res = await fetchImpl(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(stripUndefined(body)),
-    });
+    const timeoutMs =
+      this.opts.request_timeout_ms ??
+      (method === "getUpdates"
+        ? ((this.opts.poll_timeout_sec ?? 25) * 1000) + 5000
+        : 15_000);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetchImpl(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(stripUndefined(body)),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (isAbortError(error)) {
+        return { ok: false, description: `telegram_${method}_timeout_${timeoutMs}ms` };
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
     const text = await res.text();
     let parsed: unknown;
     try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { ok: false, description: text }; }
@@ -208,6 +228,15 @@ function readTelegramMessageId(value: unknown): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isAbortError(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "name" in error &&
+      (error as { name?: unknown }).name === "AbortError",
+  );
 }
 
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }

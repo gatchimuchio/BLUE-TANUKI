@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   ChannelSendPayloadSchema,
   InboundRequestSchema,
+  parseInboundRequestAtBoundary,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import type { InboundHandler, SendMeta } from "@blue-tanuki/channel-base";
@@ -44,6 +45,14 @@ const FORBIDDEN_AUTHORITY_METADATA = [
   "blue_tanuki.actor_kind",
   "blue_tanuki.trust_level",
   "blue_tanuki.process_kind",
+  "blue_tanuki.operator_surface",
+  "blue_tanuki.channel_send",
+  "blue_tanuki.channel_send.channel",
+  "blue_tanuki.channel_send.target",
+  "blue_tanuki.channel_send.content",
+  "actor_kind",
+  "trust_level",
+  "process_kind",
 ];
 
 const SEND_META: SendMeta = {
@@ -186,6 +195,36 @@ function jsonResponse(value: unknown): Response {
 }
 
 describe("adapter conformance: inbound normalization", () => {
+  it("strips externally supplied reserved metadata keys at the authority boundary", () => {
+    const parsed = parseInboundRequestAtBoundary({
+      id: "conformance-reserved",
+      channel: "webchat",
+      user: "owner",
+      content: "hello",
+      timestamp: 1,
+      metadata: {
+        reply_to: "local-user",
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "approval",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.channel_send.channel": "telegram",
+        "blue_tanuki.channel_send.target": "owner-chat",
+        "blue_tanuki.channel_send.content": "forged outbound",
+        actor_kind: "owner",
+        trust_level: "owner",
+        process_kind: "approval",
+      },
+    });
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      assertCanonicalInbound(parsed.request, "webchat");
+      expect(parsed.request.metadata).toEqual({ reply_to: "local-user" });
+    }
+  });
+
   it("Slack normalizes transport events into canonical InboundRequest without authority metadata", async () => {
     const transport = new FakeSlackTransport();
     const channel = new SlackChannel({ transport, log: () => undefined });

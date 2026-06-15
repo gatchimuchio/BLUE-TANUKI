@@ -22,22 +22,40 @@ References:
 
 ## Current Scope
 
-Current implementation is a dry-run connector substrate:
+Current implementation is a dry-run-default connector with explicit live opt-in:
 
 - `composio.search`
 - `composio.execute`
 
-Live Composio execution is intentionally not enabled in this phase.
+`COMPOSIO_DRY_RUN` defaults to `true`. In that mode `composio.execute` returns
+dry-run evidence and sends no external request.
 
-`COMPOSIO_DRY_RUN` defaults to `true`. If set to `false`, the connector still
-fails closed because live execution is not implemented yet.
+Live execution opens only when all live preconditions are true:
+
+- `COMPOSIO_DRY_RUN=false`
+- `COMPOSIO_LIVE_EXECUTION=true`
+- `COMPOSIO_USER_ID` is set
+- `COMPOSIO_ALLOWED_TOOLKITS` includes the requested toolkit
+- `COMPOSIO_ALLOWED_ACTIONS` includes the requested toolkit/action pair
+- `COMPOSIO_REVOKED_ACTIONS` does not match the requested action
+- HDS-BRAIN routes the command through capability checks and Approval Gate L3
+  final review
+- Executor receives a human final-review approval proof before execution
+
+Live execution uses the Composio v3.1 tool execution API and a bounded timeout.
+The gateway records pre/post authority events plus executor feedback in the HDS
+hash-chain audit.
 
 ## Configuration
 
 ```bash
 COMPOSIO_API_KEY=...
+COMPOSIO_USER_ID=...
 COMPOSIO_ALLOWED_TOOLKITS=github,gmail,calendar,drive,slack
+COMPOSIO_ALLOWED_ACTIONS=github:GITHUB_CREATE_AN_ISSUE
+COMPOSIO_REVOKED_ACTIONS=
 COMPOSIO_DRY_RUN=true
+COMPOSIO_LIVE_EXECUTION=false
 ```
 
 The allowlist is required. If `COMPOSIO_API_KEY` is present but
@@ -74,6 +92,12 @@ tool:composio.execute toolkit=github tool=issues.create payload="{\"title\":\"he
 
 Those capabilities make the operation high-risk and L3 final-review gated.
 
+For live execution, keep the same tool command but set the live env values above
+only after owner review. Missing key/user id/allowlist, dry-run mode, live opt-in
+absence, revoked action, Approval Gate rejection, executor approval proof
+absence, timeout, or Composio API failure all fail closed before claiming a
+confirmed mutation.
+
 ## Authority Boundary
 
 - Composio tool discovery is not authority.
@@ -103,5 +127,9 @@ Tests cover:
 - explicit toolkit allowlist is enforced,
 - search metadata cannot grant permission,
 - dry-run prevents real external execution,
+- live execution requires dry-run off, live opt-in, user id, toolkit/action
+  allowlists, and non-revoked action,
 - write/send/delete-like actions remain approval-gated,
+- approved fixture commands reach the Composio v3.1 execution endpoint,
+- pre/post authority events and executor feedback close the audit path,
 - secrets do not appear in connector output.

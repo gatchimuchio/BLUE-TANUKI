@@ -118,7 +118,7 @@ describe("TeamsChannel", () => {
   });
 
   it("Graph transport uses fixed Microsoft Graph message endpoint", async () => {
-    const calls: Array<{ url: string; body: unknown; auth: string | null }> = [];
+    const calls: Array<{ url: string; body: unknown; auth: string | null; has_signal: boolean }> = [];
     const channel = new TeamsChannel({
       access_token: "secret-graph-token",
       log: () => undefined,
@@ -127,6 +127,7 @@ describe("TeamsChannel", () => {
           url: String(input),
           body: init?.body ? JSON.parse(String(init.body)) : null,
           auth: new Headers(init?.headers).get("authorization"),
+          has_signal: init?.signal instanceof AbortSignal,
         });
         return new Response(JSON.stringify({ id: "graph-msg-1" }), {
           status: 201,
@@ -150,9 +151,45 @@ describe("TeamsChannel", () => {
           url: "https://graph.microsoft.com/v1.0/teams/team-1/channels/19%3Achannel%40thread.tacv2/messages",
           body: { body: { contentType: "text", content: "hello" } },
           auth: "Bearer secret-graph-token",
+          has_signal: true,
         },
       ]);
       expect(JSON.stringify(channel.getHistory())).not.toContain("secret-graph-token");
+    } finally {
+      await channel.stop();
+    }
+  });
+
+  it("classifies Microsoft Graph HTTP timeout as recoverable", async () => {
+    const channel = new TeamsChannel({
+      access_token: "secret-graph-token",
+      request_timeout_ms: 1,
+      retry: false,
+      log: () => undefined,
+      fetch: async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          });
+        }),
+    });
+    await channel.start(async () => undefined);
+    try {
+      const result = await channel.send(
+        {
+          channel: "teams",
+          target: teamsChannelTarget("team-1", "19:channel@thread.tacv2"),
+          content: "hello",
+        },
+        { command_id: "cmd", upstream_commit_hash: "hash" },
+      );
+      expect(result).toMatchObject({
+        delivered: false,
+        error_kind: "recoverable",
+        error_code: "teams_timeout",
+      });
     } finally {
       await channel.stop();
     }

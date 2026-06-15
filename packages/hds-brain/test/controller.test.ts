@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import type { ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
+import {
+  createGatewayInternalInboundRequest,
+  type ExecuteFeedback,
+  type InboundRequest,
+} from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
 import type { AuditEntry } from "../src/audit.js";
 import { DEFAULT_POLICY } from "../src/policy.js";
@@ -982,12 +986,19 @@ describe("HDS process/memory authority hardening", () => {
 
   it("honors gateway-internal authority context for actor/process metadata", () => {
     const c = new HDSUpperController();
-    const { log, command } = c.decide(inboundWithMetadata("approve pending", {
-      "blue_tanuki.authority_context": "gateway_internal_v1",
-      "blue_tanuki.actor_kind": "owner",
-      "blue_tanuki.trust_level": "owner",
-      "blue_tanuki.process_kind": "approval",
-    }, "r-internal-owner"));
+    const { log, command } = c.decide(createGatewayInternalInboundRequest({
+      id: "r-internal-owner",
+      channel: "webchat",
+      user: "u1",
+      content: "approve pending",
+      timestamp: Date.now(),
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "approval",
+      },
+    }));
 
     expect(log.frame.actor.actor_kind).toBe("owner");
     expect(log.frame.process.process_id).toBe("approval.process");

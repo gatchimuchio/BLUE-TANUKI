@@ -19,7 +19,7 @@
   "scripts": {
     "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
     "typecheck": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
-    "test": "node ../../node_modules/vitest/vitest.mjs run --passWithNoTests"
+    "test": "node ../../node_modules/vitest/vitest.mjs run"
   },
   "dependencies": {
     "zod": "^3.23.0"

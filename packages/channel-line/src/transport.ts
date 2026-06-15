@@ -34,9 +34,11 @@ export interface LineTransport {
 interface LineMessagingTransportOptions {
   channel_access_token: string;
   fetch?: LineFetch;
+  request_timeout_ms?: number;
 }
 
 const LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push";
+const DEFAULT_LINE_REQUEST_TIMEOUT_MS = 15_000;
 
 export class LineMessagingTransport implements LineTransport {
   constructor(private readonly opts: LineMessagingTransportOptions) {}
@@ -68,18 +70,37 @@ export class LineMessagingTransport implements LineTransport {
         error_code: "fetch_unavailable",
       };
     }
-    const res = await fetchImpl(LINE_PUSH_URL, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.opts.channel_access_token}`,
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify({
-        to: args.target,
-        messages: [{ type: "text", text: args.text }],
-      }),
-    });
+    const timeoutMs = this.opts.request_timeout_ms ?? DEFAULT_LINE_REQUEST_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetchImpl(LINE_PUSH_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.opts.channel_access_token}`,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({
+          to: args.target,
+          messages: [{ type: "text", text: args.text }],
+        }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (isAbortError(error)) {
+        return {
+          ok: false,
+          error: `line_timeout_${timeoutMs}ms`,
+          error_kind: "recoverable",
+          error_code: "line_timeout",
+        };
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
     const text = await res.text();
     const parsed = parseJsonObject(text);
     const requestId =
@@ -133,4 +154,13 @@ function readString(obj: Record<string, unknown>, key: string): string | undefin
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isAbortError(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "name" in error &&
+      (error as { name?: unknown }).name === "AbortError",
+  );
 }
