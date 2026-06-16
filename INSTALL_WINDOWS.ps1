@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$InstallerZip,
-  [string]$ReleaseDir = (Join-Path $PSScriptRoot "release\windows"),
-  [string]$WorkRoot = (Join-Path $PSScriptRoot ".codex-tmp\windows-install-entrypoint"),
+  [string]$ReleaseDir,
+  [string]$WorkRoot,
   [string]$InstallRoot,
   [string]$DataRoot,
   [switch]$DesktopShortcut,
@@ -14,6 +14,22 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$ScriptRoot = if ($PSScriptRoot) {
+  $PSScriptRoot
+} elseif ($PSCommandPath) {
+  Split-Path -Parent $PSCommandPath
+} else {
+  (Get-Location).Path
+}
+
+if (-not $ReleaseDir) {
+  $ReleaseDir = Join-Path $ScriptRoot "release\windows"
+}
+
+if (-not $WorkRoot) {
+  $WorkRoot = Join-Path $ScriptRoot ".codex-tmp\windows-install-entrypoint"
+}
 
 $script:PnpmVersion = "9.12.0"
 $script:LogPath = Join-Path $WorkRoot "install.log"
@@ -89,18 +105,23 @@ function Build-InstallerZip {
     return $null
   }
 
-  Invoke-LoggedCommand "corepack" @("enable") "Enable Corepack"
-  Invoke-LoggedCommand "corepack" @("prepare", "pnpm@$script:PnpmVersion", "--activate") "Activate pnpm $script:PnpmVersion"
-  Invoke-LoggedCommand "pnpm" @("install", "--frozen-lockfile") "Install workspace dependencies"
-  Invoke-LoggedCommand "pnpm" @("build") "Build workspace"
-  Invoke-LoggedCommand "pnpm" @("package:windows") "Build Windows installer package"
-  Invoke-LoggedCommand "pnpm" @("package:windows:verify") "Verify Windows installer package"
+  Push-Location $ScriptRoot
+  try {
+    Invoke-LoggedCommand "corepack" @("enable") "Enable Corepack"
+    Invoke-LoggedCommand "corepack" @("prepare", "pnpm@$script:PnpmVersion", "--activate") "Activate pnpm $script:PnpmVersion"
+    Invoke-LoggedCommand "pnpm" @("install", "--frozen-lockfile") "Install workspace dependencies"
+    Invoke-LoggedCommand "pnpm" @("build") "Build workspace"
+    Invoke-LoggedCommand "pnpm" @("package:windows") "Build Windows installer package"
+    Invoke-LoggedCommand "pnpm" @("package:windows:verify") "Verify Windows installer package"
 
-  $built = Find-InstallerZip
-  if (-not $built) {
-    throw "package:windows completed, but release/windows/blue-tanuki-*-windows-x64-installer.zip was not found"
+    $built = Find-InstallerZip
+    if (-not $built) {
+      throw "package:windows completed, but release/windows/blue-tanuki-*-windows-x64-installer.zip was not found"
+    }
+    return $built
+  } finally {
+    Pop-Location
   }
-  return $built
 }
 
 function Get-SetupArguments {
@@ -156,7 +177,7 @@ function Expand-And-RunInstaller($ZipPath) {
 try {
   Initialize-Log
   Write-Info "Windows install entrypoint"
-  Write-Info "Repository root: $PSScriptRoot"
+  Write-Info "Repository root: $ScriptRoot"
   Write-Info "Log: $script:LogPath"
 
   $zip = Find-InstallerZip

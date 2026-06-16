@@ -62,9 +62,18 @@ function main(): void {
 
   const rootWindowsCmd = read("INSTALL_WINDOWS.cmd");
   requireIncludes("INSTALL_WINDOWS.cmd", rootWindowsCmd, "INSTALL_WINDOWS.ps1");
+  requireIncludes("INSTALL_WINDOWS.cmd", rootWindowsCmd, "cd /d \"%~dp0\"");
 
   const rootWindowsPs = read("INSTALL_WINDOWS.ps1");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "blue-tanuki-*-windows-x64-installer.zip");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "[string]$ReleaseDir,");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "[string]$WorkRoot,");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "$ScriptRoot = if ($PSScriptRoot)");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Join-Path $ScriptRoot \"release\\windows\"");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Join-Path $ScriptRoot \".codex-tmp\\windows-install-entrypoint\"");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Push-Location $ScriptRoot");
+  requireNotIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "[string]$ReleaseDir = (Join-Path $PSScriptRoot");
+  requireNotIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "[string]$WorkRoot = (Join-Path $PSScriptRoot");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "corepack");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "pnpm install");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "pnpm package:windows");
@@ -228,6 +237,7 @@ function main(): void {
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "windows_runtime_smoke=skipped");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "source_tree_setup_guidance_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "root_source_entrypoint_result=pass");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "root_source_entrypoint_cmd_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "installer_zip_setup_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "first_message_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "repair_install_result=pass");

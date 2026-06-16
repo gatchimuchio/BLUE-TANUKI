@@ -18,6 +18,7 @@ It is evidence only; it does not activate GA, public claims, or authority.
 - `install_result=pass`
 - `source_tree_setup_guidance_result=pass`
 - `root_source_entrypoint_result=pass`
+- `root_source_entrypoint_cmd_result=pass`
 - `installer_zip_setup_result=pass`
 - `launch_result=pass`
 - `gui_result=pass`

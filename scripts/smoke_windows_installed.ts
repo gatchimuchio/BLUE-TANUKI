@@ -457,6 +457,25 @@ async function main(): Promise<void> {
     }
     console.log("source_tree_setup_guidance_result=pass");
 
+    const rootEntrypointDefaultDryRun = runExpectingStatus("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(process.cwd(), "INSTALL_WINDOWS.ps1"),
+      "-DryRun",
+      "-NoLaunch",
+    ], work, 0, "root source entrypoint default dry-run", 60_000);
+    if (!rootEntrypointDefaultDryRun.includes("Repository root:")) {
+      throw new Error("root source entrypoint default dry-run did not print repository root");
+    }
+    if (!rootEntrypointDefaultDryRun.includes("root_source_entrypoint_dry_run=pass")) {
+      throw new Error("root source entrypoint default dry-run marker missing");
+    }
+    if (rootEntrypointDefaultDryRun.includes("Cannot bind argument to parameter 'Path'")) {
+      throw new Error("root source entrypoint default dry-run failed during parameter binding");
+    }
+
     const emptyReleaseDir = path.join(work, "empty-release");
     mkdirSync(emptyReleaseDir, { recursive: true });
     const rootEntrypointDryRun = runExpectingStatus("powershell.exe", [
@@ -482,6 +501,32 @@ async function main(): Promise<void> {
       throw new Error("root source entrypoint dry-run marker missing");
     }
     console.log("root_source_entrypoint_result=pass");
+
+    const rootEntrypointCmdDryRun = runExpectingStatus("cmd.exe", [
+      "/d",
+      "/s",
+      "/c",
+      path.join(process.cwd(), "INSTALL_WINDOWS.cmd"),
+      "-DryRun",
+      "-ReleaseDir",
+      emptyReleaseDir,
+      "-WorkRoot",
+      path.join(work, "cmd-entrypoint-dry-run"),
+      "-NoLaunch",
+    ], work, 0, "root source cmd entrypoint dry-run", 60_000);
+    if (!rootEntrypointCmdDryRun.includes("Repository root:")) {
+      throw new Error("root source cmd entrypoint dry-run did not print repository root");
+    }
+    if (!rootEntrypointCmdDryRun.includes("would_build_installer=true")) {
+      throw new Error("root source cmd entrypoint did not choose build/package path when installer zip was absent");
+    }
+    if (!rootEntrypointCmdDryRun.includes("root_source_entrypoint_dry_run=pass")) {
+      throw new Error("root source cmd entrypoint dry-run marker missing");
+    }
+    if (rootEntrypointCmdDryRun.includes("Cannot bind argument to parameter 'Path'")) {
+      throw new Error("root source cmd entrypoint failed during parameter binding");
+    }
+    console.log("root_source_entrypoint_cmd_result=pass");
 
     expandArchive(artifact, packageDir);
     assertTextIncludes(path.join(packageDir, "app", "docs", "WINDOWS_INSTALLER_GUIDE.md"), [
@@ -819,6 +864,7 @@ async function main(): Promise<void> {
     console.log("windows_installed_smoke=pass");
     console.log("source_tree_setup_guidance_result=pass");
     console.log("root_source_entrypoint_result=pass");
+    console.log("root_source_entrypoint_cmd_result=pass");
     console.log("installer_zip_setup_result=pass");
     console.log("install_result=pass");
     console.log("launch_result=pass");

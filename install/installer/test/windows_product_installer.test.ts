@@ -29,6 +29,19 @@ function powerShellFileArgs(command: string, file: string, args: readonly string
   return ["-NoProfile", "-File", file, ...args];
 }
 
+function runPowerShellFile(
+  command: string,
+  file: string,
+  args: readonly string[],
+  cwd: string,
+): ReturnType<typeof spawnSync> {
+  return spawnSync(command, powerShellFileArgs(command, file, args), {
+    cwd,
+    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
+    encoding: "utf8",
+  });
+}
+
 describe("Windows product installer package", () => {
   it("uses bundled runtime and gives source-tree mislaunch guidance", () => {
     const setup = read("install/windows/product/BlueTanukiSetup.ps1");
@@ -47,14 +60,47 @@ describe("Windows product installer package", () => {
   it("exposes a source-root Windows entrypoint that builds or runs the installer zip", () => {
     const cmd = read("INSTALL_WINDOWS.cmd");
     const ps1 = read("INSTALL_WINDOWS.ps1");
+    expect(cmd).toContain("cd /d \"%~dp0\"");
     expect(cmd).toContain("INSTALL_WINDOWS.ps1");
     expect(ps1).toContain("blue-tanuki-*-windows-x64-installer.zip");
+    expect(ps1).toContain("[string]$ReleaseDir,");
+    expect(ps1).toContain("[string]$WorkRoot,");
+    expect(ps1).toContain("$ScriptRoot = if ($PSScriptRoot)");
+    expect(ps1).toContain("Join-Path $ScriptRoot \"release\\windows\"");
+    expect(ps1).toContain("Join-Path $ScriptRoot \".codex-tmp\\windows-install-entrypoint\"");
+    expect(ps1).toContain("Push-Location $ScriptRoot");
+    expect(ps1).not.toContain("[string]$ReleaseDir = (Join-Path $PSScriptRoot");
+    expect(ps1).not.toContain("[string]$WorkRoot = (Join-Path $PSScriptRoot");
     expect(ps1).toContain("corepack prepare pnpm@$script:PnpmVersion --activate");
     expect(ps1).toContain("pnpm install --frozen-lockfile");
     expect(ps1).toContain("pnpm package:windows");
     expect(ps1).toContain("pnpm package:windows:verify");
     expect(ps1).toContain("root_source_entrypoint_dry_run=pass");
     expect(ps1).toContain("BlueTanukiSetup.cmd");
+  });
+
+  it("dry-runs direct PowerShell invocation with default ReleaseDir and WorkRoot resolution", () => {
+    const command = findPowerShell();
+    const entrypoint = join(root, "INSTALL_WINDOWS.ps1");
+    if (!command) {
+      expect(read("INSTALL_WINDOWS.ps1")).toContain("$ScriptRoot = if ($PSScriptRoot)");
+      return;
+    }
+    const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-root-entrypoint-defaults-"));
+    try {
+      const result = runPowerShellFile(command, entrypoint, [
+        "-DryRun",
+        "-NoLaunch",
+      ], tmp);
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result.status).toBe(0);
+      expect(output).toContain("Repository root:");
+      expect(output).toContain(root);
+      expect(output).toContain("root_source_entrypoint_dry_run=pass");
+      expect(output).not.toContain("Cannot bind argument to parameter 'Path'");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("fails direct source-tree product setup with friendly guidance when PowerShell is available", () => {
@@ -66,17 +112,13 @@ describe("Windows product installer package", () => {
     }
     const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-source-setup-test-"));
     try {
-      const result = spawnSync(command, powerShellFileArgs(command, setup, [
+      const result = runPowerShellFile(command, setup, [
         "-InstallRoot",
         join(tmp, "InstallRoot"),
         "-DataRoot",
         join(tmp, "DataRoot"),
         "-NoLaunch",
-      ]), {
-        cwd: root,
-        env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
-        encoding: "utf8",
-      });
+      ], root);
       const output = `${result.stdout}\n${result.stderr}`;
       expect(result.status).toBe(1);
       expect(output).toContain("This setup script must be run from the packaged Windows installer zip.");
@@ -87,7 +129,7 @@ describe("Windows product installer package", () => {
     }
   });
 
-  it("dry-runs the root source entrypoint build path when no installer zip exists", () => {
+  it("dry-runs the root source entrypoint build path from another current directory", () => {
     const command = findPowerShell();
     const entrypoint = join(root, "INSTALL_WINDOWS.ps1");
     if (!command) {
@@ -97,23 +139,55 @@ describe("Windows product installer package", () => {
     const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-root-entrypoint-test-"));
     const emptyReleaseDir = join(tmp, "release");
     try {
-      const result = spawnSync(command, powerShellFileArgs(command, entrypoint, [
+      const result = runPowerShellFile(command, entrypoint, [
         "-DryRun",
         "-ReleaseDir",
         emptyReleaseDir,
         "-WorkRoot",
         join(tmp, "work"),
         "-NoLaunch",
-      ]), {
-        cwd: root,
-        env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
-        encoding: "utf8",
-      });
+      ], tmp);
       const output = `${result.stdout}\n${result.stderr}`;
       expect(result.status).toBe(0);
       expect(output).toContain("would_build_installer=true");
       expect(output).toContain("would_run=pnpm package:windows");
       expect(output).toContain("root_source_entrypoint_dry_run=pass");
+      expect(output).not.toContain("Cannot bind argument to parameter 'Path'");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("runs the cmd wrapper from another current directory on Windows", () => {
+    const cmd = read("INSTALL_WINDOWS.cmd");
+    expect(cmd).toContain("cd /d \"%~dp0\"");
+    if (process.platform !== "win32") return;
+
+    const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-root-cmd-entrypoint-"));
+    const emptyReleaseDir = join(tmp, "release");
+    try {
+      const result = spawnSync("cmd.exe", [
+        "/d",
+        "/s",
+        "/c",
+        join(root, "INSTALL_WINDOWS.cmd"),
+        "-DryRun",
+        "-ReleaseDir",
+        emptyReleaseDir,
+        "-WorkRoot",
+        join(tmp, "work"),
+        "-NoLaunch",
+      ], {
+        cwd: tmp,
+        env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
+        encoding: "utf8",
+      });
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result.status).toBe(0);
+      expect(output).toContain("Repository root:");
+      expect(output).toContain("would_build_installer=true");
+      expect(output).toContain("root_source_entrypoint_dry_run=pass");
+      expect(output).not.toContain("Cannot bind argument to parameter 'Path'");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -163,6 +237,7 @@ describe("Windows product installer package", () => {
     expect(read("scripts/verify_windows_package.ts")).toContain("const shaFile = `${archive}.sha256`");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("source_tree_setup_guidance_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("root_source_entrypoint_result=pass");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("root_source_entrypoint_cmd_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("installer_zip_setup_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("windows_runtime_smoke=skipped");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("port_conflict_result=pass");
