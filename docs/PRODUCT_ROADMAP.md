@@ -31,7 +31,7 @@
 |---|---|---|
 | Ubuntu/Linux | 開発・常時検証・回帰検出の基準面 | 常時グリーン必須。壊れたらWindows以前にブロック |
 | Windows | 最終製品ターゲット・配布ターゲット | 製品完成の最終判定面 |
-| macOS | 後続展開（install/macosは現状薄いshellのみ） | v1必須対象外 |
+| macOS | source/release bundle root entrypoint で install 後 launch まで案内 | signed native package は後続 |
 
 ## 3. 製品完成の定義（v1踏襲）
 

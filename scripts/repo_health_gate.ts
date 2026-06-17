@@ -64,9 +64,7 @@ export const PREVIEW_PACKAGE_PATHS = [
   "packages/channel-teams",
   "packages/channel-line",
   "install/installer",
-  "install/resident",
   "install/windows",
-  "install/macos",
 ] as const;
 
 export interface ImportEdge {

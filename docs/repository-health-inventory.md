@@ -20,11 +20,11 @@
 | `packages/operator-daily` | CORE | first-party Layer A Daily Operator surface; plugin-loader discovered downstream package |
 | `packages/operator-developer` | CORE | first-party Layer A Developer Operator surface; plugin-loader discovered downstream package |
 | `packages/operator-writing` | CORE | first-party Layer A Writing Operator surface; plugin-loader discovered downstream package |
-| `install/linux` | CORE | supported native Linux / WSL guided install surface |
-| `install/macos` | PREVIEW | supported later as platform surface; not used as WSL baseline |
+| `install/linux` | CORE | supported Linux guided install and launch surface |
+| `install/macos` | CORE | supported macOS guided install and launch surface |
 | `install/windows` | PREVIEW | no new Windows-native bypasses in this health phase |
 | `install/installer` | PREVIEW | guided installer acceleration; not an authority path |
-| `install/resident` | PREVIEW | resident launch helper; not authority core |
+| `install/resident` | CORE | resident launch helper required by portable install launchers; not authority core |
 | `docs/IMPLEMENTATION_INSTRUCTIONS.md` | CORE | active implementation source of truth |
 | `docs/known-environment-failures.md` | CORE | validation failure classification |
 | `docs/history/*` | ARCHIVE | historical phase evidence, not active release instruction |
@@ -68,7 +68,7 @@
 - tsconfig references include CORE and PREVIEW packages so typecheck covers the full repository.
 - core release path is CORE-first; PREVIEW package type/test coverage may remain in validation without becoming release scope.
 - `apps/gateway` hard dependencies are core-only. Preview adapters are discovered through plugin manifests in the full workspace and skipped when absent from the extracted core release bundle. Operator packages are first-party Layer A core release packages, but still load through plugin manifests and permission checks rather than hard Gateway imports.
-- core release bundle allowlist is declared as `CORE_RELEASE_PATHS` in `scripts/create_release_bundle.ts`; preview channel packages, installer/resident helpers, Windows/macOS installers, and credential-dependent live smoke are excluded from that allowlist.
+- core release bundle allowlist is declared as `CORE_RELEASE_PATHS` in `scripts/create_release_bundle.ts`; preview channel packages, the guided installer dev package, Windows source installers, and credential-dependent live smoke are excluded from that allowlist. macOS/Linux portable installer entrypoints and resident helpers are included as release install surfaces, not as HDS authority code.
 
 ## Health Phase Decisions
 

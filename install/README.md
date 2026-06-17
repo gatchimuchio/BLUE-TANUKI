@@ -12,6 +12,31 @@ There are three distinct paths:
 The repository does not build signed native packages yet. The Windows product
 package is an unsigned zip-delivered installer package, not a signed MSI/EXE.
 
+## One-click source / release-bundle entrypoints
+
+Use the root entrypoint for the current OS from the extracted source zip or
+release bundle:
+
+```text
+Windows: INSTALL_WINDOWS.cmd
+macOS:   INSTALL_MACOS.command
+Linux:   INSTALL_LINUX.desktop or sh ./INSTALL_LINUX.sh
+Unix:    sh ./INSTALL.sh
+```
+
+The macOS/Linux entrypoints run the portable installer, then start the resident
+app and open the Control Center. To install without launching:
+
+```bash
+LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_MACOS.sh
+LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_LINUX.sh
+```
+
+`NO_LAUNCH=1` is accepted as an equivalent suppression flag for macOS/Linux
+entrypoints. Linux desktop double-click behavior depends on the desktop
+environment; `INSTALL_LINUX.desktop` is provided for desktops that allow local
+launchers, and `sh ./INSTALL_LINUX.sh` remains the portable fallback.
+
 ## Distribution readiness
 
 `doctor` checks that this installer guide, update/rollback guidance,
@@ -140,6 +165,14 @@ powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuk
 
 ## macOS
 
+Source/release-bundle one-click path:
+
+```bash
+sh ./INSTALL_MACOS.sh
+```
+
+On macOS Finder, double-click root `INSTALL_MACOS.command`.
+
 ```bash
 sh ./install/macos/install.sh
 ```
@@ -150,6 +183,7 @@ Optional:
 FORCE=1 sh ./install/macos/install.sh
 FORCE=1 RESET_CONFIG=1 sh ./install/macos/install.sh
 RUN_DOCTOR=0 sh ./install/macos/install.sh
+LAUNCH_AFTER_INSTALL=0 sh ./install/macos/install.sh
 sh ./install/macos/uninstall.sh
 PURGE=1 sh ./install/macos/uninstall.sh
 DRY_RUN=1 sh ./install/macos/uninstall.sh
@@ -170,6 +204,15 @@ The installer creates `~/.local/bin/blue-tanuki`.
 
 ## Linux
 
+Source/release-bundle one-click path:
+
+```bash
+sh ./INSTALL_LINUX.sh
+```
+
+On Linux desktops that allow local launchers, double-click root
+`INSTALL_LINUX.desktop`.
+
 ```bash
 sh ./install/linux/install.sh
 ```
@@ -180,6 +223,7 @@ Optional:
 FORCE=1 sh ./install/linux/install.sh
 FORCE=1 RESET_CONFIG=1 sh ./install/linux/install.sh
 RUN_DOCTOR=0 sh ./install/linux/install.sh
+LAUNCH_AFTER_INSTALL=0 sh ./install/linux/install.sh
 sh ./install/linux/uninstall.sh
 PURGE=1 sh ./install/linux/uninstall.sh
 DRY_RUN=1 sh ./install/linux/uninstall.sh

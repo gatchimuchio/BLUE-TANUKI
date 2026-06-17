@@ -7,6 +7,10 @@ CONFIG_ROOT="${CONFIG_ROOT:-$HOME/.config/blue-tanuki}"
 FORCE="${FORCE:-0}"
 RESET_CONFIG="${RESET_CONFIG:-0}"
 RUN_DOCTOR="${RUN_DOCTOR:-1}"
+if [ "${NO_LAUNCH:-0}" = "1" ]; then
+  LAUNCH_AFTER_INSTALL=0
+fi
+LAUNCH_AFTER_INSTALL="${LAUNCH_AFTER_INSTALL:-1}"
 PNPM_VERSION="9.12.0"
 
 fail() {
@@ -42,6 +46,7 @@ SOURCE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 ENV_FILE="$CONFIG_ROOT/blue-tanuki.env"
 BIN_ROOT="$HOME/.local/bin"
 LAUNCHER="$BIN_ROOT/blue-tanuki"
+CONTROL_CENTER_URL="${BLUE_TANUKI_CONTROL_CENTER_URL:-http://127.0.0.1:8787/app}"
 
 if [ -d "$INSTALL_ROOT" ] && [ "$FORCE" != "1" ]; then
   fail "$INSTALL_ROOT already exists. Re-run with FORCE=1 to replace the app. Add RESET_CONFIG=1 only if you also want to regenerate the env file."
@@ -144,8 +149,17 @@ echo ""
 echo "BLUE-TANUKI installed."
 echo "Launcher: $LAUNCHER"
 echo "Env file:  $ENV_FILE"
+echo "Control:   $CONTROL_CENTER_URL"
 echo "Settings:  http://127.0.0.1:8787/settings"
 echo "Run:       $LAUNCHER start"
 echo "Doctor:    $LAUNCHER doctor"
 echo "Settings:  $LAUNCHER settings"
 echo "Reset cfg: FORCE=1 RESET_CONFIG=1 sh ./install/linux/install.sh"
+echo "No launch: LAUNCH_AFTER_INSTALL=0 sh ./install/linux/install.sh"
+
+if [ "$LAUNCH_AFTER_INSTALL" != "0" ]; then
+  echo ""
+  echo "Starting BLUE-TANUKI resident app..."
+  BLUE_TANUKI_CONTROL_CENTER_URL="$CONTROL_CENTER_URL" "$LAUNCHER" resident-start
+  BLUE_TANUKI_CONTROL_CENTER_URL="$CONTROL_CENTER_URL" "$LAUNCHER" resident-open
+fi

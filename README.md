@@ -22,6 +22,20 @@ Development strategy: GUI Shell is a reference LLM-readable responsibility subst
 
 ## Quick Start
 
+Choose the file for your OS from the extracted folder:
+
+| OS | Run this |
+| --- | --- |
+| Windows | `INSTALL_WINDOWS.cmd` from the source zip root, or `BlueTanukiSetup.cmd` from the packaged installer zip |
+| macOS | `INSTALL_MACOS.command` |
+| Linux | `INSTALL_LINUX.desktop` where supported, or `sh ./INSTALL_LINUX.sh` |
+
+`INSTALL.sh` also dispatches to the macOS or Linux entrypoint on Unix-like
+hosts. macOS/Linux entrypoints install from the source or release bundle, start
+the resident app, and open the Control Center. They still require a local
+Node.js/Corepack-capable environment; BLUE-TANUKI does not ship signed native
+macOS/Linux packages yet.
+
 ### Windows users
 
 Do not run `install/windows/product/BlueTanukiSetup.cmd` directly from a source
@@ -43,6 +57,33 @@ Path B: source zip
 when present. If no installer zip exists, it enables Corepack, prepares
 `pnpm@9.12.0`, installs dependencies, builds, packages, verifies, extracts the
 generated installer zip, and runs `BlueTanukiSetup.cmd`.
+
+### macOS users
+
+1. Extract the source or release bundle.
+2. Double-click `INSTALL_MACOS.command`.
+3. The installer builds the local app, starts BLUE-TANUKI, and opens the
+   Control Center.
+
+For install-only behavior:
+
+```
+LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_MACOS.sh
+```
+
+### Linux users
+
+1. Extract the source or release bundle.
+2. Double-click `INSTALL_LINUX.desktop` where your desktop environment allows
+   local launchers, or run `sh ./INSTALL_LINUX.sh` from the extracted folder.
+3. The installer builds the local app, starts BLUE-TANUKI, and opens the
+   Control Center.
+
+For install-only behavior:
+
+```
+LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_LINUX.sh
+```
 
 ### Build a Windows installer package
 

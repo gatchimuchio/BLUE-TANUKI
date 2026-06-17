@@ -15,6 +15,8 @@
 - `packages/operator-daily`
 - `packages/operator-developer`
 - `install/linux`
+- `install/macos`
+- `install/resident`
 - core validation scripts and active docs
 
 ## Preview / Archive Exclude
@@ -24,9 +26,7 @@
 - `packages/channel-teams`
 - `packages/channel-line`
 - `install/installer`
-- `install/resident`
 - `install/windows`
-- `install/macos`
 - `apps/gateway/src/smoke_live.ts`
 - historical `docs/phase*.md` and `docs/history/*`
 

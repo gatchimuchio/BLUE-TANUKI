@@ -24,6 +24,10 @@ describe("resident application integration", () => {
       expect(text).toContain("resident-autostart-disable");
       expect(text).toContain("resident-autostart-status");
     }
+    expect(mac).toContain("LAUNCH_AFTER_INSTALL");
+    expect(mac).toContain("resident-open");
+    expect(linux).toContain("LAUNCH_AFTER_INSTALL");
+    expect(linux).toContain("resident-open");
   });
 
   it("keeps autostart explicit and current-user scoped", () => {

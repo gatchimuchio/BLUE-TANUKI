@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Install BLUE-TANUKI
+Comment=Install and launch BLUE-TANUKI
+Exec=sh -c 'cd "$(dirname "$1")" && exec sh ./INSTALL_LINUX.sh' sh %k
+Terminal=true
+Categories=Utility;

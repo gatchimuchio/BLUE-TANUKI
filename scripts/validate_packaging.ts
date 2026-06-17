@@ -57,8 +57,43 @@ function main(): void {
   requireIncludes("install/README.md", installReadme, "bundles Windows Node.js");
   requireIncludes("install/README.md", installReadme, "Start Menu shortcuts");
   requireIncludes("install/README.md", installReadme, "does not silently enable autostart");
+  requireIncludes("install/README.md", installReadme, "INSTALL.sh");
+  requireIncludes("install/README.md", installReadme, "INSTALL_MACOS.command");
+  requireIncludes("install/README.md", installReadme, "INSTALL_LINUX.desktop");
+  requireIncludes("install/README.md", installReadme, "INSTALL_LINUX.sh");
+  requireIncludes("install/README.md", installReadme, "LAUNCH_AFTER_INSTALL=0");
   requireIncludes("install/README.md", installReadme, "INSTALL_WINDOWS.cmd");
   requireIncludes("install/README.md", installReadme, "Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree");
+
+  const rootUnix = read("INSTALL.sh");
+  requireIncludes("INSTALL.sh", rootUnix, "INSTALL_MACOS.sh");
+  requireIncludes("INSTALL.sh", rootUnix, "INSTALL_LINUX.sh");
+  requireIncludes("INSTALL.sh", rootUnix, "INSTALL_WINDOWS.cmd");
+
+  const rootLinuxDesktop = read("INSTALL_LINUX.desktop");
+  requireIncludes("INSTALL_LINUX.desktop", rootLinuxDesktop, "Type=Application");
+  requireIncludes("INSTALL_LINUX.desktop", rootLinuxDesktop, "Terminal=true");
+  requireIncludes("INSTALL_LINUX.desktop", rootLinuxDesktop, "INSTALL_LINUX.sh");
+
+  const rootMacCommand = read("INSTALL_MACOS.command");
+  requireIncludes("INSTALL_MACOS.command", rootMacCommand, "cd \"$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\"");
+  requireIncludes("INSTALL_MACOS.command", rootMacCommand, "exec sh ./INSTALL_MACOS.sh");
+
+  const rootMac = read("INSTALL_MACOS.sh");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "install/macos/install.sh");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "LAUNCH_AFTER_INSTALL");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "NO_LAUNCH");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "macos_source_entrypoint_dry_run=pass");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "Repository root:");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "Log:");
+
+  const rootLinux = read("INSTALL_LINUX.sh");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "install/linux/install.sh");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "LAUNCH_AFTER_INSTALL");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "NO_LAUNCH");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "linux_source_entrypoint_dry_run=pass");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "Repository root:");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "Log:");
 
   const rootWindowsCmd = read("INSTALL_WINDOWS.cmd");
   requireIncludes("INSTALL_WINDOWS.cmd", rootWindowsCmd, "INSTALL_WINDOWS.ps1");
@@ -249,12 +284,16 @@ function main(): void {
   requireIncludes("install/macos/install.sh", macInstall, "--setup --yes");
   requireIncludes("install/macos/install.sh", macInstall, "RUN_DOCTOR");
   requireIncludes("install/macos/install.sh", macInstall, "RESET_CONFIG");
+  requireIncludes("install/macos/install.sh", macInstall, "LAUNCH_AFTER_INSTALL");
+  requireIncludes("install/macos/install.sh", macInstall, "NO_LAUNCH");
   requireIncludes("install/macos/install.sh", macInstall, "Existing env file retained");
   requireIncludes("install/macos/install.sh", macInstall, "Add RESET_CONFIG=1 only");
   requireIncludes("install/macos/install.sh", macInstall, "post-install doctor");
   requireIncludes("install/macos/install.sh", macInstall, "doctor)");
   requireIncludes("install/macos/install.sh", macInstall, "resident-start");
+  requireIncludes("install/macos/install.sh", macInstall, "resident-open");
   requireIncludes("install/macos/install.sh", macInstall, "resident-autostart-enable");
+  requireIncludes("install/macos/install.sh", macInstall, "Control:");
   requireIncludes("install/macos/install.sh", macInstall, "/settings");
 
   const macUninstall = read("install/macos/uninstall.sh");
@@ -270,12 +309,16 @@ function main(): void {
   requireIncludes("install/linux/install.sh", linuxInstall, "--setup --yes");
   requireIncludes("install/linux/install.sh", linuxInstall, "RUN_DOCTOR");
   requireIncludes("install/linux/install.sh", linuxInstall, "RESET_CONFIG");
+  requireIncludes("install/linux/install.sh", linuxInstall, "LAUNCH_AFTER_INSTALL");
+  requireIncludes("install/linux/install.sh", linuxInstall, "NO_LAUNCH");
   requireIncludes("install/linux/install.sh", linuxInstall, "Existing env file retained");
   requireIncludes("install/linux/install.sh", linuxInstall, "Add RESET_CONFIG=1 only");
   requireIncludes("install/linux/install.sh", linuxInstall, "post-install doctor");
   requireIncludes("install/linux/install.sh", linuxInstall, "doctor)");
   requireIncludes("install/linux/install.sh", linuxInstall, "resident-start");
+  requireIncludes("install/linux/install.sh", linuxInstall, "resident-open");
   requireIncludes("install/linux/install.sh", linuxInstall, "resident-autostart-enable");
+  requireIncludes("install/linux/install.sh", linuxInstall, "Control:");
   requireIncludes("install/linux/install.sh", linuxInstall, "/settings");
 
   const linuxUninstall = read("install/linux/uninstall.sh");
@@ -287,6 +330,11 @@ function main(): void {
 
   const releaseBundle = read("scripts/create_release_bundle.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "CORE_RELEASE_PATHS");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL.sh");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_LINUX.desktop");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_MACOS.command");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_MACOS.sh");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_LINUX.sh");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.cmd");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.ps1");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/hds-brain");
@@ -303,6 +351,10 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "docs/phase11-s13-v1-ga-promotion-execution.md");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/linux/install.sh");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/linux/uninstall.sh");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/macos/install.sh");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/macos/uninstall.sh");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/resident/blue-tanuki-resident.sh");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/resident/blue-tanuki-resident.ps1");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/windows/product");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/windows/product/BlueTanukiSetup.ps1");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/package_windows.ts");
@@ -318,6 +370,11 @@ function main(): void {
 
   const releaseVerify = read("scripts/verify_release_bundle.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "sha256");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL.sh");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_LINUX.desktop");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_MACOS.command");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_MACOS.sh");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_LINUX.sh");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_WINDOWS.cmd");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_WINDOWS.ps1");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "manifest");
@@ -336,6 +393,10 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/v1.0-ga-promotion-review.md");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/phase11-s13-v1-ga-promotion-execution.md");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/linux/uninstall.sh");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/macos/install.sh");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/macos/uninstall.sh");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/resident/blue-tanuki-resident.sh");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/resident/blue-tanuki-resident.ps1");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/windows/product/BlueTanukiSetup.ps1");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/verify_windows_package.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/WINDOWS_PACKAGING_AUDIT.md");

@@ -6,7 +6,30 @@ v1.0 RC の最短経路は **WebChat Control Center + HDS Approval/Audit** で�
 v1.0 RC provides a guided first-run path, not a verified 5-minute beginner guarantee. 詳細な手順は [docs/FIRST_RUN_CHECKLIST.md](./docs/FIRST_RUN_CHECKLIST.md)、常駐運用の確認は [docs/PERMANENT_USE_CHECKLIST.md](./docs/PERMANENT_USE_CHECKLIST.md) を使う。
 Support scope and remaining RC limitations are fixed in [docs/SUPPORT_BOUNDARY.md](./docs/SUPPORT_BOUNDARY.md) and [docs/KNOWN_LIMITATIONS.md](./docs/KNOWN_LIMITATIONS.md). Preview surfaces are not promoted by quickstart success.
 
-## 1. Windows installer package
+## 1. OS別一発起動 entrypoint
+
+展開した folder の root から OS に合う入口を実行する。
+
+| OS | 実行するもの |
+| --- | --- |
+| Windows | source zip なら `INSTALL_WINDOWS.cmd`、packaged installer zip なら `BlueTanukiSetup.cmd` |
+| macOS | `INSTALL_MACOS.command` |
+| Linux | 対応 desktop なら `INSTALL_LINUX.desktop`、fallback は `sh ./INSTALL_LINUX.sh` |
+
+Unix-like host では `sh ./INSTALL.sh` でも macOS/Linux を自動判定する。
+macOS/Linux は source/release bundle から local app を build/install し、
+resident app を起動して Control Center を開く。現時点では signed native
+`.dmg` / `.deb` / `.rpm` ではなく、Node.js/Corepack が使える local
+environment が必要である。
+
+launch を抑止して install のみ行う場合:
+
+```bash
+LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_MACOS.sh
+LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_LINUX.sh
+```
+
+## 2. Windows installer package
 
 Windows 一般ユーザー向けの経路は installer-first である。source tree 内の
 `install/windows/product/BlueTanukiSetup.cmd` は直接実行しない。
@@ -53,7 +76,7 @@ pnpm、Git、PowerShell setup script、repository commands を要求しない。
 - [docs/WINDOWS_FIRST_RUN.md](./docs/WINDOWS_FIRST_RUN.md)
 - [docs/WINDOWS_UNINSTALL.md](./docs/WINDOWS_UNINSTALL.md)
 
-## 2. Source install
+## 3. Source install
 
 ```bash
 pnpm install
@@ -63,7 +86,7 @@ pnpm build
 pnpm validate:repo-health
 ```
 
-## 3. Guided source first-run
+## 4. Guided source first-run
 
 Recommended:
 
@@ -85,7 +108,7 @@ guarantee.
 Use `Verify LLM` in Settings before saving a non-stub provider, endpoint, model,
 or API key.
 
-## 4. Local setup
+## 5. Local setup
 
 推奨:
 
@@ -109,7 +132,7 @@ Open:
 http://127.0.0.1:8787/
 ```
 
-## 5. First WebChat message
+## 6. First WebChat message
 
 Control Center から短いメッセージを送る。HTTP で直接確認する場合:
 
@@ -120,7 +143,7 @@ curl -X POST http://127.0.0.1:8787/inbound \
   -d '{"user":"local-user","content":"hello blue-tanuki"}'
 ```
 
-## 6. Telegram
+## 7. Telegram
 
 ```bash
 export TELEGRAM_BOT_TOKEN="123456:telegram-bot-token"
@@ -129,7 +152,7 @@ pnpm gateway:serve
 
 Telegram inbound uses Bot API long polling. Outbound target is `chat_id`.
 
-## 7. Daily Brief smoke
+## 8. Daily Brief smoke
 
 Daily Brief is a scheduled `channel_send` smoke by default. Gmail/GCal/Drive can be enabled as an optional read-only source after the basic smoke works.
 
@@ -156,7 +179,7 @@ export BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES="gmail,calendar,drive"
 export GOOGLE_ACCESS_TOKEN="<read-only-google-oauth-token>"
 ```
 
-## 8. Boot-time scheduled-message smoke
+## 9. Boot-time scheduled-message smoke
 
 ```bash
 export BLUE_TANUKI_SCHEDULES_JSON='[
@@ -173,7 +196,7 @@ pnpm gateway:serve
 
 Boot-time schedules enter HDS-BRAIN as `cron.process` and share the same cron lane as approved runtime schedules.
 
-## 9. Runtime schedules
+## 10. Runtime schedules
 
 Runtime schedule creation is enabled in v1.0 RC through `tool:schedule.*`. Listing is L1. Create/update/delete are L3 final-review operations and do not run until approved.
 
@@ -186,7 +209,7 @@ tool:schedule.delete id=<id>
 
 Pending, rejected, or timed-out schedule requests do not fire. Runtime snapshots expose ids, counts, timing metadata, and payload hashes, never schedule content.
 
-## 10. Runtime snapshot
+## 11. Runtime snapshot
 
 ```bash
 curl -H "Authorization: Bearer $WEBCHAT_TOKEN" \
@@ -195,7 +218,7 @@ curl -H "Authorization: Bearer $WEBCHAT_TOKEN" \
 
 The snapshot exposes HDS state, audit chain validity, memory count, pending approvals, safe scheduled-task metadata, and authority-path invariants.
 
-## 11. Next documents
+## 12. Next documents
 
 - [docs/INSTALLER_GUIDE.md](./docs/INSTALLER_GUIDE.md)
 - [docs/WINDOWS_INSTALLER_GUIDE.md](./docs/WINDOWS_INSTALLER_GUIDE.md)

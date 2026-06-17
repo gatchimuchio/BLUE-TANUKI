@@ -54,11 +54,21 @@ export const EXTRACTED_RELEASE_COMMANDS: readonly ExtractedReleaseCommand[] = [
 ] as const;
 
 const REQUIRED_ARCHIVE_PATHS = [
+  "INSTALL.sh",
+  "INSTALL_LINUX.desktop",
+  "INSTALL_LINUX.sh",
+  "INSTALL_MACOS.command",
+  "INSTALL_MACOS.sh",
   "INSTALL_WINDOWS.cmd",
   "INSTALL_WINDOWS.ps1",
   "install/README.md",
   "install/linux/install.sh",
   "install/linux/uninstall.sh",
+  "install/macos/install.sh",
+  "install/macos/uninstall.sh",
+  "install/resident/README.md",
+  "install/resident/blue-tanuki-resident.ps1",
+  "install/resident/blue-tanuki-resident.sh",
   "install/windows/product/BlueTanukiSetup.ps1",
   "install/windows/product/BlueTanukiLauncher.ps1",
   "install/windows/product/BlueTanukiUninstall.ps1",
