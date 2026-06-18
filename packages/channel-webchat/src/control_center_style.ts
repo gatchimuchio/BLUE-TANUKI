@@ -208,9 +208,33 @@ export const CONTROL_CENTER_STYLE = `      :root {
           #17150f;
       }
 
-      .tanuki-panel svg {
-        width: min(180px, 72%);
-        height: auto;
+      .aotanu-mascot {
+        display: grid;
+        justify-items: center;
+        gap: 9px;
+        min-width: 0;
+      }
+
+      .aotanu-mascot[hidden] {
+        display: none;
+      }
+
+      .aotanu-sprite {
+        width: 128px;
+        height: 128px;
+        border: 1px solid rgba(102, 209, 193, 0.35);
+        border-radius: 6px;
+        background-color: #bdeaf4;
+        background-repeat: no-repeat;
+        background-size: 200% 200%;
+        image-rendering: pixelated;
+      }
+
+      .aotanu-caption {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
       }
 
       .screen-grid {
@@ -552,6 +576,11 @@ export const CONTROL_CENTER_STYLE = `      :root {
 
         .kv {
           grid-template-columns: 92px minmax(0, 1fr);
+        }
+
+        .aotanu-sprite {
+          width: 96px;
+          height: 96px;
         }
       }
 `;

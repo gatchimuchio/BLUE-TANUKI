@@ -58,6 +58,7 @@
 - Added unsigned Windows installer package generation with bundled Windows Node runtime, Start Menu shortcuts, current-user uninstall registration, Windows package verification, installed-app smoke script, and Windows first-run/uninstall docs.
 - Added a functional Conversation / WebChat Control Center panel using `/ws-ticket`, WebSocket, and `/inbound`, plus live Doctor / Health runtime status fields for installed GUI use.
 - Added optional OpenRouter LLM backend support and optional Composio dry-run connector support while preserving native-first configuration, HDS-BRAIN authority, Approval Gate, audit, and Windows user-data settings boundaries.
+- Added the Aotanu Control Center mascot as a read-only runtime-state display with pixelated spritesheet assets and packaged asset inclusion.
 
 ## 0.1.0 - 2026-05-06
 

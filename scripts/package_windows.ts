@@ -206,6 +206,7 @@ export async function copyAppLayout(appRoot: string): Promise<void> {
   for (const rel of ROOT_TEXT_FILES) {
     await copyFileIfExists(rel, appRoot);
   }
+  await copyDir(path.join(root, "assets"), path.join(appRoot, "assets"));
   await copyDir(path.join(root, "docs"), path.join(appRoot, "docs"));
   await copyDir(path.join(root, "scripts"), path.join(appRoot, "scripts"));
   await copyDir(path.join(root, "install/linux"), path.join(appRoot, "install/linux"));

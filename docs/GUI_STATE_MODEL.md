@@ -11,6 +11,7 @@
 | NotificationState | `/notifications` | display-only operator alerts |
 | HistoryReplayState | `/history/replay` | digest/metadata replay entries |
 | LocalUiState | sessionStorage, active tab, token input fields | display convenience only |
+| AotanuMascotState | RuntimeState projection in Control Center UI | display-only mascot animation state |
 
 ## 2. Local UI State Rule
 
@@ -24,6 +25,20 @@ Local UI state must not:
 - rewrite policy
 - update audit/history
 - affect HDS-BRAIN judgement
+
+## 2.1 Aotanu Mascot State Rule
+
+`AotanuMascotState` is a Control Center display projection only.
+
+States:
+
+- `idle`
+- `walk`
+- `working`
+- `happy`
+- `error`
+
+Mapping is performed in the WebChat Control Center UI from read-only runtime snapshot fields. The mascot may show readiness, pending work, success, or action-required state, but it must not approve, reject, resume, execute, rewrite policy, or influence HDS-BRAIN judgement.
 
 ## 3. Task States
 

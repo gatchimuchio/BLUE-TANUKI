@@ -114,23 +114,14 @@ ${CONTROL_CENTER_STYLE}    </style>
               <span class="badge readonly-note">Channel metadata is not authority</span>
             </div>
           </div>
-          <div class="tanuki-panel" aria-label="BLUE-TANUKI mascot panel">
-            <svg viewBox="0 0 240 190" role="img" aria-label="BLUE-TANUKI operations mascot">
-              <rect x="16" y="116" width="212" height="42" rx="8" fill="#252116" />
-              <circle cx="120" cy="82" r="58" fill="#d9a95f" />
-              <path d="M60 48 L83 10 L103 55 Z" fill="#7b542e" />
-              <path d="M180 48 L157 10 L137 55 Z" fill="#7b542e" />
-              <ellipse cx="91" cy="76" rx="29" ry="21" fill="#2a2118" />
-              <ellipse cx="149" cy="76" rx="29" ry="21" fill="#2a2118" />
-              <circle cx="96" cy="72" r="8" fill="#f7f3ea" />
-              <circle cx="144" cy="72" r="8" fill="#f7f3ea" />
-              <ellipse cx="120" cy="99" rx="18" ry="13" fill="#2a2118" />
-              <path d="M101 121 Q120 136 139 121" fill="none" stroke="#2a2118" stroke-width="8" stroke-linecap="round" />
-              <path d="M52 154 H188" stroke="#66d1c1" stroke-width="7" stroke-linecap="round" />
-              <circle cx="64" cy="154" r="6" fill="#54d79b" />
-              <circle cx="120" cy="154" r="6" fill="#f2bf5d" />
-              <circle cx="176" cy="154" r="6" fill="#caa6ff" />
-            </svg>
+          <div class="tanuki-panel" aria-label="Aotanu mascot panel">
+            <div id="aotanu-mascot" class="aotanu-mascot" role="img" aria-label="アオタヌ 状態: 待機中" data-state="idle">
+              <div id="aotanu-sprite" class="aotanu-sprite" aria-hidden="true"></div>
+              <div class="aotanu-caption">
+                <span class="badge readonly-note">アオタヌ</span>
+                <span id="aotanu-state-label" class="badge good">待機中</span>
+              </div>
+            </div>
           </div>
         </section>
 
