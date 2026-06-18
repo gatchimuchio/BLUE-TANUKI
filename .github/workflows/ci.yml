@@ -117,6 +117,32 @@ jobs:
           path: .codex-tmp/validate-product-macos
           if-no-files-found: ignore
 
+  macos-intel-product:
+    runs-on: macos-15-intel
+    needs: verify
+    env:
+      BLUE_TANUKI_VALIDATE_TIMEOUT_MS: "300000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: package:macos -> smoke:macos-installed product gate (x64)
+        run: pnpm validate:product -- --phase P3 --evidence .codex-tmp/validate-product-macos-intel
+      - name: Upload macOS Intel product evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-product-macos-intel-evidence
+          path: .codex-tmp/validate-product-macos-intel
+          if-no-files-found: ignore
+
   windows-product:
     runs-on: windows-latest
     needs: verify
