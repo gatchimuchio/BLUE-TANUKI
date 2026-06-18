@@ -20,6 +20,9 @@ import {
   type WebChatOperatorSurfaces,
   type WebChatRuntimeSurface,
   type WebChatSettingsSurface,
+  AOTANU_ASSET_ROUTE_PREFIX,
+  AOTANU_SPRITE_SPECS,
+  mapRuntimeSnapshotToAotanuMascotState,
 } from "../src/index.js";
 
 async function allocateTestPort(): Promise<number> {
@@ -403,9 +406,90 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("runtime-schedule-list");
       expect(html).toContain("authority-trace-list");
       expect(html).toContain("redactRuntimeValue");
+      expect(html).toContain("aotanu-mascot");
+      expect(html).toContain("aotanu-sprite");
+      expect(html).toContain("アオタヌ");
+      expect(html).toContain("aotanuStateFromRuntime");
+      expect(html).toContain("image-rendering: pixelated");
+      expect(html).toContain(AOTANU_SPRITE_SPECS.idle.asset_path);
+      expect(html).toContain(AOTANU_SPRITE_SPECS.walk.asset_path);
+      expect(html).toContain(AOTANU_SPRITE_SPECS.working.asset_path);
+      expect(html).toContain(AOTANU_SPRITE_SPECS.happy.asset_path);
+      expect(html).toContain(AOTANU_SPRITE_SPECS.error.asset_path);
     } finally {
       await ctx.teardown();
     }
+  });
+
+  it("serves only the bundled Aotanu spritesheet assets", async () => {
+    const ctx = await setup();
+    try {
+      await ctx.ch.start(async () => undefined);
+      const ok = await fetch(
+        `http://127.0.0.1:${ctx.port}${AOTANU_SPRITE_SPECS.idle.asset_path}`,
+      );
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("content-type")).toContain("image/png");
+      expect(Number(ok.headers.get("content-length"))).toBeGreaterThan(1000000);
+      await ok.arrayBuffer();
+
+      const unknown = await fetch(
+        `http://127.0.0.1:${ctx.port}${AOTANU_ASSET_ROUTE_PREFIX}unknown.png`,
+      );
+      expect(unknown.status).toBe(404);
+
+      const traversal = await fetch(
+        `http://127.0.0.1:${ctx.port}${AOTANU_ASSET_ROUTE_PREFIX}..%2Fsecret.png`,
+      );
+      expect(traversal.status).toBe(404);
+
+      const post = await postJson(
+        ctx.port,
+        AOTANU_SPRITE_SPECS.idle.asset_path,
+        {},
+      );
+      expect(post.status).toBe(405);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+});
+
+describe("Aotanu mascot runtime mapper", () => {
+  it("maps runtime snapshots to display-only mascot states", () => {
+    expect(mapRuntimeSnapshotToAotanuMascotState({
+      gateway_status: "starting",
+      hds_invariants_ok: true,
+      audit_chain_valid: true,
+      webchat_ready: true,
+    })).toBe("walk");
+    expect(mapRuntimeSnapshotToAotanuMascotState({
+      gateway_status: "running",
+      hds_invariants_ok: true,
+      audit_chain_valid: true,
+      webchat_ready: true,
+      pending_approvals_count: 1,
+    })).toBe("working");
+    expect(mapRuntimeSnapshotToAotanuMascotState({
+      gateway_status: "running",
+      hds_invariants_ok: true,
+      audit_chain_valid: true,
+      webchat_ready: true,
+      next_recommended_action: null,
+    })).toBe("happy");
+    expect(mapRuntimeSnapshotToAotanuMascotState({
+      gateway_status: "running",
+      hds_invariants_ok: true,
+      audit_chain_valid: true,
+      webchat_ready: true,
+      next_recommended_action: "Configure TELEGRAM_BOT_TOKEN to enable Telegram",
+    })).toBe("idle");
+    expect(mapRuntimeSnapshotToAotanuMascotState({
+      gateway_status: "degraded",
+      hds_invariants_ok: false,
+      audit_chain_valid: true,
+      webchat_ready: true,
+    })).toBe("error");
   });
 });
 

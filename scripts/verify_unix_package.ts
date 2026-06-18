@@ -45,6 +45,11 @@ const root = process.cwd();
 const REQUIRED_APP_ENTRIES = [
   "app/package.json",
   "app/pnpm-workspace.yaml",
+  "app/assets/aotanu/spritesheets/aotanu_idle_2x2.png",
+  "app/assets/aotanu/spritesheets/aotanu_walk_2x2.png",
+  "app/assets/aotanu/spritesheets/aotanu_working_2x2.png",
+  "app/assets/aotanu/spritesheets/aotanu_happy_2x2.png",
+  "app/assets/aotanu/spritesheets/aotanu_error_2x2.png",
   "app/apps/gateway/dist/main.js",
   "app/apps/gateway/dist/plugin_review_gate.js",
   "app/apps/gateway/src/plugin_review_gate.ts",

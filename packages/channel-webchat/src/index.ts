@@ -47,3 +47,13 @@ export {
 } from "./ticket_store.js";
 
 export { renderControlCenterHtml } from "./control_center_html.js";
+
+export {
+  AOTANU_ASSET_FILENAMES,
+  AOTANU_ASSET_ROUTE_PREFIX,
+  AOTANU_SPRITE_SPECS,
+  mapRuntimeSnapshotToAotanuMascotState,
+  type AotanuMascotState,
+  type AotanuRuntimeProjection,
+  type AotanuSpriteSheetSpec,
+} from "./aotanu_mascot.js";

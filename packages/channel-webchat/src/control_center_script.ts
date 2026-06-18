@@ -1,4 +1,15 @@
-export const CONTROL_CENTER_SCRIPT = `      const state = {
+import { AOTANU_SPRITE_SPECS } from "./aotanu_mascot.js";
+
+const AOTANU_SPRITE_SPECS_JSON = JSON.stringify(AOTANU_SPRITE_SPECS);
+
+export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU_SPRITE_SPECS_JSON};
+      const aotanuAnimation = {
+        timer: null,
+        state: "idle",
+        frame: 0
+      };
+
+      const state = {
         runtimeToken: sessionStorage.getItem("bt.runtimeToken") || "",
         approvalToken: sessionStorage.getItem("bt.approvalToken") || "",
         auditToken: sessionStorage.getItem("bt.auditToken") || "",
@@ -96,6 +107,122 @@ export const CONTROL_CENTER_SCRIPT = `      const state = {
         if (ms < 60000) return String(Math.round(ms / 1000)) + " sec";
         if (ms < 3600000) return String(Math.round(ms / 60000)) + " min";
         return String(Math.round(ms / 3600000)) + " hr";
+      }
+
+      function lowerStatus(value) {
+        return typeof value === "string" ? value.trim().toLowerCase() : "";
+      }
+
+      function numberValue(value) {
+        if (typeof value === "number" && Number.isFinite(value)) return value;
+        if (typeof value === "string" && value.trim() !== "") {
+          const parsed = Number(value);
+          if (Number.isFinite(parsed)) return parsed;
+        }
+        return 0;
+      }
+
+      function includesAny(value, needles) {
+        return needles.some(function (needle) {
+          return value.includes(needle);
+        });
+      }
+
+      function aotanuStateFromRuntime(body) {
+        const gatewayStatus = lowerStatus(body.gateway_status);
+        const workflowStatus = [
+          body.status,
+          body.runtime_status,
+          body.task_status,
+          body.state,
+          body.phase
+        ].map(lowerStatus).filter(Boolean).join(" ");
+        const nextAction = lowerStatus(body.next_recommended_action);
+        const pendingApprovals = numberValue(body.pending_approvals_count);
+        const pendingSchedules = numberValue(body.pending_schedule_approvals_count);
+        if (
+          ["degraded", "error", "failed", "blocked", "warning", "disconnected"].includes(gatewayStatus) ||
+          includesAny(workflowStatus, ["error", "failed", "blocked", "warning", "permission_denied", "disconnected", "suspended"]) ||
+          body.hds_invariants_ok === false ||
+          body.audit_chain_valid === false ||
+          body.webchat_ready === false
+        ) {
+          return "error";
+        }
+        if (
+          ["starting", "connecting", "launching", "loading"].includes(gatewayStatus) ||
+          includesAny(workflowStatus, ["connecting", "launching", "navigating", "switching", "loading_route", "loading"])
+        ) {
+          return "walk";
+        }
+        if (
+          pendingApprovals > 0 ||
+          pendingSchedules > 0 ||
+          includesAny(workflowStatus, ["running", "processing", "installing", "updating", "diagnosing", "setup_doctor", "syncing", "indexing", "waiting_approval"])
+        ) {
+          return "working";
+        }
+        if (
+          includesAny(workflowStatus, ["success", "completed", "passed", "done", "recovered"]) ||
+          (
+            gatewayStatus === "running" &&
+            body.hds_invariants_ok === true &&
+            body.audit_chain_valid === true &&
+            body.webchat_ready !== false &&
+            nextAction.length === 0
+          )
+        ) {
+          return "happy";
+        }
+        return "idle";
+      }
+
+      function aotanuReducedMotion() {
+        return Boolean(
+          window.matchMedia &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        );
+      }
+
+      function setAotanuFrame(frame) {
+        const sprite = byId("aotanu-sprite");
+        const spec = AOTANU_SPRITE_SPECS[aotanuAnimation.state] || AOTANU_SPRITE_SPECS.idle;
+        const safeFrame = frame % spec.frame_count;
+        const col = safeFrame % spec.columns;
+        const row = Math.floor(safeFrame / spec.columns);
+        const x = spec.columns === 1 ? 0 : (col / (spec.columns - 1)) * 100;
+        const y = spec.rows === 1 ? 0 : (row / (spec.rows - 1)) * 100;
+        aotanuAnimation.frame = safeFrame;
+        if (sprite) {
+          sprite.style.backgroundPosition = x + "% " + y + "%";
+        }
+      }
+
+      function renderAotanuMascot(mascotState) {
+        const panel = byId("aotanu-mascot");
+        const sprite = byId("aotanu-sprite");
+        const label = byId("aotanu-state-label");
+        if (!panel || !sprite || !label) return;
+        if (aotanuAnimation.timer) {
+          window.clearInterval(aotanuAnimation.timer);
+          aotanuAnimation.timer = null;
+        }
+        const nextState = AOTANU_SPRITE_SPECS[mascotState] ? mascotState : "idle";
+        const spec = AOTANU_SPRITE_SPECS[nextState];
+        aotanuAnimation.state = nextState;
+        panel.dataset.state = nextState;
+        panel.hidden = false;
+        panel.setAttribute("aria-label", "アオタヌ 状態: " + spec.label);
+        sprite.style.backgroundImage = "url('" + spec.asset_path + "')";
+        sprite.style.backgroundSize = String(spec.columns * 100) + "% " + String(spec.rows * 100) + "%";
+        label.textContent = spec.label;
+        label.className = "badge " + (nextState === "error" ? "bad" : nextState === "working" || nextState === "walk" ? "review" : "good");
+        setAotanuFrame(0);
+        if (!aotanuReducedMotion() && spec.fps > 0) {
+          aotanuAnimation.timer = window.setInterval(function () {
+            setAotanuFrame(aotanuAnimation.frame + 1);
+          }, Math.max(250, Math.round(1000 / spec.fps)));
+        }
       }
 
       function authHeaders(token) {
@@ -322,6 +449,7 @@ export const CONTROL_CENTER_SCRIPT = `      const state = {
         byId("header-status").className = "badge " + (body.gateway_status === "ready" ? "good" : "warn");
         updatePermanentUseStatus(body);
         renderSchedules(body);
+        renderAotanuMascot(aotanuStateFromRuntime(body));
       }
 
       function renderApprovals(body) {
@@ -1321,4 +1449,5 @@ export const CONTROL_CENTER_SCRIPT = `      const state = {
 
       syncInputs();
       setActiveScreen(state.activeScreen);
+      renderAotanuMascot("idle");
 `;

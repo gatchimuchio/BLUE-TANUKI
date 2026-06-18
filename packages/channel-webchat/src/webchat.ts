@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { createReadStream, existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
   type Server as HttpServer,
 } from "node:http";
+import * as path from "node:path";
 import { URL } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import type {
@@ -29,6 +32,10 @@ import {
   type ResumeApprovalTokenStore,
 } from "./resume_approval_token_store.js";
 import { renderControlCenterHtml } from "./control_center_html.js";
+import {
+  AOTANU_ASSET_FILENAMES,
+  AOTANU_ASSET_ROUTE_PREFIX,
+} from "./aotanu_mascot.js";
 import {
   readApprovalControlContext,
   readEvidenceControlContext,
@@ -73,6 +80,19 @@ const DEFAULT_RATE_LIMITS: Required<WebChatRateLimits> = {
 };
 
 const RESUME_GLOBAL_KEY = "*";
+const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
+const AOTANU_ASSET_ROOT = findAotanuAssetRoot();
+
+function findAotanuAssetRoot(): string {
+  let current = path.resolve(process.cwd());
+  for (;;) {
+    const candidate = path.join(current, "assets", "aotanu", "spritesheets");
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(process.cwd(), "assets", "aotanu", "spritesheets");
+    current = parent;
+  }
+}
 
 /**
  * WebChat channel — Phase 4.
@@ -446,6 +466,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    if (url.pathname.startsWith(AOTANU_ASSET_ROUTE_PREFIX)) {
+      await this.handleAotanuAsset(req, res, url.pathname);
+      return;
+    }
+
     if (url.pathname === "/app/about") {
       await this.handleAbout(req, res);
       return;
@@ -707,6 +732,63 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "not_found" }));
+  }
+
+  private async handleAotanuAsset(
+    req: IncomingMessage,
+    res: ServerResponse,
+    urlPath: string,
+  ): Promise<void> {
+    if (req.method !== "GET") {
+      res.writeHead(405, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+
+    let filename: string;
+    try {
+      filename = decodeURIComponent(urlPath.slice(AOTANU_ASSET_ROUTE_PREFIX.length));
+    } catch {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not_found" }));
+      return;
+    }
+
+    if (!AOTANU_ASSET_FILENAMES_SET.has(filename)) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not_found" }));
+      return;
+    }
+
+    const resolved = path.resolve(AOTANU_ASSET_ROOT, filename);
+    if (!resolved.startsWith(`${AOTANU_ASSET_ROOT}${path.sep}`)) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not_found" }));
+      return;
+    }
+
+    const fileStat = await stat(resolved).catch(() => null);
+    if (!fileStat?.isFile()) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not_found" }));
+      return;
+    }
+
+    res.writeHead(200, {
+      "content-type": "image/png",
+      "content-length": String(fileStat.size),
+      "cache-control": "public, max-age=3600",
+    });
+    const stream = createReadStream(resolved);
+    stream.on("error", () => {
+      if (!res.headersSent) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "asset_read_failed" }));
+        return;
+      }
+      res.destroy();
+    });
+    stream.pipe(res);
   }
 
   private checkAuth(
