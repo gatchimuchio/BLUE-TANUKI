@@ -134,6 +134,21 @@ function Read-Sha256Sidecar($ShaFile) {
   return $firstToken.ToLowerInvariant()
 }
 
+function Get-FileSha256($Path) {
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $hash = $sha.ComputeHash($stream)
+      return ([System.BitConverter]::ToString($hash) -replace "-", "").ToLowerInvariant()
+    } finally {
+      $sha.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 function Assert-InstallerManifest($ManifestFile, $ZipPath, $ActualSha) {
   if (-not (Test-Path -LiteralPath $ManifestFile)) {
     throw "missing manifest sidecar: $ManifestFile"
@@ -168,7 +183,7 @@ function Assert-InstallerIntegrity($ZipPath) {
   $shaFile = "$ZipPath.sha256"
   $manifestFile = "$ZipPath.manifest.json"
   $expectedSha = Read-Sha256Sidecar $shaFile
-  $actualSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $ZipPath).Hash.ToLowerInvariant()
+  $actualSha = Get-FileSha256 $ZipPath
   if ($actualSha -ne $expectedSha) {
     throw "installer zip SHA-256 does not match sidecar: $ZipPath"
   }

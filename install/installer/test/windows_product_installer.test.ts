@@ -75,6 +75,8 @@ describe("Windows product installer package", () => {
     expect(ps1).toContain("wrong_asset=source_zip");
     expect(ps1).toContain("would_download_release_installer=");
     expect(ps1).toContain("Developer build only: run INSTALL_WINDOWS.cmd -BuildFromSource.");
+    expect(ps1).toContain("Get-FileSha256");
+    expect(ps1).not.toContain("Get-FileHash -Algorithm SHA256");
     expect(ps1).toContain("corepack prepare pnpm@$script:PnpmVersion --activate");
     expect(ps1).not.toContain("corepack enable");
     expect(ps1).toContain("pnpm install --frozen-lockfile");

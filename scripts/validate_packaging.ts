@@ -114,6 +114,8 @@ function main(): void {
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "wrong_asset=source_zip");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "would_download_release_installer=");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Developer build only: run INSTALL_WINDOWS.cmd -BuildFromSource.");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Get-FileSha256");
+  requireNotIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Get-FileHash -Algorithm SHA256");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Resolve-PnpmRunner");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "npm exec");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "corepack prepare");
