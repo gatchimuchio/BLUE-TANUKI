@@ -43,6 +43,14 @@ The package contains:
 - HDS authority not modified,
 - autostart disabled by default.
 
+`python tooling/windows/assert_windows_oneclick_artifact.py .` is the
+deterministic Ubuntu-side static artifact audit. It requires exactly one
+`blue-tanuki-<version>-windows-x64-installer.zip` under `release/windows/`,
+verifies the `.sha256` sidecar, manifest boundary fields, bundled Windows Node
+runtime, built app output, launcher/runtime/app directories, and confirms the
+normal installer scripts do not invoke Corepack, pnpm, npm install, Git, or a
+source build.
+
 ## Installed-App Evidence
 
 `pnpm smoke:windows-installed` verifies the installed app on Windows and emits

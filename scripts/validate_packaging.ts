@@ -289,6 +289,35 @@ function main(): void {
   requireIncludes("scripts/package_windows.ts", packageWindows, "SHASUMS256.txt");
   requireIncludes("scripts/package_windows.ts", packageWindows, "runtime_sha256_verified=true");
 
+  const windowsOneclickAudit = read("tooling/windows/assert_windows_oneclick_artifact.py");
+  requireIncludes(
+    "tooling/windows/assert_windows_oneclick_artifact.py",
+    windowsOneclickAudit,
+    "blue-tanuki-*-windows-x64-installer.zip",
+  );
+  requireIncludes(
+    "tooling/windows/assert_windows_oneclick_artifact.py",
+    windowsOneclickAudit,
+    "windows_oneclick_artifact_audit=pass",
+  );
+  requireIncludes(
+    "tooling/windows/assert_windows_oneclick_artifact.py",
+    windowsOneclickAudit,
+    "source_zip_returned_as_user_artifact=false",
+  );
+  requireIncludes(
+    "tooling/windows/assert_windows_oneclick_artifact.py",
+    windowsOneclickAudit,
+    "normal_install_invokes_corepack=false",
+  );
+  requireIncludes(
+    "tooling/windows/assert_windows_oneclick_artifact.py",
+    windowsOneclickAudit,
+    "normal_install_invokes_pnpm=false",
+  );
+  requireIncludes("tooling/windows/assert_windows_oneclick_artifact.py", windowsOneclickAudit, "zipfile.ZipFile");
+  requireNotIncludes("tooling/windows/assert_windows_oneclick_artifact.py", windowsOneclickAudit, "shell=True");
+
   const packageUnix = read("scripts/package_unix.ts");
   requireIncludes("scripts/package_unix.ts", packageUnix, "linux-x64-tar-installer");
   requireIncludes("scripts/package_unix.ts", packageUnix, "macos-x64-tar-installer");
@@ -458,6 +487,7 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/package_unix.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/verify_unix_package.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/smoke_unix_installed.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "tooling/windows/assert_windows_oneclick_artifact.py");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "docs/WINDOWS_INSTALLER_GUIDE.md");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"install/installer\"");
@@ -509,6 +539,7 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/windows/product/BlueTanukiSetup.ps1");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/verify_windows_package.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/verify_unix_package.ts");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "tooling/windows/assert_windows_oneclick_artifact.py");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/WINDOWS_PACKAGING_AUDIT.md");
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"install/installer\"");

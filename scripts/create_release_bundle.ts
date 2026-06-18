@@ -50,6 +50,7 @@ const INCLUDED_PATHS = [
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   "scripts",
+  "tooling",
   "tsconfig.base.json",
   ...CORE_RELEASE_PATHS,
 ] as const;
@@ -106,6 +107,7 @@ const REQUIRED_PATHS = [
   "scripts/package_unix.ts",
   "scripts/verify_unix_package.ts",
   "scripts/smoke_unix_installed.ts",
+  "tooling/windows/assert_windows_oneclick_artifact.py",
 ] as const;
 
 const INSTALLER_PATHS = [

@@ -107,6 +107,7 @@ const REQUIRED_ARCHIVE_PATHS = [
   "scripts/package_unix.ts",
   "scripts/verify_unix_package.ts",
   "scripts/smoke_unix_installed.ts",
+  "tooling/windows/assert_windows_oneclick_artifact.py",
 ] as const;
 
 const FORBIDDEN_SEGMENTS = new Set([

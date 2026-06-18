@@ -287,6 +287,20 @@ describe("Windows product installer package", () => {
     expect(read("scripts/smoke_windows_installed.ts")).toContain("safe_mode_result=pass");
   });
 
+  it("ships a deterministic Windows one-click artifact audit gate", () => {
+    const audit = read("tooling/windows/assert_windows_oneclick_artifact.py");
+    expect(audit).toContain("blue-tanuki-*-windows-x64-installer.zip");
+    expect(audit).toContain("windows_oneclick_artifact_audit=pass");
+    expect(audit).toContain("source_zip_returned_as_user_artifact=false");
+    expect(audit).toContain("user_requires_node_pnpm_git=false");
+    expect(audit).toContain("normal_install_invokes_corepack=false");
+    expect(audit).toContain("normal_install_invokes_pnpm=false");
+    expect(audit).toContain("normal_install_invokes_source_build=false");
+    expect(audit).toContain("zipfile.ZipFile");
+    expect(audit).toContain("WINDOWS_RUNTIME_RE");
+    expect(audit).not.toContain("shell=True");
+  });
+
   it("does not tell source-zip users to run the product setup from the source tree", () => {
     const docs = [
       "README.md",
