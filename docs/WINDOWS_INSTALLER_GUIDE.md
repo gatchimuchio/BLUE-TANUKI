@@ -30,21 +30,26 @@ Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree.
 That file is copied to the root of the packaged installer zip and expects the
 packaged `app/`, `runtime/`, `launcher/`, and manifest entries next to it.
 
-Path A: use the built installer zip.
+Normal Windows users should not run source builds. Download
+`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
+`BlueTanukiSetup.cmd`.
 
 1. Download or receive `blue-tanuki-*-windows-x64-installer.zip`.
 2. Extract the zip.
 3. Run `BlueTanukiSetup.cmd` from the extracted installer folder.
 
-Path B: use a source zip.
-
-1. Extract the source zip.
-2. Run root `INSTALL_WINDOWS.cmd`.
-
 The root entrypoint uses an existing `release/windows/*windows-x64-installer.zip`
-when present. If no installer zip exists, it runs Corepack/pnpm install, build,
-`package:windows`, `package:windows:verify`, then extracts the generated
-installer zip and runs packaged setup.
+when present. If no installer zip exists, it downloads the matching GitHub
+Release installer asset plus `.sha256` and `.manifest.json`, verifies SHA-256
+and manifest claims, then runs packaged setup. If the release asset cannot be
+downloaded and verified, it fails fast with wrong-asset guidance instead of
+building from source.
+
+Developer source build is explicit only:
+
+```powershell
+.\INSTALL_WINDOWS.cmd -BuildFromSource
+```
 
 ## Scope
 
@@ -199,7 +204,10 @@ installer zip. Every GitHub Release intended for Windows users must attach:
 
 - `blue-tanuki-*-windows-x64-installer.zip`,
 - `blue-tanuki-*-windows-x64-installer.zip.sha256`,
+- `blue-tanuki-*-windows-x64-installer.zip.manifest.json`,
 - `README_INSTALL_WINDOWS.txt`.
 
-The manifest sidecar remains release evidence. Public GA claims still require
-owner GO and must remain blocked before that decision.
+The source release bundle must include these generated `release/windows/`
+artifacts or the GitHub Release must attach them as first-class assets. GitHub
+auto-generated source zip is not a Windows user installer. Public GA claims
+still require owner GO and must remain blocked before that decision.

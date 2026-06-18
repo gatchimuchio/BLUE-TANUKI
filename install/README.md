@@ -12,13 +12,13 @@ There are three distinct paths:
 The repository does not build signed native packages yet. The Windows product
 package is an unsigned zip-delivered installer package, not a signed MSI/EXE.
 
-## One-click source / release-bundle entrypoints
+## One-click entrypoints
 
-Use the root entrypoint for the current OS from the extracted source zip or
-release bundle:
+Use the packaged installer entrypoint for Windows. Use the root entrypoint for
+macOS/Linux from the extracted source zip or release bundle:
 
 ```text
-Windows: INSTALL_WINDOWS.cmd
+Windows: BlueTanukiSetup.cmd from blue-tanuki-<version>-windows-x64-installer.zip
 macOS:   INSTALL_MACOS.command
 Linux:   INSTALL_LINUX.desktop or sh ./INSTALL_LINUX.sh
 Unix:    sh ./INSTALL.sh
@@ -72,8 +72,18 @@ User flow:
 ```
 
 Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree.
-For a source zip, run root `INSTALL_WINDOWS.cmd`; it uses an existing installer
-zip or builds `package:windows` and then runs the packaged setup.
+Normal Windows users should not run source builds. Download
+`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
+`BlueTanukiSetup.cmd`.
+
+Root `INSTALL_WINDOWS.cmd` uses an existing installer zip or downloads and
+verifies the matching GitHub Release installer asset. If the packaged installer
+cannot be verified, it fails fast with wrong-asset guidance. It does not build
+from source unless a developer explicitly runs:
+
+```powershell
+.\INSTALL_WINDOWS.cmd -BuildFromSource
+```
 
 The package bundles Windows Node.js `22.14.0`, installs to
 `%LOCALAPPDATA%\Programs\BlueTanuki`, stores env/settings/logs under
@@ -103,9 +113,10 @@ Phase 11-S9 adds a guided first-run wrapper for source and release-bundle users:
 pnpm installer:run
 ```
 
-This path performs preflight checks, enables Corepack/pnpm when possible, runs
+This path performs preflight checks, uses the workspace package manager, runs
 setup, runs `doctor`, and opens the path toward the Control Center settings UI.
-It is a guided first-run accelerator, not a verified 5-minute setup guarantee.
+It is a developer/source guided first-run accelerator, not the normal Windows
+user install path and not a verified 5-minute setup guarantee.
 
 Use the Control Center Settings page and the `Verify LLM` action before saving
 LLM provider changes. On Windows, settings-saved LLM API keys are stored as

@@ -51,13 +51,12 @@ describe("Windows product installer package", () => {
     expect(setup).toContain("Register-Uninstaller");
     expect(setup).toContain("Autostart: not enabled by installer");
     expect(setup).toContain("This setup script must be run from the packaged Windows installer zip.");
-    expect(setup).toContain("Run INSTALL_WINDOWS.cmd from the repository root.");
-    expect(setup).toContain("corepack prepare pnpm@9.12.0 --activate");
+    expect(setup).toContain("INSTALL_WINDOWS.cmd -BuildFromSource");
     expect(setup).not.toContain("required package directory missing");
     expect(setup).not.toContain("Require-Command \"node\"");
   });
 
-  it("exposes a source-root Windows entrypoint that builds or runs the installer zip", () => {
+  it("exposes a source-root Windows entrypoint that runs a verified installer or explicit developer build", () => {
     const cmd = read("INSTALL_WINDOWS.cmd");
     const ps1 = read("INSTALL_WINDOWS.ps1");
     expect(cmd).toContain("cd /d \"%~dp0\"");
@@ -71,7 +70,13 @@ describe("Windows product installer package", () => {
     expect(ps1).toContain("Push-Location $ScriptRoot");
     expect(ps1).not.toContain("[string]$ReleaseDir = (Join-Path $PSScriptRoot");
     expect(ps1).not.toContain("[string]$WorkRoot = (Join-Path $PSScriptRoot");
+    expect(ps1).toContain("[switch]$BuildFromSource");
+    expect(ps1).toContain("missing_installer_artifact=fail");
+    expect(ps1).toContain("wrong_asset=source_zip");
+    expect(ps1).toContain("would_download_release_installer=");
+    expect(ps1).toContain("Developer build only: run INSTALL_WINDOWS.cmd -BuildFromSource.");
     expect(ps1).toContain("corepack prepare pnpm@$script:PnpmVersion --activate");
+    expect(ps1).not.toContain("corepack enable");
     expect(ps1).toContain("pnpm install --frozen-lockfile");
     expect(ps1).toContain("pnpm package:windows");
     expect(ps1).toContain("pnpm package:windows:verify");
@@ -129,11 +134,11 @@ describe("Windows product installer package", () => {
     }
   });
 
-  it("dry-runs the root source entrypoint build path from another current directory", () => {
+  it("dry-runs the root source entrypoint missing-installer path without source build", () => {
     const command = findPowerShell();
     const entrypoint = join(root, "INSTALL_WINDOWS.ps1");
     if (!command) {
-      expect(read("INSTALL_WINDOWS.ps1")).toContain("would_build_installer=true");
+      expect(read("INSTALL_WINDOWS.ps1")).toContain("would_download_release_installer=");
       return;
     }
     const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-root-entrypoint-test-"));
@@ -149,10 +154,41 @@ describe("Windows product installer package", () => {
       ], tmp);
       const output = `${result.stdout}\n${result.stderr}`;
       expect(result.status).toBe(0);
-      expect(output).toContain("would_build_installer=true");
-      expect(output).toContain("would_run=pnpm package:windows");
+      expect(output).toContain("wrong_asset=source_zip");
+      expect(output).toContain("would_download_release_installer=");
       expect(output).toContain("root_source_entrypoint_dry_run=pass");
+      expect(output).not.toContain("would_build_installer=true");
+      expect(output).not.toContain("would_run=pnpm package:windows");
       expect(output).not.toContain("Cannot bind argument to parameter 'Path'");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("dry-runs explicit Windows developer source build only with BuildFromSource", () => {
+    const command = findPowerShell();
+    const entrypoint = join(root, "INSTALL_WINDOWS.ps1");
+    if (!command) {
+      expect(read("INSTALL_WINDOWS.ps1")).toContain("developer_build_from_source=true");
+      return;
+    }
+    const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-root-buildfromsource-test-"));
+    try {
+      const result = runPowerShellFile(command, entrypoint, [
+        "-DryRun",
+        "-BuildFromSource",
+        "-ReleaseDir",
+        join(tmp, "empty-release"),
+        "-WorkRoot",
+        join(tmp, "work"),
+        "-NoLaunch",
+      ], tmp);
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result.status).toBe(0);
+      expect(output).toContain("developer_build_from_source=true");
+      expect(output).toContain("would_run=pnpm package:windows");
+      expect(output).toContain("root_source_entrypoint_build_from_source_dry_run=pass");
+      expect(output).not.toContain("would_run=corepack enable");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -185,8 +221,10 @@ describe("Windows product installer package", () => {
       const output = `${result.stdout}\n${result.stderr}`;
       expect(result.status).toBe(0);
       expect(output).toContain("Repository root:");
-      expect(output).toContain("would_build_installer=true");
+      expect(output).toContain("wrong_asset=source_zip");
+      expect(output).toContain("would_download_release_installer=");
       expect(output).toContain("root_source_entrypoint_dry_run=pass");
+      expect(output).not.toContain("would_build_installer=true");
       expect(output).not.toContain("Cannot bind argument to parameter 'Path'");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
@@ -237,6 +275,7 @@ describe("Windows product installer package", () => {
     expect(read("scripts/verify_windows_package.ts")).toContain("const shaFile = `${archive}.sha256`");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("source_tree_setup_guidance_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("root_source_entrypoint_result=pass");
+    expect(read("scripts/smoke_windows_installed.ts")).toContain("root_source_entrypoint_build_from_source_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("root_source_entrypoint_cmd_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("installer_zip_setup_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("windows_runtime_smoke=skipped");

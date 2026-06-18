@@ -3,6 +3,10 @@
 This first-run path is for the unsigned Windows installer package, not source
 development.
 
+Normal Windows users should not run source builds. Download
+`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
+`BlueTanukiSetup.cmd`.
+
 ## Before Install
 
 The Windows package is unsigned. Before running `BlueTanukiSetup.cmd` from the

@@ -109,10 +109,20 @@ function main(): void {
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Push-Location $ScriptRoot");
   requireNotIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "[string]$ReleaseDir = (Join-Path $PSScriptRoot");
   requireNotIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "[string]$WorkRoot = (Join-Path $PSScriptRoot");
-  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "corepack");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "[switch]$BuildFromSource");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "missing_installer_artifact=fail");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "wrong_asset=source_zip");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "would_download_release_installer=");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Developer build only: run INSTALL_WINDOWS.cmd -BuildFromSource.");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Resolve-PnpmRunner");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "npm exec");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "corepack prepare");
+  requireNotIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "corepack enable");
+  requireNotIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "would_build_installer=true");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "pnpm install");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "pnpm package:windows");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "pnpm package:windows:verify");
+  requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "root_source_entrypoint_build_from_source_dry_run=pass");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "root_source_entrypoint_dry_run=pass");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Log:");
 
@@ -233,7 +243,7 @@ function main(): void {
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Expand-Archive");
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "BLUE-TANUKI Safe Mode");
   requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "This setup script must be run from the packaged Windows installer zip.");
-  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "Run INSTALL_WINDOWS.cmd from the repository root.");
+  requireIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "INSTALL_WINDOWS.cmd -BuildFromSource");
   requireNotIncludes("install/windows/product/BlueTanukiSetup.ps1", winProductSetup, "required package directory missing");
 
   const winProductLauncher = read("install/windows/product/BlueTanukiLauncher.ps1");
@@ -260,6 +270,8 @@ function main(): void {
   requireIncludes("scripts/package_windows.ts", packageWindows, "installer_autostart: false");
   requireIncludes("scripts/package_windows.ts", packageWindows, "README_INSTALL_WINDOWS.txt");
   requireIncludes("scripts/package_windows.ts", packageWindows, "const shaFile = `${outFile}.sha256`");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "SHASUMS256.txt");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "runtime_sha256_verified=true");
 
   const verifyWindowsPackage = read("scripts/verify_windows_package.ts");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "verifyWindowsPackage");
@@ -267,11 +279,13 @@ function main(): void {
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "Start Menu");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "README_INSTALL_WINDOWS.txt");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "const shaFile = `${archive}.sha256`");
+  requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "shasums_source");
 
   const smokeWindowsInstalled = read("scripts/smoke_windows_installed.ts");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "windows_runtime_smoke=skipped");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "source_tree_setup_guidance_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "root_source_entrypoint_result=pass");
+  requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "root_source_entrypoint_build_from_source_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "root_source_entrypoint_cmd_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "installer_zip_setup_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "first_message_result=pass");
@@ -337,6 +351,9 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_LINUX.sh");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.cmd");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.ps1");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "windows_installer_artifacts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "copyWindowsInstallerArtifacts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/windows/blue-tanuki-${version}-windows-x64-installer.zip");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/hds-brain");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/channel-webchat");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/channel-telegram");
@@ -377,6 +394,8 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_LINUX.sh");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_WINDOWS.cmd");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_WINDOWS.ps1");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "windows_installer_artifacts");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/windows/blue-tanuki-${version}-windows-x64-installer.zip");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "manifest");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "core_release_paths");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "EXTRACTED_RELEASE_COMMANDS");

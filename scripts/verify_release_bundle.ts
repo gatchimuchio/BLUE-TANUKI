@@ -21,6 +21,7 @@ interface ReleaseManifest {
   core_release_paths?: string[];
   required_paths?: string[];
   installer_paths?: string[];
+  windows_installer_artifacts?: string[];
   boundaries?: {
     unsigned_source_bundle?: boolean;
     secrets_included?: boolean;
@@ -105,7 +106,6 @@ const FORBIDDEN_SEGMENTS = new Set([
   "node_modules",
   ".codex-tmp",
   ".blue-tanuki",
-  "release",
   ".git",
 ]);
 
@@ -243,6 +243,21 @@ function assertManifest(
       throw new Error(`manifest core_release_paths missing ${required}`);
     }
   }
+  for (const artifact of windowsInstallerArtifactPaths(manifest.version ?? readPackage().version)) {
+    if (!manifest.windows_installer_artifacts?.includes(artifact)) {
+      throw new Error(`manifest windows_installer_artifacts missing ${artifact}`);
+    }
+  }
+}
+
+function windowsInstallerArtifactPaths(version: string): string[] {
+  const base = `release/windows/blue-tanuki-${version}-windows-x64-installer.zip`;
+  return [
+    base,
+    `${base}.sha256`,
+    `${base}.manifest.json`,
+    "release/windows/README_INSTALL_WINDOWS.txt",
+  ];
 }
 
 function parseArchiveList(stdout: string): string[] {
@@ -307,6 +322,11 @@ function assertRequiredEntries(entries: string[]): void {
   for (const required of REQUIRED_ARCHIVE_PATHS) {
     if (!entryMatches(entries, required)) {
       throw new Error(`archive missing required entry: ${required}`);
+    }
+  }
+  for (const required of windowsInstallerArtifactPaths(readPackage().version)) {
+    if (!entryMatches(entries, required)) {
+      throw new Error(`archive missing Windows installer artifact: ${required}`);
     }
   }
 }

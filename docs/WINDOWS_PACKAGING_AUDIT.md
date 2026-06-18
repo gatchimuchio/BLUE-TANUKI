@@ -33,6 +33,7 @@ The package contains:
 - Start Menu and uninstall registration source text,
 - explicit owner autostart commands and default-disabled autostart boundary,
 - SHA-256 sidecar and manifest availability,
+- bundled Node runtime SHA-256 against Node.js `SHASUMS256.txt`,
 - `README_INSTALL_WINDOWS.txt` availability and source-tree warning,
 - no `.env`, `.npmrc`, private key, `.blue-tanuki`, `.git`, or `GUI-Shell` entries,
 - manifest boundaries:
@@ -66,9 +67,15 @@ The user does not run:
 - Node.js installers.
 
 Source zip is developer source. End users should receive the installer zip from
-GitHub Releases or `release/windows/`. Do not run `install/windows/product/BlueTanukiSetup.cmd`
-from the source tree; run root `INSTALL_WINDOWS.cmd` instead when starting from
-source.
+GitHub Releases or `release/windows/`. Normal Windows users should not run
+source builds. Download `blue-tanuki-<version>-windows-x64-installer.zip`,
+extract it, and run `BlueTanukiSetup.cmd`. Do not run `install/windows/product/BlueTanukiSetup.cmd`
+from the source tree.
+
+Root `INSTALL_WINDOWS.cmd` may use a verified local installer zip or download
+and verify the matching GitHub Release asset. If neither path verifies, it fails
+fast with wrong-asset guidance. Developer source build is explicit only through
+`INSTALL_WINDOWS.cmd -BuildFromSource`.
 
 ## Security / Authority
 
@@ -92,7 +99,9 @@ intent only.
 - It is a zip-delivered installer package, not a signed MSI/EXE.
 - Windows runtime install smoke must be run on Windows.
 - GitHub Releases for Windows users must attach the installer zip, `.sha256`,
-  and `README_INSTALL_WINDOWS.txt`; source zip alone is not the end-user
-  Windows artifact.
+  `.manifest.json`, and `README_INSTALL_WINDOWS.txt`; source zip alone is not
+  the end-user Windows artifact.
+- The official source release bundle includes generated `release/windows/`
+  installer artifacts when produced by `pnpm release:bundle`.
 - Automatic update is not implemented.
 - Desktop shortcut is optional through installer argument, not a GUI checkbox.

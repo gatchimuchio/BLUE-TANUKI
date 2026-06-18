@@ -180,6 +180,7 @@ interface ReleaseManifest {
   core_release_paths: readonly string[];
   required_paths: readonly string[];
   installer_paths: readonly string[];
+  windows_installer_artifacts: readonly string[];
   boundaries: {
     unsigned_source_bundle: true;
     secrets_included: false;
@@ -220,6 +221,26 @@ function checkRequired(): void {
   }
 }
 
+function windowsInstallerArtifactPaths(version: string): string[] {
+  const base = `release/windows/blue-tanuki-${version}-windows-x64-installer.zip`;
+  return [
+    base,
+    `${base}.sha256`,
+    `${base}.manifest.json`,
+    "release/windows/README_INSTALL_WINDOWS.txt",
+  ];
+}
+
+function checkWindowsInstallerArtifacts(version: string): void {
+  for (const rel of windowsInstallerArtifactPaths(version)) {
+    if (!existsSync(path.join(root, rel))) {
+      throw new Error(
+        `release bundle missing Windows installer artifact: ${rel}; run pnpm package:windows and pnpm package:windows:verify first`,
+      );
+    }
+  }
+}
+
 function isSecretLikeFileName(name: string): boolean {
   const lower = name.toLowerCase();
   if (EXCLUDED_FILE_NAMES.has(name) || EXCLUDED_FILE_NAMES.has(lower)) return true;
@@ -253,6 +274,15 @@ async function copyIncluded(staging: string): Promise<void> {
       force: true,
       filter: shouldIncludeSource,
     });
+  }
+}
+
+async function copyWindowsInstallerArtifacts(staging: string, version: string): Promise<void> {
+  for (const rel of windowsInstallerArtifactPaths(version)) {
+    const src = path.join(root, rel);
+    const dest = path.join(staging, rel);
+    await mkdir(path.dirname(dest), { recursive: true });
+    await cp(src, dest, { force: true });
   }
 }
 
@@ -352,6 +382,7 @@ async function writeIntegrityFiles(
     core_release_paths: CORE_RELEASE_PATHS,
     required_paths: REQUIRED_PATHS,
     installer_paths: INSTALLER_PATHS,
+    windows_installer_artifacts: windowsInstallerArtifactPaths(version),
     boundaries: {
       unsigned_source_bundle: true,
       secrets_included: false,
@@ -394,6 +425,7 @@ async function main(): Promise<void> {
           includes: INCLUDED_PATHS,
           required: REQUIRED_PATHS,
           installers: INSTALLER_PATHS,
+          windows_installer_artifacts: windowsInstallerArtifactPaths(pkg.version),
         },
         null,
         2,
@@ -402,10 +434,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  checkWindowsInstallerArtifacts(pkg.version);
   await rm(stagingParent, { recursive: true, force: true });
   await mkdir(staging, { recursive: true });
   await mkdir(outDir, { recursive: true });
   await copyIncluded(staging);
+  await copyWindowsInstallerArtifacts(staging, pkg.version);
   await rewriteCoreTsconfigs(staging);
   archive(stagingParent, outFile);
   await rm(stagingParent, { recursive: true, force: true });

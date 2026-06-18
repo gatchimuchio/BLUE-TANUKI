@@ -12,7 +12,7 @@ Support scope and remaining RC limitations are fixed in [docs/SUPPORT_BOUNDARY.m
 
 | OS | 実行するもの |
 | --- | --- |
-| Windows | source zip なら `INSTALL_WINDOWS.cmd`、packaged installer zip なら `BlueTanukiSetup.cmd` |
+| Windows | packaged installer zip の `BlueTanukiSetup.cmd` |
 | macOS | `INSTALL_MACOS.command` |
 | Linux | 対応 desktop なら `INSTALL_LINUX.desktop`、fallback は `sh ./INSTALL_LINUX.sh` |
 
@@ -31,10 +31,11 @@ LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_LINUX.sh
 
 ## 2. Windows installer package
 
-Windows 一般ユーザー向けの経路は installer-first である。source tree 内の
+Windows 一般ユーザー向けの経路は packaged installer zip のみである。Normal
+Windows users should not run source builds. Download
+`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
+`BlueTanukiSetup.cmd`. source tree 内の
 `install/windows/product/BlueTanukiSetup.cmd` は直接実行しない。
-
-導線A: ビルド済み installer zip を使う
 
 ```text
 1. blue-tanuki-*-windows-x64-installer.zip を取得
@@ -44,18 +45,17 @@ Windows 一般ユーザー向けの経路は installer-first である。source 
 5. http://127.0.0.1:8787/app の Control Center で Conversation / WebChat を使う
 ```
 
-導線B: source zip から使う
-
-```text
-1. source zip を展開
-2. root の INSTALL_WINDOWS.cmd を double-click
-```
-
 `INSTALL_WINDOWS.cmd` は `release/windows/*windows-x64-installer.zip` があれば
-それを展開して packaged setup を実行する。zip がなければ Corepack/pnpm
-準備、install、build、package、verify を行い、生成された installer zip を
-展開して setup に進む。失敗時は `.codex-tmp/windows-install-entrypoint/install.log`
-を案内する。
+それを検証して packaged setup を実行する。zip がなければ matching GitHub
+Release の Windows installer asset と `.sha256` / `.manifest.json` を取得・検証する。
+検証できない場合は「source zip ではなく Windows installer zip を使う」と
+fail fast し、source build へは落ちない。
+
+開発者 source build は明示オプション限定:
+
+```powershell
+.\INSTALL_WINDOWS.cmd -BuildFromSource
+```
 
 開発側で package を作る:
 

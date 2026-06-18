@@ -26,7 +26,7 @@ Choose the file for your OS from the extracted folder:
 
 | OS | Run this |
 | --- | --- |
-| Windows | `INSTALL_WINDOWS.cmd` from the source zip root, or `BlueTanukiSetup.cmd` from the packaged installer zip |
+| Windows | `BlueTanukiSetup.cmd` from the packaged installer zip |
 | macOS | `INSTALL_MACOS.command` |
 | Linux | `INSTALL_LINUX.desktop` where supported, or `sh ./INSTALL_LINUX.sh` |
 
@@ -48,15 +48,23 @@ Path A: prebuilt installer zip
 2. Extract the zip.
 3. Run `BlueTanukiSetup.cmd` from the extracted installer folder.
 
-Path B: source zip
+Normal Windows users should not run source builds. Download
+`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
+`BlueTanukiSetup.cmd`. The installed launcher opens:
 
-1. Extract the source zip.
-2. Run `INSTALL_WINDOWS.cmd` from the repository root.
+```text
+http://127.0.0.1:8787/app
+```
 
 `INSTALL_WINDOWS.cmd` uses an existing `release/windows/*windows-x64-installer.zip`
-when present. If no installer zip exists, it enables Corepack, prepares
-`pnpm@9.12.0`, installs dependencies, builds, packages, verifies, extracts the
-generated installer zip, and runs `BlueTanukiSetup.cmd`.
+when present. If no installer zip exists in a source tree/source zip, it
+attempts to download and verify the matching GitHub Release installer asset. If
+that cannot be verified, it fails fast with wrong-asset guidance instead of
+building from source. Developer source build is explicit only:
+
+```powershell
+.\INSTALL_WINDOWS.cmd -BuildFromSource
+```
 
 ### macOS users
 

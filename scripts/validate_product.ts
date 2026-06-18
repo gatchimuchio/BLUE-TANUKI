@@ -1011,6 +1011,7 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
     log.includes("windows_installed_smoke=pass") &&
     log.includes("source_tree_setup_guidance_result=pass") &&
     log.includes("root_source_entrypoint_result=pass") &&
+    log.includes("root_source_entrypoint_build_from_source_result=pass") &&
     log.includes("root_source_entrypoint_cmd_result=pass") &&
     log.includes("installer_zip_setup_result=pass") &&
     log.includes("install_result=pass") &&
@@ -1039,6 +1040,9 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
     details: {
       exit_code: run.exit_code,
       timed_out: run.timed_out,
+      root_source_entrypoint_result: log.includes("root_source_entrypoint_result=pass"),
+      root_source_entrypoint_build_from_source_result: log.includes("root_source_entrypoint_build_from_source_result=pass"),
+      root_source_entrypoint_cmd_result: log.includes("root_source_entrypoint_cmd_result=pass"),
       install_result: log.includes("install_result=pass"),
       launch_result: log.includes("launch_result=pass"),
       gui_result: log.includes("gui_result=pass"),

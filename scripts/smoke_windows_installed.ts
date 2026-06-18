@@ -491,16 +491,47 @@ async function main(): Promise<void> {
       path.join(work, "entrypoint-dry-run"),
       "-NoLaunch",
     ], process.cwd(), 0, "root source entrypoint dry-run", 60_000);
-    if (!rootEntrypointDryRun.includes("would_build_installer=true")) {
-      throw new Error("root source entrypoint did not choose build/package path when installer zip was absent");
+    if (!rootEntrypointDryRun.includes("wrong_asset=source_zip")) {
+      throw new Error("root source entrypoint did not identify source zip/source tree when installer zip was absent");
     }
-    if (!rootEntrypointDryRun.includes("would_run=pnpm package:windows")) {
-      throw new Error("root source entrypoint did not include package:windows in dry-run build path");
+    if (!rootEntrypointDryRun.includes("would_download_release_installer=")) {
+      throw new Error("root source entrypoint did not choose verified release download path when installer zip was absent");
+    }
+    if (rootEntrypointDryRun.includes("would_build_installer=true")) {
+      throw new Error("root source entrypoint default dry-run must not build from source");
+    }
+    if (rootEntrypointDryRun.includes("would_run=pnpm package:windows")) {
+      throw new Error("root source entrypoint default dry-run must not run package:windows");
     }
     if (!rootEntrypointDryRun.includes("root_source_entrypoint_dry_run=pass")) {
       throw new Error("root source entrypoint dry-run marker missing");
     }
     console.log("root_source_entrypoint_result=pass");
+
+    const developerBuildDryRun = runExpectingStatus("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(process.cwd(), "INSTALL_WINDOWS.ps1"),
+      "-DryRun",
+      "-BuildFromSource",
+      "-ReleaseDir",
+      emptyReleaseDir,
+      "-WorkRoot",
+      path.join(work, "developer-build-dry-run"),
+      "-NoLaunch",
+    ], process.cwd(), 0, "root source entrypoint explicit developer build dry-run", 60_000);
+    if (!developerBuildDryRun.includes("developer_build_from_source=true")) {
+      throw new Error("explicit -BuildFromSource dry-run did not mark developer build path");
+    }
+    if (!developerBuildDryRun.includes("would_run=pnpm package:windows")) {
+      throw new Error("explicit -BuildFromSource dry-run did not include package:windows");
+    }
+    if (developerBuildDryRun.includes("would_run=corepack enable")) {
+      throw new Error("explicit -BuildFromSource dry-run must not use corepack enable");
+    }
+    console.log("root_source_entrypoint_build_from_source_result=pass");
 
     const rootEntrypointCmdDryRun = runExpectingStatus("cmd.exe", [
       "/d",
@@ -517,8 +548,14 @@ async function main(): Promise<void> {
     if (!rootEntrypointCmdDryRun.includes("Repository root:")) {
       throw new Error("root source cmd entrypoint dry-run did not print repository root");
     }
-    if (!rootEntrypointCmdDryRun.includes("would_build_installer=true")) {
-      throw new Error("root source cmd entrypoint did not choose build/package path when installer zip was absent");
+    if (!rootEntrypointCmdDryRun.includes("wrong_asset=source_zip")) {
+      throw new Error("root source cmd entrypoint did not identify source zip/source tree when installer zip was absent");
+    }
+    if (!rootEntrypointCmdDryRun.includes("would_download_release_installer=")) {
+      throw new Error("root source cmd entrypoint did not choose verified release download path when installer zip was absent");
+    }
+    if (rootEntrypointCmdDryRun.includes("would_build_installer=true")) {
+      throw new Error("root source cmd entrypoint default dry-run must not build from source");
     }
     if (!rootEntrypointCmdDryRun.includes("root_source_entrypoint_dry_run=pass")) {
       throw new Error("root source cmd entrypoint dry-run marker missing");
@@ -864,6 +901,7 @@ async function main(): Promise<void> {
     console.log("windows_installed_smoke=pass");
     console.log("source_tree_setup_guidance_result=pass");
     console.log("root_source_entrypoint_result=pass");
+    console.log("root_source_entrypoint_build_from_source_result=pass");
     console.log("root_source_entrypoint_cmd_result=pass");
     console.log("installer_zip_setup_result=pass");
     console.log("install_result=pass");

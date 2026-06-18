@@ -18,6 +18,8 @@ interface ExternalManifest {
     bundled?: boolean;
     version?: string;
     archive?: string;
+    sha256?: string;
+    shasums_source?: string;
   };
   user_experience?: {
     requires_node_pnpm_git_from_user?: boolean;
@@ -188,6 +190,12 @@ function assertManifest(manifest: ExternalManifest, archive: string, actualSha: 
   if (manifest.archive?.sha256 !== actualSha) throw new Error("manifest archive sha256 mismatch");
   if (manifest.node_runtime?.bundled !== true) throw new Error("manifest must declare bundled Node runtime");
   if (manifest.node_runtime?.version !== "22.14.0") throw new Error("manifest Node runtime version must be 22.14.0");
+  if (!/^[a-f0-9]{64}$/i.test(manifest.node_runtime?.sha256 ?? "")) {
+    throw new Error("manifest Node runtime sha256 must be present");
+  }
+  if (manifest.node_runtime?.shasums_source !== "https://nodejs.org/dist/v22.14.0/SHASUMS256.txt") {
+    throw new Error("manifest Node runtime shasums_source mismatch");
+  }
   if (manifest.user_experience?.requires_node_pnpm_git_from_user !== false) {
     throw new Error("manifest must declare no user Node/pnpm/Git requirement");
   }
@@ -233,6 +241,7 @@ export function verifyWindowsPackage(artifact = defaultArtifact()): void {
   assertManifest(readManifest(manifestFile), archive, actualSha);
   const installReadme = readFileSync(installReadmeFile, "utf8");
   for (const needle of [
+    "Normal Windows users should not run source builds",
     "Extract the installer zip",
     "Run BlueTanukiSetup.cmd",
     "Do not run install/windows/product/BlueTanukiSetup.cmd from the source tree",

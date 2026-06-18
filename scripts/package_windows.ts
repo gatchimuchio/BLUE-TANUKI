@@ -20,6 +20,8 @@ interface WindowsInstallerManifest {
     version: string;
     archive: string;
     source: string;
+    sha256: string;
+    shasums_source: string;
   };
   user_experience: {
     requires_node_pnpm_git_from_user: false;
@@ -238,15 +240,8 @@ async function copyProductLaunchers(packageRoot: string): Promise<void> {
   }
 }
 
-async function downloadNodeRuntime(nodeVersion: string, cacheDir: string): Promise<{ zipPath: string; url: string; file: string }> {
-  const file = `node-v${nodeVersion}-win-x64.zip`;
-  const url = `https://nodejs.org/dist/v${nodeVersion}/${file}`;
-  const zipPath = path.join(cacheDir, file);
-  await mkdir(cacheDir, { recursive: true });
-  if (existsSync(zipPath) && (await stat(zipPath)).size > 0) {
-    return { zipPath, url, file };
-  }
-  await new Promise<void>((resolve, reject) => {
+async function downloadBuffer(url: string): Promise<Buffer> {
+  return await new Promise<Buffer>((resolve, reject) => {
     const output: Buffer[] = [];
     https.get(url, (response) => {
       if (response.statusCode !== 200) {
@@ -255,12 +250,43 @@ async function downloadNodeRuntime(nodeVersion: string, cacheDir: string): Promi
         return;
       }
       response.on("data", (chunk: Buffer) => output.push(chunk));
-      response.on("end", () => {
-        writeFile(zipPath, Buffer.concat(output)).then(resolve, reject);
-      });
+      response.on("end", () => resolve(Buffer.concat(output)));
     }).on("error", reject);
   });
-  return { zipPath, url, file };
+}
+
+async function downloadNodeRuntime(
+  nodeVersion: string,
+  cacheDir: string,
+): Promise<{ zipPath: string; url: string; file: string; sha256: string; shasumsUrl: string }> {
+  const file = `node-v${nodeVersion}-win-x64.zip`;
+  const baseUrl = `https://nodejs.org/dist/v${nodeVersion}`;
+  const url = `${baseUrl}/${file}`;
+  const shasumsUrl = `${baseUrl}/SHASUMS256.txt`;
+  const zipPath = path.join(cacheDir, file);
+  await mkdir(cacheDir, { recursive: true });
+  const shasums = (await downloadBuffer(shasumsUrl)).toString("utf8");
+  const expectedSha = shasums
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/))
+    .find((parts) => parts[1] === file)?.[0]?.toLowerCase();
+  if (!expectedSha || !/^[a-f0-9]{64}$/.test(expectedSha)) {
+    throw new Error(`Node runtime SHA-256 not found in ${shasumsUrl} for ${file}`);
+  }
+  if (existsSync(zipPath) && (await stat(zipPath)).size > 0) {
+    const cachedSha = sha256File(zipPath);
+    if (cachedSha === expectedSha) {
+      return { zipPath, url, file, sha256: expectedSha, shasumsUrl };
+    }
+    await rm(zipPath, { force: true });
+  }
+  await writeFile(zipPath, await downloadBuffer(url));
+  const actualSha = sha256File(zipPath);
+  if (actualSha !== expectedSha) {
+    await rm(zipPath, { force: true });
+    throw new Error(`Node runtime SHA-256 mismatch for ${file}`);
+  }
+  return { zipPath, url, file, sha256: expectedSha, shasumsUrl };
 }
 
 function commandExists(command: string): boolean {
@@ -316,6 +342,8 @@ function windowsReadmeInstallText(version: string): string {
   return [
     "BLUE-TANUKI Windows install",
     "",
+    "Normal Windows users should not run source builds. Download this installer zip, extract it, and run BlueTanukiSetup.cmd.",
+    "",
     "1. Extract the installer zip.",
     "2. Run BlueTanukiSetup.cmd from the extracted installer folder.",
     "3. Do not run install/windows/product/BlueTanukiSetup.cmd from the source tree.",
@@ -359,6 +387,8 @@ async function main(): Promise<void> {
       version: nodeVersion,
       archive: runtime.file,
       source: runtime.url,
+      sha256: runtime.sha256,
+      shasums_source: runtime.shasumsUrl,
     },
     user_experience: {
       requires_node_pnpm_git_from_user: false,
@@ -416,6 +446,7 @@ async function main(): Promise<void> {
   console.log(`windows_install_readme=${readmeInstall}`);
   console.log("unsigned_installer=true");
   console.log("bundled_node_runtime=true");
+  console.log("runtime_sha256_verified=true");
   console.log("user_requires_node_pnpm_git=false");
 }
 
