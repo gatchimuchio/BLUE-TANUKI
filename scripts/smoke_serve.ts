@@ -16,7 +16,15 @@
  *   pnpm tsx scripts/smoke_serve.ts
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
@@ -68,6 +76,28 @@ function spawnAuditDump(options: Parameters<typeof spawnSync>[2]) {
     [TSX_CLI, "apps/gateway/src/main.ts", "--audit-dump", "--json"],
     options,
   );
+}
+
+function runAuditDumpToFiles(env: NodeJS.ProcessEnv, auditDir: string) {
+  const stdoutFile = join(auditDir, "audit-dump.stdout.json");
+  const stderrFile = join(auditDir, "audit-dump.stderr.log");
+  const stdoutFd = openSync(stdoutFile, "w");
+  const stderrFd = openSync(stderrFile, "w");
+  let result: ReturnType<typeof spawnSync>;
+  try {
+    result = spawnAuditDump({
+      env,
+      stdio: ["ignore", stdoutFd, stderrFd],
+    });
+  } finally {
+    closeSync(stdoutFd);
+    closeSync(stderrFd);
+  }
+  return {
+    result,
+    stdout: existsSync(stdoutFile) ? readFileSync(stdoutFile, "utf8") : "",
+    stderr: existsSync(stderrFile) ? readFileSync(stderrFile, "utf8") : "",
+  };
 }
 
 async function waitFor(
@@ -234,21 +264,22 @@ async function main(): Promise<void> {
 
   // Phase 4-S3: also exercise the audit-dump CLI end-to-end.
   if (ok) {
-    const dump = spawnAuditDump({ env, encoding: "utf8" });
+    const { result: dump, stdout: dumpStdout, stderr: dumpStderr } =
+      runAuditDumpToFiles(env, auditDir);
     if (dump.status !== 0) {
       console.error(
-        `[smoke] FAIL — audit-dump exit=${dump.status} stderr=${dump.stderr}`,
+        `[smoke] FAIL — audit-dump exit=${dump.status} stderr=${dumpStderr}${dump.error ? ` error=${dump.error.message}` : ""}`,
       );
       ok = false;
     } else {
       // Last non-empty line of stdout should be the JSON report.
-      const dumpLines = dump.stdout.split("\n").filter((l) => l.trim().length > 0);
+      const dumpLines = dumpStdout.split("\n").filter((l) => l.trim().length > 0);
       const lastLine = dumpLines[dumpLines.length - 1] ?? "";
       try {
         // The report is multi-line pretty-JSON, so reparse the whole stdout
         // by extracting from the first '{' to the end.
-        const idx = dump.stdout.indexOf("{");
-        const parsed = JSON.parse(dump.stdout.slice(idx));
+        const idx = dumpStdout.indexOf("{");
+        const parsed = JSON.parse(dumpStdout.slice(idx));
         if (parsed.status !== "ok") {
           console.error(
             `[smoke] FAIL — audit-dump status=${parsed.status} detail=${parsed.detail}`,
