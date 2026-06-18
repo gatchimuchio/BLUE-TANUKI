@@ -231,11 +231,31 @@ function windowsInstallerArtifactPaths(version: string): string[] {
   ];
 }
 
-function checkWindowsInstallerArtifacts(version: string): void {
+function hasWindowsInstallerArtifacts(version: string): boolean {
+  return windowsInstallerArtifactPaths(version).every((rel) => existsSync(path.join(root, rel)));
+}
+
+function runWorkspaceCommand(args: readonly string[], label: string): void {
+  const result = spawnSync("pnpm", [...args], {
+    cwd: root,
+    encoding: "utf8",
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  if (result.status !== 0) {
+    throw new Error(`${label} failed with exit code ${String(result.status)}`);
+  }
+}
+
+function ensureWindowsInstallerArtifacts(version: string): void {
+  if (hasWindowsInstallerArtifacts(version)) return;
+  console.log("[release] Windows installer artifacts missing; generating first-class release artifacts");
+  runWorkspaceCommand(["package:windows"], "pnpm package:windows");
+  runWorkspaceCommand(["package:windows:verify"], "pnpm package:windows:verify");
   for (const rel of windowsInstallerArtifactPaths(version)) {
     if (!existsSync(path.join(root, rel))) {
       throw new Error(
-        `release bundle missing Windows installer artifact: ${rel}; run pnpm package:windows and pnpm package:windows:verify first`,
+        `release bundle missing Windows installer artifact after package generation: ${rel}`,
       );
     }
   }
@@ -434,7 +454,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  checkWindowsInstallerArtifacts(pkg.version);
+  ensureWindowsInstallerArtifacts(pkg.version);
   await rm(stagingParent, { recursive: true, force: true });
   await mkdir(staging, { recursive: true });
   await mkdir(outDir, { recursive: true });

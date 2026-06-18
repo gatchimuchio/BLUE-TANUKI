@@ -352,6 +352,7 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.cmd");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.ps1");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "windows_installer_artifacts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "ensureWindowsInstallerArtifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "copyWindowsInstallerArtifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/windows/blue-tanuki-${version}-windows-x64-installer.zip");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/hds-brain");
