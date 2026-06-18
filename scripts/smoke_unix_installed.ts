@@ -81,6 +81,33 @@ function commandLog(result: ReturnType<typeof spawnSync>): string {
   return `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
 }
 
+const INHERITED_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "SHELL",
+  "USER",
+  "USERNAME",
+  "SystemRoot",
+  "ComSpec",
+  "PATHEXT",
+  "WINDIR",
+];
+
+function childEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of INHERITED_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return { ...env, ...extraEnv };
+}
+
 function run(
   command: string,
   args: readonly string[],
@@ -92,7 +119,7 @@ function run(
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, ...extraEnv },
+    env: childEnv(extraEnv),
     stdio: "inherit",
     encoding: "utf8",
     timeout: timeoutMs,
@@ -116,7 +143,7 @@ function runAllowing(
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, ...extraEnv },
+    env: childEnv(extraEnv),
     stdio: "inherit",
     encoding: "utf8",
     timeout: timeoutMs,
@@ -140,7 +167,7 @@ function runExpectingStatus(
   logStep(`start ${label}`);
   const result = spawnSync(command, [...args], {
     cwd,
-    env: { ...process.env, ...extraEnv },
+    env: childEnv(extraEnv),
     stdio: "pipe",
     encoding: "utf8",
     timeout: timeoutMs,
