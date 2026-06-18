@@ -29,15 +29,15 @@
 
 | OS | 位置づけ | 完成判定での扱い |
 |---|---|---|
-| Ubuntu/Linux | 開発・常時検証・回帰検出の基準面 | 常時グリーン必須。壊れたらWindows以前にブロック |
-| Windows | 最終製品ターゲット・配布ターゲット | 製品完成の最終判定面 |
-| macOS | source/release bundle root entrypoint で install 後 launch まで案内 | signed native package は後続 |
+| Ubuntu/Linux | 開発・常時検証・配布ターゲット | packaged Linux installer archive と installed smoke が常時グリーン必須 |
+| Windows | 製品ターゲット・配布ターゲット | packaged Windows installer zip と installed smoke が完成判定面 |
+| macOS | 製品ターゲット・配布ターゲット | packaged macOS installer archive と installed smoke が完成判定面。signed native package は後続 |
 
 ## 3. 製品完成の定義（v1踏襲）
 
-Windowsユーザーが、Node / pnpm / Git / Ubuntu / CLI 知識なしでインストールし、Control CenterからLLM設定・外部API設定・会話・承認・監査・復旧・停止・削除まで操作できる状態。
+Windows/macOS/Linuxユーザーが、Node / Corepack / pnpm / Git / source build / CLI troubleshooting なしでインストールし、Control CenterからLLM設定・外部API設定・会話・承認・監査・復旧・停止・削除まで操作できる状態。
 
-必須条件: Windows一発インストール／常駐起動／Control Center GUI／初回セットアップ／LLM provider設定（OpenRouter導線＋自前provider層）／WebChat動作／Approval・Permission管理／Audit・Evidence表示／Doctor・Recovery／Stop・Restart・Logs・Uninstall／Linux常時グリーン／Windows実機E2E証跡／owner GO。
+必須条件: Windows/macOS/Linux一発インストール／常駐起動／Control Center GUI／初回セットアップ／LLM provider設定（OpenRouter導線＋自前provider層）／WebChat動作／Approval・Permission管理／Audit・Evidence表示／Doctor・Recovery／Stop・Restart・Logs・Uninstall／Linux常時グリーン／Windows/macOS/Linux実機またはCI E2E証跡／owner GO。
 
 ## 4. 判定ゲート体系
 

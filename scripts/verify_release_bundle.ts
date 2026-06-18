@@ -22,6 +22,7 @@ interface ReleaseManifest {
   required_paths?: string[];
   installer_paths?: string[];
   windows_installer_artifacts?: string[];
+  unix_installer_artifacts?: string[];
   boundaries?: {
     unsigned_source_bundle?: boolean;
     secrets_included?: boolean;
@@ -70,6 +71,9 @@ const REQUIRED_ARCHIVE_PATHS = [
   "install/resident/README.md",
   "install/resident/blue-tanuki-resident.ps1",
   "install/resident/blue-tanuki-resident.sh",
+  "install/unix/product/BlueTanukiSetup.sh",
+  "install/unix/product/BlueTanukiLauncher.sh",
+  "install/unix/product/BlueTanukiUninstall.sh",
   "install/windows/product/BlueTanukiSetup.ps1",
   "install/windows/product/BlueTanukiLauncher.ps1",
   "install/windows/product/BlueTanukiUninstall.ps1",
@@ -100,6 +104,9 @@ const REQUIRED_ARCHIVE_PATHS = [
   "scripts/package_windows.ts",
   "scripts/verify_windows_package.ts",
   "scripts/smoke_windows_installed.ts",
+  "scripts/package_unix.ts",
+  "scripts/verify_unix_package.ts",
+  "scripts/smoke_unix_installed.ts",
 ] as const;
 
 const FORBIDDEN_SEGMENTS = new Set([
@@ -248,6 +255,11 @@ function assertManifest(
       throw new Error(`manifest windows_installer_artifacts missing ${artifact}`);
     }
   }
+  for (const artifact of unixInstallerArtifactPaths(manifest.version ?? readPackage().version)) {
+    if (!manifest.unix_installer_artifacts?.includes(artifact)) {
+      throw new Error(`manifest unix_installer_artifacts missing ${artifact}`);
+    }
+  }
 }
 
 function windowsInstallerArtifactPaths(version: string): string[] {
@@ -257,6 +269,25 @@ function windowsInstallerArtifactPaths(version: string): string[] {
     `${base}.sha256`,
     `${base}.manifest.json`,
     "release/windows/README_INSTALL_WINDOWS.txt",
+  ];
+}
+
+function unixInstallerArtifactPaths(version: string): string[] {
+  const linux = `release/linux/blue-tanuki-${version}-linux-x64-installer.tar.gz`;
+  const macosX64 = `release/macos/blue-tanuki-${version}-macos-x64-installer.tar.gz`;
+  const macosArm64 = `release/macos/blue-tanuki-${version}-macos-arm64-installer.tar.gz`;
+  return [
+    linux,
+    `${linux}.sha256`,
+    `${linux}.manifest.json`,
+    "release/linux/README_INSTALL_LINUX.txt",
+    macosX64,
+    `${macosX64}.sha256`,
+    `${macosX64}.manifest.json`,
+    macosArm64,
+    `${macosArm64}.sha256`,
+    `${macosArm64}.manifest.json`,
+    "release/macos/README_INSTALL_MACOS.txt",
   ];
 }
 
@@ -327,6 +358,11 @@ function assertRequiredEntries(entries: string[]): void {
   for (const required of windowsInstallerArtifactPaths(readPackage().version)) {
     if (!entryMatches(entries, required)) {
       throw new Error(`archive missing Windows installer artifact: ${required}`);
+    }
+  }
+  for (const required of unixInstallerArtifactPaths(readPackage().version)) {
+    if (!entryMatches(entries, required)) {
+      throw new Error(`archive missing Linux/macOS installer artifact: ${required}`);
     }
   }
 }

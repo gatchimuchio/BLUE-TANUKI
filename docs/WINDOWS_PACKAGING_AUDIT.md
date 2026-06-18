@@ -101,7 +101,8 @@ intent only.
 - GitHub Releases for Windows users must attach the installer zip, `.sha256`,
   `.manifest.json`, and `README_INSTALL_WINDOWS.txt`; source zip alone is not
   the end-user Windows artifact.
-- The official source release bundle includes generated `release/windows/`
-  installer artifacts when produced by `pnpm release:bundle`.
+- The official source release bundle includes generated `release/windows/`,
+  `release/linux/`, and `release/macos/` installer artifacts when produced by
+  `pnpm release:bundle`.
 - Automatic update is not implemented.
 - Desktop shortcut is optional through installer argument, not a GUI checkbox.

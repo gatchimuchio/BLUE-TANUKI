@@ -43,6 +43,7 @@ const INCLUDED_PATHS = [
   "install/linux",
   "install/macos",
   "install/resident",
+  "install/unix",
   "install/windows/product",
   "install/README.md",
   "package.json",
@@ -69,6 +70,9 @@ const REQUIRED_PATHS = [
   "install/resident/README.md",
   "install/resident/blue-tanuki-resident.ps1",
   "install/resident/blue-tanuki-resident.sh",
+  "install/unix/product/BlueTanukiSetup.sh",
+  "install/unix/product/BlueTanukiLauncher.sh",
+  "install/unix/product/BlueTanukiUninstall.sh",
   "install/windows/product/BlueTanukiSetup.ps1",
   "install/windows/product/BlueTanukiLauncher.ps1",
   "install/windows/product/BlueTanukiUninstall.ps1",
@@ -99,6 +103,9 @@ const REQUIRED_PATHS = [
   "scripts/package_windows.ts",
   "scripts/verify_windows_package.ts",
   "scripts/smoke_windows_installed.ts",
+  "scripts/package_unix.ts",
+  "scripts/verify_unix_package.ts",
+  "scripts/smoke_unix_installed.ts",
 ] as const;
 
 const INSTALLER_PATHS = [
@@ -116,6 +123,9 @@ const INSTALLER_PATHS = [
   "install/resident/README.md",
   "install/resident/blue-tanuki-resident.ps1",
   "install/resident/blue-tanuki-resident.sh",
+  "install/unix/product/BlueTanukiSetup.sh",
+  "install/unix/product/BlueTanukiLauncher.sh",
+  "install/unix/product/BlueTanukiUninstall.sh",
   "install/windows/product/BlueTanukiSetup.cmd",
   "install/windows/product/BlueTanukiSetup.ps1",
   "install/windows/product/BlueTanukiLauncher.ps1",
@@ -181,6 +191,7 @@ interface ReleaseManifest {
   required_paths: readonly string[];
   installer_paths: readonly string[];
   windows_installer_artifacts: readonly string[];
+  unix_installer_artifacts: readonly string[];
   boundaries: {
     unsigned_source_bundle: true;
     secrets_included: false;
@@ -235,6 +246,29 @@ function hasWindowsInstallerArtifacts(version: string): boolean {
   return windowsInstallerArtifactPaths(version).every((rel) => existsSync(path.join(root, rel)));
 }
 
+function unixInstallerArtifactPaths(version: string): string[] {
+  const linux = `release/linux/blue-tanuki-${version}-linux-x64-installer.tar.gz`;
+  const macosX64 = `release/macos/blue-tanuki-${version}-macos-x64-installer.tar.gz`;
+  const macosArm64 = `release/macos/blue-tanuki-${version}-macos-arm64-installer.tar.gz`;
+  return [
+    linux,
+    `${linux}.sha256`,
+    `${linux}.manifest.json`,
+    "release/linux/README_INSTALL_LINUX.txt",
+    macosX64,
+    `${macosX64}.sha256`,
+    `${macosX64}.manifest.json`,
+    macosArm64,
+    `${macosArm64}.sha256`,
+    `${macosArm64}.manifest.json`,
+    "release/macos/README_INSTALL_MACOS.txt",
+  ];
+}
+
+function hasUnixInstallerArtifacts(version: string): boolean {
+  return unixInstallerArtifactPaths(version).every((rel) => existsSync(path.join(root, rel)));
+}
+
 function runWorkspaceCommand(args: readonly string[], label: string): void {
   const result = spawnSync("pnpm", [...args], {
     cwd: root,
@@ -256,6 +290,20 @@ function ensureWindowsInstallerArtifacts(version: string): void {
     if (!existsSync(path.join(root, rel))) {
       throw new Error(
         `release bundle missing Windows installer artifact after package generation: ${rel}`,
+      );
+    }
+  }
+}
+
+function ensureUnixInstallerArtifacts(version: string): void {
+  if (hasUnixInstallerArtifacts(version)) return;
+  console.log("[release] Linux/macOS installer artifacts missing; generating first-class release artifacts");
+  runWorkspaceCommand(["package:unix"], "pnpm package:unix");
+  runWorkspaceCommand(["package:unix:verify"], "pnpm package:unix:verify");
+  for (const rel of unixInstallerArtifactPaths(version)) {
+    if (!existsSync(path.join(root, rel))) {
+      throw new Error(
+        `release bundle missing Linux/macOS installer artifact after package generation: ${rel}`,
       );
     }
   }
@@ -299,6 +347,15 @@ async function copyIncluded(staging: string): Promise<void> {
 
 async function copyWindowsInstallerArtifacts(staging: string, version: string): Promise<void> {
   for (const rel of windowsInstallerArtifactPaths(version)) {
+    const src = path.join(root, rel);
+    const dest = path.join(staging, rel);
+    await mkdir(path.dirname(dest), { recursive: true });
+    await cp(src, dest, { force: true });
+  }
+}
+
+async function copyUnixInstallerArtifacts(staging: string, version: string): Promise<void> {
+  for (const rel of unixInstallerArtifactPaths(version)) {
     const src = path.join(root, rel);
     const dest = path.join(staging, rel);
     await mkdir(path.dirname(dest), { recursive: true });
@@ -403,6 +460,7 @@ async function writeIntegrityFiles(
     required_paths: REQUIRED_PATHS,
     installer_paths: INSTALLER_PATHS,
     windows_installer_artifacts: windowsInstallerArtifactPaths(version),
+    unix_installer_artifacts: unixInstallerArtifactPaths(version),
     boundaries: {
       unsigned_source_bundle: true,
       secrets_included: false,
@@ -446,6 +504,7 @@ async function main(): Promise<void> {
           required: REQUIRED_PATHS,
           installers: INSTALLER_PATHS,
           windows_installer_artifacts: windowsInstallerArtifactPaths(pkg.version),
+          unix_installer_artifacts: unixInstallerArtifactPaths(pkg.version),
         },
         null,
         2,
@@ -455,11 +514,13 @@ async function main(): Promise<void> {
   }
 
   ensureWindowsInstallerArtifacts(pkg.version);
+  ensureUnixInstallerArtifacts(pkg.version);
   await rm(stagingParent, { recursive: true, force: true });
   await mkdir(staging, { recursive: true });
   await mkdir(outDir, { recursive: true });
   await copyIncluded(staging);
   await copyWindowsInstallerArtifacts(staging, pkg.version);
+  await copyUnixInstallerArtifacts(staging, pkg.version);
   await rewriteCoreTsconfigs(staging);
   archive(stagingParent, outFile);
   await rm(stagingParent, { recursive: true, force: true });

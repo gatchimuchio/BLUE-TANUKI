@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { cp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import * as https from "node:https";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 interface PackageJson {
   version: string;
@@ -46,8 +47,8 @@ interface WindowsInstallerManifest {
   };
 }
 
-const root = process.cwd();
-const DEFAULT_NODE_VERSION = "22.14.0";
+export const root = process.cwd();
+export const DEFAULT_NODE_VERSION = "22.14.0";
 
 const RUNTIME_PACKAGES = [
   { rel: "packages/protocol", module: "@blue-tanuki/protocol" },
@@ -98,7 +99,7 @@ function argValue(name: string): string | undefined {
   return undefined;
 }
 
-function readPackage(): PackageJson {
+export function readPackage(): PackageJson {
   return JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as PackageJson;
 }
 
@@ -108,13 +109,13 @@ function assertExists(rel: string): void {
   }
 }
 
-function assertBuilt(): void {
+export function assertBuilt(): void {
   for (const rel of REQUIRED_BUILT_FILES) {
     assertExists(rel);
   }
 }
 
-async function copyDir(src: string, dest: string): Promise<void> {
+export async function copyDir(src: string, dest: string): Promise<void> {
   if (!existsSync(src)) {
     throw new Error(`missing directory: ${src}`);
   }
@@ -140,7 +141,7 @@ function isSecretLike(name: string): boolean {
   return false;
 }
 
-async function copyFileIfExists(rel: string, destRoot: string): Promise<void> {
+export async function copyFileIfExists(rel: string, destRoot: string): Promise<void> {
   const src = path.join(root, rel);
   if (!existsSync(src)) return;
   const dest = path.join(destRoot, rel);
@@ -200,7 +201,7 @@ async function copyGateway(appRoot: string): Promise<void> {
   );
 }
 
-async function copyAppLayout(appRoot: string): Promise<void> {
+export async function copyAppLayout(appRoot: string): Promise<void> {
   await mkdir(appRoot, { recursive: true });
   for (const rel of ROOT_TEXT_FILES) {
     await copyFileIfExists(rel, appRoot);
@@ -208,6 +209,8 @@ async function copyAppLayout(appRoot: string): Promise<void> {
   await copyDir(path.join(root, "docs"), path.join(appRoot, "docs"));
   await copyDir(path.join(root, "scripts"), path.join(appRoot, "scripts"));
   await copyDir(path.join(root, "install/linux"), path.join(appRoot, "install/linux"));
+  await copyDir(path.join(root, "install/macos"), path.join(appRoot, "install/macos"));
+  await copyDir(path.join(root, "install/resident"), path.join(appRoot, "install/resident"));
   await copyDir(path.join(root, "install/windows"), path.join(appRoot, "install/windows"));
   await copyFileIfExists("install/README.md", appRoot);
   await copyGateway(appRoot);
@@ -240,7 +243,7 @@ async function copyProductLaunchers(packageRoot: string): Promise<void> {
   }
 }
 
-async function downloadBuffer(url: string): Promise<Buffer> {
+export async function downloadBuffer(url: string): Promise<Buffer> {
   return await new Promise<Buffer>((resolve, reject) => {
     const output: Buffer[] = [];
     https.get(url, (response) => {
@@ -289,7 +292,7 @@ async function downloadNodeRuntime(
   return { zipPath, url, file, sha256: expectedSha, shasumsUrl };
 }
 
-function commandExists(command: string): boolean {
+export function commandExists(command: string): boolean {
   const result = process.platform === "win32"
     ? spawnSync("where", [command], { encoding: "utf8" })
     : spawnSync("sh", ["-c", `command -v ${command}`], {
@@ -333,7 +336,7 @@ function zipDirectory(sourceDir: string, outFile: string): void {
   throw new Error("python3/python is required to create Windows installer zip on this platform");
 }
 
-function sha256File(file: string): string {
+export function sha256File(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
@@ -450,7 +453,10 @@ async function main(): Promise<void> {
   console.log("user_requires_node_pnpm_git=false");
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+const invoked = process.argv[1] ? fileURLToPath(import.meta.url) === path.resolve(process.argv[1]) : false;
+if (invoked) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

@@ -42,7 +42,7 @@ describe("source and release-bundle install entrypoints", () => {
     expect(linuxDesktop).toContain("INSTALL_LINUX.sh");
   });
 
-  it("dry-runs the Linux source entrypoint from another current directory", () => {
+  it("dry-runs the Linux source entrypoint without falling back to source build", () => {
     if (process.platform === "win32") {
       expect(read("INSTALL_LINUX.sh")).toContain("linux_source_entrypoint_dry_run=pass");
       return;
@@ -50,20 +50,23 @@ describe("source and release-bundle install entrypoints", () => {
 
     const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-linux-entrypoint-"));
     try {
-      const result = runShell("INSTALL_LINUX.sh", ["--dry-run"], tmp);
+      const emptyReleaseDir = join(tmp, "release");
+      const result = runShell("INSTALL_LINUX.sh", ["--dry-run", "--release-dir", emptyReleaseDir], tmp);
       const output = `${result.stdout}\n${result.stderr}`;
       expect(result.status).toBe(0);
       expect(output).toContain("Repository root:");
       expect(output).toContain(root);
-      expect(output).toContain("would_run=sh ./install/linux/install.sh");
+      expect(output).toContain("wrong_asset=source_zip");
+      expect(output).toContain("would_download_release_installer=");
       expect(output).toContain("would_launch_after_install=0");
       expect(output).toContain("linux_source_entrypoint_dry_run=pass");
+      expect(output).not.toContain("would_run=sh ./install/linux/install.sh");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("dry-runs the macOS source entrypoint without requiring a Darwin host", () => {
+  it("dry-runs the macOS source entrypoint without falling back to source build", () => {
     if (process.platform === "win32") {
       expect(read("INSTALL_MACOS.sh")).toContain("macos_source_entrypoint_dry_run=pass");
       return;
@@ -71,14 +74,17 @@ describe("source and release-bundle install entrypoints", () => {
 
     const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-macos-entrypoint-"));
     try {
-      const result = runShell("INSTALL_MACOS.sh", ["--dry-run"], tmp);
+      const emptyReleaseDir = join(tmp, "release");
+      const result = runShell("INSTALL_MACOS.sh", ["--dry-run", "--release-dir", emptyReleaseDir], tmp);
       const output = `${result.stdout}\n${result.stderr}`;
       expect(result.status).toBe(0);
       expect(output).toContain("Repository root:");
       expect(output).toContain(root);
-      expect(output).toContain("would_run=sh ./install/macos/install.sh");
+      expect(output).toContain("wrong_asset=source_zip");
+      expect(output).toContain("would_download_release_installer=");
       expect(output).toContain("would_launch_after_install=0");
       expect(output).toContain("macos_source_entrypoint_dry_run=pass");
+      expect(output).not.toContain("would_run=sh ./install/macos/install.sh");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -92,7 +98,8 @@ describe("source and release-bundle install entrypoints", () => {
 
     const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-unix-entrypoint-"));
     try {
-      const result = runShell("INSTALL.sh", ["--dry-run"], tmp);
+      const emptyReleaseDir = join(tmp, "release");
+      const result = runShell("INSTALL.sh", ["--dry-run", "--release-dir", emptyReleaseDir], tmp);
       const output = `${result.stdout}\n${result.stderr}`;
       expect(result.status).toBe(0);
       if (process.platform === "darwin") {
@@ -100,7 +107,35 @@ describe("source and release-bundle install entrypoints", () => {
       } else {
         expect(output).toContain("linux_source_entrypoint_dry_run=pass");
       }
+      expect(output).toContain("wrong_asset=source_zip");
       expect(output).toContain("would_launch_after_install=0");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("dry-runs explicit Unix developer source build only with build-from-source", () => {
+    if (process.platform === "win32") {
+      expect(read("INSTALL_LINUX.sh")).toContain("developer_build_from_source=true");
+      expect(read("INSTALL_MACOS.sh")).toContain("developer_build_from_source=true");
+      return;
+    }
+
+    const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-unix-buildfromsource-"));
+    try {
+      const linux = runShell("INSTALL_LINUX.sh", ["--dry-run", "--build-from-source"], tmp);
+      const linuxOutput = `${linux.stdout}\n${linux.stderr}`;
+      expect(linux.status).toBe(0);
+      expect(linuxOutput).toContain("developer_build_from_source=true");
+      expect(linuxOutput).toContain("would_run=sh ./install/linux/install.sh");
+      expect(linuxOutput).toContain("linux_source_entrypoint_build_from_source_dry_run=pass");
+
+      const macos = runShell("INSTALL_MACOS.sh", ["--dry-run", "--build-from-source"], tmp);
+      const macosOutput = `${macos.stdout}\n${macos.stderr}`;
+      expect(macos.status).toBe(0);
+      expect(macosOutput).toContain("developer_build_from_source=true");
+      expect(macosOutput).toContain("would_run=sh ./install/macos/install.sh");
+      expect(macosOutput).toContain("macos_source_entrypoint_build_from_source_dry_run=pass");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -132,6 +167,9 @@ describe("source and release-bundle install entrypoints", () => {
       expect(text).toContain("install/macos/uninstall.sh");
       expect(text).toContain("install/resident/blue-tanuki-resident.sh");
       expect(text).toContain("install/resident/blue-tanuki-resident.ps1");
+      expect(text).toContain("install/unix/product/BlueTanukiSetup.sh");
+      expect(text).toContain("install/unix/product/BlueTanukiLauncher.sh");
+      expect(text).toContain("install/unix/product/BlueTanukiUninstall.sh");
       expect(text).toContain("install/linux/install.sh");
       expect(text).toContain("install/linux/uninstall.sh");
     }

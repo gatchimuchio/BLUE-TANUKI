@@ -38,7 +38,7 @@ pnpm validate:product -- --list
 BLUE_TANUKI_VALIDATE_TIMEOUT_MS=600000
 ```
 
-無指定時の既定値も 600000ms である。Windows installed smoke は installer setup / repair / launch / uninstall まで実行するため、120000ms では実機で不足する場合がある。
+無指定時の既定値も 600000ms である。Platform installed smoke は installer setup / repair / launch / uninstall まで実行するため、120000ms では実機で不足する場合がある。
 
 ## PASS / FAIL / skipped
 
@@ -62,16 +62,24 @@ BLUE_TANUKI_VALIDATE_TIMEOUT_MS=600000
 
 ## P3 Checks
 
-P3 checks are registered as Windows-target checks. Linux runs report them as `skipped`; the `windows-latest` CI job runs them through `pnpm validate:product -- --phase P3`.
-The `windows-product` CI job uploads `.codex-tmp/validate-product-windows`
-as the `validate-product-windows-evidence` artifact on both success and
-failure, so a passing Windows product gate leaves an evidence pack rather than
-only console output.
+P3 checks are registered as platform-target installer checks. Each OS runs its
+own packaged installer artifact and installed-app smoke; other platforms report
+that OS check as `skipped`. CI runs `linux-product`, `macos-product`, and
+`windows-product` jobs through `pnpm validate:product -- --phase P3`.
+
+The product CI jobs upload `.codex-tmp/validate-product-linux`,
+`.codex-tmp/validate-product-macos`, and `.codex-tmp/validate-product-windows`
+as evidence artifacts on both success and failure, so passing product gates
+leave evidence packs rather than only console output.
 
 | ID | evidence source | 内容 |
 |---|---|---|
 | `p3.package_windows_verify` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/package_windows.ts` を実行してWindows installer zip、sha256、manifest、`README_INSTALL_WINDOWS.txt`を生成し、`scripts/verify_windows_package.ts` でmanifest、sha256、README、zip contents、secret exclusion、authority boundary metadataを検証する |
 | `p3.windows_installed_smoke` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/smoke_windows_installed.ts` をWindows上で実行し、source tree product setup誤起動時のfriendly guidance、root `INSTALL_WINDOWS.ps1` default dry-run がsource buildへ落ちず verified release download / fail-closed導線になること、`-BuildFromSource` explicit dry-runのみbuild/package導線を持つこと、root `INSTALL_WINDOWS.cmd` 別cwd dry-run、installer zip展開後の`BlueTanukiSetup.cmd` install、repair install設定保持、明示autostart/HKCU Run entryによるreboot persistence、port競合検出、常駐起動、GUI/WebChat first message、approval API token separation、audit tamper検出、resident kill、watchdog crash recovery、stop、doctor、restart、safe mode、Defender/SmartScreen向けSHA-256 guidance同梱、uninstallを検証する。marker一覧は `docs/WINDOWS_EVIDENCE_PACK.md` に固定する |
+| `p3.package_linux_verify` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/package_unix.ts --platform=linux` を実行してLinux x64 installer archive、sha256、manifest、`README_INSTALL_LINUX.txt`を生成し、`scripts/verify_unix_package.ts --platform=linux` でmanifest、sha256、README、archive contents、secret exclusion、authority boundary metadataを検証する |
+| `p3.linux_installed_smoke` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/smoke_unix_installed.ts --platform=linux` をLinux上で実行し、root `INSTALL_LINUX.sh` default dry-run がsource buildへ落ちず verified release download / fail-closed導線になること、`--build-from-source` explicit dry-runのみsource install導線を持つこと、installer archive展開後の`BlueTanukiSetup.sh` install、repair install設定保持、明示autostart user entryによるreboot persistence、port競合検出、常駐起動、GUI/WebChat first message、approval API token separation、audit tamper検出、resident kill、watchdog crash recovery、stop、doctor、restart、safe mode、uninstallを検証する |
+| `p3.package_macos_verify` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/package_unix.ts --platform=macos --arch=<host>` を実行してmacOS installer archive、sha256、manifest、`README_INSTALL_MACOS.txt`を生成し、`scripts/verify_unix_package.ts --platform=macos --arch=<host>` でmanifest、sha256、README、archive contents、secret exclusion、authority boundary metadataを検証する |
+| `p3.macos_installed_smoke` | `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` | `scripts/smoke_unix_installed.ts --platform=macos` をmacOS上で実行し、root `INSTALL_MACOS.sh` default dry-run がsource buildへ落ちず verified release download / fail-closed導線になること、`--build-from-source` explicit dry-runのみsource install導線を持つこと、installer archive展開後の`BlueTanukiSetup.command` install、repair install設定保持、明示autostart LaunchAgents entryによるreboot persistence、port競合検出、常駐起動、GUI/WebChat first message、approval API token separation、audit tamper検出、resident kill、watchdog crash recovery、stop、doctor、restart、safe mode、uninstallを検証する |
 
 ## P4 Checks
 
@@ -140,7 +148,7 @@ only console output.
 | 追加Phase | 検査項目 |
 |---|---|
 | P2 | ゲート骨格＋Linux系: test一式 / smoke:serve / smoke:resume / hds:standalone / SUSPEND実発火（動的） / approval bypass不能（動的） / audit chain verify / evidence pack生成 |
-| P3 | package:windows verify / smoke:windows-installed（win環境） / install→常駐→stop/restart/logs→uninstall往復 |
+| P3 | package:windows/linux/macos verify / smoke:windows-installed（Windows） / smoke:linux-installed（Linux） / smoke:macos-installed（macOS） / install→常駐→stop/restart/logs→uninstall往復 |
 | P4 | Control Center操作スモーク（API経由） |
 | P5 | LLM resilience health fixture / LLM secret-ref fixture / 実HTTP abort timeout / settings verify timeout / Windows DPAPI connector secret roundtrip / live LLM smoke（owner資格情報、opt-in→P13でrequired化） |
 | P6 | approval allow・ask・deny・remembered grant・revoke・emergency stop・L3 final-review non-bypassの動的検証 |

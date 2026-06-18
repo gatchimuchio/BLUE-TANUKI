@@ -10,19 +10,37 @@ audit, and runtime invariant boundaries.
 
 This guided source/bundle installer is not a signed native installer and not an automatic updater.
 
-## Windows Product Installer Package
+## Product Installer Packages
 
-The Windows GUI product path is separate from `pnpm installer:run`.
+The Windows/macOS/Linux GUI product paths are separate from `pnpm installer:run`.
+Normal users should not run source builds.
 
 ```bash
 pnpm build
 pnpm package:windows
 pnpm package:windows:verify
+pnpm package:linux
+pnpm package:linux:verify
+pnpm package:macos
+pnpm package:macos:verify
 ```
 
-This creates an unsigned Windows installer package under `release/windows/`.
-It bundles Windows Node.js and installs BLUE-TANUKI without asking the end user
-to run Node.js, pnpm, Git, PowerShell setup scripts, or repository commands.
+This creates unsigned installer packages under `release/windows/`,
+`release/linux/`, and `release/macos/`. Each package bundles Node.js and
+installs BLUE-TANUKI without asking the end user to run Node.js, Corepack,
+pnpm, Git, shell/PowerShell setup scripts, or repository commands.
+
+Normal Windows users should not run source builds. Download
+`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
+`BlueTanukiSetup.cmd`.
+
+Normal macOS users should not run source builds. Download
+`blue-tanuki-<version>-macos-<arch>-installer.tar.gz`, extract it, and run
+`BlueTanukiSetup.command`.
+
+Normal Linux users should not run source builds. Download
+`blue-tanuki-<version>-linux-x64-installer.tar.gz`, extract it, and run
+`BlueTanukiSetup.sh`.
 
 See:
 
@@ -116,6 +134,10 @@ provider, endpoint, model, and API key, then verify again.
 - The Windows package is unsigned and zip-delivered. It is not a signed MSI/EXE,
   but it does provide bundled runtime install, Start Menu shortcuts, Control
   Center launch, Doctor shortcut, logs shortcut, and current-user uninstall.
+- The Linux/macOS packages are unsigned archive-delivered installers. They are
+  not signed DMG/DEB/RPM packages, but they do provide bundled runtime install,
+  current-user launchers, Control Center launch, Doctor, logs, explicit
+  autostart controls, and current-user uninstall.
 
 ## Cross-References
 

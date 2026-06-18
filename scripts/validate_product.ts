@@ -79,7 +79,7 @@ import {
 } from "./ga_promotion_gate.ts";
 
 export type ProductPhase = "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8" | "P9" | "P10" | "P11" | "P12" | "P13";
-export type ProductPlatform = "linux" | "win32" | "any";
+export type ProductPlatform = "linux" | "win32" | "darwin" | "any";
 export type ProductCheckStatus = "pass" | "fail" | "skipped";
 
 export interface ProductCheck {
@@ -245,6 +245,34 @@ export const PRODUCT_CHECKS: readonly ProductCheck[] = [
     platform: "win32",
     required: true,
     run: runWindowsInstalledSmoke,
+  },
+  {
+    id: "p3.package_linux_verify",
+    phase: "P3",
+    platform: "linux",
+    required: true,
+    run: runLinuxPackageVerify,
+  },
+  {
+    id: "p3.linux_installed_smoke",
+    phase: "P3",
+    platform: "linux",
+    required: true,
+    run: runLinuxInstalledSmoke,
+  },
+  {
+    id: "p3.package_macos_verify",
+    phase: "P3",
+    platform: "darwin",
+    required: true,
+    run: runMacosPackageVerify,
+  },
+  {
+    id: "p3.macos_installed_smoke",
+    phase: "P3",
+    platform: "darwin",
+    required: true,
+    run: runMacosInstalledSmoke,
   },
   {
     id: "p4.control_center_settings_api",
@@ -1058,6 +1086,132 @@ async function runWindowsInstalledSmoke(ctx: CheckContext): Promise<CheckResult>
       crash_recovery_result: log.includes("crash_recovery_result=pass"),
       safe_mode_result: log.includes("safe_mode_result=pass"),
       defender_smartscreen_guidance_result: log.includes("defender_smartscreen_guidance_result=pass"),
+      uninstall_result: log.includes("uninstall_result=pass"),
+    },
+  };
+}
+
+async function runLinuxPackageVerify(ctx: CheckContext): Promise<CheckResult> {
+  const packageRun = await runNodeScript(ctx, "scripts/package_unix.ts", ["--platform=linux"]);
+  const verifyRun = packageRun.exit_code === 0
+    ? await runNodeScript(ctx, "scripts/verify_unix_package.ts", ["--platform=linux"])
+    : null;
+  const log = [
+    "[package_unix linux]",
+    commandLog(packageRun),
+    "[verify_unix_package linux]",
+    verifyRun ? commandLog(verifyRun) : "skipped because package_unix failed",
+  ].join("\n");
+  const pass =
+    packageRun.exit_code === 0 &&
+    verifyRun?.exit_code === 0 &&
+    packageRun.stdout.includes("linux_installer=") &&
+    verifyRun.stdout.includes("linux_installer_verified=");
+  return {
+    status: pass ? "pass" : "fail",
+    summary: pass
+      ? "Linux installer package created and verified"
+      : `Linux package verification failed package_exit=${String(packageRun.exit_code)} verify_exit=${String(verifyRun?.exit_code)}`,
+    raw_log: log,
+    log_excerpt: excerpt(log),
+    details: {
+      package_exit_code: packageRun.exit_code,
+      verify_exit_code: verifyRun?.exit_code ?? null,
+      package_timed_out: packageRun.timed_out,
+      verify_timed_out: verifyRun?.timed_out ?? null,
+    },
+  };
+}
+
+async function runLinuxInstalledSmoke(ctx: CheckContext): Promise<CheckResult> {
+  return runUnixInstalledSmoke(ctx, "linux");
+}
+
+async function runMacosPackageVerify(ctx: CheckContext): Promise<CheckResult> {
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const packageRun = await runNodeScript(ctx, "scripts/package_unix.ts", ["--platform=macos", `--arch=${arch}`]);
+  const verifyRun = packageRun.exit_code === 0
+    ? await runNodeScript(ctx, "scripts/verify_unix_package.ts", ["--platform=macos", `--arch=${arch}`])
+    : null;
+  const log = [
+    `[package_unix macos ${arch}]`,
+    commandLog(packageRun),
+    `[verify_unix_package macos ${arch}]`,
+    verifyRun ? commandLog(verifyRun) : "skipped because package_unix failed",
+  ].join("\n");
+  const pass =
+    packageRun.exit_code === 0 &&
+    verifyRun?.exit_code === 0 &&
+    packageRun.stdout.includes("macos_installer=") &&
+    verifyRun.stdout.includes("macos_installer_verified=");
+  return {
+    status: pass ? "pass" : "fail",
+    summary: pass
+      ? `macOS ${arch} installer package created and verified`
+      : `macOS package verification failed package_exit=${String(packageRun.exit_code)} verify_exit=${String(verifyRun?.exit_code)}`,
+    raw_log: log,
+    log_excerpt: excerpt(log),
+    details: {
+      arch,
+      package_exit_code: packageRun.exit_code,
+      verify_exit_code: verifyRun?.exit_code ?? null,
+      package_timed_out: packageRun.timed_out,
+      verify_timed_out: verifyRun?.timed_out ?? null,
+    },
+  };
+}
+
+async function runMacosInstalledSmoke(ctx: CheckContext): Promise<CheckResult> {
+  return runUnixInstalledSmoke(ctx, "macos");
+}
+
+async function runUnixInstalledSmoke(ctx: CheckContext, platform: "linux" | "macos"): Promise<CheckResult> {
+  const args = [`--platform=${platform}`];
+  if (platform === "macos") {
+    args.push(`--arch=${process.arch === "arm64" ? "arm64" : "x64"}`);
+  }
+  const run = await runNodeScript(ctx, "scripts/smoke_unix_installed.ts", args);
+  const log = commandLog(run);
+  const pass =
+    run.exit_code === 0 &&
+    log.includes(`${platform}_installed_smoke=pass`) &&
+    log.includes(`${platform}_source_entrypoint_result=pass`) &&
+    log.includes(`${platform}_source_entrypoint_build_from_source_result=pass`) &&
+    log.includes("installer_archive_setup_result=pass") &&
+    log.includes("install_result=pass") &&
+    log.includes("launch_result=pass") &&
+    log.includes("gui_result=pass") &&
+    log.includes("first_message_result=pass") &&
+    log.includes("repair_install_result=pass") &&
+    log.includes("reboot_persistence_result=pass") &&
+    log.includes("port_conflict_result=pass") &&
+    log.includes("approval_flow_result=pass") &&
+    log.includes("audit_tamper_result=pass") &&
+    log.includes("crash_recovery_result=pass") &&
+    log.includes("safe_mode_result=pass") &&
+    log.includes("uninstall_result=pass");
+  return {
+    status: pass ? "pass" : "fail",
+    summary: pass
+      ? `${platform} installed-app smoke passed source-tree guidance/explicit source build/installer setup/install/repair/autostart/port-conflict/launch/gui/message/approval/audit-tamper/crash-recovery/stop/doctor/restart/safe-mode/uninstall`
+      : `${platform} installed-app smoke failed exit=${String(run.exit_code)} timed_out=${run.timed_out}`,
+    raw_log: log,
+    log_excerpt: excerpt(log),
+    details: {
+      exit_code: run.exit_code,
+      timed_out: run.timed_out,
+      root_source_entrypoint_result: log.includes(`${platform}_source_entrypoint_result=pass`),
+      root_source_entrypoint_build_from_source_result: log.includes(`${platform}_source_entrypoint_build_from_source_result=pass`),
+      install_result: log.includes("install_result=pass"),
+      launch_result: log.includes("launch_result=pass"),
+      gui_result: log.includes("gui_result=pass"),
+      first_message_result: log.includes("first_message_result=pass"),
+      repair_install_result: log.includes("repair_install_result=pass"),
+      port_conflict_result: log.includes("port_conflict_result=pass"),
+      approval_flow_result: log.includes("approval_flow_result=pass"),
+      audit_tamper_result: log.includes("audit_tamper_result=pass"),
+      crash_recovery_result: log.includes("crash_recovery_result=pass"),
+      safe_mode_result: log.includes("safe_mode_result=pass"),
       uninstall_result: log.includes("uninstall_result=pass"),
     },
   };
@@ -3004,10 +3158,14 @@ async function runChannelOperatorExtensionBoundary(ctx: CheckContext): Promise<C
   };
 }
 
-async function runNodeScript(ctx: CheckContext, scriptRel: string): Promise<CommandRunResult> {
+async function runNodeScript(
+  ctx: CheckContext,
+  scriptRel: string,
+  args: readonly string[] = [],
+): Promise<CommandRunResult> {
   return ctx.runner({
     command: process.execPath,
-    args: [path.join(ctx.rootDir, TSX_CLI_REL), scriptRel],
+    args: [path.join(ctx.rootDir, TSX_CLI_REL), scriptRel, ...args],
     cwd: ctx.rootDir,
     env: { ...process.env },
   }, ctx.timeoutMs);

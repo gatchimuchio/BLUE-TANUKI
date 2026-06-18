@@ -13,23 +13,37 @@ Support scope and remaining RC limitations are fixed in [docs/SUPPORT_BOUNDARY.m
 | OS | 実行するもの |
 | --- | --- |
 | Windows | packaged installer zip の `BlueTanukiSetup.cmd` |
-| macOS | `INSTALL_MACOS.command` |
-| Linux | 対応 desktop なら `INSTALL_LINUX.desktop`、fallback は `sh ./INSTALL_LINUX.sh` |
+| macOS | packaged installer archive の `BlueTanukiSetup.command` |
+| Linux | packaged installer archive の `BlueTanukiSetup.sh` |
 
-Unix-like host では `sh ./INSTALL.sh` でも macOS/Linux を自動判定する。
-macOS/Linux は source/release bundle から local app を build/install し、
-resident app を起動して Control Center を開く。現時点では signed native
-`.dmg` / `.deb` / `.rpm` ではなく、Node.js/Corepack が使える local
-environment が必要である。
+通常ユーザーは Windows/macOS/Linux すべてで source build を実行しない。
+packaged installer artifact を展開し、展開先直下の setup だけを実行する。
+installed launcher は `http://127.0.0.1:8787/app` を開く。通常ユーザーに
+Node.js、Corepack、pnpm、Git、source build、手動 troubleshooting は要求しない。
 
 launch を抑止して install のみ行う場合:
 
 ```bash
-LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_MACOS.sh
-LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_LINUX.sh
+LAUNCH_AFTER_INSTALL=0 sh ./BlueTanukiSetup.command
+LAUNCH_AFTER_INSTALL=0 sh ./BlueTanukiSetup.sh
 ```
 
-## 2. Windows installer package
+`INSTALL_WINDOWS.cmd` / `INSTALL_MACOS.command` / `INSTALL_LINUX.sh` / `INSTALL.sh`
+は source-root helper である。`release/` 配下に matching packaged installer が
+あれば検証して実行し、なければ GitHub Release asset の取得・検証を試す。
+検証できない場合は wrong asset として fail fast し、source build へは落ちない。
+開発者 source build は明示オプション限定:
+
+```bash
+sh ./INSTALL_MACOS.sh --build-from-source
+sh ./INSTALL_LINUX.sh --build-from-source
+```
+
+```powershell
+.\INSTALL_WINDOWS.cmd -BuildFromSource
+```
+
+## 2. Platform installer packages
 
 Windows 一般ユーザー向けの経路は packaged installer zip のみである。Normal
 Windows users should not run source builds. Download
@@ -51,11 +65,15 @@ Release の Windows installer asset と `.sha256` / `.manifest.json` を取得�
 検証できない場合は「source zip ではなく Windows installer zip を使う」と
 fail fast し、source build へは落ちない。
 
-開発者 source build は明示オプション限定:
+macOS 一般ユーザー向けの経路は packaged installer archive のみである。Normal
+macOS users should not run source builds. Download
+`blue-tanuki-<version>-macos-<arch>-installer.tar.gz`, extract it, and run
+`BlueTanukiSetup.command`.
 
-```powershell
-.\INSTALL_WINDOWS.cmd -BuildFromSource
-```
+Linux 一般ユーザー向けの経路は packaged installer archive のみである。Normal
+Linux users should not run source builds. Download
+`blue-tanuki-<version>-linux-x64-installer.tar.gz`, extract it, and run
+`BlueTanukiSetup.sh`.
 
 開発側で package を作る:
 
@@ -63,12 +81,15 @@ fail fast し、source build へは落ちない。
 pnpm build
 pnpm package:windows
 pnpm package:windows:verify
+pnpm package:linux
+pnpm package:linux:verify
+pnpm package:macos
+pnpm package:macos:verify
 ```
 
-この package は bundled Windows Node runtime を含む。ユーザーに Node.js、
-pnpm、Git、PowerShell setup script、repository commands を要求しない。
-現時点では unsigned zip-delivered installer package であり、signed MSI/EXE
-ではない。
+これらの package は bundled Node runtime を含む。ユーザーに Node.js、Corepack、
+pnpm、Git、PowerShell/shell setup script、repository commands を要求しない。
+現時点では unsigned installer package であり、signed MSI/EXE/DMG/DEB/RPM ではない。
 
 詳細:
 

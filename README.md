@@ -27,14 +27,19 @@ Choose the file for your OS from the extracted folder:
 | OS | Run this |
 | --- | --- |
 | Windows | `BlueTanukiSetup.cmd` from the packaged installer zip |
-| macOS | `INSTALL_MACOS.command` |
-| Linux | `INSTALL_LINUX.desktop` where supported, or `sh ./INSTALL_LINUX.sh` |
+| macOS | `BlueTanukiSetup.command` from the packaged installer archive |
+| Linux | `BlueTanukiSetup.sh` from the packaged installer archive |
 
-`INSTALL.sh` also dispatches to the macOS or Linux entrypoint on Unix-like
-hosts. macOS/Linux entrypoints install from the source or release bundle, start
-the resident app, and open the Control Center. They still require a local
-Node.js/Corepack-capable environment; BLUE-TANUKI does not ship signed native
-macOS/Linux packages yet.
+Normal users on Windows, macOS, and Linux should not run source builds. Use the
+packaged installer artifact for your OS. The installed launcher opens
+`http://127.0.0.1:8787/app` and does not require user-installed Node.js,
+Corepack, pnpm, Git, or source-build troubleshooting.
+
+`INSTALL.sh`, `INSTALL_MACOS.command`, and `INSTALL_LINUX.sh` are source-root
+helpers only. They use a verified local packaged installer under `release/` or
+download the matching GitHub Release asset. If no verified installer is
+available, they fail fast with wrong-asset guidance. Developer source build is
+explicit only with `--build-from-source`.
 
 ### Windows users
 
@@ -68,45 +73,60 @@ building from source. Developer source build is explicit only:
 
 ### macOS users
 
-1. Extract the source or release bundle.
-2. Double-click `INSTALL_MACOS.command`.
-3. The installer builds the local app, starts BLUE-TANUKI, and opens the
-   Control Center.
+1. Get `blue-tanuki-*-macos-<arch>-installer.tar.gz` from the GitHub Release or
+   `release/macos/`.
+2. Extract the archive.
+3. Run `BlueTanukiSetup.command` from the extracted installer folder.
+4. Launch BLUE-TANUKI from `~/Applications/BlueTanuki.command` or
+   `~/.local/bin/blue-tanuki`.
+
+Normal macOS users should not run source builds. Download
+`blue-tanuki-<version>-macos-<arch>-installer.tar.gz`, extract it, and run
+`BlueTanukiSetup.command`.
 
 For install-only behavior:
 
 ```
-LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_MACOS.sh
+LAUNCH_AFTER_INSTALL=0 sh ./BlueTanukiSetup.command
 ```
 
 ### Linux users
 
-1. Extract the source or release bundle.
-2. Double-click `INSTALL_LINUX.desktop` where your desktop environment allows
-   local launchers, or run `sh ./INSTALL_LINUX.sh` from the extracted folder.
-3. The installer builds the local app, starts BLUE-TANUKI, and opens the
-   Control Center.
+1. Get `blue-tanuki-*-linux-x64-installer.tar.gz` from the GitHub Release or
+   `release/linux/`.
+2. Extract the archive.
+3. Run `sh ./BlueTanukiSetup.sh` from the extracted installer folder.
+4. Launch BLUE-TANUKI from the desktop launcher where supported or
+   `~/.local/bin/blue-tanuki`.
+
+Normal Linux users should not run source builds. Download
+`blue-tanuki-<version>-linux-x64-installer.tar.gz`, extract it, and run
+`BlueTanukiSetup.sh`.
 
 For install-only behavior:
 
 ```
-LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_LINUX.sh
+LAUNCH_AFTER_INSTALL=0 sh ./BlueTanukiSetup.sh
 ```
 
-### Build a Windows installer package
+### Build installer packages
 
-For developers preparing the Windows artifact:
+For developers preparing release artifacts:
 
 ```
 pnpm build
 pnpm package:windows
 pnpm package:windows:verify
+pnpm package:linux
+pnpm package:linux:verify
+pnpm package:macos
+pnpm package:macos:verify
 ```
 
-This produces an unsigned Windows installer package and sidecars under
-`release/windows/`, including `README_INSTALL_WINDOWS.txt`. The installed app
-uses a bundled Windows Node runtime, creates Start Menu shortcuts, opens the
-Control Center, and preserves user data under `%APPDATA%\BlueTanuki`.
+This produces unsigned installer packages and sidecars under `release/windows/`,
+`release/linux/`, and `release/macos/`. Each packaged installer includes a
+bundled Node runtime, opens the Control Center, and preserves user data under
+the platform user data location.
 
 See [docs/WINDOWS_INSTALLER_GUIDE.md](docs/WINDOWS_INSTALLER_GUIDE.md).
 

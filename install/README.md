@@ -5,31 +5,50 @@ These scripts and package builders are the installer layer.
 There are three distinct paths:
 
 1. source/dev run from the repository,
-2. portable platform scripts that still require a local Node/pnpm-capable environment,
-3. unsigned Windows installer package for users who should not run Node, pnpm,
-   Git, PowerShell setup scripts, or repository commands manually.
+2. explicit developer source-build scripts,
+3. unsigned packaged installer artifacts for users who should not run Node,
+   Corepack, pnpm, Git, source builds, setup scripts, or repository commands manually.
 
-The repository does not build signed native packages yet. The Windows product
-package is an unsigned zip-delivered installer package, not a signed MSI/EXE.
+The repository does not build signed native packages yet. The product packages
+are unsigned archive-delivered installer packages, not signed MSI/EXE/DMG/DEB/RPM
+native packages.
 
 ## One-click entrypoints
 
-Use the packaged installer entrypoint for Windows. Use the root entrypoint for
-macOS/Linux from the extracted source zip or release bundle:
+Use the packaged installer entrypoint for every normal user path:
 
 ```text
 Windows: BlueTanukiSetup.cmd from blue-tanuki-<version>-windows-x64-installer.zip
-macOS:   INSTALL_MACOS.command
-Linux:   INSTALL_LINUX.desktop or sh ./INSTALL_LINUX.sh
-Unix:    sh ./INSTALL.sh
+macOS:   BlueTanukiSetup.command from blue-tanuki-<version>-macos-<arch>-installer.tar.gz
+Linux:   BlueTanukiSetup.sh from blue-tanuki-<version>-linux-x64-installer.tar.gz
 ```
 
-The macOS/Linux entrypoints run the portable installer, then start the resident
-app and open the Control Center. To install without launching:
+Normal Windows, macOS, and Linux users should not run source builds. The
+installed launcher opens `http://127.0.0.1:8787/app` and does not require
+user-installed Node.js, Corepack, pnpm, Git, or source-build troubleshooting.
+
+The source-root entrypoints (`INSTALL_WINDOWS.cmd`, `INSTALL_MACOS.command`,
+`INSTALL_LINUX.sh`, and `INSTALL.sh`) are convenience helpers only. They use a
+verified packaged installer under `release/` or download the matching GitHub
+Release asset. If the packaged installer cannot be verified, they fail fast
+with wrong-asset guidance instead of building from source.
+
+Developer source build is explicit only:
 
 ```bash
-LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_MACOS.sh
-LAUNCH_AFTER_INSTALL=0 sh ./INSTALL_LINUX.sh
+sh ./INSTALL_MACOS.sh --build-from-source
+sh ./INSTALL_LINUX.sh --build-from-source
+```
+
+```powershell
+.\INSTALL_WINDOWS.cmd -BuildFromSource
+```
+
+To install without launching from an extracted packaged installer:
+
+```bash
+LAUNCH_AFTER_INSTALL=0 sh ./BlueTanukiSetup.command
+LAUNCH_AFTER_INSTALL=0 sh ./BlueTanukiSetup.sh
 ```
 
 `NO_LAUNCH=1` is accepted as an equivalent suppression flag for macOS/Linux
@@ -46,7 +65,7 @@ ships as a signed native product or has an automatic updater.
 The portable installer does not build signed native packages yet.
 Use the uninstall dry-run option before destructive removal when available.
 
-## Windows installer package
+## Platform installer packages
 
 Build from a prepared development workspace:
 
@@ -54,12 +73,19 @@ Build from a prepared development workspace:
 pnpm build
 pnpm package:windows
 pnpm package:windows:verify
+pnpm package:linux
+pnpm package:linux:verify
+pnpm package:macos
+pnpm package:macos:verify
 ```
 
-Artifact:
+Artifacts:
 
 ```text
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
+release/linux/blue-tanuki-1.0.0-rc.1-linux-x64-installer.tar.gz
+release/macos/blue-tanuki-1.0.0-rc.1-macos-x64-installer.tar.gz
+release/macos/blue-tanuki-1.0.0-rc.1-macos-arm64-installer.tar.gz
 ```
 
 User flow:
@@ -76,9 +102,17 @@ Normal Windows users should not run source builds. Download
 `blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
 `BlueTanukiSetup.cmd`.
 
-Root `INSTALL_WINDOWS.cmd` uses an existing installer zip or downloads and
-verifies the matching GitHub Release installer asset. If the packaged installer
-cannot be verified, it fails fast with wrong-asset guidance. It does not build
+Normal macOS users should not run source builds. Download
+`blue-tanuki-<version>-macos-<arch>-installer.tar.gz`, extract it, and run
+`BlueTanukiSetup.command`.
+
+Normal Linux users should not run source builds. Download
+`blue-tanuki-<version>-linux-x64-installer.tar.gz`, extract it, and run
+`BlueTanukiSetup.sh`.
+
+Root platform entrypoints use an existing installer artifact or download and
+verify the matching GitHub Release installer asset. If the packaged installer
+cannot be verified, they fail fast with wrong-asset guidance. They do not build
 from source unless a developer explicitly runs:
 
 ```powershell
@@ -90,6 +124,10 @@ The package bundles Windows Node.js `22.14.0`, installs to
 `%APPDATA%\BlueTanuki`, creates Start Menu shortcuts, and registers current-user
 uninstall. Desktop shortcut creation is optional via `-DesktopShortcut`.
 
+The Linux/macOS packages bundle Node.js `22.14.0`, install to current-user
+locations, create current-user launchers, leave autostart disabled by default,
+and preserve user data on normal uninstall.
+
 The installer runs first-run setup in stub mode and post-install doctor. The
 installer does not silently enable autostart and does not change HDS-BRAIN
 authority, Approval Gate, audit, capability envelope, or Plugin Review Gate.
@@ -98,12 +136,15 @@ Windows installed-app smoke:
 
 ```bash
 pnpm smoke:windows-installed
+pnpm smoke:linux-installed
+pnpm smoke:macos-installed
 ```
 
-On non-Windows hosts this verifies package structure and reports the runtime
-smoke as skipped. On Windows it installs into temporary locations, launches the
-bundled runtime, sends one stub WebChat message, runs Doctor, stops the runtime,
-and uninstalls.
+Platform installed-app smoke installs into temporary locations, launches the
+bundled runtime, sends one stub WebChat message, checks approval token
+separation, verifies audit tamper detection, exercises crash recovery, safe
+mode, port-conflict handling, repair install, and uninstall. Runtime smoke is
+skipped only when the current host does not match the target platform.
 
 ## Guided first-run installer
 
@@ -137,6 +178,9 @@ pnpm installer:run -- --provider openai-compatible --endpoint http://127.0.0.1:1
 ```
 
 ## Requirements
+
+These requirements apply to source/dev and guided first-run paths. They do not
+apply to normal packaged installer users.
 
 - Node.js `>=22.14.0`
 - Corepack or pnpm
@@ -176,19 +220,26 @@ powershell -ExecutionPolicy Bypass -File "$env:APPDATA\BlueTanuki\bin\blue-tanuk
 
 ## macOS
 
-Source/release-bundle one-click path:
+Normal user path:
 
 ```bash
-sh ./INSTALL_MACOS.sh
+mkdir blue-tanuki-macos-installer
+tar -xzf blue-tanuki-<version>-macos-<arch>-installer.tar.gz -C blue-tanuki-macos-installer
+cd blue-tanuki-macos-installer
+sh ./BlueTanukiSetup.command
 ```
 
-On macOS Finder, double-click root `INSTALL_MACOS.command`.
+The source-root helper `INSTALL_MACOS.command` is not the normal user artifact.
+It only verifies/runs a packaged installer from `release/macos/`, downloads a
+matching GitHub Release asset, or fails fast as wrong asset.
+
+Developer source-build path:
 
 ```bash
-sh ./install/macos/install.sh
+sh ./INSTALL_MACOS.sh --build-from-source
 ```
 
-Optional:
+Developer-only options:
 
 ```bash
 FORCE=1 sh ./install/macos/install.sh
@@ -215,20 +266,27 @@ The installer creates `~/.local/bin/blue-tanuki`.
 
 ## Linux
 
-Source/release-bundle one-click path:
+Normal user path:
 
 ```bash
-sh ./INSTALL_LINUX.sh
+mkdir blue-tanuki-linux-installer
+tar -xzf blue-tanuki-<version>-linux-x64-installer.tar.gz -C blue-tanuki-linux-installer
+cd blue-tanuki-linux-installer
+sh ./BlueTanukiSetup.sh
 ```
 
-On Linux desktops that allow local launchers, double-click root
-`INSTALL_LINUX.desktop`.
+The source-root helper `INSTALL_LINUX.sh` is not the normal user artifact. It
+only verifies/runs a packaged installer from `release/linux/`, downloads a
+matching GitHub Release asset, or fails fast as wrong asset. `INSTALL_LINUX.desktop`
+only dispatches to that source-root helper.
+
+Developer source-build path:
 
 ```bash
-sh ./install/linux/install.sh
+sh ./INSTALL_LINUX.sh --build-from-source
 ```
 
-Optional:
+Developer-only options:
 
 ```bash
 FORCE=1 sh ./install/linux/install.sh

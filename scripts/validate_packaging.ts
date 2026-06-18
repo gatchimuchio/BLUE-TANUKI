@@ -81,17 +81,31 @@ function main(): void {
 
   const rootMac = read("INSTALL_MACOS.sh");
   requireIncludes("INSTALL_MACOS.sh", rootMac, "install/macos/install.sh");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "--build-from-source");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "BlueTanukiSetup.command");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "missing_installer_artifact=fail");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "wrong_asset=source_zip");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "would_download_release_installer=");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "developer_build_from_source=true");
   requireIncludes("INSTALL_MACOS.sh", rootMac, "LAUNCH_AFTER_INSTALL");
   requireIncludes("INSTALL_MACOS.sh", rootMac, "NO_LAUNCH");
   requireIncludes("INSTALL_MACOS.sh", rootMac, "macos_source_entrypoint_dry_run=pass");
+  requireIncludes("INSTALL_MACOS.sh", rootMac, "macos_source_entrypoint_build_from_source_dry_run=pass");
   requireIncludes("INSTALL_MACOS.sh", rootMac, "Repository root:");
   requireIncludes("INSTALL_MACOS.sh", rootMac, "Log:");
 
   const rootLinux = read("INSTALL_LINUX.sh");
   requireIncludes("INSTALL_LINUX.sh", rootLinux, "install/linux/install.sh");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "--build-from-source");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "BlueTanukiSetup.sh");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "missing_installer_artifact=fail");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "wrong_asset=source_zip");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "would_download_release_installer=");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "developer_build_from_source=true");
   requireIncludes("INSTALL_LINUX.sh", rootLinux, "LAUNCH_AFTER_INSTALL");
   requireIncludes("INSTALL_LINUX.sh", rootLinux, "NO_LAUNCH");
   requireIncludes("INSTALL_LINUX.sh", rootLinux, "linux_source_entrypoint_dry_run=pass");
+  requireIncludes("INSTALL_LINUX.sh", rootLinux, "linux_source_entrypoint_build_from_source_dry_run=pass");
   requireIncludes("INSTALL_LINUX.sh", rootLinux, "Repository root:");
   requireIncludes("INSTALL_LINUX.sh", rootLinux, "Log:");
 
@@ -275,6 +289,19 @@ function main(): void {
   requireIncludes("scripts/package_windows.ts", packageWindows, "SHASUMS256.txt");
   requireIncludes("scripts/package_windows.ts", packageWindows, "runtime_sha256_verified=true");
 
+  const packageUnix = read("scripts/package_unix.ts");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "linux-x64-tar-installer");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "macos-x64-tar-installer");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "macos-arm64-tar-installer");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "node-v${nodeVersion}-linux-x64.tar.xz");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "node-v${nodeVersion}-darwin-${nodeArch}.tar.gz");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "requires_node_pnpm_git_from_user: false");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "installer_autostart: false");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "README_INSTALL_LINUX.txt");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "README_INSTALL_MACOS.txt");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "SHASUMS256.txt");
+  requireIncludes("scripts/package_unix.ts", packageUnix, "runtime_sha256_verified=true");
+
   const verifyWindowsPackage = read("scripts/verify_windows_package.ts");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "verifyWindowsPackage");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "GUI-Shell");
@@ -282,6 +309,14 @@ function main(): void {
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "README_INSTALL_WINDOWS.txt");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "const shaFile = `${archive}.sha256`");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "shasums_source");
+
+  const verifyUnixPackage = read("scripts/verify_unix_package.ts");
+  requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "verifyUnixPackage");
+  requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "GUI-Shell");
+  requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "README_INSTALL_LINUX.txt");
+  requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "README_INSTALL_MACOS.txt");
+  requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "requires_node_pnpm_git_from_user");
+  requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "shasums_source");
 
   const smokeWindowsInstalled = read("scripts/smoke_windows_installed.ts");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "windows_runtime_smoke=skipped");
@@ -293,6 +328,17 @@ function main(): void {
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "first_message_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "repair_install_result=pass");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "crash_recovery_result=pass");
+
+  const smokeUnixInstalled = read("scripts/smoke_unix_installed.ts");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "linux_installed_smoke=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "macos_installed_smoke=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "installer_archive_setup_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "first_message_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "repair_install_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "port_conflict_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "approval_flow_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "crash_recovery_result=pass");
+  requireIncludes("scripts/smoke_unix_installed.ts", smokeUnixInstalled, "safe_mode_result=pass");
 
   const macInstall = read("install/macos/install.sh");
   requireIncludes("install/macos/install.sh", macInstall, "Node.js 22.14.0");
@@ -344,6 +390,28 @@ function main(): void {
   requireIncludes("install/linux/uninstall.sh", linuxUninstall, "resident-autostart-disable");
   requireIncludes("install/linux/uninstall.sh", linuxUninstall, "Config retained");
 
+  const unixProductSetup = read("install/unix/product/BlueTanukiSetup.sh");
+  requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "This setup script must be run from the packaged");
+  requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "user_requires_node_pnpm_git=false");
+  requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "Autostart: not enabled by installer");
+  requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "Existing env file retained");
+  requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "post-install doctor");
+  requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "install_result=pass");
+
+  const unixProductLauncher = read("install/unix/product/BlueTanukiLauncher.sh");
+  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "port_conflict=127.0.0.1:");
+  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "watchdog_restarting_after_exit");
+  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "BLUE_TANUKI_SAFE_MODE");
+  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "resident-autostart-enable");
+  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "autostart_status=disabled");
+  requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "exec \"$NODE_EXE\" apps/gateway/dist/main.js --serve");
+
+  const unixProductUninstall = read("install/unix/product/BlueTanukiUninstall.sh");
+  requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "safe_target");
+  requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "Data retained");
+  requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "Config retained");
+  requireIncludes("install/unix/product/BlueTanukiUninstall.sh", unixProductUninstall, "uninstall_result=pass");
+
   const releaseBundle = read("scripts/create_release_bundle.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "CORE_RELEASE_PATHS");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL.sh");
@@ -354,9 +422,15 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.cmd");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.ps1");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "windows_installer_artifacts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "unix_installer_artifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "ensureWindowsInstallerArtifacts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "ensureUnixInstallerArtifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "copyWindowsInstallerArtifacts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "copyUnixInstallerArtifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/windows/blue-tanuki-${version}-windows-x64-installer.zip");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/linux/blue-tanuki-${version}-linux-x64-installer.tar.gz");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/blue-tanuki-${version}-macos-x64-installer.tar.gz");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/blue-tanuki-${version}-macos-arm64-installer.tar.gz");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/hds-brain");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/channel-webchat");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/channel-telegram");
@@ -375,9 +449,15 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/macos/uninstall.sh");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/resident/blue-tanuki-resident.sh");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/resident/blue-tanuki-resident.ps1");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/unix/product/BlueTanukiSetup.sh");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/unix/product/BlueTanukiLauncher.sh");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/unix/product/BlueTanukiUninstall.sh");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/windows/product");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "install/windows/product/BlueTanukiSetup.ps1");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/package_windows.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/package_unix.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/verify_unix_package.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/smoke_unix_installed.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "docs/WINDOWS_INSTALLER_GUIDE.md");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"install/installer\"");
@@ -398,7 +478,11 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_WINDOWS.cmd");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_WINDOWS.ps1");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "windows_installer_artifacts");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "unix_installer_artifacts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/windows/blue-tanuki-${version}-windows-x64-installer.zip");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/linux/blue-tanuki-${version}-linux-x64-installer.tar.gz");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/blue-tanuki-${version}-macos-x64-installer.tar.gz");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/blue-tanuki-${version}-macos-arm64-installer.tar.gz");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "manifest");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "core_release_paths");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "EXTRACTED_RELEASE_COMMANDS");
@@ -419,8 +503,12 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/macos/uninstall.sh");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/resident/blue-tanuki-resident.sh");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/resident/blue-tanuki-resident.ps1");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/unix/product/BlueTanukiSetup.sh");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/unix/product/BlueTanukiLauncher.sh");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/unix/product/BlueTanukiUninstall.sh");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/windows/product/BlueTanukiSetup.ps1");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/verify_windows_package.ts");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/verify_unix_package.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/WINDOWS_PACKAGING_AUDIT.md");
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"install/installer\"");
@@ -474,9 +562,21 @@ function main(): void {
   requireIncludes("package.json", packageJson, "\"installer:verify\"");
   requireIncludes("package.json", packageJson, "\"package:windows\"");
   requireIncludes("package.json", packageJson, "\"package:windows:verify\"");
+  requireIncludes("package.json", packageJson, "\"package:linux\"");
+  requireIncludes("package.json", packageJson, "\"package:linux:verify\"");
+  requireIncludes("package.json", packageJson, "\"package:macos\"");
+  requireIncludes("package.json", packageJson, "\"package:macos:verify\"");
+  requireIncludes("package.json", packageJson, "\"package:unix\"");
+  requireIncludes("package.json", packageJson, "\"package:unix:verify\"");
   requireIncludes("package.json", packageJson, "\"installer:windows\"");
   requireIncludes("package.json", packageJson, "\"installer:windows:verify\"");
+  requireIncludes("package.json", packageJson, "\"installer:linux\"");
+  requireIncludes("package.json", packageJson, "\"installer:linux:verify\"");
+  requireIncludes("package.json", packageJson, "\"installer:macos\"");
+  requireIncludes("package.json", packageJson, "\"installer:macos:verify\"");
   requireIncludes("package.json", packageJson, "\"smoke:windows-installed\"");
+  requireIncludes("package.json", packageJson, "\"smoke:linux-installed\"");
+  requireIncludes("package.json", packageJson, "\"smoke:macos-installed\"");
   requireIncludes("package.json", packageJson, "\"validate:repo-health\"");
   requireIncludes("package.json", packageJson, "\"validate:channels\"");
   requireIncludes("package.json", packageJson, "\"validate:ga\"");
@@ -600,6 +700,9 @@ function main(): void {
   requireIncludes(".github/workflows/ci.yml", workflow, "WEBCHAT_RESUME_TOKEN");
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm release:bundle -- --dry-run");
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm release:verify");
+  requireIncludes(".github/workflows/ci.yml", workflow, "macos-product");
+  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:product -- --phase P3");
+  requireIncludes(".github/workflows/ci.yml", workflow, "Upload macOS product evidence");
 
   const unit = read("deploy/systemd/blue-tanuki.service");
   requireIncludes("deploy/systemd/blue-tanuki.service", unit, "User=blue-tanuki");
