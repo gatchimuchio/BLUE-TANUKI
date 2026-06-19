@@ -396,6 +396,9 @@ describe("InboundRequest boundary", () => {
         "blue_tanuki.trust_level": "owner",
         "blue_tanuki.process_kind": "approval",
         "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.request_id": "operation-request:forged",
+        "blue_tanuki.operation_core.used_for_authority": true,
         "blue_tanuki.channel_send.channel": "telegram",
         "ａｃｔｏｒ＿ｋｉｎｄ": "owner",
         nested: {
@@ -428,6 +431,14 @@ describe("InboundRequest boundary", () => {
         "blue_tanuki.actor_kind": "cron",
         "blue_tanuki.trust_level": "trusted",
         "blue_tanuki.process_kind": "cron",
+        "blue_tanuki.operator_surface": "daily",
+        "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.request_id": "operation-request:req-cron",
+        "blue_tanuki.operation_core.projection_id": "operator:daily:operation-core",
+        "blue_tanuki.operation_core.source_interface": "scheduler",
+        "blue_tanuki.operation_core.used_for_authority": false,
+        "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+        "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
         "blue_tanuki.channel_send.channel": "webchat",
         "blue_tanuki.channel_send.target": "local-user",
         "blue_tanuki.channel_send.content": "scheduled",
@@ -440,6 +451,8 @@ describe("InboundRequest boundary", () => {
     if (parsed.ok) {
       expect(isGatewayInternalInboundRequest(parsed.request)).toBe(true);
       expect(parsed.request.metadata?.["blue_tanuki.authority_context"]).toBe("gateway_internal_v1");
+      expect(parsed.request.metadata?.["blue_tanuki.operation_core.version"]).toBe("operation-core.v1");
+      expect(parsed.request.metadata?.["blue_tanuki.operation_core.used_for_authority"]).toBe(false);
       expect(parsed.request.metadata?.["blue_tanuki.channel_send.target"]).toBe("local-user");
     }
   });

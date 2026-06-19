@@ -215,6 +215,17 @@ LLM / GUI / API 入口は raw command ではなく `OperationRequest` / `Operati
 - `cmd` / `command` 形式の planner output は fail-closed になる。
 - 既存 `tool:*` 入力は互換 path として残し、通常 UI からは使わない。
 
+進捗:
+
+- Control Center の Writing / Daily / Developer invoke は、Gateway 内部 request として `OperationRequest` metadata を付与する。
+- HDS-BRAIN frame はこの metadata を `operation_core` として記録するが、`used_for_authority=false` / `planner_output_used_for_authority=false` / `ui_projection_used_for_authority=false` を必須にする。
+- 外部 inbound request の `blue_tanuki.operation_core.*` metadata は gateway boundary で削除され、偽装された Operation Core projection は authority path に入らない。
+
+未完了:
+
+- AI planner output そのものの `OperationPlanSchema` 検証は未接続。
+- planner output の fail-closed 化と通常 UI からの `tool:*` 互換入力排除は次段階で扱う。
+
 ### Step 4: Adapter Registry
 
 Shell / Windows / Linux / macOS / Browser / Composio / internal runtime を adapter registry に分離する。

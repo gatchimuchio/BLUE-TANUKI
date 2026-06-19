@@ -2444,7 +2444,16 @@ describe("WebChatChannel - Writing Operator API", () => {
         reply_to: "writer",
         "blue_tanuki.authority_context": "gateway_internal_v1",
         "blue_tanuki.operator_surface": "writing",
+        "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.projection_id": "operator:writing:operation-core",
+        "blue_tanuki.operation_core.source_interface": "gui",
+        "blue_tanuki.operation_core.used_for_authority": false,
+        "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+        "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
       });
+      expect(ctx.received[0]?.metadata?.["blue_tanuki.operation_core.request_id"]).toBe(
+        `operation-request:${ctx.received[0]?.id}`,
+      );
     } finally {
       await ctx.teardown();
     }
@@ -2514,7 +2523,16 @@ describe("WebChatChannel - Daily Operator API", () => {
         reply_to: "daily-user",
         "blue_tanuki.authority_context": "gateway_internal_v1",
         "blue_tanuki.operator_surface": "daily",
+        "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.projection_id": "operator:daily:operation-core",
+        "blue_tanuki.operation_core.source_interface": "gui",
+        "blue_tanuki.operation_core.used_for_authority": false,
+        "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+        "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
       });
+      expect(ctx.received[0]?.metadata?.["blue_tanuki.operation_core.request_id"]).toBe(
+        `operation-request:${ctx.received[0]?.id}`,
+      );
     } finally {
       await ctx.teardown();
     }
@@ -2584,7 +2602,16 @@ describe("WebChatChannel - Developer Operator API", () => {
         reply_to: "developer-user",
         "blue_tanuki.authority_context": "gateway_internal_v1",
         "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.projection_id": "operator:developer:operation-core",
+        "blue_tanuki.operation_core.source_interface": "gui",
+        "blue_tanuki.operation_core.used_for_authority": false,
+        "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+        "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
       });
+      expect(ctx.received[0]?.metadata?.["blue_tanuki.operation_core.request_id"]).toBe(
+        `operation-request:${ctx.received[0]?.id}`,
+      );
     } finally {
       await ctx.teardown();
     }

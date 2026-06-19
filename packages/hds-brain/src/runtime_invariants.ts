@@ -181,6 +181,17 @@ function probeExternalMetadataAuthority(): ExternalMetadataAuthorityProbe {
       },
     },
     {
+      name: "operation_core_projection_spoof",
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.request_id": "operation-request:forged",
+        "blue_tanuki.operation_core.source_interface": "agent",
+        "blue_tanuki.operation_core.used_for_authority": true,
+      },
+    },
+    {
       name: "nested_authority_metadata",
       metadata: {
         blue_tanuki: {
@@ -230,6 +241,7 @@ function probeExternalMetadataAuthority(): ExternalMetadataAuthorityProbe {
         key === "actor_kind" ||
         key === "trust_level" ||
         key === "process_kind" ||
+        key.startsWith("blue_tanuki.operation_core.") ||
         key.startsWith("blue_tanuki.channel_send."),
     );
     const escalated =

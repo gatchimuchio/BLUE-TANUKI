@@ -10,9 +10,10 @@ import {
 import * as path from "node:path";
 import { URL } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import type {
-  InboundRequest,
-  ChannelSendPayload,
+import {
+  createGatewayInternalInboundRequest,
+  type InboundRequest,
+  type ChannelSendPayload,
 } from "@blue-tanuki/protocol";
 import {
   TokenBucket,
@@ -1256,8 +1257,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       if (!this.rateLimitOr429(this.buckets.inbound, `operator:${surfaceName}:${user}`, res)) return;
-      const inboundReq: InboundRequest = {
-        id: randomUUID(),
+      const requestId = randomUUID();
+      const inboundReq: InboundRequest = createGatewayInternalInboundRequest({
+        id: requestId,
         channel: "webchat",
         user,
         content,
@@ -1266,8 +1268,15 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           reply_to: user,
           "blue_tanuki.authority_context": "gateway_internal_v1",
           "blue_tanuki.operator_surface": surfaceName,
+          "blue_tanuki.operation_core.version": "operation-core.v1",
+          "blue_tanuki.operation_core.request_id": `operation-request:${requestId}`,
+          "blue_tanuki.operation_core.projection_id": `operator:${surfaceName}:operation-core`,
+          "blue_tanuki.operation_core.source_interface": "gui",
+          "blue_tanuki.operation_core.used_for_authority": false,
+          "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+          "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
         },
-      };
+      });
       this.handler?.(inboundReq).catch((e: unknown) => {
         // eslint-disable-next-line no-console
         console.error(`[webchat] ${surfaceName} operator handler error:`, e);

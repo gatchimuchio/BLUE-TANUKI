@@ -1,5 +1,19 @@
-import { isGatewayInternalInboundRequest, type InboundRequest } from "@blue-tanuki/protocol";
-import type { ActorRef, FrameResult, HDSProcessDefinition, MemoryTrace, OperatorSurfaceRef, PolicyConfig } from "./types.js";
+import {
+  OperationRequestSchema,
+  isGatewayInternalInboundRequest,
+  type InboundRequest,
+  type OperationInterface,
+  type OperationTarget,
+} from "@blue-tanuki/protocol";
+import type {
+  ActorRef,
+  FrameResult,
+  HDSProcessDefinition,
+  MemoryTrace,
+  OperationCoreFrameRef,
+  OperatorSurfaceRef,
+  PolicyConfig,
+} from "./types.js";
 import { resolveActor, resolveProcess } from "./process.js";
 import { buildMemoryTrace, type MemoryReaderPort } from "./memory_trace.js";
 
@@ -54,6 +68,7 @@ export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
   const process = config?.process ?? resolveProcess(req, actor);
   const memory_trace: MemoryTrace = buildMemoryTrace(req, process, config?.memory_reader);
   const operator_surface = resolveOperatorSurface(req);
+  const operation_core = resolveOperationCore(req, operator_surface);
   const problem_definition_id =
     config?.resolve?.(req) ?? config?.default_policy.problem_definition_id ?? "default_v1";
 
@@ -62,14 +77,107 @@ export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
     process,
     memory_trace,
     ...(operator_surface ? { operator_surface } : {}),
+    ...(operation_core ? { operation_core } : {}),
     goal: req.content.slice(0, 200),
     protected_values: config?.protected_values ?? DEFAULT_PROTECTED_VALUES,
     world_closure: {
-      x: [req.channel, req.user, actor.actor_kind, process.process_id, ...(operator_surface ? [`surface:${operator_surface.id}`] : [])],
-      r: ["request_response", "actor_process_binding", ...(operator_surface ? ["operator_surface_binding"] : [])],
-      m: ["text", "hds_authority_plane"],
+      x: [
+        req.channel,
+        req.user,
+        actor.actor_kind,
+        process.process_id,
+        ...(operator_surface ? [`surface:${operator_surface.id}`] : []),
+        ...(operation_core ? [`operation_core:${operation_core.request.request_id}`] : []),
+      ],
+      r: [
+        "request_response",
+        "actor_process_binding",
+        ...(operator_surface ? ["operator_surface_binding"] : []),
+        ...(operation_core ? ["operation_core_request_binding"] : []),
+      ],
+      m: [
+        "text",
+        "hds_authority_plane",
+        ...(operation_core ? ["operation_core"] : []),
+      ],
     },
     problem_definition_id,
+  };
+}
+
+const OPERATION_INTERFACES: readonly OperationInterface[] = [
+  "gui",
+  "natural_language",
+  "api",
+  "cli",
+  "agent",
+  "scheduler",
+  "system",
+];
+
+function resolveOperationCore(
+  req: InboundRequest,
+  operator_surface?: OperatorSurfaceRef,
+): OperationCoreFrameRef | undefined {
+  if (!isGatewayInternalInboundRequest(req)) return undefined;
+  const meta = req.metadata ?? {};
+  if (meta["blue_tanuki.authority_context"] !== "gateway_internal_v1") return undefined;
+  if (meta["blue_tanuki.operation_core.version"] !== "operation-core.v1") return undefined;
+  if (
+    meta["blue_tanuki.operation_core.used_for_authority"] !== false ||
+    meta["blue_tanuki.operation_core.planner_output_used_for_authority"] !== false ||
+    meta["blue_tanuki.operation_core.ui_projection_used_for_authority"] !== false
+  ) {
+    return undefined;
+  }
+
+  const sourceInterface = normalizeOperationInterface(meta["blue_tanuki.operation_core.source_interface"]);
+  const requestId = stringMetadata(meta["blue_tanuki.operation_core.request_id"]) ?? `operation-request:${req.id}`;
+  const projectionId = stringMetadata(meta["blue_tanuki.operation_core.projection_id"]);
+  const target = operator_surface ? operationTargetForSurface(operator_surface) : undefined;
+  const parsedRequest = OperationRequestSchema.safeParse({
+    version: "operation-core.v1",
+    request_id: requestId,
+    source_interface: sourceInterface,
+    actor: req.user,
+    goal: req.content,
+    ...(target ? { target } : {}),
+    constraints: {
+      hds_brain_authority_required: true,
+      disallow_raw_command_as_authority: true,
+    },
+    used_for_authority: false,
+  });
+  if (!parsedRequest.success) return undefined;
+
+  return {
+    request: parsedRequest.data,
+    source: "gateway_internal_metadata",
+    ...(projectionId ? { projection_id: projectionId } : {}),
+    used_for_authority: false,
+    planner_output_used_for_authority: false,
+    ui_projection_used_for_authority: false,
+  };
+}
+
+function normalizeOperationInterface(value: unknown): OperationInterface {
+  return typeof value === "string" && OPERATION_INTERFACES.includes(value as OperationInterface)
+    ? (value as OperationInterface)
+    : "api";
+}
+
+function stringMetadata(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function operationTargetForSurface(operator_surface: OperatorSurfaceRef): OperationTarget {
+  return {
+    kind: "runtime",
+    id: `operator:${operator_surface.id}`,
+    display_name: `${operator_surface.id} operator`,
+    scope: "operator_surface",
   };
 }
 

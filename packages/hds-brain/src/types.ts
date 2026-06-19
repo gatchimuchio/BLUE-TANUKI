@@ -1,4 +1,4 @@
-import type { CommandConstraints, Decision, ExecuteCommand, ExecuteFeedback } from "@blue-tanuki/protocol";
+import type { CommandConstraints, Decision, ExecuteCommand, ExecuteFeedback, OperationRequest } from "@blue-tanuki/protocol";
 import type { OutputAuditLog } from "./output_audit.js";
 import type { RuntimeInvariantEvidenceReport, RuntimeInvariantValues } from "./runtime_invariants.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
@@ -22,6 +22,15 @@ export interface OperatorSurfaceRef {
   layer: "A";
   source: "content_prefix" | "gateway_internal_metadata";
   authority: "downstream_device_only";
+}
+
+export interface OperationCoreFrameRef {
+  request: OperationRequest;
+  source: "gateway_internal_metadata";
+  projection_id?: string;
+  used_for_authority: false;
+  planner_output_used_for_authority: false;
+  ui_projection_used_for_authority: false;
 }
 
 export interface ActorRef {
@@ -96,6 +105,7 @@ export interface FrameResult {
   process: HDSProcessDefinition;
   memory_trace: MemoryTrace;
   operator_surface?: OperatorSurfaceRef;
+  operation_core?: OperationCoreFrameRef;
   goal: string;
   protected_values: string[];
   world_closure: {

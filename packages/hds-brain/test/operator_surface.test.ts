@@ -40,6 +40,7 @@ describe("operator surface framing", () => {
       { default_policy: DEFAULT_POLICY },
     );
     expect(untrusted.operator_surface).toBeUndefined();
+    expect(untrusted.operation_core).toBeUndefined();
 
     const trusted = frame(
       createGatewayInternalInboundRequest({
@@ -51,11 +52,72 @@ describe("operator surface framing", () => {
         metadata: {
           "blue_tanuki.authority_context": "gateway_internal_v1",
           "blue_tanuki.operator_surface": "writing",
+          "blue_tanuki.operation_core.version": "operation-core.v1",
+          "blue_tanuki.operation_core.request_id": "operation-request:req-3",
+          "blue_tanuki.operation_core.projection_id": "operator:writing:operation-core",
+          "blue_tanuki.operation_core.source_interface": "gui",
+          "blue_tanuki.operation_core.used_for_authority": false,
+          "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+          "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
         },
       }),
       { default_policy: DEFAULT_POLICY },
     );
     expect(trusted.operator_surface?.source).toBe("gateway_internal_metadata");
+    expect(trusted.operation_core).toMatchObject({
+      source: "gateway_internal_metadata",
+      projection_id: "operator:writing:operation-core",
+      used_for_authority: false,
+      planner_output_used_for_authority: false,
+      ui_projection_used_for_authority: false,
+      request: {
+        version: "operation-core.v1",
+        request_id: "operation-request:req-3",
+        source_interface: "gui",
+        actor: "alice",
+        goal: "draft this",
+        target: {
+          kind: "runtime",
+          id: "operator:writing",
+          scope: "operator_surface",
+        },
+        constraints: {
+          hds_brain_authority_required: true,
+          disallow_raw_command_as_authority: true,
+        },
+        used_for_authority: false,
+      },
+    });
+    expect(trusted.world_closure.x).toContain("operation_core:operation-request:req-3");
+    expect(trusted.world_closure.r).toContain("operation_core_request_binding");
+  });
+
+  it("ignores malformed internal Operation Core metadata without changing the HDS process", () => {
+    const result = frame(
+      createGatewayInternalInboundRequest({
+        id: "req-3b",
+        channel: "webchat",
+        user: "alice",
+        content: "draft this",
+        timestamp: 1,
+        metadata: {
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.operator_surface": "writing",
+          "blue_tanuki.operation_core.version": "operation-core.v1",
+          "blue_tanuki.operation_core.request_id": "x".repeat(201),
+          "blue_tanuki.operation_core.source_interface": "gui",
+          "blue_tanuki.operation_core.used_for_authority": false,
+          "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+          "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
+        },
+      }),
+      { default_policy: DEFAULT_POLICY },
+    );
+
+    expect(result.operator_surface?.id).toBe("writing");
+    expect(result.process.process_kind).toBe("chat");
+    expect(result.operation_core).toBeUndefined();
+    expect(result.world_closure.x).not.toContain(`operation_core:${"x".repeat(201)}`);
   });
 
   it("recognizes Daily Operator without changing process authority", () => {

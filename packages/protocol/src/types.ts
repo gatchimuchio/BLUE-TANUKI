@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import type { OperationInterface } from "./operation_core.js";
+
 const DangerousObjectKeySchema = z.string().refine(
   (key) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
   "dangerous object key is not allowed",
@@ -16,6 +18,7 @@ export const RESERVED_EXTERNAL_METADATA_KEYS = [
   "blue_tanuki.trust_level",
   "blue_tanuki.process_kind",
   "blue_tanuki.operator_surface",
+  "blue_tanuki.operation_core",
   "blue_tanuki.channel_send",
   "actor_kind",
   "trust_level",
@@ -30,6 +33,13 @@ export interface GatewayInternalAuthorityMetadata extends MetadataObject {
   "blue_tanuki.trust_level"?: "owner" | "trusted" | "limited" | "untrusted";
   "blue_tanuki.process_kind"?: "chat" | "tool" | "approval" | "cron" | "webhook" | "system";
   "blue_tanuki.operator_surface"?: "writing" | "daily" | "developer";
+  "blue_tanuki.operation_core.version"?: "operation-core.v1";
+  "blue_tanuki.operation_core.request_id"?: string;
+  "blue_tanuki.operation_core.projection_id"?: string;
+  "blue_tanuki.operation_core.source_interface"?: OperationInterface;
+  "blue_tanuki.operation_core.used_for_authority"?: false;
+  "blue_tanuki.operation_core.planner_output_used_for_authority"?: false;
+  "blue_tanuki.operation_core.ui_projection_used_for_authority"?: false;
   "blue_tanuki.channel_send.channel"?: string;
   "blue_tanuki.channel_send.target"?: string;
   "blue_tanuki.channel_send.content"?: string;
@@ -308,6 +318,7 @@ export function metadataKeyReservedForInternalAuthority(key: string): boolean {
   const normalized = key.normalize("NFKC").trim();
   return (
     RESERVED_EXTERNAL_METADATA_KEY_SET.has(normalized) ||
+    normalized.startsWith("blue_tanuki.operation_core.") ||
     normalized.startsWith("blue_tanuki.channel_send.")
   );
 }
