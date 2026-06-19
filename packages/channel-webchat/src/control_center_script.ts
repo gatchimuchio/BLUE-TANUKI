@@ -467,6 +467,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("chat-status").className = "badge " + (tone || "warn");
       }
 
+      function isDirectToolShortcutInput(value) {
+        return /^(?:tool:[A-Za-z0-9_.-]+|\/tool(?:\s|$))/.test(String(value || "").trim());
+      }
+
       function disconnectChat() {
         if (state.chatSocket) {
           try { state.chatSocket.close(); } catch (_) { /* ignore */ }
@@ -518,6 +522,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         sessionStorage.setItem("bt.chatUser", state.chatUser);
         if (!state.chatToken) throw new Error("webchat token is required");
         if (!content) throw new Error("message is required");
+        if (isDirectToolShortcutInput(content)) {
+          throw new Error("tool shortcut is not available from normal Conversation. Use an Operator surface or developer recovery entrypoint.");
+        }
         appendChat("owner", content);
         const result = await postJson("/inbound", state.chatToken, { user: state.chatUser, content });
         byId("chat-content").value = "";

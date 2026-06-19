@@ -909,6 +909,23 @@ describe("WebChatChannel — HTTP inbound", () => {
     expect(got.metadata?.reply_to).toBe("u1");
   });
 
+  it("rejects direct tool shortcuts from normal WebChat inbound", async () => {
+    const r = await postJson(
+      ctx.port,
+      "/inbound",
+      { user: "u1", content: 'tool:shell.exec {"cmd":"git","args":["status"],"cwd":"."}' },
+      { authorization: `Bearer ${TOKEN}` },
+    );
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({
+      accepted: false,
+      error: "tool_shortcut_not_allowed_on_webchat_inbound",
+      operation_core_required: true,
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(ctx.received).toHaveLength(0);
+  });
+
   it("/healthz needs no auth", async () => {
     const r = await getRaw(ctx.port, "/healthz");
     expect(r.status).toBe(200);

@@ -222,10 +222,11 @@ LLM / GUI / API 入口は raw command ではなく `OperationRequest` / `Operati
 - 外部 inbound request の `blue_tanuki.operation_core.*` metadata は gateway boundary で削除され、偽装された Operation Core projection は authority path に入らない。
 - Downstream executor は LLM response が Operation Core planner JSON の場合に `OperationPlanSchema` で検証し、成功時のみ `planner_output_used_for_authority=false` の evidence として feedback result に添付する。
 - Downstream executor は JSON planner output に `cmd` / `command` / `raw_command` / `shell_command` / `terminal_command` / `subprocess_command` が含まれる場合、失敗 feedback として fail-closed にする。
+- Control Center の通常 Conversation / WebChat `/inbound` は `tool:*` / `/tool` の直接ショートカットを受け付けず、通常 GUI 導線では Operator surface / Operation Core 入口へ寄せる。
 
 未完了:
 
-- 通常 UI からの `tool:*` 互換入力排除は次段階で扱う。
+- `tool:*` 互換 path 自体は developer / recovery / compatibility entry として残っている。これを adapter registry と OS / ShellAdapter へさらに分離する作業は次段階で扱う。
 
 ### Step 4: Adapter Registry
 
@@ -308,5 +309,6 @@ Operation Core 移行が完了したと言える条件:
 - installer / release packaging の変更。
 - GUI Shell の依存追加。
 - 既存 `tool:shell.exec` 互換 path の削除。
+- developer / recovery 互換 entrypoint の削除。
 
 これは互換を壊さない移行開始点であり、完成状態ではない。

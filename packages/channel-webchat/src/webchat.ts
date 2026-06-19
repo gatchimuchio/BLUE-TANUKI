@@ -84,6 +84,10 @@ const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
 const AOTANU_ASSET_ROOT = findAotanuAssetRoot();
 
+function isDirectToolShortcutContent(content: string): boolean {
+  return /^(?:tool:[A-Za-z0-9_.-]+|\/tool(?:\s|$))/.test(content.trim());
+}
+
 function findAotanuAssetRoot(): string {
   let current = path.resolve(process.cwd());
   for (;;) {
@@ -619,6 +623,17 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       if (!this.rateLimitOr429(this.buckets.inbound, user, res)) return;
+      if (isDirectToolShortcutContent(content)) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "tool_shortcut_not_allowed_on_webchat_inbound",
+            accepted: false,
+            operation_core_required: true,
+          }),
+        );
+        return;
+      }
       const inboundReq: InboundRequest = {
         id: randomUUID(),
         channel: "webchat",
