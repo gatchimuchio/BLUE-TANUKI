@@ -75,6 +75,7 @@ export interface WebChatApprovalQueueItem {
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   authority_trace?: unknown;
+  operation_core?: OperationCoreApprovalTrace;
 }
 
 export interface WebChatApprovalGrantItem {

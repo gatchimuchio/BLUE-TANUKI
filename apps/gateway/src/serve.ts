@@ -1152,6 +1152,14 @@ export async function serve(): Promise<ServeShutdown> {
       approval_token: p.approval_token,
       approval_token_expires_at_ms: p.approval_token_expires_at_ms,
       authority_trace: p.evaluation.authority_trace,
+      operation_core: buildOperationCoreApprovalTrace({
+        command: p.command,
+        operation: p.evaluation.context.operation,
+        state: "awaiting_permission",
+        risk: p.evaluation.risk,
+        approval_level: p.evaluation.approval_level,
+        final_review_required: p.evaluation.final_review_required,
+      }),
     }));
   }
 

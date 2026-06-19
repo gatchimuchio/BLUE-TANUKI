@@ -914,6 +914,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const finalBadge = item.final_review_required ? badge("Final Review", "review") : badge("one-time", "good");
               const riskTone = item.risk === "high" || item.risk === "critical" ? "bad" : item.risk === "medium" ? "warn" : "good";
               const authority = item.authority_trace ? compactJson(redactRuntimeValue(item.authority_trace)) : "not recorded";
+              const trace = isObject(item.operation_core) ? item.operation_core : {};
               if (item.command_id && item.approval_token) {
                 state.approvalTokens[item.command_id] = item.approval_token;
               }
@@ -924,6 +925,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>request</dt><dd class="mono">' + escapeHtml(item.request_id || "unknown") + '</dd>' +
                 '<dt>risk</dt><dd>' + badge(item.risk || "unknown", riskTone) + '</dd>' +
               '<dt>ApprovalLevel</dt><dd>' + badge(level, level === "L3_final_review" ? "review" : "good") + '</dd>' +
+                '<dt>adapter</dt><dd>' + badge(trace.adapter || "not recorded", trace.adapter_is_authority === false ? "good" : "warn") + '</dd>' +
+                '<dt>runtime</dt><dd>' + escapeHtml(trace.runtime_boundary || "not recorded") + '</dd>' +
+                '<dt>effect</dt><dd>' + escapeHtml(Array.isArray(trace.effects) ? trace.effects.join(", ") : "not recorded") + '</dd>' +
                 '<dt>expires</dt><dd>' + escapeHtml(formatDate(item.approval_token_expires_at_ms)) + '</dd>' +
                 '<dt>reason</dt><dd>' + escapeHtml(item.reason || "not recorded") + '</dd>' +
                 '</dl>' +
