@@ -65,6 +65,7 @@
 - De-emphasized raw tool shortcuts from the normal Control Center Conversation path by rejecting `tool:*` / `/tool` submissions on WebChat `/inbound` while keeping the HDS compatibility router intact.
 - Added an Operation Core adapter registry and executor-side registry validation so planner steps select Shell / OS / Browser / Composio / internal runtime adapters as downstream execution adapters, with ShellAdapter kept out of the default runtime path.
 - Exposed Operation Core adapter registry state in the Control Center Plan viewer, including default runtime and per-step registry match/mismatch display.
+- Added a display-only Operation Core execution result projection in the Control Center, showing result/error digests and explicit diff/rollback recording gaps without exposing raw execution payloads.
 
 ## 0.1.0 - 2026-05-06
 

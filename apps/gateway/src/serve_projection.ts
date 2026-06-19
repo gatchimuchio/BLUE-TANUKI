@@ -160,6 +160,122 @@ export function projectCompleteHistoryEntry(entry: CompleteHistoryEntry): WebCha
   };
 }
 
+export interface OperationCoreExecutionProjection {
+  schema_version: string;
+  evidence_source: readonly ["INTERNAL_STATE"];
+  used_for_authority: false;
+  adapter_result_used_for_authority: false;
+  execution_history_used_for_authority: false;
+  raw_payload_exposed: false;
+  chain_valid: boolean;
+  skipped_count: number;
+  entries_count: number;
+  displayed_count: number;
+  latest_results: readonly Record<string, unknown>[];
+}
+
+export function projectOperationCoreExecutionHistory(
+  entries: readonly CompleteHistoryEntry[],
+  opts: { chain_valid: boolean; skipped_count: number; limit?: number },
+): OperationCoreExecutionProjection {
+  const limit = Math.min(20, Math.max(1, opts.limit ?? 6));
+  const executionEntries = entries.filter((entry) => entry.kind === "execution_history");
+  const latestResults = executionEntries
+    .slice(-limit)
+    .reverse()
+    .map(projectOperationCoreExecutionEntry);
+  return {
+    schema_version: "operation-core.execution.v1",
+    evidence_source: ["INTERNAL_STATE"],
+    used_for_authority: false,
+    adapter_result_used_for_authority: false,
+    execution_history_used_for_authority: false,
+    raw_payload_exposed: false,
+    chain_valid: opts.chain_valid === true,
+    skipped_count: opts.skipped_count,
+    entries_count: executionEntries.length,
+    displayed_count: latestResults.length,
+    latest_results: latestResults,
+  };
+}
+
+function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record<string, unknown> {
+  const payload = isRecord(entry.payload) ? entry.payload : {};
+  const command = isRecord(payload.command) ? payload.command : {};
+  const metrics = isRecord(payload.metrics) ? payload.metrics : {};
+  const error = stringValue(payload.error);
+  return {
+    index: entry.index,
+    request_id: entry.request_id,
+    command_id: entry.command_id,
+    actor: entry.actor,
+    source: entry.source,
+    timestamp: entry.timestamp,
+    payload_digest: entry.payload_digest,
+    entry_hash: entry.entry_hash,
+    origin_channel: stringValue(payload.origin_channel) ?? "unknown",
+    status: stringValue(payload.status) ?? "unknown",
+    result_present: payload.result_present === true,
+    result_digest: stringValue(payload.result_digest) ?? null,
+    error_present: Boolean(error),
+    error_digest: error ? digestString(error) : null,
+    metrics: {
+      duration_ms: numberValue(metrics.duration_ms),
+    },
+    command: projectOperationCoreCommandDescriptor(command),
+    diff: {
+      available: false,
+      reason: "OperationDiff is not recorded for this execution yet",
+      used_for_authority: false,
+      evidence_source: ["INTERNAL_STATE"],
+    },
+    rollback: {
+      available: false,
+      reason: "Rollback plan is not recorded for this execution yet",
+      used_for_authority: false,
+      evidence_source: ["INTERNAL_STATE"],
+    },
+    operation_core: {
+      role: "execution_result_projection",
+      used_for_authority: false,
+      adapter_result_used_for_authority: false,
+      raw_payload_exposed: false,
+      evidence_source: ["INTERNAL_STATE"],
+    },
+  };
+}
+
+function projectOperationCoreCommandDescriptor(command: Record<string, unknown>): Record<string, unknown> {
+  const constraints = isRecord(command.constraints) ? command.constraints : {};
+  const payload = isRecord(command.payload) ? command.payload : {};
+  return {
+    type: stringValue(command.type) ?? "unknown",
+    operation: stringValue(command.operation) ?? "unknown",
+    upstream_decision: stringValue(command.upstream_decision) ?? "unknown",
+    upstream_commit_hash: stringValue(command.upstream_commit_hash) ?? "unknown",
+    constraints: {
+      max_tokens: numberValueOrNull(constraints.max_tokens),
+      timeout_ms: numberValueOrNull(constraints.timeout_ms),
+      allowed_tools: stringArray(constraints.allowed_tools),
+      allowed_capabilities: stringArray(constraints.allowed_capabilities),
+    },
+    payload: {
+      tool_name: stringValue(payload.tool_name),
+      argument_keys: stringArray(payload.argument_keys),
+      arguments_digest: stringValue(payload.arguments_digest),
+      messages_count: numberValueOrNull(payload.messages_count),
+      message_roles: stringArray(payload.message_roles),
+      messages_digest: stringValue(payload.messages_digest),
+      backend_hint: stringValue(payload.backend_hint),
+      model: stringValue(payload.model),
+      channel: stringValue(payload.channel),
+      target_digest: stringValue(payload.target_digest),
+      content_digest: stringValue(payload.content_digest),
+      content_chars: numberValueOrNull(payload.content_chars),
+    },
+  };
+}
+
 export function projectApprovalGrant(grant: ApprovalGrant): WebChatApprovalGrantItem {
   return {
     id: grant.id,
@@ -237,6 +353,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function numberValueOrNull(value: unknown): number | null {
+  return numberValue(value) ?? null;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 export function digestString(value: string): string {

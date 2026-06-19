@@ -96,6 +96,7 @@ import {
   projectApprovalGrant,
   projectApprovalHistoryEntry,
   projectCompleteHistoryEntry,
+  projectOperationCoreExecutionHistory,
 } from "./serve_projection.js";
 import {
   DAILY_OPERATOR_REQUIRED_PERMISSIONS,
@@ -934,6 +935,13 @@ export async function serve(): Promise<ServeShutdown> {
             runtime_schedules_count: runtimeSchedulesCount,
             pending_schedule_approvals_count: pendingScheduleApprovalsCount,
             runtime_schedules: runtimeScheduleSnapshot,
+            operation_core_execution: projectOperationCoreExecutionHistory(
+              completeHistory.replay({ kind: "execution_history" }),
+              {
+                chain_valid: completeHistory.verify(),
+                skipped_count: completeHistory.skippedCount(),
+              },
+            ),
           };
         },
       },

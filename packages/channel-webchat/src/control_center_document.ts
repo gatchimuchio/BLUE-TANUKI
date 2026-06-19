@@ -197,10 +197,16 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Adapters</span><span id="operation-core-adapters">not loaded</span></div>
             <div class="metric"><span>Adapter Registry</span><span id="operation-core-adapter-registry">not loaded</span></div>
             <div class="metric"><span>Default runtime</span><span id="operation-core-default-runtime">not loaded</span></div>
+            <div class="metric"><span>Execution results</span><span id="operation-core-execution-results">not loaded</span></div>
+            <div class="metric"><span>Latest result</span><span id="operation-core-latest-result">not loaded</span></div>
+            <div class="metric"><span>Rollback</span><span id="operation-core-rollback">not loaded</span></div>
             <div class="metric"><span>Authority</span><span id="operation-core-authority">display only</span></div>
           </div>
           <div id="operation-core-list" class="trace-list">
             <div class="trace-item muted">no Operation Core projection loaded</div>
+          </div>
+          <div id="operation-core-execution-list" class="trace-list">
+            <div class="trace-item muted">no Operation Core execution result loaded</div>
           </div>
         </section>
 

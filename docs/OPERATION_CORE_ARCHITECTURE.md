@@ -268,6 +268,13 @@ Control Center は OperationPlan、diff、approval、result、rollback、audit �
 現時点で operator surface 由来の Operation Core projection は表示済み。runtime execution 中の diff / result / rollback への完全接続は Step 3 / Step 4 後に実施する。
 adapter registry と default runtime は Control Center で表示済み。runtime execution 中の diff / result / rollback への完全接続は後続段階で実施する。
 
+進捗:
+
+- Gateway runtime snapshot は complete history の `execution_history` から `operation_core_execution` を投影する。
+- 投影は `status`、`result_digest`、`error_digest`、duration、command descriptor、entry hash のみを表示し、raw payload / raw result / raw error は出さない。
+- Control Center は Execution results、Latest result、diff availability、rollback availability を Operation Core Plan viewer に表示する。
+- 現時点の diff / rollback は「not recorded」として明示され、`used_for_authority=false` / `adapter_result_used_for_authority=false` の display-only evidence に固定される。
+
 ### Step 6: Compatibility De-emphasis
 
 既存 CLI / `tool:shell.exec` 入力は developer / recovery 互換に降格する。

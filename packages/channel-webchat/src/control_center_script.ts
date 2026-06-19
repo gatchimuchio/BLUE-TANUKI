@@ -770,6 +770,82 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         );
       }
 
+      function operationCoreExecutionStatusTone(status) {
+        if (status === "success") return "good";
+        if (status === "failed" || status === "error") return "bad";
+        if (status === "suspended" || status === "approval_required") return "review";
+        return "warn";
+      }
+
+      function renderOperationCoreExecution(execution) {
+        const projection = isObject(execution) ? execution : {};
+        const latest = Array.isArray(projection.latest_results) ? projection.latest_results : [];
+        const authorityOk =
+          projection.used_for_authority === false &&
+          projection.adapter_result_used_for_authority === false &&
+          projection.execution_history_used_for_authority === false &&
+          projection.raw_payload_exposed === false;
+        const chainOk = projection.chain_valid === true;
+        const rollbackAvailable = latest.some(function (entry) {
+          return isObject(entry.rollback) && entry.rollback.available === true;
+        });
+        const latestStatus = latest.length > 0 ? latest[0].status || "unknown" : "none";
+
+        setText("operation-core-execution-results", projection.displayed_count ?? latest.length);
+        setText("operation-core-latest-result", latestStatus);
+        setText("operation-core-rollback", rollbackAvailable ? "available" : "not recorded");
+        if (byId("operation-core-execution-results")) {
+          byId("operation-core-execution-results").className = "badge " + (authorityOk && chainOk ? "good" : "bad");
+        }
+        if (byId("operation-core-latest-result")) {
+          byId("operation-core-latest-result").className = "badge " + operationCoreExecutionStatusTone(latestStatus);
+        }
+        if (byId("operation-core-rollback")) {
+          byId("operation-core-rollback").className = "badge " + (rollbackAvailable ? "good" : "warn");
+        }
+
+        if (latest.length === 0) {
+          setHtml("operation-core-execution-list", '<div class="trace-item muted">no Operation Core execution result loaded</div>');
+          return;
+        }
+
+        setHtml(
+          "operation-core-execution-list",
+          latest
+            .map(function (entry) {
+              const command = isObject(entry.command) ? entry.command : {};
+              const metrics = isObject(entry.metrics) ? entry.metrics : {};
+              const diff = isObject(entry.diff) ? entry.diff : {};
+              const rollback = isObject(entry.rollback) ? entry.rollback : {};
+              const op = isObject(entry.operation_core) ? entry.operation_core : {};
+              const resultDigest = entry.result_digest || "not recorded";
+              const errorDigest = entry.error_digest || "none";
+              const commandId = entry.command_id || "none";
+              const requestId = entry.request_id || "none";
+              const duration = typeof metrics.duration_ms === "number" ? String(metrics.duration_ms) + " ms" : "not recorded";
+              const rawSafe =
+                op.used_for_authority === false &&
+                op.adapter_result_used_for_authority === false &&
+                op.raw_payload_exposed === false;
+              return '<article class="trace-item">' +
+                '<div class="row"><h3>' + escapeHtml(command.operation || "execution result") + '</h3><span>' + badge(entry.status || "unknown", operationCoreExecutionStatusTone(entry.status)) + '</span></div>' +
+                '<dl class="kv">' +
+                '<dt>request</dt><dd class="mono">' + escapeHtml(requestId) + '</dd>' +
+                '<dt>command</dt><dd class="mono">' + escapeHtml(commandId) + '</dd>' +
+                '<dt>type</dt><dd>' + escapeHtml(command.type || "unknown") + '</dd>' +
+                '<dt>origin</dt><dd>' + escapeHtml(entry.origin_channel || "unknown") + '</dd>' +
+                '<dt>result digest</dt><dd class="mono">' + escapeHtml(resultDigest) + '</dd>' +
+                '<dt>error digest</dt><dd class="mono">' + escapeHtml(errorDigest) + '</dd>' +
+                '<dt>duration</dt><dd>' + escapeHtml(duration) + '</dd>' +
+                '<dt>diff</dt><dd>' + badge(diff.available === true ? "available" : "not recorded", diff.available === true ? "good" : "warn") + '</dd>' +
+                '<dt>rollback</dt><dd>' + badge(rollback.available === true ? "available" : "not recorded", rollback.available === true ? "good" : "warn") + '</dd>' +
+                '<dt>authority</dt><dd>' + badge(rawSafe ? "display only" : "unsafe", rawSafe ? "good" : "bad") + '</dd>' +
+                '</dl></article>';
+            })
+            .join("")
+        );
+      }
+
       function renderRuntime(body) {
         const invariantOk = body.hds_invariants_ok ?? body.hds?.invariants?.process_policy_enforced;
         const auditOk = body.audit_chain_valid ?? body.hds?.audit?.chain_valid;
@@ -788,6 +864,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         updatePermanentUseStatus(body);
         renderSchedules(body);
         renderOperationCoreProjections(body.operator_surfaces);
+        renderOperationCoreExecution(body.operation_core_execution);
         const mascotState = aotanuStateFromRuntime(body);
         renderAotanuMascot(mascotState, aotanuDisplayLabelFromRuntime(body, mascotState));
       }

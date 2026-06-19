@@ -332,7 +332,10 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("operation-core-list");
       expect(html).toContain("operation-core-adapter-registry");
       expect(html).toContain("operation-core-default-runtime");
+      expect(html).toContain("operation-core-execution-results");
+      expect(html).toContain("operation-core-execution-list");
       expect(html).toContain("renderOperationCoreProjections");
+      expect(html).toContain("renderOperationCoreExecution");
       expect(html).toContain("operation_core_projection");
       expect(html).toContain("OPERATION_ADAPTER_REGISTRY");
       expect(html).toContain("adapter-generated");
