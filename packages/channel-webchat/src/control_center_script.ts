@@ -1,8 +1,11 @@
 import { AOTANU_SPRITE_SPECS } from "./aotanu_mascot.js";
+import { OPERATION_ADAPTER_REGISTRY } from "@blue-tanuki/protocol";
 
 const AOTANU_SPRITE_SPECS_JSON = JSON.stringify(AOTANU_SPRITE_SPECS);
+const OPERATION_ADAPTER_REGISTRY_JSON = JSON.stringify(OPERATION_ADAPTER_REGISTRY);
 
 export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU_SPRITE_SPECS_JSON};
+      const OPERATION_ADAPTER_REGISTRY = ${OPERATION_ADAPTER_REGISTRY_JSON};
       const MASCOT_PREFS_STORAGE_KEY = "bt.mascotPrefs";
       const DEFAULT_MASCOT_PREFS = {
         enabled: true,
@@ -639,6 +642,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return "review";
       }
 
+      function operationCoreAdapterDescriptor(adapter) {
+        const key = typeof adapter === "string" && adapter ? adapter : "none";
+        return OPERATION_ADAPTER_REGISTRY[key] || null;
+      }
+
+      function operationCoreAdapterCommandExpected(descriptor) {
+        return descriptor && descriptor.command_generation_location === "execution_adapter_only";
+      }
+
+      function operationCoreAdapterLabel(descriptor, fallback) {
+        if (!descriptor) return fallback || "unknown adapter";
+        return descriptor.display_name + " / " + descriptor.runtime_boundary;
+      }
+
       function collectOperationCoreProjections(operatorSurfaces) {
         if (!isObject(operatorSurfaces)) return [];
         return Object.keys(operatorSurfaces)
@@ -663,6 +680,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const adapters = Array.from(new Set(steps.map(function (entry) {
           return entry.step.adapter || "none";
         }))).sort();
+        const registryOk =
+          OPERATION_ADAPTER_REGISTRY.internal_runtime &&
+          OPERATION_ADAPTER_REGISTRY.internal_runtime.default_runtime === true &&
+          OPERATION_ADAPTER_REGISTRY.shell &&
+          OPERATION_ADAPTER_REGISTRY.shell.default_runtime === false &&
+          steps.every(function (entry) {
+            const step = entry.step || {};
+            const descriptor = operationCoreAdapterDescriptor(step.adapter);
+            const expectedCommandGeneratedByAdapterOnly = operationCoreAdapterCommandExpected(descriptor);
+            return descriptor !== null &&
+              descriptor.adapter_is_authority === false &&
+              descriptor.adapter_result_used_for_authority === false &&
+              step.adapter_is_authority === false &&
+              step.command_generated_by_adapter_only === expectedCommandGeneratedByAdapterOnly;
+          });
         const authorityOk =
           projections.every(function (projection) {
             return projection.hds_brain_authority_required === true &&
@@ -674,11 +706,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }) &&
           steps.every(function (entry) {
             return entry.step.adapter_is_authority === false;
-          });
+          }) &&
+          registryOk;
 
         setText("operation-core-surface-count", projections.length);
         setText("operation-core-step-count", steps.length);
         setText("operation-core-adapters", adapters.length > 0 ? adapters.join(", ") : "none");
+        setText("operation-core-adapter-registry", registryOk ? "validated display" : "unsafe");
+        setText("operation-core-default-runtime", OPERATION_ADAPTER_REGISTRY.internal_runtime.default_runtime === true ? "internal_runtime" : "unsafe");
         setText("operation-core-authority", authorityOk ? "display only" : "unsafe");
         setText("operation-core-status", steps.length > 0 ? (authorityOk ? "loaded" : "unsafe") : "not loaded");
         if (byId("operation-core-status")) {
@@ -686,6 +721,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         if (byId("operation-core-authority")) {
           byId("operation-core-authority").className = "badge " + (authorityOk ? "good" : "bad");
+        }
+        if (byId("operation-core-adapter-registry")) {
+          byId("operation-core-adapter-registry").className = "badge " + (registryOk ? "good" : "bad");
+        }
+        if (byId("operation-core-default-runtime")) {
+          byId("operation-core-default-runtime").className = "badge " + (OPERATION_ADAPTER_REGISTRY.internal_runtime.default_runtime === true ? "good" : "bad");
         }
 
         if (steps.length === 0) {
@@ -701,12 +742,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const projection = entry.projection || {};
               const target = step.target || {};
               const permission = step.permission || {};
+              const descriptor = operationCoreAdapterDescriptor(step.adapter);
               const effects = Array.isArray(step.effects) ? step.effects.join(", ") : "none";
               const level = permission.approval_level || "unknown";
               const approvalTone = level === "L3_final_review" ? "review" : "good";
               const risk = permission.risk || "unknown";
               const gate = permission.approval_gate_required === true ? badge("Approval Gate", "review") : badge("bounded", "good");
-              const shell = step.command_generated_by_adapter_only === true ? badge("adapter-generated", "review") : badge("no raw command", "good");
+              const adapterTone = descriptor && descriptor.default_runtime === true ? "good" : "review";
+              const commandExpected = operationCoreAdapterCommandExpected(descriptor);
+              const commandOk = step.command_generated_by_adapter_only === commandExpected;
+              const command = step.command_generated_by_adapter_only === true ? badge("adapter-generated", "review") : badge("no raw command", "good");
               return '<article class="trace-item">' +
                 '<div class="row"><h3>' + escapeHtml(projection.source_surface || "surface") + ": " + escapeHtml(step.operation || "operation") + '</h3><span>' + badge(step.state || "planned", "good") + '</span></div>' +
                 '<dl class="kv">' +
@@ -716,7 +761,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>ApprovalLevel</dt><dd>' + badge(level, approvalTone) + '</dd>' +
                 '<dt>gate</dt><dd>' + gate + '</dd>' +
                 '<dt>adapter</dt><dd>' + badge(step.adapter || "none", step.adapter_is_authority === false ? "good" : "bad") + '</dd>' +
-                '<dt>command</dt><dd>' + shell + '</dd>' +
+                '<dt>registry</dt><dd>' + badge(operationCoreAdapterLabel(descriptor, step.adapter), descriptor ? adapterTone : "bad") + '</dd>' +
+                '<dt>command</dt><dd>' + command + " " + badge(commandOk ? "registry match" : "registry mismatch", commandOk ? "good" : "bad") + '</dd>' +
                 '<dt>authority</dt><dd>' + badge(step.adapter_is_authority === false ? "display only" : "unsafe", step.adapter_is_authority === false ? "good" : "bad") + '</dd>' +
                 '</dl></article>';
             })

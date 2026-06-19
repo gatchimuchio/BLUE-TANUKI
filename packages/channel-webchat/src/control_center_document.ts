@@ -195,6 +195,8 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Surfaces</span><span id="operation-core-surface-count">not loaded</span></div>
             <div class="metric"><span>Steps</span><span id="operation-core-step-count">not loaded</span></div>
             <div class="metric"><span>Adapters</span><span id="operation-core-adapters">not loaded</span></div>
+            <div class="metric"><span>Adapter Registry</span><span id="operation-core-adapter-registry">not loaded</span></div>
+            <div class="metric"><span>Default runtime</span><span id="operation-core-default-runtime">not loaded</span></div>
             <div class="metric"><span>Authority</span><span id="operation-core-authority">display only</span></div>
           </div>
           <div id="operation-core-list" class="trace-list">

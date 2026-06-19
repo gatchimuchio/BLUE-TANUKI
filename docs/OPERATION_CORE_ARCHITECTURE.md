@@ -248,6 +248,7 @@ Shell / Windows / Linux / macOS / Browser / Composio / internal runtime を adap
 - registry は `internal_runtime` だけを default runtime とし、`shell` / `windows` / `linux` / `macos` を command 生成が adapter 内部に限られる downstream execution adapter として固定する。
 - executor の LLM planner output 検査は `OperationPlanSchema` 通過後に `inspectOperationPlanAdapterRegistry()` を実行し、不整合な adapter step を fail-closed にする。
 - 成功時の planner evidence には `adapter_registry_used_for_authority=false` の registry evidence が添付される。
+- Control Center の Operation Core Plan viewer は adapter registry、default runtime、registry match / mismatch を表示し、ShellAdapter が default runtime ではないことを operator に見せる。
 
 未完了:
 
@@ -265,6 +266,7 @@ Control Center は OperationPlan、diff、approval、result、rollback、audit �
 - high-risk 操作は既存 Approval Gate からしか進まない。
 
 現時点で operator surface 由来の Operation Core projection は表示済み。runtime execution 中の diff / result / rollback への完全接続は Step 3 / Step 4 後に実施する。
+adapter registry と default runtime は Control Center で表示済み。runtime execution 中の diff / result / rollback への完全接続は後続段階で実施する。
 
 ### Step 6: Compatibility De-emphasis
 
