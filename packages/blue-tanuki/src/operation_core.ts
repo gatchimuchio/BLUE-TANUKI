@@ -1,4 +1,6 @@
 import {
+  inspectOperationPlanAdapterRegistry,
+  type OperationAdapterRegistryEvidence,
   OperationPlanSchema,
   type OperationPlan,
 } from "@blue-tanuki/protocol";
@@ -16,6 +18,7 @@ export interface OperationCorePlannerEvidence {
   role: "planner_output";
   status: "valid_plan";
   plan: OperationPlan;
+  adapter_registry: OperationAdapterRegistryEvidence;
   planner_output_used_for_authority: false;
   hds_brain_authority_required: true;
   evidence_source: readonly ["EXTERNAL_EVIDENCE"];
@@ -62,12 +65,18 @@ export function inspectOperationCorePlannerOutput(content: string): OperationCor
     );
   }
 
+  const adapterRegistryInspection = inspectOperationPlanAdapterRegistry(plan.data);
+  if (adapterRegistryInspection.kind === "rejected") {
+    return rejectPlannerOutput(`adapter registry rejected planner output: ${adapterRegistryInspection.reason}`);
+  }
+
   return {
     kind: "valid_plan",
     evidence: {
       role: "planner_output",
       status: "valid_plan",
       plan: plan.data,
+      adapter_registry: adapterRegistryInspection.evidence,
       planner_output_used_for_authority: false,
       hds_brain_authority_required: true,
       evidence_source: ["EXTERNAL_EVIDENCE"],

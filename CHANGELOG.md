@@ -63,6 +63,7 @@
 - Bound Writing / Daily / Developer Operator invokes to internal Operation Core request metadata while stripping external `blue_tanuki.operation_core.*` spoofing at the gateway boundary.
 - Added executor-side Operation Core planner output validation so LLM planner JSON must satisfy `OperationPlanSchema` and raw-command planner JSON fails closed without becoming authority.
 - De-emphasized raw tool shortcuts from the normal Control Center Conversation path by rejecting `tool:*` / `/tool` submissions on WebChat `/inbound` while keeping the HDS compatibility router intact.
+- Added an Operation Core adapter registry and executor-side registry validation so planner steps select Shell / OS / Browser / Composio / internal runtime adapters as downstream execution adapters, with ShellAdapter kept out of the default runtime path.
 
 ## 0.1.0 - 2026-05-06
 

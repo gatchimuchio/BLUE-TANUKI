@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   ExecuteCommandSchema,
+  inspectOperationPlanAdapterRegistry,
+  OPERATION_ADAPTER_REGISTRY,
   OperationCoreProjectionSchema,
   OperationExecutionResultSchema,
   OperationPlanSchema,
@@ -55,6 +57,34 @@ describe("ExecuteCommandSchema", () => {
 });
 
 describe("Operation Core schemas", () => {
+  it("defines execution adapters without making shell the default runtime", () => {
+    expect(OPERATION_ADAPTER_REGISTRY.internal_runtime).toMatchObject({
+      default_runtime: true,
+      adapter_is_authority: false,
+      command_generation_location: "not_applicable",
+    });
+    expect(OPERATION_ADAPTER_REGISTRY.shell).toMatchObject({
+      display_name: "ShellAdapter",
+      runtime_boundary: "shell_adapter",
+      default_runtime: false,
+      adapter_is_authority: false,
+      adapter_result_used_for_authority: false,
+      command_generation_location: "execution_adapter_only",
+    });
+    expect(OPERATION_ADAPTER_REGISTRY.windows).toMatchObject({
+      runtime_boundary: "os_adapter",
+      command_generation_location: "execution_adapter_only",
+    });
+    expect(OPERATION_ADAPTER_REGISTRY.linux).toMatchObject({
+      runtime_boundary: "os_adapter",
+      command_generation_location: "execution_adapter_only",
+    });
+    expect(OPERATION_ADAPTER_REGISTRY.macos).toMatchObject({
+      runtime_boundary: "os_adapter",
+      command_generation_location: "execution_adapter_only",
+    });
+  });
+
   it("accepts an OperationRequest from any interface without making it authority", () => {
     const parsed = OperationRequestSchema.parse({
       version: "operation-core.v1",
@@ -242,6 +272,60 @@ describe("Operation Core schemas", () => {
     expect(parsed.ui_projection_used_for_authority).toBe(false);
     expect(parsed.steps[0].adapter).toBe("shell");
     expect(parsed.steps[0].adapter_is_authority).toBe(false);
+  });
+
+  it("validates OperationPlan steps through the adapter registry", () => {
+    const parsed = OperationPlanSchema.parse({
+      version: "operation-core.v1",
+      plan_id: "plan-1",
+      request_id: "request-1",
+      state: "planned",
+      steps: [
+        {
+          step_id: "step-shell",
+          operation: "shell.exec",
+          target: { kind: "workspace", id: "workspace:blue-tanuki" },
+          state: "planned",
+          effects: ["process_spawn"],
+          permission: {
+            risk: "high",
+            approval_level: "L3_final_review",
+            final_review_required: true,
+            hds_brain_authority_required: true,
+            approval_gate_required: true,
+          },
+          adapter: "shell",
+          adapter_is_authority: false,
+          command_generated_by_adapter_only: true,
+        },
+      ],
+      rollback: { available: false },
+      raw_command_policy: {
+        raw_command_is_core_operation: false,
+        command_generation_location: "execution_adapter_only",
+      },
+      planner_output_used_for_authority: false,
+      hds_brain_authority_required: true,
+    });
+
+    const registry = inspectOperationPlanAdapterRegistry(parsed);
+
+    expect(registry.kind).toBe("valid");
+    if (registry.kind === "valid") {
+      expect(registry.evidence).toMatchObject({
+        default_runtime_adapter: "internal_runtime",
+        shell_default_runtime: false,
+        adapter_registry_used_for_authority: false,
+        steps: [
+          {
+            step_id: "step-shell",
+            adapter: "shell",
+            runtime_boundary: "shell_adapter",
+            command_generation_location: "execution_adapter_only",
+          },
+        ],
+      });
+    }
   });
 
   it("rejects UI projections that claim authority", () => {

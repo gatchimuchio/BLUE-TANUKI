@@ -107,6 +107,7 @@ packages/protocol/src/operation_core.ts
 - `OperationTargetSchema`
 - `OperationPermissionSchema`
 - `OperationDiffSchema`
+- `OperationAdapterDescriptorSchema`
 - `OperationCoreProjectionSchema`
 - `OperationExecutionResultSchema`
 
@@ -116,11 +117,14 @@ packages/protocol/src/operation_core.ts
 - `OperationRequest.constraints.disallow_raw_command_as_authority=true`
 - `OperationPlan.raw_command_policy.raw_command_is_core_operation=false`
 - `OperationStep.adapter_is_authority=false`
+- `OPERATION_ADAPTER_REGISTRY.shell.default_runtime=false`
+- `OPERATION_ADAPTER_REGISTRY.internal_runtime.default_runtime=true`
 - `OperationCoreProjection.ui_projection_used_for_authority=false`
 - `OperationExecutionResult.adapter_result_used_for_authority=false`
 - `OperationParametersSchema` は `cmd` / `command` / `raw_command` / `shell_command` / `terminal_command` / `subprocess_command` を拒否する
 
 これにより、AI や GUI が Operation Core に raw command を中核データとして渡す形を schema レベルで拒否する。
+また、planner output は `inspectOperationPlanAdapterRegistry()` で adapter registry と照合され、Shell / Windows / Linux / macOS adapter を選ぶ step は `command_generated_by_adapter_only=true` と `raw_command_policy.command_generation_location=execution_adapter_only` を満たさなければ fail-closed になる。
 
 ## 6. ShellAdapter の扱い
 
@@ -237,6 +241,18 @@ Shell / Windows / Linux / macOS / Browser / Composio / internal runtime を adap
 - Executor は OperationStep から adapter を選ぶ。
 - Shell は ShellAdapter であり、default runtime ではない。
 - OS ごとの installer / launcher / service 操作は OS Adapter に分離される。
+
+進捗:
+
+- `@blue-tanuki/protocol` に `OPERATION_ADAPTER_REGISTRY` と `OperationAdapterDescriptorSchema` を追加した。
+- registry は `internal_runtime` だけを default runtime とし、`shell` / `windows` / `linux` / `macos` を command 生成が adapter 内部に限られる downstream execution adapter として固定する。
+- executor の LLM planner output 検査は `OperationPlanSchema` 通過後に `inspectOperationPlanAdapterRegistry()` を実行し、不整合な adapter step を fail-closed にする。
+- 成功時の planner evidence には `adapter_registry_used_for_authority=false` の registry evidence が添付される。
+
+未完了:
+
+- 既存 `tool_call` 実行 command を直接 `OperationStep` executor に置換する作業は未実施。
+- installer / launcher / service の実行実装を Windows / Linux / macOS Adapter へ移す作業は次段階。
 
 ### Step 5: Control Center State Viewer
 

@@ -111,6 +111,13 @@ describe("Executor Operation Core planner output boundary", () => {
         status: string;
         planner_output_used_for_authority: boolean;
         hds_brain_authority_required: boolean;
+        adapter_registry?: {
+          status: string;
+          default_runtime_adapter: string;
+          shell_default_runtime: boolean;
+          adapter_registry_used_for_authority: boolean;
+          steps: Array<{ step_id: string; adapter: string; runtime_boundary: string }>;
+        };
         plan?: OperationPlan;
       };
     };
@@ -126,6 +133,19 @@ describe("Executor Operation Core planner output boundary", () => {
         raw_command_policy: {
           raw_command_is_core_operation: false,
         },
+      },
+      adapter_registry: {
+        status: "validated",
+        default_runtime_adapter: "internal_runtime",
+        shell_default_runtime: false,
+        adapter_registry_used_for_authority: false,
+        steps: [
+          {
+            step_id: "step-1",
+            adapter: "internal_runtime",
+            runtime_boundary: "internal_runtime_adapter",
+          },
+        ],
       },
     });
   });
@@ -166,6 +186,36 @@ describe("Executor Operation Core planner output boundary", () => {
 
     expect(feedback.status).toBe("failed");
     expect(feedback.error).toContain("OperationPlanSchema rejected");
+  });
+
+  it("fails closed when planner output treats ShellAdapter like the default runtime", async () => {
+    const plan = operationPlan();
+    plan.steps[0] = {
+      ...plan.steps[0],
+      operation: "shell.exec",
+      adapter: "shell",
+      command_generated_by_adapter_only: false,
+      effects: ["process_spawn"],
+      permission: {
+        risk: "high",
+        approval_level: "L3_final_review",
+        final_review_required: true,
+        hds_brain_authority_required: true,
+        approval_gate_required: true,
+      },
+    };
+
+    const exec = new Executor({
+      approval_authority: executorApproval,
+      llm: new FixedBackend(JSON.stringify(plan)),
+      tools: new ToolRegistry(),
+    });
+
+    const feedback = await exec.execute(approved(llmCmd("run a shell step")));
+
+    expect(feedback.status).toBe("failed");
+    expect(feedback.error).toContain("adapter registry rejected planner output");
+    expect(feedback.error).toContain("shell requires command_generated_by_adapter_only=true");
   });
 
   it("does not append rejected planner output to session history", async () => {

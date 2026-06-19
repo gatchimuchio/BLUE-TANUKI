@@ -113,6 +113,127 @@ export const OperationAdapterKindSchema = z.enum([
 ]);
 export type OperationAdapterKind = z.infer<typeof OperationAdapterKindSchema>;
 
+export const OperationAdapterBoundarySchema = z.enum([
+  "no_adapter",
+  "shell_adapter",
+  "os_adapter",
+  "browser_adapter",
+  "external_api_adapter",
+  "internal_runtime_adapter",
+]);
+export type OperationAdapterBoundary = z.infer<typeof OperationAdapterBoundarySchema>;
+
+export const OperationAdapterDescriptorSchema = z.object({
+  kind: OperationAdapterKindSchema,
+  display_name: z.string().min(1).max(120),
+  runtime_boundary: OperationAdapterBoundarySchema,
+  role: z.literal("execution_adapter"),
+  default_runtime: z.boolean(),
+  adapter_is_authority: z.literal(false),
+  adapter_result_used_for_authority: z.literal(false),
+  command_generation_location: z.enum([
+    "execution_adapter_only",
+    "not_applicable",
+  ]),
+}).strict();
+export type OperationAdapterDescriptor = z.infer<typeof OperationAdapterDescriptorSchema>;
+
+const OPERATION_ADAPTER_REGISTRY_DATA = {
+  none: {
+    kind: "none",
+    display_name: "No execution adapter",
+    runtime_boundary: "no_adapter",
+    role: "execution_adapter",
+    default_runtime: false,
+    adapter_is_authority: false,
+    adapter_result_used_for_authority: false,
+    command_generation_location: "not_applicable",
+  },
+  shell: {
+    kind: "shell",
+    display_name: "ShellAdapter",
+    runtime_boundary: "shell_adapter",
+    role: "execution_adapter",
+    default_runtime: false,
+    adapter_is_authority: false,
+    adapter_result_used_for_authority: false,
+    command_generation_location: "execution_adapter_only",
+  },
+  windows: {
+    kind: "windows",
+    display_name: "WindowsAdapter",
+    runtime_boundary: "os_adapter",
+    role: "execution_adapter",
+    default_runtime: false,
+    adapter_is_authority: false,
+    adapter_result_used_for_authority: false,
+    command_generation_location: "execution_adapter_only",
+  },
+  linux: {
+    kind: "linux",
+    display_name: "LinuxAdapter",
+    runtime_boundary: "os_adapter",
+    role: "execution_adapter",
+    default_runtime: false,
+    adapter_is_authority: false,
+    adapter_result_used_for_authority: false,
+    command_generation_location: "execution_adapter_only",
+  },
+  macos: {
+    kind: "macos",
+    display_name: "MacOSAdapter",
+    runtime_boundary: "os_adapter",
+    role: "execution_adapter",
+    default_runtime: false,
+    adapter_is_authority: false,
+    adapter_result_used_for_authority: false,
+    command_generation_location: "execution_adapter_only",
+  },
+  browser: {
+    kind: "browser",
+    display_name: "BrowserAdapter",
+    runtime_boundary: "browser_adapter",
+    role: "execution_adapter",
+    default_runtime: false,
+    adapter_is_authority: false,
+    adapter_result_used_for_authority: false,
+    command_generation_location: "not_applicable",
+  },
+  composio: {
+    kind: "composio",
+    display_name: "ComposioAdapter",
+    runtime_boundary: "external_api_adapter",
+    role: "execution_adapter",
+    default_runtime: false,
+    adapter_is_authority: false,
+    adapter_result_used_for_authority: false,
+    command_generation_location: "not_applicable",
+  },
+  external_api: {
+    kind: "external_api",
+    display_name: "ExternalApiAdapter",
+    runtime_boundary: "external_api_adapter",
+    role: "execution_adapter",
+    default_runtime: false,
+    adapter_is_authority: false,
+    adapter_result_used_for_authority: false,
+    command_generation_location: "not_applicable",
+  },
+  internal_runtime: {
+    kind: "internal_runtime",
+    display_name: "InternalRuntimeAdapter",
+    runtime_boundary: "internal_runtime_adapter",
+    role: "execution_adapter",
+    default_runtime: true,
+    adapter_is_authority: false,
+    adapter_result_used_for_authority: false,
+    command_generation_location: "not_applicable",
+  },
+} as const satisfies Record<OperationAdapterKind, OperationAdapterDescriptor>;
+
+export const OPERATION_ADAPTER_REGISTRY: Readonly<Record<OperationAdapterKind, OperationAdapterDescriptor>> =
+  Object.freeze(OPERATION_ADAPTER_REGISTRY_DATA);
+
 export const OperationTargetSchema = z.object({
   kind: z.enum([
     "workspace",
@@ -227,6 +348,98 @@ export const OperationPlanSchema = z.object({
   hds_brain_authority_required: z.literal(true),
 }).strict();
 export type OperationPlan = z.infer<typeof OperationPlanSchema>;
+
+export interface OperationAdapterRegistryStepEvidence {
+  step_id: string;
+  operation: string;
+  adapter: OperationAdapterKind;
+  display_name: string;
+  runtime_boundary: OperationAdapterBoundary;
+  default_runtime: boolean;
+  adapter_is_authority: false;
+  adapter_result_used_for_authority: false;
+  command_generation_location: OperationAdapterDescriptor["command_generation_location"];
+}
+
+export interface OperationAdapterRegistryEvidence {
+  role: "adapter_registry";
+  status: "validated";
+  default_runtime_adapter: "internal_runtime";
+  shell_default_runtime: false;
+  hds_brain_authority_required: true;
+  adapter_registry_used_for_authority: false;
+  evidence_source: readonly ["CONFIG", "INTERNAL_STATE"];
+  steps: OperationAdapterRegistryStepEvidence[];
+}
+
+export type OperationAdapterRegistryInspection =
+  | { kind: "valid"; evidence: OperationAdapterRegistryEvidence }
+  | { kind: "rejected"; reason: string };
+
+export function inspectOperationPlanAdapterRegistry(plan: OperationPlan): OperationAdapterRegistryInspection {
+  const steps: OperationAdapterRegistryStepEvidence[] = [];
+  let requiresAdapterCommandGeneration = false;
+
+  for (const step of plan.steps) {
+    const descriptor = OPERATION_ADAPTER_REGISTRY[step.adapter];
+    if (!descriptor) {
+      return { kind: "rejected", reason: `adapter registry does not contain adapter: ${step.adapter}` };
+    }
+    if (descriptor.adapter_is_authority !== false || step.adapter_is_authority !== false) {
+      return { kind: "rejected", reason: `adapter may not be authority: ${step.step_id}` };
+    }
+    const expectedCommandGeneratedByAdapterOnly =
+      descriptor.command_generation_location === "execution_adapter_only";
+    if (step.command_generated_by_adapter_only !== expectedCommandGeneratedByAdapterOnly) {
+      return {
+        kind: "rejected",
+        reason:
+          `adapter registry rejected ${step.step_id}: ${step.adapter} requires ` +
+          `command_generated_by_adapter_only=${expectedCommandGeneratedByAdapterOnly}`,
+      };
+    }
+    if (descriptor.command_generation_location === "execution_adapter_only") {
+      requiresAdapterCommandGeneration = true;
+    }
+    steps.push({
+      step_id: step.step_id,
+      operation: step.operation,
+      adapter: step.adapter,
+      display_name: descriptor.display_name,
+      runtime_boundary: descriptor.runtime_boundary,
+      default_runtime: descriptor.default_runtime,
+      adapter_is_authority: false,
+      adapter_result_used_for_authority: false,
+      command_generation_location: descriptor.command_generation_location,
+    });
+  }
+
+  if (
+    requiresAdapterCommandGeneration &&
+    plan.raw_command_policy.command_generation_location !== "execution_adapter_only"
+  ) {
+    return {
+      kind: "rejected",
+      reason:
+        "plan raw_command_policy must use command_generation_location=execution_adapter_only " +
+        "when any step selects an execution adapter that generates commands",
+    };
+  }
+
+  return {
+    kind: "valid",
+    evidence: {
+      role: "adapter_registry",
+      status: "validated",
+      default_runtime_adapter: "internal_runtime",
+      shell_default_runtime: false,
+      hds_brain_authority_required: true,
+      adapter_registry_used_for_authority: false,
+      evidence_source: ["CONFIG", "INTERNAL_STATE"],
+      steps,
+    },
+  };
+}
 
 export const OperationCoreProjectionSchema = z.object({
   version: z.literal("operation-core.v1"),
