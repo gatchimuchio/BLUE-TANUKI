@@ -23,6 +23,7 @@ interface ReleaseManifest {
   installer_paths?: string[];
   windows_installer_artifacts?: string[];
   unix_installer_artifacts?: string[];
+  product_installer_artifacts?: string[];
   boundaries?: {
     unsigned_source_bundle?: boolean;
     secrets_included?: boolean;
@@ -112,6 +113,8 @@ const REQUIRED_ARCHIVE_PATHS = [
   "scripts/package_unix.ts",
   "scripts/verify_unix_package.ts",
   "scripts/smoke_unix_installed.ts",
+  "scripts/package_product_installers.ts",
+  "scripts/verify_product_installers.ts",
   "tooling/windows/assert_windows_oneclick_artifact.py",
 ] as const;
 
@@ -266,6 +269,11 @@ function assertManifest(
       throw new Error(`manifest unix_installer_artifacts missing ${artifact}`);
     }
   }
+  for (const artifact of productInstallerArtifactPaths(manifest.version ?? readPackage().version)) {
+    if (!manifest.product_installer_artifacts?.includes(artifact)) {
+      throw new Error(`manifest product_installer_artifacts missing ${artifact}`);
+    }
+  }
 }
 
 function windowsInstallerArtifactPaths(version: string): string[] {
@@ -294,6 +302,27 @@ function unixInstallerArtifactPaths(version: string): string[] {
     `${macosArm64}.sha256`,
     `${macosArm64}.manifest.json`,
     "release/macos/README_INSTALL_MACOS.txt",
+  ];
+}
+
+function productInstallerArtifactPaths(version: string): string[] {
+  const windows = `release/windows/BlueTanukiSetup-${version}-windows-x64.cmd`;
+  const linux = `release/linux/BlueTanukiSetup-${version}-linux-x64.run`;
+  const macosX64 = `release/macos/BlueTanukiSetup-${version}-macos-x64.command`;
+  const macosArm64 = `release/macos/BlueTanukiSetup-${version}-macos-arm64.command`;
+  return [
+    windows,
+    `${windows}.sha256`,
+    `${windows}.manifest.json`,
+    linux,
+    `${linux}.sha256`,
+    `${linux}.manifest.json`,
+    macosX64,
+    `${macosX64}.sha256`,
+    `${macosX64}.manifest.json`,
+    macosArm64,
+    `${macosArm64}.sha256`,
+    `${macosArm64}.manifest.json`,
   ];
 }
 
@@ -369,6 +398,11 @@ function assertRequiredEntries(entries: string[]): void {
   for (const required of unixInstallerArtifactPaths(readPackage().version)) {
     if (!entryMatches(entries, required)) {
       throw new Error(`archive missing Linux/macOS installer artifact: ${required}`);
+    }
+  }
+  for (const required of productInstallerArtifactPaths(readPackage().version)) {
+    if (!entryMatches(entries, required)) {
+      throw new Error(`archive missing product installer artifact: ${required}`);
     }
   }
 }

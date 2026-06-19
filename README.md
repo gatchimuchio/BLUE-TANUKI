@@ -22,18 +22,20 @@ Development strategy: GUI Shell is a reference LLM-readable responsibility subst
 
 ## Quick Start
 
-Choose the file for your OS from the extracted folder:
+Choose the single-file installer for your OS from the Release assets:
 
 | OS | Run this |
 | --- | --- |
-| Windows | `BlueTanukiSetup.cmd` from the packaged installer zip |
-| macOS | `BlueTanukiSetup.command` from the packaged installer archive |
-| Linux | `BlueTanukiSetup.sh` from the packaged installer archive |
+| Windows | `BlueTanukiSetup-<version>-windows-x64.cmd` |
+| macOS | `BlueTanukiSetup-<version>-macos-<arch>.command` |
+| Linux | `BlueTanukiSetup-<version>-linux-x64.run` |
 
-Normal users on Windows, macOS, and Linux should not run source builds. Use the
-packaged installer artifact for your OS. The installed launcher opens
-`http://127.0.0.1:8787/app` and does not require user-installed Node.js,
-Corepack, pnpm, Git, or source-build troubleshooting.
+Normal users on Windows, macOS, and Linux should not run source builds and
+should not manually extract a nested payload archive. Download the single-file
+installer package for your OS and run it. The installer verifies its embedded
+payload, extracts it internally, installs BLUE-TANUKI, launches the resident
+app, and opens `http://127.0.0.1:8787/app`. It does not require user-installed
+Node.js, Corepack, pnpm, Git, or source-build troubleshooting.
 
 `INSTALL.sh`, `INSTALL_MACOS.command`, and `INSTALL_LINUX.sh` are source-root
 helpers only. They use a verified local packaged installer under `release/` or
@@ -46,16 +48,17 @@ explicit only with `--build-from-source`.
 Do not run `install/windows/product/BlueTanukiSetup.cmd` directly from a source
 tree. That script is the payload entrypoint inside the packaged installer zip.
 
-Path A: prebuilt installer zip
+Path A: single-file installer package
 
-1. Get `blue-tanuki-*-windows-x64-installer.zip` from the GitHub Release or
-   `release/windows/`.
-2. Extract the zip.
-3. Run `BlueTanukiSetup.cmd` from the extracted installer folder.
+1. Get `BlueTanukiSetup-<version>-windows-x64.cmd` from the GitHub Release.
+2. Double-click it.
+3. BLUE-TANUKI installs, starts, and opens the Control Center.
 
 Normal Windows users should not run source builds. Download
-`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
-`BlueTanukiSetup.cmd`. The installed launcher opens:
+`BlueTanukiSetup-<version>-windows-x64.cmd` and run it. The older
+`blue-tanuki-<version>-windows-x64-installer.zip` artifact remains available as
+the payload/recovery package, but normal users should not need to extract it
+manually. The installed launcher opens:
 
 ```text
 http://127.0.0.1:8787/app
@@ -73,16 +76,16 @@ building from source. Developer source build is explicit only:
 
 ### macOS users
 
-1. Get `blue-tanuki-*-macos-<arch>-installer.tar.gz` from the GitHub Release or
-   `release/macos/`.
-2. Extract the archive.
-3. Run `BlueTanukiSetup.command` from the extracted installer folder.
-4. Launch BLUE-TANUKI from `~/Applications/BlueTanuki.command` or
+1. Get `BlueTanukiSetup-<version>-macos-<arch>.command` from the GitHub Release.
+2. Run it.
+3. BLUE-TANUKI installs, starts, and opens the Control Center.
+4. Later, launch BLUE-TANUKI from `~/Applications/BlueTanuki.command` or
    `~/.local/bin/blue-tanuki`.
 
 Normal macOS users should not run source builds. Download
-`blue-tanuki-<version>-macos-<arch>-installer.tar.gz`, extract it, and run
-`BlueTanukiSetup.command`.
+`BlueTanukiSetup-<version>-macos-<arch>.command` and run it. The
+`blue-tanuki-<version>-macos-<arch>-installer.tar.gz` artifact is the
+payload/recovery package.
 
 For install-only behavior:
 
@@ -92,16 +95,17 @@ LAUNCH_AFTER_INSTALL=0 sh ./BlueTanukiSetup.command
 
 ### Linux users
 
-1. Get `blue-tanuki-*-linux-x64-installer.tar.gz` from the GitHub Release or
-   `release/linux/`.
-2. Extract the archive.
-3. Run `sh ./BlueTanukiSetup.sh` from the extracted installer folder.
-4. Launch BLUE-TANUKI from the desktop launcher where supported or
+1. Get `BlueTanukiSetup-<version>-linux-x64.run` from the GitHub Release.
+2. Run it with `sh ./BlueTanukiSetup-<version>-linux-x64.run` or mark it
+   executable and run it.
+3. BLUE-TANUKI installs, starts, and opens the Control Center.
+4. Later, launch BLUE-TANUKI from the desktop launcher where supported or
    `~/.local/bin/blue-tanuki`.
 
 Normal Linux users should not run source builds. Download
-`blue-tanuki-<version>-linux-x64-installer.tar.gz`, extract it, and run
-`BlueTanukiSetup.sh`.
+`BlueTanukiSetup-<version>-linux-x64.run` and run it. The
+`blue-tanuki-<version>-linux-x64-installer.tar.gz` artifact is the
+payload/recovery package.
 
 For install-only behavior:
 
@@ -121,12 +125,16 @@ pnpm package:linux
 pnpm package:linux:verify
 pnpm package:macos
 pnpm package:macos:verify
+pnpm package:installers
+pnpm package:installers:verify
 ```
 
-This produces unsigned installer packages and sidecars under `release/windows/`,
-`release/linux/`, and `release/macos/`. Each packaged installer includes a
-bundled Node runtime, opens the Control Center, and preserves user data under
-the platform user data location.
+This produces unsigned payload/recovery archives plus single-file normal user
+installers and sidecars under `release/windows/`, `release/linux/`, and
+`release/macos/`. Each single-file installer includes a bundled Node runtime
+through its verified payload, opens the Control Center, and preserves user data
+under the platform user data location. These are not signed native installer
+packages yet.
 
 See [docs/WINDOWS_INSTALLER_GUIDE.md](docs/WINDOWS_INSTALLER_GUIDE.md).
 

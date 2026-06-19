@@ -23,24 +23,28 @@ pnpm package:linux
 pnpm package:linux:verify
 pnpm package:macos
 pnpm package:macos:verify
+pnpm package:installers
+pnpm package:installers:verify
 ```
 
-This creates unsigned installer packages under `release/windows/`,
-`release/linux/`, and `release/macos/`. Each package bundles Node.js and
-installs BLUE-TANUKI without asking the end user to run Node.js, Corepack,
-pnpm, Git, shell/PowerShell setup scripts, or repository commands.
+This creates unsigned payload/recovery archives and single-file normal user
+installers under `release/windows/`, `release/linux/`, and `release/macos/`.
+Each package bundles Node.js through the verified payload and installs
+BLUE-TANUKI without asking the end user to run Node.js, Corepack, pnpm, Git,
+shell/PowerShell setup scripts, nested extraction, or repository commands.
 
 Normal Windows users should not run source builds. Download
-`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
-`BlueTanukiSetup.cmd`.
+`BlueTanukiSetup-<version>-windows-x64.cmd` and run it. The
+`blue-tanuki-<version>-windows-x64-installer.zip` artifact is payload/recovery.
 
 Normal macOS users should not run source builds. Download
-`blue-tanuki-<version>-macos-<arch>-installer.tar.gz`, extract it, and run
-`BlueTanukiSetup.command`.
+`BlueTanukiSetup-<version>-macos-<arch>.command` and run it. The
+`blue-tanuki-<version>-macos-<arch>-installer.tar.gz` artifact is
+payload/recovery.
 
 Normal Linux users should not run source builds. Download
-`blue-tanuki-<version>-linux-x64-installer.tar.gz`, extract it, and run
-`BlueTanukiSetup.sh`.
+`BlueTanukiSetup-<version>-linux-x64.run` and run it. The
+`blue-tanuki-<version>-linux-x64-installer.tar.gz` artifact is payload/recovery.
 
 See:
 
@@ -131,13 +135,16 @@ provider, endpoint, model, and API key, then verify again.
 - The installer does not provide an automatic updater.
 - The installer is a guided first-run path, not a verified 5-minute setup
   guarantee.
-- The Windows package is unsigned and zip-delivered. It is not a signed MSI/EXE,
-  but it does provide bundled runtime install, Start Menu shortcuts, Control
-  Center launch, Doctor shortcut, logs shortcut, and current-user uninstall.
-- The Linux/macOS packages are unsigned archive-delivered installers. They are
-  not signed DMG/DEB/RPM packages, but they do provide bundled runtime install,
-  current-user launchers, Control Center launch, Doctor, logs, explicit
-  autostart controls, and current-user uninstall.
+- The Windows normal-user package is an unsigned single-file command installer.
+  It is not a signed native installer package such as MSI/EXE, but it does
+  provide internally verified payload extraction, bundled runtime install,
+  Start Menu shortcuts, Control Center launch, Doctor shortcut, logs shortcut,
+  and current-user uninstall.
+- The Linux/macOS normal-user packages are unsigned single-file shell/command
+  installers. They are not signed native installer packages such as
+  DMG/DEB/RPM, but they do provide internally verified payload extraction,
+  bundled runtime install, current-user launchers, Control Center launch,
+  Doctor, logs, explicit autostart controls, and current-user uninstall.
 
 ## Cross-References
 

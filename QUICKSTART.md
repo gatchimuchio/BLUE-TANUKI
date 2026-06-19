@@ -8,18 +8,20 @@ Support scope and remaining RC limitations are fixed in [docs/SUPPORT_BOUNDARY.m
 
 ## 1. OS別一発起動 entrypoint
 
-展開した folder の root から OS に合う入口を実行する。
+GitHub Release から OS に合う single-file installer を取得して実行する。
+This is the normal user path.
 
 | OS | 実行するもの |
 | --- | --- |
-| Windows | packaged installer zip の `BlueTanukiSetup.cmd` |
-| macOS | packaged installer archive の `BlueTanukiSetup.command` |
-| Linux | packaged installer archive の `BlueTanukiSetup.sh` |
+| Windows | `BlueTanukiSetup-<version>-windows-x64.cmd` |
+| macOS | `BlueTanukiSetup-<version>-macos-<arch>.command` |
+| Linux | `BlueTanukiSetup-<version>-linux-x64.run` |
 
 通常ユーザーは Windows/macOS/Linux すべてで source build を実行しない。
-packaged installer artifact を展開し、展開先直下の setup だけを実行する。
-installed launcher は `http://127.0.0.1:8787/app` を開く。通常ユーザーに
-Node.js、Corepack、pnpm、Git、source build、手動 troubleshooting は要求しない。
+single-file installer package を実行するだけでよい。installer は embedded
+payload/recovery archive を検証し、内部展開し、install 後に
+`http://127.0.0.1:8787/app` を開く。通常ユーザーに Node.js、Corepack、pnpm、
+Git、source build、手動 nested extraction、手動 troubleshooting は要求しない。
 
 launch を抑止して install のみ行う場合:
 
@@ -45,17 +47,16 @@ sh ./INSTALL_LINUX.sh --build-from-source
 
 ## 2. Platform installer packages
 
-Windows 一般ユーザー向けの経路は packaged installer zip のみである。Normal
+Windows 一般ユーザー向けの経路は single-file installer package である。Normal
 Windows users should not run source builds. Download
-`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
-`BlueTanukiSetup.cmd`. source tree 内の
+`BlueTanukiSetup-<version>-windows-x64.cmd` and run it. source tree 内の
 `install/windows/product/BlueTanukiSetup.cmd` は直接実行しない。
 
 ```text
-1. blue-tanuki-*-windows-x64-installer.zip を取得
-2. zip を展開
-3. 展開先直下の BlueTanukiSetup.cmd を double-click
-4. Start Menu から BLUE-TANUKI を起動
+1. BlueTanukiSetup-<version>-windows-x64.cmd を取得
+2. double-click
+3. installer が payload/recovery zip を内部展開して install
+4. BLUE-TANUKI が起動
 5. http://127.0.0.1:8787/app の Control Center で Conversation / WebChat を使う
 ```
 
@@ -65,15 +66,17 @@ Release の Windows installer asset と `.sha256` / `.manifest.json` を取得�
 検証できない場合は「source zip ではなく Windows installer zip を使う」と
 fail fast し、source build へは落ちない。
 
-macOS 一般ユーザー向けの経路は packaged installer archive のみである。Normal
+macOS 一般ユーザー向けの経路は single-file installer package である。Normal
 macOS users should not run source builds. Download
-`blue-tanuki-<version>-macos-<arch>-installer.tar.gz`, extract it, and run
-`BlueTanukiSetup.command`.
+`BlueTanukiSetup-<version>-macos-<arch>.command` and run it. The
+`blue-tanuki-<version>-macos-<arch>-installer.tar.gz` artifact is kept as
+payload/recovery.
 
-Linux 一般ユーザー向けの経路は packaged installer archive のみである。Normal
+Linux 一般ユーザー向けの経路は single-file installer package である。Normal
 Linux users should not run source builds. Download
-`blue-tanuki-<version>-linux-x64-installer.tar.gz`, extract it, and run
-`BlueTanukiSetup.sh`.
+`BlueTanukiSetup-<version>-linux-x64.run` and run it. The
+`blue-tanuki-<version>-linux-x64-installer.tar.gz` artifact is kept as
+payload/recovery.
 
 開発側で package を作る:
 
@@ -85,11 +88,15 @@ pnpm package:linux
 pnpm package:linux:verify
 pnpm package:macos
 pnpm package:macos:verify
+pnpm package:installers
+pnpm package:installers:verify
 ```
 
-これらの package は bundled Node runtime を含む。ユーザーに Node.js、Corepack、
-pnpm、Git、PowerShell/shell setup script、repository commands を要求しない。
-現時点では unsigned installer package であり、signed MSI/EXE/DMG/DEB/RPM ではない。
+これらの package は bundled Node runtime を含む payload/recovery archive と、
+通常ユーザー向けの single-file installer を生成する。ユーザーに Node.js、
+Corepack、pnpm、Git、repository commands、manual nested extraction を要求しない。
+現時点では unsigned installer package であり、signed native installer
+package / automatic updater ではない。
 
 詳細:
 

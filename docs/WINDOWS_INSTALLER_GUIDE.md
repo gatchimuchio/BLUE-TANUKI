@@ -8,9 +8,18 @@ BLUE-TANUKI now has an unsigned Windows x64 installer package produced by:
 pnpm build
 pnpm package:windows
 pnpm package:windows:verify
+pnpm package:installers -- --platform=windows
+pnpm package:installers:verify -- --platform=windows
 ```
 
-The package artifact is:
+The normal-user package artifact is:
+
+```text
+release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.cmd
+```
+
+That single-file installer verifies and internally extracts this payload/recovery
+artifact:
 
 ```text
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
@@ -21,6 +30,8 @@ The package build also emits:
 ```text
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.sha256
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.manifest.json
+release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.cmd.sha256
+release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.cmd.manifest.json
 release/windows/README_INSTALL_WINDOWS.txt
 ```
 
@@ -31,12 +42,15 @@ That file is copied to the root of the packaged installer zip and expects the
 packaged `app/`, `runtime/`, `launcher/`, and manifest entries next to it.
 
 Normal Windows users should not run source builds. Download
-`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
-`BlueTanukiSetup.cmd`.
+`BlueTanukiSetup-<version>-windows-x64.cmd` and run it. The
+`blue-tanuki-<version>-windows-x64-installer.zip` artifact is payload/recovery
+and should not require manual nested extraction during normal install.
 
-1. Download or receive `blue-tanuki-*-windows-x64-installer.zip`.
-2. Extract the zip.
-3. Run `BlueTanukiSetup.cmd` from the extracted installer folder.
+1. Download or receive `BlueTanukiSetup-<version>-windows-x64.cmd`.
+2. Double-click it.
+3. The installer verifies the embedded payload/recovery zip.
+4. The installer extracts the payload internally and runs packaged setup.
+5. BLUE-TANUKI installs, starts, and opens the Control Center.
 
 The root entrypoint uses an existing `release/windows/*windows-x64-installer.zip`
 when present. If no installer zip exists, it downloads the matching GitHub
@@ -55,7 +69,8 @@ Developer source build is explicit only:
 
 The Windows package is installer-first for a normal Windows user:
 
-- The user extracts the zip and double-clicks `BlueTanukiSetup.cmd`.
+- The user downloads one single-file installer and double-clicks it.
+- The installer verifies and internally extracts the payload/recovery zip.
 - The installer copies the built app into `%LOCALAPPDATA%\Programs\BlueTanuki`.
 - The package includes a Windows Node runtime zip and expands it during install.
 - The installed app does not require user-installed Node.js, pnpm, Git, or repository commands.
@@ -64,17 +79,19 @@ The Windows package is installer-first for a normal Windows user:
 - Windows Apps / Control Panel uninstall is registered under the current user.
 - Autostart is not enabled by install.
 
-This does not build signed native packages yet. It is not a signed MSI/EXE, not
-an automatic updater, and not a GA public-claim artifact.
+This does not build signed native packages yet. It is not a signed MSI/EXE,
+not an automatic updater, and not a GA public-claim artifact.
 
 ## Unsigned Package / SmartScreen / SHA-256
 
 The v1 Windows package is unsigned. If Microsoft Defender SmartScreen shows a
 warning, verify the package hash before continuing.
 
-From PowerShell in the folder containing the zip:
+From PowerShell in the folder containing the installer:
 
 ```powershell
+Get-FileHash -Algorithm SHA256 .\BlueTanukiSetup-1.0.0-rc.1-windows-x64.cmd
+Get-Content .\BlueTanukiSetup-1.0.0-rc.1-windows-x64.cmd.sha256
 Get-FileHash -Algorithm SHA256 .\blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
 Get-Content .\blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip.sha256
 ```
@@ -86,13 +103,12 @@ hash mismatch.
 
 ## User Flow
 
-1. Download or receive the Windows installer zip.
-2. Extract it to a normal folder.
-3. Double-click `BlueTanukiSetup.cmd`.
-4. Open BLUE-TANUKI from the Start Menu.
-5. The launcher starts the resident gateway with the bundled Node runtime.
-6. The Control Center opens at `http://127.0.0.1:8787/app`.
-7. Use stub mode for first conversation without external API credentials.
+1. Download or receive `BlueTanukiSetup-<version>-windows-x64.cmd`.
+2. Double-click it.
+3. The installer verifies and internally extracts the payload/recovery zip.
+4. The packaged setup installs the app and starts the resident gateway with the bundled Node runtime.
+5. The Control Center opens at `http://127.0.0.1:8787/app`.
+6. Use stub mode for first conversation without external API credentials.
 
 ## Locations
 
@@ -188,6 +204,8 @@ Autostart can be added only later as an explicit owner action.
 ```bash
 pnpm package:windows
 pnpm package:windows:verify
+pnpm package:installers -- --platform=windows
+pnpm package:installers:verify -- --platform=windows
 pnpm installer:windows
 pnpm installer:windows:verify
 pnpm smoke:windows-installed
@@ -200,8 +218,12 @@ defined in [WINDOWS_EVIDENCE_PACK.md](WINDOWS_EVIDENCE_PACK.md).
 ## GitHub Release Artifact Policy
 
 GitHub source zip is developer source. End users should use the Windows
-installer zip. Every GitHub Release intended for Windows users must attach:
+single-file installer package. Every GitHub Release intended for Windows users
+must attach:
 
+- `BlueTanukiSetup-*-windows-x64.cmd`,
+- `BlueTanukiSetup-*-windows-x64.cmd.sha256`,
+- `BlueTanukiSetup-*-windows-x64.cmd.manifest.json`,
 - `blue-tanuki-*-windows-x64-installer.zip`,
 - `blue-tanuki-*-windows-x64-installer.zip.sha256`,
 - `blue-tanuki-*-windows-x64-installer.zip.manifest.json`,

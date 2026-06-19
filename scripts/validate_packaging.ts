@@ -331,6 +331,24 @@ function main(): void {
   requireIncludes("scripts/package_unix.ts", packageUnix, "SHASUMS256.txt");
   requireIncludes("scripts/package_unix.ts", packageUnix, "runtime_sha256_verified=true");
 
+  const productInstallers = read("scripts/package_product_installers.ts");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "windows-x64-self-extracting-cmd-installer");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "linux-x64-self-extracting-run-installer");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "macos-x64-self-extracting-command-installer");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "macos-arm64-self-extracting-command-installer");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "normal_user_runs_single_file: true");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "extracts_payload_internally: true");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "launches_after_install_by_default: true");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "requires_node_pnpm_git_from_user: false");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "requires_manual_nested_extraction: false");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "requires_source_build: false");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "signed_native_installer: false");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "BlueTanukiSetup-${version}-windows-x64.cmd");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "BlueTanukiSetup-${version}-linux-x64.run");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "BlueTanukiSetup-${version}-macos-x64.command");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "BlueTanukiSetup-${version}-macos-arm64.command");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "__BLUE_TANUKI_INSTALLER_PAYLOAD_BASE64_BELOW__");
+
   const verifyWindowsPackage = read("scripts/verify_windows_package.ts");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "verifyWindowsPackage");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "GUI-Shell");
@@ -346,6 +364,18 @@ function main(): void {
   requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "README_INSTALL_MACOS.txt");
   requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "requires_node_pnpm_git_from_user");
   requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "shasums_source");
+
+  const verifyProductInstallers = read("scripts/verify_product_installers.ts");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "embedded payload sha256 mismatch");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "forbidden normal-user path text present");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "normal_user_runs_single_file=true");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "requires_manual_nested_extraction=false");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "user_requires_node_pnpm_git=false");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "requires_source_build=false");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "signed_native_installer=false");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "corepack");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "pnpm");
+  requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "BuildFromSource");
 
   const smokeWindowsInstalled = read("scripts/smoke_windows_installed.ts");
   requireIncludes("scripts/smoke_windows_installed.ts", smokeWindowsInstalled, "windows_runtime_smoke=skipped");
@@ -452,14 +482,21 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_WINDOWS.ps1");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "windows_installer_artifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "unix_installer_artifacts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "product_installer_artifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "ensureWindowsInstallerArtifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "ensureUnixInstallerArtifacts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "ensureProductInstallerArtifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "copyWindowsInstallerArtifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "copyUnixInstallerArtifacts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "copyProductInstallerArtifacts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/windows/blue-tanuki-${version}-windows-x64-installer.zip");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/linux/blue-tanuki-${version}-linux-x64-installer.tar.gz");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/blue-tanuki-${version}-macos-x64-installer.tar.gz");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/blue-tanuki-${version}-macos-arm64-installer.tar.gz");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/windows/BlueTanukiSetup-${version}-windows-x64.cmd");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/linux/BlueTanukiSetup-${version}-linux-x64.run");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/BlueTanukiSetup-${version}-macos-x64.command");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "release/macos/BlueTanukiSetup-${version}-macos-arm64.command");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/hds-brain");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/channel-webchat");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "packages/channel-telegram");
@@ -487,6 +524,8 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/package_unix.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/verify_unix_package.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/smoke_unix_installed.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/package_product_installers.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/verify_product_installers.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "tooling/windows/assert_windows_oneclick_artifact.py");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "docs/WINDOWS_INSTALLER_GUIDE.md");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"packages/channel-slack\"");
@@ -509,10 +548,15 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_WINDOWS.ps1");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "windows_installer_artifacts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "unix_installer_artifacts");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "product_installer_artifacts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/windows/blue-tanuki-${version}-windows-x64-installer.zip");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/linux/blue-tanuki-${version}-linux-x64-installer.tar.gz");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/blue-tanuki-${version}-macos-x64-installer.tar.gz");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/blue-tanuki-${version}-macos-arm64-installer.tar.gz");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/windows/BlueTanukiSetup-${version}-windows-x64.cmd");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/linux/BlueTanukiSetup-${version}-linux-x64.run");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/BlueTanukiSetup-${version}-macos-x64.command");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "release/macos/BlueTanukiSetup-${version}-macos-arm64.command");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "manifest");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "core_release_paths");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "EXTRACTED_RELEASE_COMMANDS");

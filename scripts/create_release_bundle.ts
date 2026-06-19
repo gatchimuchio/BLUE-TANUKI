@@ -113,6 +113,8 @@ const REQUIRED_PATHS = [
   "scripts/package_unix.ts",
   "scripts/verify_unix_package.ts",
   "scripts/smoke_unix_installed.ts",
+  "scripts/package_product_installers.ts",
+  "scripts/verify_product_installers.ts",
   "tooling/windows/assert_windows_oneclick_artifact.py",
 ] as const;
 
@@ -200,6 +202,7 @@ interface ReleaseManifest {
   installer_paths: readonly string[];
   windows_installer_artifacts: readonly string[];
   unix_installer_artifacts: readonly string[];
+  product_installer_artifacts: readonly string[];
   boundaries: {
     unsigned_source_bundle: true;
     secrets_included: false;
@@ -277,6 +280,31 @@ function hasUnixInstallerArtifacts(version: string): boolean {
   return unixInstallerArtifactPaths(version).every((rel) => existsSync(path.join(root, rel)));
 }
 
+function productInstallerArtifactPaths(version: string): string[] {
+  const windows = `release/windows/BlueTanukiSetup-${version}-windows-x64.cmd`;
+  const linux = `release/linux/BlueTanukiSetup-${version}-linux-x64.run`;
+  const macosX64 = `release/macos/BlueTanukiSetup-${version}-macos-x64.command`;
+  const macosArm64 = `release/macos/BlueTanukiSetup-${version}-macos-arm64.command`;
+  return [
+    windows,
+    `${windows}.sha256`,
+    `${windows}.manifest.json`,
+    linux,
+    `${linux}.sha256`,
+    `${linux}.manifest.json`,
+    macosX64,
+    `${macosX64}.sha256`,
+    `${macosX64}.manifest.json`,
+    macosArm64,
+    `${macosArm64}.sha256`,
+    `${macosArm64}.manifest.json`,
+  ];
+}
+
+function hasProductInstallerArtifacts(version: string): boolean {
+  return productInstallerArtifactPaths(version).every((rel) => existsSync(path.join(root, rel)));
+}
+
 function runWorkspaceCommand(args: readonly string[], label: string): void {
   const result = spawnSync("pnpm", [...args], {
     cwd: root,
@@ -312,6 +340,22 @@ function ensureUnixInstallerArtifacts(version: string): void {
     if (!existsSync(path.join(root, rel))) {
       throw new Error(
         `release bundle missing Linux/macOS installer artifact after package generation: ${rel}`,
+      );
+    }
+  }
+}
+
+function ensureProductInstallerArtifacts(version: string): void {
+  if (hasProductInstallerArtifacts(version)) return;
+  ensureWindowsInstallerArtifacts(version);
+  ensureUnixInstallerArtifacts(version);
+  console.log("[release] Product installer artifacts missing; generating single-file release installers");
+  runWorkspaceCommand(["package:installers"], "pnpm package:installers");
+  runWorkspaceCommand(["package:installers:verify"], "pnpm package:installers:verify");
+  for (const rel of productInstallerArtifactPaths(version)) {
+    if (!existsSync(path.join(root, rel))) {
+      throw new Error(
+        `release bundle missing product installer artifact after package generation: ${rel}`,
       );
     }
   }
@@ -364,6 +408,15 @@ async function copyWindowsInstallerArtifacts(staging: string, version: string): 
 
 async function copyUnixInstallerArtifacts(staging: string, version: string): Promise<void> {
   for (const rel of unixInstallerArtifactPaths(version)) {
+    const src = path.join(root, rel);
+    const dest = path.join(staging, rel);
+    await mkdir(path.dirname(dest), { recursive: true });
+    await cp(src, dest, { force: true });
+  }
+}
+
+async function copyProductInstallerArtifacts(staging: string, version: string): Promise<void> {
+  for (const rel of productInstallerArtifactPaths(version)) {
     const src = path.join(root, rel);
     const dest = path.join(staging, rel);
     await mkdir(path.dirname(dest), { recursive: true });
@@ -469,6 +522,7 @@ async function writeIntegrityFiles(
     installer_paths: INSTALLER_PATHS,
     windows_installer_artifacts: windowsInstallerArtifactPaths(version),
     unix_installer_artifacts: unixInstallerArtifactPaths(version),
+    product_installer_artifacts: productInstallerArtifactPaths(version),
     boundaries: {
       unsigned_source_bundle: true,
       secrets_included: false,
@@ -513,6 +567,7 @@ async function main(): Promise<void> {
           installers: INSTALLER_PATHS,
           windows_installer_artifacts: windowsInstallerArtifactPaths(pkg.version),
           unix_installer_artifacts: unixInstallerArtifactPaths(pkg.version),
+          product_installer_artifacts: productInstallerArtifactPaths(pkg.version),
         },
         null,
         2,
@@ -523,12 +578,14 @@ async function main(): Promise<void> {
 
   ensureWindowsInstallerArtifacts(pkg.version);
   ensureUnixInstallerArtifacts(pkg.version);
+  ensureProductInstallerArtifacts(pkg.version);
   await rm(stagingParent, { recursive: true, force: true });
   await mkdir(staging, { recursive: true });
   await mkdir(outDir, { recursive: true });
   await copyIncluded(staging);
   await copyWindowsInstallerArtifacts(staging, pkg.version);
   await copyUnixInstallerArtifacts(staging, pkg.version);
+  await copyProductInstallerArtifacts(staging, pkg.version);
   await rewriteCoreTsconfigs(staging);
   archive(stagingParent, outFile);
   await rm(stagingParent, { recursive: true, force: true });

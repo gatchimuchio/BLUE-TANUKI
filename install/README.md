@@ -6,26 +6,29 @@ There are three distinct paths:
 
 1. source/dev run from the repository,
 2. explicit developer source-build scripts,
-3. unsigned packaged installer artifacts for users who should not run Node,
-   Corepack, pnpm, Git, source builds, setup scripts, or repository commands manually.
+3. unsigned single-file installer artifacts for normal users who should not run
+   Node, Corepack, pnpm, Git, source builds, setup scripts, nested extraction,
+   or repository commands manually.
 
 The repository does not build signed native packages yet. The product packages
-are unsigned archive-delivered installer packages, not signed MSI/EXE/DMG/DEB/RPM
-native packages.
+are unsigned installer packages, not signed native installer packages such as
+signed MSI/EXE/DMG/DEB/RPM.
 
 ## One-click entrypoints
 
-Use the packaged installer entrypoint for every normal user path:
+Use the single-file packaged installer entrypoint for every normal user path:
 
 ```text
-Windows: BlueTanukiSetup.cmd from blue-tanuki-<version>-windows-x64-installer.zip
-macOS:   BlueTanukiSetup.command from blue-tanuki-<version>-macos-<arch>-installer.tar.gz
-Linux:   BlueTanukiSetup.sh from blue-tanuki-<version>-linux-x64-installer.tar.gz
+Windows: BlueTanukiSetup-<version>-windows-x64.cmd
+macOS:   BlueTanukiSetup-<version>-macos-<arch>.command
+Linux:   BlueTanukiSetup-<version>-linux-x64.run
 ```
 
 Normal Windows, macOS, and Linux users should not run source builds. The
-installed launcher opens `http://127.0.0.1:8787/app` and does not require
-user-installed Node.js, Corepack, pnpm, Git, or source-build troubleshooting.
+single-file installer verifies its embedded payload/recovery archive, extracts
+it internally, installs BLUE-TANUKI, launches the resident app, and opens
+`http://127.0.0.1:8787/app`. It does not require user-installed Node.js,
+Corepack, pnpm, Git, manual nested extraction, or source-build troubleshooting.
 
 The source-root entrypoints (`INSTALL_WINDOWS.cmd`, `INSTALL_MACOS.command`,
 `INSTALL_LINUX.sh`, and `INSTALL.sh`) are convenience helpers only. They use a
@@ -77,38 +80,48 @@ pnpm package:linux
 pnpm package:linux:verify
 pnpm package:macos
 pnpm package:macos:verify
+pnpm package:installers
+pnpm package:installers:verify
 ```
 
 Artifacts:
 
 ```text
 release/windows/blue-tanuki-1.0.0-rc.1-windows-x64-installer.zip
+release/windows/BlueTanukiSetup-1.0.0-rc.1-windows-x64.cmd
 release/linux/blue-tanuki-1.0.0-rc.1-linux-x64-installer.tar.gz
+release/linux/BlueTanukiSetup-1.0.0-rc.1-linux-x64.run
 release/macos/blue-tanuki-1.0.0-rc.1-macos-x64-installer.tar.gz
+release/macos/BlueTanukiSetup-1.0.0-rc.1-macos-x64.command
 release/macos/blue-tanuki-1.0.0-rc.1-macos-arm64-installer.tar.gz
+release/macos/BlueTanukiSetup-1.0.0-rc.1-macos-arm64.command
 ```
 
 User flow:
 
 ```text
-1. Extract the zip.
-2. Double-click BlueTanukiSetup.cmd.
-3. Start BLUE-TANUKI from the Start Menu.
-4. Use Conversation / WebChat in the Control Center.
+1. Download the OS-specific BlueTanukiSetup-* single-file installer.
+2. Run it.
+3. The installer verifies and internally extracts the payload/recovery archive.
+4. BLUE-TANUKI installs, starts, and opens the Control Center.
+5. Use Conversation / WebChat in the Control Center.
 ```
 
 Do not run `install/windows/product/BlueTanukiSetup.cmd` from the source tree.
 Normal Windows users should not run source builds. Download
-`blue-tanuki-<version>-windows-x64-installer.zip`, extract it, and run
-`BlueTanukiSetup.cmd`.
+`BlueTanukiSetup-<version>-windows-x64.cmd` and run it. The
+`blue-tanuki-<version>-windows-x64-installer.zip` artifact remains available as
+payload/recovery.
 
 Normal macOS users should not run source builds. Download
-`blue-tanuki-<version>-macos-<arch>-installer.tar.gz`, extract it, and run
-`BlueTanukiSetup.command`.
+`BlueTanukiSetup-<version>-macos-<arch>.command` and run it. The
+`blue-tanuki-<version>-macos-<arch>-installer.tar.gz` artifact remains
+available as payload/recovery.
 
 Normal Linux users should not run source builds. Download
-`blue-tanuki-<version>-linux-x64-installer.tar.gz`, extract it, and run
-`BlueTanukiSetup.sh`.
+`BlueTanukiSetup-<version>-linux-x64.run` and run it. The
+`blue-tanuki-<version>-linux-x64-installer.tar.gz` artifact remains available as
+payload/recovery.
 
 Root platform entrypoints use an existing installer artifact or download and
 verify the matching GitHub Release installer asset. If the packaged installer
