@@ -252,6 +252,8 @@ Shell / Windows / Linux / macOS / Browser / Composio / internal runtime を adap
 - executor の LLM planner output 検査は `OperationPlanSchema` 通過後に `inspectOperationPlanAdapterRegistry()` を実行し、不整合な adapter step を fail-closed にする。
 - 成功時の planner evidence には `adapter_registry_used_for_authority=false` の registry evidence が添付される。
 - Control Center の Operation Core Plan viewer は adapter registry、default runtime、registry match / mismatch を表示し、ShellAdapter が default runtime ではないことを operator に見せる。
+- Executor feedback は `operation_core` execution adapter trace を任意フィールドとして持ち、実行済み command の adapter、runtime boundary、effect、ApprovalLevel、risk を `executor_trace_used_for_authority=false` の内部状態 evidence として記録する。
+- Gateway complete history の `execution_history` は executor trace を保存し、Control Center execution projection は raw payload を出さずに adapter trace だけを表示する。
 
 未完了:
 
@@ -276,7 +278,7 @@ adapter registry と default runtime は Control Center で表示済み。runtim
 - Gateway runtime snapshot は complete history の `execution_history` から `operation_core_execution` を投影する。
 - 投影は `status`、`result_digest`、`error_digest`、duration、command descriptor、entry hash のみを表示し、raw payload / raw result / raw error は出さない。
 - `operation_core_execution` は `OperationCoreExecutionProjectionSchema` で検証され、authority claim や raw payload exposure claim を拒否する。
-- Control Center は Execution results、Latest result、diff availability、rollback availability を Operation Core Plan viewer に表示する。
+- Control Center は Execution results、Latest result、adapter、runtime boundary、effect、ApprovalLevel、diff availability、rollback availability を Operation Core Plan viewer に表示する。
 - 現時点の diff / rollback は「not recorded」として明示され、`used_for_authority=false` / `adapter_result_used_for_authority=false` の display-only evidence に固定される。
 
 ### Step 6: Compatibility De-emphasis

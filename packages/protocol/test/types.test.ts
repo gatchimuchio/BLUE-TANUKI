@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ExecuteCommandSchema,
+  ExecuteFeedbackSchema,
   inspectOperationPlanAdapterRegistry,
   OPERATION_ADAPTER_REGISTRY,
   OperationCoreExecutionProjectionSchema,
@@ -58,6 +59,83 @@ describe("ExecuteCommandSchema", () => {
 });
 
 describe("Operation Core schemas", () => {
+  it("accepts executor feedback with non-authority Operation Core adapter trace", () => {
+    const parsed = ExecuteFeedbackSchema.parse({
+      command_id: "cmd-shell",
+      status: "success",
+      result: { ok: true },
+      metrics: { duration_ms: 12, tool_calls: 1 },
+      operation_core: {
+        version: "operation-core.v1",
+        role: "execution_adapter_trace",
+        operation: "tool.shell.exec",
+        state: "succeeded",
+        target: {
+          kind: "runtime",
+          id: "tool:shell.exec",
+          scope: "shell_adapter",
+        },
+        effects: ["process_spawn"],
+        permission: {
+          risk: "high",
+          approval_level: "L3_final_review",
+          final_review_required: true,
+          hds_brain_authority_required: true,
+          approval_gate_required: true,
+        },
+        adapter: "shell",
+        runtime_boundary: "shell_adapter",
+        adapter_is_authority: false,
+        command_generated_by_adapter_only: true,
+        raw_command_is_core_operation: false,
+        adapter_result_used_for_authority: false,
+        executor_trace_used_for_authority: false,
+        hds_brain_authority_required: true,
+        evidence_source: ["INTERNAL_STATE"],
+      },
+    });
+
+    expect(parsed.operation_core?.adapter).toBe("shell");
+    expect(parsed.operation_core?.executor_trace_used_for_authority).toBe(false);
+  });
+
+  it("rejects executor traces that claim authority", () => {
+    const result = ExecuteFeedbackSchema.safeParse({
+      command_id: "cmd-shell",
+      status: "success",
+      metrics: { duration_ms: 12 },
+      operation_core: {
+        version: "operation-core.v1",
+        role: "execution_adapter_trace",
+        operation: "tool.shell.exec",
+        state: "succeeded",
+        target: {
+          kind: "runtime",
+          id: "tool:shell.exec",
+        },
+        effects: ["process_spawn"],
+        permission: {
+          risk: "high",
+          approval_level: "L3_final_review",
+          final_review_required: true,
+          hds_brain_authority_required: true,
+          approval_gate_required: true,
+        },
+        adapter: "shell",
+        runtime_boundary: "shell_adapter",
+        adapter_is_authority: true,
+        command_generated_by_adapter_only: true,
+        raw_command_is_core_operation: false,
+        adapter_result_used_for_authority: false,
+        executor_trace_used_for_authority: false,
+        hds_brain_authority_required: true,
+        evidence_source: ["INTERNAL_STATE"],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("defines execution adapters without making shell the default runtime", () => {
     expect(OPERATION_ADAPTER_REGISTRY.internal_runtime).toMatchObject({
       default_runtime: true,
@@ -272,6 +350,34 @@ describe("Operation Core schemas", () => {
               message_roles: [],
               content_chars: null,
             },
+          },
+          execution_trace: {
+            version: "operation-core.v1",
+            role: "execution_adapter_trace",
+            operation: "tool.shell.exec",
+            state: "succeeded",
+            target: {
+              kind: "runtime",
+              id: "tool:shell.exec",
+              scope: "shell_adapter",
+            },
+            effects: ["process_spawn"],
+            permission: {
+              risk: "high",
+              approval_level: "L3_final_review",
+              final_review_required: true,
+              hds_brain_authority_required: true,
+              approval_gate_required: true,
+            },
+            adapter: "shell",
+            runtime_boundary: "shell_adapter",
+            adapter_is_authority: false,
+            command_generated_by_adapter_only: true,
+            raw_command_is_core_operation: false,
+            adapter_result_used_for_authority: false,
+            executor_trace_used_for_authority: false,
+            hds_brain_authority_required: true,
+            evidence_source: ["INTERNAL_STATE"],
           },
           diff: {
             available: false,

@@ -123,6 +123,15 @@ describe("Executor Operation Core planner output boundary", () => {
     };
 
     expect(feedback.status).toBe("success");
+    expect(feedback.operation_core).toMatchObject({
+      role: "execution_adapter_trace",
+      operation: "llm.call",
+      adapter: "external_api",
+      runtime_boundary: "external_api_adapter",
+      adapter_is_authority: false,
+      executor_trace_used_for_authority: false,
+      effects: ["external_send"],
+    });
     expect(result.operation_core).toMatchObject({
       role: "planner_output",
       status: "valid_plan",

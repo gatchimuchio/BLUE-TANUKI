@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { OperationInterface } from "./operation_core.js";
+import { OperationCoreExecutorTraceSchema, type OperationInterface } from "./operation_core.js";
 
 const DangerousObjectKeySchema = z.string().refine(
   (key) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
@@ -215,6 +215,7 @@ export const ExecuteFeedbackSchema = z.object({
     tokens_used: z.number().optional(),
     tool_calls: z.number().optional(),
   }),
+  operation_core: OperationCoreExecutorTraceSchema.optional(),
 });
 export type ExecuteFeedback = z.infer<typeof ExecuteFeedbackSchema>;
 

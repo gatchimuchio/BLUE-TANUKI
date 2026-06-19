@@ -11,6 +11,7 @@ import type {
   WebChatHistoryEntry,
 } from "@blue-tanuki/channel-webchat";
 import {
+  OperationCoreExecutorTraceSchema,
   OperationCoreExecutionProjectionSchema,
   type ExecuteCommand,
   type OperationCoreExecutionProjection,
@@ -194,6 +195,7 @@ function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record
   const command = isRecord(payload.command) ? payload.command : {};
   const metrics = isRecord(payload.metrics) ? payload.metrics : {};
   const error = stringValue(payload.error);
+  const executionTrace = projectOperationCoreExecutorTrace(payload.operation_core);
   return {
     index: entry.index,
     request_id: entry.request_id,
@@ -213,6 +215,7 @@ function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record
       duration_ms: numberValue(metrics.duration_ms),
     },
     command: projectOperationCoreCommandDescriptor(command),
+    ...(executionTrace ? { execution_trace: executionTrace } : {}),
     diff: {
       available: false,
       reason: "OperationDiff is not recorded for this execution yet",
@@ -233,6 +236,11 @@ function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record
       evidence_source: ["INTERNAL_STATE"],
     },
   };
+}
+
+function projectOperationCoreExecutorTrace(value: unknown): unknown | undefined {
+  const parsed = OperationCoreExecutorTraceSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function projectOperationCoreCommandDescriptor(command: Record<string, unknown>): Record<string, unknown> {

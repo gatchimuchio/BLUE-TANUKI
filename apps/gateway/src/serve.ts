@@ -544,6 +544,7 @@ export async function serve(): Promise<ServeShutdown> {
         result_digest: feedback.result === undefined ? undefined : digestValue(feedback.result),
         error: feedback.error,
         metrics: feedback.metrics,
+        operation_core: feedback.operation_core,
       },
     });
   }

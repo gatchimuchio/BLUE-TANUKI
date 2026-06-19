@@ -67,6 +67,7 @@
 - Exposed Operation Core adapter registry state in the Control Center Plan viewer, including default runtime and per-step registry match/mismatch display.
 - Added a display-only Operation Core execution result projection in the Control Center, showing result/error digests and explicit diff/rollback recording gaps without exposing raw execution payloads.
 - Added `OperationCoreExecutionProjectionSchema` so runtime execution result projections are contract-validated as display-only evidence with raw payload exposure disabled.
+- Added executor-side Operation Core adapter traces to `ExecuteFeedback` and Control Center execution history projections, showing adapter/runtime/effect/ApprovalLevel metadata as non-authority evidence.
 
 ## 0.1.0 - 2026-05-06
 

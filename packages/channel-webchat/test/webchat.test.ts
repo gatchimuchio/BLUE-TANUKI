@@ -340,6 +340,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("OPERATION_ADAPTER_REGISTRY");
       expect(html).toContain("adapter-generated");
       expect(html).toContain("registry match");
+      expect(html).toContain("runtime_boundary");
       expect(html).toContain("Channels");
       expect(html).toContain("Connectors");
       expect(html).toContain("Doctor");

@@ -818,6 +818,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const diff = isObject(entry.diff) ? entry.diff : {};
               const rollback = isObject(entry.rollback) ? entry.rollback : {};
               const op = isObject(entry.operation_core) ? entry.operation_core : {};
+              const trace = isObject(entry.execution_trace) ? entry.execution_trace : {};
+              const permission = isObject(trace.permission) ? trace.permission : {};
               const resultDigest = entry.result_digest || "not recorded";
               const errorDigest = entry.error_digest || "none";
               const commandId = entry.command_id || "none";
@@ -834,6 +836,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>command</dt><dd class="mono">' + escapeHtml(commandId) + '</dd>' +
                 '<dt>type</dt><dd>' + escapeHtml(command.type || "unknown") + '</dd>' +
                 '<dt>origin</dt><dd>' + escapeHtml(entry.origin_channel || "unknown") + '</dd>' +
+                '<dt>adapter</dt><dd>' + badge(trace.adapter || "not recorded", trace.adapter_is_authority === false ? "good" : "warn") + '</dd>' +
+                '<dt>runtime</dt><dd>' + escapeHtml(trace.runtime_boundary || "not recorded") + '</dd>' +
+                '<dt>effect</dt><dd>' + escapeHtml(Array.isArray(trace.effects) ? trace.effects.join(", ") : "not recorded") + '</dd>' +
+                '<dt>ApprovalLevel</dt><dd>' + badge(permission.approval_level || "not recorded", permission.final_review_required === true ? "review" : "good") + '</dd>' +
                 '<dt>result digest</dt><dd class="mono">' + escapeHtml(resultDigest) + '</dd>' +
                 '<dt>error digest</dt><dd class="mono">' + escapeHtml(errorDigest) + '</dd>' +
                 '<dt>duration</dt><dd>' + escapeHtml(duration) + '</dd>' +

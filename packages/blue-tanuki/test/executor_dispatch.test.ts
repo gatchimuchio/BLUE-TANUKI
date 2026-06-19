@@ -171,6 +171,19 @@ describe("Executor.executeToolCall - permission envelope", () => {
     expect(fb.status).toBe("success");
     expect(fb.metrics.tool_calls).toBe(1);
     expect(fb.result).toEqual({ echoed: { text: "hi" } });
+    expect(fb.operation_core).toMatchObject({
+      role: "execution_adapter_trace",
+      adapter: "internal_runtime",
+      runtime_boundary: "internal_runtime_adapter",
+      adapter_is_authority: false,
+      adapter_result_used_for_authority: false,
+      executor_trace_used_for_authority: false,
+      permission: {
+        risk: "low",
+        approval_level: "L1_observe",
+        hds_brain_authority_required: true,
+      },
+    });
   });
 
   it("still rejects tools outside allowed_tools before capability checks", async () => {
