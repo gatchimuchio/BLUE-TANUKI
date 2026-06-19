@@ -61,6 +61,7 @@
 - Added the Aotanu Control Center mascot as a read-only runtime-state display with pixelated spritesheet assets and packaged asset inclusion.
 - Added Operation Core projections for Writing / Daily / Developer Operator snapshots and a Control Center Operation Core Plan viewer, preserving HDS-BRAIN authority and adapter-only shell semantics.
 - Bound Writing / Daily / Developer Operator invokes to internal Operation Core request metadata while stripping external `blue_tanuki.operation_core.*` spoofing at the gateway boundary.
+- Added executor-side Operation Core planner output validation so LLM planner JSON must satisfy `OperationPlanSchema` and raw-command planner JSON fails closed without becoming authority.
 
 ## 0.1.0 - 2026-05-06
 

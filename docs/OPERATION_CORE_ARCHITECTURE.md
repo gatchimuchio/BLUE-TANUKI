@@ -220,11 +220,12 @@ LLM / GUI / API 入口は raw command ではなく `OperationRequest` / `Operati
 - Control Center の Writing / Daily / Developer invoke は、Gateway 内部 request として `OperationRequest` metadata を付与する。
 - HDS-BRAIN frame はこの metadata を `operation_core` として記録するが、`used_for_authority=false` / `planner_output_used_for_authority=false` / `ui_projection_used_for_authority=false` を必須にする。
 - 外部 inbound request の `blue_tanuki.operation_core.*` metadata は gateway boundary で削除され、偽装された Operation Core projection は authority path に入らない。
+- Downstream executor は LLM response が Operation Core planner JSON の場合に `OperationPlanSchema` で検証し、成功時のみ `planner_output_used_for_authority=false` の evidence として feedback result に添付する。
+- Downstream executor は JSON planner output に `cmd` / `command` / `raw_command` / `shell_command` / `terminal_command` / `subprocess_command` が含まれる場合、失敗 feedback として fail-closed にする。
 
 未完了:
 
-- AI planner output そのものの `OperationPlanSchema` 検証は未接続。
-- planner output の fail-closed 化と通常 UI からの `tool:*` 互換入力排除は次段階で扱う。
+- 通常 UI からの `tool:*` 互換入力排除は次段階で扱う。
 
 ### Step 4: Adapter Registry
 

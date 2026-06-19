@@ -9,6 +9,7 @@ import type {
 import type { LLMBackend } from "./llm/base.js";
 import type { ToolRegistry } from "./tools/registry.js";
 import type { SessionStore } from "./sessions/types.js";
+import { inspectOperationCorePlannerOutput } from "./operation_core.js";
 
 /**
  * Minimal dispatcher contract used by the Executor for channel_send.
@@ -213,6 +214,19 @@ export class Executor {
       }),
       constraints?.timeout_ms,
     );
+    const plannerInspection = inspectOperationCorePlannerOutput(resp.content);
+    if (plannerInspection.kind === "rejected") {
+      return {
+        command_id: id,
+        status: "failed",
+        error: `Operation Core planner output rejected: ${plannerInspection.rejection.reason}`,
+        result: { operation_core: plannerInspection.rejection },
+        metrics: {
+          duration_ms: Date.now() - start,
+          tokens_used: resp.tokens_used,
+        },
+      };
+    }
 
     // Append on success. We persist the messages that the *current call*
     // contributed (i.e. payload.messages, not the prepended history,
@@ -236,7 +250,9 @@ export class Executor {
     return {
       command_id: id,
       status: "success",
-      result: resp,
+      result: plannerInspection.kind === "valid_plan"
+        ? { ...resp, operation_core: plannerInspection.evidence }
+        : resp,
       metrics: {
         duration_ms: Date.now() - start,
         tokens_used: resp.tokens_used,

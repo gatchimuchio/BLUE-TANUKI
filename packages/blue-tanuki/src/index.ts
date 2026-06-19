@@ -1,6 +1,7 @@
 export * from "./llm/index.js";
 export * from "./tools/index.js";
 export * from "./sessions/index.js";
+export * from "./operation_core.js";
 export {
   Executor,
   createExecutorApprovalAuthority,
