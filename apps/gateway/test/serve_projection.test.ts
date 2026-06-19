@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CompleteHistoryStore } from "@blue-tanuki/hds-brain";
 import {
+  operationCorePlannerHistoryProjection,
   projectApprovalHistoryEntry,
   projectOperationCoreExecutionHistory,
 } from "../src/serve_projection.js";
@@ -67,6 +68,33 @@ describe("Operation Core execution projection", () => {
           hds_brain_authority_required: true,
           evidence_source: ["INTERNAL_STATE"],
         },
+        operation_core_planner: {
+          role: "planner_output_projection",
+          status: "valid_plan",
+          plan_id: "plan-1",
+          request_id: "operation-request:req-1",
+          state: "planned",
+          steps_count: 1,
+          step_summaries: [
+            {
+              step_id: "step-1",
+              operation: "shell.exec",
+              target_kind: "runtime",
+              target_id_digest: "target-digest",
+              effects: ["process_spawn"],
+              adapter: "shell",
+              adapter_is_authority: false,
+              command_generated_by_adapter_only: true,
+              approval_level: "L3_final_review",
+              risk: "high",
+              final_review_required: true,
+            },
+          ],
+          raw_command_is_core_operation: false,
+          planner_output_used_for_authority: false,
+          hds_brain_authority_required: true,
+          evidence_source: ["EXTERNAL_EVIDENCE", "INTERNAL_STATE"],
+        },
         raw_result: "SECRET-RAW-RESULT",
       },
     });
@@ -110,6 +138,13 @@ describe("Operation Core execution projection", () => {
         raw_command_is_core_operation: false,
         executor_trace_used_for_authority: false,
       },
+      planner_output: {
+        role: "planner_output_projection",
+        plan_id: "plan-1",
+        steps_count: 1,
+        raw_command_is_core_operation: false,
+        planner_output_used_for_authority: false,
+      },
       diff: {
         available: false,
         used_for_authority: false,
@@ -124,6 +159,71 @@ describe("Operation Core execution projection", () => {
     expect(text).not.toContain("SECRET-RAW-RESULT");
     expect(text).not.toContain("SECRET-ERROR-DETAIL");
     expect(text).not.toContain("SECRET-CONSTRAINT");
+  });
+
+  it("extracts valid OperationPlan feedback into digest-only planner history projection", () => {
+    const projection = operationCorePlannerHistoryProjection({
+      command_id: "cmd-plan",
+      status: "success",
+      result: {
+        operation_core: {
+          status: "valid_plan",
+          plan: {
+            version: "operation-core.v1",
+            plan_id: "plan-secret-target",
+            request_id: "operation-request:req-plan",
+            state: "planned",
+            steps: [
+              {
+                step_id: "step-1",
+                operation: "review_project",
+                target: {
+                  kind: "workspace",
+                  id: "SECRET-WORKSPACE-PATH",
+                },
+                state: "planned",
+                effects: ["read"],
+                permission: {
+                  risk: "low",
+                  approval_level: "L1_observe",
+                  final_review_required: false,
+                  hds_brain_authority_required: true,
+                  approval_gate_required: true,
+                },
+                adapter: "internal_runtime",
+                adapter_is_authority: false,
+                command_generated_by_adapter_only: false,
+              },
+            ],
+            rollback: { available: false },
+            raw_command_policy: {
+              raw_command_is_core_operation: false,
+              command_generation_location: "not_applicable",
+            },
+            planner_output_used_for_authority: false,
+            hds_brain_authority_required: true,
+          },
+        },
+      },
+      metrics: { duration_ms: 1 },
+    });
+    const text = JSON.stringify(projection);
+
+    expect(projection).toMatchObject({
+      role: "planner_output_projection",
+      plan_id: "plan-secret-target",
+      steps_count: 1,
+      planner_output_used_for_authority: false,
+      step_summaries: [
+        {
+          operation: "review_project",
+          target_kind: "workspace",
+          adapter: "internal_runtime",
+        },
+      ],
+    });
+    expect(text).not.toContain("SECRET-WORKSPACE-PATH");
+    expect(text).toContain("target_id_digest");
   });
 
   it("projects Approval Gate adapter traces as display-only metadata", () => {

@@ -70,6 +70,7 @@
 - Added executor-side Operation Core adapter traces to `ExecuteFeedback` and Control Center execution history projections, showing adapter/runtime/effect/ApprovalLevel metadata as non-authority evidence.
 - Added Approval Gate Operation Core adapter traces to approval history projections so Control Center can show pre-execution adapter/runtime/effect metadata without granting authority.
 - Added pending approval Operation Core adapter traces so Control Center approval decisions show adapter/runtime/effect metadata before execution.
+- Added digest-only Operation Core planner summaries to execution history projections when LLM feedback contains a valid `OperationPlan`.
 
 ## 0.1.0 - 2026-05-06
 

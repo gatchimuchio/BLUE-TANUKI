@@ -94,6 +94,7 @@ import {
   isComposioExecuteCommand,
   isCompleteHistoryKind,
   metadataKeys,
+  operationCorePlannerHistoryProjection,
   projectApprovalGrant,
   projectApprovalHistoryEntry,
   projectCompleteHistoryEntry,
@@ -566,6 +567,7 @@ export async function serve(): Promise<ServeShutdown> {
         error: feedback.error,
         metrics: feedback.metrics,
         operation_core: feedback.operation_core,
+        operation_core_planner: operationCorePlannerHistoryProjection(feedback),
       },
     });
   }

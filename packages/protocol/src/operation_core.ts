@@ -545,6 +545,33 @@ export const OperationCoreExecutionCommandProjectionSchema = z.object({
 }).strict();
 export type OperationCoreExecutionCommandProjection = z.infer<typeof OperationCoreExecutionCommandProjectionSchema>;
 
+export const OperationCorePlannerExecutionProjectionSchema = z.object({
+  role: z.literal("planner_output_projection"),
+  status: z.literal("valid_plan"),
+  plan_id: z.string().min(1).max(200),
+  request_id: z.string().min(1).max(200),
+  state: OperationStateSchema,
+  steps_count: z.number().int().nonnegative(),
+  step_summaries: z.array(z.object({
+    step_id: z.string().min(1).max(200),
+    operation: z.string().min(1).max(160),
+    target_kind: z.string().min(1).max(80),
+    target_id_digest: z.string().min(1).max(200),
+    effects: z.array(OperationEffectSchema).min(1).max(20),
+    adapter: OperationAdapterKindSchema,
+    adapter_is_authority: z.literal(false),
+    command_generated_by_adapter_only: z.boolean(),
+    approval_level: OperationApprovalLevelSchema,
+    risk: OperationRiskSchema,
+    final_review_required: z.boolean(),
+  }).strict()).max(20),
+  raw_command_is_core_operation: z.literal(false),
+  planner_output_used_for_authority: z.literal(false),
+  hds_brain_authority_required: z.literal(true),
+  evidence_source: z.array(OperationEvidenceSourceSchema).min(1),
+}).strict();
+export type OperationCorePlannerExecutionProjection = z.infer<typeof OperationCorePlannerExecutionProjectionSchema>;
+
 export const OperationCoreExecutionGapProjectionSchema = z.object({
   available: z.boolean(),
   reason: z.string().min(1).max(500),
@@ -573,6 +600,7 @@ export const OperationCoreExecutionResultProjectionSchema = z.object({
   }).strict(),
   command: OperationCoreExecutionCommandProjectionSchema,
   execution_trace: OperationCoreExecutorTraceSchema.optional(),
+  planner_output: OperationCorePlannerExecutionProjectionSchema.optional(),
   diff: OperationCoreExecutionGapProjectionSchema,
   rollback: OperationCoreExecutionGapProjectionSchema,
   operation_core: z.object({

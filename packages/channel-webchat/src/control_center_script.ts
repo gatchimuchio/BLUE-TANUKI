@@ -819,6 +819,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const rollback = isObject(entry.rollback) ? entry.rollback : {};
               const op = isObject(entry.operation_core) ? entry.operation_core : {};
               const trace = isObject(entry.execution_trace) ? entry.execution_trace : {};
+              const planner = isObject(entry.planner_output) ? entry.planner_output : {};
               const permission = isObject(trace.permission) ? trace.permission : {};
               const resultDigest = entry.result_digest || "not recorded";
               const errorDigest = entry.error_digest || "none";
@@ -840,6 +841,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>runtime</dt><dd>' + escapeHtml(trace.runtime_boundary || "not recorded") + '</dd>' +
                 '<dt>effect</dt><dd>' + escapeHtml(Array.isArray(trace.effects) ? trace.effects.join(", ") : "not recorded") + '</dd>' +
                 '<dt>ApprovalLevel</dt><dd>' + badge(permission.approval_level || "not recorded", permission.final_review_required === true ? "review" : "good") + '</dd>' +
+                '<dt>plan</dt><dd class="mono">' + escapeHtml(planner.plan_id || "not recorded") + '</dd>' +
+                '<dt>plan steps</dt><dd>' + escapeHtml(typeof planner.steps_count === "number" ? String(planner.steps_count) : "not recorded") + '</dd>' +
                 '<dt>result digest</dt><dd class="mono">' + escapeHtml(resultDigest) + '</dd>' +
                 '<dt>error digest</dt><dd class="mono">' + escapeHtml(errorDigest) + '</dd>' +
                 '<dt>duration</dt><dd>' + escapeHtml(duration) + '</dd>' +

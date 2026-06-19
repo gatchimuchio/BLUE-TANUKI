@@ -14,9 +14,13 @@ import {
   OperationCoreApprovalTraceSchema,
   OperationCoreExecutorTraceSchema,
   OperationCoreExecutionProjectionSchema,
+  OperationCorePlannerExecutionProjectionSchema,
+  OperationPlanSchema,
   type ExecuteCommand,
+  type ExecuteFeedback,
   type OperationCoreApprovalTrace,
   type OperationCoreExecutionProjection,
+  type OperationCorePlannerExecutionProjection,
 } from "@blue-tanuki/protocol";
 
 export function metadataKeys(meta: Record<string, unknown> | undefined): string[] {
@@ -192,12 +196,48 @@ export function projectOperationCoreExecutionHistory(
   });
 }
 
+export function operationCorePlannerHistoryProjection(
+  feedback: ExecuteFeedback,
+): OperationCorePlannerExecutionProjection | undefined {
+  const result = isRecord(feedback.result) ? feedback.result : null;
+  const operationCore = isRecord(result?.operation_core) ? result.operation_core : null;
+  if (!operationCore || operationCore.status !== "valid_plan") return undefined;
+  const plan = OperationPlanSchema.safeParse(operationCore.plan);
+  if (!plan.success) return undefined;
+  return OperationCorePlannerExecutionProjectionSchema.parse({
+    role: "planner_output_projection",
+    status: "valid_plan",
+    plan_id: plan.data.plan_id,
+    request_id: plan.data.request_id,
+    state: plan.data.state,
+    steps_count: plan.data.steps.length,
+    step_summaries: plan.data.steps.slice(0, 20).map((step) => ({
+      step_id: step.step_id,
+      operation: step.operation,
+      target_kind: step.target.kind,
+      target_id_digest: digestString(step.target.id),
+      effects: step.effects,
+      adapter: step.adapter,
+      adapter_is_authority: step.adapter_is_authority,
+      command_generated_by_adapter_only: step.command_generated_by_adapter_only,
+      approval_level: step.permission.approval_level,
+      risk: step.permission.risk,
+      final_review_required: step.permission.final_review_required,
+    })),
+    raw_command_is_core_operation: plan.data.raw_command_policy.raw_command_is_core_operation,
+    planner_output_used_for_authority: plan.data.planner_output_used_for_authority,
+    hds_brain_authority_required: plan.data.hds_brain_authority_required,
+    evidence_source: ["EXTERNAL_EVIDENCE", "INTERNAL_STATE"],
+  });
+}
+
 function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record<string, unknown> {
   const payload = isRecord(entry.payload) ? entry.payload : {};
   const command = isRecord(payload.command) ? payload.command : {};
   const metrics = isRecord(payload.metrics) ? payload.metrics : {};
   const error = stringValue(payload.error);
   const executionTrace = projectOperationCoreExecutorTrace(payload.operation_core);
+  const plannerOutput = projectOperationCorePlannerExecutionProjection(payload.operation_core_planner);
   return {
     index: entry.index,
     request_id: entry.request_id,
@@ -218,6 +258,7 @@ function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record
     },
     command: projectOperationCoreCommandDescriptor(command),
     ...(executionTrace ? { execution_trace: executionTrace } : {}),
+    ...(plannerOutput ? { planner_output: plannerOutput } : {}),
     diff: {
       available: false,
       reason: "OperationDiff is not recorded for this execution yet",
@@ -238,6 +279,13 @@ function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record
       evidence_source: ["INTERNAL_STATE"],
     },
   };
+}
+
+function projectOperationCorePlannerExecutionProjection(
+  value: unknown,
+): OperationCorePlannerExecutionProjection | undefined {
+  const parsed = OperationCorePlannerExecutionProjectionSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function projectOperationCoreExecutorTrace(value: unknown): unknown | undefined {
