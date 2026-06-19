@@ -145,6 +145,15 @@ function main(): void {
   const windowsWorkflow = read(".github/workflows/ci.yml");
   requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "windows-product");
   requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "pnpm validate:product -- --phase P3");
+  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "pnpm validate:release-hardening");
+  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/checkout@v7");
+  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/setup-node@v6");
+  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "pnpm/action-setup@v6");
+  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/upload-artifact@v7");
+  requireNotIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/checkout@v4");
+  requireNotIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/setup-node@v4");
+  requireNotIncludes(".github/workflows/ci.yml", windowsWorkflow, "pnpm/action-setup@v4");
+  requireNotIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/upload-artifact@v4");
   requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "Upload Windows product evidence");
   requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "if: always()");
   requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "validate-product-windows-evidence");
@@ -342,6 +351,7 @@ function main(): void {
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "requires_node_pnpm_git_from_user: false");
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "requires_manual_nested_extraction: false");
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "requires_source_build: false");
+  requireIncludes("scripts/package_product_installers.ts", productInstallers, "unsigned_installer: true");
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "signed_native_installer: false");
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "BlueTanukiSetup-${version}-windows-x64.cmd");
   requireIncludes("scripts/package_product_installers.ts", productInstallers, "BlueTanukiSetup-${version}-linux-x64.run");
@@ -526,8 +536,10 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/smoke_unix_installed.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/package_product_installers.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/verify_product_installers.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/release_hardening_gate.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "tooling/windows/assert_windows_oneclick_artifact.py");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "docs/WINDOWS_INSTALLER_GUIDE.md");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "docs/RELEASE_HARDENING.md");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"install/installer\"");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, ".sha256");
@@ -562,6 +574,7 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "EXTRACTED_RELEASE_COMMANDS");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "pnpm\", \"run\", \"doctor");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "validate:repo-health");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "validate:release-hardening");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "tar");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/CHANNEL_PROMOTION_GATE.md");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/phase11-s11-channel-first-party-promotion.md");
@@ -583,8 +596,10 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "install/windows/product/BlueTanukiSetup.ps1");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/verify_windows_package.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/verify_unix_package.ts");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/release_hardening_gate.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "tooling/windows/assert_windows_oneclick_artifact.py");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/WINDOWS_PACKAGING_AUDIT.md");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/RELEASE_HARDENING.md");
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"install/installer\"");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "isForbiddenFileName");
@@ -619,6 +634,34 @@ function main(): void {
     runbook,
     "Distribution readiness gate",
   );
+  requireIncludes("docs/UPDATE_ROLLBACK_RUNBOOK.md", runbook, "validate:release-hardening");
+  requireIncludes("docs/UPDATE_ROLLBACK_RUNBOOK.md", runbook, "runtime_auto_apply_available=false");
+
+  const releaseHardening = read("docs/RELEASE_HARDENING.md");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "CONFIG");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "EXTERNAL_EVIDENCE");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "blocked_missing_credentials");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "manual_update_only");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "runtime_auto_apply_available=false");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "--require-signing");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "actions/checkout@v7");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "actions/setup-node@v6");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "pnpm/action-setup@v6");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "actions/upload-artifact@v7");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "BLUE_TANUKI_WINDOWS_SIGNING_CERT_PFX");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "APPLE_NOTARIZATION_TEAM_ID");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "BLUE_TANUKI_LINUX_GPG_KEY_ID");
+
+  const releaseHardeningGate = read("scripts/release_hardening_gate.ts");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "ci_node20_deprecated_actions_present");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "blocked_missing_credentials");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "manual_update_only");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "runtime_auto_apply_available: false");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "--require-signing");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "actions/checkout");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "actions/setup-node");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "pnpm/action-setup");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "actions/upload-artifact");
 
   const phase10s3 = read("docs/phase10-s3-distribution-ux-hardening.md");
   requireIncludes(
@@ -653,6 +696,7 @@ function main(): void {
   requireIncludes("package.json", packageJson, "\"smoke:linux-installed\"");
   requireIncludes("package.json", packageJson, "\"smoke:macos-installed\"");
   requireIncludes("package.json", packageJson, "\"validate:repo-health\"");
+  requireIncludes("package.json", packageJson, "\"validate:release-hardening\"");
   requireIncludes("package.json", packageJson, "\"validate:channels\"");
   requireIncludes("package.json", packageJson, "\"validate:ga\"");
   requireIncludes("package.json", packageJson, "\"plugin:review\"");
@@ -664,6 +708,7 @@ function main(): void {
   requireIncludes("docs/INDEX.md", docsIndex, "PLUGIN_REVIEW_GATE.md");
   requireIncludes("docs/INDEX.md", docsIndex, "INSTALLER_GUIDE.md");
   requireIncludes("docs/INDEX.md", docsIndex, "RESIDENT_APP_GUIDE.md");
+  requireIncludes("docs/INDEX.md", docsIndex, "RELEASE_HARDENING.md");
   requireIncludes("docs/INDEX.md", docsIndex, "phase11-s9-installer-setup-ux.md");
   requireIncludes("docs/INDEX.md", docsIndex, "phase11-s10-resident-application-integration.md");
   requireIncludes("docs/INDEX.md", docsIndex, "phase11-s11-channel-first-party-promotion.md");
@@ -765,6 +810,7 @@ function main(): void {
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm test");
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm docs:check");
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:packaging");
+  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:release-hardening");
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:channels");
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm plugin:review");
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:ga");

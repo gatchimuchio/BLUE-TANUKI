@@ -9,6 +9,14 @@ uninstall/purge guidance, and release bundle checks remain present. Treat a
 `distribution_readiness` error as a release blocker. Fix the listed docs or
 scripts, then rerun `pnpm run doctor` and `pnpm validate:packaging`.
 
+Run `pnpm validate:release-hardening` for release-path work. It verifies that
+CI no longer uses Node.js 20-deprecated action majors, that the signed native
+installer boundary remains explicit, and that updater state remains
+`manual_update_only` with `runtime_auto_apply_available=false`. For a future
+signed release, `pnpm validate:release-hardening -- --require-signing` must
+fail closed until all signing and notarization/GPG credentials are present and
+separate signing evidence is produced.
+
 The Phase 11-S9 guided first-run installer is part of this gate. It is a
 portable setup wrapper, not a signed native installer and not an automatic
 updater. If `pnpm installer:run` fails, keep the existing env file and `.bak`

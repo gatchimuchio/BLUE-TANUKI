@@ -13,6 +13,7 @@
     "test": "node node_modules/vitest/vitest.mjs run && node scripts/assert_test_minimums.mjs",
     "docs:check": "node scripts/check_docs.mjs",
     "validate:repo-health": "tsx scripts/repo_health_gate.ts",
+    "validate:release-hardening": "tsx scripts/release_hardening_gate.ts",
     "validate:channels": "tsx scripts/channel_promotion_gate.ts",
     "validate:ga": "tsx scripts/ga_promotion_gate.ts",
     "validate:product": "tsx scripts/validate_product.ts",

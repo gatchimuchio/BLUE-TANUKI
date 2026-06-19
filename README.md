@@ -127,6 +127,7 @@ pnpm package:macos
 pnpm package:macos:verify
 pnpm package:installers
 pnpm package:installers:verify
+pnpm validate:release-hardening
 ```
 
 This produces unsigned payload/recovery archives plus single-file normal user
@@ -137,6 +138,8 @@ under the platform user data location. These are not signed native installer
 packages yet.
 
 See [docs/WINDOWS_INSTALLER_GUIDE.md](docs/WINDOWS_INSTALLER_GUIDE.md).
+See [docs/RELEASE_HARDENING.md](docs/RELEASE_HARDENING.md) for the CI action,
+signing-prerequisite, and manual-update hardening gate.
 
 ### Source/dev run
 
@@ -319,6 +322,7 @@ The authority core never consumes downstream session history to make decisions. 
 * [docs/CREDENTIAL_READINESS_MATRIX.md](docs/CREDENTIAL_READINESS_MATRIX.md) — credential requirements and safe skips
 * [docs/PLUGIN_REVIEW_GATE.md](docs/PLUGIN_REVIEW_GATE.md) — Layer B review gate
 * [docs/UPDATE_ROLLBACK_RUNBOOK.md](docs/UPDATE_ROLLBACK_RUNBOOK.md) — update, rollback, and recovery path
+* [docs/RELEASE_HARDENING.md](docs/RELEASE_HARDENING.md) — CI action, signing, and updater release gate
 * [docs/WINDOWS_INSTALLER_GUIDE.md](docs/WINDOWS_INSTALLER_GUIDE.md) — unsigned Windows installer package
 * [docs/WINDOWS_FIRST_RUN.md](docs/WINDOWS_FIRST_RUN.md) — installed Windows first run
 * [docs/WINDOWS_EVIDENCE_PACK.md](docs/WINDOWS_EVIDENCE_PACK.md) — Windows installed-app evidence markers
@@ -344,7 +348,7 @@ The authority core never consumes downstream session history to make decisions. 
 
 ## Release Boundary
 
-Release archives are source bundles, not standalone binaries. The Windows installer package is a separate unsigned zip-delivered installer package with a bundled Windows Node runtime. It is not a signed MSI/EXE yet. Release artifacts intentionally exclude local `.env` files, audit/session data, and secret-like backups.
+Release archives are source bundles, not standalone binaries. The OS-specific single-file installers are unsigned portable installer packages with bundled runtime payloads. They are not signed MSI/EXE/DMG/DEB/RPM artifacts yet. `pnpm validate:release-hardening` blocks stale CI action majors, records `manual_update_only`, and fails closed under `--require-signing` until signing credentials and notarization/GPG evidence exist. Release artifacts intentionally exclude local `.env` files, audit/session data, and secret-like backups.
 
 ---
 

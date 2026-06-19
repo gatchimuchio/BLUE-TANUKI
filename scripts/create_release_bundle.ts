@@ -107,6 +107,7 @@ const REQUIRED_PATHS = [
   "docs/WINDOWS_FIRST_RUN.md",
   "docs/WINDOWS_PACKAGING_AUDIT.md",
   "docs/WINDOWS_UNINSTALL.md",
+  "docs/RELEASE_HARDENING.md",
   "scripts/package_windows.ts",
   "scripts/verify_windows_package.ts",
   "scripts/smoke_windows_installed.ts",
@@ -115,6 +116,7 @@ const REQUIRED_PATHS = [
   "scripts/smoke_unix_installed.ts",
   "scripts/package_product_installers.ts",
   "scripts/verify_product_installers.ts",
+  "scripts/release_hardening_gate.ts",
   "tooling/windows/assert_windows_oneclick_artifact.py",
 ] as const;
 

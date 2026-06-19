@@ -81,6 +81,10 @@ The Windows package is installer-first for a normal Windows user:
 
 This does not build signed native packages yet. It is not a signed MSI/EXE,
 not an automatic updater, and not a GA public-claim artifact.
+Release hardening is tracked by `pnpm validate:release-hardening`; a future
+signed Windows release must also satisfy
+`pnpm validate:release-hardening -- --require-signing` and produce separate
+signing evidence.
 
 ## Unsigned Package / SmartScreen / SHA-256
 

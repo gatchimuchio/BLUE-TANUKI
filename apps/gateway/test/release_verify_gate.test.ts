@@ -8,7 +8,7 @@ import {
 } from "../../../scripts/verify_release_bundle.ts";
 
 describe("release bundle verification", () => {
-  it("commissions an extracted bundle with install, build, doctor, and repo-health", () => {
+  it("commissions an extracted bundle with install, build, doctor, repo-health, and release hardening", () => {
     const commands = EXTRACTED_RELEASE_COMMANDS.map((step) =>
       [step.command, ...step.args].join(" "),
     );
@@ -18,6 +18,7 @@ describe("release bundle verification", () => {
       "corepack pnpm build",
       "corepack pnpm run doctor",
       "corepack pnpm validate:repo-health",
+      "corepack pnpm validate:release-hardening",
     ]);
     expect(EXTRACTED_RELEASE_COMMANDS[2]?.env).toMatchObject({
       WEBCHAT_TOKEN: expect.any(String),

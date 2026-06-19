@@ -54,6 +54,7 @@ export const EXTRACTED_RELEASE_COMMANDS: readonly ExtractedReleaseCommand[] = [
     },
   },
   { command: "corepack", args: ["pnpm", "validate:repo-health"] },
+  { command: "corepack", args: ["pnpm", "validate:release-hardening"] },
 ] as const;
 
 const REQUIRED_ARCHIVE_PATHS = [
@@ -107,6 +108,7 @@ const REQUIRED_ARCHIVE_PATHS = [
   "docs/WINDOWS_FIRST_RUN.md",
   "docs/WINDOWS_PACKAGING_AUDIT.md",
   "docs/WINDOWS_UNINSTALL.md",
+  "docs/RELEASE_HARDENING.md",
   "scripts/package_windows.ts",
   "scripts/verify_windows_package.ts",
   "scripts/smoke_windows_installed.ts",
@@ -115,6 +117,7 @@ const REQUIRED_ARCHIVE_PATHS = [
   "scripts/smoke_unix_installed.ts",
   "scripts/package_product_installers.ts",
   "scripts/verify_product_installers.ts",
+  "scripts/release_hardening_gate.ts",
   "tooling/windows/assert_windows_oneclick_artifact.py",
 ] as const;
 

@@ -24,11 +24,11 @@ jobs:
       BLUE_TANUKI_AUDIT_DIR: .blue-tanuki/audit
       BLUE_TANUKI_SESSION_DIR: .blue-tanuki/sessions
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
           version: 9.12.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22.14.0"
           cache: pnpm
@@ -39,6 +39,7 @@ jobs:
       - run: pnpm docs:check
       - run: pnpm validate:repo-health
       - run: pnpm validate:packaging
+      - run: pnpm validate:release-hardening
       - run: pnpm validate:channels
       - run: pnpm plugin:review -- --package packages/channel-slack --bundled
       - run: pnpm validate:ga
@@ -62,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: verify
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build -t blue-tanuki:ci .
 
   linux-product:
@@ -71,11 +72,11 @@ jobs:
     env:
       BLUE_TANUKI_VALIDATE_TIMEOUT_MS: "300000"
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
           version: 9.12.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22.14.0"
           cache: pnpm
@@ -85,7 +86,7 @@ jobs:
         run: pnpm validate:product -- --phase P3 --evidence .codex-tmp/validate-product-linux
       - name: Upload Linux product evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: validate-product-linux-evidence
           path: .codex-tmp/validate-product-linux
@@ -97,11 +98,11 @@ jobs:
     env:
       BLUE_TANUKI_VALIDATE_TIMEOUT_MS: "300000"
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
           version: 9.12.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22.14.0"
           cache: pnpm
@@ -111,7 +112,7 @@ jobs:
         run: pnpm validate:product -- --phase P3 --evidence .codex-tmp/validate-product-macos
       - name: Upload macOS product evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: validate-product-macos-evidence
           path: .codex-tmp/validate-product-macos
@@ -123,11 +124,11 @@ jobs:
     env:
       BLUE_TANUKI_VALIDATE_TIMEOUT_MS: "300000"
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
           version: 9.12.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22.14.0"
           cache: pnpm
@@ -137,7 +138,7 @@ jobs:
         run: pnpm validate:product -- --phase P3 --evidence .codex-tmp/validate-product-macos-intel
       - name: Upload macOS Intel product evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: validate-product-macos-intel-evidence
           path: .codex-tmp/validate-product-macos-intel
@@ -149,11 +150,11 @@ jobs:
     env:
       BLUE_TANUKI_VALIDATE_TIMEOUT_MS: "300000"
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
           version: 9.12.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22.14.0"
           cache: pnpm
@@ -173,7 +174,7 @@ jobs:
         run: pnpm validate:product -- --phase P3 --evidence .codex-tmp/validate-product-windows
       - name: Upload Windows product evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: validate-product-windows-evidence
           path: .codex-tmp/validate-product-windows

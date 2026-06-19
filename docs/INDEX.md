@@ -19,6 +19,7 @@
 - [v1.0 Post-RC Closure Review](v1.0-post-rc-closure-review.md) - post-RC bundle, smoke, live-smoke, preview-promotion, installer, and updater decisions
 - [v1.0 GA Promotion Review](v1.0-ga-promotion-review.md) - GA bar evidence, pre-GO state, and owner decision boundary
 - [P13 Owner GO Readiness](P13_OWNER_GO_READINESS.md) - product-release decision boundary and pre-GO blockers
+- [Release Hardening Gate](RELEASE_HARDENING.md) - CI action, signing-prerequisite, and manual-update release gate
 
 ## First-Party Surfaces
 
@@ -102,6 +103,7 @@
 - [Channel Readiness Matrix](CHANNEL_READINESS_MATRIX.md)
 - [Channel Promotion Gate](CHANNEL_PROMOTION_GATE.md)
 - [Update / Rollback / Recovery Runbook](UPDATE_ROLLBACK_RUNBOOK.md)
+- [Release Hardening Gate](RELEASE_HARDENING.md)
 - [Known Environment Failures](known-environment-failures.md)
 - [Doctor Output](doctor-output.md)
 - [Validate Product](VALIDATE_PRODUCT.md)
@@ -114,6 +116,7 @@
 ## Distribution
 
 - [Portable Installer Guide](../install/README.md)
+- [Release Hardening Gate](RELEASE_HARDENING.md)
 - [Windows Installer Guide](WINDOWS_INSTALLER_GUIDE.md)
 - [Windows Evidence Pack](WINDOWS_EVIDENCE_PACK.md)
 - [Windows Packaging Audit](WINDOWS_PACKAGING_AUDIT.md)
