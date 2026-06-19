@@ -4,6 +4,7 @@ import {
   Executor,
   createExecutorApprovalAuthority,
 } from "../src/executor.js";
+import { buildOperationCoreApprovalTrace } from "../src/operation_core.js";
 import { MemorySessionStore } from "../src/sessions/index.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { LLMBackend, LLMRequest, LLMResponse } from "../src/llm/base.js";
@@ -24,6 +25,22 @@ function llmCmd(content: string, session_id?: string): ExecuteCommand {
     payload: {
       messages: [{ role: "user", content }],
       ...(session_id ? { session_id } : {}),
+    },
+    upstream_decision: stubUpstream,
+  };
+}
+
+function shellCmd(): ExecuteCommand {
+  return {
+    id: "cmd-shell",
+    type: "tool_call",
+    payload: {
+      tool_name: "shell.exec",
+      arguments: { cmd: "pwd", args: [] },
+    },
+    constraints: {
+      allowed_tools: ["shell.exec"],
+      allowed_capabilities: ["tool:shell.exec", "shell:exec"],
     },
     upstream_decision: stubUpstream,
   };
@@ -240,5 +257,26 @@ describe("Executor Operation Core planner output boundary", () => {
 
     expect(feedback.status).toBe("failed");
     expect(await store.getMessages("webchat:owner")).toEqual([]);
+  });
+
+  it("builds Approval Gate adapter traces without making adapters authority", () => {
+    const trace = buildOperationCoreApprovalTrace({
+      command: shellCmd(),
+      operation: "tool.shell.exec",
+      state: "awaiting_permission",
+      risk: "high",
+      approval_level: "L3_final_review",
+      final_review_required: true,
+    });
+
+    expect(trace).toMatchObject({
+      role: "approval_gate_trace",
+      adapter: "shell",
+      runtime_boundary: "shell_adapter",
+      effects: ["process_spawn"],
+      adapter_is_authority: false,
+      raw_command_is_core_operation: false,
+      approval_trace_used_for_authority: false,
+    });
   });
 });

@@ -11,9 +11,11 @@ import type {
   WebChatHistoryEntry,
 } from "@blue-tanuki/channel-webchat";
 import {
+  OperationCoreApprovalTraceSchema,
   OperationCoreExecutorTraceSchema,
   OperationCoreExecutionProjectionSchema,
   type ExecuteCommand,
+  type OperationCoreApprovalTrace,
   type OperationCoreExecutionProjection,
 } from "@blue-tanuki/protocol";
 
@@ -296,6 +298,7 @@ export function projectApprovalGrant(grant: ApprovalGrant): WebChatApprovalGrant
 
 export function projectApprovalHistoryEntry(entry: CompleteHistoryEntry): WebChatApprovalHistoryItem {
   const payload = isRecord(entry.payload) ? entry.payload : {};
+  const operationCore = projectOperationCoreApprovalTrace(payload.operation_core);
   return {
     index: entry.index,
     event: stringValue(payload.event) ?? "approval_history",
@@ -315,7 +318,13 @@ export function projectApprovalHistoryEntry(entry: CompleteHistoryEntry): WebCha
     timestamp: entry.timestamp,
     payload_digest: entry.payload_digest,
     used_for_authority: false,
+    ...(operationCore ? { operation_core: operationCore } : {}),
   };
+}
+
+function projectOperationCoreApprovalTrace(value: unknown): OperationCoreApprovalTrace | undefined {
+  const parsed = OperationCoreApprovalTraceSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 export function humanizeDecision(

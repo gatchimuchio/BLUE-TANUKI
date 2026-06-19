@@ -1,4 +1,5 @@
 import type { Clock } from "@blue-tanuki/channel-base";
+import type { OperationCoreApprovalTrace } from "@blue-tanuki/protocol";
 import type { TicketStore } from "./ticket_store.js";
 import type { ResumeApprovalTokenStore } from "./resume_approval_token_store.js";
 
@@ -110,6 +111,7 @@ export interface WebChatApprovalHistoryItem {
   timestamp: number;
   payload_digest: string;
   used_for_authority: false;
+  operation_core?: OperationCoreApprovalTrace;
 }
 
 export interface WebChatEmergencyStopSnapshot {

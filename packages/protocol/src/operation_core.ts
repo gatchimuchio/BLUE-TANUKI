@@ -497,6 +497,26 @@ export const OperationCoreExecutorTraceSchema = z.object({
 }).strict();
 export type OperationCoreExecutorTrace = z.infer<typeof OperationCoreExecutorTraceSchema>;
 
+export const OperationCoreApprovalTraceSchema = z.object({
+  version: z.literal("operation-core.v1"),
+  role: z.literal("approval_gate_trace"),
+  operation: z.string().min(1).max(160),
+  state: z.enum(["awaiting_permission", "approved", "failed", "suspended"]),
+  target: OperationTargetSchema,
+  effects: z.array(OperationEffectSchema).min(1).max(20),
+  permission: OperationPermissionSchema,
+  adapter: OperationAdapterKindSchema,
+  runtime_boundary: OperationAdapterBoundarySchema,
+  adapter_is_authority: z.literal(false),
+  command_generated_by_adapter_only: z.boolean(),
+  raw_command_is_core_operation: z.literal(false),
+  adapter_result_used_for_authority: z.literal(false),
+  approval_trace_used_for_authority: z.literal(false),
+  hds_brain_authority_required: z.literal(true),
+  evidence_source: z.array(OperationEvidenceSourceSchema).min(1),
+}).strict();
+export type OperationCoreApprovalTrace = z.infer<typeof OperationCoreApprovalTraceSchema>;
+
 export const OperationCoreExecutionCommandProjectionSchema = z.object({
   type: z.string().min(1).max(80),
   operation: z.string().min(1).max(200),

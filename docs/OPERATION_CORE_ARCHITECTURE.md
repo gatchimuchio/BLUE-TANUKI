@@ -254,6 +254,7 @@ Shell / Windows / Linux / macOS / Browser / Composio / internal runtime を adap
 - Control Center の Operation Core Plan viewer は adapter registry、default runtime、registry match / mismatch を表示し、ShellAdapter が default runtime ではないことを operator に見せる。
 - Executor feedback は `operation_core` execution adapter trace を任意フィールドとして持ち、実行済み command の adapter、runtime boundary、effect、ApprovalLevel、risk を `executor_trace_used_for_authority=false` の内部状態 evidence として記録する。
 - Gateway complete history の `execution_history` は executor trace を保存し、Control Center execution projection は raw payload を出さずに adapter trace だけを表示する。
+- Gateway complete history の `approval_history` は Approval Gate trace を保存し、承認前後の adapter、runtime boundary、effect、ApprovalLevel、risk を `approval_trace_used_for_authority=false` の内部状態 evidence として表示する。
 
 未完了:
 
@@ -278,7 +279,7 @@ adapter registry と default runtime は Control Center で表示済み。runtim
 - Gateway runtime snapshot は complete history の `execution_history` から `operation_core_execution` を投影する。
 - 投影は `status`、`result_digest`、`error_digest`、duration、command descriptor、entry hash のみを表示し、raw payload / raw result / raw error は出さない。
 - `operation_core_execution` は `OperationCoreExecutionProjectionSchema` で検証され、authority claim や raw payload exposure claim を拒否する。
-- Control Center は Execution results、Latest result、adapter、runtime boundary、effect、ApprovalLevel、diff availability、rollback availability を Operation Core Plan viewer に表示する。
+- Control Center は Approval history / Execution results に adapter、runtime boundary、effect、ApprovalLevel、diff availability、rollback availability を表示する。
 - 現時点の diff / rollback は「not recorded」として明示され、`used_for_authority=false` / `adapter_result_used_for_authority=false` の display-only evidence に固定される。
 
 ### Step 6: Compatibility De-emphasis

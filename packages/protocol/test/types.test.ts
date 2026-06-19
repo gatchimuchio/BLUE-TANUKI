@@ -4,6 +4,7 @@ import {
   ExecuteFeedbackSchema,
   inspectOperationPlanAdapterRegistry,
   OPERATION_ADAPTER_REGISTRY,
+  OperationCoreApprovalTraceSchema,
   OperationCoreExecutionProjectionSchema,
   OperationCoreProjectionSchema,
   OperationExecutionResultSchema,
@@ -131,6 +132,72 @@ describe("Operation Core schemas", () => {
         hds_brain_authority_required: true,
         evidence_source: ["INTERNAL_STATE"],
       },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts display-only Approval Gate Operation Core traces", () => {
+    const parsed = OperationCoreApprovalTraceSchema.parse({
+      version: "operation-core.v1",
+      role: "approval_gate_trace",
+      operation: "tool.shell.exec",
+      state: "awaiting_permission",
+      target: {
+        kind: "runtime",
+        id: "tool:shell.exec",
+        scope: "shell_adapter",
+      },
+      effects: ["process_spawn"],
+      permission: {
+        risk: "high",
+        approval_level: "L3_final_review",
+        final_review_required: true,
+        hds_brain_authority_required: true,
+        approval_gate_required: true,
+      },
+      adapter: "shell",
+      runtime_boundary: "shell_adapter",
+      adapter_is_authority: false,
+      command_generated_by_adapter_only: true,
+      raw_command_is_core_operation: false,
+      adapter_result_used_for_authority: false,
+      approval_trace_used_for_authority: false,
+      hds_brain_authority_required: true,
+      evidence_source: ["INTERNAL_STATE"],
+    });
+
+    expect(parsed.approval_trace_used_for_authority).toBe(false);
+    expect(parsed.adapter).toBe("shell");
+  });
+
+  it("rejects Approval Gate traces that claim authority", () => {
+    const result = OperationCoreApprovalTraceSchema.safeParse({
+      version: "operation-core.v1",
+      role: "approval_gate_trace",
+      operation: "tool.shell.exec",
+      state: "awaiting_permission",
+      target: {
+        kind: "runtime",
+        id: "tool:shell.exec",
+      },
+      effects: ["process_spawn"],
+      permission: {
+        risk: "high",
+        approval_level: "L3_final_review",
+        final_review_required: true,
+        hds_brain_authority_required: true,
+        approval_gate_required: true,
+      },
+      adapter: "shell",
+      runtime_boundary: "shell_adapter",
+      adapter_is_authority: false,
+      command_generated_by_adapter_only: true,
+      raw_command_is_core_operation: false,
+      adapter_result_used_for_authority: false,
+      approval_trace_used_for_authority: true,
+      hds_brain_authority_required: true,
+      evidence_source: ["INTERNAL_STATE"],
     });
 
     expect(result.success).toBe(false);

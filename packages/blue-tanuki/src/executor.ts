@@ -1,22 +1,18 @@
-import {
-  OPERATION_ADAPTER_REGISTRY,
-  OperationCoreExecutorTraceSchema,
-  type OperationAdapterKind,
-  type OperationCoreExecutorTrace,
-  type OperationEffect,
-  type ExecuteCommand,
-  type ExecuteFeedback,
-  type LLMCallPayload,
-  type ToolCallPayload,
-  type ChannelSendPayload,
-  type ToolCapability,
-  type OperationPermission,
-  type OperationTarget,
+import type {
+  ExecuteCommand,
+  ExecuteFeedback,
+  LLMCallPayload,
+  ToolCallPayload,
+  ChannelSendPayload,
+  ToolCapability,
 } from "@blue-tanuki/protocol";
 import type { LLMBackend } from "./llm/base.js";
 import type { ToolRegistry } from "./tools/registry.js";
 import type { SessionStore } from "./sessions/types.js";
-import { inspectOperationCorePlannerOutput } from "./operation_core.js";
+import {
+  buildOperationCoreExecutorTrace,
+  inspectOperationCorePlannerOutput,
+} from "./operation_core.js";
 
 /**
  * Minimal dispatcher contract used by the Executor for channel_send.
@@ -432,150 +428,6 @@ function attachOperationCoreTrace(
     ...feedback,
     operation_core: buildOperationCoreExecutorTrace(command, feedback.status, proof),
   };
-}
-
-function buildOperationCoreExecutorTrace(
-  command: ExecuteCommand,
-  status: ExecuteFeedback["status"],
-  proof: ExecutorApprovalProof,
-): OperationCoreExecutorTrace {
-  const adapter = operationAdapterForCommand(command);
-  const descriptor = OPERATION_ADAPTER_REGISTRY[adapter];
-  return OperationCoreExecutorTraceSchema.parse({
-    version: "operation-core.v1",
-    role: "execution_adapter_trace",
-    operation: bounded(proof.operation || commandOperationLabel(command), 160),
-    state: operationStateForStatus(status),
-    target: operationTargetForCommand(command),
-    effects: operationEffectsForCommand(command),
-    permission: operationPermissionForProof(proof),
-    adapter,
-    runtime_boundary: descriptor.runtime_boundary,
-    adapter_is_authority: false,
-    command_generated_by_adapter_only: descriptor.command_generation_location === "execution_adapter_only",
-    raw_command_is_core_operation: false,
-    adapter_result_used_for_authority: false,
-    executor_trace_used_for_authority: false,
-    hds_brain_authority_required: true,
-    evidence_source: ["INTERNAL_STATE"],
-  });
-}
-
-function operationStateForStatus(status: ExecuteFeedback["status"]): OperationCoreExecutorTrace["state"] {
-  if (status === "success") return "succeeded";
-  if (status === "suspended") return "suspended";
-  return "failed";
-}
-
-function operationPermissionForProof(proof: ExecutorApprovalProof): OperationPermission {
-  return {
-    risk: proof.risk,
-    approval_level: proof.final_review_required || proof.risk === "high"
-      ? "L3_final_review"
-      : proof.risk === "medium"
-        ? "L2_operate"
-        : "L1_observe",
-    final_review_required: proof.final_review_required,
-    hds_brain_authority_required: true,
-    approval_gate_required: true,
-  };
-}
-
-function operationAdapterForCommand(command: ExecuteCommand): OperationAdapterKind {
-  if (command.type === "noop") return "none";
-  if (command.type === "llm_call") return "external_api";
-  if (command.type === "channel_send") return "external_api";
-  if (command.type !== "tool_call") return "internal_runtime";
-
-  const tool = command.payload.tool_name;
-  if (tool === "shell.exec") return "shell";
-  if (tool === "browser.automation" || tool === "browser.snapshot") return "browser";
-  if (tool === "composio.execute") return "composio";
-  if (tool.startsWith("schedule.")) return "internal_runtime";
-  if (
-    tool === "web.search" ||
-    tool.startsWith("github.") ||
-    tool.startsWith("google.") ||
-    tool.startsWith("gmail.")
-  ) {
-    return "external_api";
-  }
-  return "internal_runtime";
-}
-
-function operationEffectsForCommand(command: ExecuteCommand): OperationEffect[] {
-  if (command.type === "noop") return ["observe"];
-  if (command.type === "llm_call") return ["external_send"];
-  if (command.type === "channel_send") return ["external_send"];
-  if (command.type !== "tool_call") return ["observe"];
-
-  const tool = command.payload.tool_name;
-  if (tool === "shell.exec") return ["process_spawn"];
-  if (tool === "browser.automation") return ["browser_action"];
-  if (tool === "browser.snapshot") return ["read"];
-  if (tool === "composio.execute") return ["external_send"];
-  if (tool.startsWith("schedule.")) return ["schedule_change"];
-  if (
-    tool.endsWith(".write") ||
-    tool === "github.write" ||
-    tool === "gmail.write" ||
-    tool === "google.calendar.write" ||
-    tool === "google.drive.write"
-  ) {
-    return ["external_send", "write"];
-  }
-  if (
-    tool === "web.search" ||
-    tool.startsWith("github.") ||
-    tool.startsWith("google.") ||
-    tool.startsWith("gmail.")
-  ) {
-    return ["external_send", "read"];
-  }
-  return ["observe"];
-}
-
-function operationTargetForCommand(command: ExecuteCommand): OperationTarget {
-  if (command.type === "llm_call") {
-    return {
-      kind: "external_service",
-      id: bounded(command.payload.backend_hint ?? command.payload.model ?? "llm_backend"),
-      scope: "llm_backend",
-    };
-  }
-  if (command.type === "channel_send") {
-    return {
-      kind: "external_service",
-      id: bounded(`channel:${command.payload.channel}`),
-      display_name: bounded(command.payload.channel),
-      scope: "channel_send",
-    };
-  }
-  if (command.type === "tool_call") {
-    const tool = command.payload.tool_name;
-    if (tool === "shell.exec") return { kind: "runtime", id: "tool:shell.exec", scope: "shell_adapter" };
-    if (tool === "browser.automation" || tool === "browser.snapshot") {
-      return { kind: "browser", id: bounded(`tool:${tool}`), scope: "browser_adapter" };
-    }
-    if (tool.startsWith("schedule.")) return { kind: "service", id: "runtime_schedule", scope: "internal_runtime" };
-    if (
-      tool === "composio.execute" ||
-      tool === "web.search" ||
-      tool.startsWith("github.") ||
-      tool.startsWith("google.") ||
-      tool.startsWith("gmail.")
-    ) {
-      return { kind: "external_service", id: bounded(`tool:${tool}`), scope: "external_api_adapter" };
-    }
-    return { kind: "runtime", id: bounded(`tool:${tool}`), scope: "internal_runtime" };
-  }
-  return { kind: "runtime", id: "noop", scope: "no_adapter" };
-}
-
-function bounded(value: string, max = 300): string {
-  const trimmed = value.trim();
-  if (!trimmed) return "unknown";
-  return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
 }
 
 function approvalProofFromCommand(command: ExecuteCommand): ApprovedCommandRecord | null {

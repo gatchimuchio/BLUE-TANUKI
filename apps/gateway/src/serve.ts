@@ -16,6 +16,7 @@ import type {
   PeriodicVerificationTrigger,
 } from "@blue-tanuki/hds-brain";
 import {
+  buildOperationCoreApprovalTrace,
   Executor,
   ToolRegistry,
   createExecutorApprovalAuthority,
@@ -408,9 +409,29 @@ export async function serve(): Promise<ServeShutdown> {
         reason: evaluation?.reason ?? null,
         operation: evaluation?.context.operation ?? commandOperation(cmd),
         origin_channel: origin.channel,
+        operation_core: evaluation
+          ? buildOperationCoreApprovalTrace({
+              command: cmd,
+              operation: evaluation.context.operation,
+              state: approvalTraceState(event, evaluation),
+              risk: evaluation.risk,
+              approval_level: evaluation.approval_level,
+              final_review_required: evaluation.final_review_required,
+            })
+          : undefined,
         ...extra,
       },
     });
+  }
+
+  function approvalTraceState(
+    event: string,
+    evaluation: ApprovalEvaluation,
+  ): "awaiting_permission" | "approved" | "failed" | "suspended" {
+    if (event.includes("emergency_stop")) return "suspended";
+    if (event.includes("pending") || evaluation.decision === "ask") return "awaiting_permission";
+    if (event.includes("approved") || evaluation.decision === "allow") return "approved";
+    return "failed";
   }
 
   function recordApprovalControlHistory(

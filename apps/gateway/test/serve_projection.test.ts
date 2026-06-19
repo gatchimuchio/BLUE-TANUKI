@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { CompleteHistoryStore } from "@blue-tanuki/hds-brain";
-import { projectOperationCoreExecutionHistory } from "../src/serve_projection.js";
+import {
+  projectApprovalHistoryEntry,
+  projectOperationCoreExecutionHistory,
+} from "../src/serve_projection.js";
 
 describe("Operation Core execution projection", () => {
   it("projects execution history as display-only digest metadata", () => {
@@ -121,5 +124,70 @@ describe("Operation Core execution projection", () => {
     expect(text).not.toContain("SECRET-RAW-RESULT");
     expect(text).not.toContain("SECRET-ERROR-DETAIL");
     expect(text).not.toContain("SECRET-CONSTRAINT");
+  });
+
+  it("projects Approval Gate adapter traces as display-only metadata", () => {
+    const history = new CompleteHistoryStore();
+    const entry = history.append({
+      kind: "approval_history",
+      request_id: "req-approval",
+      command_id: "cmd-approval",
+      actor: "owner",
+      source: "approval_runtime",
+      timestamp: 12345,
+      payload: {
+        event: "approval_pending",
+        decision: "ask",
+        operation: "tool.shell.exec",
+        risk: "high",
+        approval_level: "L3_final_review",
+        final_review_required: true,
+        reason: "no_matching_approval_grant",
+        operation_core: {
+          version: "operation-core.v1",
+          role: "approval_gate_trace",
+          operation: "tool.shell.exec",
+          state: "awaiting_permission",
+          target: {
+            kind: "runtime",
+            id: "tool:shell.exec",
+            scope: "shell_adapter",
+          },
+          effects: ["process_spawn"],
+          permission: {
+            risk: "high",
+            approval_level: "L3_final_review",
+            final_review_required: true,
+            hds_brain_authority_required: true,
+            approval_gate_required: true,
+          },
+          adapter: "shell",
+          runtime_boundary: "shell_adapter",
+          adapter_is_authority: false,
+          command_generated_by_adapter_only: true,
+          raw_command_is_core_operation: false,
+          adapter_result_used_for_authority: false,
+          approval_trace_used_for_authority: false,
+          hds_brain_authority_required: true,
+          evidence_source: ["INTERNAL_STATE"],
+        },
+        raw_command: "SECRET-RAW-COMMAND",
+      },
+    });
+    const projection = projectApprovalHistoryEntry(entry!);
+    const text = JSON.stringify(projection);
+
+    expect(projection).toMatchObject({
+      event: "approval_pending",
+      operation: "tool.shell.exec",
+      used_for_authority: false,
+      operation_core: {
+        role: "approval_gate_trace",
+        adapter: "shell",
+        runtime_boundary: "shell_adapter",
+        approval_trace_used_for_authority: false,
+      },
+    });
+    expect(text).not.toContain("SECRET-RAW-COMMAND");
   });
 });

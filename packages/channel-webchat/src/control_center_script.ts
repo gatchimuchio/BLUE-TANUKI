@@ -989,6 +989,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             .slice(-12)
             .reverse()
             .map(function (entry) {
+              const trace = isObject(entry.operation_core) ? entry.operation_core : {};
               const fields = [
                 ["event", entry.event || "unknown"],
                 ["request", entry.request_id || "none"],
@@ -999,6 +1000,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 ["operation", entry.operation || "none"],
                 ["risk", entry.risk || "none"],
                 ["ApprovalLevel", entry.approval_level || "none"],
+                ["adapter", trace.adapter || "not recorded"],
+                ["runtime", trace.runtime_boundary || "not recorded"],
+                ["effect", Array.isArray(trace.effects) ? trace.effects.join(", ") : "not recorded"],
                 ["reason", entry.reason || "none"],
                 ["payload", entry.payload_digest || "not recorded"],
                 ["authority", entry.used_for_authority === false ? "false" : "unsafe"],
