@@ -10,7 +10,11 @@ import type {
   WebChatApprovalHistoryItem,
   WebChatHistoryEntry,
 } from "@blue-tanuki/channel-webchat";
-import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import {
+  OperationCoreExecutionProjectionSchema,
+  type ExecuteCommand,
+  type OperationCoreExecutionProjection,
+} from "@blue-tanuki/protocol";
 
 export function metadataKeys(meta: Record<string, unknown> | undefined): string[] {
   return Object.keys(meta ?? {}).sort();
@@ -160,20 +164,6 @@ export function projectCompleteHistoryEntry(entry: CompleteHistoryEntry): WebCha
   };
 }
 
-export interface OperationCoreExecutionProjection {
-  schema_version: string;
-  evidence_source: readonly ["INTERNAL_STATE"];
-  used_for_authority: false;
-  adapter_result_used_for_authority: false;
-  execution_history_used_for_authority: false;
-  raw_payload_exposed: false;
-  chain_valid: boolean;
-  skipped_count: number;
-  entries_count: number;
-  displayed_count: number;
-  latest_results: readonly Record<string, unknown>[];
-}
-
 export function projectOperationCoreExecutionHistory(
   entries: readonly CompleteHistoryEntry[],
   opts: { chain_valid: boolean; skipped_count: number; limit?: number },
@@ -184,7 +174,7 @@ export function projectOperationCoreExecutionHistory(
     .slice(-limit)
     .reverse()
     .map(projectOperationCoreExecutionEntry);
-  return {
+  return OperationCoreExecutionProjectionSchema.parse({
     schema_version: "operation-core.execution.v1",
     evidence_source: ["INTERNAL_STATE"],
     used_for_authority: false,
@@ -196,7 +186,7 @@ export function projectOperationCoreExecutionHistory(
     entries_count: executionEntries.length,
     displayed_count: latestResults.length,
     latest_results: latestResults,
-  };
+  });
 }
 
 function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record<string, unknown> {

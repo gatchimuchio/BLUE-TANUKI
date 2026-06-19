@@ -3,6 +3,7 @@ import {
   ExecuteCommandSchema,
   inspectOperationPlanAdapterRegistry,
   OPERATION_ADAPTER_REGISTRY,
+  OperationCoreExecutionProjectionSchema,
   OperationCoreProjectionSchema,
   OperationExecutionResultSchema,
   OperationPlanSchema,
@@ -221,6 +222,100 @@ describe("Operation Core schemas", () => {
 
     expect(parsed.adapter).toBe("shell");
     expect(parsed.adapter_result_used_for_authority).toBe(false);
+  });
+
+  it("accepts display-only Operation Core execution projections", () => {
+    const parsed = OperationCoreExecutionProjectionSchema.parse({
+      schema_version: "operation-core.execution.v1",
+      evidence_source: ["INTERNAL_STATE"],
+      used_for_authority: false,
+      adapter_result_used_for_authority: false,
+      execution_history_used_for_authority: false,
+      raw_payload_exposed: false,
+      chain_valid: true,
+      skipped_count: 0,
+      entries_count: 1,
+      displayed_count: 1,
+      latest_results: [
+        {
+          index: 0,
+          request_id: "req-1",
+          command_id: "cmd-1",
+          actor: "owner",
+          source: "executor",
+          timestamp: 12345,
+          payload_digest: "payload-digest",
+          entry_hash: "entry-hash",
+          origin_channel: "webchat",
+          status: "success",
+          result_present: true,
+          result_digest: "result-digest",
+          error_present: false,
+          error_digest: null,
+          metrics: { duration_ms: 10 },
+          command: {
+            type: "tool_call",
+            operation: "shell.exec",
+            upstream_decision: "ASSERT",
+            upstream_commit_hash: "commit-hash",
+            constraints: {
+              max_tokens: null,
+              timeout_ms: 1000,
+              allowed_tools: ["shell.exec"],
+              allowed_capabilities: ["fs:read:workspace"],
+            },
+            payload: {
+              tool_name: "shell.exec",
+              argument_keys: ["cmd"],
+              arguments_digest: "arguments-digest",
+              messages_count: null,
+              message_roles: [],
+              content_chars: null,
+            },
+          },
+          diff: {
+            available: false,
+            reason: "OperationDiff is not recorded for this execution yet",
+            used_for_authority: false,
+            evidence_source: ["INTERNAL_STATE"],
+          },
+          rollback: {
+            available: false,
+            reason: "Rollback plan is not recorded for this execution yet",
+            used_for_authority: false,
+            evidence_source: ["INTERNAL_STATE"],
+          },
+          operation_core: {
+            role: "execution_result_projection",
+            used_for_authority: false,
+            adapter_result_used_for_authority: false,
+            raw_payload_exposed: false,
+            evidence_source: ["INTERNAL_STATE"],
+          },
+        },
+      ],
+    });
+
+    expect(parsed.latest_results[0].operation_core.used_for_authority).toBe(false);
+    expect(parsed.raw_payload_exposed).toBe(false);
+  });
+
+  it("rejects Operation Core execution projections that claim authority", () => {
+    const result = OperationCoreExecutionProjectionSchema.safeParse({
+      schema_version: "operation-core.execution.v1",
+      evidence_source: ["INTERNAL_STATE"],
+      used_for_authority: true,
+      adapter_result_used_for_authority: false,
+      execution_history_used_for_authority: false,
+      raw_payload_exposed: false,
+      chain_valid: true,
+      skipped_count: 0,
+      entries_count: 0,
+      displayed_count: 0,
+      latest_results: [],
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it("accepts read-only Operation Core projections for UI surfaces", () => {

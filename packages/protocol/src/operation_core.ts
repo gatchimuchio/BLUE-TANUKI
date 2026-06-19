@@ -279,17 +279,20 @@ export const OperationPermissionSchema = z.object({
 }).strict();
 export type OperationPermission = z.infer<typeof OperationPermissionSchema>;
 
+export const OperationEvidenceSourceSchema = z.enum([
+  "CONFIG",
+  "INTERNAL_STATE",
+  "LIVE_RUNTIME",
+  "EXTERNAL_EVIDENCE",
+  "FIXTURE",
+]);
+export type OperationEvidenceSource = z.infer<typeof OperationEvidenceSourceSchema>;
+
 export const OperationDiffSchema = z.object({
   summary: z.string().min(1).max(2000),
   affected_targets: z.array(OperationTargetSchema).max(100),
   reversible: z.boolean(),
-  evidence_source: z.array(z.enum([
-    "CONFIG",
-    "INTERNAL_STATE",
-    "LIVE_RUNTIME",
-    "EXTERNAL_EVIDENCE",
-    "FIXTURE",
-  ])).min(1),
+  evidence_source: z.array(OperationEvidenceSourceSchema).min(1),
 }).strict();
 export type OperationDiff = z.infer<typeof OperationDiffSchema>;
 
@@ -473,3 +476,85 @@ export const OperationExecutionResultSchema = z.object({
   rollback_available: z.boolean(),
 }).strict();
 export type OperationExecutionResult = z.infer<typeof OperationExecutionResultSchema>;
+
+export const OperationCoreExecutionCommandProjectionSchema = z.object({
+  type: z.string().min(1).max(80),
+  operation: z.string().min(1).max(200),
+  upstream_decision: z.string().min(1).max(80),
+  upstream_commit_hash: z.string().min(1).max(200),
+  constraints: z.object({
+    max_tokens: z.number().finite().nonnegative().nullable(),
+    timeout_ms: z.number().finite().nonnegative().nullable(),
+    allowed_tools: z.array(z.string().min(1).max(200)).max(100),
+    allowed_capabilities: z.array(z.string().min(1).max(200)).max(100),
+  }).strict(),
+  payload: z.object({
+    tool_name: z.string().min(1).max(200).optional(),
+    argument_keys: z.array(z.string().min(1).max(200)).max(100),
+    arguments_digest: z.string().min(1).max(200).optional(),
+    messages_count: z.number().finite().nonnegative().nullable(),
+    message_roles: z.array(z.string().min(1).max(80)).max(50),
+    messages_digest: z.string().min(1).max(200).optional(),
+    backend_hint: z.string().min(1).max(120).optional(),
+    model: z.string().min(1).max(200).optional(),
+    channel: z.string().min(1).max(120).optional(),
+    target_digest: z.string().min(1).max(200).optional(),
+    content_digest: z.string().min(1).max(200).optional(),
+    content_chars: z.number().finite().nonnegative().nullable(),
+  }).strict(),
+}).strict();
+export type OperationCoreExecutionCommandProjection = z.infer<typeof OperationCoreExecutionCommandProjectionSchema>;
+
+export const OperationCoreExecutionGapProjectionSchema = z.object({
+  available: z.boolean(),
+  reason: z.string().min(1).max(500),
+  used_for_authority: z.literal(false),
+  evidence_source: z.array(OperationEvidenceSourceSchema).min(1),
+}).strict();
+export type OperationCoreExecutionGapProjection = z.infer<typeof OperationCoreExecutionGapProjectionSchema>;
+
+export const OperationCoreExecutionResultProjectionSchema = z.object({
+  index: z.number().int().nonnegative(),
+  request_id: z.string().min(1).max(200).nullable(),
+  command_id: z.string().min(1).max(200).nullable(),
+  actor: z.string().min(1).max(200).optional(),
+  source: z.string().min(1).max(120).optional(),
+  timestamp: z.number().finite().nonnegative(),
+  payload_digest: z.string().min(1).max(200),
+  entry_hash: z.string().min(1).max(200),
+  origin_channel: z.string().min(1).max(120),
+  status: z.enum(["success", "failed", "suspended", "unknown"]),
+  result_present: z.boolean(),
+  result_digest: z.string().min(1).max(200).nullable(),
+  error_present: z.boolean(),
+  error_digest: z.string().min(1).max(200).nullable(),
+  metrics: z.object({
+    duration_ms: z.number().finite().nonnegative().optional(),
+  }).strict(),
+  command: OperationCoreExecutionCommandProjectionSchema,
+  diff: OperationCoreExecutionGapProjectionSchema,
+  rollback: OperationCoreExecutionGapProjectionSchema,
+  operation_core: z.object({
+    role: z.literal("execution_result_projection"),
+    used_for_authority: z.literal(false),
+    adapter_result_used_for_authority: z.literal(false),
+    raw_payload_exposed: z.literal(false),
+    evidence_source: z.array(OperationEvidenceSourceSchema).min(1),
+  }).strict(),
+}).strict();
+export type OperationCoreExecutionResultProjection = z.infer<typeof OperationCoreExecutionResultProjectionSchema>;
+
+export const OperationCoreExecutionProjectionSchema = z.object({
+  schema_version: z.literal("operation-core.execution.v1"),
+  evidence_source: z.array(OperationEvidenceSourceSchema).min(1),
+  used_for_authority: z.literal(false),
+  adapter_result_used_for_authority: z.literal(false),
+  execution_history_used_for_authority: z.literal(false),
+  raw_payload_exposed: z.literal(false),
+  chain_valid: z.boolean(),
+  skipped_count: z.number().int().nonnegative(),
+  entries_count: z.number().int().nonnegative(),
+  displayed_count: z.number().int().nonnegative(),
+  latest_results: z.array(OperationCoreExecutionResultProjectionSchema).max(20),
+}).strict();
+export type OperationCoreExecutionProjection = z.infer<typeof OperationCoreExecutionProjectionSchema>;

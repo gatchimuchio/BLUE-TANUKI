@@ -110,6 +110,7 @@ packages/protocol/src/operation_core.ts
 - `OperationAdapterDescriptorSchema`
 - `OperationCoreProjectionSchema`
 - `OperationExecutionResultSchema`
+- `OperationCoreExecutionProjectionSchema`
 
 設計上の固定:
 
@@ -121,6 +122,8 @@ packages/protocol/src/operation_core.ts
 - `OPERATION_ADAPTER_REGISTRY.internal_runtime.default_runtime=true`
 - `OperationCoreProjection.ui_projection_used_for_authority=false`
 - `OperationExecutionResult.adapter_result_used_for_authority=false`
+- `OperationCoreExecutionProjection.used_for_authority=false`
+- `OperationCoreExecutionProjection.raw_payload_exposed=false`
 - `OperationParametersSchema` は `cmd` / `command` / `raw_command` / `shell_command` / `terminal_command` / `subprocess_command` を拒否する
 
 これにより、AI や GUI が Operation Core に raw command を中核データとして渡す形を schema レベルで拒否する。
@@ -272,6 +275,7 @@ adapter registry と default runtime は Control Center で表示済み。runtim
 
 - Gateway runtime snapshot は complete history の `execution_history` から `operation_core_execution` を投影する。
 - 投影は `status`、`result_digest`、`error_digest`、duration、command descriptor、entry hash のみを表示し、raw payload / raw result / raw error は出さない。
+- `operation_core_execution` は `OperationCoreExecutionProjectionSchema` で検証され、authority claim や raw payload exposure claim を拒否する。
 - Control Center は Execution results、Latest result、diff availability、rollback availability を Operation Core Plan viewer に表示する。
 - 現時点の diff / rollback は「not recorded」として明示され、`used_for_authority=false` / `adapter_result_used_for_authority=false` の display-only evidence に固定される。
 
