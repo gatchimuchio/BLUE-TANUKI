@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   ExecuteCommandSchema,
+  OperationExecutionResultSchema,
+  OperationPlanSchema,
+  OperationRequestSchema,
   createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
   parseInboundRequestAtBoundary,
-} from "../src/types.js";
+} from "../src/index.js";
 
 const upstream = {
   frame_goal: "g",
@@ -47,6 +50,146 @@ describe("ExecuteCommandSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("Operation Core schemas", () => {
+  it("accepts an OperationRequest from any interface without making it authority", () => {
+    const parsed = OperationRequestSchema.parse({
+      version: "operation-core.v1",
+      request_id: "op-req-1",
+      source_interface: "gui",
+      actor: "local-owner",
+      goal: "install dependencies for the selected workspace",
+      target: {
+        kind: "workspace",
+        id: "workspace:blue-tanuki",
+        display_name: "BLUE-TANUKI",
+      },
+      constraints: {
+        hds_brain_authority_required: true,
+        disallow_raw_command_as_authority: true,
+        max_steps: 5,
+      },
+      used_for_authority: false,
+    });
+
+    expect(parsed.source_interface).toBe("gui");
+    expect(parsed.constraints.disallow_raw_command_as_authority).toBe(true);
+    expect(parsed.used_for_authority).toBe(false);
+  });
+
+  it("accepts an OperationPlan whose shell use is adapter-only", () => {
+    const parsed = OperationPlanSchema.parse({
+      version: "operation-core.v1",
+      plan_id: "op-plan-1",
+      request_id: "op-req-1",
+      state: "planned",
+      steps: [
+        {
+          step_id: "step-1",
+          operation: "install_dependencies",
+          target: {
+            kind: "project",
+            id: "project:blue-tanuki",
+          },
+          state: "awaiting_permission",
+          effects: ["process_spawn", "write"],
+          permission: {
+            risk: "high",
+            approval_level: "L3_final_review",
+            final_review_required: true,
+            hds_brain_authority_required: true,
+            approval_gate_required: true,
+          },
+          parameters: {
+            runtime: "node",
+            package_manager: "pnpm",
+            workspace: ".",
+          },
+          adapter: "shell",
+          adapter_is_authority: false,
+          command_generated_by_adapter_only: true,
+        },
+      ],
+      diff: {
+        summary: "Dependency installation may update local package store and build output.",
+        affected_targets: [{ kind: "project", id: "project:blue-tanuki" }],
+        reversible: true,
+        evidence_source: ["CONFIG", "LIVE_RUNTIME"],
+      },
+      rollback: {
+        available: true,
+        strategy: "restore repository backup or clean generated artifacts",
+      },
+      raw_command_policy: {
+        raw_command_is_core_operation: false,
+        command_generation_location: "execution_adapter_only",
+      },
+      planner_output_used_for_authority: false,
+      hds_brain_authority_required: true,
+    });
+
+    expect(parsed.steps[0].operation).toBe("install_dependencies");
+    expect(parsed.steps[0].adapter).toBe("shell");
+    expect(parsed.steps[0].adapter_is_authority).toBe(false);
+    expect(parsed.raw_command_policy.raw_command_is_core_operation).toBe(false);
+  });
+
+  it("rejects raw command fields inside Operation Core parameters", () => {
+    const result = OperationPlanSchema.safeParse({
+      version: "operation-core.v1",
+      plan_id: "op-plan-raw-command",
+      request_id: "op-req-1",
+      state: "planned",
+      steps: [
+        {
+          step_id: "step-1",
+          operation: "install_dependencies",
+          target: { kind: "project", id: "project:blue-tanuki" },
+          state: "planned",
+          effects: ["process_spawn"],
+          permission: {
+            risk: "high",
+            approval_level: "L3_final_review",
+            final_review_required: true,
+            hds_brain_authority_required: true,
+            approval_gate_required: true,
+          },
+          parameters: {
+            command: "pnpm install --frozen-lockfile",
+          },
+          adapter: "shell",
+          adapter_is_authority: false,
+          command_generated_by_adapter_only: true,
+        },
+      ],
+      rollback: { available: false },
+      raw_command_policy: {
+        raw_command_is_core_operation: false,
+        command_generation_location: "execution_adapter_only",
+      },
+      planner_output_used_for_authority: false,
+      hds_brain_authority_required: true,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("keeps execution adapter results out of the authority plane", () => {
+    const parsed = OperationExecutionResultSchema.parse({
+      version: "operation-core.v1",
+      plan_id: "op-plan-1",
+      step_id: "step-1",
+      state: "succeeded",
+      adapter: "shell",
+      adapter_result_used_for_authority: false,
+      output_digest: "sha256:abc",
+      rollback_available: true,
+    });
+
+    expect(parsed.adapter).toBe("shell");
+    expect(parsed.adapter_result_used_for_authority).toBe(false);
   });
 });
 

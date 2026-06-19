@@ -1276,6 +1276,15 @@ describe("built-in tools", () => {
         stdout: string;
         stderr: string;
         timed_out: boolean;
+        operation_core: {
+          role: string;
+          adapter: string;
+          operation: string;
+          state: string;
+          adapter_is_authority: boolean;
+          raw_command_is_core_operation: boolean;
+          adapter_result_used_for_authority: boolean;
+        };
       };
 
       expect(result.cwd).toBe(".");
@@ -1285,6 +1294,15 @@ describe("built-in tools", () => {
       );
       expect(result.stderr).toContain("warn");
       expect(result.timed_out).toBe(false);
+      expect(result.operation_core).toMatchObject({
+        role: "execution_adapter",
+        adapter: "shell",
+        operation: "tool.shell.exec",
+        state: "succeeded",
+        adapter_is_authority: false,
+        raw_command_is_core_operation: false,
+        adapter_result_used_for_authority: false,
+      });
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

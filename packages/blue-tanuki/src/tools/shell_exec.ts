@@ -1,12 +1,24 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import type { OperationAdapterKind, OperationState } from "@blue-tanuki/protocol";
 import type { Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
 
 export interface ShellExecOptions {
   env?: Env;
+}
+
+export interface ShellOperationAdapterMetadata {
+  role: "execution_adapter";
+  adapter: OperationAdapterKind;
+  operation: "tool.shell.exec";
+  state: Extract<OperationState, "succeeded" | "failed">;
+  adapter_is_authority: false;
+  command_generated_by_adapter_only: true;
+  raw_command_is_core_operation: false;
+  adapter_result_used_for_authority: false;
 }
 
 export async function invokeShellExec(
@@ -67,6 +79,7 @@ export async function invokeShellExec(
         stdout,
         stderr,
         truncated: true,
+        operation_core: shellOperationAdapterMetadata("failed"),
       });
     }, timeoutMs);
     child.stdout?.on("data", (chunk: Buffer | string) => append("stdout", chunk));
@@ -81,6 +94,7 @@ export async function invokeShellExec(
         stdout,
         stderr,
         truncated,
+        operation_core: shellOperationAdapterMetadata(code === 0 ? "succeeded" : "failed"),
       });
     });
   });
@@ -183,4 +197,19 @@ function pathInside(parent: string, child: string): boolean {
 
 function displayPath(filepath: string): string {
   return filepath.replace(/\\/g, "/");
+}
+
+function shellOperationAdapterMetadata(
+  state: Extract<OperationState, "succeeded" | "failed">,
+): ShellOperationAdapterMetadata {
+  return {
+    role: "execution_adapter",
+    adapter: "shell",
+    operation: "tool.shell.exec",
+    state,
+    adapter_is_authority: false,
+    command_generated_by_adapter_only: true,
+    raw_command_is_core_operation: false,
+    adapter_result_used_for_authority: false,
+  };
 }

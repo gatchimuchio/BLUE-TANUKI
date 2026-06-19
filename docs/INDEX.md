@@ -24,6 +24,7 @@
 ## First-Party Surfaces
 
 - [Operator Surfaces Index](operator-surfaces/INDEX.md) - Writing / Daily / Developer surface overview
+- [Operation Core Architecture](OPERATION_CORE_ARCHITECTURE.md) - OperationRequest / OperationPlan / ExecutionAdapter migration boundary
 - [Shared Operator Substrate](operator-surfaces/SHARED_SUBSTRATE.md)
 - [Writing Operator](operator-surfaces/WRITING_OPERATOR.md)
 - [Daily Operator](operator-surfaces/DAILY_OPERATOR.md)

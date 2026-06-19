@@ -17,6 +17,8 @@ It is a Layer A surface and does not create a developer-mode authority bypass.
 - create GitHub issues/PRs/comments through final-review
 - use browser preview tools within their disabled-by-default boundary
 
+Developer Operator may prepare process-backed work, but shell execution is represented as a ShellAdapter step under Operation Core. The raw command is not the operation authority object.
+
 ## 3. Non-Goals (out-of-scope user goals)
 
 - unrestricted shell
@@ -48,7 +50,7 @@ No new raw filesystem, process, GitHub, or browser capability is introduced in P
 | github.read | L1_observe | low | read-only |
 | browser.snapshot | L2_operate | medium | preview and public-address guards apply |
 | local file write/edit in sandbox | L2_operate | medium | existing file tool boundary applies |
-| shell.exec | L3_final_review | high | final-review always required |
+| shell.exec | L3_final_review | high | ShellAdapter only; final-review always required |
 | github.write | L3_final_review | high | external write |
 | browser.automation mutation/credential action | L3_final_review | high | preview remains disabled-by-default |
 
@@ -59,6 +61,7 @@ Developer operations must record:
 - `surface=developer`
 - file path hash or bounded path metadata
 - shell command digest and sandbox root
+- Operation Core adapter metadata where available (`adapter_is_authority=false`)
 - GitHub owner/repo/resource summary
 - browser URL origin and action class
 - ApprovalLevel / ApprovalRisk / final-review result
