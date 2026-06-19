@@ -14,3 +14,6 @@ export {
   dailyMetadataForOperation,
   digestDailyInput,
 } from "./tools.js";
+export {
+  buildDailyOperationCoreProjection,
+} from "./operation_core.js";

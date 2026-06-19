@@ -107,6 +107,7 @@ packages/protocol/src/operation_core.ts
 - `OperationTargetSchema`
 - `OperationPermissionSchema`
 - `OperationDiffSchema`
+- `OperationCoreProjectionSchema`
 - `OperationExecutionResultSchema`
 
 設計上の固定:
@@ -115,6 +116,7 @@ packages/protocol/src/operation_core.ts
 - `OperationRequest.constraints.disallow_raw_command_as_authority=true`
 - `OperationPlan.raw_command_policy.raw_command_is_core_operation=false`
 - `OperationStep.adapter_is_authority=false`
+- `OperationCoreProjection.ui_projection_used_for_authority=false`
 - `OperationExecutionResult.adapter_result_used_for_authority=false`
 - `OperationParametersSchema` は `cmd` / `command` / `raw_command` / `shell_command` / `terminal_command` / `subprocess_command` を拒否する
 
@@ -168,6 +170,8 @@ Control Center は terminal output viewer ではなく、次を表示する stat
 
 ログ全文や raw command は必要な診断面に限定し、通常画面では digest と要約を優先する。
 
+実装上は Control Center が runtime snapshot の `operator_surfaces.*.operation_core_projection` を読み、surface、step、target、effect、ApprovalLevel、risk、adapter、Approval Gate 要否を表示する。これは UI projection であり、`ui_projection_used_for_authority=false` の downstream display surface である。
+
 ## 8. 移行ステップ
 
 ### Step 1: IR 導入
@@ -188,6 +192,18 @@ Writing / Daily / Developer の operation spec を `OperationStep` へ投影す�
 
 - operator snapshot が `operation_core_projection` を返す。
 - UI は surface 固有 spec ではなく共通 Operation Core projection を表示できる。
+
+このパッチで実施済み。
+
+実装ファイル:
+
+```text
+packages/operator-writing/src/operation_core.ts
+packages/operator-daily/src/operation_core.ts
+packages/operator-developer/src/operation_core.ts
+packages/channel-webchat/src/control_center_document.ts
+packages/channel-webchat/src/control_center_script.ts
+```
 
 ### Step 3: Planner 接続
 
@@ -218,6 +234,8 @@ Control Center は OperationPlan、diff、approval、result、rollback、audit �
 - ユーザーは terminal を開かずに次の操作とリスクを理解できる。
 - raw command ではなく操作名、対象、差分、承認状態が主表示になる。
 - high-risk 操作は既存 Approval Gate からしか進まない。
+
+現時点で operator surface 由来の Operation Core projection は表示済み。runtime execution 中の diff / result / rollback への完全接続は Step 3 / Step 4 後に実施する。
 
 ### Step 6: Compatibility De-emphasis
 

@@ -1,4 +1,4 @@
-import type { ToolCapability } from "@blue-tanuki/protocol";
+import type { OperationCoreProjection, ToolCapability } from "@blue-tanuki/protocol";
 
 export type DeveloperOperationKind =
   | "file.read"
@@ -45,6 +45,7 @@ export interface DeveloperSurfaceSnapshot {
   raw_authority_added: false;
   browser_preview: DeveloperBrowserPreviewBoundary;
   operations: readonly DeveloperOperationSpec[];
+  operation_core_projection: OperationCoreProjection;
   next_recommended_action: string;
 }
 

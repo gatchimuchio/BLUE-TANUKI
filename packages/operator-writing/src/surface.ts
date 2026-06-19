@@ -1,4 +1,5 @@
 import type { WritingOperationKind, WritingOperationSpec, WritingSurfaceSnapshot } from "./types.js";
+import { buildWritingOperationCoreProjection } from "./operation_core.js";
 
 export const WRITING_SURFACE_NAME = "writing" as const;
 
@@ -128,6 +129,7 @@ export function getWritingSurfaceSnapshot(): WritingSurfaceSnapshot {
     replaces_authority: false,
     raw_authority_added: false,
     operations: WRITING_OPERATION_SPECS,
+    operation_core_projection: buildWritingOperationCoreProjection(WRITING_OPERATION_SPECS),
     next_recommended_action: "Use existing HDS-BRAIN decision, Approval Gate, and downstream tools for writing tasks.",
   };
 }

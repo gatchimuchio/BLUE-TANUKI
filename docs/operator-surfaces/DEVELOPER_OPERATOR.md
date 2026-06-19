@@ -2,6 +2,8 @@
 
 Phase 11-S8 implements this surface in `packages/operator-developer/` and exposes its state through the Gateway runtime snapshot and WebChat `/operators/developer` endpoints.
 
+The surface snapshot also exposes `operation_core_projection`, a read-only Operation Core view for Control Center. Shell execution is projected as `adapter=shell`, `adapter_is_authority=false`, and `command_generated_by_adapter_only=true`.
+
 ## 1. Purpose
 
 Developer Operator is the first-party surface for code-reading, code-editing support, local file work, guarded shell execution, GitHub operations, and browser preview work under HDS-BRAIN authority.
@@ -90,6 +92,7 @@ Developer Operator uses the shared substrate for:
 - capability declaration enforcement
 - audit-safe mutation summaries
 - browser preview quarantine
+- Operation Core projection
 - Runtime Invariants preservation
 
 ## 10. Conformance Test Requirements (Phase 11-S8 target)

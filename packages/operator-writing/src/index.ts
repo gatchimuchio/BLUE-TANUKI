@@ -11,3 +11,6 @@ export {
   digestWritingInput,
   writingMetadataForOperation,
 } from "./tools.js";
+export {
+  buildWritingOperationCoreProjection,
+} from "./operation_core.js";

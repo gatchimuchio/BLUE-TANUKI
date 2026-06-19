@@ -186,6 +186,22 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
         </section>
 
+        <section class="card" data-screen-group="home skills developer">
+          <div class="row">
+            <h2>Operation Core Plan</h2>
+            <span id="operation-core-status" class="badge warn">not loaded</span>
+          </div>
+          <div class="status-grid">
+            <div class="metric"><span>Surfaces</span><span id="operation-core-surface-count">not loaded</span></div>
+            <div class="metric"><span>Steps</span><span id="operation-core-step-count">not loaded</span></div>
+            <div class="metric"><span>Adapters</span><span id="operation-core-adapters">not loaded</span></div>
+            <div class="metric"><span>Authority</span><span id="operation-core-authority">display only</span></div>
+          </div>
+          <div id="operation-core-list" class="trace-list">
+            <div class="trace-item muted">no Operation Core projection loaded</div>
+          </div>
+        </section>
+
         <section class="card" data-screen-group="channels">
           <div class="row">
             <h2>Channels</h2>

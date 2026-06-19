@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { OperationCoreProjectionSchema } from "@blue-tanuki/protocol";
 import {
   WRITING_OPERATOR_REQUIRED_PERMISSIONS,
   buildWritingInvocation,
@@ -22,6 +23,41 @@ describe("Writing Operator surface", () => {
     expect(getWritingOperationSpec("file.write").approval_level).toBe("L2_operate");
     expect(getWritingOperationSpec("gmail.write").approval_level).toBe("L3_final_review");
     expect(getWritingOperationSpec("google.drive.write").final_review_required).toBe(true);
+  });
+
+  it("projects writing operations into display-only Operation Core steps", () => {
+    const projection = getWritingSurfaceSnapshot().operation_core_projection;
+    const editStep = projection.steps.find((step) => step.operation === "file.edit");
+    const gmailStep = projection.steps.find((step) => step.operation === "gmail.write");
+
+    expect(OperationCoreProjectionSchema.safeParse(projection).success).toBe(true);
+    expect(projection.source_surface).toBe("writing");
+    expect(projection.ui_projection_used_for_authority).toBe(false);
+    expect(projection.planner_output_used_for_authority).toBe(false);
+    expect(projection.raw_command_policy.raw_command_is_core_operation).toBe(false);
+    expect(editStep).toMatchObject({
+      target: { kind: "file", scope: "operator:writing" },
+      effects: ["write"],
+      permission: {
+        risk: "medium",
+        approval_level: "L2_operate",
+        approval_gate_required: false,
+      },
+      adapter: "internal_runtime",
+      adapter_is_authority: false,
+      command_generated_by_adapter_only: false,
+    });
+    expect(gmailStep).toMatchObject({
+      effects: ["external_send"],
+      permission: {
+        risk: "high",
+        approval_level: "L3_final_review",
+        final_review_required: true,
+        approval_gate_required: true,
+      },
+      adapter: "external_api",
+      adapter_is_authority: false,
+    });
   });
 
   it("uses only existing downstream capability names", () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { OperationCoreProjectionSchema } from "@blue-tanuki/protocol";
 import {
   DAILY_OPERATOR_REQUIRED_PERMISSIONS,
   dailyBriefSnapshotFromEnv,
@@ -45,6 +46,41 @@ describe("Daily Operator surface", () => {
     expect(getDailyOperationSpec("reminder.draft").approval_level).toBe("L2_operate");
     expect(getDailyOperationSpec("schedule.create").approval_level).toBe("L3_final_review");
     expect(getDailyOperationSpec("gmail.write").final_review_required).toBe(true);
+  });
+
+  it("projects daily operations into normalized display-only Operation Core steps", () => {
+    const projection = getDailySurfaceSnapshot().operation_core_projection;
+    const channelSend = projection.steps.find((step) => step.operation === "daily_brief.channel_send");
+    const scheduleCreate = projection.steps.find((step) => step.operation === "schedule.create");
+
+    expect(OperationCoreProjectionSchema.safeParse(projection).success).toBe(true);
+    expect(projection.source_surface).toBe("daily");
+    expect(projection.ui_projection_used_for_authority).toBe(false);
+    expect(projection.adapter_result_used_for_authority).toBe(false);
+    expect(channelSend).toMatchObject({
+      effects: ["external_send"],
+      permission: {
+        risk: "medium",
+        approval_level: "L2_operate",
+        final_review_required: false,
+        approval_gate_required: false,
+      },
+      adapter: "internal_runtime",
+      adapter_is_authority: false,
+      command_generated_by_adapter_only: false,
+    });
+    expect(channelSend?.parameters).toMatchObject({
+      source_approval_level: "existing_channel_path",
+      source_approval_risk: "contextual",
+    });
+    expect(scheduleCreate).toMatchObject({
+      effects: ["schedule_change"],
+      permission: {
+        risk: "high",
+        approval_level: "L3_final_review",
+        approval_gate_required: true,
+      },
+    });
   });
 
   it("uses existing downstream capability names and no authority capability", () => {

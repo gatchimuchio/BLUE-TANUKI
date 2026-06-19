@@ -1,5 +1,6 @@
 import type { DailyOperationKind, DailyOperationSpec, DailySurfaceSnapshot } from "./types.js";
 import { dailyBriefSnapshotFromEnv } from "./daily_brief_integration.js";
+import { buildDailyOperationCoreProjection } from "./operation_core.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -191,6 +192,7 @@ export function getDailySurfaceSnapshot(input: {
     scheduled_tasks: input.scheduled_tasks ?? [],
     runtime_schedules: input.runtime_schedules ?? [],
     operations: DAILY_OPERATION_SPECS,
+    operation_core_projection: buildDailyOperationCoreProjection(DAILY_OPERATION_SPECS),
     next_recommended_action: "Use existing cron, schedule, Google, Approval Gate, and channel-send paths for daily operations.",
   };
 }

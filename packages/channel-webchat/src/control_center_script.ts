@@ -625,6 +625,98 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("schedule-json", compactJson(redactRuntimeValue({ runtime_schedules: runtimeSchedules, scheduled_tasks: configuredTasks })));
       }
 
+      function operationCoreRiskTone(risk) {
+        if (risk === "high") return "bad";
+        if (risk === "medium") return "warn";
+        if (risk === "low") return "good";
+        return "review";
+      }
+
+      function collectOperationCoreProjections(operatorSurfaces) {
+        if (!isObject(operatorSurfaces)) return [];
+        return Object.keys(operatorSurfaces)
+          .map(function (key) {
+            const surface = operatorSurfaces[key];
+            return isObject(surface) && isObject(surface.operation_core_projection)
+              ? surface.operation_core_projection
+              : null;
+          })
+          .filter(Boolean);
+      }
+
+      function renderOperationCoreProjections(operatorSurfaces) {
+        const projections = collectOperationCoreProjections(operatorSurfaces);
+        const steps = projections.flatMap(function (projection) {
+          return Array.isArray(projection.steps)
+            ? projection.steps.map(function (step) {
+              return { projection: projection, step: step };
+            })
+            : [];
+        });
+        const adapters = Array.from(new Set(steps.map(function (entry) {
+          return entry.step.adapter || "none";
+        }))).sort();
+        const authorityOk =
+          projections.every(function (projection) {
+            return projection.hds_brain_authority_required === true &&
+              projection.planner_output_used_for_authority === false &&
+              projection.ui_projection_used_for_authority === false &&
+              projection.adapter_result_used_for_authority === false &&
+              projection.raw_command_policy &&
+              projection.raw_command_policy.raw_command_is_core_operation === false;
+          }) &&
+          steps.every(function (entry) {
+            return entry.step.adapter_is_authority === false;
+          });
+
+        setText("operation-core-surface-count", projections.length);
+        setText("operation-core-step-count", steps.length);
+        setText("operation-core-adapters", adapters.length > 0 ? adapters.join(", ") : "none");
+        setText("operation-core-authority", authorityOk ? "display only" : "unsafe");
+        setText("operation-core-status", steps.length > 0 ? (authorityOk ? "loaded" : "unsafe") : "not loaded");
+        if (byId("operation-core-status")) {
+          byId("operation-core-status").className = "badge " + (steps.length === 0 ? "warn" : authorityOk ? "good" : "bad");
+        }
+        if (byId("operation-core-authority")) {
+          byId("operation-core-authority").className = "badge " + (authorityOk ? "good" : "bad");
+        }
+
+        if (steps.length === 0) {
+          setHtml("operation-core-list", '<div class="trace-item muted">no Operation Core projection loaded</div>');
+          return;
+        }
+
+        setHtml(
+          "operation-core-list",
+          steps
+            .map(function (entry) {
+              const step = entry.step || {};
+              const projection = entry.projection || {};
+              const target = step.target || {};
+              const permission = step.permission || {};
+              const effects = Array.isArray(step.effects) ? step.effects.join(", ") : "none";
+              const level = permission.approval_level || "unknown";
+              const approvalTone = level === "L3_final_review" ? "review" : "good";
+              const risk = permission.risk || "unknown";
+              const gate = permission.approval_gate_required === true ? badge("Approval Gate", "review") : badge("bounded", "good");
+              const shell = step.command_generated_by_adapter_only === true ? badge("adapter-generated", "review") : badge("no raw command", "good");
+              return '<article class="trace-item">' +
+                '<div class="row"><h3>' + escapeHtml(projection.source_surface || "surface") + ": " + escapeHtml(step.operation || "operation") + '</h3><span>' + badge(step.state || "planned", "good") + '</span></div>' +
+                '<dl class="kv">' +
+                '<dt>target</dt><dd>' + escapeHtml((target.kind || "unknown") + " / " + (target.display_name || target.id || "unknown")) + '</dd>' +
+                '<dt>effects</dt><dd>' + escapeHtml(effects) + '</dd>' +
+                '<dt>risk</dt><dd>' + badge(risk, operationCoreRiskTone(risk)) + '</dd>' +
+                '<dt>ApprovalLevel</dt><dd>' + badge(level, approvalTone) + '</dd>' +
+                '<dt>gate</dt><dd>' + gate + '</dd>' +
+                '<dt>adapter</dt><dd>' + badge(step.adapter || "none", step.adapter_is_authority === false ? "good" : "bad") + '</dd>' +
+                '<dt>command</dt><dd>' + shell + '</dd>' +
+                '<dt>authority</dt><dd>' + badge(step.adapter_is_authority === false ? "display only" : "unsafe", step.adapter_is_authority === false ? "good" : "bad") + '</dd>' +
+                '</dl></article>';
+            })
+            .join("")
+        );
+      }
+
       function renderRuntime(body) {
         const invariantOk = body.hds_invariants_ok ?? body.hds?.invariants?.process_policy_enforced;
         const auditOk = body.audit_chain_valid ?? body.hds?.audit?.chain_valid;
@@ -642,6 +734,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("header-status").className = "badge " + (body.gateway_status === "ready" ? "good" : "warn");
         updatePermanentUseStatus(body);
         renderSchedules(body);
+        renderOperationCoreProjections(body.operator_surfaces);
         const mascotState = aotanuStateFromRuntime(body);
         renderAotanuMascot(mascotState, aotanuDisplayLabelFromRuntime(body, mascotState));
       }

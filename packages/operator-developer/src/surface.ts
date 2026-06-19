@@ -1,4 +1,5 @@
 import type { DeveloperOperationKind, DeveloperOperationSpec, DeveloperSurfaceSnapshot } from "./types.js";
+import { buildDeveloperOperationCoreProjection } from "./operation_core.js";
 
 export const DEVELOPER_SURFACE_NAME = "developer" as const;
 
@@ -143,6 +144,7 @@ export function getDeveloperSurfaceSnapshot(): DeveloperSurfaceSnapshot {
       promoted_to_first_party: false,
     },
     operations: DEVELOPER_OPERATION_SPECS,
+    operation_core_projection: buildDeveloperOperationCoreProjection(DEVELOPER_OPERATION_SPECS),
     next_recommended_action: "Use existing HDS-BRAIN decision, Approval Gate, audit, and downstream developer tools for code work.",
   };
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { OperationCoreProjectionSchema } from "@blue-tanuki/protocol";
 import {
   DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS,
   buildDeveloperInvocation,
@@ -34,6 +35,43 @@ describe("Developer Operator surface", () => {
     expect(getDeveloperOperationSpec("browser.automation").preview).toBe(true);
     expect(getDeveloperOperationSpec("browser.automation").disabled_by_default).toBe(true);
     expect(getDeveloperOperationSpec("browser.automation").approval_level).toBe("L3_final_review");
+  });
+
+  it("projects developer operations into Operation Core with shell as adapter-only", () => {
+    const projection = getDeveloperSurfaceSnapshot().operation_core_projection;
+    const shellStep = projection.steps.find((step) => step.operation === "shell.exec");
+    const browserStep = projection.steps.find((step) => step.operation === "browser.automation");
+
+    expect(OperationCoreProjectionSchema.safeParse(projection).success).toBe(true);
+    expect(projection.source_surface).toBe("developer");
+    expect(projection.raw_command_policy).toEqual({
+      raw_command_is_core_operation: false,
+      command_generation_location: "execution_adapter_only",
+    });
+    expect(projection.ui_projection_used_for_authority).toBe(false);
+    expect(shellStep).toMatchObject({
+      target: { kind: "workspace", scope: "operator:developer" },
+      effects: ["process_spawn"],
+      permission: {
+        risk: "high",
+        approval_level: "L3_final_review",
+        final_review_required: true,
+        approval_gate_required: true,
+      },
+      adapter: "shell",
+      adapter_is_authority: false,
+      command_generated_by_adapter_only: true,
+    });
+    expect(shellStep?.parameters).not.toHaveProperty("command");
+    expect(shellStep?.parameters).not.toHaveProperty("cmd");
+    expect(browserStep).toMatchObject({
+      adapter: "browser",
+      effects: ["browser_action"],
+      parameters: {
+        preview: true,
+        disabled_by_default: true,
+      },
+    });
   });
 
   it("uses only existing downstream capability names", () => {

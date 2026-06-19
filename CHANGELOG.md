@@ -59,6 +59,7 @@
 - Added a functional Conversation / WebChat Control Center panel using `/ws-ticket`, WebSocket, and `/inbound`, plus live Doctor / Health runtime status fields for installed GUI use.
 - Added optional OpenRouter LLM backend support and optional Composio dry-run connector support while preserving native-first configuration, HDS-BRAIN authority, Approval Gate, audit, and Windows user-data settings boundaries.
 - Added the Aotanu Control Center mascot as a read-only runtime-state display with pixelated spritesheet assets and packaged asset inclusion.
+- Added Operation Core projections for Writing / Daily / Developer Operator snapshots and a Control Center Operation Core Plan viewer, preserving HDS-BRAIN authority and adapter-only shell semantics.
 
 ## 0.1.0 - 2026-05-06
 

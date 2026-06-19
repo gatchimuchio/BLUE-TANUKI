@@ -327,6 +327,12 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Activity / Audit");
       expect(html).toContain("Memory");
       expect(html).toContain("Skills");
+      expect(html).toContain("Operation Core Plan");
+      expect(html).toContain("operation-core-status");
+      expect(html).toContain("operation-core-list");
+      expect(html).toContain("renderOperationCoreProjections");
+      expect(html).toContain("operation_core_projection");
+      expect(html).toContain("adapter-generated");
       expect(html).toContain("Channels");
       expect(html).toContain("Connectors");
       expect(html).toContain("Doctor");

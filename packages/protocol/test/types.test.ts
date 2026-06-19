@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ExecuteCommandSchema,
+  OperationCoreProjectionSchema,
   OperationExecutionResultSchema,
   OperationPlanSchema,
   OperationRequestSchema,
@@ -190,6 +191,95 @@ describe("Operation Core schemas", () => {
 
     expect(parsed.adapter).toBe("shell");
     expect(parsed.adapter_result_used_for_authority).toBe(false);
+  });
+
+  it("accepts read-only Operation Core projections for UI surfaces", () => {
+    const parsed = OperationCoreProjectionSchema.parse({
+      version: "operation-core.v1",
+      projection_id: "operator:developer:operation-core",
+      source_surface: "developer",
+      state: "planned",
+      steps: [
+        {
+          step_id: "developer:shell.exec",
+          operation: "shell.exec",
+          target: {
+            kind: "workspace",
+            id: "operator:developer:shell.exec",
+            display_name: "Execute shell command through existing final-review guarded tool",
+            scope: "operator:developer",
+          },
+          state: "planned",
+          effects: ["process_spawn"],
+          permission: {
+            risk: "high",
+            approval_level: "L3_final_review",
+            final_review_required: true,
+            hds_brain_authority_required: true,
+            approval_gate_required: true,
+          },
+          parameters: {
+            downstream_tools: ["shell.exec"],
+            capabilities_count: 2,
+            audit_trace: ["surface", "downstream_tool_name", "command_digest", "final_review_result"],
+          },
+          adapter: "shell",
+          adapter_is_authority: false,
+          command_generated_by_adapter_only: true,
+        },
+      ],
+      raw_command_policy: {
+        raw_command_is_core_operation: false,
+        command_generation_location: "execution_adapter_only",
+      },
+      hds_brain_authority_required: true,
+      planner_output_used_for_authority: false,
+      ui_projection_used_for_authority: false,
+      adapter_result_used_for_authority: false,
+    });
+
+    expect(parsed.source_surface).toBe("developer");
+    expect(parsed.ui_projection_used_for_authority).toBe(false);
+    expect(parsed.steps[0].adapter).toBe("shell");
+    expect(parsed.steps[0].adapter_is_authority).toBe(false);
+  });
+
+  it("rejects UI projections that claim authority", () => {
+    const result = OperationCoreProjectionSchema.safeParse({
+      version: "operation-core.v1",
+      projection_id: "operator:writing:operation-core",
+      source_surface: "writing",
+      state: "planned",
+      steps: [
+        {
+          step_id: "writing:file.edit",
+          operation: "file.edit",
+          target: { kind: "file", id: "operator:writing:file.edit" },
+          state: "planned",
+          effects: ["write"],
+          permission: {
+            risk: "medium",
+            approval_level: "L2_operate",
+            final_review_required: false,
+            hds_brain_authority_required: true,
+            approval_gate_required: false,
+          },
+          adapter: "internal_runtime",
+          adapter_is_authority: false,
+          command_generated_by_adapter_only: false,
+        },
+      ],
+      raw_command_policy: {
+        raw_command_is_core_operation: false,
+        command_generation_location: "not_applicable",
+      },
+      hds_brain_authority_required: true,
+      planner_output_used_for_authority: false,
+      ui_projection_used_for_authority: true,
+      adapter_result_used_for_authority: false,
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 

@@ -8,6 +8,8 @@ It is a Layer A surface and does not move authority into cron, Google services, 
 
 Phase 11-S7 implements this surface in `packages/operator-daily/` and exposes its state through the Gateway runtime snapshot and WebChat `/operators/daily` endpoints.
 
+The surface snapshot also exposes `operation_core_projection`, a read-only Operation Core view for Control Center. Contextual Daily Brief send metadata is normalized into a bounded L2 projection while the existing channel path remains downstream-only.
+
 ## 2. Scope (in-scope user goals)
 
 - inspect Daily Brief state
@@ -82,6 +84,7 @@ Daily Operator uses the shared substrate for:
 - schedule Approval Gate mapping
 - Google tool downstream execution
 - Daily Brief audit trace
+- Operation Core projection
 - Runtime Invariants preservation
 
 ## 10. Conformance Test Requirements (Phase 11-S7 target)

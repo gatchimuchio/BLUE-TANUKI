@@ -1,4 +1,4 @@
-import type { ToolCapability } from "@blue-tanuki/protocol";
+import type { OperationCoreProjection, ToolCapability } from "@blue-tanuki/protocol";
 
 export type DailyOperationKind =
   | "daily_brief.status"
@@ -55,5 +55,6 @@ export interface DailySurfaceSnapshot {
   scheduled_tasks: readonly unknown[];
   runtime_schedules: readonly unknown[];
   operations: readonly DailyOperationSpec[];
+  operation_core_projection: OperationCoreProjection;
   next_recommended_action: string;
 }

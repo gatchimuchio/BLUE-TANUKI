@@ -8,6 +8,8 @@ It is a Layer A surface and a downstream device, not an authority source.
 
 Phase 11-S6 implements this surface in `packages/operator-writing/` and exposes its state through the Gateway runtime snapshot and WebChat `/operators/writing` endpoints.
 
+The surface snapshot also exposes `operation_core_projection`, a read-only Operation Core view for Control Center. This projection is display-only (`ui_projection_used_for_authority=false`) and does not approve, execute, or replace HDS-BRAIN judgement.
+
 ## 2. Scope (in-scope user goals)
 
 - draft text
@@ -82,6 +84,7 @@ Writing Operator uses the shared substrate for:
 - HDS-BRAIN decision
 - Approval Gate mapping
 - audit trace
+- Operation Core projection
 - Runtime Invariants
 - downstream tool dispatch
 

@@ -1,4 +1,4 @@
-import type { ToolCapability } from "@blue-tanuki/protocol";
+import type { OperationCoreProjection, ToolCapability } from "@blue-tanuki/protocol";
 
 export type WritingOperationKind =
   | "draft.in_memory"
@@ -37,6 +37,7 @@ export interface WritingSurfaceSnapshot {
   replaces_authority: false;
   raw_authority_added: false;
   operations: readonly WritingOperationSpec[];
+  operation_core_projection: OperationCoreProjection;
   next_recommended_action: string;
 }
 

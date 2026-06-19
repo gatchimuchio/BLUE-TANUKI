@@ -8,6 +8,7 @@ It is not decoration and not a chatbot clone. It lets the human owner inspect an
 
 - runtime state
 - HDS-BRAIN decisions
+- Operation Core projections
 - approval queue
 - audit and replay evidence
 - memory references
@@ -47,6 +48,7 @@ The first GUI implementation adds:
 
 - screen navigation
 - owner operations dashboard
+- Operation Core Plan viewer from `operator_surfaces.*.operation_core_projection`
 - responsibility map
 - task state lane
 - memory / skills / channel / doctor / settings / evidence placeholders
@@ -62,3 +64,4 @@ Backend behavior is not expanded by this phase.
 - channel metadata is not authority.
 - human owner approval is required for sensitive actions.
 - display projections must redact tokens, credentials, raw payloads, command content, and rendered output content.
+- Operation Core projections remain `ui_projection_used_for_authority=false` and cannot approve, execute, or replace HDS-BRAIN judgement.

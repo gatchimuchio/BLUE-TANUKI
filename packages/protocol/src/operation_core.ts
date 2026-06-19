@@ -228,6 +228,26 @@ export const OperationPlanSchema = z.object({
 }).strict();
 export type OperationPlan = z.infer<typeof OperationPlanSchema>;
 
+export const OperationCoreProjectionSchema = z.object({
+  version: z.literal("operation-core.v1"),
+  projection_id: z.string().min(1).max(200),
+  source_surface: z.string().min(1).max(80),
+  state: z.literal("planned"),
+  steps: z.array(OperationStepSchema).min(1).max(200),
+  raw_command_policy: z.object({
+    raw_command_is_core_operation: z.literal(false),
+    command_generation_location: z.enum([
+      "execution_adapter_only",
+      "not_applicable",
+    ]),
+  }).strict(),
+  hds_brain_authority_required: z.literal(true),
+  planner_output_used_for_authority: z.literal(false),
+  ui_projection_used_for_authority: z.literal(false),
+  adapter_result_used_for_authority: z.literal(false),
+}).strict();
+export type OperationCoreProjection = z.infer<typeof OperationCoreProjectionSchema>;
+
 export const OperationExecutionResultSchema = z.object({
   version: z.literal("operation-core.v1"),
   plan_id: z.string().min(1).max(200),
