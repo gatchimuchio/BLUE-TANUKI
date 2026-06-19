@@ -10,12 +10,12 @@
 | AuthorityTraceState | `/authority/trace` | request/command authority events |
 | NotificationState | `/notifications` | display-only operator alerts |
 | HistoryReplayState | `/history/replay` | digest/metadata replay entries |
-| LocalUiState | sessionStorage, active tab, token input fields | display convenience only |
+| LocalUiState | sessionStorage, localStorage, active tab, token input fields, mascot preference fields | display convenience only |
 | AotanuMascotState | RuntimeState projection in Control Center UI | display-only mascot animation state |
 
 ## 2. Local UI State Rule
 
-Local UI state may remember selected screen and token input values in browser session storage.
+Local UI state may remember selected screen and token input values in browser session storage. It may remember display-only mascot preferences in browser local storage.
 
 Local UI state must not:
 
@@ -39,6 +39,8 @@ States:
 - `error`
 
 Mapping is performed in the WebChat Control Center UI from read-only runtime snapshot fields. The mascot may show readiness, pending work, success, or action-required state, but it must not approve, reject, resume, execute, rewrite policy, or influence HDS-BRAIN judgement.
+
+The mascot is mounted as a root-level floating dock. Its ON/OFF, built-in character, size, and corner placement preferences affect only Control Center rendering.
 
 ## 3. Task States
 

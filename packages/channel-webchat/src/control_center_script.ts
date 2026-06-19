@@ -3,6 +3,20 @@ import { AOTANU_SPRITE_SPECS } from "./aotanu_mascot.js";
 const AOTANU_SPRITE_SPECS_JSON = JSON.stringify(AOTANU_SPRITE_SPECS);
 
 export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU_SPRITE_SPECS_JSON};
+      const MASCOT_PREFS_STORAGE_KEY = "bt.mascotPrefs";
+      const DEFAULT_MASCOT_PREFS = {
+        enabled: true,
+        character: "aotanu",
+        size: "medium",
+        position: "bottom-right"
+      };
+      const MASCOT_STATE_LABELS = {
+        idle: "休憩中",
+        walk: "起動中",
+        working: "診断中",
+        happy: "休憩中",
+        error: "エラー"
+      };
       const aotanuAnimation = {
         timer: null,
         state: "idle",
@@ -26,6 +40,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
         activeScreen: sessionStorage.getItem("bt.activeScreen") || "home",
+        mascotPreferences: loadMascotPreferences(),
+        mascotActionsOpen: false,
+        lastMascotState: "idle",
+        lastMascotLabel: "休憩中",
         chatSocket: null,
         approvalTokens: Object.create(null)
       };
@@ -177,6 +195,59 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return "idle";
       }
 
+      function normalizeMascotPreferences(value) {
+        const source = isObject(value) ? value : {};
+        const allowedCharacters = ["aotanu", "none"];
+        const allowedSizes = ["small", "medium", "large"];
+        const allowedPositions = ["bottom-right", "bottom-left"];
+        return {
+          enabled: source.enabled !== false,
+          character: allowedCharacters.includes(source.character) ? source.character : DEFAULT_MASCOT_PREFS.character,
+          size: allowedSizes.includes(source.size) ? source.size : DEFAULT_MASCOT_PREFS.size,
+          position: allowedPositions.includes(source.position) ? source.position : DEFAULT_MASCOT_PREFS.position
+        };
+      }
+
+      function loadMascotPreferences() {
+        try {
+          const raw = window.localStorage.getItem(MASCOT_PREFS_STORAGE_KEY);
+          return raw ? normalizeMascotPreferences(JSON.parse(raw)) : Object.assign({}, DEFAULT_MASCOT_PREFS);
+        } catch (_) {
+          return Object.assign({}, DEFAULT_MASCOT_PREFS);
+        }
+      }
+
+      function saveMascotPreferences() {
+        try {
+          window.localStorage.setItem(MASCOT_PREFS_STORAGE_KEY, JSON.stringify(state.mascotPreferences));
+        } catch (_) {
+          /* preference persistence is best-effort browser UI state */
+        }
+      }
+
+      function aotanuDisplayLabelFromRuntime(body, mascotState) {
+        const workflowStatus = [
+          body.status,
+          body.runtime_status,
+          body.task_status,
+          body.state,
+          body.phase
+        ].map(lowerStatus).filter(Boolean).join(" ");
+        const pendingApprovals = numberValue(body.pending_approvals_count);
+        const pendingSchedules = numberValue(body.pending_schedule_approvals_count);
+        if (mascotState === "error") return "エラー";
+        if (pendingApprovals > 0 || pendingSchedules > 0 || includesAny(workflowStatus, ["waiting_approval", "approval_required"])) {
+          return "要確認";
+        }
+        return MASCOT_STATE_LABELS[mascotState] || MASCOT_STATE_LABELS.idle;
+      }
+
+      function mascotTone(mascotState, displayLabel) {
+        if (mascotState === "error") return "bad";
+        if (displayLabel === "要確認" || mascotState === "working" || mascotState === "walk") return "review";
+        return "good";
+      }
+
       function aotanuReducedMotion() {
         return Boolean(
           window.matchMedia &&
@@ -198,25 +269,146 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
-      function renderAotanuMascot(mascotState) {
+      function updateMascotSettingsStatus() {
+        const prefs = state.mascotPreferences;
+        const status = byId("mascot-settings-status");
+        if (!status) return;
+        const visible = prefs.enabled !== false && prefs.character !== "none";
+        status.textContent = visible ? "on" : "off";
+        status.className = "badge " + (visible ? "good" : "warn");
+      }
+
+      function syncMascotSettingsInputs() {
+        const prefs = state.mascotPreferences;
+        const enabled = byId("mascot-enabled");
+        const character = byId("mascot-character");
+        const size = byId("mascot-size");
+        const position = byId("mascot-position");
+        if (enabled) enabled.checked = prefs.enabled !== false;
+        if (character) character.value = prefs.character;
+        if (size) size.value = prefs.size;
+        if (position) position.value = prefs.position;
+        updateMascotSettingsStatus();
+      }
+
+      function setMascotActionsOpen(open) {
+        state.mascotActionsOpen = Boolean(open);
+        const actions = byId("mascot-actions");
+        const toggle = byId("mascot-toggle");
+        if (actions) actions.hidden = !state.mascotActionsOpen;
+        if (toggle) toggle.setAttribute("aria-expanded", state.mascotActionsOpen ? "true" : "false");
+      }
+
+      function setMascotPreferences(next) {
+        state.mascotPreferences = normalizeMascotPreferences(Object.assign({}, state.mascotPreferences, next));
+        saveMascotPreferences();
+        syncMascotSettingsInputs();
+        renderAotanuMascot(state.lastMascotState, state.lastMascotLabel);
+      }
+
+      function runMascotAction(action) {
+        setMascotActionsOpen(false);
+        if (action === "conversation") {
+          setActiveScreen("conversation");
+          const input = byId("chat-content");
+          if (input) input.focus();
+          return;
+        }
+        if (action === "doctor") {
+          setActiveScreen("doctor");
+          const input = byId("runtime-token");
+          if (input) input.focus();
+          return;
+        }
+        if (action === "activity") {
+          setActiveScreen("activity");
+          const input = byId("audit-token");
+          if (input) input.focus();
+          return;
+        }
+        if (action === "settings") {
+          setActiveScreen("settings");
+          const input = byId("mascot-enabled");
+          if (input) input.focus();
+        }
+      }
+
+      function bindMascotControls() {
+        const enabled = byId("mascot-enabled");
+        const character = byId("mascot-character");
+        const size = byId("mascot-size");
+        const position = byId("mascot-position");
+        const reset = byId("reset-mascot-settings");
+        const toggle = byId("mascot-toggle");
+        if (enabled) {
+          enabled.addEventListener("change", function () {
+            setMascotPreferences({ enabled: enabled.checked });
+          });
+        }
+        if (character) {
+          character.addEventListener("change", function () {
+            setMascotPreferences({ character: character.value });
+          });
+        }
+        if (size) {
+          size.addEventListener("change", function () {
+            setMascotPreferences({ size: size.value });
+          });
+        }
+        if (position) {
+          position.addEventListener("change", function () {
+            setMascotPreferences({ position: position.value });
+          });
+        }
+        if (reset) {
+          reset.addEventListener("click", function () {
+            setMascotPreferences(DEFAULT_MASCOT_PREFS);
+          });
+        }
+        if (toggle) {
+          toggle.addEventListener("click", function () {
+            setMascotActionsOpen(!state.mascotActionsOpen);
+          });
+        }
+      }
+
+      function renderAotanuMascot(mascotState, displayLabel) {
+        const dock = byId("mascot-dock");
         const panel = byId("aotanu-mascot");
         const sprite = byId("aotanu-sprite");
         const label = byId("aotanu-state-label");
-        if (!panel || !sprite || !label) return;
         if (aotanuAnimation.timer) {
           window.clearInterval(aotanuAnimation.timer);
           aotanuAnimation.timer = null;
         }
         const nextState = AOTANU_SPRITE_SPECS[mascotState] ? mascotState : "idle";
         const spec = AOTANU_SPRITE_SPECS[nextState];
+        const prefs = state.mascotPreferences;
+        const labelText = displayLabel || MASCOT_STATE_LABELS[nextState] || spec.label;
+        state.lastMascotState = nextState;
+        state.lastMascotLabel = labelText;
+        if (dock) {
+          dock.classList.remove(
+            "mascot-dock-bottom-right",
+            "mascot-dock-bottom-left",
+            "mascot-size-small",
+            "mascot-size-medium",
+            "mascot-size-large"
+          );
+          dock.classList.add("mascot-dock-" + prefs.position, "mascot-size-" + prefs.size);
+          dock.hidden = prefs.enabled === false || prefs.character === "none";
+          if (dock.hidden) setMascotActionsOpen(false);
+        }
+        updateMascotSettingsStatus();
+        if (!panel || !sprite || !label || (dock && dock.hidden)) return;
         aotanuAnimation.state = nextState;
         panel.dataset.state = nextState;
         panel.hidden = false;
-        panel.setAttribute("aria-label", "アオタヌ 状態: " + spec.label);
+        panel.setAttribute("aria-label", "アオタヌ 状態: " + labelText);
         sprite.style.backgroundImage = "url('" + spec.asset_path + "')";
         sprite.style.backgroundSize = String(spec.columns * 100) + "% " + String(spec.rows * 100) + "%";
-        label.textContent = spec.label;
-        label.className = "badge " + (nextState === "error" ? "bad" : nextState === "working" || nextState === "walk" ? "review" : "good");
+        label.textContent = labelText;
+        label.className = "badge " + mascotTone(nextState, labelText);
         setAotanuFrame(0);
         if (!aotanuReducedMotion() && spec.fps > 0) {
           aotanuAnimation.timer = window.setInterval(function () {
@@ -348,6 +540,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("recovery-token").value = state.recoveryToken || state.chatToken;
         byId("chat-token").value = state.chatToken;
         byId("chat-user").value = state.chatUser;
+        syncMascotSettingsInputs();
       }
 
       function severityTone(severity) {
@@ -449,7 +642,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("header-status").className = "badge " + (body.gateway_status === "ready" ? "good" : "warn");
         updatePermanentUseStatus(body);
         renderSchedules(body);
-        renderAotanuMascot(aotanuStateFromRuntime(body));
+        const mascotState = aotanuStateFromRuntime(body);
+        renderAotanuMascot(mascotState, aotanuDisplayLabelFromRuntime(body, mascotState));
       }
 
       function renderApprovals(body) {
@@ -1333,6 +1527,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setActiveScreen(screen);
           return;
         }
+        const mascotAction = target.dataset.mascotAction;
+        if (mascotAction) {
+          runMascotAction(mascotAction);
+          return;
+        }
         const verdict = target.dataset.verdict;
         const revokeGrantId = target.dataset.revokeGrant;
         if (revokeGrantId) {
@@ -1447,6 +1646,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       });
       byId("disconnect-chat").addEventListener("click", disconnectChat);
 
+      bindMascotControls();
       syncInputs();
       setActiveScreen(state.activeScreen);
       renderAotanuMascot("idle");

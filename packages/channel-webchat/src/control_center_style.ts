@@ -179,7 +179,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
 
       .dashboard-hero {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+        grid-template-columns: minmax(0, 1fr);
         gap: 12px;
         align-items: stretch;
       }
@@ -197,17 +197,6 @@ export const CONTROL_CENTER_STYLE = `      :root {
         line-height: 1.18;
       }
 
-      .tanuki-panel {
-        display: grid;
-        min-height: 170px;
-        place-items: center;
-        border: 1px solid #5a4d35;
-        border-radius: 8px;
-        background:
-          linear-gradient(135deg, rgba(84, 215, 155, 0.14), rgba(240, 169, 74, 0.12)),
-          #17150f;
-      }
-
       .aotanu-mascot {
         display: grid;
         justify-items: center;
@@ -220,8 +209,8 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       .aotanu-sprite {
-        width: 128px;
-        height: 128px;
+        width: var(--mascot-sprite-size, 96px);
+        height: var(--mascot-sprite-size, 96px);
         border: 1px solid rgba(102, 209, 193, 0.35);
         border-radius: 6px;
         background-color: #bdeaf4;
@@ -235,6 +224,95 @@ export const CONTROL_CENTER_STYLE = `      :root {
         flex-wrap: wrap;
         justify-content: center;
         gap: 8px;
+      }
+
+      .settings-subsection {
+        display: grid;
+        gap: 10px;
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid #383428;
+        border-radius: 8px;
+        background: var(--panel-2);
+      }
+
+      .mascot-dock {
+        --mascot-sprite-size: 96px;
+        position: fixed;
+        bottom: 24px;
+        z-index: 30;
+        display: grid;
+        gap: 8px;
+        justify-items: center;
+        width: max-content;
+        max-width: min(172px, calc(100vw - 32px));
+        pointer-events: none;
+      }
+
+      .mascot-dock[hidden] {
+        display: none;
+      }
+
+      .mascot-dock-bottom-right {
+        right: 24px;
+      }
+
+      .mascot-dock-bottom-left {
+        left: 24px;
+      }
+
+      .mascot-size-small {
+        --mascot-sprite-size: 80px;
+      }
+
+      .mascot-size-medium {
+        --mascot-sprite-size: 96px;
+      }
+
+      .mascot-size-large {
+        --mascot-sprite-size: 128px;
+      }
+
+      .mascot-toggle {
+        display: grid;
+        width: calc(var(--mascot-sprite-size) + 18px);
+        min-width: 0;
+        min-height: 0;
+        padding: 8px;
+        place-items: center;
+        border-color: rgba(102, 209, 193, 0.45);
+        border-radius: 8px;
+        background: rgba(16, 23, 32, 0.92);
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.38);
+        pointer-events: auto;
+      }
+
+      .mascot-toggle:hover {
+        border-color: var(--accent);
+      }
+
+      .mascot-actions {
+        order: -1;
+        display: grid;
+        gap: 6px;
+        width: 168px;
+        padding: 8px;
+        border: 1px solid rgba(102, 209, 193, 0.45);
+        border-radius: 8px;
+        background: rgba(17, 17, 15, 0.96);
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+        pointer-events: auto;
+      }
+
+      .mascot-actions[hidden] {
+        display: none;
+      }
+
+      .mascot-actions button {
+        width: 100%;
+        min-width: 0;
+        padding: 7px 8px;
+        text-align: left;
       }
 
       .screen-grid {
@@ -578,9 +656,42 @@ export const CONTROL_CENTER_STYLE = `      :root {
           grid-template-columns: 92px minmax(0, 1fr);
         }
 
-        .aotanu-sprite {
-          width: 96px;
-          height: 96px;
+        .mascot-dock {
+          bottom: 12px;
+          max-width: min(128px, calc(100vw - 24px));
+        }
+
+        .mascot-dock-bottom-right {
+          right: 12px;
+        }
+
+        .mascot-dock-bottom-left {
+          left: 12px;
+        }
+
+        .mascot-size-small {
+          --mascot-sprite-size: 64px;
+        }
+
+        .mascot-size-medium {
+          --mascot-sprite-size: 72px;
+        }
+
+        .mascot-size-large {
+          --mascot-sprite-size: 84px;
+        }
+
+        .mascot-toggle {
+          width: calc(var(--mascot-sprite-size) + 14px);
+          padding: 6px;
+        }
+
+        .mascot-dock .aotanu-caption {
+          display: none;
+        }
+
+        .mascot-actions {
+          width: 152px;
         }
       }
 `;

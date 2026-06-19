@@ -114,15 +114,6 @@ ${CONTROL_CENTER_STYLE}    </style>
               <span class="badge readonly-note">Channel metadata is not authority</span>
             </div>
           </div>
-          <div class="tanuki-panel" aria-label="Aotanu mascot panel">
-            <div id="aotanu-mascot" class="aotanu-mascot" role="img" aria-label="アオタヌ 状態: 待機中" data-state="idle">
-              <div id="aotanu-sprite" class="aotanu-sprite" aria-hidden="true"></div>
-              <div class="aotanu-caption">
-                <span class="badge readonly-note">アオタヌ</span>
-                <span id="aotanu-state-label" class="badge good">待機中</span>
-              </div>
-            </div>
-          </div>
         </section>
 
         <section class="card" data-screen-group="home conversation">
@@ -318,6 +309,32 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>OpenRouter</span><span id="settings-openrouter-status">not loaded</span></div>
             <div class="metric"><span>Verify</span><span id="settings-verify-status">not run</span></div>
           </div>
+          <section class="settings-subsection" aria-labelledby="mascot-settings-title">
+            <div class="row">
+              <h3 id="mascot-settings-title">Mascot</h3>
+              <span id="mascot-settings-status" class="badge good">on</span>
+            </div>
+            <div class="status-grid">
+              <label class="check"><input id="mascot-enabled" type="checkbox" /> Mascot</label>
+              <select id="mascot-character" aria-label="Mascot character">
+                <option value="aotanu">Aotanu / default</option>
+                <option value="none">None</option>
+                <option value="custom" disabled>Custom image</option>
+              </select>
+              <select id="mascot-size" aria-label="Mascot size">
+                <option value="small">small</option>
+                <option value="medium">medium</option>
+                <option value="large">large</option>
+              </select>
+              <select id="mascot-position" aria-label="Mascot position">
+                <option value="bottom-right">bottom-right</option>
+                <option value="bottom-left">bottom-left</option>
+              </select>
+            </div>
+            <div class="action-row">
+              <button id="reset-mascot-settings" type="button">Reset mascot settings</button>
+            </div>
+          </section>
           <pre id="settings-json">not loaded</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>LLM Provider</h3><p class="muted">Provider verification is non-mutating unless explicit save is requested through the settings surface.</p></div>
@@ -588,6 +605,24 @@ ${CONTROL_CENTER_STYLE}    </style>
           <div class="metric"><span>Forbidden</span><span>credentials / secrets / raw content</span></div>
         </section>
       </aside>
+    </div>
+
+    <div id="mascot-dock" class="mascot-dock mascot-dock-bottom-right mascot-size-medium" aria-label="Mascot dock">
+      <button id="mascot-toggle" class="mascot-toggle" type="button" aria-expanded="false" aria-controls="mascot-actions">
+        <span id="aotanu-mascot" class="aotanu-mascot" role="img" aria-label="アオタヌ 状態: 休憩中" data-state="idle">
+          <span id="aotanu-sprite" class="aotanu-sprite" aria-hidden="true"></span>
+          <span class="aotanu-caption">
+            <span class="badge readonly-note">アオタヌ</span>
+            <span id="aotanu-state-label" class="badge good">休憩中</span>
+          </span>
+        </span>
+      </button>
+      <div id="mascot-actions" class="mascot-actions" hidden>
+        <button type="button" data-mascot-action="conversation">会話を開始</button>
+        <button type="button" data-mascot-action="doctor">セットアップ診断</button>
+        <button type="button" data-mascot-action="activity">ログを見る</button>
+        <button type="button" data-mascot-action="settings">設定を開く</button>
+      </div>
     </div>
 
     <script>

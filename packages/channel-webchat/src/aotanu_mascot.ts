@@ -23,7 +23,7 @@ export const AOTANU_SPRITE_SPECS: Record<AotanuMascotState, AotanuSpriteSheetSpe
     rows: 2,
     frame_count: 4,
     fps: 3,
-    label: "待機中",
+    label: "休憩中",
   },
   walk: {
     asset_path: `${AOTANU_ASSET_ROUTE_PREFIX}aotanu_walk_2x2.png`,
@@ -31,7 +31,7 @@ export const AOTANU_SPRITE_SPECS: Record<AotanuMascotState, AotanuSpriteSheetSpe
     rows: 2,
     frame_count: 4,
     fps: 6,
-    label: "接続中",
+    label: "起動中",
   },
   working: {
     asset_path: `${AOTANU_ASSET_ROUTE_PREFIX}aotanu_working_2x2.png`,
@@ -39,7 +39,7 @@ export const AOTANU_SPRITE_SPECS: Record<AotanuMascotState, AotanuSpriteSheetSpe
     rows: 2,
     frame_count: 4,
     fps: 5,
-    label: "作業中",
+    label: "診断中",
   },
   happy: {
     asset_path: `${AOTANU_ASSET_ROUTE_PREFIX}aotanu_happy_2x2.png`,
@@ -47,7 +47,7 @@ export const AOTANU_SPRITE_SPECS: Record<AotanuMascotState, AotanuSpriteSheetSpe
     rows: 2,
     frame_count: 4,
     fps: 6,
-    label: "完了しました",
+    label: "休憩中",
   },
   error: {
     asset_path: `${AOTANU_ASSET_ROUTE_PREFIX}aotanu_error_2x2.png`,
@@ -55,7 +55,7 @@ export const AOTANU_SPRITE_SPECS: Record<AotanuMascotState, AotanuSpriteSheetSpe
     rows: 2,
     frame_count: 4,
     fps: 3,
-    label: "確認が必要です",
+    label: "エラー",
   },
 };
 
