@@ -32,6 +32,7 @@ async function freePort(): Promise<number> {
 const baseEnv = (): NodeJS.ProcessEnv => ({
   WEBCHAT_TOKEN: "abcdefghijkl",
   WEBCHAT_RESUME_TOKEN: "resume-abcdefghijkl",
+  BLUE_TANUKI_MAINTENANCE_TOKEN: "maintenance-abcdefghijkl",
   LLM_BACKEND: "stub",
 });
 
@@ -546,6 +547,21 @@ describe("runDoctor — error paths", () => {
     expect(r.ok).toBe(false);
     expect(
       r.checks.find((c) => c.id === "env:WEBCHAT_RESUME_TOKEN")?.level,
+    ).toBe("error");
+  });
+
+  it("exit_code=2 when BLUE_TANUKI_MAINTENANCE_TOKEN is missing", async () => {
+    const env = baseEnv();
+    delete env.BLUE_TANUKI_MAINTENANCE_TOKEN;
+    const r = await runDoctor({
+      env,
+      probe_port: false,
+      node_version: "22.14.0",
+    });
+    expect(r.exit_code).toBe(2);
+    expect(r.ok).toBe(false);
+    expect(
+      r.checks.find((c) => c.id === "env:BLUE_TANUKI_MAINTENANCE_TOKEN")?.level,
     ).toBe("error");
   });
 

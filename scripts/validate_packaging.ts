@@ -426,6 +426,8 @@ function main(): void {
   requireIncludes("install/macos/install.sh", macInstall, "resident-autostart-enable");
   requireIncludes("install/macos/install.sh", macInstall, "Control:");
   requireIncludes("install/macos/install.sh", macInstall, "/settings");
+  requireIncludes("install/macos/install.sh", macInstall, "safe_destructive_target");
+  requireIncludes("install/macos/install.sh", macInstall, "assert_not_same_target");
 
   const macUninstall = read("install/macos/uninstall.sh");
   requireIncludes("install/macos/uninstall.sh", macUninstall, "PURGE");
@@ -451,6 +453,8 @@ function main(): void {
   requireIncludes("install/linux/install.sh", linuxInstall, "resident-autostart-enable");
   requireIncludes("install/linux/install.sh", linuxInstall, "Control:");
   requireIncludes("install/linux/install.sh", linuxInstall, "/settings");
+  requireIncludes("install/linux/install.sh", linuxInstall, "safe_destructive_target");
+  requireIncludes("install/linux/install.sh", linuxInstall, "assert_not_same_target");
 
   const linuxUninstall = read("install/linux/uninstall.sh");
   requireIncludes("install/linux/uninstall.sh", linuxUninstall, "PURGE");
@@ -466,6 +470,8 @@ function main(): void {
   requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "Existing env file retained");
   requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "post-install doctor");
   requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "install_result=pass");
+  requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "safe_destructive_target");
+  requireIncludes("install/unix/product/BlueTanukiSetup.sh", unixProductSetup, "assert_not_same_target");
 
   const unixProductLauncher = read("install/unix/product/BlueTanukiLauncher.sh");
   requireIncludes("install/unix/product/BlueTanukiLauncher.sh", unixProductLauncher, "port_conflict=127.0.0.1:");
@@ -800,6 +806,11 @@ function main(): void {
     compose,
     "WEBCHAT_RESUME_TOKEN is required",
   );
+  requireIncludes(
+    "docker-compose.yml",
+    compose,
+    "BLUE_TANUKI_MAINTENANCE_TOKEN is required",
+  );
   requireIncludes("docker-compose.yml", compose, "BLUE_TANUKI_AUDIT_DIR");
   requireIncludes("docker-compose.yml", compose, "BLUE_TANUKI_SESSION_DIR");
   requireIncludes("docker-compose.yml", compose, "BLUE_TANUKI_SETTINGS_TOKEN");
@@ -819,6 +830,7 @@ function main(): void {
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm run doctor");
   requireIncludes(".github/workflows/ci.yml", workflow, "docker build");
   requireIncludes(".github/workflows/ci.yml", workflow, "WEBCHAT_RESUME_TOKEN");
+  requireIncludes(".github/workflows/ci.yml", workflow, "BLUE_TANUKI_MAINTENANCE_TOKEN");
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm release:bundle -- --dry-run");
   requireIncludes(".github/workflows/ci.yml", workflow, "pnpm release:verify");
   requireIncludes(".github/workflows/ci.yml", workflow, "macos-product");
@@ -848,6 +860,11 @@ function main(): void {
     "deploy/systemd/blue-tanuki.env.example",
     env,
     "WEBCHAT_RESUME_TOKEN=",
+  );
+  requireIncludes(
+    "deploy/systemd/blue-tanuki.env.example",
+    env,
+    "BLUE_TANUKI_MAINTENANCE_TOKEN=",
   );
   requireIncludes(
     "deploy/systemd/blue-tanuki.env.example",

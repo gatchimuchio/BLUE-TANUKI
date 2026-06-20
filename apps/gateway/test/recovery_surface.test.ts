@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -214,4 +215,109 @@ describe("buildRecoverySnapshot", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("rejects unsafe recovery env paths before destructive reset", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-unsafe-"));
+    try {
+      const envFile = path.join(root, "product.env");
+      const fileRoot = path.join(root, "files");
+      const recoveryDir = path.join(root, "recovery");
+      await mkdir(fileRoot);
+      await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+
+      await expect(
+        factoryResetRecovery({
+          BLUE_TANUKI_ENV_FILE: envFile,
+          BLUE_TANUKI_FILE_ROOT: fileRoot,
+          BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+          BLUE_TANUKI_SESSION_DIR: os.homedir(),
+          BLUE_TANUKI_MEMORY_DIR: path.join(os.homedir(), ".config"),
+        }, { confirm: "FACTORY_RESET" }),
+      ).rejects.toThrow(/unsafe_runtime_target/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects restore manifests that rewrite source_path outside configured runtime targets", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-manifest-"));
+    try {
+      const envFile = path.join(root, "product.env");
+      const sessionDir = path.join(root, "sessions");
+      const fileRoot = path.join(root, "files");
+      const recoveryDir = path.join(root, "recovery");
+      await mkdir(sessionDir);
+      await mkdir(fileRoot);
+      await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+      await writeFile(path.join(sessionDir, "session.jsonl"), "session\n", "utf8");
+      const env = {
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_SESSION_DIR: sessionDir,
+        BLUE_TANUKI_FILE_ROOT: fileRoot,
+        BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+      };
+
+      const backup = await createRecoveryBackup(env);
+      const manifestPath = backup.backup_manifest_path!;
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      manifest.items[0].source_path = os.homedir();
+      const tampered = `${JSON.stringify(manifest, null, 2)}\n`;
+      await writeFile(manifestPath, tampered, "utf8");
+      const digest = createHash("sha256").update(tampered).digest("hex");
+      await writeFile(`${manifestPath}.sha256`, `${digest}  manifest.json\n`, "utf8");
+
+      await expect(
+        restoreRecoveryBackup(env, { backup_id: backup.backup_id, confirm: "RESTORE" }),
+      ).rejects.toThrow(/source_path_mismatch|unsafe_runtime_target/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects relative restore manifest paths and symlink runtime targets", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-symlink-"));
+    try {
+      const envFile = path.join(root, "product.env");
+      const fileRoot = path.join(root, "files");
+      const recoveryDir = path.join(root, "recovery");
+      const outside = path.join(root, "outside");
+      const link = path.join(root, "session-link");
+      await mkdir(fileRoot);
+      await mkdir(outside);
+      await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+      await symlink(outside, link, "dir");
+
+      await expect(
+        createRecoveryBackup({
+          BLUE_TANUKI_ENV_FILE: envFile,
+          BLUE_TANUKI_FILE_ROOT: fileRoot,
+          BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+          BLUE_TANUKI_SESSION_DIR: link,
+        }),
+      ).rejects.toThrow(/symlink/);
+
+      const sessionDir = path.join(root, "sessions");
+      await mkdir(sessionDir);
+      const env = {
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_FILE_ROOT: fileRoot,
+        BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+        BLUE_TANUKI_SESSION_DIR: sessionDir,
+      };
+      const backup = await createRecoveryBackup(env);
+      const manifestPath = backup.backup_manifest_path!;
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      manifest.items[0].source_path = "../escape";
+      const tampered = `${JSON.stringify(manifest, null, 2)}\n`;
+      await writeFile(manifestPath, tampered, "utf8");
+      const digest = createHash("sha256").update(tampered).digest("hex");
+      await writeFile(`${manifestPath}.sha256`, `${digest}  manifest.json\n`, "utf8");
+
+      await expect(
+        restoreRecoveryBackup(env, { backup_id: backup.backup_id, confirm: "RESTORE" }),
+      ).rejects.toThrow(/source_path_mismatch|relative/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

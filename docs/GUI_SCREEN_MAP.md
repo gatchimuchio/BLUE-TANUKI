@@ -27,5 +27,7 @@ Existing read/write surfaces:
 - `GET /authority/trace` with `WEBCHAT_TOKEN`
 - `GET /approval` with `WEBCHAT_RESUME_TOKEN`
 - `POST /approval/:id` with `WEBCHAT_RESUME_TOKEN` plus request-bound one-time token
+- `GET/POST /update/*` with `BLUE_TANUKI_MAINTENANCE_TOKEN`
+- `GET/POST /recovery/*` with `BLUE_TANUKI_MAINTENANCE_TOKEN`
 
 No new backend route is required for the Operation Core Plan viewer. It reads the existing runtime snapshot and operator snapshot surfaces.

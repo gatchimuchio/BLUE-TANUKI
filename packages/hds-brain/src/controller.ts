@@ -50,6 +50,7 @@ import {
   buildRuntimeInvariantEvidence,
   type RuntimeInvariantEvidenceOptions,
   type RuntimeInvariantEvidenceReport,
+  type RuntimeInvariantKey,
   type RuntimeInvariantValues,
 } from "./runtime_invariants.js";
 import { fReferenceForId } from "./f_reference.js";
@@ -134,6 +135,15 @@ export interface ControllerSelfHealthOptions {
   audit_appendable?: import("./health.js").AuditAppendabilityStatus;
 }
 
+const STANDALONE_SELF_HEALTH_DEFAULTS: Required<
+  Pick<ControllerSelfHealthOptions, "required_directories" | "storage_paths" | "optional_dependencies" | "audit_appendable">
+> = {
+  required_directories: [],
+  storage_paths: [],
+  optional_dependencies: [],
+  audit_appendable: "memory_only",
+};
+
 export interface ResumeAuditOptions {
   actor?: string;
   token_kind?: ResumeAuditTrace["token_kind"];
@@ -163,7 +173,10 @@ export class HDSUpperController {
     this.audit = opts.audit ?? new AuditLog();
     this.memory = opts.memory;
     this.llm_route = opts.llm_route ?? {};
-    this.self_health = opts.self_health ?? {};
+    this.self_health = {
+      ...STANDALONE_SELF_HEALTH_DEFAULTS,
+      ...(opts.self_health ?? {}),
+    };
   }
 
   /**
@@ -659,7 +672,14 @@ export class HDSUpperController {
     evidence_options?: RuntimeInvariantEvidenceOptions;
     timestamp?: number;
   } = {}): RuntimeInvariantsLog {
-    const report = opts.report ?? buildRuntimeInvariantEvidence(opts.evidence_options);
+    const evidence_options = {
+      ...opts.evidence_options,
+      actuals: {
+        ...this.runtimeInvariantActuals(),
+        ...(opts.evidence_options?.actuals ?? {}),
+      },
+    };
+    const report = opts.report ?? buildRuntimeInvariantEvidence(evidence_options);
     const log: RuntimeInvariantsLog = {
       kind: "runtime_invariants",
       request_id: opts.request_id ?? null,
@@ -693,7 +713,9 @@ export class HDSUpperController {
   }
 
   getRuntimeSnapshot(opts: { runtime_invariants?: RuntimeInvariantEvidenceReport } = {}): HDSRuntimeSnapshot {
-    const runtime_invariants = opts.runtime_invariants ?? buildRuntimeInvariantEvidence();
+    const runtime_invariants = opts.runtime_invariants ?? buildRuntimeInvariantEvidence({
+      actuals: this.runtimeInvariantActuals(),
+    });
     return {
       state: this.state,
       suspended: this.listSuspended(),
@@ -741,6 +763,15 @@ export class HDSUpperController {
     } catch {
       return false;
     }
+  }
+
+  private runtimeInvariantActuals(): Partial<Record<RuntimeInvariantKey, boolean>> {
+    return {
+      hds_calls_llm: false,
+      process_policy_enforced: this.policyStructurallyValid(),
+      memory_used_for_authority: false,
+      complete_history_used_for_authority: false,
+    };
   }
 
   private buildCommand(req: InboundRequest, log: DecisionLog): ExecuteCommand {

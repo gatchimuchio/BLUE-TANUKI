@@ -11,7 +11,8 @@
     "secrets:WEBCHAT_TOKEN",
     "secrets:WEBCHAT_RESUME_TOKEN",
     "secrets:WEBHOOK_TOKEN",
-    "secrets:BLUE_TANUKI_SETTINGS_TOKEN"
+    "secrets:BLUE_TANUKI_SETTINGS_TOKEN",
+    "secrets:BLUE_TANUKI_MAINTENANCE_TOKEN"
   ],
-  "description": "HTTP+WS WebChat channel. Bearer auth, /ws-ticket single-use authentication, /healthz, /resume with request-bound one-time approval tokens, optional /webhook with a dedicated webhook token, /settings with dedicated settings-token auth, per-key token-bucket rate limiting. Listens on the configured port."
+  "description": "HTTP+WS WebChat channel. Bearer auth, /ws-ticket single-use authentication, /healthz, /resume with request-bound one-time approval tokens, optional /webhook with a dedicated webhook token, /settings with dedicated settings-token auth, /update and /recovery with a dedicated maintenance token, per-key token-bucket rate limiting. Listens on the configured port."
 }

@@ -18,6 +18,19 @@ function runShell(rel: string, args: readonly string[], cwd: string) {
   });
 }
 
+function runShellWithEnv(
+  rel: string,
+  args: readonly string[],
+  cwd: string,
+  env: Record<string, string>,
+) {
+  return spawnSync("sh", [join(root, rel), ...args], {
+    cwd,
+    env: { ...process.env, ...env, NO_LAUNCH: "1" },
+    encoding: "utf8",
+  });
+}
+
 describe("source and release-bundle install entrypoints", () => {
   it("exposes OS-specific root entrypoints", () => {
     expect(existsSync(join(root, "INSTALL_WINDOWS.cmd"))).toBe(true);
@@ -151,6 +164,69 @@ describe("source and release-bundle install entrypoints", () => {
       expect(text).toContain("resident-open");
       expect(text).toContain("BLUE_TANUKI_CONTROL_CENTER_URL");
       expect(text).toContain("LAUNCH_AFTER_INSTALL=0");
+    }
+  });
+
+  it("rejects broad Unix installer roots before destructive setup", () => {
+    if (process.platform === "win32") {
+      expect(read("install/unix/product/BlueTanukiSetup.sh")).toContain("safe_destructive_target");
+      return;
+    }
+
+    const tmp = mkdtempSync(join(tmpdir(), "blue-tanuki-unix-safe-target-"));
+    try {
+      const cases: Array<{
+        name: string;
+        rel: string;
+        args: readonly string[];
+        env?: Record<string, string>;
+      }> = [
+        {
+          name: "product install-root home",
+          rel: "install/unix/product/BlueTanukiSetup.sh",
+          args: ["--install-root", process.env.HOME ?? ""],
+        },
+        {
+          name: "product runtime-root local",
+          rel: "install/unix/product/BlueTanukiSetup.sh",
+          args: ["--runtime-root", join(process.env.HOME ?? "", ".local")],
+        },
+        {
+          name: "product env install-root home",
+          rel: "install/unix/product/BlueTanukiSetup.sh",
+          args: [],
+          env: { INSTALL_ROOT: process.env.HOME ?? "" },
+        },
+        {
+          name: "product env runtime-root config",
+          rel: "install/unix/product/BlueTanukiSetup.sh",
+          args: [],
+          env: { RUNTIME_ROOT: join(process.env.HOME ?? "", ".config") },
+        },
+        {
+          name: "linux source install-root home",
+          rel: "install/linux/install.sh",
+          args: [],
+          env: { INSTALL_ROOT: process.env.HOME ?? "" },
+        },
+        {
+          name: "macos source install-root home",
+          rel: "install/macos/install.sh",
+          args: [],
+          env: { INSTALL_ROOT: process.env.HOME ?? "" },
+        },
+      ];
+
+      for (const item of cases) {
+        const result = runShellWithEnv(item.rel, item.args, tmp, item.env ?? {});
+        const output = `${result.stdout}\n${result.stderr}`;
+        expect(result.status, item.name).not.toBe(0);
+        expect(output, item.name).toContain("unsafe broad path");
+        expect(output, item.name).not.toContain("missing_installer_artifact=fail");
+        expect(output, item.name).not.toContain("Node.js 22.14.0");
+      }
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 

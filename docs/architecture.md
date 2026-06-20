@@ -132,11 +132,13 @@ OpenClaw と同様のチャネル多様性を、**LLM 結合なし**で再実装
 | `POST /inbound` | Bearer | `{user, content}` を `InboundRequest` 化、handler に投入。同期で `{accepted, request_id}` を返す |
 | `GET /ws?token=...&user=...` | クエリ token | WS 接続を user 単位で登録。`OutboundChannel.send` 時に該当 user の全ソケットへブロードキャスト |
 | `POST /resume` | Bearer (`WEBCHAT_RESUME_TOKEN`) | `{request_id, verdict}` を `onResume` コールバックに転送 (Phase 1 の人間 RESUME 窓口) |
+| `GET/POST /update/*` | Bearer (`BLUE_TANUKI_MAINTENANCE_TOKEN`) | manual update verify / prepare の保守操作 |
+| `GET/POST /recovery/*` | Bearer (`BLUE_TANUKI_MAINTENANCE_TOKEN`) | backup / restore / reset / factory-reset の保守操作 |
 | `GET /healthz` | なし | liveness 用 |
 
 設計上の制約:
 - bind 既定 `127.0.0.1` (loopback only)。外部公開は明示的に `WEBCHAT_HOST` を変える必要がある
-- `WEBCHAT_TOKEN` は `/inbound` と `/ws-ticket` 用に8文字以上必須。`WEBCHAT_RESUME_TOKEN` は `/resume` 用に別 secret として必須で、同値設定はコンストラクタ/serve boot が throw
+- `WEBCHAT_TOKEN` は `/inbound` と `/ws-ticket` 用に8文字以上必須。`WEBCHAT_RESUME_TOKEN` は `/resume` 用、`BLUE_TANUKI_MAINTENANCE_TOKEN` は `/update/*` と `/recovery/*` 用に別 secret として必須で、同値設定はコンストラクタ/serve boot が throw
 - WS 認証は token クエリ。Phase 3 で「初回 HTTP ハンドシェイクで一回限り token を発行 → WS で交換」方式に置き換え予定
 - セッションは in-memory (`Map<user, Set<WebSocket>>`)。プロセス再起動で切断
 - HTTP body の hard cap 1MB
@@ -168,7 +170,7 @@ Phase 2/3 ではこれらのスキーマを **無変更** で維持。`upstream_
 | モード | 起動 | 用途 |
 |---|---|---|
 | CLI 1ショット | `pnpm gateway:dev "msg"` | Phase 1 互換、判定確認用 |
-| serve | `WEBCHAT_TOKEN=... WEBCHAT_RESUME_TOKEN=... pnpm gateway:serve:dev` | 長期駐在、WebChat + Slack/Discord (実 SDK) |
+| serve | `WEBCHAT_TOKEN=... WEBCHAT_RESUME_TOKEN=... BLUE_TANUKI_MAINTENANCE_TOKEN=... pnpm gateway:serve:dev` | 長期駐在、WebChat + Slack/Discord (実 SDK) |
 
 serve モードの中核ループ (`serve.ts`):
 

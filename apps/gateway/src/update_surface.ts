@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { PRODUCT_SCOPE_CORE_RELEASE_PATHS } from "@blue-tanuki/protocol";
 import { createRecoveryBackup } from "./recovery_surface.js";
 
 export type UpdateEvidenceSource = readonly ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"];
@@ -141,18 +142,7 @@ const AUTHORITY_BOUNDARY: UpdateAuthorityBoundary = {
   used_for_authority: false,
 };
 
-const REQUIRED_CORE_PATHS = [
-  "packages/hds-brain",
-  "packages/protocol",
-  "packages/blue-tanuki",
-  "packages/channel-base",
-  "packages/channel-webchat",
-  "packages/channel-telegram",
-  "packages/operator-writing",
-  "packages/operator-daily",
-  "packages/operator-developer",
-  "apps/gateway",
-] as const;
+const REQUIRED_CORE_PATHS = PRODUCT_SCOPE_CORE_RELEASE_PATHS;
 
 function updateRoot(env: NodeJS.ProcessEnv): string {
   return path.resolve(

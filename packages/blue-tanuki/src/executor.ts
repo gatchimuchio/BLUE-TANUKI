@@ -311,12 +311,15 @@ export class Executor {
       };
     }
 
+    const controller = new AbortController();
     const result = await this.withTimeout(
       tool.invoke(payload.arguments, {
         command_id: id,
         upstream_commit_hash: commit_hash,
+        signal: controller.signal,
       }),
       constraints?.timeout_ms,
+      controller,
     );
     return {
       command_id: id,
@@ -380,14 +383,26 @@ export class Executor {
     };
   }
 
-  private async withTimeout<T>(p: Promise<T>, timeout_ms: number | undefined): Promise<T> {
+  private async withTimeout<T>(
+    p: Promise<T>,
+    timeout_ms: number | undefined,
+    controller?: AbortController,
+  ): Promise<T> {
     if (!timeout_ms) return p;
-    return await Promise.race([
-      p,
-      new Promise<T>((_, reject) =>
-        setTimeout(() => reject(new Error(`timeout after ${timeout_ms}ms`)), timeout_ms),
-      ),
-    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        p,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`timeout after ${timeout_ms}ms`));
+            controller?.abort();
+          }, timeout_ms);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private assertExecutionApproved(cmd: ApprovedCommand): ExecutorApprovalProof {

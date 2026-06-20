@@ -126,6 +126,7 @@ function findAotanuAssetRoot(): string {
  *   POST /operators/daily/invoke body:{user,content} auth:Bearer inbound-token
  *   GET  /operators/developer auth:Bearer inbound-token
  *   POST /operators/developer/invoke body:{user,content} auth:Bearer inbound-token
+ *   GET/POST /update/* and /recovery/* auth:Bearer maintenance-token
  *   GET  /ws         query:?ticket=...
  *   GET  /healthz    no auth, not rate-limited
  *
@@ -179,6 +180,20 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     ) {
       throw new Error("WebChatChannel: opts.webhook_token must differ from WebChat tokens");
     }
+    if ((opts.update || opts.recovery) && !opts.maintenance_token) {
+      throw new Error("WebChatChannel: opts.maintenance_token is required when update or recovery surfaces are set");
+    }
+    if (opts.maintenance_token !== undefined && opts.maintenance_token.length < 16) {
+      throw new Error("WebChatChannel: opts.maintenance_token must be >=16 chars when set");
+    }
+    if (
+      opts.maintenance_token !== undefined &&
+      (opts.maintenance_token === opts.token ||
+        opts.maintenance_token === opts.resume_token ||
+        opts.maintenance_token === opts.webhook_token)
+    ) {
+      throw new Error("WebChatChannel: opts.maintenance_token must differ from WebChat tokens");
+    }
     if (opts.onResume && !opts.resume_token) {
       throw new Error("WebChatChannel: opts.resume_token is required when onResume is set");
     }
@@ -189,7 +204,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       opts.settings &&
       (opts.settings.token === opts.token ||
         opts.settings.token === opts.resume_token ||
-        opts.settings.token === opts.webhook_token)
+        opts.settings.token === opts.webhook_token ||
+        opts.settings.token === opts.maintenance_token)
     ) {
       throw new Error("WebChatChannel: opts.settings.token must differ from WebChat tokens");
     }
@@ -831,6 +847,13 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     return Boolean(m && this.opts.settings && m[1] === this.opts.settings.token);
   }
 
+  private checkMaintenanceAuth(req: IncomingMessage): boolean {
+    const h = req.headers["authorization"];
+    if (typeof h !== "string") return false;
+    const m = /^Bearer\s+(.+)$/i.exec(h);
+    return Boolean(m && this.opts.maintenance_token && m[1] === this.opts.maintenance_token);
+  }
+
   private async handleApproval(
     req: IncomingMessage,
     res: ServerResponse,
@@ -1367,7 +1390,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "update_not_configured" }));
       return;
     }
-    if (!this.checkAuth(req, "inbound")) {
+    if (!this.checkMaintenanceAuth(req)) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
@@ -1434,7 +1457,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "recovery_not_configured" }));
       return;
     }
-    if (!this.checkAuth(req, "inbound")) {
+    if (!this.checkMaintenanceAuth(req)) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;

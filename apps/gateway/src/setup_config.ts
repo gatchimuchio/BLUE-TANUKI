@@ -29,6 +29,7 @@ export interface SetupWebChatConfig {
   port: number;
   token: string;
   resume_token: string;
+  maintenance_token: string;
 }
 
 export interface SetupPathConfig {
@@ -177,6 +178,7 @@ export function createDefaultSetupConfig(
       port: 8787,
       token: generateSetupToken(tokenBytes),
       resume_token: generateSetupToken(tokenBytes),
+      maintenance_token: generateSetupToken(tokenBytes),
     },
     paths: {
       file_root: path.join(base, "files"),
@@ -269,8 +271,15 @@ export function validateSetupConfig(
   }
   validateToken(config.webchat.token, "webchat.token");
   validateToken(config.webchat.resume_token, "webchat.resume_token");
+  validateToken(config.webchat.maintenance_token, "webchat.maintenance_token");
   if (config.webchat.token === config.webchat.resume_token) {
     throw new Error("webchat.resume_token must differ from webchat.token");
+  }
+  if (
+    config.webchat.maintenance_token === config.webchat.token ||
+    config.webchat.maintenance_token === config.webchat.resume_token
+  ) {
+    throw new Error("webchat.maintenance_token must differ from WebChat tokens");
   }
 
   validatePath(config.paths.file_root, "paths.file_root");
@@ -279,7 +288,8 @@ export function validateSetupConfig(
   validateToken(config.settings.token, "settings.token");
   if (
     config.settings.token === config.webchat.token ||
-    config.settings.token === config.webchat.resume_token
+    config.settings.token === config.webchat.resume_token ||
+    config.settings.token === config.webchat.maintenance_token
   ) {
     throw new Error("settings.token must differ from WebChat tokens");
   }
@@ -341,6 +351,8 @@ export function setupConfigFromEnv(
   config.webchat.token = env.WEBCHAT_TOKEN ?? config.webchat.token;
   config.webchat.resume_token =
     env.WEBCHAT_RESUME_TOKEN ?? config.webchat.resume_token;
+  config.webchat.maintenance_token =
+    env.BLUE_TANUKI_MAINTENANCE_TOKEN ?? config.webchat.maintenance_token;
   config.paths.file_root =
     env.BLUE_TANUKI_FILE_ROOT ?? config.paths.file_root;
   config.paths.session_dir =
@@ -378,6 +390,7 @@ export function setupConfigToEnv(
     WEBCHAT_PORT: String(config.webchat.port),
     WEBCHAT_TOKEN: config.webchat.token,
     WEBCHAT_RESUME_TOKEN: config.webchat.resume_token,
+    BLUE_TANUKI_MAINTENANCE_TOKEN: config.webchat.maintenance_token,
     BLUE_TANUKI_SETTINGS_TOKEN: config.settings.token,
     BLUE_TANUKI_FILE_ROOT: path.resolve(config.paths.file_root),
     BLUE_TANUKI_SESSION_DIR: path.resolve(config.paths.session_dir),
@@ -504,6 +517,7 @@ export function renderSetupEnvFile(
     "WEBCHAT_PORT",
     "WEBCHAT_TOKEN",
     "WEBCHAT_RESUME_TOKEN",
+    "BLUE_TANUKI_MAINTENANCE_TOKEN",
     "BLUE_TANUKI_SETTINGS_TOKEN",
     "BLUE_TANUKI_FILE_ROOT",
     "BLUE_TANUKI_SESSION_DIR",

@@ -89,13 +89,13 @@ server.listen(port, "127.0.0.1");
 
 open_control_center() {
   if command -v open >/dev/null 2>&1; then
-    open "$CONTROL_CENTER_URL" >/dev/null 2>&1 || true
-    echo "opened=$CONTROL_CENTER_URL"
+    (open "$CONTROL_CENTER_URL" >/dev/null 2>&1 || true) &
+    echo "open_requested=$CONTROL_CENTER_URL"
     return
   fi
   if command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$CONTROL_CENTER_URL" >/dev/null 2>&1 || true
-    echo "opened=$CONTROL_CENTER_URL"
+    (xdg-open "$CONTROL_CENTER_URL" >/dev/null 2>&1 || true) &
+    echo "open_requested=$CONTROL_CENTER_URL"
     return
   fi
   echo "open_manually=$CONTROL_CENTER_URL"

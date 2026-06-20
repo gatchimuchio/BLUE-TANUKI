@@ -11,6 +11,7 @@ jobs:
     env:
       WEBCHAT_TOKEN: ci-webchat-token-123456
       WEBCHAT_RESUME_TOKEN: ci-resume-token-123456
+      BLUE_TANUKI_MAINTENANCE_TOKEN: ci-maintenance-token-123456
       BLUE_TANUKI_SETTINGS_TOKEN: ci-settings-token-123456
       LLM_BACKEND: stub
       SLACK_BOT_TOKEN: ci-slack-bot-token

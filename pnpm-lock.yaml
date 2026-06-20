@@ -48,6 +48,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/protocol
 
+  install/installer: {}
+
   packages/blue-tanuki:
     dependencies:
       '@blue-tanuki/protocol':

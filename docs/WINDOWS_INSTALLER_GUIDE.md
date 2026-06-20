@@ -138,7 +138,8 @@ repairs the install files and keeps the existing env/settings file by default:
 
 Use `-ResetConfig` only when the owner intentionally wants to regenerate the env
 file. A normal repair install must not rotate `WEBCHAT_TOKEN`,
-`WEBCHAT_RESUME_TOKEN`, or `BLUE_TANUKI_SETTINGS_TOKEN`.
+`WEBCHAT_RESUME_TOKEN`, `BLUE_TANUKI_MAINTENANCE_TOKEN`, or
+`BLUE_TANUKI_SETTINGS_TOKEN`.
 
 ## Included Shortcuts
 

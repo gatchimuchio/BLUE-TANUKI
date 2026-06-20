@@ -45,6 +45,7 @@ const TOKEN = "test-token-1234";
 const RESUME_TOKEN = "resume-token-1234";
 const SETTINGS_TOKEN = "settings-token-1234";
 const WEBHOOK_TOKEN = "webhook-token-1234";
+const MAINTENANCE_TOKEN = "maintenance-token-1234";
 
 interface Ctx {
   ch: WebChatChannel;
@@ -58,6 +59,7 @@ async function setup(
       onResume?: (id: string, v: string, ctx: { actor: string; token_kind: "resume" }) => Promise<unknown>;
       resume_token?: string;
       webhook_token?: string;
+      maintenance_token?: string;
       resume_approval_tokens?: false;
       resume_approval_token_ttl_ms?: number;
       ws_ticket_ttl_ms?: number;
@@ -85,6 +87,7 @@ async function setup(
     token: TOKEN,
     resume_token: opts.resume_token ?? RESUME_TOKEN,
     webhook_token: opts.webhook_token,
+    maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
     onResume: opts.onResume as never,
     resume_approval_tokens: opts.resume_approval_tokens,
@@ -308,6 +311,42 @@ describe("WebChatChannel — construction", () => {
         }),
     ).toThrow(/settings.token/);
   });
+
+  it("requires a dedicated maintenance token for update and recovery surfaces", () => {
+    expect(
+      () =>
+        new WebChatChannel({
+          port: 1234,
+          token: TOKEN,
+          update: { getSnapshot: async () => ({}) },
+        }),
+    ).toThrow(/maintenance_token/);
+    expect(
+      () =>
+        new WebChatChannel({
+          port: 1234,
+          token: TOKEN,
+          resume_token: RESUME_TOKEN,
+          maintenance_token: TOKEN,
+          recovery: { getSnapshot: async () => ({}) },
+        }),
+    ).toThrow(/maintenance_token/);
+    expect(
+      () =>
+        new WebChatChannel({
+          port: 1234,
+          token: TOKEN,
+          resume_token: RESUME_TOKEN,
+          maintenance_token: MAINTENANCE_TOKEN,
+          settings: {
+            token: MAINTENANCE_TOKEN,
+            html: "<!doctype html>",
+            getSnapshot: async () => ({}),
+          },
+          update: { getSnapshot: async () => ({}) },
+        }),
+    ).toThrow(/settings.token/);
+  });
 });
 
 describe("WebChatChannel — Control Center shell", () => {
@@ -372,6 +411,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("/app/about");
       expect(html).toContain("public claim");
       expect(html).toContain("update-token");
+      expect(html).toContain("maintenance token");
       expect(html).toContain("load-update");
       expect(html).toContain("update-next-action-status");
       expect(html).toContain("/update/snapshot");
@@ -525,7 +565,7 @@ describe("Aotanu mascot runtime mapper", () => {
 });
 
 describe("WebChatChannel — Recovery surface", () => {
-  it("serves token-gated recovery readiness and control actions with non-authority metadata", async () => {
+  it("serves maintenance-token-gated recovery readiness and control actions with non-authority metadata", async () => {
     const actions: string[] = [];
     const ctx = await setup({
       recovery: {
@@ -606,9 +646,12 @@ describe("WebChatChannel — Recovery surface", () => {
       await ctx.ch.start(async () => {});
 
       expect((await getRaw(ctx.port, "/recovery/snapshot")).status).toBe(401);
+      expect((await getRaw(ctx.port, "/recovery/snapshot", {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
 
       const ok = await getRaw(ctx.port, "/recovery/snapshot", {
-        authorization: `Bearer ${TOKEN}`,
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       expect(ok.status).toBe(200);
       expect(JSON.parse(ok.text)).toMatchObject({
@@ -637,13 +680,16 @@ describe("WebChatChannel — Recovery surface", () => {
       });
 
       const post = await postJson(ctx.port, "/recovery/snapshot", {}, {
-        authorization: `Bearer ${TOKEN}`,
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       expect(post.status).toBe(405);
 
       expect((await postJson(ctx.port, "/recovery/backup", {})).status).toBe(401);
-      const backup = await postJson(ctx.port, "/recovery/backup", {}, {
+      expect((await postJson(ctx.port, "/recovery/backup", {}, {
         authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+      const backup = await postJson(ctx.port, "/recovery/backup", {}, {
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       expect(backup.status).toBe(200);
       expect(backup.body).toMatchObject({ ok: true, result: { action: "backup", used_for_authority: false } });
@@ -652,18 +698,18 @@ describe("WebChatChannel — Recovery surface", () => {
         backup_id: "2026-06-14T00-00-00-000Z.backup.fixture",
         confirm: "RESTORE",
       }, {
-        authorization: `Bearer ${TOKEN}`,
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       expect(restore.status).toBe(200);
 
       await postJson(ctx.port, "/recovery/reset-provider", { confirm: "RESET_PROVIDER" }, {
-        authorization: `Bearer ${TOKEN}`,
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       await postJson(ctx.port, "/recovery/reset-connector", { confirm: "RESET_CONNECTOR" }, {
-        authorization: `Bearer ${TOKEN}`,
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       await postJson(ctx.port, "/recovery/factory-reset", { confirm: "FACTORY_RESET" }, {
-        authorization: `Bearer ${TOKEN}`,
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       expect(actions).toEqual([
         "backup",
@@ -735,7 +781,7 @@ describe("WebChatChannel — About surface", () => {
 });
 
 describe("WebChatChannel — Update surface", () => {
-  it("serves manual update readiness and prepare controls only with the inbound token", async () => {
+  it("serves manual update readiness and prepare controls only with the maintenance token", async () => {
     const actions: string[] = [];
     const ctx = await setup({
       update: {
@@ -812,9 +858,12 @@ describe("WebChatChannel — Update surface", () => {
       await ctx.ch.start(async () => {});
 
       expect((await getRaw(ctx.port, "/update/snapshot")).status).toBe(401);
+      expect((await getRaw(ctx.port, "/update/snapshot", {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
 
       const ok = await getRaw(ctx.port, "/update/snapshot", {
-        authorization: `Bearer ${TOKEN}`,
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       expect(ok.status).toBe(200);
       expect(JSON.parse(ok.text)).toMatchObject({
@@ -839,19 +888,22 @@ describe("WebChatChannel — Update surface", () => {
       });
 
       const snapshotPost = await postJson(ctx.port, "/update/snapshot", {}, {
-        authorization: `Bearer ${TOKEN}`,
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       expect(snapshotPost.status).toBe(405);
 
       expect((await postJson(ctx.port, "/update/verify", {})).status).toBe(401);
-      const verify = await postJson(ctx.port, "/update/verify", {}, {
+      expect((await postJson(ctx.port, "/update/verify", {}, {
         authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+      const verify = await postJson(ctx.port, "/update/verify", {}, {
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       expect(verify.status).toBe(200);
       expect(verify.body).toMatchObject({ ok: true, result: { action: "verify_candidate", used_for_authority: false } });
 
       const prepare = await postJson(ctx.port, "/update/prepare", { confirm: "PRE_UPDATE_BACKUP" }, {
-        authorization: `Bearer ${TOKEN}`,
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
       expect(prepare.status).toBe(200);
       expect(prepare.body).toMatchObject({

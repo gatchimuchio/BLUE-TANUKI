@@ -6,7 +6,7 @@ non-escalation are all verified.
 
 | Channel | Status | Setup difficulty | Credential | Live smoke | Skip path | Inbound | Outbound | Rate limit / backoff | Known failure modes | Next phase |
 |---|---|---:|---|---|---|---|---|---|---|---|
-| WebChat | first-party | low | `WEBCHAT_TOKEN`, `WEBCHAT_RESUME_TOKEN` | local smoke | n/a | yes | yes | local only | token missing, token reuse, port conflict | Control Center first-run status |
+| WebChat | first-party | low | `WEBCHAT_TOKEN`, `WEBCHAT_RESUME_TOKEN`, `BLUE_TANUKI_MAINTENANCE_TOKEN` | local smoke | n/a | yes | yes | local only | token missing, token reuse, port conflict | Control Center first-run status |
 | Telegram | first-party | medium | `TELEGRAM_BOT_TOKEN` | credentialed path | silent fallback when unset | yes | yes | Bot API polling interval configurable | bot not started, wrong chat_id, privacy mode, token revoked | stronger live smoke docs |
 | Slack | first-party-preview | medium | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` | supported when credentials/target exist | yes | yes | yes | adapter retry/backoff + typed recoverable/non-recoverable errors | missing app token, Socket Mode failure, channel permission, token revoked, rate limit | `validate:channels` promotion evidence |
 | Discord | first-party-preview | medium | `DISCORD_BOT_TOKEN` | supported when credentials/target exist | yes | yes | yes | adapter retry/backoff + typed recoverable/non-recoverable errors | gateway intent, channel permission, token revoked, rate limit | `validate:channels` promotion evidence |

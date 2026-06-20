@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import { Executor, createExecutorApprovalAuthority, type ChannelDispatcher } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
-import { ToolRegistry, echoTool } from "../src/tools/registry.js";
+import { ToolRegistry, echoTool, type Tool } from "../src/tools/registry.js";
 
 const stubUpstream = {
   frame_goal: "g",
@@ -204,6 +204,51 @@ describe("Executor.executeToolCall - permission envelope", () => {
 
     expect(fb.status).toBe("failed");
     expect(fb.error).toMatch(/not in allowed_tools/);
+  });
+
+  it("aborts cooperative tools when executor timeout fires", async () => {
+    let signalSeen = false;
+    let aborted = false;
+    const slowTool: Tool = {
+      name: "slow",
+      description: "never completes unless aborted",
+      required_capabilities: ["tool:slow"],
+      async invoke(_args, ctx) {
+        signalSeen = ctx.signal instanceof AbortSignal;
+        await new Promise<void>((resolve) => {
+          ctx.signal?.addEventListener("abort", () => {
+            aborted = true;
+            resolve();
+          }, { once: true });
+        });
+        return { aborted };
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register(slowTool);
+    const exec = new Executor({
+      approval_authority: executorApproval,
+      llm: new StubBackend(),
+      tools,
+    });
+    const command: ExecuteCommand = {
+      id: "cmd-slow-timeout",
+      type: "tool_call",
+      payload: { tool_name: "slow", arguments: {} },
+      constraints: {
+        allowed_tools: ["slow"],
+        allowed_capabilities: ["tool:slow"],
+        timeout_ms: 10,
+      },
+      upstream_decision: stubUpstream,
+    };
+
+    const fb = await exec.execute(approved(command));
+
+    expect(signalSeen).toBe(true);
+    expect(aborted).toBe(true);
+    expect(fb.status).toBe("failed");
+    expect(fb.error).toContain("timeout after 10ms");
   });
 
   it("fails closed when raw ExecuteCommand is passed without an approval proof", async () => {

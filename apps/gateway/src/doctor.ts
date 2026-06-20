@@ -28,7 +28,7 @@ import { remediationFor } from "./doctor_remediation.js";
  *
  * What we check:
  *   - Node.js version >= 22.14 (engines.node in root package.json)
- *   - Required env: WEBCHAT_TOKEN / WEBCHAT_RESUME_TOKEN present
+ *   - Required env: WEBCHAT_TOKEN / WEBCHAT_RESUME_TOKEN / BLUE_TANUKI_MAINTENANCE_TOKEN present
  *     (length-only; never log values)
  *   - Optional env: WEBHOOK_TOKEN separation when /webhook is enabled
  *   - Optional env: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, DISCORD_BOT_TOKEN,
@@ -471,27 +471,31 @@ function checkOptionalEnv(
 }
 
 function checkWebchatTokenSeparation(env: NodeJS.ProcessEnv): CheckDraft {
-  if (!env.WEBCHAT_TOKEN || !env.WEBCHAT_RESUME_TOKEN) {
+  if (!env.WEBCHAT_TOKEN || !env.WEBCHAT_RESUME_TOKEN || !env.BLUE_TANUKI_MAINTENANCE_TOKEN) {
     return {
       id: "webchat_token_separation",
       level: "error",
       label: "WebChat token split",
-      detail: "WEBCHAT_TOKEN and WEBCHAT_RESUME_TOKEN are both required",
+      detail: "WEBCHAT_TOKEN, WEBCHAT_RESUME_TOKEN, and BLUE_TANUKI_MAINTENANCE_TOKEN are all required",
     };
   }
-  if (env.WEBCHAT_TOKEN === env.WEBCHAT_RESUME_TOKEN) {
+  if (
+    env.WEBCHAT_TOKEN === env.WEBCHAT_RESUME_TOKEN ||
+    env.BLUE_TANUKI_MAINTENANCE_TOKEN === env.WEBCHAT_TOKEN ||
+    env.BLUE_TANUKI_MAINTENANCE_TOKEN === env.WEBCHAT_RESUME_TOKEN
+  ) {
     return {
       id: "webchat_token_separation",
       level: "error",
       label: "WebChat token split",
-      detail: "WEBCHAT_RESUME_TOKEN must differ from WEBCHAT_TOKEN",
+      detail: "WEBCHAT_RESUME_TOKEN and BLUE_TANUKI_MAINTENANCE_TOKEN must differ from WEBCHAT_TOKEN and each other",
     };
   }
   return {
     id: "webchat_token_separation",
     level: "ok",
     label: "WebChat token split",
-    detail: "inbound and resume tokens differ",
+    detail: "inbound, resume, and maintenance tokens differ",
   };
 }
 
@@ -516,6 +520,7 @@ function checkSettingsToken(env: NodeJS.ProcessEnv): CheckDraft {
   if (
     token === env.WEBCHAT_TOKEN ||
     token === env.WEBCHAT_RESUME_TOKEN ||
+    token === env.BLUE_TANUKI_MAINTENANCE_TOKEN ||
     token === env.WEBHOOK_TOKEN
   ) {
     return {
@@ -554,6 +559,7 @@ function checkWebhookToken(env: NodeJS.ProcessEnv): CheckDraft {
   if (
     token === env.WEBCHAT_TOKEN ||
     token === env.WEBCHAT_RESUME_TOKEN ||
+    token === env.BLUE_TANUKI_MAINTENANCE_TOKEN ||
     token === env.BLUE_TANUKI_SETTINGS_TOKEN
   ) {
     return {
@@ -1378,6 +1384,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorReport>
   draftChecks.push(checkNodeVersion(node_version));
   draftChecks.push(checkRequiredEnv(env, "WEBCHAT_TOKEN"));
   draftChecks.push(checkRequiredEnv(env, "WEBCHAT_RESUME_TOKEN"));
+  draftChecks.push(checkRequiredEnv(env, "BLUE_TANUKI_MAINTENANCE_TOKEN"));
   draftChecks.push(checkWebchatTokenSeparation(env));
   draftChecks.push(checkWebhookToken(env));
   draftChecks.push(checkSettingsToken(env));

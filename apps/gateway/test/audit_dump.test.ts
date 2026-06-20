@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AuditLog,
+  EXPECTED_RUNTIME_INVARIANTS,
   buildOutputAuditLog,
   buildRuntimeInvariantEvidence,
 } from "@blue-tanuki/hds-brain";
@@ -183,7 +184,10 @@ describe("audit-dump format", () => {
 
   it("text format includes runtime invariant evidence entries", () => {
     const log = new AuditLog();
-    const report = buildRuntimeInvariantEvidence({ generated_at_ms: 1 });
+    const report = buildRuntimeInvariantEvidence({
+      generated_at_ms: 1,
+      actuals: EXPECTED_RUNTIME_INVARIANTS,
+    });
     log.append({
       kind: "runtime_invariants",
       event: "runtime_invariants.evidence",

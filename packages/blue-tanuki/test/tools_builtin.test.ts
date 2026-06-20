@@ -1263,7 +1263,7 @@ describe("built-in tools", () => {
     try {
       const result = (await invokeShellExec(
         {
-          cmd: process.execPath,
+          cmd: "node",
           args: ["-e", "console.log(process.cwd()); console.error('warn')"],
           cwd: ".",
           timeout_ms: 10_000,
@@ -1316,16 +1316,42 @@ describe("built-in tools", () => {
       await fs.mkdir(root);
       await fs.mkdir(outside);
       await expect(
-        invokeShellExec({ cmd: process.execPath, args: ["-v"] }, { env: {} }),
+        invokeShellExec({ cmd: "node", args: ["-v"] }, { env: {} }),
       ).rejects.toThrow(/BLUE_TANUKI_SHELL_ROOT/);
       await expect(
         invokeShellExec(
-          { cmd: process.execPath, args: ["-v"], cwd: outside },
+          { cmd: "node", args: ["-v"], cwd: outside },
           { env: { BLUE_TANUKI_SHELL_ROOT: root } },
         ),
       ).rejects.toThrow(/cwd/);
     } finally {
       await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("shell.exec rejects absolute commands and destructive command shapes", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-policy-"));
+    try {
+      await expect(
+        invokeShellExec(
+          { cmd: process.execPath, args: ["-v"] },
+          { env: { BLUE_TANUKI_SHELL_ROOT: dir } },
+        ),
+      ).rejects.toThrow(/command name on PATH/);
+      await expect(
+        invokeShellExec(
+          { cmd: "rm", args: ["-rf", "/"] },
+          { env: { BLUE_TANUKI_SHELL_ROOT: dir } },
+        ),
+      ).rejects.toThrow(/destructive-command policy/);
+      await expect(
+        invokeShellExec(
+          { cmd: "node", args: ["../escape"] },
+          { env: { BLUE_TANUKI_SHELL_ROOT: dir } },
+        ),
+      ).rejects.toThrow(/destructive-argument policy/);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 });

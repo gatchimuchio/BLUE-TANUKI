@@ -85,7 +85,7 @@ leave evidence packs rather than only console output.
 
 | ID | evidence source | 内容 |
 |---|---|---|
-| `p4.control_center_settings_api` | `LIVE_RUNTIME` / `INTERNAL_STATE` / `CONFIG` / `EXTERNAL_EVIDENCE` | WebChat Control Centerをloopback上で起動し、`/app` のSettings / Connectors / About / Backup-Restoreフォーム描画、`/settings/config` の専用settings token必須性、redacted snapshot、`/settings/llm/verify` の非mutating検証、LLM設定save、Composio allowlist / dry-run / live opt-in設定save、Composio non-authority境界、`/app/about` のWebChat token必須性・read-only性・version/license/claim boundary/public_claim_allowed=false/non-authority境界、`/recovery/snapshot` のWebChat token必須性・env backup inventory・recovery pack inventory・secret-bearing分類・backup/reset control availability・destructive repair未解放・non-authority境界をAPI経由で検証する |
+| `p4.control_center_settings_api` | `LIVE_RUNTIME` / `INTERNAL_STATE` / `CONFIG` / `EXTERNAL_EVIDENCE` | WebChat Control Centerをloopback上で起動し、`/app` のSettings / Connectors / About / Backup-Restoreフォーム描画、`/settings/config` の専用settings token必須性、redacted snapshot、`/settings/llm/verify` の非mutating検証、LLM設定save、Composio allowlist / dry-run / live opt-in設定save、Composio non-authority境界、`/app/about` のWebChat token必須性・read-only性・version/license/claim boundary/public_claim_allowed=false/non-authority境界、`/recovery/snapshot` のmaintenance token必須性・WebChat/settings token拒否・env backup inventory・recovery pack inventory・secret-bearing分類・backup/reset control availability・destructive repair未解放・non-authority境界をAPI経由で検証する |
 
 ## P5 Checks
 
@@ -117,7 +117,7 @@ leave evidence packs rather than only console output.
 
 | ID | evidence source | 内容 |
 |---|---|---|
-| `p9.channel_operator_extension_boundary` | `CONFIG` / `INTERNAL_STATE` / `FIXTURE` | CLAIM・package metadata・operator manifest・release bundle・Windows package・preview/core scope文書の三点一致を確認し、`pnpm validate:channels` でWebChat/Telegram first-party、Slack/Discord/Teams/LINE first-party-preview、WhatsApp reserved-third-partyを検査する。Writing / Daily / Developer Operatorはbundled `plugin:review` とplugin-loader surface読込でLayer A / downstream / non-authority / L3 final-review境界を確認する。Plugin Review Gate / Plugin HIG / Skill Loader Contractはv1.0 contract-stable Layer B境界を宣言していることを確認する。owner-run channel promotion smokeや第三者plugin live実行は主張しない |
+| `p9.channel_operator_extension_boundary` | `CONFIG` / `INTERNAL_STATE` / `FIXTURE` | CLAIM・package metadata・operator manifest・release bundle・Windows package・preview/core scope文書・`packages/protocol/src/product_scope_contract.ts` の一致を確認し、`pnpm validate:channels` でWebChat/Telegram first-party、Slack/Discord/Teams/LINE first-party-preview、WhatsApp reserved-third-partyを検査する。Writing / Daily / Developer Operatorはbundled `plugin:review` とplugin-loader surface読込でLayer A / downstream / non-authority / L3 final-review境界を確認する。Windows product installer artifacts はrelease installer surface、Windows source installer helper はpreviewとして分離する。Plugin Review Gate / Plugin HIG / Skill Loader Contractはv1.0 contract-stable Layer B境界を宣言していることを確認する。owner-run channel promotion smokeや第三者plugin live実行は主張しない |
 
 ## P10 Checks
 

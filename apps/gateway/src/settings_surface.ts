@@ -75,6 +75,7 @@ export interface SettingsSnapshot {
     port: number;
     token_set: boolean;
     resume_token_set: boolean;
+    maintenance_token_set: boolean;
     settings_token_set: boolean;
   };
   paths: {
@@ -219,6 +220,7 @@ export function buildSettingsSnapshot(
       port: config.webchat.port,
       token_set: Boolean(envValue(env, "WEBCHAT_TOKEN")),
       resume_token_set: Boolean(envValue(env, "WEBCHAT_RESUME_TOKEN")),
+      maintenance_token_set: Boolean(envValue(env, "BLUE_TANUKI_MAINTENANCE_TOKEN")),
       settings_token_set: Boolean(envValue(env, "BLUE_TANUKI_SETTINGS_TOKEN")),
     },
     paths: {

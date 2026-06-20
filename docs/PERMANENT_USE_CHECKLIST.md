@@ -11,7 +11,7 @@
 
 - [ ] 起動方法を 1 つに決めている: source install、release bundle、Docker、systemd、portable installer
 - [ ] 起動時に読み込む env file の場所を把握している
-- [ ] `WEBCHAT_TOKEN` と `WEBCHAT_RESUME_TOKEN` が別値である
+- [ ] `WEBCHAT_TOKEN`、`WEBCHAT_RESUME_TOKEN`、`BLUE_TANUKI_MAINTENANCE_TOKEN` が別値である
 - [ ] `pnpm run doctor` が exit code `0` または warning-only `1`
 - [ ] `http://127.0.0.1:8787/healthz` が 200 を返す
 

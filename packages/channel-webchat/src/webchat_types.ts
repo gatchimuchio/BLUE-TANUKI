@@ -346,6 +346,11 @@ export interface WebChatOptions {
    * disabled; webhook-origin metadata is never allowed to carry authority.
    */
   webhook_token?: string;
+  /**
+   * Dedicated bearer token for update/recovery maintenance surfaces.
+   * Required when update or recovery surfaces are enabled.
+   */
+  maintenance_token?: string;
   /** Bind host. Defaults to 127.0.0.1 (loopback only). */
   host?: string;
   /**
@@ -403,9 +408,9 @@ export interface WebChatOptions {
   evidence?: WebChatEvidenceSurface;
   /** Optional read-only product About surface. Uses the normal inbound bearer token. */
   about?: WebChatAboutSurface;
-  /** Optional manual update readiness surface. Uses the normal inbound bearer token. */
+  /** Optional manual update readiness surface. Uses the maintenance bearer token. */
   update?: WebChatUpdateSurface;
-  /** Optional recovery readiness surface. Uses the normal inbound bearer token. */
+  /** Optional recovery readiness surface. Uses the maintenance bearer token. */
   recovery?: WebChatRecoverySurface;
   /** Optional first-party operator endpoints. Uses the normal inbound bearer token. */
   operators?: WebChatOperatorSurfaces;

@@ -124,6 +124,7 @@ async function main(): Promise<void> {
     WEBCHAT_PORT: String(PORT),
     WEBCHAT_TOKEN: TOKEN,
     WEBCHAT_RESUME_TOKEN: RESUME_TOKEN,
+    BLUE_TANUKI_MAINTENANCE_TOKEN: "smoke-maintenance-token-1234",
     WEBCHAT_HOST: "127.0.0.1",
     LLM_BACKEND: "stub",
     SLACK_BOT_TOKEN: "",

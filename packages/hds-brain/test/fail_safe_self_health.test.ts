@@ -25,10 +25,18 @@ function asDecisionLog(entry: AuditEntry): DecisionLog {
 describe("Phase 12-S8 HDS-BRAIN fail-safe / self-health policy", () => {
   it("reports healthy self-health with command execution allowed", () => {
     const controller = new HDSUpperController();
-    const health = evaluateHDSBrainHealth(controller.getRuntimeSnapshot(), { now: 1 });
+    const health = evaluateHDSBrainHealth(controller.getRuntimeSnapshot(), {
+      now: 1,
+      required_directories: [],
+      storage_paths: [],
+      optional_dependencies: [],
+      audit_appendable: "memory_only",
+    });
 
     expect(health.status).toBe("ok");
     expect(health.config_validation_status).toBe("PASS");
+    expect(health.runtime_health_status).toBe("WARN");
+    expect(health.runtime_health_observed).toBe(true);
     expect(health.runtime_checks.some((check) => check.name === "process.uptime" && check.status === "PASS")).toBe(true);
     expect(health.runtime_checks.every((check) => check.used_for_authority === false)).toBe(true);
     expect(health.fail_safe).toBe(false);
@@ -39,13 +47,19 @@ describe("Phase 12-S8 HDS-BRAIN fail-safe / self-health policy", () => {
     expect(health.operator_next_action).toBeNull();
   });
 
-  it("separates runtime health UNKNOWN from config validation", () => {
+  it("fails closed when runtime health probes are UNKNOWN", () => {
     const controller = new HDSUpperController();
-    const health = controller.getSelfHealth();
+    const health = evaluateHDSBrainHealth(controller.getRuntimeSnapshot(), { now: 1 });
 
     expect(health.config_validation_status).toBe("PASS");
-    expect(["PASS", "WARN", "FAIL", "UNKNOWN"]).toContain(health.runtime_health_status);
+    expect(health.runtime_health_status).toBe("UNKNOWN");
+    expect(health.runtime_health_observed).toBe(false);
     expect(health.runtime_checks.find((check) => check.name === "required_directories")?.status).toBe("UNKNOWN");
+    expect(health.status).toBe("fail_safe");
+    expect(health.failed_preconditions).toContain("runtime_health_observed");
+    expect(health.command_execution_allowed).toBe(false);
+    expect(health.downstream_execution_allowed).toBe(false);
+    expect(health.operator_next_action).toContain("UNKNOWN");
   });
 
   it("suspends invalid raw inbound objects at the authority boundary", () => {

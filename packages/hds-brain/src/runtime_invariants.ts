@@ -15,12 +15,12 @@ export type RuntimeInvariantKey =
   | "final_review_boundary_enforced_by_approval_gate";
 
 export interface RuntimeInvariantValues {
-  hds_calls_llm: boolean;
-  process_policy_enforced: boolean;
-  external_metadata_can_escalate_authority: boolean;
-  memory_used_for_authority: boolean;
-  complete_history_used_for_authority: boolean;
-  final_review_boundary_enforced_by_approval_gate: boolean;
+  hds_calls_llm: boolean | null;
+  process_policy_enforced: boolean | null;
+  external_metadata_can_escalate_authority: boolean | null;
+  memory_used_for_authority: boolean | null;
+  complete_history_used_for_authority: boolean | null;
+  final_review_boundary_enforced_by_approval_gate: boolean | null;
 }
 
 export type RuntimeInvariantExpectedValues = {
@@ -42,11 +42,13 @@ export const EXPECTED_RUNTIME_INVARIANTS: RuntimeInvariantExpectedValues = {
 };
 
 export type RuntimeInvariantGuarantee = "structural" | "runtime";
+export type RuntimeInvariantMeasurementStatus = "MEASURED" | "UNKNOWN";
 
 export interface RuntimeInvariantEvidenceItem {
   key: RuntimeInvariantKey;
   expected: boolean;
-  actual: boolean;
+  actual: boolean | null;
+  measurement_status: RuntimeInvariantMeasurementStatus;
   ok: boolean;
   guarantee: RuntimeInvariantGuarantee;
   evidence: string[];
@@ -72,49 +74,70 @@ export interface RuntimeInvariantEvidenceOptions {
 export function buildRuntimeInvariantEvidence(
   opts: RuntimeInvariantEvidenceOptions = {},
 ): RuntimeInvariantEvidenceReport {
-  const actuals = opts.actuals ?? {};
+  const actuals = opts.actuals;
   const externalMetadataProbe = probeExternalMetadataAuthority();
   const finalReviewBoundaryPresent =
     FINAL_REVIEW_OPERATION_LIST.every((operation) => FINAL_REVIEW_OPERATIONS.has(operation)) &&
     FINAL_REVIEW_OPERATIONS.size === FINAL_REVIEW_OPERATION_LIST.length;
-  const values: RuntimeInvariantValues = {
-    hds_calls_llm: actuals.hds_calls_llm ?? EXPECTED_RUNTIME_INVARIANTS.hds_calls_llm,
-    process_policy_enforced: actuals.process_policy_enforced ?? EXPECTED_RUNTIME_INVARIANTS.process_policy_enforced,
-    external_metadata_can_escalate_authority:
-      actuals.external_metadata_can_escalate_authority ??
+  const actualFor = (
+    key: RuntimeInvariantKey,
+    probed?: boolean,
+  ): { actual: boolean | null; measurement_status: RuntimeInvariantMeasurementStatus } => {
+    if (actuals && Object.prototype.hasOwnProperty.call(actuals, key)) {
+      return { actual: actuals[key] ?? null, measurement_status: "MEASURED" };
+    }
+    if (probed !== undefined) {
+      return { actual: probed, measurement_status: "MEASURED" };
+    }
+    return { actual: null, measurement_status: "UNKNOWN" };
+  };
+  const observed = {
+    hds_calls_llm: actualFor("hds_calls_llm"),
+    process_policy_enforced: actualFor("process_policy_enforced"),
+    external_metadata_can_escalate_authority: actualFor(
+      "external_metadata_can_escalate_authority",
       externalMetadataProbe.can_escalate_authority,
-    memory_used_for_authority:
-      actuals.memory_used_for_authority ?? EXPECTED_RUNTIME_INVARIANTS.memory_used_for_authority,
-    complete_history_used_for_authority:
-      actuals.complete_history_used_for_authority ??
-      EXPECTED_RUNTIME_INVARIANTS.complete_history_used_for_authority,
+    ),
+    memory_used_for_authority: actualFor("memory_used_for_authority"),
+    complete_history_used_for_authority: actualFor("complete_history_used_for_authority"),
+    final_review_boundary_enforced_by_approval_gate: actualFor(
+      "final_review_boundary_enforced_by_approval_gate",
+      finalReviewBoundaryPresent,
+    ),
+  } satisfies Record<RuntimeInvariantKey, { actual: boolean | null; measurement_status: RuntimeInvariantMeasurementStatus }>;
+  const values: RuntimeInvariantValues = {
+    hds_calls_llm: observed.hds_calls_llm.actual,
+    process_policy_enforced: observed.process_policy_enforced.actual,
+    external_metadata_can_escalate_authority: observed.external_metadata_can_escalate_authority.actual,
+    memory_used_for_authority: observed.memory_used_for_authority.actual,
+    complete_history_used_for_authority: observed.complete_history_used_for_authority.actual,
     final_review_boundary_enforced_by_approval_gate:
-      actuals.final_review_boundary_enforced_by_approval_gate ?? finalReviewBoundaryPresent,
+      observed.final_review_boundary_enforced_by_approval_gate.actual,
   };
   const evidence: RuntimeInvariantEvidenceItem[] = [
-    item("hds_calls_llm", values.hds_calls_llm, "structural", [
+    item("hds_calls_llm", observed.hds_calls_llm, "structural", [
       "packages/hds-brain emits llm_call command envelopes but has no LLM backend dependency.",
       "runtime_invariants.test scans HDS-BRAIN imports for downstream LLM/core clients.",
     ]),
-    item("process_policy_enforced", values.process_policy_enforced, "runtime", [
+    item("process_policy_enforced", observed.process_policy_enforced, "runtime", [
       "HDSUpperController checks process authority before commit and command execution policy before command emission.",
       "controller and policy tests cover denied actor/process/tool capability paths.",
     ]),
-    item("external_metadata_can_escalate_authority", values.external_metadata_can_escalate_authority, "runtime", [
+    item("external_metadata_can_escalate_authority", observed.external_metadata_can_escalate_authority, "runtime", [
       ...externalMetadataProbe.evidence,
       "External channel metadata is parsed without the gateway-internal brand, reserved authority keys are stripped, and frame resolution is observed before this invariant passes.",
     ], {
       probes: externalMetadataProbe.probes,
     }),
-    item("memory_used_for_authority", values.memory_used_for_authority, "structural", [
+    item("memory_used_for_authority", observed.memory_used_for_authority, "structural", [
       "MemoryTrace.used_for_authority is a literal false field.",
       "Long-term memory and F-reference hits are context/audit material only.",
     ]),
-    item("complete_history_used_for_authority", values.complete_history_used_for_authority, "structural", [
+    item("complete_history_used_for_authority", observed.complete_history_used_for_authority, "structural", [
       "CompleteHistoryStore entries and exports carry non-authority flags.",
       "Complete history is append/verify/replay/export substrate, not an approval or policy source.",
     ]),
-    item("final_review_boundary_enforced_by_approval_gate", values.final_review_boundary_enforced_by_approval_gate, "runtime", [
+    item("final_review_boundary_enforced_by_approval_gate", observed.final_review_boundary_enforced_by_approval_gate, "runtime", [
       "FINAL_REVIEW_OPERATION_LIST is the single source for Approval Gate, process profiles, and runtime evidence.",
       "full_access and reusable grants do not bypass L3 final-review operations.",
     ], {
@@ -293,7 +316,13 @@ export function runtimeInvariantReportOk(report: RuntimeInvariantEvidenceReport)
     report.all_ok === true &&
     report.report_digest === runtimeInvariantReportDigest(report) &&
     runtimeInvariantValuesOk(report.values) &&
-    report.evidence.every((entry) => entry.ok && entry.used_for_authority === false)
+    report.evidence.every(
+      (entry) =>
+        entry.ok &&
+        entry.actual !== null &&
+        entry.measurement_status === "MEASURED" &&
+        entry.used_for_authority === false,
+    )
   );
 }
 
@@ -304,19 +333,24 @@ export function runtimeInvariantReportDigest(report: RuntimeInvariantEvidenceRep
 
 function item(
   key: RuntimeInvariantKey,
-  actual: boolean,
+  observed: { actual: boolean | null; measurement_status: RuntimeInvariantMeasurementStatus },
   guarantee: RuntimeInvariantGuarantee,
   evidence: string[],
   metadata?: Record<string, unknown>,
 ): RuntimeInvariantEvidenceItem {
   const expected = EXPECTED_RUNTIME_INVARIANTS[key];
+  const actualEvidence =
+    observed.measurement_status === "UNKNOWN"
+      ? [...evidence, "actual value was not measured; UNKNOWN is fail-closed evidence, not a healthy fallback."]
+      : evidence;
   const entry: RuntimeInvariantEvidenceItem = {
     key,
     expected,
-    actual,
-    ok: actual === expected,
+    actual: observed.actual,
+    measurement_status: observed.measurement_status,
+    ok: observed.measurement_status === "MEASURED" && observed.actual === expected,
     guarantee,
-    evidence,
+    evidence: actualEvidence,
     used_for_authority: false,
   };
   if (metadata !== undefined) {

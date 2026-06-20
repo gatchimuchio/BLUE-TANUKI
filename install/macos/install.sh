@@ -11,15 +11,24 @@ if [ "${NO_LAUNCH:-0}" = "1" ]; then
 fi
 LAUNCH_AFTER_INSTALL="${LAUNCH_AFTER_INSTALL:-1}"
 PNPM_VERSION="9.12.0"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 fail() {
   echo "error: $*" >&2
   exit 1
 }
 
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../unix/safe-target.sh"
+
 need() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required. $2"
 }
+
+INSTALL_ROOT=$(safe_destructive_target "$INSTALL_ROOT" "INSTALL_ROOT")
+DATA_ROOT=$(safe_container_target "$DATA_ROOT" "DATA_ROOT")
+BIN_ROOT=$(safe_user_bin_target "$HOME/.local/bin" "BIN_ROOT")
+assert_not_same_target "$INSTALL_ROOT" "$DATA_ROOT" "INSTALL_ROOT" "DATA_ROOT"
 
 need node "Install Node.js 22.14.0 or newer."
 node -e "const v=process.versions.node.split('.').map(Number); const ok=v[0]>22 || (v[0]===22 && (v[1]>14 || (v[1]===14 && v[2]>=0))); process.exit(ok?0:1)" \
@@ -41,9 +50,8 @@ pnpm_run() {
   fail "pnpm or corepack is required."
 }
 
-SOURCE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+SOURCE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 ENV_FILE="$DATA_ROOT/blue-tanuki.env"
-BIN_ROOT="$HOME/.local/bin"
 LAUNCHER="$BIN_ROOT/blue-tanuki"
 CONTROL_CENTER_URL="${BLUE_TANUKI_CONTROL_CENTER_URL:-http://127.0.0.1:8787/app}"
 

@@ -138,8 +138,15 @@ describe("HDS-BRAIN standalone boundary", () => {
 
   it("exposes standalone runtime health from runtime snapshot", () => {
     const snapshot = new HDSUpperController().getRuntimeSnapshot();
-    const health = evaluateHDSBrainHealth(snapshot, { now: 1 });
+    const health = evaluateHDSBrainHealth(snapshot, {
+      now: 1,
+      required_directories: [],
+      storage_paths: [],
+      optional_dependencies: [],
+      audit_appendable: "memory_only",
+    });
     expect(health.status).toBe("ok");
+    expect(health.runtime_health_observed).toBe(true);
     expect(health.hds_calls_llm).toBe(false);
     expect(health.downstream_limbs_are_authority).toBe(false);
     expect(health.fail_safe).toBe(false);

@@ -97,7 +97,8 @@ Exit code: 1
 | `node_version` | Node.js version |
 | `env:WEBCHAT_TOKEN` | WebChat inbound token presence and length only |
 | `env:WEBCHAT_RESUME_TOKEN` | approval/resume token presence and length only |
-| `webchat_token_separation` | inbound/resume token separation |
+| `env:BLUE_TANUKI_MAINTENANCE_TOKEN` | update/recovery maintenance token presence and length only |
+| `webchat_token_separation` | inbound/resume/maintenance token separation |
 | `webhook_token` | optional webhook token strength and separation |
 | `settings_token` | optional settings token strength and separation |
 | `env:SLACK_BOT_TOKEN` | optional Slack token presence |

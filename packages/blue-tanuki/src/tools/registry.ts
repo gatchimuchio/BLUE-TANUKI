@@ -9,6 +9,7 @@
 export interface ToolContext {
   command_id: string;
   upstream_commit_hash: string;
+  signal?: AbortSignal;
 }
 
 export type ToolCapability = string;

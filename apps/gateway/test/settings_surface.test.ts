@@ -43,6 +43,7 @@ function runtime(): PluginRuntime {
           "network:listen",
           "secrets:WEBCHAT_TOKEN",
           "secrets:WEBCHAT_RESUME_TOKEN",
+          "secrets:BLUE_TANUKI_MAINTENANCE_TOKEN",
           "secrets:BLUE_TANUKI_SETTINGS_TOKEN",
         ],
       },
@@ -85,6 +86,7 @@ describe("settings surface", () => {
         COMPOSIO_LIVE_EXECUTION: "true",
         WEBCHAT_TOKEN: "webchat-token-123456",
         WEBCHAT_RESUME_TOKEN: "resume-token-123456",
+        BLUE_TANUKI_MAINTENANCE_TOKEN: "maintenance-token-123456",
         BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
         BLUE_TANUKI_APPROVAL_MODE: "remember_this_decision",
         BLUE_TANUKI_FILE_ROOT: "sandbox",
@@ -117,11 +119,20 @@ describe("settings surface", () => {
     expect(snapshot.integrations.composio.allowed_actions).toEqual(["github:github_create_an_issue"]);
     expect(snapshot.integrations.composio.revoked_actions).toEqual(["github:github_delete_repo"]);
     expect(snapshot.integrations.composio.used_for_authority).toBe(false);
+    expect(snapshot.webchat).toMatchObject({
+      token_set: true,
+      resume_token_set: true,
+      maintenance_token_set: true,
+      settings_token_set: true,
+    });
     expect(JSON.stringify(snapshot)).not.toContain("local-super-secret-xyz");
     expect(JSON.stringify(snapshot)).not.toContain("openrouter-super-secret-xyz");
     expect(JSON.stringify(snapshot)).not.toContain("composio-super-secret-xyz");
     expect(snapshot.plugins[0]?.permissions).toContain(
       "secrets:BLUE_TANUKI_SETTINGS_TOKEN",
+    );
+    expect(snapshot.plugins[0]?.permissions).toContain(
+      "secrets:BLUE_TANUKI_MAINTENANCE_TOKEN",
     );
   });
 

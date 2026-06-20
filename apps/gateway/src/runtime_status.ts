@@ -11,6 +11,7 @@ export interface RuntimeStatusInput {
   hds: HDSRuntimeSnapshot;
   webchat_token?: string;
   webchat_resume_token?: string;
+  webchat_maintenance_token?: string;
   telegram_bot_token?: string;
   pending_approvals_count: number;
   runtime_schedules_count: number;
@@ -36,7 +37,10 @@ export function buildRuntimeStatusSnapshot(
   const webchat_ready = Boolean(
     input.webchat_token &&
       input.webchat_resume_token &&
-      input.webchat_token !== input.webchat_resume_token,
+      input.webchat_maintenance_token &&
+      input.webchat_token !== input.webchat_resume_token &&
+      input.webchat_token !== input.webchat_maintenance_token &&
+      input.webchat_resume_token !== input.webchat_maintenance_token,
   );
   const telegram_configured = Boolean(input.telegram_bot_token);
   const audit_chain_valid = input.hds.audit.chain_valid === true;
@@ -82,7 +86,7 @@ function nextRecommendedAction(input: {
     return "Run audit verification and inspect AUDIT.md before continuing";
   }
   if (!input.webchat_ready) {
-    return "Configure distinct WEBCHAT_TOKEN and WEBCHAT_RESUME_TOKEN, then restart";
+    return "Configure distinct WEBCHAT_TOKEN, WEBCHAT_RESUME_TOKEN, and BLUE_TANUKI_MAINTENANCE_TOKEN, then restart";
   }
   if (input.pending_approvals_count > 0) {
     return "Review pending approvals in Control Center";

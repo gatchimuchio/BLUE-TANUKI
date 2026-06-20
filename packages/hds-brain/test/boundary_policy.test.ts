@@ -127,6 +127,7 @@ describe("Phase 12-S0 boundary policy", () => {
       policy_valid: true,
       audit_chain_valid: true,
       runtime_invariants_valid: true,
+      runtime_health_observed: true,
       approval_gate_available: true,
     });
     expect(healthy.command_execution_allowed).toBe(true);
@@ -138,6 +139,7 @@ describe("Phase 12-S0 boundary policy", () => {
       policy_valid: true,
       audit_chain_valid: false,
       runtime_invariants_valid: true,
+      runtime_health_observed: true,
       approval_gate_available: true,
     });
     expect(unhealthy.allowed).toBe(false);

@@ -52,6 +52,7 @@ export interface FailSafeInput {
   policy_valid: boolean;
   audit_chain_valid: boolean;
   runtime_invariants_valid: boolean;
+  runtime_health_observed: boolean;
   approval_gate_available: boolean;
   memory_chain_valid?: boolean;
 }

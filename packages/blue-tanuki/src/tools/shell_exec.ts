@@ -2,12 +2,13 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { OperationAdapterKind, OperationState } from "@blue-tanuki/protocol";
-import type { Tool } from "./registry.js";
+import type { Tool, ToolContext } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
 
 export interface ShellExecOptions {
   env?: Env;
+  signal?: AbortSignal;
 }
 
 export interface ShellOperationAdapterMetadata {
@@ -30,15 +31,22 @@ export async function invokeShellExec(
   const cwd = await resolveShellCwd(stringArg(args, "cwd", false), shellRoot);
   const cmd = stringArg(args, "cmd", false) ?? stringArg(args, "command")!;
   const argv = shellArgs(args);
+  validateShellCommand(cmd, argv);
   const timeoutMs = positiveIntArg(args, "timeout_ms", 15_000, 60_000);
   const maxBytes = positiveIntArg(args, "max_bytes", 64_000, 512_000);
+  const signal = opts.signal;
 
   return await new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("shell.exec aborted before spawn"));
+      return;
+    }
     const child = spawn(cmd, argv, {
       cwd,
       env: safeProcessEnv(),
       shell: false,
       windowsHide: true,
+      detached: process.platform !== "win32",
     });
     let stdout = "";
     let stderr = "";
@@ -70,7 +78,7 @@ export async function invokeShellExec(
       reject(error);
     };
     const timer = setTimeout(() => {
-      child.kill();
+      killChildTree(child.pid);
       done({
         cwd: displayPath(path.relative(shellRoot, cwd) || "."),
         exit_code: null,
@@ -82,10 +90,25 @@ export async function invokeShellExec(
         operation_core: shellOperationAdapterMetadata("failed"),
       });
     }, timeoutMs);
+    const onAbort = (): void => {
+      killChildTree(child.pid);
+      done({
+        cwd: displayPath(path.relative(shellRoot, cwd) || "."),
+        exit_code: null,
+        signal: "aborted",
+        timed_out: true,
+        stdout,
+        stderr,
+        truncated: true,
+        operation_core: shellOperationAdapterMetadata("failed"),
+      });
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout?.on("data", (chunk: Buffer | string) => append("stdout", chunk));
     child.stderr?.on("data", (chunk: Buffer | string) => append("stderr", chunk));
     child.on("error", fail);
     child.on("close", (code, signal) => {
+      opts.signal?.removeEventListener("abort", onAbort);
       done({
         cwd: displayPath(path.relative(shellRoot, cwd) || "."),
         exit_code: code,
@@ -104,10 +127,73 @@ export const shellExecTool: Tool = {
   name: "shell.exec",
   description: "Run a bounded non-shell command under BLUE_TANUKI_SHELL_ROOT.",
   required_capabilities: ["tool:shell.exec", "shell:exec"],
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeShellExec(args);
+  async invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> {
+    return await invokeShellExec(args, { signal: ctx.signal });
   },
 };
+
+function validateShellCommand(cmd: string, argv: readonly string[]): void {
+  if (path.isAbsolute(cmd) || cmd.includes("/") || cmd.includes("\\")) {
+    throw new Error("shell.exec cmd must be a command name on PATH, not an absolute or relative path");
+  }
+  const deniedCommands = new Set([
+    "rm",
+    "rmdir",
+    "del",
+    "erase",
+    "shred",
+    "dd",
+    "mkfs",
+    "format",
+    "diskpart",
+    "shutdown",
+    "reboot",
+    "halt",
+    "poweroff",
+    "sudo",
+    "su",
+  ]);
+  if (deniedCommands.has(cmd.toLowerCase())) {
+    throw new Error(`shell.exec command denied by destructive-command policy: ${cmd}`);
+  }
+  for (const arg of argv) {
+    const normalized = arg.trim().toLowerCase();
+    if (
+      normalized === "/" ||
+      normalized === "\\" ||
+      normalized === "--no-preserve-root" ||
+      normalized === "-rf" ||
+      normalized === "-fr" ||
+      normalized.includes("..")
+    ) {
+      throw new Error(`shell.exec argument denied by destructive-argument policy: ${arg}`);
+    }
+  }
+}
+
+function killChildTree(pid: number | undefined): void {
+  if (!pid) return;
+  try {
+    if (process.platform === "win32") {
+      process.kill(pid);
+      return;
+    }
+    process.kill(-pid, "SIGTERM");
+    setTimeout(() => {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }, 250).unref();
+  } catch {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Already gone or not killable.
+    }
+  }
+}
 
 async function shellRootFromEnv(env: Env): Promise<string> {
   const raw = env.BLUE_TANUKI_SHELL_ROOT;

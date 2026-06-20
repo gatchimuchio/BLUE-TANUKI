@@ -105,11 +105,33 @@ describe("HDS runtime invariant structural guards", () => {
   });
 
   it("keeps report digest valid after JSON round trip", () => {
-    const report = buildRuntimeInvariantEvidence({ generated_at_ms: 1 });
+    const report = buildRuntimeInvariantEvidence({
+      generated_at_ms: 1,
+      actuals: {
+        hds_calls_llm: false,
+        process_policy_enforced: true,
+        memory_used_for_authority: false,
+        complete_history_used_for_authority: false,
+      },
+    });
     const parsed = JSON.parse(JSON.stringify(report));
 
     expect(runtimeInvariantReportDigest(parsed)).toBe(report.report_digest);
     expect(runtimeInvariantReportOk(parsed)).toBe(true);
+  });
+
+  it("marks missing actuals as UNKNOWN instead of falling back to expected constants", () => {
+    const report = buildRuntimeInvariantEvidence({ generated_at_ms: 1 });
+
+    expect(report.all_ok).toBe(false);
+    expect(report.values.hds_calls_llm).toBeNull();
+    expect(report.evidence.find((entry) => entry.key === "hds_calls_llm")).toMatchObject({
+      actual: null,
+      measurement_status: "UNKNOWN",
+      ok: false,
+      used_for_authority: false,
+    });
+    expect(runtimeInvariantReportOk(report)).toBe(false);
   });
 
   it("builds failed evidence instead of silently normalizing broken invariants", () => {

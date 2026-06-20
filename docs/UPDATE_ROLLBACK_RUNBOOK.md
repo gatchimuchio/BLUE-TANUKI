@@ -107,7 +107,7 @@ Use the Update screen when the gateway is healthy enough to serve WebChat:
 2. Optionally point `BLUE_TANUKI_UPDATE_BUNDLE` at that archive. If unset,
    BLUE-TANUKI checks the default `release/blue-tanuki-<version>-source-bundle`
    archive for the current platform.
-3. Open Control Center, enter the WebChat token, and run `Load Update`.
+3. Open Control Center, enter the maintenance token, and run `Load Update`.
 4. Run `Verify Bundle`. The archive sha256, sha sidecar, manifest, unsigned
    source bundle boundary, no-secret boundary, and core release paths must match.
 5. Run `Prepare Update`. This requires explicit confirmation, creates a P10
@@ -171,6 +171,7 @@ Do not overwrite these unless intentionally resetting:
 
 - `WEBCHAT_TOKEN`
 - `WEBCHAT_RESUME_TOKEN`
+- `BLUE_TANUKI_MAINTENANCE_TOKEN`
 - `BLUE_TANUKI_SETTINGS_TOKEN`
 - LLM provider settings
 - audit/session/memory/schedule paths
@@ -220,12 +221,12 @@ Rollback must not silently reset tokens or delete audit evidence.
 
 ### Control Center restore / reset
 
-Use these controls when the gateway still starts and WebChat token access is
+Use these controls when the gateway still starts and maintenance token access is
 available:
 
 1. Open Control Center.
 2. Go to Backup / Restore.
-3. Enter the WebChat token and load recovery state.
+3. Enter the maintenance token and load recovery state.
 4. Run `Backup Now` before any reset.
 5. Use `Restore` with the selected recovery pack id for accidental config/data
    corruption.

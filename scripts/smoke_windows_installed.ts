@@ -610,6 +610,7 @@ async function main(): Promise<void> {
     assertEnvValuesRetained(envBeforeRepair, env, [
       "WEBCHAT_TOKEN",
       "WEBCHAT_RESUME_TOKEN",
+      "BLUE_TANUKI_MAINTENANCE_TOKEN",
       "BLUE_TANUKI_SETTINGS_TOKEN",
     ]);
     console.log("repair_install_result=pass");

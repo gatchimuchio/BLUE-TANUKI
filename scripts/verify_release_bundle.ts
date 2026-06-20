@@ -3,6 +3,9 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  PRODUCT_SCOPE_CORE_RELEASE_PATHS,
+} from "../packages/protocol/src/product_scope_contract.js";
 
 interface PackageJson {
   version: string;
@@ -49,6 +52,7 @@ export const EXTRACTED_RELEASE_COMMANDS: readonly ExtractedReleaseCommand[] = [
     env: {
       WEBCHAT_TOKEN: "release-verify-webchat-token-123456",
       WEBCHAT_RESUME_TOKEN: "release-verify-resume-token-123456",
+      BLUE_TANUKI_MAINTENANCE_TOKEN: "release-verify-maintenance-token-123456",
       BLUE_TANUKI_SETTINGS_TOKEN: "release-verify-settings-token-123456",
       LLM_BACKEND: "stub",
     },
@@ -246,18 +250,7 @@ function assertManifest(
   if (manifest.boundaries?.external_dynamic_imports_included !== false) {
     throw new Error("manifest must declare external_dynamic_imports_included=false");
   }
-  for (const required of [
-    "packages/hds-brain",
-    "packages/protocol",
-    "packages/blue-tanuki",
-    "packages/channel-base",
-    "packages/channel-webchat",
-    "packages/channel-telegram",
-    "packages/operator-writing",
-    "packages/operator-daily",
-    "packages/operator-developer",
-    "apps/gateway",
-  ]) {
+  for (const required of PRODUCT_SCOPE_CORE_RELEASE_PATHS) {
     if (!manifest.core_release_paths?.includes(required)) {
       throw new Error(`manifest core_release_paths missing ${required}`);
     }

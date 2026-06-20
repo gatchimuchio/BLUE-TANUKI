@@ -404,7 +404,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <span id="update-boundary-status" class="badge warn">not loaded</span>
           </div>
           <div class="status-grid">
-            <input id="update-token" type="password" autocomplete="off" placeholder="webchat token" />
+            <input id="update-token" type="password" autocomplete="off" placeholder="maintenance token" />
             <button id="load-update" class="primary" type="button">Load Update</button>
             <button id="verify-update" type="button">Verify Bundle</button>
             <button id="prepare-update" type="button">Prepare Update</button>
@@ -437,7 +437,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <span id="recovery-boundary-status" class="badge warn">not loaded</span>
           </div>
           <div class="status-grid">
-            <input id="recovery-token" type="password" autocomplete="off" placeholder="webchat token" />
+            <input id="recovery-token" type="password" autocomplete="off" placeholder="maintenance token" />
             <button id="load-recovery" class="primary" type="button">Load Recovery</button>
           </div>
           <div class="status-grid">

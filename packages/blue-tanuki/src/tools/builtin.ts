@@ -1294,10 +1294,8 @@ interface RequestLike {
 
 async function importPlaywright(): Promise<PlaywrightLike> {
   try {
-    const importer = new Function("specifier", "return import(specifier)") as (
-      specifier: string,
-    ) => Promise<unknown>;
-    const imported = await importer("playwright");
+    const specifier = "playwright";
+    const imported = await import(specifier);
     if (!isRecord(imported)) {
       throw new Error("playwright module did not load as an object");
     }

@@ -2,6 +2,10 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
+import {
+  PRODUCT_SCOPE_CORE_RELEASE_PATHS,
+  PRODUCT_SCOPE_PREVIEW_PATHS,
+} from "../packages/protocol/src/product_scope_contract.js";
 
 export const FORBIDDEN_FILES = [
   "scripts/pnpm_exec.mjs",
@@ -45,27 +49,9 @@ export const COMMAND_GATED_CLI_DYNAMIC_IMPORTS = [
   "./runtime.js",
 ] as const;
 
-export const CORE_RELEASE_ALLOWLIST = [
-  "packages/hds-brain",
-  "packages/protocol",
-  "packages/blue-tanuki",
-  "packages/channel-base",
-  "packages/channel-webchat",
-  "packages/channel-telegram",
-  "packages/operator-daily",
-  "packages/operator-developer",
-  "packages/operator-writing",
-  "apps/gateway",
-] as const;
+export const CORE_RELEASE_ALLOWLIST = PRODUCT_SCOPE_CORE_RELEASE_PATHS;
 
-export const PREVIEW_PACKAGE_PATHS = [
-  "packages/channel-slack",
-  "packages/channel-discord",
-  "packages/channel-teams",
-  "packages/channel-line",
-  "install/installer",
-  "install/windows",
-] as const;
+export const PREVIEW_PACKAGE_PATHS = PRODUCT_SCOPE_PREVIEW_PATHS;
 
 export interface ImportEdge {
   kind: "import" | "export" | "dynamic" | "dynamic_nonliteral";

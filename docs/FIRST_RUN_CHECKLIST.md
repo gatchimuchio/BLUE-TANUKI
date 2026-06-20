@@ -48,6 +48,7 @@ LLM provider changes.
 ```bash
 export WEBCHAT_TOKEN="replace-with-32chars-inbound-token"
 export WEBCHAT_RESUME_TOKEN="replace-with-32chars-resume-token"
+export BLUE_TANUKI_MAINTENANCE_TOKEN="replace-with-32chars-maintenance-token"
 export LLM_BACKEND="stub"
 ```
 
@@ -147,7 +148,8 @@ tool:schedule.create channel=webchat target=local-user content="runtime smoke" i
 | 失敗 | 状態 | 次の行動 |
 |---|---|---|
 | `pnpm` が見つからない | 依存 install 前で停止 | Corepack を有効化するか、Node 環境の PATH を直す |
-| `WEBCHAT_TOKEN is required` | gateway は起動しない | `WEBCHAT_TOKEN` と `WEBCHAT_RESUME_TOKEN` を別値で設定する |
+| `WEBCHAT_TOKEN is required` | gateway は起動しない | `WEBCHAT_TOKEN`、`WEBCHAT_RESUME_TOKEN`、`BLUE_TANUKI_MAINTENANCE_TOKEN` を別値で設定する |
+| `BLUE_TANUKI_MAINTENANCE_TOKEN is required` | update/recovery 保守面を起動できない | inbound/resume/settings token と別値の maintenance token を設定する |
 | resume token が inbound token と同じ | gateway は起動しない | resume 用 token を別に生成する |
 | port `8787` が使用中 | gateway は bind できない | 既存 process を止めるか `WEBCHAT_PORT` を変える |
 | `doctor` exit code `2` | 安全に起動できない | `pnpm run doctor` の error check を直してから再起動する |

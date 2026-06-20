@@ -14,7 +14,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ExecuteCommand } from "../packages/protocol/src/index.js";
-import { parseInboundRequestAtBoundary } from "../packages/protocol/src/index.js";
+import {
+  PRODUCT_SCOPE_CORE_RELEASE_PATHS,
+  parseInboundRequestAtBoundary,
+} from "../packages/protocol/src/index.js";
 import {
   AuditLog,
   HDSUpperController,
@@ -1222,6 +1225,7 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
   const webchatToken = "product-webchat-token-1234";
   const resumeToken = "product-resume-token-1234";
   const settingsToken = "product-settings-token-1234";
+  const maintenanceToken = "product-maintenance-token-1234";
   const updates: unknown[] = [];
   const verifications: unknown[] = [];
   const recoveryRoot = await mkdtemp(path.join(os.tmpdir(), "bt-product-recovery-"));
@@ -1245,6 +1249,7 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     host: "127.0.0.1",
     token: webchatToken,
     resume_token: resumeToken,
+    maintenance_token: maintenanceToken,
     rate_limits: false,
     settings: {
       token: settingsToken,
@@ -1307,6 +1312,7 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
           port,
           token_set: true,
           resume_token_set: true,
+          maintenance_token_set: true,
           settings_token_set: true,
         },
         paths: {
@@ -1422,12 +1428,16 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
       headers: { authorization: `Bearer ${settingsToken}` },
     });
     assertCheck(recoveryWrongToken.status === 401, `/recovery/snapshot with settings token returned ${recoveryWrongToken.status}`);
-    const recoveryPost = await fetch(`${base}/recovery/snapshot`, {
-      method: "POST",
+    const recoveryWebchatToken = await fetch(`${base}/recovery/snapshot`, {
       headers: { authorization: `Bearer ${webchatToken}` },
     });
+    assertCheck(recoveryWebchatToken.status === 401, `/recovery/snapshot with webchat token returned ${recoveryWebchatToken.status}`);
+    const recoveryPost = await fetch(`${base}/recovery/snapshot`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${maintenanceToken}` },
+    });
     assertCheck(recoveryPost.status === 405, `/recovery/snapshot POST returned ${recoveryPost.status}`);
-    const recovery = await settingsRequest(base, webchatToken, "GET", "/recovery/snapshot");
+    const recovery = await settingsRequest(base, maintenanceToken, "GET", "/recovery/snapshot");
     assertCheck(recovery.surface === "recovery", "Recovery snapshot surface mismatch");
     assertCheck(recovery.mode === "control_available", "Recovery snapshot was not control-available");
     assertCheck(recovery.env_file?.exists === true, "Recovery snapshot env file missing");
@@ -1445,7 +1455,7 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     assertCheck(recovery.authority_boundary?.recovery_action_used_for_authority === false, "Recovery snapshot made recovery actions authority");
     assertCheck(recovery.authority_boundary?.used_for_authority === false, "Recovery snapshot authority flag mismatch");
     assertCheck(recovery.runtime_paths?.audit_dir?.exists === true, "Recovery snapshot audit dir missing");
-    log.push("/recovery/snapshot: backup inventory and recovery controls loaded through webchat token gate");
+    log.push("/recovery/snapshot: backup inventory and recovery controls loaded through maintenance token gate");
 
     const snapshot = await settingsRequest(base, settingsToken, "GET", "/settings/config");
     const snapshotText = JSON.stringify(snapshot);
@@ -1518,6 +1528,7 @@ async function runRecoveryBackupRestoreControl(): Promise<CheckResult> {
   const port = await allocateLoopbackPort();
   const webchatToken = "product-recovery-webchat-token-1234";
   const resumeToken = "product-recovery-resume-token-1234";
+  const maintenanceToken = "product-recovery-maintenance-token-1234";
   const root = await mkdtemp(path.join(os.tmpdir(), "bt-product-p10-recovery-"));
   const envFile = path.join(root, "product.env");
   const auditDir = path.join(root, "audit");
@@ -1584,6 +1595,7 @@ async function runRecoveryBackupRestoreControl(): Promise<CheckResult> {
     host: "127.0.0.1",
     token: webchatToken,
     resume_token: resumeToken,
+    maintenance_token: maintenanceToken,
     rate_limits: false,
     recovery: {
       getSnapshot: async () => buildRecoverySnapshot(recoveryEnv),
@@ -1615,16 +1627,21 @@ async function runRecoveryBackupRestoreControl(): Promise<CheckResult> {
     const unauth = await fetch(`${base}/recovery/backup`, { method: "POST" });
     assertCheck(unauth.status === 401, `/recovery/backup without token returned ${unauth.status}`);
 
-    const snapshot = await settingsRequest(base, webchatToken, "GET", "/recovery/snapshot");
+    const wrongToken = await settingsRequest(base, webchatToken, "GET", "/recovery/snapshot").then(
+      () => ({ status: 200 }),
+      () => ({ status: 401 }),
+    );
+    assertCheck(wrongToken.status === 401, "/recovery/snapshot accepted webchat token");
+    const snapshot = await settingsRequest(base, maintenanceToken, "GET", "/recovery/snapshot");
     assertCheck(snapshot.mode === "control_available", "P10 recovery snapshot not control-available");
     assertCheck(snapshot.restore?.backup_available === true, "P10 recovery backup control unavailable");
     assertCheck(snapshot.restore?.provider_reset_available === true, "P10 provider reset unavailable");
     assertCheck(snapshot.restore?.connector_reset_available === true, "P10 connector reset unavailable");
     assertCheck(snapshot.restore?.factory_reset_available === true, "P10 factory reset unavailable");
     assertCheck(snapshot.authority_boundary?.used_for_authority === false, "P10 recovery snapshot became authority");
-    log.push("/recovery/snapshot: control availability visible through webchat token gate");
+    log.push("/recovery/snapshot: control availability visible through maintenance token gate");
 
-    const backup = await settingsRequest(base, webchatToken, "POST", "/recovery/backup");
+    const backup = await settingsRequest(base, maintenanceToken, "POST", "/recovery/backup");
     const backupId = backup.result?.backup_id;
     assertCheck(typeof backupId === "string" && backupId.length > 0, "P10 backup did not return backup id");
     assertCheck(!JSON.stringify(backup).includes(providerSecret), "P10 backup response exposed provider secret");
@@ -1633,7 +1650,7 @@ async function runRecoveryBackupRestoreControl(): Promise<CheckResult> {
 
     await writeFile(envFile, "LLM_BACKEND=broken\n", "utf8");
     await writeFile(sessionFile, "session-after\n", "utf8");
-    const restore = await settingsRequest(base, webchatToken, "POST", "/recovery/restore", {
+    const restore = await settingsRequest(base, maintenanceToken, "POST", "/recovery/restore", {
       backup_id: backupId,
       confirm: "RESTORE",
     });
@@ -1643,7 +1660,7 @@ async function runRecoveryBackupRestoreControl(): Promise<CheckResult> {
     assertCheck(!JSON.stringify(restore).includes(providerSecret), "P10 restore response exposed provider secret");
     log.push("/recovery/restore: selected backup restored env/session after pre-restore backup");
 
-    const providerReset = await settingsRequest(base, webchatToken, "POST", "/recovery/reset-provider", {
+    const providerReset = await settingsRequest(base, maintenanceToken, "POST", "/recovery/reset-provider", {
       confirm: "RESET_PROVIDER",
     });
     const providerEnv = await readFile(envFile, "utf8");
@@ -1652,7 +1669,7 @@ async function runRecoveryBackupRestoreControl(): Promise<CheckResult> {
     assertCheck(providerReset.result?.used_for_authority === false, "P10 provider reset result became authority");
     log.push("/recovery/reset-provider: provider credentials cleared and stub mode restored");
 
-    const connectorReset = await settingsRequest(base, webchatToken, "POST", "/recovery/reset-connector", {
+    const connectorReset = await settingsRequest(base, maintenanceToken, "POST", "/recovery/reset-connector", {
       confirm: "RESET_CONNECTOR",
     });
     const connectorEnv = await readFile(envFile, "utf8");
@@ -1672,7 +1689,7 @@ async function runRecoveryBackupRestoreControl(): Promise<CheckResult> {
     await writeFile(path.join(schedulesDir, "jobs.json"), "[]\n", "utf8");
     await writeFile(path.join(logDir, "gateway.log"), "log-reset\n", "utf8");
 
-    const factory = await settingsRequest(base, webchatToken, "POST", "/recovery/factory-reset", {
+    const factory = await settingsRequest(base, maintenanceToken, "POST", "/recovery/factory-reset", {
       confirm: "FACTORY_RESET",
     });
     assertCheck(factory.result?.action === "factory_reset", "P10 factory reset result mismatch");
@@ -1757,6 +1774,7 @@ async function runUpdateReleaseRollbackControl(ctx: CheckContext): Promise<Check
   const port = await allocateLoopbackPort();
   const webchatToken = "product-update-webchat-token-1234";
   const resumeToken = "product-update-resume-token-1234";
+  const maintenanceToken = "product-update-maintenance-token-1234";
   const root = await mkdtemp(path.join(os.tmpdir(), "bt-product-p11-update-"));
   const version = "1.0.0-rc.1";
   const envFile = path.join(root, "product.env");
@@ -1802,6 +1820,7 @@ async function runUpdateReleaseRollbackControl(ctx: CheckContext): Promise<Check
     host: "127.0.0.1",
     token: webchatToken,
     resume_token: resumeToken,
+    maintenance_token: maintenanceToken,
     rate_limits: false,
     update: {
       getSnapshot: async () => buildUpdateSnapshot(root, updateEnv),
@@ -1819,13 +1838,17 @@ async function runUpdateReleaseRollbackControl(ctx: CheckContext): Promise<Check
     const base = `http://127.0.0.1:${port}`;
     const unauth = await fetch(`${base}/update/snapshot`);
     assertCheck(unauth.status === 401, `/update/snapshot without token returned ${unauth.status}`);
+    const webchatDenied = await fetch(`${base}/update/snapshot`, {
+      headers: { authorization: `Bearer ${webchatToken}` },
+    });
+    assertCheck(webchatDenied.status === 401, `/update/snapshot with webchat token returned ${webchatDenied.status}`);
     const postSnapshot = await fetch(`${base}/update/snapshot`, {
       method: "POST",
-      headers: { authorization: `Bearer ${webchatToken}` },
+      headers: { authorization: `Bearer ${maintenanceToken}` },
     });
     assertCheck(postSnapshot.status === 405, `/update/snapshot POST returned ${postSnapshot.status}`);
 
-    const snapshot = await settingsRequest(base, webchatToken, "GET", "/update/snapshot");
+    const snapshot = await settingsRequest(base, maintenanceToken, "GET", "/update/snapshot");
     assertCheck(snapshot.surface === "update", "P11 update snapshot surface mismatch");
     assertCheck(snapshot.mode === "manual_control", "P11 update snapshot mode mismatch");
     assertCheck(snapshot.candidate?.verification_status === "pass", "P11 release candidate did not verify");
@@ -1834,9 +1857,9 @@ async function runUpdateReleaseRollbackControl(ctx: CheckContext): Promise<Check
     assertCheck(snapshot.distribution_boundary?.automatic_updater_shipped === false, "P11 unexpectedly shipped automatic updater");
     assertCheck(snapshot.distribution_boundary?.runtime_auto_apply_available === false, "P11 unexpectedly exposed runtime auto apply");
     assertCheck(snapshot.authority_boundary?.used_for_authority === false, "P11 update snapshot became authority");
-    log.push("/update/snapshot: manual update readiness and release sidecars verified through token gate");
+    log.push("/update/snapshot: manual update readiness and release sidecars verified through maintenance token gate");
 
-    const verify = await settingsRequest(base, webchatToken, "POST", "/update/verify");
+    const verify = await settingsRequest(base, maintenanceToken, "POST", "/update/verify");
     assertCheck(verify.result?.candidate?.verification_status === "pass", "P11 update verify did not pass");
     assertCheck(verify.result?.used_for_authority === false, "P11 update verify result became authority");
     assertCheck(!JSON.stringify(verify).includes(updateSecret), "P11 update verify response exposed env secret");
@@ -1850,9 +1873,18 @@ async function runUpdateReleaseRollbackControl(ctx: CheckContext): Promise<Check
       },
       body: JSON.stringify({}),
     });
-    assertCheck(prepareMissingConfirm.status === 400, `/update/prepare without confirmation returned ${prepareMissingConfirm.status}`);
+    assertCheck(prepareMissingConfirm.status === 401, `/update/prepare with webchat token returned ${prepareMissingConfirm.status}`);
+    const prepareMissingConfirmMaintenance = await fetch(`${base}/update/prepare`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${maintenanceToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    assertCheck(prepareMissingConfirmMaintenance.status === 400, `/update/prepare without confirmation returned ${prepareMissingConfirmMaintenance.status}`);
 
-    const prepared = await settingsRequest(base, webchatToken, "POST", "/update/prepare", {
+    const prepared = await settingsRequest(base, maintenanceToken, "POST", "/update/prepare", {
       confirm: "PRE_UPDATE_BACKUP",
     });
     assertCheck(prepared.result?.action === "prepare_update", "P11 prepare update action mismatch");
@@ -3096,7 +3128,8 @@ async function runChannelOperatorExtensionBoundary(ctx: CheckContext): Promise<C
     assertCheck(manifest.exports.surface !== undefined, `${operator.label}: manifest surface export missing`);
     assertCheck(inventory.includes(`| \`${operator.rel}\` | CORE |`), `${operator.label}: repository inventory does not classify package as CORE`);
     assertCheck(previewScope.includes(operator.rel), `${operator.label}: preview scope does not document first-party include`);
-    assertCheck(releaseBundle.includes(`"${operator.rel}"`), `${operator.label}: release bundle core paths do not include operator`);
+    assertCheck(PRODUCT_SCOPE_CORE_RELEASE_PATHS.includes(operator.rel), `${operator.label}: product scope core paths do not include operator`);
+    assertCheck(releaseBundle.includes("PRODUCT_SCOPE_CORE_RELEASE_PATHS"), `${operator.label}: release bundle does not use product scope core paths`);
     assertCheck(windowsPackage.includes(`rel: "${operator.rel}"`), `${operator.label}: Windows package runtime list does not include operator`);
 
     const reviewRun = await ctx.runner(

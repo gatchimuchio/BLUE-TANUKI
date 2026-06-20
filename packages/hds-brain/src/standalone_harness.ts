@@ -11,6 +11,7 @@ import {
 import {
   evaluateHDSBrainHealth,
   type HDSBrainHealth,
+  type HDSBrainHealthOptions,
 } from "./health.js";
 
 export interface StandaloneHDSBrainInput {
@@ -39,6 +40,13 @@ export interface StandaloneHDSBrainResult {
   runtime_snapshot: HDSRuntimeSnapshot;
   health: HDSBrainHealth;
 }
+
+const STANDALONE_HEALTH_OPTIONS: HDSBrainHealthOptions = {
+  required_directories: [],
+  storage_paths: [],
+  optional_dependencies: [],
+  audit_appendable: "memory_only",
+};
 
 export function runStandaloneHDSBrain(
   input: StandaloneHDSBrainInput,
@@ -81,6 +89,6 @@ export function runStandaloneHDSBrain(
     invariants: runtime_snapshot.invariants,
     runtime_invariants: runtime_snapshot.runtime_invariants,
     runtime_snapshot,
-    health: evaluateHDSBrainHealth(runtime_snapshot),
+    health: evaluateHDSBrainHealth(runtime_snapshot, STANDALONE_HEALTH_OPTIONS),
   };
 }

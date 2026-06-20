@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
+import {
+  PRODUCT_SCOPE_CORE_RELEASE_PATHS,
+  PRODUCT_SCOPE_RELEASE_INSTALLER_PATHS,
+} from "../packages/protocol/src/product_scope_contract.js";
 
 interface PackageJson {
   version: string;
@@ -10,18 +14,7 @@ interface PackageJson {
 
 const root = process.cwd();
 
-const CORE_RELEASE_PATHS = [
-  "apps/gateway",
-  "packages/hds-brain",
-  "packages/protocol",
-  "packages/blue-tanuki",
-  "packages/channel-base",
-  "packages/channel-webchat",
-  "packages/channel-telegram",
-  "packages/operator-writing",
-  "packages/operator-daily",
-  "packages/operator-developer",
-] as const;
+const CORE_RELEASE_PATHS = PRODUCT_SCOPE_CORE_RELEASE_PATHS;
 
 const INCLUDED_PATHS = [
   ".dockerignore",
@@ -120,29 +113,7 @@ const REQUIRED_PATHS = [
   "tooling/windows/assert_windows_oneclick_artifact.py",
 ] as const;
 
-const INSTALLER_PATHS = [
-  "INSTALL_WINDOWS.cmd",
-  "INSTALL_WINDOWS.ps1",
-  "INSTALL.sh",
-  "INSTALL_LINUX.desktop",
-  "INSTALL_LINUX.sh",
-  "INSTALL_MACOS.command",
-  "INSTALL_MACOS.sh",
-  "install/linux/install.sh",
-  "install/linux/uninstall.sh",
-  "install/macos/install.sh",
-  "install/macos/uninstall.sh",
-  "install/resident/README.md",
-  "install/resident/blue-tanuki-resident.ps1",
-  "install/resident/blue-tanuki-resident.sh",
-  "install/unix/product/BlueTanukiSetup.sh",
-  "install/unix/product/BlueTanukiLauncher.sh",
-  "install/unix/product/BlueTanukiUninstall.sh",
-  "install/windows/product/BlueTanukiSetup.cmd",
-  "install/windows/product/BlueTanukiSetup.ps1",
-  "install/windows/product/BlueTanukiLauncher.ps1",
-  "install/windows/product/BlueTanukiUninstall.ps1",
-] as const;
+const INSTALLER_PATHS = PRODUCT_SCOPE_RELEASE_INSTALLER_PATHS;
 
 const CORE_ROOT_TSCONFIG_REFERENCES = [
   "./packages/protocol",

@@ -87,6 +87,7 @@ a stop-ship event and inspect the workspace before distributing an archive.
 | --------------------------- | ------------ | ----------------------------------------------------- | ------------------ |
 | `WEBCHAT_TOKEN`             | `serve`      | Bearer token for `/inbound` and `/ws-ticket`          | none (hard error)  |
 | `WEBCHAT_RESUME_TOKEN`      | `serve`      | Separate Bearer token for `/resume`; must differ from `WEBCHAT_TOKEN` | none (hard error)  |
+| `BLUE_TANUKI_MAINTENANCE_TOKEN` | `serve` | Separate Bearer token for `/update/*` and `/recovery/*`; must differ from WebChat tokens | none (hard error) |
 | `WEBCHAT_PORT`              | `serve`      | HTTP/WS listen port                                   | `8787`             |
 | `WEBCHAT_HOST`              | `serve`      | HTTP/WS bind host                                     | `127.0.0.1`        |
 | `LLM_BACKEND`               | all modes    | Default LLM provider: `stub`, `anthropic`, `openai`, `openai-compatible`, or `openrouter` | `stub` |

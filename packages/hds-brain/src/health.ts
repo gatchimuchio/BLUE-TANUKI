@@ -17,6 +17,10 @@ export interface HDSBrainHealth {
   status: HDSBrainHealthStatus;
   config_validation_status: HealthCheckStatus;
   runtime_health_status: HealthCheckStatus;
+  runtime_health_observed: boolean;
+  measured_checks_count: number;
+  unknown_checks_count: number;
+  assumed_checks_count: number;
   runtime_checks: HDSRuntimeHealthCheck[];
   hds_available: boolean;
   policy_valid: boolean;
@@ -77,21 +81,28 @@ export function evaluateHDSBrainHealth(
   const runtime_invariants_ok =
     runtimeInvariantValuesOk(snapshot.invariants) &&
     runtimeInvariantReportOk(snapshot.runtime_invariants);
+  const runtime_checks = buildRuntimeChecks(snapshot, opts, runtime_invariants_ok);
+  const runtime_health_status = aggregateRuntimeStatus(runtime_checks);
+  const runtime_health_observed = runtime_health_status !== "UNKNOWN";
   const failSafeInput: FailSafeInput = {
     hds_available: opts.hds_available ?? true,
     policy_valid: opts.policy_valid ?? true,
     audit_chain_valid: snapshot.audit.chain_valid,
     runtime_invariants_valid: runtime_invariants_ok,
+    runtime_health_observed,
     approval_gate_available: opts.approval_gate_available ?? true,
     memory_chain_valid: snapshot.memory.chain_valid,
   };
   const failSafe = evaluateFailSafeBoundary(failSafeInput);
-  const runtime_checks = buildRuntimeChecks(snapshot, opts, runtime_invariants_ok);
-  const runtime_health_status = aggregateRuntimeStatus(runtime_checks);
+  const unknown_checks_count = runtime_checks.filter((check) => check.status === "UNKNOWN").length;
   return {
     status: failSafe.allowed ? "ok" : "fail_safe",
     config_validation_status: failSafeInput.policy_valid ? "PASS" : "FAIL",
     runtime_health_status,
+    runtime_health_observed,
+    measured_checks_count: runtime_checks.length - unknown_checks_count,
+    unknown_checks_count,
+    assumed_checks_count: 0,
     runtime_checks,
     hds_available: failSafeInput.hds_available,
     policy_valid: failSafeInput.policy_valid,
@@ -164,7 +175,7 @@ function buildRuntimeChecks(
   for (const item of opts.required_directories ?? []) {
     checks.push(pathCheck(`required_directory:${item.path}`, item, true));
   }
-  if (!opts.required_directories || opts.required_directories.length === 0) {
+  if (opts.required_directories === undefined) {
     checks.push({
       name: "required_directories",
       status: "UNKNOWN",
@@ -173,18 +184,36 @@ function buildRuntimeChecks(
       evidence: "self-health was evaluated without filesystem directory probes",
       used_for_authority: false,
     });
+  } else if (opts.required_directories.length === 0) {
+    checks.push({
+      name: "required_directories",
+      status: "PASS",
+      expected: "required runtime directories are explicitly scoped",
+      actual: "no required filesystem runtime directories in this HDS scope",
+      evidence: "caller supplied an empty required_directories probe set",
+      used_for_authority: false,
+    });
   }
 
   for (const item of opts.storage_paths ?? []) {
     checks.push(pathCheck(`storage_path:${item.path}`, item, true));
   }
-  if (!opts.storage_paths || opts.storage_paths.length === 0) {
+  if (opts.storage_paths === undefined) {
     checks.push({
       name: "storage_paths",
       status: snapshot.memory.configured ? "UNKNOWN" : "PASS",
       expected: "configured storage paths are accessible",
       actual: snapshot.memory.configured ? "memory configured but no path probe supplied" : "no configured storage path",
       evidence: "storage path accessibility must be supplied by the adapter that owns the path",
+      used_for_authority: false,
+    });
+  } else if (opts.storage_paths.length === 0) {
+    checks.push({
+      name: "storage_paths",
+      status: "PASS",
+      expected: "configured storage paths are explicitly probed or absent",
+      actual: "no configured storage path in this HDS scope",
+      evidence: "caller supplied an empty storage_paths probe set",
       used_for_authority: false,
     });
   }
@@ -250,6 +279,9 @@ function nextAction(failed: HDSBrainHealthPrecondition[]): string | null {
   }
   if (failed.includes("runtime_invariants_valid")) {
     return "Inspect Runtime Invariants evidence and remediate the failed invariant before retrying";
+  }
+  if (failed.includes("runtime_health_observed")) {
+    return "Run runtime self-health probes and resolve UNKNOWN checks before retrying";
   }
   if (failed.includes("approval_gate_available")) {
     return "Restore Approval Gate availability before any downstream execution";

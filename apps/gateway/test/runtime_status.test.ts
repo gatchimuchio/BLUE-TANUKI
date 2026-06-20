@@ -40,6 +40,7 @@ describe("buildRuntimeStatusSnapshot", () => {
       hds: hdsSnapshot(),
       webchat_token: "SECRET-WEBCHAT-TOKEN",
       webchat_resume_token: "SECRET-RESUME-TOKEN",
+      webchat_maintenance_token: "SECRET-MAINTENANCE-TOKEN",
       telegram_bot_token: undefined,
       pending_approvals_count: 0,
       runtime_schedules_count: 0,
@@ -59,6 +60,7 @@ describe("buildRuntimeStatusSnapshot", () => {
     });
     expect(JSON.stringify(status)).not.toContain("SECRET-WEBCHAT-TOKEN");
     expect(JSON.stringify(status)).not.toContain("SECRET-RESUME-TOKEN");
+    expect(JSON.stringify(status)).not.toContain("SECRET-MAINTENANCE-TOKEN");
   });
 
   it("prioritizes invariant and audit failures before optional Telegram setup", () => {
@@ -75,6 +77,7 @@ describe("buildRuntimeStatusSnapshot", () => {
       }),
       webchat_token: "webchat",
       webchat_resume_token: "resume",
+      webchat_maintenance_token: "maintenance",
       telegram_bot_token: undefined,
       pending_approvals_count: 0,
       runtime_schedules_count: 0,
@@ -88,6 +91,7 @@ describe("buildRuntimeStatusSnapshot", () => {
       hds: hdsSnapshot({ audit: { entries: 1, chain_valid: false } }),
       webchat_token: "webchat",
       webchat_resume_token: "resume",
+      webchat_maintenance_token: "maintenance",
       telegram_bot_token: undefined,
       pending_approvals_count: 0,
       runtime_schedules_count: 0,
@@ -103,6 +107,7 @@ describe("buildRuntimeStatusSnapshot", () => {
       hds: hdsSnapshot(),
       webchat_token: "webchat",
       webchat_resume_token: "resume",
+      webchat_maintenance_token: "maintenance",
       telegram_bot_token: "telegram",
       pending_approvals_count: 2,
       runtime_schedules_count: 1,
@@ -114,11 +119,38 @@ describe("buildRuntimeStatusSnapshot", () => {
       hds: hdsSnapshot(),
       webchat_token: "webchat",
       webchat_resume_token: "resume",
+      webchat_maintenance_token: "maintenance",
       telegram_bot_token: "telegram",
       pending_approvals_count: 0,
       runtime_schedules_count: 1,
       pending_schedule_approvals_count: 1,
     });
     expect(schedule.next_recommended_action).toBe("Review pending runtime schedule approvals");
+  });
+
+  it("does not mark WebChat ready without a distinct maintenance token", () => {
+    const missing = buildRuntimeStatusSnapshot({
+      hds: hdsSnapshot(),
+      webchat_token: "webchat",
+      webchat_resume_token: "resume",
+      telegram_bot_token: "telegram",
+      pending_approvals_count: 0,
+      runtime_schedules_count: 0,
+      pending_schedule_approvals_count: 0,
+    });
+    expect(missing.webchat_ready).toBe(false);
+    expect(missing.next_recommended_action).toContain("BLUE_TANUKI_MAINTENANCE_TOKEN");
+
+    const reused = buildRuntimeStatusSnapshot({
+      hds: hdsSnapshot(),
+      webchat_token: "webchat",
+      webchat_resume_token: "resume",
+      webchat_maintenance_token: "webchat",
+      telegram_bot_token: "telegram",
+      pending_approvals_count: 0,
+      runtime_schedules_count: 0,
+      pending_schedule_approvals_count: 0,
+    });
+    expect(reused.webchat_ready).toBe(false);
   });
 });

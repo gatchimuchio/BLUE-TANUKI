@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
 
@@ -145,6 +146,11 @@ interface RecoveryBackupManifest {
   used_for_authority: false;
   hds_brain_remains_authority: true;
   evidence_source: readonly ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"];
+}
+
+interface SafeRuntimeTarget {
+  path: string;
+  purpose: string;
 }
 
 const AUTHORITY_BOUNDARY: RecoveryAuthorityBoundary = {
@@ -363,7 +369,8 @@ function sourceSpecs(env: NodeJS.ProcessEnv): RecoverySourceSpec[] {
     {
       key: "schedules_dir",
       env_key: "BLUE_TANUKI_SCHEDULES_DIR",
-      source_path: env.BLUE_TANUKI_SCHEDULES_DIR ?? path.join(".blue-tanuki", "schedules"),
+      source_path: env.BLUE_TANUKI_SCHEDULES_DIR ??
+        (env.BLUE_TANUKI_FILE_ROOT ? path.join(env.BLUE_TANUKI_FILE_ROOT, "schedules") : undefined),
       backup_required: true,
     },
     {
@@ -379,6 +386,129 @@ function sourceSpecs(env: NodeJS.ProcessEnv): RecoverySourceSpec[] {
       backup_required: true,
     },
   ];
+}
+
+function trimTrailingSeparators(value: string): string {
+  let out = path.resolve(value);
+  while (out.length > path.parse(out).root.length && /[\\/]$/.test(out)) {
+    out = out.slice(0, -1);
+  }
+  return out;
+}
+
+function isSameOrInside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function broadRuntimePathReason(resolved: string): string | null {
+  const home = trimTrailingSeparators(os.homedir());
+  const tmp = trimTrailingSeparators(os.tmpdir());
+  const denied = [
+    path.parse(resolved).root,
+    home,
+    path.join(home, ".config"),
+    path.join(home, ".local"),
+    path.join(home, ".local", "share"),
+    path.join(home, ".local", "bin"),
+    path.join(home, "Library"),
+    path.join(home, "Library", "Application Support"),
+    tmp,
+  ].map(trimTrailingSeparators);
+  return denied.includes(trimTrailingSeparators(resolved)) ? "broad_path" : null;
+}
+
+function configuredRuntimeTargets(env: NodeJS.ProcessEnv): Map<string, string> {
+  const targets = new Map<string, string>();
+  for (const spec of sourceSpecs(env)) {
+    if (spec.source_path) {
+      targets.set(`${spec.key}:${spec.env_key}`, trimTrailingSeparators(spec.source_path));
+    }
+  }
+  return targets;
+}
+
+function managedRuntimeRoots(env: NodeJS.ProcessEnv): string[] {
+  const roots = [
+    env.BLUE_TANUKI_FILE_ROOT,
+    env.BLUE_TANUKI_ENV_FILE ? path.dirname(env.BLUE_TANUKI_ENV_FILE) : undefined,
+    env.BLUE_TANUKI_AUDIT_DIR,
+    env.BLUE_TANUKI_SESSION_DIR,
+    env.BLUE_TANUKI_MEMORY_DIR,
+    env.BLUE_TANUKI_MEMORY_FILE ? path.dirname(env.BLUE_TANUKI_MEMORY_FILE) : undefined,
+    env.BLUE_TANUKI_FAILURE_MEMORY_DIR,
+    env.BLUE_TANUKI_FAILURE_MEMORY_FILE ? path.dirname(env.BLUE_TANUKI_FAILURE_MEMORY_FILE) : undefined,
+    env.BLUE_TANUKI_SCHEDULES_DIR,
+    env.BLUE_TANUKI_LOG_DIR,
+    env.BLUE_TANUKI_APPROVALS_FILE ? path.dirname(env.BLUE_TANUKI_APPROVALS_FILE) : undefined,
+    recoveryRoot(env),
+  ]
+    .filter((item): item is string => Boolean(item && item.trim().length > 0))
+    .map(trimTrailingSeparators)
+    .filter((item) => broadRuntimePathReason(item) === null);
+  return Array.from(new Set(roots));
+}
+
+async function assertNoSymlinkTarget(resolved: string, purpose: string): Promise<void> {
+  const stat = await fs.lstat(resolved).catch((error: unknown) => {
+    const code = error instanceof Error && "code" in error ? String(error.code) : "";
+    if (code === "ENOENT") return null;
+    throw error;
+  });
+  if (stat?.isSymbolicLink()) {
+    throw new Error(`unsafe_runtime_target:${purpose}:symlink:${resolved}`);
+  }
+  const parent = path.dirname(resolved);
+  const parentStat = await fs.lstat(parent).catch((error: unknown) => {
+    const code = error instanceof Error && "code" in error ? String(error.code) : "";
+    if (code === "ENOENT") return null;
+    throw error;
+  });
+  if (parentStat?.isSymbolicLink()) {
+    throw new Error(`unsafe_runtime_target:${purpose}:symlink_parent:${parent}`);
+  }
+}
+
+async function runtimeSafeTarget(
+  env: NodeJS.ProcessEnv,
+  target: string,
+  purpose: string,
+  opts: { allow_exact?: readonly string[]; allow_under_recovery_root?: boolean } = {},
+): Promise<SafeRuntimeTarget> {
+  if (!target || target.trim().length === 0) {
+    throw new Error(`unsafe_runtime_target:${purpose}:empty`);
+  }
+  if (!path.isAbsolute(target)) {
+    throw new Error(`unsafe_runtime_target:${purpose}:relative:${target}`);
+  }
+  const resolved = trimTrailingSeparators(target);
+  const broad = broadRuntimePathReason(resolved);
+  if (broad) {
+    throw new Error(`unsafe_runtime_target:${purpose}:${broad}:${resolved}`);
+  }
+  await assertNoSymlinkTarget(resolved, purpose);
+
+  const exact = (opts.allow_exact ?? []).map(trimTrailingSeparators);
+  if (exact.includes(resolved)) return { path: resolved, purpose };
+
+  const roots = managedRuntimeRoots(env);
+  if (opts.allow_under_recovery_root) roots.push(recoveryRoot(env));
+  if (roots.some((root) => isSameOrInside(resolved, root))) {
+    return { path: resolved, purpose };
+  }
+  throw new Error(`unsafe_runtime_target:${purpose}:outside_managed_roots:${resolved}`);
+}
+
+async function assertArchivePath(packDir: string, archivePathValue: string, purpose: string): Promise<string> {
+  if (!path.isAbsolute(archivePathValue)) {
+    throw new Error(`invalid_backup_manifest_archive_path:${purpose}:relative`);
+  }
+  const resolved = trimTrailingSeparators(archivePathValue);
+  if (!isSameOrInside(resolved, trimTrailingSeparators(packDir))) {
+    throw new Error(`invalid_backup_manifest_archive_path:${purpose}:escape`);
+  }
+  await assertNoSymlinkTarget(resolved, purpose);
+  return resolved;
 }
 
 function backupId(action: string, now = new Date()): string {
@@ -452,7 +582,9 @@ async function createBackupManifest(
   env: NodeJS.ProcessEnv,
   action: "backup" | "pre_restore" | "pre_factory_reset",
 ): Promise<RecoveryBackupManifest> {
-  const root = recoveryRoot(env);
+  const root = (await runtimeSafeTarget(env, recoveryRoot(env), "recovery_root", {
+    allow_under_recovery_root: true,
+  })).path;
   const id = backupId(action);
   const packDir = path.join(root, id);
   const manifestPath = path.join(packDir, "manifest.json");
@@ -460,7 +592,11 @@ async function createBackupManifest(
 
   const items: RecoveryBackupManifestItem[] = [];
   for (const spec of sourceSpecs(env)) {
-    const source = spec.source_path ? path.resolve(spec.source_path) : undefined;
+    const source = spec.source_path
+      ? (await runtimeSafeTarget(env, path.resolve(spec.source_path), `backup_source:${spec.key}`, {
+          allow_exact: [path.resolve(spec.source_path)],
+        })).path
+      : undefined;
     if (!source) {
       items.push({
         key: spec.key,
@@ -498,7 +634,7 @@ async function createBackupManifest(
       continue;
     }
 
-    const dest = archivePath(packDir, spec, status.kind);
+    const dest = await assertArchivePath(packDir, archivePath(packDir, spec, status.kind), `backup_archive:${spec.key}`);
     await copyPath(source, dest, status.kind);
     const digest = await sha256Path(dest, status.kind);
     items.push({
@@ -535,6 +671,12 @@ async function createBackupManifest(
     encoding: "utf8",
     mode: 0o600,
   });
+  const manifestDigest = await sha256File(manifestPath);
+  await fs.writeFile(
+    `${manifestPath}.sha256`,
+    `${manifestDigest.sha256}  manifest.json\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
   return manifest;
 }
 
@@ -558,18 +700,33 @@ function actionResult(
 
 async function readManifest(env: NodeJS.ProcessEnv, backupIdValue: string): Promise<RecoveryBackupManifest> {
   assertBackupId(backupIdValue);
-  const root = recoveryRoot(env);
-  const manifestPath = path.join(root, backupIdValue, "manifest.json");
+  const root = (await runtimeSafeTarget(env, recoveryRoot(env), "recovery_root", {
+    allow_under_recovery_root: true,
+  })).path;
+  const manifestPath = await assertArchivePath(root, path.join(root, backupIdValue, "manifest.json"), "manifest");
   const rel = path.relative(root, manifestPath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new Error("invalid_backup_id");
   }
   const raw = await fs.readFile(manifestPath, "utf8");
+  const digest = createHash("sha256").update(raw).digest("hex");
+  const sidecar = await fs.readFile(`${manifestPath}.sha256`, "utf8").catch(() => "");
+  const expectedDigest = sidecar.trim().split(/\s+/)[0] ?? "";
+  if (!/^[a-f0-9]{64}$/i.test(expectedDigest) || expectedDigest.toLowerCase() !== digest) {
+    throw new Error("invalid_backup_manifest_digest");
+  }
   const parsed = JSON.parse(raw) as RecoveryBackupManifest;
   if (parsed.schema_version !== 1 || parsed.surface !== "recovery" || parsed.backup_id !== backupIdValue) {
     throw new Error("invalid_backup_manifest");
   }
-  return parsed;
+  if (trimTrailingSeparators(parsed.recovery_root) !== root) {
+    throw new Error("invalid_backup_manifest_recovery_root");
+  }
+  return {
+    ...parsed,
+    recovery_root: root,
+    manifest_path: manifestPath,
+  };
 }
 
 async function latestBackupId(env: NodeJS.ProcessEnv): Promise<string | null> {
@@ -577,23 +734,45 @@ async function latestBackupId(env: NodeJS.ProcessEnv): Promise<string | null> {
   return inventory.latest_backup_id;
 }
 
-async function restoreManifest(manifest: RecoveryBackupManifest): Promise<{ restored: number; removed: number }> {
+async function restoreManifest(
+  env: NodeJS.ProcessEnv,
+  manifest: RecoveryBackupManifest,
+): Promise<{ restored: number; removed: number }> {
   let restored = 0;
   let removed = 0;
   const packDir = path.dirname(manifest.manifest_path);
+  const expectedTargets = configuredRuntimeTargets(env);
   for (const item of manifest.items) {
     if (!item.source_path) continue;
+    const expected = expectedTargets.get(`${item.key}:${item.env_key}`);
+    if (!expected) {
+      throw new Error(`invalid_backup_manifest_target:${item.key}:not_configured`);
+    }
+    const sourcePath = trimTrailingSeparators(item.source_path);
+    if (sourcePath !== expected) {
+      throw new Error(`invalid_backup_manifest_target:${item.key}:source_path_mismatch`);
+    }
+    const target = (await runtimeSafeTarget(env, sourcePath, `restore_target:${item.key}`, {
+      allow_exact: [expected],
+    })).path;
     if (!item.copied || !item.archive_rel_path) {
-      await fs.rm(item.source_path, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
       removed += 1;
       continue;
     }
-    const archive = path.resolve(packDir, item.archive_rel_path);
+    if (item.kind !== "file" && item.kind !== "directory") {
+      throw new Error(`invalid_backup_manifest_kind:${item.key}`);
+    }
+    const archive = await assertArchivePath(packDir, path.resolve(packDir, item.archive_rel_path), `restore_archive:${item.key}`);
     const rel = path.relative(packDir, archive);
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
       throw new Error("invalid_backup_manifest_archive_path");
     }
-    await copyPath(archive, item.source_path, item.kind);
+    const digest = await sha256Path(archive, item.kind);
+    if (!item.sha256 || digest.sha256 !== item.sha256) {
+      throw new Error(`invalid_backup_manifest_archive_digest:${item.key}`);
+    }
+    await copyPath(archive, target, item.kind);
     restored += 1;
   }
   return { restored, removed };
@@ -603,8 +782,11 @@ async function readEnvValues(env: NodeJS.ProcessEnv): Promise<Record<string, str
   if (!env.BLUE_TANUKI_ENV_FILE) {
     throw new Error("env_file_required");
   }
+  const envFile = (await runtimeSafeTarget(env, path.resolve(env.BLUE_TANUKI_ENV_FILE), "env_file_read", {
+    allow_exact: [path.resolve(env.BLUE_TANUKI_ENV_FILE)],
+  })).path;
   const raw = await fs
-    .readFile(path.resolve(env.BLUE_TANUKI_ENV_FILE), "utf8")
+    .readFile(envFile, "utf8")
     .catch((error: unknown) => {
       const code = error instanceof Error && "code" in error ? String(error.code) : "";
       if (code === "ENOENT") return "";
@@ -638,7 +820,10 @@ async function writeEnvValues(
   if (!env.BLUE_TANUKI_ENV_FILE) {
     throw new Error("env_file_required");
   }
-  const result = await writeEnvFileAtomic(env.BLUE_TANUKI_ENV_FILE, renderEnvValues(values), {
+  const envFile = (await runtimeSafeTarget(env, path.resolve(env.BLUE_TANUKI_ENV_FILE), "env_file_write", {
+    allow_exact: [path.resolve(env.BLUE_TANUKI_ENV_FILE)],
+  })).path;
+  const result = await writeEnvFileAtomic(envFile, renderEnvValues(values), {
     backup: true,
     backup_label: label,
   });
@@ -655,7 +840,8 @@ function deleteEnvKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): void {
 }
 
 export async function buildRecoverySnapshot(env: NodeJS.ProcessEnv = process.env): Promise<RecoverySnapshot> {
-  const schedulesDir = env.BLUE_TANUKI_SCHEDULES_DIR ?? path.join(".blue-tanuki", "schedules");
+  const schedulesDir = env.BLUE_TANUKI_SCHEDULES_DIR ??
+    (env.BLUE_TANUKI_FILE_ROOT ? path.join(env.BLUE_TANUKI_FILE_ROOT, "schedules") : undefined);
   const backups = await recoveryBackupInventory(env);
   const envFile = await envBackups(env.BLUE_TANUKI_ENV_FILE);
   const envConfigured = Boolean(env.BLUE_TANUKI_ENV_FILE);
@@ -718,7 +904,7 @@ export async function restoreRecoveryBackup(
   if (!id) throw new Error("backup_not_found");
   const preRestore = await createBackupManifest(env, "pre_restore");
   const manifest = await readManifest(env, id);
-  const result = await restoreManifest(manifest);
+  const result = await restoreManifest(env, manifest);
   return actionResult("restore", {
     restored_backup_id: id,
     restored_items_count: result.restored,
@@ -795,17 +981,23 @@ export async function factoryResetRecovery(
   env.COMPOSIO_LIVE_EXECUTION = "false";
 
   const removedPaths: string[] = [];
-  for (const value of [
+  const resetTargets = [
     env.BLUE_TANUKI_SESSION_DIR,
     env.BLUE_TANUKI_MEMORY_FILE,
     env.BLUE_TANUKI_MEMORY_DIR,
     env.BLUE_TANUKI_FAILURE_MEMORY_FILE,
     env.BLUE_TANUKI_FAILURE_MEMORY_DIR,
-    env.BLUE_TANUKI_SCHEDULES_DIR ?? path.join(".blue-tanuki", "schedules"),
+    env.BLUE_TANUKI_SCHEDULES_DIR ??
+      (env.BLUE_TANUKI_FILE_ROOT ? path.join(env.BLUE_TANUKI_FILE_ROOT, "schedules") : undefined),
     env.BLUE_TANUKI_LOG_DIR,
-  ]) {
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => path.resolve(value));
+  for (const value of resetTargets) {
     if (!value) continue;
-    const resolved = path.resolve(value);
+    const resolved = (await runtimeSafeTarget(env, path.resolve(value), "factory_reset_remove", {
+      allow_exact: resetTargets,
+    })).path;
     await fs.rm(resolved, { recursive: true, force: true }).catch(() => undefined);
     removedPaths.push(resolved);
   }

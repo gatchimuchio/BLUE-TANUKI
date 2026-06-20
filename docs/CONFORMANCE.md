@@ -6,7 +6,7 @@
 
 現在の main release gate として扱うテスト群:
 
-- `apps/gateway/test/adapter_conformance.test.ts`
+- `tests/adapter_conformance.test.ts`
   - Teams / LINE inbound normalization and canonical outbound dispatch
   - Slack / Discord / Telegram の inbound normalization
   - canonical `InboundRequest` / `ChannelSendPayload` の利用

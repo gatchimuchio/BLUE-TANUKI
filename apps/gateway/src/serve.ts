@@ -302,6 +302,7 @@ export async function serve(): Promise<ServeShutdown> {
     "network:listen",
     "secrets:WEBCHAT_TOKEN",
     "secrets:WEBCHAT_RESUME_TOKEN",
+    "secrets:BLUE_TANUKI_MAINTENANCE_TOKEN",
     ...(process.env.WEBHOOK_TOKEN ? ["secrets:WEBHOOK_TOKEN"] : []),
     ...(process.env.BLUE_TANUKI_SETTINGS_TOKEN
       ? ["secrets:BLUE_TANUKI_SETTINGS_TOKEN"]
@@ -322,6 +323,13 @@ export async function serve(): Promise<ServeShutdown> {
   }
   if (resumeToken === token) {
     throw new Error("WEBCHAT_RESUME_TOKEN must differ from WEBCHAT_TOKEN");
+  }
+  const maintenanceToken = process.env.BLUE_TANUKI_MAINTENANCE_TOKEN;
+  if (!maintenanceToken) {
+    throw new Error("BLUE_TANUKI_MAINTENANCE_TOKEN is required for update/recovery maintenance surfaces");
+  }
+  if (maintenanceToken === token || maintenanceToken === resumeToken) {
+    throw new Error("BLUE_TANUKI_MAINTENANCE_TOKEN must differ from WebChat tokens");
   }
   const cronTasks = cronSchedulesFromEnv(process.env);
   const cron = new CronSchedulerChannel({
@@ -918,6 +926,7 @@ export async function serve(): Promise<ServeShutdown> {
       port,
       token,
       resume_token: resumeToken,
+      maintenance_token: maintenanceToken,
       webhook_token: process.env.WEBHOOK_TOKEN,
       host: process.env.WEBCHAT_HOST ?? "127.0.0.1",
       settings: createWebChatSettingsSurface({
@@ -938,6 +947,7 @@ export async function serve(): Promise<ServeShutdown> {
               hds: hdsSnapshot,
               webchat_token: process.env.WEBCHAT_TOKEN,
               webchat_resume_token: process.env.WEBCHAT_RESUME_TOKEN,
+              webchat_maintenance_token: process.env.BLUE_TANUKI_MAINTENANCE_TOKEN,
               telegram_bot_token: process.env.TELEGRAM_BOT_TOKEN,
               pending_approvals_count: pendingApprovals.length,
               runtime_schedules_count: runtimeSchedulesCount,

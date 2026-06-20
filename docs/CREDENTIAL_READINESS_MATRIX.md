@@ -13,6 +13,7 @@ connector credentials on Windows.
 |---|---|---|---|---|---|---|---|
 | `WEBCHAT_TOKEN` | WebChat inbound, `/ws-ticket`, read-only Control Center APIs | bearer secret | `pnpm setup` or manual env | required, length-only | no | `WEBCHAT_TOKEN is required for serve mode` | rotate with restart; must differ from resume token |
 | `WEBCHAT_RESUME_TOKEN` | `/resume`, `/approval` | bearer secret | `pnpm setup` or manual env | required, separation check | no | `WEBCHAT_RESUME_TOKEN must differ from WEBCHAT_TOKEN` | rotate with restart; do not reuse inbound token |
+| `BLUE_TANUKI_MAINTENANCE_TOKEN` | `/update/*`, `/recovery/*` maintenance controls | bearer secret | `pnpm setup` or manual env | required, separation check | no | `BLUE_TANUKI_MAINTENANCE_TOKEN is required for update/recovery maintenance surfaces` | rotate with restart; do not reuse inbound/resume/settings tokens |
 | `BLUE_TANUKI_SETTINGS_TOKEN` | `/settings` JSON API | bearer secret | setup/settings env | optional | settings API disabled or inaccessible | 401/403 on settings API | rotate with restart; settings writes create env backup |
 | `LLM_BACKEND` | executor provider selection | config | setup/manual | provider consistency check | yes, `stub` default | provider unavailable or unresolved backend hint | route only; does not grant authority |
 | `ANTHROPIC_API_KEY` | Anthropic backend | API key | provider dashboard/manual env | required only when backend/hint needs it | yes if backend unused | provider not registered / live smoke skip | rotate at provider, restart gateway |
