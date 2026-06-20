@@ -471,7 +471,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       function isDirectToolShortcutInput(value) {
-        return /^(?:tool:[A-Za-z0-9_.-]+|\/tool(?:\s|$))/.test(String(value || "").trim());
+        const trimmed = String(value || "").trim();
+        return /^tool:[A-Za-z0-9_.-]+/.test(trimmed) ||
+          trimmed === "/tool" ||
+          (trimmed.startsWith("/tool") && /\\s/.test(trimmed.charAt(5)));
       }
 
       function disconnectChat() {

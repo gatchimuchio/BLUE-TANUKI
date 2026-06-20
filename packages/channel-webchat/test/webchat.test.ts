@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as net from "node:net";
+import { Script } from "node:vm";
 import { WebSocket } from "ws";
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import type { SendMeta } from "@blue-tanuki/channel-base";
@@ -487,6 +488,13 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain(AOTANU_SPRITE_SPECS.working.asset_path);
       expect(html).toContain(AOTANU_SPRITE_SPECS.happy.asset_path);
       expect(html).toContain(AOTANU_SPRITE_SPECS.error.asset_path);
+      const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(
+        (match) => match[1] ?? "",
+      );
+      expect(scripts.length).toBeGreaterThan(0);
+      for (const script of scripts) {
+        expect(() => new Script(script)).not.toThrow();
+      }
     } finally {
       await ctx.teardown();
     }
