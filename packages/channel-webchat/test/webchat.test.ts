@@ -430,7 +430,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("evidence-token");
       expect(html).toContain("export-evidence");
       expect(html).toContain("/evidence/export");
-      expect(html).toContain("GUI Shell responsibility substrate mapped to BLUE-TANUKI");
+      expect(html).toContain("HDS-BRAIN authority path intact");
+      expect(html).toContain("A clean resident console");
       expect(html).toContain("UI state is not authority");
       expect(html).toContain("LLM output is not authority");
       expect(html).toContain("Memory is not authority");

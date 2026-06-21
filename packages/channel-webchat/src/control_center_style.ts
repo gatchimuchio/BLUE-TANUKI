@@ -1,23 +1,32 @@
 export const CONTROL_CENTER_STYLE = `      :root {
-        color-scheme: dark;
-        --bg: #11110f;
-        --panel: #181715;
-        --panel-2: #211f1a;
-        --panel-3: #2a281f;
-        --line: #464135;
-        --text: #f7f3ea;
-        --muted: #b5ad9d;
-        --good: #54d79b;
-        --warn: #f2bf5d;
-        --bad: #ff766f;
-        --review: #caa6ff;
-        --accent: #66d1c1;
-        --accent-2: #f0a94a;
-        --ink: #0f1210;
+        color-scheme: light;
+        --bg: #f4f7fb;
+        --surface: rgba(255, 255, 255, 0.9);
+        --surface-strong: #ffffff;
+        --surface-soft: #eef3f8;
+        --surface-inset: #f8fafc;
+        --line: #d7e0ea;
+        --line-strong: #b9c5d3;
+        --text: #101828;
+        --muted: #667085;
+        --good: #057a55;
+        --warn: #b54708;
+        --bad: #c2413f;
+        --review: #5b5bd6;
+        --accent: #0a84ff;
+        --accent-2: #14a37f;
+        --ink: #0b1220;
+        --shadow-soft: 0 10px 28px rgba(15, 23, 42, 0.08);
+        --shadow-tight: 0 2px 8px rgba(15, 23, 42, 0.08);
       }
 
       * {
         box-sizing: border-box;
+      }
+
+      html {
+        min-height: 100%;
+        background: var(--bg);
       }
 
       body {
@@ -45,14 +54,19 @@ export const CONTROL_CENTER_STYLE = `      :root {
         font: inherit;
       }
 
-      header {
+      body > header {
+        position: sticky;
+        top: 0;
+        z-index: 40;
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 16px;
-        padding: 14px 20px;
-        border-bottom: 1px solid var(--line);
-        background: #15130f;
+        padding: 12px 20px;
+        border-bottom: 1px solid rgba(215, 224, 234, 0.82);
+        background: rgba(248, 250, 252, 0.86);
+        backdrop-filter: blur(20px);
+        box-shadow: var(--shadow-tight);
       }
 
       .brand {
@@ -62,38 +76,58 @@ export const CONTROL_CENTER_STYLE = `      :root {
         min-width: 0;
       }
 
+      .brand > div {
+        min-width: 0;
+      }
+
       .tanuki-mark {
         width: 42px;
         height: 42px;
         flex: 0 0 auto;
+        filter: drop-shadow(0 6px 10px rgba(15, 23, 42, 0.14));
       }
 
       .screen-tabs {
+        position: sticky;
+        top: 67px;
+        z-index: 35;
         display: flex;
         flex-direction: row;
-        flex-wrap: wrap;
-        gap: 8px;
+        gap: 6px;
         min-width: 0;
-        padding: 10px 14px;
-        border-right: 0;
-        border-bottom: 1px solid var(--line);
-        background: #15130f;
-        overflow: visible;
+        padding: 10px 20px;
+        border-bottom: 1px solid rgba(215, 224, 234, 0.82);
+        background: rgba(244, 247, 251, 0.9);
+        backdrop-filter: blur(20px);
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: thin;
       }
 
       button.screen-tab {
+        flex: 0 0 auto;
         min-width: 0;
-        min-height: 32px;
-        padding: 6px 10px;
+        min-height: 34px;
+        padding: 7px 11px;
+        border-color: transparent;
         border-radius: 8px;
-        color: var(--muted);
+        background: transparent;
+        color: #475467;
+        font-weight: 680;
+        white-space: nowrap;
+      }
+
+      button.screen-tab:hover {
+        border-color: rgba(10, 132, 255, 0.3);
+        background: rgba(255, 255, 255, 0.72);
       }
 
       button.screen-tab.active,
       button.screen-tab[aria-selected="true"] {
-        border-color: rgba(102, 209, 193, 0.65);
-        background: #19302c;
-        color: var(--accent);
+        border-color: rgba(10, 132, 255, 0.4);
+        background: var(--accent);
+        color: #ffffff;
+        box-shadow: 0 5px 14px rgba(10, 132, 255, 0.22);
       }
 
       h1,
@@ -104,18 +138,24 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       h1 {
+        color: var(--ink);
         font-size: 18px;
         font-weight: 760;
+        line-height: 1.15;
       }
 
       h2 {
+        color: var(--ink);
         font-size: 14px;
-        font-weight: 720;
+        font-weight: 740;
+        line-height: 1.25;
       }
 
       h3 {
+        color: var(--ink);
         font-size: 13px;
-        font-weight: 700;
+        font-weight: 720;
+        line-height: 1.3;
       }
 
       .muted {
@@ -132,25 +172,21 @@ export const CONTROL_CENTER_STYLE = `      :root {
 
       .shell {
         display: grid;
-        grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(320px, 430px);
-        min-height: calc(100vh - 110px);
+        grid-template-columns: minmax(220px, 270px) minmax(0, 1fr) minmax(320px, 390px);
+        gap: 16px;
+        min-height: calc(100vh - 123px);
+        padding: 16px;
       }
 
-      nav,
-      aside {
+      .shell > nav,
+      .shell > aside {
         display: flex;
         flex-direction: column;
         gap: 12px;
         min-width: 0;
-        padding: 14px;
-        border-right: 1px solid var(--line);
-        background: #101720;
+        align-self: start;
+        max-height: calc(100vh - 139px);
         overflow-y: auto;
-      }
-
-      aside {
-        border-right: 0;
-        border-left: 1px solid var(--line);
       }
 
       main {
@@ -158,19 +194,19 @@ export const CONTROL_CENTER_STYLE = `      :root {
         min-width: 0;
         flex-direction: column;
         gap: 14px;
-        padding: 18px;
-        overflow-y: auto;
+        overflow: visible;
       }
 
       .card {
         display: flex;
         min-width: 0;
         flex-direction: column;
-        gap: 10px;
-        padding: 12px;
-        border: 1px solid var(--line);
+        gap: 12px;
+        padding: 14px;
+        border: 1px solid rgba(215, 224, 234, 0.94);
         border-radius: 8px;
-        background: var(--panel);
+        background: var(--surface);
+        box-shadow: var(--shadow-soft);
       }
 
       [data-screen-group][hidden] {
@@ -180,8 +216,37 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .dashboard-hero {
         display: grid;
         grid-template-columns: minmax(0, 1fr);
-        gap: 12px;
+        gap: 14px;
         align-items: stretch;
+        min-height: 214px;
+        border-color: rgba(13, 20, 33, 0.84);
+        background: #111827;
+        color: #f8fafc;
+      }
+
+      .dashboard-hero h2,
+      .dashboard-hero h3 {
+        color: #f8fafc;
+      }
+
+      .dashboard-hero .muted {
+        color: #cbd5e1;
+      }
+
+      .dashboard-hero .badge {
+        border-color: rgba(255, 255, 255, 0.16);
+        background: rgba(255, 255, 255, 0.08);
+        color: #e2e8f0;
+      }
+
+      .dashboard-hero .badge.good {
+        border-color: rgba(20, 163, 127, 0.46);
+        color: #7ee2c3;
+      }
+
+      .dashboard-hero .readonly-note {
+        border-color: rgba(148, 163, 184, 0.35);
+        color: #dbeafe;
       }
 
       .hero-copy {
@@ -189,12 +254,12 @@ export const CONTROL_CENTER_STYLE = `      :root {
         min-width: 0;
         flex-direction: column;
         justify-content: center;
-        gap: 10px;
+        gap: 12px;
       }
 
       .hero-title {
-        font-size: 24px;
-        line-height: 1.18;
+        font-size: 26px;
+        line-height: 1.16;
       }
 
       .aotanu-mascot {
@@ -211,8 +276,8 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .aotanu-sprite {
         width: var(--mascot-sprite-size, 96px);
         height: var(--mascot-sprite-size, 96px);
-        border: 1px solid rgba(102, 209, 193, 0.35);
-        border-radius: 6px;
+        border: 1px solid rgba(10, 132, 255, 0.22);
+        border-radius: 8px;
         background-color: #bdeaf4;
         background-repeat: no-repeat;
         background-size: 200% 200%;
@@ -231,9 +296,9 @@ export const CONTROL_CENTER_STYLE = `      :root {
         gap: 10px;
         min-width: 0;
         padding: 10px;
-        border: 1px solid #383428;
+        border: 1px solid var(--line);
         border-radius: 8px;
-        background: var(--panel-2);
+        background: var(--surface-inset);
       }
 
       .mascot-dock {
@@ -280,15 +345,16 @@ export const CONTROL_CENTER_STYLE = `      :root {
         min-height: 0;
         padding: 8px;
         place-items: center;
-        border-color: rgba(102, 209, 193, 0.45);
+        border-color: rgba(10, 132, 255, 0.18);
         border-radius: 8px;
-        background: rgba(16, 23, 32, 0.92);
-        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.38);
+        background: rgba(255, 255, 255, 0.86);
+        box-shadow: 0 16px 38px rgba(15, 23, 42, 0.16);
+        backdrop-filter: blur(18px);
         pointer-events: auto;
       }
 
       .mascot-toggle:hover {
-        border-color: var(--accent);
+        border-color: rgba(10, 132, 255, 0.56);
       }
 
       .mascot-actions {
@@ -297,10 +363,11 @@ export const CONTROL_CENTER_STYLE = `      :root {
         gap: 6px;
         width: 168px;
         padding: 8px;
-        border: 1px solid rgba(102, 209, 193, 0.45);
+        border: 1px solid rgba(10, 132, 255, 0.22);
         border-radius: 8px;
-        background: rgba(17, 17, 15, 0.96);
-        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+        background: rgba(255, 255, 255, 0.94);
+        box-shadow: 0 16px 38px rgba(15, 23, 42, 0.18);
+        backdrop-filter: blur(18px);
         pointer-events: auto;
       }
 
@@ -326,9 +393,9 @@ export const CONTROL_CENTER_STYLE = `      :root {
         gap: 8px;
         min-width: 0;
         padding: 10px;
-        border: 1px solid #383428;
+        border: 1px solid var(--line);
         border-radius: 8px;
-        background: var(--panel-2);
+        background: var(--surface-inset);
       }
 
       .lane-board {
@@ -342,9 +409,9 @@ export const CONTROL_CENTER_STYLE = `      :root {
         gap: 8px;
         min-height: 126px;
         padding: 10px;
-        border: 1px solid #383428;
+        border: 1px solid var(--line);
         border-radius: 8px;
-        background: #141813;
+        background: var(--surface-inset);
       }
 
       .map-grid {
@@ -356,15 +423,17 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .map-node {
         min-width: 0;
         padding: 9px;
-        border: 1px solid #3a4538;
+        border: 1px solid rgba(20, 163, 127, 0.22);
         border-radius: 8px;
-        background: #151d17;
+        background: #edf8f4;
+        color: #0f513f;
         text-align: center;
+        font-weight: 700;
         overflow-wrap: anywhere;
       }
 
       .readonly-note {
-        border-color: rgba(84, 215, 155, 0.45);
+        border-color: rgba(5, 122, 85, 0.28);
         color: var(--good);
       }
 
@@ -389,10 +458,10 @@ export const CONTROL_CENTER_STYLE = `      :root {
         justify-content: space-between;
         gap: 10px;
         min-width: 0;
-        padding: 8px 9px;
-        border: 1px solid #273444;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
         border-radius: 8px;
-        background: var(--panel-2);
+        background: var(--surface-inset);
       }
 
       .metric span:first-child,
@@ -422,31 +491,35 @@ export const CONTROL_CENTER_STYLE = `      :root {
         max-width: 100%;
         padding: 3px 8px;
         border: 1px solid var(--line);
-        border-radius: 999px;
-        background: var(--panel-3);
+        border-radius: 8px;
+        background: var(--surface-soft);
         color: var(--text);
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 740;
         overflow-wrap: anywhere;
       }
 
       .badge.good {
-        border-color: rgba(95, 224, 165, 0.5);
+        border-color: rgba(5, 122, 85, 0.24);
+        background: #e7f6ef;
         color: var(--good);
       }
 
       .badge.warn {
-        border-color: rgba(255, 209, 102, 0.5);
+        border-color: rgba(181, 71, 8, 0.24);
+        background: #fff4e6;
         color: var(--warn);
       }
 
       .badge.bad {
-        border-color: rgba(255, 111, 125, 0.5);
+        border-color: rgba(194, 65, 63, 0.26);
+        background: #ffeceb;
         color: var(--bad);
       }
 
       .badge.review {
-        border-color: rgba(215, 167, 255, 0.6);
+        border-color: rgba(91, 91, 214, 0.26);
+        background: #eeeeff;
         color: var(--review);
       }
 
@@ -467,7 +540,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
         padding: 9px;
         border: 1px solid var(--line);
         border-radius: 8px;
-        background: var(--panel-2);
+        background: var(--surface-inset);
       }
 
       input[type="password"],
@@ -477,41 +550,58 @@ export const CONTROL_CENTER_STYLE = `      :root {
       select,
       textarea {
         width: 100%;
-        min-height: 36px;
-        border: 1px solid var(--line);
+        min-height: 38px;
+        border: 1px solid var(--line-strong);
         border-radius: 8px;
-        background: #0e141c;
+        background: #ffffff;
         color: var(--text);
         padding: 8px 10px;
+        box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+
+      input:focus,
+      select:focus,
+      textarea:focus,
+      button:focus-visible {
+        outline: 2px solid rgba(10, 132, 255, 0.34);
+        outline-offset: 2px;
       }
 
       textarea {
-        min-height: 74px;
+        min-height: 82px;
         resize: vertical;
       }
 
       button {
-        min-height: 34px;
+        min-height: 36px;
         min-width: 74px;
-        border: 1px solid var(--line);
+        border: 1px solid var(--line-strong);
         border-radius: 8px;
-        background: var(--panel-3);
-        color: var(--text);
+        background: #ffffff;
+        color: var(--ink);
         cursor: pointer;
+        font-weight: 700;
+        box-shadow: var(--shadow-tight);
       }
 
       button.primary {
-        border-color: rgba(116, 185, 255, 0.55);
-        color: var(--accent);
+        border-color: rgba(10, 132, 255, 0.55);
+        background: var(--accent);
+        color: #ffffff;
       }
 
       button.danger {
-        border-color: rgba(255, 111, 125, 0.55);
+        border-color: rgba(194, 65, 63, 0.36);
+        background: #fff5f5;
         color: var(--bad);
       }
 
       button:hover {
-        border-color: var(--accent);
+        border-color: rgba(10, 132, 255, 0.62);
+      }
+
+      button.primary:hover {
+        background: #0071e3;
       }
 
       .log {
@@ -525,11 +615,12 @@ export const CONTROL_CENTER_STYLE = `      :root {
         padding: 12px;
         border: 1px solid var(--line);
         border-radius: 8px;
-        background: var(--panel);
+        background: var(--surface);
+        box-shadow: var(--shadow-tight);
       }
 
       .msg.system {
-        border-color: rgba(116, 185, 255, 0.5);
+        border-color: rgba(10, 132, 255, 0.24);
       }
 
       .queue-list,
@@ -554,9 +645,9 @@ export const CONTROL_CENTER_STYLE = `      :root {
         gap: 8px;
         min-width: 0;
         padding: 10px;
-        border: 1px solid #2b394a;
+        border: 1px solid var(--line);
         border-radius: 8px;
-        background: #111923;
+        background: var(--surface-inset);
       }
 
       .chat-log {
@@ -589,11 +680,92 @@ export const CONTROL_CENTER_STYLE = `      :root {
         white-space: pre-wrap;
         overflow-wrap: anywhere;
         padding: 10px;
-        border: 1px solid #273444;
+        border: 1px solid #1f2937;
         border-radius: 8px;
-        background: #0e141c;
-        color: #dce6f2;
+        background: #0b1220;
+        color: #dbeafe;
         font-size: 12px;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --bg: #0d1117;
+          --surface: rgba(22, 27, 34, 0.9);
+          --surface-strong: #161b22;
+          --surface-soft: #1f2937;
+          --surface-inset: #111827;
+          --line: #303b4b;
+          --line-strong: #46556a;
+          --text: #eef4ff;
+          --muted: #a7b1c2;
+          --good: #6ee7b7;
+          --warn: #f7bd6b;
+          --bad: #ff8b8b;
+          --review: #b7a4ff;
+          --accent: #0a84ff;
+          --accent-2: #36d6a3;
+          --ink: #f8fafc;
+          --shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.26);
+          --shadow-tight: 0 2px 8px rgba(0, 0, 0, 0.22);
+        }
+
+        body > header {
+          border-bottom-color: rgba(48, 59, 75, 0.82);
+          background: rgba(13, 17, 23, 0.86);
+        }
+
+        .screen-tabs {
+          border-bottom-color: rgba(48, 59, 75, 0.82);
+          background: rgba(13, 17, 23, 0.9);
+        }
+
+        button.screen-tab {
+          color: #c9d4e5;
+        }
+
+        button.screen-tab:hover {
+          background: rgba(31, 41, 55, 0.72);
+        }
+
+        .dashboard-hero {
+          border-color: rgba(148, 163, 184, 0.2);
+          background: #111827;
+        }
+
+        .map-node {
+          background: rgba(20, 163, 127, 0.12);
+          color: #9ff2d2;
+        }
+
+        input[type="password"],
+        input[type="text"],
+        input[type="number"],
+        input[type="url"],
+        select,
+        textarea,
+        button,
+        .mascot-toggle,
+        .mascot-actions {
+          background: var(--surface-strong);
+          color: var(--text);
+        }
+
+        .badge.good {
+          background: rgba(5, 122, 85, 0.17);
+        }
+
+        .badge.warn {
+          background: rgba(181, 71, 8, 0.17);
+        }
+
+        .badge.bad {
+          background: rgba(194, 65, 63, 0.17);
+        }
+
+        .badge.review {
+          background: rgba(91, 91, 214, 0.2);
+        }
       }
 
       @media (max-width: 1120px) {
@@ -606,41 +778,40 @@ export const CONTROL_CENTER_STYLE = `      :root {
           grid-template-columns: 1fr;
         }
 
-        aside {
+        .shell > aside {
           grid-column: 1 / -1;
-          border-left: 0;
-          border-top: 1px solid var(--line);
+          max-height: none;
         }
       }
 
       @media (max-width: 760px) {
-        header,
-        .shell,
-        .shell > nav,
-        main,
-        aside {
-          display: block;
-        }
-
-        header {
+        body > header {
+          align-items: flex-start;
+          flex-direction: column;
           padding: 12px;
         }
 
-        .shell > nav,
-        main,
-        aside {
-          padding: 12px;
-          border-left: 0;
-          border-right: 0;
+        .brand {
+          width: 100%;
         }
 
         .screen-tabs {
-          display: flex;
+          top: 96px;
+          padding: 9px 12px;
+        }
+
+        .shell {
+          display: block;
+          min-height: auto;
+          padding: 12px;
         }
 
         .shell > nav,
-        main {
-          border-bottom: 1px solid var(--line);
+        main,
+        .shell > aside {
+          display: flex;
+          max-height: none;
+          margin-bottom: 12px;
         }
 
         .status-grid {
@@ -654,6 +825,10 @@ export const CONTROL_CENTER_STYLE = `      :root {
 
         .kv {
           grid-template-columns: 92px minmax(0, 1fr);
+        }
+
+        .hero-title {
+          font-size: 23px;
         }
 
         .mascot-dock {

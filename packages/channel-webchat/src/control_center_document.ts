@@ -104,9 +104,9 @@ ${CONTROL_CENTER_STYLE}    </style>
       <main>
         <section class="card dashboard-hero" data-screen-group="home">
           <div class="hero-copy">
-            <span class="badge good">GUI Shell responsibility substrate mapped to BLUE-TANUKI</span>
+            <span class="badge good">HDS-BRAIN authority path intact</span>
             <h2 class="hero-title">Tanuki Dashboard</h2>
-            <p class="muted">This console turns HDS-BRAIN decisions, approvals, audit evidence, recovery hints, channels, memory, and operator surfaces into owner-visible state. UI state is display and intent only; it never becomes authority.</p>
+            <p class="muted">A clean resident console for decisions, approvals, audit evidence, recovery hints, channels, memory, and operator surfaces. UI state is display and intent only; it never becomes authority.</p>
             <div class="policy-row">
               <span class="badge readonly-note">UI state is not authority</span>
               <span class="badge readonly-note">LLM output is not authority</span>
