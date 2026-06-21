@@ -25,6 +25,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state: "idle",
         frame: 0
       };
+      const storedActiveScreen = sessionStorage.getItem("bt.activeScreen");
 
       const state = {
         runtimeToken: sessionStorage.getItem("bt.runtimeToken") || "",
@@ -42,7 +43,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         recoveryToken: sessionStorage.getItem("bt.recoveryToken") || "",
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
-        activeScreen: sessionStorage.getItem("bt.activeScreen") || "home",
+        activeScreen: storedActiveScreen && storedActiveScreen !== "home" ? storedActiveScreen : "conversation",
         mascotPreferences: loadMascotPreferences(),
         mascotActionsOpen: false,
         lastMascotState: "idle",
@@ -416,9 +417,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       function setActiveScreen(screen) {
-        const selected = screen || "home";
+        const selected = screen || "conversation";
         state.activeScreen = selected;
         sessionStorage.setItem("bt.activeScreen", selected);
+        document.body.dataset.activeScreen = selected;
         document.querySelectorAll("[data-screen-group]").forEach(function (node) {
           const groups = String(node.getAttribute("data-screen-group") || "").split(/\\s+/);
           node.hidden = !groups.includes(selected);
@@ -446,12 +448,28 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return response.json();
       }
 
+      function chatRoleForKind(kind) {
+        const normalized = String(kind || "").toLowerCase();
+        if (normalized === "owner" || normalized === "user") return "owner";
+        if (normalized === "channel_send" || normalized === "assistant" || normalized === "message") return "assistant";
+        if (normalized === "error") return "error";
+        return "system";
+      }
+
+      function chatLabelForRole(role, kind) {
+        if (role === "owner") return "You";
+        if (role === "assistant") return "BLUE-TANUKI";
+        if (role === "error") return "Error";
+        return String(kind || "System");
+      }
+
       function appendChat(kind, text) {
         const log = byId("chat-log");
         const item = document.createElement("article");
-        item.className = "chat-item";
-        item.innerHTML = '<div class="row"><h3>' + escapeHtml(kind) + '</h3><span class="badge good">WebChat</span></div><p>' + escapeHtml(text) + '</p>';
-        if (log.querySelector(".muted")) log.innerHTML = "";
+        const role = chatRoleForKind(kind);
+        item.className = "chat-item " + role;
+        item.innerHTML = '<div class="chat-bubble"><div class="chat-meta">' + escapeHtml(chatLabelForRole(role, kind)) + '</div><p>' + escapeHtml(text) + '</p></div>';
+        if (log.querySelector(".chat-item.system .chat-bubble p")?.textContent === "Ready.") log.innerHTML = "";
         log.appendChild(item);
         log.scrollTop = log.scrollHeight;
       }
@@ -1877,6 +1895,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setChatStatus("error", "bad");
           appendChat("error", error.message);
         });
+      });
+      byId("chat-content").addEventListener("keydown", function (event) {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          sendChat().catch(function (error) {
+            setChatStatus("error", "bad");
+            appendChat("error", error.message);
+          });
+        }
       });
       byId("disconnect-chat").addEventListener("click", disconnectChat);
 

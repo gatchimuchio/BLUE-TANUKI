@@ -11,7 +11,7 @@ export function renderControlCenterDocument(): string {
     <style>
 ${CONTROL_CENTER_STYLE}    </style>
   </head>
-  <body>
+  <body data-active-screen="conversation">
     <header>
       <div class="brand">
         <svg class="tanuki-mark" viewBox="0 0 120 120" aria-hidden="true">
@@ -35,8 +35,8 @@ ${CONTROL_CENTER_STYLE}    </style>
     </header>
 
     <nav class="screen-tabs" aria-label="Owner operation screens">
-      <button class="screen-tab active" data-screen="home" aria-selected="true">Home</button>
-      <button class="screen-tab" data-screen="conversation" aria-selected="false" title="Conversation / WebChat">Chat</button>
+      <button class="screen-tab active" data-screen="conversation" aria-selected="true" title="Conversation / WebChat">Chat</button>
+      <button class="screen-tab" data-screen="home" aria-selected="false">Console</button>
       <button class="screen-tab" data-screen="tasks" aria-selected="false">Tasks</button>
       <button class="screen-tab" data-screen="approvals" aria-selected="false">Approvals</button>
       <button class="screen-tab" data-screen="activity" aria-selected="false" title="Activity / Audit">Audit</button>
@@ -110,23 +110,33 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
         </section>
 
-        <section class="card" data-screen-group="conversation">
-          <div class="row">
-            <h2>Conversation / WebChat</h2>
+        <section class="card chat-screen" data-screen-group="conversation">
+          <div class="chat-topbar">
+            <div>
+              <h2>Chat</h2>
+              <p class="muted">Conversation / WebChat</p>
+            </div>
             <span id="chat-status" class="badge warn">not connected</span>
           </div>
-          <div class="status-grid">
-            <input id="chat-token" type="password" autocomplete="off" placeholder="webchat token" />
-            <input id="chat-user" type="text" autocomplete="off" placeholder="user" />
+          <div id="chat-log" class="chat-log" aria-live="polite">
+            <article class="chat-item system">
+              <div class="chat-bubble">
+                <div class="chat-meta">System</div>
+                <p>Ready.</p>
+              </div>
+            </article>
           </div>
-          <textarea id="chat-content" autocomplete="off" placeholder="message"></textarea>
-          <div class="action-row">
-            <button id="connect-chat" class="primary">Connect</button>
-            <button id="send-chat" class="primary">Send</button>
-            <button id="disconnect-chat">Disconnect</button>
-          </div>
-          <div id="chat-log" class="chat-log">
-            <article class="chat-item muted">no conversation messages yet</article>
+          <div class="chat-composer">
+            <div class="chat-identity-row">
+              <input id="chat-token" type="password" autocomplete="off" placeholder="webchat token" />
+              <input id="chat-user" type="text" autocomplete="off" placeholder="owner" />
+              <button id="connect-chat" class="primary">Connect</button>
+              <button id="disconnect-chat">Disconnect</button>
+            </div>
+            <div class="chat-input-row">
+              <textarea id="chat-content" autocomplete="off" placeholder="Message BLUE-TANUKI"></textarea>
+              <button id="send-chat" class="primary">Send</button>
+            </div>
           </div>
         </section>
 
