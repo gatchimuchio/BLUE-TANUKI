@@ -362,6 +362,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("BLUE-TANUKI Control Center");
       expect(html).toContain("Tanuki Dashboard");
       expect(html).toContain("Owner operation screens");
+      expect(html).toContain("height: 100dvh");
+      expect(html).toContain("grid-template-columns: repeat(15");
+      expect(html).toContain('title="Conversation / WebChat"');
       expect(html).toContain("Conversation / WebChat");
       expect(html).toContain("Tasks");
       expect(html).toContain("Activity / Audit");

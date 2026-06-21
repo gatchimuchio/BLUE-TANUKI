@@ -25,13 +25,18 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       html {
-        min-height: 100%;
+        height: 100%;
         background: var(--bg);
+        overflow: hidden;
       }
 
       body {
+        display: flex;
+        flex-direction: column;
         margin: 0;
-        min-height: 100vh;
+        height: 100dvh;
+        min-height: 0;
+        overflow: hidden;
         background: var(--bg);
         color: var(--text);
         font-family:
@@ -55,14 +60,14 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       body > header {
-        position: sticky;
-        top: 0;
         z-index: 40;
+        flex: 0 0 auto;
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 16px;
-        padding: 12px 20px;
+        min-height: 54px;
+        padding: 8px 16px;
         border-bottom: 1px solid rgba(215, 224, 234, 0.82);
         background: rgba(248, 250, 252, 0.86);
         backdrop-filter: blur(20px);
@@ -81,39 +86,38 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       .tanuki-mark {
-        width: 42px;
-        height: 42px;
+        width: 38px;
+        height: 38px;
         flex: 0 0 auto;
         filter: drop-shadow(0 6px 10px rgba(15, 23, 42, 0.14));
       }
 
       .screen-tabs {
-        position: sticky;
-        top: 67px;
         z-index: 35;
-        display: flex;
-        flex-direction: row;
+        flex: 0 0 auto;
+        display: grid;
+        grid-template-columns: repeat(15, minmax(0, 1fr));
         gap: 6px;
         min-width: 0;
-        padding: 10px 20px;
+        padding: 8px 12px;
         border-bottom: 1px solid rgba(215, 224, 234, 0.82);
         background: rgba(244, 247, 251, 0.9);
         backdrop-filter: blur(20px);
-        overflow-x: auto;
-        overflow-y: hidden;
-        scrollbar-width: thin;
+        overflow: hidden;
       }
 
       button.screen-tab {
-        flex: 0 0 auto;
         min-width: 0;
-        min-height: 34px;
-        padding: 7px 11px;
+        min-height: 30px;
+        padding: 6px 7px;
         border-color: transparent;
         border-radius: 8px;
         background: transparent;
         color: #475467;
+        font-size: 12px;
         font-weight: 680;
+        overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
       }
 
@@ -139,7 +143,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
 
       h1 {
         color: var(--ink);
-        font-size: 18px;
+        font-size: 17px;
         font-weight: 760;
         line-height: 1.15;
       }
@@ -171,38 +175,42 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       .shell {
+        flex: 1 1 auto;
         display: grid;
         grid-template-columns: minmax(220px, 270px) minmax(0, 1fr) minmax(320px, 390px);
-        gap: 16px;
-        min-height: calc(100vh - 123px);
-        padding: 16px;
+        gap: 10px;
+        min-height: 0;
+        padding: 10px;
+        overflow: hidden;
       }
 
       .shell > nav,
       .shell > aside {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 8px;
         min-width: 0;
-        align-self: start;
-        max-height: calc(100vh - 139px);
-        overflow-y: auto;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
       }
 
       main {
         display: flex;
         min-width: 0;
+        min-height: 0;
+        height: 100%;
         flex-direction: column;
-        gap: 14px;
-        overflow: visible;
+        gap: 10px;
+        overflow: hidden;
       }
 
       .card {
         display: flex;
         min-width: 0;
         flex-direction: column;
-        gap: 12px;
-        padding: 14px;
+        gap: 8px;
+        padding: 10px;
         border: 1px solid rgba(215, 224, 234, 0.94);
         border-radius: 8px;
         background: var(--surface);
@@ -216,9 +224,10 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .dashboard-hero {
         display: grid;
         grid-template-columns: minmax(0, 1fr);
-        gap: 14px;
+        gap: 10px;
         align-items: stretch;
-        min-height: 214px;
+        min-height: 0;
+        height: 100%;
         border-color: rgba(13, 20, 33, 0.84);
         background: #111827;
         color: #f8fafc;
@@ -254,11 +263,11 @@ export const CONTROL_CENTER_STYLE = `      :root {
         min-width: 0;
         flex-direction: column;
         justify-content: center;
-        gap: 12px;
+        gap: 10px;
       }
 
       .hero-title {
-        font-size: 26px;
+        font-size: 24px;
         line-height: 1.16;
       }
 
@@ -293,9 +302,9 @@ export const CONTROL_CENTER_STYLE = `      :root {
 
       .settings-subsection {
         display: grid;
-        gap: 10px;
+        gap: 8px;
         min-width: 0;
-        padding: 10px;
+        padding: 8px;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--surface-inset);
@@ -385,14 +394,14 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .screen-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
+        gap: 8px;
       }
 
       .screen-card {
         display: grid;
-        gap: 8px;
+        gap: 6px;
         min-width: 0;
-        padding: 10px;
+        padding: 8px;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--surface-inset);
@@ -401,14 +410,14 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .lane-board {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
+        gap: 8px;
       }
 
       .lane {
         display: grid;
-        gap: 8px;
-        min-height: 126px;
-        padding: 10px;
+        gap: 6px;
+        min-height: 0;
+        padding: 8px;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--surface-inset);
@@ -417,7 +426,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .map-grid {
         display: grid;
         grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 8px;
+        gap: 6px;
       }
 
       .map-node {
@@ -447,7 +456,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 10px;
+        gap: 8px;
         min-width: 0;
       }
 
@@ -456,9 +465,9 @@ export const CONTROL_CENTER_STYLE = `      :root {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 10px;
+        gap: 8px;
         min-width: 0;
-        padding: 9px 10px;
+        padding: 6px 8px;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--surface-inset);
@@ -481,15 +490,15 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .status-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 8px;
+        gap: 6px;
       }
 
       .badge {
         display: inline-flex;
         align-items: center;
-        min-height: 22px;
+        min-height: 20px;
         max-width: 100%;
-        padding: 3px 8px;
+        padding: 2px 7px;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--surface-soft);
@@ -527,17 +536,17 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .action-row {
         display: flex;
         flex-wrap: wrap;
-        gap: 8px;
+        gap: 6px;
       }
 
       label.policy,
       label.check {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
         min-width: 142px;
         flex: 1;
-        padding: 9px;
+        padding: 7px;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--surface-inset);
@@ -550,12 +559,12 @@ export const CONTROL_CENTER_STYLE = `      :root {
       select,
       textarea {
         width: 100%;
-        min-height: 38px;
+        min-height: 32px;
         border: 1px solid var(--line-strong);
         border-radius: 8px;
         background: #ffffff;
         color: var(--text);
-        padding: 8px 10px;
+        padding: 6px 8px;
         box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
       }
 
@@ -568,12 +577,12 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       textarea {
-        min-height: 82px;
+        min-height: 64px;
         resize: vertical;
       }
 
       button {
-        min-height: 36px;
+        min-height: 32px;
         min-width: 74px;
         border: 1px solid var(--line-strong);
         border-radius: 8px;
@@ -607,12 +616,12 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .log {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 8px;
       }
 
       .msg {
         max-width: 860px;
-        padding: 12px;
+        padding: 10px;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--surface);
@@ -631,7 +640,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .trace-list,
       .audit-list {
         display: grid;
-        gap: 8px;
+        gap: 6px;
       }
 
       .queue-item,
@@ -642,17 +651,19 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .trace-item,
       .audit-item {
         display: grid;
-        gap: 8px;
+        gap: 6px;
         min-width: 0;
-        padding: 10px;
+        padding: 8px;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--surface-inset);
       }
 
       .chat-log {
-        max-height: 360px;
-        overflow: auto;
+        min-height: 0;
+        flex: 1 1 auto;
+        max-height: none;
+        overflow: hidden;
       }
 
       .kv {
@@ -673,13 +684,14 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       pre {
-        max-height: 240px;
+        flex: 1 1 auto;
+        max-height: none;
         min-height: 44px;
         margin: 0;
-        overflow: auto;
+        overflow: hidden;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
-        padding: 10px;
+        padding: 8px;
         border: 1px solid #1f2937;
         border-radius: 8px;
         background: #0b1220;
@@ -779,39 +791,41 @@ export const CONTROL_CENTER_STYLE = `      :root {
         }
 
         .shell > aside {
-          grid-column: 1 / -1;
-          max-height: none;
+          display: none;
         }
       }
 
       @media (max-width: 760px) {
         body > header {
-          align-items: flex-start;
-          flex-direction: column;
-          padding: 12px;
+          align-items: center;
+          flex-direction: row;
+          min-height: 48px;
+          padding: 6px 10px;
         }
 
         .brand {
-          width: 100%;
+          width: auto;
         }
 
         .screen-tabs {
-          top: 96px;
-          padding: 9px 12px;
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+          gap: 4px;
+          padding: 6px 8px;
         }
 
         .shell {
-          display: block;
-          min-height: auto;
-          padding: 12px;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          padding: 8px;
         }
 
         .shell > nav,
-        main,
         .shell > aside {
+          display: none;
+        }
+
+        main {
           display: flex;
-          max-height: none;
-          margin-bottom: 12px;
         }
 
         .status-grid {
@@ -828,7 +842,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
         }
 
         .hero-title {
-          font-size: 23px;
+          font-size: 22px;
         }
 
         .mascot-dock {

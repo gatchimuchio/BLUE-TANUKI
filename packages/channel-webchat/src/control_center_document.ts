@@ -36,10 +36,10 @@ ${CONTROL_CENTER_STYLE}    </style>
 
     <nav class="screen-tabs" aria-label="Owner operation screens">
       <button class="screen-tab active" data-screen="home" aria-selected="true">Home</button>
-      <button class="screen-tab" data-screen="conversation" aria-selected="false">Conversation / WebChat</button>
+      <button class="screen-tab" data-screen="conversation" aria-selected="false" title="Conversation / WebChat">Chat</button>
       <button class="screen-tab" data-screen="tasks" aria-selected="false">Tasks</button>
       <button class="screen-tab" data-screen="approvals" aria-selected="false">Approvals</button>
-      <button class="screen-tab" data-screen="activity" aria-selected="false">Activity / Audit</button>
+      <button class="screen-tab" data-screen="activity" aria-selected="false" title="Activity / Audit">Audit</button>
       <button class="screen-tab" data-screen="memory" aria-selected="false">Memory</button>
       <button class="screen-tab" data-screen="skills" aria-selected="false">Skills</button>
       <button class="screen-tab" data-screen="channels" aria-selected="false">Channels</button>
@@ -48,8 +48,8 @@ ${CONTROL_CENTER_STYLE}    </style>
       <button class="screen-tab" data-screen="settings" aria-selected="false">Settings</button>
       <button class="screen-tab" data-screen="about" aria-selected="false">About</button>
       <button class="screen-tab" data-screen="update" aria-selected="false">Update</button>
-      <button class="screen-tab" data-screen="recovery" aria-selected="false">Backup / Restore</button>
-      <button class="screen-tab" data-screen="developer" aria-selected="false">Developer / Evidence</button>
+      <button class="screen-tab" data-screen="recovery" aria-selected="false" title="Backup / Restore">Backup</button>
+      <button class="screen-tab" data-screen="developer" aria-selected="false" title="Developer / Evidence">Evidence</button>
     </nav>
 
     <div class="shell">
@@ -116,7 +116,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
         </section>
 
-        <section class="card" data-screen-group="home conversation">
+        <section class="card" data-screen-group="conversation">
           <div class="row">
             <h2>Conversation / WebChat</h2>
             <span id="chat-status" class="badge warn">not connected</span>
@@ -136,7 +136,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
         </section>
 
-        <section class="card" data-screen-group="home developer">
+        <section class="card" data-screen-group="developer">
           <h2>Responsibility Map</h2>
           <div class="map-grid">
             <div class="map-node">Runtime</div>
@@ -186,7 +186,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
         </section>
 
-        <section class="card" data-screen-group="home skills developer">
+        <section class="card" data-screen-group="skills developer">
           <div class="row">
             <h2>Operation Core Plan</h2>
             <span id="operation-core-status" class="badge warn">not loaded</span>
@@ -494,7 +494,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
         </section>
 
-        <section class="log" data-screen-group="home" aria-live="polite">
+        <section class="log" data-screen-group="developer" aria-live="polite">
           <article class="msg system">
             <h2>System</h2>
             <p class="muted">Resident status, approval gates, schedule state, authority trace, and audit chain are surfaced without command content or credential values.</p>
@@ -505,7 +505,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           </article>
         </section>
 
-        <section class="card" data-screen-group="home">
+        <section class="card" data-screen-group="activity">
           <div class="row">
             <h2>Notification Center</h2>
             <span id="notification-summary" class="badge warn">not loaded</span>
