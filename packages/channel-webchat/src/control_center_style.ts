@@ -25,18 +25,14 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       html {
-        height: 100%;
+        min-height: 100%;
         background: var(--bg);
-        overflow: hidden;
       }
 
       body {
-        display: flex;
-        flex-direction: column;
         margin: 0;
-        height: 100dvh;
-        min-height: 0;
-        overflow: hidden;
+        min-height: 100dvh;
+        overflow-y: auto;
         background: var(--bg);
         color: var(--text);
         font-family:
@@ -175,13 +171,12 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       .shell {
-        flex: 1 1 auto;
         display: grid;
         grid-template-columns: minmax(220px, 270px) minmax(0, 1fr) minmax(320px, 390px);
         gap: 10px;
-        min-height: 0;
+        min-height: calc(100dvh - 106px);
         padding: 10px;
-        overflow: hidden;
+        align-items: stretch;
       }
 
       .shell > nav,
@@ -190,19 +185,17 @@ export const CONTROL_CENTER_STYLE = `      :root {
         flex-direction: column;
         gap: 8px;
         min-width: 0;
-        height: 100%;
-        min-height: 0;
-        overflow: hidden;
+        max-height: calc(100dvh - 126px);
+        overflow-y: auto;
       }
 
       main {
         display: flex;
         min-width: 0;
-        min-height: 0;
-        height: 100%;
+        min-height: calc(100dvh - 126px);
         flex-direction: column;
         gap: 10px;
-        overflow: hidden;
+        overflow: visible;
       }
 
       .card {
@@ -226,8 +219,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
         grid-template-columns: minmax(0, 1fr);
         gap: 10px;
         align-items: stretch;
-        min-height: 0;
-        height: 100%;
+        min-height: clamp(360px, calc(100dvh - 126px), 720px);
         border-color: rgba(13, 20, 33, 0.84);
         background: #111827;
         color: #f8fafc;
@@ -311,15 +303,15 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       .mascot-dock {
-        --mascot-sprite-size: 96px;
+        --mascot-sprite-size: 34px;
         position: fixed;
-        bottom: 24px;
+        bottom: 14px;
         z-index: 30;
         display: grid;
-        gap: 8px;
-        justify-items: center;
+        gap: 6px;
+        justify-items: start;
         width: max-content;
-        max-width: min(172px, calc(100vw - 32px));
+        max-width: min(260px, calc(100vw - 24px));
         pointer-events: none;
       }
 
@@ -328,32 +320,33 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       .mascot-dock-bottom-right {
-        right: 24px;
+        right: 14px;
       }
 
       .mascot-dock-bottom-left {
-        left: 24px;
+        left: 14px;
       }
 
       .mascot-size-small {
-        --mascot-sprite-size: 80px;
+        --mascot-sprite-size: 34px;
       }
 
       .mascot-size-medium {
-        --mascot-sprite-size: 96px;
+        --mascot-sprite-size: 42px;
       }
 
       .mascot-size-large {
-        --mascot-sprite-size: 128px;
+        --mascot-sprite-size: 52px;
       }
 
       .mascot-toggle {
-        display: grid;
-        width: calc(var(--mascot-sprite-size) + 18px);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: auto;
         min-width: 0;
         min-height: 0;
-        padding: 8px;
-        place-items: center;
+        padding: 6px 9px 6px 6px;
         border-color: rgba(10, 132, 255, 0.18);
         border-radius: 8px;
         background: rgba(255, 255, 255, 0.86);
@@ -370,7 +363,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
         order: -1;
         display: grid;
         gap: 6px;
-        width: 168px;
+        width: 188px;
         padding: 8px;
         border: 1px solid rgba(10, 132, 255, 0.22);
         border-radius: 8px;
@@ -471,6 +464,10 @@ export const CONTROL_CENTER_STYLE = `      :root {
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--surface-inset);
+      }
+
+      .technical-boundary {
+        display: none;
       }
 
       .metric span:first-child,
@@ -662,8 +659,8 @@ export const CONTROL_CENTER_STYLE = `      :root {
       .chat-log {
         min-height: 0;
         flex: 1 1 auto;
-        max-height: none;
-        overflow: hidden;
+        max-height: 360px;
+        overflow: auto;
       }
 
       .kv {
@@ -685,10 +682,10 @@ export const CONTROL_CENTER_STYLE = `      :root {
 
       pre {
         flex: 1 1 auto;
-        max-height: none;
+        max-height: 260px;
         min-height: 44px;
         margin: 0;
-        overflow: hidden;
+        overflow: auto;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
         padding: 8px;
@@ -816,6 +813,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
         .shell {
           display: grid;
           grid-template-columns: minmax(0, 1fr);
+          min-height: auto;
           padding: 8px;
         }
 
@@ -826,6 +824,7 @@ export const CONTROL_CENTER_STYLE = `      :root {
 
         main {
           display: flex;
+          min-height: auto;
         }
 
         .status-grid {
@@ -846,8 +845,8 @@ export const CONTROL_CENTER_STYLE = `      :root {
         }
 
         .mascot-dock {
-          bottom: 12px;
-          max-width: min(128px, calc(100vw - 24px));
+          bottom: 10px;
+          max-width: min(220px, calc(100vw - 20px));
         }
 
         .mascot-dock-bottom-right {
@@ -859,24 +858,19 @@ export const CONTROL_CENTER_STYLE = `      :root {
         }
 
         .mascot-size-small {
-          --mascot-sprite-size: 64px;
+          --mascot-sprite-size: 32px;
         }
 
         .mascot-size-medium {
-          --mascot-sprite-size: 72px;
+          --mascot-sprite-size: 38px;
         }
 
         .mascot-size-large {
-          --mascot-sprite-size: 84px;
+          --mascot-sprite-size: 46px;
         }
 
         .mascot-toggle {
-          width: calc(var(--mascot-sprite-size) + 14px);
-          padding: 6px;
-        }
-
-        .mascot-dock .aotanu-caption {
-          display: none;
+          padding: 5px 8px 5px 5px;
         }
 
         .mascot-actions {

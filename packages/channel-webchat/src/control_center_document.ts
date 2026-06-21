@@ -31,7 +31,7 @@ ${CONTROL_CENTER_STYLE}    </style>
         </div>
         <span id="header-status" class="badge warn">not loaded</span>
       </div>
-      <span class="badge">HDS-BRAIN owns authority</span>
+      <span class="badge">local RC</span>
     </header>
 
     <nav class="screen-tabs" aria-label="Owner operation screens">
@@ -104,15 +104,9 @@ ${CONTROL_CENTER_STYLE}    </style>
       <main>
         <section class="card dashboard-hero" data-screen-group="home">
           <div class="hero-copy">
-            <span class="badge good">HDS-BRAIN authority path intact</span>
+            <span class="badge good">local resident console</span>
             <h2 class="hero-title">Tanuki Dashboard</h2>
-            <p class="muted">A clean resident console for decisions, approvals, audit evidence, recovery hints, channels, memory, and operator surfaces. UI state is display and intent only; it never becomes authority.</p>
-            <div class="policy-row">
-              <span class="badge readonly-note">UI state is not authority</span>
-              <span class="badge readonly-note">LLM output is not authority</span>
-              <span class="badge readonly-note">Memory is not authority</span>
-              <span class="badge readonly-note">Channel metadata is not authority</span>
-            </div>
+            <p class="muted">Decisions, approvals, audit evidence, recovery hints, channels, memory, and operator surfaces in one quiet operations view.</p>
           </div>
         </section>
 
@@ -166,10 +160,10 @@ ${CONTROL_CENTER_STYLE}    </style>
             <span class="badge good">reference only</span>
           </div>
           <div class="screen-grid">
-            <div class="screen-card"><h3>Long-term Memory</h3><p class="muted">Preferences, summaries, and F-reference hints may be displayed as context, not authority.</p></div>
+            <div class="screen-card"><h3>Long-term Memory</h3><p class="muted">Preferences, summaries, and F-reference hints are shown as review context.</p></div>
             <div class="screen-card"><h3>Complete History</h3><p class="muted">Replay entries expose digests and metadata only. Raw payloads and rendered output are not projected.</p></div>
             <div class="screen-card"><h3>Deletion / Forgetting</h3><p class="muted">Future deletion operations are sensitive and must pass policy, approval, audit, and recovery mapping.</p></div>
-            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Memory hits cannot grant permission, infer consent, or resume suspended work.</p></div>
+            <div class="screen-card"><h3>Use Boundary</h3><p class="muted">Memory is context for review and replay, not an action shortcut.</p></div>
           </div>
         </section>
 
@@ -182,7 +176,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="screen-card"><h3>Installed</h3><p class="muted">Bundled operator surfaces load only after manifest and Plugin Review Gate checks.</p></div>
             <div class="screen-card"><h3>Under Review</h3><p class="muted">Third-party Layer B submissions require declared capabilities, conformance evidence, and no authority bypass.</p></div>
             <div class="screen-card"><h3>Disabled / Quarantined</h3><p class="muted">Unsafe or incomplete surfaces remain preview, disabled, or rejected.</p></div>
-            <div class="screen-card"><h3>Forbidden Shortcut</h3><p class="muted">Skill metadata cannot become authority or silently widen permissions.</p></div>
+            <div class="screen-card"><h3>Review Gate</h3><p class="muted">Skill metadata stays bounded by declared capability and review evidence.</p></div>
           </div>
         </section>
 
@@ -200,7 +194,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Execution results</span><span id="operation-core-execution-results">not loaded</span></div>
             <div class="metric"><span>Latest result</span><span id="operation-core-latest-result">not loaded</span></div>
             <div class="metric"><span>Rollback</span><span id="operation-core-rollback">not loaded</span></div>
-            <div class="metric"><span>Authority</span><span id="operation-core-authority">display only</span></div>
+            <div class="metric technical-boundary"><span>Boundary</span><span id="operation-core-authority">HDS path</span></div>
           </div>
           <div id="operation-core-list" class="trace-list">
             <div class="trace-item muted">no Operation Core projection loaded</div>
@@ -219,14 +213,14 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="screen-card"><h3>First-party</h3><p class="muted">WebChat and Telegram are selected owner-operation channels.</p></div>
             <div class="screen-card"><h3>Preview</h3><p class="muted">Slack, Discord, Teams, and LINE require owner evidence before promotion.</p></div>
             <div class="screen-card"><h3>Reserved Third-party</h3><p class="muted">WhatsApp remains outside first-party core.</p></div>
-            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Channel metadata is normalized and cannot escalate permission.</p></div>
+            <div class="screen-card"><h3>Metadata Boundary</h3><p class="muted">Channel metadata is normalized before review.</p></div>
           </div>
         </section>
 
         <section class="card" data-screen-group="connectors">
           <div class="row">
             <h2>Connectors</h2>
-            <span class="badge review">downstream only</span>
+            <span class="badge review">external tools</span>
           </div>
           <div class="status-grid">
             <input id="connectors-token" type="password" autocomplete="current-password" placeholder="settings token" />
@@ -255,7 +249,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Dry-run</span><span id="composio-dry-run-status">not loaded</span></div>
             <div class="metric"><span>Live opt-in</span><span id="composio-live-opt-in-status">not loaded</span></div>
             <div class="metric"><span>Live execution</span><span id="composio-live-status">not loaded</span></div>
-            <div class="metric"><span>Authority</span><span id="composio-authority-status">not authority</span></div>
+            <div class="metric technical-boundary"><span>Boundary</span><span id="composio-authority-status">HDS gated</span></div>
             <div class="metric"><span>Toolkits</span><span id="composio-toolkits-status">not loaded</span></div>
             <div class="metric"><span>Actions</span><span id="composio-actions-status">not loaded</span></div>
             <div class="metric"><span>Revoked</span><span id="composio-revoked-status">not loaded</span></div>
@@ -268,7 +262,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="screen-card"><h3>Live Boundary</h3><p class="muted">Composio live execution opens only when dry-run is disabled, live execution is enabled, user id exists, and toolkit/action allowlists pass HDS approval.</p></div>
             <div class="screen-card"><h3>Allowlist</h3><p class="muted">Toolkits are explicit operator configuration, not permission escalation or authority.</p></div>
             <div class="screen-card"><h3>Secret Update</h3><p class="muted">Leave the API key blank to keep the existing secret; enter a new key only when rotating it.</p></div>
-            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Connected account metadata, toolkit discovery, and tool results remain evidence only.</p></div>
+            <div class="screen-card"><h3>Review Boundary</h3><p class="muted">Connected account metadata and tool results stay behind approval review.</p></div>
           </div>
         </section>
 
@@ -387,14 +381,14 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Public claim</span><span id="about-public-claim">not loaded</span></div>
             <div class="metric"><span>Signed installer</span><span id="about-signed-installer">not loaded</span></div>
             <div class="metric"><span>Automatic updater</span><span id="about-automatic-updater">not loaded</span></div>
-            <div class="metric"><span>Authority</span><span id="about-authority">HDS-BRAIN</span></div>
+            <div class="metric technical-boundary"><span>Boundary</span><span id="about-authority">HDS-BRAIN</span></div>
           </div>
           <pre id="about-json">not loaded</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Release Boundary</h3><p class="muted">RC remains pre-GO until owner decision and validate:ga permit public claim activation.</p></div>
-            <div class="screen-card"><h3>Claim Boundary</h3><p class="muted">This panel displays claim metadata; it is not release approval or authority.</p></div>
+            <div class="screen-card"><h3>Claim Boundary</h3><p class="muted">This panel displays claim metadata and owner-GO state.</p></div>
             <div class="screen-card"><h3>Distribution Boundary</h3><p class="muted">Unsigned installer and automatic updater status are shown from claim metadata.</p></div>
-            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">HDS-BRAIN remains the only authority owner; UI state and claims are evidence only.</p></div>
+            <div class="screen-card"><h3>Release Control</h3><p class="muted">GA promotion remains blocked until owner GO and validation pass.</p></div>
           </div>
         </section>
 
@@ -418,7 +412,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Compatibility</span><span id="update-compatibility-status">not loaded</span></div>
             <div class="metric"><span>Rollback plan</span><span id="update-rollback-status">not loaded</span></div>
             <div class="metric"><span>Automatic updater</span><span id="update-auto-status">not shipped</span></div>
-            <div class="metric"><span>Authority</span><span id="update-authority-status">display only</span></div>
+            <div class="metric technical-boundary"><span>Boundary</span><span id="update-authority-status">HDS gated</span></div>
             <div class="metric"><span>Last action</span><span id="update-action-status">not run</span></div>
             <div class="metric"><span>Next safe action</span><span id="update-next-action-status">not loaded</span></div>
           </div>
@@ -427,7 +421,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="screen-card"><h3>Manual Update</h3><p class="muted">The runtime verifies release sidecars and prepares rollback evidence; it does not replace app files automatically.</p></div>
             <div class="screen-card"><h3>Pre-update Backup</h3><p class="muted">Prepare Update creates a recovery backup and rollback plan before manual replacement.</p></div>
             <div class="screen-card"><h3>Compatibility</h3><p class="muted">Manifest schema and release boundaries must match before update is treated as ready.</p></div>
-            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Update metadata cannot approve commands, alter HDS policy, or bypass final review.</p></div>
+            <div class="screen-card"><h3>Update Boundary</h3><p class="muted">Update metadata is checked before manual replacement.</p></div>
           </div>
         </section>
 
@@ -456,16 +450,16 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Restore</span><span id="recovery-restore-status">not loaded</span></div>
             <div class="metric"><span>Factory reset</span><span id="recovery-factory-reset-status">not loaded</span></div>
             <div class="metric"><span>Last action</span><span id="recovery-action-status">not run</span></div>
-            <div class="metric"><span>Authority</span><span id="recovery-authority-status">display only</span></div>
+            <div class="metric technical-boundary"><span>Boundary</span><span id="recovery-authority-status">HDS gated</span></div>
             <div class="metric"><span>Next action</span><span id="recovery-next-action">not loaded</span></div>
           </div>
           <div id="recovery-path-list" class="status-grid"></div>
           <pre id="recovery-json">not loaded</pre>
           <div class="screen-grid">
-            <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls, not command approval or authority.</p></div>
+            <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls.</p></div>
             <div class="screen-card"><h3>Secret-bearing</h3><p class="muted">Env files and env backups may contain credentials. Only paths and counts are displayed here.</p></div>
             <div class="screen-card"><h3>P10 Boundary</h3><p class="muted">Destructive repair remains blocked. Factory reset preserves audit and recovery backup roots.</p></div>
-            <div class="screen-card"><h3>Authority Guard</h3><p class="muted">Recovery metadata is evidence only and cannot approve, resume, or execute commands.</p></div>
+            <div class="screen-card"><h3>Recovery Boundary</h3><p class="muted">Recovery metadata is shown with paths, counts, and next safe action.</p></div>
           </div>
         </section>
 
@@ -483,12 +477,12 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Audit chain</span><span id="evidence-audit-chain">not exported</span></div>
             <div class="metric"><span>History chain</span><span id="evidence-history-chain">not exported</span></div>
             <div class="metric"><span>Redaction</span><span id="evidence-redaction-status">not exported</span></div>
-            <div class="metric"><span>Authority</span><span id="evidence-authority-status">display only</span></div>
+            <div class="metric technical-boundary"><span>Boundary</span><span id="evidence-authority-status">HDS path</span></div>
           </div>
           <pre id="evidence-json">not exported</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Repo Health</h3><p class="muted">Import graph and release-path purity checks protect production runtime boundaries.</p></div>
-            <div class="screen-card"><h3>Conformance</h3><p class="muted">Negative tests prove metadata, memory, UI state, and LLM output cannot create authority.</p></div>
+            <div class="screen-card"><h3>Conformance</h3><p class="muted">Negative tests cover metadata, memory, UI state, and LLM output boundaries.</p></div>
             <div class="screen-card"><h3>Release Gates</h3><p class="muted">GA requires technical validation plus explicit owner GO; pre-GO public claim remains false.</p></div>
             <div class="screen-card"><h3>Evidence Source</h3><p class="muted">CONFIG, INTERNAL_STATE, LIVE_RUNTIME, EXTERNAL_EVIDENCE, and FIXTURE must not be conflated.</p></div>
           </div>
@@ -559,7 +553,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           <div class="status-grid">
             <div class="metric"><span>Entries</span><span id="history-entry-count">not loaded</span></div>
             <div class="metric"><span>Chain Valid</span><span id="history-chain-valid">not loaded</span></div>
-            <div class="metric"><span>Authority</span><span id="history-authority-use">not loaded</span></div>
+            <div class="metric technical-boundary"><span>Boundary</span><span id="history-authority-use">not loaded</span></div>
             <div class="metric"><span>Skipped</span><span id="history-skipped-count">not loaded</span></div>
           </div>
           <input id="history-token" type="password" autocomplete="off" placeholder="webchat token" />
@@ -631,7 +625,7 @@ ${CONTROL_CENTER_STYLE}    </style>
       </aside>
     </div>
 
-    <div id="mascot-dock" class="mascot-dock mascot-dock-bottom-right mascot-size-medium" aria-label="Mascot dock">
+    <div id="mascot-dock" class="mascot-dock mascot-dock-bottom-left mascot-size-small" aria-label="Mascot dock">
       <button id="mascot-toggle" class="mascot-toggle" type="button" aria-expanded="false" aria-controls="mascot-actions">
         <span id="aotanu-mascot" class="aotanu-mascot" role="img" aria-label="アオタヌ 状態: 休憩中" data-state="idle">
           <span id="aotanu-sprite" class="aotanu-sprite" aria-hidden="true"></span>

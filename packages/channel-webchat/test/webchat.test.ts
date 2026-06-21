@@ -362,7 +362,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("BLUE-TANUKI Control Center");
       expect(html).toContain("Tanuki Dashboard");
       expect(html).toContain("Owner operation screens");
-      expect(html).toContain("height: 100dvh");
+      expect(html).toContain("min-height: 100dvh");
+      expect(html).toContain("overflow-y: auto");
       expect(html).toContain("grid-template-columns: repeat(15");
       expect(html).toContain('title="Conversation / WebChat"');
       expect(html).toContain("Conversation / WebChat");
@@ -433,12 +434,12 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("evidence-token");
       expect(html).toContain("export-evidence");
       expect(html).toContain("/evidence/export");
-      expect(html).toContain("HDS-BRAIN authority path intact");
-      expect(html).toContain("A clean resident console");
-      expect(html).toContain("UI state is not authority");
-      expect(html).toContain("LLM output is not authority");
-      expect(html).toContain("Memory is not authority");
-      expect(html).toContain("Channel metadata is not authority");
+      expect(html).toContain("local resident console");
+      expect(html).not.toContain("UI state is not authority");
+      expect(html).not.toContain("LLM output is not authority");
+      expect(html).not.toContain("Memory is not authority");
+      expect(html).not.toContain("Channel metadata is not authority");
+      expect(html).not.toContain("not authority");
       expect(html).toContain("Responsibility Map");
       expect(html).toContain("Runtime");
       expect(html).toContain("Capability");
@@ -469,7 +470,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("aotanu-sprite");
       expect(html).toContain("アオタヌ");
       expect(html).toContain("mascot-dock");
-      expect(html).toContain("mascot-dock-bottom-right");
+      expect(html).toContain("mascot-dock-bottom-left");
       expect(html).toContain("mascot-toggle");
       expect(html).toContain("mascot-actions");
       expect(html).toContain("mascot-enabled");

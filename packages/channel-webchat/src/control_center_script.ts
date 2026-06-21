@@ -10,8 +10,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       const DEFAULT_MASCOT_PREFS = {
         enabled: true,
         character: "aotanu",
-        size: "medium",
-        position: "bottom-right"
+        size: "small",
+        position: "bottom-left"
       };
       const MASCOT_STATE_LABELS = {
         idle: "休憩中",
@@ -717,7 +717,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("operation-core-adapters", adapters.length > 0 ? adapters.join(", ") : "none");
         setText("operation-core-adapter-registry", registryOk ? "validated display" : "unsafe");
         setText("operation-core-default-runtime", OPERATION_ADAPTER_REGISTRY.internal_runtime.default_runtime === true ? "internal_runtime" : "unsafe");
-        setText("operation-core-authority", authorityOk ? "display only" : "unsafe");
+        setText("operation-core-authority", authorityOk ? "HDS path" : "unsafe");
         setText("operation-core-status", steps.length > 0 ? (authorityOk ? "loaded" : "unsafe") : "not loaded");
         if (byId("operation-core-status")) {
           byId("operation-core-status").className = "badge " + (steps.length === 0 ? "warn" : authorityOk ? "good" : "bad");
@@ -766,7 +766,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>adapter</dt><dd>' + badge(step.adapter || "none", step.adapter_is_authority === false ? "good" : "bad") + '</dd>' +
                 '<dt>registry</dt><dd>' + badge(operationCoreAdapterLabel(descriptor, step.adapter), descriptor ? adapterTone : "bad") + '</dd>' +
                 '<dt>command</dt><dd>' + command + " " + badge(commandOk ? "registry match" : "registry mismatch", commandOk ? "good" : "bad") + '</dd>' +
-                '<dt>authority</dt><dd>' + badge(step.adapter_is_authority === false ? "display only" : "unsafe", step.adapter_is_authority === false ? "good" : "bad") + '</dd>' +
+                '<dt>boundary</dt><dd>' + badge(step.adapter_is_authority === false ? "HDS path" : "unsafe", step.adapter_is_authority === false ? "good" : "bad") + '</dd>' +
                 '</dl></article>';
             })
             .join("")
@@ -851,7 +851,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>duration</dt><dd>' + escapeHtml(duration) + '</dd>' +
                 '<dt>diff</dt><dd>' + badge(diff.available === true ? "available" : "not recorded", diff.available === true ? "good" : "warn") + '</dd>' +
                 '<dt>rollback</dt><dd>' + badge(rollback.available === true ? "available" : "not recorded", rollback.available === true ? "good" : "warn") + '</dd>' +
-                '<dt>authority</dt><dd>' + badge(rawSafe ? "display only" : "unsafe", rawSafe ? "good" : "bad") + '</dd>' +
+                '<dt>boundary</dt><dd>' + badge(rawSafe ? "HDS path" : "unsafe", rawSafe ? "good" : "bad") + '</dd>' +
                 '</dl></article>';
             })
             .join("")
@@ -1149,7 +1149,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
         setText("history-entry-count", history.entries_count ?? entries.length);
         setText("history-chain-valid", labelForBoolean(chainValid));
-        setText("history-authority-use", authorityUsed ? "unsafe" : "display only");
+        setText("history-authority-use", authorityUsed ? "unsafe" : "digest only");
         setText("history-skipped-count", history.skipped_count ?? 0);
         setText("history-summary", String(entries.length) + " replay entries");
         byId("history-summary").className = "badge " + (chainValid && !authorityUsed ? "good" : "bad");
@@ -1164,7 +1164,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               .reverse()
               .map(function (entry) {
                 const safe = redactRuntimeValue(entry);
-                const authorityBadge = safe.used_for_authority === false ? badge("false", "good") : badge("unsafe", "bad");
+                const boundaryBadge = safe.used_for_authority === false ? badge("digest only", "good") : badge("unsafe", "bad");
                 return '<article class="history-item"><dl class="kv">' +
                   '<dt>kind</dt><dd>' + escapeHtml(safe.kind || "unknown") + '</dd>' +
                   '<dt>request</dt><dd class="mono">' + escapeHtml(safe.request_id || "none") + '</dd>' +
@@ -1173,7 +1173,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '<dt>source</dt><dd>' + escapeHtml(safe.source || "unknown") + '</dd>' +
                   '<dt>payload</dt><dd class="mono">' + escapeHtml(safe.payload_digest || "not recorded") + '</dd>' +
                   '<dt>entry</dt><dd class="mono">' + escapeHtml(safe.entry_hash || "not recorded") + '</dd>' +
-                  '<dt>authority</dt><dd>' + authorityBadge + '</dd>' +
+                  '<dt>boundary</dt><dd>' + boundaryBadge + '</dd>' +
                   '<dt>time</dt><dd>' + escapeHtml(formatDate(safe.timestamp)) + '</dd>' +
                   '</dl></article>';
               })
@@ -1199,7 +1199,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("evidence-audit-chain", labelForBoolean(auditOk));
         setText("evidence-history-chain", labelForBoolean(historyOk));
         setText("evidence-redaction-status", redactionOk ? "redacted" : "review");
-        setText("evidence-authority-status", authorityOk ? "display only" : "unsafe");
+        setText("evidence-authority-status", authorityOk ? "HDS path" : "unsafe");
         setText("evidence-export-status", manifestFiles.length + " files");
         byId("evidence-export-status").className = "badge " + (auditOk && historyOk && redactionOk && authorityOk ? "good" : "bad");
         setText("evidence-json", compactJson(redactRuntimeValue({
@@ -1252,7 +1252,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("composio-dry-run-status", composio.dry_run === false ? "false" : "true");
         setText("composio-live-opt-in-status", composio.live_execution_enabled ? "enabled" : "disabled");
         setText("composio-live-status", composio.live_execution_available ? "available" : "blocked");
-        setText("composio-authority-status", composio.used_for_authority === true ? "unsafe" : "not authority");
+        setText("composio-authority-status", composio.used_for_authority === true ? "unsafe" : "HDS gated");
         setText("composio-toolkits-status", toolkits.length > 0 ? toolkits.join(", ") : "none");
         setText("composio-actions-status", actions.length > 0 ? actions.join(", ") : "none");
         setText("composio-revoked-status", revoked.length > 0 ? revoked.join(", ") : "none");
@@ -1276,7 +1276,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("about-public-claim", release.public_claim_allowed ? "allowed" : "blocked");
         setText("about-signed-installer", claim.signed_native_installer || "unknown");
         setText("about-automatic-updater", claim.automatic_updater || "unknown");
-        setText("about-authority", authority.hds_brain_owns_authority ? "HDS-BRAIN owns authority" : "unknown");
+        setText("about-authority", authority.hds_brain_owns_authority ? "HDS-BRAIN" : "unknown");
         setText("about-release-status", release.stage || "unknown");
         byId("about-release-status").className = "badge " + (release.public_claim_allowed ? "good" : "warn");
         setText("about-json", compactJson(redactRuntimeValue(snapshot)));
@@ -1297,7 +1297,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("update-compatibility-status", compat.status || "unknown");
         setText("update-rollback-status", rollback.latest_plan_id || "not prepared");
         setText("update-auto-status", dist.automatic_updater_shipped ? "shipped" : "not shipped");
-        setText("update-authority-status", authority.used_for_authority === true ? "unsafe" : "display only");
+        setText("update-authority-status", authority.used_for_authority === true ? "unsafe" : "HDS gated");
         setText("update-next-action-status", snapshot.next_safe_action || "not loaded");
         setText("update-boundary-status", snapshot.mode || "manual");
         byId("update-boundary-status").className = "badge " + (candidate.verification_status === "pass" ? "good" : "warn");
@@ -1331,7 +1331,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (packs.latest_backup_id) byId("recovery-backup-id").placeholder = packs.latest_backup_id;
         setText("recovery-restore-status", restore.execution_available ? "available" : "blocked");
         setText("recovery-factory-reset-status", restore.factory_reset_available ? "available" : "blocked");
-        setText("recovery-authority-status", authority.used_for_authority === true ? "unsafe" : "display only");
+        setText("recovery-authority-status", authority.used_for_authority === true ? "unsafe" : "HDS gated");
         setText("recovery-next-action", snapshot.next_safe_action || "review recovery readiness");
         setText("recovery-boundary-status", snapshot.mode || "read only");
         byId("recovery-boundary-status").className = "badge " + (snapshot.mode === "control_available" ? "review" : "good");
