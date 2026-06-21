@@ -303,15 +303,15 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       .mascot-dock {
-        --mascot-sprite-size: 34px;
+        --mascot-sprite-size: 96px;
         position: fixed;
-        bottom: 14px;
+        bottom: 18px;
         z-index: 30;
         display: grid;
-        gap: 6px;
-        justify-items: start;
+        gap: 8px;
+        justify-items: center;
         width: max-content;
-        max-width: min(260px, calc(100vw - 24px));
+        max-width: min(128px, calc(100vw - 24px));
         pointer-events: none;
       }
 
@@ -320,43 +320,41 @@ export const CONTROL_CENTER_STYLE = `      :root {
       }
 
       .mascot-dock-bottom-right {
-        right: 14px;
-      }
-
-      .mascot-dock-bottom-left {
-        left: 14px;
+        right: 18px;
       }
 
       .mascot-size-small {
-        --mascot-sprite-size: 34px;
+        --mascot-sprite-size: 80px;
       }
 
       .mascot-size-medium {
-        --mascot-sprite-size: 42px;
+        --mascot-sprite-size: 96px;
       }
 
       .mascot-size-large {
-        --mascot-sprite-size: 52px;
+        --mascot-sprite-size: 128px;
       }
 
       .mascot-toggle {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        width: auto;
+        display: grid;
+        width: calc(var(--mascot-sprite-size) + 18px);
         min-width: 0;
         min-height: 0;
-        padding: 6px 9px 6px 6px;
-        border-color: rgba(10, 132, 255, 0.18);
+        padding: 8px;
+        place-items: center;
+        border-color: transparent;
         border-radius: 8px;
-        background: rgba(255, 255, 255, 0.86);
-        box-shadow: 0 16px 38px rgba(15, 23, 42, 0.16);
-        backdrop-filter: blur(18px);
+        background: transparent;
+        box-shadow: none;
         pointer-events: auto;
       }
 
+      .mascot-dock .aotanu-caption {
+        display: none;
+      }
+
       .mascot-toggle:hover {
-        border-color: rgba(10, 132, 255, 0.56);
+        border-color: rgba(10, 132, 255, 0.28);
       }
 
       .mascot-actions {
@@ -845,32 +843,29 @@ export const CONTROL_CENTER_STYLE = `      :root {
         }
 
         .mascot-dock {
-          bottom: 10px;
-          max-width: min(220px, calc(100vw - 20px));
+          bottom: 12px;
+          max-width: min(104px, calc(100vw - 20px));
         }
 
         .mascot-dock-bottom-right {
           right: 12px;
         }
 
-        .mascot-dock-bottom-left {
-          left: 12px;
-        }
-
         .mascot-size-small {
-          --mascot-sprite-size: 32px;
+          --mascot-sprite-size: 64px;
         }
 
         .mascot-size-medium {
-          --mascot-sprite-size: 38px;
+          --mascot-sprite-size: 72px;
         }
 
         .mascot-size-large {
-          --mascot-sprite-size: 46px;
+          --mascot-sprite-size: 84px;
         }
 
         .mascot-toggle {
-          padding: 5px 8px 5px 5px;
+          width: calc(var(--mascot-sprite-size) + 14px);
+          padding: 6px;
         }
 
         .mascot-actions {

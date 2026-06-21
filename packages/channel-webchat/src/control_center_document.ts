@@ -344,10 +344,6 @@ ${CONTROL_CENTER_STYLE}    </style>
                 <option value="medium">medium</option>
                 <option value="large">large</option>
               </select>
-              <select id="mascot-position" aria-label="Mascot position">
-                <option value="bottom-right">bottom-right</option>
-                <option value="bottom-left">bottom-left</option>
-              </select>
             </div>
             <div class="action-row">
               <button id="reset-mascot-settings" type="button">Reset mascot settings</button>
@@ -625,7 +621,7 @@ ${CONTROL_CENTER_STYLE}    </style>
       </aside>
     </div>
 
-    <div id="mascot-dock" class="mascot-dock mascot-dock-bottom-left mascot-size-small" aria-label="Mascot dock">
+    <div id="mascot-dock" class="mascot-dock mascot-dock-bottom-right mascot-size-medium" aria-label="Mascot dock">
       <button id="mascot-toggle" class="mascot-toggle" type="button" aria-expanded="false" aria-controls="mascot-actions">
         <span id="aotanu-mascot" class="aotanu-mascot" role="img" aria-label="アオタヌ 状態: 休憩中" data-state="idle">
           <span id="aotanu-sprite" class="aotanu-sprite" aria-hidden="true"></span>

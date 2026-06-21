@@ -10,8 +10,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       const DEFAULT_MASCOT_PREFS = {
         enabled: true,
         character: "aotanu",
-        size: "small",
-        position: "bottom-left"
+        size: "medium",
+        position: "bottom-right"
       };
       const MASCOT_STATE_LABELS = {
         idle: "休憩中",
@@ -202,7 +202,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const source = isObject(value) ? value : {};
         const allowedCharacters = ["aotanu", "none"];
         const allowedSizes = ["small", "medium", "large"];
-        const allowedPositions = ["bottom-right", "bottom-left"];
+        const allowedPositions = ["bottom-right"];
         return {
           enabled: source.enabled !== false,
           character: allowedCharacters.includes(source.character) ? source.character : DEFAULT_MASCOT_PREFS.character,
@@ -286,11 +286,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const enabled = byId("mascot-enabled");
         const character = byId("mascot-character");
         const size = byId("mascot-size");
-        const position = byId("mascot-position");
         if (enabled) enabled.checked = prefs.enabled !== false;
         if (character) character.value = prefs.character;
         if (size) size.value = prefs.size;
-        if (position) position.value = prefs.position;
         updateMascotSettingsStatus();
       }
 
@@ -340,7 +338,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const enabled = byId("mascot-enabled");
         const character = byId("mascot-character");
         const size = byId("mascot-size");
-        const position = byId("mascot-position");
         const reset = byId("reset-mascot-settings");
         const toggle = byId("mascot-toggle");
         if (enabled) {
@@ -356,11 +353,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (size) {
           size.addEventListener("change", function () {
             setMascotPreferences({ size: size.value });
-          });
-        }
-        if (position) {
-          position.addEventListener("change", function () {
-            setMascotPreferences({ position: position.value });
           });
         }
         if (reset) {
@@ -393,12 +385,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (dock) {
           dock.classList.remove(
             "mascot-dock-bottom-right",
-            "mascot-dock-bottom-left",
             "mascot-size-small",
             "mascot-size-medium",
             "mascot-size-large"
           );
-          dock.classList.add("mascot-dock-" + prefs.position, "mascot-size-" + prefs.size);
+          dock.classList.add("mascot-dock-bottom-right", "mascot-size-" + prefs.size);
           dock.hidden = prefs.enabled === false || prefs.character === "none";
           if (dock.hidden) setMascotActionsOpen(false);
         }

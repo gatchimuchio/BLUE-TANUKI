@@ -470,13 +470,15 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("aotanu-sprite");
       expect(html).toContain("アオタヌ");
       expect(html).toContain("mascot-dock");
-      expect(html).toContain("mascot-dock-bottom-left");
+      expect(html).toContain("mascot-dock-bottom-right");
+      expect(html).toContain("mascot-size-medium");
       expect(html).toContain("mascot-toggle");
       expect(html).toContain("mascot-actions");
       expect(html).toContain("mascot-enabled");
       expect(html).toContain("mascot-character");
       expect(html).toContain("mascot-size");
-      expect(html).toContain("mascot-position");
+      expect(html).not.toContain("mascot-position");
+      expect(html).not.toContain("mascot-dock-bottom-left");
       expect(html).toContain("reset-mascot-settings");
       expect(html).toContain("bt.mascotPrefs");
       expect(html).toContain("localStorage");
