@@ -159,7 +159,7 @@ function powershellCommand(): string {
 
 function powershellDpapiEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  // pwsh-launched CI can pass a PSModulePath that breaks Windows PowerShell module loading.
+  // pwsh-launched automation can pass a PSModulePath that breaks Windows PowerShell module loading.
   for (const key of Object.keys(env)) {
     if (key.toLowerCase() === "psmodulepath") delete env[key];
   }

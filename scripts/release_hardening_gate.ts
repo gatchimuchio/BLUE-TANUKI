@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export type ReleaseHardeningEvidenceSource = readonly ["CONFIG", "EXTERNAL_EVIDENCE"];
+export type ReleaseHardeningEvidenceSource = readonly ["CONFIG"];
 
 export interface ReleaseHardeningOptions {
   requireSigning?: boolean;
@@ -11,7 +11,8 @@ export interface ReleaseHardeningOptions {
 
 export interface ReleaseHardeningReport {
   status: "pass_pre_signing_blocked";
-  ci_node20_deprecated_actions_present: false;
+  github_actions_workflows_present: false;
+  local_release_validation_commands_present: true;
   signed_native_installer_status:
     | "blocked_missing_credentials"
     | "credentials_configured_static_only";
@@ -20,13 +21,6 @@ export interface ReleaseHardeningReport {
   evidence_source: ReleaseHardeningEvidenceSource;
   missing_signing_credentials: readonly string[];
 }
-
-const ACTION_MAJOR_REQUIREMENTS = [
-  { action: "actions/checkout", minimumMajor: 7 },
-  { action: "actions/setup-node", minimumMajor: 6 },
-  { action: "pnpm/action-setup", minimumMajor: 6 },
-  { action: "actions/upload-artifact", minimumMajor: 7 },
-] as const;
 
 const SIGNING_CREDENTIALS = [
   "BLUE_TANUKI_WINDOWS_SIGNING_CERT_PFX",
@@ -56,37 +50,42 @@ function requireIncludes(file: string, text: string, needle: string): void {
   if (!text.includes(needle)) fail(`${file}: missing required text: ${needle}`);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function actionMajors(workflow: string, action: string): number[] {
-  const pattern = new RegExp(
-    String.raw`uses:\s*${escapeRegExp(action)}@v?(\d+)(?:\b|[.\-])`,
-    "gi",
-  );
-  const majors: number[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(workflow)) !== null) {
-    const rawMajor = match[1];
-    if (!rawMajor) continue;
-    majors.push(Number.parseInt(rawMajor, 10));
+function assertNoGitHubActionsWorkflows(root: string): void {
+  const workflowsDir = path.join(root, ".github", "workflows");
+  if (!existsSync(workflowsDir)) return;
+  const workflowFiles = readdirSync(workflowsDir)
+    .filter((name) => /\.ya?ml$/i.test(name))
+    .sort();
+  if (workflowFiles.length > 0) {
+    fail(`GitHub Actions workflows must be absent; found ${workflowFiles.join(", ")}`);
   }
-  return majors;
 }
 
-function assertWorkflowActionsCurrent(root: string): void {
-  const workflow = read(root, ".github/workflows/ci.yml");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:release-hardening");
-  for (const { action, minimumMajor } of ACTION_MAJOR_REQUIREMENTS) {
-    const majors = actionMajors(workflow, action);
-    if (majors.length === 0) fail(`.github/workflows/ci.yml: missing ${action}`);
-    const deprecated = majors.filter((major) => major < minimumMajor);
-    if (deprecated.length > 0) {
-      fail(
-        `.github/workflows/ci.yml: ${action} must be v${minimumMajor}+; found ${deprecated.join(", ")}`,
-      );
-    }
+function assertLocalReleaseValidationCommands(root: string): void {
+  const packageJson = read(root, "package.json");
+  for (const scriptName of [
+    "typecheck",
+    "build",
+    "test",
+    "docs:check",
+    "validate:repo-health",
+    "validate:packaging",
+    "validate:release-hardening",
+    "validate:channels",
+    "validate:ga",
+    "validate:product",
+    "plugin:review",
+    "doctor",
+    "smoke:serve",
+    "smoke:resume",
+    "smoke:live",
+    "smoke:windows-installed",
+    "smoke:linux-installed",
+    "smoke:macos-installed",
+    "release:bundle",
+    "release:verify",
+  ]) {
+    requireIncludes("package.json", packageJson, `"${scriptName}"`);
   }
 }
 
@@ -135,11 +134,9 @@ function assertDocs(root: string): void {
     "runtime_auto_apply_available=false",
     "signed native installer",
     "automatic updater",
+    "GitHub Actions workflows are intentionally absent",
+    "local release validation",
     "--require-signing",
-    "actions/checkout@v7",
-    "actions/setup-node@v6",
-    "pnpm/action-setup@v6",
-    "actions/upload-artifact@v7",
     ...SIGNING_CREDENTIALS,
   ]) {
     requireIncludes("docs/RELEASE_HARDENING.md", doc, needle);
@@ -176,7 +173,8 @@ export function validateReleaseHardeningGate(
 ): ReleaseHardeningReport {
   const root = path.resolve(rootDir);
   const env = options.env ?? process.env;
-  assertWorkflowActionsCurrent(root);
+  assertNoGitHubActionsWorkflows(root);
+  assertLocalReleaseValidationCommands(root);
   assertInstallerBoundary(root);
   assertUpdaterBoundary(root);
   assertDocs(root);
@@ -190,12 +188,13 @@ export function validateReleaseHardeningGate(
 
   return {
     status: "pass_pre_signing_blocked",
-    ci_node20_deprecated_actions_present: false,
+    github_actions_workflows_present: false,
+    local_release_validation_commands_present: true,
     signed_native_installer_status:
       missing.length === 0 ? "credentials_configured_static_only" : "blocked_missing_credentials",
     automatic_updater_status: "manual_update_only",
     runtime_auto_apply_available: false,
-    evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+    evidence_source: ["CONFIG"],
     missing_signing_credentials: missing,
   };
 }
@@ -209,7 +208,8 @@ function main(): void {
     requireSigning: hasArg("--require-signing"),
   });
   process.stdout.write("release_hardening=pass_pre_signing_blocked\n");
-  process.stdout.write("ci_node20_deprecated_actions_present=false\n");
+  process.stdout.write("github_actions_workflows_present=false\n");
+  process.stdout.write("local_release_validation_commands_present=true\n");
   process.stdout.write(
     `signed_native_installer_status=${report.signed_native_installer_status}\n`,
   );

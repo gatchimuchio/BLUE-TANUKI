@@ -367,7 +367,7 @@ P13はowner GOと製品release判定境界を閉じる。現状態はpre-GO read
 - GA Bar A-F evidence is machine-checked.
 - Bar G remains `PENDING_OWNER_GO`; `public_claim_allowed=false` until explicit owner GO.
 - Gate rejects `1.0.0` version promotion or README / QUICKSTART / CLAIM public claim activation before owner GO.
-- CI, doctor, packaging validation, release bundle requirements, RC docs, post-RC review, GA bar docs, and docs index updated.
+- Local validation, doctor, packaging validation, release bundle requirements, RC docs, post-RC review, GA bar docs, and docs index updated.
 - Actual v1.0.0 promotion remains pending explicit owner GO.
 
 ### Phase 12-S-1

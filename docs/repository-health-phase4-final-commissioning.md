@@ -31,9 +31,9 @@ gateway invalid inbound の責務は二段に分かれる。gateway の complete
 
 | Class | Release impact |
 |---|---|
-| environment | host / Corepack / pnpm / archive tooling / GitHub Actions availability の問題。原因が環境に閉じる場合は release blocker ではない。 |
+| environment | host / Corepack / pnpm / archive tooling / external credential availability の問題。原因が環境に閉じる場合は release blocker ではない。 |
 | credential | live-smoke credential / target 不在。core release では blocker ではない。owner-declared credentialed promotion gate では blocker。 |
-| product regression | validation, docs, import graph, release bundle, doctor, CI, authority boundary の失敗。release blocker。 |
+| product regression | validation, docs, import graph, release bundle, doctor, local gate, authority boundary の失敗。release blocker。 |
 | intentional preview limitation | core release bundle から除外された preview package / helper source / credential の不在。release blocker ではない。 |
 
 ## Local Validation Evidence
@@ -61,4 +61,4 @@ Phase closure local validation:
 
 ## Known Remaining Risk
 
-Release blocker は残さない。credentialed live smoke と GitHub Actions の最終 green 確認は環境 / credential 依存として分類し、core release gate の product regression とは分離する。
+Release blocker は残さない。credentialed live smoke と owner-run OS evidence の最終確認は環境 / credential 依存として分類し、core release gate の product regression とは分離する。

@@ -64,13 +64,14 @@ BLUE_TANUKI_VALIDATE_TIMEOUT_MS=600000
 
 P3 checks are registered as platform-target installer checks. Each OS runs its
 own packaged installer artifact and installed-app smoke; other platforms report
-that OS check as `skipped`. CI runs `linux-product`, `macos-product`, and
-`windows-product` jobs through `pnpm validate:product -- --phase P3`.
+that OS check as `skipped`. GitHub Actions jobs are not part of this gate.
+Run `pnpm validate:product -- --phase P3 --evidence <dir>` on the target OS
+when OS evidence is required.
 
-The product CI jobs upload `.codex-tmp/validate-product-linux`,
+Owner-run evidence directories such as `.codex-tmp/validate-product-linux`,
 `.codex-tmp/validate-product-macos`, and `.codex-tmp/validate-product-windows`
-as evidence artifacts on both success and failure, so passing product gates
-leave evidence packs rather than only console output.
+are the expected evidence packs. Passing product gates must leave local
+evidence packs rather than only console output.
 
 | ID | evidence source | 内容 |
 |---|---|---|
@@ -141,7 +142,7 @@ leave evidence packs rather than only console output.
 
 | ID | evidence source | 内容 |
 |---|---|---|
-| `p13.owner_go_release_boundary` | `CONFIG` / `EXTERNAL_EVIDENCE` | `validate:ga` のpre-GO結果が `status=pre_go_ready` / `owner_go=pending` / `public_claim_allowed=false` / `package_version=1.0.0-rc.1` を保ち、`require-owner-go` modeがowner decisionなしでfail-closedすることを確認する。D1-D7 decision ledger、P13 readiness doc、GA promotion review、release notesがowner GO、Windows実機E2E、release bundle verification、`docs/ga-owner-decision.json`、public claim boundaryを矛盾なく記録していることを検査する。このcheckはGA解禁ではなく、GOなしにreleaseしない境界の検査である |
+| `p13.owner_go_release_boundary` | `CONFIG` / `EXTERNAL_EVIDENCE` | `validate:ga` のpre-GO結果が `status=pre_go_ready` / `owner_go=pending` / `public_claim_allowed=false` / `package_version=1.0.0-rc.1` を保ち、`require-owner-go` modeがowner decisionなしでfail-closedすることを確認する。D1-D8 decision ledger、P13 readiness doc、GA promotion review、release notesがowner GO、Windows実機E2E、release bundle verification、`docs/ga-owner-decision.json`、public claim boundaryを矛盾なく記録していることを検査する。このcheckはGA解禁ではなく、GOなしにreleaseしない境界の検査である |
 
 ## Incremental Registration
 

@@ -66,8 +66,9 @@ uninstall/purge paths, and release-bundle verification scripts are present
 before release. This is an operator-safety gate, not a claim that BLUE-TANUKI
 ships as a signed native product or has an automatic updater.
 The portable installer does not build signed native packages yet.
-`pnpm validate:release-hardening` also checks CI action majors, signed installer
-preconditions, and the manual-update boundary. A future signed release must use
+`pnpm validate:release-hardening` also rejects GitHub Actions workflows, checks
+that local release validation scripts remain available, verifies signed installer
+preconditions, and preserves the manual-update boundary. A future signed release must use
 `pnpm validate:release-hardening -- --require-signing` and separate platform
 signing evidence.
 Use the uninstall dry-run option before destructive removal when available.

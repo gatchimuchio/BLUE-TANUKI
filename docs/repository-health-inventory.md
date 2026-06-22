@@ -92,9 +92,9 @@
 
 | Classification | Meaning | Release blocker |
 |---|---|---:|
-| environment | host/tooling problem such as missing pnpm, broken Corepack, network outage, or unavailable GitHub Actions credentials | no, unless CI release environment cannot be restored |
+| environment | host/tooling problem such as missing pnpm, broken Corepack, network outage, or unavailable external credentials | no, unless the required validation environment cannot be restored |
 | credential | optional live-smoke credential or live target absent | no for core release; yes only for an owner-declared credentialed promotion gate |
-| product regression | validation, docs, authority, package graph, release bundle, doctor, or CI failure caused by repository behavior | yes |
+| product regression | validation, docs, authority, package graph, release bundle, doctor, or local gate failure caused by repository behavior | yes |
 | intentional preview limitation | preview package/credential/surface absent from core release by design | no |
 
 ## Phase 2 Added Docs

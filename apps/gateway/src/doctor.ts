@@ -1463,7 +1463,7 @@ export function formatTextReport(report: DoctorReport): string {
   return lines.join(os.EOL);
 }
 
-/** Render a report as JSON suitable for CI pipes. */
+/** Render a report as JSON suitable for machine pipes. */
 export function formatJsonReport(report: DoctorReport): string {
   return JSON.stringify(report, null, 2);
 }

@@ -9,7 +9,7 @@ It is evidence only; it does not activate GA, public claims, or authority.
 - `LIVE_RUNTIME`: installed gateway, WebChat, approval API, audit verifier,
   resident launcher, watchdog, safe mode, uninstall.
 - `EXTERNAL_EVIDENCE`: Windows artifact, extracted install tree, HKCU Run entry,
-  uploaded `validate-product-windows-evidence` artifact from Windows CI.
+  owner-run `validate-product-windows` evidence pack.
 
 ## Required Markers
 

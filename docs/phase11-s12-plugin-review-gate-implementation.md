@@ -62,7 +62,7 @@ Passing review does not approve operations, classify risk, substitute HDS-BRAIN,
 
 ## Operator Usability
 
-Text output lists each check as PASS/FAIL and prints the review digest. JSON output is available through `--json` for CI or future review tooling.
+Text output lists each check as PASS/FAIL and prints the review digest. JSON output is available through `--json` for local automation or future review tooling.
 
 ## Release Integration
 

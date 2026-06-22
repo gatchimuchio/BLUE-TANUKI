@@ -13,8 +13,8 @@ The runbook assumes:
   `file.search`/`file.write`/`file.edit` sandboxing,
   unauthenticated `github.read`, lightweight `browser.read`, final-review
   `shell.exec`, Unicode detector normalization with raw audit
-  retention, WebChat resume token separation, Docker packaging, GitHub Actions
-  CI, systemd packaging, one-time resume approval tokens, packaging
+  retention, WebChat resume token separation, Docker packaging,
+  local validation, systemd packaging, one-time resume approval tokens, packaging
   validation, setup wizard/env-file loading, and `--audit-dump`).
 - Single-process, single-host deployment. Multi-process writers are NOT
   supported for either the session store or the audit chain.
@@ -419,19 +419,19 @@ the container healthcheck probes `/healthz`.
 
 ---
 
-## 4.2 CI
+## 4.2 Local Validation
 
-GitHub Actions CI is defined in `.github/workflows/ci.yml`.
+GitHub Actions workflows are intentionally absent. Do not add
+`.github/workflows/*.yml` as a quality gate.
 
-The verify job installs with the checked-in lockfile, then runs typecheck,
-build, tests, offline smoke checks, the live-smoke skip path, and `doctor` with
-separated dummy WebChat tokens. It also runs `pnpm validate:packaging` to catch
-packaging drift, creates the portable release bundle, and verifies its
-checksum/manifest sidecars. The Docker job runs only after verify succeeds and
-builds `blue-tanuki:ci` without pushing an image.
+For release or deployment work, run the local validation commands explicitly
+from the target workspace or target OS. The normal local set installs with the
+checked-in lockfile, then runs typecheck, build, tests, docs check,
+repo/package/release gates, scoped smoke checks, `doctor`, release bundle
+generation, and release verification.
 
-CI uses read-only repository permissions and cancels superseded runs on the
-same ref. It does not publish packages, push Docker images, or deploy.
+Quality judgment comes from local command output and owner-run evidence packs,
+not from GitHub runner status.
 
 ---
 
@@ -503,8 +503,8 @@ Exit codes:
 - `2` — `BLUE_TANUKI_AUDIT_DIR` unset (`status=SETUP-ERROR`).
 
 The text view summarises one entry per line (`[NNNN] DECISION hashprefix… request_id=…`).
-The JSON view (`--json`) emits the full structured chain — use this for CI
-and offline analysis. Reserved JSON top-level keys are `ts`, `level`,
+The JSON view (`--json`) emits the full structured chain — use this for
+offline analysis. Reserved JSON top-level keys are `ts`, `level`,
 `scope`, `msg`; user fields can never overwrite them.
 
 ### 5.3 Logs
@@ -533,7 +533,7 @@ Configured checks:
 - LINE Messaging API push: set `LINE_CHANNEL_ACCESS_TOKEN` and
   `LINE_LIVE_TARGET` to a reachable test userId, groupId, or roomId.
 
-For CI/deploy gates that require at least one real API check, set
+For deploy gates that require at least one real API check, set
 `BLUE_TANUKI_LIVE_REQUIRED=1`.
 
 ---
@@ -613,7 +613,7 @@ false` with typed delivery fields:
 
 Recovery: set the required token(s), verify the live target is a safe test
 channel/chat/user/group, restart, then run live smoke. Doctor reports optional
-token presence so deploy CI can check this without booting.
+token presence so deployment scripts can check this without booting.
 
 ---
 
@@ -658,7 +658,7 @@ development it is acceptable for every live check to report SKIP.
 - [ ] `pnpm build`
 - [ ] `pnpm typecheck`
 - [ ] `pnpm test` — all green
-- [ ] `pnpm smoke:serve` / `pnpm smoke:resume` only when explicitly fixing root workspace smoke resolution; ordinary validation excludes them while that known environment issue remains open
+- [ ] `pnpm smoke:serve` / `pnpm smoke:resume` when validating runtime, root smoke behavior, release, or operator setup
 - [ ] `pnpm smoke:live` — green for every configured real provider, or SKIP is
       explicitly accepted for this deployment
 - [ ] `pnpm validate:packaging` — green if packaging files are in use
@@ -683,7 +683,6 @@ development it is acceptable for every live check to report SKIP.
 - [ ] If using Docker, `docker compose config` succeeds with the target env
 - [ ] If using Docker, the `/data` volume policy matches audit/session
       retention requirements
-- [ ] GitHub Actions CI is green on the target branch/PR
 - [ ] If using systemd, `/etc/blue-tanuki/blue-tanuki.env` is chmod 600 and
       contains distinct WebChat tokens
 - [ ] If using systemd, `/var/lib/blue-tanuki` is writable by the

@@ -165,10 +165,10 @@ conformance は completion claim の一部だが、単独では release readines
 - `CONFIG`: manifest、compatibility matrix、package metadata、docs。
 - `INTERNAL_STATE`: generated snapshot、local store、runtime object。
 - `LIVE_RUNTIME`: 起動中の gateway / HDS-BRAIN / channel / resident process。
-- `EXTERNAL_EVIDENCE`: GitHub Actions、extracted release bundle、installed path、credentialed live smoke。
+- `EXTERNAL_EVIDENCE`: extracted release bundle、installed path、credentialed live smoke、owner-run OS evidence。
 - `FIXTURE`: mock、negative fixture、unit fixture。
 
-`CONFIG` / `INTERNAL_STATE` / `FIXTURE` の成功を `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` の成功として報告してはならない。release path の変更は extracted bundle verification と GitHub Actions green なしに release-ready と扱わない。
+`CONFIG` / `INTERNAL_STATE` / `FIXTURE` の成功を `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` の成功として報告してはならない。release path の変更は required local validation、extracted bundle verification、owner-required OS / live evidence なしに release-ready と扱わない。
 
 ## Contract-to-Runtime Coverage
 

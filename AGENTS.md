@@ -60,7 +60,7 @@ A large amount of generated structure is not evidence of completeness.
 
 ### P-Series Baseline Freeze
 
-本日時点のCI構成（ci.ymlのジョブ・コマンド列、validate系gate、smoke系）をP基準面として凍結する。基準面の変更（追加を含む）はP-Phase指示経由のみ。検査の削除・弱体化はowner承認必須。
+GitHub Actions / CI workflow はP基準面から廃止済み。`.github/workflows` 配下に workflow YAML を置かない。品質判定の基準面は owner / Codex が明示的に実行する local validation、smoke、release verification、実機 evidence とする。基準面の変更（追加を含む）はP-Phase指示経由のみ。検査の削除・弱体化はowner承認必須。
 
 ### Completion Evidence
 
@@ -167,7 +167,7 @@ A deliberate, tested, bounded, documented normalization mechanism may be accepta
 
 ### Environment and Product-Proof Separation
 
-Keep development environment, CI environment, validation environment, release-proof environment, and target product environment conceptually separate.
+Keep development environment, local validation environment, release-proof environment, external runner environment, and target product environment conceptually separate.
 
 Do not report success in one environment as proof of success in another environment unless the repository explicitly defines that equivalence and evidence supports it.
 
@@ -218,7 +218,7 @@ For detailed examples and the GUI-Shell-derived mapping, see `docs/DEVELOPMENT_P
 - Do not static-import doctor / setup / audit / installer / repair modules from production runtime.
 - Do not pass raw invalid inbound into gateway history, reply, approval origin, or execution path.
 - Do not mark required credential errors as `safe_to_ignore`.
-- Do not claim release readiness without extracted bundle verification and GitHub Actions green.
+- Do not claim release readiness without the required local validation, extracted bundle verification, and owner-required OS / live evidence.
 
 ## Required Before Any Commit
 
@@ -674,7 +674,7 @@ to fix missing `pnpm`.
 The prior root workspace smoke dependency issue is fixed. `pnpm smoke:serve`
 and `pnpm smoke:resume` are no longer classified as known environment failures.
 
-When a task explicitly targets CI, smoke checks, root workspace resolution, or a
+When a task explicitly targets smoke checks, root workspace resolution, or a
 release gate, run these checks and treat failures as actionable until proven
 environment-specific:
 
@@ -1436,7 +1436,7 @@ pnpm release:bundle
 pnpm release:verify
 ```
 
-Run `pnpm run doctor`, `pnpm smoke:serve`, `pnpm smoke:resume`, and `pnpm smoke:live` when the task explicitly targets CI, smoke checks, root workspace resolution, runtime behavior, release validation, or operator setup. For unrelated feature work, follow the active phase validation set and report skipped smoke checks as scope-limited. If `pnpm` remains unavailable after the Corepack recovery path in `docs/known-environment-failures.md`, stop pnpm-based validation and report it as an environment limitation.
+Run `pnpm run doctor`, `pnpm smoke:serve`, `pnpm smoke:resume`, and `pnpm smoke:live` when the task explicitly targets smoke checks, root workspace resolution, runtime behavior, release validation, or operator setup. For unrelated feature work, follow the active phase validation set and report skipped smoke checks as scope-limited. If `pnpm` remains unavailable after the Corepack recovery path in `docs/known-environment-failures.md`, stop pnpm-based validation and report it as an environment limitation.
 
 If a command is unavailable or fails, report:
 

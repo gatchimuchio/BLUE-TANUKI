@@ -9,23 +9,49 @@ path ではない。
 
 - 現在の RC は signed native installer ではない。
 - 現在の RC は automatic updater を持たない。
+- GitHub Actions workflows are intentionally absent.
 - runtime_auto_apply_available=false。
 - 更新は manual_update_only。
 - installer / updater / release metadata は authority として使わない。
 
-## CI action hardening
+## GitHub Actions boundary
 
-GitHub Actions の Node.js 20 deprecation warning を release blocker として扱う。
-CI は次の major 以上を要求する。
+GitHub Actions / CI workflow はこのリポジトリの品質判定経路ではない。
+`.github/workflows` 配下に YAML workflow が存在する場合、
+`pnpm validate:release-hardening` と `pnpm validate:packaging` は fail する。
+
+push / pull_request / schedule / workflow_dispatch による自動テストは使わない。
+品質判定は owner が明示的に走らせる local release validation と実機 evidence を正とする。
+
+## Local release validation
+
+local release validation の入口は package scripts に残す。
+`pnpm validate:release-hardening` は少なくとも次の script 名が `package.json` に残っていることを確認する。
 
 ```text
-actions/checkout@v7
-actions/setup-node@v6
-pnpm/action-setup@v6
-actions/upload-artifact@v7
+typecheck
+build
+test
+docs:check
+validate:repo-health
+validate:packaging
+validate:release-hardening
+validate:channels
+validate:ga
+validate:product
+plugin:review
+doctor
+smoke:serve
+smoke:resume
+smoke:live
+smoke:windows-installed
+smoke:linux-installed
+smoke:macos-installed
+release:bundle
+release:verify
 ```
 
-`pnpm validate:release-hardening` は CI workflow 内に存在しなければ失敗する。
+これらは GitHub runner ではなく、owner / Codex が必要なタイミングでローカル実機または対象OS上で実行する。
 
 ## Signing prerequisites
 
@@ -74,16 +100,18 @@ update surface は候補 bundle の検証と rollback evidence 作成までで�
 
 ## Evidence source
 
-この gate の evidence source は `CONFIG` と `EXTERNAL_EVIDENCE`。
-workflow の action major、docs、package scripts、installer manifest boundary、
+この gate の evidence source は `CONFIG`。
+GitHub Actions workflow 不在、docs、package scripts、installer manifest boundary、
 update surface boundary を読むだけで、live installed product の動作成功や署名の
-成立は証明しない。
+成立は証明しない。実機検証、extracted bundle verification、credentialed live smoke は
+別の `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` として実行・報告する。
 
 Expected normal output:
 
 ```text
 release_hardening=pass_pre_signing_blocked
-ci_node20_deprecated_actions_present=false
+github_actions_workflows_present=false
+local_release_validation_commands_present=true
 signed_native_installer_status=blocked_missing_credentials
 automatic_updater_status=manual_update_only
 runtime_auto_apply_available=false

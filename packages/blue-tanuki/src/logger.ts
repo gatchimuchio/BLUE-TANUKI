@@ -7,7 +7,7 @@
  *   2. Keep the text format byte-compatible with the previous prefix style
  *      so operators reading existing runbooks see the same shape, and tests
  *      that grep stdout (smoke scripts, etc.) continue to match.
- *   3. Optional JSON mode for machine ingestion (CI, log aggregators).
+ *   3. Optional JSON mode for machine ingestion (local validation, log aggregators).
  *      JSON-mode output is one object per line with fixed top-level keys:
  *        ts, level, scope, msg, ...fields
  *

@@ -34,7 +34,7 @@ rewrite application code to work around a missing package manager.
 environment failures. The prior root dependency issue was fixed by declaring
 the root `ws` / `@types/ws` dev dependencies and updating `pnpm-lock.yaml`.
 
-When a task explicitly targets CI, smoke tests, root workspace resolution, or a
+When a task explicitly targets smoke tests, root workspace resolution, or a
 release gate, run these checks and treat failures as actionable until proven
 environment-specific:
 
@@ -48,7 +48,7 @@ If either smoke check fails:
 - confirm `pnpm install --frozen-lockfile` passed
 - confirm root `node_modules/ws` exists after install
 - inspect child gateway logs before changing product code
-- report platform-specific failures separately from CI failures
+- report platform-specific failures separately from host environment failures
 
 ## Doctor preview credentials
 

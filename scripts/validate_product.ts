@@ -2070,7 +2070,7 @@ async function runOwnerGoReleaseBoundary(ctx: CheckContext): Promise<CheckResult
   );
 
   const ownerDecisions = await readDoc("docs/product-owner-decisions.md");
-  for (const decision of ["D1", "D2", "D3", "D4", "D5", "D6", "D7"]) {
+  for (const decision of ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"]) {
     mustInclude("docs/product-owner-decisions.md", ownerDecisions, `| ${decision} |`);
   }
   mustInclude("docs/product-owner-decisions.md", ownerDecisions, "P13基準に吸収");
@@ -2105,7 +2105,7 @@ async function runOwnerGoReleaseBoundary(ctx: CheckContext): Promise<CheckResult
     raw_log: [
       "ga gate: pre_go_ready with public_claim_allowed=false",
       "ga gate require-owner-go: blocked without owner decision",
-      "owner decisions: D1-D7 present and P13 absorption recorded",
+      "owner decisions: D1-D8 present and P13 absorption recorded",
       "readiness docs: PENDING_OWNER_GO and Windows/owner evidence blockers recorded",
     ].join("\n"),
     details: {
@@ -2115,7 +2115,7 @@ async function runOwnerGoReleaseBoundary(ctx: CheckContext): Promise<CheckResult
       public_claim_allowed: preGo.public_claim_allowed,
       bar_results: preGo.bar_results,
       require_owner_go_blocked: true,
-      owner_decisions_present: ["D1", "D2", "D3", "D4", "D5", "D6", "D7"],
+      owner_decisions_present: ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"],
       p13_actual_release_blocked: true,
       evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
       used_for_authority: false,

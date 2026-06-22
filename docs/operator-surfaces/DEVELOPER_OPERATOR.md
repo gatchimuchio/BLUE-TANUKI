@@ -82,7 +82,7 @@ Developer operations must record:
 
 ## 8. Layer Boundary (Layer A vs Layer B)
 
-Developer Operator is Layer A. Layer B plugins may add language helpers, templates, repo analyzers, or CI parsers, but cannot widen file roots, run shell, mutate GitHub, or automate browser actions outside the existing Approval Gate and capability envelope.
+Developer Operator is Layer A. Layer B plugins may add language helpers, templates, repo analyzers, or local validation parsers, but cannot widen file roots, run shell, mutate GitHub, or automate browser actions outside the existing Approval Gate and capability envelope.
 
 ## 9. Shared Substrate Usage
 

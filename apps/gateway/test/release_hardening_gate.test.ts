@@ -12,26 +12,6 @@ async function writeFile(rel: string, text: string): Promise<void> {
   await fs.writeFile(target, text, "utf8");
 }
 
-function workflow(actionMajorOverrides: Record<string, string> = {}): string {
-  const checkout = actionMajorOverrides.checkout ?? "v7";
-  const pnpm = actionMajorOverrides.pnpm ?? "v6";
-  const setupNode = actionMajorOverrides.setupNode ?? "v6";
-  const uploadArtifact = actionMajorOverrides.uploadArtifact ?? "v7";
-  return [
-    "name: CI",
-    "jobs:",
-    "  verify:",
-    "    steps:",
-    `      - uses: actions/checkout@${checkout}`,
-    `      - uses: pnpm/action-setup@${pnpm}`,
-    `      - uses: actions/setup-node@${setupNode}`,
-    "      - run: pnpm validate:release-hardening",
-    "  windows-product:",
-    "    steps:",
-    `      - uses: actions/upload-artifact@${uploadArtifact}`,
-  ].join("\n");
-}
-
 function releaseHardeningDoc(): string {
   return [
     "CONFIG",
@@ -41,11 +21,9 @@ function releaseHardeningDoc(): string {
     "runtime_auto_apply_available=false",
     "signed native installer",
     "automatic updater",
+    "GitHub Actions workflows are intentionally absent",
+    "local release validation",
     "--require-signing",
-    "actions/checkout@v7",
-    "actions/setup-node@v6",
-    "pnpm/action-setup@v6",
-    "actions/upload-artifact@v7",
     "BLUE_TANUKI_WINDOWS_SIGNING_CERT_PFX",
     "BLUE_TANUKI_WINDOWS_SIGNING_CERT_PASSWORD",
     "APPLE_DEVELOPER_ID_APPLICATION",
@@ -59,7 +37,6 @@ function releaseHardeningDoc(): string {
 }
 
 async function writeFixture(opts: {
-  workflow?: string;
   updateSurface?: string;
   env?: Record<string, string>;
 } = {}): Promise<Record<string, string>> {
@@ -67,11 +44,29 @@ async function writeFixture(opts: {
     "package.json",
     JSON.stringify({
       scripts: {
+        typecheck: "node scripts/typecheck.mjs",
+        build: "pnpm -r build",
+        test: "node node_modules/vitest/vitest.mjs run",
+        "docs:check": "node scripts/check_docs.mjs",
+        "validate:repo-health": "tsx scripts/repo_health_gate.ts",
+        "validate:packaging": "tsx scripts/validate_packaging.ts",
         "validate:release-hardening": "tsx scripts/release_hardening_gate.ts",
+        "validate:channels": "tsx scripts/channel_promotion_gate.ts",
+        "validate:ga": "tsx scripts/ga_promotion_gate.ts",
+        "validate:product": "tsx scripts/validate_product.ts",
+        "plugin:review": "tsx scripts/plugin_review_gate.ts",
+        doctor: "pnpm --filter @blue-tanuki/gateway run doctor",
+        "smoke:serve": "tsx scripts/smoke_serve.ts",
+        "smoke:resume": "tsx scripts/smoke_resume.ts",
+        "smoke:live": "tsx apps/gateway/src/smoke_live.ts",
+        "smoke:windows-installed": "tsx scripts/smoke_windows_installed.ts",
+        "smoke:linux-installed": "tsx scripts/smoke_unix_installed.ts --platform=linux",
+        "smoke:macos-installed": "tsx scripts/smoke_unix_installed.ts --platform=macos",
+        "release:bundle": "tsx scripts/create_release_bundle.ts",
+        "release:verify": "tsx scripts/verify_release_bundle.ts",
       },
     }, null, 2),
   );
-  await writeFile(".github/workflows/ci.yml", opts.workflow ?? workflow());
   await writeFile(
     "scripts/package_product_installers.ts",
     [
@@ -127,19 +122,21 @@ describe("release hardening gate", () => {
     const report = validateReleaseHardeningGate(root, { env });
 
     expect(report).toMatchObject({
-      ci_node20_deprecated_actions_present: false,
+      github_actions_workflows_present: false,
+      local_release_validation_commands_present: true,
       signed_native_installer_status: "blocked_missing_credentials",
       automatic_updater_status: "manual_update_only",
       runtime_auto_apply_available: false,
     });
   });
 
-  it("rejects Node 20-deprecated action majors", async () => {
-    await writeFixture({
-      workflow: workflow({ checkout: "v4", setupNode: "v4", pnpm: "v4", uploadArtifact: "v4" }),
-    });
+  it("rejects GitHub Actions workflows", async () => {
+    await writeFixture();
+    await writeFile(".github/workflows/ci.yml", "name: CI\non: [push]\n");
 
-    expect(() => validateReleaseHardeningGate(root, { env: {} })).toThrow(/actions\/checkout/);
+    expect(() => validateReleaseHardeningGate(root, { env: {} })).toThrow(
+      /GitHub Actions workflows must be absent/,
+    );
   });
 
   it("fails closed when signing is required but credentials are missing", async () => {

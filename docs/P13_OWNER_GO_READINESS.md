@@ -25,10 +25,10 @@ workspace is intentionally promoted.
 
 | Criterion | Current state | Evidence path |
 |---|---|---|
-| Linux CI full green | required before GO | GitHub Actions / local validation report |
+| Linux local validation full PASS | required before GO | owner/Codex local validation report |
 | `validate:product` full PASS | local Linux PASS with Windows-only checks skipped on Linux | `pnpm validate:product -- --phase P13` |
 | Windows実機E2E PASS + evidence pack | still required before GO | owner-run Windows evidence pack |
-| D1-D7 decision record | present | `docs/product-owner-decisions.md` |
+| D1-D8 decision record | present | `docs/product-owner-decisions.md` |
 | preview exclusion / first-party scope | preserved | `docs/SUPPORT_BOUNDARY.md`, `docs/KNOWN_LIMITATIONS.md`, compatibility matrix |
 | release bundle + sha256 + manifest | generated and verified by release validation | `pnpm release:bundle`, `pnpm release:verify` |
 | owner decision record | absent / pending | `docs/ga-owner-decision.json` |
@@ -59,5 +59,5 @@ PENDING_OWNER_GO
 public_claim_allowed=false
 ```
 
-Do not infer GO from passed tests, generated bundles, docs presence, CI status,
-operator convenience, or LLM output.
+Do not infer GO from passed tests, generated bundles, docs presence, remote
+runner status, operator convenience, or LLM output.

@@ -122,6 +122,20 @@ async function setup(
   };
 }
 
+async function waitForConnectionCount(
+  ch: WebChatChannel,
+  user: string,
+  expected: number,
+  timeoutMs = 1000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (ch.connectionCount(user) === expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(ch.connectionCount(user)).toBe(expected);
+}
+
 async function postJson(
   port: number,
   path: string,
@@ -1815,8 +1829,7 @@ describe("WebChatChannel — WS upgrade with ticket", () => {
     // openWsWithTicket already drained the hello frame.
     expect(ctx.ch.connectionCount("alice")).toBe(1);
     ws.close();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(ctx.ch.connectionCount("alice")).toBe(0);
+    await waitForConnectionCount(ctx.ch, "alice", 0);
   });
 
   it("ticket is single-use: second WS attempt with same ticket fails", async () => {

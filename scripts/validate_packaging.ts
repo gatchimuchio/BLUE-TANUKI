@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const root = process.cwd();
@@ -29,7 +29,22 @@ function requireNotMatches(file: string, text: string, pattern: RegExp, label: s
   }
 }
 
+function requireNoGithubWorkflowFiles(): void {
+  const workflowsDir = join(root, ".github", "workflows");
+  if (!existsSync(workflowsDir)) return;
+  const workflowFiles = readdirSync(workflowsDir)
+    .filter((name) => /\.ya?ml$/i.test(name))
+    .sort();
+  if (workflowFiles.length > 0) {
+    throw new Error(
+      `.github/workflows: GitHub Actions workflows must be absent; found ${workflowFiles.join(", ")}`,
+    );
+  }
+}
+
 function main(): void {
+  requireNoGithubWorkflowFiles();
+
   const installReadme = read("install/README.md");
   requireIncludes("install/README.md", installReadme, "Windows");
   requireIncludes("install/README.md", installReadme, "macOS");
@@ -141,22 +156,6 @@ function main(): void {
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "root_source_entrypoint_build_from_source_dry_run=pass");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "root_source_entrypoint_dry_run=pass");
   requireIncludes("INSTALL_WINDOWS.ps1", rootWindowsPs, "Log:");
-
-  const windowsWorkflow = read(".github/workflows/ci.yml");
-  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "windows-product");
-  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "pnpm validate:product -- --phase P3");
-  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "pnpm validate:release-hardening");
-  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/checkout@v7");
-  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/setup-node@v6");
-  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "pnpm/action-setup@v6");
-  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/upload-artifact@v7");
-  requireNotIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/checkout@v4");
-  requireNotIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/setup-node@v4");
-  requireNotIncludes(".github/workflows/ci.yml", windowsWorkflow, "pnpm/action-setup@v4");
-  requireNotIncludes(".github/workflows/ci.yml", windowsWorkflow, "actions/upload-artifact@v4");
-  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "Upload Windows product evidence");
-  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "if: always()");
-  requireIncludes(".github/workflows/ci.yml", windowsWorkflow, "validate-product-windows-evidence");
 
   const windowsInstallerGuide = read("docs/WINDOWS_INSTALLER_GUIDE.md");
   requireIncludes("docs/WINDOWS_INSTALLER_GUIDE.md", windowsInstallerGuide, "pnpm package:windows");
@@ -649,25 +648,20 @@ function main(): void {
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "blocked_missing_credentials");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "manual_update_only");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "runtime_auto_apply_available=false");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "GitHub Actions workflows are intentionally absent");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "local release validation");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "--require-signing");
-  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "actions/checkout@v7");
-  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "actions/setup-node@v6");
-  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "pnpm/action-setup@v6");
-  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "actions/upload-artifact@v7");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "BLUE_TANUKI_WINDOWS_SIGNING_CERT_PFX");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "APPLE_NOTARIZATION_TEAM_ID");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "BLUE_TANUKI_LINUX_GPG_KEY_ID");
 
   const releaseHardeningGate = read("scripts/release_hardening_gate.ts");
-  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "ci_node20_deprecated_actions_present");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "github_actions_workflows_present");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "local_release_validation_commands_present");
   requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "blocked_missing_credentials");
   requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "manual_update_only");
   requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "runtime_auto_apply_available: false");
   requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "--require-signing");
-  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "actions/checkout");
-  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "actions/setup-node");
-  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "pnpm/action-setup");
-  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "actions/upload-artifact");
 
   const phase10s3 = read("docs/phase10-s3-distribution-ux-hardening.md");
   requireIncludes(
@@ -682,6 +676,10 @@ function main(): void {
   );
 
   const packageJson = read("package.json");
+  requireIncludes("package.json", packageJson, "\"typecheck\"");
+  requireIncludes("package.json", packageJson, "\"build\"");
+  requireIncludes("package.json", packageJson, "\"test\"");
+  requireIncludes("package.json", packageJson, "\"docs:check\"");
   requireIncludes("package.json", packageJson, "\"installer:run\"");
   requireIncludes("package.json", packageJson, "\"installer:verify\"");
   requireIncludes("package.json", packageJson, "\"package:windows\"");
@@ -701,11 +699,18 @@ function main(): void {
   requireIncludes("package.json", packageJson, "\"smoke:windows-installed\"");
   requireIncludes("package.json", packageJson, "\"smoke:linux-installed\"");
   requireIncludes("package.json", packageJson, "\"smoke:macos-installed\"");
+  requireIncludes("package.json", packageJson, "\"smoke:serve\"");
+  requireIncludes("package.json", packageJson, "\"smoke:resume\"");
+  requireIncludes("package.json", packageJson, "\"smoke:live\"");
+  requireIncludes("package.json", packageJson, "\"doctor\"");
   requireIncludes("package.json", packageJson, "\"validate:repo-health\"");
+  requireIncludes("package.json", packageJson, "\"validate:packaging\"");
   requireIncludes("package.json", packageJson, "\"validate:release-hardening\"");
   requireIncludes("package.json", packageJson, "\"validate:channels\"");
   requireIncludes("package.json", packageJson, "\"validate:ga\"");
+  requireIncludes("package.json", packageJson, "\"validate:product\"");
   requireIncludes("package.json", packageJson, "\"plugin:review\"");
+  requireIncludes("package.json", packageJson, "\"release:bundle\"");
   requireIncludes("package.json", packageJson, "\"release:verify\"");
   requireIncludes("package.json", packageJson, "\"version\": \"1.0.0-rc.1\"");
 
@@ -814,28 +819,6 @@ function main(): void {
   requireIncludes("docker-compose.yml", compose, "BLUE_TANUKI_AUDIT_DIR");
   requireIncludes("docker-compose.yml", compose, "BLUE_TANUKI_SESSION_DIR");
   requireIncludes("docker-compose.yml", compose, "BLUE_TANUKI_SETTINGS_TOKEN");
-
-  const workflow = read(".github/workflows/ci.yml");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm typecheck");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm build");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm test");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm docs:check");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:packaging");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:release-hardening");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:channels");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm plugin:review");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:ga");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm smoke:serve");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm smoke:resume");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm run doctor");
-  requireIncludes(".github/workflows/ci.yml", workflow, "docker build");
-  requireIncludes(".github/workflows/ci.yml", workflow, "WEBCHAT_RESUME_TOKEN");
-  requireIncludes(".github/workflows/ci.yml", workflow, "BLUE_TANUKI_MAINTENANCE_TOKEN");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm release:bundle -- --dry-run");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm release:verify");
-  requireIncludes(".github/workflows/ci.yml", workflow, "macos-product");
-  requireIncludes(".github/workflows/ci.yml", workflow, "pnpm validate:product -- --phase P3");
-  requireIncludes(".github/workflows/ci.yml", workflow, "Upload macOS product evidence");
 
   const unit = read("deploy/systemd/blue-tanuki.service");
   requireIncludes("deploy/systemd/blue-tanuki.service", unit, "User=blue-tanuki");

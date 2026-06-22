@@ -52,7 +52,6 @@ export const GA_REQUIRED_FILES = [
   "QUICKSTART.md",
   "CLAIM.md",
   "package.json",
-  ".github/workflows/ci.yml",
   "docs/GA_BAR_DEFINITION.md",
   "docs/STRATEGY_FRAME.md",
   "docs/v1.0-security-and-permanent-use-review.md",
@@ -251,7 +250,7 @@ export function validateGaPromotionGate(
 
   validatePublicClaimBoundary(files, ownerGo, failures);
   validateChannelMatrix(files, failures, barFailures);
-  validateWorkflow(files, failures);
+  validateLocalValidationScripts(files, failures);
   validateGaReviewDoc(files, ownerGo, failures, warnings);
 
   const barResults = {
@@ -366,17 +365,28 @@ function validateChannelMatrix(
   }
 }
 
-function validateWorkflow(files: Record<string, string>, failures: string[]): void {
-  const workflow = files[".github/workflows/ci.yml"] ?? "";
-  for (const command of [
-    "pnpm docs:check",
-    "pnpm validate:packaging",
-    "pnpm validate:channels",
-    "pnpm validate:ga",
-    "pnpm release:verify",
+function validateLocalValidationScripts(files: Record<string, string>, failures: string[]): void {
+  const packageJson = files["package.json"] ?? "";
+  for (const scriptName of [
+    "typecheck",
+    "build",
+    "test",
+    "docs:check",
+    "validate:repo-health",
+    "validate:packaging",
+    "validate:channels",
+    "plugin:review",
+    "validate:ga",
+    "validate:product",
+    "smoke:serve",
+    "smoke:resume",
+    "smoke:live",
+    "doctor",
+    "release:bundle",
+    "release:verify",
   ]) {
-    if (!workflow.includes(command)) {
-      failures.push(`.github/workflows/ci.yml: missing ${command}`);
+    if (!packageJson.includes(`"${scriptName}"`)) {
+      failures.push(`package.json: missing local validation script ${scriptName}`);
     }
   }
 }

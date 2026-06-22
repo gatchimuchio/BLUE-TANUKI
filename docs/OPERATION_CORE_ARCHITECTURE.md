@@ -131,7 +131,7 @@ packages/protocol/src/operation_core.ts
 
 ## 6. ShellAdapter の扱い
 
-`shell.exec` は削除しない。削除すると既存機能、検証、開発者 operator、installer / smoke / CI 補助説明に不要な破壊が出る。
+`shell.exec` は削除しない。削除すると既存機能、検証、開発者 operator、installer / smoke / local validation 補助説明に不要な破壊が出る。
 
 代わりに、役割を明確化する。
 

@@ -67,7 +67,7 @@ rg -n "PRODUCT_CHECKS|ProductPhase|PHASE_ORDER|p12.docs_support_claims|validateG
 - `docs/P13_OWNER_GO_READINESS.md` must record current pre-GO state, P13 criteria, GO blockers, and fail-closed rule.
 - `scripts/validate_product.ts` must register `p13.owner_go_release_boundary`.
 - The P13 check must assert pre-GO readiness, `owner_go=false`, `public_claim_allowed=false`, RC version, Bar G pending, and `require-owner-go` blocking without owner decision.
-- The P13 check must assert D1-D7 decision ledger presence and P13 readiness/GA review/release notes consistency.
+- The P13 check must assert D1-D8 decision ledger presence and P13 readiness/GA review/release notes consistency.
 - `scripts/check_docs.mjs` and README / docs index must include the P13 readiness document.
 - `apps/gateway/test/validate_product.test.ts` must assert P13 registration.
 
@@ -76,7 +76,7 @@ rg -n "PRODUCT_CHECKS|ProductPhase|PHASE_ORDER|p12.docs_support_claims|validateG
 - HDS-BRAIN remains the only authority source.
 - P13 readiness docs and product validation evidence remain `used_for_authority=false`.
 - Public claim remains blocked with `public_claim_allowed=false`.
-- Owner GO cannot be inferred from validation success, bundle generation, docs presence, CI status, or LLM output.
+- Owner GO cannot be inferred from validation success, bundle generation, docs presence, remote runner status, or LLM output.
 - Preview status cannot be promoted by wording, Control Center state, plugin review evidence, channel metadata, or release readiness docs.
 - Signed native installer, automatic updater, runtime auto-apply, and WhatsApp first-party support remain not shipped unless a future owner-scoped phase changes them.
 
@@ -96,7 +96,7 @@ rg -n "PRODUCT_CHECKS|ProductPhase|PHASE_ORDER|p12.docs_support_claims|validateG
 
 - Unit tests must cover P13 product-check registration.
 - Product validation must cover P13 owner-GO release boundary.
-- Existing P2-P12 gates must remain green.
+- Existing P2-P12 gates must remain passing.
 
 ## Docs
 
@@ -834,7 +834,7 @@ pnpm release:bundle -- --dry-run
 ```
 
 For this phase, `pnpm smoke:serve` and `pnpm smoke:resume` are optional unless the task
-explicitly targets CI, smoke checks, root workspace resolution, or release validation.
+explicitly targets smoke checks, root workspace resolution, or release validation.
 They are no longer classified as known environment failures.
 
 ## Manual Smoke
@@ -1241,7 +1241,7 @@ pnpm release:bundle -- --dry-run
 ```
 
 For this phase, `pnpm smoke:serve` and `pnpm smoke:resume` are optional unless the task
-explicitly targets CI, smoke checks, root workspace resolution, or release validation.
+explicitly targets smoke checks, root workspace resolution, or release validation.
 They are no longer classified as known environment failures.
 
 ## Manual Smoke
@@ -2199,7 +2199,7 @@ CHANGELOG.md
 - GA Bar A-F evidence is machine-checked.
 - Bar G remains `PENDING_OWNER_GO`; `public_claim_allowed=false` until explicit owner GO.
 - Gate rejects `1.0.0` version promotion or README / QUICKSTART / CLAIM public claim activation before owner GO.
-- CI, doctor, packaging validation, release bundle requirements, RC docs, post-RC review, GA bar docs, and docs index were updated.
+- local validation, doctor, packaging validation, release bundle requirements, RC docs, post-RC review, GA bar docs, and docs index were updated.
 - Actual v1.0.0 promotion remains pending explicit owner GO.
 
 ---
@@ -2797,7 +2797,7 @@ pnpm run doctor
 pnpm validate:packaging
 ```
 
-For unrelated feature work, follow the active phase validation boundary. `pnpm smoke:serve` and `pnpm smoke:resume` are skipped unless the phase targets root workspace resolution, smoke checks, CI, or release validation. `pnpm smoke:live` may SKIP when credentials are absent.
+For unrelated feature work, follow the active phase validation boundary. `pnpm smoke:serve` and `pnpm smoke:resume` are skipped unless the phase targets root workspace resolution, smoke checks, or release validation. `pnpm smoke:live` may SKIP when credentials are absent.
 
 For release phases also run:
 

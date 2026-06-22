@@ -36,7 +36,7 @@ LLM / Codex は、実装完了を主張する前に次を区別する。
 - `CONFIG`: env、manifest、matrix、docs の整合。
 - `INTERNAL_STATE`: snapshot、store、in-memory state。
 - `LIVE_RUNTIME`: 起動中 gateway、HDS-BRAIN、channel、resident process の実動作。
-- `EXTERNAL_EVIDENCE`: CI、extracted bundle、installed path、credentialed live smoke。
+- `EXTERNAL_EVIDENCE`: extracted bundle、installed path、credentialed live smoke、owner-run OS evidence。
 - `FIXTURE`: unit fixture、mock、negative sample。
 
 `CONFIG`、`INTERNAL_STATE`、`FIXTURE` は production success や release readiness の代わりにならない。contract を追加した場合は、どの production / runtime / validator path が consume し、どの failure case が reject / audit / suspend されるかを報告する。

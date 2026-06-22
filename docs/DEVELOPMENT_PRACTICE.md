@@ -56,14 +56,14 @@ health check、doctor、Runtime Invariants、conformance、release gate、claim 
 | `CONFIG` | env / manifest / package config / docs matrix | 設定が整合していること。runtime success は証明しない。 |
 | `INTERNAL_STATE` | in-memory state / generated snapshot / local store | process 内部の現在値。外部実行や installed path は証明しない。 |
 | `LIVE_RUNTIME` | 起動中 gateway / HDS-BRAIN / channel / resident process の実動作 | その runtime path が観測範囲で動いたこと。 |
-| `EXTERNAL_EVIDENCE` | GitHub Actions、extracted bundle、installed path、credentialed live smoke、OS service evidence | release / distribution / integration の外部証拠。 |
+| `EXTERNAL_EVIDENCE` | extracted bundle、installed path、credentialed live smoke、OS service evidence、owner-run OS evidence | release / distribution / integration の外部証拠。 |
 | `FIXTURE` | unit fixture / mock / negative sample | contract logic と reject behavior。production path success は証明しない。 |
 
 Rule:
 
 - `CONFIG`、`INTERNAL_STATE`、`FIXTURE` を `LIVE_RUNTIME` や `EXTERNAL_EVIDENCE` の代わりにしない。
 - evidence が不足する場合は、成功推定ではなく `not run`、`environment-limited`、`release_blocker`、または `SUSPEND` として分類する。
-- release readiness は extracted bundle verification と GitHub Actions green なしに主張しない。
+- release readiness は required local validation、extracted bundle verification、owner-required OS / live evidence なしに主張しない。
 
 ## 5. Contract-to-Runtime Rule
 
@@ -146,7 +146,7 @@ BLUE-TANUKI は次を分離する。
 - conformance passes
 - local owner-use path works
 - extracted release bundle verifies
-- GitHub Actions green
+- local validation passes
 - credentialed live smoke passes
 - GA Bar passes
 - owner GO exists

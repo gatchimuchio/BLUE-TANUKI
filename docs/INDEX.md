@@ -6,7 +6,7 @@
 - [Quickstart](../QUICKSTART.md) - shortest local startup path
 - [Strategy Frame](STRATEGY_FRAME.md) - Layer A/B, OpenClaw two-dimensional position, and Stage 1 strategy
 - [Product Roadmap](PRODUCT_ROADMAP.md) - P1-P13 product-completion roadmap and validate:product gate plan
-- [Product Owner Decisions](product-owner-decisions.md) - owner decision ledger for D1-D7 and P13 absorption of old Bar G GO
+- [Product Owner Decisions](product-owner-decisions.md) - owner decision ledger for D1-D8 and P13 absorption of old Bar G GO
 - [Responsibility Substrate Mapping](RESPONSIBILITY_SUBSTRATE_MAPPING.md) - GUI Shell responsibility mapping for BLUE-TANUKI
 - [BLUE-TANUKI Authority Model](BLUE_TANUKI_AUTHORITY_MODEL.md) - HDS-BRAIN and owner authority boundary
 - [GA Bar Definition](GA_BAR_DEFINITION.md) - RC-to-GA promotion bar and public claim eligibility
@@ -19,7 +19,7 @@
 - [v1.0 Post-RC Closure Review](v1.0-post-rc-closure-review.md) - post-RC bundle, smoke, live-smoke, preview-promotion, installer, and updater decisions
 - [v1.0 GA Promotion Review](v1.0-ga-promotion-review.md) - GA bar evidence, pre-GO state, and owner decision boundary
 - [P13 Owner GO Readiness](P13_OWNER_GO_READINESS.md) - product-release decision boundary and pre-GO blockers
-- [Release Hardening Gate](RELEASE_HARDENING.md) - CI action, signing-prerequisite, and manual-update release gate
+- [Release Hardening Gate](RELEASE_HARDENING.md) - GitHub Actions absence, signing-prerequisite, and manual-update release gate
 
 ## First-Party Surfaces
 

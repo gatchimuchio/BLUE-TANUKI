@@ -471,7 +471,7 @@ function runInExtractedBundle(step: ExtractedReleaseCommand, cwd: string): void 
     encoding: "utf8",
     env: {
       ...process.env,
-      CI: process.env.CI ?? "1",
+      BLUE_TANUKI_RELEASE_VERIFY: "1",
       ...step.env,
     },
   });
