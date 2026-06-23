@@ -39,7 +39,9 @@ The Windows installer stores these settings in:
 %APPDATA%\BlueTanuki\blue-tanuki.env
 ```
 
-Do not store OpenRouter keys in the install directory.
+Do not store OpenRouter keys in the install directory. On Windows, first-run
+setup and Settings store the OpenRouter API key as `OPENROUTER_API_KEY_REF`
+using DPAPI CurrentUser protection; the env file keeps only the reference.
 
 ## Native-First Policy
 

@@ -76,8 +76,9 @@ Settings are stored in:
 
 Use Settings to verify non-stub LLM provider configuration before saving. API
 keys must not appear in logs, audit, runtime snapshot, or Control Center
-projections. When saved through Settings on Windows, LLM API keys are stored as
-DPAPI CurrentUser secret references and the env file keeps only the reference.
+projections. When supplied through first-run setup or saved through Settings on
+Windows, LLM API keys are stored as DPAPI CurrentUser secret references and the
+env file keeps only the reference.
 
 Optional adapters can also be configured here:
 

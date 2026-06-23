@@ -45,7 +45,7 @@ If an existing env file is overwritten with `--force`, setup creates a `.bak` fi
 ## Boundaries
 
 - No 5-minute setup guarantee is claimed.
-- On Windows, settings-saved LLM API keys are stored as DPAPI CurrentUser secret references.
+- On Windows, first-run setup and settings-saved LLM API keys are stored as DPAPI CurrentUser secret references.
 - On other platforms, API key values remain env-file material until a later keychain phase.
 - API key values are not printed by the installer.
 - LLM providers remain downstream devices under HDS-BRAIN authority.

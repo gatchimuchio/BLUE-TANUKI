@@ -12,6 +12,13 @@ import {
   type SetupProviderKind,
 } from "./setup_config.js";
 import { formatTextReport, runDoctor, type DoctorReport } from "./doctor.js";
+import {
+  llmApiKeyForProvider,
+  secretRefKey,
+  storeLlmApiKeySecret,
+  type SecretProtector,
+  type LlmSecretStoreResult,
+} from "./secret_store.js";
 
 export interface SetupCliOptions {
   yes?: boolean;
@@ -41,6 +48,22 @@ export interface SetupCommandIO {
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
+  secret_storage?: SetupSecretStorageOptions;
+}
+
+export interface SetupSecretStorageOptions {
+  platform?: NodeJS.Platform;
+  protector?: SecretProtector;
+}
+
+export interface SetupSecretStorageResult {
+  status: "not_supplied" | "stored" | "plaintext_env_fallback";
+  key: string | null;
+  storage: "win32_dpapi_current_user" | "env_file" | "unavailable";
+  os_protected: boolean;
+  used_for_authority: false;
+  evidence_source: readonly ("CONFIG" | "EXTERNAL_EVIDENCE")[];
+  detail: string;
 }
 
 export interface SetupResult {
@@ -48,6 +71,9 @@ export interface SetupResult {
   backup_path?: string;
   config: BlueTanukiSetupConfig;
   env_keys: string[];
+  secret_storage: {
+    llm_api_key: SetupSecretStorageResult;
+  };
   doctor?: DoctorReport;
 }
 
@@ -341,6 +367,72 @@ async function ensureRuntimeDirs(config: BlueTanukiSetupConfig): Promise<void> {
   await fs.mkdir(config.paths.audit_dir, { recursive: true });
 }
 
+function protectSetupLlmApiKey(
+  config: BlueTanukiSetupConfig,
+  outputPath: string,
+  env: NodeJS.ProcessEnv,
+  opts: SetupSecretStorageOptions = {},
+): SetupSecretStorageResult {
+  const key = llmApiKeyForProvider(config.llm.provider);
+  const plaintext =
+    config.llm.api_key ??
+    (config.llm.api_key_env ? env[config.llm.api_key_env] : undefined);
+
+  if (!key || !plaintext) {
+    return {
+      status: "not_supplied",
+      key: key ?? null,
+      storage: "unavailable",
+      os_protected: false,
+      used_for_authority: false,
+      evidence_source: ["CONFIG"],
+      detail: "No LLM API key was supplied during setup.",
+    };
+  }
+
+  const platform = opts.platform ?? process.platform;
+  if (platform !== "win32") {
+    return {
+      status: "plaintext_env_fallback",
+      key,
+      storage: "env_file",
+      os_protected: false,
+      used_for_authority: false,
+      evidence_source: ["CONFIG"],
+      detail: "OS-protected LLM secret storage is available only on Windows in this release.",
+    };
+  }
+
+  let stored: LlmSecretStoreResult;
+  try {
+    stored = storeLlmApiKeySecret(key, plaintext, {
+      envFilePath: outputPath,
+      env,
+      platform,
+      protector: opts.protector,
+    });
+  } catch (error) {
+    throw new Error(
+      `Windows LLM secret storage failed; refusing to write plaintext ${key}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
+  delete config.llm.api_key;
+  delete config.llm.api_key_env;
+  config.llm.api_key_ref = stored.ref;
+  return {
+    status: "stored",
+    key,
+    storage: stored.storage,
+    os_protected: true,
+    used_for_authority: false,
+    evidence_source: ["CONFIG", "EXTERNAL_EVIDENCE"],
+    detail: `${key} stored via ${secretRefKey(key)} using Windows DPAPI CurrentUser.`,
+  };
+}
+
 export async function runSetupCommand(
   args: string[] = process.argv.slice(2),
   io: SetupCommandIO = {},
@@ -360,6 +452,12 @@ export async function runSetupCommand(
 
   await ensureWritableTarget(outputPath, opts.force === true);
   await ensureRuntimeDirs(config);
+  const secretStorage = protectSetupLlmApiKey(
+    config,
+    outputPath,
+    env,
+    io.secret_storage,
+  );
   const envFile = renderSetupEnvFile(config, { source_env: env });
   const writeResult = await writeEnvFileAtomic(outputPath, envFile, {
     mode: 0o600,
@@ -380,6 +478,9 @@ export async function runSetupCommand(
     backup_path: writeResult.backup_path,
     config,
     env_keys: Object.keys(setupEnv).sort(),
+    secret_storage: {
+      llm_api_key: secretStorage,
+    },
     doctor,
   };
 }
@@ -391,6 +492,7 @@ function resultJson(result: SetupResult): string {
       backup_path: result.backup_path,
       provider: result.config.llm.provider,
       env_keys: result.env_keys,
+      secret_storage: result.secret_storage,
       doctor_exit_code: result.doctor?.exit_code,
       doctor_ok: result.doctor?.ok,
     },
@@ -416,6 +518,10 @@ export async function runSetupCli(
         writeLine(stdout, `previous env backed up to ${result.backup_path}`);
       }
       writeLine(stdout, `provider=${result.config.llm.provider}`);
+      writeLine(
+        stdout,
+        `llm_secret_storage=${result.secret_storage.llm_api_key.status}`,
+      );
       writeLine(stdout, "Use this file with --env-file or BLUE_TANUKI_ENV_FILE.");
       if (result.doctor) {
         writeLine(stdout);

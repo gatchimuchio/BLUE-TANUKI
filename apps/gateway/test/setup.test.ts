@@ -8,6 +8,15 @@ import {
   runSetupCommand,
 } from "../src/setup.js";
 
+const fakeSecretProtector = {
+  protect: (plaintext: string) => Buffer.from(`protected:${plaintext}`, "utf8").toString("base64url"),
+  unprotect: (protectedValue: string) => {
+    const decoded = Buffer.from(protectedValue, "base64url").toString("utf8");
+    if (!decoded.startsWith("protected:")) throw new Error("bad test secret");
+    return decoded.slice("protected:".length);
+  },
+};
+
 describe("setup CLI", () => {
   it("parses non-interactive provider options", () => {
     const opts = parseSetupArgs([
@@ -78,6 +87,139 @@ describe("setup CLI", () => {
       await expect(fs.stat(path.join(dir, "data", "files"))).resolves.toBeTruthy();
       await expect(fs.stat(path.join(dir, "data", "sessions"))).resolves.toBeTruthy();
       await expect(fs.stat(path.join(dir, "data", "audit"))).resolves.toBeTruthy();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stores first-run Windows LLM API keys as secret refs", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-setup-secret-"));
+    try {
+      const output = path.join(dir, "blue-tanuki.env");
+      const result = await runSetupCommand(
+        [
+          "--yes",
+          "--no-doctor",
+          "--output",
+          output,
+          "--base-dir",
+          path.join(dir, "data"),
+          "--provider",
+          "openrouter",
+          "--model",
+          "openrouter/auto",
+          "--api-key",
+          "openrouter-secret",
+        ],
+        {
+          cwd: dir,
+          env: {},
+          secret_storage: {
+            platform: "win32",
+            protector: fakeSecretProtector,
+          },
+        },
+      );
+
+      expect(result.secret_storage.llm_api_key).toMatchObject({
+        status: "stored",
+        key: "OPENROUTER_API_KEY",
+        storage: "win32_dpapi_current_user",
+        os_protected: true,
+        used_for_authority: false,
+      });
+      expect(result.env_keys).toContain("OPENROUTER_API_KEY_REF");
+      expect(result.env_keys).not.toContain("OPENROUTER_API_KEY");
+
+      const raw = await fs.readFile(output, "utf8");
+      expect(raw).toContain("LLM_BACKEND=openrouter");
+      expect(raw).toContain("OPENROUTER_MODEL=openrouter/auto");
+      expect(raw).toContain("OPENROUTER_API_KEY_REF=win32-dpapi-current-user:file:");
+      expect(raw).not.toContain("OPENROUTER_API_KEY=openrouter-secret");
+      expect(raw).not.toContain("openrouter-secret");
+
+      const secretRaw = await fs.readFile(path.join(dir, "secrets", "openrouter_api_key.dpapi"), "utf8");
+      expect(secretRaw).not.toContain("openrouter-secret");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stores first-run Windows api-key-env material as a secret ref", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-setup-env-secret-"));
+    try {
+      const output = path.join(dir, "blue-tanuki.env");
+      const result = await runSetupCommand(
+        [
+          "--yes",
+          "--no-doctor",
+          "--output",
+          output,
+          "--base-dir",
+          path.join(dir, "data"),
+          "--provider",
+          "openrouter",
+          "--model",
+          "openrouter/auto",
+          "--api-key-env",
+          "TEST_OPENROUTER_KEY",
+        ],
+        {
+          cwd: dir,
+          env: { TEST_OPENROUTER_KEY: "openrouter-env-secret" },
+          secret_storage: {
+            platform: "win32",
+            protector: fakeSecretProtector,
+          },
+        },
+      );
+
+      expect(result.secret_storage.llm_api_key.status).toBe("stored");
+      const raw = await fs.readFile(output, "utf8");
+      expect(raw).toContain("OPENROUTER_API_KEY_REF=win32-dpapi-current-user:file:");
+      expect(raw).not.toContain("OPENROUTER_API_KEY=openrouter-env-secret");
+      expect(raw).not.toContain("openrouter-env-secret");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed instead of writing plaintext when Windows setup secret storage fails", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-setup-secret-fail-"));
+    try {
+      const output = path.join(dir, "blue-tanuki.env");
+      await expect(
+        runSetupCommand(
+          [
+            "--yes",
+            "--no-doctor",
+            "--output",
+            output,
+            "--base-dir",
+            path.join(dir, "data"),
+            "--provider",
+            "openrouter",
+            "--model",
+            "openrouter/auto",
+            "--api-key",
+            "openrouter-secret",
+          ],
+          {
+            cwd: dir,
+            env: {},
+            secret_storage: {
+              platform: "win32",
+              protector: {
+                protect: () => {
+                  throw new Error("protector unavailable");
+                },
+                unprotect: (value: string) => value,
+              },
+            },
+          },
+        ),
+      ).rejects.toThrow(/refusing to write plaintext OPENROUTER_API_KEY/);
+      await expect(fs.readFile(output, "utf8")).rejects.toThrow();
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

@@ -151,6 +151,7 @@ export async function runInstallerCli(args = process.argv.slice(2)): Promise<voi
         env_file: result.setup.output_path,
         backup_path: result.setup.backup_path,
         provider: result.setup.config.llm.provider,
+        llm_secret_storage: result.setup.secret_storage.llm_api_key.status,
         doctor_ok: result.doctor?.ok,
         settings_url: result.settings_url,
         serve_started: result.serve_started,
@@ -161,6 +162,7 @@ export async function runInstallerCli(args = process.argv.slice(2)): Promise<voi
     console.log(`blue-tanuki guided installer wrote ${result.setup.output_path}`);
     if (result.setup.backup_path) console.log(`previous env backed up to ${result.setup.backup_path}`);
     console.log(`provider=${result.setup.config.llm.provider}`);
+    console.log(`llm_secret_storage=${result.setup.secret_storage.llm_api_key.status}`);
     console.log(`settings=${result.settings_url}`);
     console.log(`serve_started=${result.serve_started}`);
     console.log(`next_action=${result.next_action}`);

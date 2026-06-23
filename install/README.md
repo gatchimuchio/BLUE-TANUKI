@@ -178,10 +178,11 @@ It is a developer/source guided first-run accelerator, not the normal Windows
 user install path and not a verified 5-minute setup guarantee.
 
 Use the Control Center Settings page and the `Verify LLM` action before saving
-LLM provider changes. On Windows, settings-saved LLM API keys are stored as
-DPAPI CurrentUser secret references next to the env file; on other platforms
-they remain env-file material until a later keychain phase. API key values are
-not printed by the installer, doctor, runtime snapshot, or audit output.
+LLM provider changes. On Windows, first-run setup and settings-saved LLM API
+keys are stored as DPAPI CurrentUser secret references next to the env file; on
+other platforms they remain env-file material until a later keychain phase. API
+key values are not printed by the installer, doctor, runtime snapshot, or audit
+output.
 
 For a non-serving setup pass:
 
