@@ -1,5 +1,6 @@
 import { CONTROL_CENTER_SCRIPT } from "./control_center_script.js";
 import { CONTROL_CENTER_STYLE } from "./control_center_style.js";
+import { AOTANU_SPRITE_SPECS } from "./aotanu_mascot.js";
 
 export function renderControlCenterDocument(): string {
   return `<!doctype html>
@@ -14,17 +15,7 @@ ${CONTROL_CENTER_STYLE}    </style>
   <body data-active-screen="conversation">
     <header>
       <div class="brand">
-        <svg class="tanuki-mark" viewBox="0 0 120 120" aria-hidden="true">
-          <circle cx="60" cy="62" r="42" fill="#d6a35b" />
-          <path d="M25 40 L42 13 L55 39 Z" fill="#7a5330" />
-          <path d="M95 40 L78 13 L65 39 Z" fill="#7a5330" />
-          <ellipse cx="42" cy="58" rx="17" ry="14" fill="#2c2117" />
-          <ellipse cx="78" cy="58" rx="17" ry="14" fill="#2c2117" />
-          <circle cx="45" cy="56" r="5" fill="#f7f3ea" />
-          <circle cx="75" cy="56" r="5" fill="#f7f3ea" />
-          <ellipse cx="60" cy="73" rx="12" ry="9" fill="#2c2117" />
-          <path d="M48 88 Q60 98 72 88" fill="none" stroke="#2c2117" stroke-width="5" stroke-linecap="round" />
-        </svg>
+        <span class="brand-mascot" aria-hidden="true" style="background-image: url('${AOTANU_SPRITE_SPECS.idle.asset_path}')"></span>
         <div>
           <h1>BLUE-TANUKI Control Center</h1>
           <p class="muted">owner-facing resident AI operations console</p>

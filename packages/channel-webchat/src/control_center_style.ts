@@ -81,11 +81,18 @@ export const CONTROL_CENTER_STYLE = `      :root {
         min-width: 0;
       }
 
-      .tanuki-mark {
+      .brand-mascot {
         width: 38px;
         height: 38px;
         flex: 0 0 auto;
+        border: 1px solid rgba(10, 132, 255, 0.22);
+        border-radius: 8px;
+        background-color: #bdeaf4;
+        background-repeat: no-repeat;
+        background-position: 0 0;
+        background-size: 200% 200%;
         filter: drop-shadow(0 6px 10px rgba(15, 23, 42, 0.14));
+        image-rendering: pixelated;
       }
 
       .screen-tabs {

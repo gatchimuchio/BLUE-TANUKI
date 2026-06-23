@@ -496,6 +496,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("runtime-schedule-list");
       expect(html).toContain("authority-trace-list");
       expect(html).toContain("redactRuntimeValue");
+      expect(html).toContain("brand-mascot");
+      expect(html).not.toContain("tanuki-mark");
+      expect(html).not.toContain("<svg");
       expect(html).toContain("aotanu-mascot");
       expect(html).toContain("aotanu-sprite");
       expect(html).toContain("アオタヌ");
