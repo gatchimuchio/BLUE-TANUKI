@@ -5,6 +5,7 @@ import {
   validateChannelPromotion,
   type CompatibilityMatrix,
 } from "./channel_promotion_gate.ts";
+import { auditJapaneseBase } from "./japanese_base_gate.ts";
 
 export type GaBarStatus = "pass" | "fail" | "pending_owner_go";
 
@@ -17,6 +18,7 @@ export interface GaPromotionGateResult {
   status: "pre_go_ready" | "go_ready" | "blocked";
   owner_go: boolean;
   public_claim_allowed: boolean;
+  japanese_base_strict_ready: boolean;
   package_version: string;
   bar_results: Record<"A" | "B" | "C" | "D" | "E" | "F" | "G", GaBarStatus>;
   failures: string[];
@@ -44,10 +46,33 @@ interface RequiredNeedle {
   needles: readonly string[];
 }
 
+interface JapaneseBaseMigrationLedger {
+  schema_version?: unknown;
+  strict_ready?: unknown;
+  debts?: unknown;
+}
+
+interface JapaneseBaseIndex {
+  schema_version?: unknown;
+  base_language?: unknown;
+  normative_language_count?: unknown;
+}
+
+interface JapaneseBaseStrictAudit {
+  ok?: unknown;
+  migration_debts?: unknown;
+  failures?: unknown;
+}
+
 export const OWNER_DECISION_PATH = "docs/ga-owner-decision.json";
+export const JAPANESE_BASE_AUDIT_KEY = "__japanese_base_strict_audit__";
 
 export const GA_REQUIRED_FILES = [
   "AGENTS.md",
+  "規定/00_日本語基底規定.md",
+  "規定/正本索引.json",
+  "規定/局所例外台帳.json",
+  "規定/移行台帳.json",
   "README.md",
   "QUICKSTART.md",
   "CLAIM.md",
@@ -192,6 +217,9 @@ export function readGaPromotionFiles(root: string): Record<string, string> {
   if (existsSync(ownerDecision)) {
     files[OWNER_DECISION_PATH] = readFileSync(ownerDecision, "utf8");
   }
+  files[JAPANESE_BASE_AUDIT_KEY] = JSON.stringify(
+    auditJapaneseBase(root, { strict: true }),
+  );
   return files;
 }
 
@@ -231,6 +259,9 @@ export function validateGaPromotionGate(
   if (pkg?.scripts?.["validate:ga"] === undefined) {
     failures.push("package.json: missing validate:ga script");
   }
+  if (pkg?.scripts?.["validate:japanese-base"] === undefined) {
+    failures.push("package.json: missing validate:japanese-base script");
+  }
 
   const ownerDecision = parseOwnerDecision(files[OWNER_DECISION_PATH], failures);
   const ownerGo = ownerDecision?.decision === "GO";
@@ -248,6 +279,13 @@ export function validateGaPromotionGate(
     }
   }
 
+  const japaneseBaseStrictReady = validateJapaneseBaseBoundary(
+    files,
+    ownerGo || opts.require_owner_go === true,
+    failures,
+    warnings,
+  );
+
   validatePublicClaimBoundary(files, ownerGo, failures);
   validateChannelMatrix(files, failures, barFailures);
   validateLocalValidationScripts(files, failures);
@@ -260,16 +298,20 @@ export function validateGaPromotionGate(
     D: barFailures.D === 0 ? "pass" as const : "fail" as const,
     E: barFailures.E === 0 ? "pass" as const : "fail" as const,
     F: barFailures.F === 0 ? "pass" as const : "fail" as const,
-    G: ownerGo && failures.length === 0 ? "pass" as const : "pending_owner_go" as const,
+    G: ownerGo && japaneseBaseStrictReady && failures.length === 0
+      ? "pass" as const
+      : "pending_owner_go" as const,
   };
-  if (failures.some((failure) => failure.startsWith("public claim"))) {
+  if (failures.some((failure) =>
+    failure.startsWith("public claim") || failure.startsWith("japanese base strict boundary")
+  )) {
     barResults.G = "fail";
   }
 
   const allEvidencePass = Object.values(barResults)
     .filter((status, index) => index < 6)
     .every((status) => status === "pass");
-  const publicClaimAllowed = ownerGo && allEvidencePass && failures.length === 0;
+  const publicClaimAllowed = ownerGo && japaneseBaseStrictReady && allEvidencePass && failures.length === 0;
   const ok = failures.length === 0 && (ownerGo || !opts.require_owner_go);
 
   return {
@@ -277,11 +319,62 @@ export function validateGaPromotionGate(
     status: ok ? ownerGo ? "go_ready" : "pre_go_ready" : "blocked",
     owner_go: ownerGo,
     public_claim_allowed: publicClaimAllowed,
+    japanese_base_strict_ready: japaneseBaseStrictReady,
     package_version: packageVersion,
     bar_results: barResults,
     failures,
     warnings,
   };
+}
+
+function validateJapaneseBaseBoundary(
+  files: Record<string, string>,
+  requireStrict: boolean,
+  failures: string[],
+  warnings: string[],
+): boolean {
+  let index: JapaneseBaseIndex;
+  let migration: JapaneseBaseMigrationLedger;
+  let strictAudit: JapaneseBaseStrictAudit;
+  try {
+    index = JSON.parse(files["規定/正本索引.json"] ?? "{}") as JapaneseBaseIndex;
+  } catch (error) {
+    failures.push(`規定/正本索引.json: invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  try {
+    migration = JSON.parse(files["規定/移行台帳.json"] ?? "{}") as JapaneseBaseMigrationLedger;
+  } catch (error) {
+    failures.push(`規定/移行台帳.json: invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  try {
+    strictAudit = JSON.parse(files[JAPANESE_BASE_AUDIT_KEY] ?? "{}") as JapaneseBaseStrictAudit;
+  } catch (error) {
+    failures.push(`japanese base strict audit: invalid result: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+
+  if (index.schema_version !== 1 || index.base_language !== "日本語" || index.normative_language_count !== 1) {
+    failures.push("規定/正本索引.json: Japanese base canonical state is invalid");
+  }
+  if (migration.schema_version !== 1 || !Array.isArray(migration.debts)) {
+    failures.push("規定/移行台帳.json: migration ledger is invalid");
+    return false;
+  }
+
+  const ledgerReady = migration.strict_ready === true && migration.debts.length === 0;
+  const liveReady = strictAudit.ok === true && strictAudit.migration_debts === 0;
+  const ready = ledgerReady && liveReady;
+  if (!ready) {
+    const detail = `ledger_debts=${migration.debts.length} live_debts=${String(strictAudit.migration_debts ?? "unknown")}`;
+    if (requireStrict) {
+      failures.push(`japanese base strict boundary: strict closure is required for actual GA promotion (${detail})`);
+    } else {
+      warnings.push(`japanese base strict boundary remains pending (${detail})`);
+    }
+  }
+  return ready;
 }
 
 function parsePackage(text: string | undefined, failures: string[]): PackageJson | undefined {
@@ -372,6 +465,7 @@ function validateLocalValidationScripts(files: Record<string, string>, failures:
     "build",
     "test",
     "docs:check",
+    "validate:japanese-base",
     "validate:repo-health",
     "validate:packaging",
     "validate:channels",
@@ -431,7 +525,8 @@ function printText(result: GaPromotionGateResult): void {
   console.log(
     `[ga] ${status} status=${result.status} version=${result.package_version} ` +
       `owner_go=${result.owner_go ? "GO" : "pending"} ` +
-      `public_claim_allowed=${result.public_claim_allowed}`,
+      `public_claim_allowed=${result.public_claim_allowed} ` +
+      `japanese_base_strict_ready=${result.japanese_base_strict_ready}`,
   );
   console.log(
     `  bars: A=${result.bar_results.A} B=${result.bar_results.B} C=${result.bar_results.C} ` +

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   GA_REQUIRED_FILES,
+  JAPANESE_BASE_AUDIT_KEY,
   OWNER_DECISION_PATH,
   readGaPromotionFiles,
   validateGaPromotionGate,
@@ -36,6 +37,7 @@ describe("GA promotion gate", () => {
     expect(result.status).toBe("pre_go_ready");
     expect(result.owner_go).toBe(false);
     expect(result.public_claim_allowed).toBe(false);
+    expect(result.japanese_base_strict_ready).toBe(false);
     expect(result.package_version).toBe("1.0.0-rc.1");
     expect(result.bar_results).toMatchObject({
       A: "pass",
@@ -105,12 +107,47 @@ describe("GA promotion gate", () => {
       technical_validation_reviewed: true,
       public_claim_authorized: true,
     });
+    const migration = JSON.parse(files["規定/移行台帳.json"] ?? "{}") as Record<string, unknown>;
+    files["規定/移行台帳.json"] = JSON.stringify({
+      ...migration,
+      strict_ready: true,
+      debts: [],
+    });
+    files[JAPANESE_BASE_AUDIT_KEY] = JSON.stringify({
+      ok: true,
+      migration_debts: 0,
+      failures: [],
+    });
 
     const result = validateGaPromotionGate(files, { require_owner_go: true });
     expect(result.ok).toBe(true);
     expect(result.status).toBe("go_ready");
     expect(result.owner_go).toBe(true);
     expect(result.public_claim_allowed).toBe(true);
+    expect(result.japanese_base_strict_ready).toBe(true);
     expect(result.bar_results.G).toBe("pass");
+  });
+
+  it("日本語基底の移行負債が残る owner GO を拒否する", () => {
+    const files = withMutation(
+      currentFiles(),
+      "package.json",
+      (text) => text.replace('"version": "1.0.0-rc.1"', '"version": "1.0.0"'),
+    );
+    files[OWNER_DECISION_PATH] = JSON.stringify({
+      schema_version: 1,
+      decision: "GO",
+      version: "1.0.0",
+      decided_at: "2026-05-19T00:00:00.000Z",
+      ga_bar_reviewed: true,
+      technical_validation_reviewed: true,
+      public_claim_authorized: true,
+    });
+
+    const result = validateGaPromotionGate(files, { require_owner_go: true });
+    expect(result.ok).toBe(false);
+    expect(result.public_claim_allowed).toBe(false);
+    expect(result.bar_results.G).toBe("fail");
+    expect(result.failures.join("\n")).toContain("japanese base strict boundary");
   });
 });

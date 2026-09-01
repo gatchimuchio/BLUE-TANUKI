@@ -1,250 +1,108 @@
 # 🦝 BLUE-TANUKI
 
-A local-resident AI control plane where **authority lives in HDS-BRAIN, not the LLM**.
+BLUE-TANUKI は、**LLM ではなく HDS-BRAIN に判断・権限を置く**、owner 運用の局所常駐 AI 制御面である。
 
-BLUE-TANUKI treats LLMs, tools, cron, and channels as *downstream devices*. The HDS-BRAIN core decides actor, process, memory, approval, and execution upstream — and it never calls an LLM to do it. Every authority decision is structured, inspectable, and written to a hash-chain audit.
+LLM、ツール、cron、チャネル、plugin、memory、history、UI は下流装置として動く。HDS-BRAIN は actor、process、memory、approval、execution の可否を上流で構造的に決め、その判断経路を hash-chain audit へ記録する。HDS-BRAIN 自身は判断のために LLM を呼ばない。
 
-Current state: **1.0.0-rc.1 technical release candidate**. GA and public complete-superiority claims remain blocked until the GA Bar passes and the owner gives explicit GO.
+現在版は **`1.0.0-rc.1` technical release candidate**。P13 は `PENDING_OWNER_GO` であり、GA と外部向け優位主張は `public_claim_allowed=false` のまま閉じている。支援範囲は [docs/SUPPORT_BOUNDARY.md](docs/SUPPORT_BOUNDARY.md)、残る制限は [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) を参照する。
 
-P12 fixes the RC support boundary: see [docs/SUPPORT_BOUNDARY.md](docs/SUPPORT_BOUNDARY.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) before treating any surface as supported or release-claimable.
+## 日本語基底正本
 
-Development strategy: GUI Shell is a reference LLM-readable responsibility substrate, not a dependency to modify. BLUE-TANUKI is the target resident control plane extended under that responsibility method: LLM implementation agents may build bounded changes, but HDS-BRAIN and the human owner remain the authority boundaries.
+このリポジトリは日本語を唯一の基底規定言語とする。多言語は、外部 API・構文・固定識別子・固有名・原文証拠など実務上やむを得ない箇所だけに局所化する。既存の英語資産は例外ではなく、監査可能な移行負債として扱う。
 
----
+- [規定/README.md](規定/README.md) — 正本の読み順と成立状態
+- [規定/00_日本語基底規定.md](規定/00_日本語基底規定.md) — 適用範囲、成立順序、例外、監査
+- [規定/01_基底語彙.md](規定/01_基底語彙.md) — 日本語概念と既存識別子の接続
+- [規定/02_資産分類と局所例外.md](規定/02_資産分類と局所例外.md) — 全資産分類と例外条件
 
-## TL;DR
+```bash
+pnpm validate:japanese-base
+pnpm validate:japanese-base -- --strict
+```
 
-1. **HDS-BRAIN owns authority.** LLMs, tools, cron, and channels are downstream devices. / 権限は HDS-BRAIN に。LLM・ツール・cron・チャネルは下流。
-2. **No black box in the HDS authority path.** Actor / process / memory / approval / execution / audit are structured and inspectable. / 権限経路にブラックボックスなし。すべて構造化・検査可能。
-3. **Safety first, UX second.** Full access is allowed for owner-operated local work, but final-review operations remain gated. / 安全性が第一、UX は第二。最終レビュー操作はゲートのまま。
+通常 gate は正本・例外・移行台帳の整合を確認する。strict gate は既存移行負債が残る間は失敗する。通常 gate の合格を全資産日本語化や GA readiness と読み替えない。
 
----
+## 中核境界
 
-## Quick Start
+1. **判断・権限は HDS-BRAIN にある。** LLM、tool、cron、channel は下流である。
+2. **権限経路を black box にしない。** actor / process / memory / approval / execution / audit は構造化し検査可能にする。
+3. **安全と堅牢性を先に置く。** owner-operated full access でも final-review operation は迂回できない。
+4. **記憶と履歴は証拠であり権限ではない。** `used_for_authority=false` と `complete_history_used_for_authority=false` を保つ。
+5. **不明は自動許可しない。** fail-closed / `SUSPEND` で再監査へ戻す。
 
-Choose the single-file installer for your OS from the Release assets:
+## 通常利用者向けインストール
 
-| OS | Run this |
-| --- | --- |
+GitHub Release から対象 OS の single-file installer を取得する。
+
+| OS | 実行物 |
+|---|---|
 | Windows | `BlueTanukiSetup-<version>-windows-x64.cmd` |
 | macOS | `BlueTanukiSetup-<version>-macos-<arch>.command` |
 | Linux | `BlueTanukiSetup-<version>-linux-x64.run` |
 
-Normal users on Windows, macOS, and Linux should not run source builds and
-should not manually extract a nested payload archive. Download the single-file
-installer package for your OS and run it. The installer verifies its embedded
-payload, extracts it internally, installs BLUE-TANUKI, launches the resident
-app, and opens `http://127.0.0.1:8787/app`. It does not require user-installed
-Node.js, Corepack, pnpm, Git, or source-build troubleshooting.
+installer は埋込み payload を検証・展開して BLUE-TANUKI を導入し、resident app と `http://127.0.0.1:8787/app` を開く。通常利用者が Node.js、Corepack、pnpm、Git、source build を準備することは想定しない。
 
-`INSTALL.sh`, `INSTALL_MACOS.command`, and `INSTALL_LINUX.sh` are source-root
-helpers only. They use a verified local packaged installer under `release/` or
-download the matching GitHub Release asset. If no verified installer is
-available, they fail fast with wrong-asset guidance. Developer source build is
-explicit only with `--build-from-source`.
+文書検証器が参照する固定区分名は、通常利用者=`normal user`、単一ファイル配布=`single-file`、補助・復旧用 archive=`payload/recovery` である。これらの英語ラベルは installer 契約との照合用であり、説明上の意味はこの日本語文から定める。
 
-### Windows users
+`INSTALL.sh`、`INSTALL_MACOS.command`、`INSTALL_LINUX.sh`、`INSTALL_WINDOWS.cmd` は source-root helper である。検証済み release artifact がなければ誤った asset の案内とともに停止し、暗黙の source build は行わない。Windows の `install/windows/product/BlueTanukiSetup.cmd` は packaged payload 内の entrypoint であり、source tree から直接実行しない。
 
-Do not run `install/windows/product/BlueTanukiSetup.cmd` directly from a source
-tree. That script is the payload entrypoint inside the packaged installer zip.
+install-only:
 
-Path A: single-file installer package
-
-1. Get `BlueTanukiSetup-<version>-windows-x64.cmd` from the GitHub Release.
-2. Double-click it.
-3. BLUE-TANUKI installs, starts, and opens the Control Center.
-
-Normal Windows users should not run source builds. Download
-`BlueTanukiSetup-<version>-windows-x64.cmd` and run it. The older
-`blue-tanuki-<version>-windows-x64-installer.zip` artifact remains available as
-the payload/recovery package, but normal users should not need to extract it
-manually. The installed launcher opens:
-
-```text
-http://127.0.0.1:8787/app
-```
-
-`INSTALL_WINDOWS.cmd` uses an existing `release/windows/*windows-x64-installer.zip`
-when present. If no installer zip exists in a source tree/source zip, it
-attempts to download and verify the matching GitHub Release installer asset. If
-that cannot be verified, it fails fast with wrong-asset guidance instead of
-building from source. Developer source build is explicit only:
-
-```powershell
-.\INSTALL_WINDOWS.cmd -BuildFromSource
-```
-
-### macOS users
-
-1. Get `BlueTanukiSetup-<version>-macos-<arch>.command` from the GitHub Release.
-2. Run it.
-3. BLUE-TANUKI installs, starts, and opens the Control Center.
-4. Later, launch BLUE-TANUKI from `~/Applications/BlueTanuki.command` or
-   `~/.local/bin/blue-tanuki`.
-
-Normal macOS users should not run source builds. Download
-`BlueTanukiSetup-<version>-macos-<arch>.command` and run it. The
-`blue-tanuki-<version>-macos-<arch>-installer.tar.gz` artifact is the
-payload/recovery package.
-
-For install-only behavior:
-
-```
+```bash
 LAUNCH_AFTER_INSTALL=0 sh ./BlueTanukiSetup.command
-```
-
-### Linux users
-
-1. Get `BlueTanukiSetup-<version>-linux-x64.run` from the GitHub Release.
-2. Run it with `sh ./BlueTanukiSetup-<version>-linux-x64.run` or mark it
-   executable and run it.
-3. BLUE-TANUKI installs, starts, and opens the Control Center.
-4. Later, launch BLUE-TANUKI from the desktop launcher where supported or
-   `~/.local/bin/blue-tanuki`.
-
-Normal Linux users should not run source builds. Download
-`BlueTanukiSetup-<version>-linux-x64.run` and run it. The
-`blue-tanuki-<version>-linux-x64-installer.tar.gz` artifact is the
-payload/recovery package.
-
-For install-only behavior:
-
-```
 LAUNCH_AFTER_INSTALL=0 sh ./BlueTanukiSetup.sh
 ```
 
-### Build installer packages
+詳細は [docs/INSTALLER_GUIDE.md](docs/INSTALLER_GUIDE.md)、[install/README.md](install/README.md)、[docs/RELEASE_HARDENING.md](docs/RELEASE_HARDENING.md) を参照する。現在の installer は bundled runtime を含む unsigned portable package であり、signed native installer ではない。
 
-For developers preparing release artifacts:
+## 開発環境から起動
 
-```
-pnpm build
-pnpm package:windows
-pnpm package:windows:verify
-pnpm package:linux
-pnpm package:linux:verify
-pnpm package:macos
-pnpm package:macos:verify
-pnpm package:installers
-pnpm package:installers:verify
-pnpm validate:release-hardening
-```
-
-This produces unsigned payload/recovery archives plus single-file normal user
-installers and sidecars under `release/windows/`, `release/linux/`, and
-`release/macos/`. Each single-file installer includes a bundled Node runtime
-through its verified payload, opens the Control Center, and preserves user data
-under the platform user data location. These are not signed native installer
-packages yet.
-
-See [docs/WINDOWS_INSTALLER_GUIDE.md](docs/WINDOWS_INSTALLER_GUIDE.md).
-See [docs/RELEASE_HARDENING.md](docs/RELEASE_HARDENING.md) for the
-GitHub Actions absence, signing-prerequisite, and manual-update hardening gate.
-
-### Source/dev run
-
-```
-pnpm install
+```bash
+corepack prepare pnpm@9.12.0 --activate
+pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm build
 ```
 
-### 2. Set the inbound tokens
+最小の WebChat 設定:
 
-```
+```bash
 export WEBCHAT_TOKEN="replace-with-32chars-inbound-token"
 export WEBCHAT_RESUME_TOKEN="replace-with-32chars-resume-token"
 export LLM_BACKEND="stub"
-```
-
-### 3. Serve
-
-```
 pnpm gateway:serve
 ```
 
-Open:
+`http://127.0.0.1:8787/` を開く。設定、first-run、恒久利用は [QUICKSTART.md](QUICKSTART.md)、[docs/FIRST_RUN_CHECKLIST.md](docs/FIRST_RUN_CHECKLIST.md)、[docs/PERMANENT_USE_CHECKLIST.md](docs/PERMANENT_USE_CHECKLIST.md) を参照する。
 
-```
-http://127.0.0.1:8787/
-```
+## RC surface
 
-That's it. The WebChat Control Center, runtime snapshot, approval gate, and audit chain all run locally through the gateway.
+- WebChat Control Center (`/`, `/app`)
+- Home、Conversation、Tasks、Approvals、Activity/Audit、Memory、Skills、Channels、Doctor、Settings、Developer/Evidence の owner 操作面
+- runtime snapshot (`/runtime/snapshot`)
+- standalone HDS-BRAIN authority core
+- L1 / L2 / L3 `ApprovalLevel` と non-bypassable final-review を持つ Approval Gate
+- hash-chain audit、output audit、complete history、Runtime Invariants evidence
+- Writing / Daily / Developer Operator
+- WebChat / Telegram first-party channel
+- Slack / Discord / Teams / LINE `first-party-preview`
+- capability / approval / preview / audit 境界下の GitHub / Google / browser tool
+- optional OpenRouter provider と optional Composio connector
+- Windows / macOS / Linux portable installer と update / rollback 文書
 
-See [QUICKSTART.md](QUICKSTART.md).
+## 明示的境界
 
----
+- WhatsApp は `reserved-third-party`、`core_supported=false` で first-party core ではない。
+- preview adapter / tool は owner-run evidence なしに first-party へ昇格しない。
+- Voice / Mobile / rich Canvas は現在の GA bar 外である。
+- public third-party Skill registry は意図的に含めない。
+- OpenRouter と Composio は optional downstream adapter であり、権限源ではない。
+- `pnpm validate:ga` と owner GO が許可するまで GA 公開文言を有効化しない。
 
-## Release Candidate Surface
+## Runtime Invariants
 
-* **WebChat Control Center** at `/` and `/app`
-* **Owner-operation GUI screens** for Home, Conversation / WebChat, Tasks, Approvals, Activity / Audit, Memory, Skills, Channels, Doctor, Settings, and Developer / Evidence
-* **Runtime snapshot** at `/runtime/snapshot`
-* **HDS-BRAIN** standalone authority core
-* **Approval Gate** with L1/L2/L3 `ApprovalLevel` and non-bypassable final-review boundary
-* **Hash-chain audit**, output audit, complete history, and Runtime Invariants evidence
-* **Writing / Daily / Developer Operator** first-party surfaces
-* **WebChat / Telegram** first-party channels
-* **Slack / Discord / Teams / LINE** first-party-preview adapters gated by owner evidence
-* **Daily Brief** scheduled-message smoke via internal cron
-* **GitHub / Google / browser automation** downstream tools behind capability, approval, preview, and audit boundaries
-* **OpenRouter** optional LLM provider adapter, separate from native/direct providers
-* **Composio** optional live-gated external tool connector behind dry-run default, allowlist, capability, approval, and audit boundaries
-* **Unsigned Windows installer package**, portable installer / resident app / update-rollback documentation, and validation gates
-
-## Explicit Boundaries
-
-* **WhatsApp** remains `reserved-third-party` and is not first-party core.
-* Preview adapters and tools are not promoted to first-party without owner-run evidence.
-* **Voice / Mobile / rich Canvas** are outside the current GA bar.
-* **Public third-party Skill registry** is intentionally excluded.
-* External GA/public superiority claims remain blocked until `pnpm validate:ga` and owner GO allow them.
-* OpenRouter and Composio are optional convenience adapters, not mandatory infrastructure or authority sources.
-* Support scope and known limitations are fixed in [docs/SUPPORT_BOUNDARY.md](docs/SUPPORT_BOUNDARY.md) and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
-
----
-
-## Channels
-
-### Telegram
-
-```
-export TELEGRAM_BOT_TOKEN="123456:telegram-bot-token"
-pnpm gateway:serve
-```
-
-### Slack / Discord
-
-Slack and Discord adapters fall back silently when credentials are absent, so the gateway boots without them. Provide the channel tokens to activate.
-
----
-
-## Daily Brief Smoke
-
-```
-export BLUE_TANUKI_DAILY_BRIEF_ENABLED=1
-export BLUE_TANUKI_DAILY_BRIEF_CHANNEL=telegram
-export BLUE_TANUKI_DAILY_BRIEF_TARGET="<telegram-chat-id>"
-export BLUE_TANUKI_DAILY_BRIEF_TIME="07:00"
-export BLUE_TANUKI_DAILY_BRIEF_CONTENT="Daily Brief: scheduled smoke from BLUE-TANUKI"
-pnpm gateway:serve
-```
-
-Daily Brief is a scheduled `channel_send` smoke. Google read/write integrations remain bounded downstream tools with credential readiness, Approval Gate, and audit requirements.
-
----
-
-## Runtime Snapshot
-
-```
-curl -H "Authorization: Bearer $WEBCHAT_TOKEN" \
-  http://127.0.0.1:8787/runtime/snapshot
-```
-
-Expected invariants:
-
-```
+```json
 {
   "hds_calls_llm": false,
   "process_policy_enforced": true,
@@ -255,29 +113,25 @@ Expected invariants:
 }
 ```
 
----
+snapshot:
 
-## How It Works
-
-HDS-BRAIN sits upstream of every executor. Inbound traffic never reaches an LLM or a tool until the authority core has decided it should.
-
+```bash
+curl -H "Authorization: Bearer $WEBCHAT_TOKEN" \
+  http://127.0.0.1:8787/runtime/snapshot
 ```
-Inbound channels / cron / webhook-like sources
+
+## 実行関係
+
+```text
+Inbound channel / cron / webhook-like source
         |
         v
-     HDS-BRAIN  <-- upstream authority (never calls an LLM)
-        |  ActorRef
-        |  HDSProcessDefinition
-        |  Frame
-        |  deterministic MemoryTrace
-        |  Model / Policy
-        |  Commit
-        |  process authority enforcement
-        |  process execution-policy enforcement
-        |  Approval Gate (final-review boundary)
+     HDS-BRAIN  <- 上流判断・権限。LLM を呼ばない
+        |  actor / process / frame / policy / commit
+        |  Approval Gate / final review
         v
-     Executor   <-- downstream devices
-        |  LLM / tools / channel_send
+     Executor   <- 下流装置
+        |  LLM / tool / channel_send
         v
    ExecutorFeedback
         |
@@ -285,73 +139,61 @@ Inbound channels / cron / webhook-like sources
    hash-chain audit
 ```
 
-The authority core never consumes downstream session history to make decisions. Memory is recorded with `used_for_authority=false`, and external metadata can never escalate authority.
+下流 session history を authority decision に使わない。external metadata は権限を昇格できない。
 
----
+## Package map
 
-## Package Map
-
-| Package | Role |
-| --- | --- |
-| `@blue-tanuki/protocol` | HDS-BRAIN ↔ Executor protocol |
-| `@blue-tanuki/hds-brain` | Upstream authority core |
-| `@blue-tanuki/core` | Executor, LLM backend, tools, sessions |
-| `@blue-tanuki/channel-base` | Channel interfaces / router / dispatcher |
-| `@blue-tanuki/channel-webchat` | Local Control Center + HTTP/WS channel |
+| Package | 責任 |
+|---|---|
+| `@blue-tanuki/protocol` | HDS-BRAIN と Executor の protocol |
+| `@blue-tanuki/hds-brain` | standalone 上流判断・権限 core |
+| `@blue-tanuki/core` | Executor、LLM backend、tool、session |
+| `@blue-tanuki/channel-base` | channel interface / router / dispatcher |
+| `@blue-tanuki/channel-webchat` | local Control Center と HTTP/WS channel |
 | `@blue-tanuki/channel-telegram` | Telegram Bot API channel |
-| `@blue-tanuki/channel-slack` | Slack channel adapter |
-| `@blue-tanuki/channel-discord` | Discord channel adapter |
-| `@blue-tanuki/gateway` | Runtime wiring |
+| `@blue-tanuki/channel-slack` | preview Slack adapter |
+| `@blue-tanuki/channel-discord` | preview Discord adapter |
+| `@blue-tanuki/gateway` | runtime wiring |
 
----
+## 文書
 
-## Documents
+- [CLAIM.md](CLAIM.md) — product claim / non-claim 境界
+- [SECURITY.md](SECURITY.md) — authority と memory の security model
+- [AUDIT.md](AUDIT.md) — hash-chain audit と runtime snapshot
+- [CONFIG.md](CONFIG.md) — environment variables
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — 運用上の復旧
+- [docs/INDEX.md](docs/INDEX.md) — 文書索引
+- [docs/SUPPORT_BOUNDARY.md](docs/SUPPORT_BOUNDARY.md) — support / preview / reserved / not-shipped
+- [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) — RC 制限と evidence gap
+- [docs/CHANNEL_READINESS_MATRIX.md](docs/CHANNEL_READINESS_MATRIX.md) — channel 状態
+- [docs/CHANNEL_PROMOTION_GATE.md](docs/CHANNEL_PROMOTION_GATE.md) — preview 昇格 gate
+- [docs/CREDENTIAL_READINESS_MATRIX.md](docs/CREDENTIAL_READINESS_MATRIX.md) — credential 要件と safe skip
+- [docs/PLUGIN_REVIEW_GATE.md](docs/PLUGIN_REVIEW_GATE.md) — Layer B review gate
+- [docs/UPDATE_ROLLBACK_RUNBOOK.md](docs/UPDATE_ROLLBACK_RUNBOOK.md) — update / rollback / recovery
+- [docs/RELEASE_HARDENING.md](docs/RELEASE_HARDENING.md) — workflow 不在、signing、manual update gate
+- [docs/WINDOWS_INSTALLER_GUIDE.md](docs/WINDOWS_INSTALLER_GUIDE.md) — Windows installer
+- [docs/WINDOWS_FIRST_RUN.md](docs/WINDOWS_FIRST_RUN.md) — installed Windows first-run
+- [docs/WINDOWS_EVIDENCE_PACK.md](docs/WINDOWS_EVIDENCE_PACK.md) — Windows evidence markers
+- [docs/WINDOWS_PACKAGING_AUDIT.md](docs/WINDOWS_PACKAGING_AUDIT.md) — packaging evidence
+- [docs/WINDOWS_UNINSTALL.md](docs/WINDOWS_UNINSTALL.md) — uninstall / data preservation
+- [docs/v1.0-release-candidate.md](docs/v1.0-release-candidate.md) — RC 境界
+- [docs/v1.0-post-rc-closure-review.md](docs/v1.0-post-rc-closure-review.md) — post-RC 状態
+- [docs/v1.0-ga-promotion-review.md](docs/v1.0-ga-promotion-review.md) — GA pre-GO review
+- [docs/P13_OWNER_GO_READINESS.md](docs/P13_OWNER_GO_READINESS.md) — owner-GO 境界
+- [docs/v1.0-security-and-permanent-use-review.md](docs/v1.0-security-and-permanent-use-review.md) — security / permanent-use review
+- [docs/DEVELOPMENT_PRACTICE.md](docs/DEVELOPMENT_PRACTICE.md) — evidence discipline
+- [docs/LLM_EXTENSION_SURFACE.md](docs/LLM_EXTENSION_SURFACE.md) — LLM-safe extension
+- [docs/RESPONSIBILITY_SUBSTRATE_MAPPING.md](docs/RESPONSIBILITY_SUBSTRATE_MAPPING.md) — responsibility mapping
+- [docs/BLUE_TANUKI_AUTHORITY_MODEL.md](docs/BLUE_TANUKI_AUTHORITY_MODEL.md) — authority model
+- [docs/CONFORMANCE_TARGETS.md](docs/CONFORMANCE_TARGETS.md) — negative conformance targets
+- [docs/GUI_PRODUCT_SPEC.md](docs/GUI_PRODUCT_SPEC.md)、[docs/GUI_SCREEN_MAP.md](docs/GUI_SCREEN_MAP.md)、[docs/GUI_STATE_MODEL.md](docs/GUI_STATE_MODEL.md)、[docs/GUI_APPROVAL_UX.md](docs/GUI_APPROVAL_UX.md)、[docs/GUI_AUDIT_UX.md](docs/GUI_AUDIT_UX.md) — Control Center 仕様
 
-* [CLAIM.md](CLAIM.md) — product claim and non-claim boundary
-* [SECURITY.md](SECURITY.md) — authority and memory security model
-* [AUDIT.md](AUDIT.md) — hash-chain audit and runtime snapshot
-* [CONFIG.md](CONFIG.md) — environment variables
-* [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — operational fixes
-* [docs/INDEX.md](docs/INDEX.md) — full documentation index
-* [docs/FIRST_RUN_CHECKLIST.md](docs/FIRST_RUN_CHECKLIST.md) — first successful local operation
-* [docs/PERMANENT_USE_CHECKLIST.md](docs/PERMANENT_USE_CHECKLIST.md) — permanent owner operation
-* [docs/SUPPORT_BOUNDARY.md](docs/SUPPORT_BOUNDARY.md) — supported, preview, reserved, and not-shipped boundary
-* [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) — RC limitations and remaining evidence gaps
-* [docs/CHANNEL_READINESS_MATRIX.md](docs/CHANNEL_READINESS_MATRIX.md) — channel status and evidence
-* [docs/CHANNEL_PROMOTION_GATE.md](docs/CHANNEL_PROMOTION_GATE.md) — preview-to-first-party promotion gate
-* [docs/CREDENTIAL_READINESS_MATRIX.md](docs/CREDENTIAL_READINESS_MATRIX.md) — credential requirements and safe skips
-* [docs/PLUGIN_REVIEW_GATE.md](docs/PLUGIN_REVIEW_GATE.md) — Layer B review gate
-* [docs/UPDATE_ROLLBACK_RUNBOOK.md](docs/UPDATE_ROLLBACK_RUNBOOK.md) — update, rollback, and recovery path
-* [docs/RELEASE_HARDENING.md](docs/RELEASE_HARDENING.md) — GitHub Actions absence, signing, and updater release gate
-* [docs/WINDOWS_INSTALLER_GUIDE.md](docs/WINDOWS_INSTALLER_GUIDE.md) — unsigned Windows installer package
-* [docs/WINDOWS_FIRST_RUN.md](docs/WINDOWS_FIRST_RUN.md) — installed Windows first run
-* [docs/WINDOWS_EVIDENCE_PACK.md](docs/WINDOWS_EVIDENCE_PACK.md) — Windows installed-app evidence markers
-* [docs/WINDOWS_PACKAGING_AUDIT.md](docs/WINDOWS_PACKAGING_AUDIT.md) — Windows packaging evidence
-* [docs/WINDOWS_UNINSTALL.md](docs/WINDOWS_UNINSTALL.md) — Windows uninstall and data preservation
-* [docs/v1.0-release-candidate.md](docs/v1.0-release-candidate.md) — release-candidate boundary
-* [docs/v1.0-post-rc-closure-review.md](docs/v1.0-post-rc-closure-review.md) — post-RC closure status
-* [docs/v1.0-ga-promotion-review.md](docs/v1.0-ga-promotion-review.md) — GA promotion pre-GO review
-* [docs/P13_OWNER_GO_READINESS.md](docs/P13_OWNER_GO_READINESS.md) — P13 owner-GO release boundary
-* [docs/v1.0-security-and-permanent-use-review.md](docs/v1.0-security-and-permanent-use-review.md) — security and permanent-use review
-* [docs/DEVELOPMENT_PRACTICE.md](docs/DEVELOPMENT_PRACTICE.md) — development practice and evidence discipline
-* [docs/LLM_EXTENSION_SURFACE.md](docs/LLM_EXTENSION_SURFACE.md) — LLM-safe extension surface
-* [docs/RESPONSIBILITY_SUBSTRATE_MAPPING.md](docs/RESPONSIBILITY_SUBSTRATE_MAPPING.md) — GUI Shell responsibility mapping
-* [docs/BLUE_TANUKI_AUTHORITY_MODEL.md](docs/BLUE_TANUKI_AUTHORITY_MODEL.md) — authority model
-* [docs/CONFORMANCE_TARGETS.md](docs/CONFORMANCE_TARGETS.md) — negative conformance targets
-* [docs/GUI_PRODUCT_SPEC.md](docs/GUI_PRODUCT_SPEC.md) — Control Center product role
-* [docs/GUI_SCREEN_MAP.md](docs/GUI_SCREEN_MAP.md) — GUI screen inventory
-* [docs/GUI_STATE_MODEL.md](docs/GUI_STATE_MODEL.md) — GUI state and redaction model
-* [docs/GUI_APPROVAL_UX.md](docs/GUI_APPROVAL_UX.md) — approval UX boundary
-* [docs/GUI_AUDIT_UX.md](docs/GUI_AUDIT_UX.md) — audit UX boundary
+既存の非日本語 active docs は現在 `規定/移行台帳.json` の移行負債であり、英語であることを理由に現行日本語正本より優先しない。
 
----
+## Release boundary
 
-## Release Boundary
+source release archive は standalone binary ではない。OS 別 single-file installer は bundled runtime payload を持つ unsigned portable installer であり、signed MSI/EXE/DMG/DEB/RPM ではない。`pnpm validate:release-hardening` は GitHub Actions workflow の不在、local validation command、`manual_update_only` を確認し、signing credential と notarization/GPG evidence がない `--require-signing` を fail-closed する。release artifact は `.env`、audit/session data、secret-like backup を含めない。
 
-Release archives are source bundles, not standalone binaries. The OS-specific single-file installers are unsigned portable installer packages with bundled runtime payloads. They are not signed MSI/EXE/DMG/DEB/RPM artifacts yet. `pnpm validate:release-hardening` rejects GitHub Actions workflows, verifies the local release validation command set remains available, records `manual_update_only`, and fails closed under `--require-signing` until signing credentials and notarization/GPG evidence exist. Release artifacts intentionally exclude local `.env` files, audit/session data, and secret-like backups.
+## ライセンス
 
----
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT。法的原文は [LICENSE](LICENSE) を参照する。

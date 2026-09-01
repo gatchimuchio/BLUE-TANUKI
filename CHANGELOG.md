@@ -4,6 +4,13 @@
 
 ### Changed
 
+- J0 日本語基底規定を成立させ、日本語を唯一の基底規定言語とした。多言語は実務上不可避な局所例外だけに限定した。
+- `規定/` に基底規定、基底語彙、資産分類、正本索引、局所例外台帳、移行台帳を追加し、系列 3 リポジトリの確認済み commit を固定した。
+- `AGENTS.md`、active implementation instructions、roadmap、README、docs index、P13 / GA review を日本語正本として再構成した。
+- 既存非日本語 Markdown を例外へ格上げせず hash 付き移行負債として固定する `pnpm validate:japanese-base` を追加した。
+- 未登録負債、登録済み負債の無審査変更、解消済み負債の台帳残存を通常 gate で拒否し、`--strict` は負債が残る限り fail-closed する。
+- 日本語基底正本と監査 gate を source release bundle に含め、owner GO を伴う実 GA promotion に strict closure を要求した。
+- P13 は `PENDING_OWNER_GO`、version は `1.0.0-rc.1`、`public_claim_allowed=false` のまま維持した。
 - Replaced repository-wide Codex agent rules in `AGENTS.md` with the Phase 8/v1.0 completion posture.
 - Added `docs/IMPLEMENTATION_INSTRUCTIONS.md` as the active execution plan, with Phase 8-S1 (`ApprovalLevel` first-class + runtime schedule CRUD) as the next implementation lane.
 - Replaced `docs/ROADMAP.md` with a v9 roadmap aligned to the active implementation instructions.

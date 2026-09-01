@@ -488,6 +488,8 @@ function main(): void {
 
   const releaseBundle = read("scripts/create_release_bundle.ts");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "CORE_RELEASE_PATHS");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "AGENTS.md");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "LICENSE");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL.sh");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_LINUX.desktop");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_MACOS.command");
@@ -545,6 +547,9 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "tooling/windows/assert_windows_oneclick_artifact.py");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "docs/WINDOWS_INSTALLER_GUIDE.md");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "docs/RELEASE_HARDENING.md");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "規定/00_日本語基底規定.md");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "規定/移行台帳.json");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/japanese_base_gate.ts");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"install/installer\"");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, ".sha256");
@@ -556,6 +561,8 @@ function main(): void {
 
   const releaseVerify = read("scripts/verify_release_bundle.ts");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "sha256");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "AGENTS.md");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "LICENSE");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL.sh");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_LINUX.desktop");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_MACOS.command");
@@ -580,6 +587,7 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "pnpm\", \"run\", \"doctor");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "validate:repo-health");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "validate:release-hardening");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "validate:japanese-base");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "tar");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/CHANNEL_PROMOTION_GATE.md");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/phase11-s11-channel-first-party-promotion.md");
@@ -605,6 +613,21 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "tooling/windows/assert_windows_oneclick_artifact.py");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/WINDOWS_PACKAGING_AUDIT.md");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/RELEASE_HARDENING.md");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "規定/00_日本語基底規定.md");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "規定/移行台帳.json");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/japanese_base_gate.ts");
+  for (const migrationDebtPath of [
+    "AUDIT.md",
+    "CLAIM.md",
+    "CONFIG.md",
+    "QUICKSTART.md",
+    "SECURITY.md",
+    "TROUBLESHOOTING.md",
+    "install/installer/README.md",
+  ]) {
+    requireIncludes("scripts/create_release_bundle.ts", releaseBundle, migrationDebtPath);
+    requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, migrationDebtPath);
+  }
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/verify_release_bundle.ts", releaseVerify, "\"install/installer\"");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "isForbiddenFileName");
@@ -680,6 +703,7 @@ function main(): void {
   requireIncludes("package.json", packageJson, "\"build\"");
   requireIncludes("package.json", packageJson, "\"test\"");
   requireIncludes("package.json", packageJson, "\"docs:check\"");
+  requireIncludes("package.json", packageJson, "\"validate:japanese-base\"");
   requireIncludes("package.json", packageJson, "\"installer:run\"");
   requireIncludes("package.json", packageJson, "\"installer:verify\"");
   requireIncludes("package.json", packageJson, "\"package:windows\"");
@@ -706,6 +730,7 @@ function main(): void {
   requireIncludes("package.json", packageJson, "\"validate:repo-health\"");
   requireIncludes("package.json", packageJson, "\"validate:packaging\"");
   requireIncludes("package.json", packageJson, "\"validate:release-hardening\"");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "validate:japanese-base");
   requireIncludes("package.json", packageJson, "\"validate:channels\"");
   requireIncludes("package.json", packageJson, "\"validate:ga\"");
   requireIncludes("package.json", packageJson, "\"validate:product\"");

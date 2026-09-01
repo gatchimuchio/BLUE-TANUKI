@@ -68,6 +68,7 @@ function assertLocalReleaseValidationCommands(root: string): void {
     "build",
     "test",
     "docs:check",
+    "validate:japanese-base",
     "validate:repo-health",
     "validate:packaging",
     "validate:release-hardening",

@@ -1089,10 +1089,14 @@ async function pathExists(filepath: string): Promise<boolean> {
 }
 
 async function isCoreReleaseExtraction(root: string): Promise<boolean> {
-  return (
-    !(await pathExists(path.join(root, "packages/channel-slack"))) &&
-    !(await pathExists(path.join(root, "install/installer")))
+  const previewImplementationMarkers = [
+    ...PREVIEW_MANIFEST_PACKAGES.map((rel) => path.join(rel, "package.json")),
+    "install/installer/package.json",
+  ];
+  const markerPresence = await Promise.all(
+    previewImplementationMarkers.map((rel) => pathExists(path.join(root, rel))),
   );
+  return markerPresence.every((present) => !present);
 }
 
 async function validateManifestPackage(root: string, rel: string): Promise<string[]> {

@@ -4,6 +4,9 @@ import path from "node:path";
 const root = process.cwd();
 
 const requiredDocs = [
+  "AGENTS.md",
+  "docs/IMPLEMENTATION_INSTRUCTIONS.md",
+  "docs/ROADMAP.md",
   "docs/INDEX.md",
   "docs/FIRST_RUN_CHECKLIST.md",
   "docs/PERMANENT_USE_CHECKLIST.md",
@@ -24,6 +27,13 @@ const requiredDocs = [
   "docs/P13_OWNER_GO_READINESS.md",
   "docs/phase11-s12-plugin-review-gate-implementation.md",
   "docs/phase11-s13-v1-ga-promotion-execution.md",
+  "規定/README.md",
+  "規定/00_日本語基底規定.md",
+  "規定/01_基底語彙.md",
+  "規定/02_資産分類と局所例外.md",
+  "規定/正本索引.json",
+  "規定/局所例外台帳.json",
+  "規定/移行台帳.json",
 ];
 
 const failures = [];
@@ -46,6 +56,17 @@ const readme = read("README.md");
 const quickstart = read("QUICKSTART.md");
 const config = read("CONFIG.md");
 const troubleshooting = read("TROUBLESHOOTING.md");
+
+for (const rel of [
+  "規定/README.md",
+  "規定/00_日本語基底規定.md",
+  "規定/01_基底語彙.md",
+  "規定/02_資産分類と局所例外.md",
+]) {
+  if (!readme.includes(rel)) {
+    failures.push(`README.md does not reference ${rel}`);
+  }
+}
 
 const currentReleaseDocs = [
   "README.md",

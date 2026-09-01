@@ -1003,6 +1003,18 @@ describe("runDoctor — bundled manifests", () => {
       ]) {
         await fs.rm(path.join(root, rel), { recursive: true, force: true });
       }
+      await writeFixtureFile(
+        root,
+        "install/installer/README.md",
+        [
+          "# Guided Installer",
+          "guided first-run",
+          "pnpm installer:run",
+          "Verify LLM",
+          "not a signed native installer",
+          "not an automatic updater",
+        ].join("\n"),
+      );
 
       const r = await runDoctor({
         env: baseEnv(),

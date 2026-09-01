@@ -1,63 +1,58 @@
-# BLUE-TANUKI P13 Owner GO Readiness
+# BLUE-TANUKI P13 Owner GO 準備状態
 
-P13 is the product release decision boundary. Current state is
-`PENDING_OWNER_GO`, not GA.
+P13 は product release の最終判断境界である。現在は **`PENDING_OWNER_GO`** であり、GA ではない。
 
-This document is evidence and operator guidance only: `used_for_authority=false`.
-It cannot approve commands, classify risk, promote preview surfaces, replace
-HDS-BRAIN, infer consent, activate public claims, or bypass final review.
+この文書は証拠と operator 案内であり `used_for_authority=false` である。command approval、risk classification、preview promotion、HDS-BRAIN の代替、consent 推定、public claim 有効化、final review 迂回を行わない。
 
-## Current Machine State
+## 現在の機械状態
 
-Expected pre-GO machine state:
-
-```txt
+```text
 status=pre_go_ready
 owner_go=pending
 public_claim_allowed=false
 package_version=1.0.0-rc.1
+japanese_base=規定成立・移行中
+japanese_base_strict=false
 ```
 
-Actual `1.0.0` promotion remains blocked until owner GO evidence exists and the
-workspace is intentionally promoted.
+`1.0.0` への actual promotion は、owner GO evidence と全 gate が揃い、意図的な promotion block が実行されるまで閉じる。
 
-## P13 Criteria
+## P13 条件
 
-| Criterion | Current state | Evidence path |
+| 条件 | 現在状態 | 証拠 |
 |---|---|---|
-| Linux local validation full PASS | required before GO | owner/Codex local validation report |
-| `validate:product` full PASS | local Linux PASS with Windows-only checks skipped on Linux | `pnpm validate:product -- --phase P13` |
-| Windows実機E2E PASS + evidence pack | still required before GO | owner-run Windows evidence pack |
-| D1-D8 decision record | present | `docs/product-owner-decisions.md` |
-| preview exclusion / first-party scope | preserved | `docs/SUPPORT_BOUNDARY.md`, `docs/KNOWN_LIMITATIONS.md`, compatibility matrix |
-| release bundle + sha256 + manifest | generated and verified by release validation | `pnpm release:bundle`, `pnpm release:verify` |
-| owner decision record | absent / pending | `docs/ga-owner-decision.json` |
-| version decision | RC remains active | `package.json`, D2 |
-| release notes | RC notes present | `docs/release-notes/1.0.0-rc.1.md` |
+| Linux local validation | GO 前に full PASS が必要 | owner / Codex local report |
+| `validate:product` | Linux local。Windows-only は実機別証拠 | `pnpm validate:product -- --phase P13` |
+| Windows実機E2E | 未充足。GO 前に PASS と evidence pack が必要 | owner-run Windows evidence |
+| D1-D8 decision | 記録あり | `docs/product-owner-decisions.md` |
+| first-party / preview exclusion | 維持 | support / limitations / compatibility matrix |
+| release bundle / sha256 / manifest | 最終変更後に再生成・検証が必要 | `pnpm release:bundle`, `pnpm release:verify` |
+| owner decision | 不在 | `docs/ga-owner-decision.json` |
+| version | RC 維持 | `package.json`, D2 |
+| 日本語基底通常 gate | J0 で成立対象 | `pnpm validate:japanese-base` |
+| 日本語基底 strict gate | 移行負債が残るため未成立 | `pnpm validate:japanese-base -- --strict` |
 
-## GO Blockers
+## GO blocker
 
-P13 cannot be reported as GA complete until all of the following are true:
+次のすべてが真になるまで P13 を GA complete と報告しない。
 
-- owner records explicit GO;
-- `docs/ga-owner-decision.json` exists and passes schema validation;
-- package version is intentionally promoted according to D2;
-- `pnpm validate:ga -- --require-owner-go` passes;
-- Windows実機E2E evidence pack is reviewed;
-- owner credentialed live smoke / redaction evidence is reviewed for any
-  external surfaces being claimed;
-- release bundle is regenerated after final claim/version changes and verified;
-- README / QUICKSTART / CLAIM public wording is updated only after GO.
+- owner が明示 GO を記録する
+- `docs/ga-owner-decision.json` が存在し schema validation を通る
+- D2 に従い version を意図的に昇格する
+- `pnpm validate:ga -- --require-owner-go` が通る
+- `pnpm validate:japanese-base -- --strict` が通り、移行負債が空である
+- Windows実機E2E evidence pack を owner が確認する
+- 公開対象の external surface に必要な credentialed live smoke / redaction evidence を確認する
+- 最終 claim / version 変更後に release bundle を再生成・検証する
+- README / QUICKSTART / CLAIM の公開文言は GO 後の独立 block だけで変更する
 
-## Fail-Closed Rule
+## Fail-closed
 
-If owner GO evidence is absent, ambiguous, malformed, or inconsistent with the
-workspace version, the correct state is:
+owner GO evidence が不在、不明、malformed、version と不整合、または日本語基底 strict gate 未成立なら、状態を次に保つ。
 
-```txt
+```text
 PENDING_OWNER_GO
 public_claim_allowed=false
 ```
 
-Do not infer GO from passed tests, generated bundles, docs presence, remote
-runner status, operator convenience, or LLM output.
+tests、bundle、docs、remote runner、operator convenience、LLM output から GO を推定しない。J0 の日本語基底「規定成立」を「全資産移行完了」または GA readiness に読み替えない。

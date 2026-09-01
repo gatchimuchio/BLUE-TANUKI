@@ -1,69 +1,78 @@
-# BLUE-TANUKI Docs Index
+# BLUE-TANUKI 文書索引
 
-## Start Here
+日本語正本、現行運用文書、履歴証拠を区別して読む。英語の現行文書は `規定/移行台帳.json` に残る移行負債であり、不可避な局所例外または日本語正本へ自動昇格しない。
 
-- [README](../README.md) - product surface, boundaries, and local quickstart
-- [Quickstart](../QUICKSTART.md) - shortest local startup path
-- [Strategy Frame](STRATEGY_FRAME.md) - Layer A/B, OpenClaw two-dimensional position, and Stage 1 strategy
-- [Product Roadmap](PRODUCT_ROADMAP.md) - P1-P13 product-completion roadmap and validate:product gate plan
-- [Product Owner Decisions](product-owner-decisions.md) - owner decision ledger for D1-D8 and P13 absorption of old Bar G GO
-- [Responsibility Substrate Mapping](RESPONSIBILITY_SUBSTRATE_MAPPING.md) - GUI Shell responsibility mapping for BLUE-TANUKI
-- [BLUE-TANUKI Authority Model](BLUE_TANUKI_AUTHORITY_MODEL.md) - HDS-BRAIN and owner authority boundary
-- [GA Bar Definition](GA_BAR_DEFINITION.md) - RC-to-GA promotion bar and public claim eligibility
-- [First-Run Checklist](FIRST_RUN_CHECKLIST.md) - first successful local operation
-- [Permanent-Use Checklist](PERMANENT_USE_CHECKLIST.md) - long-running owner operation
-- [Support Boundary](SUPPORT_BOUNDARY.md) - supported first-party, preview, reserved, and not-shipped boundary
-- [Known Limitations](KNOWN_LIMITATIONS.md) - RC evidence gaps and deferred surfaces
-- [v1.0 Release Candidate](v1.0-release-candidate.md) - release-candidate claim, validation, support boundary, and upgrade notes
-- [1.0.0-rc.1 Release Notes](release-notes/1.0.0-rc.1.md) - RC scope, shipped surfaces, non-shipped boundaries, and validation expectations
-- [v1.0 Post-RC Closure Review](v1.0-post-rc-closure-review.md) - post-RC bundle, smoke, live-smoke, preview-promotion, installer, and updater decisions
-- [v1.0 GA Promotion Review](v1.0-ga-promotion-review.md) - GA bar evidence, pre-GO state, and owner decision boundary
-- [P13 Owner GO Readiness](P13_OWNER_GO_READINESS.md) - product-release decision boundary and pre-GO blockers
-- [Release Hardening Gate](RELEASE_HARDENING.md) - GitHub Actions absence, signing-prerequisite, and manual-update release gate
+## 索引の規範的な読み方
 
-## First-Party Surfaces
+この索引は文書の存在場所を示す案内であり、それ自体が各文書の主張を採用する権限ではない。最初に日本語基底正本で対象、意味、責任境界、例外条件を確認し、その後に実装契約、運用手順、監査証拠を読む。英語名のリンクや固定ファイル名は既存資産へ到達するための参照ラベルであり、日本語で成立した意味を変更しない。
 
-- [Operator Surfaces Index](operator-surfaces/INDEX.md) - Writing / Daily / Developer surface overview
-- [Operation Core Architecture](OPERATION_CORE_ARCHITECTURE.md) - OperationRequest / OperationPlan / ExecutionAdapter migration boundary
-- [Shared Operator Substrate](operator-surfaces/SHARED_SUBSTRATE.md)
+現行運用文書に日本語正本との矛盾、意味欠落、古い状態、未検証の完成主張がある場合は、日本語正本を無言で弱めず、安全側へ停止して移行負債または文書不整合として扱う。履歴証拠は当時の観測を保持するため原文のまま残せるが、現在の仕様、承認、公開判断へ昇格できない。コードや検証結果も観測した範囲しか証明せず、HDS-BRAIN や owner の判断を代替しない。
+
+文書を追加・変更するときは、どの分類に属するか、どの日本語正本へ接続するか、外部語が本当に不可避か、検証経路があるかを先に確定する。新しい非日本語文書を便宜的に追加したり、既存の移行負債へ意味を追記したりして通常 gate を迂回してはならない。
+
+## 日本語基底正本
+
+- [日本語基底規定](../規定/00_日本語基底規定.md) — 唯一の基底規定言語、成立順序、例外、監査
+- [基底語彙](../規定/01_基底語彙.md) — 日本語概念と既存識別子
+- [資産分類と局所例外](../規定/02_資産分類と局所例外.md) — 全資産分類、局所例外、移行状態
+- [正本索引](../規定/正本索引.json) — 系列 commit と正本状態
+- [局所例外台帳](../規定/局所例外台帳.json) — 不可避な多言語範囲
+- [移行台帳](../規定/移行台帳.json) — 未解消の非日本語資産
+- [Agent 規定](../AGENTS.md) — 実装・監査・Git・validation 規律
+- [Active Implementation Instructions](IMPLEMENTATION_INSTRUCTIONS.md) — 現在の bounded phase
+- [Roadmap](ROADMAP.md) — J 系列と P13 の圧縮順序
+
+## はじめに読む
+
+- [README](../README.md) — product surface、境界、local start
+- [Quickstart](../QUICKSTART.md) — 最短起動経路
+- [Strategy Frame](STRATEGY_FRAME.md) — Layer A/B と対照戦略
+- [Product Roadmap](PRODUCT_ROADMAP.md) — P1-P13 product roadmap
+- [Product Owner Decisions](product-owner-decisions.md) — D1-D8 と P13 判断台帳
+- [Responsibility Substrate Mapping](RESPONSIBILITY_SUBSTRATE_MAPPING.md) — GUI responsibility mapping
+- [Authority Model](BLUE_TANUKI_AUTHORITY_MODEL.md) — HDS-BRAIN と owner 境界
+- [GA Bar Definition](GA_BAR_DEFINITION.md) — RC から GA への gate
+- [First-Run Checklist](FIRST_RUN_CHECKLIST.md) — 最初の局所操作
+- [Permanent-Use Checklist](PERMANENT_USE_CHECKLIST.md) — 恒久運用
+- [Support Boundary](SUPPORT_BOUNDARY.md) — first-party / preview / reserved / not-shipped
+- [Known Limitations](KNOWN_LIMITATIONS.md) — RC evidence gap と延期面
+- [v1.0 Release Candidate](v1.0-release-candidate.md) — RC claim と upgrade 境界
+- [1.0.0-rc.1 Release Notes](release-notes/1.0.0-rc.1.md) — 発行時原文証拠
+- [v1.0 Post-RC Closure Review](v1.0-post-rc-closure-review.md) — post-RC 状態
+- [v1.0 GA Promotion Review](v1.0-ga-promotion-review.md) — pre-GO evidence
+- [P13 Owner GO Readiness](P13_OWNER_GO_READINESS.md) — actual release blocker
+- [Release Hardening Gate](RELEASE_HARDENING.md) — signing と manual-update 境界
+
+## 第一者 surface
+
+- [Operator Surfaces Index](operator-surfaces/INDEX.md) — Writing / Daily / Developer
+- [Operation Core Architecture](OPERATION_CORE_ARCHITECTURE.md) — request / plan / adapter
+- [Shared Operator Substrate](operator-surfaces/SHARED_SUBSTRATE.md) — 共通下流基盤
 - [Writing Operator](operator-surfaces/WRITING_OPERATOR.md)
 - [Daily Operator](operator-surfaces/DAILY_OPERATOR.md)
 - [Developer Operator](operator-surfaces/DEVELOPER_OPERATOR.md)
-- [Phase 11-S6 Writing Operator Implementation](phase11-s6-writing-operator.md)
-- [Phase 11-S7 Daily Operator Implementation](phase11-s7-daily-operator.md)
-- [Phase 11-S8 Developer Operator Implementation](phase11-s8-developer-operator.md)
 
-## Security and Authority
+## Security、authority、audit
 
-- [Security](../SECURITY.md) - HDS authority model and final-review boundary
-- [Audit](../AUDIT.md) - hash-chain audit, dump, and verification
+- [Security](../SECURITY.md) — authority と final-review
+- [Audit](../AUDIT.md) — hash-chain dump / verify
 - [HDS-BRAIN Standalone Boundary](hds-brain-standalone-boundary.md)
-- [Phase 12-S-1 HDS-BRAIN Standalone Completeness](phase12-s-1-hds-brain-standalone-completeness.md)
-- [HDS-BRAIN Risk / Approval Boundary](hds-brain-risk-approval-boundary.md)
-- [HDS-BRAIN Reference Boundary](hds-brain-reference-boundary.md)
-- [HDS-BRAIN Fail-safe Policy](hds-brain-fail-safe-policy.md)
-- [HDS-BRAIN Unknown Escalation Policy](hds-brain-unknown-escalation-policy.md)
-- [HDS-BRAIN Detector Lifecycle](hds-brain-detector-lifecycle.md)
-- [HDS-BRAIN Trinity M Policy Model](hds-brain-trinity-m-policy-model.md)
-- [Phase 12-S0 Boundary Definition Lock](phase12-s0-boundary-definition-lock.md)
-- [HDS-BRAIN Output / Result Audit Plane](hds-brain-output-audit-plane.md)
-- [Phase 12-S1 Output / Result Audit Plane](phase12-s1-output-result-audit-plane.md)
-- [HDS-BRAIN Complete History Substrate](hds-brain-complete-history-substrate.md)
-- [HDS-BRAIN Failure Memory Control](hds-brain-failure-memory-control.md)
-- [Phase 12-S2 Local Complete History Substrate](phase12-s2-local-complete-history-substrate.md)
-- [HDS-BRAIN Runtime Invariants Evidence](hds-brain-runtime-invariants-evidence.md)
-- [Phase 12-S3 Runtime Invariants Evidence](phase12-s3-runtime-invariants-evidence.md)
-- [Phase 12-S4 Final-review Operation Single Source](phase12-s4-final-review-single-source.md)
-- [Phase 12-S5 Approval / Notification / History / Replay UI Completion](phase12-s5-approval-notification-history-replay-ui.md)
-- [Phase 12-S6 Root Full-access + Compound Attack Scenario Tests](phase12-s6-root-full-access-compound-attack-scenarios.md)
-- [Phase 12-S7 Detector Lifecycle and Unknown Pattern Escalation](phase12-s7-detector-lifecycle-unknown-pattern-escalation.md)
-- [Phase 12-S8 HDS-BRAIN Fail-safe / Self-health Policy](phase12-s8-hds-brain-fail-safe-self-health-policy.md)
+- [Risk / Approval Boundary](hds-brain-risk-approval-boundary.md)
+- [Reference Boundary](hds-brain-reference-boundary.md)
+- [Fail-safe Policy](hds-brain-fail-safe-policy.md)
+- [Unknown Escalation Policy](hds-brain-unknown-escalation-policy.md)
+- [Detector Lifecycle](hds-brain-detector-lifecycle.md)
+- [Trinity M Policy Model](hds-brain-trinity-m-policy-model.md)
+- [Output / Result Audit Plane](hds-brain-output-audit-plane.md)
+- [Complete History Substrate](hds-brain-complete-history-substrate.md)
+- [Failure Memory Control](hds-brain-failure-memory-control.md)
+- [Runtime Invariants Evidence](hds-brain-runtime-invariants-evidence.md)
 - [v1.0 Security and Permanent-Use Review](v1.0-security-and-permanent-use-review.md)
 - [Capability Envelope](CAPABILITY_ENVELOPE.md)
 - [Conformance](CONFORMANCE.md)
 - [Security Review Checklist](SECURITY_REVIEW_CHECKLIST.md)
 
-## Platform Extension Surface
+## Platform extension
 
 - [Plugin Review Gate](PLUGIN_REVIEW_GATE.md)
 - [Plugin HIG](PLUGIN_HIG.md)
@@ -76,8 +85,6 @@
 - [OpenRouter Backend](OPENROUTER_BACKEND.md)
 - [Composio Connector](COMPOSIO_CONNECTOR.md)
 - [External Tool Authority Boundary](EXTERNAL_TOOL_AUTHORITY_BOUNDARY.md)
-- [Phase 11-S12 Plugin Review Gate Implementation](phase11-s12-plugin-review-gate-implementation.md)
-- [Phase 11-S13 v1.0 GA Promotion Execution](phase11-s13-v1-ga-promotion-execution.md)
 
 ## GUI / Control Center
 
@@ -93,8 +100,6 @@
 - [Troubleshooting](../TROUBLESHOOTING.md)
 - [Installer Guide](INSTALLER_GUIDE.md)
 - [Resident App Guide](RESIDENT_APP_GUIDE.md)
-- [Support Boundary](SUPPORT_BOUNDARY.md)
-- [Known Limitations](KNOWN_LIMITATIONS.md)
 - [Windows Installer Guide](WINDOWS_INSTALLER_GUIDE.md)
 - [Windows First Run](WINDOWS_FIRST_RUN.md)
 - [Windows Evidence Pack](WINDOWS_EVIDENCE_PACK.md)
@@ -104,36 +109,28 @@
 - [Channel Readiness Matrix](CHANNEL_READINESS_MATRIX.md)
 - [Channel Promotion Gate](CHANNEL_PROMOTION_GATE.md)
 - [Update / Rollback / Recovery Runbook](UPDATE_ROLLBACK_RUNBOOK.md)
-- [Release Hardening Gate](RELEASE_HARDENING.md)
 - [Known Environment Failures](known-environment-failures.md)
 - [Doctor Output](doctor-output.md)
 - [Validate Product](VALIDATE_PRODUCT.md)
-- [P13 Owner GO Readiness](P13_OWNER_GO_READINESS.md)
 - [Repository Health Inventory](repository-health-inventory.md)
-- [Repository Health Phase 4 Final Commissioning](repository-health-phase4-final-commissioning.md)
 - [Production Import Graph](production-import-graph.md)
 - [Preview Scope](preview-scope.md)
 
 ## Distribution
 
 - [Portable Installer Guide](../install/README.md)
-- [Release Hardening Gate](RELEASE_HARDENING.md)
-- [Windows Installer Guide](WINDOWS_INSTALLER_GUIDE.md)
-- [Windows Evidence Pack](WINDOWS_EVIDENCE_PACK.md)
-- [Windows Packaging Audit](WINDOWS_PACKAGING_AUDIT.md)
-- [Windows Uninstall](WINDOWS_UNINSTALL.md)
+- [Resident Helper](../install/resident/README.md)
+- [Compatibility Matrix](compatibility-matrix.json)
 - [Phase 11-S9 Installer and Setup UX](phase11-s9-installer-setup-ux.md)
 - [Phase 11-S10 Resident Application Integration](phase11-s10-resident-application-integration.md)
 - [Phase 11-S11 Channel First-Party Promotion](phase11-s11-channel-first-party-promotion.md)
-- [Phase 11-S12 Plugin Review Gate Implementation](phase11-s12-plugin-review-gate-implementation.md)
-- [Phase 11-S13 v1.0 GA Promotion Execution](phase11-s13-v1-ga-promotion-execution.md)
-- [Phase 10-S3 Distribution UX Hardening](phase10-s3-distribution-ux-hardening.md)
-- [Compatibility Matrix](compatibility-matrix.json)
+- [Phase 11-S12 Plugin Review Gate](phase11-s12-plugin-review-gate-implementation.md)
+- [Phase 11-S13 v1.0 GA Promotion](phase11-s13-v1-ga-promotion-execution.md)
 
-## Design History
+## Design と履歴
 
-- [Active Implementation Instructions](IMPLEMENTATION_INSTRUCTIONS.md)
-- [Roadmap](ROADMAP.md)
 - [OpenClaw Rejection Audit](OPENCLAW_REJECTION_AUDIT.md)
 - [Non-Goals](NON_GOALS.md)
 - [Architecture](architecture.md)
+- `docs/history/` — 過去時点の原文証拠。現行 authority ではない
+- `docs/phase*.md` — 完了済み phase の原文報告。現行実装権限ではない

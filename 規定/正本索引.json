@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "canonical_state": "2026-09-01-日本語基底規定-1",
+  "base_language": "日本語",
+  "normative_language_count": 1,
+  "status": "規定成立・移行中",
+  "established_at": "2026-09-01",
+  "canonical_documents": [
+    "規定/00_日本語基底規定.md",
+    "規定/01_基底語彙.md",
+    "規定/02_資産分類と局所例外.md"
+  ],
+  "canonical_document_hashes": {
+    "規定/00_日本語基底規定.md": "f9cfd772831ce7b2eb44aaa2c59e42ec246ee728f9535e842d9c4e486cc0358a",
+    "規定/01_基底語彙.md": "7c856a9000bd11a9f019a985a347a0deaf18b98b4d0ddb63491064c668cece49",
+    "規定/02_資産分類と局所例外.md": "608162799af310bf2f7e38192a6a58eb96ec991682f5f714ae2493de2c76356e"
+  },
+  "registries": [
+    "規定/局所例外台帳.json",
+    "規定/移行台帳.json"
+  ],
+  "series_references": [
+    {
+      "repository": "gatchimuchio/cognitive-engineering-foundations",
+      "commit": "60131da52ba7931ed7f82c7648a74ac790f50d08",
+      "role": "公開・正本成立方針の系列参照"
+    },
+    {
+      "repository": "gatchimuchio/LLM-Constitutive-Specification",
+      "commit": "3f5eb7b704dba5a06c717399c3400405b5e8944e",
+      "role": "日本語基底構成規定の系列参照"
+    },
+    {
+      "repository": "gatchimuchio/NOTNN-LLM-MINIDORA",
+      "commit": "061d81244058703c1b28ac33191ced83d7381be3",
+      "role": "実装・監査接続の系列参照"
+    }
+  ],
+  "release_boundary": {
+    "phase": "P13",
+    "state": "PENDING_OWNER_GO",
+    "public_claim_allowed": false,
+    "strict_japanese_base_required_for_go": true
+  },
+  "authority_note": "系列参照は自動的な外部権限移譲ではなく、BLUE-TANUKI の日本語正本へ採用した範囲だけが局所的に成立する。"
+}
