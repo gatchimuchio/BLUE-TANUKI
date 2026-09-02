@@ -4,6 +4,7 @@
 
 ### Changed
 
+- MIT 単一ライセンスから成果物別ライセンスへ移行し、ソフトウェア・実装資産を Apache License 2.0、文書・仕様・設計・規定・監査資産を CC BY 4.0 とした。適用範囲、法的原文、帰属、package metadata、About 表示、配布束、機械監査を一貫させた。
 - J0 日本語基底規定を成立させ、日本語を唯一の基底規定言語とした。多言語は実務上不可避な局所例外だけに限定した。
 - `規定/` に基底規定、基底語彙、資産分類、正本索引、局所例外台帳、移行台帳を追加し、系列 3 リポジトリの確認済み commit を固定した。
 - `AGENTS.md`、active implementation instructions、roadmap、README、docs index、P13 / GA review を日本語正本として再構成した。

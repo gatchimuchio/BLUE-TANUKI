@@ -782,7 +782,7 @@ describe("WebChatChannel — About surface", () => {
           package: {
             name: "blue-tanuki-workspace",
             version: "1.0.0-rc.1",
-            license: "MIT",
+            license: "Apache-2.0",
             private: true,
           },
           release: {
@@ -810,7 +810,7 @@ describe("WebChatChannel — About surface", () => {
     expect(ok.status).toBe(200);
     expect(JSON.parse(ok.text)).toMatchObject({
       product_name: "BLUE-TANUKI",
-      package: { version: "1.0.0-rc.1", license: "MIT" },
+      package: { version: "1.0.0-rc.1", license: "Apache-2.0" },
       release: { owner_go: "pending", public_claim_allowed: false },
       authority_boundary: {
         hds_brain_owns_authority: true,

@@ -2,7 +2,7 @@
   "name": "@blue-tanuki/installer",
   "version": "1.0.0-rc.1",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "description": "Guided first-run wrapper for BLUE-TANUKI portable source bundles",
   "scripts": {

@@ -2,7 +2,7 @@
   "name": "@blue-tanuki/core",
   "version": "1.0.0-rc.1",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "description": "BLUE-TANUKI executor: runs commands from HDS-BRAIN. LLM abstraction, tools, channels.",
   "type": "module",
   "main": "./dist/index.js",

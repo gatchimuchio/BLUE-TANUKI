@@ -8,7 +8,7 @@ import {
 } from "../../../scripts/verify_release_bundle.ts";
 
 describe("release bundle verification", () => {
-  it("展開済み bundle で build、doctor、健全性、日本語基底、release hardening を検証する", () => {
+  it("展開済み bundle で build、doctor、健全性、日本語基底、ライセンス、release hardening を検証する", () => {
     const commands = EXTRACTED_RELEASE_COMMANDS.map((step) =>
       [step.command, ...step.args].join(" "),
     );
@@ -19,6 +19,7 @@ describe("release bundle verification", () => {
       "corepack pnpm run doctor",
       "corepack pnpm validate:repo-health",
       "corepack pnpm validate:japanese-base",
+      "corepack pnpm validate:licensing",
       "corepack pnpm validate:release-hardening",
     ]);
     expect(EXTRACTED_RELEASE_COMMANDS[2]?.env).toMatchObject({

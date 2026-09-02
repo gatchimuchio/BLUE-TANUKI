@@ -272,9 +272,15 @@ describe("Windows product installer package", () => {
     expect(read("scripts/package_windows.ts")).toContain("windows-x64-zip-installer");
     expect(read("scripts/package_windows.ts")).toContain("README_INSTALL_WINDOWS.txt");
     expect(read("scripts/package_windows.ts")).toContain("const shaFile = `${outFile}.sha256`");
+    expect(read("scripts/package_windows.ts")).toContain("LICENSE-APACHE-2.0");
+    expect(read("scripts/package_windows.ts")).toContain("LICENSE-CC-BY-4.0");
+    expect(read("scripts/package_windows.ts")).toContain("NOTICE");
     expect(read("scripts/verify_windows_package.ts")).toContain("verifyWindowsPackage");
     expect(read("scripts/verify_windows_package.ts")).toContain("README_INSTALL_WINDOWS.txt");
     expect(read("scripts/verify_windows_package.ts")).toContain("const shaFile = `${archive}.sha256`");
+    expect(read("scripts/verify_windows_package.ts")).toContain("app/LICENSE-APACHE-2.0");
+    expect(read("scripts/verify_windows_package.ts")).toContain("app/LICENSE-CC-BY-4.0");
+    expect(read("scripts/verify_windows_package.ts")).toContain("app/NOTICE");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("source_tree_setup_guidance_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("root_source_entrypoint_result=pass");
     expect(read("scripts/smoke_windows_installed.ts")).toContain("root_source_entrypoint_build_from_source_result=pass");

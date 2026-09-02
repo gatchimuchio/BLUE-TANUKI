@@ -1,0 +1,11 @@
+BLUE-TANUKI
+Copyright 2026 gatchimuchio
+
+本リポジトリは成果物種別でライセンスを分離する。
+
+- ソースコード、Runtime、Gateway、ライブラリ、チャネル、オペレーター、テスト、ツール、ビルド、CI、インストーラー、パッケージ設定その他のソフトウェア構成物: Apache License 2.0 (`Apache-2.0`)
+- 仕様、設計、理論、規定、技術文書、解説、図表、観測・構文化・評価・監査文書、README その他の説明文書: Creative Commons Attribution 4.0 International (`CC-BY-4.0`)
+
+これはリポジトリ全体を Apache-2.0 / CC-BY-4.0 のどちらか任意で利用できるデュアルライセンスではない。適用範囲は `LICENSE`、正式条件は `LICENSE-APACHE-2.0` / `LICENSE-CC-BY-4.0` を参照すること。
+
+第三者由来のソース、資料、データ、画像、フォント、モデル関連成果物その他の資産には、各出典・原著作者・提供元の著作権、ライセンスおよび利用条件が適用される。個別の帰属表示、manifest、provenance、監査記録がある場合はそれらも参照すること。

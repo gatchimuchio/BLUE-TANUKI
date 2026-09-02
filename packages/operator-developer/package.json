@@ -2,7 +2,7 @@
   "name": "@blue-tanuki/operator-developer",
   "version": "1.0.0-rc.1",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "description": "First-party Developer Operator surface for BLUE-TANUKI v1.0 RC",
   "type": "module",
   "main": "./dist/index.js",

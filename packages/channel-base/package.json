@@ -2,7 +2,7 @@
   "name": "@blue-tanuki/channel-base",
   "version": "1.0.0-rc.1",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "description": "Channel abstraction (Inbound/Outbound) + Router/Dispatcher for BLUE-TANUKI",
   "type": "module",
   "main": "./dist/index.js",

@@ -2,7 +2,7 @@
   "name": "@blue-tanuki/gateway",
   "version": "1.0.0-rc.1",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "description": "Gateway: wires HDS-BRAIN and BLUE-TANUKI/core together. Phase 2 entry point.",
   "type": "module",
   "main": "./dist/main.js",

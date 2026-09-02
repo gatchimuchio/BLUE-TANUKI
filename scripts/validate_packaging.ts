@@ -296,6 +296,9 @@ function main(): void {
   requireIncludes("scripts/package_windows.ts", packageWindows, "const shaFile = `${outFile}.sha256`");
   requireIncludes("scripts/package_windows.ts", packageWindows, "SHASUMS256.txt");
   requireIncludes("scripts/package_windows.ts", packageWindows, "runtime_sha256_verified=true");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "LICENSE-APACHE-2.0");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "LICENSE-CC-BY-4.0");
+  requireIncludes("scripts/package_windows.ts", packageWindows, "NOTICE");
 
   const windowsOneclickAudit = read("tooling/windows/assert_windows_oneclick_artifact.py");
   requireIncludes(
@@ -365,6 +368,9 @@ function main(): void {
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "README_INSTALL_WINDOWS.txt");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "const shaFile = `${archive}.sha256`");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "shasums_source");
+  requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "app/LICENSE-APACHE-2.0");
+  requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "app/LICENSE-CC-BY-4.0");
+  requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "app/NOTICE");
 
   const verifyUnixPackage = read("scripts/verify_unix_package.ts");
   requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "verifyUnixPackage");
@@ -373,6 +379,9 @@ function main(): void {
   requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "README_INSTALL_MACOS.txt");
   requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "requires_node_pnpm_git_from_user");
   requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "shasums_source");
+  requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "app/LICENSE-APACHE-2.0");
+  requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "app/LICENSE-CC-BY-4.0");
+  requireIncludes("scripts/verify_unix_package.ts", verifyUnixPackage, "app/NOTICE");
 
   const verifyProductInstallers = read("scripts/verify_product_installers.ts");
   requireIncludes("scripts/verify_product_installers.ts", verifyProductInstallers, "embedded payload sha256 mismatch");
@@ -490,6 +499,9 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "CORE_RELEASE_PATHS");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "AGENTS.md");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "LICENSE");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "LICENSE-APACHE-2.0");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "LICENSE-CC-BY-4.0");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "NOTICE");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL.sh");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_LINUX.desktop");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "INSTALL_MACOS.command");
@@ -550,6 +562,7 @@ function main(): void {
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "規定/00_日本語基底規定.md");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "規定/移行台帳.json");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/japanese_base_gate.ts");
+  requireIncludes("scripts/create_release_bundle.ts", releaseBundle, "scripts/licensing_gate.ts");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"packages/channel-slack\"");
   requireNotIncludes("scripts/create_release_bundle.ts", releaseBundle, "\"install/installer\"");
   requireIncludes("scripts/create_release_bundle.ts", releaseBundle, ".sha256");
@@ -563,6 +576,9 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "sha256");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "AGENTS.md");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "LICENSE");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "LICENSE-APACHE-2.0");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "LICENSE-CC-BY-4.0");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "NOTICE");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL.sh");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_LINUX.desktop");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "INSTALL_MACOS.command");
@@ -588,6 +604,7 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "validate:repo-health");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "validate:release-hardening");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "validate:japanese-base");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "validate:licensing");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "tar");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/CHANNEL_PROMOTION_GATE.md");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "docs/phase11-s11-channel-first-party-promotion.md");
@@ -616,6 +633,7 @@ function main(): void {
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "規定/00_日本語基底規定.md");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "規定/移行台帳.json");
   requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/japanese_base_gate.ts");
+  requireIncludes("scripts/verify_release_bundle.ts", releaseVerify, "scripts/licensing_gate.ts");
   for (const migrationDebtPath of [
     "AUDIT.md",
     "CLAIM.md",

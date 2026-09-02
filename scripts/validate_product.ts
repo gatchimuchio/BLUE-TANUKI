@@ -1411,7 +1411,7 @@ async function runControlCenterSettingsApiSmoke(ctx: CheckContext): Promise<Chec
     const about = await settingsRequest(base, webchatToken, "GET", "/app/about");
     assertCheck(about.product_name === "BLUE-TANUKI", "About snapshot product name mismatch");
     assertCheck(about.package?.version === "1.0.0-rc.1", "About snapshot version mismatch");
-    assertCheck(about.package?.license === "MIT", "About snapshot license mismatch");
+    assertCheck(about.package?.license === "Apache-2.0", "About snapshot license mismatch");
     assertCheck(about.release?.owner_go === "pending", "About snapshot owner GO state mismatch");
     assertCheck(about.release?.public_claim_allowed === false, "About snapshot unexpectedly allowed public claim");
     assertCheck(about.claim_boundary?.signed_native_installer === "not shipped", "About snapshot signed installer boundary mismatch");

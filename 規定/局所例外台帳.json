@@ -37,18 +37,18 @@
     },
     {
       "id": "JEX-004",
-      "scope": "LICENSE",
-      "region": "MIT ライセンス原文",
+      "scope": "LICENSE-APACHE-2.0",
+      "region": "Apache License 2.0 の法的原文",
       "external_form": "英語の法的原文",
       "category": "法的原文",
       "unavoidable_reason_japanese": "標準ライセンス原文の同一性と外部照合可能性を維持するため。",
-      "japanese_reference": "README.md#ライセンス",
+      "japanese_reference": "LICENSE#ライセンス適用範囲",
       "authority_effect": "none",
-      "review_trigger": "ライセンス種別を変更するとき"
+      "review_trigger": "ライセンス種別または法的原文を変更するとき"
     }
   ],
   "frozen_assets": [
-    { "path": "LICENSE", "sha256": "07307ebc65e5390881dea837af3f2ad209965e788d44e30f32d4dc327ff26cec", "exception_id": "JEX-004" },
+    { "path": "LICENSE-APACHE-2.0", "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4", "exception_id": "JEX-004" },
     { "path": "docs/history/blue-tanuki-roadmap-v1.md", "sha256": "1afc9be8195188cfff685c646209bb763eb4f36d679330344bd363af02628358", "exception_id": "JEX-001" },
     { "path": "docs/history/phase4-s1.md", "sha256": "4f2336d1048dd9a35651c06dbd902f04342ae607b317bc2a08b2c9095e4e9acc", "exception_id": "JEX-001" },
     { "path": "docs/history/phase4-s2.md", "sha256": "7cf871039c05a3e57a832e649541c5f740da67e9e0214cc150865925f85240ca", "exception_id": "JEX-001" },

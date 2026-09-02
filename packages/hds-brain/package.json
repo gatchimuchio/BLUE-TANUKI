@@ -2,7 +2,7 @@
   "name": "@blue-tanuki/hds-brain",
   "version": "1.0.0-rc.1",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "description": "HDS-BRAIN: upstream control core. F→M→C judgment, state machine, audit. No LLM calls.",
   "type": "module",
   "main": "./dist/index.js",

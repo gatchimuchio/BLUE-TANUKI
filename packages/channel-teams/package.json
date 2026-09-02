@@ -2,7 +2,7 @@
   "name": "@blue-tanuki/channel-teams",
   "version": "1.0.0-rc.1",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "description": "Microsoft Teams channel adapter (Graph chatMessage send, preview)",
   "type": "module",
   "main": "./dist/index.js",

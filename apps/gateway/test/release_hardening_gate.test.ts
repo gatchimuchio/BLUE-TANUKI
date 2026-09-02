@@ -49,6 +49,7 @@ async function writeFixture(opts: {
         test: "node node_modules/vitest/vitest.mjs run",
         "docs:check": "node scripts/check_docs.mjs",
         "validate:japanese-base": "tsx scripts/japanese_base_gate.ts",
+        "validate:licensing": "tsx scripts/licensing_gate.ts",
         "validate:repo-health": "tsx scripts/repo_health_gate.ts",
         "validate:packaging": "tsx scripts/validate_packaging.ts",
         "validate:release-hardening": "tsx scripts/release_hardening_gate.ts",
@@ -103,6 +104,7 @@ async function writeFixture(opts: {
       '"docs/RELEASE_HARDENING.md";',
       '"scripts/release_hardening_gate.ts";',
       '"validate:release-hardening";',
+      '"validate:licensing";',
     ].join("\n"),
   );
   return opts.env ?? {};

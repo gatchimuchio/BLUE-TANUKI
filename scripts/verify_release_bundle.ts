@@ -59,6 +59,7 @@ export const EXTRACTED_RELEASE_COMMANDS: readonly ExtractedReleaseCommand[] = [
   },
   { command: "corepack", args: ["pnpm", "validate:repo-health"] },
   { command: "corepack", args: ["pnpm", "validate:japanese-base"] },
+  { command: "corepack", args: ["pnpm", "validate:licensing"] },
   { command: "corepack", args: ["pnpm", "validate:release-hardening"] },
 ] as const;
 
@@ -68,6 +69,9 @@ const REQUIRED_ARCHIVE_PATHS = [
   "CLAIM.md",
   "CONFIG.md",
   "LICENSE",
+  "LICENSE-APACHE-2.0",
+  "LICENSE-CC-BY-4.0",
+  "NOTICE",
   "QUICKSTART.md",
   "SECURITY.md",
   "TROUBLESHOOTING.md",
@@ -131,6 +135,7 @@ const REQUIRED_ARCHIVE_PATHS = [
   "規定/局所例外台帳.json",
   "規定/移行台帳.json",
   "scripts/japanese_base_gate.ts",
+  "scripts/licensing_gate.ts",
   "scripts/package_windows.ts",
   "scripts/verify_windows_package.ts",
   "scripts/smoke_windows_installed.ts",

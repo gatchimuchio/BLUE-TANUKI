@@ -11,7 +11,7 @@ describe("buildAboutSnapshot", () => {
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       name: "blue-tanuki-workspace",
       version: "1.0.0-rc.1",
-      license: "MIT",
+      license: "Apache-2.0",
       private: true,
     }));
     await writeFile(path.join(root, "CLAIM.md"), [
@@ -28,7 +28,7 @@ describe("buildAboutSnapshot", () => {
       package: {
         name: "blue-tanuki-workspace",
         version: "1.0.0-rc.1",
-        license: "MIT",
+        license: "Apache-2.0",
         private: true,
       },
       release: {

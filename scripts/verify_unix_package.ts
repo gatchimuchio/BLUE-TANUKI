@@ -45,6 +45,10 @@ const root = process.cwd();
 const REQUIRED_APP_ENTRIES = [
   "app/package.json",
   "app/pnpm-workspace.yaml",
+  "app/LICENSE",
+  "app/LICENSE-APACHE-2.0",
+  "app/LICENSE-CC-BY-4.0",
+  "app/NOTICE",
   "app/assets/aotanu/spritesheets/aotanu_idle_2x2.png",
   "app/assets/aotanu/spritesheets/aotanu_walk_2x2.png",
   "app/assets/aotanu/spritesheets/aotanu_working_2x2.png",

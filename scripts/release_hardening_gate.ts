@@ -69,6 +69,7 @@ function assertLocalReleaseValidationCommands(root: string): void {
     "test",
     "docs:check",
     "validate:japanese-base",
+    "validate:licensing",
     "validate:repo-health",
     "validate:packaging",
     "validate:release-hardening",
@@ -162,6 +163,7 @@ function assertReleaseBundleIncludesGate(root: string): void {
     verifyBundle,
     "validate:release-hardening",
   );
+  requireIncludes("scripts/verify_release_bundle.ts", verifyBundle, "validate:licensing");
 }
 
 function missingSigningCredentials(env: NodeJS.ProcessEnv): string[] {

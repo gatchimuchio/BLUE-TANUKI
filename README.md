@@ -196,4 +196,9 @@ source release archive は standalone binary ではない。OS 別 single-file i
 
 ## ライセンス
 
-MIT。法的原文は [LICENSE](LICENSE) を参照する。
+成果物の種類ごとにライセンスを分離する。任意選択のデュアルライセンスではない。
+
+- ソースコード、Runtime、Gateway、ライブラリ、テスト、ツール、ビルド・インストーラー・パッケージ設定その他のソフトウェア構成物: Apache License 2.0
+- 仕様、設計、理論、規定、技術文書、解説、図表、観測・構文化・評価・監査文書、README その他の説明文書: Creative Commons Attribution 4.0 International
+
+適用範囲は [LICENSE](LICENSE)、正式条件は [LICENSE-APACHE-2.0](LICENSE-APACHE-2.0) と [LICENSE-CC-BY-4.0](LICENSE-CC-BY-4.0)、帰属表示は [NOTICE](NOTICE) を参照する。第三者由来物には各固有の条件が適用される。

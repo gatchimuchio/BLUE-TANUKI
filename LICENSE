@@ -1,21 +1,45 @@
-MIT License
+# ライセンス適用範囲
 
-Copyright (c) 2026 gatchimuchio
+Copyright 2026 gatchimuchio
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+本リポジトリは、成果物の種類ごとにライセンスを分離する。
+これは、すべてのファイルを Apache-2.0 と CC-BY-4.0 のどちらか任意で選べるデュアルライセンスではない。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+## Apache License 2.0
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+次のソフトウェア・実装資産には Apache License 2.0 を適用する。
+
+- ソースコード
+- Runtime、Gateway、ライブラリ、チャネル、オペレーターその他の実行可能実装
+- テストコード
+- ツール・スクリプト
+- ビルド、CI、インストーラー、パッケージ設定
+- その他のソフトウェア構成物
+
+法的原文: `LICENSE-APACHE-2.0`
+SPDX: `Apache-2.0`
+
+## Creative Commons Attribution 4.0 International
+
+次の文書・知的成果物には Creative Commons Attribution 4.0 International を適用する。
+
+- 仕様
+- 設計
+- 理論・規定
+- 技術文書・解説
+- 図表
+- 観測・構文化・評価・監査文書
+- README その他の説明文書
+
+正式条件: `LICENSE-CC-BY-4.0`
+SPDX: `CC-BY-4.0`
+
+## 優先順位、移行境界、第三者由来物
+
+個別ファイルまたは個別ディレクトリに別のライセンス表示がある場合は、その表示を優先する。
+
+本変更前に MIT License の下で適法に取得された複製には、取得時に適用されていた条件が引き続き適用される。本変更は、それらの複製に対する既存の許諾を遡及的に取り消すものではない。
+
+第三者由来のソース、資料、データ、画像、フォント、モデル関連成果物その他の資産には、各原著作者・提供元の著作権、ライセンスおよび利用条件が適用される。
+
+詳細な帰属表示と適用範囲は `NOTICE` を参照すること。

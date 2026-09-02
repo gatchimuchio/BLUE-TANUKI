@@ -65,6 +65,10 @@ const RUNTIME_PACKAGES = [
 const ROOT_TEXT_FILES = [
   "package.json",
   "pnpm-workspace.yaml",
+  "LICENSE",
+  "LICENSE-APACHE-2.0",
+  "LICENSE-CC-BY-4.0",
+  "NOTICE",
   "README.md",
   "QUICKSTART.md",
   "CLAIM.md",
