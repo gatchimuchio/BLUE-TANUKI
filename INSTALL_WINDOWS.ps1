@@ -98,7 +98,7 @@ function Get-PackageVersion {
   if (-not (Test-Path -LiteralPath $packageJson)) {
     throw "package.json not found under repository root: $ScriptRoot"
   }
-  $package = Get-Content -LiteralPath $packageJson -Raw | ConvertFrom-Json
+  $package = Get-Content -LiteralPath $packageJson -Raw -Encoding UTF8 | ConvertFrom-Json
   if (-not $package.version) {
     throw "package.json does not declare version"
   }
@@ -153,7 +153,7 @@ function Assert-InstallerManifest($ManifestFile, $ZipPath, $ActualSha) {
   if (-not (Test-Path -LiteralPath $ManifestFile)) {
     throw "missing manifest sidecar: $ManifestFile"
   }
-  $manifest = Get-Content -LiteralPath $ManifestFile -Raw | ConvertFrom-Json
+  $manifest = Get-Content -LiteralPath $ManifestFile -Raw -Encoding UTF8 | ConvertFrom-Json
   if ($manifest.name -ne "blue-tanuki") {
     throw "manifest name must be blue-tanuki"
   }

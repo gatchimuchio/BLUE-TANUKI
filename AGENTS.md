@@ -377,12 +377,14 @@ pnpm release:verify
 
 ## 22. 環境
 
-推奨:
+owner 指示により、通常の編集・ビルド・テスト・起動・Git 操作は Windows を標準とする。Windows で成立する開発に WSL を必須としない。WSL / native Linux は、Unix 実行属性を必要とする配布生成・検証など、Windows で成立しない作業の補助環境として使用する。再現手順は `docs/開発環境.md` を参照する。
 
-- WSL / native Linux の ext4 workspace
+環境条件:
+
 - Corepack pnpm 9.12.0
 - Node 22.14.0 以上
-- active workspace に `/mnt/c` を使わない
+- WSL / native Linux で検証するときは ext4 workspace を使用する
+- WSL 内の active workspace に `/mnt/c` を使わない。Windows 側の通常開発場所を禁止する意味ではない
 
 `pnpm` がない場合は Node / Corepack / pnpm を確認・復旧し、それでも不可なら環境制約として報告する。product code で隠さない。WSL で `tsx` が Windows の一時パスを掴む場合は、product regression と混同せず安全な Linux 一時ディレクトリを使用する。
 

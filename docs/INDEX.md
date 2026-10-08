@@ -24,6 +24,7 @@
 
 ## はじめに読む
 
+- [Windows の開発環境と WSL の配布検証](開発環境.md) — Windows を標準とする開発、固定版の準備、補助環境での配布検証、局所起動
 - [README](../README.md) — product surface、境界、local start
 - [Quickstart](../QUICKSTART.md) — 最短起動経路
 - [Strategy Frame](STRATEGY_FRAME.md) — Layer A/B と対照戦略
