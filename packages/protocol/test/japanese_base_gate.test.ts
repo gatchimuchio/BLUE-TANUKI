@@ -58,7 +58,7 @@ describe("日本語基底監査", () => {
     expect(result.canonical_files).toBe(7);
     expect(result.exceptions).toBe(4);
     expect(result.exception_assets).toBe(74);
-    expect(result.migration_debts).toBe(79);
+    expect(result.migration_debts).toBe(78);
     expect(result.detected_debts.some((debt) => debt.path === "AUDIT.md")).toBe(true);
   });
 

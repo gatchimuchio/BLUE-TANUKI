@@ -10,6 +10,8 @@ Product release boundary: **P13 凍結 / `PENDING_OWNER_GO` / `public_claim_allo
 
 この文書は現在の実装権限を限定する active instruction である。過去 phase の詳細は Git 履歴と `docs/history/` の証拠であり、現行の実装権限ではない。
 
+作業規律は [作業標準要領](作業標準要領.md) に従う。2026-10-08 の owner 指示による D4-POCKET 作業規律の翻案は、規定・参照・台帳の局所更新である。J0 の再開、J1 の着手、P13 の公開判断を許可しない。工程内の有限受入条件と最終品質保証を分け、既存の安全要件と必須検証を維持する。
+
 ## 1. 目的
 
 BLUE-TANUKI リポジトリ全体について、日本語を唯一の基底規定言語として成立させる。多言語は実務上やむを得ない箇所に限る局所例外とし、既存の英語資産を例外へ自動昇格させず、監査可能な移行負債として固定する。
@@ -108,7 +110,7 @@ git rev-list --left-right --count HEAD...origin/main
 - P13 は `PENDING_OWNER_GO`
 - `public_claim_allowed=false`
 - `.github/workflows` 不在を保つ
-- direct-main と二世代 backup branch を保つ
+- direct-main と、編集前に保存する二世代の local recovery branch / remote backup tag を保つ（順序は `AGENTS.md` §21.7）
 
 ## 8. 実装要件
 

@@ -4,6 +4,8 @@
 
 ### Changed
 
+- D4-POCKET の確認済み作業規律を BLUE-TANUKI 向けに翻案し、`AGENTS.md` と日本語の `docs/作業標準要領.md` に接続した。有限受入条件と最終品質保証を分け、Windows 標準、HDS 権限境界、必須検証、P13 の公開保留を維持した。
+- バックアップを編集前の local recovery branch 二世代 / remote tag 二世代へ変更し、旧開発作法を新標準への案内に統合した。日本語化した一文書を移行負債から除き、監査の期待件数を 79 から 78 に整合させた。
 - Windows のソース入口で JSON の読込を UTF-8 に固定し、Windows PowerShell 5.1 が日本語を含む `package.json` と配布 manifest を誤読する問題を修正した。
 - Windows を標準とする開発環境について、固定ツール版、改行・リンク権限、WSL を補助環境とする配布検証、既存検証の実行順序、ソースから分離した局所設定を日本語で文書化した。
 - MIT 単一ライセンスから成果物別ライセンスへ移行し、ソフトウェア・実装資産を Apache License 2.0、文書・仕様・設計・規定・監査資産を CC BY 4.0 とした。適用範囲、法的原文、帰属、package metadata、About 表示、配布束、機械監査を一貫させた。

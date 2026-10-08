@@ -19,6 +19,7 @@
 - [局所例外台帳](../規定/局所例外台帳.json) — 不可避な多言語範囲
 - [移行台帳](../規定/移行台帳.json) — 未解消の非日本語資産
 - [Agent 規定](../AGENTS.md) — 実装・監査・Git・validation 規律
+- [作業標準要領](作業標準要領.md) — 有限受入条件、編集前バックアップ、実装・検証・報告、D4-POCKET からの採否
 - [Active Implementation Instructions](IMPLEMENTATION_INSTRUCTIONS.md) — 現在の bounded phase
 - [Roadmap](ROADMAP.md) — J 系列と P13 の圧縮順序
 
@@ -80,7 +81,7 @@
 - [Skill Loader Contract](SKILL_LOADER_CONTRACT.md)
 - [Adapter Contract](ADAPTER_CONTRACT.md)
 - [LLM Development Guide](LLM_DEVELOPMENT_GUIDE.md)
-- [Development Practice](DEVELOPMENT_PRACTICE.md)
+- [旧開発作法からの案内](DEVELOPMENT_PRACTICE.md) — 作業標準要領へ統合済み
 - [LLM Extension Surface](LLM_EXTENSION_SURFACE.md)
 - [Conformance Targets](CONFORMANCE_TARGETS.md)
 - [OpenRouter Backend](OPENROUTER_BACKEND.md)
