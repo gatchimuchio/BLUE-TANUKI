@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-10 — 汚染記憶の隔離と旧・新解釈の追記保持
+
+- C07.03として、HDS内部のJ/M consumerに、現在解釈のquarantine、隔離後の再open、新解釈のrestore、依存する過去判断への再評価要求を追記型lineageとして接続した。旧・新の意味本文、basis、digest、履歴を併存させ、再評価や実行は自動化しない。
+- 内容結合済みのJ承認、M event/receipt、J再照合を通し、同じ確定済みcommitの再試行はreceipt照合だけで重複eventを作らない。J auditへraw記憶本文を保存せず、M投影は非権威・非実行とする。
+- 証拠はsynthetic approval readerとtest-owned SQLiteによる局所検証。実owner承認producer、通常production caller、Gateway/UI、親C07全scenario、installed/live、release/GA/P13/owner GOは成立させない。詳細な検証とGit閉鎖は開発進捗に記録する。
+
 ## 2026-10-10 — J/M記憶更新の承認・反映・receipt確認を分離
 
 - C07.02として、J/M coordinatorのcross-store snapshotで承認済み、M反映済み、J receipt確認済みを別状態として観測できるようにした。M receiptの内容digest・update ID・J event ID・期待版の一致を確認し、不整合・保存不能は成功扱いしない。

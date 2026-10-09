@@ -62,6 +62,14 @@ export interface JMemoryCommitLifecycleSnapshot extends Omit<JControlSnapshot, "
   readonly pending: readonly (JPendingSnapshot & { readonly lifecycle_state: JMemoryCommitLifecycleState })[];
 }
 
+export interface JMemoryRecordSnapshot {
+  readonly revision: number;
+  readonly event_digest: string;
+  readonly exists: boolean;
+  readonly value: unknown;
+  readonly used_for_authority: false;
+}
+
 export type JMemoryCommitStageResult =
   | { readonly ok: true; readonly status: JControlStatus; readonly revision: number; readonly update_id: string }
   | { readonly ok: false; readonly reason: "schema_validation_failed" | "j_approval_not_verified" | "update_id_content_conflict" | "pending_update_exists" | "store_integrity_failed" | "storage_failed" | "commit_outcome_unknown" | "store_unavailable" | PersistenceFailureReason };
@@ -197,6 +205,21 @@ export class JMemoryCommitCoordinator {
     if (this.closed) return null;
     const snapshot = this.store.snapshot();
     return snapshot === null ? null : observeMemoryCommitLifecycle(snapshot, this.memoryLedger);
+  }
+
+  /** Read one M projection record for package-internal consumers; it is not authority or approval. */
+  readMemoryRecord(recordId: string): JMemoryRecordSnapshot | null {
+    if (this.closed || !isIdentifier(recordId)) return null;
+    const snapshot = this.memoryLedger.snapshot();
+    if (snapshot === null) return null;
+    const exists = Object.hasOwn(snapshot.records, recordId);
+    return Object.freeze({
+      revision: snapshot.revision,
+      event_digest: snapshot.event_digest,
+      exists,
+      value: exists ? snapshot.records[recordId] : null,
+      used_for_authority: false,
+    });
   }
 
   verify(): boolean {
