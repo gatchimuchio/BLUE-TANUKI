@@ -6,7 +6,7 @@ import {
 } from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
 import type { AuditEntry } from "../src/audit.js";
-import { DEFAULT_POLICY } from "../src/policy.js";
+import { DEFAULT_POLICY, determineCandidateAdoptionDisposition } from "../src/policy.js";
 import type { PolicyConfig } from "../src/types.js";
 import { LongTermMemoryStore } from "../src/long-term-memory/index.js";
 import { evaluateApproval } from "../src/approval_policy.js";
@@ -816,7 +816,129 @@ describe("HDSUpperController.onFeedback()", () => {
     if ("kind" in entry && entry.kind === "executor_feedback") {
       expect(entry.feedback.llm_tool_candidate_count).toBe(1);
       expect(entry.feedback.llm_tool_candidates_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(entry.feedback.llm_tool_candidate_contract_status).toBe("passed");
+      expect(entry.feedback.llm_tool_candidate_assessments).toHaveLength(1);
+      expect(entry.feedback.llm_tool_candidate_assessments[0]).toMatchObject({
+        candidate_origin_status: "inferred",
+        mechanical_contract: { outcome: "pass", evidence_status: "observed" },
+        domain_validation: { outcome: "unknown", evidence_status: "unknown" },
+        semantic_judgment: { outcome: "not_assessed", evidence_status: "unknown" },
+        adoption_disposition: "held",
+        may_execute: false,
+        used_for_authority: false,
+      });
       expect(entry.feedback.result_digest).toMatch(/^[a-f0-9]{64}$/);
+    }
+    expect(JSON.stringify(c.getAudit().list())).not.toContain(rawArgument);
+    expect(c.getAudit().verify()).toBe(true);
+  });
+
+  it("BT-U-C06.01-P: separates checks and holds an allowed LLM proposal while meaning remains unknown", () => {
+    const c = new HDSUpperController();
+    const { command } = c.decide(inbound("hello candidate review", "r-c06-positive"));
+    expect(command?.type).toBe("llm_call");
+
+    const rawArgument = "candidate-argument-c06-private-sentinel";
+    c.onFeedback({
+      command_id: command!.id,
+      status: "success",
+      result: { text: "done" },
+      llm_tool_candidates: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "call-c06-positive",
+        tool_name: "echo",
+        arguments: { text: rawArgument },
+        authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+      }],
+      metrics: { duration_ms: 1 },
+    });
+
+    const entry = c.getAudit().list()[1]!.log;
+    expect("kind" in entry && entry.kind).toBe("executor_feedback");
+    if ("kind" in entry && entry.kind === "executor_feedback") {
+      expect(entry.known_command).toBe(true);
+      expect(entry.feedback.llm_tool_candidate_assessments[0]).toMatchObject({
+        mechanical_contract: { outcome: "pass", evidence_status: "observed" },
+        domain_validation: { outcome: "pass", evidence_status: "observed" },
+        semantic_judgment: { outcome: "not_assessed", evidence_status: "unknown" },
+        adoption_disposition: "held",
+        may_execute: false,
+        used_for_authority: false,
+      });
+    }
+    expect(JSON.stringify(c.getAudit().list())).not.toContain(rawArgument);
+    expect(c.getAudit().verify()).toBe(true);
+  });
+
+  it("BT-U-C06.01-N: rejects out-of-process and malformed candidates without retaining their payload", () => {
+    const c = new HDSUpperController();
+    const { command } = c.decide(inbound("hello candidate rejection", "r-c06-negative"));
+    const rawArgument = "candidate-c06-private-sentinel";
+    c.onFeedback({
+      command_id: command!.id,
+      status: "success",
+      llm_tool_candidates: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "call-c06-negative",
+        tool_name: "unregistered.c06-probe",
+        arguments: { value: rawArgument },
+        authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+      }],
+      metrics: { duration_ms: 1 },
+    });
+
+    const outOfScope = c.getAudit().list()[1]!.log;
+    expect("kind" in outOfScope && outOfScope.kind).toBe("executor_feedback");
+    if ("kind" in outOfScope && outOfScope.kind === "executor_feedback") {
+      expect(outOfScope.feedback.llm_tool_candidate_assessments[0]).toMatchObject({
+        domain_validation: { outcome: "fail", reason_code: "process_allowlist_mismatch" },
+        adoption_disposition: "rejected",
+        may_execute: false,
+      });
+    }
+
+    c.onFeedback({
+      command_id: command!.id,
+      status: "success",
+      llm_tool_candidates: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "call-c06-malformed",
+        tool_name: "echo",
+        arguments: { value: rawArgument },
+        authority_boundary: { candidate_only: true, may_execute: true, used_for_authority: false },
+      }],
+      metrics: { duration_ms: 1 },
+    } as unknown as ExecuteFeedback);
+
+    const malformed = c.getAudit().list()[2]!.log;
+    expect("kind" in malformed && malformed.kind).toBe("executor_feedback");
+    if ("kind" in malformed && malformed.kind === "executor_feedback") {
+      expect(malformed.feedback.llm_tool_candidate_contract_status).toBe("failed");
+      expect(malformed.feedback.llm_tool_candidate_assessments).toEqual([]);
+      expect(malformed.feedback.llm_tool_candidates_digest).toBeUndefined();
+    }
+
+    c.onFeedback({
+      command_id: command!.id,
+      status: "success",
+      llm_tool_candidates: ["first", "second"].map((value) => ({
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1" as const,
+        call_id: "duplicate-call-c06",
+        tool_name: "echo",
+        arguments: { value },
+        authority_boundary: { candidate_only: true as const, may_execute: false as const, used_for_authority: false as const },
+      })),
+      metrics: { duration_ms: 1 },
+    });
+
+    const duplicate = c.getAudit().list()[3]!.log;
+    expect("kind" in duplicate && duplicate.kind).toBe("executor_feedback");
+    if ("kind" in duplicate && duplicate.kind === "executor_feedback") {
+      expect(duplicate.feedback.llm_tool_candidate_assessments).toHaveLength(2);
+      expect(duplicate.feedback.llm_tool_candidate_assessments[0]).toMatchObject({
+        mechanical_contract: { outcome: "fail", reason_code: "duplicate_call_id" },
+        adoption_disposition: "rejected",
+      });
     }
     expect(JSON.stringify(c.getAudit().list())).not.toContain(rawArgument);
     expect(c.getAudit().verify()).toBe(true);
@@ -844,6 +966,43 @@ describe("HDSUpperController.onFeedback()", () => {
       expect(entry.feedback.llm_failure).toMatchObject({ kind: "timeout", retryable: true });
     }
     expect(c.getAudit().verify()).toBe(true);
+  });
+});
+
+describe("candidate adoption evidence status", () => {
+  it.each([
+    ["observed", "eligible_for_goal_review"],
+    ["inferred", "held"],
+    ["assumed", "held"],
+    ["unknown", "held"],
+  ] as const)("maps %s semantic evidence to %s", (status, expected) => {
+    expect(determineCandidateAdoptionDisposition({
+      mechanical_contract: "pass",
+      domain_validation: "pass",
+      semantic_outcome: "supports",
+      semantic_evidence_status: status,
+    })).toBe(expected);
+  });
+
+  it("rejects failed contract or domain checks and conflicting evidence", () => {
+    expect(determineCandidateAdoptionDisposition({
+      mechanical_contract: "fail",
+      domain_validation: "pass",
+      semantic_outcome: "supports",
+      semantic_evidence_status: "observed",
+    })).toBe("rejected");
+    expect(determineCandidateAdoptionDisposition({
+      mechanical_contract: "pass",
+      domain_validation: "fail",
+      semantic_outcome: "supports",
+      semantic_evidence_status: "observed",
+    })).toBe("rejected");
+    expect(determineCandidateAdoptionDisposition({
+      mechanical_contract: "pass",
+      domain_validation: "pass",
+      semantic_outcome: "conflicts",
+      semantic_evidence_status: "observed",
+    })).toBe("rejected");
   });
 });
 

@@ -2,6 +2,10 @@ import { readFileSync } from "node:fs";
 import type { Decision } from "@blue-tanuki/protocol";
 import type {
   AxisScore,
+  CandidateAdoptionDisposition,
+  CandidateCheckOutcome,
+  CandidateEvidenceStatus,
+  CandidateSemanticOutcome,
   PolicyConfig,
   ScoringResult,
 } from "./types.js";
@@ -189,6 +193,33 @@ export function evaluateDecision(
     reason: `aggregate ${scoring.aggregate.toFixed(2)} below assert threshold; default suspend`,
     triggered_thresholds: triggered,
   };
+}
+
+/**
+ * Reduce independent candidate checks to a bounded review disposition.
+ * Passing this gate admits a candidate only to later goal review; it never
+ * makes the candidate executable or grants authority.
+ */
+export function determineCandidateAdoptionDisposition(input: {
+  mechanical_contract: CandidateCheckOutcome;
+  domain_validation: CandidateCheckOutcome;
+  semantic_outcome: CandidateSemanticOutcome;
+  semantic_evidence_status: CandidateEvidenceStatus;
+}): CandidateAdoptionDisposition {
+  if (
+    input.mechanical_contract === "fail" ||
+    input.domain_validation === "fail" ||
+    input.semantic_outcome === "conflicts"
+  ) return "rejected";
+
+  if (
+    input.mechanical_contract !== "pass" ||
+    input.domain_validation !== "pass" ||
+    input.semantic_outcome !== "supports" ||
+    input.semantic_evidence_status !== "observed"
+  ) return "held";
+
+  return "eligible_for_goal_review";
 }
 
 function axisScore(

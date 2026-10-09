@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-10 — 候補検査と判断の分離
+
+- C06.01として、通常Gateway finalizationから届くLLM tool candidateの機械契約・process allowlist照合・意味判断を、HDS feedback audit内の別々のassessmentへ接続した。
+- 元command不在や意味未評価・不確かな根拠は採用保留、機械検査・領域検証の失敗や意味conflictは拒否する。全条件を満たした場合もgoal review適格性までとし、candidateは実行・承認・権限にならない。
+- HDS auditにはcandidate digestと限定assessmentだけを記録し、raw candidate、tool名、argumentsを保存しない。通常経路の合成fixture、local validation、doctor状態、未実施のlive/release確認は開発進捗へ記録する。C06親、GA/P13/owner GOは成立させない。
+
 ## 2026-10-09 — provider fallback許可と実行同一性
 
 - C05.03として、HDSのprovider/input-source/capability/cost許可とowner設定profileを満たすretry可能failureだけに、明示fallbackを限定した。許可欠落、能力・scope・通貨・費用上限不一致、timeout/cancelではfallbackを呼ばない。

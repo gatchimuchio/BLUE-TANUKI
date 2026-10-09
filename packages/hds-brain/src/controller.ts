@@ -6,6 +6,7 @@ import type {
   GatewayInternalAuthorityMetadata,
   UpstreamDecision,
   LLMCallPayload,
+  LLMToolCallCandidate,
   LLMFallbackAuthorization,
 } from "@blue-tanuki/protocol";
 import {
@@ -32,6 +33,7 @@ import type {
   ScheduleLifecycleEvent,
   ScheduleLifecycleLog,
   SuspendedRequest,
+  LLMToolCandidateAssessment,
 } from "./types.js";
 import type { GoalGovernanceConfig } from "@blue-tanuki/protocol";
 import { frame } from "./frame.js";
@@ -45,7 +47,7 @@ import {
   DetectorRegistry,
   createDefaultDetectorRegistry,
 } from "./detectors/index.js";
-import { DEFAULT_POLICY, validatePolicy } from "./policy.js";
+import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy } from "./policy.js";
 import { routeAction } from "./action_router.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
 import {
@@ -700,10 +702,14 @@ export class HDSUpperController {
     const llmFailure = fb.llm_failure === undefined
       ? undefined
       : LLMCallFailureSchema.parse(fb.llm_failure);
-    const toolCandidates = fb.llm_tool_candidates === undefined
+    const candidateParse = fb.llm_tool_candidates === undefined
       ? undefined
-      : LLMToolCallCandidateSchema.array().max(32).parse(fb.llm_tool_candidates);
+      : LLMToolCallCandidateSchema.array().max(32).safeParse(fb.llm_tool_candidates);
+    const toolCandidates = candidateParse?.success ? candidateParse.data : undefined;
     const sourceLog = this.inflight.get(fb.command_id);
+    const candidateAssessments = toolCandidates
+      ? assessLLMToolCandidates(toolCandidates, sourceLog)
+      : [];
     const feedbackLog = {
       kind: "executor_feedback" as const,
       request_id: sourceLog?.request_id ?? null,
@@ -717,8 +723,12 @@ export class HDSUpperController {
         result_digest: fb.result === undefined ? undefined : sha256(fb.result),
         error: fb.error,
         llm_failure: llmFailure,
-        llm_tool_candidate_count: toolCandidates?.length,
+        llm_tool_candidate_count: toolCandidates?.length ?? rawCandidateCount(fb.llm_tool_candidates),
         llm_tool_candidates_digest: toolCandidates?.length ? sha256(toolCandidates) : undefined,
+        llm_tool_candidate_contract_status: fb.llm_tool_candidates === undefined
+          ? "not_present" as const
+          : candidateParse?.success ? "passed" as const : "failed" as const,
+        llm_tool_candidate_assessments: candidateAssessments,
         metrics: fb.metrics,
       },
       timestamp: Date.now(),
@@ -968,6 +978,63 @@ function computeCurrentProjectionDigest(
       memory_context_digest: memoryContextDigest,
     }))
     .digest("hex");
+}
+
+function assessLLMToolCandidates(
+  candidates: readonly LLMToolCallCandidate[],
+  sourceLog: DecisionLog | undefined,
+): LLMToolCandidateAssessment[] {
+  const callIdCounts = new Map<string, number>();
+  for (const candidate of candidates) {
+    callIdCounts.set(candidate.call_id, (callIdCounts.get(candidate.call_id) ?? 0) + 1);
+  }
+
+  return candidates.map((candidate) => {
+    const duplicateCallId = (callIdCounts.get(candidate.call_id) ?? 0) > 1;
+    const mechanicalOutcome = duplicateCallId ? "fail" : "pass";
+    const domainOutcome = sourceLog === undefined
+      ? "unknown"
+      : sourceLog.frame.process.execution_policy.allowed_command_types.includes("tool_call") &&
+          sourceLog.frame.process.execution_policy.allowed_tools.includes(candidate.tool_name)
+        ? "pass"
+        : "fail";
+    const semanticOutcome = "not_assessed" as const;
+    const semanticEvidenceStatus = "unknown" as const;
+
+    return {
+      candidate_digest: sha256(candidate),
+      candidate_origin_status: "inferred",
+      mechanical_contract: {
+        outcome: mechanicalOutcome,
+        evidence_status: "observed",
+        reason_code: duplicateCallId ? "duplicate_call_id" : "strict_schema_passed",
+      },
+      domain_validation: {
+        outcome: domainOutcome,
+        evidence_status: sourceLog === undefined ? "unknown" : "observed",
+        reason_code: sourceLog === undefined
+          ? "origin_command_unavailable"
+          : domainOutcome === "pass" ? "process_allowlist_match" : "process_allowlist_mismatch",
+      },
+      semantic_judgment: {
+        outcome: semanticOutcome,
+        evidence_status: semanticEvidenceStatus,
+        reason_code: "purpose_relation_not_assessed",
+      },
+      adoption_disposition: determineCandidateAdoptionDisposition({
+        mechanical_contract: mechanicalOutcome,
+        domain_validation: domainOutcome,
+        semantic_outcome: semanticOutcome,
+        semantic_evidence_status: semanticEvidenceStatus,
+      }),
+      may_execute: false,
+      used_for_authority: false,
+    };
+  });
+}
+
+function rawCandidateCount(value: unknown): number | undefined {
+  return Array.isArray(value) ? value.length : undefined;
 }
 
 function llmResultContent(result: unknown): string | null {

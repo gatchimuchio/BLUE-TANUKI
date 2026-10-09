@@ -306,7 +306,38 @@ export interface ExecutorFeedbackAuditTrace {
   llm_failure?: ExecuteFeedback["llm_failure"];
   llm_tool_candidate_count?: number;
   llm_tool_candidates_digest?: string;
+  llm_tool_candidate_contract_status: "not_present" | "passed" | "failed";
+  llm_tool_candidate_assessments: LLMToolCandidateAssessment[];
   metrics: ExecuteFeedback["metrics"];
+}
+
+export type CandidateEvidenceStatus = "observed" | "inferred" | "assumed" | "unknown";
+export type CandidateCheckOutcome = "pass" | "fail" | "unknown";
+export type CandidateSemanticOutcome = "supports" | "conflicts" | "not_assessed";
+export type CandidateAdoptionDisposition = "eligible_for_goal_review" | "held" | "rejected";
+
+/** Digest-only, non-executable review of an LLM-proposed tool candidate. */
+export interface LLMToolCandidateAssessment {
+  candidate_digest: string;
+  candidate_origin_status: "inferred";
+  mechanical_contract: {
+    outcome: CandidateCheckOutcome;
+    evidence_status: CandidateEvidenceStatus;
+    reason_code: "strict_schema_passed" | "duplicate_call_id" | "not_observed";
+  };
+  domain_validation: {
+    outcome: CandidateCheckOutcome;
+    evidence_status: CandidateEvidenceStatus;
+    reason_code: "process_allowlist_match" | "process_allowlist_mismatch" | "origin_command_unavailable";
+  };
+  semantic_judgment: {
+    outcome: CandidateSemanticOutcome;
+    evidence_status: CandidateEvidenceStatus;
+    reason_code: "purpose_relation_not_assessed" | "independent_support_observed" | "independent_conflict_observed";
+  };
+  adoption_disposition: CandidateAdoptionDisposition;
+  may_execute: false;
+  used_for_authority: false;
 }
 
 /**
