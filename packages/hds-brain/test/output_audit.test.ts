@@ -5,6 +5,7 @@ import {
   classifyOutputKind,
 } from "../src/output_audit.js";
 import { HDSUpperController } from "../src/controller.js";
+import { DocumentOrganizationCoordinator, renderDocumentOrganizationProjection } from "../src/document_organization.js";
 
 const upstream = {
   frame_goal: "goal",
@@ -121,6 +122,54 @@ describe("OutputAudit", () => {
     const entries = hds.getAudit().list();
     expect(entries).toHaveLength(1);
     expect(entries[0]!.log).toEqual(log);
+    expect(hds.getAudit().verify()).toBe(true);
+  });
+
+  it("audits restored J projection display by digest without creating execution authority", () => {
+    const source = "C08_PRIVATE_RESTORED_OUTPUT";
+    const hds = new HDSUpperController();
+    const coordinator = new DocumentOrganizationCoordinator({
+      task_id: "task-restored-projection",
+      request_id: "r-restored-projection",
+      source_text: source,
+      memory_version: {
+        schema_version: "blue-tanuki.memory-state-version.v1",
+        status: "verified",
+        revision_digest: "e".repeat(64),
+        entry_count: 0,
+      },
+    });
+    coordinator.applyComputeOutput(JSON.stringify({
+      schema_version: "blue-tanuki.document-organization.candidate.v1",
+      sections: [{ label: "復旧検査", excerpts: [{ start: 0, end: source.length, quote: source }] }],
+    }));
+    const projection = DocumentOrganizationCoordinator.restore(
+      { source_text: source },
+      coordinator.checkpoint(),
+    ).snapshot();
+    const rendered = renderDocumentOrganizationProjection(projection);
+    const log = hds.onDocumentOrganizationProjectionOutputAudit({
+      request_id: "r-restored-projection",
+      upstream_commit_hash: "d".repeat(64),
+      projection,
+      rendered_output: rendered,
+      target_surface: "channel",
+      timestamp: 2,
+    });
+
+    expect(log).toMatchObject({
+      kind: "j_projection_output_audit",
+      request_id: "r-restored-projection",
+      projection_status: "completed",
+      user_visible_output: true,
+      external_side_effect_result: false,
+      used_for_authority: false,
+      may_execute: false,
+      may_commit_to_memory: false,
+      reason: "terminal_j_projection_reviewed_before_display",
+    });
+    expect(JSON.stringify(log)).not.toContain(source);
+    expect(hds.getAudit().list().some((event) => event.log.kind === "j_projection_output_audit")).toBe(true);
     expect(hds.getAudit().verify()).toBe(true);
   });
 });

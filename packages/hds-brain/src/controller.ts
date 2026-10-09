@@ -55,9 +55,11 @@ import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_
 import { routeAction } from "./action_router.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
 import {
+  buildProjectionOutputAuditLog,
   buildOutputAuditLog,
   type OutputAuditInput,
   type OutputAuditLog,
+  type ProjectionOutputAuditLog,
 } from "./output_audit.js";
 import {
   buildRuntimeInvariantEvidence,
@@ -67,7 +69,12 @@ import {
   type RuntimeInvariantValues,
 } from "./runtime_invariants.js";
 import { fReferenceForId } from "./f_reference.js";
-import { DOCUMENT_ORGANIZATION_PROMPT_PREFIX } from "./document_organization.js";
+import {
+  DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
+  type DocumentOrganizationMemoryVersion,
+  type DocumentOrganizationProjection,
+} from "./document_organization.js";
+import type { MemoryStoreStateVersion } from "./long-term-memory/types.js";
 import {
   buildMemoryCitationSystemMessages,
   redactUnverifiedReferences,
@@ -94,6 +101,7 @@ interface LongTermMemoryPort {
   all?: () => readonly unknown[];
   size?: () => number;
   verify?: () => boolean;
+  stateVersion?: () => MemoryStoreStateVersion;
 }
 
 export interface HDSDecisionOptions {
@@ -814,6 +822,51 @@ export class HDSUpperController {
     const log = buildOutputAuditLog({
       ...input,
       request_id: input.request_id ?? sourceLog?.request_id ?? null,
+    });
+    this.audit.append(log);
+    return log;
+  }
+
+  /** Digest-only M generation used to prevent a transient J task from resuming against changed memory. */
+  documentOrganizationMemoryVersion(): DocumentOrganizationMemoryVersion {
+    const version = this.memory?.stateVersion?.();
+    if (!version) {
+      return {
+        schema_version: "blue-tanuki.memory-state-version.v1",
+        status: "unavailable",
+        revision_digest: null,
+        entry_count: null,
+      };
+    }
+    return version;
+  }
+
+  /** Audit a terminal J projection restored without a new C execution. */
+  onDocumentOrganizationProjectionOutputAudit(input: {
+    readonly request_id: string;
+    readonly upstream_commit_hash: string;
+    readonly projection: DocumentOrganizationProjection;
+    readonly rendered_output: string;
+    readonly target_surface: import("./output_audit.js").OutputTargetSurface;
+    readonly timestamp?: number;
+  }): ProjectionOutputAuditLog {
+    const projection = input.projection;
+    if (projection.status !== "completed" && projection.status !== "held") {
+      throw new Error("only terminal document organization projections may be restored for display");
+    }
+    if (projection.used_for_authority || projection.may_execute || projection.may_commit_to_memory ||
+        projection.accepted_excerpts.some((excerpt) => excerpt.used_for_authority || excerpt.may_execute || excerpt.may_commit_to_memory)) {
+      throw new Error("document organization projection authority flags are invalid");
+    }
+    const log = buildProjectionOutputAuditLog({
+      request_id: input.request_id,
+      upstream_commit_hash: input.upstream_commit_hash,
+      task_id: projection.task_id,
+      projection_revision: projection.revision,
+      projection_status: projection.status,
+      rendered_output: input.rendered_output,
+      target_surface: input.target_surface,
+      ...(input.timestamp !== undefined ? { timestamp: input.timestamp } : {}),
     });
     this.audit.append(log);
     return log;

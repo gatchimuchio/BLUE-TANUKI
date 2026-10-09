@@ -220,6 +220,25 @@ describe("LongTermMemoryStore JSONL persistence", () => {
     expect(new LongTermMemoryStore({ filepath }).verify()).toBe(true);
   });
 
+  it("reports a digest-only M version and detects an externally changed generation", () => {
+    const store = new LongTermMemoryStore({ filepath });
+    const emptyVersion = store.stateVersion();
+    expect(emptyVersion).toMatchObject({ status: "verified", entry_count: 0 });
+    expect(emptyVersion.revision_digest).toMatch(/^[a-f0-9]{64}$/u);
+
+    store.capture(makeLog("memory-version-private-marker"));
+    const populatedVersion = store.stateVersion();
+    expect(populatedVersion.status).toBe("verified");
+    expect(populatedVersion.entry_count).toBe(1);
+    expect(populatedVersion.revision_digest).not.toBe(emptyVersion.revision_digest);
+    expect(JSON.stringify(populatedVersion)).not.toContain("memory-version-private-marker");
+
+    writeFileSync(filepath, `${readFileSync(filepath, "utf8")}not-a-memory-record\n`);
+    const externallyChanged = store.stateVersion();
+    expect(externallyChanged.status).toBe("invalid");
+    expect(externallyChanged.revision_digest).not.toBe(populatedVersion.revision_digest);
+  });
+
   it("throws on load when the persisted chain is broken", () => {
     const store = new LongTermMemoryStore({ filepath });
     store.capture(makeLog("r1"));

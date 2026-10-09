@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-10 — 資料整理の中断・復帰とM世代照合
+
+- C08.02として、Gateway CLI / WebChatの資料整理をHDS-BRAIN所有のSQLite checkpointで再開できるようにした。保存対象はactor/source digest、M世代digest・件数、Jの確定span offsetと限定状態であり、本文・引用・C応答・分類labelは含めない。
+- process再起動後は同一原文digestとcheckpoint状態を検証し、J確定範囲だけを中立labelで再構成する。M世代の変更・未検証、破損、容量・CAS失敗ではCを続行せずholdし、完了・保留状態の再表示ではCを再実行しない。復旧projectionの表示はdigest-only HDS hash-chain auditへ記録する。
+- Windows上の合成provider/process境界E2EでC要求中kill、J範囲からの復帰、完了後のC停止・M不変、M世代変更時の未実行holdを局所検証した。証拠はFIXTUREとtest-owned INTERNAL_STATEに限り、BT-T-C08-03の一部境界だけを扱う。親C08、C08.03、実provider/live、実資料、release/GA/P13/owner GOは成立しない。
+
 ## 2026-10-10 — 通常CLI/WebChatの一時資料整理
 
 - C08.01として、Gateway CLIとWebChatへ同じJ主導の資料整理projectionを接続した。Cは完全一致する原文引用候補だけを返し、Jが引用範囲と未被覆範囲を検査する。分類意味は未検証、権限・実行・永続記憶反映はなし。

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { MemoryStoreStateVersion } from "./long-term-memory/types.js";
 
 export const DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS = 12_000;
 export const DOCUMENT_ORGANIZATION_MAX_CYCLES = 3;
@@ -6,6 +7,27 @@ export const DOCUMENT_ORGANIZATION_SCHEMA_VERSION = "blue-tanuki.document-organi
 export const DOCUMENT_ORGANIZATION_PROMPT_PREFIX = "資料整理の限定計算を行ってください。" as const;
 
 export type DocumentOrganizationStatus = "ready" | "continuing" | "completed" | "held";
+
+export interface DocumentOrganizationMemoryVersion {
+  readonly schema_version: MemoryStoreStateVersion["schema_version"];
+  readonly status: "verified" | "invalid" | "unavailable";
+  readonly revision_digest: string | null;
+  readonly entry_count: number | null;
+}
+
+export interface DocumentOrganizationCheckpoint {
+  readonly schema_version: "blue-tanuki.document-organization.checkpoint.v1";
+  readonly task_id: string;
+  readonly request_id: string;
+  readonly source_sha256: string;
+  readonly memory_version: DocumentOrganizationMemoryVersion;
+  readonly revision: number;
+  readonly completed_cycles: number;
+  readonly status: DocumentOrganizationStatus;
+  readonly accepted_spans: readonly { readonly start: number; readonly end: number }[];
+  readonly issue_codes: readonly string[];
+  readonly terminal_reason: string | null;
+}
 
 export interface DocumentOrganizationAcceptedExcerpt {
   readonly excerpt_id: string;
@@ -69,12 +91,15 @@ export class DocumentOrganizationCoordinator {
   private terminalReason: string | null = null;
   private readonly accepted: DocumentOrganizationAcceptedExcerpt[] = [];
   private readonly sourceHash: string;
+  private restoredFromCheckpoint = false;
+  private readonly memoryVersion: DocumentOrganizationMemoryVersion;
 
   constructor(
     private readonly input: {
       readonly task_id: string;
       readonly request_id: string;
       readonly source_text: string;
+      readonly memory_version?: DocumentOrganizationMemoryVersion;
     },
   ) {
     if (!isSafeIdentifier(input.task_id) || !isSafeIdentifier(input.request_id)) {
@@ -84,6 +109,86 @@ export class DocumentOrganizationCoordinator {
       throw new Error("document organization source length is outside the allowed range");
     }
     this.sourceHash = sha256(input.source_text);
+    this.memoryVersion = normalizeMemoryVersion(input.memory_version);
+  }
+
+  static restore(
+    input: {
+      readonly source_text: string;
+    },
+    checkpoint: unknown,
+  ): DocumentOrganizationCoordinator {
+    const parsed = parseDocumentOrganizationCheckpoint(checkpoint);
+    const coordinator = new DocumentOrganizationCoordinator({
+      task_id: parsed.task_id,
+      request_id: parsed.request_id,
+      source_text: input.source_text,
+      memory_version: parsed.memory_version,
+    });
+    if (coordinator.sourceHash !== parsed.source_sha256) {
+      throw new Error("document organization checkpoint source digest mismatch");
+    }
+    const spans = parsed.accepted_spans.map((span) => ({
+      start: span.start,
+      end: span.end,
+      quote: input.source_text.slice(span.start, span.end),
+      section: "再起動復旧済み範囲",
+    }));
+    const spanIssues = coordinator.validateCandidateSpans(spans);
+    if (spanIssues.length > 0) throw new Error("document organization checkpoint spans are invalid");
+    coordinator.accepted.push(...spans.map((span) => Object.freeze({
+      excerpt_id: sha256(`${parsed.request_id}|${span.start}|${span.end}|${parsed.source_sha256}`),
+      source_start: span.start,
+      source_end: span.end,
+      quote: span.quote,
+      suggested_section: span.section,
+      section_semantics: "unverified" as const,
+      evidence_status: "exact_source_span" as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+      may_commit_to_memory: false as const,
+    })));
+    coordinator.revision = parsed.revision;
+    coordinator.completedCycles = parsed.completed_cycles;
+    coordinator.status = parsed.status;
+    coordinator.issueCodes = [...parsed.issue_codes];
+    coordinator.terminalReason = parsed.terminal_reason;
+    coordinator.nextQuestion = parsed.status === "ready"
+      ? FIRST_QUESTION
+      : parsed.status === "continuing"
+        ? FOLLOWUP_QUESTION
+        : null;
+    coordinator.restoredFromCheckpoint = true;
+    coordinator.assertCheckpointState();
+    return coordinator;
+  }
+
+  checkpoint(): DocumentOrganizationCheckpoint {
+    const projection = this.snapshot();
+    return Object.freeze({
+      schema_version: "blue-tanuki.document-organization.checkpoint.v1",
+      task_id: projection.task_id,
+      request_id: projection.source_ref.request_id,
+      source_sha256: projection.source_ref.content_sha256,
+      memory_version: this.memoryVersion,
+      revision: this.revision,
+      completed_cycles: this.completedCycles,
+      status: this.status,
+      accepted_spans: Object.freeze(this.accepted.map(({ source_start, source_end }) => Object.freeze({ start: source_start, end: source_end }))),
+      issue_codes: Object.freeze([...this.issueCodes]),
+      terminal_reason: this.terminalReason,
+    });
+  }
+
+  holdForRecovery(reason: "memory_state_changed" | "memory_state_unverified" | "checkpoint_capacity" | "checkpoint_integrity_failed"): DocumentOrganizationProjection {
+    if (this.status !== "ready" && this.status !== "continuing") {
+      return this.snapshot();
+    }
+    this.status = "held";
+    this.nextQuestion = null;
+    this.issueCodes = [reason];
+    this.terminalReason = reason;
+    return this.snapshot();
   }
 
   /** JからCへ渡す限定計算指示。source_textは計算入力であり、投影へ複製しない。 */
@@ -190,7 +295,10 @@ export class DocumentOrganizationCoordinator {
         request_id: this.input.request_id,
         content_sha256: this.sourceHash,
       }),
-      accepted_excerpts: Object.freeze(this.accepted.map((excerpt) => Object.freeze({ ...excerpt }))),
+      accepted_excerpts: Object.freeze(this.accepted.map((excerpt) => Object.freeze({
+        ...excerpt,
+        ...(this.restoredFromCheckpoint ? { suggested_section: "再起動復旧済み範囲" } : {}),
+      }))),
       uncovered_ranges: Object.freeze(this.uncoveredRanges().map((range) => Object.freeze(range))),
       next_question: this.nextQuestion,
       issue_codes: Object.freeze([...this.issueCodes]),
@@ -244,6 +352,129 @@ export class DocumentOrganizationCoordinator {
     this.nextQuestion = null;
     this.terminalReason = reason;
   }
+
+  private assertCheckpointState(): void {
+    const uncovered = this.uncoveredRanges();
+    if (this.completedCycles > DOCUMENT_ORGANIZATION_MAX_CYCLES || this.revision > this.completedCycles ||
+        this.accepted.length < this.revision || this.accepted.length > this.revision * 24) {
+      throw new Error("document organization checkpoint counters are invalid");
+    }
+    if (this.status === "ready" && (this.completedCycles !== 0 || this.revision !== 0 || this.accepted.length !== 0 ||
+        this.issueCodes.length !== 0 || this.terminalReason !== null)) {
+      throw new Error("document organization ready checkpoint is inconsistent");
+    }
+    if (this.status === "continuing" && (this.completedCycles === 0 || this.revision === 0 ||
+        this.completedCycles >= DOCUMENT_ORGANIZATION_MAX_CYCLES || uncovered.length === 0 ||
+        this.issueCodes.length !== 0 || this.terminalReason !== null)) {
+      throw new Error("document organization continuing checkpoint is inconsistent");
+    }
+    if (this.status === "completed" && (this.revision === 0 || uncovered.length !== 0 || this.issueCodes.length !== 0 ||
+        this.terminalReason !== "all_non_whitespace_source_spans_have_exact_citations; section_semantics_unverified")) {
+      throw new Error("document organization completed checkpoint is inconsistent");
+    }
+    if (this.status === "held") {
+      const recoveryReasons = new Set([
+        "memory_state_changed",
+        "memory_state_unverified",
+        "checkpoint_capacity",
+        "checkpoint_integrity_failed",
+      ]);
+      const validReason = this.terminalReason === "candidate_rejected" ||
+        this.terminalReason === "cycle_failed" ||
+        this.terminalReason === "cycle_limit_reached" ||
+        this.terminalReason === "cycle_limit_with_uncovered_source" ||
+        (this.terminalReason !== null && recoveryReasons.has(this.terminalReason));
+      const validIssues = this.terminalReason === "candidate_rejected"
+        ? this.issueCodes.length > 0
+        : this.terminalReason === "cycle_failed"
+          ? this.issueCodes.length === 1
+          : this.terminalReason !== null && recoveryReasons.has(this.terminalReason)
+            ? this.issueCodes.length === 1 && this.issueCodes[0] === this.terminalReason
+            : this.issueCodes.length === 0;
+      if (!validReason || !validIssues || this.nextQuestion !== null || this.terminalReason === null) {
+        throw new Error("document organization held checkpoint is inconsistent");
+      }
+    }
+  }
+}
+
+function parseDocumentOrganizationCheckpoint(value: unknown): DocumentOrganizationCheckpoint {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("document organization checkpoint is invalid");
+  }
+  const record = value as Record<string, unknown>;
+  const expectedKeys = ["schema_version", "task_id", "request_id", "source_sha256", "memory_version", "revision", "completed_cycles", "status", "accepted_spans", "issue_codes", "terminal_reason"];
+  if (Object.keys(record).length !== expectedKeys.length || expectedKeys.some((key) => !Object.hasOwn(record, key))) {
+    throw new Error("document organization checkpoint fields are invalid");
+  }
+  if (record.schema_version !== "blue-tanuki.document-organization.checkpoint.v1" ||
+      typeof record.task_id !== "string" || !isSafeIdentifier(record.task_id) ||
+      typeof record.request_id !== "string" || !isSafeIdentifier(record.request_id) ||
+      typeof record.source_sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(record.source_sha256) ||
+      !Number.isInteger(record.revision) || (record.revision as number) < 0 ||
+      !Number.isInteger(record.completed_cycles) || (record.completed_cycles as number) < 0 ||
+      !["ready", "continuing", "completed", "held"].includes(String(record.status)) ||
+      !Array.isArray(record.accepted_spans) || record.accepted_spans.length > DOCUMENT_ORGANIZATION_MAX_CYCLES * 24 ||
+      !Array.isArray(record.issue_codes) || record.issue_codes.length > 4 ||
+      record.issue_codes.some((code) => typeof code !== "string" || !isSafeIssueCode(code)) ||
+      new Set(record.issue_codes as unknown[]).size !== record.issue_codes.length ||
+      !(record.terminal_reason === null || typeof record.terminal_reason === "string")) {
+    throw new Error("document organization checkpoint values are invalid");
+  }
+  const memoryVersion = parseMemoryVersion(record.memory_version);
+  const acceptedSpans = record.accepted_spans.map((span) => {
+    if (!span || typeof span !== "object" || Array.isArray(span) || Object.keys(span).length !== 2 ||
+        !Object.hasOwn(span, "start") || !Object.hasOwn(span, "end") ||
+        !Number.isInteger((span as { start?: unknown }).start) || !Number.isInteger((span as { end?: unknown }).end)) {
+      throw new Error("document organization checkpoint span is invalid");
+    }
+    const start = (span as { start: number }).start;
+    const end = (span as { end: number }).end;
+    if (start < 0 || end <= start) throw new Error("document organization checkpoint span is invalid");
+    return Object.freeze({ start, end });
+  });
+  return Object.freeze({
+    schema_version: record.schema_version as DocumentOrganizationCheckpoint["schema_version"],
+    task_id: record.task_id,
+    request_id: record.request_id,
+    source_sha256: record.source_sha256,
+    memory_version: memoryVersion,
+    revision: record.revision as number,
+    completed_cycles: record.completed_cycles as number,
+    status: record.status as DocumentOrganizationStatus,
+    accepted_spans: Object.freeze(acceptedSpans),
+    issue_codes: Object.freeze([...(record.issue_codes as string[])]),
+    terminal_reason: record.terminal_reason as string | null,
+  });
+}
+
+function normalizeMemoryVersion(value: DocumentOrganizationMemoryVersion | undefined): DocumentOrganizationMemoryVersion {
+  return value ? parseMemoryVersion(value) : Object.freeze({
+    schema_version: "blue-tanuki.memory-state-version.v1",
+    status: "unavailable",
+    revision_digest: null,
+    entry_count: null,
+  });
+}
+
+function parseMemoryVersion(value: unknown): DocumentOrganizationMemoryVersion {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("document organization memory version is invalid");
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length !== 4 ||
+      record.schema_version !== "blue-tanuki.memory-state-version.v1" ||
+      !["verified", "invalid", "unavailable"].includes(String(record.status)) ||
+      !(record.revision_digest === null || (typeof record.revision_digest === "string" && /^[a-f0-9]{64}$/u.test(record.revision_digest))) ||
+      !(record.entry_count === null || (Number.isInteger(record.entry_count) && (record.entry_count as number) >= 0)) ||
+      (record.status === "verified" && (record.revision_digest === null || record.entry_count === null)) ||
+      (record.status === "unavailable" && (record.revision_digest !== null || record.entry_count !== null))) {
+    throw new Error("document organization memory version is invalid");
+  }
+  return Object.freeze({
+    schema_version: record.schema_version as "blue-tanuki.memory-state-version.v1",
+    status: record.status as DocumentOrganizationMemoryVersion["status"],
+    revision_digest: record.revision_digest as string | null,
+    entry_count: record.entry_count as number | null,
+  });
 }
 
 export function renderDocumentOrganizationProjection(projection: DocumentOrganizationProjection): string {
@@ -261,8 +492,26 @@ export function renderDocumentOrganizationProjection(projection: DocumentOrganiz
     `終了理由: ${projection.terminal_reason ?? "継続中"}`,
     "権限利用: false / 実行可能: false / 永続記憶反映: false",
   ];
+  if (projection.status === "held") {
+    lines.push(`次の行動: ${documentOrganizationHoldNextAction(projection.terminal_reason)}`);
+  }
   if (projection.issue_codes.length > 0) lines.push(`問題コード: ${projection.issue_codes.join(", ")}`);
   return lines.join("\n");
+}
+
+function documentOrganizationHoldNextAction(reason: string | null): string {
+  switch (reason) {
+    case "memory_state_changed":
+      return "M世代の整合を確認する。この資料整理は終端保留であり、同じactorと原文の再送では再開しない。";
+    case "memory_state_unverified":
+      return "Mのhash-chainと保存状態を確認する。この資料整理は終端保留であり、自動再開しない。";
+    case "checkpoint_capacity":
+      return "保存領域とterminal checkpointの保持方針を確認する。進行中checkpointは自動削除されていない。";
+    case "checkpoint_integrity_failed":
+      return "checkpointを編集・削除せず、保存状態と回復点を確認する。";
+    default:
+      return "未被覆範囲と問題理由を確認し、原資料を見直してからowner判断で次のtaskを開始する。";
+  }
 }
 
 function parseCandidate(raw: unknown): CandidateParseResult {

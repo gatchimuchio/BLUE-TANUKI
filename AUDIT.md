@@ -72,6 +72,8 @@ Phase 12-S1 adds `output_audit` records before final user-visible output or exte
 
 Raw LLM/tool output content is not stored in the audit entry. Complete raw history belongs to the separate CompleteHistoryStore substrate and remains non-authority replay/evidence material.
 
+復旧済みまたは保留済みの終端J資料整理projectionは、専用の`j_projection_output_audit`へ記録する。requestとHDS commit参照、task/revision/status、表示先、rendered outputのdigestと文字数だけを持ち、原文・引用・section label・表示内容を持たない。`used_for_authority=false`、`may_execute=false`、`may_commit_to_memory=false`、`external_side_effect_result=false`を固定する。この記録はCを実行しない表示の監査であり、表示判断は行わない。権限境界はHDS-BRAINに残る。
+
 ## Complete history substrate
 
 Phase 12-S2 adds `CompleteHistoryStore` as a standalone original-record substrate in `packages/hds-brain`.

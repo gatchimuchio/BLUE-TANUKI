@@ -66,3 +66,11 @@ export interface MemoryStoreOptions {
    */
   max_entries?: number;
 }
+
+/** Digest-only view of the current M store generation for restart reconciliation. */
+export interface MemoryStoreStateVersion {
+  readonly schema_version: "blue-tanuki.memory-state-version.v1";
+  readonly status: "verified" | "invalid";
+  readonly revision_digest: string;
+  readonly entry_count: number | null;
+}

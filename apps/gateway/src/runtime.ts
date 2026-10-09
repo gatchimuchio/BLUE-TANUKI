@@ -4,6 +4,7 @@ import {
   FailureMemoryStore,
   HDSUpperController,
   LongTermMemoryStore,
+  DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
   extractFailureSignatures,
 } from "@blue-tanuki/hds-brain";
 import {
@@ -32,10 +33,13 @@ import { stripEnvFileArgs } from "./env_file.js";
 import { RuntimeScheduleManager } from "./runtime_schedule.js";
 import { resolveAllSecretRefs } from "./secret_store.js";
 import {
-  createDocumentOrganizationCoordinator,
   documentOrganizationSourceFromRequest,
+  presentRestoredDocumentOrganizationProjection,
+  prepareDocumentOrganizationSession,
   runDocumentOrganizationTask,
+  type DocumentOrganizationSession,
 } from "./document_organization_runtime.js";
+import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -154,74 +158,119 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     timestamp: Date.now(),
   });
   const organizationSourceText = documentOrganizationSourceFromRequest(inbound);
-  const organizationCoordinator = organizationSourceText === null
+  const organizationStore = organizationSourceText === null
     ? null
-    : createDocumentOrganizationCoordinator(inbound, organizationSourceText);
-  const decisionRequest = organizationCoordinator
-    ? { ...inbound, content: organizationCoordinator.buildComputePrompt() }
-    : inbound;
+    : DocumentOrganizationCheckpointStore.fromEnvironment(process.env);
+  let organizationSession: DocumentOrganizationSession | null = null;
+  let decision: ReturnType<HDSUpperController["decide"]> | undefined;
+  try {
+    organizationSession = organizationSourceText === null || organizationStore === null
+      ? null
+      : prepareDocumentOrganizationSession({
+        request: inbound,
+        source_text: organizationSourceText,
+        hds,
+        store: organizationStore,
+      });
+    const organizationCoordinator = organizationSession?.coordinator ?? null;
+    const decisionRequest = organizationCoordinator
+      ? {
+        ...inbound,
+        content: organizationSession?.restored_terminal_state
+          ? `${DOCUMENT_ORGANIZATION_PROMPT_PREFIX}復旧済みの終端projection表示に必要なHDS判断です。計算は実行しません。`
+          : organizationCoordinator.buildComputePrompt(),
+      }
+      : inbound;
 
-  if (organizationCoordinator) {
-    gatewayLog.info("inbound", {
-      id: inbound.id,
-      channel: inbound.channel,
-      user: inbound.user,
-      task: "document_organization",
-      content_digest: organizationCoordinator.snapshot().source_ref.content_sha256,
-      content_chars: organizationSourceText?.length ?? 0,
-    });
-  } else {
-    gatewayLog.info("inbound", {
-      id: inbound.id,
-      channel: inbound.channel,
-      content: inbound.content,
-    });
-  }
+    if (organizationCoordinator) {
+      gatewayLog.info("inbound", {
+        id: inbound.id,
+        channel: inbound.channel,
+        user: inbound.user,
+        task: "document_organization",
+        content_digest: organizationCoordinator.snapshot().source_ref.content_sha256,
+        content_chars: organizationSourceText?.length ?? 0,
+      });
+    } else {
+      gatewayLog.info("inbound", {
+        id: inbound.id,
+        channel: inbound.channel,
+        content: inbound.content,
+      });
+    }
 
-  const { log, command } = hds.decide(decisionRequest, organizationCoordinator
-    ? { transient_content: "document_organization" }
-    : undefined);
-  hdsLog.info("decision", {
-    decision: log.commit.decision,
-    aggregate: log.model.scoring.aggregate.toFixed(2),
-    hash: log.commit.hash.slice(0, 12),
-  });
-  hdsLog.info("reason", { reason: log.commit.reason });
-  hdsLog.info("triggered", {
-    thresholds: log.commit.triggered_thresholds.join(", "),
-  });
-  for (const ax of log.model.scoring.axis_scores) {
-    hdsLog.info("axis", {
-      axis: ax.axis,
-      score: ax.score.toFixed(2),
-      detector: ax.detector,
-      evidence: ax.evidence,
+    decision = hds.decide(decisionRequest, organizationCoordinator
+      ? { transient_content: "document_organization" }
+      : undefined);
+    const { log, command } = decision;
+    hdsLog.info("decision", {
+      decision: log.commit.decision,
+      aggregate: log.model.scoring.aggregate.toFixed(2),
+      hash: log.commit.hash.slice(0, 12),
     });
-  }
+    hdsLog.info("reason", { reason: log.commit.reason });
+    hdsLog.info("triggered", {
+      thresholds: log.commit.triggered_thresholds.join(", "),
+    });
+    for (const ax of log.model.scoring.axis_scores) {
+      hdsLog.info("axis", {
+        axis: ax.axis,
+        score: ax.score.toFixed(2),
+        detector: ax.detector,
+        evidence: ax.evidence,
+      });
+    }
 
-  if (organizationCoordinator && command) {
-    const result = await runDocumentOrganizationTask({
-      coordinator: organizationCoordinator,
-      origin: inbound,
-      hds,
-      executor,
-      executorApproval,
-      approval,
-      failureMemory,
-      target_surface: "cli",
-      first_decision: { log, command },
-    });
-    if (result) {
-      coreLog.info("document_organization.result", {
-        status: result.status,
-        revision: result.projection.revision,
-        cycles: result.projection.completed_cycles,
+    if (organizationSession?.restored_terminal_state && log.commit.decision === "ASSERT") {
+      if (command) {
+        hds.onCommandLifecycle(command.id, "approval_cancelled", {
+          actor: inbound.user,
+          reason: "document_organization_checkpoint_terminal_no_compute_required",
+        });
+      }
+      const result = presentRestoredDocumentOrganizationProjection({
+        coordinator: organizationSession.coordinator,
+        request_id: inbound.id,
+        upstream_commit_hash: log.commit.hash,
+        hds,
+        target_surface: "cli",
       });
       process.stdout.write(`${result.rendered_output}\n`);
       auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
       return;
     }
+
+    if (organizationCoordinator && command && organizationSession) {
+      const result = await runDocumentOrganizationTask({
+        coordinator: organizationCoordinator,
+        origin: inbound,
+        hds,
+        executor,
+        executorApproval,
+        approval,
+        failureMemory,
+        target_surface: "cli",
+        first_decision: { log, command },
+        persist_checkpoint: organizationSession.persist_checkpoint,
+        current_memory_version: () => hds.documentOrganizationMemoryVersion(),
+      });
+      if (result) {
+        coreLog.info("document_organization.result", {
+          status: result.status,
+          revision: result.projection.revision,
+          cycles: result.projection.completed_cycles,
+        });
+        process.stdout.write(`${result.rendered_output}\n`);
+        auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
+        return;
+      }
+    }
+  } finally {
+    organizationStore?.close();
   }
+
+  if (!decision) throw new Error("HDS decision was not produced");
+  const { log, command } = decision;
 
   if (!command) {
     if (log.commit.decision === "SUSPEND") {

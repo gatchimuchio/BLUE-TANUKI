@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = process.cwd();
 const tsxCli = join(repositoryRoot, "node_modules", "tsx", "dist", "cli.mjs");
@@ -112,6 +113,172 @@ describe("document organization ordinary entries", () => {
       rmSync(tempRoot, { recursive: true, force: true });
     }
   }, 45_000);
+
+  it("BT-U-C08.02-P-E2E: resumes after a process kill from confirmed J spans and stops after completion", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-c0802-positive-"));
+    const auditDir = join(tempRoot, "audit");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const sessionDir = join(tempRoot, "sessions");
+    const memoryFile = join(tempRoot, "memory.jsonl");
+    const restartSource = "C08_PRIVATE_RESTART_SOURCE:決定事項は青。未確認は期限。";
+    const firstQuote = "C08_PRIVATE_RESTART_SOURCE:決定事項は青。";
+    const secondQuote = "未確認は期限。";
+    const providerOnePrompts: string[] = [];
+    let providerOneCalls = 0;
+    let signalSecondCall!: () => void;
+    const secondCallSeen = new Promise<void>((resolve) => { signalSecondCall = resolve; });
+    const providerOne = createServer((request, response) => {
+      void readPrompt(request).then(async (prompt) => {
+        providerOnePrompts.push(prompt);
+        providerOneCalls += 1;
+        if (providerOneCalls === 1) {
+          respondWithExcerpt(response, restartSource, 0, firstQuote.length, "C08_PRIVATE_PROVIDER_LABEL");
+          return;
+        }
+        signalSecondCall();
+        await new Promise<void>((resolve) => {
+          request.once("aborted", resolve);
+          response.once("close", () => resolve());
+        });
+      });
+    });
+    const providerOnePort = await listenOnLoopback(providerOne);
+    const runtimePort = await reserveLoopbackPort();
+    const firstEnv = isolatedRuntimeEnvironment(providerOnePort, runtimePort, auditDir, historyFile, sessionDir);
+    firstEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
+    seedPersistentMemory(memoryFile, "c0802-memory-seed-1");
+    const memoryBeforeRestart = readFileSync(memoryFile, "utf8");
+    const childOne = spawnCaptured([tsxCli, "apps/gateway/src/main.ts", "--organize", restartSource], firstEnv);
+
+    try {
+      await waitForSignal(secondCallSeen, childOne, "second synthetic C call was not reached");
+      expect(providerOneCalls).toBe(2);
+      expect(providerOnePrompts[1]).toContain(`"start":0,"end":${firstQuote.length}`);
+      await forceStopChild(childOne.child);
+      await closeServer(providerOne);
+
+      const providerTwoPrompts: string[] = [];
+      let providerTwoCalls = 0;
+      const providerTwo = createServer((request, response) => {
+        void readPrompt(request).then((prompt) => {
+          providerTwoPrompts.push(prompt);
+          providerTwoCalls += 1;
+          respondWithExcerpt(response, restartSource, firstQuote.length, restartSource.length, "C08_PRIVATE_PROVIDER_LABEL_2");
+        });
+      });
+      const providerTwoPort = await listenOnLoopback(providerTwo);
+      const resumedEnv = isolatedRuntimeEnvironment(providerTwoPort, runtimePort, auditDir, historyFile, sessionDir);
+      resumedEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
+
+      try {
+        const resumed = await runChild([tsxCli, "apps/gateway/src/main.ts", "--organize", restartSource], resumedEnv);
+        const resumedOutput = extractProjection(resumed.stdout.join(""));
+        expect(resumedOutput).toContain("状態: completed");
+        expect(resumedOutput).toContain("C08_PRIVATE_RESTART_SOURCE:決定事項は青。");
+        expect(resumedOutput).toContain(secondQuote);
+        expect(resumedOutput).toContain("再起動復旧済み範囲");
+        expect(providerTwoCalls).toBe(1);
+        expect(providerTwoPrompts[0]).toContain(`"start":0,"end":${firstQuote.length}`);
+
+        const repeated = await runChild([tsxCli, "apps/gateway/src/main.ts", "--organize", restartSource], resumedEnv);
+        expect(extractProjection(repeated.stdout.join(""))).toContain("状態: completed");
+        expect(providerTwoCalls).toBe(1);
+        expect(readFileSync(memoryFile, "utf8")).toBe(memoryBeforeRestart);
+
+        const checkpointBytes = readFileSync(join(auditDir, "file-root", "document-organization", "j-checkpoints.sqlite"));
+        expect(checkpointBytes.includes(Buffer.from("C08_PRIVATE_RESTART_SOURCE"))).toBe(false);
+        expect(checkpointBytes.includes(Buffer.from("C08_PRIVATE_PROVIDER_LABEL"))).toBe(false);
+        const durableText = [
+          readFileSync(join(auditDir, "audit.jsonl"), "utf8"),
+          existsSync(historyFile) ? readFileSync(historyFile, "utf8") : "",
+          existsSync(sessionDir) ? readdirSync(sessionDir).map((name) => readFileSync(join(sessionDir, name), "utf8")).join("\n") : "",
+        ].join("\n");
+        expect(durableText).not.toContain("C08_PRIVATE_RESTART_SOURCE");
+        expect(durableText).not.toContain("C08_PRIVATE_PROVIDER_LABEL");
+      } finally {
+        await closeServer(providerTwo);
+      }
+    } finally {
+      await stopChild(childOne.child);
+      if (providerOne.listening) await closeServer(providerOne);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("BT-U-C08.02-N-E2E: returns a valid hold without calling C when M changed across restart", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-c0802-negative-"));
+    const auditDir = join(tempRoot, "audit");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const sessionDir = join(tempRoot, "sessions");
+    const memoryFile = join(tempRoot, "memory.jsonl");
+    const changedSource = "C08_PRIVATE_M_REVISION_SOURCE:目的を維持。未確認を残す。";
+    const acceptedQuote = "C08_PRIVATE_M_REVISION_SOURCE:目的を維持。";
+    let providerOneCalls = 0;
+    let signalSecondCall!: () => void;
+    const secondCallSeen = new Promise<void>((resolve) => { signalSecondCall = resolve; });
+    const providerOne = createServer((request, response) => {
+      void readPrompt(request).then(async () => {
+        providerOneCalls += 1;
+        if (providerOneCalls === 1) {
+          respondWithExcerpt(response, changedSource, 0, acceptedQuote.length, "C08_PRIVATE_M_PROVIDER_LABEL");
+          return;
+        }
+        signalSecondCall();
+        await new Promise<void>((resolve) => {
+          request.once("aborted", resolve);
+          response.once("close", () => resolve());
+        });
+      });
+    });
+    const providerOnePort = await listenOnLoopback(providerOne);
+    const runtimePort = await reserveLoopbackPort();
+    const firstEnv = isolatedRuntimeEnvironment(providerOnePort, runtimePort, auditDir, historyFile, sessionDir);
+    firstEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
+    seedPersistentMemory(memoryFile, "c0802-memory-seed-negative");
+    const childOne = spawnCaptured([tsxCli, "apps/gateway/src/main.ts", "--organize", changedSource], firstEnv);
+
+    try {
+      await waitForSignal(secondCallSeen, childOne, "second synthetic C call was not reached");
+      await forceStopChild(childOne.child);
+      await closeServer(providerOne);
+
+      seedPersistentMemory(memoryFile, "c0802-memory-revision-change");
+      const providerTwoPrompts: string[] = [];
+      let providerTwoCalls = 0;
+      const providerTwo = createServer((request, response) => {
+        void readPrompt(request).then((prompt) => {
+          providerTwoPrompts.push(prompt);
+          providerTwoCalls += 1;
+          respondWithExcerpt(response, changedSource, acceptedQuote.length, changedSource.length, "C08_PRIVATE_UNEXPECTED_C_LABEL");
+        });
+      });
+      const providerTwoPort = await listenOnLoopback(providerTwo);
+      const resumedEnv = isolatedRuntimeEnvironment(providerTwoPort, runtimePort, auditDir, historyFile, sessionDir);
+      resumedEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
+
+      try {
+        const held = await runChild([tsxCli, "apps/gateway/src/main.ts", "--organize", changedSource], resumedEnv);
+        const heldOutput = extractProjection(held.stdout.join(""));
+        expect(heldOutput).toContain("状態: held");
+        expect(heldOutput).toContain("memory_state_changed");
+        expect(heldOutput).toContain("再起動復旧済み範囲");
+        expect(providerTwoCalls).toBe(0);
+
+        const repeated = await runChild([tsxCli, "apps/gateway/src/main.ts", "--organize", changedSource], resumedEnv);
+        expect(extractProjection(repeated.stdout.join(""))).toContain("memory_state_changed");
+        expect(providerTwoCalls).toBe(0);
+        const checkpointBytes = readFileSync(join(auditDir, "file-root", "document-organization", "j-checkpoints.sqlite"));
+        expect(checkpointBytes.includes(Buffer.from("C08_PRIVATE_M_REVISION_SOURCE"))).toBe(false);
+        expect(checkpointBytes.includes(Buffer.from("C08_PRIVATE_M_PROVIDER_LABEL"))).toBe(false);
+      } finally {
+        await closeServer(providerTwo);
+      }
+    } finally {
+      await stopChild(childOne.child);
+      if (providerOne.listening) await closeServer(providerOne);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 async function respondWithCandidate(request: IncomingMessage, response: import("node:http").ServerResponse, cycleIndex: number, prompts: string[]): Promise<void> {
@@ -170,6 +337,8 @@ function isolatedRuntimeEnvironment(upstreamPort: number, gatewayPort: number, a
     WEBCHAT_TOKEN: token,
     WEBCHAT_RESUME_TOKEN: resumeToken,
     BLUE_TANUKI_MAINTENANCE_TOKEN: maintenanceToken,
+    BLUE_TANUKI_FILE_ROOT: join(auditDir, "file-root"),
+    BLUE_TANUKI_MEMORY_FILE: join(auditDir, "memory.jsonl"),
     BLUE_TANUKI_AUDIT_DIR: auditDir,
     BLUE_TANUKI_COMPLETE_HISTORY_FILE: historyFile,
     BLUE_TANUKI_SESSION_DIR: sessionDir,
@@ -190,6 +359,71 @@ function isolatedRuntimeEnvironment(upstreamPort: number, gatewayPort: number, a
     LINE_CHANNEL_ACCESS_TOKEN: "",
     LINE_CHANNEL_SECRET: "",
   };
+}
+
+async function readPrompt(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  const raw = Buffer.concat(chunks).toString("utf8");
+  const body = JSON.parse(raw) as { messages?: Array<{ content?: unknown }> };
+  return (body.messages ?? []).map((message) => typeof message.content === "string" ? message.content : "").join("\n");
+}
+
+function respondWithExcerpt(
+  response: import("node:http").ServerResponse,
+  sourceText: string,
+  start: number,
+  end: number,
+  label: string,
+): void {
+  const quote = sourceText.slice(start, end);
+  const candidateContent = JSON.stringify({
+    schema_version: "blue-tanuki.document-organization.candidate.v1",
+    sections: [{ label, excerpts: [{ start, end, quote }] }],
+  });
+  const content = JSON.stringify({
+    schema_version: "blue-tanuki.memory-citation-response.v1",
+    answer: candidateContent,
+    citations: [],
+  });
+  response.writeHead(200, { "content-type": "application/json" });
+  response.end(JSON.stringify({
+    id: "c0802-local-completion",
+    object: "chat.completion",
+    created: 2,
+    model: "c0802-local",
+    choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  }));
+}
+
+function seedPersistentMemory(filepath: string, requestId: string): void {
+  const memory = new LongTermMemoryStore({ filepath });
+  const hds = new HDSUpperController({ memory });
+  hds.decide({
+    id: requestId,
+    channel: "cli",
+    user: "c0802-test-owner",
+    content: "please organize this ordinary request",
+    timestamp: Date.now(),
+  });
+  if (memory.size() === 0 || !memory.verify()) throw new Error("synthetic M seed was not confirmed");
+}
+
+async function waitForSignal(signal: Promise<void>, processRun: CapturedProcess, message: string): Promise<void> {
+  await Promise.race([
+    signal,
+    once(processRun.child, "close").then(() => { throw new Error(`${message}\n${processRun.stderr.join("")}`); }),
+    new Promise<void>((_, reject) => setTimeout(() => reject(new Error(message)), 15_000)),
+  ]);
+}
+
+async function forceStopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const closed = once(child, "close");
+  if (!child.kill("SIGKILL")) throw new Error("test-owned Gateway child could not be terminated");
+  await closed;
+  children.delete(child);
 }
 
 async function listenOnLoopback(server: Server): Promise<number> {

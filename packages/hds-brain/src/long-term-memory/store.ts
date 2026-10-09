@@ -115,34 +115,49 @@ export class LongTermMemoryStore {
   }
 
   verify(): boolean {
-    let prev_hash = "GENESIS";
-    for (let index = 0; index < this.entries.length; index += 1) {
-      const entry = this.entries[index]!;
-      const expected = this.computeHash({
-        index: entry.index,
-        request_id: entry.request_id,
-        f_reference: entry.f_reference,
-        timestamp: entry.timestamp,
-        closure: entry.closure,
-        goal: entry.goal,
-        problem_definition_id: entry.problem_definition_id,
-        abstraction: entry.abstraction,
-        actor: entry.actor,
-        process: entry.process,
-        commit: entry.commit,
-        tags: entry.tags,
-        prev_hash,
-      });
-      if (
-        entry.index !== index ||
-        entry.prev_hash !== prev_hash ||
-        entry.entry_hash !== expected
-      ) {
-        return false;
-      }
-      prev_hash = entry.entry_hash;
+    return verifyMemoryEntrySequence(this.entries);
+  }
+
+  /**
+   * Return only a digest and count for binding a transient J checkpoint to an
+   * M generation. This does not expose memory entries to the caller.
+   */
+  stateVersion(): import("./types.js").MemoryStoreStateVersion {
+    if (!this.filepath) {
+      const valid = this.verify();
+      const lastHash = this.entries.at(-1)?.entry_hash ?? "GENESIS";
+      return {
+        schema_version: "blue-tanuki.memory-state-version.v1",
+        status: valid ? "verified" : "invalid",
+        revision_digest: createHash("sha256")
+          .update(`${this.entries.length}|${lastHash}`)
+          .digest("hex"),
+        entry_count: this.entries.length,
+      };
     }
-    return true;
+
+    let raw = "";
+    try {
+      raw = existsSync(this.filepath) ? readFileSync(this.filepath, "utf8") : "";
+      const diskEntries = raw.split("\n").filter((line) => line.trim().length > 0).map(decodeMemoryEntry);
+      const diskValid = verifyMemoryEntrySequence(diskEntries);
+      const sameLoadedState = diskEntries.length === this.entries.length && diskEntries.every(
+        (entry, index) => entry.entry_hash === this.entries[index]?.entry_hash,
+      );
+      return {
+        schema_version: "blue-tanuki.memory-state-version.v1",
+        status: diskValid && sameLoadedState ? "verified" : "invalid",
+        revision_digest: createHash("sha256").update(raw, "utf8").digest("hex"),
+        entry_count: diskEntries.length,
+      };
+    } catch {
+      return {
+        schema_version: "blue-tanuki.memory-state-version.v1",
+        status: "invalid",
+        revision_digest: createHash("sha256").update(raw, "utf8").digest("hex"),
+        entry_count: null,
+      };
+    }
   }
 
   private createEntry(log: DecisionLog): MemoryEntry {
@@ -207,6 +222,36 @@ export class LongTermMemoryStore {
       );
     }
   }
+}
+
+function verifyMemoryEntrySequence(entries: readonly MemoryEntry[]): boolean {
+  let previousHash = "GENESIS";
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    const canonical = canonicalizeMemoryEntry({
+      index: entry.index,
+      request_id: entry.request_id,
+      f_reference: entry.f_reference,
+      timestamp: entry.timestamp,
+      closure: entry.closure,
+      goal: entry.goal,
+      problem_definition_id: entry.problem_definition_id,
+      abstraction: entry.abstraction,
+      actor: entry.actor,
+      process: entry.process,
+      commit: entry.commit,
+      tags: entry.tags,
+      prev_hash: previousHash,
+    });
+    const expectedHash = createHash("sha256")
+      .update(`${entry.index}|${previousHash}|${canonical}`)
+      .digest("hex");
+    if (entry.index !== index || entry.prev_hash !== previousHash || entry.entry_hash !== expectedHash) {
+      return false;
+    }
+    previousHash = entry.entry_hash;
+  }
+  return true;
 }
 
 

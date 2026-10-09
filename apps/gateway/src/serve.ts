@@ -3,6 +3,7 @@ import {
   COMPLETE_HISTORY_SCHEMA_VERSION,
   CompleteHistoryStore,
   HDSUpperController,
+  DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
   extractFailureSignatures,
   runPeriodicFailureMemoryVerification,
 } from "@blue-tanuki/hds-brain";
@@ -92,10 +93,12 @@ import { buildResidentNotificationsSnapshot } from "./resident_notifications.js"
 import { probeGatewaySelfHealth } from "./runtime_health.js";
 import { resolveAllSecretRefs } from "./secret_store.js";
 import {
-  createDocumentOrganizationCoordinator,
   documentOrganizationSourceFromRequest,
+  presentRestoredDocumentOrganizationProjection,
+  prepareDocumentOrganizationSession,
   runDocumentOrganizationTask,
 } from "./document_organization_runtime.js";
+import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import {
   commandOperation,
   commandHistoryDescriptor,
@@ -1584,6 +1587,12 @@ export async function serve(): Promise<ServeShutdown> {
     session_store: buildSessionStore(plugins),
   });
 
+  let documentOrganizationCheckpointStore: DocumentOrganizationCheckpointStore | null = null;
+  const checkpointStoreForOrganizer = (): DocumentOrganizationCheckpointStore => {
+    documentOrganizationCheckpointStore ??= DocumentOrganizationCheckpointStore.fromEnvironment(process.env);
+    return documentOrganizationCheckpointStore;
+  };
+
   const handler = async (req: InboundRequest): Promise<void> => {
     const boundary = planGatewayInboundBoundary(req);
     const authorityReq = boundary.request;
@@ -1621,11 +1630,22 @@ export async function serve(): Promise<ServeShutdown> {
     const documentSource = boundary.boundary_ok
       ? documentOrganizationSourceFromRequest(authorityReq)
       : null;
-    const documentCoordinator = documentSource === null
+    const documentSession = documentSource === null
       ? null
-      : createDocumentOrganizationCoordinator(authorityReq, documentSource);
+      : prepareDocumentOrganizationSession({
+        request: authorityReq,
+        source_text: documentSource,
+        hds,
+        store: checkpointStoreForOrganizer(),
+      });
+    const documentCoordinator = documentSession?.coordinator ?? null;
     const decisionInput = documentCoordinator
-      ? { ...authorityReq, content: documentCoordinator.buildComputePrompt() }
+      ? {
+        ...authorityReq,
+        content: documentSession?.restored_terminal_state
+          ? `${DOCUMENT_ORGANIZATION_PROMPT_PREFIX}復旧済みの終端projection表示に必要なHDS判断です。計算は実行しません。`
+          : documentCoordinator.buildComputePrompt(),
+      }
       : hdsBoundaryInput;
     const { log, command } = hds.decide(decisionInput, documentCoordinator
       ? { transient_content: "document_organization" }
@@ -1657,7 +1677,53 @@ export async function serve(): Promise<ServeShutdown> {
       return;
     }
 
-    if (documentCoordinator && command) {
+    if (documentSession?.restored_terminal_state && log.commit.decision === "ASSERT") {
+      if (command) {
+        hds.onCommandLifecycle(command.id, "approval_cancelled", {
+          actor: authorityReq.user,
+          reason: "document_organization_checkpoint_terminal_no_compute_required",
+        });
+      }
+      const result = presentRestoredDocumentOrganizationProjection({
+        coordinator: documentSession.coordinator,
+        request_id: authorityReq.id,
+        upstream_commit_hash: log.commit.hash,
+        hds,
+        target_surface: "channel",
+      });
+      recordCompleteHistory({
+        kind: "audit_history",
+        request_id: authorityReq.id,
+        actor: authorityReq.user,
+        source: "document_organization_restored_j_projection",
+        timestamp: Date.now(),
+        payload: {
+          task_id: result.projection.task_id,
+          projection_revision: result.projection.revision,
+          status: result.projection.status,
+          source_sha256: result.projection.source_ref.content_sha256,
+          accepted_excerpt_count: result.projection.accepted_excerpts.length,
+          output_digest: result.output_audit.rendered_output_digest,
+          restored_from_checkpoint: true,
+          used_for_authority: false,
+          may_execute: false,
+          may_commit_to_memory: false,
+        },
+      });
+      if (result.rendered_output) {
+        await dispatcher.dispatch({
+          channel: authorityReq.channel,
+          target: replyTarget(authorityReq),
+          content: result.rendered_output,
+        }, {
+          command_id: `notify-${authorityReq.id}`,
+          upstream_commit_hash: log.commit.hash,
+        });
+      }
+      return;
+    }
+
+    if (documentCoordinator && documentSession && command) {
       const result = await runDocumentOrganizationTask({
         coordinator: documentCoordinator,
         origin: authorityReq,
@@ -1668,6 +1734,8 @@ export async function serve(): Promise<ServeShutdown> {
         failureMemory,
         target_surface: "channel",
         first_decision: { log, command },
+        persist_checkpoint: documentSession.persist_checkpoint,
+        current_memory_version: () => hds.documentOrganizationMemoryVersion(),
         emergency_stop_active: emergencyStop.active,
       });
       if (!result) return;
@@ -1675,7 +1743,7 @@ export async function serve(): Promise<ServeShutdown> {
       recordCompleteHistory({
         kind: "audit_history",
         request_id: authorityReq.id,
-        command_id: result.command_id,
+        ...(result.command_id !== null ? { command_id: result.command_id } : {}),
         actor: authorityReq.user,
         source: "document_organization_j_projection",
         timestamp: Date.now(),
@@ -1694,14 +1762,34 @@ export async function serve(): Promise<ServeShutdown> {
           may_commit_to_memory: false,
         },
       });
-      recordFinalOutputHistory(log, authorityReq, authorityReq.user, result.output_audit);
+      if (result.output_audit.kind === "output_audit") {
+        recordFinalOutputHistory(log, authorityReq, authorityReq.user, result.output_audit);
+      } else {
+        recordCompleteHistory({
+          kind: "audit_history",
+          request_id: authorityReq.id,
+          actor: authorityReq.user,
+          source: "document_organization_j_projection_output_audit",
+          timestamp: Date.now(),
+          payload: {
+            task_id: result.output_audit.task_id,
+            projection_revision: result.output_audit.projection_revision,
+            projection_status: result.output_audit.projection_status,
+            rendered_output_digest: result.output_audit.rendered_output_digest,
+            rendered_output_chars: result.output_audit.rendered_output_chars,
+            used_for_authority: false,
+            may_execute: false,
+            may_commit_to_memory: false,
+          },
+        });
+      }
       if (result.rendered_output) {
         await dispatcher.dispatch({
           channel: authorityReq.channel,
           target: replyTarget(authorityReq),
           content: result.rendered_output,
         }, {
-          command_id: result.command_id,
+          command_id: result.command_id ?? `notify-${authorityReq.id}`,
           upstream_commit_hash: result.upstream_commit_hash,
         });
       }
@@ -1742,6 +1830,8 @@ export async function serve(): Promise<ServeShutdown> {
       gatewayLog.info("shutting down");
       clearInterval(failureMemoryVerificationTimer);
       await router.stop();
+      documentOrganizationCheckpointStore?.close();
+      documentOrganizationCheckpointStore = null;
       auditLog.info("summary", {
         entries: hds.getAudit().size(),
         chain_valid: hds.getAudit().verify(),

@@ -3,8 +3,11 @@ export {
   DOCUMENT_ORGANIZATION_MAX_CYCLES,
   DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS,
   DOCUMENT_ORGANIZATION_SCHEMA_VERSION,
+  DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
   DocumentOrganizationCoordinator,
   renderDocumentOrganizationProjection,
+  type DocumentOrganizationCheckpoint,
+  type DocumentOrganizationMemoryVersion,
   type DocumentOrganizationAcceptedExcerpt,
   type DocumentOrganizationProjection,
   type DocumentOrganizationStatus,
@@ -50,10 +53,13 @@ export {
 } from "./audit.js";
 export {
   buildOutputAuditLog,
+  buildProjectionOutputAuditLog,
   classifyOutputKind,
   type OutputAuditInput,
   type OutputAuditKind,
   type OutputAuditLog,
+  type ProjectionOutputAuditInput,
+  type ProjectionOutputAuditLog,
   type OutputTargetSurface,
 } from "./output_audit.js";
 
@@ -194,6 +200,7 @@ export {
   type MemoryCommitSnapshot,
   type MemoryProcessSnapshot,
   type MemoryStoreOptions,
+  type MemoryStoreStateVersion,
 } from "./long-term-memory/index.js";
 
 export {

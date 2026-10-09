@@ -1,5 +1,5 @@
 import type { CommandConstraints, Decision, ExecuteCommand, ExecuteFeedback, OperationRequest } from "@blue-tanuki/protocol";
-import type { OutputAuditLog } from "./output_audit.js";
+import type { OutputAuditLog, ProjectionOutputAuditLog } from "./output_audit.js";
 import type { RuntimeInvariantEvidenceReport, RuntimeInvariantValues } from "./runtime_invariants.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
 import type { DetectorLifecycleTrace } from "./detectors/types.js";
@@ -557,6 +557,7 @@ export type AuditRecord =
   | DecisionLog
   | ExecutorFeedbackLog
   | OutputAuditLog
+  | ProjectionOutputAuditLog
   | ApprovalGateLog
   | AuthorityEventLog
   | MemoryReferenceLog
