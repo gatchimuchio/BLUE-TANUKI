@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { parseJsonTextAtBoundary } from "@blue-tanuki/protocol";
 import type { CompleteHistoryEntry, CompleteHistoryKind } from "./types.js";
 
 const COMPLETE_HISTORY_KINDS = new Set<CompleteHistoryKind>([
@@ -47,16 +48,14 @@ export function encodeCompleteHistoryEntry(entry: CompleteHistoryEntry): string 
 }
 
 export function decodeCompleteHistoryEntry(line: string): CompleteHistoryEntry {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line) as unknown;
-  } catch (e) {
-    throw new Error(`malformed complete history JSONL: ${e instanceof Error ? e.message : String(e)}`);
+  const boundary = parseJsonTextAtBoundary(line);
+  if (!boundary.ok) {
+    throw new Error(`malformed complete history JSONL: ${boundary.reason}`);
   }
-  if (!isCompleteHistoryEntry(parsed)) {
+  if (!isCompleteHistoryEntry(boundary.value)) {
     throw new Error("malformed complete history entry");
   }
-  return parsed;
+  return boundary.value;
 }
 
 function isCompleteHistoryEntry(value: unknown): value is CompleteHistoryEntry {

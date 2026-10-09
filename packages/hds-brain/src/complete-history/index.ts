@@ -6,6 +6,7 @@ export {
   stableJson,
 } from "./codec.js";
 export { CompleteHistoryStore } from "./store.js";
+export type { CompleteHistoryRecordProjection } from "./store.js";
 export {
   COMPLETE_HISTORY_SCHEMA_VERSION,
   type CompleteHistoryAppendInput,

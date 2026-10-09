@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — 共通record境界と旧履歴の読取投影
+
+- C01.01として、protocolへ厳格な共通record schemaとJSON文字列境界parserを追加した。意味・運用・仕事・作用・証拠の状態を分け、未知field、重複key、非有限数値、上限超過IDを拒否する。
+- CompleteHistoryStoreのJSONL readerを同じ重複key・有限数検査へ接続し、旧schema_versionと元payloadの既存read/replayを保った。別のcommon-record projectionはraw payloadを出さず、読取専用と二つの非権限flagを返す。
+- この差分はローカル契約・合成履歴の証拠であり、GatewayやApproval Gateの新しい実行経路、validate:agi、製品全体の受入、GAを成立させない。
+
 ## 2026-10-09 — 旧新切替と復元の設計
 
 - B03.03として非作用shadow、全writer・保存先・再起動元の棚卸し、停止・整合点・未決照合・実効失効・新世代取得・限定再開をADRへ記録した。既存の停止・逐次backup・readerの成立範囲と不足を保持した。

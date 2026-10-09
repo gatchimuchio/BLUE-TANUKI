@@ -165,6 +165,7 @@ export {
 
 export {
   CompleteHistoryStore,
+  type CompleteHistoryRecordProjection,
   COMPLETE_HISTORY_SCHEMA_VERSION,
   completeHistoryEntryHash,
   decodeCompleteHistoryEntry,

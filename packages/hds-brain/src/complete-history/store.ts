@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  COMMON_RECORD_SCHEMA_VERSION,
+  CommonRecordSchema,
+  type CommonRecord,
+} from "@blue-tanuki/protocol";
+import {
   completeHistoryEntryHash,
   decodeCompleteHistoryEntry,
   encodeCompleteHistoryEntry,
@@ -15,6 +20,13 @@ import {
   type CompleteHistoryReplayFilter,
   type CompleteHistoryStoreOptions,
 } from "./types.js";
+
+export interface CompleteHistoryRecordProjection {
+  readonly record: CommonRecord;
+  readonly read_only: true;
+  readonly used_for_authority: false;
+  readonly complete_history_used_for_authority: false;
+}
 
 export class CompleteHistoryStore {
   private entries: CompleteHistoryEntry[] = [];
@@ -93,6 +105,42 @@ export class CompleteHistoryStore {
         return true;
       })
       .map(cloneEntry);
+  }
+
+  replayAsCommonRecords(): readonly CompleteHistoryRecordProjection[] {
+    return this.entries.map((entry) => {
+      const sourceRef = `complete-history:${entry.kind}:${entry.id}`;
+      const candidate = {
+        record_id: entry.id,
+        record_kind: "legacy_history",
+        schema_version: COMMON_RECORD_SCHEMA_VERSION,
+        owner_id: "unknown",
+        origin: { kind: "legacy_history", source_ref: sourceRef },
+        recorded_at: entry.timestamp,
+        source_refs: [sourceRef],
+        previous_refs: entry.prev_hash === "GENESIS" ? [] : [`complete-history-hash:${entry.prev_hash}`],
+        state: {
+          meaning: { assertion: "unknown", adoption: "archived" },
+          execution: { operation: "unknown", work: "unknown", effect: "unknown" },
+          evidence: { status: "undecided" },
+        },
+        unknowns: ["旧履歴の内容から現在の意味、実行状態、外部結果、権限を推定しない。"],
+        residual_refs: [],
+        classification: "historical_reference_only",
+        content_ref: `complete-history-payload:${entry.id}`,
+        content_digest: entry.payload_digest,
+      };
+      const parsed = CommonRecordSchema.safeParse(candidate);
+      if (!parsed.success) {
+        throw new Error("malformed read-only complete history projection");
+      }
+      return {
+        record: parsed.data,
+        read_only: true,
+        used_for_authority: false,
+        complete_history_used_for_authority: false,
+      };
+    });
   }
 
   exportSnapshot(opts: { exported_at?: number } = {}): CompleteHistoryExport {

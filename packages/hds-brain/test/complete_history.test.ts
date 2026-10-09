@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CompleteHistoryStore,
+  completeHistoryEntryHash,
   decodeCompleteHistoryEntry,
   encodeCompleteHistoryEntry,
+  sha256Hex,
+  type CompleteHistoryEntry,
   type CompleteHistoryKind,
 } from "../src/complete-history/index.js";
 
@@ -108,6 +111,73 @@ describe("CompleteHistoryStore JSONL persistence", () => {
     expect(decodeCompleteHistoryEntry(encodeCompleteHistoryEntry(entry!))).toEqual(entry);
     expect(() => decodeCompleteHistoryEntry("{not-json")).toThrow(/malformed complete history JSONL/);
     expect(() => decodeCompleteHistoryEntry("{}")).toThrow(/malformed complete history entry/);
+  });
+
+  it("rejects duplicate keys and non-finite values at the persisted JSONL boundary", () => {
+    const source = new CompleteHistoryStore();
+    const entry = source.append({ kind: "user_input", payload: { id: "original" }, timestamp: 1 });
+    expect(entry).not.toBeNull();
+
+    const encoded = encodeCompleteHistoryEntry(entry!);
+    const duplicate = encoded.replace(
+      '"payload":{"id":"original"}',
+      '"payload":{"id":"original","id":"tampered"}',
+    );
+    const overflow = encoded.replace('"timestamp":1', '"timestamp":1e999');
+    const nan = encoded.replace('"timestamp":1', '"timestamp":NaN');
+
+    expect(duplicate).not.toBe(encoded);
+    expect(() => decodeCompleteHistoryEntry(duplicate)).toThrow(/duplicate_key/);
+    expect(() => decodeCompleteHistoryEntry(overflow)).toThrow(/non_finite_number/);
+    expect(() => decodeCompleteHistoryEntry(nan)).toThrow(/invalid_json/);
+  });
+
+  it("BT-U-C01.01-P exposes legacy entries as read-only common records without payload authority", () => {
+    const source = new CompleteHistoryStore();
+    const payload = { approved: true, detail: "LEGACY_SECRET_SENTINEL" };
+    const current = source.append({ kind: "approval_history", payload, timestamp: 7 });
+    expect(current).not.toBeNull();
+
+    const { entry_hash: _currentHash, ...currentBody } = current!;
+    const legacyBody = {
+      ...currentBody,
+      schema_version: "legacy-complete-history.v0",
+    } as unknown as Omit<CompleteHistoryEntry, "entry_hash">;
+    const legacyEntry: CompleteHistoryEntry = {
+      ...legacyBody,
+      entry_hash: completeHistoryEntryHash(legacyBody),
+    };
+    writeFileSync(filepath, `${encodeCompleteHistoryEntry(legacyEntry)}\n`, "utf8");
+
+    const store = new CompleteHistoryStore({ filepath });
+    expect(store.verify()).toBe(true);
+    expect(store.replay()[0]).toMatchObject({
+      schema_version: "legacy-complete-history.v0",
+      payload,
+      used_for_authority: false,
+    });
+
+    const [projection] = store.replayAsCommonRecords();
+    expect(projection).toMatchObject({
+      read_only: true,
+      used_for_authority: false,
+      complete_history_used_for_authority: false,
+      record: {
+        record_id: legacyEntry.id,
+        record_kind: "legacy_history",
+        origin: { kind: "legacy_history" },
+        state: {
+          meaning: { assertion: "unknown", adoption: "archived" },
+          execution: { operation: "unknown", work: "unknown", effect: "unknown" },
+          evidence: { status: "undecided" },
+        },
+        content_digest: legacyEntry.payload_digest,
+      },
+    });
+    expect(projection?.record).not.toHaveProperty("payload");
+    expect(JSON.stringify(projection)).not.toContain("LEGACY_SECRET_SENTINEL");
+    expect(JSON.stringify(projection)).not.toContain('"approved":true');
+    expect(sha256Hex(store.replay()[0]?.payload)).toBe(legacyEntry.payload_digest);
   });
 
   it("loads existing entries and continues the chain", () => {
