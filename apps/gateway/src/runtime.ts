@@ -31,6 +31,11 @@ import { loadPluginRuntime, type PluginRuntime } from "./plugin_loader.js";
 import { stripEnvFileArgs } from "./env_file.js";
 import { RuntimeScheduleManager } from "./runtime_schedule.js";
 import { resolveAllSecretRefs } from "./secret_store.js";
+import {
+  createDocumentOrganizationCoordinator,
+  documentOrganizationSourceFromRequest,
+  runDocumentOrganizationTask,
+} from "./document_organization_runtime.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -84,7 +89,15 @@ export function buildSessionStore(
 
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   Object.assign(process.env, resolveAllSecretRefs(process.env));
-  const userInput = stripEnvFileArgs([...argv])
+  const cleanArgs = stripEnvFileArgs([...argv]);
+  const organizeIndex = cleanArgs.indexOf("--organize");
+  const organizationSource = organizeIndex >= 0
+    ? cleanArgs.slice(organizeIndex + 1).join(" ").trim()
+    : null;
+  if (organizeIndex >= 0 && !organizationSource) {
+    throw new Error("--organize requires owner-provided source text after the flag");
+  }
+  const userInput = cleanArgs
     .filter(
       (a) =>
         a !== "--serve" &&
@@ -92,11 +105,14 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
         a !== "--doctor" &&
         a !== "--audit-dump" &&
         a !== "--audit-verify" &&
-        a !== "--json",
+        a !== "--json" &&
+        a !== "--organize",
     )
     .join(" ")
     .trim();
-  const content = userInput || "Hello, BLUE-TANUKI";
+  const content = organizationSource !== null
+    ? `/organize\n${organizationSource}`
+    : userInput || "Hello, BLUE-TANUKI";
 
   const plugins = await loadPluginRuntime();
   plugins.enforceLLMConfig(process.env);
@@ -137,14 +153,34 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     content,
     timestamp: Date.now(),
   });
+  const organizationSourceText = documentOrganizationSourceFromRequest(inbound);
+  const organizationCoordinator = organizationSourceText === null
+    ? null
+    : createDocumentOrganizationCoordinator(inbound, organizationSourceText);
+  const decisionRequest = organizationCoordinator
+    ? { ...inbound, content: organizationCoordinator.buildComputePrompt() }
+    : inbound;
 
-  gatewayLog.info("inbound", {
-    id: inbound.id,
-    channel: inbound.channel,
-    content: inbound.content,
-  });
+  if (organizationCoordinator) {
+    gatewayLog.info("inbound", {
+      id: inbound.id,
+      channel: inbound.channel,
+      user: inbound.user,
+      task: "document_organization",
+      content_digest: organizationCoordinator.snapshot().source_ref.content_sha256,
+      content_chars: organizationSourceText?.length ?? 0,
+    });
+  } else {
+    gatewayLog.info("inbound", {
+      id: inbound.id,
+      channel: inbound.channel,
+      content: inbound.content,
+    });
+  }
 
-  const { log, command } = hds.decide(inbound);
+  const { log, command } = hds.decide(decisionRequest, organizationCoordinator
+    ? { transient_content: "document_organization" }
+    : undefined);
   hdsLog.info("decision", {
     decision: log.commit.decision,
     aggregate: log.model.scoring.aggregate.toFixed(2),
@@ -161,6 +197,30 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
       detector: ax.detector,
       evidence: ax.evidence,
     });
+  }
+
+  if (organizationCoordinator && command) {
+    const result = await runDocumentOrganizationTask({
+      coordinator: organizationCoordinator,
+      origin: inbound,
+      hds,
+      executor,
+      executorApproval,
+      approval,
+      failureMemory,
+      target_surface: "cli",
+      first_decision: { log, command },
+    });
+    if (result) {
+      coreLog.info("document_organization.result", {
+        status: result.status,
+        revision: result.projection.revision,
+        cycles: result.projection.completed_cycles,
+      });
+      process.stdout.write(`${result.rendered_output}\n`);
+      auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
+      return;
+    }
   }
 
   if (!command) {

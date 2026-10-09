@@ -67,6 +67,7 @@ import {
   type RuntimeInvariantValues,
 } from "./runtime_invariants.js";
 import { fReferenceForId } from "./f_reference.js";
+import { DOCUMENT_ORGANIZATION_PROMPT_PREFIX } from "./document_organization.js";
 import {
   buildMemoryCitationSystemMessages,
   redactUnverifiedReferences,
@@ -93,6 +94,11 @@ interface LongTermMemoryPort {
   all?: () => readonly unknown[];
   size?: () => number;
   verify?: () => boolean;
+}
+
+export interface HDSDecisionOptions {
+  /** Prevent transient document-organization input from reading/writing memory or persisting session history. */
+  readonly transient_content?: "document_organization";
 }
 
 interface CapturedMemoryReference {
@@ -226,10 +232,13 @@ export class HDSUpperController {
    *   - OUT_OF_SCOPE → audit only; no command
    *   - FAIL         → audit only; no command
    */
-  decide(raw: unknown): {
+  decide(raw: unknown, options: HDSDecisionOptions = {}): {
     log: DecisionLog;
     command: ExecuteCommand | null;
   } {
+    if (Object.keys(options).some((key) => key !== "transient_content") || (options.transient_content !== undefined && options.transient_content !== "document_organization")) {
+      throw new Error("invalid HDS decision options");
+    }
     const boundary = parseInboundRequestAtBoundary(raw);
     if (!boundary.ok) {
       const fallbackReq: InboundRequest = {
@@ -305,16 +314,30 @@ export class HDSUpperController {
       return { log, command: null };
     }
     const req = boundary.request;
+    const suppressTransientDocumentOrganizationContext = options.transient_content === "document_organization" && req.content.startsWith(DOCUMENT_ORGANIZATION_PROMPT_PREFIX);
     const input = normalizeForDetection(req.content);
     const authorityReq = requestWithNormalizedContent(req, input.normalized_content);
+    const decisionTraceInput = suppressTransientDocumentOrganizationContext
+      ? {
+          ...input,
+          raw_content: "[transient_document_organization_content_redacted]",
+          normalized_content: "[transient_document_organization_content_redacted]",
+          raw_content_redacted: true as const,
+          source_content_sha256: sha256(req.content),
+          source_content_chars: req.content.length,
+        }
+      : input;
     const goalGovernanceProjection = this.goal_governance?.project(Date.now());
-    const f = frame(authorityReq, {
+    const initialFrame = frame(authorityReq, {
       default_policy: this.policy,
-      memory_reader: this.memory,
+      ...(suppressTransientDocumentOrganizationContext ? {} : { memory_reader: this.memory }),
       original_content: req.content,
       ...(this.goal_relation_tree ? { goal_relation_tree: this.goal_relation_tree } : {}),
       ...(goalGovernanceProjection ? { goal_governance: goalGovernanceProjection } : {}),
     });
+    const f = suppressTransientDocumentOrganizationContext
+      ? { ...initialFrame, goal: `[transient_document_organization sha256=${sha256(req.content)} chars=${req.content.length}]` }
+      : initialFrame;
     const selfHealth = this.evaluateSelfHealth();
     if (selfHealth.fail_safe) {
       const m = selfHealthModel(f, selfHealth);
@@ -337,11 +360,16 @@ export class HDSUpperController {
       );
       const log: DecisionLog = {
         request_id: req.id,
-        input,
+        input: decisionTraceInput,
         frame: f,
         model: m,
         commit: c,
         timestamp: Date.now(),
+        ...(suppressTransientDocumentOrganizationContext ? {
+          memory_retrieval_suppressed_for: "transient_document_organization" as const,
+          memory_capture_suppressed_for: "transient_document_organization" as const,
+          session_history_suppressed_for: "transient_document_organization" as const,
+        } : {}),
       };
       this.audit.append(log);
       this.state = "SUSPENDED";
@@ -370,11 +398,16 @@ export class HDSUpperController {
 
     let log: DecisionLog = {
       request_id: req.id,
-      input,
+      input: decisionTraceInput,
       frame: f,
       model: m,
       commit: c,
       timestamp: Date.now(),
+      ...(suppressTransientDocumentOrganizationContext ? {
+        memory_retrieval_suppressed_for: "transient_document_organization" as const,
+        memory_capture_suppressed_for: "transient_document_organization" as const,
+        session_history_suppressed_for: "transient_document_organization" as const,
+      } : {}),
     };
 
     let command: ExecuteCommand | null = null;
@@ -397,7 +430,7 @@ export class HDSUpperController {
     }
 
     this.audit.append(log);
-    this.captureMemoryReference(log);
+    if (!suppressTransientDocumentOrganizationContext) this.captureMemoryReference(log);
 
     switch (c.decision) {
       case "ASSERT": {
@@ -962,7 +995,9 @@ export class HDSUpperController {
         ...memoryMessages,
         { role: "user", content: req.content },
       ],
-      session_id: `${req.channel}:${req.user}`,
+      ...(log.memory_retrieval_suppressed_for === "transient_document_organization"
+        ? {}
+        : { session_id: `${req.channel}:${req.user}` }),
       backend_hint: backendHint,
       model: this.llm_route.model,
       temperature: this.llm_route.temperature,

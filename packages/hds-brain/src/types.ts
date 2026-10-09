@@ -281,6 +281,9 @@ export interface InputNormalizationTrace {
   raw_content: string;
   normalized_content: string;
   changed: boolean;
+  raw_content_redacted?: true;
+  source_content_sha256?: string;
+  source_content_chars?: number;
   controls: Array<{
     index: number;
     code_point: string;
@@ -297,6 +300,9 @@ export interface DecisionLog {
   model: ModelResult;
   commit: CommitResult;
   timestamp: number;
+  memory_retrieval_suppressed_for?: "transient_document_organization";
+  memory_capture_suppressed_for?: "transient_document_organization";
+  session_history_suppressed_for?: "transient_document_organization";
 }
 
 

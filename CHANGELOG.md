@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-10 — 通常CLI/WebChatの一時資料整理
+
+- C08.01として、Gateway CLIとWebChatへ同じJ主導の資料整理projectionを接続した。Cは完全一致する原文引用候補だけを返し、Jが引用範囲と未被覆範囲を検査する。分類意味は未検証、権限・実行・永続記憶反映はなし。
+- HDS Approval Gate、Executor、OutputAuditを通し、整理中はM候補読取・M捕捉・session JSONL追記を専用経路だけ抑止する。本文をHDS監査・CompleteHistoryへ保存せず、digestと文字数のredactionを使う。
+- Windows合成loopback E2EでCLI/WebChatの同一表示、各2 cycle、監査・履歴・sessionへの合成引用不在を局所確認した。実provider・実資料・親C08・release readinessは成立範囲に含めない。
+
 ## 2026-10-10 — 汚染記憶の隔離と旧・新解釈の追記保持
 
 - C07.03として、HDS内部のJ/M consumerに、現在解釈のquarantine、隔離後の再open、新解釈のrestore、依存する過去判断への再評価要求を追記型lineageとして接続した。旧・新の意味本文、basis、digest、履歴を併存させ、再評価や実行は自動化しない。

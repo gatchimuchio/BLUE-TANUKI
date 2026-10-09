@@ -1,4 +1,14 @@
 export * from "./types.js";
+export {
+  DOCUMENT_ORGANIZATION_MAX_CYCLES,
+  DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS,
+  DOCUMENT_ORGANIZATION_SCHEMA_VERSION,
+  DocumentOrganizationCoordinator,
+  renderDocumentOrganizationProjection,
+  type DocumentOrganizationAcceptedExcerpt,
+  type DocumentOrganizationProjection,
+  type DocumentOrganizationStatus,
+} from "./document_organization.js";
 export { frame, type FrameConfig } from "./frame.js";
 export {
   createUnidentifiedGoalProjection,

@@ -92,6 +92,11 @@ import { buildResidentNotificationsSnapshot } from "./resident_notifications.js"
 import { probeGatewaySelfHealth } from "./runtime_health.js";
 import { resolveAllSecretRefs } from "./secret_store.js";
 import {
+  createDocumentOrganizationCoordinator,
+  documentOrganizationSourceFromRequest,
+  runDocumentOrganizationTask,
+} from "./document_organization_runtime.js";
+import {
   commandOperation,
   commandHistoryDescriptor,
   digestString,
@@ -1613,7 +1618,18 @@ export async function serve(): Promise<ServeShutdown> {
           : undefined,
       },
     });
-    const { log, command } = hds.decide(hdsBoundaryInput);
+    const documentSource = boundary.boundary_ok
+      ? documentOrganizationSourceFromRequest(authorityReq)
+      : null;
+    const documentCoordinator = documentSource === null
+      ? null
+      : createDocumentOrganizationCoordinator(authorityReq, documentSource);
+    const decisionInput = documentCoordinator
+      ? { ...authorityReq, content: documentCoordinator.buildComputePrompt() }
+      : hdsBoundaryInput;
+    const { log, command } = hds.decide(decisionInput, documentCoordinator
+      ? { transient_content: "document_organization" }
+      : undefined);
     recordCompleteHistory({
       kind: "hds_decision",
       request_id: log.request_id,
@@ -1636,6 +1652,57 @@ export async function serve(): Promise<ServeShutdown> {
         hds.onCommandLifecycle(command.id, "approval_rejected", {
           actor: "gateway",
           reason: "gateway_inbound_boundary_invalid",
+        });
+      }
+      return;
+    }
+
+    if (documentCoordinator && command) {
+      const result = await runDocumentOrganizationTask({
+        coordinator: documentCoordinator,
+        origin: authorityReq,
+        hds,
+        executor,
+        executorApproval,
+        approval,
+        failureMemory,
+        target_surface: "channel",
+        first_decision: { log, command },
+        emergency_stop_active: emergencyStop.active,
+      });
+      if (!result) return;
+
+      recordCompleteHistory({
+        kind: "audit_history",
+        request_id: authorityReq.id,
+        command_id: result.command_id,
+        actor: authorityReq.user,
+        source: "document_organization_j_projection",
+        timestamp: Date.now(),
+        payload: {
+          schema_version: result.projection.schema_version,
+          task_id: result.projection.task_id,
+          projection_revision: result.projection.revision,
+          status: result.projection.status,
+          completed_cycles: result.projection.completed_cycles,
+          source_sha256: result.projection.source_ref.content_sha256,
+          accepted_excerpt_count: result.projection.accepted_excerpts.length,
+          uncovered_range_count: result.projection.uncovered_ranges.length,
+          issue_codes: result.projection.issue_codes,
+          used_for_authority: false,
+          may_execute: false,
+          may_commit_to_memory: false,
+        },
+      });
+      recordFinalOutputHistory(log, authorityReq, authorityReq.user, result.output_audit);
+      if (result.rendered_output) {
+        await dispatcher.dispatch({
+          channel: authorityReq.channel,
+          target: replyTarget(authorityReq),
+          content: result.rendered_output,
+        }, {
+          command_id: result.command_id,
+          upstream_commit_hash: result.upstream_commit_hash,
         });
       }
       return;
