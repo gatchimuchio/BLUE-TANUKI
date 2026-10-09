@@ -1,92 +1,73 @@
 # BLUE-TANUKI 有効な実装指示
 
-現単位: **C07.01 — 一次記録と意味更新案の分離**。owner が委任した範囲から一単位だけを扱う。Windows / PowerShell を通常の開発環境とし、WSL は要件にしない。GitHub は検証済み成果と履歴の保管先として、単位ごとにバックアップ、commit、push、remote照合まで行う。公開主張、外部業務作用、出荷判断、owner GO はこの委任に含まれない。
+現単位: **C07.02 — J承認とM反映の内容結合**。owner が委任した範囲から一単位だけを扱う。Windows / PowerShell を通常の開発環境とし、WSL を必須にしない。GitHub は検証済み成果と履歴の保管先として、単位ごとに二世代backup、commit、push、remote照合まで行う。公開主張、外部業務作用、出荷判断、owner GO はこの委任に含まれない。
 
 ## 1. 目的
 
-正規境界を通った入力の取得記録と、Cから届く意味更新案を別々の記録として扱い、取得を真実性や採用へ読み替えない。
-
-有限到達状態は、canonical inbound が未評価・未採用の observation acquisition として保存され、成功した既知LLM commandからの構造化proposalが、根拠・反証確認・適用範囲・旧版・反映先を備えた別の非権威履歴として保存されること。J承認またはM反映は行わない。
+承認済みのMemoryCommit内容をJとMの保存境界へ結び、承認・M反映・receipt確認を別状態として観測できるようにする。承認後の内容変更は同じ承認で反映させない。
 
 ## 2. Phase 境界
 
-通常のGateway inboundとLLM feedbackの経路に限定する。観測入力はGateway境界で受け入れたcanonical inboundのdigest記録とする。C proposalはExecutorを通してHDSが再検証し、Gatewayが成功した既知のLLM commandに限って履歴へ記録する。
-
-proposalはreference/digestのclaimであり、内容の正しさ、証拠の実在、意味の採用を確認しない。標準providerにproposal生成機能があるとは主張しない。
+HDS-BRAIN内の既存J/M persistence pathと専用SQLite fixtureに限定する。J pending記録、M transaction/receipt、J receipt再照合をつなぐ。合成readerをowner承認や実アプリ接続の証拠として扱わない。
 
 ## 3. Scope
 
-- packages/protocol/src/状態更新契約.ts
-- packages/protocol/src/types.ts
-- packages/protocol/test/状態更新契約.test.ts
-- packages/protocol/test/types.test.ts
-- packages/blue-tanuki/src/llm/base.ts
-- packages/blue-tanuki/src/executor.ts
-- packages/blue-tanuki/test/executor_dispatch.test.ts
-- packages/hds-brain/src/complete-history/codec.ts
-- packages/hds-brain/src/complete-history/store.ts
-- packages/hds-brain/src/controller.ts
-- packages/hds-brain/src/types.ts
-- packages/hds-brain/test/complete_history.test.ts
-- packages/hds-brain/test/controller.test.ts
-- apps/gateway/src/serve.ts
-- apps/gateway/test/serve_boundary.test.ts
+- packages/hds-brain/src/制御状態.ts
+- packages/hds-brain/test/制御状態.test.ts
 - docs/IMPLEMENTATION_INSTRUCTIONS.md
 - docs/ROADMAP.md
 - docs/開発進捗.md
 - CHANGELOG.md
 - 規定/移行台帳.json（既存CHANGELOG debtのSHA-256だけを同期）
 
-この一覧以外を変更しない。追加pathが必要になったら編集前にprivate施工記録をREPLANし、stateとtask packetを更新・再照合する。
+この一覧以外を変更しない。追加pathが必要なら編集前にprivate施工記録をREPLANし、stateとtask packetを更新・再照合する。
 
 ## 4. Non-goals
 
-C07.02のJ承認/M反映、C07.03の誤記憶隔離・復旧、MemoryCommitの作成・適用、M/J保存取引、C07親全体、外部observer、標準providerのprompt/response形式変更、UI作成導線、cross-repo、外部送信、credential確認、release/GA/P13/owner GOを扱わない。raw inbound本文、raw proposal文、根拠本文は新しい記録へ保存しない。
+C07.01のobservation/proposal、C07.03の誤記憶隔離・再解釈・復元、proposalからMemoryCommitへの変換、Gateway/UI/Control Center統合、実owner承認producer、外部業務作用、cross-repo、credential、release/GA/P13/owner GOを扱わない。標準HDS package barrelに未接続APIを公開しない。
 
 ## 5. 最初に確認する files / symbols
 
-`InboundRequestSchema`、`ExecuteFeedbackSchema`、`LLMResponse`、`Executor.executeLLMCall`、`Gateway handler`、`recordExecutionHistory`、`finalizeCommandOutput`、`HDSUpperController.onFeedback`、`CompleteHistoryStore.append/decode/verify`、C03.04とC06.03の受入・Git閉鎖記録を確認する。開始時にrepo ID/origin、branch、HEAD、dirty状態、remote refs、Windows toolchain、依存profile、通常consumer、selectorをprivate記録へ固定する。
+JMemoryCommitCoordinatorのstage/apply/reconcile/snapshot、JControlStateStore.stage/readVerifiedMemoryApproval/reconcile、MemoryUpdateLedger、MTransactionStore.applyApprovedMemoryCommit/readReceipt、parseMemoryCommitV2、receiptMatchesPending、packages/hds-brain/test/制御状態.test.ts、packages/hds-brain/test/記憶更新.test.tsを確認する。repo-wide caller検索でproduction consumerの有無を明示する。
 
 ## 6. 必須grep
 
-`meaning_update_proposal`、`observation_acquisition`、`ExecuteFeedbackSchema`、`LLMResponse`、`executeLLMCall`、`onFeedback`、`CompleteHistoryStore`、`record_type`、`used_for_authority`、`may_apply`を検索する。proposalが実行結果や表示へ漏れないこと、CompleteHistory JSONL再読込でも契約検査されること、誤った種別・未知fieldを拒否することを確認する。
+JMemoryApprovalReader、JMemoryCommitCoordinator、MemoryUpdateLedger、applyApprovedMemoryCommit、readVerifiedMemoryApproval、MemoryCommit、receipt、expected_version、content_digest、lifecycle_state、BT-U-C07.02を検索する。未知・不一致・承認後の内容差替え、M receipt不在/不一致、J/M保存障害が自動許可や成功表示にならないことを確認する。
 
 ## 7. 既存 anchor
 
-Gateway handlerはcanonical inboundだけを通常履歴・返信・実行に渡し、raw invalid入力はHDSの独立fail-closed境界監査へ限定する。ExecutorはLLM応答からExecuteFeedbackを構成する。Gateway finalizationはHDS `onFeedback` と出力監査を通す。CompleteHistoryはhash-chainとdigest-onlyの共通record投影を持つ。C07.01はこの責任分担を使い、新しいauthority経路や記憶commit経路を作らない。
+JControlStateStoreは検証済み承認参照のupdate_id、J event ID、content digest、expected M versionだけをpendingへ保存する。Mは自身のtransaction内でJ pending参照を再照合し、state/event/update ID消費/receiptを確定する。J reconcileはM receiptを読み取り、J event chainへ確認結果を追記する。現在、通常production callerと実owner承認producerは未接続である。
 
 ## 8. 実装要件
 
-1. ObservationAcquisition契約はcanonical request由来の参照・digest・件数だけを許し、semantic statusをunassessed、adoptionをnot_adopted、authority/world-truth flagsをfalseに固定する。
-2. MeaningUpdateProposalはcandidate/target/prior version、support evidence、明示したcounterevidence review、applicability scope、reflection targetを要求する。入力はstrictに検証し、proposalはunverified・not_adopted・may_apply=false・used_for_authority=falseに固定する。
-3. LLMResponseのproposal fieldは未信頼として扱う。Executorはそれを可視result/session出力から除き、HDS feedbackへ渡す。
-4. HDS `onFeedback` はproposalを独立再検証し、statusと成功時digestだけをhash-chain auditへ記録する。未知command、失敗feedback、不正shapeはpassed扱いにしない。
-5. Gatewayはcanonical inboundだけをobservation recordにし、proposalは成功・一致・LLM commandだけを`audit_history`の別payloadとして記録する。CompleteHistory appendとJSONL load/verifyはrecord_typeごとのstrict contractを再検査する。
-6. proposalはCompleteHistoryの共通record/UI/API投影へ本文として出さない。既存digest-only projectionとnon-authority flagsを維持する。
-7. いずれの経路もJ approval、MemoryUpdateLedger、MemoryCommit、永続semantic adoption、実行へ接続しない。
+1. cross-store snapshotで承認済み、M反映済み、receipt確認済みをそれぞれapproved、applied、effect_confirmedとして区別する。保存系の不整合・利用不能は別状態にする。
+2. J承認参照とMemoryCommitのupdate ID、J event ID、canonical content digest、expected versionを完全一致させる。
+3. 承認後に異内容で再計算したdigestを持つcommit、booleanだけの承認、unknown field、古い期待版を拒否しM状態/receiptを変えない。
+4. M receiptはevent/stateと同一transactionの結果だけをappliedとして扱う。J receipt確認eventがなく、またはM receiptの一致がない状態をeffect_confirmedとしない。
+5. J auditにraw memory contentを保存せず、existing hash-chain、復旧、standalone境界を維持する。
+6. proposal消費、通常アプリ接続、public API追加、別store schema変更を今回へ持ち込まない。
 
 ## 9. Safety invariants
 
-HDS-BRAIN唯一authority、owner最終責任、Approval Gate、L3 final review、audit hash-chain、Runtime Invariants、standalone HDS、Layer A/B、fail-closedを維持する。inbound、LLM proposal、evidence ref、metadata、CompleteHistoryは権限を生成しない。C07.01は内容の検証・承認・採用・反映・実行をしない。invalid shapeやunknown record typeを履歴へ通さない。
+HDS-BRAIN唯一authority、owner最終責任、Approval Gate、L3 final review、audit hash-chain、Runtime Invariants、HDS standalone、fail-closedを維持する。C出力、UI、metadata、履歴、fixtureは承認ではない。snapshotは照合用投影であり権限を生成しない。
 
 ## 10. Operator usability
 
-観測記録の意味状態とproposalの契約statusを分ける。HDS auditにはproposalのraw fieldやreference本文を置かず、valid proposal digest、status、non-authority flagsのみを置く。CompleteHistory API projectionもdigest/metadataに限る。契約失敗は理由分類だけを表示・記録し、raw inputをerrorへ含めない。
+状態名は承認済み/反映済み/後続receipt確認済みを区別し、receipt mismatchとstore unavailableを成功状態へ丸めない。snapshotには既存のdigest/metadataのみを出し、raw memory contentやcredentialを出さない。実consumer未接続とfixture範囲を明示する。
 
 ## 11. Tests
 
-- BT-U-C07.01-P: canonical inboundから未評価・未採用のobservation recordを作り、raw contentを保存しない。
-- BT-U-C07.01-P: 構造化LLM proposalがExecutorからExecuteFeedback、HDS audit、別CompleteHistory eventへ届き、raw proposal本文をvisible result/audit projectionへ出さない。
-- BT-U-C07.01-N: invalid inbound、malformed proposal、未知record field/kind、unknown command、非LLM command、failed feedbackはobservation/proposal adoptionまたは永続提案recordにならない。
-- JSONL round-trip/load、hash-chain、digest-only common-record projectionを通す。
+- BT-U-C07.02-P: packages/hds-brain/test/制御状態.test.ts の専用SQLiteでapproved -> applied -> effect_confirmedを観測し、J/M整合、再起動後receipt照合、J eventのraw content非保持を確認。
+- BT-U-C07.02-N: 承認後、同じupdate ID/J event IDで異なるchangesと正しい新digestを持つcommitへ差し替え、j_approval_not_verified、M event/receipt不変、元commitの継続可を確認。
+- 既存のreceipt mismatch、expected version、boolean-only、hash-chain/recovery負例を保持する。
 
-対象selector: `packages/protocol/test/状態更新契約.test.ts`、`packages/protocol/test/types.test.ts`、`packages/blue-tanuki/test/executor_dispatch.test.ts`、`packages/hds-brain/test/complete_history.test.ts`、`packages/hds-brain/test/controller.test.ts`、`apps/gateway/test/serve_boundary.test.ts`。
+selector: pnpm exec vitest run packages/hds-brain/test/制御状態.test.ts -t 'BT-U-C07\.02-[PN]'。選択された2件とskip数を記録し、0件実行をPASS扱いしない。
 
 ## 12. Validation commands
 
-commit前に現行repoの必須検証をすべて実行する。
+commit前に現行repoの必須検証を実行する。
 
-~~~powershell
+~~~
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm build
@@ -99,20 +80,20 @@ pnpm hds:standalone
 pnpm validate:japanese-base
 ~~~
 
-失敗を隠さず今回起因・既存・環境限定・未確定に分類する。smoke:serve/resumeは通常unit scope外なら未実行と明記する。live smoke、release gate/bundle/verify、strict Japanese-base gateは今回の受入条件でない。既存Gateway listenerやcredentialを停止・読取りしない。
+失敗は今回起因、既存、環境限定、未確定に分類する。doctorで既存Gatewayやcredentialを停止・読取りしない。smoke:serve/resumeはこの単位のscope外。release/bundle gate、strict Japanese-base gate、credentialed live smokeは受入範囲外と記録する。
 
 ## 13. Manual smoke
 
-専用Vitest selectorで、canonical inbound、C proposal transport、HDS audit、CompleteHistory append/load、raw非保持、unknown/failed拒否を合成fixtureで確認する。実provider、外部送信先、実tool、credentialを使わない。
+実test selectorを合成MemoryCommitとtest-owned一時SQLiteで実行する。実provider、実owner承認、既存runtime store、外部送信先、credential、実toolを使用しない。positive/negativeのほか、既存故障・復旧selectorを対象とする。
 
 ## 14. Permanent-use check
 
-成立するのはcanonical acquisition receiptと、構造化proposalの限定的な受け渡し・digest audit・別履歴までである。根拠refの解決・真偽確認、標準providerによるproposal出力、J承認、Mへの反映・再起動後semantic adoption、誤記憶隔離・回復、C07親scenario、installed/live、release readinessは未成立。
+この単位で成立するのはHDS内部のJ/M persistence path、content binding、M receipt読取、J receipt確認eventと合成SQLite証拠まで。通常production caller、実owner承認producer、Gateway/UI統合、installed/live、親C07、release readinessは未成立のまま維持する。
 
 ## 15. Final report format
 
-C07.01の成立条件、変更path、実consumer、positive/negative selector、各必須commandの正確な結果、証拠源/経路、doctorまたはhost制約、未実施、authority/release/P13状態、main commit、push/remote HEAD、二世代backup refs、rollback pointを日本語で報告する。fixture/local evidenceをlive/installed/external evidenceに読み替えない。
+C07.02局所受入、変更path、実consumerと未接続境界、positive/negative selector、各必須commandの正確な結果、証拠源/経路、doctorまたはhost制約、未実行、authority/release/P13状態、main commit、push/remote HEAD、二世代backup refs、rollback pointを日本語で報告する。fixture/local evidenceをlive/installed/external evidenceに読み替えない。
 
 ## 16. Next-phase dependency
 
-この単位の局所受入とGit閉鎖を記録して停止する。親C07完了やC07.02開始を推定しない。次単位は最新private state・ledger・repo状態から別の入口で依存、profile、許可scopeを再照合する。
+この単位の局所受入とGit閉鎖を記録して停止する。親C07完了やC07.03開始を推定しない。次単位は最新private state・ledger・repo状態から別の入口で依存、profile、許可scopeを再照合する。

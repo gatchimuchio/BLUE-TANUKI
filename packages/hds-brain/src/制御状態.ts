@@ -48,6 +48,20 @@ export interface JControlSnapshot {
   readonly pending: readonly JPendingSnapshot[];
 }
 
+export type JMemoryCommitLifecycleState =
+  | "idle"
+  | "approved"
+  | "applied"
+  | "effect_confirmed"
+  | "blocked"
+  | "receipt_mismatch"
+  | "unavailable";
+
+export interface JMemoryCommitLifecycleSnapshot extends Omit<JControlSnapshot, "pending"> {
+  readonly lifecycle_state: JMemoryCommitLifecycleState;
+  readonly pending: readonly (JPendingSnapshot & { readonly lifecycle_state: JMemoryCommitLifecycleState })[];
+}
+
 export type JMemoryCommitStageResult =
   | { readonly ok: true; readonly status: JControlStatus; readonly revision: number; readonly update_id: string }
   | { readonly ok: false; readonly reason: "schema_validation_failed" | "j_approval_not_verified" | "update_id_content_conflict" | "pending_update_exists" | "store_integrity_failed" | "storage_failed" | "commit_outcome_unknown" | "store_unavailable" | PersistenceFailureReason };
@@ -179,8 +193,10 @@ export class JMemoryCommitCoordinator {
     return this.store.reconcile(updateId, this.memoryLedger);
   }
 
-  snapshot(): JControlSnapshot | null {
-    return this.closed ? null : this.store.snapshot();
+  snapshot(): JMemoryCommitLifecycleSnapshot | null {
+    if (this.closed) return null;
+    const snapshot = this.store.snapshot();
+    return snapshot === null ? null : observeMemoryCommitLifecycle(snapshot, this.memoryLedger);
   }
 
   verify(): boolean {
@@ -1091,6 +1107,54 @@ function receiptMatchesPending(receipt: MemoryUpdateReceiptV1, pending: JPending
     parsed.receipt.previous_revision === pending.expected_version &&
     parsed.receipt.revision === pending.expected_version + 1 &&
     isDigest(parsed.receipt.event_digest);
+}
+
+function observeMemoryCommitLifecycle(
+  snapshot: JControlSnapshot,
+  memoryLedger: MemoryUpdateLedger,
+): JMemoryCommitLifecycleSnapshot {
+  const memoryAvailable = memoryLedger.verify();
+  const pending = snapshot.pending.map((item) => {
+    let lifecycle_state: JMemoryCommitLifecycleState;
+    if (item.status === "blocked") {
+      lifecycle_state = "blocked";
+    } else if (!memoryAvailable) {
+      lifecycle_state = "unavailable";
+    } else {
+      const receipt = memoryLedger.receipt(item.update_id);
+      if (item.status === "receipt_confirmed") {
+        lifecycle_state = receipt && item.receipt && receiptMatchesPending(receipt, item) &&
+            canonicalJson(receipt) === canonicalJson(item.receipt)
+          ? "effect_confirmed"
+          : "receipt_mismatch";
+      } else if (receipt === null) {
+        lifecycle_state = "approved";
+      } else {
+        lifecycle_state = receiptMatchesPending(receipt, item) ? "applied" : "receipt_mismatch";
+      }
+    }
+    return Object.freeze({ ...item, lifecycle_state });
+  });
+
+  const active = snapshot.active_update_id === null
+    ? undefined
+    : pending.find((item) => item.update_id === snapshot.active_update_id);
+  const latest = pending[pending.length - 1];
+  const lifecycle_state: JMemoryCommitLifecycleState = active
+    ? active.lifecycle_state
+    : snapshot.status === "blocked"
+      ? "blocked"
+      : !memoryAvailable
+        ? "unavailable"
+        : latest?.lifecycle_state === "effect_confirmed"
+          ? "effect_confirmed"
+          : "idle";
+
+  return Object.freeze({
+    ...snapshot,
+    lifecycle_state,
+    pending: Object.freeze(pending),
+  });
 }
 
 function matchesApprovalReference(value: unknown, expected: JMemoryApprovalReference): boolean {

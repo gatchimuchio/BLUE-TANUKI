@@ -29,7 +29,7 @@ describe("J制御状態とM receipt再照合", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it("M確定後J受領前の切断から、永続pendingとreceipt照会で一度だけ復帰する", () => {
+  it("BT-U-C07.02-P 承認・M反映・後続receipt確認を別状態として観測し、切断後に復帰する", () => {
     const approvalReader = approvingReader();
     const commit = makeCommit("reconcile-001", "private-memory-value");
     let coordinator = createCoordinator({
@@ -43,8 +43,9 @@ describe("J制御状態とM receipt再照合", () => {
     expect(coordinator.snapshot()).toMatchObject({
       revision: 1,
       status: "memory_commit_pending",
+      lifecycle_state: "approved",
       active_update_id: "reconcile-001",
-      pending: [{ update_id: "reconcile-001", status: "pending", expected_version: 0, receipt: null }],
+      pending: [{ update_id: "reconcile-001", status: "pending", lifecycle_state: "approved", expected_version: 0, receipt: null }],
     });
 
     const committed = coordinator.apply(commit);
@@ -55,6 +56,8 @@ describe("J制御状態とM receipt再照合", () => {
     expect(coordinator.snapshot()).toMatchObject({
       revision: 1,
       status: "memory_commit_pending",
+      lifecycle_state: "applied",
+      pending: [{ update_id: "reconcile-001", lifecycle_state: "applied", receipt: null }],
     });
 
     // M commitの確定後、Jがreceiptを記録する前に両storeを閉じる。
@@ -67,6 +70,7 @@ describe("J制御状態とM receipt再照合", () => {
     expect(coordinator.snapshot()).toMatchObject({
       revision: 1,
       status: "memory_commit_pending",
+      lifecycle_state: "applied",
       active_update_id: "reconcile-001",
     });
     expect(coordinator.reconcile("reconcile-001")).toEqual({
@@ -86,8 +90,9 @@ describe("J制御状態とM receipt再照合", () => {
     expect(coordinator.snapshot()).toMatchObject({
       revision: 2,
       status: "ready",
+      lifecycle_state: "effect_confirmed",
       active_update_id: null,
-      pending: [{ update_id: "reconcile-001", status: "receipt_confirmed", receipt: committed.receipt }],
+      pending: [{ update_id: "reconcile-001", status: "receipt_confirmed", lifecycle_state: "effect_confirmed", receipt: committed.receipt }],
     });
     expect(coordinator.verify()).toBe(true);
 
@@ -232,6 +237,37 @@ describe("J制御状態とM receipt再照合", () => {
     expect(database.prepare("SELECT COUNT(*) AS count FROM m_events").get()?.count).toBe(0);
     expect(database.prepare("SELECT COUNT(*) AS count FROM j_events").get()?.count).toBe(0);
     database.close();
+  });
+
+  it("BT-U-C07.02-N 承認後に内容を変えたcommitは同じ承認で反映しない", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    const approved = makeCommit("changed-after-approval", "approved-value");
+    const changed = makeCommit("changed-after-approval", "changed-value");
+
+    expect(coordinator.stage(approved)).toMatchObject({ ok: true, status: "memory_commit_pending" });
+    expect(coordinator.snapshot()).toMatchObject({ lifecycle_state: "approved" });
+    expect(coordinator.apply(changed)).toEqual({ ok: false, reason: "j_approval_not_verified" });
+    expect(coordinator.snapshot()).toMatchObject({
+      lifecycle_state: "approved",
+      pending: [{ update_id: "changed-after-approval", lifecycle_state: "approved" }],
+    });
+    expect(coordinator.verify()).toBe(true);
+
+    const database: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(database.prepare("SELECT COUNT(*) AS count FROM m_events").get()?.count).toBe(0);
+    expect(database.prepare("SELECT COUNT(*) AS count FROM m_receipts").get()?.count).toBe(0);
+    database.close();
+
+    const applied = coordinator.apply(approved);
+    expect(applied.ok).toBe(true);
+    expect(coordinator.snapshot()).toMatchObject({ lifecycle_state: "applied" });
+    expect(coordinator.reconcile(approved.update_id)).toMatchObject({ ok: true, status: "ready" });
+    expect(coordinator.snapshot()).toMatchObject({ lifecycle_state: "effect_confirmed" });
+    coordinator.close();
   });
 
   it("Jの状態projectionがevent chainと合わなければ復帰・反映を開始しない", () => {

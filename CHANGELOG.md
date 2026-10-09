@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-10 — J/M記憶更新の承認・反映・receipt確認を分離
+
+- C07.02として、J/M coordinatorのcross-store snapshotで承認済み、M反映済み、J receipt確認済みを別状態として観測できるようにした。M receiptの内容digest・update ID・J event ID・期待版の一致を確認し、不整合・保存不能は成功扱いしない。
+- 承認後に内容を変えたcommitは既存J pending参照と一致せず、M event/receiptを変更せず拒否する。J eventは従来どおりraw記憶本文を保持しない。
+- 検証は合成readerとtest-owned SQLiteによる局所証拠。実owner承認producer、通常production caller、Gateway/UI統合、親C07、release/GA/P13/owner GOは成立しない。検証結果とGit閉鎖は開発進捗へ記録する。
+
 ## 2026-10-10 — 一次取得と意味更新提案の分離
 
 - C07.01として、canonical inboundを未評価・未採用の取得記録へ分離し、LLM feedbackの意味更新案をExecutorからHDSへ未信頼入力として渡す。
