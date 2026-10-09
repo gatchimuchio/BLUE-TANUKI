@@ -30,6 +30,7 @@ import type {
   SuspendedRequest,
 } from "./types.js";
 import { frame } from "./frame.js";
+import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
 import { model } from "./model.js";
 import { commit } from "./commit.js";
 import { AuditLog } from "./audit.js";
@@ -114,6 +115,8 @@ export interface ControllerOptions {
   memory?: LongTermMemoryPort;
   llm_route?: LLMCommandRoute;
   self_health?: ControllerSelfHealthOptions;
+  /** Owner-supplied relationship references; audit/display only, never authority. */
+  goal_relation_graph?: unknown;
 }
 
 export interface LLMCommandRoute {
@@ -157,6 +160,7 @@ export class HDSUpperController {
   private readonly memory?: LongTermMemoryPort;
   private readonly llm_route: LLMCommandRoute;
   private readonly self_health: ControllerSelfHealthOptions;
+  private readonly goal_relation_tree?: ReadonlyGoalRelationTreeView;
 
   /** Commands awaiting executor feedback (already ASSERTed). */
   private readonly inflight = new Map<string, DecisionLog>();
@@ -173,6 +177,9 @@ export class HDSUpperController {
     this.audit = opts.audit ?? new AuditLog();
     this.memory = opts.memory;
     this.llm_route = opts.llm_route ?? {};
+    this.goal_relation_tree = opts.goal_relation_graph === undefined
+      ? undefined
+      : buildGoalRelationTreeView(opts.goal_relation_graph);
     this.self_health = {
       ...STANDALONE_SELF_HEALTH_DEFAULTS,
       ...(opts.self_health ?? {}),
@@ -204,6 +211,7 @@ export class HDSUpperController {
         default_policy: this.policy,
         memory_reader: this.memory,
         original_reference_kind: "synthetic_rejection_placeholder",
+        ...(this.goal_relation_tree ? { goal_relation_tree: this.goal_relation_tree } : {}),
       });
       const c = suspendCommit(
         "authority_input_boundary",
@@ -268,6 +276,7 @@ export class HDSUpperController {
       default_policy: this.policy,
       memory_reader: this.memory,
       original_content: req.content,
+      ...(this.goal_relation_tree ? { goal_relation_tree: this.goal_relation_tree } : {}),
     });
     const selfHealth = this.evaluateSelfHealth();
     if (selfHealth.fail_safe) {

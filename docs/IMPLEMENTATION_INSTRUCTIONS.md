@@ -1,68 +1,68 @@
 # BLUE-TANUKI 有効な実装指示
 
-現単位: **C02.01 — 原文・委任・目的射影**。`PRODUCT_BUILD_MODE`、contract profile。直接依存C01.03はmain `3a23c1ea6fcc037d94b622cd875fea3088341184` に保存済みだが、tooling受入は本単位の契約・HDS実consumer証拠を代替しない。今回はC02.01だけを実装・検証し、二世代backup、main commit/push、remote照合まで閉じて停止する。
+現単位: **C02.02 — 目的と共有手段の関係網**。`PRODUCT_BUILD_MODE`、core profile。今回はこの単位だけを実装・検証し、二世代backup、main commit/push、remote照合まで閉じて停止する。C02.01は `88136224a1711750f0f717f03a598ef61eafeecf` に保存済み。親C02のscenario全体は未実行である。
 
-ownerは全工程を一単位ずつ委任している。検証済み通常成果はGitHubへ履歴・成果物としてcommit/pushし、remote refsを照合する。公開主張、実業務作用、他repo変更、出荷判断、owner GOは別境界とする。私有原典、封印詳細、raw証拠、秘密、runtime stateはrepoへ含めない。
+ownerは全工程を一単位ずつ委任している。検証済みの通常成果をGitHubへ履歴・成果物としてcommit/pushし、remote refsを照合する。公開主張、実業務作用、他repo変更、出荷判断、owner GOは別境界。私有原典、封印詳細、raw証拠、秘密、runtime stateをrepoへ含めない。
 
 ## 1. 目的
 
-原文参照と目的射影を別recordとしてHDSの通常decision/audit経路へ接続する。必要性、対象・到達条件・範囲、評価規則、適用期間、委任権限が確認されていないときは`unknown`のまま保持し、入力文面やmetadataから推測しない。
+BT-R-C02-03の複数親・共有手段・寄与・抵触を、strictな関係網と表示木に接続する。表示木から項目が隠れてもcanonical graph全体へ復元できる状態を、今回の有限条件とする。
 
 ## 2. Phase 境界
 
-対象はprotocolのgoal projection契約、HDS `frame()`の生成、Controller decision log/auditへの実接続、局所利用文書である。合成requestだけを使う。LLMや外部serviceを起動せず、credential、保存済み製品state、別repo、外部業務作用に触れない。
+対象はprotocol契約、HDSの通常Controller decision/audit経路、局所文書、正負の合成試験。外部業務作用、別repo、秘密や実データ、LLM接続、GUI変更、配布・release操作を行わない。
 
 ## 3. Scope
 
-- `packages/protocol/src/goal_projection.ts`、`packages/protocol/src/index.ts`
-- `packages/protocol/test/goal_projection.test.ts`
-- `packages/hds-brain/src/goal_projection.ts`、`frame.ts`、`types.ts`、`index.ts`
-- `packages/hds-brain/test/goal_projection.test.ts`
-- `docs/GOAL_PROJECTION.md`、`docs/IMPLEMENTATION_INSTRUCTIONS.md`、`docs/INDEX.md`、`docs/開発進捗.md`、`docs/ROADMAP.md`、`CHANGELOG.md`
+- `packages/protocol/src/goal_relations.ts`、protocol barrel、対応test
+- `packages/hds-brain/src/goal_relations.ts`、`frame.ts`、`types.ts`、`controller.ts`、barrel、対応test
+- `docs/GOAL_RELATIONS.md`、この指示、`docs/INDEX.md`、`docs/開発進捗.md`、`docs/ROADMAP.md`、`CHANGELOG.md`、`規定/移行台帳.json`
+- 既存C02.01やC02.03、無関係なpathへscopeを広げない
 
 ## 4. Non-goals
 
-C02親scenario全体、C02.02/C02.03、目的graph、解釈訂正や版変更、自然言語からのgoal同定、owner/delegatorの推定、goalを根拠にした許可・実行、Gateway/Operator UI、永続database移行、credential/live/installed/別OS検証、release/GA/P13/owner GOを扱わない。私有原典・施工パッケージ・raw証拠をrepoへ複写しない。
+自然言語からの意味同定、寄与の成功判定、目的への採用・変更、権限や実行判断、永続semantic memory、動的UI編集、別consumer、親C02全体受入、live/installed/他OS、release/GA/P13/owner GOを扱わない。親scenario BT-T-C02-01..04は全体としてNOT_RUNのまま維持する。
 
 ## 5. 最初に確認する files / symbols
 
-root/近傍AGENTS、日本語基底、作業標準要領、active instruction、ROADMAP、SECURITY/AUDIT/CONFIG/README/CHANGELOG、C02.01と親C02、C01.03の閉鎖証拠、指定仕様s01/s03/s05/s06/s14/s15/s16、原典D0 §7／H5 第6章／A12 §6.2.1を確認する。現物は`InboundRequestSchema`、`FrameResult`、`frame()`、`HDSUpperController.decide()`、`DecisionLog`、`AuditLog.append()`、既存normalization/controller tests、protocol exportを追う。
+root/近傍AGENTS、日本語基底、作業標準要領、active instruction、ROADMAP、SECURITY/AUDIT/CONFIG/README/CHANGELOG、C02.02・親C02・C02.01閉鎖証拠、指定仕様s01/s03/s05/s06/s14/s15/s16、原典D0 §7／H5 第6章／A12 §6.2.1を確認する。現物は `GoalProjectionSchema`、`FrameResult`、`frame()`、`ControllerOptions`、`HDSUpperController.decide()`、`model()`、`commit()`、`DecisionLog`、`AuditLog.append()`、protocol/HDS exportと近傍testsを追う。
 
 ## 6. 必須grep
 
-`GoalProjectionSchema`、`goal_projection`、`original_request_ref`、`necessity`、`target_state`、`evaluation_rules`、`validity_period`、`authority`、`status: "unknown"`、`FrameResult`、`frame(`、`AuditLog.append`、`raw_content`を追跡する。UI/external metadataから射影を昇格する別経路、raw本文を射影recordへ複写する経路、frame以外の別authority ownerを追加しない。
+`GoalRelationGraphSchema`、`goal_relation_graph`、`goal_relation_tree`、`parent_goal`、`means_contribution`、`joint_contribution`、`goal_conflict`、`FrameResult`、`HDSUpperController.decide`、`AuditLog.append`、`model`、`commit`を追跡する。関係をinbound metadataから取り込む経路、関係をmodel/commit/Approval Gate/実行へ混ぜる経路、raw自由記述を関係recordへ保存する経路を追加しない。
 
 ## 7. 既存anchor
 
-`frame()`は既存`goal`へ本文先頭200文字を置く。Controllerはboundary通過後のraw本文を`DecisionLog.input`へ保持し、正規化本文をF→M→Cへ渡し、decision logをaudit hash-chainへ追加する。今回追加する射影はこの既存経路に別fieldとして接続し、legacy `goal`、normalization、decision、既存audit形式の意味を変更しない。
+`ControllerOptions`は構築時の明示設定を受け、`frame()`が`FrameResult`を返し、ControllerはF→M→C後の`DecisionLog`を`AuditLog`へ追加する。`model()`はgoal/protected values/request/actor/process/memoryを読むが、関係木は読まない。`commit()`はscoringを評価する。既存protocolには目的射影はあるが関係網schema・consumerは無い。現行HDS経路へoptionalな監査projectionを足し、既存判断入力は変えない。
 
 ## 8. 実装要件
 
-1. strict protocol schemaで、request参照/digest、必要性、対象・条件・範囲、評価規則、適用期間、権限参照、同定状態を別fieldとして定義する。
-2. 値のない項目は`unknown`の形だけを受理する。identified項目には根拠参照を要求し、`ready`は必要項目すべてがidentifiedの場合だけ受理する。
-3. HDSはaccepted raw request本文を一時的にdigest化し、参照と射影をframeへ配置する。raw本文を射影recordへ重複保存しない。invalid boundary fallbackはsynthetic placeholderと明示し、raw invalid inputを読まない。
-4. current runtimeはsemantic extraction/adoptionを行わず、各意味項目を`unknown`として開始する。自然言語、LLM、memory、session、metadata、historyはauthorityを作れない。
-5. projectionとimmutable original referenceをruntimeでfreezeし、`DecisionLog`/`AuditLog`に実際に接続する。射影はmodel/commit/approval/execution decisionの入力にしない。
-6. schema拒否理由はissue codeだけに制限し、不正本文や値を返さない。既存のlegacy goal、HDS standalone、audit hash-chain、Runtime Invariantsを保つ。
+1. protocol schemaをstrict・版付きにし、不透明UUID/hash参照と各relationの根拠参照、参照先存在、node kind、一意性、親循環、意味重複、joint contribution人数を検査する。graph/treeに`used_for_authority=false`を必須化する。上限は256 nodes、1024 relations、tree 2048 entries/depth 32。自由記述・表示名・raw本文を受け入れない。
+2. `parent_goal`は複数親を許し、`means_contribution`は未検証、`joint_contribution`は複数手段の未検証、`goal_conflict`は未解決として記録する。寄与の存在を達成の証明にしない。
+3. 画面用forestでは親・寄与の関係ごとに共有ノードを複製する。canonical graph全体をdigest付きrecovery sidecarへ保持し、viewから隠した表示要素があっても復元し、sidecar改変時はfail closedとする。
+4. 明示構築設定から検証し、凍結したtreeを`FrameResult`、`DecisionLog`、hash-chain `AuditLog`へ接続する。inbound metadataから設定や関係を作らない。
+5. treeはmodel、commit、approval、executionの入力にしない。未設定時はoptional field自体を省略し、従来経路と判定を維持する。
+6. 文書は契約、consumer、境界、復元方法、限界、検証を日本語で説明する。文書・manifest・fixtureだけを本番挙動の証拠にしない。
 
 ## 9. Safety invariants
 
-HDS-BRAIN唯一authority、owner最終責任、Approval Gate/L3 final review、audit hash-chain、Runtime Invariants、fail-closed/SUSPEND、metadata non-authority、memory/history non-authority、Layer A/Bを変更・迂回しない。goal projectionの`ready`は実行承認ではない。本単位の全証拠はcontract/local runtimeの範囲に限り、親scenario・製品全体・release readinessへ昇格しない。
+HDS-BRAIN唯一authority、owner最終責任、Approval Gate/L3 final review、audit hash-chain、Runtime Invariants、fail-closed/SUSPEND、metadata non-authority、memory/history non-authority、Layer A/Bを変更・迂回しない。関係網は判断・権限を生成せず、未知または破損は自動許可へ進めない。scope外の不足を今回の完成主張に含めない。
 
 ## 10. Operator usability
 
-`docs/GOAL_PROJECTION.md`にrecordの各項目、digest参照、unknown/identified/ready条件、invalid-input placeholder、非権限性、現在未実装の意味同定、検証方法と限界を日本語で説明する。未知を勝手に既定値で埋めず、再同定には何のowner evidenceが必要かを示す。
+`docs/GOAL_RELATIONS.md`に4種類の関係、各保持状態、forestの複製表示、canonical recovery sidecar、digest拒否、構築設定の入口、判断への非影響、現状限界、局所検証を説明する。raw内容が無くても参照先と関係種別を解釈できる前提と、永続性を保証しない境界を明記する。
 
 ## 11. Tests
 
-- `BT-U-C02.01-P`: Controllerの実`decide()`経路で原文request IDとraw-content SHA-256を別immutable referenceへ結び、必要性・target・evaluation・期間・authorityを`unknown`のまま`DecisionLog`/auditへ記録する。legacy `goal`と既存raw/normalized監査を維持する。
-- `BT-U-C02.01-N`: unknownに値を付加した構造、全項目未同定の`ready`、未知field、空評価規則、逆転した期間を拒否する。不正入力値を失敗理由へ含めない。
-- 明示的な自然文と非権限metadataを加えても射影状態が変わらず、同一request条件の決定を射影が変えないことを合成入力で確認する。
-- 親scenario BT-T-C02-01..04は今回一括実行せず、全体受入をNOT_RUNのまま維持する。
+- `BT-U-C02.02-P`: 複数親、共有手段、共同寄与、抵触がstrict graphに保存される。実`HDSUpperController.decide()`経路でforest・復元sidecarがFrameResult/DecisionLog/auditへ届き、全要素freezeと`AuditLog.verify()`を確認する。表示木から枝を隠してもcanonical graphを完全復元する。
+- `BT-U-C02.02-N`: dangling/wrong-kind/重複/cycle/不完全joint/未知field/自由記述参照/破損sidecarを拒否し、値をerrorへ出さない。inbound metadataが関係を作成・置換できないことを確認する。
+- graph有無の同一requestを比較し、model、commit hash、command type/payloadが不変であることを確認する。乱数command IDは比較対象から除外する。
+- selector: `packages/protocol/test/goal_relations.test.ts` と `packages/hds-brain/test/goal_relations.test.ts`。
+- 親scenario BT-T-C02-01..04は本単位で閉じない。
 
 ## 12. Validation commands
 
-必須:
+commit前の必須:
 
 ```text
 pnpm install --frozen-lockfile
@@ -71,30 +71,30 @@ pnpm build
 pnpm test
 pnpm docs:check
 pnpm validate:repo-health
-pnpm run doctor
-pnpm validate:packaging
 ```
 
-追加局所試験:
+実装単位追加:
 
 ```text
-pnpm exec vitest run packages/protocol/test/goal_projection.test.ts packages/hds-brain/test/goal_projection.test.ts
+pnpm run doctor
+pnpm validate:packaging
+pnpm exec vitest run packages/protocol/test/goal_relations.test.ts packages/hds-brain/test/goal_relations.test.ts
 ```
 
-`validate:agi`の登録selectorはC02.01にまだ無いため、勝手に成功根拠として使わない。doctorが既存設定/資格情報の不足を報告した場合は、内容を隠さず今回差分との関係を分類し、秘密を表示・変更しない。
+失敗は今回起因、既存、環境限定、未確定に分類し、ログを残す。credentialを表示・設定せず、既存processを停止しない。0件・未実行・非ゼロはPASSにしない。
 
 ## 13. Manual smoke
 
-Windows/PowerShell上で追加Vitest selectorを実行する。テスト内でHDS Controllerのsynthetic requestを処理し、audit hash-chainと未知値保持を確認する。Gateway、外部service、credential、実データ、別repoは起動・変更しない。child processが終端し、Vitest報告を回収したことを確認する。
+Windows/PowerShellの現在workspaceで上記Vitest selectorを実行し、child process終端、件数、出口値を回収する。試験内ではHDS Controllerの合成requestのみを処理する。Gateway、外部service、credential、実データ、installed bundle、別repoは起動・変更しない。
 
 ## 14. Permanent-use check
 
-証明対象は現在のWindows workspaceでprotocol contractを検証し、HDS Controllerのlocal decision/audit経路に未同定goal projectionを保存することまで。意味同定、明示採用、永続database、UI閲覧、parent scenario、installed配布、別OS、live外部作用、製品完成、release readinessは証明しない。
+証拠範囲はWindows workspaceのprotocol契約と通常HDS local decision/audit経路で、関係forestからのcanonical graph復元まで。UI、永続semantic memory、installed配布、他OS、live外部作用、C02親scenario、製品完成、release readinessは証明しない。
 
 ## 15. Final report format
 
-C02.01有限受入、BT-R-C02-01/02/06の成立範囲、変更pathと実consumer、証拠源・経路・リスク、局所selectorと8必須commandのexit/result、FAIL/未実施/profile/未決process、C02親/P13状態、branch/commit/push/remote HEAD、二世代backup refsと復元点を日本語で記録する。局所受入・Git統合・製品/release判断を分ける。
+C02.02有限受入とBT-R-C02-03の成立範囲、変更path・実consumer、リスク/経路/証拠源、selectorと8必須commandのexit・結果、失敗・未実施・profile・限界、親C02/P13状態、branch/commit/push/remote HEAD、二世代backup refsと復元点を日本語で記録する。local受入、Git統合、製品/release判断を区別する。
 
 ## 16. Next-phase dependency
 
-有限正負条件、必須検証、整理・安全review、二世代backup、mainの単一commit/push、remote refs/clean照合、private引継ぎまで終えたら本単位だけを閉じて停止する。親C02はPARTIALのまま保ち、C02.02を自動開始しない。
+有限正負条件、必須検証、整理・安全review、二世代backup、main単一commit/push、remote refs/clean照合、private引継ぎまでをC02.02一単位で閉じる。親C02はPARTIAL、BT-T-C02-01..04はNOT_RUN_AS_WHOLE、C02.03は候補のまま着手しない。P13は`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持し、owner GOやGAを推定しない。

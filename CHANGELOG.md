@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — 目的・手段関係網
+
+- C02.02として、版付きprotocol関係網へ複数親、共有・共同寄与、未解決の抵触を追加し、不透明な根拠参照、境界検査、非権限flagを必須にした。
+- HDS Controllerの明示構築設定から関係treeを通常decision/audit経路へ接続した。tree表示用の重複とcanonical graphの復元sidecarを分離し、表示要素が隠れてもgraph全体を復元する。関係網はmodel、commit、Approval Gate、実行判断へ使わない。
+- 正負の局所試験、workspace gates、packagingを検証した。doctorは必須token未設定と既存port使用中で失敗し、環境のfirst-run readinessは未成立。親C02 scenario全体、意味同定、永続semantic memory、live/installed、release readiness、P13 owner GOは成立させない。
+
 ## 2026-10-09 — 原文参照と未同定目的射影
 
 - protocolにstrictなGoalProjection契約を追加し、HDS frameからController decision log/auditへ接続した。受理済み入力はraw本文のdigest参照だけを保存し、必要性・到達状態・評価規則・期間・委任権限を未同定なら`unknown`のまま保持する。

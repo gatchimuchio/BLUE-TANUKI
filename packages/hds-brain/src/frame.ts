@@ -20,6 +20,7 @@ import {
   createUnidentifiedGoalProjection,
   type GoalProjectionSourceKind,
 } from "./goal_projection.js";
+import type { ReadonlyGoalRelationTreeView } from "./goal_relations.js";
 
 /**
  * Optional frame configuration: lets the gateway decide which policy
@@ -42,6 +43,8 @@ export interface FrameConfig {
   /** Raw accepted content is hashed for the immutable reference and is not copied into the projection. */
   original_content?: string;
   original_reference_kind?: GoalProjectionSourceKind;
+  /** Validated controller configuration; never sourced from inbound metadata or used as authority. */
+  goal_relation_tree?: ReadonlyGoalRelationTreeView;
   /**
    * Override protected_values per request, if needed.
    * Falls back to a conservative default.
@@ -90,6 +93,7 @@ export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
       original_content: config?.original_content ?? req.content,
       ...(config?.original_reference_kind ? { source_kind: config.original_reference_kind } : {}),
     }),
+    ...(config?.goal_relation_tree ? { goal_relation_tree: config.goal_relation_tree } : {}),
     goal: req.content.slice(0, 200),
     protected_values: config?.protected_values ?? DEFAULT_PROTECTED_VALUES,
     world_closure: {

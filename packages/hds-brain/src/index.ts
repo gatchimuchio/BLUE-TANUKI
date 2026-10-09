@@ -6,6 +6,11 @@ export {
   type GoalProjectionSourceKind,
   type ReadonlyGoalProjection,
 } from "./goal_projection.js";
+export {
+  buildGoalRelationTreeView,
+  restoreGoalRelationGraphFromTreeView,
+  type ReadonlyGoalRelationTreeView,
+} from "./goal_relations.js";
 export { resolveActor, resolveProcess } from "./process.js";
 export { buildMemoryTrace, type MemoryReaderPort } from "./memory_trace.js";
 export {
