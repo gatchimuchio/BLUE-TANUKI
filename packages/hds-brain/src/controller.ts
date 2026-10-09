@@ -48,6 +48,7 @@ import {
   createDefaultDetectorRegistry,
 } from "./detectors/index.js";
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy } from "./policy.js";
+import { assessCandidateGoalCriteria } from "./candidate_criteria.js";
 import { routeAction } from "./action_router.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
 import {
@@ -1000,6 +1001,14 @@ function assessLLMToolCandidates(
         : "fail";
     const semanticOutcome = "not_assessed" as const;
     const semanticEvidenceStatus = "unknown" as const;
+    const goalCriteria = assessCandidateGoalCriteria(
+      candidate.tool_name,
+      sourceLog?.frame.candidate_goal_criteria,
+      sourceLog ? {
+        request_id: sourceLog.request_id,
+        content_sha256: sourceLog.frame.goal_projection.original_request_ref.content_sha256,
+      } : undefined,
+    );
 
     return {
       candidate_digest: sha256(candidate),
@@ -1021,11 +1030,13 @@ function assessLLMToolCandidates(
         evidence_status: semanticEvidenceStatus,
         reason_code: "purpose_relation_not_assessed",
       },
+      goal_criteria: goalCriteria,
       adoption_disposition: determineCandidateAdoptionDisposition({
         mechanical_contract: mechanicalOutcome,
         domain_validation: domainOutcome,
         semantic_outcome: semanticOutcome,
         semantic_evidence_status: semanticEvidenceStatus,
+        goal_criteria: goalCriteria,
       }),
       may_execute: false,
       used_for_authority: false,

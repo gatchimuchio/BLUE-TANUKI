@@ -14,6 +14,7 @@ import {
   createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
   parseInboundRequestAtBoundary,
+  GOAL_CRITERIA_SCHEMA_VERSION,
 } from "../src/index.js";
 
 const upstream = {
@@ -57,6 +58,49 @@ describe("ExecuteCommandSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("InboundRequest goal criteria boundary", () => {
+  const base = {
+    id: "criteria-request-1",
+    channel: "test",
+    user: "owner",
+    content: "prepare the task",
+    timestamp: 1,
+  };
+  const goalCriteria = {
+    schema_version: GOAL_CRITERIA_SCHEMA_VERSION,
+    criteria: [{
+      criterion_ref: "task.output",
+      criterion_kind: "objective",
+      tool_relations: [{ tool_name: "echo", relation: "supports" }],
+    }],
+  };
+
+  it("preserves only the explicit top-level criteria contract through canonicalization", () => {
+    const parsed = parseInboundRequestAtBoundary({ ...base, goal_criteria: goalCriteria });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.request.goal_criteria).toEqual(goalCriteria);
+  });
+
+  it("rejects malformed criteria at the inbound boundary", () => {
+    const parsed = parseInboundRequestAtBoundary({
+      ...base,
+      goal_criteria: { ...goalCriteria, extra: "not allowed" },
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.reason).toBe("schema_validation_failed");
+  });
+
+  it("does not promote metadata that resembles a criteria contract", () => {
+    const parsed = parseInboundRequestAtBoundary({
+      ...base,
+      metadata: { "untrusted.goal_criteria": goalCriteria },
+    });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.request.goal_criteria).toBeUndefined();
   });
 });
 

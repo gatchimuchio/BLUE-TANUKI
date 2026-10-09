@@ -213,6 +213,8 @@ export interface FrameResult {
   operator_surface?: OperatorSurfaceRef;
   operation_core?: OperationCoreFrameRef;
   goal_projection: ReadonlyGoalProjection;
+  /** Request-bound, digest-only criteria context; never authority or execution permission. */
+  candidate_goal_criteria: RequestGoalCriteriaProjection;
   /** Display/audit reference only. It is excluded from model, commit, approval and execution inputs. */
   goal_relation_tree?: ReadonlyGoalRelationTreeView;
   /** Version/event projection for audit and later attribution; not consumed by model, commit, approval or execution. */
@@ -316,6 +318,35 @@ export type CandidateCheckOutcome = "pass" | "fail" | "unknown";
 export type CandidateSemanticOutcome = "supports" | "conflicts" | "not_assessed";
 export type CandidateAdoptionDisposition = "eligible_for_goal_review" | "held" | "rejected";
 
+export interface RequestGoalCriteriaProjection {
+  status: "not_provided" | "provided" | "invalid";
+  request_id: string;
+  content_sha256: string;
+  criteria_digest?: string;
+  criteria: Array<{
+    criterion_ref_digest: string;
+    criterion_kind: "objective" | "safety";
+    tool_relations: Array<{
+      tool_name_digest: string;
+      relation: "supports" | "conflicts";
+    }>;
+  }>;
+  used_for_authority: false;
+}
+
+export interface CandidateGoalCriteriaAssessment {
+  outcome: "supports" | "conflicts" | "unknown";
+  evidence_status: CandidateEvidenceStatus;
+  risk_status: "verified" | "unverified";
+  criterion_ref_digests: string[];
+  reason_code:
+    | "request_declares_criterion_support_risk_unverified"
+    | "request_declares_criterion_conflict"
+    | "no_matching_goal_criterion"
+    | "criteria_unavailable"
+    | "criteria_invalid";
+}
+
 /** Digest-only, non-executable review of an LLM-proposed tool candidate. */
 export interface LLMToolCandidateAssessment {
   candidate_digest: string;
@@ -335,6 +366,7 @@ export interface LLMToolCandidateAssessment {
     evidence_status: CandidateEvidenceStatus;
     reason_code: "purpose_relation_not_assessed" | "independent_support_observed" | "independent_conflict_observed";
   };
+  goal_criteria: CandidateGoalCriteriaAssessment;
   adoption_disposition: CandidateAdoptionDisposition;
   may_execute: false;
   used_for_authority: false;

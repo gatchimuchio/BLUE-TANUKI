@@ -1,107 +1,122 @@
 # BLUE-TANUKI 有効な実装指示
 
-現単位: **C06.01 — 候補検査と判断の分離**。LLM tool candidate の機械契約検査、元command process allowlist による領域検証、目的との意味判断を別記録にする。候補由来を推論として示し、意味判断が未評価・unknownなら採用を保留する。候補は実行可能化せず、引数や候補本文をHDS auditへ保存しない。環境構築は完了済みとして再実施せず、通常開発はWindows / PowerShellで行う。GitHubは検証済み成果と履歴の保管先であり、本単位も検証後に規定の二世代backup、main commit・push、remote照合まで閉じる。
+現単位: **C06.02 — 目的が実際に採否へ作用する接続**。受信依頼に明示されたcriteriaとLLM tool candidateを同じrequest/Decisionへ束ね、候補の寄与・抵触をHDSのgoal-review dispositionに反映する。request由来のrelationは外部事実の検証ではない。支持は仮定として扱い危険未確認なら保留、明示的な抵触は拒否する。criteria本文、criterion参照、tool名、候補本文、argumentsをHDS auditへ保存せずdigestと限定状態だけを残す。候補は実行・承認・権限にならない。環境構築は完了済み、通常開発はWindows / PowerShellで行う。GitHubは検証済み成果と履歴の保管先であり、本単位も検証後に二世代backup、main commit・push、remote照合まで閉じる。
 
 ## 1. 目的
 
-C05.02で通常Gateway finalization経路からHDSへ届くLLM tool candidateを、実行候補のまま保持しながら、機械検査・process領域検証・意味判断の状態を独立して記録し、採用可能性へ限定的に結び付ける。未知、推論、仮定、未評価の意味根拠を支持事実として扱わない。HDSはcompute requestを発行する上流判断主体であり、判断中にLLMを呼び出さない。
+C06.01のcandidate-only feedbackを、現行requestの明示criteriaとの照合へ接続する。HDSはstrictな`GoalCriteria` contractをInboundRequest境界で検査し、accepted requestのIDと本文digestへ束ねる。HDSはcandidateのtool identifierとrequestが宣言したcriteria relationを比較し、支援・抵触・未照合を別に記録する。requestの支援宣言は未検証仮説のままなので`held`、criteriaとの明示的抵触は`rejected`、criteria不在・binding不整合・危険未確認は保留とする。数値scoreは安全条件を相殺しない。
 
-有限到達条件: 厳密な候補schema、重複call ID検査、元Decisionのprocess allowlist照合、意味判断と根拠状態が独立に記録される。機械検査または領域検証の失敗は拒否、照合元command不在や未評価・不確かな意味根拠は保留とする。すべての検査を通ったcandidateであっても到達先はgoal review適格性に限り、実行・承認・権限にならない。raw candidate、tool名、argumentsをHDS auditへ保存しない。
+有限到達条件: 通常Gateway inbound境界からHDS Decision/frameへrequest-bound criteriaが届き、通常executor-feedback経路で候補別relationがdigest-only auditへ記録される。支持・抵触・未知が採否状態へ異なる形で作用し、根拠・危険未確認は保留、明示的抵触は拒否となる。`may_execute=false`、`used_for_authority=false`を保つ。
 
 ## 2. Phase 境界
 
-対象はHDS executor-feedback audit record、純粋な採否縮約関数、通常Gateway finalizationから届く候補の評価、controller testsおよびC06.01のactive指示・roadmap・進捗・changelog更新である。HDS-BRAIN standalone、唯一authority、owner最終責任、Approval Gate、L3 final review、audit hash-chain、Runtime Invariants、Layer A/Bを維持する。
+対象はprotocolのrequest criteria contractと正規化、HDS frame投影、candidate criteria照合と採否縮約、通常Gateway/HDS feedback consumer、`apps/gateway/test/serve_boundary.test.ts`による受信境界からfinalizationまでの結合確認、関連試験、C06.02のactive指示・roadmap・進捗・changelog、およびCHANGELOG fingerprintを固定する移行台帳の既存hash一項である。HDS-BRAIN standalone、唯一authority、owner最終責任、Approval Gate、L3 final review、audit hash-chain、Runtime Invariants、Layer A/Bを維持する。
 
-C06.02の基準寄与・衝突評価、C06.03の懐疑・再開評価、候補の意味判定器、goal更新・採用処理、tool実行、Approval Gate変更、外部送信、実provider/live、Control Center、installer・bundle・release・GA・P13・owner GO、他repo、環境再構築は対象外。private施工pack、原典、実行state/evidence、secretはrepositoryへ含めない。
+C06.03の懐疑・追加観測・対象枠再開放、独立した意味・危険検証、criteriaを編集するUI、candidateのToolRegistry接続・実行・承認・goal変更、外部送信、実provider/live、Control Center、installer・bundle・release・GA・P13・owner GO、他repo、環境再構築は対象外。private施工pack、原典、実行state/evidence、secretはrepositoryへ含めない。
 
 ## 3. Scope
 
-- packages/hds-brain/src/controller.ts
-- packages/hds-brain/src/types.ts
-- packages/hds-brain/src/policy.ts
-- packages/hds-brain/test/controller.test.ts
-- docs/IMPLEMENTATION_INSTRUCTIONS.md
-- docs/ROADMAP.md
-- docs/開発進捗.md
-- CHANGELOG.md
+- `packages/protocol/src/goal_criteria.ts`
+- `packages/protocol/src/types.ts`
+- `packages/protocol/src/index.ts`
+- `packages/protocol/test/goal_criteria.test.ts`
+- `packages/protocol/test/types.test.ts`
+- `packages/hds-brain/src/candidate_criteria.ts`
+- `packages/hds-brain/src/frame.ts`
+- `packages/hds-brain/src/controller.ts`
+- `packages/hds-brain/src/policy.ts`
+- `packages/hds-brain/src/types.ts`
+- `packages/hds-brain/test/candidate_criteria.test.ts`
+- `packages/hds-brain/test/controller.test.ts`
+- `apps/gateway/test/serve_boundary.test.ts`
+- `規定/移行台帳.json`（CHANGELOG.mdの既存SHA-256のみ更新。負債分類、件数、strict gateは変更しない）
+- `docs/IMPLEMENTATION_INSTRUCTIONS.md`
+- `docs/ROADMAP.md`
+- `docs/開発進捗.md`
+- `CHANGELOG.md`
 
 上記外は変更しない。追加pathが必要ならprivate施工stateと受入記録を先にREPLAN・再同期する。
 
 ## 4. Non-goals
 
-candidateの実行・ToolRegistry接続・承認・goal変更、LLMを呼ぶ意味判定、候補本文やargumentsの永続化、candidate由来の権限生成、semantic conflictの自動解消、C06.02/03のcriterion実装、memory/history authority化、policyまたはApproval Gateの変更、外部送信、credential/live provider、UI、installer/release/GA/owner GO、環境再構築を行わない。
+criteria本文の自然言語解釈、LLMによる自己評価、未検証relationの観測済み化、危険の独立認定、bounded trialの実行、ToolRegistry接続、candidate実行、Approval Gate変更、goal/criteria更新、raw criteria/candidate/tool名/argumentsのHDS audit保存、権限生成、外部作用、credential/live provider、UIによるcriteria編集、release/GA/owner GO、他repo変更、環境再構築を行わない。criteriaはトップレベルの厳密なrequest contractだけで受理し、metadataから昇格しない。
 
 ## 5. 最初に確認する files / symbols
 
-ExecutorFeedbackAuditTrace、ExecuteFeedback、LLMToolCallCandidateSchema、HDSUpperController.onFeedback、DecisionLog.frame.process.execution_policy、evaluateDecision、Gateway finalize_command_output.ts、C05.02のcandidate-onlyおよびdigest-only監査境界、C06.01受入条件を確認する。開始時のmain/remote/backup refs・clean状態とNode/Corepack/pnpm版を記録する。既存環境を再設定しない。
+`GoalCriteriaSchema`、`InboundRequestSchema`、`parseInboundRequestAtBoundary`、`normalizeInboundRequestForAuthority`、Gateway `canonicalizeGatewayInbound`、`HDSUpperController.decide`、`FrameResult`、`HDSUpperController.onFeedback`、`LLMToolCallCandidateSchema`、`assessLLMToolCandidates`、`determineCandidateAdoptionDisposition`、`finalize_command_output.ts`、C06.01受入条件を確認する。開始時のmain/remote/backup refs・clean状態、Node/Corepack/pnpm版を記録する。既存環境は再設定しない。
 
 ## 6. 必須grep
 
-llm_tool_candidates、LLMToolCallCandidateSchema、onFeedback、executor_feedback、allowed_command_types、allowed_tools、ToolRegistry、may_execute、used_for_authority、semantic_judgment、adoption_disposition、hds_calls_llmを検索する。candidateがToolRegistryへ届かないこと、HDSにLLM呼出しがないこと、候補raw内容がaudit・history・operator resultへ追加されないこと、process allowlistが候補の実行・承認へ昇格しないことを確認する。
+`goal_criteria`、`GoalCriteriaSchema`、`candidate_goal_criteria`、`assessCandidateGoalCriteria`、`LLMToolCallCandidateSchema`、`onFeedback`、`ExecutorFeedbackLog`、`adoption_disposition`、`may_execute`、`used_for_authority`、`GoalProjection`、`finalizeCommandOutput`を検索する。criteriaがトップレベルrequestからだけ入り、metadata・candidate・LLM出力がauthorityへ昇格しないこと、候補がToolRegistry/execute/approvalへ届かないこと、raw criteria/tool名/argumentsがHDS feedback auditへ入らないことを確認する。
 
 ## 7. 既存 anchor
 
-C05.02はstrict schemaのLLM tool candidateを通常Gateway finalization経路からHDS feedbackへ渡し、HDS auditにはcountとdigestだけを保持する。candidateは実行型ではなく、ToolRegistryやApproval Gateへ接続しない。HDS onFeedbackは元DecisionLogを引けるが、従来は候補の構造・領域・意味状態を独立したassessmentとして記録しない。
+C06.01は通常Gateway finalizationから`HDSUpperController.onFeedback`へcandidateを渡し、strict contract/process allowlist/意味状態をdigest-only auditへ記録する。`GoalProjection`は通常request本文のdigest参照を保持するが、必要性・対象状態・evaluation rulesを自動同定しない。既存のgoal relation graphは表示・監査用であり候補criteriaの供給源ではない。criteriaがないrequestはgoal projectionを昇格させず、candidateを保留する。
 
-HDS process execution policyにはcommand typeとtool名の許可一覧がある。これはprocess範囲との照合に使えるが、実ToolRegistryの登録、tool固有argument schema、実行可能性や目的適合性を証明しない。意味判断は本単位で未評価とし、C06.02以降へ残す。
+新criteria contractは受信者がtask fitを明示する局所入力であり、危険の事実証拠・LLM自己評価・実行許可ではない。requestが宣言したtool/criterion支援は仮定、抵触はrequest内の明示禁止との照合であり、実ToolRegistry・引数schema・作用結果・criteriaの正しさを証明しない。
 
 ## 8. 実装要件
 
-1. executor feedback auditに、候補契約の不在・通過・失敗状態と候補ごとのdigest-only assessmentを記録する。malformed inputはraw payloadを保持せず安全に失敗状態を記録する。
-2. 候補由来はinferredとして記録する。機械契約のstrict schema通過と重複call ID検査、元commandのprocess allowlist照合、目的との意味判断を独立したfieldにする。
-3. 元commandを参照できない領域検証はunknownとする。照合可能なprocess policyにcandidate toolが含まれない場合はfail、含まれる場合はprocess allowlist上のpassとする。実registryやargument schemaの検証済みとは表示しない。
-4. 本単位では意味判断をnot_assessed、証拠状態をunknownとする。機械/領域failまたは意味conflictはrejected、必須検査や意味根拠が未成立ならheld、全検査とobservedな支持意味根拠がある場合もeligible_for_goal_reviewまでに留める。
-5. assessmentにはcandidate digest、状態、限定reason code、adoption disposition、may_execute=false、used_for_authority=falseだけを持たせる。candidate raw object、tool_name、argumentsはassessmentへ複製しない。
-6. 候補malformed・重複ID・process allowlist外・元command不在・意味unknownの負例を検証し、監査hash-chainが維持されることを確認する。candidateからToolRegistry・execute・approval・goal adoptionへの呼出しを追加しない。
-7. docsにはHDS process allowlistの検証限界、意味未評価、goal reviewまでの境界を明記する。C06.02/03や外部証拠の成立を主張しない。
+1. optionalなstrict `GoalCriteria`を`InboundRequestSchema`のトップレベルだけで受ける。空・重複・未知fieldはboundaryで拒否し、metadataからは取り込まない。
+2. HDS frameにrequest IDと受信本文SHA-256へ結んだdigest-only projectionを置く。criterion refとtool名をhash化し、criteria本文とraw tool identifierは監査へ写さない。
+3. feedback candidateのtool identifierを元Decisionのcriteria projectionと照合する。support/conflict/no matchを分け、候補・criterion・requestの関係と根拠状態を記録する。
+4. request由来supportはassumed、riskはunverifiedとするため`held`。明示conflictは`rejected`。criteria不在・不一致・未知も`held`。aggregate scoreでこの縮約を相殺できない。
+5. malformed requestは既存boundary fail-closed経路へ送る。criteria不在は合成基準を作らずunknownのまま保つ。
+6. auditに候補digest、criterion/tool digests、限定enum/reason、`may_execute=false`、`used_for_authority=false`だけを残す。hash-chainを維持し、HDSからLLM・外部APIを呼ばない。
+7. docsにはrequest contractの限界、built-in UI/channelでのcriteria authoring未接続、リスク未検証時の保留、実行・authority非接続を記録する。
 
 ## 9. Safety invariants
 
-HDS-BRAIN唯一authority、owner最終責任、Approval Gate、high-risk/unknown/tool.callのL3 final review、audit hash-chain、Runtime Invariants、fail-closed、standalone HDS、Layer A/Bを維持する。LLM candidate、candidate digest、process allowlist照合結果、assessment、memory/historyは権限でない。HDSはLLMを呼ばない。candidateはexecute不可であり、adoption dispositionはgoal reviewより先へ進まない。
+HDS-BRAIN唯一authority、owner最終責任、Approval Gate、high-risk/unknown/tool.callのL3 final review、audit hash-chain、Runtime Invariants、fail-closed、standalone HDS、Layer A/Bを維持する。criteria、relation match、candidate、candidate digest、memory/historyはauthorityでない。LLMはcriteria・riskを自己認定しない。candidateはexecute不可で、goal-review dispositionは実行・承認・採用確定を意味しない。
 
 ## 10. Operator usability
 
-候補の機械検査、process allowlist照合、意味判断、採否状態を別々に追跡できるようにする。理由コードは検査範囲を説明し、process allowlist passを実在toolやargument安全性の保証に見せない。unknownまたは未評価はheldとして扱う。raw candidateやargumentsをoperator result、audit、historyへ露出しない。
+request内criteriaとのmatch状態・根拠状態・reason codeを分けて追跡できるようにする。criteriaを送らない通常requestはheldになる。contractはトップレベルInboundRequest入力用であり、現行built-in UI/channelがcriteria authoringを提供するとは主張しない。support matchは依頼内の宣言に過ぎず、実ToolRegistry登録・tool固有argument schema・目的達成・危険検証ではない。raw criteria/candidateをauditやoperator resultへ露出しない。
 
 ## 11. Tests
 
-- BT-U-C06.01-P: 通常のHDS決定からonFeedbackへ届くprocess allowlist内候補で、機械検査・領域検証・意味未評価が別々に記録され、意味unknownの採用状態がheldである。
-- BT-U-C06.01-N: process allowlist外候補はrejected。malformed candidateのraw内容を記録せず契約失敗を記録する。重複call IDを拒否する。
-- 採否縮約関数でsemantic evidence statusのobserved / inferred / assumed / unknown、検査fail、semantic conflictの結果を検証する。observed supportであっても到達先はeligible_for_goal_reviewに限定する。
-- candidate argumentsがauditにないこと、audit chain verification、candidateの非実行・非権限境界、HDS standalone性を確認する。証拠は合成fixtureとlocal validationに限り、tool実行・実provider・installed動作・release readinessを証明しない。
+- BT-U-C06.02-P: request-bound criteriaがsupportとcandidateをdigest-onlyで結び、assumed relationとunverified riskのためheldになる。
+- BT-U-C06.02-N: explicit conflictはrejected。criteriaなし、no match、request binding不一致、risk unverifiedはheld。scoreがcriteria/safety gateを覆さない。
+- malformed/duplicate/unknown criteriaはstrict boundaryでrejectし、raw payloadをauditへ残さない。metadataのみではcriteriaを作らない。
+- Gateway inbound boundaryから`finalizeCommandOutput`までの合成fixtureでcriteria binding、HDS feedback assessment、digest-only auditを通し、実toolを呼ばない。
+- audit chain、candidate non-execution/non-authority、既存`GoalProjection` unknown状態を確認する。証拠は合成fixtureとWindows local validationに限り、実provider、UI authoring、installed behavior、release readinessを証明しない。
 
 ## 12. Validation commands
 
 commit前必須:
 
-    pnpm install --frozen-lockfile
-    pnpm typecheck
-    pnpm build
-    pnpm test
-    pnpm docs:check
-    pnpm validate:repo-health
+```bash
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm build
+pnpm test
+pnpm docs:check
+pnpm validate:repo-health
+```
 
-実装単位追加:
+実装を含む単位追加:
 
-    pnpm run doctor
-    pnpm validate:packaging
-    pnpm hds:standalone
-    pnpm exec vitest run --no-file-parallelism --maxWorkers=2 packages/hds-brain/test/controller.test.ts
+```bash
+pnpm run doctor
+pnpm validate:packaging
+pnpm hds:standalone
+pnpm exec vitest run --no-file-parallelism --maxWorkers=2 packages/protocol/test/goal_criteria.test.ts packages/protocol/test/types.test.ts packages/hds-brain/test/candidate_criteria.test.ts packages/hds-brain/test/controller.test.ts apps/gateway/test/serve_boundary.test.ts
+```
 
-日本語基底規定自体を変えないためstrict language gateは今回の範囲外とする。credentialed live、release gateは実施しない。smoke:serve/resumeは本単位の対象外であり、省略はscope上未実施と記録する。credentialを読み出さず、既存listenerを停止しない。標準test timeoutやgate閾値を変更しない。
+日本語基底規定自体を変えないためstrict language gateは今回の範囲外とする。credentialed live・release gateは実施しない。`smoke:serve/resume`はsmoke・root workspace・release gate単位ではない今回のscopeから外し、未実施として報告する。既存listenerは停止せず、標準timeoutやgate閾値を変更しない。
 
 ## 13. Manual smoke
 
-専用Vitest selectorで通常Decision生成、候補feedback、process allowlist pass/fail、malformed入力、重複ID、意味unknownの保留、raw引数非保持、audit hash-chainを検証する。credential、live provider、外部送信先、実tool実行は使わない。
+専用Vitest selectorで通常InboundRequest boundaryからGateway finalization、criteria projection、request/command binding、candidate support/conflict/no-match、malformed criteria、raw非保持、audit hash-chain、non-authority boundaryを検証する。credential、live provider、外部送信先、実tool実行は使わない。
 
 ## 14. Permanent-use check
 
-今回成立させるのは通常Gateway finalizationから届くcandidateについてのHDS内digest-only局所assessmentと、保守的なgoal-review dispositionまでである。process allowlistはcommand policyとの照合であり、ToolRegistry登録・tool固有schema・実行安全を確認しない。意味判定器、criteria contribution/conflict、懐疑・再開、永続的な採用処理、長期運転、installed/release readiness、C06親全体は未成立である。owner GO、GA、公開claimを推定しない。
+成立するのはrequestがトップレベルcriteriaを明示したときのHDS内digest-only照合とgoal-review dispositionまでである。criteriaを省略した通常requestはheld。built-in UI/channelからcriteriaを作るoperator導線、criteria意味検証、危険の独立証拠、bounded trial、ToolRegistry/tool argument安全性、実行・採用、長期運転、installed/release readiness、C06親全体は未成立である。owner GO、GA、公開claimを推定しない。
 
 ## 15. Final report format
 
-BT-U-C06.01の成立範囲、変更path、通常Gateway/HDS feedback consumer、候補の非実行・非権限境界、assessmentが確認する範囲と限界、証拠源分類、専用selectorと必須commandの正確な結果、doctor/標準testの失敗・未実施・環境限界、C06親とP13状態、branch/commit/push/remote main、二世代backup refsとrollback pointを日本語で報告する。fixture/local、live/installed、releaseを区別する。
+BT-U-C06.02の成立範囲、変更path、Gateway/HDS consumer、request criteriaの非authority性、support/conflict/unknownの意味と限界、証拠源分類、専用selectorと必須commandの正確な結果、doctor/標準testの失敗・未実施・環境限界、built-in authoring未接続、C06親とP13状態、branch/commit/push/remote main、二世代backup refsとrollback pointを日本語で報告する。fixture/local、live/installed、releaseを区別する。
 
 ## 16. Next-phase dependency
 
-本単位の整理、安全review、必須検証、二世代backup rotation、main単一commit/push、remote refs/clean照合、private引継ぎを完了した後に停止する。次候補C06.02の基準寄与と衝突評価は、private施工状態と実装指示を新規同期し、ownerの継続指示後に別単位として扱う。C06親はpartialのまま、P13はPENDING_OWNER_GO、public_claim_allowed=falseを保つ。
+本単位の整理、安全review、必須検証、二世代backup rotation、main単一commit/push、remote refs/clean照合、private引継ぎを完了した後に停止する。C06親はpartial、C06.03は未着手、P13は`PENDING_OWNER_GO`、`public_claim_allowed=false`を保つ。次候補C06.03は状態・依存・mode・criteria入力の実利用可能性を新しい入口から再同期して別単位で扱う。

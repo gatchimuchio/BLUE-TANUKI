@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-10 — 依頼目的との候補関係をHDS採否へ接続
+
+- C06.02として、InboundRequestのstrictなトップレベル`GoalCriteria`をrequest ID・本文digestへ結び、通常Gateway inbound境界からHDS feedback consumerまで通す。
+- candidateとcriteriaのsupport/conflict/no-matchをHDSのgoal-review dispositionへ接続する。supportは依頼内の仮定かつ危険未確認のため保留し、明示conflictは拒否する。criteriaなし・binding不整合・unknownも保留し、scoreで安全条件を相殺しない。
+- raw criteria、criterion参照、tool名、candidate argumentsをHDS auditに保存せず、digestと限定状態のみを記録する。candidateは非実行・非権限とし、built-in criteria authoring、意味・危険の独立検証、ToolRegistry接続、実provider/live、release/GA/P13/owner GOは成立させない。検証とGit閉鎖の結果は開発進捗へ記録する。
+
 ## 2026-10-10 — 候補検査と判断の分離
 
 - C06.01として、通常Gateway finalizationから届くLLM tool candidateの機械契約・process allowlist照合・意味判断を、HDS feedback audit内の別々のassessmentへ接続した。

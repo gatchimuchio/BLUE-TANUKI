@@ -870,6 +870,130 @@ describe("HDSUpperController.onFeedback()", () => {
     expect(c.getAudit().verify()).toBe(true);
   });
 
+  it("BT-U-C06.02-P: binds a criterion support relation to the current request and holds it while risk is unverified", () => {
+    const c = new HDSUpperController();
+    const rawCriterionRef = "criterion-c06-private-sentinel";
+    const rawArgument = "candidate-c06-criteria-argument-sentinel";
+    const { log, command } = c.decide({
+      ...inbound("prepare the reviewed output", "r-c06-criteria-positive"),
+      goal_criteria: {
+        schema_version: "blue-tanuki.goal-criteria.v1",
+        criteria: [{
+          criterion_ref: rawCriterionRef,
+          criterion_kind: "objective",
+          tool_relations: [{ tool_name: "echo", relation: "supports" }],
+        }],
+      },
+    });
+    expect(command?.type).toBe("llm_call");
+    expect(log.frame.candidate_goal_criteria.status).toBe("provided");
+    expect(log.frame.candidate_goal_criteria.request_id).toBe(log.request_id);
+    expect(log.frame.candidate_goal_criteria.used_for_authority).toBe(false);
+    expect(log.frame.goal_projection.evaluation_rules).toEqual({ status: "unknown" });
+
+    c.onFeedback({
+      command_id: command!.id,
+      status: "success",
+      llm_tool_candidates: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "call-c06-criteria-positive",
+        tool_name: "echo",
+        arguments: { text: rawArgument },
+        authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+      }],
+      metrics: { duration_ms: 1 },
+    });
+
+    const entry = c.getAudit().list()[1]!.log;
+    expect("kind" in entry && entry.kind).toBe("executor_feedback");
+    if ("kind" in entry && entry.kind === "executor_feedback") {
+      expect(entry.request_id).toBe(log.request_id);
+      expect(entry.feedback.llm_tool_candidate_assessments[0]).toMatchObject({
+        goal_criteria: {
+          outcome: "supports",
+          evidence_status: "assumed",
+          risk_status: "unverified",
+          reason_code: "request_declares_criterion_support_risk_unverified",
+        },
+        adoption_disposition: "held",
+        may_execute: false,
+        used_for_authority: false,
+      });
+    }
+    const auditJson = JSON.stringify(c.getAudit().list());
+    expect(auditJson).not.toContain(rawCriterionRef);
+    expect(auditJson).not.toContain(rawArgument);
+    expect(c.getAudit().verify()).toBe(true);
+  });
+
+  it("BT-U-C06.02-N: rejects an explicit criterion conflict without score compensation", () => {
+    const c = new HDSUpperController();
+    const { command } = c.decide({
+      ...inbound("prepare the reviewed output", "r-c06-criteria-negative"),
+      goal_criteria: {
+        schema_version: "blue-tanuki.goal-criteria.v1",
+        criteria: [{
+          criterion_ref: "criterion-c06-conflict",
+          criterion_kind: "safety",
+          tool_relations: [{ tool_name: "echo", relation: "conflicts" }],
+        }],
+      },
+    });
+    expect(command?.type).toBe("llm_call");
+
+    c.onFeedback({
+      command_id: command!.id,
+      status: "success",
+      llm_tool_candidates: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "call-c06-criteria-negative",
+        tool_name: "echo",
+        arguments: { text: "safe proposal" },
+        authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+      }],
+      metrics: { duration_ms: 1 },
+    });
+
+    const entry = c.getAudit().list()[1]!.log;
+    expect("kind" in entry && entry.kind).toBe("executor_feedback");
+    if ("kind" in entry && entry.kind === "executor_feedback") {
+      expect(entry.feedback.llm_tool_candidate_assessments[0]).toMatchObject({
+        goal_criteria: {
+          outcome: "conflicts",
+          evidence_status: "assumed",
+          risk_status: "unverified",
+          reason_code: "request_declares_criterion_conflict",
+        },
+        adoption_disposition: "rejected",
+        may_execute: false,
+        used_for_authority: false,
+      });
+    }
+    expect(c.getAudit().verify()).toBe(true);
+  });
+
+  it("fails closed on malformed criteria without retaining their raw payload", () => {
+    const c = new HDSUpperController();
+    const invalidCriteriaMarker = "invalid-criteria-private-sentinel";
+    const { log, command } = c.decide({
+      ...inbound("prepare the reviewed output", "r-c06-criteria-malformed"),
+      goal_criteria: {
+        schema_version: "blue-tanuki.goal-criteria.v1",
+        criteria: [{
+          criterion_ref: invalidCriteriaMarker,
+          criterion_kind: "objective",
+          tool_relations: [{ tool_name: "echo", relation: "supports" }],
+        }],
+        unexpected: true,
+      },
+    });
+
+    expect(command).toBeNull();
+    expect(log.commit.decision).toBe("SUSPEND");
+    expect(JSON.stringify(c.getAudit().list())).not.toContain(invalidCriteriaMarker);
+    expect(c.getAudit().verify()).toBe(true);
+  });
+
   it("BT-U-C06.01-N: rejects out-of-process and malformed candidates without retaining their payload", () => {
     const c = new HDSUpperController();
     const { command } = c.decide(inbound("hello candidate rejection", "r-c06-negative"));

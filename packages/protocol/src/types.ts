@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { GoalCriteriaSchema } from "./goal_criteria.js";
 
 import { OperationCoreExecutorTraceSchema, type OperationInterface } from "./operation_core.js";
 
@@ -319,6 +320,7 @@ export const InboundRequestSchema = z.object({
   user: z.string().min(1).max(200),
   content: z.string().max(200_000),
   timestamp: z.number().finite().nonnegative(),
+  goal_criteria: GoalCriteriaSchema.optional(),
   metadata: z.record(DangerousObjectKeySchema, JsonValueSchema.optional()).optional(),
 }).strict();
 export type InboundRequest = z.infer<typeof InboundRequestSchema>;
@@ -382,6 +384,7 @@ export function normalizeInboundRequestForAuthority(
     user: normalizeScalar(request.user, "user"),
     content: request.content.normalize("NFKC"),
     timestamp: request.timestamp,
+    ...(request.goal_criteria ? { goal_criteria: GoalCriteriaSchema.parse(request.goal_criteria) } : {}),
     ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
   return opts.internal_authority_metadata === true

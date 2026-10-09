@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { HDSUpperController } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest } from "@blue-tanuki/protocol";
+import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import {
   canonicalizeGatewayInbound,
   gatewayInboundAllowsDownstream,
@@ -91,6 +92,80 @@ describe("gateway inbound boundary", () => {
     expect(log.commit.decision).toBe("SUSPEND");
     expect(log.commit.reason).toContain("authority_input_boundary");
     expect(log.model.structure.raw_input_used_for_authority).toBe(false);
+  });
+
+  it("carries request-bound criteria through gateway finalization into digest-only HDS feedback", () => {
+    const criterionRef = "criterion-gateway-c06-criteria-integration";
+    const rawArgument = "gateway-c06-criteria-argument-sentinel";
+    const plan = planGatewayInboundBoundary({
+      id: "req-gateway-c06-criteria-integration",
+      channel: "webchat",
+      user: "owner",
+      content: "prepare the reviewed output",
+      timestamp: 1,
+      goal_criteria: {
+        schema_version: "blue-tanuki.goal-criteria.v1",
+        criteria: [{
+          criterion_ref: criterionRef,
+          criterion_kind: "objective",
+          tool_relations: [{ tool_name: "echo", relation: "supports" }],
+        }],
+      },
+    });
+
+    expect(plan.boundary_ok).toBe(true);
+    expect(plan.request.goal_criteria?.criteria[0]?.criterion_ref).toBe(criterionRef);
+
+    const hds = new HDSUpperController();
+    const { log, command } = hds.decide(plan.hdsBoundaryInput);
+    expect(command?.type).toBe("llm_call");
+    if (!command || command.type !== "llm_call") throw new Error("expected llm_call");
+
+    const finalized = finalizeCommandOutput({
+      hds,
+      command,
+      feedback: {
+        command_id: command.id,
+        status: "success",
+        result: { content: "synthetic result" },
+        llm_tool_candidates: [{
+          schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+          call_id: "call-gateway-c06-criteria-integration",
+          tool_name: "echo",
+          arguments: { text: rawArgument },
+          authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+        }],
+        metrics: { duration_ms: 1 },
+      },
+      target_surface: "channel",
+      request_id: log.request_id,
+    });
+
+    expect(finalized.output_audit.used_for_authority).toBe(false);
+    const feedbackEntry = hds.getAudit().list().find((entry) =>
+      "kind" in entry.log && entry.log.kind === "executor_feedback"
+    );
+    expect(feedbackEntry && "kind" in feedbackEntry.log && feedbackEntry.log.kind === "executor_feedback")
+      .toBe(true);
+    if (!feedbackEntry || !("kind" in feedbackEntry.log) || feedbackEntry.log.kind !== "executor_feedback") {
+      throw new Error("expected executor feedback audit entry");
+    }
+
+    expect(feedbackEntry.log.request_id).toBe(log.request_id);
+    expect(feedbackEntry.log.feedback.llm_tool_candidate_assessments[0]).toMatchObject({
+      goal_criteria: {
+        outcome: "supports",
+        evidence_status: "assumed",
+        risk_status: "unverified",
+      },
+      adoption_disposition: "held",
+      may_execute: false,
+      used_for_authority: false,
+    });
+    const auditJson = JSON.stringify(hds.getAudit().list());
+    expect(auditJson).not.toContain(criterionRef);
+    expect(auditJson).not.toContain(rawArgument);
+    expect(hds.getAudit().verify()).toBe(true);
   });
 
   it("blocks dispatch and execute paths for invalid inbound", () => {

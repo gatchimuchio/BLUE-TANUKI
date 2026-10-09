@@ -5,6 +5,7 @@ import type {
   CandidateAdoptionDisposition,
   CandidateCheckOutcome,
   CandidateEvidenceStatus,
+  CandidateGoalCriteriaAssessment,
   CandidateSemanticOutcome,
   PolicyConfig,
   ScoringResult,
@@ -205,12 +206,22 @@ export function determineCandidateAdoptionDisposition(input: {
   domain_validation: CandidateCheckOutcome;
   semantic_outcome: CandidateSemanticOutcome;
   semantic_evidence_status: CandidateEvidenceStatus;
+  goal_criteria?: CandidateGoalCriteriaAssessment;
 }): CandidateAdoptionDisposition {
   if (
     input.mechanical_contract === "fail" ||
     input.domain_validation === "fail" ||
-    input.semantic_outcome === "conflicts"
+    input.semantic_outcome === "conflicts" ||
+    input.goal_criteria?.outcome === "conflicts"
   ) return "rejected";
+
+  // Request-declared support is a planning assumption. Without independently
+  // verified risk and semantic evidence it can only remain under review.
+  if (input.goal_criteria !== undefined && (
+    input.goal_criteria.outcome !== "supports" ||
+    input.goal_criteria.evidence_status !== "observed" ||
+    input.goal_criteria.risk_status !== "verified"
+  )) return "held";
 
   if (
     input.mechanical_contract !== "pass" ||

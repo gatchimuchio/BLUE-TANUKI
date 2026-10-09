@@ -16,6 +16,7 @@ import type {
 } from "./types.js";
 import { resolveActor, resolveProcess } from "./process.js";
 import { buildMemoryTrace, type MemoryReaderPort } from "./memory_trace.js";
+import { projectRequestGoalCriteria } from "./candidate_criteria.js";
 import {
   createUnidentifiedGoalProjection,
   type GoalProjectionSourceKind,
@@ -77,6 +78,7 @@ const DEFAULT_PROTECTED_VALUES = [
  * memory retrieval is exact/tag/recent only and is explicitly non-authority.
  */
 export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
+  const originalContent = config?.original_content ?? req.content;
   const actor = config?.actor ?? resolveActor(req);
   const process = config?.process ?? resolveProcess(req, actor);
   const memory_trace: MemoryTrace = buildMemoryTrace(req, process, config?.memory_reader);
@@ -93,9 +95,10 @@ export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
     ...(operation_core ? { operation_core } : {}),
     goal_projection: createUnidentifiedGoalProjection({
       request_id: req.id,
-      original_content: config?.original_content ?? req.content,
+      original_content: originalContent,
       ...(config?.original_reference_kind ? { source_kind: config.original_reference_kind } : {}),
     }),
+    candidate_goal_criteria: projectRequestGoalCriteria(req, originalContent),
     ...(config?.goal_relation_tree ? { goal_relation_tree: config.goal_relation_tree } : {}),
     ...(config?.goal_governance ? { goal_governance: config.goal_governance } : {}),
     goal: req.content.slice(0, 200),
