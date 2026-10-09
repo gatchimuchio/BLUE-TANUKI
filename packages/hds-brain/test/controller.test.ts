@@ -999,7 +999,10 @@ describe("HDS process / memory closure", () => {
       metadata: { reference_request_id: "F:hds-f-approval-seed" },
     });
 
-    expect(log.frame.memory_trace.hits.some((hit) => hit.f_reference === "F:hds-f-approval-seed")).toBe(true);
+    const priorMemory = log.frame.memory_trace.hits.find((hit) => hit.f_reference === "F:hds-f-approval-seed");
+    expect(priorMemory).toBeDefined();
+    expect(priorMemory?.provenance?.source_decision).toBe("ASSERT");
+    expect(priorMemory?.provenance?.source_decision_hash).toMatch(/^[a-f0-9]{64}$/);
     expect(command?.type).toBe("tool_call");
     const approval = evaluateApproval(command!, [], {
       actor: "alice",

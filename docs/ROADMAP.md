@@ -6,7 +6,7 @@
 
 ## 現在の開発工程
 
-ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01でM SQLite原子取引、C03.02で期待版比較・同ID冪等再送・V1履歴互換、C03.03でJ pendingの永続化とM receipt再照合からの局所復帰を実装し、一時SQLite fixtureで確認した。C03.04では保存障害後のhandle停止と、正本ledgerを維持したM/J派生像の明示的な局所再構成を実装し、破損ledgerとschema不一致のrepair拒否を同fixtureで確認した。C04.01ではJが依頼scopeを定め、hash-chain検証済みHDS LTM候補からCが支持・反証案を出し、JがID・hash版・出所・scopeを照合する通常Gateway応答経路を接続した。C04.02では明示F参照がある依頼を完全一致候補に限定し、要約射影の省略field・digest・文字切詰め差と意味未評価状態、採用/非採用/文脈除外のF参照を監査へ保持した。除外しても元のLTMは変更・削除せず、一時JSONLの再読込とhash-chain検証で復帰可能性を確認した。C04親scenario全体、自然言語意味同定、session履歴の引用適格性、実owner/L3承認、OS crash/installed/live証拠、release readinessは未成立である。各単位の全体testとdoctor結果は[開発進捗](開発進捗.md)へ記録する。親C01/C02/C03/C04の全scenarioと製品runtime全体、owner/L3承認経路、release readinessは未成立である。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
+ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01でM SQLite原子取引、C03.02で期待版比較・同ID冪等再送・V1履歴互換、C03.03でJ pendingの永続化とM receipt再照合からの局所復帰を実装し、一時SQLite fixtureで確認した。C03.04では保存障害後のhandle停止と、正本ledgerを維持したM/J派生像の明示的な局所再構成を実装し、破損ledgerとschema不一致のrepair拒否を同fixtureで確認した。C04.01ではJが依頼scopeを定め、hash-chain検証済みHDS LTM候補からCが支持・反証案を出し、JがID・hash版・出所・scopeを照合する通常Gateway応答経路を接続した。C04.02では明示F参照がある依頼を完全一致候補に限定し、要約射影の省略field・digest・文字切詰め差と意味未評価状態、採用/非採用/文脈除外のF参照を監査へ保持した。C04.03ではCの現在射影が実際に含むrecord ID/hash版を`dependency_versions`としてcontextとhash-chain auditへ保持し、過去decisionを履歴証拠と明記した。Jは同じ候補setの完全一致版だけを採り、旧版は拒否、無関係な追記は明示参照の依存版を一括失効させない。source decisionを伴う記憶があっても、shell実行は既存Approval GateのL3最終レビューを通る。全体検証、未達、環境失敗と局所証拠の境界は[開発進捗](開発進捗.md)へ記録する。親C01/C02/C03/C04の全scenarioと製品runtime全体、owner/L3実承認、release readinessは未成立である。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
 
 以下の日本語移行と P13 状態は独立して維持する。
 
@@ -18,7 +18,7 @@ ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を
 | Product phase | P13 凍結 | `PENDING_OWNER_GO`、`public_claim_allowed=false`。 |
 | Language phase | J0 完了 | 日本語基底規定、台帳、gate、active governance が成立。J1 は未承認。 |
 | Strict language gate | 未成立 | 既存の非日本語 active assets が移行負債として残る。 |
-| Runtime / authority | C04.02のF参照限定現在射影と可逆な非採用記録参照 | 射影・引用採否はHDS-BRAIN唯一権限経路の外側にあり、Approval Gate・承認・実行判断は変更しない。親C04はpartial。 |
+| Runtime / authority | C04.03の過去decision非権限化と現在射影の個別依存版照合 | 過去decisionは証拠のみ。依存一覧のID/hash版をJとauditで再照合し、依存外の追記による全失効を避ける。Approval Gate自体は変更しない。親C04はpartial。 |
 
 ## 系列
 

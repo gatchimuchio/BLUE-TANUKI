@@ -179,6 +179,10 @@ describe("audit-dump format", () => {
         { record_id: "F:source-a", version: "c".repeat(64) },
         { record_id: "F:source-b", version: "d".repeat(64) },
       ],
+      dependency_versions: [
+        { record_id: "F:source-a", version: "c".repeat(64) },
+        { record_id: "F:source-b", version: "d".repeat(64) },
+      ],
       projection_records: [
         {
           reference: { record_id: "F:source-a", version: "c".repeat(64) },
@@ -223,7 +227,9 @@ describe("audit-dump format", () => {
     const json = formatAuditJsonReport(report);
     expect(text).toContain("MEM:CITATION:accepted");
     expect(text).toContain("candidates=2 accepted=1 not_adopted=0 excluded=1 rejected=0 used_for_authority=false");
+    expect(text).toContain(`dependency_versions=F:source-a@${"c".repeat(64)},F:source-b@${"d".repeat(64)}`);
     expect(json).toContain("memory_citation_review");
+    expect(json).toContain("dependency_versions");
     expect(json).toContain("application_scope_id");
     expect(json).toContain("F:source-c");
     expect(json).toContain("not_assessed");

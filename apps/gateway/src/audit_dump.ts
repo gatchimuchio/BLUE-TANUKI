@@ -217,7 +217,11 @@ export function formatAuditTextReport(report: AuditDumpReport): string {
         const projectionRecords = e.log.projection_records ?? [];
         const notAdopted = projectionRecords.filter((record) => record.disposition === "not_adopted").length;
         const excluded = projectionRecords.filter((record) => record.disposition === "excluded_from_context").length;
-        lines.push(`  [${String(e.index).padStart(4, "0")}] ${status.padEnd(18)} ${hashShort}… request_id=${reqId} command_id=${e.log.command_id} candidates=${e.log.candidate_count} accepted=${e.log.accepted_citations.length} not_adopted=${notAdopted} excluded=${excluded} rejected=${e.log.rejected_proposal_count} used_for_authority=${e.log.used_for_authority}`);
+        const dependencyVersions = e.log.dependency_versions ?? e.log.candidate_references;
+        const dependencyText = dependencyVersions.length === 0
+          ? "(none)"
+          : dependencyVersions.map((reference) => `${reference.record_id}@${reference.version}`).join(",");
+        lines.push(`  [${String(e.index).padStart(4, "0")}] ${status.padEnd(18)} ${hashShort}… request_id=${reqId} command_id=${e.log.command_id} candidates=${e.log.candidate_count} accepted=${e.log.accepted_citations.length} not_adopted=${notAdopted} excluded=${excluded} rejected=${e.log.rejected_proposal_count} used_for_authority=${e.log.used_for_authority} dependency_versions=${dependencyText}`);
       } else if (e.log.kind === "command_lifecycle") {
         const status = `COMMAND:${e.log.phase}`;
         const reqId = e.log.request_id ?? "(unknown)";

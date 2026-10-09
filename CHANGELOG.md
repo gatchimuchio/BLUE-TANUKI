@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — 過去記憶の非権限化と依存版の限定照合
+
+- C04.03として、Cの現在射影に含まれる正確なF record ID/hash版を`dependency_versions`へ明示し、Jの引用review記録とaudit-dumpへ同じ一覧を残す。Jは現在候補setの完全一致だけを受け入れ、古いhash版を拒否する。
+- 記憶由来の過去`source_decision`を履歴証拠と明記し、現在の承認・grantと混同しないことを確認する。無関係なLTM追記は明示参照依存を失効させず、high-risk shell実行はfull accessでもL3 final reviewを維持する。
+- Windows合成fixtureの専用selectorは71件PASS、全逐次suiteは94 files／884 tests PASS。標準`pnpm test`ではdoctor testが固定5秒timeout 1件、`pnpm run doctor`では必須credential未設定と使用中portを検出した。release/GA/P13/owner GOを変更しない。
+
 ## 2026-10-09 — 記憶の現在射影と復帰参照
 
 - C04.02として、依頼に明示F参照がある場合は完全一致候補だけをCへ渡し、Jの引用採用対象も同じ候補集合へ限定した。未解決参照でtag/recent候補へfallbackしない。

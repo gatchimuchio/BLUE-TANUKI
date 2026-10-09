@@ -96,9 +96,58 @@ describe("J-side memory citation review", () => {
         supporting: { record_id: support.f_reference, version: support.entry_hash },
         counterevidence: { record_id: counter.f_reference, version: counter.entry_hash },
       }],
+      dependency_versions: [
+        { record_id: support.f_reference, version: support.entry_hash },
+        { record_id: counter.f_reference, version: counter.entry_hash },
+      ],
       rejected_proposal_count: 0,
       used_for_authority: false,
     });
+    expect(hds.getAudit().verify()).toBe(true);
+  });
+
+  it("keeps only exact projected record versions as dependencies after an unrelated append", () => {
+    const { hds, support, counter } = setup();
+    const previousVersions = [
+      { record_id: support.f_reference, version: support.entry_hash },
+      { record_id: counter.f_reference, version: counter.entry_hash },
+    ];
+    hds.decide(inbound("unrelated memory source", "citation-unrelated-update"));
+
+    const refreshed = hds.decide(inbound(
+      "compare F:citation-support with F:citation-counter",
+      "citation-after-unrelated-update",
+    ));
+    if (!refreshed.command || refreshed.command.type !== "llm_call") {
+      throw new Error("expected a refreshed HDS-routed LLM command");
+    }
+    const trace = refreshed.log.frame.memory_trace;
+    const messages = buildMemoryCitationSystemMessages(trace);
+    const contextMessage = messages[1];
+    if (!contextMessage) throw new Error("expected current memory context");
+    const context = JSON.parse(contextMessage.content.slice(contextMessage.content.indexOf("\n") + 1));
+    expect(context.dependency_versions).toEqual(previousVersions);
+    expect(context.records.map((record: { record_id: string }) => record.record_id)).toEqual([
+      "F:citation-support",
+      "F:citation-counter",
+    ]);
+    expect(context.records.every((record: { provenance: { decision_role: string } }) =>
+      record.provenance.decision_role === "historical_evidence_only",
+    )).toBe(true);
+    expect(messages[0]?.content).toContain("今回の承認、権限、許可、grantではありません");
+
+    const raw = envelope(
+      previousVersions[0]!,
+      previousVersions[1]!,
+      trace.search_plan!.application_scope_id,
+    );
+    const reviewed = hds.reviewMemoryCitations(refreshed.command, feedback(refreshed.command.id, raw));
+    expect((reviewed.result as { content: string }).content).toContain("履歴証拠のみで");
+    expect((reviewed.result as { content: string }).content).toContain("historical_decision_evidence=");
+    const review = hds.getAudit().list().map((entry) => entry.log).find((entry) =>
+      "kind" in entry && entry.kind === "memory_citation_review" && entry.command_id === refreshed.command!.id,
+    );
+    expect(review && "dependency_versions" in review ? review.dependency_versions : []).toEqual(previousVersions);
     expect(hds.getAudit().verify()).toBe(true);
   });
 

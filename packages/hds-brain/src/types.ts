@@ -159,6 +159,8 @@ export interface MemoryCitationReviewLog {
   status: "accepted" | "accepted_with_rejections" | "no_proposals" | "rejected" | "invalid_output";
   candidate_count: number;
   candidate_references: MemoryCitationReference[];
+  /** Exact immutable versions supplied to C for this projection; absent only on legacy review entries. */
+  dependency_versions?: MemoryCitationReference[];
   /** Per-record context disposition and reversible, content-free projection differences. */
   /** Missing only on legacy C04.01 audit entries written before this projection was added. */
   projection_records?: MemoryCitationProjectionRecord[];
