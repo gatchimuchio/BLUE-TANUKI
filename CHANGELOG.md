@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-10 — 懐疑入力から限定reviewの再開要求を監査
+
+- C06.03として、通常Gateway finalizationからHDS feedback auditへstrictな懐疑review入力を接続した。相反するreportは未検証claimとして記録し、影響criterionだけを独立観測待ちにする。
+- 代替仮説とcriteria frame訂正案はdigest-onlyとし、元request binding・goal projection・機械契約/process allowlistの確認結果を保つ。訂正案は同じrequest binding上の未検証projectionとしてcandidate assessmentを再計算する。
+- review入力は実行・権限にならず、独立観測provider/UI、恒久frame更新、親C06、release/GA/P13/owner GOは成立しない。局所受入、全suite、host doctor状態とGit閉鎖の証拠は開発進捗へ記録する。
+
 ## 2026-10-10 — 依頼目的との候補関係をHDS採否へ接続
 
 - C06.02として、InboundRequestのstrictなトップレベル`GoalCriteria`をrequest ID・本文digestへ結び、通常Gateway inbound境界からHDS feedback consumerまで通す。

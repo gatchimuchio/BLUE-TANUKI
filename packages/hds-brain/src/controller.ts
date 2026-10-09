@@ -15,6 +15,7 @@ import {
   parseInboundRequestAtBoundary,
   LLMCallFailureSchema,
   LLMToolCallCandidateSchema,
+  SkepticalReviewRequestSchema,
   LLMFallbackAuthorizationSchema,
 } from "@blue-tanuki/protocol";
 import type {
@@ -49,6 +50,7 @@ import {
 } from "./detectors/index.js";
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy } from "./policy.js";
 import { assessCandidateGoalCriteria } from "./candidate_criteria.js";
+import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
 import { routeAction } from "./action_router.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
 import {
@@ -707,10 +709,23 @@ export class HDSUpperController {
       ? undefined
       : LLMToolCallCandidateSchema.array().max(32).safeParse(fb.llm_tool_candidates);
     const toolCandidates = candidateParse?.success ? candidateParse.data : undefined;
+    const skepticalReviewParse = fb.skeptical_review === undefined
+      ? undefined
+      : SkepticalReviewRequestSchema.safeParse(fb.skeptical_review);
     const sourceLog = this.inflight.get(fb.command_id);
     const candidateAssessments = toolCandidates
       ? assessLLMToolCandidates(toolCandidates, sourceLog)
       : [];
+    const skepticalReview = fb.skeptical_review === undefined
+      ? undefined
+      : skepticalReviewParse?.success
+        ? assessSkepticalReview({
+          review: skepticalReviewParse.data,
+          sourceLog,
+          candidates: toolCandidates ?? [],
+          assessments: candidateAssessments,
+        })
+        : invalidSkepticalReviewTrace();
     const feedbackLog = {
       kind: "executor_feedback" as const,
       request_id: sourceLog?.request_id ?? null,
@@ -730,6 +745,10 @@ export class HDSUpperController {
           ? "not_present" as const
           : candidateParse?.success ? "passed" as const : "failed" as const,
         llm_tool_candidate_assessments: candidateAssessments,
+        skeptical_review_contract_status: fb.skeptical_review === undefined
+          ? "not_present" as const
+          : skepticalReviewParse?.success ? "passed" as const : "failed" as const,
+        ...(skepticalReview ? { skeptical_review: skepticalReview } : {}),
         metrics: fb.metrics,
       },
       timestamp: Date.now(),

@@ -9,21 +9,30 @@ export function projectRequestGoalCriteria(
   originalContent: string,
 ): RequestGoalCriteriaProjection {
   const contentSha256 = createHash("sha256").update(originalContent, "utf8").digest("hex");
-  if (request.goal_criteria === undefined) {
+  return projectGoalCriteriaForBinding(request.id, contentSha256, request.goal_criteria);
+}
+
+/** Project a proposed criteria frame without changing its original request binding. */
+export function projectGoalCriteriaForBinding(
+  requestId: string,
+  contentSha256: string,
+  goalCriteria: unknown,
+): RequestGoalCriteriaProjection {
+  if (goalCriteria === undefined) {
     return freezeDeep<RequestGoalCriteriaProjection>({
       status: "not_provided",
-      request_id: request.id,
+      request_id: requestId,
       content_sha256: contentSha256,
       criteria: [],
       used_for_authority: false,
     });
   }
 
-  const parsed = GoalCriteriaSchema.safeParse(request.goal_criteria);
-  if (!parsed.success) {
+  const parsed = GoalCriteriaSchema.safeParse(goalCriteria);
+  if (!parsed.success || !/^[a-f0-9]{64}$/.test(contentSha256)) {
     return freezeDeep<RequestGoalCriteriaProjection>({
       status: "invalid",
-      request_id: request.id,
+      request_id: requestId,
       content_sha256: contentSha256,
       criteria: [],
       used_for_authority: false,
@@ -31,19 +40,19 @@ export function projectRequestGoalCriteria(
   }
 
   const criteria = parsed.data.criteria.map((criterion) => ({
-    criterion_ref_digest: digest(criterion.criterion_ref),
+    criterion_ref_digest: digestGoalCriteriaValue(criterion.criterion_ref),
     criterion_kind: criterion.criterion_kind,
     tool_relations: criterion.tool_relations.map((relation) => ({
-      tool_name_digest: digest(canonicalToolName(relation.tool_name)),
+      tool_name_digest: digestGoalCriteriaValue(canonicalToolName(relation.tool_name)),
       relation: relation.relation,
     })).sort((left, right) => left.tool_name_digest.localeCompare(right.tool_name_digest)),
   })).sort((left, right) => left.criterion_ref_digest.localeCompare(right.criterion_ref_digest));
 
   return freezeDeep<RequestGoalCriteriaProjection>({
     status: "provided",
-    request_id: request.id,
+    request_id: requestId,
     content_sha256: contentSha256,
-    criteria_digest: digest(parsed.data),
+    criteria_digest: digestGoalCriteriaValue(parsed.data),
     criteria,
     used_for_authority: false,
   });
@@ -77,7 +86,7 @@ export function assessCandidateGoalCriteria(
     };
   }
 
-  const toolNameDigest = digest(canonicalToolName(toolName));
+  const toolNameDigest = digestGoalCriteriaValue(canonicalToolName(toolName));
   const matches = projection.criteria.flatMap((criterion) =>
     criterion.tool_relations
       .filter((relation) => relation.tool_name_digest === toolNameDigest)
@@ -119,7 +128,7 @@ export function assessCandidateGoalCriteria(
   };
 }
 
-function digest(value: unknown): string {
+export function digestGoalCriteriaValue(value: unknown): string {
   return createHash("sha256").update(stableSerialize(value), "utf8").digest("hex");
 }
 

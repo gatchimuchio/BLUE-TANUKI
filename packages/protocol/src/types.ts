@@ -294,6 +294,22 @@ export const LLMToolCallCandidateSchema = z.object({
 }).strict();
 export type LLMToolCallCandidate = z.infer<typeof LLMToolCallCandidateSchema>;
 
+/**
+ * Downstream skepticism input for a bounded, non-authority HDS review.
+ * Reports and hypotheses are claims to inspect, never verified observations.
+ */
+export const SkepticalReviewRequestSchema = z.object({
+  schema_version: z.literal("blue-tanuki.skeptical-review.v1"),
+  observation_reports: z.array(z.object({
+    criterion_ref: z.string().min(1).max(200),
+    finding: z.string().min(1).max(4_000),
+    relation: z.enum(["supports", "conflicts", "unclear"]),
+  }).strict()).min(1).max(32),
+  alternative_hypotheses: z.array(z.string().min(1).max(4_000)).max(16).optional(),
+  proposed_goal_criteria: GoalCriteriaSchema.optional(),
+}).strict();
+export type SkepticalReviewRequest = z.infer<typeof SkepticalReviewRequestSchema>;
+
 export const ExecuteFeedbackSchema = z.object({
   command_id: z.string(),
   status: z.enum(["success", "failed", "suspended"]),
@@ -301,6 +317,7 @@ export const ExecuteFeedbackSchema = z.object({
   error: z.string().optional(),
   llm_failure: LLMCallFailureSchema.optional(),
   llm_tool_candidates: z.array(LLMToolCallCandidateSchema).max(32).optional(),
+  skeptical_review: SkepticalReviewRequestSchema.optional(),
   metrics: z.object({
     duration_ms: z.number(),
     tokens_used: z.number().optional(),

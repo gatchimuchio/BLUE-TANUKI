@@ -104,6 +104,52 @@ describe("InboundRequest goal criteria boundary", () => {
   });
 });
 
+describe("ExecuteFeedback skeptical review boundary", () => {
+  const base = {
+    command_id: "cmd-review",
+    status: "success" as const,
+    metrics: { duration_ms: 1 },
+  };
+
+  it("accepts bounded reports and a proposed frame as non-authority feedback", () => {
+    const parsed = ExecuteFeedbackSchema.safeParse({
+      ...base,
+      skeptical_review: {
+        schema_version: "blue-tanuki.skeptical-review.v1",
+        observation_reports: [{
+          criterion_ref: "criterion-one",
+          finding: "synthetic observation report",
+          relation: "supports",
+        }],
+        alternative_hypotheses: ["synthetic alternative"],
+        proposed_goal_criteria: {
+          schema_version: GOAL_CRITERIA_SCHEMA_VERSION,
+          criteria: [{
+            criterion_ref: "criterion-one",
+            criterion_kind: "objective",
+            tool_relations: [{ tool_name: "echo", relation: "supports" }],
+          }],
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects malformed or unbounded review fields", () => {
+    const malformed = ExecuteFeedbackSchema.safeParse({
+      ...base,
+      skeptical_review: {
+        schema_version: "blue-tanuki.skeptical-review.v1",
+        observation_reports: [{ criterion_ref: "", finding: "", relation: "supports" }],
+        unexpected: true,
+      },
+    });
+
+    expect(malformed.success).toBe(false);
+  });
+});
+
 describe("LLMComputeContextSchema fallback authorization", () => {
   const context = {
     schema_version: "blue-tanuki.compute-context.v1",

@@ -10,7 +10,7 @@
   "next_action": "意味と境界を日本語で再成立させ、監査後に移行台帳から除く。",
   "debts": [
     { "path": "AUDIT.md", "sha256": "cb82b3a927871fda9cf5cdf8158e733c4788a77d8e497c75164944004201be8f" },
-    { "path": "CHANGELOG.md", "sha256": "9bcd05550505621ea5bee543b66c7d2c0c590c1da2dffc57ded2a649a86038f0" },
+    { "path": "CHANGELOG.md", "sha256": "c9edab5d347d9e5608499461c9e790cf97210b3b05eaf41bb25231ecd62fb3e2" },
     { "path": "CLAIM.md", "sha256": "620f2d3e488c58f67be2706a506310e2223589447d2f78f7f40671880fa263d8" },
     { "path": "CONFIG.md", "sha256": "cbc107b521cec5c53b2a6f90c65ced9574abba82eafc9684211bd0e467639ef7" },
     { "path": "deploy/systemd/README.md", "sha256": "041412c5b66118a358486f24a6a4ac44f93288c5eb43f342603522a860c6a425" },

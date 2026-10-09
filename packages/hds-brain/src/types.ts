@@ -310,6 +310,8 @@ export interface ExecutorFeedbackAuditTrace {
   llm_tool_candidates_digest?: string;
   llm_tool_candidate_contract_status: "not_present" | "passed" | "failed";
   llm_tool_candidate_assessments: LLMToolCandidateAssessment[];
+  skeptical_review_contract_status: "not_present" | "passed" | "failed";
+  skeptical_review?: SkepticalReviewAuditTrace;
   metrics: ExecuteFeedback["metrics"];
 }
 
@@ -368,6 +370,44 @@ export interface LLMToolCandidateAssessment {
   };
   goal_criteria: CandidateGoalCriteriaAssessment;
   adoption_disposition: CandidateAdoptionDisposition;
+  may_execute: false;
+  used_for_authority: false;
+}
+
+/** Digest-only, request-bound plan to reopen a limited review scope. */
+export interface SkepticalReviewAuditTrace {
+  status: "recorded" | "invalid" | "unbound" | "unmatched_scope";
+  observation_report_count: number;
+  observation_report_digests: string[];
+  observation_claim_status: "assumed";
+  affected_criterion_ref_digests: string[];
+  conflicting_report_criterion_ref_digests: string[];
+  unmatched_criterion_ref_digests: string[];
+  alternative_hypothesis_count: number;
+  alternative_hypothesis_digests: string[];
+  frame_correction: {
+    status: "not_proposed" | "proposed_unverified";
+    original_goal_projection_id?: string;
+    original_goal_content_sha256?: string;
+    proposed_criteria_digest?: string;
+    original_goal_binding_preserved: boolean;
+  };
+  candidate_reviews: SkepticalReviewCandidateTrace[];
+  follow_up_required: "none" | "independent_observation";
+  may_execute: false;
+  used_for_authority: false;
+}
+
+export interface SkepticalReviewCandidateTrace {
+  candidate_digest: string;
+  scope_status: "affected" | "preserved";
+  prior_adoption_disposition: CandidateAdoptionDisposition;
+  review_disposition: CandidateAdoptionDisposition;
+  retained_checks: {
+    mechanical_contract: LLMToolCandidateAssessment["mechanical_contract"];
+    domain_validation: LLMToolCandidateAssessment["domain_validation"];
+  };
+  proposed_goal_criteria?: CandidateGoalCriteriaAssessment;
   may_execute: false;
   used_for_authority: false;
 }

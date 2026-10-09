@@ -97,6 +97,8 @@ describe("gateway inbound boundary", () => {
   it("carries request-bound criteria through gateway finalization into digest-only HDS feedback", () => {
     const criterionRef = "criterion-gateway-c06-criteria-integration";
     const rawArgument = "gateway-c06-criteria-argument-sentinel";
+    const rawFinding = "gateway-c06-skeptical-finding-private-sentinel";
+    const rawHypothesis = "gateway-c06-skeptical-hypothesis-private-sentinel";
     const plan = planGatewayInboundBoundary({
       id: "req-gateway-c06-criteria-integration",
       channel: "webchat",
@@ -135,6 +137,14 @@ describe("gateway inbound boundary", () => {
           arguments: { text: rawArgument },
           authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
         }],
+        skeptical_review: {
+          schema_version: "blue-tanuki.skeptical-review.v1",
+          observation_reports: [
+            { criterion_ref: criterionRef, finding: rawFinding, relation: "supports" },
+            { criterion_ref: criterionRef, finding: "conflicting synthetic report", relation: "conflicts" },
+          ],
+          alternative_hypotheses: [rawHypothesis],
+        },
         metrics: { duration_ms: 1 },
       },
       target_surface: "channel",
@@ -162,9 +172,20 @@ describe("gateway inbound boundary", () => {
       may_execute: false,
       used_for_authority: false,
     });
+    expect(feedbackEntry.log.feedback.skeptical_review_contract_status).toBe("passed");
+    expect(feedbackEntry.log.feedback.skeptical_review).toMatchObject({
+      status: "recorded",
+      observation_claim_status: "assumed",
+      conflicting_report_criterion_ref_digests: [expect.stringMatching(/^[a-f0-9]{64}$/)],
+      follow_up_required: "independent_observation",
+      may_execute: false,
+      used_for_authority: false,
+    });
     const auditJson = JSON.stringify(hds.getAudit().list());
     expect(auditJson).not.toContain(criterionRef);
     expect(auditJson).not.toContain(rawArgument);
+    expect(auditJson).not.toContain(rawFinding);
+    expect(auditJson).not.toContain(rawHypothesis);
     expect(hds.getAudit().verify()).toBe(true);
   });
 

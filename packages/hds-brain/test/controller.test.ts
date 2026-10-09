@@ -972,6 +972,269 @@ describe("HDSUpperController.onFeedback()", () => {
     expect(c.getAudit().verify()).toBe(true);
   });
 
+  it("BT-U-C06.03-P: reopens only contradictory criterion scope and retains observed checks", () => {
+    const c = new HDSUpperController();
+    const affectedRef = "criterion-c06-skeptical-affected";
+    const unaffectedRef = "criterion-c06-skeptical-unaffected";
+    const rawFindingA = "skeptical-finding-private-sentinel-a";
+    const rawFindingB = "skeptical-finding-private-sentinel-b";
+    const rawHypothesis = "skeptical-hypothesis-private-sentinel";
+    const { log, command } = c.decide({
+      ...inbound("review the requested research summary", "r-c06-skeptical-positive"),
+      goal_criteria: {
+        schema_version: "blue-tanuki.goal-criteria.v1",
+        criteria: [
+          {
+            criterion_ref: unaffectedRef,
+            criterion_kind: "objective",
+            tool_relations: [{ tool_name: "echo", relation: "supports" }],
+          },
+          {
+            criterion_ref: affectedRef,
+            criterion_kind: "safety",
+            tool_relations: [{ tool_name: "file.search", relation: "supports" }],
+          },
+        ],
+      },
+    });
+    expect(command?.type).toBe("llm_call");
+
+    c.onFeedback({
+      command_id: command!.id,
+      status: "success",
+      llm_tool_candidates: [
+        {
+          schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+          call_id: "call-c06-skeptical-echo",
+          tool_name: "echo",
+          arguments: { text: "synthetic" },
+          authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+        },
+        {
+          schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+          call_id: "call-c06-skeptical-search",
+          tool_name: "file.search",
+          arguments: { root: ".", query: "synthetic", max_results: 1 },
+          authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+        },
+      ],
+      skeptical_review: {
+        schema_version: "blue-tanuki.skeptical-review.v1",
+        observation_reports: [
+          { criterion_ref: affectedRef, finding: rawFindingA, relation: "supports" },
+          { criterion_ref: affectedRef, finding: rawFindingB, relation: "conflicts" },
+        ],
+        alternative_hypotheses: [rawHypothesis],
+      },
+      metrics: { duration_ms: 1 },
+    });
+
+    const entry = c.getAudit().list()[1]!.log;
+    expect("kind" in entry && entry.kind).toBe("executor_feedback");
+    if (!("kind" in entry) || entry.kind !== "executor_feedback") throw new Error("expected feedback audit");
+    expect(entry.feedback.skeptical_review_contract_status).toBe("passed");
+    expect(entry.feedback.skeptical_review).toMatchObject({
+      status: "recorded",
+      observation_claim_status: "assumed",
+      affected_criterion_ref_digests: [expect.stringMatching(/^[a-f0-9]{64}$/)],
+      conflicting_report_criterion_ref_digests: [expect.stringMatching(/^[a-f0-9]{64}$/)],
+      alternative_hypothesis_count: 1,
+      follow_up_required: "independent_observation",
+      frame_correction: {
+        status: "not_proposed",
+        original_goal_projection_id: log.frame.goal_projection.projection_id,
+        original_goal_content_sha256: log.frame.goal_projection.original_request_ref.content_sha256,
+        original_goal_binding_preserved: true,
+      },
+      may_execute: false,
+      used_for_authority: false,
+    });
+    expect(entry.feedback.skeptical_review?.candidate_reviews).toHaveLength(2);
+    expect(entry.feedback.skeptical_review?.candidate_reviews[0]).toMatchObject({
+      scope_status: "preserved",
+      prior_adoption_disposition: "held",
+      review_disposition: "held",
+      retained_checks: {
+        mechanical_contract: { outcome: "pass", evidence_status: "observed" },
+        domain_validation: { outcome: "pass", evidence_status: "observed" },
+      },
+    });
+    expect(entry.feedback.skeptical_review?.candidate_reviews[1]).toMatchObject({
+      scope_status: "affected",
+      prior_adoption_disposition: "held",
+      review_disposition: "held",
+      retained_checks: {
+        mechanical_contract: { outcome: "pass", evidence_status: "observed" },
+        domain_validation: { outcome: "pass", evidence_status: "observed" },
+      },
+    });
+    const auditJson = JSON.stringify(c.getAudit().list());
+    expect(auditJson).not.toContain(rawFindingA);
+    expect(auditJson).not.toContain(rawFindingB);
+    expect(auditJson).not.toContain(rawHypothesis);
+    expect(auditJson).not.toContain(affectedRef);
+    expect(auditJson).not.toContain(unaffectedRef);
+    expect(c.getAudit().verify()).toBe(true);
+  });
+
+  it("BT-U-C06.03-P: previews a frame correction against the unchanged original goal binding", () => {
+    const c = new HDSUpperController();
+    const criterionRef = "criterion-c06-frame-correction";
+    const rawFinding = "frame-correction-finding-private-sentinel";
+    const rawHypothesis = "frame-correction-hypothesis-private-sentinel";
+    const { log, command } = c.decide({
+      ...inbound("find the required source material", "r-c06-frame-correction"),
+      goal_criteria: {
+        schema_version: "blue-tanuki.goal-criteria.v1",
+        criteria: [{
+          criterion_ref: criterionRef,
+          criterion_kind: "objective",
+          tool_relations: [{ tool_name: "file.search", relation: "conflicts" }],
+        }],
+      },
+    });
+    expect(command?.type).toBe("llm_call");
+
+    c.onFeedback({
+      command_id: command!.id,
+      status: "success",
+      llm_tool_candidates: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "call-c06-frame-correction",
+        tool_name: "file.search",
+        arguments: { root: ".", query: "synthetic", max_results: 1 },
+        authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+      }],
+      skeptical_review: {
+        schema_version: "blue-tanuki.skeptical-review.v1",
+        observation_reports: [{ criterion_ref: criterionRef, finding: rawFinding, relation: "supports" }],
+        alternative_hypotheses: [rawHypothesis],
+        proposed_goal_criteria: {
+          schema_version: "blue-tanuki.goal-criteria.v1",
+          criteria: [{
+            criterion_ref: criterionRef,
+            criterion_kind: "objective",
+            tool_relations: [{ tool_name: "file.search", relation: "supports" }],
+          }],
+        },
+      },
+      metrics: { duration_ms: 1 },
+    });
+
+    const entry = c.getAudit().list()[1]!.log;
+    if (!("kind" in entry) || entry.kind !== "executor_feedback") throw new Error("expected feedback audit");
+    expect(entry.feedback.llm_tool_candidate_assessments[0]?.adoption_disposition).toBe("rejected");
+    expect(entry.feedback.skeptical_review).toMatchObject({
+      status: "recorded",
+      frame_correction: {
+        status: "proposed_unverified",
+        original_goal_projection_id: log.frame.goal_projection.projection_id,
+        original_goal_content_sha256: log.frame.goal_projection.original_request_ref.content_sha256,
+        original_goal_binding_preserved: true,
+      },
+      follow_up_required: "independent_observation",
+      may_execute: false,
+      used_for_authority: false,
+    });
+    expect(entry.feedback.skeptical_review?.candidate_reviews[0]).toMatchObject({
+      scope_status: "affected",
+      prior_adoption_disposition: "rejected",
+      review_disposition: "held",
+      proposed_goal_criteria: {
+        outcome: "supports",
+        evidence_status: "assumed",
+        risk_status: "unverified",
+      },
+      retained_checks: {
+        mechanical_contract: { outcome: "pass", evidence_status: "observed" },
+        domain_validation: { outcome: "pass", evidence_status: "observed" },
+      },
+    });
+    const auditJson = JSON.stringify(c.getAudit().list());
+    expect(auditJson).not.toContain(rawFinding);
+    expect(auditJson).not.toContain(rawHypothesis);
+    expect(auditJson).not.toContain(criterionRef);
+    expect(c.getAudit().verify()).toBe(true);
+  });
+
+  it("BT-U-C06.03-N: leaves all candidate checks unchanged for malformed or unmatched review input", () => {
+    const c = new HDSUpperController();
+    const { command } = c.decide({
+      ...inbound("review the bounded task", "r-c06-skeptical-negative"),
+      goal_criteria: {
+        schema_version: "blue-tanuki.goal-criteria.v1",
+        criteria: [{
+          criterion_ref: "criterion-c06-known",
+          criterion_kind: "objective",
+          tool_relations: [{ tool_name: "echo", relation: "supports" }],
+        }],
+      },
+    });
+    const candidate = {
+      schema_version: "blue-tanuki.llm-tool-call-candidate.v1" as const,
+      call_id: "call-c06-skeptical-negative",
+      tool_name: "echo",
+      arguments: { text: "synthetic" },
+      authority_boundary: { candidate_only: true as const, may_execute: false as const, used_for_authority: false as const },
+    };
+    const invalidFinding = "invalid-review-private-sentinel";
+    c.onFeedback({
+      command_id: command!.id,
+      status: "success",
+      llm_tool_candidates: [candidate],
+      skeptical_review: {
+        schema_version: "blue-tanuki.skeptical-review.v1",
+        observation_reports: [{ criterion_ref: "criterion-c06-known", finding: invalidFinding, relation: "supports" }],
+        unexpected: true,
+      },
+      metrics: { duration_ms: 1 },
+    } as unknown as ExecuteFeedback);
+    const invalid = c.getAudit().list()[1]!.log;
+    if (!("kind" in invalid) || invalid.kind !== "executor_feedback") throw new Error("expected invalid feedback audit");
+    expect(invalid.feedback.skeptical_review_contract_status).toBe("failed");
+    expect(invalid.feedback.skeptical_review?.status).toBe("invalid");
+    expect(invalid.feedback.llm_tool_candidate_assessments[0]?.adoption_disposition).toBe("held");
+    expect(JSON.stringify(c.getAudit().list())).not.toContain(invalidFinding);
+
+    const c2 = new HDSUpperController();
+    const { command: command2 } = c2.decide({
+      ...inbound("review the bounded task", "r-c06-skeptical-unmatched"),
+      goal_criteria: {
+        schema_version: "blue-tanuki.goal-criteria.v1",
+        criteria: [{
+          criterion_ref: "criterion-c06-known",
+          criterion_kind: "objective",
+          tool_relations: [{ tool_name: "echo", relation: "supports" }],
+        }],
+      },
+    });
+    c2.onFeedback({
+      command_id: command2!.id,
+      status: "success",
+      llm_tool_candidates: [candidate],
+      skeptical_review: {
+        schema_version: "blue-tanuki.skeptical-review.v1",
+        observation_reports: [{ criterion_ref: "unmatched-criterion", finding: "synthetic", relation: "conflicts" }],
+      },
+      metrics: { duration_ms: 1 },
+    });
+    const unmatched = c2.getAudit().list()[1]!.log;
+    if (!("kind" in unmatched) || unmatched.kind !== "executor_feedback") throw new Error("expected unmatched feedback audit");
+    expect(unmatched.feedback.skeptical_review?.status).toBe("unmatched_scope");
+    expect(unmatched.feedback.skeptical_review?.follow_up_required).toBe("none");
+    expect(unmatched.feedback.skeptical_review?.candidate_reviews[0]).toMatchObject({
+      scope_status: "preserved",
+      prior_adoption_disposition: "held",
+      review_disposition: "held",
+      retained_checks: {
+        mechanical_contract: { outcome: "pass", evidence_status: "observed" },
+        domain_validation: { outcome: "pass", evidence_status: "observed" },
+      },
+    });
+    expect(c.getAudit().verify()).toBe(true);
+    expect(c2.getAudit().verify()).toBe(true);
+  });
+
   it("fails closed on malformed criteria without retaining their raw payload", () => {
     const c = new HDSUpperController();
     const invalidCriteriaMarker = "invalid-criteria-private-sentinel";
