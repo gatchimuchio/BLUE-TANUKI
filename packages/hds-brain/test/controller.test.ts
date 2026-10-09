@@ -28,6 +28,30 @@ function feedback(command_id: string, result: unknown = { ok: true }): ExecuteFe
   };
 }
 
+function meaningUpdateProposal() {
+  return {
+    schema_version: "blue-tanuki.meaning-update-proposal.v1",
+    record_type: "meaning_update_proposal",
+    proposal_ref: "proposal-controller-001",
+    candidate_ref: "candidate:001",
+    candidate_digest: "c".repeat(64),
+    target_ref: "memory:fact-001",
+    prior_version_ref: "version:4",
+    supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
+    counterevidence_review: {
+      status: "reviewed_with_references",
+      review_scope: { reference: "scope:counterevidence-001", digest: "e".repeat(64) },
+      references: [{ reference: "evidence:counter-001", digest: "f".repeat(64) }],
+    },
+    applicability_scope: { reference: "scope:applicability-001", digest: "1".repeat(64) },
+    reflection_target_ref: "reflection:goal-001",
+    proposal_status: "unverified",
+    adoption_status: "not_adopted",
+    may_apply: false,
+    used_for_authority: false,
+  };
+}
+
 function inbound(content: string, id = "req-1"): InboundRequest {
   return {
     id,
@@ -788,6 +812,69 @@ describe("HDSUpperController.onFeedback()", () => {
       expect(entry.feedback.status).toBe("failed");
     }
     expect(c.getAudit().verify()).toBe(true);
+  });
+
+  it("BT-U-C07.01-P: validates and digest-audits a meaning proposal without adopting it", () => {
+    const c = new HDSUpperController();
+    const { command } = c.decide(inbound("hello proposal", "r-c07-positive"));
+    expect(command?.type).toBe("llm_call");
+
+    c.onFeedback({
+      command_id: command!.id,
+      status: "success",
+      meaning_update_proposal: meaningUpdateProposal(),
+      metrics: { duration_ms: 1 },
+    });
+
+    const entry = c.getAudit().list()[1]!.log;
+    expect("kind" in entry && entry.kind).toBe("executor_feedback");
+    if ("kind" in entry && entry.kind === "executor_feedback") {
+      expect(entry.feedback.meaning_update_proposal_contract_status).toBe("passed");
+      expect(entry.feedback.meaning_update_proposal_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(entry.feedback.meaning_update_proposal_used_for_authority).toBe(false);
+      expect(entry.feedback.meaning_update_proposal_applied).toBe(false);
+      expect(entry.known_command).toBe(true);
+    }
+    const auditText = JSON.stringify(c.getAudit().list());
+    expect(auditText).not.toContain("candidate:001");
+    expect(c.getAudit().verify()).toBe(true);
+  });
+
+  it("BT-U-C07.01-N: rejects malformed and unmatched proposals without retaining their content", () => {
+    const c = new HDSUpperController();
+    const rawSentinel = "C07-RAW-PROPOSAL-PRIVATE-SENTINEL";
+    c.onFeedback({
+      command_id: "unknown-command-c07",
+      status: "success",
+      meaning_update_proposal: { ...meaningUpdateProposal(), raw_candidate_text: rawSentinel },
+      metrics: { duration_ms: 1 },
+    });
+
+    const entry = c.getAudit().list()[0]!.log;
+    expect("kind" in entry && entry.kind).toBe("executor_feedback");
+    if ("kind" in entry && entry.kind === "executor_feedback") {
+      expect(entry.feedback.meaning_update_proposal_contract_status).toBe("failed");
+      expect(entry.feedback.meaning_update_proposal_digest).toBeUndefined();
+      expect(entry.feedback.meaning_update_proposal_used_for_authority).toBe(false);
+      expect(entry.feedback.meaning_update_proposal_applied).toBe(false);
+      expect(entry.known_command).toBe(false);
+    }
+    expect(JSON.stringify(c.getAudit().list())).not.toContain(rawSentinel);
+    expect(c.getAudit().verify()).toBe(true);
+
+    const unmatched = new HDSUpperController();
+    unmatched.onFeedback({
+      command_id: "unmatched-valid-proposal-c07",
+      status: "success",
+      meaning_update_proposal: meaningUpdateProposal(),
+      metrics: { duration_ms: 1 },
+    });
+    const unmatchedEntry = unmatched.getAudit().list()[0]!.log;
+    if ("kind" in unmatchedEntry && unmatchedEntry.kind === "executor_feedback") {
+      expect(unmatchedEntry.feedback.meaning_update_proposal_contract_status).toBe("failed");
+      expect(unmatchedEntry.feedback.meaning_update_proposal_digest).toBeUndefined();
+      expect(unmatchedEntry.known_command).toBe(false);
+    }
   });
 
   it("audit-binds tool candidates by digest without persisting their arguments", () => {

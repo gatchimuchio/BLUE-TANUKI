@@ -61,6 +61,20 @@ describe("ExecuteCommandSchema", () => {
   });
 });
 
+describe("C07.01 ExecuteFeedback proposal transport", () => {
+  it("keeps a C proposal as untrusted feedback data for independent HDS validation", () => {
+    const proposal = { record_type: "meaning_update_proposal", raw_statement: "untrusted claim" };
+    const parsed = ExecuteFeedbackSchema.parse({
+      command_id: "cmd-c07-proposal",
+      status: "success",
+      meaning_update_proposal: proposal,
+      metrics: { duration_ms: 1 },
+    });
+
+    expect(parsed.meaning_update_proposal).toEqual(proposal);
+  });
+});
+
 describe("InboundRequest goal criteria boundary", () => {
   const base = {
     id: "criteria-request-1",

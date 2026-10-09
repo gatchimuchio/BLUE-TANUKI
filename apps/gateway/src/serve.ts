@@ -41,8 +41,13 @@ import type {
   ExecuteCommand,
   ExecuteFeedback,
   InboundRequest,
+  ObservationAcquisitionRecord,
 } from "@blue-tanuki/protocol";
-import { parseInboundRequestAtBoundary } from "@blue-tanuki/protocol";
+import {
+  parseInboundRequestAtBoundary,
+  parseMeaningUpdateProposal,
+  parseObservationAcquisitionRecord,
+} from "@blue-tanuki/protocol";
 import type {
   WebChatChannel,
   WebChatApprovalQueueItem,
@@ -199,6 +204,63 @@ export function planGatewayInboundBoundary(raw: unknown): GatewayInboundBoundary
   return {
     ...boundary,
     hdsBoundaryInput: boundary.boundary_ok ? boundary.request : raw,
+  };
+}
+
+export function buildObservationAcquisitionRecord(
+  boundary: Pick<GatewayInboundBoundaryPlan, "boundary_ok" | "request">,
+): ObservationAcquisitionRecord | null {
+  if (!boundary.boundary_ok) return null;
+  const request = boundary.request;
+  const webhookSource = request.metadata?.["webhook_source"];
+  const contentDigest = digestString(request.content);
+  const parsed = parseObservationAcquisitionRecord({
+    schema_version: "blue-tanuki.observation-acquisition.v1",
+    record_type: "observation_acquisition",
+    record_id: `observation:${digestString(`${request.id}:${request.timestamp}:${contentDigest}`)}`,
+    request_id: request.id,
+    source_channel: request.channel,
+    actor_digest: digestString(request.user),
+    acquired_at: request.timestamp,
+    content_digest: contentDigest,
+    content_chars: request.content.length,
+    metadata_key_count: metadataKeys(request.metadata).length,
+    reply_to_present: typeof request.metadata?.["reply_to"] === "string",
+    ...(typeof webhookSource === "string"
+      ? { webhook_source_digest: digestString(webhookSource) }
+      : {}),
+    boundary_status: "canonical",
+    semantic_status: "unassessed",
+    adoption_status: "not_adopted",
+    used_as_world_truth: false,
+    used_for_authority: false,
+  });
+  return parsed.ok ? parsed.record : null;
+}
+
+export function buildMeaningUpdateProposalHistoryInput(
+  command: ExecuteCommand,
+  request_id: string,
+  actor: string,
+  feedback: ExecuteFeedback,
+  timestamp = Date.now(),
+): CompleteHistoryAppendInput | null {
+  if (
+    command.type !== "llm_call" ||
+    feedback.status !== "success" ||
+    feedback.command_id !== command.id ||
+    feedback.meaning_update_proposal === undefined
+  ) return null;
+  const parsed = parseMeaningUpdateProposal(feedback.meaning_update_proposal);
+  if (!parsed.ok) return null;
+  return {
+    kind: "audit_history",
+    request_id,
+    command_id: command.id,
+    actor,
+    source: "llm_meaning_update_proposal",
+    timestamp,
+    payload: parsed.record,
   };
 }
 
@@ -819,6 +881,13 @@ export async function serve(): Promise<ServeShutdown> {
       });
     }
     const executionHistory = recordExecutionHistory(cmd, log, origin, actor, fb);
+    const meaningUpdateProposalHistory = buildMeaningUpdateProposalHistoryInput(
+      cmd,
+      log.request_id,
+      actor,
+      fb,
+    );
+    if (meaningUpdateProposalHistory) recordCompleteHistory(meaningUpdateProposalHistory);
     if (fb.status === "failed") {
       const extracted = executionHistory
         ? extractFailureSignatures({ kind: "complete_history", entry: executionHistory })
@@ -1518,19 +1587,22 @@ export async function serve(): Promise<ServeShutdown> {
     // input is passed to HDS-BRAIN only for its independent fail-closed
     // authority-boundary audit; raw input must not be used for execution.
     const hdsBoundaryInput = boundary.hdsBoundaryInput;
+    const observationAcquisitionRecord = buildObservationAcquisitionRecord(boundary);
     recordCompleteHistory({
       kind: "user_input",
       request_id: authorityReq.id,
       actor: authorityReq.user,
       source: authorityReq.channel,
       timestamp: authorityReq.timestamp,
-      payload: {
+      payload: observationAcquisitionRecord ?? {
         channel: authorityReq.channel,
         user: authorityReq.user,
         content_digest: boundary.boundary_ok ? digestString(authorityReq.content) : undefined,
         content_chars: boundary.boundary_ok ? authorityReq.content.length : 0,
         metadata_keys: metadataKeys(authorityReq.metadata),
-        boundary_status: boundary.boundary_ok ? "canonical" : "invalid_fail_closed",
+        boundary_status: boundary.boundary_ok
+          ? "canonical_record_contract_failed"
+          : "invalid_fail_closed",
         boundary_issues_count: boundary.boundary_issues.length,
         reply_to_present: typeof authorityReq.metadata?.["reply_to"] === "string",
         webhook_source: typeof authorityReq.metadata?.["webhook_source"] === "string"

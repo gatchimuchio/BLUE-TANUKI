@@ -284,6 +284,19 @@ export class Executor {
       resp = safeResponse;
     }
 
+    const meaningUpdateProposalPresent = Object.prototype.hasOwnProperty.call(
+      resp,
+      "meaning_update_proposal",
+    );
+    const meaningUpdateProposal = meaningUpdateProposalPresent
+      ? resp.meaning_update_proposal
+      : undefined;
+    if (meaningUpdateProposalPresent) {
+      const safeResponse = { ...resp };
+      delete safeResponse.meaning_update_proposal;
+      resp = safeResponse;
+    }
+
     let toolCandidates: NonNullable<LLMResponse["tool_calls"]> | undefined;
     try {
       toolCandidates = normalizeLLMToolCallCandidates(
@@ -344,6 +357,7 @@ export class Executor {
         ? { ...resp, operation_core: plannerInspection.evidence }
         : resp,
       ...(toolCandidates?.length ? { llm_tool_candidates: toolCandidates } : {}),
+      ...(meaningUpdateProposalPresent ? { meaning_update_proposal: meaningUpdateProposal } : {}),
       metrics: {
         duration_ms: Date.now() - start,
         tokens_used: resp.tokens_used,

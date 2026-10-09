@@ -318,6 +318,8 @@ export const ExecuteFeedbackSchema = z.object({
   llm_failure: LLMCallFailureSchema.optional(),
   llm_tool_candidates: z.array(LLMToolCallCandidateSchema).max(32).optional(),
   skeptical_review: SkepticalReviewRequestSchema.optional(),
+  /** C由来の未信頼出力。提案を記録する前にHDS-BRAINが検証する。 */
+  meaning_update_proposal: z.unknown().optional(),
   metrics: z.object({
     duration_ms: z.number(),
     tokens_used: z.number().optional(),

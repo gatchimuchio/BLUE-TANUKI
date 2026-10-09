@@ -15,6 +15,7 @@ import {
   parseInboundRequestAtBoundary,
   LLMCallFailureSchema,
   LLMToolCallCandidateSchema,
+  parseMeaningUpdateProposal,
   SkepticalReviewRequestSchema,
   LLMFallbackAuthorizationSchema,
 } from "@blue-tanuki/protocol";
@@ -712,7 +713,15 @@ export class HDSUpperController {
     const skepticalReviewParse = fb.skeptical_review === undefined
       ? undefined
       : SkepticalReviewRequestSchema.safeParse(fb.skeptical_review);
+    const meaningUpdateProposalParse = fb.meaning_update_proposal === undefined
+      ? undefined
+      : parseMeaningUpdateProposal(fb.meaning_update_proposal);
     const sourceLog = this.inflight.get(fb.command_id);
+    const meaningUpdateProposalContractStatus = fb.meaning_update_proposal === undefined
+      ? "not_present" as const
+      : fb.status === "success" && sourceLog !== undefined && meaningUpdateProposalParse?.ok
+        ? "passed" as const
+        : "failed" as const;
     const candidateAssessments = toolCandidates
       ? assessLLMToolCandidates(toolCandidates, sourceLog)
       : [];
@@ -749,6 +758,12 @@ export class HDSUpperController {
           ? "not_present" as const
           : skepticalReviewParse?.success ? "passed" as const : "failed" as const,
         ...(skepticalReview ? { skeptical_review: skepticalReview } : {}),
+        meaning_update_proposal_contract_status: meaningUpdateProposalContractStatus,
+        ...(meaningUpdateProposalContractStatus === "passed" && meaningUpdateProposalParse?.ok
+          ? { meaning_update_proposal_digest: sha256(meaningUpdateProposalParse.record) }
+          : {}),
+        meaning_update_proposal_used_for_authority: false as const,
+        meaning_update_proposal_applied: false as const,
         metrics: fb.metrics,
       },
       timestamp: Date.now(),

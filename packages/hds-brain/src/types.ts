@@ -312,6 +312,10 @@ export interface ExecutorFeedbackAuditTrace {
   llm_tool_candidate_assessments: LLMToolCandidateAssessment[];
   skeptical_review_contract_status: "not_present" | "passed" | "failed";
   skeptical_review?: SkepticalReviewAuditTrace;
+  meaning_update_proposal_contract_status: "not_present" | "passed" | "failed";
+  meaning_update_proposal_digest?: string;
+  meaning_update_proposal_used_for_authority: false;
+  meaning_update_proposal_applied: false;
   metrics: ExecuteFeedback["metrics"];
 }
 

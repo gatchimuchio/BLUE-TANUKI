@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-10 — 一次取得と意味更新提案の分離
+
+- C07.01として、canonical inboundを未評価・未採用の取得記録へ分離し、LLM feedbackの意味更新案をExecutorからHDSへ未信頼入力として渡す。
+- HDSは提案契約を再検証してdigest-only監査し、Gatewayは成功・一致したLLM commandからの妥当な提案だけをCompleteHistoryの別イベントへ保存する。保存・投影は非権威であり、提案の採用やM反映は行わない。
+- 根拠参照の実在・真偽、標準providerの提案生成、J承認、M反映、親C07、release/GA/P13/owner GOは成立しない。局所受入とGit閉鎖の証拠は開発進捗へ記録する。
+
 ## 2026-10-10 — 懐疑入力から限定reviewの再開要求を監査
 
 - C06.03として、通常Gateway finalizationからHDS feedback auditへstrictな懐疑review入力を接続した。相反するreportは未検証claimとして記録し、影響criterionだけを独立観測待ちにする。

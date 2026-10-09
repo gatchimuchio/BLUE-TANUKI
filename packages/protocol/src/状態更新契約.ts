@@ -11,6 +11,98 @@ export const MEMORY_COMMIT_MAX_CHANGES = 256;
 
 const IdentifierSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const ReferenceSchema = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/);
+
+export const OBSERVATION_ACQUISITION_SCHEMA_VERSION = "blue-tanuki.observation-acquisition.v1" as const;
+export const MEANING_UPDATE_PROPOSAL_SCHEMA_VERSION = "blue-tanuki.meaning-update-proposal.v1" as const;
+
+/** 正規化済み入力を取得した記録。内容の真実性・採用・権限利用を主張しない。 */
+export const ObservationAcquisitionRecordSchema = z.object({
+  schema_version: z.literal(OBSERVATION_ACQUISITION_SCHEMA_VERSION),
+  record_type: z.literal("observation_acquisition"),
+  record_id: IdentifierSchema,
+  request_id: z.string().min(1).max(200),
+  source_channel: z.string().min(1).max(80),
+  actor_digest: DigestSchema,
+  acquired_at: z.number().finite().nonnegative(),
+  content_digest: DigestSchema,
+  content_chars: z.number().int().nonnegative().safe(),
+  metadata_key_count: z.number().int().nonnegative().safe(),
+  reply_to_present: z.boolean(),
+  webhook_source_digest: DigestSchema.optional(),
+  boundary_status: z.literal("canonical"),
+  semantic_status: z.literal("unassessed"),
+  adoption_status: z.literal("not_adopted"),
+  used_as_world_truth: z.literal(false),
+  used_for_authority: z.literal(false),
+}).strict();
+
+export type ObservationAcquisitionRecord = z.infer<typeof ObservationAcquisitionRecordSchema>;
+
+const EvidenceReferenceSchema = z.object({
+  reference: ReferenceSchema,
+  digest: DigestSchema,
+}).strict();
+
+const CounterevidenceReviewSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("reviewed_with_references"),
+    review_scope: EvidenceReferenceSchema,
+    references: z.array(EvidenceReferenceSchema).min(1).max(32),
+  }).strict(),
+  z.object({
+    status: z.literal("reviewed_none_found"),
+    review_scope: EvidenceReferenceSchema,
+    references: z.array(EvidenceReferenceSchema).length(0),
+  }).strict(),
+]);
+
+/** digestと参照だけを持つCの提案。解析は形状だけを検査し、真実性・承認・採用・記憶更新・実行適格性を決めない。 */
+export const MeaningUpdateProposalSchema = z.object({
+  schema_version: z.literal(MEANING_UPDATE_PROPOSAL_SCHEMA_VERSION),
+  record_type: z.literal("meaning_update_proposal"),
+  proposal_ref: IdentifierSchema,
+  candidate_ref: ReferenceSchema,
+  candidate_digest: DigestSchema,
+  target_ref: ReferenceSchema,
+  prior_version_ref: ReferenceSchema,
+  supporting_evidence: z.array(EvidenceReferenceSchema).min(1).max(32),
+  counterevidence_review: CounterevidenceReviewSchema,
+  applicability_scope: EvidenceReferenceSchema,
+  reflection_target_ref: ReferenceSchema,
+  proposal_status: z.literal("unverified"),
+  adoption_status: z.literal("not_adopted"),
+  may_apply: z.literal(false),
+  used_for_authority: z.literal(false),
+}).strict();
+
+export type MeaningUpdateProposal = z.infer<typeof MeaningUpdateProposalSchema>;
+
+export type SemanticRecordParseResult<T> =
+  | { ok: true; record: T }
+  | { ok: false; reason: "schema_validation_failed" };
+
+export function parseObservationAcquisitionRecord(value: unknown): SemanticRecordParseResult<ObservationAcquisitionRecord> {
+  try {
+    const parsed = ObservationAcquisitionRecordSchema.safeParse(value);
+    return parsed.success
+      ? { ok: true, record: parsed.data }
+      : { ok: false, reason: "schema_validation_failed" };
+  } catch {
+    return { ok: false, reason: "schema_validation_failed" };
+  }
+}
+
+export function parseMeaningUpdateProposal(value: unknown): SemanticRecordParseResult<MeaningUpdateProposal> {
+  try {
+    const parsed = MeaningUpdateProposalSchema.safeParse(value);
+    return parsed.success
+      ? { ok: true, record: parsed.data }
+      : { ok: false, reason: "schema_validation_failed" };
+  } catch {
+    return { ok: false, reason: "schema_validation_failed" };
+  }
+}
 
 export type MemoryCommitJsonValue =
   | null

@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { parseJsonTextAtBoundary } from "@blue-tanuki/protocol";
+import {
+  parseJsonTextAtBoundary,
+  parseMeaningUpdateProposal,
+  parseObservationAcquisitionRecord,
+} from "@blue-tanuki/protocol";
 import type { CompleteHistoryEntry, CompleteHistoryKind } from "./types.js";
 
 const COMPLETE_HISTORY_KINDS = new Set<CompleteHistoryKind>([
@@ -58,6 +62,27 @@ export function decodeCompleteHistoryEntry(line: string): CompleteHistoryEntry {
   return boundary.value;
 }
 
+export function isValidCompleteHistorySemanticPayload(
+  kind: CompleteHistoryKind,
+  payload: unknown,
+): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return true;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(payload, "record_type");
+    if (!descriptor) return true;
+    if (!("value" in descriptor)) return false;
+    if (descriptor.value === "observation_acquisition" && kind === "user_input") {
+      return parseObservationAcquisitionRecord(payload).ok;
+    }
+    if (descriptor.value === "meaning_update_proposal" && kind === "audit_history") {
+      return parseMeaningUpdateProposal(payload).ok;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function isCompleteHistoryEntry(value: unknown): value is CompleteHistoryEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Partial<CompleteHistoryEntry>;
@@ -67,6 +92,7 @@ function isCompleteHistoryEntry(value: unknown): value is CompleteHistoryEntry {
     typeof entry.id === "string" &&
     typeof entry.kind === "string" &&
     COMPLETE_HISTORY_KINDS.has(entry.kind as CompleteHistoryKind) &&
+    isValidCompleteHistorySemanticPayload(entry.kind as CompleteHistoryKind, entry.payload) &&
     (typeof entry.request_id === "string" || entry.request_id === null) &&
     (typeof entry.command_id === "string" || entry.command_id === null) &&
     (entry.actor === undefined || typeof entry.actor === "string") &&

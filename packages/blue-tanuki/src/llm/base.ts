@@ -61,6 +61,8 @@ export interface LLMResponse {
   model: string;
   /** Native provider calls are data for J review, never dispatched here. */
   tool_calls?: LLMToolCallCandidate[];
+  /** 未信頼の構造化C提案。Executorは表示結果から除き、HDSの検証入力へ渡す。 */
+  meaning_update_proposal?: unknown;
   /** Canonical provider label selected by the local registry, when available. */
   provider?: string;
   raw?: unknown;

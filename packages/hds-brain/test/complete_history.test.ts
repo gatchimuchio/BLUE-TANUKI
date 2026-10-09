@@ -22,6 +22,51 @@ const ALL_KINDS: CompleteHistoryKind[] = [
   "final_output",
 ];
 
+function observationAcquisitionRecord() {
+  return {
+    schema_version: "blue-tanuki.observation-acquisition.v1",
+    record_type: "observation_acquisition",
+    record_id: "observation:0123456789abcdef",
+    request_id: "request-c07-01",
+    source_channel: "webchat",
+    actor_digest: "a".repeat(64),
+    acquired_at: 1,
+    content_digest: "b".repeat(64),
+    content_chars: 10,
+    metadata_key_count: 0,
+    reply_to_present: false,
+    boundary_status: "canonical",
+    semantic_status: "unassessed",
+    adoption_status: "not_adopted",
+    used_as_world_truth: false,
+    used_for_authority: false,
+  };
+}
+
+function meaningUpdateProposal() {
+  return {
+    schema_version: "blue-tanuki.meaning-update-proposal.v1",
+    record_type: "meaning_update_proposal",
+    proposal_ref: "proposal-c07-01",
+    candidate_ref: "candidate:001",
+    candidate_digest: "c".repeat(64),
+    target_ref: "memory:fact-001",
+    prior_version_ref: "version:4",
+    supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
+    counterevidence_review: {
+      status: "reviewed_with_references",
+      review_scope: { reference: "scope:counterevidence-001", digest: "e".repeat(64) },
+      references: [{ reference: "evidence:counter-001", digest: "f".repeat(64) }],
+    },
+    applicability_scope: { reference: "scope:applicability-001", digest: "1".repeat(64) },
+    reflection_target_ref: "reflection:goal-001",
+    proposal_status: "unverified",
+    adoption_status: "not_adopted",
+    may_apply: false,
+    used_for_authority: false,
+  };
+}
+
 describe("CompleteHistoryStore in-memory", () => {
   it("captures all complete-history kinds as non-authority source records", () => {
     const store = new CompleteHistoryStore();
@@ -87,6 +132,38 @@ describe("CompleteHistoryStore in-memory", () => {
     expect(store.append({ kind: "user_input", payload: "two" })).toBeNull();
     expect(store.size()).toBe(1);
     expect(store.skippedCount()).toBe(1);
+  });
+
+  it("keeps acquired observations and meaning proposals as separate validated non-authority records", () => {
+    const store = new CompleteHistoryStore();
+    const observation = store.append({ kind: "user_input", payload: observationAcquisitionRecord(), timestamp: 1 });
+    const proposal = store.append({ kind: "audit_history", payload: meaningUpdateProposal(), timestamp: 2 });
+
+    expect(observation?.payload).toMatchObject({
+      record_type: "observation_acquisition",
+      semantic_status: "unassessed",
+      adoption_status: "not_adopted",
+      used_as_world_truth: false,
+      used_for_authority: false,
+    });
+    expect(proposal?.payload).toMatchObject({
+      record_type: "meaning_update_proposal",
+      proposal_status: "unverified",
+      adoption_status: "not_adopted",
+      may_apply: false,
+      used_for_authority: false,
+    });
+    expect(() => store.append({
+      kind: "audit_history",
+      payload: { ...meaningUpdateProposal(), raw_candidate_text: "PRIVATE-CLAIM-SENTINEL" },
+    })).toThrow(/非権威意味記録の契約/);
+    expect(() => store.append({ kind: "execution_history", payload: meaningUpdateProposal() }))
+      .toThrow(/非権威意味記録の契約/);
+
+    const projected = JSON.stringify(store.replayAsCommonRecords());
+    expect(projected).not.toContain("candidate:001");
+    expect(projected).not.toContain("PRIVATE-CLAIM-SENTINEL");
+    expect(store.verify()).toBe(true);
   });
 });
 
@@ -195,6 +272,31 @@ describe("CompleteHistoryStore JSONL persistence", () => {
     const lines = readFileSync(filepath, "utf8").split("\n").filter(Boolean);
     expect(lines).toHaveLength(3);
     expect(new CompleteHistoryStore({ filepath }).verify()).toBe(true);
+  });
+
+  it("round-trips both C07.01 record types and rejects a tampered proposal payload", () => {
+    const store = new CompleteHistoryStore({ filepath });
+    store.append({ kind: "user_input", request_id: "request-c07-01", payload: observationAcquisitionRecord(), timestamp: 1 });
+    const proposal = store.append({ kind: "audit_history", request_id: "request-c07-01", payload: meaningUpdateProposal(), timestamp: 2 });
+    expect(proposal).not.toBeNull();
+
+    const reloaded = new CompleteHistoryStore({ filepath });
+    expect(reloaded.verify()).toBe(true);
+    expect(reloaded.replay().map((entry) => entry.kind)).toEqual(["user_input", "audit_history"]);
+
+    const { entry_hash: _entryHash, ...body } = proposal!;
+    const invalidPayload = { ...meaningUpdateProposal(), raw_candidate_text: "PRIVATE-CLAIM-SENTINEL" };
+    const invalidBody = {
+      ...body,
+      payload: invalidPayload,
+      payload_digest: sha256Hex(invalidPayload),
+    };
+    const invalidEntry = {
+      ...invalidBody,
+      entry_hash: completeHistoryEntryHash(invalidBody),
+    };
+    writeFileSync(filepath, `${JSON.stringify(invalidEntry)}\n`, "utf8");
+    expect(() => new CompleteHistoryStore({ filepath })).toThrow(/malformed complete history entry/);
   });
 
   it("throws on load when the persisted chain is broken", () => {

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import { Executor, createExecutorApprovalAuthority, type ChannelDispatcher } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
+import type { LLMBackend, LLMRequest, LLMResponse } from "../src/llm/base.js";
 import { ToolRegistry, echoTool, type Tool } from "../src/tools/registry.js";
 
 const stubUpstream = {
@@ -43,6 +44,15 @@ function shellExecCmd(): ExecuteCommand {
       allowed_tools: ["shell.exec"],
       allowed_capabilities: ["tool:shell.exec", "shell:exec"],
     },
+    upstream_decision: stubUpstream,
+  };
+}
+
+function llmCallCmd(): ExecuteCommand {
+  return {
+    id: "cmd-llm-c07-01",
+    type: "llm_call",
+    payload: { messages: [{ role: "user", content: "review this synthetic input" }] },
     upstream_decision: stubUpstream,
   };
 }
@@ -336,5 +346,54 @@ describe("Executor.executeToolCall - permission envelope", () => {
 
     expect(fb.status).toBe("failed");
     expect(fb.error).toMatch(/human final-review proof is required/);
+  });
+});
+
+describe("Executor meaning-update proposal transport", () => {
+  it("forwards an untrusted structured proposal to HDS while removing it from the visible result", async () => {
+    const proposal = {
+      schema_version: "blue-tanuki.meaning-update-proposal.v1",
+      record_type: "meaning_update_proposal",
+      proposal_ref: "proposal-executor-001",
+      candidate_ref: "candidate:executor-001",
+      candidate_digest: "c".repeat(64),
+      target_ref: "memory:fact-001",
+      prior_version_ref: "version:4",
+      supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
+      counterevidence_review: {
+        status: "reviewed_none_found",
+        review_scope: { reference: "scope:counterevidence-001", digest: "e".repeat(64) },
+        references: [],
+      },
+      applicability_scope: { reference: "scope:applicability-001", digest: "1".repeat(64) },
+      reflection_target_ref: "reflection:goal-001",
+      proposal_status: "unverified",
+      adoption_status: "not_adopted",
+      may_apply: false,
+      used_for_authority: false,
+    };
+    const llm: LLMBackend = {
+      name: "proposal-fixture",
+      async call(_request: LLMRequest): Promise<LLMResponse> {
+        return {
+          content: "synthetic answer",
+          tokens_used: 1,
+          model: "fixture-model",
+          meaning_update_proposal: proposal,
+        };
+      },
+    };
+    const exec = new Executor({
+      approval_authority: executorApproval,
+      llm,
+      tools: new ToolRegistry(),
+    });
+
+    const feedback = await exec.execute(approved(llmCallCmd()));
+    expect(feedback.status).toBe("success");
+    expect(feedback.meaning_update_proposal).toEqual(proposal);
+    expect(feedback.result).toMatchObject({ content: "synthetic answer" });
+    expect(feedback.result).not.toHaveProperty("meaning_update_proposal");
+    expect(JSON.stringify(feedback.result)).not.toContain("candidate:executor-001");
   });
 });

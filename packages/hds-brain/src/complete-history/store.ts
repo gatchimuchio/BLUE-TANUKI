@@ -10,6 +10,7 @@ import {
   completeHistoryEntryHash,
   decodeCompleteHistoryEntry,
   encodeCompleteHistoryEntry,
+  isValidCompleteHistorySemanticPayload,
   sha256Hex,
 } from "./codec.js";
 import {
@@ -48,6 +49,9 @@ export class CompleteHistoryStore {
   }
 
   append(input: CompleteHistoryAppendInput): CompleteHistoryEntry | null {
+    if (!isValidCompleteHistorySemanticPayload(input.kind, input.payload)) {
+      throw new Error("CompleteHistoryStore: 非権威意味記録の契約に不一致");
+    }
     if (this.entries.length >= this.max_entries) {
       this.skipped += 1;
       return null;
@@ -86,6 +90,7 @@ export class CompleteHistoryStore {
       if (entry.index !== i) return false;
       if (entry.prev_hash !== prev_hash) return false;
       if (entry.used_for_authority !== false) return false;
+      if (!isValidCompleteHistorySemanticPayload(entry.kind, entry.payload)) return false;
       const expectedPayloadDigest = sha256Hex(entry.payload);
       if (entry.payload_digest !== expectedPayloadDigest) return false;
       const { entry_hash: _entryHash, ...withoutHash } = entry;

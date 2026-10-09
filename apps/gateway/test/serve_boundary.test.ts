@@ -1,14 +1,150 @@
 import { describe, expect, it } from "vitest";
-import { HDSUpperController } from "@blue-tanuki/hds-brain";
-import { createGatewayInternalInboundRequest } from "@blue-tanuki/protocol";
+import { CompleteHistoryStore, HDSUpperController } from "@blue-tanuki/hds-brain";
+import { createGatewayInternalInboundRequest, type ExecuteCommand, type ExecuteFeedback } from "@blue-tanuki/protocol";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import {
   canonicalizeGatewayInbound,
+  buildMeaningUpdateProposalHistoryInput,
+  buildObservationAcquisitionRecord,
   gatewayInboundAllowsDownstream,
   planGatewayInboundBoundary,
 } from "../src/serve.js";
 
+function meaningUpdateProposal() {
+  return {
+    schema_version: "blue-tanuki.meaning-update-proposal.v1",
+    record_type: "meaning_update_proposal",
+    proposal_ref: "proposal-gateway-001",
+    candidate_ref: "candidate:gateway-001",
+    candidate_digest: "c".repeat(64),
+    target_ref: "memory:fact-001",
+    prior_version_ref: "version:4",
+    supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
+    counterevidence_review: {
+      status: "reviewed_none_found",
+      review_scope: { reference: "scope:counterevidence-001", digest: "e".repeat(64) },
+      references: [],
+    },
+    applicability_scope: { reference: "scope:applicability-001", digest: "1".repeat(64) },
+    reflection_target_ref: "reflection:goal-001",
+    proposal_status: "unverified",
+    adoption_status: "not_adopted",
+    may_apply: false,
+    used_for_authority: false,
+  };
+}
+
 describe("gateway inbound boundary", () => {
+  it("BT-U-C07.01-P/N: captures only canonical inbound as an unassessed observation receipt", () => {
+    const rawContent = "C07-RAW-INBOUND-PRIVATE-SENTINEL";
+    const valid = planGatewayInboundBoundary({
+      id: "req-c07-observation",
+      channel: "webchat",
+      user: "owner",
+      content: rawContent,
+      timestamp: 123,
+      metadata: { reply_to: "message-1", webhook_source: "synthetic-hook" },
+    });
+    const record = buildObservationAcquisitionRecord(valid);
+    expect(record).toMatchObject({
+      record_type: "observation_acquisition",
+      boundary_status: "canonical",
+      semantic_status: "unassessed",
+      adoption_status: "not_adopted",
+      used_as_world_truth: false,
+      used_for_authority: false,
+      reply_to_present: true,
+      webhook_source_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(JSON.stringify(record)).not.toContain(rawContent);
+    expect(JSON.stringify(record)).not.toContain("synthetic-hook");
+
+    const invalid = planGatewayInboundBoundary({
+      id: "req-invalid-c07",
+      channel: "webchat",
+      user: "owner",
+      content: "must not be recorded as an observation",
+      timestamp: 124,
+      unexpected: true,
+    });
+    expect(buildObservationAcquisitionRecord(invalid)).toBeNull();
+  });
+
+  it("BT-U-C07.01-P/N: stores a separate strict proposal event only for successful matching LLM feedback", () => {
+    const boundary = planGatewayInboundBoundary({
+      id: "req-c07-proposal",
+      channel: "webchat",
+      user: "owner",
+      content: "synthetic request",
+      timestamp: 1,
+    });
+    const hds = new HDSUpperController();
+    const { log, command } = hds.decide(boundary.hdsBoundaryInput);
+    expect(command?.type).toBe("llm_call");
+    if (!command || command.type !== "llm_call") throw new Error("expected llm_call");
+    const feedback: ExecuteFeedback = {
+      command_id: command.id,
+      status: "success",
+      result: { content: "synthetic answer" },
+      meaning_update_proposal: meaningUpdateProposal(),
+      metrics: { duration_ms: 1 },
+    };
+    const finalized = finalizeCommandOutput({
+      hds,
+      command,
+      feedback,
+      target_surface: "channel",
+      request_id: log.request_id,
+    });
+    expect(finalized.rendered_output).toBe("synthetic answer");
+    const feedbackLog = hds.getAudit().list().map((entry) => entry.log).find((entry) =>
+      "kind" in entry && entry.kind === "executor_feedback"
+    );
+    expect(feedbackLog && "kind" in feedbackLog && feedbackLog.kind === "executor_feedback")
+      .toBe(true);
+    if (feedbackLog && "kind" in feedbackLog && feedbackLog.kind === "executor_feedback") {
+      expect(feedbackLog.feedback.meaning_update_proposal_contract_status).toBe("passed");
+      expect(feedbackLog.feedback.meaning_update_proposal_used_for_authority).toBe(false);
+      expect(feedbackLog.feedback.meaning_update_proposal_applied).toBe(false);
+    }
+
+    const input = buildMeaningUpdateProposalHistoryInput(command, log.request_id, "owner", feedback, 123);
+    expect(input).toMatchObject({
+      kind: "audit_history",
+      request_id: "req-c07-proposal",
+      command_id: command.id,
+      source: "llm_meaning_update_proposal",
+      payload: {
+        record_type: "meaning_update_proposal",
+        adoption_status: "not_adopted",
+        may_apply: false,
+      },
+    });
+    const history = new CompleteHistoryStore();
+    const stored = history.append(input!);
+    expect(stored?.kind).toBe("audit_history");
+    expect(JSON.stringify(history.replayAsCommonRecords())).not.toContain("candidate:gateway-001");
+
+    expect(buildMeaningUpdateProposalHistoryInput(command, "req-c07-proposal", "owner", {
+      ...feedback,
+      status: "failed",
+    })).toBeNull();
+    expect(buildMeaningUpdateProposalHistoryInput(command, "req-c07-proposal", "owner", {
+      ...feedback,
+      command_id: "other-command",
+    })).toBeNull();
+    const toolCommand: ExecuteCommand = {
+      ...command,
+      type: "tool_call",
+      payload: { tool_name: "echo", arguments: {} },
+    };
+    expect(buildMeaningUpdateProposalHistoryInput(toolCommand, log.request_id, "owner", feedback)).toBeNull();
+    expect(buildMeaningUpdateProposalHistoryInput(command, "req-c07-proposal", "owner", {
+      ...feedback,
+      meaning_update_proposal: { ...meaningUpdateProposal(), raw_candidate_text: "do not store" },
+    })).toBeNull();
+  });
+
   it("canonicalizes valid inbound requests before authority use", () => {
     const result = canonicalizeGatewayInbound({
       id: " req-1 ",

@@ -2,13 +2,62 @@ import { describe, expect, it } from "vitest";
 import {
   MEMORY_COMMIT_SCHEMA_VERSION,
   MEMORY_COMMIT_V1_SCHEMA_VERSION,
+  MEANING_UPDATE_PROPOSAL_SCHEMA_VERSION,
+  OBSERVATION_ACQUISITION_SCHEMA_VERSION,
   MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION,
   createMemoryUpdateReceipt,
   memoryCommitContentDigest,
+  parseMeaningUpdateProposal,
+  parseObservationAcquisitionRecord,
   parseMemoryCommit,
   parseMemoryCommitV2,
   parseMemoryUpdateReceipt,
 } from "../src/状態更新契約.js";
+
+function validObservationAcquisitionRecord() {
+  return {
+    schema_version: OBSERVATION_ACQUISITION_SCHEMA_VERSION,
+    record_type: "observation_acquisition" as const,
+    record_id: "observation:0123456789abcdef",
+    request_id: "request-001",
+    source_channel: "webchat",
+    actor_digest: "a".repeat(64),
+    acquired_at: 1,
+    content_digest: "b".repeat(64),
+    content_chars: 12,
+    metadata_key_count: 0,
+    reply_to_present: false,
+    boundary_status: "canonical" as const,
+    semantic_status: "unassessed" as const,
+    adoption_status: "not_adopted" as const,
+    used_as_world_truth: false as const,
+    used_for_authority: false as const,
+  };
+}
+
+function validMeaningUpdateProposal() {
+  return {
+    schema_version: MEANING_UPDATE_PROPOSAL_SCHEMA_VERSION,
+    record_type: "meaning_update_proposal" as const,
+    proposal_ref: "proposal-001",
+    candidate_ref: "candidate:001",
+    candidate_digest: "c".repeat(64),
+    target_ref: "memory:fact-001",
+    prior_version_ref: "version:4",
+    supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
+    counterevidence_review: {
+      status: "reviewed_with_references" as const,
+      review_scope: { reference: "scope:counterevidence-001", digest: "e".repeat(64) },
+      references: [{ reference: "evidence:counter-001", digest: "f".repeat(64) }],
+    },
+    applicability_scope: { reference: "scope:applicability-001", digest: "1".repeat(64) },
+    reflection_target_ref: "reflection:goal-001",
+    proposal_status: "unverified" as const,
+    adoption_status: "not_adopted" as const,
+    may_apply: false as const,
+    used_for_authority: false as const,
+  };
+}
 
 function validCommit() {
   const content = {
@@ -38,6 +87,26 @@ function validReceipt() {
 }
 
 describe("状態更新契約", () => {
+  it("受領した一次記録を未評価・未採用で固定する", () => {
+    const record = validObservationAcquisitionRecord();
+    expect(parseObservationAcquisitionRecord(record)).toMatchObject({ ok: true });
+    expect(parseObservationAcquisitionRecord({ ...record, used_as_world_truth: true }).ok).toBe(false);
+    expect(parseObservationAcquisitionRecord({ ...record, adoption_status: "adopted" }).ok).toBe(false);
+    expect(parseObservationAcquisitionRecord({ ...record, raw_content: "do not persist" }).ok).toBe(false);
+  });
+
+  it("根拠・反証・範囲・旧版・反映先を持つ意味更新案だけを非採用提案として解析する", () => {
+    const proposal = validMeaningUpdateProposal();
+    expect(parseMeaningUpdateProposal(proposal)).toMatchObject({ ok: true });
+    expect(parseMeaningUpdateProposal({ ...proposal, counterevidence_review: {
+      status: "reviewed_with_references",
+      review_scope: proposal.counterevidence_review.review_scope,
+      references: [],
+    } }).ok).toBe(false);
+    expect(parseMeaningUpdateProposal({ ...proposal, may_apply: true }).ok).toBe(false);
+    expect(parseMeaningUpdateProposal({ ...proposal, raw_candidate_text: "private claim" }).ok).toBe(false);
+  });
+
   it("canonical digestで内容を検査し、正常なMemoryCommitを解析する", () => {
     const commit = validCommit();
     const parsed = parseMemoryCommit(commit);
