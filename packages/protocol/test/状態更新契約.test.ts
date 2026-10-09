@@ -1,16 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   MEMORY_COMMIT_SCHEMA_VERSION,
+  MEMORY_COMMIT_V1_SCHEMA_VERSION,
   MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION,
   createMemoryUpdateReceipt,
   memoryCommitContentDigest,
   parseMemoryCommit,
+  parseMemoryCommitV2,
   parseMemoryUpdateReceipt,
 } from "../src/状態更新契約.js";
 
 function validCommit() {
   const content = {
     schema_version: MEMORY_COMMIT_SCHEMA_VERSION,
+    expected_version: 0,
     update_id: "update-001",
     j_event_id: "j-event-001",
     changes: [
@@ -46,6 +49,26 @@ describe("状態更新契約", () => {
     expect(parsed.canonical_content_json.indexOf('"a"')).toBeLessThan(
       parsed.canonical_content_json.indexOf('"z"'),
     );
+    const otherVersion = {
+      schema_version: commit.schema_version,
+      expected_version: 1,
+      update_id: commit.update_id,
+      j_event_id: commit.j_event_id,
+      changes: commit.changes,
+    };
+    expect(memoryCommitContentDigest(otherVersion)).not.toBe(commit.content_digest);
+  });
+
+  it("V1履歴を読めるが新規書込み契約V2では受け付けない", () => {
+    const content = {
+      schema_version: MEMORY_COMMIT_V1_SCHEMA_VERSION,
+      update_id: "legacy-update",
+      j_event_id: "legacy-j-event",
+      changes: [{ operation: "upsert" as const, record_id: "legacy-fact", value: 1 }],
+    };
+    const legacy = { ...content, content_digest: memoryCommitContentDigest(content) };
+    expect(parseMemoryCommit(legacy).ok).toBe(true);
+    expect(parseMemoryCommitV2(legacy)).toEqual({ ok: false, reason: "schema_validation_failed" });
   });
 
   it("unknown fieldと同一recordへの重複変更を拒否する", () => {
@@ -57,6 +80,7 @@ describe("状態更新契約", () => {
 
     const duplicateContent = {
       schema_version: commit.schema_version,
+      expected_version: commit.expected_version,
       update_id: commit.update_id,
       j_event_id: commit.j_event_id,
       changes: [
@@ -75,6 +99,7 @@ describe("状態更新契約", () => {
     const commit = validCommit();
     const dangerous = {
       schema_version: commit.schema_version,
+      expected_version: commit.expected_version,
       update_id: commit.update_id,
       j_event_id: commit.j_event_id,
       changes: [

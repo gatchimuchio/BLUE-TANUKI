@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-export const MEMORY_COMMIT_SCHEMA_VERSION = "blue-tanuki.memory-commit.v1" as const;
+export const MEMORY_COMMIT_V1_SCHEMA_VERSION = "blue-tanuki.memory-commit.v1" as const;
+export const MEMORY_COMMIT_V2_SCHEMA_VERSION = "blue-tanuki.memory-commit.v2" as const;
+export const MEMORY_COMMIT_SCHEMA_VERSION = MEMORY_COMMIT_V2_SCHEMA_VERSION;
 export const MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION = "blue-tanuki.memory-update-receipt.v1" as const;
 export const MEMORY_COMMIT_MAX_BYTES = 1_048_576;
 export const MEMORY_COMMIT_MAX_DEPTH = 32;
@@ -41,16 +43,40 @@ const MemoryCommitChangeSchema = z.discriminatedUnion("operation", [
   }).strict(),
 ]);
 
-export const MemoryCommitV1Schema = z.object({
-  schema_version: z.literal(MEMORY_COMMIT_SCHEMA_VERSION),
+const MemoryCommitSharedFields = {
   update_id: IdentifierSchema,
   j_event_id: IdentifierSchema,
   changes: z.array(MemoryCommitChangeSchema).min(1).max(MEMORY_COMMIT_MAX_CHANGES),
   content_digest: DigestSchema,
+};
+
+export const MemoryCommitV1Schema = z.object({
+  schema_version: z.literal(MEMORY_COMMIT_V1_SCHEMA_VERSION),
+  ...MemoryCommitSharedFields,
 }).strict();
+
+export const MemoryCommitV2Schema = z.object({
+  schema_version: z.literal(MEMORY_COMMIT_V2_SCHEMA_VERSION),
+  expected_version: z.number().int().nonnegative().safe(),
+  ...MemoryCommitSharedFields,
+}).strict();
+
+const MemoryCommitSchema = z.discriminatedUnion("schema_version", [
+  MemoryCommitV1Schema,
+  MemoryCommitV2Schema,
+]);
+
+const MemoryCommitContentSchema = z.discriminatedUnion("schema_version", [
+  MemoryCommitV1Schema.omit({ content_digest: true }),
+  MemoryCommitV2Schema.omit({ content_digest: true }),
+]);
 
 export type MemoryCommitChangeV1 = z.infer<typeof MemoryCommitChangeSchema>;
 export type MemoryCommitV1 = z.infer<typeof MemoryCommitV1Schema>;
+export type MemoryCommitV2 = z.infer<typeof MemoryCommitV2Schema>;
+export type MemoryCommitContentV1 = Omit<MemoryCommitV1, "content_digest">;
+export type MemoryCommitContentV2 = Omit<MemoryCommitV2, "content_digest">;
+export type MemoryCommitContent = MemoryCommitContentV1 | MemoryCommitContentV2;
 
 const MemoryUpdateReceiptV1BaseSchema = z.object({
   schema_version: z.literal(MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION),
@@ -89,7 +115,16 @@ export type MemoryCommitFailureReason =
 export type MemoryCommitParseResult =
   | {
       ok: true;
-      commit: MemoryCommitV1;
+      commit: MemoryCommitV1 | MemoryCommitV2;
+      canonical_content_json: string;
+      content_digest: string;
+    }
+  | { ok: false; reason: MemoryCommitFailureReason };
+
+export type MemoryCommitV2ParseResult =
+  | {
+      ok: true;
+      commit: MemoryCommitV2;
       canonical_content_json: string;
       content_digest: string;
     }
@@ -104,13 +139,13 @@ export type MemoryReceiptParseResult =
  * This function validates shape only; it does not create or verify approval.
  */
 export function memoryCommitContentDigest(
-  input: Omit<MemoryCommitV1, "content_digest">,
+  input: MemoryCommitContent,
 ): string {
   const rawFailure = safelyInspectJsonValue(input);
   if (rawFailure || canonicalByteLength(input) > MEMORY_COMMIT_MAX_BYTES) {
     throw new Error("invalid memory commit content");
   }
-  const parsed = MemoryCommitV1Schema.omit({ content_digest: true }).safeParse(input);
+  const parsed = MemoryCommitContentSchema.safeParse(input);
   if (!parsed.success) {
     throw new Error("invalid memory commit content");
   }
@@ -137,7 +172,7 @@ export function parseMemoryCommit(value: unknown): MemoryCommitParseResult {
   if (canonicalByteLength(value) > MEMORY_COMMIT_MAX_BYTES) {
     return { ok: false, reason: "payload_too_large" };
   }
-  const parsed = MemoryCommitV1Schema.safeParse(value);
+  const parsed = MemoryCommitSchema.safeParse(value);
   if (!parsed.success) return { ok: false, reason: "schema_validation_failed" };
 
   const seenRecordIds = new Set<string>();
@@ -170,6 +205,16 @@ export function parseMemoryCommit(value: unknown): MemoryCommitParseResult {
   };
 }
 
+/** Parse a current write request. V1 remains readable for persisted history but cannot omit expected_version on new writes. */
+export function parseMemoryCommitV2(value: unknown): MemoryCommitV2ParseResult {
+  const parsed = parseMemoryCommit(value);
+  if (!parsed.ok) return parsed;
+  if (parsed.commit.schema_version !== MEMORY_COMMIT_V2_SCHEMA_VERSION) {
+    return { ok: false, reason: "schema_validation_failed" };
+  }
+  return { ...parsed, commit: parsed.commit };
+}
+
 /** Build an immutable receipt body with a digest over all other fields. */
 export function createMemoryUpdateReceipt(
   input: Omit<MemoryUpdateReceiptV1, "receipt_digest">,
@@ -198,7 +243,16 @@ export function parseMemoryUpdateReceipt(value: unknown): MemoryReceiptParseResu
   return { ok: true, receipt: Object.freeze(parsed.data) };
 }
 
-function commitContent(commit: MemoryCommitV1): Omit<MemoryCommitV1, "content_digest"> {
+function commitContent(commit: MemoryCommitV1 | MemoryCommitV2): MemoryCommitContent {
+  if (commit.schema_version === MEMORY_COMMIT_V2_SCHEMA_VERSION) {
+    return {
+      schema_version: commit.schema_version,
+      expected_version: commit.expected_version,
+      update_id: commit.update_id,
+      j_event_id: commit.j_event_id,
+      changes: commit.changes,
+    };
+  }
   return {
     schema_version: commit.schema_version,
     update_id: commit.update_id,

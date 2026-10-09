@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — M更新の期待版と冪等再送
+
+- C03.02として新規 `MemoryCommit` V2へ期待M版を加え、canonical digestに結合した。V1 commit/eventは既存保存履歴の検証と再生用に維持する。
+- M transaction内の期待版比較を追加し、同ID同digestはJ参照を再照合して保存済みreceiptを返し、同ID異digestと古い期待版は状態を変えず拒否する。新規V2 eventをV1履歴の後へ追記できることを局所SQLite fixtureで検証する。
+- J永続化・実承認consumer、Gateway/Controller production consumer、J帰還、crash/破損復旧、live/installed、release readiness、親C03全体、P13 owner GOは成立させない。
+
 ## 2026-10-09 — M更新の原子的な確定
 
 - C03.01として、strict版付き`MemoryCommit`/receipt契約、canonical digest、入力上限と危険key拒否をprotocolへ追加した。

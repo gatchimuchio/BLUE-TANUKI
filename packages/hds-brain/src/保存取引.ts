@@ -5,10 +5,11 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import {
   memoryCommitContentDigest,
-  parseMemoryCommit,
+  parseMemoryCommitV2,
   parseMemoryUpdateReceipt,
   createMemoryUpdateReceipt,
   type MemoryCommitV1,
+  type MemoryCommitV2,
   type MemoryUpdateReceiptV1,
 } from "@blue-tanuki/protocol";
 
@@ -17,7 +18,8 @@ import {
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 const MEMORY_STORAGE_SCHEMA_VERSION = 1;
-const MEMORY_EVENT_SCHEMA_VERSION = "blue-tanuki.memory-event.v1";
+const MEMORY_EVENT_V1_SCHEMA_VERSION = "blue-tanuki.memory-event.v1" as const;
+const MEMORY_EVENT_V2_SCHEMA_VERSION = "blue-tanuki.memory-event.v2" as const;
 const GENESIS_EVENT_DIGEST = "GENESIS";
 
 export interface JMemoryApprovalReference {
@@ -38,7 +40,8 @@ export interface JMemoryApprovalReader {
 export type MemoryUpdateFailureReason =
   | "schema_validation_failed"
   | "j_approval_not_verified"
-  | "update_id_already_consumed"
+  | "update_id_content_conflict"
+  | "expected_version_conflict"
   | "store_integrity_failed"
   | "storage_failed"
   | "commit_outcome_unknown"
@@ -55,8 +58,7 @@ export interface MemoryStoreSnapshot {
   readonly used_for_authority: false;
 }
 
-interface MemoryEventBody {
-  readonly schema_version: typeof MEMORY_EVENT_SCHEMA_VERSION;
+interface MemoryEventFields {
   readonly event_id: string;
   readonly revision: number;
   readonly previous_event_digest: string;
@@ -67,9 +69,20 @@ interface MemoryEventBody {
   readonly committed_at_utc: string;
 }
 
-interface StoredMemoryEvent extends MemoryEventBody {
-  readonly event_digest: string;
+interface MemoryEventV1 extends MemoryEventFields {
+  readonly schema_version: typeof MEMORY_EVENT_V1_SCHEMA_VERSION;
 }
+
+interface MemoryEventV2 extends MemoryEventFields {
+  readonly schema_version: typeof MEMORY_EVENT_V2_SCHEMA_VERSION;
+  readonly expected_version: number;
+}
+
+type MemoryEventBody = MemoryEventV1 | MemoryEventV2;
+
+type StoredMemoryEvent = MemoryEventBody & {
+  readonly event_digest: string;
+};
 
 interface SqlRow {
   readonly [key: string]: unknown;
@@ -130,7 +143,7 @@ export class MTransactionStore {
 
   applyApprovedMemoryCommit(input: unknown, jApproval: JMemoryApprovalReader): MemoryUpdateResult {
     if (this.closed || this.unavailable) return { ok: false, reason: "store_unavailable" };
-    const parsed = parseMemoryCommit(input);
+    const parsed = parseMemoryCommitV2(input);
     if (!parsed.ok) return { ok: false, reason: "schema_validation_failed" };
 
     let transactionStarted = false;
@@ -142,12 +155,6 @@ export class MTransactionStore {
         this.rollbackOrPoison();
         return { ok: false, reason: this.unavailable ? "commit_outcome_unknown" : "store_integrity_failed" };
       }
-      if (this.database.prepare("SELECT 1 AS present FROM m_updates WHERE update_id = ?").get(parsed.commit.update_id)) {
-        this.database.exec("ROLLBACK");
-        transactionStarted = false;
-        return { ok: false, reason: "update_id_already_consumed" };
-      }
-
       const approvalReference: JMemoryApprovalReference = Object.freeze({
         update_id: parsed.commit.update_id,
         j_event_id: parsed.commit.j_event_id,
@@ -165,6 +172,39 @@ export class MTransactionStore {
         return { ok: false, reason: "j_approval_not_verified" };
       }
 
+      const consumed = this.database.prepare(
+        "SELECT content_digest FROM m_updates WHERE update_id = ?",
+      ).get(parsed.commit.update_id);
+      if (consumed) {
+        const consumedDigest = stringValue(consumed.content_digest);
+        if (consumedDigest !== parsed.content_digest) {
+          this.database.exec("ROLLBACK");
+          transactionStarted = false;
+          return { ok: false, reason: "update_id_content_conflict" };
+        }
+        const receiptRow = this.database.prepare(
+          "SELECT receipt_json FROM m_receipts WHERE update_id = ?",
+        ).get(parsed.commit.update_id);
+        const receiptJson = stringValue(receiptRow?.receipt_json);
+        let savedReceipt: ReturnType<typeof parseMemoryUpdateReceipt>;
+        try {
+          savedReceipt = receiptJson === null
+            ? { ok: false, reason: "schema_validation_failed" }
+            : parseMemoryUpdateReceipt(JSON.parse(receiptJson) as unknown);
+        } catch {
+          savedReceipt = { ok: false, reason: "schema_validation_failed" };
+        }
+        if (!savedReceipt.ok || savedReceipt.receipt.update_id !== parsed.commit.update_id ||
+            savedReceipt.receipt.content_digest !== parsed.content_digest) {
+          this.rollbackOrPoison();
+          transactionStarted = false;
+          return { ok: false, reason: this.unavailable ? "commit_outcome_unknown" : "store_integrity_failed" };
+        }
+        this.database.exec("ROLLBACK");
+        transactionStarted = false;
+        return { ok: true, receipt: savedReceipt.receipt };
+      }
+
       const state = this.database.prepare(
         "SELECT revision, event_digest FROM m_state WHERE singleton = 1",
       ).get();
@@ -174,10 +214,16 @@ export class MTransactionStore {
         this.rollbackOrPoison();
         return { ok: false, reason: this.unavailable ? "commit_outcome_unknown" : "store_integrity_failed" };
       }
+      if (parsed.commit.expected_version !== previousRevision) {
+        this.database.exec("ROLLBACK");
+        transactionStarted = false;
+        return { ok: false, reason: "expected_version_conflict" };
+      }
 
       const committedAt = this.now().toISOString();
-      const eventBody: MemoryEventBody = {
-        schema_version: MEMORY_EVENT_SCHEMA_VERSION,
+      const eventBody: MemoryEventV2 = {
+        schema_version: MEMORY_EVENT_V2_SCHEMA_VERSION,
+        expected_version: parsed.commit.expected_version,
         event_id: `m-event:${randomUUID()}`,
         revision: previousRevision + 1,
         previous_event_digest: previousEventDigest,
@@ -473,8 +519,14 @@ function verifyDatabase(database: DatabaseSyncType): boolean {
       return false;
     }
     if (!isRecord(eventValue)) return false;
-    const event = eventValue as Partial<StoredMemoryEvent>;
-    if (event.schema_version !== MEMORY_EVENT_SCHEMA_VERSION ||
+    const event = eventValue as Record<string, unknown>;
+    const isLegacyEvent = event.schema_version === MEMORY_EVENT_V1_SCHEMA_VERSION;
+    const isCurrentEvent = event.schema_version === MEMORY_EVENT_V2_SCHEMA_VERSION;
+    const expectedEventKeys = isLegacyEvent
+      ? ["schema_version", "event_id", "revision", "previous_event_digest", "update_id", "j_event_id", "content_digest", "changes", "committed_at_utc", "event_digest"]
+      : ["schema_version", "expected_version", "event_id", "revision", "previous_event_digest", "update_id", "j_event_id", "content_digest", "changes", "committed_at_utc", "event_digest"];
+    if ((!isLegacyEvent && !isCurrentEvent) || Object.keys(event).length !== expectedEventKeys.length ||
+        expectedEventKeys.some((key) => !Object.hasOwn(event, key)) ||
         typeof event.event_id !== "string" || event.event_id !== eventRow.event_id ||
         typeof event.revision !== "number" || event.revision !== revision + 1 ||
         event.revision !== eventRow.revision || event.revision !== updateRow.revision ||
@@ -488,22 +540,32 @@ function verifyDatabase(database: DatabaseSyncType): boolean {
         typeof event.content_digest !== "string" || event.content_digest !== updateRow.content_digest ||
         typeof event.committed_at_utc !== "string" ||
         !Array.isArray(event.changes)) return false;
+    if (isCurrentEvent && (typeof event.expected_version !== "number" ||
+        !Number.isSafeInteger(event.expected_version) || event.expected_version !== event.revision - 1)) return false;
     if (seenUpdateIds.has(event.update_id)) return false;
     seenUpdateIds.add(event.update_id);
     if (canonicalJson(eventValue) !== eventJson) return false;
 
-    const content = {
-      schema_version: "blue-tanuki.memory-commit.v1" as const,
-      update_id: event.update_id,
-      j_event_id: event.j_event_id,
-      changes: event.changes,
-    };
+    const content = isCurrentEvent
+      ? {
+          schema_version: "blue-tanuki.memory-commit.v2" as const,
+          expected_version: event.expected_version as number,
+          update_id: event.update_id,
+          j_event_id: event.j_event_id,
+          changes: event.changes as MemoryCommitV2["changes"],
+        }
+      : {
+          schema_version: "blue-tanuki.memory-commit.v1" as const,
+          update_id: event.update_id as string,
+          j_event_id: event.j_event_id as string,
+          changes: event.changes as MemoryCommitV1["changes"],
+        };
     try {
       if (memoryCommitContentDigest(content) !== event.content_digest) return false;
     } catch {
       return false;
     }
-    const { event_digest: _eventDigest, ...eventBody } = event as StoredMemoryEvent;
+    const { event_digest: _eventDigest, ...eventBody } = event as unknown as StoredMemoryEvent;
     const computedEventDigest = sha256(canonicalJson(eventBody));
     if (computedEventDigest !== event.event_digest) return false;
 
