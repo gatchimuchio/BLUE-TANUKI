@@ -58,6 +58,11 @@ import {
 } from "./runtime_invariants.js";
 import { fReferenceForId } from "./f_reference.js";
 import {
+  buildMemoryCitationSystemMessages,
+  redactUnverifiedReferences,
+  reviewMemoryCitationOutput,
+} from "./memory_citation_review.js";
+import {
   evaluateHDSBrainHealth,
   type HDSBrainHealth,
   type RuntimeDependencyCheck,
@@ -625,6 +630,32 @@ export class HDSUpperController {
     this.audit.append(log);
   }
 
+  /**
+   * J reviews the downstream C response while the originating search trace is
+   * still available. Call this before onFeedback removes the in-flight log.
+   */
+  reviewMemoryCitations(command: ExecuteCommand, feedback: ExecuteFeedback): ExecuteFeedback {
+    if (command.type !== "llm_call" || feedback.command_id !== command.id || feedback.status !== "success") {
+      return feedback;
+    }
+    const rawContent = llmResultContent(feedback.result);
+    if (rawContent === null) return feedback;
+
+    const sourceLog = this.inflight.get(command.id);
+    if (!sourceLog || sourceLog.commit.decision !== "ASSERT") {
+      return withLlmResultContent(feedback, redactUnverifiedReferences(rawContent));
+    }
+
+    const reviewed = reviewMemoryCitationOutput({
+      trace: sourceLog.frame.memory_trace,
+      request_id: sourceLog.request_id,
+      command_id: command.id,
+      content: rawContent,
+    });
+    if (reviewed.audit_log) this.audit.append(reviewed.audit_log);
+    return withLlmResultContent(feedback, reviewed.content);
+  }
+
   private captureMemoryReference(log: DecisionLog): void {
     const captured = this.memory?.capture(log);
     if (!isCapturedMemoryReference(captured)) return;
@@ -859,7 +890,10 @@ export class HDSUpperController {
     // declaration of WHERE the executor should persist, not a signal
     // that HDS-BRAIN is consuming past context.
     const llmPayload: LLMCallPayload = {
-      messages: [{ role: "user", content: req.content }],
+      messages: [
+        ...buildMemoryCitationSystemMessages(log.frame.memory_trace),
+        { role: "user", content: req.content },
+      ],
       session_id: `${req.channel}:${req.user}`,
       backend_hint: this.llm_route.backend_hint,
       model: this.llm_route.model,
@@ -877,6 +911,22 @@ export class HDSUpperController {
       upstream_decision,
     };
   }
+}
+
+function llmResultContent(result: unknown): string | null {
+  if (typeof result === "string") return result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  const content = (result as Record<string, unknown>).content;
+  return typeof content === "string" ? content : null;
+}
+
+function withLlmResultContent(feedback: ExecuteFeedback, content: string): ExecuteFeedback {
+  if (typeof feedback.result === "string") return { ...feedback, result: content };
+  if (!feedback.result || typeof feedback.result !== "object" || Array.isArray(feedback.result)) return feedback;
+  return {
+    ...feedback,
+    result: { ...(feedback.result as Record<string, unknown>), content },
+  };
 }
 
 function requestWithNormalizedContent(req: InboundRequest, content: string): InboundRequest {

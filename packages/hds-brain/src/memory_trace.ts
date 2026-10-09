@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import type {
   HDSProcessDefinition,
   MemoryHit,
   MemoryReadPolicy,
+  MemorySearchPlan,
   MemoryTrace,
 } from "./types.js";
 import type { MemoryEntry } from "./long-term-memory/index.js";
@@ -18,6 +20,7 @@ export interface MemoryReaderPort {
   all?: () => readonly unknown[];
   findByRequestId?: (request_id: string) => unknown | null;
   findByTag?: (tag: string, limit?: number) => readonly unknown[];
+  verify?: () => boolean;
 }
 
 export function buildMemoryTrace(
@@ -26,8 +29,15 @@ export function buildMemoryTrace(
   reader?: MemoryReaderPort,
 ): MemoryTrace {
   const policy = process.memory_policy;
-  if (!policy.enabled || !reader || !policy.allowed_sources.includes("hds_ltm")) {
-    return emptyTrace(policy, process.process_id);
+  const source_integrity_verified = Boolean(
+    policy.enabled &&
+    policy.allowed_sources.includes("hds_ltm") &&
+    reader &&
+    readerIntegrityVerified(reader),
+  );
+  const search_plan = createSearchPlan(req, process, source_integrity_verified);
+  if (!source_integrity_verified || !reader) {
+    return emptyTrace(policy, process.process_id, search_plan);
   }
 
   const candidates = collectCandidates(reader, policy);
@@ -45,6 +55,22 @@ export function buildMemoryTrace(
       entry_hash: entry.entry_hash,
       reason,
       matched_on,
+      provenance: {
+        source_store: "hds_ltm",
+        record_id: entry.request_id,
+        version: entry.entry_hash,
+        source_ref: fReferenceForId(entry.request_id),
+        captured_at_ms: entry.timestamp,
+        ...(entry.process ? {
+          source_process_id: entry.process.process_id,
+          source_process_version: entry.process.version,
+        } : {}),
+        ...(entry.actor ? { source_actor_kind: entry.actor.actor_kind } : {}),
+        ...(entry.commit ? {
+          source_decision: entry.commit.decision,
+          source_decision_hash: entry.commit.hash,
+        } : {}),
+      },
       summary: {
         goal: entry.goal,
         problem_definition_id: entry.problem_definition_id,
@@ -88,18 +114,80 @@ export function buildMemoryTrace(
   return {
     policy_id: policy.policy_id,
     process_id: process.process_id,
+    search_plan,
     used_for_authority: false,
     hits,
   };
 }
 
-function emptyTrace(policy: MemoryReadPolicy, process_id: string): MemoryTrace {
+function emptyTrace(
+  policy: MemoryReadPolicy,
+  process_id: string,
+  search_plan: MemorySearchPlan,
+): MemoryTrace {
   return {
     policy_id: policy.policy_id,
     process_id,
+    search_plan,
     used_for_authority: false,
     hits: [],
   };
+}
+
+function createSearchPlan(
+  req: InboundRequest,
+  process: HDSProcessDefinition,
+  source_integrity_verified: boolean,
+): MemorySearchPlan {
+  const policy = process.memory_policy;
+  const purpose = "current_request_citation_context" as const;
+  const query_digest = digest(req.content);
+  const allowed_sources = source_integrity_verified
+    ? ["hds_ltm"] as const
+    : [] as const;
+  const retrieval_modes = policy.enabled ? [...policy.retrieval_modes] : [];
+  const application_scope_id = digest(JSON.stringify({
+    request_id: req.id,
+    process_id: process.process_id,
+    policy_id: policy.policy_id,
+    query_digest,
+  }));
+  const plan_id = digest(JSON.stringify({
+    purpose,
+    request_id: req.id,
+    process_id: process.process_id,
+    query_digest,
+    application_scope_id,
+    allowed_sources,
+    retrieval_modes,
+    max_hits: Math.max(0, policy.max_hits),
+    source_integrity_verified,
+  }));
+  return {
+    plan_id,
+    purpose,
+    request_id: req.id,
+    process_id: process.process_id,
+    query_digest,
+    application_scope_id,
+    allowed_sources: [...allowed_sources],
+    retrieval_modes,
+    max_hits: Math.max(0, policy.max_hits),
+    source_integrity_verified,
+    used_for_authority: false,
+  };
+}
+
+function readerIntegrityVerified(reader: MemoryReaderPort): boolean {
+  try {
+    return typeof reader.verify === "function" && reader.verify() === true;
+  } catch {
+    return false;
+  }
+}
+
+function digest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function collectCandidates(reader: MemoryReaderPort, policy: MemoryReadPolicy): MemoryEntry[] {

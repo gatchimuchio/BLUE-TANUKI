@@ -164,6 +164,44 @@ describe("audit-dump format", () => {
     expect(txt).toMatch(/Exit code: 0/);
   });
 
+  it("projects memory citation review as metadata without including source content", () => {
+    const log = new AuditLog();
+    log.append({
+      kind: "memory_citation_review",
+      event: "memory.citation_review",
+      request_id: "r-citation",
+      command_id: "cmd-citation",
+      search_plan_id: "a".repeat(64),
+      application_scope_id: "b".repeat(64),
+      status: "accepted",
+      candidate_count: 2,
+      candidate_references: [
+        { record_id: "F:source-a", version: "c".repeat(64) },
+        { record_id: "F:source-b", version: "d".repeat(64) },
+      ],
+      source_result_digest: "e".repeat(64),
+      reviewed_content_digest: "f".repeat(64),
+      accepted_citations: [{
+        claim_digest: "1".repeat(64),
+        supporting: { record_id: "F:source-a", version: "c".repeat(64) },
+        counterevidence: { record_id: "F:source-b", version: "d".repeat(64) },
+      }],
+      rejected_proposal_count: 0,
+      rejection_reasons: [],
+      used_for_authority: false,
+      timestamp: 1,
+    });
+
+    const report = auditDumpReportFromLog(log);
+    const text = formatAuditTextReport(report);
+    const json = formatAuditJsonReport(report);
+    expect(text).toContain("MEM:CITATION:accepted");
+    expect(text).toContain("candidates=2 accepted=1 rejected=0 used_for_authority=false");
+    expect(json).toContain("memory_citation_review");
+    expect(json).toContain("application_scope_id");
+    expect(json).not.toContain("private claim text");
+  });
+
   it("text format includes output audit entries without raw output", () => {
     const log = new AuditLog();
     log.append(makeLog("r-output"));

@@ -174,7 +174,8 @@ export interface WebChatAuthorityTraceItem {
     | "output_audit"
     | "runtime_invariants"
     | "schedule_lifecycle"
-    | "memory_reference";
+    | "memory_reference"
+    | "memory_citation_review";
   event: string;
   request_id: string | null;
   command_id?: string;
@@ -192,6 +193,19 @@ export interface WebChatAuthorityTraceItem {
   used_for_authority?: false;
   matched_on?: string;
   summary?: unknown;
+  search_plan_id?: string;
+  application_scope_id?: string;
+  candidate_count?: number;
+  candidate_references?: ReadonlyArray<{ record_id: string; version: string }>;
+  accepted_citations?: ReadonlyArray<{
+    claim_digest: string;
+    supporting: { record_id: string; version: string };
+    counterevidence: { record_id: string; version: string };
+  }>;
+  rejected_proposal_count?: number;
+  rejection_reasons?: readonly string[];
+  source_result_digest?: string;
+  reviewed_content_digest?: string;
   reason?: string;
   decision?: string;
   status?: string;

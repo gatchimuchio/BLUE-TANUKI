@@ -211,6 +211,10 @@ export function formatAuditTextReport(report: AuditDumpReport): string {
         const status = `MEM:${e.log.event}`;
         const reqId = e.log.request_id ?? "(unknown)";
         lines.push(`  [${String(e.index).padStart(4, "0")}] ${status.padEnd(18)} ${hashShort}… request_id=${reqId} ref=${e.log.f_reference} used_for_authority=${e.log.used_for_authority}`);
+      } else if (e.log.kind === "memory_citation_review") {
+        const status = `MEM:CITATION:${e.log.status}`;
+        const reqId = e.log.request_id ?? "(unknown)";
+        lines.push(`  [${String(e.index).padStart(4, "0")}] ${status.padEnd(18)} ${hashShort}… request_id=${reqId} command_id=${e.log.command_id} candidates=${e.log.candidate_count} accepted=${e.log.accepted_citations.length} rejected=${e.log.rejected_proposal_count} used_for_authority=${e.log.used_for_authority}`);
       } else if (e.log.kind === "command_lifecycle") {
         const status = `COMMAND:${e.log.phase}`;
         const reqId = e.log.request_id ?? "(unknown)";

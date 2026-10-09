@@ -56,6 +56,7 @@ import type {
   WebChatResumeContext,
 } from "@blue-tanuki/channel-webchat";
 import { renderCommandOutput } from "./result_render.js";
+import { finalizeCommandOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createWebChatSettingsSurface } from "./settings_surface.js";
@@ -816,7 +817,6 @@ export async function serve(): Promise<ServeShutdown> {
         },
       });
     }
-    hds.onFeedback(fb);
     const executionHistory = recordExecutionHistory(cmd, log, origin, actor, fb);
     if (fb.status === "failed") {
       const extracted = executionHistory
@@ -826,8 +826,15 @@ export async function serve(): Promise<ServeShutdown> {
       runFailureMemoryVerification("post_failure");
     }
     coreLog.info("command", { command: cmd.id.slice(0, 8), status: fb.status, duration_ms: fb.metrics.duration_ms });
-    const content = renderCommandOutput(cmd, fb);
-    const output = hds.onOutputAudit({ command: cmd, feedback: fb, rendered_output: content, target_surface: "channel", request_id: log.request_id });
+    const finalized = finalizeCommandOutput({
+      hds,
+      command: cmd,
+      feedback: fb,
+      target_surface: "channel",
+      request_id: log.request_id,
+    });
+    const content = finalized.rendered_output;
+    const output = finalized.output_audit;
     recordFinalOutputHistory(log, origin, actor, output);
     if (content) await dispatcher.dispatch({ channel: origin.channel, target: replyTarget(origin), content }, { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
     return { status: fb.status };
@@ -1264,6 +1271,27 @@ export async function serve(): Promise<ServeShutdown> {
           matched_on: log.matched_on,
           reason: log.reason,
           summary: log.summary,
+        });
+        continue;
+      }
+
+      if (log.kind === "memory_citation_review") {
+        items.push({
+          ...base,
+          kind: "memory_citation_review",
+          event: log.event,
+          command_id: log.command_id,
+          search_plan_id: log.search_plan_id,
+          application_scope_id: log.application_scope_id,
+          status: log.status,
+          candidate_count: log.candidate_count,
+          candidate_references: log.candidate_references,
+          accepted_citations: log.accepted_citations,
+          rejected_proposal_count: log.rejected_proposal_count,
+          rejection_reasons: log.rejection_reasons,
+          source_result_digest: log.source_result_digest,
+          reviewed_content_digest: log.reviewed_content_digest,
+          used_for_authority: log.used_for_authority,
         });
         continue;
       }

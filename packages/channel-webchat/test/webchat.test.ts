@@ -1468,6 +1468,33 @@ describe("WebChatChannel — authority trace API", () => {
             reason: "default_full_access_without_final_review_exception",
             timestamp: 12345,
           },
+          {
+            index: 4,
+            entry_hash: "def456",
+            kind: "memory_citation_review",
+            event: "memory.citation_review",
+            request_id: "req-2",
+            command_id: "cmd-2",
+            search_plan_id: "a".repeat(64),
+            application_scope_id: "b".repeat(64),
+            status: "accepted",
+            candidate_count: 2,
+            candidate_references: [
+              { record_id: "F:source-a", version: "c".repeat(64) },
+              { record_id: "F:source-b", version: "d".repeat(64) },
+            ],
+            accepted_citations: [{
+              claim_digest: "e".repeat(64),
+              supporting: { record_id: "F:source-a", version: "c".repeat(64) },
+              counterevidence: { record_id: "F:source-b", version: "d".repeat(64) },
+            }],
+            rejected_proposal_count: 0,
+            rejection_reasons: [],
+            source_result_digest: "f".repeat(64),
+            reviewed_content_digest: "1".repeat(64),
+            used_for_authority: false,
+            timestamp: 12346,
+          },
         ],
       },
     });
@@ -1485,7 +1512,7 @@ describe("WebChatChannel — authority trace API", () => {
       });
       expect(ok.status).toBe(200);
       const body = JSON.parse(ok.text);
-      expect(body.authority_trace).toHaveLength(1);
+      expect(body.authority_trace).toHaveLength(2);
       expect(body.authority_trace[0]).toMatchObject({
         kind: "authority_event",
         event: "approval_allowed",
@@ -1493,6 +1520,16 @@ describe("WebChatChannel — authority trace API", () => {
         command_id: "cmd-1",
         actor: "alice",
       });
+      expect(body.authority_trace[1]).toMatchObject({
+        kind: "memory_citation_review",
+        event: "memory.citation_review",
+        request_id: "req-2",
+        command_id: "cmd-2",
+        status: "accepted",
+        candidate_count: 2,
+        used_for_authority: false,
+      });
+      expect(body.authority_trace[1]).not.toHaveProperty("claim");
     } finally {
       await ctx.teardown();
     }

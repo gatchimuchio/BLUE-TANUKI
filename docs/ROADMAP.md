@@ -6,7 +6,7 @@
 
 ## 現在の開発工程
 
-ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01でM SQLite原子取引、C03.02で期待版比較・同ID冪等再送・V1履歴互換、C03.03でJ pendingの永続化とM receipt再照合からの局所復帰を実装し、一時SQLite fixtureで確認した。C03.04では保存障害後のhandle停止と、正本ledgerを維持したM/J派生像の明示的な局所再構成を実装し、破損ledgerとschema不一致のrepair拒否を同fixtureで確認した。実J承認source、Controller/Gateway production consumer、OS crash/installed証拠は未成立である。全体testとdoctorの各単位の結果は[開発進捗](開発進捗.md)へ記録する。親C01/C02/C03の全scenarioと製品runtime全体、自然言語意味同定、owner/L3承認経路、release readinessは未成立である。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
+ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01でM SQLite原子取引、C03.02で期待版比較・同ID冪等再送・V1履歴互換、C03.03でJ pendingの永続化とM receipt再照合からの局所復帰を実装し、一時SQLite fixtureで確認した。C03.04では保存障害後のhandle停止と、正本ledgerを維持したM/J派生像の明示的な局所再構成を実装し、破損ledgerとschema不一致のrepair拒否を同fixtureで確認した。C04.01ではJが現在依頼の検索範囲を定め、hash-chain検証済みのHDS LTM記録だけをCへ渡し、Cの支持・反証候補をJがID・hash版・出所・今回scopeで照合する経路をGateway通常応答へ接続する。局所試験は合成記録に限り、親C04全scenario、自然言語意味同定、session履歴の引用適格性、実owner/L3承認、OS crash/installed/live証拠、release readinessは未成立である。全体testとdoctorの各単位の結果は[開発進捗](開発進捗.md)へ記録する。親C01/C02/C03/C04の全scenarioと製品runtime全体、owner/L3承認経路、release readinessは未成立である。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
 
 以下の日本語移行と P13 状態は独立して維持する。
 
@@ -18,7 +18,7 @@ ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を
 | Product phase | P13 凍結 | `PENDING_OWNER_GO`、`public_claim_allowed=false`。 |
 | Language phase | J0 完了 | 日本語基底規定、台帳、gate、active governance が成立。J1 は未承認。 |
 | Strict language gate | 未成立 | 既存の非日本語 active assets が移行負債として残る。 |
-| Runtime / authority | 変更なし | HDS-BRAIN、Approval Gate、audit、Runtime Invariants を維持する。 |
+| Runtime / authority | C04.01の読取専用記憶引用照合を通常Gateway応答へ接続 | 引用照合はHDS-BRAIN唯一権限経路の外側にあり、Approval Gate・承認・実行判断は変更しない。親C04はpartial。 |
 
 ## 系列
 

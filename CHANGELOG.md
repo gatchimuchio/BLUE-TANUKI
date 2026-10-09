@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — 記憶参照の検索・意味提案・引用照合
+
+- C04.01として、Jが依頼ごとの検索scopeを定め、hash-chain検証済みのHDS LTM候補をMから取得し、Cの支持記録・反証候補をJがrecord ID・entry hash・出所・scopeで照合する通常応答経路をGateway CLI/WebChatへ接続した。
+- 引用reviewはnon-authority auditへdigestと限定参照metadataだけを記録し、Gatewayは照合済み射影だけを表示・OutputAuditへ渡す。不正な応答形式、未取得・旧版・異scope候補は拒否し、未照合F参照を応答から除く。
+- 局所証拠はWindows上の合成memory fixtureとworkspace検証に限る。session history適格性、親C04全体、実providerのschema遵守、credentialed live/installed、release readiness、P13 owner GOは成立させない。
+
 ## 2026-10-09 — 保存障害の停止と派生像再構成
 
 - C03.04として内部M/J SQLite storeにhealthと障害分類を追加し、保存・整合性障害後は同一handleを停止する。commit結果が不明な場合は不確実性を明示する。

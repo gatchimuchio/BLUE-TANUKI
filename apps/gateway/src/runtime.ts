@@ -24,6 +24,7 @@ import {
   describeLLMConfig,
 } from "./llm_config.js";
 import { renderCommandOutput } from "./result_render.js";
+import { finalizeCommandOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime, type PluginRuntime } from "./plugin_loader.js";
 import { stripEnvFileArgs } from "./env_file.js";
@@ -240,12 +241,17 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     duration_ms: feedback.metrics.duration_ms,
   });
 
-  const output = renderCommandOutput(command, feedback);
-  hds.onFeedback(feedback);
-  hds.onOutputAudit({ command, feedback, rendered_output: output, target_surface: "cli", request_id: inbound.id });
+  const finalized = finalizeCommandOutput({
+    hds,
+    command,
+    feedback,
+    target_surface: "cli",
+    request_id: inbound.id,
+  });
+  const output = finalized.rendered_output;
 
   if (feedback.status === "success" && command.type === "llm_call") {
-    const result = feedback.result as {
+    const result = finalized.reviewed_feedback.result as {
       content: string;
       model: string;
       tokens_used: number;

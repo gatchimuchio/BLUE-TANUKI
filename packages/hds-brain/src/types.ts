@@ -52,6 +52,35 @@ export interface MemoryReadPolicy {
   retrieval_modes: MemoryRetrievalMode[];
 }
 
+/** J-owned bounded search intent. It is a reference scope, never authority. */
+export interface MemorySearchPlan {
+  plan_id: string;
+  purpose: "current_request_citation_context";
+  request_id: string;
+  process_id: string;
+  query_digest: string;
+  application_scope_id: string;
+  allowed_sources: MemorySource[];
+  retrieval_modes: MemoryRetrievalMode[];
+  max_hits: number;
+  source_integrity_verified: boolean;
+  used_for_authority: false;
+}
+
+/** Origin metadata copied from one immutable HDS long-term-memory record. */
+export interface MemoryRecordProvenance {
+  source_store: "hds_ltm";
+  record_id: string;
+  version: string;
+  source_ref: string;
+  captured_at_ms: number;
+  source_process_id?: string;
+  source_process_version?: string;
+  source_actor_kind?: ActorKind;
+  source_decision?: Decision;
+  source_decision_hash?: string;
+}
+
 export interface MemoryHit {
   source: MemorySource;
   memory_id: string;
@@ -59,6 +88,7 @@ export interface MemoryHit {
   entry_hash: string;
   reason: MemoryRetrievalMode;
   matched_on?: string;
+  provenance?: MemoryRecordProvenance;
   summary?: {
     goal: string;
     problem_definition_id: string;
@@ -69,9 +99,40 @@ export interface MemoryHit {
 export interface MemoryTrace {
   policy_id: string;
   process_id: string;
+  search_plan?: MemorySearchPlan;
   /** Current invariant: memory is surfaced for context/audit, not for authority escalation. */
   used_for_authority: false;
   hits: MemoryHit[];
+}
+
+export interface MemoryCitationReference {
+  /** Canonical F reference for an exact retrieved record. */
+  record_id: string;
+  /** Immutable LongTermMemoryStore entry hash. */
+  version: string;
+}
+
+export interface MemoryCitationReviewLog {
+  kind: "memory_citation_review";
+  event: "memory.citation_review";
+  request_id: string | null;
+  command_id: string;
+  search_plan_id: string;
+  application_scope_id: string;
+  status: "accepted" | "accepted_with_rejections" | "no_proposals" | "rejected" | "invalid_output";
+  candidate_count: number;
+  candidate_references: MemoryCitationReference[];
+  source_result_digest: string;
+  reviewed_content_digest: string;
+  accepted_citations: Array<{
+    claim_digest: string;
+    supporting: MemoryCitationReference;
+    counterevidence: MemoryCitationReference;
+  }>;
+  rejected_proposal_count: number;
+  rejection_reasons: string[];
+  used_for_authority: false;
+  timestamp: number;
 }
 
 export interface HDSProcessDefinition {
@@ -341,6 +402,7 @@ export type AuditRecord =
   | ApprovalGateLog
   | AuthorityEventLog
   | MemoryReferenceLog
+  | MemoryCitationReviewLog
   | RuntimeInvariantsLog
   | CommandLifecycleLog
   | ScheduleLifecycleLog;

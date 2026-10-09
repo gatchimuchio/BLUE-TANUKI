@@ -855,6 +855,62 @@ describe("HDS process / memory closure", () => {
     expect(log.frame.memory_trace.hits.some((h) => h.f_reference === "F:hds-mem-1")).toBe(true);
   });
 
+  it("sends only the J-scoped memory candidates to C as non-authority context", () => {
+    const memory = new LongTermMemoryStore();
+    const c = new HDSUpperController({ memory });
+    c.decide(inbound("remember alpha", "hds-search-alpha"));
+    c.decide(inbound("remember beta", "hds-search-beta"));
+
+    const { log, command } = c.decide(inbound(
+      "compare F:hds-search-alpha and F:hds-search-beta",
+      "hds-search-current",
+    ));
+
+    expect(command?.type).toBe("llm_call");
+    expect(log.frame.memory_trace.search_plan).toMatchObject({
+      purpose: "current_request_citation_context",
+      request_id: "hds-search-current",
+      process_id: "chat.process",
+      allowed_sources: ["hds_ltm"],
+      source_integrity_verified: true,
+      used_for_authority: false,
+    });
+    expect(log.frame.memory_trace.search_plan?.query_digest).not.toContain("compare F:");
+    expect(log.frame.memory_trace.hits.map((hit) => hit.memory_id)).toEqual([
+      "hds-search-alpha",
+      "hds-search-beta",
+    ]);
+    const messages = command!.payload.messages;
+    expect(messages.map((message) => message.role)).toEqual(["system", "system", "user"]);
+    expect(messages[0]!.content).toContain("score、rank、承認、真偽の判定は出力しない");
+    expect(messages[1]!.content).toContain("F:hds-search-alpha");
+    expect(messages[1]!.content).toContain(log.frame.memory_trace.search_plan!.application_scope_id);
+    expect(messages[1]!.content).toContain(log.frame.memory_trace.hits[0]!.entry_hash);
+    expect(messages[1]!.content).not.toContain("compare F:hds-search-alpha");
+    expect(log.frame.memory_trace.used_for_authority).toBe(false);
+  });
+
+  it("does not create citation candidates from a reader without verified integrity", () => {
+    const source = new LongTermMemoryStore();
+    new HDSUpperController({ memory: source }).decide(inbound("remember verifiable item", "unverified-source-seed"));
+    const unverifiedReader = {
+      capture: () => null,
+      recent: (count: number) => source.recent(count),
+      all: () => source.all(),
+    } as unknown as LongTermMemoryStore;
+    const c = new HDSUpperController({ memory: unverifiedReader });
+    const { log, command } = c.decide(inbound("recall F:unverified-source-seed", "unverified-source-query"));
+
+    expect(log.frame.memory_trace.search_plan).toMatchObject({
+      source_integrity_verified: false,
+      allowed_sources: [],
+      used_for_authority: false,
+    });
+    expect(log.frame.memory_trace.hits).toEqual([]);
+    expect(command?.type).toBe("llm_call");
+    expect(command!.payload.messages.map((message) => message.role)).toEqual(["user"]);
+  });
+
   it("records memory write and read references as F references without authority use", () => {
     const memory = new LongTermMemoryStore();
     const c = new HDSUpperController({ memory });
