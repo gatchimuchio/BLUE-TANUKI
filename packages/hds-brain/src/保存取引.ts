@@ -105,7 +105,7 @@ export class MTransactionStore {
   }) {
     let databasePath: string;
     try {
-      databasePath = privateDatabasePath(options.private_state_root, options.database_path);
+      databasePath = resolvePrivateStateDatabasePath(options.private_state_root, options.database_path);
     } catch {
       throw new Error("invalid M database path");
     }
@@ -387,7 +387,7 @@ function hasMStorageSchema(databasePath: string): boolean {
   }
 }
 
-function privateDatabasePath(stateRootInput: string, databasePathInput: string): string {
+export function resolvePrivateStateDatabasePath(stateRootInput: string, databasePathInput: string): string {
   if (!isAbsolute(stateRootInput) || !isAbsolute(databasePathInput) || databasePathInput === ":memory:") {
     throw new Error("path must be absolute");
   }

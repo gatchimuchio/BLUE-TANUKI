@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — J pendingとM receipt再照合
+
+- C03.03としてHDS-BRAIN内部にJ所有の `j_events / j_state / j_pending` を追加し、Mと別のrevision・hash-chain・transactionで `memory_commit_pending` を保存する。J pendingには更新ID、J event ID、content digest、期待M版だけを置き、MemoryCommitの変更本文を複製しない。
+- M反映前に合成可能なJ-owned readerから参照一致を検査し、M更新は既存C03.02 transactionへ渡す。再起動後のreceipt照合はM verify/readReceiptのみを呼び、正しいreceiptでJを一度だけreadyへ進める。receipt不在はpendingを維持し、異なる既存receiptはblockedにする。
+- Windowsの一時file-backed SQLiteでM確定後のclose/reopen、receipt再照合、同内容再送、未着receipt、ID/digest不一致、承認不一致、J projection改変検出を局所試験する。合成reader、Gateway/Controller production consumer、owner/L3承認、process crash耐久性、C03.04、release readiness、P13 owner GOは成立させない。
+
 ## 2026-10-09 — M更新の期待版と冪等再送
 
 - C03.02として新規 `MemoryCommit` V2へ期待M版を加え、canonical digestに結合した。V1 commit/eventは既存保存履歴の検証と再生用に維持する。
