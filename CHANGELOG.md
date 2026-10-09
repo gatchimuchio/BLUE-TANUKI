@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — 目的の権限・版・適用時点
+
+- C02.03として、strictな目的governance契約とHDS ledgerを追加した。委任・運用・下位目的の変更権限を区別し、解釈訂正は同じ目的版のまま、目的変更は別eventで旧版を保持して版を進める。
+- event digestへ結び付く事前検証済みauthorization record、記録/承認/適用時刻の順序、将来適用、旧event時刻からの目的版解決を検査する。子目的は親版へ結合し、未再結合の子孫には再確認状態を射影する。通常Controllerのdecision/audit frameに接続するが、model、commit、Approval Gate、実行判定は変えない。
+- authorization recordはowner認証や対話的L3 approvalの代替ではなく、その発行・永続DB・UI・実結果consumerは未接続である。親C02 scenario全体、release readiness、P13 owner GOは成立させない。
+
 ## 2026-10-09 — 目的・手段関係網
 
 - C02.02として、版付きprotocol関係網へ複数親、共有・共同寄与、未解決の抵触を追加し、不透明な根拠参照、境界検査、非権限flagを必須にした。

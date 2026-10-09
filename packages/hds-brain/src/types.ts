@@ -6,6 +6,7 @@ import type { DetectorLifecycleTrace } from "./detectors/types.js";
 import type { HDSBrainHealth } from "./health.js";
 import type { ReadonlyGoalProjection } from "./goal_projection.js";
 import type { ReadonlyGoalRelationTreeView } from "./goal_relations.js";
+import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 
 /**
  * Output of the F (Frame) phase.
@@ -111,6 +112,8 @@ export interface FrameResult {
   goal_projection: ReadonlyGoalProjection;
   /** Display/audit reference only. It is excluded from model, commit, approval and execution inputs. */
   goal_relation_tree?: ReadonlyGoalRelationTreeView;
+  /** Version/event projection for audit and later attribution; not consumed by model, commit, approval or execution. */
+  goal_governance?: ReadonlyGoalGovernanceProjection;
   goal: string;
   protected_values: string[];
   world_closure: {

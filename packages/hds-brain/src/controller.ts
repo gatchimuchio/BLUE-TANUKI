@@ -29,8 +29,10 @@ import type {
   ScheduleLifecycleLog,
   SuspendedRequest,
 } from "./types.js";
+import type { GoalGovernanceConfig } from "@blue-tanuki/protocol";
 import { frame } from "./frame.js";
 import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
+import { GoalGovernanceLedger } from "./goal_governance.js";
 import { model } from "./model.js";
 import { commit } from "./commit.js";
 import { AuditLog } from "./audit.js";
@@ -117,6 +119,8 @@ export interface ControllerOptions {
   self_health?: ControllerSelfHealthOptions;
   /** Owner-supplied relationship references; audit/display only, never authority. */
   goal_relation_graph?: unknown;
+  /** Trusted HDS construction input; exact event-to-authorization digests are checked at creation. */
+  goal_governance?: GoalGovernanceConfig;
 }
 
 export interface LLMCommandRoute {
@@ -161,6 +165,7 @@ export class HDSUpperController {
   private readonly llm_route: LLMCommandRoute;
   private readonly self_health: ControllerSelfHealthOptions;
   private readonly goal_relation_tree?: ReadonlyGoalRelationTreeView;
+  private readonly goal_governance?: GoalGovernanceLedger;
 
   /** Commands awaiting executor feedback (already ASSERTed). */
   private readonly inflight = new Map<string, DecisionLog>();
@@ -180,6 +185,11 @@ export class HDSUpperController {
     this.goal_relation_tree = opts.goal_relation_graph === undefined
       ? undefined
       : buildGoalRelationTreeView(opts.goal_relation_graph);
+    if (opts.goal_governance !== undefined) {
+      const built = GoalGovernanceLedger.create(opts.goal_governance);
+      if (!built.ok) throw new Error("invalid goal governance configuration");
+      this.goal_governance = built.ledger;
+    }
     this.self_health = {
       ...STANDALONE_SELF_HEALTH_DEFAULTS,
       ...(opts.self_health ?? {}),
@@ -207,11 +217,13 @@ export class HDSUpperController {
         timestamp: Date.now(),
       };
       const input = normalizeForDetection(fallbackReq.content);
+      const goalGovernanceProjection = this.goal_governance?.project(Date.now());
       const f = frame(fallbackReq, {
         default_policy: this.policy,
         memory_reader: this.memory,
         original_reference_kind: "synthetic_rejection_placeholder",
         ...(this.goal_relation_tree ? { goal_relation_tree: this.goal_relation_tree } : {}),
+        ...(goalGovernanceProjection ? { goal_governance: goalGovernanceProjection } : {}),
       });
       const c = suspendCommit(
         "authority_input_boundary",
@@ -272,11 +284,13 @@ export class HDSUpperController {
     const req = boundary.request;
     const input = normalizeForDetection(req.content);
     const authorityReq = requestWithNormalizedContent(req, input.normalized_content);
+    const goalGovernanceProjection = this.goal_governance?.project(Date.now());
     const f = frame(authorityReq, {
       default_policy: this.policy,
       memory_reader: this.memory,
       original_content: req.content,
       ...(this.goal_relation_tree ? { goal_relation_tree: this.goal_relation_tree } : {}),
+      ...(goalGovernanceProjection ? { goal_governance: goalGovernanceProjection } : {}),
     });
     const selfHealth = this.evaluateSelfHealth();
     if (selfHealth.fail_safe) {

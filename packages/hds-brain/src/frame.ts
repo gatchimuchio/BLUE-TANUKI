@@ -21,6 +21,7 @@ import {
   type GoalProjectionSourceKind,
 } from "./goal_projection.js";
 import type { ReadonlyGoalRelationTreeView } from "./goal_relations.js";
+import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 
 /**
  * Optional frame configuration: lets the gateway decide which policy
@@ -45,6 +46,8 @@ export interface FrameConfig {
   original_reference_kind?: GoalProjectionSourceKind;
   /** Validated controller configuration; never sourced from inbound metadata or used as authority. */
   goal_relation_tree?: ReadonlyGoalRelationTreeView;
+  /** Version history for the HDS audit frame; the projection itself is not a downstream authority input. */
+  goal_governance?: ReadonlyGoalGovernanceProjection;
   /**
    * Override protected_values per request, if needed.
    * Falls back to a conservative default.
@@ -94,6 +97,7 @@ export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
       ...(config?.original_reference_kind ? { source_kind: config.original_reference_kind } : {}),
     }),
     ...(config?.goal_relation_tree ? { goal_relation_tree: config.goal_relation_tree } : {}),
+    ...(config?.goal_governance ? { goal_governance: config.goal_governance } : {}),
     goal: req.content.slice(0, 200),
     protected_values: config?.protected_values ?? DEFAULT_PROTECTED_VALUES,
     world_closure: {

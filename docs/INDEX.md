@@ -28,6 +28,7 @@
 - [共通record境界](../packages/protocol/src/common_record.ts) — JSON境界parser、独立状態schema、fail-closed理由
 - [目的射影](GOAL_PROJECTION.md) — 原文digest参照、必要性・到達状態・評価・期間・権限のunknown保持とHDS監査経路
 - [目的・手段関係網](GOAL_RELATIONS.md) — 複数親、共有・共同寄与、未解決抵触のstrict契約、forest表示とcanonical復元
+- [目的の権限・版・適用時点](GOAL_GOVERNANCE.md) — 解釈訂正と目的変更event、digest結合authorization record、HDS decision/audit projectionと承認経路の限界
 - [境界交換契約](../packages/protocol/src/境界交換契約.ts) — 制限JSONの版付き境界とcanonical bytes。実行権限は持たない
 - [開発進捗](開発進捗.md) — 施工単位の有限成果、未達、検証・Git統合
 - [要求ID付き局所試験の実行](VALIDATE_AGI.md) — `validate:agi` の登録ID選択、実試験実行、失敗分類と証明範囲

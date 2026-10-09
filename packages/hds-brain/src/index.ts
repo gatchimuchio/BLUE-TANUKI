@@ -11,6 +11,18 @@ export {
   restoreGoalRelationGraphFromTreeView,
   type ReadonlyGoalRelationTreeView,
 } from "./goal_relations.js";
+export {
+  GoalGovernanceLedger,
+  goalGovernanceEventDigest,
+  purposeVersionForEventTime,
+  type GoalGovernanceBuildResult,
+  type GoalGovernanceEventProjection,
+  type GoalGovernanceGoalProjection,
+  type GoalGovernanceInterpretationProjection,
+  type GoalGovernanceProjection,
+  type GoalGovernanceVersionProjection,
+  type ReadonlyGoalGovernanceProjection,
+} from "./goal_governance.js";
 export { resolveActor, resolveProcess } from "./process.js";
 export { buildMemoryTrace, type MemoryReaderPort } from "./memory_trace.js";
 export {

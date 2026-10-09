@@ -5,4 +5,5 @@ export * from "./product_scope_contract.js";
 export * from "./common_record.js";
 export * from "./goal_projection.js";
 export * from "./goal_relations.js";
+export * from "./goal_governance.js";
 export * from "./境界交換契約.js";
