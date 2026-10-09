@@ -179,6 +179,32 @@ describe("audit-dump format", () => {
         { record_id: "F:source-a", version: "c".repeat(64) },
         { record_id: "F:source-b", version: "d".repeat(64) },
       ],
+      projection_records: [
+        {
+          reference: { record_id: "F:source-a", version: "c".repeat(64) },
+          disposition: "adopted",
+          reason: "accepted_citation",
+          summary_difference: {
+            included_fields: ["goal", "problem_definition_id", "abstraction"],
+            included_source_digest: "4".repeat(64),
+            omitted_source_fields: ["closure.x", "closure.r", "closure.m"],
+            omitted_source_digest: "2".repeat(64),
+            truncations: [],
+            semantic_difference: "not_assessed",
+            difference_note: "raw content omitted; meaning not assessed",
+          },
+        },
+        {
+          reference: { record_id: "F:source-b", version: "d".repeat(64) },
+          disposition: "adopted",
+          reason: "accepted_citation",
+        },
+        {
+          reference: { record_id: "F:source-c", version: "3".repeat(64) },
+          disposition: "excluded_from_context",
+          reason: "explicit_reference_scope",
+        },
+      ],
       source_result_digest: "e".repeat(64),
       reviewed_content_digest: "f".repeat(64),
       accepted_citations: [{
@@ -196,10 +222,36 @@ describe("audit-dump format", () => {
     const text = formatAuditTextReport(report);
     const json = formatAuditJsonReport(report);
     expect(text).toContain("MEM:CITATION:accepted");
-    expect(text).toContain("candidates=2 accepted=1 rejected=0 used_for_authority=false");
+    expect(text).toContain("candidates=2 accepted=1 not_adopted=0 excluded=1 rejected=0 used_for_authority=false");
     expect(json).toContain("memory_citation_review");
     expect(json).toContain("application_scope_id");
+    expect(json).toContain("F:source-c");
+    expect(json).toContain("not_assessed");
     expect(json).not.toContain("private claim text");
+  });
+
+  it("renders legacy citation review entries that predate projection dispositions", () => {
+    const log = new AuditLog();
+    log.append({
+      kind: "memory_citation_review",
+      event: "memory.citation_review",
+      request_id: "r-legacy-citation",
+      command_id: "cmd-legacy-citation",
+      search_plan_id: "a".repeat(64),
+      application_scope_id: "b".repeat(64),
+      status: "no_proposals",
+      candidate_count: 0,
+      candidate_references: [],
+      source_result_digest: "c".repeat(64),
+      reviewed_content_digest: "d".repeat(64),
+      accepted_citations: [],
+      rejected_proposal_count: 0,
+      rejection_reasons: [],
+      used_for_authority: false,
+      timestamp: 1,
+    });
+    const text = formatAuditTextReport(auditDumpReportFromLog(log));
+    expect(text).toContain("not_adopted=0 excluded=0");
   });
 
   it("text format includes output audit entries without raw output", () => {

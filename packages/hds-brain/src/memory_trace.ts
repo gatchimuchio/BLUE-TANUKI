@@ -76,6 +76,7 @@ export function buildMemoryTrace(
         problem_definition_id: entry.problem_definition_id,
         abstraction: entry.abstraction,
       },
+      summary_projection: summaryProjectionSource(entry),
     });
   };
 
@@ -140,6 +141,7 @@ function createSearchPlan(
   source_integrity_verified: boolean,
 ): MemorySearchPlan {
   const policy = process.memory_policy;
+  const explicit_references_requested = exactKeys(req).length > 0;
   const purpose = "current_request_citation_context" as const;
   const query_digest = digest(req.content);
   const allowed_sources = source_integrity_verified
@@ -157,6 +159,7 @@ function createSearchPlan(
     request_id: req.id,
     process_id: process.process_id,
     query_digest,
+    explicit_references_requested,
     application_scope_id,
     allowed_sources,
     retrieval_modes,
@@ -169,12 +172,51 @@ function createSearchPlan(
     request_id: req.id,
     process_id: process.process_id,
     query_digest,
+    explicit_references_requested,
     application_scope_id,
     allowed_sources: [...allowed_sources],
     retrieval_modes,
     max_hits: Math.max(0, policy.max_hits),
     source_integrity_verified,
     used_for_authority: false,
+  };
+}
+
+function summaryProjectionSource(entry: MemoryEntry): MemoryHit["summary_projection"] {
+  const omittedSource = {
+    closure: entry.closure,
+    actor: {
+      actor_id: entry.actor?.actor_id ?? null,
+      channel: entry.actor?.channel ?? null,
+      trust_level: entry.actor?.trust_level ?? null,
+    },
+    process_kind: entry.process?.process_kind ?? null,
+    commit_reason: entry.commit?.reason ?? null,
+    tags: entry.tags ?? [],
+    index: entry.index,
+    prev_hash: entry.prev_hash,
+  };
+  return {
+    included_fields: ["goal", "problem_definition_id", "abstraction"],
+    included_source_digest: digest(JSON.stringify({
+      goal: entry.goal,
+      problem_definition_id: entry.problem_definition_id,
+      abstraction: entry.abstraction,
+    })),
+    omitted_source_fields: [
+      "closure.x",
+      "closure.r",
+      "closure.m",
+      "actor.actor_id",
+      "actor.channel",
+      "actor.trust_level",
+      "process.process_kind",
+      "commit.reason",
+      "tags",
+      "index",
+      "prev_hash",
+    ],
+    omitted_source_digest: digest(JSON.stringify(omittedSource)),
   };
 }
 

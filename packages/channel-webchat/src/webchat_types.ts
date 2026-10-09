@@ -197,6 +197,25 @@ export interface WebChatAuthorityTraceItem {
   application_scope_id?: string;
   candidate_count?: number;
   candidate_references?: ReadonlyArray<{ record_id: string; version: string }>;
+  projection_records?: ReadonlyArray<{
+    reference: { record_id: string; version: string };
+    disposition: "adopted" | "not_adopted" | "excluded_from_context";
+    reason: "accepted_citation" | "not_used_by_accepted_citation" | "explicit_reference_scope";
+    summary_difference?: {
+      included_fields: ReadonlyArray<"goal" | "problem_definition_id" | "abstraction">;
+      included_source_digest: string;
+      omitted_source_fields: ReadonlyArray<string>;
+      omitted_source_digest: string;
+      truncations: ReadonlyArray<{
+        field: "goal" | "problem_definition_id" | "abstraction";
+        source_char_count: number;
+        projected_char_count: number;
+        omitted_suffix_digest: string;
+      }>;
+      semantic_difference: "not_assessed";
+      difference_note: string;
+    };
+  }>;
   accepted_citations?: ReadonlyArray<{
     claim_digest: string;
     supporting: { record_id: string; version: string };

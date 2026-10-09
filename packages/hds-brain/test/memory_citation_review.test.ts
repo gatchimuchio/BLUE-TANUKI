@@ -1,7 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
 import { LongTermMemoryStore } from "../src/long-term-memory/index.js";
+import { buildMemoryCitationSystemMessages } from "../src/memory_citation_review.js";
+
+const tempDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of tempDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
 
 function inbound(content: string, id: string): InboundRequest {
   return { id, channel: "test", user: "fixture-user", content, timestamp: Date.now() };
@@ -176,5 +187,96 @@ describe("J-side memory citation review", () => {
     expect(hds.getAudit().list().some((entry) =>
       "kind" in entry.log && entry.log.kind === "memory_citation_review" && entry.log.status === "invalid_output",
     )).toBe(true);
+  });
+
+  it("records truncation differences and separates adopted, non-adopted, and excluded records without deleting sources", () => {
+    const directory = mkdtempSync(join(tmpdir(), "memory-projection-"));
+    tempDirectories.push(directory);
+    const filepath = join(directory, "memory.jsonl");
+    const memory = new LongTermMemoryStore({ filepath });
+    const hds = new HDSUpperController({ memory });
+    hds.decide(inbound("primary support source", "projection-support"));
+    hds.decide(inbound("counter evidence source", "projection-counter"));
+    hds.decide(inbound("unreferenced recent source", "projection-excluded"));
+
+    const current = hds.decide(inbound(
+      "compare F:projection-support with F:projection-counter",
+      "projection-current",
+    ));
+    if (!current.command || current.command.type !== "llm_call") throw new Error("expected llm command");
+    const trace = current.log.frame.memory_trace;
+    const projectionTrace = structuredClone(trace);
+    const supportProjection = projectionTrace.hits.find((hit) => hit.memory_id === "projection-support")!;
+    const syntheticSummary = {
+      goal: "g".repeat(450),
+      problem_definition_id: supportProjection.summary!.problem_definition_id,
+      abstraction: supportProjection.summary!.abstraction,
+    };
+    supportProjection.summary = syntheticSummary;
+    supportProjection.summary_projection.included_source_digest = createHash("sha256")
+      .update(JSON.stringify(syntheticSummary))
+      .digest("hex");
+    const contextMessage = buildMemoryCitationSystemMessages(projectionTrace)[1];
+    if (!contextMessage) throw new Error("expected current memory context");
+    const context = JSON.parse(contextMessage.content.slice(contextMessage.content.indexOf("\n") + 1));
+    expect(context.records.map((record: { record_id: string }) => record.record_id)).toEqual([
+      "F:projection-support",
+      "F:projection-counter",
+    ]);
+    expect(context.records[0].summary.goal).toHaveLength(400);
+    expect(context.records[0].summary_difference).toMatchObject({
+      semantic_difference: "not_assessed",
+      truncations: [{
+        field: "goal",
+        source_char_count: 450,
+        projected_char_count: 400,
+        omitted_suffix_digest: createHash("sha256").update("g".repeat(51)).digest("hex"),
+      }],
+    });
+    expect(contextMessage.content).not.toContain("g".repeat(450));
+
+    const support = trace.hits.find((hit) => hit.memory_id === "projection-support")!;
+    const counter = trace.hits.find((hit) => hit.memory_id === "projection-counter")!;
+    const scopeId = trace.search_plan!.application_scope_id;
+    const response = JSON.stringify({
+      schema_version: "blue-tanuki.memory-citation-response.v1",
+      answer: "二記録の比較案",
+      citations: [],
+    });
+    const sizeBeforeReview = memory.size();
+    hds.reviewMemoryCitations(current.command, feedback(current.command.id, response));
+
+    const review = hds.getAudit().list().map((entry) => entry.log).find((entry) =>
+      "kind" in entry && entry.kind === "memory_citation_review",
+    );
+    if (!review || !("projection_records" in review)) throw new Error("expected projection review audit");
+    expect(review.projection_records ?? []).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        reference: { record_id: "F:projection-support", version: support.entry_hash },
+        disposition: "not_adopted",
+      }),
+      expect.objectContaining({
+        reference: { record_id: "F:projection-counter", version: counter.entry_hash },
+        disposition: "not_adopted",
+        reason: "not_used_by_accepted_citation",
+      }),
+      expect.objectContaining({
+        reference: expect.objectContaining({ record_id: "F:projection-excluded" }),
+        disposition: "excluded_from_context",
+        reason: "explicit_reference_scope",
+      }),
+    ]));
+    expect(JSON.stringify(review)).not.toContain("unreferenced recent source");
+    expect(memory.size()).toBe(sizeBeforeReview);
+    expect(memory.verify()).toBe(true);
+    expect(memory.findByRequestId("projection-excluded")?.f_reference).toBe("F:projection-excluded");
+
+    const reloaded = new LongTermMemoryStore({ filepath });
+    expect(reloaded.size()).toBe(sizeBeforeReview);
+    expect(reloaded.findByRequestId("projection-excluded")?.entry_hash).toBe(
+      memory.findByRequestId("projection-excluded")?.entry_hash,
+    );
+    expect(reloaded.verify()).toBe(true);
+    expect(readFileSync(filepath, "utf8").split("\n").filter(Boolean)).toHaveLength(sizeBeforeReview);
   });
 });

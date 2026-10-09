@@ -59,6 +59,8 @@ export interface MemorySearchPlan {
   request_id: string;
   process_id: string;
   query_digest: string;
+  /** Whether this request contains an explicit F reference; raw input is not retained. */
+  explicit_references_requested: boolean;
   application_scope_id: string;
   allowed_sources: MemorySource[];
   retrieval_modes: MemoryRetrievalMode[];
@@ -94,6 +96,31 @@ export interface MemoryHit {
     problem_definition_id: string;
     abstraction: string;
   };
+  /** Digest-only account of source fields omitted from the bounded C projection. */
+  summary_projection: MemorySummarySourceProjection;
+}
+
+export type MemorySummaryField = "goal" | "problem_definition_id" | "abstraction";
+
+export interface MemorySummarySourceProjection {
+  included_fields: MemorySummaryField[];
+  included_source_digest: string;
+  omitted_source_fields: string[];
+  omitted_source_digest: string;
+}
+
+export interface MemorySummaryTruncation {
+  field: MemorySummaryField;
+  source_char_count: number;
+  projected_char_count: number;
+  omitted_suffix_digest: string;
+}
+
+export interface MemorySummaryDifference extends MemorySummarySourceProjection {
+  truncations: MemorySummaryTruncation[];
+  /** No semantic equivalence is inferred from the compact projection. */
+  semantic_difference: "not_assessed";
+  difference_note: string;
 }
 
 export interface MemoryTrace {
@@ -112,6 +139,16 @@ export interface MemoryCitationReference {
   version: string;
 }
 
+export interface MemoryCitationProjectionRecord {
+  reference: MemoryCitationReference;
+  disposition: "adopted" | "not_adopted" | "excluded_from_context";
+  reason:
+    | "accepted_citation"
+    | "not_used_by_accepted_citation"
+    | "explicit_reference_scope";
+  summary_difference?: MemorySummaryDifference;
+}
+
 export interface MemoryCitationReviewLog {
   kind: "memory_citation_review";
   event: "memory.citation_review";
@@ -122,6 +159,9 @@ export interface MemoryCitationReviewLog {
   status: "accepted" | "accepted_with_rejections" | "no_proposals" | "rejected" | "invalid_output";
   candidate_count: number;
   candidate_references: MemoryCitationReference[];
+  /** Per-record context disposition and reversible, content-free projection differences. */
+  /** Missing only on legacy C04.01 audit entries written before this projection was added. */
+  projection_records?: MemoryCitationProjectionRecord[];
   source_result_digest: string;
   reviewed_content_digest: string;
   accepted_citations: Array<{

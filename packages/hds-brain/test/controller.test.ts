@@ -860,6 +860,7 @@ describe("HDS process / memory closure", () => {
     const c = new HDSUpperController({ memory });
     c.decide(inbound("remember alpha", "hds-search-alpha"));
     c.decide(inbound("remember beta", "hds-search-beta"));
+    c.decide(inbound("remember unrelated gamma", "hds-search-gamma"));
 
     const { log, command } = c.decide(inbound(
       "compare F:hds-search-alpha and F:hds-search-beta",
@@ -873,21 +874,66 @@ describe("HDS process / memory closure", () => {
       process_id: "chat.process",
       allowed_sources: ["hds_ltm"],
       source_integrity_verified: true,
+      explicit_references_requested: true,
       used_for_authority: false,
     });
     expect(log.frame.memory_trace.search_plan?.query_digest).not.toContain("compare F:");
-    expect(log.frame.memory_trace.hits.map((hit) => hit.memory_id)).toEqual([
+    expect(log.frame.memory_trace.hits.map((hit) => hit.memory_id)).toContain("hds-search-gamma");
+    expect(log.frame.memory_trace.hits.map((hit) => hit.memory_id)).toEqual(expect.arrayContaining([
       "hds-search-alpha",
       "hds-search-beta",
-    ]);
+    ]));
     const messages = command!.payload.messages;
     expect(messages.map((message) => message.role)).toEqual(["system", "system", "user"]);
     expect(messages[0]!.content).toContain("score、rank、承認、真偽の判定は出力しない");
     expect(messages[1]!.content).toContain("F:hds-search-alpha");
     expect(messages[1]!.content).toContain(log.frame.memory_trace.search_plan!.application_scope_id);
     expect(messages[1]!.content).toContain(log.frame.memory_trace.hits[0]!.entry_hash);
+    expect(messages[1]!.content).not.toContain("hds-search-gamma");
+    const context = JSON.parse(messages[1]!.content.slice(messages[1]!.content.indexOf("\n") + 1));
+    expect(context.records.map((record: { record_id: string }) => record.record_id)).toEqual([
+      "F:hds-search-alpha",
+      "F:hds-search-beta",
+    ]);
+    expect(context.records[0].summary_difference).toMatchObject({
+      included_fields: ["goal", "problem_definition_id", "abstraction"],
+      omitted_source_fields: expect.arrayContaining(["closure.x", "commit.reason"]),
+      semantic_difference: "not_assessed",
+    });
+    expect(context.records[0].summary_difference.difference_note).toContain("意味上の影響は未評価");
     expect(messages[1]!.content).not.toContain("compare F:hds-search-alpha");
     expect(log.frame.memory_trace.used_for_authority).toBe(false);
+  });
+
+  it("does not fall back to unrelated memory when an explicit F reference is unresolved", () => {
+    const memory = new LongTermMemoryStore();
+    const c = new HDSUpperController({ memory });
+    c.decide(inbound("remember a safe candidate", "hds-unresolved-seed"));
+
+    const { log, command } = c.decide(inbound("recall F:missing-record", "hds-unresolved-query"));
+    expect(log.frame.memory_trace.search_plan?.explicit_references_requested).toBe(true);
+    expect(log.frame.memory_trace.hits.length).toBeGreaterThan(0);
+    expect(command?.type).toBe("llm_call");
+    expect(command!.payload.messages.map((message) => message.role)).toEqual(["user"]);
+
+    const reviewed = c.reviewMemoryCitations(command!, feedback(command!.id, JSON.stringify({
+      schema_version: "blue-tanuki.memory-citation-response.v1",
+      answer: "F:hds-unresolved-seedを使う回答",
+      citations: [],
+    })));
+    const reviewedContent = typeof reviewed.result === "string"
+      ? reviewed.result
+      : (reviewed.result as { content: string }).content;
+    expect(reviewedContent).not.toContain("F:hds-unresolved-seed");
+    const audit = c.getAudit().list().map((entry) => entry.log).find((entry) =>
+      "kind" in entry && entry.kind === "memory_citation_review",
+    );
+    expect(audit && "projection_records" in audit ? audit.projection_records ?? [] : []).toContainEqual(expect.objectContaining({
+      reference: expect.objectContaining({ record_id: "F:hds-unresolved-seed" }),
+      disposition: "excluded_from_context",
+      reason: "explicit_reference_scope",
+    }));
+    expect(c.getAudit().verify()).toBe(true);
   });
 
   it("does not create citation candidates from a reader without verified integrity", () => {

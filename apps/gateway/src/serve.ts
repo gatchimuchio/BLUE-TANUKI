@@ -1286,6 +1286,7 @@ export async function serve(): Promise<ServeShutdown> {
           status: log.status,
           candidate_count: log.candidate_count,
           candidate_references: log.candidate_references,
+          projection_records: log.projection_records ?? [],
           accepted_citations: log.accepted_citations,
           rejected_proposal_count: log.rejected_proposal_count,
           rejection_reasons: log.rejection_reasons,

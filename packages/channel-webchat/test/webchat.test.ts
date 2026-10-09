@@ -1483,6 +1483,23 @@ describe("WebChatChannel — authority trace API", () => {
               { record_id: "F:source-a", version: "c".repeat(64) },
               { record_id: "F:source-b", version: "d".repeat(64) },
             ],
+            projection_records: [
+              {
+                reference: { record_id: "F:source-a", version: "c".repeat(64) },
+                disposition: "adopted",
+                reason: "accepted_citation",
+              },
+              {
+                reference: { record_id: "F:source-b", version: "d".repeat(64) },
+                disposition: "adopted",
+                reason: "accepted_citation",
+              },
+              {
+                reference: { record_id: "F:source-c", version: "2".repeat(64) },
+                disposition: "excluded_from_context",
+                reason: "explicit_reference_scope",
+              },
+            ],
             accepted_citations: [{
               claim_digest: "e".repeat(64),
               supporting: { record_id: "F:source-a", version: "c".repeat(64) },
@@ -1529,6 +1546,10 @@ describe("WebChatChannel — authority trace API", () => {
         candidate_count: 2,
         used_for_authority: false,
       });
+      expect(body.authority_trace[1].projection_records).toContainEqual(expect.objectContaining({
+        reference: { record_id: "F:source-c", version: "2".repeat(64) },
+        disposition: "excluded_from_context",
+      }));
       expect(body.authority_trace[1]).not.toHaveProperty("claim");
     } finally {
       await ctx.teardown();

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — 記憶の現在射影と復帰参照
+
+- C04.02として、依頼に明示F参照がある場合は完全一致候補だけをCへ渡し、Jの引用採用対象も同じ候補集合へ限定した。未解決参照でtag/recent候補へfallbackしない。
+- Cへ渡すsummary projectionは、原記録F ID・immutable version、含むfield、省いたsource fieldのdigest、文字切詰めfieldの長さ・省略suffix digest、意味差の未評価状態を保持する。監査へrecordごとの採用・非採用・context除外をdigest-onlyで記録し、Gateway/WebChat authority traceとaudit-dumpへ投影した。
+- 除外・非採用によるLongTermMemoryStoreの削除や更新は行わない。一時JSONLの再読込とhash-chain検証を確認した。証拠はWindows上の合成fixtureとlocal validationに限り、親C04全scenario、provider/live/installed、release readiness、P13 owner GOは成立させない。
+
 ## 2026-10-09 — 記憶参照の検索・意味提案・引用照合
 
 - C04.01として、Jが依頼ごとの検索scopeを定め、hash-chain検証済みのHDS LTM候補をMから取得し、Cの支持記録・反証候補をJがrecord ID・entry hash・出所・scopeで照合する通常応答経路をGateway CLI/WebChatへ接続した。
