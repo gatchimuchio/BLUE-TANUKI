@@ -23,6 +23,11 @@
 - [Active Implementation Instructions](IMPLEMENTATION_INSTRUCTIONS.md) — 現在の bounded phase
 - [Roadmap](ROADMAP.md) — J 系列と P13 の圧縮順序
 
+## 現行の開発記録
+
+- [開発進捗](開発進捗.md) — 有限に成立した成果、未達、検証・Git 統合、次単位の条件
+- [B02.03 外殻接続変更案](外殻接続変更案.md) — 公開ソースに基づく限定提案。実装・別 repo 書込みの許可ではない
+
 ## はじめに読む
 
 - [Windows の開発環境と WSL の配布検証](開発環境.md) — Windows を標準とする開発、固定版の準備、補助環境での配布検証、局所起動
