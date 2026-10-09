@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-09 — 言語間契約の同値性
+
+- C01.02として、版付き制限JSON境界をprotocolへ追加し、同一の合成fixtureを使うTypeScript境界と開発専用Rust conformance crateを用意した。正例6件のcanonical bytesと負例20件の拒否理由を両実装で照合する。
+- profile、ローカル試験、通常workspace検証の結果を記録した。Rust product consumer、実IPC、issuer/audience、期限・世代・再送、実作用、release readinessは成立していない。P13のowner GOと公開保留を維持する。
+
 ## 2026-10-09 — 共通record境界と旧履歴の読取投影
 
 - C01.01として、protocolへ厳格な共通record schemaとJSON文字列境界parserを追加した。意味・運用・仕事・作用・証拠の状態を分け、未知field、重複key、非有限数値、上限超過IDを拒否する。

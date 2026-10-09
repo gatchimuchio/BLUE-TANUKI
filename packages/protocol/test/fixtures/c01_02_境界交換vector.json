@@ -1,0 +1,137 @@
+{
+  "format_version": "blue-tanuki.boundary-exchange-vectors.v1",
+  "positive": [
+    {
+      "id": "unicode-preservation-and-utf16-key-order",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T12:34:56.789Z\",\"content\":{\"z\":0,\"a\":null,\"arr\":[2,1,null],\"decomposed\":\"e\\u0301\",\"precomposed\":\"é\",\"line\":\"a\\r\\nb\",\"utf16\":\"\\uD83D\\uDE00\",\"😀\":1,\"\\uE000\":2}}",
+      "canonical": "{\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"content\":{\"a\":null,\"arr\":[2,1,null],\"decomposed\":\"é\",\"line\":\"a\\r\\nb\",\"precomposed\":\"é\",\"utf16\":\"😀\",\"z\":0,\"😀\":1,\"\":2},\"issued_at_utc\":\"2026-10-09T12:34:56.789Z\",\"schema_version\":\"blue-tanuki.boundary-exchange.v1\"}"
+    },
+    {
+      "id": "empty-content-has-no-implicit-defaults",
+      "input": "{\"content\":{},\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"schema_version\":\"blue-tanuki.boundary-exchange.v1\"}",
+      "canonical": "{\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"content\":{},\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"schema_version\":\"blue-tanuki.boundary-exchange.v1\"}"
+    },
+    {
+      "id": "null-is-distinct-from-omitted",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"value\":1,\"optional\":null}}",
+      "canonical": "{\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"content\":{\"optional\":null,\"value\":1},\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"schema_version\":\"blue-tanuki.boundary-exchange.v1\"}"
+    },
+    {
+      "id": "omitted-field-stays-omitted",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"value\":1}}",
+      "canonical": "{\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"content\":{\"value\":1},\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"schema_version\":\"blue-tanuki.boundary-exchange.v1\"}"
+    },
+    {
+      "id": "safe-integer-boundaries-and-array-order",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"max\":9007199254740991,\"min\":-9007199254740991,\"order\":[3,1,2]}}",
+      "canonical": "{\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"content\":{\"max\":9007199254740991,\"min\":-9007199254740991,\"order\":[3,1,2]},\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"schema_version\":\"blue-tanuki.boundary-exchange.v1\"}"
+    },
+    {
+      "id": "jcs-control-character-escaping",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"escape\":\"\\b\\t\\n\\f\\r\\u0000\"}}",
+      "canonical": "{\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"content\":{\"escape\":\"\\b\\t\\n\\f\\r\\u0000\"},\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"schema_version\":\"blue-tanuki.boundary-exchange.v1\"}"
+    }
+  ],
+  "negative": [
+    {
+      "id": "duplicate-decoded-key",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"x\":1,\"\\u0078\":2}}",
+      "reason": "duplicate_key"
+    },
+    {
+      "id": "unpaired-high-surrogate",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"x\":\"\\uD800\"}}",
+      "reason": "invalid_unicode"
+    },
+    {
+      "id": "unpaired-low-surrogate",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"x\":\"\\uDC00\"}}",
+      "reason": "invalid_unicode"
+    },
+    {
+      "id": "fractional-number-token",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"x\":1.0}}",
+      "reason": "invalid_number_profile"
+    },
+    {
+      "id": "exponent-number-token",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"x\":1e0}}",
+      "reason": "invalid_number_profile"
+    },
+    {
+      "id": "negative-zero-token",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"x\":-0}}",
+      "reason": "invalid_number_profile"
+    },
+    {
+      "id": "unsafe-integer-token",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"x\":9007199254740992}}",
+      "reason": "invalid_number_profile"
+    },
+    {
+      "id": "invalid-json-number",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"x\":NaN}}",
+      "reason": "invalid_json"
+    },
+    {
+      "id": "unknown-top-level-field",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{},\"authority\":{\"secret\":\"SECRET_VECTOR_SENTINEL\"}}",
+      "reason": "schema_validation_failed"
+    },
+    {
+      "id": "unsupported-contract-version",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v2\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{}}",
+      "reason": "schema_validation_failed"
+    },
+    {
+      "id": "unsupported-canonicalization-version",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"other\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{}}",
+      "reason": "schema_validation_failed"
+    },
+    {
+      "id": "non-utc-timestamp",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000+09:00\",\"content\":{}}",
+      "reason": "schema_validation_failed"
+    },
+    {
+      "id": "invalid-calendar-timestamp",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-02-30T00:00:00.000Z\",\"content\":{}}",
+      "reason": "schema_validation_failed"
+    },
+    {
+      "id": "dangerous-content-key",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"__proto__\":1}}",
+      "reason": "dangerous_key"
+    },
+    {
+      "id": "dangerous-constructor-key-in-nested-array",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"values\":[{\"constructor\":1}]}}",
+      "reason": "dangerous_key"
+    },
+    {
+      "id": "dangerous-prototype-key",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{\"prototype\":{\"value\":1}}}",
+      "reason": "dangerous_key"
+    },
+    {
+      "id": "schema-error-precedes-dangerous-key-outside-content",
+      "input": "{\"schema_version\":\"blue-tanuki.boundary-exchange.v1\",\"canonicalization_version\":\"blue-tanuki.jcs-safe-integer.v1\",\"issued_at_utc\":\"2026-10-09T00:00:00.000Z\",\"content\":{},\"authority\":{\"__proto__\":1}}",
+      "reason": "schema_validation_failed"
+    },
+    {
+      "id": "invalid-utf8",
+      "input_utf8_hex": "7b22736368656d615f76657273696f6e223a22626c75652d74616e756b692e626f756e646172792d65786368616e67652e7631222c2263616e6f6e6963616c697a6174696f6e5f76657273696f6e223a22626c75652d74616e756b692e6a63732d736166652d696e74656765722e7631222c226973737565645f61745f757463223a22323032362d31302d30395430303a30303a30302e3030305a222c22636f6e74656e74223a7b2278223a22ff227d7d",
+      "reason": "invalid_utf8"
+    },
+    {
+      "id": "payload-too-large",
+      "generated": {"kind": "oversized_content", "repeat": 1048576},
+      "reason": "payload_too_large"
+    },
+    {
+      "id": "nesting-too-deep",
+      "generated": {"kind": "nested_arrays", "count": 63},
+      "reason": "payload_too_deep"
+    }
+  ]
+}

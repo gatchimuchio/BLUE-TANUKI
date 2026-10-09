@@ -3,6 +3,7 @@ node_modules/
 
 dist/
 **/dist/
+packages/protocol/rust-conformance/target/
 
 .env
 .env.*
