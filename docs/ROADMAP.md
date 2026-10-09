@@ -6,7 +6,7 @@
 
 ## 現在の開発工程
 
-ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。直近完了はC01.02のPRODUCT_BUILD_MODE／contract単位で、制限JSON境界と共有vectorによるTypeScript／開発専用Rustの局所同値を受け入れた。実Rust consumer、IPC、issuer/audience、実作用への接続は未成立。直接依存C01.01はmain `12410aec` に保存済み。[開発進捗](開発進捗.md) に有限受入、未実施、検証とGit統合を記録する。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次候補C01.03の受入runner接続は未開始である。
+ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、実件数を照合する開発導線と未登録・0件・未実装の負例を受け入れた。親C01のT01/T02/T04、製品runtime consumer、release readinessは未成立である。C01.02はmain `20ff760`、C01.01はmain `12410aec` に保存済み。[開発進捗](開発進捗.md) に有限受入、未実施、検証とGit統合を記録する。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。C01.03だけを閉じ、次候補C02.01へは自動進行しない。
 
 以下の日本語移行と P13 状態は独立して維持する。
 

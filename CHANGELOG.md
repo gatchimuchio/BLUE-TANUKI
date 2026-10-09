@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-09 — 要求ID付き実試験入口
+
+- 開発専用の`validate:agi`を追加し、登録済み要求IDを実Vitestのtest file／test-name selectorへ接続する。JSON報告、子process終了値、成功・失敗件数、一時報告回収を照合し、未登録・0件・未実装・実行失敗を非成功にする。
+- 利用文書に選択方法、失敗分類、適用範囲を記録する。局所の開発試験導線であり、親C01全体、製品runtime、release readiness、P13 owner GOは証明しない。
+
 ## 2026-10-09 — 言語間契約の同値性
 
 - C01.02として、版付き制限JSON境界をprotocolへ追加し、同一の合成fixtureを使うTypeScript境界と開発専用Rust conformance crateを用意した。正例6件のcanonical bytesと負例20件の拒否理由を両実装で照合する。

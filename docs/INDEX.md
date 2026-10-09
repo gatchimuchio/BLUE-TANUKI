@@ -27,7 +27,8 @@
 
 - [共通record境界](../packages/protocol/src/common_record.ts) — JSON境界parser、独立状態schema、fail-closed理由
 - [境界交換契約](../packages/protocol/src/境界交換契約.ts) — 制限JSONの版付き境界とcanonical bytes。実行権限は持たない
-- [開発進捗](開発進捗.md) — C01.02の有限成果、未達、検証・Git統合
+- [開発進捗](開発進捗.md) — 施工単位の有限成果、未達、検証・Git統合
+- [要求ID付き局所試験の実行](VALIDATE_AGI.md) — `validate:agi` の登録ID選択、実試験実行、失敗分類と証明範囲
 - [旧新切替と復元の判断記録](旧新切替と復元の判断記録.md) — B03.03の停止・切替・照合・戻し、非作用shadow、非公開差分、現物不足と後継
 - [実行分離と接続認証](実行分離と接続認証.md) — 実行分離、C01.02の局所境界契約、外殻接続の未実証と後継
 - [B02.03 外殻接続変更案](外殻接続変更案.md) — 公開ソースに基づく限定提案。実装・別 repo 書込みの許可ではない

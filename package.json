@@ -18,6 +18,7 @@
     "validate:release-hardening": "tsx scripts/release_hardening_gate.ts",
     "validate:channels": "tsx scripts/channel_promotion_gate.ts",
     "validate:ga": "tsx scripts/ga_promotion_gate.ts",
+    "validate:agi": "tsx scripts/validate_agi.ts",
     "validate:product": "tsx scripts/validate_product.ts",
     "plugin:review": "tsx scripts/plugin_review_gate.ts",
     "gateway": "pnpm --filter @blue-tanuki/gateway run start",
