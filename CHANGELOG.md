@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-09 — provider応答・候補保持・中断境界
+
+- C05.02として、OpenAI互換tool_callsとAnthropic tool_useを実行されない型付きcandidateへ正規化し、Executorと通常Gateway finalization経路へ渡す。HDS feedback auditはfailure要約とcandidate count/digestだけを記録する。
+- provider response bodyの読了までtimeoutを適用し、caller cancellationを伝播する。partial/malformed/disconnected/timeout/cancelをtyped failureとし、raw provider payloadとHTTP error bodyを応答・auditへ出さない。
+- 合成fixtureの受入結果とworkspace検証、host doctor状態、未実施のlive/release確認は開発進捗へ記録する。tool実行、fallback/egress policy変更、GA/P13/owner GOは含めない。
 ## 2026-10-09 — C計算入力とprovider実行識別の結合
 
 - C05.01として、generic input/output型のCompute契約を追加し、LLM固有payloadはadapter内に閉じた。HDS現在射影digest、session historyを含む実provider入力digest、provider出力digestとresource limitをresult identityへ結合する。

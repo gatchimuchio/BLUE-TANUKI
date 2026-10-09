@@ -11,14 +11,17 @@ import {
 class CapturingBackend implements LLMBackend {
   readonly name = "fixture-provider";
   readonly seen: LLMRequest[] = [];
+  lastSignal?: AbortSignal;
 
-  async call(request: LLMRequest): Promise<LLMResponse> {
+  async call(request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
     this.seen.push(request);
+    this.lastSignal = signal;
     return {
       content: "fixture response",
       tokens_used: 7,
       model: "fixture-model-v1",
       provider: "untrusted-response-provider",
+      raw: { private: "raw provider payload" },
     };
   }
 }
@@ -46,10 +49,13 @@ function computeRequest(): ComputeRequest<LLMRequest> {
 describe("LLMComputeAdapter", () => {
   it("binds provider execution identity and keeps compute metadata local", async () => {
     const backend = new CapturingBackend();
-    const result = await new LLMComputeAdapter(backend).compute(computeRequest());
+    const controller = new AbortController();
+    const result = await new LLMComputeAdapter(backend).compute(computeRequest(), controller.signal);
 
     expect(backend.seen).toEqual([computeRequest().input]);
+    expect(backend.lastSignal).toBe(controller.signal);
     expect(backend.seen[0]).not.toHaveProperty("execution_identity");
+    expect(result).not.toHaveProperty("raw");
     expect(result.provider).toBe("fixture-provider");
     expect(result.execution_identity).toMatchObject({
       request_id: "request-1",

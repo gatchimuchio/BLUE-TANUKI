@@ -221,11 +221,57 @@ export type ExecuteCommand = z.infer<typeof ExecuteCommandSchema>;
  * Feedback from BLUE-TANUKI executor back to HDS-BRAIN.
  * Used by HDS-BRAIN to update its state machine.
  */
+export const LLMCallFailureSchema = z.object({
+  schema_version: z.literal("blue-tanuki.llm-failure.v1"),
+  kind: z.enum([
+    "rate_limited",
+    "temporary_network",
+    "disconnected",
+    "remote_service_unavailable",
+    "auth",
+    "bad_request",
+    "bad_response",
+    "timeout",
+    "cancelled",
+    "partial_response",
+    "invalid_structured_output",
+    "unknown",
+  ]),
+  retryable: z.boolean(),
+  provider: z.string().min(1).max(128).optional(),
+  status: z.number().int().min(100).max(599).optional(),
+  retry_after_ms: z.number().int().min(0).max(604_800_000).optional(),
+  authority_boundary: z.object({
+    used_for_authority: z.literal(false),
+  }).strict(),
+}).strict();
+export type LLMCallFailure = z.infer<typeof LLMCallFailureSchema>;
+export type LLMCallFailureKind = LLMCallFailure["kind"];
+
+/**
+ * Untrusted provider tool output. It is returned for J review and is never an
+ * executable command or permission grant by itself.
+ */
+export const LLMToolCallCandidateSchema = z.object({
+  schema_version: z.literal("blue-tanuki.llm-tool-call-candidate.v1"),
+  call_id: z.string().min(1).max(200),
+  tool_name: z.string().min(1).max(200),
+  arguments: z.record(z.unknown()),
+  authority_boundary: z.object({
+    candidate_only: z.literal(true),
+    may_execute: z.literal(false),
+    used_for_authority: z.literal(false),
+  }).strict(),
+}).strict();
+export type LLMToolCallCandidate = z.infer<typeof LLMToolCallCandidateSchema>;
+
 export const ExecuteFeedbackSchema = z.object({
   command_id: z.string(),
   status: z.enum(["success", "failed", "suspended"]),
   result: z.unknown().optional(),
   error: z.string().optional(),
+  llm_failure: LLMCallFailureSchema.optional(),
+  llm_tool_candidates: z.array(LLMToolCallCandidateSchema).max(32).optional(),
   metrics: z.object({
     duration_ms: z.number(),
     tokens_used: z.number().optional(),

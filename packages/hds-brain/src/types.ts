@@ -303,6 +303,9 @@ export interface ExecutorFeedbackAuditTrace {
   result_present: boolean;
   result_digest?: string;
   error?: string;
+  llm_failure?: ExecuteFeedback["llm_failure"];
+  llm_tool_candidate_count?: number;
+  llm_tool_candidates_digest?: string;
   metrics: ExecuteFeedback["metrics"];
 }
 

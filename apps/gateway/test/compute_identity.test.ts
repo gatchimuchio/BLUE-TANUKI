@@ -9,6 +9,7 @@ import {
   createExecutorApprovalAuthority,
 } from "@blue-tanuki/core";
 import type { LLMBackend, LLMRequest, LLMResponse } from "@blue-tanuki/core";
+import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 
 class FixtureProvider implements LLMBackend {
   readonly name = "fixture-provider";
@@ -17,6 +18,31 @@ class FixtureProvider implements LLMBackend {
   async call(request: LLMRequest): Promise<LLMResponse> {
     this.requests.push(request);
     return { content: "A local fixture response.", tokens_used: 3, model: "fixture-model-v1" };
+  }
+}
+
+class ToolCandidateProvider implements LLMBackend {
+  readonly name = "fixture-provider";
+  readonly requests: LLMRequest[] = [];
+
+  async call(request: LLMRequest): Promise<LLMResponse> {
+    this.requests.push(request);
+    return {
+      content: "",
+      tokens_used: 2,
+      model: "fixture-model-v1",
+      tool_calls: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "call-gateway-1",
+        tool_name: "shell.exec",
+        arguments: { command: "gateway-tool-argument-private-sentinel" },
+        authority_boundary: {
+          candidate_only: true,
+          may_execute: false,
+          used_for_authority: false,
+        },
+      }],
+    };
   }
 }
 
@@ -115,5 +141,59 @@ describe("HDS to Gateway compute identity", () => {
       "accepted_inbound_request",
       "selected_memory_references",
     ]);
+  });
+
+  it("returns candidates through the normal Gateway/HDS feedback path as non-authority data", async () => {
+    const provider = new ToolCandidateProvider();
+    const registry = new LLMRegistry().register(provider);
+    const hds = new HDSUpperController();
+    const { log, command } = hds.decide(inbound("request a candidate", "compute-tool-candidate"));
+    if (!command || command.type !== "llm_call") throw new Error("expected HDS llm_call");
+
+    const authority = createExecutorApprovalAuthority();
+    const executor = new Executor({
+      approval_authority: authority,
+      llm: registry,
+      compute: new LLMComputeAdapter(registry),
+      tools: new ToolRegistry(),
+    });
+    const approved = authority.approve(command, {
+      source: "approval_gate",
+      decision: "allow",
+      approved_by: "fixture-owner",
+      approved_at_ms: 1,
+      upstream_commit_hash: command.upstream_decision.commit_hash,
+      operation: "llm.call",
+      risk: "low",
+      final_review_required: false,
+      reason: "fixture candidate path test",
+    });
+    const feedback = await executor.execute(approved);
+    const finalized = finalizeCommandOutput({
+      hds,
+      command,
+      feedback,
+      target_surface: "channel",
+      request_id: log.request_id,
+    });
+
+    expect(finalized.reviewed_feedback.llm_tool_candidates).toHaveLength(1);
+    expect(finalized.reviewed_feedback.llm_tool_candidates?.[0]?.authority_boundary).toEqual({
+      candidate_only: true,
+      may_execute: false,
+      used_for_authority: false,
+    });
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]).not.toHaveProperty("tools");
+    const feedbackEntry = hds.getAudit().list().find((entry) =>
+      "kind" in entry.log && entry.log.kind === "executor_feedback",
+    );
+    if (!feedbackEntry || !("kind" in feedbackEntry.log) || feedbackEntry.log.kind !== "executor_feedback") {
+      throw new Error("expected executor feedback audit entry");
+    }
+    expect(feedbackEntry.log.feedback.llm_tool_candidate_count).toBe(1);
+    expect(feedbackEntry.log.feedback.llm_tool_candidates_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(hds.getAudit().list())).not.toContain("gateway-tool-argument-private-sentinel");
+    expect(hds.getAudit().verify()).toBe(true);
   });
 });

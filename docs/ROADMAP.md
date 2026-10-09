@@ -6,7 +6,7 @@
 
 ## 現在の開発工程
 
-ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01でM SQLite原子取引、C03.02で期待版比較・同ID冪等再送・V1履歴互換、C03.03でJ pendingの永続化とM receipt再照合からの局所復帰を実装し、一時SQLite fixtureで確認した。C03.04では保存障害後のhandle停止と、正本ledgerを維持したM/J派生像の明示的な局所再構成を実装し、破損ledgerとschema不一致のrepair拒否を同fixtureで確認した。C04.01ではJが依頼scopeを定め、hash-chain検証済みHDS LTM候補からCが支持・反証案を出し、JがID・hash版・出所・scopeを照合する通常Gateway応答経路を接続した。C04.02では明示F参照がある依頼を完全一致候補に限定し、要約射影の省略field・digest・文字切詰め差と意味未評価状態、採用/非採用/文脈除外のF参照を監査へ保持した。C04.03ではCの現在射影が実際に含むrecord ID/hash版を`dependency_versions`としてcontextとhash-chain auditへ保持し、過去decisionを履歴証拠と明記した。C05.01ではgeneric input/output型のCompute契約を設け、HDS現在射影digest、実provider input/output digest、要求・実provider/model、ローカルC入力規則版、data exposure sourceとresource limitsを通常Gateway Executor経路のresult identityへ結ぶ。金額costはprovider報告がないためunknownとし、Mini Dora fixtureも同じ権限なし契約を使う。C05親の残りC05.02以降とC01/C02/C03/C04親全scenario、実provider/live/installed、release readinessは未成立である。全体検証、未達、環境失敗と局所証拠の境界は[開発進捗](開発進捗.md)へ記録する。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
+ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付きvalidate:agiを実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01–04ではM/Jの永続化・復旧、C04.01–03ではmemory候補・引用・依存版をHDS権限外の通常経路へ接続した。C05.01ではgeneric Compute identityへHDS射影digest、実provider input/output digest、provider/model、local P、data exposure source、resource limitsとunknown costを結合した。C05.02ではprovider応答のstrict parsing、timeout/cancel中断、native tool callのcandidate-only化、HDSへのdigest-only auditを通常Gateway finalization経路で確認する。C05親の残りC05.03以降、C01/C02/C03/C04親全scenario、実provider/live/installed、release readinessは未成立である。全体検証、未達、環境失敗と局所証拠の境界は[開発進捗](開発進捗.md)へ記録する。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
 
 以下の日本語移行と P13 状態は独立して維持する。
 
@@ -18,7 +18,7 @@ ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を
 | Product phase | P13 凍結 | `PENDING_OWNER_GO`、`public_claim_allowed=false`。 |
 | Language phase | J0 完了 | 日本語基底規定、台帳、gate、active governance が成立。J1 は未承認。 |
 | Strict language gate | 未成立 | 既存の非日本語 active assets が移行負債として残る。 |
-| Runtime / authority | C05.01のC入力・provider実行識別結合 | HDS射影digest、実provider input/output digest、要求/実provider・model、ローカルC入力規則版、data exposure metadataとcost状態をnon-authority結果へ結ぶ。親C05はpartial。 |
+| Runtime / authority | C05.02のprovider応答・tool candidate境界 | provider応答をstrict parsingし、timeout/cancel/disconnect/partial failureを型付けする。native tool callは実行せずnon-authority candidateとして通常Gateway/HDS auditへ渡す。親C05はpartial。 |
 
 ## 系列
 

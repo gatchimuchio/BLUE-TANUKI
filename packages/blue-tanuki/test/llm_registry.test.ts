@@ -198,4 +198,22 @@ describe("LLMRegistry", () => {
     });
     expect(fallback.seen).toHaveLength(0);
   });
+
+  it("does not call a provider or fallback when the caller already cancelled", async () => {
+    const primary = new NamedBackend("primary");
+    const fallback = new NamedBackend("stub");
+    const registry = new LLMRegistry({ retry: { max_attempts: 3 } })
+      .register(primary)
+      .register(fallback)
+      .setDefault("primary")
+      .setFallback("stub");
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(registry.call({
+      messages: [{ role: "user", content: "sensitive fixture" }],
+    }, controller.signal)).rejects.toMatchObject({ kind: "cancelled", retryable: false });
+    expect(primary.seen).toHaveLength(0);
+    expect(fallback.seen).toHaveLength(0);
+  });
 });

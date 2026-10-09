@@ -2,12 +2,24 @@ import { createHash } from "node:crypto";
 import type {
   ExecuteCommand,
   ExecuteFeedback,
+  LLMCallFailure,
   LLMCallPayload,
   ToolCallPayload,
   ChannelSendPayload,
   ToolCapability,
 } from "@blue-tanuki/protocol";
-import type { LLMBackend, LLMRequest, LLMResponse } from "./llm/base.js";
+import {
+  classifyLLMError,
+  createLLMAbortError,
+  LLMProviderError,
+  LLM_EXECUTION_CANCELLED_REASON,
+  LLM_EXECUTION_TIMEOUT_REASON,
+  normalizeLLMToolCallCandidates,
+  type LLMBackend,
+  type LLMErrorKind,
+  type LLMRequest,
+  type LLMResponse,
+} from "./llm/base.js";
 import {
   LLM_COMPUTE_PROFILE,
   type ComputeBackend,
@@ -74,6 +86,11 @@ export interface ExecutorDeps {
    * the SessionStore is large but per-call context should be smaller.
    */
   history_limit?: number;
+}
+
+export interface ExecutorExecutionContext {
+  /** Caller cancellation for the current LLM request. */
+  signal?: AbortSignal;
 }
 
 const APPROVED_COMMAND_BRAND: unique symbol = Symbol("blue_tanuki.executor.approved_command.v1");
@@ -158,7 +175,7 @@ function approveCommandForExecution(
 export class Executor {
   constructor(private readonly deps: ExecutorDeps) {}
 
-  async execute(cmd: ApprovedCommand): Promise<ExecuteFeedback> {
+  async execute(cmd: ApprovedCommand, context: ExecutorExecutionContext = {}): Promise<ExecuteFeedback> {
     const start = Date.now();
     let proof: ExecutorApprovalProof | undefined;
     try {
@@ -166,7 +183,7 @@ export class Executor {
       let feedback: ExecuteFeedback;
       switch (cmd.type) {
         case "llm_call":
-          feedback = await this.executeLLMCall(cmd.id, cmd.payload, cmd.constraints, start);
+          feedback = await this.executeLLMCall(cmd.id, cmd.payload, cmd.constraints, start, context.signal);
           break;
         case "tool_call":
           feedback = await this.executeToolCall(cmd.id, cmd.payload, cmd.constraints, start, cmd.upstream_decision.commit_hash);
@@ -200,6 +217,7 @@ export class Executor {
     payload: LLMCallPayload,
     constraints: ExecuteCommand["constraints"],
     start: number,
+    callerSignal?: AbortSignal,
   ): Promise<ExecuteFeedback> {
     // History merge: when a session_store is configured AND the payload
     // declares a session_id, prepend retained history before invoking
@@ -233,27 +251,64 @@ export class Executor {
       ...(constraints?.max_tokens !== undefined ? { max_tokens: constraints.max_tokens } : {}),
       ...(constraints?.timeout_ms !== undefined ? { timeout_ms: constraints.timeout_ms } : {}),
     };
-    const response = this.deps.compute
-      ? this.deps.compute.compute(buildComputeRequest({
-          request_id: id,
-          context: payload.compute_context,
-          provider_request: providerRequest,
-          max_tokens: constraints?.max_tokens,
-          timeout_ms: constraints?.timeout_ms,
-          session_history_applied: sessionHistoryApplied,
-        }))
-      : this.deps.llm.call(providerRequest);
-    const resp = await this.withTimeout(
-      response,
-      constraints?.timeout_ms,
-    );
+    const requestedProvider = safeProviderLabel(payload.backend_hint ?? this.deps.llm.name);
+    let resp: LLMResponse;
+    try {
+      resp = await withLLMCallGuard(
+        requestedProvider,
+        constraints?.timeout_ms,
+        callerSignal,
+        async (signal) => {
+          if (this.deps.compute) {
+            return this.deps.compute.compute(buildComputeRequest({
+              request_id: id,
+              context: payload.compute_context,
+              provider_request: providerRequest,
+              max_tokens: constraints?.max_tokens,
+              timeout_ms: constraints?.timeout_ms,
+              session_history_applied: sessionHistoryApplied,
+            }), signal);
+          }
+          return this.deps.llm.call(providerRequest, signal);
+        },
+      );
+    } catch (error) {
+      return buildLLMFailureFeedback(id, error, requestedProvider, Date.now() - start);
+    }
+
+    // Provider adapters and custom backends may attach raw diagnostic payloads.
+    // They are never part of the operator-facing result or session history.
+    if (Object.hasOwn(resp, "raw")) {
+      const safeResponse = { ...resp };
+      delete safeResponse.raw;
+      resp = safeResponse;
+    }
+
+    let toolCandidates: NonNullable<LLMResponse["tool_calls"]> | undefined;
+    try {
+      toolCandidates = normalizeLLMToolCallCandidates(
+        safeProviderLabel(resp.provider ?? requestedProvider),
+        resp.tool_calls,
+      );
+      if (toolCandidates) resp = { ...resp, tool_calls: toolCandidates };
+    } catch (error) {
+      return buildLLMFailureFeedback(id, error, requestedProvider, Date.now() - start);
+    }
+
     const plannerInspection = inspectOperationCorePlannerOutput(resp.content);
     if (plannerInspection.kind === "rejected") {
       return {
         command_id: id,
         status: "failed",
-        error: `Operation Core planner output rejected: ${plannerInspection.rejection.reason}`,
-        result: { operation_core: plannerInspection.rejection },
+        error: safeOperationPlanRejection(plannerInspection.rejection.reason),
+        llm_failure: {
+          schema_version: "blue-tanuki.llm-failure.v1",
+          kind: "invalid_structured_output",
+          retryable: false,
+          provider: safeProviderLabel(resp.provider ?? requestedProvider),
+          authority_boundary: { used_for_authority: false },
+        },
+        result: { operation_core: { status: "rejected", planner_output_used_for_authority: false } },
         metrics: {
           duration_ms: Date.now() - start,
           tokens_used: resp.tokens_used,
@@ -273,11 +328,13 @@ export class Executor {
           timestamp: now,
         });
       }
-      await session_store.append(session_id, {
-        role: "assistant",
-        content: resp.content,
-        timestamp: Date.now(),
-      });
+      if (resp.content) {
+        await session_store.append(session_id, {
+          role: "assistant",
+          content: resp.content,
+          timestamp: Date.now(),
+        });
+      }
     }
 
     return {
@@ -286,6 +343,7 @@ export class Executor {
       result: plannerInspection.kind === "valid_plan"
         ? { ...resp, operation_core: plannerInspection.evidence }
         : resp,
+      ...(toolCandidates?.length ? { llm_tool_candidates: toolCandidates } : {}),
       metrics: {
         duration_ms: Date.now() - start,
         tokens_used: resp.tokens_used,
@@ -453,6 +511,144 @@ export class Executor {
       }
     }
     return proof;
+  }
+}
+
+function safeOperationPlanRejection(reason: string): string {
+  if (reason.startsWith("raw command field is not allowed in planner output:")) {
+    return "Operation Core planner output rejected: raw command field.";
+  }
+  if (reason.startsWith("OperationPlanSchema rejected planner output")) {
+    return "Operation Core planner output rejected: OperationPlanSchema rejected planner output.";
+  }
+  if (/^adapter registry rejected planner output: adapter registry rejected [A-Za-z0-9._:-]+: shell requires command_generated_by_adapter_only=true$/.test(reason)) {
+    return "Operation Core planner output rejected: adapter registry rejected planner output: shell requires command_generated_by_adapter_only=true";
+  }
+  return "Model output did not satisfy the OperationPlan structure.";
+}
+
+function safeProviderLabel(value: string): string {
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(trimmed) ? trimmed : "configured-provider";
+}
+
+function safeLLMFailureMessage(kind: LLMErrorKind): string {
+  switch (kind) {
+    case "rate_limited": return "The provider rate limit was reached.";
+    case "temporary_network":
+    case "disconnected": return "The provider connection ended before a complete response.";
+    case "remote_service_unavailable": return "The provider is temporarily unavailable.";
+    case "auth": return "Provider authentication failed.";
+    case "bad_request": return "The provider rejected the request.";
+    case "bad_response":
+    case "invalid_structured_output": return "The provider returned an invalid response structure.";
+    case "timeout": return "The provider request timed out.";
+    case "cancelled": return "The provider request was cancelled.";
+    case "partial_response": return "The provider returned a partial response.";
+    case "unknown": return "The LLM request failed.";
+  }
+}
+
+function buildLLMFailureFeedback(
+  commandId: string,
+  error: unknown,
+  requestedProvider: string,
+  durationMs: number,
+): ExecuteFeedback {
+  const classification = classifyLLMError(error);
+  const provider = error instanceof LLMProviderError
+    ? safeProviderLabel(error.provider)
+    : requestedProvider;
+  const failure: LLMCallFailure = {
+    schema_version: "blue-tanuki.llm-failure.v1",
+    kind: classification.kind,
+    retryable: classification.retryable,
+    provider,
+    ...(classification.status !== undefined ? { status: classification.status } : {}),
+    ...(classification.retry_after_ms !== undefined
+      ? { retry_after_ms: Math.min(604_800_000, classification.retry_after_ms) }
+      : {}),
+    authority_boundary: { used_for_authority: false },
+  };
+  return {
+    command_id: commandId,
+    status: "failed",
+    error: safeLLMLocalError(error) ?? safeLLMFailureMessage(classification.kind),
+    llm_failure: failure,
+    metrics: { duration_ms: durationMs },
+  };
+}
+
+function safeLLMLocalError(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const exactMessages = new Set([
+    "LLM compute context is required when a compute adapter is configured",
+    "compute request_id is required",
+    "compute projection digest must be a SHA-256 hex digest",
+    "compute input digest must be a SHA-256 hex digest",
+    "compute local P version is required",
+    "LLM compute profile does not match this adapter",
+    "compute data exposure sources are required",
+    "compute data exposure sources must be unique",
+    "compute requested egress provider is required",
+    "compute requested provider does not match its data exposure scope",
+    "compute backend returned no provider identity",
+    "compute backend returned no model identity",
+  ]);
+  if (exactMessages.has(error.message)) return error.message;
+  if (/^compute resource limit (?:max_tokens|timeout_ms) must be a positive safe integer$/.test(error.message)) {
+    return error.message;
+  }
+  return undefined;
+}
+
+async function withLLMCallGuard<T>(
+  provider: string,
+  timeoutMs: number | undefined,
+  callerSignal: AbortSignal | undefined,
+  invoke: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (callerSignal?.aborted) {
+    const controller = new AbortController();
+    controller.abort(LLM_EXECUTION_CANCELLED_REASON);
+    throw createLLMAbortError(provider, controller.signal);
+  }
+
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let callerAbortHandler: (() => void) | undefined;
+  const guards: Promise<never>[] = [];
+
+  if (timeoutMs !== undefined && timeoutMs > 0) {
+    guards.push(new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort(LLM_EXECUTION_TIMEOUT_REASON);
+        reject(createLLMAbortError(provider, controller.signal));
+      }, timeoutMs);
+    }));
+  }
+
+  if (callerSignal) {
+    guards.push(new Promise<never>((_, reject) => {
+      callerAbortHandler = () => {
+        controller.abort(LLM_EXECUTION_CANCELLED_REASON);
+        reject(createLLMAbortError(provider, controller.signal));
+      };
+      callerSignal.addEventListener("abort", callerAbortHandler, { once: true });
+      if (callerSignal.aborted) callerAbortHandler();
+    }));
+  }
+
+  const operation = Promise.resolve().then(() => {
+    if (controller.signal.aborted) throw createLLMAbortError(provider, controller.signal);
+    return invoke(controller.signal);
+  });
+
+  try {
+    return await Promise.race([operation, ...guards]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (callerAbortHandler) callerSignal?.removeEventListener("abort", callerAbortHandler);
   }
 }
 

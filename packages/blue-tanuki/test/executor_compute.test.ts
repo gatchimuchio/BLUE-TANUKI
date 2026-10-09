@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import { Executor, createExecutorApprovalAuthority } from "../src/executor.js";
 import type { ComputeBackend, ComputeRequest } from "../src/llm/compute.js";
@@ -16,7 +16,7 @@ const upstream = {
   commit_decision: "ASSERT" as const,
 };
 
-function command(id: string, context = true): ExecuteCommand {
+function command(id: string, context = true, timeout_ms = 1_500): ExecuteCommand {
   return {
     id,
     type: "llm_call",
@@ -36,7 +36,7 @@ function command(id: string, context = true): ExecuteCommand {
         },
       } : {}),
     },
-    constraints: { max_tokens: 64, timeout_ms: 1_500 },
+    constraints: { max_tokens: 64, timeout_ms },
     upstream_decision: upstream,
   };
 }
@@ -58,10 +58,28 @@ function approved(cmd: ExecuteCommand) {
 class CapturingBackend implements LLMBackend {
   readonly name = "fixture-provider";
   readonly seen: LLMRequest[] = [];
+  constructor(private readonly response: LLMResponse = {
+    content: "fixture reply",
+    tokens_used: 2,
+    model: "fixture-model-v1",
+  }) {}
 
   async call(request: LLMRequest): Promise<LLMResponse> {
     this.seen.push(request);
-    return { content: "fixture reply", tokens_used: 2, model: "fixture-model-v1" };
+    return this.response;
+  }
+}
+
+class HangingBackend implements LLMBackend {
+  readonly name = "fixture-provider";
+  signal?: AbortSignal;
+  private startedResolver!: () => void;
+  readonly started = new Promise<void>((resolve) => { this.startedResolver = resolve; });
+
+  async call(_request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
+    this.signal = signal;
+    this.startedResolver();
+    return new Promise<LLMResponse>(() => undefined);
   }
 }
 
@@ -137,5 +155,102 @@ describe("Executor compute boundary", () => {
     expect(result.error).toContain("compute context is required");
     expect(compute.requests).toHaveLength(0);
     expect(backend.seen).toHaveLength(0);
+  });
+
+  it("returns native tool calls as candidates without invoking registered tools", async () => {
+    const candidate = {
+      schema_version: "blue-tanuki.llm-tool-call-candidate.v1" as const,
+      call_id: "call-danger",
+      tool_name: "shell.exec",
+      arguments: { command: "echo must-not-run" },
+      authority_boundary: {
+        candidate_only: true as const,
+        may_execute: false as const,
+        used_for_authority: false as const,
+      },
+    };
+    const backend = new CapturingBackend({
+      content: "",
+      tokens_used: 1,
+      model: "fixture-model-v1",
+      tool_calls: [candidate],
+    });
+    const invoke = vi.fn(async () => ({ executed: true }));
+    const tools = new ToolRegistry();
+    tools.register({ name: "shell.exec", description: "fixture", invoke });
+    const executor = new Executor({
+      approval_authority: authority,
+      llm: backend,
+      compute: new LLMComputeAdapter(backend),
+      tools,
+    });
+
+    const result = await executor.execute(approved(command("compute-tool-candidate")));
+
+    expect(result.status).toBe("success");
+    expect(result.llm_tool_candidates).toHaveLength(1);
+    expect(result.llm_tool_candidates?.[0]?.authority_boundary).toEqual({
+      candidate_only: true,
+      may_execute: false,
+      used_for_authority: false,
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("types malformed planner JSON and does not return the raw provider content", async () => {
+    const rawSentinel = "provider-raw-response-sentinel";
+    const backend = new CapturingBackend({
+      content: `{"plan_id":"${rawSentinel}","steps":`,
+      tokens_used: 4,
+      model: "fixture-model-v1",
+    });
+    const executor = new Executor({
+      approval_authority: authority,
+      llm: backend,
+      compute: new LLMComputeAdapter(backend),
+      tools: new ToolRegistry(),
+    });
+
+    const result = await executor.execute(approved(command("compute-invalid-json")));
+
+    expect(result.status).toBe("failed");
+    expect(result.llm_failure).toMatchObject({ kind: "invalid_structured_output", retryable: false });
+    expect(result.error).not.toContain(rawSentinel);
+    expect(JSON.stringify(result)).not.toContain(rawSentinel);
+  });
+
+  it("aborts the provider and returns a typed caller cancellation", async () => {
+    const backend = new HangingBackend();
+    const executor = new Executor({
+      approval_authority: authority,
+      llm: backend,
+      compute: new LLMComputeAdapter(backend),
+      tools: new ToolRegistry(),
+    });
+    const controller = new AbortController();
+    const pending = executor.execute(approved(command("compute-cancelled")), { signal: controller.signal });
+    await backend.started;
+    controller.abort();
+
+    const result = await pending;
+    expect(result.status).toBe("failed");
+    expect(result.llm_failure).toMatchObject({ kind: "cancelled", retryable: false });
+    expect(backend.signal?.aborted).toBe(true);
+  });
+
+  it("aborts provider work on the command deadline and returns a typed timeout", async () => {
+    const backend = new HangingBackend();
+    const executor = new Executor({
+      approval_authority: authority,
+      llm: backend,
+      compute: new LLMComputeAdapter(backend),
+      tools: new ToolRegistry(),
+    });
+
+    const result = await executor.execute(approved(command("compute-timeout", true, 15)));
+
+    expect(result.status).toBe("failed");
+    expect(result.llm_failure).toMatchObject({ kind: "timeout", retryable: true });
+    expect(backend.signal?.aborted).toBe(true);
   });
 });

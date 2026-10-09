@@ -137,6 +137,79 @@ describe("Operation Core schemas", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts typed LLM failures and candidate-only tool calls", () => {
+    const parsed = ExecuteFeedbackSchema.parse({
+      command_id: "llm-candidate",
+      status: "success",
+      result: { content: "", tokens_used: 1, model: "fixture-model" },
+      llm_tool_candidates: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "call-1",
+        tool_name: "shell.exec",
+        arguments: { command: "echo forbidden" },
+        authority_boundary: {
+          candidate_only: true,
+          may_execute: false,
+          used_for_authority: false,
+        },
+      }],
+      metrics: { duration_ms: 4 },
+    });
+
+    expect(parsed.llm_tool_candidates?.[0]?.authority_boundary).toEqual({
+      candidate_only: true,
+      may_execute: false,
+      used_for_authority: false,
+    });
+
+    const failed = ExecuteFeedbackSchema.parse({
+      command_id: "llm-timeout",
+      status: "failed",
+      error: "The provider request timed out.",
+      llm_failure: {
+        schema_version: "blue-tanuki.llm-failure.v1",
+        kind: "timeout",
+        retryable: true,
+        provider: "fixture-provider",
+        authority_boundary: { used_for_authority: false },
+      },
+      metrics: { duration_ms: 1 },
+    });
+    expect(failed.llm_failure?.kind).toBe("timeout");
+  });
+
+  it("rejects tool candidates or failure metadata that claim authority", () => {
+    const candidate = ExecuteFeedbackSchema.safeParse({
+      command_id: "llm-candidate",
+      status: "success",
+      llm_tool_candidates: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "call-1",
+        tool_name: "shell.exec",
+        arguments: {},
+        authority_boundary: {
+          candidate_only: true,
+          may_execute: true,
+          used_for_authority: false,
+        },
+      }],
+      metrics: { duration_ms: 1 },
+    });
+    const failure = ExecuteFeedbackSchema.safeParse({
+      command_id: "llm-error",
+      status: "failed",
+      llm_failure: {
+        schema_version: "blue-tanuki.llm-failure.v1",
+        kind: "cancelled",
+        retryable: false,
+        authority_boundary: { used_for_authority: true },
+      },
+      metrics: { duration_ms: 1 },
+    });
+    expect(candidate.success).toBe(false);
+    expect(failure.success).toBe(false);
+  });
+
   it("accepts display-only Approval Gate Operation Core traces", () => {
     const parsed = OperationCoreApprovalTraceSchema.parse({
       version: "operation-core.v1",

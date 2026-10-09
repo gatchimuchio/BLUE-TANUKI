@@ -1,5 +1,6 @@
 import {
   classifyLLMError,
+  createLLMAbortError,
   type LLMBackend,
   type LLMErrorKind,
   type LLMRequest,
@@ -197,16 +198,19 @@ export class LLMRegistry implements LLMBackend {
     return { backend, name: normalizeName(backend.name) };
   }
 
-  async call(req: LLMRequest): Promise<LLMResponse> {
+  async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
     const selected = this.resolveWithName(req.backend_hint);
+    if (signal?.aborted) throw createLLMAbortError(selected.name, signal);
     try {
-      return await this.callWithRetry(selected.backend, selected.name, req);
+      return await this.callWithRetry(selected.backend, selected.name, req, signal);
     } catch (error) {
+      // Cancellation and command deadlines must not start another provider call.
+      if (signal?.aborted) throw error;
       const classification = classifyLLMError(error);
       if (!req.backend_hint && this.fallbackName && classification.retryable) {
         const fallback = this.resolveWithName(this.fallbackName);
         if (fallback.name !== selected.name) {
-          return await this.callWithRetry(fallback.backend, fallback.name, req);
+          return await this.callWithRetry(fallback.backend, fallback.name, req, signal);
         }
       }
       throw error;
@@ -217,20 +221,23 @@ export class LLMRegistry implements LLMBackend {
     backend: LLMBackend,
     name: string,
     req: LLMRequest,
+    signal?: AbortSignal,
   ): Promise<LLMResponse> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= this.retryPolicy.max_attempts; attempt += 1) {
+      if (signal?.aborted) throw createLLMAbortError(name, signal);
       try {
         const response = await backend.call({
           ...req,
           backend_hint: undefined,
-        });
+        }, signal);
         this.recordSuccess(name);
         return { ...response, provider: name };
       } catch (error) {
         lastError = error;
         const classification = classifyLLMError(error);
         this.recordFailure(name, classification.kind, classification.retryable, classification.retry_after_ms);
+        if (signal?.aborted) throw error;
         const mayRetry = classification.retryable && attempt < this.retryPolicy.max_attempts;
         if (!mayRetry) break;
         await this.sleep(this.retryDelayMs(attempt, classification.retry_after_ms));

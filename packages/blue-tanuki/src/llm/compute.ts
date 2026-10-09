@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { LLMBackend, LLMRequest, LLMResponse } from "./base.js";
+import { normalizeLLMToolCallCandidates, type LLMBackend, type LLMRequest, type LLMResponse } from "./base.js";
 
 export const LLM_COMPUTE_PROFILE = Object.freeze({
   id: "blue-tanuki.llm-call",
@@ -74,23 +74,30 @@ export interface ComputeBackend<
   TInput extends object = Record<string, never>,
   TOutput extends object = Record<string, never>,
 > {
-  compute(request: ComputeRequest<TInput>): Promise<ComputeResult<TOutput>>;
+  compute(request: ComputeRequest<TInput>, signal?: AbortSignal): Promise<ComputeResult<TOutput>>;
 }
 
 /** 既存のLLM providerを共通Compute契約へ接続するadapter。 */
 export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse> {
   constructor(private readonly backend: LLMBackend) {}
 
-  async compute(request: ComputeRequest<LLMRequest>): Promise<ComputeResult<LLMResponse>> {
+  async compute(request: ComputeRequest<LLMRequest>, signal?: AbortSignal): Promise<ComputeResult<LLMResponse>> {
     validateComputeRequest(request);
-    const response = await this.backend.call(request.input);
+    const response = await this.backend.call(request.input, signal);
     const provider = this.backend.canonical_provider_identity === true
       ? (response.provider ?? "").trim()
       : this.backend.name.trim();
     const model = response.model.trim();
     if (!provider) throw new Error("compute backend returned no provider identity");
     if (!model) throw new Error("compute backend returned no model identity");
-    const normalizedResponse = { ...response, provider, model };
+    const toolCalls = normalizeLLMToolCallCandidates(provider, response.tool_calls);
+    const normalizedResponse = { ...response };
+    delete normalizedResponse.raw;
+    Object.assign(normalizedResponse, {
+      provider,
+      model,
+      ...(toolCalls !== undefined ? { tool_calls: toolCalls } : {}),
+    });
 
     return {
       ...normalizedResponse,

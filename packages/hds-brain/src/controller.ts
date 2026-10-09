@@ -11,6 +11,8 @@ import {
   createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
   parseInboundRequestAtBoundary,
+  LLMCallFailureSchema,
+  LLMToolCallCandidateSchema,
 } from "@blue-tanuki/protocol";
 import type {
   ApprovalGateLog,
@@ -685,6 +687,12 @@ export class HDSUpperController {
    * SUSPENDED entry — that boundary is enforced by design.
    */
   onFeedback(fb: ExecuteFeedback): void {
+    const llmFailure = fb.llm_failure === undefined
+      ? undefined
+      : LLMCallFailureSchema.parse(fb.llm_failure);
+    const toolCandidates = fb.llm_tool_candidates === undefined
+      ? undefined
+      : LLMToolCallCandidateSchema.array().max(32).parse(fb.llm_tool_candidates);
     const sourceLog = this.inflight.get(fb.command_id);
     const feedbackLog = {
       kind: "executor_feedback" as const,
@@ -698,6 +706,9 @@ export class HDSUpperController {
         result_present: fb.result !== undefined,
         result_digest: fb.result === undefined ? undefined : sha256(fb.result),
         error: fb.error,
+        llm_failure: llmFailure,
+        llm_tool_candidate_count: toolCandidates?.length,
+        llm_tool_candidates_digest: toolCandidates?.length ? sha256(toolCandidates) : undefined,
         metrics: fb.metrics,
       },
       timestamp: Date.now(),

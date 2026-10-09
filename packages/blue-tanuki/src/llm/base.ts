@@ -1,3 +1,9 @@
+import {
+  LLMToolCallCandidateSchema,
+  type LLMCallFailureKind,
+  type LLMToolCallCandidate,
+} from "@blue-tanuki/protocol";
+
 /**
  * LLM backend abstraction.
  *
@@ -32,6 +38,8 @@ export interface LLMResponse {
   content: string;
   tokens_used: number;
   model: string;
+  /** Native provider calls are data for J review, never dispatched here. */
+  tool_calls?: LLMToolCallCandidate[];
   /** Canonical provider label selected by the local registry, when available. */
   provider?: string;
   raw?: unknown;
@@ -41,18 +49,143 @@ export interface LLMBackend {
   readonly name: string;
   /** Set only by a local registry that stamps its selected canonical backend on responses. */
   readonly canonical_provider_identity?: true;
-  call(req: LLMRequest): Promise<LLMResponse>;
+  call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>;
 }
 
-export type LLMErrorKind =
-  | "rate_limited"
-  | "temporary_network"
-  | "remote_service_unavailable"
-  | "auth"
-  | "bad_request"
-  | "bad_response"
-  | "timeout"
-  | "unknown";
+export type LLMErrorKind = LLMCallFailureKind;
+
+export type { LLMToolCallCandidate };
+
+export const LLM_EXECUTION_TIMEOUT_REASON = Symbol.for("blue-tanuki.llm.execution-timeout.v1");
+export const LLM_EXECUTION_CANCELLED_REASON = Symbol.for("blue-tanuki.llm.execution-cancelled.v1");
+
+const MAX_TOOL_CALL_ARGUMENT_LENGTH = 65_536;
+const MAX_TOOL_ARGUMENT_DEPTH = 20;
+const MAX_TOOL_ARGUMENT_NODES = 4_096;
+const MAX_TOOL_ARGUMENT_ARRAY_LENGTH = 512;
+const MAX_TOOL_ARGUMENT_OBJECT_KEYS = 256;
+const FORBIDDEN_TOOL_ARGUMENT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+export function createLLMToolCallCandidate(
+  provider: string,
+  callId: unknown,
+  toolName: unknown,
+  rawArguments: unknown,
+): LLMToolCallCandidate {
+  if (typeof callId !== "string" || !callId.trim() || callId.length > 200) {
+    throw invalidStructuredOutput(provider);
+  }
+  if (typeof toolName !== "string" || !toolName.trim() || toolName.length > 200) {
+    throw invalidStructuredOutput(provider);
+  }
+
+  let parsedArguments = rawArguments;
+  if (typeof rawArguments === "string") {
+    if (rawArguments.length > MAX_TOOL_CALL_ARGUMENT_LENGTH) {
+      throw invalidStructuredOutput(provider);
+    }
+    try {
+      parsedArguments = JSON.parse(rawArguments) as unknown;
+    } catch {
+      throw invalidStructuredOutput(provider);
+    }
+  }
+
+  const argumentsObject = copySafeJsonObject(provider, parsedArguments);
+  try {
+    return LLMToolCallCandidateSchema.parse({
+      schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+      call_id: callId.trim(),
+      tool_name: toolName.trim(),
+      arguments: argumentsObject,
+      authority_boundary: {
+        candidate_only: true,
+        may_execute: false,
+        used_for_authority: false,
+      },
+    });
+  } catch {
+    throw invalidStructuredOutput(provider);
+  }
+}
+
+export function normalizeLLMToolCallCandidates(
+  provider: string,
+  candidates: unknown,
+): LLMToolCallCandidate[] | undefined {
+  if (candidates === undefined) return undefined;
+  if (!Array.isArray(candidates) || candidates.length > 32) throw invalidStructuredOutput(provider);
+  return candidates.map((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw invalidStructuredOutput(provider);
+    }
+    const record = candidate as Record<string, unknown>;
+    return createLLMToolCallCandidate(provider, record.call_id, record.tool_name, record.arguments);
+  });
+}
+
+function copySafeJsonObject(provider: string, value: unknown): Record<string, unknown> {
+  const state = { nodes: 0 };
+  const copied = copySafeJsonValue(provider, value, 0, state);
+  if (!copied || typeof copied !== "object" || Array.isArray(copied)) {
+    throw invalidStructuredOutput(provider);
+  }
+  return copied as Record<string, unknown>;
+}
+
+function copySafeJsonValue(provider: string, value: unknown, depth: number, state: { nodes: number }): unknown {
+  state.nodes += 1;
+  if (depth > MAX_TOOL_ARGUMENT_DEPTH || state.nodes > MAX_TOOL_ARGUMENT_NODES) {
+    throw invalidStructuredOutput(provider);
+  }
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (value.length > MAX_TOOL_CALL_ARGUMENT_LENGTH) throw invalidStructuredOutput(provider);
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw invalidStructuredOutput(provider);
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > MAX_TOOL_ARGUMENT_ARRAY_LENGTH) throw invalidStructuredOutput(provider);
+    return value.map((entry) => copySafeJsonValue(provider, entry, depth + 1, state));
+  }
+  if (typeof value !== "object") throw invalidStructuredOutput(provider);
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw invalidStructuredOutput(provider);
+  const entries = Object.entries(value);
+  if (entries.length > MAX_TOOL_ARGUMENT_OBJECT_KEYS) throw invalidStructuredOutput(provider);
+  const copied: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const [key, entry] of entries) {
+    if (!key || key.length > 256 || FORBIDDEN_TOOL_ARGUMENT_KEYS.has(key)) {
+      throw invalidStructuredOutput(provider);
+    }
+    copied[key] = copySafeJsonValue(provider, entry, depth + 1, state);
+  }
+  return copied;
+}
+
+function invalidStructuredOutput(provider: string): LLMProviderError {
+  return new LLMProviderError("Provider returned invalid structured output.", {
+    provider,
+    kind: "invalid_structured_output",
+    retryable: false,
+  });
+}
+
+export function createLLMAbortError(provider: string, signal?: AbortSignal): LLMProviderError {
+  const timedOut = signal?.reason === LLM_EXECUTION_TIMEOUT_REASON;
+  return new LLMProviderError(
+    timedOut ? "Provider request timed out." : "Provider request was cancelled.",
+    {
+      provider,
+      kind: timedOut ? "timeout" : "cancelled",
+      retryable: timedOut,
+    },
+  );
+}
 
 export interface LLMErrorClassification {
   kind: LLMErrorKind;
@@ -100,7 +233,7 @@ export function classifyLLMError(error: unknown): LLMErrorClassification {
     };
   }
   if (error instanceof Error && error.name === "AbortError") {
-    return { kind: "timeout", retryable: true };
+    return { kind: "cancelled", retryable: false };
   }
   return { kind: "unknown", retryable: false };
 }

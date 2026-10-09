@@ -1,33 +1,11 @@
 import {
   LLMProviderError,
+  createLLMToolCallCandidate,
   type LLMBackend,
-  type LLMMessage,
   type LLMRequest,
   type LLMResponse,
 } from "./base.js";
-import { fetchWithProviderTimeout } from "./fetch_timeout.js";
-
-type OpenAIContentPart = {
-  type?: string;
-  text?: string;
-};
-
-type OpenAIChoice = {
-  message?: {
-    content?: string | OpenAIContentPart[];
-  };
-  text?: string;
-};
-
-type OpenAICompatibleAPIResponse = {
-  choices?: OpenAIChoice[];
-  usage?: {
-    total_tokens?: number;
-    prompt_tokens?: number;
-    completion_tokens?: number;
-  };
-  model?: string;
-};
+import { fetchWithProviderTimeout, readProviderJson } from "./fetch_timeout.js";
 
 export interface OpenAICompatibleBackendOptions {
   apiKey?: string;
@@ -44,33 +22,117 @@ function normalizeEndpoint(endpoint: string): string {
   return trimmed;
 }
 
-function extractText(choice: OpenAIChoice | undefined): string {
-  const content = choice?.message?.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((part) => part.type === "text" && typeof part.text === "string")
-      .map((part) => part.text)
-      .join("");
-  }
-  if (typeof choice?.text === "string") return choice.text;
-  return "";
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function tokenCount(data: OpenAICompatibleAPIResponse): number {
-  const usage = data.usage;
-  if (!usage) return 0;
-  if (typeof usage.total_tokens === "number") return usage.total_tokens;
-  return (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
+function invalidStructuredOutput(provider: string): never {
+  throw new LLMProviderError("Provider returned invalid structured output.", {
+    provider,
+    kind: "invalid_structured_output",
+    retryable: false,
+  });
+}
+
+function extractText(provider: string, content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    let text = "";
+    for (const part of content) {
+      if (!isRecord(part) || typeof part.type !== "string") invalidStructuredOutput(provider);
+      if (part.type === "text") {
+        if (typeof part.text !== "string") invalidStructuredOutput(provider);
+        text += part.text;
+      }
+    }
+    return text;
+  }
+  if (content === null || content === undefined) return "";
+  return invalidStructuredOutput(provider);
+}
+
+function tokenCount(provider: string, usage: unknown): number {
+  if (usage === undefined || usage === null) return 0;
+  if (!isRecord(usage)) invalidStructuredOutput(provider);
+  const read = (value: unknown): number | undefined => {
+    if (value === undefined) return undefined;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+      invalidStructuredOutput(provider);
+    }
+    return value;
+  };
+  const total = read(usage.total_tokens);
+  if (total !== undefined) return total;
+  const sum = (read(usage.prompt_tokens) ?? 0) + (read(usage.completion_tokens) ?? 0);
+  if (!Number.isSafeInteger(sum)) invalidStructuredOutput(provider);
+  return sum;
+}
+
+function parseToolCalls(provider: string, raw: unknown): NonNullable<LLMResponse["tool_calls"]> {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || raw.length > 32) invalidStructuredOutput(provider);
+  return raw.map((entry) => {
+    if (!isRecord(entry) || entry.type !== "function" || !isRecord(entry.function)) {
+      return invalidStructuredOutput(provider);
+    }
+    return createLLMToolCallCandidate(
+      provider,
+      entry.id,
+      entry.function.name,
+      entry.function.arguments,
+    );
+  });
+}
+
+function parseResponse(provider: string, data: unknown, requestedModel: string): LLMResponse {
+  if (!isRecord(data) || !Array.isArray(data.choices) || data.choices.length === 0) {
+    invalidStructuredOutput(provider);
+  }
+  const choice = data.choices[0];
+  if (!isRecord(choice) || !isRecord(choice.message)) invalidStructuredOutput(provider);
+
+  if (choice.finish_reason === "length" || choice.finish_reason === null) {
+    throw new LLMProviderError("Provider returned a partial response.", {
+      provider,
+      kind: "partial_response",
+      retryable: false,
+    });
+  }
+  if (
+    choice.finish_reason !== undefined &&
+    choice.finish_reason !== "stop" &&
+    choice.finish_reason !== "tool_calls" &&
+    choice.finish_reason !== "function_call"
+  ) {
+    invalidStructuredOutput(provider);
+  }
+
+  const content = extractText(provider, choice.message.content);
+  const toolCalls = parseToolCalls(provider, choice.message.tool_calls);
+  if (choice.finish_reason === "tool_calls" && toolCalls.length === 0) {
+    invalidStructuredOutput(provider);
+  }
+  if (!content && toolCalls.length === 0) invalidStructuredOutput(provider);
+
+  const responseModel = data.model;
+  if (responseModel !== undefined && (typeof responseModel !== "string" || !responseModel.trim())) {
+    invalidStructuredOutput(provider);
+  }
+  return {
+    content,
+    tokens_used: tokenCount(provider, data.usage),
+    model: typeof responseModel === "string" ? responseModel : requestedModel,
+    ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+  };
 }
 
 function retryAfterMs(headers: Headers): number | undefined {
   const raw = headers.get("retry-after");
   if (!raw) return undefined;
   const seconds = Number(raw);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(604_800_000, Math.round(seconds * 1000));
   const dateMs = Date.parse(raw);
-  if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
+  if (Number.isFinite(dateMs)) return Math.min(604_800_000, Math.max(0, dateMs - Date.now()));
   return undefined;
 }
 
@@ -88,12 +150,8 @@ function errorKindForStatus(status: number): {
 }
 
 /**
- * Backend for OpenAI-compatible chat completion APIs.
- *
- * This covers OpenAI-compatible SaaS providers, OpenRouter-style routers,
- * vLLM, llama.cpp servers, Ollama's OpenAI endpoint, and similar local or
- * self-hosted runtimes. It is intentionally downstream-only: it answers a
- * request after HDS-BRAIN has already decided the command may run.
+ * Raw-fetch adapter for OpenAI-compatible chat completion APIs. Native tool
+ * calls are parsed as non-authority candidates; no SDK or tool executor runs.
  */
 export class OpenAICompatibleBackend implements LLMBackend {
   readonly name: string;
@@ -101,12 +159,8 @@ export class OpenAICompatibleBackend implements LLMBackend {
   private readonly headers: Record<string, string>;
 
   constructor(private readonly opts: OpenAICompatibleBackendOptions) {
-    if (!opts.defaultModel) {
-      throw new Error("OpenAICompatibleBackend: defaultModel is required");
-    }
-    if (!opts.endpoint) {
-      throw new Error("OpenAICompatibleBackend: endpoint is required");
-    }
+    if (!opts.defaultModel) throw new Error("OpenAICompatibleBackend: defaultModel is required");
+    if (!opts.endpoint) throw new Error("OpenAICompatibleBackend: endpoint is required");
     this.name = opts.name ?? "openai-compatible";
     this.endpoint = normalizeEndpoint(opts.endpoint);
     this.headers = {
@@ -118,10 +172,10 @@ export class OpenAICompatibleBackend implements LLMBackend {
     }
   }
 
-  async call(req: LLMRequest): Promise<LLMResponse> {
+  async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
     const body: {
       model: string;
-      messages: LLMMessage[];
+      messages: LLMRequest["messages"];
       max_tokens?: number;
       temperature?: number;
     } = {
@@ -131,53 +185,32 @@ export class OpenAICompatibleBackend implements LLMBackend {
     if (req.max_tokens !== undefined) body.max_tokens = req.max_tokens;
     if (req.temperature !== undefined) body.temperature = req.temperature;
 
-    let res: Response;
-    try {
-      res = await fetchWithProviderTimeout(this.name, this.endpoint, {
+    return fetchWithProviderTimeout(
+      this.name,
+      this.endpoint,
+      {
         method: "POST",
         headers: this.headers,
         body: JSON.stringify(body),
-      }, req.timeout_ms);
-    } catch (error) {
-      if (error instanceof LLMProviderError) throw error;
-      throw new LLMProviderError(`${this.name}: network error`, {
-        provider: this.name,
-        kind: "temporary_network",
-        retryable: true,
-        cause: error,
-      });
-    }
-
-    if (!res.ok) {
-      const errText = await res.text();
-      const classified = errorKindForStatus(res.status);
-      throw new LLMProviderError(
-        `${this.name}: API error ${res.status}: ${errText.slice(0, 500)}`,
-        {
-          provider: this.name,
-          status: res.status,
-          retry_after_ms: retryAfterMs(res.headers),
-          ...classified,
-        },
-      );
-    }
-
-    let data: OpenAICompatibleAPIResponse;
-    try {
-      data = (await res.json()) as OpenAICompatibleAPIResponse;
-    } catch (error) {
-      throw new LLMProviderError(`${this.name}: invalid JSON response`, {
-        provider: this.name,
-        kind: "bad_response",
-        retryable: false,
-        cause: error,
-      });
-    }
-    return {
-      content: extractText(data.choices?.[0]),
-      tokens_used: tokenCount(data),
-      model: data.model ?? body.model,
-      raw: data,
-    };
+      },
+      req.timeout_ms,
+      async (response) => {
+        if (!response.ok) {
+          void response.body?.cancel().catch(() => undefined);
+          const classified = errorKindForStatus(response.status);
+          throw new LLMProviderError(
+            `${this.name}: API error ${response.status}; response body omitted.`,
+            {
+              provider: this.name,
+              status: response.status,
+              retry_after_ms: retryAfterMs(response.headers),
+              ...classified,
+            },
+          );
+        }
+        return parseResponse(this.name, await readProviderJson(this.name, response), body.model);
+      },
+      signal,
+    );
   }
 }

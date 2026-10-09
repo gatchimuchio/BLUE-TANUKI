@@ -6,6 +6,7 @@ export type {
   LLMErrorKind,
   LLMErrorClassification,
   LLMProviderErrorOptions,
+  LLMToolCallCandidate,
 } from "./base.js";
 export {
   LLMProviderError,

@@ -765,6 +765,62 @@ describe("HDSUpperController.onFeedback()", () => {
     }
     expect(c.getAudit().verify()).toBe(true);
   });
+
+  it("audit-binds tool candidates by digest without persisting their arguments", () => {
+    const c = new HDSUpperController();
+    const rawArgument = "candidate-argument-private-sentinel";
+    c.onFeedback({
+      command_id: "candidate-command",
+      status: "success",
+      result: { response_digest: "a".repeat(64) },
+      llm_tool_candidates: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "call-1",
+        tool_name: "shell.exec",
+        arguments: { command: rawArgument },
+        authority_boundary: {
+          candidate_only: true,
+          may_execute: false,
+          used_for_authority: false,
+        },
+      }],
+      metrics: { duration_ms: 1 },
+    });
+
+    const entry = c.getAudit().list()[0]!.log;
+    expect("kind" in entry && entry.kind).toBe("executor_feedback");
+    if ("kind" in entry && entry.kind === "executor_feedback") {
+      expect(entry.feedback.llm_tool_candidate_count).toBe(1);
+      expect(entry.feedback.llm_tool_candidates_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(entry.feedback.result_digest).toMatch(/^[a-f0-9]{64}$/);
+    }
+    expect(JSON.stringify(c.getAudit().list())).not.toContain(rawArgument);
+    expect(c.getAudit().verify()).toBe(true);
+  });
+
+  it("records typed provider failure metadata without raw response text", () => {
+    const c = new HDSUpperController();
+    c.onFeedback({
+      command_id: "timeout-command",
+      status: "failed",
+      error: "The provider request timed out.",
+      llm_failure: {
+        schema_version: "blue-tanuki.llm-failure.v1",
+        kind: "timeout",
+        retryable: true,
+        provider: "fixture-provider",
+        authority_boundary: { used_for_authority: false },
+      },
+      metrics: { duration_ms: 10 },
+    });
+
+    const entry = c.getAudit().list()[0]!.log;
+    expect("kind" in entry && entry.kind).toBe("executor_feedback");
+    if ("kind" in entry && entry.kind === "executor_feedback") {
+      expect(entry.feedback.llm_failure).toMatchObject({ kind: "timeout", retryable: true });
+    }
+    expect(c.getAudit().verify()).toBe(true);
+  });
 });
 
 describe("HDSUpperController long-term memory integration", () => {
