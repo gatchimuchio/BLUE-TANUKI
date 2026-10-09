@@ -6,7 +6,7 @@
 
 ## 現在の開発工程
 
-ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01でM SQLite原子取引、C03.02で期待版比較・同ID冪等再送・V1履歴互換、C03.03でJ pendingの永続化とM receipt再照合からの局所復帰を実装し、一時SQLite fixtureで確認した。実J承認source、Controller/Gateway production consumer、C03.04破損復旧、OS crash/installed証拠は未成立である。全体testとdoctorの各単位の結果は[開発進捗](開発進捗.md)へ記録する。親C01/C02/C03の全scenarioと製品runtime全体、自然言語意味同定、owner/L3承認経路、release readinessは未成立である。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
+ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01でM SQLite原子取引、C03.02で期待版比較・同ID冪等再送・V1履歴互換、C03.03でJ pendingの永続化とM receipt再照合からの局所復帰を実装し、一時SQLite fixtureで確認した。C03.04では保存障害後のhandle停止と、正本ledgerを維持したM/J派生像の明示的な局所再構成を実装し、破損ledgerとschema不一致のrepair拒否を同fixtureで確認した。実J承認source、Controller/Gateway production consumer、OS crash/installed証拠は未成立である。全体testとdoctorの各単位の結果は[開発進捗](開発進捗.md)へ記録する。親C01/C02/C03の全scenarioと製品runtime全体、自然言語意味同定、owner/L3承認経路、release readinessは未成立である。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
 
 以下の日本語移行と P13 状態は独立して維持する。
 

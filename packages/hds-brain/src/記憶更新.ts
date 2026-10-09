@@ -1,6 +1,7 @@
 import {
   MTransactionStore,
   type JMemoryApprovalReader,
+  type PersistenceHealth,
   type MemoryStoreSnapshot,
   type MemoryUpdateResult,
 } from "./保存取引.js";
@@ -43,6 +44,10 @@ export class MemoryUpdateLedger {
 
   verify(): boolean {
     return this.store.verify();
+  }
+
+  health(): PersistenceHealth {
+    return this.store.health();
   }
 
   close(): void {

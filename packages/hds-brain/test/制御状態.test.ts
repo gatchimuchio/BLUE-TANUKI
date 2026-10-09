@@ -7,7 +7,7 @@ import {
   MEMORY_COMMIT_SCHEMA_VERSION,
   memoryCommitContentDigest,
 } from "@blue-tanuki/protocol";
-import { JMemoryCommitCoordinator } from "../src/制御状態.js";
+import { JMemoryCommitCoordinator, rebuildJControlProjection } from "../src/制御状態.js";
 import { MemoryUpdateLedger } from "../src/記憶更新.js";
 import type { JMemoryApprovalReader, JMemoryApprovalReference } from "../src/保存取引.js";
 
@@ -252,12 +252,154 @@ describe("J制御状態とM receipt再照合", () => {
       private_state_root: directory,
       database_path: databasePath,
       j_approval_reader: approvingReader(),
-    })).toThrow("J control state initialization failed");
+    })).toThrow("projection_mismatch");
 
     const check: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
     expect(check.prepare("SELECT COUNT(*) AS count FROM m_events").get()?.count).toBe(0);
     expect(check.prepare("SELECT COUNT(*) AS count FROM j_events").get()?.count).toBe(1);
     check.close();
+  });
+
+  it("Jの派生像をj_eventsから再構築し、J ledgerだけを保持する", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    const commit = makeCommit("repair-j", "synthetic-value");
+    expect(coordinator.stage(commit)).toMatchObject({ ok: true, status: "memory_commit_pending" });
+    coordinator.close();
+
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    const canonicalBefore = damaged.prepare("SELECT event_payload_json FROM j_events ORDER BY revision").all();
+    damaged.exec("UPDATE j_state SET revision = 0, event_digest = 'GENESIS', status = 'ready', active_update_id = NULL");
+    damaged.exec("DELETE FROM j_pending");
+    damaged.close();
+
+    expect(rebuildJControlProjection({
+      private_state_root: directory,
+      database_path: databasePath,
+    })).toEqual({ ok: true, revision: 1, event_count: 1 });
+    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(checked.prepare("SELECT event_payload_json FROM j_events ORDER BY revision").all()).toEqual(canonicalBefore);
+    expect(checked.prepare("SELECT COUNT(*) AS count FROM m_events").get()?.count).toBe(0);
+    checked.close();
+
+    const reopened = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    expect(reopened.snapshot()).toMatchObject({
+      revision: 1,
+      status: "memory_commit_pending",
+      active_update_id: "repair-j",
+      pending: [{ update_id: "repair-j", status: "pending" }],
+    });
+    expect(reopened.verify()).toBe(true);
+    reopened.close();
+  });
+
+  it("Jの破損末尾を修復せず保持し、storeをledger_corruptで停止する", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    expect(coordinator.stage(makeCommit("corrupt-j", "synthetic")).ok).toBe(true);
+    coordinator.close();
+
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    damaged.prepare("UPDATE j_events SET event_payload_json = ? WHERE revision = 1").run("{torn");
+    damaged.close();
+    expect(rebuildJControlProjection({
+      private_state_root: directory,
+      database_path: databasePath,
+    })).toEqual({ ok: false, reason: "ledger_corrupt" });
+    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(checked.prepare("SELECT event_payload_json FROM j_events WHERE revision = 1").get()?.event_payload_json)
+      .toBe("{torn");
+    checked.close();
+    let openFailure: unknown;
+    try {
+      new JMemoryCommitCoordinator({
+        private_state_root: directory,
+        database_path: databasePath,
+        j_approval_reader: approvingReader(),
+      });
+    } catch (error) {
+      openFailure = error;
+    }
+    expect(openFailure).toMatchObject({ reason: "ledger_corrupt" });
+  });
+
+  it("J write failure後は同じhandleとcoordinatorからの新規stageを停止する", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    const connection: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    connection.exec(
+      "CREATE TRIGGER injected_j_failure BEFORE INSERT ON j_events BEGIN SELECT RAISE(ABORT, 'injected'); END",
+    );
+    connection.close();
+
+    const first = makeCommit("j-write-fault", "synthetic");
+    expect(coordinator.stage(first)).toEqual({ ok: false, reason: "write_failed" });
+    expect(coordinator.health().j).toEqual({ available: false, failure: "write_failed", outcome_unknown: false });
+    expect(coordinator.stage(makeCommit("j-after-fault", "later"))).toEqual({
+      ok: false,
+      reason: "store_unavailable",
+    });
+    coordinator.close();
+  });
+
+  it("J schema version不一致の派生再構築を拒否する", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    coordinator.close();
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    damaged.exec("UPDATE j_schema SET schema_version = 99 WHERE singleton = 1");
+    damaged.close();
+
+    expect(rebuildJControlProjection({
+      private_state_root: directory,
+      database_path: databasePath,
+    })).toEqual({ ok: false, reason: "schema_mismatch" });
+  });
+
+  it("J派生tableのtriggerが正本を書き換え得るDBでは再構築を拒否する", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    expect(coordinator.stage(makeCommit("trigger-guard-j", "synthetic")).ok).toBe(true);
+    coordinator.close();
+
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    const canonicalPayload = damaged.prepare(
+      "SELECT event_payload_json FROM j_events WHERE revision = 1",
+    ).get()?.event_payload_json;
+    damaged.exec("UPDATE j_state SET revision = 0, event_digest = 'GENESIS', status = 'ready', active_update_id = NULL");
+    damaged.exec(
+      "CREATE TRIGGER tamper_canonical_j AFTER DELETE ON j_pending BEGIN UPDATE j_events SET event_payload_json = '{torn' WHERE revision = 1; END",
+    );
+    damaged.close();
+
+    expect(rebuildJControlProjection({
+      private_state_root: directory,
+      database_path: databasePath,
+    })).toEqual({ ok: false, reason: "schema_mismatch" });
+    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(checked.prepare("SELECT event_payload_json FROM j_events WHERE revision = 1").get()?.event_payload_json)
+      .toBe(canonicalPayload);
+    expect(checked.prepare("SELECT revision FROM j_state WHERE singleton = 1").get()?.revision).toBe(0);
+    checked.close();
   });
 });
 

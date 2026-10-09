@@ -13,6 +13,10 @@ import {
   memoryCommitContentDigest,
 } from "@blue-tanuki/protocol";
 import { MemoryUpdateLedger } from "../src/記憶更新.js";
+import {
+  classifyPersistenceFailure,
+  rebuildMemoryDerivedProjection,
+} from "../src/保存取引.js";
 import type { JMemoryApprovalReader, JMemoryApprovalReference } from "../src/保存取引.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -129,11 +133,162 @@ describe("M記憶更新取引", () => {
             { operation: "delete" as const, record_id: "remove-me" },
           ];
     const failed = ledger.apply(makeCommit("faulted", faultChanges, 1));
-    expect(failed).toEqual({ ok: false, reason: "storage_failed" });
-    expect(ledger.snapshot()).toEqual(before);
+    expect(failed).toEqual({ ok: false, reason: "write_failed" });
+    expect(ledger.health()).toEqual({ available: false, failure: "write_failed", outcome_unknown: false });
+    expect(ledger.apply(makeCommit("after-fault", [{ operation: "upsert", record_id: "later", value: 1 }], 1)))
+      .toEqual({ ok: false, reason: "store_unavailable" });
+    expect(ledger.snapshot()).toBeNull();
     expect(ledger.receipt("faulted")).toBeNull();
-    expect(ledger.verify()).toBe(true);
     ledger.close();
+
+    const reopened = new MemoryUpdateLedger({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvalReader,
+    });
+    expect(reopened.snapshot()).toEqual(before);
+    expect(reopened.verify()).toBe(true);
+    reopened.close();
+  });
+
+  it("Mの派生像を正本ledgerから再構築し、event payloadを変更しない", () => {
+    const reader = approvingReader();
+    const ledger = new MemoryUpdateLedger({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: reader,
+    });
+    expect(ledger.apply(makeCommit("repair-m-1", [
+      { operation: "upsert", record_id: "fact-a", value: { count: 1 } },
+      { operation: "upsert", record_id: "fact-b", value: "keep" },
+    ])).ok).toBe(true);
+    expect(ledger.apply(makeCommit("repair-m-2", [
+      { operation: "upsert", record_id: "fact-a", value: { count: 2 } },
+      { operation: "delete", record_id: "fact-b" },
+    ], 1)).ok).toBe(true);
+    ledger.close();
+
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    const canonicalBefore = damaged.prepare("SELECT event_payload_json FROM m_events ORDER BY revision").all();
+    damaged.exec("UPDATE m_state SET revision = 0, event_digest = 'GENESIS' WHERE singleton = 1");
+    damaged.exec("DELETE FROM m_records");
+    damaged.exec("DELETE FROM m_receipts");
+    damaged.exec("DELETE FROM m_updates");
+    damaged.close();
+
+    expect(rebuildMemoryDerivedProjection({
+      private_state_root: directory,
+      database_path: databasePath,
+    })).toEqual({ ok: true, revision: 2, event_count: 2 });
+    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(checked.prepare("SELECT event_payload_json FROM m_events ORDER BY revision").all()).toEqual(canonicalBefore);
+    checked.close();
+
+    const reopened = new MemoryUpdateLedger({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: reader,
+    });
+    expect(reopened.verify()).toBe(true);
+    expect(reopened.snapshot()).toMatchObject({
+      revision: 2,
+      records: { "fact-a": { count: 2 } },
+      used_for_authority: false,
+    });
+    expect(reopened.receipt("repair-m-2")).toMatchObject({ revision: 2 });
+    reopened.close();
+  });
+
+  it("Mの破損末尾は再構築せず、破損payloadをそのまま保つ", () => {
+    const ledger = new MemoryUpdateLedger({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    expect(ledger.apply(makeCommit("corrupt-m", [
+      { operation: "upsert", record_id: "fact", value: "synthetic" },
+    ])).ok).toBe(true);
+    ledger.close();
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    damaged.prepare("UPDATE m_events SET event_payload_json = ? WHERE revision = 1").run("{torn");
+    damaged.close();
+
+    expect(rebuildMemoryDerivedProjection({
+      private_state_root: directory,
+      database_path: databasePath,
+    })).toEqual({ ok: false, reason: "ledger_corrupt" });
+    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(checked.prepare("SELECT event_payload_json FROM m_events WHERE revision = 1").get()?.event_payload_json)
+      .toBe("{torn");
+    checked.close();
+    let openFailure: unknown;
+    try {
+      new MemoryUpdateLedger({
+        private_state_root: directory,
+        database_path: databasePath,
+        j_approval_reader: approvingReader(),
+      });
+    } catch (error) {
+      openFailure = error;
+    }
+    expect(openFailure).toMatchObject({ reason: "ledger_corrupt" });
+  });
+
+  it("M schema mismatchは明示し、障害種別を細分する", () => {
+    const ledger = new MemoryUpdateLedger({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    ledger.close();
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    damaged.exec("UPDATE m_schema SET schema_version = 99 WHERE singleton = 1");
+    damaged.close();
+
+    expect(rebuildMemoryDerivedProjection({
+      private_state_root: directory,
+      database_path: databasePath,
+    })).toEqual({ ok: false, reason: "schema_mismatch" });
+    let openFailure: unknown;
+    try {
+      new MemoryUpdateLedger({
+        private_state_root: directory,
+        database_path: databasePath,
+        j_approval_reader: approvingReader(),
+      });
+    } catch (error) {
+      openFailure = error;
+    }
+    expect(openFailure).toMatchObject({ reason: "schema_mismatch" });
+    expect(classifyPersistenceFailure({ errcode: 13 })).toBe("disk_full");
+    expect(classifyPersistenceFailure({ errcode: 778 })).toBe("write_failed");
+    expect(classifyPersistenceFailure({ errcode: 1034 })).toBe("sync_failed");
+  });
+
+  it("実SQLiteのpage上限超過をdisk_fullとして分類し、M handleを停止する", () => {
+    const ledger = new MemoryUpdateLedger({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    const internal = ledger as unknown as {
+      store: { database: InstanceType<typeof DatabaseSync> };
+    };
+    try {
+      const pageCount = internal.store.database.prepare("PRAGMA page_count").get()?.page_count;
+      expect(typeof pageCount).toBe("number");
+      internal.store.database.exec("PRAGMA max_page_count = " + String(pageCount));
+      const failed = ledger.apply(makeCommit("disk-full", [
+        { operation: "upsert", record_id: "large", value: "x".repeat(700_000) },
+      ]));
+      expect(failed).toEqual({ ok: false, reason: "commit_outcome_unknown", outcome_unknown: true });
+      expect(ledger.health()).toEqual({ available: false, failure: "disk_full", outcome_unknown: true });
+      expect(ledger.apply(makeCommit("after-full", [
+        { operation: "upsert", record_id: "later", value: 1 },
+      ]))).toEqual({ ok: false, reason: "store_unavailable" });
+    } finally {
+      ledger.close();
+    }
   });
 
   it("同じ承認内容の再送は保存済みreceiptを返し、異内容の同一IDを拒否する", () => {
@@ -261,6 +416,38 @@ describe("M記憶更新取引", () => {
     expect(reopened.verify()).toBe(true);
     expect(reopened.snapshot()).toMatchObject({ revision: 2, records: { "legacy-fact": { count: 1 }, "current-fact": 2 } });
     reopened.close();
+  });
+
+  it("M派生tableのtriggerが正本を書き換え得るDBでは再構築を拒否する", () => {
+    const ledger = new MemoryUpdateLedger({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    expect(ledger.apply(makeCommit("trigger-guard-m", [
+      { operation: "upsert", record_id: "fact", value: "synthetic" },
+    ])).ok).toBe(true);
+    ledger.close();
+
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    const canonicalPayload = damaged.prepare(
+      "SELECT event_payload_json FROM m_events WHERE revision = 1",
+    ).get()?.event_payload_json;
+    damaged.exec("UPDATE m_state SET revision = 0, event_digest = 'GENESIS' WHERE singleton = 1");
+    damaged.exec(
+      "CREATE TRIGGER tamper_canonical_m AFTER DELETE ON m_records BEGIN UPDATE m_events SET event_payload_json = '{torn' WHERE revision = 1; END",
+    );
+    damaged.close();
+
+    expect(rebuildMemoryDerivedProjection({
+      private_state_root: directory,
+      database_path: databasePath,
+    })).toEqual({ ok: false, reason: "schema_mismatch" });
+    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(checked.prepare("SELECT event_payload_json FROM m_events WHERE revision = 1").get()?.event_payload_json)
+      .toBe(canonicalPayload);
+    expect(checked.prepare("SELECT revision FROM m_state WHERE singleton = 1").get()?.revision).toBe(0);
+    checked.close();
   });
 });
 

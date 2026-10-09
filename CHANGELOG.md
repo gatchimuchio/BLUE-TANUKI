@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — 保存障害の停止と派生像再構成
+
+- C03.04として内部M/J SQLite storeにhealthと障害分類を追加し、保存・整合性障害後は同一handleを停止する。commit結果が不明な場合は不確実性を明示する。
+- M `m_events`、J `j_events` を各正本として検証し、明示repairはownerごとの派生tableだけを再生成する。破損・未知schema・schema不一致・canonicalを書き換え得るpersistent triggerではrepairを拒否し、canonical ledgerを変更しない。
+- Windows上のfile-backed一時SQLiteで、J/M projection復旧、壊れたledger・triggerの非変更拒否、容量・write failure後の停止を局所検証する。production consumer、実fsync/OS crash耐久性、release readiness、P13 owner GOは成立させない。
+
 ## 2026-10-09 — J pendingとM receipt再照合
 
 - C03.03としてHDS-BRAIN内部にJ所有の `j_events / j_state / j_pending` を追加し、Mと別のrevision・hash-chain・transactionで `memory_commit_pending` を保存する。J pendingには更新ID、J event ID、content digest、期待M版だけを置き、MemoryCommitの変更本文を複製しない。

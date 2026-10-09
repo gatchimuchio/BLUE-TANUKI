@@ -1,106 +1,102 @@
 # BLUE-TANUKI 有効な実装指示
 
-現単位: **C03.03 — JとMの受領照合**。この単位だけを実装・検証し、二世代backup、main commit/push、remote照合まで閉じて境界停止する。ownerはrev1.1系列を一単位ずつ委任し、通常の検証済み成果をGitHubへ履歴・成果物として保存することを指示している。外部作用、別repo、公開主張、出荷判断、owner GOは別境界である。
+現単位: **C03.04 — 保存障害と派生像の再構成**。この単位だけを実装・検証し、二世代backup、main commit/push、remote照合まで閉じて境界停止する。ownerはrev1.1系列を一単位ずつ委任し、通常の検証済み成果をGitHubへ履歴・成果物として保存する。外部作用、別repo、公開主張、出荷判断、owner GOは別境界である。環境構築は完了済みとして再実施しない。
 
 ## 1. 目的
 
-BT-R-C03-04の限定範囲として、Mが確定した後、Jがreceiptを受け取る前に通信が切れても、Jの永続 `memory_commit_pending` とreceipt照会から復帰できるようにする。M更新を重複反映せず、receipt未確認のままJを進行させない。
+BT-R-C03-05/06の有限範囲として、M/Jの正本event ledgerが検証不能、保存schema不一致、disk full、write/fsync障害のとき安全側に停止し、正本ledgerだけから派生状態を明示的に再構成できることを局所確認する。
 
 ## 2. Phase 境界
 
-HDS-BRAIN内にJ所有の永続pending記録とreceipt再照合経路を実装し、C03.02のM所有SQLite保存取引へ局所接続する。J/Mの論理所有と名前空間を分ける。試験はWindows上の一時file-backed SQLiteと合成J承認参照を使う。新しいJ storeはHDS-BRAIN package barrel、Controller、Gateway、UI、installerから未接続のままとし、owner/L3承認のproduction consumerを作らない。
+対象は既存の内部M transaction、J control-state store、J/M wrapper、および一時SQLite testである。通常constructorでの自動修復・migrationは行わない。修復入口は個別ownerの派生像にだけ作用し、正本event ledgerは検証・再生専用とする。HDS package barrel、Controller、Gateway、UI、installer、production consumerへ接続しない。
 
 ## 3. Scope
 
-- `packages/hds-brain/src/保存取引.ts`
-- `packages/hds-brain/src/制御状態.ts`
-- `packages/hds-brain/test/制御状態.test.ts`
-- `docs/状態所有と保存取引.md`
-- `docs/IMPLEMENTATION_INSTRUCTIONS.md`
-- `docs/ROADMAP.md`
-- `docs/開発進捗.md`
-- `CHANGELOG.md`
-- `規定/移行台帳.json`
+- packages/hds-brain/src/保存取引.ts
+- packages/hds-brain/src/記憶更新.ts
+- packages/hds-brain/src/制御状態.ts
+- packages/hds-brain/test/記憶更新.test.ts
+- packages/hds-brain/test/制御状態.test.ts
+- docs/状態所有と保存取引.md
+- docs/IMPLEMENTATION_INSTRUCTIONS.md
+- docs/ROADMAP.md
+- docs/開発進捗.md
+- CHANGELOG.md
+- 規定/移行台帳.json
 
-上記以外のsource/test/docs、protocol schema、HDS barrel、Controller/Gateway、GUI、installer、release path、他repoは変更しない。範囲拡大が必要ならREPLANし、現差分へ混ぜない。
+上記以外は変更しない。path追加が必要と判明したらREPLANして新たに再同期する。
 
 ## 4. Non-goals
 
-C03.04の破損・容量・同期障害・再構築、稼働DB migration、複数process/OSの排他保証、crash/power-loss耐久性、production J authority source、Controller/Gateway統合、UI表示、実ユーザーデータ、外部業務作用、live/installed/release/GA/P13/owner GOを扱わない。J pendingへMemoryCommit本文・変更値を複製せず、receipt不在時にM更新を自動再送しない。合成承認readerは実承認の証拠ではない。
+C03.01–03の意味変更、database migration、startup自動修復、production J承認source、HDS barrel/Controller/Gateway/UI/installer接続、複数process・OSの排他保証、物理的な電源断・OS crash耐久性、実ユーザーデータ、外部業務作用、他repo、release/GA/P13/owner GOは扱わない。壊れたledgerを切り詰めたり架空の正常chainへ置換しない。内部原典・private作業証拠・secretはrepoへ含めない。
 
 ## 5. 最初に確認する files / symbols
 
-root/近傍AGENTS、日本語基底規定、`docs/作業標準要領.md`、active instruction、ROADMAP、SECURITY/AUDIT/CONFIG/README/CHANGELOG、C03.02受入証拠、B03.01配置決定、C03.03要求を読む。`MTransactionStore`、`MemoryUpdateLedger`、`JMemoryApprovalReader`、`readReceipt`、`verifyDatabase`、保存先境界helper、`HDSUpperController`、Gateway runtime、HDS package barrel、standalone import境界を追う。既存のApproval Gate、AuditLog、CompleteHistory、旧JSONLをJ制御正本へ転用しない。
+root AGENTSと適用規定、日本語基底、作業標準、ROADMAP、SECURITY/AUDIT/CONFIG/README/CHANGELOG、C03.03の受入証拠、rev1.1 C03.04・C03要求・指定仕様章・原典指定節を確認する。MTransactionStore、MemoryUpdateLedger、JControlStateStore、JMemoryCommitCoordinator、verifyDatabase/replayDatabase、private-state path resolver、HDS barrel、Controller/Gatewayの未接続状態と各testを追う。開始時のHEAD、remote、backup refs、dirty stateを記録する。
 
 ## 6. 必須grep
 
-`memory_commit_pending`、`j_events`、`j_state`、`j_pending`、`readReceipt`、`content_digest`、`expected_version`、`receipt_confirmed`、`memory_used_for_authority`を追う。approvalのboolean、UI/metadata/history/LLM/tool結果からの権限生成、M receiptを使った自動再送、J/M共有の汎用更新口、raw MemoryCommitのJ側複製を導入しない。
+追跡語: m_events、j_events、m_state、m_records、m_updates、m_receipts、j_state、j_pending、schema_version、verifyDatabase、replayDatabase、store_unavailable、memory_used_for_authority。自動repair、ledger書換え、別authority path、修復moduleのruntime import、秘密・raw payloadのerror出力がないことを確認する。
 
 ## 7. 既存anchor
 
-`packages/hds-brain/src/保存取引.ts` のM transactionとprivate state root境界を再利用し、同じDB上でJ名前空間のみを操作する。`packages/hds-brain/src/記憶更新.ts` の `MemoryUpdateLedger.receipt()` / `verify()` をreceipt読取consumerとする。新規 `packages/hds-brain/src/制御状態.ts` はJ所有state/event/pendingと再照合だけを持ち、DB handleや汎用SQLを公開しない。`controller.ts` と `apps/gateway/src/runtime.ts` は現状把握専用で今回変更しない。
+Mの正本はm_events、派生像はm_state/m_records/m_updates/m_receipts。Jの正本はj_events、派生像はj_state/j_pending。既存M/Jの名前空間、hash-chain、schema version、private state root、SQLite保護PRAGMAを維持する。C03.03のreceipt再照合はMへの自動再送なしを保つ。
 
 ## 8. 実装要件
 
-1. 保存先は既存private-state-root内に解決し、C03.02と同じNode SQLite保護設定を読み戻す。M/J schemaの不足や不一致を自動修復・migrationしない。
-2. Jは `j_events`、`j_state`、`j_pending` の専用名前空間を持つ。J event、状態projection、pending更新は一つの局所SQLite取引で確定する。現HEADに既存J schemaがないため、初期状態からの単一versionだけを扱う。
-3. `memory_commit_pending` を書く前に、J-owned readerから `update_id`、`j_event_id`、canonical `content_digest` が一致する参照を検証する。独立booleanを受け取らない。承認参照不一致や同ID異内容は状態を書かず拒否する。
-4. J pendingはopaque ID、event ID、digest、expected M versionなど回復に必要な最小metadataだけを持つ。MemoryCommit本文、意味記憶値、credential、tool出力を保存しない。
-5. Mへの初回反映はC03.02 `MemoryUpdateLedger.apply()` がJ pendingを再照合して行う。J storeのreceipt再照合APIはM `verify()` と `receipt()` を読むだけで、M apply/retry/writeを呼ばない。
-6. receiptはupdate ID、content digest、previous revision、result revisionとexpected versionの関係をすべて検証する。receipt不在ならJをpendingのまま保つ。不一致・不正はfail-closedでblockedとし、readyへ進めない。
-7. 有効receiptの確定、J event、J state `ready`、pending receipt記録は一つのJ transactionで行う。同じreceiptの再照合は同じ保存結果を返しrevision/eventを増やさない。
-8. `memory_commit_pending` は「JがM receiptを待つ」状態であり、M未確認receiptを成功扱いしない。M記憶、J event、receiptのいずれもpermission、approval、risk分類、final review、policyを生成しない。
+1. 起動時のschema不一致、canonical event破損、派生像不一致を安全な分類で識別し、診断内容にpath/raw SQL/raw payloadを含めない。
+2. disk full、SQLite write failure、fsync failureを区別する。保存失敗または整合性failure後は、当該store handleを再使用不可にし新しい更新を拒否する。通常のschema検証、approval mismatch、期待版競合など業務拒否は障害停止と混同しない。
+3. M専用とJ専用の明示的rebuild entrypointを設ける。正本ledgerのschema/hash-chain/event payloadを再検証し、transaction内で再検証した後に限り、該当ownerの派生tableを再生成する。他owner領域へ書かない。
+4. canonical event row/payloadは一切更新・削除・再採番しない。ledgerの末尾破損、未知event schema、hash不一致はrepair拒否とし、元の破損を維持して停止する。
+5. 修復対象ownerの永続SQLite triggerを検査する。派生table書込みからcanonical ledger等へ副作用し得るtriggerがあればschema不一致として修復を拒否する。
+6. 修復後に通常storeを新規openして全整合性を再検査する。constructorが自動修復を始めない。外部anchorがないhash chainから末尾切捨て・全履歴差替え検出を主張しない。
 
 ## 9. Safety invariants
 
-HDS-BRAIN唯一authority、owner最終責任、Approval Gate/L3 final review、audit hash-chain、Runtime Invariants、fail-closed/SUSPEND、memory/history/metadata non-authority、Layer A/B、standalone境界を保つ。J storeは承認を生成せず、検証済みJ参照を永続化する。Mは採否せず、receiptはJ/Mの更新照合に限る。fixtureを実承認扱いしない。
+HDS-BRAIN唯一authority、owner最終責任、Approval Gate/L3 final review、audit hash-chain、Runtime Invariants、fail-closed/SUSPEND、memory/history/metadata non-authority、Layer A/B、standalone境界を維持する。JとMの所有領域を混ぜず、repairは承認・採否・risk分類・permissionを生成しない。保護措置をaudit成功へ依存させない。修復moduleはpackage barrelやruntime pathからimportしない。
 
 ## 10. Operator usability
 
-`docs/状態所有と保存取引.md` と開発進捗へ、J pendingの状態遷移、receipt不在・不一致、再照合、close/reopen後の復帰、raw payloadを保存しないこと、M再送を起こさないことを記録する。Controller/Gateway/UIへの接続、doctorの新表示、production復帰経路があると誤認させない。
+安全なstatus/errorで原因分類、停止状態、明示repairが可能/不可の区別、次の確認行動を示す。path・秘密・raw event/valueを出力しない。repair成功はlocal fixture範囲の状態でありproduction recoveryやOS耐久性を意味しない。docs/状態所有と保存取引.mdと開発進捗.mdに責任境界、復元条件、限界を記録する。
 
 ## 11. Tests
 
-- `BT-U-C03.03-P`: J pendingを永続化し、Mが実SQLiteでcommitした後、J receipt受領前に両storeをclose/reopenする。M receipt照会からJが一度だけreadyへ復帰し、M revisionとreceiptは一回分のまま。
-- `BT-U-C03.03-N`: receipt不在はpendingを保ち、receipt不一致・承認参照不一致・同ID異内容は拒否またはblockedとし、M再更新やJ進行を起こさない。反復照合はread-only/idempotent。
-- Selector: `packages/hds-brain/test/制御状態.test.ts` と `packages/hds-brain/test/記憶更新.test.ts`。
-- 一時DBと合成値だけを使い、実Gateway、既存listener、credentials、製品データ、外部service、別repo、crash/power-lossを使わない。
+- BT-U-C03.04-P: file-backed SQLiteのM/J派生像を個別に改変し、owner専用の明示repairで正本ledgerから再生する。canonical event bytes/digestsが変わらず、修復後のclose/reopenとverifyが通る。
+- BT-U-C03.04-N: 壊れた/未知schema/hash不一致ledgerとcanonicalを書き換え得るowner triggerのrepairを拒否し、正本を変更しない。schema mismatch、disk full、write/fsync failureで停止分類を確認し、障害を受けたhandleの後続更新が拒否される。
+- 実test selector: packages/hds-brain/test/記憶更新.test.ts と packages/hds-brain/test/制御状態.test.ts。
+- Windows一時file-backed DB・合成値だけを使用し、fixture結果をLIVE_RUNTIME/installed evidenceに読み替えない。
 
 ## 12. Validation commands
 
 commit前必須:
 
-```text
-pnpm install --frozen-lockfile
-pnpm typecheck
-pnpm build
-pnpm test
-pnpm docs:check
-pnpm validate:repo-health
-```
+    pnpm install --frozen-lockfile
+    pnpm typecheck
+    pnpm build
+    pnpm test
+    pnpm docs:check
+    pnpm validate:repo-health
 
 実装単位追加:
 
-```text
-pnpm run doctor
-pnpm validate:packaging
-pnpm exec vitest run packages/hds-brain/test/制御状態.test.ts packages/hds-brain/test/記憶更新.test.ts
-```
+    pnpm run doctor
+    pnpm validate:packaging
+    pnpm exec vitest run packages/hds-brain/test/記憶更新.test.ts packages/hds-brain/test/制御状態.test.ts
 
-失敗は今回起因、既存、環境限定、未確定に分類し、exit値・test件数・ログ参照を記録する。credentialsを表示・変更せず、既存processを止めない。CHANGELOG変更後は移行台帳hashを同期する。
+失敗は今回起因、既存、環境限定、未確定に分類し、exit値と件数を記録する。実装検証失敗を隠さない。
 
 ## 13. Manual smoke
 
-Windows/PowerShellの現在workspaceで局所selectorを実行し、実 `node:sqlite` file DB、子process終了値、正例のcommit・receipt再照合、close/reopen後のJ/M revisionと件数、receipt不在時のpending維持を確認する。一時fixture DBは試験終了後に破棄する。Gateway、external service、credential、既存port、実データ、live/installed/release smokeは起動・変更しない。
+現在のWindows/PowerShell workspace上でselectorを実行する。一時DBで正例repair、破損ledger・trigger schema拒否、容量・write/fsync failureの安全停止、close/reopen後の再検査を確認する。既存Gateway/listener/process、credential、製品DB、external service、別repoは操作しない。物理OS fsync failureを起こしたとは主張せず、注入/合成試験と明記する。
 
 ## 14. Permanent-use check
 
-証拠範囲は現在のWindows Node hostでのJ pending保存、C03.02 M SQLite receiptの読取、合成承認参照、receipt照合とclose/reopen復帰である。証拠源は `FIXTURE` / `INTERNAL_STATE`。実J authority、production consumer、OS crash durability、複数process、DB migration/repair、installed配布、release readinessは証明しない。
+許される証拠主張は現在のWindows Node hostの内部M/J file-backed SQLite fixture、明示された修復entrypoint、失敗時の同handle停止まで。証拠源はFIXTURE/INTERNAL_STATE。production consumer、owner/L3承認、OS crash/power-loss、複数process、installed distribution、release readinessの証明ではない。
 
 ## 15. Final report format
 
-C03.03有限受入とBT-R-C03-04の成立範囲、変更path・consumer・risk/route/evidence source、selectorと8必須commandのexit/結果、失敗・未実施・profile制限、親C03/P13状態、branch/commit/push/remote HEAD、二世代backup refs、復元点を日本語で記録する。局所受入、Git統合、production/runtime/release判断を分ける。
+C03.04局所受入とBT-R-C03-05/06の成立範囲、変更path、内部consumer、risk/route/evidence source、selectorと全必須commandのexit/結果、失敗・未実施・残存限界、親C03/P13状態、branch/commit/push/remote HEAD、二世代backup refs、復元点を日本語で簡潔に記録する。局所受入、Git統合、production/runtime/release判断を分ける。
 
 ## 16. Next-phase dependency
 
-有限正負条件、必須検証、整理・安全review、二世代backup、main単一commit/push、remote refs/clean照合、private引継ぎをC03.03一単位で閉じる。ここで施工編集を止め、C03.04の破損・容量・同期障害・再構成は開始しない。親C03全体は部分状態のまま。P13は `PENDING_OWNER_GO`、`public_claim_allowed=false` を維持し、owner GO/GAを推定しない。
+C03.04の有限正負条件、整理、安全review、必須検証、二世代backup、main単一commit/push、remote refs/clean照合、private引継ぎまで閉じて境界停止する。親C03 scenario全体、production接続、実運用耐久性、release状態は未完了のまま保持する。P13はPENDING_OWNER_GO、public_claim_allowed=falseを維持し、owner GO/GAを推定しない。
