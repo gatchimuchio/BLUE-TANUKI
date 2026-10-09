@@ -99,6 +99,12 @@ describe("buildLLMBackendFromEnv", () => {
     const llm = buildLLMBackendFromEnv({
       LLM_BACKEND: "fast",
       LLM_PROVIDERS_JSON: providers,
+      BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({
+        "local-fast": {
+          capabilities: ["llm.text.generate"],
+          max_cost_per_attempt: { amount: 0.02, currency: "USD" },
+        },
+      }),
     });
     const registry = llm as LLMRegistry;
 
@@ -110,6 +116,12 @@ describe("buildLLMBackendFromEnv", () => {
       "local-fast",
       "stub",
     ]);
+    expect(registry.healthSnapshot().fallback_profiles).toContainEqual({
+      provider: "local-fast",
+      capabilities: ["llm.text.generate"],
+      max_cost_per_attempt: { amount: 0.02, currency: "USD", source: "CONFIG" },
+      used_for_authority: false,
+    });
   });
 
   it("configures explicit LLM retry and fallback without making health authority", () => {
@@ -173,6 +185,27 @@ describe("buildLLMBackendFromEnv", () => {
       timeout_ms: 4567,
     });
     expect(describeLLMCommandRoute({}).backend_hint).toBe("(registry default)");
+  });
+
+  it("parses an explicit HDS fallback authorization without reading credentials", () => {
+    const route = buildLLMCommandRouteFromEnv({
+      BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON: JSON.stringify({
+        allowed_providers: ["backup"],
+        allowed_input_sources: ["accepted_inbound_request"],
+        required_capabilities: ["llm.text.generate"],
+        max_total_cost: { amount: 0.5, currency: "USD" },
+      }),
+    });
+
+    expect(route.fallback_authorization).toEqual({
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request"],
+      required_capabilities: ["llm.text.generate"],
+      max_total_cost: { amount: 0.5, currency: "USD" },
+    });
+    expect(() => buildLLMCommandRouteFromEnv({
+      BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON: "{\"allowed_providers\":[\"backup\"]}",
+    })).toThrow(/invalid shape/);
   });
 
   it("rejects invalid upstream LLM route env", () => {

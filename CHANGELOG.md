@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — provider fallback許可と実行同一性
+
+- C05.03として、HDSのprovider/input-source/capability/cost許可とowner設定profileを満たすretry可能failureだけに、明示fallbackを限定した。許可欠落、能力・scope・通貨・費用上限不一致、timeout/cancelではfallbackを呼ばない。
+- Registry-owned切替traceをCompute execution identityへ接続し、切替元/先、failure kind、許可source/能力、設定上限に基づく推定費用を記録する。authorizationをproviderへ渡さず、実請求額やlive providerの成立は主張しない。
+- selectorとworkspace検証、doctor状態、未実施のlive/release確認は開発進捗へ記録する。GA/P13/owner GOは含めない。
+
 ## 2026-10-09 — provider応答・候補保持・中断境界
 
 - C05.02として、OpenAI互換tool_callsとAnthropic tool_useを実行されない型付きcandidateへ正規化し、Executorと通常Gateway finalization経路へ渡す。HDS feedback auditはfailure要約とcandidate count/digestだけを記録する。

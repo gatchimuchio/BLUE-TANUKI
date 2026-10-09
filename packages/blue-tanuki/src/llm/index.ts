@@ -1,5 +1,8 @@
 export type {
   LLMBackend,
+  LLMFallbackCostBound,
+  LLMFallbackProfile,
+  LLMFallbackTrace,
   LLMRequest,
   LLMResponse,
   LLMMessage,
@@ -11,6 +14,7 @@ export type {
 export {
   LLMProviderError,
   classifyLLMError,
+  LLM_ROUTING_TRACE,
 } from "./base.js";
 export { StubBackend } from "./stub.js";
 export { AnthropicBackend } from "./anthropic.js";

@@ -8,7 +8,7 @@ import {
   ToolRegistry,
   createExecutorApprovalAuthority,
 } from "@blue-tanuki/core";
-import type { LLMBackend, LLMRequest, LLMResponse } from "@blue-tanuki/core";
+import { LLMProviderError, type LLMBackend, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 
 class FixtureProvider implements LLMBackend {
@@ -111,6 +111,121 @@ describe("HDS to Gateway compute identity", () => {
       entry.log.kind === "executor_feedback" && entry.log.command_id === command.id,
     );
     expect(audit?.log).toMatchObject({ kind: "executor_feedback", feedback: { result_present: true } });
+    expect(hds.getAudit().verify()).toBe(true);
+  });
+
+  it("falls back only under the HDS provider, capability, data-scope, and cost grant", async () => {
+    class PrimaryProvider implements LLMBackend {
+      readonly name = "primary";
+      readonly requests: LLMRequest[] = [];
+      async call(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        throw new LLMProviderError("primary unavailable", {
+          provider: this.name,
+          kind: "remote_service_unavailable",
+          retryable: true,
+          status: 503,
+        });
+      }
+    }
+    class BackupProvider implements LLMBackend {
+      readonly name = "backup";
+      readonly requests: LLMRequest[] = [];
+      async call(request: LLMRequest): Promise<LLMResponse> {
+        this.requests.push(request);
+        return { content: "A permitted fixture response.", tokens_used: 2, model: "backup-model-v1" };
+      }
+    }
+
+    const primary = new PrimaryProvider();
+    const backup = new BackupProvider();
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 } })
+      .register(primary)
+      .register(backup)
+      .setDefault("primary")
+      .setFallback("backup")
+      .setFallbackProfile("primary", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.2, currency: "USD" },
+      })
+      .setFallbackProfile("backup", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+      });
+    const hds = new HDSUpperController({
+      llm_route: {
+        backend_hint: "primary",
+        fallback_authorization: {
+          allowed_providers: ["backup"],
+          allowed_input_sources: ["accepted_inbound_request"],
+          required_capabilities: ["llm.text.generate"],
+          max_total_cost: { amount: 0.3, currency: "USD" },
+        },
+      },
+    });
+    const { log, command } = hds.decide(inbound("bounded compute request", "compute-fallback-1"));
+    if (!command || command.type !== "llm_call") throw new Error("expected HDS llm_call");
+
+    const authority = createExecutorApprovalAuthority();
+    const executor = new Executor({
+      approval_authority: authority,
+      llm: registry,
+      compute: new LLMComputeAdapter(registry),
+      tools: new ToolRegistry(),
+    });
+    const approved = authority.approve(command, {
+      source: "approval_gate",
+      decision: "allow",
+      approved_by: "fixture-owner",
+      approved_at_ms: 1,
+      upstream_commit_hash: command.upstream_decision.commit_hash,
+      operation: "llm.call",
+      risk: "low",
+      final_review_required: false,
+      reason: "fallback permission fixture",
+    });
+    const feedback = await executor.execute(approved);
+
+    expect(feedback.status).toBe("success");
+    expect(feedback.result).toMatchObject({
+      execution_identity: {
+        request_id: command.id,
+        provider: {
+          requested: "primary",
+          actual: "backup",
+          fallback: {
+            used: true,
+            from_provider: "primary",
+            failure_kind: "remote_service_unavailable",
+            allowed_input_sources: ["accepted_inbound_request"],
+            max_total_cost: { amount: 0.3, currency: "USD" },
+            estimated_total_cost: { amount: 0.3, currency: "USD", source: "CONFIG" },
+          },
+        },
+        data_exposure_scope: {
+          input_sources: ["accepted_inbound_request"],
+          requested_egress_provider: "primary",
+        },
+      },
+      cost: { status: "estimated", amount: 0.3, currency: "USD" },
+      authority_boundary: { used_for_authority: false },
+    });
+    expect(primary.requests).toHaveLength(1);
+    expect(backup.requests).toHaveLength(1);
+    expect(backup.requests[0]?.messages).toEqual(primary.requests[0]?.messages);
+
+    const finalized = finalizeCommandOutput({
+      hds,
+      command,
+      feedback,
+      target_surface: "channel",
+      request_id: log.request_id,
+    });
+    expect(finalized.reviewed_feedback.result).toMatchObject({
+      execution_identity: {
+        provider: { actual: "backup", fallback: { used: true, from_provider: "primary" } },
+      },
+    });
     expect(hds.getAudit().verify()).toBe(true);
   });
 

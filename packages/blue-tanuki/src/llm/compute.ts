@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { normalizeLLMToolCallCandidates, type LLMBackend, type LLMRequest, type LLMResponse } from "./base.js";
+import { LLMFallbackAuthorizationSchema, type LLMFallbackAuthorization } from "@blue-tanuki/protocol";
+import {
+  LLM_ROUTING_TRACE,
+  normalizeLLMToolCallCandidates,
+  type LLMBackend,
+  type LLMErrorKind,
+  type LLMRequest,
+  type LLMResponse,
+} from "./base.js";
+import { LLMRegistry } from "./registry.js";
 
 export const LLM_COMPUTE_PROFILE = Object.freeze({
   id: "blue-tanuki.llm-call",
@@ -28,6 +37,7 @@ export interface ComputeRequest<TInput extends object = Record<string, never>> {
   c_profile: ComputeProfile;
   local_p_version: string;
   data_exposure_scope: ComputeDataExposureScope;
+  fallback_authorization?: LLMFallbackAuthorization;
   resource_limits: {
     max_tokens?: number;
     timeout_ms?: number;
@@ -50,6 +60,15 @@ export type ComputeResult<TOutput extends object = Record<string, never>> = TOut
     provider: {
       requested: string;
       actual: string;
+      fallback: { used: false } | {
+        used: true;
+        from_provider: string;
+        failure_kind: LLMErrorKind;
+        allowed_input_sources: string[];
+        required_capabilities: string[];
+        max_total_cost: { amount: number; currency: string };
+        estimated_total_cost: { amount: number; currency: string; source: string };
+      };
     };
     model: {
       requested: string | null;
@@ -82,8 +101,13 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
   constructor(private readonly backend: LLMBackend) {}
 
   async compute(request: ComputeRequest<LLMRequest>, signal?: AbortSignal): Promise<ComputeResult<LLMResponse>> {
-    validateComputeRequest(request);
-    const response = await this.backend.call(request.input, signal);
+    const fallbackAuthorization = validateComputeRequest(request);
+    const response = this.backend instanceof LLMRegistry
+      ? await this.backend.callWithFallbackAuthorization(request.input, signal, fallbackAuthorization)
+      : await this.backend.call(request.input, signal);
+    const fallbackTrace = this.backend instanceof LLMRegistry
+      ? response[LLM_ROUTING_TRACE]
+      : undefined;
     const provider = this.backend.canonical_provider_identity === true
       ? (response.provider ?? "").trim()
       : this.backend.name.trim();
@@ -93,6 +117,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
     const toolCalls = normalizeLLMToolCallCandidates(provider, response.tool_calls);
     const normalizedResponse = { ...response };
     delete normalizedResponse.raw;
+    delete normalizedResponse[LLM_ROUTING_TRACE];
     Object.assign(normalizedResponse, {
       provider,
       model,
@@ -111,6 +136,17 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
         provider: {
           requested: request.data_exposure_scope.requested_egress_provider,
           actual: provider,
+          fallback: fallbackTrace && fallbackAuthorization
+            ? {
+                used: true,
+                from_provider: fallbackTrace.from_provider,
+                failure_kind: fallbackTrace.failure_kind,
+                allowed_input_sources: [...fallbackAuthorization.allowed_input_sources],
+                required_capabilities: [...fallbackAuthorization.required_capabilities],
+                max_total_cost: { ...fallbackAuthorization.max_total_cost },
+                estimated_total_cost: { ...fallbackTrace.estimated_total_cost },
+              }
+            : { used: false },
         },
         model: {
           requested: request.input.model ?? null,
@@ -125,10 +161,15 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
           timeout_ms: request.resource_limits.timeout_ms ?? null,
         },
       },
-      cost: {
-        status: "unknown",
-        reason: "provider_did_not_report_monetary_cost",
-      },
+      cost: fallbackTrace
+        ? {
+            status: "estimated",
+            ...fallbackTrace.estimated_total_cost,
+          }
+        : {
+            status: "unknown",
+            reason: "provider_did_not_report_monetary_cost",
+          },
       authority_boundary: {
         compute_output_used_for_authority: false,
         provider_metadata_used_for_authority: false,
@@ -138,7 +179,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
   }
 }
 
-function validateComputeRequest(request: ComputeRequest<LLMRequest>): void {
+function validateComputeRequest(request: ComputeRequest<LLMRequest>): LLMFallbackAuthorization | undefined {
   const digest = /^[a-f0-9]{64}$/;
   if (!request.request_id.trim()) throw new Error("compute request_id is required");
   if (!digest.test(request.current_projection_digest)) {
@@ -163,6 +204,12 @@ function validateComputeRequest(request: ComputeRequest<LLMRequest>): void {
   if (!request.data_exposure_scope.requested_egress_provider.trim()) {
     throw new Error("compute requested egress provider is required");
   }
+  const parsedFallbackAuthorization = request.fallback_authorization === undefined
+    ? undefined
+    : LLMFallbackAuthorizationSchema.safeParse(request.fallback_authorization);
+  if (parsedFallbackAuthorization && !parsedFallbackAuthorization.success) {
+    throw new Error("compute fallback authorization is invalid");
+  }
   const requestedProvider = request.input.backend_hint?.trim() || "registry-default";
   if (requestedProvider !== request.data_exposure_scope.requested_egress_provider) {
     throw new Error("compute requested provider does not match its data exposure scope");
@@ -172,4 +219,10 @@ function validateComputeRequest(request: ComputeRequest<LLMRequest>): void {
       throw new Error(`compute resource limit ${name} must be a positive safe integer`);
     }
   }
+  if (!parsedFallbackAuthorization?.success) return undefined;
+  const authorization = parsedFallbackAuthorization.data;
+  if (!request.data_exposure_scope.input_sources.every(
+    (source) => authorization.allowed_input_sources.includes(source),
+  )) return undefined;
+  return authorization;
 }

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { LLMBackend, LLMRequest, LLMResponse } from "../src/llm/base.js";
+import { LLMProviderError, type LLMBackend, type LLMRequest, type LLMResponse } from "../src/llm/base.js";
+import { LLMRegistry } from "../src/llm/registry.js";
 import {
   LLMComputeAdapter,
   LLM_COMPUTE_PROFILE,
@@ -81,6 +82,99 @@ describe("LLMComputeAdapter", () => {
       provider_metadata_used_for_authority: false,
       used_for_authority: false,
     });
+    expect(result.execution_identity.provider.fallback).toEqual({ used: false });
+  });
+
+  it("records a permitted provider switch and bounded estimated cost in execution identity", async () => {
+    class Primary implements LLMBackend {
+      readonly name = "primary";
+      async call(): Promise<LLMResponse> {
+        throw new LLMProviderError("primary unavailable", {
+          provider: this.name,
+          kind: "remote_service_unavailable",
+          retryable: true,
+          status: 503,
+        });
+      }
+    }
+    class Backup implements LLMBackend {
+      readonly name = "backup";
+      readonly seen: LLMRequest[] = [];
+      async call(request: LLMRequest): Promise<LLMResponse> {
+        this.seen.push(request);
+        return { content: "backup response", tokens_used: 2, model: "backup-model" };
+      }
+    }
+    const primary = new Primary();
+    const backup = new Backup();
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 } })
+      .register(primary)
+      .register(backup)
+      .setDefault("primary")
+      .setFallback("backup")
+      .setFallbackProfile("primary", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.2, currency: "USD" },
+      })
+      .setFallbackProfile("backup", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+      });
+    const request = computeRequest();
+    request.data_exposure_scope.requested_egress_provider = "registry-default";
+    request.input.backend_hint = undefined;
+    request.fallback_authorization = {
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request", "selected_memory_references"],
+      required_capabilities: ["llm.text.generate"],
+      max_total_cost: { amount: 0.3, currency: "USD" },
+    };
+
+    const result = await new LLMComputeAdapter(registry).compute(request);
+
+    expect(backup.seen).toHaveLength(1);
+    expect(backup.seen[0]).toEqual(request.input);
+    expect(result.execution_identity.provider).toEqual({
+      requested: "registry-default",
+      actual: "backup",
+      fallback: {
+        used: true,
+        from_provider: "primary",
+        failure_kind: "remote_service_unavailable",
+        allowed_input_sources: ["accepted_inbound_request", "selected_memory_references"],
+        required_capabilities: ["llm.text.generate"],
+        max_total_cost: { amount: 0.3, currency: "USD" },
+        estimated_total_cost: {
+          amount: 0.3,
+          currency: "USD",
+          source: "CONFIG",
+        },
+      },
+    });
+    expect(result.cost).toEqual({
+      status: "estimated",
+      amount: 0.3,
+      currency: "USD",
+      source: "CONFIG",
+    });
+    expect(result.authority_boundary.used_for_authority).toBe(false);
+
+    const historyRequest = computeRequest();
+    historyRequest.data_exposure_scope = {
+      ...historyRequest.data_exposure_scope,
+      requested_egress_provider: "registry-default",
+      input_sources: ["accepted_inbound_request", "session_history"],
+    };
+    historyRequest.input.backend_hint = undefined;
+    historyRequest.fallback_authorization = {
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request"],
+      required_capabilities: ["llm.text.generate"],
+      max_total_cost: { amount: 0.3, currency: "USD" },
+    };
+    await expect(new LLMComputeAdapter(registry).compute(historyRequest))
+      .rejects.toMatchObject({ provider: "primary", kind: "remote_service_unavailable" });
+    expect(backup.seen).toHaveLength(1);
   });
 
   it("rejects provider-route mismatch before making a provider call", async () => {
@@ -120,7 +214,7 @@ describe("LLMComputeAdapter", () => {
             output_digest: "f".repeat(64),
             c_profile: request.c_profile,
             local_p_version: request.local_p_version,
-            provider: { requested: "mini-dora-local", actual: "mini-dora-local" },
+            provider: { requested: "mini-dora-local", actual: "mini-dora-local", fallback: { used: false } },
             model: { requested: null, actual: "mini-dora-v1" },
             data_exposure_scope: request.data_exposure_scope,
             resource_limits: { max_tokens: null, timeout_ms: null },

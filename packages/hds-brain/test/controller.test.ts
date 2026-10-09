@@ -178,6 +178,30 @@ describe("HDSUpperController.decide()", () => {
     });
   });
 
+  it("copies an explicit fallback grant into the HDS compute context", () => {
+    const grant = {
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request"],
+      required_capabilities: ["llm.text.generate"],
+      max_total_cost: { amount: 0.5, currency: "USD" },
+    };
+    const controller = new HDSUpperController({
+      llm_route: { fallback_authorization: grant },
+    });
+    grant.allowed_providers[0] = "changed-after-controller-start";
+
+    const { command } = controller.decide(inbound("fallback fixture"));
+    expect(command?.type).toBe("llm_call");
+    if (command?.type === "llm_call") {
+      expect(command.payload.compute_context?.fallback_authorization).toEqual({
+        allowed_providers: ["backup"],
+        allowed_input_sources: ["accepted_inbound_request"],
+        required_capabilities: ["llm.text.generate"],
+        max_total_cost: { amount: 0.5, currency: "USD" },
+      });
+    }
+  });
+
   it("routes explicit file.search requests to tool_call with capability envelope", () => {
     const c = new HDSUpperController();
     const { command } = c.decide(

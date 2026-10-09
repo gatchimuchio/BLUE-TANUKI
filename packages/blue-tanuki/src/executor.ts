@@ -752,6 +752,9 @@ function buildComputeRequest(input: {
       input_sources,
       requested_egress_provider: context.data_exposure.requested_egress_provider,
     },
+    ...(context.fallback_authorization
+      ? { fallback_authorization: context.fallback_authorization }
+      : {}),
     resource_limits: {
       ...(input.max_tokens !== undefined ? { max_tokens: input.max_tokens } : {}),
       ...(input.timeout_ms !== undefined ? { timeout_ms: input.timeout_ms } : {}),

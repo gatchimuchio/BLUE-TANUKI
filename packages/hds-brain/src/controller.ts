@@ -6,6 +6,7 @@ import type {
   GatewayInternalAuthorityMetadata,
   UpstreamDecision,
   LLMCallPayload,
+  LLMFallbackAuthorization,
 } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
@@ -13,6 +14,7 @@ import {
   parseInboundRequestAtBoundary,
   LLMCallFailureSchema,
   LLMToolCallCandidateSchema,
+  LLMFallbackAuthorizationSchema,
 } from "@blue-tanuki/protocol";
 import type {
   ApprovalGateLog,
@@ -136,6 +138,8 @@ export interface LLMCommandRoute {
   temperature?: number;
   max_tokens?: number;
   timeout_ms?: number;
+  /** Owner-supplied HDS grant. Omission prevents alternate-provider fallback. */
+  fallback_authorization?: LLMFallbackAuthorization;
 }
 
 export interface ControllerSelfHealthOptions {
@@ -188,7 +192,13 @@ export class HDSUpperController {
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
     this.memory = opts.memory;
-    this.llm_route = opts.llm_route ?? {};
+    const llmRoute = opts.llm_route ?? {};
+    this.llm_route = {
+      ...llmRoute,
+      ...(llmRoute.fallback_authorization !== undefined
+        ? { fallback_authorization: LLMFallbackAuthorizationSchema.parse(llmRoute.fallback_authorization) }
+        : {}),
+    };
     this.goal_relation_tree = opts.goal_relation_graph === undefined
       ? undefined
       : buildGoalRelationTreeView(opts.goal_relation_graph);
@@ -925,6 +935,9 @@ export class HDSUpperController {
           ],
           requested_egress_provider: backendHint ?? "registry-default",
         },
+        ...(this.llm_route.fallback_authorization
+          ? { fallback_authorization: this.llm_route.fallback_authorization }
+          : {}),
       },
     };
 

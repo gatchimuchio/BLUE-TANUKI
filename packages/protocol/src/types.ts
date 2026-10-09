@@ -90,6 +90,32 @@ export type UpstreamDecision = z.infer<typeof UpstreamDecisionSchema>;
 /**
  * LLM call payload (one of the executor's primary command types).
  */
+export const LLMFallbackAuthorizationSchema = z.object({
+  allowed_providers: z.array(z.string().trim().min(1).max(120)).min(1).max(16),
+  allowed_input_sources: z.array(z.enum([
+    "accepted_inbound_request",
+    "selected_memory_references",
+    "session_history",
+  ])).min(1).max(3),
+  required_capabilities: z.array(z.string().trim().min(1).max(120)).min(1).max(16),
+  max_total_cost: z.object({
+    amount: z.number().finite().nonnegative(),
+    currency: z.string().regex(/^[A-Z]{3}$/),
+  }).strict(),
+}).strict().superRefine((value, context) => {
+  const providers = value.allowed_providers.map((provider) => provider.toLowerCase());
+  if (new Set(providers).size !== providers.length) {
+    context.addIssue({ code: "custom", message: "fallback providers must be unique" });
+  }
+  if (new Set(value.allowed_input_sources).size !== value.allowed_input_sources.length) {
+    context.addIssue({ code: "custom", message: "fallback input sources must be unique" });
+  }
+  if (new Set(value.required_capabilities).size !== value.required_capabilities.length) {
+    context.addIssue({ code: "custom", message: "fallback capabilities must be unique" });
+  }
+});
+export type LLMFallbackAuthorization = z.infer<typeof LLMFallbackAuthorizationSchema>;
+
 export const LLMComputeContextSchema = z.object({
   schema_version: z.literal("blue-tanuki.compute-context.v1"),
   projection_digest: z.string().regex(/^[a-f0-9]{64}$/),
@@ -101,6 +127,8 @@ export const LLMComputeContextSchema = z.object({
     ])).min(1).max(2),
     requested_egress_provider: z.string().trim().min(1).max(120),
   }).strict(),
+  /** HDS-issued constraints for an alternate provider; absent means no fallback authorization. */
+  fallback_authorization: LLMFallbackAuthorizationSchema.optional(),
 }).strict();
 export type LLMComputeContext = z.infer<typeof LLMComputeContextSchema>;
 

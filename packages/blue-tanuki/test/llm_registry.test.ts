@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { LLMRegistry } from "../src/llm/registry.js";
 import {
+  LLM_ROUTING_TRACE,
   LLMProviderError,
   type LLMBackend,
   type LLMRequest,
@@ -69,6 +70,28 @@ class FailingBackend implements LLMBackend {
 }
 
 describe("LLMRegistry", () => {
+  it("does not accept a provider-supplied routing trace as registry evidence", async () => {
+    const provider = new NamedBackend("primary");
+    const untrusted = new LLMRegistry().register({
+      name: provider.name,
+      async call(request) {
+        const response = await provider.call(request);
+        return {
+          ...response,
+          [LLM_ROUTING_TRACE]: {
+            from_provider: "spoofed",
+            failure_kind: "remote_service_unavailable",
+            estimated_total_cost: { amount: 0, currency: "USD", source: "CONFIG" },
+          },
+        };
+      },
+    });
+
+    const response = await untrusted.call({ messages: [{ role: "user", content: "hello" }] });
+
+    expect(response[LLM_ROUTING_TRACE]).toBeUndefined();
+  });
+
   it("routes to the default backend when no hint is present", async () => {
     const stub = new NamedBackend("stub");
     const fast = new NamedBackend("fast");
@@ -147,7 +170,7 @@ describe("LLMRegistry", () => {
     });
   });
 
-  it("uses an explicit fallback only for default routing", async () => {
+  it("uses an explicitly authorized fallback for a selected primary route", async () => {
     const primary = new FlakyBackend("primary", 2);
     const fallback = new NamedBackend("stub");
     const registry = new LLMRegistry({
@@ -157,13 +180,36 @@ describe("LLMRegistry", () => {
       .register(primary)
       .register(fallback)
       .setDefault("primary")
-      .setFallback("stub");
+      .setFallback("stub")
+      .setFallbackProfile("primary", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.2, currency: "USD" },
+      })
+      .setFallbackProfile("stub", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+      });
 
-    const res = await registry.call({
+    const res = await registry.callWithFallbackAuthorization({
+      backend_hint: "primary",
       messages: [{ role: "user", content: "hello" }],
+    }, undefined, {
+      allowed_providers: ["stub"],
+      allowed_input_sources: ["accepted_inbound_request"],
+      required_capabilities: ["llm.text.generate"],
+      max_total_cost: { amount: 0.3, currency: "USD" },
     });
     expect(res.content).toBe("from:stub");
     expect(res.provider).toBe("stub");
+    expect(res[LLM_ROUTING_TRACE]).toEqual({
+      from_provider: "primary",
+      failure_kind: "remote_service_unavailable",
+      estimated_total_cost: {
+        amount: 0.3,
+        currency: "USD",
+        source: "CONFIG",
+      },
+    });
     expect(primary.seen).toHaveLength(1);
     expect(fallback.seen).toHaveLength(1);
 
@@ -174,6 +220,144 @@ describe("LLMRegistry", () => {
       }),
     ).rejects.toThrow(/primary unavailable/);
     expect(fallback.seen).toHaveLength(1);
+  });
+
+  it("does not send the request to an allowed provider when the cumulative cost estimate exceeds the HDS bound", async () => {
+    const primary = new FailingBackend("primary", "remote_service_unavailable", true);
+    const fallback = new NamedBackend("backup");
+    const registry = new LLMRegistry({ retry: { max_attempts: 2 } })
+      .register(primary)
+      .register(fallback)
+      .setDefault("primary")
+      .setFallback("backup")
+      .setFallbackProfile("primary", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.2, currency: "USD" },
+      })
+      .setFallbackProfile("backup", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+      });
+
+    await expect(registry.callWithFallbackAuthorization({
+      messages: [{ role: "user", content: "private fixture body" }],
+    }, undefined, {
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request"],
+      required_capabilities: ["llm.text.generate"],
+      max_total_cost: { amount: 0.5, currency: "USD" },
+    })).rejects.toMatchObject({ provider: "primary", kind: "remote_service_unavailable" });
+    expect(primary.seen).toHaveLength(2);
+    expect(fallback.seen).toHaveLength(0);
+  });
+
+  it("blocks an unlisted or incapable fallback without disclosing the request body", async () => {
+    const primary = new FailingBackend("primary", "remote_service_unavailable", true);
+    const fallback = new NamedBackend("backup");
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 } })
+      .register(primary)
+      .register(fallback)
+      .setDefault("primary")
+      .setFallback("backup")
+      .setFallbackProfile("primary", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0, currency: "USD" },
+      })
+      .setFallbackProfile("backup", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0, currency: "USD" },
+      });
+
+    for (const fallback_authorization of [
+      {
+        allowed_providers: ["other"],
+        allowed_input_sources: ["accepted_inbound_request"],
+        required_capabilities: ["llm.text.generate"],
+        max_total_cost: { amount: 0, currency: "USD" },
+      },
+      {
+        allowed_providers: ["backup"],
+        allowed_input_sources: ["accepted_inbound_request"],
+        required_capabilities: ["llm.image.generate"],
+        max_total_cost: { amount: 0, currency: "USD" },
+      },
+    ]) {
+      await expect(registry.callWithFallbackAuthorization({
+        messages: [{ role: "user", content: "private fixture body" }],
+      }, undefined, fallback_authorization)).rejects.toMatchObject({ provider: "primary" });
+      expect(fallback.seen).toHaveLength(0);
+    }
+    expect(JSON.stringify(primary.seen)).toContain("private fixture body");
+  });
+
+  it("blocks fallback when a provider profile is missing or its currency differs", async () => {
+    for (const scenario of ["missing-primary-profile", "currency-mismatch"] as const) {
+      const primary = new FailingBackend("primary", "remote_service_unavailable", true);
+      const fallback = new NamedBackend("backup");
+      const registry = new LLMRegistry({ retry: { max_attempts: 1 } })
+        .register(primary)
+        .register(fallback)
+        .setFallback("backup")
+        .setFallbackProfile("backup", {
+          capabilities: ["llm.text.generate"],
+          max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+        });
+      if (scenario === "currency-mismatch") {
+        registry.setFallbackProfile("primary", {
+          capabilities: ["llm.text.generate"],
+          max_cost_per_attempt: { amount: 0.2, currency: "EUR" },
+        });
+      }
+
+      await expect(registry.callWithFallbackAuthorization({
+        messages: [{ role: "user", content: "bounded fixture" }],
+      }, undefined, {
+        allowed_providers: ["backup"],
+        allowed_input_sources: ["accepted_inbound_request"],
+        required_capabilities: ["llm.text.generate"],
+        max_total_cost: { amount: 1, currency: "USD" },
+      })).rejects.toMatchObject({ provider: "primary", kind: "remote_service_unavailable" });
+      expect(fallback.seen).toHaveLength(0);
+    }
+  });
+
+  it("does not start fallback if cancellation arrives with the primary failure", async () => {
+    const controller = new AbortController();
+    const primary: LLMBackend = {
+      name: "primary",
+      async call() {
+        controller.abort();
+        throw new LLMProviderError("primary unavailable", {
+          provider: "primary",
+          kind: "remote_service_unavailable",
+          retryable: true,
+          status: 503,
+        });
+      },
+    };
+    const fallback = new NamedBackend("backup");
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 } })
+      .register(primary)
+      .register(fallback)
+      .setFallback("backup")
+      .setFallbackProfile("primary", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.2, currency: "USD" },
+      })
+      .setFallbackProfile("backup", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+      });
+
+    await expect(registry.callWithFallbackAuthorization({
+      messages: [{ role: "user", content: "cancelled fixture" }],
+    }, controller.signal, {
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request"],
+      required_capabilities: ["llm.text.generate"],
+      max_total_cost: { amount: 1, currency: "USD" },
+    })).rejects.toMatchObject({ kind: "remote_service_unavailable" });
+    expect(fallback.seen).toHaveLength(0);
   });
 
   it("does not hide non-retryable credential failures behind fallback", async () => {

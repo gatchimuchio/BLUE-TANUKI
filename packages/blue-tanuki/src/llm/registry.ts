@@ -1,11 +1,15 @@
 import {
   classifyLLMError,
   createLLMAbortError,
+  LLM_ROUTING_TRACE,
   type LLMBackend,
+  type LLMFallbackCostBound,
+  type LLMFallbackProfile,
   type LLMErrorKind,
   type LLMRequest,
   type LLMResponse,
 } from "./base.js";
+import { LLMFallbackAuthorizationSchema, type LLMFallbackAuthorization } from "@blue-tanuki/protocol";
 
 function normalizeName(name: string): string {
   return name.trim().toLowerCase();
@@ -42,6 +46,12 @@ export interface LLMRegistryHealthSnapshot {
   surface: "llm_registry_health";
   default_backend: string | null;
   fallback_backend: string | null;
+  fallback_profiles: Array<{
+    provider: string;
+    capabilities: string[];
+    max_cost_per_attempt: LLMFallbackCostBound;
+    used_for_authority: false;
+  }>;
   retry_policy: LLMRetryPolicy;
   providers: LLMBackendHealth[];
   authority_boundary: {
@@ -83,6 +93,7 @@ export class LLMRegistry implements LLMBackend {
   readonly canonical_provider_identity = true as const;
   private readonly backends = new Map<string, LLMBackend>();
   private readonly primaryNames = new Set<string>();
+  private readonly fallbackProfiles = new Map<string, LLMFallbackProfile>();
   private readonly health = new Map<string, LLMBackendHealth>();
   private readonly retryPolicy: LLMRetryPolicy;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -102,7 +113,11 @@ export class LLMRegistry implements LLMBackend {
     this.now = opts.now ?? Date.now;
   }
 
-  register(backend: LLMBackend, aliases: readonly string[] = []): this {
+  register(
+    backend: LLMBackend,
+    aliases: readonly string[] = [],
+    fallbackProfile?: LLMFallbackProfile,
+  ): this {
     const primary = normalizeName(backend.name);
     if (!primary) {
       throw new Error("LLMRegistry: backend name is required");
@@ -126,7 +141,28 @@ export class LLMRegistry implements LLMBackend {
       const key = normalizeName(alias);
       if (key) this.backends.set(key, backend);
     }
+    if (fallbackProfile) this.setFallbackProfile(primary, fallbackProfile);
     if (!this.defaultName) this.defaultName = primary;
+    return this;
+  }
+
+  setFallbackProfile(name: string, profile: LLMFallbackProfile): this {
+    const key = normalizeName(name);
+    const registered = this.backends.get(key);
+    if (!registered) {
+      throw new Error(`LLMRegistry: fallback profile provider '${name}' is not registered`);
+    }
+    const canonical = normalizeName(registered.name);
+    if (this.fallbackProfiles.has(canonical)) {
+      throw new Error(`LLMRegistry: fallback profile for '${canonical}' is already configured`);
+    }
+    if (!isValidFallbackProfile(profile)) {
+      throw new Error(`LLMRegistry: fallback profile for '${canonical}' is invalid`);
+    }
+    this.fallbackProfiles.set(canonical, {
+      capabilities: [...profile.capabilities],
+      max_cost_per_attempt: { ...profile.max_cost_per_attempt },
+    });
     return this;
   }
 
@@ -170,6 +206,14 @@ export class LLMRegistry implements LLMBackend {
       surface: "llm_registry_health",
       default_backend: this.defaultName ?? null,
       fallback_backend: this.fallbackName ?? null,
+      fallback_profiles: Array.from(this.fallbackProfiles.entries())
+        .map(([provider, profile]) => ({
+          provider,
+          capabilities: [...profile.capabilities],
+          max_cost_per_attempt: { ...profile.max_cost_per_attempt, source: "CONFIG" as const },
+          used_for_authority: false as const,
+        }))
+        .sort((a, b) => a.provider.localeCompare(b.provider)),
       retry_policy: { ...this.retryPolicy },
       providers: Array.from(this.health.values())
         .map((entry) => ({ ...entry }))
@@ -199,22 +243,85 @@ export class LLMRegistry implements LLMBackend {
   }
 
   async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
+    return this.callWithFallbackAuthorization(req, signal);
+  }
+
+  /** @internal HDS fallback authorization is consumed here and never forwarded to a provider. */
+  async callWithFallbackAuthorization(
+    req: LLMRequest,
+    signal: AbortSignal | undefined,
+    fallbackAuthorization?: LLMFallbackAuthorization,
+  ): Promise<LLMResponse> {
     const selected = this.resolveWithName(req.backend_hint);
     if (signal?.aborted) throw createLLMAbortError(selected.name, signal);
     try {
-      return await this.callWithRetry(selected.backend, selected.name, req, signal);
+      const response = await this.callWithRetry(selected.backend, selected.name, req, signal);
+      return withoutRoutingTrace(response);
     } catch (error) {
       // Cancellation and command deadlines must not start another provider call.
       if (signal?.aborted) throw error;
       const classification = classifyLLMError(error);
-      if (!req.backend_hint && this.fallbackName && classification.retryable) {
+      if (this.fallbackName && classification.retryable) {
         const fallback = this.resolveWithName(this.fallbackName);
-        if (fallback.name !== selected.name) {
-          return await this.callWithRetry(fallback.backend, fallback.name, req, signal);
+        const estimatedTotalCost = this.authorizedFallbackCost(
+          selected.name,
+          fallback.name,
+          req,
+          fallbackAuthorization,
+        );
+        if (fallback.name !== selected.name && estimatedTotalCost) {
+          const response = withoutRoutingTrace(
+            await this.callWithRetry(fallback.backend, fallback.name, req, signal),
+          );
+          return {
+            ...response,
+            provider: fallback.name,
+            [LLM_ROUTING_TRACE]: {
+              from_provider: selected.name,
+              failure_kind: classification.kind,
+              estimated_total_cost: estimatedTotalCost,
+            },
+          };
         }
       }
       throw error;
     }
+  }
+
+  private authorizedFallbackCost(
+    primaryName: string,
+    fallbackName: string,
+    request: LLMRequest,
+    fallbackAuthorization: LLMFallbackAuthorization | undefined,
+  ): LLMFallbackCostBound | undefined {
+    const parsed = LLMFallbackAuthorizationSchema.safeParse(fallbackAuthorization);
+    if (!parsed.success) return undefined;
+    const authorization = parsed.data;
+    if (!authorization.allowed_providers.some((name) => normalizeName(name) === fallbackName)) {
+      return undefined;
+    }
+
+    const primaryProfile = this.fallbackProfiles.get(primaryName);
+    const fallbackProfile = this.fallbackProfiles.get(fallbackName);
+    if (!primaryProfile || !fallbackProfile) return undefined;
+    if (request.max_tokens !== undefined && request.max_tokens <= 0) return undefined;
+    if (authorization.required_capabilities.some(
+      (capability) => !fallbackProfile.capabilities.includes(capability),
+    )) return undefined;
+
+    const primaryCost = primaryProfile.max_cost_per_attempt;
+    const fallbackCost = fallbackProfile.max_cost_per_attempt;
+    if (primaryCost.currency !== fallbackCost.currency || primaryCost.currency !== authorization.max_total_cost.currency) {
+      return undefined;
+    }
+    const total = boundedCostSum(
+      primaryCost.amount,
+      fallbackCost.amount,
+      this.retryPolicy.max_attempts,
+      authorization.max_total_cost.amount,
+    );
+    if (total === undefined) return undefined;
+    return { amount: total, currency: primaryCost.currency, source: "CONFIG" };
   }
 
   private async callWithRetry(
@@ -278,4 +385,68 @@ export class LLMRegistry implements LLMBackend {
     entry.last_error_retryable = retryable;
     entry.retry_after_ms = retryAfterMs ?? null;
   }
+}
+
+function isValidFallbackProfile(profile: LLMFallbackProfile): boolean {
+  if (!profile || Object.getPrototypeOf(profile) !== Object.prototype) return false;
+  if (Object.keys(profile).sort().join(",") !== "capabilities,max_cost_per_attempt") return false;
+  if (!profile || !Array.isArray(profile.capabilities) || profile.capabilities.length === 0 || profile.capabilities.length > 16) {
+    return false;
+  }
+  if (profile.capabilities.some((capability) => typeof capability !== "string" || !capability.trim() || capability.length > 120)) {
+    return false;
+  }
+  if (new Set(profile.capabilities).size !== profile.capabilities.length) return false;
+  const cost = profile.max_cost_per_attempt;
+  if (!cost || Object.getPrototypeOf(cost) !== Object.prototype || Object.keys(cost).sort().join(",") !== "amount,currency") return false;
+  return Boolean(
+    Number.isFinite(cost.amount) &&
+    cost.amount >= 0 &&
+    /^[A-Z]{3}$/.test(cost.currency),
+  );
+}
+
+function boundedCostSum(
+  primary: number,
+  fallback: number,
+  attemptsPerProvider: number,
+  maximum: number,
+): number | undefined {
+  if (!Number.isSafeInteger(attemptsPerProvider) || attemptsPerProvider < 1) return undefined;
+  const values = [primary, fallback, maximum].map(decimalUnits);
+  const scale = Math.max(...values.map((value) => value.scale));
+  const [primaryUnits, fallbackUnits, maximumUnits] = values.map((value) =>
+    value.units * (10n ** BigInt(scale - value.scale)),
+  );
+  const totalUnits = (primaryUnits! + fallbackUnits!) * BigInt(attemptsPerProvider);
+  if (totalUnits > maximumUnits!) return undefined;
+  const total = Number(formatDecimalUnits(totalUnits, scale));
+  return Number.isFinite(total) ? total : undefined;
+}
+
+function decimalUnits(value: number): { units: bigint; scale: number } {
+  const [coefficient, exponentText] = value.toString().toLowerCase().split("e");
+  const exponent = Number(exponentText ?? "0");
+  const [whole, fraction = ""] = (coefficient ?? "0").split(".");
+  const digits = `${whole ?? "0"}${fraction}`.replace(/^0+(?=\d)/, "");
+  let scale = fraction.length - exponent;
+  let units = BigInt(digits || "0");
+  if (scale < 0) {
+    units *= 10n ** BigInt(-scale);
+    scale = 0;
+  }
+  return { units, scale };
+}
+
+function formatDecimalUnits(units: bigint, scale: number): string {
+  if (scale === 0) return units.toString();
+  const padded = units.toString().padStart(scale + 1, "0");
+  const splitAt = padded.length - scale;
+  return `${padded.slice(0, splitAt)}.${padded.slice(splitAt)}`;
+}
+
+function withoutRoutingTrace(response: LLMResponse): LLMResponse {
+  const sanitized = { ...response };
+  delete sanitized[LLM_ROUTING_TRACE];
+  return sanitized;
 }

@@ -53,6 +53,38 @@ Native/direct providers remain canonical. Missing OpenRouter must not break
 `stub`, `openai`, `anthropic`, `openai-compatible`, local endpoints, or
 `LLM_PROVIDERS_JSON`.
 
+### Constrained provider fallback
+
+Fallback is disabled unless HDS supplies an explicit authorization and both
+the selected and fallback providers have owner-configured profiles. The
+authorization limits fallback provider names, input sources, required
+capabilities, and the maximum total estimated cost. Provider profiles declare
+capabilities and a conservative maximum estimated cost per attempt. The
+registry multiplies the sum of both profiles by
+`BLUE_TANUKI_LLM_RETRY_ATTEMPTS` (default `1`) before comparing it with the
+authorization limit. All amounts must use the same ISO 4217 currency code.
+
+```bash
+BLUE_TANUKI_LLM_FALLBACK_BACKEND=anthropic
+BLUE_TANUKI_LLM_RETRY_ATTEMPTS=1
+BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON='{"openai":{"capabilities":["llm.text.generate"],"max_cost_per_attempt":{"amount":0.25,"currency":"USD"}},"anthropic":{"capabilities":["llm.text.generate"],"max_cost_per_attempt":{"amount":0.25,"currency":"USD"}}}'
+BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON='{"allowed_providers":["anthropic"],"allowed_input_sources":["accepted_inbound_request"],"required_capabilities":["llm.text.generate"],"max_total_cost":{"amount":0.5,"currency":"USD"}}'
+```
+
+`BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON` is an HDS route constraint; it
+does not create permission in the provider or replace review of the original
+operation. Keep `allowed_input_sources` limited to sources acceptable for the
+fallback provider. If the request includes a source outside that list, HDS
+authorization is malformed, either provider profile is missing, capabilities
+or currencies differ, or the estimated maximum exceeds the grant, the registry
+keeps the primary failure and makes no fallback request. Timeout, cancellation,
+and non-retryable failures also stop before fallback.
+
+Profile amounts are configuration estimates, not measured usage or a billing
+guarantee. Configure conservative maxima for the selected model and request
+limits; actual provider charges can differ. The execution identity labels the
+fallback amount as estimated and retains the actual monetary cost as unverified.
+
 ## Telegram
 
 ```bash

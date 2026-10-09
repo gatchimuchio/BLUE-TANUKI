@@ -34,6 +34,27 @@ export interface LLMRequest {
   timeout_ms?: number;
 }
 
+/** Registry-owned trace. Provider response metadata is never used to create this value. */
+export const LLM_ROUTING_TRACE: unique symbol = Symbol("blue-tanuki.llm-routing-trace");
+
+export interface LLMFallbackCostBound {
+  amount: number;
+  currency: string;
+  source: "CONFIG";
+}
+
+export interface LLMFallbackProfile {
+  capabilities: readonly string[];
+  /** Owner-configured maximum estimate for one provider attempt. */
+  max_cost_per_attempt: { amount: number; currency: string };
+}
+
+export interface LLMFallbackTrace {
+  from_provider: string;
+  failure_kind: LLMErrorKind;
+  estimated_total_cost: LLMFallbackCostBound;
+}
+
 export interface LLMResponse {
   content: string;
   tokens_used: number;
@@ -43,6 +64,7 @@ export interface LLMResponse {
   /** Canonical provider label selected by the local registry, when available. */
   provider?: string;
   raw?: unknown;
+  [LLM_ROUTING_TRACE]?: LLMFallbackTrace;
 }
 
 export interface LLMBackend {

@@ -4,9 +4,11 @@ import {
   OpenAICompatibleBackend,
   StubBackend,
   type LLMBackend,
+  type LLMFallbackProfile,
   type LLMRetryPolicy,
 } from "@blue-tanuki/core";
 import type { LLMCommandRoute } from "@blue-tanuki/hds-brain";
+import { LLMFallbackAuthorizationSchema } from "@blue-tanuki/protocol";
 import {
   hasLLMSecretMaterial,
   resolveLLMSecretRefs,
@@ -79,6 +81,36 @@ function parseHeadersJson(raw: string | undefined): Record<string, string> {
   if (!raw) return {};
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   return headersFromObject(parsed, "LLM headers JSON");
+}
+
+function parseFallbackProfilesJson(raw: string | undefined): Array<[string, LLMFallbackProfile]> {
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON must be valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON must be a provider object");
+  }
+  return Object.entries(parsed as Record<string, unknown>)
+    .map(([provider, profile]) => [provider, profile as LLMFallbackProfile]);
+}
+
+function parseFallbackAuthorizationJson(raw: string | undefined): LLMCommandRoute["fallback_authorization"] {
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON must be valid JSON");
+  }
+  const result = LLMFallbackAuthorizationSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON has an invalid shape");
+  }
+  return result.data;
 }
 
 function parseProvidersJson(raw: string | undefined, env: Env): ProviderSpec[] {
@@ -190,7 +222,13 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
   const registry = new LLMRegistry({
     retry: buildLLMRetryPolicyFromEnv(resolvedEnv),
   });
-  registry.register(new StubBackend());
+  registry.register(new StubBackend(), [], {
+    capabilities: ["llm.text.generate"],
+    max_cost_per_attempt: {
+      amount: 0,
+      currency: "USD",
+    },
+  });
 
   const anthropicKey = envValue(resolvedEnv, "ANTHROPIC_API_KEY");
   if (
@@ -309,6 +347,11 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
   const defaultBackend =
     envValue(resolvedEnv, "LLM_BACKEND", "LLM_DEFAULT_BACKEND") ?? "stub";
   registry.setDefault(defaultBackend);
+  for (const [provider, profile] of parseFallbackProfilesJson(
+    envValue(resolvedEnv, "BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON"),
+  )) {
+    registry.setFallbackProfile(provider, profile);
+  }
   registry.setFallback(envValue(resolvedEnv, "BLUE_TANUKI_LLM_FALLBACK_BACKEND"));
   return registry;
 }
@@ -316,12 +359,16 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
 export function buildLLMCommandRouteFromEnv(
   env: Env = process.env,
 ): LLMCommandRoute {
+  const fallbackAuthorization = parseFallbackAuthorizationJson(
+    envValue(env, "BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON"),
+  );
   return {
     backend_hint: envValue(env, "BLUE_TANUKI_LLM_BACKEND_HINT"),
     model: envValue(env, "BLUE_TANUKI_LLM_MODEL"),
     temperature: parseTemperatureEnv(env),
     max_tokens: parsePositiveIntEnv(env, "BLUE_TANUKI_LLM_MAX_TOKENS"),
     timeout_ms: parsePositiveIntEnv(env, "BLUE_TANUKI_LLM_TIMEOUT_MS"),
+    ...(fallbackAuthorization ? { fallback_authorization: fallbackAuthorization } : {}),
   };
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ExecuteCommandSchema,
   ExecuteFeedbackSchema,
+  LLMComputeContextSchema,
   inspectOperationPlanAdapterRegistry,
   OPERATION_ADAPTER_REGISTRY,
   OperationCoreApprovalTraceSchema,
@@ -56,6 +57,44 @@ describe("ExecuteCommandSchema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("LLMComputeContextSchema fallback authorization", () => {
+  const context = {
+    schema_version: "blue-tanuki.compute-context.v1",
+    projection_digest: "a".repeat(64),
+    local_p_version: "local-p.v1",
+    data_exposure: {
+      input_sources: ["accepted_inbound_request"],
+      requested_egress_provider: "primary",
+    },
+  };
+
+  it("accepts an explicit provider, capability, and cumulative cost bound", () => {
+    const parsed = LLMComputeContextSchema.parse({
+      ...context,
+      fallback_authorization: {
+        allowed_providers: ["backup"],
+        allowed_input_sources: ["accepted_inbound_request"],
+        required_capabilities: ["llm.text.generate"],
+        max_total_cost: { amount: 0.5, currency: "USD" },
+      },
+    });
+
+    expect(parsed.fallback_authorization?.allowed_providers).toEqual(["backup"]);
+  });
+
+  it("rejects duplicate, empty, unbounded, or unknown fallback authorization data", () => {
+    for (const authorization of [
+      { allowed_providers: ["backup", "BACKUP"], allowed_input_sources: ["accepted_inbound_request"], required_capabilities: ["llm.text.generate"], max_total_cost: { amount: 1, currency: "USD" } },
+      { allowed_providers: ["backup"], allowed_input_sources: [], required_capabilities: [], max_total_cost: { amount: 1, currency: "USD" } },
+      { allowed_providers: ["backup"], allowed_input_sources: ["accepted_inbound_request"], required_capabilities: ["llm.text.generate"], max_total_cost: { amount: -1, currency: "USD" } },
+      { allowed_providers: ["backup"], allowed_input_sources: ["accepted_inbound_request"], required_capabilities: ["llm.text.generate"], max_total_cost: { amount: 1, currency: "usd" } },
+      { allowed_providers: ["backup"], allowed_input_sources: ["accepted_inbound_request"], required_capabilities: ["llm.text.generate"], max_total_cost: { amount: 1, currency: "USD" }, approved: true },
+    ]) {
+      expect(LLMComputeContextSchema.safeParse({ ...context, fallback_authorization: authorization }).success).toBe(false);
+    }
   });
 });
 

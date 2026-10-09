@@ -6,7 +6,7 @@
 
 ## 現在の開発工程
 
-ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付きvalidate:agiを実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01–04ではM/Jの永続化・復旧、C04.01–03ではmemory候補・引用・依存版をHDS権限外の通常経路へ接続した。C05.01ではgeneric Compute identityへHDS射影digest、実provider input/output digest、provider/model、local P、data exposure source、resource limitsとunknown costを結合した。C05.02ではprovider応答のstrict parsing、timeout/cancel中断、native tool callのcandidate-only化、HDSへのdigest-only auditを通常Gateway finalization経路で確認する。C05親の残りC05.03以降、C01/C02/C03/C04親全scenario、実provider/live/installed、release readinessは未成立である。全体検証、未達、環境失敗と局所証拠の境界は[開発進捗](開発進捗.md)へ記録する。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
+ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付きvalidate:agiを実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01–04ではM/Jの永続化・復旧、C04.01–03ではmemory候補・引用・依存版をHDS権限外の通常経路へ接続した。C05.01ではgeneric Compute identityへHDS射影digest、実provider input/output digest、provider/model、local P、data exposure source、resource limitsとunknown costを結合した。C05.02ではprovider応答のstrict parsing、timeout/cancel中断、native tool callのcandidate-only化、HDSへのdigest-only auditを通常Gateway finalization経路で確認した。C05.03ではowner設定のprovider能力・費用profileとHDS fallback authorizationを交差させ、許可内の切替だけを実行同一性に記録する。C05親、C01/C02/C03/C04親全scenario、実provider/live/installed、release readinessは未成立である。全体検証、未達、環境失敗と局所証拠の境界は[開発進捗](開発進捗.md)へ記録する。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
 
 以下の日本語移行と P13 状態は独立して維持する。
 
@@ -18,7 +18,7 @@ ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を
 | Product phase | P13 凍結 | `PENDING_OWNER_GO`、`public_claim_allowed=false`。 |
 | Language phase | J0 完了 | 日本語基底規定、台帳、gate、active governance が成立。J1 は未承認。 |
 | Strict language gate | 未成立 | 既存の非日本語 active assets が移行負債として残る。 |
-| Runtime / authority | C05.02のprovider応答・tool candidate境界 | provider応答をstrict parsingし、timeout/cancel/disconnect/partial failureを型付けする。native tool callは実行せずnon-authority candidateとして通常Gateway/HDS auditへ渡す。親C05はpartial。 |
+| Runtime / authority | C05.03の制約付きprovider fallback境界 | HDS authorizationとowner設定profileの交差範囲に限りretry可能failure後のfallbackを行い、provider切替元/先・failure・source・能力・設定費用推定をCompute identityへ記録する。実請求・live provider証拠ではなく、親C05はpartial。 |
 
 ## 系列
 
