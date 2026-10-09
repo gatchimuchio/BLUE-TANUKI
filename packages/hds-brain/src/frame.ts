@@ -16,6 +16,10 @@ import type {
 } from "./types.js";
 import { resolveActor, resolveProcess } from "./process.js";
 import { buildMemoryTrace, type MemoryReaderPort } from "./memory_trace.js";
+import {
+  createUnidentifiedGoalProjection,
+  type GoalProjectionSourceKind,
+} from "./goal_projection.js";
 
 /**
  * Optional frame configuration: lets the gateway decide which policy
@@ -35,6 +39,9 @@ export interface FrameConfig {
   /** Override actor/process resolution for tests or higher-level gateway policy. */
   actor?: ActorRef;
   process?: HDSProcessDefinition;
+  /** Raw accepted content is hashed for the immutable reference and is not copied into the projection. */
+  original_content?: string;
+  original_reference_kind?: GoalProjectionSourceKind;
   /**
    * Override protected_values per request, if needed.
    * Falls back to a conservative default.
@@ -78,6 +85,11 @@ export function frame(req: InboundRequest, config?: FrameConfig): FrameResult {
     memory_trace,
     ...(operator_surface ? { operator_surface } : {}),
     ...(operation_core ? { operation_core } : {}),
+    goal_projection: createUnidentifiedGoalProjection({
+      request_id: req.id,
+      original_content: config?.original_content ?? req.content,
+      ...(config?.original_reference_kind ? { source_kind: config.original_reference_kind } : {}),
+    }),
     goal: req.content.slice(0, 200),
     protected_values: config?.protected_values ?? DEFAULT_PROTECTED_VALUES,
     world_closure: {

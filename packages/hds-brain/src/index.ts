@@ -1,5 +1,11 @@
 export * from "./types.js";
 export { frame, type FrameConfig } from "./frame.js";
+export {
+  createUnidentifiedGoalProjection,
+  type DeepReadonly,
+  type GoalProjectionSourceKind,
+  type ReadonlyGoalProjection,
+} from "./goal_projection.js";
 export { resolveActor, resolveProcess } from "./process.js";
 export { buildMemoryTrace, type MemoryReaderPort } from "./memory_trace.js";
 export {

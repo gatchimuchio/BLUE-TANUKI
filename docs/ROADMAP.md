@@ -6,7 +6,7 @@
 
 ## 現在の開発工程
 
-ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、実件数を照合する開発導線と未登録・0件・未実装の負例を受け入れた。親C01のT01/T02/T04、製品runtime consumer、release readinessは未成立である。C01.02はmain `20ff760`、C01.01はmain `12410aec` に保存済み。[開発進捗](開発進捗.md) に有限受入、未実施、検証とGit統合を記録する。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。C01.03だけを閉じ、次候補C02.01へは自動進行しない。
+ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、開発導線の正負例を受け入れた。C02.01では原文digest参照と未同定目的射影をHDS Controller/auditへ接続した。親C01/C02のscenarioと製品runtime全体、意味同定、release readinessは未成立である。[開発進捗](開発進捗.md) に有限受入、未実施、検証とGit統合を記録する。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次候補C02.02へは自動進行しない。
 
 以下の日本語移行と P13 状態は独立して維持する。
 

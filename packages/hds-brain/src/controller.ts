@@ -203,6 +203,7 @@ export class HDSUpperController {
       const f = frame(fallbackReq, {
         default_policy: this.policy,
         memory_reader: this.memory,
+        original_reference_kind: "synthetic_rejection_placeholder",
       });
       const c = suspendCommit(
         "authority_input_boundary",
@@ -266,6 +267,7 @@ export class HDSUpperController {
     const f = frame(authorityReq, {
       default_policy: this.policy,
       memory_reader: this.memory,
+      original_content: req.content,
     });
     const selfHealth = this.evaluateSelfHealth();
     if (selfHealth.fail_safe) {

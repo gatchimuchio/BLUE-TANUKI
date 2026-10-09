@@ -1,68 +1,64 @@
 # BLUE-TANUKI 有効な実装指示
 
-現単位: **C01.03 — 受入入口の実試験接続**。`PRODUCT_BUILD_MODE`、tooling profile。直接依存C01.02はmain `20ff76087d86cf12526b11c7b94ede4ee03b500c` に保存済み。今回はC01.03だけを実装し、必須検証、二世代backup、main commit/push、remote照合まで閉じて停止する。
+現単位: **C02.01 — 原文・委任・目的射影**。`PRODUCT_BUILD_MODE`、contract profile。直接依存C01.03はmain `3a23c1ea6fcc037d94b622cd875fea3088341184` に保存済みだが、tooling受入は本単位の契約・HDS実consumer証拠を代替しない。今回はC02.01だけを実装・検証し、二世代backup、main commit/push、remote照合まで閉じて停止する。
 
-ownerは全工程を一単位ずつ委任している。検証済み単位の通常成果はGitHubへ履歴・成果物としてcommit/pushし、remote refsを照合する。公開主張、実業務作用、他repo変更、出荷判断、owner GOは別境界とする。private原典、封印詳細、raw証拠、秘密、runtime stateはrepoへ含めない。
+ownerは全工程を一単位ずつ委任している。検証済み通常成果はGitHubへ履歴・成果物としてcommit/pushし、remote refsを照合する。公開主張、実業務作用、他repo変更、出荷判断、owner GOは別境界とする。私有原典、封印詳細、raw証拠、秘密、runtime stateはrepoへ含めない。
 
 ## 1. 目的
 
-`validate:agi`を追加し、要求IDで登録された実Vitest selectorを起動して、実行結果と終了値を利用者へ返す。未登録、選択0件、実装未接続、test失敗を非成功にする。既存のvalidation commandを維持し、文書検査とruntime試験を混ぜない。
+原文参照と目的射影を別recordとしてHDSの通常decision/audit経路へ接続する。必要性、対象・到達条件・範囲、評価規則、適用期間、委任権限が確認されていないときは`unknown`のまま保持し、入力文面やmetadataから推測しない。
 
 ## 2. Phase 境界
 
-開発専用のローカル試験起動器と日本語利用文書を対象とする。fixtureは合成・専用一時領域に限る。Gateway、HDS-BRAIN、Approval Gate、監査、Runtime Invariants、credential、保存済み製品データ、外部service、別repoは変更・起動・接続しない。`validate:product`は既存の製品検証面として維持し、`docs:check`から独立させる。
+対象はprotocolのgoal projection契約、HDS `frame()`の生成、Controller decision log/auditへの実接続、局所利用文書である。合成requestだけを使う。LLMや外部serviceを起動せず、credential、保存済み製品state、別repo、外部業務作用に触れない。
 
 ## 3. Scope
 
-- `package.json`
-- `scripts/validate_agi.ts`
-- `scripts/validate_agi.test.ts`
-- `docs/VALIDATE_AGI.md`
-- `docs/IMPLEMENTATION_INSTRUCTIONS.md`
-- `docs/INDEX.md`
-- `docs/開発進捗.md`
-- `docs/ROADMAP.md`
-- `CHANGELOG.md`
-- `規定/移行台帳.json`は今回更新するCHANGELOG hashのみ
+- `packages/protocol/src/goal_projection.ts`、`packages/protocol/src/index.ts`
+- `packages/protocol/test/goal_projection.test.ts`
+- `packages/hds-brain/src/goal_projection.ts`、`frame.ts`、`types.ts`、`index.ts`
+- `packages/hds-brain/test/goal_projection.test.ts`
+- `docs/GOAL_PROJECTION.md`、`docs/IMPLEMENTATION_INSTRUCTIONS.md`、`docs/INDEX.md`、`docs/開発進捗.md`、`docs/ROADMAP.md`、`CHANGELOG.md`
 
 ## 4. Non-goals
 
-C01親scenario全体の受入、先行単位の仕様・実装変更、製品runtime変更、Rust product consumer、IPC・live・installed・別OS検証、`validate:product`の置換、既存gateの緩和、第三者依存追加、公開claim、GA、P13 owner GOを行わない。HDS内部原典・rev1.1施工パッケージを公開しない。
+C02親scenario全体、C02.02/C02.03、目的graph、解釈訂正や版変更、自然言語からのgoal同定、owner/delegatorの推定、goalを根拠にした許可・実行、Gateway/Operator UI、永続database移行、credential/live/installed/別OS検証、release/GA/P13/owner GOを扱わない。私有原典・施工パッケージ・raw証拠をrepoへ複写しない。
 
 ## 5. 最初に確認する files / symbols
 
-root/近傍AGENTS、日本語基底、作業標準要領、`SECURITY.md`、`AUDIT.md`、`CONFIG.md`、`README.md`、`CHANGELOG.md`、active指示、C01.03と親C01、C01.02/C01.01の受入証拠、仕様s03/s05/s06/s07/s13/s14/s15/s16、D0 §5–6／A12 §16／H5 §14-24を確認する。現物は`package.json`のscripts、`scripts/validate_product.ts`、`apps/gateway/test/validate_product.test.ts`、Vitest設定、C01.01/.02の実test selectorとする。
+root/近傍AGENTS、日本語基底、作業標準要領、active instruction、ROADMAP、SECURITY/AUDIT/CONFIG/README/CHANGELOG、C02.01と親C02、C01.03の閉鎖証拠、指定仕様s01/s03/s05/s06/s14/s15/s16、原典D0 §7／H5 第6章／A12 §6.2.1を確認する。現物は`InboundRequestSchema`、`FrameResult`、`frame()`、`HDSUpperController.decide()`、`DecisionLog`、`AuditLog.append()`、既存normalization/controller tests、protocol exportを追う。
 
 ## 6. 必須grep
 
-`validate:agi`、`validate:product`、`docs:check`、`BT-U-C01.01`、`BT-U-C01.02`、`BT-T-C01-01`〜`04`、`NOT_IMPLEMENTED`、`testNamePattern`、Vitest JSON reporter、`numPassedTests`、`assert_test_minimums`を登録・起動・test・文書から確認する。status文字列だけをPASS源にしていないことを追跡する。
+`GoalProjectionSchema`、`goal_projection`、`original_request_ref`、`necessity`、`target_state`、`evaluation_rules`、`validity_period`、`authority`、`status: "unknown"`、`FrameResult`、`frame(`、`AuditLog.append`、`raw_content`を追跡する。UI/external metadataから射影を昇格する別経路、raw本文を射影recordへ複写する経路、frame以外の別authority ownerを追加しない。
 
 ## 7. 既存anchor
 
-`package.json`に既存の`validate:product`と`docs:check`があり、`validate:agi`はない。製品gate本体は`scripts/validate_product.ts`、既存のその試験は`apps/gateway/test/validate_product.test.ts`。C01.01/.02には実Vitest test fileとID付きselectorがある。これらは接続先の探索・読取専用anchorであり、製品gateを改造しない。
+`frame()`は既存`goal`へ本文先頭200文字を置く。Controllerはboundary通過後のraw本文を`DecisionLog.input`へ保持し、正規化本文をF→M→Cへ渡し、decision logをaudit hash-chainへ追加する。今回追加する射影はこの既存経路に別fieldとして接続し、legacy `goal`、normalization、decision、既存audit形式の意味を変更しない。
 
 ## 8. 実装要件
 
-1. 開発専用の`validate:agi` scriptと、重複ID・未知selector・空選択をfail-closedで扱うcase registry/runnerを追加する。
-2. `--unit <ID>`、`--case <ID>`、`--list`を明示検査し、未登録は`UNREGISTERED`、選択0件は`NO_CASES`、selector未実装は`NOT_IMPLEMENTED`として非zero終了する。
-3. 実装済みcaseはrepo内Vitest fileとtest-name selectorを子processで実際に起動する。正しいJSON reporter、終了code、1件以上の成功test、失敗0件を確認する。timeout、子process失敗、report欠落・不正・0件を成功扱いしない。
-4. ケースstatusや`PASS`という文字列の存在をtest成功の根拠にしない。既存selectorはcase IDと実file/nameへ結ぶ。親scenario全体の受入と単位局所testを分け、部分sliceで親をPASSにしない。
-5. `validate:product`、`docs:check`、`pnpm test`等の既存呼出しを維持する。runnerは開発専用としruntime import/exportに接続しない。
-6. 出力と一時報告に入力payload・credential・raw製品データを含めず、case ID、test件数、終了code、失敗分類、再実行方法を示す。
+1. strict protocol schemaで、request参照/digest、必要性、対象・条件・範囲、評価規則、適用期間、権限参照、同定状態を別fieldとして定義する。
+2. 値のない項目は`unknown`の形だけを受理する。identified項目には根拠参照を要求し、`ready`は必要項目すべてがidentifiedの場合だけ受理する。
+3. HDSはaccepted raw request本文を一時的にdigest化し、参照と射影をframeへ配置する。raw本文を射影recordへ重複保存しない。invalid boundary fallbackはsynthetic placeholderと明示し、raw invalid inputを読まない。
+4. current runtimeはsemantic extraction/adoptionを行わず、各意味項目を`unknown`として開始する。自然言語、LLM、memory、session、metadata、historyはauthorityを作れない。
+5. projectionとimmutable original referenceをruntimeでfreezeし、`DecisionLog`/`AuditLog`に実際に接続する。射影はmodel/commit/approval/execution decisionの入力にしない。
+6. schema拒否理由はissue codeだけに制限し、不正本文や値を返さない。既存のlegacy goal、HDS standalone、audit hash-chain、Runtime Invariantsを保つ。
 
 ## 9. Safety invariants
 
-HDS-BRAIN唯一authority、owner最終責任、Approval GateとL3 final review、audit hash-chain、Runtime Invariants、fail-closed/SUSPEND、Layer A/B、metadata non-authorityを変更・迂回しない。runner結果は開発testの証拠に限り、製品権限、runtime健全性、親C01全体、release readiness、P13 GOへ昇格しない。
+HDS-BRAIN唯一authority、owner最終責任、Approval Gate/L3 final review、audit hash-chain、Runtime Invariants、fail-closed/SUSPEND、metadata non-authority、memory/history non-authority、Layer A/Bを変更・迂回しない。goal projectionの`ready`は実行承認ではない。本単位の全証拠はcontract/local runtimeの範囲に限り、親scenario・製品全体・release readinessへ昇格しない。
 
 ## 10. Operator usability
 
-CLI usage、case/unit選択、list、exit値、失敗分類、selector再実行方法を`docs/VALIDATE_AGI.md`へ日本語で記す。未登録・0件・未実装の違いを説明し、親scenario未受入を局所testのPASSで隠さない。`validate:product`と役割を混同しない。
+`docs/GOAL_PROJECTION.md`にrecordの各項目、digest参照、unknown/identified/ready条件、invalid-input placeholder、非権限性、現在未実装の意味同定、検証方法と限界を日本語で説明する。未知を勝手に既定値で埋めず、再同定には何のowner evidenceが必要かを示す。
 
 ## 11. Tests
 
-- `BT-U-C01.03-P`: `validate:agi -- --unit C01.03`が登録済み実Vitest selectorを実行し、1件以上の成功test、失敗0、exit 0を返す。
-- `BT-U-C01.03-N`: 未登録unit/case、既知caseのunit不一致による0件、明示NOT_IMPLEMENTED、Vitest failure/0 passed/malformed report/timeoutを非zeroとし、PASS表示しない。
-- `BT-T-C01-03`はrunnerがNOT_IMPLEMENTEDと非zeroを返す負例検証に限る。C01親scenario01/02/04はNOT_RUN_AS_WHOLEのまま維持し、局所sliceを親受入へ昇格しない。
+- `BT-U-C02.01-P`: Controllerの実`decide()`経路で原文request IDとraw-content SHA-256を別immutable referenceへ結び、必要性・target・evaluation・期間・authorityを`unknown`のまま`DecisionLog`/auditへ記録する。legacy `goal`と既存raw/normalized監査を維持する。
+- `BT-U-C02.01-N`: unknownに値を付加した構造、全項目未同定の`ready`、未知field、空評価規則、逆転した期間を拒否する。不正入力値を失敗理由へ含めない。
+- 明示的な自然文と非権限metadataを加えても射影状態が変わらず、同一request条件の決定を射影が変えないことを合成入力で確認する。
+- 親scenario BT-T-C02-01..04は今回一括実行せず、全体受入をNOT_RUNのまま維持する。
 
 ## 12. Validation commands
 
@@ -79,29 +75,26 @@ pnpm run doctor
 pnpm validate:packaging
 ```
 
-追加selector:
+追加局所試験:
 
 ```text
-pnpm validate:agi -- --unit C01.03
-pnpm validate:agi -- --case BT-T-C01-01
-pnpm validate:agi -- --unit C01.03 --case BT-U-C01.02-P
-pnpm validate:agi -- --case BT-T-C01-99
+pnpm exec vitest run packages/protocol/test/goal_projection.test.ts packages/hds-brain/test/goal_projection.test.ts
 ```
 
-後三つはそれぞれNOT_IMPLEMENTED、NO_CASES、UNREGISTEREDの非zeroが期待値。`doctor`は現環境で実行して正確な結果を記録する。資格情報を読まず、既存listener/processを停止・再起動しない。smoke:serve/resume、live、installed、release gateは本単位に不要で未実行と報告する。
+`validate:agi`の登録selectorはC02.01にまだ無いため、勝手に成功根拠として使わない。doctorが既存設定/資格情報の不足を報告した場合は、内容を隠さず今回差分との関係を分類し、秘密を表示・変更しない。
 
 ## 13. Manual smoke
 
-Windows/PowerShellからC01.03正例を実行し、runnerがOS一時領域へ作るJSON reporterを読むことを確認する。各負例のexit code・分類を確認する。Gatewayを起動せず、製品state、credential、外部serviceへ触れない。test子processがすべて終端し、一時報告ファイルを回収したことを確認する。
+Windows/PowerShell上で追加Vitest selectorを実行する。テスト内でHDS Controllerのsynthetic requestを処理し、audit hash-chainと未知値保持を確認する。Gateway、外部service、credential、実データ、別repoは起動・変更しない。child processが終端し、Vitest報告を回収したことを確認する。
 
 ## 14. Permanent-use check
 
-証明対象は現在のWindows workspaceにおいて登録されたVitest selectorを起動・照合する開発導線まで。`validate:product`、runtime、親scenario、Rust product consumer、IPC、installed配布、別OS、live外部作用、製品完成、release readinessは証明しない。利用文書に対象・限界を明記する。
+証明対象は現在のWindows workspaceでprotocol contractを検証し、HDS Controllerのlocal decision/audit経路に未同定goal projectionを保存することまで。意味同定、明示採用、永続database、UI閲覧、parent scenario、installed配布、別OS、live外部作用、製品完成、release readinessは証明しない。
 
 ## 15. Final report format
 
-C01.03有限受入、変更pathと実consumer、証拠源・経路・リスク、全selectorと8必須commandのexit/result、FAIL/未実施/profile/未決process、C01親/P13状態、branch/commit/push/remote HEAD、二世代backup refsと復元点を日本語で記録する。局所受入・Git統合・製品/release判断を分ける。
+C02.01有限受入、BT-R-C02-01/02/06の成立範囲、変更pathと実consumer、証拠源・経路・リスク、局所selectorと8必須commandのexit/result、FAIL/未実施/profile/未決process、C02親/P13状態、branch/commit/push/remote HEAD、二世代backup refsと復元点を日本語で記録する。局所受入・Git統合・製品/release判断を分ける。
 
 ## 16. Next-phase dependency
 
-C01.03の実test接続、未登録/0件/未実装の負例、必須検証の分類、整理・review、二世代backup、mainの単一commit/push、remote refs/clean照合、private引継ぎまで終えたら本単位だけを閉じて停止する。次候補C02.01へ惰性で進まない。C01親はPARTIALのまま保つ。
+有限正負条件、必須検証、整理・安全review、二世代backup、mainの単一commit/push、remote refs/clean照合、private引継ぎまで終えたら本単位だけを閉じて停止する。親C02はPARTIALのまま保ち、C02.02を自動開始しない。

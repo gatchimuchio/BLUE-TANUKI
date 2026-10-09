@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-09 — 原文参照と未同定目的射影
+
+- protocolにstrictなGoalProjection契約を追加し、HDS frameからController decision log/auditへ接続した。受理済み入力はraw本文のdigest参照だけを保存し、必要性・到達状態・評価規則・期間・委任権限を未同定なら`unknown`のまま保持する。
+- 自然文やmetadataによる自動同定、raw invalid payloadの保存を行わず、既存のlegacy goal、F→M→C、Approval Gate、audit hash-chainを維持した。意味同定、永続DB、UI、親C02 scenario、live/installed、release readiness、P13 owner GOは成立させない。
+
 ## 2026-10-09 — 要求ID付き実試験入口
 
 - 開発専用の`validate:agi`を追加し、登録済み要求IDを実Vitestのtest file／test-name selectorへ接続する。JSON報告、子process終了値、成功・失敗件数、一時報告回収を照合し、未登録・0件・未実装・実行失敗を非成功にする。
