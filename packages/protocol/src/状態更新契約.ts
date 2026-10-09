@@ -1,0 +1,308 @@
+import { createHash } from "node:crypto";
+import { z } from "zod";
+
+export const MEMORY_COMMIT_SCHEMA_VERSION = "blue-tanuki.memory-commit.v1" as const;
+export const MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION = "blue-tanuki.memory-update-receipt.v1" as const;
+export const MEMORY_COMMIT_MAX_BYTES = 1_048_576;
+export const MEMORY_COMMIT_MAX_DEPTH = 32;
+export const MEMORY_COMMIT_MAX_CHANGES = 256;
+
+const IdentifierSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
+export type MemoryCommitJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly MemoryCommitJsonValue[]
+  | { readonly [key: string]: MemoryCommitJsonValue };
+
+const MemoryCommitJsonValueSchema: z.ZodType<MemoryCommitJsonValue> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.boolean(),
+    z.number().finite(),
+    z.string(),
+    z.array(MemoryCommitJsonValueSchema),
+    z.record(MemoryCommitJsonValueSchema),
+  ]),
+);
+
+const MemoryCommitChangeSchema = z.discriminatedUnion("operation", [
+  z.object({
+    operation: z.literal("upsert"),
+    record_id: IdentifierSchema,
+    value: MemoryCommitJsonValueSchema,
+  }).strict(),
+  z.object({
+    operation: z.literal("delete"),
+    record_id: IdentifierSchema,
+  }).strict(),
+]);
+
+export const MemoryCommitV1Schema = z.object({
+  schema_version: z.literal(MEMORY_COMMIT_SCHEMA_VERSION),
+  update_id: IdentifierSchema,
+  j_event_id: IdentifierSchema,
+  changes: z.array(MemoryCommitChangeSchema).min(1).max(MEMORY_COMMIT_MAX_CHANGES),
+  content_digest: DigestSchema,
+}).strict();
+
+export type MemoryCommitChangeV1 = z.infer<typeof MemoryCommitChangeSchema>;
+export type MemoryCommitV1 = z.infer<typeof MemoryCommitV1Schema>;
+
+const MemoryUpdateReceiptV1BaseSchema = z.object({
+  schema_version: z.literal(MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION),
+  update_id: IdentifierSchema,
+  event_id: IdentifierSchema,
+  previous_revision: z.number().int().nonnegative().safe(),
+  revision: z.number().int().positive().safe(),
+  content_digest: DigestSchema,
+  event_digest: DigestSchema,
+  committed_at_utc: z.string().datetime({ offset: false }),
+  receipt_digest: DigestSchema,
+}).strict();
+
+export const MemoryUpdateReceiptV1Schema = MemoryUpdateReceiptV1BaseSchema.superRefine(
+  (receipt, context) => {
+    if (receipt.revision !== receipt.previous_revision + 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "revision must advance exactly once",
+        path: ["revision"],
+      });
+    }
+  },
+);
+
+export type MemoryUpdateReceiptV1 = z.infer<typeof MemoryUpdateReceiptV1Schema>;
+
+export type MemoryCommitFailureReason =
+  | "schema_validation_failed"
+  | "invalid_json_value"
+  | "duplicate_record_id"
+  | "payload_too_large"
+  | "payload_too_deep"
+  | "content_digest_mismatch";
+
+export type MemoryCommitParseResult =
+  | {
+      ok: true;
+      commit: MemoryCommitV1;
+      canonical_content_json: string;
+      content_digest: string;
+    }
+  | { ok: false; reason: MemoryCommitFailureReason };
+
+export type MemoryReceiptParseResult =
+  | { ok: true; receipt: MemoryUpdateReceiptV1 }
+  | { ok: false; reason: "schema_validation_failed" | "receipt_digest_mismatch" };
+
+/**
+ * Compute the content digest bound to a J-owned approval reference.
+ * This function validates shape only; it does not create or verify approval.
+ */
+export function memoryCommitContentDigest(
+  input: Omit<MemoryCommitV1, "content_digest">,
+): string {
+  const rawFailure = safelyInspectJsonValue(input);
+  if (rawFailure || canonicalByteLength(input) > MEMORY_COMMIT_MAX_BYTES) {
+    throw new Error("invalid memory commit content");
+  }
+  const parsed = MemoryCommitV1Schema.omit({ content_digest: true }).safeParse(input);
+  if (!parsed.success) {
+    throw new Error("invalid memory commit content");
+  }
+  const seenRecordIds = new Set<string>();
+  for (const change of parsed.data.changes) {
+    if (seenRecordIds.has(change.record_id)) {
+      throw new Error("invalid memory commit content");
+    }
+    seenRecordIds.add(change.record_id);
+  }
+  const jsonFailure = inspectJsonValue(parsed.data.changes);
+  if (jsonFailure) throw new Error("invalid memory commit content");
+  const canonicalContent = canonicalJson(parsed.data);
+  if (Buffer.byteLength(canonicalContent, "utf8") > MEMORY_COMMIT_MAX_BYTES) {
+    throw new Error("invalid memory commit content");
+  }
+  return sha256(canonicalContent);
+}
+
+/** Parse a commit without echoing input values through validation errors. */
+export function parseMemoryCommit(value: unknown): MemoryCommitParseResult {
+  const rawFailure = safelyInspectJsonValue(value);
+  if (rawFailure) return { ok: false, reason: rawFailure };
+  if (canonicalByteLength(value) > MEMORY_COMMIT_MAX_BYTES) {
+    return { ok: false, reason: "payload_too_large" };
+  }
+  const parsed = MemoryCommitV1Schema.safeParse(value);
+  if (!parsed.success) return { ok: false, reason: "schema_validation_failed" };
+
+  const seenRecordIds = new Set<string>();
+  for (const change of parsed.data.changes) {
+    if (seenRecordIds.has(change.record_id)) {
+      return { ok: false, reason: "duplicate_record_id" };
+    }
+    seenRecordIds.add(change.record_id);
+  }
+
+  const jsonFailure = inspectJsonValue(parsed.data.changes);
+  if (jsonFailure) return { ok: false, reason: jsonFailure };
+
+  const content = commitContent(parsed.data);
+  const canonicalContentJson = canonicalJson(content);
+  if (Buffer.byteLength(canonicalContentJson, "utf8") > MEMORY_COMMIT_MAX_BYTES) {
+    return { ok: false, reason: "payload_too_large" };
+  }
+
+  const digest = sha256(canonicalContentJson);
+  if (digest !== parsed.data.content_digest) {
+    return { ok: false, reason: "content_digest_mismatch" };
+  }
+
+  return {
+    ok: true,
+    commit: parsed.data,
+    canonical_content_json: canonicalContentJson,
+    content_digest: digest,
+  };
+}
+
+/** Build an immutable receipt body with a digest over all other fields. */
+export function createMemoryUpdateReceipt(
+  input: Omit<MemoryUpdateReceiptV1, "receipt_digest">,
+): MemoryUpdateReceiptV1 {
+  if (safelyInspectJsonValue(input)) throw new Error("invalid memory update receipt");
+  const parsed = MemoryUpdateReceiptV1BaseSchema.omit({ receipt_digest: true }).safeParse(input);
+  if (!parsed.success || parsed.data.revision !== parsed.data.previous_revision + 1) {
+    throw new Error("invalid memory update receipt");
+  }
+  return Object.freeze({
+    ...parsed.data,
+    receipt_digest: sha256(canonicalJson(parsed.data)),
+  });
+}
+
+/** Validate receipt fields and recompute the digest without trusting callers. */
+export function parseMemoryUpdateReceipt(value: unknown): MemoryReceiptParseResult {
+  if (safelyInspectJsonValue(value)) return { ok: false, reason: "schema_validation_failed" };
+  const parsed = MemoryUpdateReceiptV1Schema.safeParse(value);
+  if (!parsed.success) return { ok: false, reason: "schema_validation_failed" };
+
+  const { receipt_digest: _receiptDigest, ...body } = parsed.data;
+  if (sha256(canonicalJson(body)) !== parsed.data.receipt_digest) {
+    return { ok: false, reason: "receipt_digest_mismatch" };
+  }
+  return { ok: true, receipt: Object.freeze(parsed.data) };
+}
+
+function commitContent(commit: MemoryCommitV1): Omit<MemoryCommitV1, "content_digest"> {
+  return {
+    schema_version: commit.schema_version,
+    update_id: commit.update_id,
+    j_event_id: commit.j_event_id,
+    changes: commit.changes,
+  };
+}
+
+function inspectJsonValue(
+  value: unknown,
+  depth = 0,
+  ancestors: Set<object> = new Set(),
+): MemoryCommitFailureReason | null {
+  if (depth > MEMORY_COMMIT_MAX_DEPTH) return "payload_too_deep";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
+      return "invalid_json_value";
+    }
+    return null;
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") return null;
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+      return "invalid_json_value";
+    }
+    if (Object.getOwnPropertyNames(value).length !== value.length + 1) return "invalid_json_value";
+    if (ancestors.has(value)) return "invalid_json_value";
+    ancestors.add(value);
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !("value" in descriptor)) {
+        ancestors.delete(value);
+        return "invalid_json_value";
+      }
+      const failure = inspectJsonValue(descriptor.value, depth + 1, ancestors);
+      if (failure) {
+        ancestors.delete(value);
+        return failure;
+      }
+    }
+    if (Object.keys(value).length !== value.length) {
+      ancestors.delete(value);
+      return "invalid_json_value";
+    }
+    ancestors.delete(value);
+    return null;
+  }
+  if (typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if ((prototype !== Object.prototype && prototype !== null) ||
+        Object.getOwnPropertySymbols(value).length > 0 ||
+        Object.getOwnPropertyNames(value).length !== Object.keys(value).length) {
+      return "invalid_json_value";
+    }
+    if (ancestors.has(value)) return "invalid_json_value";
+    ancestors.add(value);
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      if (key === "__proto__" || key === "prototype" || key === "constructor") {
+        ancestors.delete(value);
+        return "invalid_json_value";
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor)) {
+        ancestors.delete(value);
+        return "invalid_json_value";
+      }
+      const failure = inspectJsonValue(descriptor.value, depth + 1, ancestors);
+      if (failure) {
+        ancestors.delete(value);
+        return failure;
+      }
+    }
+    ancestors.delete(value);
+    return null;
+  }
+  return "invalid_json_value";
+}
+
+function safelyInspectJsonValue(value: unknown): MemoryCommitFailureReason | null {
+  try {
+    return inspectJsonValue(value);
+  } catch {
+    return "invalid_json_value";
+  }
+}
+
+function canonicalByteLength(value: unknown): number {
+  return Buffer.byteLength(canonicalJson(value), "utf8");
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw new Error("invalid canonical JSON value");
+    return encoded;
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}

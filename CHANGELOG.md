@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — M更新の原子的な確定
+
+- C03.01として、strict版付き`MemoryCommit`/receipt契約、canonical digest、入力上限と危険key拒否をprotocolへ追加した。
+- HDS-BRAIN内部のM APIとSQLite取引を追加し、M event、record差分、revision、更新ID消費、receiptを単一transactionで確定する。設定読戻し、保存chain/state replay、各write pointでのrollback、close/reopen後の照合を局所試験した。
+- 合成J reader、期待版/retry、J帰還、crash/破損復旧、Gateway/Controller production consumer、live/installed、release readiness、親C03全体、P13 owner GOは成立させない。
+
 ## 2026-10-09 — 目的の権限・版・適用時点
 
 - C02.03として、strictな目的governance契約とHDS ledgerを追加した。委任・運用・下位目的の変更権限を区別し、解釈訂正は同じ目的版のまま、目的変更は別eventで旧版を保持して版を進める。

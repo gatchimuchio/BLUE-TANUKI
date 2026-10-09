@@ -6,7 +6,7 @@
 
 ## 現在の開発工程
 
-ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、C02.01では原文digest参照と未同定目的射影、C02.02では複数親・共有手段・寄与・抵触の関係網をHDS Controller/auditへ接続した。C02.03では解釈訂正と目的変更を別eventとし、目的種別の変更権限、親目的version、適用時点、旧版の保持を通常HDS auditへ接続した。全体testの一部timeoutは個別再実行で通過したが、全体commandは非成功として[開発進捗](開発進捗.md)へ記録する。親C01/C02のscenarioと製品runtime全体、自然言語意味同定、owner/L3承認経路、release readinessは未成立である。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
+ownerが委任した施工系列は、一単位ずつ有限受入とGit完結を行う。C01.03では要求ID付き`validate:agi`を実Vitest selectorへ接続し、C02.01–03では目的の射影・関係・権限版をHDS decision/auditへ局所接続した。C03.01では版付きMemoryCommit/receipt契約と内部M SQLite取引を追加し、合成J照会、各write pointのrollback、close/reopen後のchain/state/receiptを局所試験する。J・Gateway・Controller production consumer、J帰還、期待版/retry、破損復旧、installed/crash証拠は未成立である。全体testとdoctorの実結果は[開発進捗](開発進捗.md)へ記録する。親C01/C02/C03の全scenarioと製品runtime全体、自然言語意味同定、owner/L3承認経路、release readinessは未成立である。GitHubは検証済み成果と履歴の保管面であり、通常の単位ごとのcommit・push・remote照合を完結に含む。次単位は最新状態を新規同期し、工程境界で停止する。
 
 以下の日本語移行と P13 状態は独立して維持する。
 

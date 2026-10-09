@@ -7,3 +7,4 @@ export * from "./goal_projection.js";
 export * from "./goal_relations.js";
 export * from "./goal_governance.js";
 export * from "./境界交換契約.js";
+export * from "./状態更新契約.js";
