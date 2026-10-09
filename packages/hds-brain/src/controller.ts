@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   InboundRequest,
   ExecuteCommand,
@@ -889,15 +889,32 @@ export class HDSUpperController {
     // on the latest inbound request only. The session_id is upstream's
     // declaration of WHERE the executor should persist, not a signal
     // that HDS-BRAIN is consuming past context.
+    const memoryMessages = buildMemoryCitationSystemMessages(log.frame.memory_trace);
+    const backendHint = this.llm_route.backend_hint?.trim() || undefined;
     const llmPayload: LLMCallPayload = {
       messages: [
-        ...buildMemoryCitationSystemMessages(log.frame.memory_trace),
+        ...memoryMessages,
         { role: "user", content: req.content },
       ],
       session_id: `${req.channel}:${req.user}`,
-      backend_hint: this.llm_route.backend_hint,
+      backend_hint: backendHint,
       model: this.llm_route.model,
       temperature: this.llm_route.temperature,
+      compute_context: {
+        schema_version: "blue-tanuki.compute-context.v1",
+        projection_digest: computeCurrentProjectionDigest(
+          log.frame.goal_projection.projection_id,
+          memoryMessages,
+        ),
+        local_p_version: "blue-tanuki.c-input-rules.v1",
+        data_exposure: {
+          input_sources: [
+            "accepted_inbound_request",
+            ...(memoryMessages.length > 0 ? ["selected_memory_references" as const] : []),
+          ],
+          requested_egress_provider: backendHint ?? "registry-default",
+        },
+      },
     };
 
     const max_tokens = this.llm_route.max_tokens ?? 1024;
@@ -911,6 +928,22 @@ export class HDSUpperController {
       upstream_decision,
     };
   }
+}
+
+function computeCurrentProjectionDigest(
+  goalProjectionId: string,
+  memoryMessages: readonly { role: string; content: string }[],
+): string {
+  const memoryContextDigest = createHash("sha256")
+    .update(JSON.stringify(memoryMessages))
+    .digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify({
+      schema_version: "blue-tanuki.compute-current-projection.v1",
+      goal_projection_id: goalProjectionId,
+      memory_context_digest: memoryContextDigest,
+    }))
+    .digest("hex");
 }
 
 function llmResultContent(result: unknown): string | null {

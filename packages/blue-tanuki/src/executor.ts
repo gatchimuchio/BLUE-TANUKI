@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ExecuteCommand,
   ExecuteFeedback,
@@ -6,7 +7,13 @@ import type {
   ChannelSendPayload,
   ToolCapability,
 } from "@blue-tanuki/protocol";
-import type { LLMBackend } from "./llm/base.js";
+import type { LLMBackend, LLMRequest, LLMResponse } from "./llm/base.js";
+import {
+  LLM_COMPUTE_PROFILE,
+  type ComputeBackend,
+  type ComputeInputSource,
+  type ComputeRequest,
+} from "./llm/compute.js";
 import type { ToolRegistry } from "./tools/registry.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
@@ -36,6 +43,8 @@ export interface ChannelDispatcher {
 
 export interface ExecutorDeps {
   llm: LLMBackend;
+  /** Gateway configures this for the governed HDS-to-provider path. */
+  compute?: ComputeBackend<LLMRequest, LLMResponse>;
   tools: ToolRegistry;
   /**
    * Required authority instance for approving commands for this Executor.
@@ -202,11 +211,13 @@ export class Executor {
     const session_id = payload.session_id;
 
     let effectiveMessages = payload.messages;
+    let sessionHistoryApplied = false;
     if (session_store && session_id) {
       const history = await session_store.getMessages(session_id, {
         limit: this.deps.history_limit,
       });
       if (history.length > 0) {
+        sessionHistoryApplied = true;
         effectiveMessages = [
           ...history.map((m) => ({ role: m.role, content: m.content })),
           ...payload.messages,
@@ -214,15 +225,26 @@ export class Executor {
       }
     }
 
+    const providerRequest: LLMRequest = {
+      messages: effectiveMessages,
+      ...(payload.backend_hint !== undefined ? { backend_hint: payload.backend_hint } : {}),
+      ...(payload.model !== undefined ? { model: payload.model } : {}),
+      ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
+      ...(constraints?.max_tokens !== undefined ? { max_tokens: constraints.max_tokens } : {}),
+      ...(constraints?.timeout_ms !== undefined ? { timeout_ms: constraints.timeout_ms } : {}),
+    };
+    const response = this.deps.compute
+      ? this.deps.compute.compute(buildComputeRequest({
+          request_id: id,
+          context: payload.compute_context,
+          provider_request: providerRequest,
+          max_tokens: constraints?.max_tokens,
+          timeout_ms: constraints?.timeout_ms,
+          session_history_applied: sessionHistoryApplied,
+        }))
+      : this.deps.llm.call(providerRequest);
     const resp = await this.withTimeout(
-      this.deps.llm.call({
-        messages: effectiveMessages,
-        backend_hint: payload.backend_hint,
-        model: payload.model,
-        temperature: payload.temperature,
-        max_tokens: constraints?.max_tokens,
-        timeout_ms: constraints?.timeout_ms,
-      }),
+      response,
       constraints?.timeout_ms,
     );
     const plannerInspection = inspectOperationCorePlannerOutput(resp.content);
@@ -506,4 +528,38 @@ function hasAnyCapability(caps: readonly ToolCapability[], expected: readonly st
 function commandOperationLabel(command: ExecuteCommand): string {
   if (command.type === "tool_call") return command.payload.tool_name;
   return command.type;
+}
+
+function buildComputeRequest(input: {
+  request_id: string;
+  context: LLMCallPayload["compute_context"];
+  provider_request: LLMRequest;
+  max_tokens?: number;
+  timeout_ms?: number;
+  session_history_applied: boolean;
+}): ComputeRequest<LLMRequest> {
+  const context = input.context;
+  if (!context) {
+    throw new Error("LLM compute context is required when a compute adapter is configured");
+  }
+  const input_sources: ComputeInputSource[] = [...context.data_exposure.input_sources];
+  if (input.session_history_applied) input_sources.push("session_history");
+  return {
+    request_id: input.request_id,
+    current_projection_digest: context.projection_digest,
+    input_digest: createHash("sha256")
+      .update(JSON.stringify(input.provider_request))
+      .digest("hex"),
+    c_profile: LLM_COMPUTE_PROFILE,
+    local_p_version: context.local_p_version,
+    data_exposure_scope: {
+      input_sources,
+      requested_egress_provider: context.data_exposure.requested_egress_provider,
+    },
+    resource_limits: {
+      ...(input.max_tokens !== undefined ? { max_tokens: input.max_tokens } : {}),
+      ...(input.timeout_ms !== undefined ? { timeout_ms: input.timeout_ms } : {}),
+    },
+    input: input.provider_request,
+  };
 }

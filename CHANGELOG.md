@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-09 — C計算入力とprovider実行識別の結合
+
+- C05.01として、generic input/output型のCompute契約を追加し、LLM固有payloadはadapter内に閉じた。HDS現在射影digest、session historyを含む実provider入力digest、provider出力digestとresource limitをresult identityへ結合する。
+- Registryが選択したcanonical providerと実model、要求route、ローカルC入力規則版、data exposure source、費用状態を記録する。Gateway CLI/serveの両Executor経路へ接続し、Mini Dora fixtureも同じ権限なし契約を使うことを確認した。
+- 合成provider fixtureの専用selectorとworkspace validation結果は開発進捗に記録する。実provider/live、fallback policyの再設計、GA/P13/owner GOは今回の成立範囲に含めない。
+
 ## 2026-10-09 — 過去記憶の非権限化と依存版の限定照合
 
 - C04.03として、Cの現在射影に含まれる正確なF record ID/hash版を`dependency_versions`へ明示し、Jの引用review記録とaudit-dumpへ同じ一覧を残す。Jは現在候補setの完全一致だけを受け入れ、古いhash版を拒否する。

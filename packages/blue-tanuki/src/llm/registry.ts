@@ -79,6 +79,7 @@ function defaultSleep(ms: number): Promise<void> {
  */
 export class LLMRegistry implements LLMBackend {
   readonly name = "registry";
+  readonly canonical_provider_identity = true as const;
   private readonly backends = new Map<string, LLMBackend>();
   private readonly primaryNames = new Set<string>();
   private readonly health = new Map<string, LLMBackendHealth>();
@@ -225,7 +226,7 @@ export class LLMRegistry implements LLMBackend {
           backend_hint: undefined,
         });
         this.recordSuccess(name);
-        return response;
+        return { ...response, provider: name };
       } catch (error) {
         lastError = error;
         const classification = classifyLLMError(error);

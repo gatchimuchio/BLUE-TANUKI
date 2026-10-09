@@ -1,110 +1,118 @@
 # BLUE-TANUKI 有効な実装指示
 
-現単位: **C04.03 — 権限非復活と依存版失効**。`PRODUCT_BUILD_MODE`、profile `core`。直接依存C04.02の有限受入とpush済みcommitを参照し、証拠を今回のprofile全体へ拡張しない。現在射影が実際に消費する不変記録の版を個別に追跡し、過去decisionを履歴証拠として保持しながら現在権限へ戻さない。検証後は二世代backup、`main`への単一commit・push、remote照合まで閉じ、ここで停止する。GitHubは検証済み成果と履歴の保管面である。別repo、業務上の外部作用、公開主張、出荷判断、owner GOは別境界である。環境構築は完了済みとして再実施せず、作業環境はWindowsを使う。
+現単位: **C05.01 — C計算入出力とprovider/model識別の結合**。profileはcompute-local。現在のHDS射影と実際のprovider入力digestを分けて保持し、要求routeと実provider/model、local P版、data exposure scope、resource limits、cost状態を共通Compute結果へ結ぶ。C05.02以降、外部作用、公開、出荷判断、owner GOは別境界である。環境構築は完了済みとして再実施せず、通常開発はWindows / PowerShellで行う。GitHubは検証済み成果と履歴の保管先であり、この単位も検証後に規定の二世代backup、main commit・push、remote照合まで閉じる。
 
 ## 1. 目的
 
-BT-R-C04-05/06の今回範囲として、HDSの過去判断を出所付きの履歴証拠として明示し、今回の許可・承認・grantへ変換しない。Cへ渡した現在射影が実際に含むF record IDとimmutable hash版を個別の依存版一覧として残し、同じ候補集合をJの引用照合へ渡す。
+BT-R-C05-01、BT-R-C05-04、BT-R-C05-06の今回範囲として、現在射影・Cの入力/出力・実計算routeを一つの非権限execution identityへ結合する。LLM provider adapterを共通Compute契約の下流実装とし、将来のMini Doraも同じ権限なし契約へ接続できる形にする。
 
-有限到達条件: **過去承認は証拠のみとし、実際に依存する版の変更だけを再評価へ結ぶ。** 現行LTMは追記専用であり、依存版が一致しない候補は引用受入時に拒否する。依存一覧外の追記だけでは既存参照を全失効させない。局所条件を満たしたらここで停止し、親C04やreleaseの成立へ拡張しない。
+有限到達条件: **Gatewayの通常HDS→Executor→LLM provider経路で、HDSの現在射影digest、実入力digestと結果digest、要求routeと選択されたcanonical provider/model、C profile、local P版、入力data exposure scope、resource limits、金額cost状態がresult identityへ結合し、Compute出力とprovider metadataが非権限のままHDS feedback auditでdigest拘束される。** providerから金額が得られない場合はcostをunknownとする。Mini Dora実装や別権限経路は今回作らない。
 
 ## 2. Phase 境界
 
-対象は既存の`MemoryTrace`、C向け候補context、J引用review、HDS hash-chain audit、Gateway audit-dumpである。C向けcontextとJ admissionは同じ現在候補集合・record/hash版を使う。HDS-BRAINの唯一authority、Approval Gate、grant store、L3 final reviewは変更しない。memory出所の過去decisionは証拠であり、current approvalではない。LongTermMemoryStoreのcanonical entryとappend-only/hash-chain動作を維持する。raw answer、summary本文、claim本文、command、secretを新しい監査項目へ複製しない。
+対象はprotocolのLLM compute context、HDS command生成、LLM registry provider identity、ExecutorのCompute contract、Gateway CLI/serve wiring、局所fixture testsと本書に限る。HDS-BRAINが唯一authorityであり、Approval Gate、L3 final review、audit hash-chain、Runtime Invariants、Layer A/Bを維持する。
+
+C05.02のstructured output / tool-candidate境界、C05.03のfallback方針、provider費用の実報告、credentialed/live provider、Mini Dora provider、Control Center表示、installer/bundle、release/GA/P13/owner GOは対象外。private施工pack・原典・実行state・secretはrepositoryへ含めない。
 
 ## 3. Scope
 
-- `packages/hds-brain/src/types.ts`
-- `packages/hds-brain/src/memory_citation_review.ts`
-- `packages/hds-brain/test/memory_citation_review.test.ts`
-- `packages/hds-brain/test/controller.test.ts`
-- `apps/gateway/src/audit_dump.ts`
-- `apps/gateway/test/audit_dump.test.ts`
-- `docs/IMPLEMENTATION_INSTRUCTIONS.md`
-- `docs/ROADMAP.md`
-- `docs/開発進捗.md`
-- `CHANGELOG.md`
-- `規定/移行台帳.json`（既存負債のCHANGELOG hash同期が必要な場合だけ）
+- packages/protocol/src/types.ts
+- packages/hds-brain/src/controller.ts
+- packages/blue-tanuki/src/llm/base.ts
+- packages/blue-tanuki/src/llm/index.ts
+- packages/blue-tanuki/src/llm/compute.ts
+- packages/blue-tanuki/src/llm/registry.ts
+- packages/blue-tanuki/src/executor.ts
+- packages/blue-tanuki/test/llm_compute.test.ts
+- packages/blue-tanuki/test/llm_registry.test.ts
+- packages/blue-tanuki/test/executor_compute.test.ts
+- apps/gateway/src/runtime.ts
+- apps/gateway/src/serve.ts
+- apps/gateway/test/compute_identity.test.ts
+- docs/IMPLEMENTATION_INSTRUCTIONS.md
+- docs/ROADMAP.md
+- docs/開発進捗.md
+- docs/作業標準要領.md
+- CHANGELOG.md
+- 規定/移行台帳.json（既存CHANGELOG fingerprint debtの同期に限る）
 
-上記以外は変更しない。追加pathが必要ならREPLANし、新たに再同期する。
+上記外は変更しない。追加pathが必要になればprivate施工stateと受入packetをREPLAN・再同期する。
 
 ## 4. Non-goals
 
-C04.01の検索・意味解釈・引用採否の再設計、C04.02のsummary projectionや除外復帰の再設計、approval policy/grant storeの変更、過去grantの復元機構、全memory schema刷新、全履歴投入、session-store/CompleteHistoryの改修、全LTM再走査・global memory epoch、別repo、外部作用、credentialed provider/live、実ユーザーデータ、GUI大型変更、release/GA/P13/owner GOを扱わない。rev1.1原典、owner原文、private運転状態、secret、raw実行証拠はrepoへ含めない。
+C05.02/03の実装、fallback semanticsの変更、provider別egress許可制御、外部LLM資格情報/live呼出し、実金額推定、provider遵守の保証、Mini Dora本体、memory/history authority化、Approval Gateやpolicy変更、LLM出力による判断・実行、GA/release/owner GO、別repo作業、環境再構築を行わない。C04.03のmemory引用・依存版意味論を再設計しない。
 
 ## 5. 最初に確認する files / symbols
 
-対象repoの`AGENTS.md`、日本語正本、SECURITY/AUDIT/CONFIG/README/CHANGELOG、ROADMAP、開発進捗、C04.03・親要求、指定仕様節・原典、C04.02実装と受入記録を照合する。`MemoryRecordProvenance.source_decision`、`buildMemoryTrace`、`verifiedCandidates`、`currentProjectionCandidates`、`buildMemoryCitationSystemMessages`、`reviewMemoryCitationOutput`、`MemoryCitationReviewLog`、`HDSUpperController.reviewMemoryCitations`、`evaluateApproval`、LTM `verify/all/findByRequestId`、Gateway audit-dumpを追う。開始HEAD、remote、dirty帰属、local recovery refs、remote backup refsを記録する。
+LLMCallPayloadSchema、LLMRequest/LLMResponse、LLMRegistry.callWithRetry、HDSUpperController.buildCommand、goal_projection.projection_id、buildMemoryCitationSystemMessages、Executor.executeLLMCall、SessionStore、runtime.tsとserve.tsのExecutor生成箇所、FINAL_REVIEW_OPERATION_LIST、feedback/output audit、C01.03/C04.03の局所前提を確認する。開始時のmain/remote/backup refs・clean状態・Node/Corepack/pnpm版を記録する。ローカル既存環境を再設定しない。
 
 ## 6. 必須grep
 
-`source_decision`、`used_for_authority`、`MemoryCitationReference`、`candidate_references`、`dependency_versions`、`accepted_citations`、`reviewMemoryCitations`、`evaluateApproval`、`LongTermMemoryStore`、`FINAL_REVIEW_OPERATION_LIST`、`memory.citation_review`、`AUDIT.md`を検索する。過去decisionをgrant/ApprovalGateへ渡す経路、現在候補とJ admissionの不一致、依存集合外の全失効、同一IDの版不一致を通す経路、raw contentの監査複製がないことを確認する。
+LLMComputeAdapter、ComputeRequest、ComputeResult、execution_identity、compute_context、projection_digest、input_digest、output_digest、local_p_version、requested_egress_provider、backend_hint、session_history、used_for_authority、FINAL_REVIEW_OPERATION_LIST、onFeedbackを検索する。Gateway production Executorが両方adapterを構成すること、HDS context欠落時にproviderを呼ばないこと、providerにCompute metadataが渡らないこと、provider/model識別が実選択と一致することを確認する。Compute result/provider metadataがApproval Gateや第二authority pathへ到達しないことも確認する。
 
 ## 7. 既存anchor
 
-LTMはimmutable entry hash-chainを検証し、記録の更新・削除APIを持たない。`MemoryTrace`は候補のF参照、entry hash、provenanceを持つ。`verifiedCandidates`はsource/reference/hashの一致を確認し、explicit F指定では`currentProjectionCandidates`が完全一致した候補だけに絞る。Jは同じ候補から作ったrecord ID/hash版のmapで引用を照合し、古いhashは`version_mismatch`で拒否する。Approval評価は現在のExecuteCommandと現在のgrantsだけを入力とし、memory traceを読まない。high-risk `tool.call`、`shell.exec`、unknown等はfull accessでもL3 final reviewとなる。
+HDS goal_projection.projection_idは現在のaccepted inbound requestに結び付いている。Cへ渡すmemory citation system messagesはHDSが検証した現在の選択参照であり、履歴全体ではない。Executorはprovider呼出し直前にSessionStore履歴を結合できる。LLMRegistryは要求hint/既定routeをcanonical backendへ解決する。Gateway CLI/serveはExecutorを生成する二つの通常production入口である。
 
-不足しているのは、C context内の依存版の明示的な集合名と、C04.03監査記録・operator audit-dumpへの同集合の記録である。source decisionの出所値はpromptと照合済み参照表示に現れるが、履歴証拠のみという表示が足りない。
+C04.03が作るmemory参照・依存版と過去decisionは証拠のみで、現在権限ではない。HDS feedback auditはresult全体のdigestを記録するがraw resultを複製しない。provider応答が金額costを返す現行contractはない。A12 §5に基づくlocal PはC入力側のsystem-owned規則版であり、外部model weightsやpermissionではない。
 
 ## 8. 実装要件
 
-1. C contextの`dependency_versions`は今回実際に渡す現在候補だけから作り、各要素を`{record_id, version}`とする。候補集合外のLTM全体hash/headを依存版として使わない。
-2. 過去の`source_decision`とhashは「履歴証拠のみ」と明記し、今回の権限・承認・grantと区別する。引用表示にも同じ境界を示す。
-3. `MemoryCitationReviewLog`へ同じ`dependency_versions`を記録し、既存のcandidate referencesと一致させる。旧監査recordで新fieldが欠けても読み取れるようにする。
-4. J admissionは現在候補の同じ依存集合を用い、record IDとimmutable hash版の完全一致だけを採用する。依存版mismatchは候補単位で拒否し、他の一致候補や依存外の新規追記を一括失効させない。
-5. Gateway audit-dumpで依存IDと完全版を表示し、raw summary、claim、result、commandを含めない。authority/non-authority flagsはfalseを保つ。
-6. 履歴引用、dependency metadata、C提案はいずれもapprove/execute、risk/process分類、permission、approval、fallback authority、second authority pathを作らない。
+1. Protocolにstrictな非権限compute contextを追加し、HDSがgoal_projection.projection_idと実際に選択したmemory messagesのdigestから現在projection digestを作る。raw request / memory textを新しいidentityやauditへ複製しない。
+2. HDSはC profile blue-tanuki.llm-call@1、local P版 blue-tanuki.c-input-rules.v1、入力source、要求provider routeをcommandへ載せる。入力sourceはaccepted inbound request、実際にmessageへ選んだmemory referenceに限る。
+3. Executorはproviderへ渡す直前の実際のLLMRequest全体（effective messages、model/temperature、route hint、resource optionsを含む）をSHA-256でdigest化し、request ID、現在projection digest、data exposure scope、resource limitsと共通Compute requestへ結ぶ。実際にprependしたsession historyはsourceとして追記する。既存Approval Gate証明の前提を変更しない。
+4. ComputeBackend/ComputeRequest/ComputeResultはgeneric input/output型とし、approve/execute/permission/risk/final review APIを持たない。LLM adapterだけがLLM payloadを扱い、providerへ通常のLLMRequestだけを渡す。Compute identity/contextをprovider payloadへ漏らさない。configured adapterでcontext、profile、route bindingが無効ならprovider call前に失敗する。
+5. LLMRegistryは実際に選択したcanonical providerをresponse metadataへ付与する。Compute resultは要求routeと実provider、要求/実model、profile、local P版、input source、resource limitsと実provider output digestを記録する。既定route/fallback時もrequestedとactualを別々に保持する。
+6. Monetary costはproviderが報告しない限りunknownとし、token countから金額を推定しない。結果はcompute_output_used_for_authority=false、provider_metadata_used_for_authority=false、used_for_authority=falseを保つ。
+7. Gateway CLI/serveの両production Executor経路へadapterを接続する。既存C05.02/.03の責務を先取りしない。
 
 ## 9. Safety invariants
 
-HDS-BRAIN唯一authority、owner最終責任、Approval Gate/L3 final review、audit hash-chain、Runtime Invariants、fail-closed、memory/history/external metadata non-authority、Layer A/B、standalone境界を維持する。high-risk/unknown/tool.callをmemory参照や過去`ASSERT`で許可しない。source verification failure、未解決参照、scope mismatch、版不一致時は照合済み引用を表示しない。依存版一覧は監査・再照合の証拠であり、権限や承認ではない。
+HDS-BRAIN唯一authority、owner最終責任、Approval Gate、high-risk/unknown/tool.callのL3 final review、audit hash-chain、Runtime Invariants、fail-closed、session/memory/history/LLM/provider metadataのnon-authority、standalone HDS、Layer A/Bを維持する。Compute resultはcommand発行、承認、risk/process分類、policy更新、fallback authority、second authority pathに使わない。data exposure metadataは実際の入力・要求routeを記述するidentity情報であり、provider accessの許可を生成しない。
 
 ## 10. Operator usability
 
-利用者・次consumerが今回の射影に含まれたrecord IDと完全版、過去decisionの履歴上の意味、引用採否結果を確認できる。version mismatchならどの提案が拒否されたかをauditで特定できる。依存外の追加recordは当該射影の依存版を置換しない。未決状態を「承認済み」と表示しない。
+局所diagnosticsでrequest、projection/input digest、要求/実provider/model、local P版、入力source、resource limits、cost unknownを区別できる。失敗はprovider call前か後かを分かる形で返し、secret・raw message・credentialを出さない。missing contextやroute mismatchをfail-closedにし、調査・再試行可能なerrorを保つ。
 
 ## 11. Tests
 
-- BT-U-C04.03-P: 合成LTMから明示参照の現在projectionを作り、C context、J review、hash-chain audit、audit-dumpの`dependency_versions`が同じrecord ID/hash版であることを確認する。別のmemory recordをappend後、新しい明示参照projectionが元の依存版だけで再構築・受理されることを確認する。source decisionが`ASSERT`の履歴でも、`tool.shell.exec`はfull access下でL3 `ask`のままであることを通常controller consumerで確認する。
-- BT-U-C04.03-N: 同一F IDの旧hash版、候補外ID、誤scopeを拒否し、HDS照合済み引用を出さない。過去decisionは現在承認として表示せず、dependency/version以外のraw contentをaudit-dumpへ出さない。
-- 実test selector: `packages/hds-brain/test/memory_citation_review.test.ts`、`packages/hds-brain/test/controller.test.ts`、`apps/gateway/test/audit_dump.test.ts`。
-- Windows上の合成memoryと専用一時領域のみを使用し、fixture/local evidenceをlive/installed証拠へ読み替えない。
+- BT-U-C05.01-P: HDSが有効なprojection digest/local P/source/request routeを作る。Gateway integration fixtureでcommandを既存approval authorityへ渡し、Executor→LLMRegistry→選択providerの通常経路でactual provider/model、requested route、cost unknown、resource identityとnon-authority resultを得る。HDS feedback hash-chainを検証する。
+- BT-U-C05.01-N: digest形式/route mismatchはprovider call前に拒否する。configured computeにcontextがない場合もprovider callしない。providerには通常LLMRequestのみが届き、Compute contextは含まれない。
+- BT-U-C05.01-D: 異なるaccepted requestは異なるprojection digestを持つ。session historyが実際に適用されたときだけinput digestとsource scopeへ含め、resource limitsはcommand constraintsと一致する。
+- Registry試験でrequested alias/defaultと選択されたcanonical providerを区別する。fixtureはFIXTURE証拠であり、実provider、外部egress許可、Mini Dora実装を証明しない。
+- Selector: packages/blue-tanuki/test/llm_compute.test.ts、packages/blue-tanuki/test/llm_registry.test.ts、packages/blue-tanuki/test/executor_compute.test.ts、apps/gateway/test/compute_identity.test.ts。
 
 ## 12. Validation commands
 
 commit前必須:
 
-```text
-pnpm install --frozen-lockfile
-pnpm typecheck
-pnpm build
-pnpm test
-pnpm docs:check
-pnpm validate:repo-health
-```
+    pnpm install --frozen-lockfile
+    pnpm typecheck
+    pnpm build
+    pnpm test
+    pnpm docs:check
+    pnpm validate:repo-health
 
 実装単位追加:
 
-```text
-pnpm run doctor
-pnpm validate:packaging
-pnpm exec vitest run --no-file-parallelism --maxWorkers=2 packages/hds-brain/test/memory_citation_review.test.ts packages/hds-brain/test/controller.test.ts apps/gateway/test/audit_dump.test.ts
-```
+    pnpm run doctor
+    pnpm validate:packaging
+    pnpm exec vitest run --no-file-parallelism --maxWorkers=2 packages/blue-tanuki/test/llm_compute.test.ts packages/blue-tanuki/test/llm_registry.test.ts packages/blue-tanuki/test/executor_compute.test.ts apps/gateway/test/compute_identity.test.ts
 
-`pnpm test`並列実行にtimeoutがあれば正確な失敗を記録し、設定を変えず同じ全testを逐次で診断する。serve/resume/live smokeとrelease gateは今回のscope外であり、省略状態を報告する。既存Gateway/listener、credential、production memory、外部serviceは操作しない。
+標準pnpm testの既知・今回発生timeoutは実結果のまま記録する。必要時はtimeout/script設定を緩和せず、同じ全testを逐次実行して原因を分類する。smoke:serve/resume、credentialed live、release gateは本単位の受入selectorではないため、未実施を報告する。credentialを読み出さず、既存listenerを停止しない。
 
 ## 13. Manual smoke
 
-固定したVitest consumer selectorを合成LTMで実行し、過去decisionの非権限表示、依存ID/hashの一致、unrelated append後の再構築、stale hash拒否、Approval Gate L3境界、hash-chain verify、audit-dump内容を確認する。実LLM provider/liveや外部書込みは起動しない。
+専用fixture selectorでprotocol validation、HDS command生成、Executorの実入力digest、Registry選択provider identity、provider境界へのmetadata非送信、audit hash-chainを通す。credential、live外部provider、GUI、送信先は使わない。外部のproviderへデータを送る操作を実施しない。
 
 ## 14. Permanent-use check
 
-今回成立させるのはWindows上の通常HDS projection/citation review、個別immutable版の再照合、non-authority audit projectionまでである。証拠源は`FIXTURE`とsource inspection/`INTERNAL_STATE`。semantic dependencyの完全な自動同定、全session/historyの依存解析、実providerの遵守、長期運転、OS crash/installed/live、release readiness、親BT-T-C04-01..04全体は未成立である。
+今回成立させるのはWindows上のGateway構成、通常HDS command/Executor/provider route、result identityと局所audit digestまでである。証拠はsource inspection、FIXTUREとINTERNAL_STATE。providerの実受領、金額請求、外部egress policy、fallbackが許可する情報範囲、session/history保持の恒久品質、長期運転、crash/installed、Mini Dora、release readiness、親C05全体は未成立である。owner GO、GA、公開claimを推定しない。
 
 ## 15. Final report format
 
-BT-R-C04-05/06の成立範囲、変更path、production consumer、risk/route/evidence分類、専用selectorと必須commandの正確な結果、doctorの失敗・未実施・残存限界、親C04/P13状態、branch/commit/push/remote HEAD、二世代backup refs、復元点を日本語で報告する。local acceptance、Git統合、live/installed、release判断を区別する。
+BT-R-C05-01/04/06の局所成立範囲、変更path、production consumerとroute/evidence分類、専用selectorおよび必須commandの正確な結果、doctor/標準testの失敗・未実施・環境限界、C05親とP13状態、branch/commit/push/remote main、二世代backup refsとrollback pointを日本語で報告する。fixture/local、provider live、installed/releaseを区別する。
 
 ## 16. Next-phase dependency
 
-C04.03の正負条件、整理、安全review、必須検証、二世代backup、`main`単一commit/push、remote refs/clean照合、private引継ぎまで閉じて工程境界で停止する。C04親全scenario、session/full-history改修、release状態は未成立のまま保つ。P13は`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持し、owner GO/GAを推定しない。
+本単位の整理、安全review、必須検証、二世代backup rotation、main単一commit/push、remote refs/clean照合、private引継ぎを完了した後に停止する。C05.02へ自動進行しない。C05親はpartialのまま、P13はPENDING_OWNER_GO、public_claim_allowed=falseを保つ。

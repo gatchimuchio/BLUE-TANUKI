@@ -18,6 +18,19 @@ export type { OpenAICompatibleBackendOptions } from "./openai_compatible.js";
 export {
   LLMRegistry,
 } from "./registry.js";
+export {
+  LLMComputeAdapter,
+  LLM_COMPUTE_PROFILE,
+} from "./compute.js";
+export type {
+  ComputeBackend,
+  ComputeCost,
+  ComputeDataExposureScope,
+  ComputeInputSource,
+  ComputeProfile,
+  ComputeRequest,
+  ComputeResult,
+} from "./compute.js";
 export type {
   LLMRetryPolicy,
   LLMRegistryOptions,

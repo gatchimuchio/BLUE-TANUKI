@@ -32,11 +32,15 @@ export interface LLMResponse {
   content: string;
   tokens_used: number;
   model: string;
+  /** Canonical provider label selected by the local registry, when available. */
+  provider?: string;
   raw?: unknown;
 }
 
 export interface LLMBackend {
   readonly name: string;
+  /** Set only by a local registry that stamps its selected canonical backend on responses. */
+  readonly canonical_provider_identity?: true;
   call(req: LLMRequest): Promise<LLMResponse>;
 }
 

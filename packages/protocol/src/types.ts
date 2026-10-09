@@ -90,6 +90,20 @@ export type UpstreamDecision = z.infer<typeof UpstreamDecisionSchema>;
 /**
  * LLM call payload (one of the executor's primary command types).
  */
+export const LLMComputeContextSchema = z.object({
+  schema_version: z.literal("blue-tanuki.compute-context.v1"),
+  projection_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  local_p_version: z.string().trim().min(1).max(120),
+  data_exposure: z.object({
+    input_sources: z.array(z.enum([
+      "accepted_inbound_request",
+      "selected_memory_references",
+    ])).min(1).max(2),
+    requested_egress_provider: z.string().trim().min(1).max(120),
+  }).strict(),
+}).strict();
+export type LLMComputeContext = z.infer<typeof LLMComputeContextSchema>;
+
 export const LLMCallPayloadSchema = z.object({
   messages: z.array(
     z.object({
@@ -105,6 +119,8 @@ export const LLMCallPayloadSchema = z.object({
   backend_hint: z.string().optional(),
   model: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
+  /** Non-authority binding for the current HDS projection and requested data route. */
+  compute_context: LLMComputeContextSchema.optional(),
   /**
    * Optional session identifier. When set, the executor's SessionStore
    * (if configured) will (a) prepend retained history before calling the

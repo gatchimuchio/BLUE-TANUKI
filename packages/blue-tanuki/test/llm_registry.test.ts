@@ -82,6 +82,7 @@ describe("LLMRegistry", () => {
     });
 
     expect(res.content).toBe("from:fast");
+    expect(res.provider).toBe("fast");
     expect(stub.seen).toHaveLength(0);
     expect(fast.seen).toHaveLength(1);
   });
@@ -90,7 +91,7 @@ describe("LLMRegistry", () => {
     const claude = new NamedBackend("anthropic");
     const registry = new LLMRegistry().register(claude, ["claude"]);
 
-    await registry.call({
+    const res = await registry.call({
       backend_hint: "claude",
       messages: [{ role: "user", content: "hi" }],
       model: "m",
@@ -99,6 +100,7 @@ describe("LLMRegistry", () => {
     expect(claude.seen).toHaveLength(1);
     expect(claude.seen[0].backend_hint).toBeUndefined();
     expect(claude.seen[0].model).toBe("m");
+    expect(res.provider).toBe("anthropic");
   });
 
   it("fails closed on unknown hints", async () => {
@@ -161,6 +163,7 @@ describe("LLMRegistry", () => {
       messages: [{ role: "user", content: "hello" }],
     });
     expect(res.content).toBe("from:stub");
+    expect(res.provider).toBe("stub");
     expect(primary.seen).toHaveLength(1);
     expect(fallback.seen).toHaveLength(1);
 

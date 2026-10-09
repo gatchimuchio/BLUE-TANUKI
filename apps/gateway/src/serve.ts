@@ -18,6 +18,7 @@ import type {
 import {
   buildOperationCoreApprovalTrace,
   Executor,
+  LLMComputeAdapter,
   ToolRegistry,
   createExecutorApprovalAuthority,
   createLogger,
@@ -1502,6 +1503,7 @@ export async function serve(): Promise<ServeShutdown> {
 
   executor = new Executor({
     llm,
+    compute: new LLMComputeAdapter(llm),
     tools,
     approval_authority: executorApproval,
     dispatcher,

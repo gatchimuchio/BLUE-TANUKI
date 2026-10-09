@@ -8,6 +8,7 @@ import {
 } from "@blue-tanuki/hds-brain";
 import {
   Executor,
+  LLMComputeAdapter,
   ToolRegistry,
   MemorySessionStore,
   JsonFileSessionStore,
@@ -121,7 +122,13 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   const failureMemory = buildFailureMemoryStore(process.env);
   const approval = buildApprovalRuntime(process.env);
   const executorApproval = createExecutorApprovalAuthority();
-  const executor = new Executor({ llm, tools, approval_authority: executorApproval, session_store });
+  const executor = new Executor({
+    llm,
+    compute: new LLMComputeAdapter(llm),
+    tools,
+    approval_authority: executorApproval,
+    session_store,
+  });
 
   const inbound: InboundRequest = normalizeInboundRequestForAuthority({
     id: randomUUID(),
