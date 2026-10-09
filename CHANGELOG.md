@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-09 — 実行分離・認証・外殻契約
+
+- B03.02として既存IPC・登録Adapterを優先し、主体・世代・canonical内容・受領Broker記録を結ぶ方式と、独立保護・用途限定秘密参照・外殻一般射影を記録した。J採否、現Permission、必要Owner Approvalを別条件にした。
+- 新transportの必要性は未立証のため、具体的不足時だけの限定候補へ修正した。新通信、永続消費、実停止、秘密使用、対象OS隔離、別repo変更は未実装／未実証。P13と日本語移行状態を維持した。
+
 ## 2026-10-09 — 状態所有と保存取引の配置
 
 - B03.01として既存package・store・実consumerを照合し、新しいJ制御状態と承認済みM更新を既存HDS-BRAIN／protocolへ接続する最小配置を記録した。同じSQLiteでも所有・更新API・確定取引を分け、J pending、M receipt、commit結果不明の照会・停止、不可欠な監査の保存先を定めた。
