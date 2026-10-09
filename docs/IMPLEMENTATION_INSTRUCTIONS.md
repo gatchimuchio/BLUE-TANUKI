@@ -1,56 +1,56 @@
 # BLUE-TANUKI 有効な実装指示
 
-現単位: **B02.04 — ミニドラ変更の限定委任案**。資料工程、文書 profile。有限資料条件と必須6検証は受入済み。test初回timeoutと変更なしの全件再実行PASSは開発進捗に保持。Git 完結は該当 main commit の remote・backup・clean 照合を要する。作業基点は main `d8f988a9f2d90a37219572873a063b3b86d7fad8`。
+現単位: **B03.01 — 状態所有と保存取引の配置**。資料工程、文書profile。有限資料条件と必須6検証は受入済み。Git完結は該当main commitのremote・backup・clean照合を要する。作業基点はmain `c5659dc7c02ba7c63324b926cbc376c7dc8e7344`。前単位B02.04は有限資料受入と検証・Git保管を閉じた。旧結果や既存試験を新取引の実証へ転記しない。
 
-owner の全工程委任と、GitHub を履歴・成果物保管庫として使う明示指示に基づく。今回の対象は公開ソースに基づく限定提案と作業記録。私有原典・核心の封印詳細を掲載する許可ではない。
+ownerの全工程委任と、GitHubを履歴・成果物保管庫として使う明示指示に基づく。通常成果を各単位で検証・commit・pushする。私有原典・封印詳細・完全対応表・秘密・運転状態・raw証拠は公開しない。
 
-J0 は完了、J1 は未承認。旧 J0 指示は編集前 commit の Git 履歴に保持する。P13 は凍結、`PENDING_OWNER_GO`、`public_claim_allowed=false`、版 `1.0.0-rc.1` を維持する。
+J0完了、J1未承認。P13は凍結、`PENDING_OWNER_GO`、`public_claim_allowed=false`、版 `1.0.0-rc.1` を維持する。
 
 ## 1. 目的
 
-ミニドラ側の必要な最小差分または変更不要の条件を C 契約へ結ぶ。公開ソースから限定案と実consumer・受入・復元条件を作り、成果と履歴を GitHub に保存する。資料受入と製品実接続を区別する。
+既存資産の採否、J/M保存所有、取引単位を具体的な配置へ固定する。既存HDS-BRAIN・protocol・Approval Gateへ接続する最小差分を設計し、第二の万能判断基盤を作らない。
 
 ## 2. Phase 境界
 
-一つの資料単位を検証・整理・編集前二世代保存・commit・push・remote 照合まで閉じる。B02.02 の取得済みミニドラソースを固定版と現在の API main へ照合して使う。資料受入を接続実装や製品承認と混同しない。
+一つの資料単位を編集前二世代保存、配置決定、整理、必須検証、main commit・push・remote照合まで閉じる。今回の根拠は同版ソース、依存資料、公式保存仕様。新しいDBや製品取引は実装しない。
 
 ## 3. Scope
 
-- `docs/ミニドラ接続変更案.md`、`docs/開発進捗.md`
+- `docs/状態所有と保存取引.md`、`docs/開発進捗.md`
 - 本指示、`docs/ROADMAP.md`、`docs/INDEX.md`、`CHANGELOG.md`
-- `規定/移行台帳.json` の審査済み CHANGELOG hash のみ
+- `規定/移行台帳.json` の審査済みCHANGELOG hashのみ
 
 ## 4. Non-goals
 
-実ミニドラの実装・推論・接続、別 repo 書込み、全面改修、内部保護の撤去、核心モデルの公開、規定案全体の適用、製品名・言語刷新、J1、GA、owner GO、実資格による業務作用。
+B03.02のIPC・認証・故障分離、B03.03のwriter移行、C03の実DB取引、実業務作用、別repo変更、全面改修、規定案全体の適用、製品名・言語刷新、J1、GA、owner GO。既存保護を外さず、共有DBを実隔離済みとしない。
 
 ## 5. 最初に確認する files / symbols
 
-`AGENTS.md`、日本語基底正本、作業標準要領、ROADMAP、SECURITY／AUDIT／CONFIG／README／CHANGELOG、現指示と進捗。固定版ミニドラの製品版API、HDS運用の製品／セッション、要求・出力束、実模型状態、通信と監査、既存試験定義、root AGENTSと公開境界。
+AGENTS、日本語基底正本、作業標準要領、現指示、ROADMAP、SECURITY／AUDIT／CONFIG／README／CHANGELOG。protocol型とparser、HDSUpperController、AuditLog、LTM／complete-history／approval／failure-memory store、executor session、gateway組立・schedule・recovery／updateを追跡する。
 
 ## 6. 必須 grep
 
-固定 archive を展開・実行せず、対象本文から `応答`、`停止要求`、`期限秒`、`外部読取許可`、`状態sha256`、`APPROVE`、`監査` の実consumerを検索する。候補pathの不存在は未観測として残し、同名機能の保護を別入口へ転記しない。
+`MemoryCommitSnapshot`、`captureMemoryReference`、`appendFileSync`、`writeFileSync`、`inflight`、`suspended`、`sourceSpecs`、`createBackupManifest`、`restoreManifest` の定義とconsumerを読む。driverの不存在を調べ、既存JSONLを原子取引と推定しない。新API pathは設計時点の不存在を確認する。
 
 ## 7. 既存 anchor
 
-[ミニドラ接続変更案](ミニドラ接続変更案.md) の固定版・実入口に正確な path と観測範囲を記録する。存在しない API や参照用 Adapter の実通信を発明しない。
+[状態所有と保存取引](状態所有と保存取引.md) §1の実pathを観測基点へ照合する。controllerの採否→audit→記憶→参照auditは別書込み、各storeの起動・復旧は個別。sourceの観測と未来の接続予定を区別する。
 
 ## 8. 実装要件
 
-変更候補ごとに実 consumer、不足、最小 path、契約、正負試験、後継、復元条件を記す。不変更判断には既存保護の根拠を付ける。公開ソースと工程記録だけを掲載し、私有の原典・完全対応表・秘密・運転状態・raw 証拠を stage しない。
+資産の採否、所有者、実consumer、限定更新API、保存・拒否・失敗、後続受入を記録する。新J/MのSQLite・別namespace・別取引を固定し、J pending→M反映→J帰還とBroker別所有を明示する。公式仕様、現driver import、未実証を分ける。
 
 ## 9. Safety invariants
 
-HDS-BRAIN、Approval Gate、final review、hash-chain audit、Runtime Invariants は変更しない。ミニドラ内部の局所採否・P状態をBLUEの採否・正本状態・外部作用権限へ昇格させない。既存保護と情報境界を維持し、timeoutを停止に、sourceを実証に読み替えない。
+HDS-BRAIN standalone、Approval Gate、L3 final review、hash-chain audit、Runtime Invariantsを維持。同じDBを同じ最終責任としない。意味記憶MをTrinityのdeterministic policy Mと混同しない。C・UI・metadata・過去承認・履歴から現在権限を生成しない。必要監査を正本取引へ結び、旧監査の欠損を捏造しない。
 
 ## 10. Operator usability
 
-利用者が GitHub 上で成果、実装していない部分、検証結果、次の条件、復元点を確認できること。私有記録だけで通常の成果保管を不要と判定しない。
+採否済みpending、M反映済み、J照合済み、外部結果不明を区別する。保存障害では変更有無、再試行・照会方法、停止状態、必要修復、未決作用を示す。commit結果不明を未commitと断定しない。コード復元と状態・消費済み権限・外部作用の復元を区別する。
 
 ## 11. Tests
 
-有限受入は6不足について実consumer、必要時だけの最小path、変更不要条件、正負受入、後継、復元条件が具体化すること。負例は本案件から別repo全面改修の承認を導かないこと。局所の資料・source照合と独立読取監査を行う。後続の製品試験は NOT_RUN のまま。
+資料正例は資産採否・J/M別所有・別更新API・保存取引の具体化。負例は同じDBを同じ最終責任とする案、第二正本、記憶権限化、JSONL原子性誤認、pending欠落、架空crash実証を拒否する。原文・source・公式仕様を照合し独立読取監査を行う。新DB crash／再起動／OS／writer移行の製品試験はNOT_RUN。
 
 ## 12. Validation commands
 
@@ -63,20 +63,20 @@ pnpm docs:check
 pnpm validate:repo-health
 ```
 
-文書工程のため doctor、packaging、release 生成、installed／live smoke は対象外。検査の省略・弱化は行わない。通常の日本語 gate は docs:check に含む。全移行・GO を扱わないため厳格 gate 成功は今回の条件に追加しない。
+文書工程のためdoctor、packaging、release生成、installed／live smokeは対象外。通常日本語gateはdocs:checkに含む。全移行・GOを扱わず、厳格gate成功を今回の条件には追加しない。既存検査の削減やtimeout変更は行わない。
 
 ## 13. Manual smoke
 
-索引→進捗→変更案の参照、固定版の path、未実施表示、公開除外、後継と復元条件を読取監査する。製品 UI・新しい接続の起動は対象外。
+索引→進捗→配置決定の参照、実pathと新pathの区別、取引の所有、未実施表示、公開除外、後継・復元条件を読取監査する。新しい製品保存経路の起動は対象外。
 
 ## 14. Permanent-use check
 
-今回の成果保管を恒久利用の証拠にしない。実接続、版変更、切断、取消、結果不明、秘密、更新・復元は後継の実 consumer と各 profile で受入する。
+文書整合や既存試験を恒久保存・復帰・実隔離・現在Permissionの証拠にしない。driver/設定、write/sync障害、競合、receipt消失、再起動・epoch、投影再構築、対象OSの証拠を後続の実consumerへ渡す。
 
 ## 15. Final report format
 
-有限成果、変更ファイル、リスクと証拠分類、実行コマンド・結果・全失敗、未実施、P13、main commit、push／remote、二世代 refs と復元点を簡潔に示す。検証・commit・push の未完了を完了扱いしない。
+有限成果、変更ファイル、リスク・経路・証拠分類、正確な検証と全失敗、未実施、P13、main commit、push／remote、二世代refsと復元点を示す。資料受入、実装、Git統合、releaseを別状態で報告する。
 
 ## 16. Next-phase dependency
 
-次候補は B03.01。この単位の局所受入と Git 完結・引継ぎで境界停止する。全工程の範囲委任に従い、次単位は現指示、依存、版、変更範囲、未決作用を新しい入口で再同期する。別repo変更・実業務作用・出荷GOは別判断。
+次候補はB03.02。本単位の局所受入、Git完結、引継ぎを確定し境界停止する。範囲委任に従い、次単位は現指示、依存、HEAD、未決状態、許可pathを新しい入口で再同期する。別repo変更・実業務作用・出荷GOは別判断。
