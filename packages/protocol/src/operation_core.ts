@@ -14,7 +14,7 @@ export type OperationJsonValue =
   | OperationJsonValue[]
   | { [key: string]: OperationJsonValue | undefined };
 
-const OperationJsonValueSchema: z.ZodType<OperationJsonValue> = z.lazy(() =>
+export const OperationJsonValueSchema: z.ZodType<OperationJsonValue> = z.lazy(() =>
   z.union([
     z.string(),
     z.number().finite(),
@@ -297,6 +297,46 @@ export const OperationDiffSchema = z.object({
 }).strict();
 export type OperationDiff = z.infer<typeof OperationDiffSchema>;
 
+// 準備は具体値の候補を作るだけで、承認・実行・結果検証を行わない。
+const PreparationPathSchema = z.array(OperationObjectKeySchema).min(1).max(12);
+export const OperationStepPreparationSchema = z.object({
+  depends_on: z.array(z.string().min(1).max(200)).max(100),
+  bindings: z.array(z.object({
+    source_step_id: z.string().min(1).max(200),
+    output_path: PreparationPathSchema,
+    field: z.enum(["target", "parameters", "preconditions", "validation", "compensation"]),
+    path: PreparationPathSchema,
+  }).strict()).max(100),
+  preconditions: z.array(z.object({
+    condition_id: z.string().min(1).max(200),
+    target: OperationTargetSchema,
+    expected_revision: z.string().min(1).max(200),
+  }).strict()).max(100),
+  validation: z.array(z.object({
+    check_id: z.string().min(1).max(200),
+    method: z.enum(["result_equals", "revision_equals"]),
+    target: OperationTargetSchema,
+    expected: OperationJsonValueSchema,
+  }).strict()).min(1).max(100),
+  compensation: z.discriminatedUnion("available", [
+    z.object({ available: z.literal(false), reason: z.string().min(1).max(500) }).strict(),
+    z.object({
+      available: z.literal(true),
+      action: z.object({
+        operation: z.string().min(1).max(160),
+        target: OperationTargetSchema,
+        parameters: OperationParametersSchema,
+        effects: z.array(OperationEffectSchema).min(1).max(20),
+        permission: OperationPermissionSchema,
+        adapter: OperationAdapterKindSchema,
+        adapter_is_authority: z.literal(false),
+        command_generated_by_adapter_only: z.boolean(),
+      }).strict(),
+    }).strict(),
+  ]),
+}).strict();
+export type OperationStepPreparation = z.infer<typeof OperationStepPreparationSchema>;
+
 export const OperationStepSchema = z.object({
   step_id: z.string().min(1).max(200),
   operation: z.string().min(1).max(160),
@@ -309,6 +349,7 @@ export const OperationStepSchema = z.object({
   adapter_is_authority: z.literal(false),
   command_generated_by_adapter_only: z.boolean(),
   result_digest: z.string().min(1).max(200).optional(),
+  preparation: OperationStepPreparationSchema.optional(),
 }).strict();
 export type OperationStep = z.infer<typeof OperationStepSchema>;
 
@@ -352,6 +393,25 @@ export const OperationPlanSchema = z.object({
   hds_brain_authority_required: z.literal(true),
 }).strict();
 export type OperationPlan = z.infer<typeof OperationPlanSchema>;
+
+export const OperationPreparationIssueSchema = z.enum([
+  "preparation_missing", "parameters_missing", "dependency_unavailable",
+  "dependency_expired", "dependency_target_mismatch", "dependency_field_missing",
+  "target_unresolved", "value_unresolved", "precondition_unobserved",
+  "precondition_expired", "precondition_changed",
+]);
+export const OperationPreparationSummarySchema = z.object({
+  status: z.enum(["ready", "not_ready"]),
+  steps: z.array(z.object({
+    step_id: z.string().min(1).max(200),
+    status: z.enum(["ready", "not_ready"]),
+    issues: z.array(OperationPreparationIssueSchema).max(20),
+  }).strict()).max(100),
+  may_execute: z.literal(false),
+  used_for_authority: z.literal(false),
+  hds_brain_authority_required: z.literal(true),
+}).strict();
+export type OperationPreparationSummary = z.infer<typeof OperationPreparationSummarySchema>;
 
 export interface OperationAdapterRegistryStepEvidence {
   step_id: string;
@@ -590,6 +650,7 @@ export const OperationCorePlannerExecutionProjectionSchema = z.object({
   request_id: z.string().min(1).max(200),
   state: OperationStateSchema,
   steps_count: z.number().int().nonnegative(),
+  preparation: OperationPreparationSummarySchema.optional(),
   step_summaries: z.array(z.object({
     step_id: z.string().min(1).max(200),
     operation: z.string().min(1).max(160),

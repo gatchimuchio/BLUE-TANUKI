@@ -15,6 +15,9 @@ import {
   type OperationEffect,
   type OperationPermission,
   OperationPlanSchema,
+  prepareOperationPlan,
+  type OperationPreparationContext,
+  type OperationPreparationSummary,
   type OperationPlan,
   type OperationRisk,
   type OperationState,
@@ -35,6 +38,7 @@ export interface OperationCorePlannerEvidence {
   status: "valid_plan";
   plan: OperationPlan;
   adapter_registry: OperationAdapterRegistryEvidence;
+  preparation: OperationPreparationSummary;
   planner_output_used_for_authority: false;
   hds_brain_authority_required: true;
   evidence_source: readonly ["EXTERNAL_EVIDENCE"];
@@ -54,7 +58,10 @@ export type OperationCorePlannerInspection =
   | { kind: "valid_plan"; evidence: OperationCorePlannerEvidence }
   | { kind: "rejected"; rejection: OperationCorePlannerRejection };
 
-export function inspectOperationCorePlannerOutput(content: string): OperationCorePlannerInspection {
+export function inspectOperationCorePlannerOutput(
+  content: string,
+  context: OperationPreparationContext = { now_ms: Date.now(), results: [], observations: [] },
+): OperationCorePlannerInspection {
   const candidate = extractJsonCandidate(content);
   if (!candidate) return { kind: "none" };
 
@@ -86,13 +93,17 @@ export function inspectOperationCorePlannerOutput(content: string): OperationCor
     return rejectPlannerOutput(`adapter registry rejected planner output: ${adapterRegistryInspection.reason}`);
   }
 
+  const prepared = prepareOperationPlan(plan.data, context);
+  if (prepared.kind === "rejected") return rejectPlannerOutput(`plan preparation rejected: ${prepared.code}`);
+
   return {
     kind: "valid_plan",
     evidence: {
       role: "planner_output",
       status: "valid_plan",
-      plan: plan.data,
+      plan: prepared.plan,
       adapter_registry: adapterRegistryInspection.evidence,
+      preparation: prepared.summary,
       planner_output_used_for_authority: false,
       hds_brain_authority_required: true,
       evidence_source: ["EXTERNAL_EVIDENCE"],

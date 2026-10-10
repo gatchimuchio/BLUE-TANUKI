@@ -16,6 +16,7 @@ import {
   OperationCoreExecutionProjectionSchema,
   OperationCorePlannerExecutionProjectionSchema,
   OperationPlanSchema,
+  prepareOperationPlan,
   type ExecuteCommand,
   type ExecuteFeedback,
   type OperationCoreApprovalTrace,
@@ -204,6 +205,9 @@ export function operationCorePlannerHistoryProjection(
   if (!operationCore || operationCore.status !== "valid_plan") return undefined;
   const plan = OperationPlanSchema.safeParse(operationCore.plan);
   if (!plan.success) return undefined;
+  // 履歴の自己申告statusを信頼せず再検査する。依存観測は履歴から権限化しない。
+  const prepared = prepareOperationPlan(plan.data, { now_ms: Date.now(), results: [], observations: [] });
+  if (prepared.kind === "rejected") return undefined;
   return OperationCorePlannerExecutionProjectionSchema.parse({
     role: "planner_output_projection",
     status: "valid_plan",
@@ -211,6 +215,7 @@ export function operationCorePlannerHistoryProjection(
     request_id: plan.data.request_id,
     state: plan.data.state,
     steps_count: plan.data.steps.length,
+    preparation: prepared.summary,
     step_summaries: plan.data.steps.slice(0, 20).map((step) => ({
       step_id: step.step_id,
       operation: step.operation,

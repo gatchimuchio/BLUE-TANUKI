@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CompleteHistoryStore } from "@blue-tanuki/hds-brain";
+import { OperationPlanSchema } from "@blue-tanuki/protocol";
 import {
   operationCorePlannerHistoryProjection,
   projectApprovalHistoryEntry,
@@ -162,9 +163,9 @@ describe("Operation Core execution projection", () => {
   });
 
   it("extracts valid OperationPlan feedback into digest-only planner history projection", () => {
-    const projection = operationCorePlannerHistoryProjection({
+    const feedback = {
       command_id: "cmd-plan",
-      status: "success",
+      status: "success" as const,
       result: {
         operation_core: {
           status: "valid_plan",
@@ -176,7 +177,7 @@ describe("Operation Core execution projection", () => {
             steps: [
               {
                 step_id: "step-1",
-                operation: "review_project",
+                operation: "file.search",
                 target: {
                   kind: "workspace",
                   id: "SECRET-WORKSPACE-PATH",
@@ -206,17 +207,19 @@ describe("Operation Core execution projection", () => {
         },
       },
       metrics: { duration_ms: 1 },
-    });
+    };
+    const projection = operationCorePlannerHistoryProjection(feedback);
     const text = JSON.stringify(projection);
 
     expect(projection).toMatchObject({
       role: "planner_output_projection",
       plan_id: "plan-secret-target",
       steps_count: 1,
+      preparation: { status: "not_ready", may_execute: false, used_for_authority: false },
       planner_output_used_for_authority: false,
       step_summaries: [
         {
-          operation: "review_project",
+          operation: "file.search",
           target_kind: "workspace",
           adapter: "internal_runtime",
         },
@@ -224,6 +227,27 @@ describe("Operation Core execution projection", () => {
     });
     expect(text).not.toContain("SECRET-WORKSPACE-PATH");
     expect(text).toContain("target_id_digest");
+
+    const plan = OperationPlanSchema.parse(feedback.result.operation_core.plan);
+    plan.steps[0]!.parameters = { query: "SECRET-ARGUMENT" };
+    plan.steps[0]!.preparation = {
+      depends_on: [], bindings: [], preconditions: [],
+      validation: [{ check_id: "observed", target: plan.steps[0]!.target, method: "result_equals", expected: "SECRET-EXPECTED" }],
+      compensation: { available: false, reason: "SECRET-COMPENSATION" },
+    };
+    const prepare = () => operationCorePlannerHistoryProjection({ ...feedback, result: { operation_core: {
+      ...feedback.result.operation_core, plan, preparation: { status: "ready", may_execute: true },
+    } } });
+    const ready = prepare();
+    expect(ready).toMatchObject({ preparation: { status: "ready", may_execute: false, used_for_authority: false } });
+    expect(JSON.stringify(ready)).not.toContain("SECRET-");
+    delete plan.steps[0]!.preparation;
+    expect(prepare()).toMatchObject({ preparation: { status: "not_ready", may_execute: false } });
+    plan.steps[0]!.operation = "review_project";
+    expect(prepare()).toBeUndefined();
+    plan.steps[0]!.operation = "file.search";
+    plan.steps[0]!.effects = ["write"];
+    expect(prepare()).toBeUndefined();
   });
 
   it("projects Approval Gate adapter traces as display-only metadata", () => {

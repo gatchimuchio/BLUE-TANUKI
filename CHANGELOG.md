@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-10 — 依存stepの具体化と準備未完の保持
+
+- D01.02として、明示した成功依存結果と新鮮な前提観測から対象・引数・検証・補償候補を具体化する純粋な準備検査を追加した。全descriptor効果を保持し、欠落・失敗・失効・未解決の対象/宛先は準備未完、graph・binding・型・descriptor不正は拒否する。
+- 通常planner / Executor feedbackとdigest-only Gateway historyへ接続し、Control Centerは準備状態と未承認境界を表示する。legacy planを準備済みにせず、LLMの成功自己申告・未知将来出力・副宛先wildcardから権限を作らない。plan自動実行・新しいauthority・実provider呼出しは追加しない。
+- 有限受入、試験の初回失敗と修正、必須検証、環境制約はdocs/開発進捗.mdへ記録する。実資料・実provider・installed/live・複数step実行・release/GA/P13/owner GOの証拠ではない。
+
 ## 2026-10-10 — 操作記述子と複合効果の通常経路接続
 
 - D01.01として、現在の組み込みtool、LLM、channel、schedule操作の版付き記述子catalogをprotocolへ追加し、HDS action router、tool能力、schedule、三operator surface、OperationPlan検査から共有するようにした。operatorごとの必要能力一覧も同catalogから導出する。

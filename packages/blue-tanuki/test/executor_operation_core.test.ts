@@ -152,6 +152,7 @@ describe("Executor Operation Core planner output boundary", () => {
     expect(result.operation_core).toMatchObject({
       role: "planner_output",
       status: "valid_plan",
+      preparation: { status: "not_ready", may_execute: false, used_for_authority: false },
       planner_output_used_for_authority: false,
       hds_brain_authority_required: true,
       plan: {
@@ -174,6 +175,41 @@ describe("Executor Operation Core planner output boundary", () => {
         ],
       },
     });
+  });
+
+  it("BT-U-D01.02-P connects literal preparation to ordinary Executor feedback", async () => {
+    const plan = operationPlan();
+    plan.steps[0]!.target = { kind: "runtime", id: "session:synthetic" };
+    plan.steps[0]!.parameters = { content: "合成の青" };
+    plan.steps[0]!.preparation = {
+      depends_on: [], bindings: [], preconditions: [],
+      validation: [{ check_id: "text", target: plan.steps[0]!.target, method: "result_equals", expected: "合成の青" }],
+      compensation: { available: false, reason: "送信は取り消せない" },
+    };
+    const exec = new Executor({ approval_authority: executorApproval,
+      llm: new FixedBackend(JSON.stringify(plan)), tools: new ToolRegistry() });
+    expect(await exec.execute(approved(llmCmd("synthetic preparation")))).toMatchObject({
+      status: "success", result: { operation_core: { preparation: { status: "ready", may_execute: false, used_for_authority: false } } },
+    });
+  });
+
+  it("BT-U-D01.02-N keeps missing dependencies and rejects invalid graphs in ordinary Executor", async () => {
+    const plan = operationPlan();
+    plan.steps.push({ ...plan.steps[0]!, step_id: "step-2", parameters: {}, preparation: {
+      depends_on: ["step-1"], bindings: [], preconditions: [],
+      validation: [{ check_id: "result", target: { kind: "runtime", id: "session:synthetic" }, method: "result_equals", expected: true }],
+      compensation: { available: false, reason: "未実行候補" },
+    } });
+    const run = () => new Executor({ approval_authority: executorApproval,
+      llm: new FixedBackend(JSON.stringify(plan)), tools: new ToolRegistry() }).execute(approved(llmCmd("dependent plan")));
+    expect(await run()).toMatchObject({ status: "success", result: { operation_core: {
+      preparation: { status: "not_ready", may_execute: false, steps: [{}, { issues: expect.arrayContaining(["dependency_unavailable"]) }] },
+    } } });
+    plan.steps[1]!.preparation!.depends_on = ["step-2"];
+    const feedback = await run();
+    expect(feedback.status).toBe("failed");
+    expect(feedback).toMatchObject({ llm_failure: { kind: "invalid_structured_output" },
+      result: { operation_core: { status: "rejected", planner_output_used_for_authority: false } } });
   });
 
   it("fails closed when LLM planner output contains raw command keys", async () => {
