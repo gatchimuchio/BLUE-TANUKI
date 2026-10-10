@@ -1,41 +1,11 @@
 import type { DailyOperationKind, DailyOperationSpec, DailySurfaceSnapshot } from "./types.js";
 import { dailyBriefSnapshotFromEnv } from "./daily_brief_integration.js";
 import { buildDailyOperationCoreProjection } from "./operation_core.js";
+import { requireOperationDescriptor, requiredCapabilitiesForSurface } from "@blue-tanuki/protocol";
 
 type Env = Record<string, string | undefined>;
 
 export const DAILY_SURFACE_NAME = "daily" as const;
-
-export const DAILY_OPERATOR_REQUIRED_PERMISSIONS = [
-  "tool:schedule.list",
-  "tool:schedule.create",
-  "tool:schedule.update",
-  "tool:schedule.delete",
-  "schedule:read",
-  "schedule:create",
-  "schedule:update",
-  "schedule:delete",
-  "tool:gmail.read",
-  "tool:google.calendar.read",
-  "tool:google.drive.read",
-  "tool:gmail.write",
-  "tool:google.calendar.write",
-  "tool:google.drive.write",
-  "network:googleapis.com",
-  "secrets:GOOGLE_ACCESS_TOKEN",
-  "secrets:GMAIL_ACCESS_TOKEN",
-  "secrets:GOOGLE_CALENDAR_ACCESS_TOKEN",
-  "secrets:GOOGLE_DRIVE_ACCESS_TOKEN",
-  "google:gmail.read",
-  "google:calendar.read",
-  "google:drive.read",
-  "google:gmail.write",
-  "google:calendar.write",
-  "google:drive.write",
-  "channel:send",
-  "external:send",
-  "email:send",
-] as const;
 
 export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
   {
@@ -45,37 +15,37 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     approval_risk: "low",
     final_review_required: false,
     downstream_tools: ["cron.process"],
-    capabilities: [],
+    capabilities: requireOperationDescriptor("daily_brief.status").required_capabilities,
     audit_trace: ["surface", "daily_brief_enabled", "payload_hash"],
   },
   {
     kind: "google.gmail.read",
     label: "Read bounded Gmail summary",
-    approval_level: "L1_observe",
-    approval_risk: "low",
-    final_review_required: false,
+    approval_level: "L3_final_review",
+    approval_risk: "high",
+    final_review_required: true,
     downstream_tools: ["gmail.read"],
-    capabilities: ["tool:gmail.read", "network:googleapis.com", "secrets:GMAIL_ACCESS_TOKEN", "google:gmail.read"],
+    capabilities: requireOperationDescriptor("google.gmail.read").required_capabilities,
     audit_trace: ["surface", "google_service", "result_digest"],
   },
   {
     kind: "google.calendar.read",
     label: "Read bounded Google Calendar summary",
-    approval_level: "L1_observe",
-    approval_risk: "low",
-    final_review_required: false,
+    approval_level: "L3_final_review",
+    approval_risk: "high",
+    final_review_required: true,
     downstream_tools: ["google.calendar.read"],
-    capabilities: ["tool:google.calendar.read", "network:googleapis.com", "secrets:GOOGLE_CALENDAR_ACCESS_TOKEN", "google:calendar.read"],
+    capabilities: requireOperationDescriptor("google.calendar.read").required_capabilities,
     audit_trace: ["surface", "google_service", "result_digest"],
   },
   {
     kind: "google.drive.read",
     label: "Read bounded Google Drive summary",
-    approval_level: "L1_observe",
-    approval_risk: "low",
-    final_review_required: false,
+    approval_level: "L3_final_review",
+    approval_risk: "high",
+    final_review_required: true,
     downstream_tools: ["google.drive.read"],
-    capabilities: ["tool:google.drive.read", "network:googleapis.com", "secrets:GOOGLE_DRIVE_ACCESS_TOKEN", "google:drive.read"],
+    capabilities: requireOperationDescriptor("google.drive.read").required_capabilities,
     audit_trace: ["surface", "google_service", "result_digest"],
   },
   {
@@ -85,7 +55,7 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     approval_risk: "low",
     final_review_required: false,
     downstream_tools: ["schedule.list"],
-    capabilities: ["tool:schedule.list", "schedule:read"],
+    capabilities: requireOperationDescriptor("schedule.list").required_capabilities,
     audit_trace: ["surface", "schedule_id", "payload_hash"],
   },
   {
@@ -95,7 +65,7 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     approval_risk: "medium",
     final_review_required: false,
     downstream_tools: ["llm_call"],
-    capabilities: [],
+    capabilities: requireOperationDescriptor("reminder.draft").required_capabilities,
     audit_trace: ["surface", "source_type", "llm_input_digest", "llm_output_digest"],
   },
   {
@@ -105,7 +75,7 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     approval_risk: "high",
     final_review_required: true,
     downstream_tools: ["schedule.create"],
-    capabilities: ["tool:schedule.create", "schedule:create"],
+    capabilities: requireOperationDescriptor("schedule.create").required_capabilities,
     audit_trace: ["surface", "schedule_id", "payload_hash", "final_review_result"],
   },
   {
@@ -115,7 +85,7 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     approval_risk: "high",
     final_review_required: true,
     downstream_tools: ["schedule.update"],
-    capabilities: ["tool:schedule.update", "schedule:update"],
+    capabilities: requireOperationDescriptor("schedule.update").required_capabilities,
     audit_trace: ["surface", "schedule_id", "payload_hash", "final_review_result"],
   },
   {
@@ -125,7 +95,7 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     approval_risk: "high",
     final_review_required: true,
     downstream_tools: ["schedule.delete"],
-    capabilities: ["tool:schedule.delete", "schedule:delete"],
+    capabilities: requireOperationDescriptor("schedule.delete").required_capabilities,
     audit_trace: ["surface", "schedule_id", "payload_hash", "final_review_result"],
   },
   {
@@ -135,7 +105,7 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     approval_risk: "high",
     final_review_required: true,
     downstream_tools: ["gmail.write"],
-    capabilities: ["tool:gmail.write", "network:googleapis.com", "secrets:GMAIL_ACCESS_TOKEN", "google:gmail.write", "external:send", "email:send"],
+    capabilities: requireOperationDescriptor("gmail.write").required_capabilities,
     audit_trace: ["surface", "google_service", "external_target_summary", "final_review_result"],
   },
   {
@@ -145,7 +115,7 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     approval_risk: "high",
     final_review_required: true,
     downstream_tools: ["google.calendar.write"],
-    capabilities: ["tool:google.calendar.write", "network:googleapis.com", "secrets:GOOGLE_CALENDAR_ACCESS_TOKEN", "google:calendar.write"],
+    capabilities: requireOperationDescriptor("google.calendar.write").required_capabilities,
     audit_trace: ["surface", "google_service", "external_target_summary", "final_review_result"],
   },
   {
@@ -155,7 +125,7 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     approval_risk: "high",
     final_review_required: true,
     downstream_tools: ["google.drive.write"],
-    capabilities: ["tool:google.drive.write", "network:googleapis.com", "secrets:GOOGLE_DRIVE_ACCESS_TOKEN", "google:drive.write"],
+    capabilities: requireOperationDescriptor("google.drive.write").required_capabilities,
     audit_trace: ["surface", "google_service", "external_target_summary", "final_review_result"],
   },
   {
@@ -165,10 +135,12 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     approval_risk: "contextual",
     final_review_required: false,
     downstream_tools: ["channel_send"],
-    capabilities: ["channel:send"],
+    capabilities: requireOperationDescriptor("daily_brief.channel_send").required_capabilities,
     audit_trace: ["surface", "channel_target_summary", "payload_hash"],
   },
 ] as const;
+
+export const DAILY_OPERATOR_REQUIRED_PERMISSIONS = requiredCapabilitiesForSurface("daily");
 
 export function getDailyOperationSpec(kind: DailyOperationKind): DailyOperationSpec {
   const spec = DAILY_OPERATION_SPECS.find((operation) => operation.kind === kind);

@@ -82,14 +82,14 @@ function operationPlan(): OperationPlan {
     steps: [
       {
         step_id: "step-1",
-        operation: "draft_text",
+        operation: "draft.in_memory",
         target: {
           kind: "runtime",
           id: "operator:writing",
           scope: "operator_surface",
         },
         state: "planned",
-        effects: ["write"],
+        effects: ["external_send"],
         permission: {
           risk: "medium",
           approval_level: "L2_operate",
@@ -97,7 +97,7 @@ function operationPlan(): OperationPlan {
           hds_brain_authority_required: true,
           approval_gate_required: true,
         },
-        adapter: "internal_runtime",
+        adapter: "external_api",
         adapter_is_authority: false,
         command_generated_by_adapter_only: false,
       },
@@ -168,8 +168,8 @@ describe("Executor Operation Core planner output boundary", () => {
         steps: [
           {
             step_id: "step-1",
-            adapter: "internal_runtime",
-            runtime_boundary: "internal_runtime_adapter",
+            adapter: "external_api",
+            runtime_boundary: "external_api_adapter",
           },
         ],
       },
@@ -221,7 +221,15 @@ describe("Executor Operation Core planner output boundary", () => {
       operation: "shell.exec",
       adapter: "shell",
       command_generated_by_adapter_only: false,
-      effects: ["process_spawn"],
+      effects: [
+        "process_spawn",
+        "read",
+        "write",
+        "delete",
+        "external_send",
+        "credential_access",
+        "settings_change",
+      ],
       permission: {
         risk: "high",
         approval_level: "L3_final_review",
@@ -273,7 +281,15 @@ describe("Executor Operation Core planner output boundary", () => {
       role: "approval_gate_trace",
       adapter: "shell",
       runtime_boundary: "shell_adapter",
-      effects: ["process_spawn"],
+      effects: [
+        "process_spawn",
+        "read",
+        "write",
+        "delete",
+        "external_send",
+        "credential_access",
+        "settings_change",
+      ],
       adapter_is_authority: false,
       raw_command_is_core_operation: false,
       approval_trace_used_for_authority: false,

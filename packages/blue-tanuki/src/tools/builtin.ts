@@ -5,6 +5,7 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import * as path from "node:path";
+import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
 import { echoTool, type Tool } from "./registry.js";
 import {
   gmailReadTool,
@@ -1605,7 +1606,7 @@ export async function invokeFileEdit(
 export const fileSearchTool: Tool = {
   name: "file.search",
   description: "Read-only text search under a requested root directory.",
-  required_capabilities: ["tool:file.search", "fs:read"],
+  required_capabilities: requireToolOperationDescriptor("file.search").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeFileSearch(args);
   },
@@ -1614,7 +1615,7 @@ export const fileSearchTool: Tool = {
 export const fileWriteTool: Tool = {
   name: "file.write",
   description: "Create, overwrite, or append a UTF-8 file under BLUE_TANUKI_FILE_ROOT.",
-  required_capabilities: ["tool:file.write", "fs:write"],
+  required_capabilities: requireToolOperationDescriptor("file.write").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeFileWrite(args);
   },
@@ -1623,7 +1624,7 @@ export const fileWriteTool: Tool = {
 export const fileEditTool: Tool = {
   name: "file.edit",
   description: "Perform an exact UTF-8 text replacement under BLUE_TANUKI_FILE_ROOT.",
-  required_capabilities: ["tool:file.edit", "fs:read", "fs:write"],
+  required_capabilities: requireToolOperationDescriptor("file.edit").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeFileEdit(args);
   },
@@ -1632,7 +1633,7 @@ export const fileEditTool: Tool = {
 export const httpFetchTool: Tool = {
   name: "http.fetch",
   description: "GET or HEAD an HTTP(S) URL and return a bounded response body.",
-  required_capabilities: ["tool:http.fetch", "network:http"],
+  required_capabilities: requireToolOperationDescriptor("http.fetch").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeHttpFetch(args);
   },
@@ -1641,7 +1642,7 @@ export const httpFetchTool: Tool = {
 export const webSearchTool: Tool = {
   name: "web.search",
   description: "Provider-neutral web search via BLUE_TANUKI_WEB_SEARCH_ENDPOINT.",
-  required_capabilities: ["tool:web.search", "network:http"],
+  required_capabilities: requireToolOperationDescriptor("web.search").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeWebSearch(args);
   },
@@ -1650,7 +1651,7 @@ export const webSearchTool: Tool = {
 export const githubReadTool: Tool = {
   name: "github.read",
   description: "Read public GitHub repo, issue, and pull request metadata from api.github.com.",
-  required_capabilities: ["tool:github.read", "network:github.com"],
+  required_capabilities: requireToolOperationDescriptor("github.read").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeGitHubRead(args);
   },
@@ -1659,14 +1660,7 @@ export const githubReadTool: Tool = {
 export const githubWriteTool: Tool = {
   name: "github.write",
   description: "Create/update GitHub issues, pull requests, and comments on allowlisted repositories.",
-  required_capabilities: [
-    "tool:github.write",
-    "network:github.com",
-    "secrets:GITHUB_TOKEN",
-    "github:issue.write",
-    "github:pr.write",
-    "github:comment.write",
-  ],
+  required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeGitHubWrite(args);
   },
@@ -1675,7 +1669,7 @@ export const githubWriteTool: Tool = {
 export const browserReadTool: Tool = {
   name: "browser.read",
   description: "Fetch a public web page through the SSRF guard and extract bounded readable text.",
-  required_capabilities: ["tool:browser.read", "network:http"],
+  required_capabilities: requireToolOperationDescriptor("browser.read").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeBrowserRead(args);
   },
@@ -1684,7 +1678,7 @@ export const browserReadTool: Tool = {
 export const browserSnapshotTool: Tool = {
   name: "browser.snapshot",
   description: "Disabled-by-default preview: capture a bounded headless page snapshot without credentials.",
-  required_capabilities: ["tool:browser.snapshot", "browser:snapshot", "network:http"],
+  required_capabilities: requireToolOperationDescriptor("browser.snapshot").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeBrowserSnapshot(args);
   },
@@ -1693,7 +1687,7 @@ export const browserSnapshotTool: Tool = {
 export const browserAutomationTool: Tool = {
   name: "browser.automation",
   description: "Disabled-by-default preview for guarded headless browser actions.",
-  required_capabilities: ["tool:browser.automation", "browser:act", "network:http"],
+  required_capabilities: requireToolOperationDescriptor("browser.automation").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeBrowserAutomation(args);
   },

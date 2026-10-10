@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { OperationCoreProjectionSchema } from "@blue-tanuki/protocol";
+import {
+  OperationCoreProjectionSchema,
+  OPERATOR_SURFACE_OPERATION_IDS,
+  requiredCapabilitiesForSurface,
+} from "@blue-tanuki/protocol";
 import {
   DAILY_OPERATOR_REQUIRED_PERMISSIONS,
   dailyBriefSnapshotFromEnv,
@@ -40,9 +44,12 @@ describe("Daily Operator surface", () => {
     });
   });
 
-  it("keeps read, schedule mutation, and Google write boundaries explicit", () => {
+  it("keeps credentialed Google reads and schedule mutations at their governed boundary", () => {
     expect(getDailyOperationSpec("daily_brief.status").approval_level).toBe("L1_observe");
     expect(getDailyOperationSpec("schedule.list").approval_level).toBe("L1_observe");
+    expect(getDailyOperationSpec("google.gmail.read").approval_level).toBe("L3_final_review");
+    expect(getDailyOperationSpec("google.calendar.read").final_review_required).toBe(true);
+    expect(getDailyOperationSpec("google.drive.read").approval_risk).toBe("high");
     expect(getDailyOperationSpec("reminder.draft").approval_level).toBe("L2_operate");
     expect(getDailyOperationSpec("schedule.create").approval_level).toBe("L3_final_review");
     expect(getDailyOperationSpec("gmail.write").final_review_required).toBe(true);
@@ -65,7 +72,7 @@ describe("Daily Operator surface", () => {
         final_review_required: false,
         approval_gate_required: false,
       },
-      adapter: "internal_runtime",
+      adapter: "external_api",
       adapter_is_authority: false,
       command_generated_by_adapter_only: false,
     });
@@ -74,7 +81,7 @@ describe("Daily Operator surface", () => {
       source_approval_risk: "contextual",
     });
     expect(scheduleCreate).toMatchObject({
-      effects: ["schedule_change"],
+      effects: ["schedule_change", "write"],
       permission: {
         risk: "high",
         approval_level: "L3_final_review",
@@ -84,9 +91,14 @@ describe("Daily Operator surface", () => {
   });
 
   it("uses existing downstream capability names and no authority capability", () => {
+    expect(DAILY_OPERATOR_REQUIRED_PERMISSIONS).toEqual(requiredCapabilitiesForSurface("daily"));
+    expect(getDailySurfaceSnapshot().operations.map((operation) => operation.kind).sort()).toEqual(
+      [...OPERATOR_SURFACE_OPERATION_IDS.daily].sort(),
+    );
     expect(DAILY_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:schedule.create");
     expect(DAILY_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:gmail.read");
     expect(DAILY_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:google.calendar.write");
+    expect(DAILY_OPERATOR_REQUIRED_PERMISSIONS).toContain("secrets:GOOGLE_ACCESS_TOKEN");
     expect(DAILY_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("authority:write");
     expect(DAILY_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("hds:bypass");
   });

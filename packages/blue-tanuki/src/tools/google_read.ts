@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
+import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
 import type { Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
@@ -594,13 +595,7 @@ export async function buildGoogleDailyBriefContent(
 export const gmailReadTool: Tool = {
   name: "gmail.read",
   description: "Read a bounded Gmail metadata summary with an operator-provided OAuth token.",
-  required_capabilities: [
-    "tool:gmail.read",
-    "network:googleapis.com",
-    "secrets:GMAIL_ACCESS_TOKEN",
-    "secrets:GOOGLE_ACCESS_TOKEN",
-    "google:gmail.read",
-  ],
+  required_capabilities: requireToolOperationDescriptor("gmail.read").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeGmailRead(args);
   },
@@ -609,13 +604,7 @@ export const gmailReadTool: Tool = {
 export const googleCalendarReadTool: Tool = {
   name: "google.calendar.read",
   description: "Read a bounded Google Calendar event summary with an operator-provided OAuth token.",
-  required_capabilities: [
-    "tool:google.calendar.read",
-    "network:googleapis.com",
-    "secrets:GOOGLE_CALENDAR_ACCESS_TOKEN",
-    "secrets:GOOGLE_ACCESS_TOKEN",
-    "google:calendar.read",
-  ],
+  required_capabilities: requireToolOperationDescriptor("google.calendar.read").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeGoogleCalendarRead(args);
   },
@@ -624,13 +613,7 @@ export const googleCalendarReadTool: Tool = {
 export const googleDriveReadTool: Tool = {
   name: "google.drive.read",
   description: "Read a bounded Google Drive metadata summary with an operator-provided OAuth token.",
-  required_capabilities: [
-    "tool:google.drive.read",
-    "network:googleapis.com",
-    "secrets:GOOGLE_DRIVE_ACCESS_TOKEN",
-    "secrets:GOOGLE_ACCESS_TOKEN",
-    "google:drive.read",
-  ],
+  required_capabilities: requireToolOperationDescriptor("google.drive.read").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeGoogleDriveRead(args);
   },

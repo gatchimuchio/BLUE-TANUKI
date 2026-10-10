@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
+import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
 import type { Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
@@ -540,15 +541,7 @@ export async function invokeGoogleDriveWrite(
 export const gmailWriteTool: Tool = {
   name: "gmail.write",
   description: "Create Gmail drafts or send Gmail messages with an operator-provided OAuth token.",
-  required_capabilities: [
-    "tool:gmail.write",
-    "network:googleapis.com",
-    "secrets:GMAIL_ACCESS_TOKEN",
-    "secrets:GOOGLE_ACCESS_TOKEN",
-    "google:gmail.write",
-    "external:send",
-    "email:send",
-  ],
+  required_capabilities: requireToolOperationDescriptor("gmail.write").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeGmailWrite(args);
   },
@@ -557,13 +550,7 @@ export const gmailWriteTool: Tool = {
 export const googleCalendarWriteTool: Tool = {
   name: "google.calendar.write",
   description: "Create, update, or delete Google Calendar events with an operator-provided OAuth token.",
-  required_capabilities: [
-    "tool:google.calendar.write",
-    "network:googleapis.com",
-    "secrets:GOOGLE_CALENDAR_ACCESS_TOKEN",
-    "secrets:GOOGLE_ACCESS_TOKEN",
-    "google:calendar.write",
-  ],
+  required_capabilities: requireToolOperationDescriptor("google.calendar.write").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeGoogleCalendarWrite(args);
   },
@@ -572,13 +559,7 @@ export const googleCalendarWriteTool: Tool = {
 export const googleDriveWriteTool: Tool = {
   name: "google.drive.write",
   description: "Create or update bounded Google Drive text files with an operator-provided OAuth token.",
-  required_capabilities: [
-    "tool:google.drive.write",
-    "network:googleapis.com",
-    "secrets:GOOGLE_DRIVE_ACCESS_TOKEN",
-    "secrets:GOOGLE_ACCESS_TOKEN",
-    "google:drive.write",
-  ],
+  required_capabilities: requireToolOperationDescriptor("google.drive.write").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeGoogleDriveWrite(args);
   },

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
+import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
 import type { Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
@@ -510,11 +511,7 @@ export const composioSearchTool: Tool = {
   name: "composio.search",
   description:
     "Searches Composio toolkit/tool metadata under an explicit allowlist. Metadata is never authority.",
-  required_capabilities: [
-    "tool:composio.search",
-    "network:composio.dev",
-    "secrets:COMPOSIO_API_KEY",
-  ],
+  required_capabilities: requireToolOperationDescriptor("composio.search").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeComposioSearch(args);
   },
@@ -524,12 +521,7 @@ export const composioExecuteTool: Tool = {
   name: "composio.execute",
   description:
     "Executes Composio external tools only after explicit toolkit/action allowlists, live opt-in, capability, approval, and audit boundaries.",
-  required_capabilities: [
-    "tool:composio.execute",
-    "network:composio.dev",
-    "secrets:COMPOSIO_API_KEY",
-    "external:send",
-  ],
+  required_capabilities: requireToolOperationDescriptor("composio.execute").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeComposioExecute(args);
   },

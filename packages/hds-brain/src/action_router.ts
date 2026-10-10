@@ -1,4 +1,5 @@
 import type { InboundRequest } from "@blue-tanuki/protocol";
+import { getToolOperationDescriptor } from "@blue-tanuki/protocol";
 
 export interface ToolActionRoute {
   type: "tool_call";
@@ -14,164 +15,6 @@ export interface NoopActionRoute {
 }
 
 export type ActionRoute = ToolActionRoute | NoopActionRoute | null;
-
-interface ToolSpec {
-  allowed_capabilities: string[];
-  timeout_ms: number;
-}
-
-const TOOL_SPECS: Record<string, ToolSpec> = {
-  echo: {
-    allowed_capabilities: ["tool:echo"],
-    timeout_ms: 5_000,
-  },
-  "file.search": {
-    allowed_capabilities: ["tool:file.search", "fs:read"],
-    timeout_ms: 10_000,
-  },
-  "file.write": {
-    allowed_capabilities: ["tool:file.write", "fs:write"],
-    timeout_ms: 15_000,
-  },
-  "file.edit": {
-    allowed_capabilities: ["tool:file.edit", "fs:read", "fs:write"],
-    timeout_ms: 15_000,
-  },
-  "http.fetch": {
-    allowed_capabilities: ["tool:http.fetch", "network:http"],
-    timeout_ms: 15_000,
-  },
-  "web.search": {
-    allowed_capabilities: ["tool:web.search", "network:http"],
-    timeout_ms: 15_000,
-  },
-  "github.read": {
-    allowed_capabilities: ["tool:github.read", "network:github.com"],
-    timeout_ms: 15_000,
-  },
-  "github.write": {
-    allowed_capabilities: [
-      "tool:github.write",
-      "network:github.com",
-      "secrets:GITHUB_TOKEN",
-      "github:issue.write",
-      "github:pr.write",
-      "github:comment.write",
-    ],
-    timeout_ms: 15_000,
-  },
-  "gmail.read": {
-    allowed_capabilities: [
-      "tool:gmail.read",
-      "network:googleapis.com",
-      "secrets:GMAIL_ACCESS_TOKEN",
-      "secrets:GOOGLE_ACCESS_TOKEN",
-      "google:gmail.read",
-    ],
-    timeout_ms: 15_000,
-  },
-  "google.calendar.read": {
-    allowed_capabilities: [
-      "tool:google.calendar.read",
-      "network:googleapis.com",
-      "secrets:GOOGLE_CALENDAR_ACCESS_TOKEN",
-      "secrets:GOOGLE_ACCESS_TOKEN",
-      "google:calendar.read",
-    ],
-    timeout_ms: 15_000,
-  },
-  "google.drive.read": {
-    allowed_capabilities: [
-      "tool:google.drive.read",
-      "network:googleapis.com",
-      "secrets:GOOGLE_DRIVE_ACCESS_TOKEN",
-      "secrets:GOOGLE_ACCESS_TOKEN",
-      "google:drive.read",
-    ],
-    timeout_ms: 15_000,
-  },
-  "gmail.write": {
-    allowed_capabilities: [
-      "tool:gmail.write",
-      "network:googleapis.com",
-      "secrets:GMAIL_ACCESS_TOKEN",
-      "secrets:GOOGLE_ACCESS_TOKEN",
-      "google:gmail.write",
-      "external:send",
-      "email:send",
-    ],
-    timeout_ms: 15_000,
-  },
-  "google.calendar.write": {
-    allowed_capabilities: [
-      "tool:google.calendar.write",
-      "network:googleapis.com",
-      "secrets:GOOGLE_CALENDAR_ACCESS_TOKEN",
-      "secrets:GOOGLE_ACCESS_TOKEN",
-      "google:calendar.write",
-    ],
-    timeout_ms: 15_000,
-  },
-  "google.drive.write": {
-    allowed_capabilities: [
-      "tool:google.drive.write",
-      "network:googleapis.com",
-      "secrets:GOOGLE_DRIVE_ACCESS_TOKEN",
-      "secrets:GOOGLE_ACCESS_TOKEN",
-      "google:drive.write",
-    ],
-    timeout_ms: 15_000,
-  },
-  "composio.search": {
-    allowed_capabilities: [
-      "tool:composio.search",
-      "network:composio.dev",
-      "secrets:COMPOSIO_API_KEY",
-    ],
-    timeout_ms: 15_000,
-  },
-  "composio.execute": {
-    allowed_capabilities: [
-      "tool:composio.execute",
-      "network:composio.dev",
-      "secrets:COMPOSIO_API_KEY",
-      "external:send",
-    ],
-    timeout_ms: 15_000,
-  },
-  "browser.read": {
-    allowed_capabilities: ["tool:browser.read", "network:http"],
-    timeout_ms: 15_000,
-  },
-  "browser.snapshot": {
-    allowed_capabilities: ["tool:browser.snapshot", "browser:snapshot", "network:http"],
-    timeout_ms: 15_000,
-  },
-  "browser.automation": {
-    allowed_capabilities: ["tool:browser.automation", "browser:act", "network:http"],
-    timeout_ms: 15_000,
-  },
-  "shell.exec": {
-    allowed_capabilities: ["tool:shell.exec", "shell:exec"],
-    timeout_ms: 15_000,
-  },
-  "schedule.list": {
-    allowed_capabilities: ["tool:schedule.list", "schedule:read"],
-    timeout_ms: 5_000,
-  },
-  "schedule.create": {
-    allowed_capabilities: ["tool:schedule.create", "schedule:create"],
-    timeout_ms: 5_000,
-  },
-  "schedule.update": {
-    allowed_capabilities: ["tool:schedule.update", "schedule:update"],
-    timeout_ms: 5_000,
-  },
-  "schedule.delete": {
-    allowed_capabilities: ["tool:schedule.delete", "schedule:delete"],
-    timeout_ms: 5_000,
-  },
-};
 
 /**
  * Route explicit tool requests to a bounded command envelope.
@@ -254,7 +97,7 @@ function buildToolRoute(
   toolName: string,
   args: Record<string, unknown>,
 ): ActionRoute {
-  const spec = TOOL_SPECS[toolName];
+  const spec = getToolOperationDescriptor(toolName);
   if (!spec) {
     return { type: "noop", reason: `unsupported tool: ${toolName}` };
   }
@@ -262,7 +105,7 @@ function buildToolRoute(
     type: "tool_call",
     tool_name: toolName,
     arguments: coerceToolArgs(toolName, args),
-    allowed_capabilities: [...spec.allowed_capabilities],
+    allowed_capabilities: [...spec.required_capabilities],
     timeout_ms: spec.timeout_ms,
   };
 }

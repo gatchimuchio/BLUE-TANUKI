@@ -57,6 +57,15 @@ function llmCallCmd(): ExecuteCommand {
   };
 }
 
+function noopCmd(reason?: string): ExecuteCommand {
+  return {
+    id: "cmd-noop",
+    type: "noop",
+    payload: reason === undefined ? {} : { reason },
+    upstream_decision: stubUpstream,
+  };
+}
+
 function approved(command: ExecuteCommand, risk: "low" | "medium" | "high" = "low") {
   return executorApproval.approve(command, {
     source: risk === "high" ? "human_final_review" : "approval_gate",
@@ -146,6 +155,34 @@ describe("Executor.executeChannelSend — dispatcher path", () => {
 });
 
 describe("Executor.executeToolCall - permission envelope", () => {
+  it("BT-U-D01.01-N reports unsupported tool noops as failed without echoing arbitrary reason text", async () => {
+    const exec = new Executor({
+      approval_authority: executorApproval,
+      llm: new StubBackend(),
+      tools: new ToolRegistry(),
+    });
+    const unsupported = await exec.execute(approved(noopCmd("unsupported tool: payment.charge")));
+    const malformed = await exec.execute(approved(noopCmd("invalid arguments: secret-value-should-not-echo")));
+
+    expect(unsupported.status).toBe("failed");
+    expect(unsupported.error).toBe("unsupported tool; no tool was executed");
+    expect(malformed.status).toBe("failed");
+    expect(malformed.error).toBe("operation could not be routed; no tool was executed");
+    expect(malformed.error).not.toContain("secret-value-should-not-echo");
+  });
+
+  it("keeps an intentional reason-free noop as success", async () => {
+    const exec = new Executor({
+      approval_authority: executorApproval,
+      llm: new StubBackend(),
+      tools: new ToolRegistry(),
+    });
+    const feedback = await exec.execute(approved(noopCmd()));
+
+    expect(feedback.status).toBe("success");
+    expect(feedback.result).toBeNull();
+  });
+
   it("fails closed when a tool capability is not explicitly allowed", async () => {
     const tools = new ToolRegistry();
     tools.register(echoTool);

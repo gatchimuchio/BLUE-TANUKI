@@ -1,25 +1,8 @@
 import type { WritingOperationKind, WritingOperationSpec, WritingSurfaceSnapshot } from "./types.js";
 import { buildWritingOperationCoreProjection } from "./operation_core.js";
+import { requireOperationDescriptor, requiredCapabilitiesForSurface } from "@blue-tanuki/protocol";
 
 export const WRITING_SURFACE_NAME = "writing" as const;
-
-export const WRITING_OPERATOR_REQUIRED_PERMISSIONS = [
-  "tool:file.search",
-  "fs:read",
-  "tool:file.write",
-  "tool:file.edit",
-  "fs:write",
-  "tool:gmail.write",
-  "tool:google.drive.write",
-  "network:googleapis.com",
-  "secrets:GOOGLE_ACCESS_TOKEN",
-  "secrets:GMAIL_ACCESS_TOKEN",
-  "secrets:GOOGLE_DRIVE_ACCESS_TOKEN",
-  "google:gmail.write",
-  "google:drive.write",
-  "external:send",
-  "email:send",
-] as const;
 
 export const WRITING_OPERATION_SPECS: readonly WritingOperationSpec[] = [
   {
@@ -69,7 +52,7 @@ export const WRITING_OPERATION_SPECS: readonly WritingOperationSpec[] = [
     approval_risk: "low",
     final_review_required: false,
     downstream_tools: ["file.search"],
-    capabilities: ["tool:file.search", "fs:read"],
+    capabilities: requireOperationDescriptor("file.read").required_capabilities,
     audit_trace: ["surface", "source_type", "downstream_tool_name", "path_metadata"],
   },
   {
@@ -79,7 +62,7 @@ export const WRITING_OPERATION_SPECS: readonly WritingOperationSpec[] = [
     approval_risk: "medium",
     final_review_required: false,
     downstream_tools: ["file.write"],
-    capabilities: ["tool:file.write", "fs:write"],
+    capabilities: requireOperationDescriptor("file.write").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "path_metadata", "approval_level"],
   },
   {
@@ -89,7 +72,7 @@ export const WRITING_OPERATION_SPECS: readonly WritingOperationSpec[] = [
     approval_risk: "medium",
     final_review_required: false,
     downstream_tools: ["file.edit"],
-    capabilities: ["tool:file.edit", "fs:write"],
+    capabilities: requireOperationDescriptor("file.edit").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "path_metadata", "approval_level"],
   },
   {
@@ -99,7 +82,7 @@ export const WRITING_OPERATION_SPECS: readonly WritingOperationSpec[] = [
     approval_risk: "high",
     final_review_required: true,
     downstream_tools: ["gmail.write"],
-    capabilities: ["tool:gmail.write", "network:googleapis.com", "secrets:GMAIL_ACCESS_TOKEN", "google:gmail.write", "external:send", "email:send"],
+    capabilities: requireOperationDescriptor("gmail.write").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "external_target_summary", "final_review_result"],
   },
   {
@@ -109,10 +92,12 @@ export const WRITING_OPERATION_SPECS: readonly WritingOperationSpec[] = [
     approval_risk: "high",
     final_review_required: true,
     downstream_tools: ["google.drive.write"],
-    capabilities: ["tool:google.drive.write", "network:googleapis.com", "secrets:GOOGLE_DRIVE_ACCESS_TOKEN", "google:drive.write"],
+    capabilities: requireOperationDescriptor("google.drive.write").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "external_target_summary", "final_review_result"],
   },
 ] as const;
+
+export const WRITING_OPERATOR_REQUIRED_PERMISSIONS = requiredCapabilitiesForSurface("writing");
 
 export function getWritingOperationSpec(kind: WritingOperationKind): WritingOperationSpec {
   const spec = WRITING_OPERATION_SPECS.find((operation) => operation.kind === kind);

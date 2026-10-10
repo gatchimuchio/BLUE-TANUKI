@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import type { OperationAdapterKind, OperationState } from "@blue-tanuki/protocol";
+import { requireToolOperationDescriptor, type OperationAdapterKind, type OperationState } from "@blue-tanuki/protocol";
 import type { Tool, ToolContext } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
@@ -126,7 +126,7 @@ export async function invokeShellExec(
 export const shellExecTool: Tool = {
   name: "shell.exec",
   description: "Run a bounded non-shell command under BLUE_TANUKI_SHELL_ROOT.",
-  required_capabilities: ["tool:shell.exec", "shell:exec"],
+  required_capabilities: requireToolOperationDescriptor("shell.exec").required_capabilities,
   async invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> {
     return await invokeShellExec(args, { signal: ctx.signal });
   },

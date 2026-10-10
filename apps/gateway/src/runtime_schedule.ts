@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { Tool } from "@blue-tanuki/core";
 import type { ApprovalEvaluation } from "@blue-tanuki/hds-brain";
-import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import { requireToolOperationDescriptor, type ExecuteCommand } from "@blue-tanuki/protocol";
 import { cronPayloadHash, type CronSchedulerChannel, type CronTaskOptions } from "./cron_channel.js";
 
 type Env = Record<string, string | undefined>;
@@ -134,25 +134,25 @@ export class RuntimeScheduleManager {
       {
         name: "schedule.list",
         description: "List runtime schedules without exposing schedule content.",
-        required_capabilities: ["tool:schedule.list", "schedule:read"],
+        required_capabilities: requireToolOperationDescriptor("schedule.list").required_capabilities,
         invoke: async () => this.list(),
       },
       {
         name: "schedule.create",
         description: "Activate a previously approved runtime schedule create request.",
-        required_capabilities: ["tool:schedule.create", "schedule:create"],
+        required_capabilities: requireToolOperationDescriptor("schedule.create").required_capabilities,
         invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
       },
       {
         name: "schedule.update",
         description: "Activate a previously approved runtime schedule update request.",
-        required_capabilities: ["tool:schedule.update", "schedule:update"],
+        required_capabilities: requireToolOperationDescriptor("schedule.update").required_capabilities,
         invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
       },
       {
         name: "schedule.delete",
         description: "Activate a previously approved runtime schedule delete request.",
-        required_capabilities: ["tool:schedule.delete", "schedule:delete"],
+        required_capabilities: requireToolOperationDescriptor("schedule.delete").required_capabilities,
         invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
       },
     ];

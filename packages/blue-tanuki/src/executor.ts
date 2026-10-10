@@ -192,12 +192,22 @@ export class Executor {
           feedback = await this.executeChannelSend(cmd.id, cmd.payload, start, cmd.upstream_decision.commit_hash);
           break;
         case "noop":
-          feedback = {
-            command_id: cmd.id,
-            status: "success",
-            result: null,
-            metrics: { duration_ms: Date.now() - start },
-          };
+          {
+            const error = safeNoopFailure(cmd.payload);
+            feedback = error
+              ? {
+                  command_id: cmd.id,
+                  status: "failed",
+                  error,
+                  metrics: { duration_ms: Date.now() - start },
+                }
+              : {
+                  command_id: cmd.id,
+                  status: "success",
+                  result: null,
+                  metrics: { duration_ms: Date.now() - start },
+                };
+          }
           break;
       }
       return attachOperationCoreTrace(cmd, feedback, proof);
@@ -539,6 +549,15 @@ function safeOperationPlanRejection(reason: string): string {
     return "Operation Core planner output rejected: adapter registry rejected planner output: shell requires command_generated_by_adapter_only=true";
   }
   return "Model output did not satisfy the OperationPlan structure.";
+}
+
+function safeNoopFailure(payload: Record<string, unknown>): string | undefined {
+  if (!Object.hasOwn(payload, "reason")) return undefined;
+  const reason = payload.reason;
+  if (typeof reason === "string" && reason.trim().startsWith("unsupported tool:")) {
+    return "unsupported tool; no tool was executed";
+  }
+  return "operation could not be routed; no tool was executed";
 }
 
 function safeProviderLabel(value: string): string {

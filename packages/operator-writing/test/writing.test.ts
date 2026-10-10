@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { OperationCoreProjectionSchema } from "@blue-tanuki/protocol";
+import {
+  OperationCoreProjectionSchema,
+  OPERATOR_SURFACE_OPERATION_IDS,
+  requiredCapabilitiesForSurface,
+} from "@blue-tanuki/protocol";
 import {
   WRITING_OPERATOR_REQUIRED_PERMISSIONS,
   buildWritingInvocation,
@@ -37,7 +41,7 @@ describe("Writing Operator surface", () => {
     expect(projection.raw_command_policy.raw_command_is_core_operation).toBe(false);
     expect(editStep).toMatchObject({
       target: { kind: "file", scope: "operator:writing" },
-      effects: ["write"],
+      effects: ["read", "write"],
       permission: {
         risk: "medium",
         approval_level: "L2_operate",
@@ -48,7 +52,7 @@ describe("Writing Operator surface", () => {
       command_generated_by_adapter_only: false,
     });
     expect(gmailStep).toMatchObject({
-      effects: ["external_send"],
+      effects: ["external_send", "write", "credential_access"],
       permission: {
         risk: "high",
         approval_level: "L3_final_review",
@@ -61,8 +65,14 @@ describe("Writing Operator surface", () => {
   });
 
   it("uses only existing downstream capability names", () => {
+    expect(WRITING_OPERATOR_REQUIRED_PERMISSIONS).toEqual(requiredCapabilitiesForSurface("writing"));
+    expect(getWritingSurfaceSnapshot().operations.map((operation) => operation.kind).sort()).toEqual(
+      [...OPERATOR_SURFACE_OPERATION_IDS.writing].sort(),
+    );
     expect(WRITING_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:file.search");
     expect(WRITING_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:gmail.write");
+    expect(WRITING_OPERATOR_REQUIRED_PERMISSIONS).toContain("secrets:GOOGLE_ACCESS_TOKEN");
+    expect(getWritingOperationSpec("file.edit").capabilities).toContain("fs:read");
     expect(WRITING_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("authority:write");
     expect(WRITING_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("hds:bypass");
   });

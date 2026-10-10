@@ -1,5 +1,7 @@
 import {
   inspectOperationPlanAdapterRegistry,
+  getOperationDescriptor,
+  getToolOperationDescriptor,
   OPERATION_ADAPTER_REGISTRY,
   OperationCoreApprovalTraceSchema,
   OperationCoreExecutorTraceSchema,
@@ -250,56 +252,18 @@ function operationPermissionForApproval(approval: OperationCoreApprovalEvidenceL
 
 function operationAdapterForCommand(command: ExecuteCommand): OperationAdapterKind {
   if (command.type === "noop") return "none";
-  if (command.type === "llm_call") return "external_api";
-  if (command.type === "channel_send") return "external_api";
+  if (command.type === "llm_call") return getOperationDescriptor("llm.call")!.adapter;
+  if (command.type === "channel_send") return getOperationDescriptor("channel.send")!.adapter;
   if (command.type !== "tool_call") return "internal_runtime";
-
-  const tool = command.payload.tool_name;
-  if (tool === "shell.exec") return "shell";
-  if (tool === "browser.automation" || tool === "browser.snapshot") return "browser";
-  if (tool === "composio.execute") return "composio";
-  if (tool.startsWith("schedule.")) return "internal_runtime";
-  if (
-    tool === "web.search" ||
-    tool.startsWith("github.") ||
-    tool.startsWith("google.") ||
-    tool.startsWith("gmail.")
-  ) {
-    return "external_api";
-  }
-  return "internal_runtime";
+  return getToolOperationDescriptor(command.payload.tool_name)?.adapter ?? "internal_runtime";
 }
 
 function operationEffectsForCommand(command: ExecuteCommand): OperationEffect[] {
   if (command.type === "noop") return ["observe"];
-  if (command.type === "llm_call") return ["external_send"];
-  if (command.type === "channel_send") return ["external_send"];
+  if (command.type === "llm_call") return [...getOperationDescriptor("llm.call")!.effects];
+  if (command.type === "channel_send") return [...getOperationDescriptor("channel.send")!.effects];
   if (command.type !== "tool_call") return ["observe"];
-
-  const tool = command.payload.tool_name;
-  if (tool === "shell.exec") return ["process_spawn"];
-  if (tool === "browser.automation") return ["browser_action"];
-  if (tool === "browser.snapshot") return ["read"];
-  if (tool === "composio.execute") return ["external_send"];
-  if (tool.startsWith("schedule.")) return ["schedule_change"];
-  if (
-    tool.endsWith(".write") ||
-    tool === "github.write" ||
-    tool === "gmail.write" ||
-    tool === "google.calendar.write" ||
-    tool === "google.drive.write"
-  ) {
-    return ["external_send", "write"];
-  }
-  if (
-    tool === "web.search" ||
-    tool.startsWith("github.") ||
-    tool.startsWith("google.") ||
-    tool.startsWith("gmail.")
-  ) {
-    return ["external_send", "read"];
-  }
-  return ["observe"];
+  return [...(getToolOperationDescriptor(command.payload.tool_name)?.effects ?? ["observe"] as const)];
 }
 
 function operationTargetForCommand(command: ExecuteCommand): OperationTarget {

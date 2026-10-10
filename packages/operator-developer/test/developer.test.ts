@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { OperationCoreProjectionSchema } from "@blue-tanuki/protocol";
+import {
+  OperationCoreProjectionSchema,
+  OPERATOR_SURFACE_OPERATION_IDS,
+  requiredCapabilitiesForSurface,
+} from "@blue-tanuki/protocol";
 import {
   DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS,
   buildDeveloperInvocation,
@@ -21,6 +25,7 @@ describe("Developer Operator surface", () => {
   it("keeps L1, L2, and L3 operation boundaries explicit", () => {
     expect(getDeveloperOperationSpec("file.read").approval_level).toBe("L1_observe");
     expect(getDeveloperOperationSpec("file.write").approval_level).toBe("L2_operate");
+    expect(getDeveloperOperationSpec("github.read").approval_level).toBe("L2_operate");
     expect(getDeveloperOperationSpec("github.write").approval_level).toBe("L3_final_review");
     expect(getDeveloperOperationSpec("shell.exec").final_review_required).toBe(true);
   });
@@ -51,7 +56,15 @@ describe("Developer Operator surface", () => {
     expect(projection.ui_projection_used_for_authority).toBe(false);
     expect(shellStep).toMatchObject({
       target: { kind: "workspace", scope: "operator:developer" },
-      effects: ["process_spawn"],
+      effects: [
+        "process_spawn",
+        "read",
+        "write",
+        "delete",
+        "external_send",
+        "credential_access",
+        "settings_change",
+      ],
       permission: {
         risk: "high",
         approval_level: "L3_final_review",
@@ -66,7 +79,7 @@ describe("Developer Operator surface", () => {
     expect(shellStep?.parameters).not.toHaveProperty("cmd");
     expect(browserStep).toMatchObject({
       adapter: "browser",
-      effects: ["browser_action"],
+      effects: ["external_send", "read", "browser_action"],
       parameters: {
         preview: true,
         disabled_by_default: true,
@@ -75,9 +88,15 @@ describe("Developer Operator surface", () => {
   });
 
   it("uses only existing downstream capability names", () => {
+    expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toEqual(requiredCapabilitiesForSurface("developer"));
+    expect(getDeveloperSurfaceSnapshot().operations.map((operation) => operation.kind).sort()).toEqual(
+      [...OPERATOR_SURFACE_OPERATION_IDS.developer].sort(),
+    );
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:file.search");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:github.write");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).toContain("tool:shell.exec");
+    expect(getDeveloperOperationSpec("github.read").capabilities).not.toContain("secrets:GITHUB_TOKEN");
+    expect(getDeveloperOperationSpec("file.edit").capabilities).toContain("fs:read");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("authority:write");
     expect(DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS).not.toContain("hds:bypass");
   });

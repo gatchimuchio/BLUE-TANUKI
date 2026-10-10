@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { getOperationDescriptor } from "./operation_catalog.js";
 
 const OperationObjectKeySchema = z.string().refine(
   (key) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
@@ -355,6 +356,11 @@ export type OperationPlan = z.infer<typeof OperationPlanSchema>;
 export interface OperationAdapterRegistryStepEvidence {
   step_id: string;
   operation: string;
+  descriptor_version: string;
+  implementation_ref: string;
+  required_effects: readonly OperationEffect[];
+  required_capabilities: readonly string[];
+  descriptor_registry_used_for_authority: false;
   adapter: OperationAdapterKind;
   display_name: string;
   runtime_boundary: OperationAdapterBoundary;
@@ -371,6 +377,7 @@ export interface OperationAdapterRegistryEvidence {
   shell_default_runtime: false;
   hds_brain_authority_required: true;
   adapter_registry_used_for_authority: false;
+  descriptor_registry_used_for_authority: false;
   evidence_source: readonly ["CONFIG", "INTERNAL_STATE"];
   steps: OperationAdapterRegistryStepEvidence[];
 }
@@ -384,6 +391,31 @@ export function inspectOperationPlanAdapterRegistry(plan: OperationPlan): Operat
   let requiresAdapterCommandGeneration = false;
 
   for (const step of plan.steps) {
+    const operationDescriptor = getOperationDescriptor(step.operation);
+    if (!operationDescriptor) {
+      return { kind: "rejected", reason: `operation descriptor registry does not contain operation: ${step.operation}` };
+    }
+    if (step.adapter !== operationDescriptor.adapter) {
+      return {
+        kind: "rejected",
+        reason:
+          `operation descriptor registry rejected ${step.step_id}: operation ${step.operation} ` +
+          `requires adapter=${operationDescriptor.adapter}`,
+      };
+    }
+    const expectedEffects = [...operationDescriptor.effects].sort();
+    const actualEffects = [...step.effects].sort();
+    if (
+      actualEffects.length !== expectedEffects.length ||
+      actualEffects.some((effect, index) => effect !== expectedEffects[index])
+    ) {
+      return {
+        kind: "rejected",
+        reason:
+          `operation descriptor registry rejected ${step.step_id}: operation ${step.operation} ` +
+          `requires the complete effect set [${expectedEffects.join(", ")}]`,
+      };
+    }
     const descriptor = OPERATION_ADAPTER_REGISTRY[step.adapter];
     if (!descriptor) {
       return { kind: "rejected", reason: `adapter registry does not contain adapter: ${step.adapter}` };
@@ -407,6 +439,11 @@ export function inspectOperationPlanAdapterRegistry(plan: OperationPlan): Operat
     steps.push({
       step_id: step.step_id,
       operation: step.operation,
+      descriptor_version: operationDescriptor.descriptor_version,
+      implementation_ref: operationDescriptor.implementation_ref,
+      required_effects: [...operationDescriptor.effects],
+      required_capabilities: [...operationDescriptor.required_capabilities],
+      descriptor_registry_used_for_authority: false,
       adapter: step.adapter,
       display_name: descriptor.display_name,
       runtime_boundary: descriptor.runtime_boundary,
@@ -438,6 +475,7 @@ export function inspectOperationPlanAdapterRegistry(plan: OperationPlan): Operat
       shell_default_runtime: false,
       hds_brain_authority_required: true,
       adapter_registry_used_for_authority: false,
+      descriptor_registry_used_for_authority: false,
       evidence_source: ["CONFIG", "INTERNAL_STATE"],
       steps,
     },

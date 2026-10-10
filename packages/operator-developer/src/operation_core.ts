@@ -1,12 +1,11 @@
 import type {
-  OperationAdapterKind,
   OperationApprovalLevel,
   OperationCoreProjection,
-  OperationEffect,
   OperationRisk,
   OperationStep,
   OperationTarget,
 } from "@blue-tanuki/protocol";
+import { requireOperationDescriptor } from "@blue-tanuki/protocol";
 import type { DeveloperOperationSpec } from "./types.js";
 
 const SURFACE_SCOPE = "operator:developer";
@@ -52,29 +51,15 @@ function targetForDeveloperOperation(spec: DeveloperOperationSpec): OperationTar
   };
 }
 
-function effectsForDeveloperOperation(spec: DeveloperOperationSpec): OperationEffect[] {
-  if (spec.kind === "file.read" || spec.kind === "github.read") return ["read"];
-  if (spec.kind === "file.write" || spec.kind === "file.edit" || spec.kind === "github.write") return ["write"];
-  if (spec.kind.startsWith("browser.")) return ["browser_action"];
-  if (spec.kind === "shell.exec") return ["process_spawn"];
-  return ["observe"];
-}
-
-function adapterForDeveloperOperation(spec: DeveloperOperationSpec): OperationAdapterKind {
-  if (spec.kind === "shell.exec") return "shell";
-  if (spec.kind.startsWith("browser.")) return "browser";
-  if (spec.kind.startsWith("github.")) return "external_api";
-  return "internal_runtime";
-}
-
 function stepForDeveloperOperation(spec: DeveloperOperationSpec): OperationStep {
-  const shellBacked = spec.kind === "shell.exec";
+  const descriptor = requireOperationDescriptor(spec.kind);
+  const shellBacked = descriptor.adapter === "shell";
   return {
     step_id: `${SURFACE_SCOPE}:${spec.kind}`,
     operation: spec.kind,
     target: targetForDeveloperOperation(spec),
     state: "planned",
-    effects: effectsForDeveloperOperation(spec),
+    effects: [...descriptor.effects],
     permission: {
       risk: spec.approval_risk as OperationRisk,
       approval_level: spec.approval_level as OperationApprovalLevel,
@@ -89,7 +74,7 @@ function stepForDeveloperOperation(spec: DeveloperOperationSpec): OperationStep 
       preview: spec.preview,
       disabled_by_default: spec.disabled_by_default,
     },
-    adapter: adapterForDeveloperOperation(spec),
+    adapter: descriptor.adapter,
     adapter_is_authority: false,
     command_generated_by_adapter_only: shellBacked,
   };

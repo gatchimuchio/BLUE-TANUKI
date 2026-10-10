@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-10 — 操作記述子と複合効果の通常経路接続
+
+- D01.01として、現在の組み込みtool、LLM、channel、schedule操作の版付き記述子catalogをprotocolへ追加し、HDS action router、tool能力、schedule、三operator surface、OperationPlan検査から共有するようにした。operatorごとの必要能力一覧も同catalogから導出する。
+- file.edit、credentialを使うGoogle/Gmail読取・書込、schedule変更、shell、browser、Composioの複合作用を保持し、descriptor不在・adapter不一致・effect欠落を非権威のplan検査で拒否する。未知toolの理由付きnoopは成功にせず、下流を呼ばないbounded failureを返す。Approval Gateとfinal-review正本は変更していない。
+- 通常経路の合成test、全repository test 105 files / 979 cases、typecheck/build/docs/repo-health/packagingはPASS。doctorはこのWindows環境で必須WebChat token未設定と既存8787 listenerのため失敗した。provider/live、実業務作用、installed runtime、GA/P13/owner GOは本単位の証拠範囲外。
+
 ## 2026-10-10 — 資料整理の中断・復帰とM世代照合
 
 - C08.02として、Gateway CLI / WebChatの資料整理をHDS-BRAIN所有のSQLite checkpointで再開できるようにした。保存対象はactor/source digest、M世代digest・件数、Jの確定span offsetと限定状態であり、本文・引用・C応答・分類labelは含めない。

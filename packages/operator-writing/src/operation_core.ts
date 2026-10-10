@@ -1,12 +1,11 @@
 import type {
-  OperationAdapterKind,
   OperationApprovalLevel,
   OperationCoreProjection,
-  OperationEffect,
   OperationRisk,
   OperationStep,
   OperationTarget,
 } from "@blue-tanuki/protocol";
+import { requireOperationDescriptor } from "@blue-tanuki/protocol";
 import type { WritingOperationSpec } from "./types.js";
 
 const SURFACE_SCOPE = "operator:writing";
@@ -44,25 +43,14 @@ function targetForWritingOperation(spec: WritingOperationSpec): OperationTarget 
   };
 }
 
-function effectsForWritingOperation(spec: WritingOperationSpec): OperationEffect[] {
-  if (spec.kind === "file.read") return ["read"];
-  if (spec.kind === "file.write" || spec.kind === "file.edit" || spec.kind === "google.drive.write") return ["write"];
-  if (spec.kind === "gmail.write") return ["external_send"];
-  return ["observe"];
-}
-
-function adapterForWritingOperation(spec: WritingOperationSpec): OperationAdapterKind {
-  if (spec.kind === "gmail.write" || spec.kind === "google.drive.write") return "external_api";
-  return "internal_runtime";
-}
-
 function stepForWritingOperation(spec: WritingOperationSpec): OperationStep {
+  const descriptor = requireOperationDescriptor(spec.kind);
   return {
     step_id: `${SURFACE_SCOPE}:${spec.kind}`,
     operation: spec.kind,
     target: targetForWritingOperation(spec),
     state: "planned",
-    effects: effectsForWritingOperation(spec),
+    effects: [...descriptor.effects],
     permission: {
       risk: spec.approval_risk as OperationRisk,
       approval_level: spec.approval_level as OperationApprovalLevel,
@@ -75,7 +63,7 @@ function stepForWritingOperation(spec: WritingOperationSpec): OperationStep {
       capabilities_count: spec.capabilities.length,
       audit_trace: [...spec.audit_trace],
     },
-    adapter: adapterForWritingOperation(spec),
+    adapter: descriptor.adapter,
     adapter_is_authority: false,
     command_generated_by_adapter_only: false,
   };

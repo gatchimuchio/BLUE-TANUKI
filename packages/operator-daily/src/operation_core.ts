@@ -1,12 +1,11 @@
 import type {
-  OperationAdapterKind,
   OperationApprovalLevel,
   OperationCoreProjection,
-  OperationEffect,
   OperationRisk,
   OperationStep,
   OperationTarget,
 } from "@blue-tanuki/protocol";
+import { requireOperationDescriptor } from "@blue-tanuki/protocol";
 import type { DailyApprovalLevel, DailyApprovalRisk, DailyOperationSpec } from "./types.js";
 
 const SURFACE_SCOPE = "operator:daily";
@@ -44,28 +43,15 @@ function targetForDailyOperation(spec: DailyOperationSpec): OperationTarget {
   };
 }
 
-function effectsForDailyOperation(spec: DailyOperationSpec): OperationEffect[] {
-  if (spec.kind.endsWith(".read") || spec.kind === "schedule.list") return ["read"];
-  if (spec.kind === "schedule.create" || spec.kind === "schedule.update") return ["schedule_change"];
-  if (spec.kind === "schedule.delete") return ["schedule_change", "delete"];
-  if (spec.kind === "gmail.write" || spec.kind === "daily_brief.channel_send") return ["external_send"];
-  if (spec.kind === "google.calendar.write" || spec.kind === "google.drive.write") return ["write"];
-  return ["observe"];
-}
-
-function adapterForDailyOperation(spec: DailyOperationSpec): OperationAdapterKind {
-  if (spec.kind.startsWith("google.") || spec.kind === "gmail.write") return "external_api";
-  return "internal_runtime";
-}
-
 function stepForDailyOperation(spec: DailyOperationSpec): OperationStep {
+  const descriptor = requireOperationDescriptor(spec.kind);
   const approvalLevel = normalizeApprovalLevel(spec.approval_level);
   return {
     step_id: `${SURFACE_SCOPE}:${spec.kind}`,
     operation: spec.kind,
     target: targetForDailyOperation(spec),
     state: "planned",
-    effects: effectsForDailyOperation(spec),
+    effects: [...descriptor.effects],
     permission: {
       risk: normalizeRisk(spec.approval_risk),
       approval_level: approvalLevel,
@@ -80,7 +66,7 @@ function stepForDailyOperation(spec: DailyOperationSpec): OperationStep {
       source_approval_level: spec.approval_level,
       source_approval_risk: spec.approval_risk,
     },
-    adapter: adapterForDailyOperation(spec),
+    adapter: descriptor.adapter,
     adapter_is_authority: false,
     command_generated_by_adapter_only: false,
   };

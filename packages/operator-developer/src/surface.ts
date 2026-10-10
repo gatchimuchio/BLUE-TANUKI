@@ -1,29 +1,8 @@
 import type { DeveloperOperationKind, DeveloperOperationSpec, DeveloperSurfaceSnapshot } from "./types.js";
 import { buildDeveloperOperationCoreProjection } from "./operation_core.js";
+import { requireOperationDescriptor, requiredCapabilitiesForSurface } from "@blue-tanuki/protocol";
 
 export const DEVELOPER_SURFACE_NAME = "developer" as const;
-
-export const DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS = [
-  "tool:file.search",
-  "fs:read",
-  "tool:file.write",
-  "tool:file.edit",
-  "fs:write",
-  "tool:github.read",
-  "tool:github.write",
-  "network:github.com",
-  "secrets:GITHUB_TOKEN",
-  "github:issue.write",
-  "github:pr.write",
-  "github:comment.write",
-  "tool:browser.snapshot",
-  "tool:browser.automation",
-  "browser:snapshot",
-  "browser:act",
-  "network:http",
-  "tool:shell.exec",
-  "shell:exec",
-] as const;
 
 export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
   {
@@ -35,19 +14,19 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
     preview: false,
     disabled_by_default: false,
     downstream_tools: ["file.search"],
-    capabilities: ["tool:file.search", "fs:read"],
+    capabilities: requireOperationDescriptor("file.read").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "path_metadata"],
   },
   {
     kind: "github.read",
     label: "Read GitHub repository or issue context through existing tools",
-    approval_level: "L1_observe",
-    approval_risk: "low",
+    approval_level: "L2_operate",
+    approval_risk: "medium",
     final_review_required: false,
     preview: false,
     disabled_by_default: false,
     downstream_tools: ["github.read"],
-    capabilities: ["tool:github.read", "network:github.com", "secrets:GITHUB_TOKEN"],
+    capabilities: requireOperationDescriptor("github.read").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "external_target_summary"],
   },
   {
@@ -59,7 +38,7 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
     preview: false,
     disabled_by_default: false,
     downstream_tools: ["file.write"],
-    capabilities: ["tool:file.write", "fs:write"],
+    capabilities: requireOperationDescriptor("file.write").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "path_metadata", "approval_level"],
   },
   {
@@ -71,7 +50,7 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
     preview: false,
     disabled_by_default: false,
     downstream_tools: ["file.edit"],
-    capabilities: ["tool:file.edit", "fs:write"],
+    capabilities: requireOperationDescriptor("file.edit").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "path_metadata", "approval_level"],
   },
   {
@@ -83,7 +62,7 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
     preview: true,
     disabled_by_default: true,
     downstream_tools: ["browser.snapshot"],
-    capabilities: ["tool:browser.snapshot", "browser:snapshot", "network:http"],
+    capabilities: requireOperationDescriptor("browser.snapshot").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "target_origin", "approval_level"],
   },
   {
@@ -95,7 +74,7 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
     preview: false,
     disabled_by_default: false,
     downstream_tools: ["github.write"],
-    capabilities: ["tool:github.write", "network:github.com", "secrets:GITHUB_TOKEN", "github:issue.write", "github:pr.write", "github:comment.write"],
+    capabilities: requireOperationDescriptor("github.write").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "external_target_summary", "final_review_result"],
   },
   {
@@ -107,7 +86,7 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
     preview: true,
     disabled_by_default: true,
     downstream_tools: ["browser.automation"],
-    capabilities: ["tool:browser.automation", "browser:act", "network:http"],
+    capabilities: requireOperationDescriptor("browser.automation").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "target_origin", "final_review_result"],
   },
   {
@@ -119,10 +98,12 @@ export const DEVELOPER_OPERATION_SPECS: readonly DeveloperOperationSpec[] = [
     preview: false,
     disabled_by_default: false,
     downstream_tools: ["shell.exec"],
-    capabilities: ["tool:shell.exec", "shell:exec"],
+    capabilities: requireOperationDescriptor("shell.exec").required_capabilities,
     audit_trace: ["surface", "downstream_tool_name", "command_digest", "final_review_result"],
   },
 ] as const;
+
+export const DEVELOPER_OPERATOR_REQUIRED_PERMISSIONS = requiredCapabilitiesForSurface("developer");
 
 export function getDeveloperOperationSpec(kind: DeveloperOperationKind): DeveloperOperationSpec {
   const spec = DEVELOPER_OPERATION_SPECS.find((operation) => operation.kind === kind);

@@ -785,7 +785,7 @@ describe("Operation Core schemas", () => {
     expect(parsed.steps[0].adapter_is_authority).toBe(false);
   });
 
-  it("validates OperationPlan steps through the adapter registry", () => {
+  it("BT-U-D01.01-P validates OperationPlan steps through reviewed descriptors", () => {
     const parsed = OperationPlanSchema.parse({
       version: "operation-core.v1",
       plan_id: "plan-1",
@@ -797,7 +797,15 @@ describe("Operation Core schemas", () => {
           operation: "shell.exec",
           target: { kind: "workspace", id: "workspace:blue-tanuki" },
           state: "planned",
-          effects: ["process_spawn"],
+          effects: [
+            "process_spawn",
+            "read",
+            "write",
+            "delete",
+            "external_send",
+            "credential_access",
+            "settings_change",
+          ],
           permission: {
             risk: "high",
             approval_level: "L3_final_review",
@@ -827,15 +835,77 @@ describe("Operation Core schemas", () => {
         default_runtime_adapter: "internal_runtime",
         shell_default_runtime: false,
         adapter_registry_used_for_authority: false,
+        descriptor_registry_used_for_authority: false,
         steps: [
           {
             step_id: "step-shell",
+            descriptor_version: "1.0.0",
+            implementation_ref: "packages/blue-tanuki/src/tools/shell_exec.ts#shellExecTool",
+            required_effects: [
+              "process_spawn",
+              "read",
+              "write",
+              "delete",
+              "external_send",
+              "credential_access",
+              "settings_change",
+            ],
+            descriptor_registry_used_for_authority: false,
             adapter: "shell",
             runtime_boundary: "shell_adapter",
             command_generation_location: "execution_adapter_only",
           },
         ],
       });
+    }
+  });
+
+  it("BT-U-D01.01-N rejects unknown operations, adapter mismatch, and lost effects", () => {
+    const base = OperationPlanSchema.parse({
+      version: "operation-core.v1",
+      plan_id: "plan-descriptor-negative",
+      request_id: "request-descriptor-negative",
+      state: "planned",
+      steps: [
+        {
+          step_id: "step-file-edit",
+          operation: "file.edit",
+          target: { kind: "file", id: "workspace:note.txt" },
+          state: "planned",
+          effects: ["read", "write"],
+          permission: {
+            risk: "medium",
+            approval_level: "L2_operate",
+            final_review_required: false,
+            hds_brain_authority_required: true,
+            approval_gate_required: true,
+          },
+          adapter: "internal_runtime",
+          adapter_is_authority: false,
+          command_generated_by_adapter_only: false,
+        },
+      ],
+      rollback: { available: false },
+      raw_command_policy: {
+        raw_command_is_core_operation: false,
+        command_generation_location: "not_applicable",
+      },
+      planner_output_used_for_authority: false,
+      hds_brain_authority_required: true,
+    });
+    const mutations = [
+      { operation: "unreviewed.operation" },
+      { adapter: "external_api" },
+      { effects: ["write"] },
+    ] as const;
+
+    for (const mutation of mutations) {
+      const candidate = {
+        ...base,
+        steps: [{ ...base.steps[0], ...mutation }],
+      };
+      const inspection = inspectOperationPlanAdapterRegistry(candidate);
+      expect(inspection.kind).toBe("rejected");
     }
   });
 

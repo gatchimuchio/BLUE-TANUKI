@@ -1,3 +1,5 @@
+import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
+
 /**
  * Tool registry.
  *
@@ -56,7 +58,7 @@ export class ToolRegistry {
 export const echoTool: Tool = {
   name: "echo",
   description: "Returns its arguments verbatim. Phase 0 smoke test only.",
-  required_capabilities: ["tool:echo"],
+  required_capabilities: requireToolOperationDescriptor("echo").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return { echoed: args };
   },
