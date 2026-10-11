@@ -328,6 +328,14 @@ mainを唯一の開発正本とする。作業開始前にorigin/main、local HE
 
 本§21は旧§21の「各phaseでfull test、個別QA、毎回backup/commit/push」をQE方式へ正式置換する。これはテスト体系や安全保護の廃止ではなく、適用時期と対象の配置変更である。下位の旧作業標準・指示・進捗に矛盾が残るときは公開可能な差分を記録し、次の認可済み規定同期バッチで改訂する。
 
+### 6. Validation
+
+旧文書のAGENTS.md#6-validationから参照される互換見出し。現行の検証強度・実行時期・未実施の扱いは本§21.2と§21.3を正本とする。小単位ごとにfull suiteの合格を要求する旧文書の手順は、QE_BUILDの方法として適用しない。ただし安全に必要な限定否定確認、出荷時の必須検査、正確な未実施記録は維持する。
+
+### 7. Git closure
+
+旧文書のAGENTS.md#7-git-closureから参照される互換見出し。現行Git規則は本§21.4を正本とする。main一本、単一writer、意味あるBUILD_BATCH単位のcommit/push、編集前の二世代backup branch（refs/heads）、remote照合を採用する。旧remote backup tagを正本として再採用したり、毎小単位の回転を復活させたりしない。
+
 ## 22. 環境
 
 owner 指示により、通常の編集・ビルド・テスト・起動・Git 操作は Windows を標準とする。Windows で成立する開発に WSL を必須としない。WSL / native Linux は、Unix 実行属性を必要とする配布生成・検証など、Windows で成立しない作業の補助環境として使用する。再現手順は `docs/開発環境.md` を参照する。
