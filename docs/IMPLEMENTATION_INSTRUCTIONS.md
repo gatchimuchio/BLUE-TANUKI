@@ -36,7 +36,7 @@ J/HDS判断とBrokerの現在Permissionは独立であり、Owner最終責任、
 
 最終対応対象はWindows、Linux、macOS、Android、iOS。AndroidはG09、iOSはG10として独立実装し、旧F16のモバイル入力媒体と分ける。旧v1.0 RCのMobile非搭載は現在の完成主張とは独立した制限である。内部QE rev2.2三点正本の実装索引は旧192＋6＝198単位。Public Gitへ非公開原典全文を投入しない。
 
-QE_DESIGN→QE_BUILD→SYSTEM_SHAPED→BUILD_COVERED→QE_QC→QE_QA→QE_RELEASE_REVIEWへ統一する。192小単位は実装索引であり、小単位の全体試験・QA・毎回Git保全を義務化しない。安全重要の拒否検査と既存保護は維持する。
+QE_DESIGN→QE_BUILD→SYSTEM_SHAPED→BUILD_COVERED→QE_QC→QE_QA→QE_RELEASE_REVIEWへ統一する。198小単位（旧192＋Android/iOS各3）は実装索引であり、小単位の全体試験・QA・毎回Git保全を義務化しない。安全重要の拒否検査と既存保護は維持する。
 
 OpenClaw/Museの観測能力を包含対象から勝手に削除せず、危険な実装方式は安全な代替経路へ置き換える。ClawHubの無審査コード実行を禁止し、安全な互換Adapterの検討まで禁止しない。
 

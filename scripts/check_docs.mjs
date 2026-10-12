@@ -159,10 +159,10 @@ for (const [rel, tokens] of Object.entries(qeGovernanceRequired)) {
   }
 }
 const qeGovernanceForbidden = {
-  "docs/作業標準要領.md": ["一作業単位をmainへ一commit", "remote backup tag を正本"],
+  "docs/作業標準要領.md": ["一作業単位をmainへ一commit", "現行remote backupの正本はrefs/heads"],
   "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["D01.02だけを実施する", "検証後に二世代backup branchを回す"],
   "docs/ROADMAP.md": ["一単位ずつ有限受入とGit完結を行う"],
-  "docs/DEVELOPMENT_PRACTICE.md": ["remote tag で二世代を保存する"],
+  "docs/DEVELOPMENT_PRACTICE.md": ["現行二世代remote backupの正本はrefs/heads"],
   "docs/NON_GOALS.md": ["- No ClawHub compatibility"],
   "docs/STRATEGY_FRAME.md": [
     "does not modify GUI Shell, depend on GUI Shell at runtime",

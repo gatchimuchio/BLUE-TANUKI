@@ -28,4 +28,4 @@
 4. main HEAD、remote二tag、旧remote backup branchの不在、ローカル復元点、作業ツリーを再照合する。すべて成立したときだけMIGRATION_COMPLETEに変更する。
 5. tag変更API・認証済みGitが利用不能、競合、失敗、main更新が検出された場合、PENDING_BACKUP_REF_MIGRATIONを保持し、remote branchを消さずblockerを記録する。次の製品QE_BUILD着手前に再処理する。
 
-非公開施工パッケージrev2.2に、DRY_RUNから開始するための安全確認付きPowerShell補助手順を収録する。Public Gitへ内部原典、資格、トークン、監査生証拠を投入しない。既存mainをforce push／resetしない。
+非公開施工パッケージrev2.3にDRY_RUNから開始する安全確認付きPowerShell補助手順と整合検査を収録する。GitHub接続からremote tag更新／branch削除は実行しておらず、認可済みWindows Git経路でのみref移行を完結する。Public Gitへ内部原典、資格、トークン、監査生証拠を投入しない。既存mainをforce push／resetしない。

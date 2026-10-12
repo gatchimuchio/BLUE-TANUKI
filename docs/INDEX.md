@@ -21,7 +21,7 @@
 - [Agent 規定](../AGENTS.md) — QE施工、5OS完成目標、D4Pocket方式のバックアップ規律
 - [QE対応OS正本](PLATFORM_TARGETS_QE.md) — Windows・Linux・macOS・Android・iOSの独立実装とOS別QC/QA
 - [Backup ref移行](BACKUP_REF_MIGRATION.md) — local二世代branch／remote二世代tagへの移行状態と安全手順
-- [作業標準要領](作業標準要領.md) — QE_BUILDとBUILD_BATCH、QC/QA後段、backup branch正本
+- [作業標準要領](作業標準要領.md) — QE_BUILDとBUILD_BATCH、QC/QA後段、remote tag正本（移行中は旧branchを保全）
 - [Active Implementation Instructions](IMPLEMENTATION_INSTRUCTIONS.md) — QE-GOV-SYNCと製品実装停止
 - [Roadmap](ROADMAP.md) — QE全体工程と独立した旧J/P13境界
 
