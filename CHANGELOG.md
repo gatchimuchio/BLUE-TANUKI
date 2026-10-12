@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-12 — QE-GOV-SYNC閉鎖とbackup ref移行完了
+
+- local recovery branch二本とremote backup tag二本を同じ二世代へ揃えた。remote tagのSHAを照合してから旧remote backup branch二本を整理し、完了時のSHAと手順をdocs/BACKUP_REF_MIGRATION.mdに記録した。
+- QE規定、作業標準、ロードマップ、現行工程の閉鎖記録、索引、docs gateを同期した。製品コード、provider、credential、別repo、公開・出荷判断は扱わず、製品開発停止、C08.03保留、P13=PENDING_OWNER_GOを維持した。
+
 ## 2026-10-12 — 5OS対応要求とD4Pocket方式のバックアップ統一
 
 - 新AGI製品の最終対象をWindows／Linux／macOS／Android／iOSの5OSへ明文化した。F16のモバイル入力媒体とAndroid/iOSの独立製品対応を区別し、内部QE rev2.2にG09／G10各3単位を追加した。実動作・QC・QAが成立したとは主張しない。

@@ -1,4 +1,6 @@
-# BLUE-TANUKI 現行実装指示：QE-GOV-SYNC（5OS／backup ref移行）
+# BLUE-TANUKI QE-GOV-SYNC閉鎖記録（5OS／backup ref移行）
+
+**状態：MIGRATION_COMPLETE／QE-GOV-SYNC完了（2026-10-12）。** この規定同期とref移行を閉鎖した。製品開発は停止状態を維持し、次のQE_BUILDには自動進行しない。
 
 ## 1. 目的
 
@@ -32,7 +34,7 @@ J/HDS判断とBrokerの現在Permissionは独立であり、Owner最終責任、
 
 ## 8. 実装要件
 
-バックアップ正規方式はD4Pocketと同じlocal二世代branch／remote二世代tagとする。現在BLUEはPENDING_BACKUP_REF_MIGRATIONであり、tag二本の実SHAが保存されてから旧remote branchを整理する。tag変更手段・権限がないときはref移行を完了扱いせず、既存branchを保護してCodexの認可済みGitへ移送する。
+バックアップ正規方式はD4Pocketと同じlocal二世代branch／remote二世代tagとする。BLUEの実移行は2026-10-12に完了し、tag二本の実SHAを照合した後に旧remote branch二本を整理した。完了時のlocal branch、remote tag、main SHAはdocs/BACKUP_REF_MIGRATION.mdに記録する。将来、tag変更手段・権限がない場合はref移行を完了扱いせず、既存branchを保護する。
 
 最終対応対象はWindows、Linux、macOS、Android、iOS。AndroidはG09、iOSはG10として独立実装し、旧F16のモバイル入力媒体と分ける。旧v1.0 RCのMobile非搭載は現在の完成主張とは独立した制限である。内部QE rev2.2三点正本の実装索引は旧192＋6＝198単位。Public Gitへ非公開原典全文を投入しない。
 

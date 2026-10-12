@@ -334,9 +334,9 @@ mainを唯一の開発正本とし、単一writerがBUILD_BATCHまたは統治�
 
 **D4Pocketと統一する正規方式は、ローカル復旧用branch二本（refs/heads/codex/backup-main、refs/heads/codex/backup-main-prev）とGitHub上のPR-neutralなtag二本（refs/tags/codex/backup-main、refs/tags/codex/backup-main-prev）。** 現backup-mainをprevへ退避し、編集前mainをbackup-mainへ保存する。確認済みの旧remote tag SHAを期待値とするforce-with-leaseで二本を原子的にpushし、tag二本のremote SHAとmainを照合する。GitHub上の同名backup branchを正規世代として維持しない。
 
-**現在の移行状態はPENDING_BACKUP_REF_MIGRATION。** BLUE-TANUKIには旧remote backup branch二本と古い同名tag二本があり、保存SHAは異なる。実際のtag移行を確認するまで既存remote backup branchを削除せず、暫定的な復元点として保護する。現在値・移行条件はdocs/BACKUP_REF_MIGRATION.mdを確認する。tag保存を証明してからのみ、旧remote backup branchを競合検出付きで整理する。異常・他writer更新・不足があれば変更を止め、完了宣言しない。
+**移行状態はMIGRATION_COMPLETE（2026-10-12）。** remote backup tag二本への保存とSHA照合後、旧remote backup branch二本を期待SHA付きatomic pushで整理した。local recovery branch二本とremote tag二本は同じ二世代に揃っている。完了時SHA、手順、検証証拠はdocs/BACKUP_REF_MIGRATION.mdを参照する。今後もref競合、他writer更新、照合不足があれば変更を止め、完了宣言しない。
 
-BUILD_BATCH終了時に限定commitをmainへpushし、remote HEAD、バックアップrefs、作業ツリーと復元点を照合する。tag移行が未完なら次の製品QE_BUILD前に認可済みGit操作で移行を閉包する。タグ作成・移行・branch削除・mainのforce pushを、確認・権限なく実施しない。secret、内部HDS/QE原典、credential、実運転状態、debug一時物をGitに混ぜない。reset --hard／cleanで既存作業を消さない。
+BUILD_BATCH終了時に限定commitをmainへpushし、remote HEAD、バックアップrefs、作業ツリーと復元点を照合する。tag移行は2026-10-12に閉鎖した。将来のタグ作成・移行・branch削除・mainのforce pushは、確認・権限なく実施しない。secret、内部HDS/QE原典、credential、実運転状態、debug一時物をGitに混ぜない。reset --hard／cleanで既存作業を消さない。
 
 ### 5. 旧規定との移行
 
