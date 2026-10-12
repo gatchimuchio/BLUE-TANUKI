@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-12 — 5OS対応要求とD4Pocket方式のバックアップ統一
+
+- 新AGI製品の最終対象をWindows／Linux／macOS／Android／iOSの5OSへ明文化した。F16のモバイル入力媒体とAndroid/iOSの独立製品対応を区別し、内部QE rev2.2にG09／G10各3単位を追加した。実動作・QC・QAが成立したとは主張しない。
+- Gitバックアップの正規方式をD4Pocketと同じlocal二世代branch／remote二世代tagへ改訂した。既存BLUEではtagの保存SHAが旧remote branchと異なるためPENDING_BACKUP_REF_MIGRATIONと記録し、tag移行完了までbranchを削除しない。
+- QE規律、作業標準、ロードマップ、現行指示、索引、再発防止文書ゲート、日本語基底試験の期待値を整合。旧v1.0 RCのP13=PENDING_OWNER_GO、public_claim_allowed=false、C08.03保留、製品開発停止は維持した。
+
+
 ## 2026-10-12 — QE品質体系と施工・競合・復元規定の同期
 
 - AGENTS.mdのQE方式を、作業標準、現行指示、工程表、歴史的進捗、戦略、非対象、旧v1.0 RCの公開境界へ統一した。全体実装先行、実物QC後段、個別QAとし、192小単位は施工索引、BUILD_BATCHを実装・復元単位とした。

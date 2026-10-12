@@ -5,6 +5,8 @@ const root = process.cwd();
 
 const requiredDocs = [
   "AGENTS.md",
+  "docs/PLATFORM_TARGETS_QE.md",
+  "docs/BACKUP_REF_MIGRATION.md",
   "docs/IMPLEMENTATION_INSTRUCTIONS.md",
   "docs/ROADMAP.md",
   "docs/INDEX.md",
@@ -137,15 +139,17 @@ if (!troubleshooting.includes("FIRST_RUN_CHECKLIST.md")) {
 // QE規定の現行文書間の構造的一致を確認する。
 // 文書整合だけを確認し、製品のQC/QAや実機成功は証明しない。
 const qeGovernanceRequired = {
-  "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/heads"],
-  "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/heads/codex/backup-main"],
+  "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/tags/codex/backup-main", "Android", "iOS"],
+  "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/tags/codex/backup-main", "Android", "iOS"],
   "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["QE-GOV-SYNC", "製品開発停止", "PENDING_OWNER_GO"],
-  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "J4"],
-  "docs/DEVELOPMENT_PRACTICE.md": ["BUILD_BATCH", "refs/heads", "refs/tags"],
+  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "J4", "Android", "iOS", "PENDING_BACKUP_REF_MIGRATION"],
+  "docs/DEVELOPMENT_PRACTICE.md": ["BUILD_BATCH", "refs/heads", "refs/tags/codex/backup-main"],
   "docs/STRATEGY_FRAME.md": ["OpenClaw", "Muse", "D4Pocket", "QC", "QA"],
-  "docs/NON_GOALS.md": ["ClawHub", "BUILD_GAP", "PENDING_OWNER_GO"],
+  "docs/NON_GOALS.md": ["ClawHub", "BUILD_GAP", "PENDING_OWNER_GO", "Android", "iOS"],
   "docs/OPENCLAW_REJECTION_AUDIT.md": ["ClawHub", "BUILD_GAP", "QC"],
-  "docs/INDEX.md": ["D4Pocket", "QE", "P13"],
+  "docs/INDEX.md": ["D4Pocket", "QE", "P13", "PLATFORM_TARGETS_QE.md", "BACKUP_REF_MIGRATION.md"],
+  "docs/PLATFORM_TARGETS_QE.md": ["Windows", "Linux", "macOS", "Android", "iOS", "Device Link", "QE_QC", "QE_QA"],
+  "docs/BACKUP_REF_MIGRATION.md": ["refs/heads/codex/backup-main", "refs/tags/codex/backup-main", "PENDING_BACKUP_REF_MIGRATION", "force-with-lease"],
   "CLAIM.md": ["D4Pocket", "v1.0 RC"],
 };
 for (const [rel, tokens] of Object.entries(qeGovernanceRequired)) {

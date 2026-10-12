@@ -16,6 +16,10 @@
 - ClawHub marketplaceの無審査直接実行は禁止。ただし認証、隔離、権限、監査を満たす安全な互換Adapterや相当機能まで永久に排除しない。
 - Voice/mobile、signed native installer、公開第三者Skill registry等、旧RCに非搭載の能力は現状非搭載として記録する。新AGIの全体能力検討からは消さない。
 
+## 5OSの新AGI製品目標
+
+Windows、Linux、macOS、Android、iOSを最終対応対象とする。旧RCで未搭載のAndroid/iOSは新AGIの実装要求であり、永久的non-goalではない。Androidの成功をiOSの完成判定へ転用しない。Mobileクライアント接続と端末単独でのAGI実行を区別し、後者を実装済みとは主張しない。
+
 ## QE工程と公開
 
 QE_BUILDは全体設計を実装し、BUILD_COVERED後にQE_QCで実物を検査・改善し、QE_QAで対象別にQA_SCOPED／QA_NOT_ESTABLISHEDを判断する。危険な未接続作用を有効化せず、最低限の安全拒否・停止確認をBUILD中に保つ。

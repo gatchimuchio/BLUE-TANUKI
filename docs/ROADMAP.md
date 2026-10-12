@@ -1,6 +1,6 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
-2026-10-12。内部QE rev2.0三点正本を設計・要求・192施工単位の根拠とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
+2026-10-12。内部QE rev2.2三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
 ## 現行のQE工程
 
@@ -14,7 +14,7 @@
 | QE_QA | QC証拠から対象別・OS別・版別保証 | 未着手 |
 | QE_RELEASE_REVIEW | ownerによる独立公開・出荷判断 | 未着手 |
 
-192小単位は実装索引であって192件のQC/QAではない。小単位ごとに指示書とAGENTSを再読し、実際の仕事を先へつなぐBUILD_BATCHで施工・限定技術確認・Git保全を行う。
+192小単位は実装索引であって198件のQC/QAではない。小単位ごとに指示書とAGENTSを再読し、実際の仕事を先へつなぐBUILD_BATCHで施工・限定技術確認・Git保全を行う。
 
 ## 公開可能なBUILD_BATCHの順序案
 
@@ -23,10 +23,19 @@
 3. QEB-02：複数step実行、結果帰還、再計画、復旧。
 4. QEB-03：D4Pocket汎用外殻とBLUEの認証済みAdapter／Broker接続。
 5. QEB-04：OpenClaw/Museの観測された能力群を安全に実装。
-6. QEB-05：ミニドラを交換計算Cとして接続。
-7. QEB-06：全能力のBUILD_GAPを照合してBUILD_COVEREDを判定。
+6. QEB-04M：Android（G09）とiOS（G10）をそれぞれ独立したnative製品入口として一気通貫で結合する。Device Link、端末の資格・OS権限、仕事の承認・観測・取消・切断復帰、更新・削除まで対象とし、詳細QCはBUILD_COVERED後へ置く。
+7. QEB-05：ミニドラを交換計算Cとして接続。
+8. QEB-06：全能力のBUILD_GAPを照合してBUILD_COVEREDを判定。
 
 この順序は完成の証拠や無制限な作業許可ではない。D4Pocket・ミニドラの別repo、実資格と業務作用は別の委任が必要。BUILD_COVERED後にQE_QCで実物を検査し原因を修正、QE_QAで対象別の保証を判定する。
+
+## 5OSの製品完成スコープ
+
+最終対応対象はWindows／Linux native／macOS／Android／iOS。Desktop三系統に加え、AndroidとiOSのnative製品入口を別々に実装し、両OSの実機QC／QAを独立して行う。F16の「モバイル入力媒体」はAndroid/iOSの製品完成を代替しない。詳細は[QE対応OS正本](PLATFORM_TARGETS_QE.md)。旧v1.0 RCのMobile非搭載は別の歴史的制限である。
+
+## D4Pocket方式へのバックアップ移行
+
+local二世代branch／remote二世代tagへ統一する。ただしBLUEのremoteには旧branchと古いtagの不一致が残り、現時点では**PENDING_BACKUP_REF_MIGRATION**。二tagのSHAを実保存・確認するまで旧remote branchを消さない。[復元ref移行手順](BACKUP_REF_MIGRATION.md)を参照。新AGIの製品QE_BUILD再開とは独立した規定修正である。
 
 ## 既存の局所実装・停止
 

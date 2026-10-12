@@ -1,5 +1,7 @@
 # BLUE-TANUKI 旧v1.0 RC製品ロードマップ v2.1（歴史・独立release境界）
 
+**最終5OS追補（2026-10-12）：** 新AGIの完成対象はWindows／Linux／macOS／Android／iOS。旧v1.0 RCに関する本書のDesktop三系統の完成基準と、当時のMobile未搭載は歴史上のrelease境界であり、新AGIの5OS完成目標を縮小しない。現行OS別要件はdocs/PLATFORM_TARGETS_QE.md。
+
 **現行QEとの関係（2026-10-12）：** 本書は旧v1.0 RC／P1–P13の実装と公開条件を記録したもの。新AGI全体系の実装順はAGENTS.mdとdocs/ROADMAP.mdのQE_BUILD→QE_QC→QE_QAに従う。以下の「実装done」「単一ロードマップ」「次のCodexタスク」は当時の旧RC文脈であり新AGI実装の再開や完成を意味しない。P13=PENDING_OWNER_GO、public_claim_allowed=false、実機・GA・release検査とowner GOは継続する。
 
 作成: 2026-06-11 / クロちゃん（独立監査役）

@@ -1,14 +1,16 @@
-# BLUE-TANUKI 現行実装指示：QE-GOV-SYNC
+# BLUE-TANUKI 現行実装指示：QE-GOV-SYNC（5OS／backup ref移行）
 
 ## 1. 目的
 
-AGENTS.mdのQE規律へ作業標準・工程・戦略・非対象・文書整合検査を同期する。今回は規定整合の限定taskであり、製品コードの新規開発ではない。
+AGENTS.mdのQE規律へ作業標準・工程・戦略・非対象・文書整合検査を同期する。今回はバックアップ方式のD4Pocket一致、5OSの設計・工程・文書gate統合という規定整合の限定taskであり、製品コードの新規開発ではない。
 
 ## 2. Phase境界
 
 D01.02は2026-10-10に局所実装・検証されmainへ反映した過去成果。ownerの製品開発停止を維持し、D01.03へ自動進行しない。C08.03の実LLM/provider試験は保留。別repo、実資格、実外部作用、公開、P13 Owner GOの権限は本規定同期から生まれない。
 
 ## 3. Scope
+
+今回の追加対象はAGENTS.md、docs/PLATFORM_TARGETS_QE.md、docs/BACKUP_REF_MIGRATION.md、docs/作業標準要領.md、docs/ROADMAP.md、docs/DEVELOPMENT_PRACTICE.md、docs/INDEX.md、scripts/check_docs.mjs、必要な日本語基底試験の整合である。
 
 AGENTS.md、docs/作業標準要領.md、docs/ROADMAP.md、docs/開発進捗.md、docs/STRATEGY_FRAME.md、docs/NON_GOALS.md、docs/DEVELOPMENT_PRACTICE.md、docs/OPENCLAW_REJECTION_AUDIT.md、docs/INDEX.md、関連する文書ゲートと旧v1 RCの公開境界。
 
@@ -29,6 +31,10 @@ QE_BUILD、BUILD_BATCH、QE_QC、QE_QA、D01.02、PENDING_OWNER_GO、D4Pocket、
 J/HDS判断とBrokerの現在Permissionは独立であり、Owner最終責任、Approval Gate、L3、hash-chain監査、Runtime Invariants、M非権限、fail-closedを保持する。D4Pocketは新AGIの予定外殻であり、旧RCの実導入証拠はない。
 
 ## 8. 実装要件
+
+バックアップ正規方式はD4Pocketと同じlocal二世代branch／remote二世代tagとする。現在BLUEはPENDING_BACKUP_REF_MIGRATIONであり、tag二本の実SHAが保存されてから旧remote branchを整理する。tag変更手段・権限がないときはref移行を完了扱いせず、既存branchを保護してCodexの認可済みGitへ移送する。
+
+最終対応対象はWindows、Linux、macOS、Android、iOS。AndroidはG09、iOSはG10として独立実装し、旧F16のモバイル入力媒体と分ける。旧v1.0 RCのMobile非搭載は現在の完成主張とは独立した制限である。内部QE rev2.2三点正本の実装索引は旧192＋6＝198単位。Public Gitへ非公開原典全文を投入しない。
 
 QE_DESIGN→QE_BUILD→SYSTEM_SHAPED→BUILD_COVERED→QE_QC→QE_QA→QE_RELEASE_REVIEWへ統一する。192小単位は実装索引であり、小単位の全体試験・QA・毎回Git保全を義務化しない。安全重要の拒否検査と既存保護は維持する。
 

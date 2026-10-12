@@ -10,7 +10,7 @@
 
 本リポジトリの品質体系は、ownerが定めたQE（品質工学）へ統一する。「QEが開発全体を包含し、完成した実物にQC（品質管理）を適用し、その証拠から個別対象のQA（品質保証）を判定する」という本プロジェクト固有の作用・包含関係を採用する。一般の品質規格や全組織で普遍的に成り立つ階層の主張ではない。
 
-**開発順：全体設計 → 一気通貫で全体実装 → システムの結合形状成立 → 実物へのQC（観測・全体検査・原因分析・改善・再検査） → 対象別QA → ownerの独立した公開・出荷判断。** 先に局所の品質保証を192回完成させて製品を組み上げる方式は採用しない。安全第一・品質第二を維持し、安全・承認・秘密・監査・停止の保護は実装中も常時有効にする。
+**開発順：全体設計 → 一気通貫で全体実装 → システムの結合形状成立 → 実物へのQC（観測・全体検査・原因分析・改善・再検査） → 対象別QA → ownerの独立した公開・出荷判断。** 先に局所の品質保証を198回完成させて製品を組み上げる方式は採用しない。安全第一・品質第二を維持し、安全・承認・秘密・監査・停止の保護は実装中も常時有効にする。
 
 ownerが指定した内部版「BLUE-TANUKI QE統合実装仕様書 rev2.0」「BLUE-TANUKI QE工程表 rev2.0」「BLUE-TANUKI Codex QE施工指示書 rev2.0」は、技術完成形・実装順・施工運転の三点正本である。ただし内部原典や全要求対応表はPublicリポジトリへ転載しない。作業時に内部正本へアクセスできなければ推測で補わず、現行repoの実物と公開可能な要求から作業可能範囲を確定し、欠落条件を明記する。
 
@@ -72,7 +72,7 @@ BLUE-TANUKIの目標は、目的を持つ仕事を計算・判断・作用・観
 
 毎タスクの開始、作業単位の切替、セッション・担当の交代時には、適用AGENTS.md、最新のowner指示、指定された指示書、今回の目的、実際のHEAD・差分・対象コードを**改めて読む**。小単位の切れ目は目的ドリフト防止と実装先の再同期のために作り、毎回QC／QAや全テスト、バックアップ回転を行うためには使わない。モデル内部状態が実際に消去されたとは主張せず、正本と現物から再構成する。
 
-192の小単位は実装漏れ防止の索引であり、工程の主成果は次consumerをつないだBUILD_BATCH単位の実経路である。各小単位はCODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYの状態と、次に実装すべきproducer・consumerを記録する。小単位の合格票、負例の全数追加、詳細品質保証を先行実装の障害物としない。
+198の小単位は実装漏れ防止の索引であり、工程の主成果は次consumerをつないだBUILD_BATCH単位の実経路である。各小単位はCODE_PRESENT／WIRED／BUILD_GAP／BLOCKED_AUTHORITYの状態と、次に実装すべきproducer・consumerを記録する。小単位の合格票、負例の全数追加、詳細品質保証を先行実装の障害物としない。
 
 作業開始時に対象・目的・到達状態・依存・現在許可された作用を記述し、関連コード、既存検査、契約・責任境界を確認する。関連しないrefactor、依存更新、独自wrapper、実装されないschema増殖、非必要な抽象化を禁止する。read-onlyの調査subagentは並列利用できるが、同一work blockの編集・Git操作・正本確定は単一writerへ集約する。他者の差分をreset、revert、clean、上書きで消さない。
 
@@ -278,6 +278,18 @@ Baileys、WAHA、WhatsApp Web automation、first-party WhatsApp Business API、T
 
 未完成・実験的・高リスク・第三者的機能は preview へ隔離し、conformance、permission、audit、Runtime Invariants、support level、failure mode が揃うまで昇格しない。
 
+### 最終対応OSの規定（5OS）
+
+BLUE-TANUKIの新AGI製品の完成対象は**Windows／Linux／macOS／Android／iOSの5OS**。Windows-firstは開発順序であって最終製品の対象を減らさない。対応済みという現状主張ではない。
+
+Windows、Linux native、macOSはそれぞれDesktopの導入・通常仕事・権限・復旧を実装する。WSL／WSLg／headlessの証拠をLinux nativeへ転用しない。AndroidとiOSは独立したMobile製品入口とし、native導入／初期設定、OS権限、秘密保管、認証済みDevice Link、仕事の開始・状態観測・Owner承認・取消・中断復帰、更新・削除を各OS別に成立させる。
+
+Mobileの招待・device credential等の秘密はnative境界に置き、Dart、platform-channelの戻り値、ログ、traceへ返さない。TLS以外への自動fallback、切断後の無断再送、Mobile UIがHDS-JまたはD4Pocket Brokerの権限を代行する経路を禁止する。D4Pocketの既存Mobile契約を参照し、別repo変更は限定委任に従う。
+
+「MobileクライアントがDesktop Brokerを経由して仕事を行う」ことと「Mobile端末単独でC/J/Mや実作用を稼働させる」ことは別能力。後者を本規定だけで実装済み・必要条件成立とは扱わない。
+
+従来F16のモバイル入出力だけではOS別製品の成立条件を満たさない。非公開QE rev2.2ではAndroid G09とiOS G10の各三単位を追加し、旧192単位と合わせて198単位とする。全体実装後にOS別QC、対象別QAを行い、AndroidとiOSの実機証拠を相互代用しない。旧1.0 RCのMobile非搭載の記録と新5OS開発目標を区別する。公開要約はdocs/PLATFORM_TARGETS_QE.md。
+
 ## 19. 競合比較・互換性と公開境界
 
 OpenClawとMuseは機能名の数ではなく、実際にできる仕事、接続の深さ、導入・回復・長期運転、統治・互換性を比べる対象とする。旧OpenClaw拒否監査は危険patternの反証材料として保持するが、今回の完全包含という製品目標を縮小するために使わない。既知の未包含を隠したり、安全保護を解除して包含済みと報告したりしない。
@@ -290,7 +302,7 @@ P13はPENDING_OWNER_GO、version 1.0.0-rc.1、public_claim_allowed=falseのま�
 
 現行工程の設計・順序・施工手順はownerが最新版と指定したQE仕様／工程表／指示書を正本とする。docs/IMPLEMENTATION_INSTRUCTIONS.mdは個別のactive task、docs/ROADMAP.mdは公開要約、docs/開発進捗.mdは観測済み履歴を持つ。これらに残る旧「毎小単位の詳細QA／full test／Git closure」は、本QE規律に反する工程方法として上書きし、規定同期作業へ記録する。安全条件・公開の保留は旧版でも維持する。
 
-工程状態はQE_DESIGN → QE_BUILD → SYSTEM_SHAPED → BUILD_COVERED → QE_QC → QE_QA → QE_RELEASE_REVIEW。QE_QCは全体実装形状の成立後であり、QE_QAは個別対象を限定してQCの証拠から判定する。192施工単位は分解・依存・再同期の索引であって192個のQAゲートではない。
+工程状態はQE_DESIGN → QE_BUILD → SYSTEM_SHAPED → BUILD_COVERED → QE_QC → QE_QA → QE_RELEASE_REVIEW。QE_QCは全体実装形状の成立後であり、QE_QAは個別対象を限定してQCの証拠から判定する。198施工単位は分解・依存・再同期の索引であって192個のQAゲートではない。
 
 BUILD_BATCHは小単位をいくつかまとめて、目的→C→J→Broker／Executor→結果→M→帰還の実際のproducer／consumerを前進させるまとまりとする。小単位ごとにAGENTS.mdと指示書、現物を再読する。接続済みか未接続かを記録して次へ進み、バッチ末に最低限の技術疎通とGit保全を行う。schema・型・mockだけを積み上げて完了扱いしない。
 
@@ -316,13 +328,15 @@ QE_BUILD中に必要なのは、構文・型・変更したproducer／consumer�
 
 バッチが前進させた実挙動、未接続の残差、次consumerを記録する。関連するcode・contract・必要なdocs／履歴をバッチ単位で整合させ、一小単位ごとの文書更新儀式・全体QC・品質保証を廃止する。無関係なrefactor、不要な抽象化、一時物は除去し、安全を壊す既知欠陥は即修正または遮断する。
 
-### 4. Git運用と復旧点
+### 4. Git運用と復旧点（D4Pocket方式）
 
-mainを唯一の開発正本とする。作業開始前にorigin/main、local HEAD、dirty state、他writerの差分を照合し、cleanで同期した状態から編集する。原則main一本、通常のfeature branch・PRなし。読取調査subagentは並列可、編集・Gitを行うwriterは一つ。明示許可された手動Actions検査だけ一時branchを許し、完了後に削除する。
+mainを唯一の開発正本とし、単一writerがBUILD_BATCHまたは統治改訂の編集前にorigin/main、ローカルHEAD、dirty差分と他writerを確認する。小単位の切替ごとにバックアップ世代を回さない。
 
-二世代のbackupはcodex/backup-mainとcodex/backup-main-prevの**remote branch（refs/heads）**に統一する。BUILD_BATCHまたは統治変更の編集前に、確認済みの現backup-mainをbackup-main-prevへ、現在のmainをbackup-mainへ、expected SHA／force-with-leaseで安全に保存する。小単位の切れ目ごとに回転させない。既存の同名remote tag（refs/tags）は履歴として保持し、無断更新・削除・現行backupとの混同を行わない。異なるrefを同じ名前だけで指定しない。
+**D4Pocketと統一する正規方式は、ローカル復旧用branch二本（refs/heads/codex/backup-main、refs/heads/codex/backup-main-prev）とGitHub上のPR-neutralなtag二本（refs/tags/codex/backup-main、refs/tags/codex/backup-main-prev）。** 現backup-mainをprevへ退避し、編集前mainをbackup-mainへ保存する。確認済みの旧remote tag SHAを期待値とするforce-with-leaseで二本を原子的にpushし、tag二本のremote SHAとmainを照合する。GitHub上の同名backup branchを正規世代として維持しない。
 
-変更を実行したバッチは、関係する技術確認の結果と未実施を記録し、限定commitをmainにpushし、remote HEAD、両backup branch、復旧点を照合する。バックアップ・Git closureに失敗したら「完了」と報告せず停止。secret、内部HDS資料、未公開QE全文、資格、実運転状態、debug一時物はstageしない。reset --hard／cleanによる既存作業の消去を禁止する。
+**現在の移行状態はPENDING_BACKUP_REF_MIGRATION。** BLUE-TANUKIには旧remote backup branch二本と古い同名tag二本があり、保存SHAは異なる。実際のtag移行を確認するまで既存remote backup branchを削除せず、暫定的な復元点として保護する。現在値・移行条件はdocs/BACKUP_REF_MIGRATION.mdを確認する。tag保存を証明してからのみ、旧remote backup branchを競合検出付きで整理する。異常・他writer更新・不足があれば変更を止め、完了宣言しない。
+
+BUILD_BATCH終了時に限定commitをmainへpushし、remote HEAD、バックアップrefs、作業ツリーと復元点を照合する。tag移行が未完なら次の製品QE_BUILD前に認可済みGit操作で移行を閉包する。タグ作成・移行・branch削除・mainのforce pushを、確認・権限なく実施しない。secret、内部HDS/QE原典、credential、実運転状態、debug一時物をGitに混ぜない。reset --hard／cleanで既存作業を消さない。
 
 ### 5. 旧規定との移行
 
@@ -334,9 +348,11 @@ mainを唯一の開発正本とする。作業開始前にorigin/main、local HE
 
 ### 7. Git closure
 
-旧文書のAGENTS.md#7-git-closureから参照される互換見出し。現行Git規則は本§21.4を正本とする。main一本、単一writer、意味あるBUILD_BATCH単位のcommit/push、編集前の二世代backup branch（refs/heads）、remote照合を採用する。旧remote backup tagを正本として再採用したり、毎小単位の回転を復活させたりしない。
+旧文書のAGENTS.md#7-git-closureから参照される互換見出し。現行Git規則は本§21.4を正本とし、D4Pocket方式のlocal二世代branch／remote二世代tagとする。旧remote backup branchはtag二本の移行・remote照合まで保全し、移行完了後だけ競合検出付きで整理する。毎小単位の世代回転は行わない。
 
 ## 22. 環境
+
+Windows-firstは開発・施工の優先順であり、5OSの最終製品対象を縮退させない。OS別の実装・QC／QAはdocs/PLATFORM_TARGETS_QE.mdを参照する。
 
 owner 指示により、通常の編集・ビルド・テスト・起動・Git 操作は Windows を標準とする。Windows で成立する開発に WSL を必須としない。WSL / native Linux は、Unix 実行属性を必要とする配布生成・検証など、Windows で成立しない作業の補助環境として使用する。再現手順は `docs/開発環境.md` を参照する。
 
