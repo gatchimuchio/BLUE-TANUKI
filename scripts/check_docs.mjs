@@ -134,6 +134,47 @@ if (!troubleshooting.includes("FIRST_RUN_CHECKLIST.md")) {
   failures.push("TROUBLESHOOTING.md does not reference FIRST_RUN_CHECKLIST.md");
 }
 
+// QE規定の現行文書間の構造的一致を確認する。
+// 文書整合だけを確認し、製品のQC/QAや実機成功は証明しない。
+const qeGovernanceRequired = {
+  "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/heads"],
+  "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/heads/codex/backup-main"],
+  "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["QE-GOV-SYNC", "製品開発停止", "PENDING_OWNER_GO"],
+  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "J4"],
+  "docs/DEVELOPMENT_PRACTICE.md": ["BUILD_BATCH", "refs/heads", "refs/tags"],
+  "docs/STRATEGY_FRAME.md": ["OpenClaw", "Muse", "D4Pocket", "QC", "QA"],
+  "docs/NON_GOALS.md": ["ClawHub", "BUILD_GAP", "PENDING_OWNER_GO"],
+  "docs/OPENCLAW_REJECTION_AUDIT.md": ["ClawHub", "BUILD_GAP", "QC"],
+  "docs/INDEX.md": ["D4Pocket", "QE", "P13"],
+  "CLAIM.md": ["D4Pocket", "v1.0 RC"],
+};
+for (const [rel, tokens] of Object.entries(qeGovernanceRequired)) {
+  const body = read(rel);
+  for (const token of tokens) {
+    if (!body.includes(token)) failures.push(`${rel}: QE現行正本の必須要素欠落: ${token}`);
+  }
+}
+const qeGovernanceForbidden = {
+  "docs/作業標準要領.md": ["一作業単位をmainへ一commit", "remote backup tag を正本"],
+  "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["D01.02だけを実施する", "検証後に二世代backup branchを回す"],
+  "docs/ROADMAP.md": ["一単位ずつ有限受入とGit完結を行う"],
+  "docs/DEVELOPMENT_PRACTICE.md": ["remote tag で二世代を保存する"],
+  "docs/NON_GOALS.md": ["- No ClawHub compatibility"],
+  "docs/STRATEGY_FRAME.md": [
+    "does not modify GUI Shell, depend on GUI Shell at runtime",
+    "does not mean set-theoretic inclusion of every OpenClaw feature",
+  ],
+  "docs/OPENCLAW_REJECTION_AUDIT.md": [
+    "the coverage target does not require implementing every OpenClaw feature",
+  ],
+};
+for (const [rel, patterns] of Object.entries(qeGovernanceForbidden)) {
+  const body = read(rel);
+  for (const pattern of patterns) {
+    if (body.includes(pattern)) failures.push(`${rel}: 廃止済みの現行施工・設計規則が残存: ${pattern}`);
+  }
+}
+
 const stalePatterns = [
   new RegExp(["runtime schedule creation", "is not enabled in v0\\.1"].join(" "), "i"),
   new RegExp(["Runtime schedule creation", "remains outside v0\\.1"].join(" "), "i"),

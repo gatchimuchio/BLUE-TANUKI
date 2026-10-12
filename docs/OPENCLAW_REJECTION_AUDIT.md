@@ -1,5 +1,7 @@
 # OpenClaw Rejection Audit
 
+**Current scope (2026-10-12):** This historical audit rejects unsafe *implementation mechanisms*. The new BLUE-TANUKI AGI/QE capability inventory includes all observed OpenClaw/Muse capabilities. Rejection of a dangerous design must lead to a safer bounded equivalent, an explicit BUILD_GAP, or an independently authorized deferral, not silent removal of a user-facing capability. Detailed QC follows an integrated QE_BUILD; scoped QA and owner GO are separate.
+
 ## 1. Scope and Intent
 
 This document is an internal engineering audit for BLUE-TANUKI.
@@ -43,7 +45,7 @@ The rejection criteria are engineering criteria:
 - If a feature hides side effects from hash-chain audit, it is rejected.
 - If a feature cannot explain failure and recovery to the owner without source-code knowledge, it is incomplete.
 
-The BLUE-TANUKI answer is not "implement every OpenClaw feature." The answer is:
+The BLUE-TANUKI answer is not "copy every unsafe OpenClaw mechanism." The current engineering inventory still includes all observed user-facing capabilities; unsafe designs must be replaced or recorded as gaps. The safety rule is:
 
 ```md
 Preserve HDS authority safety first.
@@ -159,7 +161,7 @@ BLUE-TANUKI accepts extension only through:
 - preview quarantine
 - signed-third-party review in a later phase if needed
 
-ClawHub compatibility is therefore a non-goal.
+Unreviewed direct ClawHub code execution is a non-goal. A reviewed and capability-bounded equivalent adapter remains an engineering candidate; marketplace metadata never grants authority.
 
 ## 10. WhatsApp Ecosystem
 
@@ -225,8 +227,8 @@ The feature-coverage target dimension is governed by [STRATEGY_FRAME.md](STRATEG
 These dimensions coexist independently:
 
 - design posture rejection remains unchanged;
-- selected-scope complete superiority is a coverage target;
-- the coverage target does not require implementing every OpenClaw feature;
+- selected-scope superiority is an older v1.0 RC claim boundary, not the current AGI-wide capability inventory;
+- the current inventory includes every observed capability as wired, explicit BUILD_GAP, or individually justified owner deferral;
 - the coverage target never weakens HDS authority, Approval Gate, audit, Runtime Invariants, or preview quarantine.
 
-OpenClaw remains rejected as a starting posture even when BLUE-TANUKI targets superiority inside the selected functional scope.
+Unsafe OpenClaw implementation postures remain rejected; the current AGI capability inclusion target must not weaken HDS authority, Approval Gate, audit, Runtime Invariants or preview quarantine. No superiority claim is established without system QC, scoped QA and owner GO.

@@ -12,6 +12,8 @@ BLUE-TANUKI = HDS-BRAIN, Approval Gate, audit, GUI, runtime, packaging
 
 Do not place OpenRouter and Composio in the same authority layer.
 
+**New AGI/QE architecture scope (2026-10-12):** D4Pocket is the planned external GUI/runtime/OS broker. J/HDS adoption and D4Pocket's actual environment Permission/owner approval are independent requirements for sensitive actions. No current v1.0 RC live D4Pocket integration is claimed. The target design does not itself authorize a change in D4Pocket's repository, credential storage, or OS effect surface.
+
 ## Native-First Integration Policy
 
 BLUE-TANUKI must not depend exclusively on convenience aggregation services.

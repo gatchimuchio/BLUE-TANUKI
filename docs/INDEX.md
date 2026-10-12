@@ -19,9 +19,9 @@
 - [局所例外台帳](../規定/局所例外台帳.json) — 不可避な多言語範囲
 - [移行台帳](../規定/移行台帳.json) — 未解消の非日本語資産
 - [Agent 規定](../AGENTS.md) — 実装・監査・Git・validation 規律
-- [作業標準要領](作業標準要領.md) — 有限受入条件、編集前バックアップ、実装・検証・報告、D4-POCKET からの採否
-- [Active Implementation Instructions](IMPLEMENTATION_INSTRUCTIONS.md) — 現在の bounded phase
-- [Roadmap](ROADMAP.md) — J 系列と P13 の圧縮順序
+- [作業標準要領](作業標準要領.md) — QE_BUILDとBUILD_BATCH、QC/QA後段、backup branch正本
+- [Active Implementation Instructions](IMPLEMENTATION_INSTRUCTIONS.md) — QE-GOV-SYNCと製品実装停止
+- [Roadmap](ROADMAP.md) — QE全体工程と独立した旧J/P13境界
 
 ## 現行の開発記録
 
@@ -30,7 +30,7 @@
 - [目的・手段関係網](GOAL_RELATIONS.md) — 複数親、共有・共同寄与、未解決抵触のstrict契約、forest表示とcanonical復元
 - [目的の権限・版・適用時点](GOAL_GOVERNANCE.md) — 解釈訂正と目的変更event、digest結合authorization record、HDS decision/audit projectionと承認経路の限界
 - [境界交換契約](../packages/protocol/src/境界交換契約.ts) — 制限JSONの版付き境界とcanonical bytes。実行権限は持たない
-- [開発進捗](開発進捗.md) — 施工単位の有限成果、未達、検証・Git統合
+- [開発進捗](開発進捗.md) — QE移行と過去の局所成果・検証・Gitの履歴
 - [要求ID付き局所試験の実行](VALIDATE_AGI.md) — `validate:agi` の登録ID選択、実試験実行、失敗分類と証明範囲
 - [旧新切替と復元の判断記録](旧新切替と復元の判断記録.md) — B03.03の停止・切替・照合・戻し、非作用shadow、非公開差分、現物不足と後継
 - [実行分離と接続認証](実行分離と接続認証.md) — 実行分離、C01.02の局所境界契約、外殻接続の未実証と後継
@@ -44,8 +44,8 @@
 - [Windows の開発環境と WSL の配布検証](開発環境.md) — Windows を標準とする開発、固定版の準備、補助環境での配布検証、局所起動
 - [README](../README.md) — product surface、境界、local start
 - [Quickstart](../QUICKSTART.md) — 最短起動経路
-- [Strategy Frame](STRATEGY_FRAME.md) — Layer A/B と対照戦略
-- [Product Roadmap](PRODUCT_ROADMAP.md) — P1-P13 product roadmap
+- [Strategy Frame](STRATEGY_FRAME.md) — Layer A/B、競合能力包含、D4Pocket予定外殻
+- [Product Roadmap](PRODUCT_ROADMAP.md) — 旧v1.0 RCのP1–P13と独立したrelease境界
 - [Product Owner Decisions](product-owner-decisions.md) — D1-D8 と P13 判断台帳
 - [Responsibility Substrate Mapping](RESPONSIBILITY_SUBSTRATE_MAPPING.md) — GUI responsibility mapping
 - [Authority Model](BLUE_TANUKI_AUTHORITY_MODEL.md) — HDS-BRAIN と owner 境界

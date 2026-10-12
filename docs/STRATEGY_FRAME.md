@@ -1,10 +1,12 @@
 # BLUE-TANUKI Strategy Frame
 
-## 1. Purpose
+## 1. Purpose and Current Engineering Target
 
-This document binds the repository-level strategy that is otherwise spread across `AGENTS.md`, `docs/ROADMAP.md`, and `docs/OPENCLAW_REJECTION_AUDIT.md`.
+The current AGI/QE engineering target is BLUE-TANUKI as an integrated C/J/M system with an external action boundary and planned D4Pocket shell. The older v1.0 RC release remains a separately governed historical baseline, not the scope limit or active implementation scheduler for the new AGI architecture.
 
-It defines the Layer A / Layer B split, product experience direction, OpenClaw two-dimensional position, platform strategy, and strategic sequence for the v1.0 GA path.
+QE organizes design, continuous end-to-end implementation, system-wide QC on the resulting real product, scoped QA, and independent owner release approval. Existing safety and release restrictions remain effective.
+
+This document governs Layer A/B, the OpenClaw/Muse capability inventory, unsafe-mechanism rejection, D4Pocket integration responsibility, and historic v1.0 release separation.
 
 ## 2. Authority Layer Mapping
 
@@ -42,23 +44,15 @@ In BLUE-TANUKI, ease of use means:
 - resident app integration with the operating system
 - visible recovery and next action when something fails
 
-## 4. OpenClaw Position (Two-Dimensional)
+## 4. OpenClaw/Muse: Capability Inclusion and Mechanism Rejection
 
-BLUE-TANUKI keeps two independent OpenClaw dimensions separate.
+Dimension 1 is the engineering posture. BLUE-TANUKI rejects hidden authority, unsafe skill execution, approval bypass, audit evasion, and uncontrolled external actions. The underlying implementation mechanism must be rejected or adapted where unsafe.
 
-Dimension 1 is design posture. BLUE-TANUKI rejects OpenClaw-style breadth-first, agent-autonomy-first design. This posture does not change.
+Dimension 2 is the capability inventory. The target includes all observed OpenClaw and Muse user-facing functions and operational capabilities. Each item remains implemented and connected, an explicit BUILD_GAP, or a precisely justified owner-scoped deferral; the former selected-scope v1.0 RC strategy does not delete targets from the AGI engineering inventory.
 
-Dimension 2 is feature coverage. Inside the selected and safety-preserving scope, BLUE-TANUKI targets complete superiority over OpenClaw. This does not mean set-theoretic inclusion of every OpenClaw feature. It means complete superiority inside the deliberately selected scope.
+A reviewed Layer B adapter can safely implement a capability without making it Layer A. An unsafe marketplace runtime or unreviewed ClawHub code path stays disallowed, while an independently verified equivalent adapter is a candidate. WhatsApp first-party core remains outside the current v1.0 RC but the user-facing capability cannot silently disappear from the later AGI inventory.
 
-Selection criteria:
-
-- If a feature breaks safety, exclude it.
-- If a feature blurs containment, exclude it.
-- If a feature bypasses HDS authority, exclude it.
-- If a feature is a first-party killer experience, implement it in Layer A.
-- If a feature can safely remain replaceable, expose it through Layer B.
-
-Feature-set complete inclusion means implementing every visible feature. Selected-scope complete superiority means selecting only the features that fit BLUE-TANUKI's authority model and completing them to a higher reliability and usability bar.
+The number of channels, schemas, or test cases does not prove parity. QE_BUILD wires the actual capability, QE_QC measures it under comparable conditions, QE_QA states any warranted range, and owner GO is separate.
 
 ## 5. Platform Strategy
 
@@ -68,38 +62,25 @@ The rule is: if the platform boundary is opened later, it breaks later. Therefor
 
 This document declares that strategy. Detailed Layer B specification is handled by the Phase 11-S5 platform extension surface documents.
 
-## 6. GUI Shell Responsibility Substrate Strategy
+## 6. D4Pocket Runtime Shell and Responsibility Substrate
 
-GUI Shell is a reference implementation and LLM-readable responsibility substrate. BLUE-TANUKI does not modify GUI Shell, depend on GUI Shell at runtime, or outsource authority to GUI Shell.
+D4Pocket (the renamed GUI-Shell) is both a design/reference substrate and the planned external GUI/runtime/OS broker shell for the new AGI system. No production D4Pocket integration is claimed for the existing v1.0 RC.
 
-The BLUE-TANUKI development strategy is:
+HDS-BRAIN/J retains BLUE-TANUKI purpose and decision authority. D4Pocket keeps independent current OS/workspace Permission, actor and target identity, credential containment, bounded approval, single-use grants, action supervision and audit, behind authenticated adapters. J's decision cannot substitute for D4Pocket's Permission, nor does a D4Pocket UI request or broker record replace J's adoption decision.
 
-```txt
-GUI Shell responsibility structure
-  -> LLM implementation agent reads it
-  -> maps authority / approval / audit / recovery / evidence boundaries
-  -> implements bounded BLUE-TANUKI changes under HDS-BRAIN authority
-```
+D4Pocket is a generic shell and must not acquire BLUE-specific HDS policy. Do not create a direct Flutter/HTTP authority shortcut or a second approval path. Any modification to the D4Pocket repository requires a separately authorized bounded instruction, exact HEAD reconciliation, tests and a rollback point.
 
-This turns BLUE-TANUKI into the target product that demonstrates LLM-assisted extension under an explicit responsibility substrate. LLM agents may implement and validate bounded changes, but they remain non-authority. HDS-BRAIN owns BLUE-TANUKI internal authority, and the human owner retains final approval, recovery, release, and responsibility authority.
+This paragraph describes the target design only. Implementation, live/installed evidence, capability promotion and release are open until demonstrated by real producer/consumer paths.
 
-Primary mapping documents:
+Related references: [External tool boundary](EXTERNAL_TOOL_AUTHORITY_BOUNDARY.md), [D4 connection proposal](外殻接続変更案.md), [Authority Model](BLUE_TANUKI_AUTHORITY_MODEL.md), [Responsibility Mapping](RESPONSIBILITY_SUBSTRATE_MAPPING.md).
 
-- [LLM Extension Surface](LLM_EXTENSION_SURFACE.md)
-- [Responsibility Substrate Mapping](RESPONSIBILITY_SUBSTRATE_MAPPING.md)
-- [BLUE-TANUKI Authority Model](BLUE_TANUKI_AUTHORITY_MODEL.md)
-- [Conformance Targets](CONFORMANCE_TARGETS.md)
-- [GUI Product Spec](GUI_PRODUCT_SPEC.md)
+## 7. Strategic Sequence and v1.0 Release Separation
 
-## 7. Strategic Sequence
+The current engineering sequence is QE_DESIGN → QE_BUILD → SYSTEM_SHAPED → BUILD_COVERED → QE_QC → QE_QA → QE_RELEASE_REVIEW. The system is implemented end-to-end before broad quality control. A test count, local contract PASS, or isolated feature is not a completed system.
 
-Stage 1 - BLUE-TANUKI: proof that the owner can use LLMs completely as tools under HDS authority.
+The historic Stage 1 v1.0 RC, Stage 2 full-feature plan, and Stage 3 model replacement narrative remains a record of older scope and release choices, not the current AGI implementation scheduler.
 
-Stage 2 - full-feature version: show the reachable requirements for an AGI-class system.
-
-Stage 3 - self-contained AI without LLM dependency.
-
-BLUE-TANUKI v1.0 GA is the Stage 1 artifact. OSS release is how Stage 1 is shown. Publishing GA before the bar is met damages the trust base needed for Stage 2 and Stage 3.
+Current RC publication remains gated: 1.0.0-rc.1, P13 PENDING_OWNER_GO, public_claim_allowed=false. The new AGI build, MiniDora exchange, competitive superiority and legacy RC release are separate claims. None is inferred from the existence of the design or the QE methodology.
 
 ## 8. Non-Goals of This Document
 

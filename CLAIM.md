@@ -21,7 +21,7 @@ The core claim is:
 No black box in BLUE-TANUKI's HDS authority path.
 ```
 
-Development-method note: BLUE-TANUKI may use GUI Shell as a reference LLM-readable responsibility substrate for implementation strategy and GUI design. This is not a claim that GUI Shell is a production dependency, an authority source, or a BLUE-TANUKI runtime component.
+Development-scope note (2026-10-12): the currently released v1.0 RC does not claim a working D4Pocket (formerly GUI-Shell) runtime integration. Separately, the new AGI/QE engineering architecture plans D4Pocket as an authenticated GUI/runtime/OS broker shell. BLUE-TANUKI retains HDS decision authority, and D4Pocket retains independent current Permission and owner-bound approvals. A future integration plan is not evidence that this dependency exists in the current installed product.
 
 Meaning:
 

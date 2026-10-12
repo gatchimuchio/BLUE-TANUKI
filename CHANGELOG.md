@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-12 — QE品質体系と施工・競合・復元規定の同期
+
+- AGENTS.mdのQE方式を、作業標準、現行指示、工程表、歴史的進捗、戦略、非対象、旧v1.0 RCの公開境界へ統一した。全体実装先行、実物QC後段、個別QAとし、192小単位は施工索引、BUILD_BATCHを実装・復元単位とした。
+- D4Pocketは新AGIの予定外殻であり、現行旧RCへ実装済みと主張しない。OpenClaw/Museの全観測能力を要件母集団に残し、危険な実装方式は拒否する。ClawHubの無審査実行禁止・旧RC WhatsApp first-party非対象・HDS/Approval/L3/owner GOの保護は維持した。
+- 現行Gitバックアップはremote branchのrefs/heads/codex/backup-mainとrefs/heads/codex/backup-main-prevに統一し、同名tagは履歴として保持。旧D01.02のactive施工命令、毎単位の全test・局所QA・backup回転義務を現行規律から解消し、文書整合gateを追加した。
+- 製品コード・外部実作用・credential・別repoは変更していない。Ownerの製品開発停止とC08.03実provider保留、P13=PENDING_OWNER_GOとpublic_claim_allowed=falseを保持した。
+
 ## 2026-10-10 — 依存stepの具体化と準備未完の保持
 
 - D01.02として、明示した成功依存結果と新鮮な前提観測から対象・引数・検証・補償候補を具体化する純粋な準備検査を追加した。全descriptor効果を保持し、欠落・失敗・失効・未解決の対象/宛先は準備未完、graph・binding・型・descriptor不正は拒否する。

@@ -1,4 +1,6 @@
-# BLUE-TANUKI 製品完成ロードマップ v2.1（確定版・実装現状反映）
+# BLUE-TANUKI 旧v1.0 RC製品ロードマップ v2.1（歴史・独立release境界）
+
+**現行QEとの関係（2026-10-12）：** 本書は旧v1.0 RC／P1–P13の実装と公開条件を記録したもの。新AGI全体系の実装順はAGENTS.mdとdocs/ROADMAP.mdのQE_BUILD→QE_QC→QE_QAに従う。以下の「実装done」「単一ロードマップ」「次のCodexタスク」は当時の旧RC文脈であり新AGI実装の再開や完成を意味しない。P13=PENDING_OWNER_GO、public_claim_allowed=false、実機・GA・release検査とowner GOは継続する。
 
 作成: 2026-06-11 / クロちゃん（独立監査役）
 **決定記録: 2026-06-11、ご主人様がD1〜D7をクロちゃん推奨どおり承認・確定。本決定をもって2026-05-23のBLUE-TANUKI凍結を解除する（D1発効）。2026-06-23にD8としてGitHub Actions / CI廃止を追加。**
@@ -8,8 +10,8 @@
 
 ## 0. 文書の位置づけ
 
-- 本書は **製品完成スコープの単一ロードマップ** として、`docs/ROADMAP.md`（v9, Band A–F）の「製品完成」に関する記述を上書きする。
-- 実装指示の source of truth は引き続き `docs/IMPLEMENTATION_INSTRUCTIONS.md` + `AGENTS.md`。**本書採用後の最初のCodexタスクは、両文書へのP系列反映と `docs/ROADMAP.md` への置換宣言の追記**とする。
+- 本書は **旧v1.0 RCの製品完成スコープのロードマップ** として、`docs/ROADMAP.md`（v9, Band A–F）の「製品完成」に関する記述を上書きする。
+- 実装指示の source of truth は引き続き `docs/IMPLEMENTATION_INSTRUCTIONS.md` + `AGENTS.md`。**当時の本書採用後に予定された最初のCodexタスクは、両文書へのP系列反映と `docs/ROADMAP.md` への置換宣言の追記**とする。
 - 命名規則: 製品PhaseはP1〜P13。既存の Phase X-SY 系列・Band A–F とは衝突させない。各P-Phase内のCodex指示は従来通り機能塊単位（Phase Pn-S1, Pn-S2…）で起票する。
 - 開発運用は従来原則を維持: single-track（Codexセッションは直列。本書の「並列可」は依存関係上の着手順自由を意味し、同時並走を意味しない）、機能塊間でのみ監査を挟む。
 
