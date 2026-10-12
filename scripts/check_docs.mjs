@@ -142,7 +142,7 @@ const qeGovernanceRequired = {
   "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/tags/codex/backup-main", "Android", "iOS"],
   "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/tags/codex/backup-main", "Android", "iOS"],
   "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["QE-GOV-SYNC", "製品開発停止", "PENDING_OWNER_GO"],
-  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "J4", "Android", "iOS", "PENDING_BACKUP_REF_MIGRATION"],
+  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "J4", "Android", "iOS", "PENDING_BACKUP_REF_MIGRATION", "refs/tags/codex/backup-main"],
   "docs/DEVELOPMENT_PRACTICE.md": ["BUILD_BATCH", "refs/heads", "refs/tags/codex/backup-main"],
   "docs/STRATEGY_FRAME.md": ["OpenClaw", "Muse", "D4Pocket", "QC", "QA"],
   "docs/NON_GOALS.md": ["ClawHub", "BUILD_GAP", "PENDING_OWNER_GO", "Android", "iOS"],

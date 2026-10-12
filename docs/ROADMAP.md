@@ -35,7 +35,7 @@
 
 ## D4Pocket方式へのバックアップ移行
 
-local二世代branch／remote二世代tagへ統一する。ただしBLUEのremoteには旧branchと古いtagの不一致が残り、現時点では**PENDING_BACKUP_REF_MIGRATION**。二tagのSHAを実保存・確認するまで旧remote branchを消さない。[復元ref移行手順](BACKUP_REF_MIGRATION.md)を参照。新AGIの製品QE_BUILD再開とは独立した規定修正である。
+local二世代branch（refs/heads/codex/backup-main、refs/heads/codex/backup-main-prev）／remote二世代tag（refs/tags/codex/backup-main、refs/tags/codex/backup-main-prev）へ統一する。ただしBLUEのremoteには旧branchと古いtagの不一致が残り、現時点では**PENDING_BACKUP_REF_MIGRATION**。二tagのSHAを実保存・確認するまで旧remote branchを消さない。[復元ref移行手順](BACKUP_REF_MIGRATION.md)を参照。新AGIの製品QE_BUILD再開とは独立した規定修正である。
 
 ## 既存の局所実装・停止
 
