@@ -22,11 +22,12 @@
 - [QE対応OS正本](PLATFORM_TARGETS_QE.md) — Windows・Linux・macOS・Android・iOSの独立実装とOS別QC/QA
 - [Backup ref移行（MIGRATION_COMPLETE）](BACKUP_REF_MIGRATION.md) — local二世代branch／remote二世代tagへの移行結果と安全手順
 - [作業標準要領](作業標準要領.md) — QE_BUILDとBUILD_BATCH、QC/QA後段、移行完了済みのremote tag正本
-- [現行QE_BUILD指示](IMPLEMENTATION_INSTRUCTIONS.md) — 実Executor結果と監査・履歴consumerの接続、次のBUILD_GAP
+- [現行QE_BUILD指示](IMPLEMENTATION_INSTRUCTIONS.md) — 計画保持・明示step選択・実結果・改訂の接続、次のBUILD_GAP
 - [Roadmap](ROADMAP.md) — QE全体工程と独立した旧J/P13境界
 
 ## 現行の開発記録
 
+- [計画接続の操作](計画接続の操作.md) — Developer入口、内部対応、私有回復状態、明示step選択と未実行部分の改訂
 - [共通record境界](../packages/protocol/src/common_record.ts) — JSON境界parser、独立状態schema、fail-closed理由
 - [目的射影](GOAL_PROJECTION.md) — 原文digest参照、必要性・到達状態・評価・期間・権限のunknown保持とHDS監査経路
 - [目的・手段関係網](GOAL_RELATIONS.md) — 複数親、共有・共同寄与、未解決抵触のstrict契約、forest表示とcanonical復元

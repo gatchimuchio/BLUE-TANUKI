@@ -244,6 +244,28 @@ describe("built-in tools", () => {
     }
   });
 
+  it("通常file操作は私有runtime状態とそのalias・root指定を拒否する", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-private-state-"));
+    const privateDir = path.join(root, "private-state");
+    try {
+      await fs.mkdir(privateDir);
+      await fs.writeFile(path.join(privateDir, "j-state.sqlite"), "needle private runtime");
+      await fs.writeFile(path.join(root, "safe.txt"), "needle safe");
+      await fs.symlink(privateDir, path.join(root, "alias"), "junction");
+      for (const dir of ["private-state", "alias"]) {
+        await expect(invokeFileSearch({ root: dir, query: "needle" }, fileSearchEnv(root))).rejects.toThrow(/secret-like/);
+        await expect(invokeFileWrite({ path: `${dir}/j-state.sqlite`, content: "changed", mode: "overwrite" }, fileSearchEnv(root)))
+          .rejects.toThrow(/secret-like|private runtime/);
+      }
+      for (const sandbox of [privateDir, path.join(root, "alias")]) {
+        await expect(invokeFileSearch({ root: ".", query: "needle" }, fileSearchEnv(sandbox))).rejects.toThrow(/private runtime/);
+      }
+      const searched = await invokeFileSearch({ root: ".", query: "needle" }, fileSearchEnv(root)) as { matches: Array<{ path: string }> };
+      expect(searched.matches.map((match) => match.path)).toEqual(["safe.txt"]);
+      expect(await fs.readFile(path.join(privateDir, "j-state.sqlite"), "utf8")).toBe("needle private runtime");
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
   it("file.write fails closed for accidental overwrite, sandbox escape, and secret-like paths", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-tool-"));
     const sandbox = path.join(parent, "sandbox");

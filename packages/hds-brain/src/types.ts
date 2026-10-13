@@ -566,7 +566,9 @@ export type AuditRecord =
   | MemoryCitationReviewLog
   | RuntimeInvariantsLog
   | CommandLifecycleLog
-  | ScheduleLifecycleLog;
+  | ScheduleLifecycleLog
+  | { kind: "operation_plan"; event: string; request_id: string | null; command_id: string; projection_digest: string;
+      used_for_authority: false; timestamp: number };
 
 /**
  * Per-axis policy entry.
@@ -618,6 +620,7 @@ export interface SuspendedRequest {
   reason: string;
   fail_safe?: boolean;
   resume_allowed?: boolean;
+  resume_denied_reason?: string;
   self_health?: HDSBrainHealth;
 }
 

@@ -99,6 +99,7 @@ import {
   runDocumentOrganizationTask,
 } from "./document_organization_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
+import { OperationPlanStateStore } from "./operation_plan_store.js";
 import {
   commandOperation,
   commandHistoryDescriptor,
@@ -330,7 +331,9 @@ export async function serve(): Promise<ServeShutdown> {
   const llm = buildLLMBackendFromEnv();
 
   const runtimeSelfHealth = await probeGatewaySelfHealth(process.env);
+  const operationPlanState = OperationPlanStateStore.fromEnvironment();
   const hds = new HDSUpperController({
+    operation_plan_state: operationPlanState,
     audit: buildAuditLog(),
     memory: buildHDSMemoryStore(process.env),
     llm_route: buildLLMCommandRouteFromEnv(),
@@ -701,6 +704,10 @@ export async function serve(): Promise<ServeShutdown> {
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
     let executionEvaluation = opts.approval_evaluation ?? null;
+    if (!hds.operationPlanCommandIsCurrent(cmd)) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_binding_stale" });
+      return { status: "plan_binding_stale" };
+    }
     if (emergencyStop.active) {
       hds.onAuthorityEvent("emergency_stop_blocked", {
         request_id: log.request_id,
@@ -796,6 +803,10 @@ export async function serve(): Promise<ServeShutdown> {
           reason: failureMemoryRequiresApproval ? `failure_memory:${failureGate.reason}` : evaluation.reason,
         });
         const issued = await webchat.issueResumeApprovalToken(cmd.id);
+        if (!hds.operationPlanCommandIsCurrent(cmd)) {
+          hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_changed_while_issuing_token" });
+          return { status: "plan_binding_stale" };
+        }
         recordApprovalHistory("approval_pending", cmd, log, origin, actor, evaluation, {
           failure_memory_required: failureMemoryRequiresApproval,
           failure_memory_reason: failureMemoryRequiresApproval ? failureGate.reason : undefined,
@@ -860,6 +871,10 @@ export async function serve(): Promise<ServeShutdown> {
       final_review_required: executionEvaluation.final_review_required,
       reason: executionEvaluation.reason,
     });
+    if (!hds.beginOperationPlanAttempt(cmd)) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_attempt_not_admitted" });
+      return { status: "plan_binding_stale" };
+    }
     const fb = await executor.execute(approvedCommand);
     if (isComposioExecuteCommand(cmd)) {
       hds.onAuthorityEvent(
@@ -922,9 +937,19 @@ export async function serve(): Promise<ServeShutdown> {
 
   async function resumePendingApproval(command_id: string, verdict: "approve" | "reject" | "block", ctx: WebChatResumeContext): Promise<unknown> {
     const pending = pendingApprovals.get(command_id);
-    if (!pending) return null;
+    if (!pending) return hds.isOperationPlanCommand(command_id) ? { executed: false, status: "plan_binding_stale" } : null;
+    if (!hds.operationPlanCommandIsCurrent(pending.command)) {
+      pendingApprovals.delete(command_id);
+      hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "plan_binding_stale" });
+      return { executed: false, status: "plan_binding_stale" };
+    }
     if (verdict === "approve" && emergencyStop.active) {
       const issued = await webchat.issueResumeApprovalToken(command_id);
+      if (!hds.operationPlanCommandIsCurrent(pending.command)) {
+        pendingApprovals.delete(command_id);
+        hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "plan_binding_stale" });
+        return { executed: false, status: "plan_binding_stale" };
+      }
       pendingApprovals.set(command_id, {
         ...pending,
         approval_token: issued?.token,
@@ -1240,6 +1265,10 @@ export async function serve(): Promise<ServeShutdown> {
   });
 
   function pendingApprovalSnapshot(): WebChatApprovalQueueItem[] {
+    for (const [id, p] of pendingApprovals) if (!hds.operationPlanCommandIsCurrent(p.command)) {
+      pendingApprovals.delete(id);
+      hds.onCommandLifecycle(id, "approval_cancelled", { reason: "plan_binding_stale" });
+    }
     return Array.from(pendingApprovals.values()).map((p) => ({
       command_id: p.command.id,
       request_id: p.log.request_id,
@@ -1834,6 +1863,7 @@ export async function serve(): Promise<ServeShutdown> {
       await router.stop();
       documentOrganizationCheckpointStore?.close();
       documentOrganizationCheckpointStore = null;
+      operationPlanState.close();
       auditLog.info("summary", {
         entries: hds.getAudit().size(),
         chain_valid: hds.getAudit().verify(),

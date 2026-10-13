@@ -19,6 +19,7 @@ const SECRET_DENY_COMPONENTS = new Set([
   "id_rsa",
   "secret",
   "secrets",
+  "private-state",
 ]);
 const SECRET_DENY_SUFFIXES = [".key", ".pem", ".p12", ".pfx"] as const;
 
@@ -43,7 +44,9 @@ export async function sandboxRootFromEnv(env: Env): Promise<string> {
     throw new Error("BLUE_TANUKI_FILE_ROOT is required for file.search");
   }
   const resolved = path.resolve(raw);
+  assertNotPrivateState(resolved);
   const real = await fs.realpath(resolved);
+  assertNotPrivateState(real);
   const stat = await fs.stat(real);
   if (!stat.isDirectory()) {
     throw new Error("BLUE_TANUKI_FILE_ROOT must be a directory");
@@ -88,6 +91,8 @@ export async function resolveSandboxFilePath(
 
   const parent = path.dirname(lexical);
   const realParent = await fs.realpath(parent);
+  assertNotPrivateState(realParent);
+  assertNotSecretLike(path.relative(sandboxRoot, realParent), displayPath(rel || "."));
   if (!pathInside(sandboxRoot, realParent)) {
     throw new Error("file path escapes BLUE_TANUKI_FILE_ROOT via symlink");
   }
@@ -105,6 +110,8 @@ export async function resolveSandboxFilePath(
   }
   if (existing) {
     const real = await fs.realpath(lexical);
+    assertNotPrivateState(real);
+    assertNotSecretLike(path.relative(sandboxRoot, real), displayPath(rel || "."));
     if (!pathInside(sandboxRoot, real)) {
       throw new Error("file path escapes BLUE_TANUKI_FILE_ROOT via symlink");
     }
@@ -131,6 +138,7 @@ export async function* walkFiles(
       continue;
     }
     const real = await fs.realpath(full);
+    if (isPrivateStatePath(real) || isSecretLikeRelativePath(path.relative(sandboxRoot, real))) continue;
     if (!pathInside(sandboxRoot, real)) {
       throw new Error(
         `file.search path escapes BLUE_TANUKI_FILE_ROOT via symlink: ${displayPath(rel)}`,
@@ -153,4 +161,11 @@ function assertNotSecretLike(rel: string, label: string): void {
   if (isSecretLikeRelativePath(rel)) {
     throw new Error(`file.search denied secret-like path: ${label}`);
   }
+}
+
+function isPrivateStatePath(filepath: string): boolean {
+  return filepath.replace(/\\/g, "/").split("/").some((part) => part.toLowerCase() === "private-state");
+}
+function assertNotPrivateState(filepath: string): void {
+  if (isPrivateStatePath(filepath)) throw new Error("file operation denied private runtime state");
 }

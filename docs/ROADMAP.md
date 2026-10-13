@@ -7,7 +7,7 @@
 | 工程 | 主な目的 | 状態 |
 |---|---|---|
 | QE_DESIGN | C/J/M、作用・記憶・外殻の全体設計 | 設計と現在コードの残差あり |
-| QE_BUILD | 一気通貫の全体系を先行実装 | 実Executor結果のproducerと監査・履歴consumerを接続中 |
+| QE_BUILD | 一気通貫の全体系を先行実装 | 計画保持・明示step選択・依存結果・未実行改訂を接続中 |
 | SYSTEM_SHAPED | 試験仕事が目的→結果→M→復帰まで通る | 全体成立未確認 |
 | BUILD_COVERED | 全機能群の結合形状を確認 | 未成立 |
 | QE_QC | 実物の全体検査・欠陥・原因・改善・再検査 | 未着手 |
@@ -39,7 +39,7 @@ local二世代branch（refs/heads/codex/backup-main、refs/heads/codex/backup-ma
 
 ## 既存の局所実装と現行接続
 
-C01～C08.02、D01.01～D01.02などは現行Gitに局所成果を持つが、AGI全体の完成、複数step完遂、D4Pocket実接続の証明ではない。現行の開発委任に従い、QEB-01で実結果を既存監査・履歴へ接続する。D01.03の旧plan保持、実commandとplan/stepの対応、未実行部分の再審査はBUILD_GAPとして次の接続対象に残す。C08.03実LLM/providerは保留。
+C01～C08.02、D01.01～D01.02などは現行Gitに局所成果を持つが、AGI全体の完成、D4Pocket実接続の証明ではない。QEB-01-RESULTSで実結果を既存監査・履歴へ接続し、QEB-01-PLANSで旧plan保持、内部command-step対応、明示step選択、検証済み依存結果、未実行部分の再審査を接続する。現在のtarget resolverはfile.searchのdirectoryだけ。自動目的採否、汎用Broker内容結合、外部postcondition照合、独立停止・取消はBUILD_GAP。操作は[計画接続の操作](計画接続の操作.md)を参照する。C08.03実LLM/providerは保留。
 
 ## 旧RCのP13と日本語基底J系列
 

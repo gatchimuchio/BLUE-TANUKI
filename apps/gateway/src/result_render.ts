@@ -34,6 +34,9 @@ export function renderCommandOutput(
         maxChars,
       );
     case "noop": {
+      if (cmd.payload.control_event === "plan_revision_committed") {
+        return truncate("計画の未実行部分を改訂しました。変更部分は新しいstep選択と現在の承認条件を確認してください。", maxChars);
+      }
       const reason = readReason(cmd.payload);
       return truncate(reason ? `[noop] ${reason}` : "[noop]", maxChars);
     }

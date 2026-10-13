@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-13 — 計画保持・実結果の依存入力・未実行改訂
+
+- QEB-01-PLANSとして、既知C commandの未実行候補をHDSに保持し、Developerの明示step選択から現在のHDS・Approval・Executorを通す経路を接続した。実file.searchの検証済み結果を依存入力へ具体化し、影響する未実行commandだけを改訂で失効する。旧版と試行済み結果を保持する。
+- 開始意思の私有SQLite CAS保存、実行直前のcommand全体照合と固定、再起動時の旧承認失効・結果不明の再実行防止、通常file操作からのprivate-state保護を追加した。provider IDは射影でdigest handleにし、計画controlのSUSPENDをresumeで迂回させない。
+- 合成Cと実file.searchを使う開発専用HTTP smoke、限定試験、操作文書を追加した。自動目的採否・汎用target/Broker・外部postcondition・全OS・QC/QAは未成立。C08.03実provider、別repo、P13公開判断の保留は維持する。
+
 ## 2026-10-12 — QE-GOV-SYNC閉鎖とbackup ref移行完了
 
 - local recovery branch二本とremote backup tag二本を同じ二世代へ揃えた。remote tagのSHAを照合してから旧remote backup branch二本を整理し、完了時のSHAと手順をdocs/BACKUP_REF_MIGRATION.mdに記録した。

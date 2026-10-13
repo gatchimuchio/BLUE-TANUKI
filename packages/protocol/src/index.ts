@@ -4,6 +4,7 @@ export * from "./manifest.js";
 export * from "./operation_core.js";
 export * from "./operation_catalog.js";
 export * from "./operation_preparation.js";
+export * from "./operation_plan_state.js";
 export * from "./product_scope_contract.js";
 export * from "./common_record.js";
 export * from "./goal_projection.js";

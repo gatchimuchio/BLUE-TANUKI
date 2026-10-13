@@ -19,7 +19,11 @@ import {
   SkepticalReviewRequestSchema,
   LLMFallbackAuthorizationSchema,
   inspectOperationCommandExecutionResult,
+  OperationPlanControlSchema,
+  type OperationPlanControl,
+  getOperationDescriptor,
 } from "@blue-tanuki/protocol";
+import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort } from "./operation_plan.js";
 import type {
   ApprovalGateLog,
   AuthorityEventLog,
@@ -54,6 +58,7 @@ import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy }
 import { assessCandidateGoalCriteria } from "./candidate_criteria.js";
 import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
 import { routeAction } from "./action_router.js";
+import { resolveActor } from "./process.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
 import {
   buildProjectionOutputAuditLog,
@@ -124,6 +129,7 @@ export interface HDSRuntimeSnapshot {
   memory: { configured: boolean; entries?: number; chain_valid?: boolean };
   invariants: RuntimeInvariantValues;
   runtime_invariants: RuntimeInvariantEvidenceReport;
+  operation_plans: ReturnType<OperationPlanLedger["projection"]>;
 }
 
 /**
@@ -151,6 +157,7 @@ export interface ControllerOptions {
   goal_relation_graph?: unknown;
   /** Trusted HDS construction input; exact event-to-authorization digests are checked at creation. */
   goal_governance?: GoalGovernanceConfig;
+  operation_plan_state?: OperationPlanStatePort;
 }
 
 export interface LLMCommandRoute {
@@ -198,6 +205,8 @@ export class HDSUpperController {
   private readonly self_health: ControllerSelfHealthOptions;
   private readonly goal_relation_tree?: ReadonlyGoalRelationTreeView;
   private readonly goal_governance?: GoalGovernanceLedger;
+  private readonly operationPlans: OperationPlanLedger;
+  private readonly issuedLLM = new Map<string, { command: ExecuteCommand; origin: InboundRequest }>();
 
   /** Commands awaiting executor feedback (already ASSERTed). */
   private readonly inflight = new Map<string, DecisionLog>();
@@ -209,6 +218,7 @@ export class HDSUpperController {
   private readonly suspendedRequests = new Map<string, InboundRequest>();
 
   constructor(opts: ControllerOptions = {}) {
+    this.operationPlans = new OperationPlanLedger(opts.operation_plan_state);
     this.policy = opts.policy ?? DEFAULT_POLICY;
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
@@ -322,7 +332,37 @@ export class HDSUpperController {
       this.suspendedRequests.set(fallbackReq.id, fallbackReq);
       return { log, command: null };
     }
-    const req = boundary.request;
+    let req = boundary.request;
+    let planControl: OperationPlanControl | undefined;
+    let planControlFailure: string | undefined;
+    const controlCaller = req;
+    const planPrefix = /^plan:([^\s]+)(?:\s+([\s\S]*))?$/i.exec(req.content.trim());
+    if (planPrefix && planPrefix[1] !== "compute") {
+      try {
+        if (!isGatewayInternalInboundRequest(req) || req.metadata?.["blue_tanuki.operator_surface"] !== "developer" ||
+            !["owner", "user"].includes(resolveActor(req).actor_kind)) {
+          throw new Error("plan_control_requires_internal_developer");
+        }
+        planControl = OperationPlanControlSchema.parse({ ...JSON.parse(planPrefix[2] ?? "{}"), action: planPrefix[1] });
+        const selection = this.operationPlans.inspectControl(planControl, req);
+        if (selection.step) {
+          const descriptor = getOperationDescriptor(selection.step.operation)!;
+          req = createGatewayInternalInboundRequest({ ...req,
+            content: `${selection.goal}\n今回選択した作用候補: ${JSON.stringify({ operation: descriptor.operation_id, target: selection.step.target, parameters: selection.step.parameters })}`,
+            metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1",
+              "blue_tanuki.tool_call": { tool_name: descriptor.tool_name!, arguments: selection.step.parameters! } },
+          });
+        }
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "";
+        planControlFailure = ["plan_control_requires_internal_developer", "plan_owner_or_identity_mismatch",
+          "plan_revision_changed", "plan_step_identity_mismatch", "plan_step_already_selected_or_attempted", "plan_step_not_ready",
+          "plan_target_resolver_not_connected", "plan_revision_identity_changed", "plan_revision_unchanged",
+          "plan_attempted_step_or_dependency_changed"].includes(reason) ? reason : "plan_control_rejected";
+      }
+    } else if (/^plan:/i.test(req.content.trim()) && !planPrefix) {
+      planControlFailure = "plan_control_invalid";
+    }
     const suppressTransientDocumentOrganizationContext = options.transient_content === "document_organization" && req.content.startsWith(DOCUMENT_ORGANIZATION_PROMPT_PREFIX);
     const input = normalizeForDetection(req.content);
     const authorityReq = requestWithNormalizedContent(req, input.normalized_content);
@@ -397,7 +437,9 @@ export class HDSUpperController {
     const m = model(authorityReq, f, this.policy, this.detectors);
 
     const processViolation = processAuthorityViolation(f);
-    let c = processViolation
+    let c = planControlFailure
+      ? securityCommit("plan_control_denied", planControlFailure, { request_id: req.id })
+      : processViolation
       ? securityCommit("process_authority_denied", processViolation, {
           request_id: req.id,
           actor: f.actor,
@@ -438,6 +480,18 @@ export class HDSUpperController {
       }
     }
 
+    if (command && planControl) {
+      try {
+        if (planControl.action === "review") this.operationPlans.bind(planControl, controlCaller, command);
+        else {
+          const invalidated = this.operationPlans.revise(planControl, controlCaller);
+          for (const id of invalidated) this.onCommandLifecycle(id, "approval_cancelled", { reason: "plan_revision_invalidated" });
+        }
+      } catch {
+        c = securityCommit("plan_control_denied", "plan_state_or_command_binding_failed", { request_id: req.id });
+        log = { ...log, commit: c }; command = null;
+      }
+    }
     this.audit.append(log);
     if (!suppressTransientDocumentOrganizationContext) this.captureMemoryReference(log);
 
@@ -448,6 +502,10 @@ export class HDSUpperController {
         }
         this.state = "DECIDED";
         this.inflight.set(command.id, log);
+        if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
+            req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
+          this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req) });
+        }
         return { log, command };
       }
       case "SUSPEND": {
@@ -457,6 +515,7 @@ export class HDSUpperController {
           log,
           suspended_at: Date.now(),
           reason: c.reason,
+          ...(planControl ? { resume_allowed: false, resume_denied_reason: "plan_control_requires_fresh_review" } : {}),
         });
         this.suspendedRequests.set(req.id, authorityReq);
         return { log, command: null };
@@ -503,7 +562,7 @@ export class HDSUpperController {
       const token_kind = opts.token_kind ?? "resume";
       const reason =
         susp.resume_allowed === false
-          ? `human_resume_denied:fail_safe (was SUSPEND: ${susp.reason})`
+          ? `human_resume_denied:${susp.resume_denied_reason ?? "fail_safe"} (was SUSPEND: ${susp.reason})`
           : `human_resume_denied:self_health_fail_safe:${selfHealth.fail_safe_reason}`;
       const deniedHash = sha256({
         kind: "human_resume_denied",
@@ -531,7 +590,7 @@ export class HDSUpperController {
           hash: deniedHash,
           triggered_thresholds: [
             ...susp.log.commit.triggered_thresholds,
-            "human_resume_denied:fail_safe",
+            `human_resume_denied:${susp.resume_denied_reason ?? "fail_safe"}`,
             ...selfHealth.failed_preconditions.map((precondition) => `hds_fail_safe:${precondition}=false`),
           ],
         },
@@ -595,6 +654,10 @@ export class HDSUpperController {
     if (verdict === "approve") {
       const command = this.buildCommand(req, resumeLog);
       this.inflight.set(command.id, resumeLog);
+      if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
+          req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
+        this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req) });
+      }
       return { log: resumeLog, command, request: req };
     }
     return { log: resumeLog, command: null, request: req };
@@ -673,7 +736,11 @@ export class HDSUpperController {
       timestamp: Date.now(),
     };
     this.audit.append(lifecycleLog);
-    if (phase === "approval_rejected" || phase === "approval_cancelled") this.inflight.delete(command_id);
+    if (phase === "approval_rejected" || phase === "approval_cancelled") {
+      this.operationPlans.abandon(command_id);
+      this.issuedLLM.delete(command_id);
+      this.inflight.delete(command_id);
+    }
   }
 
   /** Record runtime schedule lifecycle without feeding it back into authority. */
@@ -821,9 +888,46 @@ export class HDSUpperController {
     };
     this.audit.append(feedbackLog);
 
+    const issued = this.issuedLLM.get(fb.command_id);
+    if (sourceLog && issued && issued.command.type === "llm_call" &&
+        issued.command.upstream_decision.commit_hash === sourceLog.commit.hash && fb.status === "success") {
+      const result = fb.result && typeof fb.result === "object" ? fb.result as Record<string, unknown> : undefined;
+      const planner = result?.operation_core && typeof result.operation_core === "object"
+        ? result.operation_core as Record<string, unknown> : undefined;
+      if (planner?.status === "valid_plan") {
+        try {
+          this.operationPlans.retainCandidate(planner.plan, issued.origin);
+          this.planEvent("candidate_retained", fb.command_id);
+        } catch {
+          this.planEvent("candidate_rejected", fb.command_id);
+        }
+      }
+    }
+    if (sourceLog && this.operationPlans.isBound(fb.command_id)) {
+      this.operationPlans.recordResult(fb);
+      this.planEvent("result_observed", fb.command_id);
+    }
+    this.issuedLLM.delete(fb.command_id);
+
     if (sourceLog) {
       this.inflight.delete(fb.command_id);
     }
+  }
+
+  operationPlanCommandIsCurrent(command: ExecuteCommand): boolean {
+    return this.operationPlans.canExecute(command);
+  }
+  isOperationPlanCommand(command_id: string): boolean { return this.operationPlans.isBound(command_id); }
+  beginOperationPlanAttempt(command: ExecuteCommand): boolean {
+    const known = this.inflight.get(command.id);
+    if (this.operationPlans.isBound(command.id) && (!known || known.commit.hash !== command.upstream_decision.commit_hash)) return false;
+    const allowed = this.operationPlans.beginAttempt(command);
+    if (allowed && this.operationPlans.isBound(command.id)) this.planEvent("intent_committed", command.id);
+    return allowed;
+  }
+  private planEvent(event: string, command_id: string): void {
+    this.audit.append({ kind: "operation_plan", event, request_id: this.inflight.get(command_id)?.request_id ?? null, command_id,
+      projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false, timestamp: Date.now() });
   }
 
   /** Record result/output release before a user-visible or external handoff. */
@@ -954,6 +1058,7 @@ export class HDSUpperController {
       },
       invariants: runtime_invariants.values,
       runtime_invariants,
+      operation_plans: this.operationPlans.projection(),
     };
   }
 
@@ -1000,6 +1105,10 @@ export class HDSUpperController {
       commit_decision: log.commit.decision,
       request_id: log.request_id,
     };
+
+    if (req.content.trim().startsWith("plan:revise")) {
+      return { id: randomUUID(), type: "noop", payload: { control_event: "plan_revision_committed" }, upstream_decision };
+    }
 
     // S7 action routing: explicit safe tool requests may become tool_call.
     // Unknown explicit tool requests become noop instead of being passed to
@@ -1057,6 +1166,9 @@ export class HDSUpperController {
     const llmPayload: LLMCallPayload = {
       messages: [
         ...memoryMessages,
+        ...(req.content.trim().startsWith("plan:compute") && isGatewayInternalInboundRequest(req) &&
+          req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? [{ role: "system" as const,
+          content: `OperationPlanの候補だけをoperation-core.v1のJSONで返してください。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。未実行を成功と申告しないこと。planner_output_used_for_authority=false、hds_brain_authority_required=true。raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。rollback.available=false。現在の実target resolverはfile.searchのdirectory targetと同一rootのみ。採用・承認・実行はこの計算の責務ではありません。` }] : []),
         { role: "user", content: req.content },
       ],
       ...(log.memory_retrieval_suppressed_for === "transient_document_organization"
