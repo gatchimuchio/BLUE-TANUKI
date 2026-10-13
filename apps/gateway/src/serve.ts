@@ -22,6 +22,8 @@ import {
   LLMComputeAdapter,
   ToolRegistry,
   createExecutorApprovalAuthority,
+  captureExecutorCommandForApproval,
+  executorCommandDigest,
   createLogger,
 } from "@blue-tanuki/core";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
@@ -147,6 +149,7 @@ const cronLog = createLogger({ scope: "cron" });
 
 interface PendingApproval {
   command: ExecuteCommand;
+  command_digest: string;
   log: DecisionLog;
   origin: InboundRequest;
   evaluation: ApprovalEvaluation;
@@ -700,7 +703,7 @@ export async function serve(): Promise<ServeShutdown> {
     cmd: ExecuteCommand,
     log: DecisionLog,
     origin: InboundRequest,
-    opts: { skip_approval?: boolean; actor?: string; approval_evaluation?: ApprovalEvaluation } = {},
+    opts: { skip_approval?: boolean; actor?: string; approval_evaluation?: ApprovalEvaluation; command_digest?: string } = {},
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
     let executionEvaluation = opts.approval_evaluation ?? null;
@@ -708,6 +711,14 @@ export async function serve(): Promise<ServeShutdown> {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_binding_stale" });
       return { status: "plan_binding_stale" };
     }
+    const reviewed = captureExecutorCommandForApproval(cmd);
+    const reviewedDigest = opts.command_digest ?? reviewed.command_digest;
+    if (reviewed.command_digest !== reviewedDigest) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "approval_content_changed" });
+      return { status: "approval_content_changed" };
+    }
+    // HDS発行objectのplan対応を維持し、承認/tokenのawait前に内容を固定する。
+    // 権限記録自体はprivateに保持する。
     if (emergencyStop.active) {
       hds.onAuthorityEvent("emergency_stop_blocked", {
         request_id: log.request_id,
@@ -815,6 +826,7 @@ export async function serve(): Promise<ServeShutdown> {
         });
         pendingApprovals.set(cmd.id, {
           command: cmd,
+          command_digest: reviewedDigest,
           log,
           origin,
           evaluation,
@@ -870,7 +882,7 @@ export async function serve(): Promise<ServeShutdown> {
       risk: executionEvaluation.risk,
       final_review_required: executionEvaluation.final_review_required,
       reason: executionEvaluation.reason,
-    });
+    }, reviewedDigest);
     if (!hds.beginOperationPlanAttempt(cmd)) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_attempt_not_admitted" });
       return { status: "plan_binding_stale" };
@@ -938,6 +950,11 @@ export async function serve(): Promise<ServeShutdown> {
   async function resumePendingApproval(command_id: string, verdict: "approve" | "reject" | "block", ctx: WebChatResumeContext): Promise<unknown> {
     const pending = pendingApprovals.get(command_id);
     if (!pending) return hds.isOperationPlanCommand(command_id) ? { executed: false, status: "plan_binding_stale" } : null;
+    if (executorCommandDigest(pending.command) !== pending.command_digest) {
+      pendingApprovals.delete(command_id);
+      hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "approval_content_changed" });
+      return { executed: false, status: "approval_content_changed" };
+    }
     if (!hds.operationPlanCommandIsCurrent(pending.command)) {
       pendingApprovals.delete(command_id);
       hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "plan_binding_stale" });
@@ -1026,6 +1043,7 @@ export async function serve(): Promise<ServeShutdown> {
       skip_approval: true,
       actor: ctx.actor,
       approval_evaluation: pending.evaluation,
+      command_digest: pending.command_digest,
     });
     return { approval: "approve", executed: true, status: r.status };
   }

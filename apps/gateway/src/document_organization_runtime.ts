@@ -13,6 +13,7 @@ import {
 } from "@blue-tanuki/hds-brain";
 import {
   Executor,
+  captureExecutorCommandForApproval,
   type ExecutorApprovalAuthority,
 } from "@blue-tanuki/core";
 import type { FailureMemoryStore } from "@blue-tanuki/hds-brain";
@@ -262,6 +263,7 @@ export async function runDocumentOrganizationTask(
       break;
     }
 
+    const reviewed = captureExecutorCommandForApproval(command);
     const evaluation = input.approval.evaluate(command, input.origin.user);
     input.hds.onApprovalEvaluation(evaluation, { request_id: log.request_id });
     if (evaluation.decision !== "allow") {
@@ -291,7 +293,7 @@ export async function runDocumentOrganizationTask(
       risk: evaluation.risk,
       final_review_required: evaluation.final_review_required,
       reason: evaluation.reason,
-    });
+    }, reviewed.command_digest);
     const feedback = await input.executor.execute(approvedCommand);
     lastFeedback = feedback;
     const reviewedFeedback = input.hds.reviewMemoryCitations(command, feedback);

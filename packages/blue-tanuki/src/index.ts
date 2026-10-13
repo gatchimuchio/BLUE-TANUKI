@@ -5,6 +5,8 @@ export * from "./operation_core.js";
 export {
   Executor,
   createExecutorApprovalAuthority,
+  executorCommandDigest,
+  captureExecutorCommandForApproval,
   type ApprovedCommand,
   type ExecutorApprovalAuthority,
   type ExecutorDeps,

@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import {
+  BOUNDARY_EXCHANGE_SCHEMA_VERSION,
+  BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
+  parseBoundaryExchangeAtBoundary,
+} from "@blue-tanuki/protocol";
 import type {
   ExecuteCommand,
   ExecuteFeedback,
@@ -115,23 +120,28 @@ export interface ExecutorApprovalProof {
 }
 
 interface ApprovedCommandRecord {
-  proof: ExecutorApprovalProof;
+  proof: Readonly<ExecutorApprovalProof>;
   authority_id: symbol;
+  command_digest: string;
+  consumed: boolean;
 }
+
+// 権限記録をreflection可能なpropertyや直列化commandへ載せない。
+const APPROVED_COMMAND_RECORDS = new WeakMap<ExecuteCommand, ApprovedCommandRecord>();
 
 export type ApprovedCommand = ExecuteCommand & {
   readonly [APPROVED_COMMAND_BRAND]: ApprovedCommandRecord;
 };
 
 export interface ExecutorApprovalAuthority {
-  approve(command: ExecuteCommand, proof: ExecutorApprovalProof): ApprovedCommand;
+  approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string): ApprovedCommand;
 }
 
 export function createExecutorApprovalAuthority(): ExecutorApprovalAuthority {
   const authorityId = Symbol("blue_tanuki.executor.approval_authority.instance");
   const authority = Object.freeze({
-    approve(command: ExecuteCommand, proof: ExecutorApprovalProof): ApprovedCommand {
-      return approveCommandForExecution(command, proof, authorityId);
+    approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string): ApprovedCommand {
+      return approveCommandForExecution(command, proof, authorityId, expected_command_digest);
     },
   });
   APPROVAL_AUTHORITY_IDS.set(authority, authorityId);
@@ -142,12 +152,14 @@ function approveCommandForExecution(
   command: ExecuteCommand,
   proof: ExecutorApprovalProof,
   authority_id: symbol,
+  expected_command_digest?: string,
 ): ApprovedCommand {
-  if (proof.upstream_commit_hash !== command.upstream_decision.commit_hash) {
+  const snapshot = approvalCommandSnapshot(command);
+  if (proof.upstream_commit_hash !== snapshot.upstream_decision.commit_hash) {
     throw new Error("approval proof commit hash does not match command upstream decision");
   }
-  if (command.upstream_decision.commit_decision !== "ASSERT") {
-    throw new Error(`approval proof cannot execute upstream decision ${command.upstream_decision.commit_decision}`);
+  if (snapshot.upstream_decision.commit_decision !== "ASSERT") {
+    throw new Error(`approval proof cannot execute upstream decision ${snapshot.upstream_decision.commit_decision}`);
   }
   if (!proof.approved_by.trim()) {
     throw new Error("approval proof approved_by is required");
@@ -155,14 +167,94 @@ function approveCommandForExecution(
   if (!Number.isFinite(proof.approved_at_ms) || proof.approved_at_ms <= 0) {
     throw new Error("approval proof approved_at_ms must be a positive timestamp");
   }
-  const approved = command as ApprovedCommand;
-  Object.defineProperty(approved, APPROVED_COMMAND_BRAND, {
-    value: { proof: { ...proof }, authority_id },
-    enumerable: false,
-    configurable: false,
-    writable: false,
+  const command_digest = executorCommandDigest(snapshot);
+  if (expected_command_digest !== undefined && expected_command_digest !== command_digest) {
+    throw new Error("Executor approval rejected: reviewed command content changed");
+  }
+  const approved = snapshot as ApprovedCommand;
+  APPROVED_COMMAND_RECORDS.set(approved, {
+    proof: Object.freeze({ ...proof }), authority_id, command_digest, consumed: false,
   });
+  freezeApprovalContent(approved);
   return approved;
+}
+
+/** 内容の同一性だけを示す。digestは発行者を認証せず、権限を付与しない。 */
+export function executorCommandDigest(command: ExecuteCommand): string {
+  const content = approvalCommandSnapshot(command);
+  const boundary = parseBoundaryExchangeAtBoundary(new TextEncoder().encode(JSON.stringify({
+    schema_version: BOUNDARY_EXCHANGE_SCHEMA_VERSION,
+    canonicalization_version: BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
+    issued_at_utc: "1970-01-01T00:00:00.000Z",
+    // 既存交換profileは整数tokenだけを許す。全値をJSON種別付きで表現し、
+    // 小数を正確に固定しつつ、似たobjectや文字列との衝突を防ぐ。
+    content: { profile: "executor-command-content.v1", command: approvalDigestValue(content) },
+  })));
+  if (!boundary.ok) throw new Error("Executor approval rejected: command content is not canonical JSON");
+  return createHash("sha256").update(boundary.canonical_bytes).digest("hex");
+}
+
+function approvalDigestValue(value: unknown): unknown {
+  if (value === null) return ["null"];
+  if (typeof value === "number") return ["number", JSON.stringify(value)];
+  if (typeof value === "string" || typeof value === "boolean") return [typeof value, value];
+  if (Array.isArray(value)) return ["array", value.map(approvalDigestValue)];
+  const fields = Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .map(([key, child]) => [key, approvalDigestValue(child)]));
+  return ["object", fields];
+}
+
+/** HDS発行objectの内部plan対応を維持しながら内容を固定する。 */
+export function captureExecutorCommandForApproval(command: ExecuteCommand): { command: ExecuteCommand; command_digest: string } {
+  const snapshot = approvalCommandSnapshot(command);
+  const command_digest = executorCommandDigest(snapshot);
+  freezeApprovalContent(command);
+  return Object.freeze({ command, command_digest });
+}
+
+function approvalCommandSnapshot(command: ExecuteCommand): ExecuteCommand {
+  // 直列化前にdescriptorを検査する。JSON.stringifyだけでは非JSON値を
+  // 黙って変更し、下流objectのgetterやtoJSONを呼び出してしまう。
+  const optionalUndefinedFields = new Set([
+    "constraints", "constraints.max_tokens", "constraints.timeout_ms", "constraints.allowed_tools", "constraints.allowed_capabilities",
+    "upstream_decision.request_id", "payload.backend_hint", "payload.model", "payload.temperature", "payload.compute_context", "payload.session_id",
+    "payload.compute_context.fallback_authorization",
+  ]);
+  const visit = (value: unknown, depth: number, path: string[] = []): unknown => {
+    if (depth > 64) throw new Error("Executor approval rejected: command content is not canonical JSON");
+    if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+    if (typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0) &&
+        (!Number.isInteger(value) || Number.isSafeInteger(value))) return value;
+    if (!value || typeof value !== "object" ||
+        (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) {
+      throw new Error("Executor approval rejected: command content is not canonical JSON");
+    }
+    if (Object.getOwnPropertySymbols(value).length) throw new Error("Executor approval rejected: command content is not canonical JSON");
+    if (Object.getOwnPropertyNames(value).some((key) => !(Array.isArray(value) && key === "length") && !Object.getOwnPropertyDescriptor(value, key)?.enumerable)) {
+      throw new Error("Executor approval rejected: command content is not canonical JSON");
+    }
+    if (Array.isArray(value) && Object.keys(value).some((key) => !/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length)) {
+      throw new Error("Executor approval rejected: command content is not canonical JSON");
+    }
+    const out: Record<string, unknown> | unknown[] = Array.isArray(value) ? [] : Object.create(null);
+    const keys = Array.isArray(value) ? Array.from({ length: value.length }, (_, index) => String(index)) : Object.keys(value);
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor)) throw new Error("Executor approval rejected: command content is not canonical JSON");
+      const nextPath = [...path, key];
+      if (descriptor.value === undefined && !Array.isArray(value) && !nextPath.some((part) => part.includes(".")) &&
+          optionalUndefinedFields.has(nextPath.join("."))) continue;
+      Object.defineProperty(out, key, { value: visit(descriptor.value, depth + 1, nextPath), enumerable: true, writable: true, configurable: true });
+    }
+    return out;
+  };
+  return visit(command, 0) as ExecuteCommand;
+}
+
+function freezeApprovalContent(value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  for (const child of Object.values(value)) freezeApprovalContent(child);
+  Object.freeze(value);
 }
 
 /**
@@ -529,6 +621,10 @@ export class Executor {
     if (record.authority_id !== authorityIdFor(this.deps.approval_authority)) {
       throw new Error("Executor rejected command: approval authority mismatch");
     }
+    if (record.consumed) throw new Error("Executor rejected command: approval already consumed");
+    if (record.command_digest !== executorCommandDigest(cmd)) {
+      throw new Error("Executor rejected command: approved command content changed");
+    }
     const { proof } = record;
     if (proof.upstream_commit_hash !== cmd.upstream_decision.commit_hash) {
       throw new Error("Executor rejected command: approval proof commit hash mismatch");
@@ -546,6 +642,9 @@ export class Executor {
         );
       }
     }
+    // adapter/historyのawait前に同期消費する。失敗でも承認を復活させず、
+    // 次の試行には新しい上流採否を必要とする。
+    record.consumed = true;
     return proof;
   }
 }
@@ -713,8 +812,7 @@ function attachOperationCoreTrace(
 }
 
 function approvalProofFromCommand(command: ExecuteCommand): ApprovedCommandRecord | null {
-  const proof = (command as { [APPROVED_COMMAND_BRAND]?: ApprovedCommandRecord })[APPROVED_COMMAND_BRAND];
-  return proof ?? null;
+  return APPROVED_COMMAND_RECORDS.get(command) ?? null;
 }
 
 function authorityIdFor(authority: ExecutorApprovalAuthority): symbol {

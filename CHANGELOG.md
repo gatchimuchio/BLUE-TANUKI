@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-13 — Approval受付からExecutorへの内容固定
+
+- HTTP・CLI・資料整理の既存consumerでcommandを受付時に深く固定し、制限JSON・JCSの内容digestをpending承認とExecutorへ結合した。承認後の引数・宛先・constraints差替えを防ぐ。
+- Executorのauthority/proofをprivate WeakMapへ移し、承認済みの固定copyだけを単回実行する。objectコピーやJSONからauthorityを復活させず、作用後の失敗でも同じ承認を再利用しない。既存L3と能力保護は保持する。
+- D02.01全体とD02.02のprocess認証・期限・永続ticket、独立Broker・実体resolverはBUILD_GAP。実provider・実業務・別repo・QC/QA・公開判断は未実施。
+
 ## 2026-10-13 — 計画保持・実結果の依存入力・未実行改訂
 
 - QEB-01-PLANSとして、既知C commandの未実行候補をHDSに保持し、Developerの明示step選択から現在のHDS・Approval・Executorを通す経路を接続した。実file.searchの検証済み結果を依存入力へ具体化し、影響する未実行commandだけを改訂で失効する。旧版と試行済み結果を保持する。

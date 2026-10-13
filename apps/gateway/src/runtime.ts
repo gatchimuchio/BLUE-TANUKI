@@ -14,6 +14,7 @@ import {
   MemorySessionStore,
   JsonFileSessionStore,
   createExecutorApprovalAuthority,
+  captureExecutorCommandForApproval,
   createLogger,
   type SessionStore,
 } from "@blue-tanuki/core";
@@ -320,6 +321,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     });
   }
 
+  const reviewed = captureExecutorCommandForApproval(command);
   const approvalEval = approval.evaluate(command, inbound.user);
   hds.onApprovalEvaluation(approvalEval, { request_id: inbound.id });
   if (approvalEval.decision !== "allow") {
@@ -344,7 +346,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     risk: approvalEval.risk,
     final_review_required: approvalEval.final_review_required,
     reason: approvalEval.reason,
-  });
+  }, reviewed.command_digest);
   const feedback = await executor.execute(approvedCommand);
   if (feedback.status === "failed") {
     for (const signature of extractFailureSignatures({ kind: "command_result", command, feedback })) {
