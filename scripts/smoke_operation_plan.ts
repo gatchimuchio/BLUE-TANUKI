@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { strict as assert } from "node:assert";
+import { createRequire } from "node:module";
 import type { OperationPlan, OperationStep } from "@blue-tanuki/protocol";
 import type { HDSUpperController } from "@blue-tanuki/hds-brain";
 
@@ -14,7 +15,11 @@ type Pending = { command_id: string; approval_token: string; approval_level: str
 type Snapshot = { hds: { operation_plans: PlanProjection }; pending_approvals: Pending[];
   execution_receipts: { used_for_authority: false; execution_eligible: false; records: Array<{
     ticket_digest: string; command_digest: string; execution_epoch_digest: string; state: string; invocation_boundary?: string;
-    worker_id_digest?: string; worker_pid?: number; worker_platform?: string; worker_exit_observed: boolean }> } };
+    worker_id_digest?: string; worker_pid?: number; worker_platform?: string; worker_exit_observed: boolean;
+    result_delivery_digest?: string; result_delivery_acknowledged?: boolean }> } };
+
+const recovery = process.argv.includes("--reconciliation");
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 const root = await mkdtemp(join(tmpdir(), "blue-plan-http-"));
 const workspace = join(root, "workspace");
@@ -106,7 +111,31 @@ try {
   await waitFor(async () => (await snapshot()).hds.operation_plans.plans.length === 1);
   let state = await snapshot(); const first = await select(state.hds.operation_plans.plans[0].steps[0]);
   assert.equal(first.approval_level, "L1_observe");
-  await approve(first);
+  if (recovery) {
+    // 開発専用の保存故障。実作用は一時Workspaceの検索だけ。製品への故障hookは追加しない。
+    const jPath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
+    const db = new DatabaseSync(jPath);
+    db.exec(`CREATE TRIGGER fixture_j_result_failure BEFORE UPDATE ON operation_plan_state
+      WHEN json_array_length(json_extract(NEW.checkpoint_json,'$.plans[0].results')) > 0
+      BEGIN SELECT RAISE(ABORT,'fixture J result persistence failure'); END;`);
+    db.close();
+    const response = await fetch(`${base}/resume`, { method: "POST",
+      headers: { authorization: `Bearer ${resumeToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ request_id: first.command_id, verdict: "approve", approval_token: first.approval_token }) });
+    assert.equal(response.status, 400);
+    assert.match((await response.json() as { error: string }).error, /fixture J result persistence failure/);
+    const before = (await snapshot()).execution_receipts.records.find((r) => r.invocation_boundary === "tool_adapter")!;
+    assert.equal(before.state, "adapter_returned"); assert.equal(before.result_delivery_acknowledged, false);
+    assert.equal((await snapshot()).hds.operation_plans.plans[0].steps[0].status, "intent_committed");
+    await stop();
+    const repair = new DatabaseSync(jPath); repair.exec("DROP TRIGGER fixture_j_result_failure"); repair.close();
+    await boot();
+    const recovered = (await snapshot()).execution_receipts.records.find((r) => r.ticket_digest === before.ticket_digest)!;
+    assert.equal(recovered.result_delivery_acknowledged, true);
+    assert.equal(recovered.worker_id_digest, before.worker_id_digest);
+    assert.equal(recovered.result_delivery_digest, before.result_delivery_digest);
+    assert.equal((await snapshot()).execution_receipts.records.filter((r) => r.invocation_boundary === "tool_adapter").length, 1);
+  } else await approve(first);
   await waitFor(async () => (await snapshot()).hds.operation_plans.plans[0].steps[0].status === "verified");
   state = await snapshot(); const stale = await select(state.hds.operation_plans.plans[0].steps[1]);
   const revised = structuredClone(candidate!); revised.steps[1]!.parameters!.max_results = 2;
@@ -126,6 +155,7 @@ try {
   assert.ok(actions.every((receipt) => receipt.worker_pid! > 0 && receipt.worker_pid !== child!.pid &&
     receipt.worker_platform === process.platform && receipt.worker_exit_observed && /^[0-9a-f]{64}$/.test(receipt.worker_id_digest ?? "")));
   assert.equal(new Set(actions.map((receipt) => receipt.worker_id_digest)).size, 2);
+  assert.ok(actions.every((receipt) => receipt.result_delivery_acknowledged === true && /^[0-9a-f]{64}$/.test(receipt.result_delivery_digest ?? "")));
   assert.ok(receipts.records.some((receipt) => receipt.invocation_boundary === "llm_adapter"));
   assert.ok(!JSON.stringify(receipts).includes(workspace)); assert.ok(!JSON.stringify(receipts).includes("fixture-owner"));
   await stop(); await boot(); state = await snapshot();
@@ -133,6 +163,6 @@ try {
   assert.equal(calls, 1);
   assert.deepEqual(state.execution_receipts.records, receipts.records);
   const denied = await fetch(`${base}/runtime/snapshot`); assert.equal(denied.status, 401);
-  console.log("PASS: loopback C → Developer HTTP → HDS → Approval Gate → durable intent → dedicated file.search process → worker receipt/exit → J dependent result; revision invalidation; digest-only receipt after restart");
+  console.log(`PASS: loopback C → Developer HTTP → HDS → Approval Gate → durable intent → dedicated file.search process → saved actual result → J dependent result; revision invalidation; digest-only receipt after restart${recovery ? "; actual Gateway restart reconciles lost J result without new worker/action" : ""}`);
 } catch (error) { console.error(diagnostics); throw error; }
 finally { await stop(); await new Promise<void>((resolve) => provider.close(() => resolve())); await rm(root, { recursive: true, force: true }); }

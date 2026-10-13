@@ -6,6 +6,7 @@ import {
   BOUNDARY_EXCHANGE_SCHEMA_VERSION,
   BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
   parseBoundaryExchangeAtBoundary,
+  inspectExecutionResultDelivery,
 } from "@blue-tanuki/protocol";
 import type {
   ExecuteCommand,
@@ -116,6 +117,8 @@ export interface ExecutorExecutionContext {
   signal?: AbortSignal;
   /** worker起動待ち後にもGatewayの現在停止条件を同期検査する。 */
   before_tool_dispatch?: () => void;
+  /** Gatewayの永続J bindingがある検索結果だけ、私有outboxへ渡す。 */
+  save_result_delivery?: boolean;
 }
 
 const APPROVED_COMMAND_BRAND: unique symbol = Symbol("blue_tanuki.executor.approved_command.v1");
@@ -410,10 +413,15 @@ export class Executor {
       try {
         record.runtime.store?.complete(record.ticket, {
           state: !invocation ? "not_attempted" : feedback.status === "success" ? "adapter_returned" : "outcome_unknown",
-          feedback_status: feedback.status, observed_at_ms: Date.now(),
+          feedback_status: feedback.status, observed_at_ms: feedback.operation_core_result?.observed_at_ms ?? Date.now(),
           output_digest: feedback.operation_core_result?.output_digest,
           error_digest: feedback.error ? createHash("sha256").update(feedback.error).digest("hex") : undefined,
-        });
+        }, context.save_result_delivery && cmd.type === "tool_call" && cmd.payload.tool_name === "file.search" && this.deps.file_search_worker && feedback.operation_core_result
+          ? inspectExecutionResultDelivery({ profile: "file-search-result-delivery.v1", admission: { ...record.ticket },
+            feedback: { command_id: feedback.command_id, status: feedback.status,
+              ...(feedback.result === undefined ? {} : { result: feedback.result }),
+              metrics: { duration_ms: feedback.metrics.duration_ms }, operation_core_result: feedback.operation_core_result } })
+          : undefined);
       } catch {
         // 保存失敗は成功へ変換しない。同じ承認の再作用も許可しない。
         feedback = attachOperationCoreTrace(cmd, { command_id: cmd.id, status: "failed",

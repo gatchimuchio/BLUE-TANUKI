@@ -1,3 +1,4 @@
+import type { ExecutionResultDelivery } from "@blue-tanuki/protocol";
 /** Executor所有の消費・開始意思。Jの採否や環境Permissionを代替しない。 */
 export interface ExecutionIntentTicket {
   ticket_id: string;
@@ -35,6 +36,8 @@ export interface ExecutionIntentReceipt extends ExecutionIntentTicket {
   worker_started_at_ms?: number;
   worker_exit_observed_at_ms?: number;
   used_for_authority: false;
+  result_delivery_digest?: string;
+  result_delivery_acknowledged?: boolean;
 }
 
 /** 同期port。consumeの保存失敗では下流を起動せず、消費を復活させない。 */
@@ -45,7 +48,8 @@ export interface ExecutionIntentStore {
   bindWorker?(ticket: Readonly<ExecutionIntentTicket>, worker: Readonly<ExecutionWorkerIdentity>, now_ms: number): void;
   observeWorkerExit?(ticket: Readonly<ExecutionIntentTicket>, worker: Readonly<ExecutionWorkerIdentity>, now_ms: number): void;
   complete(ticket: Readonly<ExecutionIntentTicket>, result: Pick<ExecutionIntentReceipt,
-    "state" | "feedback_status" | "output_digest" | "error_digest" | "observed_at_ms">): void;
+    "state" | "feedback_status" | "output_digest" | "error_digest" | "observed_at_ms">,
+    delivery?: ExecutionResultDelivery): void;
   lookup(ticket_id: string): ExecutionIntentReceipt | null;
 }
 

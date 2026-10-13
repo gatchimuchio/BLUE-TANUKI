@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { OperationPlanSchema, OperationJsonValueSchema, OperationTargetSchema, OperationStepSchema } from "./operation_core.js";
+import { ExecutionAdmissionSchema } from "./execution_result_delivery.js";
 
 const Id = z.string().min(1).max(200);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -20,6 +21,8 @@ export const OperationPlanCheckpointSchema = z.object({
       operation: Id,
       status: z.enum(["selected", "intent_committed", "verified", "outcome_unknown", "verification_failed", "not_attempted", "invalidated"]),
       result_digest: Digest.optional(),
+      execution_admission: ExecutionAdmissionSchema.optional(),
+      delivery_digest: Digest.optional(),
     }).strict()).max(1000),
     results: z.array(z.object({
       plan_id: Id, request_id: Id, step_id: Id, result_id: Id, operation: Id,

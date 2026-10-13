@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-13 — 保存実結果を再起動Jへ配送
+
+- 計画file.searchの実行前にticket・内容・epochをJへ結合し、実検索結果と元の観測をreceiptと同じ私有SQLite取引へ保存する。本文を公開snapshotへ出さない。
+- 再起動後は承認やinflightを復活させず、既存Jの結果検証とCASを通してから配送確認する。ack前中断の同結果再送、元観測時刻の鮮度、別内容拒否を接続した。
+- 独立D4 Permission・他作用の結果調停・常時配送・保存容量回収・結果のM帰還はBUILD_GAP。全体QC／QA、実provider、別repo、P13の保留は維持する。
+
 ## 2026-10-13 — 専用file.search processとworker受領の接続
 
 - Gatewayの組込みfile.searchを固定child・最小環境・専用IPCへ通し、全command内容とticket、実PID・worker世代・OSを結合した。応答の同一性・形状と実終了を確認して既存J結果検証へ返す。

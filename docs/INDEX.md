@@ -22,7 +22,7 @@
 - [QE対応OS正本](PLATFORM_TARGETS_QE.md) — Windows・Linux・macOS・Android・iOSの独立実装とOS別QC/QA
 - [Backup ref移行（MIGRATION_COMPLETE）](BACKUP_REF_MIGRATION.md) — local二世代branch／remote二世代tagへの移行結果と安全手順
 - [作業標準要領](作業標準要領.md) — QE_BUILDとBUILD_BATCH、QC/QA後段、移行完了済みのremote tag正本
-- [現行QE_BUILD指示](IMPLEMENTATION_INSTRUCTIONS.md) — 承認内容・永続実行・専用workerと実結果の接続、次のBUILD_GAP
+- [現行QE_BUILD指示](IMPLEMENTATION_INSTRUCTIONS.md) — 承認内容・永続実行・専用worker・保存結果の再起動J調停、次のBUILD_GAP
 - [Roadmap](ROADMAP.md) — QE全体工程と独立した旧J/P13境界
 
 ## 現行の開発記録

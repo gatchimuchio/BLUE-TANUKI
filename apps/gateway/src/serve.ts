@@ -28,6 +28,7 @@ import {
   type ExecutionIntentReceipt,
 } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
+import { executionAdmissionForCommand, reconcileExecutionResults } from "./reconcile_execution_results.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -438,6 +439,7 @@ export async function serve(): Promise<ServeShutdown> {
   let executor: Executor;
   const executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
   const executorApproval = createExecutorApprovalAuthority({ execution_store: executionStore });
+  gatewayLog.info("saved execution result reconciliation", reconcileExecutionResults(hds, executionStore));
   let webchat: WebChatChannel;
 
   function recordCompleteHistory(input: CompleteHistoryAppendInput): CompleteHistoryEntry | null {
@@ -898,7 +900,9 @@ export async function serve(): Promise<ServeShutdown> {
       final_review_required: executionEvaluation.final_review_required,
       reason: executionEvaluation.reason,
     }, reviewedDigest);
-    if (!hds.beginOperationPlanAttempt(cmd)) {
+    const planBound = hds.isOperationPlanCommand(cmd.id);
+    const admission = planBound ? executionAdmissionForCommand(cmd, executorApproval.receipt(approvedCommand)) : undefined;
+    if (!hds.beginOperationPlanAttempt(cmd, admission)) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_attempt_not_admitted" });
       return { status: "plan_binding_stale" };
     }
@@ -906,13 +910,15 @@ export async function serve(): Promise<ServeShutdown> {
     if (emergencyStop.active) executionController.abort();
     executionControllers.add(executionController);
     let fb: ExecuteFeedback;
-    const executionTask = executor.execute(approvedCommand, { signal: executionController.signal, before_tool_dispatch: () => {
+    const executionTask = executor.execute(approvedCommand, { save_result_delivery: planBound,
+      signal: executionController.signal, before_tool_dispatch: () => {
       if (emergencyStop.active) throw new Error("file_search_worker_emergency_stop_active");
     } });
     executionTasks.add(executionTask);
     try {
       fb = await executionTask;
     } finally { executionControllers.delete(executionController); executionTasks.delete(executionTask); }
+    if (planBound) gatewayLog.info("saved execution result reconciliation", reconcileExecutionResults(hds, executionStore));
     if (isComposioExecuteCommand(cmd)) {
       hds.onAuthorityEvent(
         fb.status === "success" ? "composio_execution_completed" : "composio_execution_failed",

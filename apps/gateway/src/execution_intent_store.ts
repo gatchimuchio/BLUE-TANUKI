@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, realpathSync, lstatSync } from "node:fs";
+import { mkdirSync, realpathSync, lstatSync, chmodSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary, ExecutionWorkerIdentity } from "@blue-tanuki/core";
 import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
-  parseBoundaryExchangeAtBoundary } from "@blue-tanuki/protocol";
+  parseBoundaryExchangeAtBoundary, inspectExecutionResultDelivery, inspectOperationCommandExecutionResult,
+  type ExecutionResultDelivery } from "@blue-tanuki/protocol";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -19,6 +20,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
   constructor(filepath: string) {
     mkdirSync(dirname(resolve(filepath)), { recursive: true });
     this.db = new DatabaseSync(filepath);
+    if (process.platform !== "win32") chmodSync(filepath, 0o600);
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA");
     this.db.exec(`CREATE TABLE IF NOT EXISTS execution_intents (
       ticket_id TEXT PRIMARY KEY, command_key TEXT NOT NULL UNIQUE, receipt_json TEXT NOT NULL, receipt_digest TEXT NOT NULL
@@ -26,6 +28,10 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     CREATE TABLE IF NOT EXISTS execution_events (
       sequence INTEGER PRIMARY KEY, ticket_id TEXT NOT NULL, event_json TEXT NOT NULL,
       previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS execution_result_outbox (
+      ticket_id TEXT PRIMARY KEY REFERENCES execution_intents(ticket_id),
+      delivery_json TEXT NOT NULL, delivery_digest TEXT NOT NULL
     ) STRICT;`);
     // 別processのcommitとevents/receipt読取が交差しない一貫した境界で確認する。
     try { this.transaction(() => {}); }
@@ -39,6 +45,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     for (const dir of [privateRoot, directory]) {
       mkdirSync(dir, { recursive: true });
       if (lstatSync(dir).isSymbolicLink()) throw new Error("execution_state_directory_must_not_be_symlink");
+      if (process.platform !== "win32") chmodSync(dir, 0o700);
     }
     const filepath = join(directory, "executor.sqlite");
     try {
@@ -97,7 +104,8 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     });
   }
   complete(ticket: Readonly<ExecutionIntentTicket>, result: Pick<ExecutionIntentReceipt,
-    "state" | "feedback_status" | "output_digest" | "error_digest" | "observed_at_ms">): void {
+    "state" | "feedback_status" | "output_digest" | "error_digest" | "observed_at_ms">,
+    delivery?: ExecutionResultDelivery): void {
     this.transaction(() => {
       const receipt = this.lookup(ticket.ticket_id);
       if (!receipt || !sameTicket(receipt, ticket)) throw new Error("Executor receipt rejected: ticket mismatch");
@@ -109,8 +117,40 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
         throw new Error("Executor receipt rejected: invalid state transition");
       }
       const completed = { ...receipt, ...result };
+      if (delivery) {
+        const checked = inspectExecutionResultDelivery(delivery);
+        validateDelivery(completed, checked);
+        const json = JSON.stringify(checked);
+        const capacity = this.db.prepare("SELECT count(*) AS rows, coalesce(sum(length(CAST(delivery_json AS BLOB))),0) AS bytes FROM execution_result_outbox").get() as { rows: number; bytes: number };
+        if (capacity.rows >= 1000 || capacity.bytes + Buffer.byteLength(json) > 8_388_608) throw new Error("execution_delivery_store_full");
+        completed.result_delivery_digest = digest(json);
+        completed.result_delivery_acknowledged = false;
+        this.db.prepare("INSERT INTO execution_result_outbox VALUES(?,?,?)").run(ticket.ticket_id, json, completed.result_delivery_digest);
+      }
       validateReceipt(completed);
       this.save(completed); this.appendEvent(completed, result.observed_at_ms!);
+    });
+  }
+  /** 内部J consumer専用。配送は作用や現在承認を復元しない。rawをsnapshotへ返さない。 */
+  pendingResults(limit = 50): Array<{ delivery: ExecutionResultDelivery; delivery_digest: string }> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error("execution_delivery_limit_invalid");
+    let results: ReturnType<GatewayExecutionIntentStore["pendingResults"]> = [];
+    this.transaction(() => {
+      const rows = this.db.prepare(`SELECT o.delivery_json,o.delivery_digest FROM execution_result_outbox o
+        JOIN execution_intents i ON i.ticket_id=o.ticket_id
+        WHERE json_extract(i.receipt_json,'$.result_delivery_acknowledged')=0 ORDER BY o.rowid LIMIT ?`).all(limit) as
+        { delivery_json: string; delivery_digest: string }[];
+      results = rows.map((row) => ({ delivery: inspectExecutionResultDelivery(JSON.parse(row.delivery_json)), delivery_digest: row.delivery_digest }));
+    });
+    return results;
+  }
+  acknowledgeResult(ticket_id: string, delivery_digest: string): void {
+    this.transaction(() => {
+      const receipt = this.lookup(ticket_id);
+      if (!receipt?.result_delivery_digest || receipt.result_delivery_digest !== delivery_digest) throw new Error("execution_delivery_ack_mismatch");
+      if (receipt.result_delivery_acknowledged) return;
+      receipt.result_delivery_acknowledged = true;
+      this.save(receipt); this.appendEvent(receipt, Date.now());
     });
   }
   lookup(ticket_id: string): ExecutionIntentReceipt | null {
@@ -137,6 +177,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     invocation_boundary?: ExecutionInvocationBoundary; feedback_status?: ExecutionIntentReceipt["feedback_status"];
     output_digest?: string; error_digest?: string;
     worker_id_digest?: string; worker_pid?: number; worker_platform?: string; worker_exit_observed: boolean;
+    result_delivery_digest?: string; result_delivery_acknowledged?: boolean;
   }> } {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error("execution_receipt_limit_invalid");
     let records: ReturnType<GatewayExecutionIntentStore["snapshot"]>["records"] = [];
@@ -150,7 +191,8 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
           output_digest: receipt.output_digest, error_digest: receipt.error_digest,
           worker_id_digest: receipt.worker_id ? digest(receipt.worker_id) : undefined,
           worker_pid: receipt.worker_pid, worker_platform: receipt.worker_platform,
-          worker_exit_observed: receipt.worker_exit_observed_at_ms !== undefined };
+          worker_exit_observed: receipt.worker_exit_observed_at_ms !== undefined,
+          result_delivery_digest: receipt.result_delivery_digest, result_delivery_acknowledged: receipt.result_delivery_acknowledged };
       });
     });
     return { used_for_authority: false, execution_eligible: false, records };
@@ -177,6 +219,16 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       try {
         const receipt = this.lookup(ticket.ticket_id)!; const event = latest.get(ticket.ticket_id);
         if (!event || JSON.stringify(Object.entries(receipt).sort()) !== JSON.stringify(Object.entries(event).sort())) return false;
+      } catch { return false; }
+    }
+    const outbox = this.db.prepare("SELECT ticket_id,delivery_json,delivery_digest FROM execution_result_outbox").all() as
+      { ticket_id: string; delivery_json: string; delivery_digest: string }[];
+    if (outbox.length !== [...latest.values()].filter((r) => r.result_delivery_digest !== undefined).length) return false;
+    for (const row of outbox) {
+      try {
+        const receipt = latest.get(row.ticket_id);
+        if (!receipt || receipt.result_delivery_digest !== row.delivery_digest || digest(row.delivery_json) !== row.delivery_digest) return false;
+        validateDelivery(receipt, inspectExecutionResultDelivery(JSON.parse(row.delivery_json)));
       } catch { return false; }
     }
     return true;
@@ -230,7 +282,8 @@ function validateReceipt(receipt: ExecutionIntentReceipt): void {
   validateTicket(receipt);
   const fields = ["ticket_id", "command_key", "command_digest", "proof_digest", "execution_epoch", "issued_at_ms", "expires_at_ms",
     "state", "invocation_boundary", "feedback_status", "output_digest", "error_digest", "consumed_at_ms", "observed_at_ms", "used_for_authority",
-    "worker_id", "worker_pid", "worker_platform", "worker_started_at_ms", "worker_exit_observed_at_ms"];
+    "worker_id", "worker_pid", "worker_platform", "worker_started_at_ms", "worker_exit_observed_at_ms",
+    "result_delivery_digest", "result_delivery_acknowledged"];
   const workerFields = [receipt.worker_id, receipt.worker_pid, receipt.worker_platform, receipt.worker_started_at_ms];
   const hasWorker = workerFields.some((value) => value !== undefined);
   if (receipt.used_for_authority !== false ||
@@ -238,7 +291,9 @@ function validateReceipt(receipt: ExecutionIntentReceipt): void {
       !["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"].includes(receipt.state) ||
       (receipt.feedback_status !== undefined && !["success", "failed", "suspended"].includes(receipt.feedback_status)) ||
       (receipt.invocation_boundary !== undefined && !["tool_adapter", "channel_adapter", "llm_adapter", "console_preview"].includes(receipt.invocation_boundary)) ||
-      [receipt.output_digest, receipt.error_digest].some((v) => v !== undefined && !/^[0-9a-f]{64}$/.test(v)) ||
+      [receipt.output_digest, receipt.error_digest, receipt.result_delivery_digest].some((v) => v !== undefined && !/^[0-9a-f]{64}$/.test(v)) ||
+      ((receipt.result_delivery_digest !== undefined) !== (receipt.result_delivery_acknowledged !== undefined)) ||
+      (receipt.result_delivery_acknowledged !== undefined && typeof receipt.result_delivery_acknowledged !== "boolean") ||
       [receipt.consumed_at_ms, receipt.observed_at_ms, receipt.worker_started_at_ms, receipt.worker_exit_observed_at_ms]
         .some((v) => v !== undefined && (!Number.isSafeInteger(v) || v <= 0)) ||
       (hasWorker && (!/^[0-9a-f-]{36}$/.test(receipt.worker_id ?? "") || !Number.isSafeInteger(receipt.worker_pid) || receipt.worker_pid! <= 0 ||
@@ -246,4 +301,20 @@ function validateReceipt(receipt: ExecutionIntentReceipt): void {
       (receipt.worker_exit_observed_at_ms !== undefined && (!hasWorker || receipt.worker_exit_observed_at_ms < receipt.worker_started_at_ms!))) {
     throw new Error("execution_receipt_invalid");
   }
+}
+
+function validateDelivery(receipt: ExecutionIntentReceipt, delivery: ExecutionResultDelivery): void {
+  const fb = delivery.feedback;
+  const result = inspectOperationCommandExecutionResult(fb.operation_core_result, {
+    request_id: fb.operation_core_result.request_id, command_id: fb.command_id,
+    upstream_commit_hash: fb.operation_core_result.upstream_commit_hash, status: fb.status, operation: "file.search",
+  });
+  if (!sameTicket(receipt, delivery.admission) || !result || receipt.feedback_status !== fb.status ||
+      receipt.command_key !== digest(JSON.stringify(["gateway-executor-command.v1", fb.command_id])) ||
+      receipt.output_digest !== result.output_digest || receipt.error_digest !== result.error_digest ||
+      receipt.observed_at_ms !== result.observed_at_ms ||
+      (fb.result === undefined ? result.output_digest !== undefined : digest(JSON.stringify(fb.result)) !== result.output_digest) ||
+      (receipt.state === "adapter_returned" ? result.action_outcome !== "reported_success" || !fb.result
+        : receipt.state === "not_attempted" ? result.action_outcome !== "not_attempted"
+          : receipt.state !== "outcome_unknown" || result.action_outcome !== "unknown")) throw new Error("execution_delivery_receipt_mismatch");
 }

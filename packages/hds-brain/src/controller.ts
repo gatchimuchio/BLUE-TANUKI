@@ -8,6 +8,7 @@ import type {
   LLMCallPayload,
   LLMToolCallCandidate,
   LLMFallbackAuthorization,
+  ExecutionAdmission, ExecutionResultDelivery,
 } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
@@ -918,12 +919,17 @@ export class HDSUpperController {
     return this.operationPlans.canExecute(command);
   }
   isOperationPlanCommand(command_id: string): boolean { return this.operationPlans.isBound(command_id); }
-  beginOperationPlanAttempt(command: ExecuteCommand): boolean {
+  beginOperationPlanAttempt(command: ExecuteCommand, admission?: ExecutionAdmission): boolean {
     const known = this.inflight.get(command.id);
     if (this.operationPlans.isBound(command.id) && (!known || known.commit.hash !== command.upstream_decision.commit_hash)) return false;
-    const allowed = this.operationPlans.beginAttempt(command);
+    const allowed = this.operationPlans.beginAttempt(command, admission);
     if (allowed && this.operationPlans.isBound(command.id)) this.planEvent("intent_committed", command.id);
     return allowed;
+  }
+  reconcileOperationPlanResult(delivery: ExecutionResultDelivery, delivery_digest: string): boolean {
+    const adopted = this.operationPlans.reconcileResult(delivery, delivery_digest);
+    if (adopted) this.planEvent("result_reconciled", delivery.feedback.command_id);
+    return adopted;
   }
   private planEvent(event: string, command_id: string): void {
     this.audit.append({ kind: "operation_plan", event, request_id: this.inflight.get(command_id)?.request_id ?? null, command_id,

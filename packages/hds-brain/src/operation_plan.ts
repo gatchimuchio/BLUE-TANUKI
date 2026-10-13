@@ -4,6 +4,7 @@ import {
   OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationStep,
+  ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
 } from "@blue-tanuki/protocol";
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
@@ -59,6 +60,7 @@ export class OperationPlanLedger {
     this.savedDigest = operationPlanDigest(this.state);
     const ids = new Set<string>();
     const commands = new Set<string>();
+    const tickets = new Set<string>();
     for (const p of this.state.plans) {
       const first = p.revisions[0]!.plan;
       if (ids.has(first.plan_id)) throw new Error("plan_checkpoint_duplicate_identity");
@@ -75,6 +77,13 @@ export class OperationPlanLedger {
             b.prepared_step.step_id !== b.step_id || b.prepared_step.operation !== b.operation ||
             b.prepared_step.operation !== step.operation) throw new Error("plan_checkpoint_binding_mismatch");
         commands.add(b.command_id);
+        if (b.execution_admission) {
+          if (tickets.has(b.execution_admission.ticket_id) || b.execution_admission.command_key !==
+              createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", b.command_id])).digest("hex") ||
+              b.status === "selected" || b.status === "invalidated") throw new Error("plan_checkpoint_admission_mismatch");
+          tickets.add(b.execution_admission.ticket_id);
+        }
+        if (b.delivery_digest && (!b.execution_admission || !b.result_digest)) throw new Error("plan_checkpoint_delivery_mismatch");
       }
       for (const result of p.results) {
         const binding = p.bindings.find((b) => b.step_id === result.step_id && b.status === "verified");
@@ -182,11 +191,15 @@ export class OperationPlanLedger {
       command.payload.tool_name === b.operation && commandPayloadDigest(command) === b.payload_digest &&
       operationPlanDigest(command) === b.command_digest;
   }
-  beginAttempt(command: ExecuteCommand): boolean {
+  beginAttempt(command: ExecuteCommand, admission?: ExecutionAdmission): boolean {
     if (!this.canExecute(command)) return false;
     if (!this.isBound(command.id)) return true;
+    const admitted = admission === undefined ? undefined : ExecutionAdmissionSchema.parse(admission);
+    if (admitted && (admitted.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
+        Date.now() < admitted.issued_at_ms || Date.now() >= admitted.expires_at_ms)) return false;
     this.change((state) => { for (const p of state.plans) {
-      const b = p.bindings.find((b) => b.command_id === command.id); if (b) b.status = "intent_committed";
+      const b = p.bindings.find((b) => b.command_id === command.id);
+      if (b) { b.status = "intent_committed"; if (admitted) b.execution_admission = admitted; }
     } });
     freezeCommand(command);
     return true;
@@ -201,7 +214,43 @@ export class OperationPlanLedger {
   recordResult(feedback: ExecuteFeedback): void {
     const match = this.binding(feedback.command_id);
     if (!match || match.b.status !== "intent_committed") return;
-    const { p, b } = match;
+    this.applyResult(match, feedback);
+  }
+
+  /** 起動時の私有結果調停。inflightや承認を復元せず、作用を一切呼ばない。 */
+  reconcileResult(value: ExecutionResultDelivery, delivery_digest: string): boolean {
+    const delivery = inspectExecutionResultDelivery(value);
+    if (createHash("sha256").update(JSON.stringify(delivery)).digest("hex") !== delivery_digest) throw new Error("plan_delivery_digest_mismatch");
+    const match = this.binding(delivery.feedback.command_id);
+    if (!match?.b.execution_admission) return false;
+    const { b, p } = match;
+    if (operationPlanDigest(b.execution_admission) !== operationPlanDigest(delivery.admission)) throw new Error("plan_delivery_admission_mismatch");
+    if (b.delivery_digest) {
+      if (b.delivery_digest !== delivery_digest) throw new Error("plan_delivery_identity_conflict");
+      return true;
+    }
+    const fb = delivery.feedback;
+    const result = inspectOperationCommandExecutionResult(fb.operation_core_result, {
+      request_id: b.request_id, command_id: b.command_id, upstream_commit_hash: b.commit_hash, status: fb.status, operation: b.operation,
+    });
+    if (!result || result.command_payload_digest !== b.payload_digest || result.observed_at_ms < delivery.admission.issued_at_ms ||
+        result.observed_at_ms > Date.now() || (fb.result === undefined ? result.output_digest !== undefined :
+          createHash("sha256").update(JSON.stringify(fb.result)).digest("hex") !== result.output_digest)) throw new Error("plan_delivery_result_mismatch");
+    if (["intent_committed", "outcome_unknown"].includes(b.status) && !b.result_digest) {
+      this.applyResult(match, fb, delivery_digest);
+      return true;
+    }
+    if (b.result_digest !== operationPlanDigest(result)) throw new Error("plan_delivery_result_conflict");
+    if (b.status === "verified") {
+      const saved = p.results.find((r) => r.step_id === b.step_id && r.result_id === result.result_id);
+      if (!saved || saved.observed_at_ms !== result.observed_at_ms ||
+          operationPlanDigest(saved.output) !== operationPlanDigest(fb.result)) throw new Error("plan_delivery_result_conflict");
+    } else if (!["not_attempted", "outcome_unknown", "verification_failed"].includes(b.status)) return false;
+    this.change((state) => { state.plans.flatMap((p) => p.bindings).find((b) => b.command_id === fb.command_id)!.delivery_digest = delivery_digest; });
+    return true;
+  }
+
+  private applyResult({ p, b }: { p: PlanState; b: Binding }, feedback: ExecuteFeedback, delivery_digest?: string): void {
     const result = inspectOperationCommandExecutionResult(feedback.operation_core_result, {
       request_id: b.request_id, command_id: b.command_id, upstream_commit_hash: b.commit_hash,
       operation: b.operation, status: feedback.status,
@@ -219,6 +268,7 @@ export class OperationPlanLedger {
         : result.action_outcome === "not_attempted" ? "not_attempted"
           : verified ? "verified" : result.action_outcome === "reported_success" ? "verification_failed" : "outcome_unknown";
       if (result) binding.result_digest = operationPlanDigest(result);
+      if (delivery_digest) binding.delivery_digest = delivery_digest;
       if (verified && output.success && result) target.results.push({ plan_id: p.revisions[0]!.plan.plan_id,
         request_id: p.revisions[0]!.plan.request_id, step_id: b.step_id, result_id: result.result_id, operation: b.operation,
         status: "succeeded", target: step.target, output: output.data, observed_at_ms: result.observed_at_ms,
@@ -236,7 +286,10 @@ export class OperationPlanLedger {
         steps: p.revisions.at(-1)!.plan.steps.map((step) => ({ step_id: operationPlanDigest(step.step_id),
           operation: step.operation, definition_digest: stepDigest(step),
           status: p.bindings.filter((b) => b.step_id === step.step_id).at(-1)?.status ?? "not_selected" })),
-        bindings: p.bindings.map(({ prepared_step: _raw, ...b }) => ({ ...b, step_id: operationPlanDigest(b.step_id) })),
+        bindings: p.bindings.map((b) => ({ step_id: operationPlanDigest(b.step_id), revision_digest: b.revision_digest,
+          step_digest: b.step_digest, command_id: b.command_id, request_id: b.request_id, commit_hash: b.commit_hash,
+          payload_digest: b.payload_digest, command_digest: b.command_digest, operation: b.operation,
+          status: b.status, result_digest: b.result_digest, delivery_digest: b.delivery_digest })),
       })) };
   }
 
