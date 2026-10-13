@@ -14,7 +14,7 @@
 
 ## Mobileの構造と安全
 
-AndroidとiOSは一括した「モバイル対応」ではなく、独立した製品要求として管理する。画像・音声入力を扱うF16は共通媒体の責務であって、Android/iOSの製品完成ではない。非公開QE rev2.2の追加実装索引ではAndroid=G09、iOS=G10。旧G05・G06は別のQC親成果であり上書きしない。
+AndroidとiOSは一括した「モバイル対応」ではなく、独立した製品要求として管理する。画像・音声入力を扱うF16は共通媒体の責務であって、Android/iOSの製品完成ではない。現行の非公開QE rev2.3の実装索引ではAndroid=G09、iOS=G10。旧G05・G06は別のQC親成果であり上書きしない。
 
 D4Pocket（旧GUI-Shell）は予定するMobile/OS Broker外殻であり、その既存契約を利用する。招待・端末資格・TLSの秘密情報はAndroid/iOS native層で扱い、Dartやplatform-channelの戻り値、アプリログ、監査投影へ露出しない。Mobile画面やC／J／Mの提案から権限を生成せず、Desktop Broker側の現在Permission・対象・Ownerの必要承認を独立に満たす。
 
