@@ -42,6 +42,7 @@ import {
 } from "./document_organization_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
+import { createFileSearchWorker } from "./file_search_worker.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -155,6 +156,7 @@ async function runCliWithExecutionStore(argv: readonly string[], executionStore:
     compute: new LLMComputeAdapter(llm),
     tools,
     approval_authority: executorApproval,
+    file_search_worker: createFileSearchWorker(process.env),
     session_store,
   });
 

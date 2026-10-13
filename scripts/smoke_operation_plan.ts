@@ -13,7 +13,8 @@ type PlanProjection = ReturnType<HDSUpperController["getRuntimeSnapshot"]>["oper
 type Pending = { command_id: string; approval_token: string; approval_level: string };
 type Snapshot = { hds: { operation_plans: PlanProjection }; pending_approvals: Pending[];
   execution_receipts: { used_for_authority: false; execution_eligible: false; records: Array<{
-    ticket_digest: string; command_digest: string; execution_epoch_digest: string; state: string; invocation_boundary?: string }> } };
+    ticket_digest: string; command_digest: string; execution_epoch_digest: string; state: string; invocation_boundary?: string;
+    worker_id_digest?: string; worker_pid?: number; worker_platform?: string; worker_exit_observed: boolean }> } };
 
 const root = await mkdtemp(join(tmpdir(), "blue-plan-http-"));
 const workspace = join(root, "workspace");
@@ -71,10 +72,10 @@ const base = `http://127.0.0.1:${gatewayPort}`;
 let child: ChildProcess | undefined;
 let diagnostics = "";
 async function stop() {
-  if (child && child.exitCode === null && child.signalCode === null) { const exited = once(child, "exit"); child.kill(); await exited; }
+  if (child && child.exitCode === null && child.signalCode === null) { const closed = once(child, "close"); child.kill(); await closed; }
 }
 async function boot() {
-  child = spawn(process.execPath, [join(process.cwd(), "node_modules/tsx/dist/cli.mjs"), "apps/gateway/src/main.ts", "--serve"],
+  child = spawn(process.execPath, ["apps/gateway/dist/main.js", "--serve"],
     { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   for (const stream of [child.stdout, child.stderr]) stream?.on("data", (data) => { diagnostics = (diagnostics + String(data)).slice(-16000); });
   await waitFor(async () => { try { return (await fetch(`${base}/healthz`)).ok; } catch { return false; } });
@@ -122,6 +123,9 @@ try {
   assert.equal(receipts.used_for_authority, false); assert.equal(receipts.execution_eligible, false);
   const actions = receipts.records.filter((receipt) => receipt.invocation_boundary === "tool_adapter");
   assert.equal(actions.length, 2); assert.ok(actions.every((receipt) => receipt.state === "adapter_returned"));
+  assert.ok(actions.every((receipt) => receipt.worker_pid! > 0 && receipt.worker_pid !== child!.pid &&
+    receipt.worker_platform === process.platform && receipt.worker_exit_observed && /^[0-9a-f]{64}$/.test(receipt.worker_id_digest ?? "")));
+  assert.equal(new Set(actions.map((receipt) => receipt.worker_id_digest)).size, 2);
   assert.ok(receipts.records.some((receipt) => receipt.invocation_boundary === "llm_adapter"));
   assert.ok(!JSON.stringify(receipts).includes(workspace)); assert.ok(!JSON.stringify(receipts).includes("fixture-owner"));
   await stop(); await boot(); state = await snapshot();
@@ -129,6 +133,6 @@ try {
   assert.equal(calls, 1);
   assert.deepEqual(state.execution_receipts.records, receipts.records);
   const denied = await fetch(`${base}/runtime/snapshot`); assert.equal(denied.status, 401);
-  console.log("PASS: loopback C → Developer HTTP → HDS → Approval Gate → durable intent → real file.search → dependent result; revision invalidation; authenticated digest-only receipt after restart");
+  console.log("PASS: loopback C → Developer HTTP → HDS → Approval Gate → durable intent → dedicated file.search process → worker receipt/exit → J dependent result; revision invalidation; digest-only receipt after restart");
 } catch (error) { console.error(diagnostics); throw error; }
 finally { await stop(); await new Promise<void>((resolve) => provider.close(() => resolve())); await rm(root, { recursive: true, force: true }); }

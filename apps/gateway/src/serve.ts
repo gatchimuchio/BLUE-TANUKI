@@ -28,6 +28,7 @@ import {
   type ExecutionIntentReceipt,
 } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
+import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
 import { buildAuditLog } from "./audit_config.js";
 import {
@@ -366,6 +367,8 @@ export async function serve(): Promise<ServeShutdown> {
   for (const tool of runtimeSchedules.tools()) tools.register(tool);
   const approval = buildApprovalRuntime(process.env);
   const pendingApprovals = new Map<string, PendingApproval>();
+  const executionControllers = new Set<AbortController>();
+  const executionTasks = new Set<Promise<ExecuteFeedback>>();
   const emergencyStop: EmergencyStopState = {
     active: false,
     activated_at: null,
@@ -564,6 +567,8 @@ export async function serve(): Promise<ServeShutdown> {
 
   function activateEmergencyStop(ctx: WebChatApprovalControlContext): WebChatEmergencyStopSnapshot {
     emergencyStop.active = true;
+    // worker停止は監査・history保存の成功に依存させない。
+    for (const controller of executionControllers) controller.abort();
     emergencyStop.activated_at = Date.now();
     emergencyStop.activated_by = ctx.actor;
     emergencyStop.reason = ctx.reason ?? "owner emergency stop";
@@ -897,7 +902,17 @@ export async function serve(): Promise<ServeShutdown> {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_attempt_not_admitted" });
       return { status: "plan_binding_stale" };
     }
-    const fb = await executor.execute(approvedCommand);
+    const executionController = new AbortController();
+    if (emergencyStop.active) executionController.abort();
+    executionControllers.add(executionController);
+    let fb: ExecuteFeedback;
+    const executionTask = executor.execute(approvedCommand, { signal: executionController.signal, before_tool_dispatch: () => {
+      if (emergencyStop.active) throw new Error("file_search_worker_emergency_stop_active");
+    } });
+    executionTasks.add(executionTask);
+    try {
+      fb = await executionTask;
+    } finally { executionControllers.delete(executionController); executionTasks.delete(executionTask); }
     if (isComposioExecuteCommand(cmd)) {
       hds.onAuthorityEvent(
         fb.status === "success" ? "composio_execution_completed" : "composio_execution_failed",
@@ -1643,6 +1658,7 @@ export async function serve(): Promise<ServeShutdown> {
     compute: new LLMComputeAdapter(llm),
     tools,
     approval_authority: executorApproval,
+    file_search_worker: createFileSearchWorker(process.env),
     dispatcher,
     session_store: buildSessionStore(plugins),
   });
@@ -1889,7 +1905,11 @@ export async function serve(): Promise<ServeShutdown> {
     shutdown: async () => {
       gatewayLog.info("shutting down");
       clearInterval(failureMemoryVerificationTimer);
+      emergencyStop.active = true;
+      for (const controller of executionControllers) controller.abort();
       await router.stop();
+      // workerのcloseと最終receipt保存が済む前にDBを閉じない。
+      await Promise.allSettled([...executionTasks]);
       documentOrganizationCheckpointStore?.close();
       documentOrganizationCheckpointStore = null;
       operationPlanState.close();

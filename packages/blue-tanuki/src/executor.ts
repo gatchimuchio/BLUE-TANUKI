@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import type { ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary,
+import type { ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary, ExecutionWorkerIdentity,
   ExecutorApprovalOptions, ExecutorApprovalClock, ExecutionIntentStore } from "./execution_intent.js";
 import {
   BOUNDARY_EXCHANGE_SCHEMA_VERSION,
@@ -12,7 +12,6 @@ import type {
   ExecuteFeedback,
   LLMCallFailure,
   LLMCallPayload,
-  ToolCallPayload,
   ChannelSendPayload,
   ToolCapability,
 } from "@blue-tanuki/protocol";
@@ -35,6 +34,7 @@ import {
   type ComputeRequest,
 } from "./llm/compute.js";
 import type { ToolRegistry } from "./tools/registry.js";
+import { fileSearchTool } from "./tools/builtin.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
@@ -69,6 +69,8 @@ export interface ExecutorDeps {
   /** Gateway configures this for the governed HDS-to-provider path. */
   compute?: ComputeBackend<LLMRequest, LLMResponse>;
   tools: ToolRegistry;
+  /** Gatewayの組込みfile.searchだけを固定workerへ送る。省略はcore開発用。 */
+  file_search_worker?: FileSearchWorker;
   /**
    * Required authority instance for approving commands for this Executor.
    * A proof object alone is not execution authority; the command must be
@@ -99,9 +101,21 @@ export interface ExecutorDeps {
   history_limit?: number;
 }
 
+export interface FileSearchWorkerRequest {
+  command: Extract<ExecuteCommand, { type: "tool_call" }>;
+  ticket: Readonly<ExecutionIntentTicket>;
+  signal?: AbortSignal;
+  on_started(worker: Readonly<ExecutionWorkerIdentity>): void;
+  before_dispatch(): void;
+  on_exit(worker: Readonly<ExecutionWorkerIdentity>, observed_at_ms: number): void;
+}
+export interface FileSearchWorker { invoke(request: FileSearchWorkerRequest): Promise<unknown>; }
+
 export interface ExecutorExecutionContext {
   /** Caller cancellation for the current LLM request. */
   signal?: AbortSignal;
+  /** worker起動待ち後にもGatewayの現在停止条件を同期検査する。 */
+  before_tool_dispatch?: () => void;
 }
 
 const APPROVED_COMMAND_BRAND: unique symbol = Symbol("blue_tanuki.executor.approved_command.v1");
@@ -357,7 +371,7 @@ export class Executor {
           feedback = await this.executeLLMCall(cmd.id, cmd.payload, cmd.constraints, start, context.signal, markInvoked);
           break;
         case "tool_call":
-          feedback = await this.executeToolCall(cmd.id, cmd.payload, cmd.constraints, start, cmd.upstream_decision.commit_hash, markInvoked);
+          feedback = await this.executeToolCall(cmd, start, markInvoked, context.signal, context.before_tool_dispatch);
           break;
         case "channel_send":
           feedback = await this.executeChannelSend(cmd.id, cmd.payload, start, cmd.upstream_decision.commit_hash, markInvoked);
@@ -568,13 +582,14 @@ export class Executor {
   }
 
   private async executeToolCall(
-    id: string,
-    payload: ToolCallPayload,
-    constraints: ExecuteCommand["constraints"],
+    command: Extract<ExecuteCommand, { type: "tool_call" }>,
     start: number,
-    commit_hash: string,
     markInvoked: (boundary: ExecutionInvocationBoundary) => void,
+    signal?: AbortSignal,
+    before_tool_dispatch?: () => void,
   ): Promise<ExecuteFeedback> {
+    const { id, payload, constraints } = command;
+    const commit_hash = command.upstream_decision.commit_hash;
     if (constraints?.allowed_tools && !constraints.allowed_tools.includes(payload.tool_name)) {
       return {
         command_id: id,
@@ -608,6 +623,43 @@ export class Executor {
       };
     }
 
+    if (payload.tool_name === "file.search" && this.deps.file_search_worker) {
+      if (tool !== fileSearchTool) throw new Error("File search worker requires the registered built-in adapter");
+      const record = APPROVED_COMMAND_RECORDS.get(command)!;
+      const store = record.runtime.store;
+      if (!store?.bindWorker || !store.observeWorkerExit) throw new Error("File search worker requires durable worker receipts");
+      let worker: Readonly<ExecutionWorkerIdentity> | undefined;
+      let dispatched = false; let exited = false;
+      const result = await this.deps.file_search_worker.invoke({ command, ticket: record.ticket, signal,
+        on_started: (identity) => {
+          if (worker || exited) throw new Error("File search worker start repeated");
+          const now = assertTicketCurrent(record);
+          const captured = Object.freeze({ worker_id: identity.worker_id, worker_pid: identity.worker_pid,
+            worker_platform: identity.worker_platform, worker_started_at_ms: identity.worker_started_at_ms });
+          store.bindWorker!(record.ticket, captured, now);
+          worker = captured;
+        },
+        before_dispatch: () => {
+          if (!worker || dispatched || exited || signal?.aborted) throw new Error("File search worker dispatch rejected");
+          before_tool_dispatch?.();
+          markInvoked("tool_adapter");
+          // SQLite待機で期限を消費し得る。保存後、IPC送信前にも両clockを読む。
+          assertTicketCurrent(record);
+          before_tool_dispatch?.();
+          if (signal?.aborted) throw new Error("File search worker dispatch cancelled");
+          dispatched = true;
+        },
+        on_exit: (identity, observed_at_ms) => {
+          if (!worker || exited || Object.keys(worker).some((key) => worker![key as keyof ExecutionWorkerIdentity] !== identity[key as keyof ExecutionWorkerIdentity])) {
+            throw new Error("File search worker exit identity mismatch");
+          }
+          store.observeWorkerExit!(record.ticket, worker, observed_at_ms);
+          exited = true;
+        },
+      });
+      if (!worker || !dispatched || !exited) throw new Error("File search worker lifecycle incomplete");
+      return { command_id: id, status: "success", result, metrics: { duration_ms: Date.now() - start, tool_calls: 1 } };
+    }
     const controller = new AbortController();
     markInvoked("tool_adapter");
     const result = await this.withTimeout(

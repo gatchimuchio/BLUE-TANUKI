@@ -13,6 +13,14 @@ export type ExecutionInvocationBoundary = "tool_adapter" | "channel_adapter" | "
 export type ExecutionReceiptState = "issued" | "intent_committed" | "invocation_attempted" |
   "adapter_returned" | "not_attempted" | "outcome_unknown";
 
+/** 親が専用IPCと実child.pidへ結合して観測する。PIDだけでは同一性にならない。 */
+export interface ExecutionWorkerIdentity {
+  worker_id: string;
+  worker_pid: number;
+  worker_platform: string;
+  worker_started_at_ms: number;
+}
+
 export interface ExecutionIntentReceipt extends ExecutionIntentTicket {
   state: ExecutionReceiptState;
   invocation_boundary?: ExecutionInvocationBoundary;
@@ -21,6 +29,11 @@ export interface ExecutionIntentReceipt extends ExecutionIntentTicket {
   error_digest?: string;
   consumed_at_ms?: number;
   observed_at_ms?: number;
+  worker_id?: string;
+  worker_pid?: number;
+  worker_platform?: string;
+  worker_started_at_ms?: number;
+  worker_exit_observed_at_ms?: number;
   used_for_authority: false;
 }
 
@@ -29,6 +42,8 @@ export interface ExecutionIntentStore {
   issue(ticket: Readonly<ExecutionIntentTicket>): void;
   consume(ticket: Readonly<ExecutionIntentTicket>, now_ms: number): void;
   markInvocation(ticket: Readonly<ExecutionIntentTicket>, boundary: ExecutionInvocationBoundary, now_ms: number): void;
+  bindWorker?(ticket: Readonly<ExecutionIntentTicket>, worker: Readonly<ExecutionWorkerIdentity>, now_ms: number): void;
+  observeWorkerExit?(ticket: Readonly<ExecutionIntentTicket>, worker: Readonly<ExecutionWorkerIdentity>, now_ms: number): void;
   complete(ticket: Readonly<ExecutionIntentTicket>, result: Pick<ExecutionIntentReceipt,
     "state" | "feedback_status" | "output_digest" | "error_digest" | "observed_at_ms">): void;
   lookup(ticket_id: string): ExecutionIntentReceipt | null;

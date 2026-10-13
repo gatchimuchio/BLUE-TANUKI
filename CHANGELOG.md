@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-13 — 専用file.search processとworker受領の接続
+
+- Gatewayの組込みfile.searchを固定child・最小環境・専用IPCへ通し、全command内容とticket、実PID・worker世代・OSを結合した。応答の同一性・形状と実終了を確認して既存J結果検証へ返す。
+- 起動待ちと同期保存後にも停止・期限を再検査し、emergency stopと通常終了をworker停止へ接続した。切断・保存失敗・同名adapter置換・再送から直接実行へfallbackしない。
+- D4独立Permission、Jとの保存receipt調停、OS sandbox・5OS installed、QC/QAはBUILD_GAP。実provider・別repo・P13の保留を維持する。
+
 ## 2026-10-13 — 永続実行意思・期限・再照会の接続
 
 - GatewayのHTTP・CLI・資料整理へ私有SQLiteの実行storeを注入し、内容・epoch・wall/monotonic期限、単回消費と開始意思を実adapter前に結合した。同じcommand IDの再発行・時計巻戻し・保存失敗から再作用しない。

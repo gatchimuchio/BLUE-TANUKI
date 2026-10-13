@@ -43,6 +43,7 @@ export {
   browserAutomationTool,
   shellExecTool,
   invokeFileWrite,
+  invokeFileSearch,
   invokeFileEdit,
   invokeWebSearch,
   invokeGitHubRead,

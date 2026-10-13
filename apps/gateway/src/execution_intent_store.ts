@@ -3,7 +3,7 @@ import { mkdirSync, realpathSync, lstatSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
-import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary } from "@blue-tanuki/core";
+import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary, ExecutionWorkerIdentity } from "@blue-tanuki/core";
 import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
   parseBoundaryExchangeAtBoundary } from "@blue-tanuki/protocol";
 
@@ -74,6 +74,28 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       this.save(receipt); this.appendEvent(receipt, now_ms);
     });
   }
+  bindWorker(ticket: Readonly<ExecutionIntentTicket>, worker: Readonly<ExecutionWorkerIdentity>, now_ms: number): void {
+    this.transaction(() => {
+      const receipt = this.current(ticket, now_ms);
+      if (receipt.state !== "intent_committed" || receipt.worker_id !== undefined) throw new Error("Executor worker binding rejected");
+      Object.assign(receipt, { worker_id: worker.worker_id, worker_pid: worker.worker_pid,
+        worker_platform: worker.worker_platform, worker_started_at_ms: worker.worker_started_at_ms });
+      this.save(receipt); this.appendEvent(receipt, now_ms);
+    });
+  }
+  observeWorkerExit(ticket: Readonly<ExecutionIntentTicket>, worker: Readonly<ExecutionWorkerIdentity>, now_ms: number): void {
+    this.transaction(() => {
+      const receipt = this.lookup(ticket.ticket_id);
+      if (!receipt || !sameTicket(receipt, ticket) || receipt.worker_exit_observed_at_ms !== undefined ||
+          (receipt.state !== "intent_committed" && receipt.state !== "invocation_attempted") ||
+          ["worker_id", "worker_pid", "worker_platform", "worker_started_at_ms"].some((key) =>
+            receipt[key as keyof ExecutionIntentReceipt] !== worker[key as keyof ExecutionWorkerIdentity])) {
+        throw new Error("Executor worker exit identity rejected");
+      }
+      receipt.worker_exit_observed_at_ms = now_ms;
+      this.save(receipt); this.appendEvent(receipt, now_ms);
+    });
+  }
   complete(ticket: Readonly<ExecutionIntentTicket>, result: Pick<ExecutionIntentReceipt,
     "state" | "feedback_status" | "output_digest" | "error_digest" | "observed_at_ms">): void {
     this.transaction(() => {
@@ -82,7 +104,8 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       if ((receipt.state === "intent_committed" && result.state !== "not_attempted") ||
           (receipt.state === "invocation_attempted" && result.state !== "adapter_returned" && result.state !== "outcome_unknown") ||
           (receipt.state !== "intent_committed" && receipt.state !== "invocation_attempted") ||
-          (result.state === "adapter_returned" && result.feedback_status !== "success")) {
+          (result.state === "adapter_returned" && (result.feedback_status !== "success" ||
+            (receipt.worker_id !== undefined && receipt.worker_exit_observed_at_ms === undefined)))) {
         throw new Error("Executor receipt rejected: invalid state transition");
       }
       const completed = { ...receipt, ...result };
@@ -113,6 +136,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     ticket_digest: string; command_digest: string; execution_epoch_digest: string; state: ExecutionIntentReceipt["state"];
     invocation_boundary?: ExecutionInvocationBoundary; feedback_status?: ExecutionIntentReceipt["feedback_status"];
     output_digest?: string; error_digest?: string;
+    worker_id_digest?: string; worker_pid?: number; worker_platform?: string; worker_exit_observed: boolean;
   }> } {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error("execution_receipt_limit_invalid");
     let records: ReturnType<GatewayExecutionIntentStore["snapshot"]>["records"] = [];
@@ -123,7 +147,10 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
         return { ticket_digest: digest(receipt.ticket_id), command_digest: receipt.command_digest,
           execution_epoch_digest: digest(receipt.execution_epoch), state: receipt.state,
           invocation_boundary: receipt.invocation_boundary, feedback_status: receipt.feedback_status,
-          output_digest: receipt.output_digest, error_digest: receipt.error_digest };
+          output_digest: receipt.output_digest, error_digest: receipt.error_digest,
+          worker_id_digest: receipt.worker_id ? digest(receipt.worker_id) : undefined,
+          worker_pid: receipt.worker_pid, worker_platform: receipt.worker_platform,
+          worker_exit_observed: receipt.worker_exit_observed_at_ms !== undefined };
       });
     });
     return { used_for_authority: false, execution_eligible: false, records };
@@ -202,14 +229,21 @@ function validateTicket(ticket: ExecutionIntentTicket): void {
 function validateReceipt(receipt: ExecutionIntentReceipt): void {
   validateTicket(receipt);
   const fields = ["ticket_id", "command_key", "command_digest", "proof_digest", "execution_epoch", "issued_at_ms", "expires_at_ms",
-    "state", "invocation_boundary", "feedback_status", "output_digest", "error_digest", "consumed_at_ms", "observed_at_ms", "used_for_authority"];
+    "state", "invocation_boundary", "feedback_status", "output_digest", "error_digest", "consumed_at_ms", "observed_at_ms", "used_for_authority",
+    "worker_id", "worker_pid", "worker_platform", "worker_started_at_ms", "worker_exit_observed_at_ms"];
+  const workerFields = [receipt.worker_id, receipt.worker_pid, receipt.worker_platform, receipt.worker_started_at_ms];
+  const hasWorker = workerFields.some((value) => value !== undefined);
   if (receipt.used_for_authority !== false ||
       Object.keys(receipt).some((key) => !fields.includes(key)) ||
       !["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"].includes(receipt.state) ||
       (receipt.feedback_status !== undefined && !["success", "failed", "suspended"].includes(receipt.feedback_status)) ||
       (receipt.invocation_boundary !== undefined && !["tool_adapter", "channel_adapter", "llm_adapter", "console_preview"].includes(receipt.invocation_boundary)) ||
       [receipt.output_digest, receipt.error_digest].some((v) => v !== undefined && !/^[0-9a-f]{64}$/.test(v)) ||
-      [receipt.consumed_at_ms, receipt.observed_at_ms].some((v) => v !== undefined && (!Number.isSafeInteger(v) || v <= 0))) {
+      [receipt.consumed_at_ms, receipt.observed_at_ms, receipt.worker_started_at_ms, receipt.worker_exit_observed_at_ms]
+        .some((v) => v !== undefined && (!Number.isSafeInteger(v) || v <= 0)) ||
+      (hasWorker && (!/^[0-9a-f-]{36}$/.test(receipt.worker_id ?? "") || !Number.isSafeInteger(receipt.worker_pid) || receipt.worker_pid! <= 0 ||
+        !["win32", "linux", "darwin"].includes(receipt.worker_platform ?? "") || !receipt.worker_started_at_ms || receipt.state === "issued")) ||
+      (receipt.worker_exit_observed_at_ms !== undefined && (!hasWorker || receipt.worker_exit_observed_at_ms < receipt.worker_started_at_ms!))) {
     throw new Error("execution_receipt_invalid");
   }
 }
