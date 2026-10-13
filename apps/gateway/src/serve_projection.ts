@@ -17,11 +17,13 @@ import {
   OperationCorePlannerExecutionProjectionSchema,
   OperationPlanSchema,
   prepareOperationPlan,
+  inspectOperationCommandExecutionResult,
   type ExecuteCommand,
   type ExecuteFeedback,
   type OperationCoreApprovalTrace,
   type OperationCoreExecutionProjection,
   type OperationCorePlannerExecutionProjection,
+  type OperationCommandExecutionResult,
 } from "@blue-tanuki/protocol";
 
 export function metadataKeys(meta: Record<string, unknown> | undefined): string[] {
@@ -236,6 +238,19 @@ export function operationCorePlannerHistoryProjection(
   });
 }
 
+export function operationCoreResultHistoryProjection(
+  command: ExecuteCommand,
+  feedback: ExecuteFeedback,
+): OperationCommandExecutionResult | undefined {
+  return inspectOperationCommandExecutionResult(feedback.operation_core_result, {
+    request_id: command.upstream_decision.request_id ?? null,
+    command_id: command.id,
+    upstream_commit_hash: command.upstream_decision.commit_hash,
+    status: feedback.status,
+    operation: command.type === "channel_send" ? "channel.send" : commandOperation(command),
+  });
+}
+
 function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record<string, unknown> {
   const payload = isRecord(entry.payload) ? entry.payload : {};
   const command = isRecord(payload.command) ? payload.command : {};
@@ -243,6 +258,13 @@ function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record
   const error = stringValue(payload.error);
   const executionTrace = projectOperationCoreExecutorTrace(payload.operation_core);
   const plannerOutput = projectOperationCorePlannerExecutionProjection(payload.operation_core_planner);
+  const commandResult = inspectOperationCommandExecutionResult(payload.operation_core_result, {
+    request_id: entry.request_id,
+    command_id: entry.command_id,
+    upstream_commit_hash: stringValue(command.upstream_commit_hash) ?? null,
+    status: stringValue(payload.status) ?? "unknown",
+    operation: command.type === "channel_send" ? "channel.send" : stringValue(command.operation) ?? "unknown",
+  });
   return {
     index: entry.index,
     request_id: entry.request_id,
@@ -263,6 +285,7 @@ function projectOperationCoreExecutionEntry(entry: CompleteHistoryEntry): Record
     },
     command: projectOperationCoreCommandDescriptor(command),
     ...(executionTrace ? { execution_trace: executionTrace } : {}),
+    ...(commandResult ? { command_execution_result: commandResult } : {}),
     ...(plannerOutput ? { planner_output: plannerOutput } : {}),
     diff: {
       available: false,

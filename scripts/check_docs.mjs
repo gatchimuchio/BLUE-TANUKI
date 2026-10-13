@@ -141,7 +141,7 @@ if (!troubleshooting.includes("FIRST_RUN_CHECKLIST.md")) {
 const qeGovernanceRequired = {
   "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
   "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
-  "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["QE-GOV-SYNC", "製品開発停止", "PENDING_OWNER_GO", "MIGRATION_COMPLETE"],
+  "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["QE_BUILD", "BUILD_BATCH", "BUILD_GAP", "PENDING_OWNER_GO", "MIGRATION_COMPLETE"],
   "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "J4", "Android", "iOS", "MIGRATION_COMPLETE", "refs/tags/codex/backup-main"],
   "docs/DEVELOPMENT_PRACTICE.md": ["BUILD_BATCH", "refs/heads", "refs/tags/codex/backup-main", "MIGRATION_COMPLETE"],
   "docs/STRATEGY_FRAME.md": ["OpenClaw", "Muse", "D4Pocket", "QC", "QA"],

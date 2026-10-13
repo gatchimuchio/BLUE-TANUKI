@@ -831,6 +831,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const rollback = isObject(entry.rollback) ? entry.rollback : {};
               const op = isObject(entry.operation_core) ? entry.operation_core : {};
               const trace = isObject(entry.execution_trace) ? entry.execution_trace : {};
+              const commandResult = isObject(entry.command_execution_result) ? entry.command_execution_result : {};
               const planner = isObject(entry.planner_output) ? entry.planner_output : {};
               const preparation = isObject(planner.preparation) ? planner.preparation : {};
               const permission = isObject(trace.permission) ? trace.permission : {};
@@ -848,6 +849,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dl class="kv">' +
                 '<dt>request</dt><dd class="mono">' + escapeHtml(requestId) + '</dd>' +
                 '<dt>command</dt><dd class="mono">' + escapeHtml(commandId) + '</dd>' +
+                '<dt>観測結果ID</dt><dd class="mono">' + escapeHtml(commandResult.result_id || "未記録") + '</dd>' +
+                '<dt>実行口</dt><dd>' + escapeHtml(commandResult.execution_boundary === "tool_adapter" ? "tool呼出し" : commandResult.execution_boundary === "channel_adapter" ? "channel呼出し" : commandResult.execution_boundary === "console_preview" ? "console表示のみ" : commandResult.execution_boundary === "not_invoked" ? "未呼出し" : "未記録") + '</dd>' +
+                '<dt>作用結果</dt><dd>' + escapeHtml(commandResult.action_outcome === "reported_success" ? "下流が成功を報告" : commandResult.action_outcome === "unknown" ? "作用結果不明・自動再実行不可" : commandResult.action_outcome === "not_attempted" ? "作用未試行" : commandResult.action_outcome === "preview_only" ? "表示のみ・配送の証拠なし" : "未記録") + '</dd>' +
                 '<dt>type</dt><dd>' + escapeHtml(command.type || "unknown") + '</dd>' +
                 '<dt>origin</dt><dd>' + escapeHtml(entry.origin_channel || "unknown") + '</dd>' +
                 '<dt>adapter</dt><dd>' + badge(trace.adapter || "not recorded", trace.adapter_is_authority === false ? "good" : "warn") + '</dd>' +

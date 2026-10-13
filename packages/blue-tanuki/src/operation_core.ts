@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
   inspectOperationPlanAdapterRegistry,
   getOperationDescriptor,
@@ -5,12 +6,14 @@ import {
   OPERATION_ADAPTER_REGISTRY,
   OperationCoreApprovalTraceSchema,
   OperationCoreExecutorTraceSchema,
+  OperationCommandExecutionResultSchema,
   type ExecuteCommand,
   type ExecuteFeedback,
   type OperationAdapterKind,
   type OperationApprovalLevel,
   type OperationCoreApprovalTrace,
   type OperationCoreExecutorTrace,
+  type OperationCommandExecutionResult,
   type OperationAdapterRegistryEvidence,
   type OperationEffect,
   type OperationPermission,
@@ -195,6 +198,55 @@ export function buildOperationCoreExecutorTrace(
   });
 }
 
+type CommandObservation = Pick<OperationCommandExecutionResult,
+  "result_id" | "request_id" | "command_id" | "upstream_commit_hash" | "operation" | "adapter" | "command_payload_digest">;
+export type OperationExecutionBoundary = OperationCommandExecutionResult["execution_boundary"];
+
+/** 呼出し前に同一性を固定する。未承認commandはExecutorからここへ渡さない。 */
+export function captureOperationCommandObservation(command: ExecuteCommand): CommandObservation | undefined {
+  if (command.type !== "tool_call" && command.type !== "channel_send") return undefined;
+  const request_id = command.upstream_decision.request_id;
+  const command_payload_digest = digestValue(command.payload);
+  if (!request_id || !command_payload_digest) return undefined;
+  return {
+    result_id: `operation-execution:${randomUUID()}`,
+    request_id,
+    command_id: command.id,
+    upstream_commit_hash: command.upstream_decision.commit_hash,
+    operation: command.type === "channel_send" ? "channel.send" : commandOperationLabel(command),
+    adapter: operationAdapterForCommand(command),
+    command_payload_digest,
+  };
+}
+
+export function buildOperationCommandExecutionResult(
+  observation: CommandObservation | undefined,
+  feedback: ExecuteFeedback,
+  execution_boundary: OperationExecutionBoundary,
+): OperationCommandExecutionResult | undefined {
+  if (!observation || observation.command_id !== feedback.command_id) return undefined;
+  const state = operationStateForFeedbackStatus(feedback.status);
+  const output_digest = feedback.result === undefined ? undefined : digestValue(feedback.result);
+  const parsed = OperationCommandExecutionResultSchema.safeParse({
+    ...observation,
+    version: "operation-core.v1",
+    role: "command_execution_result",
+    state,
+    execution_boundary,
+    action_outcome: execution_boundary === "not_invoked" ? "not_attempted"
+      : execution_boundary === "console_preview" ? "preview_only"
+        : state === "succeeded" ? "reported_success" : "unknown",
+    observed_at_ms: Date.now(),
+    ...(output_digest ? { output_digest } : {}),
+    ...(feedback.error ? { error_digest: digestString(feedback.error) } : {}),
+    plan_step_binding: "unbound",
+    adapter_result_used_for_authority: false,
+    used_for_authority: false,
+    evidence_source: ["INTERNAL_STATE"],
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
 export function buildOperationCoreApprovalTrace(
   input: {
     command: ExecuteCommand;
@@ -323,4 +375,18 @@ function bounded(value: string, max = 300): string {
   const trimmed = value.trim();
   if (!trimmed) return "unknown";
   return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+}
+
+function digestString(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function digestValue(value: unknown): string | undefined {
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? undefined : digestString(serialized);
+  } catch {
+    // 観測digestを生成できなくても実際の作用結果を失敗へ書き換えない。
+    return undefined;
+  }
 }

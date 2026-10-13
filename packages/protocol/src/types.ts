@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { GoalCriteriaSchema } from "./goal_criteria.js";
 
-import { OperationCoreExecutorTraceSchema, type OperationInterface } from "./operation_core.js";
+import { OperationCoreExecutorTraceSchema, OperationCommandExecutionResultSchema, type OperationInterface } from "./operation_core.js";
 
 const DangerousObjectKeySchema = z.string().refine(
   (key) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
@@ -85,6 +85,7 @@ export const UpstreamDecisionSchema = z.object({
   model_abstraction: z.string(),
   commit_hash: z.string(),
   commit_decision: DecisionSchema,
+  request_id: z.string().min(1).max(200).optional(),
 });
 export type UpstreamDecision = z.infer<typeof UpstreamDecisionSchema>;
 
@@ -326,6 +327,7 @@ export const ExecuteFeedbackSchema = z.object({
     tool_calls: z.number().optional(),
   }),
   operation_core: OperationCoreExecutorTraceSchema.optional(),
+  operation_core_result: OperationCommandExecutionResultSchema.optional(),
 });
 export type ExecuteFeedback = z.infer<typeof ExecuteFeedbackSchema>;
 

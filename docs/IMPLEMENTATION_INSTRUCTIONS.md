@@ -1,77 +1,39 @@
-# BLUE-TANUKI QE-GOV-SYNC閉鎖記録（5OS／backup ref移行／正本再読）
+# BLUE-TANUKI 現行QE_BUILD指示
 
-**状態：MIGRATION_COMPLETE／QE-GOV-SYNC完了（2026-10-12）。** この規定同期とref移行を閉鎖した。製品開発は停止状態を維持し、次のQE_BUILDには自動進行しない。
+2026-10-13。最新版の非公開QE rev2.3三点正本と適用AGENTS.mdを再読し、現行ownerの開発委任をBLUE本体の接続実装へ適用する。過去のQE-GOV-SYNCと製品開発停止は履歴へ保持する。規定更新だけを再開の根拠にしない。
 
-## 1. 目的
+## 対象と到達状態
 
-AGENTS.mdのQE規律へ作業標準・工程・戦略・非対象・文書整合検査を同期する。今回はバックアップ方式のD4Pocket一致、5OSの設計・工程・文書gate統合という規定整合の限定taskであり、製品コードの新規開発ではない。
+QE_STAGE: QE_BUILD。BUILD_BATCH: QEB-01-RESULTS。関係単位はD01.02の依存結果入力、D01.03の実結果producerと改訂経路。今回の接続は「既存HDS-issued command → 既存Approval／Executor → 実結果の識別 → HDS feedback監査 → digest履歴 → Control Center表示」。
 
-2026-10-13のowner追補により、毎作業の開始・切替・再開時に最新版の三点セットすべてと適用AGENTS.mdを読み直す規律を明示した。現行の三点正本はrev2.3であり、公開文書の正本参照とBUILD_BATCH番号を同版へ同期する。これは製品開発停止を解除する指示ではない。
+型・metadataだけで終了せず、専用一時領域の実file.searchをこのconsumerへ通す。実行口を呼ぶ前の拒否、呼出し後の結果不明、console表示のみを区別し、raw検索内容・対象・errorを追加の結果記録へ保存しない。
 
-## 2. Phase境界
+## 現物・変更範囲
 
-D01.02は2026-10-10に局所実装・検証されmainへ反映した過去成果。ownerの製品開発停止を維持し、D01.03へ自動進行しない。C08.03の実LLM/provider試験は保留。別repo、実資格、実外部作用、公開、P13 Owner GOの権限は本規定同期から生まれない。
+開始時local／remote mainは66a21a84545666fbeb178ff003bc14b3fd5796f7、作業ツリーはクリーン。旧D01.03差分は既存stashに保全し、復元・上書きしない。parentを単一writerとし、調査subagentはread-onlyとする。
 
-## 3. Scope
+protocolのcommand結果契約、HDSの実request IDとfeedback相関、既存Executorの結果producer、gatewayの履歴projection、既存Control Centerの表示と必要な限定試験を変更する。既存planのOperationExecutionResultとは別の未結合command観測として記録する。
 
-今回の追加対象はAGENTS.md、docs/PLATFORM_TARGETS_QE.md、docs/BACKUP_REF_MIGRATION.md、docs/作業標準要領.md、docs/ROADMAP.md、docs/DEVELOPMENT_PRACTICE.md、docs/INDEX.md、scripts/check_docs.mjs、必要な日本語基底試験の整合である。
+## 次consumerと未接続
 
-AGENTS.md、docs/作業標準要領.md、docs/ROADMAP.md、docs/開発進捗.md、docs/STRATEGY_FRAME.md、docs/NON_GOALS.md、docs/DEVELOPMENT_PRACTICE.md、docs/OPENCLAW_REJECTION_AUDIT.md、docs/INDEX.md、関連する文書ゲートと旧v1 RCの公開境界。
+D01.03はBUILD_GAP。実command結果をplan/stepへ結び付ける内部binding、旧plan保持、実行済み・試行済みstepの再実行防止、改訂された未実行stepのHDS採否と旧pending承認の失効を次に接続する。今回の結果はplan_step_binding=unboundであり、依存準備へ自己申告のplan/step IDを渡さない。
 
-## 4. Non-goals
+GatewayでLLM planから自動stepを起動する経路は今回追加しない。失敗・timeoutを「作用なし」とみなす自動再実行も追加しない。現在の結果記録だけで複数step完遂・SYSTEM_SHAPED・BUILD_COVEREDを宣言しない。
 
-製品コード、HDS/Approval/L3、credential、実OS作用、D4Pocket／ミニドラの別repo実装、製品release、J1日本語移行を開始しない。内部QE/HDSの設計原典・要求対応表をPublic Gitへ置かない。
+## 安全・停止条件
 
-## 5. 最初に確認する files
+既存HDS standalone、Approval Gate、L3、hash-chain監査、output audit、M非権限、fail-closedを維持する。未承認command、相関不一致、未知commandの結果を実行権限・実行済みstepの根拠にしない。console fallbackは配送成功の証拠へ昇格させない。
 
-最新版の三点正本（仕様書・工程表・施工指示書）すべてとroot／最寄りのAGENTS.mdを読み直す。関連箇所はAGENTS §§0/2/3/5/19/20/21/24、作業標準要領、ROADMAP、STRATEGY_FRAME、NON_GOALS、PRODUCT_ROADMAP、開発進捗、移行台帳、scripts/check_docs.mjs、最新main HEAD。前回の読取結果、会話要約、記憶だけで今回の再読を代替しない。
+C08.03実provider試験、実credential、実外部業務作用、D4Pocket／ミニドラ別repo変更は保留。P13=PENDING_OWNER_GO、public_claim_allowed=false、version=1.0.0-rc.1。非公開QE／HDS原典・要求対応表・raw証拠はPublic Gitへ置かない。
 
-## 6. 必須grep
+他writerの変更、重大な安全逸脱、owner停止指示があれば該当変更を止めて再同期する。バックアップref移行はMIGRATION_COMPLETEであり、旧ZIPの移行待ちを現在へ転記しない。
 
-QE_BUILD、BUILD_BATCH、QE_QC、QE_QA、D01.02、PENDING_OWNER_GO、D4Pocket、GUI Shell、ClawHub、selected-scope、refs/heads、refs/tags、pnpm testを確認する。
+## 技術確認と復元点
 
-## 7. 既存anchor
+Windowsでtypecheck → build → 変更した実consumerと未承認・不一致の限定確認を実施する。HDS standalone、gatewayのserve/resume smoke、変更文書のdocs:check、差分チェックを行う。全体suite、耐久、性能、全OS、実provider、QC／QAはこのBUILD_BATCHでは未実施。
 
-J/HDS判断とBrokerの現在Permissionは独立であり、Owner最終責任、Approval Gate、L3、hash-chain監査、Runtime Invariants、M非権限、fail-closedを保持する。D4Pocketは新AGIの予定外殻であり、旧RCの実導入証拠はない。
+編集前復元点はlocal refs/heads/codex/backup-main／prevとremote refs/tags/codex/backup-main／prevを66a21a84545666fbeb178ff003bc14b3fd5796f7／b31be61b55f4097f2b638d3a2ae3be88d2a4a251へ期待SHA付きatomic pushで照合済み。意味ある接続と必要な確認を終えたら限定commit/pushし、remote main・二世代tag・stash・作業ツリーを再照合する。
 
-## 8. 実装要件
+## 再同期
 
-バックアップ正規方式はD4Pocketと同じlocal二世代branch／remote二世代tagとする。BLUEの実移行は2026-10-12に完了し、tag二本の実SHAを照合した後に旧remote branch二本を整理した。完了時のlocal branch、remote tag、main SHAはdocs/BACKUP_REF_MIGRATION.mdに記録する。将来、tag変更手段・権限がない場合はref移行を完了扱いせず、既存branchを保護する。
-
-最終対応対象はWindows、Linux、macOS、Android、iOS。AndroidはG09、iOSはG10として独立実装し、旧F16のモバイル入力媒体と分ける。旧v1.0 RCのMobile非搭載は現在の完成主張とは独立した制限である。現行の内部QE rev2.3三点正本の実装索引は旧192＋6＝198単位。Public Gitへ非公開原典全文を投入しない。
-
-QE_DESIGN→QE_BUILD→SYSTEM_SHAPED→BUILD_COVERED→QE_QC→QE_QA→QE_RELEASE_REVIEWへ統一する。198小単位（旧192＋Android/iOS各3）は実装索引であり、小単位の全体試験・QA・毎回Git保全を義務化しない。安全重要の拒否検査と既存保護は維持する。
-
-OpenClaw/Museの観測能力を包含対象から勝手に削除せず、危険な実装方式は安全な代替経路へ置き換える。ClawHubの無審査コード実行を禁止し、安全な互換Adapterの検討まで禁止しない。
-
-## 9. Safety invariants
-
-HDS-BRAIN、Owner同意、D4Pocketの独立Permission、L3、秘密、監査、停止とfail-closedを維持し、非公開正本を公開しない。
-
-## 10. Operator usability
-
-実際に通った仕事と残るBUILD_GAP、次consumerを優先報告し、schemaやfixture成功を本番完成へ転用しない。
-
-## 11. Tests
-
-文書間の現行QE工程、backup refs、競合包含、D4Pocket責務、P13を突合する。既存testや保護ゲートを削除しない。
-
-## 12. Validation commands
-
-差分、関連docs:checkと日本語基底gate、移行台帳SHA、Git HEADと二世代backupを確認する。実行できない検証はNOT_RUNと記録する。
-
-## 13. Manual smoke
-
-この作業では実Provider、OS実機、installed製品、credentialed live、外部実作用の試験を行わない。
-
-## 14. Permanent-use check
-
-現行旧RCは1.0.0-rc.1、P13=PENDING_OWNER_GO、public_claim_allowed=false。新AGIのQE_QC/QAは未開始と区別する。
-
-## 15. Final report format
-
-変更した文書、解消した不整合、保持した安全・停止、実施検査とNOT_RUN、commit/remote HEAD/backup SHAを記録する。
-
-## 16. Next-phase dependency
-
-QE-GOV-SYNCの完了は製品開発再開の承認ではない。ownerの明示再開、認可済み環境にある最新版の内部QE三点正本と適用AGENTS.mdの再読、最新mainと現物差分の再照合後にのみ次のBUILD_BATCHを選ぶ。2026-10-13はrev2.3三点正本の読取を確認済み。C08.03実provider保留と別repo変更には独立した承認が必要。
+毎作業・小単位の開始／切替／再開時に、最新版の仕様書・工程表・施工指示書すべてと適用AGENTS.md、active指示、actual HEADと差分を読み直す。前回要約・記憶で代替しない。詳細QCを小単位へ先行させず、次の実consumerを接続する。

@@ -30,6 +30,9 @@ import type { ToolRegistry } from "./tools/registry.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
+  captureOperationCommandObservation,
+  buildOperationCommandExecutionResult,
+  type OperationExecutionBoundary,
   inspectOperationCorePlannerOutput,
 } from "./operation_core.js";
 
@@ -178,18 +181,22 @@ export class Executor {
   async execute(cmd: ApprovedCommand, context: ExecutorExecutionContext = {}): Promise<ExecuteFeedback> {
     const start = Date.now();
     let proof: ExecutorApprovalProof | undefined;
+    let observation: ReturnType<typeof captureOperationCommandObservation>;
+    const execution = { boundary: "not_invoked" as OperationExecutionBoundary };
+    const markInvoked = (boundary: OperationExecutionBoundary): void => { execution.boundary = boundary; };
     try {
       proof = this.assertExecutionApproved(cmd);
+      observation = captureOperationCommandObservation(cmd);
       let feedback: ExecuteFeedback;
       switch (cmd.type) {
         case "llm_call":
           feedback = await this.executeLLMCall(cmd.id, cmd.payload, cmd.constraints, start, context.signal);
           break;
         case "tool_call":
-          feedback = await this.executeToolCall(cmd.id, cmd.payload, cmd.constraints, start, cmd.upstream_decision.commit_hash);
+          feedback = await this.executeToolCall(cmd.id, cmd.payload, cmd.constraints, start, cmd.upstream_decision.commit_hash, markInvoked);
           break;
         case "channel_send":
-          feedback = await this.executeChannelSend(cmd.id, cmd.payload, start, cmd.upstream_decision.commit_hash);
+          feedback = await this.executeChannelSend(cmd.id, cmd.payload, start, cmd.upstream_decision.commit_hash, markInvoked);
           break;
         case "noop":
           {
@@ -210,7 +217,7 @@ export class Executor {
           }
           break;
       }
-      return attachOperationCoreTrace(cmd, feedback, proof);
+      return attachOperationCoreTrace(cmd, feedback, proof, observation, execution.boundary);
     } catch (e) {
       const feedback: ExecuteFeedback = {
         command_id: cmd.id,
@@ -218,7 +225,7 @@ export class Executor {
         error: e instanceof Error ? e.message : String(e),
         metrics: { duration_ms: Date.now() - start },
       };
-      return proof ? attachOperationCoreTrace(cmd, feedback, proof) : feedback;
+      return proof ? attachOperationCoreTrace(cmd, feedback, proof, observation, execution.boundary) : feedback;
     }
   }
 
@@ -381,6 +388,7 @@ export class Executor {
     constraints: ExecuteCommand["constraints"],
     start: number,
     commit_hash: string,
+    markInvoked: (boundary: OperationExecutionBoundary) => void,
   ): Promise<ExecuteFeedback> {
     if (constraints?.allowed_tools && !constraints.allowed_tools.includes(payload.tool_name)) {
       return {
@@ -416,6 +424,7 @@ export class Executor {
     }
 
     const controller = new AbortController();
+    markInvoked("tool_adapter");
     const result = await this.withTimeout(
       tool.invoke(payload.arguments, {
         command_id: id,
@@ -438,8 +447,10 @@ export class Executor {
     payload: ChannelSendPayload,
     start: number,
     commit_hash: string,
+    markInvoked: (boundary: OperationExecutionBoundary) => void,
   ): Promise<ExecuteFeedback> {
     if (this.deps.dispatcher) {
+      markInvoked("channel_adapter");
       const r = await this.deps.dispatcher.dispatch(payload, {
         command_id: id,
         upstream_commit_hash: commit_hash,
@@ -475,6 +486,7 @@ export class Executor {
     }
 
     // Fallback: Phase 0/1 behavior — log only.
+    markInvoked("console_preview");
     // eslint-disable-next-line no-console
     console.log(
       `[channel:${payload.channel}] -> ${payload.target}: ${payload.content}`,
@@ -689,10 +701,14 @@ function attachOperationCoreTrace(
   command: ExecuteCommand,
   feedback: ExecuteFeedback,
   proof: ExecutorApprovalProof,
+  observation: ReturnType<typeof captureOperationCommandObservation>,
+  execution_boundary: OperationExecutionBoundary,
 ): ExecuteFeedback {
+  const result = buildOperationCommandExecutionResult(observation, feedback, execution_boundary);
   return {
     ...feedback,
     operation_core: buildOperationCoreExecutorTrace(command, feedback.status, proof),
+    ...(result ? { operation_core_result: result } : {}),
   };
 }
 

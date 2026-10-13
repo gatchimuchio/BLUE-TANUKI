@@ -18,6 +18,7 @@ import {
   parseMeaningUpdateProposal,
   SkepticalReviewRequestSchema,
   LLMFallbackAuthorizationSchema,
+  inspectOperationCommandExecutionResult,
 } from "@blue-tanuki/protocol";
 import type {
   ApprovalGateLog,
@@ -758,6 +759,12 @@ export class HDSUpperController {
       ? undefined
       : parseMeaningUpdateProposal(fb.meaning_update_proposal);
     const sourceLog = this.inflight.get(fb.command_id);
+    const operationResult = sourceLog ? inspectOperationCommandExecutionResult(fb.operation_core_result, {
+      request_id: sourceLog.request_id,
+      command_id: fb.command_id,
+      upstream_commit_hash: sourceLog.commit.hash,
+      status: fb.status,
+    }) : undefined;
     const meaningUpdateProposalContractStatus = fb.meaning_update_proposal === undefined
       ? "not_present" as const
       : fb.status === "success" && sourceLog !== undefined && meaningUpdateProposalParse?.ok
@@ -787,6 +794,9 @@ export class HDSUpperController {
         status: fb.status,
         result_present: fb.result !== undefined,
         result_digest: fb.result === undefined ? undefined : sha256(fb.result),
+        operation_result_contract_status: fb.operation_core_result === undefined
+          ? "not_present" as const : operationResult ? "passed" as const : "failed" as const,
+        operation_result_digest: operationResult ? sha256(operationResult) : undefined,
         error: fb.error,
         llm_failure: llmFailure,
         llm_tool_candidate_count: toolCandidates?.length ?? rawCandidateCount(fb.llm_tool_candidates),
@@ -988,6 +998,7 @@ export class HDSUpperController {
       model_abstraction: log.model.abstraction,
       commit_hash: log.commit.hash,
       commit_decision: log.commit.decision,
+      request_id: log.request_id,
     };
 
     // S7 action routing: explicit safe tool requests may become tool_call.

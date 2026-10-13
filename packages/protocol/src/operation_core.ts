@@ -575,6 +575,59 @@ export const OperationExecutionResultSchema = z.object({
 }).strict();
 export type OperationExecutionResult = z.infer<typeof OperationExecutionResultSchema>;
 
+// 実commandの観測。plan/stepへの対応は別途確定するまで成立しない。
+export const OperationCommandExecutionResultSchema = z.object({
+  version: z.literal("operation-core.v1"),
+  role: z.literal("command_execution_result"),
+  result_id: z.string().min(1).max(200),
+  request_id: z.string().min(1).max(200),
+  command_id: z.string().min(1).max(200),
+  upstream_commit_hash: z.string().min(1).max(200),
+  operation: z.string().min(1).max(160),
+  state: z.enum(["succeeded", "failed", "suspended"]),
+  adapter: OperationAdapterKindSchema,
+  execution_boundary: z.enum(["not_invoked", "tool_adapter", "channel_adapter", "console_preview"]),
+  action_outcome: z.enum(["not_attempted", "reported_success", "unknown", "preview_only"]),
+  observed_at_ms: z.number().finite().nonnegative(),
+  command_payload_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  output_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  error_digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  plan_step_binding: z.literal("unbound"),
+  adapter_result_used_for_authority: z.literal(false),
+  used_for_authority: z.literal(false),
+  evidence_source: z.tuple([z.literal("INTERNAL_STATE")]),
+}).strict().superRefine((result, context) => {
+  const expected = result.execution_boundary === "not_invoked" ? "not_attempted"
+    : result.execution_boundary === "console_preview" ? "preview_only"
+      : result.state === "succeeded" ? "reported_success" : "unknown";
+  if (result.action_outcome !== expected ||
+      (result.execution_boundary === "not_invoked" && result.state === "succeeded")) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "execution boundary and outcome do not agree" });
+  }
+});
+export type OperationCommandExecutionResult = z.infer<typeof OperationCommandExecutionResultSchema>;
+
+/** 形状と実呼出しとの相関のみを検査する。実行・承認の根拠にはしない。 */
+export function inspectOperationCommandExecutionResult(
+  value: unknown,
+  expected: {
+    request_id: string | null;
+    command_id: string | null;
+    upstream_commit_hash: string | null;
+    status: string;
+    operation?: string;
+  },
+): OperationCommandExecutionResult | undefined {
+  const parsed = OperationCommandExecutionResultSchema.safeParse(value);
+  if (!parsed.success) return undefined;
+  const result = parsed.data;
+  const state = expected.status === "success" ? "succeeded" : expected.status;
+  return result.request_id === expected.request_id && result.command_id === expected.command_id &&
+    result.upstream_commit_hash === expected.upstream_commit_hash && result.state === state &&
+    (expected.operation === undefined || result.operation === expected.operation)
+    ? result : undefined;
+}
+
 export const OperationCoreExecutorTraceSchema = z.object({
   version: z.literal("operation-core.v1"),
   role: z.literal("execution_adapter_trace"),
@@ -699,6 +752,7 @@ export const OperationCoreExecutionResultProjectionSchema = z.object({
   }).strict(),
   command: OperationCoreExecutionCommandProjectionSchema,
   execution_trace: OperationCoreExecutorTraceSchema.optional(),
+  command_execution_result: OperationCommandExecutionResultSchema.optional(),
   planner_output: OperationCorePlannerExecutionProjectionSchema.optional(),
   diff: OperationCoreExecutionGapProjectionSchema,
   rollback: OperationCoreExecutionGapProjectionSchema,

@@ -310,6 +310,8 @@ export interface ExecutorFeedbackAuditTrace {
   status: ExecuteFeedback["status"];
   result_present: boolean;
   result_digest?: string;
+  operation_result_contract_status?: "not_present" | "passed" | "failed";
+  operation_result_digest?: string;
   error?: string;
   llm_failure?: ExecuteFeedback["llm_failure"];
   llm_tool_candidate_count?: number;
