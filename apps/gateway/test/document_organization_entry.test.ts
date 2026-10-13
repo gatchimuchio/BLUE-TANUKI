@@ -9,7 +9,7 @@ import { WebSocket } from "ws";
 import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = process.cwd();
-const tsxCli = join(repositoryRoot, "node_modules", "tsx", "dist", "cli.mjs");
+const tsxArgs = ["--import", "tsx"];
 const source = "決定事項:青\n未確認:期限";
 const firstExcerpt = "決定事項:青";
 const secondExcerpt = "未確認:期限";
@@ -49,7 +49,7 @@ describe("document organization ordinary entries", () => {
 
     try {
       const cli = await runChild(
-        [tsxCli, "apps/gateway/src/main.ts", "--organize", source],
+        [...tsxArgs, "apps/gateway/src/main.ts", "--organize", source],
         runtimeEnv,
       );
       const cliOutput = extractProjection(cli.stdout.join(""));
@@ -148,7 +148,7 @@ describe("document organization ordinary entries", () => {
     firstEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
     seedPersistentMemory(memoryFile, "c0802-memory-seed-1");
     const memoryBeforeRestart = readFileSync(memoryFile, "utf8");
-    const childOne = spawnCaptured([tsxCli, "apps/gateway/src/main.ts", "--organize", restartSource], firstEnv);
+    const childOne = spawnCaptured([...tsxArgs, "apps/gateway/src/main.ts", "--organize", restartSource], firstEnv);
 
     try {
       await waitForSignal(secondCallSeen, childOne, "second synthetic C call was not reached");
@@ -171,7 +171,7 @@ describe("document organization ordinary entries", () => {
       resumedEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
 
       try {
-        const resumed = await runChild([tsxCli, "apps/gateway/src/main.ts", "--organize", restartSource], resumedEnv);
+        const resumed = await runChild([...tsxArgs, "apps/gateway/src/main.ts", "--organize", restartSource], resumedEnv);
         const resumedOutput = extractProjection(resumed.stdout.join(""));
         expect(resumedOutput).toContain("状態: completed");
         expect(resumedOutput).toContain("C08_PRIVATE_RESTART_SOURCE:決定事項は青。");
@@ -180,7 +180,7 @@ describe("document organization ordinary entries", () => {
         expect(providerTwoCalls).toBe(1);
         expect(providerTwoPrompts[0]).toContain(`"start":0,"end":${firstQuote.length}`);
 
-        const repeated = await runChild([tsxCli, "apps/gateway/src/main.ts", "--organize", restartSource], resumedEnv);
+        const repeated = await runChild([...tsxArgs, "apps/gateway/src/main.ts", "--organize", restartSource], resumedEnv);
         expect(extractProjection(repeated.stdout.join(""))).toContain("状態: completed");
         expect(providerTwoCalls).toBe(1);
         expect(readFileSync(memoryFile, "utf8")).toBe(memoryBeforeRestart);
@@ -235,7 +235,7 @@ describe("document organization ordinary entries", () => {
     const firstEnv = isolatedRuntimeEnvironment(providerOnePort, runtimePort, auditDir, historyFile, sessionDir);
     firstEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
     seedPersistentMemory(memoryFile, "c0802-memory-seed-negative");
-    const childOne = spawnCaptured([tsxCli, "apps/gateway/src/main.ts", "--organize", changedSource], firstEnv);
+    const childOne = spawnCaptured([...tsxArgs, "apps/gateway/src/main.ts", "--organize", changedSource], firstEnv);
 
     try {
       await waitForSignal(secondCallSeen, childOne, "second synthetic C call was not reached");
@@ -257,14 +257,14 @@ describe("document organization ordinary entries", () => {
       resumedEnv.BLUE_TANUKI_MEMORY_FILE = memoryFile;
 
       try {
-        const held = await runChild([tsxCli, "apps/gateway/src/main.ts", "--organize", changedSource], resumedEnv);
+        const held = await runChild([...tsxArgs, "apps/gateway/src/main.ts", "--organize", changedSource], resumedEnv);
         const heldOutput = extractProjection(held.stdout.join(""));
         expect(heldOutput).toContain("状態: held");
         expect(heldOutput).toContain("memory_state_changed");
         expect(heldOutput).toContain("再起動復旧済み範囲");
         expect(providerTwoCalls).toBe(0);
 
-        const repeated = await runChild([tsxCli, "apps/gateway/src/main.ts", "--organize", changedSource], resumedEnv);
+        const repeated = await runChild([...tsxArgs, "apps/gateway/src/main.ts", "--organize", changedSource], resumedEnv);
         expect(extractProjection(repeated.stdout.join(""))).toContain("memory_state_changed");
         expect(providerTwoCalls).toBe(0);
         const checkpointBytes = readFileSync(join(auditDir, "file-root", "document-organization", "j-checkpoints.sqlite"));
@@ -338,6 +338,7 @@ function isolatedRuntimeEnvironment(upstreamPort: number, gatewayPort: number, a
     WEBCHAT_RESUME_TOKEN: resumeToken,
     BLUE_TANUKI_MAINTENANCE_TOKEN: maintenanceToken,
     BLUE_TANUKI_FILE_ROOT: join(auditDir, "file-root"),
+    BLUE_TANUKI_STATE_ROOT: join(auditDir, "state"),
     BLUE_TANUKI_MEMORY_FILE: join(auditDir, "memory.jsonl"),
     BLUE_TANUKI_AUDIT_DIR: auditDir,
     BLUE_TANUKI_COMPLETE_HISTORY_FILE: historyFile,
@@ -419,9 +420,11 @@ async function waitForSignal(signal: Promise<void>, processRun: CapturedProcess,
 }
 
 async function forceStopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (!children.has(child)) return;
   const closed = once(child, "close");
-  if (!child.kill("SIGKILL")) throw new Error("test-owned Gateway child could not be terminated");
+  if (child.exitCode === null && child.signalCode === null && !child.kill("SIGKILL")) {
+    throw new Error("test-owned Gateway child could not be terminated");
+  }
   await closed;
   children.delete(child);
 }
@@ -442,7 +445,7 @@ async function reserveLoopbackPort(): Promise<number> {
 }
 
 function spawnGateway(env: NodeJS.ProcessEnv): CapturedProcess {
-  return spawnCaptured([tsxCli, "apps/gateway/src/main.ts", "--serve"], env);
+  return spawnCaptured([...tsxArgs, "apps/gateway/src/main.ts", "--serve"], env);
 }
 
 async function runChild(args: string[], env: NodeJS.ProcessEnv): Promise<CapturedProcess> {
@@ -455,7 +458,7 @@ async function runChild(args: string[], env: NodeJS.ProcessEnv): Promise<Capture
 }
 
 function spawnCaptured(args: string[], env: NodeJS.ProcessEnv): CapturedProcess {
-  const child = spawn(process.execPath, args, { cwd: repositoryRoot, env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, args, { cwd: repositoryRoot, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   children.add(child);
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -504,12 +507,22 @@ function waitForWebChatSend(webSocket: WebSocket): Promise<string> {
 }
 
 async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (!children.has(child)) return;
+  const closed = once(child, "close");
+  if (child.exitCode !== null || child.signalCode !== null) { await closed; children.delete(child); return; }
   child.kill();
-  await Promise.race([
-    once(child, "close").then(() => undefined),
-    new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const ended = await Promise.race([
+    closed.then(() => true),
+    new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 3_000); }),
   ]);
+  if (timer) clearTimeout(timer);
+  if (!ended) {
+    if (child.exitCode === null && child.signalCode === null && !child.kill("SIGKILL")) {
+      throw new Error("test-owned Gateway child could not be terminated");
+    }
+    await closed;
+  }
   children.delete(child);
 }
 

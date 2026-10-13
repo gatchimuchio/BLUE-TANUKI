@@ -25,7 +25,9 @@ import {
   captureExecutorCommandForApproval,
   executorCommandDigest,
   createLogger,
+  type ExecutionIntentReceipt,
 } from "@blue-tanuki/core";
+import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
 import { buildAuditLog } from "./audit_config.js";
 import {
@@ -431,7 +433,8 @@ export async function serve(): Promise<ServeShutdown> {
   // Forward declarations: resume/approval closures resolve at call time.
   // eslint-disable-next-line prefer-const
   let executor: Executor;
-  const executorApproval = createExecutorApprovalAuthority();
+  const executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
+  const executorApproval = createExecutorApprovalAuthority({ execution_store: executionStore });
   let webchat: WebChatChannel;
 
   function recordCompleteHistory(input: CompleteHistoryAppendInput): CompleteHistoryEntry | null {
@@ -637,6 +640,7 @@ export async function serve(): Promise<ServeShutdown> {
     origin: InboundRequest,
     actor: string,
     feedback: ExecuteFeedback,
+    receipt: ExecutionIntentReceipt | null,
   ): CompleteHistoryEntry | null {
     return recordCompleteHistory({
       kind: "execution_history",
@@ -656,6 +660,12 @@ export async function serve(): Promise<ServeShutdown> {
         operation_core: feedback.operation_core,
         operation_core_result: operationCoreResultHistoryProjection(cmd, feedback),
         operation_core_planner: operationCorePlannerHistoryProjection(feedback),
+        execution_receipt: receipt ? {
+          ticket_digest: digestString(receipt.ticket_id), command_digest: receipt.command_digest,
+          execution_epoch_digest: digestString(receipt.execution_epoch), state: receipt.state,
+          invocation_boundary: receipt.invocation_boundary, feedback_status: receipt.feedback_status,
+          output_digest: receipt.output_digest, error_digest: receipt.error_digest, used_for_authority: false,
+        } : undefined,
       },
     });
   }
@@ -917,7 +927,7 @@ export async function serve(): Promise<ServeShutdown> {
         },
       });
     }
-    const executionHistory = recordExecutionHistory(cmd, log, origin, actor, fb);
+    const executionHistory = recordExecutionHistory(cmd, log, origin, actor, fb, executorApproval.receipt(approvedCommand));
     const meaningUpdateProposalHistory = buildMeaningUpdateProposalHistoryInput(
       cmd,
       log.request_id,
@@ -1099,6 +1109,7 @@ export async function serve(): Promise<ServeShutdown> {
             runtime_schedules_count: runtimeSchedulesCount,
             pending_schedule_approvals_count: pendingScheduleApprovalsCount,
             runtime_schedules: runtimeScheduleSnapshot,
+            execution_receipts: executionStore.snapshot(),
             operation_core_execution: projectOperationCoreExecutionHistory(
               completeHistory.replay({ kind: "execution_history" }),
               {
@@ -1882,6 +1893,7 @@ export async function serve(): Promise<ServeShutdown> {
       documentOrganizationCheckpointStore?.close();
       documentOrganizationCheckpointStore = null;
       operationPlanState.close();
+      executionStore.close();
       auditLog.info("summary", {
         entries: hds.getAudit().size(),
         chain_valid: hds.getAudit().verify(),

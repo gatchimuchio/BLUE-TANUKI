@@ -11,7 +11,9 @@ import type { HDSUpperController } from "@blue-tanuki/hds-brain";
 
 type PlanProjection = ReturnType<HDSUpperController["getRuntimeSnapshot"]>["operation_plans"];
 type Pending = { command_id: string; approval_token: string; approval_level: string };
-type Snapshot = { hds: { operation_plans: PlanProjection }; pending_approvals: Pending[] };
+type Snapshot = { hds: { operation_plans: PlanProjection }; pending_approvals: Pending[];
+  execution_receipts: { used_for_authority: false; execution_eligible: false; records: Array<{
+    ticket_digest: string; command_digest: string; execution_epoch_digest: string; state: string; invocation_boundary?: string }> } };
 
 const root = await mkdtemp(join(tmpdir(), "blue-plan-http-"));
 const workspace = join(root, "workspace");
@@ -116,9 +118,17 @@ try {
   await waitFor(async () => (await snapshot()).hds.operation_plans.plans[0].status === "results_verified");
   const projection = (await snapshot()).hds.operation_plans;
   assert.ok(!JSON.stringify(projection).includes(workspace)); assert.ok(!JSON.stringify(projection).includes("loopback-plan"));
+  const receipts = (await snapshot()).execution_receipts;
+  assert.equal(receipts.used_for_authority, false); assert.equal(receipts.execution_eligible, false);
+  const actions = receipts.records.filter((receipt) => receipt.invocation_boundary === "tool_adapter");
+  assert.equal(actions.length, 2); assert.ok(actions.every((receipt) => receipt.state === "adapter_returned"));
+  assert.ok(receipts.records.some((receipt) => receipt.invocation_boundary === "llm_adapter"));
+  assert.ok(!JSON.stringify(receipts).includes(workspace)); assert.ok(!JSON.stringify(receipts).includes("fixture-owner"));
   await stop(); await boot(); state = await snapshot();
   assert.equal(state.hds.operation_plans.plans[0].status, "results_verified"); assert.equal(state.pending_approvals.length, 0);
   assert.equal(calls, 1);
-  console.log("PASS: loopback C → Developer HTTP → HDS → Approval Gate → real file.search → dependent result; revision invalidation; private restart state");
+  assert.deepEqual(state.execution_receipts.records, receipts.records);
+  const denied = await fetch(`${base}/runtime/snapshot`); assert.equal(denied.status, 401);
+  console.log("PASS: loopback C → Developer HTTP → HDS → Approval Gate → durable intent → real file.search → dependent result; revision invalidation; authenticated digest-only receipt after restart");
 } catch (error) { console.error(diagnostics); throw error; }
 finally { await stop(); await new Promise<void>((resolve) => provider.close(() => resolve())); await rm(root, { recursive: true, force: true }); }

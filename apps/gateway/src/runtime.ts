@@ -41,6 +41,7 @@ import {
   type DocumentOrganizationSession,
 } from "./document_organization_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
+import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -94,6 +95,12 @@ export function buildSessionStore(
 
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   Object.assign(process.env, resolveAllSecretRefs(process.env));
+  const executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
+  try { await runCliWithExecutionStore(argv, executionStore); }
+  finally { executionStore.close(); }
+}
+
+async function runCliWithExecutionStore(argv: readonly string[], executionStore: GatewayExecutionIntentStore): Promise<void> {
   const cleanArgs = stripEnvFileArgs([...argv]);
   const organizeIndex = cleanArgs.indexOf("--organize");
   const organizationSource = organizeIndex >= 0
@@ -142,7 +149,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   });
   const failureMemory = buildFailureMemoryStore(process.env);
   const approval = buildApprovalRuntime(process.env);
-  const executorApproval = createExecutorApprovalAuthority();
+  const executorApproval = createExecutorApprovalAuthority({ execution_store: executionStore });
   const executor = new Executor({
     llm,
     compute: new LLMComputeAdapter(llm),

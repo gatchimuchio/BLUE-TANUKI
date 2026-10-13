@@ -28,7 +28,8 @@
 ## 現行の開発記録
 
 - [計画接続の操作](計画接続の操作.md) — Developer入口、内部対応、私有回復状態、明示step選択と未実行部分の改訂
-- [承認内容の固定](承認内容の固定.md) — Approval受付からExecutorの内容固定・process内単回承認、永続ticket等の未接続
+- [承認内容の固定](承認内容の固定.md) — Approval受付からExecutorの内容固定と認証・独立Permissionの未接続
+- [実行意思と再照会](実行意思と再照会.md) — local期限・永続消費・開始意思・receipt、再起動後の認証付き状態照会
 - [共通record境界](../packages/protocol/src/common_record.ts) — JSON境界parser、独立状態schema、fail-closed理由
 - [目的射影](GOAL_PROJECTION.md) — 原文digest参照、必要性・到達状態・評価・期間・権限のunknown保持とHDS監査経路
 - [目的・手段関係網](GOAL_RELATIONS.md) — 複数親、共有・共同寄与、未解決抵触のstrict契約、forest表示とcanonical復元

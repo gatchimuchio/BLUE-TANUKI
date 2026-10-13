@@ -1,4 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
+import type { ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary,
+  ExecutorApprovalOptions, ExecutorApprovalClock, ExecutionIntentStore } from "./execution_intent.js";
 import {
   BOUNDARY_EXCHANGE_SCHEMA_VERSION,
   BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
@@ -124,6 +127,19 @@ interface ApprovedCommandRecord {
   authority_id: symbol;
   command_digest: string;
   consumed: boolean;
+  ticket: Readonly<ExecutionIntentTicket>;
+  issued_monotonic_ms: number;
+  runtime: ApprovalRuntime;
+}
+
+interface ApprovalRuntime {
+  authority_id: symbol;
+  execution_epoch: string;
+  clock: ExecutorApprovalClock;
+  ttl_ms: number;
+  last_wall_ms: number;
+  last_monotonic_ms: number;
+  store?: ExecutionIntentStore;
 }
 
 // 権限記録をreflection可能なpropertyや直列化commandへ載せない。
@@ -135,13 +151,29 @@ export type ApprovedCommand = ExecuteCommand & {
 
 export interface ExecutorApprovalAuthority {
   approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string): ApprovedCommand;
+  /** 再照会は実行しない。未完の消費は結果不明として表示する。 */
+  receipt(command: ApprovedCommand): ExecutionIntentReceipt | null;
 }
 
-export function createExecutorApprovalAuthority(): ExecutorApprovalAuthority {
+export function createExecutorApprovalAuthority(options: ExecutorApprovalOptions = {}): ExecutorApprovalAuthority {
   const authorityId = Symbol("blue_tanuki.executor.approval_authority.instance");
+  const ttl_ms = options.ticket_ttl_ms ?? 300_000;
+  if (!Number.isSafeInteger(ttl_ms) || ttl_ms <= 0 || ttl_ms > 600_000) throw new Error("Executor ticket TTL is invalid");
+  const runtime: ApprovalRuntime = { authority_id: authorityId, execution_epoch: randomUUID(),
+    clock: options.clock ?? { wallNow: Date.now, monotonicNow: () => performance.now() }, ttl_ms,
+    last_wall_ms: 0, last_monotonic_ms: 0, store: options.execution_store };
+  readApprovalClock(runtime);
   const authority = Object.freeze({
     approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string): ApprovedCommand {
-      return approveCommandForExecution(command, proof, authorityId, expected_command_digest);
+      return approveCommandForExecution(command, proof, runtime, expected_command_digest);
+    },
+    receipt(command: ApprovedCommand): ExecutionIntentReceipt | null {
+      const record = APPROVED_COMMAND_RECORDS.get(command);
+      if (!record || record.authority_id !== authorityId) return null;
+      const receipt = runtime.store?.lookup(record.ticket.ticket_id) ?? null;
+      if (!receipt) return null;
+      return Object.freeze({ ...receipt, state: receipt.state === "intent_committed" || receipt.state === "invocation_attempted"
+        ? "outcome_unknown" : receipt.state });
     },
   });
   APPROVAL_AUTHORITY_IDS.set(authority, authorityId);
@@ -150,11 +182,16 @@ export function createExecutorApprovalAuthority(): ExecutorApprovalAuthority {
 
 function approveCommandForExecution(
   command: ExecuteCommand,
-  proof: ExecutorApprovalProof,
-  authority_id: symbol,
+  inputProof: ExecutorApprovalProof,
+  runtime: ApprovalRuntime,
   expected_command_digest?: string,
 ): ApprovedCommand {
   const snapshot = approvalCommandSnapshot(command);
+  // 宣言済みのproof値を一度だけ捕捉し、保存digestと実行検査へ同じ値を渡す。
+  const proof = Object.freeze({ source: inputProof.source, decision: inputProof.decision,
+    approved_by: inputProof.approved_by, approved_at_ms: inputProof.approved_at_ms,
+    upstream_commit_hash: inputProof.upstream_commit_hash, operation: inputProof.operation,
+    risk: inputProof.risk, final_review_required: inputProof.final_review_required, reason: inputProof.reason });
   if (proof.upstream_commit_hash !== snapshot.upstream_decision.commit_hash) {
     throw new Error("approval proof commit hash does not match command upstream decision");
   }
@@ -172,11 +209,39 @@ function approveCommandForExecution(
     throw new Error("Executor approval rejected: reviewed command content changed");
   }
   const approved = snapshot as ApprovedCommand;
+  const clock = readApprovalClock(runtime);
+  const ticket: Readonly<ExecutionIntentTicket> = Object.freeze({
+    ticket_id: randomUUID(), execution_epoch: runtime.execution_epoch,
+    command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", snapshot.id])).digest("hex"),
+    command_digest, proof_digest: createHash("sha256").update(JSON.stringify(proof)).digest("hex"),
+    issued_at_ms: clock.wall, expires_at_ms: clock.wall + runtime.ttl_ms,
+  });
+  runtime.store?.issue(ticket);
   APPROVED_COMMAND_RECORDS.set(approved, {
-    proof: Object.freeze({ ...proof }), authority_id, command_digest, consumed: false,
+    proof, authority_id: runtime.authority_id, command_digest, consumed: false,
+    ticket, issued_monotonic_ms: clock.monotonic, runtime,
   });
   freezeApprovalContent(approved);
   return approved;
+}
+
+function readApprovalClock(runtime: ApprovalRuntime): { wall: number; monotonic: number } {
+  const wall = runtime.clock.wallNow(); const monotonic = runtime.clock.monotonicNow();
+  if (!Number.isSafeInteger(wall) || wall <= 0 || !Number.isFinite(monotonic) || monotonic < 0 ||
+      wall < runtime.last_wall_ms || monotonic < runtime.last_monotonic_ms) {
+    throw new Error("Executor rejected command: approval clock invalid or rolled back");
+  }
+  runtime.last_wall_ms = wall; runtime.last_monotonic_ms = monotonic;
+  return { wall, monotonic };
+}
+
+function assertTicketCurrent(record: ApprovedCommandRecord): number {
+  const now = readApprovalClock(record.runtime);
+  if (record.ticket.execution_epoch !== record.runtime.execution_epoch || now.wall >= record.ticket.expires_at_ms ||
+      now.monotonic - record.issued_monotonic_ms >= record.runtime.ttl_ms) {
+    throw new Error("Executor rejected command: approval ticket expired or epoch changed");
+  }
+  return now.wall;
 }
 
 /** 内容の同一性だけを示す。digestは発行者を認証せず、権限を付与しない。 */
@@ -275,14 +340,21 @@ export class Executor {
     let proof: ExecutorApprovalProof | undefined;
     let observation: ReturnType<typeof captureOperationCommandObservation>;
     const execution = { boundary: "not_invoked" as OperationExecutionBoundary };
-    const markInvoked = (boundary: OperationExecutionBoundary): void => { execution.boundary = boundary; };
+    let invocation: ExecutionInvocationBoundary | undefined;
+    const markInvoked = (boundary: ExecutionInvocationBoundary): void => {
+      const record = APPROVED_COMMAND_RECORDS.get(cmd)!;
+      const now = assertTicketCurrent(record);
+      record.runtime.store?.markInvocation(record.ticket, boundary, now);
+      invocation = boundary;
+      if (boundary !== "llm_adapter") execution.boundary = boundary;
+    };
+    let feedback: ExecuteFeedback;
     try {
       proof = this.assertExecutionApproved(cmd);
       observation = captureOperationCommandObservation(cmd);
-      let feedback: ExecuteFeedback;
       switch (cmd.type) {
         case "llm_call":
-          feedback = await this.executeLLMCall(cmd.id, cmd.payload, cmd.constraints, start, context.signal);
+          feedback = await this.executeLLMCall(cmd.id, cmd.payload, cmd.constraints, start, context.signal, markInvoked);
           break;
         case "tool_call":
           feedback = await this.executeToolCall(cmd.id, cmd.payload, cmd.constraints, start, cmd.upstream_decision.commit_hash, markInvoked);
@@ -309,16 +381,33 @@ export class Executor {
           }
           break;
       }
-      return attachOperationCoreTrace(cmd, feedback, proof, observation, execution.boundary);
+      feedback = attachOperationCoreTrace(cmd, feedback, proof, observation, execution.boundary);
     } catch (e) {
-      const feedback: ExecuteFeedback = {
+      feedback = {
         command_id: cmd.id,
         status: "failed",
         error: e instanceof Error ? e.message : String(e),
         metrics: { duration_ms: Date.now() - start },
       };
-      return proof ? attachOperationCoreTrace(cmd, feedback, proof, observation, execution.boundary) : feedback;
+      if (proof) feedback = attachOperationCoreTrace(cmd, feedback, proof, observation, execution.boundary);
     }
+    if (proof) {
+      const record = APPROVED_COMMAND_RECORDS.get(cmd)!;
+      try {
+        record.runtime.store?.complete(record.ticket, {
+          state: !invocation ? "not_attempted" : feedback.status === "success" ? "adapter_returned" : "outcome_unknown",
+          feedback_status: feedback.status, observed_at_ms: Date.now(),
+          output_digest: feedback.operation_core_result?.output_digest,
+          error_digest: feedback.error ? createHash("sha256").update(feedback.error).digest("hex") : undefined,
+        });
+      } catch {
+        // 保存失敗は成功へ変換しない。同じ承認の再作用も許可しない。
+        feedback = attachOperationCoreTrace(cmd, { command_id: cmd.id, status: "failed",
+          error: "Executor receipt persistence failed; execution outcome requires inspection",
+          metrics: { duration_ms: Date.now() - start } }, proof, observation, execution.boundary);
+      }
+    }
+    return feedback;
   }
 
   private async executeLLMCall(
@@ -327,6 +416,7 @@ export class Executor {
     constraints: ExecuteCommand["constraints"],
     start: number,
     callerSignal?: AbortSignal,
+    markInvoked?: (boundary: ExecutionInvocationBoundary) => void,
   ): Promise<ExecuteFeedback> {
     // History merge: when a session_store is configured AND the payload
     // declares a session_id, prepend retained history before invoking
@@ -369,15 +459,18 @@ export class Executor {
         callerSignal,
         async (signal) => {
           if (this.deps.compute) {
-            return this.deps.compute.compute(buildComputeRequest({
+            const request = buildComputeRequest({
               request_id: id,
               context: payload.compute_context,
               provider_request: providerRequest,
               max_tokens: constraints?.max_tokens,
               timeout_ms: constraints?.timeout_ms,
               session_history_applied: sessionHistoryApplied,
-            }), signal);
+            });
+            markInvoked?.("llm_adapter");
+            return this.deps.compute.compute(request, signal);
           }
+          markInvoked?.("llm_adapter");
           return this.deps.llm.call(providerRequest, signal);
         },
       );
@@ -480,7 +573,7 @@ export class Executor {
     constraints: ExecuteCommand["constraints"],
     start: number,
     commit_hash: string,
-    markInvoked: (boundary: OperationExecutionBoundary) => void,
+    markInvoked: (boundary: ExecutionInvocationBoundary) => void,
   ): Promise<ExecuteFeedback> {
     if (constraints?.allowed_tools && !constraints.allowed_tools.includes(payload.tool_name)) {
       return {
@@ -539,7 +632,7 @@ export class Executor {
     payload: ChannelSendPayload,
     start: number,
     commit_hash: string,
-    markInvoked: (boundary: OperationExecutionBoundary) => void,
+    markInvoked: (boundary: ExecutionInvocationBoundary) => void,
   ): Promise<ExecuteFeedback> {
     if (this.deps.dispatcher) {
       markInvoked("channel_adapter");
@@ -644,7 +737,9 @@ export class Executor {
     }
     // adapter/historyのawait前に同期消費する。失敗でも承認を復活させず、
     // 次の試行には新しい上流採否を必要とする。
+    const now = assertTicketCurrent(record);
     record.consumed = true;
+    record.runtime.store?.consume(record.ticket, now);
     return proof;
   }
 }

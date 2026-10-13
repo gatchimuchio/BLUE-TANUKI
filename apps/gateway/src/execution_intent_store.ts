@@ -1,0 +1,215 @@
+import { createHash } from "node:crypto";
+import { mkdirSync, realpathSync, lstatSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import type { DatabaseSync as DatabaseType } from "node:sqlite";
+import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary } from "@blue-tanuki/core";
+import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
+  parseBoundaryExchangeAtBoundary } from "@blue-tanuki/protocol";
+
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
+const sameTicket = (a: ExecutionIntentTicket, b: ExecutionIntentTicket): boolean =>
+  ["ticket_id", "command_key", "command_digest", "proof_digest", "execution_epoch", "issued_at_ms", "expires_at_ms"]
+    .every((key) => a[key as keyof ExecutionIntentTicket] === b[key as keyof ExecutionIntentTicket]);
+
+/** 私有の実行所有記録。Jのcheckpointと別取引であり、権限の復元元ではない。 */
+export class GatewayExecutionIntentStore implements ExecutionIntentStore {
+  private readonly db: DatabaseType;
+  constructor(filepath: string) {
+    mkdirSync(dirname(resolve(filepath)), { recursive: true });
+    this.db = new DatabaseSync(filepath);
+    this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS execution_intents (
+      ticket_id TEXT PRIMARY KEY, command_key TEXT NOT NULL UNIQUE, receipt_json TEXT NOT NULL, receipt_digest TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS execution_events (
+      sequence INTEGER PRIMARY KEY, ticket_id TEXT NOT NULL, event_json TEXT NOT NULL,
+      previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL
+    ) STRICT;`);
+    // 別processのcommitとevents/receipt読取が交差しない一貫した境界で確認する。
+    try { this.transaction(() => {}); }
+    catch (error) { this.db.close(); throw error; }
+  }
+  static fromEnvironment(env: NodeJS.ProcessEnv = process.env): GatewayExecutionIntentStore {
+    const stateRoot = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
+    mkdirSync(stateRoot, { recursive: true });
+    const privateRoot = join(realpathSync(stateRoot), "private-state");
+    const directory = join(privateRoot, "execution-intents");
+    for (const dir of [privateRoot, directory]) {
+      mkdirSync(dir, { recursive: true });
+      if (lstatSync(dir).isSymbolicLink()) throw new Error("execution_state_directory_must_not_be_symlink");
+    }
+    const filepath = join(directory, "executor.sqlite");
+    try {
+      if (lstatSync(filepath).isSymbolicLink()) throw new Error("execution_state_file_must_not_be_symlink");
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    return new GatewayExecutionIntentStore(filepath);
+  }
+  issue(ticket: Readonly<ExecutionIntentTicket>): void {
+    this.transaction(() => {
+      validateTicket(ticket);
+      if (this.db.prepare("SELECT ticket_id FROM execution_intents WHERE command_key=?").get(ticket.command_key)) {
+        throw new Error("Executor ticket issue rejected: command already issued; inspect existing receipt");
+      }
+      const receipt: ExecutionIntentReceipt = { ...ticket, state: "issued", used_for_authority: false };
+      this.save(receipt, true);
+      this.appendEvent(receipt, ticket.issued_at_ms);
+    });
+  }
+  consume(ticket: Readonly<ExecutionIntentTicket>, now_ms: number): void {
+    this.transaction(() => {
+      const receipt = this.current(ticket, now_ms);
+      if (receipt.state !== "issued") throw new Error("Executor ticket consumption rejected: already consumed");
+      // 単回消費、開始意思、開始eventを同一commitにする。下流はこの後だけ。
+      receipt.state = "intent_committed"; receipt.consumed_at_ms = now_ms;
+      this.save(receipt); this.appendEvent(receipt, now_ms);
+    });
+  }
+  markInvocation(ticket: Readonly<ExecutionIntentTicket>, boundary: ExecutionInvocationBoundary, now_ms: number): void {
+    this.transaction(() => {
+      const receipt = this.current(ticket, now_ms);
+      if (receipt.state !== "intent_committed") throw new Error("Executor invocation rejected: intent not current");
+      receipt.state = "invocation_attempted"; receipt.invocation_boundary = boundary;
+      this.save(receipt); this.appendEvent(receipt, now_ms);
+    });
+  }
+  complete(ticket: Readonly<ExecutionIntentTicket>, result: Pick<ExecutionIntentReceipt,
+    "state" | "feedback_status" | "output_digest" | "error_digest" | "observed_at_ms">): void {
+    this.transaction(() => {
+      const receipt = this.lookup(ticket.ticket_id);
+      if (!receipt || !sameTicket(receipt, ticket)) throw new Error("Executor receipt rejected: ticket mismatch");
+      if ((receipt.state === "intent_committed" && result.state !== "not_attempted") ||
+          (receipt.state === "invocation_attempted" && result.state !== "adapter_returned" && result.state !== "outcome_unknown") ||
+          (receipt.state !== "intent_committed" && receipt.state !== "invocation_attempted") ||
+          (result.state === "adapter_returned" && result.feedback_status !== "success")) {
+        throw new Error("Executor receipt rejected: invalid state transition");
+      }
+      const completed = { ...receipt, ...result };
+      validateReceipt(completed);
+      this.save(completed); this.appendEvent(completed, result.observed_at_ms!);
+    });
+  }
+  lookup(ticket_id: string): ExecutionIntentReceipt | null {
+    const row = this.db.prepare("SELECT receipt_json,receipt_digest,command_key,ticket_id FROM execution_intents WHERE ticket_id=?")
+      .get(ticket_id) as { receipt_json: string; receipt_digest: string; command_key: string; ticket_id: string } | undefined;
+    if (!row) return null;
+    if (digest(row.receipt_json) !== row.receipt_digest) throw new Error("execution_receipt_integrity_failed");
+    let receipt: ExecutionIntentReceipt;
+    try { receipt = JSON.parse(row.receipt_json) as ExecutionIntentReceipt; validateReceipt(receipt); }
+    catch { throw new Error("execution_receipt_integrity_failed"); }
+    if (receipt.ticket_id !== row.ticket_id || receipt.command_key !== row.command_key) throw new Error("execution_receipt_integrity_failed");
+    return receipt;
+  }
+  /** 再起動・再照会では未完intentを結果不明にする。作用も権限復元もしない。 */
+  lookupCommand(command_key: string): ExecutionIntentReceipt | null {
+    const row = this.db.prepare("SELECT ticket_id FROM execution_intents WHERE command_key=?").get(command_key) as { ticket_id: string } | undefined;
+    const receipt = row ? this.lookup(row.ticket_id) : null;
+    return receipt && (receipt.state === "intent_committed" || receipt.state === "invocation_attempted")
+      ? { ...receipt, state: "outcome_unknown" } : receipt;
+  }
+  /** 認証済みControl Center snapshot用。raw command、ticket handle、現在権限を返さない。 */
+  snapshot(limit = 50): { used_for_authority: false; execution_eligible: false; records: Array<{
+    ticket_digest: string; command_digest: string; execution_epoch_digest: string; state: ExecutionIntentReceipt["state"];
+    invocation_boundary?: ExecutionInvocationBoundary; feedback_status?: ExecutionIntentReceipt["feedback_status"];
+    output_digest?: string; error_digest?: string;
+  }> } {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error("execution_receipt_limit_invalid");
+    let records: ReturnType<GatewayExecutionIntentStore["snapshot"]>["records"] = [];
+    this.transaction(() => {
+      const rows = this.db.prepare("SELECT command_key FROM execution_intents ORDER BY rowid DESC LIMIT ?").all(limit) as { command_key: string }[];
+      records = rows.map(({ command_key }) => {
+        const receipt = this.lookupCommand(command_key)!;
+        return { ticket_digest: digest(receipt.ticket_id), command_digest: receipt.command_digest,
+          execution_epoch_digest: digest(receipt.execution_epoch), state: receipt.state,
+          invocation_boundary: receipt.invocation_boundary, feedback_status: receipt.feedback_status,
+          output_digest: receipt.output_digest, error_digest: receipt.error_digest };
+      });
+    });
+    return { used_for_authority: false, execution_eligible: false, records };
+  }
+  verifyEvents(): boolean {
+    let previous = "0".repeat(64);
+    let sequence = 0;
+    const latest = new Map<string, ExecutionIntentReceipt>();
+    const rows = this.db.prepare("SELECT sequence,ticket_id,event_json,previous_hash,event_hash FROM execution_events ORDER BY sequence").all() as
+      { sequence: number; ticket_id: string; event_json: string; previous_hash: string; event_hash: string }[];
+    for (const row of rows) {
+      if (row.sequence !== ++sequence || row.previous_hash !== previous || digest(previous + row.event_json) !== row.event_hash) return false;
+      try {
+        const receipt = JSON.parse(row.event_json).content.receipt as ExecutionIntentReceipt;
+        validateReceipt(receipt);
+        if (receipt.ticket_id !== row.ticket_id) return false;
+        latest.set(row.ticket_id, receipt);
+      } catch { return false; }
+      previous = row.event_hash;
+    }
+    const tickets = this.db.prepare("SELECT ticket_id FROM execution_intents").all() as { ticket_id: string }[];
+    if (tickets.length !== latest.size) return false;
+    for (const ticket of tickets) {
+      try {
+        const receipt = this.lookup(ticket.ticket_id)!; const event = latest.get(ticket.ticket_id);
+        if (!event || JSON.stringify(Object.entries(receipt).sort()) !== JSON.stringify(Object.entries(event).sort())) return false;
+      } catch { return false; }
+    }
+    return true;
+  }
+  close(): void { this.db.close(); }
+  private current(ticket: Readonly<ExecutionIntentTicket>, now_ms: number): ExecutionIntentReceipt {
+    const receipt = this.lookup(ticket.ticket_id);
+    if (!receipt || !sameTicket(receipt, ticket)) throw new Error("Executor ticket rejected: content or epoch mismatch");
+    if (!Number.isSafeInteger(now_ms) || now_ms < receipt.issued_at_ms || now_ms >= receipt.expires_at_ms) {
+      throw new Error("Executor ticket rejected: expired or clock invalid");
+    }
+    return receipt;
+  }
+  private save(receipt: ExecutionIntentReceipt, insert = false): void {
+    validateReceipt(receipt);
+    const json = JSON.stringify(receipt);
+    if (insert) this.db.prepare("INSERT INTO execution_intents VALUES(?,?,?,?)").run(receipt.ticket_id, receipt.command_key, json, digest(json));
+    else this.db.prepare("UPDATE execution_intents SET receipt_json=?,receipt_digest=? WHERE ticket_id=?").run(json, digest(json), receipt.ticket_id);
+  }
+  private appendEvent(receipt: ExecutionIntentReceipt, now_ms: number): void {
+    const row = this.db.prepare("SELECT event_hash FROM execution_events ORDER BY sequence DESC LIMIT 1").get() as { event_hash: string } | undefined;
+    const previous = row?.event_hash ?? "0".repeat(64);
+    const parsed = parseBoundaryExchangeAtBoundary(new TextEncoder().encode(JSON.stringify({
+      schema_version: BOUNDARY_EXCHANGE_SCHEMA_VERSION, canonicalization_version: BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
+      issued_at_utc: new Date(now_ms).toISOString(), content: { profile: "executor-intent-event.v1", receipt },
+    })));
+    if (!parsed.ok) throw new Error("execution_event_canonicalization_failed");
+    const json = new TextDecoder().decode(parsed.canonical_bytes);
+    this.db.prepare("INSERT INTO execution_events(ticket_id,event_json,previous_hash,event_hash) VALUES(?,?,?,?)")
+      .run(receipt.ticket_id, json, previous, digest(previous + json));
+  }
+  private transaction(operation: () => void): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (!this.verifyEvents()) throw new Error("execution_event_integrity_failed");
+      operation(); this.db.exec("COMMIT");
+    }
+    catch (error) { try { this.db.exec("ROLLBACK"); } catch { /* 元の失敗を保つ。 */ } throw error; }
+  }
+}
+
+function validateTicket(ticket: ExecutionIntentTicket): void {
+  if (!ticket || !/^[0-9a-f-]{36}$/.test(ticket.ticket_id) || !/^[0-9a-f-]{36}$/.test(ticket.execution_epoch) ||
+      ![ticket.command_key, ticket.command_digest, ticket.proof_digest].every((v) => /^[0-9a-f]{64}$/.test(v)) ||
+      !Number.isSafeInteger(ticket.issued_at_ms) || ticket.issued_at_ms <= 0 || !Number.isSafeInteger(ticket.expires_at_ms) ||
+      ticket.expires_at_ms <= ticket.issued_at_ms || ticket.expires_at_ms - ticket.issued_at_ms > 600_000) {
+    throw new Error("execution_ticket_invalid");
+  }
+}
+function validateReceipt(receipt: ExecutionIntentReceipt): void {
+  validateTicket(receipt);
+  const fields = ["ticket_id", "command_key", "command_digest", "proof_digest", "execution_epoch", "issued_at_ms", "expires_at_ms",
+    "state", "invocation_boundary", "feedback_status", "output_digest", "error_digest", "consumed_at_ms", "observed_at_ms", "used_for_authority"];
+  if (receipt.used_for_authority !== false ||
+      Object.keys(receipt).some((key) => !fields.includes(key)) ||
+      !["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"].includes(receipt.state) ||
+      (receipt.feedback_status !== undefined && !["success", "failed", "suspended"].includes(receipt.feedback_status)) ||
+      (receipt.invocation_boundary !== undefined && !["tool_adapter", "channel_adapter", "llm_adapter", "console_preview"].includes(receipt.invocation_boundary)) ||
+      [receipt.output_digest, receipt.error_digest].some((v) => v !== undefined && !/^[0-9a-f]{64}$/.test(v)) ||
+      [receipt.consumed_at_ms, receipt.observed_at_ms].some((v) => v !== undefined && (!Number.isSafeInteger(v) || v <= 0))) {
+    throw new Error("execution_receipt_invalid");
+  }
+}

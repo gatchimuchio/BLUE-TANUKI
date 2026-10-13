@@ -2,6 +2,8 @@ export * from "./llm/index.js";
 export * from "./tools/index.js";
 export * from "./sessions/index.js";
 export * from "./operation_core.js";
+export type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt,
+  ExecutionInvocationBoundary, ExecutionReceiptState, ExecutorApprovalOptions, ExecutorApprovalClock } from "./execution_intent.js";
 export {
   Executor,
   createExecutorApprovalAuthority,

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-13 — 永続実行意思・期限・再照会の接続
+
+- GatewayのHTTP・CLI・資料整理へ私有SQLiteの実行storeを注入し、内容・epoch・wall/monotonic期限、単回消費と開始意思を実adapter前に結合した。同じcommand IDの再発行・時計巻戻し・保存失敗から再作用しない。
+- 未呼出し・adapter応答観測・結果不明を保存し、既存認証済みruntime snapshotから再起動後もdigestと状態だけを照会する。event整合確認と開始記録を同じ取引へ接続し、receipt保存失敗は成功へ変換しない。
+- D4Pocketとのprocess認証・独立Permission、実体版、Jとのreceipt調停・worker世代はBUILD_GAP。旧L3、実provider・別repo・P13の保留を維持する。局所疎通をQC/QAへ昇格しない。
+
 ## 2026-10-13 — Approval受付からExecutorへの内容固定
 
 - HTTP・CLI・資料整理の既存consumerでcommandを受付時に深く固定し、制限JSON・JCSの内容digestをpending承認とExecutorへ結合した。承認後の引数・宛先・constraints差替えを防ぐ。
