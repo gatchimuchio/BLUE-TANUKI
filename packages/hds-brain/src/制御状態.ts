@@ -133,16 +133,24 @@ export class JMemoryCommitCoordinator {
   constructor(options: {
     readonly private_state_root: string;
     readonly database_path: string;
+    /** 新しいruntimeはJ/Mを別DBに置く。省略は既存の共有DB履歴用。 */
+    readonly memory_database_path?: string;
     readonly j_approval_reader: JMemoryApprovalReader;
     readonly now?: () => Date;
   }) {
+    if (options.memory_database_path !== undefined) {
+      const jPath = resolvePrivateStateDatabasePath(options.private_state_root, options.database_path);
+      const mPath = resolvePrivateStateDatabasePath(options.private_state_root, options.memory_database_path);
+      if (jPath !== mPath && (existsSync(jPath) && statSync(jPath).size > 0) !==
+          (existsSync(mPath) && statSync(mPath).size > 0)) throw new PersistenceStoreError("J", "schema_mismatch");
+    }
     let store: JControlStateStore | undefined;
     const persistedApprovalReader: JMemoryApprovalReader = {
       readVerifiedMemoryApproval: (reference) => store?.readVerifiedMemoryApproval(reference) ?? null,
     };
     this.memoryLedger = new MemoryUpdateLedger({
       private_state_root: options.private_state_root,
-      database_path: options.database_path,
+      database_path: options.memory_database_path ?? options.database_path,
       j_approval_reader: persistedApprovalReader,
       now: options.now,
     });
@@ -150,6 +158,9 @@ export class JMemoryCommitCoordinator {
       store = new JControlStateStore({
         private_state_root: options.private_state_root,
         database_path: options.database_path,
+        shared_memory_database: options.memory_database_path === undefined ||
+          resolvePrivateStateDatabasePath(options.private_state_root, options.memory_database_path) ===
+            resolvePrivateStateDatabasePath(options.private_state_root, options.database_path),
         now: options.now,
       });
       this.store = store;
@@ -249,6 +260,7 @@ class JControlStateStore {
   constructor(options: {
     readonly private_state_root: string;
     readonly database_path: string;
+    readonly shared_memory_database: boolean;
     readonly now?: () => Date;
   }) {
     let databasePath: string;
@@ -269,7 +281,9 @@ class JControlStateStore {
       database.exec("PRAGMA journal_mode = DELETE");
       database.exec("PRAGMA synchronous = EXTRA");
       database.exec("PRAGMA foreign_keys = ON");
-      if (!verifyPragmas(database) || !verifyMNamespace(database)) {
+      const tables = database.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+      if (!verifyPragmas(database) || (options.shared_memory_database ? !verifyMNamespace(database) :
+          tables.some((row) => typeof row.name !== "string" || !J_TABLES.includes(row.name as typeof J_TABLES[number])))) {
         throw new PersistenceStoreError("J", "schema_mismatch");
       }
       this.database = database;

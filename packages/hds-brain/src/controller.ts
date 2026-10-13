@@ -24,7 +24,7 @@ import {
   type OperationPlanControl,
   getOperationDescriptor,
 } from "@blue-tanuki/protocol";
-import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort } from "./operation_plan.js";
+import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage } from "./operation_plan.js";
 import type {
   ApprovalGateLog,
   AuthorityEventLog,
@@ -159,6 +159,7 @@ export interface ControllerOptions {
   /** Trusted HDS construction input; exact event-to-authorization digests are checked at creation. */
   goal_governance?: GoalGovernanceConfig;
   operation_plan_state?: OperationPlanStatePort;
+  operation_plan_memory?: OperationPlanMemoryStorage;
 }
 
 export interface LLMCommandRoute {
@@ -219,7 +220,7 @@ export class HDSUpperController {
   private readonly suspendedRequests = new Map<string, InboundRequest>();
 
   constructor(opts: ControllerOptions = {}) {
-    this.operationPlans = new OperationPlanLedger(opts.operation_plan_state);
+    this.operationPlans = new OperationPlanLedger(opts.operation_plan_state, opts.operation_plan_memory);
     this.policy = opts.policy ?? DEFAULT_POLICY;
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
@@ -928,9 +929,14 @@ export class HDSUpperController {
   }
   reconcileOperationPlanResult(delivery: ExecutionResultDelivery, delivery_digest: string): boolean {
     const adopted = this.operationPlans.reconcileResult(delivery, delivery_digest);
-    if (adopted) this.planEvent("result_reconciled", delivery.feedback.command_id);
-    return adopted;
+    if (adopted) {
+      this.operationPlans.reconcileMemory();
+      this.planEvent("result_reconciled", delivery.feedback.command_id);
+    }
+    return adopted && this.operationPlans.resultMemoryIsDurable(delivery.feedback.command_id);
   }
+  reconcileOperationPlanMemory(): boolean { return this.operationPlans.reconcileMemory(); }
+  closeOperationPlanMemory(): void { this.operationPlans.closeMemory(); }
   private planEvent(event: string, command_id: string): void {
     this.audit.append({ kind: "operation_plan", event, request_id: this.inflight.get(command_id)?.request_id ?? null, command_id,
       projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false, timestamp: Date.now() });

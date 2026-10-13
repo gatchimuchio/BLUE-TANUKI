@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { OperationPlanSchema, OperationJsonValueSchema, OperationTargetSchema, OperationStepSchema } from "./operation_core.js";
 import { ExecutionAdmissionSchema } from "./execution_result_delivery.js";
+import { MemoryCommitV2Schema, MemoryUpdateReceiptV1Schema } from "./状態更新契約.js";
 
 const Id = z.string().min(1).max(200);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -23,6 +24,8 @@ export const OperationPlanCheckpointSchema = z.object({
       result_digest: Digest.optional(),
       execution_admission: ExecutionAdmissionSchema.optional(),
       delivery_digest: Digest.optional(),
+      memory_commit: MemoryCommitV2Schema.optional(),
+      memory_receipt: MemoryUpdateReceiptV1Schema.optional(),
     }).strict()).max(1000),
     results: z.array(z.object({
       plan_id: Id, request_id: Id, step_id: Id, result_id: Id, operation: Id,

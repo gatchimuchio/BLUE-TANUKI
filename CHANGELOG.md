@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-13 — 実観測のM保存とreceiptからの復帰
+
+- Jの検証済み計画file.search結果を限定観測として固定し、全文commitのCAS保存から既存M取引・receiptへ接続した。任意意味更新や権限昇格は行わない。
+- 再起動後は同commit・同receiptと元M recordを照合して後続stepへ戻る。元計画版・観測時刻を保ち、M pending、J読取失敗・CAS競合では進行や配送ackを保留する。
+- 一般意味採用・C引用・学習、D4独立Permission・5OS製品・QC/QA・実provider・別repo・P13は未成立または保留。
+
 ## 2026-10-13 — 保存実結果を再起動Jへ配送
 
 - 計画file.searchの実行前にticket・内容・epochをJへ結合し、実検索結果と元の観測をreceiptと同じ私有SQLite取引へ保存する。本文を公開snapshotへ出さない。

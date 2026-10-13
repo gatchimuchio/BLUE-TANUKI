@@ -19,6 +19,7 @@ type Snapshot = { hds: { operation_plans: PlanProjection }; pending_approvals: P
     result_delivery_digest?: string; result_delivery_acknowledged?: boolean }> } };
 
 const recovery = process.argv.includes("--reconciliation");
+const memoryRecovery = process.argv.includes("--memory-reconciliation");
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 const root = await mkdtemp(join(tmpdir(), "blue-plan-http-"));
@@ -111,7 +112,29 @@ try {
   await waitFor(async () => (await snapshot()).hds.operation_plans.plans.length === 1);
   let state = await snapshot(); const first = await select(state.hds.operation_plans.plans[0].steps[0]);
   assert.equal(first.approval_level, "L1_observe");
-  if (recovery) {
+  if (memoryRecovery) {
+    const jPath = join(root, "state", "private-state", "result-memory", "j-control.sqlite");
+    const mPath = join(root, "state", "private-state", "result-memory", "m-state.sqlite");
+    const db = new DatabaseSync(jPath);
+    db.exec(`CREATE TRIGGER fixture_memory_receipt_failure BEFORE UPDATE ON j_state WHEN NEW.status='ready'
+      BEGIN SELECT RAISE(ABORT,'fixture memory receipt persistence failure'); END;`);
+    db.close(); await approve(first);
+    state = await snapshot();
+    assert.equal(state.hds.operation_plans.plans[0].steps[0].status, "verified");
+    assert.equal(state.hds.operation_plans.result_memory.status, "pending_or_unavailable");
+    assert.equal(state.hds.operation_plans.plans[0].bindings[0].memory_status, "memory_commit_pending");
+    const m = new DatabaseSync(mPath);
+    const receipt = m.prepare("SELECT receipt_json FROM m_receipts").get()!.receipt_json;
+    assert.equal(m.prepare("SELECT revision FROM m_state").get()!.revision, 1); m.close();
+    await stop(); const repair = new DatabaseSync(jPath); repair.exec("DROP TRIGGER fixture_memory_receipt_failure"); repair.close();
+    await boot(); state = await snapshot();
+    assert.equal(state.hds.operation_plans.result_memory.status, "receipt_confirmed");
+    assert.equal(state.hds.operation_plans.plans[0].bindings[0].memory_status, "receipt_confirmed");
+    const restored = new DatabaseSync(mPath);
+    assert.equal(restored.prepare("SELECT revision FROM m_state").get()!.revision, 1);
+    assert.equal(restored.prepare("SELECT receipt_json FROM m_receipts").get()!.receipt_json, receipt); restored.close();
+    assert.equal(state.execution_receipts.records.filter((r) => r.invocation_boundary === "tool_adapter").length, 1);
+  } else if (recovery) {
     // 開発専用の保存故障。実作用は一時Workspaceの検索だけ。製品への故障hookは追加しない。
     const jPath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
     const db = new DatabaseSync(jPath);
@@ -147,6 +170,9 @@ try {
   state = await snapshot(); await approve(await select(state.hds.operation_plans.plans[0].steps[1]));
   await waitFor(async () => (await snapshot()).hds.operation_plans.plans[0].status === "results_verified");
   const projection = (await snapshot()).hds.operation_plans;
+  assert.equal(projection.result_memory.status, "receipt_confirmed");
+  assert.ok(projection.plans[0].bindings.filter((binding) => binding.status === "verified")
+    .every((binding) => binding.memory_status === "receipt_confirmed"));
   assert.ok(!JSON.stringify(projection).includes(workspace)); assert.ok(!JSON.stringify(projection).includes("loopback-plan"));
   const receipts = (await snapshot()).execution_receipts;
   assert.equal(receipts.used_for_authority, false); assert.equal(receipts.execution_eligible, false);
@@ -160,9 +186,10 @@ try {
   assert.ok(!JSON.stringify(receipts).includes(workspace)); assert.ok(!JSON.stringify(receipts).includes("fixture-owner"));
   await stop(); await boot(); state = await snapshot();
   assert.equal(state.hds.operation_plans.plans[0].status, "results_verified"); assert.equal(state.pending_approvals.length, 0);
+  assert.equal(state.hds.operation_plans.result_memory.status, "receipt_confirmed");
   assert.equal(calls, 1);
   assert.deepEqual(state.execution_receipts.records, receipts.records);
   const denied = await fetch(`${base}/runtime/snapshot`); assert.equal(denied.status, 401);
-  console.log(`PASS: loopback C → Developer HTTP → HDS → Approval Gate → durable intent → dedicated file.search process → saved actual result → J dependent result; revision invalidation; digest-only receipt after restart${recovery ? "; actual Gateway restart reconciles lost J result without new worker/action" : ""}`);
+  console.log(`PASS: loopback C → Developer HTTP → HDS → Approval Gate → durable intent → dedicated file.search process → saved actual result → J → private M receipt → dependent result; revision invalidation; digest-only receipt after restart${recovery ? "; actual Gateway restart reconciles lost J result without new worker/action" : ""}${memoryRecovery ? "; M commit before J receipt recovers the same memory receipt without another action" : ""}`);
 } catch (error) { console.error(diagnostics); throw error; }
 finally { await stop(); await new Promise<void>((resolve) => provider.close(() => resolve())); await rm(root, { recursive: true, force: true }); }

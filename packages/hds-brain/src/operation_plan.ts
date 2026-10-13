@@ -6,6 +6,9 @@ import {
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationStep,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
 } from "@blue-tanuki/protocol";
+import { JMemoryCommitCoordinator } from "./制御状態.js";
+import type { JMemoryApprovalReference } from "./保存取引.js";
+import { buildResultMemoryCommit, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
@@ -13,6 +16,11 @@ type Binding = PlanState["bindings"][number];
 export interface OperationPlanStatePort {
   load(): unknown | null;
   compareAndSet(expected_digest: string | null, checkpoint: OperationPlanCheckpoint): void;
+}
+export interface OperationPlanMemoryStorage {
+  readonly private_state_root: string;
+  readonly database_path: string;
+  readonly memory_database_path: string;
 }
 
 export function operationPlanDigest(value: unknown): string {
@@ -53,9 +61,12 @@ export class OperationPlanLedger {
   private state: OperationPlanCheckpoint = { schema_version: "operation-plan-state.v1", plans: [] };
   private savedDigest: string | null = null;
   private readonly issuedBindings = new WeakMap<ExecuteCommand, string>();
-  constructor(private readonly port?: OperationPlanStatePort) {
+  private readonly resultMemory?: JMemoryCommitCoordinator;
+  private memoryReady = true;
+  constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage) {
+    if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
     const saved = port?.load();
-    if (saved == null) return;
+    if (saved != null) {
     this.state = OperationPlanCheckpointSchema.parse(saved);
     this.savedDigest = operationPlanDigest(this.state);
     const ids = new Set<string>();
@@ -84,6 +95,8 @@ export class OperationPlanLedger {
           tickets.add(b.execution_admission.ticket_id);
         }
         if (b.delivery_digest && (!b.execution_admission || !b.result_digest)) throw new Error("plan_checkpoint_delivery_mismatch");
+        if (b.memory_commit && (!memoryStorage || !verifyResultMemoryCommit(p, b))) throw new Error("plan_checkpoint_memory_mismatch");
+        if (b.memory_receipt && (!b.memory_commit || !receiptForResultCommit(b.memory_receipt, b.memory_commit))) throw new Error("plan_checkpoint_memory_receipt_mismatch");
       }
       for (const result of p.results) {
         const binding = p.bindings.find((b) => b.step_id === result.step_id && b.status === "verified");
@@ -103,6 +116,9 @@ export class OperationPlanLedger {
         if (b.status === "intent_committed") b.status = "outcome_unknown";
       }
     });
+    }
+    if (memoryStorage) this.resultMemory = new JMemoryCommitCoordinator({ ...memoryStorage,
+      j_approval_reader: { readVerifiedMemoryApproval: (ref) => this.readResultMemoryApproval(ref) } });
   }
 
   retainCandidate(value: unknown, origin: InboundRequest): void {
@@ -118,6 +134,7 @@ export class OperationPlanLedger {
   inspectControl(control: OperationPlanControl, caller: InboundRequest): {
     plan_id: string; revision_digest: string; step?: OperationStep; goal: string;
   } {
+    if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
     const p = this.ownedPlan(control.plan_id, caller);
     const current = p.revisions.at(-1)!;
     const expected = control.action === "review" ? control.revision_digest : control.expected_revision_digest;
@@ -179,6 +196,7 @@ export class OperationPlanLedger {
   canExecute(command: ExecuteCommand): boolean {
     const match = this.binding(this.issuedBindings.get(command) ?? command.id);
     if (!match) return true;
+    if (!this.reconcileMemory()) return false;
     const { p, b } = match;
     const step = p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === b.step_id);
     const prepared = prepareOperationPlan(p.revisions.at(-1)!.plan, { now_ms: Date.now(), results: p.results, observations: [] });
@@ -215,6 +233,75 @@ export class OperationPlanLedger {
     const match = this.binding(feedback.command_id);
     if (!match || match.b.status !== "intent_committed") return;
     this.applyResult(match, feedback);
+  }
+
+  /** 保存済みの同内容だけをJ→Mへ配送。作用・意味更新・承認復元は呼ばない。 */
+  reconcileMemory(): boolean {
+    if (!this.resultMemory) return true;
+    this.memoryReady = false;
+    try {
+      if (this.port && operationPlanDigest(this.port.load()) !== this.savedDigest && this.savedDigest !== null) return false;
+      for (const p of this.state.plans) for (const original of p.bindings) {
+        if (original.status !== "verified") continue;
+        if (!original.execution_admission || !original.delivery_digest) return false;
+        let b = this.binding(original.command_id)!.b;
+        if (!b.memory_commit) {
+          const lifecycle = this.resultMemory.snapshot();
+          const stored = this.resultMemory.readMemoryRecord(resultMemoryIdentity(b).record_id);
+          if (!lifecycle || lifecycle.status !== "ready" || !stored || stored.exists) return false;
+          const commit = buildResultMemoryCommit(p, b, stored.revision);
+          this.change((state) => { state.plans.flatMap((entry) => entry.bindings).find((entry) => entry.command_id === b.command_id)!.memory_commit = commit; });
+          b = this.binding(b.command_id)!.b;
+        }
+        if (!verifyResultMemoryCommit(p, b)) return false;
+        const commit = b.memory_commit!;
+        const lifecycle = this.resultMemory.snapshot();
+        if (!lifecycle) return false;
+        const existing = lifecycle.pending.find((entry) => entry.update_id === commit.update_id);
+        if (!existing) {
+          const staged = this.resultMemory.stage(commit);
+          if (!staged.ok || staged.status === "blocked") return false;
+        }
+        let reconciled = this.resultMemory.reconcile(commit.update_id);
+        if (!reconciled.ok) return false;
+        if (reconciled.status === "memory_commit_pending") {
+          const applied = this.resultMemory.apply(commit);
+          if (!applied.ok) return false;
+          reconciled = this.resultMemory.reconcile(commit.update_id);
+        }
+        if (!reconciled.ok || reconciled.status !== "ready" || !receiptForResultCommit(reconciled.receipt, commit)) return false;
+        const record = this.resultMemory.readMemoryRecord(resultMemoryIdentity(b).record_id);
+        if (!record?.exists || operationPlanDigest(record.value) !== operationPlanDigest(commit.changes[0]!.operation === "upsert" ? commit.changes[0]!.value : null)) return false;
+        if (b.memory_receipt) {
+          if (operationPlanDigest(b.memory_receipt) !== operationPlanDigest(reconciled.receipt)) return false;
+        } else {
+          const receipt = reconciled.receipt;
+          this.change((state) => { state.plans.flatMap((entry) => entry.bindings).find((entry) => entry.command_id === b.command_id)!.memory_receipt = receipt; });
+        }
+      }
+      this.memoryReady = this.resultMemory.snapshot()?.status === "ready";
+      return this.memoryReady;
+    } catch { return false; }
+  }
+  /** Executor ackは、Jが後続配送のexact本文を保全した後だけ許す。 */
+  resultMemoryIsDurable(command_id: string): boolean {
+    try {
+      if (this.port && operationPlanDigest(this.port.load()) !== this.savedDigest) return false;
+      const match = this.binding(command_id);
+      if (!match) return false;
+      return !this.resultMemory || match.b.status !== "verified" || verifyResultMemoryCommit(match.p, match.b);
+    } catch { return false; }
+  }
+  closeMemory(): void { this.resultMemory?.close(); }
+
+  private readResultMemoryApproval(reference: JMemoryApprovalReference): unknown {
+    if (!this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return null;
+    for (const p of this.state.plans) for (const b of p.bindings) {
+      const c = b.memory_commit;
+      if (c && c.update_id === reference.update_id && c.j_event_id === reference.j_event_id &&
+          c.content_digest === reference.content_digest && verifyResultMemoryCommit(p, b)) return Object.freeze({ ...reference });
+    }
+    return null;
   }
 
   /** 起動時の私有結果調停。inflightや承認を復元せず、作用を一切呼ばない。 */
@@ -278,6 +365,8 @@ export class OperationPlanLedger {
 
   projection() {
     return { schema_version: "operation-plan-projection.v1", used_for_authority: false as const, raw_payload_exposed: false as const,
+      result_memory: { configured: !!this.resultMemory, status: !this.resultMemory ? "not_configured" : this.memoryReady ? "receipt_confirmed" : "pending_or_unavailable",
+        used_for_authority: false as const },
       plans: this.state.plans.map((p) => ({ plan_id: operationPlanDigest(p.revisions[0]!.plan.plan_id),
         request_id: p.revisions[0]!.plan.request_id, revision: p.revisions.length,
         revision_digest: p.revisions.at(-1)!.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),
@@ -289,7 +378,9 @@ export class OperationPlanLedger {
         bindings: p.bindings.map((b) => ({ step_id: operationPlanDigest(b.step_id), revision_digest: b.revision_digest,
           step_digest: b.step_digest, command_id: b.command_id, request_id: b.request_id, commit_hash: b.commit_hash,
           payload_digest: b.payload_digest, command_digest: b.command_digest, operation: b.operation,
-          status: b.status, result_digest: b.result_digest, delivery_digest: b.delivery_digest })),
+          status: b.status, result_digest: b.result_digest, delivery_digest: b.delivery_digest,
+          memory_status: b.memory_receipt ? "receipt_confirmed" : b.memory_commit ? "memory_commit_pending" : "not_recorded",
+          memory_content_digest: b.memory_commit?.content_digest, memory_receipt_digest: b.memory_receipt?.receipt_digest })),
       })) };
   }
 

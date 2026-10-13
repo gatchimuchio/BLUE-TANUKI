@@ -29,6 +29,7 @@ import {
 } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { executionAdmissionForCommand, reconcileExecutionResults } from "./reconcile_execution_results.js";
+import { operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -341,6 +342,7 @@ export async function serve(): Promise<ServeShutdown> {
   const operationPlanState = OperationPlanStateStore.fromEnvironment();
   const hds = new HDSUpperController({
     operation_plan_state: operationPlanState,
+    operation_plan_memory: operationResultMemoryStorage(),
     audit: buildAuditLog(),
     memory: buildHDSMemoryStore(process.env),
     llm_route: buildLLMCommandRouteFromEnv(),
@@ -440,6 +442,7 @@ export async function serve(): Promise<ServeShutdown> {
   const executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
   const executorApproval = createExecutorApprovalAuthority({ execution_store: executionStore });
   gatewayLog.info("saved execution result reconciliation", reconcileExecutionResults(hds, executionStore));
+  gatewayLog.info("saved result memory reconciliation", { ready: hds.reconcileOperationPlanMemory() });
   let webchat: WebChatChannel;
 
   function recordCompleteHistory(input: CompleteHistoryAppendInput): CompleteHistoryEntry | null {
@@ -1919,6 +1922,7 @@ export async function serve(): Promise<ServeShutdown> {
       documentOrganizationCheckpointStore?.close();
       documentOrganizationCheckpointStore = null;
       operationPlanState.close();
+      hds.closeOperationPlanMemory();
       executionStore.close();
       auditLog.info("summary", {
         entries: hds.getAudit().size(),

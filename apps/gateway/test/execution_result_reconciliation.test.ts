@@ -6,12 +6,13 @@ import { join } from "node:path";
 import { createRequire } from "node:module";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileSearchTool } from "@blue-tanuki/core";
-import { createGatewayInternalInboundRequest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
 import { executionAdmissionForCommand, reconcileExecutionResults } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
+import { operationResultMemoryStorage } from "../src/operation_result_memory_config.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -43,12 +44,18 @@ async function fixture(run: (context: Awaited<ReturnType<typeof setup>>) => Prom
   mkdirSync(workspace); writeFileSync(join(workspace, "blue.txt"), "blue\n");
   vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
   const context = await setup(root, workspace);
-  try { await run(context); } finally { context.execution.close(); context.j.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); }
+  try { await run(context); } finally { for (const hds of context.controllers) hds.closeOperationPlanMemory(); context.execution.close(); context.j.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); }
 }
 async function setup(root: string, workspace: string) {
   const executionPath = join(root, "executor.sqlite"); const jPath = join(root, "j.sqlite");
   const execution = new GatewayExecutionIntentStore(executionPath); const j = new OperationPlanStateStore(jPath);
-  const hds = new HDSUpperController({ operation_plan_state: j }); const origin = request("plan:compute 合成の検索結果を後続stepへ渡す");
+  const memory = operationResultMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") });
+  const controllers: HDSUpperController[] = [];
+  function createHds(state = j) {
+    const controller = new HDSUpperController({ operation_plan_state: state, operation_plan_memory: memory });
+    controllers.push(controller); return controller;
+  }
+  const hds = createHds(); const origin = request("plan:compute 合成の検索結果を後続stepへ渡す");
   const plan = candidate(origin.id, workspace); const tools = new ToolRegistry(); tools.register(fileSearchTool);
   const authority = createExecutorApprovalAuthority({ execution_store: execution });
   const actualWorker = createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace });
@@ -65,7 +72,17 @@ async function setup(root: string, workspace: string) {
   finalizeCommandOutput({ hds, command: initial, feedback: first, request_id: origin.id, target_surface: "channel" });
   const cmd = review(hds, plan, "search")!; const approved = approve(cmd);
   const admission = executionAdmissionForCommand(cmd, authority.receipt(approved));
-  return { root, workspace, executionPath, jPath, execution, j, hds, plan, cmd, approved, admission, authority, executor, invoke };
+  return { root, workspace, executionPath, jPath, execution, j, hds, plan, cmd, approved, admission, authority, executor, invoke, memory, controllers, createHds };
+}
+
+function inspectMemory(c: Awaited<ReturnType<typeof setup>>) {
+  const db = new DatabaseSync(c.memory.memory_database_path);
+  try {
+    const revision = db.prepare("SELECT revision FROM m_state").get()!.revision;
+    const rows = db.prepare("SELECT value_json FROM m_records").all();
+    const receipts = db.prepare("SELECT receipt_json FROM m_receipts").all();
+    return { revision, records: rows.map((r) => JSON.parse(String(r.value_json))), receipts: receipts.map((r) => JSON.parse(String(r.receipt_json))) };
+  } finally { db.close(); }
 }
 
 describe("保存実結果→再起動J→依存stepの非作用調停", () => {
@@ -79,7 +96,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(c.execution.lookup(c.admission.ticket_id)?.result_delivery_acknowledged).toBe(false);
     const reopened = new GatewayExecutionIntentStore(c.executionPath); const j = new OperationPlanStateStore(c.jPath);
     try {
-      const hds = new HDSUpperController({ operation_plan_state: j });
+      c.hds.closeOperationPlanMemory(); const hds = c.createHds(j);
       hds.onFeedback(feedback); // 通常のinflight保護は維持し、この遅延feedbackを採用しない。
       expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("outcome_unknown");
       expect(review(hds, c.plan, "dependent")).toBeNull();
@@ -100,7 +117,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 0, deferred: 1 });
     expect(c.j.load()?.plans[0]?.results).toHaveLength(1); expect(c.execution.pendingResults()).toHaveLength(1);
     ack.mockRestore();
-    const restarted = new HDSUpperController({ operation_plan_state: c.j });
+    c.hds.closeOperationPlanMemory(); const restarted = c.createHds();
     expect(reconcileExecutionResults(restarted, c.execution)).toEqual({ adopted: 1, deferred: 0 });
     const checkpoint = c.j.load()!;
     expect(restarted.reconcileOperationPlanResult(saved.delivery, saved.delivery_digest)).toBe(true);
@@ -118,7 +135,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     c.hds.decide(request(`plan:revise ${JSON.stringify({ plan_id: c.plan.plan_id, expected_revision_digest: operationPlanDigest(c.plan), plan: revised })}`));
     const now = feedback.operation_core_result!.observed_at_ms + 600_001;
     vi.spyOn(Date, "now").mockReturnValue(now);
-    const restarted = new HDSUpperController({ operation_plan_state: c.j });
+    c.hds.closeOperationPlanMemory(); const restarted = c.createHds();
     expect(reconcileExecutionResults(restarted, c.execution).adopted).toBe(1);
     expect(review(restarted, revised, "dependent")).toBeNull();
     const state = c.j.load()!.plans[0]!;
@@ -129,7 +146,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
 
   it("admissionが無い・まだ開始されていないJ bindingを保存結果から権限化しない", async () => fixture(async (c) => {
     c.hds.beginOperationPlanAttempt(c.cmd); await c.executor.execute(c.approved, { save_result_delivery: true });
-    const restarted = new HDSUpperController({ operation_plan_state: c.j });
+    c.hds.closeOperationPlanMemory(); const restarted = c.createHds();
     expect(reconcileExecutionResults(restarted, c.execution)).toEqual({ adopted: 0, deferred: 1 });
     expect(c.j.load()?.plans[0]?.results).toHaveLength(0); expect(c.execution.pendingResults()).toHaveLength(1);
     expect(review(restarted, c.plan, "search")).toBeNull(); expect(c.invoke).toHaveBeenCalledTimes(1);
@@ -175,5 +192,87 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       expect(() => c.execution.acknowledgeResult(c.admission.ticket_id, saved.delivery_digest)).toThrow("execution_event_integrity_failed");
       expect(c.j.load()?.plans[0]?.results).toHaveLength(0);
     } finally { db.close(); }
+  }));
+
+  it("実観測だけをMへ一度保存し、別DBの同receiptと元出力を読取照合して後続へ戻る", async () => fixture(async (c) => {
+    c.hds.beginOperationPlanAttempt(c.cmd, c.admission);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+    const before = inspectMemory(c); expect(before.revision).toBe(1); expect(before.records).toHaveLength(1);
+    const observation = before.records[0];
+    expect(observation.adoption_status).toBe("observation_only"); expect(observation.used_as_world_truth).toBe(false);
+    expect(observation.used_for_authority).toBe(false); expect(observation.may_execute).toBe(false);
+    expect(observation.result.request_id).toBe(c.plan.request_id);
+    expect(observation.step_review_request_id).toBe(c.cmd.upstream_decision.request_id);
+    expect(observation.result.request_id).not.toBe(observation.step_review_request_id);
+    expect(observation.output_digest).toBe(feedback.operation_core_result!.output_digest);
+    expect(observation.result.output).toEqual(feedback.result);
+    expect(hash(observation.result.output)).not.toBe(observation.output_digest); // M canonical保存でキー順が変わる。
+    const jDb = new DatabaseSync(c.memory.database_path);
+    try { expect(jDb.prepare("SELECT name FROM sqlite_master WHERE name GLOB 'm_*'").all()).toHaveLength(0); }
+    finally { jDb.close(); }
+    c.hds.closeOperationPlanMemory(); const restarted = c.createHds();
+    expect(restarted.reconcileOperationPlanMemory()).toBe(true); expect(inspectMemory(c)).toEqual(before);
+    expect(review(restarted, c.plan, "dependent")?.type).toBe("tool_call");
+    const projection = JSON.stringify(restarted.getRuntimeSnapshot().operation_plans);
+    for (const raw of [c.workspace, '"matches"', '"memory_commit"', c.admission.ticket_id]) expect(projection).not.toContain(raw);
+    expect(c.invoke).toHaveBeenCalledTimes(1);
+  }));
+
+  it.each(["j_stage", "j_receipt", "checkpoint_receipt"])("%sの中断窓から保存済み同commitだけでM帰還を復旧する", async (window) => fixture(async (c) => {
+    const path = window === "checkpoint_receipt" ? c.jPath : c.memory.database_path;
+    const db = new DatabaseSync(path);
+    if (window === "checkpoint_receipt") db.exec(`CREATE TRIGGER fixture_memory_failure BEFORE UPDATE ON operation_plan_state
+      WHEN json_extract(NEW.checkpoint_json,'$.plans[0].bindings[0].memory_receipt') IS NOT NULL
+      BEGIN SELECT RAISE(ABORT,'fixture memory checkpoint failure'); END;`);
+    else db.exec(`CREATE TRIGGER fixture_memory_failure BEFORE UPDATE ON j_state
+      WHEN NEW.status='${window === "j_stage" ? "memory_commit_pending" : "ready"}'
+      BEGIN SELECT RAISE(ABORT,'fixture memory receipt failure'); END;`);
+    c.hds.beginOperationPlanAttempt(c.cmd, c.admission);
+    await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+    const saved = c.j.load()!.plans[0]!.bindings[0]!.memory_commit;
+    expect(saved).toBeDefined(); expect(c.j.load()!.plans[0]!.bindings[0]!.memory_receipt).toBeUndefined();
+    const before = inspectMemory(c);
+    expect(before.revision).toBe(window === "j_stage" ? 0 : 1);
+    expect(review(c.hds, c.plan, "dependent")).toBeNull(); expect(c.hds.operationPlanCommandIsCurrent(c.cmd)).toBe(false);
+    c.hds.closeOperationPlanMemory(); db.exec("DROP TRIGGER fixture_memory_failure"); db.close();
+    const restarted = c.createHds(); expect(restarted.reconcileOperationPlanMemory()).toBe(true);
+    expect(c.j.load()!.plans[0]!.bindings[0]!.memory_commit).toEqual(saved);
+    const after = inspectMemory(c); expect(after.revision).toBe(1); expect(after.records).toHaveLength(1);
+    if (before.revision === 1) expect(after.receipts).toEqual(before.receipts);
+    expect(review(restarted, c.plan, "dependent")?.type).toBe("tool_call"); expect(c.invoke).toHaveBeenCalledTimes(1);
+  }));
+
+  it("保存J commitの権限化・任意変更を再起動時に拒否する", async () => fixture(async (c) => {
+    c.hds.beginOperationPlanAttempt(c.cmd, c.admission); await c.executor.execute(c.approved, { save_result_delivery: true });
+    reconcileExecutionResults(c.hds, c.execution); c.hds.closeOperationPlanMemory();
+    const previous = c.j.load()!; const changed = structuredClone(previous);
+    const b = changed.plans[0]!.bindings[0]!; const commit = b.memory_commit!;
+    (commit.changes[0] as { value: Record<string, unknown> }).value.used_for_authority = true;
+    const { content_digest: _digest, ...content } = commit; commit.content_digest = memoryCommitContentDigest(content);
+    delete b.memory_receipt; c.j.compareAndSet(operationPlanDigest(previous), changed);
+    expect(() => c.createHds()).toThrow("plan_checkpoint_memory_mismatch"); expect(inspectMemory(c).revision).toBe(1);
+    expect(c.invoke).toHaveBeenCalledTimes(1);
+  }));
+
+  it("J保存読取不能で配送ackを保留し、復旧後の同内容確認だけでackする", async () => fixture(async (c) => {
+    c.hds.beginOperationPlanAttempt(c.cmd, c.admission); await c.executor.execute(c.approved, { save_result_delivery: true });
+    const lost = vi.spyOn(c.execution, "acknowledgeResult").mockImplementationOnce(() => { throw new Error("fixture ack interrupted"); });
+    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 0, deferred: 1 }); lost.mockRestore();
+    const before = inspectMemory(c);
+    const unavailable = vi.spyOn(c.j, "load").mockImplementation(() => { throw new Error("fixture J unavailable"); });
+    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 0, deferred: 1 });
+    expect(c.execution.pendingResults()).toHaveLength(1); unavailable.mockRestore();
+    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+    expect(inspectMemory(c)).toEqual(before); expect(c.invoke).toHaveBeenCalledTimes(1);
+  }));
+
+  it("片方だけ失われたJ/M DBを新規初期化して履歴の確定と扱わない", async () => fixture(async (c) => {
+    c.hds.beginOperationPlanAttempt(c.cmd, c.admission); await c.executor.execute(c.approved, { save_result_delivery: true });
+    reconcileExecutionResults(c.hds, c.execution); c.hds.closeOperationPlanMemory();
+    rmSync(c.memory.database_path);
+    expect(() => c.createHds()).toThrow(/schema_mismatch/); expect(inspectMemory(c).revision).toBe(1);
+    expect(c.invoke).toHaveBeenCalledTimes(1);
   }));
 });

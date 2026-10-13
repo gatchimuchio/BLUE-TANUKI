@@ -1,29 +1,25 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-13。最新版の非公開QE rev2.3三点全文と適用AGENTS.mdを毎作業・切替・再開時に再読する。現在のowner開発委任に従い、過去の停止・旧SHAから現在状態を巻き戻さない。
+2026-10-13。毎作業・切替・再開時に、最新版非公開QE rev2.3の三点全文と適用AGENTS.md、active、現物を再読する。現在のowner開発委任に従う。
 
 ## 対象と到達状態
 
-QE_STAGE=QE_BUILD。BUILD_BATCH=QEB-01-RESULT-RECONCILIATION。D04.02／D04.03のBLUE内部分として、固定file.search workerの実結果を同じExecutor取引で保存し、再起動後の既存J bindingへ非作用配送して依存stepへ戻す。通常HTTPの保存結果とJのCAS採用、配送確認をつなぐ。対象は既存組込みfile.searchの計画stepのみ。
+QE_STAGE=QE_BUILD。BUILD_BATCH=QEB-01-RESULT-MEMORY。C03.01–C03.03の既存取引とreceiptを、実plan file.search結果から私有Mへ接続する。元実結果→Jの限定観測記録→内容固定MemoryCommit→M保存→receipt再照合→後続stepを通す。任意の意味更新・知識昇格は対象外。
 
-承認後、実行前にExecutorが発行したticket・全内容digest・proof digest・epoch・期限をJ checkpointへ結合する。Jの計画digestとExecutorの内容digestは別契約として検査する。実operation_core_resultと容量・形状を制限した実検索出力は私有outboxに保存し、元JSONのキー順・result ID・観測時刻を保持する。receiptとoutbox、eventはExecutorの同じSQLite取引で保存する。
+開始HEADは5f6659acf42d9cc221bbdfe141b48f18305f1164、local/remote main一致・clean。local復元branch二世代とremote tag二世代を5f6659acf42d9cc221bbdfe141b48f18305f1164／72167f81155a24d6b8a3921ee0fe2380340769fbへCAS・leased atomic pushで保全した。旧D01.03 stashは保持。backup ref移行はMIGRATION_COMPLETE。親単一writer、subagent read-only。
 
-再起動時は旧承認・inflightを復元せず、開始意思を持つ元bindingとadmissionを照合する専用consumerで既存result_equalsを通す。結果と配送digestをJの同じCASへ保存し、その後だけoutboxをackする。J保存後・ack前の中断は同結果の再配送で回復し、異内容を拒否する。依存の鮮度は元観測時刻＋10分のまま。全pendingの上限内一回走査とし、未採用は保持する。
-
-編集前local／remote mainは72167f81155a24d6b8a3921ee0fe2380340769fb、clean。親が単一writer、subagentはread-only。local復元branch二世代とremote tag二世代は72167f81155a24d6b8a3921ee0fe2380340769fb／6f4c350a091ce745fa9c57abe3311a582330925eへCAS・期待SHA付きatomic pushで照合済み。旧D01.03 stashは保持。backup ref移行はMIGRATION_COMPLETE。
+Jは実admission・配送digest・verified bindingと元結果から限定観測だけを固定する。MemoryCommit本文・expected_versionを先にJ checkpointへCAS保存し、Jの読取専用同内容参照で既存coordinatorをstage→apply→receipt照合する。新runtimeのJ/Mは別SQLite取引。再起動で同保存commitを使い、receipt確認まで後続stepを保留する。M recordを読取照合する実consumerを依存準備へつなぐ。
 
 ## 安全・未接続
 
-通常onFeedbackのinflight保護、HDS standalone、Approval Gate、L3、能力envelope、output audit、監査、M非権限を維持する。保存結果は権限でもCや記憶更新の候補でもない。欠落・issued・未完のreceiptを未作用へ変換せず、同ticketを復活させない。raw検索本文・ticket・epoch・資格をsnapshot／Complete Historyへ出さない。保存・照合失敗はpending／結果不明を保持する。
+Mは非権限・観測限定・世界真理未採用。元plan requestとstep審査requestを分け、旧計画版・元観測時刻・期限を保持する。過去L3を任意M変更や新作用へ再利用せず、同検索結果の内部記録だけ扱う。候補提案、C案、delete、任意上書きは入口を作らない。raw出力・ticket・資格をUI/C/Complete Historyへ出さない。保存故障・receipt不一致はfail-closed。既存Approval/L3/output audit/standalone/監査を維持。
 
-一配送の上限は256 KiB、保存上限は1000件・8 MiB。満杯では削除や成功への変換をせず保存故障として扱う。長期の保持・容量解消、ack故障後の常時配送、OS別秘密保護は後続接続／QC対象として残す。POSIX私有dir／DB modeを限定するがWindows ACL保証を主張しない。
+Mの一般意味採用・反証・長期学習、全体writer lease、OS別保護・容量回復、D4独立Permission、実外部受理照合、5OS製品はBUILD_GAP。実provider・実資格・業務作用、D4Pocket/ミニドラ別repo変更、公開・出荷は保留。P13=PENDING_OWNER_GO、public_claim_allowed=false、version=1.0.0-rc.1。内部原典・ZIP・対応表・raw運転証拠はPublic Gitへ入れない。
 
-認証済みJ↔D4 Brokerと独立Permission AND、委任・目的版・実体版の全結合、外部受理照合、OS強制隔離・process群停止・5OS installed証拠はBUILD_GAP。JとExecutorのDBは別取引であり、全体ACIDや製品完遂を主張しない。実provider・実資格・外部業務作用、D4Pocket／ミニドラ別repo編集、公開・出荷判断は保留。P13=PENDING_OWNER_GO、public_claim_allowed=false、version=1.0.0-rc.1。内部原典・ZIP・要求対応表・秘密・raw運転状態をPublic Gitへ置かない。他writer更新・重大安全逸脱・owner停止では再同期する。
+## 技術確認・保全
 
-## 技術確認とGit
+typecheck→build、実worker結果→M→再起動後続の限定testと、未承認入力・異内容・J/M中断窓の必要な否定確認を行う。built Gatewayの隔離HTTP smoke、HDS standalone、変更文書検査・差分確認を実施する。全suite/QC/QA/耐久/全OS/providerは後段。結果と未接続を記録し、限定commitをmainへpushしてremote refs・dirty・stashを再照合する。他writer・重大保護逸脱・owner停止では再同期する。
 
-Windowsでtypecheck→build、実保存・再起動・依存・ack窓・異内容・鮮度・未呼出し・保存故障の限定testと関連する既存安全testを実施する。built GatewayのHTTP smokeは専用一時DBのJ保存故障を使い、実worker結果保存後の再起動・非作用採用と新規作用数を観測する。製品に故障hookは追加しない。HDS standalone、変更文書docs:check、差分確認も行う。全suite／網羅QC／QA／耐久／全OS／実providerはNOT_RUN。
+STATUS=WIRED（通常HTTPの計画file.search観測保存と既存J依存consumerの限定範囲）。次consumerはM受領確認済み観測を使うJの依存step準備。一般意味採用や任意M更新の承認経路は別施工。
 
-バッチ末に接続結果と残差を開発進捗へ記録し、限定commitをmainへpush、remote main・二世代tag・stash・dirtyを再照合する。次作業も三点全文・AGENTS・現物を再読する。次consumerは独立D4 Permission、保留配送の継続的な再照合、結果のM帰還であり、別repoの提案・許可を分離する。
-
-localの計画file.search結果調停はWIRED。最新typecheck→build、限定10 files／88 tests（2 workers固定）、built Gatewayの保存故障・再起動HTTP smoke、HDS standalone、docs:checkはPASS。D03／D04全体はBUILD_GAP。全体QC／QAは未開始。初回smokeの試験側HTTP status誤りと修正は開発進捗に保持する。
+最終typecheck→build、限定8 files／86 tests（2 workers固定）、built GatewayのM受領保存故障・再起動HTTP smoke、HDS standaloneはPASS。docs:check（通常日本語基底・license）と差分確認もPASS。mainへ限定commit/pushしてremoteを照合する。初回HTTP smokeの試験側assertionとack確認欠陥の修正は開発進捗に保持する。
