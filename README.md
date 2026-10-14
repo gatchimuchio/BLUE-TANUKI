@@ -1,10 +1,36 @@
 # 🦝 BLUE-TANUKI
+### AIを「呼び出す道具」から、仕事を任せる仕組みへ。
 
-BLUE-TANUKI は、**LLM ではなく HDS-BRAIN に判断・権限を置く**、owner 運用の局所常駐 AI 制御面である。
+**BLUE-TANUKIは、判断・許可・実行・記憶・監査をひとつながりに設計した、ローカル常駐型AIエージェント基盤です。**
 
-LLM、ツール、cron、チャネル、plugin、memory、history、UI は下流装置として動く。HDS-BRAIN は actor、process、memory、approval、execution の可否を上流で構造的に決め、その判断経路を hash-chain audit へ記録する。HDS-BRAIN 自身は判断のために LLM を呼ばない。
+従来型の「LLMにツールを渡す」構成から一歩進み、**何を実行してよいのか／誰が許可したのか／何を実際に行ったのか／失敗後どう戻すのか**まで、独立した制御面で扱います。AIの高性能化と、人間が安心して仕事を委ねられることは別の課題です。BLUE-TANUKIは、その間にある設計上の空白へ挑みます。
 
-現在版は **`1.0.0-rc.1` technical release candidate**。P13 は `PENDING_OWNER_GO` であり、GA と外部向け優位主張は `public_claim_allowed=false` のまま閉じている。支援範囲は [docs/SUPPORT_BOUNDARY.md](docs/SUPPORT_BOUNDARY.md)、残る制限は [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) を参照する。
+> **設計の核心：LLMは能力として使う。しかし、権限そのものにはしない。**
+> HDS-BRAINが上流の判断・停止・承認境界を管理し、LLM・外部ツール・チャネルは下流で作用します。HDS-BRAINの権限判断は、LLM呼出しに依存しません。
+
+## なぜBLUE-TANUKIか
+
+| 設計の柱 | 得られること |
+|---|---|
+| **判断と実行の分離** | LLMの出力、外部データ、記憶から権限が勝手に増えない |
+| **承認と停止を構造化** | 危険な操作は最終レビューを通し、不明・不整合では停止できる |
+| **結果から次の仕事へ** | 計画・実行結果・記憶のつながりを再起動後まで扱う方向で実装を拡張 |
+| **証拠を残す** | hash-chain auditと実行・承認の記録を、後から照合できる |
+
+単一のチャットUIでも、特定のLLMのラッパーでもありません。**異なるモデルやツールを交換しながら、エージェントの責任構造を保つ**ことを狙っています。OpenRouterやComposioは任意の下流接続であり、権限源ではありません。
+
+## 現在の到達点 — 公開RCと次世代開発を区別
+
+| 系列 | 2026年10月13日時点で確認できる状態 |
+|---|---|
+| **公開済み技術RC** | <code>1.0.0-rc.1</code>。Windows／macOS／Linux向けのportable installerを配布。HDS-BRAIN・承認・監査・チャット／操作面などの局所実装を含む |
+| **現行の次世代開発** | QEの **<code>QE_BUILD</code>** 段階。計画した<code>file.search</code>の実結果を私有記憶Mへ保存し、受領確認・再起動後の同一結果照合を経て後続stepへ接続する経路まで局所的に実装・検査 |
+| **目標とする製品範囲** | Windows、Linux、macOS、Android、iOSの5OS。現在の対応・到達実績と、今後の完成目標は別 |
+| **未成立の全体条件** | 全能力の<code>BUILD_COVERED</code>、実物全体のQE_QC、対象別QE_QA、5OS製品受入、GA／owner GO |
+
+この表は、新QE開発の局所成果を**製品全体の完成・AGI達成・5OS出荷可能**と読み替えるものではありません。旧RCのP13は<code>PENDING_OWNER_GO</code>、<code>public_claim_allowed=false</code>のままです。[公開ロードマップ](docs/ROADMAP.md)と[実装進捗](docs/開発進捗.md)が現在の工程・根拠を示します。非公開の内部理論・施工正本・秘密・生の運転証拠は公開しません。
+
+---
 
 ## 日本語基底正本
 
@@ -30,7 +56,7 @@ pnpm validate:japanese-base -- --strict
 4. **記憶と履歴は証拠であり権限ではない。** `used_for_authority=false` と `complete_history_used_for_authority=false` を保つ。
 5. **不明は自動許可しない。** fail-closed / `SUSPEND` で再監査へ戻す。
 
-## 通常利用者向けインストール
+## 技術RCを試す — インストール
 
 GitHub Release から対象 OS の single-file installer を取得する。
 
@@ -76,7 +102,10 @@ pnpm gateway:serve
 
 `http://127.0.0.1:8787/` を開く。設定、first-run、恒久利用は [QUICKSTART.md](QUICKSTART.md)、[docs/FIRST_RUN_CHECKLIST.md](docs/FIRST_RUN_CHECKLIST.md)、[docs/PERMANENT_USE_CHECKLIST.md](docs/PERMANENT_USE_CHECKLIST.md) を参照する。
 
-## RC surface
+## 公開技術RCの機能範囲
+
+以下は旧 <code>1.0.0-rc.1</code> の実装・公開境界であり、新しいQE開発全体の完成を示す一覧ではありません。
+
 
 - WebChat Control Center (`/`, `/app`)
 - Home、Conversation、Tasks、Approvals、Activity/Audit、Memory、Skills、Channels、Doctor、Settings、Developer/Evidence の owner 操作面
@@ -91,7 +120,10 @@ pnpm gateway:serve
 - optional OpenRouter provider と optional Composio connector
 - Windows / macOS / Linux portable installer と update / rollback 文書
 
-## 明示的境界
+## 実装・公開の境界
+
+現行QE開発のAndroid／iOS対象は将来の製品完成スコープです。以下のVoice／Mobile／rich Canvasに関する境界は**旧RCのGA基準**を記したものです。
+
 
 - WhatsApp は `reserved-third-party`、`core_supported=false` で first-party core ではない。
 - preview adapter / tool は owner-run evidence なしに first-party へ昇格しない。
@@ -157,6 +189,9 @@ Inbound channel / cron / webhook-like source
 
 ## 文書
 
+- [docs/ROADMAP.md](docs/ROADMAP.md) — 現行QE開発の工程と未成立条件
+- [docs/開発進捗.md](docs/開発進捗.md) — 実装済みの接続・試験・残差の観測記録
+- [docs/PLATFORM_TARGETS_QE.md](docs/PLATFORM_TARGETS_QE.md) — 5OSの目標とRCとの区別
 - [CLAIM.md](CLAIM.md) — product claim / non-claim 境界
 - [SECURITY.md](SECURITY.md) — authority と memory の security model
 - [AUDIT.md](AUDIT.md) — hash-chain audit と runtime snapshot
