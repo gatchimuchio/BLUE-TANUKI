@@ -1,6 +1,12 @@
 # Changelog
 
-## 2026-10-18 — QEB-03-D09.02 BLUE承認内容レビュー
+## 2026-10-18 — QEB-02-D09.03 WebChat再接続とGateway状態の分離
+
+- WebChatの切断・画面閉鎖はチャット接続だけを閉じ、Gateway停止とは別であることをControl Centerに表示する。接続成立時、runtime tokenがなければ通信せず、あれば認証済みRuntime Snapshotをno-storeで再取得して受信時刻を示す。
+- 古いWebSocket世代のopen/message/errorを無視し、再接続後のsnapshot要求が以前の要求結果に上書きされないようにする。Gateway statusはrunning/degradedとHDS・audit状態に合わせて表示する。
+- D4Pocket連携、service stop/cancel実装、外部資格・作用は含まない。D09.03全体は未接続consumerを残す。
+
+## 2026-10-18 — QEB-02-D09.02 BLUE承認内容レビュー
 
 - WebChatのGmail `message.send`承認に、resume認証付きの明示的な内容確認経路を追加した。production serializerと同じ有効payloadを表示し、未対応入力では確認・承認をfail-closedする。
 - Control Centerは内容確認前にApproveを無効化する。Gatewayは明示previewのdigest-only開示記録がpending中にあることを一回券消費前と実行直前に確認し、digest文字列だけの直接approveを拒否する。承認履歴にはdigestのみを残す。

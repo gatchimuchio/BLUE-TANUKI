@@ -1,13 +1,13 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
-2026-10-17。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
+2026-10-18。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
 ## 現行のQE工程
 
 | 工程 | 主な目的 | 状態 |
 |---|---|---|
 | QE_DESIGN | C/J/M、作用・記憶・外殻の全体設計 | 設計と現在コードの残差あり |
-| QE_BUILD | 一気通貫の全体系を先行実装 | 上記の計画・結果・作用基盤に、受領済みfile.search観測の限定C射影、J表示前引用照合、意味更新案v2のtarget record/version照合、単一宛先Gmail作用と結果不明のJ配送、J計画revision/statusの既存Control Center表示、合成loopback receiptのdigest-only非権威観測を接続。Developer HTTPからの合成runtime照合をbuild済みGateway smokeで確認し、Gmail送信承認では明示的な内容確認とpending command digest結合をBLUE WebChatに追加。実provider receipt照会、D4Pocket画面接続、prior version、一般意味採用、全体系は未接続 |
+| QE_BUILD | 一気通貫の全体系を先行実装 | 上記の計画・結果・作用基盤に、受領済みfile.search観測の限定C射影、J表示前引用照合、意味更新案v2のtarget record/version照合、単一宛先Gmail作用と結果不明のJ配送、J計画revision/statusの既存Control Center表示、合成loopback receiptのdigest-only非権威観測を接続。Developer HTTPからの合成runtime照合をbuild済みGateway smokeで確認し、Gmail送信承認では明示的な内容確認とpending command digest結合をBLUE WebChatに追加。WebChat接続成立時の認証済みRuntime Snapshot再取得と、chat socket／Gateway状態の表示分離も実装。実provider receipt照会、D4Pocket画面接続、prior version、一般意味採用、全体系は未接続 |
 | SYSTEM_SHAPED | 試験仕事が目的→結果→M→復帰まで通る | 全体成立未確認 |
 | BUILD_COVERED | 全機能群の結合形状を確認 | 未成立 |
 | QE_QC | 実物の全体検査・欠陥・原因・改善・再検査 | 未着手 |
@@ -47,7 +47,9 @@ local二世代branch（refs/heads/codex/backup-main、refs/heads/codex/backup-ma
 
 C01～C08.02、D01.01～D01.02などは現行Gitに局所成果を持つが、AGI全体の完成、D4Pocket実接続の証明ではない。QEB-01-RESULTSで実結果を既存監査・履歴へ、QEB-01-PLANSで旧plan保持、内部command-step対応、明示step選択、検証済み依存結果、未実行部分の再審査を接続した。QEB-01-APPROVAL-CONTENTはApproval受付からExecutorまで内容を固定する。QEB-01-EXECUTION-INTENTはlocal期限、私有SQLiteの単回消費・開始意思・receipt、再起動後の認証付きdigest照会を接続する。QEB-01-FILE-SEARCH-WORKERは組込みfile.searchを固定childの専用IPCへ通し、実worker世代・終了と既存Jの結果検証を接続する。QEB-01-RESULT-RECONCILIATIONは保存実結果を再起動Jへ非作用配送する。QEB-01-RESULT-MEMORYはその検証済み観測を私有Mへ保存し、同receipt・元recordを照合して依存stepへ戻る。QEB-01-RESULT-REFLECTIONは現行計画の受領済みfile.search観測をdigestと件数等の有限射影にし、Cの解釈候補・不確実性をJが表示前に引用照合する。QEB-01-C07-PROPOSAL-REFERENCE-REVIEWは意味更新案の支持／反証record ID・版を現在のM射影へ限定照合する。QEB-01-C07-SCOPE-PLAN-DIGEST-REVIEWは両scope referenceを現在のapplication_scope_idへ、scope digestを同一J MemorySearchPlanのplan_idへ照合し、結果を非権威auditへ記録する。これは同一計画への結合であり、意味的支持／反証、探索完全性、scopeの意味適合、target/prior version、採用は未検証のまま保持する。plan:reflect由来のproposalは通常の意味更新履歴へ保存しない。候補は未採用で、一般C引用・学習は未接続。対象resolverはfile.searchのdirectoryと、単一宛先gmail.write／message.sendに限定される。receipt観測はloopback fixture経路から永続J checkpoint・既存Control Centerへの限定接続であり、実サービスreceiptを取得するproduct adapterは未接続。自動目的採否、独立D4 Broker Permission・汎用内容結合、他の外部作用の照合、外部postcondition照合、OS強制隔離・全作用の独立停止はBUILD_GAP。操作は[計画接続の操作](計画接続の操作.md)、[承認内容の固定](承認内容の固定.md)、[実行意思と再照会](実行意思と再照会.md)を参照する。C08.03実LLM/providerは保留。
 
-2026-10-18のQEB-03-D09.02-BLUE-APPROVAL-CONTENT-REVIEWでは、BLUE WebChatにresume認証付きの明示的Gmail送信内容previewを追加した。previewはcurrent pending commandとproduction payload serializerに結び、approve時にpreview開示記録と同一command digestを一回券消費前とGateway実行直前に確認する。本文は明示preview以外の一覧・snapshot・履歴へ出さず、承認履歴へはdigestのみを投影する。D4 consumerは別途権限が必要で未接続のため、D09.02全体は`BUILD_GAP`を維持する。実送信・credentialは使用していない。
+2026-10-18のQEB-02-D09.02-BLUE-APPROVAL-CONTENT-REVIEWでは、BLUE WebChatにresume認証付きの明示的Gmail送信内容previewを追加した。previewはcurrent pending commandとproduction payload serializerに結び、approve時にpreview開示記録と同一command digestを一回券消費前とGateway実行直前に確認する。本文は明示preview以外の一覧・snapshot・履歴へ出さず、承認履歴へはdigestのみを投影する。D4 consumerは別途権限が必要で未接続のため、D09.02全体は`BUILD_GAP`を維持する。実送信・credentialは使用していない。
+
+2026-10-18のQEB-02-D09.03-BLUE-WEBCHAT-RECONNECT-SNAPSHOTでは、WebChat接続状態をGateway process状態と区別し、接続成立時にRuntime tokenがある場合だけno-storeの認証済みsnapshotを再取得するBLUE側consumerを追加した。閉じた古いWebSocket eventは無視する。Control Center/Gatewayの実processを使ったreconnect E2E、service stop/cancel、D4Pocket画面接続は未確認・未接続。D09.03全体は`BUILD_GAP`。
 
 ## 旧RCのP13と日本語基底J系列
 

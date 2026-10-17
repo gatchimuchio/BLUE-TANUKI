@@ -1,31 +1,32 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。今回の単位開始時にowner指定の最新版QE三点全文（rev2.3）、適用AGENTS.md、作業標準、QE再同期規約、active指示、最新HEAD／remote／dirty state、D09.02要求、承認・Gmail実装と現行WebChat経路を読み直した。Windows上のBLUE-TANUKIだけを対象とし、D4Pocket／ミニドラには変更を加えない。
+2026-10-18。今回の小単位開始時にowner指定の最新版QE三点全文（rev2.3）、適用AGENTS.md、作業標準、QE再同期規約、active指示、最新HEAD／remote／dirty state、D09.03要求とWebChat接続・runtime snapshot consumerを読み直した。Windows上のBLUE-TANUKIだけを対象とし、D4Pocket／ミニドラには変更を加えない。
 
 ## 今回の施工単位
 
-backup ref移行状態=`MIGRATION_COMPLETE`。QE_STAGE=QE_BUILD。BUILD_BATCH=QEB-03-D09.02-BLUE-APPROVAL-CONTENT-REVIEW。関連単位=D09.02（BLUE側の部分施工）。開始HEAD／origin/main=`24c550ed2d73a42f8502edd38d7ca6c3252ca69a`、clean。編集前local recovery branchは`af905ab`／`41bea5f`、remote backup tagはlease付きatomic pushで`24c550e`／`af905ab`へ回転した。競合したlocal tagsは変更していない。
+backup ref移行状態=`MIGRATION_COMPLETE`。QE_STAGE=QE_BUILD。BUILD_BATCH=QEB-02-D09.03-BLUE-WEBCHAT-RECONNECT-SNAPSHOT。関連単位=D09.03（BLUE側部分施工）。開始HEAD／origin/main=`cf0458b6f9680439fd32adedfce210b2e663a32a`、clean。編集前local recovery branch／remote backup tagは`cf0458b`／`24c550e`の二世代。実装commit=`b8619bfa57e7454a2dee5532fffe7f14b1144585`をorigin/mainへpush済み。
 
 ### 今回の目的と境界
 
-既存WebChat承認画面で、pending中のGmail `message.send`についてownerが明示的に内容を確認し、その時点の完全なcommand digestに結び付けて承認する経路をBLUE側で成立させる。宛先（to/cc/bcc/from）、実際に送られる件名・本文、effective request payload digestを、resume認証済みの明示操作に限って表示する。通常の承認一覧、runtime snapshot、監査履歴には本文・宛先を追加しない。previewだけでは承認・実行・権限を発生させない。approve時も既存HDS承認と一回券を通し、現在のpending command digestを再検証する。
+WebChatのWebSocket接続・切断をGateway serviceの起動・停止と誤認させず、現在世代の接続成立後に認証済みRuntime Snapshotを再取得するBLUE側consumerを接続する。保存済みの独立Runtime tokenがない場合は通信せず、snapshot状態をunknownとする。再取得要求は`cache: no-store`を指定し、受信時刻を表示する。古いWebSocket世代のeventと古いsnapshot要求結果は画面を上書きしない。
 
-対象=D09.02 BLUE-side WebChat content review、合成・fixtureによる検証。対象外=D4Pocket変更（別途限定委任が必要）、credential／実Gmail／外部送信／C08.03、全体QE_QC／QE_QA、公開・出荷判断。D09.02はBLUE部分のみで完了扱いせず、D4 consumerを含む全体状態は`BUILD_GAP`のままとする。
+対象=D09.03 BLUE WebChat接続状態／Runtime Snapshot再同期の部分施工。対象外=D4Pocket変更（別途限定委任が必要）、サービスstop/cancel/restart API、実provider／資格／外部作用、C08.03、全体QE_QC／QE_QA、公開・出荷判断。D09.03全体はD4 consumerと実サービスライフサイクルが未接続のため`BUILD_GAP`のままとする。
 
 ### 必須境界
 
-- 対象は`tool_call`／`gmail.write`／`message.send`だけ。content previewは現在のGateway pending commandから取り、再parse・再計算LLM呼出しをしない。
-- explicit `POST /approval/:id/content` とresume tokenを必須にし、レスポンスは`no-store`。内容をsession/local storage、history、audit、通常snapshot、ログへ保存しない。
-- previewは有効なpending command、現在のplan binding、command digestを照合し、digest-onlyの開示記録をpending中だけメモリに保持する。実送信に使われない入力や未対応項目を安全に解釈できない場合はpreview／approveをfail-closedする。
-- WebChatはpreviewで返ったdigestをapprove要求へ添え、Gatewayが「preview開示が実施されたこと」と同じpending digestを再検査する。digest文字列だけの直接approveは通さない。reject／blockは内容を見ずに可能とする。
-- 実provider、実credential、実外部作用、D4Pocket／ミニドラrepo変更は禁止。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+- Disconnect／画面閉鎖はWebChat側socketを閉じるだけであり、Gateway service停止やjob cancellationを推定・発行しない。
+- reconnect snapshotには専用Runtime tokenを使う。WebChat tokenへ代替せず、tokenがない場合はHTTP requestを送らない。
+- 新しいsnapshotが取れない間はGateway statusをunknownと表示し、古い値を現在状態に見せない。GET応答と要求はcacheしない。
+- D4Pocket／ミニドラrepo、実credential、外部業務作用は対象外。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
 
-## 今回の検証・閉包
+## 検証・閉包
 
-- `pnpm typecheck`: PASS。`pnpm build`: PASS、15 workspace projects。
-- 対象Vitest 3 files／84 tests: PASS。explicit reveal、resume認証、no-store、preview未開示digest拒否、一回券温存、history digest-only projectionを確認。
-- `pnpm docs:check`: PASS。CHANGELOG更新後の初回は登録済みhash不一致でFAILし、実ファイルhashを移行台帳へ同期して再実行した。通常日本語gateとlicenseはPASS、移行負債77件を維持。`git diff --check`: PASS。
-- 確認範囲は純関数payload投影、実HTTP WebChat API route、history projection、build/typecheck。build済みGateway processとControl Centerを実際に起動するE2E、Gmail credential／実送信、D4 consumer、全体QE_QC／QE_QAは未実施。
-- 実装commit `00a1d57`を`origin/main`へpushし、fetch後のlocal／remote main同一性を確認した。QEB-03開始時のlocal recovery branch／remote tagは`24c550e`／`af905ab`の二世代を保持する。
+- `pnpm exec vitest run packages/channel-webchat/test/webchat.test.ts`: PASS、1 file／76 tests。Control Center shellと埋込JavaScript構文を確認。
+- `pnpm typecheck`: PASS。
+- `pnpm build`: PASS、15 workspace projects。
+- `git diff --check`: PASS。
+- `pnpm docs:check`: PASS。通常日本語gate・license PASS、日本語基底の移行負債77件を維持。
+- Gateway processとControl Centerを実際に使うWebSocket reconnect E2E、D4 consumer、service stop/cancel、外部provider／資格／送信、全体QE_QC／QE_QAは未実施。
+- 工程表QEB-02のshell系実装に属する部分施工として記録する。前記録のD09.02をQEB-03とした文書ラベルは、工程表に合わせQEB-02へ訂正した。実装状態とD09.02の`BUILD_GAP`は変更しない。
 
-実装経路はBLUE WebChatで明示previewした合成Gmail `message.send`内容の表示と、同一pending command digestを条件とする既存HDS一回券approveに結合した。D4側consumerが未接続のため、D09.02全体は`BUILD_GAP`。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+実装経路はWebChat接続成立→socket世代照合→既存Runtime tokenによるno-store snapshot取得→受信時刻とGateway状態の表示へ接続した。UI切断からGateway停止・job取消へのconsumerは追加していない。BLUE WebChat内の限定接続であり、D09.03全体は`BUILD_GAP`。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
