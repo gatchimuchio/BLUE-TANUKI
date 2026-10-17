@@ -32,9 +32,10 @@ function setup() {
   }
   const support = decided.log.frame.memory_trace.hits.find((hit) => hit.memory_id === "citation-support");
   const counter = decided.log.frame.memory_trace.hits.find((hit) => hit.memory_id === "citation-counter");
-  const scopeId = decided.log.frame.memory_trace.search_plan?.application_scope_id;
-  if (!support || !counter || !scopeId) throw new Error("expected two scoped memory candidates");
-  return { hds, command: decided.command, support, counter, scopeId };
+  const searchPlan = decided.log.frame.memory_trace.search_plan;
+  if (!support || !counter || !searchPlan) throw new Error("expected two scoped memory candidates");
+  return { hds, command: decided.command, support, counter,
+    scopeId: searchPlan.application_scope_id, scopePlanDigest: searchPlan.plan_id };
 }
 
 function feedback(command_id: string, content: string): ExecuteFeedback {
@@ -69,6 +70,7 @@ function meaningUpdateProposal(
   support: { f_reference: string; entry_hash: string },
   counter: { f_reference: string; entry_hash: string },
   scopeId: string,
+  scopePlanDigest: string,
 ) {
   return {
     schema_version: "blue-tanuki.meaning-update-proposal.v1",
@@ -81,10 +83,10 @@ function meaningUpdateProposal(
     supporting_evidence: [{ reference: support.f_reference, digest: support.entry_hash }],
     counterevidence_review: {
       status: "reviewed_with_references",
-      review_scope: { reference: scopeId, digest: "e".repeat(64) },
+      review_scope: { reference: scopeId, digest: scopePlanDigest },
       references: [{ reference: counter.f_reference, digest: counter.entry_hash }],
     },
-    applicability_scope: { reference: scopeId, digest: "f".repeat(64) },
+    applicability_scope: { reference: scopeId, digest: scopePlanDigest },
     reflection_target_ref: "reflection:citation-review-001",
     proposal_status: "unverified",
     adoption_status: "not_adopted",
@@ -95,10 +97,10 @@ function meaningUpdateProposal(
 
 describe("J-side memory citation review", () => {
   it("checks proposal record versions against the current M projection without assessing meaning or adoption", () => {
-    const { hds, command, support, counter, scopeId } = setup();
+    const { hds, command, support, counter, scopeId, scopePlanDigest } = setup();
     hds.onFeedback({
       ...feedback(command.id, { content: "synthetic" }),
-      meaning_update_proposal: meaningUpdateProposal(support, counter, scopeId),
+      meaning_update_proposal: meaningUpdateProposal(support, counter, scopeId, scopePlanDigest),
     });
 
     const entry = hds.getAudit().list().map((item) => item.log).find((log) =>
@@ -114,8 +116,10 @@ describe("J-side memory citation review", () => {
         counterevidence_references_verified: 1,
         applicability_scope_matches_current: true,
         counterevidence_scope_matches_current: true,
+        applicability_scope_digest_matches_current: true,
+        counterevidence_scope_digest_matches_current: true,
         counterevidence_claim_status: "references_verified",
-        scope_digests_verified: false,
+        scope_digests_verified: true,
         target_and_prior_version_verified: false,
         semantic_relation_status: "not_assessed",
         adoption_status: "not_adopted",
@@ -130,6 +134,7 @@ describe("J-side memory citation review", () => {
     expect(feedbackAuditText).not.toContain(support.f_reference);
     expect(feedbackAuditText).not.toContain(counter.f_reference);
     expect(feedbackAuditText).not.toContain(support.entry_hash);
+    expect(feedbackAuditText).not.toContain(scopePlanDigest);
     expect(hds.getAudit().verify()).toBe(true);
   });
 
@@ -138,7 +143,7 @@ describe("J-side memory citation review", () => {
     failed.hds.onFeedback({
       ...feedback(failed.command.id, { content: "synthetic" }),
       status: "failed",
-      meaning_update_proposal: meaningUpdateProposal(failed.support, failed.counter, failed.scopeId),
+      meaning_update_proposal: meaningUpdateProposal(failed.support, failed.counter, failed.scopeId, failed.scopePlanDigest),
     });
     const failedEntry = failed.hds.getAudit().list().map((item) => item.log).find((log) =>
       "kind" in log && log.kind === "executor_feedback" && log.command_id === failed.command.id,
@@ -152,7 +157,7 @@ describe("J-side memory citation review", () => {
     });
 
     const noCounter = setup();
-    const proposal = meaningUpdateProposal(noCounter.support, noCounter.counter, noCounter.scopeId);
+    const proposal = meaningUpdateProposal(noCounter.support, noCounter.counter, noCounter.scopeId, noCounter.scopePlanDigest);
     proposal.counterevidence_review.status = "reviewed_none_found";
     proposal.counterevidence_review.references = [];
     noCounter.hds.onFeedback({
@@ -174,7 +179,7 @@ describe("J-side memory citation review", () => {
 
   it("marks stale evidence versions and mismatched scope references without adopting the proposal", () => {
     const stale = setup();
-    const staleProposal = meaningUpdateProposal(stale.support, stale.counter, stale.scopeId);
+    const staleProposal = meaningUpdateProposal(stale.support, stale.counter, stale.scopeId, stale.scopePlanDigest);
     staleProposal.supporting_evidence[0]!.digest = "a".repeat(64);
     staleProposal.counterevidence_review.references[0]!.digest = "b".repeat(64);
     stale.hds.onFeedback({
@@ -196,7 +201,7 @@ describe("J-side memory citation review", () => {
     });
 
     const wrongScope = setup();
-    const wrongScopeProposal = meaningUpdateProposal(wrongScope.support, wrongScope.counter, wrongScope.scopeId);
+    const wrongScopeProposal = meaningUpdateProposal(wrongScope.support, wrongScope.counter, wrongScope.scopeId, wrongScope.scopePlanDigest);
     wrongScopeProposal.applicability_scope.reference = "scope:not-current";
     wrongScope.hds.onFeedback({
       ...feedback(wrongScope.command.id, { content: "synthetic" }),
@@ -210,8 +215,35 @@ describe("J-side memory citation review", () => {
       review_status: "scope_reference_mismatch",
       applicability_scope_matches_current: false,
       counterevidence_scope_matches_current: true,
-      scope_digests_verified: false,
+      applicability_scope_digest_matches_current: true,
+      counterevidence_scope_digest_matches_current: true,
+      scope_digests_verified: true,
       may_apply: false,
+    });
+  });
+
+  it("keeps proposal scopes unverified when either scope digest is not bound to the current J plan", () => {
+    const { hds, command, support, counter, scopeId, scopePlanDigest } = setup();
+    const proposal = meaningUpdateProposal(support, counter, scopeId, scopePlanDigest);
+    proposal.counterevidence_review.review_scope.digest = "e".repeat(64);
+    hds.onFeedback({
+      ...feedback(command.id, { content: "synthetic" }),
+      meaning_update_proposal: proposal,
+    });
+    const entry = hds.getAudit().list().map((item) => item.log).find((log) =>
+      "kind" in log && log.kind === "executor_feedback" && log.command_id === command.id,
+    );
+    expect(entry && "kind" in entry && entry.kind === "executor_feedback"
+      ? entry.feedback.meaning_update_proposal_reference_review : undefined).toMatchObject({
+      review_status: "scope_digest_mismatch",
+      applicability_scope_matches_current: true,
+      counterevidence_scope_matches_current: true,
+      applicability_scope_digest_matches_current: true,
+      counterevidence_scope_digest_matches_current: false,
+      scope_digests_verified: false,
+      adoption_status: "not_adopted",
+      may_apply: false,
+      used_for_authority: false,
     });
   });
 

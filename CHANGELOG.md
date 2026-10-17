@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-17 — C07 scopeを現在のJ検索計画へdigest結合
+
+- 意味更新案の適用scope／反証確認scopeを同一commandの`application_scope_id`と`MemorySearchPlan.plan_id`へ照合し、各一致状態とdigest不一致statusをHDSの非権威auditへ記録する。
+- plan digest一致は同一検索計画への結合だけを示す。意味的支持／反証、探索完全性、target/prior version、意味採用は未検証のまま保持する。
+
 ## 2026-10-17 — C07 proposalの現在根拠参照を限定照合
 
 - 成功・一致したGateway `llm_call` feedbackのsupport/counterevidence record IDと版を、同commandの現在M射影へ照合し、status・件数だけを非権威auditへ記録する。

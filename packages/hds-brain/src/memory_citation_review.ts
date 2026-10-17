@@ -38,6 +38,7 @@ export interface MeaningUpdateProposalReferenceReview {
     | "no_current_projection"
     | "evidence_version_mismatch"
     | "scope_reference_mismatch"
+    | "scope_digest_mismatch"
     | "counterevidence_absence_unverified"
     | "references_verified_unadopted";
   readonly supporting_reference_count: number;
@@ -46,8 +47,10 @@ export interface MeaningUpdateProposalReferenceReview {
   readonly counterevidence_references_verified: number;
   readonly applicability_scope_matches_current: boolean;
   readonly counterevidence_scope_matches_current: boolean;
+  readonly applicability_scope_digest_matches_current: boolean;
+  readonly counterevidence_scope_digest_matches_current: boolean;
   readonly counterevidence_claim_status: "references_verified" | "references_unverified" | "none_found_unverified";
-  readonly scope_digests_verified: false;
+  readonly scope_digests_verified: boolean;
   readonly target_and_prior_version_verified: false;
   readonly semantic_relation_status: "not_assessed";
   readonly adoption_status: "not_adopted";
@@ -308,12 +311,20 @@ export function reviewMeaningUpdateProposalReferences(
     proposal.applicability_scope.reference === plan.application_scope_id;
   const counterevidenceScopeMatches = plan !== undefined &&
     proposal.counterevidence_review.review_scope.reference === plan.application_scope_id;
+  // plan_id binds all J-owned retrieval-scope inputs, including the application scope id.
+  // A match is only an integrity tie to this request's plan; it does not assess meaning or completeness.
+  const applicabilityScopeDigestMatches = plan !== undefined &&
+    proposal.applicability_scope.digest === plan.plan_id;
+  const counterevidenceScopeDigestMatches = plan !== undefined &&
+    proposal.counterevidence_review.review_scope.digest === plan.plan_id;
+  const scopeDigestsVerified = applicabilityScopeDigestMatches && counterevidenceScopeDigestMatches;
   const evidenceMismatch = candidates.length === 0 || supportingVerified !== proposal.supporting_evidence.length ||
     counterevidenceVerified !== counterevidenceReferences.length || hasOverlap;
   let reviewStatus: MeaningUpdateProposalReferenceReview["review_status"];
   if (!plan || candidates.length === 0) reviewStatus = "no_current_projection";
   else if (evidenceMismatch) reviewStatus = "evidence_version_mismatch";
   else if (!applicabilityScopeMatches || !counterevidenceScopeMatches) reviewStatus = "scope_reference_mismatch";
+  else if (!scopeDigestsVerified) reviewStatus = "scope_digest_mismatch";
   else if (proposal.counterevidence_review.status === "reviewed_none_found") {
     reviewStatus = "counterevidence_absence_unverified";
   } else reviewStatus = "references_verified_unadopted";
@@ -325,11 +336,13 @@ export function reviewMeaningUpdateProposalReferences(
     counterevidence_references_verified: counterevidenceVerified,
     applicability_scope_matches_current: applicabilityScopeMatches,
     counterevidence_scope_matches_current: counterevidenceScopeMatches,
+    applicability_scope_digest_matches_current: applicabilityScopeDigestMatches,
+    counterevidence_scope_digest_matches_current: counterevidenceScopeDigestMatches,
     counterevidence_claim_status: proposal.counterevidence_review.status === "reviewed_none_found"
       ? "none_found_unverified"
       : counterevidenceVerified === counterevidenceReferences.length
         ? "references_verified" : "references_unverified",
-    scope_digests_verified: false,
+    scope_digests_verified: scopeDigestsVerified,
     target_and_prior_version_verified: false,
     semantic_relation_status: "not_assessed",
     adoption_status: "not_adopted",
