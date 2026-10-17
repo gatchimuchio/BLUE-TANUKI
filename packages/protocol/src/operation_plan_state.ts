@@ -5,6 +5,61 @@ import { MemoryCommitV2Schema, MemoryUpdateReceiptV1Schema } from "./状態更�
 
 const Id = z.string().min(1).max(200);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
+export const OperationPlanExternalReceiptObservationSchema = z.object({
+  schema_version: z.literal("external-receipt-observation.v1"),
+  source: z.literal("local_inspection"),
+  plan_id_digest: Digest,
+  revision_digest: Digest,
+  step_id_digest: Digest,
+  command_digest: Digest,
+  executor_command_digest: Digest,
+  command_key_digest: Digest,
+  observed_command_digest: Digest.optional(),
+  observed_command_key_digest: Digest.optional(),
+  request_payload_digest: Digest,
+  observed_payload_digest: Digest.optional(),
+  candidate_set_digest: Digest,
+  status: z.enum(["matched", "not_found", "mismatch", "ambiguous"]),
+  match_count: z.number().int().min(0).max(100),
+  receipt_digest: Digest.optional(),
+  evidence_digest: Digest,
+  observed_at_ms: z.number().int().safe().nonnegative(),
+  used_for_authority: z.literal(false),
+  raw_receipt_exposed: z.literal(false),
+}).strict().superRefine((observation, context) => {
+  if (observation.status === "matched" && (observation.match_count !== 1 || !observation.receipt_digest ||
+      !observation.observed_command_digest || !observation.observed_command_key_digest || !observation.observed_payload_digest)) {
+    context.addIssue({ code: "custom", message: "matched_receipt_requires_one_digest_bound_record" });
+  }
+  if (observation.status === "matched" && observation.observed_payload_digest !== observation.request_payload_digest) {
+    context.addIssue({ code: "custom", message: "matched_receipt_requires_payload_digest_match" });
+  }
+  if (observation.status === "matched" && (observation.observed_command_digest !== observation.executor_command_digest ||
+      observation.observed_command_key_digest !== observation.command_key_digest)) {
+    context.addIssue({ code: "custom", message: "matched_receipt_requires_command_digest_match" });
+  }
+  if (observation.status === "not_found" && (observation.match_count !== 0 || observation.receipt_digest !== undefined ||
+      observation.observed_command_digest !== undefined || observation.observed_command_key_digest !== undefined ||
+      observation.observed_payload_digest !== undefined)) {
+    context.addIssue({ code: "custom", message: "not_found_receipt_must_have_no_matches" });
+  }
+  if (observation.status === "mismatch" && (observation.match_count !== 1 || !observation.receipt_digest ||
+      !observation.observed_command_digest || !observation.observed_command_key_digest || !observation.observed_payload_digest)) {
+    context.addIssue({ code: "custom", message: "mismatched_receipt_requires_one_candidate" });
+  }
+  if (observation.status === "mismatch" && observation.observed_payload_digest === observation.request_payload_digest &&
+      observation.observed_command_digest === observation.executor_command_digest &&
+      observation.observed_command_key_digest === observation.command_key_digest) {
+    context.addIssue({ code: "custom", message: "mismatched_receipt_requires_digest_mismatch" });
+  }
+  if (observation.status === "ambiguous" && (observation.match_count < 2 || observation.receipt_digest !== undefined ||
+      observation.observed_command_digest !== undefined || observation.observed_command_key_digest !== undefined ||
+      observation.observed_payload_digest !== undefined)) {
+    context.addIssue({ code: "custom", message: "ambiguous_receipt_requires_multiple_candidates" });
+  }
+});
+export type OperationPlanExternalReceiptObservation = z.infer<typeof OperationPlanExternalReceiptObservationSchema>;
+
 export const OperationPlanControlSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("review"), plan_id: Id, revision_digest: Digest, step_id: Id }).strict(),
   z.object({ action: z.literal("revise"), plan_id: Id, expected_revision_digest: Digest, plan: OperationPlanSchema }).strict(),
@@ -26,6 +81,7 @@ export const OperationPlanCheckpointSchema = z.object({
   plans: z.array(z.object({
     owner: Id, channel: Id, goal: z.string().min(1).max(200_000),
     revisions: z.array(z.object({ digest: Digest, plan: OperationPlanSchema }).strict()).min(1).max(100),
+    receipt_observations: z.array(OperationPlanExternalReceiptObservationSchema).max(100).default([]),
     bindings: z.array(z.object({
       step_id: Id, revision_digest: Digest, step_digest: Digest, prepared_step: OperationStepSchema,
       command_id: Id, request_id: Id, commit_hash: Id, payload_digest: Digest, command_digest: Digest,

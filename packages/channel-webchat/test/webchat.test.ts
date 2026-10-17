@@ -414,6 +414,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("renderOperationCoreExecution");
       expect(html).toContain("renderOperationPlanStatus");
       expect(html).toContain("receipt照合まで再送しないでください");
+      expect(html).toContain("local inspectionの1件がcommand/payload digest一致");
+      expect(html).toContain("成功・目標達成は未確認");
       expect(html).toContain("operation_core_projection");
       expect(html).toContain("OPERATION_ADAPTER_REGISTRY");
       expect(html).toContain("adapter-generated");

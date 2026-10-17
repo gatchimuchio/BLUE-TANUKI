@@ -11,6 +11,7 @@ import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, ToolRe
 import { createGatewayInternalInboundRequest, type InboundRequest, type OperationPlan } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
+import { ingestLocalInspectionReceipt } from "../src/external_receipt_observation.js";
 import { executionAdmissionForCommand, reconcileExecutionResults } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 
@@ -153,13 +154,15 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       planStore = new OperationPlanStateStore(planPath);
       let hds = new HDSUpperController({ operation_plan_state: planStore });
       const tools = new ToolRegistry();
-      const observedRequests: Array<{ idempotency_key?: string; command_digest?: string }> = [];
+      const observedRequests: Array<{ idempotency_key?: string; command_digest?: string; request_payload_digest?: string }> = [];
       tools.register(createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: FIXTURE_TOKEN }, request: async (target) => {
-        observedRequests.push({ idempotency_key: target.idempotency_key, command_digest: target.command_digest });
+        const requestPayload = target.body ?? "";
+        observedRequests.push({ idempotency_key: target.idempotency_key, command_digest: target.command_digest,
+          request_payload_digest: digest(requestPayload) });
         const response = await fetch(new URL("/send", endpoint), { method: target.method,
           headers: { authorization: `Bearer ${target.token}`, "content-type": target.contentType ?? "application/json",
             "idempotency-key": target.idempotency_key!, "x-command-digest": target.command_digest!,
-            "x-google-path": target.path }, body: target.body });
+            "x-google-path": target.path }, body: requestPayload });
         return { status: response.status, ok: response.ok, content_type: response.headers.get("content-type"),
           body: await response.text(), truncated: false, request_id: response.headers.get("x-request-id") };
       } }));
@@ -221,6 +224,31 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         expect(response.status).toBe(200);
         expect(reconciliation).toMatchObject({ status: "accepted", matches: [{ idempotency_key: command_key,
           command_digest: receipt!.command_digest, receipt_id: originalReceiptId }] });
+        const currentPlan = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
+        const receiptObservationInput = {
+          caller: source,
+          command_id: command.id,
+          command_digest: currentPlan.bindings[0]!.command_digest,
+          executor_command_digest: receipt!.command_digest,
+          plan_id_digest: currentPlan.plan_id,
+          revision_digest: currentPlan.revision_digest,
+          step_id_digest: currentPlan.steps[0]!.step_id,
+          request_payload_digest: observedRequests[0]!.request_payload_digest!,
+          response: reconciliation,
+        };
+        const observation = ingestLocalInspectionReceipt(hds, receiptObservationInput);
+        expect(observation).toMatchObject({ status: "matched", match_count: 1, source: "local_inspection",
+          used_for_authority: false, raw_receipt_exposed: false });
+        expect(() => ingestLocalInspectionReceipt(hds, { ...receiptObservationInput,
+          caller: request("unauthorized receipt observation", "another-owner") })).toThrow(/owner_mismatch/);
+        expect(() => ingestLocalInspectionReceipt(hds, { ...receiptObservationInput,
+          command_digest: "9".repeat(64) })).toThrow(/command_mismatch/);
+        const observedStep = hds.getRuntimeSnapshot().operation_plans.plans[0]!.steps[0]!;
+        expect(observedStep).toMatchObject({ status: "outcome_unknown", external_receipt_observation: "matched",
+          external_receipt: { source: "local_inspection", match_count: 1, used_for_authority: false, raw_receipt_exposed: false } });
+        expect(JSON.stringify(hds.getRuntimeSnapshot().operation_plans)).not.toContain(originalReceiptId);
+        expect(JSON.stringify(planStore.load())).not.toContain(originalReceiptId);
+        expect(planStore.load()?.plans[0]?.receipt_observations).toHaveLength(1);
         const reissuedAuthority = createExecutorApprovalAuthority({ execution_store: executionStore });
         expect(() => reissuedAuthority.approve(command, {
           source: "human_final_review", decision: "approve", approved_by: "fixture-owner", approved_at_ms: Date.now(),

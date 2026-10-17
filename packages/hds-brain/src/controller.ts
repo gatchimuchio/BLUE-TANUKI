@@ -20,6 +20,7 @@ import {
   SkepticalReviewRequestSchema,
   LLMFallbackAuthorizationSchema,
   inspectOperationCommandExecutionResult,
+  OperationPlanExternalReceiptObservationSchema,
   OperationPlanControlSchema,
   type OperationPlanControl,
   getOperationDescriptor,
@@ -1004,6 +1005,12 @@ ${planControl.question}`,
       this.planEvent("result_reconciled", delivery.feedback.command_id);
     }
     return adopted && this.operationPlans.resultMemoryIsDurable(delivery.feedback.command_id);
+  }
+  recordOperationPlanExternalReceiptObservation(value: unknown, caller: InboundRequest): boolean {
+    const observation = OperationPlanExternalReceiptObservationSchema.parse(value);
+    const recorded = this.operationPlans.recordExternalReceiptObservation(observation, caller);
+    if (recorded !== null) this.planEvent("external_receipt_observed", recorded.command_id);
+    return recorded !== null;
   }
   reconcileOperationPlanMemory(): boolean { return this.operationPlans.reconcileMemory(); }
   closeOperationPlanMemory(): void { this.operationPlans.closeMemory(); }

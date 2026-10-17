@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-18 — QEB-01-D08.01-D09.01 receipt観測をJとControl Centerへ接続
+
+- loopback inspectionの合成応答をcommand key、Executor command、request payload digestで照合し、raw receipt IDを含まない非権威観測としてJの永続OperationPlan状態に記録する。
+- 版付きruntime snapshotと既存Control Centerへ観測状態・digestを表示する。一致してもstepは`outcome_unknown`を維持し、成功・goal達成・再実行権限に昇格しない。
+- local合成経路の試験のみ。実サービス照合adapter、credential、provider、実業務作用、D4Pocket接続は含まない。D08.01／D09.01は部分接続・`BUILD_GAP`。
+
 ## 2026-10-17 — QEB-01-D09.01 J計画状態を既存Control Centerへ投影
 
 - Gateway runtime snapshotに、HDSのOperationPlanからrevision・step状態・結果digestだけを選ぶ非権威projectionを追加した。goal、target、宛先、本文、生の実行結果は投影しない。

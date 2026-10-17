@@ -217,7 +217,16 @@ export interface OperationPlanStatusProjection {
       step_id: string;
       operation: string;
       status: "not_selected" | "selected" | "intent_committed" | "outcome_unknown" | "not_attempted" | "verified" | "verification_failed" | "invalidated";
-      external_receipt_observation: "not_applicable" | "not_recorded";
+      external_receipt_observation: "not_applicable" | "not_recorded" | "matched" | "not_found" | "mismatch" | "ambiguous";
+      external_receipt?: {
+        source: "local_inspection";
+        match_count: number;
+        evidence_digest: string;
+        receipt_digest?: string;
+        observed_at_ms: number;
+        used_for_authority: false;
+        raw_receipt_exposed: false;
+      };
       binding?: {
         command_digest: string;
         result_digest?: string;
@@ -262,6 +271,30 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       if (!isDigest(step.step_id) || !isDigest(step.definition_digest) || typeof step.operation !== "string" ||
           !/^[a-z][a-z0-9._-]{0,99}$/.test(step.operation) || typeof step.status !== "string" ||
           !OPERATION_PLAN_STEP_STATUSES.has(step.status)) return invalidOperationPlanStatusProjection();
+      const observationStatus = step.external_receipt_observation;
+      const observation = step.external_receipt;
+      const allowedObservationStatuses = step.status === "outcome_unknown"
+        ? ["not_recorded", "matched", "not_found", "mismatch", "ambiguous"]
+        : ["not_applicable"];
+      const observationValid = observationStatus === "not_recorded" || observationStatus === "not_applicable"
+        ? observation === undefined
+        : isRecord(observation) && Object.keys(observation).every((key) =>
+          ["source", "match_count", "evidence_digest", "receipt_digest", "observed_at_ms", "used_for_authority", "raw_receipt_exposed"].includes(key)) &&
+          observation.source === "local_inspection" && observation.used_for_authority === false && observation.raw_receipt_exposed === false &&
+          Number.isInteger(observation.match_count) && (observation.match_count as number) >= 0 &&
+          (observation.match_count as number) <= 100 && isDigest(observation.evidence_digest) &&
+          (observation.receipt_digest === undefined || isDigest(observation.receipt_digest)) &&
+          Number.isSafeInteger(observation.observed_at_ms) && (observation.observed_at_ms as number) >= 0;
+      const observationStateValid = observationStatus === "not_recorded" || observationStatus === "not_applicable" ||
+        (observationStatus === "matched" && isRecord(observation) && observation.match_count === 1 && isDigest(observation.receipt_digest)) ||
+        (observationStatus === "not_found" && isRecord(observation) && observation.match_count === 0 && observation.receipt_digest === undefined) ||
+        (observationStatus === "mismatch" && isRecord(observation) && observation.match_count === 1 && isDigest(observation.receipt_digest)) ||
+        (observationStatus === "ambiguous" && isRecord(observation) && typeof observation.match_count === "number" && observation.match_count >= 2 &&
+          observation.receipt_digest === undefined);
+      if (typeof observationStatus !== "string" || !allowedObservationStatuses.includes(observationStatus) ||
+          !observationValid || !observationStateValid) {
+        return invalidOperationPlanStatusProjection();
+      }
       const matching = bindings.filter((candidate) => candidate.step_id === step.step_id);
       const binding = matching.at(-1);
       if (binding && (binding.status !== step.status || !isDigest(binding.command_digest) ||
@@ -274,7 +307,16 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         step_id: step.step_id,
         operation: step.operation,
         status: step.status as OperationPlanStatusProjection["plans"][number]["steps"][number]["status"],
-        external_receipt_observation: step.status === "outcome_unknown" ? "not_recorded" : "not_applicable",
+        external_receipt_observation: observationStatus as OperationPlanStatusProjection["plans"][number]["steps"][number]["external_receipt_observation"],
+        ...(isRecord(observation) ? { external_receipt: {
+          source: "local_inspection" as const,
+          match_count: observation.match_count as number,
+          evidence_digest: observation.evidence_digest as string,
+          ...(typeof observation.receipt_digest === "string" ? { receipt_digest: observation.receipt_digest } : {}),
+          observed_at_ms: observation.observed_at_ms as number,
+          used_for_authority: false as const,
+          raw_receipt_exposed: false as const,
+        } } : {}),
         ...(binding ? { binding: {
           command_digest: binding.command_digest as string,
           ...(typeof binding.result_digest === "string" ? { result_digest: binding.result_digest } : {}),

@@ -3,11 +3,14 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, ToolRegistry, fileSearchTool } from "@blue-tanuki/core";
-import { createGatewayInternalInboundRequest, type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema, type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
+
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 function request(content: string, user = "fixture-owner"): InboundRequest {
   return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user, timestamp: Date.now(), content,
@@ -71,6 +74,30 @@ function review(hds: HDSUpperController, candidate: OperationPlan, step_id: stri
 }
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
+  it("receipt配列を持たない旧checkpointをdigest検証後に既定値へ移行して読む", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-legacy-state-"));
+    const filepath = join(root, "state.sqlite");
+    const store = new OperationPlanStateStore(filepath);
+    const candidate = plan("legacy", join(root, "workspace"));
+    const legacy = {
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal: "legacy checkpoint",
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], bindings: [], results: [] }],
+    };
+    try {
+      OperationPlanCheckpointSchema.parse(legacy);
+      store.close();
+      const db = new DatabaseSync(filepath);
+      try {
+        db.prepare("INSERT INTO operation_plan_state (id, checkpoint_json, digest) VALUES (1, ?, ?)")
+          .run(JSON.stringify(legacy), operationPlanDigest(legacy));
+      } finally { db.close(); }
+      const restored = new OperationPlanStateStore(filepath);
+      try { expect(restored.load()?.plans[0]?.receipt_observations).toEqual([]); }
+      finally { restored.close(); }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it("Gmail計画は宛先固定の単一message.sendだけをtool commandへ結ぶ", async () => {
     const safeHds = new HDSUpperController(); const safeOrigin = request("plan:compute synthetic send");
     const safe = gmailSendPlan(safeOrigin.id, { operation: "message.send", to: "inspection@example.invalid",

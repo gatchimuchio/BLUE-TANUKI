@@ -912,14 +912,37 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             steps.map(function (step) {
               const binding = isObject(step.binding) ? step.binding : {};
               const unknown = step.status === "outcome_unknown";
-              const receipt = step.external_receipt_observation === "not_recorded" ? "外部receipt観測はJに未記録" : "対象外";
+              const receiptLabels = {
+                not_applicable: "対象外",
+                not_recorded: "Jに外部receipt観測未記録",
+                matched: "local inspectionの1件がcommand/payload digest一致（成功・目標達成は未確認）",
+                not_found: "local inspectionに一致なし（未送信の証明ではありません）",
+                mismatch: "local inspectionのreceipt digest不一致（結果不明を維持）",
+                ambiguous: "local inspectionに複数候補（結果不明を維持）",
+              };
+              const receipt = Object.prototype.hasOwnProperty.call(receiptLabels, step.external_receipt_observation)
+                ? receiptLabels[step.external_receipt_observation] : "観測状態を確認できません";
+              const externalReceipt = isObject(step.external_receipt) ? step.external_receipt : {};
+              const externalReceiptSafe = externalReceipt.source === "local_inspection" &&
+                externalReceipt.used_for_authority === false && externalReceipt.raw_receipt_exposed === false &&
+                typeof externalReceipt.evidence_digest === "string" && /^[a-f0-9]{64}$/.test(externalReceipt.evidence_digest) &&
+                Number.isInteger(externalReceipt.match_count) && externalReceipt.match_count >= 0 && externalReceipt.match_count <= 100 &&
+                Number.isSafeInteger(externalReceipt.observed_at_ms) && externalReceipt.observed_at_ms >= 0 &&
+                (externalReceipt.receipt_digest === undefined || (typeof externalReceipt.receipt_digest === "string" && /^[a-f0-9]{64}$/.test(externalReceipt.receipt_digest))) &&
+                step.external_receipt_observation !== "not_recorded";
+              const externalReceiptDetails = externalReceiptSafe
+                ? '<dt>観測source</dt><dd>local inspection（合成）</dd><dt>観測evidence digest</dt><dd class="mono">' +
+                  escapeHtml(shortDigest(externalReceipt.evidence_digest)) + '</dd><dt>候補件数</dt><dd>' +
+                  escapeHtml(String(externalReceipt.match_count)) + '</dd>' +
+                  (externalReceipt.receipt_digest ? '<dt>receipt digest</dt><dd class="mono">' + escapeHtml(shortDigest(externalReceipt.receipt_digest)) + '</dd>' : '')
+                : '';
               return '<div class="trace-item"><div class="row"><h4>' + escapeHtml(step.operation || "operation") + '</h4>' +
                 badge(unknown ? "結果不明" : step.status || "unknown", operationPlanStatusTone(step.status)) + '</div>' +
                 '<dl class="kv"><dt>step digest</dt><dd class="mono">' + escapeHtml(shortDigest(step.step_id)) + '</dd>' +
                 '<dt>command digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.command_digest)) + '</dd>' +
                 '<dt>実行結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.result_digest)) + '</dd>' +
                 '<dt>J配送digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.delivery_digest)) + '</dd>' +
-                '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd></dl>' +
+                '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd>' + externalReceiptDetails + '</dl>' +
                 (unknown ? '<p class="muted">外部作用の結果は未確認です。receipt照合まで再送しないでください。</p>' : '') +
                 '</div>';
             }).join("") +

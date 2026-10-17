@@ -5,6 +5,7 @@ import {
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationStep,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
+  OperationPlanExternalReceiptObservationSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
 } from "@blue-tanuki/protocol";
 import { JMemoryCommitCoordinator } from "./制御状態.js";
@@ -149,7 +150,7 @@ export class OperationPlanLedger {
       throw new Error("plan_source_binding_mismatch");
     }
     this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: origin.content,
-      revisions: [{ digest: operationPlanDigest(plan), plan }], bindings: [], results: [] }));
+      revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
   }
 
   inspectControl(control: Exclude<OperationPlanControl, { action: "reflect" }>, caller: InboundRequest): {
@@ -380,6 +381,40 @@ export class OperationPlanLedger {
   }
   forgetReflection(command_id: string): void { this.reflections.delete(command_id); }
 
+  /** Persist read-only receipt evidence without changing an operation's J-owned outcome. */
+  recordExternalReceiptObservation(value: unknown, caller: InboundRequest): { request_id: string; command_id: string } | null {
+    const observation = OperationPlanExternalReceiptObservationSchema.parse(value);
+    const { evidence_digest, observed_at_ms, ...evidence } = observation;
+    if (operationPlanDigest(evidence) !== evidence_digest || observed_at_ms > Date.now() + 30_000) {
+      throw new Error("external_receipt_observation_integrity_failed");
+    }
+    const matches = this.state.plans.filter((plan) => operationPlanDigest(plan.revisions[0]!.plan.plan_id) === observation.plan_id_digest);
+    const plan = matches[0];
+    if (matches.length !== 1 || !plan || plan.owner !== caller.user || plan.channel !== caller.channel) {
+      throw new Error("external_receipt_observation_owner_mismatch");
+    }
+    const revision = plan.revisions.at(-1)!;
+    if (revision.digest !== observation.revision_digest) throw new Error("external_receipt_observation_stale_revision");
+    const steps = revision.plan.steps.filter((step) => operationPlanDigest(step.step_id) === observation.step_id_digest);
+    if (steps.length !== 1) throw new Error("external_receipt_observation_step_mismatch");
+    const step = steps[0]!;
+    const binding = plan.bindings.filter((entry) => entry.step_id === step.step_id && entry.revision_digest === revision.digest).at(-1);
+    if (!binding || binding.status !== "outcome_unknown" || !binding.execution_admission ||
+        binding.command_digest !== observation.command_digest ||
+        binding.execution_admission.command_digest !== observation.executor_command_digest ||
+        observed_at_ms < binding.execution_admission.issued_at_ms) {
+      throw new Error("external_receipt_observation_command_mismatch");
+    }
+    if (plan.receipt_observations.some((entry) => entry.command_digest === binding.command_digest &&
+        entry.evidence_digest === evidence_digest)) return null;
+    if (plan.receipt_observations.length >= 100) throw new Error("external_receipt_observation_capacity_reached");
+    this.change((state) => {
+      const target = state.plans.find((entry) => entry.revisions[0]!.plan.plan_id === plan.revisions[0]!.plan.plan_id)!;
+      target.receipt_observations.push(observation);
+    });
+    return { request_id: binding.request_id, command_id: binding.command_id };
+  }
+
   private readResultMemoryApproval(reference: JMemoryApprovalReference): unknown {
     if (!this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return null;
     for (const p of this.state.plans) for (const b of p.bindings) {
@@ -453,21 +488,36 @@ export class OperationPlanLedger {
     return { schema_version: "operation-plan-projection.v1", used_for_authority: false as const, raw_payload_exposed: false as const,
       result_memory: { configured: !!this.resultMemory, status: !this.resultMemory ? "not_configured" : this.memoryReady ? "receipt_confirmed" : "pending_or_unavailable",
         used_for_authority: false as const },
-      plans: this.state.plans.map((p) => ({ plan_id: operationPlanDigest(p.revisions[0]!.plan.plan_id),
+      plans: this.state.plans.map((p) => {
+        const currentRevision = p.revisions.at(-1)!;
+        return { plan_id: operationPlanDigest(p.revisions[0]!.plan.plan_id),
         request_id: p.revisions[0]!.plan.request_id, revision: p.revisions.length,
-        revision_digest: p.revisions.at(-1)!.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),
-        status: p.revisions.at(-1)!.plan.steps.every((s) => p.bindings.some((b) => b.step_id === s.step_id && b.status === "verified"))
+        revision_digest: currentRevision.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),
+        status: currentRevision.plan.steps.every((s) => p.bindings.some((b) => b.step_id === s.step_id && b.status === "verified"))
           ? "results_verified" : "awaiting_step_review",
-        steps: p.revisions.at(-1)!.plan.steps.map((step) => ({ step_id: operationPlanDigest(step.step_id),
-          operation: step.operation, definition_digest: stepDigest(step),
-          status: p.bindings.filter((b) => b.step_id === step.step_id).at(-1)?.status ?? "not_selected" })),
+        steps: currentRevision.plan.steps.map((step) => {
+          const binding = p.bindings.filter((entry) => entry.step_id === step.step_id).at(-1);
+          const observation = binding?.status === "outcome_unknown"
+            ? p.receipt_observations.filter((entry) => entry.revision_digest === currentRevision.digest &&
+              entry.step_id_digest === operationPlanDigest(step.step_id) && entry.command_digest === binding.command_digest).at(-1)
+            : undefined;
+          return { step_id: operationPlanDigest(step.step_id), operation: step.operation,
+            definition_digest: stepDigest(step), status: binding?.status ?? "not_selected",
+            external_receipt_observation: binding?.status !== "outcome_unknown" ? "not_applicable" : observation?.status ?? "not_recorded",
+            ...(observation ? { external_receipt: {
+              source: observation.source, match_count: observation.match_count, evidence_digest: observation.evidence_digest,
+              ...(observation.receipt_digest ? { receipt_digest: observation.receipt_digest } : {}),
+              observed_at_ms: observation.observed_at_ms, used_for_authority: false as const, raw_receipt_exposed: false as const,
+            } } : {}),
+          };
+        }),
         bindings: p.bindings.map((b) => ({ step_id: operationPlanDigest(b.step_id), revision_digest: b.revision_digest,
           step_digest: b.step_digest, command_id: b.command_id, request_id: b.request_id, commit_hash: b.commit_hash,
           payload_digest: b.payload_digest, command_digest: b.command_digest, operation: b.operation,
           status: b.status, result_digest: b.result_digest, delivery_digest: b.delivery_digest,
           memory_status: b.memory_receipt ? "receipt_confirmed" : b.memory_commit ? "memory_commit_pending" : "not_recorded",
           memory_content_digest: b.memory_commit?.content_digest, memory_receipt_digest: b.memory_receipt?.receipt_digest })),
-      })) };
+      }; }) };
   }
 
   private ownedPlan(id: string, caller: InboundRequest): PlanState {

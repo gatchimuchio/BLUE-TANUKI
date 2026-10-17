@@ -34,9 +34,9 @@ export class OperationPlanStateStore implements OperationPlanStatePort {
     const row = this.db.prepare("SELECT checkpoint_json, digest FROM operation_plan_state WHERE id=1").get() as
       { checkpoint_json: string; digest: string } | undefined;
     if (!row) return null;
-    const value = OperationPlanCheckpointSchema.parse(JSON.parse(row.checkpoint_json));
-    if (operationPlanDigest(value) !== row.digest) throw new Error("plan_checkpoint_integrity_failed");
-    return value;
+    const raw: unknown = JSON.parse(row.checkpoint_json);
+    if (operationPlanDigest(raw) !== row.digest) throw new Error("plan_checkpoint_integrity_failed");
+    return OperationPlanCheckpointSchema.parse(raw);
   }
   compareAndSet(expected_digest: string | null, checkpoint: OperationPlanCheckpoint): void {
     this.db.exec("BEGIN IMMEDIATE");
