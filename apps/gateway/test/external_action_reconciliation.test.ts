@@ -12,6 +12,7 @@ import { createGatewayInternalInboundRequest, type InboundRequest, type Operatio
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { ingestLocalInspectionReceipt } from "../src/external_receipt_observation.js";
+import { queryLocalInspectionReceipt } from "../src/local_inspection_adapter.js";
 import { executionAdmissionForCommand, reconcileExecutionResults } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 
@@ -30,15 +31,17 @@ interface AcceptedMutation {
 function inspectionServer(): {
   server: Server;
   url: Promise<string>;
-  status: () => { effects: number; accepted: AcceptedMutation[] };
+  status: () => { effects: number; read_queries: number; accepted: AcceptedMutation[] };
 } {
   const accepted: AcceptedMutation[] = [];
   let effects = 0;
+  let readQueries = 0;
   let dropNextResponse = true;
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      if (request.method === "GET" && url.pathname.startsWith("/reconcile/")) {
+      if (request.method === "GET" && /^\/reconcile\/[a-f0-9]{64}$/.test(url.pathname)) {
+        readQueries += 1;
         const key = decodeURIComponent(url.pathname.slice("/reconcile/".length));
         const matches = accepted.filter((record) => record.idempotency_key === key);
         const status = matches.length === 0 ? "not_found" : matches.length === 1 ? "accepted" : "ambiguous";
@@ -88,7 +91,7 @@ function inspectionServer(): {
       resolve(`http://127.0.0.1:${address.port}`);
     });
   });
-  return { server, url, status: () => ({ effects, accepted: [...accepted] }) };
+  return { server, url, status: () => ({ effects, read_queries: readQueries, accepted: [...accepted] }) };
 }
 
 function request(content: string, user = "fixture-owner"): InboundRequest {
@@ -219,9 +222,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         const receipt = executionStore.lookupCommand(command_key);
         expect(receipt).toMatchObject({ state: "outcome_unknown", command_key,
           command_digest: observedRequests[0]!.command_digest, used_for_authority: false });
-        const response = await fetch(new URL(`/reconcile/${command_key}`, endpoint));
-        const reconciliation = await response.json() as { status: string; matches: AcceptedMutation[] };
-        expect(response.status).toBe(200);
+        const reconciliation = await queryLocalInspectionReceipt(endpoint, command_key);
         expect(reconciliation).toMatchObject({ status: "accepted", matches: [{ idempotency_key: command_key,
           command_digest: receipt!.command_digest, receipt_id: originalReceiptId }] });
         const currentPlan = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
@@ -257,6 +258,8 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         })).toThrow(/command already issued/);
         expect(inspection.status().effects).toBe(1);
       }
+      expect(inspection.status().effects).toBe(1);
+      expect(inspection.status().read_queries).toBe(3);
       expect(JSON.stringify(executionStore.snapshot())).not.toContain(FIXTURE_TOKEN);
       expect(JSON.stringify(hds.getAudit().list())).not.toContain(FIXTURE_TOKEN);
       expect(executionStore.verifyEvents()).toBe(true);

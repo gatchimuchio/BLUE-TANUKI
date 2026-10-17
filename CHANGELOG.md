@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-18 — QEB-01-D08.01-D09.01 loopback inspection adapter
+
+- Gatewayにsynthetic loopback専用read-only照会producerを追加し、D08.01縦断fixtureからGETを通す。明示的な`127.0.0.1`、HTTP、port付きroot URL、固定照会path、redirect拒否、timeout上限、64 KiB応答上限を強制する。
+- 3回の再起動後の照会をadapter経由にし、read-only GET 3回の間も合成非冪等作用が1回、J状態が`outcome_unknown`のままであることを確認した。
+- product runtimeのowner起動・照会前認可、実provider・資格・実ネットワーク、D4Pocket接続は未実装。D08.01／D09.01は`BUILD_GAP`を維持する。
+
 ## 2026-10-18 — QEB-01-D08.01-D09.01 receipt観測をJとControl Centerへ接続
 
 - loopback inspectionの合成応答をcommand key、Executor command、request payload digestで照合し、raw receipt IDを含まない非権威観測としてJの永続OperationPlan状態に記録する。

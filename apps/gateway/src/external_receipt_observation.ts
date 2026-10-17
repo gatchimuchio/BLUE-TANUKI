@@ -7,7 +7,7 @@ const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 interface LocalInspectionMatch {
   idempotency_key: string; command_digest: string; payload_digest: string; receipt_id: string;
 }
-interface LocalInspectionResponse { status: "not_found" | "accepted" | "ambiguous"; matches: LocalInspectionMatch[] }
+export interface LocalInspectionResponse { status: "not_found" | "accepted" | "ambiguous"; matches: LocalInspectionMatch[] }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -16,7 +16,7 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
   const keys = Object.keys(value).sort();
   return keys.length === expected.length && keys.every((key, index) => key === [...expected].sort()[index]);
 }
-function parseLocalInspectionResponse(value: unknown): LocalInspectionResponse {
+export function parseLocalInspectionResponse(value: unknown): LocalInspectionResponse {
   if (!isRecord(value) || !exactKeys(value, ["status", "matches"]) ||
       !["not_found", "accepted", "ambiguous"].includes(String(value.status)) ||
       !Array.isArray(value.matches) || value.matches.length > 100) throw new Error("external_receipt_observation_response_invalid");

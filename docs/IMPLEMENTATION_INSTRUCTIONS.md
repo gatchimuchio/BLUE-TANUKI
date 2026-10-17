@@ -1,25 +1,26 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。owner指定の最新版QE三点全文（rev2.3）、root AGENTS.md、作業標準、QE再同期規約、前回active指示、actual HEAD／remote／dirty state、D08.01／D09.01要求、JのOperationPlan checkpoint／projectionとloopback inspection serverの現行経路を再読した。Windows上のBLUE-TANUKIだけを変更対象とする。
+2026-10-18。今回の単位開始時にowner指定の最新版QE三点全文（rev2.3）、root AGENTS.md、作業標準、QE再同期規約、active指示、実HEAD／remote／dirty state、D08.01／D09.01要求、現行receipt ingestionと縦断fixtureを再読した。Windows上のBLUE-TANUKIだけを変更対象とした。
 
 ## 今回の施工単位
 
-QE_STAGE=QE_BUILD。BUILD_BATCH=QEB-01-D08.01-D09.01-RECEIPT-OBSERVATION-INGESTION。関連単位=D08.01（部分接続）・D09.01（部分接続）。開始HEAD=`a343092b92c31afe3bd7af0f60831c74a3fe189e`、clean。編集前のlocal復旧branchは`a343092`／`d305081`、remote backup tagも同SHAへ原子的に回転し、remote mainと照合した。短縮refに衝突する古いlocal tagは非正本として変更しない。
-
 backup ref移行状態=`MIGRATION_COMPLETE`（2026-10-12）。
 
-loopback inspection serverが返す合成receiptを厳格に照合し、plan/revision/step/command digestとpayload digestが合致したことを、秘密・raw receipt IDを含まない非権威観測としてJの永続OperationPlan状態へ記録する。既存Control Centerは観測状態とevidence digestを表示する。観測が一致してもplan/step status、成功、goal達成、再実行権限は変えない。
+QE_STAGE=QE_BUILD。BUILD_BATCH=QEB-01-D08.01-D09.01-LOOPBACK-INSPECTION-ADAPTER。関連単位=D08.01／D09.01（部分接続）。開始HEAD／origin/main=`609d621918fbcbcd19f43e45e0d8e3097a4aad1f`、clean。編集前のlocal復旧branchは`609d621`／`a343092`、remote backup tagも同SHAへlease付きatomic pushで回転し、mainと照合した。衝突した古いlocal tagは非正本として変更していない。
 
-許可範囲は隔離した127.0.0.1 inspection serverと合成値のみ。Gmail/外部provider、実credential、実業務作用、実network lookup、C08.03、D4Pocket／ミニドラ別repo、公開・出荷判断は対象外。raw receipt、宛先、本文、外部IDをJ projection/UIへ出さない。
+Gatewayに合成loopback専用の読取照会producerを追加した。許可endpointはHTTP・明示的`127.0.0.1`・port付きroot URLのみで、照会method/pathは`GET /reconcile/<64桁digest>`へ固定する。redirect、credential付きURL、path/query/hash付きURL、範囲外timeout、不正content-type、64 KiB超応答を拒否し、応答を既存の厳格parseへ渡す。D08.01縦断fixtureをこのproducer経由へ切り替え、3回の再起動後照会がread-only GET 3回、合成非冪等作用1回のまま、J状態は`outcome_unknown`を維持することを確認した。
 
 ## 確認状態
 
-- `pnpm exec vitest run apps/gateway/test/external_receipt_observation.test.ts apps/gateway/test/external_action_reconciliation.test.ts apps/gateway/test/serve_projection.test.ts apps/gateway/test/operation_plan_runtime.test.ts packages/channel-webchat/test/webchat.test.ts`: 5 files／92 tests PASS。receipt配列を持たない旧checkpointのdigest検証後移行を含む。
-- `pnpm typecheck`: PASS。`pnpm build`: PASS、15 workspace projects。`pnpm hds:standalone`: PASS、health=ok、audit chain valid、Runtime Invariants all_ok=true、`hds_calls_llm=false`。
-- `pnpm docs:check`: PASS。docs、日本語基底通常gate、license。Markdown 186、移行負債77件。`git diff --check`: PASS。
+- 関連Gateway試験: 3 files／10 tests PASS。endpoint制限、redirect不追従、chunked response上限、結果不明後のGET再照会・二重作用なしを含む。
+- `pnpm typecheck`: 最終PASS。初回はNode `RequestInit`型に`cache` optionがなく失敗したため、`Cache-Control: no-store` request headerへ置換した。
+- `pnpm build`: PASS、15 workspace projects。
+- `pnpm docs:check`: 初回はQE現行正本の必須語`MIGRATION_COMPLETE`欠落でFAILし、active指示へ記載して再実行後PASS。Markdown 186、移行負債77件。
+- `git diff --check`: PASS。CHANGELOG SHA-256=`4d9387ccf8083951d88ab08b1105b502efc19078886d7f8b4f27d54e230deca0`、移行台帳一致。
+- HDS-BRAIN／protocolは変更しておらず、`pnpm hds:standalone`は未実行。実provider、credential、C08.03、実ネットワーク照会、実業務作用は未実施。
 
 ## 成立範囲・次consumer
 
-今回の接続先はlocal loopback inspection fixture response→厳格parse・command key／Executor command／request payload digest照合→非権威・digest-only J checkpoint→版付きruntime snapshot→既存Control Center。再起動後の状態保持と再送禁止表示を確認した。raw receipt取得のproduct runtime route、実サービス向け照会adapter、provider照会権限は実装・実行していない。D08.01／D09.01とも全体成立ではなく`BUILD_GAP`を維持する。
+成立範囲はlocal synthetic loopback inspection endpointからの固定read-only照会producerを、既存の結果不明縦断testへ接続したところまで。これはproduct runtime routeではなく、任意endpoint設定や外部providerを受け付けない。HDSは観測記録時にowner/channel・現行plan/revision/step・結果不明bindingを検証するが、production runtimeに照会を開始するowner操作と、照会前の現行認可確認は未接続である。D08.01／D09.01は部分接続・`BUILD_GAP`を維持する。
 
-次はowner操作と現在の認可・観測権限を通す、必要時だけ起動する読取専用照合adapterのproducer。実providerのlive実行は別承認がない限り行わない。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+次はownerが対象stepの照会を明示し、現在のJ binding／owner／channel／照会期限を照会前に検査して、必要時のみread-only照会を開始する合成loopback経路を接続する。実providerのlive実行は別途明示承認なしに行わない。D4Pocket／ミニドラ別repo変更、公開・出荷判断も対象外。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
