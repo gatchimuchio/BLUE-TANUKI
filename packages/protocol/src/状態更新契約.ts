@@ -14,7 +14,9 @@ const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const ReferenceSchema = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/);
 
 export const OBSERVATION_ACQUISITION_SCHEMA_VERSION = "blue-tanuki.observation-acquisition.v1" as const;
-export const MEANING_UPDATE_PROPOSAL_SCHEMA_VERSION = "blue-tanuki.meaning-update-proposal.v1" as const;
+export const MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION = "blue-tanuki.meaning-update-proposal.v1" as const;
+export const MEANING_UPDATE_PROPOSAL_V2_SCHEMA_VERSION = "blue-tanuki.meaning-update-proposal.v2" as const;
+export const MEANING_UPDATE_PROPOSAL_SCHEMA_VERSION = MEANING_UPDATE_PROPOSAL_V2_SCHEMA_VERSION;
 
 /** 正規化済み入力を取得した記録。内容の真実性・採用・権限利用を主張しない。 */
 export const ObservationAcquisitionRecordSchema = z.object({
@@ -57,15 +59,11 @@ const CounterevidenceReviewSchema = z.discriminatedUnion("status", [
   }).strict(),
 ]);
 
-/** digestと参照だけを持つCの提案。解析は形状だけを検査し、真実性・承認・採用・記憶更新・実行適格性を決めない。 */
-export const MeaningUpdateProposalSchema = z.object({
-  schema_version: z.literal(MEANING_UPDATE_PROPOSAL_SCHEMA_VERSION),
+const MeaningUpdateProposalCommonFields = {
   record_type: z.literal("meaning_update_proposal"),
   proposal_ref: IdentifierSchema,
   candidate_ref: ReferenceSchema,
   candidate_digest: DigestSchema,
-  target_ref: ReferenceSchema,
-  prior_version_ref: ReferenceSchema,
   supporting_evidence: z.array(EvidenceReferenceSchema).min(1).max(32),
   counterevidence_review: CounterevidenceReviewSchema,
   applicability_scope: EvidenceReferenceSchema,
@@ -74,8 +72,39 @@ export const MeaningUpdateProposalSchema = z.object({
   adoption_status: z.literal("not_adopted"),
   may_apply: z.literal(false),
   used_for_authority: z.literal(false),
+};
+
+/** v2 wire equivalent of HDS MemoryCitationReference; protocol must not depend on hds-brain. */
+export const MeaningUpdateTargetReferenceSchema = z.object({
+  record_id: z.string().regex(/^F:[A-Za-z0-9_.:-]{1,96}$/),
+  version: DigestSchema,
+}).strict();
+export type MeaningUpdateTargetReference = z.infer<typeof MeaningUpdateTargetReferenceSchema>;
+
+/** Legacy proposal records remain readable; their target and prior version are unverified strings. */
+export const MeaningUpdateProposalV1Schema = z.object({
+  schema_version: z.literal(MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION),
+  ...MeaningUpdateProposalCommonFields,
+  target_ref: ReferenceSchema,
+  prior_version_ref: ReferenceSchema,
 }).strict();
 
+/** v2 requires an exact target record/version pair; the prior-version claim remains unverified. */
+export const MeaningUpdateProposalV2Schema = z.object({
+  schema_version: z.literal(MEANING_UPDATE_PROPOSAL_V2_SCHEMA_VERSION),
+  ...MeaningUpdateProposalCommonFields,
+  target_reference: MeaningUpdateTargetReferenceSchema,
+  prior_version_ref: ReferenceSchema,
+}).strict();
+
+/** digest and references only: parsing checks shape, never truth, approval, adoption, or execution. */
+export const MeaningUpdateProposalSchema = z.discriminatedUnion("schema_version", [
+  MeaningUpdateProposalV1Schema,
+  MeaningUpdateProposalV2Schema,
+]);
+
+export type MeaningUpdateProposalV1 = z.infer<typeof MeaningUpdateProposalV1Schema>;
+export type MeaningUpdateProposalV2 = z.infer<typeof MeaningUpdateProposalV2Schema>;
 export type MeaningUpdateProposal = z.infer<typeof MeaningUpdateProposalSchema>;
 
 export type SemanticRecordParseResult<T> =

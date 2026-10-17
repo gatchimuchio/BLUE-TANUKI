@@ -883,6 +883,7 @@ ${planControl.question}`,
           applicability_scope_matches_current: false, counterevidence_scope_matches_current: false,
           applicability_scope_digest_matches_current: false, counterevidence_scope_digest_matches_current: false,
           counterevidence_claim_status: "not_present" as const, scope_digests_verified: false as const,
+          target_reference_matches_current_projection: false as const,
           target_and_prior_version_verified: false as const, semantic_relation_status: "not_assessed" as const,
           adoption_status: "not_adopted" as const, may_apply: false as const, used_for_authority: false as const }
       : meaningUpdateProposalParse?.ok
@@ -893,6 +894,7 @@ ${planControl.question}`,
               applicability_scope_matches_current: false, counterevidence_scope_matches_current: false,
               applicability_scope_digest_matches_current: false, counterevidence_scope_digest_matches_current: false,
               counterevidence_claim_status: "not_reviewed" as const, scope_digests_verified: false as const,
+              target_reference_matches_current_projection: false as const,
               target_and_prior_version_verified: false as const, semantic_relation_status: "not_assessed" as const,
               adoption_status: "not_adopted" as const, may_apply: false as const, used_for_authority: false as const }
         : { review_status: "invalid_contract" as const, supporting_reference_count: 0, supporting_references_verified: 0,
@@ -900,6 +902,7 @@ ${planControl.question}`,
             applicability_scope_matches_current: false, counterevidence_scope_matches_current: false,
             applicability_scope_digest_matches_current: false, counterevidence_scope_digest_matches_current: false,
             counterevidence_claim_status: "invalid_contract" as const, scope_digests_verified: false as const,
+            target_reference_matches_current_projection: false as const,
             target_and_prior_version_verified: false as const, semantic_relation_status: "not_assessed" as const,
             adoption_status: "not_adopted" as const, may_apply: false as const, used_for_authority: false as const };
     const candidateAssessments = toolCandidates

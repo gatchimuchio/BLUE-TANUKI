@@ -17,12 +17,12 @@ import {
 
 function meaningUpdateProposal() {
   return {
-    schema_version: "blue-tanuki.meaning-update-proposal.v1",
+    schema_version: "blue-tanuki.meaning-update-proposal.v2",
     record_type: "meaning_update_proposal",
     proposal_ref: "proposal-gateway-001",
     candidate_ref: "candidate:gateway-001",
     candidate_digest: "c".repeat(64),
-    target_ref: "memory:fact-001",
+    target_reference: { record_id: "F:fact-001", version: "2".repeat(64) },
     prior_version_ref: "version:4",
     supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
     counterevidence_review: {

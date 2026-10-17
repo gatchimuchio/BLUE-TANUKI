@@ -7,7 +7,7 @@
 | 工程 | 主な目的 | 状態 |
 |---|---|---|
 | QE_DESIGN | C/J/M、作用・記憶・外殻の全体設計 | 設計と現在コードの残差あり |
-| QE_BUILD | 一気通貫の全体系を先行実装 | 上記の計画・結果・作用基盤に、受領済みfile.search観測の限定C射影とJの表示前引用照合を接続。一般意味採用・全体系は未接続 |
+| QE_BUILD | 一気通貫の全体系を先行実装 | 上記の計画・結果・作用基盤に、受領済みfile.search観測の限定C射影とJの表示前引用照合、意味更新案v2のtarget record/version照合を接続。prior version・一般意味採用・全体系は未接続 |
 | SYSTEM_SHAPED | 試験仕事が目的→結果→M→復帰まで通る | 全体成立未確認 |
 | BUILD_COVERED | 全機能群の結合形状を確認 | 未成立 |
 | QE_QC | 実物の全体検査・欠陥・原因・改善・再検査 | 未着手 |
@@ -38,6 +38,8 @@
 local二世代branch（refs/heads/codex/backup-main、refs/heads/codex/backup-main-prev）／remote二世代tag（refs/tags/codex/backup-main、refs/tags/codex/backup-main-prev）への移行状態は**MIGRATION_COMPLETE（2026-10-12）**。二tagのSHAを照合後、旧remote backup branch二本を競合検出付きで整理した。完了時SHAと手順は[復元ref移行記録](BACKUP_REF_MIGRATION.md)を参照する。新AGIの製品QE_BUILD再開とは独立した規定修正である。
 
 ## 既存の局所実装と現行接続
+
+2026-10-17に意味更新案のv2 `target_reference`を既存MemoryCitationReferenceと同じ(record ID, immutable entry hash)で表し、同一commandの現在M射影との完全一致をHDSが照合するようにした。v1履歴は解析可能なまま残す。`prior_version_ref`は未型付け・未検証であり、意味関係の評価、記憶採用、M反映、権限には使わない。
 
 C01～C08.02、D01.01～D01.02などは現行Gitに局所成果を持つが、AGI全体の完成、D4Pocket実接続の証明ではない。QEB-01-RESULTSで実結果を既存監査・履歴へ、QEB-01-PLANSで旧plan保持、内部command-step対応、明示step選択、検証済み依存結果、未実行部分の再審査を接続した。QEB-01-APPROVAL-CONTENTはApproval受付からExecutorまで内容を固定する。QEB-01-EXECUTION-INTENTはlocal期限、私有SQLiteの単回消費・開始意思・receipt、再起動後の認証付きdigest照会を接続する。QEB-01-FILE-SEARCH-WORKERは組込みfile.searchを固定childの専用IPCへ通し、実worker世代・終了と既存Jの結果検証を接続する。QEB-01-RESULT-RECONCILIATIONは保存実結果を再起動Jへ非作用配送する。QEB-01-RESULT-MEMORYはその検証済み観測を私有Mへ保存し、同receipt・元recordを照合して依存stepへ戻る。QEB-01-RESULT-REFLECTIONは現行計画の受領済みfile.search観測をdigestと件数等の有限射影にし、Cの解釈候補・不確実性をJが表示前に引用照合する。QEB-01-C07-PROPOSAL-REFERENCE-REVIEWは意味更新案の支持／反証record ID・版を現在のM射影へ限定照合する。QEB-01-C07-SCOPE-PLAN-DIGEST-REVIEWは両scope referenceを現在のapplication_scope_idへ、scope digestを同一J MemorySearchPlanのplan_idへ照合し、結果を非権威auditへ記録する。これは同一計画への結合であり、意味的支持／反証、探索完全性、scopeの意味適合、target/prior version、採用は未検証のまま保持する。plan:reflect由来のproposalは通常の意味更新履歴へ保存しない。候補は未採用で、一般C引用・学習は未接続。現在のtarget resolverはfile.searchのdirectoryだけ。自動目的採否、独立D4 Broker Permission・汎用内容結合、他作用の保存receipt調停、外部postcondition照合、OS強制隔離・全作用の独立停止はBUILD_GAP。操作は[計画接続の操作](計画接続の操作.md)、[承認内容の固定](承認内容の固定.md)、[実行意思と再照会](実行意思と再照会.md)を参照する。C08.03実LLM/providerは保留。
 

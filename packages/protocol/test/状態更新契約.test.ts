@@ -3,6 +3,7 @@ import {
   MEMORY_COMMIT_SCHEMA_VERSION,
   MEMORY_COMMIT_V1_SCHEMA_VERSION,
   MEANING_UPDATE_PROPOSAL_SCHEMA_VERSION,
+  MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION,
   OBSERVATION_ACQUISITION_SCHEMA_VERSION,
   MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION,
   createMemoryUpdateReceipt,
@@ -42,7 +43,7 @@ function validMeaningUpdateProposal() {
     proposal_ref: "proposal-001",
     candidate_ref: "candidate:001",
     candidate_digest: "c".repeat(64),
-    target_ref: "memory:fact-001",
+    target_reference: { record_id: "F:fact-001", version: "2".repeat(64) },
     prior_version_ref: "version:4",
     supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
     counterevidence_review: {
@@ -105,6 +106,17 @@ describe("状態更新契約", () => {
     } }).ok).toBe(false);
     expect(parseMeaningUpdateProposal({ ...proposal, may_apply: true }).ok).toBe(false);
     expect(parseMeaningUpdateProposal({ ...proposal, raw_candidate_text: "private claim" }).ok).toBe(false);
+    expect(parseMeaningUpdateProposal({ ...proposal, target_reference: { ...proposal.target_reference, version: "not-a-digest" } }).ok).toBe(false);
+  });
+
+  it("既存履歴のv1意味更新案を読み取るがv2のtarget型として扱わない", () => {
+    const proposal = validMeaningUpdateProposal();
+    const { target_reference: _targetReference, ...common } = proposal;
+    expect(parseMeaningUpdateProposal({
+      ...common,
+      schema_version: MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION,
+      target_ref: "memory:fact-001",
+    })).toMatchObject({ ok: true, record: { schema_version: MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION } });
   });
 
   it("canonical digestで内容を検査し、正常なMemoryCommitを解析する", () => {

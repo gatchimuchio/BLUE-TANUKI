@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
+import { MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION } from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
 import { LongTermMemoryStore } from "../src/long-term-memory/index.js";
 import { buildMemoryCitationSystemMessages } from "../src/memory_citation_review.js";
@@ -73,12 +74,12 @@ function meaningUpdateProposal(
   scopePlanDigest: string,
 ) {
   return {
-    schema_version: "blue-tanuki.meaning-update-proposal.v1",
+    schema_version: "blue-tanuki.meaning-update-proposal.v2",
     record_type: "meaning_update_proposal",
     proposal_ref: "proposal-citation-review-001",
     candidate_ref: "candidate:citation-review-001",
     candidate_digest: "c".repeat(64),
-    target_ref: "memory:citation-review-target",
+    target_reference: { record_id: support.f_reference, version: support.entry_hash },
     prior_version_ref: "version:citation-review-1",
     supporting_evidence: [{ reference: support.f_reference, digest: support.entry_hash }],
     counterevidence_review: {
@@ -109,7 +110,7 @@ describe("J-side memory citation review", () => {
     expect(entry && "kind" in entry && entry.kind === "executor_feedback" ? entry.feedback : undefined).toMatchObject({
       meaning_update_proposal_contract_status: "passed",
       meaning_update_proposal_reference_review: {
-        review_status: "references_verified_unadopted",
+        review_status: "prior_version_unverified",
         supporting_reference_count: 1,
         supporting_references_verified: 1,
         counterevidence_reference_count: 1,
@@ -120,6 +121,7 @@ describe("J-side memory citation review", () => {
         counterevidence_scope_digest_matches_current: true,
         counterevidence_claim_status: "references_verified",
         scope_digests_verified: true,
+        target_reference_matches_current_projection: true,
         target_and_prior_version_verified: false,
         semantic_relation_status: "not_assessed",
         adoption_status: "not_adopted",
@@ -136,6 +138,61 @@ describe("J-side memory citation review", () => {
     expect(feedbackAuditText).not.toContain(support.entry_hash);
     expect(feedbackAuditText).not.toContain(scopePlanDigest);
     expect(hds.getAudit().verify()).toBe(true);
+  });
+
+  it("requires an exact current M target version in v2 while leaving the prior version unverified", () => {
+    const { hds, command, support, counter, scopeId, scopePlanDigest } = setup();
+    const proposal = meaningUpdateProposal(support, counter, scopeId, scopePlanDigest);
+    proposal.target_reference = { record_id: support.f_reference, version: "0".repeat(64) };
+    hds.onFeedback({
+      ...feedback(command.id, { content: "synthetic" }),
+      meaning_update_proposal: proposal,
+    });
+
+    const entry = hds.getAudit().list().map((item) => item.log).find((log) =>
+      "kind" in log && log.kind === "executor_feedback" && log.command_id === command.id,
+    );
+    expect(entry && "kind" in entry && entry.kind === "executor_feedback" ? entry.feedback : undefined).toMatchObject({
+      meaning_update_proposal_reference_review: {
+        review_status: "target_reference_mismatch",
+        target_reference_matches_current_projection: false,
+        target_and_prior_version_verified: false,
+        semantic_relation_status: "not_assessed",
+        adoption_status: "not_adopted",
+        may_apply: false,
+        used_for_authority: false,
+      },
+    });
+  });
+
+  it("keeps legacy v1 target and prior-version claims explicitly unverified", () => {
+    const { hds, command, support, counter, scopeId, scopePlanDigest } = setup();
+    const current = meaningUpdateProposal(support, counter, scopeId, scopePlanDigest);
+    const { target_reference: _targetReference, ...legacy } = current;
+    hds.onFeedback({
+      ...feedback(command.id, { content: "synthetic" }),
+      meaning_update_proposal: {
+        ...legacy,
+        schema_version: MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION,
+        target_ref: "memory:citation-review-target",
+      },
+    });
+
+    const entry = hds.getAudit().list().map((item) => item.log).find((log) =>
+      "kind" in log && log.kind === "executor_feedback" && log.command_id === command.id,
+    );
+    expect(entry && "kind" in entry && entry.kind === "executor_feedback" ? entry.feedback : undefined).toMatchObject({
+      meaning_update_proposal_contract_status: "passed",
+      meaning_update_proposal_reference_review: {
+        review_status: "target_reference_unverified",
+        target_reference_matches_current_projection: false,
+        target_and_prior_version_verified: false,
+        semantic_relation_status: "not_assessed",
+        adoption_status: "not_adopted",
+        may_apply: false,
+        used_for_authority: false,
+      },
+    });
   });
 
   it("does not validate failed feedback proposals or claims that no counterevidence was found", () => {

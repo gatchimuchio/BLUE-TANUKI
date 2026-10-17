@@ -325,6 +325,7 @@ export interface ExecutorFeedbackAuditTrace {
   meaning_update_proposal_digest?: string;
   meaning_update_proposal_reference_review: {
     review_status: "not_present" | "invalid_contract" | "not_reviewed" | "no_current_projection" | "evidence_version_mismatch" |
+      "target_reference_unverified" | "target_reference_mismatch" | "prior_version_unverified" |
       "scope_reference_mismatch" | "scope_digest_mismatch" | "counterevidence_absence_unverified" | "references_verified_unadopted";
     supporting_reference_count: number;
     supporting_references_verified: number;
@@ -337,6 +338,7 @@ export interface ExecutorFeedbackAuditTrace {
     counterevidence_claim_status: "not_present" | "not_reviewed" | "references_verified" | "references_unverified" |
       "none_found_unverified" | "invalid_contract";
     scope_digests_verified: boolean;
+    target_reference_matches_current_projection: boolean;
     target_and_prior_version_verified: false;
     semantic_relation_status: "not_assessed";
     adoption_status: "not_adopted";

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-17 — 意味更新案v2の対象参照を現在M版へ結合
+
+- `target_reference`を`record_id`と不変entry hashの型付き参照にし、HDSが同一commandの現在M射影と完全一致するか監査へ記録する。v1履歴は引き続き解析する。
+- `prior_version_ref`は未検証のままとし、意味関係・採用・M反映・権限へ昇格しない。
+
 ## 2026-10-17 — C07 scopeを現在のJ検索計画へdigest結合
 
 - 意味更新案の適用scope／反証確認scopeを同一commandの`application_scope_id`と`MemorySearchPlan.plan_id`へ照合し、各一致状態とdigest不一致statusをHDSの非権威auditへ記録する。
