@@ -49,6 +49,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         lastMascotState: "idle",
         lastMascotLabel: "休憩中",
         chatSocket: null,
+        chatConnectionGeneration: 0,
+        runtimeSnapshotRequestId: 0,
         approvalTokens: Object.create(null),
         approvalContentDigests: Object.create(null)
       };
@@ -433,8 +435,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
       }
 
-      async function fetchJson(path, token) {
-        const response = await fetch(path, { headers: authHeaders(token) });
+      async function fetchJson(path, token, options) {
+        const response = await fetch(path, Object.assign({ headers: authHeaders(token) }, options || {}));
         if (!response.ok) throw new Error(path + " failed: HTTP " + response.status);
         return response.json();
       }
@@ -488,11 +490,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       function disconnectChat() {
-        if (state.chatSocket) {
-          try { state.chatSocket.close(); } catch (_) { /* ignore */ }
-        }
+        state.chatConnectionGeneration += 1;
+        const socket = state.chatSocket;
         state.chatSocket = null;
-        setChatStatus("not connected", "warn");
+        if (socket) {
+          try { socket.close(); } catch (_) { /* ignore */ }
+        }
+        setChatStatus("WebChat disconnected", "warn");
       }
 
       async function connectChat() {
@@ -502,15 +506,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         sessionStorage.setItem("bt.chatUser", state.chatUser);
         if (!state.chatToken) throw new Error("webchat token is required");
         disconnectChat();
+        const generation = state.chatConnectionGeneration;
         const ticket = await postJson("/ws-ticket", state.chatToken, { user: state.chatUser });
+        if (generation !== state.chatConnectionGeneration) return;
         const protocol = window.location.protocol === "https:" ? "wss" : "ws";
         const ws = new WebSocket(protocol + "://" + window.location.host + "/ws?ticket=" + encodeURIComponent(ticket.ticket));
         state.chatSocket = ws;
-        setChatStatus("connecting", "warn");
+        setChatStatus("WebChat connecting", "warn");
         ws.addEventListener("open", function () {
-          setChatStatus("connected", "good");
+          if (state.chatSocket !== ws || generation !== state.chatConnectionGeneration) return;
+          setChatStatus("WebChat connected", "good");
+          loadRuntime("webchat-connected");
         });
         ws.addEventListener("message", function (event) {
+          if (state.chatSocket !== ws || generation !== state.chatConnectionGeneration) return;
           let frame = null;
           try { frame = JSON.parse(event.data); } catch (_) { frame = { kind: "message", content: String(event.data) }; }
           if (frame.kind === "hello") {
@@ -520,13 +529,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           appendChat(frame.kind || "message", frame.content || compactJson(redactRuntimeValue(frame)));
         });
         ws.addEventListener("close", function () {
-          if (state.chatSocket === ws) {
+          if (state.chatSocket === ws && generation === state.chatConnectionGeneration) {
             state.chatSocket = null;
-            setChatStatus("closed", "warn");
+            setChatStatus("WebChat disconnected", "warn");
           }
         });
         ws.addEventListener("error", function () {
-          setChatStatus("socket error", "bad");
+          if (state.chatSocket !== ws || generation !== state.chatConnectionGeneration) return;
+          setChatStatus("WebChat socket error", "bad");
         });
       }
 
@@ -970,7 +980,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       function renderRuntime(body) {
         const invariantOk = body.hds_invariants_ok ?? body.hds?.invariants?.process_policy_enforced;
         const auditOk = body.audit_chain_valid ?? body.hds?.audit?.chain_valid;
-        setText("gateway-status", body.gateway_status || "unknown");
+        const gatewayStatus = body.gateway_status || "unknown";
+        const gatewayTone = gatewayStatus === "degraded" || invariantOk === false || auditOk === false
+          ? "bad"
+          : gatewayStatus === "running" && invariantOk === true && auditOk === true
+            ? "good"
+            : "warn";
+        setText("gateway-status", gatewayStatus);
+        byId("gateway-status").className = "badge " + gatewayTone;
         setText("runtime-invariant", labelForBoolean(invariantOk));
         setText("runtime-audit", labelForBoolean(auditOk));
         setText("first-run-next-action", body.next_recommended_action || "none");
@@ -980,8 +997,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("doctor-next-action", body.next_recommended_action || "none");
         setText("doctor-installer-mode", body.webchat_ready ? "runtime ready" : "setup incomplete");
         setText("runtime-json", compactJson(redactRuntimeValue(body)));
-        setText("header-status", body.gateway_status || "loaded");
-        byId("header-status").className = "badge " + (body.gateway_status === "ready" ? "good" : "warn");
+        setText("header-status", gatewayStatus);
+        byId("header-status").className = "badge " + gatewayTone;
         updatePermanentUseStatus(body);
         renderSchedules(body);
         renderOperationCoreProjections(body.operator_surfaces);
@@ -1713,17 +1730,41 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
-      async function loadRuntime() {
+      function setRuntimeSnapshotObservation(value, tone) {
+        const status = byId("runtime-snapshot-observed");
+        if (!status) return;
+        status.textContent = String(value);
+        status.className = "badge " + (tone || "warn");
+      }
+
+      async function loadRuntime(source) {
         const token = byId("runtime-token").value.trim();
         state.runtimeToken = token;
         sessionStorage.setItem("bt.runtimeToken", token);
+        const requestId = ++state.runtimeSnapshotRequestId;
+        if (!token) {
+          setText("gateway-status", "unknown");
+          byId("gateway-status").className = "badge warn";
+          setText("header-status", "snapshot not refreshed");
+          byId("header-status").className = "badge warn";
+          setText("runtime-json", "not refreshed: runtime token required");
+          setRuntimeSnapshotObservation("not refreshed: runtime token required", "warn");
+          return;
+        }
+        setRuntimeSnapshotObservation("refreshing" + (source === "webchat-connected" ? " after WebChat connection" : ""), "warn");
         try {
-          const body = await fetchJson("/runtime/snapshot", token);
+          const body = await fetchJson("/runtime/snapshot", token, { cache: "no-store" });
+          if (requestId !== state.runtimeSnapshotRequestId) return;
           renderRuntime(body);
+          setRuntimeSnapshotObservation("received " + new Date().toISOString(), "good");
         } catch (error) {
+          if (requestId !== state.runtimeSnapshotRequestId) return;
+          setText("gateway-status", "unknown");
+          byId("gateway-status").className = "badge warn";
           setText("runtime-json", error.message);
           setText("header-status", "runtime error");
           byId("header-status").className = "badge bad";
+          setRuntimeSnapshotObservation("refresh failed; Gateway state is unknown", "bad");
         }
       }
 
@@ -2079,13 +2120,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("save-settings").addEventListener("click", saveSettings);
       byId("connect-chat").addEventListener("click", function () {
         connectChat().catch(function (error) {
-          setChatStatus("error", "bad");
+          setChatStatus("WebChat error", "bad");
           appendChat("error", error.message);
         });
       });
       byId("send-chat").addEventListener("click", function () {
         sendChat().catch(function (error) {
-          setChatStatus("error", "bad");
+          setChatStatus("WebChat error", "bad");
           appendChat("error", error.message);
         });
       });
@@ -2093,7 +2134,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           sendChat().catch(function (error) {
-            setChatStatus("error", "bad");
+            setChatStatus("WebChat error", "bad");
             appendChat("error", error.message);
           });
         }

@@ -389,6 +389,11 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Conversation / WebChat");
       expect(html).toContain("chat-screen");
       expect(html).toContain("chat-topbar");
+      expect(html).toContain("WebChatの切断やこの画面を閉じる操作は、チャット接続だけを閉じます。Gatewayサービスの停止を意味しません。");
+      expect(html).toContain("runtime-snapshot-observed");
+      expect(html).toContain('loadRuntime("webchat-connected")');
+      expect(html).toContain('cache: "no-store"');
+      expect(html).toContain("chatConnectionGeneration");
       expect(html).toContain("chat-log");
       expect(html).toContain("chat-bubble");
       expect(html).toContain("chat-composer");

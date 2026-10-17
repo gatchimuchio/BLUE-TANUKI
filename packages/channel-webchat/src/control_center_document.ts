@@ -78,8 +78,10 @@ ${CONTROL_CENTER_STYLE}    </style>
         <section class="card">
           <h2>Runtime Snapshot</h2>
           <div class="metric"><span>Gateway</span><span id="gateway-status">not loaded</span></div>
+          <div class="metric"><span>Snapshot受信時刻</span><span id="runtime-snapshot-observed" class="badge warn" aria-live="polite">not loaded</span></div>
           <div class="metric"><span>HDS Invariants</span><span id="runtime-invariant">not loaded</span></div>
           <div class="metric"><span>Audit Chain</span><span id="runtime-audit">not loaded</span></div>
+          <p class="muted">WebChatの切断やこの画面を閉じる操作は、チャット接続だけを閉じます。Gatewayサービスの停止を意味しません。Gateway状態は認証済みRuntime Snapshotで別途確認し、再接続時はRuntime tokenがある場合に再取得します。</p>
           <input id="runtime-token" type="password" autocomplete="off" placeholder="webchat token" />
           <button id="load-runtime" class="primary">Load</button>
         </section>
@@ -107,7 +109,7 @@ ${CONTROL_CENTER_STYLE}    </style>
               <h2>Chat</h2>
               <p class="muted">Conversation / WebChat</p>
             </div>
-            <span id="chat-status" class="badge warn">not connected</span>
+            <span id="chat-status" class="badge warn">WebChat not connected</span>
           </div>
           <div id="chat-log" class="chat-log" aria-live="polite">
             <article class="chat-item system">
