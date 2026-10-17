@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileSearchTool, LLMComputeAdapter, createLLMToolCallCandidate, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
+import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileSearchTool, LLMComputeAdapter, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -371,7 +371,13 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
   it.each(["reference", "duplicate", "compute_request", "compute_output", "missing_compute", "tool", "meaning", "planner", "malformed_result", "failure"])("%sを成功・意味採用・作用へ変換しない", async (failure) => fixture(async (c) => {
     await recordActualObservation(c); const before = inspectMemory(c); const decision = reflect(c); const command = decision.command!;
     const runner = reflectionExecutor(c, (response) => {
-      if (failure === "tool") return { ...response, tool_calls: [createLLMToolCallCandidate("fixture", "x", "file.search", {})] };
+      if (failure === "tool") return { ...response, tool_calls: [{
+        schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+        call_id: "x",
+        tool_name: "file.search",
+        arguments: {},
+        authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+      }] };
       if (failure === "meaning") return { ...response, meaning_update_proposal: { private: true } };
       if (failure === "planner") return { ...response, content: JSON.stringify(c.plan) };
       const candidate = JSON.parse(response.content);
