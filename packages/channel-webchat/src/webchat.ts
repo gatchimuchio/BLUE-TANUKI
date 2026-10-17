@@ -50,9 +50,11 @@ import {
 
 import type {
   WebChatAboutSurface,
+  WebChatApprovalContentReview,
   WebChatApprovalGrantItem,
   WebChatApprovalHistoryItem,
   WebChatApprovalQueueItem,
+  WebChatApprovalContentReviewValidation,
   WebChatApprovalSurface,
   WebChatAuditSurface,
   WebChatAuthoritySurface,
@@ -108,6 +110,7 @@ function findAotanuAssetRoot(): string {
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
  *   POST /resume     body:{request_id, verdict, approval_token}  auth:Bearer  rate-limited (global)
  *   GET  /approval   auth:Bearer resume-token
+ *   POST /approval/:id/content auth:Bearer resume-token (explicit content review)
  *   POST /approval/:id body:{verdict, approval_token} auth:Bearer resume-token
  *   GET  /approval/grants auth:Bearer resume-token
  *   POST /approval/grants/:id/revoke body:{actor?,reason?} auth:Bearer resume-token
@@ -865,6 +868,49 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    const contentReviewMatch = /^\/approval\/([^/]+)\/content$/.exec(url.pathname);
+    if (contentReviewMatch) {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.opts.approval?.reviewContent) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "approval_content_review_not_configured" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res)) return;
+      let command_id: string;
+      try {
+        command_id = decodeURIComponent(contentReviewMatch[1] ?? "");
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "approval_id_invalid" }));
+        return;
+      }
+      let content: WebChatApprovalContentReview | null;
+      try {
+        content = await this.opts.approval.reviewContent(command_id);
+      } catch {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+        return;
+      }
+      if (!content) {
+        res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(JSON.stringify(content));
+      return;
+    }
+
     if (url.pathname === "/approval") {
       if (req.method !== "GET") {
         res.writeHead(405, { "content-type": "application/json" });
@@ -1040,6 +1086,27 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res))
       return;
+    const content_review_digest = typeof body?.content_review_digest === "string"
+      ? body.content_review_digest
+      : undefined;
+    if (verdict === "approve" && this.opts.approval?.validateContentReview) {
+      let review: WebChatApprovalContentReviewValidation;
+      try {
+        review = await this.opts.approval.validateContentReview(
+          approval_id,
+          content_review_digest,
+        );
+      } catch {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+        return;
+      }
+      if (review !== "valid" && review !== "not_required") {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: `approval_content_review_${review}` }));
+        return;
+      }
+    }
     if (!(await this.consumeResumeApprovalToken(approval_id, body, res))) return;
 
     const actor =
@@ -1050,6 +1117,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const result = await this.opts.onResume(approval_id, verdict, {
         actor,
         token_kind: "resume",
+        ...(content_review_digest ? { content_review_digest } : {}),
         approval: readResumeApprovalOptions(body),
       });
       res.writeHead(200, { "content-type": "application/json" });

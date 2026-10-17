@@ -49,7 +49,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         lastMascotState: "idle",
         lastMascotLabel: "休憩中",
         chatSocket: null,
-        approvalTokens: Object.create(null)
+        approvalTokens: Object.create(null),
+        approvalContentDigests: Object.create(null)
       };
 
       const redactKeyParts = ["token", "secret", "authorization", "cookie", "content", "credential", "password"];
@@ -1013,6 +1014,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("approval-grant-count", grants.length);
         setText("approval-history-count", approvalHistory.length);
         state.approvalTokens = Object.create(null);
+        state.approvalContentDigests = Object.create(null);
         renderApprovalGrants(grants);
         renderApprovalHistory(approvalHistory);
 
@@ -1033,6 +1035,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               if (item.command_id && item.approval_token) {
                 state.approvalTokens[item.command_id] = item.approval_token;
               }
+              const requiresContentReview = item.content_review_required === true;
               return '<article class="queue-item" data-command="' + escapeHtml(item.command_id || "") + '">' +
                 '<div class="row"><h3>' + escapeHtml(item.operation || "unknown operation") + '</h3><span>' + finalBadge + '</span></div>' +
                 '<dl class="kv">' +
@@ -1047,8 +1050,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>reason</dt><dd>' + escapeHtml(item.reason || "not recorded") + '</dd>' +
                 '</dl>' +
                 '<pre>' + escapeHtml(authority) + '</pre>' +
+                (requiresContentReview
+                  ? '<section class="approval-content-review"><button data-review-content="' + escapeHtml(item.command_id || "") + '">Review exact content</button><div data-content-review-view aria-live="polite">Content has not been revealed.</div></section>'
+                  : '') +
                 '<div class="action-row">' +
-                '<button class="primary" data-verdict="approve" data-command="' + escapeHtml(item.command_id || "") + '">Approve</button>' +
+                '<button class="primary" data-verdict="approve" data-command="' + escapeHtml(item.command_id || "") + '"' + (requiresContentReview ? ' disabled' : '') + '>Approve</button>' +
                 '<button data-verdict="reject" data-command="' + escapeHtml(item.command_id || "") + '">Reject</button>' +
                 '<button class="danger" data-verdict="block" data-command="' + escapeHtml(item.command_id || "") + '">Block</button>' +
                 '</div>' +
@@ -1123,6 +1129,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 ["runtime", trace.runtime_boundary || "not recorded"],
                 ["effect", Array.isArray(trace.effects) ? trace.effects.join(", ") : "not recorded"],
                 ["reason", entry.reason || "none"],
+                ["content review", entry.content_review_digest || "not recorded"],
                 ["payload", entry.payload_digest || "not recorded"],
                 ["authority", entry.used_for_authority === false ? "false" : "unsafe"],
                 ["time", formatDate(entry.timestamp)]
@@ -1723,6 +1730,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       async function loadApprovals() {
         const token = byId("approval-token").value.trim();
         state.approvalToken = token;
+        state.approvalContentDigests = Object.create(null);
         sessionStorage.setItem("bt.approvalToken", token);
         try {
           const body = await fetchJson("/approval", token);
@@ -1756,13 +1764,75 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             "content-type": "application/json",
             ...authHeaders(token)
           },
-          body: JSON.stringify({ verdict: verdict, approval_token: approvalToken })
+          body: JSON.stringify({
+            verdict: verdict,
+            approval_token: approvalToken,
+            ...(state.approvalContentDigests[commandId]
+              ? { content_review_digest: state.approvalContentDigests[commandId] }
+              : {})
+          })
         });
         if (!response.ok) {
           const text = await response.text();
           throw new Error("approval failed: HTTP " + response.status + " " + text);
         }
         await loadApprovals();
+      }
+
+      async function reviewApprovalContent(commandId, button) {
+        const token = byId("approval-token").value.trim();
+        delete state.approvalContentDigests[commandId];
+        const card = Array.from(document.querySelectorAll(".queue-item[data-command]"))
+          .find(function (item) { return item.getAttribute("data-command") === commandId; });
+        if (!card) throw new Error("approval is no longer shown; reload pending approvals");
+        const view = card.querySelector("[data-content-review-view]");
+        const approve = card.querySelector('[data-verdict="approve"]');
+        if (!view || !approve) throw new Error("content review panel is unavailable");
+        view.textContent = "Refreshing exact content…";
+        approve.disabled = true;
+        const response = await fetch("/approval/" + encodeURIComponent(commandId) + "/content", {
+          method: "POST",
+          headers: authHeaders(token)
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error("content review failed: HTTP " + response.status + " " + text);
+        }
+        const review = await response.json();
+        if (review.command_id !== commandId || review.operation !== "gmail.write.message.send" ||
+            review.used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review.command_digest || "") ||
+            !/^[a-f0-9]{64}$/.test(review.request_payload_digest || "") ||
+            typeof review.to !== "string" || typeof review.subject !== "string" ||
+            typeof review.body_text !== "string") {
+          throw new Error("content review response is not bound to this approval");
+        }
+        view.replaceChildren();
+        const heading = document.createElement("strong");
+        heading.textContent = "Exact outgoing message";
+        view.appendChild(heading);
+        [["To", review.to], ["Cc", review.cc], ["Bcc", review.bcc], ["From", review.from], ["Subject", review.subject]]
+          .forEach(function (field) {
+            if (field[1] === undefined) return;
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+        const bodyLabel = document.createElement("strong");
+        bodyLabel.textContent = "Body";
+        view.appendChild(bodyLabel);
+        const body = document.createElement("pre");
+        body.textContent = review.body_text;
+        view.appendChild(body);
+        const digests = document.createElement("small");
+        digests.textContent = "Command digest: " + review.command_digest + " | Request payload digest: " + review.request_payload_digest;
+        view.appendChild(digests);
+        state.approvalContentDigests[commandId] = review.command_digest;
+        approve.disabled = false;
+        button.textContent = "Refresh exact content";
       }
 
       async function revokeApprovalGrant(grantId) {
@@ -1896,11 +1966,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           return;
         }
         const verdict = target.dataset.verdict;
+        const reviewCommandId = target.dataset.reviewContent;
         const revokeGrantId = target.dataset.revokeGrant;
         if (revokeGrantId) {
           target.disabled = true;
           try {
             await revokeApprovalGrant(revokeGrantId);
+          } catch (error) {
+            alert(error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
+        if (reviewCommandId) {
+          target.disabled = true;
+          try {
+            await reviewApprovalContent(reviewCommandId, target);
           } catch (error) {
             alert(error.message);
           } finally {

@@ -316,6 +316,31 @@ describe("Operation Core execution projection", () => {
     expect(text).not.toContain("SECRET-RAW-COMMAND");
   });
 
+  it("exposes only a valid content-review digest in approval history", () => {
+    const history = new CompleteHistoryStore();
+    const entry = history.append({
+      kind: "approval_history",
+      request_id: "req-review",
+      command_id: "cmd-review",
+      actor: "owner",
+      source: "approval_runtime",
+      timestamp: 12345,
+      payload: {
+        event: "human_resume_approved",
+        content_review_digest: "c".repeat(64),
+        body_text: "SECRET-EMAIL-BODY",
+      },
+    });
+    const projection = projectApprovalHistoryEntry(entry!);
+
+    expect(projection.content_review_digest).toBe("c".repeat(64));
+    expect(JSON.stringify(projection)).not.toContain("SECRET-EMAIL-BODY");
+    expect(projectApprovalHistoryEntry({
+      ...entry!,
+      payload: { event: "human_resume_approved", content_review_digest: "invalid" },
+    }).content_review_digest).toBeUndefined();
+  });
+
   it("projects versioned J plan and outcome-unknown state without content or authority", () => {
     const projection = projectOperationPlanStatus({
       schema_version: "operation-plan-projection.v1",

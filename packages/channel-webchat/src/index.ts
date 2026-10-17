@@ -9,6 +9,8 @@ export {
   type WebChatSettingsSurface,
   type WebChatRuntimeSurface,
   type WebChatApprovalQueueItem,
+  type WebChatApprovalContentReview,
+  type WebChatApprovalContentReviewValidation,
   type WebChatApprovalGrantItem,
   type WebChatApprovalHistoryItem,
   type WebChatEmergencyStopSnapshot,

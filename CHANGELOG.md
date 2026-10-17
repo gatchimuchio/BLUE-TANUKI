@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-18 — QEB-03-D09.02 BLUE承認内容レビュー
+
+- WebChatのGmail `message.send`承認に、resume認証付きの明示的な内容確認経路を追加した。production serializerと同じ有効payloadを表示し、未対応入力では確認・承認をfail-closedする。
+- Control Centerは内容確認前にApproveを無効化する。Gatewayは明示previewのdigest-only開示記録がpending中にあることを一回券消費前と実行直前に確認し、digest文字列だけの直接approveを拒否する。承認履歴にはdigestのみを残す。
+- 本文を通常一覧、runtime snapshot、履歴projectionへ含めない。実送信、資格、D4Pocket変更は含まない。D09.02全体はD4 consumer未接続のため部分施工。
+
 ## 2026-10-18 — QEB-01-D08.01-D09.01 owner起動のloopback照合
 
 - Control CenterのJ計画状態に、`outcome_unknown` stepをDeveloper入口から明示照合する操作を追加した。Jはowner/channel・現行revision・binding・対象operationを照会前に再検査し、30秒・単回の読取許可を発行する。

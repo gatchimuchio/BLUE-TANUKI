@@ -63,6 +63,8 @@ import type {
   WebChatApprovalQueueItem,
   WebChatApprovalGrantItem,
   WebChatApprovalHistoryItem,
+  WebChatApprovalContentReview,
+  WebChatApprovalContentReviewValidation,
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
   WebChatAuthorityTraceItem,
@@ -97,6 +99,11 @@ import {
   RuntimeScheduleManager,
   runtimeScheduleMutationCommand,
 } from "./runtime_schedule.js";
+import {
+  isGmailMessageSendCommand,
+  projectGmailMessageSendContentReview,
+  validateGmailMessageSendContentReview,
+} from "./approval_content_review.js";
 import { buildRuntimeStatusSnapshot } from "./runtime_status.js";
 import { buildResidentNotificationsSnapshot } from "./resident_notifications.js";
 import { probeGatewaySelfHealth } from "./runtime_health.js";
@@ -163,6 +170,7 @@ interface PendingApproval {
   evaluation: ApprovalEvaluation;
   approval_token?: string;
   approval_token_expires_at_ms?: number;
+  content_review_digest?: string;
 }
 
 interface EmergencyStopState {
@@ -998,6 +1006,20 @@ export async function serve(): Promise<ServeShutdown> {
       hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "plan_binding_stale" });
       return { executed: false, status: "plan_binding_stale" };
     }
+    if (verdict === "approve" && isGmailMessageSendCommand(pending.command) &&
+        validateGmailMessageSendContentReview(
+          pending.command,
+          pending.command_digest,
+          true,
+          pending.content_review_digest,
+          ctx.content_review_digest,
+        ) !== "valid") {
+      return {
+        executed: false,
+        pending: true,
+        status: "approval_content_review_required",
+      };
+    }
     if (verdict === "approve" && emergencyStop.active) {
       const issued = await webchat.issueResumeApprovalToken(command_id);
       if (!hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -1076,6 +1098,7 @@ export async function serve(): Promise<ServeShutdown> {
       verdict,
       token_kind: ctx.token_kind,
       remember_requested: Boolean(ctx.approval?.remember || ctx.approval?.mode),
+      ...(ctx.content_review_digest ? { content_review_digest: ctx.content_review_digest } : {}),
     });
     const r = await executeAndEcho(pending.command, pending.log, pending.origin, {
       skip_approval: true,
@@ -1151,6 +1174,9 @@ export async function serve(): Promise<ServeShutdown> {
       },
       approval: {
         list: async () => pendingApprovalSnapshot(),
+        reviewContent: async (command_id: string) => pendingApprovalContentReview(command_id),
+        validateContentReview: async (command_id: string, content_review_digest: string | undefined) =>
+          validatePendingApprovalContentReview(command_id, content_review_digest),
         grants: async () => approvalGrantsSnapshot(),
         revokeGrant: async (grant_id: string, ctx: WebChatApprovalControlContext) =>
           revokeApprovalGrant(grant_id, ctx),
@@ -1322,6 +1348,36 @@ export async function serve(): Promise<ServeShutdown> {
     }],
   });
 
+  function pendingApprovalContentReview(command_id: string): WebChatApprovalContentReview | null {
+    const pending = pendingApprovals.get(command_id);
+    if (!pending || !isGmailMessageSendCommand(pending.command) ||
+        executorCommandDigest(pending.command) !== pending.command_digest ||
+        !hds.operationPlanCommandIsCurrent(pending.command)) return null;
+    const review = projectGmailMessageSendContentReview(pending.command, pending.command_digest);
+    if (!review) return null;
+    pendingApprovals.set(command_id, {
+      ...pending,
+      content_review_digest: review.command_digest,
+    });
+    return review;
+  }
+
+  function validatePendingApprovalContentReview(
+    command_id: string,
+    content_review_digest: string | undefined,
+  ): WebChatApprovalContentReviewValidation {
+    const pending = pendingApprovals.get(command_id);
+    if (!pending) return "stale";
+    return validateGmailMessageSendContentReview(
+      pending.command,
+      pending.command_digest,
+      executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command),
+      pending.content_review_digest,
+      content_review_digest,
+    );
+  }
+
   function pendingApprovalSnapshot(): WebChatApprovalQueueItem[] {
     for (const [id, p] of pendingApprovals) if (!hds.operationPlanCommandIsCurrent(p.command)) {
       pendingApprovals.delete(id);
@@ -1335,6 +1391,7 @@ export async function serve(): Promise<ServeShutdown> {
       approval_level: p.evaluation.approval_level,
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
+      content_review_required: isGmailMessageSendCommand(p.command),
       approval_token: p.approval_token,
       approval_token_expires_at_ms: p.approval_token_expires_at_ms,
       authority_trace: p.evaluation.authority_trace,

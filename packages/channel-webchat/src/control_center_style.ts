@@ -639,6 +639,11 @@ export const CONTROL_CENTER_STYLE = `      :root {
         color: var(--bad);
       }
 
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.56;
+      }
+
       button:hover {
         border-color: rgba(10, 132, 255, 0.62);
       }
@@ -691,6 +696,25 @@ export const CONTROL_CENTER_STYLE = `      :root {
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--surface-inset);
+      }
+
+      .approval-content-review {
+        display: grid;
+        gap: 8px;
+        padding: 10px;
+        border: 1px solid var(--review);
+        border-radius: 8px;
+        background: #f8f8ff;
+        overflow-wrap: anywhere;
+      }
+
+      .approval-content-review p {
+        margin: 5px 0;
+      }
+
+      .approval-content-review small {
+        color: var(--muted);
+        overflow-wrap: anywhere;
       }
 
       .chat-log {

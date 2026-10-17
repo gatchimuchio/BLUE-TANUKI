@@ -1604,6 +1604,154 @@ describe("WebChatChannel — authority trace API", () => {
 });
 
 describe("WebChatChannel — approval API", () => {
+  it("reveals pending content only through the explicit resume-authenticated review route", async () => {
+    let reviewCalls = 0;
+    const ctx = await setup({
+      approval: {
+        list: async () => [{
+          command_id: "cmd-content",
+          request_id: "req-content",
+          operation: "gmail.write",
+          risk: "high",
+          final_review_required: true,
+          reason: "final_review_required",
+          content_review_required: true,
+        }],
+        reviewContent: async (command_id) => {
+          reviewCalls += 1;
+          return command_id === "cmd-content" ? {
+            command_id,
+            command_digest: "a".repeat(64),
+            request_payload_digest: "b".repeat(64),
+            operation: "gmail.write.message.send",
+            to: "owner@example.test",
+            subject: "synthetic subject",
+            body_text: "synthetic body",
+            used_for_authority: false,
+          } : null;
+        },
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      expect((await postJson(ctx.port, "/approval/cmd-content/content", {})).status).toBe(401);
+      expect(reviewCalls).toBe(0);
+
+      const response = await fetch(`http://127.0.0.1:${ctx.port}/approval/cmd-content/content`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(await response.json()).toMatchObject({
+        command_id: "cmd-content",
+        command_digest: "a".repeat(64),
+        to: "owner@example.test",
+        subject: "synthetic subject",
+        body_text: "synthetic body",
+        used_for_authority: false,
+      });
+
+      const queue = await getRaw(ctx.port, "/approval", {
+        authorization: `Bearer ${RESUME_TOKEN}`,
+      });
+      expect(queue.text).not.toContain("synthetic body");
+      expect(reviewCalls).toBe(1);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
+  it("validates content binding before consuming the one-time approval token", async () => {
+    const calls: unknown[] = [];
+    const digest = "c".repeat(64);
+    let revealedDigest: string | undefined;
+    const ctx = await setup({
+      approval: {
+        list: async () => [],
+        reviewContent: async (id) => {
+          if (id !== "cmd-content-approve") return null;
+          revealedDigest = digest;
+          return {
+            command_id: id,
+            command_digest: digest,
+            request_payload_digest: "b".repeat(64),
+            operation: "gmail.write.message.send",
+            to: "owner@example.test",
+            subject: "synthetic subject",
+            body_text: "synthetic body",
+            used_for_authority: false,
+          };
+        },
+        validateContentReview: async (_id, submitted) => {
+          if (!revealedDigest || !submitted) return "required";
+          return submitted === revealedDigest ? "valid" : "stale";
+        },
+      },
+      onResume: async (id, verdict, resumeCtx) => {
+        calls.push({ id, verdict, resumeCtx });
+        return { handled: true };
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      const issued = await ctx.ch.issueResumeApprovalToken("cmd-content-approve");
+      const missing = await postJson(
+        ctx.port,
+        "/approval/cmd-content-approve",
+        { verdict: "approve", approval_token: issued?.token },
+        { authorization: `Bearer ${RESUME_TOKEN}` },
+      );
+      expect(missing.status).toBe(409);
+      expect(missing.body).toEqual({ error: "approval_content_review_required" });
+
+      const guessed = await postJson(
+        ctx.port,
+        "/approval/cmd-content-approve",
+        {
+          verdict: "approve",
+          approval_token: issued?.token,
+          content_review_digest: digest,
+        },
+        { authorization: `Bearer ${RESUME_TOKEN}` },
+      );
+      expect(guessed.status).toBe(409);
+
+      const review = await postJson(
+        ctx.port,
+        "/approval/cmd-content-approve/content",
+        {},
+        { authorization: `Bearer ${RESUME_TOKEN}` },
+      );
+      expect(review.status).toBe(200);
+
+      const approved = await postJson(
+        ctx.port,
+        "/approval/cmd-content-approve",
+        {
+          verdict: "approve",
+          approval_token: issued?.token,
+          content_review_digest: digest,
+        },
+        { authorization: `Bearer ${RESUME_TOKEN}` },
+      );
+      expect(approved.status).toBe(200);
+      expect(calls).toEqual([{
+        id: "cmd-content-approve",
+        verdict: "approve",
+        resumeCtx: {
+          actor: "webchat-human",
+          token_kind: "resume",
+          content_review_digest: digest,
+          approval: undefined,
+        },
+      }]);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
   it("lists pending approvals only with the resume token", async () => {
     const ctx = await setup({
       approval: {

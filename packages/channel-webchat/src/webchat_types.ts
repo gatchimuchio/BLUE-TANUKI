@@ -38,6 +38,7 @@ export interface WebChatResumeApprovalOptions {
 export interface WebChatResumeContext {
   actor: string;
   token_kind: "resume";
+  content_review_digest?: string;
   approval?: WebChatResumeApprovalOptions;
 }
 
@@ -72,11 +73,34 @@ export interface WebChatApprovalQueueItem {
   approval_level?: string;
   final_review_required: boolean;
   reason: string;
+  /** True when this approval requires an explicit, digest-bound content review before approval. */
+  content_review_required?: boolean;
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   authority_trace?: unknown;
   operation_core?: OperationCoreApprovalTrace;
 }
+
+export interface WebChatApprovalContentReview {
+  command_id: string;
+  command_digest: string;
+  request_payload_digest: string;
+  operation: "gmail.write.message.send";
+  to: string;
+  cc?: string;
+  bcc?: string;
+  from?: string;
+  subject: string;
+  body_text: string;
+  used_for_authority: false;
+}
+
+export type WebChatApprovalContentReviewValidation =
+  | "not_required"
+  | "valid"
+  | "required"
+  | "stale"
+  | "unavailable";
 
 export interface WebChatApprovalGrantItem {
   id: string;
@@ -109,6 +133,7 @@ export interface WebChatApprovalHistoryItem {
   approval_level?: string | null;
   final_review_required?: boolean;
   reason?: string | null;
+  content_review_digest?: string;
   timestamp: number;
   payload_digest: string;
   used_for_authority: false;
@@ -138,6 +163,13 @@ export interface WebChatApprovalControlContext {
 export interface WebChatApprovalSurface {
   /** Return pending human approval work for the local console. */
   list: () => Promise<readonly WebChatApprovalQueueItem[]>;
+  /** Explicitly reveal supported content for one current pending approval. */
+  reviewContent?: (command_id: string) => Promise<WebChatApprovalContentReview | null>;
+  /** Validate the digest returned by reviewContent before consuming the approval token. */
+  validateContentReview?: (
+    command_id: string,
+    content_review_digest: string | undefined,
+  ) => Promise<WebChatApprovalContentReviewValidation>;
   /** Return reusable approval grants, including non-revocable system grants. */
   grants?: () => Promise<readonly WebChatApprovalGrantItem[]>;
   /** Revoke a reusable human approval grant. */

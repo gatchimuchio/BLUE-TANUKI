@@ -531,6 +531,9 @@ export function projectApprovalHistoryEntry(entry: CompleteHistoryEntry): WebCha
         ? payload.final_review_required
         : undefined,
     reason: stringValue(payload.reason) ?? null,
+    ...(isDigest(payload.content_review_digest)
+      ? { content_review_digest: payload.content_review_digest }
+      : {}),
     timestamp: entry.timestamp,
     payload_digest: entry.payload_digest,
     used_for_authority: false,
