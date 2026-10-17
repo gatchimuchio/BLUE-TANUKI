@@ -8,6 +8,8 @@ import {
   parseBoundaryExchangeAtBoundary,
   inspectExecutionResultDelivery,
 } from "@blue-tanuki/protocol";
+import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
+import type { ApprovalOperation, ApprovalRisk } from "@blue-tanuki/hds-brain";
 import type {
   ExecuteCommand,
   ExecuteFeedback,
@@ -133,8 +135,8 @@ export interface ExecutorApprovalProof {
   approved_by: string;
   approved_at_ms: number;
   upstream_commit_hash: string;
-  operation: string;
-  risk: "low" | "medium" | "high";
+  operation: ApprovalOperation;
+  risk: ApprovalRisk;
   final_review_required: boolean;
   reason: string;
 }
@@ -221,6 +223,7 @@ function approveCommandForExecution(
   if (!Number.isFinite(proof.approved_at_ms) || proof.approved_at_ms <= 0) {
     throw new Error("approval proof approved_at_ms must be a positive timestamp");
   }
+  assertApprovalProofMatchesHdsPolicy(snapshot, proof);
   const command_digest = executorCommandDigest(snapshot);
   if (expected_command_digest !== undefined && expected_command_digest !== command_digest) {
     throw new Error("Executor approval rejected: reviewed command content changed");
@@ -788,13 +791,7 @@ export class Executor {
     if (proof.decision !== "allow" && proof.decision !== "approve") {
       throw new Error("Executor rejected command: approval proof decision is not executable");
     }
-    if (commandRequiresHumanFinalReview(cmd)) {
-      if (proof.source !== "human_final_review" || proof.final_review_required !== true || proof.risk !== "high") {
-        throw new Error(
-          `Executor rejected high-risk command ${commandOperationLabel(cmd)}: human final-review proof is required`,
-        );
-      }
-    }
+    assertApprovalProofMatchesHdsPolicy(cmd, proof);
     // adapter/historyのawait前に同期消費する。失敗でも承認を復活させず、
     // 次の試行には新しい上流採否を必要とする。
     const now = assertTicketCurrent(record);
@@ -978,49 +975,33 @@ function authorityIdFor(authority: ExecutorApprovalAuthority): symbol {
   return id;
 }
 
-function commandRequiresHumanFinalReview(command: ExecuteCommand): boolean {
-  if (command.type !== "tool_call") return false;
-  const tool = command.payload.tool_name;
-  if (
-    tool === "shell.exec" ||
-    tool === "github.write" ||
-    tool === "gmail.write" ||
-    tool === "google.calendar.write" ||
-    tool === "google.drive.write" ||
-    tool === "composio.execute" ||
-    tool === "browser.automation" ||
-    tool === "schedule.create" ||
-    tool === "schedule.update" ||
-    tool === "schedule.delete"
-  ) {
-    return true;
+function assertApprovalProofMatchesHdsPolicy(
+  command: ExecuteCommand,
+  proof: Readonly<ExecutorApprovalProof>,
+): void {
+  if (proof.source !== "approval_gate" && proof.source !== "human_final_review") {
+    throw new Error("Executor rejected approval proof: proof source is invalid");
   }
-  const caps = command.constraints?.allowed_capabilities ?? [];
-  return hasAnyCapability(caps, [
-    "shell:exec",
-    "process:exec",
-    "settings:write",
-    "schedule:create",
-    "schedule:update",
-    "schedule:delete",
-    "automation:create",
-    "automation:update",
-    "automation:delete",
-    "tool:github.write",
-    "tool:gmail.write",
-    "tool:google.calendar.write",
-    "tool:google.drive.write",
-    "tool:composio.execute",
-    "tool:browser.automation",
-    "browser:act",
-    "external:send",
-    "email:send",
-  ]);
-}
-
-function hasAnyCapability(caps: readonly ToolCapability[], expected: readonly string[]): boolean {
-  const set = new Set(caps);
-  return expected.some((cap) => set.has(cap));
+  const context = approvalContextFromCommand(command);
+  const final_review_required = finalReviewRequired(context);
+  if (proof.operation !== context.operation) {
+    throw new Error("Executor rejected approval proof: operation does not match HDS command classification");
+  }
+  if (proof.risk !== context.risk) {
+    throw new Error("Executor rejected approval proof: risk does not match HDS command classification");
+  }
+  if (proof.final_review_required !== final_review_required) {
+    throw new Error("Executor rejected approval proof: final-review status does not match HDS command classification");
+  }
+  if ((proof.source === "approval_gate" && proof.decision !== "allow") ||
+      (proof.source === "human_final_review" && proof.decision !== "approve")) {
+    throw new Error("Executor rejected approval proof: decision does not match proof source");
+  }
+  if (final_review_required && proof.source !== "human_final_review") {
+    throw new Error(
+      `Executor rejected high-risk command ${commandOperationLabel(command)}: human final-review proof is required`,
+    );
+  }
 }
 
 function commandOperationLabel(command: ExecuteCommand): string {

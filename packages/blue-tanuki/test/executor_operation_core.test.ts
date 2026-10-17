@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
 import type { ExecuteCommand, OperationPlan } from "@blue-tanuki/protocol";
 import {
   Executor,
@@ -47,15 +48,17 @@ function shellCmd(): ExecuteCommand {
 }
 
 function approved(command: ExecuteCommand) {
+  const context = approvalContextFromCommand(command);
+  const final_review_required = finalReviewRequired(context);
   return executorApproval.approve(command, {
-    source: "approval_gate",
-    decision: "allow",
+    source: final_review_required ? "human_final_review" : "approval_gate",
+    decision: final_review_required ? "approve" : "allow",
     approved_by: "test-owner",
     approved_at_ms: 1,
     upstream_commit_hash: command.upstream_decision.commit_hash,
-    operation: "llm.call",
-    risk: "low",
-    final_review_required: false,
+    operation: context.operation,
+    risk: context.risk,
+    final_review_required,
     reason: "test approval",
   });
 }

@@ -41,6 +41,8 @@ local二世代branch（refs/heads/codex/backup-main、refs/heads/codex/backup-ma
 
 2026-10-17に意味更新案のv2 `target_reference`を既存MemoryCitationReferenceと同じ(record ID, immutable entry hash)で表し、同一commandの現在M射影との完全一致をHDSが照合するようにした。v1履歴は解析可能なまま残す。`prior_version_ref`は未型付け・未検証であり、意味関係の評価、記憶採用、M反映、権限には使わない。
 
+2026-10-17のQEB-01-APPROVAL-POLICY-CONSUMERで、ExecutorはHDS-BRAINのcommand分類を直接消費し、proofのoperation／risk／final-review状態を発行時とdispatch直前に照合する。HDSがL3と分類する場合はhuman final-review由来を要求する。D02.02の部分接続であり、独立Broker PermissionやD08.01の単一外部作用・結果照合は未接続。
+
 C01～C08.02、D01.01～D01.02などは現行Gitに局所成果を持つが、AGI全体の完成、D4Pocket実接続の証明ではない。QEB-01-RESULTSで実結果を既存監査・履歴へ、QEB-01-PLANSで旧plan保持、内部command-step対応、明示step選択、検証済み依存結果、未実行部分の再審査を接続した。QEB-01-APPROVAL-CONTENTはApproval受付からExecutorまで内容を固定する。QEB-01-EXECUTION-INTENTはlocal期限、私有SQLiteの単回消費・開始意思・receipt、再起動後の認証付きdigest照会を接続する。QEB-01-FILE-SEARCH-WORKERは組込みfile.searchを固定childの専用IPCへ通し、実worker世代・終了と既存Jの結果検証を接続する。QEB-01-RESULT-RECONCILIATIONは保存実結果を再起動Jへ非作用配送する。QEB-01-RESULT-MEMORYはその検証済み観測を私有Mへ保存し、同receipt・元recordを照合して依存stepへ戻る。QEB-01-RESULT-REFLECTIONは現行計画の受領済みfile.search観測をdigestと件数等の有限射影にし、Cの解釈候補・不確実性をJが表示前に引用照合する。QEB-01-C07-PROPOSAL-REFERENCE-REVIEWは意味更新案の支持／反証record ID・版を現在のM射影へ限定照合する。QEB-01-C07-SCOPE-PLAN-DIGEST-REVIEWは両scope referenceを現在のapplication_scope_idへ、scope digestを同一J MemorySearchPlanのplan_idへ照合し、結果を非権威auditへ記録する。これは同一計画への結合であり、意味的支持／反証、探索完全性、scopeの意味適合、target/prior version、採用は未検証のまま保持する。plan:reflect由来のproposalは通常の意味更新履歴へ保存しない。候補は未採用で、一般C引用・学習は未接続。現在のtarget resolverはfile.searchのdirectoryだけ。自動目的採否、独立D4 Broker Permission・汎用内容結合、他作用の保存receipt調停、外部postcondition照合、OS強制隔離・全作用の独立停止はBUILD_GAP。操作は[計画接続の操作](計画接続の操作.md)、[承認内容の固定](承認内容の固定.md)、[実行意思と再照会](実行意思と再照会.md)を参照する。C08.03実LLM/providerは保留。
 
 ## 旧RCのP13と日本語基底J系列

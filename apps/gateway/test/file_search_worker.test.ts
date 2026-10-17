@@ -21,7 +21,7 @@ function source(): Extract<ExecuteCommand, { type: "tool_call" }> {
       commit_hash: "fixture-commit", commit_decision: "ASSERT" } };
 }
 const proof = () => ({ source: "approval_gate" as const, decision: "allow" as const, approved_by: "fixture-owner",
-  approved_at_ms: Date.now(), upstream_commit_hash: "fixture-commit", operation: "file.search", risk: "low" as const,
+  approved_at_ms: Date.now(), upstream_commit_hash: "fixture-commit", operation: "tool.file.search", risk: "low" as const,
   final_review_required: false, reason: "fixture" });
 async function temporary(run: (store: GatewayExecutionIntentStore, workspace: string, filename: string) => Promise<void>) {
   const root = mkdtempSync(join(tmpdir(), "blue-search-worker-"));

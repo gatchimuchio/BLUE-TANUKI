@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-17 — QEB-01承認policyをExecutor consumerへ接続
+
+- ExecutorがHDS-BRAINの正規command分類から`operation`／`risk`／`final_review_required`を照合し、承認発行時と実行直前の両方でproofとの不一致を拒否する。未知proof sourceとsource／decisionの不整合も拒否する。
+- HDSがL3 final reviewと分類するcommandは、Executor proof発行時とdispatch直前の双方で`human_final_review`由来を要求する。L3の不正proofで永続ticketを先に作らない。重複していたExecutor内の独自operation分類を除去した。
+
 ## 2026-10-17 — 意味更新案v2の対象参照を現在M版へ結合
 
 - `target_reference`を`record_id`と不変entry hashの型付き参照にし、HDSが同一commandの現在M射影と完全一致するか監査へ記録する。v1履歴は引き続き解析する。

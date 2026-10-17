@@ -52,6 +52,9 @@ importers:
 
   packages/blue-tanuki:
     dependencies:
+      '@blue-tanuki/hds-brain':
+        specifier: workspace:*
+        version: link:../hds-brain
       '@blue-tanuki/protocol':
         specifier: workspace:*
         version: link:../protocol

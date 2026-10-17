@@ -22,6 +22,7 @@
     "test": "node ../../node_modules/vitest/vitest.mjs run"
   },
   "dependencies": {
+    "@blue-tanuki/hds-brain": "workspace:*",
     "@blue-tanuki/protocol": "workspace:*"
   }
 }

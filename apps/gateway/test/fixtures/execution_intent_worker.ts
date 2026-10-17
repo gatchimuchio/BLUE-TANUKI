@@ -2,6 +2,7 @@
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { once } from "node:events";
+import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, ToolRegistry } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "../../src/execution_intent_store.js";
 
@@ -22,8 +23,11 @@ try {
   const command = { id, type: "tool_call" as const, payload: { tool_name: "synthetic.read", arguments: { target: "青" } },
     constraints: { allowed_tools: ["synthetic.read"], allowed_capabilities: ["tool:synthetic.read"] },
     upstream_decision: { request_id: "fixture-task", frame_goal: "合成対象を読む", model_abstraction: "fixture", commit_hash: "fixture-commit", commit_decision: "ASSERT" as const } };
-  const approved = authority.approve(command, { source: "approval_gate", decision: "allow", approved_by: "fixture-owner", approved_at_ms: Date.now(),
-    upstream_commit_hash: "fixture-commit", operation: "synthetic.read", risk: "low", final_review_required: false, reason: "fixture" });
+  const context = approvalContextFromCommand(command);
+  const final_review_required = finalReviewRequired(context);
+  const approved = authority.approve(command, { source: final_review_required ? "human_final_review" : "approval_gate",
+    decision: final_review_required ? "approve" : "allow", approved_by: "fixture-owner", approved_at_ms: Date.now(),
+    upstream_commit_hash: "fixture-commit", operation: context.operation, risk: context.risk, final_review_required, reason: "fixture" });
   const result = await executor.execute(approved);
   process.exitCode = result.status === "success" ? 0 : 1;
 } catch (error) {

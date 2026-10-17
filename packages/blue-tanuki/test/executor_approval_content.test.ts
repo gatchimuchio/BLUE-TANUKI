@@ -7,21 +7,21 @@ import {
 import { StubBackend } from "../src/llm/stub.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 
-function command(): Extract<ExecuteCommand, { type: "tool_call" }> {
+function command(toolName = "synthetic.read", capabilities: string[] = ["fs:read"]): Extract<ExecuteCommand, { type: "tool_call" }> {
   return { id: "synthetic-command", type: "tool_call",
-    payload: { tool_name: "synthetic.read", arguments: { target: "one", body: { text: "青" } } },
-    constraints: { allowed_tools: ["synthetic.read"], allowed_capabilities: ["tool:synthetic.read"] },
+    payload: { tool_name: toolName, arguments: { target: "one", body: { text: "青" } } },
+    constraints: { allowed_tools: [toolName], allowed_capabilities: capabilities },
     upstream_decision: { frame_goal: "合成対象を読む", model_abstraction: "fixture", commit_hash: "synthetic-hds-commit", commit_decision: "ASSERT" } };
 }
-function proof(): ExecutorApprovalProof {
+function proof(overrides: Partial<ExecutorApprovalProof> = {}): ExecutorApprovalProof {
   return { source: "approval_gate", decision: "allow", approved_by: "fixture-owner", approved_at_ms: 1,
-    upstream_commit_hash: "synthetic-hds-commit", operation: "synthetic.read", risk: "low",
-    final_review_required: false, reason: "synthetic review" };
+    upstream_commit_hash: "synthetic-hds-commit", operation: "tool.file.read", risk: "low",
+    final_review_required: false, reason: "synthetic review", ...overrides };
 }
-function runtime(invoke: (args: Record<string, unknown>) => Promise<unknown>) {
+function runtime(invoke: (args: Record<string, unknown>) => Promise<unknown>, toolName = "synthetic.read", capabilities: string[] = ["fs:read"]) {
   const approval = createExecutorApprovalAuthority();
   const tools = new ToolRegistry();
-  tools.register({ name: "synthetic.read", description: "合成の内容固定確認", required_capabilities: ["tool:synthetic.read"], invoke });
+  tools.register({ name: toolName, description: "合成の内容固定確認", required_capabilities: capabilities, invoke });
   return { approval, executor: new Executor({ approval_authority: approval, tools, llm: new StubBackend() }) };
 }
 
@@ -129,5 +129,40 @@ describe("承認内容からExecutorへの固定", () => {
       const c = command(); c.payload.arguments.number = value; return executorCommandDigest(c);
     });
     expect(new Set(variants).size).toBe(4);
+  });
+
+  it("HDS正本のoperation・riskと一致しないproofを拒否する", () => {
+    const { approval } = runtime(async () => null);
+    const unknown = command("synthetic.unknown", ["tool:synthetic.unknown"]);
+    expect(() => approval.approve(unknown, proof({ source: "untrusted" as ExecutorApprovalProof["source"] })))
+      .toThrow(/proof source is invalid/);
+    expect(() => approval.approve(unknown, proof())).toThrow(/operation does not match HDS/);
+    expect(() => approval.approve(unknown, proof({ operation: "tool.call" }))).toThrow(/risk does not match HDS/);
+    expect(() => approval.approve(unknown, proof({ operation: "tool.call", risk: "high" }))).toThrow(/final-review status does not match HDS/);
+  });
+
+  it.each([
+    { toolName: "synthetic.unknown", capability: "tool:synthetic.unknown", operation: "tool.call" },
+    { toolName: "synthetic.credential", capability: "credential:read", operation: "credential.access" },
+    { toolName: "synthetic.payment", capability: "payment:charge", operation: "payment.charge" },
+  ] as const)("HDSのL3分類 $operation にはExecutorでhuman final-reviewを要求する", async ({ toolName, capability, operation }) => {
+    let calls = 0;
+    const { approval } = runtime(async () => { calls++; return null; }, toolName, [capability]);
+    const source = command(toolName, [capability]);
+    const proofWithoutHumanReview = proof({ operation, risk: "high", final_review_required: true });
+    expect(() => approval.approve(source, proofWithoutHumanReview)).toThrow(/human final-review proof is required/);
+    expect(calls).toBe(0);
+  });
+
+  it("HDS分類と内容が一致したhuman final-review proofだけを合成Executorへ通す", async () => {
+    let calls = 0;
+    const toolName = "synthetic.unknown";
+    const capability = "tool:synthetic.unknown";
+    const { approval, executor } = runtime(async () => { calls++; return { completed: true }; }, toolName, [capability]);
+    const source = command(toolName, [capability]);
+    const approved = approval.approve(source, proof({ source: "human_final_review", decision: "approve",
+      operation: "tool.call", risk: "high", final_review_required: true }));
+    expect((await executor.execute(approved)).status).toBe("success");
+    expect(calls).toBe(1);
   });
 });

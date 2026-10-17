@@ -1,31 +1,23 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-17。毎作業・切替・再開時に、owner指定の最新版QE三点全文、適用AGENTS.md、active、HEAD・差分・対象producer／consumerを読み直す。現在のowner開発委任に従い、Windows上でBLUE本体を施工する。
+2026-10-17。owner指定の最新版QE三点全文、適用AGENTS.md、active指示、HEAD・差分・対象producer／consumerを本作業開始時に再読済み。Windows上でBLUE本体を施工する。
 
-## 対象と到達状態
+## 現行施工単位
 
-QE_STAGE=QE_BUILD。BUILD_BATCH=QEB-01-C07-TYPED-TARGET-REFERENCE。C07.01の意味更新案v2に、既存`MemoryCitationReference`と同じ`(record_id, version)`の型付き`target_reference`を導入する。HDSは成功feedbackに付随する案について、同一commandの現在MemoryTrace内でrecord IDと不変entry hashの両方が完全一致するか照合し、raw参照／hashを重複しない非権威audit booleanへ残す。v1履歴は引き続き解析するがtargetを未検証とする。
+QE_STAGE=QE_BUILD。BUILD_BATCH=QEB-01-APPROVAL-POLICY-CONSUMER。ExecutorをHDS-BRAINの唯一のcommand分類consumerへ接続する。
 
-v2の`prior_version_ref`はまだ汎用文字列のため、旧版の存在・対象との系譜・適合は未検証であり、`target_and_prior_version_verified=false`を維持する。targetの一致も記憶更新候補の意味、支持／反証、scopeの意味適合・探索完全性、採用、M反映、実行権限を判定しない。proposalは未採用・非権限・非適用のままとする。
+`packages/hds-brain/src/approval_policy.ts`の`approvalContextFromCommand`と`finalReviewRequired`をExecutorが直接使用する。proof発行時と実行直前に`operation`、`risk`、`final_review_required`を実commandから再導出して照合し、unknown proof sourceとsource／decision不整合を拒否する。HDSがL3と判定したcommandはproof発行時とExecutor dispatch直前の双方で`human_final_review`由来を要求し、不正proofの永続ticketを先行発行しない。Executor独自のfinal-review operation分類は削除した。Core→HDS-BRAINのworkspace依存を追加し、HDS-BRAIN standaloneを維持する。
 
-この実装では実LLM/providerからv2が生成されることを検証しない。C08.03の実provider試験を保留する。
+開始HEAD=`f85c681eb8ce0b8542b06c111dde354527eeca4c`。編集前にlocal復旧branch二世代とremote backup tag二世代を開始HEAD／直前HEADで照合した。local／remote共通の復元世代は`f85c681eb8ce0b8542b06c111dde354527eeca4c`／`6407a969df8f3dd64fb0d33546e5253242085534`。バックアップref方式の移行は`MIGRATION_COMPLETE`（2026-10-12）である。
 
-## 判定の境界
+## 確認状態
 
-実装対象はprotocol v1/v2 parser、HDSの現在投影target照合とaudit、fallback型、対応tests。v2 targetが現projectionにない場合は`target_reference_mismatch`、v1のgeneric targetは`target_reference_unverified`、targetは一致してもprior versionが未検証なら`prior_version_unverified`とする。scope digestが一致する場合も同一planへの結合に限る。
+Core Executorの対象5 files／49 tests、Gateway実行意思・file.search worker・operation plan・operation resultの4 files／24 testsはPASS。全workspace `pnpm typecheck`、15 project `pnpm build`、`pnpm hds:standalone`もPASS。HDS standaloneはhealth=ok、audit chain valid、Runtime Invariants all_ok=true、hds_calls_llm=false。
 
-実owner承認producer・M反映consumer・初期MemoryInterpretation producerは接続しない。D4Pocket／ミニドラ、credential、外部業務作用は対象外。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、version=`1.0.0-rc.1`を維持する。内部QE原典・ZIP・要求対応表・raw運転証拠はPublic Gitへ追加しない。
+Gateway結果調停の拡張suiteは29 tests中28 PASS／1 FAIL。失敗は「tool候補を成功・意味採用・作用へ変換しない」で、承認proofは通過した後の合成LLM tool候補処理が`llm_failure.kind=unknown`を返し、結果本文がないためoutput digest状態が`not_present`となる。今回の承認policy接続内の不一致ではないが、原因は未確定のため別途調査対象として残す。全suite PASSとは扱わない。
 
-## 対象と確認
+## 残る境界と閉鎖
 
-対象は`packages/protocol/src/状態更新契約.ts`、`packages/hds-brain/src/memory_citation_review.ts`、`packages/hds-brain/src/types.ts`、`packages/hds-brain/src/controller.ts`と対応tests、ならびに公開可能な進捗・ロードマップ・changelogである。必要な確認は関連protocol／HDS／Gateway／Executor tests、`pnpm typecheck`、`pnpm build`、`pnpm hds:standalone`、`pnpm docs:check`、`git diff --check`。
+D02.02の部分接続として扱う。D02.03の移行完了、Broker独立Permission、D08.01の単一外部作用・結果照合、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAは主張しない。独立Broker Permission、汎用command内容結合、他作用の保存receipt調停、外部postcondition照合、5OS installed対応は引き続き`BUILD_GAP`。D4Pocket／ミニドラ別repo、provider・実credential・業務外部作用は変更・使用しない。C08.03実provider検証は保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。内部QE原典・ZIP・要求対応表・raw運転証拠はPublic Gitへ追加しない。
 
-開始HEAD=origin/main=`6407a969df8f3dd64fb0d33546e5253242085534`、clean。編集前の復元点はlocal `codex/backup-main`／`codex/backup-main-prev`=`6407a969df8f3dd64fb0d33546e5253242085534`／`62fa57927b7a138b87e71354f1ca154f03c63ecf`、remote backup tag二世代も同じSHAへ更新・照合済み。
-
-## 次の接続点
-
-prior-versionの型付きproducerとM履歴consumer、意味関係を生成・独立評価する許可済み経路は未接続のまま残す。推測でresolverを作らず、これらが現行の製品経路を妨げるかを記録して、次の実consumerへ進む。実provider、実業務作用、別repo、公開・出荷判断は別境界で保留する。
-
-prior-version履歴照合と意味評価は具体的な`BUILD_GAP`。C07親全体、意味採用、SYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAは未成立。
-
-backup refsの移行状態は`MIGRATION_COMPLETE`。編集前復元点の作成後、バッチ末にmain commit/push、remote HEAD、local復旧branch二世代、remote tag二世代、clean worktreeを照合する。
+このバッチを閉じる前に、`pnpm docs:check`、`git diff --check`と差分レビューを完了し、限定commitをmainへpushする。最後にremote HEAD、local復旧branch二世代、remote tag二世代、clean worktreeを照合する。次consumerは最新正本と作業時点の実装を再読して選ぶ。

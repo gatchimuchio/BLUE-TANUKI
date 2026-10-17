@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, ToolRegistry, fileSearchTool, type ExecutorApprovalClock,
   type ExecutionIntentStore } from "@blue-tanuki/core";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
@@ -17,9 +18,14 @@ function command(id = "synthetic-command"): Extract<ExecuteCommand, { type: "too
     upstream_decision: { request_id: "synthetic-task", frame_goal: "合成対象を読む", model_abstraction: "fixture",
       commit_hash: "fixture-commit", commit_decision: "ASSERT" } };
 }
-const proof = () => ({ source: "approval_gate" as const, decision: "allow" as const, approved_by: "fixture-owner",
-  approved_at_ms: Date.now(), upstream_commit_hash: "fixture-commit", operation: "synthetic.read", risk: "low" as const,
-  final_review_required: false, reason: "fixture" });
+const proof = (source: ExecuteCommand = command()) => {
+  const context = approvalContextFromCommand(source);
+  const final_review_required = finalReviewRequired(context);
+  return { source: final_review_required ? "human_final_review" as const : "approval_gate" as const,
+    decision: final_review_required ? "approve" as const : "allow" as const, approved_by: "fixture-owner",
+    approved_at_ms: Date.now(), upstream_commit_hash: source.upstream_decision.commit_hash, operation: context.operation,
+    risk: context.risk, final_review_required, reason: "fixture" };
+};
 function rig(store: ExecutionIntentStore, clock?: ExecutorApprovalClock, invoke = async (_args: Record<string, unknown>) => "青") {
   const authority = createExecutorApprovalAuthority({ execution_store: store, clock, ticket_ttl_ms: clock ? 100 : 300_000 });
   const tools = new ToolRegistry();
@@ -45,7 +51,7 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
       const source = command();
       source.payload = { tool_name: "file.search", arguments: { root: workspace, query: "blue", max_results: 1 } };
       source.constraints = { allowed_tools: ["file.search"], allowed_capabilities: [...fileSearchTool.required_capabilities!] };
-      const approved = authority.approve(source, { ...proof(), operation: "file.search" });
+      const approved = authority.approve(source, proof(source));
       const feedback = await executor.execute(approved);
       expect(feedback.status).toBe("success");
       expect(feedback.operation_core_result?.action_outcome).toBe("reported_success");
@@ -53,7 +59,7 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
       expect(receipt).toMatchObject({ state: "adapter_returned", invocation_boundary: "tool_adapter", used_for_authority: false });
       expect(receipt.output_digest).toBe(feedback.operation_core_result?.output_digest);
       expect((await executor.execute(approved)).error).toMatch(/already consumed/);
-      expect(() => authority.approve(source, proof())).toThrow(/command already issued/);
+      expect(() => authority.approve(source, proof(source))).toThrow(/command already issued/);
     } finally { if (prior === undefined) delete process.env.BLUE_TANUKI_FILE_ROOT; else process.env.BLUE_TANUKI_FILE_ROOT = prior; }
     const next = rig(store);
     expect(() => next.authority.approve(command(), proof())).toThrow(/command already issued/);
@@ -87,10 +93,10 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
       llm: { name: "fixture", call: async () => { calls++; return { content: "青", model: "fixture", tokens_used: 0 }; } },
       session_store: { getMessages: async () => { wall += 100; monotonic += 100; return []; }, append: async () => {}, clear: async () => {}, size: async () => 0 } });
     const source: ExecuteCommand = { ...command(), type: "llm_call", payload: { messages: [{ role: "user", content: "青" }], session_id: "fixture" } };
-    const approved = authority.approve(source, proof());
+    const approved = authority.approve(source, proof(source));
     expect((await executor.execute(approved)).status).toBe("failed"); expect(calls).toBe(0);
     expect(authority.receipt(approved)?.state).toBe("not_attempted");
-    expect(() => authority.approve(source, proof())).toThrow(/command already issued/);
+    expect(() => authority.approve(source, proof(source))).toThrow(/command already issued/);
   }));
 
   it("consume commit後の返却喪失では下流0、receipt保存喪失では成功を返さず再作用0", async () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, type ChannelDispatcher } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
 import type { LLMBackend, LLMRequest, LLMResponse } from "../src/llm/base.js";
@@ -66,16 +67,18 @@ function noopCmd(reason?: string): ExecuteCommand {
   };
 }
 
-function approved(command: ExecuteCommand, risk: "low" | "medium" | "high" = "low") {
+function approved(command: ExecuteCommand) {
+  const context = approvalContextFromCommand(command);
+  const final_review_required = finalReviewRequired(context);
   return executorApproval.approve(command, {
-    source: risk === "high" ? "human_final_review" : "approval_gate",
-    decision: risk === "high" ? "approve" : "allow",
+    source: final_review_required ? "human_final_review" : "approval_gate",
+    decision: final_review_required ? "approve" : "allow",
     approved_by: "test-owner",
     approved_at_ms: 1,
     upstream_commit_hash: command.upstream_decision.commit_hash,
-    operation: command.type === "tool_call" ? `tool.${command.payload.tool_name}` : command.type,
-    risk,
-    final_review_required: risk === "high",
+    operation: context.operation,
+    risk: context.risk,
+    final_review_required,
     reason: "test approval",
   });
 }
@@ -95,7 +98,7 @@ describe("Executor.executeChannelSend — dispatcher path", () => {
       tools: new ToolRegistry(),
       dispatcher,
     });
-    const fb = await exec.execute(approved(channelSendCmd("webchat"), "medium"));
+    const fb = await exec.execute(approved(channelSendCmd("webchat")));
     expect(fb.status).toBe("success");
     expect(calls).toEqual([{ channel: "webchat", meta_hash: "hash-123" }]);
     const result = fb.result as { sent: boolean; external_id: string };
@@ -121,7 +124,7 @@ describe("Executor.executeChannelSend — dispatcher path", () => {
       tools: new ToolRegistry(),
       dispatcher,
     });
-    const fb = await exec.execute(approved(channelSendCmd("slack"), "medium"));
+    const fb = await exec.execute(approved(channelSendCmd("slack")));
     expect(fb.status).toBe("failed");
     expect(fb.error).toMatch(/no_channel_registered:slack/);
     expect(fb.result).toMatchObject({
@@ -145,7 +148,7 @@ describe("Executor.executeChannelSend — dispatcher path", () => {
         llm: new StubBackend(),
         tools: new ToolRegistry(),
       });
-      const fb = await exec.execute(approved(channelSendCmd("legacy"), "medium"));
+      const fb = await exec.execute(approved(channelSendCmd("legacy")));
       expect(fb.status).toBe("success");
       expect(lines.some((l) => l.includes("[channel:legacy]"))).toBe(true);
     } finally {
@@ -226,8 +229,8 @@ describe("Executor.executeToolCall - permission envelope", () => {
       adapter_result_used_for_authority: false,
       executor_trace_used_for_authority: false,
       permission: {
-        risk: "low",
-        approval_level: "L1_observe",
+        risk: "high",
+        approval_level: "L3_final_review",
         hds_brain_authority_required: true,
       },
     });
@@ -330,7 +333,7 @@ describe("Executor.executeToolCall - permission envelope", () => {
       approved_by: "test-owner",
       approved_at_ms: 1,
       upstream_commit_hash: command.upstream_decision.commit_hash,
-      operation: "channel_send",
+      operation: "channel.send",
       risk: "medium",
       final_review_required: false,
       reason: "foreign authority",
@@ -352,7 +355,7 @@ describe("Executor.executeToolCall - permission envelope", () => {
         approved_by: "test-owner",
         approved_at_ms: 1,
         upstream_commit_hash: "forged-hash",
-        operation: "channel_send",
+        operation: "channel.send",
         risk: "medium",
         final_review_required: false,
         reason: "forged commit hash",
@@ -360,14 +363,9 @@ describe("Executor.executeToolCall - permission envelope", () => {
     ).toThrow(/commit hash does not match/);
   });
 
-  it("re-verifies human final-review proof for high-risk tools", async () => {
-    const exec = new Executor({
-      approval_authority: executorApproval,
-      llm: new StubBackend(),
-      tools: new ToolRegistry(),
-    });
+  it("refuses to issue a high-risk Executor proof without human final review", () => {
     const command = shellExecCmd();
-    const brandedButNotHumanReviewed = executorApproval.approve(command, {
+    expect(() => executorApproval.approve(command, {
       source: "approval_gate",
       decision: "allow",
       approved_by: "test-owner",
@@ -377,12 +375,7 @@ describe("Executor.executeToolCall - permission envelope", () => {
       risk: "high",
       final_review_required: true,
       reason: "bad test approval",
-    });
-
-    const fb = await exec.execute(brandedButNotHumanReviewed);
-
-    expect(fb.status).toBe("failed");
-    expect(fb.error).toMatch(/human final-review proof is required/);
+    })).toThrow(/human final-review proof is required/);
   });
 });
 
