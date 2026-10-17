@@ -408,8 +408,12 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("operation-core-default-runtime");
       expect(html).toContain("operation-core-execution-results");
       expect(html).toContain("operation-core-execution-list");
+      expect(html).toContain("operation-plan-state-summary");
+      expect(html).toContain("operation-plan-state-list");
       expect(html).toContain("renderOperationCoreProjections");
       expect(html).toContain("renderOperationCoreExecution");
+      expect(html).toContain("renderOperationPlanStatus");
+      expect(html).toContain("receipt照合まで再送しないでください");
       expect(html).toContain("operation_core_projection");
       expect(html).toContain("OPERATION_ADAPTER_REGISTRY");
       expect(html).toContain("adapter-generated");
@@ -1394,6 +1398,20 @@ describe("WebChatChannel — runtime snapshot API", () => {
           audit_chain_valid: true,
           next_recommended_action: "Review pending approvals in Control Center",
           scheduled_tasks: [{ id: "safe", payload_hash: "abc123" }],
+          operation_plan_status: {
+            schema_version: "operation-plan.status.v1",
+            evidence_source: ["INTERNAL_STATE"],
+            used_for_authority: false,
+            raw_payload_exposed: false,
+            status: "available",
+            plan_count: 1,
+            displayed_count: 1,
+            plans: [{ plan_id: "a".repeat(64), revision: 2, revision_digest: "b".repeat(64),
+              status: "awaiting_step_review", step_count: 1,
+              steps: [{ step_id: "c".repeat(64), operation: "gmail.write", status: "outcome_unknown",
+                external_receipt_observation: "not_recorded", binding: { command_digest: "d".repeat(64),
+                  result_digest: "e".repeat(64), delivery_digest: "f".repeat(64), memory_status: "not_recorded" } }] }],
+          },
         }),
       },
     });
@@ -1420,6 +1438,8 @@ describe("WebChatChannel — runtime snapshot API", () => {
         runtime_schedules_count: 2,
         pending_schedule_approvals_count: 1,
         audit_chain_valid: true,
+        operation_plan_status: { status: "available", used_for_authority: false, raw_payload_exposed: false,
+          plans: [{ steps: [{ status: "outcome_unknown", external_receipt_observation: "not_recorded" }] }] },
       });
       expect(JSON.stringify(body)).not.toContain("private schedule content");
       expect(JSON.stringify(body)).not.toContain(RESUME_TOKEN);

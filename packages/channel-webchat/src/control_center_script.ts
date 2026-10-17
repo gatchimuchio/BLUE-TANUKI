@@ -873,6 +873,60 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         );
       }
 
+      function operationPlanStatusTone(status) {
+        if (status === "verified" || status === "results_verified") return "good";
+        if (status === "outcome_unknown" || status === "verification_failed") return "warn";
+        if (status === "invalidated") return "bad";
+        return "review";
+      }
+
+      function shortDigest(value) {
+        return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value.slice(0, 12) : "未記録";
+      }
+
+      function renderOperationPlanStatus(value) {
+        const projection = isObject(value) ? value : {};
+        const safe = projection.schema_version === "operation-plan.status.v1" &&
+          projection.status === "available" && projection.used_for_authority === false &&
+          projection.raw_payload_exposed === false && Array.isArray(projection.plans);
+        const summary = safe ? String(projection.displayed_count) + " / " + String(projection.plan_count) + " 件" : "利用不可";
+        setText("operation-plan-state-summary", summary);
+        if (byId("operation-plan-state-summary")) {
+          byId("operation-plan-state-summary").className = "badge " + (safe ? "good" : "bad");
+        }
+        if (!safe) {
+          setHtml("operation-plan-state-list", '<div class="trace-item muted">J計画snapshotの非権威・payload非露出条件を確認できないため表示しません。</div>');
+          return;
+        }
+        if (projection.plans.length === 0) {
+          setHtml("operation-plan-state-list", '<div class="trace-item muted">現在表示できるJ計画はありません。</div>');
+          return;
+        }
+        setHtml("operation-plan-state-list", projection.plans.map(function (plan) {
+          const steps = Array.isArray(plan.steps) ? plan.steps : [];
+          return '<article class="trace-item">' +
+            '<div class="row"><h3>計画 ' + escapeHtml(shortDigest(plan.plan_id)) + '</h3><span>' + badge("revision " + String(plan.revision), "review") + '</span></div>' +
+            '<dl class="kv"><dt>計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.revision_digest)) + '</dd>' +
+            '<dt>計画状態</dt><dd>' + badge(plan.status || "unknown", operationPlanStatusTone(plan.status)) + '</dd>' +
+            '<dt>step数</dt><dd>' + escapeHtml(String(plan.step_count ?? steps.length)) + '</dd></dl>' +
+            steps.map(function (step) {
+              const binding = isObject(step.binding) ? step.binding : {};
+              const unknown = step.status === "outcome_unknown";
+              const receipt = step.external_receipt_observation === "not_recorded" ? "外部receipt観測はJに未記録" : "対象外";
+              return '<div class="trace-item"><div class="row"><h4>' + escapeHtml(step.operation || "operation") + '</h4>' +
+                badge(unknown ? "結果不明" : step.status || "unknown", operationPlanStatusTone(step.status)) + '</div>' +
+                '<dl class="kv"><dt>step digest</dt><dd class="mono">' + escapeHtml(shortDigest(step.step_id)) + '</dd>' +
+                '<dt>command digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.command_digest)) + '</dd>' +
+                '<dt>実行結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.result_digest)) + '</dd>' +
+                '<dt>J配送digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.delivery_digest)) + '</dd>' +
+                '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd></dl>' +
+                (unknown ? '<p class="muted">外部作用の結果は未確認です。receipt照合まで再送しないでください。</p>' : '') +
+                '</div>';
+            }).join("") +
+            '</article>';
+        }).join(""));
+      }
+
       function renderRuntime(body) {
         const invariantOk = body.hds_invariants_ok ?? body.hds?.invariants?.process_policy_enforced;
         const auditOk = body.audit_chain_valid ?? body.hds?.audit?.chain_valid;
@@ -892,6 +946,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         renderSchedules(body);
         renderOperationCoreProjections(body.operator_surfaces);
         renderOperationCoreExecution(body.operation_core_execution);
+        renderOperationPlanStatus(body.operation_plan_status);
         const mascotState = aotanuStateFromRuntime(body);
         renderAotanuMascot(mascotState, aotanuDisplayLabelFromRuntime(body, mascotState));
       }

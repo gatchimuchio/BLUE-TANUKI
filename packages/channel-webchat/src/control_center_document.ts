@@ -203,6 +203,14 @@ ${CONTROL_CENTER_STYLE}    </style>
           <div id="operation-core-execution-list" class="trace-list">
             <div class="trace-item muted">no Operation Core execution result loaded</div>
           </div>
+          <div class="row">
+            <h3>現在のJ計画状態</h3>
+            <span id="operation-plan-state-summary" class="badge warn">未読込</span>
+          </div>
+          <p class="muted">表示専用の版付きsnapshotです。結果不明の作用はreceipt照合前に再送しません。</p>
+          <div id="operation-plan-state-list" class="trace-list">
+            <div class="trace-item muted">J計画状態はまだ読み込まれていません。</div>
+          </div>
         </section>
 
         <section class="card" data-screen-group="channels">

@@ -124,6 +124,7 @@ import {
   projectApprovalHistoryEntry,
   projectCompleteHistoryEntry,
   projectOperationCoreExecutionHistory,
+  projectOperationPlanStatus,
 } from "./serve_projection.js";
 import {
   DAILY_OPERATOR_REQUIRED_PERMISSIONS,
@@ -1136,6 +1137,7 @@ export async function serve(): Promise<ServeShutdown> {
             pending_schedule_approvals_count: pendingScheduleApprovalsCount,
             runtime_schedules: runtimeScheduleSnapshot,
             execution_receipts: executionStore.snapshot(),
+            operation_plan_status: projectOperationPlanStatus(hdsSnapshot.operation_plans),
             operation_core_execution: projectOperationCoreExecutionHistory(
               completeHistory.replay({ kind: "execution_history" }),
               {

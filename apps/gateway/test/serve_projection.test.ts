@@ -5,6 +5,7 @@ import {
   operationCorePlannerHistoryProjection,
   projectApprovalHistoryEntry,
   projectOperationCoreExecutionHistory,
+  projectOperationPlanStatus,
 } from "../src/serve_projection.js";
 
 describe("Operation Core execution projection", () => {
@@ -313,5 +314,46 @@ describe("Operation Core execution projection", () => {
       },
     });
     expect(text).not.toContain("SECRET-RAW-COMMAND");
+  });
+
+  it("projects versioned J plan and outcome-unknown state without content or authority", () => {
+    const projection = projectOperationPlanStatus({
+      schema_version: "operation-plan-projection.v1",
+      used_for_authority: false,
+      raw_payload_exposed: false,
+      plans: [{
+        plan_id: "a".repeat(64),
+        request_id: "SECRET-REQUEST-ID",
+        goal: "SECRET-GOAL",
+        revision: 2,
+        revision_digest: "b".repeat(64),
+        status: "awaiting_step_review",
+        steps: [{
+          step_id: "c".repeat(64), operation: "gmail.write", definition_digest: "d".repeat(64),
+          status: "outcome_unknown", parameters: { to: "SECRET-RECIPIENT", body_text: "SECRET-BODY" },
+        }],
+        bindings: [{
+          step_id: "c".repeat(64), command_id: "SECRET-COMMAND-ID", command_digest: "e".repeat(64),
+          status: "outcome_unknown", result_digest: "f".repeat(64), delivery_digest: "1".repeat(64),
+          payload_digest: "SECRET-PAYLOAD-DIGEST", memory_status: "not_recorded",
+        }],
+      }],
+    });
+    const text = JSON.stringify(projection);
+    expect(projection).toMatchObject({
+      schema_version: "operation-plan.status.v1", evidence_source: ["INTERNAL_STATE"],
+      used_for_authority: false, raw_payload_exposed: false, status: "available",
+      plan_count: 1, displayed_count: 1,
+      plans: [{ revision: 2, revision_digest: "b".repeat(64), steps: [{
+        operation: "gmail.write", status: "outcome_unknown", external_receipt_observation: "not_recorded",
+        binding: { command_digest: "e".repeat(64), result_digest: "f".repeat(64), delivery_digest: "1".repeat(64) },
+      }] }],
+    });
+    for (const secret of ["SECRET-REQUEST-ID", "SECRET-GOAL", "SECRET-RECIPIENT", "SECRET-BODY", "SECRET-COMMAND-ID", "SECRET-PAYLOAD-DIGEST"]) {
+      expect(text).not.toContain(secret);
+    }
+
+    expect(projectOperationPlanStatus({ schema_version: "operation-plan-projection.v1", used_for_authority: true,
+      raw_payload_exposed: false, plans: [] })).toMatchObject({ status: "unavailable", plans: [] });
   });
 });

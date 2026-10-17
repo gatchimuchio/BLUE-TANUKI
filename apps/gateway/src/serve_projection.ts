@@ -199,6 +199,104 @@ export function projectOperationCoreExecutionHistory(
   });
 }
 
+export interface OperationPlanStatusProjection {
+  schema_version: "operation-plan.status.v1";
+  evidence_source: ["INTERNAL_STATE"];
+  used_for_authority: false;
+  raw_payload_exposed: false;
+  status: "available" | "unavailable";
+  plan_count: number;
+  displayed_count: number;
+  plans: Array<{
+    plan_id: string;
+    revision: number;
+    revision_digest: string;
+    status: "awaiting_step_review" | "results_verified";
+    step_count: number;
+    steps: Array<{
+      step_id: string;
+      operation: string;
+      status: "not_selected" | "selected" | "intent_committed" | "outcome_unknown" | "not_attempted" | "verified" | "verification_failed" | "invalidated";
+      external_receipt_observation: "not_applicable" | "not_recorded";
+      binding?: {
+        command_digest: string;
+        result_digest?: string;
+        delivery_digest?: string;
+        memory_status: "not_recorded" | "memory_commit_pending" | "receipt_confirmed";
+      };
+    }>;
+  }>;
+}
+
+const OPERATION_PLAN_STEP_STATUSES = new Set([
+  "not_selected", "selected", "intent_committed", "outcome_unknown", "not_attempted",
+  "verified", "verification_failed", "invalidated",
+]);
+
+function invalidOperationPlanStatusProjection(): OperationPlanStatusProjection {
+  return {
+    schema_version: "operation-plan.status.v1", evidence_source: ["INTERNAL_STATE"],
+    used_for_authority: false, raw_payload_exposed: false, status: "unavailable",
+    plan_count: 0, displayed_count: 0, plans: [],
+  };
+}
+
+/** Current J plan state for the existing operator view; it omits goals, targets, and arguments. */
+export function projectOperationPlanStatus(value: unknown): OperationPlanStatusProjection {
+  if (!isRecord(value) || value.schema_version !== "operation-plan-projection.v1" ||
+      value.used_for_authority !== false || value.raw_payload_exposed !== false || !Array.isArray(value.plans)) {
+    return invalidOperationPlanStatusProjection();
+  }
+  const inputPlans = value.plans;
+  if (inputPlans.length > 0 && !inputPlans.every(isRecord)) return invalidOperationPlanStatusProjection();
+  const plans: OperationPlanStatusProjection["plans"] = [];
+  for (const plan of inputPlans.slice(-20).reverse()) {
+    const revision = numberValue(plan.revision);
+    if (!isDigest(plan.plan_id) || !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
+        !["awaiting_step_review", "results_verified"].includes(String(plan.status)) ||
+        !Array.isArray(plan.steps) || !Array.isArray(plan.bindings) ||
+        !plan.steps.every(isRecord) || !plan.bindings.every(isRecord)) return invalidOperationPlanStatusProjection();
+    const bindings = plan.bindings as Record<string, unknown>[];
+    const steps: OperationPlanStatusProjection["plans"][number]["steps"] = [];
+    for (const step of (plan.steps as Record<string, unknown>[]).slice(0, 20)) {
+      if (!isDigest(step.step_id) || !isDigest(step.definition_digest) || typeof step.operation !== "string" ||
+          !/^[a-z][a-z0-9._-]{0,99}$/.test(step.operation) || typeof step.status !== "string" ||
+          !OPERATION_PLAN_STEP_STATUSES.has(step.status)) return invalidOperationPlanStatusProjection();
+      const matching = bindings.filter((candidate) => candidate.step_id === step.step_id);
+      const binding = matching.at(-1);
+      if (binding && (binding.status !== step.status || !isDigest(binding.command_digest) ||
+          (binding.result_digest !== undefined && !isDigest(binding.result_digest)) ||
+          (binding.delivery_digest !== undefined && !isDigest(binding.delivery_digest)) ||
+          !["not_recorded", "memory_commit_pending", "receipt_confirmed"].includes(String(binding.memory_status)))) {
+        return invalidOperationPlanStatusProjection();
+      }
+      steps.push({
+        step_id: step.step_id,
+        operation: step.operation,
+        status: step.status as OperationPlanStatusProjection["plans"][number]["steps"][number]["status"],
+        external_receipt_observation: step.status === "outcome_unknown" ? "not_recorded" : "not_applicable",
+        ...(binding ? { binding: {
+          command_digest: binding.command_digest as string,
+          ...(typeof binding.result_digest === "string" ? { result_digest: binding.result_digest } : {}),
+          ...(typeof binding.delivery_digest === "string" ? { delivery_digest: binding.delivery_digest } : {}),
+          memory_status: binding.memory_status as "not_recorded" | "memory_commit_pending" | "receipt_confirmed",
+        } } : {}),
+      });
+    }
+    plans.push({ plan_id: plan.plan_id, revision: revision!, revision_digest: plan.revision_digest,
+      status: plan.status as "awaiting_step_review" | "results_verified", step_count: plan.steps.length, steps });
+  }
+  return {
+    schema_version: "operation-plan.status.v1", evidence_source: ["INTERNAL_STATE"],
+    used_for_authority: false, raw_payload_exposed: false, status: "available",
+    plan_count: inputPlans.length, displayed_count: plans.length, plans,
+  };
+}
+
+function isDigest(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
 export function operationCorePlannerHistoryProjection(
   feedback: ExecuteFeedback,
 ): OperationCorePlannerExecutionProjection | undefined {

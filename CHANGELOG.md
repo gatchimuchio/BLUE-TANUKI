@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-17 — QEB-01-D09.01 J計画状態を既存Control Centerへ投影
+
+- Gateway runtime snapshotに、HDSのOperationPlanからrevision・step状態・結果digestだけを選ぶ非権威projectionを追加した。goal、target、宛先、本文、生の実行結果は投影しない。
+- 既存WebChat Control Centerで計画revisionと`outcome_unknown`を表示し、receipt未記録・照合前に再送しない状態を示す。外部receipt照会、Jへのreceipt観測保存、D4Pocket画面との接続は未実装。
+- local projection／WebChat試験のみ。実provider・credential・業務外部作用は使用していない。
+
 ## 2026-10-17 — QEB-01-D08.01外部作用の結果不明をJへ配送
 
 - OperationPlanのGmail `message.send`対象resolverを単一宛先に限定して接続し、承認ticket由来のcommand identityをadapterへ渡す。identity欠落は送信前に拒否する。
