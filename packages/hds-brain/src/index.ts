@@ -1,5 +1,6 @@
 export * from "./types.js";
-export { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage } from "./operation_plan.js";
+export { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
+  type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
 export {
   DOCUMENT_ORGANIZATION_MAX_CYCLES,
   DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS,

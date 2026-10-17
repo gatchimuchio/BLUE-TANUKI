@@ -14,6 +14,11 @@ export function renderCommandOutput(
   const maxChars = opts.max_chars ?? DEFAULT_MAX_CHARS;
   if (cmd.type === "channel_send") return null;
 
+  if (cmd.type === "noop" && cmd.payload.control_event === "operation_plan_receipt_reconciliation" &&
+      isRecord(feedback.result) && typeof feedback.result.content === "string") {
+    return truncate(feedback.result.content, maxChars);
+  }
+
   if (feedback.status === "failed") {
     return truncate(
       `[failed:${cmd.type}] ${feedback.error ?? "command failed"}`,

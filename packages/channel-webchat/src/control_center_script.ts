@@ -546,6 +546,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "request accepted");
       }
 
+      async function invokeReceiptReconciliation(planId, revisionDigest, stepId) {
+        state.chatToken = byId("chat-token").value.trim();
+        state.chatUser = byId("chat-user").value.trim() || "owner";
+        if (!state.chatToken) throw new Error("webchat token is required");
+        const content = "plan:reconcile " + JSON.stringify({ plan_id: planId, revision_digest: revisionDigest, step_id: stepId });
+        const result = await postJson("/operators/developer/invoke", state.chatToken, { user: state.chatUser, content });
+        appendChat("owner", content);
+        appendChat("accepted", result.request_id || "read-only reconciliation accepted");
+      }
+
       function syncInputs() {
         byId("runtime-token").value = state.runtimeToken;
         byId("approval-token").value = state.approvalToken;
@@ -904,6 +914,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         setHtml("operation-plan-state-list", projection.plans.map(function (plan) {
           const steps = Array.isArray(plan.steps) ? plan.steps : [];
+          const reconciliationPlanReady = typeof plan.plan_id === "string" && /^[a-f0-9]{64}$/.test(plan.plan_id) &&
+            typeof plan.revision_digest === "string" && /^[a-f0-9]{64}$/.test(plan.revision_digest);
           return '<article class="trace-item">' +
             '<div class="row"><h3>計画 ' + escapeHtml(shortDigest(plan.plan_id)) + '</h3><span>' + badge("revision " + String(plan.revision), "review") + '</span></div>' +
             '<dl class="kv"><dt>計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.revision_digest)) + '</dd>' +
@@ -912,6 +924,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             steps.map(function (step) {
               const binding = isObject(step.binding) ? step.binding : {};
               const unknown = step.status === "outcome_unknown";
+              const reconciliationStepReady = reconciliationPlanReady && typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id);
               const receiptLabels = {
                 not_applicable: "対象外",
                 not_recorded: "Jに外部receipt観測未記録",
@@ -943,7 +956,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>実行結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.result_digest)) + '</dd>' +
                 '<dt>J配送digest</dt><dd class="mono">' + escapeHtml(shortDigest(binding.delivery_digest)) + '</dd>' +
                 '<dt>receipt照合</dt><dd>' + escapeHtml(receipt) + '</dd>' + externalReceiptDetails + '</dl>' +
-                (unknown ? '<p class="muted">外部作用の結果は未確認です。receipt照合まで再送しないでください。</p>' : '') +
+                (unknown ? '<p class="muted">外部作用の結果は未確認です。照合はDeveloper入口から明示要求した場合だけloopbackへ1回GETし、作用は再送しません。</p>' : '') +
+                (unknown && reconciliationStepReady ? '<button type="button" class="secondary" data-operation-plan-reconcile="true" data-plan-id="' +
+                  escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) + '" data-step-id="' +
+                  escapeHtml(step.step_id) + '">loopbackで読取照合</button>' : '') +
                 '</div>';
             }).join("") +
             '</article>';
@@ -1866,6 +1882,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const mascotAction = target.dataset.mascotAction;
         if (mascotAction) {
           runMascotAction(mascotAction);
+          return;
+        }
+        if (target.dataset.operationPlanReconcile === "true") {
+          target.disabled = true;
+          try {
+            await invokeReceiptReconciliation(target.dataset.planId || "", target.dataset.revisionDigest || "", target.dataset.stepId || "");
+          } catch (error) {
+            appendChat("error", error.message);
+          } finally {
+            target.disabled = false;
+          }
           return;
         }
         const verdict = target.dataset.verdict;

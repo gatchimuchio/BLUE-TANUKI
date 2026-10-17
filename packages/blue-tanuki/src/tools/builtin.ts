@@ -106,6 +106,7 @@ export {
   googleCalendarWriteTool,
   googleDriveWriteTool,
   invokeGmailWrite,
+  gmailWriteRequestPayloadDigest,
   invokeGoogleCalendarWrite,
   invokeGoogleDriveWrite,
   type GoogleWriteMethod,

@@ -355,20 +355,10 @@ export async function invokeGmailWrite(
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const env = opts.env ?? process.env;
   const token = googleToken(env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "gmail.write");
-  const request = opts.request ?? defaultGoogleWriteRequest;
+  const sendRequest = opts.request ?? defaultGoogleWriteRequest;
 
-  let path: string;
-  let body: Record<string, unknown>;
-  if (operation === "draft.create") {
-    path = "/gmail/v1/users/me/drafts";
-    body = { message: { raw: encodedMimeMessage(args) } };
-  } else if (operation === "message.send") {
-    path = "/gmail/v1/users/me/messages/send";
-    body = { raw: encodedMimeMessage(args) };
-  } else {
-    path = "/gmail/v1/users/me/drafts/send";
-    body = { id: stringArg(args, "draft_id")! };
-  }
+  const builtRequest = gmailWriteRequest(args);
+  const { path, body } = builtRequest;
 
   const target = {
     service: "gmail" as const,
@@ -377,12 +367,26 @@ export async function invokeGmailWrite(
     method: "POST" as const,
     maxBytes,
     token,
-    body: jsonBody(body),
+    body,
     ...executionRequestIdentity(opts),
   };
-  const response = await request(target);
+  const response = await sendRequest(target);
   if (!response.ok) throw googleWriteResponseError("gmail.write", response);
   return mutationResult("gmail.write", "gmail", operation, target, response);
+}
+
+/** Return the exact bounded message-send body digest without reading credentials or sending it. */
+export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): string {
+  const request = gmailWriteRequest(args);
+  if (request.path !== "/gmail/v1/users/me/messages/send") throw new Error("gmail_receipt_reconciliation_operation_unsupported");
+  return createHash("sha256").update(request.body, "utf8").digest("hex");
+}
+
+function gmailWriteRequest(args: Record<string, unknown>): { path: string; body: string } {
+  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+  if (operation === "draft.create") return { path: "/gmail/v1/users/me/drafts", body: jsonBody({ message: { raw: encodedMimeMessage(args) } }) };
+  if (operation === "message.send") return { path: "/gmail/v1/users/me/messages/send", body: jsonBody({ raw: encodedMimeMessage(args) }) };
+  return { path: "/gmail/v1/users/me/drafts/send", body: jsonBody({ id: stringArg(args, "draft_id")! }) };
 }
 
 function calendarEventBody(args: Record<string, unknown>, requireTime: boolean): Record<string, unknown> {

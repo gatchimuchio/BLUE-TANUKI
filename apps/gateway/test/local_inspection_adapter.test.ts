@@ -31,6 +31,8 @@ describe("loopback-only reconciliation adapter", () => {
     for (const endpoint of [
       "https://127.0.0.1:1234",
       "http://example.invalid:1234",
+      "http://127.1:1234",
+      "http://2130706433:1234",
       "http://user:secret@127.0.0.1:1234",
       "http://127.0.0.1:1234/prefix",
       "http://127.0.0.1:1234/?query=1",

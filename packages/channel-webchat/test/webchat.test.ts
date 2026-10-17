@@ -392,6 +392,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("chat-log");
       expect(html).toContain("chat-bubble");
       expect(html).toContain("chat-composer");
+      expect(html).toContain("data-operation-plan-reconcile");
+      expect(html).toContain("/operators/developer/invoke");
+      expect(html).toContain("照合はDeveloper入口から明示要求");
       expect(html).toContain("chat-identity-row");
       expect(html).toContain("chat-input-row");
       expect(html).toContain("Message BLUE-TANUKI");
@@ -413,7 +416,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("renderOperationCoreProjections");
       expect(html).toContain("renderOperationCoreExecution");
       expect(html).toContain("renderOperationPlanStatus");
-      expect(html).toContain("receipt照合まで再送しないでください");
+      expect(html).toContain("loopbackで読取照合");
+      expect(html).toContain("照合はDeveloper入口から明示要求した場合だけloopbackへ1回GETし");
       expect(html).toContain("local inspectionの1件がcommand/payload digest一致");
       expect(html).toContain("成功・目標達成は未確認");
       expect(html).toContain("operation_core_projection");

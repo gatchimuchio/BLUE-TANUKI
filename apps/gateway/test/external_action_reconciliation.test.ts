@@ -12,7 +12,7 @@ import { createGatewayInternalInboundRequest, type InboundRequest, type Operatio
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { ingestLocalInspectionReceipt } from "../src/external_receipt_observation.js";
-import { queryLocalInspectionReceipt } from "../src/local_inspection_adapter.js";
+import { runLocalInspectionReconciliation } from "../src/local_inspection_runtime.js";
 import { executionAdmissionForCommand, reconcileExecutionResults } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 
@@ -94,9 +94,9 @@ function inspectionServer(): {
   return { server, url, status: () => ({ effects, read_queries: readQueries, accepted: [...accepted] }) };
 }
 
-function request(content: string, user = "fixture-owner"): InboundRequest {
-  return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user, timestamp: Date.now(), content,
-    metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer" } });
+function request(content: string, user = "fixture-owner", operatorSurface = "developer", channel = "webchat"): InboundRequest {
+  return createGatewayInternalInboundRequest({ id: randomUUID(), channel, user, timestamp: Date.now(), content,
+    metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": operatorSurface } });
 }
 
 function candidate(planRequestId: string): OperationPlan {
@@ -222,12 +222,55 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         const receipt = executionStore.lookupCommand(command_key);
         expect(receipt).toMatchObject({ state: "outcome_unknown", command_key,
           command_digest: observedRequests[0]!.command_digest, used_for_authority: false });
-        const reconciliation = await queryLocalInspectionReceipt(endpoint, command_key);
-        expect(reconciliation).toMatchObject({ status: "accepted", matches: [{ idempotency_key: command_key,
-          command_digest: receipt!.command_digest, receipt_id: originalReceiptId }] });
         const currentPlan = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
+        if (restart === 0) {
+          const control = { plan_id: currentPlan.plan_id, revision_digest: currentPlan.revision_digest,
+            step_id: currentPlan.steps[0]!.step_id };
+          const unauthorizedRequest = request(`plan:reconcile ${JSON.stringify(control)}`, "other-owner");
+          expect(hds.decide(unauthorizedRequest).command).toBeNull();
+          const wrongSurfaceRequest = request(`plan:reconcile ${JSON.stringify(control)}`, "fixture-owner", "daily");
+          expect(hds.decide(wrongSurfaceRequest).command).toBeNull();
+          const wrongChannelRequest = request(`plan:reconcile ${JSON.stringify(control)}`, "fixture-owner", "developer", "telegram");
+          expect(hds.decide(wrongChannelRequest).command).toBeNull();
+          const staleRequest = request(`plan:reconcile ${JSON.stringify({ ...control, revision_digest: "0".repeat(64) })}`);
+          expect(hds.decide(staleRequest).command).toBeNull();
+
+          const missingEndpointRequest = request(`plan:reconcile ${JSON.stringify(control)}`);
+          const missingEndpointCommand = hds.decide(missingEndpointRequest).command;
+          if (!missingEndpointCommand) throw new Error("J did not issue the explicit reconciliation control");
+          expect(await runLocalInspectionReconciliation({ hds, command: missingEndpointCommand,
+            caller: missingEndpointRequest })).toMatchObject({ status: "not_run", reason: "local_inspection_endpoint_not_configured" });
+          expect(inspection.status().read_queries).toBe(0);
+
+          const expiredRequest = request(`plan:reconcile ${JSON.stringify(control)}`);
+          const expiredCommand = hds.decide(expiredRequest).command;
+          if (!expiredCommand) throw new Error("J did not issue the expiring reconciliation control");
+          expect(await runLocalInspectionReconciliation({ hds, command: expiredCommand, caller: expiredRequest,
+            endpoint, now_ms: Date.now() + 30_001 })).toMatchObject({ status: "rejected" });
+          expect(inspection.status().read_queries).toBe(0);
+        }
+        const reconciliationRequest = request(`plan:reconcile ${JSON.stringify({ plan_id: currentPlan.plan_id,
+          revision_digest: currentPlan.revision_digest, step_id: currentPlan.steps[0]!.step_id })}`);
+        const reconciliationDecision = hds.decide(reconciliationRequest);
+        const reconciliationCommand = reconciliationDecision.command;
+        expect(reconciliationDecision.log.commit.decision).toBe("ASSERT");
+        expect(reconciliationCommand).toMatchObject({ type: "noop", payload: { control_event: "operation_plan_receipt_reconciliation" } });
+        if (!reconciliationCommand) throw new Error("J did not issue the read-only reconciliation control");
+        const reconciliation = await runLocalInspectionReconciliation({ hds, command: reconciliationCommand,
+          caller: reconciliationRequest, endpoint });
+        expect(reconciliation.status).toBe("observed");
+        if (reconciliation.status !== "observed") throw new Error("local read-only reconciliation did not record an observation");
+        const observation = reconciliation.observation;
+        if (restart === 0) {
+          expect(await runLocalInspectionReconciliation({ hds, command: reconciliationCommand,
+            caller: reconciliationRequest, endpoint })).toMatchObject({ status: "rejected" });
+          expect(inspection.status().read_queries).toBe(1);
+        }
+        finalizeCommandOutput({ hds, command: reconciliationCommand,
+          feedback: { command_id: reconciliationCommand.id, status: "success", result: { content: "digest-only receipt observed; outcome_unknown retained" },
+            metrics: { duration_ms: 1 } }, request_id: reconciliationRequest.id, target_surface: "channel" });
         const receiptObservationInput = {
-          caller: source,
+          caller: reconciliationRequest,
           command_id: command.id,
           command_digest: currentPlan.bindings[0]!.command_digest,
           executor_command_digest: receipt!.command_digest,
@@ -235,9 +278,10 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
           revision_digest: currentPlan.revision_digest,
           step_id_digest: currentPlan.steps[0]!.step_id,
           request_payload_digest: observedRequests[0]!.request_payload_digest!,
-          response: reconciliation,
+          response: { status: "accepted", matches: [{ idempotency_key: command_key,
+            command_digest: receipt!.command_digest, payload_digest: observedRequests[0]!.request_payload_digest!,
+            receipt_id: originalReceiptId }] },
         };
-        const observation = ingestLocalInspectionReceipt(hds, receiptObservationInput);
         expect(observation).toMatchObject({ status: "matched", match_count: 1, source: "local_inspection",
           used_for_authority: false, raw_receipt_exposed: false });
         expect(() => ingestLocalInspectionReceipt(hds, { ...receiptObservationInput,

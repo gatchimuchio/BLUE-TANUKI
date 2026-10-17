@@ -30,6 +30,7 @@ import {
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { executionAdmissionForCommand, reconcileExecutionResults } from "./reconcile_execution_results.js";
 import { operationResultMemoryStorage } from "./operation_result_memory_config.js";
+import { runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -1882,6 +1883,36 @@ export async function serve(): Promise<ServeShutdown> {
           upstream_commit_hash: result.upstream_commit_hash,
         });
       }
+      return;
+    }
+
+    if (command?.type === "noop" && command.payload.control_event === "operation_plan_receipt_reconciliation") {
+      const startedAt = Date.now();
+      const result = await runLocalInspectionReconciliation({
+        hds,
+        command,
+        caller: authorityReq,
+        endpoint: nonEmptyEnv(process.env.BLUE_TANUKI_LOCAL_INSPECTION_ENDPOINT),
+      });
+      const content = result.status === "observed"
+        ? `合成local inspectionの読取照合を1回記録しました。観測=${result.observation.status}、候補数=${result.observation.match_count}。HDSのstep状態はoutcome_unknownのままです。これは成功・目標達成・再実行許可を意味せず、作用の再送もしていません。`
+        : result.status === "not_run"
+        ? `照合は未実施です（${result.reason}）。loopback endpointが設定されていないため通信していません。HDSのstep状態はoutcome_unknownのままです。`
+        : result.status === "failed"
+        ? `照合に失敗しました（${result.reason}）。この試行では結果観測を記録していません。HDSのstep状態はoutcome_unknownのままです。作用の再送はしていません。`
+        : `照合許可が期限切れまたは古くなったため未実施です。HDSのstep状態はoutcome_unknownのままです。`;
+      const feedback: ExecuteFeedback = {
+        command_id: command.id,
+        status: result.status === "observed" ? "success" : "failed",
+        result: { content },
+        ...(result.status === "observed" ? {} : { error: result.reason }),
+        metrics: { duration_ms: Math.max(0, Date.now() - startedAt) },
+      };
+      const finalized = finalizeCommandOutput({ hds, command, feedback, target_surface: "channel", request_id: log.request_id });
+      recordFinalOutputHistory(log, authorityReq, authorityReq.user, finalized.output_audit);
+      if (finalized.rendered_output) await dispatcher.dispatch({
+        channel: authorityReq.channel, target: replyTarget(authorityReq), content: finalized.rendered_output,
+      }, { command_id: command.id, upstream_commit_hash: log.commit.hash });
       return;
     }
 

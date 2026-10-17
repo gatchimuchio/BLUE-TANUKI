@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   getOperationDescriptor, inspectOperationCommandExecutionResult,
   OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
@@ -7,6 +7,7 @@ import {
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
+  type OperationPlanReceiptReconciliationControl,
 } from "@blue-tanuki/protocol";
 import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
@@ -24,6 +25,23 @@ export interface OperationPlanMemoryStorage {
   readonly private_state_root: string;
   readonly database_path: string;
   readonly memory_database_path: string;
+}
+
+export interface OperationPlanReceiptReconciliationAuthorization {
+  readonly authorization_id: string;
+  readonly caller_user: string;
+  readonly caller_channel: string;
+  readonly plan_id_digest: string;
+  readonly revision_digest: string;
+  readonly step_id_digest: string;
+  readonly command_id: string;
+  readonly command_digest: string;
+  readonly executor_command_digest: string;
+  readonly command_key: string;
+  readonly operation: string;
+  readonly parameters: Record<string, unknown>;
+  readonly issued_at_ms: number;
+  readonly expires_at_ms: number;
 }
 
 export function operationPlanDigest(value: unknown): string {
@@ -85,6 +103,13 @@ export class OperationPlanLedger {
   private memoryReady = true;
   private readonly reflections = new Map<string, { command_digest: string; control: OperationPlanReflectionControl;
     caller: InboundRequest; projection_digest: string }>();
+  private readonly receiptReconciliations = new Map<string, {
+    command_digest: string;
+    caller_user: string;
+    caller_channel: string;
+    control: OperationPlanReceiptReconciliationControl;
+    authorization: OperationPlanReceiptReconciliationAuthorization;
+  }>();
   constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
     const saved = port?.load();
@@ -153,7 +178,7 @@ export class OperationPlanLedger {
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
   }
 
-  inspectControl(control: Exclude<OperationPlanControl, { action: "reflect" }>, caller: InboundRequest): {
+  inspectControl(control: Extract<OperationPlanControl, { action: "review" | "revise" }>, caller: InboundRequest): {
     plan_id: string; revision_digest: string; step?: OperationStep; goal: string;
   } {
     if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
@@ -178,6 +203,75 @@ export class OperationPlanLedger {
     // 実接続がある、対象と引数を狭く結び付けたadapterだけをcommand化する。
     if (!hasConnectedPlanTarget(step)) throw new Error("plan_target_resolver_not_connected");
     return { plan_id: current.plan.plan_id, revision_digest: expected, step, goal: p.goal };
+  }
+
+  /** Check the current J binding and issue no authority beyond one short-lived read-only lookup. */
+  bindReceiptReconciliation(
+    control: OperationPlanReceiptReconciliationControl,
+    caller: InboundRequest,
+    command: ExecuteCommand,
+    now_ms = Date.now(),
+  ): void {
+    if (command.type !== "noop" || command.payload.control_event !== "operation_plan_receipt_reconciliation" ||
+        command.upstream_decision.request_id !== caller.id || !Number.isSafeInteger(now_ms) || now_ms <= 0) {
+      throw new Error("plan_receipt_reconciliation_command_invalid");
+    }
+    const inspected = this.inspectReceiptReconciliation(control, caller);
+    const binding = inspected.binding;
+    const authorization: OperationPlanReceiptReconciliationAuthorization = {
+      authorization_id: randomUUID(), caller_user: caller.user, caller_channel: caller.channel,
+      plan_id_digest: operationPlanDigest(inspected.plan_id), revision_digest: inspected.revision_digest,
+      step_id_digest: operationPlanDigest(inspected.step.step_id), command_id: binding.command_id,
+      command_digest: binding.command_digest, executor_command_digest: binding.execution_admission!.command_digest,
+      command_key: binding.execution_admission!.command_key, operation: inspected.step.operation,
+      parameters: structuredClone(inspected.step.parameters ?? {}), issued_at_ms: now_ms, expires_at_ms: now_ms + 30_000,
+    };
+    for (const [id, pending] of this.receiptReconciliations) {
+      if (pending.authorization.expires_at_ms <= now_ms) this.receiptReconciliations.delete(id);
+    }
+    if (this.receiptReconciliations.size >= 128) throw new Error("plan_receipt_reconciliation_capacity_reached");
+    this.receiptReconciliations.set(command.id, {
+      command_digest: operationPlanDigest(command), caller_user: caller.user, caller_channel: caller.channel,
+      control: structuredClone(control), authorization,
+    });
+    const expiry = setTimeout(() => {
+      if (this.receiptReconciliations.get(command.id)?.authorization.authorization_id === authorization.authorization_id) {
+        this.receiptReconciliations.delete(command.id);
+      }
+    }, 30_000);
+    expiry.unref?.();
+  }
+
+  /** Consume a fresh J-issued reconciliation permit and recheck the current binding before any query. */
+  takeReceiptReconciliationAuthorization(
+    command: ExecuteCommand,
+    caller: InboundRequest,
+    now_ms = Date.now(),
+  ): OperationPlanReceiptReconciliationAuthorization | null {
+    const issued = this.receiptReconciliations.get(command.id);
+    this.receiptReconciliations.delete(command.id);
+    if (!issued || command.type !== "noop" || command.payload.control_event !== "operation_plan_receipt_reconciliation" ||
+        issued.command_digest !== operationPlanDigest(command) || issued.caller_user !== caller.user ||
+        issued.caller_channel !== caller.channel || !Number.isSafeInteger(now_ms) ||
+        now_ms < issued.authorization.issued_at_ms || now_ms >= issued.authorization.expires_at_ms) return null;
+    try {
+      const current = this.inspectReceiptReconciliation(issued.control, caller);
+      const binding = current.binding;
+      if (operationPlanDigest(current.plan_id) !== issued.authorization.plan_id_digest ||
+          current.revision_digest !== issued.authorization.revision_digest ||
+          operationPlanDigest(current.step.step_id) !== issued.authorization.step_id_digest ||
+          binding.command_id !== issued.authorization.command_id || binding.command_digest !== issued.authorization.command_digest ||
+          binding.execution_admission?.command_digest !== issued.authorization.executor_command_digest ||
+          binding.execution_admission?.command_key !== issued.authorization.command_key) return null;
+      return structuredClone(issued.authorization);
+    } catch { return null; }
+  }
+
+  inspectReceiptReconciliationForControl(
+    control: OperationPlanReceiptReconciliationControl,
+    caller: InboundRequest,
+  ): void {
+    this.inspectReceiptReconciliation(control, caller);
   }
 
   bind(control: Extract<OperationPlanControl, { action: "review" }>, caller: InboundRequest, command: ExecuteCommand): void {
@@ -525,6 +619,40 @@ export class OperationPlanLedger {
     const p = matches[0];
     if (matches.length !== 1 || !p || p.owner !== caller.user || p.channel !== caller.channel) throw new Error("plan_owner_or_identity_mismatch");
     return p;
+  }
+
+  private inspectReceiptReconciliation(control: OperationPlanReceiptReconciliationControl, caller: InboundRequest): {
+    plan_id: string; revision_digest: string; step: OperationStep; binding: Binding;
+  } {
+    if (this.port) {
+      const loaded = this.port.load();
+      if ((loaded === null ? null : operationPlanDigest(loaded)) !== this.savedDigest) throw new Error("plan_state_changed");
+    }
+    const plan = this.ownedPlan(control.plan_id, caller);
+    const current = plan.revisions.at(-1)!;
+    if (current.digest !== control.revision_digest) throw new Error("plan_revision_changed");
+    const steps = current.plan.steps.filter((step) => step.step_id === control.step_id ||
+      operationPlanDigest(step.step_id) === control.step_id);
+    if (steps.length !== 1) throw new Error("plan_step_identity_mismatch");
+    const step = steps[0]!;
+    const bindings = plan.bindings.filter((binding) => binding.step_id === step.step_id && binding.revision_digest === current.digest);
+    const binding = bindings.at(-1);
+    if (!binding || binding.status !== "outcome_unknown" || !binding.execution_admission) {
+      throw new Error("plan_receipt_reconciliation_not_outcome_unknown");
+    }
+    if (binding.step_digest !== stepDigest(step) || binding.prepared_step.step_id !== step.step_id ||
+        binding.prepared_step.operation !== step.operation) {
+      throw new Error("plan_receipt_reconciliation_binding_invalid");
+    }
+    if (step.operation !== "gmail.write" || step.parameters?.operation !== "message.send") {
+      throw new Error("plan_receipt_reconciliation_operation_unsupported");
+    }
+    const expectedKey = createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", binding.command_id])).digest("hex");
+    if (binding.execution_admission.command_key !== expectedKey ||
+        binding.execution_admission.command_digest.length !== 64 || binding.command_digest.length !== 64) {
+      throw new Error("plan_receipt_reconciliation_binding_invalid");
+    }
+    return { plan_id: current.plan.plan_id, revision_digest: current.digest, step, binding };
   }
   private binding(id: string): { p: PlanState; b: Binding } | undefined {
     for (const p of this.state.plans) { const b = p.bindings.find((b) => b.command_id === id); if (b) return { p, b }; }

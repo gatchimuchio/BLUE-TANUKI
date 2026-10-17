@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-18 — QEB-01-D08.01-D09.01 owner起動のloopback照合
+
+- Control CenterのJ計画状態に、`outcome_unknown` stepをDeveloper入口から明示照合する操作を追加した。Jはowner/channel・現行revision・binding・対象operationを照会前に再検査し、30秒・単回の読取許可を発行する。
+- Gatewayは設定済みloopback endpointへ固定routeのGETを最大1回だけ送り、再送を行わない。未設定・不正endpoint・期限切れでは照会しない。対象は合成Gmail `message.send`のみ。
+- receiptはcommand key／command digest／実際のmessage payload digestを照合してdigest-onlyで記録する。どの照合結果でもstepは`outcome_unknown`のままで、成功・目標達成・再実行許可へ昇格しない。
+- 合成loopback試験は外部作用1回・読取照会3回・結果不明維持を確認した。実provider、credential、実ネットワーク、業務送信、D4Pocket接続、QE_QC／QA、P13 GOは含まない。
+
 ## 2026-10-18 — QEB-01-D08.01-D09.01 loopback inspection adapter
 
 - Gatewayにsynthetic loopback専用read-only照会producerを追加し、D08.01縦断fixtureからGETを通す。明示的な`127.0.0.1`、HTTP、port付きroot URL、固定照会path、redirect拒否、timeout上限、64 KiB応答上限を強制する。

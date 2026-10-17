@@ -54,6 +54,7 @@ export {
   invokeGoogleDriveRead,
   buildGoogleDailyBriefContent,
   invokeGmailWrite,
+  gmailWriteRequestPayloadDigest,
   invokeGoogleCalendarWrite,
   invokeGoogleDriveWrite,
   invokeBrowserRead,

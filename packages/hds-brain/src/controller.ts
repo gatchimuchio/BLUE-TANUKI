@@ -26,7 +26,8 @@ import {
   getOperationDescriptor,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
 } from "@blue-tanuki/protocol";
-import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage } from "./operation_plan.js";
+import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
+  type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
 import { reviewResultReflection, type ResultObservationProjection } from "./operation_result_reflection.js";
 import type {
   ApprovalGateLog,
@@ -357,6 +358,10 @@ export class HDSUpperController {
           req = createGatewayInternalInboundRequest({ ...req, content: `保存実観測の解釈候補を作る。
 ${planControl.question}`,
             metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1" } });
+        } else if (planControl.action === "reconcile") {
+          this.inspectOperationPlanReceiptReconciliationForControl(planControl, req);
+          req = createGatewayInternalInboundRequest({ ...req, content: "plan:reconcile",
+            metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1" } });
         } else {
         const selection = this.operationPlans.inspectControl(planControl, req);
         if (selection.step) {
@@ -375,14 +380,18 @@ ${planControl.question}`,
           "plan_target_resolver_not_connected", "plan_revision_identity_changed", "plan_revision_unchanged",
           "plan_attempted_step_or_dependency_changed", "plan_reflection_memory_unavailable", "plan_reflection_step_identity_mismatch",
           "plan_reflection_observation_not_current", "plan_reflection_record_mismatch", "plan_reflection_observation_expired",
-          "plan_reflection_summary_not_available"].includes(reason) ? reason : "plan_control_rejected";
+          "plan_reflection_summary_not_available", "plan_receipt_reconciliation_not_outcome_unknown",
+          "plan_receipt_reconciliation_operation_unsupported", "plan_receipt_reconciliation_binding_invalid",
+          "plan_receipt_reconciliation_capacity_reached", "plan_state_changed"]
+          .includes(reason) ? reason : "plan_control_rejected";
       }
     } else if (/^plan:/i.test(req.content.trim()) && !planPrefix) {
       planControlFailure = "plan_control_invalid";
     }
     const suppressTransientDocumentOrganizationContext = options.transient_content === "document_organization" && req.content.startsWith(DOCUMENT_ORGANIZATION_PROMPT_PREFIX);
     const isolatedContextReason = suppressTransientDocumentOrganizationContext ? "transient_document_organization" as const
-      : planPrefix?.[1]?.toLowerCase() === "reflect" ? "operation_result_reflection" as const : undefined;
+      : planPrefix?.[1]?.toLowerCase() === "reflect" ? "operation_result_reflection" as const
+      : planPrefix?.[1]?.toLowerCase() === "reconcile" ? "operation_plan_receipt_reconciliation" as const : undefined;
     const input = normalizeForDetection(req.content);
     const authorityReq = requestWithNormalizedContent(req, input.normalized_content);
     const decisionTraceInput = isolatedContextReason
@@ -505,6 +514,8 @@ ${planControl.question}`,
         else if (planControl.action === "revise") {
           const invalidated = this.operationPlans.revise(planControl, controlCaller);
           for (const id of invalidated) this.onCommandLifecycle(id, "approval_cancelled", { reason: "plan_revision_invalidated" });
+        } else if (planControl.action === "reconcile") {
+          this.operationPlans.bindReceiptReconciliation(planControl, controlCaller, command);
         } else {
           this.operationPlans.bindReflection(planControl, controlCaller, command, reflection!);
           this.audit.append({ kind: "operation_plan", event: "reflection_projection_selected", request_id: req.id,
@@ -1012,6 +1023,19 @@ ${planControl.question}`,
     if (recorded !== null) this.planEvent("external_receipt_observed", recorded.command_id);
     return recorded !== null;
   }
+  takeOperationPlanReceiptReconciliationAuthorization(
+    command: ExecuteCommand,
+    caller: InboundRequest,
+    now_ms?: number,
+  ): OperationPlanReceiptReconciliationAuthorization | null {
+    return this.operationPlans.takeReceiptReconciliationAuthorization(command, caller, now_ms);
+  }
+  inspectOperationPlanReceiptReconciliationForControl(
+    control: Extract<OperationPlanControl, { action: "reconcile" }>,
+    caller: InboundRequest,
+  ): void {
+    this.operationPlans.inspectReceiptReconciliationForControl(control, caller);
+  }
   reconcileOperationPlanMemory(): boolean { return this.operationPlans.reconcileMemory(); }
   closeOperationPlanMemory(): void { this.operationPlans.closeMemory(); }
   private planEvent(event: string, command_id: string): void {
@@ -1212,6 +1236,9 @@ ${planControl.question}`,
 
     if (req.content.trim().startsWith("plan:revise")) {
       return { id: randomUUID(), type: "noop", payload: { control_event: "plan_revision_committed" }, upstream_decision };
+    }
+    if (req.content.trim() === "plan:reconcile") {
+      return { id: randomUUID(), type: "noop", payload: { control_event: "operation_plan_receipt_reconciliation" }, upstream_decision };
     }
 
     // S7 action routing: explicit safe tool requests may become tool_call.

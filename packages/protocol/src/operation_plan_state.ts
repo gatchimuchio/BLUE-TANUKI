@@ -62,12 +62,14 @@ export type OperationPlanExternalReceiptObservation = z.infer<typeof OperationPl
 
 export const OperationPlanControlSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("review"), plan_id: Id, revision_digest: Digest, step_id: Id }).strict(),
+  z.object({ action: z.literal("reconcile"), plan_id: Id, revision_digest: Digest, step_id: Id }).strict(),
   z.object({ action: z.literal("revise"), plan_id: Id, expected_revision_digest: Digest, plan: OperationPlanSchema }).strict(),
   z.object({ action: z.literal("reflect"), plan_id: Id, revision_digest: Digest,
     step_ids: z.array(Id).min(1).max(8), question: z.string().trim().min(1).max(4000) }).strict(),
 ]);
 export type OperationPlanControl = z.infer<typeof OperationPlanControlSchema>;
 export type OperationPlanReflectionControl = Extract<OperationPlanControl, { action: "reflect" }>;
+export type OperationPlanReceiptReconciliationControl = Extract<OperationPlanControl, { action: "reconcile" }>;
 export const OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION = "blue-tanuki.result-reflection.v1";
 /** Cの解釈候補。形状・引用一致は意味採用や実行許可を表さない。 */
 export const OperationPlanReflectionCandidateSchema = z.object({

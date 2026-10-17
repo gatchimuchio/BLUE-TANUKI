@@ -30,6 +30,14 @@ WEBCHAT_RESUME_TOKEN=...
 
 Tokens must differ.
 
+## Optional local receipt inspection
+
+```bash
+BLUE_TANUKI_LOCAL_INSPECTION_ENDPOINT=http://127.0.0.1:43127
+```
+
+This setting enables the explicit Developer action for a currently `outcome_unknown` Gmail `message.send` step. The gateway issues one bounded read-only `GET /reconcile/<command-key-digest>` to this HTTP loopback endpoint; it never retries the original write. The endpoint must be an owner-run synthetic inspection service. If unset, the action records that no query occurred. Provider endpoints, credentials, redirects, and non-loopback hosts are not accepted. A matching receipt remains non-authority evidence and does not change the step from `outcome_unknown`.
+
 ## Optional LLM
 
 ```bash

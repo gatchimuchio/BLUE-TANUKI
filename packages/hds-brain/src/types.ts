@@ -300,9 +300,9 @@ export interface DecisionLog {
   model: ModelResult;
   commit: CommitResult;
   timestamp: number;
-  memory_retrieval_suppressed_for?: "transient_document_organization" | "operation_result_reflection";
-  memory_capture_suppressed_for?: "transient_document_organization" | "operation_result_reflection";
-  session_history_suppressed_for?: "transient_document_organization" | "operation_result_reflection";
+  memory_retrieval_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation";
+  memory_capture_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation";
+  session_history_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation";
 }
 
 

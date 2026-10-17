@@ -4,12 +4,16 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 2_000;
 
 function inspectionEndpoint(value: string): URL {
-  if (value.length > 2_048) throw new Error("local_inspection_endpoint_invalid");
+  if (value.length > 2_048 || !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(value)) {
+    throw new Error("local_inspection_endpoint_invalid");
+  }
   let url: URL;
   try { url = new URL(value); }
   catch { throw new Error("local_inspection_endpoint_invalid"); }
+  const port = Number(url.port);
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port ||
-      url.username !== "" || url.password !== "" || url.pathname !== "/" || url.search !== "" || url.hash !== "") {
+      !Number.isSafeInteger(port) || port < 1 || port > 65_535 || url.username !== "" || url.password !== "" ||
+      url.pathname !== "/" || url.search !== "" || url.hash !== "") {
     throw new Error("local_inspection_endpoint_invalid");
   }
   return url;
