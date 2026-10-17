@@ -12,7 +12,7 @@ import { createGatewayInternalInboundRequest, type InboundRequest, type Operatio
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { ingestLocalInspectionReceipt } from "../src/external_receipt_observation.js";
-import { runLocalInspectionReconciliation } from "../src/local_inspection_runtime.js";
+import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "../src/local_inspection_runtime.js";
 import { executionAdmissionForCommand, reconcileExecutionResults } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 
@@ -245,8 +245,12 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
           const expiredRequest = request(`plan:reconcile ${JSON.stringify(control)}`);
           const expiredCommand = hds.decide(expiredRequest).command;
           if (!expiredCommand) throw new Error("J did not issue the expiring reconciliation control");
-          expect(await runLocalInspectionReconciliation({ hds, command: expiredCommand, caller: expiredRequest,
-            endpoint, now_ms: Date.now() + 30_001 })).toMatchObject({ status: "rejected" });
+          const expiredResult = await runLocalInspectionReconciliation({ hds, command: expiredCommand, caller: expiredRequest,
+            endpoint, now_ms: Date.now() + 30_001 });
+          expect(expiredResult).toMatchObject({ status: "rejected" });
+          expect(localInspectionReconciliationMessage(expiredResult)).toContain("期限切れまたは古くなったため未実施");
+          expect(localInspectionReconciliationMessage(expiredResult)).toContain("outcome_unknownのままです");
+          expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("outcome_unknown");
           expect(inspection.status().read_queries).toBe(0);
         }
         const reconciliationRequest = request(`plan:reconcile ${JSON.stringify({ plan_id: currentPlan.plan_id,

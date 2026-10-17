@@ -52,6 +52,7 @@
     "hds:standalone": "tsx examples/hds-brain-standalone.ts",
     "smoke:serve": "tsx scripts/smoke_serve.ts",
     "smoke:resume": "tsx scripts/smoke_resume.ts",
+    "smoke:receipt-reconciliation": "tsx scripts/smoke_receipt_reconciliation.ts",
     "smoke:windows-installed": "tsx scripts/smoke_windows_installed.ts",
     "smoke:linux-installed": "tsx scripts/smoke_unix_installed.ts --platform=linux",
     "smoke:macos-installed": "tsx scripts/smoke_unix_installed.ts --platform=macos",

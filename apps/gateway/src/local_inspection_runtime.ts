@@ -10,6 +10,20 @@ export type LocalInspectionReconciliationResult =
   | { readonly status: "failed"; readonly reason: string }
   | { readonly status: "rejected"; readonly reason: "plan_receipt_reconciliation_authorization_expired_or_stale" };
 
+/** Result text shared by the live Developer route and the local smoke boundary. */
+export function localInspectionReconciliationMessage(result: LocalInspectionReconciliationResult): string {
+  if (result.status === "observed") {
+    return `合成local inspectionの読取照合を1回記録しました。観測=${result.observation.status}、候補数=${result.observation.match_count}。HDSのstep状態はoutcome_unknownのままです。これは成功・目標達成・再実行許可を意味せず、作用の再送もしていません。`;
+  }
+  if (result.status === "not_run") {
+    return `照合は未実施です（${result.reason}）。loopback endpointが設定されていないため通信していません。HDSのstep状態はoutcome_unknownのままです。`;
+  }
+  if (result.status === "failed") {
+    return `照合に失敗しました（${result.reason}）。この試行では結果観測を記録していません。HDSのstep状態はoutcome_unknownのままです。作用の再送はしていません。`;
+  }
+  return "照合許可が期限切れまたは古くなったため未実施です。HDSのstep状態はoutcome_unknownのままです。";
+}
+
 type ReconciliationHDS = Pick<HDSUpperController,
   "takeOperationPlanReceiptReconciliationAuthorization" | "recordOperationPlanExternalReceiptObservation">;
 

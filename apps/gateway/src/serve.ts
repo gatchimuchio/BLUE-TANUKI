@@ -30,7 +30,7 @@ import {
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { executionAdmissionForCommand, reconcileExecutionResults } from "./reconcile_execution_results.js";
 import { operationResultMemoryStorage } from "./operation_result_memory_config.js";
-import { runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
+import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -1894,13 +1894,7 @@ export async function serve(): Promise<ServeShutdown> {
         caller: authorityReq,
         endpoint: nonEmptyEnv(process.env.BLUE_TANUKI_LOCAL_INSPECTION_ENDPOINT),
       });
-      const content = result.status === "observed"
-        ? `合成local inspectionの読取照合を1回記録しました。観測=${result.observation.status}、候補数=${result.observation.match_count}。HDSのstep状態はoutcome_unknownのままです。これは成功・目標達成・再実行許可を意味せず、作用の再送もしていません。`
-        : result.status === "not_run"
-        ? `照合は未実施です（${result.reason}）。loopback endpointが設定されていないため通信していません。HDSのstep状態はoutcome_unknownのままです。`
-        : result.status === "failed"
-        ? `照合に失敗しました（${result.reason}）。この試行では結果観測を記録していません。HDSのstep状態はoutcome_unknownのままです。作用の再送はしていません。`
-        : `照合許可が期限切れまたは古くなったため未実施です。HDSのstep状態はoutcome_unknownのままです。`;
+      const content = localInspectionReconciliationMessage(result);
       const feedback: ExecuteFeedback = {
         command_id: command.id,
         status: result.status === "observed" ? "success" : "failed",
