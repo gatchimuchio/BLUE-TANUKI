@@ -119,7 +119,7 @@ export interface ExecutorExecutionContext {
   signal?: AbortSignal;
   /** worker起動待ち後にもGatewayの現在停止条件を同期検査する。 */
   before_tool_dispatch?: () => void;
-  /** Gatewayの永続J bindingがある検索結果だけ、私有outboxへ渡す。 */
+  /** Gatewayの永続J bindingがあるtool adapter結果だけ、私有outboxへ渡す。 */
   save_result_delivery?: boolean;
 }
 
@@ -419,11 +419,15 @@ export class Executor {
           feedback_status: feedback.status, observed_at_ms: feedback.operation_core_result?.observed_at_ms ?? Date.now(),
           output_digest: feedback.operation_core_result?.output_digest,
           error_digest: feedback.error ? createHash("sha256").update(feedback.error).digest("hex") : undefined,
-        }, context.save_result_delivery && cmd.type === "tool_call" && cmd.payload.tool_name === "file.search" && this.deps.file_search_worker && feedback.operation_core_result
-          ? inspectExecutionResultDelivery({ profile: "file-search-result-delivery.v1", admission: { ...record.ticket },
-            feedback: { command_id: feedback.command_id, status: feedback.status,
-              ...(feedback.result === undefined ? {} : { result: feedback.result }),
-              metrics: { duration_ms: feedback.metrics.duration_ms }, operation_core_result: feedback.operation_core_result } })
+        }, context.save_result_delivery && cmd.type === "tool_call" && feedback.operation_core_result
+          ? inspectExecutionResultDelivery({
+              profile: cmd.payload.tool_name === "file.search" && this.deps.file_search_worker
+                ? "file-search-result-delivery.v1" : "tool-adapter-result-delivery.v1",
+              admission: { ...record.ticket },
+              feedback: { command_id: feedback.command_id, status: feedback.status,
+                ...(feedback.result === undefined ? {} : { result: feedback.result }),
+                metrics: { duration_ms: feedback.metrics.duration_ms }, operation_core_result: feedback.operation_core_result },
+            })
           : undefined);
       } catch {
         // 保存失敗は成功へ変換しない。同じ承認の再作用も許可しない。
@@ -677,6 +681,8 @@ export class Executor {
       tool.invoke(payload.arguments, {
         command_id: id,
         upstream_commit_hash: commit_hash,
+        idempotency_key: APPROVED_COMMAND_RECORDS.get(command)!.ticket.command_key,
+        command_digest: APPROVED_COMMAND_RECORDS.get(command)!.ticket.command_digest,
         signal: controller.signal,
       }),
       constraints?.timeout_ms,

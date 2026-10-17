@@ -35,6 +35,7 @@ export {
   gmailReadTool,
   googleCalendarReadTool,
   googleDriveReadTool,
+  createGmailWriteTool,
   gmailWriteTool,
   googleCalendarWriteTool,
   googleDriveWriteTool,

@@ -58,6 +58,23 @@ function candidatePlan(value: unknown): OperationPlan {
   return plan;
 }
 
+/** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
+function hasConnectedPlanTarget(step: OperationStep): boolean {
+  const parameters = step.parameters;
+  if (step.operation === "file.search") {
+    return step.target.kind === "directory" && step.target.id.length > 0 &&
+      parameters?.root === step.target.id;
+  }
+  if (step.operation !== "gmail.write" || step.adapter !== "external_api" ||
+      step.target.kind !== "external_service" || step.target.id !== "gmail" || !parameters ||
+      parameters.operation !== "message.send" || typeof parameters.to !== "string" ||
+      parameters.to.length > 320 || !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$/.test(parameters.to) ||
+      typeof parameters.subject !== "string" || parameters.subject.trim().length === 0 ||
+      parameters.subject.length > 200 || /[\r\n]/.test(parameters.subject) ||
+      typeof parameters.body_text !== "string" || parameters.body_text.length > 64_000) return false;
+  return Object.keys(parameters).every((key) => ["operation", "to", "subject", "body_text"].includes(key));
+}
+
 /** J所有の計画・版・単回試行。LLM、I/O作用、Approvalの代行は行わない。 */
 export class OperationPlanLedger {
   private state: OperationPlanCheckpoint = { schema_version: "operation-plan-state.v1", plans: [] };
@@ -157,10 +174,8 @@ export class OperationPlanLedger {
     if (inspected.kind === "rejected") throw new Error(`plan_${inspected.code}`);
     const step = inspected.plan.steps.find((s) => s.step_id === stepId);
     if (!step || inspected.summary.steps.find((s) => s.step_id === stepId)?.status !== "ready") throw new Error("plan_step_not_ready");
-    // 対象resolverの実接続がある範囲だけ候補commandへ具体化する。
-    if (step.operation !== "file.search" || step.target.kind !== "directory" || step.parameters?.root !== step.target.id) {
-      throw new Error("plan_target_resolver_not_connected");
-    }
+    // 実接続がある、対象と引数を狭く結び付けたadapterだけをcommand化する。
+    if (!hasConnectedPlanTarget(step)) throw new Error("plan_target_resolver_not_connected");
     return { plan_id: current.plan.plan_id, revision_digest: expected, step, goal: p.goal };
   }
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-17 — QEB-01-D08.01外部作用の結果不明をJへ配送
+
+- OperationPlanのGmail `message.send`対象resolverを単一宛先に限定して接続し、承認ticket由来のcommand identityをadapterへ渡す。identity欠落は送信前に拒否する。
+- 登録済みtool adapterの限定結果profileを既存の私有outboxへ追加し、Gatewayがdescriptor・invocation boundary・receiptを、Jがexact bindingとdigestを照合して再起動後も結果不明を受領する。
+- 合成C／L3 proofとloopback非冪等検査serverで受理後の応答消失、再起動後の読取照合、二重作用0件を確認した。照会receiptは製品のJ/Mや操作者画面へまだ返らず、成功へ自動昇格しない。実provider・credential・業務送信、D08.01全体の成立を含まない。
+
 ## 2026-10-17 — QEB-01承認policyをExecutor consumerへ接続
 
 - ExecutorがHDS-BRAINの正規command分類から`operation`／`risk`／`final_review_required`を照合し、承認発行時と実行直前の両方でproofとの不一致を拒否する。未知proof sourceとsource／decisionの不整合も拒否する。

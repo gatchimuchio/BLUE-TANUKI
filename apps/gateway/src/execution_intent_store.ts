@@ -6,7 +6,7 @@ import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary, ExecutionWorkerIdentity } from "@blue-tanuki/core";
 import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
   parseBoundaryExchangeAtBoundary, inspectExecutionResultDelivery, inspectOperationCommandExecutionResult,
-  type ExecutionResultDelivery } from "@blue-tanuki/protocol";
+  getOperationDescriptor, type ExecutionResultDelivery } from "@blue-tanuki/protocol";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -305,11 +305,17 @@ function validateReceipt(receipt: ExecutionIntentReceipt): void {
 
 function validateDelivery(receipt: ExecutionIntentReceipt, delivery: ExecutionResultDelivery): void {
   const fb = delivery.feedback;
+  const operation = fb.operation_core_result.operation;
+  const descriptor = getOperationDescriptor(operation);
+  const profileMatches = delivery.profile === "file-search-result-delivery.v1"
+    ? operation === "file.search" && receipt.worker_id !== undefined
+    : !!descriptor && descriptor.tool_name === operation && receipt.invocation_boundary === "tool_adapter";
   const result = inspectOperationCommandExecutionResult(fb.operation_core_result, {
     request_id: fb.operation_core_result.request_id, command_id: fb.command_id,
-    upstream_commit_hash: fb.operation_core_result.upstream_commit_hash, status: fb.status, operation: "file.search",
+    upstream_commit_hash: fb.operation_core_result.upstream_commit_hash, status: fb.status, operation,
   });
-  if (!sameTicket(receipt, delivery.admission) || !result || receipt.feedback_status !== fb.status ||
+  if (!sameTicket(receipt, delivery.admission) || !profileMatches || !descriptor || result?.adapter !== descriptor.adapter ||
+      !result || receipt.feedback_status !== fb.status ||
       receipt.command_key !== digest(JSON.stringify(["gateway-executor-command.v1", fb.command_id])) ||
       receipt.output_digest !== result.output_digest || receipt.error_digest !== result.error_digest ||
       receipt.observed_at_ms !== result.observed_at_ms ||

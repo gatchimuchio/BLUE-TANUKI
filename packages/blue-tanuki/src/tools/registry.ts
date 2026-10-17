@@ -11,6 +11,10 @@ import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
 export interface ToolContext {
   command_id: string;
   upstream_commit_hash: string;
+  /** Stable digest for downstream duplicate lookup; it grants no authority. */
+  idempotency_key?: string;
+  /** Digest of the exact approved command; adapters may bind external receipts to it. */
+  command_digest?: string;
   signal?: AbortSignal;
 }
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { OperationCommandExecutionResultSchema } from "./operation_core.js";
+import { OperationCommandExecutionResultSchema, OperationJsonValueSchema } from "./operation_core.js";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
 const Time = z.number().int().positive().safe();
@@ -20,16 +20,28 @@ const SearchOutput = z.object({
   }).strict()).max(100),
 }).strict();
 
-/** file.searchの保存済み実結果だけ。計算候補・記憶更新・raw errorは配送しない。 */
-export const ExecutionResultDeliverySchema = z.object({
-  profile: z.literal("file-search-result-delivery.v1"), admission: ExecutionAdmissionSchema,
-  feedback: z.object({
-    command_id: z.string().min(1).max(200), status: z.enum(["success", "failed", "suspended"]),
-    result: SearchOutput.optional(),
-    metrics: z.object({ duration_ms: z.number().finite().nonnegative() }).strict(),
-    operation_core_result: OperationCommandExecutionResultSchema,
-  }).strict(),
+const DeliveryFeedback = z.object({
+  command_id: z.string().min(1).max(200), status: z.enum(["success", "failed", "suspended"]),
+  metrics: z.object({ duration_ms: z.number().finite().nonnegative() }).strict(),
+  operation_core_result: OperationCommandExecutionResultSchema,
 }).strict();
+
+/** file.searchの保存済み実結果だけ。計算候補・記憶更新・raw errorは配送しない。 */
+const FileSearchExecutionResultDeliverySchema = z.object({
+  profile: z.literal("file-search-result-delivery.v1"), admission: ExecutionAdmissionSchema,
+  feedback: DeliveryFeedback.extend({ result: SearchOutput.optional() }),
+}).strict();
+
+/** 審査済みtool adapterの最小実行結果。J bindingがexact commandと対応付ける。 */
+const ToolAdapterExecutionResultDeliverySchema = z.object({
+  profile: z.literal("tool-adapter-result-delivery.v1"), admission: ExecutionAdmissionSchema,
+  feedback: DeliveryFeedback.extend({ result: OperationJsonValueSchema.optional() }),
+}).strict();
+
+export const ExecutionResultDeliverySchema = z.discriminatedUnion("profile", [
+  FileSearchExecutionResultDeliverySchema,
+  ToolAdapterExecutionResultDeliverySchema,
+]);
 export type ExecutionResultDelivery = z.infer<typeof ExecutionResultDeliverySchema>;
 
 /** parseによるキー順変更は既存output_digestを壊すので、検査後も元JSON順を保つ。 */

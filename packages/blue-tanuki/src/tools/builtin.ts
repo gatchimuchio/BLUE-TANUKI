@@ -101,6 +101,7 @@ export {
   type GoogleReadTarget,
 } from "./google_read.js";
 export {
+  createGmailWriteTool,
   gmailWriteTool,
   googleCalendarWriteTool,
   googleDriveWriteTool,

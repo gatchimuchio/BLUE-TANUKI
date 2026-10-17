@@ -17,6 +17,9 @@ export interface GoogleWriteTarget {
   token: string;
   body?: string;
   contentType?: string;
+  /** Digest-only identity from an approved Executor ticket; not an authority token. */
+  idempotency_key?: string;
+  command_digest?: string;
 }
 
 export interface GoogleWriteResponse {
@@ -31,6 +34,8 @@ export interface GoogleWriteResponse {
 export interface GoogleWriteOptions {
   env?: Env;
   request?: (target: GoogleWriteTarget) => Promise<GoogleWriteResponse>;
+  idempotency_key?: string;
+  command_digest?: string;
 }
 
 const GOOGLE_WRITE_TIMEOUT_MS = 15_000;
@@ -148,6 +153,8 @@ async function defaultGoogleWriteRequest(
       Authorization: `Bearer ${target.token}`,
       "User-Agent": `BLUE-TANUKI/0.1 ${target.service}.write`,
     };
+    // The provider may ignore this header. It is a lookup hint only; Executor never retries an unknown write.
+    if (target.idempotency_key) headers["Idempotency-Key"] = target.idempotency_key;
     if (requestBody) {
       headers["Content-Type"] = target.contentType ?? "application/json";
       headers["Content-Length"] = String(requestBody.length);
@@ -246,6 +253,17 @@ function operationArg(args: Record<string, unknown>, allowed: readonly string[])
     throw new Error(`operation must be ${allowed.join(", ")}`);
   }
   return operation;
+}
+
+function executionRequestIdentity(options: GoogleWriteOptions): Pick<GoogleWriteTarget, "idempotency_key" | "command_digest"> {
+  const key = options.idempotency_key;
+  const commandDigest = options.command_digest;
+  if (key === undefined && commandDigest === undefined) return {};
+  if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key) ||
+      typeof commandDigest !== "string" || !/^[a-f0-9]{64}$/.test(commandDigest)) {
+    throw new Error("approved execution request identity is invalid; mutation_sent=false");
+  }
+  return { idempotency_key: key, command_digest: commandDigest };
 }
 
 function jsonBody(value: unknown): string {
@@ -360,6 +378,7 @@ export async function invokeGmailWrite(
     maxBytes,
     token,
     body: jsonBody(body),
+    ...executionRequestIdentity(opts),
   };
   const response = await request(target);
   if (!response.ok) throw googleWriteResponseError("gmail.write", response);
@@ -538,14 +557,23 @@ export async function invokeGoogleDriveWrite(
   return mutationResult("google.drive.write", "drive", operation, target, response);
 }
 
-export const gmailWriteTool: Tool = {
-  name: "gmail.write",
-  description: "Create Gmail drafts or send Gmail messages with an operator-provided OAuth token.",
-  required_capabilities: requireToolOperationDescriptor("gmail.write").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeGmailWrite(args);
-  },
-};
+export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempotency_key" | "command_digest"> = {}): Tool {
+  return {
+    name: "gmail.write",
+    description: "Create Gmail drafts or send Gmail messages with an operator-provided OAuth token.",
+    required_capabilities: requireToolOperationDescriptor("gmail.write").required_capabilities,
+    async invoke(args, context): Promise<unknown> {
+      if (typeof context.idempotency_key !== "string" || !/^[a-f0-9]{64}$/.test(context.idempotency_key) ||
+          typeof context.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(context.command_digest)) {
+        throw new Error("gmail.write requires an approved Executor identity; mutation_sent=false");
+      }
+      return await invokeGmailWrite(args, { ...options, idempotency_key: context.idempotency_key,
+        command_digest: context.command_digest });
+    },
+  };
+}
+
+export const gmailWriteTool: Tool = createGmailWriteTool();
 
 export const googleCalendarWriteTool: Tool = {
   name: "google.calendar.write",

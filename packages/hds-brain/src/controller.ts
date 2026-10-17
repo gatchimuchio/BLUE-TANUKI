@@ -1265,7 +1265,7 @@ ${planControl.question}`,
         ...memoryMessages,
         ...(req.content.trim().startsWith("plan:compute") && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? [{ role: "system" as const,
-          content: `OperationPlanの候補だけをoperation-core.v1のJSONで返してください。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。未実行を成功と申告しないこと。planner_output_used_for_authority=false、hds_brain_authority_required=true。raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。rollback.available=false。現在の実target resolverはfile.searchのdirectory targetと同一rootのみ。採用・承認・実行はこの計算の責務ではありません。` }] : []),
+          content: `OperationPlanの候補だけをoperation-core.v1のJSONで返してください。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。未実行を成功と申告しないこと。planner_output_used_for_authority=false、hds_brain_authority_required=true。raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致、およびgmail.writeのexternal_service target id=gmailでoperation=message.send、単一のto、subject、body_textだけを使う場合に限ります。Gmail計画へcc/bcc/fromやcredentialを含めません。採用・承認・実行はこの計算の責務ではありません。` }] : []),
         { role: "user", content: req.content },
       ],
       ...(log.memory_retrieval_suppressed_for === "transient_document_organization"

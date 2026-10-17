@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, ToolRegistry, fileSearchTool } from "@blue-tanuki/core";
-import { createGatewayInternalInboundRequest, type ExecuteCommand, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 
@@ -33,6 +33,21 @@ function plan(id: string, root: string): OperationPlan {
     rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
+function gmailSendPlan(id: string, parameters: OperationParameters): OperationPlan {
+  const target = { kind: "external_service" as const, id: "gmail" };
+  return { version: "operation-core.v1", plan_id: `gmail-plan-${id}`, request_id: id, state: "planned",
+    steps: [{ step_id: "send", operation: "gmail.write", target, state: "planned",
+      effects: ["external_send", "write", "credential_access"],
+      permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+        hds_brain_authority_required: true, approval_gate_required: true },
+      adapter: "external_api", adapter_is_authority: false, command_generated_by_adapter_only: false, parameters,
+      preparation: { depends_on: [], bindings: [], preconditions: [],
+        validation: [{ check_id: "send-accepted", method: "result_equals", target, expected: { mutation_status: "confirmed" } }],
+        compensation: { available: false, reason: "external send cannot be recalled" } } }],
+    rollback: { available: false },
+    raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false, hds_brain_authority_required: true };
+}
 function rig(hds: HDSUpperController, candidate: OperationPlan, tool = fileSearchTool) {
   const tools = new ToolRegistry(); tools.register(tool);
   const authority = createExecutorApprovalAuthority();
@@ -56,6 +71,25 @@ function review(hds: HDSUpperController, candidate: OperationPlan, step_id: stri
 }
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
+  it("Gmail計画は宛先固定の単一message.sendだけをtool commandへ結ぶ", async () => {
+    const safeHds = new HDSUpperController(); const safeOrigin = request("plan:compute synthetic send");
+    const safe = gmailSendPlan(safeOrigin.id, { operation: "message.send", to: "inspection@example.invalid",
+      subject: "synthetic", body_text: "fixture" });
+    const safeExecutor = rig(safeHds, safe); await safeExecutor.run(safeHds.decide(safeOrigin).command!);
+    const selected = review(safeHds, safe, "send");
+    expect(selected.command?.type).toBe("tool_call");
+    if (selected.command?.type !== "tool_call") throw new Error("bounded Gmail plan was not connected");
+    expect(selected.command.payload).toMatchObject({ tool_name: "gmail.write", arguments: safe.steps[0]?.parameters });
+
+    const unsafeHds = new HDSUpperController(); const unsafeOrigin = request("plan:compute multiple send targets");
+    const unsafe = gmailSendPlan(unsafeOrigin.id, { operation: "message.send", to: "inspection@example.invalid",
+      cc: "second@example.invalid", subject: "synthetic", body_text: "fixture" });
+    const unsafeExecutor = rig(unsafeHds, unsafe); await unsafeExecutor.run(unsafeHds.decide(unsafeOrigin).command!);
+    const rejected = review(unsafeHds, unsafe, "send");
+    expect(rejected.command).toBeNull();
+    expect(rejected.log.commit.decision).not.toBe("ASSERT");
+  });
+
   it("実file.search結果を依存入力にし、変更pendingだけ失効して旧版と試行済みを保持", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-")); const workspace = join(root, "workspace");
     await mkdir(workspace); await writeFile(join(workspace, "blue.txt"), "blue\n");
