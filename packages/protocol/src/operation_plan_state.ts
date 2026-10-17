@@ -8,8 +8,18 @@ const Digest = z.string().regex(/^[a-f0-9]{64}$/);
 export const OperationPlanControlSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("review"), plan_id: Id, revision_digest: Digest, step_id: Id }).strict(),
   z.object({ action: z.literal("revise"), plan_id: Id, expected_revision_digest: Digest, plan: OperationPlanSchema }).strict(),
+  z.object({ action: z.literal("reflect"), plan_id: Id, revision_digest: Digest,
+    step_ids: z.array(Id).min(1).max(8), question: z.string().trim().min(1).max(4000) }).strict(),
 ]);
 export type OperationPlanControl = z.infer<typeof OperationPlanControlSchema>;
+export type OperationPlanReflectionControl = Extract<OperationPlanControl, { action: "reflect" }>;
+export const OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION = "blue-tanuki.result-reflection.v1";
+/** Cの解釈候補。形状・引用一致は意味採用や実行許可を表さない。 */
+export const OperationPlanReflectionCandidateSchema = z.object({
+  schema_version: z.literal("operation-result-reflection-candidate.v1"), projection_digest: Digest,
+  citations: z.array(z.object({ record_id: Id, record_digest: Digest,
+    interpretation: z.string().trim().min(1).max(800), uncertainty: z.string().trim().min(1).max(800) }).strict()).min(1).max(8),
+}).strict();
 
 export const OperationPlanCheckpointSchema = z.object({
   schema_version: z.literal("operation-plan-state.v1"),

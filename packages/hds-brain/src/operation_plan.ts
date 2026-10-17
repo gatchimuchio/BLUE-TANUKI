@@ -5,10 +5,12 @@ import {
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationStep,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
+  OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
 } from "@blue-tanuki/protocol";
 import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { buildResultMemoryCommit, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
+import type { ResultObservationCitation, ResultObservationProjection } from "./operation_result_reflection.js";
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
@@ -63,6 +65,8 @@ export class OperationPlanLedger {
   private readonly issuedBindings = new WeakMap<ExecuteCommand, string>();
   private readonly resultMemory?: JMemoryCommitCoordinator;
   private memoryReady = true;
+  private readonly reflections = new Map<string, { command_digest: string; control: OperationPlanReflectionControl;
+    caller: InboundRequest; projection_digest: string }>();
   constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
     const saved = port?.load();
@@ -131,7 +135,7 @@ export class OperationPlanLedger {
       revisions: [{ digest: operationPlanDigest(plan), plan }], bindings: [], results: [] }));
   }
 
-  inspectControl(control: OperationPlanControl, caller: InboundRequest): {
+  inspectControl(control: Exclude<OperationPlanControl, { action: "reflect" }>, caller: InboundRequest): {
     plan_id: string; revision_digest: string; step?: OperationStep; goal: string;
   } {
     if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
@@ -194,6 +198,9 @@ export class OperationPlanLedger {
 
   isBound(command_id: string): boolean { return this.binding(command_id) !== undefined; }
   canExecute(command: ExecuteCommand): boolean {
+    if (this.reflections.has(command.id) || (command.type === "llm_call" && command.payload.compute_context?.local_p_version === OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION)) {
+      return this.readReflection(command) !== undefined;
+    }
     const match = this.binding(this.issuedBindings.get(command) ?? command.id);
     if (!match) return true;
     if (!this.reconcileMemory()) return false;
@@ -293,6 +300,70 @@ export class OperationPlanLedger {
     } catch { return false; }
   }
   closeMemory(): void { this.resultMemory?.close(); }
+
+  /** 同仕事・現版の受領済み観測だけをJが選択する。全履歴やraw検索内容をCへ渡さない。 */
+  inspectReflection(control: OperationPlanReflectionControl, caller: InboundRequest): ResultObservationProjection {
+    if (!this.resultMemory || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest ||
+        this.resultMemory.snapshot()?.status !== "ready") throw new Error("plan_reflection_memory_unavailable");
+    const p = this.ownedPlan(control.plan_id, caller);
+    const current = p.revisions.at(-1)!;
+    if (current.digest !== control.revision_digest) throw new Error("plan_revision_changed");
+    const ids = new Set<string>();
+    const citations: ResultObservationCitation[] = [];
+    for (const id of control.step_ids) {
+      const steps = current.plan.steps.filter((step) => step.step_id === id || operationPlanDigest(step.step_id) === id);
+      if (steps.length !== 1 || ids.has(steps[0]!.step_id)) throw new Error("plan_reflection_step_identity_mismatch");
+      const step = steps[0]!; ids.add(step.step_id);
+      const bindings = p.bindings.filter((b) => b.step_id === step.step_id && b.status === "verified" && b.revision_digest === current.digest);
+      const b = bindings[0];
+      if (bindings.length !== 1 || !b || !b.memory_commit || !b.memory_receipt || !verifyResultMemoryCommit(p, b) ||
+          !receiptForResultCommit(b.memory_receipt, b.memory_commit) || b.step_digest !== stepDigest(step)) throw new Error("plan_reflection_observation_not_current");
+      const receipt = this.resultMemory.reconcile(b.memory_commit.update_id);
+      if (!receipt.ok || receipt.status !== "ready" || operationPlanDigest(receipt.receipt) !== operationPlanDigest(b.memory_receipt)) {
+        throw new Error("plan_reflection_record_mismatch");
+      }
+      const record = this.resultMemory.readMemoryRecord(resultMemoryIdentity(b).record_id);
+      const value = b.memory_commit.changes[0]!;
+      if (!record?.exists || value.operation !== "upsert" || operationPlanDigest(record.value) !== operationPlanDigest(value.value)) {
+        throw new Error("plan_reflection_record_mismatch");
+      }
+      const result = p.results.find((r) => r.step_id === b.step_id)!;
+      if (Date.now() < result.observed_at_ms || Date.now() >= result.expires_at_ms) throw new Error("plan_reflection_observation_expired");
+      const output = result.output;
+      if (!output || typeof output !== "object" || Array.isArray(output) || !Array.isArray(output.matches) ||
+          typeof output.visited_files !== "number" || !Number.isSafeInteger(output.visited_files) || output.visited_files < 0) {
+        throw new Error("plan_reflection_summary_not_available");
+      }
+      citations.push({ record_id: resultMemoryIdentity(b).record_id, record_digest: operationPlanDigest(record.value),
+        memory_revision: b.memory_receipt.revision, receipt_digest: b.memory_receipt.receipt_digest,
+        source_revision_digest: b.revision_digest, step_digest: b.step_digest, delivery_digest: b.delivery_digest!,
+        observed_at_ms: result.observed_at_ms, expires_at_ms: result.expires_at_ms, operation: "file.search",
+        observation: { reported_status: "succeeded", match_count: output.matches.length,
+          visited_files: output.visited_files, completeness: "unknown" }, adoption_status: "observation_only",
+        counterevidence_status: "not_assessed", used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    }
+    return { schema_version: "operation-result-current-projection.v1", scope: { plan_handle: operationPlanDigest(current.plan.plan_id),
+      revision_digest: current.digest, owner_digest: operationPlanDigest(p.owner), channel_digest: operationPlanDigest(p.channel) },
+      citations, used_for_authority: false, memory_adoption: false, may_execute: false };
+  }
+  bindReflection(control: OperationPlanReflectionControl, caller: InboundRequest, command: ExecuteCommand,
+    projection: ResultObservationProjection): void {
+    if (this.reflections.size >= 32 || command.type !== "llm_call" || command.payload.session_id ||
+        command.payload.compute_context?.local_p_version !== OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION ||
+        command.payload.compute_context.projection_digest !== operationPlanDigest(projection) ||
+        operationPlanDigest(this.inspectReflection(control, caller)) !== operationPlanDigest(projection)) throw new Error("plan_reflection_binding_failed");
+    this.reflections.set(command.id, { command_digest: operationPlanDigest(command), control: structuredClone(control),
+      caller: structuredClone(caller), projection_digest: operationPlanDigest(projection) });
+  }
+  readReflection(command: ExecuteCommand): ResultObservationProjection | undefined {
+    try {
+      const binding = this.reflections.get(command.id);
+      if (!binding || operationPlanDigest(command) !== binding.command_digest) return undefined;
+      const current = this.inspectReflection(binding.control, binding.caller);
+      return operationPlanDigest(current) === binding.projection_digest ? current : undefined;
+    } catch { return undefined; }
+  }
+  forgetReflection(command_id: string): void { this.reflections.delete(command_id); }
 
   private readResultMemoryApproval(reference: JMemoryApprovalReference): unknown {
     if (!this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return null;

@@ -7,11 +7,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { strict as assert } from "node:assert";
 import { createRequire } from "node:module";
+import { WebSocket } from "ws";
+import { operationPlanDigest } from "../packages/hds-brain/dist/index.js";
 import type { OperationPlan, OperationStep } from "@blue-tanuki/protocol";
 import type { HDSUpperController } from "@blue-tanuki/hds-brain";
 
 type PlanProjection = ReturnType<HDSUpperController["getRuntimeSnapshot"]>["operation_plans"];
-type Pending = { command_id: string; approval_token: string; approval_level: string };
+type Pending = { command_id: string; request_id: string; approval_token: string; approval_level: string };
 type Snapshot = { hds: { operation_plans: PlanProjection }; pending_approvals: Pending[];
   execution_receipts: { used_for_authority: false; execution_eligible: false; records: Array<{
     ticket_digest: string; command_digest: string; execution_epoch_digest: string; state: string; invocation_boundary?: string;
@@ -20,6 +22,7 @@ type Snapshot = { hds: { operation_plans: PlanProjection }; pending_approvals: P
 
 const recovery = process.argv.includes("--reconciliation");
 const memoryRecovery = process.argv.includes("--memory-reconciliation");
+const reflectionSmoke = process.argv.includes("--reflection");
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 const root = await mkdtemp(join(tmpdir(), "blue-plan-http-"));
@@ -32,6 +35,20 @@ const provider = createServer(async (req, res) => {
     assert.equal(req.url, "/v1/chat/completions");
     let body = ""; for await (const part of req) body += String(part);
     const messages = JSON.parse(body).messages as Array<{ role: string; content: string }>;
+    if (messages[0]?.content.includes('"schema_version":"operation-result-current-projection.v1"')) {
+      assert.ok(reflectionSmoke); assert.equal(messages.length, 2);
+      for (const raw of [workspace, "blue.txt", "loopback-plan", '"matches"', "execution_admission"])
+        assert.ok(!JSON.stringify(messages).includes(raw));
+      const projection = JSON.parse(messages[0].content.split("\n").at(-1)!);
+      assert.equal(projection.citations[0].observation.match_count, 1);
+      assert.equal(projection.citations[0].observation.completeness, "unknown");
+      const content = { schema_version: "operation-result-reflection-candidate.v1", projection_digest: operationPlanDigest(projection),
+        citations: projection.citations.map((source: {record_id: string; record_digest: string}) => ({ record_id: source.record_id,
+          record_digest: source.record_digest, interpretation: "検索で1件の一致が報告された", uncertainty: "完全性は未確認" })) };
+      calls++; res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: JSON.stringify(content) }, finish_reason: "stop" }],
+        model: "fixture", usage: { total_tokens: 0 } })); return;
+    }
     const requestId = messages.find((message) => message.role === "system" && message.content.includes("固定request_id="))
       ?.content.match(/固定request_id=([^。]+)\u3002/)?.[1];
     assert.ok(requestId);
@@ -77,6 +94,8 @@ env.BLUE_TANUKI_APPROVAL_MODE = "ask_every_time";
 const base = `http://127.0.0.1:${gatewayPort}`;
 let child: ChildProcess | undefined;
 let diagnostics = "";
+let reflectionSocket: WebSocket | undefined;
+let reflectionDb: InstanceType<typeof DatabaseSync> | undefined;
 async function stop() {
   if (child && child.exitCode === null && child.signalCode === null) { const closed = once(child, "close"); child.kill(); await closed; }
 }
@@ -97,7 +116,7 @@ async function waitFor(check: () => Promise<boolean>): Promise<void> {
   while (Date.now() < deadline) { if (await check()) return; await new Promise((resolve) => setTimeout(resolve, 100)); }
   throw new Error("local plan smoke did not reach expected state");
 }
-const invoke = (content: string) => json("/operators/developer/invoke", { user: "fixture-owner", content });
+const invoke = (content: string) => json<{ accepted: boolean; request_id: string }>("/operators/developer/invoke", { user: "fixture-owner", content });
 const snapshot = () => json<Snapshot>("/runtime/snapshot");
 async function select(step: PlanProjection["plans"][number]["steps"][number]) {
   const state = await snapshot(); const plan = state.hds.operation_plans.plans[0];
@@ -160,6 +179,36 @@ try {
     assert.equal((await snapshot()).execution_receipts.records.filter((r) => r.invocation_boundary === "tool_adapter").length, 1);
   } else await approve(first);
   await waitFor(async () => (await snapshot()).hds.operation_plans.plans[0].steps[0].status === "verified");
+  if (reflectionSmoke) {
+    const ticket = await json<{ ticket: string }>("/ws-ticket", { user: "fixture-owner" });
+    reflectionSocket = new WebSocket(`${base.replace("http:", "ws:")}/ws?ticket=${encodeURIComponent(ticket.ticket)}`);
+    const replies: Array<{ command_id: string; content: string }> = []; reflectionSocket.on("message", (data) => {
+      const message = JSON.parse(String(data));
+      if (message.kind === "channel_send") replies.push({ command_id: message.command_id, content: message.content });
+    });
+    await once(reflectionSocket, "open"); state = await snapshot(); const p = state.hds.operation_plans.plans[0];
+    const m = reflectionDb = new DatabaseSync(join(root, "state", "private-state", "result-memory", "m-state.sqlite"));
+    const before = m.prepare("SELECT revision FROM m_state").get()!.revision;
+    const request = await invoke(`plan:reflect ${JSON.stringify({ plan_id: p.plan_id, revision_digest: p.revision_digest,
+      step_ids: [p.steps[0].step_id], question: "この実観測から何が言えるか。不確実性も示す" })}`);
+    assert.equal(request.accepted, true);
+    const isReflectionOutput = (content: string) => content.includes("operation-result-reflection-review.v1") ||
+      content.includes("観測の解釈候補を採用できませんでした。");
+    await waitFor(async () => (await snapshot()).pending_approvals.some((pending) => pending.request_id === request.request_id) ||
+      replies.some((reply) => isReflectionOutput(reply.content)));
+    const reflectionPending = (await snapshot()).pending_approvals.find((pending) => pending.request_id === request.request_id);
+    if (reflectionPending) {
+      const result = await approve(reflectionPending);
+      assert.equal(result.executed, true); assert.equal(result.status, "success");
+    }
+    await waitFor(async () => replies.some((reply) => isReflectionOutput(reply.content)));
+    const output = replies.filter((reply) => isReflectionOutput(reply.content)).at(-1)!.content;
+    assert.ok(output.includes("references_verified_interpretation_unverified"), output);
+    assert.ok(output.includes('"memory_adoption": false')); assert.ok(output.includes('"used_as_world_truth": false'));
+    assert.ok(!output.includes(workspace)); assert.equal(m.prepare("SELECT revision FROM m_state").get()!.revision, before); m.close(); reflectionDb = undefined;
+    assert.equal(calls, 2); assert.equal((await snapshot()).execution_receipts.records.filter((r) => r.invocation_boundary === "tool_adapter").length, 1);
+    reflectionSocket.close(); await once(reflectionSocket, "close"); reflectionSocket = undefined;
+  }
   state = await snapshot(); const stale = await select(state.hds.operation_plans.plans[0].steps[1]);
   const revised = structuredClone(candidate!); revised.steps[1]!.parameters!.max_results = 2;
   await invoke(`plan:revise ${JSON.stringify({ plan_id: state.hds.operation_plans.plans[0].plan_id,
@@ -187,9 +236,9 @@ try {
   await stop(); await boot(); state = await snapshot();
   assert.equal(state.hds.operation_plans.plans[0].status, "results_verified"); assert.equal(state.pending_approvals.length, 0);
   assert.equal(state.hds.operation_plans.result_memory.status, "receipt_confirmed");
-  assert.equal(calls, 1);
+  assert.equal(calls, reflectionSmoke ? 2 : 1);
   assert.deepEqual(state.execution_receipts.records, receipts.records);
   const denied = await fetch(`${base}/runtime/snapshot`); assert.equal(denied.status, 401);
-  console.log(`PASS: loopback C → Developer HTTP → HDS → Approval Gate → durable intent → dedicated file.search process → saved actual result → J → private M receipt → dependent result; revision invalidation; digest-only receipt after restart${recovery ? "; actual Gateway restart reconciles lost J result without new worker/action" : ""}${memoryRecovery ? "; M commit before J receipt recovers the same memory receipt without another action" : ""}`);
+  console.log(`PASS: loopback C → Developer HTTP → HDS → Approval Gate → durable intent → dedicated file.search process → saved actual result → J → private M receipt → dependent result; revision invalidation; digest-only receipt after restart${recovery ? "; actual Gateway restart reconciles lost J result without new worker/action" : ""}${memoryRecovery ? "; M commit before J receipt recovers the same memory receipt without another action" : ""}${reflectionSmoke ? "; private M observation → finite Compute → pre-display J citation review, no history/raw result or M mutation" : ""}`);
 } catch (error) { console.error(diagnostics); throw error; }
-finally { await stop(); await new Promise<void>((resolve) => provider.close(() => resolve())); await rm(root, { recursive: true, force: true }); }
+finally { reflectionDb?.close(); reflectionSocket?.terminate(); await stop(); await new Promise<void>((resolve) => provider.close(() => resolve())); await rm(root, { recursive: true, force: true }); }

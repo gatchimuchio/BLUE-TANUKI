@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileSearchTool } from "@blue-tanuki/core";
+import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileSearchTool, LLMComputeAdapter, createLLMToolCallCandidate, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -51,8 +51,9 @@ async function setup(root: string, workspace: string) {
   const execution = new GatewayExecutionIntentStore(executionPath); const j = new OperationPlanStateStore(jPath);
   const memory = operationResultMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") });
   const controllers: HDSUpperController[] = [];
+  const oldMemory = { capture: vi.fn(), recent: vi.fn(() => []), all: vi.fn(() => []) };
   function createHds(state = j) {
-    const controller = new HDSUpperController({ operation_plan_state: state, operation_plan_memory: memory });
+    const controller = new HDSUpperController({ operation_plan_state: state, operation_plan_memory: memory, memory: oldMemory });
     controllers.push(controller); return controller;
   }
   const hds = createHds(); const origin = request("plan:compute 合成の検索結果を後続stepへ渡す");
@@ -72,7 +73,7 @@ async function setup(root: string, workspace: string) {
   finalizeCommandOutput({ hds, command: initial, feedback: first, request_id: origin.id, target_surface: "channel" });
   const cmd = review(hds, plan, "search")!; const approved = approve(cmd);
   const admission = executionAdmissionForCommand(cmd, authority.receipt(approved));
-  return { root, workspace, executionPath, jPath, execution, j, hds, plan, cmd, approved, admission, authority, executor, invoke, memory, controllers, createHds };
+  return { root, workspace, executionPath, jPath, execution, j, hds, plan, cmd, approved, admission, authority, executor, invoke, memory, controllers, createHds, approve, oldMemory };
 }
 
 function inspectMemory(c: Awaited<ReturnType<typeof setup>>) {
@@ -274,5 +275,134 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     rmSync(c.memory.database_path);
     expect(() => c.createHds()).toThrow(/schema_mismatch/); expect(inspectMemory(c).revision).toBe(1);
     expect(c.invoke).toHaveBeenCalledTimes(1);
+  }));
+});
+
+function reflect(c: Awaited<ReturnType<typeof setup>>, hds = c.hds, changes: Record<string, unknown> = {}) {
+  const p = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
+  return hds.decide(request(`plan:reflect ${JSON.stringify({ plan_id: p.plan_id, revision_digest: p.revision_digest,
+    step_ids: [p.steps[0]!.step_id], question: "この観測で何が言えて、何が未確認か", ...changes })}`));
+}
+function reflectionExecutor(c: Awaited<ReturnType<typeof setup>>, mutate?: (response: LLMResponse) => LLMResponse) {
+  const call = vi.fn(async (req: LLMRequest): Promise<LLMResponse> => {
+    const projection = JSON.parse(req.messages[0]!.content.split("\n").at(-1)!);
+    const response = { content: JSON.stringify({ schema_version: "operation-result-reflection-candidate.v1",
+      projection_digest: operationPlanDigest(projection), citations: projection.citations.map((source: {record_id: string; record_digest: string}) => ({
+        record_id: source.record_id, record_digest: source.record_digest,
+        interpretation: "検索で1件の一致が報告された", uncertainty: "完全走査と現在の外界状態は未確認" })) }),
+      model: "fixture", tokens_used: 0 };
+    return mutate ? mutate(response) : response;
+  });
+  const llm = { name: "fixture", call };
+  const history = { getMessages: vi.fn(async () => [{ role: "user" as const, content: "private-history-sentinel", timestamp: 1 }]),
+    append: vi.fn(async () => {}), clear: vi.fn(async () => {}), size: async () => 1 };
+  const executor = new Executor({ tools: new ToolRegistry(), approval_authority: c.authority,
+    llm, compute: new LLMComputeAdapter(llm), session_store: history });
+  return { executor, call, history };
+}
+async function recordActualObservation(c: Awaited<ReturnType<typeof setup>>) {
+  expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+  expect((await c.executor.execute(c.approved, { save_result_delivery: true })).status).toBe("success");
+  expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+}
+describe("受領済みM実観測→有限C射影→表示前J照合", () => {
+  it("実worker観測をraw/historyなしでCへ戻し、未採用解釈だけを表示する", async () => fixture(async (c) => {
+    await recordActualObservation(c); const before = inspectMemory(c);
+    const calls = { capture: c.oldMemory.capture.mock.calls.length, recent: c.oldMemory.recent.mock.calls.length };
+    const decision = reflect(c); const command = decision.command!;
+    expect(command.type).toBe("llm_call"); if (command.type !== "llm_call") throw new Error("expected reflection");
+    expect(command.payload.session_id).toBeUndefined(); expect(command.payload.compute_context?.data_exposure.input_sources)
+      .toEqual(["accepted_inbound_request", "selected_memory_references"]);
+    expect(decision.log.memory_capture_suppressed_for).toBe("operation_result_reflection");
+    expect(c.oldMemory.capture).toHaveBeenCalledTimes(calls.capture); expect(c.oldMemory.recent).toHaveBeenCalledTimes(calls.recent);
+    const visible = JSON.stringify(command.payload);
+    for (const raw of [c.workspace, "blue.txt", '"matches"', c.admission.ticket_id, c.cmd.id, c.plan.plan_id]) expect(visible).not.toContain(raw);
+    expect(visible).toContain('completeness'); expect(visible).toContain('not_assessed');
+    expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(true);
+    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(c.approve(command));
+    expect(feedback.status).toBe("success"); expect(runner.call).toHaveBeenCalledTimes(1);
+    expect(runner.history.getMessages).not.toHaveBeenCalled(); expect(runner.history.append).not.toHaveBeenCalled();
+    const result = finalizeCommandOutput({ hds: c.hds, command, feedback, request_id: decision.log.request_id, target_surface: "channel" });
+    expect(result.reviewed_feedback.status).toBe("success");
+    expect(result.rendered_output).toContain("references_verified_interpretation_unverified");
+    expect(result.rendered_output).toContain('"memory_adoption": false'); expect(result.rendered_output).not.toContain(c.workspace);
+    expect(inspectMemory(c)).toEqual(before); expect(c.invoke).toHaveBeenCalledTimes(1);
+    expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(false);
+  }));
+  it("別owner/channel・重複step・未受領・旧版をCへfallbackせず拒否する", async () => fixture(async (c) => {
+    expect(reflect(c).command).toBeNull(); await recordActualObservation(c);
+    const p = c.hds.getRuntimeSnapshot().operation_plans.plans[0]!;
+    const content = `plan:reflect ${JSON.stringify({ plan_id: p.plan_id, revision_digest: p.revision_digest,
+      step_ids: [p.steps[0]!.step_id], question: "観測を解釈" })}`;
+    const outsider = createGatewayInternalInboundRequest({ ...request(content), user: "different-owner" });
+    expect(c.hds.decide(outsider).command).toBeNull();
+    const otherChannel = createGatewayInternalInboundRequest({ ...request(content), channel: "telegram" });
+    expect(c.hds.decide(otherChannel).command).toBeNull();
+    expect(c.hds.decide({ ...request(content) }).command).toBeNull(); // private brandはspreadで失われる。
+    expect(reflect(c, c.hds, { step_ids: [p.steps[0]!.step_id, "search"] }).command).toBeNull();
+    expect(reflect(c, c.hds, { revision_digest: "0".repeat(64) }).command).toBeNull();
+  }));
+  it("送信待機・返答待機中の計画改訂と再起動旧commandを拒否する", async () => fixture(async (c) => {
+    await recordActualObservation(c); const decision = reflect(c); const command = decision.command!;
+    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(c.approve(command));
+    const altered = structuredClone(command); if (altered.type === "llm_call") altered.payload.compute_context!.local_p_version = "forged";
+    expect(c.hds.operationPlanCommandIsCurrent(altered)).toBe(false);
+    const changed = structuredClone(c.plan); changed.steps[1]!.parameters!.max_results = 2;
+    const revised = c.hds.decide(request(`plan:revise ${JSON.stringify({ plan_id: c.plan.plan_id,
+      expected_revision_digest: operationPlanDigest(c.plan), plan: changed })}`)); expect(revised.command?.type).toBe("noop");
+    expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(false);
+    const output = finalizeCommandOutput({ hds: c.hds, command, feedback, request_id: decision.log.request_id, target_surface: "channel" });
+    expect(output.reviewed_feedback.status).toBe("failed"); expect(output.rendered_output).not.toContain("検索で1件");
+    c.hds.closeOperationPlanMemory(); const restarted = c.createHds();
+    expect(restarted.operationPlanCommandIsCurrent(command)).toBe(false); expect(reflect(c, restarted).command).toBeNull();
+  }));
+  it("参照しない別M観測の追加で同じ引用射影を全失効しない", async () => fixture(async (c) => {
+    await recordActualObservation(c); const decision = reflect(c); const command = decision.command!;
+    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(c.approve(command));
+    const next = review(c.hds, c.plan, "dependent")!; const approved = c.approve(next);
+    const admission = executionAdmissionForCommand(next, c.authority.receipt(approved));
+    expect(c.hds.beginOperationPlanAttempt(next, admission)).toBe(true);
+    expect((await c.executor.execute(approved, { save_result_delivery: true })).status).toBe("success");
+    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+    expect(inspectMemory(c).revision).toBe(2); expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(true);
+    const output = finalizeCommandOutput({ hds: c.hds, command, feedback, request_id: decision.log.request_id, target_surface: "channel" });
+    expect(output.reviewed_feedback.status).toBe("success"); expect(c.invoke).toHaveBeenCalledTimes(2);
+  }));
+  it.each(["reference", "duplicate", "compute_request", "compute_output", "missing_compute", "tool", "meaning", "planner", "malformed_result", "failure"])("%sを成功・意味採用・作用へ変換しない", async (failure) => fixture(async (c) => {
+    await recordActualObservation(c); const before = inspectMemory(c); const decision = reflect(c); const command = decision.command!;
+    const runner = reflectionExecutor(c, (response) => {
+      if (failure === "tool") return { ...response, tool_calls: [createLLMToolCallCandidate("fixture", "x", "file.search", {})] };
+      if (failure === "meaning") return { ...response, meaning_update_proposal: { private: true } };
+      if (failure === "planner") return { ...response, content: JSON.stringify(c.plan) };
+      const candidate = JSON.parse(response.content);
+      if (failure === "reference") candidate.citations[0].record_digest = "0".repeat(64);
+      if (failure === "duplicate") candidate.citations.push(candidate.citations[0]);
+      return { ...response, content: JSON.stringify(candidate) };
+    });
+    const feedback = await runner.executor.execute(c.approve(command));
+    const value = feedback.result as Record<string, any>;
+    if (failure === "compute_request") value.execution_identity.request_id = "other-command";
+    if (failure === "compute_output") value.execution_identity.output_digest = "0".repeat(64);
+    if (failure === "missing_compute") delete value.execution_identity;
+      if (failure === "malformed_result") feedback.result = new Proxy({}, { ownKeys: () => { throw new Error("private provider metadata"); } });
+    if (failure === "failure") { feedback.status = "failed"; feedback.error = "private-provider-error"; }
+    const output = finalizeCommandOutput({ hds: c.hds, command, feedback, request_id: decision.log.request_id, target_surface: "channel" });
+    expect(output.reviewed_feedback.status).toBe("failed"); expect(output.rendered_output).toContain("解釈候補を採用できません");
+    expect(output.rendered_output).not.toContain("private-provider-error"); expect(output.rendered_output).not.toContain("private provider metadata");
+    expect(output.output_audit.result_digest_status).toBe(failure === "malformed_result" ? "unavailable" : "recorded");
+    expect(c.hds.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
+    expect(inspectMemory(c)).toEqual(before); expect(c.invoke).toHaveBeenCalledTimes(1);
+  }));
+  it("関連M破損・J読取不能・観測期限切れはC送信と返答を遮断する", async () => fixture(async (c) => {
+    await recordActualObservation(c); const decision = reflect(c); const command = decision.command!;
+    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(c.approve(command));
+    const unreadable = vi.spyOn(c.j, "load").mockImplementation(() => { throw new Error("fixture read failure"); });
+    expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(false); unreadable.mockRestore();
+    const observed = c.j.load()!.plans[0]!.results[0]!; const clock = vi.spyOn(Date, "now").mockReturnValue(observed.expires_at_ms);
+    expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(false); clock.mockRestore();
+    const db = new DatabaseSync(c.memory.memory_database_path);
+    try { db.exec("UPDATE m_records SET value_json='{}'"); } finally { db.close(); }
+    expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(false);
+    expect(c.hds.reviewMemoryCitations(command, feedback).status).toBe("failed"); expect(reflect(c).command).toBeNull();
   }));
 });

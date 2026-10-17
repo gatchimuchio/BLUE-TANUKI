@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-17 — 受領済み実観測からの限定解釈候補
+
+- 同一owner/channel・現行計画版の受領済みfile.search観測から、digestと件数等だけの有限C射影を作り、解釈候補を表示前にJが引用照合する経路を接続した。
+- raw検索内容・path・session historyはCへ渡さず、解釈は未採用・非権限・非実行のまま保持する。実provider、一般意味採用、QC／QA、公開・出荷判断は含まない。
+
 ## 2026-10-13 — 実観測のM保存とreceiptからの復帰
 
 - Jの検証済み計画file.search結果を限定観測として固定し、全文commitのCAS保存から既存M取引・receiptへ接続した。任意意味更新や権限昇格は行わない。

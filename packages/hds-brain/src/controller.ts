@@ -23,8 +23,10 @@ import {
   OperationPlanControlSchema,
   type OperationPlanControl,
   getOperationDescriptor,
+  OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
 } from "@blue-tanuki/protocol";
 import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage } from "./operation_plan.js";
+import { reviewResultReflection, type ResultObservationProjection } from "./operation_result_reflection.js";
 import type {
   ApprovalGateLog,
   AuthorityEventLog,
@@ -337,6 +339,7 @@ export class HDSUpperController {
     let req = boundary.request;
     let planControl: OperationPlanControl | undefined;
     let planControlFailure: string | undefined;
+    let reflection: ResultObservationProjection | undefined;
     const controlCaller = req;
     const planPrefix = /^plan:([^\s]+)(?:\s+([\s\S]*))?$/i.exec(req.content.trim());
     if (planPrefix && planPrefix[1] !== "compute") {
@@ -346,6 +349,13 @@ export class HDSUpperController {
           throw new Error("plan_control_requires_internal_developer");
         }
         planControl = OperationPlanControlSchema.parse({ ...JSON.parse(planPrefix[2] ?? "{}"), action: planPrefix[1] });
+        if (planControl.action === "reflect") {
+          if (!this.operationPlans.reconcileMemory()) throw new Error("plan_reflection_memory_unavailable");
+          reflection = this.operationPlans.inspectReflection(planControl, req);
+          req = createGatewayInternalInboundRequest({ ...req, content: `保存実観測の解釈候補を作る。
+${planControl.question}`,
+            metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1" } });
+        } else {
         const selection = this.operationPlans.inspectControl(planControl, req);
         if (selection.step) {
           const descriptor = getOperationDescriptor(selection.step.operation)!;
@@ -355,24 +365,29 @@ export class HDSUpperController {
               "blue_tanuki.tool_call": { tool_name: descriptor.tool_name!, arguments: selection.step.parameters! } },
           });
         }
+        }
       } catch (error) {
         const reason = error instanceof Error ? error.message : "";
         planControlFailure = ["plan_control_requires_internal_developer", "plan_owner_or_identity_mismatch",
           "plan_revision_changed", "plan_step_identity_mismatch", "plan_step_already_selected_or_attempted", "plan_step_not_ready",
           "plan_target_resolver_not_connected", "plan_revision_identity_changed", "plan_revision_unchanged",
-          "plan_attempted_step_or_dependency_changed"].includes(reason) ? reason : "plan_control_rejected";
+          "plan_attempted_step_or_dependency_changed", "plan_reflection_memory_unavailable", "plan_reflection_step_identity_mismatch",
+          "plan_reflection_observation_not_current", "plan_reflection_record_mismatch", "plan_reflection_observation_expired",
+          "plan_reflection_summary_not_available"].includes(reason) ? reason : "plan_control_rejected";
       }
     } else if (/^plan:/i.test(req.content.trim()) && !planPrefix) {
       planControlFailure = "plan_control_invalid";
     }
     const suppressTransientDocumentOrganizationContext = options.transient_content === "document_organization" && req.content.startsWith(DOCUMENT_ORGANIZATION_PROMPT_PREFIX);
+    const isolatedContextReason = suppressTransientDocumentOrganizationContext ? "transient_document_organization" as const
+      : planPrefix?.[1]?.toLowerCase() === "reflect" ? "operation_result_reflection" as const : undefined;
     const input = normalizeForDetection(req.content);
     const authorityReq = requestWithNormalizedContent(req, input.normalized_content);
-    const decisionTraceInput = suppressTransientDocumentOrganizationContext
+    const decisionTraceInput = isolatedContextReason
       ? {
           ...input,
-          raw_content: "[transient_document_organization_content_redacted]",
-          normalized_content: "[transient_document_organization_content_redacted]",
+          raw_content: `[${isolatedContextReason}_content_redacted]`,
+          normalized_content: `[${isolatedContextReason}_content_redacted]`,
           raw_content_redacted: true as const,
           source_content_sha256: sha256(req.content),
           source_content_chars: req.content.length,
@@ -381,13 +396,13 @@ export class HDSUpperController {
     const goalGovernanceProjection = this.goal_governance?.project(Date.now());
     const initialFrame = frame(authorityReq, {
       default_policy: this.policy,
-      ...(suppressTransientDocumentOrganizationContext ? {} : { memory_reader: this.memory }),
+      ...(isolatedContextReason ? {} : { memory_reader: this.memory }),
       original_content: req.content,
       ...(this.goal_relation_tree ? { goal_relation_tree: this.goal_relation_tree } : {}),
       ...(goalGovernanceProjection ? { goal_governance: goalGovernanceProjection } : {}),
     });
-    const f = suppressTransientDocumentOrganizationContext
-      ? { ...initialFrame, goal: `[transient_document_organization sha256=${sha256(req.content)} chars=${req.content.length}]` }
+    const f = isolatedContextReason
+      ? { ...initialFrame, goal: `[${isolatedContextReason} sha256=${sha256(req.content)} chars=${req.content.length}]` }
       : initialFrame;
     const selfHealth = this.evaluateSelfHealth();
     if (selfHealth.fail_safe) {
@@ -416,10 +431,10 @@ export class HDSUpperController {
         model: m,
         commit: c,
         timestamp: Date.now(),
-        ...(suppressTransientDocumentOrganizationContext ? {
-          memory_retrieval_suppressed_for: "transient_document_organization" as const,
-          memory_capture_suppressed_for: "transient_document_organization" as const,
-          session_history_suppressed_for: "transient_document_organization" as const,
+        ...(isolatedContextReason ? {
+          memory_retrieval_suppressed_for: isolatedContextReason,
+          memory_capture_suppressed_for: isolatedContextReason,
+          session_history_suppressed_for: isolatedContextReason,
         } : {}),
       };
       this.audit.append(log);
@@ -456,16 +471,16 @@ export class HDSUpperController {
       model: m,
       commit: c,
       timestamp: Date.now(),
-      ...(suppressTransientDocumentOrganizationContext ? {
-        memory_retrieval_suppressed_for: "transient_document_organization" as const,
-        memory_capture_suppressed_for: "transient_document_organization" as const,
-        session_history_suppressed_for: "transient_document_organization" as const,
+      ...(isolatedContextReason ? {
+        memory_retrieval_suppressed_for: isolatedContextReason,
+        memory_capture_suppressed_for: isolatedContextReason,
+        session_history_suppressed_for: isolatedContextReason,
       } : {}),
     };
 
     let command: ExecuteCommand | null = null;
     if (c.decision === "ASSERT") {
-      const candidate = this.buildCommand(authorityReq, log);
+      const candidate = this.buildCommand(authorityReq, log, reflection);
       const commandViolation = commandExecutionPolicyViolation(candidate, f.process);
       if (commandViolation) {
         c = securityCommit("process_execution_policy_denied", commandViolation, {
@@ -485,9 +500,13 @@ export class HDSUpperController {
     if (command && planControl) {
       try {
         if (planControl.action === "review") this.operationPlans.bind(planControl, controlCaller, command);
-        else {
+        else if (planControl.action === "revise") {
           const invalidated = this.operationPlans.revise(planControl, controlCaller);
           for (const id of invalidated) this.onCommandLifecycle(id, "approval_cancelled", { reason: "plan_revision_invalidated" });
+        } else {
+          this.operationPlans.bindReflection(planControl, controlCaller, command, reflection!);
+          this.audit.append({ kind: "operation_plan", event: "reflection_projection_selected", request_id: req.id,
+            command_id: command.id, projection_digest: operationPlanDigest(reflection), used_for_authority: false, timestamp: Date.now() });
         }
       } catch {
         c = securityCommit("plan_control_denied", "plan_state_or_command_binding_failed", { request_id: req.id });
@@ -495,7 +514,7 @@ export class HDSUpperController {
       }
     }
     this.audit.append(log);
-    if (!suppressTransientDocumentOrganizationContext) this.captureMemoryReference(log);
+    if (!isolatedContextReason) this.captureMemoryReference(log);
 
     switch (c.decision) {
       case "ASSERT": {
@@ -740,6 +759,7 @@ export class HDSUpperController {
     this.audit.append(lifecycleLog);
     if (phase === "approval_rejected" || phase === "approval_cancelled") {
       this.operationPlans.abandon(command_id);
+      this.operationPlans.forgetReflection(command_id);
       this.issuedLLM.delete(command_id);
       this.inflight.delete(command_id);
     }
@@ -764,6 +784,19 @@ export class HDSUpperController {
    * still available. Call this before onFeedback removes the in-flight log.
    */
   reviewMemoryCitations(command: ExecuteCommand, feedback: ExecuteFeedback): ExecuteFeedback {
+    if (command.type === "llm_call" && command.payload.compute_context?.local_p_version === OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION) {
+      const source = this.inflight.get(command.id);
+      const issued = this.issuedLLM.get(command.id);
+      const projection = source?.commit.hash === command.upstream_decision.commit_hash && issued &&
+        operationPlanDigest(issued.command) === operationPlanDigest(command) ? this.operationPlans.readReflection(command) : undefined;
+      const reviewed = reviewResultReflection(command, feedback, projection, projection ? operationPlanDigest(projection) : undefined);
+      this.audit.append({ kind: "operation_plan", event: reviewed.accepted ? "reflection_references_verified" : "reflection_candidate_rejected",
+        request_id: source?.request_id ?? null, command_id: command.id, projection_digest: command.payload.compute_context.projection_digest,
+        used_for_authority: false, timestamp: Date.now() });
+      return { command_id: feedback.command_id, metrics: feedback.metrics,
+        status: reviewed.accepted ? "success" : feedback.status === "suspended" ? "suspended" : "failed",
+        ...(reviewed.accepted ? { result: { content: reviewed.content } } : { error: reviewed.content }) };
+    }
     if (command.type !== "llm_call" || feedback.command_id !== command.id || feedback.status !== "success") {
       return feedback;
     }
@@ -828,6 +861,10 @@ export class HDSUpperController {
       ? undefined
       : parseMeaningUpdateProposal(fb.meaning_update_proposal);
     const sourceLog = this.inflight.get(fb.command_id);
+    const resultAudit: { digest?: string; status: "not_present" | "recorded" | "unavailable" } = fb.result === undefined ? { status: "not_present" } : (() => {
+      try { return { digest: sha256(fb.result), status: "recorded" as const }; }
+      catch { return { status: "unavailable" as const }; }
+    })();
     const operationResult = sourceLog ? inspectOperationCommandExecutionResult(fb.operation_core_result, {
       request_id: sourceLog.request_id,
       command_id: fb.command_id,
@@ -862,7 +899,8 @@ export class HDSUpperController {
       feedback: {
         status: fb.status,
         result_present: fb.result !== undefined,
-        result_digest: fb.result === undefined ? undefined : sha256(fb.result),
+        result_digest: resultAudit.digest,
+        result_digest_status: resultAudit.status,
         operation_result_contract_status: fb.operation_core_result === undefined
           ? "not_present" as const : operationResult ? "passed" as const : "failed" as const,
         operation_result_digest: operationResult ? sha256(operationResult) : undefined,
@@ -892,6 +930,7 @@ export class HDSUpperController {
 
     const issued = this.issuedLLM.get(fb.command_id);
     if (sourceLog && issued && issued.command.type === "llm_call" &&
+        issued.command.payload.compute_context?.local_p_version !== OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION &&
         issued.command.upstream_decision.commit_hash === sourceLog.commit.hash && fb.status === "success") {
       const result = fb.result && typeof fb.result === "object" ? fb.result as Record<string, unknown> : undefined;
       const planner = result?.operation_core && typeof result.operation_core === "object"
@@ -910,6 +949,7 @@ export class HDSUpperController {
       this.planEvent("result_observed", fb.command_id);
     }
     this.issuedLLM.delete(fb.command_id);
+    this.operationPlans.forgetReflection(fb.command_id);
 
     if (sourceLog) {
       this.inflight.delete(fb.command_id);
@@ -1109,7 +1149,7 @@ export class HDSUpperController {
     };
   }
 
-  private buildCommand(req: InboundRequest, log: DecisionLog): ExecuteCommand {
+  private buildCommand(req: InboundRequest, log: DecisionLog, reflection?: ResultObservationProjection): ExecuteCommand {
     const upstream_decision: UpstreamDecision = {
       frame_goal: log.frame.goal,
       model_abstraction: log.model.abstraction,
@@ -1117,6 +1157,21 @@ export class HDSUpperController {
       commit_decision: log.commit.decision,
       request_id: log.request_id,
     };
+
+    // 観測解釈はtool/channel routingより前に、有限入力のC計算だけへ固定する。
+    if (reflection) {
+      const backendHint = this.llm_route.backend_hint?.trim() || undefined;
+      const digest = operationPlanDigest(reflection);
+      return { id: randomUUID(), type: "llm_call", upstream_decision,
+        constraints: { max_tokens: this.llm_route.max_tokens ?? 1024, timeout_ms: this.llm_route.timeout_ms ?? 30000 },
+        payload: { messages: [{ role: "system", content: `受領確認済みの限定観測から解釈候補だけを返してください。検索件数は観測値で、完全走査・不存在・世界真理・反証不存在・承認を証明しません。出力はJSONのみ: {"schema_version":"operation-result-reflection-candidate.v1","projection_digest":"${digest}","citations":[{"record_id":"引用元ID","record_digest":"引用元digest","interpretation":"未検証の解釈候補","uncertainty":"不確実性と追加観測の必要性"}]}。引用は下記だけ。tool・計画・意味更新・実行を発行しない。各解釈/不確実性は800文字以内。\n${JSON.stringify(reflection)}` },
+          { role: "user", content: req.content }], backend_hint: backendHint, model: this.llm_route.model,
+          temperature: this.llm_route.temperature, compute_context: { schema_version: "blue-tanuki.compute-context.v1",
+            projection_digest: digest, local_p_version: OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
+            data_exposure: { input_sources: ["accepted_inbound_request", "selected_memory_references"],
+              requested_egress_provider: backendHint ?? "registry-default" } } } };
+    }
+    if (log.memory_retrieval_suppressed_for === "operation_result_reflection") throw new Error("plan_reflection_context_missing");
 
     if (req.content.trim().startsWith("plan:revise")) {
       return { id: randomUUID(), type: "noop", payload: { control_event: "plan_revision_committed" }, upstream_decision };

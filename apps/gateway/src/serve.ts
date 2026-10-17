@@ -978,7 +978,7 @@ export async function serve(): Promise<ServeShutdown> {
     const output = finalized.output_audit;
     recordFinalOutputHistory(log, origin, actor, output);
     if (content) await dispatcher.dispatch({ channel: origin.channel, target: replyTarget(origin), content }, { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
-    return { status: fb.status };
+    return { status: finalized.reviewed_feedback.status };
   }
 
   async function resumePendingApproval(command_id: string, verdict: "approve" | "reject" | "block", ctx: WebChatResumeContext): Promise<unknown> {

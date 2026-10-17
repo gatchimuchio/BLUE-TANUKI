@@ -300,9 +300,9 @@ export interface DecisionLog {
   model: ModelResult;
   commit: CommitResult;
   timestamp: number;
-  memory_retrieval_suppressed_for?: "transient_document_organization";
-  memory_capture_suppressed_for?: "transient_document_organization";
-  session_history_suppressed_for?: "transient_document_organization";
+  memory_retrieval_suppressed_for?: "transient_document_organization" | "operation_result_reflection";
+  memory_capture_suppressed_for?: "transient_document_organization" | "operation_result_reflection";
+  session_history_suppressed_for?: "transient_document_organization" | "operation_result_reflection";
 }
 
 
@@ -310,6 +310,7 @@ export interface ExecutorFeedbackAuditTrace {
   status: ExecuteFeedback["status"];
   result_present: boolean;
   result_digest?: string;
+  result_digest_status: "not_present" | "recorded" | "unavailable";
   operation_result_contract_status?: "not_present" | "passed" | "failed";
   operation_result_digest?: string;
   error?: string;

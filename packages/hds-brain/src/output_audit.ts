@@ -38,6 +38,7 @@ export interface OutputAuditLog {
   status: ExecuteFeedback["status"];
   result_present: boolean;
   result_digest?: string;
+  result_digest_status: "not_present" | "recorded" | "unavailable";
   rendered_output_present: boolean;
   rendered_output_digest?: string;
   rendered_output_chars?: number;
@@ -86,6 +87,7 @@ export function buildOutputAuditLog(input: OutputAuditInput): OutputAuditLog {
   const targetSurface = input.target_surface ?? "unknown";
   const renderedOutputPresent = typeof output === "string" && output.length > 0;
   const resultPresent = input.feedback.result !== undefined;
+  const resultDigest = auditDigest(input.feedback.result);
   const userVisibleOutput = renderedOutputPresent && isUserVisibleSurface(targetSurface);
   const externalSideEffectResult =
     outputKind === "external_action_result" || targetSurface === "external";
@@ -101,7 +103,8 @@ export function buildOutputAuditLog(input: OutputAuditInput): OutputAuditLog {
     target_surface: targetSurface,
     status: input.feedback.status,
     result_present: resultPresent,
-    result_digest: resultPresent ? sha256(input.feedback.result) : undefined,
+    result_digest: resultDigest.digest,
+    result_digest_status: resultDigest.status,
     rendered_output_present: renderedOutputPresent,
     rendered_output_digest: renderedOutputPresent ? sha256(output) : undefined,
     rendered_output_chars: renderedOutputPresent ? output.length : undefined,
@@ -112,6 +115,12 @@ export function buildOutputAuditLog(input: OutputAuditInput): OutputAuditLog {
     reason: outputAuditReason(outputKind, input.feedback.status, renderedOutputPresent),
     timestamp: input.timestamp ?? Date.now(),
   };
+}
+
+function auditDigest(value: unknown): { digest?: string; status: "not_present" | "recorded" | "unavailable" } {
+  if (value === undefined) return { status: "not_present" };
+  try { return { digest: sha256(value), status: "recorded" }; }
+  catch { return { status: "unavailable" }; }
 }
 
 export function buildProjectionOutputAuditLog(input: ProjectionOutputAuditInput): ProjectionOutputAuditLog {
