@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-17 — C07 proposalの現在根拠参照を限定照合
+
+- 成功・一致したGateway `llm_call` feedbackのsupport/counterevidence record IDと版を、同commandの現在M射影へ照合し、status・件数だけを非権威auditへ記録する。
+- scope referenceの一致だけを確認し、scope digest・意味的支持・反証探索の完全性・target/prior versionは未検証のまま保持する。「反証なし」は未確認として扱い、採用・M反映しない。plan:reflect由来の候補を通常の意味更新履歴へ保存しない。
+
 ## 2026-10-17 — 受領済み実観測からの限定解釈候補
 
 - 同一owner/channel・現行計画版の受領済みfile.search観測から、digestと件数等だけの有限C射影を作り、解釈候補を表示前にJが引用照合する経路を接続した。

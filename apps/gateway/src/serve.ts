@@ -52,6 +52,7 @@ import type {
   ObservationAcquisitionRecord,
 } from "@blue-tanuki/protocol";
 import {
+  OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   parseInboundRequestAtBoundary,
   parseMeaningUpdateProposal,
   parseObservationAcquisitionRecord,
@@ -265,6 +266,7 @@ export function buildMeaningUpdateProposalHistoryInput(
 ): CompleteHistoryAppendInput | null {
   if (
     command.type !== "llm_call" ||
+    command.payload.compute_context?.local_p_version === OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION ||
     feedback.status !== "success" ||
     feedback.command_id !== command.id ||
     feedback.meaning_update_proposal === undefined

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { LLMCallPayload } from "@blue-tanuki/protocol";
+import type { LLMCallPayload, MeaningUpdateProposal } from "@blue-tanuki/protocol";
 import { parseJsonTextAtBoundary } from "@blue-tanuki/protocol";
 import type {
   MemoryCitationReference,
@@ -31,6 +31,28 @@ const SUMMARY_LIMITS: Record<MemorySummaryField, number> = {
 export interface MemoryCitationReviewResult {
   content: string;
   audit_log: MemoryCitationReviewLog | null;
+}
+
+export interface MeaningUpdateProposalReferenceReview {
+  readonly review_status:
+    | "no_current_projection"
+    | "evidence_version_mismatch"
+    | "scope_reference_mismatch"
+    | "counterevidence_absence_unverified"
+    | "references_verified_unadopted";
+  readonly supporting_reference_count: number;
+  readonly supporting_references_verified: number;
+  readonly counterevidence_reference_count: number;
+  readonly counterevidence_references_verified: number;
+  readonly applicability_scope_matches_current: boolean;
+  readonly counterevidence_scope_matches_current: boolean;
+  readonly counterevidence_claim_status: "references_verified" | "references_unverified" | "none_found_unverified";
+  readonly scope_digests_verified: false;
+  readonly target_and_prior_version_verified: false;
+  readonly semantic_relation_status: "not_assessed";
+  readonly adoption_status: "not_adopted";
+  readonly may_apply: false;
+  readonly used_for_authority: false;
 }
 
 interface VerifiedCandidate {
@@ -260,6 +282,60 @@ export function reviewMemoryCitationOutput(input: {
     timestamp: input.timestamp ?? Date.now(),
   };
   return { content, audit_log };
+}
+
+/** J verifies that a C proposal's evidence versions belong to this request's current M projection.
+ * Scope digests, target/prior-version references, and semantic support remain unverified; this
+ * review can never authorize or apply a meaning update.
+ */
+export function reviewMeaningUpdateProposalReferences(
+  proposal: MeaningUpdateProposal,
+  trace: MemoryTrace | undefined,
+): MeaningUpdateProposalReferenceReview {
+  const plan = trace?.search_plan;
+  const candidates = trace ? currentProjectionCandidates(trace, verifiedCandidates(trace)) : [];
+  const verified = (reference: { readonly reference: string; readonly digest: string }): boolean =>
+    candidates.some((candidate) => candidate.reference.record_id === reference.reference &&
+      candidate.reference.version === reference.digest);
+  const supportingVerified = proposal.supporting_evidence.filter(verified).length;
+  const counterevidenceReferences = proposal.counterevidence_review.status === "reviewed_with_references"
+    ? proposal.counterevidence_review.references
+    : [];
+  const counterevidenceVerified = counterevidenceReferences.filter(verified).length;
+  const hasOverlap = proposal.supporting_evidence.some((support) => counterevidenceReferences.some((counter) =>
+    support.reference === counter.reference && support.digest === counter.digest));
+  const applicabilityScopeMatches = plan !== undefined &&
+    proposal.applicability_scope.reference === plan.application_scope_id;
+  const counterevidenceScopeMatches = plan !== undefined &&
+    proposal.counterevidence_review.review_scope.reference === plan.application_scope_id;
+  const evidenceMismatch = candidates.length === 0 || supportingVerified !== proposal.supporting_evidence.length ||
+    counterevidenceVerified !== counterevidenceReferences.length || hasOverlap;
+  let reviewStatus: MeaningUpdateProposalReferenceReview["review_status"];
+  if (!plan || candidates.length === 0) reviewStatus = "no_current_projection";
+  else if (evidenceMismatch) reviewStatus = "evidence_version_mismatch";
+  else if (!applicabilityScopeMatches || !counterevidenceScopeMatches) reviewStatus = "scope_reference_mismatch";
+  else if (proposal.counterevidence_review.status === "reviewed_none_found") {
+    reviewStatus = "counterevidence_absence_unverified";
+  } else reviewStatus = "references_verified_unadopted";
+  return Object.freeze({
+    review_status: reviewStatus,
+    supporting_reference_count: proposal.supporting_evidence.length,
+    supporting_references_verified: supportingVerified,
+    counterevidence_reference_count: counterevidenceReferences.length,
+    counterevidence_references_verified: counterevidenceVerified,
+    applicability_scope_matches_current: applicabilityScopeMatches,
+    counterevidence_scope_matches_current: counterevidenceScopeMatches,
+    counterevidence_claim_status: proposal.counterevidence_review.status === "reviewed_none_found"
+      ? "none_found_unverified"
+      : counterevidenceVerified === counterevidenceReferences.length
+        ? "references_verified" : "references_unverified",
+    scope_digests_verified: false,
+    target_and_prior_version_verified: false,
+    semantic_relation_status: "not_assessed",
+    adoption_status: "not_adopted",
+    may_apply: false,
+    used_for_authority: false,
+  });
 }
 
 /** Fail-closed fallback for an executor response whose originating HDS log is unavailable. */

@@ -65,7 +65,156 @@ function envelope(
   });
 }
 
+function meaningUpdateProposal(
+  support: { f_reference: string; entry_hash: string },
+  counter: { f_reference: string; entry_hash: string },
+  scopeId: string,
+) {
+  return {
+    schema_version: "blue-tanuki.meaning-update-proposal.v1",
+    record_type: "meaning_update_proposal",
+    proposal_ref: "proposal-citation-review-001",
+    candidate_ref: "candidate:citation-review-001",
+    candidate_digest: "c".repeat(64),
+    target_ref: "memory:citation-review-target",
+    prior_version_ref: "version:citation-review-1",
+    supporting_evidence: [{ reference: support.f_reference, digest: support.entry_hash }],
+    counterevidence_review: {
+      status: "reviewed_with_references",
+      review_scope: { reference: scopeId, digest: "e".repeat(64) },
+      references: [{ reference: counter.f_reference, digest: counter.entry_hash }],
+    },
+    applicability_scope: { reference: scopeId, digest: "f".repeat(64) },
+    reflection_target_ref: "reflection:citation-review-001",
+    proposal_status: "unverified",
+    adoption_status: "not_adopted",
+    may_apply: false,
+    used_for_authority: false,
+  };
+}
+
 describe("J-side memory citation review", () => {
+  it("checks proposal record versions against the current M projection without assessing meaning or adoption", () => {
+    const { hds, command, support, counter, scopeId } = setup();
+    hds.onFeedback({
+      ...feedback(command.id, { content: "synthetic" }),
+      meaning_update_proposal: meaningUpdateProposal(support, counter, scopeId),
+    });
+
+    const entry = hds.getAudit().list().map((item) => item.log).find((log) =>
+      "kind" in log && log.kind === "executor_feedback" && log.command_id === command.id,
+    );
+    expect(entry && "kind" in entry && entry.kind === "executor_feedback" ? entry.feedback : undefined).toMatchObject({
+      meaning_update_proposal_contract_status: "passed",
+      meaning_update_proposal_reference_review: {
+        review_status: "references_verified_unadopted",
+        supporting_reference_count: 1,
+        supporting_references_verified: 1,
+        counterevidence_reference_count: 1,
+        counterevidence_references_verified: 1,
+        applicability_scope_matches_current: true,
+        counterevidence_scope_matches_current: true,
+        counterevidence_claim_status: "references_verified",
+        scope_digests_verified: false,
+        target_and_prior_version_verified: false,
+        semantic_relation_status: "not_assessed",
+        adoption_status: "not_adopted",
+        may_apply: false,
+        used_for_authority: false,
+      },
+      meaning_update_proposal_applied: false,
+      meaning_update_proposal_used_for_authority: false,
+    });
+    const feedbackAuditText = JSON.stringify(entry && "kind" in entry && entry.kind === "executor_feedback"
+      ? entry.feedback : {});
+    expect(feedbackAuditText).not.toContain(support.f_reference);
+    expect(feedbackAuditText).not.toContain(counter.f_reference);
+    expect(feedbackAuditText).not.toContain(support.entry_hash);
+    expect(hds.getAudit().verify()).toBe(true);
+  });
+
+  it("does not validate failed feedback proposals or claims that no counterevidence was found", () => {
+    const failed = setup();
+    failed.hds.onFeedback({
+      ...feedback(failed.command.id, { content: "synthetic" }),
+      status: "failed",
+      meaning_update_proposal: meaningUpdateProposal(failed.support, failed.counter, failed.scopeId),
+    });
+    const failedEntry = failed.hds.getAudit().list().map((item) => item.log).find((log) =>
+      "kind" in log && log.kind === "executor_feedback" && log.command_id === failed.command.id,
+    );
+    expect(failedEntry && "kind" in failedEntry && failedEntry.kind === "executor_feedback"
+      ? failedEntry.feedback.meaning_update_proposal_reference_review : undefined).toMatchObject({
+      review_status: "not_reviewed",
+      counterevidence_claim_status: "not_reviewed",
+      used_for_authority: false,
+      may_apply: false,
+    });
+
+    const noCounter = setup();
+    const proposal = meaningUpdateProposal(noCounter.support, noCounter.counter, noCounter.scopeId);
+    proposal.counterevidence_review.status = "reviewed_none_found";
+    proposal.counterevidence_review.references = [];
+    noCounter.hds.onFeedback({
+      ...feedback(noCounter.command.id, { content: "synthetic" }),
+      meaning_update_proposal: proposal,
+    });
+    const noCounterEntry = noCounter.hds.getAudit().list().map((item) => item.log).find((log) =>
+      "kind" in log && log.kind === "executor_feedback" && log.command_id === noCounter.command.id,
+    );
+    expect(noCounterEntry && "kind" in noCounterEntry && noCounterEntry.kind === "executor_feedback"
+      ? noCounterEntry.feedback.meaning_update_proposal_reference_review : undefined).toMatchObject({
+      review_status: "counterevidence_absence_unverified",
+      counterevidence_reference_count: 0,
+      counterevidence_references_verified: 0,
+      counterevidence_claim_status: "none_found_unverified",
+      may_apply: false,
+    });
+  });
+
+  it("marks stale evidence versions and mismatched scope references without adopting the proposal", () => {
+    const stale = setup();
+    const staleProposal = meaningUpdateProposal(stale.support, stale.counter, stale.scopeId);
+    staleProposal.supporting_evidence[0]!.digest = "a".repeat(64);
+    staleProposal.counterevidence_review.references[0]!.digest = "b".repeat(64);
+    stale.hds.onFeedback({
+      ...feedback(stale.command.id, { content: "synthetic" }),
+      meaning_update_proposal: staleProposal,
+    });
+    const staleEntry = stale.hds.getAudit().list().map((item) => item.log).find((log) =>
+      "kind" in log && log.kind === "executor_feedback" && log.command_id === stale.command.id,
+    );
+    expect(staleEntry && "kind" in staleEntry && staleEntry.kind === "executor_feedback"
+      ? staleEntry.feedback.meaning_update_proposal_reference_review : undefined).toMatchObject({
+      review_status: "evidence_version_mismatch",
+      supporting_reference_count: 1,
+      supporting_references_verified: 0,
+      counterevidence_references_verified: 0,
+      counterevidence_claim_status: "references_unverified",
+      adoption_status: "not_adopted",
+      may_apply: false,
+    });
+
+    const wrongScope = setup();
+    const wrongScopeProposal = meaningUpdateProposal(wrongScope.support, wrongScope.counter, wrongScope.scopeId);
+    wrongScopeProposal.applicability_scope.reference = "scope:not-current";
+    wrongScope.hds.onFeedback({
+      ...feedback(wrongScope.command.id, { content: "synthetic" }),
+      meaning_update_proposal: wrongScopeProposal,
+    });
+    const wrongScopeEntry = wrongScope.hds.getAudit().list().map((item) => item.log).find((log) =>
+      "kind" in log && log.kind === "executor_feedback" && log.command_id === wrongScope.command.id,
+    );
+    expect(wrongScopeEntry && "kind" in wrongScopeEntry && wrongScopeEntry.kind === "executor_feedback"
+      ? wrongScopeEntry.feedback.meaning_update_proposal_reference_review : undefined).toMatchObject({
+      review_status: "scope_reference_mismatch",
+      applicability_scope_matches_current: false,
+      counterevidence_scope_matches_current: true,
+      scope_digests_verified: false,
+      may_apply: false,
+    });
+  });
+
   it("admits an exact retrieved support/counterevidence pair for this request only", () => {
     const { hds, command, support, counter, scopeId } = setup();
     const raw = envelope(

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { CompleteHistoryStore, HDSUpperController } from "@blue-tanuki/hds-brain";
-import { createGatewayInternalInboundRequest, type ExecuteCommand, type ExecuteFeedback } from "@blue-tanuki/protocol";
+import {
+  createGatewayInternalInboundRequest,
+  OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
+  type ExecuteCommand,
+  type ExecuteFeedback,
+} from "@blue-tanuki/protocol";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import {
   canonicalizeGatewayInbound,
@@ -124,6 +129,28 @@ describe("gateway inbound boundary", () => {
     const stored = history.append(input!);
     expect(stored?.kind).toBe("audit_history");
     expect(JSON.stringify(history.replayAsCommonRecords())).not.toContain("candidate:gateway-001");
+
+    const reflectionCommand: ExecuteCommand = {
+      ...command,
+      payload: {
+        ...command.payload,
+        compute_context: {
+          schema_version: "blue-tanuki.compute-context.v1",
+          projection_digest: "a".repeat(64),
+          local_p_version: OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
+          data_exposure: {
+            input_sources: ["accepted_inbound_request"],
+            requested_egress_provider: "fixture-provider",
+          },
+        },
+      },
+    };
+    expect(buildMeaningUpdateProposalHistoryInput(
+      reflectionCommand,
+      log.request_id,
+      "owner",
+      feedback,
+    )).toBeNull();
 
     expect(buildMeaningUpdateProposalHistoryInput(command, "req-c07-proposal", "owner", {
       ...feedback,

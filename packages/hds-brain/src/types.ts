@@ -323,6 +323,24 @@ export interface ExecutorFeedbackAuditTrace {
   skeptical_review?: SkepticalReviewAuditTrace;
   meaning_update_proposal_contract_status: "not_present" | "passed" | "failed";
   meaning_update_proposal_digest?: string;
+  meaning_update_proposal_reference_review: {
+    review_status: "not_present" | "invalid_contract" | "not_reviewed" | "no_current_projection" | "evidence_version_mismatch" |
+      "scope_reference_mismatch" | "counterevidence_absence_unverified" | "references_verified_unadopted";
+    supporting_reference_count: number;
+    supporting_references_verified: number;
+    counterevidence_reference_count: number;
+    counterevidence_references_verified: number;
+    applicability_scope_matches_current: boolean;
+    counterevidence_scope_matches_current: boolean;
+    counterevidence_claim_status: "not_present" | "not_reviewed" | "references_verified" | "references_unverified" |
+      "none_found_unverified" | "invalid_contract";
+    scope_digests_verified: false;
+    target_and_prior_version_verified: false;
+    semantic_relation_status: "not_assessed";
+    adoption_status: "not_adopted";
+    may_apply: false;
+    used_for_authority: false;
+  };
   meaning_update_proposal_used_for_authority: false;
   meaning_update_proposal_applied: false;
   metrics: ExecuteFeedback["metrics"];
