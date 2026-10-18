@@ -485,8 +485,11 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Cronイベント台帳</span><span id="recovery-backup-store-cron_events">未確認</span></div>
           </div>
           <h3>backup内J計画scope・残差</h3>
-          <p class="muted">Operation PlanのJ checkpointを読み取り専用で検査します。scope digestはInboundRequest由来の診断相関であり、仕事IDではありません。J以外の台帳との相関、DB間の原子的同時点、復元可能性、復元・再開許可は成立しません。</p>
+          <p class="muted">Operation PlanのJ checkpointを読み取り専用で検査します。scope digestはInboundRequest由来の診断相関であり、仕事IDではありません。</p>
           <pre id="recovery-backup-plan-scopes">未確認</pre>
+          <h3>backup内の計画別依存scope</h3>
+          <p class="muted">manifestで検査済みのJ制御／M／Broker／Operation Plan／Cron archive間をread-onlyで診断相関します。各SQLite snapshotは独立取得で、同時点atomicity、restore point、job identity、復元・再開許可を示しません。未検証台帳は読まず未観測にします。</p>
+          <pre id="recovery-backup-plan-dependencies">未確認</pre>
           <pre id="recovery-backup-inspection-json">未確認</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls.</p></div>

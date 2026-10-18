@@ -18,7 +18,11 @@ import { createRecoveryBackup, inspectLatestRecoveryBackup } from "../src/recove
 import { operationPlanRequestScopeDigest } from "../src/recovery_request_scope.js";
 import { DocumentOrganizationCheckpointStore } from "../src/document_organization_checkpoint_store.js";
 import { inspectOperationPlanRecoveryLedger } from "../src/operation_plan_recovery_inspection.js";
-import { inspectGatewayRecoveryState, projectGatewayRecoveryInspectionForOperator } from "../src/recovery_inspection.js";
+import {
+  inspectGatewayRecoveryCanonicalArchive,
+  inspectGatewayRecoveryState,
+  projectGatewayRecoveryInspectionForOperator,
+} from "../src/recovery_inspection.js";
 
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -80,6 +84,87 @@ describe("J OperationPlan recovery inspection", () => {
     expect(JSON.stringify(inventory)).not.toContain("private-command-");
     expect(await readFile(sourcePlanPath)).toEqual(sourceBefore);
     expect(await readFile(archivePath)).toEqual(archiveBefore);
+  });
+
+  it("correlates verified backup stores per plan and labels the missing Cron evidence as unobserved", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-dependencies-"));
+    const { stateRoot, privateRoot, admissions } = await createPlanState(temporaryRoot, 1);
+    const envFile = path.join(temporaryRoot, "product.env");
+    const recoveryDirectory = path.join(temporaryRoot, "recovery");
+    await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const executionDirectory = path.join(privateRoot, "execution-intents");
+    await mkdir(executionDirectory, { recursive: true });
+    const brokerPath = path.join(executionDirectory, "executor.sqlite");
+    const broker = new GatewayExecutionIntentStore(brokerPath);
+    broker.issue(admissions[0]!);
+    broker.close();
+    const sourcePlanPath = path.join(privateRoot, "operation-plans", "j-state.sqlite");
+    const sourcePlanBefore = await readFile(sourcePlanPath);
+    const sourceBrokerBefore = await readFile(brokerPath);
+    const env = { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_ENV_FILE: envFile, BLUE_TANUKI_RECOVERY_DIR: recoveryDirectory };
+
+    const backup = await createRecoveryBackup(env);
+    const packDirectory = path.join(recoveryDirectory, backup.backup_id!);
+    const planArchivePath = path.join(packDirectory, "canonical-state", "operation_plans.sqlite");
+    const brokerArchivePath = path.join(packDirectory, "canonical-state", "broker.sqlite");
+    const planArchiveBefore = await readFile(planArchivePath);
+    const brokerArchiveBefore = await readFile(brokerArchivePath);
+    const inspection = await inspectLatestRecoveryBackup(env);
+    const dependencies = inspection.operation_plan_archive_dependencies;
+
+    expect(inspection).toMatchObject({ status: "verified", canonical_state_cross_store_atomic: false });
+    expect(dependencies).toMatchObject({
+      status: "unobserved",
+      reason: null,
+      plan_scope_count: 1,
+      residual_plan_scope_count: 0,
+      unobserved_plan_scope_count: 1,
+      omitted_plan_scope_count: 0,
+      cross_store_consistency: "independent_sqlite_online_snapshots",
+      cross_store_atomic: false,
+      external_backup_restore_point: "not_examined",
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(dependencies.plan_scopes).toMatchObject([{
+      status: "unobserved",
+      residual_dependencies: [],
+      unobserved_dependencies: ["cron_approval"],
+    }]);
+    expect(JSON.stringify(dependencies)).not.toContain("private-owner");
+    expect(JSON.stringify(dependencies)).not.toContain("private-plan-id");
+    expect(JSON.stringify(dependencies)).not.toContain("private-command-");
+    expect(await readFile(sourcePlanPath)).toEqual(sourcePlanBefore);
+    expect(await readFile(brokerPath)).toEqual(sourceBrokerBefore);
+    expect(await readFile(planArchivePath)).toEqual(planArchiveBefore);
+    expect(await readFile(brokerArchivePath)).toEqual(brokerArchiveBefore);
+
+    const manifest = JSON.parse(await readFile(path.join(packDirectory, "manifest.json"), "utf8")) as {
+      canonical_state_snapshot: Parameters<typeof inspectGatewayRecoveryCanonicalArchive>[1];
+    };
+    const unverifiedBrokerBytes = Buffer.from("unverified broker archive fixture");
+    await writeFile(brokerArchivePath, unverifiedBrokerBytes);
+    const unverifiedSnapshot = {
+      ...manifest.canonical_state_snapshot,
+      entries: manifest.canonical_state_snapshot.entries.map((entry) => entry.store_key === "broker"
+        ? {
+            ...entry,
+            status: "captured_unverified" as const,
+            integrity_check: "failed" as const,
+            bytes: unverifiedBrokerBytes.byteLength,
+            sha256: createHash("sha256").update(unverifiedBrokerBytes).digest("hex"),
+          }
+        : entry),
+    };
+    const unverifiedArchiveReport = inspectGatewayRecoveryCanonicalArchive(packDirectory, unverifiedSnapshot);
+    expect(unverifiedArchiveReport.ledgers.operation_plans.status).toBe("verified");
+    expect(unverifiedArchiveReport.ledgers.execution.status).toBe("unavailable");
+    expect(unverifiedArchiveReport.plan_dependency_scopes).toMatchObject([{
+      status: "unobserved",
+      residual_dependencies: [],
+      unobserved_dependencies: ["broker", "delivery", "cron_approval"],
+    }]);
+    expect(await readFile(sourcePlanPath)).toEqual(sourcePlanBefore);
   });
 
   it("correlates exact J admissions to verified Broker records without exposing plan or command content", async () => {

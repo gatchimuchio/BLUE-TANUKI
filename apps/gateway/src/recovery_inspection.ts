@@ -1,6 +1,10 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import * as path from "node:path";
-import { CANONICAL_STATE_STORE_PATHS, type CanonicalStateStoreKey } from "./canonical_state_backup.js";
+import {
+  CANONICAL_STATE_STORE_PATHS,
+  type CanonicalStateSnapshotManifest,
+  type CanonicalStateStoreKey,
+} from "./canonical_state_backup.js";
 import {
   inspectJControlRecoveryLedger,
   inspectMemoryRecoveryLedger,
@@ -941,10 +945,57 @@ function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths |
   }
 }
 
-export function inspectGatewayRecoveryState(
-  env: NodeJS.ProcessEnv = process.env,
+function hasSafeCanonicalArchiveStatePaths(
+  packDirectory: string,
+  snapshot: CanonicalStateSnapshotManifest,
+): StateDatabasePaths | null {
+  try {
+    const packPath = path.resolve(packDirectory);
+    const packStat = lstatSync(packPath);
+    if (packStat.isSymbolicLink() || !packStat.isDirectory() || realpathSync(packPath) !== packPath) return null;
+    const archiveRoot = path.join(packPath, "canonical-state");
+    const archiveRootStat = lstatSync(archiveRoot);
+    if (archiveRootStat.isSymbolicLink() || !archiveRootStat.isDirectory() || realpathSync(archiveRoot) !== archiveRoot) return null;
+    const expectedKeys = new Set(CANONICAL_STATE_STORE_PATHS.map((store) => store.key));
+    if (snapshot.schema_version !== 1 || snapshot.cross_store_atomic !== false ||
+        snapshot.store_consistency !== "independent_sqlite_online_snapshots" ||
+        snapshot.entries.length !== expectedKeys.size || new Set(snapshot.entries.map((entry) => entry.store_key)).size !== expectedKeys.size ||
+        snapshot.entries.some((entry) => !expectedKeys.has(entry.store_key))) return null;
+
+    const pathsByKey = new Map<CanonicalStateStoreKey, string | null>();
+    for (const store of CANONICAL_STATE_STORE_PATHS) {
+      const entry = snapshot.entries.find((candidate) => candidate.store_key === store.key);
+      if (!entry) return null;
+      if (entry.status !== "verified") {
+        pathsByKey.set(store.key, null);
+        continue;
+      }
+      const expectedRelativePath = path.join("canonical-state", `${store.key}.sqlite`);
+      if (entry.archive_rel_path !== expectedRelativePath) return null;
+      const archivePath = path.join(packPath, expectedRelativePath);
+      const archiveStat = lstatSync(archivePath);
+      if (archiveStat.isSymbolicLink() || !archiveStat.isFile() || archiveStat.size === 0 ||
+          realpathSync(archivePath) !== archivePath) return null;
+      pathsByKey.set(store.key, archivePath);
+    }
+
+    return {
+      privateRoot: packPath,
+      jPath: pathsByKey.get("j_control") ?? null,
+      mPath: pathsByKey.get("m_state") ?? null,
+      executionPath: pathsByKey.get("broker") ?? null,
+      operationPlansPath: pathsByKey.get("operation_plans") ?? null,
+      cronEventsPath: pathsByKey.get("cron_events") ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function inspectGatewayRecoveryStateFromPaths(
+  paths: StateDatabasePaths | null,
+  env: NodeJS.ProcessEnv,
 ): GatewayRecoveryInspectionReport {
-  const paths = hasSafeExistingStatePaths(env);
   const unavailable = (owner: "J" | "M"): PersistenceLedgerInspection => ({
     owner,
     status: "unavailable",
@@ -1094,6 +1145,24 @@ export function inspectGatewayRecoveryState(
       ? "This read-only checkpoint is not a backup or restore point and does not authorize work; use the guarded recovery path for any recovery action."
       : "Keep work suspended; preserve the stores and compare verified prefixes with an independently verified backup before any repair.",
   };
+}
+
+export function inspectGatewayRecoveryState(
+  env: NodeJS.ProcessEnv = process.env,
+): GatewayRecoveryInspectionReport {
+  return inspectGatewayRecoveryStateFromPaths(hasSafeExistingStatePaths(env), env);
+}
+
+/** Inspect only manifest-verified canonical archive entries through the existing read-only recovery path. */
+export function inspectGatewayRecoveryCanonicalArchive(
+  packDirectory: string,
+  snapshot: CanonicalStateSnapshotManifest,
+): GatewayRecoveryInspectionReport {
+  const archiveRoot = path.resolve(packDirectory, "canonical-state");
+  return inspectGatewayRecoveryStateFromPaths(
+    hasSafeCanonicalArchiveStatePaths(packDirectory, snapshot),
+    { BLUE_TANUKI_FILE_ROOT: archiveRoot },
+  );
 }
 
 export function correlateOperationPlanBindings(

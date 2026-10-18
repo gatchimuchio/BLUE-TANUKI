@@ -1,29 +1,35 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0、工程表SHA-256=7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77、Codex施工指示SHA-256=D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8）、適用AGENTS.md、作業標準要領、現物、active対象要求を再読した。今回開始HEAD／origin/main=286588ae050869528885accadbdcc77defadac0f、worktree clean。local recovery branchとlocal／remote backup tagは現世代=286588ae050869528885accadbdcc77defadac0f、前世代=8e210722636084fb6f473cc44e3a4b08ae785655で一致し、remote SHAを照合した。復旧ref移行状態=MIGRATION_COMPLETE。ownerの開発続行指示を維持し、C08.03実provider保留、別repo変更・実業務作用・公開行為・出荷判断は対象外とする。
+2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0、工程表SHA-256=7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77、Codex施工指示SHA-256=D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8）、適用AGENTS.md、作業標準要領、現物、active対象要求を再読した。今回開始HEAD／origin/main=09800b52c7fa21fb9e41050cb8621f78e00fed06、worktree clean。local recovery branchとlocal／remote backup tagは現世代=09800b52c7fa21fb9e41050cb8621f78e00fed06、前世代=286588ae050869528885accadbdcc77defadac0fで一致し、remote SHAを照合した。復旧ref移行状態=MIGRATION_COMPLETE。ownerの開発続行指示を維持し、C08.03実provider保留、別repo変更・実業務作用・公開行為・出荷判断は対象外とする。
 
 ## 今回のBUILD_BATCH
 
-QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-BACKUP-PLAN-SCOPE-RESIDUAL-INSPECTION`。関係単位=E03.03「破損範囲の隔離復旧」。開始HEAD／`origin/main`=`286588ae050869528885accadbdcc77defadac0f`、worktree clean。編集前local recovery branch二世代とlocal／remote backup tag二世代は現世代=`286588ae050869528885accadbdcc77defadac0f`、前世代=`8e210722636084fb6f473cc44e3a4b08ae785655`で一致。
+QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-ARCHIVED-PLAN-DEPENDENCY-CORRELATION`。関係単位=E03.03「破損範囲の隔離復旧」。開始HEAD／`origin/main`=`09800b52c7fa21fb9e41050cb8621f78e00fed06`、worktree clean。編集前local recovery branch二世代とlocal／remote backup tag二世代は現世代=`09800b52c7fa21fb9e41050cb8621f78e00fed06`、前世代=`286588ae050869528885accadbdcc77defadac0f`で一致。
 
-目的は、canonical SQLite snapshotのdigest／integrity検査だけだったRecovery backup consumerを、同じ既存read-only Operation Plan J台帳検査へ接続すること。検査済みarchiveのplan digest・request scope digest・固定残差状態・件数をControl Centerへ表示し、backup側に保存されたJ計画の状態を現行J台帳の表示と区別する。
+目的は、独立canonical snapshotに保存されたOperation Plan JとJ-control／M／Broker／Cron台帳を、既存read-only recovery inspectorとplan dependency correlationへ接続し、計画digestごとの残差／未観測依存をRecovery Backup consumerで見分けられるようにすること。snapshotはstore別に独立しているため、相関はbackup内の診断だけとする。
 
-対象は`canonical-state/operation_plans.sqlite`の安全なpath許可、既存J recovery inspectorの再利用、inspection前後のarchive digest照合、backup API／Control Centerの固定projectionと表示。不正境界・不一致件数は全scopeを抑止する。対象外はjob/task identity、他ledgerとの相関、DB間atomic snapshot、独立restore point判定、canonical state適用、復元・repair・resume、権限変更、実credential／provider、外部作用、別repo、公開・出荷判断。`cross_store_atomic=false`、`cross_ledger_correlation=not_performed`、`used_for_authority=false`、`may_execute=false`を維持する。
+対象は、検証済みmanifest entryの固定archive pathからのread-only J-control／M／Broker／Operation Plan／Cron inspection、既存`correlateOperationPlanBindings`／`buildRecoveryPlanDependencyScopes`の再利用、全検査対象archiveのinspection後digest再照合、backup API／Control Centerの固定enum・digest・件数表示。非verified storeは読まずunobservedとして扱い、境界・件数不一致時は全scopeを抑止する。対象外はdocument checkpoint archive追加、独立snapshot間のatomicity／restore point、job/task identity、canonical state適用、復元・repair・resume、権限変更、実credential／provider、外部作用、別repo、公開・出荷判断。`cross_store_atomic=false`、`used_for_authority=false`、`may_execute=false`、`external_backup_restore_point=not_examined`を維持する。
 
-最小確認は、archive J台帳の正常scope読取、request/plan/command/goal/pathの非露出、sourceとarchive bytes不変、Control Centerの正常／残差／件数不一致／不正投影抑止。Gateway／WebChat focused tests、`pnpm typecheck`→`pnpm build`、`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check`を行う。全suite、実state復元、実provider／credential、5OS実機、QE_QC／QE_QAは対象外。
+最小確認は、合成backupのJ計画とBroker admission相関、欠損／非verified ledgerのunobserved扱い、全archive bytes不変、raw identity非露出、Control Centerの正常／残差／不正集約拒否。対象Gateway／WebChat tests、`pnpm typecheck`→`pnpm build`、`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check`を行う。全suite、実state復元、実provider／credential、5OS実機、QE_QC／QE_QAは対象外。
+
+開始時の到達境界は直前バッチで接続したbackup内J plan inventoryまで。cross-store atomicity、独立restore point、仕事の復元可能性、復元・repair・resume・権限への接続はこのバッチで成立させない。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
 
 ## 今回の実績
 
-Operation Planのbackup archiveを、固定`canonical-state/operation_plans.sqlite` pathだけから既存J recovery inspectorでread-only検査する。archive hashをinspector実行後に再照合し、変化または読取失敗は未確認として閉じる。Control Centerは12桁digest、固定整合状態、件数だけを表示し、scope・状態・集約件数の不一致時は行をすべて抑止する。要求scope digestはInboundRequest由来の診断相関で、job identityや復元許可ではない。backup内のJ台帳以外は相関せず、独立SQLite snapshot間のatomicityや復元可能性を示さない。
+既存のread-only recovery inspectorと`correlateOperationPlanBindings`／`buildRecoveryPlanDependencyScopes`を検証済みcanonical archiveに接続した。fixed archive pathからOperation Plan、J-control、M、Broker、Cronを読み、verified archiveのdigest／byte数をinspection後に再照合する。非verified storeはcorrelation inspectorへ渡さず、依存を未観測とする。Recovery Backup APIとControl Centerへplan digestの短縮形、残差／未観測の固定enum・依存カテゴリ・件数を接続し、1 planに残差と未観測の双方がある表示も維持した。不正境界・status・重複digest・カテゴリ・集約件数ではscopeを抑止する。
 
 | 限定確認 | 結果 |
 |---|---|
-| Gateway Recovery／Operation Plan／WebChat focused tests | PASS、3 files／99 tests。backup archive読取、許可path限定、digest/scopeだけの射影、source/archive bytes不変、表示の正常・残差・不正件数抑止を確認。 |
-| `pnpm typecheck`→`pnpm build` | 両方PASS。15 workspace projectsをbuild。 |
+| Gateway Recovery／Operation Plan／WebChat focused tests | PASS、3 files／100 tests。検証済みbackupのBroker admission一致とCron未収録の未観測表示、archive／source DB bytes不変、digest以外のraw identity非露出、Control Center正常・残差＋未観測併存・集約不整合拒否を確認。 |
+| `pnpm typecheck`→`pnpm build` | PASS。buildは15 workspace projects。 |
 | `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
-| 全suite、実state restore、credential/live/provider、5OS実機、QE_QC／QE_QA | 未実施。 |
+| 全suite、実state復元、実credential／provider、5OS実機、QE_QC／QE_QA | 未実施。 |
 
-E03.03／QEB-03=`BUILD_GAP`、independent restore point・cross-ledger archived state correlation・guarded selective recoveryは未接続。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+E03.03=`BUILD_GAP`を維持する。per-store snapshot間atomicity、独立restore point、job identity、仕事の復元可能性、復元・repair・resume・権限は成立していない。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。別repo、実業務作用、公開・出荷判断なし。
+
+## 前回のBUILD_BATCH実績
+
+`QEB-03-E03.03-BACKUP-PLAN-SCOPE-RESIDUAL-INSPECTION`はcommit `09800b52c7fa21fb9e41050cb8621f78e00fed06`でmainへ反映済み。backup内のJ Operation Plan archiveを固定pathからread-only検査し、Control Centerへ計画／request scope digestと残差件数を表示した。Gateway／WebChat focused tests 3 files／99 tests、typecheck、build、docs、repo-health、diff checkがPASS。J以外のarchived ledger相関は未接続、E03.03は`BUILD_GAP`。
 
 ## 前回のBUILD_BATCH
 

@@ -381,7 +381,9 @@ describe("WebChatChannel — Control Center shell", () => {
       functionSource("recoveryInspectionDigest"),
       functionSource("recoveryBackupStoreStatuses"),
       functionSource("recoveryBackupOperationPlanInventory"),
+      functionSource("recoveryBackupOperationPlanDependencyInventory"),
       functionSource("formatRecoveryBackupPlanScopes"),
+      functionSource("formatRecoveryBackupPlanDependencies"),
       functionSource("renderRecoveryBackupStoreStatuses"),
     ].join("\n");
     const render = functionSource("renderRecoveryBackupInspection");
@@ -396,6 +398,7 @@ describe("WebChatChannel — Control Center shell", () => {
       JSON.stringify({
         projection: JSON.parse(output["recovery-backup-inspection-json"]),
         backupPlanText: output["recovery-backup-plan-scopes"],
+        backupPlanDependencyText: output["recovery-backup-plan-dependencies"],
         storeStatus: Object.fromEntries(["j_control", "m_state", "broker", "operation_plans", "cron_events"].map((key) =>
           [key, output["recovery-backup-store-" + key]])),
       });
@@ -425,6 +428,13 @@ describe("WebChatChannel — Control Center shell", () => {
         plan_scopes: [{ plan_id_digest: "b".repeat(64), request_scope_digest: "c".repeat(64), integrity: "verified",
           plan_record_count: 1, binding_count: 2, residual_binding_count: 0, omitted_binding_count: 0 }],
         cross_ledger_correlation: "not_performed", used_for_authority: false, may_execute: false,
+      },
+      operation_plan_archive_dependencies: {
+        status: "correlated", reason: null, plan_scope_count: 1, residual_plan_scope_count: 0,
+        unobserved_plan_scope_count: 0, omitted_plan_scope_count: 0,
+        plan_scopes: [{ plan_id_digest: "d".repeat(64), status: "observed", residual_dependencies: [], unobserved_dependencies: [] }],
+        cross_store_consistency: "independent_sqlite_online_snapshots", cross_store_atomic: false,
+        external_backup_restore_point: "not_examined", used_for_authority: false, may_execute: false,
       },
       used_for_authority: false,
       may_execute: false,
@@ -482,6 +492,44 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(planInventory.backupPlanText).toContain("計画digest bbbbbbbbbbbb / 要求scope digest cccccccccccc");
     expect(planInventory.backupPlanText).toContain("仕事ID・復元点・復元許可ではなく");
     expect(planInventory.backupPlanText).toContain("J以外の台帳との相関は未実施");
+
+    const dependencies = JSON.parse(evaluate(completeRows)) as {
+      projection: { operation_plan_archive_dependencies: { status: string; plan_scopes: Array<Record<string, unknown>> } };
+      backupPlanDependencyText: string;
+    };
+    expect(dependencies.projection.operation_plan_archive_dependencies.status).toBe("correlated");
+    expect(dependencies.projection.operation_plan_archive_dependencies.plan_scopes).toMatchObject([
+      { plan_id_digest: "d".repeat(64), status: "observed", residual_dependencies: [], unobserved_dependencies: [] },
+    ]);
+    expect(dependencies.backupPlanDependencyText).toContain("観測範囲内で残差なし");
+    expect(dependencies.backupPlanDependencyText).toContain("同時点atomicity");
+    expect(dependencies.backupPlanDependencyText).not.toContain("d".repeat(64));
+
+    const residualAndUnobserved = JSON.parse(evaluate(completeRows, { operation_plan_archive_dependencies: {
+      status: "residuals_present", reason: null, plan_scope_count: 1, residual_plan_scope_count: 1,
+      unobserved_plan_scope_count: 1, omitted_plan_scope_count: 0,
+      plan_scopes: [{ plan_id_digest: "d".repeat(64), status: "residuals_present",
+        residual_dependencies: ["broker"], unobserved_dependencies: ["cron_approval"] }],
+      cross_store_consistency: "independent_sqlite_online_snapshots", cross_store_atomic: false,
+      external_backup_restore_point: "not_examined", used_for_authority: false, may_execute: false,
+    } })) as { projection: { operation_plan_archive_dependencies: { plan_scopes: Array<Record<string, unknown>> } }; backupPlanDependencyText: string };
+    expect(residualAndUnobserved.projection.operation_plan_archive_dependencies.plan_scopes).toMatchObject([
+      { residual_dependencies: ["broker"], unobserved_dependencies: ["cron_approval"] },
+    ]);
+    expect(residualAndUnobserved.backupPlanDependencyText).toContain("残差: Broker");
+    expect(residualAndUnobserved.backupPlanDependencyText).toContain("未観測: Cron承認");
+
+    const invalidDependencyCounts = JSON.parse(evaluate(completeRows, { operation_plan_archive_dependencies: {
+      status: "correlated", reason: null, plan_scope_count: 1, residual_plan_scope_count: 1,
+      unobserved_plan_scope_count: 0, omitted_plan_scope_count: 0,
+      plan_scopes: [{ plan_id_digest: "d".repeat(64), status: "observed", residual_dependencies: [], unobserved_dependencies: [] }],
+      cross_store_consistency: "independent_sqlite_online_snapshots", cross_store_atomic: false,
+      external_backup_restore_point: "not_examined", used_for_authority: false, may_execute: false,
+    } })) as { projection: { status: string; operation_plan_archive_dependencies: { status: string; plan_scopes: unknown[] } }; backupPlanDependencyText: string };
+    expect(invalidDependencyCounts.projection.status).toBe("invalid_report");
+    expect(invalidDependencyCounts.projection.operation_plan_archive_dependencies.status).toBe("snapshot_unverified");
+    expect(invalidDependencyCounts.projection.operation_plan_archive_dependencies.plan_scopes).toEqual([]);
+    expect(invalidDependencyCounts.backupPlanDependencyText).toBe("未確認");
 
     const residual = JSON.parse(evaluate(completeRows, { operation_plan_archive_inventory: {
       status: "residuals_present", reason: "binding_mismatch", plan_scope_count: 1, plan_count: 1,

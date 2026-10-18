@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -105,10 +105,11 @@ function safeCronRecoveryPath(privateStateRoot: string, databasePath: string): s
     const root = realpathSync(privateStateRoot);
     const absolutePath = resolve(databasePath);
     const rel = relative(root, absolutePath);
-    if (rel !== join("cron-events", "cron-events.sqlite") || isAbsolute(rel) || rel.startsWith(`..${sep}`)) return null;
-    const directory = join(root, "cron-events");
+    const allowedPaths = [join("cron-events", "cron-events.sqlite"), join("canonical-state", "cron_events.sqlite")];
+    if (!allowedPaths.includes(rel) || isAbsolute(rel) || rel.startsWith(`..${sep}`)) return null;
+    const directory = join(root, dirname(rel));
     const directoryStat = lstatSync(directory);
-    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) return null;
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory() || realpathSync(directory) !== directory) return null;
     const fileStat = lstatSync(absolutePath);
     if (fileStat.isSymbolicLink() || !fileStat.isFile() || fileStat.size === 0 || realpathSync(absolutePath) !== absolutePath) return null;
     return absolutePath;

@@ -12,6 +12,7 @@ import {
   type CanonicalStateStoreKey,
 } from "./canonical_state_backup.js";
 import { inspectOperationPlanRecoveryLedger, type OperationPlanRecoveryInspection } from "./operation_plan_recovery_inspection.js";
+import { inspectGatewayRecoveryCanonicalArchive, type RecoveryPlanDependencyCategory } from "./recovery_inspection.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
 export type RecoveryAction =
@@ -126,8 +127,37 @@ export interface RecoveryBackupInspection {
     readonly status: CanonicalStateSnapshotEntryStatus;
   }[];
   operation_plan_archive_inventory: RecoveryBackupOperationPlanInventory;
+  operation_plan_archive_dependencies: RecoveryBackupOperationPlanDependencyInventory;
   used_for_authority: false;
   may_execute: false;
+}
+
+export interface RecoveryBackupOperationPlanDependencyInventory {
+  readonly status:
+    | "not_included"
+    | "not_present"
+    | "snapshot_unverified"
+    | "unavailable"
+    | "no_plan_scopes"
+    | "correlated"
+    | "residuals_present"
+    | "unobserved";
+  readonly reason: "snapshot_unverified" | "operation_plan_unavailable" | null;
+  readonly plan_scope_count: number | null;
+  readonly residual_plan_scope_count: number | null;
+  readonly unobserved_plan_scope_count: number | null;
+  readonly omitted_plan_scope_count: number | null;
+  readonly plan_scopes: readonly {
+    readonly plan_id_digest: string;
+    readonly status: "observed" | "residuals_present" | "unobserved";
+    readonly residual_dependencies: readonly RecoveryPlanDependencyCategory[];
+    readonly unobserved_dependencies: readonly RecoveryPlanDependencyCategory[];
+  }[];
+  readonly cross_store_consistency: "independent_sqlite_online_snapshots" | "not_included";
+  readonly cross_store_atomic: false | null;
+  readonly external_backup_restore_point: "not_examined";
+  readonly used_for_authority: false;
+  readonly may_execute: false;
 }
 
 export interface RecoveryBackupOperationPlanInventory {
@@ -938,6 +968,92 @@ function emptyBackupOperationPlanInventory(
   };
 }
 
+function emptyBackupOperationPlanDependencyInventory(
+  status: RecoveryBackupOperationPlanDependencyInventory["status"],
+  options: {
+    readonly reason?: RecoveryBackupOperationPlanDependencyInventory["reason"];
+    readonly included?: boolean;
+  } = {},
+): RecoveryBackupOperationPlanDependencyInventory {
+  const included = options.included ?? status !== "not_included";
+  return {
+    status,
+    reason: options.reason ?? null,
+    plan_scope_count: null,
+    residual_plan_scope_count: null,
+    unobserved_plan_scope_count: null,
+    omitted_plan_scope_count: null,
+    plan_scopes: [],
+    cross_store_consistency: included ? "independent_sqlite_online_snapshots" : "not_included",
+    cross_store_atomic: included ? false : null,
+    external_backup_restore_point: "not_examined",
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
+/** Correlate only per-store verified canonical archives, then confirm every inspected archive stayed byte-identical. */
+async function inspectBackupOperationPlanDependencies(
+  packDirectory: string,
+  snapshot: CanonicalStateSnapshotManifest | undefined,
+): Promise<RecoveryBackupOperationPlanDependencyInventory> {
+  if (!snapshot) return emptyBackupOperationPlanDependencyInventory("not_included", { included: false });
+  const planEntry = snapshot.entries.find((entry) => entry.store_key === "operation_plans");
+  if (!planEntry) {
+    return emptyBackupOperationPlanDependencyInventory("snapshot_unverified", { reason: "snapshot_unverified" });
+  }
+  if (planEntry.status === "not_present") {
+    return emptyBackupOperationPlanDependencyInventory("not_present");
+  }
+  if (planEntry.status !== "verified" || !planEntry.archive_rel_path || !planEntry.sha256) {
+    return emptyBackupOperationPlanDependencyInventory("snapshot_unverified", { reason: "snapshot_unverified" });
+  }
+
+  const report = inspectGatewayRecoveryCanonicalArchive(packDirectory, snapshot);
+  const verifiedEntries = snapshot.entries.filter((entry) => entry.status === "verified");
+  const afterInspection = await Promise.all(verifiedEntries.map(async (entry) => {
+    if (!entry.archive_rel_path || !entry.sha256) return null;
+    const archivePath = path.resolve(packDirectory, entry.archive_rel_path);
+    const digest = await sha256Path(archivePath, "file").catch(() => null);
+    return digest && digest.bytes === entry.bytes && digest.sha256 === entry.sha256 ? digest : null;
+  }));
+  if (afterInspection.some((digest) => digest === null)) {
+    return emptyBackupOperationPlanDependencyInventory("snapshot_unverified", { reason: "snapshot_unverified" });
+  }
+
+  if (report.ledgers.operation_plans.status !== "verified" && report.ledgers.operation_plans.status !== "residuals_present") {
+    return emptyBackupOperationPlanDependencyInventory("unavailable", { reason: "operation_plan_unavailable" });
+  }
+
+  const allScopes = report.plan_dependency_scopes;
+  const planScopes = allScopes.slice(0, 64).map((scope) => ({
+    plan_id_digest: scope.plan_id_digest,
+    status: scope.status,
+    residual_dependencies: [...scope.residual_dependencies],
+    unobserved_dependencies: [...scope.unobserved_dependencies],
+  }));
+  const residualPlanScopeCount = allScopes.filter((scope) => scope.status === "residuals_present").length;
+  const unobservedPlanScopeCount = allScopes.filter((scope) => scope.status === "unobserved").length;
+  const status: RecoveryBackupOperationPlanDependencyInventory["status"] = allScopes.length === 0
+    ? "no_plan_scopes"
+    : residualPlanScopeCount > 0 ? "residuals_present"
+      : unobservedPlanScopeCount > 0 ? "unobserved" : "correlated";
+  return {
+    status,
+    reason: null,
+    plan_scope_count: allScopes.length,
+    residual_plan_scope_count: residualPlanScopeCount,
+    unobserved_plan_scope_count: unobservedPlanScopeCount,
+    omitted_plan_scope_count: allScopes.length - planScopes.length,
+    plan_scopes: planScopes,
+    cross_store_consistency: "independent_sqlite_online_snapshots",
+    cross_store_atomic: false,
+    external_backup_restore_point: "not_examined",
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
 /** Inspect only J's archived plan checkpoint after its enclosing snapshot digest passed. */
 async function inspectBackupOperationPlanInventory(
   packDirectory: string,
@@ -1007,6 +1123,7 @@ export async function inspectLatestRecoveryBackup(
     canonical_state_cross_store_atomic: null,
     canonical_state_stores: [],
     operation_plan_archive_inventory: emptyBackupOperationPlanInventory("not_included"),
+    operation_plan_archive_dependencies: emptyBackupOperationPlanDependencyInventory("not_included", { included: false }),
     used_for_authority: false as const,
     may_execute: false as const,
   };
@@ -1044,6 +1161,9 @@ export async function inspectLatestRecoveryBackup(
     const operationPlanArchiveInventory = await inspectBackupOperationPlanInventory(
       path.dirname(manifest.manifest_path), manifest.canonical_state_snapshot,
     );
+    const operationPlanArchiveDependencies = await inspectBackupOperationPlanDependencies(
+      path.dirname(manifest.manifest_path), manifest.canonical_state_snapshot,
+    );
     const configuredRequiredItems = manifest.items.filter((item) => item.backup_required && item.source_path !== null);
     const copiedRequiredItems = configuredRequiredItems.filter((item) => item.copied);
     const missingRequiredItemCount = configuredRequiredItems.length - copiedRequiredItems.length;
@@ -1067,6 +1187,7 @@ export async function inspectLatestRecoveryBackup(
       canonical_state_cross_store_atomic: canonicalState?.cross_store_atomic ?? null,
       canonical_state_stores: canonicalStateStores,
       operation_plan_archive_inventory: operationPlanArchiveInventory,
+      operation_plan_archive_dependencies: operationPlanArchiveDependencies,
     };
   } catch {
     return {
@@ -1079,6 +1200,9 @@ export async function inspectLatestRecoveryBackup(
       missing_required_item_count: null,
       canonical_state_coverage: "unknown",
       canonical_state_stores: [],
+      operation_plan_archive_dependencies: emptyBackupOperationPlanDependencyInventory("snapshot_unverified", {
+        reason: "snapshot_unverified",
+      }),
     };
   }
 }

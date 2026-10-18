@@ -362,10 +362,11 @@ function safeExecutionRecoveryPath(privateStateRoot: string, databasePath: strin
     const root = realpathSync(privateStateRoot);
     const absolutePath = resolve(databasePath);
     const rel = relative(root, absolutePath);
-    if (rel !== join("execution-intents", "executor.sqlite") || isAbsolute(rel) || rel.startsWith(`..${sep}`)) return null;
-    const directory = join(root, "execution-intents");
+    const allowedPaths = [join("execution-intents", "executor.sqlite"), join("canonical-state", "broker.sqlite")];
+    if (!allowedPaths.includes(rel) || isAbsolute(rel) || rel.startsWith(`..${sep}`)) return null;
+    const directory = join(root, dirname(rel));
     const directoryStat = lstatSync(directory);
-    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) return null;
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory() || realpathSync(directory) !== directory) return null;
     const fileStat = lstatSync(absolutePath);
     if (fileStat.isSymbolicLink() || !fileStat.isFile() || fileStat.size === 0 || realpathSync(absolutePath) !== absolutePath) return null;
     return absolutePath;
