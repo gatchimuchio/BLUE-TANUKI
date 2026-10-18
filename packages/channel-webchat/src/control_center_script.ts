@@ -1597,6 +1597,95 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return { reason, verified_event_count: verified, unverified_event_count: unverified, first_unverified_ordinal: first, last_verified_revision: revision };
       }
 
+      function formatRecoveryPlanDependencyScopes(scopes, boundaryValid, inspectionStatus, omittedCount, operationPlanStatus) {
+        const statusLabels = {
+          observed: "観測範囲内で残差なし",
+          residuals_present: "残差あり",
+          unobserved: "未観測"
+        };
+        const categoryLabels = {
+          operation_plan: "Operation Plan",
+          broker: "Broker",
+          delivery: "結果配送",
+          memory: "J/M記憶連結",
+          cron_approval: "Cron承認handoff"
+        };
+        const allowedCategories = Object.keys(categoryLabels);
+        const safeOmittedCount = Number.isSafeInteger(omittedCount) && omittedCount >= 0 ? omittedCount : null;
+        const omittedLabel = safeOmittedCount === null ? "省略scope件数: 未確認" :
+          safeOmittedCount > 0 ? "省略scope件数: " + safeOmittedCount : "";
+        const unverified = function (reason) {
+          return ["依存scope: 未確認（" + reason + "）", omittedLabel].filter(Boolean).join("\\n");
+        };
+        if (boundaryValid !== true || !["verified", "residuals_present"].includes(inspectionStatus) ||
+            !["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"].includes(operationPlanStatus) ||
+            !Array.isArray(scopes) || scopes.length > 64 || safeOmittedCount === null) {
+          return unverified("検査境界または件数を検証できません");
+        }
+        if (!["verified", "residuals_present"].includes(operationPlanStatus)) {
+          return unverified("Operation Plan台帳を検証できません");
+        }
+        const rows = [];
+        const seenDigests = new Set();
+        const seenPrefixes = new Set();
+        for (const item of scopes) {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return unverified("scope形式が不正です");
+          const digest = recoveryInspectionDigest(item.plan_id_digest);
+          const requestScopeDigest = item.request_scope_digest === null ? null : recoveryInspectionDigest(item.request_scope_digest);
+          const integrity = recoveryInspectionEnum(item.integrity, ["verified", "residuals_present"]);
+          const status = recoveryInspectionEnum(item.status, Object.keys(statusLabels));
+          const planRecordCount = item.plan_record_count;
+          const bindingCount = item.binding_count;
+          const inspectedBindingCount = item.inspected_binding_count;
+          const omittedBindingCount = item.omitted_binding_count;
+          const residualBindingCount = item.residual_binding_count;
+          const readCategories = function (value) {
+            if (!Array.isArray(value)) return null;
+            const entries = value.map(function (entry) { return recoveryInspectionEnum(entry, allowedCategories); });
+            return entries.some(function (entry) { return entry === "unknown"; }) || new Set(entries).size !== entries.length ? null : entries;
+          };
+          const residuals = readCategories(item.residual_dependencies);
+          const unobserved = readCategories(item.unobserved_dependencies);
+          const digestPrefix = digest ? digest.slice(0, 12) : null;
+          const countsValid = Number.isSafeInteger(planRecordCount) && planRecordCount >= 1 &&
+            Number.isSafeInteger(bindingCount) && bindingCount >= 0 &&
+            Number.isSafeInteger(inspectedBindingCount) && inspectedBindingCount >= 0 &&
+            Number.isSafeInteger(omittedBindingCount) && omittedBindingCount >= 0 &&
+            Number.isSafeInteger(residualBindingCount) && residualBindingCount >= 0 &&
+            residualBindingCount <= bindingCount && omittedBindingCount <= bindingCount &&
+            inspectedBindingCount + omittedBindingCount === bindingCount;
+          const expectedStatus = residuals && residuals.length > 0 ? "residuals_present" :
+            (unobserved && unobserved.length > 0) || omittedBindingCount > 0 ? "unobserved" : "observed";
+          if (!digest || (item.request_scope_digest !== null && !requestScopeDigest) || integrity === "unknown" ||
+              status === "unknown" || !countsValid || residuals === null || unobserved === null ||
+              status !== expectedStatus || seenDigests.has(digest) || seenPrefixes.has(digestPrefix) ||
+              (integrity === "residuals_present" && (!residuals || residuals.indexOf("operation_plan") < 0)) ||
+              (residualBindingCount > 0 && residuals.indexOf("operation_plan") < 0)) {
+            return unverified("scopeの状態・分類・件数を検証できません");
+          }
+          seenDigests.add(digest);
+          seenPrefixes.add(digestPrefix);
+          const categories = function (values) { return values.length ? values.map(function (value) { return categoryLabels[value]; }).join("、") : "なし"; };
+          rows.push("Plan " + digestPrefix + " — " + statusLabels[status] +
+            "（計画記録 " + planRecordCount + "件、依存関連付け " + bindingCount + "件: 検査 " + inspectedBindingCount +
+            "件／省略 " + omittedBindingCount + "件／残差 " + residualBindingCount + "件）" +
+            "\\n  残差依存: " + categories(residuals) + "／未観測依存: " + categories(unobserved));
+        }
+        let summary;
+        if (rows.length === 0 && safeOmittedCount === 0 && operationPlanStatus === "verified") {
+          summary = "該当するOperation Planはありません（台帳検査済み）";
+        } else if (rows.length === 0 && safeOmittedCount === 0) {
+          summary = "依存scopeは未確認（Operation Plan台帳に残差があります）";
+        } else if (rows.length === 0) {
+          summary = "依存scope: 未確認（scopeが省略されています）";
+        } else {
+          summary = "現行台帳で観測したOperation Plan依存scope（仕事ID・backup復旧点ではありません）\\n" + rows.join("\\n");
+        }
+        if (safeOmittedCount > 0) summary += "\\n省略scope件数: " + safeOmittedCount;
+        summary += "\\n読み取り専用の診断です。復旧可能性・復元・再開許可を示しません。";
+        return summary;
+      }
+
       function renderRecoveryInspection(report) {
         const source = report && typeof report === "object" ? report : {};
         const ledgers = source.ledgers && typeof source.ledgers === "object" ? source.ledgers : {};
@@ -1928,6 +2017,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("recovery-inspection-status", status);
         byId("recovery-inspection-status").className = "badge " + (status === "verified" ? "review" : "warn");
         setText("recovery-inspection-json", compactJson(projection));
+        setText("recovery-plan-dependency-scopes", formatRecoveryPlanDependencyScopes(
+          projection.plan_dependency_scopes,
+          boundaryOk,
+          status,
+          source.omitted_plan_dependency_scope_count,
+          ledgerStatuses.operation_plans
+        ));
       }
 
       function renderRecoveryBackupInspection(report) {

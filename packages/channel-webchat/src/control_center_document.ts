@@ -467,6 +467,9 @@ ${CONTROL_CENTER_STYLE}    </style>
             <span id="recovery-inspection-status" class="badge warn">未確認</span>
           </div>
           <p class="muted">読み取り専用の診断です。権限・実行・復旧は行いません。仕事ごとの参照はdigestと固定状態だけを表示し、台帳別の検証済みprefix／未検証suffixと最初の未検証位置を示します。次のbackup pack検査でstore別SQLite snapshotを確認できますが、DB間の原子的同時点や仕事単位の復旧点は確立しません。</p>
+          <h3>Operation Plan依存scope（現行台帳検査）</h3>
+          <p class="muted">現行の読み取り専用台帳で観測したPlan digest短縮形、固定状態、依存分類と件数を表示します。仕事ID、backup内の復旧点、復旧可能性を示さず、復元・再開許可を行いません。</p>
+          <pre id="recovery-plan-dependency-scopes">未確認</pre>
           <pre id="recovery-inspection-json">未確認</pre>
           <div class="status-grid">
             <button id="inspect-recovery-backup" type="button">最新backup packの整合性を読み取り検査</button>

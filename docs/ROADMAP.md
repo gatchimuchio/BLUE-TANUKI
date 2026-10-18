@@ -104,3 +104,5 @@ J0は日本語基底規定成立として完了。J1（活正文書）、J2（UI
 ## 正本
 
 AGENTS.mdがQE方法と保護、docs/作業標準要領.mdが運用、docs/IMPLEMENTATION_INSTRUCTIONS.mdが限定task、docs/開発進捗.mdが観測済み履歴、docs/STRATEGY_FRAME.mdが競合と外殻の戦略、docs/PRODUCT_ROADMAP.mdが旧v1 RCのrelease境界を扱う。現在のowner開発委任と内部正本の再照合に基づきQE_BUILDを継続する。
+
+2026-10-18のQEB-03-E03.03-OPERATOR-PLAN-DEPENDENCY-SCOPE-READABILITYで、現行のread-only Recovery Inspectionに含まれるOperation Plan依存scopeをControl Centerへ固定日本語で表示した。verified boundaryでは短縮digest・状態・依存分類と件数を示し、不正・未検証時は全scopeを抑止する。これは現行台帳の診断表示であり、job identity、backup restore point、recoverability、実復元・再開を成立させない。E03.03／QEB-03は引き続き`BUILD_GAP`。

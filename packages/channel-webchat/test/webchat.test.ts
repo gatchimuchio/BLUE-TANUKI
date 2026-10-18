@@ -490,6 +490,74 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(CONTROL_CENTER_SCRIPT).toContain('canonical_state_stores: safeStatus === "verified" ? canonicalStores : []');
   });
 
+  it("renders only verified Operation Plan dependency scopes with fixed labels and counts", () => {
+    const functionSource = (name: string): string => {
+      const start = CONTROL_CENTER_SCRIPT.indexOf(`function ${name}(`);
+      const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
+      const end = next < 0 ? CONTROL_CENTER_SCRIPT.length : next;
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      return CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    };
+    const helper = [functionSource("recoveryInspectionEnum"), functionSource("recoveryInspectionDigest"),
+      functionSource("formatRecoveryPlanDependencyScopes")].join("\n");
+    const evaluate = (scopes: unknown, boundary = true, inspectionStatus = "verified", omittedCount = 0, ledgerStatus = "verified") =>
+      new Script(`${helper}\nformatRecoveryPlanDependencyScopes(scopes, boundary, inspectionStatus, omittedCount, ledgerStatus)`)
+        .runInNewContext({ scopes, boundary, inspectionStatus, omittedCount, ledgerStatus }) as string;
+    const scopes = [
+      {
+        plan_id_digest: "a".repeat(64), request_scope_digest: "9".repeat(64), integrity: "verified",
+        plan_record_count: 1, binding_count: 2, inspected_binding_count: 2, omitted_binding_count: 0,
+        residual_binding_count: 0, status: "observed", residual_dependencies: [], unobserved_dependencies: [],
+      },
+      {
+        plan_id_digest: "b".repeat(64), request_scope_digest: null, integrity: "residuals_present",
+        plan_record_count: 2, binding_count: 3, inspected_binding_count: 3, omitted_binding_count: 0,
+        residual_binding_count: 1, status: "residuals_present", residual_dependencies: ["operation_plan", "broker"],
+        unobserved_dependencies: ["delivery"],
+      },
+      {
+        plan_id_digest: "c".repeat(64), request_scope_digest: null, integrity: "verified",
+        plan_record_count: 1, binding_count: 1, inspected_binding_count: 1, omitted_binding_count: 0,
+        residual_binding_count: 0, status: "unobserved", residual_dependencies: [],
+        unobserved_dependencies: ["memory", "cron_approval"],
+      },
+    ];
+    const rendered = evaluate(scopes);
+    expect(rendered).toContain("Plan aaaaaaaaaaaa — 観測範囲内で残差なし");
+    expect(rendered).toContain("Plan bbbbbbbbbbbb — 残差あり");
+    expect(rendered).toContain("Plan cccccccccccc — 未観測");
+    expect(rendered).toContain("Operation Plan、Broker");
+    expect(rendered).toContain("結果配送");
+    expect(rendered).toContain("J/M記憶連結、Cron承認handoff");
+    expect(rendered).toContain("依存関連付け 3件: 検査 3件／省略 0件／残差 1件");
+    expect(rendered).not.toContain("a".repeat(64));
+    expect(rendered).not.toContain("9".repeat(64));
+    expect(rendered).toContain("復旧可能性・復元・再開許可を示しません");
+
+    const invalidBoundary = evaluate(scopes, false, "verified", 2);
+    expect(invalidBoundary).toContain("依存scope: 未確認");
+    expect(invalidBoundary).toContain("省略scope件数: 2");
+    expect(invalidBoundary).not.toContain("Plan aaaaaaaaaaaa");
+    expect(evaluate(scopes, true, "verified", 0, "unavailable")).toContain("Operation Plan台帳を検証できません");
+    expect(evaluate([], true, "verified", 0, "verified")).toContain("該当するOperation Planはありません（台帳検査済み）");
+    expect(evaluate([], true, "verified", 0, "unavailable")).toContain("依存scope: 未確認");
+
+    const unknownStatus = evaluate([{ ...scopes[0] as object, status: "approved" }]);
+    expect(unknownStatus).toContain("依存scope: 未確認");
+    expect(unknownStatus).not.toContain("Plan aaaaaaaaaaaa");
+    const unknownCategory = evaluate([{ ...scopes[0] as object, unobserved_dependencies: ["filesystem"] }]);
+    expect(unknownCategory).toContain("依存scope: 未確認");
+    const inconsistentCounts = evaluate([{ ...scopes[0] as object, inspected_binding_count: 1 }]);
+    expect(inconsistentCounts).toContain("依存scope: 未確認");
+    const prefixCollision = evaluate([
+      scopes[0],
+      { ...scopes[0] as object, plan_id_digest: "a".repeat(12) + "f".repeat(52) },
+    ]);
+    expect(prefixCollision).toContain("依存scope: 未確認");
+    expect(prefixCollision).not.toContain("Plan aaaaaaaaaaaa");
+  });
+
   it("serves the local resident app shell at /app", async () => {
     const ctx = await setup();
     try {
@@ -599,6 +667,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("inspect-recovery-ledgers");
       expect(html).toContain("/recovery/inspection");
       expect(html).toContain("recovery-inspection-json");
+      expect(html).toContain("recovery-plan-dependency-scopes");
+      expect(html).toContain("Operation Plan依存scope（現行台帳検査）");
+      expect(html).toContain("復元・再開許可を行いません");
       expect(html).toContain("ledger_boundaries");
       expect(html).toContain("verified_event_count");
       expect(html).toContain("最初の未検証位置");

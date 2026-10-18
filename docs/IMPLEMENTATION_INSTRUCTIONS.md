@@ -4,6 +4,29 @@
 
 ## 今回のBUILD_BATCH
 
+QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-OPERATOR-PLAN-DEPENDENCY-SCOPE-READABILITY`。関係単位=E03.03「破損範囲の隔離復旧」。開始HEAD／`origin/main`=`8e210722636084fb6f473cc44e3a4b08ae785655`、worktree clean。編集前local recovery branchとlocal／remote backup tagは現世代=`8e210722636084fb6f473cc44e3a4b08ae785655`、前世代=`9ba97ee1b24dd54c49a8de96ecd1cdc7eae9b80c`で一致し、remote tag SHAを照合した。
+
+目的は、read-only Recovery Inspectionに既に含まれる`plan_dependency_scopes`をControl Centerで固定日本語表示し、Operation Planごとの観測状態、残差依存、未観測依存を操作者が識別できるようにすること。表示するIDはplan digestの短縮形だけとし、既存の固定enumと件数を再検査する。
+
+対象は現行台帳inspectionのControl Center表示、固定status／依存カテゴリの整形、表示境界の合成確認。backup内snapshotのstatus表示とは明確に分ける。対象外は仕事IDの新設・認定、backupとの時点相関、recoverability／restore point判定、archive適用、実state restore、resume、HDS／Approval／Broker権限変更、外部作用、C08.03 live/provider、別repo、公開・出荷判断。表示は現行read-only ledger inspectionだけの非権威診断であり、復旧許可を生成しない。
+
+最小確認は、`observed`／`residuals_present`／`unobserved`の固定表示、全既知依存カテゴリの日本語化、digest以外のraw ID非表示、invalid boundary・不整合件数・未知enum時の全行抑止、表示省略件数の明示。対象WebChat test、`pnpm typecheck`→`pnpm build`、`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check`を行う。全suite、実復旧、credential/live/provider、5OS実機、QE_QC／QE_QAは対象外。
+
+## 今回の実績
+
+Control Centerのread-only Recovery Inspectionに「Operation Plan依存scope（現行台帳検査）」を追加した。検証済み境界のscopeは12桁digest短縮形、固定日本語status／依存カテゴリ、計画記録・関連付け・検査・省略・残差件数で表示する。境界不正、未知enum、scope形式不正、digest不正、件数不整合、Operation Plan台帳未検証ではscope行をすべて抑止し「未確認」とする。省略scope件数も個別に検証し、不明を0件へ補正しない。verifiedの空台帳は「該当するOperation Planはありません（台帳検査済み）」とし、unavailable等の未検証状態と区別する。
+
+| 限定確認 | 結果 |
+|---|---|
+| WebChat Control Center focused tests | PASS、1 file／79 tests。3状態・5依存カテゴリ・12桁digest・prefix衝突・件数・boundary／未知enum／不整合件数／省略件数・空／unavailableを確認。 |
+| `pnpm typecheck`→`pnpm build` | 両方PASS。15 workspace projectsをbuild。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 全suite、実state restore、credential/live/provider、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+安全境界は現行Inspection APIのMaintenance Token gate、`used_for_authority=false`、`may_execute=false`、`external_backup_restore_point="not_examined"`を維持する。plan digestはOperation Plan単位の診断識別子であり、仕事ID・回復可能性・独立restore point・再開許可ではない。E03.03／QEB-03=`BUILD_GAP`、C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+
+## 前回のBUILD_BATCH
+
 QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-OPERATOR-PER-STORE-STATUS-READABILITY`。関係単位=E03.03「破損範囲の隔離復旧」。開始HEAD／`origin/main`=`9ba97ee1b24dd54c49a8de96ecd1cdc7eae9b80c`、worktree clean。編集前にlocal recovery branch二世代とremote backup tag二世代を現世代=`9ba97ee1b24dd54c49a8de96ecd1cdc7eae9b80c`、前世代=`ccb6342d26efe3f720b746086d1e71282d8aa327`へ回転し、local／remote SHAを照合した。
 
 目的は、Recovery Backup inspectionで検証済みのcanonical SQLite statusをControl Centerの固定5行へ読みやすく表示し、台帳ごとの取得・検証状態をoperatorが確認できるようにすること。statusは固定日本語ラベルへ写し、受信projectionが不正・不完全・未検証なら全行を「未確認」、canonical snapshotがbackupに含まれない場合は「このbackupに未収録」と表示する。
