@@ -42,6 +42,7 @@ import {
 } from "./document_organization_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
+import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
@@ -95,13 +96,23 @@ export function buildSessionStore(
 }
 
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
-  Object.assign(process.env, resolveAllSecretRefs(process.env));
-  const executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
-  try { await runCliWithExecutionStore(argv, executionStore); }
-  finally { executionStore.close(); }
+  const ownerLease = GatewayRuntimeOwnerLease.fromEnvironment(process.env);
+  let executionStore: GatewayExecutionIntentStore | undefined;
+  try {
+    Object.assign(process.env, resolveAllSecretRefs(process.env));
+    executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
+    await runCliWithExecutionStore(argv, executionStore, ownerLease);
+  } finally {
+    executionStore?.close();
+    ownerLease.close();
+  }
 }
 
-async function runCliWithExecutionStore(argv: readonly string[], executionStore: GatewayExecutionIntentStore): Promise<void> {
+async function runCliWithExecutionStore(
+  argv: readonly string[],
+  executionStore: GatewayExecutionIntentStore,
+  ownerLease: GatewayRuntimeOwnerLease,
+): Promise<void> {
   const cleanArgs = stripEnvFileArgs([...argv]);
   const organizeIndex = cleanArgs.indexOf("--organize");
   const organizationSource = organizeIndex >= 0
@@ -150,7 +161,11 @@ async function runCliWithExecutionStore(argv: readonly string[], executionStore:
   });
   const failureMemory = buildFailureMemoryStore(process.env);
   const approval = buildApprovalRuntime(process.env);
-  const executorApproval = createExecutorApprovalAuthority({ execution_store: executionStore });
+  const executorApproval = createExecutorApprovalAuthority({
+    execution_store: executionStore,
+    execution_epoch: ownerLease.executionEpoch,
+    assert_execution_owner: () => ownerLease.assertActive(),
+  });
   const executor = new Executor({
     llm,
     compute: new LLMComputeAdapter(llm),

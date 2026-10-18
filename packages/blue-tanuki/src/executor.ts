@@ -154,6 +154,7 @@ interface ApprovedCommandRecord {
 interface ApprovalRuntime {
   authority_id: symbol;
   execution_epoch: string;
+  assert_execution_owner?: () => void;
   clock: ExecutorApprovalClock;
   ttl_ms: number;
   last_wall_ms: number;
@@ -178,7 +179,10 @@ export function createExecutorApprovalAuthority(options: ExecutorApprovalOptions
   const authorityId = Symbol("blue_tanuki.executor.approval_authority.instance");
   const ttl_ms = options.ticket_ttl_ms ?? 300_000;
   if (!Number.isSafeInteger(ttl_ms) || ttl_ms <= 0 || ttl_ms > 600_000) throw new Error("Executor ticket TTL is invalid");
-  const runtime: ApprovalRuntime = { authority_id: authorityId, execution_epoch: randomUUID(),
+  const execution_epoch = options.execution_epoch ?? randomUUID();
+  if (!/^[0-9a-f-]{36}$/i.test(execution_epoch)) throw new Error("Executor execution epoch is invalid");
+  const runtime: ApprovalRuntime = { authority_id: authorityId, execution_epoch,
+    assert_execution_owner: options.assert_execution_owner,
     clock: options.clock ?? { wallNow: Date.now, monotonicNow: () => performance.now() }, ttl_ms,
     last_wall_ms: 0, last_monotonic_ms: 0, store: options.execution_store };
   readApprovalClock(runtime);
@@ -205,6 +209,7 @@ function approveCommandForExecution(
   runtime: ApprovalRuntime,
   expected_command_digest?: string,
 ): ApprovedCommand {
+  runtime.assert_execution_owner?.();
   const snapshot = approvalCommandSnapshot(command);
   // 宣言済みのproof値を一度だけ捕捉し、保存digestと実行検査へ同じ値を渡す。
   const proof = Object.freeze({ source: inputProof.source, decision: inputProof.decision,
@@ -363,6 +368,7 @@ export class Executor {
     let invocation: ExecutionInvocationBoundary | undefined;
     const markInvoked = (boundary: ExecutionInvocationBoundary): void => {
       const record = APPROVED_COMMAND_RECORDS.get(cmd)!;
+      record.runtime.assert_execution_owner?.();
       const now = assertTicketCurrent(record);
       record.runtime.store?.markInvocation(record.ticket, boundary, now);
       invocation = boundary;
@@ -414,6 +420,7 @@ export class Executor {
     if (proof) {
       const record = APPROVED_COMMAND_RECORDS.get(cmd)!;
       try {
+        record.runtime.assert_execution_owner?.();
         record.runtime.store?.complete(record.ticket, {
           state: !invocation ? "not_attempted" : feedback.status === "success" ? "adapter_returned" : "outcome_unknown",
           feedback_status: feedback.status, observed_at_ms: feedback.operation_core_result?.observed_at_ms ?? Date.now(),
@@ -648,6 +655,7 @@ export class Executor {
       const result = await this.deps.file_search_worker.invoke({ command, ticket: record.ticket, signal,
         on_started: (identity) => {
           if (worker || exited) throw new Error("File search worker start repeated");
+          record.runtime.assert_execution_owner?.();
           const now = assertTicketCurrent(record);
           const captured = Object.freeze({ worker_id: identity.worker_id, worker_pid: identity.worker_pid,
             worker_platform: identity.worker_platform, worker_started_at_ms: identity.worker_started_at_ms });
@@ -660,6 +668,7 @@ export class Executor {
           markInvoked("tool_adapter");
           // SQLite待機で期限を消費し得る。保存後、IPC送信前にも両clockを読む。
           assertTicketCurrent(record);
+          record.runtime.assert_execution_owner?.();
           before_tool_dispatch?.();
           if (signal?.aborted) throw new Error("File search worker dispatch cancelled");
           dispatched = true;
@@ -668,6 +677,7 @@ export class Executor {
           if (!worker || exited || Object.keys(worker).some((key) => worker![key as keyof ExecutionWorkerIdentity] !== identity[key as keyof ExecutionWorkerIdentity])) {
             throw new Error("File search worker exit identity mismatch");
           }
+          record.runtime.assert_execution_owner?.();
           store.observeWorkerExit!(record.ticket, worker, observed_at_ms);
           exited = true;
         },
@@ -780,6 +790,7 @@ export class Executor {
     if (!record) {
       throw new Error("Executor rejected unapproved command: ApprovedCommand proof is required");
     }
+    record.runtime.assert_execution_owner?.();
     if (record.authority_id !== authorityIdFor(this.deps.approval_authority)) {
       throw new Error("Executor rejected command: approval authority mismatch");
     }

@@ -61,6 +61,10 @@ export interface ExecutorApprovalClock {
 export interface ExecutorApprovalOptions {
   /** Gatewayでは私有SQLiteを必須注入する。省略時はprocess内の開発用経路。 */
   execution_store?: ExecutionIntentStore;
+  /** Gateway起動時に永続化したowner世代。省略時はprocess内のUUIDを発行する。 */
+  execution_epoch?: string;
+  /** Persisted intentを書き込むGateway所有権を、発行・作用境界・結果保存で同期確認する。 */
+  assert_execution_owner?: () => void;
   clock?: ExecutorApprovalClock;
   /** 発行から実adapter呼出しまでの上限。実行中timeoutとは別。 */
   ticket_ttl_ms?: number;

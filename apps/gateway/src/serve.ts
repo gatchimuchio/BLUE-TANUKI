@@ -28,6 +28,7 @@ import {
   type ExecutionIntentReceipt,
 } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
+import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "./reconcile_execution_results.js";
 import { operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
@@ -313,6 +314,16 @@ function unavailableOperatorSurface(surface: "daily" | "developer" | "writing"):
 }
 
 export async function serve(): Promise<ServeShutdown> {
+  const ownerLease = GatewayRuntimeOwnerLease.fromEnvironment(process.env);
+  try {
+    return await serveWithOwnerLease(ownerLease);
+  } catch (error) {
+    ownerLease.close();
+    throw error;
+  }
+}
+
+async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promise<ServeShutdown> {
   Object.assign(process.env, resolveAllSecretRefs(process.env));
   const plugins = await loadPluginRuntime();
   plugins.enforceLLMConfig(process.env);
@@ -455,7 +466,11 @@ export async function serve(): Promise<ServeShutdown> {
   // eslint-disable-next-line prefer-const
   let executor: Executor;
   const executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
-  const executorApproval = createExecutorApprovalAuthority({ execution_store: executionStore });
+  const executorApproval = createExecutorApprovalAuthority({
+    execution_store: executionStore,
+    execution_epoch: ownerLease.executionEpoch,
+    assert_execution_owner: () => ownerLease.assertActive(),
+  });
   const startupRecovery = reconcileStartupExecutionState(hds, executionStore);
   gatewayLog.info("startup saved-result reconciliation", {
     adopted: startupRecovery.adopted,
@@ -2037,6 +2052,7 @@ export async function serve(): Promise<ServeShutdown> {
         entries: hds.getAudit().size(),
         chain_valid: hds.getAudit().verify(),
       });
+      ownerLease.close();
     },
   };
 }
