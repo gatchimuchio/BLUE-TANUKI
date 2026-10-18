@@ -380,6 +380,7 @@ describe("WebChatChannel — Control Center shell", () => {
       functionSource("recoveryInspectionCount"),
       functionSource("recoveryInspectionDigest"),
       functionSource("recoveryBackupStoreStatuses"),
+      functionSource("renderRecoveryBackupStoreStatuses"),
     ].join("\n");
     const render = functionSource("renderRecoveryBackupInspection");
     const evaluate = (rows: unknown, counts: Record<string, unknown> = {}) => new Script(`
@@ -390,7 +391,11 @@ describe("WebChatChannel — Control Center shell", () => {
       ${helpers}
       ${render}
       renderRecoveryBackupInspection(report);
-      JSON.parse(output["recovery-backup-inspection-json"]);
+      JSON.stringify({
+        projection: JSON.parse(output["recovery-backup-inspection-json"]),
+        storeStatus: Object.fromEntries(["j_control", "m_state", "broker", "operation_plans", "cron_events"].map((key) =>
+          [key, output["recovery-backup-store-" + key]])),
+      });
     `).runInNewContext({ report: {
       schema_version: 1,
       surface: "recovery_backup_inspection",
@@ -413,7 +418,7 @@ describe("WebChatChannel — Control Center shell", () => {
       used_for_authority: false,
       may_execute: false,
       ...counts,
-    } });
+    } }) as string;
     const rows = [
       { store_key: "j_control", status: "verified" },
       { store_key: "m_state", status: "captured_unverified" },
@@ -428,6 +433,21 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(validate(rows.slice(1))).toBeNull();
     expect(validate([{ ...rows[0] }, { ...rows[1], store_key: "j_control" }, ...rows.slice(2)])).toBeNull();
     expect(validate([{ ...rows[0], status: "unknown" }, ...rows.slice(1)])).toBeNull();
+    const partial = JSON.parse(evaluate(rows, {
+      canonical_state_coverage: "partial",
+      canonical_state_snapshot_count: 3,
+      canonical_state_verified_store_count: 2,
+      canonical_state_missing_store_count: 1,
+      canonical_state_unverified_store_count: 2,
+    })) as { projection: { status: string }; storeStatus: Record<string, string> };
+    expect(partial.projection.status).toBe("verified");
+    expect(partial.storeStatus).toEqual({
+      j_control: "アーカイブ検査済み",
+      m_state: "取得済み・未検証",
+      broker: "取得失敗",
+      operation_plans: "backup時に未存在",
+      cron_events: "アーカイブ検査済み",
+    });
     const completeRows = [
       { store_key: "j_control", status: "verified" },
       { store_key: "m_state", status: "verified" },
@@ -435,10 +455,38 @@ describe("WebChatChannel — Control Center shell", () => {
       { store_key: "operation_plans", status: "verified" },
       { store_key: "cron_events", status: "verified" },
     ];
-    expect(evaluate(completeRows).canonical_state_stores).toEqual(completeRows);
+    const valid = JSON.parse(evaluate(completeRows)) as { projection: { canonical_state_stores: unknown }; storeStatus: Record<string, string> };
+    expect(valid.projection.canonical_state_stores).toEqual(completeRows);
+    expect(valid.storeStatus).toEqual({
+      j_control: "アーカイブ検査済み",
+      m_state: "アーカイブ検査済み",
+      broker: "アーカイブ検査済み",
+      operation_plans: "アーカイブ検査済み",
+      cron_events: "アーカイブ検査済み",
+    });
     const mismatched = evaluate(completeRows, { canonical_state_verified_store_count: 4 });
-    expect(mismatched.status).toBe("invalid_report");
-    expect(mismatched.canonical_state_stores).toEqual([]);
+    const invalid = JSON.parse(mismatched) as { projection: { status: string; canonical_state_stores: unknown[] }; storeStatus: Record<string, string> };
+    expect(invalid.projection.status).toBe("invalid_report");
+    expect(invalid.projection.canonical_state_stores).toEqual([]);
+    expect(Object.values(invalid.storeStatus)).toEqual(["未確認", "未確認", "未確認", "未確認", "未確認"]);
+    const noCanonicalSnapshot = JSON.parse(evaluate([], {
+      canonical_state_coverage: "not_included",
+      canonical_state_expected_store_count: null,
+      canonical_state_snapshot_count: null,
+      canonical_state_verified_store_count: null,
+      canonical_state_missing_store_count: null,
+      canonical_state_unverified_store_count: null,
+      canonical_state_store_consistency: "not_included",
+      canonical_state_cross_store_atomic: null,
+    })) as { projection: { status: string }; storeStatus: Record<string, string> };
+    expect(noCanonicalSnapshot.projection.status).toBe("verified");
+    expect(Object.values(noCanonicalSnapshot.storeStatus)).toEqual([
+      "このbackupに未収録",
+      "このbackupに未収録",
+      "このbackupに未収録",
+      "このbackupに未収録",
+      "このbackupに未収録",
+    ]);
     expect(CONTROL_CENTER_SCRIPT).toContain('canonical_state_stores: safeStatus === "verified" ? canonicalStores : []');
   });
 
@@ -566,6 +614,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("canonical_state_coverage");
       expect(html).toContain("function recoveryBackupStoreStatuses");
       expect(html).toContain("canonical_state_stores");
+      expect(html).toContain("recovery-backup-store-j_control");
+      expect(html).toContain("台帳別snapshot検査");
       expect(html).toContain("bt.recoveryToken");
       expect(html).toContain("/settings/config");
       expect(html).toContain("/settings/llm/verify");

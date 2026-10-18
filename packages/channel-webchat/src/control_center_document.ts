@@ -473,6 +473,14 @@ ${CONTROL_CENTER_STYLE}    </style>
             <span id="recovery-backup-inspection-status" class="badge warn">未確認</span>
           </div>
           <p class="muted">manifest、pack内保存物、store別SQLite snapshotのdigestと整合性を読み取り検査します。snapshot間の原子的同時点は保証せず、Restore経路でcanonical stateを適用しません。復旧許可や仕事単位の復旧点を意味しません。</p>
+          <h3>台帳別snapshot検査</h3>
+          <div class="status-grid" aria-label="台帳別SQLite snapshot status">
+            <div class="metric"><span>J制御台帳</span><span id="recovery-backup-store-j_control">未確認</span></div>
+            <div class="metric"><span>M状態台帳</span><span id="recovery-backup-store-m_state">未確認</span></div>
+            <div class="metric"><span>Broker実行台帳</span><span id="recovery-backup-store-broker">未確認</span></div>
+            <div class="metric"><span>Operation Plan台帳</span><span id="recovery-backup-store-operation_plans">未確認</span></div>
+            <div class="metric"><span>Cronイベント台帳</span><span id="recovery-backup-store-cron_events">未確認</span></div>
+          </div>
           <pre id="recovery-backup-inspection-json">未確認</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls.</p></div>

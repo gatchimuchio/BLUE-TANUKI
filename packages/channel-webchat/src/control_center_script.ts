@@ -1551,6 +1551,25 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return seen.size === expectedKeys.length ? projected : null;
       }
 
+      function renderRecoveryBackupStoreStatuses(value, coverage, overallStatus) {
+        const expectedKeys = ["j_control", "m_state", "broker", "operation_plans", "cron_events"];
+        const safeRows = recoveryBackupStoreStatuses(value);
+        const statusLabels = {
+          verified: "アーカイブ検査済み",
+          captured_unverified: "取得済み・未検証",
+          snapshot_failed: "取得失敗",
+          not_present: "backup時に未存在"
+        };
+        const hasVerifiedRows = overallStatus === "verified" && safeRows !== null && safeRows.length === expectedKeys.length;
+        const unavailableLabel = overallStatus === "verified" && coverage === "not_included"
+          ? "このbackupに未収録"
+          : "未確認";
+        for (const key of expectedKeys) {
+          const row = hasVerifiedRows ? safeRows.find((item) => item.store_key === key) : null;
+          setText("recovery-backup-store-" + key, row ? statusLabels[row.status] : unavailableLabel);
+        }
+      }
+
       function recoveryInspectionLedgerStatus(value, allowed) {
         const status = typeof value === "string" ? value : value && typeof value === "object" ? value.status : null;
         return recoveryInspectionEnum(status, allowed);
@@ -2008,6 +2027,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         };
         setText("recovery-backup-inspection-status", safeStatus);
         byId("recovery-backup-inspection-status").className = "badge " + (safeStatus === "verified" ? "review" : "warn");
+        renderRecoveryBackupStoreStatuses(
+          safeStatus === "verified" ? canonicalStores : [],
+          safeStatus === "verified" ? canonicalCoverage : "unknown",
+          safeStatus,
+        );
         setText("recovery-backup-inspection-json", compactJson(projection));
       }
 

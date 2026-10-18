@@ -1,8 +1,31 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0、工程表SHA-256=7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF309F77BABACC56796A1893FE77、Codex施工指示SHA-256=D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8）、適用AGENTS.md、作業標準要領、現物、active対象要求を今回も再読した。今回開始HEAD／origin/main=ccb6342d26efe3f720b746086d1e71282d8aa327、worktree clean。編集前local復旧branchとlocal／remote backup tagは現世代=ccb6342d26efe3f720b746086d1e71282d8aa327、前世代=340f96b04717d54d7f4ed4c81da11526d09798a8で一致。復旧ref移行状態=MIGRATION_COMPLETE。ownerの開発続行指示を維持し、C08.03実provider試験保留、別repo変更・実業務作用・公開行為・出荷判断は対象外とする。
+2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0、工程表SHA-256=7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77、Codex施工指示SHA-256=D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8）、適用AGENTS.md、作業標準要領、現物、active対象要求を再読した。今回開始HEAD／origin/main=9ba97ee1b24dd54c49a8de96ecd1cdc7eae9b80c、worktree clean。編集前local recovery branchとlocal／remote backup tagは現世代=9ba97ee1b24dd54c49a8de96ecd1cdc7eae9b80c、前世代=ccb6342d26efe3f720b746086d1e71282d8aa327で一致。復旧ref移行状態=MIGRATION_COMPLETE。ownerの開発続行指示を維持し、C08.03実provider保留、別repo変更・実業務作用・公開行為・出荷判断は対象外とする。
 
 ## 今回のBUILD_BATCH
+
+QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-OPERATOR-PER-STORE-STATUS-READABILITY`。関係単位=E03.03「破損範囲の隔離復旧」。開始HEAD／`origin/main`=`9ba97ee1b24dd54c49a8de96ecd1cdc7eae9b80c`、worktree clean。編集前にlocal recovery branch二世代とremote backup tag二世代を現世代=`9ba97ee1b24dd54c49a8de96ecd1cdc7eae9b80c`、前世代=`ccb6342d26efe3f720b746086d1e71282d8aa327`へ回転し、local／remote SHAを照合した。
+
+目的は、Recovery Backup inspectionで検証済みのcanonical SQLite statusをControl Centerの固定5行へ読みやすく表示し、台帳ごとの取得・検証状態をoperatorが確認できるようにすること。statusは固定日本語ラベルへ写し、受信projectionが不正・不完全・未検証なら全行を「未確認」、canonical snapshotがbackupに含まれない場合は「このbackupに未収録」と表示する。
+
+対象はRecovery Control Center文書と表示script、status投影の合成検証、既存Gateway/WebChat接続確認。対象外はarchive適用、実state restore、job identity・recoverability・restore point判定、store間atomicity、権限変更、C08.03 live/provider、別repo、実業務作用、公開・出荷判断。status表示は復旧可能性を意味せず、`canonical_state_cross_store_atomic=false`、`used_for_authority=false`、`may_execute=false`を維持する。
+
+最小確認は、5台帳の固定順・固定表示ラベル、verified／未収録／invalidの表示分離、不正受信時の個別行抑止、変更したWebChat tests、`pnpm typecheck`→`pnpm build`、`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check`。全suite、実state restore、credential/live/provider、5OS実機、QE_QC／QE_QAは対象外。
+
+## 今回の実績
+
+Control CenterのBackup検査に台帳別statusを固定5行で表示した。各台帳名・status labelは固定文字列で、verified boundaryの5行だけが値を受け取る。不正／不完全／未検証のprojectionは全行を「未確認」、snapshot未収録は「このbackupに未収録」とし、台帳がbackup時点で存在しなかったstatusと区別する。generic Restoreがcanonical stateを適用しない既存境界を維持した。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway recovery surface／WebChat focused tests | PASS、2 files／90 tests。全5台帳の各status、未収録、aggregate不一致時の`invalid_report`化と全行抑止を確認。 |
+| `pnpm typecheck`→`pnpm build` | 両方PASS。15 workspace projectsをbuild。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 全suite、実state restore、credential/live/provider、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+status表示はarchive検査結果の読みやすい投影であり、実state restore、仕事のrecoverability、独立restore point、store間atomicityを示さない。E03.03／QEB-03=`BUILD_GAP`、C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。別repo、実業務作用、公開・出荷判断なし。
+
+## 前回のBUILD_BATCH
 
 QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-PER-STORE-SNAPSHOT-STATUS-PROJECTION`。関係単位=E03.03「破損範囲の隔離復旧」。開始HEAD／`origin/main`=`ccb6342d26efe3f720b746086d1e71282d8aa327`、worktree clean。編集前local recovery branch二世代とremote backup tag二世代を現世代=`ccb6342d26efe3f720b746086d1e71282d8aa327`、前世代=`340f96b04717d54d7f4edc81da11526d09798a8`へ回転し、local／remoteの各SHAを照合した。
 
@@ -12,7 +35,7 @@ QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-PER-STORE-SNAPSHOT-STATUS-PROJE
 
 最小確認は、5台帳の固定status表示、manifest coverage件数との整合、未知・重複・欠落statusの拒否、invalid backupからの個別情報抑止、合成testでのsource/archive非変更。変更したrecovery surface／WebChat tests、`pnpm typecheck`→`pnpm build`、Recovery operator疎通、`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check`を実施する。全suite、実state復旧、credential/live/provider、5OS実機、QE_QC／QE_QAは対象外。
 
-## 今回の実績
+## 前回の実績
 
 既存のread-only Recovery Backup inspectionがcanonical snapshot manifestの5台帳statusを固定順・固定enumだけで返し、Control Centerは受信status・集約件数・coverageの相互整合を再検査するよう接続した。`not_found`／invalid inspectionでは台帳別statusを空にし、Control Centerもverified boundary以外のstatus行を表示しない。raw ID、行内容、path、archive digestは投影しない。`cross_store_atomic=false`、`used_for_authority=false`、`may_execute=false`は維持した。
 
@@ -26,7 +49,7 @@ QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-PER-STORE-SNAPSHOT-STATUS-PROJE
 
 Recovery Backup inspectionのread-only per-store投影を接続した部分実装であり、独立restore point、実state復元、store間atomicity、復旧可能性は証明しない。E03.03／QEB-03=`BUILD_GAP`、C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。別repo、実業務作用、公開・出荷判断は行っていない。
 
-## 前回のBUILD_BATCH
+## それ以前のBUILD_BATCH
 
 QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-SNAPSHOT-CAPTURE-CHANGE-DETECTION`。関係単位=E03.03「破損範囲の隔離復旧」、E03.02「未決作用・M pendingの回復」。開始HEAD／`origin/main`=`340f96b04717d54d7f4ed4c81da11526d09798a8`、worktree clean。編集前local recovery branch二世代とremote backup tag二世代を現世代=`340f96b04717d54d7f4ed4c81da11526d09798a8`、前世代=`be85af9f76fe45023954609587a2d49d6fa6a8f4`へ回転し、期待SHA・remote実値を照合した。
 

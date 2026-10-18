@@ -18,6 +18,8 @@
 
 2026-10-18の`QEB-03-E03.03-PER-STORE-SNAPSHOT-STATUS-PROJECTION`では、read-only Recovery Backup inspectionからcanonical snapshotの5台帳statusを固定順・固定enumに限ってControl Centerへ接続した。Control Centerは各statusと集約件数・coverageの整合を再検査し、不整合・invalid boundaryでは台帳別statusを表示しない。投影は非権威で復元操作を行わず、store間atomicityやrestore pointを証明しない。E03.03／QEB-03は`BUILD_GAP`を維持する。
 
+2026-10-18の`QEB-03-E03.03-OPERATOR-PER-STORE-STATUS-READABILITY`では、検証済みstatusをControl Centerの5つの固定行へ日本語ラベルで表示する。invalid／未確認時は全行を「未確認」、canonical snapshotが含まれない場合は「このbackupに未収録」とし、backup時の台帳不存在と区別する。statusはarchive検査結果であり、generic Restoreはcanonical stateを適用しない。E03.03／QEB-03は`BUILD_GAP`。
+
 2026-10-18のQEB-03-E03.02-CRON-NO-REPLAY-OWNER-RESOLUTIONでは、未決Cron eventの正確なevent ID／payload digestに結び付いたL3の「再実行しない」判断をDaily操作として接続した。HDSの永続hash-chain監査で同一command／requestのL3要求と人間承認を検証し、Cron cursorは同じeventの判断が再起動後も検証できた場合に限り次eventを許可する。処理中、stale／重複、監査検証不能はfail-closed。元の結果は`outcome_unknown`のまま保持し、再送・結果成功の推定・M更新はしない。durable job lifecycleと実外部結果の照合を含むE03.02／E01.01全体は`BUILD_GAP`。
 
 2026-10-18のQEB-03-E03.02-CRON-FAILURE-OUTCOME-PROPAGATIONでは、共有InboundRouterが捕捉していたhandler例外をCron channelに限ってschedulerへ返し、永続event cursorへ`outcome_unknown`として記録する経路を接続した。後続source eventはownerの明示したno-replay判断までblockedのまま。その他channelの例外封じ込めは維持し、`handler_returned`を外部作用成功とは扱わない。pending approvalを含むdurable job lifecycle、実外部receipt照合は引き続き`BUILD_GAP`。
