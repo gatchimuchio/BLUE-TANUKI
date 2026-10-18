@@ -175,6 +175,7 @@ interface PendingApproval {
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   content_review_digest?: string;
+  cron_event?: { event_id: string; payload_digest: string };
 }
 
 interface EmergencyStopState {
@@ -209,6 +210,17 @@ export interface GatewayInboundBoundaryPlan extends GatewayInboundBoundaryResult
 function replyTarget(req: InboundRequest): string {
   const m = req.metadata?.["reply_to"];
   return typeof m === "string" && m.length > 0 ? m : req.user;
+}
+
+function cronApprovalEventReference(request: InboundRequest): { event_id: string; payload_digest: string } | undefined {
+  if (request.channel !== "cron") return undefined;
+  const event_id = request.metadata?.["blue_tanuki.cron.event_id"];
+  const payload_digest = request.metadata?.["blue_tanuki.cron.payload_hash"];
+  if (typeof event_id !== "string" || !/^cron-[a-f0-9]{64}$/.test(event_id) ||
+      typeof payload_digest !== "string" || !/^[a-f0-9]{64}$/.test(payload_digest)) {
+    throw new Error("cron approval request is missing a valid durable event identity");
+  }
+  return { event_id, payload_digest };
 }
 
 export function canonicalizeGatewayInbound(raw: unknown): GatewayInboundBoundaryResult {
@@ -449,6 +461,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     verifyNoReplayDisposition: (event_id, payload_digest) =>
       hds.isCronEventNoReplayAcknowledged(event_id, payload_digest),
   });
+  cronEventStore.recoverPendingApprovalHandoffs();
   const cron = new CronSchedulerChannel({
     tasks: [...cronTasks, ...runtimeSchedules.activeCronTasks()],
     log: (line: string) => cronLog.info(line),
@@ -887,8 +900,30 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           actor,
           reason: failureMemoryRequiresApproval ? `failure_memory:${failureGate.reason}` : evaluation.reason,
         });
+        let cronEvent: PendingApproval["cron_event"];
+        try {
+          cronEvent = cronApprovalEventReference(origin);
+          if (cronEvent) {
+            cronEventStore.recordPendingApproval(cronEvent.event_id, cronEvent.payload_digest, cmd.id, log.request_id);
+          }
+        } catch (error) {
+          hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "cron_approval_handoff_unavailable" });
+          recordApprovalHistory("approval_cancelled", cmd, log, origin, actor, evaluation, {
+            reason: "cron_approval_handoff_unavailable",
+          });
+          throw error;
+        }
         const issued = await webchat.issueResumeApprovalToken(cmd.id);
         if (!hds.operationPlanCommandIsCurrent(cmd)) {
+          if (cronEvent) {
+            cronEventStore.resolvePendingApproval(
+              cronEvent.event_id,
+              cronEvent.payload_digest,
+              cmd.id,
+              log.request_id,
+              "cancelled",
+            );
+          }
           hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_changed_while_issuing_token" });
           return { status: "plan_binding_stale" };
         }
@@ -906,6 +941,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           evaluation,
           approval_token: issued?.token,
           approval_token_expires_at_ms: issued?.expires_at_ms,
+          ...(cronEvent ? { cron_event: cronEvent } : {}),
         });
         const approvalContent = failureMemoryRequiresApproval
           ? `${approvalRequiredMessage(evaluation, cmd.id, issued?.token)} failure_memory_gate=${failureGate.reason}`
@@ -1048,13 +1084,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
 
   async function resumePendingApproval(command_id: string, verdict: "approve" | "reject" | "block", ctx: WebChatResumeContext): Promise<unknown> {
     const pending = pendingApprovals.get(command_id);
-    if (!pending) return hds.isOperationPlanCommand(command_id) ? { executed: false, status: "plan_binding_stale" } : null;
+    if (!pending) {
+      if (cronEventStore.hasCronApprovalReference(command_id)) {
+        return { executed: false, status: "approval_unavailable_after_restart", fresh_request_required: true };
+      }
+      return hds.isOperationPlanCommand(command_id) ? { executed: false, status: "plan_binding_stale" } : null;
+    }
     if (executorCommandDigest(pending.command) !== pending.command_digest) {
+      resolveCronApprovalHandoff(pending, "cancelled");
       pendingApprovals.delete(command_id);
       hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "approval_content_changed" });
       return { executed: false, status: "approval_content_changed" };
     }
     if (!hds.operationPlanCommandIsCurrent(pending.command)) {
+      resolveCronApprovalHandoff(pending, "cancelled");
       pendingApprovals.delete(command_id);
       hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "plan_binding_stale" });
       return { executed: false, status: "plan_binding_stale" };
@@ -1076,6 +1119,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (verdict === "approve" && emergencyStop.active) {
       const issued = await webchat.issueResumeApprovalToken(command_id);
       if (!hds.operationPlanCommandIsCurrent(pending.command)) {
+        resolveCronApprovalHandoff(pending, "cancelled");
         pendingApprovals.delete(command_id);
         hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "plan_binding_stale" });
         return { executed: false, status: "plan_binding_stale" };
@@ -1114,8 +1158,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         approval_token_reissued: Boolean(issued?.token),
       };
     }
-    pendingApprovals.delete(command_id);
     if (verdict !== "approve") {
+      resolveCronApprovalHandoff(pending, "rejected");
+      pendingApprovals.delete(command_id);
       runtimeSchedules.rejectPending(command_id, ctx.actor, `human_approval:${verdict}`);
       hds.onCommandLifecycle(command_id, "approval_rejected", { actor: ctx.actor, reason: `human_approval:${verdict}` });
       recordApprovalHistory("human_resume_rejected", pending.command, pending.log, pending.origin, ctx.actor, pending.evaluation, {
@@ -1126,6 +1171,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       return { approval: verdict, executed: false };
     }
     if (runtimeScheduleMutationCommand(pending.command) && !runtimeSchedules.hasPending(command_id)) {
+      resolveCronApprovalHandoff(pending, "cancelled");
+      pendingApprovals.delete(command_id);
       const content = "[schedule-expired] approval expired before activation. activated=false can_fire=false next_action=Submit the schedule request again and approve the new command_id.";
       hds.onCommandLifecycle(command_id, "approval_rejected", { actor: ctx.actor, reason: "schedule_approval_expired" });
       recordApprovalHistory("schedule_approval_expired", pending.command, pending.log, pending.origin, ctx.actor, pending.evaluation, {
@@ -1135,6 +1182,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       await dispatcher.dispatch({ channel: pending.origin.channel, target: replyTarget(pending.origin), content }, { command_id: `schedule-expired-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
       return { approval: "approve", executed: false, status: "schedule_approval_expired" };
     }
+    resolveCronApprovalHandoff(pending, "consumed");
+    pendingApprovals.delete(command_id);
     if (ctx.approval?.remember || ctx.approval?.mode) {
       const grant = approval.remember(pending.evaluation, { actor: ctx.actor, mode: ctx.approval.mode, duration_ms: ctx.approval.duration_ms, note: `remembered from approval of command_id=${command_id}` });
       hds.onAuthorityEvent("grant_created", {
@@ -1438,6 +1487,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
 
   function pendingApprovalSnapshot(): WebChatApprovalQueueItem[] {
     for (const [id, p] of pendingApprovals) if (!hds.operationPlanCommandIsCurrent(p.command)) {
+      resolveCronApprovalHandoff(p, "cancelled");
       pendingApprovals.delete(id);
       hds.onCommandLifecycle(id, "approval_cancelled", { reason: "plan_binding_stale" });
     }
@@ -1741,8 +1791,23 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pending_approvals: pendingApprovalSnapshot(),
       authority_trace: authorityTrace,
       unresolved_cron_events: cronEventStore.unresolvedEvents(),
+      interrupted_cron_approvals: cronEventStore.interruptedApprovalHandoffs(),
       operation_plan_projection: operationPlanProjection,
     });
+  }
+
+  function resolveCronApprovalHandoff(
+    pending: PendingApproval,
+    resolution: "consumed" | "rejected" | "cancelled",
+  ): void {
+    if (!pending.cron_event) return;
+    cronEventStore.resolvePendingApproval(
+      pending.cron_event.event_id,
+      pending.cron_event.payload_digest,
+      pending.command.id,
+      pending.log.request_id,
+      resolution,
+    );
   }
 
   function completeHistorySnapshot(filter: WebChatHistoryReplayFilter): WebChatHistorySnapshot {

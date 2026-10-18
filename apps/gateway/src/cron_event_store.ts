@@ -27,6 +27,20 @@ export interface CronEventCursorSnapshot {
   readonly updated_at_ms: number;
 }
 
+export interface CronApprovalHandoffSnapshot {
+  readonly source_digest: string;
+  readonly sequence: number;
+  readonly event_id: string;
+  readonly payload_digest: string;
+  readonly command_id_digest: string;
+  readonly state: "interrupted";
+  readonly updated_at_ms: number;
+}
+
+export type CronApprovalHandoffResolution = "consumed" | "rejected" | "cancelled";
+
+const MAX_CRON_APPROVAL_HANDOFFS = 10_000;
+
 export type CronEventClaim =
   | { readonly status: "accepted" }
   | { readonly status: "duplicate"; readonly delivery_state: CronEventDeliveryState }
@@ -86,7 +100,23 @@ export class GatewayCronEventStore {
         payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
         delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown')),
         updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
-      ) STRICT;`);
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS cron_approval_handoff (
+        source_digest TEXT NOT NULL CHECK(length(source_digest) = 64),
+        sequence INTEGER NOT NULL CHECK(sequence >= 0),
+        event_id TEXT NOT NULL,
+        payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
+        command_id_digest TEXT NOT NULL CHECK(length(command_id_digest) = 64),
+        request_id_digest TEXT NOT NULL CHECK(length(request_id_digest) = 64),
+        state TEXT NOT NULL CHECK(state IN ('pending','interrupted','consumed','rejected','cancelled')),
+        created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+        updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+        PRIMARY KEY(event_id,command_id_digest)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS cron_approval_handoff_command_ref
+        ON cron_approval_handoff(command_id_digest);
+      CREATE INDEX IF NOT EXISTS cron_approval_handoff_request_ref
+        ON cron_approval_handoff(request_id_digest);`);
       const integrity = this.db.prepare("PRAGMA quick_check(1)").get() as Record<string, unknown> | undefined;
       if (!integrity || Object.values(integrity)[0] !== "ok") {
         throw new Error("cron_event_store_integrity_check_failed");
@@ -98,6 +128,12 @@ export class GatewayCronEventStore {
         o.event_id AS outbox_event_id,o.sequence AS outbox_sequence,o.payload_digest AS outbox_payload_digest,
         o.delivery_state AS outbox_delivery_state,o.updated_at_ms AS outbox_updated_at_ms
         FROM cron_event_inbox i LEFT JOIN cron_event_outbox o ON o.source_digest=i.source_digest LIMIT 0`);
+      const handoffRows = this.db.prepare(`SELECT source_digest,sequence,event_id,payload_digest,command_id_digest,
+        request_id_digest,state,created_at_ms,updated_at_ms FROM cron_approval_handoff`).all() as unknown as CronApprovalHandoffRow[];
+      if (handoffRows.length > MAX_CRON_APPROVAL_HANDOFFS) {
+        throw new Error("cron approval handoff capacity exceeded");
+      }
+      for (const row of handoffRows) validateApprovalHandoffRow(row);
       this.transaction(() => {});
     } catch (error) {
       this.db.close();
@@ -213,6 +249,119 @@ export class GatewayCronEventStore {
     return this.unresolvedEvents().find((event) => event.event_id === event_id && event.payload_digest === payload_digest);
   }
 
+  recordPendingApproval(
+    event_id: string,
+    payload_digest: string,
+    command_id: string,
+    request_id: string,
+    now_ms = Date.now(),
+  ): void {
+    validateApprovalHandoffInput(event_id, payload_digest, command_id, request_id, now_ms);
+    const command_id_digest = sha256(command_id);
+    const request_id_digest = sha256(request_id);
+    this.transaction(() => {
+      const row = this.db.prepare(`SELECT i.source_digest,i.sequence,i.event_id,i.payload_digest,i.delivery_state,i.updated_at_ms,
+        o.event_id AS outbox_event_id,o.sequence AS outbox_sequence,o.payload_digest AS outbox_payload_digest,
+        o.delivery_state AS outbox_delivery_state,o.updated_at_ms AS outbox_updated_at_ms
+        FROM cron_event_inbox i LEFT JOIN cron_event_outbox o ON o.source_digest=i.source_digest
+        WHERE i.event_id=?`).get(event_id) as {
+          source_digest: string; sequence: number; event_id: string; payload_digest: string;
+          delivery_state: CronEventDeliveryState; updated_at_ms: number; outbox_event_id?: string;
+          outbox_sequence?: number; outbox_payload_digest?: string; outbox_delivery_state?: CronEventDeliveryState;
+          outbox_updated_at_ms?: number;
+        } | undefined;
+      if (!row) throw new Error("cron approval handoff event is not present in the durable cursor");
+      const cursor = parseCursorRow(row.source_digest, row);
+      if (cursor.event_id !== event_id || cursor.payload_digest !== payload_digest || cursor.delivery_state !== "dispatching") {
+        throw new Error("cron approval handoff event is stale or not dispatching");
+      }
+
+      const existing = this.db.prepare(`SELECT source_digest,sequence,event_id,payload_digest,command_id_digest,
+        request_id_digest,state,created_at_ms,updated_at_ms FROM cron_approval_handoff
+        WHERE event_id=? AND command_id_digest=?`).get(event_id, command_id_digest) as CronApprovalHandoffRow | undefined;
+      if (existing) {
+        validateApprovalHandoffRow(existing);
+        if (existing.source_digest !== cursor.source_digest || existing.sequence !== cursor.sequence ||
+            existing.payload_digest !== payload_digest || existing.request_id_digest !== request_id_digest ||
+            existing.state !== "pending") {
+          throw new Error("cron approval handoff identity conflicts with a saved record");
+        }
+        return;
+      }
+
+      const count = this.db.prepare("SELECT COUNT(*) AS count FROM cron_approval_handoff").get() as { count: number };
+      if (!Number.isSafeInteger(count.count) || count.count >= MAX_CRON_APPROVAL_HANDOFFS) {
+        throw new Error("cron approval handoff capacity reached; new approvals are blocked");
+      }
+      this.db.prepare(`INSERT INTO cron_approval_handoff
+        (source_digest,sequence,event_id,payload_digest,command_id_digest,request_id_digest,state,created_at_ms,updated_at_ms)
+        VALUES (?,?,?,?,?,?,'pending',?,?)`)
+        .run(cursor.source_digest, cursor.sequence, event_id, payload_digest, command_id_digest, request_id_digest, now_ms, now_ms);
+    });
+  }
+
+  resolvePendingApproval(
+    event_id: string,
+    payload_digest: string,
+    command_id: string,
+    request_id: string,
+    resolution: CronApprovalHandoffResolution,
+    now_ms = Date.now(),
+  ): void {
+    validateApprovalHandoffInput(event_id, payload_digest, command_id, request_id, now_ms);
+    if (resolution !== "consumed" && resolution !== "rejected" && resolution !== "cancelled") {
+      throw new Error("invalid cron approval handoff resolution");
+    }
+    const command_id_digest = sha256(command_id);
+    const request_id_digest = sha256(request_id);
+    this.transaction(() => {
+      const update = this.db.prepare(`UPDATE cron_approval_handoff SET state=?,updated_at_ms=?
+        WHERE event_id=? AND payload_digest=? AND command_id_digest=? AND request_id_digest=? AND state='pending'`)
+        .run(resolution, now_ms, event_id, payload_digest, command_id_digest, request_id_digest);
+      if (Number(update.changes) === 1) return;
+      const existing = this.db.prepare(`SELECT source_digest,sequence,event_id,payload_digest,command_id_digest,
+        request_id_digest,state,created_at_ms,updated_at_ms FROM cron_approval_handoff
+        WHERE event_id=? AND command_id_digest=?`).get(event_id, command_id_digest) as CronApprovalHandoffRow | undefined;
+      if (existing) validateApprovalHandoffRow(existing);
+      if (!existing || existing.payload_digest !== payload_digest || existing.request_id_digest !== request_id_digest ||
+          existing.state !== resolution) {
+        throw new Error("cron approval handoff is missing, stale, or already resolved differently");
+      }
+    });
+  }
+
+  recoverPendingApprovalHandoffs(now_ms = Date.now()): number {
+    if (!Number.isSafeInteger(now_ms) || now_ms < 0) throw new Error("invalid cron approval recovery time");
+    const result = this.db.prepare(`UPDATE cron_approval_handoff SET state='interrupted',updated_at_ms=?
+      WHERE state='pending'`).run(now_ms);
+    return Number(result.changes);
+  }
+
+  interruptedApprovalHandoffs(): CronApprovalHandoffSnapshot[] {
+    const rows = this.db.prepare(`SELECT source_digest,sequence,event_id,payload_digest,command_id_digest,
+      request_id_digest,state,created_at_ms,updated_at_ms FROM cron_approval_handoff
+      WHERE state='interrupted' ORDER BY updated_at_ms DESC,event_id ASC,command_id_digest ASC`).all() as unknown as CronApprovalHandoffRow[];
+    return rows.map((row) => {
+      validateApprovalHandoffRow(row);
+      return {
+        source_digest: row.source_digest,
+        sequence: row.sequence,
+        event_id: row.event_id,
+        payload_digest: row.payload_digest,
+        command_id_digest: row.command_id_digest,
+        state: "interrupted" as const,
+        updated_at_ms: row.updated_at_ms,
+      };
+    });
+  }
+
+  hasCronApprovalReference(reference: string): boolean {
+    if (typeof reference !== "string" || reference.length === 0 || reference.length > 500) return false;
+    const digest = sha256(reference);
+    return Boolean(this.db.prepare(`SELECT 1 AS present FROM cron_approval_handoff
+      WHERE command_id_digest=? OR request_id_digest=? LIMIT 1`).get(digest, digest));
+  }
+
   close(): void {
     this.db.close();
   }
@@ -268,6 +417,45 @@ export class GatewayCronEventStore {
     } catch {
       return "verification_unavailable";
     }
+  }
+}
+
+interface CronApprovalHandoffRow {
+  source_digest: string;
+  sequence: number;
+  event_id: string;
+  payload_digest: string;
+  command_id_digest: string;
+  request_id_digest: string;
+  state: string;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+function validateApprovalHandoffInput(
+  event_id: string,
+  payload_digest: string,
+  command_id: string,
+  request_id: string,
+  now_ms: number,
+): void {
+  if (typeof event_id !== "string" || !/^cron-[a-f0-9]{64}$/.test(event_id) ||
+      typeof payload_digest !== "string" || !DIGEST.test(payload_digest) ||
+      typeof command_id !== "string" || command_id.length === 0 || command_id.length > 500 ||
+      typeof request_id !== "string" || request_id.length === 0 || request_id.length > 500 ||
+      !Number.isSafeInteger(now_ms) || now_ms < 0) {
+    throw new Error("invalid cron approval handoff identity");
+  }
+}
+
+function validateApprovalHandoffRow(row: CronApprovalHandoffRow): void {
+  if (!DIGEST.test(row.source_digest) || !Number.isSafeInteger(row.sequence) || row.sequence < 0 ||
+      row.event_id !== `cron-${sha256(`${row.source_digest}\0${row.sequence}`)}` ||
+      !DIGEST.test(row.payload_digest) || !DIGEST.test(row.command_id_digest) || !DIGEST.test(row.request_id_digest) ||
+      !["pending", "interrupted", "consumed", "rejected", "cancelled"].includes(row.state) ||
+      !Number.isSafeInteger(row.created_at_ms) || row.created_at_ms < 0 ||
+      !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
+    throw new Error("cron approval handoff integrity check failed");
   }
 }
 

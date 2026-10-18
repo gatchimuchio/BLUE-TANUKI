@@ -149,4 +149,70 @@ describe("GatewayCronEventStore", () => {
       reopened.close();
     }
   });
+
+  it("recovers pending approval as a non-resumable digest-only interruption", () => {
+    const { filepath, store } = makeStore();
+    const event = makeEvent("cron:runtime:approval", 9_000, "synthetic scheduled approval content");
+    const commandId = "synthetic-command-private-id";
+    const requestId = "synthetic-request-private-id";
+    expect(store.claim(event, 100)).toEqual({ status: "accepted" });
+    store.recordPendingApproval(event.event_id, event.payload_digest, commandId, requestId, 150);
+    store.settle(event, "handler_returned", 200);
+    expect(store.interruptedApprovalHandoffs()).toEqual([]);
+    expect(store.hasCronApprovalReference(commandId)).toBe(true);
+    store.close();
+
+    const db = new DatabaseSync(filepath);
+    try {
+      const saved = JSON.stringify(db.prepare("SELECT * FROM cron_approval_handoff").all());
+      expect(saved).not.toContain(commandId);
+      expect(saved).not.toContain(requestId);
+      expect(saved).not.toContain("synthetic scheduled approval content");
+    } finally {
+      db.close();
+    }
+
+    const reopened = new GatewayCronEventStore(filepath);
+    try {
+      expect(reopened.recoverPendingApprovalHandoffs(50)).toBe(1);
+      expect(reopened.recoverPendingApprovalHandoffs(400)).toBe(0);
+      expect(reopened.interruptedApprovalHandoffs()).toEqual([{
+        source_digest: createHash("sha256").update(event.source).digest("hex"),
+        sequence: event.sequence,
+        event_id: event.event_id,
+        payload_digest: event.payload_digest,
+        command_id_digest: createHash("sha256").update(commandId).digest("hex"),
+        state: "interrupted",
+        updated_at_ms: 50,
+      }]);
+      expect(reopened.hasCronApprovalReference(commandId)).toBe(true);
+      expect(reopened.hasCronApprovalReference(requestId)).toBe(true);
+      const projection = JSON.stringify(reopened.interruptedApprovalHandoffs());
+      expect(projection).not.toContain(commandId);
+      expect(projection).not.toContain(requestId);
+      expect(projection).not.toContain("synthetic scheduled approval content");
+      expect(() => reopened.resolvePendingApproval(
+        event.event_id,
+        event.payload_digest,
+        commandId,
+        requestId,
+        "consumed",
+        500,
+      )).toThrow(/already resolved differently/);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("keeps a resolved Cron approval reference as a stale-resume tombstone", () => {
+    const { store } = makeStore();
+    const event = makeEvent("cron:runtime:approval-resolved", 10_000, "synthetic approved task");
+    store.claim(event, 100);
+    store.recordPendingApproval(event.event_id, event.payload_digest, "command-old", "request-old", 150);
+    store.resolvePendingApproval(event.event_id, event.payload_digest, "command-old", "request-old", "consumed", 200);
+    expect(store.hasCronApprovalReference("command-old")).toBe(true);
+    expect(store.hasCronApprovalReference("request-old")).toBe(true);
+    expect(store.interruptedApprovalHandoffs()).toEqual([]);
+    store.close();
+  });
 });

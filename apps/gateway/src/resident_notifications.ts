@@ -5,7 +5,7 @@ import type {
   WebChatAuthorityTraceItem,
   WebChatNotificationItem,
 } from "@blue-tanuki/channel-webchat";
-import type { CronEventCursorSnapshot } from "./cron_event_store.js";
+import type { CronApprovalHandoffSnapshot, CronEventCursorSnapshot } from "./cron_event_store.js";
 
 interface OperationPlanCorrelationProjection {
   readonly schema_version: string;
@@ -29,6 +29,7 @@ export interface ResidentNotificationInput {
   pending_approvals: readonly WebChatApprovalQueueItem[];
   authority_trace: readonly WebChatAuthorityTraceItem[];
   unresolved_cron_events?: readonly CronEventCursorSnapshot[];
+  interrupted_cron_approvals?: readonly CronApprovalHandoffSnapshot[];
   operation_plan_projection?: OperationPlanCorrelationProjection;
   limit?: number;
 }
@@ -98,6 +99,23 @@ export function buildResidentNotificationsSnapshot(
       next_action: event.resolution_state === "owner_acknowledged_no_replay"
         ? "The next event may proceed, but this result is still unknown; inspect the authorized target independently before treating the action as complete."
         : "Inspect Authority Trace for this event ID and verify target delivery before taking any duplicate action.",
+    });
+  }
+
+  for (const [index, approval] of (input.interrupted_cron_approvals ?? []).entries()) {
+    notifications.push({
+      id: `cron-approval-interrupted:${approval.event_id}:${index}`,
+      kind: "approval_interrupted",
+      severity: "warning",
+      title: "Cron approval was interrupted by Gateway restart",
+      message: "A saved approval was not restored after restart. Inspect the event and any saved result before creating a new request.",
+      timestamp: approval.updated_at_ms,
+      source: "cron_approval_handoff",
+      read_only: true,
+      authority: "display_only",
+      request_id: approval.event_id,
+      payload_hash: approval.payload_digest,
+      next_action: "Review Authority Trace and result evidence for this event. If work is still needed, submit a new request for a fresh approval; do not reuse the interrupted approval.",
     });
   }
 

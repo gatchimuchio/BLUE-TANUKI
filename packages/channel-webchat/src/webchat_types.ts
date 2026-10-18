@@ -290,6 +290,7 @@ export interface WebChatAuthoritySurface {
 
 export type WebChatNotificationKind =
   | "approval_required"
+  | "approval_interrupted"
   | "schedule_fired"
   | "schedule_delivery_unknown"
   | "schedule_failed"

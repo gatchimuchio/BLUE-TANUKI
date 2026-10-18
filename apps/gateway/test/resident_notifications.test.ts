@@ -236,6 +236,41 @@ describe("buildResidentNotificationsSnapshot", () => {
     expect(JSON.stringify(notifications)).not.toContain("do-not-emit");
   });
 
+  it("shows interrupted Cron approvals as read-only notices without restoring approval data", () => {
+    const eventId = `cron-${"a".repeat(64)}`;
+    const payloadDigest = "b".repeat(64);
+    const commandDigest = "c".repeat(64);
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 1000,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [],
+      interrupted_cron_approvals: [{
+        source_digest: "d".repeat(64),
+        sequence: 17,
+        event_id: eventId,
+        payload_digest: payloadDigest,
+        command_id_digest: commandDigest,
+        state: "interrupted",
+        updated_at_ms: 900,
+      }],
+    });
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({
+      kind: "approval_interrupted",
+      severity: "warning",
+      request_id: eventId,
+      payload_hash: payloadDigest,
+      timestamp: 900,
+      read_only: true,
+      authority: "display_only",
+      next_action: expect.stringContaining("fresh approval"),
+    });
+    expect(notifications[0]?.message).toContain("was not restored");
+    expect(JSON.stringify(notifications)).not.toContain(commandDigest);
+  });
+
   it("limits and sorts notifications by newest timestamp", () => {
     const notifications = buildResidentNotificationsSnapshot({
       now_ms: 1000,
