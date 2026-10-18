@@ -43,8 +43,44 @@ export interface ResidentNotificationInput {
   authority_trace: readonly WebChatAuthorityTraceItem[];
   unresolved_cron_events?: readonly CronEventCursorSnapshot[];
   interrupted_cron_approvals?: readonly CronApprovalHandoffSnapshot[];
+  cron_state_read_failures?: readonly CronNotificationStateReadFailure[];
   operation_plan_projection?: OperationPlanCorrelationProjection;
   limit?: number;
+}
+
+export type CronNotificationStateReadFailure = "unresolved_events" | "interrupted_approvals";
+
+export interface CronNotificationStateReader {
+  unresolvedEvents(): CronEventCursorSnapshot[];
+  interruptedApprovalHandoffs(): CronApprovalHandoffSnapshot[];
+}
+
+export interface CronNotificationStateSnapshot {
+  readonly unresolved_events: readonly CronEventCursorSnapshot[];
+  readonly interrupted_approvals: readonly CronApprovalHandoffSnapshot[];
+  readonly read_failures: readonly CronNotificationStateReadFailure[];
+}
+
+/** Keep one unreadable Cron projection from suppressing the other notifications. */
+export function readCronNotificationState(store: CronNotificationStateReader): CronNotificationStateSnapshot {
+  let unresolvedEvents: CronEventCursorSnapshot[] = [];
+  let interruptedApprovals: CronApprovalHandoffSnapshot[] = [];
+  const readFailures: CronNotificationStateReadFailure[] = [];
+  try {
+    unresolvedEvents = store.unresolvedEvents();
+  } catch {
+    readFailures.push("unresolved_events");
+  }
+  try {
+    interruptedApprovals = store.interruptedApprovalHandoffs();
+  } catch {
+    readFailures.push("interrupted_approvals");
+  }
+  return {
+    unresolved_events: unresolvedEvents,
+    interrupted_approvals: interruptedApprovals,
+    read_failures: readFailures,
+  };
 }
 
 export function buildResidentNotificationsSnapshot(
@@ -65,6 +101,24 @@ export function buildResidentNotificationsSnapshot(
       read_only: true,
       authority: "display_only",
       next_action: "Stop normal operation, preserve the audit store, and run audit verification before continuing.",
+    });
+  }
+
+  for (const failure of input.cron_state_read_failures ?? []) {
+    if (failure !== "unresolved_events" && failure !== "interrupted_approvals") continue;
+    notifications.push({
+      id: `cron-state-unavailable:${failure}`,
+      kind: "cron_recovery_state_unavailable",
+      severity: "warning",
+      title: "Scheduled recovery state could not be verified",
+      message: failure === "unresolved_events"
+        ? "The unresolved schedule-event list could not be verified; its state may be incomplete. No recovery action was taken."
+        : "The interrupted schedule-approval list could not be verified; its state may be incomplete. No recovery action was taken.",
+      timestamp: now,
+      source: failure === "unresolved_events" ? "cron_event_cursor" : "cron_approval_handoff",
+      read_only: true,
+      authority: "display_only",
+      next_action: "Preserve the recovery state and verify pending schedule work before creating a duplicate request.",
     });
   }
 

@@ -293,6 +293,7 @@ export type WebChatNotificationKind =
   | "approval_interrupted"
   | "schedule_fired"
   | "schedule_delivery_unknown"
+  | "cron_recovery_state_unavailable"
   | "schedule_failed"
   | "connector_failure"
   | "audit_warning";

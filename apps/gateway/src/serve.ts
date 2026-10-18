@@ -110,7 +110,7 @@ import {
   validateGmailMessageSendContentReview,
 } from "./approval_content_review.js";
 import { buildRuntimeStatusSnapshot } from "./runtime_status.js";
-import { buildResidentNotificationsSnapshot } from "./resident_notifications.js";
+import { buildResidentNotificationsSnapshot, readCronNotificationState } from "./resident_notifications.js";
 import { probeGatewaySelfHealth } from "./runtime_health.js";
 import { resolveAllSecretRefs } from "./secret_store.js";
 import {
@@ -1788,12 +1788,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const authorityTrace = authorityTraceSnapshot();
     let operationPlanProjection: ReturnType<HDSUpperController["getRuntimeSnapshot"]>["operation_plans"] | undefined;
     try { operationPlanProjection = hds.getRuntimeSnapshot().operation_plans; } catch { /* optional read-only correlation */ }
+    const cronState = readCronNotificationState(cronEventStore);
     return buildResidentNotificationsSnapshot({
       audit_chain_valid: hds.getAudit().verify(),
       pending_approvals: pendingApprovalSnapshot(),
       authority_trace: authorityTrace,
-      unresolved_cron_events: cronEventStore.unresolvedEvents(),
-      interrupted_cron_approvals: cronEventStore.interruptedApprovalHandoffs(),
+      unresolved_cron_events: cronState.unresolved_events,
+      interrupted_cron_approvals: cronState.interrupted_approvals,
+      cron_state_read_failures: cronState.read_failures,
       operation_plan_projection: operationPlanProjection,
     });
   }
