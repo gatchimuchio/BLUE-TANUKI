@@ -28,6 +28,8 @@ owner leaseのschema／世代／process間排他／喪失後拒否を対象に�
 
 E03.01は、Windows local filesystemでのSQLite process exclusionとGateway Executor fenceを接続した部分実装として`BUILD_GAP`を維持する。Windows ACL検査、network filesystemのlock、実行中にすでに外部adapterへ渡った作用の停止、旧generation receiptの分離は未確認・未接続。live serve／実credential／実provider／外部作用は未実施。
 
+実装commit=`d01abd9745d9503288127b543ab858f875478220`を`origin/main`へpush済み。push後のfetchでlocal／remote mainが同SHAと確認。local recovery branch／remote backup tagは開始点の二世代`e4344ee0ad06faa12c05b0b8beae3fcffb1f0eb0`／`742b23c61d15cb390de9b5625179412a53bd49be`でSHA一致。文書閉包後の作業ツリーとref状態は最終照合する。
+
 ### Git・停止条件
 
 通常成果を限定commitとして`main`へpushし、push後にremote HEAD、local二世代recovery branch、remote二世代backup tag、clean stateを再照合する。owner leaseの破損・重複・喪失が作用継続または二重ownerを許す場合はdispatchを無効のままにする。E03.01／QEB-03全体の完成宣言は行わない。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
