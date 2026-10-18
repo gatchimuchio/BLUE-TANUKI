@@ -2,7 +2,22 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-03-E03.03-VERIFIED-PLAN-RESTORE-REFRESH`
+### 最新BUILD_BATCH：`QEB-03-E03.03-MULTI-PLAN-RESTORE-RESIDUAL-HOLD`
+
+開始HEAD／`origin/main`=`64ccf7f1923b6af7b1475b843b70a2f7ddc2b9f2`、開始worktree clean。owner指定のQE rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、E03.03、現物を再読した。編集前にlocal recovery branch二本とremote backup tag二本を照合・回転し、開始HEADをcurrent／previous両世代へ保全した。
+
+`recovery_mutation_entry.test.ts`の実Gateway L3 restore fixtureを複数planへ広げた。backup内のcleanなplan digestを選択scopeにして合成L3 reviewを通し、同じOperation Plan storeにあるBroker admission欠落のcollateral planを残差状態で含める。Gateway process／HTTP／SQLiteの復元後、HDS projectionと永続hold stateが残差planだけを`held_residual`として保持し、clean planにはrecovery holdを付けないことを確認した。restore要求は選択store全体に作用するため、この結果は残差planを選択しない。HDSによる計画実行、ownerの実承認、Executor作用は行っていない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `recovery_mutation_entry.test.ts` | PASS、追加ケース1件。合成L3復元後の2 plan、残差planだけのHDS／永続holdを確認。 |
+| Gateway `typecheck`／`git diff --check` | PASS。 |
+| `pnpm docs:check`／`pnpm validate:repo-health` | PASS。日本語基底の既存移行負債76件。 |
+| 実owner approval／plan review後の承認／Executor作用／provider／外部書込み／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+この復元後HDS hold分離経路は合成Gateway fixture上で`WIRED`。E03.03全体は`BUILD_GAP`。次consumerは復元後checkpointのclean planを通常HDS reviewへ渡し、残差planのreviewは拒否されExecutor履歴を作らない経路。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の境界を維持する。
+
+### 前回BUILD_BATCH：`QEB-03-E03.03-VERIFIED-PLAN-RESTORE-REFRESH`
 
 開始HEAD／`origin/main`=`41a0bf675f582e681148efacc371498eec713222`、worktree clean。owner指定rev2.3三点正本・適用`AGENTS.md`・作業標準・active指示・E03.03と現物を再読し、前回候補のrestore preflight／verified scope接続が既存コードにあることを追跡した。Gatewayはbackup由来Operation Plan digestをwhole-store L3 targetへ結び、実行時にもbackup scopeを再検証する。
 

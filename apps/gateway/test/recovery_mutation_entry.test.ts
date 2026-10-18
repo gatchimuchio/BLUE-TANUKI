@@ -544,7 +544,7 @@ describe("Recovery mutation HDS L3 entry", () => {
     }
   }, 30_000);
 
-  it("restores a verified Operation Plan store through L3 and refreshes the runtime checkpoint", async () => {
+  it("restores a verified Operation Plan store through L3 and holds only the residual collateral plan", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-operation-plan-restore-l3-"));
     temporaryRoots.push(root);
     const envFile = join(root, "product.env");
@@ -553,7 +553,7 @@ describe("Recovery mutation HDS L3 entry", () => {
     writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
     const runtimeEnv = isolatedRuntimeEnvironment(root, envFile, historyFile, port);
     const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
-    const { plan_id_digest: planIdDigest } = seedOperationPlanState(planStatePath);
+    const { cleanPlanIdDigest, residualPlanIdDigest } = seedMixedOperationPlanRestoreState(planStatePath);
     const gateway = spawnGateway(runtimeEnv);
 
     try {
@@ -571,7 +571,7 @@ describe("Recovery mutation HDS L3 entry", () => {
       const changedStore = new OperationPlanStateStore(planStatePath);
       try {
         const current = changedStore.load();
-        expect(current?.plans).toHaveLength(1);
+        expect(current?.plans).toHaveLength(2);
         const empty = OperationPlanCheckpointSchema.parse({
           schema_version: "operation-plan-state.v1",
           plans: [],
@@ -588,12 +588,12 @@ describe("Recovery mutation HDS L3 entry", () => {
           backup_id: backupId,
           store_key: "operation_plans",
           scope_kind: "operation_plan",
-          scope_digest: planIdDigest,
+          scope_digest: cleanPlanIdDigest,
           confirm: "RESTORE",
         },
       });
       const expectedTarget =
-        `recovery.restore:${backupId}:store:operation_plans:effect:whole_store:scope:operation_plan:${planIdDigest}`;
+        `recovery.restore:${backupId}:store:operation_plans:effect:whole_store:scope:operation_plan:${cleanPlanIdDigest}`;
       expect(queued.status, JSON.stringify(queued.body)).toBe(202);
       expect(queued.body).toMatchObject({ ok: true, result: {
         status: "approval_required",
@@ -602,7 +602,7 @@ describe("Recovery mutation HDS L3 entry", () => {
         restore_effect_scope: "entire_selected_store",
         scope_applicability: {
           status: "matched",
-          matched_plan_id_digest: planIdDigest,
+          matched_plan_id_digest: cleanPlanIdDigest,
           used_for_authority: false,
           may_execute: false,
         },
@@ -634,12 +634,22 @@ describe("Recovery mutation HDS L3 entry", () => {
       const restoredStore = new OperationPlanStateStore(planStatePath);
       try {
         expect(restoredStore.load()?.plans.map((plan) => operationPlanDigest(plan.revisions[0]!.plan.plan_id)))
-          .toEqual([planIdDigest]);
+          .toEqual([cleanPlanIdDigest, residualPlanIdDigest]);
+        expect(restoredStore.loadRecoveryHoldState()).toMatchObject({
+          holds: [{ plan_id_digest: residualPlanIdDigest, reason: "held_residual" }],
+          used_for_authority: false,
+          may_execute: false,
+        });
       } finally {
         restoredStore.close();
       }
       const runtime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
-      expect(runtime.body.hds.operation_plans.plans).toMatchObject([{ plan_id: planIdDigest }]);
+      const runtimePlans = runtime.body.hds.operation_plans.plans as Array<Record<string, unknown>>;
+      expect(runtimePlans).toEqual(expect.arrayContaining([
+        expect.objectContaining({ plan_id: cleanPlanIdDigest }),
+        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
+      ]));
+      expect(runtimePlans.find((plan) => plan.plan_id === cleanPlanIdDigest)?.recovery_hold_reason).toBeUndefined();
       expect(runtime.body.hds.operation_plans.used_for_authority).toBe(false);
       expect(runtime.body.hds.operation_plans.raw_payload_exposed).toBe(false);
     } finally {
@@ -888,6 +898,66 @@ function seedOperationPlanState(filepath: string): { plan_id_digest: string; rev
     store.close();
   }
   return { plan_id_digest: operationPlanDigest(plan.plan_id), revision_digest: revisionDigest };
+}
+
+function seedMixedOperationPlanRestoreState(filepath: string): {
+  cleanPlanIdDigest: string;
+  residualPlanIdDigest: string;
+} {
+  mkdirSync(dirname(filepath), { recursive: true });
+  const cleanPlan = syntheticOperationPlan("restore-clean-request", "restore-clean-plan", "restore-clean-step");
+  const residualPlan = syntheticOperationPlan("restore-residual-request", "restore-residual-plan", "restore-residual-step");
+  const cleanRevisionDigest = operationPlanDigest(cleanPlan);
+  const residualRevisionDigest = operationPlanDigest(residualPlan);
+  const residualStep = residualPlan.steps[0]!;
+  const { state: _state, result_digest: _result, ...residualStepDefinition } = residualStep;
+  const residualBinding = {
+    step_id: residualStep.step_id,
+    revision_digest: residualRevisionDigest,
+    step_digest: operationPlanDigest(residualStepDefinition),
+    prepared_step: residualStep,
+    command_id: "synthetic-residual-command",
+    request_id: residualPlan.request_id,
+    commit_hash: "synthetic-residual-commit",
+    payload_digest: createHash("sha256").update("synthetic-residual-payload").digest("hex"),
+    command_digest: createHash("sha256").update("synthetic-residual-command").digest("hex"),
+    operation: residualStep.operation,
+    // An intent without its Broker admission is a real residual dependency for this fixture.
+    status: "intent_committed" as const,
+  };
+  const checkpoint = OperationPlanCheckpointSchema.parse({
+    schema_version: "operation-plan-state.v1",
+    plans: [
+      {
+        owner: "fixture-owner",
+        channel: "webchat",
+        goal: "fixture clean collateral plan",
+        revisions: [{ digest: cleanRevisionDigest, plan: cleanPlan }],
+        receipt_observations: [],
+        bindings: [],
+        results: [],
+      },
+      {
+        owner: "fixture-owner",
+        channel: "webchat",
+        goal: "fixture residual collateral plan",
+        revisions: [{ digest: residualRevisionDigest, plan: residualPlan }],
+        receipt_observations: [],
+        bindings: [residualBinding],
+        results: [],
+      },
+    ],
+  });
+  const store = new OperationPlanStateStore(filepath);
+  try {
+    store.compareAndSet(null, checkpoint);
+  } finally {
+    store.close();
+  }
+  return {
+    cleanPlanIdDigest: operationPlanDigest(cleanPlan.plan_id),
+    residualPlanIdDigest: operationPlanDigest(residualPlan.plan_id),
+  };
 }
 
 function syntheticOperationPlan(requestId: string, planId: string, stepId: string) {
