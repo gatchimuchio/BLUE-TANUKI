@@ -2,21 +2,21 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-03-E03.03-CRON-RESTORE-QUIESCE-REOPEN-REOBSERVATION`
+### 最新BUILD_BATCH：`QEB-03-E03.03-JM-RESTORE-QUIESCE-REOPEN-HDS-HOLD`
 
-開始HEAD／`origin/main`=`6d4fe92546d633e89c58ff1f868611d0548599f2`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、Cron scheduler／store／serve／Recovery observerを再読して開始した。
+開始HEAD／`origin/main`=`f8569ebf6219652c7ab89bf1e1581816fc7b93f8`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、J/M store lifecycle／HDS OperationPlan／Gateway restore consumer／post-action observerを再読して開始した。
 
-`cron_events`選択復元を通常serveのconsumerへ接続した。要求時とL3実行直前にCron承認handoff残存を拒否し、L3承認後はschedulerを停止・排出してからpending Cron承認を再確認する。新しいコマンド実行を一時遮断し、既存Executor taskを排出した後に選択SQLite接続を閉じる。Recovery toolはserveのquiescence gateなしにCron storeを復元できない。復元後はDBをreopenし、schema／integrityと承認handoffを再検査する。完全・安定したComplete History、実行command、backup digest、対象store digest、live Cron ledger（verified／残差0）が一致した場合だけschedulerを再開する。不一致、failed restore、history欠落、reopen失敗はscheduler holdまたはserve maintenance holdへ閉じる。観測は権限や旧承認を復活させず、L3 tokenを再利用しない。
+`j_control`／`m_state`選択復元を通常serveの実consumerへ接続した。L3承認後にmaintenance lockを取り、既存Executor仕事を排出する。HDSはactive plan attemptがなくJ/M pairが内部検証可能な場合だけ両SQLite接続を閉じ、restore toolはserveからquiescence receiptを受けたときだけ実行できる。復元前に現在のOperationPlan全件へdigest限定・非権威の`held_unverified`を永続保存し、実行判定でもholdを検査する。復元後は安定した完全履歴、command identity、選択store、backup digest、restored-state digest、台帳verified／残差0を照合し、すべて一致した場合だけ同じHDS consumer pairを再openしてmaintenance lockを解く。不一致、失敗、履歴欠落、再open失敗はJ/M consumerを閉じたままmaintenance holdへ閉じる。J/M ledger integrityだけでは各planのcross-store dependencyを証明しないため、正常再観測でも既存plan holdは解除しない。
 
 | 限定確認 | 結果 |
 |---|---|
-| Cron／Recovery／post-action observerの5 test files | PASS、39 tests。合成stateでRecovery endpoint→HDS L3 queue→test resume token→Executor→selected store restore→reopen／post-observation→scheduler resumeを確認。 |
-| Gateway typecheck／workspace build | PASS。 |
-| `smoke:serve` | PASS。stub WebChat、channel_send、audit persistence／dumpを確認。 |
+| J/M lifecycle／Recovery evidence／post-action observer／Gateway L3 restoreの5 test files | PASS、41 tests。合成stateでJ/M双方のRecovery endpoint→HDS L3 queue→test resume token→Executor→選択store restore→reopen／再観測と既存planの永続holdを確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS。workspace 15 projects。 |
+| `pnpm hds:standalone`／`pnpm smoke:serve` | 両方PASS。HDS invariants／audit chain、stub WebChat、channel_send、audit persistence／dumpを確認。 |
 | `docs:check`／`validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件を確認。 |
 | 実データrestore／実owner approval／restart／provider credential／外部作用／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
 
-実装commit=`76c776d`。E03.03は`BUILD_GAP`を維持する。`j_control`／`m_state`のJ/M store lifecycleは未接続で引き続き作用前fail-closed。`cron_events`の本接続もQE_BUILDの合成試験であり、実製品データの復旧・OS別QA・全体QCを証明しない。次consumerはJ/M selected-store close/reopenとHDS consumer lifecycleの接続。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。D4Pocket／ミニドラへの変更、実業務作用、公開・出荷判断なし。
+E03.03は`BUILD_GAP`を維持する。次consumerは、J/M復元後に既存planのJ control／M receipt依存が一致することをdigest限定で計画別に証明する実consumerであり、依存証拠がない間はholdを維持する。store間atomicity、仕事単位restore point、復旧可能性は未成立。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。D4Pocket／ミニドラへの変更、実業務作用、公開・出荷判断なし。
 
 ### 前回BUILD_BATCH：`QEB-03-E03.03-RESTORE-STARTUP-UNVERIFIED-HOLD`
 

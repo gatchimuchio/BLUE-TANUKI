@@ -91,15 +91,16 @@ describe("Recovery mutation tool boundary", () => {
     })).toThrow("invalid_recovery_request");
   });
 
-  it("blocks selected stores whose live Gateway consumers cannot be quiesced", async () => {
-    expect(canonicalStoreRestoreConsumersNotQuiesced("j_control")).toEqual(["hds_control_store"]);
-    expect(canonicalStoreRestoreConsumersNotQuiesced("m_state")).toEqual(["hds_memory_store"]);
+  it("requires a live quiesce receipt for J/M and Cron selected-store restore", async () => {
+    expect(canonicalStoreRestoreConsumersNotQuiesced("j_control")).toEqual([]);
+    expect(canonicalStoreRestoreConsumersNotQuiesced("m_state")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("broker")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("cron_events")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("operation_plans")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced(undefined)).toEqual([]);
 
-    const restore = createRecoveryMutationTools({}).find((tool) => tool.name === "recovery.restore");
+    const restore = createRecoveryMutationTools({}, undefined, { canonicalStoreRestoreQuiesced: () => false })
+      .find((tool) => tool.name === "recovery.restore");
     const arguments_ = { backup_id: "fixture", store_key: "broker", confirm: "RESTORE" };
     await expect(restore?.invoke(arguments_))
       .rejects.toThrow("broker_restore_execution_context_missing");
@@ -109,6 +110,10 @@ describe("Recovery mutation tool boundary", () => {
       idempotency_key: "a".repeat(64),
     })).rejects.toThrow("broker_restore_execution_store_unavailable");
     await expect(restore?.invoke({ backup_id: "fixture", store_key: "cron_events", confirm: "RESTORE" }))
+      .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
+    await expect(restore?.invoke({ backup_id: "fixture", store_key: "j_control", confirm: "RESTORE" }))
+      .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
+    await expect(restore?.invoke({ backup_id: "fixture", store_key: "m_state", confirm: "RESTORE" }))
       .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
   });
 });

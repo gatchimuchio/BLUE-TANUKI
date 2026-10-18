@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   COMPLETE_HISTORY_SCHEMA_VERSION,
   CompleteHistoryStore,
@@ -131,6 +131,7 @@ import {
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { OperationPlanStateStore } from "./operation_plan_store.js";
 import { operationPlanRecoveryEvidenceFromObservation } from "./operation_plan_recovery_evidence.js";
+import type { CanonicalStateStoreKey } from "./canonical_state_backup.js";
 import {
   commandOperation,
   commandHistoryDescriptor,
@@ -387,9 +388,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
   let gatewayShuttingDown = false;
   let cronEventsStoreQuiesced = false;
-  let cronEventsRestoreMaintenanceCommandId: string | null = null;
+  let jMRestoreStoreQuiesced: "j_control" | "m_state" | null = null;
+  let canonicalStoreRestoreMaintenanceCommandId: string | null = null;
   for (const tool of createRecoveryMutationTools(process.env, () => recoveryExecutionStore, {
-    cronEventsStoreQuiesced: () => cronEventsStoreQuiesced,
+    canonicalStoreRestoreQuiesced: (storeKey: CanonicalStateStoreKey) =>
+      storeKey === "cron_events" ? cronEventsStoreQuiesced : storeKey === jMRestoreStoreQuiesced,
   })) tools.register(tool);
   plugins.registerTools(tools);
   const llm = buildLLMBackendFromEnv();
@@ -895,7 +898,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     opts: { skip_approval?: boolean; actor?: string; approval_evaluation?: ApprovalEvaluation; command_digest?: string } = {},
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
-    if (cronEventsRestoreMaintenanceCommandId && cronEventsRestoreMaintenanceCommandId !== cmd.id) {
+    if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
         actor,
         reason: "canonical_state_restore_in_progress",
@@ -910,6 +913,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       cmd.payload.arguments.store_key === "operation_plans" && cmd.payload.arguments.confirm === "RESTORE";
     const cronEventsRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       cmd.payload.arguments.store_key === "cron_events" && cmd.payload.arguments.confirm === "RESTORE";
+    const jMRestoreStoreKey = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
+      (cmd.payload.arguments.store_key === "j_control" || cmd.payload.arguments.store_key === "m_state") &&
+      cmd.payload.arguments.confirm === "RESTORE" ? cmd.payload.arguments.store_key : null;
     let executionEvaluation = opts.approval_evaluation ?? null;
     if (!hds.operationPlanCommandIsCurrent(cmd)) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_binding_stale" });
@@ -1130,7 +1136,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (!executionEvaluation) {
       throw new Error("approval evaluation proof is required before executor execution");
     }
-    if (cronEventsRestoreMaintenanceCommandId && cronEventsRestoreMaintenanceCommandId !== cmd.id) {
+    if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
         actor,
         reason: "canonical_state_restore_in_progress",
@@ -1172,7 +1178,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         await cron.resumeAfterRecoveryRestore({ restore_attempted: true, observation_verified: observationVerified });
       }
       cronEventsRestoreQuiesced = false;
-      cronEventsRestoreMaintenanceCommandId = null;
+      canonicalStoreRestoreMaintenanceCommandId = null;
     };
     if (cronEventsRestore) {
       if (!await cron.quiesceForRecoveryRestore()) {
@@ -1187,26 +1193,43 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         });
         return { status: "cron_approval_handoff_pending" };
       }
-      cronEventsRestoreMaintenanceCommandId = cmd.id;
+      canonicalStoreRestoreMaintenanceCommandId = cmd.id;
       while (executionTasks.size > 0) await Promise.allSettled(Array.from(executionTasks));
       try {
         cronEventStore.close();
         cronEventsStoreQuiesced = true;
         cronEventsRestoreQuiesced = true;
       } catch {
-        cronEventsRestoreMaintenanceCommandId = null;
+        canonicalStoreRestoreMaintenanceCommandId = null;
         if (cronEventStore.isClosed()) {
           try {
             cronEventStore.reopenAfterRecoveryRestore();
             cronEventsStoreQuiesced = false;
           } catch {
-            cronEventsRestoreMaintenanceCommandId = cmd.id;
+            canonicalStoreRestoreMaintenanceCommandId = cmd.id;
             throw new Error("cron_event_store_quiescence_failed");
           }
         }
         await cron.resumeAfterRecoveryRestore({ restore_attempted: false, observation_verified: false });
         hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "cron_event_store_quiescence_failed" });
         return { status: "cron_event_store_quiescence_failed" };
+      }
+    }
+    let jMRestoreQuiesced = false;
+    if (jMRestoreStoreKey) {
+      canonicalStoreRestoreMaintenanceCommandId = cmd.id;
+      while (executionTasks.size > 0) await Promise.allSettled(Array.from(executionTasks));
+      if (!hds.quiesceOperationPlanMemoryForCanonicalRestore()) {
+        canonicalStoreRestoreMaintenanceCommandId = null;
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "j_m_store_not_quiescent" });
+        return { status: "j_m_store_not_quiescent" };
+      }
+      jMRestoreQuiesced = true;
+      jMRestoreStoreQuiesced = jMRestoreStoreKey;
+      // Persist a conservative hold before invoking whole-store restore. If it
+      // cannot be recorded, keep both the database and gateway maintenance lock closed.
+      if (!hds.holdOperationPlansForCanonicalMemoryRestore(cmd)) {
+        throw new Error("j_m_operation_plan_hold_unavailable");
       }
     }
     const executionController = new AbortController();
@@ -1308,6 +1331,87 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const content = finalized.rendered_output;
     const output = finalized.output_audit;
     const finalOutputRecorded = recordFinalOutputHistory(log, origin, actor, output, cmd);
+    if (jMRestoreQuiesced && jMRestoreStoreKey) {
+      const restoreResultEvidence = fb.status === "success"
+        ? recoveryStoreRestoreHistoryEvidence(fb.result)
+        : null;
+      let observationVerified = false;
+      if (executionHistory && finalOutputRecorded && restoreResultEvidence?.store_key === jMRestoreStoreKey) {
+        const historySize = completeHistory.size();
+        const historySkippedCount = completeHistory.skippedCount();
+        const historyChainValid = completeHistory.verify();
+        const historyIncompleteAtStart = recoveryObservationHistoryIncomplete;
+        const historyAtCapacity = completeHistoryMaxEntries !== undefined && historySize >= completeHistoryMaxEntries;
+        const historyEntries = completeHistory.replay().filter(
+          (entry): entry is CompleteHistoryEntry & { kind: "execution_history" | "final_output" } =>
+            entry.kind === "execution_history" || entry.kind === "final_output",
+        );
+        const historyEvidence = {
+          entries: historyEntries,
+          chain_valid: historyChainValid,
+          skipped_count: historySkippedCount +
+            (historyAtCapacity || historyIncompleteAtStart ? 1 : 0),
+          not_before_timestamp_ms: recoveryObservationStartedAtMs,
+        };
+        const historyComplete = !!completeHistoryFile && historyChainValid && historySkippedCount === 0 &&
+          !historyAtCapacity && !historyIncompleteAtStart;
+        if (historyComplete) {
+          try {
+            const observation = await buildRecoveryPostActionObservation(historyEvidence, process.env, {
+              mode: "in_process_restore",
+              expected_command_id: cmd.id,
+            });
+            const historyStable = historySize === completeHistory.size() &&
+              historySkippedCount === completeHistory.skippedCount() && historyChainValid === completeHistory.verify() &&
+              historyIncompleteAtStart === recoveryObservationHistoryIncomplete;
+            observationVerified = historyStable && observation.status === "matched" &&
+              observation.operation === "restore" && observation.store_key === jMRestoreStoreKey &&
+              observation.command_id_digest === createHash("sha256").update(cmd.id).digest("hex") &&
+              observation.store_ledger_status === "verified" && observation.store_ledger_residual_count === 0 &&
+              observation.restore_backup_id_digest === restoreResultEvidence.restored_backup_id_digest &&
+              observation.restored_state_digest === restoreResultEvidence.restored_store_state_digest;
+            if (observationVerified && !gatewayShuttingDown) {
+              observationVerified = hds.reopenOperationPlanMemoryAfterCanonicalRestore();
+              if (observationVerified) {
+                jMRestoreStoreQuiesced = null;
+                jMRestoreQuiesced = false;
+                canonicalStoreRestoreMaintenanceCommandId = null;
+              }
+            }
+            if (!observationVerified) {
+              gatewayLog.warn("J/M restore remains held after post-action observation", {
+                command_id: cmd.id,
+                history_stable: historyStable,
+                observation_status: observation.status,
+                observation_store_key: observation.store_key,
+                store_ledger_status: observation.store_ledger_status,
+                store_ledger_residual_count: observation.store_ledger_residual_count,
+                restore_backup_id_digest_matches:
+                  observation.restore_backup_id_digest === restoreResultEvidence.restored_backup_id_digest,
+                restored_state_digest_matches:
+                  observation.restored_state_digest === restoreResultEvidence.restored_store_state_digest,
+                hds_store_reopened: false,
+              });
+            }
+          } catch {
+            gatewayLog.warn("J/M restore remains held after post-action observation", {
+              command_id: cmd.id,
+              reason: "restore_observation_or_reopen_failed",
+            });
+          }
+        } else {
+          gatewayLog.warn("J/M restore remains held after post-action observation", {
+            command_id: cmd.id,
+            reason: "restore_history_incomplete",
+          });
+        }
+      } else {
+        gatewayLog.warn("J/M restore remains held after post-action observation", {
+          command_id: cmd.id,
+          reason: "restore_result_unverified",
+        });
+      }
+    }
     if (operationPlanRestore && fb.status === "success") {
       const restoreResultEvidence = recoveryStoreRestoreHistoryEvidence(fb.result);
       if (!executionHistory || !finalOutputRecorded || restoreResultEvidence?.store_key !== "operation_plans") {
@@ -1462,7 +1566,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   }
 
   async function resumePendingApproval(command_id: string, verdict: "approve" | "reject" | "block", ctx: WebChatResumeContext): Promise<unknown> {
-    if (cronEventsRestoreMaintenanceCommandId) {
+    if (canonicalStoreRestoreMaintenanceCommandId) {
       return { executed: false, status: "canonical_state_restore_in_progress" };
     }
     const pending = pendingApprovals.get(command_id);
@@ -1603,7 +1707,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     toolName: RecoveryToolName,
     rawArguments: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    if (cronEventsRestoreMaintenanceCommandId) {
+    if (canonicalStoreRestoreMaintenanceCommandId) {
       return {
         status: "blocked_restore_in_progress",
         executed: false,
@@ -2112,7 +2216,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
 
   function cronNoReplayReview(command: ExecuteCommand): WebChatApprovalQueueItem["cron_no_replay_review"] {
     if (command.type !== "tool_call" || command.payload.tool_name !== "schedule.resolve_event") return undefined;
-    if (cronEventsRestoreMaintenanceCommandId) {
+    if (canonicalStoreRestoreMaintenanceCommandId) {
       return {
         kind: "cron_no_replay",
         status: "verification_unavailable",

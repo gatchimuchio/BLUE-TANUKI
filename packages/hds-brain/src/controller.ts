@@ -1286,6 +1286,15 @@ ${planControl.question}`,
   }
   reconcileOperationPlanMemory(): boolean { return this.operationPlans.reconcileMemory(); }
   closeOperationPlanMemory(): void { this.operationPlans.closeMemory(); }
+  holdOperationPlansForCanonicalMemoryRestore(command: ExecuteCommand): boolean {
+    return this.operationPlans.holdForCanonicalMemoryRestore(command);
+  }
+  quiesceOperationPlanMemoryForCanonicalRestore(): boolean {
+    return this.operationPlans.quiesceMemoryForCanonicalRestore();
+  }
+  reopenOperationPlanMemoryAfterCanonicalRestore(): boolean {
+    return this.operationPlans.reopenMemoryAfterCanonicalRestore();
+  }
   private planEvent(event: string, command_id: string): void {
     this.audit.append({ kind: "operation_plan", event, request_id: this.inflight.get(command_id)?.request_id ?? null, command_id,
       projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false, timestamp: Date.now() });

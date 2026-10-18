@@ -20,18 +20,16 @@ export const RECOVERY_TOOL_NAMES = [
 export type RecoveryToolName = (typeof RECOVERY_TOOL_NAMES)[number];
 
 const CANONICAL_STORE_RESTORE_CONSUMERS: Record<CanonicalStateStoreKey, readonly string[]> = {
-  j_control: ["hds_control_store"],
-  m_state: ["hds_memory_store"],
+  j_control: [],
+  m_state: [],
   broker: [],
   operation_plans: [],
   cron_events: [],
 };
 
 /**
- * J/M still lack a live quiesce boundary. Cron restore has a serve-owned
- * scheduler pause and store reopen path; Broker preserves its active restore
- * receipt inside the Broker-owned snapshot transaction. Operation Plans retain
- * their dedicated in-process HDS refresh path.
+ * This lists only consumers without a supported live quiesce mechanism. Runtime
+ * readiness is checked separately at the recovery tool boundary.
  */
 export function canonicalStoreRestoreConsumersNotQuiesced(storeKey: unknown): readonly string[] {
   if (typeof storeKey !== "string" || !Object.hasOwn(CANONICAL_STORE_RESTORE_CONSUMERS, storeKey)) return [];
@@ -99,7 +97,7 @@ export function normalizeRecoveryMutationArguments(
 export function createRecoveryMutationTools(
   env: NodeJS.ProcessEnv = process.env,
   getBrokerStore?: () => GatewayExecutionIntentStore | undefined,
-  options: { readonly cronEventsStoreQuiesced?: () => boolean } = {},
+  options: { readonly canonicalStoreRestoreQuiesced?: (storeKey: CanonicalStateStoreKey) => boolean } = {},
 ): readonly Tool[] {
   const restoreRecoveryTool: Tool = {
     name: "recovery.restore",
@@ -110,7 +108,8 @@ export function createRecoveryMutationTools(
       if (canonicalStoreRestoreConsumersNotQuiesced(args.store_key).length > 0) {
         throw new Error("canonical_state_restore_consumers_not_quiesced");
       }
-      if (args.store_key === "cron_events" && options.cronEventsStoreQuiesced?.() !== true) {
+      if ((args.store_key === "j_control" || args.store_key === "m_state" || args.store_key === "cron_events") &&
+          options.canonicalStoreRestoreQuiesced?.(args.store_key) !== true) {
         throw new Error("canonical_state_restore_consumers_not_quiesced");
       }
       if (args.store_key === "broker" && !/^[a-f0-9]{64}$/.test(ctx?.idempotency_key ?? "")) {

@@ -325,7 +325,9 @@ export class OperationPlanLedger {
   private readonly issuedBindings = new WeakMap<ExecuteCommand, string>();
   private readonly issuedBindingIds = new Set<string>();
   private readonly activePlanAttempts = new Set<string>();
-  private readonly resultMemory?: JMemoryCommitCoordinator;
+  private readonly memoryStorage?: OperationPlanMemoryStorage;
+  private resultMemory?: JMemoryCommitCoordinator;
+  private memoryQuiesced = false;
   private memoryReady = true;
   private readonly reflections = new Map<string, { command_digest: string; control: OperationPlanReflectionControl;
     caller: InboundRequest; projection_digest: string }>();
@@ -345,6 +347,7 @@ export class OperationPlanLedger {
   constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage,
     recoveryEvidence?: OperationPlanRecoveryEvidence) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
+    this.memoryStorage = memoryStorage;
     const checkedRecoveryEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
     let loadedCheckpointDigest: string | null = null;
     const saved = port?.load();
@@ -389,6 +392,73 @@ export class OperationPlanLedger {
     if (!this.port || this.recoveryRefreshPending || this.activePlanAttempts.size > 0) return false;
     this.recoveryRefreshPending = true;
     return true;
+  }
+
+  /** Persist a non-authority hold before restoring either J or M as a whole store. */
+  holdForCanonicalMemoryRestore(command: ExecuteCommand): boolean {
+    if (!this.port || this.recoveryRefreshPending || this.activePlanAttempts.size > 0) return false;
+    if (this.state.plans.length === 0) return true;
+    if (!this.savedDigest) return false;
+    const evidence = parseOperationPlanRecoveryEvidence({
+      schema_version: "operation-plan-recovery-evidence.v1",
+      scope: "unverified_history",
+      checkpoint_digest: this.savedDigest,
+      provenance: {
+        source: "recovery_restore",
+        command_id_digest: recoveryCommandIdDigest(command.id),
+        operation_digest: null,
+        result_digest: null,
+        restore_backup_id_digest: null,
+        restore_scope_plan_digest: null,
+        restored_state_digest: null,
+      },
+      plans: [],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    this.applyRecoveryEvidence(evidence, true);
+    this.persistRecoveryHoldState();
+    return true;
+  }
+
+  /** Close only an idle, internally verified J/M pair before whole-store restore. */
+  quiesceMemoryForCanonicalRestore(): boolean {
+    if (!this.resultMemory || this.memoryQuiesced || this.activePlanAttempts.size > 0) return false;
+    const lifecycle = this.resultMemory.snapshot();
+    if (!lifecycle || !this.resultMemory.verify() || lifecycle.status === "memory_commit_pending" ||
+        lifecycle.pending.some((entry) => ["approved", "applied", "unavailable", "receipt_mismatch"].includes(entry.lifecycle_state))) {
+      return false;
+    }
+    this.memoryQuiesced = true;
+    this.memoryReady = false;
+    this.resultMemory.close();
+    this.resultMemory = undefined;
+    return true;
+  }
+
+  /** Reopen the configured pair only after recovery observation; failed opens stay unavailable. */
+  reopenMemoryAfterCanonicalRestore(): boolean {
+    if (!this.memoryQuiesced || !this.memoryStorage) return false;
+    try {
+      this.resultMemory?.close();
+      const reopened = new JMemoryCommitCoordinator({ ...this.memoryStorage,
+        j_approval_reader: { readVerifiedMemoryApproval: (ref) => this.readResultMemoryApproval(ref) } });
+      const lifecycle = reopened.snapshot();
+      if (!lifecycle || !reopened.verify() || lifecycle.status !== "ready" ||
+          !["idle", "effect_confirmed"].includes(lifecycle.lifecycle_state) ||
+          lifecycle.pending.some((entry) => entry.lifecycle_state !== "effect_confirmed")) {
+        reopened.close();
+        this.resultMemory = undefined;
+        return false;
+      }
+      this.resultMemory = reopened;
+      this.memoryQuiesced = false;
+      this.memoryReady = true;
+      return true;
+    } catch {
+      this.resultMemory = undefined;
+      return false;
+    }
   }
 
   refreshAfterRecoveryRestore(command: ExecuteCommand, recoveryEvidence?: OperationPlanRecoveryEvidence): string {
@@ -673,6 +743,7 @@ export class OperationPlanLedger {
     const bindingId = issuedBindingId ?? command.id;
     const match = this.binding(bindingId);
     if (!match) return !this.issuedBindingIds.has(bindingId) && !this.issuedBindingIds.has(command.id);
+    if (this.memoryQuiesced || this.recoveryHolds.has(operationPlanDigest(match.p.revisions[0]!.plan.plan_id))) return false;
     if (!this.reconcileMemory()) return false;
     const { p, b } = match;
     const step = p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === b.step_id);
@@ -725,6 +796,7 @@ export class OperationPlanLedger {
   /** 保存済みの同内容だけをJ→Mへ配送。作用・意味更新・承認復元は呼ばない。 */
   reconcileMemory(): boolean {
     if (this.recoveryRefreshPending) return false;
+    if (this.memoryQuiesced) return false;
     if (!this.resultMemory) return true;
     this.memoryReady = false;
     try {
@@ -783,7 +855,12 @@ export class OperationPlanLedger {
       return !this.resultMemory || match.b.status !== "verified" || verifyResultMemoryCommit(match.p, match.b);
     } catch { return false; }
   }
-  closeMemory(): void { this.resultMemory?.close(); }
+  closeMemory(): void {
+    this.memoryQuiesced = true;
+    this.memoryReady = false;
+    this.resultMemory?.close();
+    this.resultMemory = undefined;
+  }
 
   /** 同仕事・現版の受領済み観測だけをJが選択する。全履歴やraw検索内容をCへ渡さない。 */
   inspectReflection(control: OperationPlanReflectionControl, caller: InboundRequest): ResultObservationProjection {

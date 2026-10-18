@@ -40,8 +40,12 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
   const observation = input.observation;
   if (observation.operation !== "restore") return undefined;
   if (observation.store_key !== "operation_plans") {
-    if (observation.store_key === "j_control" || observation.store_key === "m_state" ||
-        observation.store_key === "cron_events") {
+    if (observation.store_key === "j_control" || observation.store_key === "m_state") {
+      // J/M store integrity does not prove that each existing OperationPlan still
+      // has the exact cross-store memory dependencies it was created against.
+      return unverifiedHistoryEvidence(checkpointDigest, observation);
+    }
+    if (observation.store_key === "cron_events") {
       if (observation.status === "matched" && observation.store_ledger_status === "verified" &&
           observation.store_ledger_residual_count === 0) return undefined;
       return unverifiedHistoryEvidence(checkpointDigest, observation);

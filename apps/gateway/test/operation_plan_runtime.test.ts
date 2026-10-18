@@ -23,6 +23,13 @@ function operationPlanRestoreCommand(): ExecuteCommand {
     upstream_decision: { request_id: randomUUID(), commit_hash: "a".repeat(64), commit_decision: "ASSERT" },
   } as unknown as ExecuteCommand;
 }
+function canonicalMemoryRestoreCommand(store_key: "j_control" | "m_state" = "j_control"): ExecuteCommand {
+  return {
+    id: randomUUID(), type: "tool_call",
+    payload: { tool_name: "recovery.restore", arguments: { backup_id: "fixture", store_key, confirm: "RESTORE" } },
+    upstream_decision: { request_id: randomUUID(), commit_hash: "a".repeat(64), commit_decision: "ASSERT" },
+  } as unknown as ExecuteCommand;
+}
 function recoveryCommandIdDigest(commandId: string): string {
   return createHash("sha256").update(commandId).digest("hex");
 }
@@ -167,6 +174,45 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(hds.beginOperationPlanAttempt(selected)).toBe(true);
       expect(hds.beginOperationPlanRecoveryRefresh(operationPlanRestoreCommand())).toBe(false);
     } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("quiesces and reopens J/M only after internal verification while persisting plan holds", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-jm-restore-lifecycle-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const privateRoot = join(root, "private-state");
+    await mkdir(privateRoot, { recursive: true });
+    const memory = {
+      private_state_root: privateRoot,
+      database_path: join(privateRoot, "result-memory", "j-control.sqlite"),
+      memory_database_path: join(privateRoot, "result-memory", "m-state.sqlite"),
+    };
+    await mkdir(join(privateRoot, "result-memory"), { recursive: true });
+    let hds: HDSUpperController | undefined;
+    try {
+      hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
+      const origin = request("plan:compute synthetic task before J/M restore");
+      const candidate = plan(origin.id, root);
+      await rig(hds, candidate).run(hds.decide(origin).command!);
+      const selected = review(hds, candidate, "search").command!;
+      const restoreCommand = canonicalMemoryRestoreCommand();
+
+      expect(hds.quiesceOperationPlanMemoryForCanonicalRestore()).toBe(true);
+      expect(hds.operationPlanCommandIsCurrent(selected)).toBe(false);
+      expect(hds.holdOperationPlansForCanonicalMemoryRestore(restoreCommand)).toBe(true);
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unverified" });
+      expect(hds.beginOperationPlanAttempt(selected)).toBe(false);
+      expect(hds.reopenOperationPlanMemoryAfterCanonicalRestore()).toBe(true);
+      expect(hds.beginOperationPlanAttempt(selected)).toBe(false);
+
+      hds.closeOperationPlanMemory();
+      hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unverified" });
+      expect(hds.beginOperationPlanAttempt(selected)).toBe(false);
+    } finally {
+      hds?.closeOperationPlanMemory();
       store.close();
       await rm(root, { recursive: true, force: true });
     }

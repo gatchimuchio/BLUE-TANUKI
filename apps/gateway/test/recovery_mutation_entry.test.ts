@@ -95,7 +95,7 @@ describe("Recovery mutation HDS L3 entry", () => {
         token: resumeToken,
         body: { verdict: "approve", approval_token: approvalToken },
       });
-      expect(approved.status).toBe(200);
+      expect(approved.status, `${JSON.stringify(approved.body)}\n${gateway.output.join("")}`).toBe(200);
       expect(approved.body, gateway.output.join("")).toMatchObject({
         ok: true,
         result: { approval: "approve", executed: true, status: "success" },
@@ -114,6 +114,58 @@ describe("Recovery mutation HDS L3 entry", () => {
       }
     }
   });
+
+  it("quiesces J/M for selected restore, verifies the reopened pair, and keeps existing plans held", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-jm-restore-l3-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
+    const port = await reserveLoopbackPort();
+    writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const runtimeEnv = isolatedRuntimeEnvironment(root, envFile, historyFile, port);
+    const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
+    const planIdDigest = seedOperationPlanState(planStatePath);
+    const gateway = spawnGateway(runtimeEnv);
+    try {
+      await waitForHealth(port, gateway);
+      const backup = await requestJson(port, "/recovery/backup", { method: "POST", token: maintenanceToken, body: {} });
+      const backupId = (backup.body.result as Record<string, unknown>).backup_id as string;
+      for (const store_key of ["j_control", "m_state"] as const) {
+        const queued = await requestJson(port, "/recovery/restore", {
+          method: "POST",
+          token: maintenanceToken,
+          body: { backup_id: backupId, store_key, confirm: "RESTORE" },
+        });
+        expect(queued.status, JSON.stringify(queued.body)).toBe(202);
+        expect(queued.body).toMatchObject({ ok: true, result: {
+          status: "approval_required", operation: "recovery.restore", risk: "high",
+          approval_level: "L3_final_review", final_review_required: true,
+        } });
+
+        const approvalQueue = await requestJson(port, "/approval", { token: resumeToken });
+        const pending = (approvalQueue.body.pending_approvals as Array<Record<string, unknown>>)
+          .find((item) => item.operation === "recovery.restore");
+        expect(pending).toMatchObject({ risk: "high", approval_level: "L3_final_review", final_review_required: true });
+        const approved = await requestJson(port, `/approval/${encodeURIComponent(String(pending?.command_id))}`, {
+          method: "POST",
+          token: resumeToken,
+          body: { verdict: "approve", approval_token: pending?.approval_token },
+        });
+        expect(approved.status, `${JSON.stringify(approved.body)}\n${gateway.output.join("")}`).toBe(200);
+        expect(approved.body, gateway.output.join("")).toMatchObject({ ok: true, result: {
+          approval: "approve", executed: true, status: "success",
+        } });
+      }
+
+      const runtime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(runtime.body.hds.operation_plans.result_memory).toMatchObject({
+        configured: true, status: "receipt_confirmed", used_for_authority: false,
+      });
+      expect(runtime.body.hds.operation_plans.plans).toMatchObject([{ plan_id: planIdDigest, recovery_hold_reason: "held_unverified" }]);
+    } finally {
+      await stopChild(gateway.child);
+    }
+  }, 30_000);
 
   it("binds plan restore to its exact L3 scope and rejects changed backup before state mutation", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-recovery-l3-"));
@@ -137,32 +189,6 @@ describe("Recovery mutation HDS L3 entry", () => {
       });
       expect(backup.status).toBe(200);
       const backupId = (backup.body.result as Record<string, unknown>).backup_id as string;
-      for (const [store_key, blocking_consumer] of [
-        ["j_control", "hds_control_store"],
-        ["m_state", "hds_memory_store"],
-      ] as const) {
-        const blockedRestore = await requestJson(port, "/recovery/restore", {
-          method: "POST",
-          token: maintenanceToken,
-          body: { backup_id: backupId, store_key, confirm: "RESTORE" },
-        });
-        expect(blockedRestore.status).toBe(200);
-        expect(blockedRestore.body).toMatchObject({
-          ok: true,
-          result: {
-            status: "blocked_consumers_not_quiesced",
-            executed: false,
-            operation: "recovery.restore",
-            restore_effect_scope: "entire_selected_store",
-            store_key,
-            blocking_consumers: [blocking_consumer],
-            reason: "canonical_state_restore_consumers_not_quiesced",
-            l3_request_created: false,
-            used_for_authority: false,
-            may_execute: false,
-          },
-        });
-      }
       const unverifiedScope = await requestJson(port, "/recovery/restore", {
         method: "POST",
         token: maintenanceToken,
@@ -324,7 +350,7 @@ describe("Recovery mutation HDS L3 entry", () => {
         token: resumeToken,
         body: { verdict: "approve", approval_token: approvalToken, remember: true, actor: "client-claimed-owner" },
       });
-      expect(approved.status).toBe(200);
+      expect(approved.status, `${JSON.stringify(approved.body)}\n${gateway.output.join("")}`).toBe(200);
       expect(approved.body).toMatchObject({
         ok: true,
         result: { approval: "approve", executed: true, status: "success" },
