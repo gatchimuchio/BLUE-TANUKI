@@ -729,6 +729,128 @@ async function readManifest(env: NodeJS.ProcessEnv, backupIdValue: string): Prom
   };
 }
 
+function isRecoveryBackupManifestItem(value: unknown): value is RecoveryBackupManifestItem {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.key === "string" &&
+    typeof item.env_key === "string" &&
+    (typeof item.source_path === "string" || item.source_path === null) &&
+    (typeof item.archive_path === "string" || item.archive_path === null) &&
+    (typeof item.archive_rel_path === "string" || item.archive_rel_path === null) &&
+    typeof item.exists === "boolean" &&
+    ["file", "directory", "missing", "unset", "unknown"].includes(String(item.kind)) &&
+    typeof item.copied === "boolean" &&
+    typeof item.backup_required === "boolean" &&
+    typeof item.bytes === "number" &&
+    (typeof item.sha256 === "string" || item.sha256 === null) &&
+    (item.skipped_reason === undefined || typeof item.skipped_reason === "string")
+  );
+}
+
+async function assertArchiveTreeHasNoSymlinks(archivePath: string, kind: "file" | "directory"): Promise<void> {
+  const rootStat = await fs.lstat(archivePath);
+  if (rootStat.isSymbolicLink()) throw new Error("invalid_backup_manifest_archive_symlink");
+  if (kind === "file") {
+    if (!rootStat.isFile()) throw new Error("invalid_backup_manifest_archive_kind");
+    return;
+  }
+  if (!rootStat.isDirectory()) throw new Error("invalid_backup_manifest_archive_kind");
+
+  const walk = async (directory: string): Promise<void> => {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const child = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error("invalid_backup_manifest_archive_symlink");
+      if (entry.isDirectory()) await walk(child);
+      else if (!entry.isFile()) throw new Error("invalid_backup_manifest_archive_kind");
+    }
+  };
+  await walk(archivePath);
+}
+
+async function preflightRestoreManifest(env: NodeJS.ProcessEnv, manifest: RecoveryBackupManifest): Promise<void> {
+  const rawItems: unknown = manifest.items;
+  const expectedSpecs = sourceSpecs(env);
+  if (!Array.isArray(rawItems) || rawItems.length !== expectedSpecs.length) {
+    throw new Error("invalid_backup_manifest_items");
+  }
+  const expectedByPair = new Map<string, RecoverySourceSpec>(
+    expectedSpecs.map((spec) => [`${spec.key}:${spec.env_key}`, spec]),
+  );
+  const seen = new Set<string>();
+  const expectedTargets = configuredRuntimeTargets(env);
+  const packDir = path.dirname(manifest.manifest_path);
+
+  for (const value of rawItems as unknown[]) {
+    if (!isRecoveryBackupManifestItem(value)) throw new Error("invalid_backup_manifest_item");
+    const item = value;
+    const pair = `${item.key}:${item.env_key}`;
+    const spec = expectedByPair.get(pair);
+    if (!spec || seen.has(pair) || item.backup_required !== spec.backup_required) {
+      throw new Error("invalid_backup_manifest_item_identity");
+    }
+    seen.add(pair);
+
+    if (item.source_path === null) {
+      if (
+        item.copied || item.exists || item.archive_path !== null || item.archive_rel_path !== null ||
+        item.sha256 !== null || item.bytes !== 0
+      ) {
+        throw new Error(`invalid_backup_manifest_item_state:${item.key}`);
+      }
+      continue;
+    }
+
+    const expected = expectedTargets.get(pair);
+    if (!expected) throw new Error(`invalid_backup_manifest_target:${item.key}:not_configured`);
+    const sourcePath = trimTrailingSeparators(item.source_path);
+    if (sourcePath !== expected) {
+      throw new Error(`invalid_backup_manifest_target:${item.key}:source_path_mismatch`);
+    }
+    await runtimeSafeTarget(env, sourcePath, `restore_target:${item.key}`, { allow_exact: [expected] });
+
+    if (!item.copied) {
+      if (
+        item.exists || item.archive_path !== null || item.archive_rel_path !== null ||
+        item.sha256 !== null || item.bytes !== 0 || !["missing", "unknown"].includes(item.kind)
+      ) {
+        throw new Error(`invalid_backup_manifest_item_state:${item.key}`);
+      }
+      continue;
+    }
+
+    if (
+      !item.exists || (item.kind !== "file" && item.kind !== "directory") ||
+      typeof item.archive_rel_path !== "string" || item.archive_rel_path.length === 0 ||
+      typeof item.archive_path !== "string" || !path.isAbsolute(item.archive_path) ||
+      typeof item.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(item.sha256) ||
+      !Number.isSafeInteger(item.bytes) || item.bytes < 0
+    ) {
+      throw new Error(`invalid_backup_manifest_item_state:${item.key}`);
+    }
+    const archive = await assertArchivePath(
+      packDir,
+      path.resolve(packDir, item.archive_rel_path),
+      `restore_archive:${item.key}`,
+    );
+    if (trimTrailingSeparators(item.archive_path) !== archive) {
+      throw new Error(`invalid_backup_manifest_archive_path:${item.key}`);
+    }
+    const relative = path.relative(packDir, archive);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error("invalid_backup_manifest_archive_path");
+    }
+    await assertArchiveTreeHasNoSymlinks(archive, item.kind);
+    const digest = await sha256Path(archive, item.kind);
+    if (digest.sha256 !== item.sha256 || digest.bytes !== item.bytes) {
+      throw new Error(`invalid_backup_manifest_archive_digest:${item.key}`);
+    }
+  }
+
+  if (seen.size !== expectedByPair.size) throw new Error("invalid_backup_manifest_items");
+}
+
 async function latestBackupId(env: NodeJS.ProcessEnv): Promise<string | null> {
   const inventory = await recoveryBackupInventory(env);
   return inventory.latest_backup_id;
@@ -902,8 +1024,9 @@ export async function restoreRecoveryBackup(
   assertConfirmation(options.confirm, "RESTORE");
   const id = options.backup_id ?? (await latestBackupId(env));
   if (!id) throw new Error("backup_not_found");
-  const preRestore = await createBackupManifest(env, "pre_restore");
   const manifest = await readManifest(env, id);
+  await preflightRestoreManifest(env, manifest);
+  const preRestore = await createBackupManifest(env, "pre_restore");
   const result = await restoreManifest(env, manifest);
   return actionResult("restore", {
     restored_backup_id: id,

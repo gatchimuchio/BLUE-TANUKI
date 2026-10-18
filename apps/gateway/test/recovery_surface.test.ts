@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -316,6 +316,84 @@ describe("buildRecoverySnapshot", () => {
       await expect(
         restoreRecoveryBackup(env, { backup_id: backup.backup_id, confirm: "RESTORE" }),
       ).rejects.toThrow(/source_path_mismatch|relative/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preflights every archive before creating a pre-restore pack or changing targets", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-preflight-"));
+    try {
+      const envFile = path.join(root, "product.env");
+      const sessionDir = path.join(root, "sessions");
+      const sessionFile = path.join(sessionDir, "session.jsonl");
+      const fileRoot = path.join(root, "files");
+      const recoveryDir = path.join(root, "recovery");
+      await mkdir(sessionDir);
+      await mkdir(fileRoot);
+      await writeFile(envFile, "LLM_BACKEND=before\n", "utf8");
+      await writeFile(sessionFile, "session-before\n", "utf8");
+      const env = {
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_SESSION_DIR: sessionDir,
+        BLUE_TANUKI_FILE_ROOT: fileRoot,
+        BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+      };
+
+      const backup = await createRecoveryBackup(env);
+      const manifestPath = backup.backup_manifest_path!;
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      const sessionItem = manifest.items.find((item: { key: string }) => item.key === "session_dir");
+      const packDir = path.dirname(manifestPath);
+      const sessionArchive = path.join(packDir, sessionItem.archive_rel_path, "session.jsonl");
+      await writeFile(sessionArchive, "corrupted-archive\n", "utf8");
+
+      await writeFile(envFile, "LLM_BACKEND=after\n", "utf8");
+      await writeFile(sessionFile, "session-after\n", "utf8");
+      const packsBeforeRestore = await readdir(recoveryDir);
+
+      await expect(
+        restoreRecoveryBackup(env, { backup_id: backup.backup_id, confirm: "RESTORE" }),
+      ).rejects.toThrow(/invalid_backup_manifest_archive_digest:session_dir/);
+
+      expect(await readFile(envFile, "utf8")).toBe("LLM_BACKEND=after\n");
+      expect(await readFile(sessionFile, "utf8")).toBe("session-after\n");
+      expect(await readdir(recoveryDir)).toEqual(packsBeforeRestore);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlinks inside directory archives before restoring any target", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-archive-link-"));
+    try {
+      const envFile = path.join(root, "product.env");
+      const sessionDir = path.join(root, "sessions");
+      const fileRoot = path.join(root, "files");
+      const recoveryDir = path.join(root, "recovery");
+      const outsideFile = path.join(root, "outside.json");
+      await mkdir(sessionDir);
+      await mkdir(fileRoot);
+      await writeFile(envFile, "LLM_BACKEND=before\n", "utf8");
+      await writeFile(outsideFile, "outside\n", "utf8");
+      await symlink(outsideFile, path.join(sessionDir, "linked.json"), "file");
+      const env = {
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_SESSION_DIR: sessionDir,
+        BLUE_TANUKI_FILE_ROOT: fileRoot,
+        BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+      };
+
+      const backup = await createRecoveryBackup(env);
+      await writeFile(envFile, "LLM_BACKEND=after\n", "utf8");
+      const packsBeforeRestore = await readdir(recoveryDir);
+
+      await expect(
+        restoreRecoveryBackup(env, { backup_id: backup.backup_id, confirm: "RESTORE" }),
+      ).rejects.toThrow("invalid_backup_manifest_archive_symlink");
+
+      expect(await readFile(envFile, "utf8")).toBe("LLM_BACKEND=after\n");
+      expect(await readdir(recoveryDir)).toEqual(packsBeforeRestore);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
