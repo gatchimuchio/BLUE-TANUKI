@@ -4,7 +4,9 @@
 
 `QEB-03-E03.03-INPROCESS-RESTORE-PLAN-SELECTION-HOLD` は2026-10-19に実装・限定確認を完了。承認済みのselected `operation_plans` restore開始前にHDSのplan経路を止め、既存plan実行中ならrestore自体を開始しない。実行履歴・最終出力履歴の後でRecovery result digestとcanonical DB fingerprintを照合し、同じserve processの開いたstate storeからcheckpointを意味検証付きで再読込する。保存済みselected bindingを失効、開始済みbindingを結果不明にし、復元時点の全planだけ`held_unverified`にする。restore証拠・history・auditのいずれかが不足すればrefresh gateを解除しない。Control Centerに照合中／step選択停止／再起動点検を表示する。照合後の新規planは通常HDS経路へ戻す。実績は`docs/開発進捗.md`に記録し、E03.03=`BUILD_GAP`を維持する。
 
-次候補は`QEB-03-E03.03-INPROCESS-RESTORE-PLAN-DEPENDENCY-EVIDENCE`。producer候補はselected restore結果に含まれるopaque backup digestと既存read-only backup／Operation Plan dependency inspection、consumer候補は同一processでcheckpointをreloadした後のHDS plan別recovery hold。次作業の開始時に最新版三点正本・適用AGENTS.md・作業標準要領・本active指示・HEAD・差分・コード現物を読み直し、backup packの同一性、plan digest対応、依存statusの完全性、現在ledgerとの更新競合を確認してから範囲を確定する。証拠が完全に結合できないplanはholdのままにし、read-only evidenceから権限・Approval・Broker実行・resumeを生成しない。実restore、実承認、provider、別repo、公開・出荷判断は対象外。
+`QEB-03-E03.03-INPROCESS-RESTORE-PLAN-DEPENDENCY-EVIDENCE` は2026-10-19に実装・限定確認を完了し、実装commit=`e8e7ec89b6cfeea5b3cd01229bda21409c3f80d1`を`main`へpush済み。同一process内のselected `operation_plans` restoreを完全history chain・expected command・opaque backup digest・再読込checkpointへ照合し、既存read-only plan dependency inspectionをHDSの計画別recovery holdへ接続した。残差／未観測／未確認はholdし、いずれかの整合性を確認できなければrefresh gateを解除しない。read-only evidenceから承認・実行・resume権限は生じず、E03.03=`BUILD_GAP`。限定検証は3 files／26 focused tests、typecheck、15 workspace build、HDS standalone、serve smoke、docs／repo-health gates。実restore／実再起動／実owner承認／provider資格情報／全suite／5OS実機／QE_QC／QE_QAは未実施。
+
+次候補は`QEB-03-E03.03-RECOVERY-HOLD-REOBSERVATION-CONSUMER-AUDIT`。HDSが保持する計画別holdについて、state変化後に既存のowner操作・再観測経路があるか、同一plan／checkpoint／result identityをどう結ぶか、現在holdを解除できる既存consumerがあるかをread-onlyで監査する。resume／Approval／Broker実行の新設、hold解除や実Recoveryは行わない。次の作業開始時にowner指定最新版三点正本、適用`AGENTS.md`、作業標準要領、本active指示、現行HEAD・差分・対象コードを改めて読み、現行責務と許可作用を確定する。
 
 ## 直近のBUILD_BATCH実績
 

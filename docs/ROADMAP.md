@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-03-E03.03-INPROCESS-RESTORE-PLAN-DEPENDENCY-EVIDENCE`では、同一serve process内の成功restoreを完全history・expected command・opaque backup digest・再読込checkpointへ照合し、既存read-only dependency inspectionをHDSの計画別holdへ接続した。残差／未観測／未確認は各planを選択停止し、history・store・checkpointの不一致時はgateを維持する。clean evidenceも通常HDS reviewに留まり、実行・Approval・resumeを生成しない。3 files／26 focused tests、typecheck、15 workspace build、HDS standalone、serve smokeを確認した。実restoreや実restart、独立restore point、store間atomicityは未実証でありE03.03／QEB-03=`BUILD_GAP`を維持する。
+
 2026-10-19の`QEB-03-E03.03-PLAN-RESIDUAL-ISOLATION-CONSUMER-AUDIT`では、計画別残差／未観測依存を実行や復旧再開のために読むruntime consumerがまだないことを確認した。Recovery post-action observationはRecovery snapshot／Control Centerのread-only表示にとどまり、startupの保存結果／M receipt調停やOperationPlanの承認resumeはこの投影を消費しない。HDSの計画step再確認・選択との接続は、残差を再開可否へ反映する契約が未成立のため`BUILD_GAP`。E03.03／QEB-03の状態、非権威診断、owner GOの独立境界を維持する。
 
 続く`QEB-03-E03.03-PLAN-RESTORE-HDS-SELECTION-GUARD`では、起動時のRecovery observationをHDSの既存plan-step reviewへdigest限定で接続した。復元済みplanの残差・未観測・欠落依存・checkpoint競合はHDS内で該当planのstep選択を止め、scopeが未確認なら起動時の既存planをholdする。復元後に完全backup inventoryに存在しないと確認できた後発planはholdしない。clean observationはApproval、Broker、resume、外部作用を許可しない。Control Centerへ固定理由を表示し、合成検証は通過したが実restore／実再起動は未実施。独立restore point、job復帰、Recovery後の実結果照合は未接続のためE03.03／QEB-03=`BUILD_GAP`を維持する。
