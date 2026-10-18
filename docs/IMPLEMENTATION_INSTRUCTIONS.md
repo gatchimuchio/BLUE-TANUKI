@@ -1,8 +1,18 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-## 直近完了分と次のBUILD_BATCH
+## 直近完了のconsumer監査と次のBUILD_BATCH
 
-QEB-03-E03.03-RESTORE-SCOPE-RELATION-OPERATOR-PROJECTION は2026-10-19に実装・限定確認を完了。開始HEAD／origin/main=35233ad37cd329075a90ef4d73c24ce3bc59157d、開始worktree clean。HDS recovery holdのrequested／collateral／unknown関係を、OperationPlan projection→Gateway固定allowlist→Control Centerに接続した。scope関係欠落時は未確認表示とし、hold、L3、Broker、Approval、restore範囲を変えない。表示は非権威でplan単位復元やhold解除を意味しない。focused tests 3 files／101 tests、pnpm typecheck、15 workspace build、HDS standalone、serve smoke、docs:check、repo-health、git diff --checkはPASS。実restore／owner approvalによる実行／実restart／provider credential／全suite／5OS実機／QE_QC／QE_QAは未実施。E03.03=BUILD_GAP、C08.03保留、P13=PENDING_OWNER_GO、public_claim_allowed=falseを維持する。次はBT-R-E03-06に関係する、operation_plans以外のselected canonical store restoreがOperation Plan／M／Broker／Cronの実consumerへ与える依存影響を現物から監査し、未接続consumerを特定する。job単位SQLite行復元、別repo変更、実業務作用、公開・出荷判断は追加しない。実装commit=912b93de18524a286d55158fbbb5b9c9327e57b7をmainへpush済み。
+`QEB-03-E03.03-NON-OP-CANONICAL-STORE-RESTORE-CONSUMER-AUDIT` は2026-10-19にread-onlyで完了。開始HEAD／`origin/main`=`c31cf529b03dec25aabc827fa2ba0ff8d3687936`、開始worktree clean。rev2.3三点正本、適用AGENTS.md、作業標準要領、active指示とE03.03を再読し、非`operation_plans`選択restoreからJ／M／Broker／Cronの実consumerを追った。
+
+canonical stateは`j_control`、`m_state`、`broker`、`operation_plans`、`cron_events`の5 storeを独立snapshotし、cross-store atomicityはない。既存read-only scope inspectorはstore別dependency categoryを返すが、L3 request／作用直前のscope検査とin-process HDS refreshは`operation_plans`だけに接続されている。非`operation_plans` restoreのpost-action observationはstore ledger観測までで、`operationPlanRecoveryEvidenceFromObservation`はplan holdへ変換せず、startup hold observerも`operation_plans`以外を選ばない。
+
+実consumerとして、HDSのJ／M transaction store、GatewayのBroker result outboxと起動時result／M reconciliation、Cron event inbox／outbox・pending approval回復・J側no-replay照合が確認できた。これらの既存consumerと非`operation_plans` restoreの間に、restore開始前の共通quiescence判定とrestore後のplan recovery hold接続がない。これは静的callsiteの欠落として確認したもので、実restore・並行実行・再起動による挙動は未試験。
+
+次は`QEB-03-E03.03-NON-OP-STORE-RESTORE-QUIESCENCE`。選択canonical storeのrestoreとJ／M／Broker／Cronの実consumerを同時に動かさない境界を、実callsiteで実装可能か確認して接続する。consumerを確実に静止・排出できない条件はL3要求作成またはrestore作用の前にfail-closedとし、成功後の再起動・再観測要件をownerへ明示する。store全体restore、HDS／Approval／L3、非権威観測を維持し、DB行単位restore、実restore、resume、別repo、外部業務作用、公開・出荷判断は含めない。E03.03=`BUILD_GAP`、C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+
+## 直近実装分の履歴
+
+QEB-03-E03.03-RESTORE-SCOPE-RELATION-OPERATOR-PROJECTION は2026-10-19に実装・限定確認を完了。開始HEAD／origin/main=35233ad37cd329075a90ef4d73c24ce3bc59157d、開始worktree clean。HDS recovery holdのrequested／collateral／unknown関係を、OperationPlan projection→Gateway固定allowlist→Control Centerに接続した。scope関係欠落時は未確認表示とし、hold、L3、Broker、Approval、restore範囲を変えない。表示は非権威でplan単位復元やhold解除を意味しない。focused tests 3 files／101 tests、pnpm typecheck、15 workspace build、HDS standalone、serve smoke、docs:check、repo-health、git diff --checkはPASS。実restore／owner approvalによる実行／実restart／provider credential／全suite／5OS実機／QE_QC／QE_QAは未実施。E03.03=BUILD_GAP、C08.03保留、P13=PENDING_OWNER_GO、public_claim_allowed=falseを維持する。非`operation_plans` store restoreの後続監査は上段に記録した。job単位SQLite行復元、別repo変更、実業務作用、公開・出荷判断は追加していない。実装commit=912b93de18524a286d55158fbbb5b9c9327e57b7をmainへpush済み。
 
 `QEB-03-E03.03-RECOVERY-HOLD-RESTART-PROVENANCE` は2026-10-19に実装・限定確認を完了。開始HEAD／`origin/main`=`0acfb6b0ef9ee20f629de992ca1e63b84783c4c8`、開始worktree clean。SQLiteにplan digest単位のrecovery holdと、checkpoint／Recovery result／発生commandのdigest provenanceを永続化し、起動時に無関係なprovider／connector／factory resetで隠れない`operation_plans` restoreだけを再観測する。read-only Recovery projectionから内部command／restored-state digestを除外した。選択restoreのHDS refreshはRecovery historyと同じraw command ID SHA-256を比較する。別commandの証拠はrefresh gate・checkpoint・既存holdを変更せず拒否する。実装commit=`2986ad4`を`main`へpush済み。
 
