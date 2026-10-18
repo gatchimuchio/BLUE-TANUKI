@@ -206,6 +206,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       expect(inspection.status().effects).toBe(1);
 
       const originalReceiptId = inspection.status().accepted[0]?.receipt_id;
+      const currentEpoch = randomUUID();
       for (let restart = 0; restart < 3; restart += 1) {
         planStore.close();
         executionStore.close();
@@ -214,7 +215,9 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         hds = new HDSUpperController({ operation_plan_state: planStore });
         const jState = hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status;
         expect(jState).toBe("outcome_unknown");
-        expect(reconcileExecutionResults(hds, executionStore)).toEqual({ adopted: restart === 0 ? 1 : 0, deferred: 0 });
+        expect(reconcileExecutionResults(hds, executionStore, currentEpoch)).toEqual({
+          adopted: 0, deferred: 0, stale_generation_archived: restart === 0 ? 1 : 0,
+        });
         expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("outcome_unknown");
         const staleReview = reviewedSend(hds, plan);
         expect(staleReview.command).toBeNull();

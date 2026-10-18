@@ -150,6 +150,26 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       if (!receipt?.result_delivery_digest || receipt.result_delivery_digest !== delivery_digest) throw new Error("execution_delivery_ack_mismatch");
       if (receipt.result_delivery_acknowledged) return;
       receipt.result_delivery_acknowledged = true;
+      receipt.result_delivery_disposition = "reconciled";
+      this.save(receipt); this.appendEvent(receipt, Date.now());
+    });
+  }
+  /** Old-generation delivery remains private, digest-traceable evidence and never enters J/M. */
+  archiveStaleGenerationResult(ticket_id: string, delivery_digest: string, current_epoch: string): void {
+    if (!/^[0-9a-f-]{36}$/i.test(current_epoch)) throw new Error("execution_owner_epoch_invalid");
+    this.transaction(() => {
+      const receipt = this.lookup(ticket_id);
+      if (!receipt?.result_delivery_digest || receipt.result_delivery_digest !== delivery_digest) {
+        throw new Error("execution_delivery_ack_mismatch");
+      }
+      if (receipt.execution_epoch === current_epoch) throw new Error("execution_delivery_not_stale");
+      if (receipt.result_delivery_acknowledged) {
+        if (receipt.result_delivery_disposition === "stale_generation_evidence") return;
+        throw new Error("execution_delivery_disposition_conflict");
+      }
+      receipt.result_delivery_acknowledged = true;
+      receipt.result_delivery_disposition = "stale_generation_evidence";
+      receipt.result_archived_by_epoch_digest = digest(current_epoch);
       this.save(receipt); this.appendEvent(receipt, Date.now());
     });
   }
@@ -178,6 +198,8 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     output_digest?: string; error_digest?: string;
     worker_id_digest?: string; worker_pid?: number; worker_platform?: string; worker_exit_observed: boolean;
     result_delivery_digest?: string; result_delivery_acknowledged?: boolean;
+    result_delivery_disposition?: ExecutionIntentReceipt["result_delivery_disposition"];
+    result_archived_by_epoch_digest?: string;
   }> } {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error("execution_receipt_limit_invalid");
     let records: ReturnType<GatewayExecutionIntentStore["snapshot"]>["records"] = [];
@@ -192,7 +214,9 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
           worker_id_digest: receipt.worker_id ? digest(receipt.worker_id) : undefined,
           worker_pid: receipt.worker_pid, worker_platform: receipt.worker_platform,
           worker_exit_observed: receipt.worker_exit_observed_at_ms !== undefined,
-          result_delivery_digest: receipt.result_delivery_digest, result_delivery_acknowledged: receipt.result_delivery_acknowledged };
+          result_delivery_digest: receipt.result_delivery_digest, result_delivery_acknowledged: receipt.result_delivery_acknowledged,
+          result_delivery_disposition: receipt.result_delivery_disposition,
+          result_archived_by_epoch_digest: receipt.result_archived_by_epoch_digest };
       });
     });
     return { used_for_authority: false, execution_eligible: false, records };
@@ -283,7 +307,7 @@ function validateReceipt(receipt: ExecutionIntentReceipt): void {
   const fields = ["ticket_id", "command_key", "command_digest", "proof_digest", "execution_epoch", "issued_at_ms", "expires_at_ms",
     "state", "invocation_boundary", "feedback_status", "output_digest", "error_digest", "consumed_at_ms", "observed_at_ms", "used_for_authority",
     "worker_id", "worker_pid", "worker_platform", "worker_started_at_ms", "worker_exit_observed_at_ms",
-    "result_delivery_digest", "result_delivery_acknowledged"];
+    "result_delivery_digest", "result_delivery_acknowledged", "result_delivery_disposition", "result_archived_by_epoch_digest"];
   const workerFields = [receipt.worker_id, receipt.worker_pid, receipt.worker_platform, receipt.worker_started_at_ms];
   const hasWorker = workerFields.some((value) => value !== undefined);
   if (receipt.used_for_authority !== false ||
@@ -294,6 +318,10 @@ function validateReceipt(receipt: ExecutionIntentReceipt): void {
       [receipt.output_digest, receipt.error_digest, receipt.result_delivery_digest].some((v) => v !== undefined && !/^[0-9a-f]{64}$/.test(v)) ||
       ((receipt.result_delivery_digest !== undefined) !== (receipt.result_delivery_acknowledged !== undefined)) ||
       (receipt.result_delivery_acknowledged !== undefined && typeof receipt.result_delivery_acknowledged !== "boolean") ||
+      (receipt.result_delivery_disposition !== undefined && !["reconciled", "stale_generation_evidence"].includes(receipt.result_delivery_disposition)) ||
+      (receipt.result_delivery_disposition !== undefined && receipt.result_delivery_acknowledged !== true) ||
+      ((receipt.result_delivery_disposition === "stale_generation_evidence") !== (receipt.result_archived_by_epoch_digest !== undefined)) ||
+      (receipt.result_archived_by_epoch_digest !== undefined && !/^[0-9a-f]{64}$/.test(receipt.result_archived_by_epoch_digest)) ||
       [receipt.consumed_at_ms, receipt.observed_at_ms, receipt.worker_started_at_ms, receipt.worker_exit_observed_at_ms]
         .some((v) => v !== undefined && (!Number.isSafeInteger(v) || v <= 0)) ||
       (hasWorker && (!/^[0-9a-f-]{36}$/.test(receipt.worker_id ?? "") || !Number.isSafeInteger(receipt.worker_pid) || receipt.worker_pid! <= 0 ||

@@ -471,10 +471,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     execution_epoch: ownerLease.executionEpoch,
     assert_execution_owner: () => ownerLease.assertActive(),
   });
-  const startupRecovery = reconcileStartupExecutionState(hds, executionStore);
+  const startupRecovery = reconcileStartupExecutionState(hds, executionStore, ownerLease.executionEpoch);
   gatewayLog.info("startup saved-result reconciliation", {
     adopted: startupRecovery.adopted,
     deferred: startupRecovery.deferred,
+    stale_generation_archived: startupRecovery.stale_generation_archived,
     memory_ready: startupRecovery.memory_ready,
     result_store_readable: startupRecovery.result_store_readable,
   });
@@ -968,7 +969,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     try {
       fb = await executionTask;
     } finally { executionControllers.delete(executionController); executionTasks.delete(executionTask); }
-    if (planBound) gatewayLog.info("saved execution result reconciliation", reconcileExecutionResults(hds, executionStore));
+    if (planBound) gatewayLog.info("saved execution result reconciliation",
+      reconcileExecutionResults(hds, executionStore, ownerLease.executionEpoch));
     if (isComposioExecuteCommand(cmd)) {
       hds.onAuthorityEvent(
         fb.status === "success" ? "composio_execution_completed" : "composio_execution_failed",

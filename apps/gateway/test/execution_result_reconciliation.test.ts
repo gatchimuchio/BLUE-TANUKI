@@ -10,7 +10,7 @@ import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type Ex
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
-import { executionAdmissionForCommand, reconcileExecutionResults } from "../src/reconcile_execution_results.js";
+import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { operationResultMemoryStorage } from "../src/operation_result_memory_config.js";
 
@@ -87,6 +87,42 @@ function inspectMemory(c: Awaited<ReturnType<typeof setup>>) {
 }
 
 describe("保存実結果→再起動J→依存stepの非作用調停", () => {
+  it("旧generationの遅延結果をprivate evidenceへ隔離し、現行J/Mへ適用しない", async () => fixture(async (c) => {
+    c.hds.beginOperationPlanAttempt(c.cmd, c.admission);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    const saved = c.execution.pendingResults()[0]!;
+    c.hds.closeOperationPlanMemory();
+    const restarted = c.createHds();
+    const currentEpoch = randomUUID();
+    const reconcileResult = vi.spyOn(restarted, "reconcileOperationPlanResult");
+
+    expect(reconcileStartupExecutionState(restarted, c.execution, currentEpoch)).toEqual({
+      ready: true, adopted: 0, deferred: 0, stale_generation_archived: 1,
+      memory_ready: true, result_store_readable: true,
+    });
+    expect(reconcileResult).not.toHaveBeenCalled();
+    expect(c.j.load()?.plans[0]?.results).toHaveLength(0);
+    expect(inspectMemory(c).revision).toBe(0);
+    expect(c.execution.pendingResults()).toHaveLength(0);
+    expect(c.execution.lookup(c.admission.ticket_id)).toMatchObject({
+      result_delivery_acknowledged: true,
+      result_delivery_disposition: "stale_generation_evidence",
+      result_archived_by_epoch_digest: createHash("sha256").update(currentEpoch).digest("hex"),
+    });
+    expect(c.execution.verifyEvents()).toBe(true);
+    const db = new DatabaseSync(c.executionPath);
+    try {
+      expect(db.prepare("SELECT delivery_digest FROM execution_result_outbox WHERE ticket_id=?")
+        .get(c.admission.ticket_id)).toEqual({ delivery_digest: saved.delivery_digest });
+    } finally { db.close(); }
+    const visible = JSON.stringify(c.execution.snapshot());
+    expect(visible).toContain("stale_generation_evidence");
+    expect(visible).not.toContain(c.workspace);
+    expect(visible).not.toContain('"matches"');
+    expect(c.invoke).toHaveBeenCalledTimes(1);
+  }));
+
   it("実worker結果とreceiptを保存し、承認/inflightなしの再起動後にJへ一回採用する", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
@@ -101,7 +137,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       hds.onFeedback(feedback); // 通常のinflight保護は維持し、この遅延feedbackを採用しない。
       expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("outcome_unknown");
       expect(review(hds, c.plan, "dependent")).toBeNull();
-      expect(reconcileExecutionResults(hds, reopened)).toEqual({ adopted: 1, deferred: 0 });
+      expect(reconcileExecutionResults(hds, reopened, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
       expect(j.load()?.plans[0]?.results[0]?.observed_at_ms).toBe(feedback.operation_core_result?.observed_at_ms);
       expect(review(hds, c.plan, "dependent")?.type).toBe("tool_call");
       expect(reopened.pendingResults()).toHaveLength(0); expect(reopened.verifyEvents()).toBe(true);
@@ -115,11 +151,11 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     c.hds.beginOperationPlanAttempt(c.cmd, c.admission); await c.executor.execute(c.approved, { save_result_delivery: true });
     const saved = c.execution.pendingResults()[0]!;
     const ack = vi.spyOn(c.execution, "acknowledgeResult").mockImplementationOnce(() => { throw new Error("fixture lost ack"); });
-    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 0, deferred: 1 });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 0, deferred: 1, stale_generation_archived: 0 });
     expect(c.j.load()?.plans[0]?.results).toHaveLength(1); expect(c.execution.pendingResults()).toHaveLength(1);
     ack.mockRestore();
     c.hds.closeOperationPlanMemory(); const restarted = c.createHds();
-    expect(reconcileExecutionResults(restarted, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+    expect(reconcileExecutionResults(restarted, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
     const checkpoint = c.j.load()!;
     expect(restarted.reconcileOperationPlanResult(saved.delivery, saved.delivery_digest)).toBe(true);
     expect(c.j.load()).toEqual(checkpoint); expect(checkpoint.plans[0]?.results).toHaveLength(1);
@@ -137,7 +173,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const now = feedback.operation_core_result!.observed_at_ms + 600_001;
     vi.spyOn(Date, "now").mockReturnValue(now);
     c.hds.closeOperationPlanMemory(); const restarted = c.createHds();
-    expect(reconcileExecutionResults(restarted, c.execution).adopted).toBe(1);
+    expect(reconcileExecutionResults(restarted, c.execution, c.admission.execution_epoch).adopted).toBe(1);
     expect(review(restarted, revised, "dependent")).toBeNull();
     const state = c.j.load()!.plans[0]!;
     expect(state.bindings[0]?.revision_digest).toBe(operationPlanDigest(c.plan));
@@ -148,7 +184,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
   it("admissionが無い・まだ開始されていないJ bindingを保存結果から権限化しない", async () => fixture(async (c) => {
     c.hds.beginOperationPlanAttempt(c.cmd); await c.executor.execute(c.approved, { save_result_delivery: true });
     c.hds.closeOperationPlanMemory(); const restarted = c.createHds();
-    expect(reconcileExecutionResults(restarted, c.execution)).toEqual({ adopted: 0, deferred: 1 });
+    expect(reconcileExecutionResults(restarted, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 0, deferred: 1, stale_generation_archived: 0 });
     expect(c.j.load()?.plans[0]?.results).toHaveLength(0); expect(c.execution.pendingResults()).toHaveLength(1);
     expect(review(restarted, c.plan, "search")).toBeNull(); expect(c.invoke).toHaveBeenCalledTimes(1);
     expect(() => executionAdmissionForCommand({ ...c.cmd, id: randomUUID() }, c.authority.receipt(c.approved))).toThrow();
@@ -158,7 +194,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     c.hds.beginOperationPlanAttempt(c.cmd, c.admission);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true, before_tool_dispatch: () => { throw new Error("fixture stop"); } });
     expect(feedback.operation_core_result?.action_outcome).toBe("not_attempted");
-    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
     expect(c.j.load()?.plans[0]?.bindings[0]?.status).toBe("not_attempted"); expect(c.j.load()?.plans[0]?.results).toHaveLength(0);
     expect(review(c.hds, c.plan, "dependent")).toBeNull(); expect((await c.executor.execute(c.approved)).error).toMatch(/already consumed/);
   }));
@@ -174,7 +210,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       expect(feedback.status).toBe("failed"); expect(feedback.error).toMatch(/receipt persistence failed/);
       expect(c.execution.pendingResults()).toHaveLength(0); expect(c.execution.verifyEvents()).toBe(true);
       expect(c.execution.snapshot().records[0]?.state).toBe("outcome_unknown");
-      expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 0, deferred: 0 });
+      expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 0, deferred: 0, stale_generation_archived: 0 });
       expect(c.j.load()?.plans[0]?.results).toHaveLength(0); expect(c.invoke).toHaveBeenCalledTimes(1);
       expect((await c.executor.execute(c.approved)).error).toMatch(/already consumed/);
     } finally { db.close(); }
@@ -198,7 +234,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
   it("実観測だけをMへ一度保存し、別DBの同receiptと元出力を読取照合して後続へ戻る", async () => fixture(async (c) => {
     c.hds.beginOperationPlanAttempt(c.cmd, c.admission);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
-    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
     const before = inspectMemory(c); expect(before.revision).toBe(1); expect(before.records).toHaveLength(1);
     const observation = before.records[0];
     expect(observation.adoption_status).toBe("observation_only"); expect(observation.used_as_world_truth).toBe(false);
@@ -231,7 +267,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       BEGIN SELECT RAISE(ABORT,'fixture memory receipt failure'); END;`);
     c.hds.beginOperationPlanAttempt(c.cmd, c.admission);
     await c.executor.execute(c.approved, { save_result_delivery: true });
-    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
     const saved = c.j.load()!.plans[0]!.bindings[0]!.memory_commit;
     expect(saved).toBeDefined(); expect(c.j.load()!.plans[0]!.bindings[0]!.memory_receipt).toBeUndefined();
     const before = inspectMemory(c);
@@ -247,7 +283,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
 
   it("保存J commitの権限化・任意変更を再起動時に拒否する", async () => fixture(async (c) => {
     c.hds.beginOperationPlanAttempt(c.cmd, c.admission); await c.executor.execute(c.approved, { save_result_delivery: true });
-    reconcileExecutionResults(c.hds, c.execution); c.hds.closeOperationPlanMemory();
+    reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch); c.hds.closeOperationPlanMemory();
     const previous = c.j.load()!; const changed = structuredClone(previous);
     const b = changed.plans[0]!.bindings[0]!; const commit = b.memory_commit!;
     (commit.changes[0] as { value: Record<string, unknown> }).value.used_for_authority = true;
@@ -260,18 +296,18 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
   it("J保存読取不能で配送ackを保留し、復旧後の同内容確認だけでackする", async () => fixture(async (c) => {
     c.hds.beginOperationPlanAttempt(c.cmd, c.admission); await c.executor.execute(c.approved, { save_result_delivery: true });
     const lost = vi.spyOn(c.execution, "acknowledgeResult").mockImplementationOnce(() => { throw new Error("fixture ack interrupted"); });
-    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 0, deferred: 1 }); lost.mockRestore();
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 0, deferred: 1, stale_generation_archived: 0 }); lost.mockRestore();
     const before = inspectMemory(c);
     const unavailable = vi.spyOn(c.j, "load").mockImplementation(() => { throw new Error("fixture J unavailable"); });
-    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 0, deferred: 1 });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 0, deferred: 1, stale_generation_archived: 0 });
     expect(c.execution.pendingResults()).toHaveLength(1); unavailable.mockRestore();
-    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
     expect(inspectMemory(c)).toEqual(before); expect(c.invoke).toHaveBeenCalledTimes(1);
   }));
 
   it("片方だけ失われたJ/M DBを新規初期化して履歴の確定と扱わない", async () => fixture(async (c) => {
     c.hds.beginOperationPlanAttempt(c.cmd, c.admission); await c.executor.execute(c.approved, { save_result_delivery: true });
-    reconcileExecutionResults(c.hds, c.execution); c.hds.closeOperationPlanMemory();
+    reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch); c.hds.closeOperationPlanMemory();
     rmSync(c.memory.database_path);
     expect(() => c.createHds()).toThrow(/schema_mismatch/); expect(inspectMemory(c).revision).toBe(1);
     expect(c.invoke).toHaveBeenCalledTimes(1);
@@ -303,7 +339,7 @@ function reflectionExecutor(c: Awaited<ReturnType<typeof setup>>, mutate?: (resp
 async function recordActualObservation(c: Awaited<ReturnType<typeof setup>>) {
   expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
   expect((await c.executor.execute(c.approved, { save_result_delivery: true })).status).toBe("success");
-  expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+  expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
 }
 describe("受領済みM実観測→有限C射影→表示前J照合", () => {
   it("実worker観測をraw/historyなしでCへ戻し、未採用解釈だけを表示する", async () => fixture(async (c) => {
@@ -363,7 +399,7 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
     const admission = executionAdmissionForCommand(next, c.authority.receipt(approved));
     expect(c.hds.beginOperationPlanAttempt(next, admission)).toBe(true);
     expect((await c.executor.execute(approved, { save_result_delivery: true })).status).toBe("success");
-    expect(reconcileExecutionResults(c.hds, c.execution)).toEqual({ adopted: 1, deferred: 0 });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
     expect(inspectMemory(c).revision).toBe(2); expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(true);
     const output = finalizeCommandOutput({ hds: c.hds, command, feedback, request_id: decision.log.request_id, target_surface: "channel" });
     expect(output.reviewed_feedback.status).toBe("success"); expect(c.invoke).toHaveBeenCalledTimes(2);

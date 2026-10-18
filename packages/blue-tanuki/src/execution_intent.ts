@@ -38,6 +38,8 @@ export interface ExecutionIntentReceipt extends ExecutionIntentTicket {
   used_for_authority: false;
   result_delivery_digest?: string;
   result_delivery_acknowledged?: boolean;
+  result_delivery_disposition?: "reconciled" | "stale_generation_evidence";
+  result_archived_by_epoch_digest?: string;
 }
 
 /** 同期port。consumeの保存失敗では下流を起動せず、消費を復活させない。 */
