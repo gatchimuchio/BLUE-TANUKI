@@ -240,6 +240,8 @@ describe("Gateway recovery operator projection", () => {
         admission_digest: "d".repeat(64),
         broker_correlation: "not_found",
         delivery_correlation: "not_observed",
+        memory_update_id_digest: "f".repeat(64),
+        memory_correlation: "missing_plan_memory_link",
         command_id: "RAW_COMMAND_SENTINEL",
         ticket_id: "RAW_TICKET_SENTINEL",
       }],
@@ -273,6 +275,8 @@ describe("Gateway recovery operator projection", () => {
         admission_digest: "d".repeat(64),
         broker_correlation: "not_found",
         delivery_correlation: "not_observed",
+        memory_update_id_digest: "f".repeat(64),
+        memory_correlation: "missing_plan_memory_link",
       }],
       omitted_operation_plan_correlation_count: 0,
       update_residuals: [{ update_id_digest: "e".repeat(64), disposition: "content_mismatch" }],
@@ -298,6 +302,8 @@ describe("Gateway recovery operator projection", () => {
       admission_digest: null,
       broker_correlation: "not_admitted",
       delivery_correlation: "not_recorded",
+      memory_update_id_digest: null,
+      memory_correlation: "not_recorded",
     };
     const update = { update_id_digest: "e".repeat(64), disposition: "blocked_j" };
     const capped = projectGatewayRecoveryInspectionForOperator({

@@ -475,6 +475,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("/recovery/inspection");
       expect(html).toContain("recovery-inspection-json");
       expect(html).toContain("operation_plan_correlations");
+      expect(html).toContain("memory_update_id_digest");
+      expect(html).toContain("memory_correlation");
       expect(html).toContain("update_residuals");
       expect(html).toContain("仕事ごとの参照はdigestと固定状態だけ");
       expect(html).toContain("独立backup復元点は未検査です");
@@ -714,6 +716,8 @@ describe("WebChatChannel — Recovery surface", () => {
               admission_digest: "d".repeat(64),
               broker_correlation: "not_found",
               delivery_correlation: "not_observed",
+              memory_update_id_digest: "f".repeat(64),
+              memory_correlation: "m_state_unverified",
             }],
             omitted_operation_plan_correlation_count: 0,
             update_residuals: [{ update_id_digest: "e".repeat(64), disposition: "content_mismatch" }],
@@ -772,6 +776,10 @@ describe("WebChatChannel — Recovery surface", () => {
         mode: "read_only",
         status: "residuals_present",
         operation_plan_residual_count: 1,
+        operation_plan_correlations: [{
+          memory_update_id_digest: "f".repeat(64),
+          memory_correlation: "m_state_unverified",
+        }],
         external_backup_restore_point: "not_examined",
         used_for_authority: false,
         may_execute: false,

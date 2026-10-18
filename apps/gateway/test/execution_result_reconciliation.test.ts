@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -13,6 +13,7 @@ import { createFileSearchWorker } from "../src/file_search_worker.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { operationResultMemoryStorage } from "../src/operation_result_memory_config.js";
+import { correlateOperationPlanBindings, inspectGatewayRecoveryState } from "../src/recovery_inspection.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -253,6 +254,57 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(review(restarted, c.plan, "dependent")?.type).toBe("tool_call");
     const projection = JSON.stringify(restarted.getRuntimeSnapshot().operation_plans);
     for (const raw of [c.workspace, '"matches"', '"memory_commit"', c.admission.ticket_id]) expect(projection).not.toContain(raw);
+
+    const privateRoot = c.memory.private_state_root;
+    const operationPlansDirectory = join(privateRoot, "operation-plans");
+    const executionDirectory = join(privateRoot, "execution-intents");
+    mkdirSync(operationPlansDirectory, { recursive: true }); mkdirSync(executionDirectory, { recursive: true });
+    const inspectedPlanPath = join(operationPlansDirectory, "j-state.sqlite");
+    const inspectedExecutionPath = join(executionDirectory, "executor.sqlite");
+    copyFileSync(c.jPath, inspectedPlanPath); copyFileSync(c.executionPath, inspectedExecutionPath);
+    const inspectedPaths = [c.memory.database_path, inspectedPlanPath, inspectedExecutionPath];
+    const inspectedBefore = inspectedPaths.map((file) => readFileSync(file));
+    const recovery = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: join(c.root, "state") });
+    const memoryCorrelation = recovery.operation_plan_correlations.find((item) => item.memory_update_id_digest !== null);
+    expect(memoryCorrelation).toMatchObject({ memory_correlation: "matched" });
+    expect(memoryCorrelation?.memory_update_id_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(recovery.ledgers.operation_plans).toMatchObject({ status: "verified", unverified_memory_link_count: 0 });
+    expect(recovery.operation_plan_residual_count).toBe(0);
+    expect(recovery.used_for_authority).toBe(false); expect(recovery.may_execute).toBe(false);
+    const mismatchedMemory = {
+      ...recovery.ledgers.m,
+      updates: recovery.ledgers.m.updates.map((update) => update.update_id_digest === memoryCorrelation?.memory_update_id_digest
+        ? { ...update, content_digest: "f".repeat(64) }
+        : update),
+    };
+    const mismatchCorrelation = correlateOperationPlanBindings(
+      recovery.ledgers.operation_plans,
+      recovery.ledgers.execution,
+      recovery.ledgers.j,
+      mismatchedMemory,
+    ).find((item) => item.memory_update_id_digest !== null);
+    expect(mismatchCorrelation?.memory_correlation).toBe("content_mismatch");
+    const recoveryJson = JSON.stringify(recovery);
+    const savedCommit = c.j.load()!.plans[0]!.bindings.find((binding) => binding.memory_commit)?.memory_commit!;
+    for (const raw of [savedCommit.update_id, savedCommit.j_event_id, c.workspace, "blue.txt", '"matches"']) {
+      expect(recoveryJson).not.toContain(raw);
+    }
+    expect(inspectedPaths.map((file) => readFileSync(file))).toEqual(inspectedBefore);
+
+    const currentCheckpoint = c.j.load()!;
+    const checkpointWithoutMemoryLink = structuredClone(currentCheckpoint);
+    const resultBinding = checkpointWithoutMemoryLink.plans[0]!.bindings.find((binding) => binding.memory_commit)!;
+    delete resultBinding.memory_commit; delete resultBinding.memory_receipt;
+    c.j.compareAndSet(operationPlanDigest(currentCheckpoint), checkpointWithoutMemoryLink);
+    expect(c.j.load()!.plans[0]!.bindings.find((binding) => binding.step_id === resultBinding.step_id)?.memory_commit).toBeUndefined();
+    copyFileSync(c.jPath, inspectedPlanPath);
+    const missingLinkBefore = [readFileSync(inspectedPlanPath), readFileSync(c.memory.database_path)];
+    const missingLinkReport = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: join(c.root, "state") });
+    expect(missingLinkReport.operation_plan_correlations.find((item) => item.plan_id_digest === memoryCorrelation?.plan_id_digest &&
+      item.step_id_digest === memoryCorrelation.step_id_digest)?.memory_correlation)
+      .toBe("missing_plan_memory_link");
+    expect(missingLinkReport.operation_plan_residual_count).toBeGreaterThan(0);
+    expect([readFileSync(inspectedPlanPath), readFileSync(c.memory.database_path)]).toEqual(missingLinkBefore);
     expect(c.invoke).toHaveBeenCalledTimes(1);
   }));
 

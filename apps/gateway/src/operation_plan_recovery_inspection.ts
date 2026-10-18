@@ -3,13 +3,24 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
-import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { operationPlanDigest, receiptForResultCommit, verifyResultMemoryCommit } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema, type ExecutionAdmission, type OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 import { executionAdmissionDigest } from "./execution_intent_store.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 export type OperationPlanBindingStatus = OperationPlanCheckpoint["plans"][number]["bindings"][number]["status"];
+
+export interface OperationPlanMemoryLinkInspection {
+  readonly integrity: "not_recorded" | "missing_expected" | "verified" | "residuals_present";
+  readonly update_id_digest: string | null;
+  readonly j_event_id_digest: string | null;
+  readonly content_digest: string | null;
+  readonly expected_version: number | null;
+  readonly receipt_digest: string | null;
+  readonly receipt_revision: number | null;
+  readonly receipt_event_digest: string | null;
+}
 
 export interface OperationPlanRecoveryInspection {
   readonly owner: "J";
@@ -32,6 +43,7 @@ export interface OperationPlanRecoveryInspection {
     readonly integrity: "verified" | "residuals_present";
     readonly admission_digest: string | null;
     readonly delivery_digest: string | null;
+    readonly memory_link: OperationPlanMemoryLinkInspection;
   }[];
   readonly used_for_authority: false;
   readonly may_execute: false;
@@ -96,6 +108,50 @@ function commandKeyFor(commandId: string): string {
   return createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", commandId])).digest("hex");
 }
 
+function inspectResultMemoryLink(
+  plan: OperationPlanCheckpoint["plans"][number],
+  binding: OperationPlanCheckpoint["plans"][number]["bindings"][number],
+): OperationPlanMemoryLinkInspection {
+  const commit = binding.memory_commit;
+  const receipt = binding.memory_receipt;
+  if (!commit && !receipt) {
+    const expected = binding.status === "verified" && binding.operation === "file.search" &&
+      binding.execution_admission !== undefined && binding.delivery_digest !== undefined && binding.result_digest !== undefined &&
+      plan.results.some((result) => result.step_id === binding.step_id);
+    return {
+      integrity: expected ? "missing_expected" : "not_recorded",
+      update_id_digest: null, j_event_id_digest: null, content_digest: null,
+      expected_version: null, receipt_digest: null, receipt_revision: null, receipt_event_digest: null,
+    };
+  }
+
+  let commitValid = false;
+  let receiptValid = !receipt;
+  try {
+    commitValid = !!commit && verifyResultMemoryCommit(plan, binding);
+    receiptValid = !receipt || (!!commit && commitValid && receiptForResultCommit(receipt, commit));
+  } catch {
+    commitValid = false;
+    receiptValid = false;
+  }
+  if (!commitValid || !receiptValid || !commit) {
+    return {
+      integrity: "residuals_present", update_id_digest: null, j_event_id_digest: null, content_digest: null,
+      expected_version: null, receipt_digest: null, receipt_revision: null, receipt_event_digest: null,
+    };
+  }
+  return {
+    integrity: "verified",
+    update_id_digest: createHash("sha256").update(commit.update_id).digest("hex"),
+    j_event_id_digest: createHash("sha256").update(commit.j_event_id).digest("hex"),
+    content_digest: commit.content_digest,
+    expected_version: commit.expected_version,
+    receipt_digest: receipt?.receipt_digest ?? null,
+    receipt_revision: receipt?.revision ?? null,
+    receipt_event_digest: receipt?.event_digest ?? null,
+  };
+}
+
 function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
   bindings: OperationPlanRecoveryInspection["bindings"];
   residualPlanCount: number;
@@ -148,12 +204,14 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
         duplicateTicketIds.has(admission.ticket_id) || admission.command_key !== commandKeyFor(binding.command_id) ||
         binding.status === "selected" || binding.status === "invalidated");
       const deliveryMismatch = binding.delivery_digest !== undefined && (!admission || !binding.result_digest);
-      if (binding.memory_commit || binding.memory_receipt) unverifiedMemoryLinkCount++;
+      const memoryLink = inspectResultMemoryLink(planState, binding);
+      if (memoryLink.integrity !== "not_recorded") unverifiedMemoryLinkCount++;
       const invalid = planRevisionMismatch || !revision || !step ||
         (step ? stepDefinitionDigest(step) !== binding.step_digest : true) ||
         binding.prepared_step.step_id !== binding.step_id || binding.prepared_step.operation !== binding.operation ||
         (step ? step.operation !== binding.operation : true) || duplicateCommandIds.has(binding.command_id) ||
         admissionMismatch || deliveryMismatch || invalidResultCommands.has(binding.command_id) ||
+        ["missing_expected", "residuals_present"].includes(memoryLink.integrity) ||
         (!admission && !["selected", "not_attempted", "invalidated"].includes(binding.status));
       if (invalid) residualCount++;
       else verifiedCount++;
@@ -167,6 +225,7 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
         integrity: invalid ? "residuals_present" : "verified",
         admission_digest: admission ? executionAdmissionDigest(admission) : null,
         delivery_digest: binding.delivery_digest ?? null,
+        memory_link: memoryLink,
       });
     }
   }

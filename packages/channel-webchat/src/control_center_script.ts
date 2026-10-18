@@ -1527,7 +1527,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const bindingIntegrity = recoveryInspectionEnum(value.binding_integrity, ["verified", "residuals_present"]);
               const brokerCorrelation = recoveryInspectionEnum(value.broker_correlation, ["matched", "not_admitted", "admission_missing", "not_found", "not_observed_due_to_limit", "ambiguous", "broker_unverified", "j_binding_unverified"]);
               const deliveryCorrelation = recoveryInspectionEnum(value.delivery_correlation, ["matched", "not_recorded", "j_not_recorded", "broker_not_recorded", "mismatch", "not_observed"]);
-              if (!planIdDigest || !stepIdDigest || !commandIdDigest || (value.admission_digest !== null && !admissionDigest) || bindingStatus === "unknown" || bindingIntegrity === "unknown" || brokerCorrelation === "unknown" || deliveryCorrelation === "unknown") return null;
+              const memoryUpdateIdDigest = value.memory_update_id_digest === null ? null : recoveryInspectionDigest(value.memory_update_id_digest);
+              const memoryCorrelation = recoveryInspectionEnum(value.memory_correlation, ["not_recorded", "missing_plan_memory_link", "binding_unverified", "j_state_unverified", "m_state_unverified", "missing_verified_j_link", "missing_verified_m_link", "pending_m_commit", "pending_j_receipt", "blocked_j", "m_present_for_blocked_j", "content_mismatch", "event_identity_mismatch", "revision_mismatch", "receipt_mismatch", "ambiguous", "matched"]);
+              if (!planIdDigest || !stepIdDigest || !commandIdDigest || (value.admission_digest !== null && !admissionDigest) || (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || bindingStatus === "unknown" || bindingIntegrity === "unknown" || brokerCorrelation === "unknown" || deliveryCorrelation === "unknown" || memoryCorrelation === "unknown") return null;
               return {
                 plan_id_digest: planIdDigest,
                 step_id_digest: stepIdDigest,
@@ -1536,7 +1538,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 binding_integrity: bindingIntegrity,
                 admission_digest: admissionDigest,
                 broker_correlation: brokerCorrelation,
-                delivery_correlation: deliveryCorrelation
+                delivery_correlation: deliveryCorrelation,
+                memory_update_id_digest: memoryUpdateIdDigest,
+                memory_correlation: memoryCorrelation
               };
             }).filter(function (item) { return item !== null; })
           : [];

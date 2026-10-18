@@ -90,6 +90,25 @@ export interface OperationPlanBrokerCorrelation {
     | "broker_not_recorded"
     | "mismatch"
     | "not_observed";
+  readonly memory_update_id_digest: string | null;
+  readonly memory_correlation:
+    | "not_recorded"
+    | "missing_plan_memory_link"
+    | "binding_unverified"
+    | "j_state_unverified"
+    | "m_state_unverified"
+    | "missing_verified_j_link"
+    | "missing_verified_m_link"
+    | "pending_m_commit"
+    | "pending_j_receipt"
+    | "blocked_j"
+    | "m_present_for_blocked_j"
+    | "content_mismatch"
+    | "event_identity_mismatch"
+    | "revision_mismatch"
+    | "receipt_mismatch"
+    | "ambiguous"
+    | "matched";
 }
 
 export interface GatewayRecoveryOperatorProjection {
@@ -116,6 +135,8 @@ export interface GatewayRecoveryOperatorProjection {
     readonly admission_digest: string | null;
     readonly broker_correlation: OperationPlanBrokerCorrelation["broker_correlation"];
     readonly delivery_correlation: OperationPlanBrokerCorrelation["delivery_correlation"];
+    readonly memory_update_id_digest: string | null;
+    readonly memory_correlation: OperationPlanBrokerCorrelation["memory_correlation"];
   }[];
   readonly omitted_operation_plan_correlation_count: number;
   readonly update_residuals: readonly RecoveryUpdateResidual[];
@@ -142,6 +163,11 @@ const BROKER_CORRELATIONS: readonly OperationPlanBrokerCorrelation["broker_corre
 ];
 const DELIVERY_CORRELATIONS: readonly OperationPlanBrokerCorrelation["delivery_correlation"][] = [
   "matched", "not_recorded", "j_not_recorded", "broker_not_recorded", "mismatch", "not_observed",
+];
+const MEMORY_CORRELATIONS: readonly OperationPlanBrokerCorrelation["memory_correlation"][] = [
+  "not_recorded", "missing_plan_memory_link", "binding_unverified", "j_state_unverified", "m_state_unverified", "missing_verified_j_link",
+  "missing_verified_m_link", "pending_m_commit", "pending_j_receipt", "blocked_j", "m_present_for_blocked_j",
+  "content_mismatch", "event_identity_mismatch", "revision_mismatch", "receipt_mismatch", "ambiguous", "matched",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -175,8 +201,11 @@ function projectOperatorOperationPlanCorrelations(
     const admissionDigest = value.admission_digest === null ? null : fixedDigest(value.admission_digest);
     const brokerCorrelation = fixedEnum(value.broker_correlation, BROKER_CORRELATIONS);
     const deliveryCorrelation = fixedEnum(value.delivery_correlation, DELIVERY_CORRELATIONS);
+    const memoryUpdateIdDigest = value.memory_update_id_digest === null ? null : fixedDigest(value.memory_update_id_digest);
+    const memoryCorrelation = fixedEnum(value.memory_correlation, MEMORY_CORRELATIONS);
     if (!planIdDigest || !stepIdDigest || !commandIdDigest || !status || !bindingIntegrity ||
-        (value.admission_digest !== null && !admissionDigest) || !brokerCorrelation || !deliveryCorrelation) continue;
+        (value.admission_digest !== null && !admissionDigest) || !brokerCorrelation || !deliveryCorrelation ||
+        (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || !memoryCorrelation) continue;
     rows.push({
       plan_id_digest: planIdDigest,
       step_id_digest: stepIdDigest,
@@ -186,6 +215,8 @@ function projectOperatorOperationPlanCorrelations(
       admission_digest: admissionDigest,
       broker_correlation: brokerCorrelation,
       delivery_correlation: deliveryCorrelation,
+      memory_update_id_digest: memoryUpdateIdDigest,
+      memory_correlation: memoryCorrelation,
     });
   }
   return { rows, omitted: values.length - rows.length };
@@ -347,7 +378,10 @@ export function inspectGatewayRecoveryState(
     ? inspectOperationPlanRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.operationPlansPath })
     : unavailableOperationPlans;
   const residuals = correlateRecoveryUpdates(j, m);
-  const operationPlanCorrelations = correlateOperationPlanBindings(operationPlans, execution);
+  const operationPlanCorrelations = correlateOperationPlanBindings(operationPlans, execution, j, m);
+  const operationPlanMemoryLinkResidualCount = operationPlanCorrelations.filter((item) =>
+    item.memory_correlation !== "not_recorded" && item.memory_correlation !== "matched",
+  ).length;
   const storesVerified = j.status === "verified" && m.status === "verified";
   const hasHardResidual = residuals.some((item) => !["paired", "pending_m_commit", "pending_j_receipt"].includes(item.disposition));
   const executionResidualCount = execution.status === "verified" ? 0 : Math.max(
@@ -358,20 +392,34 @@ export function inspectGatewayRecoveryState(
     ["admission_missing", "not_found", "not_observed_due_to_limit", "ambiguous", "broker_unverified"].includes(item.broker_correlation) ||
     ["j_not_recorded", "broker_not_recorded", "mismatch"].includes(item.delivery_correlation),
   ).length;
-  const operationPlanResidualCount = operationPlans.status === "verified" && operationPlanCorrelationResidualCount === 0 &&
+  const operationPlanStructuralResidualCount = operationPlans.plan_integrity_residual_count + operationPlans.residual_binding_count +
+    (operationPlans.omitted_binding_count > 0 ? 1 : 0);
+  const operationPlanHasSourceState = ["verified", "residuals_present"].includes(operationPlans.status);
+  const operationPlansResolved: OperationPlanRecoveryInspection = operationPlanHasSourceState
+    ? {
+        ...operationPlans,
+        status: operationPlanStructuralResidualCount > 0 || operationPlanMemoryLinkResidualCount > 0
+          ? "residuals_present"
+          : "verified",
+        reason: operationPlanStructuralResidualCount > 0
+          ? "binding_mismatch"
+          : operationPlanMemoryLinkResidualCount > 0 ? "cross_ledger_unverified" : null,
+        unverified_memory_link_count: operationPlanMemoryLinkResidualCount,
+      }
+    : operationPlans;
+  const operationPlanResidualCount = operationPlansResolved.status === "verified" && operationPlanCorrelationResidualCount === 0 &&
       operationPlans.omitted_binding_count === 0
     ? 0
-    : Math.max(1, operationPlans.plan_integrity_residual_count + operationPlans.residual_binding_count +
-      operationPlans.unverified_memory_link_count + operationPlanCorrelationResidualCount +
-      (operationPlans.omitted_binding_count > 0 ? 1 : 0));
-  const checkpointVerified = storesVerified && execution.status === "verified" && operationPlans.status === "verified" &&
-    !hasHardResidual && operationPlanCorrelationResidualCount === 0 && operationPlans.omitted_binding_count === 0;
+    : Math.max(1, operationPlanStructuralResidualCount + operationPlanMemoryLinkResidualCount + operationPlanCorrelationResidualCount);
+  const checkpointVerified = storesVerified && execution.status === "verified" && operationPlansResolved.status === "verified" &&
+    !hasHardResidual && operationPlanCorrelationResidualCount === 0 && operationPlanMemoryLinkResidualCount === 0 &&
+    operationPlans.omitted_binding_count === 0;
   return {
     schema_version: 3,
     surface: "recovery_inspection",
     mode: "read_only",
     status: checkpointVerified ? "verified" : "residuals_present",
-    ledgers: { j, m, execution, operation_plans: operationPlans },
+    ledgers: { j, m, execution, operation_plans: operationPlansResolved },
     operation_plan_correlations: operationPlanCorrelations,
     replay_checkpoint: checkpointVerified
       ? {
@@ -404,6 +452,8 @@ export function inspectGatewayRecoveryState(
 export function correlateOperationPlanBindings(
   operationPlans: OperationPlanRecoveryInspection,
   execution: ExecutionIntentRecoveryInspection,
+  j: PersistenceLedgerInspection,
+  m: PersistenceLedgerInspection,
 ): OperationPlanBrokerCorrelation[] {
   const byAdmission = new Map<string, ExecutionIntentRecoveryInspection["records"]>();
   if (execution.status === "verified") {
@@ -447,8 +497,49 @@ export function correlateOperationPlanBindings(
       broker_correlation: brokerCorrelation,
       broker_state: brokerRecord?.state ?? null,
       delivery_correlation: deliveryCorrelation,
+      memory_update_id_digest: binding.memory_link.update_id_digest,
+      memory_correlation: correlateOperationPlanMemoryBinding(binding.memory_link, j, m),
     };
   });
+}
+
+function correlateOperationPlanMemoryBinding(
+  link: OperationPlanRecoveryInspection["bindings"][number]["memory_link"],
+  j: PersistenceLedgerInspection,
+  m: PersistenceLedgerInspection,
+): OperationPlanBrokerCorrelation["memory_correlation"] {
+  if (link.integrity === "not_recorded") return "not_recorded";
+  if (link.integrity === "missing_expected") return "missing_plan_memory_link";
+  if (link.integrity !== "verified" || !link.update_id_digest || !link.j_event_id_digest || !link.content_digest ||
+      link.expected_version === null) return "binding_unverified";
+  if (j.status !== "verified") return "j_state_unverified";
+  if (m.status !== "verified") return "m_state_unverified";
+
+  const jMatches = j.updates.filter((item) => item.update_id_digest === link.update_id_digest);
+  const mMatches = m.updates.filter((item) => item.update_id_digest === link.update_id_digest);
+  if (jMatches.length > 1 || mMatches.length > 1) return "ambiguous";
+  const jUpdate = jMatches[0];
+  const mUpdate = mMatches[0];
+  if (!jUpdate) return "missing_verified_j_link";
+  if (!mUpdate) {
+    if (link.receipt_digest) return "receipt_mismatch";
+    return jUpdate.phase === "pending" ? "pending_m_commit"
+      : jUpdate.phase === "blocked" ? "blocked_j" : "missing_verified_m_link";
+  }
+  if (jUpdate.content_digest !== link.content_digest || mUpdate.content_digest !== link.content_digest) return "content_mismatch";
+  if (jUpdate.j_event_id_digest !== link.j_event_id_digest || mUpdate.j_event_id_digest !== link.j_event_id_digest) {
+    return "event_identity_mismatch";
+  }
+  if (jUpdate.expected_version !== undefined && jUpdate.expected_version !== link.expected_version) return "revision_mismatch";
+  if (mUpdate.revision !== link.expected_version + 1) return "revision_mismatch";
+  if (jUpdate.phase === "blocked") return "m_present_for_blocked_j";
+  if (jUpdate.phase === "pending") return link.receipt_digest ? "receipt_mismatch" : "pending_j_receipt";
+  if (!link.receipt_digest || link.receipt_revision === null || !link.receipt_event_digest) return "pending_j_receipt";
+  if (jUpdate.receipt_revision !== link.receipt_revision || mUpdate.revision !== link.receipt_revision ||
+      jUpdate.receipt_event_digest !== link.receipt_event_digest || mUpdate.event_digest !== link.receipt_event_digest) {
+    return "receipt_mismatch";
+  }
+  return "matched";
 }
 
 export function correlateRecoveryUpdates(

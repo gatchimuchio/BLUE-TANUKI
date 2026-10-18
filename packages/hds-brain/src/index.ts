@@ -7,6 +7,7 @@ export {
 } from "./保存取引.js";
 export { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
   type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
+export { verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
 export {
   DOCUMENT_ORGANIZATION_MAX_CYCLES,
   DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS,
