@@ -120,6 +120,12 @@ async function runRecoveryInspectCli(): Promise<void> {
     writeStdout(`Execution ledger residuals: ${report.execution_residual_count}`);
     writeStdout(`Operation plan residuals: ${report.operation_plan_residual_count}`);
     writeStdout(`Cron approval correlation residuals: ${report.cron_approval_correlation_residual_count}`);
+    const checkpoints = report.ledgers.document_organization_checkpoints;
+    writeStdout(`Document organization checkpoints: ${checkpoints.status}; records=${checkpoints.checkpoint_count ?? "unavailable"}; verified=${checkpoints.verified_checkpoint_count ?? "unavailable"}; residual=${checkpoints.residual_checkpoint_count ?? "unavailable"}; omitted=${checkpoints.omitted_checkpoint_count ?? "unavailable"}; unresolved=${checkpoints.unresolved_checkpoint_count ?? "unavailable"}`);
+    for (const checkpoint of checkpoints.records) {
+      writeStdout(`checkpoint=${checkpoint.checkpoint_ref_digest ?? "unidentified"} integrity=${checkpoint.integrity} reason=${checkpoint.reason ?? "none"} recorded_status=${checkpoint.checkpoint_status ?? "unknown"}`);
+    }
+    writeStdout(`Document organization checkpoint residuals: ${report.document_organization_checkpoint_residual_count}`);
     for (const residual of report.update_residuals) {
       writeStdout(`update=${residual.update_id_digest} disposition=${residual.disposition}`);
     }

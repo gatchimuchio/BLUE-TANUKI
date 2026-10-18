@@ -448,6 +448,16 @@ function parseDocumentOrganizationCheckpoint(value: unknown): DocumentOrganizati
   });
 }
 
+/** Validate the checkpoint's stored shape without exposing its contents or claiming source-span validity. */
+export function validateDocumentOrganizationCheckpointShape(value: unknown): boolean {
+  try {
+    parseDocumentOrganizationCheckpoint(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeMemoryVersion(value: DocumentOrganizationMemoryVersion | undefined): DocumentOrganizationMemoryVersion {
   return value ? parseMemoryVersion(value) : Object.freeze({
     schema_version: "blue-tanuki.memory-state-version.v1",

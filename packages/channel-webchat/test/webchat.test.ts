@@ -707,7 +707,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 5,
+            schema_version: 6,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -717,6 +717,7 @@ describe("WebChatChannel — Recovery surface", () => {
               broker: "verified",
               operation_plans: "residuals_present",
               cron_events: "unavailable",
+              document_organization_checkpoints: "unavailable",
             },
             cron_event_summary: {
               status: "unavailable",
@@ -734,6 +735,17 @@ describe("WebChatChannel — Recovery surface", () => {
               pending_approval_handoff_count: null,
               interrupted_approval_handoff_count: null,
               residual_count: 1,
+            },
+            document_organization_checkpoint_summary: {
+              status: "unavailable",
+              reason: "store_unavailable",
+              checkpoint_count: null,
+              verified_checkpoint_count: null,
+              residual_checkpoint_count: null,
+              omitted_checkpoint_count: null,
+              unresolved_checkpoint_count: null,
+              residual_count: 1,
+              records: [],
             },
             ledger_boundaries: {
               j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
@@ -775,6 +787,7 @@ describe("WebChatChannel — Recovery surface", () => {
             operation_plan_residual_count: 1,
             cron_event_residual_count: 1,
             cron_approval_correlation_residual_count: 1,
+            document_organization_checkpoint_residual_count: 1,
             external_backup_restore_point: "not_examined",
             boundary_valid: true,
             used_for_authority: false,
@@ -857,7 +870,9 @@ describe("WebChatChannel — Recovery surface", () => {
         operation_plan_residual_count: 1,
         cron_event_residual_count: 1,
         cron_approval_correlation_residual_count: 1,
+        document_organization_checkpoint_residual_count: 1,
         cron_event_summary: { status: "unavailable", residual_count: 1, cursor_count: null, pending_approval_handoff_count: null },
+        document_organization_checkpoint_summary: { status: "unavailable", residual_count: 1, checkpoint_count: null, unresolved_checkpoint_count: null },
         operation_plan_correlations: [{
           memory_update_id_digest: "f".repeat(64),
           memory_correlation: "m_state_unverified",

@@ -1564,6 +1564,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const source = report && typeof report === "object" ? report : {};
         const ledgers = source.ledgers && typeof source.ledgers === "object" ? source.ledgers : {};
         const cronSource = source.cron_event_summary && typeof source.cron_event_summary === "object" ? source.cron_event_summary : {};
+        const documentCheckpointSource = source.document_organization_checkpoint_summary && typeof source.document_organization_checkpoint_summary === "object" ? source.document_organization_checkpoint_summary : {};
         const cronStatus = recoveryInspectionEnum(cronSource.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
         const cronReason = cronSource.reason === null ? null : recoveryInspectionEnum(cronSource.reason, ["store_unavailable", "schema_mismatch", "ledger_corrupt", "outbox_mismatch"]);
         const cronCountKeys = ["cursor_count", "verified_cursor_count", "unverified_cursor_count", "omitted_cursor_count", "unresolved_cursor_count", "orphan_outbox_count", "approval_handoff_count", "verified_approval_handoff_count", "unverified_approval_handoff_count", "omitted_approval_handoff_count", "pending_approval_handoff_count", "interrupted_approval_handoff_count"];
@@ -1591,14 +1592,73 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               (cronReason !== "ledger_corrupt" || cronCounts.unverified_cursor_count + cronCounts.unverified_approval_handoff_count > 0) &&
               (cronReason !== "outbox_mismatch" || cronCounts.orphan_outbox_count > 0));
         const cronLedgerStatus = recoveryInspectionLedgerStatus(ledgers.cron_events, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
+        const documentCheckpointStatus = recoveryInspectionEnum(documentCheckpointSource.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
+        const documentCheckpointReason = documentCheckpointSource.reason === null ? null : recoveryInspectionEnum(documentCheckpointSource.reason, ["store_unavailable", "schema_mismatch", "ledger_corrupt", "row_limit_reached", "unfinished_checkpoints"]);
+        const documentCheckpointCountKeys = ["checkpoint_count", "verified_checkpoint_count", "residual_checkpoint_count", "omitted_checkpoint_count", "unresolved_checkpoint_count"];
+        const documentCheckpointCounts = {};
+        let documentCheckpointCountsValid = true;
+        documentCheckpointCountKeys.forEach(function (key) {
+          const value = documentCheckpointSource[key];
+          if (value === null || (Number.isSafeInteger(value) && value >= 0)) documentCheckpointCounts[key] = value;
+          else documentCheckpointCountsValid = false;
+        });
+        const documentCheckpointSourceRecords = Array.isArray(documentCheckpointSource.records) ? documentCheckpointSource.records : null;
+        const documentCheckpointReferences = new Set();
+        let documentCheckpointRecordsValid = documentCheckpointSourceRecords !== null && documentCheckpointSourceRecords.length <= 128;
+        const documentCheckpointRecords = (documentCheckpointSourceRecords || []).slice(0, 128).map(function (item) {
+              const value = item && typeof item === "object" ? item : {};
+              const reference = value.checkpoint_ref_digest === null ? null : recoveryInspectionDigest(value.checkpoint_ref_digest);
+              const integrity = recoveryInspectionEnum(value.integrity, ["verified", "residuals_present"]);
+              const reason = value.reason === null ? null : recoveryInspectionEnum(value.reason, ["row_shape_invalid", "checkpoint_digest_mismatch", "checkpoint_json_invalid", "checkpoint_shape_invalid", "checkpoint_identity_mismatch"]);
+              const checkpointStatus = value.checkpoint_status === null ? null : recoveryInspectionEnum(value.checkpoint_status, ["ready", "continuing", "completed", "held"]);
+              if ((value.checkpoint_ref_digest !== null && !reference) || integrity === "unknown" ||
+                  (value.reason !== null && reason === "unknown") ||
+                  (value.checkpoint_status !== null && checkpointStatus === "unknown") ||
+                  (integrity === "verified" && (reason !== null || checkpointStatus === null || reference === null)) ||
+                  (integrity === "residuals_present" && reason === null) ||
+                  (reference !== null && documentCheckpointReferences.has(reference))) {
+                documentCheckpointRecordsValid = false;
+                return null;
+              }
+              if (reference !== null) documentCheckpointReferences.add(reference);
+              return { checkpoint_ref_digest: reference, integrity: integrity, reason: reason, checkpoint_status: checkpointStatus };
+            }).filter(function (item) { return item !== null; });
+        if (documentCheckpointRecords.length !== (documentCheckpointSourceRecords || []).length) documentCheckpointRecordsValid = false;
+        const documentCheckpointResidualCount = documentCheckpointSource.residual_count;
+        const documentCheckpointUnavailable = ["unavailable", "schema_mismatch", "corrupt"].includes(documentCheckpointStatus);
+        const documentCheckpointCountsUnknown = documentCheckpointCountKeys.every(function (key) { return documentCheckpointCounts[key] === null; });
+        const documentCheckpointCountsNumeric = documentCheckpointCountKeys.every(function (key) { return Number.isSafeInteger(documentCheckpointCounts[key]) && documentCheckpointCounts[key] >= 0; });
+        const documentCheckpointVerifiedRows = documentCheckpointRecords.filter(function (item) { return item.integrity === "verified"; }).length;
+        const documentCheckpointResidualRows = documentCheckpointRecords.filter(function (item) { return item.integrity === "residuals_present"; }).length;
+        const documentCheckpointUnresolvedRows = documentCheckpointRecords.filter(function (item) { return item.integrity === "verified" && item.checkpoint_status !== "completed"; }).length;
+        const expectedDocumentCheckpointResiduals = documentCheckpointCounts.residual_checkpoint_count + documentCheckpointCounts.omitted_checkpoint_count + documentCheckpointCounts.unresolved_checkpoint_count;
+        const expectedDocumentCheckpointReason = documentCheckpointResidualRows > 0 ? "ledger_corrupt" : documentCheckpointCounts.omitted_checkpoint_count > 0 ? "row_limit_reached" :
+          documentCheckpointCounts.unresolved_checkpoint_count > 0 ? "unfinished_checkpoints" : null;
+        const documentCheckpointSummaryValid = documentCheckpointStatus !== "unknown" && documentCheckpointCountsValid &&
+          documentCheckpointRecordsValid &&
+          Number.isSafeInteger(documentCheckpointResidualCount) && documentCheckpointResidualCount >= 0 &&
+          (documentCheckpointUnavailable
+            ? documentCheckpointCountsUnknown && documentCheckpointRecords.length === 0 && documentCheckpointResidualCount > 0 &&
+              documentCheckpointReason === (documentCheckpointStatus === "unavailable" ? "store_unavailable" : documentCheckpointStatus === "schema_mismatch" ? "schema_mismatch" : "ledger_corrupt")
+            : documentCheckpointCountsNumeric &&
+              documentCheckpointCounts.verified_checkpoint_count === documentCheckpointVerifiedRows &&
+              documentCheckpointCounts.residual_checkpoint_count === documentCheckpointResidualRows &&
+              documentCheckpointCounts.checkpoint_count === documentCheckpointCounts.verified_checkpoint_count + documentCheckpointCounts.residual_checkpoint_count + documentCheckpointCounts.omitted_checkpoint_count &&
+              documentCheckpointRecords.length === documentCheckpointCounts.verified_checkpoint_count + documentCheckpointCounts.residual_checkpoint_count &&
+              documentCheckpointCounts.unresolved_checkpoint_count === documentCheckpointUnresolvedRows &&
+              expectedDocumentCheckpointResiduals === documentCheckpointResidualCount &&
+              (documentCheckpointStatus === "verified" ? documentCheckpointResidualCount === 0 && documentCheckpointReason === null :
+                documentCheckpointResidualCount > 0 && documentCheckpointReason === expectedDocumentCheckpointReason));
+        const documentCheckpointLedgerStatus = recoveryInspectionLedgerStatus(ledgers.document_organization_checkpoints, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
         const cronApprovalCorrelationResidualCount = recoveryInspectionCount(source.cron_approval_correlation_residual_count);
-        const initialBoundaryOk = source.schema_version === 5 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && cronApprovalCorrelationResidualCount !== null;
+        const initialBoundaryOk = source.schema_version === 6 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
         const ledgerStatuses = {
           j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           broker: recoveryInspectionLedgerStatus(ledgers.broker, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           operation_plans: recoveryInspectionLedgerStatus(ledgers.operation_plans, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
-          cron_events: cronLedgerStatus
+          cron_events: cronLedgerStatus,
+          document_organization_checkpoints: documentCheckpointLedgerStatus
         };
         const planCorrelations = Array.isArray(source.operation_plan_correlations)
           ? source.operation_plan_correlations.slice(0, 200).map(function (item) {
@@ -1723,11 +1783,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           operation_plan_residual_count: recoveryInspectionCount(source.operation_plan_residual_count),
           cron_event_residual_count: recoveryInspectionCount(source.cron_event_residual_count),
           cron_approval_correlation_residual_count: cronApprovalCorrelationResidualCount,
+          document_organization_checkpoint_residual_count: recoveryInspectionCount(source.document_organization_checkpoint_residual_count),
           cron_event_summary: {
             status: cronStatus,
             reason: cronReason,
             ...cronCounts,
             residual_count: cronResidualCount
+          },
+          document_organization_checkpoint_summary: {
+            status: documentCheckpointStatus,
+            reason: documentCheckpointReason,
+            ...documentCheckpointCounts,
+            residual_count: documentCheckpointResidualCount,
+            records: documentCheckpointRecords
           },
           operation_plan_correlations: planCorrelations,
           omitted_operation_plan_correlation_count: recoveryInspectionCount(source.omitted_operation_plan_correlation_count),

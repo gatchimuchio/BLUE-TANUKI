@@ -14,6 +14,7 @@ export {
   DOCUMENT_ORGANIZATION_SCHEMA_VERSION,
   DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
   DocumentOrganizationCoordinator,
+  validateDocumentOrganizationCheckpointShape,
   renderDocumentOrganizationProjection,
   type DocumentOrganizationCheckpoint,
   type DocumentOrganizationMemoryVersion,
