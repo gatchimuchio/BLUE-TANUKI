@@ -13,6 +13,7 @@ import { createFileSearchWorker } from "../src/file_search_worker.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { operationResultMemoryStorage } from "../src/operation_result_memory_config.js";
+import { operationPlanRecoveryEvidenceFromObservation } from "../src/operation_plan_recovery_evidence.js";
 import { correlateOperationPlanBindings, inspectGatewayRecoveryState } from "../src/recovery_inspection.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -202,6 +203,103 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(c.hds.getRuntimeSnapshot().operation_plans.plans[0]).not.toHaveProperty("recovery_hold_reason");
     expect(c.hds.getAudit().verify()).toBe(true);
   }));
+
+  it("J/M receipt-backed plan hold survives a closed-store restart and releases only at a fresh review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-result-reconcile-jm-process-restart-"));
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace);
+    writeFileSync(join(workspace, "blue.txt"), "blue\n");
+    vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+    const c = await setup(root, workspace);
+    let originalJOpen = true;
+    let restartedJ: OperationPlanStateStore | undefined;
+    try {
+      expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+      const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+      expect(feedback.status).toBe("success");
+      finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id,
+        target_surface: "channel" });
+      expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toMatchObject({ adopted: 1, deferred: 0 });
+      expect(c.j.load()?.plans[0]?.bindings[0]?.memory_receipt).toBeDefined();
+
+      const staleSelection = review(c.hds, c.plan, "dependent")!;
+      const restoreCommand = canonicalMemoryRestoreCommand();
+      expect(c.hds.quiesceOperationPlanMemoryForCanonicalRestore()).toBe(true);
+      expect(c.hds.holdOperationPlansForCanonicalMemoryRestore(restoreCommand)).toBe(true);
+      expect(c.hds.beginOperationPlanAttempt(staleSelection)).toBe(false);
+      expect(c.hds.reopenOperationPlanMemoryAfterCanonicalRestore()).toBe(true);
+      const observation = {
+        status: "matched" as const,
+        operation: "restore" as const,
+        store_key: "m_state" as const,
+        command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+        operation_digest: createHash("sha256").update("restart-restore-operation").digest("hex"),
+        result_digest: createHash("sha256").update("restart-restore-result").digest("hex"),
+        restore_backup_id_digest: createHash("sha256").update("restart-restore-backup").digest("hex"),
+        restored_state_digest: createHash("sha256").update("restart-restored-state").digest("hex"),
+        store_ledger_status: "verified" as const,
+        store_ledger_residual_count: 0 as const,
+      };
+      expect(c.hds.recordOperationPlanMemoryRestoreObservation(restoreCommand, observation)).toBe(true);
+      const checkpointBeforeRestart = c.j.load();
+      const holdBeforeRestart = c.j.loadRecoveryHoldState();
+      if (!checkpointBeforeRestart) throw new Error("missing restart checkpoint fixture");
+      expect(holdBeforeRestart).toMatchObject({
+        used_for_authority: false,
+        may_execute: false,
+        holds: [{ provenance: { source: "recovery_restore", restore_store_key: "m_state",
+          checkpoint_digest: expect.any(String) } }],
+      });
+      expect(inspectMemory(c).receipts).toHaveLength(1);
+
+      c.hds.closeOperationPlanMemory();
+      c.controllers.splice(0, c.controllers.length);
+      c.j.close();
+      originalJOpen = false;
+      restartedJ = new OperationPlanStateStore(c.jPath);
+      const startupEvidence = operationPlanRecoveryEvidenceFromObservation({
+        observation: {
+          status: "matched", operation: "restore", store_key: "m_state",
+          operation_digest: observation.operation_digest, result_digest: observation.result_digest,
+          command_id_digest: observation.command_id_digest, restored_state_digest: observation.restored_state_digest,
+          store_ledger_status: "verified", store_ledger_residual_count: 0,
+          plan_residuals: null, restore_backup_id_digest: observation.restore_backup_id_digest,
+          restore_scope_plan_digest: null, plan_restore_points: null, configuration_state: "not_observed",
+          evidence_source: "COMPLETE_HISTORY", used_for_authority: false, may_execute: false,
+        },
+        checkpoint: checkpointBeforeRestart,
+        history_complete: true,
+      });
+      const restarted = new HDSUpperController({ operation_plan_state: restartedJ, operation_plan_memory: c.memory,
+        operation_plan_recovery_evidence: startupEvidence, memory: c.oldMemory });
+      c.controllers.push(restarted);
+
+      expect(restartedJ.load()).toEqual(checkpointBeforeRestart);
+      expect(restartedJ.loadRecoveryHoldState()).toMatchObject({
+        used_for_authority: false,
+        may_execute: false,
+        holds: [{ reason: "held_unverified", provenance: {
+          command_id_digest: recoveryCommandIdDigest(restoreCommand.id), restore_store_key: "m_state",
+          checkpoint_digest: operationPlanDigest(checkpointBeforeRestart),
+        } }],
+      });
+      expect(restarted.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unverified" });
+      expect(restarted.beginOperationPlanAttempt(staleSelection)).toBe(false);
+      expect(review(restarted, c.plan, "dependent")?.type).toBe("tool_call");
+      expect(restarted.getRuntimeSnapshot().operation_plans.plans[0]).not.toHaveProperty("recovery_hold_reason");
+      expect(restartedJ.loadRecoveryHoldState()).toMatchObject({ holds: [] });
+      expect(inspectMemory(c).receipts).toHaveLength(1);
+      expect(restarted.getAudit().verify()).toBe(true);
+    } finally {
+      for (const controller of c.controllers) controller.closeOperationPlanMemory();
+      restartedJ?.close();
+      if (originalJOpen) c.j.close();
+      c.execution.close();
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("J/M restore permits a fresh review when an unexecuted plan has no J/M result dependency", async () => fixture(async (c) => {
     const staleSelection = c.cmd;
