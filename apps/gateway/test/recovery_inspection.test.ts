@@ -225,9 +225,9 @@ describe("Gateway recovery operator projection", () => {
       mode: "read_only",
       status: "residuals_present",
       ledgers: {
-        j: { status: "verified" },
-        m: { status: "projection_mismatch" },
-        execution: { status: "verified" },
+        j: { status: "verified", reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
+        m: { status: "projection_mismatch", reason: "projection_mismatch", verified_event_count: 2, unverified_event_count: 1, first_unverified_ordinal: 3, last_verified_revision: 2 },
+        execution: { status: "verified", reason: "RAW_REASON_SENTINEL", verified_event_count: 2, unverified_event_count: 0, first_unverified_ordinal: null },
         operation_plans: { status: "residuals_present" },
       },
       replay_checkpoint: null,
@@ -265,7 +265,13 @@ describe("Gateway recovery operator projection", () => {
       surface: "recovery_inspection_operator",
       mode: "read_only",
       status: "residuals_present",
+      schema_version: 2,
       ledgers: { j: "verified", m: "projection_mismatch", broker: "verified", operation_plans: "residuals_present" },
+      ledger_boundaries: {
+        j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
+        m: { reason: "projection_mismatch", verified_event_count: 2, unverified_event_count: 1, first_unverified_ordinal: 3, last_verified_revision: 2 },
+        broker: { reason: "unknown", verified_event_count: 2, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: null },
+      },
       operation_plan_correlations: [{
         plan_id_digest: "a".repeat(64),
         step_id_digest: "b".repeat(64),
@@ -287,7 +293,7 @@ describe("Gateway recovery operator projection", () => {
       may_execute: false,
     });
     const serialized = JSON.stringify(projection);
-    for (const sentinel of ["RAW_COMMAND_SENTINEL", "RAW_TICKET_SENTINEL", "RAW_UPDATE_SENTINEL", "RAW_ACTION_SENTINEL", "private\\state.sqlite"]) {
+    for (const sentinel of ["RAW_COMMAND_SENTINEL", "RAW_TICKET_SENTINEL", "RAW_UPDATE_SENTINEL", "RAW_ACTION_SENTINEL", "RAW_REASON_SENTINEL", "private\\state.sqlite"]) {
       expect(serialized).not.toContain(sentinel);
     }
   });
@@ -340,6 +346,34 @@ describe("Gateway recovery operator projection", () => {
     expect(invalid.update_residuals).toEqual([]);
     expect(invalid.omitted_operation_plan_correlation_count).toBe(1);
     expect(invalid.omitted_update_residual_count).toBe(1);
+    expect(invalid.ledger_boundaries).toMatchObject({
+      j: { reason: "unknown", verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
+      m: { reason: "unknown", verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
+      broker: { reason: "unknown", verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
+    });
+  });
+
+  it("hides inconsistent or unavailable ledger positions instead of presenting an empty recovery boundary", () => {
+    const projection = projectGatewayRecoveryInspectionForOperator({
+      schema_version: 3,
+      surface: "recovery_inspection",
+      mode: "read_only",
+      status: "residuals_present",
+      ledgers: {
+        j: { status: "corrupt", reason: "ledger_corrupt", verified_event_count: 8, unverified_event_count: 2, first_unverified_ordinal: 12, last_verified_revision: 8 },
+        m: { status: "unavailable", reason: "store_unavailable", verified_event_count: 0, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 0 },
+        execution: { status: "verified", reason: null, verified_event_count: 4, unverified_event_count: 1, first_unverified_ordinal: null },
+      },
+      operation_plan_correlations: [],
+      update_residuals: [],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(projection.ledger_boundaries).toEqual({
+      j: { reason: "ledger_corrupt", verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
+      m: { reason: "store_unavailable", verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
+      broker: { reason: null, verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
+    });
   });
 });
 

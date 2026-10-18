@@ -474,6 +474,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("inspect-recovery-ledgers");
       expect(html).toContain("/recovery/inspection");
       expect(html).toContain("recovery-inspection-json");
+      expect(html).toContain("ledger_boundaries");
+      expect(html).toContain("verified_event_count");
+      expect(html).toContain("最初の未検証位置");
       expect(html).toContain("operation_plan_correlations");
       expect(html).toContain("memory_update_id_digest");
       expect(html).toContain("memory_correlation");
@@ -699,7 +702,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 1,
+            schema_version: 2,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -708,6 +711,11 @@ describe("WebChatChannel — Recovery surface", () => {
               m: "unavailable",
               broker: "verified",
               operation_plans: "residuals_present",
+            },
+            ledger_boundaries: {
+              j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
+              m: { reason: "store_unavailable", verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
+              broker: { reason: null, verified_event_count: 2, unverified_event_count: 1, first_unverified_ordinal: 3, last_verified_revision: null },
             },
             replay_checkpoint: "not_verified",
             operation_plan_correlations: [{
@@ -778,6 +786,11 @@ describe("WebChatChannel — Recovery surface", () => {
         surface: "recovery_inspection_operator",
         mode: "read_only",
         status: "residuals_present",
+        ledger_boundaries: {
+          j: { verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
+          m: { reason: "store_unavailable", verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
+          broker: { verified_event_count: 2, unverified_event_count: 1, first_unverified_ordinal: 3, last_verified_revision: null },
+        },
         operation_plan_residual_count: 1,
         operation_plan_correlations: [{
           memory_update_id_digest: "f".repeat(64),

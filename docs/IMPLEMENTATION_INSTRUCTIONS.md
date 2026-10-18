@@ -1,27 +1,25 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF309F77BABACC56796A1893FE77`、Codex施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`、作業標準要領、active指示、関係するE03.02／E01.01／D04.02要求と現物を再読した。開始HEAD／`origin/main`=`fdbd2738d6f51f9df5702f994aaff007c56fbd7e`、開始worktree clean。三点原典はowner指定rev2.3 ZIPの新規展開から読み、旧版の状態を現行へ転記しない。
+2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0、工程表SHA-256=7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF309F77BABACC56796A1893FE77、Codex施工指示SHA-256=D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8）、適用AGENTS.md、作業標準要領、現物、active対象要求を再読した。開始HEAD／origin/main=1fc0d17888a62a6b4cc3f55bb2f1a50c72a8f952、開始worktree clean。三点正本はowner指定rev2.3 ZIPの新規展開から再読し、旧版や過去会話の状態を現行へ転記しない。
 
 ## 今回のBUILD_BATCH
 
-QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.02-CRON-RECEIPT-OBSERVATION-CORRELATION`。関係単位=E03.02「未決作用・M pendingの回復」、E01.01「永続jobと重複event」、D04.02「実行receiptと受理後照合」。対象はBLUE-TANUKIのCron向けread-only resident notification。D4Pocket／ミニドラ、実provider／credential、実外部業務作用、公開・出荷判断は対象外。
+QE_STAGE=QE_BUILD。BUILD_BATCH=QEB-03-E03.03-RECOVERY-BOUNDARY-OPERATOR-PROJECTION。関係単位=E03.03「破損範囲の隔離復旧」。対象はBLUE-TANUKIの既存read-only復旧診断からControl Center operator projectionへの検証境界表示接続。D4Pocket／ミニドラ、実provider／credential、外部業務作用、実復旧・再開、公開・出荷判断は対象外。
 
-既存HDSの`operation_plans` projectionは、完全一致したplan request IDごとに保存済み結果の相関と、未解決bindingへの`local_inspection`外部receipt観測（`matched`／`not_found`／`mismatch`／`ambiguous`／`not_recorded`）を非権威情報として持つ。Gateway notificationは現在、Cron cursorの結果・M相関は表示するがreceipt観測を表示せず、restartで中断したCron approval通知には結果相関自体がない。Cron event IDと一意なplan request IDの一致を使い、cursor通知と中断approval通知の双方へreceipt観測のsource/statusだけを投影する。外部照会は通知生成時に起動しない。
+現行producerのJ/M/Broker recovery inspectorは検証済みevent数、未検証event数、破損開始ordinal、J/Mの最後の検証済みrevisionを持ち、CLIへ表示する。一方、Control Center向けdigest-only projectionはledger statusへ縮退し、operator consumerでは破損・検証境界位置を確認できない。これら数値と固定reason enumを非権威のoperator projectionへ渡し、Control Centerの既存read-only表示に結ぶ。
 
-### 安全境界
+### 到達・停止境界
 
-- `operation-plan-projection.v1`、`used_for_authority=false`、`raw_payload_exposed=false`を必須確認し、planが一意にevent IDへ一致しない場合は不明／曖昧状態を保持する。
-- 表示するのは固定source=`local_inspection`と検査済みstatusのみ。raw receipt、候補本文、credential、plan/commandの本文・識別子、receipt/evidence digestは通知へ加えない。
-- `matched`も外部作用成功・目的達成・Cron event解消・M確定を意味しない。`outcome_unknown`、未決cursor、L3 no-replay判断、fresh approval要件を変更しない。
-- 変更はGateway projection／resident notification／WebChat read-only表示に限定し、HDS・Broker・Executor・Cron cursor・承認・作用・memoryの判断や状態を変更しない。
-- C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+- projectionは検証済みprefixの件数、未検証suffixの件数、最初の未検証ordinal、取得できる最終検証revision、許可enumのreasonだけを表示する。event digest、raw event、task/command/credential、database pathは追加しない。
+- used_for_authority=false、may_execute=false、external_backup_restore_point=not_examinedを維持する。検証済みprefixはbackup／restore pointではなく、復旧・再開の許可も作らない。
+- 外側report boundaryが不正なら台帳境界の数値をnull／unknownへ落とす。ledgerがunavailable/schema不一致等で検証数を確定できない場合も0件と誤表示しない。件数とordinalの整合を検査してから投影する。
+- 実DB修復、backup作成・復元、job別dependency graph、無関係jobの継続可否判断はこのバッチで実装しない。E03.03は仕事単位の破損影響範囲と独立backup照合が未接続のためBUILD_GAPのまま記録する。
+- HDS-J／Approval／L3／Broker／M非権限／監査／fail-closedは不変。P13=PENDING_OWNER_GO、public_claim_allowed=false、C08.03実provider保留を維持する。
 
-### 到達・確認
+### 確認・Git
 
-- Cron event IDで保存済みOperationPlanとの結果・receipt観測を通知へ接続する。projection欠落、複数plan、未知status、step相関の異常を曖昧／利用不可として表示し、証拠を成功へ昇格させない。
-- focused testsはGateway resident notificationとWebChat通知描画に限定する。`pnpm typecheck`、必要な`pnpm build`、文書変更に対する`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check`をバッチ境界で実施する。
-- live provider／credential、外部業務作用、全suite、全OS実機、QE_QC／QE_QAは実施しない。
+- 対象testsはGateway recovery projectionとWebChat Control Center描画。型検査、必要なbuild、文書変更のdocs gate、差分checkをバッチ境界で行う。
+- 全suite、live/provider、credential、外部業務作用、5OS実機、QE_QC／QE_QAは実施しない。
+- MIGRATION_COMPLETE（2026-10-12）。編集前の復旧refsはlocal branch／tagとremote tagで現世代=1fc0d17888a62a6b4cc3f55bb2f1a50c72a8f952、前世代=fdbd2738d6f51f9df5702f994aaff007c56fbd7e。実装と公開可能な進捗を限定commit／pushし、remote HEAD・二世代refs・clean worktreeを照合する。秘密・内部原典を追加しない。
 
-編集前に復旧状態=`MIGRATION_COMPLETE`を確認した。local復旧branch二世代・local tag二世代・remote backup tag二世代は現世代=`fdbd2738d6f51f9df5702f994aaff007c56fbd7e`、前世代=`4f85463e1924db1afb812a195f238ed2cd68a7e4`で一致。実装と関連公開文書を限定commitして`main`へpushし、remote HEAD・二世代refs・worktreeを照合する。
-
-残るBUILD_GAPは外部receipt照合結果に基づくHDS／owner判断とCron lifecycleの統合、worker世代別の結果帰属の全consumer、durable job全体である。receipt観測表示から自動再送・自動no-replay・成功判断を追加しない。
+次のconsumerはoperatorが実際の破損仕事と無関係な仕事を分けて復旧できるguarded recovery path。現在の単位でそれがなければ「可視化済み」と完了扱いせず、具体的なBUILD_GAPを残す。

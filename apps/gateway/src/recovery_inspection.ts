@@ -111,8 +111,16 @@ export interface OperationPlanBrokerCorrelation {
     | "matched";
 }
 
+export interface RecoveryLedgerBoundaryObservation {
+  readonly reason: PersistenceLedgerInspection["reason"] | ExecutionIntentRecoveryInspection["reason"] | "unknown";
+  readonly verified_event_count: number | null;
+  readonly unverified_event_count: number | null;
+  readonly first_unverified_ordinal: number | null;
+  readonly last_verified_revision: number | null;
+}
+
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 1;
+  readonly schema_version: 2;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -121,6 +129,11 @@ export interface GatewayRecoveryOperatorProjection {
     readonly m: string;
     readonly broker: string;
     readonly operation_plans: string;
+  };
+  readonly ledger_boundaries: {
+    readonly j: RecoveryLedgerBoundaryObservation;
+    readonly m: RecoveryLedgerBoundaryObservation;
+    readonly broker: RecoveryLedgerBoundaryObservation;
   };
   readonly replay_checkpoint: "verified_replay_checkpoint_not_backup" | "not_verified";
   readonly isolated_update_count: number;
@@ -169,6 +182,11 @@ const MEMORY_CORRELATIONS: readonly OperationPlanBrokerCorrelation["memory_corre
   "missing_verified_m_link", "pending_m_commit", "pending_j_receipt", "blocked_j", "m_present_for_blocked_j",
   "content_mismatch", "event_identity_mismatch", "revision_mismatch", "receipt_mismatch", "ambiguous", "matched",
 ];
+const RECOVERY_LEDGER_REASONS: readonly NonNullable<RecoveryLedgerBoundaryObservation["reason"]>[] = [
+  "disk_full", "write_failed", "sync_failed", "schema_mismatch", "ledger_corrupt", "projection_mismatch",
+  "store_unavailable", "outbox_mismatch",
+];
+const RECOVERY_LEDGER_STATUSES = ["verified", "projection_mismatch", "corrupt", "residuals_present", "unavailable", "schema_mismatch"] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -184,6 +202,57 @@ function fixedDigest(value: unknown): string | null {
 
 function fixedCount(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function unknownLedgerBoundary(): RecoveryLedgerBoundaryObservation {
+  return {
+    reason: "unknown",
+    verified_event_count: null,
+    unverified_event_count: null,
+    first_unverified_ordinal: null,
+    last_verified_revision: null,
+  };
+}
+
+function projectLedgerBoundary(
+  value: unknown,
+  enabled: boolean,
+  hasRevision: boolean,
+): RecoveryLedgerBoundaryObservation {
+  if (!enabled || !isRecord(value)) return unknownLedgerBoundary();
+  const status = fixedEnum(value.status, RECOVERY_LEDGER_STATUSES);
+  const reason = value.reason === null ? null : fixedEnum(value.reason, RECOVERY_LEDGER_REASONS) ?? "unknown";
+  if (!status) return unknownLedgerBoundary();
+  if (status === "unavailable" || status === "schema_mismatch") {
+    return { ...unknownLedgerBoundary(), reason };
+  }
+
+  const verified = typeof value.verified_event_count === "number" && Number.isSafeInteger(value.verified_event_count) && value.verified_event_count >= 0
+    ? value.verified_event_count : null;
+  const unverified = typeof value.unverified_event_count === "number" && Number.isSafeInteger(value.unverified_event_count) && value.unverified_event_count >= 0
+    ? value.unverified_event_count : null;
+  const firstUnverified = value.first_unverified_ordinal === null
+    ? null
+    : typeof value.first_unverified_ordinal === "number" && Number.isSafeInteger(value.first_unverified_ordinal) && value.first_unverified_ordinal > 0
+      ? value.first_unverified_ordinal : undefined;
+  const lastVerifiedRevision = hasRevision
+    ? typeof value.last_verified_revision === "number" && Number.isSafeInteger(value.last_verified_revision) && value.last_verified_revision >= 0
+      ? value.last_verified_revision : null
+    : null;
+  const countsValid = verified !== null && unverified !== null && Number.isSafeInteger(verified + unverified) &&
+    firstUnverified !== undefined &&
+    (unverified === 0 ? firstUnverified === null : firstUnverified === verified + 1) &&
+    (status !== "verified" || unverified === 0) &&
+    (!hasRevision || lastVerifiedRevision !== null);
+  if (!countsValid) return { ...unknownLedgerBoundary(), reason };
+
+  return {
+    reason,
+    verified_event_count: verified,
+    unverified_event_count: unverified,
+    first_unverified_ordinal: firstUnverified,
+    last_verified_revision: lastVerifiedRevision,
+  };
 }
 
 function projectOperatorOperationPlanCorrelations(
@@ -242,15 +311,15 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
   const source = isRecord(value) ? value : {};
   const ledgers = isRecord(source.ledgers) ? source.ledgers : {};
   const reportShapeValid = source.schema_version === 3 && source.surface === "recovery_inspection" && source.mode === "read_only";
-  const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false;
   const sourceStatus = fixedEnum(source.status, ["verified", "residuals_present"] as const);
+  const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false && sourceStatus !== null;
   const operationPlanSources = Array.isArray(source.operation_plan_correlations) ? source.operation_plan_correlations : [];
   const updateSources = Array.isArray(source.update_residuals) ? source.update_residuals : [];
   const operationPlans = projectOperatorOperationPlanCorrelations(operationPlanSources, boundaryValid);
   const updates = projectOperatorUpdateResiduals(updateSources, boundaryValid);
   const ledgerStatuses = ["verified", "projection_mismatch", "corrupt", "residuals_present", "unavailable", "schema_mismatch"] as const;
   return {
-    schema_version: 1,
+    schema_version: 2,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -259,6 +328,11 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
       m: fixedEnum(isRecord(ledgers.m) ? ledgers.m.status : null, ledgerStatuses) ?? "unknown",
       broker: fixedEnum(isRecord(ledgers.execution) ? ledgers.execution.status : null, ledgerStatuses) ?? "unknown",
       operation_plans: fixedEnum(isRecord(ledgers.operation_plans) ? ledgers.operation_plans.status : null, ledgerStatuses) ?? "unknown",
+    },
+    ledger_boundaries: {
+      j: projectLedgerBoundary(ledgers.j, boundaryValid, true),
+      m: projectLedgerBoundary(ledgers.m, boundaryValid, true),
+      broker: projectLedgerBoundary(ledgers.execution, boundaryValid, false),
     },
     replay_checkpoint: boundaryValid && isRecord(source.replay_checkpoint) &&
         source.replay_checkpoint.verified === true && source.replay_checkpoint.kind === "canonical_replay_checkpoint_not_backup"

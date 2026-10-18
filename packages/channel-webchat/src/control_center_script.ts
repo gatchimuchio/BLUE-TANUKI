@@ -1538,13 +1538,41 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return recoveryInspectionEnum(status, allowed);
       }
 
+      function recoveryInspectionLedgerBoundary(value, enabled, status, hasRevision) {
+        const unknown = { reason: "unknown", verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null };
+        if (!enabled || !value || typeof value !== "object") return unknown;
+        const reason = value.reason === null ? null : recoveryInspectionEnum(value.reason, ["disk_full", "write_failed", "sync_failed", "schema_mismatch", "ledger_corrupt", "projection_mismatch", "store_unavailable", "outbox_mismatch", "unknown"]);
+        const readCount = function (item) { return item === null ? null : Number.isSafeInteger(item) && item >= 0 ? item : undefined; };
+        const verified = readCount(value.verified_event_count);
+        const unverified = readCount(value.unverified_event_count);
+        const first = value.first_unverified_ordinal === null ? null : Number.isSafeInteger(value.first_unverified_ordinal) && value.first_unverified_ordinal > 0 ? value.first_unverified_ordinal : undefined;
+        const revision = readCount(value.last_verified_revision);
+        if (["unavailable", "schema_mismatch"].includes(status)) return { ...unknown, reason };
+        if (!["verified", "projection_mismatch", "residuals_present", "corrupt"].includes(status)) return unknown;
+        if (verified === null && unverified === null) return { ...unknown, reason };
+        if (verified === undefined || unverified === undefined || first === undefined || revision === undefined ||
+            !Number.isSafeInteger(verified + unverified) ||
+            (unverified === 0 && first !== null) ||
+            (unverified > 0 && first !== verified + 1) ||
+            (status === "verified" && unverified > 0) ||
+            (hasRevision && revision === null) ||
+            (!hasRevision && revision !== null)) return { ...unknown, reason: reason === "unknown" ? "unknown" : reason };
+        return { reason, verified_event_count: verified, unverified_event_count: unverified, first_unverified_ordinal: first, last_verified_revision: revision };
+      }
+
       function renderRecoveryInspection(report) {
         const source = report && typeof report === "object" ? report : {};
         const ledgers = source.ledgers && typeof source.ledgers === "object" ? source.ledgers : {};
-        const boundaryOk = source.schema_version === 1 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true;
+        const boundaryOk = source.schema_version === 2 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true;
         const status = boundaryOk
           ? recoveryInspectionEnum(source.status, ["verified", "residuals_present", "invalid_report"])
           : "invalid_report";
+        const ledgerStatuses = {
+          j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
+          m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
+          broker: recoveryInspectionLedgerStatus(ledgers.broker, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
+          operation_plans: recoveryInspectionLedgerStatus(ledgers.operation_plans, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"])
+        };
         const planCorrelations = Array.isArray(source.operation_plan_correlations)
           ? source.operation_plan_correlations.slice(0, 200).map(function (item) {
               const value = item && typeof item === "object" ? item : {};
@@ -1584,11 +1612,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const projection = {
           mode: recoveryInspectionEnum(source.mode, ["read_only"]),
           status,
-          ledgers: {
-            j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
-            m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
-            broker: recoveryInspectionLedgerStatus(ledgers.broker, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
-            operation_plans: recoveryInspectionLedgerStatus(ledgers.operation_plans, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"])
+          ledgers: ledgerStatuses,
+          ledger_boundaries: {
+            j: recoveryInspectionLedgerBoundary(source.ledger_boundaries && source.ledger_boundaries.j, boundaryOk, ledgerStatuses.j, true),
+            m: recoveryInspectionLedgerBoundary(source.ledger_boundaries && source.ledger_boundaries.m, boundaryOk, ledgerStatuses.m, true),
+            broker: recoveryInspectionLedgerBoundary(source.ledger_boundaries && source.ledger_boundaries.broker, boundaryOk, ledgerStatuses.broker, false)
           },
           replay_checkpoint: source.replay_checkpoint === "verified_replay_checkpoint_not_backup"
             ? "verified_replay_checkpoint_not_backup"
