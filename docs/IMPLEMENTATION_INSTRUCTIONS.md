@@ -2,11 +2,28 @@
 
 ## 次のBUILD_BATCH
 
-次は `QEB-03-E03.03-RECOVERY-SELECTED-PLAN-RESIDUAL-PROJECTION`。今回のselected-store台帳観測を次consumerへ進め、選択storeが`operation_plans`の場合だけ、同じread-only inspectorが返す計画ごとの固定digest・状態・残差件数をpost-action観測とControl Centerへ表示する。raw owner／goal／command／計画ID／行内容／pathは出さず、他store、権限、recoverability、resumeへ接続しない。合成state／履歴のみを使い、実restore／実再起動／実owner承認は対象外。
+次は `QEB-03-E03.03-RESTORE-POINT-PLAN-RESIDUAL-CORRELATION`。ownerの最新版三点正本・適用AGENTS.md・現物を再読し、selected-store restore履歴に保存する固定backup digestと既存read-only backup／plan-dependency inspectorの接続を確認する。実際のconsumerが成立する場合だけ、Operation Plan digest単位で復元点記録・台帳残差・未観測依存を表示する。raw backup ID／owner／goal／command／計画ID／行内容／pathは出さず、権限・自動resume・復旧可能の断定へ接続しない。合成state／履歴のみを使い、実restore／実再起動／実owner承認は対象外。既存機構で実際のconsumerが成立しない場合は、作業を拡大せず具体的なBUILD_GAPを記録する。
 
 次の作業前に最新版の三点正本と適用AGENTS.mdを読み直す。C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
 
 ## 直近のBUILD_BATCH実績
+
+`QEB-03-E03.03-RECOVERY-SELECTED-PLAN-RESIDUAL-PROJECTION` は2026-10-19に開始HEAD／`origin/main`=`8c532feffcf80bdef9f801cfd25f3e4e07ba8e2d`、開始worktree cleanで開始した。owner指定rev2.3三点正本、適用AGENTS.md、作業標準要領、active指示、E03.03と関連実装を再読した。開始時local current／previous recovery branch・tagおよびremote current／previous tagはそれぞれ現世代=`8c532feffcf80bdef9f801cfd25f3e4e07ba8e2d`、前世代=`7cd36c1dcf8bbf343c0be2000c3e51e3f778d776`。
+
+選択storeが`operation_plans`の場合に限り、同じread-only inspectorが返した計画別SHA-256 digest、計画内integrity status、binding数、残差binding数、省略binding数をpost-action観測へ投影し、Control Centerへ表示した。SQLiteの観測前後でbyte数／SHA-256が変化した場合は未確認となり、計画一覧を返さない。計画summaryはschema上限64件、digest以外のraw plan ID、owner、goal、command、行内容、pathは出さない。ほかのselected storeには計画一覧を付けず、`used_for_authority=false`／`may_execute=false`、recoverability／resume非接続を維持した。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway recovery post-action observation focused test | PASS、1 file／7 tests。合成のclean／residual plan summary、selected-only読取、変更後の空台帳、schema不一致時の一覧抑止、raw ID／owner／goal／path非露出、read-only bytes不変を確認。 |
+| WebChat / Control Center focused test | PASS、1 file／82 tests。digest／固定status／残差数／省略数、未選択store抑止、不正projection全体抑止を確認。 |
+| `pnpm typecheck`→`pnpm build` | 両方PASS。workspace 15 projects。 |
+| `pnpm smoke:serve` | PASS。stub WebChat、audit persistence、audit-dump chain検証。Recovery mutationなし。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実state restore／実環境再起動／実owner承認／provider・credential／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+E03.03／QEB-03=`BUILD_GAP`を維持する。計画digest別の台帳検査summaryは仕事単位のrestore point、cross-store依存状態、recoverabilityを示さない。次consumerは、selected restoreの不透明backup digestと既存read-only backup／plan-dependency inspectionの実接続可能性を現物から確認すること。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。別repo、実業務作用、公開・出荷判断なし。
+
+実装commit=`561cfc6003d30bc333f696621c804f1bbddc35be`を`main`へpush済み。docs-only closeout commitもpushし、最終`main`／local current recovery branch・tag／remote current tagはcloseout HEADで一致、previous branch／tagは開始HEAD=`8c532feffcf80bdef9f801cfd25f3e4e07ba8e2d`を保持した。最終ref照合後worktree clean。
 
 `QEB-03-E03.03-RECOVERY-POST-RESTORE-LEDGER-REOBSERVATION` は2026-10-19に開始HEAD／`origin/main`=`7cd36c1dcf8bbf343c0be2000c3e51e3f778d776`、worktree cleanで開始した。owner指定rev2.3三点正本、適用AGENTS.md、作業標準要領、active指示、E03.03と対象コードを本単位の開始時に再読した。編集前にlocal current／previous backup branch・tagとremote current／previous backup tagがすべて開始HEADを指す状態を確認した。
 
