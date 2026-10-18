@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, realpathSync, lstatSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, lstatSync, chmodSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary, ExecutionWorkerIdentity } from "@blue-tanuki/core";
 import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
@@ -291,6 +291,293 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       operation(); this.db.exec("COMMIT");
     }
     catch (error) { try { this.db.exec("ROLLBACK"); } catch { /* 元の失敗を保つ。 */ } throw error; }
+  }
+}
+
+export interface ExecutionIntentRecoveryInspection {
+  readonly owner: "Broker";
+  readonly status: "verified" | "corrupt" | "residuals_present" | "unavailable" | "schema_mismatch";
+  readonly reason: "ledger_corrupt" | "projection_mismatch" | "outbox_mismatch" | "store_unavailable" | "schema_mismatch" | null;
+  readonly total_event_count: number;
+  readonly verified_event_count: number;
+  readonly unverified_event_count: number;
+  readonly first_unverified_ordinal: number | null;
+  readonly last_verified_event_digest: string | null;
+  readonly receipt_projection_mismatch_count: number;
+  readonly outbox_mismatch_count: number;
+  readonly current_state_available: boolean;
+  readonly omitted_record_count: number;
+  readonly records: readonly {
+    readonly ticket_digest: string;
+    readonly command_key_digest: string;
+    readonly execution_epoch_digest: string;
+    readonly state: ExecutionIntentReceipt["state"];
+    readonly reconciliation_required: boolean;
+    readonly result_delivery_pending: boolean;
+  }[];
+  readonly used_for_authority: false;
+  readonly execution_eligible: false;
+}
+
+interface VerifiedExecutionEvent {
+  readonly receipt: ExecutionIntentReceipt;
+  readonly event_hash: string;
+  readonly sequence: number;
+}
+
+function unavailableExecutionInspection(
+  status: "unavailable" | "schema_mismatch" = "unavailable",
+  reason: "store_unavailable" | "schema_mismatch" = "store_unavailable",
+): ExecutionIntentRecoveryInspection {
+  return {
+    owner: "Broker",
+    status,
+    reason,
+    total_event_count: 0,
+    verified_event_count: 0,
+    unverified_event_count: 0,
+    first_unverified_ordinal: null,
+    last_verified_event_digest: null,
+    receipt_projection_mismatch_count: 0,
+    outbox_mismatch_count: 0,
+    current_state_available: false,
+    omitted_record_count: 0,
+    records: [],
+    used_for_authority: false,
+    execution_eligible: false,
+  };
+}
+
+function safeExecutionRecoveryPath(privateStateRoot: string, databasePath: string): string | null {
+  try {
+    const rootStat = lstatSync(privateStateRoot);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return null;
+    const root = realpathSync(privateStateRoot);
+    const absolutePath = resolve(databasePath);
+    const rel = relative(root, absolutePath);
+    if (rel !== join("execution-intents", "executor.sqlite") || isAbsolute(rel) || rel.startsWith(`..${sep}`)) return null;
+    const directory = join(root, "execution-intents");
+    const directoryStat = lstatSync(directory);
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) return null;
+    const fileStat = lstatSync(absolutePath);
+    if (fileStat.isSymbolicLink() || !fileStat.isFile() || fileStat.size === 0 || realpathSync(absolutePath) !== absolutePath) return null;
+    return absolutePath;
+  } catch {
+    return null;
+  }
+}
+
+function verifyExecutionRecoverySchema(database: DatabaseType): boolean {
+  const tables = new Set(["execution_intents", "execution_events", "execution_result_outbox"]);
+  const objectRows = database.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE type IN ('table','trigger')")
+    .all() as { type: string; name: string; tbl_name: string; sql: string | null }[];
+  const tableRows = objectRows.filter((row) => row.type === "table" && tables.has(row.name));
+  if (tableRows.length !== tables.size || objectRows.some((row) => row.type === "trigger" && tables.has(row.tbl_name))) return false;
+  const expected: Record<string, readonly { name: string; type: string; primaryKey: number }[]> = {
+    execution_intents: [
+      { name: "ticket_id", type: "TEXT", primaryKey: 1 },
+      { name: "command_key", type: "TEXT", primaryKey: 0 },
+      { name: "receipt_json", type: "TEXT", primaryKey: 0 },
+      { name: "receipt_digest", type: "TEXT", primaryKey: 0 },
+    ],
+    execution_events: [
+      { name: "sequence", type: "INTEGER", primaryKey: 1 },
+      { name: "ticket_id", type: "TEXT", primaryKey: 0 },
+      { name: "event_json", type: "TEXT", primaryKey: 0 },
+      { name: "previous_hash", type: "TEXT", primaryKey: 0 },
+      { name: "event_hash", type: "TEXT", primaryKey: 0 },
+    ],
+    execution_result_outbox: [
+      { name: "ticket_id", type: "TEXT", primaryKey: 1 },
+      { name: "delivery_json", type: "TEXT", primaryKey: 0 },
+      { name: "delivery_digest", type: "TEXT", primaryKey: 0 },
+    ],
+  };
+  return Object.entries(expected).every(([table, columns]) => {
+    const schema = tableRows.find((row) => row.name === table)?.sql;
+    if (typeof schema !== "string" || !/\bSTRICT\b/i.test(schema)) return false;
+    const actual = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string; type: string; pk: number }[];
+    return actual.length === columns.length && columns.every((column, index) => {
+      const row = actual[index];
+      return row?.name === column.name && row.type.toUpperCase() === column.type && row.pk === column.primaryKey;
+    });
+  });
+}
+
+/** Inspect the private Broker execution ledger without creating or repairing a store. */
+export function inspectExecutionIntentRecoveryLedger(options: {
+  readonly private_state_root: string;
+  readonly database_path: string;
+}): ExecutionIntentRecoveryInspection {
+  let database: DatabaseType | undefined;
+  let databasePath: string;
+  try {
+    databasePath = safeExecutionRecoveryPath(options.private_state_root, options.database_path) ?? "";
+    if (!databasePath || ["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${databasePath}${suffix}`))) {
+      return unavailableExecutionInspection();
+    }
+    database = new DatabaseSync(databasePath, {
+      readOnly: true,
+      enableForeignKeyConstraints: true,
+      allowExtension: false,
+    });
+    database.enableLoadExtension(false);
+    database.exec("PRAGMA busy_timeout = 0; PRAGMA query_only = ON; BEGIN");
+    if (["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${databasePath}${suffix}`))) {
+      return unavailableExecutionInspection();
+    }
+    const mode = database.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined;
+    if (typeof mode?.journal_mode !== "string" || mode.journal_mode.toLowerCase() !== "delete") {
+      return unavailableExecutionInspection();
+    }
+    if (!verifyExecutionRecoverySchema(database)) {
+      return unavailableExecutionInspection("schema_mismatch", "schema_mismatch");
+    }
+
+    const totalRow = database.prepare("SELECT count(*) AS count FROM execution_events").get() as { count?: unknown } | undefined;
+    const totalEventCount = totalRow?.count;
+    if (typeof totalEventCount !== "number" || !Number.isSafeInteger(totalEventCount) || totalEventCount < 0) {
+      return unavailableExecutionInspection("schema_mismatch", "schema_mismatch");
+    }
+    const rows = database.prepare("SELECT sequence,ticket_id,event_json,previous_hash,event_hash FROM execution_events ORDER BY sequence")
+      .all() as { sequence: number; ticket_id: string; event_json: string; previous_hash: string; event_hash: string }[];
+    const latest = new Map<string, VerifiedExecutionEvent>();
+    let previous = "0".repeat(64);
+    let verifiedEventCount = 0;
+    for (const row of rows) {
+      if (!Number.isSafeInteger(row.sequence) || row.sequence !== verifiedEventCount + 1 ||
+          typeof row.ticket_id !== "string" || typeof row.event_json !== "string" ||
+          typeof row.previous_hash !== "string" || typeof row.event_hash !== "string" ||
+          row.previous_hash !== previous || digest(previous + row.event_json) !== row.event_hash) break;
+      try {
+        const parsed: unknown = JSON.parse(row.event_json);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) ||
+            typeof (parsed as { content?: unknown }).content !== "object" ||
+            (parsed as { content?: { profile?: unknown } }).content?.profile !== "executor-intent-event.v1") break;
+        const receipt = (parsed as { content: { receipt?: unknown } }).content.receipt as ExecutionIntentReceipt;
+        validateReceipt(receipt);
+        if (receipt.ticket_id !== row.ticket_id) break;
+        verifiedEventCount++;
+        previous = row.event_hash;
+        latest.set(row.ticket_id, { receipt, event_hash: row.event_hash, sequence: row.sequence });
+      } catch {
+        break;
+      }
+    }
+
+    if (verifiedEventCount !== totalEventCount || rows.length !== totalEventCount) {
+      return {
+        owner: "Broker",
+        status: "corrupt",
+        reason: "ledger_corrupt",
+        total_event_count: totalEventCount,
+        verified_event_count: verifiedEventCount,
+        unverified_event_count: Math.max(0, totalEventCount - verifiedEventCount),
+        first_unverified_ordinal: verifiedEventCount < totalEventCount ? verifiedEventCount + 1 : null,
+        last_verified_event_digest: verifiedEventCount > 0 ? previous : null,
+        receipt_projection_mismatch_count: 0,
+        outbox_mismatch_count: 0,
+        current_state_available: false,
+        omitted_record_count: 0,
+        records: [],
+        used_for_authority: false,
+        execution_eligible: false,
+      };
+    }
+
+    let receiptProjectionMismatchCount = 0;
+    try {
+      const projections = database.prepare("SELECT ticket_id,command_key,receipt_json,receipt_digest FROM execution_intents ORDER BY rowid")
+        .all() as { ticket_id: string; command_key: string; receipt_json: string; receipt_digest: string }[];
+      const seen = new Set<string>();
+      for (const row of projections) {
+        const ticketId = typeof row.ticket_id === "string" ? row.ticket_id : null;
+        const duplicateTicket = ticketId !== null && seen.has(ticketId);
+        if (ticketId !== null) seen.add(ticketId);
+        try {
+          if (typeof row.ticket_id !== "string" || typeof row.command_key !== "string" ||
+              typeof row.receipt_json !== "string" || typeof row.receipt_digest !== "string" ||
+              digest(row.receipt_json) !== row.receipt_digest) throw new Error("invalid_projection");
+          const receipt = JSON.parse(row.receipt_json) as ExecutionIntentReceipt;
+          validateReceipt(receipt);
+          const event = latest.get(row.ticket_id);
+          if (!event || duplicateTicket || receipt.ticket_id !== row.ticket_id || receipt.command_key !== row.command_key ||
+              JSON.stringify(Object.entries(receipt).sort()) !== JSON.stringify(Object.entries(event.receipt).sort())) {
+            receiptProjectionMismatchCount++;
+          }
+        } catch {
+          receiptProjectionMismatchCount++;
+        }
+      }
+      for (const ticketId of latest.keys()) if (!seen.has(ticketId)) receiptProjectionMismatchCount++;
+    } catch {
+      return unavailableExecutionInspection("schema_mismatch", "schema_mismatch");
+    }
+
+    let outboxMismatchCount = 0;
+    try {
+      const outbox = database.prepare("SELECT ticket_id,delivery_json,delivery_digest FROM execution_result_outbox ORDER BY rowid")
+        .all() as { ticket_id: string; delivery_json: string; delivery_digest: string }[];
+      const seen = new Set<string>();
+      for (const row of outbox) {
+        const ticketId = typeof row.ticket_id === "string" ? row.ticket_id : null;
+        const duplicateTicket = ticketId !== null && seen.has(ticketId);
+        if (ticketId !== null) seen.add(ticketId);
+        try {
+          if (typeof row.ticket_id !== "string" || typeof row.delivery_json !== "string" || typeof row.delivery_digest !== "string") {
+            throw new Error("invalid_outbox");
+          }
+          const event = latest.get(row.ticket_id);
+          const delivery = inspectExecutionResultDelivery(JSON.parse(row.delivery_json));
+          if (!event || duplicateTicket || event.receipt.result_delivery_digest !== row.delivery_digest ||
+              digest(row.delivery_json) !== row.delivery_digest) throw new Error("outbox_digest_mismatch");
+          validateDelivery(event.receipt, delivery);
+        } catch {
+          outboxMismatchCount++;
+        }
+      }
+      for (const [ticketId, { receipt }] of latest) {
+        if (receipt.result_delivery_digest !== undefined && !seen.has(ticketId)) outboxMismatchCount++;
+      }
+    } catch {
+      return unavailableExecutionInspection("schema_mismatch", "schema_mismatch");
+    }
+
+    const mismatch = receiptProjectionMismatchCount > 0 || outboxMismatchCount > 0;
+    const records = mismatch ? [] : [...latest.entries()]
+      .sort((a, b) => b[1].sequence - a[1].sequence)
+      .slice(0, 200)
+      .map(([ticketId, { receipt }]) => ({
+        ticket_digest: digest(ticketId),
+        command_key_digest: digest(receipt.command_key),
+        execution_epoch_digest: digest(receipt.execution_epoch),
+        state: receipt.state,
+        reconciliation_required: ["intent_committed", "invocation_attempted", "outcome_unknown"].includes(receipt.state) ||
+          receipt.result_delivery_acknowledged === false,
+        result_delivery_pending: receipt.result_delivery_acknowledged === false,
+      }));
+    return {
+      owner: "Broker",
+      status: mismatch ? "residuals_present" : "verified",
+      reason: receiptProjectionMismatchCount > 0 ? "projection_mismatch" : outboxMismatchCount > 0 ? "outbox_mismatch" : null,
+      total_event_count: totalEventCount,
+      verified_event_count: verifiedEventCount,
+      unverified_event_count: 0,
+      first_unverified_ordinal: null,
+      last_verified_event_digest: verifiedEventCount > 0 ? previous : null,
+      receipt_projection_mismatch_count: receiptProjectionMismatchCount,
+      outbox_mismatch_count: outboxMismatchCount,
+      current_state_available: !mismatch,
+      omitted_record_count: Math.max(0, latest.size - records.length),
+      records,
+      used_for_authority: false,
+      execution_eligible: false,
+    };
+  } catch {
+    return unavailableExecutionInspection();
+  } finally {
+    try { database?.exec("ROLLBACK"); } catch { /* no read snapshot was opened */ }
+    try { database?.close(); } catch { /* read-only inspection has no state to commit */ }
   }
 }
 

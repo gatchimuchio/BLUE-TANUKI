@@ -22,6 +22,8 @@
 
 2026-10-18のQEB-03-E03.03-READONLY-LEDGER-RECOVERY-INSPECTIONでは、通常startup／owner lease／HDS controller初期化に入らないGateway `--recovery-inspect` CLIを接続した。HDS J/Mのcanonical eventをread-onlyで再生し、verified prefix、破損suffix、projection差異、opaque update digestの残差を表示する。journal副ファイル検出時はDBを開かず、独立backupは未検査と明示し、repair／restore／resume／権限発行をしない。破損suffixに対する限定fixture、保存物不変、副ファイル時のopen抑止、J/M残差分類、空state rootでのJSON／text CLIを確認した。これは部分接続であり、verified prefixからの復旧、backup検査、operator UI、E03.03／QEB-03全体は未成立のため`BUILD_GAP`を維持する。
 
+2026-10-18のQEB-03-E03.03-EXECUTION-LEDGER-READONLY-INSPECTIONでは、同じCLIへBroker execution-intent ledgerのread-only検査を追加した。event hash chain、receipt projection、result outboxを照合し、破損suffixや整合しないprojectionからcurrent stateを出さず、健全時もopaque digestと状態だけを返す。J/M/Brokerの三台帳のいずれかが未検証ならreplay checkpointを表示しない。通常Executor write pathに変更はなく、E03.03は独立backup／restore point、仕事単位のplan binding照合、operator recovery UIが未接続のため`BUILD_GAP`を維持する。
+
 2026-10-18のQEB-03-E03.01-GATEWAY-OWNER-LEASE-EXECUTION-EPOCHでは、常駐serveとCLIが共有state rootのSQLite exclusive leaseを保持し、永続generation／UUID execution epochをExecutionIntentとExecutorの作用境界へ接続した。別Node processの同時owner拒否、再取得時の世代更新、lease喪失後の合成tool非dispatchを限定testで確認。Windows ACL、network filesystem、実行中に既に渡された作用の停止、旧世代receiptの分離は未確認で、E03.01／QEB-03全体は`BUILD_GAP`。
 
 198小単位（旧192＋Android/iOS各3）は実装索引であり、個別のQC/QAを198回行うための工程ではない。毎作業および各小単位の開始・切替・再開時に最新版の三点セットすべてと適用AGENTS.mdを読み直し、実際の仕事を先へつなぐBUILD_BATCHで施工・限定技術確認・Git保全を行う。

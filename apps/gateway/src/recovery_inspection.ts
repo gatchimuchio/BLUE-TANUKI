@@ -5,6 +5,10 @@ import {
   inspectMemoryRecoveryLedger,
   type PersistenceLedgerInspection,
 } from "@blue-tanuki/hds-brain";
+import {
+  inspectExecutionIntentRecoveryLedger,
+  type ExecutionIntentRecoveryInspection,
+} from "./execution_intent_store.js";
 
 export interface RecoveryUpdateResidual {
   readonly update_id_digest: string;
@@ -25,13 +29,14 @@ export interface RecoveryUpdateResidual {
 }
 
 export interface GatewayRecoveryInspectionReport {
-  readonly schema_version: 1;
+  readonly schema_version: 2;
   readonly surface: "recovery_inspection";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present";
   readonly ledgers: {
     readonly j: PersistenceLedgerInspection;
     readonly m: PersistenceLedgerInspection;
+    readonly execution: ExecutionIntentRecoveryInspection;
   };
   readonly replay_checkpoint: null | {
     readonly verified: true;
@@ -44,6 +49,7 @@ export interface GatewayRecoveryInspectionReport {
   };
   readonly update_residuals: readonly RecoveryUpdateResidual[];
   readonly isolated_update_count: number;
+  readonly execution_residual_count: number;
   readonly external_backup_restore_point: "not_examined";
   readonly used_for_authority: false;
   readonly may_execute: false;
@@ -54,6 +60,7 @@ interface StateDatabasePaths {
   readonly privateRoot: string;
   readonly jPath: string | null;
   readonly mPath: string | null;
+  readonly executionPath: string | null;
 }
 
 function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths | null {
@@ -63,19 +70,31 @@ function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths |
     if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return null;
     const stateRoot = realpathSync(configuredRoot);
     const privateRoot = path.join(stateRoot, "private-state");
+    const privateStat = lstatSync(privateRoot);
+    if (privateStat.isSymbolicLink() || !privateStat.isDirectory()) return null;
     const resultDirectory = path.join(privateRoot, "result-memory");
-    for (const directory of [privateRoot, resultDirectory]) {
-      const stat = lstatSync(directory);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) return null;
-    }
+    const executionDirectory = path.join(privateRoot, "execution-intents");
     const jPath = path.join(resultDirectory, "j-control.sqlite");
     const mPath = path.join(resultDirectory, "m-state.sqlite");
-    const safeDatabasePath = (databasePath: string): string | null => {
+    const executionPath = path.join(executionDirectory, "executor.sqlite");
+    const safeDatabasePath = (directory: string, databasePath: string): string | null => {
+      try {
+        const directoryStat = lstatSync(directory);
+        if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) return null;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        return null;
+      }
       if (!existsSync(databasePath)) return databasePath;
       const stat = lstatSync(databasePath);
       return stat.isSymbolicLink() || !stat.isFile() ? null : databasePath;
     };
-    return { privateRoot, jPath: safeDatabasePath(jPath), mPath: safeDatabasePath(mPath) };
+    return {
+      privateRoot,
+      jPath: safeDatabasePath(resultDirectory, jPath),
+      mPath: safeDatabasePath(resultDirectory, mPath),
+      executionPath: safeDatabasePath(executionDirectory, executionPath),
+    };
   } catch {
     return null;
   }
@@ -97,22 +116,46 @@ export function inspectGatewayRecoveryState(
     updates: [],
     used_for_authority: false,
   });
+  const unavailableExecution: ExecutionIntentRecoveryInspection = {
+    owner: "Broker",
+    status: "unavailable",
+    reason: "store_unavailable",
+    total_event_count: 0,
+    verified_event_count: 0,
+    unverified_event_count: 0,
+    first_unverified_ordinal: null,
+    last_verified_event_digest: null,
+    receipt_projection_mismatch_count: 0,
+    outbox_mismatch_count: 0,
+    current_state_available: false,
+    omitted_record_count: 0,
+    records: [],
+    used_for_authority: false,
+    execution_eligible: false,
+  };
   const j = paths?.jPath
     ? inspectJControlRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.jPath })
     : unavailable("J");
   const m = paths?.mPath
     ? inspectMemoryRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.mPath })
     : unavailable("M");
+  const execution = paths?.executionPath
+    ? inspectExecutionIntentRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.executionPath })
+    : unavailableExecution;
   const residuals = correlateRecoveryUpdates(j, m);
   const storesVerified = j.status === "verified" && m.status === "verified";
   const hasHardResidual = residuals.some((item) => !["paired", "pending_m_commit", "pending_j_receipt"].includes(item.disposition));
-  const checkpointVerified = storesVerified && !hasHardResidual;
+  const executionResidualCount = execution.status === "verified" ? 0 : Math.max(
+    1,
+    execution.unverified_event_count + execution.receipt_projection_mismatch_count + execution.outbox_mismatch_count,
+  );
+  const checkpointVerified = storesVerified && execution.status === "verified" && !hasHardResidual;
   return {
-    schema_version: 1,
+    schema_version: 2,
     surface: "recovery_inspection",
     mode: "read_only",
     status: checkpointVerified ? "verified" : "residuals_present",
-    ledgers: { j, m },
+    ledgers: { j, m, execution },
     replay_checkpoint: checkpointVerified
       ? {
           verified: true,
@@ -128,12 +171,13 @@ export function inspectGatewayRecoveryState(
     isolated_update_count: residuals.filter((item) =>
       !["paired", "pending_m_commit", "pending_j_receipt"].includes(item.disposition),
     ).length,
+    execution_residual_count: executionResidualCount,
     external_backup_restore_point: "not_examined",
     used_for_authority: false,
     may_execute: false,
     next_safe_action: checkpointVerified
-      ? "This read-only checkpoint does not restore data or authorize work; use the guarded recovery path for any repair."
-      : "Keep work suspended; preserve the stores and compare the verified prefixes with an independently verified backup before repair.",
+      ? "This read-only checkpoint is not a backup or restore point and does not authorize work; use the guarded recovery path for any recovery action."
+      : "Keep work suspended; preserve the stores and compare verified prefixes with an independently verified backup before any repair.",
   };
 }
 

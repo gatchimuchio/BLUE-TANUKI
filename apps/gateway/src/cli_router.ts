@@ -96,9 +96,16 @@ async function runRecoveryInspectCli(): Promise<void> {
       }
       if (ledger.reason) writeStdout(`${ledger.owner} reason: ${ledger.reason}`);
     }
+    const execution = report.ledgers.execution;
+    writeStdout(`Broker execution: ${execution.status}; verified_events=${execution.verified_event_count}; unverified_events=${execution.unverified_event_count}; last_verified_digest=${execution.last_verified_event_digest ?? "unavailable"}; current_state_available=${execution.current_state_available}; projection_mismatches=${execution.receipt_projection_mismatch_count}; outbox_mismatches=${execution.outbox_mismatch_count}`);
+    if (execution.first_unverified_ordinal !== null) {
+      writeStdout(`Broker execution first unverified event ordinal: ${execution.first_unverified_ordinal}`);
+    }
+    if (execution.reason) writeStdout(`Broker execution reason: ${execution.reason}`);
     writeStdout(`Replay checkpoint: ${report.replay_checkpoint?.kind ?? "not confirmed"}`);
     writeStdout(`External backup restore point: ${report.external_backup_restore_point}`);
     writeStdout(`Isolated update references: ${report.isolated_update_count}`);
+    writeStdout(`Execution ledger residuals: ${report.execution_residual_count}`);
     for (const residual of report.update_residuals) {
       writeStdout(`update=${residual.update_id_digest} disposition=${residual.disposition}`);
     }
