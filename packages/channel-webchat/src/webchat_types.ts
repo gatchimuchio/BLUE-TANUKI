@@ -289,6 +289,21 @@ export type WebChatNotificationSeverity =
   | "critical"
   | "action_required";
 
+export type WebChatCronResultCorrelationStatus =
+  | "projection_unavailable"
+  | "no_matching_plan"
+  | "no_bound_command"
+  | "ambiguous"
+  | "execution_unresolved"
+  | "saved_result_missing"
+  | "saved_result_linked";
+
+export type WebChatCronResultMemoryStatus =
+  | "not_recorded"
+  | "commit_pending"
+  | "receipt_confirmed"
+  | "mixed_or_unknown";
+
 export interface WebChatNotificationItem {
   id: string;
   kind: WebChatNotificationKind;
@@ -305,6 +320,8 @@ export interface WebChatNotificationItem {
   approval_level?: string;
   risk?: string;
   payload_hash?: string;
+  result_correlation_status?: WebChatCronResultCorrelationStatus;
+  result_memory_status?: WebChatCronResultMemoryStatus;
   expires_at_ms?: number;
   next_action?: string;
 }

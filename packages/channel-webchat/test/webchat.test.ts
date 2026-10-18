@@ -514,6 +514,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Final Review");
       expect(html).toContain("Notification Center");
       expect(html).toContain("load-notifications");
+      expect(html).toContain('fields.push(["result correlation", item.result_correlation_status])');
       expect(html).toContain("Complete History / Replay");
       expect(html).toContain("load-history");
       expect(html).toContain("history-list");
@@ -2651,6 +2652,8 @@ describe("WebChatChannel - resident notifications API", () => {
             authority: "display_only",
             request_id: "cron-event-42",
             payload_hash: "b".repeat(64),
+            result_correlation_status: "saved_result_linked",
+            result_memory_status: "receipt_confirmed",
           },
         ],
       },
@@ -2684,6 +2687,8 @@ describe("WebChatChannel - resident notifications API", () => {
         authority: "display_only",
         request_id: "cron-event-42",
         payload_hash: "b".repeat(64),
+        result_correlation_status: "saved_result_linked",
+        result_memory_status: "receipt_confirmed",
       });
       expect(JSON.stringify(body)).not.toContain("approval_token");
     } finally {

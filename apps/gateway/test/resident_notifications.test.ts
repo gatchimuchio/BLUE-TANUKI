@@ -25,6 +25,23 @@ describe("buildResidentNotificationsSnapshot", () => {
         delivery_state: "outcome_unknown",
         updated_at_ms: 950,
       }],
+      operation_plan_projection: {
+        schema_version: "operation-plan-projection.v1",
+        used_for_authority: false,
+        raw_payload_exposed: false,
+        plans: [{
+          request_id: "cron-event-42",
+          goal: "private goal text",
+          bindings: [{
+            request_id: "cron-event-42",
+            command_id: "private-command-id",
+            status: "verified",
+            result_digest: "d".repeat(64),
+            delivery_digest: "c".repeat(64),
+            memory_status: "receipt_confirmed",
+          }],
+        }],
+      } as never,
     });
 
     expect(notifications).toContainEqual(expect.objectContaining({
@@ -34,6 +51,8 @@ describe("buildResidentNotificationsSnapshot", () => {
       authority: "display_only",
       request_id: "cron-event-42",
       payload_hash: "b".repeat(64),
+      result_correlation_status: "saved_result_linked",
+      result_memory_status: "receipt_confirmed",
       timestamp: 950,
     }));
     const notice = notifications.find((item) => item.kind === "schedule_delivery_unknown");
@@ -42,6 +61,77 @@ describe("buildResidentNotificationsSnapshot", () => {
     expect(JSON.stringify(notifications)).not.toContain("a".repeat(64));
     expect(JSON.stringify(notifications)).not.toContain("private schedule content");
     expect(JSON.stringify(notifications)).not.toContain("private target");
+    expect(JSON.stringify(notifications)).not.toContain("private-command-id");
+    expect(JSON.stringify(notifications)).not.toContain("private goal text");
+    expect(JSON.stringify(notifications)).not.toContain("c".repeat(64));
+  });
+
+  it.each([
+    [undefined, "projection_unavailable"],
+    [{ schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false, plans: [] }, "no_matching_plan"],
+    [{ schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false, plans: [{ request_id: "cron-event-42", bindings: [] }] }, "no_bound_command"],
+    [{ schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false, plans: [{ request_id: "cron-event-42", bindings: [{ request_id: "cron-event-42", status: "outcome_unknown" }] }] }, "execution_unresolved"],
+    [{ schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false, plans: [{ request_id: "cron-event-42", bindings: [{ request_id: "cron-event-42", status: "verified" }] }] }, "saved_result_missing"],
+    [{ schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false, plans: [{ request_id: "cron-event-42", bindings: [{ request_id: "cron-event-42", status: "unexpected" }] }] }, "ambiguous"],
+    [{ schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false, plans: [{ request_id: "cron-event-42", bindings: [{ request_id: "different-request", status: "verified" }] }] }, "ambiguous"],
+    [{ schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false, plans: [
+      { request_id: "cron-event-42", bindings: [] }, { request_id: "cron-event-42", bindings: [] },
+    ] }, "ambiguous"],
+  ] as const)("keeps missing or uncertain plan/result links explicit", (operation_plan_projection, status) => {
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 1000,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [],
+      unresolved_cron_events: [{
+        source_digest: "a".repeat(64), sequence: 42, event_id: "cron-event-42", payload_digest: "b".repeat(64),
+        delivery_state: "outcome_unknown", updated_at_ms: 950,
+      }],
+      operation_plan_projection: operation_plan_projection as never,
+    });
+    expect(notifications[0]).toMatchObject({
+      kind: "schedule_delivery_unknown",
+      result_correlation_status: status,
+      read_only: true,
+      authority: "display_only",
+    });
+    expect(JSON.stringify(notifications)).not.toContain("private-command-id");
+  });
+
+  it("keeps a linked result with pending memory receipt distinct from external success", () => {
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 1000,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [],
+      unresolved_cron_events: [{
+        source_digest: "a".repeat(64), sequence: 42, event_id: "cron-event-42", payload_digest: "b".repeat(64),
+        delivery_state: "outcome_unknown", updated_at_ms: 950,
+      }],
+      operation_plan_projection: {
+        schema_version: "operation-plan-projection.v1",
+        used_for_authority: false,
+        raw_payload_exposed: false,
+        plans: [{
+          request_id: "cron-event-42",
+          bindings: [{
+            request_id: "cron-event-42",
+            status: "verified",
+            result_digest: "d".repeat(64),
+            delivery_digest: "c".repeat(64),
+            memory_status: "memory_commit_pending",
+          }],
+        }],
+      },
+    });
+
+    expect(notifications[0]).toMatchObject({
+      result_correlation_status: "saved_result_linked",
+      result_memory_status: "commit_pending",
+      read_only: true,
+      authority: "display_only",
+    });
+    expect(notifications[0]?.message).toContain("not proof of external success");
   });
 
   it("projects approval, schedule, connector, and audit warnings as display-only notifications", () => {

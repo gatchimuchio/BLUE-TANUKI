@@ -1190,6 +1190,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 ["next", item.next_action || "none"],
                 ["authority", item.authority || "display_only"]
               ];
+              if (item.result_correlation_status) {
+                fields.push(["result correlation", item.result_correlation_status]);
+              }
+              if (item.result_memory_status) {
+                fields.push(["result memory", item.result_memory_status]);
+              }
               return '<article class="notification-item">' +
                 '<div class="row"><h3>' + escapeHtml(item.title || "Notification") + '</h3>' + badge("read only", "good") + '</div>' +
                 '<p class="muted">' + escapeHtml(item.message || "") + '</p>' +

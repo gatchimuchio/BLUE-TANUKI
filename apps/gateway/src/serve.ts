@@ -1653,11 +1653,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
 
   function residentNotificationSnapshot() {
     const authorityTrace = authorityTraceSnapshot();
+    let operationPlanProjection: ReturnType<HDSUpperController["getRuntimeSnapshot"]>["operation_plans"] | undefined;
+    try { operationPlanProjection = hds.getRuntimeSnapshot().operation_plans; } catch { /* optional read-only correlation */ }
     return buildResidentNotificationsSnapshot({
       audit_chain_valid: hds.getAudit().verify(),
       pending_approvals: pendingApprovalSnapshot(),
       authority_trace: authorityTrace,
       unresolved_cron_events: cronEventStore.unresolvedEvents(),
+      operation_plan_projection: operationPlanProjection,
     });
   }
 

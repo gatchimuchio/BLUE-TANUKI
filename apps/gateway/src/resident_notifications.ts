@@ -1,9 +1,27 @@
 import type {
   WebChatApprovalQueueItem,
+  WebChatCronResultCorrelationStatus,
+  WebChatCronResultMemoryStatus,
   WebChatAuthorityTraceItem,
   WebChatNotificationItem,
 } from "@blue-tanuki/channel-webchat";
 import type { CronEventCursorSnapshot } from "./cron_event_store.js";
+
+interface OperationPlanCorrelationProjection {
+  readonly schema_version: string;
+  readonly used_for_authority: false;
+  readonly raw_payload_exposed: false;
+  readonly plans: readonly {
+    readonly request_id: string;
+    readonly bindings: readonly {
+      readonly request_id: string;
+      readonly status: string;
+      readonly result_digest?: string;
+      readonly delivery_digest?: string;
+      readonly memory_status?: string;
+    }[];
+  }[];
+}
 
 export interface ResidentNotificationInput {
   now_ms?: number;
@@ -11,6 +29,7 @@ export interface ResidentNotificationInput {
   pending_approvals: readonly WebChatApprovalQueueItem[];
   authority_trace: readonly WebChatAuthorityTraceItem[];
   unresolved_cron_events?: readonly CronEventCursorSnapshot[];
+  operation_plan_projection?: OperationPlanCorrelationProjection;
   limit?: number;
 }
 
@@ -63,13 +82,14 @@ export function buildResidentNotificationsSnapshot(
       kind: "schedule_delivery_unknown",
       severity: "warning",
       title: "Schedule delivery result is unsettled",
-      message: `Cron event sequence ${event.sequence} remains ${event.delivery_state}; delivery is not confirmed, and later events from this source are blocked without automatic replay.`,
+      message: `Cron event sequence ${event.sequence} remains ${event.delivery_state}; delivery is not confirmed, and later events from this source are blocked without automatic replay. A saved-result link is evidence correlation only, not proof of external success.`,
       timestamp: event.updated_at_ms,
       source: "cron_event_cursor",
       read_only: true,
       authority: "display_only",
       request_id: event.event_id,
       payload_hash: event.payload_digest,
+      ...cronResultCorrelation(event.event_id, input.operation_plan_projection),
       next_action: "Inspect Authority Trace for this event ID and verify target delivery before taking any duplicate action.",
     });
   }
@@ -159,6 +179,58 @@ export function buildResidentNotificationsSnapshot(
   return dedupe(notifications)
     .sort((a, b) => b.timestamp - a.timestamp || a.id.localeCompare(b.id))
     .slice(0, input.limit ?? 50);
+}
+
+function cronResultCorrelation(
+  requestId: string,
+  projection: OperationPlanCorrelationProjection | undefined,
+): Pick<WebChatNotificationItem, "result_correlation_status" | "result_memory_status"> {
+  if (!projection || projection.schema_version !== "operation-plan-projection.v1" ||
+      projection.used_for_authority !== false || projection.raw_payload_exposed !== false ||
+      !Array.isArray(projection.plans)) {
+    return { result_correlation_status: "projection_unavailable" };
+  }
+
+  const plans = (projection.plans as OperationPlanCorrelationProjection["plans"])
+    .filter((plan) => plan.request_id === requestId);
+  if (plans.length === 0) return { result_correlation_status: "no_matching_plan" };
+  if (plans.length !== 1) return { result_correlation_status: "ambiguous" };
+
+  const planBindings = plans[0]!.bindings as unknown;
+  if (!Array.isArray(planBindings)) return { result_correlation_status: "ambiguous" };
+  const bindings = planBindings as OperationPlanCorrelationProjection["plans"][number]["bindings"];
+  if (bindings.some((binding) => binding.request_id !== requestId)) {
+    return { result_correlation_status: "ambiguous" };
+  }
+  if (bindings.length === 0) return { result_correlation_status: "no_bound_command" };
+  const unresolved = new Set(["selected", "intent_committed", "outcome_unknown"]);
+  if (bindings.some((binding) => unresolved.has(binding.status))) {
+    return { result_correlation_status: "execution_unresolved" };
+  }
+  const terminal = new Set(["verified", "verification_failed", "not_attempted"]);
+  const known = new Set([...unresolved, ...terminal, "invalidated"]);
+  if (bindings.some((binding) => !known.has(binding.status))) {
+    return { result_correlation_status: "ambiguous" };
+  }
+  if (bindings.some((binding) => !terminal.has(binding.status)) ||
+      bindings.some((binding) => !/^[a-f0-9]{64}$/.test(binding.result_digest ?? "") ||
+        !/^[a-f0-9]{64}$/.test(binding.delivery_digest ?? ""))) {
+    return { result_correlation_status: "saved_result_missing" };
+  }
+
+  const memoryStates = bindings.map((binding) => binding.memory_status);
+  const singleMemoryState = memoryStates.every((state) => state === memoryStates[0]) ? memoryStates[0] : undefined;
+  const memoryStatus: WebChatCronResultMemoryStatus = singleMemoryState === "memory_commit_pending"
+    ? "commit_pending"
+    : singleMemoryState === "receipt_confirmed"
+      ? "receipt_confirmed"
+      : singleMemoryState === "not_recorded"
+        ? "not_recorded"
+        : "mixed_or_unknown";
+  return {
+    result_correlation_status: "saved_result_linked",
+    result_memory_status: memoryStatus,
+  };
 }
 
 function looksLikeConnectorFailure(error: string | undefined): boolean {
