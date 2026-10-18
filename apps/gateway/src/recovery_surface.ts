@@ -94,6 +94,21 @@ export interface RecoveryActionResult {
   next_safe_action: string;
 }
 
+export interface RecoveryBackupInspection {
+  schema_version: 1;
+  surface: "recovery_backup_inspection";
+  mode: "read_only";
+  status: "verified" | "not_found" | "invalid";
+  backup_id_digest: string | null;
+  coverage: "complete_for_configured_targets" | "partial" | "none_configured" | "unknown";
+  configured_required_item_count: number | null;
+  copied_required_item_count: number | null;
+  missing_required_item_count: number | null;
+  canonical_state_coverage: "not_included";
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface RestoreRecoveryOptions {
   backup_id?: string;
   confirm?: string;
@@ -854,6 +869,70 @@ async function preflightRestoreManifest(env: NodeJS.ProcessEnv, manifest: Recove
 async function latestBackupId(env: NodeJS.ProcessEnv): Promise<string | null> {
   const inventory = await recoveryBackupInventory(env);
   return inventory.latest_backup_id;
+}
+
+/** Verify the newest recovery pack's manifest and archived item digests without restoring or writing. */
+export async function inspectLatestRecoveryBackup(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RecoveryBackupInspection> {
+  const base = {
+    schema_version: 1 as const,
+    surface: "recovery_backup_inspection" as const,
+    mode: "read_only" as const,
+    canonical_state_coverage: "not_included" as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+  let backupId: string | null = null;
+  try {
+    backupId = await latestBackupId(env);
+    if (!backupId) {
+      return {
+        ...base,
+        status: "not_found",
+        backup_id_digest: null,
+        coverage: "unknown",
+        configured_required_item_count: null,
+        copied_required_item_count: null,
+        missing_required_item_count: null,
+      };
+    }
+    const manifest = await readManifest(env, backupId);
+    if (manifest.action !== "backup" && manifest.action !== "pre_restore" && manifest.action !== "pre_factory_reset") {
+      throw new Error("invalid_backup_manifest_action");
+    }
+    if (manifest.secret_material !== true || manifest.used_for_authority !== false ||
+        manifest.hds_brain_remains_authority !== true ||
+        JSON.stringify(manifest.authority_boundary) !== JSON.stringify(AUTHORITY_BOUNDARY) ||
+        JSON.stringify(manifest.evidence_source) !== JSON.stringify(["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"])) {
+      throw new Error("invalid_backup_manifest_boundary");
+    }
+    await preflightRestoreManifest(env, manifest);
+    const configuredRequiredItems = manifest.items.filter((item) => item.backup_required && item.source_path !== null);
+    const copiedRequiredItems = configuredRequiredItems.filter((item) => item.copied);
+    const missingRequiredItemCount = configuredRequiredItems.length - copiedRequiredItems.length;
+    return {
+      ...base,
+      status: "verified",
+      backup_id_digest: createHash("sha256").update(backupId).digest("hex"),
+      coverage: configuredRequiredItems.length === 0
+        ? "none_configured"
+        : missingRequiredItemCount === 0 ? "complete_for_configured_targets" : "partial",
+      configured_required_item_count: configuredRequiredItems.length,
+      copied_required_item_count: copiedRequiredItems.length,
+      missing_required_item_count: missingRequiredItemCount,
+    };
+  } catch {
+    return {
+      ...base,
+      status: "invalid",
+      backup_id_digest: backupId ? createHash("sha256").update(backupId).digest("hex") : null,
+      coverage: "unknown",
+      configured_required_item_count: null,
+      copied_required_item_count: null,
+      missing_required_item_count: null,
+    };
+  }
 }
 
 async function restoreManifest(

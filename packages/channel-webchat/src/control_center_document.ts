@@ -468,6 +468,12 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <p class="muted">読み取り専用の診断です。権限・実行・復旧は行いません。仕事ごとの参照はdigestと固定状態だけを表示し、台帳別の検証済みprefix／未検証suffixと最初の未検証位置を示します。再生checkpointはbackupではなく、独立backup復元点は未検査です。</p>
           <pre id="recovery-inspection-json">未確認</pre>
+          <div class="status-grid">
+            <button id="inspect-recovery-backup" type="button">最新backup packの整合性を読み取り検査</button>
+            <span id="recovery-backup-inspection-status" class="badge warn">未確認</span>
+          </div>
+          <p class="muted">manifestとpack内の保存物だけを検査します。HDS／Broker等の正本状態は含まず、独立復元点・復旧許可・完全なバックアップを意味しません。</p>
+          <pre id="recovery-backup-inspection-json">未確認</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls.</p></div>
             <div class="screen-card"><h3>Secret-bearing</h3><p class="muted">Env files and env backups may contain credentials. Only paths and counts are displayed here.</p></div>

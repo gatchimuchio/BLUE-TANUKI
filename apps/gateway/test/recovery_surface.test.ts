@@ -7,6 +7,7 @@ import {
   buildRecoverySnapshot,
   createRecoveryBackup,
   factoryResetRecovery,
+  inspectLatestRecoveryBackup,
   resetRecoveryConnector,
   resetRecoveryProvider,
   restoreRecoveryBackup,
@@ -164,6 +165,21 @@ describe("buildRecoverySnapshot", () => {
       expect(JSON.stringify(backup)).not.toContain("provider-secret-value");
       expect(JSON.stringify(backup)).not.toContain("connector-secret-value");
 
+      const inspection = await inspectLatestRecoveryBackup(env);
+      expect(inspection).toMatchObject({
+        surface: "recovery_backup_inspection",
+        mode: "read_only",
+        status: "verified",
+        backup_id_digest: createHash("sha256").update(backup.backup_id!).digest("hex"),
+        coverage: "complete_for_configured_targets",
+        canonical_state_coverage: "not_included",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(inspection.copied_required_item_count).toBe(inspection.configured_required_item_count);
+      expect(JSON.stringify(inspection)).not.toContain("provider-secret-value");
+      expect(JSON.stringify(inspection)).not.toContain("connector-secret-value");
+
       await writeFile(envFile, "LLM_BACKEND=broken\n", "utf8");
       await writeFile(sessionFile, "session-after\n", "utf8");
       const restored = await restoreRecoveryBackup(env, {
@@ -215,6 +231,60 @@ describe("buildRecoverySnapshot", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("inspects recovery pack integrity without changing the pack and reports tampering without details", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-inspection-"));
+    try {
+      const envFile = path.join(root, "product.env");
+      const recoveryDir = path.join(root, "recovery");
+      await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+      const env = { BLUE_TANUKI_ENV_FILE: envFile, BLUE_TANUKI_RECOVERY_DIR: recoveryDir };
+      const missing = await inspectLatestRecoveryBackup(env);
+      expect(missing).toMatchObject({
+        status: "not_found",
+        backup_id_digest: null,
+        canonical_state_coverage: "not_included",
+        used_for_authority: false,
+        may_execute: false,
+      });
+
+      const backup = await createRecoveryBackup(env);
+      const manifestPath = backup.backup_manifest_path!;
+      const manifestBefore = await readFile(manifestPath, "utf8");
+      const manifest = JSON.parse(manifestBefore) as { items: Array<{ copied: boolean; archive_path: string | null; kind: string }> };
+      const archive = manifest.items.find((item) => item.copied && item.kind === "file" && item.archive_path);
+      expect(archive?.archive_path).toBeTruthy();
+      const originalArchive = await readFile(archive!.archive_path!, "utf8");
+
+      const verified = await inspectLatestRecoveryBackup(env);
+      expect(verified.status).toBe("verified");
+      expect(await readFile(manifestPath, "utf8")).toBe(manifestBefore);
+      expect(await readFile(archive!.archive_path!, "utf8")).toBe(originalArchive);
+
+      await writeFile(manifestPath, `${manifestBefore}\n`, "utf8");
+      const invalidManifest = await inspectLatestRecoveryBackup(env);
+      expect(invalidManifest.status).toBe("invalid");
+      expect(JSON.stringify(invalidManifest)).not.toContain(manifestPath);
+      await writeFile(manifestPath, manifestBefore, "utf8");
+
+      await writeFile(archive!.archive_path!, `${originalArchive}tampered\n`, "utf8");
+      const invalid = await inspectLatestRecoveryBackup(env);
+      expect(invalid).toMatchObject({
+        status: "invalid",
+        coverage: "unknown",
+        configured_required_item_count: null,
+        copied_required_item_count: null,
+        missing_required_item_count: null,
+        canonical_state_coverage: "not_included",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(JSON.stringify(invalid)).not.toContain("tampered");
+      expect(JSON.stringify(invalid)).not.toContain(archive!.archive_path!);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it("rejects unsafe recovery env paths before destructive reset", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-unsafe-"));

@@ -431,6 +431,8 @@ export interface WebChatRecoverySurface {
   getSnapshot: () => Promise<unknown>;
   /** Inspect persisted recovery ledgers without changing them or granting authority. */
   inspectLedgerState?: () => Promise<unknown>;
+  /** Inspect the latest recovery pack without changing it or granting authority. */
+  inspectBackup?: () => Promise<unknown>;
   /** Create a local recovery backup pack. */
   createBackup?: () => Promise<unknown>;
   /** Restore from a selected or latest local recovery backup pack. */

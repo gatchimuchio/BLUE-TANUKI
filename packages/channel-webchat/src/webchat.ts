@@ -1568,6 +1568,30 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       }
       return;
     }
+    if (route === "/recovery/backup-inspection") {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.opts.recovery.inspectBackup) {
+        res.writeHead(501, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "recovery_backup_inspection_not_configured" }));
+        return;
+      }
+      try {
+        const report = await this.opts.recovery.inspectBackup();
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        });
+        res.end(JSON.stringify(report));
+      } catch {
+        res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "recovery_backup_inspection_failed" }));
+      }
+      return;
+    }
     if (req.method !== "POST") {
       res.writeHead(405, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "method_not_allowed" }));

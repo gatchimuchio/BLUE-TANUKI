@@ -1638,6 +1638,59 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("recovery-inspection-json", compactJson(projection));
       }
 
+      function renderRecoveryBackupInspection(report) {
+        const source = report && typeof report === "object" ? report : {};
+        const boundaryOk = source.schema_version === 1 &&
+          source.surface === "recovery_backup_inspection" &&
+          source.mode === "read_only" &&
+          source.canonical_state_coverage === "not_included" &&
+          source.used_for_authority === false &&
+          source.may_execute === false;
+        const rawStatus = recoveryInspectionEnum(source.status, ["verified", "not_found", "invalid"]);
+        const status = boundaryOk ? rawStatus : "invalid_report";
+        const digest = source.backup_id_digest === null ? null : recoveryInspectionDigest(source.backup_id_digest);
+        const coverage = recoveryInspectionEnum(source.coverage, ["complete_for_configured_targets", "partial", "none_configured", "unknown"]);
+        const count = function (value) {
+          return Number.isSafeInteger(value) && value >= 0 ? value : null;
+        };
+        let configured = count(source.configured_required_item_count);
+        let copied = count(source.copied_required_item_count);
+        let missing = count(source.missing_required_item_count);
+        let safeStatus = status;
+        let safeCoverage = coverage;
+        if (status === "verified" && (!digest || configured === null || copied === null || missing === null ||
+            copied > configured || missing !== configured - copied || coverage === "unknown" ||
+            (configured === 0 && coverage !== "none_configured") ||
+            (configured > 0 && missing === 0 && coverage !== "complete_for_configured_targets") ||
+            (missing > 0 && coverage !== "partial"))) {
+          safeStatus = "invalid_report";
+        }
+        if (status === "not_found" && (digest !== null || configured !== null || copied !== null || missing !== null)) {
+          safeStatus = "invalid_report";
+        }
+        if (safeStatus !== "verified") {
+          configured = null;
+          copied = null;
+          missing = null;
+          safeCoverage = "unknown";
+        }
+        const projection = {
+          mode: boundaryOk ? "read_only" : "invalid_report",
+          status: safeStatus,
+          backup_id_digest: safeStatus === "not_found" ? null : digest,
+          coverage: safeCoverage,
+          configured_required_item_count: configured,
+          copied_required_item_count: copied,
+          missing_required_item_count: missing,
+          canonical_state_coverage: "not_included",
+          used_for_authority: false,
+          may_execute: false
+        };
+        setText("recovery-backup-inspection-status", safeStatus);
+        byId("recovery-backup-inspection-status").className = "badge " + (safeStatus === "verified" ? "review" : "warn");
+        setText("recovery-backup-inspection-json", compactJson(projection));
+      }
+
       function settingsPayload() {
         const llm = {
           provider: byId("settings-provider").value,
@@ -1779,6 +1832,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("recovery-inspection-status", "取得失敗");
           byId("recovery-inspection-status").className = "badge bad";
           setText("recovery-inspection-json", "診断を取得できません。Gatewayの状態とmaintenance tokenを確認してください。");
+        }
+      }
+
+      async function inspectRecoveryBackup() {
+        const token = byId("recovery-token").value.trim();
+        state.recoveryToken = token;
+        sessionStorage.setItem("bt.recoveryToken", token);
+        try {
+          const report = await fetchJson("/recovery/backup-inspection", token);
+          renderRecoveryBackupInspection(report);
+        } catch {
+          setText("recovery-backup-inspection-status", "取得失敗");
+          byId("recovery-backup-inspection-status").className = "badge bad";
+          setText("recovery-backup-inspection-json", "検査結果を取得できません。Gatewayの状態とmaintenance tokenを確認してください。");
         }
       }
 
@@ -2246,6 +2313,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("recovery-inspection-status", "取得失敗");
           byId("recovery-inspection-status").className = "badge bad";
           setText("recovery-inspection-json", "診断を取得できません。Gatewayの状態とmaintenance tokenを確認してください。");
+        });
+      });
+      byId("inspect-recovery-backup").addEventListener("click", function () {
+        inspectRecoveryBackup().catch(function () {
+          setText("recovery-backup-inspection-status", "取得失敗");
+          byId("recovery-backup-inspection-status").className = "badge bad";
+          setText("recovery-backup-inspection-json", "検査結果を取得できません。Gatewayの状態とmaintenance tokenを確認してください。");
         });
       });
       byId("create-recovery-backup").addEventListener("click", function () {

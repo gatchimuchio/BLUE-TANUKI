@@ -85,6 +85,7 @@ import {
   buildRecoverySnapshot,
   createRecoveryBackup,
   factoryResetRecovery,
+  inspectLatestRecoveryBackup,
   resetRecoveryConnector,
   resetRecoveryProvider,
   restoreRecoveryBackup,
@@ -1385,6 +1386,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       },
       recovery: {
         getSnapshot: async () => buildRecoverySnapshot(process.env),
+        inspectBackup: async () => inspectLatestRecoveryBackup(process.env),
         inspectLedgerState: async () => {
           const { inspectGatewayRecoveryState, projectGatewayRecoveryInspectionForOperator } =
             await import("./recovery_inspection.js");

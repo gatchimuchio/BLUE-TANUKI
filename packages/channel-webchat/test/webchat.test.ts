@@ -483,6 +483,10 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("update_residuals");
       expect(html).toContain("仕事ごとの参照はdigestと固定状態だけ");
       expect(html).toContain("独立backup復元点は未検査です");
+      expect(html).toContain("inspect-recovery-backup");
+      expect(html).toContain("/recovery/backup-inspection");
+      expect(html).toContain("recovery-backup-inspection-json");
+      expect(html).toContain("canonical_state_coverage");
       expect(html).toContain("bt.recoveryToken");
       expect(html).toContain("/settings/config");
       expect(html).toContain("/settings/llm/verify");
@@ -646,6 +650,7 @@ describe("WebChatChannel — Recovery surface", () => {
   it("serves maintenance-token-gated recovery readiness and control actions with non-authority metadata", async () => {
     const actions: string[] = [];
     let inspectionReads = 0;
+    let backupInspectionReads = 0;
     const ctx = await setup({
       recovery: {
         getSnapshot: async () => ({
@@ -743,6 +748,23 @@ describe("WebChatChannel — Recovery surface", () => {
             next_safe_action: "Preserve the stores.",
           };
         },
+        inspectBackup: async () => {
+          backupInspectionReads += 1;
+          return {
+            schema_version: 1,
+            surface: "recovery_backup_inspection",
+            mode: "read_only",
+            status: "verified",
+            backup_id_digest: "a".repeat(64),
+            coverage: "complete_for_configured_targets",
+            configured_required_item_count: 4,
+            copied_required_item_count: 4,
+            missing_required_item_count: 0,
+            canonical_state_coverage: "not_included",
+            used_for_authority: false,
+            may_execute: false,
+          };
+        },
         createBackup: async () => {
           actions.push("backup");
           return { action: "backup", used_for_authority: false };
@@ -802,6 +824,31 @@ describe("WebChatChannel — Recovery surface", () => {
       });
       expect(inspectionReads).toBe(1);
       expect(actions).toEqual([]);
+
+      expect((await getRaw(ctx.port, "/recovery/backup-inspection")).status).toBe(401);
+      expect((await getRaw(ctx.port, "/recovery/backup-inspection", {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+      const backupInspection = await getRaw(ctx.port, "/recovery/backup-inspection", {
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
+      });
+      expect(backupInspection.status).toBe(200);
+      expect(backupInspection.headers.get("cache-control")).toBe("no-store");
+      expect(JSON.parse(backupInspection.text)).toMatchObject({
+        surface: "recovery_backup_inspection",
+        mode: "read_only",
+        status: "verified",
+        coverage: "complete_for_configured_targets",
+        canonical_state_coverage: "not_included",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(backupInspectionReads).toBe(1);
+      expect(actions).toEqual([]);
+      expect((await postJson(ctx.port, "/recovery/backup-inspection", {}, {
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
+      })).status).toBe(405);
+      expect(backupInspectionReads).toBe(1);
       expect((await postJson(ctx.port, "/recovery/inspection", {}, {
         authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       })).status).toBe(405);
