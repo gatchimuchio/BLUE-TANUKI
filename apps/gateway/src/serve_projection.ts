@@ -216,6 +216,7 @@ export interface OperationPlanStatusProjection {
     revision_digest: string;
     status: "awaiting_step_review" | "results_verified";
     recovery_hold_reason?: "held_residual" | "held_unobserved" | "held_unverified";
+    recovery_hold_scope_relation?: "requested" | "collateral" | "unknown";
     step_count: number;
     steps: Array<{
       step_id: string;
@@ -276,6 +277,8 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         !["awaiting_step_review", "results_verified"].includes(String(plan.status)) ||
         (plan.recovery_hold_reason !== undefined &&
           !["held_residual", "held_unobserved", "held_unverified"].includes(String(plan.recovery_hold_reason))) ||
+        (plan.recovery_hold_scope_relation !== undefined &&
+          (!plan.recovery_hold_reason || !["requested", "collateral", "unknown"].includes(String(plan.recovery_hold_scope_relation)))) ||
         !Array.isArray(plan.steps) || !Array.isArray(plan.bindings) ||
         !plan.steps.every(isRecord) || !plan.bindings.every(isRecord)) return invalidOperationPlanStatusProjection();
     const bindings = plan.bindings as Record<string, unknown>[];
@@ -340,6 +343,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     }
     plans.push({ plan_id: plan.plan_id, revision: revision!, revision_digest: plan.revision_digest,
       ...(plan.recovery_hold_reason ? { recovery_hold_reason: plan.recovery_hold_reason as "held_residual" | "held_unobserved" | "held_unverified" } : {}),
+      ...(plan.recovery_hold_scope_relation ? { recovery_hold_scope_relation: plan.recovery_hold_scope_relation as "requested" | "collateral" | "unknown" } : {}),
       status: plan.status as "awaiting_step_review" | "results_verified", step_count: plan.steps.length, steps });
   }
   return {

@@ -225,10 +225,13 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       const projection = hds.getRuntimeSnapshot().operation_plans;
       expect(projection.recovery_refresh_status).toBe("ready");
       expect(projection.plans).toMatchObject([
-        { plan_id: operationPlanDigest(candidates[0]!.plan_id), recovery_hold_reason: "held_residual" },
-        { plan_id: operationPlanDigest(candidates[1]!.plan_id), recovery_hold_reason: "held_unobserved" },
+        { plan_id: operationPlanDigest(candidates[0]!.plan_id), recovery_hold_reason: "held_residual",
+          recovery_hold_scope_relation: "requested" },
+        { plan_id: operationPlanDigest(candidates[1]!.plan_id), recovery_hold_reason: "held_unobserved",
+          recovery_hold_scope_relation: "collateral" },
         { plan_id: operationPlanDigest(candidates[2]!.plan_id) },
-        { plan_id: operationPlanDigest(candidates[3]!.plan_id), recovery_hold_reason: "held_unverified" },
+        { plan_id: operationPlanDigest(candidates[3]!.plan_id), recovery_hold_reason: "held_unverified",
+          recovery_hold_scope_relation: "collateral" },
       ]);
       const recoveryHolds = store.loadRecoveryHoldState() as { holds: unknown[] };
       expect(recoveryHolds.holds).toHaveLength(3);

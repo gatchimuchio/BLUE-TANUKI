@@ -801,6 +801,10 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("renderOperationPlanStatus");
       expect(html).toContain("復元残差あり（step選択停止中）");
       expect(html).toContain("復元依存未観測（step選択停止中）");
+      expect(html).toContain("L3要求で指定された計画");
+      expect(html).toContain("選択store内の巻き添え計画");
+      expect(html).toContain("L3要求との関係は未確認");
+      expect(html).toContain("復元scopeとの関係表示はplan単位の復元やhold解除を意味しません。");
       expect(html).toContain("状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。");
       expect(html).toContain("loopbackで読取照合");
       expect(html).toContain("照合はDeveloper入口から明示要求した場合だけloopbackへ1回GETし");

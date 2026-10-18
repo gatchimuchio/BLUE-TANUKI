@@ -936,17 +936,27 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             held_unobserved: "復元依存未観測（step選択停止中）",
             held_unverified: "復元履歴未確認（step選択停止中）",
           };
+          const recoveryScopeRelationLabels = {
+            requested: "L3要求で指定された計画",
+            collateral: "選択store内の巻き添え計画",
+            unknown: "L3要求との関係は未確認",
+          };
           const recoveryHold = Object.prototype.hasOwnProperty.call(recoveryHoldLabels, plan.recovery_hold_reason)
             ? recoveryHoldLabels[plan.recovery_hold_reason] : null;
+          const recoveryScopeRelation = recoveryHold
+            ? (Object.prototype.hasOwnProperty.call(recoveryScopeRelationLabels, plan.recovery_hold_scope_relation)
+              ? recoveryScopeRelationLabels[plan.recovery_hold_scope_relation] : recoveryScopeRelationLabels.unknown)
+            : null;
           const reconciliationPlanReady = typeof plan.plan_id === "string" && /^[a-f0-9]{64}$/.test(plan.plan_id) &&
             typeof plan.revision_digest === "string" && /^[a-f0-9]{64}$/.test(plan.revision_digest);
           return '<article class="trace-item">' +
             '<div class="row"><h3>計画 ' + escapeHtml(shortDigest(plan.plan_id)) + '</h3><span>' + badge("revision " + String(plan.revision), "review") + '</span></div>' +
             '<dl class="kv"><dt>計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.revision_digest)) + '</dd>' +
             '<dt>計画状態</dt><dd>' + badge(plan.status || "unknown", operationPlanStatusTone(plan.status)) + '</dd>' +
-            (recoveryHold ? '<dt>復元後の選択</dt><dd>' + escapeHtml(recoveryHold) + '</dd>' : '') +
+            (recoveryHold ? '<dt>復元後の選択</dt><dd>' + escapeHtml(recoveryHold) + '</dd>' +
+              '<dt>復元scopeとの関係</dt><dd>' + escapeHtml(recoveryScopeRelation) + '</dd>' : '') +
             '<dt>step数</dt><dd>' + escapeHtml(String(plan.step_count ?? steps.length)) + '</dd></dl>' +
-            (recoveryHold ? '<p class="muted">この計画のstep選択は停止中です。状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。</p>' : '') +
+            (recoveryHold ? '<p class="muted">この計画のstep選択は停止中です。復元scopeとの関係表示はplan単位の復元やhold解除を意味しません。状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。</p>' : '') +
             steps.map(function (step) {
               const binding = isObject(step.binding) ? step.binding : {};
               const unknown = step.status === "outcome_unknown";

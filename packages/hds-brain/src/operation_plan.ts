@@ -962,10 +962,12 @@ export class OperationPlanLedger {
       plans: this.state.plans.map((p) => {
         const currentRevision = p.revisions.at(-1)!;
         const planIdDigest = operationPlanDigest(p.revisions[0]!.plan.plan_id);
+        const recoveryHold = this.recoveryHolds.get(planIdDigest);
         return { plan_id: planIdDigest,
         request_id: p.revisions[0]!.plan.request_id, revision: p.revisions.length,
         revision_digest: currentRevision.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),
-        ...(this.recoveryHolds.has(planIdDigest) ? { recovery_hold_reason: this.recoveryHolds.get(planIdDigest)!.reason } : {}),
+        ...(recoveryHold ? { recovery_hold_reason: recoveryHold.reason,
+          recovery_hold_scope_relation: recoveryHold.restore_scope_relation } : {}),
         status: currentRevision.plan.steps.every((s) => p.bindings.some((b) => b.step_id === s.step_id && b.status === "verified"))
           ? "results_verified" : "awaiting_step_review",
         steps: currentRevision.plan.steps.map((step) => {
