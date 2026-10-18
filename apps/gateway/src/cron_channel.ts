@@ -62,6 +62,23 @@ export interface CronTaskSnapshot {
   payload_hash: string;
   next_fire_at_ms: number | null;
   last_fire_at_ms: number | null;
+  recovery_hold: "restore_observation_unverified" | null;
+}
+
+export function cronRestoreObservationRequiresHold(observation: {
+  readonly operation: string | null;
+  readonly store_key: string | null;
+  readonly status: string;
+  readonly store_ledger_status: string | null;
+  readonly store_ledger_residual_count: number | null;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}): boolean {
+  if (observation.operation !== "restore") return false;
+  if (observation.store_key === null) return observation.status === "unverified";
+  if (observation.store_key !== "cron_events") return false;
+  return observation.status !== "matched" || observation.store_ledger_status !== "verified" ||
+    observation.store_ledger_residual_count !== 0 || observation.used_for_authority || observation.may_execute;
 }
 
 export type DailyBriefCronSnapshot = CronTaskSnapshot;
@@ -127,6 +144,7 @@ export class CronSchedulerChannel implements InboundChannel {
   private readonly onFire?: (task: CronTaskSnapshot, event: CronEventIdentity) => void;
   private readonly contentProvider?: CronContentProvider;
   private readonly eventStore?: GatewayCronEventStore;
+  private recoveryHold: CronTaskSnapshot["recovery_hold"] = null;
 
   constructor(opts: CronSchedulerOptions) {
     this.logLine = opts.log;
@@ -143,6 +161,11 @@ export class CronSchedulerChannel implements InboundChannel {
     if (this.started) return;
     this.started = true;
     this.handler = handler;
+
+    if (this.recoveryHold) {
+      this.log("[cron] scheduler held because canonical restore observation is not clean");
+      return;
+    }
 
     let active = 0;
     for (const runtime of this.runtimes.values()) {
@@ -163,6 +186,11 @@ export class CronSchedulerChannel implements InboundChannel {
     while (this.pendingFires.size > 0) await Promise.all(Array.from(this.pendingFires));
   }
 
+  holdForUnverifiedRestoreObservation(): void {
+    if (this.started) throw new Error("cron recovery hold must be set before scheduler start");
+    this.recoveryHold = "restore_observation_unverified";
+  }
+
   snapshot(): CronTaskSnapshot[] {
     return Array.from(this.runtimes.values()).map((runtime) => ({
       id: runtime.task.id,
@@ -177,6 +205,7 @@ export class CronSchedulerChannel implements InboundChannel {
       payload_hash: runtime.task.payload_hash,
       next_fire_at_ms: runtime.nextFireAtMs,
       last_fire_at_ms: runtime.lastFireAtMs,
+      recovery_hold: this.recoveryHold,
     }));
   }
 
@@ -191,7 +220,7 @@ export class CronSchedulerChannel implements InboundChannel {
     if (existing) this.stopRuntime(existing);
     const runtime = createRuntime(normalized);
     this.runtimes.set(normalized.id, runtime);
-    if (this.started && normalized.enabled && this.handler) {
+    if (this.started && !this.recoveryHold && normalized.enabled && this.handler) {
       this.scheduleTask(runtime, this.handler);
     }
     return this.snapshotForRuntime(runtime);
@@ -392,6 +421,7 @@ export class CronSchedulerChannel implements InboundChannel {
       payload_hash: payloadHash ?? runtime.task.payload_hash,
       next_fire_at_ms: runtime.nextFireAtMs,
       last_fire_at_ms: runtime.lastFireAtMs,
+      recovery_hold: this.recoveryHold,
     };
   }
 }

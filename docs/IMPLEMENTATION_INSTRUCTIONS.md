@@ -2,6 +2,14 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-03-E03.03-RESTORE-STARTUP-UNVERIFIED-HOLD`
+
+開始HEAD／`origin/main`=`198033627b1bce9f1b68dd823d25c5a8d8637b22`、worktree clean。owner指定rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、Recovery observer／serve／HDS evidence／Cron consumerを再読して開始した。
+
+`recovery.restore`の試行履歴にはcanonical selected store keyとbackup IDのSHA-256 digestだけを記録し、失敗試行も次回起動時のhold候補にできるようにした。履歴chainが不完全・起動中に不安定な場合はrestore成否や実状態を確認した扱いにせず、履歴内のselected storeを保留専用候補として扱う。履歴内の要求・試行・完了証拠が互いに異なる場合は対象を推定せず、曖昧なrestoreとしてCron consumerも保留する。`operation_plans`専用observerを別に保ち、後続のJ/M/Cron restoreが以前のplan restore holdを覆わないようにした。J/M/Cron選択時の未検証evidenceは既存HDS planをholdし、`cron_events`または対象不明のrestoreはCron schedulerを起動前にholdしてsnapshotへ固定理由を表示する。cleanな再観測はholdを新設しないが、観測結果は権限・resumeに使わない。
+
+この変更はJ/M/Cron storeを復元可能にしない。J/Mのlifecycle close/reopenとCronを含むselected storeの同一process quiescenceが未接続のため、該当restore経路は引き続き作用前fail-closed。E03.03=`BUILD_GAP`。限定確認はRecovery observer／HDS evidence／Cronの3 files・32 tests、Gateway typecheck/build、`smoke:serve`、`docs:check`、`validate:repo-health`、`git diff --check`がPASS。実restore／restartは未実施。次consumerは通常serve内でのJ/M/Cron store所有者静止・再開契約を特定し、既存Recovery admissionへ接続すること。
+
 `QEB-03-E03.03-RESTORE-RESTART-LIFECYCLE-AUDIT` は2026-10-19にread-onlyで完了。開始HEAD／`origin/main`=`c169e4c60efcad65364f87cf87a1fa9e7d5e6e87`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、対象コードを本単位の開始時に再読した。
 
 既存serve lifecycleは、停止時にrouterを止め、in-flight executor taskを待ち、Cron／Operation Plan／Broker storeとowner leaseを閉じてから終了する。しかしHDS controllerの公開closeはOperation Plan用memoryに限られ、selected J/M store群を一括して閉じるlifecycle APIがない。pending L3 approvalはserve内Mapで、再起動時に再構築されない。complete-historyとHDS auditはfile persistenceが任意で、startup recovery observationはOperation Plan hold専用である。SIGINT／SIGTERM handlerはshutdown後processを終了し、store適用・再起動・対象storeの再観測へ進まない。systemdの`Restart=on-failure`等は同じserve commandを再起動するだけで、承認済みrecovery transitionを引き継がない。

@@ -39,8 +39,15 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
   }
   const observation = input.observation;
   if (observation.operation !== "restore") return undefined;
-  if (observation.store_key !== "operation_plans") return observation.store_key === null
-    ? unverifiedHistoryEvidence(checkpointDigest, observation) : undefined;
+  if (observation.store_key !== "operation_plans") {
+    if (observation.store_key === "j_control" || observation.store_key === "m_state" ||
+        observation.store_key === "cron_events") {
+      if (observation.status === "matched" && observation.store_ledger_status === "verified" &&
+          observation.store_ledger_residual_count === 0) return undefined;
+      return unverifiedHistoryEvidence(checkpointDigest, observation);
+    }
+    return observation.store_key === null ? unverifiedHistoryEvidence(checkpointDigest, observation) : undefined;
+  }
   if (!observation.restore_scope_plan_digest || !/^[a-f0-9]{64}$/.test(observation.restore_scope_plan_digest)) {
     return unverifiedHistoryEvidence(checkpointDigest, observation);
   }

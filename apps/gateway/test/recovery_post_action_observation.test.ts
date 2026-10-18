@@ -11,6 +11,7 @@ import {
   buildRecoveryPostActionObservation,
   buildRecoverySnapshot,
   createRecoveryBackup,
+  recoveryStoreRestoreAttemptHistoryEvidence,
   recoveryStoreRestoreHistoryEvidence,
   type RecoveryHistoryEvidenceEntry,
 } from "../src/recovery_surface.js";
@@ -351,6 +352,159 @@ describe("buildRecoveryPostActionObservation", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("keeps the selected canonical store digest-only when a restore attempt fails", async () => {
+    const attempt = recoveryStoreRestoreAttemptHistoryEvidence({
+      type: "tool_call",
+      payload: {
+        tool_name: "recovery.restore",
+        arguments: { backup_id: "private-backup-id", store_key: "cron_events" },
+      },
+    });
+    expect(attempt).toEqual({
+      schema_version: 1,
+      store_key: "cron_events",
+      backup_id_digest: createHash("sha256").update("private-backup-id").digest("hex"),
+    });
+    expect(JSON.stringify(attempt)).not.toContain("private-backup-id");
+    expect(recoveryStoreRestoreAttemptHistoryEvidence({
+      type: "tool_call",
+      payload: { tool_name: "recovery.restore", arguments: { backup_id: "backup-1", store_key: "unknown" } },
+    })).toBeUndefined();
+
+    const entries = historyFor("recovery.restore", "failed", null, null);
+    const execution = entries[0]!;
+    const payload = execution.payload as Record<string, unknown>;
+    entries[0] = { ...execution, payload: { ...payload, recovery_store_restore_attempt: attempt } };
+    const observation = await buildRecoveryPostActionObservation({
+      entries,
+      chain_valid: true,
+      skipped_count: 0,
+      not_before_timestamp_ms: Date.now() + 10_000,
+    }, {}, { mode: "startup_canonical_store_hold" });
+    expect(observation).toMatchObject({
+      status: "failed",
+      operation: "restore",
+      store_key: "cron_events",
+      restore_backup_id_digest: attempt?.backup_id_digest,
+      used_for_authority: false,
+      may_execute: false,
+    });
+  });
+
+  it("uses an incomplete history restore candidate only to hold the selected store", async () => {
+    const attempt = recoveryStoreRestoreAttemptHistoryEvidence({
+      type: "tool_call",
+      payload: {
+        tool_name: "recovery.restore",
+        arguments: { backup_id: "private-backup-id", store_key: "cron_events" },
+      },
+    });
+    const entries = historyFor("recovery.restore", "failed", null, null);
+    const execution = entries[0]!;
+    const payload = execution.payload as Record<string, unknown>;
+    entries[0] = { ...execution, payload: { ...payload, recovery_store_restore_attempt: attempt } };
+
+    const observation = await buildRecoveryPostActionObservation({
+      entries,
+      chain_valid: false,
+      skipped_count: 1,
+      not_before_timestamp_ms: Date.now() + 10_000,
+    }, {}, { mode: "startup_canonical_store_hold" });
+
+    expect(observation).toMatchObject({
+      status: "unverified",
+      operation: "restore",
+      store_key: "cron_events",
+      restore_backup_id_digest: attempt?.backup_id_digest,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(observation.store_ledger_status).toBeNull();
+  });
+
+  it("does not accept a restore result whose selected store differs from the recorded attempt", async () => {
+    const attempt = recoveryStoreRestoreAttemptHistoryEvidence({
+      type: "tool_call",
+      payload: {
+        tool_name: "recovery.restore",
+        arguments: { backup_id: "private-backup-id", store_key: "m_state" },
+      },
+    });
+    const restoreResult = recoveryStoreRestoreHistoryEvidence({
+      action: "restore",
+      status: "completed",
+      used_for_authority: false,
+      canonical_state_cross_store_atomic: false,
+      restored_store_key: "cron_events",
+      restored_store_archive_digest: digest("c"),
+      restored_store_state_digest: digest("d"),
+      restored_backup_id: "private-backup-id",
+    });
+    const entries = historyFor("recovery.restore", "success", digest("b"), digest("b"));
+    const execution = entries[0]!;
+    const payload = execution.payload as Record<string, unknown>;
+    entries[0] = {
+      ...execution,
+      payload: {
+        ...payload,
+        recovery_store_restore_attempt: attempt,
+        recovery_store_restore: restoreResult,
+      },
+    };
+
+    const observation = await buildRecoveryPostActionObservation({
+      entries,
+      chain_valid: true,
+      skipped_count: 0,
+      not_before_timestamp_ms: Date.now() + 10_000,
+    }, {}, { mode: "startup_canonical_store_hold" });
+
+    expect(observation).toMatchObject({
+      status: "unverified",
+      operation: "restore",
+      store_key: null,
+      restore_backup_id_digest: null,
+      used_for_authority: false,
+      may_execute: false,
+    });
+  });
+
+  it("keeps plan-specific startup hold observation separate from a newer canonical-store restore", async () => {
+    const planAttempt = recoveryStoreRestoreAttemptHistoryEvidence({
+      type: "tool_call",
+      payload: {
+        tool_name: "recovery.restore",
+        arguments: { backup_id: "plan-backup", store_key: "operation_plans" },
+      },
+    });
+    const memoryAttempt = recoveryStoreRestoreAttemptHistoryEvidence({
+      type: "tool_call",
+      payload: {
+        tool_name: "recovery.restore",
+        arguments: { backup_id: "memory-backup", store_key: "m_state" },
+      },
+    });
+    const first = historyFor("recovery.restore", "failed", null, null, "plan-restore", 4);
+    const second = historyFor("recovery.restore", "failed", null, null, "memory-restore", 6);
+    for (const [entries, attempt] of [[first, planAttempt], [second, memoryAttempt]] as const) {
+      const execution = entries[0]!;
+      const payload = execution.payload as Record<string, unknown>;
+      entries[0] = { ...execution, payload: { ...payload, recovery_store_restore_attempt: attempt } };
+    }
+    const history = {
+      entries: [...first, ...second],
+      chain_valid: true,
+      skipped_count: 0,
+      not_before_timestamp_ms: Date.now() + 10_000,
+    };
+
+    const planHold = await buildRecoveryPostActionObservation(history, {}, { mode: "startup_operation_plan_hold" });
+    const canonicalHold = await buildRecoveryPostActionObservation(history, {}, { mode: "startup_canonical_store_hold" });
+
+    expect(planHold).toMatchObject({ operation: "restore", store_key: "operation_plans", status: "failed" });
+    expect(canonicalHold).toMatchObject({ operation: "restore", store_key: "m_state", status: "failed" });
   });
 
   it("does not confirm a reset while provider keys remain in process environment", async () => {

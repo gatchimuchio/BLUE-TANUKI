@@ -89,6 +89,7 @@ import {
   inspectRecoveryPlanRestoreScopeApplicability,
   inspectRecoveryScopeApplicability,
   isVerifiedRecoveryPlanRestoreScope,
+  recoveryStoreRestoreAttemptHistoryEvidence,
   recoveryStoreRestoreHistoryEvidence,
 } from "./recovery_surface.js";
 import {
@@ -104,7 +105,7 @@ import {
   verifyUpdateCandidate,
 } from "./update_surface.js";
 import { createGatewayEvidencePack } from "./evidence_pack.js";
-import { CronSchedulerChannel, cronSchedulesFromEnv } from "./cron_channel.js";
+import { CronSchedulerChannel, cronRestoreObservationRequiresHold, cronSchedulesFromEnv } from "./cron_channel.js";
 import { GatewayCronEventStore } from "./cron_event_store.js";
 import { createCronEventResolutionTool } from "./cron_event_resolution_tool.js";
 import { googleDailyBriefProviderFromEnv } from "./google_daily_brief.js";
@@ -415,21 +416,39 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       (!completeHistoryFile || startupHistoryAtCapacity ? 1 : 0),
     not_before_timestamp_ms: recoveryObservationStartedAtMs,
   };
-  let startupRecoveryObservation = await buildRecoveryPostActionObservation(startupRecoveryHistory, process.env);
+  let startupRecoveryObservation = await buildRecoveryPostActionObservation(startupRecoveryHistory, process.env, {
+    mode: "startup_canonical_store_hold",
+  });
   let startupOperationPlanHoldObservation = await buildRecoveryPostActionObservation(startupRecoveryHistory, process.env, {
     mode: "startup_operation_plan_hold",
   });
   const startupHistoryStable = startupHistorySize === completeHistory.size() &&
     startupHistorySkippedCount === completeHistory.skippedCount() && startupHistoryChainValid === completeHistory.verify();
   if (!startupHistoryStable) {
-    const unstableHistory = { entries: [], chain_valid: false, skipped_count: 0 } as const;
-    startupRecoveryObservation = await buildRecoveryPostActionObservation(unstableHistory, process.env);
+    const unstableHistory = {
+      entries: startupHistoryEntries,
+      chain_valid: false,
+      skipped_count: Math.max(1, startupHistorySkippedCount),
+      not_before_timestamp_ms: recoveryObservationStartedAtMs,
+    } as const;
+    startupRecoveryObservation = await buildRecoveryPostActionObservation(unstableHistory, process.env, {
+      mode: "startup_canonical_store_hold",
+    });
     startupOperationPlanHoldObservation = await buildRecoveryPostActionObservation(unstableHistory, process.env, {
       mode: "startup_operation_plan_hold",
     });
   }
+  const canonicalStoreRestoreNeedsOperationPlanHold = startupRecoveryObservation.operation === "restore" &&
+    (startupRecoveryObservation.store_key === null ||
+      ((startupRecoveryObservation.store_key === "j_control" || startupRecoveryObservation.store_key === "m_state" ||
+        startupRecoveryObservation.store_key === "cron_events") &&
+        (startupRecoveryObservation.status !== "matched" ||
+          startupRecoveryObservation.store_ledger_status !== "verified" ||
+          startupRecoveryObservation.store_ledger_residual_count !== 0)));
   const startupOperationPlanRecoveryEvidence = operationPlanRecoveryEvidenceFromObservation({
-    observation: startupOperationPlanHoldObservation,
+    observation: canonicalStoreRestoreNeedsOperationPlanHold
+      ? startupRecoveryObservation
+      : startupOperationPlanHoldObservation,
     checkpoint: operationPlanCheckpointAtStartup,
     history_complete: !!completeHistoryFile && startupHistoryStable && startupHistoryChainValid && startupHistorySkippedCount === 0 &&
       !startupHistoryAtCapacity && !(operationPlanCheckpointAtStartup?.plans.length && startupHistorySize === 0),
@@ -529,6 +548,15 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       });
     },
   });
+  if (cronRestoreObservationRequiresHold(startupRecoveryObservation)) {
+    cron.holdForUnverifiedRestoreObservation();
+    gatewayLog.warn("Cron scheduler held after canonical restore observation", {
+      store_key: "cron_events",
+      observation_status: startupRecoveryObservation.status,
+      ledger_status: startupRecoveryObservation.store_ledger_status,
+      residual_count: startupRecoveryObservation.store_ledger_residual_count,
+    });
+  }
   runtimeSchedules.attachScheduler(cron);
   tools.register(createCronEventResolutionTool(cronEventStore, cron));
 
@@ -778,6 +806,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const recoveryStoreRestore = feedback.status === "success" && isRecoveryMutationCommand(cmd)
       ? recoveryStoreRestoreHistoryEvidence(feedback.result)
       : undefined;
+    const recoveryStoreRestoreAttempt = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore"
+      ? recoveryStoreRestoreAttemptHistoryEvidence(cmd)
+      : undefined;
     const entry = recordCompleteHistory({
       kind: "execution_history",
       request_id: log.request_id,
@@ -792,6 +823,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         result_present: feedback.result !== undefined,
         result_digest: feedback.result === undefined ? undefined : digestValue(feedback.result),
         ...(recoveryStoreRestore ? { recovery_store_restore: recoveryStoreRestore } : {}),
+        ...(recoveryStoreRestoreAttempt ? { recovery_store_restore_attempt: recoveryStoreRestoreAttempt } : {}),
         error: feedback.error,
         metrics: feedback.metrics,
         operation_core: feedback.operation_core,

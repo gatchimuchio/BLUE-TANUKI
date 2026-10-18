@@ -113,4 +113,37 @@ describe("Recovery observationからHDS計画保留を導出", () => {
       observation: observation({ status: "no_record", operation: null, store_key: null }), checkpoint, history_complete: true,
     })).toBeUndefined();
   });
+
+  it("J/M/Cron restoreがcleanに再観測できない間は既存plan群をunverified holdにする", () => {
+    for (const store_key of ["j_control", "m_state", "cron_events"] as const) {
+      const held = operationPlanRecoveryEvidenceFromObservation({
+        observation: observation({
+          status: "failed",
+          store_key,
+          store_ledger_status: "unverified",
+          store_ledger_residual_count: null,
+          plan_residuals: null,
+          plan_restore_points: null,
+        }),
+        checkpoint,
+        history_complete: true,
+      });
+      expect(held).toMatchObject({
+        scope: "unverified_history",
+        plans: [],
+        used_for_authority: false,
+        may_execute: false,
+        provenance: { source: "recovery_restore" },
+      });
+      expect(operationPlanRecoveryEvidenceFromObservation({
+        observation: observation({
+          store_key,
+          store_ledger_status: "verified",
+          store_ledger_residual_count: 0,
+        }),
+        checkpoint,
+        history_complete: true,
+      })).toBeUndefined();
+    }
+  });
 });

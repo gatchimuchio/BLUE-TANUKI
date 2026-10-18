@@ -155,8 +155,14 @@ export interface RecoveryHistoryEvidence {
 
 export interface RecoveryPostActionObservationOptions {
   /** Startup observations require the mutation to predate this process. In-process restore checks are explicit and command-bound. */
-  readonly mode?: "after_restart" | "in_process_restore" | "startup_operation_plan_hold";
+  readonly mode?: "after_restart" | "in_process_restore" | "startup_operation_plan_hold" | "startup_canonical_store_hold";
   readonly expected_command_id?: string;
+}
+
+export interface RecoveryStoreRestoreAttemptEvidence {
+  readonly schema_version: 1;
+  readonly store_key: CanonicalStateStoreKey;
+  readonly backup_id_digest: string;
 }
 
 export interface RecoveryStoreRestoreHistoryEvidence {
@@ -1706,6 +1712,28 @@ export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoverySto
   };
 }
 
+/** Preserve only the selected store and backup digest so a failed restore can be held after restart. */
+export function recoveryStoreRestoreAttemptHistoryEvidence(command: unknown): RecoveryStoreRestoreAttemptEvidence | undefined {
+  if (!isRecoveryObservationRecord(command) || command.type !== "tool_call" ||
+      !isRecoveryObservationRecord(command.payload) || command.payload.tool_name !== "recovery.restore" ||
+      !isRecoveryObservationRecord(command.payload.arguments)) return undefined;
+  const args = command.payload.arguments;
+  if (typeof args.store_key !== "string" ||
+      !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === args.store_key)) return undefined;
+  const backupIdDigest = recoveryBackupIdDigest(args.backup_id);
+  if (!backupIdDigest) return undefined;
+  return { schema_version: 1, store_key: args.store_key as CanonicalStateStoreKey, backup_id_digest: backupIdDigest };
+}
+
+function recoveryStoreRestoreAttemptFromHistory(value: unknown): RecoveryStoreRestoreAttemptEvidence | null {
+  if (!isRecoveryObservationRecord(value) || value.schema_version !== 1 ||
+      typeof value.store_key !== "string" ||
+      !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === value.store_key)) return null;
+  const backupIdDigest = recoveryObservationDigest(value.backup_id_digest);
+  if (!backupIdDigest) return null;
+  return { schema_version: 1, store_key: value.store_key as CanonicalStateStoreKey, backup_id_digest: backupIdDigest };
+}
+
 function recoveryStoreRestoreEvidenceFromHistory(value: unknown): RecoveryStoreRestoreHistoryEvidence | null {
   if (!isRecoveryObservationRecord(value) || value.schema_version !== 1) return null;
   const storeKey = value.store_key;
@@ -1826,6 +1854,46 @@ function noRecoveryActionObservation(
   };
 }
 
+/** An invalid history can only restrict the identified store; it can never confirm restore or authorize work. */
+function unverifiedRecoveryStoreHoldCandidate(history: RecoveryHistoryEvidence): RecoveryPostActionObservation {
+  let latest: { index: number; storeKey: CanonicalStateStoreKey | null; backupIdDigest: string | null } | undefined;
+  for (const entry of history.entries) {
+    if (entry.kind !== "execution_history" || entry.used_for_authority !== false ||
+        !isRecoveryObservationRecord(entry.payload)) continue;
+    const command = entry.payload.command;
+    if (!isRecoveryObservationRecord(command) || command.operation !== "recovery.restore" ||
+        !isRecoveryObservationRecord(command.payload) || command.payload.tool_name !== "recovery.restore") continue;
+    const attempt = recoveryStoreRestoreAttemptFromHistory(entry.payload.recovery_store_restore_attempt);
+    const completed = recoveryStoreRestoreEvidenceFromHistory(entry.payload.recovery_store_restore);
+    const commandArguments = isRecoveryObservationRecord(command.payload.arguments) ? command.payload.arguments : null;
+    const commandStoreKey = typeof commandArguments?.store_key === "string" &&
+      CANONICAL_STATE_STORE_PATHS.some((store) => store.key === commandArguments.store_key)
+      ? commandArguments.store_key as CanonicalStateStoreKey
+      : null;
+    const candidateStoreKeys = [attempt?.store_key, completed?.store_key, commandStoreKey]
+      .filter((value): value is CanonicalStateStoreKey => value !== undefined && value !== null);
+    const distinctStoreKeys = [...new Set(candidateStoreKeys)];
+    const storeKey = distinctStoreKeys.length === 1 ? distinctStoreKeys[0]! : null;
+    const candidateBackupDigests = [attempt?.backup_id_digest, completed?.restored_backup_id_digest]
+      .filter((value): value is string => value !== undefined && value !== null);
+    const distinctBackupDigests = [...new Set(candidateBackupDigests)];
+    const backupIdDigest = distinctBackupDigests.length === 1 ? distinctBackupDigests[0]! : null;
+    if (latest && entry.index < latest.index) continue;
+    latest = {
+      index: entry.index,
+      storeKey,
+      backupIdDigest,
+    };
+  }
+  if (!latest) return noRecoveryActionObservation("unverified");
+  return {
+    ...noRecoveryActionObservation("unverified"),
+    operation: "restore",
+    store_key: latest.storeKey,
+    restore_backup_id_digest: latest.backupIdDigest,
+  };
+}
+
 /** Re-observe the latest Recovery mutation from non-authoritative history and the current local environment. */
 export async function buildRecoveryPostActionObservation(
   history: RecoveryHistoryEvidence,
@@ -1833,7 +1901,9 @@ export async function buildRecoveryPostActionObservation(
   options: RecoveryPostActionObservationOptions = {},
 ): Promise<RecoveryPostActionObservation> {
   if (!history.chain_valid || history.skipped_count !== 0) {
-    return noRecoveryActionObservation("unverified");
+    return options.mode === "startup_canonical_store_hold"
+      ? unverifiedRecoveryStoreHoldCandidate(history)
+      : noRecoveryActionObservation("unverified");
   }
 
   let latest: {
@@ -1845,6 +1915,7 @@ export async function buildRecoveryPostActionObservation(
     resultDigest: string | null;
     commandIdDigest: string;
     restoreEvidence: RecoveryStoreRestoreHistoryEvidence | null;
+    restoreAttempt: RecoveryStoreRestoreAttemptEvidence | null;
   } | undefined;
   for (const entry of history.entries) {
     if (entry.kind !== "execution_history" || entry.used_for_authority !== false || !entry.command_id ||
@@ -1858,8 +1929,12 @@ export async function buildRecoveryPostActionObservation(
     const operation = toolName as keyof typeof RECOVERY_OBSERVATION_OPERATIONS;
     const restoreEvidence = operation === "recovery.restore" && isRecoveryObservationRecord(entry.payload)
       ? recoveryStoreRestoreEvidenceFromHistory(entry.payload.recovery_store_restore) : null;
+    const restoreAttempt = operation === "recovery.restore" && isRecoveryObservationRecord(entry.payload)
+      ? recoveryStoreRestoreAttemptFromHistory(entry.payload.recovery_store_restore_attempt) : null;
     if (options.mode === "startup_operation_plan_hold" && operation !== "recovery.restore") continue;
     if (options.mode === "startup_operation_plan_hold" && restoreEvidence && restoreEvidence.store_key !== "operation_plans") continue;
+    if (options.mode === "startup_operation_plan_hold" && !restoreEvidence && restoreAttempt?.store_key !== "operation_plans") continue;
+    if (options.mode === "startup_canonical_store_hold" && operation !== "recovery.restore") continue;
     const argumentsDigest = recoveryObservationDigest(command.payload.arguments_digest);
     if (!argumentsDigest) {
       if (!latest || entry.index >= latest.entry.index) {
@@ -1872,6 +1947,7 @@ export async function buildRecoveryPostActionObservation(
           resultDigest: recoveryObservationDigest(entry.payload.result_digest),
           commandIdDigest: createHash("sha256").update(entry.command_id).digest("hex"),
           restoreEvidence,
+          restoreAttempt,
         };
       }
       continue;
@@ -1886,6 +1962,7 @@ export async function buildRecoveryPostActionObservation(
         resultDigest: recoveryObservationDigest(entry.payload.result_digest),
         commandIdDigest: createHash("sha256").update(entry.command_id).digest("hex"),
         restoreEvidence,
+        restoreAttempt,
       };
     }
   }
@@ -1919,7 +1996,7 @@ export async function buildRecoveryPostActionObservation(
     return unverified;
   }
   if (options.mode !== "in_process_restore" && options.expected_command_id !== undefined) return unverified;
-  if (options.mode === "startup_operation_plan_hold" &&
+  if ((options.mode === "startup_operation_plan_hold" || options.mode === "startup_canonical_store_hold") &&
       (latest.action !== "restore" || latest.entry.timestamp >= (history.not_before_timestamp_ms ?? Number.POSITIVE_INFINITY))) {
     return unverified;
   }
@@ -1937,7 +2014,17 @@ export async function buildRecoveryPostActionObservation(
   if (latest.executionStatus === "failed") {
     const finalResultDigest = recoveryObservationDigest(finalPayload.result_digest);
     if (latest.resultDigest !== finalResultDigest) return unverified;
-    return { ...unverified, status: "failed" };
+    if (latest.restoreAttempt && latest.restoreEvidence &&
+        (latest.restoreAttempt.store_key !== latest.restoreEvidence.store_key ||
+          latest.restoreAttempt.backup_id_digest !== latest.restoreEvidence.restored_backup_id_digest)) {
+      return { ...unverified, store_key: null, restore_backup_id_digest: null };
+    }
+    return {
+      ...unverified,
+      status: "failed",
+      store_key: latest.restoreEvidence?.store_key ?? latest.restoreAttempt?.store_key ?? null,
+      restore_backup_id_digest: latest.restoreEvidence?.restored_backup_id_digest ?? latest.restoreAttempt?.backup_id_digest ?? null,
+    };
   }
   if (latest.executionStatus !== "success" || !latest.resultDigest ||
       recoveryObservationDigest(finalPayload.result_digest) !== latest.resultDigest || finalPayload.result_present !== true) {
@@ -1949,7 +2036,18 @@ export async function buildRecoveryPostActionObservation(
     const restoreEvidence = latest.restoreEvidence ?? (payload
       ? recoveryStoreRestoreEvidenceFromHistory(payload.recovery_store_restore)
       : null);
-    if (!restoreEvidence) return unverified;
+    if (!restoreEvidence) {
+      return {
+        ...unverified,
+        store_key: latest.restoreAttempt?.store_key ?? null,
+        restore_backup_id_digest: latest.restoreAttempt?.backup_id_digest ?? null,
+      };
+    }
+    if (latest.restoreAttempt &&
+        (latest.restoreAttempt.store_key !== restoreEvidence.store_key ||
+          latest.restoreAttempt.backup_id_digest !== restoreEvidence.restored_backup_id_digest)) {
+      return { ...unverified, store_key: null, restore_backup_id_digest: null };
+    }
     const predatesCurrentProcess = history.not_before_timestamp_ms !== undefined &&
       latest.entry.timestamp < history.not_before_timestamp_ms;
     if (options.mode === "in_process_restore") {

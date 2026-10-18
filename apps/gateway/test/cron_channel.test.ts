@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   CronSchedulerChannel,
   DailyBriefCronChannel,
+  cronRestoreObservationRequiresHold,
   cronPayloadHash,
   cronSchedulesFromEnv,
   dailyBriefCronFromEnv,
@@ -79,6 +80,56 @@ describe("dailyBriefCronFromEnv", () => {
 });
 
 describe("CronSchedulerChannel", () => {
+  it("holds scheduled consumers when Cron restore is not cleanly observed or its store is ambiguous", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 9, 6, 30, 0, 0));
+    const received: unknown[] = [];
+    const heldObservation = {
+      operation: "restore",
+      store_key: "cron_events",
+      status: "failed",
+      store_ledger_status: null,
+      store_ledger_residual_count: null,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    expect(cronRestoreObservationRequiresHold(heldObservation)).toBe(true);
+    expect(cronRestoreObservationRequiresHold({
+      ...heldObservation,
+      status: "matched",
+      store_ledger_status: "verified",
+      store_ledger_residual_count: 0,
+    })).toBe(false);
+    expect(cronRestoreObservationRequiresHold({
+      ...heldObservation,
+      store_key: "operation_plans",
+    })).toBe(false);
+    expect(cronRestoreObservationRequiresHold({
+      ...heldObservation,
+      store_key: null,
+      status: "unverified",
+    })).toBe(true);
+
+    const ch = new CronSchedulerChannel({
+      tasks: [{ id: "smoke", channel: "webchat", target: "local-user", content: "must stay held", interval_ms: 1000 }],
+      log: () => undefined,
+    });
+    ch.holdForUnverifiedRestoreObservation();
+    try {
+      await ch.start(async (request) => { received.push(request); });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(received).toHaveLength(0);
+      expect(ch.snapshot()).toMatchObject([{
+        running: false,
+        next_fire_at_ms: null,
+        recovery_hold: "restore_observation_unverified",
+      }]);
+    } finally {
+      await ch.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("exposes multiple scheduled-message snapshots without exposing content", async () => {
     const now = new Date(2026, 4, 9, 6, 30, 0, 0);
     const ch = new CronSchedulerChannel({
