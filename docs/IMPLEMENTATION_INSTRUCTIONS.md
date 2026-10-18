@@ -2,13 +2,29 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-03-E03.03-RESTORE-STARTUP-UNVERIFIED-HOLD`
+### 最新BUILD_BATCH：`QEB-03-E03.03-CRON-RESTORE-QUIESCE-REOPEN-REOBSERVATION`
+
+開始HEAD／`origin/main`=`6d4fe92546d633e89c58ff1f868611d0548599f2`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、Cron scheduler／store／serve／Recovery observerを再読して開始した。
+
+`cron_events`選択復元を通常serveのconsumerへ接続した。要求時とL3実行直前にCron承認handoff残存を拒否し、L3承認後はschedulerを停止・排出してからpending Cron承認を再確認する。新しいコマンド実行を一時遮断し、既存Executor taskを排出した後に選択SQLite接続を閉じる。Recovery toolはserveのquiescence gateなしにCron storeを復元できない。復元後はDBをreopenし、schema／integrityと承認handoffを再検査する。完全・安定したComplete History、実行command、backup digest、対象store digest、live Cron ledger（verified／残差0）が一致した場合だけschedulerを再開する。不一致、failed restore、history欠落、reopen失敗はscheduler holdまたはserve maintenance holdへ閉じる。観測は権限や旧承認を復活させず、L3 tokenを再利用しない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Cron／Recovery／post-action observerの5 test files | PASS、39 tests。合成stateでRecovery endpoint→HDS L3 queue→test resume token→Executor→selected store restore→reopen／post-observation→scheduler resumeを確認。 |
+| Gateway typecheck／workspace build | PASS。 |
+| `smoke:serve` | PASS。stub WebChat、channel_send、audit persistence／dumpを確認。 |
+| `docs:check`／`validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件を確認。 |
+| 実データrestore／実owner approval／restart／provider credential／外部作用／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+実装commit=`76c776d`。E03.03は`BUILD_GAP`を維持する。`j_control`／`m_state`のJ/M store lifecycleは未接続で引き続き作用前fail-closed。`cron_events`の本接続もQE_BUILDの合成試験であり、実製品データの復旧・OS別QA・全体QCを証明しない。次consumerはJ/M selected-store close/reopenとHDS consumer lifecycleの接続。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。D4Pocket／ミニドラへの変更、実業務作用、公開・出荷判断なし。
+
+### 前回BUILD_BATCH：`QEB-03-E03.03-RESTORE-STARTUP-UNVERIFIED-HOLD`
 
 開始HEAD／`origin/main`=`198033627b1bce9f1b68dd823d25c5a8d8637b22`、worktree clean。owner指定rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、Recovery observer／serve／HDS evidence／Cron consumerを再読して開始した。
 
 `recovery.restore`の試行履歴にはcanonical selected store keyとbackup IDのSHA-256 digestだけを記録し、失敗試行も次回起動時のhold候補にできるようにした。履歴chainが不完全・起動中に不安定な場合はrestore成否や実状態を確認した扱いにせず、履歴内のselected storeを保留専用候補として扱う。履歴内の要求・試行・完了証拠が互いに異なる場合は対象を推定せず、曖昧なrestoreとしてCron consumerも保留する。`operation_plans`専用observerを別に保ち、後続のJ/M/Cron restoreが以前のplan restore holdを覆わないようにした。J/M/Cron選択時の未検証evidenceは既存HDS planをholdし、`cron_events`または対象不明のrestoreはCron schedulerを起動前にholdしてsnapshotへ固定理由を表示する。cleanな再観測はholdを新設しないが、観測結果は権限・resumeに使わない。
 
-この変更はJ/M/Cron storeを復元可能にしない。J/Mのlifecycle close/reopenとCronを含むselected storeの同一process quiescenceが未接続のため、該当restore経路は引き続き作用前fail-closed。E03.03=`BUILD_GAP`。限定確認はRecovery observer／HDS evidence／Cronの3 files・32 tests、Gateway typecheck/build、`smoke:serve`、`docs:check`、`validate:repo-health`、`git diff --check`がPASS。実restore／restartは未実施。実装commit=`ae7ce9b9c82fba6008fe9e124bdd6e4d78c832c3`をmainへpushし、push直後のmain/current refsとprevious refsをそれぞれ`ae7ce9b9c82fba6008fe9e124bdd6e4d78c832c3`／開始HEAD=`198033627b1bce9f1b68dd823d25c5a8d8637b22`で照合した。closeout文書も同一BUILD_BATCHへ含め、最終current/previous復元refを終了時に照合する。次consumerは通常serve内でのJ/M/Cron store所有者静止・再開契約を特定し、既存Recovery admissionへ接続すること。
+この時点ではJ/M store lifecycleとCron selected-store quiescenceが未接続で、canonical restore全体を有効にしていなかった。E03.03=`BUILD_GAP`。Recovery observer／HDS evidence／Cronの3 files・32 tests、Gateway typecheck/build、`smoke:serve`、`docs:check`、`validate:repo-health`、`git diff --check`はPASS。実restore／restartは未実施。実装commit=`ae7ce9b9c82fba6008fe9e124bdd6e4d78c832c3`とcloseout commit=`6d4fe92546d633e89c58ff1f868611d0548599f2`をpushし、main/current refs=`6d4fe92546d633e89c58ff1f868611d0548599f2`、previous refs=`198033627b1bce9f1b68dd823d25c5a8d8637b22`を照合済み。次consumerは通常serve内でJ/M store lifecycleを接続すること。
 
 `QEB-03-E03.03-RESTORE-RESTART-LIFECYCLE-AUDIT` は2026-10-19にread-onlyで完了。開始HEAD／`origin/main`=`c169e4c60efcad65364f87cf87a1fa9e7d5e6e87`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、対象コードを本単位の開始時に再読した。
 
