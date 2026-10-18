@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, createReadStream, lstatSync, realpathSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 
-const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+const { DatabaseSync, backup } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 export const CANONICAL_STATE_STORE_PATHS = [
   { key: "j_control", relative_path: join("result-memory", "j-control.sqlite") },
@@ -162,6 +162,24 @@ function resolveStoreSources(stateRootValue: string): StoreSource[] {
       throw new Error("canonical_state_backup_source_unavailable");
     }
   });
+}
+
+export function resolveCanonicalStateStoreTargetPath(
+  stateRootValue: string,
+  storeKey: CanonicalStateStoreKey,
+): string {
+  const stateRoot = resolve(stateRootValue);
+  const sources = resolveStoreSources(stateRoot);
+  const source = sources.find((item) => item.key === storeKey);
+  if (!source) throw new Error("canonical_state_restore_store_unknown");
+  let realStateRoot: string;
+  try { realStateRoot = realpathSync(stateRoot); }
+  catch { throw new Error("canonical_state_restore_target_unavailable"); }
+  const privateRoot = join(realStateRoot, "private-state");
+  if (!safeDirectory(privateRoot) || !safeDirectory(dirname(source.path))) {
+    throw new Error("canonical_state_restore_target_unavailable");
+  }
+  return source.path;
 }
 
 function integrityCheck(database: DatabaseSyncType): boolean {
@@ -450,4 +468,63 @@ export async function inspectCanonicalStateSnapshots(
     store_consistency: value.store_consistency,
     cross_store_atomic: false,
   };
+}
+
+export async function restoreCanonicalStateSnapshotStore(
+  stateRootValue: string,
+  packDirectory: string,
+  snapshot: CanonicalStateSnapshotManifest,
+  storeKey: CanonicalStateStoreKey,
+): Promise<{ readonly bytes: number; readonly sha256: string }> {
+  await inspectCanonicalStateSnapshots(packDirectory, snapshot);
+  const entry = snapshot.entries.find((item) => item.store_key === storeKey);
+  if (!entry || entry.status !== "verified" || !entry.archive_rel_path || !entry.sha256) {
+    throw new Error("canonical_state_restore_store_unverified");
+  }
+
+  const targetPath = resolveCanonicalStateStoreTargetPath(stateRootValue, storeKey);
+  for (const suffix of ["-journal", "-wal", "-shm"]) {
+    try {
+      await fs.lstat(`${targetPath}${suffix}`);
+      throw new Error("canonical_state_restore_target_busy");
+    } catch (error) {
+      if (error instanceof Error && error.message === "canonical_state_restore_target_busy") throw error;
+      if (!isMissing(error)) throw new Error("canonical_state_restore_target_unavailable");
+    }
+  }
+
+  const archivePath = join(packDirectory, entry.archive_rel_path);
+  const before = await digestFile(archivePath);
+  if (before.bytes !== entry.bytes || before.sha256 !== entry.sha256) {
+    throw new Error("canonical_state_restore_archive_changed");
+  }
+
+  let source: DatabaseSyncType | undefined;
+  try {
+    source = new DatabaseSync(archivePath, { readOnly: true });
+    if (!integrityCheck(source)) throw new Error("canonical_state_restore_archive_invalid");
+    await backup(source, targetPath);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("canonical_state_restore_")) throw error;
+    throw new Error("canonical_state_restore_write_failed");
+  } finally {
+    try { source?.close(); } catch { /* keep restore outcome */ }
+  }
+
+  const after = await digestFile(archivePath).catch(() => null);
+  if (!after || after.bytes !== entry.bytes || after.sha256 !== entry.sha256) {
+    throw new Error("canonical_state_restore_archive_changed");
+  }
+
+  let restored: DatabaseSyncType | undefined;
+  try {
+    restored = new DatabaseSync(targetPath, { readOnly: true });
+    if (!integrityCheck(restored)) throw new Error("canonical_state_restore_target_invalid");
+  } catch (error) {
+    if (error instanceof Error && error.message === "canonical_state_restore_target_invalid") throw error;
+    throw new Error("canonical_state_restore_target_invalid");
+  } finally {
+    try { restored?.close(); } catch { /* verification result is already fixed */ }
+  }
+  return { bytes: entry.bytes, sha256: entry.sha256 };
 }

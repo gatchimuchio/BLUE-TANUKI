@@ -2,9 +2,28 @@
 
 ## 次のBUILD_BATCH
 
-次は `QEB-03-E03.03-RECOVERY-SELECTIVE-STORE-RESTORE`。今回接続したscope照合は非権威診断であり、復旧作用へ直結させない。開始時に最新三点正本・適用AGENTS.md・現行指示・実装を再読し、owner L3、事前backup、選択storeの正確な対象、無関係state保護、曖昧／未検証時の停止をconsumer側で確認する。実環境へのrestore、C08.03、公開・出荷判断は対象外。
+次は `QEB-03-E03.03-RECOVERY-SELECTED-STORE-POST-RESTORE-OBSERVATION`。selected-store restoreの結果は仕事復旧や再開許可ではない。合成stateと合成履歴で、再起動後の読み取り専用観測が要求されたstoreだけの結果を照合し、変更・不一致・未確認は固定statusで残す。実state restore／実環境再起動、scope applicabilityの権威化、resume、C08.03、公開・出荷判断は対象外。
 
 次の作業前に最新版の三点正本と適用AGENTS.mdを読み直す。C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
+
+## 直近のBUILD_BATCH実績
+
+`QEB-03-E03.03-RECOVERY-SELECTIVE-STORE-RESTORE` は開始HEAD／`origin/main`=`e2fded682628aa1ea2b16d264b98cca4aa5454af`、開始worktree cleanで開始した。rev2.3三点正本、適用AGENTS.md、作業標準要領、現行指示、E03.03に関する現物を再読した。編集前のlocal recovery branch／remote backup tag二世代は現世代=`e2fded682628aa1ea2b16d264b98cca4aa5454af`、前世代=`79b7182326d9ec3efc79f26ae089db00a11143e3`で一致していた。
+
+固定された5 canonical store keyから一つだけを選ぶrestore consumerをRecovery toolとControl Centerへ接続した。選択storeのsnapshot manifest・archive digest・SQLite integrityを確認し、変更前backup packとstore snapshotを確保してから対象DBだけをSQLite online backupで置換する。実行直前に対象DBのbyte digestをpre-action snapshotと照合し、競合変更・sidecar・曖昧／未検証snapshotをfail-closedにする。既存full configured-files restoreはcanonical storeを適用しないまま維持した。HDS L3 targetにはbackup IDとselected store keyを含める。scope applicabilityは診断に留め、restore権限やjob identityに使わない。
+
+合成DBで、選択したOperation Plan storeが復元され、別のBroker DBと設定ファイルが不変であること、pre-action snapshotが存在することを確認した。未検証snapshotは状態変更・pre-action pack作成より前に拒否した。Control Centerは固定store選択を送り、他storeや未知storeを選択できない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway recovery surface／recovery tools／HDS Approval／WebChat focused tests | PASS、4 files／117 tests。selected store restore、無関係state不変、未検証snapshot拒否、固定引数、L3 targetを確認。 |
+| `pnpm typecheck`→`pnpm build` | PASS。15 workspace projects。 |
+| `pnpm hds:standalone` | PASS。Runtime Invariantsとnon-authority flagsを確認。 |
+| `pnpm smoke:serve` | PASS。stub WebChat応答、audit persistence、audit-dump chain検証。Recovery mutationは実行していない。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実state restore、実owner承認、実provider／credential、全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+E03.03／QEB-03=`BUILD_GAP`を維持する。selected storeだけの適用consumerは接続したが、job単位の復旧identity、store間atomicity、再起動後のselected-store結果照合、自動resumeは未接続。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。別repo、実業務作用、公開・出荷判断なし。
 
 ## 直前のBUILD_BATCH実績
 

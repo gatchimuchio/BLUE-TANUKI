@@ -29,6 +29,20 @@ describe("Recovery mutation tool boundary", () => {
     expect(normalizeRecoveryMutationArguments("recovery.restore", {
       confirm: "RESTORE",
     }, { latestBackupId: "2026-10-18.backup.abc" }).backup_id).toBe("2026-10-18.backup.abc");
+    expect(normalizeRecoveryMutationArguments("recovery.restore", {
+      backup_id: "2026-10-18.backup.abc",
+      store_key: "operation_plans",
+      confirm: "RESTORE",
+    })).toEqual({
+      backup_id: "2026-10-18.backup.abc",
+      store_key: "operation_plans",
+      confirm: "RESTORE",
+    });
+    expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
+      backup_id: "2026-10-18.backup.abc",
+      store_key: "unknown_store",
+      confirm: "RESTORE",
+    })).toThrow("invalid_store_key");
     expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
       backup_id: "latest",
       confirm: "RESTORE",

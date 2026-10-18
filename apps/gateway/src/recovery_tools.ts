@@ -7,6 +7,7 @@ import {
   restoreRecoveryBackup,
   type RecoveryActionResult,
 } from "./recovery_surface.js";
+import { CANONICAL_STATE_STORE_PATHS, type CanonicalStateStoreKey } from "./canonical_state_backup.js";
 
 export const RECOVERY_TOOL_NAMES = [
   "recovery.restore",
@@ -30,12 +31,18 @@ export function normalizeRecoveryMutationArguments(
   options: { readonly latestBackupId?: string | null } = {},
 ): Record<string, string> {
   if (!isRecord(raw)) throw new Error("invalid_recovery_request");
-  const allowedKeys = toolName === "recovery.restore" ? ["backup_id", "confirm"] : ["confirm"];
+  const allowedKeys = toolName === "recovery.restore" ? ["backup_id", "store_key", "confirm"] : ["confirm"];
   if (Object.keys(raw).some((key) => !allowedKeys.includes(key))) {
     throw new Error("invalid_recovery_request");
   }
   if (raw.confirm !== CONFIRMATION[toolName]) throw new Error("recovery_confirmation_required");
   if (toolName !== "recovery.restore") return { confirm: CONFIRMATION[toolName] };
+
+  const storeKey = raw.store_key;
+  if (storeKey !== undefined &&
+      (typeof storeKey !== "string" || !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === storeKey))) {
+    throw new Error("invalid_store_key");
+  }
 
   const requestedId = raw.backup_id;
   if (requestedId !== undefined && typeof requestedId !== "string") {
@@ -47,7 +54,11 @@ export function normalizeRecoveryMutationArguments(
   if (typeof backupId !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(backupId) || backupId === "latest") {
     throw new Error(backupId ? "invalid_backup_id" : "backup_not_found");
   }
-  return { backup_id: backupId, confirm: CONFIRMATION[toolName] };
+  return {
+    backup_id: backupId,
+    ...(typeof storeKey === "string" ? { store_key: storeKey } : {}),
+    confirm: CONFIRMATION[toolName],
+  };
 }
 
 export function createRecoveryMutationTools(env: NodeJS.ProcessEnv = process.env): readonly Tool[] {
@@ -59,6 +70,7 @@ export function createRecoveryMutationTools(env: NodeJS.ProcessEnv = process.env
       const args = normalizeRecoveryMutationArguments("recovery.restore", raw);
       const result = await invokeRecoverySafely(() => restoreRecoveryBackup(env, {
         backup_id: args.backup_id,
+        ...(args.store_key ? { store_key: args.store_key as CanonicalStateStoreKey } : {}),
         confirm: args.confirm,
       }));
       return operatorSafeRecoveryResult(result);
@@ -111,6 +123,11 @@ function operatorSafeRecoveryResult(result: RecoveryActionResult): Record<string
     status: result.status,
     ...(result.backup_id ? { backup_id: result.backup_id } : {}),
     ...(result.restored_backup_id ? { restored_backup_id: result.restored_backup_id } : {}),
+    ...(result.restored_store_key ? { restored_store_key: result.restored_store_key } : {}),
+    ...(result.restored_store_archive_digest ? { restored_store_archive_digest: result.restored_store_archive_digest } : {}),
+    ...(result.canonical_state_cross_store_atomic !== undefined
+      ? { canonical_state_cross_store_atomic: result.canonical_state_cross_store_atomic }
+      : {}),
     ...(result.restored_items_count !== undefined ? { restored_items_count: result.restored_items_count } : {}),
     ...(result.removed_paths_count !== undefined ? { removed_paths_count: result.removed_paths_count } : {}),
     ...(result.reset_keys ? { reset_keys: result.reset_keys } : {}),

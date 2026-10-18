@@ -444,10 +444,21 @@ ${CONTROL_CENTER_STYLE}    </style>
           <div class="status-grid">
             <input id="recovery-backup-id" type="text" autocomplete="off" placeholder="backup id or latest" />
             <button id="create-recovery-backup" type="button">Backup Now</button>
-            <button id="restore-recovery-backup" type="button" disabled>Request Restore Review</button>
+            <button id="restore-recovery-backup" type="button" disabled>Request full restore review</button>
             <button id="reset-recovery-provider" type="button" disabled>Request Provider Reset Review</button>
             <button id="reset-recovery-connector" type="button" disabled>Request Connector Reset Review</button>
             <button id="factory-reset-recovery" type="button" disabled>Request Factory Reset Review</button>
+          </div>
+          <div class="status-grid">
+            <label>Restore exactly one canonical store<select id="recovery-restore-store">
+              <option value="">Select a store</option>
+              <option value="j_control">J control ledger</option>
+              <option value="m_state">M state ledger</option>
+              <option value="broker">Broker execution ledger</option>
+              <option value="operation_plans">Operation Plan ledger</option>
+              <option value="cron_events">Cron event ledger</option>
+            </select></label>
+            <button id="restore-recovery-store" type="button" disabled>Request selected-store restore review</button>
           </div>
           <p id="recovery-action-guard">Recovery changes require owner L3 review. Backup and read-only inspection remain available.</p>
           <div class="status-grid">
@@ -478,7 +489,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="inspect-recovery-backup" type="button">最新backup packの整合性を読み取り検査</button>
             <span id="recovery-backup-inspection-status" class="badge warn">未確認</span>
           </div>
-          <p class="muted">manifest、pack内保存物、store別SQLite snapshotのdigestと整合性を読み取り検査します。snapshot間の原子的同時点は保証せず、Restore経路でcanonical stateを適用しません。復旧許可や仕事単位の復旧点を意味しません。</p>
+          <p class="muted">manifest、pack内保存物、store別SQLite snapshotのdigestと整合性を読み取り検査します。full Restoreはcanonical stateを適用しません。selected-store restoreはowner L3審査後に指定storeだけを適用し、実行直前のbackupを作成します。snapshot間の原子的同時点、仕事単位の復旧点、自動resumeは成立しません。</p>
           <h3>台帳別snapshot検査</h3>
           <div class="status-grid" aria-label="台帳別SQLite snapshot status">
             <div class="metric"><span>J制御台帳</span><span id="recovery-backup-store-j_control">未確認</span></div>

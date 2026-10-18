@@ -7,6 +7,8 @@ import {
   CANONICAL_STATE_STORE_PATHS,
   captureCanonicalStateSnapshots,
   inspectCanonicalStateSnapshots,
+  restoreCanonicalStateSnapshotStore,
+  resolveCanonicalStateStoreTargetPath,
   type CanonicalStateSnapshotEntryStatus,
   type CanonicalStateSnapshotInspection,
   type CanonicalStateSnapshotManifest,
@@ -129,6 +131,9 @@ export interface RecoveryActionResult {
   backup_id?: string;
   backup_manifest_path?: string;
   restored_backup_id?: string;
+  restored_store_key?: CanonicalStateStoreKey;
+  restored_store_archive_digest?: string;
+  canonical_state_cross_store_atomic?: false;
   restored_items_count?: number;
   removed_paths_count?: number;
   reset_keys?: readonly string[];
@@ -271,6 +276,7 @@ export interface RecoveryBackupOperationPlanInventory {
 
 export interface RestoreRecoveryOptions {
   backup_id?: string;
+  store_key?: CanonicalStateStoreKey;
   confirm?: string;
 }
 
@@ -1809,6 +1815,65 @@ export async function restoreRecoveryBackup(
   const id = options.backup_id ?? (await latestBackupId(env));
   if (!id) throw new Error("backup_not_found");
   const manifest = await readManifest(env, id);
+  if (options.store_key) {
+    const packDir = path.dirname(manifest.manifest_path);
+    const snapshot = manifest.canonical_state_snapshot;
+    if (!snapshot) throw new Error("canonical_state_snapshot_missing");
+    await inspectCanonicalStateSnapshots(packDir, snapshot);
+    const selected = snapshot.entries.find((entry) => entry.store_key === options.store_key);
+    if (!selected || selected.status !== "verified" || !selected.archive_rel_path || !selected.sha256) {
+      throw new Error("canonical_state_store_unverified");
+    }
+
+    const targetPath = resolveCanonicalStateStoreTargetPath(
+      env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+      options.store_key,
+    );
+    await runtimeSafeTarget(env, targetPath, "canonical_restore_target", { allow_exact: [targetPath] });
+    const targetExists = await fs.lstat(targetPath).then((stat) => {
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("canonical_state_restore_target_unavailable");
+      return true;
+    }).catch((error: unknown) => {
+      const code = error instanceof Error && "code" in error ? String(error.code) : "";
+      if (code === "ENOENT") return false;
+      throw error;
+    });
+
+    const preRestore = await createBackupManifest(env, "pre_restore");
+    const preSnapshot = preRestore.canonical_state_snapshot;
+    if (!preSnapshot) throw new Error("pre_restore_canonical_snapshot_missing");
+    const preRestorePackDir = path.dirname(preRestore.manifest_path);
+    await inspectCanonicalStateSnapshots(preRestorePackDir, preSnapshot);
+    const preEntry = preSnapshot.entries.find((entry) => entry.store_key === options.store_key);
+    const acceptableBefore = targetExists
+      ? preEntry?.status === "verified" || preEntry?.status === "captured_unverified"
+      : preEntry?.status === "not_present";
+    if (!acceptableBefore) throw new Error("pre_restore_store_unverified");
+    if (targetExists) {
+      if (!preEntry?.archive_rel_path || !preEntry.sha256) throw new Error("pre_restore_store_unverified");
+      const beforeRestore = await sha256Path(targetPath, "file").catch(() => null);
+      if (!beforeRestore || beforeRestore.sha256 !== preEntry.sha256 || beforeRestore.bytes !== preEntry.bytes) {
+        throw new Error("canonical_state_restore_target_changed");
+      }
+    }
+
+    const restored = await restoreCanonicalStateSnapshotStore(
+      env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+      packDir,
+      snapshot,
+      options.store_key,
+    );
+    return actionResult("restore", {
+      restored_backup_id: id,
+      restored_store_key: options.store_key,
+      restored_store_archive_digest: restored.sha256,
+      canonical_state_cross_store_atomic: false,
+      pre_action_backup_id: preRestore.backup_id,
+      pre_action_backup_manifest_path: preRestore.manifest_path,
+      next_safe_action: "Restart BLUE-TANUKI, then inspect the restored store and all cross-store residuals. Only this selected SQLite store was restored; snapshots are independent, cross-store atomicity is false, and job recovery or automatic resume is not implied.",
+    });
+  }
+
   await preflightRestoreManifest(env, manifest);
   const preRestore = await createBackupManifest(env, "pre_restore");
   const result = await restoreManifest(env, manifest);

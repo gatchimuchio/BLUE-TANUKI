@@ -776,7 +776,11 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Backup / Restore");
       expect(html).toContain('id="restore-recovery-backup" type="button" disabled');
       expect(html).toContain("Recovery changes require owner L3 review. Backup and read-only inspection remain available.");
-      expect(html).toContain("Request Restore Review");
+      expect(html).toContain("Request full restore review");
+      expect(html).toContain('id="recovery-restore-store"');
+      expect(html).toContain('option value="operation_plans"');
+      expect(html).toContain("Request selected-store restore review");
+      expect(html).toContain("restoreRecoveryStore");
       expect(html).toContain("item.target");
       expect(html).toContain("OpenRouter");
       expect(html).toContain("Composio");
@@ -925,6 +929,53 @@ describe("WebChatChannel — Control Center shell", () => {
     } finally {
       await ctx.teardown();
     }
+  });
+
+  it("submits exactly one fixed canonical store for owner L3 review", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function restoreRecoveryStore(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function resetRecoveryProvider", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const functionSource = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+
+    const run = async (storeKey: string) => {
+      const raw = await new Script(`
+        const elements = {
+          "recovery-restore-store": { value: ${JSON.stringify(storeKey)} },
+          "recovery-backup-id": { value: "backup-2026-10-18" },
+          "recovery-action-status": { textContent: "" },
+        };
+        let request = null;
+        const prompts = [];
+        const window = { confirm(message) { prompts.push(message); return true; } };
+        function byId(id) { return elements[id]; }
+        function setText(id, value) { elements[id].textContent = value; }
+        async function runRecoveryAction(path, body) { request = { path, body }; }
+        ${functionSource}
+        restoreRecoveryStore().then(() => JSON.stringify({ request, prompts, status: elements["recovery-action-status"].textContent }));
+      `).runInNewContext() as Promise<string>;
+      return JSON.parse(raw) as {
+        request: { path: string; body: Record<string, unknown> } | null;
+        prompts: string[];
+        status: string;
+      };
+    };
+
+    const valid = await run("operation_plans");
+    expect(valid).toMatchObject({
+      request: {
+        path: "/recovery/restore",
+        body: { confirm: "RESTORE", store_key: "operation_plans", backup_id: "backup-2026-10-18" },
+      },
+    });
+    expect(valid.prompts[0]).toContain("owner L3 review");
+    expect(valid.prompts[0]).toContain("Only this store will be selected");
+    expect(valid.prompts[0]).toContain("pre-action backup");
+    expect(valid.prompts[0]).toContain("Operation Plan ledger");
+    expect(await run("unknown_store")).toMatchObject({
+      request: null,
+      status: "select one verified store",
+    });
   });
 
   it("serves only the bundled Aotanu spritesheet assets", async () => {

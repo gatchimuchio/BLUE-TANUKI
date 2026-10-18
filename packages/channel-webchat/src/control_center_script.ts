@@ -1529,6 +1529,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ? "Submitting a request only queues the exact action for owner L3 review. No recovery change runs until the owner approves it in the approval queue."
           : "Recovery mutation status is unavailable.");
         byId("restore-recovery-backup").disabled = !restoreReviewAvailable;
+        byId("recovery-restore-store").setAttribute("data-review-available", restoreReviewAvailable ? "true" : "false");
+        byId("restore-recovery-store").disabled = !restoreReviewAvailable || !byId("recovery-restore-store").value;
         byId("reset-recovery-provider").disabled = !providerReviewAvailable;
         byId("reset-recovery-connector").disabled = !connectorReviewAvailable;
         byId("factory-reset-recovery").disabled = !factoryReviewAvailable;
@@ -2695,9 +2697,30 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function restoreRecoveryBackup() {
-        if (!window.confirm("Submit a restore request for owner L3 review? No recovery change runs until the owner approves it.")) return;
+        if (!window.confirm("Submit a full configured-files restore request for owner L3 review? No recovery change runs until the owner approves it.")) return;
         const backupId = byId("recovery-backup-id").value.trim();
         const body = { confirm: "RESTORE" };
+        if (backupId) body.backup_id = backupId;
+        await runRecoveryAction("/recovery/restore", body);
+      }
+
+      async function restoreRecoveryStore() {
+        const storeKey = byId("recovery-restore-store").value;
+        const labels = {
+          j_control: "J control ledger",
+          m_state: "M state ledger",
+          broker: "Broker execution ledger",
+          operation_plans: "Operation Plan ledger",
+          cron_events: "Cron event ledger"
+        };
+        if (!Object.prototype.hasOwnProperty.call(labels, storeKey)) {
+          setText("recovery-action-status", "select one verified store");
+          return;
+        }
+        const backupId = byId("recovery-backup-id").value.trim();
+        const backupLabel = backupId || "latest backup";
+        if (!window.confirm("Submit " + labels[storeKey] + " from " + backupLabel + " for owner L3 review? Only this store will be selected; no change runs until approval and a pre-action backup.")) return;
+        const body = { confirm: "RESTORE", store_key: storeKey };
         if (backupId) body.backup_id = backupId;
         await runRecoveryAction("/recovery/restore", body);
       }
@@ -3164,6 +3187,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       });
       byId("restore-recovery-backup").addEventListener("click", function () {
         restoreRecoveryBackup().catch(function (error) {
+          setText("recovery-action-status", "error");
+          byId("recovery-action-status").className = "badge bad";
+          setText("recovery-json", error.message);
+        });
+      });
+      byId("recovery-restore-store").addEventListener("change", function () {
+        byId("restore-recovery-store").disabled =
+          byId("recovery-restore-store").getAttribute("data-review-available") !== "true" ||
+          !byId("recovery-restore-store").value;
+      });
+      byId("restore-recovery-store").addEventListener("click", function () {
+        restoreRecoveryStore().catch(function (error) {
           setText("recovery-action-status", "error");
           byId("recovery-action-status").className = "badge bad";
           setText("recovery-json", error.message);

@@ -296,6 +296,116 @@ describe("buildRecoverySnapshot", () => {
     }
   }, 15_000);
 
+  it("restores only the selected verified canonical store after a pre-action snapshot", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-selective-store-restore-"));
+    let liveSelected: DatabaseSyncType | undefined;
+    try {
+      const envFile = path.join(root, "product.env");
+      const recoveryDir = path.join(root, "recovery");
+      const stateRoot = path.join(root, "state");
+      await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+      const selectedPath = await createCanonicalDatabase(
+        stateRoot,
+        path.join("operation-plans", "j-state.sqlite"),
+        "snapshot-state",
+      );
+      const unrelatedPath = await createCanonicalDatabase(
+        stateRoot,
+        path.join("execution-intents", "executor.sqlite"),
+        "unrelated-state",
+      );
+      const unrelatedBefore = await readFile(unrelatedPath);
+      const env = {
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+        BLUE_TANUKI_STATE_ROOT: stateRoot,
+      };
+      const backup = await createRecoveryBackup(env);
+      await writeFile(envFile, "LLM_BACKEND=changed\n", "utf8");
+      liveSelected = new DatabaseSync(selectedPath);
+      liveSelected.exec("DELETE FROM snapshot_fixture; INSERT INTO snapshot_fixture (value) VALUES ('current-state')");
+
+      const restored = await restoreRecoveryBackup(env, {
+        backup_id: backup.backup_id,
+        store_key: "operation_plans",
+        confirm: "RESTORE",
+      });
+
+      expect(liveSelected.prepare("SELECT value FROM snapshot_fixture").get()).toEqual({ value: "snapshot-state" });
+      expect(await readFile(unrelatedPath)).toEqual(unrelatedBefore);
+      expect(await readFile(envFile, "utf8")).toBe("LLM_BACKEND=changed\n");
+      expect(restored).toMatchObject({
+        action: "restore",
+        restored_backup_id: backup.backup_id,
+        restored_store_key: "operation_plans",
+        canonical_state_cross_store_atomic: false,
+      });
+      expect(restored.restored_store_archive_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(restored.pre_action_backup_id).toBeTruthy();
+      const preActionManifest = JSON.parse(await readFile(
+        path.join(recoveryDir, restored.pre_action_backup_id!, "manifest.json"),
+        "utf8",
+      )) as { canonical_state_snapshot: { entries: Array<{ store_key: string; status: string }> } };
+      expect(preActionManifest.canonical_state_snapshot.entries.find((entry) => entry.store_key === "operation_plans")?.status)
+        .toBe("verified");
+      expect(JSON.stringify(restored)).not.toContain(selectedPath);
+      expect(JSON.stringify(restored)).not.toContain(unrelatedPath);
+    } finally {
+      try { liveSelected?.close(); } catch { /* test cleanup */ }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an unverified selected store before creating a pre-action pack or changing state", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-unverified-store-restore-"));
+    try {
+      const envFile = path.join(root, "product.env");
+      const recoveryDir = path.join(root, "recovery");
+      const stateRoot = path.join(root, "state");
+      await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+      const selectedPath = await createCanonicalDatabase(
+        stateRoot,
+        path.join("operation-plans", "j-state.sqlite"),
+        "current-state",
+      );
+      const env = {
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+        BLUE_TANUKI_STATE_ROOT: stateRoot,
+      };
+      const backup = await createRecoveryBackup(env);
+      const manifestPath = backup.backup_manifest_path!;
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+        canonical_state_snapshot: { entries: Array<Record<string, unknown>> };
+      };
+      const entry = manifest.canonical_state_snapshot.entries.find((item) => item.store_key === "operation_plans")!;
+      const archiveRelPath = String(entry.archive_rel_path);
+      await rm(path.join(path.dirname(manifestPath), archiveRelPath), { force: true });
+      Object.assign(entry, {
+        status: "snapshot_failed",
+        archive_rel_path: null,
+        bytes: 0,
+        sha256: null,
+        integrity_check: "not_run",
+      });
+      const raw = `${JSON.stringify(manifest, null, 2)}\n`;
+      await writeFile(manifestPath, raw, "utf8");
+      await writeFile(`${manifestPath}.sha256`, `${createHash("sha256").update(raw).digest("hex")}  manifest.json\n`, "utf8");
+      const packsBefore = await readdir(recoveryDir);
+
+      await expect(restoreRecoveryBackup(env, {
+        backup_id: backup.backup_id,
+        store_key: "operation_plans",
+        confirm: "RESTORE",
+      })).rejects.toThrow("canonical_state_store_unverified");
+
+      expect(readCanonicalDatabase(selectedPath)).toEqual(["current-state"]);
+      expect(await readdir(recoveryDir)).toEqual(packsBefore);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("inspects recovery pack integrity without changing the pack and reports tampering without details", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-inspection-"));
     try {

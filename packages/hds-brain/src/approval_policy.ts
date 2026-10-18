@@ -398,9 +398,12 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
     }
     if (op === "recovery.restore") {
       const backupId = typeof args.backup_id === "string" ? args.backup_id : undefined;
+      const storeKey = typeof args.store_key === "string" ? args.store_key : undefined;
       return {
         target_scope: "task_type",
-        target: backupId ? `recovery.restore:${backupId}` : "recovery.restore:missing-backup-id",
+        target: backupId
+          ? storeKey ? `recovery.restore:${backupId}:store:${storeKey}` : `recovery.restore:${backupId}`
+          : "recovery.restore:missing-backup-id",
       };
     }
     if (op === "recovery.reset_provider") {
