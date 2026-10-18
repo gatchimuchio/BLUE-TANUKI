@@ -48,7 +48,7 @@ export interface RecoveryUpdateResidual {
 }
 
 export interface GatewayRecoveryInspectionReport {
-  readonly schema_version: 7;
+  readonly schema_version: 8;
   readonly surface: "recovery_inspection";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present";
@@ -159,7 +159,7 @@ export interface RecoveryLedgerBoundaryObservation {
 }
 
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 6;
+  readonly schema_version: 7;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -454,12 +454,14 @@ function projectOperationPlanSummaries(
       continue;
     }
     const planIdDigest = fixedDigest(item.plan_id_digest);
+    const requestScopeDigest = item.request_scope_digest === null ? null : fixedDigest(item.request_scope_digest);
     const integrity = fixedEnum(item.integrity, ["verified", "residuals_present"] as const);
     const planRecordCount = item.plan_record_count;
     const bindingCount = item.binding_count;
     const residualBindingCount = item.residual_binding_count;
     const omittedBindingCount = item.omitted_binding_count;
-    if (!planIdDigest || !integrity || !Number.isSafeInteger(planRecordCount) || (planRecordCount as number) < 1 ||
+    if (!planIdDigest || (item.request_scope_digest !== null && !requestScopeDigest) || !integrity ||
+        !Number.isSafeInteger(planRecordCount) || (planRecordCount as number) < 1 ||
         !Number.isSafeInteger(bindingCount) || (bindingCount as number) < 0 ||
         !Number.isSafeInteger(residualBindingCount) || (residualBindingCount as number) < 0 ||
         (residualBindingCount as number) > (bindingCount as number) ||
@@ -470,6 +472,7 @@ function projectOperationPlanSummaries(
     }
     rows.push({
       plan_id_digest: planIdDigest,
+      request_scope_digest: requestScopeDigest,
       integrity,
       plan_record_count: planRecordCount as number,
       binding_count: bindingCount as number,
@@ -603,10 +606,12 @@ function projectDocumentOrganizationCheckpointSummary(value: unknown): {
   for (const input of inputRecords) {
     if (!isRecord(input)) return { summary: unknown, valid: false };
     const checkpointRefDigest = input.checkpoint_ref_digest === null ? null : fixedDigest(input.checkpoint_ref_digest);
+    const requestScopeDigest = input.request_scope_digest === null ? null : fixedDigest(input.request_scope_digest);
     const integrity = fixedEnum(input.integrity, ["verified", "residuals_present"] as const);
     const recordReason = input.reason === null ? null : fixedEnum(input.reason, recordReasons);
     const checkpointStatus = input.checkpoint_status === null ? null : fixedEnum(input.checkpoint_status, checkpointStatuses);
-    if ((input.checkpoint_ref_digest !== null && !checkpointRefDigest) || !integrity ||
+    if ((input.checkpoint_ref_digest !== null && !checkpointRefDigest) ||
+        (input.request_scope_digest !== null && !requestScopeDigest) || !integrity ||
         (input.reason !== null && !recordReason) || (input.checkpoint_status !== null && !checkpointStatus) ||
         (integrity === "verified" && (recordReason !== null || checkpointStatus === null || checkpointRefDigest === null)) ||
         (integrity === "residuals_present" && recordReason === null) ||
@@ -614,6 +619,7 @@ function projectDocumentOrganizationCheckpointSummary(value: unknown): {
     if (checkpointRefDigest) seenReferences.add(checkpointRefDigest);
     records.push({
       checkpoint_ref_digest: checkpointRefDigest,
+      request_scope_digest: requestScopeDigest,
       integrity,
       reason: recordReason,
       checkpoint_status: checkpointStatus,
@@ -654,7 +660,7 @@ function projectDocumentOrganizationCheckpointSummary(value: unknown): {
 export function projectGatewayRecoveryInspectionForOperator(value: unknown): GatewayRecoveryOperatorProjection {
   const source = isRecord(value) ? value : {};
   const ledgers = isRecord(source.ledgers) ? source.ledgers : {};
-  const reportShapeValid = source.schema_version === 7 && source.surface === "recovery_inspection" && source.mode === "read_only";
+  const reportShapeValid = source.schema_version === 8 && source.surface === "recovery_inspection" && source.mode === "read_only";
   const sourceStatus = fixedEnum(source.status, ["verified", "residuals_present"] as const);
   const cronEvents = projectCronEventSummary(ledgers.cron_events);
   const cronLedgerStatus = fixedEnum(isRecord(ledgers.cron_events) ? ledgers.cron_events.status : null, CRON_RECOVERY_STATUSES);
@@ -714,7 +720,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
   const updates = projectOperatorUpdateResiduals(updateSources, boundaryValid);
   const ledgerStatuses = RECOVERY_LEDGER_STATUSES;
   return {
-    schema_version: 6,
+    schema_version: 7,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -923,7 +929,7 @@ export function inspectGatewayRecoveryState(
     !hasHardResidual && operationPlanCorrelationResidualCount === 0 && operationPlanMemoryLinkResidualCount === 0 &&
     operationPlans.omitted_binding_count === 0 && cronApprovalCorrelationResidualCount === 0;
   return {
-    schema_version: 7,
+    schema_version: 8,
     surface: "recovery_inspection",
     mode: "read_only",
     status: checkpointVerified ? "verified" : "residuals_present",

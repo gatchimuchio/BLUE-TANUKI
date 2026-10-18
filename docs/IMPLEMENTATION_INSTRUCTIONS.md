@@ -1,8 +1,32 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF309F77BABACC56796A1893FE77`、Codex施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`、作業標準要領、現物、active対象要求を今回も再読した。今回開始HEAD／`origin/main`=`e7c1528c10934ced7b0d082a8ea9b4991f14db30`、worktree clean。編集前local復旧branch／tagとremote backup tagは現世代=`e7c1528c10934ced7b0d082a8ea9b4991f14db30`、前世代=`e75ea1eb20cb586d189996b400398c7f66b050b9`で一致。復旧ref移行状態=`MIGRATION_COMPLETE`。ownerは製品開発を続行するよう明示済み。C08.03実provider試験は保留、別repo変更・実業務作用・公開行為・出荷判断はこの委任外。
+2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77`、Codex施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`、作業標準要領、現物、active対象要求を今回も再読した。今回開始HEAD／`origin/main`=`32b8a67c7a141b72dd56ebd18a120fbf569df6e5`、worktree clean。編集前local復旧branch／tagとremote backup tagは現世代=`32b8a67c7a141b72dd56ebd18a120fbf569df6e5`、前世代=`e7c1528c10934ced7b0d082a8ea9b4991f14db30`で一致。復旧ref移行状態=`MIGRATION_COMPLETE`。ownerの製品開発続行指示を維持する。C08.03実provider試験は保留、別repo変更・実業務作用・公開行為・出荷判断はこの委任外。
 
 ## 今回のBUILD_BATCH
+
+QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-INBOUND-REQUEST-RECOVERY-SCOPE`。関係単位=E03.03「破損範囲の隔離復旧」、E03.02「未決作用・M pendingの回復」。開始HEAD／`origin/main`=`32b8a67c7a141b72dd56ebd18a120fbf569df6e5`、開始worktree clean。編集前にlocal復旧branch二世代とremote backup tag二世代を現世代=`32b8a67c7a141b72dd56ebd18a120fbf569df6e5`、前世代=`e7c1528c10934ced7b0d082a8ea9b4991f14db30`へ回転・照合した。
+
+目的は、実装上で同一と確認できるInboundRequest.idをOperation Planと文書整理checkpointの読取専用復旧検査へ接続すること。Operation Planは`operation-request:<InboundRequest.id>`、文書整理checkpointは`InboundRequest.id`を含むtask/request identityを保存する。raw IDではなく、保存キーと共通のchannel／actor digestも含めたドメイン分離`request_scope_digest`で両consumerを結び、Operation PlanのBroker／delivery／M／Cron依存とcheckpoint状態を同じrequest範囲として操作者が照合できるようにする。
+
+対象は、両producerのidentity変換の厳密な検査、Operation Plan summary／dependency scopeとdocument checkpoint recordへのdigest-only相関、Gateway/operator projectionと`--recovery-inspect`への接続、Control Centerの既存projectionでの表示、synthetic fixtureによる一致・不一致・不正・raw ID非露出の確認。identity形状・整合性が検証できない記録はrequest scopeへ結ばず未分類残差として残す。対象外は永続schema変更、request/task IDの新設、document checkpointと他台帳の未確認相関、restore point判定・restore／resume・Approval／HDS／権限変更、外部作用、C08.03 live/provider、別repo、公開・出荷判断。`request_scope_digest`は診断相関専用で、task/job identity・recoverability・権限を意味しない。`used_for_authority=false`、`may_execute=false`、`external_backup_restore_point="not_examined"`を維持する。
+
+最小確認は、同一InboundRequest.idからOperation Plan／文書checkpointに同じdigestが出ること、prefix不一致・構造不正・checkpoint integrity不一致を誤相関しないこと、投影・CLI・Control Centerにraw request/task IDが出ないこと、読取検査でstore bytesが変わらないこと。対象test、`pnpm typecheck`→`pnpm build`、Control Center script構文、`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check`を実行する。全suite、credential/live/provider、実復旧、5OS実機、QE_QC／QE_QAは対象外。
+
+## 今回の実績
+
+共有utilityでcheckpoint storeと同じchannel／actor digestを計算し、`blue-tanuki.inbound-request-scope.v1`へInboundRequest.idと共にdomain-separated SHA-256化した。Operation Planの厳密な`operation-request:` prefixと、完全検証済みdocument checkpointのtask/request bindingから同じ`request_scope_digest`を導出した。plan summary／dependency scopeとcheckpoint recordへ通し、Gateway recovery report schema v8、operator projection schema v7、CLI、Control Centerへdigest-onlyで接続した。prefix不一致、計画revision不整合、checkpoint integrity不整合はscopeへ結ばず`null`／unlinkedのままにする。
+
+| 限定確認 | 結果 |
+|---|---|
+| recovery inspection／Operation Plan／document checkpoint／WebChat Control Center focused tests | PASS、4 files／105 tests。同一InboundRequest.idのdigest一致、未リンク・破損境界、raw ID非露出、checkpoint DB bytes不変を確認。 |
+| `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| build後Control Center script構文 | PASS、配布scriptをFunction構文解析。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 全suite、credential/live/provider、実復旧、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+request scopeはInboundRequest由来の診断相関でありtask/job identity、依存隔離の実操作、復旧可能性、restore point、権限ではない。未検証・壊れた行のscopeは不明のまま。E03.03=`BUILD_GAP`を維持し、独立restore pointとguarded selective recoveryを未接続として残す。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。
+
+## 前回のBUILD_BATCH
 
 QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-DOCUMENT-ORGANIZATION-CHECKPOINT-INSPECTION`。開始HEAD／`origin/main`=`e7c1528c10934ced7b0d082a8ea9b4991f14db30`、開始worktree clean。編集前のlocal復旧branch／tagおよびremote backup tag二世代を照合済み。
 
@@ -12,7 +36,7 @@ QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-DOCUMENT-ORGANIZATION-CHECKPOIN
 
 最小確認は、read-only接続・sidecar/schema/SQLite異常のfail-closed、行別digest／JSON整合の分類、上限超過の未観測、無関係行への非波及、元DB bytes不変、CLI／operator projectionの固定enum・件数・digest境界と不正report拒否。続けて対象test、`pnpm typecheck`→`pnpm build`、Control Center script構文、`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check`を実行する。全suite、credential/live/provider、実復旧、5OS実機、QE_QC／QE_QAは対象外。
 
-## 今回の実績
+## 前回の実績
 
 `inspectDocumentOrganizationCheckpointLedger`を追加し、既存`document_organization_checkpoints`をread-onlyで検査してGateway recovery report schema v7へ接続した。operator projection schema v6、`--recovery-inspect`、Control Centerへdigest-onlyの行別integrity、固定reason/status、集計数を渡す。行上限128、schema／SQLite異常、sidecar、digest／JSON／shape／identity不整合は未確認・残差として閉じ、Control Centerの重複digest・件数不整合・欠落配列も境界不正として拒否する。read-only接続前後のDB bytes不変とmissing rootを作らないことを確認した。
 

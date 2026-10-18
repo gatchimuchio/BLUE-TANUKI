@@ -45,6 +45,10 @@ describe("read-only document organization checkpoint recovery inspection", () =>
       ],
     });
     expect(inspection.records.every((record) => /^[a-f0-9]{64}$/.test(record.checkpoint_ref_digest ?? ""))).toBe(true);
+    expect(new Set(inspection.records.map((record) => record.request_scope_digest))).toEqual(new Set([
+      sha256(`blue-tanuki.inbound-request-scope.v1\0${sha256("3:cli|17:PRIVATE_ACTOR_ONE")}\0PRIVATE_REQUEST_ONE`),
+      sha256(`blue-tanuki.inbound-request-scope.v1\0${sha256("3:cli|17:PRIVATE_ACTOR_TWO")}\0PRIVATE_REQUEST_TWO`),
+    ]));
     expect(await readFile(databasePath)).toEqual(before);
     const serialized = JSON.stringify(inspection);
     for (const value of ["PRIVATE_ACTOR_ONE", "PRIVATE_ACTOR_TWO", "PRIVATE_REQUEST_ONE", "PRIVATE_REQUEST_TWO", "PRIVATE_SOURCE_ONE", "PRIVATE_SOURCE_TWO"]) {
@@ -98,7 +102,7 @@ describe("read-only document organization checkpoint recovery inspection", () =>
     expect(inspection.residual_checkpoint_count).toBe(1);
     expect(inspection.unresolved_checkpoint_count).toBe(1);
     expect(inspection.records.filter((record) => record.integrity === "residuals_present")).toMatchObject([
-      { integrity: "residuals_present", reason: "checkpoint_digest_mismatch", checkpoint_status: null },
+      { integrity: "residuals_present", reason: "checkpoint_digest_mismatch", checkpoint_status: null, request_scope_digest: null },
     ]);
     expect(await readFile(databasePath)).toEqual(beforeInspection);
     const serialized = JSON.stringify(inspection);

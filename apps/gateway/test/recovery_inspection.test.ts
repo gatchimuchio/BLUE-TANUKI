@@ -362,6 +362,7 @@ describe("Gateway recovery operator projection", () => {
     } as const;
     const planSummary = {
       plan_id_digest: "a".repeat(64),
+      request_scope_digest: null,
       integrity: "residuals_present",
       plan_record_count: 1,
       binding_count: 1,
@@ -369,7 +370,7 @@ describe("Gateway recovery operator projection", () => {
       omitted_binding_count: 0,
     } as const;
     const report = {
-      schema_version: 7,
+      schema_version: 8,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -414,7 +415,7 @@ describe("Gateway recovery operator projection", () => {
       surface: "recovery_inspection_operator",
       mode: "read_only",
       status: "residuals_present",
-      schema_version: 6,
+      schema_version: 7,
       ledgers: { j: "verified", m: "projection_mismatch", broker: "verified", operation_plans: "residuals_present", document_organization_checkpoints: "verified" },
       ledger_boundaries: {
         j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
@@ -437,6 +438,7 @@ describe("Gateway recovery operator projection", () => {
       omitted_operation_plan_correlation_count: 0,
       plan_dependency_scopes: [{
         plan_id_digest: "a".repeat(64),
+        request_scope_digest: null,
         integrity: "residuals_present",
         plan_record_count: 1,
         binding_count: 1,
@@ -465,6 +467,7 @@ describe("Gateway recovery operator projection", () => {
   it("keeps downstream delivery evidence unobserved when the Broker link is unavailable or absent", () => {
     const plan = {
       plan_id_digest: "a".repeat(64),
+      request_scope_digest: null,
       integrity: "verified",
       plan_record_count: 1,
       binding_count: 1,
@@ -522,6 +525,7 @@ describe("Gateway recovery operator projection", () => {
     const update = { update_id_digest: "e".repeat(64), disposition: "blocked_j" };
     const omittedPlanSummary = {
       plan_id_digest: "a".repeat(64),
+      request_scope_digest: null,
       integrity: "verified",
       plan_record_count: 1,
       binding_count: 201,
@@ -530,7 +534,7 @@ describe("Gateway recovery operator projection", () => {
     } as const;
     const inspectedRows = Array.from({ length: 200 }, () => row);
     const capped = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 7,
+      schema_version: 8,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -562,7 +566,7 @@ describe("Gateway recovery operator projection", () => {
     expect(capped.omitted_update_residual_count).toBe(1);
 
     const invalid = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 7,
+      schema_version: 8,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "verified",
@@ -587,7 +591,7 @@ describe("Gateway recovery operator projection", () => {
 
   it("hides inconsistent or unavailable ledger positions instead of presenting an empty recovery boundary", () => {
     const projection = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 7,
+      schema_version: 8,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -617,7 +621,7 @@ describe("Gateway recovery operator projection", () => {
 
   it("invalidates the entire operator boundary when Cron summary counts do not reconcile", () => {
     const projection = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 7,
+      schema_version: 8,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "verified",
@@ -640,7 +644,7 @@ describe("Gateway recovery operator projection", () => {
 
   it("invalidates the operator boundary when the Cron correlation residual count disagrees with its rows", () => {
     const projection = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 7,
+      schema_version: 8,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",

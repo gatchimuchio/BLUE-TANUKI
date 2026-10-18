@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { DocumentOrganizationCoordinator, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import {
   OperationPlanCheckpointSchema,
   type ExecutionAdmission,
@@ -14,6 +14,7 @@ import {
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
+import { DocumentOrganizationCheckpointStore } from "../src/document_organization_checkpoint_store.js";
 import { inspectGatewayRecoveryState, projectGatewayRecoveryInspectionForOperator } from "../src/recovery_inspection.js";
 
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -215,6 +216,7 @@ describe("J OperationPlan recovery inspection", () => {
         residual_dependencies: [],
       }),
     ]));
+    expect(report.plan_dependency_scopes.find((scope) => scope.plan_id_digest === cleanPlanDigest)?.request_scope_digest).toBeNull();
     expect(report.external_backup_restore_point).toBe("not_examined");
     expect(report.used_for_authority).toBe(false);
     expect(report.may_execute).toBe(false);
@@ -226,6 +228,49 @@ describe("J OperationPlan recovery inspection", () => {
       expect(serializedReport).not.toContain(secret);
       expect(serializedProjection).not.toContain(secret);
     }
+  });
+
+  it("correlates a verified plan and document checkpoint by the exact inbound request scope digest", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-request-scope-"));
+    const { stateRoot } = await createPlanState(temporaryRoot, 1);
+    const requestId = "private-request-id";
+    const source = "private-document-source";
+    const fileRoot = path.join(temporaryRoot, "files");
+    const checkpointPath = path.join(fileRoot, "document-organization", "j-checkpoints.sqlite");
+    const checkpoints = new DocumentOrganizationCheckpointStore(checkpointPath);
+    checkpoints.getOrCreate({
+      channel: "webchat",
+      actor: "private-owner",
+      source_sha256: sha256(source),
+    }, new DocumentOrganizationCoordinator({
+      task_id: `document-organization:${requestId}`,
+      request_id: requestId,
+      source_text: source,
+    }).checkpoint());
+    checkpoints.close();
+    const checkpointBefore = await readFile(checkpointPath);
+
+    const report = inspectGatewayRecoveryState({
+      BLUE_TANUKI_STATE_ROOT: stateRoot,
+      BLUE_TANUKI_FILE_ROOT: fileRoot,
+    });
+    const actorDigest = sha256(`7:webchat|13:private-owner`);
+    const expectedScopeDigest = sha256(`blue-tanuki.inbound-request-scope.v1\0${actorDigest}\0${requestId}`);
+    const planScope = report.plan_dependency_scopes[0];
+    const documentRecord = report.ledgers.document_organization_checkpoints.records[0];
+    expect(planScope?.request_scope_digest).toBe(expectedScopeDigest);
+    expect(documentRecord?.request_scope_digest).toBe(expectedScopeDigest);
+    expect(report.used_for_authority).toBe(false);
+    expect(report.may_execute).toBe(false);
+    const projection = projectGatewayRecoveryInspectionForOperator(report);
+    expect(projection.boundary_valid).toBe(true);
+    expect(projection.plan_dependency_scopes[0]?.request_scope_digest).toBe(expectedScopeDigest);
+    expect(projection.document_organization_checkpoint_summary.records[0]?.request_scope_digest).toBe(expectedScopeDigest);
+    for (const value of [requestId, `operation-request:${requestId}`, `document-organization:${requestId}`, source, "private-owner"]) {
+      expect(JSON.stringify(report)).not.toContain(value);
+      expect(JSON.stringify(projection)).not.toContain(value);
+    }
+    expect(await readFile(checkpointPath)).toEqual(checkpointBefore);
   });
 
   it("refuses an operation-plan database with SQLite sidecars without opening or changing it", async () => {
@@ -386,7 +431,7 @@ function planFixture(bindingCount: number): OperationPlan {
   return {
     version: "operation-core.v1",
     plan_id: "private-plan-id",
-    request_id: "private-request-id",
+    request_id: "operation-request:private-request-id",
     state: "planned",
     steps,
     rollback: { available: false },

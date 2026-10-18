@@ -85,6 +85,8 @@ C01～C08.02、D01.01～D01.02などは現行Gitに局所成果を持つが、AG
 
 2026-10-18のQEB-03-E01.01-CRON-EVENT-IDENTITY-CURSORでは、承認済みRuntimeScheduleのCron発火にsource／予定時刻由来の安定event IDを付け、Gateway private SQLite inbox/outbox cursorへdigestとconsumer状態を保存する。重複・逆順・payload衝突を識別し、未確定consumerを自動再実行せず、同一sourceの呼出しを直列化した。これはE01.01のBLUE Cron部分接続であり、durable job状態、再起動後の未決outbox復旧、全channel共通inbox、catch-up、E01.01全体の成立は未確認のまま`BUILD_GAP`。
 
+2026-10-18の`QEB-03-E03.03-INBOUND-REQUEST-RECOVERY-SCOPE`では、Operation Planの`operation-request:<InboundRequest.id>`と検証済み文書整理checkpointの同じInboundRequest.idを、checkpoint保存キーと共通のchannel／actor digestも含むdomain-separated `request_scope_digest`でread-only復旧検査へ結んだ。Gateway/operator report、CLI、Control Centerへdigestのみを表示し、identity不一致や破損行は未リンクで残す。これはrequest範囲の診断相関で、task/job復旧権限やrestore pointではない。独立restore pointとguarded selective recoveryが未接続のためE03.03は`BUILD_GAP`。
+
 ## 旧RCのP13と日本語基底J系列
 
 旧v1.0 RCのP1–P12とP13は独立した出荷履歴・境界。version=1.0.0-rc.1、P13=PENDING_OWNER_GO、public_claim_allowed=false。必要な実機、GA、release bundle、strict日本語基底とowner GOの条件は維持し、旧RCの局所PASSを新AGI構成の品質へ転用しない。

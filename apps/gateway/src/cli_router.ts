@@ -112,7 +112,7 @@ async function runRecoveryInspectCli(): Promise<void> {
       writeStdout(`plan=${correlation.plan_id_digest} step=${correlation.step_id_digest} binding=${correlation.status}/${correlation.binding_integrity} broker=${correlation.broker_correlation} delivery=${correlation.delivery_correlation} memory=${correlation.memory_correlation} cron_approval=${correlation.cron_approval_correlation}${correlation.memory_update_id_digest ? ` update=${correlation.memory_update_id_digest}` : ""}`);
     }
     for (const scope of report.plan_dependency_scopes) {
-      writeStdout(`plan_scope=${scope.plan_id_digest} status=${scope.status} bindings=${scope.inspected_binding_count}/${scope.binding_count} omitted=${scope.omitted_binding_count} residual_dependencies=${scope.residual_dependencies.join(",") || "none"} unobserved_dependencies=${scope.unobserved_dependencies.join(",") || "none"}`);
+      writeStdout(`plan_scope=${scope.plan_id_digest} request_scope=${scope.request_scope_digest ?? "unlinked"} status=${scope.status} bindings=${scope.inspected_binding_count}/${scope.binding_count} omitted=${scope.omitted_binding_count} residual_dependencies=${scope.residual_dependencies.join(",") || "none"} unobserved_dependencies=${scope.unobserved_dependencies.join(",") || "none"}`);
     }
     writeStdout(`Replay checkpoint: ${report.replay_checkpoint?.kind ?? "not confirmed"}`);
     writeStdout(`External backup restore point: ${report.external_backup_restore_point}`);
@@ -123,7 +123,7 @@ async function runRecoveryInspectCli(): Promise<void> {
     const checkpoints = report.ledgers.document_organization_checkpoints;
     writeStdout(`Document organization checkpoints: ${checkpoints.status}; records=${checkpoints.checkpoint_count ?? "unavailable"}; verified=${checkpoints.verified_checkpoint_count ?? "unavailable"}; residual=${checkpoints.residual_checkpoint_count ?? "unavailable"}; omitted=${checkpoints.omitted_checkpoint_count ?? "unavailable"}; unresolved=${checkpoints.unresolved_checkpoint_count ?? "unavailable"}`);
     for (const checkpoint of checkpoints.records) {
-      writeStdout(`checkpoint=${checkpoint.checkpoint_ref_digest ?? "unidentified"} integrity=${checkpoint.integrity} reason=${checkpoint.reason ?? "none"} recorded_status=${checkpoint.checkpoint_status ?? "unknown"}`);
+      writeStdout(`checkpoint=${checkpoint.checkpoint_ref_digest ?? "unidentified"} request_scope=${checkpoint.request_scope_digest ?? "unlinked"} integrity=${checkpoint.integrity} reason=${checkpoint.reason ?? "none"} recorded_status=${checkpoint.checkpoint_status ?? "unknown"}`);
     }
     writeStdout(`Document organization checkpoint residuals: ${report.document_organization_checkpoint_residual_count}`);
     for (const residual of report.update_residuals) {

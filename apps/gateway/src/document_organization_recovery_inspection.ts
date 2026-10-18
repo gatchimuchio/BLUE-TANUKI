@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { validateDocumentOrganizationCheckpointShape } from "@blue-tanuki/hds-brain";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
+import { recoveryRequestScopeDigest } from "./recovery_request_scope.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -26,6 +27,7 @@ export type DocumentOrganizationCheckpointLedgerReason =
 
 export interface DocumentOrganizationCheckpointRecordInspection {
   readonly checkpoint_ref_digest: string | null;
+  readonly request_scope_digest: string | null;
   readonly integrity: "verified" | "residuals_present";
   readonly reason: "row_shape_invalid" | "checkpoint_digest_mismatch" | "checkpoint_json_invalid" |
     "checkpoint_shape_invalid" | "checkpoint_identity_mismatch" | null;
@@ -145,6 +147,7 @@ function inspectRow(row: CheckpointRow): DocumentOrganizationCheckpointRecordIns
     : null;
   let reason: DocumentOrganizationCheckpointRecordInspection["reason"] = null;
   let checkpointStatus: DocumentOrganizationCheckpointStatus | null = null;
+  let requestScopeDigest: string | null = null;
   if (referenceDigest === null || typeof row.status !== "string" || !CHECKPOINT_STATUSES.includes(row.status as DocumentOrganizationCheckpointStatus) ||
       typeof row.checkpoint_json !== "string" || typeof row.checkpoint_digest !== "string" || !DIGEST.test(row.checkpoint_digest) ||
       typeof row.updated_at !== "number" || !Number.isSafeInteger(row.updated_at) || row.updated_at < 0) {
@@ -168,11 +171,13 @@ function inspectRow(row: CheckpointRow): DocumentOrganizationCheckpointRecordIns
         reason = "checkpoint_identity_mismatch";
       } else {
         checkpointStatus = row.status as DocumentOrganizationCheckpointStatus;
+        requestScopeDigest = recoveryRequestScopeDigest(payload.request_id, row.actor_digest);
       }
     }
   }
   return {
     checkpoint_ref_digest: referenceDigest,
+    request_scope_digest: reason === null ? requestScopeDigest : null,
     integrity: reason === null ? "verified" : "residuals_present",
     reason,
     checkpoint_status: checkpointStatus,

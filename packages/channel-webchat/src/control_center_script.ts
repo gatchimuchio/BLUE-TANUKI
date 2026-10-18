@@ -1608,10 +1608,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const documentCheckpointRecords = (documentCheckpointSourceRecords || []).slice(0, 128).map(function (item) {
               const value = item && typeof item === "object" ? item : {};
               const reference = value.checkpoint_ref_digest === null ? null : recoveryInspectionDigest(value.checkpoint_ref_digest);
+              const requestScopeDigest = value.request_scope_digest === null ? null : recoveryInspectionDigest(value.request_scope_digest);
               const integrity = recoveryInspectionEnum(value.integrity, ["verified", "residuals_present"]);
               const reason = value.reason === null ? null : recoveryInspectionEnum(value.reason, ["row_shape_invalid", "checkpoint_digest_mismatch", "checkpoint_json_invalid", "checkpoint_shape_invalid", "checkpoint_identity_mismatch"]);
               const checkpointStatus = value.checkpoint_status === null ? null : recoveryInspectionEnum(value.checkpoint_status, ["ready", "continuing", "completed", "held"]);
-              if ((value.checkpoint_ref_digest !== null && !reference) || integrity === "unknown" ||
+              if ((value.checkpoint_ref_digest !== null && !reference) ||
+                  (value.request_scope_digest !== null && !requestScopeDigest) || integrity === "unknown" ||
                   (value.reason !== null && reason === "unknown") ||
                   (value.checkpoint_status !== null && checkpointStatus === "unknown") ||
                   (integrity === "verified" && (reason !== null || checkpointStatus === null || reference === null)) ||
@@ -1621,7 +1623,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 return null;
               }
               if (reference !== null) documentCheckpointReferences.add(reference);
-              return { checkpoint_ref_digest: reference, integrity: integrity, reason: reason, checkpoint_status: checkpointStatus };
+              return { checkpoint_ref_digest: reference, request_scope_digest: requestScopeDigest, integrity: integrity, reason: reason, checkpoint_status: checkpointStatus };
             }).filter(function (item) { return item !== null; });
         if (documentCheckpointRecords.length !== (documentCheckpointSourceRecords || []).length) documentCheckpointRecordsValid = false;
         const documentCheckpointResidualCount = documentCheckpointSource.residual_count;
@@ -1651,7 +1653,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 documentCheckpointResidualCount > 0 && documentCheckpointReason === expectedDocumentCheckpointReason));
         const documentCheckpointLedgerStatus = recoveryInspectionLedgerStatus(ledgers.document_organization_checkpoints, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
         const cronApprovalCorrelationResidualCount = recoveryInspectionCount(source.cron_approval_correlation_residual_count);
-        const initialBoundaryOk = source.schema_version === 6 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
+        const initialBoundaryOk = source.schema_version === 7 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
         const ledgerStatuses = {
           j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
@@ -1697,6 +1699,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ? source.plan_dependency_scopes.slice(0, 64).map(function (item) {
               const value = item && typeof item === "object" ? item : {};
               const planIdDigest = recoveryInspectionDigest(value.plan_id_digest);
+              const requestScopeDigest = value.request_scope_digest === null ? null : recoveryInspectionDigest(value.request_scope_digest);
               const planIntegrity = recoveryInspectionEnum(value.integrity, ["verified", "residuals_present"]);
               const scopeStatus = recoveryInspectionEnum(value.status, ["observed", "residuals_present", "unobserved"]);
               const planRecordCount = value.plan_record_count;
@@ -1721,7 +1724,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 inspectedBindingCount + omittedBindingCount === bindingCount;
               const expectedStatus = residualDependencies && residualDependencies.length > 0 ? "residuals_present" :
                 (unobservedDependencies && unobservedDependencies.length > 0) || omittedBindingCount > 0 ? "unobserved" : "observed";
-              const valid = planIdDigest && planIntegrity !== "unknown" && scopeStatus !== "unknown" && countsValid &&
+              const valid = planIdDigest && (value.request_scope_digest === null || requestScopeDigest) && planIntegrity !== "unknown" && scopeStatus !== "unknown" && countsValid &&
                 residualDependencies !== null && unobservedDependencies !== null && scopeStatus === expectedStatus &&
                 (planIntegrity !== "residuals_present" || residualDependencies.indexOf("operation_plan") >= 0) &&
                 (residualBindingCount === 0 || residualDependencies.indexOf("operation_plan") >= 0);
@@ -1731,6 +1734,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               }
               return {
                 plan_id_digest: planIdDigest,
+                request_scope_digest: requestScopeDigest,
                 integrity: planIntegrity,
                 plan_record_count: planRecordCount,
                 binding_count: bindingCount,

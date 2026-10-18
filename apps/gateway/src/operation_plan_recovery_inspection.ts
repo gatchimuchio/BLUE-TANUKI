@@ -6,6 +6,7 @@ import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { operationPlanDigest, receiptForResultCommit, verifyResultMemoryCommit } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema, type ExecutionAdmission, type OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 import { executionAdmissionDigest } from "./execution_intent_store.js";
+import { operationPlanRequestScopeDigest } from "./recovery_request_scope.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
@@ -24,6 +25,7 @@ export interface OperationPlanMemoryLinkInspection {
 
 export interface OperationPlanRecoveryPlanSummary {
   readonly plan_id_digest: string;
+  readonly request_scope_digest: string | null;
   readonly integrity: "verified" | "residuals_present";
   readonly plan_record_count: number;
   readonly binding_count: number;
@@ -254,8 +256,13 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
       });
     }
     const existing = planSummaries.get(planIdDigest);
+    const requestScopeDigest = planRevisionMismatch ? null :
+      operationPlanRequestScopeDigest(requestId, planState.channel, planState.owner);
     planSummaries.set(planIdDigest, {
       plan_id_digest: planIdDigest,
+      request_scope_digest: existing && existing.request_scope_digest !== requestScopeDigest
+        ? null
+        : requestScopeDigest,
       integrity: planHasResidual || !!existing ? "residuals_present" : "verified",
       plan_record_count: (existing?.plan_record_count ?? 0) + 1,
       binding_count: (existing?.binding_count ?? 0) + planState.bindings.length,
