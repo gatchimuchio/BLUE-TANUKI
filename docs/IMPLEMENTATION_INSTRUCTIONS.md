@@ -22,4 +22,4 @@ Recovery inspectionに、未決のOperationPlan bindingとM update残差を仕�
 
 Gateway recovery focused suiteは1 file／9 tests PASS、WebChat focused suiteは1 file／76 tests PASS。`pnpm typecheck`はPASS、`pnpm build`は15 workspace projects PASS、`pnpm docs:check`は日本語基底通常gate・licenseを含めPASS（移行負債77件）、`git diff --check`もPASS。
 
-実装・文書のpush後に再fetchし、local／remote mainの同一SHA、clean tree、二世代local recovery branch／remote backup tagを再照合する。remoteに他writerの進行があればforceせず再同期する。
+実装commit=`9372bb8c39e2ffe14ee897ece17a574f7ee4aaba`をpush済み。再fetch後のlocal／`origin/main`は同SHAで、編集前復元参照はlocal branch／remote tagとも現世代=`30a3d4176ea50f2adc51a3fda0a595129e2a333e`、前世代=`57dae6014ae4af984fa5a54c274238a0715342d1`で一致した。進捗記録を含むdocs-only closeoutをpushした後も再fetchし、main一致・clean tree・二世代ref一致を確認する。remoteに他writerの進行があればforceせず再同期する。
