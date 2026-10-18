@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -95,6 +95,28 @@ describe("RuntimeScheduleManager", () => {
     ]));
   });
 
+  it("requires a fresh L3 evaluation bound to the same schedule command", async () => {
+    const m = await manager();
+    const cmd = command("schedule.create", {
+      id: "review-bound",
+      channel: "webchat",
+      target: "local-user",
+      content: "scheduled content",
+      interval_ms: 120000,
+    });
+    const valid = evaluation(cmd);
+    const mismatched = {
+      ...valid,
+      context: { ...valid.context, command_id: "another-command" },
+    };
+    expect(m.preparePending(cmd, mismatched, { request_id: "req-review", actor: "alice" })).toMatchObject({ ok: false });
+
+    const downgraded = { ...valid, approval_level: "L2_operate" as const };
+    expect(m.preparePending(cmd, downgraded, { request_id: "req-review", actor: "alice" })).toMatchObject({ ok: false });
+    expect(m.pendingCount()).toBe(0);
+    expect(m.activeCount()).toBe(0);
+  });
+
   it("rejects duplicate active schedules and pending conflicts without activation", async () => {
     const m = await manager();
     const create = command("schedule.create", {
@@ -148,6 +170,100 @@ describe("RuntimeScheduleManager", () => {
     await approve(m, del);
     expect(m.activeCount()).toBe(0);
     expect(m.snapshot().find((s) => s.id === "updatable")?.status).toBe("deleted");
+  });
+
+  it("switches a trigger mode only through the newly approved update", async () => {
+    const m = await manager();
+    const create = command("schedule.create", {
+      id: "trigger-switch",
+      channel: "webchat",
+      target: "local-user",
+      content: "scheduled content",
+      time: "07:15",
+    });
+    expect(m.preparePending(create, evaluation(create), { request_id: "req-trigger-create", actor: "alice" }).ok).toBe(true);
+    await approve(m, create);
+    expect(m.activeCronTasks()[0]).toMatchObject({ time: "07:15", interval_ms: undefined });
+
+    const update = command("schedule.update", { id: "trigger-switch", interval_ms: 60000 });
+    expect(m.preparePending(update, evaluation(update), { request_id: "req-trigger-update", actor: "alice" }).ok).toBe(true);
+    expect(m.activeCronTasks()[0]?.time).toBe("07:15");
+    await approve(m, update);
+    expect(m.activeCronTasks()[0]).toMatchObject({ time: undefined, interval_ms: 60000 });
+  });
+
+  it("reloads only exact persisted schedules and rejects an unknown state instead of activating it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bt-runtime-schedules-reload-"));
+    const env = { BLUE_TANUKI_SCHEDULES_DIR: dir };
+    const m = await RuntimeScheduleManager.open({ env });
+    const create = command("schedule.create", {
+      id: "reload-safe",
+      channel: "webchat",
+      target: "local-user",
+      content: "scheduled content",
+      interval_ms: 120000,
+    });
+    expect(m.preparePending(create, evaluation(create), { request_id: "req-reload", actor: "alice" }).ok).toBe(true);
+    await approve(m, create);
+
+    const reopened = await RuntimeScheduleManager.open({ env });
+    expect(reopened.activeCount()).toBe(1);
+    expect(reopened.activeCronTasks()).toMatchObject([{ id: "reload-safe", interval_ms: 120000 }]);
+
+    const update = command("schedule.update", { id: "reload-safe", interval_ms: 60000 });
+    expect(reopened.preparePending(update, evaluation(update), { request_id: "req-reload-update", actor: "alice" }).ok).toBe(true);
+    await approve(reopened, update);
+    const updated = await RuntimeScheduleManager.open({ env });
+    expect(updated.activeCronTasks()).toMatchObject([{ id: "reload-safe", interval_ms: 60000 }]);
+
+    const deletion = command("schedule.delete", { id: "reload-safe" });
+    expect(updated.preparePending(deletion, evaluation(deletion), { request_id: "req-reload-delete", actor: "alice" }).ok).toBe(true);
+    await approve(updated, deletion);
+    const deleted = await RuntimeScheduleManager.open({ env });
+    expect(deleted.activeCount()).toBe(0);
+    expect(deleted.snapshot()).toMatchObject([{ id: "reload-safe", status: "deleted", enabled: false }]);
+
+    const file = join(dir, "runtime-schedules.json");
+    const stored = JSON.parse(readFileSync(file, "utf8")) as Array<Record<string, unknown>>;
+    stored[0]!.status = "unrecognized";
+    writeFileSync(file, `${JSON.stringify(stored)}\n`, "utf8");
+    await expect(RuntimeScheduleManager.open({ env })).rejects.toThrow(/status is invalid/);
+
+    stored[0]!.status = "active";
+    stored[0]!.enabled = true;
+    stored[0]!.payload_hash = "0".repeat(64);
+    writeFileSync(file, `${JSON.stringify(stored)}\n`, "utf8");
+    await expect(RuntimeScheduleManager.open({ env })).rejects.toThrow(/payload hash does not match/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not activate an approved change when atomic persistence fails", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bt-runtime-schedules-write-failure-"));
+    const env = { BLUE_TANUKI_SCHEDULES_DIR: dir };
+    const m = await RuntimeScheduleManager.open({ env });
+    const cron = new CronSchedulerChannel({ tasks: [], log: () => undefined });
+    m.attachScheduler(cron);
+    const create = command("schedule.create", {
+      id: "persist-before-fire",
+      channel: "webchat",
+      target: "local-user",
+      content: "original content",
+      interval_ms: 120000,
+    });
+    expect(m.preparePending(create, evaluation(create), { request_id: "req-persist-create", actor: "alice" }).ok).toBe(true);
+    await approve(m, create);
+    const oldHash = m.snapshot()[0]?.payload_hash;
+    const store = join(dir, "runtime-schedules.json");
+    renameSync(store, join(dir, "runtime-schedules.before-failure.json"));
+    mkdirSync(store);
+
+    const update = command("schedule.update", { id: "persist-before-fire", content: "uncommitted content" });
+    expect(m.preparePending(update, evaluation(update), { request_id: "req-persist-update", actor: "alice" }).ok).toBe(true);
+    await expect(approve(m, update)).rejects.toThrow();
+    expect(m.activeCount()).toBe(1);
+    expect(m.snapshot()[0]?.payload_hash).toBe(oldHash);
+    expect(cron.snapshot()[0]?.payload_hash).toBe(oldHash);
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it("rejects invalid schedule create fields with owner-actionable output", async () => {

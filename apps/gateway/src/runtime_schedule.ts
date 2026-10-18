@@ -201,6 +201,25 @@ export class RuntimeScheduleManager {
     if (tool !== "schedule.create" && tool !== "schedule.update" && tool !== "schedule.delete") {
       return { ok: false, message: "schedule operation rejected: unsupported schedule tool; nothing was activated; retry with schedule.create/update/delete" };
     }
+    const expectedOperation = tool;
+    const actor = opts.actor?.trim() || evaluation.context.actor;
+    if (
+      evaluation.decision !== "ask" ||
+      evaluation.context.command_id !== command.id ||
+      evaluation.context.operation !== expectedOperation ||
+      evaluation.context.command_type !== "tool_call" ||
+      evaluation.context.actor !== actor ||
+      evaluation.context.risk !== "high" ||
+      evaluation.risk !== "high" ||
+      evaluation.approval_level !== "L3_final_review" ||
+      !evaluation.final_review_required ||
+      typeof opts.request_id !== "string" || opts.request_id.trim().length === 0
+    ) {
+      return {
+        ok: false,
+        message: "schedule operation rejected: a fresh L3 final-review evaluation bound to this command and request is required; activated=false can_fire=false next_action=Submit a new schedule request for owner review.",
+      };
+    }
 
     try {
       const pending = this.buildPending(tool, command, evaluation, opts);
@@ -248,7 +267,6 @@ export class RuntimeScheduleManager {
     }
     this.pending.delete(command_id);
     this.pendingBySchedule.delete(pending.schedule_id);
-    this.onLifecycle?.("schedule.lifecycle.approved", lifecycleFromPending(pending));
 
     if (pending.operation === "delete") {
       const previous = pending.previous;
@@ -261,9 +279,12 @@ export class RuntimeScheduleManager {
         status: "deleted",
         updated_at_ms: this.now(),
       };
+      const nextSchedules = new Map(this.schedules);
+      nextSchedules.set(deleted.id, deleted);
+      await this.persist(nextSchedules.values());
       this.schedules.set(deleted.id, deleted);
       this.scheduler?.removeTask(deleted.id);
-      await this.persist();
+      this.onLifecycle?.("schedule.lifecycle.approved", lifecycleFromPending(pending));
       this.onLifecycle?.("schedule.lifecycle.deleted", lifecycleFromPending(pending));
       return {
         schedule_id: deleted.id,
@@ -280,9 +301,12 @@ export class RuntimeScheduleManager {
       enabled: true,
       updated_at_ms: this.now(),
     };
+    const nextSchedules = new Map(this.schedules);
+    nextSchedules.set(activated.id, activated);
+    await this.persist(nextSchedules.values());
     this.schedules.set(activated.id, activated);
     const schedulerSnapshot = this.scheduler?.upsertTask(this.toCronTask(activated));
-    await this.persist();
+    this.onLifecycle?.("schedule.lifecycle.approved", lifecycleFromPending(pending));
     this.onLifecycle?.(
       pending.operation === "create" ? "schedule.lifecycle.activated" : "schedule.lifecycle.updated",
       lifecycleFromPending(pending),
@@ -404,10 +428,24 @@ export class RuntimeScheduleManager {
     }
   }
 
-  private async persist(): Promise<void> {
-    const records = Array.from(this.schedules.values()).sort((a, b) => a.id.localeCompare(b.id));
-    await fs.mkdir(path.dirname(this.file), { recursive: true });
-    await fs.writeFile(this.file, `${JSON.stringify(records, null, 2)}\n`, "utf8");
+  private async persist(schedules: Iterable<RuntimeSchedule> = this.schedules.values()): Promise<void> {
+    const records = Array.from(schedules).sort((a, b) => a.id.localeCompare(b.id));
+    const directory = path.dirname(this.file);
+    const temporary = path.join(directory, `.${path.basename(this.file)}.${process.pid}.${randomUUID()}.tmp`);
+    await fs.mkdir(directory, { recursive: true });
+    try {
+      const handle = await fs.open(temporary, "wx", 0o600);
+      try {
+        await handle.writeFile(`${JSON.stringify(records, null, 2)}\n`, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await fs.rename(temporary, this.file);
+    } catch (error) {
+      await fs.unlink(temporary).catch(() => undefined);
+      throw error;
+    }
   }
 
   private persistSoon(): void {
@@ -426,8 +464,14 @@ function buildScheduleFromArgs(
   const content = stringArg(args, "content", previous?.content);
   const time = optionalTime(args.time, previous?.time);
   const interval_ms = optionalInterval(args.interval_ms, previous?.interval_ms);
-  if (time === undefined && interval_ms === undefined) {
-    throw new Error("schedule requires time=HH:MM or interval_ms; nothing was activated");
+  const timeWasProvided = args.time !== undefined;
+  const intervalWasProvided = args.interval_ms !== undefined;
+  const selectedTime = timeWasProvided && args.time !== null ? time :
+    intervalWasProvided && args.interval_ms !== null && !timeWasProvided ? undefined : time;
+  const selectedInterval = intervalWasProvided && args.interval_ms !== null ? interval_ms :
+    timeWasProvided && args.time !== null && !intervalWasProvided ? undefined : interval_ms;
+  if ((selectedTime === undefined) === (selectedInterval === undefined)) {
+    throw new Error("schedule requires exactly one trigger: time=HH:MM or interval_ms; nothing was activated");
   }
   return {
     id,
@@ -436,11 +480,11 @@ function buildScheduleFromArgs(
     channel,
     target,
     content,
-    time,
-    interval_ms,
+    time: selectedTime,
+    interval_ms: selectedInterval,
     created_at_ms: previous?.created_at_ms ?? now,
     updated_at_ms: now,
-    payload_hash: cronPayloadHash({ channel, target, content, time, interval_ms }),
+    payload_hash: cronPayloadHash({ channel, target, content, time: selectedTime, interval_ms: selectedInterval }),
     status: "pending",
   };
 }
@@ -476,32 +520,50 @@ async function readSchedulesFile(file: string): Promise<RuntimeSchedule[]> {
   });
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed)) throw new Error("runtime schedule store must contain an array");
-  return parsed.map(parseStoredSchedule);
+  const schedules = parsed.map(parseStoredSchedule);
+  const ids = new Set<string>();
+  for (const schedule of schedules) {
+    if (ids.has(schedule.id)) throw new Error("runtime schedule store contains a duplicate id");
+    ids.add(schedule.id);
+  }
+  return schedules;
 }
 
 function parseStoredSchedule(value: unknown): RuntimeSchedule {
   if (!isRecord(value)) throw new Error("runtime schedule store entry must be an object");
   const id = requiredId(value.id, "id");
+  if (id !== value.id) throw new Error("runtime schedule store id is not canonical");
+  if (value.origin !== undefined && value.origin !== "runtime") throw new Error("runtime schedule store origin is invalid");
   const channel = requiredString(value.channel, "channel");
   const target = requiredString(value.target, "target");
   const content = requiredString(value.content, "content");
   const time = optionalTime(value.time, undefined);
   const interval_ms = optionalInterval(value.interval_ms, undefined);
   const status = runtimeStatus(value.status);
+  if (typeof value.enabled !== "boolean" || value.enabled !== (status === "active")) {
+    throw new Error("runtime schedule store enabled/status state is inconsistent");
+  }
+  if ((time === undefined) === (interval_ms === undefined)) {
+    throw new Error("runtime schedule store must contain exactly one trigger");
+  }
+  const created_at_ms = storedTimestamp(value.created_at_ms, "created_at_ms");
+  const updated_at_ms = storedTimestamp(value.updated_at_ms, "updated_at_ms");
+  const expectedPayloadHash = cronPayloadHash({ channel, target, content, time, interval_ms });
+  if (typeof value.payload_hash !== "string" || !/^[a-f0-9]{64}$/.test(value.payload_hash) || value.payload_hash !== expectedPayloadHash) {
+    throw new Error("runtime schedule store payload hash does not match its trigger content");
+  }
   return {
     id,
     origin: "runtime",
-    enabled: value.enabled !== false,
+    enabled: value.enabled,
     channel,
     target,
     content,
     time,
     interval_ms,
-    created_at_ms: numberOr(value.created_at_ms, Date.now()),
-    updated_at_ms: numberOr(value.updated_at_ms, Date.now()),
-    payload_hash: typeof value.payload_hash === "string" && value.payload_hash.length > 0
-      ? value.payload_hash
-      : cronPayloadHash({ channel, target, content, time, interval_ms }),
+    created_at_ms,
+    updated_at_ms,
+    payload_hash: value.payload_hash,
     status,
   };
 }
@@ -548,15 +610,15 @@ function optionalTime(value: unknown, fallback: string | undefined): string | un
 
 function optionalInterval(value: unknown, fallback: number | undefined): number | undefined {
   if (value === undefined) return fallback;
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw new Error("interval_ms must be a positive integer");
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 2_147_483_647) {
+    throw new Error("interval_ms must be a positive integer no greater than 2147483647");
   }
   return value;
 }
 
 function runtimeStatus(value: unknown): RuntimeSchedule["status"] {
   if (value === "pending" || value === "active" || value === "disabled" || value === "deleted" || value === "rejected") return value;
-  return "active";
+  throw new Error("runtime schedule store status is invalid");
 }
 
 function positiveEnvInt(value: string | undefined, fallback: number): number {
@@ -565,8 +627,11 @@ function positiveEnvInt(value: string | undefined, fallback: number): number {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-function numberOr(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+function storedTimestamp(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`runtime schedule store ${label} is invalid`);
+  }
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

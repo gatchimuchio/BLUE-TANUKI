@@ -1,32 +1,26 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。今回の施工単位開始時に、owner指定の最新版QE三点正本（rev2.3）全文、適用`AGENTS.md`、`docs/作業標準要領.md`、QE再同期規約、active指示、現行HEAD・remote・dirty state、E01.01とCron／RuntimeScheduleの実consumerを読み直した。対象はWindows上のBLUE-TANUKIのみ。D4Pocket／ミニドラのrepoには変更しない。
+2026-10-18。owner指定の最新版QE三点正本（rev2.3）全文、適用`AGENTS.md`、`docs/作業標準要領.md`、QE再同期規約、active指示、現行HEAD・remote・dirty state、E01.01／E01.02とRuntimeSchedule→Cron→Gateway実consumerを読み直した。対象はWindows上のBLUE-TANUKIのみ。D4Pocket／ミニドラのrepoは変更しない。
 
-## 今回の施工単位
+## 今回のBUILD_BATCH
 
-backup ref移行状態=`MIGRATION_COMPLETE`。QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E01.01-CRON-EVENT-IDENTITY-CURSOR`。関連単位=E01.01のBLUE Cron／Gateway部分接続。開始HEAD／`origin/main`=`5370e5e54456af59314d203a114547413e3f225a`、clean。編集前のlocal recovery branch／remote backup tagは現世代`5370e5e`、直前世代`cf0458b`。remote二tagとlocal二branchのSHAを確認済み。
+QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E01.01-DURABLE-SCHEDULE-ACTIVATION`。関連単位=E01.01の永続trigger・承認済みRuntimeScheduleからCronへの接続。現単位の局所境界は`WIRED`、E01.01/QEB-03全体は`BUILD_GAP`。開始HEAD／`origin/main`=`e45c40bd00bf467058d1e6ad41745921617a4c6f`、clean。backup ref移行=`MIGRATION_COMPLETE`。編集前のlocal recovery branch／remote backup tagは現世代`e45c40b`、直前世代`5370e5e`。remote二tagとlocal二branchを実値照合済み。
 
 ### 目的と到達状態
 
-承認済みRuntimeScheduleの永続triggerからCron発火まで、同一schedule sourceのイベントに安定したevent IDと単調な予定時刻を与える。private Gateway event cursorにsource/event/payload digestとconsumer状態を保存し、同一eventの再配送を抑止し、より古いeventを拒否する。Cronの同一source内のconsumer呼出しは順序を保つ。未確定状態は成功扱いせず、自動再実行しない。
-
-本施工はE01.01の限定接続であり、durable jobの完了、再起動後のpending outbox再配送、全channel共通inbox、E01.02の時差／catch-up、E03の所有権世代・回復を完了扱いしない。これらは実物に照らして次consumerとして残す。
+HDSの同一schedule commandに対するL3最終レビューから、永続RuntimeSchedule、再起動時の読戻し、Cron task登録までを安全に接続する。scheduleのcreate/update/deleteはoperation・command ID・risk・L3 final-review条件が一致する新しい承認評価だけ受け入れる。承認後はschedule全体をatomic replaceで永続化し、保存失敗時はmemory／Cronを有効化しない。保存成功後にのみ現在状態とCron consumerを更新する。永続レコードは型・状態・同一性・payload digestを厳密照合し、不明状態をactiveへ補完しない。
 
 ### 対象と境界
 
-- 対象：`apps/gateway/src/cron_channel.ts`、Gateway private event store、`apps/gateway/src/serve.ts`との接続、関連する限定試験、進捗・ロードマップ・変更記録。
-- Cron eventのsourceはschedule origin／IDから導出し、event IDはsourceと予定発火時刻に結合する。payload digestが一致しない同一event IDは衝突として処理し、HDSへ二重配送しない。
-- private DBにはraw content、target、credentialを保存しない。HDS-BRAIN、Approval、Executor、監査の既存責任を保ち、event identityは権限に使わない。
-- 対象外：D4Pocket／ミニドラ変更、実provider／credential／外部業務送信、C08.03、別channelの全面dedup、restart後の未決イベント再実行、全体QE_QC／QE_QA、公開・出荷判断。
+- 対象：`apps/gateway/src/runtime_schedule.ts`、`apps/gateway/test/runtime_schedule.test.ts`、active指示・進捗・公開ロードマップ。
+- schedule発火は外部作用の承認ではない。Cronからの実作用・所有者向け承認導線は独立した次接続として追跡する。
+- 未決Cron eventの再起動後reconciliation、E01.02のtimezone／DST／clock jump／catch-up、E01.03待機、E03世代・復旧、durable job全体は未完了のまま残す。
+- 対象外：D4Pocket／ミニドラ変更、provider／credential／外部業務送信、C08.03、全体QE_QC／QE_QA、公開・出荷判断。
 
-### 最小技術確認
+### 安全・最小技術確認
 
-event storeの再open後に重複・逆順・payload衝突を検査する。Cronのevent ID/source/sequenceと直列dispatchを対象testで確認する。影響したVitest、`pnpm typecheck`、`pnpm build`、`pnpm docs:check`、`git diff --check`を実施し、実送信を行わない。
-
-実行結果：`pnpm exec vitest run apps/gateway/test/cron_event_store.test.ts apps/gateway/test/cron_channel.test.ts apps/gateway/test/runtime_schedule.test.ts` PASS（3 files／19 tests）、`pnpm typecheck` PASS、`pnpm build` PASS（15 workspace projects）、`pnpm docs:check` PASS（初回にCHANGELOG移行hashの不一致を検出し、実hashを台帳へ反映後にPASS。移行負債77件）、`git diff --check` PASS。実provider・credential・外部送信なし。
+不正・不一致なapproval評価、壊れた永続レコード、payload hash不一致、保存失敗ではCron起動を許可しない。作成・更新・削除の保存後再open、保存失敗時に旧scheduleが有効のままで新内容が登録されないことを対象testで確認する。`runtime_schedule.test.ts`／`cron_event_store.test.ts`／`cron_channel.test.ts`は3 files／23 tests PASS、`pnpm typecheck` PASS、`pnpm build` PASS。`pnpm docs:check`は初回に本指示の必須状態語`BUILD_GAP`と`MIGRATION_COMPLETE`の欠落でFAILした後、補記して再実行しPASS。`git diff --check` PASS。実credential／外部送信なし。
 
 ### 停止・復旧・記録
 
-DB破損・schema不整合・event衝突では fail-closed にする。handler開始後に結果が不明なeventは再送しない。処理済み、重複、逆順、衝突、結果不明を区別し、権限や仕事の完了へ昇格させない。完成した技術接続と残るBUILD_GAPを記録し、意味あるbuild batch終了時に限定commitを`main`へpush、remote HEADと復元refsを照合する。今回の実装commit=`43bc89f52ef2c8da0bb50f83c962be8e74b17c94`は`origin/main`へpush済み。fetch後のlocal／remote mainは一致し、local二branch／remote二tagは現世代`5370e5e`／直前`cf0458b`を指している。この文書と進捗記録もcloseoutとして次のpushへ含める。
-
-P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+schedule DBの不整合はfail-closedとし、破損をactiveへ読み替えない。更新を永続化できない場合は旧scheduleを維持する。Cron eventのdispatch後に結果不明なeventは自動再送しない。承認評価のpayload digestは内容整合確認であり、再起動時のapproval lifecycle照合や承認証明ではない。BUILD_BATCH終了時は限定commitを`main`へpushし、remote HEAD、二世代復元refs、作業ツリーを再照合する。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
