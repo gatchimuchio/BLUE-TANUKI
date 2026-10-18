@@ -1,20 +1,12 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-## 直近完了のBUILD_BATCHと次のconsumer
+## 直近の施工・監査結果と次のconsumer
 
-`QEB-03-E03.03-NON-OP-STORE-RESTORE-QUIESCENCE` は2026-10-19に実装・限定確認を完了。開始HEAD／`origin/main`=`a04540ddd7b43dfcf052b318d9bf84211ccd007d`、開始worktree clean。rev2.3三点正本、root `AGENTS.md`、作業標準要領、active指示、E03.03、対象callsiteを再読した。
+`QEB-03-E03.03-RESTORE-RESTART-LIFECYCLE-AUDIT` は2026-10-19にread-onlyで完了。開始HEAD／`origin/main`=`c169e4c60efcad65364f87cf87a1fa9e7d5e6e87`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、対象コードを本単位の開始時に再読した。
 
-実行中Gatewayが保持するconsumerを静止・排出する経路がない`j_control`／`m_state`／`broker`／`cron_events`のselected-store restoreを、Recovery mutation入口でHDS判断・L3要求作成前に拒否する。通常の`executeAndEcho`にも同じ境界を置き、executor toolにも防御検査を追加した。固定consumer分類はHDS control／memory store、Gateway execution intent store、Cron scheduler／approval store。`operation_plans`の既存scope確認・HDS hold refreshは維持し、store指定のないgeneric file restoreも変更していない。Control Centerへ現在の拒否境界と未接続理由を表示する。
+既存serve lifecycleは、停止時にrouterを止め、in-flight executor taskを待ち、Cron／Operation Plan／Broker storeとowner leaseを閉じてから終了する。しかしHDS controllerの公開closeはOperation Plan用memoryに限られ、selected J/M store群を一括して閉じるlifecycle APIがない。pending L3 approvalはserve内Mapで、再起動時に再構築されない。complete-historyとHDS auditはfile persistenceが任意で、startup recovery observationはOperation Plan hold専用である。SIGINT／SIGTERM handlerはshutdown後processを終了し、store適用・再起動・対象storeの再観測へ進まない。systemdの`Restart=on-failure`等は同じserve commandを再起動するだけで、承認済みrecovery transitionを引き継がない。
 
-| 限定確認 | 結果 |
-|---|---|
-| `recovery_tools.test.ts`／`recovery_mutation_entry.test.ts` | PASS、2 files／4 tests。4台帳がconsumer理由付きで拒否され、L3 pendingが作られないこと、executor入口でも拒否されることを確認。Gateway統合testはrepository rootから実行。 |
-| `pnpm typecheck`→`pnpm build` | 両方PASS。buildは15 workspace projects。 |
-| `pnpm smoke:serve` | PASS。stub WebChat、audit persistence、audit-dump chainを確認。Recovery mutationなし。 |
-| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
-| 実canonical restore／実restart／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
-
-selected-store全体restoreとHDS／Approval／L3、非権威表示は維持した。consumer静止・排出と、復元後の対象store再open／再観測は未接続なので、非Operation Plan storeの実復元は引き続き利用不可。次consumerは、Gateway停止・対象DB適用・再起動・再観測をHDS承認と不整合なく結ぶ専用lifecycleの実行可能性。実restore・resume・別repo・外部業務作用は行わず、E03.03=`BUILD_GAP`、C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+したがって外部service restartを既存Recovery consumerとみなせず、HDS L3から非`operation_plans` selected-store全体restoreまでを安全につなぐ実行可能経路はまだない。次BUILD_BATCHは、restore対象storeの外に置く永続single-use transitionのproducer／consumerを設計・実装接続する。HDS final review command・backup/store digest・owner lease世代・各crash phaseを固定し、transition自体は非権威の進行証拠に限定する。起動時はtransitionの完全性と対象store再観測が終わるまで該当consumerを開かず、不明・重複・不整合はholdへ閉じる。HDSだけが承認し、pending approvalを再利用して自動resumeしない。実restore・実approval・実restart・外部作用は未実施。E03.03=`BUILD_GAP`、C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
 
 ### 先行consumer監査
 
