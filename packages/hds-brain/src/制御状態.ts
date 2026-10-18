@@ -12,8 +12,10 @@ import {
   resolvePrivateStateDatabasePath,
   PersistenceStoreError,
   sqliteErrorCode,
+  unavailableLedgerInspection,
   type JMemoryApprovalReader,
   type JMemoryApprovalReference,
+  type PersistenceLedgerInspection,
   type PersistenceFailureReason,
   type PersistenceHealth,
   type PersistenceRecoveryResult,
@@ -869,6 +871,100 @@ export function rebuildJControlProjection(options: {
   }
 }
 
+/**
+ * Inspect the J canonical ledger without opening a writer or repairing any projection.
+ * The verified prefix is diagnostic evidence only and cannot authorize work.
+ */
+export function inspectJControlRecoveryLedger(options: {
+  readonly private_state_root: string;
+  readonly database_path: string;
+}): PersistenceLedgerInspection {
+  let database: DatabaseSyncType | undefined;
+  try {
+    let databasePath: string;
+    try {
+      databasePath = resolvePrivateStateDatabasePath(options.private_state_root, options.database_path);
+    } catch {
+      return unavailableLedgerInspection("J", "store_unavailable");
+    }
+    if (!existsSync(databasePath) || !statSync(databasePath).isFile() || statSync(databasePath).size === 0) {
+      return unavailableLedgerInspection("J", "store_unavailable");
+    }
+    if (hasSQLiteRecoverySidecars(databasePath)) {
+      return unavailableLedgerInspection("J", "store_unavailable");
+    }
+    database = new DatabaseSync(databasePath, {
+      readOnly: true,
+      enableForeignKeyConstraints: true,
+      allowExtension: false,
+    });
+    database.enableLoadExtension(false);
+    database.exec("PRAGMA query_only = ON");
+    if (stringValue(firstValue(database.prepare("PRAGMA journal_mode").get()))?.toLowerCase() !== "delete") {
+      return unavailableLedgerInspection("J", "store_unavailable");
+    }
+    if (!verifyJTableSchema(database) || !verifyNoJRecoveryTriggers(database)) {
+      return unavailableLedgerInspection("J", "schema_mismatch");
+    }
+
+    const totalEventCount = integerValue(
+      (database.prepare("SELECT count(*) AS count FROM j_events").get() as SqlRow | undefined)?.count,
+    );
+    if (totalEventCount === null || totalEventCount < 0) {
+      return unavailableLedgerInspection("J", "schema_mismatch");
+    }
+    let verifiedProjection: JStateProjection | null = null;
+    let verifiedEventCount = 0;
+    const projection = replayDatabase(database, (verified) => {
+      verifiedProjection = verified;
+      verifiedEventCount++;
+    });
+    const prefix = projection ?? verifiedProjection ?? {
+      revision: 0,
+      event_digest: GENESIS_EVENT_DIGEST,
+      status: "ready" as const,
+      active_update_id: null,
+      pending: new Map<string, JPendingSnapshot>(),
+    };
+    if (projection === null) {
+      return {
+        owner: "J",
+        status: "corrupt",
+        reason: "ledger_corrupt",
+        verified_event_count: verifiedEventCount,
+        unverified_event_count: Math.max(0, totalEventCount - verifiedEventCount),
+        first_unverified_ordinal: verifiedEventCount < totalEventCount ? verifiedEventCount + 1 : null,
+        last_verified_revision: prefix.revision,
+        last_verified_event_digest: prefix.event_digest,
+        updates: inspectionUpdates(prefix.pending.values()),
+        used_for_authority: false,
+      };
+    }
+    const projectionMatches = verifyJDerivedProjection(database, projection);
+    return {
+      owner: "J",
+      status: projectionMatches ? "verified" : "projection_mismatch",
+      reason: projectionMatches ? null : "projection_mismatch",
+      verified_event_count: verifiedEventCount,
+      unverified_event_count: 0,
+      first_unverified_ordinal: null,
+      last_verified_revision: projection.revision,
+      last_verified_event_digest: projection.event_digest,
+      updates: inspectionUpdates(projection.pending.values()),
+      used_for_authority: false,
+    };
+  } catch (error) {
+    const reason = error instanceof PersistenceStoreError
+      ? error.reason
+      : classifyPersistenceFailure(error);
+    return unavailableLedgerInspection("J", sqliteErrorCode(error) !== null && reason === "write_failed"
+      ? "store_unavailable"
+      : reason);
+  } finally {
+    try { database?.close(); } catch { /* read-only inspection has no state to commit */ }
+  }
+}
+
 function initializeJStorageSchema(database: DatabaseSyncType): void {
   const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'j_*' ORDER BY name")
     .all().map((row) => stringValue(row.name)).filter((name): name is string => name !== null);
@@ -963,6 +1059,10 @@ function verifyNoJRecoveryTriggers(database: DatabaseSyncType): boolean {
   ).all().length === 0;
 }
 
+function hasSQLiteRecoverySidecars(databasePath: string): boolean {
+  return ["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${databasePath}${suffix}`));
+}
+
 function verifyJDerivedProjection(database: DatabaseSyncType, projection: JStateProjection): boolean {
   const stateRows = database.prepare("SELECT singleton, revision, event_digest, status, active_update_id FROM j_state").all();
   if (stateRows.length !== 1 || integerValue(stateRows[0]?.singleton) !== 1 ||
@@ -1018,7 +1118,10 @@ function inspectJDatabase(database: DatabaseSyncType): JDatabaseInspection {
   }
 }
 
-function replayDatabase(database: DatabaseSyncType): JStateProjection | null {
+function replayDatabase(
+  database: DatabaseSyncType,
+  onVerifiedEvent?: (projection: JStateProjection) => void,
+): JStateProjection | null {
   try {
     const events = database.prepare(
       "SELECT event_id, revision, previous_event_digest, event_digest, event_payload_json FROM j_events ORDER BY revision",
@@ -1046,6 +1149,7 @@ function replayDatabase(database: DatabaseSyncType): JStateProjection | null {
       const next = applyEvent(projection, event);
       if (!next) return null;
       projection = next;
+      onVerifiedEvent?.(projection);
     }
     return projection;
   } catch (error) {
@@ -1097,6 +1201,22 @@ function applyEvent(current: JStateProjection, event: JStoredEvent): JStateProje
     active_update_id: null,
     pending,
   };
+}
+
+function inspectionUpdates(pending: Iterable<JPendingSnapshot>): PersistenceLedgerInspection["updates"] {
+  return Array.from(pending)
+    .sort((a, b) => a.update_id.localeCompare(b.update_id))
+    .map((item) => ({
+      update_id_digest: sha256(item.update_id),
+      j_event_id_digest: sha256(item.j_event_id),
+      content_digest: item.content_digest,
+      phase: item.status,
+      expected_version: item.expected_version,
+      ...(item.receipt ? {
+        receipt_revision: item.receipt.revision,
+        receipt_event_digest: item.receipt.event_digest,
+      } : {}),
+    }));
 }
 
 function storeEvent(body: JEventBody): JStoredEvent {

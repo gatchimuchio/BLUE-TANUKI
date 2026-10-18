@@ -1,4 +1,10 @@
 export * from "./types.js";
+export { inspectJControlRecoveryLedger } from "./制御状態.js";
+export {
+  inspectMemoryRecoveryLedger,
+  type PersistenceLedgerInspection,
+  type PersistenceLedgerInspectionUpdate,
+} from "./保存取引.js";
 export { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
   type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
 export {

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import {
 import { MemoryUpdateLedger } from "../src/記憶更新.js";
 import {
   classifyPersistenceFailure,
+  inspectMemoryRecoveryLedger,
   rebuildMemoryDerivedProjection,
 } from "../src/保存取引.js";
 import type { JMemoryApprovalReader, JMemoryApprovalReference } from "../src/保存取引.js";
@@ -448,6 +449,72 @@ describe("M記憶更新取引", () => {
       .toBe(canonicalPayload);
     expect(checked.prepare("SELECT revision FROM m_state WHERE singleton = 1").get()?.revision).toBe(0);
     checked.close();
+  });
+
+  it("M recovery inspectionは再生可能prefixと未検証suffixだけを読み取り、DBを変更しない", () => {
+    const ledger = new MemoryUpdateLedger({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    expect(ledger.apply(makeCommit("m-inspection-one", [
+      { operation: "upsert", record_id: "first", value: "synthetic" },
+    ])).ok).toBe(true);
+    expect(ledger.apply(makeCommit("m-inspection-two", [
+      { operation: "upsert", record_id: "second", value: "later" },
+    ], 1)).ok).toBe(true);
+    ledger.close();
+
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    damaged.prepare("UPDATE m_events SET event_payload_json = ? WHERE revision = 2").run("{torn");
+    damaged.close();
+    const before = readFileSync(databasePath);
+    const report = inspectMemoryRecoveryLedger({ private_state_root: directory, database_path: databasePath });
+
+    expect(report).toMatchObject({
+      owner: "M",
+      status: "corrupt",
+      reason: "ledger_corrupt",
+      verified_event_count: 1,
+      unverified_event_count: 1,
+      first_unverified_ordinal: 2,
+      last_verified_revision: 1,
+      used_for_authority: false,
+    });
+    expect(report.updates).toHaveLength(1);
+    expect(report.updates[0]?.phase).toBe("committed");
+    expect(report.updates[0]?.update_id_digest).not.toContain("m-inspection-one");
+    expect(readFileSync(databasePath)).toEqual(before);
+
+    const walPath = `${databasePath}-wal`;
+    writeFileSync(walPath, "preserve-without-opening");
+    expect(inspectMemoryRecoveryLedger({ private_state_root: directory, database_path: databasePath }))
+      .toMatchObject({ status: "unavailable", reason: "store_unavailable", used_for_authority: false });
+    expect(readFileSync(walPath, "utf8")).toBe("preserve-without-opening");
+  });
+
+  it("M recovery inspectionは健全ledgerと派生projection差異を権限化せず区別する", () => {
+    const ledger = new MemoryUpdateLedger({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    expect(ledger.apply(makeCommit("m-projection-inspection", [
+      { operation: "upsert", record_id: "projection", value: "canonical" },
+    ])).ok).toBe(true);
+    ledger.close();
+
+    const healthy = inspectMemoryRecoveryLedger({ private_state_root: directory, database_path: databasePath });
+    expect(healthy).toMatchObject({ status: "verified", reason: null, verified_event_count: 1, used_for_authority: false });
+
+    const tampered: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    tampered.prepare("UPDATE m_records SET value_json = ? WHERE record_id = ?").run('"projection-only"', "projection");
+    tampered.close();
+    const before = readFileSync(databasePath);
+    const report = inspectMemoryRecoveryLedger({ private_state_root: directory, database_path: databasePath });
+
+    expect(report).toMatchObject({ status: "projection_mismatch", reason: "projection_mismatch", used_for_authority: false });
+    expect(readFileSync(databasePath)).toEqual(before);
   });
 });
 

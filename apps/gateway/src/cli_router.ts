@@ -82,6 +82,31 @@ async function runFailureMemoryVerifyCli(): Promise<void> {
   process.exit(report.unresolved_risks.length > 0 || report.requires_human_review.length > 0 ? 1 : 0);
 }
 
+async function runRecoveryInspectCli(): Promise<void> {
+  const { inspectGatewayRecoveryState } = await import("./recovery_inspection.js");
+  const report = inspectGatewayRecoveryState(process.env);
+  if (process.argv.includes("--json")) {
+    writeStdout(JSON.stringify(report, null, 2));
+  } else {
+    writeStdout(`Recovery inspection: ${report.status}`);
+    for (const ledger of [report.ledgers.j, report.ledgers.m]) {
+      writeStdout(`${ledger.owner}: ${ledger.status}; verified_events=${ledger.verified_event_count}; unverified_events=${ledger.unverified_event_count}; last_verified_revision=${ledger.last_verified_revision}; last_verified_digest=${ledger.last_verified_event_digest ?? "unavailable"}`);
+      if (ledger.first_unverified_ordinal !== null) {
+        writeStdout(`${ledger.owner} first unverified event ordinal: ${ledger.first_unverified_ordinal}`);
+      }
+      if (ledger.reason) writeStdout(`${ledger.owner} reason: ${ledger.reason}`);
+    }
+    writeStdout(`Replay checkpoint: ${report.replay_checkpoint?.kind ?? "not confirmed"}`);
+    writeStdout(`External backup restore point: ${report.external_backup_restore_point}`);
+    writeStdout(`Isolated update references: ${report.isolated_update_count}`);
+    for (const residual of report.update_residuals) {
+      writeStdout(`update=${residual.update_id_digest} disposition=${residual.disposition}`);
+    }
+    writeStdout(report.next_safe_action);
+  }
+  process.exitCode = report.status === "verified" ? 0 : 2;
+}
+
 async function runSetupCliMode(): Promise<void> {
   const { runSetupCli } = await import("./setup.js");
   await runSetupCli(process.argv.slice(2));
@@ -98,6 +123,10 @@ async function runOneShotCliMode(argv: readonly string[]): Promise<void> {
 }
 
 export async function runGatewayCliRouter(): Promise<void> {
+  if (process.argv.includes("--recovery-inspect")) {
+    await runRecoveryInspectCli();
+    return;
+  }
   const envFile = await loadEnvFileFromArgv(process.argv.slice(2));
   if (envFile) {
     gatewayLog.info("env file loaded", {

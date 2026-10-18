@@ -63,6 +63,50 @@ export type PersistenceRecoveryResult =
   | { readonly ok: true; readonly revision: number; readonly event_count: number }
   | { readonly ok: false; readonly reason: PersistenceFailureReason; readonly outcome_unknown?: boolean };
 
+export interface PersistenceLedgerInspectionUpdate {
+  readonly update_id_digest: string;
+  readonly j_event_id_digest: string;
+  readonly content_digest: string;
+  readonly phase: "pending" | "receipt_confirmed" | "blocked" | "committed";
+  readonly expected_version?: number;
+  readonly revision?: number;
+  readonly event_digest?: string;
+  readonly receipt_revision?: number;
+  readonly receipt_event_digest?: string;
+}
+
+/** Read-only, non-authority evidence about a canonical J or M ledger. */
+export interface PersistenceLedgerInspection {
+  readonly owner: "J" | "M";
+  readonly status: "verified" | "projection_mismatch" | "corrupt" | "unavailable";
+  readonly reason: PersistenceFailureReason | null;
+  readonly verified_event_count: number;
+  readonly unverified_event_count: number;
+  readonly first_unverified_ordinal: number | null;
+  readonly last_verified_revision: number;
+  readonly last_verified_event_digest: string | null;
+  readonly updates: readonly PersistenceLedgerInspectionUpdate[];
+  readonly used_for_authority: false;
+}
+
+export function unavailableLedgerInspection(
+  owner: "J" | "M",
+  reason: PersistenceFailureReason,
+): PersistenceLedgerInspection {
+  return {
+    owner,
+    status: "unavailable",
+    reason,
+    verified_event_count: 0,
+    unverified_event_count: 0,
+    first_unverified_ordinal: null,
+    last_verified_revision: 0,
+    last_verified_event_digest: null,
+    updates: [],
+    used_for_authority: false,
+  };
+}
+
 export class PersistenceStoreError extends Error {
   constructor(
     readonly owner: "M" | "J",
@@ -580,7 +624,10 @@ function verifyNoMRecoveryTriggers(database: DatabaseSyncType): boolean {
   ).all().length === 0;
 }
 
-function replayMCanonicalLedger(database: DatabaseSyncType): MCanonicalProjection | null {
+function replayMCanonicalLedger(
+  database: DatabaseSyncType,
+  onVerifiedEvent?: (event: StoredMemoryEvent) => void,
+): MCanonicalProjection | null {
   try {
     const eventRows = database.prepare(
       "SELECT event_id, revision, previous_event_digest, event_digest, event_payload_json FROM m_events ORDER BY revision",
@@ -648,6 +695,7 @@ function replayMCanonicalLedger(database: DatabaseSyncType): MCanonicalProjectio
         }
       }
       events.push(event as unknown as StoredMemoryEvent);
+      onVerifiedEvent?.(event as unknown as StoredMemoryEvent);
       revision = event.revision;
       priorDigest = event.event_digest;
     }
@@ -861,6 +909,107 @@ export function rebuildMemoryDerivedProjection(options: {
       // The recovery result never includes raw driver errors or paths.
     }
   }
+}
+
+/**
+ * Inspect the M canonical ledger without opening a writer or repairing any projection.
+ * The verified prefix is diagnostic evidence only and cannot authorize work.
+ */
+export function inspectMemoryRecoveryLedger(options: {
+  readonly private_state_root: string;
+  readonly database_path: string;
+}): PersistenceLedgerInspection {
+  let database: DatabaseSyncType | undefined;
+  try {
+    let databasePath: string;
+    try {
+      databasePath = resolvePrivateStateDatabasePath(options.private_state_root, options.database_path);
+    } catch {
+      return unavailableLedgerInspection("M", "store_unavailable");
+    }
+    if (!existsSync(databasePath) || !statSync(databasePath).isFile() || statSync(databasePath).size === 0) {
+      return unavailableLedgerInspection("M", "store_unavailable");
+    }
+    if (hasSQLiteRecoverySidecars(databasePath)) {
+      return unavailableLedgerInspection("M", "store_unavailable");
+    }
+    database = new DatabaseSync(databasePath, {
+      readOnly: true,
+      enableForeignKeyConstraints: true,
+      allowExtension: false,
+    });
+    database.enableLoadExtension(false);
+    database.exec("PRAGMA query_only = ON");
+    if (stringValue(firstValue(database.prepare("PRAGMA journal_mode").get()))?.toLowerCase() !== "delete") {
+      return unavailableLedgerInspection("M", "store_unavailable");
+    }
+    if (!verifyMTableSchema(database) || !verifyNoMRecoveryTriggers(database)) {
+      return unavailableLedgerInspection("M", "schema_mismatch");
+    }
+
+    const totalEventCount = integerValue(
+      (database.prepare("SELECT count(*) AS count FROM m_events").get() as SqlRow | undefined)?.count,
+    );
+    if (totalEventCount === null || totalEventCount < 0) {
+      return unavailableLedgerInspection("M", "schema_mismatch");
+    }
+    const verifiedEvents: StoredMemoryEvent[] = [];
+    const canonical = replayMCanonicalLedger(database, (event) => verifiedEvents.push(event));
+    const verifiedEventCount = verifiedEvents.length;
+    const lastVerified = verifiedEvents[verifiedEvents.length - 1];
+    if (canonical === null) {
+      return {
+        owner: "M",
+        status: "corrupt",
+        reason: "ledger_corrupt",
+        verified_event_count: verifiedEventCount,
+        unverified_event_count: Math.max(0, totalEventCount - verifiedEventCount),
+        first_unverified_ordinal: verifiedEventCount < totalEventCount ? verifiedEventCount + 1 : null,
+        last_verified_revision: lastVerified?.revision ?? 0,
+        last_verified_event_digest: lastVerified?.event_digest ?? GENESIS_EVENT_DIGEST,
+        updates: verifiedEvents.map((event) => ({
+          update_id_digest: sha256(event.update_id),
+          j_event_id_digest: sha256(event.j_event_id),
+          content_digest: event.content_digest,
+          phase: "committed" as const,
+          revision: event.revision,
+          event_digest: event.event_digest,
+        })),
+        used_for_authority: false,
+      };
+    }
+    const projectionMatches = verifyMDerivedProjection(database, canonical);
+    return {
+      owner: "M",
+      status: projectionMatches ? "verified" : "projection_mismatch",
+      reason: projectionMatches ? null : "projection_mismatch",
+      verified_event_count: verifiedEventCount,
+      unverified_event_count: 0,
+      first_unverified_ordinal: null,
+      last_verified_revision: canonical.revision,
+      last_verified_event_digest: canonical.event_digest,
+      updates: canonical.events.map((event) => ({
+        update_id_digest: sha256(event.update_id),
+        j_event_id_digest: sha256(event.j_event_id),
+        content_digest: event.content_digest,
+        phase: "committed" as const,
+        revision: event.revision,
+        event_digest: event.event_digest,
+      })),
+      used_for_authority: false,
+    };
+  } catch (error) {
+    const reason = classifyPersistenceFailure(error);
+    return unavailableLedgerInspection("M", sqliteErrorCode(error) !== null && reason === "write_failed"
+      ? "store_unavailable"
+      : reason);
+  } finally {
+    try { database?.close(); } catch { /* read-only inspection has no state to commit */ }
+  }
+}
+
+function hasSQLiteRecoverySidecars(databasePath: string): boolean {
+  return ["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${databasePath}${suffix}`));
 }
 
 function matchesApprovalReference(value: unknown, expected: JMemoryApprovalReference): boolean {

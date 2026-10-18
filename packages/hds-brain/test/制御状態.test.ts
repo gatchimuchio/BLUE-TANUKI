@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +7,7 @@ import {
   MEMORY_COMMIT_SCHEMA_VERSION,
   memoryCommitContentDigest,
 } from "@blue-tanuki/protocol";
-import { JMemoryCommitCoordinator, rebuildJControlProjection } from "../src/制御状態.js";
+import { inspectJControlRecoveryLedger, JMemoryCommitCoordinator, rebuildJControlProjection } from "../src/制御状態.js";
 import { MemoryUpdateLedger } from "../src/記憶更新.js";
 import type { JMemoryApprovalReader, JMemoryApprovalReference } from "../src/保存取引.js";
 
@@ -367,6 +367,69 @@ describe("J制御状態とM receipt再照合", () => {
       openFailure = error;
     }
     expect(openFailure).toMatchObject({ reason: "ledger_corrupt" });
+  });
+
+  it("J recovery inspectionは再生可能prefixと未検証suffixだけを読み取り、DBを変更しない", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    const first = makeCommit("inspection-private-update", "synthetic");
+    expect(coordinator.stage(first).ok).toBe(true);
+    expect(coordinator.apply(first).ok).toBe(true);
+    expect(coordinator.reconcile(first.update_id).ok).toBe(true);
+    expect(coordinator.stage(makeCommit("later-private-update", "later", 1)).ok).toBe(true);
+    coordinator.close();
+
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    damaged.prepare("UPDATE j_events SET event_payload_json = ? WHERE revision = 2").run("{torn");
+    damaged.close();
+    const before = readFileSync(databasePath);
+    const report = inspectJControlRecoveryLedger({ private_state_root: directory, database_path: databasePath });
+
+    expect(report).toMatchObject({
+      owner: "J",
+      status: "corrupt",
+      reason: "ledger_corrupt",
+      verified_event_count: 1,
+      unverified_event_count: 2,
+      first_unverified_ordinal: 2,
+      last_verified_revision: 1,
+      used_for_authority: false,
+    });
+    expect(report.updates).toHaveLength(1);
+    expect(report.updates[0]?.phase).toBe("pending");
+    expect(report.updates[0]?.update_id_digest).not.toContain("inspection-private-update");
+    expect(readFileSync(databasePath)).toEqual(before);
+
+    const walPath = `${databasePath}-wal`;
+    writeFileSync(walPath, "preserve-without-opening");
+    expect(inspectJControlRecoveryLedger({ private_state_root: directory, database_path: databasePath }))
+      .toMatchObject({ status: "unavailable", reason: "store_unavailable", used_for_authority: false });
+    expect(readFileSync(walPath, "utf8")).toBe("preserve-without-opening");
+  });
+
+  it("J recovery inspectionは健全ledgerと派生projection差異を権限化せず区別する", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    expect(coordinator.stage(makeCommit("j-projection-inspection", "synthetic")).ok).toBe(true);
+    coordinator.close();
+
+    const healthy = inspectJControlRecoveryLedger({ private_state_root: directory, database_path: databasePath });
+    expect(healthy).toMatchObject({ status: "verified", reason: null, verified_event_count: 1, used_for_authority: false });
+
+    const tampered: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    tampered.prepare("UPDATE j_state SET revision = 99 WHERE singleton = 1").run();
+    tampered.close();
+    const before = readFileSync(databasePath);
+    const report = inspectJControlRecoveryLedger({ private_state_root: directory, database_path: databasePath });
+
+    expect(report).toMatchObject({ status: "projection_mismatch", reason: "projection_mismatch", used_for_authority: false });
+    expect(readFileSync(databasePath)).toEqual(before);
   });
 
   it("J write failure後は同じhandleとcoordinatorからの新規stageを停止する", () => {
