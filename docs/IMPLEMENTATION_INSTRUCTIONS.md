@@ -2,22 +2,22 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-03-E03.03-RECOVERY-PLAN-RESIDUAL-ISOLATION`
+### 最新BUILD_BATCH：`QEB-03-E03.03-RECOVERY-RESIDUAL-OPERATOR-DOM`
 
-開始HEAD／`origin/main`=`65bdd2e9fa0170df179c72a5ee890e3c4c0e7205`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）と適用`AGENTS.md`、作業標準要領、active指示、現物を再読した。開始local recovery branch／remote backup tagはcurrent=`65bdd2e9fa0170df179c72a5ee890e3c4c0e7205`、previous=`0c1fa21857069b5acee1cb11370b20b7e2da8562`。
+開始HEAD／`origin/main`=`84e24d62424f2c7aed8eea01241bb420078c3541`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）と適用`AGENTS.md`、作業標準要領、active指示、現物を再読した。開始local recovery branch／remote backup tagはcurrent=`84e24d62424f2c7aed8eea01241bb420078c3541`、previous=`c886a9ad88b501a3475e958b2014867342a3ca8d`。作業中はloopbackだけにbindしたstub Gatewayと独立一時stateを使い、実資格・外部provider・外部作用を使わなかった。
 
-前単位で作成した、復元由来の`held_unverified`旧planとfresh planの併存Gateway fixtureをread-only Recovery inspectionへ接続した。両planは別digest scopeとして返り、holdがfresh planへ伝播しない。続いてfixture内だけで旧planのrevision digestを不一致にし、checkpoint全体digestは再計算した。再inspectionは旧planだけを`residuals_present`／`operation_plan`残差とし、fresh planは`observed`／残差なしのまま返した。hold storeは`held_unverified`を維持し、raw plan IDは投影されない。これはRecovery inventoryの読取範囲で、planの復元可能性・resume許可・実状態の修復を示さない。
+Control Center Recoveryの実browser DOMで「回復台帳を読み取り検査」を実行した。永続checkpointにsynthetic fresh planを併置した後、旧plan revisionだけに残差を作ったinspectionは、旧digest scopeを`residuals_present`／`Operation Plan`残差、新digest scopeを`observed`／残差なしと分けて表示した。画面上には読み取り専用で、復旧可能性・復元・再開許可を示さない説明があり、JSONも`mode=read_only`、`used_for_authority=false`、`may_execute=false`。Runtime Snapshot画面はGateway内の旧planのみを`held_unverified`として表示した。fresh planはRecovery inspection用に隔離checkpointへ追加した状態であり、Gateway runtime内の新規計画作成を証明しない。raw plan IDはDOM／投影へ出ていない。
 
 | 限定確認 | 結果 |
 |---|---|
-| 新規の`recovery_mutation_entry.test.ts`対象test | PASS。旧hold＋fresh planの別scope、片planのsynthetic residual隔離、非権威・非実行・raw ID非露出を確認。 |
-| 同file全4件 | 3件PASS。既存Cron復旧testは既定5秒上限を5.157秒で超過し、単独再実行でも同じ上限超過。test timeout変更なし。 |
-| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。製品コード変更なし。 |
+| loopback Gateway／Control Center Recovery browser DOM | PASS。旧plan残差とfresh planの観測状態が別scope表示。 |
+| Recovery inspection／Runtime Snapshot | PASS。read-only／非権威／非実行フラグを確認し、runtimeの旧plan holdを観測。Recovery inspection上の全体statusは`residuals_present`、Operation Plan残差は1件。 |
+| 対象Gateway test／typecheck／build／全test suite | このDOM確認では未実行。直前の実装batchでは対象test、typecheck、buildがPASSし、同file全件は3/4 PASS・既存Cron testが既定5秒上限を5.157秒超過。 |
 | 実restore／owner approval／Executor作用／実provider／外部書込み／5OS実機／QE_QC／QE_QA | 未実施。 |
 
-次consumerは、旧planだけに残差がある同じ合成状態をControl Center Recoveryの実browser DOMで表示し、fresh plan scopeとの分離・read-only説明・hold継続を操作者向け画面で照合する。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の独立境界を維持する。
+Recovery UIのこのread-only consumerは合成checkpoint上で`WIRED`。E03.03全体は`BUILD_GAP`を維持する。次consumer候補はOperation Plan単位のrestore review preflightとverified backup scopeの結合であり、次作業の開始時に現行コードとrev2.3正本を再照合する。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の独立境界を維持する。
 
-実装test commit=`dd677bc3ca586fef92e765352ff73ea93ed2c7e5`を`main`へpush済み。実装push直後のlocal／remote `main`とcurrent recovery branch／tagは同commit、previous branch／tagは開始HEAD=`65bdd2e9fa0170df179c72a5ee890e3c4c0e7205`。この記録を含むdocs-only closeoutもpushし、終了時のremote HEAD、二世代tag、local branch、worktreeを照合済み。
+製品コードは変更していない。このDOM証拠を含むdocs-only commitを`main`へpushし、終了時にlocal／remote `main`、current／previous recovery branch・backup tag、worktreeを再照合する。
 
 ### 最新BUILD_BATCH：`QEB-03-E03.03-FRESH-PLAN-AFTER-RECOVERY-HOLD`
 
