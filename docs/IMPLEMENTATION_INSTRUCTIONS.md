@@ -1,32 +1,32 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。今回の小単位開始時にowner指定の最新版QE三点全文（rev2.3）、適用AGENTS.md、作業標準、QE再同期規約、active指示、最新HEAD／remote／dirty state、D09.03要求とWebChat接続・runtime snapshot consumerを読み直した。Windows上のBLUE-TANUKIだけを対象とし、D4Pocket／ミニドラには変更を加えない。
+2026-10-18。今回の施工単位開始時に、owner指定の最新版QE三点正本（rev2.3）全文、適用`AGENTS.md`、`docs/作業標準要領.md`、QE再同期規約、active指示、現行HEAD・remote・dirty state、E01.01とCron／RuntimeScheduleの実consumerを読み直した。対象はWindows上のBLUE-TANUKIのみ。D4Pocket／ミニドラのrepoには変更しない。
 
 ## 今回の施工単位
 
-backup ref移行状態=`MIGRATION_COMPLETE`。QE_STAGE=QE_BUILD。BUILD_BATCH=QEB-02-D09.03-BLUE-WEBCHAT-RECONNECT-SNAPSHOT。関連単位=D09.03（BLUE側部分施工）。開始HEAD／origin/main=`cf0458b6f9680439fd32adedfce210b2e663a32a`、clean。編集前local recovery branch／remote backup tagは`cf0458b`／`24c550e`の二世代。実装commit=`b8619bfa57e7454a2dee5532fffe7f14b1144585`をorigin/mainへpush済み。
+backup ref移行状態=`MIGRATION_COMPLETE`。QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E01.01-CRON-EVENT-IDENTITY-CURSOR`。関連単位=E01.01のBLUE Cron／Gateway部分接続。開始HEAD／`origin/main`=`5370e5e54456af59314d203a114547413e3f225a`、clean。編集前のlocal recovery branch／remote backup tagは現世代`5370e5e`、直前世代`cf0458b`。remote二tagとlocal二branchのSHAを確認済み。
 
-### 今回の目的と境界
+### 目的と到達状態
 
-WebChatのWebSocket接続・切断をGateway serviceの起動・停止と誤認させず、現在世代の接続成立後に認証済みRuntime Snapshotを再取得するBLUE側consumerを接続する。保存済みの独立Runtime tokenがない場合は通信せず、snapshot状態をunknownとする。再取得要求は`cache: no-store`を指定し、受信時刻を表示する。古いWebSocket世代のeventと古いsnapshot要求結果は画面を上書きしない。
+承認済みRuntimeScheduleの永続triggerからCron発火まで、同一schedule sourceのイベントに安定したevent IDと単調な予定時刻を与える。private Gateway event cursorにsource/event/payload digestとconsumer状態を保存し、同一eventの再配送を抑止し、より古いeventを拒否する。Cronの同一source内のconsumer呼出しは順序を保つ。未確定状態は成功扱いせず、自動再実行しない。
 
-対象=D09.03 BLUE WebChat接続状態／Runtime Snapshot再同期の部分施工。対象外=D4Pocket変更（別途限定委任が必要）、サービスstop/cancel/restart API、実provider／資格／外部作用、C08.03、全体QE_QC／QE_QA、公開・出荷判断。D09.03全体はD4 consumerと実サービスライフサイクルが未接続のため`BUILD_GAP`のままとする。
+本施工はE01.01の限定接続であり、durable jobの完了、再起動後のpending outbox再配送、全channel共通inbox、E01.02の時差／catch-up、E03の所有権世代・回復を完了扱いしない。これらは実物に照らして次consumerとして残す。
 
-### 必須境界
+### 対象と境界
 
-- Disconnect／画面閉鎖はWebChat側socketを閉じるだけであり、Gateway service停止やjob cancellationを推定・発行しない。
-- reconnect snapshotには専用Runtime tokenを使う。WebChat tokenへ代替せず、tokenがない場合はHTTP requestを送らない。
-- 新しいsnapshotが取れない間はGateway statusをunknownと表示し、古い値を現在状態に見せない。GET応答と要求はcacheしない。
-- D4Pocket／ミニドラrepo、実credential、外部業務作用は対象外。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+- 対象：`apps/gateway/src/cron_channel.ts`、Gateway private event store、`apps/gateway/src/serve.ts`との接続、関連する限定試験、進捗・ロードマップ・変更記録。
+- Cron eventのsourceはschedule origin／IDから導出し、event IDはsourceと予定発火時刻に結合する。payload digestが一致しない同一event IDは衝突として処理し、HDSへ二重配送しない。
+- private DBにはraw content、target、credentialを保存しない。HDS-BRAIN、Approval、Executor、監査の既存責任を保ち、event identityは権限に使わない。
+- 対象外：D4Pocket／ミニドラ変更、実provider／credential／外部業務送信、C08.03、別channelの全面dedup、restart後の未決イベント再実行、全体QE_QC／QE_QA、公開・出荷判断。
 
-## 検証・閉包
+### 最小技術確認
 
-- `pnpm exec vitest run packages/channel-webchat/test/webchat.test.ts`: PASS、1 file／76 tests。Control Center shellと埋込JavaScript構文を確認。
-- `pnpm typecheck`: PASS。
-- `pnpm build`: PASS、15 workspace projects。
-- `git diff --check`: PASS。
-- `pnpm docs:check`: PASS。通常日本語gate・license PASS、日本語基底の移行負債77件を維持。
-- Gateway processとControl Centerを実際に使うWebSocket reconnect E2E、D4 consumer、service stop/cancel、外部provider／資格／送信、全体QE_QC／QE_QAは未実施。
-- 工程表QEB-02のshell系実装に属する部分施工として記録する。前記録のD09.02をQEB-03とした文書ラベルは、工程表に合わせQEB-02へ訂正した。実装状態とD09.02の`BUILD_GAP`は変更しない。
+event storeの再open後に重複・逆順・payload衝突を検査する。Cronのevent ID/source/sequenceと直列dispatchを対象testで確認する。影響したVitest、`pnpm typecheck`、`pnpm build`、`pnpm docs:check`、`git diff --check`を実施し、実送信を行わない。
 
-実装経路はWebChat接続成立→socket世代照合→既存Runtime tokenによるno-store snapshot取得→受信時刻とGateway状態の表示へ接続した。UI切断からGateway停止・job取消へのconsumerは追加していない。BLUE WebChat内の限定接続であり、D09.03全体は`BUILD_GAP`。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+実行結果：`pnpm exec vitest run apps/gateway/test/cron_event_store.test.ts apps/gateway/test/cron_channel.test.ts apps/gateway/test/runtime_schedule.test.ts` PASS（3 files／19 tests）、`pnpm typecheck` PASS、`pnpm build` PASS（15 workspace projects）、`pnpm docs:check` PASS（初回にCHANGELOG移行hashの不一致を検出し、実hashを台帳へ反映後にPASS。移行負債77件）、`git diff --check` PASS。実provider・credential・外部送信なし。
+
+### 停止・復旧・記録
+
+DB破損・schema不整合・event衝突では fail-closed にする。handler開始後に結果が不明なeventは再送しない。処理済み、重複、逆順、衝突、結果不明を区別し、権限や仕事の完了へ昇格させない。完成した技術接続と残るBUILD_GAPを記録し、意味あるbuild batch終了時に限定commitを`main`へpush、remote HEADと復元refsを照合する。今回の変更は検証済みであり、最終diff確認後にpushする。
+
+P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。

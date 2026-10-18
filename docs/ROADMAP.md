@@ -7,7 +7,7 @@
 | 工程 | 主な目的 | 状態 |
 |---|---|---|
 | QE_DESIGN | C/J/M、作用・記憶・外殻の全体設計 | 設計と現在コードの残差あり |
-| QE_BUILD | 一気通貫の全体系を先行実装 | 上記の計画・結果・作用基盤に、受領済みfile.search観測の限定C射影、J表示前引用照合、意味更新案v2のtarget record/version照合、単一宛先Gmail作用と結果不明のJ配送、J計画revision/statusの既存Control Center表示、合成loopback receiptのdigest-only非権威観測を接続。Developer HTTPからの合成runtime照合をbuild済みGateway smokeで確認し、Gmail送信承認では明示的な内容確認とpending command digest結合をBLUE WebChatに追加。WebChat接続成立時の認証済みRuntime Snapshot再取得と、chat socket／Gateway状態の表示分離も実装。実provider receipt照会、D4Pocket画面接続、prior version、一般意味採用、全体系は未接続 |
+| QE_BUILD | 一気通貫の全体系を先行実装 | 上記の計画・結果・作用基盤に、受領済みfile.search観測の限定C射影、J表示前引用照合、意味更新案v2のtarget record/version照合、単一宛先Gmail作用と結果不明のJ配送、J計画revision/statusの既存Control Center表示、合成loopback receiptのdigest-only非権威観測を接続。Developer HTTPからの合成runtime照合をbuild済みGateway smokeで確認し、Gmail送信承認では明示的な内容確認とpending command digest結合をBLUE WebChatに追加。WebChat接続成立時の認証済みRuntime Snapshot再取得と、chat socket／Gateway状態の表示分離も実装。2026-10-18にCron scheduleの安定event identity、private cursor、同一source直列consumerを部分接続。durable job復旧、再起動後の未決イベント再配送、実provider receipt照会、D4Pocket画面接続、prior version、一般意味採用、全体系は未接続 |
 | SYSTEM_SHAPED | 試験仕事が目的→結果→M→復帰まで通る | 全体成立未確認 |
 | BUILD_COVERED | 全機能群の結合形状を確認 | 未成立 |
 | QE_QC | 実物の全体検査・欠陥・原因・改善・再検査 | 未着手 |
@@ -50,6 +50,8 @@ C01～C08.02、D01.01～D01.02などは現行Gitに局所成果を持つが、AG
 2026-10-18のQEB-02-D09.02-BLUE-APPROVAL-CONTENT-REVIEWでは、BLUE WebChatにresume認証付きの明示的Gmail送信内容previewを追加した。previewはcurrent pending commandとproduction payload serializerに結び、approve時にpreview開示記録と同一command digestを一回券消費前とGateway実行直前に確認する。本文は明示preview以外の一覧・snapshot・履歴へ出さず、承認履歴へはdigestのみを投影する。D4 consumerは別途権限が必要で未接続のため、D09.02全体は`BUILD_GAP`を維持する。実送信・credentialは使用していない。
 
 2026-10-18のQEB-02-D09.03-BLUE-WEBCHAT-RECONNECT-SNAPSHOTでは、WebChat接続状態をGateway process状態と区別し、接続成立時にRuntime tokenがある場合だけno-storeの認証済みsnapshotを再取得するBLUE側consumerを追加した。閉じた古いWebSocket eventは無視する。Control Center/Gatewayの実processを使ったreconnect E2E、service stop/cancel、D4Pocket画面接続は未確認・未接続。D09.03全体は`BUILD_GAP`。
+
+2026-10-18のQEB-03-E01.01-CRON-EVENT-IDENTITY-CURSORでは、承認済みRuntimeScheduleのCron発火にsource／予定時刻由来の安定event IDを付け、Gateway private SQLite inbox/outbox cursorへdigestとconsumer状態を保存する。重複・逆順・payload衝突を識別し、未確定consumerを自動再実行せず、同一sourceの呼出しを直列化した。これはE01.01のBLUE Cron部分接続であり、durable job状態、再起動後の未決outbox復旧、全channel共通inbox、catch-up、E01.01全体の成立は未確認のまま`BUILD_GAP`。
 
 ## 旧RCのP13と日本語基底J系列
 

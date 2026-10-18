@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   createGatewayInternalInboundRequest,
   metadataKeyReservedForInternalAuthority,
@@ -6,6 +6,11 @@ import {
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import type { InboundChannel, InboundHandler } from "@blue-tanuki/channel-base";
+import {
+  createCronEventIdentity,
+  type CronEventIdentity,
+  type GatewayCronEventStore,
+} from "./cron_event_store.js";
 
 export interface CronTaskOptions {
   id: string;
@@ -26,8 +31,9 @@ export interface CronSchedulerOptions {
   tasks: CronTaskOptions[];
   log?: (line: string) => void;
   now?: () => Date;
-  onFire?: (task: CronTaskSnapshot) => void;
+  onFire?: (task: CronTaskSnapshot, event: CronEventIdentity) => void;
   content_provider?: CronContentProvider;
+  event_store?: GatewayCronEventStore;
 }
 
 export interface DailyBriefCronOptions {
@@ -112,17 +118,21 @@ export class CronSchedulerChannel implements InboundChannel {
   readonly name = "cron";
   private started = false;
   private readonly runtimes = new Map<string, CronTaskRuntime>();
+  private readonly pendingBySource = new Map<string, Promise<void>>();
+  private readonly pendingFires = new Set<Promise<void>>();
   private readonly logLine?: (line: string) => void;
   private readonly nowFn?: () => Date;
   private handler: InboundHandler | null = null;
-  private readonly onFire?: (task: CronTaskSnapshot) => void;
+  private readonly onFire?: (task: CronTaskSnapshot, event: CronEventIdentity) => void;
   private readonly contentProvider?: CronContentProvider;
+  private readonly eventStore?: GatewayCronEventStore;
 
   constructor(opts: CronSchedulerOptions) {
     this.logLine = opts.log;
     this.nowFn = opts.now;
     this.onFire = opts.onFire;
     this.contentProvider = opts.content_provider;
+    this.eventStore = opts.event_store;
     for (const task of normalizeCronTasks(opts.tasks)) {
       this.runtimes.set(task.id, createRuntime(task));
     }
@@ -149,6 +159,7 @@ export class CronSchedulerChannel implements InboundChannel {
     for (const runtime of this.runtimes.values()) this.stopRuntime(runtime);
     this.started = false;
     this.handler = null;
+    while (this.pendingFires.size > 0) await Promise.all(Array.from(this.pendingFires));
   }
 
   snapshot(): CronTaskSnapshot[] {
@@ -195,8 +206,9 @@ export class CronSchedulerChannel implements InboundChannel {
     if (task.interval_ms && task.interval_ms > 0) {
       runtime.nextFireAtMs = this.nowMs() + task.interval_ms;
       runtime.timer = setInterval(() => {
-        runtime.nextFireAtMs = this.nowMs() + task.interval_ms!;
-        void this.fire(runtime, handler);
+        const scheduledAtMs = runtime.nextFireAtMs ?? this.nowMs();
+        runtime.nextFireAtMs = scheduledAtMs + task.interval_ms!;
+        this.enqueueFire(runtime, handler, scheduledAtMs);
       }, task.interval_ms);
       runtime.timer.unref?.();
       this.log(`[cron] task interval enabled id=${task.id} interval_ms=${task.interval_ms}`);
@@ -211,21 +223,52 @@ export class CronSchedulerChannel implements InboundChannel {
     const delay = delayUntilLocalTime(task.time, now);
     runtime.nextFireAtMs = now.getTime() + delay;
     runtime.timer = setTimeout(() => {
-      void this.fire(runtime, handler).finally(() => {
-        if (this.started && task.enabled) this.scheduleNextDaily(runtime, handler);
+      const scheduledAtMs = runtime.nextFireAtMs ?? this.nowMs();
+      this.enqueueFire(runtime, handler, scheduledAtMs).finally(() => {
+        if (this.started && task.enabled && this.runtimes.get(task.id) === runtime) {
+          this.scheduleNextDaily(runtime, handler);
+        }
       });
     }, delay);
     runtime.timer.unref?.();
     this.log(`[cron] task scheduled id=${task.id} time=${task.time} delay_ms=${delay}`);
   }
 
-  private async fire(runtime: CronTaskRuntime, handler: InboundHandler): Promise<void> {
+  private enqueueFire(runtime: CronTaskRuntime, handler: InboundHandler, scheduledAtMs: number): Promise<void> {
+    const source = `cron:${runtime.task.origin}:${runtime.task.id}`;
+    const queued = (this.pendingBySource.get(source) ?? Promise.resolve())
+      .then(() => this.fire(runtime, handler, scheduledAtMs))
+      .catch((error: unknown) => {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.log(`[cron] dispatch failed id=${runtime.task.id} reason=${truncateMetadata(reason)}`);
+      });
+    this.pendingBySource.set(source, queued);
+    this.pendingFires.add(queued);
+    void queued.then(() => {
+      this.pendingFires.delete(queued);
+      if (this.pendingBySource.get(source) === queued) this.pendingBySource.delete(source);
+    });
+    return queued;
+  }
+
+  private async fire(runtime: CronTaskRuntime, handler: InboundHandler, scheduledAtMs: number): Promise<void> {
     const task = runtime.task;
-    runtime.lastFireAtMs = this.nowMs();
+    runtime.lastFireAtMs = scheduledAtMs;
     const resolved = await this.resolveContent(task);
     const resolvedMetadata = safeCronProviderMetadata(resolved.metadata ?? {});
     const payloadHash = cronPayloadHash({ ...task, content: resolved.content });
-    this.onFire?.(this.snapshotForRuntime(runtime, payloadHash));
+    const event = createCronEventIdentity(`cron:${task.origin}:${task.id}`, scheduledAtMs, payloadHash);
+    const claim = this.eventStore?.claim(event) ?? { status: "accepted" as const };
+    if (claim.status !== "accepted") {
+      this.log(`[cron] event not dispatched id=${task.id} status=${claim.status}${claim.status === "duplicate" || claim.status === "blocked_unresolved" ? ` delivery_state=${claim.delivery_state}` : ""}`);
+      return;
+    }
+    try {
+      this.onFire?.(this.snapshotForRuntime(runtime, payloadHash), event);
+    } catch (error) {
+      this.eventStore?.settle(event, "outcome_unknown");
+      throw error;
+    }
     const metadata: GatewayInternalAuthorityMetadata = {
       ...resolvedMetadata,
       "blue_tanuki.authority_context": "gateway_internal_v1",
@@ -236,13 +279,16 @@ export class CronSchedulerChannel implements InboundChannel {
       "blue_tanuki.cron.task_id": task.id,
       "blue_tanuki.cron.origin": task.origin,
       "blue_tanuki.cron.payload_hash": payloadHash,
+      "blue_tanuki.cron.event_source": event.source,
+      "blue_tanuki.cron.event_id": event.event_id,
+      "blue_tanuki.cron.event_sequence": String(event.sequence),
       "blue_tanuki.cron.content_source": resolvedMetadata["blue_tanuki.cron.content_source"] ?? "static",
       "blue_tanuki.channel_send.channel": task.channel,
       "blue_tanuki.channel_send.target": task.target,
       "blue_tanuki.channel_send.content": resolved.content,
     };
     const inbound: InboundRequest = createGatewayInternalInboundRequest({
-      id: randomUUID(),
+      id: event.event_id,
       channel: "cron",
       user: "blue-tanuki-cron",
       content: resolved.content,
@@ -250,7 +296,13 @@ export class CronSchedulerChannel implements InboundChannel {
       metadata,
     });
     this.log(`[cron] firing task id=${task.id} channel=${task.channel} target=${task.target}`);
-    await handler(inbound);
+    try {
+      await handler(inbound);
+      this.eventStore?.settle(event, "handler_returned");
+    } catch (error) {
+      this.eventStore?.settle(event, "outcome_unknown");
+      throw error;
+    }
   }
 
   private log(line: string): void {

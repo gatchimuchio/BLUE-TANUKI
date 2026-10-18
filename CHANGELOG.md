@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-18 — QEB-03-E01.01 Cronイベント識別cursor
+
+- Cron schedule発火にsource／予定時刻由来のevent IDを付け、digest-onlyのprivate inbox/outbox cursorで重複・逆順・payload衝突を識別する。未確定consumerは自動再実行せず、cursor不整合時は配送を停止する。
+- 同一sourceのconsumer呼出しを直列化し、既存HDS／Approval／Executor経路へevent identityを非権威metadataとして渡す。実provider、外部送信、durable job復旧、全channel共有dedupは本変更に含まない。
+
 ## 2026-10-18 — QEB-02-D09.03 WebChat再接続とGateway状態の分離
 
 - WebChatの切断・画面閉鎖はチャット接続だけを閉じ、Gateway停止とは別であることをControl Centerに表示する。接続成立時、runtime tokenがなければ通信せず、あれば認証済みRuntime Snapshotをno-storeで再取得して受信時刻を示す。

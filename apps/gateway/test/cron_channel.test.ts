@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   CronSchedulerChannel,
   DailyBriefCronChannel,
@@ -6,6 +9,7 @@ import {
   cronSchedulesFromEnv,
   dailyBriefCronFromEnv,
 } from "../src/cron_channel.js";
+import { GatewayCronEventStore } from "../src/cron_event_store.js";
 
 describe("DailyBriefCronChannel snapshot", () => {
   it("exposes the next daily fire time without exposing content", async () => {
@@ -163,6 +167,102 @@ describe("CronSchedulerChannel", () => {
       expect(ch.snapshot()[0]?.last_fire_at_ms).toBe(new Date(2026, 4, 9, 6, 30, 1, 0).getTime());
     } finally {
       await ch.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("serializes same-source deliveries and carries the scheduled event identity", async () => {
+    vi.useFakeTimers();
+    const base = new Date(2026, 4, 9, 6, 30, 0, 0).getTime();
+    vi.setSystemTime(base);
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-channel-"));
+    const store = new GatewayCronEventStore(join(root, "private", "cron-events.sqlite"));
+    const seen: Array<{ id: string; sequence: string | undefined }> = [];
+    let active = 0;
+    let maxActive = 0;
+    let releaseFirst = (): void => undefined;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const ch = new CronSchedulerChannel({
+      tasks: [{
+        id: "ordered",
+        origin: "runtime",
+        channel: "webchat",
+        target: "local-user",
+        content: "synthetic scheduled content",
+        interval_ms: 1000,
+      }],
+      event_store: store,
+      log: () => undefined,
+    });
+
+    try {
+      await ch.start(async (req) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        seen.push({
+          id: req.id,
+          sequence: req.metadata?.["blue_tanuki.cron.event_sequence"],
+        });
+        try {
+          if (seen.length === 1) await firstGate;
+        } finally {
+          active -= 1;
+        }
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(seen).toHaveLength(1);
+      releaseFirst();
+      await ch.stop();
+
+      expect(seen).toHaveLength(3);
+      expect(seen.map(({ sequence }) => Number(sequence))).toEqual([base + 1000, base + 2000, base + 3000]);
+      expect(new Set(seen.map(({ id }) => id)).size).toBe(3);
+      expect(maxActive).toBe(1);
+    } finally {
+      releaseFirst();
+      await ch.stop();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not redeliver a persisted scheduled identity after scheduler restart", async () => {
+    vi.useFakeTimers();
+    const base = new Date(2026, 4, 9, 6, 30, 0, 0).getTime();
+    vi.setSystemTime(base);
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-restart-"));
+    const store = new GatewayCronEventStore(join(root, "private", "cron-events.sqlite"));
+    const received: unknown[] = [];
+    const makeChannel = () => new CronSchedulerChannel({
+      tasks: [{
+        id: "restart-stable",
+        origin: "runtime",
+        channel: "webchat",
+        target: "local-user",
+        content: "synthetic restart content",
+        interval_ms: 1000,
+      }],
+      now: () => new Date(base),
+      event_store: store,
+      log: () => undefined,
+    });
+
+    try {
+      const first = makeChannel();
+      await first.start(async (req) => { received.push(req); });
+      await vi.advanceTimersByTimeAsync(1000);
+      await first.stop();
+
+      const restarted = makeChannel();
+      await restarted.start(async (req) => { received.push(req); });
+      await vi.advanceTimersByTimeAsync(1000);
+      await restarted.stop();
+
+      expect(received).toHaveLength(1);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });

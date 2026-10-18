@@ -94,6 +94,7 @@ import {
 } from "./update_surface.js";
 import { createGatewayEvidencePack } from "./evidence_pack.js";
 import { CronSchedulerChannel, cronSchedulesFromEnv } from "./cron_channel.js";
+import { GatewayCronEventStore } from "./cron_event_store.js";
 import { googleDailyBriefProviderFromEnv } from "./google_daily_brief.js";
 import {
   RuntimeScheduleManager,
@@ -431,18 +432,20 @@ export async function serve(): Promise<ServeShutdown> {
     throw new Error("BLUE_TANUKI_MAINTENANCE_TOKEN must differ from WebChat tokens");
   }
   const cronTasks = cronSchedulesFromEnv(process.env);
+  const cronEventStore = GatewayCronEventStore.fromEnvironment(process.env);
   const cron = new CronSchedulerChannel({
     tasks: [...cronTasks, ...runtimeSchedules.activeCronTasks()],
     log: (line: string) => cronLog.info(line),
     content_provider: googleDailyBriefProviderFromEnv(process.env),
-    onFire: (task) => {
+    event_store: cronEventStore,
+    onFire: (task, event) => {
       hds.onScheduleLifecycle("schedule.lifecycle.fired", {
         schedule_id: task.id,
         origin: task.origin,
         operation: "fire",
         actor: "blue-tanuki-cron",
         payload_hash: task.payload_hash,
-        request_id: null,
+        request_id: event.event_id,
       });
     },
   });
@@ -2005,6 +2008,7 @@ export async function serve(): Promise<ServeShutdown> {
       await router.stop();
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);
+      cronEventStore.close();
       documentOrganizationCheckpointStore?.close();
       documentOrganizationCheckpointStore = null;
       operationPlanState.close();
