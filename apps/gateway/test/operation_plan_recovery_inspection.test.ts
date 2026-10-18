@@ -158,10 +158,12 @@ describe("J OperationPlan recovery inspection", () => {
     const bindings = checkpoint.plans[0]!.bindings;
     const commandIds = bindings.map((binding) => binding.command_id);
     const requestIds = bindings.map((binding) => binding.request_id);
+    const eventIds: string[] = [];
     const makePending = (source: string, sequence: number, bindingIndex: number, now: number) => {
       const event = createCronEventIdentity(source, sequence, sha256(`payload-${source}`));
       expect(cron.claim(event, now).status).toBe("accepted");
       cron.recordPendingApproval(event.event_id, event.payload_digest, commandIds[bindingIndex]!, requestIds[bindingIndex]!, now + 1);
+      eventIds.push(event.event_id);
       return event;
     };
 
@@ -207,6 +209,7 @@ describe("J OperationPlan recovery inspection", () => {
     for (const secret of [
       ...commandIds,
       ...requestIds,
+      ...eventIds,
       ...["synthetic-resolved-source", "synthetic-interrupted-source", "synthetic-duplicate-source-a", "synthetic-duplicate-source-b", "synthetic-pending-source"],
     ]) expect(serialized).not.toContain(secret);
     const projected = JSON.stringify(projection);
