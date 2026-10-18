@@ -206,6 +206,9 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(hds.beginOperationPlanAttempt(selected)).toBe(false);
       expect(hds.reopenOperationPlanMemoryAfterCanonicalRestore()).toBe(true);
       expect(hds.beginOperationPlanAttempt(selected)).toBe(false);
+      const unobservedReview = review(hds, candidate, "independent");
+      expect(unobservedReview.command).toBeNull();
+      expect(unobservedReview.log.commit.reason).toBe("plan_control_denied:plan_recovery_unverified_hold");
 
       hds.closeOperationPlanMemory();
       hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: memory });
@@ -213,6 +216,50 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(hds.beginOperationPlanAttempt(selected)).toBe(false);
     } finally {
       hds?.closeOperationPlanMemory();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("J/M restore observation preserves an unresolved OperationPlan-store hold", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-jm-do-not-clear-plan-restore-hold-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const candidate = plan("older-operation-plan-restore", root);
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal: "unresolved plan-store restore",
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] }],
+    });
+    const planIdDigest = operationPlanDigest(candidate.plan_id);
+    store.compareAndSet(null, checkpoint);
+    store.compareAndSetRecoveryHoldState(null, {
+      schema_version: "operation-plan-recovery-holds.v1",
+      holds: [{ plan_id_digest: planIdDigest, reason: "held_unverified", restore_scope_relation: "requested",
+        provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest("older-plan-restore"),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64), restore_store_key: "operation_plans",
+          restore_backup_id_digest: "c".repeat(64), restore_scope_plan_digest: planIdDigest,
+          restored_state_digest: "d".repeat(64), checkpoint_digest: operationPlanDigest(checkpoint) } }],
+      used_for_authority: false, may_execute: false,
+    });
+    try {
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      const restoreCommand = canonicalMemoryRestoreCommand("m_state");
+      expect(hds.holdOperationPlansForCanonicalMemoryRestore(restoreCommand)).toBe(true);
+      const observation = {
+        status: "matched" as const, operation: "restore" as const, store_key: "m_state" as const,
+        command_id_digest: recoveryCommandIdDigest(restoreCommand.id), operation_digest: "e".repeat(64),
+        result_digest: "f".repeat(64), restore_backup_id_digest: "1".repeat(64),
+        restored_state_digest: "2".repeat(64), store_ledger_status: "verified" as const,
+        store_ledger_residual_count: 0 as const,
+      };
+      expect(hds.recordOperationPlanMemoryRestoreObservation(restoreCommand, observation)).toBe(true);
+      expect(store.loadRecoveryHoldState()).toMatchObject({
+        holds: [{ plan_id_digest: planIdDigest, provenance: { restore_store_key: "operation_plans" } }],
+      });
+      const blocked = review(hds, candidate, "search");
+      expect(blocked.command).toBeNull();
+      expect(blocked.log.commit.reason).toBe("plan_control_denied:plan_recovery_unverified_hold");
+    } finally {
       store.close();
       await rm(root, { recursive: true, force: true });
     }

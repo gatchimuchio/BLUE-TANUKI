@@ -235,6 +235,12 @@ export class JMemoryCommitCoordinator {
     });
   }
 
+  /** Read one persisted M receipt without reconciling or changing J/M state. */
+  readMemoryReceipt(updateId: string): MemoryUpdateReceiptV1 | null {
+    if (this.closed || !isIdentifier(updateId)) return null;
+    return this.memoryLedger.receipt(updateId);
+  }
+
   verify(): boolean {
     return !this.closed && this.store.verify() && this.memoryLedger.verify();
   }

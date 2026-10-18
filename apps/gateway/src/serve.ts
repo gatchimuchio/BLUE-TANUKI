@@ -1373,9 +1373,27 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             if (observationVerified && !gatewayShuttingDown) {
               observationVerified = hds.reopenOperationPlanMemoryAfterCanonicalRestore();
               if (observationVerified) {
-                jMRestoreStoreQuiesced = null;
-                jMRestoreQuiesced = false;
-                canonicalStoreRestoreMaintenanceCommandId = null;
+                observationVerified = hds.recordOperationPlanMemoryRestoreObservation(cmd, {
+                  status: "matched",
+                  operation: "restore",
+                  store_key: observation.store_key as "j_control" | "m_state",
+                  command_id_digest: observation.command_id_digest!,
+                  operation_digest: observation.operation_digest!,
+                  result_digest: observation.result_digest!,
+                  restore_backup_id_digest: observation.restore_backup_id_digest!,
+                  restored_state_digest: observation.restored_state_digest!,
+                  store_ledger_status: "verified",
+                  store_ledger_residual_count: 0,
+                });
+                if (observationVerified) {
+                  jMRestoreStoreQuiesced = null;
+                  jMRestoreQuiesced = false;
+                  canonicalStoreRestoreMaintenanceCommandId = null;
+                } else {
+                  // Keep the Gateway maintenance lock if the HDS hold record
+                  // could not durably bind this observation to the restore.
+                  hds.closeOperationPlanMemory();
+                }
               }
             }
             if (!observationVerified) {

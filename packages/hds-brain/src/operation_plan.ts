@@ -37,6 +37,7 @@ export interface OperationPlanRecoveryEvidenceProvenance {
   readonly command_id_digest: string | null;
   readonly operation_digest: string | null;
   readonly result_digest: string | null;
+  readonly restore_store_key?: "j_control" | "m_state" | "broker" | "operation_plans" | "cron_events" | null;
   readonly restore_backup_id_digest: string | null;
   readonly restore_scope_plan_digest: string | null;
   readonly restored_state_digest: string | null;
@@ -56,6 +57,20 @@ export interface OperationPlanRecoveryHoldState {
   }[];
   readonly used_for_authority: false;
   readonly may_execute: false;
+}
+
+/** A verified post-action observation is recorded as evidence only, never as authority. */
+export interface OperationPlanCanonicalMemoryRestoreObservation {
+  readonly status: "matched";
+  readonly operation: "restore";
+  readonly store_key: "j_control" | "m_state";
+  readonly command_id_digest: string;
+  readonly operation_digest: string;
+  readonly result_digest: string;
+  readonly restore_backup_id_digest: string;
+  readonly restored_state_digest: string;
+  readonly store_ledger_status: "verified";
+  readonly store_ledger_residual_count: 0;
 }
 
 export interface OperationPlanRecoveryEvidence {
@@ -78,16 +93,18 @@ function recoveryEvidenceProvenance(value: unknown): OperationPlanRecoveryEviden
   const raw = value as Record<string, unknown> | undefined;
   if (raw === undefined) return {
     source: "unverified_history", command_id_digest: null, operation_digest: null, result_digest: null,
-    restore_backup_id_digest: null, restore_scope_plan_digest: null, restored_state_digest: null,
+    restore_store_key: null, restore_backup_id_digest: null, restore_scope_plan_digest: null, restored_state_digest: null,
   };
   const digestOrNull = (digest: unknown): digest is string | null => digest === null ||
     (typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest));
   if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
       Object.keys(raw).some((key) => !["source", "command_id_digest", "operation_digest", "result_digest",
-        "restore_backup_id_digest", "restore_scope_plan_digest", "restored_state_digest"].includes(key)) ||
+        "restore_store_key", "restore_backup_id_digest", "restore_scope_plan_digest", "restored_state_digest"].includes(key)) ||
       !["recovery_restore", "unverified_history"].includes(String(raw.source)) ||
       !digestOrNull(raw.command_id_digest) || !digestOrNull(raw.operation_digest) ||
       !digestOrNull(raw.result_digest) || !digestOrNull(raw.restore_backup_id_digest) ||
+      (raw.restore_store_key !== undefined && raw.restore_store_key !== null &&
+        !["j_control", "m_state", "broker", "operation_plans", "cron_events"].includes(String(raw.restore_store_key))) ||
       (raw.restore_scope_plan_digest !== undefined && !digestOrNull(raw.restore_scope_plan_digest)) ||
       !digestOrNull(raw.restored_state_digest)) throw new Error("plan_recovery_evidence_invalid");
   return {
@@ -95,6 +112,8 @@ function recoveryEvidenceProvenance(value: unknown): OperationPlanRecoveryEviden
     command_id_digest: raw.command_id_digest,
     operation_digest: raw.operation_digest,
     result_digest: raw.result_digest,
+    restore_store_key: raw.restore_store_key === undefined || raw.restore_store_key === null
+      ? null : raw.restore_store_key as NonNullable<OperationPlanRecoveryEvidenceProvenance["restore_store_key"]>,
     restore_backup_id_digest: raw.restore_backup_id_digest,
     restore_scope_plan_digest: raw.restore_scope_plan_digest ?? null,
     restored_state_digest: raw.restored_state_digest,
@@ -133,12 +152,13 @@ function parseOperationPlanRecoveryHoldState(value: unknown): OperationPlanRecov
       command_id_digest: provenance.command_id_digest,
       operation_digest: provenance.operation_digest,
       result_digest: provenance.result_digest,
+      restore_store_key: provenance.restore_store_key,
       restore_backup_id_digest: provenance.restore_backup_id_digest,
       restore_scope_plan_digest: provenance.restore_scope_plan_digest,
       restored_state_digest: provenance.restored_state_digest,
     });
     if (Object.keys(provenance).some((key) => !["source", "command_id_digest", "operation_digest", "result_digest",
-      "restore_backup_id_digest", "restore_scope_plan_digest", "restored_state_digest", "checkpoint_digest"].includes(key)) ||
+      "restore_store_key", "restore_backup_id_digest", "restore_scope_plan_digest", "restored_state_digest", "checkpoint_digest"].includes(key)) ||
         typeof provenance.checkpoint_digest !== "string" || !/^[a-f0-9]{64}$/.test(provenance.checkpoint_digest)) {
       throw new Error("plan_recovery_hold_state_invalid");
     }
@@ -396,9 +416,13 @@ export class OperationPlanLedger {
 
   /** Persist a non-authority hold before restoring either J or M as a whole store. */
   holdForCanonicalMemoryRestore(command: ExecuteCommand): boolean {
+    if (command.type !== "tool_call" || command.payload.tool_name !== "recovery.restore" ||
+        !["j_control", "m_state"].includes(String(command.payload.arguments.store_key)) ||
+        command.payload.arguments.confirm !== "RESTORE" || command.upstream_decision.commit_decision !== "ASSERT") return false;
     if (!this.port || this.recoveryRefreshPending || this.activePlanAttempts.size > 0) return false;
     if (this.state.plans.length === 0) return true;
     if (!this.savedDigest) return false;
+    const restoreStoreKey = command.payload.arguments.store_key as "j_control" | "m_state";
     const evidence = parseOperationPlanRecoveryEvidence({
       schema_version: "operation-plan-recovery-evidence.v1",
       scope: "unverified_history",
@@ -408,6 +432,7 @@ export class OperationPlanLedger {
         command_id_digest: recoveryCommandIdDigest(command.id),
         operation_digest: null,
         result_digest: null,
+        restore_store_key: restoreStoreKey,
         restore_backup_id_digest: null,
         restore_scope_plan_digest: null,
         restored_state_digest: null,
@@ -418,7 +443,73 @@ export class OperationPlanLedger {
     });
     this.applyRecoveryEvidence(evidence, true);
     this.persistRecoveryHoldState();
+    // A selection predating a whole-store restore is not reusable after the hold
+    // is later cleared. Started work is kept uncertain rather than made retryable.
+    this.change((state) => {
+      for (const plan of state.plans) for (const binding of plan.bindings) {
+        if (binding.status === "selected") binding.status = "invalidated";
+        if (binding.status === "intent_committed") binding.status = "outcome_unknown";
+      }
+    });
     return true;
+  }
+
+  /** Attach a matched J/M restore observation to its existing non-authority holds. */
+  recordCanonicalMemoryRestoreObservation(
+    command: ExecuteCommand,
+    observation: OperationPlanCanonicalMemoryRestoreObservation,
+  ): boolean {
+    const digest = (value: string) => /^[a-f0-9]{64}$/.test(value);
+    if (command.type !== "tool_call" || command.payload.tool_name !== "recovery.restore" ||
+        command.payload.arguments.store_key !== observation.store_key || command.payload.arguments.confirm !== "RESTORE" ||
+        command.upstream_decision.commit_decision !== "ASSERT" ||
+        observation.status !== "matched" || observation.operation !== "restore" ||
+        !["j_control", "m_state"].includes(observation.store_key) ||
+        observation.store_ledger_status !== "verified" || observation.store_ledger_residual_count !== 0 ||
+        !digest(observation.command_id_digest) || observation.command_id_digest !== recoveryCommandIdDigest(command.id) ||
+        !digest(observation.operation_digest) || !digest(observation.result_digest) ||
+        !digest(observation.restore_backup_id_digest) || !digest(observation.restored_state_digest)) return false;
+    if (this.state.plans.length === 0) return this.recoveryHolds.size === 0;
+    if (!this.state.plans.every((plan) => this.recoveryHolds.has(operationPlanDigest(plan.revisions[0]!.plan.plan_id)))) {
+      return false;
+    }
+
+    const updated = new Map<string, { reason: OperationPlanRecoveryHoldReason;
+      restore_scope_relation: OperationPlanRecoveryScopeRelation; provenance: OperationPlanRecoveryHoldProvenance }>();
+    for (const [planId, hold] of this.recoveryHolds) updated.set(planId, hold);
+    let matched = 0;
+    for (const [planId, hold] of updated) {
+      if (hold.reason !== "held_unverified" || hold.provenance.source !== "recovery_restore" ||
+          hold.provenance.command_id_digest !== observation.command_id_digest) continue;
+      matched++;
+      updated.set(planId, { ...hold, provenance: {
+        ...hold.provenance,
+        restore_store_key: observation.store_key,
+        operation_digest: observation.operation_digest,
+        result_digest: observation.result_digest,
+        restore_backup_id_digest: observation.restore_backup_id_digest,
+        restored_state_digest: observation.restored_state_digest,
+      } });
+    }
+    // Older residual/unobserved holds remain protective. They do not prevent the
+    // J/M pair from reopening once the current restore itself has been observed.
+    if (matched === 0) return this.state.plans.every((plan) => {
+      const hold = this.recoveryHolds.get(operationPlanDigest(plan.revisions[0]!.plan.plan_id));
+      if (!hold) return false;
+      if (hold.reason !== "held_unverified" || hold.provenance.source !== "recovery_restore") return true;
+      return hold.provenance.restore_store_key !== "j_control" && hold.provenance.restore_store_key !== "m_state";
+    });
+    const previous = new Map(this.recoveryHolds);
+    this.recoveryHolds.clear();
+    for (const [planId, hold] of updated) this.recoveryHolds.set(planId, hold);
+    try {
+      this.persistRecoveryHoldState();
+      return true;
+    } catch {
+      this.recoveryHolds.clear();
+      for (const [planId, hold] of previous) this.recoveryHolds.set(planId, hold);
+      return false;
+    }
   }
 
   /** Close only an idle, internally verified J/M pair before whole-store restore. */
@@ -551,6 +642,76 @@ export class OperationPlanLedger {
     return { ...source, checkpoint_digest: evidence.checkpoint_digest };
   }
 
+  private recoveryDependenciesVerified(
+    plan: PlanState,
+    hold: { readonly reason: OperationPlanRecoveryHoldReason; readonly provenance: OperationPlanRecoveryHoldProvenance },
+  ): boolean {
+    try {
+      const provenance = hold.provenance;
+      if (hold.reason !== "held_unverified" || provenance.source !== "recovery_restore" ||
+          (provenance.restore_store_key !== "j_control" && provenance.restore_store_key !== "m_state") ||
+          !provenance.command_id_digest || !provenance.operation_digest || !provenance.result_digest ||
+          !provenance.restore_backup_id_digest || !provenance.restored_state_digest ||
+          !/^[a-f0-9]{64}$/.test(provenance.checkpoint_digest) || !this.port || !this.resultMemory ||
+          this.memoryQuiesced || !this.savedDigest || operationPlanDigest(this.port.load()) !== this.savedDigest ||
+          !this.resultMemory.verify()) return false;
+
+      // A restore can invalidate prior selections, but must never turn an uncertain
+      // or still-selected attempt into a fresh attempt. Such plans stay held for explicit recovery.
+      if (plan.bindings.some((binding) => binding.status === "selected" ||
+          binding.status === "intent_committed" || binding.status === "outcome_unknown")) {
+        return false;
+      }
+      const verified = plan.bindings.filter((binding) => binding.status === "verified");
+      if (verified.length === 0 && (plan.results.length > 0 || plan.bindings.some((binding) =>
+        !["invalidated", "not_attempted"].includes(binding.status) || binding.execution_admission !== undefined ||
+        binding.delivery_digest !== undefined || binding.memory_commit !== undefined || binding.memory_receipt !== undefined))) {
+        return false;
+      }
+
+      const lifecycle = this.resultMemory.snapshot();
+      if (!lifecycle || lifecycle.status !== "ready" ||
+          !["idle", "effect_confirmed"].includes(lifecycle.lifecycle_state) ||
+          lifecycle.pending.some((entry) => entry.lifecycle_state !== "effect_confirmed")) return false;
+
+      return verified.every((binding) => {
+        if (!binding.execution_admission || !binding.delivery_digest || !binding.memory_commit || !binding.memory_receipt ||
+            !verifyResultMemoryCommit(plan, binding) || !receiptForResultCommit(binding.memory_receipt, binding.memory_commit)) {
+          return false;
+        }
+        const commit = binding.memory_commit;
+        if (commit.changes.length !== 1 || commit.changes[0]?.operation !== "upsert") return false;
+        const directReceipt = this.resultMemory!.readMemoryReceipt(commit.update_id);
+        const jEntries = lifecycle.pending.filter((entry) => entry.update_id === commit.update_id);
+        if (!directReceipt || jEntries.length !== 1) return false;
+        const jEntry = jEntries[0]!;
+        if (jEntry.lifecycle_state !== "effect_confirmed" || jEntry.status !== "receipt_confirmed" ||
+            jEntry.j_event_id !== commit.j_event_id || jEntry.content_digest !== commit.content_digest ||
+            !jEntry.receipt || operationPlanDigest(jEntry.receipt) !== operationPlanDigest(binding.memory_receipt) ||
+            operationPlanDigest(directReceipt) !== operationPlanDigest(binding.memory_receipt) ||
+            !receiptForResultCommit(directReceipt, commit)) return false;
+        const record = this.resultMemory!.readMemoryRecord(resultMemoryIdentity(binding).record_id);
+        return !!record?.exists && operationPlanDigest(record.value) === operationPlanDigest(commit.changes[0]!.value);
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  private releaseRecoveryHoldForFreshReview(plan: PlanState): boolean {
+    const planIdDigest = operationPlanDigest(plan.revisions[0]!.plan.plan_id);
+    const hold = this.recoveryHolds.get(planIdDigest);
+    if (!hold || !this.recoveryDependenciesVerified(plan, hold)) return false;
+    this.recoveryHolds.delete(planIdDigest);
+    try {
+      this.persistRecoveryHoldState();
+      return true;
+    } catch {
+      this.recoveryHolds.set(planIdDigest, hold);
+      return false;
+    }
+  }
+
   private addRecoveryHold(
     planIdDigest: string,
     reason: OperationPlanRecoveryHoldReason,
@@ -563,10 +724,19 @@ export class OperationPlanLedger {
       return;
     }
     const rank: Record<OperationPlanRecoveryHoldReason, number> = {
-      held_unobserved: 1, held_residual: 2, held_unverified: 3,
+      held_unobserved: 1, held_unverified: 2, held_residual: 3,
     };
     if (rank[reason] > rank[existing.reason]) this.recoveryHolds.set(planIdDigest,
       { reason, restore_scope_relation: restoreScopeRelation, provenance });
+    else if (reason === existing.reason && reason === "held_unverified" &&
+        provenance.source === "recovery_restore" && provenance.command_id_digest !== null &&
+        (provenance.restore_store_key === "j_control" || provenance.restore_store_key === "m_state") &&
+        existing.provenance.source === "recovery_restore" &&
+        (existing.provenance.restore_store_key === "j_control" || existing.provenance.restore_store_key === "m_state")) {
+      // A new whole-store restore supersedes the earlier pending observation for
+      // this same kind of hold; its result still has to be observed afterwards.
+      this.recoveryHolds.set(planIdDigest, { reason, restore_scope_relation: restoreScopeRelation, provenance });
+    }
   }
 
   private persistRecoveryHoldState(): void {
@@ -597,21 +767,20 @@ export class OperationPlanLedger {
   }
 
   inspectControl(control: Extract<OperationPlanControl, { action: "review" | "revise" }>, caller: InboundRequest): {
-    plan_id: string; revision_digest: string; step?: OperationStep; goal: string;
+    plan_id: string; revision_digest: string; step?: OperationStep; goal: string; recovery_hold_released: boolean;
   } {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
-    if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
     const p = this.ownedPlan(control.plan_id, caller);
-    if (control.action === "review") {
-      const recoveryHold = this.recoveryHolds.get(operationPlanDigest(p.revisions[0]!.plan.plan_id));
-      if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
-    }
+    let recoveryHoldReleased = false;
+    const recoveryHold = control.action === "review"
+      ? this.recoveryHolds.get(operationPlanDigest(p.revisions[0]!.plan.plan_id)) : undefined;
+    if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
     const current = p.revisions.at(-1)!;
     const expected = control.action === "review" ? control.revision_digest : control.expected_revision_digest;
     if (expected !== current.digest) throw new Error("plan_revision_changed");
     if (control.action === "revise") {
       this.revisionImpact(p, control.plan);
-      return { plan_id: control.plan_id, revision_digest: expected, goal: p.goal };
+      return { plan_id: control.plan_id, revision_digest: expected, goal: p.goal, recovery_hold_released: false };
     }
     const steps = current.plan.steps.filter((s) => s.step_id === control.step_id || operationPlanDigest(s.step_id) === control.step_id);
     if (steps.length !== 1) throw new Error("plan_step_identity_mismatch");
@@ -625,7 +794,13 @@ export class OperationPlanLedger {
     if (!step || inspected.summary.steps.find((s) => s.step_id === stepId)?.status !== "ready") throw new Error("plan_step_not_ready");
     // 実接続がある、対象と引数を狭く結び付けたadapterだけをcommand化する。
     if (!hasConnectedPlanTarget(step)) throw new Error("plan_target_resolver_not_connected");
-    return { plan_id: current.plan.plan_id, revision_digest: expected, step, goal: p.goal };
+    // 期限切れrevisionや不正stepの要求では復元holdを消さない。
+    if (recoveryHold && !this.releaseRecoveryHoldForFreshReview(p)) {
+      throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
+    }
+    recoveryHoldReleased = recoveryHold !== undefined;
+    return { plan_id: current.plan.plan_id, revision_digest: expected, step, goal: p.goal,
+      recovery_hold_released: recoveryHoldReleased };
   }
 
   /** Check the current J binding and issue no authority beyond one short-lived read-only lookup. */

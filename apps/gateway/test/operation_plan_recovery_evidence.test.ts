@@ -41,7 +41,8 @@ describe("Recovery observationからHDS計画保留を導出", () => {
   it("cleanな計画証拠は観測状態のまま渡し、権限化しない", () => {
     const evidence = operationPlanRecoveryEvidenceFromObservation({ observation: observation(), checkpoint, history_complete: true });
     expect(evidence).toMatchObject({ scope: "restored_operation_plans", used_for_authority: false, may_execute: false,
-      provenance: { source: "recovery_restore", command_id_digest: createHash("sha256").update("recovery-command-1").digest("hex") },
+      provenance: { source: "recovery_restore", restore_store_key: "operation_plans",
+        command_id_digest: createHash("sha256").update("recovery-command-1").digest("hex") },
       plans: planIds.map((plan_id, index) => ({ plan_id_digest: operationPlanDigest(plan_id),
         restore_scope_relation: index === 0 ? "requested" : "collateral", restore_membership: "restored",
         integrity: "verified", dependency_status: "observed" })) });
@@ -133,7 +134,7 @@ describe("Recovery observationからHDS計画保留を導出", () => {
         plans: [],
         used_for_authority: false,
         may_execute: false,
-        provenance: { source: "recovery_restore" },
+        provenance: { source: "recovery_restore", restore_store_key: store_key },
       });
       const verified = operationPlanRecoveryEvidenceFromObservation({
         observation: observation({
@@ -145,7 +146,8 @@ describe("Recovery observationからHDS計画保留を導出", () => {
         history_complete: true,
       });
       if (store_key === "j_control" || store_key === "m_state") {
-        expect(verified).toMatchObject({ scope: "unverified_history", plans: [], used_for_authority: false, may_execute: false });
+        expect(verified).toMatchObject({ scope: "unverified_history", plans: [], used_for_authority: false, may_execute: false,
+          provenance: { restore_store_key: store_key } });
       } else {
         expect(verified).toBeUndefined();
       }

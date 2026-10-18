@@ -21,6 +21,13 @@ function request(content: string): InboundRequest {
   return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: "fixture-owner", timestamp: Date.now(), content,
     metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer" } });
 }
+function recoveryCommandIdDigest(commandId: string): string { return createHash("sha256").update(commandId).digest("hex"); }
+function canonicalMemoryRestoreCommand(): ExecuteCommand {
+  return { id: randomUUID(), type: "tool_call",
+    payload: { tool_name: "recovery.restore", arguments: { backup_id: "fixture", store_key: "m_state", confirm: "RESTORE" } },
+    upstream_decision: { request_id: randomUUID(), commit_hash: "a".repeat(64), commit_decision: "ASSERT" },
+  } as unknown as ExecuteCommand;
+}
 function candidate(id: string, root: string): OperationPlan {
   const target = { kind: "directory" as const, id: root };
   const output = { root, sandbox_root: root, query: "blue", visited_files: 1, matches: [{ path: "blue.txt", line_number: 1, line: "blue" }] };
@@ -146,6 +153,84 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       for (const secret of [c.workspace, c.admission.ticket_id, c.admission.execution_epoch, '"matches"', '"execution_admission"']) expect(visible).not.toContain(secret);
       expect(c.invoke).toHaveBeenCalledTimes(1); expect((await c.executor.execute(c.approved)).status).toBe("failed");
     } finally { reopened.close(); j.close(); }
+  }));
+
+  it("J/M restore hold clears only at a fresh review after digest-exact dependencies are verified", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id,
+      target_surface: "channel" });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toMatchObject({ adopted: 1, deferred: 0 });
+    expect(c.j.load()?.plans[0]?.bindings[0]?.memory_receipt).toBeDefined();
+
+    const staleSelection = review(c.hds, c.plan, "dependent")!;
+    const restoreCommand = canonicalMemoryRestoreCommand();
+    expect(c.hds.quiesceOperationPlanMemoryForCanonicalRestore()).toBe(true);
+    expect(c.hds.holdOperationPlansForCanonicalMemoryRestore(restoreCommand)).toBe(true);
+    expect(c.hds.beginOperationPlanAttempt(staleSelection)).toBe(false);
+    expect(c.hds.reopenOperationPlanMemoryAfterCanonicalRestore()).toBe(true);
+
+    const observation = (command: ExecuteCommand) => ({
+      status: "matched" as const,
+      operation: "restore" as const,
+      store_key: "m_state" as const,
+      command_id_digest: recoveryCommandIdDigest(command.id),
+      operation_digest: createHash("sha256").update("restore-operation").digest("hex"),
+      result_digest: createHash("sha256").update("restore-result").digest("hex"),
+      restore_backup_id_digest: createHash("sha256").update("restore-backup").digest("hex"),
+      restored_state_digest: createHash("sha256").update("restored-state").digest("hex"),
+      store_ledger_status: "verified" as const,
+      store_ledger_residual_count: 0 as const,
+    });
+    const unrelatedRestore = canonicalMemoryRestoreCommand();
+    expect(c.hds.recordOperationPlanMemoryRestoreObservation(unrelatedRestore, observation(unrelatedRestore))).toBe(false);
+    expect(c.hds.recordOperationPlanMemoryRestoreObservation(restoreCommand, observation(restoreCommand))).toBe(true);
+    expect(c.hds.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unverified" });
+
+    const currentPlan = c.hds.getRuntimeSnapshot().operation_plans.plans[0]!;
+    const staleReview = c.hds.decide(request(`plan:review ${JSON.stringify({ plan_id: currentPlan.plan_id,
+      revision_digest: "f".repeat(64), step_id: operationPlanDigest("dependent") })}`));
+    expect(staleReview.command).toBeNull();
+    expect(staleReview.log.commit.reason).toBe("plan_control_denied:plan_revision_changed");
+    expect(c.hds.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unverified" });
+
+    const freshSelection = review(c.hds, c.plan, "dependent")!;
+    expect(freshSelection.type).toBe("tool_call");
+    expect(freshSelection.id).not.toBe(staleSelection.id);
+    expect(c.hds.beginOperationPlanAttempt(staleSelection)).toBe(false);
+    expect(c.hds.getRuntimeSnapshot().operation_plans.plans[0]).not.toHaveProperty("recovery_hold_reason");
+    expect(c.hds.getAudit().verify()).toBe(true);
+  }));
+
+  it("J/M restore permits a fresh review when an unexecuted plan has no J/M result dependency", async () => fixture(async (c) => {
+    const staleSelection = c.cmd;
+    const restoreCommand = canonicalMemoryRestoreCommand();
+    expect(c.hds.quiesceOperationPlanMemoryForCanonicalRestore()).toBe(true);
+    expect(c.hds.holdOperationPlansForCanonicalMemoryRestore(restoreCommand)).toBe(true);
+    expect(c.hds.beginOperationPlanAttempt(staleSelection, c.admission)).toBe(false);
+    expect(c.hds.reopenOperationPlanMemoryAfterCanonicalRestore()).toBe(true);
+
+    const observation = {
+      status: "matched" as const,
+      operation: "restore" as const,
+      store_key: "m_state" as const,
+      command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+      operation_digest: createHash("sha256").update("no-dependency-restore-operation").digest("hex"),
+      result_digest: createHash("sha256").update("no-dependency-restore-result").digest("hex"),
+      restore_backup_id_digest: createHash("sha256").update("no-dependency-restore-backup").digest("hex"),
+      restored_state_digest: createHash("sha256").update("no-dependency-restored-state").digest("hex"),
+      store_ledger_status: "verified" as const,
+      store_ledger_residual_count: 0 as const,
+    };
+    expect(c.hds.recordOperationPlanMemoryRestoreObservation(restoreCommand, observation)).toBe(true);
+    expect(c.hds.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unverified" });
+
+    const freshSelection = review(c.hds, c.plan, "search")!;
+    expect(freshSelection.type).toBe("tool_call");
+    expect(freshSelection.id).not.toBe(staleSelection.id);
+    expect(c.hds.beginOperationPlanAttempt(staleSelection, c.admission)).toBe(false);
+    expect(c.hds.getRuntimeSnapshot().operation_plans.plans[0]).not.toHaveProperty("recovery_hold_reason");
   }));
 
   it("J commit後ack前の中断は同結果再送で回復し、ID差替えを拒否して結果を二重追加しない", async () => fixture(async (c) => {

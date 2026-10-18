@@ -30,7 +30,8 @@ import {
   type FailureReviewProjection,
 } from "@blue-tanuki/protocol";
 import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
-  type OperationPlanRecoveryEvidence, type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
+  type OperationPlanRecoveryEvidence, type OperationPlanReceiptReconciliationAuthorization,
+  type OperationPlanCanonicalMemoryRestoreObservation } from "./operation_plan.js";
 import { reviewResultReflection, type ResultObservationProjection } from "./operation_result_reflection.js";
 import type {
   ApprovalGateLog,
@@ -398,7 +399,7 @@ ${planControl.question}`,
         planControlFailure = ["plan_control_requires_internal_developer", "plan_owner_or_identity_mismatch",
           "plan_revision_changed", "plan_step_identity_mismatch", "plan_step_already_selected_or_attempted", "plan_step_not_ready",
           "plan_recovery_residual_hold", "plan_recovery_unobserved_hold", "plan_recovery_unverified_hold",
-          "plan_recovery_refresh_hold",
+          "plan_recovery_refresh_hold", "plan_memory_commit_pending",
           "plan_target_resolver_not_connected", "plan_revision_identity_changed", "plan_revision_unchanged",
           "plan_attempted_step_or_dependency_changed", "plan_reflection_memory_unavailable", "plan_reflection_step_identity_mismatch",
           "plan_reflection_observation_not_current", "plan_reflection_record_mismatch", "plan_reflection_observation_expired",
@@ -1288,6 +1289,12 @@ ${planControl.question}`,
   closeOperationPlanMemory(): void { this.operationPlans.closeMemory(); }
   holdOperationPlansForCanonicalMemoryRestore(command: ExecuteCommand): boolean {
     return this.operationPlans.holdForCanonicalMemoryRestore(command);
+  }
+  recordOperationPlanMemoryRestoreObservation(
+    command: ExecuteCommand,
+    observation: OperationPlanCanonicalMemoryRestoreObservation,
+  ): boolean {
+    return this.operationPlans.recordCanonicalMemoryRestoreObservation(command, observation);
   }
   quiesceOperationPlanMemoryForCanonicalRestore(): boolean {
     return this.operationPlans.quiesceMemoryForCanonicalRestore();
