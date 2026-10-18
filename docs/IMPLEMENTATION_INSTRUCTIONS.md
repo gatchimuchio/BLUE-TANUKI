@@ -8,6 +8,12 @@
 
 したがって外部service restartを既存Recovery consumerとみなせず、HDS L3から非`operation_plans` selected-store全体restoreまでを安全につなぐ実行可能経路はまだない。次BUILD_BATCHは、restore対象storeの外に置く永続single-use transitionのproducer／consumerを設計・実装接続する。HDS final review command・backup/store digest・owner lease世代・各crash phaseを固定し、transition自体は非権威の進行証拠に限定する。起動時はtransitionの完全性と対象store再観測が終わるまで該当consumerを開かず、不明・重複・不整合はholdへ閉じる。HDSだけが承認し、pending approvalを再利用して自動resumeしない。実restore・実approval・実restart・外部作用は未実施。E03.03=`BUILD_GAP`、C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
 
+### 追加監査：approval世代とBroker選択復元
+
+開始HEAD=`29098931f151e4845e6b5271b464e2f127b8a524`で、rev2.3のE03.03・関係要求、AGENTS、active指示とHDS／Executor／Broker保存経路を再読した。E03.03の再起動条件は旧worker・旧承認を拒否すること。実装も起動時に保存済み`selected` bindingを`invalidated`、`intent_committed`を`outcome_unknown`へ変え、Executor ticketは現在の`execution_epoch`と期限へ束縛する。従って再起動を越えるtransitionは承認やExecutor ticketを保持・再利用せず、要求対象とbackup/store digestだけの非権威contextを渡し、新processでHDSが改めてL3判断する。
+
+`broker` canonical storeは`GatewayExecutionIntentStore`自身のticket／単回消費／result outbox正本である。既存Executorはrestoreの前後に同じstoreへticket・receiptを書き込むため、selected `broker` snapshotの置換で実行中restore自身のreceiptまで失う。Brokerを閉じたまま既存Executorでrestoreする経路もない。これは他のconsumerの停止処理へまとめて隠せない別のBUILD_GAPであり、専用のBroker所有取引・結果照合が成立するまで`broker` restoreをfail-closedに保つ。次consumerは、fresh HDS L3と新しい実行世代を要求しつつ、選択したBroker全体restoreが自身の実行意思・receiptを消さない接続契約である。
+
 ### 先行consumer監査
 
 `QEB-03-E03.03-NON-OP-CANONICAL-STORE-RESTORE-CONSUMER-AUDIT` は2026-10-19にread-onlyで完了。開始HEAD／`origin/main`=`c31cf529b03dec25aabc827fa2ba0ff8d3687936`、開始worktree clean。canonical stateは5 storeの独立snapshotでcross-store atomicityなし。L3 request／作用直前のscope検査とin-process HDS refreshは`operation_plans`だけに接続され、非plan restoreのpost-action observationはplan holdへ変換されない。実consumerとして、HDS J／M transaction store、Gateway Broker result outboxと起動時reconciliation、Cron event inbox／outbox・pending approval回復・J側no-replay照合を確認した。restore前の共通quiescence判定とrestore後hold接続は存在せず、実restore・並行実行・再起動は未試験。
