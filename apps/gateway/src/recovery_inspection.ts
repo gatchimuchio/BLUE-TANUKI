@@ -16,7 +16,9 @@ import {
 } from "./operation_plan_recovery_inspection.js";
 import {
   inspectCronEventRecoveryLedger,
+  type CronApprovalCommandMatch,
   type CronEventRecoveryInspection,
+  type CronEventRecoveryLedgerInspection,
   type CronEventRecoveryReason,
   type CronEventRecoveryStatus,
 } from "./cron_event_recovery_inspection.js";
@@ -40,7 +42,7 @@ export interface RecoveryUpdateResidual {
 }
 
 export interface GatewayRecoveryInspectionReport {
-  readonly schema_version: 4;
+  readonly schema_version: 5;
   readonly surface: "recovery_inspection";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present";
@@ -68,6 +70,7 @@ export interface GatewayRecoveryInspectionReport {
   readonly execution_residual_count: number;
   readonly operation_plan_residual_count: number;
   readonly cron_event_residual_count: number;
+  readonly cron_approval_correlation_residual_count: number;
   readonly external_backup_restore_point: "not_examined";
   readonly used_for_authority: false;
   readonly may_execute: false;
@@ -117,6 +120,15 @@ export interface OperationPlanBrokerCorrelation {
     | "receipt_mismatch"
     | "ambiguous"
     | "matched";
+  readonly cron_approval_correlation:
+    | "not_recorded"
+    | "pending"
+    | "interrupted"
+    | "resolved"
+    | "ambiguous"
+    | "not_observed_due_to_limit"
+    | "cron_unverified"
+    | "plan_binding_unverified";
 }
 
 export interface RecoveryLedgerBoundaryObservation {
@@ -128,7 +140,7 @@ export interface RecoveryLedgerBoundaryObservation {
 }
 
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 3;
+  readonly schema_version: 4;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -150,6 +162,7 @@ export interface GatewayRecoveryOperatorProjection {
   readonly execution_residual_count: number;
   readonly operation_plan_residual_count: number;
   readonly cron_event_residual_count: number;
+  readonly cron_approval_correlation_residual_count: number;
   readonly operation_plan_correlations: readonly {
     readonly plan_id_digest: string;
     readonly step_id_digest: string;
@@ -161,6 +174,7 @@ export interface GatewayRecoveryOperatorProjection {
     readonly delivery_correlation: OperationPlanBrokerCorrelation["delivery_correlation"];
     readonly memory_update_id_digest: string | null;
     readonly memory_correlation: OperationPlanBrokerCorrelation["memory_correlation"];
+    readonly cron_approval_correlation: OperationPlanBrokerCorrelation["cron_approval_correlation"];
   }[];
   readonly omitted_operation_plan_correlation_count: number;
   readonly update_residuals: readonly RecoveryUpdateResidual[];
@@ -193,6 +207,12 @@ const MEMORY_CORRELATIONS: readonly OperationPlanBrokerCorrelation["memory_corre
   "missing_verified_m_link", "pending_m_commit", "pending_j_receipt", "blocked_j", "m_present_for_blocked_j",
   "content_mismatch", "event_identity_mismatch", "revision_mismatch", "receipt_mismatch", "ambiguous", "matched",
 ];
+const CRON_APPROVAL_CORRELATIONS: readonly OperationPlanBrokerCorrelation["cron_approval_correlation"][] = [
+  "not_recorded", "pending", "interrupted", "resolved", "ambiguous", "not_observed_due_to_limit", "cron_unverified", "plan_binding_unverified",
+];
+const CRON_APPROVAL_CORRELATION_RESIDUALS = new Set<OperationPlanBrokerCorrelation["cron_approval_correlation"]>([
+  "ambiguous", "not_observed_due_to_limit", "cron_unverified", "plan_binding_unverified",
+]);
 const RECOVERY_LEDGER_REASONS: readonly NonNullable<RecoveryLedgerBoundaryObservation["reason"]>[] = [
   "disk_full", "write_failed", "sync_failed", "schema_mismatch", "ledger_corrupt", "projection_mismatch",
   "store_unavailable", "outbox_mismatch",
@@ -285,9 +305,10 @@ function projectOperatorOperationPlanCorrelations(
     const deliveryCorrelation = fixedEnum(value.delivery_correlation, DELIVERY_CORRELATIONS);
     const memoryUpdateIdDigest = value.memory_update_id_digest === null ? null : fixedDigest(value.memory_update_id_digest);
     const memoryCorrelation = fixedEnum(value.memory_correlation, MEMORY_CORRELATIONS);
+    const cronApprovalCorrelation = fixedEnum(value.cron_approval_correlation, CRON_APPROVAL_CORRELATIONS);
     if (!planIdDigest || !stepIdDigest || !commandIdDigest || !status || !bindingIntegrity ||
         (value.admission_digest !== null && !admissionDigest) || !brokerCorrelation || !deliveryCorrelation ||
-        (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || !memoryCorrelation) continue;
+        (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || !memoryCorrelation || !cronApprovalCorrelation) continue;
     rows.push({
       plan_id_digest: planIdDigest,
       step_id_digest: stepIdDigest,
@@ -299,6 +320,7 @@ function projectOperatorOperationPlanCorrelations(
       delivery_correlation: deliveryCorrelation,
       memory_update_id_digest: memoryUpdateIdDigest,
       memory_correlation: memoryCorrelation,
+      cron_approval_correlation: cronApprovalCorrelation,
     });
   }
   return { rows, omitted: values.length - rows.length };
@@ -394,21 +416,30 @@ function projectCronEventSummary(value: unknown): {
 export function projectGatewayRecoveryInspectionForOperator(value: unknown): GatewayRecoveryOperatorProjection {
   const source = isRecord(value) ? value : {};
   const ledgers = isRecord(source.ledgers) ? source.ledgers : {};
-  const reportShapeValid = source.schema_version === 4 && source.surface === "recovery_inspection" && source.mode === "read_only";
+  const reportShapeValid = source.schema_version === 5 && source.surface === "recovery_inspection" && source.mode === "read_only";
   const sourceStatus = fixedEnum(source.status, ["verified", "residuals_present"] as const);
   const cronEvents = projectCronEventSummary(ledgers.cron_events);
   const cronLedgerStatus = fixedEnum(isRecord(ledgers.cron_events) ? ledgers.cron_events.status : null, CRON_RECOVERY_STATUSES);
   const cronResidualCount = source.cron_event_residual_count;
-  const cronBoundaryValid = cronEvents.valid && cronLedgerStatus === cronEvents.summary.status &&
-    Number.isSafeInteger(cronResidualCount) && cronResidualCount === cronEvents.summary.residual_count;
-  const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false && sourceStatus !== null && cronBoundaryValid;
+  const cronApprovalCorrelationResidualCount = source.cron_approval_correlation_residual_count;
   const operationPlanSources = Array.isArray(source.operation_plan_correlations) ? source.operation_plan_correlations : [];
+  const cronCorrelationStates = operationPlanSources.map((item) =>
+    isRecord(item) ? fixedEnum(item.cron_approval_correlation, CRON_APPROVAL_CORRELATIONS) : null,
+  );
+  const cronCorrelationsValid = cronCorrelationStates.every((item) => item !== null) &&
+    Number.isSafeInteger(cronApprovalCorrelationResidualCount) &&
+    cronCorrelationStates.filter((item) => item !== null && CRON_APPROVAL_CORRELATION_RESIDUALS.has(item)).length ===
+      cronApprovalCorrelationResidualCount;
+  const cronBoundaryValid = cronEvents.valid && cronLedgerStatus === cronEvents.summary.status &&
+    Number.isSafeInteger(cronResidualCount) && cronResidualCount === cronEvents.summary.residual_count &&
+    Number.isSafeInteger(cronApprovalCorrelationResidualCount) && (cronApprovalCorrelationResidualCount as number) >= 0 && cronCorrelationsValid;
+  const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false && sourceStatus !== null && cronBoundaryValid;
   const updateSources = Array.isArray(source.update_residuals) ? source.update_residuals : [];
   const operationPlans = projectOperatorOperationPlanCorrelations(operationPlanSources, boundaryValid);
   const updates = projectOperatorUpdateResiduals(updateSources, boundaryValid);
   const ledgerStatuses = ["verified", "projection_mismatch", "corrupt", "residuals_present", "unavailable", "schema_mismatch"] as const;
   return {
-    schema_version: 3,
+    schema_version: 4,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -433,6 +464,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     execution_residual_count: fixedCount(source.execution_residual_count),
     operation_plan_residual_count: fixedCount(source.operation_plan_residual_count),
     cron_event_residual_count: fixedCount(source.cron_event_residual_count),
+    cron_approval_correlation_residual_count: fixedCount(source.cron_approval_correlation_residual_count),
     operation_plan_correlations: operationPlans.rows,
     omitted_operation_plan_correlation_count: operationPlans.omitted,
     update_residuals: updates.rows,
@@ -554,11 +586,19 @@ export function inspectGatewayRecoveryState(
   const operationPlans = paths?.operationPlansPath
     ? inspectOperationPlanRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.operationPlansPath })
     : unavailableOperationPlans;
-  const cronEvents = paths?.cronEventsPath
-    ? inspectCronEventRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.cronEventsPath })
-    : unavailableCronEvents;
+  const cronCommandIdDigests = operationPlans.bindings
+    .filter((binding) => binding.integrity === "verified")
+    .map((binding) => binding.cron_command_id_digest);
+  const cronInspection: CronEventRecoveryLedgerInspection = paths?.cronEventsPath
+    ? inspectCronEventRecoveryLedger({
+        private_state_root: paths.privateRoot,
+        database_path: paths.cronEventsPath,
+        command_id_digests: cronCommandIdDigests,
+      })
+    : { ...unavailableCronEvents, approval_command_matches: [] };
+  const { approval_command_matches: cronApprovalMatches, ...cronEvents } = cronInspection;
   const residuals = correlateRecoveryUpdates(j, m);
-  const operationPlanCorrelations = correlateOperationPlanBindings(operationPlans, execution, j, m);
+  const operationPlanCorrelations = correlateOperationPlanBindings(operationPlans, execution, j, m, cronEvents, cronApprovalMatches);
   const operationPlanMemoryLinkResidualCount = operationPlanCorrelations.filter((item) =>
     item.memory_correlation !== "not_recorded" && item.memory_correlation !== "matched",
   ).length;
@@ -571,6 +611,9 @@ export function inspectGatewayRecoveryState(
   const operationPlanCorrelationResidualCount = operationPlanCorrelations.filter((item) =>
     ["admission_missing", "not_found", "not_observed_due_to_limit", "ambiguous", "broker_unverified"].includes(item.broker_correlation) ||
     ["j_not_recorded", "broker_not_recorded", "mismatch"].includes(item.delivery_correlation),
+  ).length;
+  const cronApprovalCorrelationResidualCount = operationPlanCorrelations.filter((item) =>
+    CRON_APPROVAL_CORRELATION_RESIDUALS.has(item.cron_approval_correlation),
   ).length;
   const operationPlanStructuralResidualCount = operationPlans.plan_integrity_residual_count + operationPlans.residual_binding_count +
     (operationPlans.omitted_binding_count > 0 ? 1 : 0);
@@ -594,9 +637,9 @@ export function inspectGatewayRecoveryState(
   const checkpointVerified = storesVerified && execution.status === "verified" && operationPlansResolved.status === "verified" &&
     cronEvents.status === "verified" &&
     !hasHardResidual && operationPlanCorrelationResidualCount === 0 && operationPlanMemoryLinkResidualCount === 0 &&
-    operationPlans.omitted_binding_count === 0;
+    operationPlans.omitted_binding_count === 0 && cronApprovalCorrelationResidualCount === 0;
   return {
-    schema_version: 4,
+    schema_version: 5,
     surface: "recovery_inspection",
     mode: "read_only",
     status: checkpointVerified ? "verified" : "residuals_present",
@@ -622,6 +665,7 @@ export function inspectGatewayRecoveryState(
     execution_residual_count: executionResidualCount,
     operation_plan_residual_count: operationPlanResidualCount,
     cron_event_residual_count: cronEvents.residual_count,
+    cron_approval_correlation_residual_count: cronApprovalCorrelationResidualCount,
     external_backup_restore_point: "not_examined",
     used_for_authority: false,
     may_execute: false,
@@ -636,6 +680,8 @@ export function correlateOperationPlanBindings(
   execution: ExecutionIntentRecoveryInspection,
   j: PersistenceLedgerInspection,
   m: PersistenceLedgerInspection,
+  cronEvents: CronEventRecoveryInspection,
+  cronApprovalMatches: readonly CronApprovalCommandMatch[],
 ): OperationPlanBrokerCorrelation[] {
   const byAdmission = new Map<string, ExecutionIntentRecoveryInspection["records"]>();
   if (execution.status === "verified") {
@@ -681,8 +727,34 @@ export function correlateOperationPlanBindings(
       delivery_correlation: deliveryCorrelation,
       memory_update_id_digest: binding.memory_link.update_id_digest,
       memory_correlation: correlateOperationPlanMemoryBinding(binding.memory_link, j, m),
+      cron_approval_correlation: correlateCronApprovalHandoff(binding, cronEvents, cronApprovalMatches),
     };
   });
+}
+
+function correlateCronApprovalHandoff(
+  binding: OperationPlanRecoveryInspection["bindings"][number],
+  cronEvents: CronEventRecoveryInspection,
+  matches: readonly CronApprovalCommandMatch[],
+): OperationPlanBrokerCorrelation["cron_approval_correlation"] {
+  if (binding.integrity !== "verified" || !HEX_DIGEST.test(binding.cron_command_id_digest)) return "plan_binding_unverified";
+  if (["unavailable", "schema_mismatch", "corrupt"].includes(cronEvents.status)) return "cron_unverified";
+  const omitted = cronEvents.omitted_approval_handoff_count;
+  const unverified = cronEvents.unverified_approval_handoff_count;
+  if (omitted === null || unverified === null) return "cron_unverified";
+  if (omitted > 0) return "not_observed_due_to_limit";
+  if (unverified > 0) return "cron_unverified";
+  const match = matches.find((item) => item.command_id_digest === binding.cron_command_id_digest);
+  if (!match) return "not_recorded";
+  if (match.row_count !== 1 || match.states.length !== 1) return "ambiguous";
+  switch (match.states[0]) {
+    case "pending": return "pending";
+    case "interrupted": return "interrupted";
+    case "consumed":
+    case "rejected":
+    case "cancelled": return "resolved";
+    default: return "cron_unverified";
+  }
 }
 
 function correlateOperationPlanMemoryBinding(

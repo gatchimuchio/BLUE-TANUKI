@@ -282,6 +282,8 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       recovery.ledgers.execution,
       recovery.ledgers.j,
       mismatchedMemory,
+      recovery.ledgers.cron_events,
+      [],
     ).find((item) => item.memory_update_id_digest !== null);
     expect(mismatchCorrelation?.memory_correlation).toBe("content_mismatch");
     const recoveryJson = JSON.stringify(recovery);

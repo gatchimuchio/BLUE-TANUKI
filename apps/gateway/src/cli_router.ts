@@ -109,13 +109,14 @@ async function runRecoveryInspectCli(): Promise<void> {
     writeStdout(`Cron events: ${cronEvents.status}; cursors=${cronEvents.verified_cursor_count ?? "unavailable"}/${cronEvents.cursor_count ?? "unavailable"}; unresolved_cursors=${cronEvents.unresolved_cursor_count ?? "unavailable"}; unverified_cursors=${cronEvents.unverified_cursor_count ?? "unavailable"}; orphan_outbox=${cronEvents.orphan_outbox_count ?? "unavailable"}; approvals=${cronEvents.verified_approval_handoff_count ?? "unavailable"}/${cronEvents.approval_handoff_count ?? "unavailable"}; pending_approvals=${cronEvents.pending_approval_handoff_count ?? "unavailable"}; interrupted_approvals=${cronEvents.interrupted_approval_handoff_count ?? "unavailable"}; residuals=${cronEvents.residual_count}`);
     if (cronEvents.reason) writeStdout(`Cron events reason: ${cronEvents.reason}`);
     for (const correlation of report.operation_plan_correlations) {
-      writeStdout(`plan=${correlation.plan_id_digest} step=${correlation.step_id_digest} binding=${correlation.status}/${correlation.binding_integrity} broker=${correlation.broker_correlation} delivery=${correlation.delivery_correlation} memory=${correlation.memory_correlation}${correlation.memory_update_id_digest ? ` update=${correlation.memory_update_id_digest}` : ""}`);
+      writeStdout(`plan=${correlation.plan_id_digest} step=${correlation.step_id_digest} binding=${correlation.status}/${correlation.binding_integrity} broker=${correlation.broker_correlation} delivery=${correlation.delivery_correlation} memory=${correlation.memory_correlation} cron_approval=${correlation.cron_approval_correlation}${correlation.memory_update_id_digest ? ` update=${correlation.memory_update_id_digest}` : ""}`);
     }
     writeStdout(`Replay checkpoint: ${report.replay_checkpoint?.kind ?? "not confirmed"}`);
     writeStdout(`External backup restore point: ${report.external_backup_restore_point}`);
     writeStdout(`Isolated update references: ${report.isolated_update_count}`);
     writeStdout(`Execution ledger residuals: ${report.execution_residual_count}`);
     writeStdout(`Operation plan residuals: ${report.operation_plan_residual_count}`);
+    writeStdout(`Cron approval correlation residuals: ${report.cron_approval_correlation_residual_count}`);
     for (const residual of report.update_residuals) {
       writeStdout(`update=${residual.update_id_digest} disposition=${residual.disposition}`);
     }

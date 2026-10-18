@@ -11,8 +11,9 @@ import {
   type OperationPlan,
 } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
+import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
-import { inspectGatewayRecoveryState } from "../src/recovery_inspection.js";
+import { inspectGatewayRecoveryState, projectGatewayRecoveryInspectionForOperator } from "../src/recovery_inspection.js";
 
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -145,6 +146,73 @@ describe("J OperationPlan recovery inspection", () => {
     expect(report.ledgers.operation_plans.status).toBe("unavailable");
     expect(await readFile(planPath)).toEqual(before);
     expect(await readFile(sidecar, "utf8")).toBe("sentinel");
+  });
+
+  it("correlates Cron approval handoffs to Operation Plan bindings by digest without changing either ledger", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-cron-"));
+    const { stateRoot, privateRoot, checkpoint } = await createPlanState(temporaryRoot, 5);
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const cronPath = path.join(cronDirectory, "cron-events.sqlite");
+    const cron = new GatewayCronEventStore(cronPath);
+    const bindings = checkpoint.plans[0]!.bindings;
+    const commandIds = bindings.map((binding) => binding.command_id);
+    const requestIds = bindings.map((binding) => binding.request_id);
+    const makePending = (source: string, sequence: number, bindingIndex: number, now: number) => {
+      const event = createCronEventIdentity(source, sequence, sha256(`payload-${source}`));
+      expect(cron.claim(event, now).status).toBe("accepted");
+      cron.recordPendingApproval(event.event_id, event.payload_digest, commandIds[bindingIndex]!, requestIds[bindingIndex]!, now + 1);
+      return event;
+    };
+
+    const resolvedEvent = makePending("synthetic-resolved-source", 1, 0, 10);
+    cron.resolvePendingApproval(
+      resolvedEvent.event_id,
+      resolvedEvent.payload_digest,
+      commandIds[0]!,
+      requestIds[0]!,
+      "consumed",
+      12,
+    );
+    makePending("synthetic-interrupted-source", 2, 1, 20);
+    makePending("synthetic-duplicate-source-a", 3, 4, 30);
+    makePending("synthetic-duplicate-source-b", 4, 4, 40);
+    expect(cron.recoverPendingApprovalHandoffs(50)).toBe(3);
+    makePending("synthetic-pending-source", 5, 2, 60);
+    cron.close();
+
+    const planPath = path.join(privateRoot, "operation-plans", "j-state.sqlite");
+    const planBefore = await readFile(planPath);
+    const cronBefore = await readFile(cronPath);
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
+
+    expect(report.operation_plan_correlations.map((item) => item.cron_approval_correlation)).toEqual([
+      "resolved", "interrupted", "pending", "not_recorded", "ambiguous",
+    ]);
+    expect(report.cron_approval_correlation_residual_count).toBe(1);
+    expect(report.replay_checkpoint).toBeNull();
+    expect(report.used_for_authority).toBe(false);
+    expect(report.may_execute).toBe(false);
+    const projection = projectGatewayRecoveryInspectionForOperator(report);
+    expect(projection).toMatchObject({
+      status: "residuals_present",
+      cron_approval_correlation_residual_count: 1,
+      operation_plan_correlations: report.operation_plan_correlations.map((item) => ({
+        cron_approval_correlation: item.cron_approval_correlation,
+      })),
+      used_for_authority: false,
+      may_execute: false,
+    });
+    const serialized = JSON.stringify(report);
+    for (const secret of [
+      ...commandIds,
+      ...requestIds,
+      ...["synthetic-resolved-source", "synthetic-interrupted-source", "synthetic-duplicate-source-a", "synthetic-duplicate-source-b", "synthetic-pending-source"],
+    ]) expect(serialized).not.toContain(secret);
+    const projected = JSON.stringify(projection);
+    for (const secret of [...commandIds, ...requestIds]) expect(projected).not.toContain(secret);
+    expect(await readFile(planPath)).toEqual(planBefore);
+    expect(await readFile(cronPath)).toEqual(cronBefore);
   });
 });
 

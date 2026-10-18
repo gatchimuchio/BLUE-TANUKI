@@ -333,7 +333,7 @@ describe("Gateway read-only recovery inspection", () => {
 describe("Gateway recovery operator projection", () => {
   it("retains digest-keyed residual rows while omitting raw identifiers and unrelated fields", () => {
     const report = {
-      schema_version: 4,
+      schema_version: 5,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -356,6 +356,7 @@ describe("Gateway recovery operator projection", () => {
         delivery_correlation: "not_observed",
         memory_update_id_digest: "f".repeat(64),
         memory_correlation: "missing_plan_memory_link",
+        cron_approval_correlation: "plan_binding_unverified",
         command_id: "RAW_COMMAND_SENTINEL",
         ticket_id: "RAW_TICKET_SENTINEL",
       }],
@@ -368,6 +369,7 @@ describe("Gateway recovery operator projection", () => {
       execution_residual_count: 0,
       operation_plan_residual_count: 1,
       cron_event_residual_count: 0,
+      cron_approval_correlation_residual_count: 1,
       external_backup_restore_point: "not_examined",
       used_for_authority: false,
       may_execute: false,
@@ -380,7 +382,7 @@ describe("Gateway recovery operator projection", () => {
       surface: "recovery_inspection_operator",
       mode: "read_only",
       status: "residuals_present",
-      schema_version: 3,
+      schema_version: 4,
       ledgers: { j: "verified", m: "projection_mismatch", broker: "verified", operation_plans: "residuals_present" },
       ledger_boundaries: {
         j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
@@ -398,8 +400,10 @@ describe("Gateway recovery operator projection", () => {
         delivery_correlation: "not_observed",
         memory_update_id_digest: "f".repeat(64),
         memory_correlation: "missing_plan_memory_link",
+        cron_approval_correlation: "plan_binding_unverified",
       }],
       omitted_operation_plan_correlation_count: 0,
+      cron_approval_correlation_residual_count: 1,
       update_residuals: [{ update_id_digest: "e".repeat(64), disposition: "content_mismatch" }],
       omitted_update_residual_count: 0,
       external_backup_restore_point: "not_examined",
@@ -425,15 +429,17 @@ describe("Gateway recovery operator projection", () => {
       delivery_correlation: "not_recorded",
       memory_update_id_digest: null,
       memory_correlation: "not_recorded",
+      cron_approval_correlation: "not_recorded",
     };
     const update = { update_id_digest: "e".repeat(64), disposition: "blocked_j" };
     const capped = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 4,
+      schema_version: 5,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
       ledgers: { cron_events: cronEventInspection("verified") },
       cron_event_residual_count: 0,
+      cron_approval_correlation_residual_count: 0,
       replay_checkpoint: null,
       operation_plan_correlations: Array.from({ length: 201 }, () => row),
       update_residuals: Array.from({ length: 201 }, () => update),
@@ -446,7 +452,7 @@ describe("Gateway recovery operator projection", () => {
     expect(capped.omitted_update_residual_count).toBe(1);
 
     const invalid = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 4,
+      schema_version: 5,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "verified",
@@ -471,7 +477,7 @@ describe("Gateway recovery operator projection", () => {
 
   it("hides inconsistent or unavailable ledger positions instead of presenting an empty recovery boundary", () => {
     const projection = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 4,
+      schema_version: 5,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -482,6 +488,7 @@ describe("Gateway recovery operator projection", () => {
         cron_events: cronEventInspection("verified"),
       },
       cron_event_residual_count: 0,
+      cron_approval_correlation_residual_count: 0,
       operation_plan_correlations: [],
       update_residuals: [],
       used_for_authority: false,
@@ -496,19 +503,51 @@ describe("Gateway recovery operator projection", () => {
 
   it("invalidates the entire operator boundary when Cron summary counts do not reconcile", () => {
     const projection = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 4,
+      schema_version: 5,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "verified",
       ledgers: { cron_events: { ...cronEventInspection("verified"), cursor_count: 2 } },
       operation_plan_correlations: [],
       update_residuals: [],
+      cron_approval_correlation_residual_count: 0,
       used_for_authority: false,
       may_execute: false,
     });
     expect(projection.status).toBe("invalid_report");
     expect(projection.boundary_valid).toBe(false);
     expect(projection.cron_event_summary.cursor_count).toBeNull();
+  });
+
+  it("invalidates the operator boundary when the Cron correlation residual count disagrees with its rows", () => {
+    const projection = projectGatewayRecoveryInspectionForOperator({
+      schema_version: 5,
+      surface: "recovery_inspection",
+      mode: "read_only",
+      status: "residuals_present",
+      ledgers: { cron_events: cronEventInspection("verified") },
+      cron_event_residual_count: 0,
+      cron_approval_correlation_residual_count: 0,
+      operation_plan_correlations: [{
+        plan_id_digest: "a".repeat(64),
+        step_id_digest: "b".repeat(64),
+        command_id_digest: "c".repeat(64),
+        status: "not_attempted",
+        binding_integrity: "verified",
+        admission_digest: null,
+        broker_correlation: "not_admitted",
+        delivery_correlation: "not_recorded",
+        memory_update_id_digest: null,
+        memory_correlation: "not_recorded",
+        cron_approval_correlation: "ambiguous",
+      }],
+      update_residuals: [],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(projection.status).toBe("invalid_report");
+    expect(projection.boundary_valid).toBe(false);
+    expect(projection.operation_plan_correlations).toEqual([]);
   });
 });
 

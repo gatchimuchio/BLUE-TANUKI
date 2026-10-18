@@ -707,7 +707,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 3,
+            schema_version: 4,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -752,6 +752,7 @@ describe("WebChatChannel — Recovery surface", () => {
               delivery_correlation: "not_observed",
               memory_update_id_digest: "f".repeat(64),
               memory_correlation: "m_state_unverified",
+              cron_approval_correlation: "cron_unverified",
             }],
             omitted_operation_plan_correlation_count: 0,
             update_residuals: [{ update_id_digest: "e".repeat(64), disposition: "content_mismatch" }],
@@ -760,6 +761,7 @@ describe("WebChatChannel — Recovery surface", () => {
             execution_residual_count: 0,
             operation_plan_residual_count: 1,
             cron_event_residual_count: 1,
+            cron_approval_correlation_residual_count: 1,
             external_backup_restore_point: "not_examined",
             boundary_valid: true,
             used_for_authority: false,
@@ -834,10 +836,12 @@ describe("WebChatChannel — Recovery surface", () => {
         },
         operation_plan_residual_count: 1,
         cron_event_residual_count: 1,
+        cron_approval_correlation_residual_count: 1,
         cron_event_summary: { status: "unavailable", residual_count: 1, cursor_count: null, pending_approval_handoff_count: null },
         operation_plan_correlations: [{
           memory_update_id_digest: "f".repeat(64),
           memory_correlation: "m_state_unverified",
+          cron_approval_correlation: "cron_unverified",
         }],
         external_backup_restore_point: "not_examined",
         used_for_authority: false,

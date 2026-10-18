@@ -1591,7 +1591,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               (cronReason !== "ledger_corrupt" || cronCounts.unverified_cursor_count + cronCounts.unverified_approval_handoff_count > 0) &&
               (cronReason !== "outbox_mismatch" || cronCounts.orphan_outbox_count > 0));
         const cronLedgerStatus = recoveryInspectionLedgerStatus(ledgers.cron_events, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
-        const boundaryOk = source.schema_version === 3 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount;
+        const cronApprovalCorrelationResidualCount = recoveryInspectionCount(source.cron_approval_correlation_residual_count);
+        const boundaryOk = source.schema_version === 4 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && cronApprovalCorrelationResidualCount !== null;
         const status = boundaryOk
           ? recoveryInspectionEnum(source.status, ["verified", "residuals_present", "invalid_report"])
           : "invalid_report";
@@ -1615,7 +1616,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const deliveryCorrelation = recoveryInspectionEnum(value.delivery_correlation, ["matched", "not_recorded", "j_not_recorded", "broker_not_recorded", "mismatch", "not_observed"]);
               const memoryUpdateIdDigest = value.memory_update_id_digest === null ? null : recoveryInspectionDigest(value.memory_update_id_digest);
               const memoryCorrelation = recoveryInspectionEnum(value.memory_correlation, ["not_recorded", "missing_plan_memory_link", "binding_unverified", "j_state_unverified", "m_state_unverified", "missing_verified_j_link", "missing_verified_m_link", "pending_m_commit", "pending_j_receipt", "blocked_j", "m_present_for_blocked_j", "content_mismatch", "event_identity_mismatch", "revision_mismatch", "receipt_mismatch", "ambiguous", "matched"]);
-              if (!planIdDigest || !stepIdDigest || !commandIdDigest || (value.admission_digest !== null && !admissionDigest) || (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || bindingStatus === "unknown" || bindingIntegrity === "unknown" || brokerCorrelation === "unknown" || deliveryCorrelation === "unknown" || memoryCorrelation === "unknown") return null;
+              const cronApprovalCorrelation = recoveryInspectionEnum(value.cron_approval_correlation, ["not_recorded", "pending", "interrupted", "resolved", "ambiguous", "not_observed_due_to_limit", "cron_unverified", "plan_binding_unverified"]);
+              if (!planIdDigest || !stepIdDigest || !commandIdDigest || (value.admission_digest !== null && !admissionDigest) || (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || bindingStatus === "unknown" || bindingIntegrity === "unknown" || brokerCorrelation === "unknown" || deliveryCorrelation === "unknown" || memoryCorrelation === "unknown" || cronApprovalCorrelation === "unknown") return null;
               return {
                 plan_id_digest: planIdDigest,
                 step_id_digest: stepIdDigest,
@@ -1626,7 +1628,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 broker_correlation: brokerCorrelation,
                 delivery_correlation: deliveryCorrelation,
                 memory_update_id_digest: memoryUpdateIdDigest,
-                memory_correlation: memoryCorrelation
+                memory_correlation: memoryCorrelation,
+                cron_approval_correlation: cronApprovalCorrelation
               };
             }).filter(function (item) { return item !== null; })
           : [];
@@ -1654,6 +1657,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           execution_residual_count: recoveryInspectionCount(source.execution_residual_count),
           operation_plan_residual_count: recoveryInspectionCount(source.operation_plan_residual_count),
           cron_event_residual_count: recoveryInspectionCount(source.cron_event_residual_count),
+          cron_approval_correlation_residual_count: cronApprovalCorrelationResidualCount,
           cron_event_summary: {
             status: cronStatus,
             reason: cronReason,

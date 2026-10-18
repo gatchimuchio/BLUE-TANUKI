@@ -30,6 +30,19 @@ export interface CronEventRecoveryInspection {
   readonly used_for_authority: false;
 }
 
+export type CronApprovalHandoffState = "pending" | "interrupted" | "consumed" | "rejected" | "cancelled";
+
+export interface CronApprovalCommandMatch {
+  readonly command_id_digest: string;
+  readonly row_count: number;
+  readonly states: readonly CronApprovalHandoffState[];
+}
+
+export interface CronEventRecoveryLedgerInspection extends CronEventRecoveryInspection {
+  /** Digest-only matches requested by the recovery aggregator; never contains command IDs. */
+  readonly approval_command_matches: readonly CronApprovalCommandMatch[];
+}
+
 interface CronCursorRow {
   source_digest: unknown;
   sequence: unknown;
@@ -54,12 +67,16 @@ interface CronApprovalRow {
   state: unknown;
   created_at_ms: unknown;
   updated_at_ms: unknown;
+  cursor_source_digest: unknown;
+  cursor_sequence: unknown;
+  cursor_event_id: unknown;
+  cursor_payload_digest: unknown;
 }
 
 function unavailableInspection(
   status: "corrupt" | "unavailable" | "schema_mismatch",
   reason: CronEventRecoveryReason,
-): CronEventRecoveryInspection {
+): CronEventRecoveryLedgerInspection {
   return {
     status,
     reason,
@@ -77,6 +94,7 @@ function unavailableInspection(
     interrupted_approval_handoff_count: null,
     residual_count: 1,
     used_for_authority: false,
+    approval_command_matches: [],
   };
 }
 
@@ -185,6 +203,8 @@ function validApprovalRow(row: CronApprovalRow): boolean {
     typeof row.command_id_digest === "string" && DIGEST.test(row.command_id_digest) &&
     typeof row.request_id_digest === "string" && DIGEST.test(row.request_id_digest) &&
     ["pending", "interrupted", "consumed", "rejected", "cancelled"].includes(String(row.state)) &&
+    row.cursor_source_digest === row.source_digest && row.cursor_sequence === row.sequence &&
+    row.cursor_event_id === row.event_id && row.cursor_payload_digest === row.payload_digest &&
     nonnegativeSafeInteger(row.created_at_ms) && nonnegativeSafeInteger(row.updated_at_ms);
 }
 
@@ -192,7 +212,8 @@ function validApprovalRow(row: CronApprovalRow): boolean {
 export function inspectCronEventRecoveryLedger(options: {
   readonly private_state_root: string;
   readonly database_path: string;
-}): CronEventRecoveryInspection {
+  readonly command_id_digests?: readonly string[];
+}): CronEventRecoveryLedgerInspection {
   let database: DatabaseType | undefined;
   let databasePath = "";
   try {
@@ -236,9 +257,17 @@ export function inspectCronEventRecoveryLedger(options: {
         o.delivery_state AS outbox_delivery_state,o.updated_at_ms AS outbox_updated_at_ms
       FROM cron_event_inbox i LEFT JOIN cron_event_outbox o ON o.source_digest=i.source_digest
       ORDER BY i.source_digest LIMIT ?`).all(CRON_INSPECTION_ROW_LIMIT) as unknown as CronCursorRow[];
-    const approvalRows = database.prepare(`SELECT source_digest,sequence,event_id,payload_digest,command_id_digest,
-        request_id_digest,state,created_at_ms,updated_at_ms FROM cron_approval_handoff
-      ORDER BY event_id,command_id_digest LIMIT ?`).all(CRON_INSPECTION_ROW_LIMIT) as unknown as CronApprovalRow[];
+    const approvalRows = database.prepare(`SELECT a.source_digest,a.sequence,a.event_id,a.payload_digest,a.command_id_digest,
+        a.request_id_digest,a.state,a.created_at_ms,a.updated_at_ms,
+        i.source_digest AS cursor_source_digest,i.sequence AS cursor_sequence,i.event_id AS cursor_event_id,
+        i.payload_digest AS cursor_payload_digest
+      FROM cron_approval_handoff a LEFT JOIN cron_event_inbox i ON i.source_digest=a.source_digest
+      ORDER BY a.event_id,a.command_id_digest LIMIT ?`).all(CRON_INSPECTION_ROW_LIMIT) as unknown as CronApprovalRow[];
+
+    const wantedCommandDigests = new Set((options.command_id_digests ?? [])
+      .filter((value) => typeof value === "string" && DIGEST.test(value))
+      .map((value) => value.toLowerCase()));
+    const approvalMatches = new Map<string, { row_count: number; states: Set<CronApprovalHandoffState> }>();
 
     let verifiedCursorCount = 0;
     let unverifiedCursorCount = 0;
@@ -260,6 +289,13 @@ export function inspectCronEventRecoveryLedger(options: {
         unverifiedApprovalCount++;
       } else {
         verifiedApprovalCount++;
+        const commandIdDigest = String(row.command_id_digest).toLowerCase();
+        if (wantedCommandDigests.has(commandIdDigest)) {
+          const match = approvalMatches.get(commandIdDigest) ?? { row_count: 0, states: new Set<CronApprovalHandoffState>() };
+          match.row_count++;
+          match.states.add(row.state as CronApprovalHandoffState);
+          approvalMatches.set(commandIdDigest, match);
+        }
         if (row.state === "pending") pendingApprovalCount++;
         if (row.state === "interrupted") interruptedApprovalCount++;
       }
@@ -287,6 +323,11 @@ export function inspectCronEventRecoveryLedger(options: {
       interrupted_approval_handoff_count: interruptedApprovalCount,
       residual_count: residualCount,
       used_for_authority: false,
+      approval_command_matches: [...approvalMatches.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([command_id_digest, match]) => ({
+        command_id_digest,
+        row_count: match.row_count,
+        states: [...match.states].sort(),
+      })),
     };
   } catch {
     return unavailableInspection("unavailable", "store_unavailable");
