@@ -20,7 +20,7 @@ selected-store restore成功結果からraw backup IDを保存せずSHA-256 dige
 | `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
 | 実restore／実再起動／owner承認／provider credential／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
 
-実装commit=`8e46072`。push後のmain／backup refs／clean worktreeは最終closeoutで記録する。E03.03=`BUILD_GAP`を維持する。次consumerは残差／未観測依存を実際に読む起動・復旧・再開経路が現存するかの監査。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。別repo、実業務作用、公開・出荷判断なし。
+実装commit=`8e46072`。docs-only closeoutを含むmainをpushし、local／remote mainとcurrent backup branch／tagをcloseout HEADへ、previous branch／tagを開始HEADへ合わせてSHA照合し、worktree cleanを確認した。E03.03=`BUILD_GAP`を維持する。次consumerは残差／未観測依存を実際に読む起動・復旧・再開経路が現存するかの監査。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。別repo、実業務作用、公開・出荷判断なし。
 
 ## 前回のBUILD_BATCH実績
 
