@@ -4,6 +4,7 @@ import { Script } from "node:vm";
 import { WebSocket } from "ws";
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import type { SendMeta } from "@blue-tanuki/channel-base";
+import { CONTROL_CENTER_SCRIPT } from "../src/control_center_script.js";
 import {
   WebChatChannel,
   MemoryTicketStore,
@@ -365,6 +366,82 @@ describe("WebChatChannel — construction", () => {
 });
 
 describe("WebChatChannel — Control Center shell", () => {
+  it("projects only the five ordered canonical store statuses and rejects malformed rows", () => {
+    const functionSource = (name: string): string => {
+      const start = CONTROL_CENTER_SCRIPT.indexOf(`function ${name}(`);
+      const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
+      const end = next < 0 ? CONTROL_CENTER_SCRIPT.length : next;
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      return CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    };
+    const helpers = [
+      functionSource("recoveryInspectionEnum"),
+      functionSource("recoveryInspectionCount"),
+      functionSource("recoveryInspectionDigest"),
+      functionSource("recoveryBackupStoreStatuses"),
+    ].join("\n");
+    const render = functionSource("renderRecoveryBackupInspection");
+    const evaluate = (rows: unknown, counts: Record<string, unknown> = {}) => new Script(`
+      const output = {};
+      function setText(key, value) { output[key] = value; }
+      function byId() { return { className: "" }; }
+      function compactJson(value) { return JSON.stringify(value); }
+      ${helpers}
+      ${render}
+      renderRecoveryBackupInspection(report);
+      JSON.parse(output["recovery-backup-inspection-json"]);
+    `).runInNewContext({ report: {
+      schema_version: 1,
+      surface: "recovery_backup_inspection",
+      mode: "read_only",
+      status: "verified",
+      backup_id_digest: "a".repeat(64),
+      coverage: "complete_for_configured_targets",
+      configured_required_item_count: 1,
+      copied_required_item_count: 1,
+      missing_required_item_count: 0,
+      canonical_state_coverage: "complete",
+      canonical_state_expected_store_count: 5,
+      canonical_state_snapshot_count: 5,
+      canonical_state_verified_store_count: 5,
+      canonical_state_missing_store_count: 0,
+      canonical_state_unverified_store_count: 0,
+      canonical_state_store_consistency: "independent_sqlite_online_snapshots",
+      canonical_state_cross_store_atomic: false,
+      canonical_state_stores: rows,
+      used_for_authority: false,
+      may_execute: false,
+      ...counts,
+    } });
+    const rows = [
+      { store_key: "j_control", status: "verified" },
+      { store_key: "m_state", status: "captured_unverified" },
+      { store_key: "broker", status: "snapshot_failed" },
+      { store_key: "operation_plans", status: "not_present" },
+      { store_key: "cron_events", status: "verified" },
+    ];
+    const validate = new Script(`(${functionSource("recoveryBackupStoreStatuses")})`).runInNewContext() as
+      (value: unknown) => unknown;
+    expect(validate(rows)).toEqual(rows);
+    expect(validate([])).toEqual([]);
+    expect(validate(rows.slice(1))).toBeNull();
+    expect(validate([{ ...rows[0] }, { ...rows[1], store_key: "j_control" }, ...rows.slice(2)])).toBeNull();
+    expect(validate([{ ...rows[0], status: "unknown" }, ...rows.slice(1)])).toBeNull();
+    const completeRows = [
+      { store_key: "j_control", status: "verified" },
+      { store_key: "m_state", status: "verified" },
+      { store_key: "broker", status: "verified" },
+      { store_key: "operation_plans", status: "verified" },
+      { store_key: "cron_events", status: "verified" },
+    ];
+    expect(evaluate(completeRows).canonical_state_stores).toEqual(completeRows);
+    const mismatched = evaluate(completeRows, { canonical_state_verified_store_count: 4 });
+    expect(mismatched.status).toBe("invalid_report");
+    expect(mismatched.canonical_state_stores).toEqual([]);
+    expect(CONTROL_CENTER_SCRIPT).toContain('canonical_state_stores: safeStatus === "verified" ? canonicalStores : []');
+  });
+
   it("serves the local resident app shell at /app", async () => {
     const ctx = await setup();
     try {
@@ -487,6 +564,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("/recovery/backup-inspection");
       expect(html).toContain("recovery-backup-inspection-json");
       expect(html).toContain("canonical_state_coverage");
+      expect(html).toContain("function recoveryBackupStoreStatuses");
+      expect(html).toContain("canonical_state_stores");
       expect(html).toContain("bt.recoveryToken");
       expect(html).toContain("/settings/config");
       expect(html).toContain("/settings/llm/verify");
@@ -835,6 +914,13 @@ describe("WebChatChannel — Recovery surface", () => {
             canonical_state_unverified_store_count: 0,
             canonical_state_store_consistency: "independent_sqlite_online_snapshots",
             canonical_state_cross_store_atomic: false,
+            canonical_state_stores: [
+              { store_key: "j_control", status: "verified" },
+              { store_key: "m_state", status: "verified" },
+              { store_key: "broker", status: "verified" },
+              { store_key: "operation_plans", status: "verified" },
+              { store_key: "cron_events", status: "verified" },
+            ],
             used_for_authority: false,
             may_execute: false,
           };
@@ -947,6 +1033,13 @@ describe("WebChatChannel — Recovery surface", () => {
         canonical_state_unverified_store_count: 0,
         canonical_state_store_consistency: "independent_sqlite_online_snapshots",
         canonical_state_cross_store_atomic: false,
+        canonical_state_stores: [
+          { store_key: "j_control", status: "verified" },
+          { store_key: "m_state", status: "verified" },
+          { store_key: "broker", status: "verified" },
+          { store_key: "operation_plans", status: "verified" },
+          { store_key: "cron_events", status: "verified" },
+        ],
         used_for_authority: false,
         may_execute: false,
       });

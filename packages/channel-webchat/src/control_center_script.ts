@@ -1533,6 +1533,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : null;
       }
 
+      function recoveryBackupStoreStatuses(value) {
+        const expectedKeys = ["j_control", "m_state", "broker", "operation_plans", "cron_events"];
+        const allowedStatuses = ["verified", "captured_unverified", "snapshot_failed", "not_present"];
+        if (!Array.isArray(value)) return null;
+        if (value.length === 0) return [];
+        if (value.length !== expectedKeys.length) return null;
+        const seen = new Set();
+        const projected = [];
+        for (let index = 0; index < value.length; index += 1) {
+          const item = value[index];
+          if (!item || typeof item !== "object" || Array.isArray(item) ||
+              item.store_key !== expectedKeys[index] || !allowedStatuses.includes(item.status) || seen.has(item.store_key)) return null;
+          seen.add(item.store_key);
+          projected.push({ store_key: item.store_key, status: item.status });
+        }
+        return seen.size === expectedKeys.length ? projected : null;
+      }
+
       function recoveryInspectionLedgerStatus(value, allowed) {
         const status = typeof value === "string" ? value : value && typeof value === "object" ? value.status : null;
         return recoveryInspectionEnum(status, allowed);
@@ -1917,6 +1935,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         let canonicalVerified = count(source.canonical_state_verified_store_count);
         let canonicalMissing = count(source.canonical_state_missing_store_count);
         let canonicalUnverified = count(source.canonical_state_unverified_store_count);
+        const canonicalStores = recoveryBackupStoreStatuses(source.canonical_state_stores);
+        const canonicalStoreCountsMatch = canonicalStores !== null && canonicalStores.length === 5 &&
+          canonicalStores.filter((item) => item.status === "verified").length === canonicalVerified &&
+          canonicalStores.filter((item) => item.status === "not_present").length === canonicalMissing &&
+          canonicalStores.filter((item) => item.status === "snapshot_failed" || item.status === "captured_unverified").length === canonicalUnverified &&
+          canonicalStores.filter((item) => item.status === "verified" || item.status === "captured_unverified").length === canonicalCaptured;
         let canonicalConsistency = recoveryInspectionEnum(source.canonical_state_store_consistency,
           ["independent_sqlite_online_snapshots", "not_included"]);
         let canonicalCrossStoreAtomic = source.canonical_state_cross_store_atomic === null ? null : source.canonical_state_cross_store_atomic;
@@ -1931,17 +1955,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         const canonicalNotIncluded = canonicalCoverage === "not_included" && canonicalExpected === null &&
           canonicalCaptured === null && canonicalVerified === null && canonicalMissing === null &&
-          canonicalUnverified === null && canonicalConsistency === "not_included" && canonicalCrossStoreAtomic === null;
+          canonicalUnverified === null && canonicalConsistency === "not_included" && canonicalCrossStoreAtomic === null &&
+          canonicalStores !== null && canonicalStores.length === 0;
         const canonicalIncluded = canonicalCoverage !== "not_included" && canonicalCoverage !== "unknown" &&
           canonicalExpected === 5 && canonicalCaptured !== null && canonicalVerified !== null &&
           canonicalMissing !== null && canonicalUnverified !== null && canonicalConsistency === "independent_sqlite_online_snapshots" &&
           canonicalCrossStoreAtomic === false && canonicalCaptured <= canonicalExpected &&
           canonicalVerified <= canonicalCaptured && canonicalMissing <= canonicalExpected &&
           canonicalUnverified <= canonicalExpected && canonicalVerified + canonicalMissing + canonicalUnverified === canonicalExpected &&
+          canonicalStoreCountsMatch &&
           ((canonicalCoverage === "complete" && canonicalVerified === canonicalExpected && canonicalCaptured === canonicalExpected &&
             canonicalMissing === 0 && canonicalUnverified === 0) ||
            (canonicalCoverage === "none_present" && canonicalCaptured === 0 && canonicalVerified === 0 &&
-            canonicalMissing === canonicalExpected && canonicalUnverified === 0) || canonicalCoverage === "partial");
+            canonicalMissing === canonicalExpected && canonicalUnverified === 0) ||
+           (canonicalCoverage === "partial" && canonicalVerified < canonicalExpected && canonicalMissing < canonicalExpected));
         if (status === "verified" && !canonicalNotIncluded && !canonicalIncluded) safeStatus = "invalid_report";
         if (status === "not_found" && (digest !== null || configured !== null || copied !== null || missing !== null || !canonicalNotIncluded)) {
           safeStatus = "invalid_report";
@@ -1975,6 +2002,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           canonical_state_unverified_store_count: canonicalUnverified,
           canonical_state_store_consistency: canonicalConsistency,
           canonical_state_cross_store_atomic: canonicalCrossStoreAtomic,
+          canonical_state_stores: safeStatus === "verified" ? canonicalStores : [],
           used_for_authority: false,
           may_execute: false
         };

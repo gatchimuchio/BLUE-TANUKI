@@ -214,6 +214,13 @@ describe("buildRecoverySnapshot", () => {
         canonical_state_unverified_store_count: 0,
         canonical_state_store_consistency: "independent_sqlite_online_snapshots",
         canonical_state_cross_store_atomic: false,
+        canonical_state_stores: [
+          { store_key: "j_control", status: "not_present" },
+          { store_key: "m_state", status: "not_present" },
+          { store_key: "broker", status: "not_present" },
+          { store_key: "operation_plans", status: "not_present" },
+          { store_key: "cron_events", status: "not_present" },
+        ],
         used_for_authority: false,
         may_execute: false,
       });
@@ -286,6 +293,7 @@ describe("buildRecoverySnapshot", () => {
         status: "not_found",
         backup_id_digest: null,
         canonical_state_coverage: "not_included",
+        canonical_state_stores: [],
         used_for_authority: false,
         may_execute: false,
       });
@@ -301,6 +309,13 @@ describe("buildRecoverySnapshot", () => {
       const verified = await inspectLatestRecoveryBackup(env);
       expect(verified.status).toBe("verified");
       expect(verified.canonical_state_coverage).toBe("none_present");
+      expect(verified.canonical_state_stores.map(({ store_key, status }) => [store_key, status])).toEqual([
+        ["j_control", "not_present"],
+        ["m_state", "not_present"],
+        ["broker", "not_present"],
+        ["operation_plans", "not_present"],
+        ["cron_events", "not_present"],
+      ]);
       expect(await readFile(manifestPath, "utf8")).toBe(manifestBefore);
       expect(await readFile(archive!.archive_path!, "utf8")).toBe(originalArchive);
 
@@ -319,6 +334,7 @@ describe("buildRecoverySnapshot", () => {
         copied_required_item_count: null,
         missing_required_item_count: null,
         canonical_state_coverage: "unknown",
+        canonical_state_stores: [],
         used_for_authority: false,
         may_execute: false,
       });
@@ -379,6 +395,13 @@ describe("buildRecoverySnapshot", () => {
         canonical_state_store_consistency: "independent_sqlite_online_snapshots",
         canonical_state_cross_store_atomic: false,
       });
+      expect(inspection.canonical_state_stores.map(({ store_key, status }) => [store_key, status])).toEqual([
+        ["j_control", "verified"],
+        ["m_state", "verified"],
+        ["broker", "verified"],
+        ["operation_plans", "verified"],
+        ["cron_events", "verified"],
+      ]);
       for (let index = 0; index < snapshotPaths.length; index += 1) {
         expect(await readFile(snapshotPaths[index]!)).toEqual(snapshotBytesBefore[index]);
       }
@@ -483,6 +506,13 @@ describe("buildRecoverySnapshot", () => {
         canonical_state_unverified_store_count: 1,
         canonical_state_cross_store_atomic: false,
       });
+      expect(inspection.canonical_state_stores.map(({ store_key, status }) => [store_key, status])).toEqual([
+        ["j_control", "verified"],
+        ["m_state", "snapshot_failed"],
+        ["broker", "verified"],
+        ["operation_plans", "not_present"],
+        ["cron_events", "not_present"],
+      ]);
       expect(JSON.stringify(inspection)).not.toContain(corruptPath);
       expect(JSON.stringify(inspection)).not.toContain("not a SQLite database");
     } finally {

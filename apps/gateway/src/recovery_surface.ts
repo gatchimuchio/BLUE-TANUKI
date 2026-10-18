@@ -6,8 +6,10 @@ import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
 import {
   captureCanonicalStateSnapshots,
   inspectCanonicalStateSnapshots,
+  type CanonicalStateSnapshotEntryStatus,
   type CanonicalStateSnapshotInspection,
   type CanonicalStateSnapshotManifest,
+  type CanonicalStateStoreKey,
 } from "./canonical_state_backup.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
@@ -118,6 +120,10 @@ export interface RecoveryBackupInspection {
   canonical_state_unverified_store_count: number | null;
   canonical_state_store_consistency: CanonicalStateSnapshotInspection["store_consistency"] | "not_included";
   canonical_state_cross_store_atomic: false | null;
+  canonical_state_stores: readonly {
+    readonly store_key: CanonicalStateStoreKey;
+    readonly status: CanonicalStateSnapshotEntryStatus;
+  }[];
   used_for_authority: false;
   may_execute: false;
 }
@@ -907,6 +913,7 @@ export async function inspectLatestRecoveryBackup(
     canonical_state_unverified_store_count: null,
     canonical_state_store_consistency: "not_included" as const,
     canonical_state_cross_store_atomic: null,
+    canonical_state_stores: [],
     used_for_authority: false as const,
     may_execute: false as const,
   };
@@ -938,6 +945,9 @@ export async function inspectLatestRecoveryBackup(
     const canonicalState = manifest.canonical_state_snapshot
       ? await inspectCanonicalStateSnapshots(path.dirname(manifest.manifest_path), manifest.canonical_state_snapshot)
       : null;
+    const canonicalStateStores = manifest.canonical_state_snapshot
+      ? manifest.canonical_state_snapshot.entries.map(({ store_key, status }) => ({ store_key, status }))
+      : [];
     const configuredRequiredItems = manifest.items.filter((item) => item.backup_required && item.source_path !== null);
     const copiedRequiredItems = configuredRequiredItems.filter((item) => item.copied);
     const missingRequiredItemCount = configuredRequiredItems.length - copiedRequiredItems.length;
@@ -959,6 +969,7 @@ export async function inspectLatestRecoveryBackup(
       canonical_state_unverified_store_count: canonicalState?.unverified_store_count ?? null,
       canonical_state_store_consistency: canonicalState?.store_consistency ?? "not_included",
       canonical_state_cross_store_atomic: canonicalState?.cross_store_atomic ?? null,
+      canonical_state_stores: canonicalStateStores,
     };
   } catch {
     return {
@@ -970,6 +981,7 @@ export async function inspectLatestRecoveryBackup(
       copied_required_item_count: null,
       missing_required_item_count: null,
       canonical_state_coverage: "unknown",
+      canonical_state_stores: [],
     };
   }
 }
