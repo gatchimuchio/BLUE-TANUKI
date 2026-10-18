@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { InboundRequest, ChannelSendPayload } from "@blue-tanuki/protocol";
 import {
   InboundRouter,
@@ -119,6 +119,27 @@ describe("InboundRouter", () => {
     // Must not throw at the channel level.
     await expect(a.push(inbound("a", "x"))).resolves.toBeUndefined();
     await router.stop();
+  });
+
+  it("propagates failures only for explicitly configured channels and hides details from scheduler errors", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const router = new InboundRouter({ propagateHandlerErrorsForChannels: ["cron"] });
+    const cron = new FakeInbound("cron");
+    const webchat = new FakeInbound("webchat");
+    router.register(cron);
+    router.register(webchat);
+    await router.start(async () => {
+      throw new Error("private synthetic failure detail");
+    });
+
+    try {
+      await expect(webchat.push(inbound("webchat", "safe"))).resolves.toBeUndefined();
+      await expect(cron.push(inbound("cron", "safe"))).rejects.toThrow("inbound_handler_failed");
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      await router.stop();
+      errorSpy.mockRestore();
+    }
   });
 
   it("stops all channels", async () => {

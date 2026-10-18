@@ -407,7 +407,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     cleared_by: null,
     clear_reason: null,
   };
-  const router = new InboundRouter();
+  const router = new InboundRouter({ propagateHandlerErrorsForChannels: ["cron"] });
   const dispatcher = new OutboundDispatcher();
 
   const port = parseInt(process.env.WEBCHAT_PORT ?? "8787", 10);

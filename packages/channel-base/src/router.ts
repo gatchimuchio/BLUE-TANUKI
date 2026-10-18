@@ -1,6 +1,11 @@
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import type { InboundChannel, InboundHandler } from "./types.js";
 
+export interface InboundRouterOptions {
+  /** Channels whose scheduler must observe handler failure to persist an unknown outcome. */
+  readonly propagateHandlerErrorsForChannels?: readonly string[];
+}
+
 /**
  * InboundRouter — multiplexes multiple InboundChannels into a single handler.
  *
@@ -12,8 +17,13 @@ import type { InboundChannel, InboundHandler } from "./types.js";
  */
 export class InboundRouter {
   private readonly channels = new Map<string, InboundChannel>();
+  private readonly propagateHandlerErrorsForChannels: ReadonlySet<string>;
   private started = false;
   private handler: InboundHandler | null = null;
+
+  constructor(options: InboundRouterOptions = {}) {
+    this.propagateHandlerErrorsForChannels = new Set(options.propagateHandlerErrorsForChannels ?? []);
+  }
 
   register(channel: InboundChannel): void {
     if (this.channels.has(channel.name)) {
@@ -43,9 +53,11 @@ export class InboundRouter {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         // eslint-disable-next-line no-console
-        console.error(
-          `[inbound-router] handler threw on ${req.channel}/${req.id}: ${msg}`,
-        );
+        console.error(`[inbound-router] handler threw on ${req.channel}/${req.id}: ${msg}`);
+        if (this.propagateHandlerErrorsForChannels.has(req.channel)) {
+          // Keep the router's existing exception detail out of scheduler logs/cursors.
+          throw new Error("inbound_handler_failed");
+        }
       }
     };
     this.started = true;

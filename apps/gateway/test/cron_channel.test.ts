@@ -10,6 +10,7 @@ import {
   dailyBriefCronFromEnv,
 } from "../src/cron_channel.js";
 import { GatewayCronEventStore } from "../src/cron_event_store.js";
+import { InboundRouter } from "@blue-tanuki/channel-base";
 
 describe("DailyBriefCronChannel snapshot", () => {
   it("exposes the next daily fire time without exposing content", async () => {
@@ -167,6 +168,51 @@ describe("CronSchedulerChannel", () => {
       expect(ch.snapshot()[0]?.last_fire_at_ms).toBe(new Date(2026, 4, 9, 6, 30, 1, 0).getTime());
     } finally {
       await ch.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("persists Cron handler exceptions as outcome_unknown through the shared inbound router", async () => {
+    vi.useFakeTimers();
+    const base = new Date(2026, 4, 9, 6, 30, 0, 0).getTime();
+    vi.setSystemTime(base);
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-handler-failure-"));
+    const store = new GatewayCronEventStore(join(root, "private", "cron-events.sqlite"));
+    const router = new InboundRouter({ propagateHandlerErrorsForChannels: ["cron"] });
+    const cron = new CronSchedulerChannel({
+      tasks: [{
+        id: "handler-failure",
+        origin: "runtime",
+        channel: "webchat",
+        target: "local-user",
+        content: "synthetic scheduled content",
+        interval_ms: 1000,
+      }],
+      event_store: store,
+      log: () => undefined,
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    router.register(cron);
+
+    try {
+      await router.start(async () => {
+        throw new Error("private synthetic failure detail");
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+
+      const unresolved = store.unresolvedEvents();
+      expect(unresolved).toHaveLength(1);
+      expect(unresolved[0]).toMatchObject({
+        delivery_state: "outcome_unknown",
+        resolution_state: "unacknowledged",
+      });
+      expect(JSON.stringify(unresolved)).not.toContain("private synthetic failure detail");
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      await router.stop();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+      errorSpy.mockRestore();
       vi.useRealTimers();
     }
   });
