@@ -23,6 +23,7 @@ import {
   type RecoverySelectedPlanResidualObservation,
   type RecoverySelectedStoreLedgerStatus,
 } from "./recovery_inspection.js";
+import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
 export type RecoveryAction =
@@ -325,6 +326,10 @@ export interface RestoreRecoveryOptions {
   store_key?: CanonicalStateStoreKey;
   scope_kind?: "operation_plan";
   scope_digest?: string;
+  /** Private Executor context; never accepted from recovery tool arguments. */
+  executor_command_key?: string;
+  /** Existing Gateway owner connection; Broker restore must not open a second writer. */
+  broker_execution_store?: GatewayExecutionIntentStore;
   confirm?: string;
 }
 
@@ -2185,6 +2190,12 @@ export async function restoreRecoveryBackup(
     if (!selected || selected.status !== "verified" || !selected.archive_rel_path || !selected.sha256) {
       throw new Error("canonical_state_store_unverified");
     }
+    if (options.store_key === "broker" && !/^[a-f0-9]{64}$/.test(options.executor_command_key ?? "")) {
+      throw new Error("broker_restore_execution_context_missing");
+    }
+    if (options.store_key === "broker" && !options.broker_execution_store) {
+      throw new Error("broker_restore_execution_store_unavailable");
+    }
 
     const targetPath = resolveCanonicalStateStoreTargetPath(
       env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
@@ -2221,12 +2232,34 @@ export async function restoreRecoveryBackup(
     if (options.store_key === "operation_plans") {
       planScopeInspection = await requireVerifiedRecoveryPlanRestoreScope(env, id, options.scope_kind, options.scope_digest);
     }
-    const restored = await restoreCanonicalStateSnapshotStore(
-      env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
-      packDir,
-      snapshot,
-      options.store_key,
-    );
+    let restored: { readonly bytes: number; readonly sha256: string; readonly restoredStateSha256: string };
+    if (options.store_key === "broker") {
+      const archivePath = path.resolve(packDir, selected.archive_rel_path);
+      const archiveBefore = await sha256Path(archivePath, "file").catch(() => null);
+      if (!archiveBefore || archiveBefore.bytes !== selected.bytes || archiveBefore.sha256 !== selected.sha256) {
+        throw new Error("canonical_state_restore_archive_changed");
+      }
+      options.broker_execution_store!.restoreFromCanonicalSnapshot(archivePath, options.executor_command_key!);
+      const archiveAfter = await sha256Path(archivePath, "file").catch(() => null);
+      if (!archiveAfter || archiveAfter.bytes !== selected.bytes || archiveAfter.sha256 !== selected.sha256) {
+        throw new Error("canonical_state_restore_archive_changed");
+      }
+      const target = await inspectCanonicalStateStoreTarget(
+        env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+        options.store_key,
+      );
+      if (target.status !== "verified" || target.sha256 === null || target.bytes === null) {
+        throw new Error("canonical_state_restore_target_unverified");
+      }
+      restored = { bytes: selected.bytes, sha256: selected.sha256, restoredStateSha256: target.sha256 };
+    } else {
+      restored = await restoreCanonicalStateSnapshotStore(
+        env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+        packDir,
+        snapshot,
+        options.store_key,
+      );
+    }
     return actionResult("restore", {
       restored_backup_id: id,
       restored_store_key: options.store_key,
@@ -2239,7 +2272,9 @@ export async function restoreRecoveryBackup(
       canonical_state_cross_store_atomic: false,
       pre_action_backup_id: preRestore.backup_id,
       pre_action_backup_manifest_path: preRestore.manifest_path,
-      next_safe_action: "Restart BLUE-TANUKI, then inspect the restored store and all cross-store residuals. Only this selected SQLite store was restored; snapshots are independent, cross-store atomicity is false, and job recovery or automatic resume is not implied.",
+      next_safe_action: options.store_key === "broker"
+        ? "The restored-state digest marks the atomic import boundary while this restore's Executor receipt is still in progress; Executor then finalizes that receipt in Broker. Inspect cross-store residuals before resuming affected work. Only this selected SQLite store was restored; cross-store atomicity is false, and job recovery or automatic resume is not implied."
+        : "Restart BLUE-TANUKI, then inspect the restored store and all cross-store residuals. Only this selected SQLite store was restored; snapshots are independent, cross-store atomicity is false, and job recovery or automatic resume is not implied.",
     });
   }
 

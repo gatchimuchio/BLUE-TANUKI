@@ -6,13 +6,15 @@
 
 既存serve lifecycleは、停止時にrouterを止め、in-flight executor taskを待ち、Cron／Operation Plan／Broker storeとowner leaseを閉じてから終了する。しかしHDS controllerの公開closeはOperation Plan用memoryに限られ、selected J/M store群を一括して閉じるlifecycle APIがない。pending L3 approvalはserve内Mapで、再起動時に再構築されない。complete-historyとHDS auditはfile persistenceが任意で、startup recovery observationはOperation Plan hold専用である。SIGINT／SIGTERM handlerはshutdown後processを終了し、store適用・再起動・対象storeの再観測へ進まない。systemdの`Restart=on-failure`等は同じserve commandを再起動するだけで、承認済みrecovery transitionを引き継がない。
 
-したがって外部service restartを既存Recovery consumerとみなせず、HDS L3から非`operation_plans` selected-store全体restoreまでを安全につなぐ実行可能経路はまだない。次BUILD_BATCHは、restore対象storeの外に置く永続single-use transitionのproducer／consumerを設計・実装接続する。HDS final review command・backup/store digest・owner lease世代・各crash phaseを固定し、transition自体は非権威の進行証拠に限定する。起動時はtransitionの完全性と対象store再観測が終わるまで該当consumerを開かず、不明・重複・不整合はholdへ閉じる。HDSだけが承認し、pending approvalを再利用して自動resumeしない。実restore・実approval・実restart・外部作用は未実施。E03.03=`BUILD_GAP`、C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+従来は外部service restartを既存Recovery consumerとみなせず、非`operation_plans` selected-store全体restoreの実行経路がなかった。Brokerについては後述のBroker所有取引でin-process経路を接続した。J/M／Cronの閉鎖・再観測・起動holdは未実装であり、これらは引き続きfail-closedとする。別storeへ作用を移す永続single-use transitionを実装する場合は、HDS final-review command・backup/store digest・owner lease世代・crash phaseだけを非権威の進行証拠として記録し、起動時の完全性・対象store再観測より前に通常consumerを開かない。不明・重複・不整合はholdへ閉じる。HDSだけが承認し、pending approvalを再利用して自動resumeしない。実環境でのrestore／owner approval／restart／外部作用は未実施。E03.03=`BUILD_GAP`、C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
 
 ### 追加監査：approval世代とBroker選択復元
 
 開始HEAD=`29098931f151e4845e6b5271b464e2f127b8a524`で、rev2.3のE03.03・関係要求、AGENTS、active指示とHDS／Executor／Broker保存経路を再読した。E03.03の再起動条件は旧worker・旧承認を拒否すること。実装も起動時に保存済み`selected` bindingを`invalidated`、`intent_committed`を`outcome_unknown`へ変え、Executor ticketは現在の`execution_epoch`と期限へ束縛する。従って再起動を越えるtransitionは承認やExecutor ticketを保持・再利用せず、要求対象とbackup/store digestだけの非権威contextを渡し、新processでHDSが改めてL3判断する。
 
-`broker` canonical storeは`GatewayExecutionIntentStore`自身のticket／単回消費／result outbox正本である。既存Executorはrestoreの前後に同じstoreへticket・receiptを書き込むため、selected `broker` snapshotの置換で実行中restore自身のreceiptまで失う。Brokerを閉じたまま既存Executorでrestoreする経路もない。これは他のconsumerの停止処理へまとめて隠せない別のBUILD_GAPであり、専用のBroker所有取引・結果照合が成立するまで`broker` restoreをfail-closedに保つ。次consumerは、fresh HDS L3と新しい実行世代を要求しつつ、選択したBroker全体restoreが自身の実行意思・receiptを消さない接続契約である。
+開始HEAD=`88dcaa1ac59bc8f83bde3a1236ef7c317aa045f4`から`QEB-03-E03.03-BROKER-RESTORE-ATOMIC-RECEIPT`を実装した。Executorのprivate `ToolContext.idempotency_key`をRecovery toolへ渡し、GatewayExecutionIntentStoreが現在の`invocation_attempted` ticketを特定する。Recovery toolはserveが所有する同じGatewayExecutionIntentStore接続を受け取り、別のBroker writerを開かない。選択snapshotのschema・integrity・event chain・receipt projection・outboxを検証し、同じSQLite取引内でselected storeを置換して現在のrestore receiptを追加する。完了receiptは既存Executorが同じ接続へ記録する。表示する`restored_store_state_digest`は、このatomic import時点（receipt finalization前）の観測値である。現在世代の他の未完実行、選択snapshot内の同世代未完実行、ticket衝突、SQLite sidecar、破損ledgerは拒否する。restore ticketや承認を復元権限として使わず、HDS L3は既存の通常経路で毎回必要である。
+
+これによりBroker自身の実行意図・結果receiptが選択snapshotの置換で消える欠陥は`WIRED`。selected snapshotのcross-store atomicityは依然`false`で、仕事の再開・自動resumeを意味しない。J/M・Cronのconsumer、復元後の全cross-ledger residual observation、実環境restoreは未成立で、E03.03全体は`BUILD_GAP`を維持する。次consumerは復元後のJ/M／Operation Plan／Cronとの残差を通常Gatewayの再開前に観測し、そのhold結果をoperatorへ結ぶこと。実restore・実owner承認・実restart・外部作用・provider credentialは未実施。
 
 ### 先行consumer監査
 

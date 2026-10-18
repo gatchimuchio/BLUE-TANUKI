@@ -1,5 +1,5 @@
 import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
-import type { Tool } from "@blue-tanuki/core";
+import type { Tool, ToolContext } from "@blue-tanuki/core";
 import {
   factoryResetRecovery,
   resetRecoveryConnector,
@@ -8,6 +8,7 @@ import {
   type RecoveryActionResult,
 } from "./recovery_surface.js";
 import { CANONICAL_STATE_STORE_PATHS, type CanonicalStateStoreKey } from "./canonical_state_backup.js";
+import type { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 
 export const RECOVERY_TOOL_NAMES = [
   "recovery.restore",
@@ -21,13 +22,14 @@ export type RecoveryToolName = (typeof RECOVERY_TOOL_NAMES)[number];
 const CANONICAL_STORE_RESTORE_CONSUMERS: Record<CanonicalStateStoreKey, readonly string[]> = {
   j_control: ["hds_control_store"],
   m_state: ["hds_memory_store"],
-  broker: ["gateway_execution_intent_store"],
+  broker: [],
   operation_plans: [],
   cron_events: ["gateway_cron_scheduler_and_approval_store"],
 };
 
 /**
- * The live Gateway has no quiesce/close/reopen boundary for these consumers.
+ * J/M and Cron still lack a live quiesce boundary. Broker uses an atomic
+ * Broker-owned snapshot transaction that preserves only the active restore receipt.
  * Operation Plans retain their dedicated in-process HDS refresh path.
  */
 export function canonicalStoreRestoreConsumersNotQuiesced(storeKey: unknown): readonly string[] {
@@ -93,15 +95,25 @@ export function normalizeRecoveryMutationArguments(
   };
 }
 
-export function createRecoveryMutationTools(env: NodeJS.ProcessEnv = process.env): readonly Tool[] {
+export function createRecoveryMutationTools(
+  env: NodeJS.ProcessEnv = process.env,
+  getBrokerStore?: () => GatewayExecutionIntentStore | undefined,
+): readonly Tool[] {
   const restoreRecoveryTool: Tool = {
     name: "recovery.restore",
     description: "Restore one explicitly selected local recovery backup after HDS L3 owner final review.",
     required_capabilities: requireToolOperationDescriptor("recovery.restore").required_capabilities,
-    async invoke(raw) {
+    async invoke(raw, ctx?: ToolContext) {
       const args = normalizeRecoveryMutationArguments("recovery.restore", raw);
       if (canonicalStoreRestoreConsumersNotQuiesced(args.store_key).length > 0) {
         throw new Error("canonical_state_restore_consumers_not_quiesced");
+      }
+      if (args.store_key === "broker" && !/^[a-f0-9]{64}$/.test(ctx?.idempotency_key ?? "")) {
+        throw new Error("broker_restore_execution_context_missing");
+      }
+      const brokerStore = args.store_key === "broker" ? getBrokerStore?.() : undefined;
+      if (args.store_key === "broker" && !brokerStore) {
+        throw new Error("broker_restore_execution_store_unavailable");
       }
       const result = await invokeRecoverySafely(() => restoreRecoveryBackup(env, {
         backup_id: args.backup_id,
@@ -109,6 +121,10 @@ export function createRecoveryMutationTools(env: NodeJS.ProcessEnv = process.env
         ...(args.scope_kind === "operation_plan" && args.scope_digest
           ? { scope_kind: "operation_plan" as const, scope_digest: args.scope_digest }
           : {}),
+        ...(args.store_key === "broker" && ctx?.idempotency_key
+          ? { executor_command_key: ctx.idempotency_key }
+          : {}),
+        ...(brokerStore ? { broker_execution_store: brokerStore } : {}),
         confirm: args.confirm,
       }));
       return operatorSafeRecoveryResult(result);

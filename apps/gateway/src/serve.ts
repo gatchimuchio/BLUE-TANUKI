@@ -383,7 +383,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   gatewayLog.info("LLM command route", describeLLMCommandRoute());
 
   const tools = new ToolRegistry();
-  for (const tool of createRecoveryMutationTools(process.env)) tools.register(tool);
+  let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
+  for (const tool of createRecoveryMutationTools(process.env, () => recoveryExecutionStore)) tools.register(tool);
   plugins.registerTools(tools);
   const llm = buildLLMBackendFromEnv();
 
@@ -535,6 +536,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   // eslint-disable-next-line prefer-const
   let executor: Executor;
   const executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
+  recoveryExecutionStore = executionStore;
   const executorApproval = createExecutorApprovalAuthority({
     execution_store: executionStore,
     execution_epoch: ownerLease.executionEpoch,

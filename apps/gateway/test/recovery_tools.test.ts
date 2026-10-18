@@ -79,6 +79,12 @@ describe("Recovery mutation tool boundary", () => {
       confirm: "RESTORE",
       force: true,
     })).toThrow("invalid_recovery_request");
+    expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
+      backup_id: "2026-10-18.backup.abc",
+      store_key: "broker",
+      executor_command_key: "a".repeat(64),
+      confirm: "RESTORE",
+    })).toThrow("invalid_recovery_request");
     expect(() => normalizeRecoveryMutationArguments("recovery.reset_provider", {
       confirm: "RESET_PROVIDER",
       target: "another-provider",
@@ -88,7 +94,7 @@ describe("Recovery mutation tool boundary", () => {
   it("blocks selected stores whose live Gateway consumers cannot be quiesced", async () => {
     expect(canonicalStoreRestoreConsumersNotQuiesced("j_control")).toEqual(["hds_control_store"]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("m_state")).toEqual(["hds_memory_store"]);
-    expect(canonicalStoreRestoreConsumersNotQuiesced("broker")).toEqual(["gateway_execution_intent_store"]);
+    expect(canonicalStoreRestoreConsumersNotQuiesced("broker")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("cron_events")).toEqual([
       "gateway_cron_scheduler_and_approval_store",
     ]);
@@ -96,7 +102,13 @@ describe("Recovery mutation tool boundary", () => {
     expect(canonicalStoreRestoreConsumersNotQuiesced(undefined)).toEqual([]);
 
     const restore = createRecoveryMutationTools({}).find((tool) => tool.name === "recovery.restore");
-    await expect(restore?.invoke({ backup_id: "fixture", store_key: "broker", confirm: "RESTORE" }))
-      .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
+    const arguments_ = { backup_id: "fixture", store_key: "broker", confirm: "RESTORE" };
+    await expect(restore?.invoke(arguments_))
+      .rejects.toThrow("broker_restore_execution_context_missing");
+    await expect(restore?.invoke(arguments_, {
+      command_id: "fixture-restore",
+      upstream_commit_hash: "fixture-commit",
+      idempotency_key: "a".repeat(64),
+    })).rejects.toThrow("broker_restore_execution_store_unavailable");
   });
 });

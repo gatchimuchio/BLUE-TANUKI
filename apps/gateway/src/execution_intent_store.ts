@@ -22,10 +22,12 @@ const sameTicket = (a: ExecutionIntentTicket, b: ExecutionIntentTicket): boolean
 /** 私有の実行所有記録。Jのcheckpointと別取引であり、権限の復元元ではない。 */
 export class GatewayExecutionIntentStore implements ExecutionIntentStore {
   private readonly db: DatabaseType;
+  private readonly filepath: string;
   constructor(filepath: string) {
-    mkdirSync(dirname(resolve(filepath)), { recursive: true });
-    this.db = new DatabaseSync(filepath);
-    if (process.platform !== "win32") chmodSync(filepath, 0o600);
+    this.filepath = resolve(filepath);
+    mkdirSync(dirname(this.filepath), { recursive: true });
+    this.db = new DatabaseSync(this.filepath);
+    if (process.platform !== "win32") chmodSync(this.filepath, 0o600);
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA");
     this.db.exec(`CREATE TABLE IF NOT EXISTS execution_intents (
       ticket_id TEXT PRIMARY KEY, command_key TEXT NOT NULL UNIQUE, receipt_json TEXT NOT NULL, receipt_digest TEXT NOT NULL
@@ -227,40 +229,96 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     return { used_for_authority: false, execution_eligible: false, records };
   }
   verifyEvents(): boolean {
-    let previous = "0".repeat(64);
-    let sequence = 0;
-    const latest = new Map<string, ExecutionIntentReceipt>();
-    const rows = this.db.prepare("SELECT sequence,ticket_id,event_json,previous_hash,event_hash FROM execution_events ORDER BY sequence").all() as
-      { sequence: number; ticket_id: string; event_json: string; previous_hash: string; event_hash: string }[];
-    for (const row of rows) {
-      if (row.sequence !== ++sequence || row.previous_hash !== previous || digest(previous + row.event_json) !== row.event_hash) return false;
-      try {
-        const receipt = JSON.parse(row.event_json).content.receipt as ExecutionIntentReceipt;
-        validateReceipt(receipt);
-        if (receipt.ticket_id !== row.ticket_id) return false;
-        latest.set(row.ticket_id, receipt);
-      } catch { return false; }
-      previous = row.event_hash;
+    return verifyExecutionIntentDatabase(this.db, false);
+  }
+  /**
+   * Replace the selected Broker snapshot atomically while preserving only the
+   * currently invoking restore's non-authoritative receipt. The caller must
+   * already have obtained fresh HDS approval and verified the backup manifest.
+   */
+  restoreFromCanonicalSnapshot(snapshotPath: string, executionCommandKey: string): void {
+    if (!/^[a-f0-9]{64}$/.test(executionCommandKey)) throw new Error("broker_restore_execution_context_invalid");
+    const resolvedSnapshot = resolve(snapshotPath);
+    let source: DatabaseType | undefined;
+    try {
+      const stat = lstatSync(resolvedSnapshot);
+      if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(resolvedSnapshot) !== resolvedSnapshot ||
+          resolvedSnapshot === this.filepath ||
+          ["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${resolvedSnapshot}${suffix}`))) {
+        throw new Error("broker_restore_archive_unavailable");
+      }
+      if (["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${this.filepath}${suffix}`))) {
+        throw new Error("broker_restore_store_busy");
+      }
+      source = new DatabaseSync(resolvedSnapshot, {
+        readOnly: true,
+        enableForeignKeyConstraints: true,
+        allowExtension: false,
+      });
+      source.enableLoadExtension(false);
+      source.exec("PRAGMA busy_timeout = 0; PRAGMA query_only = ON; BEGIN");
+      const integrity = source.prepare("PRAGMA integrity_check").get() as { integrity_check?: unknown } | undefined;
+      const journal = source.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined;
+      if (integrity?.integrity_check !== "ok" || journal?.journal_mode !== "delete" ||
+          !verifyExecutionIntentDatabase(source, true)) {
+        throw new Error("broker_restore_archive_invalid");
+      }
+
+      this.transaction(() => {
+        const currentRow = this.db.prepare("SELECT ticket_id FROM execution_intents WHERE command_key=?")
+          .get(executionCommandKey) as { ticket_id: string } | undefined;
+        const current = currentRow ? this.lookup(currentRow.ticket_id) : null;
+        if (!current || current.command_key !== executionCommandKey || current.state !== "invocation_attempted" ||
+            current.invocation_boundary !== "tool_adapter") {
+          throw new Error("broker_restore_active_executor_receipt_required");
+        }
+
+        const activeStates = new Set<ExecutionIntentReceipt["state"]>(["issued", "intent_committed", "invocation_attempted"]);
+        const currentActive = executionReceipts(this.db).filter((receipt) =>
+          receipt.execution_epoch === current.execution_epoch && activeStates.has(receipt.state));
+        if (currentActive.length !== 1 || currentActive[0]?.ticket_id !== current.ticket_id) {
+          throw new Error("broker_restore_other_current_epoch_execution_active");
+        }
+        if (executionReceipts(source!).some((receipt) =>
+          receipt.execution_epoch === current.execution_epoch && activeStates.has(receipt.state))) {
+          throw new Error("broker_restore_archive_current_epoch_execution_active");
+        }
+        const collision = source!.prepare(
+          "SELECT ticket_id FROM execution_intents WHERE ticket_id=? OR command_key=?",
+        ).get(current.ticket_id, current.command_key);
+        if (collision) throw new Error("broker_restore_executor_receipt_conflict");
+
+        this.db.exec("DELETE FROM execution_result_outbox; DELETE FROM execution_events; DELETE FROM execution_intents;");
+        const insertIntent = this.db.prepare("INSERT INTO execution_intents(ticket_id,command_key,receipt_json,receipt_digest) VALUES(?,?,?,?)");
+        for (const row of source!.prepare(
+          "SELECT ticket_id,command_key,receipt_json,receipt_digest FROM execution_intents ORDER BY rowid",
+        ).iterate() as Iterable<{ ticket_id: string; command_key: string; receipt_json: string; receipt_digest: string }>) {
+          insertIntent.run(row.ticket_id, row.command_key, row.receipt_json, row.receipt_digest);
+        }
+        const insertEvent = this.db.prepare(
+          "INSERT INTO execution_events(sequence,ticket_id,event_json,previous_hash,event_hash) VALUES(?,?,?,?,?)",
+        );
+        for (const row of source!.prepare(
+          "SELECT sequence,ticket_id,event_json,previous_hash,event_hash FROM execution_events ORDER BY sequence",
+        ).iterate() as Iterable<{ sequence: number; ticket_id: string; event_json: string; previous_hash: string; event_hash: string }>) {
+          insertEvent.run(row.sequence, row.ticket_id, row.event_json, row.previous_hash, row.event_hash);
+        }
+        const insertDelivery = this.db.prepare(
+          "INSERT INTO execution_result_outbox(ticket_id,delivery_json,delivery_digest) VALUES(?,?,?)",
+        );
+        for (const row of source!.prepare(
+          "SELECT ticket_id,delivery_json,delivery_digest FROM execution_result_outbox ORDER BY rowid",
+        ).iterate() as Iterable<{ ticket_id: string; delivery_json: string; delivery_digest: string }>) {
+          insertDelivery.run(row.ticket_id, row.delivery_json, row.delivery_digest);
+        }
+        this.save(current, true);
+        this.appendEvent(current, Date.now());
+        if (!this.verifyEvents()) throw new Error("broker_restore_result_integrity_failed");
+      });
+    } finally {
+      try { source?.exec("ROLLBACK"); } catch { /* preserve the restore result */ }
+      try { source?.close(); } catch { /* preserve the restore result */ }
     }
-    const tickets = this.db.prepare("SELECT ticket_id FROM execution_intents").all() as { ticket_id: string }[];
-    if (tickets.length !== latest.size) return false;
-    for (const ticket of tickets) {
-      try {
-        const receipt = this.lookup(ticket.ticket_id)!; const event = latest.get(ticket.ticket_id);
-        if (!event || JSON.stringify(Object.entries(receipt).sort()) !== JSON.stringify(Object.entries(event).sort())) return false;
-      } catch { return false; }
-    }
-    const outbox = this.db.prepare("SELECT ticket_id,delivery_json,delivery_digest FROM execution_result_outbox").all() as
-      { ticket_id: string; delivery_json: string; delivery_digest: string }[];
-    if (outbox.length !== [...latest.values()].filter((r) => r.result_delivery_digest !== undefined).length) return false;
-    for (const row of outbox) {
-      try {
-        const receipt = latest.get(row.ticket_id);
-        if (!receipt || receipt.result_delivery_digest !== row.delivery_digest || digest(row.delivery_json) !== row.delivery_digest) return false;
-        validateDelivery(receipt, inspectExecutionResultDelivery(JSON.parse(row.delivery_json)));
-      } catch { return false; }
-    }
-    return true;
   }
   close(): void { this.db.close(); }
   private current(ticket: Readonly<ExecutionIntentTicket>, now_ms: number): ExecutionIntentReceipt {
@@ -297,6 +355,59 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     }
     catch (error) { try { this.db.exec("ROLLBACK"); } catch { /* 元の失敗を保つ。 */ } throw error; }
   }
+}
+
+function executionReceipts(database: DatabaseType): ExecutionIntentReceipt[] {
+  const rows = database.prepare("SELECT ticket_id,command_key,receipt_json,receipt_digest FROM execution_intents")
+    .all() as { ticket_id: string; command_key: string; receipt_json: string; receipt_digest: string }[];
+  return rows.map((row) => {
+    if (digest(row.receipt_json) !== row.receipt_digest) throw new Error("execution_receipt_integrity_failed");
+    let receipt: ExecutionIntentReceipt;
+    try { receipt = JSON.parse(row.receipt_json) as ExecutionIntentReceipt; validateReceipt(receipt); }
+    catch { throw new Error("execution_receipt_integrity_failed"); }
+    if (receipt.ticket_id !== row.ticket_id || receipt.command_key !== row.command_key) {
+      throw new Error("execution_receipt_integrity_failed");
+    }
+    return receipt;
+  });
+}
+
+function verifyExecutionIntentDatabase(database: DatabaseType, checkSchema: boolean): boolean {
+  try {
+    if (checkSchema && !verifyExecutionRecoverySchema(database)) return false;
+    let previous = "0".repeat(64);
+    let sequence = 0;
+    const latest = new Map<string, ExecutionIntentReceipt>();
+    const rows = database.prepare("SELECT sequence,ticket_id,event_json,previous_hash,event_hash FROM execution_events ORDER BY sequence").all() as
+      { sequence: number; ticket_id: string; event_json: string; previous_hash: string; event_hash: string }[];
+    for (const row of rows) {
+      if (row.sequence !== ++sequence || row.previous_hash !== previous || digest(previous + row.event_json) !== row.event_hash) return false;
+      try {
+        const receipt = JSON.parse(row.event_json).content.receipt as ExecutionIntentReceipt;
+        validateReceipt(receipt);
+        if (receipt.ticket_id !== row.ticket_id) return false;
+        latest.set(row.ticket_id, receipt);
+      } catch { return false; }
+      previous = row.event_hash;
+    }
+    const receipts = executionReceipts(database);
+    if (receipts.length !== latest.size) return false;
+    for (const receipt of receipts) {
+      const event = latest.get(receipt.ticket_id);
+      if (!event || JSON.stringify(Object.entries(receipt).sort()) !== JSON.stringify(Object.entries(event).sort())) return false;
+    }
+    const outbox = database.prepare("SELECT ticket_id,delivery_json,delivery_digest FROM execution_result_outbox").all() as
+      { ticket_id: string; delivery_json: string; delivery_digest: string }[];
+    if (outbox.length !== [...latest.values()].filter((receipt) => receipt.result_delivery_digest !== undefined).length) return false;
+    for (const row of outbox) {
+      try {
+        const receipt = latest.get(row.ticket_id);
+        if (!receipt || receipt.result_delivery_digest !== row.delivery_digest || digest(row.delivery_json) !== row.delivery_digest) return false;
+        validateDelivery(receipt, inspectExecutionResultDelivery(JSON.parse(row.delivery_json)));
+      } catch { return false; }
+    }
+    return true;
+  } catch { return false; }
 }
 
 export interface ExecutionIntentRecoveryInspection {
