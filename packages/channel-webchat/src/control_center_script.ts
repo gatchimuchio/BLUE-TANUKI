@@ -2847,11 +2847,25 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("recovery-action-status", "select one verified store");
           return;
         }
+        const scopeKind = byId("recovery-scope-kind").value;
+        const scopeDigest = byId("recovery-scope-digest").value.trim();
+        if (storeKey === "operation_plans" &&
+            (scopeKind !== "operation_plan" || !/^[a-f0-9]{64}$/i.test(scopeDigest))) {
+          setText("recovery-action-status", "Operation Plan digestを指定してください");
+          return;
+        }
         const backupId = byId("recovery-backup-id").value.trim();
         const backupLabel = backupId || "latest backup";
-        if (!window.confirm("Submit " + labels[storeKey] + " from " + backupLabel + " for owner L3 review? Only this store will be selected; no change runs until approval and a pre-action backup.")) return;
+        const scopePrompt = storeKey === "operation_plans"
+          ? " Plan digest " + scopeDigest.toLowerCase() + " is bound to review; the effect replaces the entire selected Operation Plan store."
+          : "";
+        if (!window.confirm("Submit " + labels[storeKey] + " from " + backupLabel + " for owner L3 review? Only this store will be selected; no change runs until approval and a pre-action backup." + scopePrompt)) return;
         const body = { confirm: "RESTORE", store_key: storeKey };
         if (backupId) body.backup_id = backupId;
+        if (storeKey === "operation_plans") {
+          body.scope_kind = "operation_plan";
+          body.scope_digest = scopeDigest.toLowerCase();
+        }
         await runRecoveryAction("/recovery/restore", body);
       }
 

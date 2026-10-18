@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import {
+  OperationPlanCheckpointSchema,
+  type ExecutionAdmission,
+  type OperationPlan,
+  type OperationPlanCheckpoint,
+} from "@blue-tanuki/protocol";
 import { captureCanonicalStateSnapshots, inspectCanonicalStateSnapshots } from "../src/canonical_state_backup.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import {
@@ -12,6 +19,7 @@ import {
   createRecoveryBackup,
   factoryResetRecovery,
   inspectLatestRecoveryBackup,
+  inspectRecoveryPlanRestoreScopeApplicability,
   resetRecoveryConnector,
   resetRecoveryProvider,
   restoreRecoveryBackup,
@@ -50,6 +58,88 @@ function readCanonicalDatabase(filepath: string): string[] {
   } finally {
     database.close();
   }
+}
+
+function recoveryPlanCheckpoint(): { checkpoint: OperationPlanCheckpoint; planScopeDigest: string } {
+  const step: OperationPlan["steps"][number] = {
+    step_id: "recovery-scope-step",
+    operation: "file.search",
+    target: { kind: "directory", id: "fixture-workspace" },
+    state: "planned",
+    effects: ["read"],
+    permission: {
+      risk: "low",
+      approval_level: "L1_observe",
+      final_review_required: false,
+      hds_brain_authority_required: true,
+      approval_gate_required: true,
+    },
+    adapter: "internal_runtime",
+    adapter_is_authority: false,
+    command_generated_by_adapter_only: false,
+    parameters: { root: "fixture-workspace", query: "fixture", max_results: 1 },
+    preparation: {
+      depends_on: [],
+      bindings: [],
+      preconditions: [],
+      validation: [{
+        check_id: "recovery-scope-check",
+        method: "result_equals",
+        target: { kind: "directory", id: "fixture-workspace" },
+        expected: { count: 0 },
+      }],
+      compensation: { available: false, reason: "fixture" },
+    },
+  };
+  const plan: OperationPlan = {
+    version: "operation-core.v1",
+    plan_id: "recovery-scope-plan",
+    request_id: "recovery-scope-request",
+    state: "planned",
+    steps: [step],
+    rollback: { available: false },
+    raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false,
+    hds_brain_authority_required: true,
+  };
+  const revisionDigest = operationPlanDigest(plan);
+  const { state: _state, result_digest: _result, ...stepDefinition } = step;
+  const commandId = "recovery-scope-command";
+  const admission: ExecutionAdmission = {
+    ticket_id: randomUUID(),
+    command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", commandId])).digest("hex"),
+    command_digest: createHash("sha256").update("recovery-scope-command-digest").digest("hex"),
+    proof_digest: createHash("sha256").update("recovery-scope-proof").digest("hex"),
+    execution_epoch: randomUUID(),
+    issued_at_ms: 10_000,
+    expires_at_ms: 20_000,
+  };
+  const checkpoint = OperationPlanCheckpointSchema.parse({
+    schema_version: "operation-plan-state.v1",
+    plans: [{
+      owner: "fixture-owner",
+      channel: "webchat",
+      goal: "fixture recovery scope",
+      revisions: [{ digest: revisionDigest, plan }],
+      receipt_observations: [],
+      bindings: [{
+        step_id: step.step_id,
+        revision_digest: revisionDigest,
+        step_digest: operationPlanDigest(stepDefinition),
+        prepared_step: step,
+        command_id: commandId,
+        request_id: plan.request_id,
+        commit_hash: createHash("sha256").update("recovery-scope-commit").digest("hex"),
+        payload_digest: createHash("sha256").update("recovery-scope-payload").digest("hex"),
+        command_digest: admission.command_digest,
+        operation: step.operation,
+        status: "intent_committed",
+        execution_admission: admission,
+      }],
+      results: [],
+    }],
+  });
+  return { checkpoint, planScopeDigest: operationPlanDigest(plan.plan_id) };
 }
 
 describe("buildRecoverySnapshot", () => {
@@ -299,18 +389,14 @@ describe("buildRecoverySnapshot", () => {
 
   it("restores only the selected verified canonical store after a pre-action snapshot", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-selective-store-restore-"));
-    let liveSelected: DatabaseSyncType | undefined;
     let livePlanStore: OperationPlanStateStore | undefined;
     try {
       const envFile = path.join(root, "product.env");
       const recoveryDir = path.join(root, "recovery");
       const stateRoot = path.join(root, "state");
       await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
-      const selectedPath = await createCanonicalDatabase(
-        stateRoot,
-        path.join("operation-plans", "j-state.sqlite"),
-        "snapshot-state",
-      );
+      const selectedPath = path.join(stateRoot, "private-state", "operation-plans", "j-state.sqlite");
+      await mkdir(path.dirname(selectedPath), { recursive: true });
       const unrelatedPath = await createCanonicalDatabase(
         stateRoot,
         path.join("execution-intents", "executor.sqlite"),
@@ -318,7 +404,7 @@ describe("buildRecoverySnapshot", () => {
       );
       const unrelatedBefore = await readFile(unrelatedPath);
       livePlanStore = new OperationPlanStateStore(selectedPath);
-      const checkpoint = { schema_version: "operation-plan-state.v1" as const, plans: [] };
+      const { checkpoint, planScopeDigest } = recoveryPlanCheckpoint();
       livePlanStore.compareAndSet(null, checkpoint);
       const env = {
         BLUE_TANUKI_ENV_FILE: envFile,
@@ -326,18 +412,34 @@ describe("buildRecoverySnapshot", () => {
         BLUE_TANUKI_STATE_ROOT: stateRoot,
       };
       const backup = await createRecoveryBackup(env);
+      const packsBeforeRejectedRestore = await readdir(recoveryDir);
+      await expect(restoreRecoveryBackup(env, {
+        backup_id: backup.backup_id,
+        store_key: "operation_plans",
+        confirm: "RESTORE",
+      })).rejects.toThrow("operation_plan_scope_required");
+      await expect(restoreRecoveryBackup(env, {
+        backup_id: backup.backup_id,
+        store_key: "operation_plans",
+        scope_kind: "operation_plan",
+        scope_digest: "f".repeat(64),
+        confirm: "RESTORE",
+      })).rejects.toThrow("operation_plan_scope_unverified");
+      expect(await readdir(recoveryDir)).toEqual(packsBeforeRejectedRestore);
+      const restoreScopeInspection = await inspectRecoveryPlanRestoreScopeApplicability(env, backup.backup_id!, planScopeDigest);
+      expect(restoreScopeInspection).toMatchObject({ status: "matched", reason: null });
       await writeFile(envFile, "LLM_BACKEND=changed\n", "utf8");
-      liveSelected = new DatabaseSync(selectedPath);
-      liveSelected.exec("DELETE FROM snapshot_fixture; INSERT INTO snapshot_fixture (value) VALUES ('current-state')");
-      liveSelected.exec("DELETE FROM operation_plan_state");
+      const emptyCheckpoint = OperationPlanCheckpointSchema.parse({ schema_version: "operation-plan-state.v1", plans: [] });
+      livePlanStore.compareAndSet(operationPlanDigest(checkpoint), emptyCheckpoint);
 
       const restored = await restoreRecoveryBackup(env, {
         backup_id: backup.backup_id,
         store_key: "operation_plans",
+        scope_kind: "operation_plan",
+        scope_digest: planScopeDigest,
         confirm: "RESTORE",
       });
 
-      expect(liveSelected.prepare("SELECT value FROM snapshot_fixture").get()).toEqual({ value: "snapshot-state" });
       expect(livePlanStore.load()).toEqual(checkpoint);
       expect(await readFile(unrelatedPath)).toEqual(unrelatedBefore);
       expect(await readFile(envFile, "utf8")).toBe("LLM_BACKEND=changed\n");
@@ -345,6 +447,8 @@ describe("buildRecoverySnapshot", () => {
         action: "restore",
         restored_backup_id: backup.backup_id,
         restored_store_key: "operation_plans",
+        restore_scope_kind: "operation_plan",
+        restore_scope_digest: planScopeDigest,
         canonical_state_cross_store_atomic: false,
       });
       expect(restored.restored_store_archive_digest).toMatch(/^[a-f0-9]{64}$/);
@@ -361,7 +465,6 @@ describe("buildRecoverySnapshot", () => {
       expect(JSON.stringify(restored)).not.toContain(selectedPath);
       expect(JSON.stringify(restored)).not.toContain(unrelatedPath);
     } finally {
-      try { liveSelected?.close(); } catch { /* test cleanup */ }
       try { livePlanStore?.close(); } catch { /* test cleanup */ }
       await rm(root, { recursive: true, force: true });
     }
@@ -374,11 +477,12 @@ describe("buildRecoverySnapshot", () => {
       const recoveryDir = path.join(root, "recovery");
       const stateRoot = path.join(root, "state");
       await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
-      const selectedPath = await createCanonicalDatabase(
-        stateRoot,
-        path.join("operation-plans", "j-state.sqlite"),
-        "current-state",
-      );
+      const selectedPath = path.join(stateRoot, "private-state", "operation-plans", "j-state.sqlite");
+      await mkdir(path.dirname(selectedPath), { recursive: true });
+      const { checkpoint, planScopeDigest } = recoveryPlanCheckpoint();
+      const planStore = new OperationPlanStateStore(selectedPath);
+      planStore.compareAndSet(null, checkpoint);
+      planStore.close();
       const env = {
         BLUE_TANUKI_ENV_FILE: envFile,
         BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
@@ -407,10 +511,13 @@ describe("buildRecoverySnapshot", () => {
       await expect(restoreRecoveryBackup(env, {
         backup_id: backup.backup_id,
         store_key: "operation_plans",
+        scope_kind: "operation_plan",
+        scope_digest: planScopeDigest,
         confirm: "RESTORE",
-      })).rejects.toThrow("canonical_state_store_unverified");
+      })).rejects.toThrow("operation_plan_scope_unverified");
 
-      expect(readCanonicalDatabase(selectedPath)).toEqual(["current-state"]);
+      const unchangedStore = new OperationPlanStateStore(selectedPath);
+      try { expect(unchangedStore.load()).toEqual(checkpoint); } finally { unchangedStore.close(); }
       expect(await readdir(recoveryDir)).toEqual(packsBefore);
     } finally {
       await rm(root, { recursive: true, force: true });

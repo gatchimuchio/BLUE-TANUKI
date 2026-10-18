@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19のQEB-03-E03.03-RECOVERY-PLAN-SCOPE-RESTORE-REVIEW-BINDINGでは、既存Operation Plan digestをselected operation_plans store restoreのowner L3 request／targetへ結合し、作用前とrestore直前に同じbackup scopeを再照合する経路を接続した。scopeが欠落・不一致・曖昧・未確認ならL3 request前に拒否する。承認対象は計画digestを含むが効果は選択store全体の置換であり、plan行単位のrestoreではない。130 focused tests、typecheck、build、HDS standalone、serve smokeはPASS。実restore／実approval実行／実restartは未実施。E03.03=BUILD_GAP、C08.03 provider保留、P13=PENDING_OWNER_GOを維持する。
+
 2026-10-19の`QEB-03-E03.03-RECOVERY-JOB-SCOPE-CONSUMER-AUDIT`では、Operation Planの`plan_id`がstep／commandを通じてBroker、M、Cron handoffとbackup dependency inventoryを結ぶ現行のplan範囲identityであることを確認した。汎用`task_id/run_id`はoptional contractに留まり、各機能のtask/event IDは相互のjob identityではない。Recoveryのexact-scope applicabilityはread-only表示で、L3 restore要求はbackup ID／store keyだけを束縛し、selected canonical SQLite store全体を復元する。snapshot間atomicityもない。次は既存plan digestをcanonical `operation_plans` restoreのL3要求・実行直前照合へ結び、scope mismatchを作用前に拒否する。これはselected-store復元のscope bindingであり、job単位DB復元を意味しない。E03.03=`BUILD_GAP`、C08.03 provider保留、P13=`PENDING_OWNER_GO`を維持する。
 
 2026-10-19の`QEB-03-E03.03-INPROCESS-RESTORE-PLAN-DEPENDENCY-EVIDENCE`では、同一serve process内の成功restoreを完全history・expected command・opaque backup digest・再読込checkpointへ照合し、既存read-only dependency inspectionをHDSの計画別holdへ接続した。残差／未観測／未確認は各planを選択停止し、history・store・checkpointの不一致時はgateを維持する。clean evidenceも通常HDS reviewに留まり、実行・Approval・resumeを生成しない。3 files／26 focused tests、typecheck、15 workspace build、HDS standalone、serve smokeを確認した。実restoreや実restart、独立restore point、store間atomicityは未実証でありE03.03／QEB-03=`BUILD_GAP`を維持する。

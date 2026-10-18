@@ -32,12 +32,35 @@ describe("Recovery mutation tool boundary", () => {
     expect(normalizeRecoveryMutationArguments("recovery.restore", {
       backup_id: "2026-10-18.backup.abc",
       store_key: "operation_plans",
+      scope_kind: "operation_plan",
+      scope_digest: "a".repeat(64),
       confirm: "RESTORE",
     })).toEqual({
       backup_id: "2026-10-18.backup.abc",
       store_key: "operation_plans",
+      scope_kind: "operation_plan",
+      scope_digest: "a".repeat(64),
       confirm: "RESTORE",
     });
+    expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
+      backup_id: "2026-10-18.backup.abc",
+      store_key: "operation_plans",
+      confirm: "RESTORE",
+    })).toThrow("operation_plan_scope_required");
+    expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
+      backup_id: "2026-10-18.backup.abc",
+      store_key: "operation_plans",
+      scope_kind: "operation_plan",
+      scope_digest: "not-a-digest",
+      confirm: "RESTORE",
+    })).toThrow("operation_plan_scope_invalid");
+    expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
+      backup_id: "2026-10-18.backup.abc",
+      store_key: "j_control",
+      scope_kind: "operation_plan",
+      scope_digest: "a".repeat(64),
+      confirm: "RESTORE",
+    })).toThrow("invalid_recovery_request");
     expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
       backup_id: "2026-10-18.backup.abc",
       store_key: "unknown_store",

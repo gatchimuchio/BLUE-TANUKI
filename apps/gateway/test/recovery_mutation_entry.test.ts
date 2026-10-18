@@ -30,6 +30,40 @@ describe("Recovery mutation HDS L3 entry", () => {
     try {
       await waitForHealth(port, gateway);
 
+      const backup = await requestJson(port, "/recovery/backup", {
+        method: "POST",
+        token: maintenanceToken,
+        body: {},
+      });
+      expect(backup.status).toBe(200);
+      const backupId = (backup.body.result as Record<string, unknown>).backup_id as string;
+      const unverifiedScope = await requestJson(port, "/recovery/restore", {
+        method: "POST",
+        token: maintenanceToken,
+        body: {
+          backup_id: backupId,
+          store_key: "operation_plans",
+          scope_kind: "operation_plan",
+          scope_digest: "f".repeat(64),
+          confirm: "RESTORE",
+        },
+      });
+      expect(unverifiedScope.status).toBe(200);
+      expect(unverifiedScope.body).toMatchObject({
+        ok: true,
+        result: {
+          status: "blocked_unverified_scope",
+          executed: false,
+          restore_effect_scope: "entire_selected_store",
+          used_for_authority: false,
+          may_execute: false,
+          scope_applicability: { status: "unverified", used_for_authority: false, may_execute: false },
+        },
+      });
+      const noRecoveryApproval = await requestJson(port, "/approval", { token: resumeToken });
+      expect(noRecoveryApproval.body.pending_approvals).toEqual([]);
+      expect(readFileSync(envFile, "utf8")).toBe(before);
+
       const invalid = await requestJson(port, "/recovery/reset-provider", {
         method: "POST",
         token: maintenanceToken,

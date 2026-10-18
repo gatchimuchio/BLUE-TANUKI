@@ -14,7 +14,13 @@ import {
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
-import { createRecoveryBackup, inspectLatestRecoveryBackup, inspectRecoveryScopeApplicability } from "../src/recovery_surface.js";
+import {
+  createRecoveryBackup,
+  inspectLatestRecoveryBackup,
+  inspectRecoveryPlanRestoreScopeApplicability,
+  inspectRecoveryScopeApplicability,
+  isVerifiedRecoveryPlanRestoreScope,
+} from "../src/recovery_surface.js";
 import { operationPlanRequestScopeDigest } from "../src/recovery_request_scope.js";
 import { DocumentOrganizationCheckpointStore } from "../src/document_organization_checkpoint_store.js";
 import { inspectOperationPlanRecoveryLedger } from "../src/operation_plan_recovery_inspection.js";
@@ -84,6 +90,23 @@ describe("J OperationPlan recovery inspection", () => {
     expect(JSON.stringify(inventory)).not.toContain("private-command-");
     expect(await readFile(sourcePlanPath)).toEqual(sourceBefore);
     expect(await readFile(archivePath)).toEqual(archiveBefore);
+
+    const planIdDigest = operationPlanDigest("private-plan-id");
+    const restoreScope = await inspectRecoveryPlanRestoreScopeApplicability(env, backup.backup_id!, planIdDigest);
+    expect(restoreScope).toMatchObject({
+      status: "matched",
+      reason: null,
+      scope_kind: "operation_plan",
+      scope_digest: planIdDigest,
+      matched_plan_id_digest: planIdDigest,
+      store_candidate_count: 1,
+      verified_store_candidate_count: 1,
+      store_candidates: [{ store_key: "operation_plans", snapshot_status: "verified" }],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(isVerifiedRecoveryPlanRestoreScope(restoreScope, backup.backup_id!, planIdDigest)).toBe(true);
+    expect(isVerifiedRecoveryPlanRestoreScope(restoreScope, backup.backup_id!, sha256("another-plan"))).toBe(false);
   });
 
   it("matches a caller-selected plan scope to fixed backup stores without changing source or archive bytes", async () => {

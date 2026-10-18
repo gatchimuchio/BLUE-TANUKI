@@ -86,7 +86,9 @@ import {
   buildRecoverySnapshot,
   createRecoveryBackup,
   inspectLatestRecoveryBackup,
+  inspectRecoveryPlanRestoreScopeApplicability,
   inspectRecoveryScopeApplicability,
+  isVerifiedRecoveryPlanRestoreScope,
   recoveryStoreRestoreHistoryEvidence,
 } from "./recovery_surface.js";
 import {
@@ -1374,6 +1376,23 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ? snapshot.recovery_backups.latest_backup_id
       : null;
     const arguments_ = normalizeRecoveryMutationArguments(toolName, rawArguments, { latestBackupId });
+    const planScopeInspection = toolName === "recovery.restore" && arguments_.store_key === "operation_plans"
+      ? await inspectRecoveryPlanRestoreScopeApplicability(process.env, arguments_.backup_id!, arguments_.scope_digest!)
+      : null;
+    if (planScopeInspection && !isVerifiedRecoveryPlanRestoreScope(
+      planScopeInspection, arguments_.backup_id!, arguments_.scope_digest!,
+    )) {
+      return {
+        status: "blocked_unverified_scope",
+        executed: false,
+        operation: toolName,
+        restore_effect_scope: "entire_selected_store",
+        scope_applicability: planScopeInspection,
+        used_for_authority: false,
+        may_execute: false,
+        next_action: "指定backupとOperation Plan digestの読み取り照合を確認してから、必要ならowner L3レビューを申請してください。復元要求は作成されていません。",
+      };
+    }
     const origin: InboundRequest = {
       id: randomUUID(),
       channel: "webchat",
@@ -1479,6 +1498,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       risk: evaluation.risk,
       approval_level: evaluation.approval_level,
       final_review_required: true,
+      ...(planScopeInspection ? {
+        restore_effect_scope: "entire_selected_store",
+        scope_applicability: planScopeInspection,
+      } : {}),
       next_action: "Review this exact operation and target in the owner approval queue. A fresh owner L3 approval token is required; this request has not executed.",
     };
   }

@@ -449,9 +449,10 @@ describe("approval grant helpers", () => {
 
 describe("Recovery mutation final review", () => {
   it("keeps every recovery mutation high-risk L3 ask despite matching reusable grants", () => {
+    const planScopeDigest = "a".repeat(64);
     const cases = [
       { name: "recovery.restore", args: { backup_id: "backup-2026-01", confirm: "RESTORE" }, target: "recovery.restore:backup-2026-01" },
-      { name: "recovery.restore", args: { backup_id: "backup-2026-01", store_key: "operation_plans", confirm: "RESTORE" }, target: "recovery.restore:backup-2026-01:store:operation_plans" },
+      { name: "recovery.restore", args: { backup_id: "backup-2026-01", store_key: "operation_plans", scope_kind: "operation_plan", scope_digest: planScopeDigest, confirm: "RESTORE" }, target: `recovery.restore:backup-2026-01:store:operation_plans:effect:whole_store:scope:operation_plan:${planScopeDigest}` },
       { name: "recovery.reset_provider", args: { confirm: "RESET_PROVIDER" }, target: "recovery.reset_provider:provider-configuration" },
       { name: "recovery.reset_connector", args: { confirm: "RESET_CONNECTOR" }, target: "recovery.reset_connector:connector-configuration" },
       { name: "recovery.factory_reset", args: { confirm: "FACTORY_RESET" }, target: "recovery.factory_reset:local-runtime-state-and-config" },

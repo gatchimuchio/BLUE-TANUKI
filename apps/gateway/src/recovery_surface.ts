@@ -174,6 +174,8 @@ export interface RecoveryActionResult {
   restored_store_key?: CanonicalStateStoreKey;
   restored_store_archive_digest?: string;
   restored_store_state_digest?: string;
+  restore_scope_kind?: "operation_plan";
+  restore_scope_digest?: string;
   canonical_state_cross_store_atomic?: false;
   restored_items_count?: number;
   removed_paths_count?: number;
@@ -318,6 +320,8 @@ export interface RecoveryBackupOperationPlanInventory {
 export interface RestoreRecoveryOptions {
   backup_id?: string;
   store_key?: CanonicalStateStoreKey;
+  scope_kind?: "operation_plan";
+  scope_digest?: string;
   confirm?: string;
 }
 
@@ -1529,6 +1533,63 @@ export async function inspectRecoveryScopeApplicability(
   };
 }
 
+/** Bind an Operation Plan digest to one exact backup without exposing the backup ID. */
+export async function inspectRecoveryPlanRestoreScopeApplicability(
+  env: NodeJS.ProcessEnv,
+  backupId: string,
+  planIdDigest: string,
+): Promise<RecoveryScopeApplicabilityInspection> {
+  if (!/^[A-Za-z0-9_.-]{1,128}$/u.test(backupId) || backupId === "latest" ||
+      !RECOVERY_SCOPE_DIGEST.test(planIdDigest)) {
+    return emptyRecoveryScopeApplicability("invalid_request", {
+      ...( /^[A-Za-z0-9_.-]{1,128}$/u.test(backupId) && backupId !== "latest"
+        ? { backup_id_digest: createHash("sha256").update(backupId).digest("hex") }
+        : {}),
+      scope_kind: "operation_plan",
+      scope_digest: planIdDigest,
+    });
+  }
+  return inspectRecoveryScopeApplicability(env, {
+    backup_id_digest: createHash("sha256").update(backupId).digest("hex"),
+    scope_kind: "operation_plan",
+    scope_digest: planIdDigest.toLowerCase(),
+    store_candidates: ["operation_plans"],
+  });
+}
+
+export function isVerifiedRecoveryPlanRestoreScope(
+  inspection: RecoveryScopeApplicabilityInspection,
+  backupId: string,
+  planIdDigest: string,
+): boolean {
+  const store = inspection.store_candidates[0];
+  return inspection.status === "matched" && inspection.reason === null &&
+    inspection.scope_kind === "operation_plan" && inspection.scope_digest === planIdDigest.toLowerCase() &&
+    inspection.backup_id_digest === createHash("sha256").update(backupId).digest("hex") &&
+    inspection.matched_plan_id_digest === planIdDigest.toLowerCase() && inspection.matched_plan_scope_count === 1 &&
+    inspection.store_candidate_count === 1 && inspection.verified_store_candidate_count === 1 &&
+    inspection.cross_store_atomic === false && inspection.used_for_authority === false && inspection.may_execute === false &&
+    store?.store_key === "operation_plans" && store.snapshot_status === "verified" &&
+    (store.dependency_status === "no_residual_recorded" || store.dependency_status === "residuals_present") &&
+    store.related_dependencies.length === 1 && store.related_dependencies[0] === "operation_plan";
+}
+
+async function requireVerifiedRecoveryPlanRestoreScope(
+  env: NodeJS.ProcessEnv,
+  backupId: string,
+  scopeKind: string | undefined,
+  scopeDigest: string | undefined,
+): Promise<RecoveryScopeApplicabilityInspection> {
+  if (scopeKind !== "operation_plan" || typeof scopeDigest !== "string" || !RECOVERY_SCOPE_DIGEST.test(scopeDigest)) {
+    throw new Error("operation_plan_scope_required");
+  }
+  const inspection = await inspectRecoveryPlanRestoreScopeApplicability(env, backupId, scopeDigest);
+  if (!isVerifiedRecoveryPlanRestoreScope(inspection, backupId, scopeDigest)) {
+    throw new Error("operation_plan_scope_unverified");
+  }
+  return inspection;
+}
+
 async function restoreManifest(
   env: NodeJS.ProcessEnv,
   manifest: RecoveryBackupManifest,
@@ -2084,6 +2145,10 @@ export async function restoreRecoveryBackup(
   assertConfirmation(options.confirm, "RESTORE");
   const id = options.backup_id ?? (await latestBackupId(env));
   if (!id) throw new Error("backup_not_found");
+  let planScopeInspection: RecoveryScopeApplicabilityInspection | undefined;
+  if (options.store_key === "operation_plans") {
+    planScopeInspection = await requireVerifiedRecoveryPlanRestoreScope(env, id, options.scope_kind, options.scope_digest);
+  }
   const manifest = await readManifest(env, id);
   if (options.store_key) {
     const packDir = path.dirname(manifest.manifest_path);
@@ -2127,6 +2192,9 @@ export async function restoreRecoveryBackup(
       }
     }
 
+    if (options.store_key === "operation_plans") {
+      planScopeInspection = await requireVerifiedRecoveryPlanRestoreScope(env, id, options.scope_kind, options.scope_digest);
+    }
     const restored = await restoreCanonicalStateSnapshotStore(
       env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
       packDir,
@@ -2138,6 +2206,10 @@ export async function restoreRecoveryBackup(
       restored_store_key: options.store_key,
       restored_store_archive_digest: restored.sha256,
       restored_store_state_digest: restored.restoredStateSha256,
+      ...(planScopeInspection ? {
+        restore_scope_kind: "operation_plan" as const,
+        restore_scope_digest: planScopeInspection.scope_digest!,
+      } : {}),
       canonical_state_cross_store_atomic: false,
       pre_action_backup_id: preRestore.backup_id,
       pre_action_backup_manifest_path: preRestore.manifest_path,

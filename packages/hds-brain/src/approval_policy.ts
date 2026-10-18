@@ -399,10 +399,18 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
     if (op === "recovery.restore") {
       const backupId = typeof args.backup_id === "string" ? args.backup_id : undefined;
       const storeKey = typeof args.store_key === "string" ? args.store_key : undefined;
+      const scopeKind = typeof args.scope_kind === "string" ? args.scope_kind : undefined;
+      const scopeDigest = typeof args.scope_digest === "string" && /^[a-f0-9]{64}$/i.test(args.scope_digest)
+        ? args.scope_digest.toLowerCase() : undefined;
+      const planScope = storeKey === "operation_plans"
+        ? scopeKind === "operation_plan" && scopeDigest
+          ? `:effect:whole_store:scope:operation_plan:${scopeDigest}`
+          : ":effect:whole_store:scope:missing_or_invalid"
+        : "";
       return {
         target_scope: "task_type",
         target: backupId
-          ? storeKey ? `recovery.restore:${backupId}:store:${storeKey}` : `recovery.restore:${backupId}`
+          ? storeKey ? `recovery.restore:${backupId}:store:${storeKey}${planScope}` : `recovery.restore:${backupId}`
           : "recovery.restore:missing-backup-id",
       };
     }

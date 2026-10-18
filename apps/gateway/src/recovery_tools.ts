@@ -31,7 +31,9 @@ export function normalizeRecoveryMutationArguments(
   options: { readonly latestBackupId?: string | null } = {},
 ): Record<string, string> {
   if (!isRecord(raw)) throw new Error("invalid_recovery_request");
-  const allowedKeys = toolName === "recovery.restore" ? ["backup_id", "store_key", "confirm"] : ["confirm"];
+  const allowedKeys = toolName === "recovery.restore"
+    ? ["backup_id", "store_key", "scope_kind", "scope_digest", "confirm"]
+    : ["confirm"];
   if (Object.keys(raw).some((key) => !allowedKeys.includes(key))) {
     throw new Error("invalid_recovery_request");
   }
@@ -42,6 +44,16 @@ export function normalizeRecoveryMutationArguments(
   if (storeKey !== undefined &&
       (typeof storeKey !== "string" || !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === storeKey))) {
     throw new Error("invalid_store_key");
+  }
+  const scopeKind = raw.scope_kind;
+  const scopeDigest = raw.scope_digest;
+  if (storeKey === "operation_plans") {
+    if (scopeKind !== "operation_plan") throw new Error("operation_plan_scope_required");
+    if (typeof scopeDigest !== "string" || !/^[a-f0-9]{64}$/i.test(scopeDigest)) {
+      throw new Error("operation_plan_scope_invalid");
+    }
+  } else if (scopeKind !== undefined || scopeDigest !== undefined) {
+    throw new Error("invalid_recovery_request");
   }
 
   const requestedId = raw.backup_id;
@@ -57,6 +69,9 @@ export function normalizeRecoveryMutationArguments(
   return {
     backup_id: backupId,
     ...(typeof storeKey === "string" ? { store_key: storeKey } : {}),
+    ...(scopeKind === "operation_plan" && typeof scopeDigest === "string"
+      ? { scope_kind: "operation_plan", scope_digest: scopeDigest.toLowerCase() }
+      : {}),
     confirm: CONFIRMATION[toolName],
   };
 }
@@ -71,6 +86,9 @@ export function createRecoveryMutationTools(env: NodeJS.ProcessEnv = process.env
       const result = await invokeRecoverySafely(() => restoreRecoveryBackup(env, {
         backup_id: args.backup_id,
         ...(args.store_key ? { store_key: args.store_key as CanonicalStateStoreKey } : {}),
+        ...(args.scope_kind === "operation_plan" && args.scope_digest
+          ? { scope_kind: "operation_plan" as const, scope_digest: args.scope_digest }
+          : {}),
         confirm: args.confirm,
       }));
       return operatorSafeRecoveryResult(result);
@@ -126,6 +144,8 @@ function operatorSafeRecoveryResult(result: RecoveryActionResult): Record<string
     ...(result.restored_store_key ? { restored_store_key: result.restored_store_key } : {}),
     ...(result.restored_store_archive_digest ? { restored_store_archive_digest: result.restored_store_archive_digest } : {}),
     ...(result.restored_store_state_digest ? { restored_store_state_digest: result.restored_store_state_digest } : {}),
+    ...(result.restore_scope_kind ? { restore_scope_kind: result.restore_scope_kind } : {}),
+    ...(result.restore_scope_digest ? { restore_scope_digest: result.restore_scope_digest } : {}),
     ...(result.canonical_state_cross_store_atomic !== undefined
       ? { canonical_state_cross_store_atomic: result.canonical_state_cross_store_atomic }
       : {}),

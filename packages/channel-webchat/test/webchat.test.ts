@@ -992,11 +992,13 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(end).toBeGreaterThan(start);
     const functionSource = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
 
-    const run = async (storeKey: string) => {
+    const run = async (storeKey: string, scopeKind = "operation_plan", scopeDigest = "a".repeat(64)) => {
       const raw = await new Script(`
         const elements = {
           "recovery-restore-store": { value: ${JSON.stringify(storeKey)} },
           "recovery-backup-id": { value: "backup-2026-10-18" },
+          "recovery-scope-kind": { value: ${JSON.stringify(scopeKind)} },
+          "recovery-scope-digest": { value: ${JSON.stringify(scopeDigest)} },
           "recovery-action-status": { textContent: "" },
         };
         let request = null;
@@ -1019,13 +1021,28 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(valid).toMatchObject({
       request: {
         path: "/recovery/restore",
-        body: { confirm: "RESTORE", store_key: "operation_plans", backup_id: "backup-2026-10-18" },
+        body: {
+          confirm: "RESTORE",
+          store_key: "operation_plans",
+          backup_id: "backup-2026-10-18",
+          scope_kind: "operation_plan",
+          scope_digest: "a".repeat(64),
+        },
       },
     });
     expect(valid.prompts[0]).toContain("owner L3 review");
     expect(valid.prompts[0]).toContain("Only this store will be selected");
     expect(valid.prompts[0]).toContain("pre-action backup");
     expect(valid.prompts[0]).toContain("Operation Plan ledger");
+    expect(valid.prompts[0]).toContain("entire selected Operation Plan store");
+    expect(await run("operation_plans", "request_scope", "a".repeat(64))).toMatchObject({
+      request: null,
+      status: "Operation Plan digestを指定してください",
+    });
+    expect(await run("operation_plans", "operation_plan", "invalid")).toMatchObject({
+      request: null,
+      status: "Operation Plan digestを指定してください",
+    });
     expect(await run("unknown_store")).toMatchObject({
       request: null,
       status: "select one verified store",
