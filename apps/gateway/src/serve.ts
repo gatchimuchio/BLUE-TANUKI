@@ -86,6 +86,7 @@ import {
   buildRecoverySnapshot,
   createRecoveryBackup,
   inspectLatestRecoveryBackup,
+  inspectRecoveryScopeApplicability,
 } from "./recovery_surface.js";
 import {
   createRecoveryMutationTools,
@@ -1558,6 +1559,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           return buildRecoverySnapshot(process.env, postActionObservation);
         },
         inspectBackup: async () => inspectLatestRecoveryBackup(process.env),
+        inspectScopeApplicability: async (body: Record<string, unknown>) =>
+          inspectRecoveryScopeApplicability(process.env, body),
         inspectLedgerState: async () => {
           const { inspectGatewayRecoveryState, projectGatewayRecoveryInspectionForOperator } =
             await import("./recovery_inspection.js");

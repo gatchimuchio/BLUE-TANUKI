@@ -435,6 +435,8 @@ export interface WebChatRecoverySurface {
   inspectLedgerState?: () => Promise<unknown>;
   /** Inspect the latest recovery pack without changing it or granting authority. */
   inspectBackup?: () => Promise<unknown>;
+  /** Correlate a caller-specified scope and canonical store candidates with one verified backup, read-only. */
+  inspectScopeApplicability?: (body: Record<string, unknown>) => Promise<unknown>;
   /** Create a local recovery backup pack. */
   createBackup?: () => Promise<unknown>;
   /** Restore from a selected or latest local recovery backup pack. */

@@ -2377,6 +2377,122 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("recovery-backup-inspection-json", compactJson(projection));
       }
 
+      function renderRecoveryScopeApplicability(report) {
+        const source = report && typeof report === "object" ? report : {};
+        const digest = function (value) { return value === null ? null : recoveryInspectionDigest(value); };
+        const count = function (value) { return value === null || (Number.isSafeInteger(value) && value >= 0) ? value : undefined; };
+        const categories = ["operation_plan", "broker", "delivery", "memory", "cron_approval"];
+        const storeKeys = ["j_control", "m_state", "broker", "operation_plans", "cron_events"];
+        const dependenciesByStore = {
+          j_control: [], m_state: ["memory"], broker: ["broker", "delivery"],
+          operation_plans: ["operation_plan"], cron_events: ["cron_approval"]
+        };
+        const reasons = ["invalid_request", "backup_not_found", "backup_unverified", "scope_not_found", "scope_ambiguous",
+          "dependency_unverified", "dependency_not_mapped", "store_unverified"];
+        const snapshotStatuses = ["verified", "captured_unverified", "snapshot_failed", "not_present", "unknown"];
+        const dependencyStatuses = ["residuals_present", "unobserved", "no_residual_recorded", "not_mapped", "unknown"];
+        const rawStatus = recoveryInspectionEnum(source.status, ["matched", "unverified"]);
+        const scopeKind = source.scope_kind === null ? null : recoveryInspectionEnum(source.scope_kind, ["request_scope", "operation_plan"]);
+        const scopeDigest = digest(source.scope_digest);
+        const backupDigest = digest(source.backup_id_digest);
+        const planDigest = digest(source.matched_plan_id_digest);
+        const reason = source.reason === null ? null : recoveryInspectionEnum(source.reason, reasons);
+        const matchedPlanCount = count(source.matched_plan_scope_count);
+        const storeCount = count(source.store_candidate_count);
+        const verifiedStoreCount = count(source.verified_store_candidate_count);
+        const dependencyScopeStatus = recoveryInspectionEnum(source.dependency_scope_status,
+          ["observed", "residuals_present", "unobserved", "unknown"]);
+        const readCategories = function (value) {
+          if (!Array.isArray(value) || value.length > categories.length) return null;
+          const rows = value.map(function (item) { return recoveryInspectionEnum(item, categories); });
+          return rows.every(Boolean) && new Set(rows).size === rows.length ? rows : null;
+        };
+        const residualDependencies = readCategories(source.residual_dependencies);
+        const unobservedDependencies = readCategories(source.unobserved_dependencies);
+        let valid = source.schema_version === 1 && source.surface === "recovery_scope_applicability" && source.mode === "read_only" &&
+          rawStatus !== null && (source.reason === null || reason !== null) &&
+          (source.scope_kind === null || scopeKind !== null) && (source.scope_digest === null || scopeDigest !== null) &&
+          (source.backup_id_digest === null || backupDigest !== null) && (source.matched_plan_id_digest === null || planDigest !== null) &&
+          matchedPlanCount !== undefined && storeCount !== undefined && verifiedStoreCount !== undefined &&
+          dependencyScopeStatus !== null && residualDependencies !== null && unobservedDependencies !== null &&
+          (source.cross_store_atomic === false || source.cross_store_atomic === null);
+        if (source.used_for_authority !== false || source.may_execute !== false || source.external_backup_restore_point !== "not_examined") valid = false;
+        const storeRows = [];
+        if (!Array.isArray(source.store_candidates) || source.store_candidates.length > 5) valid = false;
+        else {
+          const seen = new Set();
+          for (const item of source.store_candidates) {
+            const row = item && typeof item === "object" ? item : {};
+            const key = recoveryInspectionEnum(row.store_key, storeKeys);
+            const snapshotStatus = recoveryInspectionEnum(row.snapshot_status, snapshotStatuses);
+            const dependencyStatus = recoveryInspectionEnum(row.dependency_status, dependencyStatuses);
+            const related = readCategories(row.related_dependencies);
+            if (!key || !snapshotStatus || !dependencyStatus || !related || seen.has(key) ||
+                JSON.stringify(related) !== JSON.stringify(dependenciesByStore[key])) { valid = false; continue; }
+            seen.add(key);
+            storeRows.push({ store_key: key, snapshot_status: snapshotStatus,
+              dependency_status: dependencyStatus, related_dependencies: related });
+          }
+        }
+        if (rawStatus === "matched" && (reason !== null || !scopeKind || !scopeDigest || !backupDigest || !planDigest ||
+            matchedPlanCount !== 1 || storeCount === null || storeCount < 1 || storeCount > 5 ||
+            verifiedStoreCount !== storeCount || storeRows.length !== storeCount || !dependencyScopeStatus ||
+            storeRows.some(function (row) { return row.snapshot_status !== "verified" ||
+              ["unobserved", "not_mapped", "unknown"].includes(row.dependency_status); }))) valid = false;
+        const status = valid ? rawStatus : "invalid_report";
+        const projection = valid ? {
+          schema_version: 1,
+          surface: "recovery_scope_applicability",
+          mode: "read_only",
+          status: rawStatus,
+          reason,
+          scope_kind: scopeKind,
+          scope_digest: scopeDigest,
+          backup_id_digest: backupDigest,
+          matched_plan_id_digest: planDigest,
+          matched_plan_scope_count: matchedPlanCount,
+          store_candidate_count: storeCount,
+          verified_store_candidate_count: verifiedStoreCount,
+          dependency_scope_status: dependencyScopeStatus,
+          residual_dependencies: residualDependencies,
+          unobserved_dependencies: unobservedDependencies,
+          store_candidates: storeRows,
+          cross_store_atomic: source.cross_store_atomic,
+          external_backup_restore_point: "not_examined",
+          used_for_authority: false,
+          may_execute: false
+        } : {
+          schema_version: 1,
+          surface: "recovery_scope_applicability",
+          mode: "read_only",
+          status: "unverified",
+          reason: "invalid_request",
+          scope_kind: null,
+          scope_digest: null,
+          backup_id_digest: null,
+          matched_plan_id_digest: null,
+          matched_plan_scope_count: null,
+          store_candidate_count: null,
+          verified_store_candidate_count: null,
+          dependency_scope_status: "unknown",
+          residual_dependencies: [],
+          unobserved_dependencies: [],
+          store_candidates: [],
+          cross_store_atomic: null,
+          external_backup_restore_point: "not_examined",
+          used_for_authority: false,
+          may_execute: false
+        };
+        setText("recovery-scope-applicability-status", status === "matched" ? "照合成立（復旧可否は未判定）" : "未確認");
+        byId("recovery-scope-applicability-status").className = "badge " + (status === "matched" ? "review" : "warn");
+        const rowsText = storeRows.map(function (row) {
+          return row.store_key + " / snapshot=" + row.snapshot_status + " / dependency=" + row.dependency_status +
+            (row.related_dependencies.length ? " (" + row.related_dependencies.join(",") + ")" : "");
+        });
+        setText("recovery-scope-applicability-json", compactJson(projection) +
+          (rowsText.length ? "\\n" + rowsText.join("\\n") : ""));
+      }
+
       function settingsPayload() {
         const llm = {
           provider: byId("settings-provider").value,
@@ -2528,10 +2644,34 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         try {
           const report = await fetchJson("/recovery/backup-inspection", token);
           renderRecoveryBackupInspection(report);
+          const backupDigest = report && report.status === "verified" ? recoveryInspectionDigest(report.backup_id_digest) : null;
+          if (backupDigest) byId("recovery-scope-backup-digest").value = backupDigest;
         } catch {
           setText("recovery-backup-inspection-status", "取得失敗");
           byId("recovery-backup-inspection-status").className = "badge bad";
           setText("recovery-backup-inspection-json", "検査結果を取得できません。Gatewayの状態とmaintenance tokenを確認してください。");
+        }
+      }
+
+      async function inspectRecoveryScopeApplicability() {
+        const token = byId("recovery-token").value.trim();
+        state.recoveryToken = token;
+        sessionStorage.setItem("bt.recoveryToken", token);
+        const storeCandidates = Array.from(document.querySelectorAll("[data-recovery-scope-store]:checked"))
+          .map(function (input) { return input.getAttribute("data-recovery-scope-store"); });
+        const request = {
+          backup_id_digest: byId("recovery-scope-backup-digest").value.trim(),
+          scope_kind: byId("recovery-scope-kind").value,
+          scope_digest: byId("recovery-scope-digest").value.trim(),
+          store_candidates: storeCandidates
+        };
+        try {
+          const report = await postJson("/recovery/scope-applicability", token, request);
+          renderRecoveryScopeApplicability(report);
+        } catch {
+          setText("recovery-scope-applicability-status", "取得失敗");
+          byId("recovery-scope-applicability-status").className = "badge bad";
+          setText("recovery-scope-applicability-json", "照合結果を取得できません。backup検査、scope digest、store候補、Gatewayの状態を確認してください。");
         }
       }
 
@@ -3006,6 +3146,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("recovery-backup-inspection-status", "取得失敗");
           byId("recovery-backup-inspection-status").className = "badge bad";
           setText("recovery-backup-inspection-json", "検査結果を取得できません。Gatewayの状態とmaintenance tokenを確認してください。");
+        });
+      });
+      byId("inspect-recovery-scope-applicability").addEventListener("click", function () {
+        inspectRecoveryScopeApplicability().catch(function () {
+          setText("recovery-scope-applicability-status", "取得失敗");
+          byId("recovery-scope-applicability-status").className = "badge bad";
+          setText("recovery-scope-applicability-json", "照合結果を取得できません。指定内容とGatewayの状態を確認してください。");
         });
       });
       byId("create-recovery-backup").addEventListener("click", function () {

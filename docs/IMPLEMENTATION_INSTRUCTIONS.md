@@ -2,11 +2,28 @@
 
 ## 次のBUILD_BATCH
 
-次は `QEB-03-E03.03-RECOVERY-SCOPE-APPLICABILITY-BOUNDARY`。既存のverified per-store backup inspectionとPlan依存scopeを、ownerが指定した破損範囲・backup・store候補へ安全に結ぶ読み取り専用consumerを実装する。結果は固定enumとdigest・件数に限定し、scope identityが曖昧、ledgerが未検証、archiveやschemaが不整合の場合は`unverified`へ閉じる。job identity、独立restore point、store間atomicity、復旧可否、repair／resume／権限は推定しない。canonical stateの書込みは対象外とし、E03.03の現行要求を再読して対象と停止条件を確定してから着手する。
+次は `QEB-03-E03.03-RECOVERY-SELECTIVE-STORE-RESTORE`。今回接続したscope照合は非権威診断であり、復旧作用へ直結させない。開始時に最新三点正本・適用AGENTS.md・現行指示・実装を再読し、owner L3、事前backup、選択storeの正確な対象、無関係state保護、曖昧／未検証時の停止をconsumer側で確認する。実環境へのrestore、C08.03、公開・出荷判断は対象外。
 
 次の作業前に最新版の三点正本と適用AGENTS.mdを読み直す。C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
 
 ## 直前のBUILD_BATCH実績
+
+`QEB-03-E03.03-RECOVERY-SCOPE-APPLICABILITY-BOUNDARY` は開始HEAD／`origin/main`=`79b7182326d9ec3efc79f26ae089db00a11143e3`、開始worktree cleanで開始した。owner指定rev2.3三点正本、適用AGENTS.md、作業標準要領、現行指示、E03.03、対象コードを再読した。
+
+指定backup ID digest、request-scope／Operation Plan digest、固定canonical store候補を読み取り専用で照合するconsumerをGateway、maintenance-token-gated WebChat endpoint、Recovery Control Centerへ接続した。完全一致が1件のPlan scopeだけを候補にし、重複request scope、未検証Plan、snapshot未検証、依存未観測、依存対応表のないJ-controlは`unverified`へ閉じる。Control Centerはfixed enum・digest・件数・store別固定依存対応を再検査する。source／archiveは読み取りのみで、raw owner・goal・plan・request・backup IDは返さない。scope一致は復旧可能性、job identity、独立restore point、store間atomicity、restore／repair／resume／authorityを成立させない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway Operation Plan recovery focused tests | PASS、1 file／11 tests。exact scope match、重複request scopeの拒否、未対応store・scope不一致のfail-closed、source／archive bytes不変とraw identity非露出を確認。 |
+| WebChat Recovery / Control Center focused tests | PASS、1 file／80 tests。maintenance token、POST／GET method、`no-store`、response projectionのenum/digest/store mapping検証を確認。 |
+| `pnpm typecheck`→`pnpm build` | PASS。workspace 15 projects。 |
+| `pnpm smoke:serve` | PASS。stub WebChat応答、audit persistence、audit-dump chain検証。Recovery mutationは実行していない。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 全suite、実canonical state restore、実credential／provider、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+E03.03／QEB-03=`BUILD_GAP`を維持する。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。別repo、実業務作用、公開・出荷判断なし。
+
+## その前のBUILD_BATCH実績
 
 `QEB-03-E03.03-RECOVERY-POST-ACTION-REOBSERVATION` は開始HEAD／`origin/main`=`890caf8c6cf9e74307146e6c209e866ad4b59461`、開始worktree cleanで開始した。owner指定rev2.3三点正本、適用AGENTS.md、作業標準要領、現行指示、E03.03と現物を再読した。commit準備時のlocal recovery branchとlocal／remote backup tagは現世代=`890caf8c6cf9e74307146e6c209e866ad4b59461`、前世代=`7d502eedf8cc5f1493bdb15d64c9b5c445046a45`で一致した。
 

@@ -14,7 +14,7 @@ import {
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
-import { createRecoveryBackup, inspectLatestRecoveryBackup } from "../src/recovery_surface.js";
+import { createRecoveryBackup, inspectLatestRecoveryBackup, inspectRecoveryScopeApplicability } from "../src/recovery_surface.js";
 import { operationPlanRequestScopeDigest } from "../src/recovery_request_scope.js";
 import { DocumentOrganizationCheckpointStore } from "../src/document_organization_checkpoint_store.js";
 import { inspectOperationPlanRecoveryLedger } from "../src/operation_plan_recovery_inspection.js";
@@ -84,6 +84,150 @@ describe("J OperationPlan recovery inspection", () => {
     expect(JSON.stringify(inventory)).not.toContain("private-command-");
     expect(await readFile(sourcePlanPath)).toEqual(sourceBefore);
     expect(await readFile(archivePath)).toEqual(archiveBefore);
+  });
+
+  it("matches a caller-selected plan scope to fixed backup stores without changing source or archive bytes", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-scope-applicability-"));
+    const { stateRoot, privateRoot } = await createPlanState(temporaryRoot, 1);
+    const envFile = path.join(temporaryRoot, "product.env");
+    const recoveryDirectory = path.join(temporaryRoot, "recovery");
+    await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const sourcePlanPath = path.join(privateRoot, "operation-plans", "j-state.sqlite");
+    const jControlPath = path.join(privateRoot, "result-memory", "j-control.sqlite");
+    await mkdir(path.dirname(jControlPath), { recursive: true });
+    const jControl = new DatabaseSync(jControlPath);
+    jControl.exec("CREATE TABLE fixture (value TEXT NOT NULL)");
+    jControl.close();
+    const sourceBefore = await readFile(sourcePlanPath);
+    const env = { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_ENV_FILE: envFile, BLUE_TANUKI_RECOVERY_DIR: recoveryDirectory };
+
+    const backup = await createRecoveryBackup(env);
+    const packDirectory = path.join(recoveryDirectory, backup.backup_id!);
+    const archivePath = path.join(packDirectory, "canonical-state", "operation_plans.sqlite");
+    const archiveBefore = await readFile(archivePath);
+    const requestScopeDigest = operationPlanRequestScopeDigest("operation-request:private-request-id", "webchat", "private-owner");
+    const report = await inspectRecoveryScopeApplicability(env, {
+      backup_id_digest: sha256(backup.backup_id!),
+      scope_kind: "request_scope",
+      scope_digest: requestScopeDigest,
+      store_candidates: ["operation_plans"],
+    });
+
+    expect(report).toMatchObject({
+      surface: "recovery_scope_applicability",
+      mode: "read_only",
+      status: "matched",
+      reason: null,
+      scope_kind: "request_scope",
+      scope_digest: requestScopeDigest,
+      backup_id_digest: sha256(backup.backup_id!),
+      matched_plan_id_digest: operationPlanDigest("private-plan-id"),
+      matched_plan_scope_count: 1,
+      store_candidate_count: 1,
+      verified_store_candidate_count: 1,
+      cross_store_atomic: false,
+      external_backup_restore_point: "not_examined",
+      used_for_authority: false,
+      may_execute: false,
+      store_candidates: [{
+        store_key: "operation_plans",
+        snapshot_status: "verified",
+        dependency_status: "no_residual_recorded",
+        related_dependencies: ["operation_plan"],
+      }],
+    });
+    expect(JSON.stringify(report)).not.toContain("private-owner");
+    expect(JSON.stringify(report)).not.toContain("private-plan-id");
+    expect(JSON.stringify(report)).not.toContain("private-request-id");
+    expect(JSON.stringify(report)).not.toContain(backup.backup_id!);
+    expect(await readFile(sourcePlanPath)).toEqual(sourceBefore);
+    expect(await readFile(archivePath)).toEqual(archiveBefore);
+
+    const missingScope = await inspectRecoveryScopeApplicability(env, {
+      backup_id_digest: sha256(backup.backup_id!),
+      scope_kind: "request_scope",
+      scope_digest: "f".repeat(64),
+      store_candidates: ["operation_plans"],
+    });
+    expect(missingScope).toMatchObject({ status: "unverified", reason: "scope_not_found", may_execute: false });
+
+    const unmappedCandidate = await inspectRecoveryScopeApplicability(env, {
+      backup_id_digest: sha256(backup.backup_id!),
+      scope_kind: "request_scope",
+      scope_digest: requestScopeDigest,
+      store_candidates: ["j_control"],
+    });
+    expect(unmappedCandidate).toMatchObject({
+      status: "unverified",
+      reason: "dependency_not_mapped",
+      store_candidates: [{ store_key: "j_control", snapshot_status: "verified", dependency_status: "not_mapped" }],
+    });
+
+    const invalidRequest = await inspectRecoveryScopeApplicability(env, {
+      backup_id_digest: sha256(backup.backup_id!),
+      scope_kind: "request_scope",
+      scope_digest: requestScopeDigest,
+      store_candidates: ["operation_plans", "operation_plans"],
+    });
+    expect(invalidRequest).toMatchObject({ status: "unverified", reason: "invalid_request" });
+  });
+
+  it("keeps a duplicate request-scope identity unverified instead of selecting one plan", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-scope-ambiguous-"));
+    const { stateRoot, privateRoot, checkpoint } = await createPlanState(temporaryRoot, 1);
+    const firstPlanState = checkpoint.plans[0]!;
+    const duplicatePlan = planFixture(1);
+    duplicatePlan.plan_id = "private-plan-id-second";
+    duplicatePlan.steps = duplicatePlan.steps.map((step, index) => ({ ...step, step_id: `private-second-step-${index + 1}` }));
+    const duplicateRevisionDigest = operationPlanDigest(duplicatePlan);
+    const duplicatePlanState = {
+      ...firstPlanState,
+      revisions: [{ digest: duplicateRevisionDigest, plan: duplicatePlan }],
+      bindings: firstPlanState.bindings.map((binding, index) => {
+        const step = duplicatePlan.steps[index]!;
+        const commandId = `private-second-command-${index + 1}`;
+        return {
+          ...binding,
+          step_id: step.step_id,
+          revision_digest: duplicateRevisionDigest,
+          step_digest: stepDefinitionDigest(step),
+          prepared_step: step,
+          command_id: commandId,
+          request_id: duplicatePlan.request_id,
+          commit_hash: `private-second-commit-${index + 1}`,
+          payload_digest: sha256(`private-second-payload-${index + 1}`),
+          command_digest: sha256(`private-second-command-digest-${index + 1}`),
+          execution_admission: admissionFor(commandId),
+        };
+      }),
+    };
+    const updatedCheckpoint = OperationPlanCheckpointSchema.parse({
+      ...checkpoint,
+      plans: [...checkpoint.plans, duplicatePlanState],
+    });
+    const planStore = new OperationPlanStateStore(path.join(privateRoot, "operation-plans", "j-state.sqlite"));
+    planStore.compareAndSet(operationPlanDigest(checkpoint), updatedCheckpoint);
+    planStore.close();
+
+    const envFile = path.join(temporaryRoot, "product.env");
+    const recoveryDirectory = path.join(temporaryRoot, "recovery");
+    await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const env = { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_ENV_FILE: envFile, BLUE_TANUKI_RECOVERY_DIR: recoveryDirectory };
+    const backup = await createRecoveryBackup(env);
+    const requestScopeDigest = operationPlanRequestScopeDigest("operation-request:private-request-id", "webchat", "private-owner");
+
+    const report = await inspectRecoveryScopeApplicability(env, {
+      backup_id_digest: sha256(backup.backup_id!),
+      scope_kind: "request_scope",
+      scope_digest: requestScopeDigest,
+      store_candidates: ["operation_plans"],
+    });
+
+    expect(report).toMatchObject({ status: "unverified", reason: "scope_ambiguous", matched_plan_scope_count: 2 });
+    expect(JSON.stringify(report)).not.toContain("private-plan-id");
+    expect(JSON.stringify(report)).not.toContain("private-request-id");
+    expect(report.matched_plan_id_digest).toBeNull();
+    expect(report.may_execute).toBe(false);
   });
 
   it("correlates verified backup stores per plan and labels the missing Cron evidence as unobserved", async () => {

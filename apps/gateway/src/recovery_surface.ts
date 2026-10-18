@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
 import {
+  CANONICAL_STATE_STORE_PATHS,
   captureCanonicalStateSnapshots,
   inspectCanonicalStateSnapshots,
   type CanonicalStateSnapshotEntryStatus,
@@ -168,6 +169,50 @@ export interface RecoveryBackupInspection {
   operation_plan_archive_dependencies: RecoveryBackupOperationPlanDependencyInventory;
   used_for_authority: false;
   may_execute: false;
+}
+
+export interface RecoveryScopeApplicabilityRequest {
+  readonly backup_id_digest: string;
+  readonly scope_kind: "request_scope" | "operation_plan";
+  readonly scope_digest: string;
+  readonly store_candidates: readonly CanonicalStateStoreKey[];
+}
+
+export interface RecoveryScopeApplicabilityInspection {
+  readonly schema_version: 1;
+  readonly surface: "recovery_scope_applicability";
+  readonly mode: "read_only";
+  readonly status: "matched" | "unverified";
+  readonly reason:
+    | "invalid_request"
+    | "backup_not_found"
+    | "backup_unverified"
+    | "scope_not_found"
+    | "scope_ambiguous"
+    | "dependency_unverified"
+    | "dependency_not_mapped"
+    | "store_unverified"
+    | null;
+  readonly scope_kind: RecoveryScopeApplicabilityRequest["scope_kind"] | null;
+  readonly scope_digest: string | null;
+  readonly backup_id_digest: string | null;
+  readonly matched_plan_id_digest: string | null;
+  readonly matched_plan_scope_count: number | null;
+  readonly store_candidate_count: number | null;
+  readonly verified_store_candidate_count: number | null;
+  readonly dependency_scope_status: "observed" | "residuals_present" | "unobserved" | "unknown";
+  readonly residual_dependencies: readonly RecoveryPlanDependencyCategory[];
+  readonly unobserved_dependencies: readonly RecoveryPlanDependencyCategory[];
+  readonly store_candidates: readonly {
+    readonly store_key: CanonicalStateStoreKey;
+    readonly snapshot_status: CanonicalStateSnapshotEntryStatus | "unknown";
+    readonly dependency_status: "residuals_present" | "unobserved" | "no_residual_recorded" | "not_mapped" | "unknown";
+    readonly related_dependencies: readonly RecoveryPlanDependencyCategory[];
+  }[];
+  readonly cross_store_atomic: false | null;
+  readonly external_backup_restore_point: "not_examined";
+  readonly used_for_authority: false;
+  readonly may_execute: false;
 }
 
 export interface RecoveryBackupOperationPlanDependencyInventory {
@@ -1143,9 +1188,34 @@ async function inspectBackupOperationPlanInventory(
   };
 }
 
-/** Verify the newest recovery pack's manifest and archived item digests without restoring or writing. */
-export async function inspectLatestRecoveryBackup(
-  env: NodeJS.ProcessEnv = process.env,
+const RECOVERY_SCOPE_DIGEST = /^[a-f0-9]{64}$/i;
+const RECOVERY_SCOPE_DEPENDENCIES: Readonly<Record<CanonicalStateStoreKey, readonly RecoveryPlanDependencyCategory[]>> = {
+  j_control: [],
+  m_state: ["memory"],
+  broker: ["broker", "delivery"],
+  operation_plans: ["operation_plan"],
+  cron_events: ["cron_approval"],
+};
+
+async function backupIdForDigest(env: NodeJS.ProcessEnv, requestedDigest: string): Promise<string | null> {
+  const root = (await runtimeSafeTarget(env, recoveryRoot(env), "recovery_root", {
+    allow_under_recovery_root: true,
+  })).path;
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  const matches = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((id) => {
+      if (!/^[A-Za-z0-9_.-]+$/u.test(id)) return false;
+      return createHash("sha256").update(id).digest("hex") === requestedDigest;
+    });
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+/** Verify one selected recovery pack's manifest and archived item digests without restoring or writing. */
+async function inspectRecoveryBackup(
+  env: NodeJS.ProcessEnv,
+  selectBackupId: () => Promise<string | null>,
 ): Promise<RecoveryBackupInspection> {
   const base = {
     schema_version: 1 as const,
@@ -1167,7 +1237,7 @@ export async function inspectLatestRecoveryBackup(
   };
   let backupId: string | null = null;
   try {
-    backupId = await latestBackupId(env);
+    backupId = await selectBackupId();
     if (!backupId) {
       return {
         ...base,
@@ -1243,6 +1313,173 @@ export async function inspectLatestRecoveryBackup(
       }),
     };
   }
+}
+
+/** Verify the newest recovery pack's manifest and archived item digests without restoring or writing. */
+export async function inspectLatestRecoveryBackup(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RecoveryBackupInspection> {
+  return inspectRecoveryBackup(env, () => latestBackupId(env));
+}
+
+function emptyRecoveryScopeApplicability(
+  reason: RecoveryScopeApplicabilityInspection["reason"],
+  request: Partial<RecoveryScopeApplicabilityRequest> = {},
+): RecoveryScopeApplicabilityInspection {
+  return {
+    schema_version: 1,
+    surface: "recovery_scope_applicability",
+    mode: "read_only",
+    status: "unverified",
+    reason,
+    scope_kind: request.scope_kind === "request_scope" || request.scope_kind === "operation_plan" ? request.scope_kind : null,
+    scope_digest: typeof request.scope_digest === "string" && RECOVERY_SCOPE_DIGEST.test(request.scope_digest)
+      ? request.scope_digest.toLowerCase() : null,
+    backup_id_digest: typeof request.backup_id_digest === "string" && RECOVERY_SCOPE_DIGEST.test(request.backup_id_digest)
+      ? request.backup_id_digest.toLowerCase() : null,
+    matched_plan_id_digest: null,
+    matched_plan_scope_count: null,
+    store_candidate_count: null,
+    verified_store_candidate_count: null,
+    dependency_scope_status: "unknown",
+    residual_dependencies: [],
+    unobserved_dependencies: [],
+    store_candidates: [],
+    cross_store_atomic: null,
+    external_backup_restore_point: "not_examined",
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
+function normalizeRecoveryScopeApplicabilityRequest(value: unknown): RecoveryScopeApplicabilityRequest | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (typeof input.backup_id_digest !== "string" || !RECOVERY_SCOPE_DIGEST.test(input.backup_id_digest) ||
+      (input.scope_kind !== "request_scope" && input.scope_kind !== "operation_plan") ||
+      typeof input.scope_digest !== "string" || !RECOVERY_SCOPE_DIGEST.test(input.scope_digest) ||
+      !Array.isArray(input.store_candidates) || input.store_candidates.length < 1 || input.store_candidates.length > 5) return null;
+  const allowedStores = new Set<CanonicalStateStoreKey>(CANONICAL_STATE_STORE_PATHS.map((item) => item.key));
+  if (!input.store_candidates.every((item) => typeof item === "string" && allowedStores.has(item as CanonicalStateStoreKey))) return null;
+  const storeCandidates = input.store_candidates as CanonicalStateStoreKey[];
+  if (new Set(storeCandidates).size !== storeCandidates.length) return null;
+  return {
+    backup_id_digest: input.backup_id_digest.toLowerCase(),
+    scope_kind: input.scope_kind,
+    scope_digest: input.scope_digest.toLowerCase(),
+    store_candidates: storeCandidates,
+  };
+}
+
+function recoveryScopeDependencyStatus(
+  related: readonly RecoveryPlanDependencyCategory[],
+  residual: readonly RecoveryPlanDependencyCategory[],
+  unobserved: readonly RecoveryPlanDependencyCategory[],
+): RecoveryScopeApplicabilityInspection["store_candidates"][number]["dependency_status"] {
+  if (related.length === 0) return "not_mapped";
+  if (related.some((category) => unobserved.includes(category))) return "unobserved";
+  if (related.some((category) => residual.includes(category))) return "residuals_present";
+  return "no_residual_recorded";
+}
+
+/** Read-only exact-scope correlation against one digest-selected backup and fixed canonical stores. */
+export async function inspectRecoveryScopeApplicability(
+  env: NodeJS.ProcessEnv,
+  requestValue: unknown,
+): Promise<RecoveryScopeApplicabilityInspection> {
+  const request = normalizeRecoveryScopeApplicabilityRequest(requestValue);
+  if (!request) return emptyRecoveryScopeApplicability("invalid_request");
+
+  const backup = await inspectRecoveryBackup(env, () => backupIdForDigest(env, request.backup_id_digest));
+  const baseRequest = request;
+  if (backup.status === "not_found") return emptyRecoveryScopeApplicability("backup_not_found", baseRequest);
+  if (backup.status !== "verified" || backup.backup_id_digest !== request.backup_id_digest) {
+    return emptyRecoveryScopeApplicability("backup_unverified", baseRequest);
+  }
+
+  const inventory = backup.operation_plan_archive_inventory;
+  const dependencies = backup.operation_plan_archive_dependencies;
+  if ((inventory.status !== "verified" && inventory.status !== "residuals_present") ||
+      (dependencies.status !== "correlated" && dependencies.status !== "residuals_present" && dependencies.status !== "unobserved") ||
+      inventory.omitted_plan_scope_count !== 0 || dependencies.omitted_plan_scope_count !== 0 ||
+      inventory.plan_scope_count === null || dependencies.plan_scope_count === null ||
+      inventory.plan_scopes.length !== inventory.plan_scope_count || dependencies.plan_scopes.length !== dependencies.plan_scope_count) {
+    return emptyRecoveryScopeApplicability("dependency_unverified", baseRequest);
+  }
+
+  const matchingPlans = inventory.plan_scopes.filter((plan) => request.scope_kind === "operation_plan"
+    ? plan.plan_id_digest === request.scope_digest
+    : plan.request_scope_digest === request.scope_digest);
+  if (matchingPlans.length === 0) return emptyRecoveryScopeApplicability("scope_not_found", baseRequest);
+  if (matchingPlans.length !== 1) {
+    return {
+      ...emptyRecoveryScopeApplicability("scope_ambiguous", baseRequest),
+      matched_plan_scope_count: matchingPlans.length,
+    };
+  }
+
+  const matchedPlan = matchingPlans[0]!;
+  if (matchedPlan.integrity !== "verified") {
+    return emptyRecoveryScopeApplicability("dependency_unverified", baseRequest);
+  }
+  const matchingDependencyScopes = dependencies.plan_scopes.filter((scope) => scope.plan_id_digest === matchedPlan.plan_id_digest);
+  if (matchingDependencyScopes.length !== 1) {
+    return {
+      ...emptyRecoveryScopeApplicability("dependency_unverified", baseRequest),
+      matched_plan_id_digest: matchedPlan.plan_id_digest,
+      matched_plan_scope_count: 1,
+    };
+  }
+  const dependencyScope = matchingDependencyScopes[0]!;
+  const snapshotStatuses = new Map(backup.canonical_state_stores.map((entry) => [entry.store_key, entry.status]));
+  if (snapshotStatuses.size !== 5 || backup.canonical_state_cross_store_atomic !== false) {
+    return emptyRecoveryScopeApplicability("store_unverified", baseRequest);
+  }
+
+  const storeCandidates = request.store_candidates.map((storeKey) => {
+    const relatedDependencies = RECOVERY_SCOPE_DEPENDENCIES[storeKey];
+    const snapshotStatus: CanonicalStateSnapshotEntryStatus | "unknown" = snapshotStatuses.get(storeKey) ?? "unknown";
+    return {
+      store_key: storeKey,
+      snapshot_status: snapshotStatus,
+      dependency_status: recoveryScopeDependencyStatus(
+        relatedDependencies,
+        dependencyScope.residual_dependencies,
+        dependencyScope.unobserved_dependencies,
+      ),
+      related_dependencies: [...relatedDependencies],
+    };
+  });
+  const verifiedStoreCandidateCount = storeCandidates.filter((item) => item.snapshot_status === "verified").length;
+  const unverifiedDependency = storeCandidates.some((item) =>
+    item.dependency_status === "unobserved" || item.dependency_status === "not_mapped" || item.dependency_status === "unknown");
+  const unverifiedStore = verifiedStoreCandidateCount !== storeCandidates.length;
+  const reason = unverifiedStore ? "store_unverified"
+    : unverifiedDependency ? (storeCandidates.some((item) => item.dependency_status === "not_mapped")
+      ? "dependency_not_mapped" : "dependency_unverified")
+      : null;
+  return {
+    schema_version: 1,
+    surface: "recovery_scope_applicability",
+    mode: "read_only",
+    status: reason === null ? "matched" : "unverified",
+    reason,
+    scope_kind: request.scope_kind,
+    scope_digest: request.scope_digest,
+    backup_id_digest: request.backup_id_digest,
+    matched_plan_id_digest: matchedPlan.plan_id_digest,
+    matched_plan_scope_count: 1,
+    store_candidate_count: storeCandidates.length,
+    verified_store_candidate_count: verifiedStoreCandidateCount,
+    dependency_scope_status: dependencyScope.status,
+    residual_dependencies: [...dependencyScope.residual_dependencies],
+    unobserved_dependencies: [...dependencyScope.unobserved_dependencies],
+    store_candidates: storeCandidates,
+    cross_store_atomic: false,
+    external_backup_restore_point: "not_examined",
+    used_for_authority: false,
+    may_execute: false,
+  };
 }
 
 async function restoreManifest(

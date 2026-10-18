@@ -142,7 +142,7 @@ async function postJson(
   path: string,
   body: unknown,
   headers: Record<string, string> = {},
-): Promise<{ status: number; body: unknown }> {
+): Promise<{ status: number; body: unknown; headers: Headers }> {
   const res = await fetch(`http://127.0.0.1:${port}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
@@ -155,7 +155,7 @@ async function postJson(
   } catch {
     parsed = txt;
   }
-  return { status: res.status, body: parsed };
+  return { status: res.status, body: parsed, headers: res.headers };
 }
 
 async function getRaw(
@@ -366,6 +366,59 @@ describe("WebChatChannel — construction", () => {
 });
 
 describe("WebChatChannel — Control Center shell", () => {
+  it("projects only verified scope-applicability enums and digest fields", () => {
+    const functionSource = (name: string): string => {
+      const start = CONTROL_CENTER_SCRIPT.indexOf(`function ${name}(`);
+      const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
+      const end = next < 0 ? CONTROL_CENTER_SCRIPT.length : next;
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      return CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    };
+    const helpers = [functionSource("recoveryInspectionEnum"), functionSource("recoveryInspectionDigest")].join("\n");
+    const render = functionSource("renderRecoveryScopeApplicability");
+    const evaluate = (report: unknown) => JSON.parse(new Script(`
+      const output = {};
+      function setText(key, value) { output[key] = value; }
+      function byId(key) { return output[key] || (output[key] = { className: "" }); }
+      function compactJson(value) { return JSON.stringify(value); }
+      ${helpers}
+      ${render}
+      renderRecoveryScopeApplicability(report);
+      JSON.stringify({ status: output["recovery-scope-applicability-status"], body: output["recovery-scope-applicability-json"] });
+    `).runInNewContext({ report })) as { status: string; body: string };
+    const report = {
+      schema_version: 1,
+      surface: "recovery_scope_applicability",
+      mode: "read_only",
+      status: "matched",
+      reason: null,
+      scope_kind: "operation_plan",
+      scope_digest: "a".repeat(64),
+      backup_id_digest: "b".repeat(64),
+      matched_plan_id_digest: "c".repeat(64),
+      matched_plan_scope_count: 1,
+      store_candidate_count: 1,
+      verified_store_candidate_count: 1,
+      dependency_scope_status: "observed",
+      residual_dependencies: [],
+      unobserved_dependencies: [],
+      store_candidates: [{
+        store_key: "operation_plans",
+        snapshot_status: "verified",
+        dependency_status: "no_residual_recorded",
+        related_dependencies: ["operation_plan"],
+      }],
+      cross_store_atomic: false,
+      external_backup_restore_point: "not_examined",
+      used_for_authority: false,
+      may_execute: false,
+    };
+    expect(evaluate(report)).toMatchObject({ status: "照合成立（復旧可否は未判定）" });
+    expect(evaluate({ ...report, store_candidates: [{ ...report.store_candidates[0], related_dependencies: ["memory"] }] }))
+      .toMatchObject({ status: "未確認" });
+  });
+
   it("projects only the five ordered canonical store statuses and rejects malformed rows", () => {
     const functionSource = (name: string): string => {
       const start = CONTROL_CENTER_SCRIPT.indexOf(`function ${name}(`);
@@ -778,6 +831,10 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("inspect-recovery-backup");
       expect(html).toContain("/recovery/backup-inspection");
       expect(html).toContain("recovery-backup-inspection-json");
+      expect(html).toContain("指定scopeとbackup store候補の照合");
+      expect(html).toContain("recovery-scope-applicability");
+      expect(html).toContain("/recovery/scope-applicability");
+      expect(html).toContain("ownerが指定したscope digest");
       expect(html).toContain("canonical_state_coverage");
       expect(html).toContain("function recoveryBackupStoreStatuses");
       expect(html).toContain("canonical_state_stores");
@@ -948,6 +1005,7 @@ describe("WebChatChannel — Recovery surface", () => {
     const actions: string[] = [];
     let inspectionReads = 0;
     let backupInspectionReads = 0;
+    let scopeApplicabilityReads = 0;
     const ctx = await setup({
       recovery: {
         getSnapshot: async () => ({
@@ -1158,6 +1216,18 @@ describe("WebChatChannel — Recovery surface", () => {
             may_execute: false,
           };
         },
+        inspectScopeApplicability: async (body) => {
+          scopeApplicabilityReads += 1;
+          return {
+            schema_version: 1,
+            surface: "recovery_scope_applicability",
+            mode: "read_only",
+            status: "unverified",
+            reason: body.scope_digest === "e".repeat(64) ? "scope_not_found" : "invalid_request",
+            used_for_authority: false,
+            may_execute: false,
+          };
+        },
         createBackup: async () => {
           actions.push("backup");
           return { action: "backup", used_for_authority: false };
@@ -1282,6 +1352,30 @@ describe("WebChatChannel — Recovery surface", () => {
         authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       })).status).toBe(405);
       expect(backupInspectionReads).toBe(1);
+      expect((await postJson(ctx.port, "/recovery/scope-applicability", { scope_digest: "e".repeat(64) })).status).toBe(401);
+      expect((await postJson(ctx.port, "/recovery/scope-applicability", { scope_digest: "e".repeat(64) }, {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+      const scopeApplicability = await postJson(ctx.port, "/recovery/scope-applicability", {
+        scope_digest: "e".repeat(64),
+        scope_kind: "request_scope",
+        store_candidates: ["operation_plans"],
+      }, { authorization: `Bearer ${MAINTENANCE_TOKEN}` });
+      expect(scopeApplicability.status).toBe(200);
+      expect(scopeApplicability.headers.get("cache-control")).toBe("no-store");
+      expect(scopeApplicability.body).toMatchObject({
+        surface: "recovery_scope_applicability",
+        mode: "read_only",
+        status: "unverified",
+        reason: "scope_not_found",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(scopeApplicabilityReads).toBe(1);
+      expect((await getRaw(ctx.port, "/recovery/scope-applicability", {
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
+      })).status).toBe(405);
+      expect(scopeApplicabilityReads).toBe(1);
       expect((await postJson(ctx.port, "/recovery/inspection", {}, {
         authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       })).status).toBe(405);

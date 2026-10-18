@@ -494,6 +494,25 @@ ${CONTROL_CENTER_STYLE}    </style>
           <p class="muted">manifestで検査済みのJ制御／M／Broker／Operation Plan／Cron archive間をread-onlyで診断相関します。各SQLite snapshotは独立取得で、同時点atomicity、restore point、job identity、復元・再開許可を示しません。未検証台帳は読まず未観測にします。</p>
           <pre id="recovery-backup-plan-dependencies">未確認</pre>
           <pre id="recovery-backup-inspection-json">未確認</pre>
+          <h3>指定scopeとbackup store候補の照合</h3>
+          <p class="muted">ownerが指定したscope digest・検証対象backup・canonical store候補をread-onlyで照合します。照合成立はscopeと保存物のdigest／依存記録の一致だけを示し、破損の確定、復旧可能性、独立restore point、復元・repair・resume・権限を示しません。曖昧・未検証・未接続は未確認として扱います。</p>
+          <div class="status-grid">
+            <label>backup ID digest<input id="recovery-scope-backup-digest" type="text" inputmode="text" maxlength="64" autocomplete="off" spellcheck="false"></label>
+            <label>scope identity<select id="recovery-scope-kind"><option value="request_scope">request scope digest</option><option value="operation_plan">Operation Plan digest</option></select></label>
+            <label>scope digest<input id="recovery-scope-digest" type="text" inputmode="text" maxlength="64" autocomplete="off" spellcheck="false"></label>
+          </div>
+          <div class="status-grid" aria-label="scope applicability store candidates">
+            <label><input type="checkbox" data-recovery-scope-store="j_control">J制御台帳</label>
+            <label><input type="checkbox" data-recovery-scope-store="m_state">M状態台帳</label>
+            <label><input type="checkbox" data-recovery-scope-store="broker">Broker実行台帳</label>
+            <label><input type="checkbox" data-recovery-scope-store="operation_plans">Operation Plan台帳</label>
+            <label><input type="checkbox" data-recovery-scope-store="cron_events">Cronイベント台帳</label>
+          </div>
+          <div class="status-grid">
+            <button id="inspect-recovery-scope-applicability" type="button">指定scopeとstore候補を読み取り照合</button>
+            <span id="recovery-scope-applicability-status" class="badge warn">未確認</span>
+          </div>
+          <pre id="recovery-scope-applicability-json">未確認</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls.</p></div>
             <div class="screen-card"><h3>Secret-bearing</h3><p class="muted">Env files and env backups may contain credentials. Only paths and counts are displayed here.</p></div>
