@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-03-E03.03-RECOVERY-HOLD-REOBSERVATION-CONSUMER-AUDIT`で、Operation Plan Recovery holdはread-only再観測では解除されず、selected `operation_plans` restore後の証拠結合refreshだけが既存の再評価経路と確認した。一方holdは揮発Mapであり、最新のRecovery履歴がreset等の場合、再起動時にholdを再構成できない経路がある。実再起動では未再現。次はholdの発生元identityを保持し、無関係なRecovery変更後の再起動でもfail-closedで継承するBUILDを行う。E03.03／QEB-03=`BUILD_GAP`を維持する。
+
 2026-10-19の`QEB-03-E03.03-INPROCESS-RESTORE-PLAN-DEPENDENCY-EVIDENCE`では、同一serve process内の成功restoreを完全history・expected command・opaque backup digest・再読込checkpointへ照合し、既存read-only dependency inspectionをHDSの計画別holdへ接続した。残差／未観測／未確認は各planを選択停止し、history・store・checkpointの不一致時はgateを維持する。clean evidenceも通常HDS reviewに留まり、実行・Approval・resumeを生成しない。3 files／26 focused tests、typecheck、15 workspace build、HDS standalone、serve smokeを確認した。実restoreや実restart、独立restore point、store間atomicityは未実証でありE03.03／QEB-03=`BUILD_GAP`を維持する。
 
 2026-10-19の`QEB-03-E03.03-PLAN-RESIDUAL-ISOLATION-CONSUMER-AUDIT`では、計画別残差／未観測依存を実行や復旧再開のために読むruntime consumerがまだないことを確認した。Recovery post-action observationはRecovery snapshot／Control Centerのread-only表示にとどまり、startupの保存結果／M receipt調停やOperationPlanの承認resumeはこの投影を消費しない。HDSの計画step再確認・選択との接続は、残差を再開可否へ反映する契約が未成立のため`BUILD_GAP`。E03.03／QEB-03の状態、非権威診断、owner GOの独立境界を維持する。

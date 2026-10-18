@@ -1,12 +1,14 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-## 次のBUILD_BATCH
+## 直近完了分と次のBUILD_BATCH
 
 `QEB-03-E03.03-INPROCESS-RESTORE-PLAN-SELECTION-HOLD` は2026-10-19に実装・限定確認を完了。承認済みのselected `operation_plans` restore開始前にHDSのplan経路を止め、既存plan実行中ならrestore自体を開始しない。実行履歴・最終出力履歴の後でRecovery result digestとcanonical DB fingerprintを照合し、同じserve processの開いたstate storeからcheckpointを意味検証付きで再読込する。保存済みselected bindingを失効、開始済みbindingを結果不明にし、復元時点の全planだけ`held_unverified`にする。restore証拠・history・auditのいずれかが不足すればrefresh gateを解除しない。Control Centerに照合中／step選択停止／再起動点検を表示する。照合後の新規planは通常HDS経路へ戻す。実績は`docs/開発進捗.md`に記録し、E03.03=`BUILD_GAP`を維持する。
 
 `QEB-03-E03.03-INPROCESS-RESTORE-PLAN-DEPENDENCY-EVIDENCE` は2026-10-19に実装・限定確認を完了し、実装commit=`e8e7ec89b6cfeea5b3cd01229bda21409c3f80d1`を`main`へpush済み。同一process内のselected `operation_plans` restoreを完全history chain・expected command・opaque backup digest・再読込checkpointへ照合し、既存read-only plan dependency inspectionをHDSの計画別recovery holdへ接続した。残差／未観測／未確認はholdし、いずれかの整合性を確認できなければrefresh gateを解除しない。read-only evidenceから承認・実行・resume権限は生じず、E03.03=`BUILD_GAP`。限定検証は3 files／26 focused tests、typecheck、15 workspace build、HDS standalone、serve smoke、docs／repo-health gates。実restore／実再起動／実owner承認／provider資格情報／全suite／5OS実機／QE_QC／QE_QAは未実施。
 
-次候補は`QEB-03-E03.03-RECOVERY-HOLD-REOBSERVATION-CONSUMER-AUDIT`。HDSが保持する計画別holdについて、state変化後に既存のowner操作・再観測経路があるか、同一plan／checkpoint／result identityをどう結ぶか、現在holdを解除できる既存consumerがあるかをread-onlyで監査する。resume／Approval／Broker実行の新設、hold解除や実Recoveryは行わない。次の作業開始時にowner指定最新版三点正本、適用`AGENTS.md`、作業標準要領、本active指示、現行HEAD・差分・対象コードを改めて読み、現行責務と許可作用を確定する。
+`QEB-03-E03.03-RECOVERY-HOLD-REOBSERVATION-CONSUMER-AUDIT` は2026-10-19に静的read-only監査を完了した。GET inspectionは表示専用でholdを解除せず、実行中holdを更新・解除する既存経路は、完全なrestore後証拠を再照合するowner承認済み`recovery.restore`だけだった。hold自体はplan digestと理由だけを持つmemory mapで、checkpointへ永続化されない。起動時observerはrestore／provider reset／connector reset／factory resetを横断して履歴上の最新Recovery変更を選ぶが、Operation Plan evidence変換は最新操作がrestore以外なら`undefined`を返す。このためplan restore後に別Recovery変更を行った状態で再起動すると、以前のholdを新Ledgerへ再構成できずstep reviewが進める経路が残る。holdの発生元command／backup／checkpoint／result identityも保持されず、継続監査可能性に不足がある。実再起動による動作試験はしていないが、選択・変換・constructorの静的経路で確認した。実Recovery、resume／Approval／Broker実行の新設、hold解除、コード変更は行っていない。
+
+次のBUILD_BATCHは`QEB-03-E03.03-RECOVERY-HOLD-RESTART-PROVENANCE`。無関係な最新Recovery変更や再起動でplan別holdが消えないよう、holdのcheckpoint結合・発生元identity・起動時fail-closed再構成を実装する。可視化された観測だけでholdを解除せず、解除条件は同一plan／checkpoint／Recovery resultの整合性に限定する。既存HDSのOwner L3境界を維持し、resume／Approval／Broker実行や実Recovery操作は追加しない。対象テスト、次consumer、停止条件、復元点を具体化し、開始時にowner指定最新版三点正本・適用`AGENTS.md`・作業標準要領・本active指示・HEAD・差分を再読してから開始する。
 
 ## 直近のBUILD_BATCH実績
 
