@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -93,6 +94,8 @@ describe("Recovery mutation HDS L3 entry", () => {
 
     let gateway: ReturnType<typeof spawnGateway> | undefined;
     let webSocket: WebSocket | undefined;
+    let freshPlanRequestId: string | undefined;
+    let freshReviewRequestId: string | undefined;
     try {
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(port, gateway);
@@ -193,6 +196,87 @@ describe("Recovery mutation HDS L3 entry", () => {
       expect(userFacingDecision).toContain("新しい依頼から新規計画を作成してください。");
       expect(userFacingDecision).toContain("保留中の計画レビューは再試行しないでください。");
 
+      const syntheticProvider = await startSyntheticPlanProvider();
+      const freshPlanRuntimeEnv = {
+        ...runtimeEnv,
+        LLM_BACKEND: "synthetic-plan-provider",
+        LLM_PROVIDERS_JSON: JSON.stringify([{
+          name: "synthetic-plan-provider",
+          endpoint: syntheticProvider.endpoint,
+          model: "synthetic-plan-model",
+        }]),
+        BLUE_TANUKI_APPROVAL_MODE: "ask_every_time",
+      };
+      try {
+        webSocket.close();
+        webSocket = undefined;
+        await stopChild(gateway.child);
+        gateway = undefined;
+        gateway = spawnGateway(freshPlanRuntimeEnv);
+        await waitForHealth(port, gateway);
+
+        const freshTicketResponse = await requestJson(port, "/ws-ticket", {
+          method: "POST",
+          token: inboundToken,
+          body: { user: "fixture-owner" },
+        });
+        expect(freshTicketResponse.status, gateway.output.join("")).toBe(200);
+        webSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?ticket=${encodeURIComponent(freshTicketResponse.body.ticket as string)}`);
+        await once(webSocket, "open");
+
+        const freshPlanReply = waitForWebChatSend(webSocket);
+        const freshPlanRequest = await requestJson(port, "/operators/developer/invoke", {
+          method: "POST",
+          token: inboundToken,
+          body: { user: "fixture-owner", content: "plan:compute synthetic fresh request after recovery hold" },
+        });
+        expect(freshPlanRequest.status, `${JSON.stringify(freshPlanRequest.body)}\n${gateway.output.join("")}`).toBe(202);
+        freshPlanRequestId = freshPlanRequest.body.request_id as string;
+        await waitForHistoryDecision(port, gateway, freshPlanRequestId);
+        await freshPlanReply;
+
+        let freshRuntime: { body: Record<string, unknown> } | undefined;
+        const planDeadline = Date.now() + 5_000;
+        while (Date.now() < planDeadline) {
+          freshRuntime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+          const plans = ((freshRuntime.body.hds as { operation_plans?: { plans?: Array<Record<string, unknown>> } })
+            .operation_plans?.plans ?? []);
+          if (plans.length === 2) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        const retainedPlans = ((freshRuntime?.body.hds as { operation_plans?: { plans?: Array<Record<string, unknown>> } })
+          .operation_plans?.plans ?? []);
+        expect(retainedPlans, gateway.output.join("")).toHaveLength(2);
+        const heldPlan = retainedPlans.find((plan) => plan.plan_id === planIdDigest);
+        const freshPlan = retainedPlans.find((plan) => plan.plan_id !== planIdDigest);
+        expect(heldPlan).toMatchObject({ recovery_hold_reason: "held_unverified" });
+        expect(freshPlan).toMatchObject({ request_id: `operation-request:${freshPlanRequestId}`, status: "awaiting_step_review" });
+
+        const freshReviewRequest = await requestJson(port, "/operators/developer/invoke", {
+          method: "POST",
+          token: inboundToken,
+          body: { user: "fixture-owner", content: `plan:review ${JSON.stringify({
+            plan_id: freshPlan!.plan_id,
+            revision_digest: freshPlan!.revision_digest,
+            step_id: (freshPlan!.steps as Array<Record<string, unknown>>)[0]!.step_id,
+          })}` },
+        });
+        expect(freshReviewRequest.status, `${JSON.stringify(freshReviewRequest.body)}\n${gateway.output.join("")}`).toBe(202);
+        freshReviewRequestId = freshReviewRequest.body.request_id as string;
+        await waitForHistoryDecision(port, gateway, freshReviewRequestId);
+
+        const reviewedRuntime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+        expect(reviewedRuntime.body.pending_approvals, gateway.output.join("")).toMatchObject([
+          { request_id: freshReviewRequestId, operation: "tool.file.search", approval_level: "L1_observe" },
+        ]);
+        expect(((reviewedRuntime.body.hds as { operation_plans: { plans: Array<Record<string, unknown>> } })
+          .operation_plans.plans.find((plan) => plan.plan_id === planIdDigest)))
+          .toMatchObject({ recovery_hold_reason: "held_unverified" });
+        expect(syntheticProvider.callCount()).toBe(1);
+      } finally {
+        await syntheticProvider.close();
+      }
+
       await stopChild(gateway.child);
       gateway = undefined;
 
@@ -207,6 +291,13 @@ describe("Recovery mutation HDS L3 entry", () => {
       const reviewExecution = reviewHistory.replay({ kind: "execution_history", request_id: reviewRequestId });
       expect(reviewExecution).toHaveLength(0);
 
+      const freshPlanHistory = reviewHistory.replay({ kind: "hds_decision", request_id: freshPlanRequestId! });
+      expect(freshPlanHistory).toHaveLength(1);
+      const freshReviewHistory = reviewHistory.replay({ kind: "hds_decision", request_id: freshReviewRequestId! });
+      expect(freshReviewHistory).toHaveLength(1);
+      const freshReviewExecution = reviewHistory.replay({ kind: "execution_history", request_id: freshReviewRequestId! });
+      expect(freshReviewExecution).toHaveLength(0);
+
       const restartedStore = new OperationPlanStateStore(planStatePath);
       try {
         expect(restartedStore.loadRecoveryHoldState()).toMatchObject({
@@ -215,6 +306,8 @@ describe("Recovery mutation HDS L3 entry", () => {
           used_for_authority: false,
           may_execute: false,
         });
+        expect(restartedStore.load()?.plans.map((plan) => operationPlanDigest(plan.revisions[0]!.plan.plan_id)))
+          .toEqual(expect.arrayContaining([planIdDigest, operationPlanDigest("fresh-request-plan")]));
       } finally {
         restartedStore.close();
       }
@@ -584,47 +677,7 @@ describe("Recovery mutation HDS L3 entry", () => {
 
 function seedOperationPlanState(filepath: string): { plan_id_digest: string; revision_digest: string } {
   mkdirSync(dirname(filepath), { recursive: true });
-  const step = {
-    step_id: "restore-review-step",
-    operation: "file.search",
-    target: { kind: "directory" as const, id: "fixture-workspace" },
-    state: "planned" as const,
-    effects: ["read" as const],
-    permission: {
-      risk: "low" as const,
-      approval_level: "L1_observe" as const,
-      final_review_required: false,
-      hds_brain_authority_required: true as const,
-      approval_gate_required: true,
-    },
-    adapter: "internal_runtime" as const,
-    adapter_is_authority: false as const,
-    command_generated_by_adapter_only: false,
-    parameters: { root: "fixture-workspace", query: "fixture", max_results: 1 },
-    preparation: {
-      depends_on: [],
-      bindings: [],
-      preconditions: [],
-      validation: [{
-        check_id: "restore-review-check",
-        method: "result_equals" as const,
-        target: { kind: "directory" as const, id: "fixture-workspace" },
-        expected: { count: 0 },
-      }],
-      compensation: { available: false, reason: "fixture" },
-    },
-  };
-  const plan = {
-    version: "operation-core.v1" as const,
-    plan_id: "restore-review-plan",
-    request_id: "restore-review-request",
-    state: "planned" as const,
-    steps: [step],
-    rollback: { available: false },
-    raw_command_policy: { raw_command_is_core_operation: false as const, command_generation_location: "not_applicable" as const },
-    planner_output_used_for_authority: false as const,
-    hds_brain_authority_required: true as const,
-  };
+  const plan = syntheticOperationPlan("restore-review-request", "restore-review-plan", "restore-review-step");
   const revisionDigest = operationPlanDigest(plan);
   const checkpoint = OperationPlanCheckpointSchema.parse({
     schema_version: "operation-plan-state.v1",
@@ -645,6 +698,100 @@ function seedOperationPlanState(filepath: string): { plan_id_digest: string; rev
     store.close();
   }
   return { plan_id_digest: operationPlanDigest(plan.plan_id), revision_digest: revisionDigest };
+}
+
+function syntheticOperationPlan(requestId: string, planId: string, stepId: string) {
+  const step = {
+    step_id: stepId,
+    operation: "file.search",
+    target: { kind: "directory" as const, id: "fixture-workspace" },
+    state: "planned" as const,
+    effects: ["read" as const],
+    permission: {
+      risk: "low" as const,
+      approval_level: "L1_observe" as const,
+      final_review_required: false,
+      hds_brain_authority_required: true as const,
+      approval_gate_required: true,
+    },
+    adapter: "internal_runtime" as const,
+    adapter_is_authority: false as const,
+    command_generated_by_adapter_only: false,
+    parameters: { root: "fixture-workspace", query: "fixture", max_results: 1 },
+    preparation: {
+      depends_on: [],
+      bindings: [],
+      preconditions: [],
+      validation: [{
+        check_id: `${stepId}-check`,
+        method: "result_equals" as const,
+        target: { kind: "directory" as const, id: "fixture-workspace" },
+        expected: { count: 0 },
+      }],
+      compensation: { available: false, reason: "fixture" },
+    },
+  };
+  return {
+    version: "operation-core.v1" as const,
+    plan_id: planId,
+    request_id: requestId,
+    state: "planned" as const,
+    steps: [step],
+    rollback: { available: false },
+    raw_command_policy: { raw_command_is_core_operation: false as const, command_generation_location: "not_applicable" as const },
+    planner_output_used_for_authority: false as const,
+    hds_brain_authority_required: true as const,
+  };
+}
+
+async function startSyntheticPlanProvider(): Promise<{
+  endpoint: string;
+  callCount(): number;
+  close(): Promise<void>;
+}> {
+  let calls = 0;
+  const server: Server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      calls++;
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+          messages?: Array<{ role?: unknown; content?: unknown }>;
+        };
+        const system = body.messages?.find((message) => message.role === "system")?.content;
+        const requestId = typeof system === "string" ? /固定request_id=([^。]+)/.exec(system)?.[1] : undefined;
+        if (!requestId) {
+          response.writeHead(400, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: "synthetic request binding missing" }));
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          id: "chatcmpl-synthetic-plan",
+          object: "chat.completion",
+          model: "synthetic-plan-model",
+          choices: [{ index: 0, message: { role: "assistant", content: JSON.stringify(
+            syntheticOperationPlan(requestId, "fresh-request-plan", "fresh-request-step")) }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        }));
+      } catch {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "synthetic request invalid" }));
+      }
+    });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Synthetic plan provider did not bind loopback");
+  return {
+    endpoint: `http://127.0.0.1:${address.port}/v1/chat/completions`,
+    callCount: () => calls,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    }),
+  };
 }
 
 function isolatedRuntimeEnvironment(root: string, envFile: string, historyFile: string, port: number): NodeJS.ProcessEnv {

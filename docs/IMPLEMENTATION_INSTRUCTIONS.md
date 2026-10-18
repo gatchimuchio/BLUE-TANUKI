@@ -2,6 +2,21 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-03-E03.03-FRESH-PLAN-AFTER-RECOVERY-HOLD`
+
+開始HEAD／`origin/main`=`0c1fa21857069b5acee1cb11370b20b7e2da8562`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）と適用`AGENTS.md`、作業標準要領、active指示を再読した。開始local recovery branch／remote backup tagはcurrent=`0c1fa21857069b5acee1cb11370b20b7e2da8562`、previous=`3813bfe65d7cc5c43f53aaa7e88ba9e56f8d7433`。
+
+起動時に`held_unverified`となった旧planが、Developer `/operators/developer/invoke`から新しい`plan:compute`で作る別planへholdを波及させないことをGateway統合testで確認した。loopbackだけにbindした固定JSON応答fixtureを1回使い、新規request IDに結び付いたcandidateの保存、旧planのhold維持、新planの`plan:review`後のL1 `tool.file.search`承認待ちを観測した。承認は行わず、review requestのExecutor履歴は0件。テスト内のprovider fixtureは外部LLM・資格・外部ネットワークを使わない。この範囲は`WIRED`（合成fixture／実Gateway process・HTTP・SQLite）、E03.03全体は`BUILD_GAP`。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `recovery_mutation_entry.test.ts` | PASS、4 tests。hold中plan拒否の後、新しいrequestから別planを作成し、新planだけHDS review→Approval待ちへ進む。旧holdと両planの永続保存、review requestのExecutor履歴なしを確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実provider／credential／承認／Executor作用／外部書込み／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+次consumerは、旧hold planと新規planの両方がある状態をRecoveryのread-only inspectionで照合し、同じselected-store inventory内の関係と残差を混同せず表示する経路。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の独立境界を維持する。
+
 ### 最新BUILD_BATCH：`QEB-03-E03.03-HOLD-TO-RECOVERY-LEDGER-INSPECTION`
 
 開始HEAD／`origin/main`=`3813bfe65d7cc5c43f53aaa7e88ba9e56f8d7433`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）と適用`AGENTS.md`、作業標準要領、active指示を再読した。開始local recovery branch／remote backup tagはcurrent=`3813bfe65d7cc5c43f53aaa7e88ba9e56f8d7433`、previous=`87a75045eb765129f1f1c549d446061e4d1fdeb6`。
