@@ -23,4 +23,4 @@ HDSの同一schedule commandに対するL3最終レビューから、永続Runti
 
 ### 停止・復旧・記録
 
-schedule DBの不整合はfail-closedとし、破損をactiveへ読み替えない。更新を永続化できない場合は旧scheduleを維持する。Cron eventのdispatch後に結果不明なeventは自動再送しない。承認評価のpayload digestは内容整合確認であり、再起動時のapproval lifecycle照合や承認証明ではない。BUILD_BATCH終了時は限定commitを`main`へpushし、remote HEAD、二世代復元refs、作業ツリーを再照合する。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+schedule DBの不整合はfail-closedとし、破損をactiveへ読み替えない。更新を永続化できない場合は旧scheduleを維持する。Cron eventのdispatch後に結果不明なeventは自動再送しない。承認評価のpayload digestは内容整合確認であり、再起動時のapproval lifecycle照合や承認証明ではない。実装commit=`edbee744cabac99dd093f21f763e2e0125bf54ef`を`origin/main`へpush済み。fetch後のlocal／remote mainは同SHA、local recovery branch二世代／remote backup tag二世代は現世代`e45c40b`／直前`5370e5e`で一致、worktree cleanを確認した。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
