@@ -62,3 +62,11 @@ export {
 export {
   runPeriodicFailureMemoryVerification,
 } from "./verifier.js";
+export {
+  assessFailureReviewCandidate,
+  createFailureReviewProjection,
+  failureReviewProjectionDigest,
+  failureReviewResultContent,
+  invalidFailureReviewTrace,
+  parseFailureReviewCandidate,
+} from "./review.js";

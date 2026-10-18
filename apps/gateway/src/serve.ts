@@ -34,6 +34,7 @@ import { operationResultMemoryStorage } from "./operation_result_memory_config.j
 import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
+import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { buildAuditLog } from "./audit_config.js";
 import {
   buildLLMBackendFromEnv,
@@ -1842,7 +1843,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           ? `${DOCUMENT_ORGANIZATION_PROMPT_PREFIX}復旧済みの終端projection表示に必要なHDS判断です。計算は実行しません。`
           : documentCoordinator.buildComputePrompt(),
       }
-      : hdsBoundaryInput;
+      : boundary.boundary_ok
+        ? prepareFailureReviewInbound(hdsBoundaryInput, failureMemory)
+        : hdsBoundaryInput;
     const { log, command } = hds.decide(decisionInput, documentCoordinator
       ? { transient_content: "document_organization" }
       : undefined);

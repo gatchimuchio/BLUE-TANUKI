@@ -229,6 +229,12 @@ export {
 
 export {
   FailureMemoryStore,
+  assessFailureReviewCandidate,
+  createFailureReviewProjection,
+  failureReviewProjectionDigest,
+  failureReviewResultContent,
+  invalidFailureReviewTrace,
+  parseFailureReviewCandidate,
   FAILURE_MEMORY_SCHEMA_VERSION,
   candidateFromCommand,
   commandActionPattern,

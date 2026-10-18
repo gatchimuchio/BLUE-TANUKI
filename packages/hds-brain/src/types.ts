@@ -300,9 +300,9 @@ export interface DecisionLog {
   model: ModelResult;
   commit: CommitResult;
   timestamp: number;
-  memory_retrieval_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation";
-  memory_capture_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation";
-  session_history_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation";
+  memory_retrieval_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation" | "failure_review";
+  memory_capture_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation" | "failure_review";
+  session_history_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation" | "failure_review";
 }
 
 
@@ -321,6 +321,8 @@ export interface ExecutorFeedbackAuditTrace {
   llm_tool_candidate_assessments: LLMToolCandidateAssessment[];
   skeptical_review_contract_status: "not_present" | "passed" | "failed";
   skeptical_review?: SkepticalReviewAuditTrace;
+  failure_review_contract_status: "not_present" | "passed" | "failed";
+  failure_review?: FailureReviewAuditTrace;
   meaning_update_proposal_contract_status: "not_present" | "passed" | "failed";
   meaning_update_proposal_digest?: string;
   meaning_update_proposal_reference_review: {
@@ -443,6 +445,28 @@ export interface SkepticalReviewCandidateTrace {
     domain_validation: LLMToolCandidateAssessment["domain_validation"];
   };
   proposed_goal_criteria?: CandidateGoalCriteriaAssessment;
+  may_execute: false;
+  used_for_authority: false;
+}
+
+/** Cause-review candidate summary; all free text is represented by digest only. */
+export interface FailureReviewAuditTrace {
+  status: "recorded" | "invalid" | "unbound" | "mismatched";
+  signature_id_digest: string;
+  signature_digest: string;
+  projection_digest: string;
+  proposed_scope_assessment: "same_scope" | "uncertain" | "different_scope" | "not_assessed";
+  scope_disposition: "held_for_independent_observation";
+  cause_hypothesis_count: number;
+  cause_hypothesis_categories: import("./failure-memory/types.js").FailureType[];
+  cause_hypothesis_digests: string[];
+  alternative_hypothesis_digests: string[];
+  observation_error_hypothesis_digests: string[];
+  counterexample_digests: string[];
+  resume_condition_digests: string[];
+  additional_observation_digests: string[];
+  cause_adoption: "not_adopted";
+  follow_up_required: "none" | "independent_observation";
   may_execute: false;
   used_for_authority: false;
 }

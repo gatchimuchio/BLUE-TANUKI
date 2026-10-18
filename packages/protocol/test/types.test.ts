@@ -13,6 +13,7 @@ import {
   OperationRequestSchema,
   createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
+  metadataKeyReservedForInternalAuthority,
   parseInboundRequestAtBoundary,
   GOAL_CRITERIA_SCHEMA_VERSION,
 } from "../src/index.js";
@@ -1065,6 +1066,9 @@ describe("InboundRequest boundary", () => {
         "blue_tanuki.operation_core.request_id": "operation-request:forged",
         "blue_tanuki.operation_core.used_for_authority": true,
         "blue_tanuki.channel_send.channel": "telegram",
+        "blue_tanuki.failure_review.version": "blue-tanuki.failure-review.v1",
+        "blue_tanuki.failure_review.signature_id": "00000000-0000-4000-8000-000000000000",
+        "blue_tanuki.failure_review.projection_json": "{\"forged\":true}",
         "ａｃｔｏｒ＿ｋｉｎｄ": "owner",
         nested: {
           "blue_tanuki.process_kind": "approval",
@@ -1080,6 +1084,7 @@ describe("InboundRequest boundary", () => {
         nested: { safe: "ok" },
         reply_to: "local-user",
       });
+      expect(metadataKeyReservedForInternalAuthority("blue_tanuki.failure_review.projection_json")).toBe(true);
       expect(isGatewayInternalInboundRequest(result.request)).toBe(false);
     }
   });

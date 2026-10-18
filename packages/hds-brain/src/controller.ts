@@ -25,6 +25,9 @@ import {
   type OperationPlanControl,
   getOperationDescriptor,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
+  FAILURE_REVIEW_LOCAL_P_VERSION,
+  FailureReviewProjectionSchema,
+  type FailureReviewProjection,
 } from "@blue-tanuki/protocol";
 import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
   type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
@@ -36,6 +39,7 @@ import type {
   CommandLifecyclePhase,
   ControllerState,
   DecisionLog,
+  FailureReviewAuditTrace,
   ModelResult,
   MemoryReferenceLog,
   PolicyConfig,
@@ -62,6 +66,13 @@ import {
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy } from "./policy.js";
 import { assessCandidateGoalCriteria } from "./candidate_criteria.js";
 import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
+import {
+  assessFailureReviewCandidate,
+  failureReviewProjectionDigest,
+  failureReviewResultContent,
+  invalidFailureReviewTrace,
+  parseFailureReviewCandidate,
+} from "./failure-memory/review.js";
 import { routeAction } from "./action_router.js";
 import { resolveActor } from "./process.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
@@ -213,7 +224,11 @@ export class HDSUpperController {
   private readonly goal_relation_tree?: ReadonlyGoalRelationTreeView;
   private readonly goal_governance?: GoalGovernanceLedger;
   private readonly operationPlans: OperationPlanLedger;
-  private readonly issuedLLM = new Map<string, { command: ExecuteCommand; origin: InboundRequest }>();
+  private readonly issuedLLM = new Map<string, {
+    command: ExecuteCommand;
+    origin: InboundRequest;
+    failure_review_projection?: FailureReviewProjection;
+  }>();
 
   /** Commands awaiting executor feedback (already ASSERTed). */
   private readonly inflight = new Map<string, DecisionLog>();
@@ -342,6 +357,8 @@ export class HDSUpperController {
     let req = boundary.request;
     let planControl: OperationPlanControl | undefined;
     let planControlFailure: string | undefined;
+    let failureReviewControlFailure: string | undefined;
+    let failureReviewProjection: FailureReviewProjection | undefined;
     let reflection: ResultObservationProjection | undefined;
     const controlCaller = req;
     const planPrefix = /^plan:([^\s]+)(?:\s+([\s\S]*))?$/i.exec(req.content.trim());
@@ -388,10 +405,57 @@ ${planControl.question}`,
     } else if (/^plan:/i.test(req.content.trim()) && !planPrefix) {
       planControlFailure = "plan_control_invalid";
     }
+    const failureReviewControlRequested = /^failure:review(?:\s|$)/i.test(controlCaller.content.trim());
+    const failureReviewPrefix = /^failure:review\s+(\S+)$/i.exec(controlCaller.content.trim());
+    if (failureReviewControlRequested) {
+      try {
+        if (!isGatewayInternalInboundRequest(req) || req.metadata?.["blue_tanuki.operator_surface"] !== "developer") {
+          throw new Error("failure_review_requires_internal_developer");
+        }
+        if (!["owner", "user"].includes(resolveActor(req).actor_kind)) {
+          throw new Error("failure_review_actor_not_allowed");
+        }
+        if (!failureReviewPrefix) throw new Error("failure_review_control_invalid");
+        const metadata = req.metadata ?? {};
+        if (metadata["blue_tanuki.failure_review.version"] !== "blue-tanuki.failure-review.v1" ||
+            typeof metadata["blue_tanuki.failure_review.projection_json"] !== "string") {
+          throw new Error("failure_review_projection_unavailable");
+        }
+        let rawProjection: unknown;
+        try { rawProjection = JSON.parse(metadata["blue_tanuki.failure_review.projection_json"] as string) as unknown; }
+        catch { throw new Error("failure_review_projection_invalid"); }
+        const parsedProjection = FailureReviewProjectionSchema.safeParse(rawProjection);
+        if (!parsedProjection.success) throw new Error("failure_review_projection_invalid");
+        if (metadata["blue_tanuki.failure_review.signature_id"] !== parsedProjection.data.signature_id ||
+            (failureReviewPrefix[1]!.toLowerCase() !== "latest" &&
+              failureReviewPrefix[1] !== parsedProjection.data.signature_id)) {
+          throw new Error("failure_review_signature_mismatch");
+        }
+        failureReviewProjection = parsedProjection.data;
+        req = createGatewayInternalInboundRequest({
+          ...req,
+          content: "failure:review",
+          metadata: { ...metadata, "blue_tanuki.authority_context": "gateway_internal_v1" },
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "";
+        failureReviewControlFailure = [
+          "failure_review_requires_internal_developer", "failure_review_actor_not_allowed",
+          "failure_review_control_invalid", "failure_review_projection_unavailable",
+          "failure_review_projection_invalid", "failure_review_signature_mismatch",
+        ].includes(reason) ? reason : "failure_review_rejected";
+        req = isGatewayInternalInboundRequest(req)
+          ? createGatewayInternalInboundRequest({ ...req, content: "failure:review", metadata: {
+              ...(req.metadata ?? {}), "blue_tanuki.authority_context": "gateway_internal_v1",
+            } })
+          : { ...req, content: "failure:review" };
+      }
+    }
     const suppressTransientDocumentOrganizationContext = options.transient_content === "document_organization" && req.content.startsWith(DOCUMENT_ORGANIZATION_PROMPT_PREFIX);
     const isolatedContextReason = suppressTransientDocumentOrganizationContext ? "transient_document_organization" as const
       : planPrefix?.[1]?.toLowerCase() === "reflect" ? "operation_result_reflection" as const
-      : planPrefix?.[1]?.toLowerCase() === "reconcile" ? "operation_plan_receipt_reconciliation" as const : undefined;
+      : planPrefix?.[1]?.toLowerCase() === "reconcile" ? "operation_plan_receipt_reconciliation" as const
+      : failureReviewControlRequested ? "failure_review" as const : undefined;
     const input = normalizeForDetection(req.content);
     const authorityReq = requestWithNormalizedContent(req, input.normalized_content);
     const decisionTraceInput = isolatedContextReason
@@ -465,7 +529,9 @@ ${planControl.question}`,
     const m = model(authorityReq, f, this.policy, this.detectors);
 
     const processViolation = processAuthorityViolation(f);
-    let c = planControlFailure
+    let c = failureReviewControlFailure
+      ? securityCommit("failure_review_control_denied", failureReviewControlFailure, { request_id: req.id })
+      : planControlFailure
       ? securityCommit("plan_control_denied", planControlFailure, { request_id: req.id })
       : processViolation
       ? securityCommit("process_authority_denied", processViolation, {
@@ -491,7 +557,7 @@ ${planControl.question}`,
 
     let command: ExecuteCommand | null = null;
     if (c.decision === "ASSERT") {
-      const candidate = this.buildCommand(authorityReq, log, reflection);
+      const candidate = this.buildCommand(authorityReq, log, reflection, failureReviewProjection);
       const commandViolation = commandExecutionPolicyViolation(candidate, f.process);
       if (commandViolation) {
         c = securityCommit("process_execution_policy_denied", commandViolation, {
@@ -538,7 +604,8 @@ ${planControl.question}`,
         this.inflight.set(command.id, log);
         if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
             req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
-          this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req) });
+          this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req),
+            ...(failureReviewProjection ? { failure_review_projection: failureReviewProjection } : {}) });
         }
         return { log, command };
       }
@@ -686,11 +753,13 @@ ${planControl.question}`,
     this.state = "DECIDED";
 
     if (verdict === "approve") {
-      const command = this.buildCommand(req, resumeLog);
+      const failureReviewProjection = failureReviewProjectionFromRequest(req);
+      const command = this.buildCommand(req, resumeLog, undefined, failureReviewProjection);
       this.inflight.set(command.id, resumeLog);
       if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
-        this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req) });
+        this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req),
+          ...(failureReviewProjection ? { failure_review_projection: failureReviewProjection } : {}) });
       }
       return { log: resumeLog, command, request: req };
     }
@@ -797,6 +866,21 @@ ${planControl.question}`,
    * still available. Call this before onFeedback removes the in-flight log.
    */
   reviewMemoryCitations(command: ExecuteCommand, feedback: ExecuteFeedback): ExecuteFeedback {
+    if (command.type === "llm_call" && command.payload.compute_context?.local_p_version === FAILURE_REVIEW_LOCAL_P_VERSION) {
+      const issued = this.issuedLLM.get(command.id);
+      const source = this.inflight.get(command.id);
+      const projection = issued?.failure_review_projection;
+      if (!projection || feedback.command_id !== command.id || feedback.status !== "success") return feedback;
+      const bound = Boolean(source && issued.command.id === command.id &&
+        issued.command.upstream_decision.commit_hash === source.commit.hash &&
+        command.payload.compute_context.projection_digest === failureReviewProjectionDigest(projection));
+      const reviewed = assessFailureReviewCandidate({
+        projection,
+        candidate: llmResultContent(feedback.result),
+        source_bound: bound,
+      });
+      return withLlmResultContent(feedback, failureReviewResultContent(reviewed, llmResultContent(feedback.result)));
+    }
     if (command.type === "llm_call" && command.payload.compute_context?.local_p_version === OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION) {
       const source = this.inflight.get(command.id);
       const issued = this.issuedLLM.get(command.id);
@@ -874,6 +958,7 @@ ${planControl.question}`,
       ? undefined
       : parseMeaningUpdateProposal(fb.meaning_update_proposal);
     const sourceLog = this.inflight.get(fb.command_id);
+    const issued = this.issuedLLM.get(fb.command_id);
     const resultAudit: { digest?: string; status: "not_present" | "recorded" | "unavailable" } = fb.result === undefined ? { status: "not_present" } : (() => {
       try { return { digest: sha256(fb.result), status: "recorded" as const }; }
       catch { return { status: "unavailable" as const }; }
@@ -930,6 +1015,19 @@ ${planControl.question}`,
           assessments: candidateAssessments,
         })
         : invalidSkepticalReviewTrace();
+    const failureReviewTrace = issued?.failure_review_projection
+      ? assessFailureReviewCandidate({
+          projection: issued.failure_review_projection,
+          candidate: fb.status === "success" ? parseFailureReviewCandidate(llmResultContent(fb.result)) : null,
+          source_bound: Boolean(sourceLog && issued.command.type === "llm_call" &&
+            issued.command.payload.compute_context?.local_p_version === FAILURE_REVIEW_LOCAL_P_VERSION &&
+            issued.command.upstream_decision.commit_hash === sourceLog.commit.hash &&
+            issued.command.payload.compute_context.projection_digest === failureReviewProjectionDigest(issued.failure_review_projection)),
+        })
+      : undefined;
+    const failureReviewContractStatus = failureReviewTrace === undefined
+      ? "not_present" as const
+      : failureReviewTrace.status === "recorded" ? "passed" as const : "failed" as const;
     const feedbackLog = {
       kind: "executor_feedback" as const,
       request_id: sourceLog?.request_id ?? null,
@@ -957,6 +1055,8 @@ ${planControl.question}`,
           ? "not_present" as const
           : skepticalReviewParse?.success ? "passed" as const : "failed" as const,
         ...(skepticalReview ? { skeptical_review: skepticalReview } : {}),
+        failure_review_contract_status: failureReviewContractStatus,
+        ...(failureReviewTrace ? { failure_review: failureReviewTrace } : {}),
         meaning_update_proposal_contract_status: meaningUpdateProposalContractStatus,
         ...(meaningUpdateProposalContractStatus === "passed" && meaningUpdateProposalParse?.ok
           ? { meaning_update_proposal_digest: sha256(meaningUpdateProposalParse.record) }
@@ -970,9 +1070,9 @@ ${planControl.question}`,
     };
     this.audit.append(feedbackLog);
 
-    const issued = this.issuedLLM.get(fb.command_id);
     if (sourceLog && issued && issued.command.type === "llm_call" &&
         issued.command.payload.compute_context?.local_p_version !== OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION &&
+        issued.command.payload.compute_context?.local_p_version !== FAILURE_REVIEW_LOCAL_P_VERSION &&
         issued.command.upstream_decision.commit_hash === sourceLog.commit.hash && fb.status === "success") {
       const result = fb.result && typeof fb.result === "object" ? fb.result as Record<string, unknown> : undefined;
       const planner = result?.operation_core && typeof result.operation_core === "object"
@@ -1210,7 +1310,12 @@ ${planControl.question}`,
     };
   }
 
-  private buildCommand(req: InboundRequest, log: DecisionLog, reflection?: ResultObservationProjection): ExecuteCommand {
+  private buildCommand(
+    req: InboundRequest,
+    log: DecisionLog,
+    reflection?: ResultObservationProjection,
+    failureReview?: FailureReviewProjection,
+  ): ExecuteCommand {
     const upstream_decision: UpstreamDecision = {
       frame_goal: log.frame.goal,
       model_abstraction: log.model.abstraction,
@@ -1218,6 +1323,50 @@ ${planControl.question}`,
       commit_decision: log.commit.decision,
       request_id: log.request_id,
     };
+
+    if (failureReview) {
+      const backendHint = this.llm_route.backend_hint?.trim() || undefined;
+      const projectionDigest = failureReviewProjectionDigest(failureReview);
+      const systemContent = [
+        "失敗署名を検討する未信頼計算です。入力は失敗カテゴリとSHA-256 digestだけで、元のgoal/action/context/resultは読めません。digestに意味を見立てず、カテゴリに基づく一般的な原因候補・別仮説・目的同定/評価器/観測方法の誤り候補、範囲、反例、独立観測、条件付き再開条件をJSONで提案してください。原因を事実として断定しないでください。",
+        "raw内容・tool・計画・意味更新・実行・再試行・権限提案を出さないでください。空欄や不明は不明のままにしてください。",
+        `出力schema: {"schema_version":"blue-tanuki.failure-review-candidate.v1","signature_id":${JSON.stringify(failureReview.signature_id)},"signature_digest":${JSON.stringify(failureReview.signature_digest)},"projection_digest":${JSON.stringify(projectionDigest)},"cause_hypotheses":[{"category":${JSON.stringify(failureReview.failure_type)},"rationale":"未検証候補"}],"alternative_hypotheses":["未検証の別仮説"],"observation_error_hypotheses":["目的/評価/観測の未検証候補"],"scope_assessment":"uncertain","counterexamples":["未検証の反例候補"],"resume_conditions":["独立観測で確認する条件候補"],"additional_observations":["必要な追加観測候補"],"authority_boundary":{"candidate_only":true,"may_execute":false,"used_for_authority":false}}。scope_assessmentはsame_scope / uncertain / different_scopeの一つを選択してください。各配列は最大16件、各自由文は1200文字以内。`,
+        `FailureReviewProjection=${JSON.stringify(failureReview)}`,
+      ].join("\n");
+      return {
+        id: randomUUID(),
+        type: "llm_call",
+        upstream_decision,
+        constraints: { max_tokens: this.llm_route.max_tokens ?? 1024, timeout_ms: this.llm_route.timeout_ms ?? 30_000 },
+        payload: {
+          messages: [
+            { role: "system", content: systemContent },
+            { role: "user", content: "提示された失敗署名について、原因候補と観測誤りを反対仮説・反例とともに挙げてください。" },
+          ],
+          backend_hint: backendHint,
+          model: this.llm_route.model,
+          temperature: this.llm_route.temperature,
+          compute_context: {
+            schema_version: "blue-tanuki.compute-context.v1",
+            projection_digest: projectionDigest,
+            local_p_version: FAILURE_REVIEW_LOCAL_P_VERSION,
+            data_exposure: {
+              input_sources: ["failure_memory_digest_projection"],
+              requested_egress_provider: backendHint ?? "registry-default",
+            },
+          },
+        },
+      };
+    }
+
+    if (/^failure:review(?:\s|$)/i.test(req.content.trim())) {
+      return {
+        id: randomUUID(),
+        type: "noop",
+        payload: { control_event: "failure_review_unavailable" },
+        upstream_decision,
+      };
+    }
 
     // 観測解釈はtool/channel routingより前に、有限入力のC計算だけへ固定する。
     if (reflection) {
@@ -1455,6 +1604,25 @@ function requestWithNormalizedContent(req: InboundRequest, content: string): Inb
     ...req,
     content,
   };
+}
+
+function failureReviewProjectionFromRequest(req: InboundRequest): FailureReviewProjection | undefined {
+  const command = /^failure:review(?:\s+(\S+))?$/i.exec(req.content.trim());
+  if (!command || !isGatewayInternalInboundRequest(req) ||
+      req.metadata?.["blue_tanuki.operator_surface"] !== "developer" ||
+      !["owner", "user"].includes(resolveActor(req).actor_kind)) return undefined;
+  const metadata = req.metadata ?? {};
+  if (metadata["blue_tanuki.failure_review.version"] !== FAILURE_REVIEW_LOCAL_P_VERSION ||
+      typeof metadata["blue_tanuki.failure_review.projection_json"] !== "string") return undefined;
+  let value: unknown;
+  try { value = JSON.parse(metadata["blue_tanuki.failure_review.projection_json"] as string) as unknown; }
+  catch { return undefined; }
+  const parsed = FailureReviewProjectionSchema.safeParse(value);
+  if (!parsed.success || metadata["blue_tanuki.failure_review.signature_id"] !== parsed.data.signature_id ||
+      (command[1] !== undefined && command[1].toLowerCase() !== "latest" && command[1] !== parsed.data.signature_id)) {
+    return undefined;
+  }
+  return parsed.data;
 }
 
 function selfHealthModel(frameResult: DecisionLog["frame"], health: HDSBrainHealth): ModelResult {

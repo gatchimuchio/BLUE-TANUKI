@@ -21,6 +21,7 @@ export const RESERVED_EXTERNAL_METADATA_KEYS = [
   "blue_tanuki.operator_surface",
   "blue_tanuki.operation_core",
   "blue_tanuki.channel_send",
+  "blue_tanuki.failure_review",
   "actor_kind",
   "trust_level",
   "process_kind",
@@ -44,6 +45,9 @@ export interface GatewayInternalAuthorityMetadata extends MetadataObject {
   "blue_tanuki.channel_send.channel"?: string;
   "blue_tanuki.channel_send.target"?: string;
   "blue_tanuki.channel_send.content"?: string;
+  "blue_tanuki.failure_review.version"?: "blue-tanuki.failure-review.v1";
+  "blue_tanuki.failure_review.signature_id"?: string;
+  "blue_tanuki.failure_review.projection_json"?: string;
 }
 
 export interface GatewayInternalInboundRequestInput extends Omit<InboundRequest, "metadata"> {
@@ -126,6 +130,7 @@ export const LLMComputeContextSchema = z.object({
     input_sources: z.array(z.enum([
       "accepted_inbound_request",
       "selected_memory_references",
+      "failure_memory_digest_projection",
     ])).min(1).max(2),
     requested_egress_provider: z.string().trim().min(1).max(120),
   }).strict(),
@@ -311,6 +316,58 @@ export const SkepticalReviewRequestSchema = z.object({
 }).strict();
 export type SkepticalReviewRequest = z.infer<typeof SkepticalReviewRequestSchema>;
 
+export const FAILURE_REVIEW_LOCAL_P_VERSION = "blue-tanuki.failure-review.v1" as const;
+
+const FailureReviewSha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+const FailureReviewScopeSchema = z.enum([
+  "command", "tool", "file", "repo", "test", "llm_output", "workflow", "authority", "boundary",
+]);
+const FailureReviewTypeSchema = z.enum([
+  "no_progress", "repeat_error", "boundary_violation", "hallucination", "wrong_file", "bad_command",
+  "test_regression", "permission_error", "environment_error", "logic_drift", "unresolved_warning",
+  "repeated_manual_correction",
+]);
+
+/** Gatewayが失敗署名から作るC向けのdigest-only入力。権限や世界事実ではない。 */
+export const FailureReviewProjectionSchema = z.object({
+  schema_version: z.literal("blue-tanuki.failure-review-projection.v1"),
+  signature_id: z.string().uuid(),
+  signature_digest: FailureReviewSha256Schema,
+  scope: FailureReviewScopeSchema,
+  failure_type: FailureReviewTypeSchema,
+  cause_candidates: z.array(FailureReviewTypeSchema).max(16),
+  unknowns: z.array(z.string().min(1).max(96)).max(16),
+  input_pattern_digest: FailureReviewSha256Schema,
+  action_pattern_digest: FailureReviewSha256Schema,
+  context_pattern_digest: FailureReviewSha256Schema,
+  result_pattern_digest: FailureReviewSha256Schema.optional(),
+}).strict();
+export type FailureReviewProjection = z.infer<typeof FailureReviewProjectionSchema>;
+
+/** Cの原因・反対仮説・観測誤差提案。Jがrequest-boundに検査するまで全て未信頼。 */
+export const FailureReviewCandidateSchema = z.object({
+  schema_version: z.literal("blue-tanuki.failure-review-candidate.v1"),
+  signature_id: z.string().min(1).max(200),
+  signature_digest: FailureReviewSha256Schema,
+  projection_digest: FailureReviewSha256Schema,
+  cause_hypotheses: z.array(z.object({
+    category: FailureReviewTypeSchema,
+    rationale: z.string().min(1).max(1_200),
+  }).strict()).max(16),
+  alternative_hypotheses: z.array(z.string().min(1).max(1_200)).max(16),
+  observation_error_hypotheses: z.array(z.string().min(1).max(1_200)).max(16),
+  scope_assessment: z.enum(["same_scope", "uncertain", "different_scope"]),
+  counterexamples: z.array(z.string().min(1).max(1_200)).max(16),
+  resume_conditions: z.array(z.string().min(1).max(1_200)).max(16),
+  additional_observations: z.array(z.string().min(1).max(1_200)).max(16),
+  authority_boundary: z.object({
+    candidate_only: z.literal(true),
+    may_execute: z.literal(false),
+    used_for_authority: z.literal(false),
+  }).strict(),
+}).strict();
+export type FailureReviewCandidate = z.infer<typeof FailureReviewCandidateSchema>;
+
 export const ExecuteFeedbackSchema = z.object({
   command_id: z.string(),
   status: z.enum(["success", "failed", "suspended"]),
@@ -434,7 +491,8 @@ export function metadataKeyReservedForInternalAuthority(key: string): boolean {
   return (
     RESERVED_EXTERNAL_METADATA_KEY_SET.has(normalized) ||
     normalized.startsWith("blue_tanuki.operation_core.") ||
-    normalized.startsWith("blue_tanuki.channel_send.")
+    normalized.startsWith("blue_tanuki.channel_send.") ||
+    normalized.startsWith("blue_tanuki.failure_review.")
   );
 }
 

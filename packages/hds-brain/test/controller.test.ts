@@ -5,6 +5,7 @@ import {
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
+import { createFailureReviewProjection, FailureMemoryStore, failureReviewProjectionDigest } from "../src/failure-memory/index.js";
 import type { AuditEntry } from "../src/audit.js";
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition } from "../src/policy.js";
 import type { PolicyConfig } from "../src/types.js";
@@ -771,6 +772,121 @@ describe("HDSUpperController invariants", () => {
 });
 
 describe("HDSUpperController.onFeedback()", () => {
+  it("reviews an explicit failure signature as digest-only, non-authority C feedback", () => {
+    const store = new FailureMemoryStore();
+    const signature = store.addSignature({
+      scope: "repo",
+      failure_type: "logic_drift",
+      input_pattern: "FAILURE_REVIEW_RAW_GOAL_SENTINEL",
+      action_pattern: "FAILURE_REVIEW_RAW_ACTION_SENTINEL",
+      context_pattern: "FAILURE_REVIEW_RAW_CONTEXT_SENTINEL",
+      result_pattern: "FAILURE_REVIEW_RAW_RESULT_SENTINEL",
+      notes: "FAILURE_REVIEW_RAW_NOTE_SENTINEL",
+    });
+    const projection = createFailureReviewProjection(signature);
+    const c = new HDSUpperController();
+    const { log, command } = c.decide(createGatewayInternalInboundRequest({
+      id: "failure-review-controller-request",
+      channel: "webchat",
+      user: "u1",
+      content: `failure:review ${signature.id}`,
+      timestamp: Date.now(),
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.failure_review.version": "blue-tanuki.failure-review.v1",
+        "blue_tanuki.failure_review.signature_id": projection.signature_id,
+        "blue_tanuki.failure_review.projection_json": JSON.stringify(projection),
+      },
+    }));
+
+    expect(log.commit.decision).toBe("ASSERT");
+    expect(log.memory_retrieval_suppressed_for).toBe("failure_review");
+    expect(command?.type).toBe("llm_call");
+    if (!command || command.type !== "llm_call") return;
+    expect(command.payload.compute_context?.local_p_version).toBe("blue-tanuki.failure-review.v1");
+    expect(command.payload.compute_context?.projection_digest).toBe(failureReviewProjectionDigest(projection));
+    const issued = JSON.stringify(command);
+    for (const sentinel of ["FAILURE_REVIEW_RAW_GOAL_SENTINEL", "FAILURE_REVIEW_RAW_ACTION_SENTINEL", "FAILURE_REVIEW_RAW_CONTEXT_SENTINEL", "FAILURE_REVIEW_RAW_RESULT_SENTINEL", "FAILURE_REVIEW_RAW_NOTE_SENTINEL"]) {
+      expect(issued).not.toContain(sentinel);
+    }
+
+    const rationale = "C_ONLY_UNVERIFIED_CAUSE_RATIONALE";
+    const candidate = {
+      schema_version: "blue-tanuki.failure-review-candidate.v1",
+      signature_id: projection.signature_id,
+      signature_digest: projection.signature_digest,
+      projection_digest: failureReviewProjectionDigest(projection),
+      cause_hypotheses: [{ category: "logic_drift", rationale }],
+      alternative_hypotheses: ["C_ONLY_ALTERNATIVE_HYPOTHESIS"],
+      observation_error_hypotheses: ["C_ONLY_OBSERVATION_ERROR"],
+      scope_assessment: "uncertain",
+      counterexamples: ["C_ONLY_COUNTEREXAMPLE"],
+      resume_conditions: ["C_ONLY_RESUME_CONDITION"],
+      additional_observations: ["C_ONLY_ADDITIONAL_OBSERVATION"],
+      authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+    };
+    const rawFeedback = feedback(command.id, {
+      content: JSON.stringify(candidate),
+      operation_core: { status: "valid_plan", plan: { planner_output_used_for_authority: false } },
+    });
+    const reviewed = c.reviewMemoryCitations(command, rawFeedback);
+    expect(JSON.stringify(reviewed.result)).toContain(rationale);
+    expect(JSON.stringify(reviewed.result)).toContain("C_ONLY_ALTERNATIVE_HYPOTHESIS");
+    expect(JSON.stringify(reviewed.result)).toContain("cause_adoption");
+    expect(JSON.stringify(reviewed.result)).toContain("unverified_candidate_only");
+
+    c.onFeedback(rawFeedback);
+    const feedbackEntry = c.getAudit().list().find((entry) => "kind" in entry.log && entry.log.kind === "executor_feedback")?.log;
+    expect(feedbackEntry && "kind" in feedbackEntry && feedbackEntry.kind === "executor_feedback"
+      ? feedbackEntry.feedback.failure_review : undefined).toMatchObject({
+      status: "recorded",
+      cause_adoption: "not_adopted",
+      follow_up_required: "independent_observation",
+      may_execute: false,
+      used_for_authority: false,
+    });
+    expect(JSON.stringify(feedbackEntry)).not.toContain(rationale);
+    expect(c.getAudit().list().some((entry) => "kind" in entry.log && entry.log.kind === "operation_plan")).toBe(false);
+    expect(c.getAudit().verify()).toBe(true);
+  });
+
+  it("fails closed for external or malformed failure review commands", () => {
+    const external = new HDSUpperController();
+    const denied = external.decide(inbound("failure:review latest", "external-failure-review"));
+    expect(denied.command).toBeNull();
+    expect(denied.log.commit.decision).not.toBe("ASSERT");
+
+    const malformed = new HDSUpperController();
+    const invalid = malformed.decide(createGatewayInternalInboundRequest({
+      id: "malformed-failure-review",
+      channel: "webchat",
+      user: "u1",
+      content: "failure:review",
+      timestamp: Date.now(),
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.operator_surface": "developer",
+      },
+    }));
+    expect(invalid.command).toBeNull();
+    expect(invalid.log.commit.decision).not.toBe("ASSERT");
+
+    const missingSignature = new HDSUpperController().decide(createGatewayInternalInboundRequest({
+      id: "missing-failure-review-signature",
+      channel: "webchat",
+      user: "u1",
+      content: "failure:review 00000000-0000-4000-8000-000000000000",
+      timestamp: Date.now(),
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.operator_surface": "developer",
+      },
+    }));
+    expect(missingSignature.command).toBeNull();
+    expect(missingSignature.log.commit.decision).not.toBe("ASSERT");
+  });
+
   it("appends executor feedback to the same audit hash-chain", () => {
     const c = new HDSUpperController();
     const { command } = c.decide(inbound("hello feedback", "r-feedback"));

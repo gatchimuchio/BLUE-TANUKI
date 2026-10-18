@@ -16,6 +16,8 @@
 
 2026-10-18のQEB-03-E04.01-CONDITIONED-FAILURE-GATEでは、Gateway command failureからHDS-BRAIN failure memory、次の実行前gateまでを接続した。署名にはgoal・action／target・actor/channel・症状のdigestを分離して保持し、原因分類は候補、原因と予測差は未確認として記録する。異なるtarget／goalや旧request IDで誤照合しないfixtureを追加。raw error・goal・argumentsは新規failure signatureへ保存しない。既存failure-memory-v2は読み込み互換を保つが、条件patternを持たない旧command signatureは新gateで適用しない。予測差を供給するproducerとJの原因・反対仮説採否は未接続のため、E04.01／QEB-03は`BUILD_GAP`。
 
+2026-10-18のQEB-03-E04.02-FAILURE-CAUSE-REVIEWでは、明示したDeveloper要求から保存済みfailure signatureのカテゴリ・allowlist unknown・パターンdigestだけをGatewayが射影し、HDS-issued C computeと署名／projection結合済みJ reviewへ接続した。Cの候補本文は形状・結合確認後に未検証候補としてDeveloperへ表示し、HDS auditには内容でなく各候補のdigestを記録する。Cのscope判断は提案として残し、Jは常に独立観測まで保留する。raw failure patternを渡さず、fallback provider authorization、memory更新、failure gate変更、retry、OperationPlan保持、外部作用へ接続しない。protocol／HDS／Gateway／Compute focused tests、workspace typecheck/buildを確認した。意味に基づく原因確定・独立観測の取得／採否・Memory反映・条件変化後の限定再試行は未接続で、E04.02／QEB-03は`BUILD_GAP`を維持する。
+
 2026-10-18にCronの未決dispatch状態を、event ID・sequence・delivery state・payload digest・時刻に限ったread-only通知として認証済みWebChatへ接続した。通知は外部結果の成功を断定せず、再送・解除・承認を行わない。再起動後の未決作用照合・復旧は未接続であり、E01.01／E03.02／QEB-03は`BUILD_GAP`。
 
 2026-10-18のQEB-03-E03.02-STARTUP-RECONCILIATION-BARRIERでは、Gatewayが起動時に既存Execution result outboxとM pendingを再照合し、未解決receiptが残る場合は通常inbound／Cron開始前に停止する経路を接続した。これはE03.02の部分実装であり、単一writer／boot generation／fencing、旧世代結果の分離、Cron eventとjob resultの相関、回復operator UIは未成立。E03.02／QEB-03は`BUILD_GAP`を維持する。

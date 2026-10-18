@@ -175,6 +175,22 @@ describe("LLMComputeAdapter", () => {
     await expect(new LLMComputeAdapter(registry).compute(historyRequest))
       .rejects.toMatchObject({ provider: "primary", kind: "remote_service_unavailable" });
     expect(backup.seen).toHaveLength(1);
+
+    const failureReviewRequest = computeRequest();
+    failureReviewRequest.data_exposure_scope = {
+      requested_egress_provider: "registry-default",
+      input_sources: ["accepted_inbound_request", "failure_memory_digest_projection"],
+    };
+    failureReviewRequest.input.backend_hint = undefined;
+    failureReviewRequest.fallback_authorization = {
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request"],
+      required_capabilities: ["llm.text.generate"],
+      max_total_cost: { amount: 0.3, currency: "USD" },
+    };
+    await expect(new LLMComputeAdapter(registry).compute(failureReviewRequest))
+      .rejects.toMatchObject({ provider: "primary", kind: "remote_service_unavailable" });
+    expect(backup.seen).toHaveLength(1);
   });
 
   it("rejects provider-route mismatch before making a provider call", async () => {

@@ -23,6 +23,7 @@ export interface ComputeProfile {
 export type ComputeInputSource =
   | "accepted_inbound_request"
   | "selected_memory_references"
+  | "failure_memory_digest_projection"
   | "session_history";
 
 export interface ComputeDataExposureScope {
@@ -221,8 +222,9 @@ function validateComputeRequest(request: ComputeRequest<LLMRequest>): LLMFallbac
   }
   if (!parsedFallbackAuthorization?.success) return undefined;
   const authorization = parsedFallbackAuthorization.data;
+  const allowedInputSources = new Set<string>(authorization.allowed_input_sources);
   if (!request.data_exposure_scope.input_sources.every(
-    (source) => authorization.allowed_input_sources.includes(source),
+    (source) => allowedInputSources.has(source),
   )) return undefined;
   return authorization;
 }
