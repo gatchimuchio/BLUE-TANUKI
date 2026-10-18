@@ -26,6 +26,8 @@
 
 2026-10-18のQEB-03-E03.03-PLAN-BROKER-LEDGER-CORRELATIONでは、同じCLIへOperationPlan checkpointのread-only inspectionと、J binding／Broker execution-intent receiptのadmission digest相関を追加した。J checkpointの自己digest・schema・revision／step／result／command key／ticket uniquenessを確認し、Broker未検証・記録上限・不一致を区別する。未照合のJ/M result-memory linkは残差として保ち、checkpointを成立扱いしない。出力はopaque digestと固定enumに限定し、破損checkpoint全体を抑止しながら個別不整合のないbindingは保持する。合成2-file／11-test、`pnpm typecheck`、15 workspace build、未作成state rootでのJSON／text CLIを確認し、read前後のDB bytes不変とsidecar時open抑止を確認した。checkpointは認証済anchorやbackupではなく、restore・repair・resume・権限を生成しない。独立backup／restore、未決結果operator UI、E03.03／QEB-03全体は未成立で`BUILD_GAP`を維持する。
 
+2026-10-18のQEB-03-E03.03-PLAN-MEMORY-LEDGER-CORRELATIONでは、OperationPlanに記録されたJ result-memory commit／receiptをcanonical J/M ledger inspectionへupdate・event・content・revision・receipt digestでread-only照合した。期待linkの欠落、未検証、保留、不一致は残差のまま保持する。CLI／認証済みoperator projection／WebChatには固定enumとdigestだけを渡し、raw IDや本文を出さない。縦断fixture 30件、Gateway inspection 13件、WebChat 76件、typecheck、15 workspace build、docs gateを確認し、J/M/OperationPlan/Broker保存物がinspection前後で不変であることをfixtureで確認した。復旧操作や権限は生成しない。E03.03／QEB-03全体は未成立で`BUILD_GAP`を維持する。
+
 2026-10-18のQEB-03-E03.01-GATEWAY-OWNER-LEASE-EXECUTION-EPOCHでは、常駐serveとCLIが共有state rootのSQLite exclusive leaseを保持し、永続generation／UUID execution epochをExecutionIntentとExecutorの作用境界へ接続した。別Node processの同時owner拒否、再取得時の世代更新、lease喪失後の合成tool非dispatchを限定testで確認。Windows ACL、network filesystem、実行中に既に渡された作用の停止、旧世代receiptの分離は未確認で、E03.01／QEB-03全体は`BUILD_GAP`。
 
 198小単位（旧192＋Android/iOS各3）は実装索引であり、個別のQC/QAを198回行うための工程ではない。毎作業および各小単位の開始・切替・再開時に最新版の三点セットすべてと適用AGENTS.mdを読み直し、実際の仕事を先へつなぐBUILD_BATCHで施工・限定技術確認・Git保全を行う。
