@@ -18,6 +18,8 @@
 
 E03.03は`BUILD_GAP`を維持する。次consumerは、J/M復元後に既存planのJ control／M receipt依存が一致することをdigest限定で計画別に証明する実consumerであり、依存証拠がない間はholdを維持する。store間atomicity、仕事単位restore point、復旧可能性は未成立。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。D4Pocket／ミニドラへの変更、実業務作用、公開・出荷判断なし。
 
+実装commit=`078fa117dbe4953b75538c77e97e7afa0171b3cd`を`main`へpush済み。実装push直後のlocal／remote mainとcurrent recovery branch／tagは同commit、previous recovery branch／tagは開始HEAD=`f8569ebf6219652c7ab89bf1e1581816fc7b93f8`。この記録を含むdocs-only closeoutもpushし、終了時のmain／current ref一致、previous ref、clean worktreeを照合する。
+
 ### 前回BUILD_BATCH：`QEB-03-E03.03-RESTORE-STARTUP-UNVERIFIED-HOLD`
 
 開始HEAD／`origin/main`=`198033627b1bce9f1b68dd823d25c5a8d8637b22`、worktree clean。owner指定rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、Recovery observer／serve／HDS evidence／Cron consumerを再読して開始した。
