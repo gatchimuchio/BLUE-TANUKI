@@ -273,6 +273,93 @@ describe("Recovery mutation HDS L3 entry", () => {
           .operation_plans.plans.find((plan) => plan.plan_id === planIdDigest)))
           .toMatchObject({ recovery_hold_reason: "held_unverified" });
         expect(syntheticProvider.callCount()).toBe(1);
+
+        const combinedRecoveryInspection = await requestJson(port, "/recovery/inspection", { token: maintenanceToken });
+        expect(combinedRecoveryInspection.status, gateway.output.join("")).toBe(200);
+        const inspectedPlanDigests = [planIdDigest, operationPlanDigest("fresh-request-plan")];
+        expect(combinedRecoveryInspection.body).toMatchObject({
+          surface: "recovery_inspection_operator",
+          mode: "read_only",
+          used_for_authority: false,
+          may_execute: false,
+          ledgers: { operation_plans: "verified" },
+          operation_plan_residual_count: 0,
+        });
+        const inspectedPlanScopes = (combinedRecoveryInspection.body.plan_dependency_scopes as Array<Record<string, unknown>>)
+          .filter((scope) => inspectedPlanDigests.includes(scope.plan_id_digest as string));
+        expect(inspectedPlanScopes).toHaveLength(2);
+        expect(inspectedPlanScopes).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            plan_id_digest: planIdDigest,
+            status: "observed",
+            integrity: "verified",
+            residual_dependencies: [],
+            unobserved_dependencies: [],
+          }),
+          expect.objectContaining({
+            plan_id_digest: operationPlanDigest("fresh-request-plan"),
+            status: "observed",
+            integrity: "verified",
+            residual_dependencies: [],
+            unobserved_dependencies: [],
+          }),
+        ]));
+        expect(JSON.stringify(combinedRecoveryInspection.body)).not.toContain("restore-review-plan");
+        expect(JSON.stringify(combinedRecoveryInspection.body)).not.toContain("fresh-request-plan");
+
+        const planInspectionStore = new OperationPlanStateStore(planStatePath);
+        try {
+          const currentCheckpoint = planInspectionStore.load();
+          if (!currentCheckpoint) throw new Error("Operation Plan checkpoint disappeared during the test");
+          const damagedCheckpoint = OperationPlanCheckpointSchema.parse({
+            ...currentCheckpoint,
+            plans: currentCheckpoint.plans.map((planState) => planState.revisions[0]?.plan.plan_id !== "restore-review-plan"
+              ? planState
+              : {
+                  ...planState,
+                  revisions: planState.revisions.map((revision, index) => index === 0
+                    ? { ...revision, digest: operationPlanDigest("synthetic-damaged-old-plan-revision") }
+                    : revision),
+                }),
+          });
+          planInspectionStore.compareAndSet(operationPlanDigest(currentCheckpoint), damagedCheckpoint);
+          expect(planInspectionStore.loadRecoveryHoldState()).toMatchObject({
+            holds: [{ plan_id_digest: planIdDigest, reason: "held_unverified" }],
+            used_for_authority: false,
+            may_execute: false,
+          });
+        } finally {
+          planInspectionStore.close();
+        }
+
+        const residualInspection = await requestJson(port, "/recovery/inspection", { token: maintenanceToken });
+        expect(residualInspection.status, gateway.output.join("")).toBe(200);
+        expect(residualInspection.body).toMatchObject({
+          ledgers: { operation_plans: "residuals_present" },
+          operation_plan_residual_count: 1,
+          used_for_authority: false,
+          may_execute: false,
+        });
+        const residualPlanScopes = (residualInspection.body.plan_dependency_scopes as Array<Record<string, unknown>>)
+          .filter((scope) => inspectedPlanDigests.includes(scope.plan_id_digest as string));
+        expect(residualPlanScopes).toHaveLength(2);
+        expect(residualPlanScopes).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            plan_id_digest: planIdDigest,
+            status: "residuals_present",
+            integrity: "residuals_present",
+            residual_dependencies: ["operation_plan"],
+          }),
+          expect.objectContaining({
+            plan_id_digest: operationPlanDigest("fresh-request-plan"),
+            status: "observed",
+            integrity: "verified",
+            residual_dependencies: [],
+            unobserved_dependencies: [],
+          }),
+        ]));
+        expect(JSON.stringify(residualInspection.body)).not.toContain("restore-review-plan");
+        expect(JSON.stringify(residualInspection.body)).not.toContain("fresh-request-plan");
       } finally {
         await syntheticProvider.close();
       }
