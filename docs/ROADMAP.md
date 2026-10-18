@@ -7,7 +7,7 @@
 | 工程 | 主な目的 | 状態 |
 |---|---|---|
 | QE_DESIGN | C/J/M、作用・記憶・外殻の全体設計 | 設計と現在コードの残差あり |
-| QE_BUILD | 一気通貫の全体系を先行実装 | 上記の計画・結果・作用基盤に、受領済みfile.search観測の限定C射影、J表示前引用照合、意味更新案v2のtarget record/version照合、単一宛先Gmail作用と結果不明のJ配送、J計画revision/statusの既存Control Center表示、合成loopback receiptのdigest-only非権威観測を接続。Developer HTTPからの合成runtime照合をbuild済みGateway smokeで確認し、Gmail送信承認では明示的な内容確認とpending command digest結合をBLUE WebChatに追加。WebChat接続成立時の認証済みRuntime Snapshot再取得と、chat socket／Gateway状態の表示分離も実装。2026-10-18にCron scheduleの安定event identity、private cursor、同一source直列consumerを部分接続し、schedule変更を同一commandのL3 final-review評価へ結合、永続storeを検証してからCronへ有効化する境界を部分接続。起動時の保存済み結果／M receipt照合が未解決なら通常inbound／Cron起動を止める障壁も部分接続。同日、常駐serve／CLIに同一state rootのSQLite process-exclusive owner lease、永続boot generation／execution epoch、Executorの承認・dispatch・receipt fenceを追加し、別processの二重ownerを限定fixtureで拒否。J/M/Broker ledgerとJ OperationPlan bindingをdigest-onlyで照合するread-only `--recovery-inspect` CLIも部分接続した。未決Cron eventとjob resultの相関、修復・独立backup照合・restoreを含むrecovery、未決結果のoperator UI、Windows ACL検査、実行中に渡した外部作用のfencing、network filesystem、approval lifecycleの再起動時照合、実provider receipt照会、D4Pocket画面接続、prior version、一般意味採用、全体系は未接続 |
+| QE_BUILD | 一気通貫の全体系を先行実装 | 上記の計画・結果・作用基盤に、受領済みfile.search観測の限定C射影、J表示前引用照合、意味更新案v2のtarget record/version照合、単一宛先Gmail作用と結果不明のJ配送、J計画revision/statusの既存Control Center表示、合成loopback receiptのdigest-only非権威観測を接続。Developer HTTPからの合成runtime照合をbuild済みGateway smokeで確認し、Gmail送信承認では明示的な内容確認とpending command digest結合をBLUE WebChatに追加。WebChat接続成立時の認証済みRuntime Snapshot再取得と、chat socket／Gateway状態の表示分離も実装。2026-10-18にCron scheduleの安定event identity、private cursor、同一source直列consumerを部分接続し、schedule変更を同一commandのL3 final-review評価へ結合、永続storeを検証してからCronへ有効化する境界を部分接続。起動時の保存済み結果／M receipt照合が未解決なら通常inbound／Cron起動を止める障壁も部分接続。同日、常駐serve／CLIに同一state rootのSQLite process-exclusive owner lease、永続boot generation／execution epoch、Executorの承認・dispatch・receipt fenceを追加し、別processの二重ownerを限定fixtureで拒否。J/M/Broker ledgerとJ OperationPlan bindingをdigest-onlyで照合するread-only `--recovery-inspect` CLIも部分接続した。未決Cron eventとjob resultの相関、修復・独立backup照合・restoreを含むrecovery、仕事別digest-only残差表示を超える回復操作UI、Windows ACL検査、実行中に渡した外部作用のfencing、network filesystem、approval lifecycleの再起動時照合、実provider receipt照会、D4Pocket画面接続、prior version、一般意味採用、全体系は未接続 |
 | SYSTEM_SHAPED | 試験仕事が目的→結果→M→復帰まで通る | 全体成立未確認 |
 | BUILD_COVERED | 全機能群の結合形状を確認 | 未成立 |
 | QE_QC | 実物の全体検査・欠陥・原因・改善・再検査 | 未着手 |
@@ -30,7 +30,7 @@
 
 198小単位（旧192＋Android/iOS各3）は実装索引であり、個別のQC/QAを198回行うための工程ではない。毎作業および各小単位の開始・切替・再開時に最新版の三点セットすべてと適用AGENTS.mdを読み直し、実際の仕事を先へつなぐBUILD_BATCHで施工・限定技術確認・Git保全を行う。
 
-2026-10-18のQEB-03-E03.03-OPERATOR-RECOVERY-INSPECTIONでは、既存Recovery面にmaintenance-token保護のread-only `GET /recovery/inspection`を追加し、J/M/Broker/OperationPlan診断の固定状態・残差件数をallowlistで表示した。権限・実行・復旧actionは行わず、再生checkpointをbackupと誤認させず、外部backup restore pointは`not_examined`のまま示す。Recovery surfaceへの診断投影が成立した部分接続であり、独立backupの確認、task別の復旧判断・restore・E03.03／QEB-03全体は`BUILD_GAP`。
+2026-10-18のQEB-03-E03.03-OPERATOR-RECOVERY-INSPECTIONでは、既存Recovery面にmaintenance-token保護のread-only `GET /recovery/inspection`を追加し、J/M/Broker/OperationPlan診断の固定状態・残差件数をallowlistで表示した。続くQEB-03-E03.03-OPERATOR-RESIDUAL-ISOLATIONでは、plan／step／commandとupdateの参照をSHA-256 digest、固定enum、最大200件のoperator projectionへ限定した。raw IDや内容を出さず、invalid boundaryでは明細を抑止する。両接続とも権限・実行・復旧actionを行わず、再生checkpointをbackupと誤認させず、外部backup restore pointは`not_examined`のまま示す。仕事別復旧操作、独立backupの確認・restore、E03.03／QEB-03全体は`BUILD_GAP`。
 
 ## 公開可能なBUILD_BATCHの順序案
 

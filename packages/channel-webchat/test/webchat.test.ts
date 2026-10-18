@@ -474,6 +474,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("inspect-recovery-ledgers");
       expect(html).toContain("/recovery/inspection");
       expect(html).toContain("recovery-inspection-json");
+      expect(html).toContain("operation_plan_correlations");
+      expect(html).toContain("update_residuals");
+      expect(html).toContain("仕事ごとの参照はdigestと固定状態だけ");
       expect(html).toContain("独立backup復元点は未検査です");
       expect(html).toContain("bt.recoveryToken");
       expect(html).toContain("/settings/config");
@@ -691,22 +694,35 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 3,
-            surface: "recovery_inspection",
+            schema_version: 1,
+            surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
             ledgers: {
-              j: { status: "verified" },
-              m: { status: "unavailable" },
-              execution: { status: "verified" },
-              operation_plans: { status: "residuals_present" },
+              j: "verified",
+              m: "unavailable",
+              broker: "verified",
+              operation_plans: "residuals_present",
             },
-            replay_checkpoint: null,
-            update_residuals: [],
+            replay_checkpoint: "not_verified",
+            operation_plan_correlations: [{
+              plan_id_digest: "a".repeat(64),
+              step_id_digest: "b".repeat(64),
+              command_id_digest: "c".repeat(64),
+              status: "outcome_unknown",
+              binding_integrity: "residuals_present",
+              admission_digest: "d".repeat(64),
+              broker_correlation: "not_found",
+              delivery_correlation: "not_observed",
+            }],
+            omitted_operation_plan_correlation_count: 0,
+            update_residuals: [{ update_id_digest: "e".repeat(64), disposition: "content_mismatch" }],
+            omitted_update_residual_count: 0,
             isolated_update_count: 0,
             execution_residual_count: 0,
             operation_plan_residual_count: 1,
             external_backup_restore_point: "not_examined",
+            boundary_valid: true,
             used_for_authority: false,
             may_execute: false,
             next_safe_action: "Preserve the stores.",
@@ -752,7 +768,7 @@ describe("WebChatChannel — Recovery surface", () => {
       expect(inspection.status).toBe(200);
       expect(inspection.headers.get("cache-control")).toBe("no-store");
       expect(JSON.parse(inspection.text)).toMatchObject({
-        surface: "recovery_inspection",
+        surface: "recovery_inspection_operator",
         mode: "read_only",
         status: "residuals_present",
         operation_plan_residual_count: 1,

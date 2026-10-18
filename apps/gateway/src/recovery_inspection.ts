@@ -92,6 +92,161 @@ export interface OperationPlanBrokerCorrelation {
     | "not_observed";
 }
 
+export interface GatewayRecoveryOperatorProjection {
+  readonly schema_version: 1;
+  readonly surface: "recovery_inspection_operator";
+  readonly mode: "read_only";
+  readonly status: "verified" | "residuals_present" | "invalid_report";
+  readonly ledgers: {
+    readonly j: string;
+    readonly m: string;
+    readonly broker: string;
+    readonly operation_plans: string;
+  };
+  readonly replay_checkpoint: "verified_replay_checkpoint_not_backup" | "not_verified";
+  readonly isolated_update_count: number;
+  readonly execution_residual_count: number;
+  readonly operation_plan_residual_count: number;
+  readonly operation_plan_correlations: readonly {
+    readonly plan_id_digest: string;
+    readonly step_id_digest: string;
+    readonly command_id_digest: string;
+    readonly status: OperationPlanBindingStatus;
+    readonly binding_integrity: "verified" | "residuals_present";
+    readonly admission_digest: string | null;
+    readonly broker_correlation: OperationPlanBrokerCorrelation["broker_correlation"];
+    readonly delivery_correlation: OperationPlanBrokerCorrelation["delivery_correlation"];
+  }[];
+  readonly omitted_operation_plan_correlation_count: number;
+  readonly update_residuals: readonly RecoveryUpdateResidual[];
+  readonly omitted_update_residual_count: number;
+  readonly external_backup_restore_point: "not_examined";
+  readonly boundary_valid: boolean;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
+const OPERATOR_RECORD_LIMIT = 200;
+const HEX_DIGEST = /^[0-9a-f]{64}$/i;
+const OPERATION_PLAN_STATUSES: readonly OperationPlanBindingStatus[] = [
+  "selected", "intent_committed", "verified", "outcome_unknown", "verification_failed", "not_attempted", "invalidated",
+];
+const UPDATE_DISPOSITIONS: readonly RecoveryUpdateResidual["disposition"][] = [
+  "paired", "pending_m_commit", "pending_j_receipt", "missing_verified_j_link", "missing_verified_m_link",
+  "content_mismatch", "event_identity_mismatch", "revision_mismatch", "receipt_mismatch",
+  "m_present_for_blocked_j", "blocked_j", "m_state_unverified", "j_state_unverified",
+];
+const BROKER_CORRELATIONS: readonly OperationPlanBrokerCorrelation["broker_correlation"][] = [
+  "matched", "not_admitted", "admission_missing", "not_found", "not_observed_due_to_limit", "ambiguous",
+  "broker_unverified", "j_binding_unverified",
+];
+const DELIVERY_CORRELATIONS: readonly OperationPlanBrokerCorrelation["delivery_correlation"][] = [
+  "matched", "not_recorded", "j_not_recorded", "broker_not_recorded", "mismatch", "not_observed",
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function fixedEnum<T extends string>(value: unknown, allowed: readonly T[]): T | null {
+  return typeof value === "string" && allowed.includes(value as T) ? value as T : null;
+}
+
+function fixedDigest(value: unknown): string | null {
+  return typeof value === "string" && HEX_DIGEST.test(value) ? value.toLowerCase() : null;
+}
+
+function fixedCount(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function projectOperatorOperationPlanCorrelations(
+  values: readonly unknown[],
+  enabled: boolean,
+): { rows: GatewayRecoveryOperatorProjection["operation_plan_correlations"]; omitted: number } {
+  const rows: NonNullable<GatewayRecoveryOperatorProjection["operation_plan_correlations"]>[number][] = [];
+  for (const value of enabled ? values.slice(0, OPERATOR_RECORD_LIMIT) : []) {
+    if (!isRecord(value)) continue;
+    const planIdDigest = fixedDigest(value.plan_id_digest);
+    const stepIdDigest = fixedDigest(value.step_id_digest);
+    const commandIdDigest = fixedDigest(value.command_id_digest);
+    const status = fixedEnum(value.status, OPERATION_PLAN_STATUSES);
+    const bindingIntegrity = fixedEnum(value.binding_integrity, ["verified", "residuals_present"] as const);
+    const admissionDigest = value.admission_digest === null ? null : fixedDigest(value.admission_digest);
+    const brokerCorrelation = fixedEnum(value.broker_correlation, BROKER_CORRELATIONS);
+    const deliveryCorrelation = fixedEnum(value.delivery_correlation, DELIVERY_CORRELATIONS);
+    if (!planIdDigest || !stepIdDigest || !commandIdDigest || !status || !bindingIntegrity ||
+        (value.admission_digest !== null && !admissionDigest) || !brokerCorrelation || !deliveryCorrelation) continue;
+    rows.push({
+      plan_id_digest: planIdDigest,
+      step_id_digest: stepIdDigest,
+      command_id_digest: commandIdDigest,
+      status,
+      binding_integrity: bindingIntegrity,
+      admission_digest: admissionDigest,
+      broker_correlation: brokerCorrelation,
+      delivery_correlation: deliveryCorrelation,
+    });
+  }
+  return { rows, omitted: values.length - rows.length };
+}
+
+function projectOperatorUpdateResiduals(
+  values: readonly unknown[],
+  enabled: boolean,
+): { rows: GatewayRecoveryOperatorProjection["update_residuals"]; omitted: number } {
+  const rows: RecoveryUpdateResidual[] = [];
+  for (const value of enabled ? values.slice(0, OPERATOR_RECORD_LIMIT) : []) {
+    if (!isRecord(value)) continue;
+    const updateIdDigest = fixedDigest(value.update_id_digest);
+    const disposition = fixedEnum(value.disposition, UPDATE_DISPOSITIONS);
+    if (!updateIdDigest || !disposition) continue;
+    rows.push({ update_id_digest: updateIdDigest, disposition });
+  }
+  return { rows, omitted: values.length - rows.length };
+}
+
+/** Whitelist a digest-only recovery report before exposing per-work residuals to an operator surface. */
+export function projectGatewayRecoveryInspectionForOperator(value: unknown): GatewayRecoveryOperatorProjection {
+  const source = isRecord(value) ? value : {};
+  const ledgers = isRecord(source.ledgers) ? source.ledgers : {};
+  const reportShapeValid = source.schema_version === 3 && source.surface === "recovery_inspection" && source.mode === "read_only";
+  const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false;
+  const sourceStatus = fixedEnum(source.status, ["verified", "residuals_present"] as const);
+  const operationPlanSources = Array.isArray(source.operation_plan_correlations) ? source.operation_plan_correlations : [];
+  const updateSources = Array.isArray(source.update_residuals) ? source.update_residuals : [];
+  const operationPlans = projectOperatorOperationPlanCorrelations(operationPlanSources, boundaryValid);
+  const updates = projectOperatorUpdateResiduals(updateSources, boundaryValid);
+  const ledgerStatuses = ["verified", "projection_mismatch", "corrupt", "residuals_present", "unavailable", "schema_mismatch"] as const;
+  return {
+    schema_version: 1,
+    surface: "recovery_inspection_operator",
+    mode: "read_only",
+    status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
+    ledgers: {
+      j: fixedEnum(isRecord(ledgers.j) ? ledgers.j.status : null, ledgerStatuses) ?? "unknown",
+      m: fixedEnum(isRecord(ledgers.m) ? ledgers.m.status : null, ledgerStatuses) ?? "unknown",
+      broker: fixedEnum(isRecord(ledgers.execution) ? ledgers.execution.status : null, ledgerStatuses) ?? "unknown",
+      operation_plans: fixedEnum(isRecord(ledgers.operation_plans) ? ledgers.operation_plans.status : null, ledgerStatuses) ?? "unknown",
+    },
+    replay_checkpoint: boundaryValid && isRecord(source.replay_checkpoint) &&
+        source.replay_checkpoint.verified === true && source.replay_checkpoint.kind === "canonical_replay_checkpoint_not_backup"
+      ? "verified_replay_checkpoint_not_backup"
+      : "not_verified",
+    isolated_update_count: fixedCount(source.isolated_update_count),
+    execution_residual_count: fixedCount(source.execution_residual_count),
+    operation_plan_residual_count: fixedCount(source.operation_plan_residual_count),
+    operation_plan_correlations: operationPlans.rows,
+    omitted_operation_plan_correlation_count: operationPlans.omitted,
+    update_residuals: updates.rows,
+    omitted_update_residual_count: updates.omitted,
+    external_backup_restore_point: "not_examined",
+    boundary_valid: boundaryValid,
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
 interface StateDatabasePaths {
   readonly privateRoot: string;
   readonly jPath: string | null;

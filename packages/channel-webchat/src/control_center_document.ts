@@ -466,7 +466,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="inspect-recovery-ledgers" type="button">回復台帳を読み取り検査</button>
             <span id="recovery-inspection-status" class="badge warn">未確認</span>
           </div>
-          <p class="muted">読み取り専用の診断です。権限・実行・復旧は行いません。再生checkpointはbackupではなく、独立backup復元点は未検査です。</p>
+          <p class="muted">読み取り専用の診断です。権限・実行・復旧は行いません。仕事ごとの参照はdigestと固定状態だけを表示します。再生checkpointはbackupではなく、独立backup復元点は未検査です。</p>
           <pre id="recovery-inspection-json">未確認</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls.</p></div>

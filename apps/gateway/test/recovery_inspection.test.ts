@@ -4,7 +4,11 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { correlateRecoveryUpdates, inspectGatewayRecoveryState } from "../src/recovery_inspection.js";
+import {
+  correlateRecoveryUpdates,
+  inspectGatewayRecoveryState,
+  projectGatewayRecoveryInspectionForOperator,
+} from "../src/recovery_inspection.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import type { PersistenceLedgerInspection, PersistenceLedgerInspectionUpdate } from "@blue-tanuki/hds-brain";
 
@@ -210,6 +214,126 @@ describe("Gateway read-only recovery inspection", () => {
       .toEqual([{ update_id_digest: "a".repeat(64), disposition: "missing_verified_j_link" }]);
     expect(correlateRecoveryUpdates(ledgerInspection("J", [jPending]), ledgerInspection("M", [{ ...mCommit, content_digest: "e".repeat(64) }])))
       .toEqual([{ update_id_digest: "a".repeat(64), disposition: "content_mismatch" }]);
+  });
+});
+
+describe("Gateway recovery operator projection", () => {
+  it("retains digest-keyed residual rows while omitting raw identifiers and unrelated fields", () => {
+    const report = {
+      schema_version: 3,
+      surface: "recovery_inspection",
+      mode: "read_only",
+      status: "residuals_present",
+      ledgers: {
+        j: { status: "verified" },
+        m: { status: "projection_mismatch" },
+        execution: { status: "verified" },
+        operation_plans: { status: "residuals_present" },
+      },
+      replay_checkpoint: null,
+      operation_plan_correlations: [{
+        plan_id_digest: "a".repeat(64),
+        step_id_digest: "b".repeat(64),
+        command_id_digest: "c".repeat(64),
+        status: "outcome_unknown",
+        binding_integrity: "residuals_present",
+        admission_digest: "d".repeat(64),
+        broker_correlation: "not_found",
+        delivery_correlation: "not_observed",
+        command_id: "RAW_COMMAND_SENTINEL",
+        ticket_id: "RAW_TICKET_SENTINEL",
+      }],
+      update_residuals: [{
+        update_id_digest: "e".repeat(64),
+        disposition: "content_mismatch",
+        update_id: "RAW_UPDATE_SENTINEL",
+      }],
+      isolated_update_count: 1,
+      execution_residual_count: 0,
+      operation_plan_residual_count: 1,
+      external_backup_restore_point: "not_examined",
+      used_for_authority: false,
+      may_execute: false,
+      next_safe_action: "RAW_ACTION_SENTINEL",
+      database_path: "C:\\private\\state.sqlite",
+    };
+
+    const projection = projectGatewayRecoveryInspectionForOperator(report);
+    expect(projection).toMatchObject({
+      surface: "recovery_inspection_operator",
+      mode: "read_only",
+      status: "residuals_present",
+      ledgers: { j: "verified", m: "projection_mismatch", broker: "verified", operation_plans: "residuals_present" },
+      operation_plan_correlations: [{
+        plan_id_digest: "a".repeat(64),
+        step_id_digest: "b".repeat(64),
+        command_id_digest: "c".repeat(64),
+        status: "outcome_unknown",
+        binding_integrity: "residuals_present",
+        admission_digest: "d".repeat(64),
+        broker_correlation: "not_found",
+        delivery_correlation: "not_observed",
+      }],
+      omitted_operation_plan_correlation_count: 0,
+      update_residuals: [{ update_id_digest: "e".repeat(64), disposition: "content_mismatch" }],
+      omitted_update_residual_count: 0,
+      external_backup_restore_point: "not_examined",
+      boundary_valid: true,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    const serialized = JSON.stringify(projection);
+    for (const sentinel of ["RAW_COMMAND_SENTINEL", "RAW_TICKET_SENTINEL", "RAW_UPDATE_SENTINEL", "RAW_ACTION_SENTINEL", "private\\state.sqlite"]) {
+      expect(serialized).not.toContain(sentinel);
+    }
+  });
+
+  it("caps operator rows and suppresses records when the source report boundary is invalid", () => {
+    const row = {
+      plan_id_digest: "a".repeat(64),
+      step_id_digest: "b".repeat(64),
+      command_id_digest: "c".repeat(64),
+      status: "not_attempted",
+      binding_integrity: "verified",
+      admission_digest: null,
+      broker_correlation: "not_admitted",
+      delivery_correlation: "not_recorded",
+    };
+    const update = { update_id_digest: "e".repeat(64), disposition: "blocked_j" };
+    const capped = projectGatewayRecoveryInspectionForOperator({
+      schema_version: 3,
+      surface: "recovery_inspection",
+      mode: "read_only",
+      status: "residuals_present",
+      ledgers: {},
+      replay_checkpoint: null,
+      operation_plan_correlations: Array.from({ length: 201 }, () => row),
+      update_residuals: Array.from({ length: 201 }, () => update),
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(capped.operation_plan_correlations).toHaveLength(200);
+    expect(capped.omitted_operation_plan_correlation_count).toBe(1);
+    expect(capped.update_residuals).toHaveLength(200);
+    expect(capped.omitted_update_residual_count).toBe(1);
+
+    const invalid = projectGatewayRecoveryInspectionForOperator({
+      schema_version: 3,
+      surface: "recovery_inspection",
+      mode: "read_only",
+      status: "verified",
+      ledgers: {},
+      operation_plan_correlations: [row],
+      update_residuals: [update],
+      used_for_authority: true,
+      may_execute: false,
+    });
+    expect(invalid.status).toBe("invalid_report");
+    expect(invalid.boundary_valid).toBe(false);
+    expect(invalid.operation_plan_correlations).toEqual([]);
+    expect(invalid.update_residuals).toEqual([]);
+    expect(invalid.omitted_operation_plan_correlation_count).toBe(1);
+    expect(invalid.omitted_update_residual_count).toBe(1);
   });
 });
 

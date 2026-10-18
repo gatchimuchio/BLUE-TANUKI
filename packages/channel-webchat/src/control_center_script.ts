@@ -1500,29 +1500,75 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return Number.isSafeInteger(value) && value >= 0 ? value : 0;
       }
 
+      function recoveryInspectionDigest(value) {
+        return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : null;
+      }
+
+      function recoveryInspectionLedgerStatus(value, allowed) {
+        const status = typeof value === "string" ? value : value && typeof value === "object" ? value.status : null;
+        return recoveryInspectionEnum(status, allowed);
+      }
+
       function renderRecoveryInspection(report) {
         const source = report && typeof report === "object" ? report : {};
         const ledgers = source.ledgers && typeof source.ledgers === "object" ? source.ledgers : {};
-        const boundaryOk = source.used_for_authority === false && source.may_execute === false;
+        const boundaryOk = source.schema_version === 1 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true;
         const status = boundaryOk
-          ? recoveryInspectionEnum(source.status, ["verified", "residuals_present"])
+          ? recoveryInspectionEnum(source.status, ["verified", "residuals_present", "invalid_report"])
           : "invalid_report";
+        const planCorrelations = Array.isArray(source.operation_plan_correlations)
+          ? source.operation_plan_correlations.slice(0, 200).map(function (item) {
+              const value = item && typeof item === "object" ? item : {};
+              const planIdDigest = recoveryInspectionDigest(value.plan_id_digest);
+              const stepIdDigest = recoveryInspectionDigest(value.step_id_digest);
+              const commandIdDigest = recoveryInspectionDigest(value.command_id_digest);
+              const admissionDigest = value.admission_digest === null ? null : recoveryInspectionDigest(value.admission_digest);
+              const bindingStatus = recoveryInspectionEnum(value.status, ["selected", "intent_committed", "verified", "outcome_unknown", "verification_failed", "not_attempted", "invalidated"]);
+              const bindingIntegrity = recoveryInspectionEnum(value.binding_integrity, ["verified", "residuals_present"]);
+              const brokerCorrelation = recoveryInspectionEnum(value.broker_correlation, ["matched", "not_admitted", "admission_missing", "not_found", "not_observed_due_to_limit", "ambiguous", "broker_unverified", "j_binding_unverified"]);
+              const deliveryCorrelation = recoveryInspectionEnum(value.delivery_correlation, ["matched", "not_recorded", "j_not_recorded", "broker_not_recorded", "mismatch", "not_observed"]);
+              if (!planIdDigest || !stepIdDigest || !commandIdDigest || (value.admission_digest !== null && !admissionDigest) || bindingStatus === "unknown" || bindingIntegrity === "unknown" || brokerCorrelation === "unknown" || deliveryCorrelation === "unknown") return null;
+              return {
+                plan_id_digest: planIdDigest,
+                step_id_digest: stepIdDigest,
+                command_id_digest: commandIdDigest,
+                status: bindingStatus,
+                binding_integrity: bindingIntegrity,
+                admission_digest: admissionDigest,
+                broker_correlation: brokerCorrelation,
+                delivery_correlation: deliveryCorrelation
+              };
+            }).filter(function (item) { return item !== null; })
+          : [];
+        const updateResiduals = Array.isArray(source.update_residuals)
+          ? source.update_residuals.slice(0, 200).map(function (item) {
+              const value = item && typeof item === "object" ? item : {};
+              const updateIdDigest = recoveryInspectionDigest(value.update_id_digest);
+              const disposition = recoveryInspectionEnum(value.disposition, ["paired", "pending_m_commit", "pending_j_receipt", "missing_verified_j_link", "missing_verified_m_link", "content_mismatch", "event_identity_mismatch", "revision_mismatch", "receipt_mismatch", "m_present_for_blocked_j", "blocked_j", "m_state_unverified", "j_state_unverified"]);
+              return updateIdDigest && disposition !== "unknown" ? { update_id_digest: updateIdDigest, disposition: disposition } : null;
+            }).filter(function (item) { return item !== null; })
+          : [];
         const projection = {
           mode: recoveryInspectionEnum(source.mode, ["read_only"]),
           status,
           ledgers: {
-            j: recoveryInspectionEnum(ledgers.j && ledgers.j.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
-            m: recoveryInspectionEnum(ledgers.m && ledgers.m.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
-            broker: recoveryInspectionEnum(ledgers.execution && ledgers.execution.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
-            operation_plans: recoveryInspectionEnum(ledgers.operation_plans && ledgers.operation_plans.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"])
+            j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
+            m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
+            broker: recoveryInspectionLedgerStatus(ledgers.broker, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
+            operation_plans: recoveryInspectionLedgerStatus(ledgers.operation_plans, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"])
           },
-          replay_checkpoint: source.replay_checkpoint && source.replay_checkpoint.verified === true
+          replay_checkpoint: source.replay_checkpoint === "verified_replay_checkpoint_not_backup"
             ? "verified_replay_checkpoint_not_backup"
             : "not_verified",
           isolated_update_count: recoveryInspectionCount(source.isolated_update_count),
           execution_residual_count: recoveryInspectionCount(source.execution_residual_count),
           operation_plan_residual_count: recoveryInspectionCount(source.operation_plan_residual_count),
+          operation_plan_correlations: planCorrelations,
+          omitted_operation_plan_correlation_count: recoveryInspectionCount(source.omitted_operation_plan_correlation_count),
+          update_residuals: updateResiduals,
+          omitted_update_residual_count: recoveryInspectionCount(source.omitted_update_residual_count),
           external_backup_restore_point: recoveryInspectionEnum(source.external_backup_restore_point, ["not_examined"]),
+          boundary_valid: boundaryOk,
           used_for_authority: false,
           may_execute: false
         };
