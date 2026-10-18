@@ -80,16 +80,72 @@ function selectedStoreRestoreHistory(stateDigest: string): RecoveryHistoryEviden
   ];
 }
 
-async function createOperationPlanStore(stateRoot: string): Promise<string> {
+async function createOperationPlanStore(stateRoot: string, plans: unknown[] = []): Promise<string> {
   const databasePath = path.join(stateRoot, "private-state", "operation-plans", "j-state.sqlite");
   await mkdir(path.dirname(databasePath), { recursive: true });
   const store = new OperationPlanStateStore(databasePath);
   store.compareAndSet(null, OperationPlanCheckpointSchema.parse({
     schema_version: "operation-plan-state.v1",
-    plans: [],
+    plans,
   }));
   store.close();
   return databasePath;
+}
+
+function recoveryObservationPlanState(planId: string, withResidualBinding: boolean): unknown {
+  const requestId = `private-request-${planId}`;
+  const step = {
+    step_id: `private-step-${planId}`,
+    operation: "file.search",
+    target: { kind: "directory" as const, id: "private-workspace" },
+    state: "planned" as const,
+    effects: ["read" as const],
+    permission: {
+      risk: "low" as const,
+      approval_level: "L1_observe" as const,
+      final_review_required: false,
+      hds_brain_authority_required: true as const,
+      approval_gate_required: true,
+    },
+    adapter: "internal_runtime" as const,
+    adapter_is_authority: false as const,
+    command_generated_by_adapter_only: false,
+  };
+  const plan = {
+    version: "operation-core.v1" as const,
+    plan_id: planId,
+    request_id: requestId,
+    state: "planned" as const,
+    steps: [step],
+    rollback: { available: false },
+    raw_command_policy: { raw_command_is_core_operation: false as const, command_generation_location: "not_applicable" as const },
+    planner_output_used_for_authority: false as const,
+    hds_brain_authority_required: true as const,
+  };
+  const revisionDigest = operationPlanDigest(plan);
+  const { state: _state, ...stepDefinition } = step;
+  const bindings = withResidualBinding ? [{
+    step_id: step.step_id,
+    revision_digest: revisionDigest,
+    step_digest: operationPlanDigest(stepDefinition),
+    prepared_step: step,
+    command_id: `private-command-${planId}`,
+    request_id: requestId,
+    commit_hash: "private-commit",
+    payload_digest: digest("c"),
+    command_digest: digest("d"),
+    operation: step.operation,
+    status: "intent_committed" as const,
+  }] : [];
+  return {
+    owner: "private-owner",
+    channel: "webchat",
+    goal: "private recovery observation goal",
+    revisions: [{ digest: revisionDigest, plan }],
+    receipt_observations: [],
+    bindings,
+    results: [],
+  };
 }
 
 async function sha256File(filePath: string): Promise<string> {
@@ -262,7 +318,10 @@ describe("buildRecoveryPostActionObservation", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-restore-reobserve-"));
     try {
       const stateRoot = path.join(root, "state");
-      const storePath = await createOperationPlanStore(stateRoot);
+      const storePath = await createOperationPlanStore(stateRoot, [
+        recoveryObservationPlanState("private-clean-plan", false),
+        recoveryObservationPlanState("private-residual-plan", true),
+      ]);
       await writeFile(path.join(stateRoot, "private-state", "execution-intents"), "unselected sibling store", "utf8");
       const restoredStateDigest = await sha256File(storePath);
       const history = {
@@ -285,17 +344,29 @@ describe("buildRecoveryPostActionObservation", () => {
         operation: "restore",
         store_key: "operation_plans",
         evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
-        store_ledger_status: "verified",
-        store_ledger_residual_count: 0,
+        store_ledger_status: "residuals_present",
+        store_ledger_residual_count: 1,
+        plan_residuals: [
+          { status: "verified", binding_count: 0, residual_binding_count: 0, omitted_binding_count: 0 },
+          { status: "residuals_present", binding_count: 1, residual_binding_count: 1, omitted_binding_count: 0 },
+        ],
         used_for_authority: false,
         may_execute: false,
       });
+      expect(matched.plan_residuals?.map((plan) => plan.plan_id_digest)).toEqual([
+        operationPlanDigest("private-clean-plan"), operationPlanDigest("private-residual-plan"),
+      ]);
       expect(await readFile(storePath)).toEqual(originalBytes);
       expect(JSON.stringify(matched)).not.toContain(storePath);
+      for (const secret of ["private-owner", "private recovery observation goal", "private-clean-plan", "private-residual-plan",
+        "private-request-private-clean-plan", "private-command-private-residual-plan"]) {
+        expect(JSON.stringify(matched)).not.toContain(secret);
+      }
 
       const database: DatabaseSyncType = new DatabaseSync(storePath);
-      database.prepare("UPDATE operation_plan_state SET checkpoint_json=? WHERE id=1")
-        .run('{ "schema_version": "operation-plan-state.v1", "plans": [] }');
+      const emptyCheckpoint = { schema_version: "operation-plan-state.v1", plans: [] };
+      database.prepare("UPDATE operation_plan_state SET checkpoint_json=?,digest=? WHERE id=1")
+        .run(JSON.stringify(emptyCheckpoint), operationPlanDigest(emptyCheckpoint));
       database.close();
       const changedBytes = await readFile(storePath);
       const changed = await buildRecoveryPostActionObservation(history, { BLUE_TANUKI_STATE_ROOT: stateRoot });
@@ -306,6 +377,7 @@ describe("buildRecoveryPostActionObservation", () => {
         store_key: "operation_plans",
         store_ledger_status: "verified",
         store_ledger_residual_count: 0,
+        plan_residuals: [],
       });
       expect(await readFile(storePath)).toEqual(changedBytes);
 
@@ -319,6 +391,7 @@ describe("buildRecoveryPostActionObservation", () => {
         status: "changed",
         store_ledger_status: "schema_mismatch",
         store_ledger_residual_count: 1,
+        plan_residuals: null,
       });
     } finally {
       await rm(root, { recursive: true, force: true });

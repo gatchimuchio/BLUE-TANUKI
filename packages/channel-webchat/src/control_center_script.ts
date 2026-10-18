@@ -1481,6 +1481,28 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("update-json", compactJson(redactRuntimeValue(result)));
       }
 
+      function formatRecoveryPostActionPlanResiduals(observation) {
+        if (!observation || observation.operation !== "restore" || observation.store_key !== "operation_plans" ||
+            !Array.isArray(observation.plan_residuals) || observation.plan_residuals.length > 64) return "未観測";
+        const seen = new Set();
+        const rows = [];
+        for (const item of observation.plan_residuals) {
+          if (!item || typeof item !== "object" || typeof item.plan_id_digest !== "string" ||
+              !/^[a-f0-9]{64}$/.test(item.plan_id_digest) ||
+              !["verified", "residuals_present"].includes(item.status) ||
+              !Number.isSafeInteger(item.binding_count) || item.binding_count < 0 ||
+              !Number.isSafeInteger(item.residual_binding_count) || item.residual_binding_count < 0 ||
+              !Number.isSafeInteger(item.omitted_binding_count) || item.omitted_binding_count < 0 ||
+              item.residual_binding_count > item.binding_count || item.omitted_binding_count > item.binding_count ||
+              seen.has(item.plan_id_digest)) return "未確認（表示を抑止）";
+          seen.add(item.plan_id_digest);
+          rows.push("計画digest " + item.plan_id_digest.slice(0, 12) + "・計画内検査: " +
+            (item.status === "verified" ? "検証済み" : "残差あり") + "・binding " + item.binding_count +
+            "・残差binding " + item.residual_binding_count + "・未表示binding " + item.omitted_binding_count);
+        }
+        return rows.length > 0 ? rows.join("\\n") : "対象計画なし";
+      }
+
       function renderRecoverySnapshot(snapshot) {
         const envFile = snapshot.env_file || {};
         const packs = snapshot.recovery_backups || {};
@@ -1553,6 +1575,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         setText("recovery-post-action-observation", observationLabel);
         byId("recovery-post-action-observation").className = "badge " + observationTone;
+        setText("recovery-post-action-plan-residuals", formatRecoveryPostActionPlanResiduals(observation));
         setText("recovery-env-file-status", envFile.exists ? "present" : envFile.configured ? "missing" : "not configured");
         setText("recovery-env-backup-count", envFile.backup_count ?? 0);
         setText("recovery-pack-count", packs.backup_count ?? 0);

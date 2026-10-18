@@ -20,6 +20,7 @@ import {
   inspectCanonicalStateStoreLedger,
   inspectGatewayRecoveryCanonicalArchive,
   type RecoveryPlanDependencyCategory,
+  type RecoverySelectedPlanResidualObservation,
   type RecoverySelectedStoreLedgerStatus,
 } from "./recovery_inspection.js";
 
@@ -106,6 +107,7 @@ export interface RecoveryPostActionObservation {
   result_digest: string | null;
   store_ledger_status: RecoverySelectedStoreLedgerStatus | null;
   store_ledger_residual_count: number | null;
+  plan_residuals: readonly RecoverySelectedPlanResidualObservation[] | null;
   configuration_state:
     | "provider_stub"
     | "connector_dry_run"
@@ -1620,6 +1622,7 @@ function noRecoveryActionObservation(
     result_digest: null,
     store_ledger_status: null,
     store_ledger_residual_count: null,
+    plan_residuals: null,
     configuration_state: "not_observed",
     evidence_source: "NONE",
     used_for_authority: false,
@@ -1692,6 +1695,7 @@ export async function buildRecoveryPostActionObservation(
     result_digest: latest.resultDigest,
     store_ledger_status: null,
     store_ledger_residual_count: null,
+    plan_residuals: null,
     configuration_state: "not_observed",
     evidence_source: "COMPLETE_HISTORY",
     used_for_authority: false,
@@ -1771,6 +1775,7 @@ export async function buildRecoveryPostActionObservation(
       store_key: restoreEvidence.store_key,
       store_ledger_status: storeLedger.status,
       store_ledger_residual_count: storeLedger.residual_count,
+      plan_residuals: restoreEvidence.store_key === "operation_plans" ? storeLedger.plan_residuals : null,
       evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
     };
   }

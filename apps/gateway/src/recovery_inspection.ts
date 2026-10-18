@@ -1178,14 +1178,24 @@ export type RecoverySelectedStoreLedgerStatus =
 export interface RecoverySelectedStoreLedgerObservation {
   readonly status: RecoverySelectedStoreLedgerStatus;
   readonly residual_count: number | null;
+  readonly plan_residuals: readonly RecoverySelectedPlanResidualObservation[] | null;
   readonly used_for_authority: false;
   readonly may_execute: false;
+}
+
+export interface RecoverySelectedPlanResidualObservation {
+  readonly plan_id_digest: string;
+  readonly status: "verified" | "residuals_present";
+  readonly binding_count: number;
+  readonly residual_binding_count: number;
+  readonly omitted_binding_count: number;
 }
 
 function selectedLedgerObservation(
   status: string,
   reason: string | null,
   residualCount: number | null,
+  planResiduals: readonly RecoverySelectedPlanResidualObservation[] | null = null,
 ): RecoverySelectedStoreLedgerObservation {
   const normalizedStatus: RecoverySelectedStoreLedgerStatus = status === "projection_mismatch"
     ? "projection_mismatch"
@@ -1208,6 +1218,7 @@ function selectedLedgerObservation(
   return {
     status: normalizedStatus,
     residual_count: normalizedStatus === "unavailable" ? null : count,
+    plan_residuals: planResiduals,
     used_for_authority: false,
     may_execute: false,
   };
@@ -1260,7 +1271,16 @@ export function inspectCanonicalStateStoreLedger(
       const residualCount = inspection.status === "unavailable"
         ? null
         : inspection.plan_integrity_residual_count + inspection.residual_binding_count + inspection.unverified_memory_link_count;
-      return selectedLedgerObservation(inspection.status, inspection.reason, residualCount);
+      const planResiduals = inspection.status === "verified" || inspection.status === "residuals_present"
+        ? inspection.plans.map((plan): RecoverySelectedPlanResidualObservation => ({
+            plan_id_digest: plan.plan_id_digest,
+            status: plan.integrity,
+            binding_count: plan.binding_count,
+            residual_binding_count: plan.residual_binding_count,
+            omitted_binding_count: plan.omitted_binding_count,
+          }))
+        : null;
+      return selectedLedgerObservation(inspection.status, inspection.reason, residualCount, planResiduals);
     }
     case "cron_events": {
       const inspection = inspectCronEventRecoveryLedger({ private_state_root: privateRoot, database_path: databasePath });

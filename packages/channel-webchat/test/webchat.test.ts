@@ -366,6 +366,32 @@ describe("WebChatChannel — construction", () => {
 });
 
 describe("WebChatChannel — Control Center shell", () => {
+  it("renders only bounded Operation Plan digests, fixed statuses, and residual counts after selected-store restore", () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function formatRecoveryPostActionPlanResiduals(");
+    const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
+    const end = next < 0 ? CONTROL_CENTER_SCRIPT.length : next;
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const formatter = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    const evaluate = (observation: unknown) => new Script(`${formatter}\nformatRecoveryPostActionPlanResiduals(observation)`)
+      .runInNewContext({ observation }) as string;
+    const observation = {
+      operation: "restore",
+      store_key: "operation_plans",
+      plan_residuals: [
+        { plan_id_digest: "a".repeat(64), status: "verified", binding_count: 1, residual_binding_count: 0, omitted_binding_count: 0 },
+        { plan_id_digest: "b".repeat(64), status: "residuals_present", binding_count: 3, residual_binding_count: 2, omitted_binding_count: 1 },
+      ],
+    };
+    const text = evaluate(observation);
+    expect(text).toContain("計画digest aaaaaaaaaaaa・計画内検査: 検証済み・binding 1・残差binding 0・未表示binding 0");
+    expect(text).toContain("計画digest bbbbbbbbbbbb・計画内検査: 残差あり・binding 3・残差binding 2・未表示binding 1");
+    expect(text.split("\n")).toHaveLength(2);
+    expect(evaluate({ ...observation, store_key: "broker" })).toBe("未観測");
+    expect(evaluate({ ...observation, plan_residuals: [{ ...observation.plan_residuals[0], plan_id_digest: "raw-plan-id" }] }))
+      .toBe("未確認（表示を抑止）");
+  });
+
   it("projects only verified scope-applicability enums and digest fields", () => {
     const functionSource = (name: string): string => {
       const start = CONTROL_CENTER_SCRIPT.indexOf(`function ${name}(`);
@@ -816,6 +842,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("recovery-token");
       expect(html).toContain("load-recovery");
       expect(html).toContain("recovery-post-action-observation");
+      expect(html).toContain("recovery-post-action-plan-residuals");
+      expect(html).toContain("選択store内の計画別台帳検査");
       expect(html).toContain("復元直後の状態と一致");
       expect(html).toContain("復元後に状態変更を観測");
       expect(html).toContain("復元状態と不一致");
