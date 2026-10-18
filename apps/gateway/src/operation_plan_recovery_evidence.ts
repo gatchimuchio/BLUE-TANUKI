@@ -16,6 +16,7 @@ function unverifiedHistoryEvidence(
       operation_digest: observation?.operation_digest ?? null,
       result_digest: observation?.result_digest ?? null,
       restore_backup_id_digest: observation?.restore_backup_id_digest ?? null,
+      restore_scope_plan_digest: observation?.restore_scope_plan_digest ?? null,
       restored_state_digest: observation?.restored_state_digest ?? null,
     },
     plans: [],
@@ -40,6 +41,9 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
   if (observation.operation !== "restore") return undefined;
   if (observation.store_key !== "operation_plans") return observation.store_key === null
     ? unverifiedHistoryEvidence(checkpointDigest, observation) : undefined;
+  if (!observation.restore_scope_plan_digest || !/^[a-f0-9]{64}$/.test(observation.restore_scope_plan_digest)) {
+    return unverifiedHistoryEvidence(checkpointDigest, observation);
+  }
 
   const evidencePlans = plans.map((planState) => {
     const planIdDigest = operationPlanDigest(planState.revisions[0]!.plan.plan_id);
@@ -73,7 +77,13 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
       dependencyStatus = "observed";
     }
 
-    return { plan_id_digest: planIdDigest, restore_membership: restoreMembership, integrity, dependency_status: dependencyStatus };
+    return {
+      plan_id_digest: planIdDigest,
+      restore_scope_relation: planIdDigest === observation.restore_scope_plan_digest ? "requested" as const : "collateral" as const,
+      restore_membership: restoreMembership,
+      integrity,
+      dependency_status: dependencyStatus,
+    };
   });
   return {
     schema_version: "operation-plan-recovery-evidence.v1",
@@ -85,6 +95,7 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
       operation_digest: observation.operation_digest,
       result_digest: observation.result_digest,
       restore_backup_id_digest: observation.restore_backup_id_digest,
+      restore_scope_plan_digest: observation.restore_scope_plan_digest,
       restored_state_digest: observation.restored_state_digest,
     },
     plans: evidencePlans,

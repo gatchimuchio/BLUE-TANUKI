@@ -69,6 +69,7 @@ function selectedStoreRestoreHistory(
   backupIdDigest = digest("e"),
   commandId = "recovery-command-1",
   firstIndex = 4,
+  scopePlanDigest: string | null = operationPlanDigest("private-clean-plan"),
 ): RecoveryHistoryEvidenceEntry[] {
   const entries = historyFor("recovery.restore", "success", digest("b"), digest("b"), commandId, firstIndex);
   const execution = entries[0]!;
@@ -83,6 +84,7 @@ function selectedStoreRestoreHistory(
           store_key: "operation_plans",
           restored_store_state_digest: stateDigest,
           restored_backup_id_digest: backupIdDigest,
+          ...(scopePlanDigest ? { restore_scope_plan_digest: scopePlanDigest } : {}),
         },
       },
     },
@@ -173,6 +175,8 @@ describe("buildRecoveryPostActionObservation", () => {
       restored_store_key: "operation_plans",
       restored_store_archive_digest: digest("a"),
       restored_store_state_digest: digest("b"),
+      restore_scope_kind: "operation_plan",
+      restore_scope_digest: operationPlanDigest("private-correlated-plan"),
       backup_manifest_path: "private/path/manifest.json",
     });
 
@@ -181,6 +185,7 @@ describe("buildRecoveryPostActionObservation", () => {
       store_key: "operation_plans",
       restored_store_state_digest: digest("b"),
       restored_backup_id_digest: createHash("sha256").update("private-backup-id").digest("hex"),
+      restore_scope_plan_digest: operationPlanDigest("private-correlated-plan"),
     });
     expect(JSON.stringify(evidence)).not.toContain("private-backup-id");
     expect(JSON.stringify(evidence)).not.toContain("private/path");
@@ -239,7 +244,8 @@ describe("buildRecoveryPostActionObservation", () => {
       const storePath = await createOperationPlanStore(stateRoot, [recoveryObservationPlanState("plan-after-restore", false)]);
       const restoredStateDigest = await sha256File(storePath);
       const entries = [
-        ...selectedStoreRestoreHistory(restoredStateDigest, digest("e"), "plan-restore-command", 4),
+        ...selectedStoreRestoreHistory(restoredStateDigest, digest("e"), "plan-restore-command", 4,
+          operationPlanDigest("plan-after-restore")),
         ...historyFor("recovery.reset_provider", "success", digest("f"), digest("f"), "later-provider-reset", 6),
       ];
       const history = { entries, chain_valid: true, skipped_count: 0, not_before_timestamp_ms: Date.now() + 10_000 };
@@ -399,6 +405,7 @@ describe("buildRecoveryPostActionObservation", () => {
         status: "matched",
         operation: "restore",
         store_key: "operation_plans",
+        restore_scope_plan_digest: operationPlanDigest("private-clean-plan"),
         evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
         store_ledger_status: "residuals_present",
         store_ledger_residual_count: 1,
@@ -418,6 +425,19 @@ describe("buildRecoveryPostActionObservation", () => {
         "private-request-private-clean-plan", "private-command-private-residual-plan"]) {
         expect(JSON.stringify(matched)).not.toContain(secret);
       }
+
+      const missingScope = await buildRecoveryPostActionObservation({
+        ...history,
+        entries: selectedStoreRestoreHistory(restoredStateDigest, digest("e"), "recovery-command-1", 4, null),
+      }, { BLUE_TANUKI_STATE_ROOT: stateRoot });
+      expect(missingScope).toMatchObject({
+        status: "unverified",
+        store_key: "operation_plans",
+        restore_scope_plan_digest: null,
+        plan_residuals: null,
+        used_for_authority: false,
+        may_execute: false,
+      });
 
       const database: DatabaseSyncType = new DatabaseSync(storePath);
       const emptyCheckpoint = { schema_version: "operation-plan-state.v1", plans: [] };
@@ -476,7 +496,8 @@ describe("buildRecoveryPostActionObservation", () => {
         archiveManifest.canonical_state_snapshot.entries.find((entry) => entry.store_key === "operation_plans")!.archive_rel_path!);
       const archiveDigestBefore = await sha256File(planArchivePath);
       const stateDigest = await sha256File(storePath);
-      const restoreHistoryEntries = selectedStoreRestoreHistory(stateDigest, backupIdDigest);
+      const restoreHistoryEntries = selectedStoreRestoreHistory(stateDigest, backupIdDigest, "recovery-command-1", 4,
+        operationPlanDigest("private-correlated-plan"));
       const history = {
         entries: restoreHistoryEntries,
         chain_valid: true,
@@ -503,6 +524,7 @@ describe("buildRecoveryPostActionObservation", () => {
       expect(observation).toMatchObject({
         status: "matched",
         restore_backup_id_digest: backupIdDigest,
+        restore_scope_plan_digest: operationPlanDigest("private-correlated-plan"),
         plan_restore_points: [
           {
             plan_id_digest: operationPlanDigest("private-correlated-plan"),
@@ -519,6 +541,7 @@ describe("buildRecoveryPostActionObservation", () => {
         operation: "restore",
         store_key: "operation_plans",
         restore_backup_id_digest: backupIdDigest,
+        restore_scope_plan_digest: operationPlanDigest("private-correlated-plan"),
         plan_restore_points: [{
           plan_id_digest: operationPlanDigest("private-correlated-plan"),
           backup_plan_record_status: "matched",
@@ -548,6 +571,7 @@ describe("buildRecoveryPostActionObservation", () => {
       });
       expect(hdsEvidence?.plans).toMatchObject([{
         plan_id_digest: operationPlanDigest("private-correlated-plan"),
+        restore_scope_relation: "requested",
         restore_membership: "restored",
         integrity: "residuals_present",
         dependency_status: "residuals_present",
@@ -557,7 +581,8 @@ describe("buildRecoveryPostActionObservation", () => {
       expect(JSON.stringify(hdsEvidence)).not.toContain("private-correlated-plan");
 
       const missingBackup = await buildRecoveryPostActionObservation({
-        entries: selectedStoreRestoreHistory(stateDigest, digest("f")),
+        entries: selectedStoreRestoreHistory(stateDigest, digest("f"), "recovery-command-1", 4,
+          operationPlanDigest("private-correlated-plan")),
         chain_valid: true,
         skipped_count: 0,
         not_before_timestamp_ms: Date.now() + 10_000,
@@ -579,7 +604,8 @@ describe("buildRecoveryPostActionObservation", () => {
         .run(JSON.stringify(changedCheckpoint), operationPlanDigest(changedCheckpoint));
       changedDatabase.close();
       const postRestorePlan = await buildRecoveryPostActionObservation({
-        entries: selectedStoreRestoreHistory(stateDigest, backupIdDigest),
+        entries: selectedStoreRestoreHistory(stateDigest, backupIdDigest, "recovery-command-1", 4,
+          operationPlanDigest("private-correlated-plan")),
         chain_valid: true,
         skipped_count: 0,
         not_before_timestamp_ms: Date.now() + 10_000,

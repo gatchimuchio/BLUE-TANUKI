@@ -113,6 +113,8 @@ export interface RecoveryPostActionObservation {
   store_ledger_residual_count: number | null;
   plan_residuals: readonly RecoverySelectedPlanResidualObservation[] | null;
   restore_backup_id_digest: string | null;
+  /** Digest of the operation plan requested by L3; restore still applies to the full selected SQLite store. */
+  restore_scope_plan_digest: string | null;
   plan_restore_points: readonly RecoveryPlanRestorePointObservation[] | null;
   configuration_state:
     | "provider_stub"
@@ -161,6 +163,7 @@ export interface RecoveryStoreRestoreHistoryEvidence {
   readonly store_key: CanonicalStateStoreKey;
   readonly restored_store_state_digest: string;
   readonly restored_backup_id_digest?: string;
+  readonly restore_scope_plan_digest?: string;
 }
 
 export interface RecoveryActionResult {
@@ -1682,11 +1685,19 @@ export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoverySto
   const stateDigest = recoveryObservationDigest(value.restored_store_state_digest);
   const backupIdDigest = recoveryBackupIdDigest(value.restored_backup_id);
   if (!archiveDigest || !stateDigest || !backupIdDigest) return undefined;
+  const scopeKind = value.restore_scope_kind;
+  const scopeDigest = recoveryObservationDigest(value.restore_scope_digest);
+  if (storeKey === "operation_plans") {
+    if (scopeKind !== "operation_plan" || !scopeDigest) return undefined;
+  } else if (scopeKind !== undefined || value.restore_scope_digest !== undefined) {
+    return undefined;
+  }
   return {
     schema_version: 1,
     store_key: storeKey as CanonicalStateStoreKey,
     restored_store_state_digest: stateDigest,
     restored_backup_id_digest: backupIdDigest,
+    ...(storeKey === "operation_plans" ? { restore_scope_plan_digest: scopeDigest! } : {}),
   };
 }
 
@@ -1695,13 +1706,18 @@ function recoveryStoreRestoreEvidenceFromHistory(value: unknown): RecoveryStoreR
   const storeKey = value.store_key;
   const stateDigest = recoveryObservationDigest(value.restored_store_state_digest);
   const backupIdDigest = recoveryObservationDigest(value.restored_backup_id_digest);
+  const hasScopeDigest = value.restore_scope_plan_digest !== undefined;
+  const scopeDigest = recoveryObservationDigest(value.restore_scope_plan_digest);
   if (typeof storeKey !== "string" || !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === storeKey) ||
-      !stateDigest || (value.restored_backup_id_digest !== undefined && !backupIdDigest)) return null;
+      !stateDigest || (value.restored_backup_id_digest !== undefined && !backupIdDigest) ||
+      (hasScopeDigest && !scopeDigest) ||
+      (storeKey !== "operation_plans" && hasScopeDigest)) return null;
   return {
     schema_version: 1,
     store_key: storeKey as CanonicalStateStoreKey,
     restored_store_state_digest: stateDigest,
     ...(backupIdDigest ? { restored_backup_id_digest: backupIdDigest } : {}),
+    ...(scopeDigest ? { restore_scope_plan_digest: scopeDigest } : {}),
   };
 }
 
@@ -1796,6 +1812,7 @@ function noRecoveryActionObservation(
     store_ledger_residual_count: null,
     plan_residuals: null,
     restore_backup_id_digest: null,
+    restore_scope_plan_digest: null,
     plan_restore_points: null,
     configuration_state: "not_observed",
     evidence_source: "NONE",
@@ -1884,6 +1901,7 @@ export async function buildRecoveryPostActionObservation(
     store_ledger_residual_count: null,
     plan_residuals: null,
     restore_backup_id_digest: null,
+    restore_scope_plan_digest: latest.restoreEvidence?.restore_scope_plan_digest ?? null,
     plan_restore_points: null,
     configuration_state: "not_observed",
     evidence_source: "COMPLETE_HISTORY",
@@ -1935,6 +1953,13 @@ export async function buildRecoveryPostActionObservation(
           restore_backup_id_digest: restoreEvidence.restored_backup_id_digest ?? null };
       }
     } else if (options.mode !== "startup_operation_plan_hold" && !predatesCurrentProcess) {
+      return {
+        ...unverified,
+        store_key: restoreEvidence.store_key,
+        restore_backup_id_digest: restoreEvidence.restored_backup_id_digest ?? null,
+      };
+    }
+    if (restoreEvidence.store_key === "operation_plans" && !restoreEvidence.restore_scope_plan_digest) {
       return {
         ...unverified,
         store_key: restoreEvidence.store_key,
@@ -1994,6 +2019,7 @@ export async function buildRecoveryPostActionObservation(
       store_ledger_residual_count: storeLedger.residual_count,
       plan_residuals: restoreEvidence.store_key === "operation_plans" ? storeLedger.plan_residuals : null,
       restore_backup_id_digest: restoreEvidence.restored_backup_id_digest ?? null,
+      restore_scope_plan_digest: restoreEvidence.restore_scope_plan_digest ?? null,
       plan_restore_points: planRestorePoints,
       evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
     };

@@ -25,6 +25,7 @@ function observation(overrides: Partial<RecoveryPostActionObservation> = {}): Re
     plan_residuals: planIds.map((plan_id) => ({ plan_id_digest: operationPlanDigest(plan_id), status: "verified" as const,
       binding_count: 0, residual_binding_count: 0, omitted_binding_count: 0 })),
     restore_backup_id_digest: "c".repeat(64),
+    restore_scope_plan_digest: operationPlanDigest(planIds[0]),
     plan_restore_points: planIds.map((plan_id) => ({ plan_id_digest: operationPlanDigest(plan_id),
       backup_plan_record_status: "matched" as const, backup_plan_integrity: "verified" as const, backup_plan_record_count: 1,
       dependency_status: "observed" as const, residual_dependencies: [], unobserved_dependencies: [] })),
@@ -41,7 +42,8 @@ describe("Recovery observationからHDS計画保留を導出", () => {
     const evidence = operationPlanRecoveryEvidenceFromObservation({ observation: observation(), checkpoint, history_complete: true });
     expect(evidence).toMatchObject({ scope: "restored_operation_plans", used_for_authority: false, may_execute: false,
       provenance: { source: "recovery_restore", command_id_digest: createHash("sha256").update("recovery-command-1").digest("hex") },
-      plans: planIds.map((plan_id) => ({ plan_id_digest: operationPlanDigest(plan_id), restore_membership: "restored",
+      plans: planIds.map((plan_id, index) => ({ plan_id_digest: operationPlanDigest(plan_id),
+        restore_scope_relation: index === 0 ? "requested" : "collateral", restore_membership: "restored",
         integrity: "verified", dependency_status: "observed" })) });
   });
 
@@ -60,14 +62,15 @@ describe("Recovery observationからHDS計画保留を導出", () => {
     });
     const evidence = operationPlanRecoveryEvidenceFromObservation({ observation: current, checkpoint, history_complete: true });
     expect(evidence?.plans).toEqual([
-      { plan_id_digest: operationPlanDigest(planIds[0]), restore_membership: "restored", integrity: "verified", dependency_status: "unobserved" },
-      { plan_id_digest: operationPlanDigest(planIds[1]), restore_membership: "restored", integrity: "residuals_present", dependency_status: "residuals_present" },
+      { plan_id_digest: operationPlanDigest(planIds[0]), restore_scope_relation: "requested", restore_membership: "restored", integrity: "verified", dependency_status: "unobserved" },
+      { plan_id_digest: operationPlanDigest(planIds[1]), restore_scope_relation: "collateral", restore_membership: "restored", integrity: "residuals_present", dependency_status: "residuals_present" },
     ]);
 
     const incomplete = operationPlanRecoveryEvidenceFromObservation({
       observation: observation({ plan_restore_points: null }), checkpoint, history_complete: true,
     });
-    expect(incomplete?.plans).toEqual(planIds.map((plan_id) => ({ plan_id_digest: operationPlanDigest(plan_id), restore_membership: "unknown",
+    expect(incomplete?.plans).toEqual(planIds.map((plan_id, index) => ({ plan_id_digest: operationPlanDigest(plan_id),
+      restore_scope_relation: index === 0 ? "requested" : "collateral", restore_membership: "unknown",
       integrity: "unverified", dependency_status: "unknown" })));
   });
 
@@ -83,6 +86,19 @@ describe("Recovery observationからHDS計画保留を導出", () => {
     });
     const evidence = operationPlanRecoveryEvidenceFromObservation({ observation: changed, checkpoint, history_complete: true });
     expect(evidence?.plans.map((plan) => plan.restore_membership)).toEqual(["not_restored", "restored"]);
+  });
+
+  it("missing requested-plan scope produces only unverified history evidence", () => {
+    const evidence = operationPlanRecoveryEvidenceFromObservation({
+      observation: observation({ restore_scope_plan_digest: null }), checkpoint, history_complete: true,
+    });
+    expect(evidence).toMatchObject({
+      scope: "unverified_history",
+      provenance: { source: "recovery_restore", restore_scope_plan_digest: null },
+      plans: [],
+      used_for_authority: false,
+      may_execute: false,
+    });
   });
 
   it("復元historyが欠落・不完全なら既存plan群のみにhold scopeを付ける", () => {

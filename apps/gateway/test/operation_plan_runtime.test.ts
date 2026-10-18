@@ -200,16 +200,21 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
           source: "recovery_restore" as const,
           command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
           operation_digest: "a".repeat(64), result_digest: "b".repeat(64),
+          restore_scope_plan_digest: operationPlanDigest(candidates[0]!.plan_id),
           restore_backup_id_digest: "c".repeat(64), restored_state_digest: "d".repeat(64),
         },
         plans: [
-          { plan_id_digest: operationPlanDigest(candidates[0]!.plan_id), restore_membership: "restored" as const,
+          { plan_id_digest: operationPlanDigest(candidates[0]!.plan_id), restore_scope_relation: "requested" as const,
+            restore_membership: "restored" as const,
             integrity: "residuals_present" as const, dependency_status: "residuals_present" as const },
-          { plan_id_digest: operationPlanDigest(candidates[1]!.plan_id), restore_membership: "restored" as const,
+          { plan_id_digest: operationPlanDigest(candidates[1]!.plan_id), restore_scope_relation: "collateral" as const,
+            restore_membership: "restored" as const,
             integrity: "verified" as const, dependency_status: "unobserved" as const },
-          { plan_id_digest: operationPlanDigest(candidates[2]!.plan_id), restore_membership: "restored" as const,
+          { plan_id_digest: operationPlanDigest(candidates[2]!.plan_id), restore_scope_relation: "collateral" as const,
+            restore_membership: "restored" as const,
             integrity: "verified" as const, dependency_status: "observed" as const },
-          { plan_id_digest: operationPlanDigest(candidates[3]!.plan_id), restore_membership: "unknown" as const,
+          { plan_id_digest: operationPlanDigest(candidates[3]!.plan_id), restore_scope_relation: "collateral" as const,
+            restore_membership: "unknown" as const,
             integrity: "unverified" as const, dependency_status: "unknown" as const },
         ],
         used_for_authority: false as const,
@@ -225,6 +230,24 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         { plan_id: operationPlanDigest(candidates[2]!.plan_id) },
         { plan_id: operationPlanDigest(candidates[3]!.plan_id), recovery_hold_reason: "held_unverified" },
       ]);
+      const recoveryHolds = store.loadRecoveryHoldState() as { holds: unknown[] };
+      expect(recoveryHolds.holds).toHaveLength(3);
+      expect(recoveryHolds.holds).toEqual(expect.arrayContaining([
+        { plan_id_digest: operationPlanDigest(candidates[0]!.plan_id), restore_scope_relation: "requested",
+          reason: "held_residual", provenance: expect.objectContaining({
+            restore_scope_plan_digest: operationPlanDigest(candidates[0]!.plan_id),
+          }) },
+        { plan_id_digest: operationPlanDigest(candidates[1]!.plan_id), restore_scope_relation: "collateral",
+          reason: "held_unobserved", provenance: expect.objectContaining({
+            restore_scope_plan_digest: operationPlanDigest(candidates[0]!.plan_id),
+          }) },
+        { plan_id_digest: operationPlanDigest(candidates[3]!.plan_id), restore_scope_relation: "collateral",
+          reason: "held_unverified", provenance: expect.objectContaining({
+            restore_scope_plan_digest: operationPlanDigest(candidates[0]!.plan_id),
+          }) },
+      ]));
+      const restarted = new HDSUpperController({ operation_plan_state: store });
+      expect(review(restarted, candidates[1]!, "search").command).toBeNull();
       expect(review(hds, candidates[0]!, "search").command).toBeNull();
       expect(review(hds, candidates[1]!, "search").command).toBeNull();
       expect(review(hds, candidates[3]!, "search").command).toBeNull();
@@ -259,9 +282,10 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
           source: "recovery_restore",
           command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
           operation_digest: "a".repeat(64), result_digest: "b".repeat(64),
+          restore_scope_plan_digest: operationPlanDigest(restored.plan_id),
           restore_backup_id_digest: "c".repeat(64), restored_state_digest: "d".repeat(64),
         },
-        plans: [{ plan_id_digest: operationPlanDigest(restored.plan_id), restore_membership: "restored",
+        plans: [{ plan_id_digest: operationPlanDigest(restored.plan_id), restore_scope_relation: "requested", restore_membership: "restored",
           integrity: "verified", dependency_status: "observed" }],
         used_for_authority: false,
         may_execute: false,
@@ -295,7 +319,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
           restored_state_digest: "d".repeat(64), checkpoint_digest: operationPlanDigest(restoredCheckpoint) } }],
       used_for_authority: false,
       may_execute: false,
-    });
+    } as unknown as Parameters<typeof store.compareAndSetRecoveryHoldState>[1]);
     try {
       const hds = new HDSUpperController({ operation_plan_state: store });
       const restoreCommand = operationPlanRestoreCommand();
@@ -310,9 +334,10 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
           source: "recovery_restore",
           command_id_digest: recoveryCommandIdDigest("different-restore"),
           operation_digest: "e".repeat(64), result_digest: "f".repeat(64),
+          restore_scope_plan_digest: operationPlanDigest(restored.plan_id),
           restore_backup_id_digest: "1".repeat(64), restored_state_digest: "2".repeat(64),
         },
-        plans: [{ plan_id_digest: operationPlanDigest(restored.plan_id), restore_membership: "restored",
+        plans: [{ plan_id_digest: operationPlanDigest(restored.plan_id), restore_scope_relation: "requested", restore_membership: "restored",
           integrity: "verified", dependency_status: "observed" }],
         used_for_authority: false,
         may_execute: false,
@@ -345,11 +370,14 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const hds = new HDSUpperController({ operation_plan_state: store, operation_plan_recovery_evidence: {
       schema_version: "operation-plan-recovery-evidence.v1", scope: "restored_operation_plans",
       checkpoint_digest: operationPlanDigest(checkpoint),
+        provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest("startup-restore"),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64), restore_backup_id_digest: "c".repeat(64),
+          restore_scope_plan_digest: operationPlanDigest(residual.plan_id), restored_state_digest: "d".repeat(64) },
       plans: [
-        { plan_id_digest: operationPlanDigest(residual.plan_id), restore_membership: "restored",
+          { plan_id_digest: operationPlanDigest(residual.plan_id), restore_scope_relation: "requested", restore_membership: "restored",
           integrity: "residuals_present", dependency_status: "residuals_present" },
-        { plan_id_digest: operationPlanDigest(clean.plan_id), restore_membership: "restored", integrity: "verified", dependency_status: "observed" },
-        { plan_id_digest: operationPlanDigest(afterRestore.plan_id), restore_membership: "not_restored",
+          { plan_id_digest: operationPlanDigest(clean.plan_id), restore_scope_relation: "collateral", restore_membership: "restored", integrity: "verified", dependency_status: "observed" },
+          { plan_id_digest: operationPlanDigest(afterRestore.plan_id), restore_scope_relation: "collateral", restore_membership: "not_restored",
           integrity: "unverified", dependency_status: "unknown" },
       ], used_for_authority: false, may_execute: false,
     } });
@@ -396,7 +424,10 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       const staleEvidenceHds = new HDSUpperController({ operation_plan_state: store, operation_plan_recovery_evidence: {
         schema_version: "operation-plan-recovery-evidence.v1", scope: "restored_operation_plans",
         checkpoint_digest: "f".repeat(64),
-        plans: [{ plan_id_digest: operationPlanDigest(existing.plan_id), restore_membership: "restored",
+        provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest("stale-restore"),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64), restore_backup_id_digest: "c".repeat(64),
+          restore_scope_plan_digest: operationPlanDigest(existing.plan_id), restored_state_digest: "d".repeat(64) },
+        plans: [{ plan_id_digest: operationPlanDigest(existing.plan_id), restore_scope_relation: "requested", restore_membership: "restored",
           integrity: "verified", dependency_status: "observed" }],
         used_for_authority: false, may_execute: false,
       } });
@@ -405,7 +436,20 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(() => new HDSUpperController({ operation_plan_recovery_evidence: {
         schema_version: "operation-plan-recovery-evidence.v1", scope: "restored_operation_plans",
         checkpoint_digest: "f".repeat(64),
-        plans: [{ plan_id_digest: "not-a-digest", restore_membership: "restored", integrity: "verified", dependency_status: "observed" }],
+        provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest("invalid-restore"),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64), restore_backup_id_digest: "c".repeat(64),
+          restore_scope_plan_digest: "d".repeat(64), restored_state_digest: "e".repeat(64) },
+        plans: [{ plan_id_digest: "not-a-digest", restore_scope_relation: "collateral", restore_membership: "restored", integrity: "verified", dependency_status: "observed" }],
+        used_for_authority: false, may_execute: false,
+      } })).toThrow("plan_recovery_evidence_invalid");
+      expect(() => new HDSUpperController({ operation_plan_recovery_evidence: {
+        schema_version: "operation-plan-recovery-evidence.v1", scope: "restored_operation_plans",
+        checkpoint_digest: operationPlanDigest(checkpoint),
+        provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest("scope-mismatch"),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64), restore_backup_id_digest: "c".repeat(64),
+          restore_scope_plan_digest: operationPlanDigest(existing.plan_id), restored_state_digest: "d".repeat(64) },
+        plans: [{ plan_id_digest: operationPlanDigest(existing.plan_id), restore_scope_relation: "collateral",
+          restore_membership: "restored", integrity: "verified", dependency_status: "observed" }],
         used_for_authority: false, may_execute: false,
       } })).toThrow("plan_recovery_evidence_invalid");
     } finally {

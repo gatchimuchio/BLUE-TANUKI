@@ -1195,6 +1195,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             } else if (observation.status !== "matched" || observation.operation !== "restore" ||
                 observation.store_key !== "operation_plans" ||
                 observation.restore_backup_id_digest !== restoreResultEvidence.restored_backup_id_digest ||
+                observation.restore_scope_plan_digest !== restoreResultEvidence.restore_scope_plan_digest ||
                 observation.plan_residuals === null || observation.plan_restore_points === null) {
               gatewayLog.warn("operation-plan restore refresh remains held", {
                 command_id: cmd.id,
