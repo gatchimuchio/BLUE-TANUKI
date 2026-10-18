@@ -87,6 +87,7 @@ import {
   createRecoveryBackup,
   inspectLatestRecoveryBackup,
   inspectRecoveryScopeApplicability,
+  recoveryStoreRestoreHistoryEvidence,
 } from "./recovery_surface.js";
 import {
   createRecoveryMutationTools,
@@ -731,6 +732,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     feedback: ExecuteFeedback,
     receipt: ExecutionIntentReceipt | null,
   ): CompleteHistoryEntry | null {
+    const recoveryStoreRestore = feedback.status === "success" && isRecoveryMutationCommand(cmd)
+      ? recoveryStoreRestoreHistoryEvidence(feedback.result)
+      : undefined;
     const entry = recordCompleteHistory({
       kind: "execution_history",
       request_id: log.request_id,
@@ -744,6 +748,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         status: feedback.status,
         result_present: feedback.result !== undefined,
         result_digest: feedback.result === undefined ? undefined : digestValue(feedback.result),
+        ...(recoveryStoreRestore ? { recovery_store_restore: recoveryStoreRestore } : {}),
         error: feedback.error,
         metrics: feedback.metrics,
         operation_core: feedback.operation_core,

@@ -125,6 +125,7 @@ function operatorSafeRecoveryResult(result: RecoveryActionResult): Record<string
     ...(result.restored_backup_id ? { restored_backup_id: result.restored_backup_id } : {}),
     ...(result.restored_store_key ? { restored_store_key: result.restored_store_key } : {}),
     ...(result.restored_store_archive_digest ? { restored_store_archive_digest: result.restored_store_archive_digest } : {}),
+    ...(result.restored_store_state_digest ? { restored_store_state_digest: result.restored_store_state_digest } : {}),
     ...(result.canonical_state_cross_store_atomic !== undefined
       ? { canonical_state_cross_store_atomic: result.canonical_state_cross_store_atomic }
       : {}),

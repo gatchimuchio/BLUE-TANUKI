@@ -6,6 +6,7 @@ import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
 import {
   CANONICAL_STATE_STORE_PATHS,
   captureCanonicalStateSnapshots,
+  inspectCanonicalStateStoreTarget,
   inspectCanonicalStateSnapshots,
   restoreCanonicalStateSnapshotStore,
   resolveCanonicalStateStoreTargetPath,
@@ -93,8 +94,9 @@ export interface RecoverySnapshot {
 }
 
 export interface RecoveryPostActionObservation {
-  status: "changed" | "failed" | "unverified" | "no_record";
+  status: "changed" | "failed" | "mismatch" | "matched" | "unverified" | "no_record";
   operation: RecoveryMutationAction | null;
+  store_key: CanonicalStateStoreKey | null;
   operation_digest: string | null;
   result_digest: string | null;
   configuration_state:
@@ -123,6 +125,12 @@ export interface RecoveryHistoryEvidence {
   not_before_timestamp_ms?: number;
 }
 
+export interface RecoveryStoreRestoreHistoryEvidence {
+  readonly schema_version: 1;
+  readonly store_key: CanonicalStateStoreKey;
+  readonly restored_store_state_digest: string;
+}
+
 export interface RecoveryActionResult {
   schema_version: 1;
   surface: "recovery";
@@ -133,6 +141,7 @@ export interface RecoveryActionResult {
   restored_backup_id?: string;
   restored_store_key?: CanonicalStateStoreKey;
   restored_store_archive_digest?: string;
+  restored_store_state_digest?: string;
   canonical_state_cross_store_atomic?: false;
   restored_items_count?: number;
   removed_paths_count?: number;
@@ -1564,12 +1573,42 @@ function recoveryObservationDigest(value: unknown): string | null {
   return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : null;
 }
 
+/** Keep only fixed store identity and digests needed for a non-authoritative post-restart observation. */
+export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoveryStoreRestoreHistoryEvidence | undefined {
+  if (!isRecoveryObservationRecord(value) || value.action !== "restore" || value.status !== "completed" ||
+      value.used_for_authority !== false || value.canonical_state_cross_store_atomic !== false) return undefined;
+  const storeKey = value.restored_store_key;
+  if (typeof storeKey !== "string" || !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === storeKey)) return undefined;
+  const archiveDigest = recoveryObservationDigest(value.restored_store_archive_digest);
+  const stateDigest = recoveryObservationDigest(value.restored_store_state_digest);
+  if (!archiveDigest || !stateDigest) return undefined;
+  return {
+    schema_version: 1,
+    store_key: storeKey as CanonicalStateStoreKey,
+    restored_store_state_digest: stateDigest,
+  };
+}
+
+function recoveryStoreRestoreEvidenceFromHistory(value: unknown): RecoveryStoreRestoreHistoryEvidence | null {
+  if (!isRecoveryObservationRecord(value) || value.schema_version !== 1) return null;
+  const storeKey = value.store_key;
+  const stateDigest = recoveryObservationDigest(value.restored_store_state_digest);
+  if (typeof storeKey !== "string" || !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === storeKey) ||
+      !stateDigest) return null;
+  return {
+    schema_version: 1,
+    store_key: storeKey as CanonicalStateStoreKey,
+    restored_store_state_digest: stateDigest,
+  };
+}
+
 function noRecoveryActionObservation(
   status: RecoveryPostActionObservation["status"],
 ): RecoveryPostActionObservation {
   return {
     status,
     operation: null,
+    store_key: null,
     operation_digest: null,
     result_digest: null,
     configuration_state: "not_observed",
@@ -1639,6 +1678,7 @@ export async function buildRecoveryPostActionObservation(
   const unverified: RecoveryPostActionObservation = {
     status: "unverified",
     operation: latest.action,
+    store_key: null,
     operation_digest: operationDigest,
     result_digest: latest.resultDigest,
     configuration_state: "not_observed",
@@ -1647,7 +1687,7 @@ export async function buildRecoveryPostActionObservation(
     may_execute: false,
   };
   if (!operationDigest) return unverified;
-  if (history.not_before_timestamp_ms !== undefined &&
+  if (latest.action !== "restore" && history.not_before_timestamp_ms !== undefined &&
       latest.entry.timestamp < history.not_before_timestamp_ms) return unverified;
 
   const finalOutput = history.entries
@@ -1668,7 +1708,42 @@ export async function buildRecoveryPostActionObservation(
     return unverified;
   }
 
-  if (latest.action === "restore") return unverified;
+  if (latest.action === "restore") {
+    const payload = isRecoveryObservationRecord(latest.entry.payload) ? latest.entry.payload : null;
+    const restoreEvidence = payload
+      ? recoveryStoreRestoreEvidenceFromHistory(payload.recovery_store_restore)
+      : null;
+    if (!restoreEvidence) return unverified;
+    if (history.not_before_timestamp_ms === undefined ||
+        latest.entry.timestamp >= history.not_before_timestamp_ms) {
+      return { ...unverified, store_key: restoreEvidence.store_key };
+    }
+    const target = await inspectCanonicalStateStoreTarget(
+      env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+      restoreEvidence.store_key,
+    );
+    if (target.status === "not_present" || target.status === "mismatch") {
+      return {
+        ...unverified,
+        status: "mismatch",
+        store_key: restoreEvidence.store_key,
+        evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
+      };
+    }
+    if (target.status !== "verified" || !target.sha256) {
+      return {
+        ...unverified,
+        store_key: restoreEvidence.store_key,
+        evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
+      };
+    }
+    return {
+      ...unverified,
+      status: target.sha256 === restoreEvidence.restored_store_state_digest ? "matched" : "changed",
+      store_key: restoreEvidence.store_key,
+      evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
+    };
+  }
   let values: Record<string, string>;
   try {
     values = await readEnvValues(env);
@@ -1867,6 +1942,7 @@ export async function restoreRecoveryBackup(
       restored_backup_id: id,
       restored_store_key: options.store_key,
       restored_store_archive_digest: restored.sha256,
+      restored_store_state_digest: restored.restoredStateSha256,
       canonical_state_cross_store_atomic: false,
       pre_action_backup_id: preRestore.backup_id,
       pre_action_backup_manifest_path: preRestore.manifest_path,

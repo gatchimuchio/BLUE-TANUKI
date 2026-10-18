@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import {
   buildRecoveryPostActionObservation,
+  recoveryStoreRestoreHistoryEvidence,
   type RecoveryHistoryEvidenceEntry,
 } from "../src/recovery_surface.js";
+
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
 
@@ -51,7 +57,68 @@ function historyFor(
   ];
 }
 
+function selectedStoreRestoreHistory(stateDigest: string): RecoveryHistoryEvidenceEntry[] {
+  const entries = historyFor("recovery.restore");
+  const execution = entries[0]!;
+  const payload = execution.payload as Record<string, unknown>;
+  return [
+    {
+      ...execution,
+      payload: {
+        ...payload,
+        recovery_store_restore: {
+          schema_version: 1,
+          store_key: "operation_plans",
+          restored_store_state_digest: stateDigest,
+        },
+      },
+    },
+    entries[1]!,
+  ];
+}
+
+async function createOperationPlanStore(stateRoot: string, marker: string): Promise<string> {
+  const databasePath = path.join(stateRoot, "private-state", "operation-plans", "j-state.sqlite");
+  await mkdir(path.dirname(databasePath), { recursive: true });
+  const database: DatabaseSyncType = new DatabaseSync(databasePath);
+  database.exec("CREATE TABLE restore_fixture (value TEXT NOT NULL)");
+  database.prepare("INSERT INTO restore_fixture (value) VALUES (?)").run(marker);
+  database.close();
+  return databasePath;
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  return createHash("sha256").update(await readFile(filePath)).digest("hex");
+}
+
 describe("buildRecoveryPostActionObservation", () => {
+  it("persists only fixed selected-store identity and digests for restore observation", () => {
+    const evidence = recoveryStoreRestoreHistoryEvidence({
+      action: "restore",
+      status: "completed",
+      used_for_authority: false,
+      canonical_state_cross_store_atomic: false,
+      restored_backup_id: "private-backup-id",
+      restored_store_key: "operation_plans",
+      restored_store_archive_digest: digest("a"),
+      restored_store_state_digest: digest("b"),
+      backup_manifest_path: "private/path/manifest.json",
+    });
+
+    expect(evidence).toEqual({
+      schema_version: 1,
+      store_key: "operation_plans",
+      restored_store_state_digest: digest("b"),
+    });
+    expect(JSON.stringify(evidence)).not.toContain("private-backup-id");
+    expect(JSON.stringify(evidence)).not.toContain("private/path");
+    expect(recoveryStoreRestoreHistoryEvidence({
+      action: "restore", status: "completed", used_for_authority: false,
+      canonical_state_cross_store_atomic: false, restored_store_key: "unknown",
+      restored_store_archive_digest: digest("a"), restored_store_state_digest: digest("b"),
+    })).toBeUndefined();
+  });
+
   it("confirms only provider configuration observed in both the env file and current process", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-observation-"));
     try {
@@ -181,6 +248,85 @@ describe("buildRecoveryPostActionObservation", () => {
       expect(observation.status).toBe("unverified");
       expect(observation.configuration_state).toBe("not_observed");
       expect(JSON.stringify(observation)).not.toContain("must-never-be-returned");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reobserves only the selected SQLite store after restart and detects later changes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-restore-reobserve-"));
+    try {
+      const stateRoot = path.join(root, "state");
+      const storePath = await createOperationPlanStore(stateRoot, "restored-state");
+      const restoredStateDigest = await sha256File(storePath);
+      const history = {
+        entries: selectedStoreRestoreHistory(restoredStateDigest),
+        chain_valid: true,
+        skipped_count: 0,
+        not_before_timestamp_ms: Date.now() + 10_000,
+      };
+      const sameProcess = await buildRecoveryPostActionObservation({
+        ...history,
+        not_before_timestamp_ms: history.entries[0]!.timestamp - 1,
+      }, { BLUE_TANUKI_STATE_ROOT: stateRoot });
+      expect(sameProcess).toMatchObject({ status: "unverified", store_key: "operation_plans" });
+
+      const originalBytes = await readFile(storePath);
+      const matched = await buildRecoveryPostActionObservation(history, { BLUE_TANUKI_STATE_ROOT: stateRoot });
+
+      expect(matched).toMatchObject({
+        status: "matched",
+        operation: "restore",
+        store_key: "operation_plans",
+        evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(await readFile(storePath)).toEqual(originalBytes);
+      expect(JSON.stringify(matched)).not.toContain(storePath);
+
+      const database: DatabaseSyncType = new DatabaseSync(storePath);
+      database.prepare("INSERT INTO restore_fixture (value) VALUES (?)").run("later-state");
+      database.close();
+      const changedBytes = await readFile(storePath);
+      const changed = await buildRecoveryPostActionObservation(history, { BLUE_TANUKI_STATE_ROOT: stateRoot });
+
+      expect(changed).toMatchObject({
+        status: "changed",
+        operation: "restore",
+        store_key: "operation_plans",
+      });
+      expect(await readFile(storePath)).toEqual(changedBytes);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps missing or invalid selected-store state distinct from an unobservable sidecar state", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-restore-boundary-"));
+    try {
+      const stateRoot = path.join(root, "state");
+      const storePath = await createOperationPlanStore(stateRoot, "restored-state");
+      const history = {
+        entries: selectedStoreRestoreHistory(await sha256File(storePath)),
+        chain_valid: true,
+        skipped_count: 0,
+        not_before_timestamp_ms: Date.now() + 10_000,
+      };
+      await writeFile(storePath, "not a sqlite database", "utf8");
+      const mismatch = await buildRecoveryPostActionObservation(history, { BLUE_TANUKI_STATE_ROOT: stateRoot });
+      expect(mismatch).toMatchObject({ status: "mismatch", store_key: "operation_plans" });
+
+      await rm(storePath);
+      const validStore = await createOperationPlanStore(stateRoot, "restored-state");
+      await writeFile(`${validStore}-wal`, "pending-sidecar", "utf8");
+      const unverified = await buildRecoveryPostActionObservation(history, { BLUE_TANUKI_STATE_ROOT: stateRoot });
+      expect(unverified).toMatchObject({ status: "unverified", store_key: "operation_plans" });
+
+      await rm(`${validStore}-wal`);
+      await rm(validStore);
+      const missing = await buildRecoveryPostActionObservation(history, { BLUE_TANUKI_STATE_ROOT: stateRoot });
+      expect(missing).toMatchObject({ status: "mismatch", store_key: "operation_plans" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

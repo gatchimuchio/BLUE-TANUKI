@@ -182,6 +182,83 @@ export function resolveCanonicalStateStoreTargetPath(
   return source.path;
 }
 
+export interface CanonicalStateStoreTargetInspection {
+  readonly status: "verified" | "not_present" | "mismatch" | "unverified";
+  readonly bytes: number | null;
+  readonly sha256: string | null;
+}
+
+/** Read one fixed canonical store without creating paths or accepting sidecar state. */
+export async function inspectCanonicalStateStoreTarget(
+  stateRootValue: string,
+  storeKey: CanonicalStateStoreKey,
+): Promise<CanonicalStateStoreTargetInspection> {
+  let targetPath: string;
+  try {
+    targetPath = resolveCanonicalStateStoreTargetPath(stateRootValue, storeKey);
+  } catch {
+    return { status: "unverified", bytes: null, sha256: null };
+  }
+
+  for (const suffix of ["-journal", "-wal", "-shm"]) {
+    try {
+      await fs.lstat(`${targetPath}${suffix}`);
+      return { status: "unverified", bytes: null, sha256: null };
+    } catch (error) {
+      if (!isMissing(error)) return { status: "unverified", bytes: null, sha256: null };
+    }
+  }
+
+  let beforeIdentity: StoreSourceIdentity;
+  let beforeDigest: { bytes: number; sha256: string };
+  try {
+    beforeIdentity = storeSourceIdentity(targetPath);
+    beforeDigest = await digestFile(targetPath);
+  } catch (error) {
+    if (isMissing(error)) return { status: "not_present", bytes: null, sha256: null };
+    return { status: "unverified", bytes: null, sha256: null };
+  }
+
+  let database: DatabaseSyncType | undefined;
+  let journalMode: string | null = null;
+  let integrityValid = false;
+  try {
+    database = new DatabaseSync(targetPath, { readOnly: true });
+    const journalModeRow = database.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined;
+    journalMode = typeof journalModeRow?.journal_mode === "string" ? journalModeRow.journal_mode.toLowerCase() : null;
+    integrityValid = integrityCheck(database);
+  } catch {
+    integrityValid = false;
+  } finally {
+    try { database?.close(); } catch { /* The inspection remains non-authoritative. */ }
+  }
+  if (!integrityValid) return { status: "mismatch", bytes: null, sha256: null };
+  if (journalMode !== "delete") return { status: "unverified", bytes: null, sha256: null };
+
+  for (const suffix of ["-journal", "-wal", "-shm"]) {
+    try {
+      await fs.lstat(`${targetPath}${suffix}`);
+      return { status: "unverified", bytes: null, sha256: null };
+    } catch (error) {
+      if (!isMissing(error)) return { status: "unverified", bytes: null, sha256: null };
+    }
+  }
+
+  let afterIdentity: StoreSourceIdentity;
+  let afterDigest: { bytes: number; sha256: string };
+  try {
+    afterIdentity = storeSourceIdentity(targetPath);
+    afterDigest = await digestFile(targetPath);
+  } catch {
+    return { status: "unverified", bytes: null, sha256: null };
+  }
+  if (!sameStoreSourceIdentity(beforeIdentity, afterIdentity) ||
+      beforeDigest.bytes !== afterDigest.bytes || beforeDigest.sha256 !== afterDigest.sha256) {
+    return { status: "unverified", bytes: null, sha256: null };
+  }
+  return { status: "verified", bytes: afterDigest.bytes, sha256: afterDigest.sha256 };
+}
+
 function integrityCheck(database: DatabaseSyncType): boolean {
   try {
     let rows = 0;
@@ -475,7 +552,7 @@ export async function restoreCanonicalStateSnapshotStore(
   packDirectory: string,
   snapshot: CanonicalStateSnapshotManifest,
   storeKey: CanonicalStateStoreKey,
-): Promise<{ readonly bytes: number; readonly sha256: string }> {
+): Promise<{ readonly bytes: number; readonly sha256: string; readonly restoredStateSha256: string }> {
   await inspectCanonicalStateSnapshots(packDirectory, snapshot);
   const entry = snapshot.entries.find((item) => item.store_key === storeKey);
   if (!entry || entry.status !== "verified" || !entry.archive_rel_path || !entry.sha256) {
@@ -526,5 +603,9 @@ export async function restoreCanonicalStateSnapshotStore(
   } finally {
     try { restored?.close(); } catch { /* verification result is already fixed */ }
   }
-  return { bytes: entry.bytes, sha256: entry.sha256 };
+  const targetInspection = await inspectCanonicalStateStoreTarget(stateRootValue, storeKey);
+  if (targetInspection.status !== "verified" || !targetInspection.sha256 || targetInspection.bytes === null) {
+    throw new Error("canonical_state_restore_target_unverified");
+  }
+  return { bytes: entry.bytes, sha256: entry.sha256, restoredStateSha256: targetInspection.sha256 };
 }

@@ -816,6 +816,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("recovery-token");
       expect(html).toContain("load-recovery");
       expect(html).toContain("recovery-post-action-observation");
+      expect(html).toContain("復元直後の状態と一致");
+      expect(html).toContain("復元後に状態変更を観測");
+      expect(html).toContain("復元状態と不一致");
       expect(html).toContain("/recovery/snapshot");
       expect(html).toContain("inspect-recovery-ledgers");
       expect(html).toContain("/recovery/inspection");

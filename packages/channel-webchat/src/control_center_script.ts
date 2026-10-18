@@ -1494,12 +1494,33 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           connector_reset: "接続設定リセット",
           factory_reset: "工場リセット",
         };
+        const storeLabels = {
+          j_control: "J制御台帳",
+          m_state: "M状態台帳",
+          broker: "Broker台帳",
+          operation_plans: "Operation Plan台帳",
+          cron_events: "Cron台帳",
+        };
         const operationLabel = Object.prototype.hasOwnProperty.call(operationLabels, observation.operation)
           ? operationLabels[observation.operation]
           : "復旧操作";
+        const storeLabel = Object.prototype.hasOwnProperty.call(storeLabels, observation.store_key)
+          ? storeLabels[observation.store_key]
+          : null;
         let observationLabel = "未確認";
         let observationTone = "warn";
-        if (observation.status === "changed") {
+        if (observation.operation === "restore" && observation.status === "matched" && storeLabel) {
+          observationLabel = storeLabel + "・復元直後の状態と一致";
+          observationTone = "good";
+        } else if (observation.operation === "restore" && observation.status === "changed" && storeLabel) {
+          observationLabel = storeLabel + "・復元後に状態変更を観測";
+          observationTone = "warn";
+        } else if (observation.operation === "restore" && observation.status === "mismatch" && storeLabel) {
+          observationLabel = storeLabel + "・復元状態と不一致";
+          observationTone = "bad";
+        } else if (observation.operation === "restore" && observation.status === "unverified") {
+          observationLabel = storeLabel ? storeLabel + "・再起動後の状態は未確認" : "復元操作・未確認";
+        } else if (observation.status === "changed") {
           observationLabel = operationLabel + "・設定変更済み";
           observationTone = "good";
         } else if (observation.status === "failed") {

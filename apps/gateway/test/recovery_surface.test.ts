@@ -341,6 +341,9 @@ describe("buildRecoverySnapshot", () => {
         canonical_state_cross_store_atomic: false,
       });
       expect(restored.restored_store_archive_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(restored.restored_store_state_digest).toBe(
+        createHash("sha256").update(await readFile(selectedPath)).digest("hex"),
+      );
       expect(restored.pre_action_backup_id).toBeTruthy();
       const preActionManifest = JSON.parse(await readFile(
         path.join(recoveryDir, restored.pre_action_backup_id!, "manifest.json"),

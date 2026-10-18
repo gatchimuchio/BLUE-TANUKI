@@ -2,11 +2,27 @@
 
 ## 次のBUILD_BATCH
 
-次は `QEB-03-E03.03-RECOVERY-SELECTED-STORE-POST-RESTORE-OBSERVATION`。selected-store restoreの結果は仕事復旧や再開許可ではない。合成stateと合成履歴で、再起動後の読み取り専用観測が要求されたstoreだけの結果を照合し、変更・不一致・未確認は固定statusで残す。実state restore／実環境再起動、scope applicabilityの権威化、resume、C08.03、公開・出荷判断は対象外。
+次は `QEB-03-E03.03-RECOVERY-POST-RESTORE-LEDGER-REOBSERVATION`。前バッチのfingerprint照合に続け、再起動後に選択storeだけを既存read-only ledger inspectorへ接続し、台帳構造状態と残差件数を固定status・enum・件数で観測する。raw ID／行内容／pathは出さず、他store、権限、復旧可否、resumeへ接続しない。合成state／履歴と合成異常だけを使い、実state restore／実環境再起動／実owner承認は対象外。
 
 次の作業前に最新版の三点正本と適用AGENTS.mdを読み直す。C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
 
 ## 直近のBUILD_BATCH実績
+
+`QEB-03-E03.03-RECOVERY-SELECTED-STORE-POST-RESTORE-OBSERVATION` は開始HEAD／`origin/main`=`854965b9b8540094498c44dd09cc3bda538f384f`、開始worktree cleanで開始した。owner指定rev2.3三点正本、適用AGENTS.md、作業標準要領、active指示、E03.03と対象コードを再読した。編集前のlocal recovery branch／remote backup tag二世代は現世代=`854965b9b8540094498c44dd09cc3bda538f384f`、前世代=`e2fded682628aa1ea2b16d264b98cca4aa5454af`で一致し、編集前CAS回転後にlocal／remote refsを再照合した。
+
+selected-store restoreの成功結果から、固定store keyと復元直後のtarget SQLite byte digestだけをComplete Historyへ非権威メタデータとして記録する。raw backup ID、path、行内容、source archive digestは記録しない。再起動後、完全なhistory chainとexecution／final-output digestが一致した選択storeに限り、read-only SQLite integrityとbyte digestを照合する。Gateway起動時刻より後の同一process内記録は再起動後証拠として扱わない。状態一致は`matched`、後続変更は`changed`、欠損／整合不良は`mismatch`、sidecar・race・不完全履歴等は`unverified`とする。generic Restore、他store、権限、復旧可能性、自動resumeには接続しない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway recovery surface／recovery tools／post-action observation／WebChat focused tests | PASS、4 files／104 tests。復元fingerprint一致、同一processでは未確認、後続状態変更、欠損／SQLite不整合／sidecarの区別、観測中のsource bytes不変、固定key・digest allowlistと非露出を確認。 |
+| `pnpm typecheck`→`pnpm build` | 両方PASS。15 workspace projects。 |
+| `pnpm smoke:serve` | PASS。stub WebChat、audit persistence、audit-dump chain検証。Recovery mutationは実行していない。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実state restore／実環境再起動／実owner承認／provider・credential／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+E03.03／QEB-03=`BUILD_GAP`を維持する。fingerprint一致は復元直後の対象DB bytesとの一致だけを示し、job復旧identity、store間atomicity、意味的な仕事状態、復旧可能性、自動resumeを成立させない。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。別repo、実業務作用、公開・出荷判断なし。次consumerは再起動後の選択store限定ledger構造・残差観測。
+
+## 前回のBUILD_BATCH実績
 
 `QEB-03-E03.03-RECOVERY-SELECTIVE-STORE-RESTORE` は開始HEAD／`origin/main`=`e2fded682628aa1ea2b16d264b98cca4aa5454af`、開始worktree cleanで開始した。rev2.3三点正本、適用AGENTS.md、作業標準要領、現行指示、E03.03に関する現物を再読した。編集前のlocal recovery branch／remote backup tag二世代は現世代=`e2fded682628aa1ea2b16d264b98cca4aa5454af`、前世代=`79b7182326d9ec3efc79f26ae089db00a11143e3`で一致していた。
 
