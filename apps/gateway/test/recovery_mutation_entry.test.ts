@@ -128,6 +128,21 @@ describe("Recovery mutation HDS L3 entry", () => {
       const restartedRuntime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
       expect(restartedRuntime.body.hds.operation_plans.plans, gateway.output.join(""))
         .toMatchObject([{ plan_id: planIdDigest, recovery_hold_reason: "held_unverified" }]);
+      expect(restartedRuntime.body.operation_plan_status, gateway.output.join(""))
+        .toMatchObject({
+          schema_version: "operation-plan.status.v1",
+          status: "available",
+          used_for_authority: false,
+          raw_payload_exposed: false,
+          plans: [{ plan_id: planIdDigest, recovery_hold_reason: "held_unverified" }],
+        });
+      const controlCenterResponse = await fetch(`http://127.0.0.1:${port}/`);
+      expect(controlCenterResponse.status, gateway.output.join(""))
+        .toBe(200);
+      const controlCenterHtml = await controlCenterResponse.text();
+      expect(controlCenterHtml).toContain("renderOperationPlanStatus(body.operation_plan_status)");
+      expect(controlCenterHtml).toContain("復元履歴未確認（step選択停止中）");
+      expect(controlCenterHtml).toContain("状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。");
 
       const ticketResponse = await requestJson(port, "/ws-ticket", {
         method: "POST",
