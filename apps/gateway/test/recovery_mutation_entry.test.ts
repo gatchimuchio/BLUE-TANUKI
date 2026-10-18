@@ -143,6 +143,23 @@ describe("Recovery mutation HDS L3 entry", () => {
       expect(controlCenterHtml).toContain("renderOperationPlanStatus(body.operation_plan_status)");
       expect(controlCenterHtml).toContain("復元履歴未確認（step選択停止中）");
       expect(controlCenterHtml).toContain("状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。");
+      expect(controlCenterHtml).toContain('id="inspect-recovery-ledgers"');
+      expect(controlCenterHtml).toContain('fetchJson("/recovery/inspection", token)');
+
+      const recoveryInspection = await requestJson(port, "/recovery/inspection", { token: maintenanceToken });
+      expect(recoveryInspection.status, gateway.output.join("")).toBe(200);
+      expect(recoveryInspection.body, gateway.output.join("")).toMatchObject({
+        surface: "recovery_inspection_operator",
+        mode: "read_only",
+        used_for_authority: false,
+        may_execute: false,
+        plan_dependency_scopes: expect.arrayContaining([
+          expect.objectContaining({ plan_id_digest: planIdDigest }),
+        ]),
+      });
+      const recoveryInspectionJson = JSON.stringify(recoveryInspection.body);
+      expect(recoveryInspectionJson).not.toContain("restore-review-plan");
+      expect(recoveryInspectionJson).not.toContain("synthetic-backup-id");
 
       const ticketResponse = await requestJson(port, "/ws-ticket", {
         method: "POST",
@@ -172,6 +189,7 @@ describe("Recovery mutation HDS L3 entry", () => {
       const userFacingDecision = await displayedDecision;
       expect(userFacingDecision).toContain("plan_control_denied:plan_recovery_unverified_hold");
       expect(userFacingDecision).toContain("Control Centerで復旧状態を読み取り確認してください。");
+      expect(userFacingDecision).toContain("Recovery画面の「回復台帳を読み取り検査」を実行してください。");
       expect(userFacingDecision).toContain("新しい依頼から新規計画を作成してください。");
       expect(userFacingDecision).toContain("保留中の計画レビューは再試行しないでください。");
 
