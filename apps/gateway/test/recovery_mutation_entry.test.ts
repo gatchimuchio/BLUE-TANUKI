@@ -6,10 +6,11 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { CompleteHistoryStore, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
+import { recoveryStoreRestoreAttemptHistoryEvidence } from "../src/recovery_surface.js";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const maintenanceToken = "recovery-l3-maintenance-test-token";
@@ -27,6 +28,122 @@ afterEach(async () => {
 });
 
 describe("Recovery mutation HDS L3 entry", () => {
+  it("reconstructs a persisted operation-plan restore hold during Gateway startup and restart", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-startup-plan-hold-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
+    const port = await reserveLoopbackPort();
+    writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const runtimeEnv = isolatedRuntimeEnvironment(root, envFile, historyFile, port);
+    const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
+    const planIdDigest = seedOperationPlanState(planStatePath);
+    const restoreCommand = {
+      type: "tool_call",
+      payload: {
+        tool_name: "recovery.restore",
+        arguments: { backup_id: "synthetic-backup-id", store_key: "operation_plans" },
+      },
+    };
+    const restoreAttempt = recoveryStoreRestoreAttemptHistoryEvidence(restoreCommand);
+    expect(restoreAttempt).toMatchObject({ schema_version: 1, store_key: "operation_plans" });
+    const commandId = "synthetic-failed-plan-restore";
+    const resultDigest = createHash("sha256").update("synthetic failed restore result").digest("hex");
+    const timestamp = Date.now() - 10_000;
+    const history = new CompleteHistoryStore({ filepath: historyFile });
+    history.append({
+      kind: "execution_history",
+      command_id: commandId,
+      actor: "synthetic-test-fixture",
+      source: "recovery-startup-test",
+      timestamp,
+      payload: {
+        command: {
+          operation: "recovery.restore",
+          payload: {
+            tool_name: "recovery.restore",
+            arguments_digest: createHash("sha256").update("synthetic restore arguments").digest("hex"),
+          },
+        },
+        status: "failed",
+        result_present: true,
+        result_digest: resultDigest,
+        recovery_store_restore_attempt: restoreAttempt,
+      },
+    });
+    history.append({
+      kind: "final_output",
+      command_id: commandId,
+      actor: "synthetic-test-fixture",
+      source: "recovery-startup-test",
+      timestamp: timestamp + 1,
+      payload: {
+        status: "failed",
+        result_present: true,
+        result_digest: resultDigest,
+        used_for_authority: false,
+      },
+    });
+    expect(history.verify()).toBe(true);
+    expect(history.size()).toBe(2);
+    expect(history.replay().every((entry) => entry.used_for_authority === false)).toBe(true);
+    expect(JSON.stringify(history.replay())).not.toContain("synthetic-backup-id");
+
+    let gateway: ReturnType<typeof spawnGateway> | undefined;
+    try {
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(port, gateway);
+      const firstRuntime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(firstRuntime.body.hds.operation_plans, gateway.output.join("")).toMatchObject({
+        used_for_authority: false,
+        raw_payload_exposed: false,
+        plans: [{ plan_id: planIdDigest, recovery_hold_reason: "held_unverified" }],
+      });
+
+      await stopChild(gateway.child);
+      gateway = undefined;
+
+      const persistedStore = new OperationPlanStateStore(planStatePath);
+      try {
+        const persistedHoldState = persistedStore.loadRecoveryHoldState();
+        expect(persistedHoldState).toMatchObject({
+          schema_version: "operation-plan-recovery-holds.v1",
+          holds: [{ plan_id_digest: planIdDigest, reason: "held_unverified",
+            provenance: { source: "recovery_restore", restore_store_key: "operation_plans" } }],
+          used_for_authority: false,
+          may_execute: false,
+        });
+        expect(JSON.stringify(persistedHoldState)).not.toContain("synthetic-backup-id");
+        expect(JSON.stringify(persistedHoldState)).not.toContain(commandId);
+      } finally {
+        persistedStore.close();
+      }
+
+      writeFileSync(historyFile, "", "utf8");
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(port, gateway);
+      const restartedRuntime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(restartedRuntime.body.hds.operation_plans.plans, gateway.output.join(""))
+        .toMatchObject([{ plan_id: planIdDigest, recovery_hold_reason: "held_unverified" }]);
+      await stopChild(gateway.child);
+      gateway = undefined;
+
+      const restartedStore = new OperationPlanStateStore(planStatePath);
+      try {
+        expect(restartedStore.loadRecoveryHoldState()).toMatchObject({
+          holds: [{ plan_id_digest: planIdDigest, reason: "held_unverified",
+            provenance: { source: "recovery_restore", restore_store_key: "operation_plans" } }],
+          used_for_authority: false,
+          may_execute: false,
+        });
+      } finally {
+        restartedStore.close();
+      }
+    } finally {
+      if (gateway) await stopChild(gateway.child);
+    }
+  }, 30_000);
+
   it("quiesces, restores, reopens, and reobserves the Cron event store under L3", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-restore-l3-"));
     temporaryRoots.push(root);
