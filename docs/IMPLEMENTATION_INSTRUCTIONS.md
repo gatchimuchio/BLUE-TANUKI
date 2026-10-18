@@ -25,3 +25,9 @@ Gateway起動時に保存済みExecutor結果outboxを既存の同一receipt照�
 ### Git・停止条件
 
 通常成果を限定commitとして`main`へpushし、push後にremote HEAD、local二世代recovery branch、remote二世代backup tag、clean stateを再照合する。未配送receiptまたはM pendingが残る場合は起動を止め、結果を成功や未実行へ丸めない。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+
+### 実施結果
+
+単一worker関連試験は2 files／33 tests PASS。default-parallel初回実行では既存結果調停testの3件がFAILしたが、該当selector単独再実行はPASSし、単一worker再実行も全件PASS。`pnpm typecheck`、`pnpm build`（15 workspace projects）、`pnpm docs:check`、`git diff --check`はPASS。日本語基底の移行負債77件を維持。live serve／実credential／外部作用は未実施。
+
+実装commit=`75f03d91054a1a1780b9148a3b798bf2fbc46ac4`を`origin/main`へpush済み。fetch後のlocal／remote mainは同SHA、作業ツリーclean。local recovery branch／remote backup tagは現世代`742b23c61d15cb390de9b5625179412a53bd49be`、直前世代`3926b448799469e645c712ca63dfa800b910a8e5`でSHA一致。P13は`PENDING_OWNER_GO`、`public_claim_allowed=false`。
