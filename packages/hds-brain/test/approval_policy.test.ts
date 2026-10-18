@@ -446,3 +446,39 @@ describe("approval grant helpers", () => {
     expect(grant.actor).toBe("alice");
   });
 });
+
+describe("Recovery mutation final review", () => {
+  it("keeps every recovery mutation high-risk L3 ask despite matching reusable grants", () => {
+    const cases = [
+      { name: "recovery.restore", args: { backup_id: "backup-2026-01", confirm: "RESTORE" }, target: "recovery.restore:backup-2026-01" },
+      { name: "recovery.reset_provider", args: { confirm: "RESET_PROVIDER" }, target: "recovery.reset_provider:provider-configuration" },
+      { name: "recovery.reset_connector", args: { confirm: "RESET_CONNECTOR" }, target: "recovery.reset_connector:connector-configuration" },
+      { name: "recovery.factory_reset", args: { confirm: "FACTORY_RESET" }, target: "recovery.factory_reset:local-runtime-state-and-config" },
+    ] as const;
+
+    for (const [index, item] of cases.entries()) {
+      const command = toolCommand(item.name, item.args, [`tool:${item.name}`, `recovery:${item.name.slice("recovery.".length)}`, "fs:write"]);
+      command.id = `recovery-${index}`;
+      const grant = buildApprovalGrant({
+        mode: "full_access",
+        decision: "allow",
+        operation: item.name,
+        target_scope: "task_type",
+        target: item.target,
+        risk: "high",
+        actor: "owner",
+        created_by: "owner",
+        expires_at: null,
+      });
+      const evaluation = evaluateApproval(command, [grant], { actor: "owner", default_mode: "full_access" });
+
+      expect(evaluation.context.operation).toBe(item.name);
+      expect(evaluation.context.target).toBe(item.target);
+      expect(evaluation.risk).toBe("high");
+      expect(evaluation.approval_level).toBe("L3_final_review");
+      expect(evaluation.final_review_required).toBe(true);
+      expect(evaluation.decision).toBe("ask");
+      expect(evaluation.reason).toContain("grant_matched_but_final_review_required");
+    }
+  });
+});

@@ -396,6 +396,22 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
         target: urlValue ? `${op}:${urlValue}` : command.payload.tool_name,
       };
     }
+    if (op === "recovery.restore") {
+      const backupId = typeof args.backup_id === "string" ? args.backup_id : undefined;
+      return {
+        target_scope: "task_type",
+        target: backupId ? `recovery.restore:${backupId}` : "recovery.restore:missing-backup-id",
+      };
+    }
+    if (op === "recovery.reset_provider") {
+      return { target_scope: "task_type", target: "recovery.reset_provider:provider-configuration" };
+    }
+    if (op === "recovery.reset_connector") {
+      return { target_scope: "task_type", target: "recovery.reset_connector:connector-configuration" };
+    }
+    if (op === "recovery.factory_reset") {
+      return { target_scope: "task_type", target: "recovery.factory_reset:local-runtime-state-and-config" };
+    }
     const pathValue = typeof args.path === "string" ? args.path : undefined;
     const rootValue = typeof args.root === "string" ? args.root : undefined;
     const queryValue = typeof args.query === "string" ? args.query : undefined;

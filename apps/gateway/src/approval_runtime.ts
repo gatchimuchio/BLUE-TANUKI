@@ -62,7 +62,9 @@ export function approvalRequiredMessage(evaluation: ApprovalEvaluation, command_
     `reason=${evaluation.reason}`,
     approval_token ? `approval_token=${approval_token}` : null,
     "Approve via POST /resume with request_id=<command_id> and verdict=approve.",
-    "To remember: include remember=true and optional duration_ms, or approval_mode=full_access.",
+    evaluation.final_review_required
+      ? "Reusable grants cannot bypass this final review."
+      : "To remember: include remember=true and optional duration_ms, or approval_mode=full_access.",
   ].filter(Boolean).join(" ");
 }
 

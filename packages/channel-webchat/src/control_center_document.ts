@@ -444,12 +444,12 @@ ${CONTROL_CENTER_STYLE}    </style>
           <div class="status-grid">
             <input id="recovery-backup-id" type="text" autocomplete="off" placeholder="backup id or latest" />
             <button id="create-recovery-backup" type="button">Backup Now</button>
-            <button id="restore-recovery-backup" type="button" disabled>Restore</button>
-            <button id="reset-recovery-provider" type="button" disabled>Reset Provider</button>
-            <button id="reset-recovery-connector" type="button" disabled>Reset Connector</button>
-            <button id="factory-reset-recovery" type="button" disabled>Factory Reset</button>
+            <button id="restore-recovery-backup" type="button" disabled>Request Restore Review</button>
+            <button id="reset-recovery-provider" type="button" disabled>Request Provider Reset Review</button>
+            <button id="reset-recovery-connector" type="button" disabled>Request Connector Reset Review</button>
+            <button id="factory-reset-recovery" type="button" disabled>Request Factory Reset Review</button>
           </div>
-          <p id="recovery-action-guard">Restore and reset actions are unavailable until HDS L3 final review is connected. Backup and read-only inspection remain available.</p>
+          <p id="recovery-action-guard">Recovery changes require owner L3 review. Backup and read-only inspection remain available.</p>
           <div class="status-grid">
             <div class="metric"><span>Env file</span><span id="recovery-env-file-status">not loaded</span></div>
             <div class="metric"><span>Env backups</span><span id="recovery-env-backup-count">not loaded</span></div>

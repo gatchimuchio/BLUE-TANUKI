@@ -2,11 +2,28 @@
 
 ## 次のBUILD_BATCH
 
-前回のRecovery変更経路は、maintenance tokenと確認文字列だけでRestore／resetを呼べ、HDS L3最終審査を経由していなかった。直前バッチで公開Recovery HTTP経路をfail-closedにし、HDSの単一最終審査リストへRecovery操作を登録した。画面表示も実行不可へ揃えた。
+直前の `QEB-03-E03.03-RECOVERY-HDS-L3-MUTATION-PATH` で、Recovery変更をHDSの目的採否、high-risk／L3最終審査、owner resume tokenの単回消費、hash-chain audit、Executor、結果投影へ接続した。maintenance tokenは要求登録だけを認証する。実行前に完全な引数と対象を固定し、画面確認やapproval grantはowner承認の代用にしない。
 
-次consumerは `recovery.restore`／`recovery.reset_provider`／`recovery.reset_connector`／`recovery.factory_reset` のうち必要な操作を、HDSの目的採否・L3 owner承認・単回消費・hash-chain auditへ接続するGateway経路である。maintenance tokenはendpoint accessだけを認証する。UI確認、設定値、tool名、Approval grantをL3承認の代用にせず、経路が成立するまで公開Recovery mutationはblockedのまま保つ。canonical SQLite snapshotはstore間atomicity・仕事identity・独立restore pointが未成立であり、引き続きgeneric Restoreへ適用しない。
+次consumerはRecovery変更後のread-only再観測である。実行結果と固定された環境状態をoperation／result digestへ対応付け、操作者へ「設定変更済み／未確認／失敗」を表示する。秘密値、raw path、SQLite snapshotのstore間atomicity、仕事単位restore pointを推定しない。pending approvalがGateway再起動後に失われた場合は新規要求を必要とし、C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
 
 ## 直前のBUILD_BATCH実績
+
+`QEB-03-E03.03-RECOVERY-HDS-L3-MUTATION-PATH` は開始HEAD／`origin/main`=`7d502eedf8cc5f1493bdb15d64c9b5c445046a45`で開始し、worktreeにはこのRecovery作業の先行差分が存在した。三点正本rev2.3、適用AGENTS.md、作業標準要領、active指示、E03.03と現物を再同期した。
+
+4つのRecovery toolをoperation catalog／HDS tool processへ登録し、固定tool nameでhigh-risk・L3・askへ分類した。Restoreは要求時点のbackup IDを確定し、Approval queueとControl Centerに正確なtargetを表示する。HDS L3が成立しない場合は実行せず、maintenance endpointは `approval_required` と `executed=false` を返す。認証済みowner resumeと1回限りのapproval tokenを経た後だけExecutorが変更を実行する。再利用grantはfinal reviewに使えず、request bodyのactor申告をRecovery承認監査の実行主体として採らない。tool結果はpath／manifest内容を除いたallowlist projectionとし、失敗時のraw filesystem errorも抑止する。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway Recovery／WebChat／HDS Approval／protocol focused tests | PASS、6 files／117 tests。invalid argumentsとL3分類、backup target固定、approval queue、単回token、誤token拒否、owner resume後の一時env reset、再実行拒否、client actor偽装抑止を確認。 |
+| `pnpm typecheck`→`pnpm build` | PASS。15 workspace projects。 |
+| `pnpm hds:standalone` | PASS。standalone snapshotでRuntime Invariantsとnon-authority flagsを確認。 |
+| `pnpm docs:check` | PASS。docs／licensing gate PASS、日本語基底の既存移行負債76件。 |
+| `pnpm validate:repo-health`／`git diff --check` | 両方PASS。 |
+| 実provider・外部書込み、store横断atomic restore、job identity、独立restore point、全suite、5OS実機、QE_QC／QE_QA | 未実施／未成立。 |
+
+E03.03=`BUILD_GAP`を維持する。owner resume後の一時env resetは合成設定を使った一時Gateway process内の限定runtime疎通であり、実provider接続・実資格・実業務作用を含まない。canonical SQLite snapshotはgeneric Restoreへ適用しない。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+
+## 前回のBUILD_BATCH実績
 
 `QEB-03-E03.03-RECOVERY-L3-MUTATION-BOUNDARY` は開始HEAD／`origin/main`=`9a9f9fe4b3aa6c76a512dba2eeca1e4e14eaf1df`、開始worktree cleanで開始した。三点正本rev2.3、適用AGENTS.md、作業標準、現行指示、E03.03、HDS Approval GateとRecovery consumerを再読した。編集前local recovery branch二世代とremote backup tag二世代は現世代=`9a9f9fe4b3aa6c76a512dba2eeca1e4e14eaf1df`、前世代=`09800b52c7fa21fb9e41050cb8621f78e00fed06`で一致した。
 

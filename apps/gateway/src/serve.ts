@@ -84,12 +84,14 @@ import { buildAboutSnapshot } from "./about_surface.js";
 import {
   buildRecoverySnapshot,
   createRecoveryBackup,
-  factoryResetRecovery,
   inspectLatestRecoveryBackup,
-  resetRecoveryConnector,
-  resetRecoveryProvider,
-  restoreRecoveryBackup,
 } from "./recovery_surface.js";
+import {
+  createRecoveryMutationTools,
+  normalizeRecoveryMutationArguments,
+  RECOVERY_TOOL_NAMES,
+  type RecoveryToolName,
+} from "./recovery_tools.js";
 import {
   buildUpdateSnapshot,
   prepareManualUpdate,
@@ -374,6 +376,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   gatewayLog.info("LLM command route", describeLLMCommandRoute());
 
   const tools = new ToolRegistry();
+  for (const tool of createRecoveryMutationTools(process.env)) tools.register(tool);
   plugins.registerTools(tools);
   const llm = buildLLMBackendFromEnv();
 
@@ -860,7 +863,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       return { status: "failure_memory_blocked" };
     }
     if (!opts.skip_approval) {
-      const evaluation = approval.evaluate(cmd, actor);
+      const evaluation = opts.approval_evaluation ?? approval.evaluate(cmd, actor);
       executionEvaluation = evaluation;
       hds.onApprovalEvaluation(evaluation, { request_id: log.request_id });
       recordApprovalHistory("policy_evaluation", cmd, log, origin, actor, evaluation);
@@ -1091,16 +1094,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
       return hds.isOperationPlanCommand(command_id) ? { executed: false, status: "plan_binding_stale" } : null;
     }
+    const approvalActor = pending.command.type === "tool_call" &&
+      RECOVERY_TOOL_NAMES.includes(pending.command.payload.tool_name as RecoveryToolName)
+      ? "webchat-resume-token-holder"
+      : ctx.actor;
     if (executorCommandDigest(pending.command) !== pending.command_digest) {
       resolveCronApprovalHandoff(pending, "cancelled");
       pendingApprovals.delete(command_id);
-      hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "approval_content_changed" });
+      hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: approvalActor, reason: "approval_content_changed" });
       return { executed: false, status: "approval_content_changed" };
     }
     if (!hds.operationPlanCommandIsCurrent(pending.command)) {
       resolveCronApprovalHandoff(pending, "cancelled");
       pendingApprovals.delete(command_id);
-      hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "plan_binding_stale" });
+      hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: approvalActor, reason: "plan_binding_stale" });
       return { executed: false, status: "plan_binding_stale" };
     }
     if (verdict === "approve" && isGmailMessageSendCommand(pending.command) &&
@@ -1122,7 +1129,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       if (!hds.operationPlanCommandIsCurrent(pending.command)) {
         resolveCronApprovalHandoff(pending, "cancelled");
         pendingApprovals.delete(command_id);
-        hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: ctx.actor, reason: "plan_binding_stale" });
+        hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: approvalActor, reason: "plan_binding_stale" });
         return { executed: false, status: "plan_binding_stale" };
       }
       pendingApprovals.set(command_id, {
@@ -1133,10 +1140,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       hds.onAuthorityEvent("emergency_stop_blocked", {
         request_id: pending.log.request_id,
         command_id,
-        actor: ctx.actor,
+        actor: approvalActor,
         reason: emergencyStop.reason ?? "owner emergency stop active",
       });
-      recordApprovalHistory("emergency_stop_blocked_approval", pending.command, pending.log, pending.origin, ctx.actor, pending.evaluation, {
+      recordApprovalHistory("emergency_stop_blocked_approval", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
         verdict,
         token_kind: ctx.token_kind,
         approval_token_reissued: Boolean(issued?.token),
@@ -1162,9 +1169,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (verdict !== "approve") {
       resolveCronApprovalHandoff(pending, "rejected");
       pendingApprovals.delete(command_id);
-      runtimeSchedules.rejectPending(command_id, ctx.actor, `human_approval:${verdict}`);
-      hds.onCommandLifecycle(command_id, "approval_rejected", { actor: ctx.actor, reason: `human_approval:${verdict}` });
-      recordApprovalHistory("human_resume_rejected", pending.command, pending.log, pending.origin, ctx.actor, pending.evaluation, {
+      runtimeSchedules.rejectPending(command_id, approvalActor, `human_approval:${verdict}`);
+      hds.onCommandLifecycle(command_id, "approval_rejected", { actor: approvalActor, reason: `human_approval:${verdict}` });
+      recordApprovalHistory("human_resume_rejected", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
         verdict,
         token_kind: ctx.token_kind,
       });
@@ -1175,8 +1182,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       resolveCronApprovalHandoff(pending, "cancelled");
       pendingApprovals.delete(command_id);
       const content = "[schedule-expired] approval expired before activation. activated=false can_fire=false next_action=Submit the schedule request again and approve the new command_id.";
-      hds.onCommandLifecycle(command_id, "approval_rejected", { actor: ctx.actor, reason: "schedule_approval_expired" });
-      recordApprovalHistory("schedule_approval_expired", pending.command, pending.log, pending.origin, ctx.actor, pending.evaluation, {
+      hds.onCommandLifecycle(command_id, "approval_rejected", { actor: approvalActor, reason: "schedule_approval_expired" });
+      recordApprovalHistory("schedule_approval_expired", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
         verdict,
         token_kind: ctx.token_kind,
       });
@@ -1185,31 +1192,154 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     resolveCronApprovalHandoff(pending, "consumed");
     pendingApprovals.delete(command_id);
-    if (ctx.approval?.remember || ctx.approval?.mode) {
-      const grant = approval.remember(pending.evaluation, { actor: ctx.actor, mode: ctx.approval.mode, duration_ms: ctx.approval.duration_ms, note: `remembered from approval of command_id=${command_id}` });
+    const rememberRequested = Boolean(ctx.approval?.remember || ctx.approval?.mode);
+    if (rememberRequested && !pending.evaluation.final_review_required) {
+      const grant = approval.remember(pending.evaluation, { actor: approvalActor, mode: ctx.approval?.mode, duration_ms: ctx.approval?.duration_ms, note: `remembered from approval of command_id=${command_id}` });
       hds.onAuthorityEvent("grant_created", {
         request_id: pending.log.request_id,
         command_id,
         grant_id: grant.id,
-        actor: ctx.actor,
+        actor: approvalActor,
         reason: `remembered from approval of command_id=${command_id}`,
         evaluation: pending.evaluation,
       });
     }
-    hds.onCommandLifecycle(command_id, "approval_approved", { actor: ctx.actor, reason: "human_approval:approve" });
-    recordApprovalHistory("human_resume_approved", pending.command, pending.log, pending.origin, ctx.actor, pending.evaluation, {
+    hds.onCommandLifecycle(command_id, "approval_approved", { actor: approvalActor, reason: "human_approval:approve" });
+    recordApprovalHistory("human_resume_approved", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
       verdict,
       token_kind: ctx.token_kind,
-      remember_requested: Boolean(ctx.approval?.remember || ctx.approval?.mode),
+      remember_requested: rememberRequested && !pending.evaluation.final_review_required,
+      remember_ignored_final_review: rememberRequested && pending.evaluation.final_review_required,
       ...(ctx.content_review_digest ? { content_review_digest: ctx.content_review_digest } : {}),
     });
     const r = await executeAndEcho(pending.command, pending.log, pending.origin, {
       skip_approval: true,
-      actor: ctx.actor,
+      actor: approvalActor,
       approval_evaluation: pending.evaluation,
       command_digest: pending.command_digest,
     });
     return { approval: "approve", executed: true, status: r.status };
+  }
+
+  async function requestRecoveryMutation(
+    toolName: RecoveryToolName,
+    rawArguments: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const snapshot = await buildRecoverySnapshot(process.env);
+    if (toolName !== "recovery.restore" && !snapshot.env_file.configured) {
+      throw new Error("env_file_required");
+    }
+    const latestBackupId = toolName === "recovery.restore"
+      ? snapshot.recovery_backups.latest_backup_id
+      : null;
+    const arguments_ = normalizeRecoveryMutationArguments(toolName, rawArguments, { latestBackupId });
+    const origin: InboundRequest = {
+      id: randomUUID(),
+      channel: "webchat",
+      user: "webchat-maintenance-token-holder",
+      content: `tool:${toolName} ${JSON.stringify(arguments_)}`,
+      timestamp: Date.now(),
+      metadata: { reply_to: "local-user" },
+    };
+    const boundary = planGatewayInboundBoundary(origin);
+    if (!gatewayInboundAllowsDownstream(boundary)) throw new Error("recovery_request_boundary_invalid");
+    const authorityOrigin = boundary.request;
+    const observation = buildObservationAcquisitionRecord(boundary);
+    recordCompleteHistory({
+      kind: "user_input",
+      request_id: authorityOrigin.id,
+      actor: authorityOrigin.user,
+      source: authorityOrigin.channel,
+      timestamp: authorityOrigin.timestamp,
+      payload: observation ?? {
+        channel: authorityOrigin.channel,
+        content_digest: digestString(authorityOrigin.content),
+        content_chars: authorityOrigin.content.length,
+        metadata_keys: metadataKeys(authorityOrigin.metadata),
+        boundary_status: "canonical_record_contract_failed",
+        boundary_issues_count: 0,
+        reply_to_present: true,
+      },
+    });
+    const { log, command } = hds.decide(boundary.hdsBoundaryInput);
+    recordCompleteHistory({
+      kind: "hds_decision",
+      request_id: log.request_id,
+      command_id: command?.id,
+      actor: authorityOrigin.user,
+      source: "hds-brain",
+      timestamp: log.timestamp,
+      payload: hdsDecisionHistoryPayload(log, command),
+    });
+    if (!command || command.type !== "tool_call" || command.payload.tool_name !== toolName) {
+      if (command) hds.onCommandLifecycle(command.id, "approval_rejected", {
+        actor: authorityOrigin.user,
+        reason: "recovery_hds_operation_mismatch",
+      });
+      return { status: "blocked_authority", executed: false, operation: toolName, reason: "recovery_hds_operation_mismatch" };
+    }
+    const evaluation = approval.evaluate(command, authorityOrigin.user);
+    const finalReviewReady = evaluation.context.operation === toolName &&
+      evaluation.decision === "ask" &&
+      evaluation.risk === "high" &&
+      evaluation.approval_level === "L3_final_review" &&
+      evaluation.final_review_required;
+    if (!finalReviewReady) {
+      hds.onApprovalEvaluation(evaluation, { request_id: log.request_id });
+      recordApprovalHistory("recovery_final_review_unavailable", command, log, authorityOrigin, authorityOrigin.user, evaluation, {
+        recovery_request_blocked: true,
+      });
+      hds.onCommandLifecycle(command.id, "approval_rejected", {
+        actor: authorityOrigin.user,
+        reason: "recovery_l3_gate_unavailable",
+      });
+      return { status: "blocked_authority", executed: false, operation: toolName, reason: "recovery_l3_gate_unavailable" };
+    }
+    const result = await executeAndEcho(command, log, authorityOrigin, {
+      actor: authorityOrigin.user,
+      approval_evaluation: evaluation,
+    });
+    if (result.status !== "approval_required") {
+      return {
+        status: result.status,
+        executed: false,
+        operation: toolName,
+        request_id: log.request_id,
+        command_id: command.id,
+      };
+    }
+    const pending = pendingApprovals.get(command.id);
+    if (!pending || pending.evaluation.context.operation !== toolName || !pending.evaluation.final_review_required) {
+      if (pending) pendingApprovals.delete(command.id);
+      hds.onCommandLifecycle(command.id, "approval_cancelled", {
+        actor: authorityOrigin.user,
+        reason: "recovery_approval_queue_incomplete",
+      });
+      return { status: "approval_unavailable", executed: false, operation: toolName, command_id: command.id };
+    }
+    if (!pending.approval_token) {
+      pendingApprovals.delete(command.id);
+      hds.onCommandLifecycle(command.id, "approval_cancelled", {
+        actor: authorityOrigin.user,
+        reason: "recovery_approval_token_unavailable",
+      });
+      recordApprovalHistory("approval_cancelled", command, log, authorityOrigin, authorityOrigin.user, evaluation, {
+        reason: "recovery_approval_token_unavailable",
+      });
+      return { status: "approval_unavailable", executed: false, operation: toolName, command_id: command.id };
+    }
+    return {
+      status: "approval_required",
+      executed: false,
+      request_id: log.request_id,
+      command_id: command.id,
+      operation: evaluation.context.operation,
+      target: evaluation.context.target,
+      risk: evaluation.risk,
+      approval_level: evaluation.approval_level,
+      final_review_required: true,
+      next_action: "Review this exact operation and target in the owner approval queue. A fresh owner L3 approval token is required; this request has not executed.",
+    };
   }
 
   webchat = plugins.createChannel<WebChatChannel>({
@@ -1393,23 +1523,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           return projectGatewayRecoveryInspectionForOperator(inspectGatewayRecoveryState(process.env));
         },
         createBackup: async () => createRecoveryBackup(process.env),
-        restoreBackup: async (body: Record<string, unknown>) =>
-          restoreRecoveryBackup(process.env, {
-            backup_id: typeof body.backup_id === "string" ? body.backup_id : undefined,
-            confirm: typeof body.confirm === "string" ? body.confirm : undefined,
-          }),
-        resetProvider: async (body: Record<string, unknown>) =>
-          resetRecoveryProvider(process.env, {
-            confirm: typeof body.confirm === "string" ? body.confirm : undefined,
-          }),
-        resetConnector: async (body: Record<string, unknown>) =>
-          resetRecoveryConnector(process.env, {
-            confirm: typeof body.confirm === "string" ? body.confirm : undefined,
-          }),
-        factoryReset: async (body: Record<string, unknown>) =>
-          factoryResetRecovery(process.env, {
-            confirm: typeof body.confirm === "string" ? body.confirm : undefined,
-          }),
+        restoreBackup: async (body: Record<string, unknown>) => requestRecoveryMutation("recovery.restore", body),
+        resetProvider: async (body: Record<string, unknown>) => requestRecoveryMutation("recovery.reset_provider", body),
+        resetConnector: async (body: Record<string, unknown>) => requestRecoveryMutation("recovery.reset_connector", body),
+        factoryReset: async (body: Record<string, unknown>) => requestRecoveryMutation("recovery.factory_reset", body),
       },
       operators: {
         daily: {
@@ -1497,6 +1614,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       command_id: p.command.id,
       request_id: p.log.request_id,
       operation: p.evaluation.context.operation,
+      target: p.evaluation.context.target,
       risk: p.evaluation.risk,
       approval_level: p.evaluation.approval_level,
       final_review_required: p.evaluation.final_review_required,

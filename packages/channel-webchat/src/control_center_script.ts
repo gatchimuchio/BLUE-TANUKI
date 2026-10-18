@@ -1062,6 +1062,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dl class="kv">' +
                 '<dt>command</dt><dd class="mono">' + escapeHtml(item.command_id || "unknown") + '</dd>' +
                 '<dt>request</dt><dd class="mono">' + escapeHtml(item.request_id || "unknown") + '</dd>' +
+                (item.target ? '<dt>target</dt><dd>' + escapeHtml(item.target) + '</dd>' : '') +
                 '<dt>risk</dt><dd>' + badge(item.risk || "unknown", riskTone) + '</dd>' +
               '<dt>ApprovalLevel</dt><dd>' + badge(level, level === "L3_final_review" ? "review" : "good") + '</dd>' +
                 '<dt>adapter</dt><dd>' + badge(trace.adapter || "not recorded", trace.adapter_is_authority === false ? "good" : "warn") + '</dd>' +
@@ -1491,23 +1492,27 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("recovery-pack-count", packs.backup_count ?? 0);
         setText("recovery-latest-backup", packs.latest_backup_id || envFile.latest_backup_path || "none");
         if (packs.latest_backup_id) byId("recovery-backup-id").placeholder = packs.latest_backup_id;
-        setText("recovery-restore-status", restore.execution_available ? "available" : "blocked");
-        setText("recovery-factory-reset-status", restore.factory_reset_available ? "available" : "blocked");
-        setText("recovery-action-guard", restore.blocked_reason === "hds_final_review_not_connected"
-          ? "Restore and reset actions are blocked until HDS L3 final review is connected. Backup and read-only inspection remain available."
+        const restoreReviewAvailable = restore.restore_review_request_available === true;
+        const providerReviewAvailable = restore.provider_reset_review_request_available === true;
+        const connectorReviewAvailable = restore.connector_reset_review_request_available === true;
+        const factoryReviewAvailable = restore.factory_reset_review_request_available === true;
+        setText("recovery-restore-status", restoreReviewAvailable ? "owner review required" : "unavailable");
+        setText("recovery-factory-reset-status", factoryReviewAvailable ? "owner review required" : "unavailable");
+        setText("recovery-action-guard", restore.blocked_reason === "owner_l3_review_required"
+          ? "Submitting a request only queues the exact action for owner L3 review. No recovery change runs until the owner approves it in the approval queue."
           : "Recovery mutation status is unavailable.");
-        byId("restore-recovery-backup").disabled = restore.execution_available !== true;
-        byId("reset-recovery-provider").disabled = restore.provider_reset_available !== true;
-        byId("reset-recovery-connector").disabled = restore.connector_reset_available !== true;
-        byId("factory-reset-recovery").disabled = restore.factory_reset_available !== true;
+        byId("restore-recovery-backup").disabled = !restoreReviewAvailable;
+        byId("reset-recovery-provider").disabled = !providerReviewAvailable;
+        byId("reset-recovery-connector").disabled = !connectorReviewAvailable;
+        byId("factory-reset-recovery").disabled = !factoryReviewAvailable;
         setText("recovery-authority-status", authority.used_for_authority === true
           ? "unsafe"
-          : restore.blocked_reason === "hds_final_review_not_connected" ? "HDS L3 required" : "HDS gated");
+          : restore.blocked_reason === "owner_l3_review_required" ? "HDS L3 required" : "HDS gated");
         setText("recovery-next-action", snapshot.next_safe_action || "review recovery readiness");
         setText("recovery-boundary-status", snapshot.mode || "read only");
         byId("recovery-boundary-status").className = "badge " + (snapshot.mode === "control_available" ? "review" : "good");
-        byId("recovery-restore-status").className = "badge " + (restore.execution_available ? "review" : "warn");
-        byId("recovery-factory-reset-status").className = "badge " + (restore.factory_reset_available ? "review" : "warn");
+        byId("recovery-restore-status").className = "badge " + (restoreReviewAvailable ? "review" : "warn");
+        byId("recovery-factory-reset-status").className = "badge " + (factoryReviewAvailable ? "review" : "warn");
         byId("recovery-authority-status").className = "badge " + (authority.used_for_authority === true ? "bad" : "good");
         setHtml(
           "recovery-path-list",
@@ -1525,8 +1530,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       function renderRecoveryActionResult(body) {
         const result = body.result || body;
-        setText("recovery-action-status", result.action ? result.action + " completed" : "completed");
-        byId("recovery-action-status").className = "badge review";
+        const queued = result.status === "approval_required" && result.executed === false;
+        const label = queued ? "queued for owner review" : result.status === "blocked_authority" ? "blocked" : "not executed";
+        setText("recovery-action-status", label);
+        byId("recovery-action-status").className = "badge " + (queued ? "review" : "warn");
         setText("recovery-json", compactJson(redactRuntimeValue(result)));
       }
 
@@ -2521,7 +2528,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function restoreRecoveryBackup() {
-        if (!window.confirm("Restore from the selected recovery backup?")) return;
+        if (!window.confirm("Submit a restore request for owner L3 review? No recovery change runs until the owner approves it.")) return;
         const backupId = byId("recovery-backup-id").value.trim();
         const body = { confirm: "RESTORE" };
         if (backupId) body.backup_id = backupId;
@@ -2529,17 +2536,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function resetRecoveryProvider() {
-        if (!window.confirm("Reset provider configuration to stub mode?")) return;
+        if (!window.confirm("Submit a provider reset request for owner L3 review? No configuration changes until the owner approves it.")) return;
         await runRecoveryAction("/recovery/reset-provider", { confirm: "RESET_PROVIDER" });
       }
 
       async function resetRecoveryConnector() {
-        if (!window.confirm("Reset connector credentials and live execution settings?")) return;
+        if (!window.confirm("Submit a connector reset request for owner L3 review? No configuration changes until the owner approves it.")) return;
         await runRecoveryAction("/recovery/reset-connector", { confirm: "RESET_CONNECTOR" });
       }
 
       async function factoryResetRecovery() {
-        if (!window.confirm("Factory reset local runtime state while preserving audit and backups?")) return;
+        if (!window.confirm("Submit a factory reset request for owner L3 review? No state changes until the owner approves it.")) return;
         await runRecoveryAction("/recovery/factory-reset", { confirm: "FACTORY_RESET" });
       }
 

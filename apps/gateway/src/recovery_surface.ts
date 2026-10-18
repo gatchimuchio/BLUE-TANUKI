@@ -69,12 +69,16 @@ export interface RecoverySnapshot {
   };
   restore: {
     execution_available: boolean;
+    restore_review_request_available: boolean;
     backup_available: boolean;
     latest_backup_id: string | null;
+    factory_reset_review_request_available: boolean;
+    provider_reset_review_request_available: boolean;
+    connector_reset_review_request_available: boolean;
     factory_reset_available: boolean;
     provider_reset_available: boolean;
     connector_reset_available: boolean;
-    blocked_reason: "hds_final_review_not_connected";
+    blocked_reason: "owner_l3_review_required";
     destructive_repair_available: false;
     confirmation_required: true;
   };
@@ -1338,17 +1342,21 @@ export async function buildRecoverySnapshot(env: NodeJS.ProcessEnv = process.env
     },
     restore: {
       execution_available: false,
+      restore_review_request_available: backups.latest_backup_id !== null,
       backup_available: true,
       latest_backup_id: backups.latest_backup_id,
+      factory_reset_review_request_available: envFile.configured,
+      provider_reset_review_request_available: envFile.configured,
+      connector_reset_review_request_available: envFile.configured,
       factory_reset_available: false,
       provider_reset_available: false,
       connector_reset_available: false,
-      blocked_reason: "hds_final_review_not_connected",
+      blocked_reason: "owner_l3_review_required",
       destructive_repair_available: false,
       confirmation_required: true,
     },
     authority_boundary: AUTHORITY_BOUNDARY,
-    next_safe_action: "Recovery restore and reset actions are blocked until they use the HDS L3 final-review path. Backup and read-only inspection remain available.",
+    next_safe_action: "Submit an available recovery change for HDS L3 owner review. Maintenance access only queues the exact operation; it does not execute it. Canonical SQLite snapshots are not applied by generic Restore.",
     evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
   };
 }

@@ -129,7 +129,7 @@ function findAotanuAssetRoot(): string {
  *   POST /operators/daily/invoke body:{user,content} auth:Bearer inbound-token
  *   GET  /operators/developer auth:Bearer inbound-token
  *   POST /operators/developer/invoke body:{user,content} auth:Bearer inbound-token
- *   GET/POST /update/* and /recovery/* auth:Bearer maintenance-token; recovery mutations remain blocked until HDS L3 review is wired
+ *   GET/POST /update/* and /recovery/* auth:Bearer maintenance-token; recovery mutations only enqueue HDS L3 review
  *   GET  /ws         query:?ticket=...
  *   GET  /healthz    no auth, not rate-limited
  *
@@ -1597,22 +1597,6 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "method_not_allowed" }));
       return;
     }
-    if ([
-      "/recovery/restore",
-      "/recovery/reset-provider",
-      "/recovery/reset-connector",
-      "/recovery/factory-reset",
-    ].includes(route)) {
-      res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
-      res.end(JSON.stringify({
-        error: "hds_final_review_not_connected",
-        status: "blocked_authority",
-        approval_level_required: "L3_final_review",
-        executed: false,
-        used_for_authority: false,
-      }));
-      return;
-    }
     try {
       const body = (await readJson(req)) ?? {};
       let result: unknown;
@@ -1656,7 +1640,12 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "recovery_action_not_found" }));
         return;
       }
-      res.writeHead(200, {
+      const queuedForFinalReview = result !== null && typeof result === "object" &&
+        (result as { status?: unknown }).status === "approval_required" &&
+        (result as { executed?: unknown }).executed === false;
+      const blockedAuthority = result !== null && typeof result === "object" &&
+        ["blocked_authority", "approval_unavailable"].includes(String((result as { status?: unknown }).status));
+      res.writeHead(queuedForFinalReview ? 202 : blockedAuthority ? 409 : 200, {
         "content-type": "application/json",
         "cache-control": "no-store",
       });

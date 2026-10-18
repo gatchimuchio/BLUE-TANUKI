@@ -80,6 +80,7 @@ export interface WebChatApprovalQueueItem {
   command_id: string;
   request_id: string;
   operation: string;
+  target?: string;
   risk: string;
   approval_level?: string;
   final_review_required: boolean;

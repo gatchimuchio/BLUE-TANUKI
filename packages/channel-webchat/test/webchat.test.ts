@@ -722,7 +722,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Update");
       expect(html).toContain("Backup / Restore");
       expect(html).toContain('id="restore-recovery-backup" type="button" disabled');
-      expect(html).toContain("Restore and reset actions are unavailable until HDS L3 final review is connected.");
+      expect(html).toContain("Recovery changes require owner L3 review. Backup and read-only inspection remain available.");
+      expect(html).toContain("Request Restore Review");
+      expect(html).toContain("item.target");
       expect(html).toContain("OpenRouter");
       expect(html).toContain("Composio");
       expect(html).toContain("connectors-token");
@@ -980,12 +982,16 @@ describe("WebChatChannel — Recovery surface", () => {
           },
           restore: {
             execution_available: false,
+            restore_review_request_available: true,
             backup_available: true,
             latest_backup_id: "2026-06-14T00-00-00-000Z.backup.fixture",
+            factory_reset_review_request_available: true,
+            provider_reset_review_request_available: true,
+            connector_reset_review_request_available: true,
             factory_reset_available: false,
             provider_reset_available: false,
             connector_reset_available: false,
-            blocked_reason: "hds_final_review_not_connected",
+            blocked_reason: "owner_l3_review_required",
             destructive_repair_available: false,
             confirmation_required: true,
           },
@@ -1146,19 +1152,19 @@ describe("WebChatChannel — Recovery surface", () => {
         },
         restoreBackup: async (body) => {
           actions.push(`restore:${String(body.confirm)}`);
-          return { action: "restore", backup_id: body.backup_id, used_for_authority: false };
+          return { status: "approval_required", executed: false, operation: "recovery.restore", backup_id: body.backup_id, used_for_authority: false };
         },
         resetProvider: async (body) => {
           actions.push(`provider:${String(body.confirm)}`);
-          return { action: "provider_reset", used_for_authority: false };
+          return { status: "approval_required", executed: false, operation: "recovery.reset_provider", used_for_authority: false };
         },
         resetConnector: async (body) => {
           actions.push(`connector:${String(body.confirm)}`);
-          return { action: "connector_reset", used_for_authority: false };
+          return { status: "approval_required", executed: false, operation: "recovery.reset_connector", used_for_authority: false };
         },
         factoryReset: async (body) => {
           actions.push(`factory:${String(body.confirm)}`);
-          return { action: "factory_reset", used_for_authority: false };
+          return { status: "approval_required", executed: false, operation: "recovery.factory_reset", used_for_authority: false };
         },
       },
     });
@@ -1287,10 +1293,14 @@ describe("WebChatChannel — Recovery surface", () => {
         },
         restore: {
           execution_available: false,
+          restore_review_request_available: true,
+          factory_reset_review_request_available: true,
+          provider_reset_review_request_available: true,
+          connector_reset_review_request_available: true,
           factory_reset_available: false,
           provider_reset_available: false,
           connector_reset_available: false,
-          blocked_reason: "hds_final_review_not_connected",
+          blocked_reason: "owner_l3_review_required",
           destructive_repair_available: false,
         },
         authority_boundary: {
@@ -1322,13 +1332,10 @@ describe("WebChatChannel — Recovery surface", () => {
       }, {
         authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
-      expect(restore.status).toBe(403);
+      expect(restore.status).toBe(202);
       expect(restore.body).toMatchObject({
-        error: "hds_final_review_not_connected",
-        status: "blocked_authority",
-        approval_level_required: "L3_final_review",
-        executed: false,
-        used_for_authority: false,
+        ok: true,
+        result: { status: "approval_required", executed: false },
       });
 
       const providerReset = await postJson(ctx.port, "/recovery/reset-provider", { confirm: "RESET_PROVIDER" }, {
@@ -1340,13 +1347,13 @@ describe("WebChatChannel — Recovery surface", () => {
       const factoryReset = await postJson(ctx.port, "/recovery/factory-reset", { confirm: "FACTORY_RESET" }, {
         authorization: `Bearer ${MAINTENANCE_TOKEN}`,
       });
-      expect(providerReset.status).toBe(403);
-      expect(connectorReset.status).toBe(403);
-      expect(factoryReset.status).toBe(403);
-      expect(providerReset.body.error).toBe("hds_final_review_not_connected");
-      expect(connectorReset.body.error).toBe("hds_final_review_not_connected");
-      expect(factoryReset.body.error).toBe("hds_final_review_not_connected");
-      expect(actions).toEqual(["backup"]);
+      expect(providerReset.status).toBe(202);
+      expect(connectorReset.status).toBe(202);
+      expect(factoryReset.status).toBe(202);
+      expect(providerReset.body.result).toMatchObject({ status: "approval_required", executed: false });
+      expect(connectorReset.body.result).toMatchObject({ status: "approval_required", executed: false });
+      expect(factoryReset.body.result).toMatchObject({ status: "approval_required", executed: false });
+      expect(actions).toEqual(["backup", "restore:RESTORE", "provider:RESET_PROVIDER", "connector:RESET_CONNECTOR", "factory:FACTORY_RESET"]);
     } finally {
       await ctx.teardown();
     }

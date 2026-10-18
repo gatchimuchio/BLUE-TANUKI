@@ -35,6 +35,10 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
       "schedule.update",
       "schedule.delete",
       "schedule.resolve_event",
+      "recovery.restore",
+      "recovery.reset_provider",
+      "recovery.reset_connector",
+      "recovery.factory_reset",
     ];
 
     expect(OPERATION_DESCRIPTOR_REGISTRY.filter((descriptor) => descriptor.tool_name).map((descriptor) => descriptor.tool_name).sort())
@@ -71,6 +75,14 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
       "tool:schedule.resolve_event",
       "schedule:resolve_event",
     ]);
+    expect(getToolOperationDescriptor("recovery.restore")?.effects).toEqual(["write", "delete"]);
+    expect(getToolOperationDescriptor("recovery.restore")?.required_capabilities).toEqual([
+      "tool:recovery.restore",
+      "recovery:restore",
+      "fs:write",
+      "fs:delete",
+    ]);
+    expect(getToolOperationDescriptor("recovery.factory_reset")?.required_capabilities).toContain("fs:delete");
     expect(getToolOperationDescriptor("gmail.read")?.required_capabilities).toContain(
       "secrets:GOOGLE_ACCESS_TOKEN",
     );

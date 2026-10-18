@@ -110,12 +110,16 @@ describe("buildRecoverySnapshot", () => {
       });
       expect(snapshot.restore).toMatchObject({
         execution_available: false,
+        restore_review_request_available: false,
         backup_available: true,
         latest_backup_id: null,
+        factory_reset_review_request_available: true,
+        provider_reset_review_request_available: true,
+        connector_reset_review_request_available: true,
         factory_reset_available: false,
         provider_reset_available: false,
         connector_reset_available: false,
-        blocked_reason: "hds_final_review_not_connected",
+        blocked_reason: "owner_l3_review_required",
         destructive_repair_available: false,
         confirmation_required: true,
       });
@@ -201,10 +205,14 @@ describe("buildRecoverySnapshot", () => {
       expect(JSON.stringify(backup)).not.toContain("connector-secret-value");
       expect((await buildRecoverySnapshot(env)).restore).toMatchObject({
         execution_available: false,
+        restore_review_request_available: true,
+        factory_reset_review_request_available: true,
+        provider_reset_review_request_available: true,
+        connector_reset_review_request_available: true,
         factory_reset_available: false,
         provider_reset_available: false,
         connector_reset_available: false,
-        blocked_reason: "hds_final_review_not_connected",
+        blocked_reason: "owner_l3_review_required",
       });
 
       const inspection = await inspectLatestRecoveryBackup(env);
