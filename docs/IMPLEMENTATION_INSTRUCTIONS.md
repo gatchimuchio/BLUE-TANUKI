@@ -2,23 +2,25 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-03-E03.03-JM-RESTORE-QUIESCE-REOPEN-HDS-HOLD`
+### 最新BUILD_BATCH：`QEB-03-E03.03-JM-RESTORE-PLAN-DEPENDENCY-REVIEW`
 
-開始HEAD／`origin/main`=`f8569ebf6219652c7ab89bf1e1581816fc7b93f8`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、J/M store lifecycle／HDS OperationPlan／Gateway restore consumer／post-action observerを再読して開始した。
+開始HEAD／`origin/main`=`d75cddd49b1ff5ed6a14d05fc2f663298a292bfd`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、J/M復元観測・OperationPlan hold・M receipt読取consumerを再読した。開始時のlocal recovery branchとremote backup tagはcurrent=`d75cddd49b1ff5ed6a14d05fc2f663298a292bfd`、previous=`f8569ebf6219652c7ab89bf1e1581816fc7b93f8`。
 
-`j_control`／`m_state`選択復元を通常serveの実consumerへ接続した。L3承認後にmaintenance lockを取り、既存Executor仕事を排出する。HDSはactive plan attemptがなくJ/M pairが内部検証可能な場合だけ両SQLite接続を閉じ、restore toolはserveからquiescence receiptを受けたときだけ実行できる。復元前に現在のOperationPlan全件へdigest限定・非権威の`held_unverified`を永続保存し、実行判定でもholdを検査する。復元後は安定した完全履歴、command identity、選択store、backup digest、restored-state digest、台帳verified／残差0を照合し、すべて一致した場合だけ同じHDS consumer pairを再openしてmaintenance lockを解く。不一致、失敗、履歴欠落、再open失敗はJ/M consumerを閉じたままmaintenance holdへ閉じる。J/M ledger integrityだけでは各planのcross-store dependencyを証明しないため、正常再観測でも既存plan holdは解除しない。
+J/M全体の再open後、既存OperationPlanごとにJ control lifecycleとM receipt／result recordが同じcommitへ対応するread-only依存確認を接続した。復元前の選択bindingは`invalidated`、開始済みで結果不明のbindingは`outcome_unknown`として保持する。復元観測のstore・command・operation／result／backup／restored-state digestが一致し、J/M ledgerがverified・残差0でも、各planの保存commit・J event・M receipt・result recordが一致しなければholdは続く。未実行計画は結果・commit・receipt・実行開始記録がない場合だけ依存なしと確認する。fresh reviewのrevision・step・target検証を通った場合にのみ該当planのholdを記録上解除し、新しいbindingを作る。古い選択、OperationPlan-storeや他理由のholdをJ/M観測で上書きしない。実行、Approval、resumeを自動生成しない。
 
 | 限定確認 | 結果 |
 |---|---|
-| J/M lifecycle／Recovery evidence／post-action observer／Gateway L3 restoreの5 test files | PASS、41 tests。合成stateでJ/M双方のRecovery endpoint→HDS L3 queue→test resume token→Executor→選択store restore→reopen／再観測と既存planの永続holdを確認。 |
+| OperationPlan runtime／Recovery evidence／post-action observer／Gateway result reconciliation／L3 restore focused tests | PASS、5 files／71 tests。まとめ実行でCron統合testが既定5秒を超えたが、該当ファイルを単独実行して3/3 PASS。 |
 | `pnpm typecheck`／`pnpm build` | PASS。workspace 15 projects。 |
-| `pnpm hds:standalone`／`pnpm smoke:serve` | 両方PASS。HDS invariants／audit chain、stub WebChat、channel_send、audit persistence／dumpを確認。 |
-| `docs:check`／`validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件を確認。 |
-| 実データrestore／実owner approval／restart／provider credential／外部作用／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+| `pnpm hds:standalone`／`pnpm smoke:serve` | PASS。HDS Runtime Invariants／audit chain、stub WebChat、audit persistence／dumpを確認。 |
+| `docs:check`／`validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実canonical restore／実owner approval／restart／provider credential／外部作用／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
 
-E03.03は`BUILD_GAP`を維持する。次consumerは、J/M復元後に既存planのJ control／M receipt依存が一致することをdigest限定で計画別に証明する実consumerであり、依存証拠がない間はholdを維持する。store間atomicity、仕事単位restore point、復旧可能性は未成立。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。D4Pocket／ミニドラへの変更、実業務作用、公開・出荷判断なし。
+E03.03=`BUILD_GAP`を維持する。cross-store atomicity、仕事単位restore point、復旧可能性、未確定実行のresumeは未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。D4Pocket／ミニドラ、実業務作用、公開・出荷判断なし。次consumerは、このplan依存holdが通常の再起動後も同じcheckpoint・J/M receipt証拠で安全に再構成される経路の現物確認と不足接続である。
 
-実装commit=`078fa117dbe4953b75538c77e97e7afa0171b3cd`を`main`へpush済み。実装push直後のlocal／remote mainとcurrent recovery branch／tagは同commit、previous recovery branch／tagは開始HEAD=`f8569ebf6219652c7ab89bf1e1581816fc7b93f8`。この記録を含むdocs-only closeoutもpushし、終了時のmain／current ref一致、previous ref、clean worktreeを照合する。
+実装commit=`70623f91ebb95787e28dfcdc18ecc9e2cbd791ff`を`main`へpush済み。push直後のlocal／remote mainとcurrent recovery branch／tagは同commit、previous recovery branch／tagは開始HEAD=`d75cddd49b1ff5ed6a14d05fc2f663298a292bfd`。この記録を含むdocs-only closeout後、最終refsとworktree状態を再照合する。
+
+### 前回BUILD_BATCH：`QEB-03-E03.03-JM-RESTORE-QUIESCE-REOPEN-HDS-HOLD`
 
 ### 前回BUILD_BATCH：`QEB-03-E03.03-RESTORE-STARTUP-UNVERIFIED-HOLD`
 
