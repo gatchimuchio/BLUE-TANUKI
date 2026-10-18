@@ -2,9 +2,9 @@
 
 ## 次のBUILD_BATCH
 
-次は `QEB-03-E03.03-PLAN-RESIDUAL-ISOLATION-CONSUMER-AUDIT`。ownerの最新版三点正本・適用AGENTS.md・現物を再読し、今回接続した計画別残差／未観測依存を実際に読む復旧・起動・再開consumerが存在するか確認する。既存の実consumerが見つかった場合だけ、その境界で残差・未観測を無視して仕事を再開しない最小接続を行う。consumerが存在しない／権限変更を要する場合は具体的BUILD_GAPを記録し、resume・権限・Approvalを新設しない。合成state／履歴のみ、実restore／実再起動／実owner承認なし。
+`QEB-03-E03.03-PLAN-RESIDUAL-ISOLATION-CONSUMER-AUDIT` は2026-10-19に完了。監査結果と具体的BUILD_GAPは本書の直近実績、および `docs/開発進捗.md` に記録した。今回の観測から新しいresume・権限・Approval経路は作らない。
 
-次の作業前に最新版の三点正本と適用AGENTS.mdを読み直す。C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
+E03.03は`BUILD_GAP`を維持する。次に実装対象を選ぶ際は、owner指定の最新三点正本・適用AGENTS.md・現物を再読し、実在するproducer→consumerを特定してから別のBUILD_BATCHを固定する。今回見つかった近接境界は `OperationPlanLedger.inspectControl` の計画step再確認・選択経路だが、これはRecoveryの計画別残差／未観測依存を現在読んでいない。診断情報を同経路へ接続して再開可否を変えるには、HDS側の消費契約と残差の扱いを別途設計する必要がある。C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
 
 ## 直近のBUILD_BATCH実績
 

@@ -1,6 +1,8 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
-2026-10-18。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
+2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
+
+2026-10-19の`QEB-03-E03.03-PLAN-RESIDUAL-ISOLATION-CONSUMER-AUDIT`では、計画別残差／未観測依存を実行や復旧再開のために読むruntime consumerがまだないことを確認した。Recovery post-action observationはRecovery snapshot／Control Centerのread-only表示にとどまり、startupの保存結果／M receipt調停やOperationPlanの承認resumeはこの投影を消費しない。HDSの計画step再確認・選択との接続は、残差を再開可否へ反映する契約が未成立のため`BUILD_GAP`。E03.03／QEB-03の状態、非権威診断、owner GOの独立境界を維持する。
 
 ## 現行のQE工程
 
