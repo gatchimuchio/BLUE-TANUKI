@@ -32,6 +32,8 @@
 
 2026-10-18のQEB-03-E03.03-OPERATOR-RECOVERY-INSPECTIONでは、既存Recovery面にmaintenance-token保護のread-only `GET /recovery/inspection`を追加し、J/M/Broker/OperationPlan診断の固定状態・残差件数をallowlistで表示した。続くQEB-03-E03.03-OPERATOR-RESIDUAL-ISOLATIONでは、plan／step／commandとupdateの参照をSHA-256 digest、固定enum、最大200件のoperator projectionへ限定した。raw IDや内容を出さず、invalid boundaryでは明細を抑止する。両接続とも権限・実行・復旧actionを行わず、再生checkpointをbackupと誤認させず、外部backup restore pointは`not_examined`のまま示す。仕事別復旧操作、独立backupの確認・restore、E03.03／QEB-03全体は`BUILD_GAP`。
 
+2026-10-18のQEB-03-E03.03-RESTORE-PREFLIGHT-ATOMICITYでは、既存local recovery restoreを変更する前に選択manifestの全item／target／archiveを検査する経路を追加した。後段archiveのdigest不一致とdirectory内symlinkをfixtureで拒否し、target不変更とpre-restore pack未作成を確認した。これはrestore対象の検査を先行する部分実装であり、J/M/Broker ledgerの復旧、独立backupの検証、実stateへのrestore、restore可能性の証明ではない。E03.03／QEB-03は`BUILD_GAP`を維持する。
+
 ## 公開可能なBUILD_BATCHの順序案
 
 1. QEB-00：QE規律、現行正本、Git復元、安全と公開制限の同期。
