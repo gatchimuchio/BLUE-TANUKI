@@ -2,6 +2,23 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-03-E03.03-RECOVERY-PLAN-RESIDUAL-ISOLATION`
+
+開始HEAD／`origin/main`=`65bdd2e9fa0170df179c72a5ee890e3c4c0e7205`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）と適用`AGENTS.md`、作業標準要領、active指示、現物を再読した。開始local recovery branch／remote backup tagはcurrent=`65bdd2e9fa0170df179c72a5ee890e3c4c0e7205`、previous=`0c1fa21857069b5acee1cb11370b20b7e2da8562`。
+
+前単位で作成した、復元由来の`held_unverified`旧planとfresh planの併存Gateway fixtureをread-only Recovery inspectionへ接続した。両planは別digest scopeとして返り、holdがfresh planへ伝播しない。続いてfixture内だけで旧planのrevision digestを不一致にし、checkpoint全体digestは再計算した。再inspectionは旧planだけを`residuals_present`／`operation_plan`残差とし、fresh planは`observed`／残差なしのまま返した。hold storeは`held_unverified`を維持し、raw plan IDは投影されない。これはRecovery inventoryの読取範囲で、planの復元可能性・resume許可・実状態の修復を示さない。
+
+| 限定確認 | 結果 |
+|---|---|
+| 新規の`recovery_mutation_entry.test.ts`対象test | PASS。旧hold＋fresh planの別scope、片planのsynthetic residual隔離、非権威・非実行・raw ID非露出を確認。 |
+| 同file全4件 | 3件PASS。既存Cron復旧testは既定5秒上限を5.157秒で超過し、単独再実行でも同じ上限超過。test timeout変更なし。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。製品コード変更なし。 |
+| 実restore／owner approval／Executor作用／実provider／外部書込み／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+次consumerは、旧planだけに残差がある同じ合成状態をControl Center Recoveryの実browser DOMで表示し、fresh plan scopeとの分離・read-only説明・hold継続を操作者向け画面で照合する。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の独立境界を維持する。
+
+実装test commit=`dd677bc3ca586fef92e765352ff73ea93ed2c7e5`を`main`へpush済み。実装push直後のlocal／remote `main`とcurrent recovery branch／tagは同commit、previous branch／tagは開始HEAD=`65bdd2e9fa0170df179c72a5ee890e3c4c0e7205`。この記録を含むdocs-only closeoutを続けてpushし、終了時にremote HEAD、二世代tag、local branch、worktreeを再照合する。
+
 ### 最新BUILD_BATCH：`QEB-03-E03.03-FRESH-PLAN-AFTER-RECOVERY-HOLD`
 
 開始HEAD／`origin/main`=`0c1fa21857069b5acee1cb11370b20b7e2da8562`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）と適用`AGENTS.md`、作業標準要領、active指示を再読した。開始local recovery branch／remote backup tagはcurrent=`0c1fa21857069b5acee1cb11370b20b7e2da8562`、previous=`3813bfe65d7cc5c43f53aaa7e88ba9e56f8d7433`。

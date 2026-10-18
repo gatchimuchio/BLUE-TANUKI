@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-03-E03.03-RECOVERY-PLAN-RESIDUAL-ISOLATION`では、同じOperation Plan inventory内の旧`held_unverified` planとfresh planを別digest scopeで投影し、合成fixture内の旧plan revision残差を旧planだけへ限定できることを確認した。fresh planは`observed`のまま、hold・復旧権限・実行は変化しない。対象Gateway testとtypecheck/buildはPASS。全file実行では既存Cron復旧testが既定5秒を5.157秒超過したため、全件PASSとは扱わない。E03.03=`BUILD_GAP`を維持する。次は残差が異なる両scopeをControl Center Recovery browser DOMで表示する。
+
 2026-10-19の`QEB-03-E03.03-FRESH-PLAN-AFTER-RECOVERY-HOLD`では、起動時に`held_unverified`となったplanを保持したまま、新しいDeveloper requestから別Operation Planを作り、そのplanのfresh HDS reviewだけがL1承認待ちへ進むことを、合成Gateway processで確認した。固定JSON応答はloopback fixtureから1回だけ返し、外部LLM・資格・外部ネットワークを使わない。review requestにExecutor実行履歴はなく、旧holdと新旧planのSQLite保存を確認した。Gateway focused test 4/4、typecheck、15 workspace buildはPASS。実provider、承認、外部作用は未実施。E03.03=`BUILD_GAP`を維持し、次は両planが並ぶ状態のread-only Recovery inspectionを照合する。
 
 2026-10-19の`QEB-03-E03.03-HOLD-TO-RECOVERY-LEDGER-INSPECTION`では、起動時holdからRecovery台帳inspectionまでの操作者経路を、合成stateの隔離Gateway processと実Control Center browser DOMで確認した。Recovery画面は全体`residuals_present`（document organization checkpoint store unavailable）と、同じplan digestの観測範囲内に依存残差なしを別々に示し、仕事単位の復旧可能性・復元・再開許可ではないと表示する。Evidence画面は同じplan digestのstep選択停止と、新しい依頼から新規計画を作る案内を表示する。Runtime Snapshotは`held_unverified`／scope relation `unknown`を維持し、raw IDやpayloadを露出しない。検査はread-onlyで、hold・権限を変えない。Gateway `recovery_mutation_entry.test.ts`は4/4 PASS。typecheck／15 workspace buildは製品コード変更時にPASS済み、docs:check／repo-health／diff checkもPASS。実restore、owner approval、外部作用は未実施。E03.03=`BUILD_GAP`を維持し、次は既存holdを保持したまま新しい依頼の新規planをHDS reviewへ届ける経路を合成processで確認する。
