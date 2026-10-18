@@ -2,11 +2,27 @@
 
 ## 次のBUILD_BATCH
 
-次は `QEB-03-E03.03-RESTORE-POINT-PLAN-RESIDUAL-CORRELATION`。ownerの最新版三点正本・適用AGENTS.md・現物を再読し、selected-store restore履歴に保存する固定backup digestと既存read-only backup／plan-dependency inspectorの接続を確認する。実際のconsumerが成立する場合だけ、Operation Plan digest単位で復元点記録・台帳残差・未観測依存を表示する。raw backup ID／owner／goal／command／計画ID／行内容／pathは出さず、権限・自動resume・復旧可能の断定へ接続しない。合成state／履歴のみを使い、実restore／実再起動／実owner承認は対象外。既存機構で実際のconsumerが成立しない場合は、作業を拡大せず具体的なBUILD_GAPを記録する。
+次は `QEB-03-E03.03-PLAN-RESIDUAL-ISOLATION-CONSUMER-AUDIT`。ownerの最新版三点正本・適用AGENTS.md・現物を再読し、今回接続した計画別残差／未観測依存を実際に読む復旧・起動・再開consumerが存在するか確認する。既存の実consumerが見つかった場合だけ、その境界で残差・未観測を無視して仕事を再開しない最小接続を行う。consumerが存在しない／権限変更を要する場合は具体的BUILD_GAPを記録し、resume・権限・Approvalを新設しない。合成state／履歴のみ、実restore／実再起動／実owner承認なし。
 
 次の作業前に最新版の三点正本と適用AGENTS.mdを読み直す。C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
 
 ## 直近のBUILD_BATCH実績
+
+`QEB-03-E03.03-RESTORE-POINT-PLAN-RESIDUAL-CORRELATION` は2026-10-19に開始HEAD／`origin/main`=`25070321b073272532d226d910c7be72f0b5e2eb`、開始worktree cleanで開始した。owner指定rev2.3三点正本、適用AGENTS.md、作業標準要領、active指示、E03.03と現物を再読し、開始時local main／current recovery branch・tag／remote main・current tagは`25070321b073272532d226d910c7be72f0b5e2eb`、previous branch・tagは`8c532feffcf80bdef9f801cfd25f3e4e07ba8e2d`。
+
+selected-store restore成功結果からraw backup IDを保存せずSHA-256 digestをComplete Historyへ記録する。再起動後、選択`operation_plans` storeのbyte digestがrestore履歴と一致した場合に限り、そのdigestで既存read-only backup inspectorを一度呼び、同じ計画digestのpack内記録、integrity状態、依存残差／未観測をpost-action observationとControl Centerへ接続した。backup pack・計画scopeが欠落／曖昧／未検証なら相関を閉じる。現行storeと復元後digestが異なる場合はbackup相関を行わない。raw backup ID／plan ID／owner／goal／command／row／pathを投影せず、権限・復旧可能判定・自動resumeに接続しない。DB間atomicityなしを維持する。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway recovery post-action observation／WebChat Control Center | PASS、2 files／90 tests。実pack digestの相関、計画integrity residual、残差・未観測依存、backup不在のfail-closed、raw ID非露出、archive bytes不変を確認。 |
+| `pnpm typecheck`→`pnpm build` | PASS、15 workspace projects。 |
+| `pnpm smoke:serve` | PASS。stub WebChat、audit persistence、audit-dump chain検証。Recovery mutationなし。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実restore／実再起動／owner承認／provider credential／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+実装commit=`8e46072`。push後のmain／backup refs／clean worktreeは最終closeoutで記録する。E03.03=`BUILD_GAP`を維持する。次consumerは残差／未観測依存を実際に読む起動・復旧・再開経路が現存するかの監査。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。別repo、実業務作用、公開・出荷判断なし。
+
+## 前回のBUILD_BATCH実績
 
 `QEB-03-E03.03-RECOVERY-SELECTED-PLAN-RESIDUAL-PROJECTION` は2026-10-19に開始HEAD／`origin/main`=`8c532feffcf80bdef9f801cfd25f3e4e07ba8e2d`、開始worktree cleanで開始した。owner指定rev2.3三点正本、適用AGENTS.md、作業標準要領、active指示、E03.03と関連実装を再読した。開始時local current／previous recovery branch・tagおよびremote current／previous tagはそれぞれ現世代=`8c532feffcf80bdef9f801cfd25f3e4e07ba8e2d`、前世代=`7cd36c1dcf8bbf343c0be2000c3e51e3f778d776`。
 
