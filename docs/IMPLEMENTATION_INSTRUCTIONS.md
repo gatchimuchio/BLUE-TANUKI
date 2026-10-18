@@ -1,46 +1,39 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。E03.03の次BUILD_BATCH開始時に、owner指定のQE rev2.3三点正本（仕様SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF309F77BABACC56796A1893FE77`、施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`、`docs/作業標準要領.md`、QE再同期規約、直前指示、最新HEAD／差分、E03.03原文と実行台帳consumerを読み直した。対象はBLUE-TANUKIのみ。D4Pocket／ミニドラのrepoは変更しない。
+2026-10-18。新しいBUILD_BATCH開始時に、owner指定のQE rev2.3三点正本（仕様SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF309F77BABACC56796A1893FE77`、施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`、`docs/作業標準要領.md`、QE再同期規約、直前指示、最新HEAD／差分、E03.03原文とJ/Broker ledger producer／consumerを読み直した。対象はBLUE-TANUKIのみ。D4Pocket／ミニドラのrepoは変更しない。
 
 ## 今回のBUILD_BATCH
 
-QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-EXECUTION-LEDGER-READONLY-INSPECTION`。関連単位=E03.03「破損範囲の隔離復旧」。開始HEAD／`origin/main`=`fda958820347762271ee9cd0d54ae78ac78f973e`、開始時clean。編集前のlocal recovery branch／remote backup tagは現世代`fda958820347762271ee9cd0d54ae78ac78f973e`、直前`06474e29ee965f90adbae135b533a1bcb2fb0334`へCAS／期待SHA付きatomic pushで回転し、local branch pair・remote tag pair・mainの実SHA一致を確認した。backup ref移行=`MIGRATION_COMPLETE`。
+QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-PLAN-BROKER-LEDGER-CORRELATION`。関連単位=E03.03「破損範囲の隔離復旧」。開始HEAD／`origin/main`=`0456640657249b5d641044274abee05eb8236747`、開始時clean。作業前にlocal復旧branchとremote backup tagを現世代`0456640657249b5d641044274abee05eb8236747`、前世代`fda958820347762271ee9cd0d54ae78ac78f973e`へCAS／期待SHA付きで回転し、local二branch・remote二tag・mainのSHA一致を確認した。backup ref移行=`MIGRATION_COMPLETE`。
 
 ### 目的と到達状態
 
-前バッチで接続したGateway `--recovery-inspect`へ、Brokerの私有execution-intent SQLite台帳の読取専用検査を接続する。実行event hash chain、receipt projection、result outboxを既存runtime検査と同じ契約で照合し、健全な台帳の非権威なdigest／状態要約、または再生可能prefix・未検証suffix・未照合残差を返す。Gateway通常起動、Owner lease、HDS生成に依存しない診断経路とする。
-
-破損／未検証suffixがあるときは、suffix由来のticketや状態を信頼済み仕事として表示しない。診断はJ/Mの検査・照合と同じreportへ統合し、権限・承認・実行可否を生成しない。検査によるDB byte変更・schema作成・journal mode変更がないことを合成DBで確認する。
-
-このバッチだけでE03.03、回復可能な仕事の再開、確認済みbackup、実restore、SYSTEM_SHAPED、BUILD_COVERED、QE_QC／QE_QAは成立しない。E03.03は`BUILD_GAP`のまま保つ。
+既存Gateway `--recovery-inspect`へ、J OperationPlan checkpointの厳密なread-only inspectionと、J binding／Broker execution-intent recordのadmission digest相関を接続する。J checkpointの行digest・schema・plan revision／step／result binding／command key／ticket uniquenessを検査し、既存Brokerのhash-chain／projection／outbox検査結果と照合する。J/M間のresult-memory commit／receiptは未照合として残す。正常・欠損・不一致・破損・記録上限による未観測を区別したopaque digest／固定enumの残差を返す。
 
 ### 対象と境界
 
-- 対象：Gateway execution-intent台帳のread-only inspector、Gateway `--recovery-inspect`への統合、限定test、`docs/開発進捗.md`、`docs/ROADMAP.md`、本指示。
-- 既存のSQLite schema、write-side execution lifecycle、J/M ledger、Approval、Broker authority、通常startup、外部作用は変更しない。
-- outputは台帳status、verified／unverified event件数、first unverified ordinal、verified event digest、opaque ticket／command／epoch digest、状態enum、outbox検査残差の数に限る。raw receipt、ticket、command、worker識別、delivery本文、credential、保存先絶対pathを出さない。`used_for_authority=false`、`execution_eligible=false`を保つ。
-- 既存のSQLite read-only openとrecovery sidecar拒否を使う。検査のために書込store constructorを呼ばず、DB、親dir、sidecarを作らない。Node最小版`22.14.0`を維持し、依存追加をしない。
-- 実環境DB／service、資格情報/provider、実作用、D4Pocket／ミニドラ別repo、truncate／rebuild／restore／retry／resume、独立backupの作成・検証、OS ACL/network filesystem保証、全体QE_QC／QE_QA、P13公開・出荷判断は対象外。
+- 対象：J plan-state read-only inspector、新しい`--recovery-inspect` report／text summaryへの接続、focused test、`docs/開発進捗.md`、`docs/ROADMAP.md`、本指示。
+- Jの書込store constructor、`OperationPlanLedger`、通常Gateway起動／lease、HDS判断・Approval、Broker書込・Executor・M保存・再生・repair／restore／resume／retryは呼ばない。
+- reportにraw plan／step／command／ticket／goal／owner／channel／target／arguments／output／worker／delivery本文、DB絶対pathを出さない。含めるのはopaque digest、固定状態enum、照合区分、残差件数のみ。すべて`used_for_authority=false`、`may_execute=false`を保つ。
+- J checkpoint digestは同一DB内の整合検査であり、認証済anchor・独立backup・restore pointではない。Broker record未観測はrecord上限を考慮する。未検証BrokerをJ binding不一致として断定しない。
+- 読取は既存DBに限定し、symlink・SQLite sidecar・schema違い・journal不適合はfail-closedで開かない。検査によってDB／parent dir／sidecarを作成・変更しない。依存追加、外部provider／資格情報／外部業務作用、他repo変更は行わない。
+- 独立backupの存在・完全性・restore可能性、実restore、operator recovery UI、全体QE_QC／QE_QA、SYSTEM_SHAPED／BUILD_COVEREDは今回の対象外。E03.03／QEB-03は`BUILD_GAP`を維持する。
 
 ### 最小確認
 
-合成SQLiteで健全なreceipt event、projection mismatch、破損suffix、WAL／journal等sidecar時のopen抑止を確認し、read-only検査前後のDB bytesを比較する。Gateway focused test、`pnpm typecheck`、`pnpm build`、`pnpm docs:check`、`git diff --check`を実行する。変更した既存動作はfocused selectorで疎通し、実state rootは参照しない。
+合成J checkpointとBroker ledgerで一致・不一致・上限未観測・破損時のfail-closedを確認する。valid sibling bindingを不一致の影響で捨てない。J checkpoint／Broker DB bytesが検査前後で不変であり、空state rootを作らず、sidecar検出時に開かないことをfocused testで確認する。Gateway focused suite、`pnpm typecheck`→`pnpm build`、built CLIの一回の未作成root smoke、`pnpm docs:check`、`git diff --check`を行う。
 
-### 実装・検証結果
+### 実装・限定確認の結果
 
-| 確認 | 実測結果 |
-|---|---|
-| Gateway recovery／Executor／result reconciliation focused suite（repo root、`--no-file-parallelism --maxWorkers=2`） | PASS。3 files／43 tests（`execution_result_reconciliation.test.ts` 30、`execution_intent_runtime.test.ts` 6、`recovery_inspection.test.ts` 7）。健全receipt、projection／outbox差異、破損suffix、sidecar時open抑止、DB不変、既存実行・調停動作を確認。 |
-| `pnpm typecheck` | PASS、exit 0。 |
-| `pnpm build` | PASS、exit 0。15 workspace projects。 |
-| built Gateway `--recovery-inspect --json`、未作成一時state root | exit 2で`residuals_present`。J／M／Broker台帳 unavailable、checkpointなし。一時state rootは作成されず、repair／restore／retry／resumeなし。 |
-| `pnpm docs:check` | PASS、文書・日本語基底通常gate・license。日本語基底移行負債77件を維持。 |
-| `git diff --check` | PASS。 |
+- Gateway recovery focused suite（repo root、2 workers固定）：PASS、2 files／11 tests。J/Broker admission完全一致、異ticket不一致、健全binding保持、checkpoint digest破損時の全件抑止、bindingなしplanのrevision残差、sidecar時open抑止、検査前後のDB bytes不変を確認。
+- `pnpm typecheck`：PASS、exit 0。初回はreport型の追加field漏れで失敗し型修正後に再実行した。
+- `pnpm build`：PASS、exit 0、15 workspace projects。
+- build済み`--recovery-inspect --json`／text：未作成state rootでいずれもexit 2の残差報告。J Operation Plans unavailableを表示しrootは作られない。
+- `pnpm docs:check`：PASS。文書、日本語基底通常gate、license。Markdown 186、移行負債77件。
+- `git diff --check`：PASS。
 
-最初のprocess fixture付きfocused suiteは`apps/gateway`をcwdにして起動したため、repo-root基準fixture pathが解決されずtimeout／派生失敗になった。製品コード・timeoutを変更せずrepo rootから2 workersで再実行し43 testsがPASSした。これはtest harnessの起動位置差として記録し、実行経路の合格証拠へ混同しない。
+このread-only検査は独立backup／restore pointではなく、J/M result-memory相関も未実装で、権限・resume・retry・repair・restoreを発行しない。E03.03／QEB-03=`BUILD_GAP`、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、C08.03実provider保留を維持する。実state root、外部作用、他repo変更は対象外。
 
-実state root、独立backupの検証、restore／修復、credentialed provider、実外部作用、5OS実機、全体QE_QC／QE_QAは未実施。この検査は稼働中データや独立backupの復元可能性を証明しない。
+### Git閉包
 
-### Git・停止条件
-
-実装commit=`e44751e070a5cb4623d2550eb2b33059aac02b70`を`main`へpushし、fast-forwardとremote反映を確認した。push前のremote `main`は開始SHA=`fda958820347762271ee9cd0d54ae78ac78f973e`。編集前復元参照はlocal branch `codex/backup-main`=`fda958820347762271ee9cd0d54ae78ac78f973e`、`codex/backup-main-prev`=`06474e29ee965f90adbae135b533a1bcb2fb0334`、remote tagも同名・同SHAで維持した。記録の閉包commitは文書gate後に別pushする。inspectionが書込み可能な接続を使う、破損suffixから現行状態を推定する、raw ticket／command／worker／deliveryを露出する、または診断からretry／resumeを起動する場合は、その実装を停止してfail-closedを維持する。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、C08.03実provider保留を維持する。次のE03.03接続はJ operation-plan bindingとの照合、および独立backup／復元可能性の証明であり、このバッチでは未着手とする。
+編集前復旧参照はlocal branch `codex/backup-main`=`0456640657249b5d641044274abee05eb8236747`、`codex/backup-main-prev`=`fda958820347762271ee9cd0d54ae78ac78f973e`、remote tagも同名・同SHAで一致。focused suite 10/10、typecheck、15-workspace build、JSON／text CLI smoke、docs gate、diff checkはPASS。commit/push前に最新main／差分を再照合し、fetch後のremote main、二世代参照、clean treeの実SHAを追記する。remoteに他writerの進行があれば上書きせず再同期する。

@@ -6,10 +6,15 @@ import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary, ExecutionWorkerIdentity } from "@blue-tanuki/core";
 import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
   parseBoundaryExchangeAtBoundary, inspectExecutionResultDelivery, inspectOperationCommandExecutionResult,
-  getOperationDescriptor, type ExecutionResultDelivery } from "@blue-tanuki/protocol";
+  getOperationDescriptor, type ExecutionAdmission, type ExecutionResultDelivery } from "@blue-tanuki/protocol";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
+/** Stable opaque join key for J's saved admission and the verified Broker receipt. */
+export function executionAdmissionDigest(admission: ExecutionAdmission): string {
+  return digest(JSON.stringify(["blue-tanuki.execution-admission.v1", admission.ticket_id, admission.command_key,
+    admission.command_digest, admission.proof_digest, admission.execution_epoch, admission.issued_at_ms, admission.expires_at_ms]));
+}
 const sameTicket = (a: ExecutionIntentTicket, b: ExecutionIntentTicket): boolean =>
   ["ticket_id", "command_key", "command_digest", "proof_digest", "execution_epoch", "issued_at_ms", "expires_at_ms"]
     .every((key) => a[key as keyof ExecutionIntentTicket] === b[key as keyof ExecutionIntentTicket]);
@@ -311,9 +316,11 @@ export interface ExecutionIntentRecoveryInspection {
     readonly ticket_digest: string;
     readonly command_key_digest: string;
     readonly execution_epoch_digest: string;
+    readonly admission_digest: string;
     readonly state: ExecutionIntentReceipt["state"];
     readonly reconciliation_required: boolean;
     readonly result_delivery_pending: boolean;
+    readonly result_delivery_digest: string | null;
   }[];
   readonly used_for_authority: false;
   readonly execution_eligible: false;
@@ -551,10 +558,12 @@ export function inspectExecutionIntentRecoveryLedger(options: {
         ticket_digest: digest(ticketId),
         command_key_digest: digest(receipt.command_key),
         execution_epoch_digest: digest(receipt.execution_epoch),
+        admission_digest: executionAdmissionDigest(receipt),
         state: receipt.state,
         reconciliation_required: ["intent_committed", "invocation_attempted", "outcome_unknown"].includes(receipt.state) ||
           receipt.result_delivery_acknowledged === false,
         result_delivery_pending: receipt.result_delivery_acknowledged === false,
+        result_delivery_digest: receipt.result_delivery_digest ?? null,
       }));
     return {
       owner: "Broker",

@@ -9,6 +9,11 @@ import {
   inspectExecutionIntentRecoveryLedger,
   type ExecutionIntentRecoveryInspection,
 } from "./execution_intent_store.js";
+import {
+  inspectOperationPlanRecoveryLedger,
+  type OperationPlanBindingStatus,
+  type OperationPlanRecoveryInspection,
+} from "./operation_plan_recovery_inspection.js";
 
 export interface RecoveryUpdateResidual {
   readonly update_id_digest: string;
@@ -29,7 +34,7 @@ export interface RecoveryUpdateResidual {
 }
 
 export interface GatewayRecoveryInspectionReport {
-  readonly schema_version: 2;
+  readonly schema_version: 3;
   readonly surface: "recovery_inspection";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present";
@@ -37,7 +42,9 @@ export interface GatewayRecoveryInspectionReport {
     readonly j: PersistenceLedgerInspection;
     readonly m: PersistenceLedgerInspection;
     readonly execution: ExecutionIntentRecoveryInspection;
+    readonly operation_plans: OperationPlanRecoveryInspection;
   };
+  readonly operation_plan_correlations: readonly OperationPlanBrokerCorrelation[];
   readonly replay_checkpoint: null | {
     readonly verified: true;
     readonly kind: "canonical_replay_checkpoint_not_backup";
@@ -46,14 +53,43 @@ export interface GatewayRecoveryInspectionReport {
     readonly m_revision: number;
     readonly m_event_digest: string;
     readonly update_count: number;
+    readonly operation_plan_count: number;
+    readonly operation_plan_binding_count: number;
   };
   readonly update_residuals: readonly RecoveryUpdateResidual[];
   readonly isolated_update_count: number;
   readonly execution_residual_count: number;
+  readonly operation_plan_residual_count: number;
   readonly external_backup_restore_point: "not_examined";
   readonly used_for_authority: false;
   readonly may_execute: false;
   readonly next_safe_action: string;
+}
+
+export interface OperationPlanBrokerCorrelation {
+  readonly plan_id_digest: string;
+  readonly step_id_digest: string;
+  readonly command_id_digest: string;
+  readonly status: OperationPlanBindingStatus;
+  readonly binding_integrity: "verified" | "residuals_present";
+  readonly admission_digest: string | null;
+  readonly broker_correlation:
+    | "matched"
+    | "not_admitted"
+    | "admission_missing"
+    | "not_found"
+    | "not_observed_due_to_limit"
+    | "ambiguous"
+    | "broker_unverified"
+    | "j_binding_unverified";
+  readonly broker_state: ExecutionIntentRecoveryInspection["records"][number]["state"] | null;
+  readonly delivery_correlation:
+    | "matched"
+    | "not_recorded"
+    | "j_not_recorded"
+    | "broker_not_recorded"
+    | "mismatch"
+    | "not_observed";
 }
 
 interface StateDatabasePaths {
@@ -61,6 +97,7 @@ interface StateDatabasePaths {
   readonly jPath: string | null;
   readonly mPath: string | null;
   readonly executionPath: string | null;
+  readonly operationPlansPath: string | null;
 }
 
 function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths | null {
@@ -77,6 +114,8 @@ function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths |
     const jPath = path.join(resultDirectory, "j-control.sqlite");
     const mPath = path.join(resultDirectory, "m-state.sqlite");
     const executionPath = path.join(executionDirectory, "executor.sqlite");
+    const operationPlansDirectory = path.join(privateRoot, "operation-plans");
+    const operationPlansPath = path.join(operationPlansDirectory, "j-state.sqlite");
     const safeDatabasePath = (directory: string, databasePath: string): string | null => {
       try {
         const directoryStat = lstatSync(directory);
@@ -94,6 +133,7 @@ function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths |
       jPath: safeDatabasePath(resultDirectory, jPath),
       mPath: safeDatabasePath(resultDirectory, mPath),
       executionPath: safeDatabasePath(executionDirectory, executionPath),
+      operationPlansPath: safeDatabasePath(operationPlansDirectory, operationPlansPath),
     };
   } catch {
     return null;
@@ -133,6 +173,12 @@ export function inspectGatewayRecoveryState(
     used_for_authority: false,
     execution_eligible: false,
   };
+  const unavailableOperationPlans: OperationPlanRecoveryInspection = {
+    owner: "J", status: "unavailable", reason: "store_unavailable", plan_count: 0, plan_integrity_residual_count: 0,
+    binding_count: 0, verified_binding_count: 0, residual_binding_count: 0, unverified_memory_link_count: 0,
+    omitted_binding_count: 0,
+    bindings: [], used_for_authority: false, may_execute: false,
+  };
   const j = paths?.jPath
     ? inspectJControlRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.jPath })
     : unavailable("J");
@@ -142,20 +188,36 @@ export function inspectGatewayRecoveryState(
   const execution = paths?.executionPath
     ? inspectExecutionIntentRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.executionPath })
     : unavailableExecution;
+  const operationPlans = paths?.operationPlansPath
+    ? inspectOperationPlanRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.operationPlansPath })
+    : unavailableOperationPlans;
   const residuals = correlateRecoveryUpdates(j, m);
+  const operationPlanCorrelations = correlateOperationPlanBindings(operationPlans, execution);
   const storesVerified = j.status === "verified" && m.status === "verified";
   const hasHardResidual = residuals.some((item) => !["paired", "pending_m_commit", "pending_j_receipt"].includes(item.disposition));
   const executionResidualCount = execution.status === "verified" ? 0 : Math.max(
     1,
     execution.unverified_event_count + execution.receipt_projection_mismatch_count + execution.outbox_mismatch_count,
   );
-  const checkpointVerified = storesVerified && execution.status === "verified" && !hasHardResidual;
+  const operationPlanCorrelationResidualCount = operationPlanCorrelations.filter((item) =>
+    ["admission_missing", "not_found", "not_observed_due_to_limit", "ambiguous", "broker_unverified"].includes(item.broker_correlation) ||
+    ["j_not_recorded", "broker_not_recorded", "mismatch"].includes(item.delivery_correlation),
+  ).length;
+  const operationPlanResidualCount = operationPlans.status === "verified" && operationPlanCorrelationResidualCount === 0 &&
+      operationPlans.omitted_binding_count === 0
+    ? 0
+    : Math.max(1, operationPlans.plan_integrity_residual_count + operationPlans.residual_binding_count +
+      operationPlans.unverified_memory_link_count + operationPlanCorrelationResidualCount +
+      (operationPlans.omitted_binding_count > 0 ? 1 : 0));
+  const checkpointVerified = storesVerified && execution.status === "verified" && operationPlans.status === "verified" &&
+    !hasHardResidual && operationPlanCorrelationResidualCount === 0 && operationPlans.omitted_binding_count === 0;
   return {
-    schema_version: 2,
+    schema_version: 3,
     surface: "recovery_inspection",
     mode: "read_only",
     status: checkpointVerified ? "verified" : "residuals_present",
-    ledgers: { j, m, execution },
+    ledgers: { j, m, execution, operation_plans: operationPlans },
+    operation_plan_correlations: operationPlanCorrelations,
     replay_checkpoint: checkpointVerified
       ? {
           verified: true,
@@ -165,6 +227,8 @@ export function inspectGatewayRecoveryState(
           m_revision: m.last_verified_revision,
           m_event_digest: m.last_verified_event_digest ?? "GENESIS",
           update_count: residuals.length,
+          operation_plan_count: operationPlans.plan_count,
+          operation_plan_binding_count: operationPlans.binding_count,
         }
       : null,
     update_residuals: residuals,
@@ -172,6 +236,7 @@ export function inspectGatewayRecoveryState(
       !["paired", "pending_m_commit", "pending_j_receipt"].includes(item.disposition),
     ).length,
     execution_residual_count: executionResidualCount,
+    operation_plan_residual_count: operationPlanResidualCount,
     external_backup_restore_point: "not_examined",
     used_for_authority: false,
     may_execute: false,
@@ -179,6 +244,56 @@ export function inspectGatewayRecoveryState(
       ? "This read-only checkpoint is not a backup or restore point and does not authorize work; use the guarded recovery path for any recovery action."
       : "Keep work suspended; preserve the stores and compare verified prefixes with an independently verified backup before any repair.",
   };
+}
+
+export function correlateOperationPlanBindings(
+  operationPlans: OperationPlanRecoveryInspection,
+  execution: ExecutionIntentRecoveryInspection,
+): OperationPlanBrokerCorrelation[] {
+  const byAdmission = new Map<string, ExecutionIntentRecoveryInspection["records"]>();
+  if (execution.status === "verified") {
+    for (const record of execution.records) {
+      byAdmission.set(record.admission_digest, [...(byAdmission.get(record.admission_digest) ?? []), record]);
+    }
+  }
+  return operationPlans.bindings.map((binding): OperationPlanBrokerCorrelation => {
+    let brokerCorrelation: OperationPlanBrokerCorrelation["broker_correlation"];
+    let brokerRecord: ExecutionIntentRecoveryInspection["records"][number] | undefined;
+    if (binding.integrity !== "verified") {
+      brokerCorrelation = "j_binding_unverified";
+    } else if (!binding.admission_digest) {
+      brokerCorrelation = ["selected", "not_attempted", "invalidated"].includes(binding.status)
+        ? "not_admitted"
+        : "admission_missing";
+    } else if (execution.status !== "verified") {
+      brokerCorrelation = "broker_unverified";
+    } else {
+      const matches = byAdmission.get(binding.admission_digest) ?? [];
+      if (matches.length > 1) brokerCorrelation = "ambiguous";
+      else if (matches.length === 1) {
+        brokerCorrelation = "matched";
+        brokerRecord = matches[0];
+      } else if (execution.omitted_record_count > 0) brokerCorrelation = "not_observed_due_to_limit";
+      else brokerCorrelation = "not_found";
+    }
+    const deliveryCorrelation: OperationPlanBrokerCorrelation["delivery_correlation"] = !brokerRecord
+      ? "not_observed"
+      : binding.delivery_digest === null && brokerRecord.result_delivery_digest === null ? "not_recorded"
+        : binding.delivery_digest === null ? "j_not_recorded"
+          : brokerRecord.result_delivery_digest === null ? "broker_not_recorded"
+            : binding.delivery_digest === brokerRecord.result_delivery_digest ? "matched" : "mismatch";
+    return {
+      plan_id_digest: binding.plan_id_digest,
+      step_id_digest: binding.step_id_digest,
+      command_id_digest: binding.command_id_digest,
+      status: binding.status,
+      binding_integrity: binding.integrity,
+      admission_digest: binding.admission_digest,
+      broker_correlation: brokerCorrelation,
+      broker_state: brokerRecord?.state ?? null,
+      delivery_correlation: deliveryCorrelation,
+    };
+  });
 }
 
 export function correlateRecoveryUpdates(

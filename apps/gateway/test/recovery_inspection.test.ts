@@ -36,6 +36,7 @@ describe("Gateway read-only recovery inspection", () => {
     expect(report.ledgers.j.status).toBe("unavailable");
     expect(report.ledgers.m.status).toBe("unavailable");
     expect(report.ledgers.execution.status).toBe("unavailable");
+    expect(report.ledgers.operation_plans.status).toBe("unavailable");
     expect(JSON.stringify(report)).not.toContain(stateRoot);
     await expect(stat(stateRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
