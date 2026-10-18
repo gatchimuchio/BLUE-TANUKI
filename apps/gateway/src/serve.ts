@@ -82,6 +82,7 @@ import { loadPluginRuntime } from "./plugin_loader.js";
 import { createWebChatSettingsSurface } from "./settings_surface.js";
 import { buildAboutSnapshot } from "./about_surface.js";
 import {
+  buildRecoveryPostActionObservation,
   buildRecoverySnapshot,
   createRecoveryBackup,
   inspectLatestRecoveryBackup,
@@ -397,6 +398,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     filepath: completeHistoryFile,
     max_entries: completeHistoryMaxEntries,
   });
+  const recoveryObservationStartedAtMs = Date.now();
   gatewayLog.info("complete history", {
     persistence: completeHistoryFile ? "jsonl" : "memory",
     entries: completeHistory.size(),
@@ -515,6 +517,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     throw new Error("gateway_startup_reconciliation_unresolved");
   }
   let webchat: WebChatChannel;
+  let recoveryObservationHistoryIncomplete = false;
+
+  function isRecoveryMutationCommand(cmd: ExecuteCommand): boolean {
+    return cmd.type === "tool_call" && RECOVERY_TOOL_NAMES.includes(cmd.payload.tool_name as RecoveryToolName);
+  }
 
   function recordCompleteHistory(input: CompleteHistoryAppendInput): CompleteHistoryEntry | null {
     try {
@@ -723,7 +730,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     feedback: ExecuteFeedback,
     receipt: ExecutionIntentReceipt | null,
   ): CompleteHistoryEntry | null {
-    return recordCompleteHistory({
+    const entry = recordCompleteHistory({
       kind: "execution_history",
       request_id: log.request_id,
       command_id: cmd.id,
@@ -749,6 +756,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         } : undefined,
       },
     });
+    if (isRecoveryMutationCommand(cmd) && !entry) recoveryObservationHistoryIncomplete = true;
+    return entry;
   }
 
   function recordFinalOutputHistory(
@@ -756,8 +765,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     origin: InboundRequest,
     actor: string,
     output: OutputAuditLog,
+    command?: ExecuteCommand,
   ): void {
-    recordCompleteHistory({
+    const entry = recordCompleteHistory({
       kind: "final_output",
       request_id: output.request_id ?? log.request_id,
       command_id: output.command_id,
@@ -784,6 +794,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         reason: output.reason,
       },
     });
+    if (command && isRecoveryMutationCommand(command) && !entry) recoveryObservationHistoryIncomplete = true;
   }
 
   /**
@@ -1081,7 +1092,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     });
     const content = finalized.rendered_output;
     const output = finalized.output_audit;
-    recordFinalOutputHistory(log, origin, actor, output);
+    recordFinalOutputHistory(log, origin, actor, output, cmd);
     if (content) await dispatcher.dispatch({ channel: origin.channel, target: replyTarget(origin), content }, { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
     return { status: finalized.reviewed_feedback.status };
   }
@@ -1515,7 +1526,37 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           }),
       },
       recovery: {
-        getSnapshot: async () => buildRecoverySnapshot(process.env),
+        getSnapshot: async () => {
+          const historySize = completeHistory.size();
+          const historySkippedCount = completeHistory.skippedCount();
+          const historyChainValid = completeHistory.verify();
+          const recoveryHistoryIncompleteAtStart = recoveryObservationHistoryIncomplete;
+          const historyAtCapacity = completeHistoryMaxEntries !== undefined &&
+            historySize >= completeHistoryMaxEntries;
+          const historyEntries = completeHistory.replay().filter(
+            (entry): entry is CompleteHistoryEntry & { kind: "execution_history" | "final_output" } =>
+              entry.kind === "execution_history" || entry.kind === "final_output",
+          );
+          const historyEvidence = {
+            entries: historyEntries,
+            chain_valid: historyChainValid,
+            skipped_count: historySkippedCount +
+              (historyAtCapacity || recoveryHistoryIncompleteAtStart ? 1 : 0),
+            not_before_timestamp_ms: recoveryObservationStartedAtMs,
+          };
+          let postActionObservation = await buildRecoveryPostActionObservation(historyEvidence, process.env);
+          if (historySize !== completeHistory.size() ||
+              historySkippedCount !== completeHistory.skippedCount() ||
+              historyChainValid !== completeHistory.verify() ||
+              recoveryHistoryIncompleteAtStart !== recoveryObservationHistoryIncomplete) {
+            postActionObservation = await buildRecoveryPostActionObservation({
+              entries: [],
+              chain_valid: false,
+              skipped_count: 0,
+            }, process.env);
+          }
+          return buildRecoverySnapshot(process.env, postActionObservation);
+        },
         inspectBackup: async () => inspectLatestRecoveryBackup(process.env),
         inspectLedgerState: async () => {
           const { inspectGatewayRecoveryState, projectGatewayRecoveryInspectionForOperator } =

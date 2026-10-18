@@ -1487,6 +1487,33 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const restore = snapshot.restore || {};
         const authority = snapshot.authority_boundary || {};
         const paths = snapshot.runtime_paths || {};
+        const observation = snapshot.post_action_observation || {};
+        const operationLabels = {
+          restore: "復元",
+          provider_reset: "プロバイダー設定リセット",
+          connector_reset: "接続設定リセット",
+          factory_reset: "工場リセット",
+        };
+        const operationLabel = Object.prototype.hasOwnProperty.call(operationLabels, observation.operation)
+          ? operationLabels[observation.operation]
+          : "復旧操作";
+        let observationLabel = "未確認";
+        let observationTone = "warn";
+        if (observation.status === "changed") {
+          observationLabel = operationLabel + "・設定変更済み";
+          observationTone = "good";
+        } else if (observation.status === "failed") {
+          observationLabel = operationLabel + "・操作失敗、現状態は未確認";
+          observationTone = "bad";
+        } else if (observation.status === "no_record") {
+          observationLabel = "実行記録なし・未確認";
+        } else if (observation.status === "unverified" && observation.operation) {
+          observationLabel = observation.configuration_state === "provider_connector_dry_run"
+            ? "工場リセット・設定変更確認、全体は未確認"
+            : operationLabel + "・未確認";
+        }
+        setText("recovery-post-action-observation", observationLabel);
+        byId("recovery-post-action-observation").className = "badge " + observationTone;
         setText("recovery-env-file-status", envFile.exists ? "present" : envFile.configured ? "missing" : "not configured");
         setText("recovery-env-backup-count", envFile.backup_count ?? 0);
         setText("recovery-pack-count", packs.backup_count ?? 0);

@@ -21,6 +21,7 @@ export type RecoveryAction =
   | "provider_reset"
   | "connector_reset"
   | "factory_reset";
+type RecoveryMutationAction = Exclude<RecoveryAction, "backup">;
 
 export interface RecoveryPathStatus {
   configured: boolean;
@@ -83,8 +84,40 @@ export interface RecoverySnapshot {
     confirmation_required: true;
   };
   authority_boundary: RecoveryAuthorityBoundary;
+  post_action_observation: RecoveryPostActionObservation;
   next_safe_action: string;
   evidence_source: readonly ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"];
+}
+
+export interface RecoveryPostActionObservation {
+  status: "changed" | "failed" | "unverified" | "no_record";
+  operation: RecoveryMutationAction | null;
+  operation_digest: string | null;
+  result_digest: string | null;
+  configuration_state:
+    | "provider_stub"
+    | "connector_dry_run"
+    | "provider_connector_dry_run"
+    | "not_observed";
+  evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME" | "COMPLETE_HISTORY" | "NONE";
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export interface RecoveryHistoryEvidenceEntry {
+  kind: "execution_history" | "final_output";
+  command_id: string | null;
+  index: number;
+  timestamp: number;
+  used_for_authority: false;
+  payload: unknown;
+}
+
+export interface RecoveryHistoryEvidence {
+  entries: readonly RecoveryHistoryEvidenceEntry[];
+  chain_valid: boolean;
+  skipped_count: number;
+  not_before_timestamp_ms?: number;
 }
 
 export interface RecoveryActionResult {
@@ -1273,6 +1306,161 @@ async function readEnvValues(env: NodeJS.ProcessEnv): Promise<Record<string, str
   return parseEnvFile(raw).values;
 }
 
+const RECOVERY_OBSERVATION_OPERATIONS = {
+  "recovery.restore": "restore",
+  "recovery.reset_provider": "provider_reset",
+  "recovery.reset_connector": "connector_reset",
+  "recovery.factory_reset": "factory_reset",
+} as const;
+
+function isRecoveryObservationRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function recoveryObservationDigest(value: unknown): string | null {
+  return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : null;
+}
+
+function noRecoveryActionObservation(
+  status: RecoveryPostActionObservation["status"],
+): RecoveryPostActionObservation {
+  return {
+    status,
+    operation: null,
+    operation_digest: null,
+    result_digest: null,
+    configuration_state: "not_observed",
+    evidence_source: "NONE",
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
+/** Re-observe the latest Recovery mutation from non-authoritative history and the current local environment. */
+export async function buildRecoveryPostActionObservation(
+  history: RecoveryHistoryEvidence,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RecoveryPostActionObservation> {
+  if (!history.chain_valid || history.skipped_count !== 0) {
+    return noRecoveryActionObservation("unverified");
+  }
+
+  let latest: {
+    entry: RecoveryHistoryEvidenceEntry;
+    operation: keyof typeof RECOVERY_OBSERVATION_OPERATIONS;
+    action: RecoveryMutationAction;
+    argumentsDigest: string;
+    executionStatus: unknown;
+    resultDigest: string | null;
+  } | undefined;
+  for (const entry of history.entries) {
+    if (entry.kind !== "execution_history" || entry.used_for_authority !== false || !entry.command_id ||
+        !isRecoveryObservationRecord(entry.payload)) continue;
+    const command = entry.payload.command;
+    if (!isRecoveryObservationRecord(command) || !isRecoveryObservationRecord(command.payload)) continue;
+    const toolName = command.payload.tool_name;
+    if (typeof toolName !== "string" ||
+        !Object.prototype.hasOwnProperty.call(RECOVERY_OBSERVATION_OPERATIONS, toolName) ||
+        command.operation !== toolName) continue;
+    const operation = toolName as keyof typeof RECOVERY_OBSERVATION_OPERATIONS;
+    const argumentsDigest = recoveryObservationDigest(command.payload.arguments_digest);
+    if (!argumentsDigest) {
+      if (!latest || entry.index >= latest.entry.index) {
+        latest = {
+          entry,
+          operation,
+          action: RECOVERY_OBSERVATION_OPERATIONS[operation],
+          argumentsDigest: "",
+          executionStatus: entry.payload.status,
+          resultDigest: recoveryObservationDigest(entry.payload.result_digest),
+        };
+      }
+      continue;
+    }
+    if (!latest || entry.index >= latest.entry.index) {
+      latest = {
+        entry,
+        operation,
+        action: RECOVERY_OBSERVATION_OPERATIONS[operation],
+        argumentsDigest,
+        executionStatus: entry.payload.status,
+        resultDigest: recoveryObservationDigest(entry.payload.result_digest),
+      };
+    }
+  }
+  if (!latest) return noRecoveryActionObservation("no_record");
+
+  const operationDigest = latest.argumentsDigest
+    ? createHash("sha256").update(`${latest.operation}\n${latest.argumentsDigest}`).digest("hex")
+    : null;
+  const unverified: RecoveryPostActionObservation = {
+    status: "unverified",
+    operation: latest.action,
+    operation_digest: operationDigest,
+    result_digest: latest.resultDigest,
+    configuration_state: "not_observed",
+    evidence_source: "COMPLETE_HISTORY",
+    used_for_authority: false,
+    may_execute: false,
+  };
+  if (!operationDigest) return unverified;
+  if (history.not_before_timestamp_ms !== undefined &&
+      latest.entry.timestamp < history.not_before_timestamp_ms) return unverified;
+
+  const finalOutput = history.entries
+    .filter((entry) => entry.kind === "final_output" && entry.command_id === latest!.entry.command_id &&
+      entry.used_for_authority === false && isRecoveryObservationRecord(entry.payload))
+    .sort((left, right) => right.index - left.index)[0];
+  const finalPayload = finalOutput && isRecoveryObservationRecord(finalOutput.payload) ? finalOutput.payload : null;
+  if (!finalPayload || finalPayload.used_for_authority !== false || finalPayload.status !== latest.executionStatus) {
+    return unverified;
+  }
+  if (latest.executionStatus === "failed") {
+    const finalResultDigest = recoveryObservationDigest(finalPayload.result_digest);
+    if (latest.resultDigest !== finalResultDigest) return unverified;
+    return { ...unverified, status: "failed" };
+  }
+  if (latest.executionStatus !== "success" || !latest.resultDigest ||
+      recoveryObservationDigest(finalPayload.result_digest) !== latest.resultDigest || finalPayload.result_present !== true) {
+    return unverified;
+  }
+
+  if (latest.action === "restore") return unverified;
+  let values: Record<string, string>;
+  try {
+    values = await readEnvValues(env);
+  } catch {
+    return unverified;
+  }
+  const processKeysAbsent = (keys: readonly string[]) => keys.every((key) => env[key] === undefined);
+  const fileKeysAbsent = (keys: readonly string[]) => keys.every((key) => !Object.prototype.hasOwnProperty.call(values, key));
+  const providerResetObserved =
+    values.LLM_BACKEND === "stub" && env.LLM_BACKEND === "stub" &&
+    fileKeysAbsent(PROVIDER_RESET_KEYS) && processKeysAbsent(PROVIDER_RESET_KEYS);
+  const connectorResetObserved =
+    values.COMPOSIO_DRY_RUN === "true" && env.COMPOSIO_DRY_RUN === "true" &&
+    values.COMPOSIO_LIVE_EXECUTION === "false" && env.COMPOSIO_LIVE_EXECUTION === "false" &&
+    fileKeysAbsent(CONNECTOR_RESET_KEYS) && processKeysAbsent(CONNECTOR_RESET_KEYS);
+  const observed = latest.action === "provider_reset"
+    ? providerResetObserved
+    : latest.action === "connector_reset"
+      ? connectorResetObserved
+      : providerResetObserved && connectorResetObserved;
+  const configurationState = latest.action === "provider_reset" && providerResetObserved
+    ? "provider_stub"
+    : latest.action === "connector_reset" && connectorResetObserved
+      ? "connector_dry_run"
+      : latest.action === "factory_reset" && observed
+        ? "provider_connector_dry_run"
+        : "not_observed";
+  return {
+    ...unverified,
+    status: observed && latest.action !== "factory_reset" ? "changed" : "unverified",
+    configuration_state: configurationState,
+    evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
+  };
+}
+
 function renderEnvValues(values: Record<string, string>): string {
   const lines = [
     "# BLUE-TANUKI local env",
@@ -1317,7 +1505,10 @@ function deleteEnvKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): void {
   }
 }
 
-export async function buildRecoverySnapshot(env: NodeJS.ProcessEnv = process.env): Promise<RecoverySnapshot> {
+export async function buildRecoverySnapshot(
+  env: NodeJS.ProcessEnv = process.env,
+  postActionObservation: RecoveryPostActionObservation = noRecoveryActionObservation("no_record"),
+): Promise<RecoverySnapshot> {
   const schedulesDir = env.BLUE_TANUKI_SCHEDULES_DIR ??
     (env.BLUE_TANUKI_FILE_ROOT ? path.join(env.BLUE_TANUKI_FILE_ROOT, "schedules") : undefined);
   const backups = await recoveryBackupInventory(env);
@@ -1356,6 +1547,7 @@ export async function buildRecoverySnapshot(env: NodeJS.ProcessEnv = process.env
       confirmation_required: true,
     },
     authority_boundary: AUTHORITY_BOUNDARY,
+    post_action_observation: postActionObservation,
     next_safe_action: "Submit an available recovery change for HDS L3 owner review. Maintenance access only queues the exact operation; it does not execute it. Canonical SQLite snapshots are not applied by generic Restore.",
     evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
   };

@@ -758,6 +758,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("bt.updateToken");
       expect(html).toContain("recovery-token");
       expect(html).toContain("load-recovery");
+      expect(html).toContain("recovery-post-action-observation");
       expect(html).toContain("/recovery/snapshot");
       expect(html).toContain("inspect-recovery-ledgers");
       expect(html).toContain("/recovery/inspection");
@@ -943,6 +944,7 @@ describe("Aotanu mascot runtime mapper", () => {
 
 describe("WebChatChannel — Recovery surface", () => {
   it("serves maintenance-token-gated recovery readiness and control actions with non-authority metadata", async () => {
+    expect(() => new Function(CONTROL_CENTER_SCRIPT)).not.toThrow();
     const actions: string[] = [];
     let inspectionReads = 0;
     let backupInspectionReads = 0;
@@ -1000,6 +1002,16 @@ describe("WebChatChannel — Recovery surface", () => {
             recovery_metadata_used_for_authority: false,
             recovery_action_used_for_authority: false,
             used_for_authority: false,
+          },
+          post_action_observation: {
+            status: "changed",
+            operation: "provider_reset",
+            operation_digest: "c".repeat(64),
+            result_digest: "d".repeat(64),
+            configuration_state: "provider_stub",
+            evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
+            used_for_authority: false,
+            may_execute: false,
           },
           next_safe_action: "Review backup inventory.",
           evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
@@ -1308,6 +1320,13 @@ describe("WebChatChannel — Recovery surface", () => {
           recovery_metadata_used_for_authority: false,
           recovery_action_used_for_authority: false,
           used_for_authority: false,
+        },
+        post_action_observation: {
+          status: "changed",
+          operation: "provider_reset",
+          configuration_state: "provider_stub",
+          used_for_authority: false,
+          may_execute: false,
         },
       });
 

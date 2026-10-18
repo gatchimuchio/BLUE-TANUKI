@@ -458,10 +458,12 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Restore</span><span id="recovery-restore-status">not loaded</span></div>
             <div class="metric"><span>Factory reset</span><span id="recovery-factory-reset-status">not loaded</span></div>
             <div class="metric"><span>Last action</span><span id="recovery-action-status">not run</span></div>
+            <div class="metric"><span>復旧操作後の再観測</span><span id="recovery-post-action-observation">未確認</span></div>
             <div class="metric technical-boundary"><span>Boundary</span><span id="recovery-authority-status">HDS gated</span></div>
             <div class="metric"><span>Next action</span><span id="recovery-next-action">not loaded</span></div>
           </div>
           <div id="recovery-path-list" class="status-grid"></div>
+          <p class="muted">直近の復旧操作を実行履歴と現在の固定設定状態で読み取り再観測します。承認、実行、復旧可否の判定には使いません。工場リセットは設定部分のみ確認できても全体を確認済みにしません。</p>
           <pre id="recovery-json">not loaded</pre>
           <div class="status-grid">
             <button id="inspect-recovery-ledgers" type="button">回復台帳を読み取り検査</button>

@@ -2,11 +2,28 @@
 
 ## 次のBUILD_BATCH
 
-直前の `QEB-03-E03.03-RECOVERY-HDS-L3-MUTATION-PATH` で、Recovery変更をHDSの目的採否、high-risk／L3最終審査、owner resume tokenの単回消費、hash-chain audit、Executor、結果投影へ接続した。maintenance tokenは要求登録だけを認証する。実行前に完全な引数と対象を固定し、画面確認やapproval grantはowner承認の代用にしない。
+次は `QEB-03-E03.03-RECOVERY-SCOPE-APPLICABILITY-BOUNDARY`。既存のverified per-store backup inspectionとPlan依存scopeを、ownerが指定した破損範囲・backup・store候補へ安全に結ぶ読み取り専用consumerを実装する。結果は固定enumとdigest・件数に限定し、scope identityが曖昧、ledgerが未検証、archiveやschemaが不整合の場合は`unverified`へ閉じる。job identity、独立restore point、store間atomicity、復旧可否、repair／resume／権限は推定しない。canonical stateの書込みは対象外とし、E03.03の現行要求を再読して対象と停止条件を確定してから着手する。
 
-次consumerはRecovery変更後のread-only再観測である。実行結果と固定された環境状態をoperation／result digestへ対応付け、操作者へ「設定変更済み／未確認／失敗」を表示する。秘密値、raw path、SQLite snapshotのstore間atomicity、仕事単位restore pointを推定しない。pending approvalがGateway再起動後に失われた場合は新規要求を必要とし、C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
+次の作業前に最新版の三点正本と適用AGENTS.mdを読み直す。C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
 
 ## 直前のBUILD_BATCH実績
+
+`QEB-03-E03.03-RECOVERY-POST-ACTION-REOBSERVATION` は開始HEAD／`origin/main`=`890caf8c6cf9e74307146e6c209e866ad4b59461`、開始worktree cleanで開始した。owner指定rev2.3三点正本、適用AGENTS.md、作業標準要領、現行指示、E03.03と現物を再読した。commit準備時のlocal recovery branchとlocal／remote backup tagは現世代=`890caf8c6cf9e74307146e6c209e866ad4b59461`、前世代=`7d502eedf8cc5f1493bdb15d64c9b5c445046a45`で一致した。
+
+Recoveryの`execution_history`と`final_output`をcommand IDで結び、固定Recovery tool名・引数digest・status・result digestを照合した。history chainが無効／欠落recordがある、digestやstatusが不一致、該当final outputがない場合は`unverified`とする。現Gateway起動より前の履歴は現在状態の根拠にせず、historyが上限へ達した場合やRecovery結果をhistoryへ記録できなかった場合も未確認へ閉じる。成功したprovider／connector resetだけ、現在の`.env`とGateway process environmentの固定状態を確認し、secret値とpathを返さない。Restoreはcanonical SQLiteを適用しないため未確認、Factory Resetは設定状態を確認できても削除範囲全体は未確認と表示する。履歴の照合中に新recordが増えた場合も未確認へ閉じ、観測は権限・承認・実行に使わない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway recovery／post-action observation tests | PASS、2 files／16 tests。env fileとprocessの状態一致、secret非露出、history欠落／旧Gateway記録、digest mismatch、failed status、Restore／Factory Resetの未確認範囲を確認。 |
+| WebChat recovery / Control Center tests | PASS、1 file／79 tests。snapshot projectionとControl Center表示、script parseabilityを確認。 |
+| `pnpm typecheck`→`pnpm build` | PASS。workspace全体、15 projects。 |
+| `pnpm smoke:serve` | PASS。stub WebChat応答、audit persistence、audit-dump chain検証。Recovery mutationは実行していない。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件。 |
+| 実Recovery操作、実provider／credential、SQLite restore、全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+E03.03／QEB-03=`BUILD_GAP`を維持する。状態再観測は設定の現在値と結果digestの照合であり、restore、job recovery、canonical SQLite適用や独立restore pointを証明しない。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。D4Pocketその他別repo、実業務作用、公開・出荷判断なし。
+
+## 前回のBUILD_BATCH実績
 
 `QEB-03-E03.03-RECOVERY-HDS-L3-MUTATION-PATH` は開始HEAD／`origin/main`=`7d502eedf8cc5f1493bdb15d64c9b5c445046a45`で開始し、worktreeにはこのRecovery作業の先行差分が存在した。三点正本rev2.3、適用AGENTS.md、作業標準要領、active指示、E03.03と現物を再同期した。
 
