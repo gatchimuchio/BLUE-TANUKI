@@ -544,6 +544,109 @@ describe("Recovery mutation HDS L3 entry", () => {
     }
   }, 30_000);
 
+  it("restores a verified Operation Plan store through L3 and refreshes the runtime checkpoint", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-operation-plan-restore-l3-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
+    const port = await reserveLoopbackPort();
+    writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const runtimeEnv = isolatedRuntimeEnvironment(root, envFile, historyFile, port);
+    const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
+    const { plan_id_digest: planIdDigest } = seedOperationPlanState(planStatePath);
+    const gateway = spawnGateway(runtimeEnv);
+
+    try {
+      await waitForHealth(port, gateway);
+      const backup = await requestJson(port, "/recovery/backup", {
+        method: "POST",
+        token: maintenanceToken,
+        body: {},
+      });
+      expect(backup.status).toBe(200);
+      const backupId = (backup.body.result as Record<string, unknown>).backup_id as string;
+
+      // Change only the fixture's selected SQLite store after backup. The running
+      // Gateway then has to consume the restored checkpoint through its HDS refresh.
+      const changedStore = new OperationPlanStateStore(planStatePath);
+      try {
+        const current = changedStore.load();
+        expect(current?.plans).toHaveLength(1);
+        const empty = OperationPlanCheckpointSchema.parse({
+          schema_version: "operation-plan-state.v1",
+          plans: [],
+        });
+        changedStore.compareAndSet(current ? operationPlanDigest(current) : null, empty);
+      } finally {
+        changedStore.close();
+      }
+
+      const queued = await requestJson(port, "/recovery/restore", {
+        method: "POST",
+        token: maintenanceToken,
+        body: {
+          backup_id: backupId,
+          store_key: "operation_plans",
+          scope_kind: "operation_plan",
+          scope_digest: planIdDigest,
+          confirm: "RESTORE",
+        },
+      });
+      const expectedTarget =
+        `recovery.restore:${backupId}:store:operation_plans:effect:whole_store:scope:operation_plan:${planIdDigest}`;
+      expect(queued.status, JSON.stringify(queued.body)).toBe(202);
+      expect(queued.body).toMatchObject({ ok: true, result: {
+        status: "approval_required",
+        executed: false,
+        target: expectedTarget,
+        restore_effect_scope: "entire_selected_store",
+        scope_applicability: {
+          status: "matched",
+          matched_plan_id_digest: planIdDigest,
+          used_for_authority: false,
+          may_execute: false,
+        },
+        risk: "high",
+        approval_level: "L3_final_review",
+        final_review_required: true,
+      } });
+
+      const approvalQueue = await requestJson(port, "/approval", { token: resumeToken });
+      const pending = (approvalQueue.body.pending_approvals as Array<Record<string, unknown>>)
+        .find((item) => item.operation === "recovery.restore");
+      expect(pending).toMatchObject({
+        target: expectedTarget,
+        risk: "high",
+        approval_level: "L3_final_review",
+        final_review_required: true,
+      });
+      const approved = await requestJson(port, `/approval/${encodeURIComponent(String(pending?.command_id))}`, {
+        method: "POST",
+        token: resumeToken,
+        body: { verdict: "approve", approval_token: pending?.approval_token },
+      });
+      expect(approved.status, `${JSON.stringify(approved.body)}\n${gateway.output.join("")}`).toBe(200);
+      expect(approved.body, gateway.output.join("")).toMatchObject({
+        ok: true,
+        result: { approval: "approve", executed: true, status: "success" },
+      });
+
+      const restoredStore = new OperationPlanStateStore(planStatePath);
+      try {
+        expect(restoredStore.load()?.plans.map((plan) => operationPlanDigest(plan.revisions[0]!.plan.plan_id)))
+          .toEqual([planIdDigest]);
+      } finally {
+        restoredStore.close();
+      }
+      const runtime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(runtime.body.hds.operation_plans.plans).toMatchObject([{ plan_id: planIdDigest }]);
+      expect(runtime.body.hds.operation_plans.used_for_authority).toBe(false);
+      expect(runtime.body.hds.operation_plans.raw_payload_exposed).toBe(false);
+    } finally {
+      await stopChild(gateway.child);
+    }
+  }, 30_000);
+
   it("binds plan restore to its exact L3 scope and rejects changed backup before state mutation", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-recovery-l3-"));
     const envFile = join(root, "product.env");

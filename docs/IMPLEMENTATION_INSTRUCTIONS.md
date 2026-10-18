@@ -2,6 +2,20 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-03-E03.03-VERIFIED-PLAN-RESTORE-REFRESH`
+
+開始HEAD／`origin/main`=`41a0bf675f582e681148efacc371498eec713222`、worktree clean。owner指定rev2.3三点正本・適用`AGENTS.md`・作業標準・active指示・E03.03と現物を再読し、前回候補のrestore preflight／verified scope接続が既存コードにあることを追跡した。Gatewayはbackup由来Operation Plan digestをwhole-store L3 targetへ結び、実行時にもbackup scopeを再検証する。
+
+`recovery_mutation_entry.test.ts`に、隔離したstub Gatewayでの成功経路を追加した。backup取得後に一時SQLiteの選択storeを空checkpointへ変更し、合成L3 tokenによる承認経路を通して、検証済みbackupからのstore復元とGateway/HDS runtime checkpoint再読込を確認した。対象scopeは`operation_plan` digestで、実効果は選択Operation Plan store全体。これはテスト用の承認経路であり、実owner承認や製品上の復旧可能性判定ではない。実provider・資格・実業務作用は未使用。
+
+| 限定確認 | 結果 |
+|---|---|
+| `recovery_mutation_entry.test.ts` の追加ケース | PASS、1 test。L3 target／verified scope、store復元、runtime checkpoint再読込を確認。 |
+| Gateway `typecheck`／`git diff --check` | PASS。 |
+| 実owner approval／残差を含む複数planの復元後hold分離／実業務作用／実provider／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+前回候補のpreflight経路は`WIRED`、成功restore後の単一clean plan再読込も合成Gatewayで`WIRED`。E03.03全体は`BUILD_GAP`。次consumerは複数planを含むrestore observationをHDSへ渡し、残差planだけをholdし、影響しないplanを分離する実runtime経路。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の境界を維持する。
+
 ### 最新BUILD_BATCH：`QEB-03-E03.03-RECOVERY-RESIDUAL-OPERATOR-DOM`
 
 開始HEAD／`origin/main`=`84e24d62424f2c7aed8eea01241bb420078c3541`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）と適用`AGENTS.md`、作業標準要領、active指示、現物を再読した。開始local recovery branch／remote backup tagはcurrent=`84e24d62424f2c7aed8eea01241bb420078c3541`、previous=`c886a9ad88b501a3475e958b2014867342a3ca8d`。作業中はloopbackだけにbindしたstub Gatewayと独立一時stateを使い、実資格・外部provider・外部作用を使わなかった。
