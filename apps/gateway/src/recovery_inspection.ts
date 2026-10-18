@@ -2,6 +2,7 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import {
   CANONICAL_STATE_STORE_PATHS,
+  resolveCanonicalStateStoreInspectionPath,
   type CanonicalStateSnapshotManifest,
   type CanonicalStateStoreKey,
 } from "./canonical_state_backup.js";
@@ -1163,6 +1164,109 @@ export function inspectGatewayRecoveryCanonicalArchive(
     hasSafeCanonicalArchiveStatePaths(packDirectory, snapshot),
     { BLUE_TANUKI_FILE_ROOT: archiveRoot },
   );
+}
+
+export type RecoverySelectedStoreLedgerStatus =
+  | "verified"
+  | "residuals_present"
+  | "projection_mismatch"
+  | "corrupt"
+  | "schema_mismatch"
+  | "unavailable"
+  | "unverified";
+
+export interface RecoverySelectedStoreLedgerObservation {
+  readonly status: RecoverySelectedStoreLedgerStatus;
+  readonly residual_count: number | null;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
+function selectedLedgerObservation(
+  status: string,
+  reason: string | null,
+  residualCount: number | null,
+): RecoverySelectedStoreLedgerObservation {
+  const normalizedStatus: RecoverySelectedStoreLedgerStatus = status === "projection_mismatch"
+    ? "projection_mismatch"
+    : status === "corrupt"
+      ? "corrupt"
+      : status === "schema_mismatch" || reason === "schema_mismatch"
+        ? "schema_mismatch"
+        : status === "unavailable"
+          ? "unavailable"
+          : status === "unverified"
+            ? "unverified"
+            : status === "residuals_present" || (residualCount !== null && residualCount > 0)
+              ? "residuals_present"
+              : status === "verified"
+                ? "verified"
+                : "unverified";
+  const count = residualCount === null || !Number.isSafeInteger(residualCount) || residualCount < 0
+    ? null
+    : residualCount;
+  return {
+    status: normalizedStatus,
+    residual_count: normalizedStatus === "unavailable" ? null : count,
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
+/** Inspect exactly one selected canonical store through its existing read-only ledger inspector. */
+export function inspectCanonicalStateStoreLedger(
+  stateRoot: string,
+  storeKey: CanonicalStateStoreKey,
+): RecoverySelectedStoreLedgerObservation {
+  let databasePath: string;
+  let privateRoot: string;
+  try {
+    databasePath = resolveCanonicalStateStoreInspectionPath(stateRoot, storeKey);
+    privateRoot = path.join(realpathSync(path.resolve(stateRoot)), "private-state");
+  } catch {
+    return selectedLedgerObservation("unavailable", "store_unavailable", null);
+  }
+
+  switch (storeKey) {
+    case "j_control": {
+      const inspection = inspectJControlRecoveryLedger({ private_state_root: privateRoot, database_path: databasePath });
+      const outstandingUpdates = inspection.updates.filter((update) => update.phase !== "committed").length;
+      const residualCount = inspection.status === "unavailable" ? null
+        : Math.max(inspection.unverified_event_count + outstandingUpdates,
+          inspection.status === "projection_mismatch" || inspection.status === "corrupt" ? 1 : 0);
+      return selectedLedgerObservation(inspection.status, inspection.reason, residualCount);
+    }
+    case "m_state": {
+      const inspection = inspectMemoryRecoveryLedger({ private_state_root: privateRoot, database_path: databasePath });
+      const residualCount = inspection.status === "unavailable" ? null
+        : Math.max(inspection.unverified_event_count,
+          inspection.status === "projection_mismatch" || inspection.status === "corrupt" ? 1 : 0);
+      return selectedLedgerObservation(inspection.status, inspection.reason, residualCount);
+    }
+    case "broker": {
+      const inspection = inspectExecutionIntentRecoveryLedger({ private_state_root: privateRoot, database_path: databasePath });
+      const omittedRecords = inspection.omitted_record_count > 0;
+      const knownResidualCount = inspection.unverified_event_count + inspection.receipt_projection_mismatch_count +
+        inspection.outbox_mismatch_count + inspection.records.filter((record) =>
+          record.reconciliation_required || record.result_delivery_pending,
+        ).length;
+      const residualCount = inspection.status === "unavailable" || inspection.status === "schema_mismatch" || omittedRecords
+        ? null
+        : Math.max(knownResidualCount, inspection.status === "corrupt" ? 1 : 0);
+      return selectedLedgerObservation(inspection.status, inspection.reason, residualCount);
+    }
+    case "operation_plans": {
+      const inspection = inspectOperationPlanRecoveryLedger({ private_state_root: privateRoot, database_path: databasePath });
+      const residualCount = inspection.status === "unavailable"
+        ? null
+        : inspection.plan_integrity_residual_count + inspection.residual_binding_count + inspection.unverified_memory_link_count;
+      return selectedLedgerObservation(inspection.status, inspection.reason, residualCount);
+    }
+    case "cron_events": {
+      const inspection = inspectCronEventRecoveryLedger({ private_state_root: privateRoot, database_path: databasePath });
+      return selectedLedgerObservation(inspection.status, inspection.reason, inspection.residual_count);
+    }
+  }
 }
 
 export function correlateOperationPlanBindings(

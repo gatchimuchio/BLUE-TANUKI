@@ -182,6 +182,35 @@ export function resolveCanonicalStateStoreTargetPath(
   return source.path;
 }
 
+/** Resolve only the selected canonical store; never stat sibling stores. */
+export function resolveCanonicalStateStoreInspectionPath(
+  stateRootValue: string,
+  storeKey: CanonicalStateStoreKey,
+): string {
+  const store = CANONICAL_STATE_STORE_PATHS.find((candidate) => candidate.key === storeKey);
+  if (!store) throw new Error("canonical_state_restore_store_unknown");
+  const stateRoot = resolve(stateRootValue);
+  if (!safeDirectory(stateRoot)) throw new Error("canonical_state_restore_target_unavailable");
+  const realStateRoot = realpathSync(stateRoot);
+  const privateRoot = join(realStateRoot, "private-state");
+  if (!safeDirectory(privateRoot)) throw new Error("canonical_state_restore_target_unavailable");
+  const targetPath = join(privateRoot, store.relative_path);
+  if (!safeDirectory(dirname(targetPath))) throw new Error("canonical_state_restore_target_unavailable");
+  try {
+    const stat = lstatSync(targetPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("canonical_state_restore_target_unavailable");
+    const resolvedTarget = realpathSync(targetPath);
+    const rel = relative(privateRoot, resolvedTarget);
+    if (rel.startsWith(`..${sep}`) || rel === ".." || resolve(privateRoot, rel) !== resolvedTarget) {
+      throw new Error("canonical_state_restore_target_unavailable");
+    }
+    return resolvedTarget;
+  } catch (error) {
+    if (isMissing(error)) return targetPath;
+    throw new Error("canonical_state_restore_target_unavailable");
+  }
+}
+
 export interface CanonicalStateStoreTargetInspection {
   readonly status: "verified" | "not_present" | "mismatch" | "unverified";
   readonly bytes: number | null;
@@ -195,7 +224,7 @@ export async function inspectCanonicalStateStoreTarget(
 ): Promise<CanonicalStateStoreTargetInspection> {
   let targetPath: string;
   try {
-    targetPath = resolveCanonicalStateStoreTargetPath(stateRootValue, storeKey);
+    targetPath = resolveCanonicalStateStoreInspectionPath(stateRootValue, storeKey);
   } catch {
     return { status: "unverified", bytes: null, sha256: null };
   }

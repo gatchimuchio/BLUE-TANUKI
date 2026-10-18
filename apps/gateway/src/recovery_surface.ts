@@ -16,7 +16,12 @@ import {
   type CanonicalStateStoreKey,
 } from "./canonical_state_backup.js";
 import { inspectOperationPlanRecoveryLedger, type OperationPlanRecoveryInspection } from "./operation_plan_recovery_inspection.js";
-import { inspectGatewayRecoveryCanonicalArchive, type RecoveryPlanDependencyCategory } from "./recovery_inspection.js";
+import {
+  inspectCanonicalStateStoreLedger,
+  inspectGatewayRecoveryCanonicalArchive,
+  type RecoveryPlanDependencyCategory,
+  type RecoverySelectedStoreLedgerStatus,
+} from "./recovery_inspection.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
 export type RecoveryAction =
@@ -99,6 +104,8 @@ export interface RecoveryPostActionObservation {
   store_key: CanonicalStateStoreKey | null;
   operation_digest: string | null;
   result_digest: string | null;
+  store_ledger_status: RecoverySelectedStoreLedgerStatus | null;
+  store_ledger_residual_count: number | null;
   configuration_state:
     | "provider_stub"
     | "connector_dry_run"
@@ -1611,6 +1618,8 @@ function noRecoveryActionObservation(
     store_key: null,
     operation_digest: null,
     result_digest: null,
+    store_ledger_status: null,
+    store_ledger_residual_count: null,
     configuration_state: "not_observed",
     evidence_source: "NONE",
     used_for_authority: false,
@@ -1681,6 +1690,8 @@ export async function buildRecoveryPostActionObservation(
     store_key: null,
     operation_digest: operationDigest,
     result_digest: latest.resultDigest,
+    store_ledger_status: null,
+    store_ledger_residual_count: null,
     configuration_state: "not_observed",
     evidence_source: "COMPLETE_HISTORY",
     used_for_authority: false,
@@ -1737,10 +1748,29 @@ export async function buildRecoveryPostActionObservation(
         evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
       };
     }
+    const storeLedger = inspectCanonicalStateStoreLedger(
+      env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+      restoreEvidence.store_key,
+    );
+    const afterLedgerInspection = await inspectCanonicalStateStoreTarget(
+      env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+      restoreEvidence.store_key,
+    );
+    if (afterLedgerInspection.status !== "verified" || afterLedgerInspection.sha256 !== target.sha256 ||
+        afterLedgerInspection.bytes !== target.bytes) {
+      return {
+        ...unverified,
+        store_key: restoreEvidence.store_key,
+        store_ledger_status: "unverified",
+        evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
+      };
+    }
     return {
       ...unverified,
       status: target.sha256 === restoreEvidence.restored_store_state_digest ? "matched" : "changed",
       store_key: restoreEvidence.store_key,
+      store_ledger_status: storeLedger.status,
+      store_ledger_residual_count: storeLedger.residual_count,
       evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
     };
   }

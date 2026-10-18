@@ -5,11 +5,14 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import {
   buildRecoveryPostActionObservation,
   recoveryStoreRestoreHistoryEvidence,
   type RecoveryHistoryEvidenceEntry,
 } from "../src/recovery_surface.js";
+import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
@@ -77,13 +80,15 @@ function selectedStoreRestoreHistory(stateDigest: string): RecoveryHistoryEviden
   ];
 }
 
-async function createOperationPlanStore(stateRoot: string, marker: string): Promise<string> {
+async function createOperationPlanStore(stateRoot: string): Promise<string> {
   const databasePath = path.join(stateRoot, "private-state", "operation-plans", "j-state.sqlite");
   await mkdir(path.dirname(databasePath), { recursive: true });
-  const database: DatabaseSyncType = new DatabaseSync(databasePath);
-  database.exec("CREATE TABLE restore_fixture (value TEXT NOT NULL)");
-  database.prepare("INSERT INTO restore_fixture (value) VALUES (?)").run(marker);
-  database.close();
+  const store = new OperationPlanStateStore(databasePath);
+  store.compareAndSet(null, OperationPlanCheckpointSchema.parse({
+    schema_version: "operation-plan-state.v1",
+    plans: [],
+  }));
+  store.close();
   return databasePath;
 }
 
@@ -257,7 +262,8 @@ describe("buildRecoveryPostActionObservation", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-restore-reobserve-"));
     try {
       const stateRoot = path.join(root, "state");
-      const storePath = await createOperationPlanStore(stateRoot, "restored-state");
+      const storePath = await createOperationPlanStore(stateRoot);
+      await writeFile(path.join(stateRoot, "private-state", "execution-intents"), "unselected sibling store", "utf8");
       const restoredStateDigest = await sha256File(storePath);
       const history = {
         entries: selectedStoreRestoreHistory(restoredStateDigest),
@@ -279,6 +285,8 @@ describe("buildRecoveryPostActionObservation", () => {
         operation: "restore",
         store_key: "operation_plans",
         evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
+        store_ledger_status: "verified",
+        store_ledger_residual_count: 0,
         used_for_authority: false,
         may_execute: false,
       });
@@ -286,7 +294,8 @@ describe("buildRecoveryPostActionObservation", () => {
       expect(JSON.stringify(matched)).not.toContain(storePath);
 
       const database: DatabaseSyncType = new DatabaseSync(storePath);
-      database.prepare("INSERT INTO restore_fixture (value) VALUES (?)").run("later-state");
+      database.prepare("UPDATE operation_plan_state SET checkpoint_json=? WHERE id=1")
+        .run('{ "schema_version": "operation-plan-state.v1", "plans": [] }');
       database.close();
       const changedBytes = await readFile(storePath);
       const changed = await buildRecoveryPostActionObservation(history, { BLUE_TANUKI_STATE_ROOT: stateRoot });
@@ -295,8 +304,22 @@ describe("buildRecoveryPostActionObservation", () => {
         status: "changed",
         operation: "restore",
         store_key: "operation_plans",
+        store_ledger_status: "verified",
+        store_ledger_residual_count: 0,
       });
       expect(await readFile(storePath)).toEqual(changedBytes);
+
+      const corruptCheckpoint = { schema_version: "operation-plan-state.v1", plans: null };
+      const corruptDatabase: DatabaseSyncType = new DatabaseSync(storePath);
+      corruptDatabase.prepare("UPDATE operation_plan_state SET checkpoint_json=?,digest=? WHERE id=1")
+        .run(JSON.stringify(corruptCheckpoint), operationPlanDigest(corruptCheckpoint));
+      corruptDatabase.close();
+      const residuals = await buildRecoveryPostActionObservation(history, { BLUE_TANUKI_STATE_ROOT: stateRoot });
+      expect(residuals).toMatchObject({
+        status: "changed",
+        store_ledger_status: "schema_mismatch",
+        store_ledger_residual_count: 1,
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -306,7 +329,7 @@ describe("buildRecoveryPostActionObservation", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-restore-boundary-"));
     try {
       const stateRoot = path.join(root, "state");
-      const storePath = await createOperationPlanStore(stateRoot, "restored-state");
+      const storePath = await createOperationPlanStore(stateRoot);
       const history = {
         entries: selectedStoreRestoreHistory(await sha256File(storePath)),
         chain_valid: true,
@@ -318,7 +341,7 @@ describe("buildRecoveryPostActionObservation", () => {
       expect(mismatch).toMatchObject({ status: "mismatch", store_key: "operation_plans" });
 
       await rm(storePath);
-      const validStore = await createOperationPlanStore(stateRoot, "restored-state");
+      const validStore = await createOperationPlanStore(stateRoot);
       await writeFile(`${validStore}-wal`, "pending-sidecar", "utf8");
       const unverified = await buildRecoveryPostActionObservation(history, { BLUE_TANUKI_STATE_ROOT: stateRoot });
       expect(unverified).toMatchObject({ status: "unverified", store_key: "operation_plans" });

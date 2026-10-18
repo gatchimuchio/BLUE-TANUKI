@@ -819,6 +819,11 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("復元直後の状態と一致");
       expect(html).toContain("復元後に状態変更を観測");
       expect(html).toContain("復元状態と不一致");
+      expect(html).toContain("storeLedgerStatusLabels");
+      expect(html).toContain('verified: "検証済み"');
+      expect(html).toContain('residuals_present: "残差あり"');
+      expect(html).toContain('schema_mismatch: "schema不一致"');
+      expect(html).toContain('observation.store_ledger_residual_count >= 0');
       expect(html).toContain("/recovery/snapshot");
       expect(html).toContain("inspect-recovery-ledgers");
       expect(html).toContain("/recovery/inspection");

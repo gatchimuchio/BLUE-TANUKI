@@ -1501,6 +1501,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           operation_plans: "Operation Plan台帳",
           cron_events: "Cron台帳",
         };
+        const storeLedgerStatusLabels = {
+          verified: "検証済み",
+          residuals_present: "残差あり",
+          projection_mismatch: "投影不一致",
+          corrupt: "破損",
+          schema_mismatch: "schema不一致",
+          unavailable: "利用不可",
+          unverified: "未確認",
+        };
         const operationLabel = Object.prototype.hasOwnProperty.call(operationLabels, observation.operation)
           ? operationLabels[observation.operation]
           : "復旧操作";
@@ -1532,6 +1541,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           observationLabel = observation.configuration_state === "provider_connector_dry_run"
             ? "工場リセット・設定変更確認、全体は未確認"
             : operationLabel + "・未確認";
+        }
+        if (observation.operation === "restore" && storeLabel &&
+            Object.prototype.hasOwnProperty.call(storeLedgerStatusLabels, observation.store_ledger_status)) {
+          const ledgerStatusLabel = storeLedgerStatusLabels[observation.store_ledger_status];
+          const residualCount = Number.isSafeInteger(observation.store_ledger_residual_count) &&
+            observation.store_ledger_residual_count >= 0
+            ? observation.store_ledger_residual_count
+            : "未観測";
+          observationLabel += "・台帳検査: " + ledgerStatusLabel + "（残件 " + residualCount + "）";
         }
         setText("recovery-post-action-observation", observationLabel);
         byId("recovery-post-action-observation").className = "badge " + observationTone;
