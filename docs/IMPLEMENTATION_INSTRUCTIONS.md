@@ -23,6 +23,14 @@ Gateway startupおよび実行後reconciliationにcurrent persisted execution ep
 
 現行epoch resultの既存J/M reconciliationを維持する確認、旧epoch resultがdigest-only履歴化されJ/Mを変えずpendingを解放する限定test、snapshotの非漏えい、`pnpm typecheck`、`pnpm build`、`pnpm docs:check`、`git diff --check`を実行する。live serve／実credential／外部作用は実行しない。
 
+### 実施結果
+
+- 3-file限定Vitestは35 tests PASS。続く旧generation隔離focused testは1 test PASS、`startup_execution_reconciliation.test.ts`全5 testsもPASS。現行epochのJ/M配送、旧epoch結果のJ/M非到達・snapshot非漏えい・outbox保持・hash-chain検証、archive failure時のstartup fail-closedを確認した。
+- `pnpm typecheck` PASS。`pnpm build` PASS（15 workspace projects）。
+- `pnpm docs:check` PASS。日本語基底・license gateもPASS、日本語基底移行負債77件を維持。`git diff --check` PASS。
+- 実装commit=`e430ab4c01ede5f36e4aef391365c41e2ddb567b`を`origin/main`へpush済み。local／remote main SHA一致を確認した。remote backup tagは現世代`89825a413eb4d23463243dbf26da79040e1fcd0e`／直前`e4344ee0ad06faa12c05b0b8beae3fcffb1f0eb0`で、local branch／tagも同じ値に照合した。
+- E03.02／QEB-03は`BUILD_GAP`。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。live serve、credential、実provider、外部作用、QE_QC／QE_QA、公開・出荷判断は行っていない。
+
 ### Git・停止条件
 
 通常成果を限定commitとして`main`へpushし、push後にremote HEAD、local二世代recovery branch、remote二世代backup tag、clean stateを再照合する。旧epoch resultを現行J/Mへ適用する経路またはraw contentをControl Centerへ出す経路が残る場合はstartupをfail-closedのままにする。E03.02／QEB-03全体の完成宣言は行わない。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
