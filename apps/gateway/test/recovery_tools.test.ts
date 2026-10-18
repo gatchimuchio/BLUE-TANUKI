@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createRecoveryMutationTools, normalizeRecoveryMutationArguments } from "../src/recovery_tools.js";
+import {
+  canonicalStoreRestoreConsumersNotQuiesced,
+  createRecoveryMutationTools,
+  normalizeRecoveryMutationArguments,
+} from "../src/recovery_tools.js";
 
 describe("Recovery mutation tool boundary", () => {
   it("registers only the four catalogued mutations with their exact capabilities", () => {
@@ -79,5 +83,20 @@ describe("Recovery mutation tool boundary", () => {
       confirm: "RESET_PROVIDER",
       target: "another-provider",
     })).toThrow("invalid_recovery_request");
+  });
+
+  it("blocks selected stores whose live Gateway consumers cannot be quiesced", async () => {
+    expect(canonicalStoreRestoreConsumersNotQuiesced("j_control")).toEqual(["hds_control_store"]);
+    expect(canonicalStoreRestoreConsumersNotQuiesced("m_state")).toEqual(["hds_memory_store"]);
+    expect(canonicalStoreRestoreConsumersNotQuiesced("broker")).toEqual(["gateway_execution_intent_store"]);
+    expect(canonicalStoreRestoreConsumersNotQuiesced("cron_events")).toEqual([
+      "gateway_cron_scheduler_and_approval_store",
+    ]);
+    expect(canonicalStoreRestoreConsumersNotQuiesced("operation_plans")).toEqual([]);
+    expect(canonicalStoreRestoreConsumersNotQuiesced(undefined)).toEqual([]);
+
+    const restore = createRecoveryMutationTools({}).find((tool) => tool.name === "recovery.restore");
+    await expect(restore?.invoke({ backup_id: "fixture", store_key: "broker", confirm: "RESTORE" }))
+      .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
   });
 });

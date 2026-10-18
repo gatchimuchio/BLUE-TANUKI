@@ -18,6 +18,23 @@ export const RECOVERY_TOOL_NAMES = [
 
 export type RecoveryToolName = (typeof RECOVERY_TOOL_NAMES)[number];
 
+const CANONICAL_STORE_RESTORE_CONSUMERS: Record<CanonicalStateStoreKey, readonly string[]> = {
+  j_control: ["hds_control_store"],
+  m_state: ["hds_memory_store"],
+  broker: ["gateway_execution_intent_store"],
+  operation_plans: [],
+  cron_events: ["gateway_cron_scheduler_and_approval_store"],
+};
+
+/**
+ * The live Gateway has no quiesce/close/reopen boundary for these consumers.
+ * Operation Plans retain their dedicated in-process HDS refresh path.
+ */
+export function canonicalStoreRestoreConsumersNotQuiesced(storeKey: unknown): readonly string[] {
+  if (typeof storeKey !== "string" || !Object.hasOwn(CANONICAL_STORE_RESTORE_CONSUMERS, storeKey)) return [];
+  return CANONICAL_STORE_RESTORE_CONSUMERS[storeKey as CanonicalStateStoreKey];
+}
+
 const CONFIRMATION: Record<RecoveryToolName, string> = {
   "recovery.restore": "RESTORE",
   "recovery.reset_provider": "RESET_PROVIDER",
@@ -83,6 +100,9 @@ export function createRecoveryMutationTools(env: NodeJS.ProcessEnv = process.env
     required_capabilities: requireToolOperationDescriptor("recovery.restore").required_capabilities,
     async invoke(raw) {
       const args = normalizeRecoveryMutationArguments("recovery.restore", raw);
+      if (canonicalStoreRestoreConsumersNotQuiesced(args.store_key).length > 0) {
+        throw new Error("canonical_state_restore_consumers_not_quiesced");
+      }
       const result = await invokeRecoverySafely(() => restoreRecoveryBackup(env, {
         backup_id: args.backup_id,
         ...(args.store_key ? { store_key: args.store_key as CanonicalStateStoreKey } : {}),

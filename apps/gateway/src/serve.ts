@@ -93,6 +93,7 @@ import {
 } from "./recovery_surface.js";
 import {
   createRecoveryMutationTools,
+  canonicalStoreRestoreConsumersNotQuiesced,
   normalizeRecoveryMutationArguments,
   RECOVERY_TOOL_NAMES,
   type RecoveryToolName,
@@ -855,6 +856,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     opts: { skip_approval?: boolean; actor?: string; approval_evaluation?: ApprovalEvaluation; command_digest?: string } = {},
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
+    const restoreStoreKey = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore"
+      ? cmd.payload.arguments.store_key
+      : undefined;
+    const restoreConsumersNotQuiesced = canonicalStoreRestoreConsumersNotQuiesced(restoreStoreKey);
     const operationPlanRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       cmd.payload.arguments.store_key === "operation_plans" && cmd.payload.arguments.confirm === "RESTORE";
     let executionEvaluation = opts.approval_evaluation ?? null;
@@ -867,6 +872,37 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (reviewed.command_digest !== reviewedDigest) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "approval_content_changed" });
       return { status: "approval_content_changed" };
+    }
+    if (restoreConsumersNotQuiesced.length > 0) {
+      const reason = "canonical_state_restore_consumers_not_quiesced";
+      const feedback: ExecuteFeedback = {
+        command_id: cmd.id,
+        status: "failed",
+        error: reason,
+        metrics: { duration_ms: 0 },
+      };
+      const finalized = finalizeCommandOutput({
+        hds,
+        command: cmd,
+        feedback,
+        target_surface: "channel",
+        request_id: log.request_id,
+      });
+      recordApprovalHistory("recovery_restore_blocked", cmd, log, origin, actor, null, {
+        blocking_consumers: restoreConsumersNotQuiesced,
+        l3_request_created: false,
+        used_for_authority: false,
+        may_execute: false,
+      });
+      recordFinalOutputHistory(log, origin, actor, finalized.output_audit, cmd);
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason });
+      if (finalized.rendered_output) {
+        await dispatcher.dispatch(
+          { channel: origin.channel, target: replyTarget(origin), content: finalized.rendered_output },
+          { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
+        );
+      }
+      return { status: reason };
     }
     // HDS発行objectのplan対応を維持し、承認/tokenのawait前に内容を固定する。
     // 権限記録自体はprivateに保持する。
@@ -1377,6 +1413,24 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ? snapshot.recovery_backups.latest_backup_id
       : null;
     const arguments_ = normalizeRecoveryMutationArguments(toolName, rawArguments, { latestBackupId });
+    const restoreConsumersNotQuiesced = toolName === "recovery.restore"
+      ? canonicalStoreRestoreConsumersNotQuiesced(arguments_.store_key)
+      : [];
+    if (restoreConsumersNotQuiesced.length > 0) {
+      return {
+        status: "blocked_consumers_not_quiesced",
+        executed: false,
+        operation: toolName,
+        restore_effect_scope: "entire_selected_store",
+        store_key: arguments_.store_key,
+        blocking_consumers: restoreConsumersNotQuiesced,
+        reason: "canonical_state_restore_consumers_not_quiesced",
+        l3_request_created: false,
+        used_for_authority: false,
+        may_execute: false,
+        next_action: "Gatewayの実consumerを静止・排出し、復元後に再起動・再観測する境界が未接続です。安全な静止を確認できる復元経路が実装されるまで、このstoreの復元要求は作成されません。",
+      };
+    }
     const planScopeInspection = toolName === "recovery.restore" && arguments_.store_key === "operation_plans"
       ? await inspectRecoveryPlanRestoreScopeApplicability(process.env, arguments_.backup_id!, arguments_.scope_digest!)
       : null;

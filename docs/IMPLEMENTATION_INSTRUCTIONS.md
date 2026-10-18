@@ -1,14 +1,24 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-## 直近完了のconsumer監査と次のBUILD_BATCH
+## 直近完了のBUILD_BATCHと次のconsumer
 
-`QEB-03-E03.03-NON-OP-CANONICAL-STORE-RESTORE-CONSUMER-AUDIT` は2026-10-19にread-onlyで完了。開始HEAD／`origin/main`=`c31cf529b03dec25aabc827fa2ba0ff8d3687936`、開始worktree clean。rev2.3三点正本、適用AGENTS.md、作業標準要領、active指示とE03.03を再読し、非`operation_plans`選択restoreからJ／M／Broker／Cronの実consumerを追った。
+`QEB-03-E03.03-NON-OP-STORE-RESTORE-QUIESCENCE` は2026-10-19に実装・限定確認を完了。開始HEAD／`origin/main`=`a04540ddd7b43dfcf052b318d9bf84211ccd007d`、開始worktree clean。rev2.3三点正本、root `AGENTS.md`、作業標準要領、active指示、E03.03、対象callsiteを再読した。
 
-canonical stateは`j_control`、`m_state`、`broker`、`operation_plans`、`cron_events`の5 storeを独立snapshotし、cross-store atomicityはない。既存read-only scope inspectorはstore別dependency categoryを返すが、L3 request／作用直前のscope検査とin-process HDS refreshは`operation_plans`だけに接続されている。非`operation_plans` restoreのpost-action observationはstore ledger観測までで、`operationPlanRecoveryEvidenceFromObservation`はplan holdへ変換せず、startup hold observerも`operation_plans`以外を選ばない。
+実行中Gatewayが保持するconsumerを静止・排出する経路がない`j_control`／`m_state`／`broker`／`cron_events`のselected-store restoreを、Recovery mutation入口でHDS判断・L3要求作成前に拒否する。通常の`executeAndEcho`にも同じ境界を置き、executor toolにも防御検査を追加した。固定consumer分類はHDS control／memory store、Gateway execution intent store、Cron scheduler／approval store。`operation_plans`の既存scope確認・HDS hold refreshは維持し、store指定のないgeneric file restoreも変更していない。Control Centerへ現在の拒否境界と未接続理由を表示する。
 
-実consumerとして、HDSのJ／M transaction store、GatewayのBroker result outboxと起動時result／M reconciliation、Cron event inbox／outbox・pending approval回復・J側no-replay照合が確認できた。これらの既存consumerと非`operation_plans` restoreの間に、restore開始前の共通quiescence判定とrestore後のplan recovery hold接続がない。これは静的callsiteの欠落として確認したもので、実restore・並行実行・再起動による挙動は未試験。
+| 限定確認 | 結果 |
+|---|---|
+| `recovery_tools.test.ts`／`recovery_mutation_entry.test.ts` | PASS、2 files／4 tests。4台帳がconsumer理由付きで拒否され、L3 pendingが作られないこと、executor入口でも拒否されることを確認。Gateway統合testはrepository rootから実行。 |
+| `pnpm typecheck`→`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `pnpm smoke:serve` | PASS。stub WebChat、audit persistence、audit-dump chainを確認。Recovery mutationなし。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実canonical restore／実restart／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
 
-次は`QEB-03-E03.03-NON-OP-STORE-RESTORE-QUIESCENCE`。選択canonical storeのrestoreとJ／M／Broker／Cronの実consumerを同時に動かさない境界を、実callsiteで実装可能か確認して接続する。consumerを確実に静止・排出できない条件はL3要求作成またはrestore作用の前にfail-closedとし、成功後の再起動・再観測要件をownerへ明示する。store全体restore、HDS／Approval／L3、非権威観測を維持し、DB行単位restore、実restore、resume、別repo、外部業務作用、公開・出荷判断は含めない。E03.03=`BUILD_GAP`、C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+selected-store全体restoreとHDS／Approval／L3、非権威表示は維持した。consumer静止・排出と、復元後の対象store再open／再観測は未接続なので、非Operation Plan storeの実復元は引き続き利用不可。次consumerは、Gateway停止・対象DB適用・再起動・再観測をHDS承認と不整合なく結ぶ専用lifecycleの実行可能性。実restore・resume・別repo・外部業務作用は行わず、E03.03=`BUILD_GAP`、C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+
+### 先行consumer監査
+
+`QEB-03-E03.03-NON-OP-CANONICAL-STORE-RESTORE-CONSUMER-AUDIT` は2026-10-19にread-onlyで完了。開始HEAD／`origin/main`=`c31cf529b03dec25aabc827fa2ba0ff8d3687936`、開始worktree clean。canonical stateは5 storeの独立snapshotでcross-store atomicityなし。L3 request／作用直前のscope検査とin-process HDS refreshは`operation_plans`だけに接続され、非plan restoreのpost-action observationはplan holdへ変換されない。実consumerとして、HDS J／M transaction store、Gateway Broker result outboxと起動時reconciliation、Cron event inbox／outbox・pending approval回復・J側no-replay照合を確認した。restore前の共通quiescence判定とrestore後hold接続は存在せず、実restore・並行実行・再起動は未試験。
 
 ## 直近実装分の履歴
 

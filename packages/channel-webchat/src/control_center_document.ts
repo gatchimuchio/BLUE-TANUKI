@@ -492,7 +492,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="inspect-recovery-backup" type="button">最新backup packの整合性を読み取り検査</button>
             <span id="recovery-backup-inspection-status" class="badge warn">未確認</span>
           </div>
-          <p class="muted">manifest、pack内保存物、store別SQLite snapshotのdigestと整合性を読み取り検査します。full Restoreはcanonical stateを適用しません。selected-store restoreはowner L3審査後に指定storeだけを適用し、実行直前のbackupを作成します。Operation Plan台帳では指定plan digestをL3対象に結び、実行直前に同じbackup scopeを再照合します。効果はplan行だけでなく選択したOperation Plan store全体の置換です。snapshot間の原子的同時点、仕事単位の復旧点、自動resumeは成立しません。</p>
+          <p class="muted">manifest、pack内保存物、store別SQLite snapshotのdigestと整合性を読み取り検査します。full Restoreはcanonical stateを適用しません。selected-store restoreは実行直前のbackupを作成し、L3審査後に指定store全体を適用します。Operation Plan台帳は指定plan digestをL3対象に結び、直前に同じbackup scopeを再照合します。J／M／Broker／Cron台帳は現在のGateway consumerを静止・排出する経路がないため、consumer quiescenceが実装されるまでL3要求作成前に拒否します。snapshot間の原子的同時点、仕事単位の復旧点、自動resumeは成立しません。</p>
           <h3>台帳別snapshot検査</h3>
           <div class="status-grid" aria-label="台帳別SQLite snapshot status">
             <div class="metric"><span>J制御台帳</span><span id="recovery-backup-store-j_control">未確認</span></div>
