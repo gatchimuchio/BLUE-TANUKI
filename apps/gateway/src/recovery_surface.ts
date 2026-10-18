@@ -146,6 +146,12 @@ export interface RecoveryHistoryEvidence {
   not_before_timestamp_ms?: number;
 }
 
+export interface RecoveryPostActionObservationOptions {
+  /** Startup observations require the mutation to predate this process. In-process restore checks are explicit and command-bound. */
+  readonly mode?: "after_restart" | "in_process_restore";
+  readonly expected_command_id?: string;
+}
+
 export interface RecoveryStoreRestoreHistoryEvidence {
   readonly schema_version: 1;
   readonly store_key: CanonicalStateStoreKey;
@@ -1735,6 +1741,7 @@ function noRecoveryActionObservation(
 export async function buildRecoveryPostActionObservation(
   history: RecoveryHistoryEvidence,
   env: NodeJS.ProcessEnv = process.env,
+  options: RecoveryPostActionObservationOptions = {},
 ): Promise<RecoveryPostActionObservation> {
   if (!history.chain_valid || history.skipped_count !== 0) {
     return noRecoveryActionObservation("unverified");
@@ -1805,6 +1812,11 @@ export async function buildRecoveryPostActionObservation(
     may_execute: false,
   };
   if (!operationDigest) return unverified;
+  if (options.mode === "in_process_restore" &&
+      (latest.action !== "restore" || !options.expected_command_id || latest.entry.command_id !== options.expected_command_id)) {
+    return unverified;
+  }
+  if (options.mode !== "in_process_restore" && options.expected_command_id !== undefined) return unverified;
   if (latest.action !== "restore" && history.not_before_timestamp_ms !== undefined &&
       latest.entry.timestamp < history.not_before_timestamp_ms) return unverified;
 
@@ -1832,8 +1844,14 @@ export async function buildRecoveryPostActionObservation(
       ? recoveryStoreRestoreEvidenceFromHistory(payload.recovery_store_restore)
       : null;
     if (!restoreEvidence) return unverified;
-    if (history.not_before_timestamp_ms === undefined ||
-        latest.entry.timestamp >= history.not_before_timestamp_ms) {
+    const predatesCurrentProcess = history.not_before_timestamp_ms !== undefined &&
+      latest.entry.timestamp < history.not_before_timestamp_ms;
+    if (options.mode === "in_process_restore") {
+      if (restoreEvidence.store_key !== "operation_plans" || history.not_before_timestamp_ms === undefined || predatesCurrentProcess) {
+        return { ...unverified, store_key: restoreEvidence.store_key,
+          restore_backup_id_digest: restoreEvidence.restored_backup_id_digest ?? null };
+      }
+    } else if (!predatesCurrentProcess) {
       return {
         ...unverified,
         store_key: restoreEvidence.store_key,

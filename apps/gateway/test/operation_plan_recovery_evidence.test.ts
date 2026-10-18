@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 import type { RecoveryPostActionObservation } from "../src/recovery_surface.js";
-import { operationPlanRecoveryEvidenceFromStartup } from "../src/operation_plan_recovery_evidence.js";
+import { operationPlanRecoveryEvidenceFromObservation } from "../src/operation_plan_recovery_evidence.js";
 
 const planIds = ["plan-restored-clean", "plan-restored-residual"] as const;
 const checkpoint = {
@@ -33,9 +33,9 @@ function observation(overrides: Partial<RecoveryPostActionObservation> = {}): Re
   };
 }
 
-describe("起動時Recovery証拠からHDS計画保留を導出", () => {
+describe("Recovery observationからHDS計画保留を導出", () => {
   it("cleanな計画証拠は観測状態のまま渡し、権限化しない", () => {
-    const evidence = operationPlanRecoveryEvidenceFromStartup({ observation: observation(), checkpoint, history_complete: true });
+    const evidence = operationPlanRecoveryEvidenceFromObservation({ observation: observation(), checkpoint, history_complete: true });
     expect(evidence).toMatchObject({ scope: "restored_operation_plans", used_for_authority: false, may_execute: false,
       plans: planIds.map((plan_id) => ({ plan_id_digest: operationPlanDigest(plan_id), restore_membership: "restored",
         integrity: "verified", dependency_status: "observed" })) });
@@ -54,13 +54,13 @@ describe("起動時Recovery証拠からHDS計画保留を導出", () => {
           dependency_status: "residuals_present", residual_dependencies: ["execution_intent"], unobserved_dependencies: [] },
       ],
     });
-    const evidence = operationPlanRecoveryEvidenceFromStartup({ observation: current, checkpoint, history_complete: true });
+    const evidence = operationPlanRecoveryEvidenceFromObservation({ observation: current, checkpoint, history_complete: true });
     expect(evidence?.plans).toEqual([
       { plan_id_digest: operationPlanDigest(planIds[0]), restore_membership: "restored", integrity: "verified", dependency_status: "unobserved" },
       { plan_id_digest: operationPlanDigest(planIds[1]), restore_membership: "restored", integrity: "residuals_present", dependency_status: "residuals_present" },
     ]);
 
-    const incomplete = operationPlanRecoveryEvidenceFromStartup({
+    const incomplete = operationPlanRecoveryEvidenceFromObservation({
       observation: observation({ plan_restore_points: null }), checkpoint, history_complete: true,
     });
     expect(incomplete?.plans).toEqual(planIds.map((plan_id) => ({ plan_id_digest: operationPlanDigest(plan_id), restore_membership: "unknown",
@@ -77,19 +77,19 @@ describe("起動時Recovery証拠からHDS計画保留を導出", () => {
           backup_plan_record_count: 1, dependency_status: "residuals_present", residual_dependencies: ["operation_plan"], unobserved_dependencies: [] },
       ],
     });
-    const evidence = operationPlanRecoveryEvidenceFromStartup({ observation: changed, checkpoint, history_complete: true });
+    const evidence = operationPlanRecoveryEvidenceFromObservation({ observation: changed, checkpoint, history_complete: true });
     expect(evidence?.plans.map((plan) => plan.restore_membership)).toEqual(["not_restored", "restored"]);
   });
 
   it("復元historyが欠落・不完全なら既存plan群のみにhold scopeを付ける", () => {
-    const evidence = operationPlanRecoveryEvidenceFromStartup({
+    const evidence = operationPlanRecoveryEvidenceFromObservation({
       observation: observation({ status: "no_record", operation: null, store_key: null }), checkpoint, history_complete: false,
     });
     expect(evidence).toMatchObject({ scope: "unverified_history", plans: [], used_for_authority: false, may_execute: false });
   });
 
   it("完全なhistoryに復元recordがなければRecovery holdを作らない", () => {
-    expect(operationPlanRecoveryEvidenceFromStartup({
+    expect(operationPlanRecoveryEvidenceFromObservation({
       observation: observation({ status: "no_record", operation: null, store_key: null }), checkpoint, history_complete: true,
     })).toBeUndefined();
   });

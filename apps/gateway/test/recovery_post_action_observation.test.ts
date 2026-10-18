@@ -13,6 +13,7 @@ import {
   recoveryStoreRestoreHistoryEvidence,
   type RecoveryHistoryEvidenceEntry,
 } from "../src/recovery_surface.js";
+import { operationPlanRecoveryEvidenceFromObservation } from "../src/operation_plan_recovery_evidence.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -435,12 +436,29 @@ describe("buildRecoveryPostActionObservation", () => {
         archiveManifest.canonical_state_snapshot.entries.find((entry) => entry.store_key === "operation_plans")!.archive_rel_path!);
       const archiveDigestBefore = await sha256File(planArchivePath);
       const stateDigest = await sha256File(storePath);
-      const observation = await buildRecoveryPostActionObservation({
-        entries: selectedStoreRestoreHistory(stateDigest, backupIdDigest),
+      const restoreHistoryEntries = selectedStoreRestoreHistory(stateDigest, backupIdDigest);
+      const history = {
+        entries: restoreHistoryEntries,
         chain_valid: true,
         skipped_count: 0,
         not_before_timestamp_ms: Date.now() + 10_000,
-      }, { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_RECOVERY_DIR: recoveryRoot });
+      };
+      const observation = await buildRecoveryPostActionObservation(history,
+        { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_RECOVERY_DIR: recoveryRoot });
+      const inProcessObservation = await buildRecoveryPostActionObservation({
+        ...history,
+        not_before_timestamp_ms: restoreHistoryEntries[0]!.timestamp - 1,
+      }, { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_RECOVERY_DIR: recoveryRoot }, {
+        mode: "in_process_restore",
+        expected_command_id: "recovery-command-1",
+      });
+      const mismatchedCommandObservation = await buildRecoveryPostActionObservation({
+        ...history,
+        not_before_timestamp_ms: restoreHistoryEntries[0]!.timestamp - 1,
+      }, { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_RECOVERY_DIR: recoveryRoot }, {
+        mode: "in_process_restore",
+        expected_command_id: "another-command",
+      });
 
       expect(observation).toMatchObject({
         status: "matched",
@@ -456,6 +474,20 @@ describe("buildRecoveryPostActionObservation", () => {
         used_for_authority: false,
         may_execute: false,
       });
+      expect(inProcessObservation).toMatchObject({
+        status: "matched",
+        operation: "restore",
+        store_key: "operation_plans",
+        restore_backup_id_digest: backupIdDigest,
+        plan_restore_points: [{
+          plan_id_digest: operationPlanDigest("private-correlated-plan"),
+          backup_plan_record_status: "matched",
+          dependency_status: "residuals_present",
+        }],
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(mismatchedCommandObservation.status).toBe("unverified");
       const point = observation.plan_restore_points?.[0];
       expect(point).toMatchObject({
         dependency_status: "residuals_present",
@@ -466,6 +498,23 @@ describe("buildRecoveryPostActionObservation", () => {
       expect(JSON.stringify(observation)).not.toContain(backupId);
       expect(JSON.stringify(observation)).not.toContain("private-correlated-plan");
       expect(JSON.stringify(observation)).not.toContain(planArchivePath);
+      const stateReader = new OperationPlanStateStore(storePath);
+      const checkpoint = stateReader.load();
+      stateReader.close();
+      const hdsEvidence = operationPlanRecoveryEvidenceFromObservation({
+        observation: inProcessObservation,
+        checkpoint,
+        history_complete: true,
+      });
+      expect(hdsEvidence?.plans).toMatchObject([{
+        plan_id_digest: operationPlanDigest("private-correlated-plan"),
+        restore_membership: "restored",
+        integrity: "residuals_present",
+        dependency_status: "residuals_present",
+      }]);
+      expect(hdsEvidence?.used_for_authority).toBe(false);
+      expect(hdsEvidence?.may_execute).toBe(false);
+      expect(JSON.stringify(hdsEvidence)).not.toContain("private-correlated-plan");
 
       const missingBackup = await buildRecoveryPostActionObservation({
         entries: selectedStoreRestoreHistory(stateDigest, digest("f")),

@@ -240,7 +240,7 @@ export class OperationPlanLedger {
     return true;
   }
 
-  refreshAfterRecoveryRestore(): string {
+  refreshAfterRecoveryRestore(recoveryEvidence?: OperationPlanRecoveryEvidence): string {
     if (!this.recoveryRefreshPending || this.activePlanAttempts.size > 0) {
       throw new Error("plan_recovery_refresh_not_ready");
     }
@@ -248,8 +248,9 @@ export class OperationPlanLedger {
     const checked = saved == null
       ? { schema_version: "operation-plan-state.v1" as const, plans: [] }
       : validateOperationPlanCheckpoint(saved, Boolean(this.resultMemory));
+    const restoredCheckpointDigest = saved == null ? null : operationPlanDigest(checked);
     this.state = checked;
-    this.savedDigest = saved == null ? null : operationPlanDigest(checked);
+    this.savedDigest = restoredCheckpointDigest;
     this.reflections.clear();
     this.receiptReconciliations.clear();
     // Restore changes only plan history. Any selection or started attempt from
@@ -261,8 +262,13 @@ export class OperationPlanLedger {
       }
     });
     this.recoveryHolds.clear();
-    for (const plan of this.state.plans) {
-      this.recoveryHolds.set(operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified");
+    if (recoveryEvidence) {
+      const checkedEvidence = parseOperationPlanRecoveryEvidence(recoveryEvidence);
+      this.applyRecoveryEvidence(checkedEvidence, checkedEvidence.checkpoint_digest === restoredCheckpointDigest);
+    } else {
+      for (const plan of this.state.plans) {
+        this.recoveryHolds.set(operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified");
+      }
     }
     this.memoryReady = this.resultMemory?.snapshot()?.status === "ready";
     return this.savedDigest!;

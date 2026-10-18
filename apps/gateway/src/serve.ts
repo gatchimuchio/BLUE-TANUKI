@@ -126,8 +126,7 @@ import {
 } from "./document_organization_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { OperationPlanStateStore } from "./operation_plan_store.js";
-import { inspectCanonicalStateStoreTarget } from "./canonical_state_backup.js";
-import { operationPlanRecoveryEvidenceFromStartup } from "./operation_plan_recovery_evidence.js";
+import { operationPlanRecoveryEvidenceFromObservation } from "./operation_plan_recovery_evidence.js";
 import {
   commandOperation,
   commandHistoryDescriptor,
@@ -418,7 +417,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   if (!startupHistoryStable) {
     startupRecoveryObservation = await buildRecoveryPostActionObservation({ entries: [], chain_valid: false, skipped_count: 0 }, process.env);
   }
-  const startupOperationPlanRecoveryEvidence = operationPlanRecoveryEvidenceFromStartup({
+  const startupOperationPlanRecoveryEvidence = operationPlanRecoveryEvidenceFromObservation({
     observation: startupRecoveryObservation,
     checkpoint: operationPlanCheckpointAtStartup,
     history_complete: !!completeHistoryFile && startupHistoryStable && startupHistoryChainValid && startupHistorySkippedCount === 0 &&
@@ -1140,26 +1139,78 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const output = finalized.output_audit;
     const finalOutputRecorded = recordFinalOutputHistory(log, origin, actor, output, cmd);
     if (operationPlanRestore && fb.status === "success") {
-      const evidence = recoveryStoreRestoreHistoryEvidence(fb.result);
-      if (!executionHistory || !finalOutputRecorded || evidence?.store_key !== "operation_plans") {
+      const restoreResultEvidence = recoveryStoreRestoreHistoryEvidence(fb.result);
+      if (!executionHistory || !finalOutputRecorded || restoreResultEvidence?.store_key !== "operation_plans") {
         gatewayLog.warn("operation-plan restore refresh remains held", {
           command_id: cmd.id,
           reason: !executionHistory || !finalOutputRecorded ? "restore_history_incomplete" : "restore_result_unverified",
         });
       } else {
-        const inspection = await inspectCanonicalStateStoreTarget(process.env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki", "operation_plans");
-        if (inspection.status !== "verified" || inspection.sha256 !== evidence.restored_store_state_digest) {
+        const historySize = completeHistory.size();
+        const historySkippedCount = completeHistory.skippedCount();
+        const historyChainValid = completeHistory.verify();
+        const historyIncompleteAtStart = recoveryObservationHistoryIncomplete;
+        const historyAtCapacity = completeHistoryMaxEntries !== undefined && historySize >= completeHistoryMaxEntries;
+        const historyEntries = completeHistory.replay().filter(
+          (entry): entry is CompleteHistoryEntry & { kind: "execution_history" | "final_output" } =>
+            entry.kind === "execution_history" || entry.kind === "final_output",
+        );
+        const historyEvidence = {
+          entries: historyEntries,
+          chain_valid: historyChainValid,
+          skipped_count: historySkippedCount +
+            (historyAtCapacity || historyIncompleteAtStart ? 1 : 0),
+          not_before_timestamp_ms: recoveryObservationStartedAtMs,
+        };
+        const historyComplete = !!completeHistoryFile && historyChainValid && historySkippedCount === 0 &&
+          !historyAtCapacity && !historyIncompleteAtStart;
+        if (!historyComplete) {
           gatewayLog.warn("operation-plan restore refresh remains held", {
             command_id: cmd.id,
-            reason: "restored_store_digest_mismatch",
+            reason: "restore_history_incomplete",
           });
         } else {
           try {
-            hds.refreshOperationPlansAfterRecoveryRestore(cmd);
-          } catch (error) {
+            const observation = await buildRecoveryPostActionObservation(historyEvidence, process.env, {
+              mode: "in_process_restore",
+              expected_command_id: cmd.id,
+            });
+            const historyStable = historySize === completeHistory.size() &&
+              historySkippedCount === completeHistory.skippedCount() && historyChainValid === completeHistory.verify() &&
+              historyIncompleteAtStart === recoveryObservationHistoryIncomplete;
+            if (!historyStable) {
+              gatewayLog.warn("operation-plan restore refresh remains held", {
+                command_id: cmd.id,
+                reason: "restore_history_changed_during_inspection",
+              });
+            } else if (observation.status !== "matched" || observation.operation !== "restore" ||
+                observation.store_key !== "operation_plans" ||
+                observation.restore_backup_id_digest !== restoreResultEvidence.restored_backup_id_digest ||
+                observation.plan_residuals === null || observation.plan_restore_points === null) {
+              gatewayLog.warn("operation-plan restore refresh remains held", {
+                command_id: cmd.id,
+                reason: "restore_plan_dependency_evidence_unverified",
+              });
+            } else {
+              const checkpoint = operationPlanState.load();
+              const recoveryEvidence = operationPlanRecoveryEvidenceFromObservation({
+                observation,
+                checkpoint,
+                history_complete: true,
+              });
+              if ((checkpoint?.plans.length ?? 0) > 0 && !recoveryEvidence) {
+                gatewayLog.warn("operation-plan restore refresh remains held", {
+                  command_id: cmd.id,
+                  reason: "restore_plan_dependency_evidence_missing",
+                });
+              } else {
+                hds.refreshOperationPlansAfterRecoveryRestore(cmd, recoveryEvidence);
+              }
+            }
+          } catch {
             gatewayLog.warn("operation-plan restore refresh remains held", {
               command_id: cmd.id,
-              reason: error instanceof Error ? error.message : "restore_refresh_failed",
+              reason: "restore_plan_dependency_inspection_failed",
             });
           }
         }

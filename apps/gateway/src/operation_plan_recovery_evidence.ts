@@ -13,8 +13,8 @@ function unverifiedHistoryEvidence(checkpointDigest: string): OperationPlanRecov
   };
 }
 
-/** Convert startup recovery observations into HDS evidence that can only hold existing plan selection. */
-export function operationPlanRecoveryEvidenceFromStartup(input: {
+/** Convert recovery observations into checkpoint-bound HDS evidence that can only hold existing plan selection. */
+export function operationPlanRecoveryEvidenceFromObservation(input: {
   readonly observation: RecoveryPostActionObservation;
   readonly checkpoint: OperationPlanCheckpoint | null;
   readonly history_complete: boolean;

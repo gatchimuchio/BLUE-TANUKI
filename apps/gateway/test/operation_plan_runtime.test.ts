@@ -151,6 +151,99 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     }
   });
 
+  it("same-process restore accepts only checkpoint-bound dependency evidence and applies plan-specific holds", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-live-restore-dependency-evidence-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const restoreWriter = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const candidates = [
+      plan("restored-with-residual-dependency", root),
+      plan("restored-with-unobserved-dependency", root),
+      plan("restored-with-observed-dependencies", root),
+      plan("restored-with-unknown-membership", root),
+    ];
+    const restoredCheckpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: candidates.map((candidate) => ({ owner: "fixture-owner", channel: "webchat", goal: "synthetic restored plan",
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] })),
+    });
+    try {
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      const restoreCommand = operationPlanRestoreCommand();
+      expect(hds.beginOperationPlanRecoveryRefresh(restoreCommand)).toBe(true);
+      restoreWriter.compareAndSet(null, restoredCheckpoint);
+      const evidence = {
+        schema_version: "operation-plan-recovery-evidence.v1" as const,
+        scope: "restored_operation_plans" as const,
+        checkpoint_digest: operationPlanDigest(restoredCheckpoint),
+        plans: [
+          { plan_id_digest: operationPlanDigest(candidates[0]!.plan_id), restore_membership: "restored" as const,
+            integrity: "residuals_present" as const, dependency_status: "residuals_present" as const },
+          { plan_id_digest: operationPlanDigest(candidates[1]!.plan_id), restore_membership: "restored" as const,
+            integrity: "verified" as const, dependency_status: "unobserved" as const },
+          { plan_id_digest: operationPlanDigest(candidates[2]!.plan_id), restore_membership: "restored" as const,
+            integrity: "verified" as const, dependency_status: "observed" as const },
+          { plan_id_digest: operationPlanDigest(candidates[3]!.plan_id), restore_membership: "unknown" as const,
+            integrity: "unverified" as const, dependency_status: "unknown" as const },
+        ],
+        used_for_authority: false as const,
+        may_execute: false as const,
+      };
+      hds.refreshOperationPlansAfterRecoveryRestore(restoreCommand, evidence);
+
+      const projection = hds.getRuntimeSnapshot().operation_plans;
+      expect(projection.recovery_refresh_status).toBe("ready");
+      expect(projection.plans).toMatchObject([
+        { plan_id: operationPlanDigest(candidates[0]!.plan_id), recovery_hold_reason: "held_residual" },
+        { plan_id: operationPlanDigest(candidates[1]!.plan_id), recovery_hold_reason: "held_unobserved" },
+        { plan_id: operationPlanDigest(candidates[2]!.plan_id) },
+        { plan_id: operationPlanDigest(candidates[3]!.plan_id), recovery_hold_reason: "held_unverified" },
+      ]);
+      expect(review(hds, candidates[0]!, "search").command).toBeNull();
+      expect(review(hds, candidates[1]!, "search").command).toBeNull();
+      expect(review(hds, candidates[3]!, "search").command).toBeNull();
+      expect(review(hds, candidates[2]!, "search").command?.type).toBe("tool_call");
+    } finally {
+      restoreWriter.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("same-process restore digest mismatch holds every restored plan", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-live-restore-stale-evidence-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const restoreWriter = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const restored = plan("restored-after-ledger-race", root);
+    const restoredCheckpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal: "stale evidence fixture",
+        revisions: [{ digest: operationPlanDigest(restored), plan: restored }], receipt_observations: [], bindings: [], results: [] }],
+    });
+    try {
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      const restoreCommand = operationPlanRestoreCommand();
+      expect(hds.beginOperationPlanRecoveryRefresh(restoreCommand)).toBe(true);
+      restoreWriter.compareAndSet(null, restoredCheckpoint);
+      hds.refreshOperationPlansAfterRecoveryRestore(restoreCommand, {
+        schema_version: "operation-plan-recovery-evidence.v1",
+        scope: "restored_operation_plans",
+        checkpoint_digest: "f".repeat(64),
+        plans: [{ plan_id_digest: operationPlanDigest(restored.plan_id), restore_membership: "restored",
+          integrity: "verified", dependency_status: "observed" }],
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(hds.getRuntimeSnapshot().operation_plans.plans).toMatchObject([
+        { plan_id: operationPlanDigest(restored.plan_id), recovery_hold_reason: "held_unverified" },
+      ]);
+      expect(review(hds, restored, "search").command).toBeNull();
+    } finally {
+      restoreWriter.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("復元残差は既存plan選択だけをholdし、cleanと新規planも通常HDS判断へ戻す", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-recovery-hold-"));
     const store = new OperationPlanStateStore(join(root, "state.sqlite"));
