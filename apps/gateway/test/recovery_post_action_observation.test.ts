@@ -9,6 +9,7 @@ import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import {
   buildRecoveryPostActionObservation,
+  createRecoveryBackup,
   recoveryStoreRestoreHistoryEvidence,
   type RecoveryHistoryEvidenceEntry,
 } from "../src/recovery_surface.js";
@@ -60,7 +61,7 @@ function historyFor(
   ];
 }
 
-function selectedStoreRestoreHistory(stateDigest: string): RecoveryHistoryEvidenceEntry[] {
+function selectedStoreRestoreHistory(stateDigest: string, backupIdDigest = digest("e")): RecoveryHistoryEvidenceEntry[] {
   const entries = historyFor("recovery.restore");
   const execution = entries[0]!;
   const payload = execution.payload as Record<string, unknown>;
@@ -73,6 +74,7 @@ function selectedStoreRestoreHistory(stateDigest: string): RecoveryHistoryEviden
           schema_version: 1,
           store_key: "operation_plans",
           restored_store_state_digest: stateDigest,
+          restored_backup_id_digest: backupIdDigest,
         },
       },
     },
@@ -170,12 +172,25 @@ describe("buildRecoveryPostActionObservation", () => {
       schema_version: 1,
       store_key: "operation_plans",
       restored_store_state_digest: digest("b"),
+      restored_backup_id_digest: createHash("sha256").update("private-backup-id").digest("hex"),
     });
     expect(JSON.stringify(evidence)).not.toContain("private-backup-id");
     expect(JSON.stringify(evidence)).not.toContain("private/path");
     expect(recoveryStoreRestoreHistoryEvidence({
       action: "restore", status: "completed", used_for_authority: false,
       canonical_state_cross_store_atomic: false, restored_store_key: "unknown",
+      restored_backup_id: "private-backup-id",
+      restored_store_archive_digest: digest("a"), restored_store_state_digest: digest("b"),
+    })).toBeUndefined();
+    expect(recoveryStoreRestoreHistoryEvidence({
+      action: "restore", status: "completed", used_for_authority: false,
+      canonical_state_cross_store_atomic: false, restored_store_key: "operation_plans",
+      restored_store_archive_digest: digest("a"), restored_store_state_digest: digest("b"),
+      restored_backup_id: "../private-backup-id",
+    })).toBeUndefined();
+    expect(recoveryStoreRestoreHistoryEvidence({
+      action: "restore", status: "completed", used_for_authority: false,
+      canonical_state_cross_store_atomic: false, restored_store_key: "operation_plans",
       restored_store_archive_digest: digest("a"), restored_store_state_digest: digest("b"),
     })).toBeUndefined();
   });
@@ -378,6 +393,7 @@ describe("buildRecoveryPostActionObservation", () => {
         store_ledger_status: "verified",
         store_ledger_residual_count: 0,
         plan_residuals: [],
+        plan_restore_points: null,
       });
       expect(await readFile(storePath)).toEqual(changedBytes);
 
@@ -397,6 +413,77 @@ describe("buildRecoveryPostActionObservation", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("correlates selected-plan residuals with the exact backup pack through digests only", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-restore-point-"));
+    try {
+      const stateRoot = path.join(root, "state");
+      const recoveryRoot = path.join(root, "recovery");
+      const storePath = await createOperationPlanStore(stateRoot, [
+        recoveryObservationPlanState("private-correlated-plan", true),
+      ]);
+      const backup = await createRecoveryBackup({
+        BLUE_TANUKI_STATE_ROOT: stateRoot,
+        BLUE_TANUKI_RECOVERY_DIR: recoveryRoot,
+      });
+      const backupId = backup.backup_id!;
+      const backupIdDigest = createHash("sha256").update(backupId).digest("hex");
+      const archiveManifest = JSON.parse(await readFile(backup.backup_manifest_path!, "utf8")) as {
+        canonical_state_snapshot: { entries: Array<{ store_key: string; archive_rel_path: string | null }> };
+      };
+      const planArchivePath = path.join(path.dirname(backup.backup_manifest_path!),
+        archiveManifest.canonical_state_snapshot.entries.find((entry) => entry.store_key === "operation_plans")!.archive_rel_path!);
+      const archiveDigestBefore = await sha256File(planArchivePath);
+      const stateDigest = await sha256File(storePath);
+      const observation = await buildRecoveryPostActionObservation({
+        entries: selectedStoreRestoreHistory(stateDigest, backupIdDigest),
+        chain_valid: true,
+        skipped_count: 0,
+        not_before_timestamp_ms: Date.now() + 10_000,
+      }, { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_RECOVERY_DIR: recoveryRoot });
+
+      expect(observation).toMatchObject({
+        status: "matched",
+        restore_backup_id_digest: backupIdDigest,
+        plan_restore_points: [
+          {
+            plan_id_digest: operationPlanDigest("private-correlated-plan"),
+            backup_plan_record_status: "matched",
+            backup_plan_integrity: "residuals_present",
+            backup_plan_record_count: 1,
+          },
+        ],
+        used_for_authority: false,
+        may_execute: false,
+      });
+      const point = observation.plan_restore_points?.[0];
+      expect(point).toMatchObject({
+        dependency_status: "residuals_present",
+        residual_dependencies: ["operation_plan"],
+        unobserved_dependencies: ["broker", "delivery", "cron_approval"],
+      });
+      expect(await sha256File(planArchivePath)).toBe(archiveDigestBefore);
+      expect(JSON.stringify(observation)).not.toContain(backupId);
+      expect(JSON.stringify(observation)).not.toContain("private-correlated-plan");
+      expect(JSON.stringify(observation)).not.toContain(planArchivePath);
+
+      const missingBackup = await buildRecoveryPostActionObservation({
+        entries: selectedStoreRestoreHistory(stateDigest, digest("f")),
+        chain_valid: true,
+        skipped_count: 0,
+        not_before_timestamp_ms: Date.now() + 10_000,
+      }, { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_RECOVERY_DIR: recoveryRoot });
+      expect(missingBackup.plan_restore_points).toMatchObject([{
+        backup_plan_record_status: "unverified",
+        backup_plan_integrity: null,
+        dependency_status: "unknown",
+        residual_dependencies: [],
+        unobserved_dependencies: [],
+      }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it("keeps missing or invalid selected-store state distinct from an unobservable sidecar state", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-restore-boundary-"));

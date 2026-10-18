@@ -1484,6 +1484,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       function formatRecoveryPostActionPlanResiduals(observation) {
         if (!observation || observation.operation !== "restore" || observation.store_key !== "operation_plans" ||
             !Array.isArray(observation.plan_residuals) || observation.plan_residuals.length > 64) return "未観測";
+        const categories = ["operation_plan", "broker", "delivery", "memory", "cron_approval"];
         const seen = new Set();
         const rows = [];
         for (const item of observation.plan_residuals) {
@@ -1500,7 +1501,59 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             (item.status === "verified" ? "検証済み" : "残差あり") + "・binding " + item.binding_count +
             "・残差binding " + item.residual_binding_count + "・未表示binding " + item.omitted_binding_count);
         }
-        return rows.length > 0 ? rows.join("\\n") : "対象計画なし";
+        const restoreDigest = observation.restore_backup_id_digest;
+        const restorePoints = observation.plan_restore_points;
+        if (restoreDigest !== null && (typeof restoreDigest !== "string" || !/^[a-f0-9]{64}$/.test(restoreDigest))) {
+          return "未確認（表示を抑止）";
+        }
+        if (restorePoints !== null) {
+          if (!restoreDigest || !Array.isArray(restorePoints) || restorePoints.length !== rows.length || restorePoints.length > 64) {
+            return "未確認（表示を抑止）";
+          }
+          const pointSeen = new Set();
+          const statusLabels = { matched: "一意に一致", not_found: "記録なし", ambiguous: "複数または不定", unverified: "未確認" };
+          const dependencyLabels = { observed: "観測範囲内", residuals_present: "残差あり", unobserved: "未観測あり", unknown: "未確認" };
+          for (let index = 0; index < restorePoints.length; index += 1) {
+            const point = restorePoints[index];
+            const backupPlanStatus = point && point.backup_plan_record_status;
+            const backupPlanIntegrity = point && point.backup_plan_integrity;
+            const backupPlanRecordCount = point && point.backup_plan_record_count;
+            const dependencyStatus = point && point.dependency_status;
+            const residualDependencies = point && point.residual_dependencies;
+            const unobservedDependencies = point && point.unobserved_dependencies;
+            if (!point || typeof point !== "object" || point.plan_id_digest !== observation.plan_residuals[index].plan_id_digest ||
+                !/^[a-f0-9]{64}$/.test(point.plan_id_digest) || pointSeen.has(point.plan_id_digest) ||
+                !Object.prototype.hasOwnProperty.call(statusLabels, backupPlanStatus) ||
+                ![null, "verified", "residuals_present"].includes(backupPlanIntegrity) ||
+                !(backupPlanRecordCount === null ||
+                  (Number.isSafeInteger(backupPlanRecordCount) && backupPlanRecordCount >= 0)) ||
+                !Object.prototype.hasOwnProperty.call(dependencyLabels, dependencyStatus) ||
+                !Array.isArray(residualDependencies) || !Array.isArray(unobservedDependencies) ||
+                residualDependencies.some((category) => !categories.includes(category)) ||
+                unobservedDependencies.some((category) => !categories.includes(category)) ||
+                new Set(residualDependencies).size !== residualDependencies.length ||
+                new Set(unobservedDependencies).size !== unobservedDependencies.length ||
+                (backupPlanStatus === "matched" && (backupPlanIntegrity === null || backupPlanRecordCount !== 1)) ||
+                (backupPlanStatus === "not_found" && (backupPlanIntegrity !== null || backupPlanRecordCount !== null)) ||
+                (backupPlanStatus === "unverified" && (backupPlanIntegrity !== null || backupPlanRecordCount !== null)) ||
+                (backupPlanStatus === "ambiguous" && backupPlanRecordCount === 1) ||
+                (dependencyStatus === "observed" && (residualDependencies.length > 0 || unobservedDependencies.length > 0)) ||
+                (dependencyStatus === "residuals_present" && residualDependencies.length === 0) ||
+                (dependencyStatus === "unobserved" && unobservedDependencies.length === 0) ||
+                (dependencyStatus === "unknown" && (residualDependencies.length > 0 || unobservedDependencies.length > 0))) {
+              return "未確認（表示を抑止）";
+            }
+            pointSeen.add(point.plan_id_digest);
+            rows[index] += "・同一backup内計画記録: " + statusLabels[point.backup_plan_record_status] +
+              "・backup内計画検査: " + (backupPlanIntegrity === null ? "未確認" :
+                backupPlanIntegrity === "verified" ? "検証済み" : "残差あり") +
+              "・依存: " + dependencyLabels[dependencyStatus] +
+              "（残差 " + residualDependencies.join("・") + "／未観測 " + unobservedDependencies.join("・") + "）";
+          }
+        }
+        const digestLabel = restoreDigest ? "復元元backup digest " + restoreDigest.slice(0, 12) : "復元元backup digest 未記録";
+        const associationLabel = restorePoints === null ? "計画別backup相関: 未観測" : "計画別backup相関: 読取検査";
+        return digestLabel + "・" + associationLabel + "\\n" + (rows.length > 0 ? rows.join("\\n") : "対象計画なし");
       }
 
       function renderRecoverySnapshot(snapshot) {

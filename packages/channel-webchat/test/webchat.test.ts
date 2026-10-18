@@ -378,17 +378,29 @@ describe("WebChatChannel — Control Center shell", () => {
     const observation = {
       operation: "restore",
       store_key: "operation_plans",
+      restore_backup_id_digest: "c".repeat(64),
       plan_residuals: [
         { plan_id_digest: "a".repeat(64), status: "verified", binding_count: 1, residual_binding_count: 0, omitted_binding_count: 0 },
         { plan_id_digest: "b".repeat(64), status: "residuals_present", binding_count: 3, residual_binding_count: 2, omitted_binding_count: 1 },
       ],
+      plan_restore_points: [
+        { plan_id_digest: "a".repeat(64), backup_plan_record_status: "matched", backup_plan_integrity: "verified",
+          backup_plan_record_count: 1, dependency_status: "observed", residual_dependencies: [], unobserved_dependencies: [] },
+        { plan_id_digest: "b".repeat(64), backup_plan_record_status: "matched", backup_plan_integrity: "residuals_present",
+          backup_plan_record_count: 1, dependency_status: "residuals_present", residual_dependencies: ["broker"], unobserved_dependencies: ["delivery"] },
+      ],
     };
     const text = evaluate(observation);
+    expect(text).toContain("復元元backup digest cccccccccccc・計画別backup相関: 読取検査");
     expect(text).toContain("計画digest aaaaaaaaaaaa・計画内検査: 検証済み・binding 1・残差binding 0・未表示binding 0");
+    expect(text).toContain("backup内計画検査: 検証済み・依存: 観測範囲内");
     expect(text).toContain("計画digest bbbbbbbbbbbb・計画内検査: 残差あり・binding 3・残差binding 2・未表示binding 1");
-    expect(text.split("\n")).toHaveLength(2);
+    expect(text).toContain("依存: 残差あり（残差 broker／未観測 delivery）");
+    expect(text.split("\n")).toHaveLength(3);
     expect(evaluate({ ...observation, store_key: "broker" })).toBe("未観測");
     expect(evaluate({ ...observation, plan_residuals: [{ ...observation.plan_residuals[0], plan_id_digest: "raw-plan-id" }] }))
+      .toBe("未確認（表示を抑止）");
+    expect(evaluate({ ...observation, plan_restore_points: [{ ...observation.plan_restore_points[0], plan_id_digest: "d".repeat(64) }, observation.plan_restore_points[1]] }))
       .toBe("未確認（表示を抑止）");
   });
 
