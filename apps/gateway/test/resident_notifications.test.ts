@@ -271,6 +271,110 @@ describe("buildResidentNotificationsSnapshot", () => {
     expect(JSON.stringify(notifications)).not.toContain(commandDigest);
   });
 
+  it("correlates Cron and interrupted-approval notices without exposing receipt digests", () => {
+    const eventId = `cron-${"a".repeat(64)}`;
+    const payloadDigest = "b".repeat(64);
+    const evidenceDigest = "d".repeat(64);
+    const receiptDigest = "e".repeat(64);
+    const projection = {
+      schema_version: "operation-plan-projection.v1",
+      used_for_authority: false,
+      raw_payload_exposed: false,
+      plans: [{
+        request_id: eventId,
+        steps: [{
+          status: "outcome_unknown",
+          external_receipt_observation: "matched",
+          external_receipt: {
+            source: "local_inspection",
+            match_count: 1,
+            evidence_digest: evidenceDigest,
+            receipt_digest: receiptDigest,
+            observed_at_ms: 800,
+            used_for_authority: false,
+            raw_receipt_exposed: false,
+          },
+        }],
+        bindings: [{ request_id: eventId, status: "outcome_unknown" }],
+      }],
+    };
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 1000,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [],
+      unresolved_cron_events: [{
+        source_digest: "f".repeat(64), sequence: 17, event_id: eventId, payload_digest: payloadDigest,
+        delivery_state: "outcome_unknown", resolution_state: "unacknowledged", updated_at_ms: 900,
+      }],
+      interrupted_cron_approvals: [{
+        source_digest: "c".repeat(64), sequence: 17, event_id: eventId, payload_digest: payloadDigest,
+        command_id_digest: "9".repeat(64), state: "interrupted", updated_at_ms: 950,
+      }],
+      operation_plan_projection: projection,
+    });
+
+    expect(notifications).toHaveLength(2);
+    for (const notice of notifications) {
+      expect(notice).toMatchObject({
+        result_correlation_status: "execution_unresolved",
+        external_receipt_observation_status: "matched",
+        external_receipt_observation_source: "local_inspection",
+        read_only: true,
+        authority: "display_only",
+      });
+      expect(notice.message).toContain("does not settle delivery or establish action success");
+    }
+    const interrupted = notifications.find((notice) => notice.kind === "approval_interrupted");
+    expect(interrupted?.next_action).toContain("fresh approval");
+    const visible = JSON.stringify(notifications);
+    expect(visible).not.toContain(evidenceDigest);
+    expect(visible).not.toContain(receiptDigest);
+    expect(visible).not.toContain("raw_receipt");
+  });
+
+  it("keeps malformed external receipt observations mixed and non-authoritative", () => {
+    const eventId = `cron-${"a".repeat(64)}`;
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 1000,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [],
+      interrupted_cron_approvals: [{
+        source_digest: "c".repeat(64), sequence: 17, event_id: eventId, payload_digest: "b".repeat(64),
+        command_id_digest: "9".repeat(64), state: "interrupted", updated_at_ms: 950,
+      }],
+      operation_plan_projection: {
+        schema_version: "operation-plan-projection.v1",
+        used_for_authority: false,
+        raw_payload_exposed: false,
+        plans: [{
+          request_id: eventId,
+          steps: [{
+            status: "outcome_unknown",
+            external_receipt_observation: "matched",
+            external_receipt: {
+              source: "local_inspection", match_count: 2, evidence_digest: "d".repeat(64),
+              receipt_digest: "e".repeat(64), observed_at_ms: 800, used_for_authority: false, raw_receipt_exposed: false,
+            },
+          }],
+          bindings: [{ request_id: eventId, status: "outcome_unknown" }],
+        }],
+      },
+    });
+
+    expect(notifications[0]).toMatchObject({
+      kind: "approval_interrupted",
+      external_receipt_observation_status: "mixed_or_unknown",
+      read_only: true,
+      authority: "display_only",
+    });
+    expect(notifications[0]).not.toHaveProperty("external_receipt_observation_source");
+    expect(notifications[0]?.message).toContain("Receipt observation state=mixed_or_unknown");
+    expect(notifications[0]?.message).not.toContain("local receipt observation");
+    expect(notifications[0]?.next_action).toContain("fresh approval");
+  });
+
   it("limits and sorts notifications by newest timestamp", () => {
     const notifications = buildResidentNotificationsSnapshot({
       now_ms: 1000,

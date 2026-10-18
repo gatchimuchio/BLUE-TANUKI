@@ -13,6 +13,19 @@ interface OperationPlanCorrelationProjection {
   readonly raw_payload_exposed: false;
   readonly plans: readonly {
     readonly request_id: string;
+    readonly steps?: readonly {
+      readonly status: string;
+      readonly external_receipt_observation?: string;
+      readonly external_receipt?: {
+        readonly source: string;
+        readonly match_count: number;
+        readonly evidence_digest: string;
+        readonly receipt_digest?: string;
+        readonly observed_at_ms: number;
+        readonly used_for_authority: boolean;
+        readonly raw_receipt_exposed: boolean;
+      };
+    }[];
     readonly bindings: readonly {
       readonly request_id: string;
       readonly status: string;
@@ -78,16 +91,21 @@ export function buildResidentNotificationsSnapshot(
   }
 
   for (const event of input.unresolved_cron_events ?? []) {
+    const externalReceiptCorrelation = cronExternalReceiptCorrelation(event.event_id, input.operation_plan_projection);
+    const receiptDisclosure = receiptObservationDisclosure(
+      externalReceiptCorrelation.external_receipt_observation_status,
+      externalReceiptCorrelation.external_receipt_observation_source,
+    );
     notifications.push({
       id: `schedule-delivery-unsettled:${event.event_id}`,
       kind: "schedule_delivery_unknown",
       severity: "warning",
       title: "Schedule delivery result is unsettled",
       message: event.resolution_state === "owner_acknowledged_no_replay"
-        ? `Cron event sequence ${event.sequence} remains ${event.delivery_state}; the owner recorded a no-replay disposition, so later events may proceed. The original outcome remains unknown. A saved-result link is evidence correlation only.`
+        ? `Cron event sequence ${event.sequence} remains ${event.delivery_state}; the owner recorded a no-replay disposition, so later events may proceed. The original outcome remains unknown. A saved-result link is evidence correlation only.${receiptDisclosure}`
         : event.resolution_state === "verification_unavailable"
-        ? `Cron event sequence ${event.sequence} remains ${event.delivery_state}; the no-replay disposition could not be verified, so later events remain blocked. A saved-result link is evidence correlation only, not proof of external success.`
-        : `Cron event sequence ${event.sequence} remains ${event.delivery_state}; delivery is not confirmed, and later events from this source are blocked without automatic replay. A saved-result link is evidence correlation only, not proof of external success.`,
+        ? `Cron event sequence ${event.sequence} remains ${event.delivery_state}; the no-replay disposition could not be verified, so later events remain blocked. A saved-result link is evidence correlation only, not proof of external success.${receiptDisclosure}`
+        : `Cron event sequence ${event.sequence} remains ${event.delivery_state}; delivery is not confirmed, and later events from this source are blocked without automatic replay. A saved-result link is evidence correlation only, not proof of external success.${receiptDisclosure}`,
       timestamp: event.updated_at_ms,
       source: "cron_event_cursor",
       read_only: true,
@@ -96,6 +114,7 @@ export function buildResidentNotificationsSnapshot(
       payload_hash: event.payload_digest,
       cron_resolution_state: event.resolution_state,
       ...cronResultCorrelation(event.event_id, input.operation_plan_projection),
+      ...externalReceiptCorrelation,
       next_action: event.resolution_state === "owner_acknowledged_no_replay"
         ? "The next event may proceed, but this result is still unknown; inspect the authorized target independently before treating the action as complete."
         : "Inspect Authority Trace for this event ID and verify target delivery before taking any duplicate action.",
@@ -103,18 +122,25 @@ export function buildResidentNotificationsSnapshot(
   }
 
   for (const [index, approval] of (input.interrupted_cron_approvals ?? []).entries()) {
+    const resultCorrelation = cronResultCorrelation(approval.event_id, input.operation_plan_projection);
+    const externalReceiptCorrelation = cronExternalReceiptCorrelation(approval.event_id, input.operation_plan_projection);
     notifications.push({
       id: `cron-approval-interrupted:${approval.event_id}:${index}`,
       kind: "approval_interrupted",
       severity: "warning",
       title: "Cron approval was interrupted by Gateway restart",
-      message: "A saved approval was not restored after restart. Inspect the event and any saved result before creating a new request.",
+      message: `A saved approval was not restored after restart. Inspect the event and any saved result before creating a new request.${receiptObservationDisclosure(
+        externalReceiptCorrelation.external_receipt_observation_status,
+        externalReceiptCorrelation.external_receipt_observation_source,
+      )}`,
       timestamp: approval.updated_at_ms,
       source: "cron_approval_handoff",
       read_only: true,
       authority: "display_only",
       request_id: approval.event_id,
       payload_hash: approval.payload_digest,
+      ...resultCorrelation,
+      ...externalReceiptCorrelation,
       next_action: "Review Authority Trace and result evidence for this event. If work is still needed, submit a new request for a fresh approval; do not reuse the interrupted approval.",
     });
   }
@@ -212,7 +238,8 @@ function cronResultCorrelation(
 ): Pick<WebChatNotificationItem, "result_correlation_status" | "result_memory_status"> {
   if (!projection || projection.schema_version !== "operation-plan-projection.v1" ||
       projection.used_for_authority !== false || projection.raw_payload_exposed !== false ||
-      !Array.isArray(projection.plans)) {
+      !Array.isArray(projection.plans) || !projection.plans.every((plan) =>
+        plan && typeof plan.request_id === "string" && Array.isArray(plan.bindings))) {
     return { result_correlation_status: "projection_unavailable" };
   }
 
@@ -256,6 +283,76 @@ function cronResultCorrelation(
     result_correlation_status: "saved_result_linked",
     result_memory_status: memoryStatus,
   };
+}
+
+function cronExternalReceiptCorrelation(
+  requestId: string,
+  projection: OperationPlanCorrelationProjection | undefined,
+): Pick<WebChatNotificationItem, "external_receipt_observation_status" | "external_receipt_observation_source"> {
+  if (!projection || projection.schema_version !== "operation-plan-projection.v1" ||
+      projection.used_for_authority !== false || projection.raw_payload_exposed !== false ||
+      !Array.isArray(projection.plans) || !projection.plans.every((plan) =>
+        plan && typeof plan.request_id === "string" && Array.isArray(plan.bindings))) {
+    return { external_receipt_observation_status: "projection_unavailable" };
+  }
+  const plans = projection.plans.filter((plan) => plan?.request_id === requestId);
+  if (plans.length === 0) return { external_receipt_observation_status: "no_matching_plan" };
+  if (plans.length !== 1) return { external_receipt_observation_status: "ambiguous" };
+  const steps = plans[0]!.steps;
+  if (!Array.isArray(steps) || !steps.every((step) => step && typeof step.status === "string")) {
+    return { external_receipt_observation_status: "projection_unavailable" };
+  }
+  const unresolved = steps.filter((step) => step.status === "outcome_unknown");
+  if (unresolved.length === 0) return { external_receipt_observation_status: "not_applicable" };
+
+  const statuses: string[] = [];
+  let hasRecordedObservation = false;
+  for (const step of unresolved) {
+    const status = step.external_receipt_observation;
+    if (!status || !["not_recorded", "matched", "not_found", "mismatch", "ambiguous"].includes(status)) {
+      return { external_receipt_observation_status: "mixed_or_unknown" };
+    }
+    statuses.push(status);
+    if (status === "not_recorded") {
+      if (step.external_receipt !== undefined) return { external_receipt_observation_status: "mixed_or_unknown" };
+      continue;
+    }
+    const observation = step.external_receipt;
+    if (!observation || observation.source !== "local_inspection" || observation.used_for_authority !== false ||
+        observation.raw_receipt_exposed !== false || !Number.isSafeInteger(observation.match_count) ||
+        observation.match_count < 0 || observation.match_count > 100 ||
+        !/^[a-f0-9]{64}$/.test(observation.evidence_digest) ||
+        (observation.receipt_digest !== undefined && !/^[a-f0-9]{64}$/.test(observation.receipt_digest)) ||
+        !Number.isSafeInteger(observation.observed_at_ms) || observation.observed_at_ms < 0) {
+      return { external_receipt_observation_status: "mixed_or_unknown" };
+    }
+    const consistent = status === "matched"
+      ? observation.match_count === 1 && observation.receipt_digest !== undefined
+      : status === "not_found"
+        ? observation.match_count === 0 && observation.receipt_digest === undefined
+        : status === "mismatch"
+          ? observation.match_count === 1 && observation.receipt_digest !== undefined
+          : observation.match_count >= 2 && observation.receipt_digest === undefined;
+    if (!consistent) return { external_receipt_observation_status: "mixed_or_unknown" };
+    hasRecordedObservation = true;
+  }
+
+  const uniqueStatuses = new Set(statuses);
+  return {
+    external_receipt_observation_status: uniqueStatuses.size === 1
+      ? statuses[0] as WebChatNotificationItem["external_receipt_observation_status"]
+      : "mixed_or_unknown",
+    ...(hasRecordedObservation ? { external_receipt_observation_source: "local_inspection" as const } : {}),
+  };
+}
+
+function receiptObservationDisclosure(
+  status: WebChatNotificationItem["external_receipt_observation_status"],
+  source: WebChatNotificationItem["external_receipt_observation_source"],
+): string {
+  if (!status || status === "projection_unavailable" || status === "no_matching_plan" || status === "not_applicable") return "";
+  const label = source === "local_inspection" ? "Read-only local receipt observation" : "Receipt observation state";
+  return ` ${label}=${status}; it does not settle delivery or establish action success.`;
 }
 
 function looksLikeConnectorFailure(error: string | undefined): boolean {

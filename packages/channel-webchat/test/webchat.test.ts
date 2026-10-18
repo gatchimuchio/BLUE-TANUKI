@@ -515,6 +515,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("Notification Center");
       expect(html).toContain("load-notifications");
       expect(html).toContain('fields.push(["result correlation", item.result_correlation_status])');
+      expect(html).toContain('fields.push(["receipt observation", item.external_receipt_observation_status])');
+      expect(html).toContain('fields.push(["receipt source", item.external_receipt_observation_source])');
       expect(html).toContain("Complete History / Replay");
       expect(html).toContain("load-history");
       expect(html).toContain("history-list");

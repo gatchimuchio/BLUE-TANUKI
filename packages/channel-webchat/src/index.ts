@@ -24,6 +24,7 @@ export {
   type WebChatNotificationSeverity,
   type WebChatCronResultCorrelationStatus,
   type WebChatCronResultMemoryStatus,
+  type WebChatCronExternalReceiptObservationStatus,
   type WebChatNotificationSurface,
   type WebChatHistoryEntry,
   type WebChatHistoryReplayFilter,

@@ -1210,6 +1210,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               if (item.result_memory_status) {
                 fields.push(["result memory", item.result_memory_status]);
               }
+              if (item.external_receipt_observation_status) {
+                fields.push(["receipt observation", item.external_receipt_observation_status]);
+              }
+              if (item.external_receipt_observation_source) {
+                fields.push(["receipt source", item.external_receipt_observation_source]);
+              }
               if (item.cron_resolution_state) {
                 fields.push(["Cron resolution", item.cron_resolution_state]);
               }

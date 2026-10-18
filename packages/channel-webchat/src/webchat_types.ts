@@ -318,6 +318,17 @@ export type WebChatCronResultMemoryStatus =
   | "receipt_confirmed"
   | "mixed_or_unknown";
 
+export type WebChatCronExternalReceiptObservationStatus =
+  | "projection_unavailable"
+  | "no_matching_plan"
+  | "not_applicable"
+  | "not_recorded"
+  | "matched"
+  | "not_found"
+  | "mismatch"
+  | "ambiguous"
+  | "mixed_or_unknown";
+
 export type WebChatCronResolutionState =
   | "unacknowledged"
   | "owner_acknowledged_no_replay"
@@ -341,6 +352,8 @@ export interface WebChatNotificationItem {
   payload_hash?: string;
   result_correlation_status?: WebChatCronResultCorrelationStatus;
   result_memory_status?: WebChatCronResultMemoryStatus;
+  external_receipt_observation_status?: WebChatCronExternalReceiptObservationStatus;
+  external_receipt_observation_source?: "local_inspection";
   cron_resolution_state?: WebChatCronResolutionState;
   expires_at_ms?: number;
   next_action?: string;
