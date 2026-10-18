@@ -1551,6 +1551,86 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return seen.size === expectedKeys.length ? projected : null;
       }
 
+      function recoveryBackupOperationPlanInventory(value) {
+        const statuses = ["not_included", "not_present", "snapshot_unverified", "verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"];
+        const reasons = [null, "checkpoint_missing", "checkpoint_integrity_mismatch", "binding_mismatch", "cross_ledger_unverified", "store_unavailable", "schema_mismatch", "snapshot_unverified"];
+        if (!value || typeof value !== "object" || Array.isArray(value) || !statuses.includes(value.status) ||
+            !reasons.includes(value.reason) || value.cross_ledger_correlation !== "not_performed" ||
+            value.used_for_authority !== false || value.may_execute !== false || !Array.isArray(value.plan_scopes) || value.plan_scopes.length > 64) return null;
+        const countKeys = ["plan_scope_count", "plan_count", "plan_integrity_residual_count", "binding_count", "verified_binding_count",
+          "residual_binding_count", "unverified_memory_link_count", "omitted_binding_count", "omitted_plan_scope_count"];
+        const countValues = countKeys.map(function (key) { return value[key]; });
+        const rows = [];
+        const seen = new Set();
+        for (const item of value.plan_scopes) {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+          const planDigest = recoveryInspectionDigest(item.plan_id_digest);
+          const requestDigest = item.request_scope_digest === null ? null : recoveryInspectionDigest(item.request_scope_digest);
+          const integrity = recoveryInspectionEnum(item.integrity, ["verified", "residuals_present"]);
+          const planRecordCount = item.plan_record_count;
+          const bindingCount = item.binding_count;
+          const residualBindingCount = item.residual_binding_count;
+          const omittedBindingCount = item.omitted_binding_count;
+          if (!planDigest || (item.request_scope_digest !== null && !requestDigest) || integrity === "unknown" || seen.has(planDigest) ||
+              !Number.isSafeInteger(planRecordCount) || planRecordCount < 1 || !Number.isSafeInteger(bindingCount) || bindingCount < 0 ||
+              !Number.isSafeInteger(residualBindingCount) || residualBindingCount < 0 || residualBindingCount > bindingCount ||
+              !Number.isSafeInteger(omittedBindingCount) || omittedBindingCount < 0 || omittedBindingCount > bindingCount) return null;
+          seen.add(planDigest);
+          rows.push({ plan_id_digest: planDigest, request_scope_digest: requestDigest, integrity,
+            plan_record_count: planRecordCount, binding_count: bindingCount,
+            residual_binding_count: residualBindingCount, omitted_binding_count: omittedBindingCount });
+        }
+        const projection = { status: value.status, reason: value.reason, plan_scope_count: value.plan_scope_count,
+          plan_count: value.plan_count, plan_integrity_residual_count: value.plan_integrity_residual_count,
+          binding_count: value.binding_count, verified_binding_count: value.verified_binding_count,
+          residual_binding_count: value.residual_binding_count, unverified_memory_link_count: value.unverified_memory_link_count,
+          omitted_binding_count: value.omitted_binding_count, omitted_plan_scope_count: value.omitted_plan_scope_count,
+          plan_scopes: rows, cross_ledger_correlation: "not_performed", used_for_authority: false, may_execute: false };
+        if (["verified", "residuals_present"].includes(value.status)) {
+          if (!countValues.every(function (count) { return Number.isSafeInteger(count) && count >= 0; }) ||
+              value.plan_scope_count < rows.length || value.plan_scope_count - rows.length !== value.omitted_plan_scope_count ||
+              value.plan_scope_count > value.plan_count || value.plan_integrity_residual_count > value.plan_count ||
+              value.binding_count !== value.verified_binding_count + value.residual_binding_count ||
+              value.unverified_memory_link_count > value.binding_count || value.omitted_binding_count > value.binding_count ||
+              rows.reduce(function (sum, item) { return sum + item.plan_record_count; }, 0) > value.plan_count ||
+              rows.reduce(function (sum, item) { return sum + item.binding_count; }, 0) > value.binding_count ||
+              rows.reduce(function (sum, item) { return sum + item.residual_binding_count; }, 0) > value.residual_binding_count ||
+              rows.reduce(function (sum, item) { return sum + item.omitted_binding_count; }, 0) > value.omitted_binding_count) return null;
+          if (value.omitted_plan_scope_count === 0 &&
+              (rows.reduce(function (sum, item) { return sum + item.plan_record_count; }, 0) !== value.plan_count ||
+               rows.reduce(function (sum, item) { return sum + item.binding_count; }, 0) !== value.binding_count ||
+               rows.reduce(function (sum, item) { return sum + item.residual_binding_count; }, 0) !== value.residual_binding_count ||
+               rows.reduce(function (sum, item) { return sum + item.omitted_binding_count; }, 0) !== value.omitted_binding_count)) return null;
+          if (value.status === "verified" && (value.plan_integrity_residual_count !== 0 || value.residual_binding_count !== 0 ||
+              value.unverified_memory_link_count !== 0 || rows.some(function (item) { return item.integrity !== "verified"; }))) return null;
+          if (value.status === "residuals_present" && value.plan_integrity_residual_count === 0 &&
+              value.residual_binding_count === 0 && value.unverified_memory_link_count === 0) return null;
+        } else if (countValues.some(function (count) { return count !== null; }) || rows.length !== 0) return null;
+        return projection;
+      }
+
+      function formatRecoveryBackupPlanScopes(inventory, overallStatus) {
+        if (overallStatus === "not_found") return "backupがありません";
+        if (overallStatus !== "verified" || !inventory) return "未確認";
+        const labels = { not_included: "このbackupに未収録", not_present: "backup時に未存在",
+          snapshot_unverified: "J計画snapshot未検証", verified: "検査済み", residuals_present: "残差あり",
+          corrupt: "checkpoint破損", unavailable: "未確認", schema_mismatch: "schema不一致" };
+        const label = labels[inventory.status] || "未確認";
+        if (inventory.status !== "verified" && inventory.status !== "residuals_present") return "backup内Operation Plan: " + label;
+        const rows = inventory.plan_scopes.map(function (item) {
+          const requestScope = item.request_scope_digest ? item.request_scope_digest.slice(0, 12) : "未確認";
+          return "計画digest " + item.plan_id_digest.slice(0, 12) + " / 要求scope digest " + requestScope + " / " +
+            (item.integrity === "verified" ? "整合" : "残差") + " / 計画記録 " + item.plan_record_count +
+            " / 結果binding " + item.binding_count + " / 残差binding " + item.residual_binding_count +
+            " / 省略binding " + item.omitted_binding_count;
+        });
+        return ["backup内J計画台帳: " + label + " / 計画scope " + inventory.plan_scope_count +
+          " / 計画記録 " + inventory.plan_count + " / 結果binding " + inventory.binding_count +
+          " / 残差binding " + inventory.residual_binding_count + " / M照合未確認 " + inventory.unverified_memory_link_count +
+          " / 省略scope " + inventory.omitted_plan_scope_count,
+          ...rows, "要求scope digestはInboundRequest由来の診断相関です。仕事ID・復元点・復元許可ではなく、J以外の台帳との相関は未実施です。"].join("\\n");
+      }
+
       function renderRecoveryBackupStoreStatuses(value, coverage, overallStatus) {
         const expectedKeys = ["j_control", "m_state", "broker", "operation_plans", "cron_events"];
         const safeRows = recoveryBackupStoreStatuses(value);
@@ -2051,6 +2131,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         let canonicalMissing = count(source.canonical_state_missing_store_count);
         let canonicalUnverified = count(source.canonical_state_unverified_store_count);
         const canonicalStores = recoveryBackupStoreStatuses(source.canonical_state_stores);
+        let operationPlanInventory = recoveryBackupOperationPlanInventory(source.operation_plan_archive_inventory);
         const canonicalStoreCountsMatch = canonicalStores !== null && canonicalStores.length === 5 &&
           canonicalStores.filter((item) => item.status === "verified").length === canonicalVerified &&
           canonicalStores.filter((item) => item.status === "not_present").length === canonicalMissing &&
@@ -2065,7 +2146,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             copied > configured || missing !== configured - copied || coverage === "unknown" ||
             (configured === 0 && coverage !== "none_configured") ||
             (configured > 0 && missing === 0 && coverage !== "complete_for_configured_targets") ||
-            (missing > 0 && coverage !== "partial") || canonicalCoverage === "unknown")) {
+            (missing > 0 && coverage !== "partial") || canonicalCoverage === "unknown" || !operationPlanInventory)) {
           safeStatus = "invalid_report";
         }
         const canonicalNotIncluded = canonicalCoverage === "not_included" && canonicalExpected === null &&
@@ -2088,6 +2169,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (status === "not_found" && (digest !== null || configured !== null || copied !== null || missing !== null || !canonicalNotIncluded)) {
           safeStatus = "invalid_report";
         }
+        if (status === "not_found" && operationPlanInventory?.status !== "not_included") safeStatus = "invalid_report";
         if (safeStatus !== "verified") {
           configured = null;
           copied = null;
@@ -2101,6 +2183,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           canonicalConsistency = "not_included";
           canonicalCrossStoreAtomic = null;
         }
+        if (safeStatus === "invalid_report") operationPlanInventory = {
+          status: "snapshot_unverified", reason: "snapshot_unverified", plan_scope_count: null, plan_count: null,
+          plan_integrity_residual_count: null, binding_count: null, verified_binding_count: null,
+          residual_binding_count: null, unverified_memory_link_count: null, omitted_binding_count: null,
+          omitted_plan_scope_count: null, plan_scopes: [], cross_ledger_correlation: "not_performed",
+          used_for_authority: false, may_execute: false,
+        };
         const projection = {
           mode: boundaryOk ? "read_only" : "invalid_report",
           status: safeStatus,
@@ -2118,6 +2207,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           canonical_state_store_consistency: canonicalConsistency,
           canonical_state_cross_store_atomic: canonicalCrossStoreAtomic,
           canonical_state_stores: safeStatus === "verified" ? canonicalStores : [],
+          operation_plan_archive_inventory: operationPlanInventory,
           used_for_authority: false,
           may_execute: false
         };
@@ -2128,6 +2218,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           safeStatus === "verified" ? canonicalCoverage : "unknown",
           safeStatus,
         );
+        setText("recovery-backup-plan-scopes", formatRecoveryBackupPlanScopes(
+          operationPlanInventory,
+          safeStatus,
+        ));
         setText("recovery-backup-inspection-json", compactJson(projection));
       }
 

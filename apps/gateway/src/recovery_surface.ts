@@ -11,6 +11,7 @@ import {
   type CanonicalStateSnapshotManifest,
   type CanonicalStateStoreKey,
 } from "./canonical_state_backup.js";
+import { inspectOperationPlanRecoveryLedger, type OperationPlanRecoveryInspection } from "./operation_plan_recovery_inspection.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
 export type RecoveryAction =
@@ -124,8 +125,35 @@ export interface RecoveryBackupInspection {
     readonly store_key: CanonicalStateStoreKey;
     readonly status: CanonicalStateSnapshotEntryStatus;
   }[];
+  operation_plan_archive_inventory: RecoveryBackupOperationPlanInventory;
   used_for_authority: false;
   may_execute: false;
+}
+
+export interface RecoveryBackupOperationPlanInventory {
+  readonly status: "not_included" | "not_present" | "snapshot_unverified" | OperationPlanRecoveryInspection["status"];
+  readonly reason: OperationPlanRecoveryInspection["reason"] | "snapshot_unverified";
+  readonly plan_scope_count: number | null;
+  readonly plan_count: number | null;
+  readonly plan_integrity_residual_count: number | null;
+  readonly binding_count: number | null;
+  readonly verified_binding_count: number | null;
+  readonly residual_binding_count: number | null;
+  readonly unverified_memory_link_count: number | null;
+  readonly omitted_binding_count: number | null;
+  readonly omitted_plan_scope_count: number | null;
+  readonly plan_scopes: readonly {
+    readonly plan_id_digest: string;
+    readonly request_scope_digest: string | null;
+    readonly integrity: "verified" | "residuals_present";
+    readonly plan_record_count: number;
+    readonly binding_count: number;
+    readonly residual_binding_count: number;
+    readonly omitted_binding_count: number;
+  }[];
+  readonly cross_ledger_correlation: "not_performed";
+  readonly used_for_authority: false;
+  readonly may_execute: false;
 }
 
 export interface RestoreRecoveryOptions {
@@ -897,6 +925,70 @@ async function latestBackupId(env: NodeJS.ProcessEnv): Promise<string | null> {
   return inventory.latest_backup_id;
 }
 
+function emptyBackupOperationPlanInventory(
+  status: RecoveryBackupOperationPlanInventory["status"],
+  reason: RecoveryBackupOperationPlanInventory["reason"] = null,
+): RecoveryBackupOperationPlanInventory {
+  return {
+    status, reason, plan_scope_count: null, plan_count: null, plan_integrity_residual_count: null,
+    binding_count: null, verified_binding_count: null, residual_binding_count: null,
+    unverified_memory_link_count: null, omitted_binding_count: null,
+    omitted_plan_scope_count: null, plan_scopes: [], cross_ledger_correlation: "not_performed",
+    used_for_authority: false, may_execute: false,
+  };
+}
+
+/** Inspect only J's archived plan checkpoint after its enclosing snapshot digest passed. */
+async function inspectBackupOperationPlanInventory(
+  packDirectory: string,
+  snapshot: CanonicalStateSnapshotManifest | undefined,
+): Promise<RecoveryBackupOperationPlanInventory> {
+  if (!snapshot) return emptyBackupOperationPlanInventory("not_included");
+  const entry = snapshot.entries.find((item) => item.store_key === "operation_plans");
+  if (!entry) return emptyBackupOperationPlanInventory("snapshot_unverified", "snapshot_unverified");
+  if (entry.status === "not_present") return emptyBackupOperationPlanInventory("not_present");
+  if (entry.status !== "verified" || !entry.archive_rel_path || !entry.sha256) {
+    return emptyBackupOperationPlanInventory("snapshot_unverified", "snapshot_unverified");
+  }
+
+  const archivePath = path.resolve(packDirectory, entry.archive_rel_path);
+  const inspected = inspectOperationPlanRecoveryLedger({ private_state_root: packDirectory, database_path: archivePath });
+  const afterInspection = await sha256Path(archivePath, "file").catch(() => null);
+  if (!afterInspection || afterInspection.bytes !== entry.bytes || afterInspection.sha256 !== entry.sha256) {
+    return emptyBackupOperationPlanInventory("snapshot_unverified", "snapshot_unverified");
+  }
+  if (inspected.status !== "verified" && inspected.status !== "residuals_present") {
+    return emptyBackupOperationPlanInventory(inspected.status, inspected.reason);
+  }
+
+  const planScopes = inspected.plans.slice(0, 64).map((plan) => ({
+    plan_id_digest: plan.plan_id_digest,
+    request_scope_digest: plan.request_scope_digest,
+    integrity: plan.integrity,
+    plan_record_count: plan.plan_record_count,
+    binding_count: plan.binding_count,
+    residual_binding_count: plan.residual_binding_count,
+    omitted_binding_count: plan.omitted_binding_count,
+  }));
+  return {
+    status: inspected.status,
+    reason: inspected.reason,
+    plan_scope_count: inspected.plans.length,
+    plan_count: inspected.plan_count,
+    plan_integrity_residual_count: inspected.plan_integrity_residual_count,
+    binding_count: inspected.binding_count,
+    verified_binding_count: inspected.verified_binding_count,
+    residual_binding_count: inspected.residual_binding_count,
+    unverified_memory_link_count: inspected.unverified_memory_link_count,
+    omitted_binding_count: inspected.omitted_binding_count,
+    omitted_plan_scope_count: Math.max(0, inspected.plans.length - planScopes.length),
+    plan_scopes: planScopes,
+    cross_ledger_correlation: "not_performed",
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
 /** Verify the newest recovery pack's manifest and archived item digests without restoring or writing. */
 export async function inspectLatestRecoveryBackup(
   env: NodeJS.ProcessEnv = process.env,
@@ -914,6 +1006,7 @@ export async function inspectLatestRecoveryBackup(
     canonical_state_store_consistency: "not_included" as const,
     canonical_state_cross_store_atomic: null,
     canonical_state_stores: [],
+    operation_plan_archive_inventory: emptyBackupOperationPlanInventory("not_included"),
     used_for_authority: false as const,
     may_execute: false as const,
   };
@@ -948,6 +1041,9 @@ export async function inspectLatestRecoveryBackup(
     const canonicalStateStores = manifest.canonical_state_snapshot
       ? manifest.canonical_state_snapshot.entries.map(({ store_key, status }) => ({ store_key, status }))
       : [];
+    const operationPlanArchiveInventory = await inspectBackupOperationPlanInventory(
+      path.dirname(manifest.manifest_path), manifest.canonical_state_snapshot,
+    );
     const configuredRequiredItems = manifest.items.filter((item) => item.backup_required && item.source_path !== null);
     const copiedRequiredItems = configuredRequiredItems.filter((item) => item.copied);
     const missingRequiredItemCount = configuredRequiredItems.length - copiedRequiredItems.length;
@@ -970,6 +1066,7 @@ export async function inspectLatestRecoveryBackup(
       canonical_state_store_consistency: canonicalState?.store_consistency ?? "not_included",
       canonical_state_cross_store_atomic: canonicalState?.cross_store_atomic ?? null,
       canonical_state_stores: canonicalStateStores,
+      operation_plan_archive_inventory: operationPlanArchiveInventory,
     };
   } catch {
     return {

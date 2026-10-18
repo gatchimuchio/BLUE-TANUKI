@@ -380,6 +380,8 @@ describe("WebChatChannel — Control Center shell", () => {
       functionSource("recoveryInspectionCount"),
       functionSource("recoveryInspectionDigest"),
       functionSource("recoveryBackupStoreStatuses"),
+      functionSource("recoveryBackupOperationPlanInventory"),
+      functionSource("formatRecoveryBackupPlanScopes"),
       functionSource("renderRecoveryBackupStoreStatuses"),
     ].join("\n");
     const render = functionSource("renderRecoveryBackupInspection");
@@ -393,6 +395,7 @@ describe("WebChatChannel — Control Center shell", () => {
       renderRecoveryBackupInspection(report);
       JSON.stringify({
         projection: JSON.parse(output["recovery-backup-inspection-json"]),
+        backupPlanText: output["recovery-backup-plan-scopes"],
         storeStatus: Object.fromEntries(["j_control", "m_state", "broker", "operation_plans", "cron_events"].map((key) =>
           [key, output["recovery-backup-store-" + key]])),
       });
@@ -415,6 +418,14 @@ describe("WebChatChannel — Control Center shell", () => {
       canonical_state_store_consistency: "independent_sqlite_online_snapshots",
       canonical_state_cross_store_atomic: false,
       canonical_state_stores: rows,
+      operation_plan_archive_inventory: {
+        status: "verified", reason: null, plan_scope_count: 1, plan_count: 1, plan_integrity_residual_count: 0,
+        binding_count: 2, verified_binding_count: 2, residual_binding_count: 0, unverified_memory_link_count: 0,
+        omitted_binding_count: 0, omitted_plan_scope_count: 0,
+        plan_scopes: [{ plan_id_digest: "b".repeat(64), request_scope_digest: "c".repeat(64), integrity: "verified",
+          plan_record_count: 1, binding_count: 2, residual_binding_count: 0, omitted_binding_count: 0 }],
+        cross_ledger_correlation: "not_performed", used_for_authority: false, may_execute: false,
+      },
       used_for_authority: false,
       may_execute: false,
       ...counts,
@@ -464,6 +475,38 @@ describe("WebChatChannel — Control Center shell", () => {
       operation_plans: "アーカイブ検査済み",
       cron_events: "アーカイブ検査済み",
     });
+    const planInventory = JSON.parse(evaluate(completeRows)) as { projection: { operation_plan_archive_inventory: { plan_scopes: Array<Record<string, unknown>> } }; backupPlanText: string };
+    expect(planInventory.projection.operation_plan_archive_inventory.plan_scopes).toMatchObject([
+      { plan_id_digest: "b".repeat(64), request_scope_digest: "c".repeat(64), integrity: "verified" },
+    ]);
+    expect(planInventory.backupPlanText).toContain("計画digest bbbbbbbbbbbb / 要求scope digest cccccccccccc");
+    expect(planInventory.backupPlanText).toContain("仕事ID・復元点・復元許可ではなく");
+    expect(planInventory.backupPlanText).toContain("J以外の台帳との相関は未実施");
+
+    const residual = JSON.parse(evaluate(completeRows, { operation_plan_archive_inventory: {
+      status: "residuals_present", reason: "binding_mismatch", plan_scope_count: 1, plan_count: 1,
+      plan_integrity_residual_count: 1, binding_count: 2, verified_binding_count: 1,
+      residual_binding_count: 1, unverified_memory_link_count: 0, omitted_binding_count: 0, omitted_plan_scope_count: 0,
+      plan_scopes: [{ plan_id_digest: "b".repeat(64), request_scope_digest: null, integrity: "residuals_present",
+        plan_record_count: 1, binding_count: 2, residual_binding_count: 1, omitted_binding_count: 0 }],
+      cross_ledger_correlation: "not_performed", used_for_authority: false, may_execute: false,
+    } })) as { projection: { operation_plan_archive_inventory: { status: string; plan_scopes: unknown[] } }; backupPlanText: string };
+    expect(residual.projection.operation_plan_archive_inventory.status).toBe("residuals_present");
+    expect(residual.projection.operation_plan_archive_inventory.plan_scopes).toMatchObject([{ integrity: "residuals_present" }]);
+    expect(residual.backupPlanText).toContain("残差あり");
+
+    const forgedPlanCount = JSON.parse(evaluate(completeRows, { operation_plan_archive_inventory: {
+      status: "verified", reason: null, plan_scope_count: 1, plan_count: 2, plan_integrity_residual_count: 0,
+      binding_count: 2, verified_binding_count: 2, residual_binding_count: 0, unverified_memory_link_count: 0,
+      omitted_binding_count: 0, omitted_plan_scope_count: 0,
+      plan_scopes: [{ plan_id_digest: "b".repeat(64), request_scope_digest: "c".repeat(64), integrity: "verified",
+        plan_record_count: 1, binding_count: 2, residual_binding_count: 0, omitted_binding_count: 0 }],
+      cross_ledger_correlation: "not_performed", used_for_authority: false, may_execute: false,
+    } })) as { projection: { status: string; operation_plan_archive_inventory: { plan_scopes: unknown[] } }; backupPlanText: string; storeStatus: Record<string, string> };
+    expect(forgedPlanCount.projection.status).toBe("invalid_report");
+    expect(forgedPlanCount.projection.operation_plan_archive_inventory.plan_scopes).toEqual([]);
+    expect(forgedPlanCount.backupPlanText).toBe("未確認");
+    expect(Object.values(forgedPlanCount.storeStatus)).toEqual(["未確認", "未確認", "未確認", "未確認", "未確認"]);
     const mismatched = evaluate(completeRows, { canonical_state_verified_store_count: 4 });
     const invalid = JSON.parse(mismatched) as { projection: { status: string; canonical_state_stores: unknown[] }; storeStatus: Record<string, string> };
     expect(invalid.projection.status).toBe("invalid_report");

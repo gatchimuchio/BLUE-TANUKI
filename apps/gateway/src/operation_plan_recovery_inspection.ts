@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { operationPlanDigest, receiptForResultCommit, verifyResultMemoryCommit } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema, type ExecutionAdmission, type OperationPlanCheckpoint } from "@blue-tanuki/protocol";
@@ -81,10 +81,11 @@ function safeOperationPlanRecoveryPath(privateStateRoot: string, databasePath: s
     const root = realpathSync(privateStateRoot);
     const absolutePath = resolve(databasePath);
     const rel = relative(root, absolutePath);
-    if (rel !== join("operation-plans", "j-state.sqlite") || isAbsolute(rel) || rel.startsWith(`..${sep}`)) return null;
-    const directory = join(root, "operation-plans");
+    const allowedPaths = [join("operation-plans", "j-state.sqlite"), join("canonical-state", "operation_plans.sqlite")];
+    if (!allowedPaths.includes(rel) || isAbsolute(rel) || rel.startsWith(`..${sep}`)) return null;
+    const directory = join(root, dirname(rel));
     const directoryStat = lstatSync(directory);
-    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) return null;
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory() || realpathSync(directory) !== directory) return null;
     const fileStat = lstatSync(absolutePath);
     if (fileStat.isSymbolicLink() || !fileStat.isFile() || fileStat.size === 0 || realpathSync(absolutePath) !== absolutePath) return null;
     return absolutePath;

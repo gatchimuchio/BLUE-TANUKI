@@ -484,6 +484,9 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Operation Plan台帳</span><span id="recovery-backup-store-operation_plans">未確認</span></div>
             <div class="metric"><span>Cronイベント台帳</span><span id="recovery-backup-store-cron_events">未確認</span></div>
           </div>
+          <h3>backup内J計画scope・残差</h3>
+          <p class="muted">Operation PlanのJ checkpointを読み取り専用で検査します。scope digestはInboundRequest由来の診断相関であり、仕事IDではありません。J以外の台帳との相関、DB間の原子的同時点、復元可能性、復元・再開許可は成立しません。</p>
+          <pre id="recovery-backup-plan-scopes">未確認</pre>
           <pre id="recovery-backup-inspection-json">未確認</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls.</p></div>
