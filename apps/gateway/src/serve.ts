@@ -28,7 +28,7 @@ import {
   type ExecutionIntentReceipt,
 } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
-import { executionAdmissionForCommand, reconcileExecutionResults } from "./reconcile_execution_results.js";
+import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "./reconcile_execution_results.js";
 import { operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
@@ -456,8 +456,25 @@ export async function serve(): Promise<ServeShutdown> {
   let executor: Executor;
   const executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
   const executorApproval = createExecutorApprovalAuthority({ execution_store: executionStore });
-  gatewayLog.info("saved execution result reconciliation", reconcileExecutionResults(hds, executionStore));
-  gatewayLog.info("saved result memory reconciliation", { ready: hds.reconcileOperationPlanMemory() });
+  const startupRecovery = reconcileStartupExecutionState(hds, executionStore);
+  gatewayLog.info("startup saved-result reconciliation", {
+    adopted: startupRecovery.adopted,
+    deferred: startupRecovery.deferred,
+    memory_ready: startupRecovery.memory_ready,
+    result_store_readable: startupRecovery.result_store_readable,
+  });
+  if (!startupRecovery.ready) {
+    gatewayLog.error("Gateway startup blocked before inbound channels: saved result or memory reconciliation is unavailable or pending", {
+      deferred: startupRecovery.deferred,
+      memory_ready: startupRecovery.memory_ready,
+      result_store_readable: startupRecovery.result_store_readable,
+    });
+    cronEventStore.close();
+    operationPlanState.close();
+    hds.closeOperationPlanMemory();
+    executionStore.close();
+    throw new Error("gateway_startup_reconciliation_unresolved");
+  }
   let webchat: WebChatChannel;
 
   function recordCompleteHistory(input: CompleteHistoryAppendInput): CompleteHistoryEntry | null {

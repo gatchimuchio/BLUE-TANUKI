@@ -28,3 +28,37 @@ export function reconcileExecutionResults(hds: HDSUpperController, store: Gatewa
   }
   return { adopted, deferred };
 }
+
+/** 起動consumer。未決outbox/Mを回復できない場合、通常runtime開始前にfail-closedする。 */
+export function reconcileStartupExecutionState(hds: HDSUpperController, store: GatewayExecutionIntentStore): {
+  readonly ready: boolean;
+  readonly adopted: number;
+  readonly deferred: number;
+  readonly memory_ready: boolean;
+  readonly result_store_readable: boolean;
+} {
+  let resultStoreReadable = true;
+  const reconcile = () => {
+    try { return reconcileExecutionResults(hds, store); }
+    catch { resultStoreReadable = false; return { adopted: 0, deferred: 0 }; }
+  };
+  const reconcileMemory = () => {
+    try { return hds.reconcileOperationPlanMemory(); }
+    catch { return false; }
+  };
+  const firstPass = reconcile();
+  let adopted = firstPass.adopted;
+  let deferred = firstPass.deferred;
+  let memoryReady = reconcileMemory();
+
+  // M receipt回復で配送保留が解消した場合に限り、同じ不変receiptを一度だけ再照合する。
+  if (deferred > 0 && memoryReady) {
+    const retry = reconcile();
+    adopted += retry.adopted;
+    deferred = retry.deferred;
+    memoryReady = reconcileMemory();
+  }
+
+  return { ready: resultStoreReadable && deferred === 0 && memoryReady, adopted, deferred,
+    memory_ready: memoryReady, result_store_readable: resultStoreReadable };
+}

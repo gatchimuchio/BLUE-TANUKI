@@ -7,7 +7,7 @@
 | 工程 | 主な目的 | 状態 |
 |---|---|---|
 | QE_DESIGN | C/J/M、作用・記憶・外殻の全体設計 | 設計と現在コードの残差あり |
-| QE_BUILD | 一気通貫の全体系を先行実装 | 上記の計画・結果・作用基盤に、受領済みfile.search観測の限定C射影、J表示前引用照合、意味更新案v2のtarget record/version照合、単一宛先Gmail作用と結果不明のJ配送、J計画revision/statusの既存Control Center表示、合成loopback receiptのdigest-only非権威観測を接続。Developer HTTPからの合成runtime照合をbuild済みGateway smokeで確認し、Gmail送信承認では明示的な内容確認とpending command digest結合をBLUE WebChatに追加。WebChat接続成立時の認証済みRuntime Snapshot再取得と、chat socket／Gateway状態の表示分離も実装。2026-10-18にCron scheduleの安定event identity、private cursor、同一source直列consumerを部分接続し、schedule変更を同一commandのL3 final-review評価へ結合、永続storeを検証してからCronへ有効化する境界を部分接続。durable job復旧、approval lifecycleの再起動時照合、再起動後の未決イベントreconciliation、実provider receipt照会、D4Pocket画面接続、prior version、一般意味採用、全体系は未接続 |
+| QE_BUILD | 一気通貫の全体系を先行実装 | 上記の計画・結果・作用基盤に、受領済みfile.search観測の限定C射影、J表示前引用照合、意味更新案v2のtarget record/version照合、単一宛先Gmail作用と結果不明のJ配送、J計画revision/statusの既存Control Center表示、合成loopback receiptのdigest-only非権威観測を接続。Developer HTTPからの合成runtime照合をbuild済みGateway smokeで確認し、Gmail送信承認では明示的な内容確認とpending command digest結合をBLUE WebChatに追加。WebChat接続成立時の認証済みRuntime Snapshot再取得と、chat socket／Gateway状態の表示分離も実装。2026-10-18にCron scheduleの安定event identity、private cursor、同一source直列consumerを部分接続し、schedule変更を同一commandのL3 final-review評価へ結合、永続storeを検証してからCronへ有効化する境界を部分接続。さらに起動時の保存済み結果／M receipt照合が未解決なら通常inbound／Cron起動を止める障壁を部分接続。durable job復旧、単一writer／boot generation／fencing、approval lifecycleの再起動時照合、再起動後の未決Cron event reconciliation、旧世代resultの分離、実provider receipt照会、D4Pocket画面接続、prior version、一般意味採用、全体系は未接続 |
 | SYSTEM_SHAPED | 試験仕事が目的→結果→M→復帰まで通る | 全体成立未確認 |
 | BUILD_COVERED | 全機能群の結合形状を確認 | 未成立 |
 | QE_QC | 実物の全体検査・欠陥・原因・改善・再検査 | 未着手 |
@@ -15,6 +15,8 @@
 | QE_RELEASE_REVIEW | ownerによる独立公開・出荷判断 | 未着手 |
 
 2026-10-18にCronの未決dispatch状態を、event ID・sequence・delivery state・payload digest・時刻に限ったread-only通知として認証済みWebChatへ接続した。通知は外部結果の成功を断定せず、再送・解除・承認を行わない。再起動後の未決作用照合・復旧は未接続であり、E01.01／E03.02／QEB-03は`BUILD_GAP`。
+
+2026-10-18のQEB-03-E03.02-STARTUP-RECONCILIATION-BARRIERでは、Gatewayが起動時に既存Execution result outboxとM pendingを再照合し、未解決receiptが残る場合は通常inbound／Cron開始前に停止する経路を接続した。これはE03.02の部分実装であり、単一writer／boot generation／fencing、旧世代結果の分離、Cron eventとjob resultの相関、回復operator UIは未成立。E03.02／QEB-03は`BUILD_GAP`を維持する。
 
 198小単位（旧192＋Android/iOS各3）は実装索引であり、個別のQC/QAを198回行うための工程ではない。毎作業および各小単位の開始・切替・再開時に最新版の三点セットすべてと適用AGENTS.mdを読み直し、実際の仕事を先へつなぐBUILD_BATCHで施工・限定技術確認・Git保全を行う。
 
