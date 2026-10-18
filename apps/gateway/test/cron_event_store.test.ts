@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +25,29 @@ function makeStore(): { root: string; filepath: string; store: GatewayCronEventS
 }
 
 describe("GatewayCronEventStore", () => {
+  it("reopens and revalidates the selected database after a recovery replacement", () => {
+    const target = makeStore();
+    const backup = makeStore();
+    const oldEvent = makeEvent("cron:restore-target", 1, "old target state");
+    const restoredEvent = makeEvent("cron:restore-backup", 7, "restored backup state");
+    target.store.claim(oldEvent, 10);
+    target.store.settle(oldEvent, "handler_returned", 20);
+    backup.store.claim(restoredEvent, 70);
+    backup.store.settle(restoredEvent, "handler_returned", 80);
+
+    target.store.close();
+    backup.store.close();
+    copyFileSync(backup.filepath, target.filepath);
+    try {
+      target.store.reopenAfterRecoveryRestore();
+      expect(target.store.unresolvedEvents()).toEqual([]);
+      expect(target.store.claim(restoredEvent)).toEqual({ status: "duplicate", delivery_state: "handler_returned" });
+      expect(target.store.claim(oldEvent)).toEqual({ status: "accepted" });
+    } finally {
+      target.store.close();
+    }
+  });
+
   it("persists a high-water cursor, rejects duplicates and reverse order, and blocks unresolved delivery", () => {
     const { filepath, store } = makeStore();
     const first = makeEvent("cron:runtime:synthetic", 1_000, "合成内容 A");

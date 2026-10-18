@@ -130,6 +130,33 @@ describe("CronSchedulerChannel", () => {
     }
   });
 
+  it("pauses and resumes scheduled work only after recovery observation", async () => {
+    vi.useFakeTimers();
+    const received: unknown[] = [];
+    const ch = new CronSchedulerChannel({
+      tasks: [{ id: "restore", channel: "webchat", target: "local-user", content: "scheduled", interval_ms: 60_000 }],
+      log: () => undefined,
+    });
+    const handler = async (request: InboundRequest) => { received.push(request); };
+    try {
+      await ch.start(handler);
+      expect(ch.snapshot()[0]).toMatchObject({ running: true, recovery_hold: null });
+      expect(await ch.quiesceForRecoveryRestore()).toBe(true);
+      expect(ch.snapshot()[0]).toMatchObject({ running: false, recovery_hold: null });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(received).toHaveLength(0);
+
+      await ch.resumeAfterRecoveryRestore({ restore_attempted: true, observation_verified: false });
+      expect(ch.snapshot()[0]).toMatchObject({ running: false, recovery_hold: "restore_observation_unverified" });
+      expect(await ch.quiesceForRecoveryRestore()).toBe(true);
+      await ch.resumeAfterRecoveryRestore({ restore_attempted: true, observation_verified: true });
+      expect(ch.snapshot()[0]).toMatchObject({ running: true, recovery_hold: null });
+    } finally {
+      await ch.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("exposes multiple scheduled-message snapshots without exposing content", async () => {
     const now = new Date(2026, 4, 9, 6, 30, 0, 0);
     const ch = new CronSchedulerChannel({

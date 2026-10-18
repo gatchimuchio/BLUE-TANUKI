@@ -2051,7 +2051,8 @@ export async function buildRecoveryPostActionObservation(
     const predatesCurrentProcess = history.not_before_timestamp_ms !== undefined &&
       latest.entry.timestamp < history.not_before_timestamp_ms;
     if (options.mode === "in_process_restore") {
-      if (restoreEvidence.store_key !== "operation_plans" || history.not_before_timestamp_ms === undefined || predatesCurrentProcess) {
+      if ((restoreEvidence.store_key !== "operation_plans" && restoreEvidence.store_key !== "cron_events") ||
+          history.not_before_timestamp_ms === undefined || predatesCurrentProcess) {
         return { ...unverified, store_key: restoreEvidence.store_key,
           restore_backup_id_digest: restoreEvidence.restored_backup_id_digest ?? null };
       }

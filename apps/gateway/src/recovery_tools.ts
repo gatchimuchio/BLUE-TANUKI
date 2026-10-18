@@ -24,13 +24,14 @@ const CANONICAL_STORE_RESTORE_CONSUMERS: Record<CanonicalStateStoreKey, readonly
   m_state: ["hds_memory_store"],
   broker: [],
   operation_plans: [],
-  cron_events: ["gateway_cron_scheduler_and_approval_store"],
+  cron_events: [],
 };
 
 /**
- * J/M and Cron still lack a live quiesce boundary. Broker uses an atomic
- * Broker-owned snapshot transaction that preserves only the active restore receipt.
- * Operation Plans retain their dedicated in-process HDS refresh path.
+ * J/M still lack a live quiesce boundary. Cron restore has a serve-owned
+ * scheduler pause and store reopen path; Broker preserves its active restore
+ * receipt inside the Broker-owned snapshot transaction. Operation Plans retain
+ * their dedicated in-process HDS refresh path.
  */
 export function canonicalStoreRestoreConsumersNotQuiesced(storeKey: unknown): readonly string[] {
   if (typeof storeKey !== "string" || !Object.hasOwn(CANONICAL_STORE_RESTORE_CONSUMERS, storeKey)) return [];
@@ -98,6 +99,7 @@ export function normalizeRecoveryMutationArguments(
 export function createRecoveryMutationTools(
   env: NodeJS.ProcessEnv = process.env,
   getBrokerStore?: () => GatewayExecutionIntentStore | undefined,
+  options: { readonly cronEventsStoreQuiesced?: () => boolean } = {},
 ): readonly Tool[] {
   const restoreRecoveryTool: Tool = {
     name: "recovery.restore",
@@ -106,6 +108,9 @@ export function createRecoveryMutationTools(
     async invoke(raw, ctx?: ToolContext) {
       const args = normalizeRecoveryMutationArguments("recovery.restore", raw);
       if (canonicalStoreRestoreConsumersNotQuiesced(args.store_key).length > 0) {
+        throw new Error("canonical_state_restore_consumers_not_quiesced");
+      }
+      if (args.store_key === "cron_events" && options.cronEventsStoreQuiesced?.() !== true) {
         throw new Error("canonical_state_restore_consumers_not_quiesced");
       }
       if (args.store_key === "broker" && !/^[a-f0-9]{64}$/.test(ctx?.idempotency_key ?? "")) {

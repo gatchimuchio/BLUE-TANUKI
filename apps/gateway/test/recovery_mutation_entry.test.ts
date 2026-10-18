@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
+import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -15,12 +17,104 @@ const resumeToken = "recovery-l3-owner-resume-test-token";
 const inboundToken = "recovery-l3-inbound-test-token";
 const secretMarker = "LOCAL_ONLY_RECOVERY_TEST_SECRET";
 const children = new Set<ChildProcessWithoutNullStreams>();
+const temporaryRoots: string[] = [];
 
 afterEach(async () => {
   await Promise.all([...children].map(stopChild));
+  for (const root of temporaryRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+  }
 });
 
 describe("Recovery mutation HDS L3 entry", () => {
+  it("quiesces, restores, reopens, and reobserves the Cron event store under L3", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-restore-l3-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
+    const port = await reserveLoopbackPort();
+    writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const runtimeEnv = {
+      ...isolatedRuntimeEnvironment(root, envFile, historyFile, port),
+      BLUE_TANUKI_SCHEDULES_JSON: JSON.stringify([{
+        id: "cron-restore-test",
+        channel: "webchat",
+        target: "local-user",
+        content: "synthetic scheduled message",
+        interval_ms: 60_000,
+      }]),
+    };
+    const event = createCronEventIdentity(
+      "cron:restore-test:seed",
+      1,
+      createHash("sha256").update("synthetic cron recovery fixture").digest("hex"),
+    );
+    const seededStore = GatewayCronEventStore.fromEnvironment(runtimeEnv);
+    expect(seededStore.claim(event, 100)).toEqual({ status: "accepted" });
+    seededStore.settle(event, "handler_returned", 200);
+    seededStore.close();
+
+    const gateway = spawnGateway(runtimeEnv);
+    let gatewayStopped = false;
+    try {
+      await waitForHealth(port, gateway);
+      const backup = await requestJson(port, "/recovery/backup", {
+        method: "POST",
+        token: maintenanceToken,
+        body: {},
+      });
+      expect(backup.status).toBe(200);
+      const backupId = (backup.body.result as Record<string, unknown>).backup_id as string;
+
+      const queued = await requestJson(port, "/recovery/restore", {
+        method: "POST",
+        token: maintenanceToken,
+        body: { backup_id: backupId, store_key: "cron_events", confirm: "RESTORE" },
+      });
+      expect(queued.status, JSON.stringify(queued.body)).toBe(202);
+      expect(queued.body).toMatchObject({
+        ok: true,
+        result: {
+          status: "approval_required",
+          executed: false,
+          operation: "recovery.restore",
+          risk: "high",
+          approval_level: "L3_final_review",
+          final_review_required: true,
+        },
+      });
+
+      const approvalQueue = await requestJson(port, "/approval", { token: resumeToken });
+      const pending = (approvalQueue.body.pending_approvals as Array<Record<string, unknown>>)
+        .find((item) => item.operation === "recovery.restore");
+      expect(pending).toMatchObject({ risk: "high", approval_level: "L3_final_review", final_review_required: true });
+      const commandId = pending?.command_id as string;
+      const approvalToken = pending?.approval_token as string;
+      const approved = await requestJson(port, `/approval/${encodeURIComponent(commandId)}`, {
+        method: "POST",
+        token: resumeToken,
+        body: { verdict: "approve", approval_token: approvalToken },
+      });
+      expect(approved.status).toBe(200);
+      expect(approved.body, gateway.output.join("")).toMatchObject({
+        ok: true,
+        result: { approval: "approve", executed: true, status: "success" },
+      });
+
+      const runtime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(runtime.body.scheduled_tasks, gateway.output.join(""))
+        .toMatchObject([{ id: "cron-restore-test", running: true, recovery_hold: null }]);
+      await stopChild(gateway);
+      children.delete(gateway);
+      gatewayStopped = true;
+    } finally {
+      if (!gatewayStopped) {
+        await stopChild(gateway);
+        children.delete(gateway);
+      }
+    }
+  });
+
   it("binds plan restore to its exact L3 scope and rejects changed backup before state mutation", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-recovery-l3-"));
     const envFile = join(root, "product.env");
@@ -46,7 +140,6 @@ describe("Recovery mutation HDS L3 entry", () => {
       for (const [store_key, blocking_consumer] of [
         ["j_control", "hds_control_store"],
         ["m_state", "hds_memory_store"],
-        ["cron_events", "gateway_cron_scheduler_and_approval_store"],
       ] as const) {
         const blockedRestore = await requestJson(port, "/recovery/restore", {
           method: "POST",

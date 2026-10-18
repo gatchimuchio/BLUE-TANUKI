@@ -78,16 +78,23 @@ export function createCronEventIdentity(
  * mark. The cursor prevents duplicate dispatch but is not proof of job success.
  */
 export class GatewayCronEventStore {
-  private readonly db: DatabaseType;
+  private db: DatabaseType;
+  private readonly filepath: string;
+  private closed = false;
   private readonly verifyNoReplayDisposition?: (event_id: string, payload_digest: string) => boolean;
 
   constructor(filepath: string, opts: {
     verifyNoReplayDisposition?: (event_id: string, payload_digest: string) => boolean;
   } = {}) {
+    this.filepath = filepath;
     this.verifyNoReplayDisposition = opts.verifyNoReplayDisposition;
     mkdirSync(dirname(resolve(filepath)), { recursive: true });
     this.db = new DatabaseSync(filepath);
-    if (process.platform !== "win32") chmodSync(filepath, 0o600);
+    this.initializeDatabase();
+  }
+
+  private initializeDatabase(): void {
+    if (process.platform !== "win32") chmodSync(this.filepath, 0o600);
     try {
       this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA; PRAGMA foreign_keys=ON");
       this.db.exec(`CREATE TABLE IF NOT EXISTS cron_event_inbox (
@@ -142,6 +149,7 @@ export class GatewayCronEventStore {
       this.transaction(() => {});
     } catch (error) {
       this.db.close();
+      this.closed = true;
       throw error;
     }
   }
@@ -370,7 +378,26 @@ export class GatewayCronEventStore {
   }
 
   close(): void {
+    if (this.closed) return;
     this.db.close();
+    this.closed = true;
+  }
+
+  isClosed(): boolean {
+    return this.closed;
+  }
+
+  reopenAfterRecoveryRestore(): void {
+    if (!this.closed) throw new Error("cron_event_store_must_be_closed_before_restore_reopen");
+    this.db = new DatabaseSync(this.filepath);
+    this.closed = false;
+    this.initializeDatabase();
+    try {
+      this.recoverPendingApprovalHandoffs();
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
 
   private transaction<T>(fn: () => T): T {

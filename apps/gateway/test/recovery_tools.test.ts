@@ -95,9 +95,7 @@ describe("Recovery mutation tool boundary", () => {
     expect(canonicalStoreRestoreConsumersNotQuiesced("j_control")).toEqual(["hds_control_store"]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("m_state")).toEqual(["hds_memory_store"]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("broker")).toEqual([]);
-    expect(canonicalStoreRestoreConsumersNotQuiesced("cron_events")).toEqual([
-      "gateway_cron_scheduler_and_approval_store",
-    ]);
+    expect(canonicalStoreRestoreConsumersNotQuiesced("cron_events")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("operation_plans")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced(undefined)).toEqual([]);
 
@@ -110,5 +108,7 @@ describe("Recovery mutation tool boundary", () => {
       upstream_commit_hash: "fixture-commit",
       idempotency_key: "a".repeat(64),
     })).rejects.toThrow("broker_restore_execution_store_unavailable");
+    await expect(restore?.invoke({ backup_id: "fixture", store_key: "cron_events", confirm: "RESTORE" }))
+      .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
   });
 });

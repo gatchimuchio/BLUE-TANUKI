@@ -145,6 +145,8 @@ export class CronSchedulerChannel implements InboundChannel {
   private readonly contentProvider?: CronContentProvider;
   private readonly eventStore?: GatewayCronEventStore;
   private recoveryHold: CronTaskSnapshot["recovery_hold"] = null;
+  private recoveryRestorePause: { readonly handler: InboundHandler | null } | null = null;
+  private recoveryRestoreQuiescing = false;
 
   constructor(opts: CronSchedulerOptions) {
     this.logLine = opts.log;
@@ -184,6 +186,35 @@ export class CronSchedulerChannel implements InboundChannel {
     this.started = false;
     this.handler = null;
     while (this.pendingFires.size > 0) await Promise.all(Array.from(this.pendingFires));
+  }
+
+  async quiesceForRecoveryRestore(): Promise<boolean> {
+    if (this.recoveryRestorePause || this.recoveryRestoreQuiescing) return false;
+    this.recoveryRestoreQuiescing = true;
+    const handler = this.handler;
+    try {
+      await this.stop();
+      this.recoveryRestorePause = { handler };
+      return true;
+    } finally {
+      this.recoveryRestoreQuiescing = false;
+    }
+  }
+
+  async resumeAfterRecoveryRestore(options: {
+    readonly restore_attempted: boolean;
+    readonly observation_verified: boolean;
+  }): Promise<void> {
+    const pause = this.recoveryRestorePause;
+    if (!pause) throw new Error("cron_recovery_restore_not_quiesced");
+    if (options.restore_attempted && !options.observation_verified) {
+      this.holdForUnverifiedRestoreObservation();
+    } else if (options.restore_attempted && options.observation_verified &&
+        this.recoveryHold === "restore_observation_unverified") {
+      this.recoveryHold = null;
+    }
+    this.recoveryRestorePause = null;
+    if (pause.handler) await this.start(pause.handler);
   }
 
   holdForUnverifiedRestoreObservation(): void {

@@ -385,7 +385,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
 
   const tools = new ToolRegistry();
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
-  for (const tool of createRecoveryMutationTools(process.env, () => recoveryExecutionStore)) tools.register(tool);
+  let gatewayShuttingDown = false;
+  let cronEventsStoreQuiesced = false;
+  let cronEventsRestoreMaintenanceCommandId: string | null = null;
+  for (const tool of createRecoveryMutationTools(process.env, () => recoveryExecutionStore, {
+    cronEventsStoreQuiesced: () => cronEventsStoreQuiesced,
+  })) tools.register(tool);
   plugins.registerTools(tools);
   const llm = buildLLMBackendFromEnv();
 
@@ -890,12 +895,21 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     opts: { skip_approval?: boolean; actor?: string; approval_evaluation?: ApprovalEvaluation; command_digest?: string } = {},
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
+    if (cronEventsRestoreMaintenanceCommandId && cronEventsRestoreMaintenanceCommandId !== cmd.id) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
+        actor,
+        reason: "canonical_state_restore_in_progress",
+      });
+      return { status: "canonical_state_restore_in_progress" };
+    }
     const restoreStoreKey = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore"
       ? cmd.payload.arguments.store_key
       : undefined;
     const restoreConsumersNotQuiesced = canonicalStoreRestoreConsumersNotQuiesced(restoreStoreKey);
     const operationPlanRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       cmd.payload.arguments.store_key === "operation_plans" && cmd.payload.arguments.confirm === "RESTORE";
+    const cronEventsRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
+      cmd.payload.arguments.store_key === "cron_events" && cmd.payload.arguments.confirm === "RESTORE";
     let executionEvaluation = opts.approval_evaluation ?? null;
     if (!hds.operationPlanCommandIsCurrent(cmd)) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_binding_stale" });
@@ -1116,6 +1130,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (!executionEvaluation) {
       throw new Error("approval evaluation proof is required before executor execution");
     }
+    if (cronEventsRestoreMaintenanceCommandId && cronEventsRestoreMaintenanceCommandId !== cmd.id) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
+        actor,
+        reason: "canonical_state_restore_in_progress",
+      });
+      return { status: "canonical_state_restore_in_progress" };
+    }
     const approvedCommand = executorApproval.approve(cmd, {
       source: opts.skip_approval ? "human_final_review" : "approval_gate",
       decision: opts.skip_approval ? "approve" : "allow",
@@ -1138,18 +1159,88 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       gatewayLog.warn("operation-plan restore was not started", { command_id: cmd.id, reason: "plan_refresh_busy" });
       return { status: "operation_plan_recovery_refresh_busy" };
     }
+    let cronEventsRestoreQuiesced = false;
+    const reopenCronEventStoreAfterRestore = () => {
+      if (cronEventsRestoreQuiesced && cronEventStore.isClosed()) {
+        cronEventStore.reopenAfterRecoveryRestore();
+        cronEventsStoreQuiesced = false;
+      }
+    };
+    const finishCronEventRestore = async (observationVerified: boolean) => {
+      if (!cronEventsRestoreQuiesced) return;
+      if (!gatewayShuttingDown) {
+        await cron.resumeAfterRecoveryRestore({ restore_attempted: true, observation_verified: observationVerified });
+      }
+      cronEventsRestoreQuiesced = false;
+      cronEventsRestoreMaintenanceCommandId = null;
+    };
+    if (cronEventsRestore) {
+      if (!await cron.quiesceForRecoveryRestore()) {
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "cron_recovery_restore_busy" });
+        return { status: "cron_recovery_restore_busy" };
+      }
+      if (Array.from(pendingApprovals.values()).some((pending) => pending.cron_event !== undefined)) {
+        await cron.resumeAfterRecoveryRestore({ restore_attempted: false, observation_verified: false });
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
+          actor,
+          reason: "cron_approval_handoff_pending",
+        });
+        return { status: "cron_approval_handoff_pending" };
+      }
+      cronEventsRestoreMaintenanceCommandId = cmd.id;
+      while (executionTasks.size > 0) await Promise.allSettled(Array.from(executionTasks));
+      try {
+        cronEventStore.close();
+        cronEventsStoreQuiesced = true;
+        cronEventsRestoreQuiesced = true;
+      } catch {
+        cronEventsRestoreMaintenanceCommandId = null;
+        if (cronEventStore.isClosed()) {
+          try {
+            cronEventStore.reopenAfterRecoveryRestore();
+            cronEventsStoreQuiesced = false;
+          } catch {
+            cronEventsRestoreMaintenanceCommandId = cmd.id;
+            throw new Error("cron_event_store_quiescence_failed");
+          }
+        }
+        await cron.resumeAfterRecoveryRestore({ restore_attempted: false, observation_verified: false });
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "cron_event_store_quiescence_failed" });
+        return { status: "cron_event_store_quiescence_failed" };
+      }
+    }
     const executionController = new AbortController();
     if (emergencyStop.active) executionController.abort();
     executionControllers.add(executionController);
     let fb: ExecuteFeedback;
-    const executionTask = executor.execute(approvedCommand, { save_result_delivery: planBound,
-      signal: executionController.signal, before_tool_dispatch: () => {
-      if (emergencyStop.active) throw new Error("file_search_worker_emergency_stop_active");
-    } });
+    let executionTask: Promise<ExecuteFeedback>;
+    try {
+      executionTask = executor.execute(approvedCommand, { save_result_delivery: planBound,
+        signal: executionController.signal, before_tool_dispatch: () => {
+          if (emergencyStop.active) throw new Error("file_search_worker_emergency_stop_active");
+        } });
+    } catch (error) {
+      try {
+        reopenCronEventStoreAfterRestore();
+        await finishCronEventRestore(false);
+      } catch {
+        throw new Error("cron_event_store_reopen_failed");
+      }
+      throw error;
+    }
     executionTasks.add(executionTask);
     try {
       fb = await executionTask;
+    } catch (error) {
+      try {
+        reopenCronEventStoreAfterRestore();
+        await finishCronEventRestore(false);
+      } catch {
+        throw new Error("cron_event_store_reopen_failed");
+      }
+      throw error;
     } finally { executionControllers.delete(executionController); executionTasks.delete(executionTask); }
+    reopenCronEventStoreAfterRestore();
     if (fb.status === "success" && cmd.type === "tool_call" &&
         cmd.payload.tool_name === "schedule.resolve_event") {
       if (!executionEvaluation) throw new Error("cron event disposition requires its HDS approval evaluation");
@@ -1296,11 +1387,84 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         }
       }
     }
+    if (cronEventsRestoreQuiesced) {
+      let observationVerified = false;
+      const restoreResultEvidence = fb.status === "success"
+        ? recoveryStoreRestoreHistoryEvidence(fb.result)
+        : null;
+      if (executionHistory && finalOutputRecorded && restoreResultEvidence?.store_key === "cron_events") {
+        const historySize = completeHistory.size();
+        const historySkippedCount = completeHistory.skippedCount();
+        const historyChainValid = completeHistory.verify();
+        const historyIncompleteAtStart = recoveryObservationHistoryIncomplete;
+        const historyAtCapacity = completeHistoryMaxEntries !== undefined && historySize >= completeHistoryMaxEntries;
+        const historyEntries = completeHistory.replay().filter(
+          (entry): entry is CompleteHistoryEntry & { kind: "execution_history" | "final_output" } =>
+            entry.kind === "execution_history" || entry.kind === "final_output",
+        );
+        const historyEvidence = {
+          entries: historyEntries,
+          chain_valid: historyChainValid,
+          skipped_count: historySkippedCount +
+            (historyAtCapacity || historyIncompleteAtStart ? 1 : 0),
+          not_before_timestamp_ms: recoveryObservationStartedAtMs,
+        };
+        const historyComplete = !!completeHistoryFile && historyChainValid && historySkippedCount === 0 &&
+          !historyAtCapacity && !historyIncompleteAtStart;
+        if (historyComplete) {
+          try {
+            const observation = await buildRecoveryPostActionObservation(historyEvidence, process.env, {
+              mode: "in_process_restore",
+              expected_command_id: cmd.id,
+            });
+            const historyStable = historySize === completeHistory.size() &&
+              historySkippedCount === completeHistory.skippedCount() && historyChainValid === completeHistory.verify() &&
+              historyIncompleteAtStart === recoveryObservationHistoryIncomplete;
+            observationVerified = historyStable && observation.status === "matched" &&
+              observation.operation === "restore" && observation.store_key === "cron_events" &&
+              observation.restore_backup_id_digest === restoreResultEvidence.restored_backup_id_digest &&
+              !cronRestoreObservationRequiresHold(observation);
+            if (!observationVerified) {
+              gatewayLog.warn("Cron restore remains held after post-action observation", {
+                command_id: cmd.id,
+                history_stable: historyStable,
+                observation_status: observation.status,
+                observation_operation: observation.operation,
+                observation_store_key: observation.store_key,
+                store_ledger_status: observation.store_ledger_status,
+                store_ledger_residual_count: observation.store_ledger_residual_count,
+                restore_backup_id_digest_matches:
+                  observation.restore_backup_id_digest === restoreResultEvidence.restored_backup_id_digest,
+              });
+            }
+          } catch {
+            gatewayLog.warn("Cron restore remains held after post-action observation", {
+              command_id: cmd.id,
+              reason: "restore_observation_failed",
+            });
+          }
+        } else {
+          gatewayLog.warn("Cron restore remains held after post-action observation", {
+            command_id: cmd.id,
+            reason: "restore_history_incomplete",
+          });
+        }
+      } else {
+        gatewayLog.warn("Cron restore remains held after post-action observation", {
+          command_id: cmd.id,
+          reason: "restore_result_unverified",
+        });
+      }
+      await finishCronEventRestore(observationVerified);
+    }
     if (content) await dispatcher.dispatch({ channel: origin.channel, target: replyTarget(origin), content }, { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
     return { status: finalized.reviewed_feedback.status };
   }
 
   async function resumePendingApproval(command_id: string, verdict: "approve" | "reject" | "block", ctx: WebChatResumeContext): Promise<unknown> {
+    if (cronEventsRestoreMaintenanceCommandId) {
+      return { executed: false, status: "canonical_state_restore_in_progress" };
+    }
     const pending = pendingApprovals.get(command_id);
     if (!pending) {
       if (cronEventStore.hasCronApprovalReference(command_id)) {
@@ -1439,6 +1603,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     toolName: RecoveryToolName,
     rawArguments: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
+    if (cronEventsRestoreMaintenanceCommandId) {
+      return {
+        status: "blocked_restore_in_progress",
+        executed: false,
+        operation: toolName,
+        l3_request_created: false,
+        used_for_authority: false,
+        may_execute: false,
+      };
+    }
     const snapshot = await buildRecoverySnapshot(process.env);
     if (toolName !== "recovery.restore" && !snapshot.env_file.configured) {
       throw new Error("env_file_required");
@@ -1447,6 +1621,22 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ? snapshot.recovery_backups.latest_backup_id
       : null;
     const arguments_ = normalizeRecoveryMutationArguments(toolName, rawArguments, { latestBackupId });
+    if (toolName === "recovery.restore" && arguments_.store_key === "cron_events" &&
+        Array.from(pendingApprovals.values()).some((pending) => pending.cron_event !== undefined)) {
+      return {
+        status: "blocked_cron_approval_handoff_pending",
+        executed: false,
+        operation: toolName,
+        restore_effect_scope: "entire_selected_store",
+        store_key: "cron_events",
+        blocking_consumers: ["pending_cron_approval_handoff"],
+        reason: "cron_approval_handoff_pending",
+        l3_request_created: false,
+        used_for_authority: false,
+        may_execute: false,
+        next_action: "未処理のCron承認を完了または取消してから、Cronイベント台帳の復元を再申請してください。",
+      };
+    }
     const restoreConsumersNotQuiesced = toolName === "recovery.restore"
       ? canonicalStoreRestoreConsumersNotQuiesced(arguments_.store_key)
       : [];
@@ -1922,6 +2112,15 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
 
   function cronNoReplayReview(command: ExecuteCommand): WebChatApprovalQueueItem["cron_no_replay_review"] {
     if (command.type !== "tool_call" || command.payload.tool_name !== "schedule.resolve_event") return undefined;
+    if (cronEventsRestoreMaintenanceCommandId) {
+      return {
+        kind: "cron_no_replay",
+        status: "verification_unavailable",
+        disposition: "acknowledge_no_replay",
+        original_outcome: "unknown",
+        eligible: false,
+      };
+    }
     const rawArgs = command.payload.arguments;
     const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
       ? rawArgs as Record<string, unknown>
@@ -2607,6 +2806,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   return {
     shutdown: async () => {
       gatewayLog.info("shutting down");
+      gatewayShuttingDown = true;
       clearInterval(failureMemoryVerificationTimer);
       emergencyStop.active = true;
       for (const controller of executionControllers) controller.abort();
