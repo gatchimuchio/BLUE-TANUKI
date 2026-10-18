@@ -128,25 +128,41 @@ describe("GatewayCronEventStore", () => {
   it("keeps event payload out of the durable cursor and fails closed on inbox/outbox mismatch", () => {
     const { filepath, store } = makeStore();
     const event = makeEvent("cron:runtime:private", 4_000, "secret synthetic payload");
+    const verifiedEvent = makeEvent("cron:runtime:verified", 4_001, "verified synthetic payload");
+    const orphanEvent = makeEvent("cron:runtime:orphan", 4_002, "orphan synthetic payload");
     expect(store.claim(event)).toEqual({ status: "accepted" });
     store.settle(event, "handler_returned");
-    store.close();
+    expect(store.claim(verifiedEvent)).toEqual({ status: "accepted" });
+    expect(store.claim(orphanEvent)).toEqual({ status: "accepted" });
 
     const db = new DatabaseSync(filepath);
     try {
+      db.exec("PRAGMA foreign_keys=OFF");
       const rows = db.prepare("SELECT * FROM cron_event_inbox").all();
       expect(JSON.stringify(rows)).not.toContain("secret synthetic payload");
-      db.exec("DELETE FROM cron_event_outbox");
+      db.prepare("DELETE FROM cron_event_outbox WHERE source_digest=?")
+        .run(createHash("sha256").update(event.source).digest("hex"));
+      db.prepare("DELETE FROM cron_event_inbox WHERE source_digest=?")
+        .run(createHash("sha256").update(orphanEvent.source).digest("hex"));
     } finally {
       db.close();
     }
 
-    const reopened = new GatewayCronEventStore(filepath);
     try {
-      expect(() => reopened.claim(event)).toThrow(/cursor_integrity/);
-      expect(() => reopened.unresolvedEvents()).toThrow(/cursor_integrity/);
+      expect(() => store.claim(event)).toThrow(/cursor_integrity/);
+      expect(() => store.claim(orphanEvent)).toThrow(/orphan_outbox/);
+      expect(() => store.unresolvedEvents()).toThrow(/cursor_integrity|orphan_outbox/);
+      const inspection = store.inspectUnresolvedEventsForNotification();
+      expect(inspection.invalid_record_count).toBe(2);
+      expect(inspection.events).toEqual([expect.objectContaining({
+        event_id: verifiedEvent.event_id,
+        payload_digest: verifiedEvent.payload_digest,
+        delivery_state: "dispatching",
+      })]);
+      expect(JSON.stringify(inspection)).not.toContain(event.event_id);
+      expect(JSON.stringify(inspection)).not.toContain(orphanEvent.event_id);
     } finally {
-      reopened.close();
+      store.close();
     }
   });
 

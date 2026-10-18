@@ -5,7 +5,11 @@ import type {
   WebChatAuthorityTraceItem,
   WebChatNotificationItem,
 } from "@blue-tanuki/channel-webchat";
-import type { CronApprovalHandoffSnapshot, CronEventCursorSnapshot } from "./cron_event_store.js";
+import type {
+  CronApprovalHandoffSnapshot,
+  CronEventCursorSnapshot,
+  CronEventNotificationInspection,
+} from "./cron_event_store.js";
 
 interface OperationPlanCorrelationProjection {
   readonly schema_version: string;
@@ -48,10 +52,13 @@ export interface ResidentNotificationInput {
   limit?: number;
 }
 
-export type CronNotificationStateReadFailure = "unresolved_events" | "interrupted_approvals";
+export type CronNotificationStateReadFailure =
+  | "unresolved_events"
+  | "unresolved_events_partial"
+  | "interrupted_approvals";
 
 export interface CronNotificationStateReader {
-  unresolvedEvents(): CronEventCursorSnapshot[];
+  inspectUnresolvedEventsForNotification(): CronEventNotificationInspection;
   interruptedApprovalHandoffs(): CronApprovalHandoffSnapshot[];
 }
 
@@ -67,7 +74,12 @@ export function readCronNotificationState(store: CronNotificationStateReader): C
   let interruptedApprovals: CronApprovalHandoffSnapshot[] = [];
   const readFailures: CronNotificationStateReadFailure[] = [];
   try {
-    unresolvedEvents = store.unresolvedEvents();
+    const inspection = store.inspectUnresolvedEventsForNotification();
+    if (!Number.isSafeInteger(inspection.invalid_record_count) || inspection.invalid_record_count < 0) {
+      throw new Error("cron_notification_inspection_count_invalid");
+    }
+    unresolvedEvents = [...inspection.events];
+    if (inspection.invalid_record_count > 0) readFailures.push("unresolved_events_partial");
   } catch {
     readFailures.push("unresolved_events");
   }
@@ -105,20 +117,26 @@ export function buildResidentNotificationsSnapshot(
   }
 
   for (const failure of input.cron_state_read_failures ?? []) {
-    if (failure !== "unresolved_events" && failure !== "interrupted_approvals") continue;
+    if (failure !== "unresolved_events" && failure !== "unresolved_events_partial" &&
+        failure !== "interrupted_approvals") continue;
+    const unresolvedEvents = failure === "unresolved_events" || failure === "unresolved_events_partial";
     notifications.push({
       id: `cron-state-unavailable:${failure}`,
       kind: "cron_recovery_state_unavailable",
       severity: "warning",
       title: "Scheduled recovery state could not be verified",
-      message: failure === "unresolved_events"
+      message: failure === "unresolved_events_partial"
+        ? "Some unresolved schedule-event records could not be verified and were omitted; the list may be incomplete. No recovery action was taken."
+        : failure === "unresolved_events"
         ? "The unresolved schedule-event list could not be verified; its state may be incomplete. No recovery action was taken."
         : "The interrupted schedule-approval list could not be verified; its state may be incomplete. No recovery action was taken.",
       timestamp: now,
-      source: failure === "unresolved_events" ? "cron_event_cursor" : "cron_approval_handoff",
+      source: unresolvedEvents ? "cron_event_cursor" : "cron_approval_handoff",
       read_only: true,
       authority: "display_only",
-      next_action: "Preserve the recovery state and verify pending schedule work before creating a duplicate request.",
+      next_action: unresolvedEvents
+        ? "Preserve the recovery state and verify pending schedule work before creating a duplicate request."
+        : "Preserve the recovery state and verify pending schedule approvals before taking another action.",
     });
   }
 

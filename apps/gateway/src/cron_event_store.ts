@@ -27,6 +27,11 @@ export interface CronEventCursorSnapshot {
   readonly updated_at_ms: number;
 }
 
+export interface CronEventNotificationInspection {
+  readonly events: readonly CronEventCursorSnapshot[];
+  readonly invalid_record_count: number;
+}
+
 export interface CronApprovalHandoffSnapshot {
   readonly source_digest: string;
   readonly sequence: number;
@@ -215,32 +220,34 @@ export class GatewayCronEventStore {
   }
 
   unresolvedEvents(): CronEventCursorSnapshot[] {
-    const rows = this.db.prepare(`SELECT i.source_digest,i.sequence,i.event_id,i.payload_digest,i.delivery_state,i.updated_at_ms,
-      o.event_id AS outbox_event_id,o.sequence AS outbox_sequence,o.payload_digest AS outbox_payload_digest,
-      o.delivery_state AS outbox_delivery_state,o.updated_at_ms AS outbox_updated_at_ms
-      FROM cron_event_inbox i LEFT JOIN cron_event_outbox o ON o.source_digest=i.source_digest
-      ORDER BY i.updated_at_ms DESC,i.source_digest ASC`).all() as Array<{
-        source_digest: string;
-        sequence: number;
-        event_id: string;
-        payload_digest: string;
-        delivery_state: string;
-        updated_at_ms: number;
-        outbox_event_id?: string;
-        outbox_sequence?: number;
-        outbox_payload_digest?: string;
-        outbox_delivery_state?: string;
-        outbox_updated_at_ms?: number;
-      }>;
-    const orphan = this.db.prepare(`SELECT 1 AS present FROM cron_event_outbox o
-      LEFT JOIN cron_event_inbox i ON i.source_digest=o.source_digest WHERE i.source_digest IS NULL LIMIT 1`).get();
-    if (orphan) throw new Error("cron_event_store_orphan_outbox_detected");
-    return rows
+    if (this.readOrphanOutboxCount() > 0) throw new Error("cron_event_store_orphan_outbox_detected");
+    return this.readUnresolvedEventRows()
       .map((row) => {
         const cursor = parseCursorRow(row.source_digest, row);
         return { ...cursor, resolution_state: this.resolutionState(cursor.event_id, cursor.payload_digest) };
       })
       .filter((row) => row.delivery_state !== "handler_returned");
+  }
+
+  /** Read-only notification projection that keeps independently verified sources visible. */
+  inspectUnresolvedEventsForNotification(): CronEventNotificationInspection {
+    const rows = this.readUnresolvedEventRows();
+    let invalidRecordCount = this.readOrphanOutboxCount();
+    const events: CronEventCursorSnapshot[] = [];
+    for (const row of rows) {
+      try {
+        const cursor = parseCursorRow(row.source_digest, row);
+        if (cursor.delivery_state !== "handler_returned") {
+          events.push({
+            ...cursor,
+            resolution_state: this.resolutionState(cursor.event_id, cursor.payload_digest),
+          });
+        }
+      } catch {
+        invalidRecordCount += 1;
+      }
+    }
+    return { events, invalid_record_count: invalidRecordCount };
   }
 
   unresolvedEvent(event_id: string, payload_digest: string): CronEventCursorSnapshot | undefined {
@@ -378,6 +385,23 @@ export class GatewayCronEventStore {
     }
   }
 
+  private readUnresolvedEventRows(): CronEventCursorRow[] {
+    return this.db.prepare(`SELECT i.source_digest,i.sequence,i.event_id,i.payload_digest,i.delivery_state,i.updated_at_ms,
+      o.event_id AS outbox_event_id,o.sequence AS outbox_sequence,o.payload_digest AS outbox_payload_digest,
+      o.delivery_state AS outbox_delivery_state,o.updated_at_ms AS outbox_updated_at_ms
+      FROM cron_event_inbox i LEFT JOIN cron_event_outbox o ON o.source_digest=i.source_digest
+      ORDER BY i.updated_at_ms DESC,i.source_digest ASC`).all() as unknown as CronEventCursorRow[];
+  }
+
+  private readOrphanOutboxCount(): number {
+    const result = this.db.prepare(`SELECT COUNT(*) AS count FROM cron_event_outbox o
+      LEFT JOIN cron_event_inbox i ON i.source_digest=o.source_digest WHERE i.source_digest IS NULL`).get() as { count: number };
+    if (!Number.isSafeInteger(result.count) || result.count < 0) {
+      throw new Error("cron_event_store_orphan_outbox_count_invalid");
+    }
+    return result.count;
+  }
+
   private readCurrentCursor(source_digest: string): {
     sequence: number;
     event_id: string;
@@ -430,6 +454,20 @@ interface CronApprovalHandoffRow {
   state: string;
   created_at_ms: number;
   updated_at_ms: number;
+}
+
+interface CronEventCursorRow {
+  source_digest: string;
+  sequence: number;
+  event_id: string;
+  payload_digest: string;
+  delivery_state: string;
+  updated_at_ms: number;
+  outbox_event_id?: string;
+  outbox_sequence?: number;
+  outbox_payload_digest?: string;
+  outbox_delivery_state?: string;
+  outbox_updated_at_ms?: number;
 }
 
 function validateApprovalHandoffInput(

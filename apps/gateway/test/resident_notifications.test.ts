@@ -14,7 +14,7 @@ describe("buildResidentNotificationsSnapshot", () => {
     };
     let executionReads = 0;
     const state = readCronNotificationState({
-      unresolvedEvents() {
+      inspectUnresolvedEventsForNotification() {
         throw new Error("RAW_CRON_CURSOR_ERROR");
       },
       interruptedApprovalHandoffs() {
@@ -65,7 +65,7 @@ describe("buildResidentNotificationsSnapshot", () => {
       resolution_state: "unacknowledged" as const, updated_at_ms: 900,
     };
     const state = readCronNotificationState({
-      unresolvedEvents: () => [event],
+      inspectUnresolvedEventsForNotification: () => ({ events: [event], invalid_record_count: 0 }),
       interruptedApprovalHandoffs() {
         throw new Error("RAW_CRON_APPROVAL_ERROR");
       },
@@ -95,7 +95,7 @@ describe("buildResidentNotificationsSnapshot", () => {
 
   it("reports both Cron projections unavailable without replacing unrelated notices", () => {
     const state = readCronNotificationState({
-      unresolvedEvents() { throw new Error("RAW_CURSOR_ERROR"); },
+      inspectUnresolvedEventsForNotification() { throw new Error("RAW_CURSOR_ERROR"); },
       interruptedApprovalHandoffs() { throw new Error("RAW_APPROVAL_ERROR"); },
     });
     const notifications = buildResidentNotificationsSnapshot({
@@ -118,6 +118,40 @@ describe("buildResidentNotificationsSnapshot", () => {
       "schedule_fired",
     ]);
     expect(JSON.stringify(notifications)).not.toMatch(/RAW_(CURSOR|APPROVAL)_ERROR/);
+  });
+
+  it("keeps verified schedule events visible and warns when invalid cursor rows were omitted", () => {
+    const event = {
+      source_digest: "a".repeat(64), sequence: 17, event_id: `cron-${"b".repeat(64)}`,
+      payload_digest: "c".repeat(64), delivery_state: "outcome_unknown" as const,
+      resolution_state: "unacknowledged" as const, updated_at_ms: 950,
+    };
+    const state = readCronNotificationState({
+      inspectUnresolvedEventsForNotification: () => ({ events: [event], invalid_record_count: 2 }),
+      interruptedApprovalHandoffs: () => [],
+    });
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 1000,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [],
+      unresolved_cron_events: state.unresolved_events,
+      interrupted_cron_approvals: state.interrupted_approvals,
+      cron_state_read_failures: state.read_failures,
+    });
+
+    expect(state.read_failures).toEqual(["unresolved_events_partial"]);
+    expect(notifications.map((item) => item.kind)).toEqual([
+      "cron_recovery_state_unavailable",
+      "schedule_delivery_unknown",
+    ]);
+    expect(notifications[0]).toMatchObject({
+      source: "cron_event_cursor",
+      read_only: true,
+      authority: "display_only",
+      message: expect.stringContaining("Some unresolved schedule-event records could not be verified and were omitted"),
+    });
+    expect(notifications[1]).toMatchObject({ kind: "schedule_delivery_unknown", request_id: event.event_id });
   });
 
   it("shows only unsettled cron cursor identity and digest as a read-only notice", () => {
