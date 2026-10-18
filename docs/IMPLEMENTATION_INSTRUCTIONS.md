@@ -22,6 +22,8 @@ selected-store restoreの成功結果から、固定store keyと復元直後のt
 
 E03.03／QEB-03=`BUILD_GAP`を維持する。fingerprint一致は復元直後の対象DB bytesとの一致だけを示し、job復旧identity、store間atomicity、意味的な仕事状態、復旧可能性、自動resumeを成立させない。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。別repo、実業務作用、公開・出荷判断なし。次consumerは再起動後の選択store限定ledger構造・残差観測。
 
+実装commit=`803cd29975e664cbdee1100ec2ccba54ac521bfd`を`main`へpushし、push後のlocal／remote mainとlocal branch／remote tag二世代を照合した。実装push直後のbackup refsは現世代=`803cd29975e664cbdee1100ec2ccba54ac521bfd`、前世代=`854965b9b8540094498c44dd09cc3bda538f384f`。本closeout記録を含むdocs-only commitもpushし、最終local／remote mainと現世代refは同一HEAD、前世代refは`854965b9b8540094498c44dd09cc3bda538f384f`、worktree cleanを再確認する。
+
 ## 前回のBUILD_BATCH実績
 
 `QEB-03-E03.03-RECOVERY-SELECTIVE-STORE-RESTORE` は開始HEAD／`origin/main`=`e2fded682628aa1ea2b16d264b98cca4aa5454af`、開始worktree cleanで開始した。rev2.3三点正本、適用AGENTS.md、作業標準要領、現行指示、E03.03に関する現物を再読した。編集前のlocal recovery branch／remote backup tag二世代は現世代=`e2fded682628aa1ea2b16d264b98cca4aa5454af`、前世代=`79b7182326d9ec3efc79f26ae089db00a11143e3`で一致していた。
