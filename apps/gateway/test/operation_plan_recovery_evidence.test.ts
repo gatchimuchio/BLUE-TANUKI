@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 import type { RecoveryPostActionObservation } from "../src/recovery_surface.js";
@@ -17,6 +18,8 @@ function observation(overrides: Partial<RecoveryPostActionObservation> = {}): Re
     store_key: "operation_plans",
     operation_digest: "a".repeat(64),
     result_digest: "b".repeat(64),
+    command_id_digest: createHash("sha256").update("recovery-command-1").digest("hex"),
+    restored_state_digest: "d".repeat(64),
     store_ledger_status: "verified",
     store_ledger_residual_count: 0,
     plan_residuals: planIds.map((plan_id) => ({ plan_id_digest: operationPlanDigest(plan_id), status: "verified" as const,
@@ -37,6 +40,7 @@ describe("Recovery observationからHDS計画保留を導出", () => {
   it("cleanな計画証拠は観測状態のまま渡し、権限化しない", () => {
     const evidence = operationPlanRecoveryEvidenceFromObservation({ observation: observation(), checkpoint, history_complete: true });
     expect(evidence).toMatchObject({ scope: "restored_operation_plans", used_for_authority: false, may_execute: false,
+      provenance: { source: "recovery_restore", command_id_digest: createHash("sha256").update("recovery-command-1").digest("hex") },
       plans: planIds.map((plan_id) => ({ plan_id_digest: operationPlanDigest(plan_id), restore_membership: "restored",
         integrity: "verified", dependency_status: "observed" })) });
   });

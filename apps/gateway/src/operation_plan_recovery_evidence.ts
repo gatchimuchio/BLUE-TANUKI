@@ -2,11 +2,22 @@ import { operationPlanDigest, type OperationPlanRecoveryEvidence } from "@blue-t
 import type { OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 import type { RecoveryPostActionObservation } from "./recovery_surface.js";
 
-function unverifiedHistoryEvidence(checkpointDigest: string): OperationPlanRecoveryEvidence {
+function unverifiedHistoryEvidence(
+  checkpointDigest: string,
+  observation?: RecoveryPostActionObservation,
+): OperationPlanRecoveryEvidence {
   return {
     schema_version: "operation-plan-recovery-evidence.v1",
     scope: "unverified_history",
     checkpoint_digest: checkpointDigest,
+    provenance: {
+      source: observation?.operation === "restore" ? "recovery_restore" : "unverified_history",
+      command_id_digest: observation?.command_id_digest ?? null,
+      operation_digest: observation?.operation_digest ?? null,
+      result_digest: observation?.result_digest ?? null,
+      restore_backup_id_digest: observation?.restore_backup_id_digest ?? null,
+      restored_state_digest: observation?.restored_state_digest ?? null,
+    },
     plans: [],
     used_for_authority: false,
     may_execute: false,
@@ -23,12 +34,12 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
   if (plans.length === 0) return undefined;
   const checkpointDigest = operationPlanDigest(input.checkpoint);
   if (!input.history_complete || (input.observation.status === "unverified" && input.observation.operation === null)) {
-    return unverifiedHistoryEvidence(checkpointDigest);
+    return unverifiedHistoryEvidence(checkpointDigest, input.observation);
   }
   const observation = input.observation;
   if (observation.operation !== "restore") return undefined;
   if (observation.store_key !== "operation_plans") return observation.store_key === null
-    ? unverifiedHistoryEvidence(checkpointDigest) : undefined;
+    ? unverifiedHistoryEvidence(checkpointDigest, observation) : undefined;
 
   const evidencePlans = plans.map((planState) => {
     const planIdDigest = operationPlanDigest(planState.revisions[0]!.plan.plan_id);
@@ -68,6 +79,14 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
     schema_version: "operation-plan-recovery-evidence.v1",
     scope: "restored_operation_plans",
     checkpoint_digest: checkpointDigest,
+    provenance: {
+      source: "recovery_restore",
+      command_id_digest: observation.command_id_digest,
+      operation_digest: observation.operation_digest,
+      result_digest: observation.result_digest,
+      restore_backup_id_digest: observation.restore_backup_id_digest,
+      restored_state_digest: observation.restored_state_digest,
+    },
     plans: evidencePlans,
     used_for_authority: false,
     may_execute: false,

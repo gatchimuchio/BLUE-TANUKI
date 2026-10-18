@@ -6,7 +6,9 @@ export {
   type PersistenceLedgerInspectionUpdate,
 } from "./保存取引.js";
 export { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
-  type OperationPlanRecoveryEvidence, type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
+  type OperationPlanRecoveryEvidence, type OperationPlanRecoveryEvidenceProvenance,
+  type OperationPlanRecoveryHoldState, type OperationPlanRecoveryHoldProvenance,
+  type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
 export { verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
 export {
   DOCUMENT_ORGANIZATION_MAX_CYCLES,

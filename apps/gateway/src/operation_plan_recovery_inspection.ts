@@ -98,8 +98,11 @@ function verifyOperationPlanRecoverySchema(database: DatabaseType): boolean {
   const rows = database.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE type IN ('table','trigger')")
     .all() as { type: string; name: string; tbl_name: string; sql: string | null }[];
   const tables = rows.filter((row) => row.type === "table");
-  if (tables.length !== 1 || tables[0]?.name !== "operation_plan_state" || rows.some((row) => row.type === "trigger")) return false;
-  if (typeof tables[0]?.sql !== "string" || !/\bSTRICT\b/i.test(tables[0].sql)) return false;
+  const tableNames = new Set(tables.map((row) => row.name));
+  if ((tables.length !== 1 && tables.length !== 2) || !tableNames.has("operation_plan_state") ||
+      (tables.length === 2 && !tableNames.has("operation_plan_recovery_holds")) ||
+      rows.some((row) => row.type === "trigger")) return false;
+  if (tables.some((table) => typeof table.sql !== "string" || !/\bSTRICT\b/i.test(table.sql))) return false;
   const columns = database.prepare("PRAGMA table_info(operation_plan_state)").all() as
     { name: string; type: string; pk: number }[];
   const expected = [
@@ -107,10 +110,32 @@ function verifyOperationPlanRecoverySchema(database: DatabaseType): boolean {
     { name: "checkpoint_json", type: "TEXT", pk: 0 },
     { name: "digest", type: "TEXT", pk: 0 },
   ];
-  return columns.length === expected.length && expected.every((column, index) => {
+  const stateTableValid = columns.length === expected.length && expected.every((column, index) => {
     const actual = columns[index];
     return actual?.name === column.name && actual.type.toUpperCase() === column.type && actual.pk === column.pk;
   });
+  if (!stateTableValid) return false;
+  if (tableNames.has("operation_plan_recovery_holds")) {
+    const holdColumns = database.prepare("PRAGMA table_info(operation_plan_recovery_holds)").all() as
+      { name: string; type: string; pk: number }[];
+    const expectedHoldColumns = [
+      { name: "id", type: "INTEGER", pk: 1 },
+      { name: "state_json", type: "TEXT", pk: 0 },
+      { name: "digest", type: "TEXT", pk: 0 },
+    ];
+    if (holdColumns.length !== expectedHoldColumns.length || !expectedHoldColumns.every((column, index) => {
+      const actual = holdColumns[index];
+      return actual?.name === column.name && actual.type.toUpperCase() === column.type && actual.pk === column.pk;
+    })) return false;
+    const holdRow = database.prepare("SELECT state_json, digest FROM operation_plan_recovery_holds WHERE id=1").get() as
+      { state_json: string; digest: string } | undefined;
+    if (holdRow) {
+      try {
+        if (operationPlanDigest(JSON.parse(holdRow.state_json)) !== holdRow.digest) return false;
+      } catch { return false; }
+    }
+  }
+  return true;
 }
 
 function stepDefinitionDigest(step: OperationPlanCheckpoint["plans"][number]["revisions"][number]["plan"]["steps"][number]): string {

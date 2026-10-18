@@ -1234,7 +1234,7 @@ ${planControl.question}`,
     if (command.type !== "tool_call" || command.payload.tool_name !== "recovery.restore" ||
         command.payload.arguments.store_key !== "operation_plans" || command.payload.arguments.confirm !== "RESTORE" ||
         command.upstream_decision.commit_decision !== "ASSERT") throw new Error("plan_recovery_refresh_command_invalid");
-    const checkpointDigest = this.operationPlans.refreshAfterRecoveryRestore(recoveryEvidence);
+    const checkpointDigest = this.operationPlans.refreshAfterRecoveryRestore(command, recoveryEvidence);
     this.operationPlans.finishRecoveryRefresh();
     try {
       this.audit.append({ kind: "operation_plan", event: "recovery_refresh_completed",

@@ -412,13 +412,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     not_before_timestamp_ms: recoveryObservationStartedAtMs,
   };
   let startupRecoveryObservation = await buildRecoveryPostActionObservation(startupRecoveryHistory, process.env);
+  let startupOperationPlanHoldObservation = await buildRecoveryPostActionObservation(startupRecoveryHistory, process.env, {
+    mode: "startup_operation_plan_hold",
+  });
   const startupHistoryStable = startupHistorySize === completeHistory.size() &&
     startupHistorySkippedCount === completeHistory.skippedCount() && startupHistoryChainValid === completeHistory.verify();
   if (!startupHistoryStable) {
-    startupRecoveryObservation = await buildRecoveryPostActionObservation({ entries: [], chain_valid: false, skipped_count: 0 }, process.env);
+    const unstableHistory = { entries: [], chain_valid: false, skipped_count: 0 } as const;
+    startupRecoveryObservation = await buildRecoveryPostActionObservation(unstableHistory, process.env);
+    startupOperationPlanHoldObservation = await buildRecoveryPostActionObservation(unstableHistory, process.env, {
+      mode: "startup_operation_plan_hold",
+    });
   }
   const startupOperationPlanRecoveryEvidence = operationPlanRecoveryEvidenceFromObservation({
-    observation: startupRecoveryObservation,
+    observation: startupOperationPlanHoldObservation,
     checkpoint: operationPlanCheckpointAtStartup,
     history_complete: !!completeHistoryFile && startupHistoryStable && startupHistoryChainValid && startupHistorySkippedCount === 0 &&
       !startupHistoryAtCapacity && !(operationPlanCheckpointAtStartup?.plans.length && startupHistorySize === 0),

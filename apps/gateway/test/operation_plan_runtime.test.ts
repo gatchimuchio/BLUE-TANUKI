@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, ToolRegistry, fileSearchTool } from "@blue-tanuki/core";
@@ -22,6 +22,9 @@ function operationPlanRestoreCommand(): ExecuteCommand {
     payload: { tool_name: "recovery.restore", arguments: { backup_id: "fixture", store_key: "operation_plans", confirm: "RESTORE" } },
     upstream_decision: { request_id: randomUUID(), commit_hash: "a".repeat(64), commit_decision: "ASSERT" },
   } as unknown as ExecuteCommand;
+}
+function recoveryCommandIdDigest(commandId: string): string {
+  return createHash("sha256").update(commandId).digest("hex");
 }
 function plan(id: string, root: string): OperationPlan {
   const target = { kind: "directory" as const, id: root };
@@ -119,9 +122,27 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(hds.getRuntimeSnapshot().operation_plans.plans).toMatchObject([
         { plan_id: operationPlanDigest(restored.plan_id), recovery_hold_reason: "held_unverified" },
       ]);
+      const persistedHoldState = store.loadRecoveryHoldState() as {
+        schema_version: string;
+        holds: { plan_id_digest: string; reason: string; provenance: Record<string, unknown> }[];
+      };
+      expect(persistedHoldState).toMatchObject({
+        schema_version: "operation-plan-recovery-holds.v1",
+        used_for_authority: false,
+        may_execute: false,
+        holds: [{ plan_id_digest: operationPlanDigest(restored.plan_id), reason: "held_unverified",
+          provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+            checkpoint_digest: operationPlanDigest(restoredCheckpoint) } }],
+      });
+      expect(JSON.stringify(persistedHoldState)).not.toContain(restoreCommand.id);
       const held = review(hds, restored, "search");
       expect(held.command).toBeNull();
       expect(held.log.commit.reason).toBe("plan_control_denied:plan_recovery_unverified_hold");
+
+      const restarted = new HDSUpperController({ operation_plan_state: store });
+      const heldAfterRestart = review(restarted, restored, "search");
+      expect(heldAfterRestart.command).toBeNull();
+      expect(heldAfterRestart.log.commit.reason).toBe("plan_control_denied:plan_recovery_unverified_hold");
 
       const newOrigin = request("plan:compute new task after restore refresh");
       const fresh = plan(newOrigin.id, root);
@@ -175,6 +196,12 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         schema_version: "operation-plan-recovery-evidence.v1" as const,
         scope: "restored_operation_plans" as const,
         checkpoint_digest: operationPlanDigest(restoredCheckpoint),
+        provenance: {
+          source: "recovery_restore" as const,
+          command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64),
+          restore_backup_id_digest: "c".repeat(64), restored_state_digest: "d".repeat(64),
+        },
         plans: [
           { plan_id_digest: operationPlanDigest(candidates[0]!.plan_id), restore_membership: "restored" as const,
             integrity: "residuals_present" as const, dependency_status: "residuals_present" as const },
@@ -228,6 +255,12 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         schema_version: "operation-plan-recovery-evidence.v1",
         scope: "restored_operation_plans",
         checkpoint_digest: "f".repeat(64),
+        provenance: {
+          source: "recovery_restore",
+          command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64),
+          restore_backup_id_digest: "c".repeat(64), restored_state_digest: "d".repeat(64),
+        },
         plans: [{ plan_id_digest: operationPlanDigest(restored.plan_id), restore_membership: "restored",
           integrity: "verified", dependency_status: "observed" }],
         used_for_authority: false,
@@ -239,6 +272,55 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(review(hds, restored, "search").command).toBeNull();
     } finally {
       restoreWriter.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects restore evidence from another command without replacing durable plan holds", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-live-restore-command-mismatch-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const restored = plan("restored-after-command-mismatch", root);
+    const restoredCheckpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal: "command mismatch fixture",
+        revisions: [{ digest: operationPlanDigest(restored), plan: restored }], receipt_observations: [], bindings: [], results: [] }],
+    });
+    store.compareAndSet(null, restoredCheckpoint);
+    store.compareAndSetRecoveryHoldState(null, {
+      schema_version: "operation-plan-recovery-holds.v1",
+      holds: [{ plan_id_digest: operationPlanDigest(restored.plan_id), reason: "held_residual",
+        provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest("prior-restore"),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64), restore_backup_id_digest: "c".repeat(64),
+          restored_state_digest: "d".repeat(64), checkpoint_digest: operationPlanDigest(restoredCheckpoint) } }],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    try {
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      const restoreCommand = operationPlanRestoreCommand();
+      expect(hds.beginOperationPlanRecoveryRefresh(restoreCommand)).toBe(true);
+      const previousCheckpoint = store.load();
+      const previousHoldState = store.loadRecoveryHoldState();
+      expect(() => hds.refreshOperationPlansAfterRecoveryRestore(restoreCommand, {
+        schema_version: "operation-plan-recovery-evidence.v1",
+        scope: "restored_operation_plans",
+        checkpoint_digest: operationPlanDigest(restoredCheckpoint),
+        provenance: {
+          source: "recovery_restore",
+          command_id_digest: recoveryCommandIdDigest("different-restore"),
+          operation_digest: "e".repeat(64), result_digest: "f".repeat(64),
+          restore_backup_id_digest: "1".repeat(64), restored_state_digest: "2".repeat(64),
+        },
+        plans: [{ plan_id_digest: operationPlanDigest(restored.plan_id), restore_membership: "restored",
+          integrity: "verified", dependency_status: "observed" }],
+        used_for_authority: false,
+        may_execute: false,
+      })).toThrow("plan_recovery_evidence_command_mismatch");
+      expect(hds.getRuntimeSnapshot().operation_plans.recovery_refresh_status).toBe("pending");
+      expect(store.load()).toEqual(previousCheckpoint);
+      expect(store.loadRecoveryHoldState()).toEqual(previousHoldState);
+    } finally {
       store.close();
       await rm(root, { recursive: true, force: true });
     }
@@ -256,6 +338,10 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] })),
     });
     store.compareAndSet(null, checkpoint);
+    store.compareAndSetRecoveryHoldState(null, {
+      schema_version: "operation-plan-recovery-holds.v1", holds: [],
+      used_for_authority: false, may_execute: false,
+    });
     const hds = new HDSUpperController({ operation_plan_state: store, operation_plan_recovery_evidence: {
       schema_version: "operation-plan-recovery-evidence.v1", scope: "restored_operation_plans",
       checkpoint_digest: operationPlanDigest(checkpoint),

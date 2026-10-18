@@ -9,6 +9,7 @@ import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import {
   buildRecoveryPostActionObservation,
+  buildRecoverySnapshot,
   createRecoveryBackup,
   recoveryStoreRestoreHistoryEvidence,
   type RecoveryHistoryEvidenceEntry,
@@ -25,13 +26,14 @@ function historyFor(
   status: "success" | "failed" | "suspended" = "success",
   resultDigest: string | null = digest("b"),
   finalOutputDigest: string | null = resultDigest,
+  commandId = "recovery-command-1",
+  firstIndex = 4,
 ): RecoveryHistoryEvidenceEntry[] {
-  const commandId = "recovery-command-1";
   return [
     {
       kind: "execution_history",
       command_id: commandId,
-      index: 4,
+      index: firstIndex,
       timestamp: Date.now(),
       used_for_authority: false,
       payload: {
@@ -49,7 +51,7 @@ function historyFor(
     {
       kind: "final_output",
       command_id: commandId,
-      index: 5,
+      index: firstIndex + 1,
       timestamp: Date.now(),
       used_for_authority: false,
       payload: {
@@ -62,8 +64,13 @@ function historyFor(
   ];
 }
 
-function selectedStoreRestoreHistory(stateDigest: string, backupIdDigest = digest("e")): RecoveryHistoryEvidenceEntry[] {
-  const entries = historyFor("recovery.restore");
+function selectedStoreRestoreHistory(
+  stateDigest: string,
+  backupIdDigest = digest("e"),
+  commandId = "recovery-command-1",
+  firstIndex = 4,
+): RecoveryHistoryEvidenceEntry[] {
+  const entries = historyFor("recovery.restore", "success", digest("b"), digest("b"), commandId, firstIndex);
   const execution = entries[0]!;
   const payload = execution.payload as Record<string, unknown>;
   return [
@@ -218,6 +225,39 @@ describe("buildRecoveryPostActionObservation", () => {
       expect(observation.operation_digest).toMatch(/^[a-f0-9]{64}$/);
       expect(observation.result_digest).toBe(digest("b"));
       expect(JSON.stringify(observation)).not.toContain("product.env");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("startup recovery-hold observation keeps the latest plan restore visible after a newer provider reset", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-plan-hold-reobserve-latest-reset-"));
+    try {
+      const stateRoot = path.join(root, "state");
+      const envFile = path.join(root, "product.env");
+      await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+      const storePath = await createOperationPlanStore(stateRoot, [recoveryObservationPlanState("plan-after-restore", false)]);
+      const restoredStateDigest = await sha256File(storePath);
+      const entries = [
+        ...selectedStoreRestoreHistory(restoredStateDigest, digest("e"), "plan-restore-command", 4),
+        ...historyFor("recovery.reset_provider", "success", digest("f"), digest("f"), "later-provider-reset", 6),
+      ];
+      const history = { entries, chain_valid: true, skipped_count: 0, not_before_timestamp_ms: Date.now() + 10_000 };
+      const env = { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_RECOVERY_DIR: path.join(root, "recovery"), LLM_BACKEND: "stub" };
+      const latestMutation = await buildRecoveryPostActionObservation(history, env);
+      const planHoldObservation = await buildRecoveryPostActionObservation(history, env, { mode: "startup_operation_plan_hold" });
+
+      expect(latestMutation.operation).toBe("provider_reset");
+      expect(planHoldObservation).toMatchObject({
+        operation: "restore",
+        store_key: "operation_plans",
+        command_id_digest: createHash("sha256").update("plan-restore-command").digest("hex"),
+        restored_state_digest: restoredStateDigest,
+      });
+      const publicObservation = JSON.stringify((await buildRecoverySnapshot(env, planHoldObservation)).post_action_observation);
+      expect(publicObservation).not.toContain("command_id_digest");
+      expect(publicObservation).not.toContain(restoredStateDigest);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -94,7 +94,7 @@ export interface RecoverySnapshot {
     confirmation_required: true;
   };
   authority_boundary: RecoveryAuthorityBoundary;
-  post_action_observation: RecoveryPostActionObservation;
+  post_action_observation: Omit<RecoveryPostActionObservation, "command_id_digest" | "restored_state_digest">;
   next_safe_action: string;
   evidence_source: readonly ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"];
 }
@@ -105,6 +105,10 @@ export interface RecoveryPostActionObservation {
   store_key: CanonicalStateStoreKey | null;
   operation_digest: string | null;
   result_digest: string | null;
+  /** Internal correlation only; omitted from the Recovery UI projection. */
+  command_id_digest: string | null;
+  /** Expected digest of the restored canonical store, not the current checkpoint. */
+  restored_state_digest: string | null;
   store_ledger_status: RecoverySelectedStoreLedgerStatus | null;
   store_ledger_residual_count: number | null;
   plan_residuals: readonly RecoverySelectedPlanResidualObservation[] | null;
@@ -148,7 +152,7 @@ export interface RecoveryHistoryEvidence {
 
 export interface RecoveryPostActionObservationOptions {
   /** Startup observations require the mutation to predate this process. In-process restore checks are explicit and command-bound. */
-  readonly mode?: "after_restart" | "in_process_restore";
+  readonly mode?: "after_restart" | "in_process_restore" | "startup_operation_plan_hold";
   readonly expected_command_id?: string;
 }
 
@@ -1725,6 +1729,8 @@ function noRecoveryActionObservation(
     store_key: null,
     operation_digest: null,
     result_digest: null,
+    command_id_digest: null,
+    restored_state_digest: null,
     store_ledger_status: null,
     store_ledger_residual_count: null,
     plan_residuals: null,
@@ -1754,6 +1760,8 @@ export async function buildRecoveryPostActionObservation(
     argumentsDigest: string;
     executionStatus: unknown;
     resultDigest: string | null;
+    commandIdDigest: string;
+    restoreEvidence: RecoveryStoreRestoreHistoryEvidence | null;
   } | undefined;
   for (const entry of history.entries) {
     if (entry.kind !== "execution_history" || entry.used_for_authority !== false || !entry.command_id ||
@@ -1765,6 +1773,10 @@ export async function buildRecoveryPostActionObservation(
         !Object.prototype.hasOwnProperty.call(RECOVERY_OBSERVATION_OPERATIONS, toolName) ||
         command.operation !== toolName) continue;
     const operation = toolName as keyof typeof RECOVERY_OBSERVATION_OPERATIONS;
+    const restoreEvidence = operation === "recovery.restore" && isRecoveryObservationRecord(entry.payload)
+      ? recoveryStoreRestoreEvidenceFromHistory(entry.payload.recovery_store_restore) : null;
+    if (options.mode === "startup_operation_plan_hold" && operation !== "recovery.restore") continue;
+    if (options.mode === "startup_operation_plan_hold" && restoreEvidence && restoreEvidence.store_key !== "operation_plans") continue;
     const argumentsDigest = recoveryObservationDigest(command.payload.arguments_digest);
     if (!argumentsDigest) {
       if (!latest || entry.index >= latest.entry.index) {
@@ -1775,6 +1787,8 @@ export async function buildRecoveryPostActionObservation(
           argumentsDigest: "",
           executionStatus: entry.payload.status,
           resultDigest: recoveryObservationDigest(entry.payload.result_digest),
+          commandIdDigest: createHash("sha256").update(entry.command_id).digest("hex"),
+          restoreEvidence,
         };
       }
       continue;
@@ -1787,6 +1801,8 @@ export async function buildRecoveryPostActionObservation(
         argumentsDigest,
         executionStatus: entry.payload.status,
         resultDigest: recoveryObservationDigest(entry.payload.result_digest),
+        commandIdDigest: createHash("sha256").update(entry.command_id).digest("hex"),
+        restoreEvidence,
       };
     }
   }
@@ -1801,6 +1817,8 @@ export async function buildRecoveryPostActionObservation(
     store_key: null,
     operation_digest: operationDigest,
     result_digest: latest.resultDigest,
+    command_id_digest: latest.commandIdDigest,
+    restored_state_digest: latest.restoreEvidence?.restored_store_state_digest ?? null,
     store_ledger_status: null,
     store_ledger_residual_count: null,
     plan_residuals: null,
@@ -1817,6 +1835,10 @@ export async function buildRecoveryPostActionObservation(
     return unverified;
   }
   if (options.mode !== "in_process_restore" && options.expected_command_id !== undefined) return unverified;
+  if (options.mode === "startup_operation_plan_hold" &&
+      (latest.action !== "restore" || latest.entry.timestamp >= (history.not_before_timestamp_ms ?? Number.POSITIVE_INFINITY))) {
+    return unverified;
+  }
   if (latest.action !== "restore" && history.not_before_timestamp_ms !== undefined &&
       latest.entry.timestamp < history.not_before_timestamp_ms) return unverified;
 
@@ -1840,9 +1862,9 @@ export async function buildRecoveryPostActionObservation(
 
   if (latest.action === "restore") {
     const payload = isRecoveryObservationRecord(latest.entry.payload) ? latest.entry.payload : null;
-    const restoreEvidence = payload
+    const restoreEvidence = latest.restoreEvidence ?? (payload
       ? recoveryStoreRestoreEvidenceFromHistory(payload.recovery_store_restore)
-      : null;
+      : null);
     if (!restoreEvidence) return unverified;
     const predatesCurrentProcess = history.not_before_timestamp_ms !== undefined &&
       latest.entry.timestamp < history.not_before_timestamp_ms;
@@ -1851,7 +1873,7 @@ export async function buildRecoveryPostActionObservation(
         return { ...unverified, store_key: restoreEvidence.store_key,
           restore_backup_id_digest: restoreEvidence.restored_backup_id_digest ?? null };
       }
-    } else if (!predatesCurrentProcess) {
+    } else if (options.mode !== "startup_operation_plan_hold" && !predatesCurrentProcess) {
       return {
         ...unverified,
         store_key: restoreEvidence.store_key,
@@ -2002,6 +2024,8 @@ export async function buildRecoverySnapshot(
     (env.BLUE_TANUKI_FILE_ROOT ? path.join(env.BLUE_TANUKI_FILE_ROOT, "schedules") : undefined);
   const backups = await recoveryBackupInventory(env);
   const envFile = await envBackups(env.BLUE_TANUKI_ENV_FILE);
+  const { command_id_digest: _commandIdDigest, restored_state_digest: _restoredStateDigest,
+    ...publicPostActionObservation } = postActionObservation;
   return {
     schema_version: 1,
     surface: "recovery",
@@ -2036,7 +2060,7 @@ export async function buildRecoverySnapshot(
       confirmation_required: true,
     },
     authority_boundary: AUTHORITY_BOUNDARY,
-    post_action_observation: postActionObservation,
+    post_action_observation: publicPostActionObservation,
     next_safe_action: "Submit an available recovery change for HDS L3 owner review. Maintenance access only queues the exact operation; it does not execute it. Canonical SQLite snapshots are not applied by generic Restore.",
     evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
   };

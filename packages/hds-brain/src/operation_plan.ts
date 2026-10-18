@@ -20,6 +20,8 @@ type Binding = PlanState["bindings"][number];
 export interface OperationPlanStatePort {
   load(): unknown | null;
   compareAndSet(expected_digest: string | null, checkpoint: OperationPlanCheckpoint): void;
+  loadRecoveryHoldState(): unknown | null;
+  compareAndSetRecoveryHoldState(expected_digest: string | null, state: OperationPlanRecoveryHoldState): void;
 }
 export interface OperationPlanMemoryStorage {
   readonly private_state_root: string;
@@ -27,10 +29,37 @@ export interface OperationPlanMemoryStorage {
   readonly memory_database_path: string;
 }
 
+export type OperationPlanRecoveryHoldReason = "held_residual" | "held_unobserved" | "held_unverified";
+
+export interface OperationPlanRecoveryEvidenceProvenance {
+  readonly source: "recovery_restore" | "unverified_history";
+  readonly command_id_digest: string | null;
+  readonly operation_digest: string | null;
+  readonly result_digest: string | null;
+  readonly restore_backup_id_digest: string | null;
+  readonly restored_state_digest: string | null;
+}
+
+export interface OperationPlanRecoveryHoldProvenance extends OperationPlanRecoveryEvidenceProvenance {
+  readonly checkpoint_digest: string;
+}
+
+export interface OperationPlanRecoveryHoldState {
+  readonly schema_version: "operation-plan-recovery-holds.v1";
+  readonly holds: readonly {
+    readonly plan_id_digest: string;
+    readonly reason: OperationPlanRecoveryHoldReason;
+    readonly provenance: OperationPlanRecoveryHoldProvenance;
+  }[];
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
 export interface OperationPlanRecoveryEvidence {
   readonly schema_version: "operation-plan-recovery-evidence.v1";
   readonly scope: "restored_operation_plans" | "unverified_history";
   readonly checkpoint_digest: string;
+  readonly provenance?: OperationPlanRecoveryEvidenceProvenance;
   readonly plans: readonly {
     readonly plan_id_digest: string;
     readonly restore_membership: "restored" | "not_restored" | "unknown";
@@ -41,12 +70,75 @@ export interface OperationPlanRecoveryEvidence {
   readonly may_execute: false;
 }
 
-type OperationPlanRecoveryHoldReason = "held_residual" | "held_unobserved" | "held_unverified";
+function recoveryEvidenceProvenance(value: unknown): OperationPlanRecoveryEvidenceProvenance {
+  const raw = value as Record<string, unknown> | undefined;
+  if (raw === undefined) return {
+    source: "unverified_history", command_id_digest: null, operation_digest: null, result_digest: null,
+    restore_backup_id_digest: null, restored_state_digest: null,
+  };
+  const digestOrNull = (digest: unknown): digest is string | null => digest === null ||
+    (typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
+      Object.keys(raw).some((key) => !["source", "command_id_digest", "operation_digest", "result_digest",
+        "restore_backup_id_digest", "restored_state_digest"].includes(key)) ||
+      !["recovery_restore", "unverified_history"].includes(String(raw.source)) ||
+      !digestOrNull(raw.command_id_digest) || !digestOrNull(raw.operation_digest) ||
+      !digestOrNull(raw.result_digest) || !digestOrNull(raw.restore_backup_id_digest) ||
+      !digestOrNull(raw.restored_state_digest)) throw new Error("plan_recovery_evidence_invalid");
+  return {
+    source: raw.source as OperationPlanRecoveryEvidenceProvenance["source"],
+    command_id_digest: raw.command_id_digest,
+    operation_digest: raw.operation_digest,
+    result_digest: raw.result_digest,
+    restore_backup_id_digest: raw.restore_backup_id_digest,
+    restored_state_digest: raw.restored_state_digest,
+  };
+}
+
+function parseOperationPlanRecoveryHoldState(value: unknown): OperationPlanRecoveryHoldState {
+  const raw = value as Record<string, unknown>;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
+      Object.keys(raw).some((key) => !["schema_version", "holds", "used_for_authority", "may_execute"].includes(key)) ||
+      raw.schema_version !== "operation-plan-recovery-holds.v1" || raw.used_for_authority !== false ||
+      raw.may_execute !== false || !Array.isArray(raw.holds) || raw.holds.length > 64) {
+    throw new Error("plan_recovery_hold_state_invalid");
+  }
+  const seen = new Set<string>();
+  const holds = raw.holds.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("plan_recovery_hold_state_invalid");
+    const hold = entry as Record<string, unknown>;
+    const provenance = hold.provenance as Record<string, unknown> | undefined;
+    if (Object.keys(hold).some((key) => !["plan_id_digest", "reason", "provenance"].includes(key)) ||
+        typeof hold.plan_id_digest !== "string" || !/^[a-f0-9]{64}$/.test(hold.plan_id_digest) ||
+        seen.has(hold.plan_id_digest) || !["held_residual", "held_unobserved", "held_unverified"].includes(String(hold.reason)) ||
+        !provenance || typeof provenance !== "object" || Array.isArray(provenance)) {
+      throw new Error("plan_recovery_hold_state_invalid");
+    }
+    const evidenceProvenance = recoveryEvidenceProvenance({
+      source: provenance.source,
+      command_id_digest: provenance.command_id_digest,
+      operation_digest: provenance.operation_digest,
+      result_digest: provenance.result_digest,
+      restore_backup_id_digest: provenance.restore_backup_id_digest,
+      restored_state_digest: provenance.restored_state_digest,
+    });
+    if (Object.keys(provenance).some((key) => !["source", "command_id_digest", "operation_digest", "result_digest",
+      "restore_backup_id_digest", "restored_state_digest", "checkpoint_digest"].includes(key)) ||
+        typeof provenance.checkpoint_digest !== "string" || !/^[a-f0-9]{64}$/.test(provenance.checkpoint_digest)) {
+      throw new Error("plan_recovery_hold_state_invalid");
+    }
+    seen.add(hold.plan_id_digest);
+    return { plan_id_digest: hold.plan_id_digest, reason: hold.reason as OperationPlanRecoveryHoldReason,
+      provenance: { ...evidenceProvenance, checkpoint_digest: provenance.checkpoint_digest } };
+  });
+  return { schema_version: "operation-plan-recovery-holds.v1", holds,
+    used_for_authority: false, may_execute: false };
+}
 
 function parseOperationPlanRecoveryEvidence(value: OperationPlanRecoveryEvidence): OperationPlanRecoveryEvidence {
   const raw = value as unknown as Record<string, unknown>;
   if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
-      Object.keys(raw).some((key) => !["schema_version", "scope", "checkpoint_digest", "plans", "used_for_authority", "may_execute"].includes(key)) ||
+      Object.keys(raw).some((key) => !["schema_version", "scope", "checkpoint_digest", "provenance", "plans", "used_for_authority", "may_execute"].includes(key)) ||
       raw.schema_version !== "operation-plan-recovery-evidence.v1" ||
       !["restored_operation_plans", "unverified_history"].includes(String(raw.scope)) ||
       typeof raw.checkpoint_digest !== "string" || !/^[a-f0-9]{64}$/.test(raw.checkpoint_digest) ||
@@ -73,6 +165,7 @@ function parseOperationPlanRecoveryEvidence(value: OperationPlanRecoveryEvidence
   if (raw.scope === "unverified_history" && plans.length !== 0) throw new Error("plan_recovery_evidence_invalid");
   return { schema_version: "operation-plan-recovery-evidence.v1", scope: raw.scope as OperationPlanRecoveryEvidence["scope"],
     checkpoint_digest: raw.checkpoint_digest,
+    ...(raw.provenance === undefined ? {} : { provenance: recoveryEvidenceProvenance(raw.provenance) }),
     plans, used_for_authority: false, may_execute: false };
 }
 
@@ -95,6 +188,10 @@ export interface OperationPlanReceiptReconciliationAuthorization {
 
 export function operationPlanDigest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
+}
+function recoveryCommandIdDigest(commandId: string): string {
+  // Match Recovery history and Cron handoff identity: hash the raw command ID bytes.
+  return createHash("sha256").update(commandId).digest("hex");
 }
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
@@ -208,7 +305,10 @@ export class OperationPlanLedger {
     control: OperationPlanReceiptReconciliationControl;
     authorization: OperationPlanReceiptReconciliationAuthorization;
   }>();
-  private readonly recoveryHolds = new Map<string, OperationPlanRecoveryHoldReason>();
+  private readonly recoveryHolds = new Map<string, {
+    reason: OperationPlanRecoveryHoldReason;
+    provenance: OperationPlanRecoveryHoldProvenance;
+  }>();
   private recoveryRefreshPending = false;
   constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage,
     recoveryEvidence?: OperationPlanRecoveryEvidence) {
@@ -230,8 +330,27 @@ export class OperationPlanLedger {
     }
     if (memoryStorage) this.resultMemory = new JMemoryCommitCoordinator({ ...memoryStorage,
       j_approval_reader: { readVerifiedMemoryApproval: (ref) => this.readResultMemoryApproval(ref) } });
-    if (checkedRecoveryEvidence) this.applyRecoveryEvidence(checkedRecoveryEvidence,
-      checkedRecoveryEvidence.checkpoint_digest === loadedCheckpointDigest);
+    let persistedRecoveryHoldState: OperationPlanRecoveryHoldState | null = null;
+    const persistedRecoveryHoldStateRaw = port?.loadRecoveryHoldState();
+    if (persistedRecoveryHoldStateRaw !== null && persistedRecoveryHoldStateRaw !== undefined) {
+      persistedRecoveryHoldState = parseOperationPlanRecoveryHoldState(persistedRecoveryHoldStateRaw);
+      for (const hold of persistedRecoveryHoldState.holds) this.recoveryHolds.set(hold.plan_id_digest,
+        { reason: hold.reason, provenance: hold.provenance });
+    }
+    if (checkedRecoveryEvidence) {
+      if (!persistedRecoveryHoldState && this.state.plans.length > 0) {
+        // Legacy volatile holds have no durable record. On upgrade, preserve the
+        // possibility that an earlier restore created one rather than trusting a
+        // startup observation to release it.
+        const provenance = this.provenanceForEvidence(checkedRecoveryEvidence);
+        for (const plan of this.state.plans) this.addRecoveryHold(
+          operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified", provenance);
+      } else {
+        this.applyRecoveryEvidence(checkedRecoveryEvidence,
+          checkedRecoveryEvidence.checkpoint_digest === loadedCheckpointDigest);
+      }
+      if (this.recoveryHolds.size > 0) this.persistRecoveryHoldState();
+    }
   }
 
   beginRecoveryRefresh(): boolean {
@@ -240,9 +359,17 @@ export class OperationPlanLedger {
     return true;
   }
 
-  refreshAfterRecoveryRestore(recoveryEvidence?: OperationPlanRecoveryEvidence): string {
+  refreshAfterRecoveryRestore(command: ExecuteCommand, recoveryEvidence?: OperationPlanRecoveryEvidence): string {
     if (!this.recoveryRefreshPending || this.activePlanAttempts.size > 0) {
       throw new Error("plan_recovery_refresh_not_ready");
+    }
+    const checkedEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
+    if (checkedEvidence) {
+      const evidenceProvenance = checkedEvidence.provenance;
+      if (!evidenceProvenance || evidenceProvenance.source !== "recovery_restore" ||
+          evidenceProvenance.command_id_digest !== recoveryCommandIdDigest(command.id)) {
+        throw new Error("plan_recovery_evidence_command_mismatch");
+      }
     }
     const saved = this.port?.load();
     const checked = saved == null
@@ -262,14 +389,22 @@ export class OperationPlanLedger {
       }
     });
     this.recoveryHolds.clear();
-    if (recoveryEvidence) {
-      const checkedEvidence = parseOperationPlanRecoveryEvidence(recoveryEvidence);
+    if (checkedEvidence) {
       this.applyRecoveryEvidence(checkedEvidence, checkedEvidence.checkpoint_digest === restoredCheckpointDigest);
     } else {
       for (const plan of this.state.plans) {
-        this.recoveryHolds.set(operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified");
+        this.addRecoveryHold(operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified", {
+          source: "recovery_restore",
+          command_id_digest: recoveryCommandIdDigest(command.id),
+          operation_digest: null,
+          result_digest: null,
+          restore_backup_id_digest: null,
+          restored_state_digest: null,
+          checkpoint_digest: restoredCheckpointDigest ?? operationPlanDigest(checked),
+        });
       }
     }
+    this.persistRecoveryHoldState();
     this.memoryReady = this.resultMemory?.snapshot()?.status === "ready";
     return this.savedDigest!;
   }
@@ -282,8 +417,10 @@ export class OperationPlanLedger {
   }
 
   private applyRecoveryEvidence(evidence: OperationPlanRecoveryEvidence, checkpointMatches: boolean): void {
+    const provenance = this.provenanceForEvidence(evidence);
     if (!checkpointMatches || evidence.scope === "unverified_history") {
-      for (const plan of this.state.plans) this.recoveryHolds.set(operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified");
+      for (const plan of this.state.plans) this.addRecoveryHold(
+        operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified", provenance);
       return;
     }
     const byPlan = new Map(evidence.plans.map((plan) => [plan.plan_id_digest, plan]));
@@ -291,19 +428,56 @@ export class OperationPlanLedger {
       const digest = operationPlanDigest(plan.revisions[0]!.plan.plan_id);
       const state = byPlan.get(digest);
       if (!state) {
-        this.recoveryHolds.set(digest, "held_unverified");
+        this.addRecoveryHold(digest, "held_unverified", provenance);
     } else if (state.restore_membership === "not_restored") {
       continue;
     } else if (state.restore_membership === "unknown") {
-      this.recoveryHolds.set(digest, "held_unverified");
+      this.addRecoveryHold(digest, "held_unverified", provenance);
       } else if (state.integrity === "residuals_present" || state.dependency_status === "residuals_present") {
-        this.recoveryHolds.set(digest, "held_residual");
+        this.addRecoveryHold(digest, "held_residual", provenance);
       } else if (state.integrity === "unverified" || state.dependency_status === "unknown") {
-        this.recoveryHolds.set(digest, "held_unverified");
+        this.addRecoveryHold(digest, "held_unverified", provenance);
       } else if (state.dependency_status === "unobserved") {
-        this.recoveryHolds.set(digest, "held_unobserved");
+        this.addRecoveryHold(digest, "held_unobserved", provenance);
       }
     }
+  }
+
+  private provenanceForEvidence(evidence: OperationPlanRecoveryEvidence): OperationPlanRecoveryHoldProvenance {
+    const source = evidence.provenance ?? recoveryEvidenceProvenance(undefined);
+    return { ...source, checkpoint_digest: evidence.checkpoint_digest };
+  }
+
+  private addRecoveryHold(
+    planIdDigest: string,
+    reason: OperationPlanRecoveryHoldReason,
+    provenance: OperationPlanRecoveryHoldProvenance,
+  ): void {
+    const existing = this.recoveryHolds.get(planIdDigest);
+    if (!existing) {
+      this.recoveryHolds.set(planIdDigest, { reason, provenance });
+      return;
+    }
+    const rank: Record<OperationPlanRecoveryHoldReason, number> = {
+      held_unobserved: 1, held_residual: 2, held_unverified: 3,
+    };
+    if (rank[reason] > rank[existing.reason]) this.recoveryHolds.set(planIdDigest, { reason, provenance });
+  }
+
+  private persistRecoveryHoldState(): void {
+    if (!this.port) return;
+    const rawCurrent = this.port.loadRecoveryHoldState();
+    const current = rawCurrent === null || rawCurrent === undefined
+      ? null : parseOperationPlanRecoveryHoldState(rawCurrent);
+    const state: OperationPlanRecoveryHoldState = {
+      schema_version: "operation-plan-recovery-holds.v1",
+      holds: [...this.recoveryHolds.entries()].map(([plan_id_digest, hold]) => ({
+        plan_id_digest, reason: hold.reason, provenance: hold.provenance,
+      })).sort((left, right) => left.plan_id_digest.localeCompare(right.plan_id_digest)),
+      used_for_authority: false,
+      may_execute: false,
+    };
+    this.port.compareAndSetRecoveryHoldState(current ? operationPlanDigest(current) : null, state);
   }
 
   retainCandidate(value: unknown, origin: InboundRequest): void {
@@ -325,7 +499,7 @@ export class OperationPlanLedger {
     const p = this.ownedPlan(control.plan_id, caller);
     if (control.action === "review") {
       const recoveryHold = this.recoveryHolds.get(operationPlanDigest(p.revisions[0]!.plan.plan_id));
-      if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.slice("held_".length)}_hold`);
+      if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
     }
     const current = p.revisions.at(-1)!;
     const expected = control.action === "review" ? control.revision_digest : control.expected_revision_digest;
@@ -756,7 +930,7 @@ export class OperationPlanLedger {
         return { plan_id: planIdDigest,
         request_id: p.revisions[0]!.plan.request_id, revision: p.revisions.length,
         revision_digest: currentRevision.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),
-        ...(this.recoveryHolds.has(planIdDigest) ? { recovery_hold_reason: this.recoveryHolds.get(planIdDigest)! } : {}),
+        ...(this.recoveryHolds.has(planIdDigest) ? { recovery_hold_reason: this.recoveryHolds.get(planIdDigest)!.reason } : {}),
         status: currentRevision.plan.steps.every((s) => p.bindings.some((b) => b.step_id === s.step_id && b.status === "verified"))
           ? "results_verified" : "awaiting_step_review",
         steps: currentRevision.plan.steps.map((step) => {
