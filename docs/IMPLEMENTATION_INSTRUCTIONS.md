@@ -17,7 +17,7 @@
 
 次consumerは、旧planだけに残差がある同じ合成状態をControl Center Recoveryの実browser DOMで表示し、fresh plan scopeとの分離・read-only説明・hold継続を操作者向け画面で照合する。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の独立境界を維持する。
 
-実装test commit=`dd677bc3ca586fef92e765352ff73ea93ed2c7e5`を`main`へpush済み。実装push直後のlocal／remote `main`とcurrent recovery branch／tagは同commit、previous branch／tagは開始HEAD=`65bdd2e9fa0170df179c72a5ee890e3c4c0e7205`。この記録を含むdocs-only closeoutを続けてpushし、終了時にremote HEAD、二世代tag、local branch、worktreeを再照合する。
+実装test commit=`dd677bc3ca586fef92e765352ff73ea93ed2c7e5`を`main`へpush済み。実装push直後のlocal／remote `main`とcurrent recovery branch／tagは同commit、previous branch／tagは開始HEAD=`65bdd2e9fa0170df179c72a5ee890e3c4c0e7205`。この記録を含むdocs-only closeoutもpushし、終了時のremote HEAD、二世代tag、local branch、worktreeを照合済み。
 
 ### 最新BUILD_BATCH：`QEB-03-E03.03-FRESH-PLAN-AFTER-RECOVERY-HOLD`
 
