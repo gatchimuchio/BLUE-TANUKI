@@ -30,7 +30,7 @@ import {
   type FailureReviewProjection,
 } from "@blue-tanuki/protocol";
 import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
-  type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
+  type OperationPlanRecoveryEvidence, type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
 import { reviewResultReflection, type ResultObservationProjection } from "./operation_result_reflection.js";
 import type {
   ApprovalGateLog,
@@ -176,6 +176,8 @@ export interface ControllerOptions {
   goal_governance?: GoalGovernanceConfig;
   operation_plan_state?: OperationPlanStatePort;
   operation_plan_memory?: OperationPlanMemoryStorage;
+  /** Verified startup evidence can only hold existing plan selection; it never grants or resumes authority. */
+  operation_plan_recovery_evidence?: OperationPlanRecoveryEvidence;
 }
 
 export interface LLMCommandRoute {
@@ -240,7 +242,8 @@ export class HDSUpperController {
   private readonly suspendedRequests = new Map<string, InboundRequest>();
 
   constructor(opts: ControllerOptions = {}) {
-    this.operationPlans = new OperationPlanLedger(opts.operation_plan_state, opts.operation_plan_memory);
+    this.operationPlans = new OperationPlanLedger(opts.operation_plan_state, opts.operation_plan_memory,
+      opts.operation_plan_recovery_evidence);
     this.policy = opts.policy ?? DEFAULT_POLICY;
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
@@ -394,6 +397,7 @@ ${planControl.question}`,
         const reason = error instanceof Error ? error.message : "";
         planControlFailure = ["plan_control_requires_internal_developer", "plan_owner_or_identity_mismatch",
           "plan_revision_changed", "plan_step_identity_mismatch", "plan_step_already_selected_or_attempted", "plan_step_not_ready",
+          "plan_recovery_residual_hold", "plan_recovery_unobserved_hold", "plan_recovery_unverified_hold",
           "plan_target_resolver_not_connected", "plan_revision_identity_changed", "plan_revision_unchanged",
           "plan_attempted_step_or_dependency_changed", "plan_reflection_memory_unavailable", "plan_reflection_step_identity_mismatch",
           "plan_reflection_observation_not_current", "plan_reflection_record_mismatch", "plan_reflection_observation_expired",

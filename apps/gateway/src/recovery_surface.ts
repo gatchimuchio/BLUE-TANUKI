@@ -1863,9 +1863,9 @@ export async function buildRecoveryPostActionObservation(
       env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
       restoreEvidence.store_key,
     );
+    // Keep backup membership correlation after later plan-store writes so newly created plans can be distinguished from restored plans.
     const planRestorePoints = restoreEvidence.store_key === "operation_plans" &&
-      restoreEvidence.restored_backup_id_digest && target.sha256 === restoreEvidence.restored_store_state_digest &&
-      storeLedger.plan_residuals
+      restoreEvidence.restored_backup_id_digest && storeLedger.plan_residuals
       ? await inspectRecoveryPlanRestorePoints(
           env,
           restoreEvidence.restored_backup_id_digest,

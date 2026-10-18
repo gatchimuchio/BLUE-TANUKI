@@ -2,9 +2,9 @@
 
 ## 次のBUILD_BATCH
 
-`QEB-03-E03.03-PLAN-RESIDUAL-ISOLATION-CONSUMER-AUDIT` は2026-10-19に完了。監査結果と具体的BUILD_GAPは本書の直近実績、および `docs/開発進捗.md` に記録した。今回の観測から新しいresume・権限・Approval経路は作らない。
+`QEB-03-E03.03-PLAN-RESTORE-HDS-SELECTION-GUARD` は2026-10-19に実装・限定確認を完了。起動時Recovery observationをHDSの既存plan-step reviewへdigest限定で接続し、復元時の既存planに残差・未観測・scope不整合があれば選択停止する。完全backup inventoryから復元後の新規planと識別できた計画は停止しない。Checkpoint digestで検査とHDS loadのraceを閉じ、Control Centerへ固定理由を表示する。clean observationは採択・Approval・Broker・resumeを許可せず、E03.03=`BUILD_GAP`を維持する。実績は`docs/開発進捗.md`に記録。
 
-E03.03は`BUILD_GAP`を維持する。次に実装対象を選ぶ際は、owner指定の最新三点正本・適用AGENTS.md・現物を再読し、実在するproducer→consumerを特定してから別のBUILD_BATCHを固定する。今回見つかった近接境界は `OperationPlanLedger.inspectControl` の計画step再確認・選択経路だが、これはRecoveryの計画別残差／未観測依存を現在読んでいない。診断情報を同経路へ接続して再開可否を変えるには、HDS側の消費契約と残差の扱いを別途設計する必要がある。C08.03実provider試験保留、P13 owner GO保留、別repo・実業務作用・公開・出荷判断の境界を維持する。
+次候補は`QEB-03-E03.03-INPROCESS-RESTORE-PLAN-SELECTION-HOLD`。producer候補はGateway内で完了するcanonical `operation_plans` restoreのExecutionResult／Recovery result、consumer候補は同じserve processのHDS `OperationPlanLedger` と次Inbound前のplan-step review。最新三点正本・適用AGENTS.md・作業標準要領・本active指示とコード現物を再読し、restore結果がhistoryへ記録される順序、HDS stale checkpoint fence、次requestのconsumerを特定してから範囲を確定する。未確認scopeは既存planのみholdし、新規planの通常HDS経路とBroker／Approvalを保持する。外部作用の実行、実restore、実承認、実provider、別repo、公開・出荷判断は含めない。
 
 ## 直近のBUILD_BATCH実績
 

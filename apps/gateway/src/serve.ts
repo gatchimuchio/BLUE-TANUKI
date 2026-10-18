@@ -126,6 +126,7 @@ import {
 } from "./document_organization_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { OperationPlanStateStore } from "./operation_plan_store.js";
+import { operationPlanRecoveryEvidenceFromStartup } from "./operation_plan_recovery_evidence.js";
 import {
   commandOperation,
   commandHistoryDescriptor,
@@ -385,15 +386,6 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
 
   const runtimeSelfHealth = await probeGatewaySelfHealth(process.env);
   const operationPlanState = OperationPlanStateStore.fromEnvironment();
-  const hds = new HDSUpperController({
-    operation_plan_state: operationPlanState,
-    operation_plan_memory: operationResultMemoryStorage(),
-    audit: buildAuditLog(),
-    memory: buildHDSMemoryStore(process.env),
-    llm_route: buildLLMCommandRouteFromEnv(),
-    self_health: runtimeSelfHealth,
-  });
-  const failureMemory = buildFailureMemoryStore(process.env);
   const completeHistoryFile = nonEmptyEnv(process.env.BLUE_TANUKI_COMPLETE_HISTORY_FILE);
   const completeHistoryMaxEntries = parsePositiveInt(process.env.BLUE_TANUKI_COMPLETE_HISTORY_MAX_ENTRIES);
   const completeHistory = new CompleteHistoryStore({
@@ -401,6 +393,46 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     max_entries: completeHistoryMaxEntries,
   });
   const recoveryObservationStartedAtMs = Date.now();
+  let recoveryObservationHistoryIncomplete = false;
+  const operationPlanCheckpointAtStartup = operationPlanState.load();
+  const startupHistorySize = completeHistory.size();
+  const startupHistorySkippedCount = completeHistory.skippedCount();
+  const startupHistoryChainValid = completeHistory.verify();
+  const startupHistoryAtCapacity = completeHistoryMaxEntries !== undefined &&
+    startupHistorySize >= completeHistoryMaxEntries;
+  const startupHistoryEntries = completeHistory.replay().filter(
+    (entry): entry is CompleteHistoryEntry & { kind: "execution_history" | "final_output" } =>
+      entry.kind === "execution_history" || entry.kind === "final_output",
+  );
+  const startupRecoveryHistory = {
+    entries: startupHistoryEntries,
+    chain_valid: startupHistoryChainValid,
+    skipped_count: startupHistorySkippedCount +
+      (!completeHistoryFile || startupHistoryAtCapacity ? 1 : 0),
+    not_before_timestamp_ms: recoveryObservationStartedAtMs,
+  };
+  let startupRecoveryObservation = await buildRecoveryPostActionObservation(startupRecoveryHistory, process.env);
+  const startupHistoryStable = startupHistorySize === completeHistory.size() &&
+    startupHistorySkippedCount === completeHistory.skippedCount() && startupHistoryChainValid === completeHistory.verify();
+  if (!startupHistoryStable) {
+    startupRecoveryObservation = await buildRecoveryPostActionObservation({ entries: [], chain_valid: false, skipped_count: 0 }, process.env);
+  }
+  const startupOperationPlanRecoveryEvidence = operationPlanRecoveryEvidenceFromStartup({
+    observation: startupRecoveryObservation,
+    checkpoint: operationPlanCheckpointAtStartup,
+    history_complete: !!completeHistoryFile && startupHistoryStable && startupHistoryChainValid && startupHistorySkippedCount === 0 &&
+      !startupHistoryAtCapacity && !(operationPlanCheckpointAtStartup?.plans.length && startupHistorySize === 0),
+  });
+  const hds = new HDSUpperController({
+    operation_plan_state: operationPlanState,
+    operation_plan_memory: operationResultMemoryStorage(),
+    operation_plan_recovery_evidence: startupOperationPlanRecoveryEvidence,
+    audit: buildAuditLog(),
+    memory: buildHDSMemoryStore(process.env),
+    llm_route: buildLLMCommandRouteFromEnv(),
+    self_health: runtimeSelfHealth,
+  });
+  const failureMemory = buildFailureMemoryStore(process.env);
   gatewayLog.info("complete history", {
     persistence: completeHistoryFile ? "jsonl" : "memory",
     entries: completeHistory.size(),
@@ -519,7 +551,6 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     throw new Error("gateway_startup_reconciliation_unresolved");
   }
   let webchat: WebChatChannel;
-  let recoveryObservationHistoryIncomplete = false;
 
   function isRecoveryMutationCommand(cmd: ExecuteCommand): boolean {
     return cmd.type === "tool_call" && RECOVERY_TOOL_NAMES.includes(cmd.payload.tool_name as RecoveryToolName);

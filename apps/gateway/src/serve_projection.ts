@@ -214,6 +214,7 @@ export interface OperationPlanStatusProjection {
     revision: number;
     revision_digest: string;
     status: "awaiting_step_review" | "results_verified";
+    recovery_hold_reason?: "held_residual" | "held_unobserved" | "held_unverified";
     step_count: number;
     steps: Array<{
       step_id: string;
@@ -265,6 +266,8 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     const revision = numberValue(plan.revision);
     if (!isDigest(plan.plan_id) || !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
         !["awaiting_step_review", "results_verified"].includes(String(plan.status)) ||
+        (plan.recovery_hold_reason !== undefined &&
+          !["held_residual", "held_unobserved", "held_unverified"].includes(String(plan.recovery_hold_reason))) ||
         !Array.isArray(plan.steps) || !Array.isArray(plan.bindings) ||
         !plan.steps.every(isRecord) || !plan.bindings.every(isRecord)) return invalidOperationPlanStatusProjection();
     const bindings = plan.bindings as Record<string, unknown>[];
@@ -328,6 +331,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       });
     }
     plans.push({ plan_id: plan.plan_id, revision: revision!, revision_digest: plan.revision_digest,
+      ...(plan.recovery_hold_reason ? { recovery_hold_reason: plan.recovery_hold_reason as "held_residual" | "held_unobserved" | "held_unverified" } : {}),
       status: plan.status as "awaiting_step_review" | "results_verified", step_count: plan.steps.length, steps });
   }
   return {

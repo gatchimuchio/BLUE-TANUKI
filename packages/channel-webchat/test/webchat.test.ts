@@ -796,6 +796,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("renderOperationCoreProjections");
       expect(html).toContain("renderOperationCoreExecution");
       expect(html).toContain("renderOperationPlanStatus");
+      expect(html).toContain("復元残差あり（step選択停止中）");
+      expect(html).toContain("復元依存未観測（step選択停止中）");
+      expect(html).toContain("状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。");
       expect(html).toContain("loopbackで読取照合");
       expect(html).toContain("照合はDeveloper入口から明示要求した場合だけloopbackへ1回GETし");
       expect(html).toContain("local inspectionの1件がcommand/payload digest一致");

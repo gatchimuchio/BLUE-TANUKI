@@ -4,6 +4,8 @@
 
 2026-10-19の`QEB-03-E03.03-PLAN-RESIDUAL-ISOLATION-CONSUMER-AUDIT`では、計画別残差／未観測依存を実行や復旧再開のために読むruntime consumerがまだないことを確認した。Recovery post-action observationはRecovery snapshot／Control Centerのread-only表示にとどまり、startupの保存結果／M receipt調停やOperationPlanの承認resumeはこの投影を消費しない。HDSの計画step再確認・選択との接続は、残差を再開可否へ反映する契約が未成立のため`BUILD_GAP`。E03.03／QEB-03の状態、非権威診断、owner GOの独立境界を維持する。
 
+続く`QEB-03-E03.03-PLAN-RESTORE-HDS-SELECTION-GUARD`では、起動時のRecovery observationをHDSの既存plan-step reviewへdigest限定で接続した。復元済みplanの残差・未観測・欠落依存・checkpoint競合はHDS内で該当planのstep選択を止め、scopeが未確認なら起動時の既存planをholdする。復元後に完全backup inventoryに存在しないと確認できた後発planはholdしない。clean observationはApproval、Broker、resume、外部作用を許可しない。Control Centerへ固定理由を表示し、合成検証は通過したが実restore／実再起動は未実施。独立restore point、job復帰、Recovery後の実結果照合は未接続のためE03.03／QEB-03=`BUILD_GAP`を維持する。
+
 ## 現行のQE工程
 
 | 工程 | 主な目的 | 状態 |

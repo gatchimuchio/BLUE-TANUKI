@@ -393,7 +393,7 @@ describe("buildRecoveryPostActionObservation", () => {
         store_ledger_status: "verified",
         store_ledger_residual_count: 0,
         plan_residuals: [],
-        plan_restore_points: null,
+        plan_restore_points: [],
       });
       expect(await readFile(storePath)).toEqual(changedBytes);
 
@@ -480,6 +480,29 @@ describe("buildRecoveryPostActionObservation", () => {
         residual_dependencies: [],
         unobserved_dependencies: [],
       }]);
+
+      const changedCheckpoint = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [recoveryObservationPlanState("private-after-restore-plan", false)],
+      });
+      const changedDatabase: DatabaseSyncType = new DatabaseSync(storePath);
+      changedDatabase.prepare("UPDATE operation_plan_state SET checkpoint_json=?,digest=? WHERE id=1")
+        .run(JSON.stringify(changedCheckpoint), operationPlanDigest(changedCheckpoint));
+      changedDatabase.close();
+      const postRestorePlan = await buildRecoveryPostActionObservation({
+        entries: selectedStoreRestoreHistory(stateDigest, backupIdDigest),
+        chain_valid: true,
+        skipped_count: 0,
+        not_before_timestamp_ms: Date.now() + 10_000,
+      }, { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_RECOVERY_DIR: recoveryRoot });
+      expect(postRestorePlan).toMatchObject({
+        status: "changed",
+        plan_restore_points: [{
+          plan_id_digest: operationPlanDigest("private-after-restore-plan"),
+          backup_plan_record_status: "not_found",
+          dependency_status: "unknown",
+        }],
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

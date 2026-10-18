@@ -27,6 +27,55 @@ export interface OperationPlanMemoryStorage {
   readonly memory_database_path: string;
 }
 
+export interface OperationPlanRecoveryEvidence {
+  readonly schema_version: "operation-plan-recovery-evidence.v1";
+  readonly scope: "restored_operation_plans" | "unverified_history";
+  readonly checkpoint_digest: string;
+  readonly plans: readonly {
+    readonly plan_id_digest: string;
+    readonly restore_membership: "restored" | "not_restored" | "unknown";
+    readonly integrity: "verified" | "residuals_present" | "unverified";
+    readonly dependency_status: "observed" | "residuals_present" | "unobserved" | "unknown";
+  }[];
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
+type OperationPlanRecoveryHoldReason = "held_residual" | "held_unobserved" | "held_unverified";
+
+function parseOperationPlanRecoveryEvidence(value: OperationPlanRecoveryEvidence): OperationPlanRecoveryEvidence {
+  const raw = value as unknown as Record<string, unknown>;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
+      Object.keys(raw).some((key) => !["schema_version", "scope", "checkpoint_digest", "plans", "used_for_authority", "may_execute"].includes(key)) ||
+      raw.schema_version !== "operation-plan-recovery-evidence.v1" ||
+      !["restored_operation_plans", "unverified_history"].includes(String(raw.scope)) ||
+      typeof raw.checkpoint_digest !== "string" || !/^[a-f0-9]{64}$/.test(raw.checkpoint_digest) ||
+      raw.used_for_authority !== false || raw.may_execute !== false || !Array.isArray(raw.plans) || raw.plans.length > 256) {
+    throw new Error("plan_recovery_evidence_invalid");
+  }
+  const seen = new Set<string>();
+  const plans = raw.plans.map((entry): OperationPlanRecoveryEvidence["plans"][number] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("plan_recovery_evidence_invalid");
+    const plan = entry as Record<string, unknown>;
+    if (Object.keys(plan).some((key) => !["plan_id_digest", "restore_membership", "integrity", "dependency_status"].includes(key)) ||
+        typeof plan.plan_id_digest !== "string" || !/^[a-f0-9]{64}$/.test(plan.plan_id_digest) || seen.has(plan.plan_id_digest) ||
+        !["restored", "not_restored", "unknown"].includes(String(plan.restore_membership)) ||
+        !["verified", "residuals_present", "unverified"].includes(String(plan.integrity)) ||
+        !["observed", "residuals_present", "unobserved", "unknown"].includes(String(plan.dependency_status))) {
+      throw new Error("plan_recovery_evidence_invalid");
+    }
+    seen.add(plan.plan_id_digest);
+    return { plan_id_digest: plan.plan_id_digest,
+      restore_membership: plan.restore_membership as OperationPlanRecoveryEvidence["plans"][number]["restore_membership"],
+      integrity: plan.integrity as OperationPlanRecoveryEvidence["plans"][number]["integrity"],
+      dependency_status: plan.dependency_status as OperationPlanRecoveryEvidence["plans"][number]["dependency_status"] };
+  });
+  if (raw.scope === "unverified_history" && plans.length !== 0) throw new Error("plan_recovery_evidence_invalid");
+  return { schema_version: "operation-plan-recovery-evidence.v1", scope: raw.scope as OperationPlanRecoveryEvidence["scope"],
+    checkpoint_digest: raw.checkpoint_digest,
+    plans, used_for_authority: false, may_execute: false };
+}
+
 export interface OperationPlanReceiptReconciliationAuthorization {
   readonly authorization_id: string;
   readonly caller_user: string;
@@ -110,12 +159,17 @@ export class OperationPlanLedger {
     control: OperationPlanReceiptReconciliationControl;
     authorization: OperationPlanReceiptReconciliationAuthorization;
   }>();
-  constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage) {
+  private readonly recoveryHolds = new Map<string, OperationPlanRecoveryHoldReason>();
+  constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage,
+    recoveryEvidence?: OperationPlanRecoveryEvidence) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
+    const checkedRecoveryEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
+    let loadedCheckpointDigest: string | null = null;
     const saved = port?.load();
     if (saved != null) {
     this.state = OperationPlanCheckpointSchema.parse(saved);
     this.savedDigest = operationPlanDigest(this.state);
+    loadedCheckpointDigest = this.savedDigest;
     const ids = new Set<string>();
     const commands = new Set<string>();
     const tickets = new Set<string>();
@@ -166,6 +220,33 @@ export class OperationPlanLedger {
     }
     if (memoryStorage) this.resultMemory = new JMemoryCommitCoordinator({ ...memoryStorage,
       j_approval_reader: { readVerifiedMemoryApproval: (ref) => this.readResultMemoryApproval(ref) } });
+    if (checkedRecoveryEvidence) this.applyRecoveryEvidence(checkedRecoveryEvidence,
+      checkedRecoveryEvidence.checkpoint_digest === loadedCheckpointDigest);
+  }
+
+  private applyRecoveryEvidence(evidence: OperationPlanRecoveryEvidence, checkpointMatches: boolean): void {
+    if (!checkpointMatches || evidence.scope === "unverified_history") {
+      for (const plan of this.state.plans) this.recoveryHolds.set(operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified");
+      return;
+    }
+    const byPlan = new Map(evidence.plans.map((plan) => [plan.plan_id_digest, plan]));
+    for (const plan of this.state.plans) {
+      const digest = operationPlanDigest(plan.revisions[0]!.plan.plan_id);
+      const state = byPlan.get(digest);
+      if (!state) {
+        this.recoveryHolds.set(digest, "held_unverified");
+    } else if (state.restore_membership === "not_restored") {
+      continue;
+    } else if (state.restore_membership === "unknown") {
+      this.recoveryHolds.set(digest, "held_unverified");
+      } else if (state.integrity === "residuals_present" || state.dependency_status === "residuals_present") {
+        this.recoveryHolds.set(digest, "held_residual");
+      } else if (state.integrity === "unverified" || state.dependency_status === "unknown") {
+        this.recoveryHolds.set(digest, "held_unverified");
+      } else if (state.dependency_status === "unobserved") {
+        this.recoveryHolds.set(digest, "held_unobserved");
+      }
+    }
   }
 
   retainCandidate(value: unknown, origin: InboundRequest): void {
@@ -183,6 +264,10 @@ export class OperationPlanLedger {
   } {
     if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
     const p = this.ownedPlan(control.plan_id, caller);
+    if (control.action === "review") {
+      const recoveryHold = this.recoveryHolds.get(operationPlanDigest(p.revisions[0]!.plan.plan_id));
+      if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.slice("held_".length)}_hold`);
+    }
     const current = p.revisions.at(-1)!;
     const expected = control.action === "review" ? control.revision_digest : control.expected_revision_digest;
     if (expected !== current.digest) throw new Error("plan_revision_changed");
@@ -584,9 +669,11 @@ export class OperationPlanLedger {
         used_for_authority: false as const },
       plans: this.state.plans.map((p) => {
         const currentRevision = p.revisions.at(-1)!;
-        return { plan_id: operationPlanDigest(p.revisions[0]!.plan.plan_id),
+        const planIdDigest = operationPlanDigest(p.revisions[0]!.plan.plan_id);
+        return { plan_id: planIdDigest,
         request_id: p.revisions[0]!.plan.request_id, revision: p.revisions.length,
         revision_digest: currentRevision.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),
+        ...(this.recoveryHolds.has(planIdDigest) ? { recovery_hold_reason: this.recoveryHolds.get(planIdDigest)! } : {}),
         status: currentRevision.plan.steps.every((s) => p.bindings.some((b) => b.step_id === s.step_id && b.status === "verified"))
           ? "results_verified" : "awaiting_step_review",
         steps: currentRevision.plan.steps.map((step) => {
