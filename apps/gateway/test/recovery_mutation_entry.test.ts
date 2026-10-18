@@ -37,7 +37,8 @@ describe("Recovery mutation HDS L3 entry", () => {
     writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
     const runtimeEnv = isolatedRuntimeEnvironment(root, envFile, historyFile, port);
     const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
-    const planIdDigest = seedOperationPlanState(planStatePath);
+    const seededPlan = seedOperationPlanState(planStatePath);
+    const planIdDigest = seededPlan.plan_id_digest;
     const restoreCommand = {
       type: "tool_call",
       payload: {
@@ -125,8 +126,35 @@ describe("Recovery mutation HDS L3 entry", () => {
       const restartedRuntime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
       expect(restartedRuntime.body.hds.operation_plans.plans, gateway.output.join(""))
         .toMatchObject([{ plan_id: planIdDigest, recovery_hold_reason: "held_unverified" }]);
+
+      const reviewContent = `plan:review ${JSON.stringify({
+        plan_id: planIdDigest,
+        revision_digest: seededPlan.revision_digest,
+        step_id: "restore-review-step",
+      })}`;
+      const reviewRequest = await requestJson(port, "/operators/developer/invoke", {
+        method: "POST",
+        token: inboundToken,
+        body: { user: "fixture-owner", content: reviewContent },
+      });
+      expect(reviewRequest.status, `${JSON.stringify(reviewRequest.body)}\n${gateway.output.join("")}`).toBe(202);
+      const reviewRequestId = reviewRequest.body.request_id as string;
+      expect(reviewRequestId).toEqual(expect.any(String));
+      await waitForHistoryDecision(port, gateway, reviewRequestId);
+
       await stopChild(gateway.child);
       gateway = undefined;
+
+      const reviewHistory = new CompleteHistoryStore({ filepath: historyFile });
+      const reviewDecisions = reviewHistory.replay({ kind: "hds_decision", request_id: reviewRequestId });
+      expect(reviewDecisions).toHaveLength(1);
+      expect(reviewDecisions[0]?.payload).toMatchObject({
+        decision: "FAIL",
+        reason: "plan_control_denied:plan_recovery_unverified_hold",
+        command: null,
+      });
+      const reviewExecution = reviewHistory.replay({ kind: "execution_history", request_id: reviewRequestId });
+      expect(reviewExecution).toHaveLength(0);
 
       const restartedStore = new OperationPlanStateStore(planStatePath);
       try {
@@ -241,7 +269,7 @@ describe("Recovery mutation HDS L3 entry", () => {
     writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
     const runtimeEnv = isolatedRuntimeEnvironment(root, envFile, historyFile, port);
     const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
-    const planIdDigest = seedOperationPlanState(planStatePath);
+    const planIdDigest = seedOperationPlanState(planStatePath).plan_id_digest;
     const gateway = spawnGateway(runtimeEnv);
     try {
       await waitForHealth(port, gateway);
@@ -293,7 +321,7 @@ describe("Recovery mutation HDS L3 entry", () => {
     const before = readFileSync(envFile, "utf8");
     const runtimeEnv = isolatedRuntimeEnvironment(root, envFile, historyFile, port);
     const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
-    const planScopeDigest = seedOperationPlanState(planStatePath);
+    const planScopeDigest = seedOperationPlanState(planStatePath).plan_id_digest;
     const gateway = spawnGateway(runtimeEnv);
 
     try {
@@ -502,7 +530,7 @@ describe("Recovery mutation HDS L3 entry", () => {
   }, 30_000);
 });
 
-function seedOperationPlanState(filepath: string): string {
+function seedOperationPlanState(filepath: string): { plan_id_digest: string; revision_digest: string } {
   mkdirSync(dirname(filepath), { recursive: true });
   const step = {
     step_id: "restore-review-step",
@@ -564,7 +592,7 @@ function seedOperationPlanState(filepath: string): string {
   } finally {
     store.close();
   }
-  return operationPlanDigest(plan.plan_id);
+  return { plan_id_digest: operationPlanDigest(plan.plan_id), revision_digest: revisionDigest };
 }
 
 function isolatedRuntimeEnvironment(root: string, envFile: string, historyFile: string, port: number): NodeJS.ProcessEnv {
@@ -660,6 +688,24 @@ async function requestJson(
     ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
+}
+
+async function waitForHistoryDecision(
+  port: number,
+  gateway: { child: ChildProcessWithoutNullStreams; output: string[] },
+  requestId: string,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (gateway.child.exitCode !== null) throw new Error(`Gateway exited before recording HDS decision: ${gateway.output.join("")}`);
+    const response = await requestJson(port,
+      `/history?kind=hds_decision&request_id=${encodeURIComponent(requestId)}`, { token: inboundToken });
+    const history = response.body.history as Record<string, unknown> | undefined;
+    const entries = Array.isArray(history?.entries) ? history.entries : [];
+    if (response.status === 200 && entries.length === 1) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for HDS decision ${requestId}: ${gateway.output.join("")}`);
 }
 
 async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {

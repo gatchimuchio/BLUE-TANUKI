@@ -2,6 +2,22 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-03-E03.03-STARTUP-HOLD-DEVELOPER-PLAN-REVIEW`
+
+開始HEAD／`origin/main`=`63999a56543c723dfa55ea6d7d7a14276f7474cf`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）と適用`AGENTS.md`、作業標準要領、active指示を再読した。開始時のlocal current／previous recovery branchとremote current／previous backup tagはcurrent=`63999a56543c723dfa55ea6d7d7a14276f7474cf`、previous=`d347acd22ccac67b157b74e22908057c05838d80`。
+
+既存のWebChat `/operators/developer/invoke`は認証済みDeveloper要求をGateway内部要求へ変換し、HDS `plan:review` consumerへ渡している。既存planが起動時の`held_unverified`状態にある合成Gateway processで、同endpointからowner／plan revision／stepを結んだレビューを送り、HDSが`plan_control_denied:plan_recovery_unverified_hold`として拒否し、commandを作らずexecutor履歴も生じないことを回帰testへ追加した。製品コードの経路欠落は見つからず、この経路は`WIRED`（合成fixture）。E03.03全体は`BUILD_GAP`。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `recovery_mutation_entry.test.ts` | PASS、4 tests。追加経路はGateway起動→Developer HTTP→内部Developer要求→HDS hold拒否→commandなしを確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS、workspace 15 projects。 |
+| `pnpm smoke:serve` | PASS。 |
+| `docs:check`／`validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実canonical restore／実owner approval／provider credential／外部作用／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+次consumerは、HDSの安全な拒否結果をDeveloper UIへ届け、保留理由と次の安全な操作を操作者が確認できる出力経路である。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の独立境界を維持する。
+
 ### 最新BUILD_BATCH：`QEB-03-E03.03-COMPLETE-HISTORY-STARTUP-HOLD-PROCESS-RESTART`
 
 開始HEAD／`origin/main`=`d347acd22ccac67b157b74e22908057c05838d80`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、Gateway startup／Complete History／HDS hold保存経路を再読した。開始local recovery branchesとremote backup tagsはcurrent=`d347acd22ccac67b157b74e22908057c05838d80`、previous=`209d4ae0f28ffc3d7feb1fd0fd6ed5d79ad0318e`で一致していた。
