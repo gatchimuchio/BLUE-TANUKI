@@ -8,6 +8,14 @@
 
 従来は外部service restartを既存Recovery consumerとみなせず、非`operation_plans` selected-store全体restoreの実行経路がなかった。Brokerについては後述のBroker所有取引でin-process経路を接続した。J/M／Cronの閉鎖・再観測・起動holdは未実装であり、これらは引き続きfail-closedとする。別storeへ作用を移す永続single-use transitionを実装する場合は、HDS final-review command・backup/store digest・owner lease世代・crash phaseだけを非権威の進行証拠として記録し、起動時の完全性・対象store再観測より前に通常consumerを開かない。不明・重複・不整合はholdへ閉じる。HDSだけが承認し、pending approvalを再利用して自動resumeしない。実環境でのrestore／owner approval／restart／外部作用は未実施。E03.03=`BUILD_GAP`、C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
 
+### 現行HEADでのfollow-up：plan restore review binding
+
+`QEB-03-E03.03-RECOVERY-PLAN-SCOPE-RESTORE-REVIEW-BINDING` は開始HEAD／`origin/main`=`4e526b249e7a8b0311090c6d90561718a9474376`、worktree cleanで現物を再照合した。L3 target生成は既にHDS `scopeFromCommand()`でbackup ID・`operation_plans`・全store作用・`scope_digest`を結び、Gatewayはscope applicabilityがverifiedの場合だけrequestを作成していた。approval後のrestore consumerも `restoreRecoveryBackup()` 内で範囲を再検査し、選択snapshotのdigest/integrityを確認してから作用する。このためproduct codeは現行HEAD上で`WIRED`であり、本単位では実Gateway経路のintegration evidenceを追加した。
+
+`recovery_mutation_entry.test.ts` は合成planと隔離state rootで実際のRecovery endpoint→HDS L3 queue→owner-resume test token→Executor→restore consumerを通す。queue targetにbackup/store/whole-store/plan digestが全て含まれること、要求・queueの両方がhigh-risk L3であること、承認待ち中はstateが不変であることを確認する。承認後・作用前に選択archiveを欠損させると実行が失敗し、live plan DBとbackup pack inventoryが変わらない。実restore／実owner承認ではない。package単位test起動時に壊れていたcwd依存もtest file位置基準へ修正し、Brokerのquiescence期待値を現行のatomic restore consumerに合わせた。
+
+次consumerはJ/M／Cron selected-storeの安全な同一process quiescenceと、復元後のstartup hold／再観測をつなぐこと。これが未接続の間は該当restoreをfail-closedで維持する。Store間atomicity、job単位restore、実restore／実restartは成立していない。
+
 ### 追加監査：approval世代とBroker選択復元
 
 開始HEAD=`29098931f151e4845e6b5271b464e2f127b8a524`で、rev2.3のE03.03・関係要求、AGENTS、active指示とHDS／Executor／Broker保存経路を再読した。E03.03の再起動条件は旧worker・旧承認を拒否すること。実装も起動時に保存済み`selected` bindingを`invalidated`、`intent_committed`を`outcome_unknown`へ変え、Executor ticketは現在の`execution_epoch`と期限へ束縛する。従って再起動を越えるtransitionは承認やExecutor ticketを保持・再利用せず、要求対象とbackup/store digestだけの非権威contextを渡し、新processでHDSが改めてL3判断する。
