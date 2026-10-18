@@ -16,6 +16,15 @@ export interface CronEventIdentity {
 
 export type CronEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown";
 
+export interface CronEventCursorSnapshot {
+  readonly source_digest: string;
+  readonly sequence: number;
+  readonly event_id: string;
+  readonly payload_digest: string;
+  readonly delivery_state: CronEventDeliveryState;
+  readonly updated_at_ms: number;
+}
+
 export type CronEventClaim =
   | { readonly status: "accepted" }
   | { readonly status: "duplicate"; readonly delivery_state: CronEventDeliveryState }
@@ -159,6 +168,32 @@ export class GatewayCronEventStore {
     });
   }
 
+  unresolvedEvents(): CronEventCursorSnapshot[] {
+    const rows = this.db.prepare(`SELECT i.source_digest,i.sequence,i.event_id,i.payload_digest,i.delivery_state,i.updated_at_ms,
+      o.event_id AS outbox_event_id,o.sequence AS outbox_sequence,o.payload_digest AS outbox_payload_digest,
+      o.delivery_state AS outbox_delivery_state,o.updated_at_ms AS outbox_updated_at_ms
+      FROM cron_event_inbox i LEFT JOIN cron_event_outbox o ON o.source_digest=i.source_digest
+      ORDER BY i.updated_at_ms DESC,i.source_digest ASC`).all() as Array<{
+        source_digest: string;
+        sequence: number;
+        event_id: string;
+        payload_digest: string;
+        delivery_state: string;
+        updated_at_ms: number;
+        outbox_event_id?: string;
+        outbox_sequence?: number;
+        outbox_payload_digest?: string;
+        outbox_delivery_state?: string;
+        outbox_updated_at_ms?: number;
+      }>;
+    const orphan = this.db.prepare(`SELECT 1 AS present FROM cron_event_outbox o
+      LEFT JOIN cron_event_inbox i ON i.source_digest=o.source_digest WHERE i.source_digest IS NULL LIMIT 1`).get();
+    if (orphan) throw new Error("cron_event_store_orphan_outbox_detected");
+    return rows
+      .map((row) => parseCursorRow(row.source_digest, row))
+      .filter((row) => row.delivery_state !== "handler_returned");
+  }
+
   close(): void {
     this.db.close();
   }
@@ -196,21 +231,48 @@ export class GatewayCronEventStore {
       if (orphan) throw new Error("cron_event_store_orphan_outbox_detected");
       return undefined;
     }
-    if (!Number.isSafeInteger(row.sequence) || row.sequence < 0 ||
-        row.event_id !== `cron-${sha256(`${source_digest}\0${row.sequence}`)}` || !DIGEST.test(row.payload_digest) ||
-        !["dispatching", "handler_returned", "outcome_unknown"].includes(row.delivery_state) ||
-        row.outbox_event_id !== row.event_id || row.outbox_sequence !== row.sequence ||
-        row.outbox_payload_digest !== row.payload_digest || row.outbox_delivery_state !== row.delivery_state ||
-        row.outbox_updated_at_ms !== row.updated_at_ms) {
-      throw new Error("cron_event_store_cursor_integrity_failed");
-    }
+    const snapshot = parseCursorRow(source_digest, row);
     return {
-      sequence: row.sequence,
-      event_id: row.event_id,
-      payload_digest: row.payload_digest,
-      delivery_state: row.delivery_state,
+      sequence: snapshot.sequence,
+      event_id: snapshot.event_id,
+      payload_digest: snapshot.payload_digest,
+      delivery_state: snapshot.delivery_state,
     };
   }
+}
+
+function parseCursorRow(
+  source_digest: string,
+  row: {
+    sequence: number;
+    event_id: string;
+    payload_digest: string;
+    delivery_state: string;
+    updated_at_ms: number;
+    outbox_event_id?: string;
+    outbox_sequence?: number;
+    outbox_payload_digest?: string;
+    outbox_delivery_state?: string;
+    outbox_updated_at_ms?: number;
+  },
+): CronEventCursorSnapshot {
+  if (!DIGEST.test(source_digest) || !Number.isSafeInteger(row.sequence) || row.sequence < 0 ||
+      row.event_id !== `cron-${sha256(`${source_digest}\0${row.sequence}`)}` || !DIGEST.test(row.payload_digest) ||
+      (row.delivery_state !== "dispatching" && row.delivery_state !== "handler_returned" && row.delivery_state !== "outcome_unknown") ||
+      !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0 ||
+      row.outbox_event_id !== row.event_id || row.outbox_sequence !== row.sequence ||
+      row.outbox_payload_digest !== row.payload_digest || row.outbox_delivery_state !== row.delivery_state ||
+      row.outbox_updated_at_ms !== row.updated_at_ms) {
+    throw new Error("cron_event_store_cursor_integrity_failed");
+  }
+  return {
+    source_digest,
+    sequence: row.sequence,
+    event_id: row.event_id,
+    payload_digest: row.payload_digest,
+    delivery_state: row.delivery_state,
+    updated_at_ms: row.updated_at_ms,
+  };
 }
 
 function validateEvent(event: CronEventIdentity): void {

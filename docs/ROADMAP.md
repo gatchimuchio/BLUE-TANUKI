@@ -14,6 +14,8 @@
 | QE_QA | QC証拠から対象別・OS別・版別保証 | 未着手 |
 | QE_RELEASE_REVIEW | ownerによる独立公開・出荷判断 | 未着手 |
 
+2026-10-18にCronの未決dispatch状態を、event ID・sequence・delivery state・payload digest・時刻に限ったread-only通知として認証済みWebChatへ接続した。通知は外部結果の成功を断定せず、再送・解除・承認を行わない。再起動後の未決作用照合・復旧は未接続であり、E01.01／E03.02／QEB-03は`BUILD_GAP`。
+
 198小単位（旧192＋Android/iOS各3）は実装索引であり、個別のQC/QAを198回行うための工程ではない。毎作業および各小単位の開始・切替・再開時に最新版の三点セットすべてと適用AGENTS.mdを読み直し、実際の仕事を先へつなぐBUILD_BATCHで施工・限定技術確認・Git保全を行う。
 
 ## 公開可能なBUILD_BATCHの順序案

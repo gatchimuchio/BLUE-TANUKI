@@ -2,6 +2,48 @@ import { describe, expect, it } from "vitest";
 import { buildResidentNotificationsSnapshot } from "../src/resident_notifications.js";
 
 describe("buildResidentNotificationsSnapshot", () => {
+  it("shows only unsettled cron cursor identity and digest as a read-only notice", () => {
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 1000,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [
+        {
+          index: 1,
+          entry_hash: "trace-entry",
+          kind: "schedule_lifecycle",
+          event: "schedule.lifecycle.fired",
+          request_id: "cron-event-42",
+          timestamp: 900,
+        },
+      ],
+      unresolved_cron_events: [{
+        source_digest: "a".repeat(64),
+        sequence: 42,
+        event_id: "cron-event-42",
+        payload_digest: "b".repeat(64),
+        delivery_state: "outcome_unknown",
+        updated_at_ms: 950,
+      }],
+    });
+
+    expect(notifications).toContainEqual(expect.objectContaining({
+      kind: "schedule_delivery_unknown",
+      severity: "warning",
+      read_only: true,
+      authority: "display_only",
+      request_id: "cron-event-42",
+      payload_hash: "b".repeat(64),
+      timestamp: 950,
+    }));
+    const notice = notifications.find((item) => item.kind === "schedule_delivery_unknown");
+    expect(notice?.message).toContain("sequence 42 remains outcome_unknown");
+    expect(notice).not.toHaveProperty("schedule_id");
+    expect(JSON.stringify(notifications)).not.toContain("a".repeat(64));
+    expect(JSON.stringify(notifications)).not.toContain("private schedule content");
+    expect(JSON.stringify(notifications)).not.toContain("private target");
+  });
+
   it("projects approval, schedule, connector, and audit warnings as display-only notifications", () => {
     const notifications = buildResidentNotificationsSnapshot({
       now_ms: 1000,

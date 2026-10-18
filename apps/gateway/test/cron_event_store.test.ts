@@ -30,16 +30,33 @@ describe("GatewayCronEventStore", () => {
     const first = makeEvent("cron:runtime:synthetic", 1_000, "合成内容 A");
     const next = makeEvent("cron:runtime:synthetic", 2_000, "合成内容 B");
 
-    expect(store.claim(first)).toEqual({ status: "accepted" });
+    expect(store.claim(first, 100)).toEqual({ status: "accepted" });
+    expect(store.unresolvedEvents()).toEqual([{
+      source_digest: createHash("sha256").update(first.source).digest("hex"),
+      sequence: first.sequence,
+      event_id: first.event_id,
+      payload_digest: first.payload_digest,
+      delivery_state: "dispatching",
+      updated_at_ms: 100,
+    }]);
     expect(store.claim(first)).toEqual({ status: "duplicate", delivery_state: "dispatching" });
     expect(store.claim(next)).toEqual({ status: "blocked_unresolved", delivery_state: "dispatching" });
-    store.settle(first, "handler_returned");
+    store.settle(first, "handler_returned", 200);
+    expect(store.unresolvedEvents()).toEqual([]);
     expect(store.claim(next)).toEqual({ status: "accepted" });
-    store.settle(next, "outcome_unknown");
+    store.settle(next, "outcome_unknown", 400);
     store.close();
 
     const reopened = new GatewayCronEventStore(filepath);
     try {
+      expect(reopened.unresolvedEvents()).toEqual([{
+        source_digest: createHash("sha256").update(next.source).digest("hex"),
+        sequence: next.sequence,
+        event_id: next.event_id,
+        payload_digest: next.payload_digest,
+        delivery_state: "outcome_unknown",
+        updated_at_ms: 400,
+      }]);
       expect(reopened.claim(next)).toEqual({ status: "duplicate", delivery_state: "outcome_unknown" });
       expect(reopened.claim(makeEvent("cron:runtime:synthetic", 3_000, "合成内容 C")))
         .toEqual({ status: "blocked_unresolved", delivery_state: "outcome_unknown" });
@@ -78,6 +95,7 @@ describe("GatewayCronEventStore", () => {
     const reopened = new GatewayCronEventStore(filepath);
     try {
       expect(() => reopened.claim(event)).toThrow(/cursor_integrity/);
+      expect(() => reopened.unresolvedEvents()).toThrow(/cursor_integrity/);
     } finally {
       reopened.close();
     }

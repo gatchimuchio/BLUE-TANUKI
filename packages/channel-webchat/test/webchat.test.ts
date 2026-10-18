@@ -2561,6 +2561,19 @@ describe("WebChatChannel - resident notifications API", () => {
             risk: "high",
             next_action: "Open Approval Queue.",
           },
+          {
+            id: "schedule-delivery-unsettled:cron-event-42",
+            kind: "schedule_delivery_unknown",
+            severity: "warning",
+            title: "Schedule delivery result is unsettled",
+            message: "Cron event sequence 42 remains outcome_unknown.",
+            timestamp: 12346,
+            source: "cron_event_cursor",
+            read_only: true,
+            authority: "display_only",
+            request_id: "cron-event-42",
+            payload_hash: "b".repeat(64),
+          },
         ],
       },
     });
@@ -2578,13 +2591,21 @@ describe("WebChatChannel - resident notifications API", () => {
       });
       expect(ok.status).toBe(200);
       const body = JSON.parse(ok.text);
-      expect(body.notifications).toHaveLength(1);
+      expect(body.notifications).toHaveLength(2);
       expect(body.notifications[0]).toMatchObject({
         kind: "approval_required",
         severity: "action_required",
         read_only: true,
         authority: "display_only",
         command_id: "cmd-1",
+      });
+      expect(body.notifications[1]).toMatchObject({
+        kind: "schedule_delivery_unknown",
+        severity: "warning",
+        read_only: true,
+        authority: "display_only",
+        request_id: "cron-event-42",
+        payload_hash: "b".repeat(64),
       });
       expect(JSON.stringify(body)).not.toContain("approval_token");
     } finally {

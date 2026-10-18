@@ -3,12 +3,14 @@ import type {
   WebChatAuthorityTraceItem,
   WebChatNotificationItem,
 } from "@blue-tanuki/channel-webchat";
+import type { CronEventCursorSnapshot } from "./cron_event_store.js";
 
 export interface ResidentNotificationInput {
   now_ms?: number;
   audit_chain_valid: boolean;
   pending_approvals: readonly WebChatApprovalQueueItem[];
   authority_trace: readonly WebChatAuthorityTraceItem[];
+  unresolved_cron_events?: readonly CronEventCursorSnapshot[];
   limit?: number;
 }
 
@@ -52,6 +54,23 @@ export function buildResidentNotificationsSnapshot(
       risk: item.risk,
       expires_at_ms: item.approval_token_expires_at_ms,
       next_action: "Open Approval Queue and submit approve, reject, or block through the Approval Gate.",
+    });
+  }
+
+  for (const event of input.unresolved_cron_events ?? []) {
+    notifications.push({
+      id: `schedule-delivery-unsettled:${event.event_id}`,
+      kind: "schedule_delivery_unknown",
+      severity: "warning",
+      title: "Schedule delivery result is unsettled",
+      message: `Cron event sequence ${event.sequence} remains ${event.delivery_state}; delivery is not confirmed, and later events from this source are blocked without automatic replay.`,
+      timestamp: event.updated_at_ms,
+      source: "cron_event_cursor",
+      read_only: true,
+      authority: "display_only",
+      request_id: event.event_id,
+      payload_hash: event.payload_digest,
+      next_action: "Inspect Authority Trace for this event ID and verify target delivery before taking any duplicate action.",
     });
   }
 

@@ -1607,10 +1607,12 @@ export async function serve(): Promise<ServeShutdown> {
   }
 
   function residentNotificationSnapshot() {
+    const authorityTrace = authorityTraceSnapshot();
     return buildResidentNotificationsSnapshot({
       audit_chain_valid: hds.getAudit().verify(),
       pending_approvals: pendingApprovalSnapshot(),
-      authority_trace: authorityTraceSnapshot(),
+      authority_trace: authorityTrace,
+      unresolved_cron_events: cronEventStore.unresolvedEvents(),
     });
   }
 
