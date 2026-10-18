@@ -909,21 +909,27 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const projection = isObject(value) ? value : {};
         const safe = projection.schema_version === "operation-plan.status.v1" &&
           projection.status === "available" && projection.used_for_authority === false &&
-          projection.raw_payload_exposed === false && Array.isArray(projection.plans);
-        const summary = safe ? String(projection.displayed_count) + " / " + String(projection.plan_count) + " 件" : "利用不可";
+          projection.raw_payload_exposed === false && ["ready", "pending"].includes(projection.recovery_refresh_status) &&
+          Array.isArray(projection.plans);
+        const refreshPending = safe && projection.recovery_refresh_status === "pending";
+        const summary = !safe ? "利用不可" : refreshPending ? "復元照合中" :
+          String(projection.displayed_count) + " / " + String(projection.plan_count) + " 件";
         setText("operation-plan-state-summary", summary);
         if (byId("operation-plan-state-summary")) {
-          byId("operation-plan-state-summary").className = "badge " + (safe ? "good" : "bad");
+          byId("operation-plan-state-summary").className = "badge " + (refreshPending ? "warn" : safe ? "good" : "bad");
         }
         if (!safe) {
           setHtml("operation-plan-state-list", '<div class="trace-item muted">J計画snapshotの非権威・payload非露出条件を確認できないため表示しません。</div>');
           return;
         }
+        const refreshNotice = refreshPending
+          ? '<div class="trace-item muted">選択したOperation Plan storeの復元結果が未確認です。step選択を停止しています。復元処理完了後にGatewayを再起動して復旧状態を点検してください。</div>'
+          : "";
         if (projection.plans.length === 0) {
-          setHtml("operation-plan-state-list", '<div class="trace-item muted">現在表示できるJ計画はありません。</div>');
+          setHtml("operation-plan-state-list", refreshNotice + '<div class="trace-item muted">現在表示できるJ計画はありません。</div>');
           return;
         }
-        setHtml("operation-plan-state-list", projection.plans.map(function (plan) {
+        setHtml("operation-plan-state-list", refreshNotice + projection.plans.map(function (plan) {
           const steps = Array.isArray(plan.steps) ? plan.steps : [];
           const recoveryHoldLabels = {
             held_residual: "復元残差あり（step選択停止中）",

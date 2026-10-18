@@ -207,6 +207,7 @@ export interface OperationPlanStatusProjection {
   used_for_authority: false;
   raw_payload_exposed: false;
   status: "available" | "unavailable";
+  recovery_refresh_status: "ready" | "pending" | "unavailable";
   plan_count: number;
   displayed_count: number;
   plans: Array<{
@@ -249,6 +250,7 @@ function invalidOperationPlanStatusProjection(): OperationPlanStatusProjection {
   return {
     schema_version: "operation-plan.status.v1", evidence_source: ["INTERNAL_STATE"],
     used_for_authority: false, raw_payload_exposed: false, status: "unavailable",
+    recovery_refresh_status: "unavailable",
     plan_count: 0, displayed_count: 0, plans: [],
   };
 }
@@ -257,6 +259,12 @@ function invalidOperationPlanStatusProjection(): OperationPlanStatusProjection {
 export function projectOperationPlanStatus(value: unknown): OperationPlanStatusProjection {
   if (!isRecord(value) || value.schema_version !== "operation-plan-projection.v1" ||
       value.used_for_authority !== false || value.raw_payload_exposed !== false || !Array.isArray(value.plans)) {
+    return invalidOperationPlanStatusProjection();
+  }
+  const recoveryRefreshStatus = value.recovery_refresh_status === undefined
+    ? "ready"
+    : value.recovery_refresh_status;
+  if (recoveryRefreshStatus !== "ready" && recoveryRefreshStatus !== "pending") {
     return invalidOperationPlanStatusProjection();
   }
   const inputPlans = value.plans;
@@ -337,6 +345,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
   return {
     schema_version: "operation-plan.status.v1", evidence_source: ["INTERNAL_STATE"],
     used_for_authority: false, raw_payload_exposed: false, status: "available",
+    recovery_refresh_status: recoveryRefreshStatus,
     plan_count: inputPlans.length, displayed_count: plans.length, plans,
   };
 }

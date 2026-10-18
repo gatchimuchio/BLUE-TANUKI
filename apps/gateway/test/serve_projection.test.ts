@@ -370,6 +370,7 @@ describe("Operation Core execution projection", () => {
     expect(projection).toMatchObject({
       schema_version: "operation-plan.status.v1", evidence_source: ["INTERNAL_STATE"],
       used_for_authority: false, raw_payload_exposed: false, status: "available",
+      recovery_refresh_status: "ready",
       plan_count: 1, displayed_count: 1,
       plans: [{ revision: 2, revision_digest: "b".repeat(64), steps: [{
         operation: "gmail.write", status: "outcome_unknown", external_receipt_observation: "not_recorded",
@@ -394,6 +395,14 @@ describe("Operation Core execution projection", () => {
         source: "local_inspection", match_count: 1, evidence_digest: "e".repeat(64), receipt_digest: "f".repeat(64),
       },
     }] }] });
+    expect(projectOperationPlanStatus({
+      schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false,
+      recovery_refresh_status: "pending", plans: [],
+    })).toMatchObject({ status: "available", recovery_refresh_status: "pending", plan_count: 0 });
+    expect(projectOperationPlanStatus({
+      schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false,
+      recovery_refresh_status: "unknown", plans: [],
+    })).toMatchObject({ status: "unavailable", recovery_refresh_status: "unavailable", plans: [] });
     expect(projectOperationPlanStatus({
       schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false,
       plans: [{ plan_id: "a".repeat(64), revision: 2, revision_digest: "b".repeat(64), status: "awaiting_step_review",

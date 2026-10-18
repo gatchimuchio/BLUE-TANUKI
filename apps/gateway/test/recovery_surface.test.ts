@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { captureCanonicalStateSnapshots, inspectCanonicalStateSnapshots } from "../src/canonical_state_backup.js";
+import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import {
   buildRecoverySnapshot,
   createRecoveryBackup,
@@ -299,6 +300,7 @@ describe("buildRecoverySnapshot", () => {
   it("restores only the selected verified canonical store after a pre-action snapshot", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-selective-store-restore-"));
     let liveSelected: DatabaseSyncType | undefined;
+    let livePlanStore: OperationPlanStateStore | undefined;
     try {
       const envFile = path.join(root, "product.env");
       const recoveryDir = path.join(root, "recovery");
@@ -315,6 +317,9 @@ describe("buildRecoverySnapshot", () => {
         "unrelated-state",
       );
       const unrelatedBefore = await readFile(unrelatedPath);
+      livePlanStore = new OperationPlanStateStore(selectedPath);
+      const checkpoint = { schema_version: "operation-plan-state.v1" as const, plans: [] };
+      livePlanStore.compareAndSet(null, checkpoint);
       const env = {
         BLUE_TANUKI_ENV_FILE: envFile,
         BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
@@ -324,6 +329,7 @@ describe("buildRecoverySnapshot", () => {
       await writeFile(envFile, "LLM_BACKEND=changed\n", "utf8");
       liveSelected = new DatabaseSync(selectedPath);
       liveSelected.exec("DELETE FROM snapshot_fixture; INSERT INTO snapshot_fixture (value) VALUES ('current-state')");
+      liveSelected.exec("DELETE FROM operation_plan_state");
 
       const restored = await restoreRecoveryBackup(env, {
         backup_id: backup.backup_id,
@@ -332,6 +338,7 @@ describe("buildRecoverySnapshot", () => {
       });
 
       expect(liveSelected.prepare("SELECT value FROM snapshot_fixture").get()).toEqual({ value: "snapshot-state" });
+      expect(livePlanStore.load()).toEqual(checkpoint);
       expect(await readFile(unrelatedPath)).toEqual(unrelatedBefore);
       expect(await readFile(envFile, "utf8")).toBe("LLM_BACKEND=changed\n");
       expect(restored).toMatchObject({
@@ -355,6 +362,7 @@ describe("buildRecoverySnapshot", () => {
       expect(JSON.stringify(restored)).not.toContain(unrelatedPath);
     } finally {
       try { liveSelected?.close(); } catch { /* test cleanup */ }
+      try { livePlanStore?.close(); } catch { /* test cleanup */ }
       await rm(root, { recursive: true, force: true });
     }
   });

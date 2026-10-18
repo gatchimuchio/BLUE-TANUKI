@@ -398,6 +398,7 @@ ${planControl.question}`,
         planControlFailure = ["plan_control_requires_internal_developer", "plan_owner_or_identity_mismatch",
           "plan_revision_changed", "plan_step_identity_mismatch", "plan_step_already_selected_or_attempted", "plan_step_not_ready",
           "plan_recovery_residual_hold", "plan_recovery_unobserved_hold", "plan_recovery_unverified_hold",
+          "plan_recovery_refresh_hold",
           "plan_target_resolver_not_connected", "plan_revision_identity_changed", "plan_revision_unchanged",
           "plan_attempted_step_or_dependency_changed", "plan_reflection_memory_unavailable", "plan_reflection_step_identity_mismatch",
           "plan_reflection_observation_not_current", "plan_reflection_record_mismatch", "plan_reflection_observation_expired",
@@ -1217,6 +1218,36 @@ ${planControl.question}`,
 
   operationPlanCommandIsCurrent(command: ExecuteCommand): boolean {
     return this.operationPlans.canExecute(command);
+  }
+  beginOperationPlanRecoveryRefresh(command: ExecuteCommand): boolean {
+    if (command.type !== "tool_call" || command.payload.tool_name !== "recovery.restore" ||
+        command.payload.arguments.store_key !== "operation_plans" || command.payload.arguments.confirm !== "RESTORE" ||
+        command.upstream_decision.commit_decision !== "ASSERT") return false;
+    const started = this.operationPlans.beginRecoveryRefresh();
+    if (started) this.audit.append({ kind: "operation_plan", event: "recovery_refresh_started",
+      request_id: command.upstream_decision.request_id ?? null, command_id: command.id,
+      projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false,
+      timestamp: Date.now() });
+    return started;
+  }
+  refreshOperationPlansAfterRecoveryRestore(command: ExecuteCommand): string {
+    if (command.type !== "tool_call" || command.payload.tool_name !== "recovery.restore" ||
+        command.payload.arguments.store_key !== "operation_plans" || command.payload.arguments.confirm !== "RESTORE" ||
+        command.upstream_decision.commit_decision !== "ASSERT") throw new Error("plan_recovery_refresh_command_invalid");
+    const checkpointDigest = this.operationPlans.refreshAfterRecoveryRestore();
+    this.operationPlans.finishRecoveryRefresh();
+    try {
+      this.audit.append({ kind: "operation_plan", event: "recovery_refresh_completed",
+        request_id: command.upstream_decision.request_id ?? null, command_id: command.id,
+        projection_digest: operationPlanDigest(this.operationPlans.projection()), used_for_authority: false,
+        timestamp: Date.now() });
+    } catch (error) {
+      // No event-loop yield occurs before the audit append; reacquire the gate
+      // immediately if the completion record cannot be durably emitted.
+      if (!this.operationPlans.beginRecoveryRefresh()) throw new Error("plan_recovery_refresh_relock_failed");
+      throw error;
+    }
+    return checkpointDigest;
   }
   isOperationPlanCommand(command_id: string): boolean { return this.operationPlans.isBound(command_id); }
   beginOperationPlanAttempt(command: ExecuteCommand, admission?: ExecutionAdmission): boolean {

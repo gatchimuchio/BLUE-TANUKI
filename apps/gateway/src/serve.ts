@@ -126,6 +126,7 @@ import {
 } from "./document_organization_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { OperationPlanStateStore } from "./operation_plan_store.js";
+import { inspectCanonicalStateStoreTarget } from "./canonical_state_backup.js";
 import { operationPlanRecoveryEvidenceFromStartup } from "./operation_plan_recovery_evidence.js";
 import {
   commandOperation,
@@ -803,7 +804,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     actor: string,
     output: OutputAuditLog,
     command?: ExecuteCommand,
-  ): void {
+  ): boolean {
     const entry = recordCompleteHistory({
       kind: "final_output",
       request_id: output.request_id ?? log.request_id,
@@ -832,6 +833,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       },
     });
     if (command && isRecoveryMutationCommand(command) && !entry) recoveryObservationHistoryIncomplete = true;
+    return entry !== null;
   }
 
   /**
@@ -845,6 +847,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     opts: { skip_approval?: boolean; actor?: string; approval_evaluation?: ApprovalEvaluation; command_digest?: string } = {},
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
+    const operationPlanRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
+      cmd.payload.arguments.store_key === "operation_plans" && cmd.payload.arguments.confirm === "RESTORE";
     let executionEvaluation = opts.approval_evaluation ?? null;
     if (!hds.operationPlanCommandIsCurrent(cmd)) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_binding_stale" });
@@ -1051,6 +1055,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_attempt_not_admitted" });
       return { status: "plan_binding_stale" };
     }
+    if (operationPlanRestore && !hds.beginOperationPlanRecoveryRefresh(cmd)) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "operation_plan_recovery_refresh_busy" });
+      gatewayLog.warn("operation-plan restore was not started", { command_id: cmd.id, reason: "plan_refresh_busy" });
+      return { status: "operation_plan_recovery_refresh_busy" };
+    }
     const executionController = new AbortController();
     if (emergencyStop.active) executionController.abort();
     executionControllers.add(executionController);
@@ -1129,7 +1138,33 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     });
     const content = finalized.rendered_output;
     const output = finalized.output_audit;
-    recordFinalOutputHistory(log, origin, actor, output, cmd);
+    const finalOutputRecorded = recordFinalOutputHistory(log, origin, actor, output, cmd);
+    if (operationPlanRestore && fb.status === "success") {
+      const evidence = recoveryStoreRestoreHistoryEvidence(fb.result);
+      if (!executionHistory || !finalOutputRecorded || evidence?.store_key !== "operation_plans") {
+        gatewayLog.warn("operation-plan restore refresh remains held", {
+          command_id: cmd.id,
+          reason: !executionHistory || !finalOutputRecorded ? "restore_history_incomplete" : "restore_result_unverified",
+        });
+      } else {
+        const inspection = await inspectCanonicalStateStoreTarget(process.env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki", "operation_plans");
+        if (inspection.status !== "verified" || inspection.sha256 !== evidence.restored_store_state_digest) {
+          gatewayLog.warn("operation-plan restore refresh remains held", {
+            command_id: cmd.id,
+            reason: "restored_store_digest_mismatch",
+          });
+        } else {
+          try {
+            hds.refreshOperationPlansAfterRecoveryRestore(cmd);
+          } catch (error) {
+            gatewayLog.warn("operation-plan restore refresh remains held", {
+              command_id: cmd.id,
+              reason: error instanceof Error ? error.message : "restore_refresh_failed",
+            });
+          }
+        }
+      }
+    }
     if (content) await dispatcher.dispatch({ channel: origin.channel, target: replyTarget(origin), content }, { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
     return { status: finalized.reviewed_feedback.status };
   }

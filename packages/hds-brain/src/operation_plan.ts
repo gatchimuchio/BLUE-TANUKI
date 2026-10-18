@@ -126,6 +126,53 @@ function candidatePlan(value: unknown): OperationPlan {
   return plan;
 }
 
+function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolean): OperationPlanCheckpoint {
+  const state = OperationPlanCheckpointSchema.parse(value);
+  const ids = new Set<string>();
+  const commands = new Set<string>();
+  const tickets = new Set<string>();
+  for (const p of state.plans) {
+    const first = p.revisions[0]!.plan;
+    if (ids.has(first.plan_id)) throw new Error("plan_checkpoint_duplicate_identity");
+    ids.add(first.plan_id);
+    for (const revision of p.revisions) {
+      candidatePlan(revision.plan);
+      if (revision.digest !== operationPlanDigest(revision.plan) || revision.plan.plan_id !== first.plan_id ||
+          revision.plan.request_id !== first.request_id) throw new Error("plan_checkpoint_revision_mismatch");
+    }
+    for (const b of p.bindings) {
+      const revision = p.revisions.find((r) => r.digest === b.revision_digest);
+      const step = revision?.plan.steps.find((s) => s.step_id === b.step_id);
+      if (!step || stepDigest(step) !== b.step_digest || commands.has(b.command_id) ||
+          b.prepared_step.step_id !== b.step_id || b.prepared_step.operation !== b.operation ||
+          b.prepared_step.operation !== step.operation) throw new Error("plan_checkpoint_binding_mismatch");
+      commands.add(b.command_id);
+      if (b.execution_admission) {
+        if (tickets.has(b.execution_admission.ticket_id) || b.execution_admission.command_key !==
+            createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", b.command_id])).digest("hex") ||
+            b.status === "selected" || b.status === "invalidated") throw new Error("plan_checkpoint_admission_mismatch");
+        tickets.add(b.execution_admission.ticket_id);
+      }
+      if (b.delivery_digest && (!b.execution_admission || !b.result_digest)) throw new Error("plan_checkpoint_delivery_mismatch");
+      if (b.memory_commit && (!memoryAvailable || !verifyResultMemoryCommit(p, b))) throw new Error("plan_checkpoint_memory_mismatch");
+      if (b.memory_receipt && (!b.memory_commit || !receiptForResultCommit(b.memory_receipt, b.memory_commit))) {
+        throw new Error("plan_checkpoint_memory_receipt_mismatch");
+      }
+    }
+    for (const result of p.results) {
+      const binding = p.bindings.find((b) => b.step_id === result.step_id && b.status === "verified");
+      if (!binding || result.plan_id !== first.plan_id || result.request_id !== first.request_id ||
+          result.operation !== binding.operation || result.expires_at_ms !== result.observed_at_ms + 600_000 ||
+          operationPlanDigest(result.target) !== operationPlanDigest(binding.prepared_step.target) ||
+          !binding.prepared_step.preparation?.validation.length ||
+          !binding.prepared_step.preparation.validation.every((v) => v.method === "result_equals" &&
+            operationPlanDigest(v.target) === operationPlanDigest(result.target) &&
+            operationPlanDigest(v.expected) === operationPlanDigest(result.output))) throw new Error("plan_checkpoint_result_mismatch");
+    }
+  }
+  return state;
+}
+
 /** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
@@ -148,6 +195,8 @@ export class OperationPlanLedger {
   private state: OperationPlanCheckpoint = { schema_version: "operation-plan-state.v1", plans: [] };
   private savedDigest: string | null = null;
   private readonly issuedBindings = new WeakMap<ExecuteCommand, string>();
+  private readonly issuedBindingIds = new Set<string>();
+  private readonly activePlanAttempts = new Set<string>();
   private readonly resultMemory?: JMemoryCommitCoordinator;
   private memoryReady = true;
   private readonly reflections = new Map<string, { command_digest: string; control: OperationPlanReflectionControl;
@@ -160,6 +209,7 @@ export class OperationPlanLedger {
     authorization: OperationPlanReceiptReconciliationAuthorization;
   }>();
   private readonly recoveryHolds = new Map<string, OperationPlanRecoveryHoldReason>();
+  private recoveryRefreshPending = false;
   constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage,
     recoveryEvidence?: OperationPlanRecoveryEvidence) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
@@ -167,49 +217,9 @@ export class OperationPlanLedger {
     let loadedCheckpointDigest: string | null = null;
     const saved = port?.load();
     if (saved != null) {
-    this.state = OperationPlanCheckpointSchema.parse(saved);
+    this.state = validateOperationPlanCheckpoint(saved, Boolean(memoryStorage));
     this.savedDigest = operationPlanDigest(this.state);
     loadedCheckpointDigest = this.savedDigest;
-    const ids = new Set<string>();
-    const commands = new Set<string>();
-    const tickets = new Set<string>();
-    for (const p of this.state.plans) {
-      const first = p.revisions[0]!.plan;
-      if (ids.has(first.plan_id)) throw new Error("plan_checkpoint_duplicate_identity");
-      ids.add(first.plan_id);
-      for (const revision of p.revisions) {
-        candidatePlan(revision.plan);
-        if (revision.digest !== operationPlanDigest(revision.plan) || revision.plan.plan_id !== first.plan_id ||
-            revision.plan.request_id !== first.request_id) throw new Error("plan_checkpoint_revision_mismatch");
-      }
-      for (const b of p.bindings) {
-        const revision = p.revisions.find((r) => r.digest === b.revision_digest);
-        const step = revision?.plan.steps.find((s) => s.step_id === b.step_id);
-        if (!step || stepDigest(step) !== b.step_digest || commands.has(b.command_id) ||
-            b.prepared_step.step_id !== b.step_id || b.prepared_step.operation !== b.operation ||
-            b.prepared_step.operation !== step.operation) throw new Error("plan_checkpoint_binding_mismatch");
-        commands.add(b.command_id);
-        if (b.execution_admission) {
-          if (tickets.has(b.execution_admission.ticket_id) || b.execution_admission.command_key !==
-              createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", b.command_id])).digest("hex") ||
-              b.status === "selected" || b.status === "invalidated") throw new Error("plan_checkpoint_admission_mismatch");
-          tickets.add(b.execution_admission.ticket_id);
-        }
-        if (b.delivery_digest && (!b.execution_admission || !b.result_digest)) throw new Error("plan_checkpoint_delivery_mismatch");
-        if (b.memory_commit && (!memoryStorage || !verifyResultMemoryCommit(p, b))) throw new Error("plan_checkpoint_memory_mismatch");
-        if (b.memory_receipt && (!b.memory_commit || !receiptForResultCommit(b.memory_receipt, b.memory_commit))) throw new Error("plan_checkpoint_memory_receipt_mismatch");
-      }
-      for (const result of p.results) {
-        const binding = p.bindings.find((b) => b.step_id === result.step_id && b.status === "verified");
-        if (!binding || result.plan_id !== first.plan_id || result.request_id !== first.request_id ||
-            result.operation !== binding.operation || result.expires_at_ms !== result.observed_at_ms + 600_000 ||
-            operationPlanDigest(result.target) !== operationPlanDigest(binding.prepared_step.target) ||
-            !binding.prepared_step.preparation?.validation.length ||
-            !binding.prepared_step.preparation.validation.every((v) => v.method === "result_equals" &&
-              operationPlanDigest(v.target) === operationPlanDigest(result.target) &&
-              operationPlanDigest(v.expected) === operationPlanDigest(result.output))) throw new Error("plan_checkpoint_result_mismatch");
-      }
-    }
     // 過去の承認は復活させない。開始意思があれば未起動と断定しない。
     this.change((state) => {
       for (const p of state.plans) for (const b of p.bindings) {
@@ -222,6 +232,47 @@ export class OperationPlanLedger {
       j_approval_reader: { readVerifiedMemoryApproval: (ref) => this.readResultMemoryApproval(ref) } });
     if (checkedRecoveryEvidence) this.applyRecoveryEvidence(checkedRecoveryEvidence,
       checkedRecoveryEvidence.checkpoint_digest === loadedCheckpointDigest);
+  }
+
+  beginRecoveryRefresh(): boolean {
+    if (!this.port || this.recoveryRefreshPending || this.activePlanAttempts.size > 0) return false;
+    this.recoveryRefreshPending = true;
+    return true;
+  }
+
+  refreshAfterRecoveryRestore(): string {
+    if (!this.recoveryRefreshPending || this.activePlanAttempts.size > 0) {
+      throw new Error("plan_recovery_refresh_not_ready");
+    }
+    const saved = this.port?.load();
+    const checked = saved == null
+      ? { schema_version: "operation-plan-state.v1" as const, plans: [] }
+      : validateOperationPlanCheckpoint(saved, Boolean(this.resultMemory));
+    this.state = checked;
+    this.savedDigest = saved == null ? null : operationPlanDigest(checked);
+    this.reflections.clear();
+    this.receiptReconciliations.clear();
+    // Restore changes only plan history. Any selection or started attempt from
+    // the restored checkpoint must be revoked or represented as uncertain.
+    this.change((state) => {
+      for (const plan of state.plans) for (const binding of plan.bindings) {
+        if (binding.status === "selected") binding.status = "invalidated";
+        if (binding.status === "intent_committed") binding.status = "outcome_unknown";
+      }
+    });
+    this.recoveryHolds.clear();
+    for (const plan of this.state.plans) {
+      this.recoveryHolds.set(operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified");
+    }
+    this.memoryReady = this.resultMemory?.snapshot()?.status === "ready";
+    return this.savedDigest!;
+  }
+
+  finishRecoveryRefresh(): void {
+    if (!this.recoveryRefreshPending || this.activePlanAttempts.size > 0) {
+      throw new Error("plan_recovery_refresh_not_ready");
+    }
+    this.recoveryRefreshPending = false;
   }
 
   private applyRecoveryEvidence(evidence: OperationPlanRecoveryEvidence, checkpointMatches: boolean): void {
@@ -250,6 +301,7 @@ export class OperationPlanLedger {
   }
 
   retainCandidate(value: unknown, origin: InboundRequest): void {
+    if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const plan = candidatePlan(value);
     const expected = origin.metadata?.["blue_tanuki.operation_core.request_id"] ?? origin.id;
     if (plan.request_id !== expected || this.state.plans.some((p) => p.revisions[0]!.plan.plan_id === plan.plan_id)) {
@@ -262,6 +314,7 @@ export class OperationPlanLedger {
   inspectControl(control: Extract<OperationPlanControl, { action: "review" | "revise" }>, caller: InboundRequest): {
     plan_id: string; revision_digest: string; step?: OperationStep; goal: string;
   } {
+    if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     if (!this.reconcileMemory()) throw new Error("plan_memory_commit_pending");
     const p = this.ownedPlan(control.plan_id, caller);
     if (control.action === "review") {
@@ -376,6 +429,7 @@ export class OperationPlanLedger {
         operation: descriptor.operation_id, status: "selected" });
     });
     this.issuedBindings.set(command, command.id);
+    this.issuedBindingIds.add(command.id);
   }
 
   revise(control: Extract<OperationPlanControl, { action: "revise" }>, caller: InboundRequest): string[] {
@@ -393,11 +447,17 @@ export class OperationPlanLedger {
 
   isBound(command_id: string): boolean { return this.binding(command_id) !== undefined; }
   canExecute(command: ExecuteCommand): boolean {
-    if (this.reflections.has(command.id) || (command.type === "llm_call" && command.payload.compute_context?.local_p_version === OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION)) {
+    const reflectionCommand = this.reflections.has(command.id) || (command.type === "llm_call" &&
+      command.payload.compute_context?.local_p_version === OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION);
+    const issuedBindingId = this.issuedBindings.get(command);
+    if (this.recoveryRefreshPending &&
+        (reflectionCommand || issuedBindingId !== undefined || this.issuedBindingIds.has(command.id))) return false;
+    if (reflectionCommand) {
       return this.readReflection(command) !== undefined;
     }
-    const match = this.binding(this.issuedBindings.get(command) ?? command.id);
-    if (!match) return true;
+    const bindingId = issuedBindingId ?? command.id;
+    const match = this.binding(bindingId);
+    if (!match) return !this.issuedBindingIds.has(bindingId) && !this.issuedBindingIds.has(command.id);
     if (!this.reconcileMemory()) return false;
     const { p, b } = match;
     const step = p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === b.step_id);
@@ -421,10 +481,12 @@ export class OperationPlanLedger {
       const b = p.bindings.find((b) => b.command_id === command.id);
       if (b) { b.status = "intent_committed"; if (admitted) b.execution_admission = admitted; }
     } });
+    this.activePlanAttempts.add(this.issuedBindings.get(command) ?? command.id);
     freezeCommand(command);
     return true;
   }
   abandon(command_id: string): void {
+    if (this.recoveryRefreshPending) return;
     if (!this.binding(command_id) || this.binding(command_id)!.b.status !== "selected") return;
     this.change((state) => { for (const p of state.plans) {
       const b = p.bindings.find((b) => b.command_id === command_id); if (b?.status === "selected") b.status = "invalidated";
@@ -432,53 +494,65 @@ export class OperationPlanLedger {
   }
 
   recordResult(feedback: ExecuteFeedback): void {
-    const match = this.binding(feedback.command_id);
-    if (!match || match.b.status !== "intent_committed") return;
-    this.applyResult(match, feedback);
+    if (this.recoveryRefreshPending) {
+      this.activePlanAttempts.delete(feedback.command_id);
+      return;
+    }
+    try {
+      const match = this.binding(feedback.command_id);
+      if (!match || match.b.status !== "intent_committed") return;
+      this.applyResult(match, feedback);
+    } finally {
+      this.activePlanAttempts.delete(feedback.command_id);
+    }
   }
 
   /** 保存済みの同内容だけをJ→Mへ配送。作用・意味更新・承認復元は呼ばない。 */
   reconcileMemory(): boolean {
+    if (this.recoveryRefreshPending) return false;
     if (!this.resultMemory) return true;
     this.memoryReady = false;
     try {
       if (this.port && operationPlanDigest(this.port.load()) !== this.savedDigest && this.savedDigest !== null) return false;
-      for (const p of this.state.plans) for (const original of p.bindings) {
-        if (original.status !== "verified") continue;
-        if (!original.execution_admission || !original.delivery_digest) return false;
-        let b = this.binding(original.command_id)!.b;
-        if (!b.memory_commit) {
+      for (const p of this.state.plans) {
+        if (this.recoveryHolds.has(operationPlanDigest(p.revisions[0]!.plan.plan_id))) continue;
+        for (const original of p.bindings) {
+          if (original.status !== "verified") continue;
+          if (!original.execution_admission || !original.delivery_digest) return false;
+          let b = this.binding(original.command_id)!.b;
+          if (!b.memory_commit) {
+            const lifecycle = this.resultMemory.snapshot();
+            const stored = this.resultMemory.readMemoryRecord(resultMemoryIdentity(b).record_id);
+            if (!lifecycle || lifecycle.status !== "ready" || !stored || stored.exists) return false;
+            const commit = buildResultMemoryCommit(p, b, stored.revision);
+            this.change((state) => { state.plans.flatMap((entry) => entry.bindings).find((entry) => entry.command_id === b.command_id)!.memory_commit = commit; });
+            b = this.binding(b.command_id)!.b;
+          }
+          if (!verifyResultMemoryCommit(p, b)) return false;
+          const commit = b.memory_commit!;
           const lifecycle = this.resultMemory.snapshot();
-          const stored = this.resultMemory.readMemoryRecord(resultMemoryIdentity(b).record_id);
-          if (!lifecycle || lifecycle.status !== "ready" || !stored || stored.exists) return false;
-          const commit = buildResultMemoryCommit(p, b, stored.revision);
-          this.change((state) => { state.plans.flatMap((entry) => entry.bindings).find((entry) => entry.command_id === b.command_id)!.memory_commit = commit; });
-          b = this.binding(b.command_id)!.b;
-        }
-        if (!verifyResultMemoryCommit(p, b)) return false;
-        const commit = b.memory_commit!;
-        const lifecycle = this.resultMemory.snapshot();
-        if (!lifecycle) return false;
-        const existing = lifecycle.pending.find((entry) => entry.update_id === commit.update_id);
-        if (!existing) {
-          const staged = this.resultMemory.stage(commit);
-          if (!staged.ok || staged.status === "blocked") return false;
-        }
-        let reconciled = this.resultMemory.reconcile(commit.update_id);
-        if (!reconciled.ok) return false;
-        if (reconciled.status === "memory_commit_pending") {
-          const applied = this.resultMemory.apply(commit);
-          if (!applied.ok) return false;
-          reconciled = this.resultMemory.reconcile(commit.update_id);
-        }
-        if (!reconciled.ok || reconciled.status !== "ready" || !receiptForResultCommit(reconciled.receipt, commit)) return false;
-        const record = this.resultMemory.readMemoryRecord(resultMemoryIdentity(b).record_id);
-        if (!record?.exists || operationPlanDigest(record.value) !== operationPlanDigest(commit.changes[0]!.operation === "upsert" ? commit.changes[0]!.value : null)) return false;
-        if (b.memory_receipt) {
-          if (operationPlanDigest(b.memory_receipt) !== operationPlanDigest(reconciled.receipt)) return false;
-        } else {
-          const receipt = reconciled.receipt;
-          this.change((state) => { state.plans.flatMap((entry) => entry.bindings).find((entry) => entry.command_id === b.command_id)!.memory_receipt = receipt; });
+          if (!lifecycle) return false;
+          const existing = lifecycle.pending.find((entry) => entry.update_id === commit.update_id);
+          if (!existing) {
+            const staged = this.resultMemory.stage(commit);
+            if (!staged.ok || staged.status === "blocked") return false;
+          }
+          let reconciled = this.resultMemory.reconcile(commit.update_id);
+          if (!reconciled.ok) return false;
+          if (reconciled.status === "memory_commit_pending") {
+            const applied = this.resultMemory.apply(commit);
+            if (!applied.ok) return false;
+            reconciled = this.resultMemory.reconcile(commit.update_id);
+          }
+          if (!reconciled.ok || reconciled.status !== "ready" || !receiptForResultCommit(reconciled.receipt, commit)) return false;
+          const record = this.resultMemory.readMemoryRecord(resultMemoryIdentity(b).record_id);
+          if (!record?.exists || operationPlanDigest(record.value) !== operationPlanDigest(commit.changes[0]!.operation === "upsert" ? commit.changes[0]!.value : null)) return false;
+          if (b.memory_receipt) {
+            if (operationPlanDigest(b.memory_receipt) !== operationPlanDigest(reconciled.receipt)) return false;
+          } else {
+            const receipt = reconciled.receipt;
+            this.change((state) => { state.plans.flatMap((entry) => entry.bindings).find((entry) => entry.command_id === b.command_id)!.memory_receipt = receipt; });
+          }
         }
       }
       this.memoryReady = this.resultMemory.snapshot()?.status === "ready";
@@ -498,7 +572,7 @@ export class OperationPlanLedger {
 
   /** 同仕事・現版の受領済み観測だけをJが選択する。全履歴やraw検索内容をCへ渡さない。 */
   inspectReflection(control: OperationPlanReflectionControl, caller: InboundRequest): ResultObservationProjection {
-    if (!this.resultMemory || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest ||
+    if (this.recoveryRefreshPending || !this.resultMemory || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest ||
         this.resultMemory.snapshot()?.status !== "ready") throw new Error("plan_reflection_memory_unavailable");
     const p = this.ownedPlan(control.plan_id, caller);
     const current = p.revisions.at(-1)!;
@@ -562,6 +636,7 @@ export class OperationPlanLedger {
 
   /** Persist read-only receipt evidence without changing an operation's J-owned outcome. */
   recordExternalReceiptObservation(value: unknown, caller: InboundRequest): { request_id: string; command_id: string } | null {
+    if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const observation = OperationPlanExternalReceiptObservationSchema.parse(value);
     const { evidence_digest, observed_at_ms, ...evidence } = observation;
     if (operationPlanDigest(evidence) !== evidence_digest || observed_at_ms > Date.now() + 30_000) {
@@ -606,6 +681,7 @@ export class OperationPlanLedger {
 
   /** 起動時の私有結果調停。inflightや承認を復元せず、作用を一切呼ばない。 */
   reconcileResult(value: ExecutionResultDelivery, delivery_digest: string): boolean {
+    if (this.recoveryRefreshPending) return false;
     const delivery = inspectExecutionResultDelivery(value);
     if (createHash("sha256").update(JSON.stringify(delivery)).digest("hex") !== delivery_digest) throw new Error("plan_delivery_digest_mismatch");
     const match = this.binding(delivery.feedback.command_id);
@@ -665,6 +741,7 @@ export class OperationPlanLedger {
 
   projection() {
     return { schema_version: "operation-plan-projection.v1", used_for_authority: false as const, raw_payload_exposed: false as const,
+      recovery_refresh_status: this.recoveryRefreshPending ? "pending" as const : "ready" as const,
       result_memory: { configured: !!this.resultMemory, status: !this.resultMemory ? "not_configured" : this.memoryReady ? "receipt_confirmed" : "pending_or_unavailable",
         used_for_authority: false as const },
       plans: this.state.plans.map((p) => {
@@ -711,6 +788,7 @@ export class OperationPlanLedger {
   private inspectReceiptReconciliation(control: OperationPlanReceiptReconciliationControl, caller: InboundRequest): {
     plan_id: string; revision_digest: string; step: OperationStep; binding: Binding;
   } {
+    if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     if (this.port) {
       const loaded = this.port.load();
       if ((loaded === null ? null : operationPlanDigest(loaded)) !== this.savedDigest) throw new Error("plan_state_changed");

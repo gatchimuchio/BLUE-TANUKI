@@ -793,6 +793,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("operation-core-execution-list");
       expect(html).toContain("operation-plan-state-summary");
       expect(html).toContain("operation-plan-state-list");
+      expect(html).toContain("recovery_refresh_status");
+      expect(html).toContain("復元照合中");
+      expect(html).toContain("step選択を停止しています。復元処理完了後にGatewayを再起動して復旧状態を点検してください。");
       expect(html).toContain("renderOperationCoreProjections");
       expect(html).toContain("renderOperationCoreExecution");
       expect(html).toContain("renderOperationPlanStatus");

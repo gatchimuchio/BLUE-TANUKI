@@ -16,6 +16,13 @@ function request(content: string, user = "fixture-owner"): InboundRequest {
   return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user, timestamp: Date.now(), content,
     metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer" } });
 }
+function operationPlanRestoreCommand(): ExecuteCommand {
+  return {
+    id: randomUUID(), type: "tool_call",
+    payload: { tool_name: "recovery.restore", arguments: { backup_id: "fixture", store_key: "operation_plans", confirm: "RESTORE" } },
+    upstream_decision: { request_id: randomUUID(), commit_hash: "a".repeat(64), commit_decision: "ASSERT" },
+  } as unknown as ExecuteCommand;
+}
 function plan(id: string, root: string): OperationPlan {
   const target = { kind: "directory" as const, id: root };
   const result = { root, sandbox_root: root, query: "blue", visited_files: 1,
@@ -74,6 +81,76 @@ function review(hds: HDSUpperController, candidate: OperationPlan, step_id: stri
 }
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
+  it("selected-store restore gates plan use, rebases the live ledger, and holds only restored plans", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-live-restore-refresh-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const restoreWriter = new OperationPlanStateStore(join(root, "state.sqlite"));
+    try {
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      const originalOrigin = request("plan:compute original synthetic task");
+      const original = plan(originalOrigin.id, root);
+      await rig(hds, original).run(hds.decide(originalOrigin).command!);
+      const selected = review(hds, original, "search").command!;
+
+      const restoreCommand = operationPlanRestoreCommand();
+      expect(hds.beginOperationPlanRecoveryRefresh(restoreCommand)).toBe(true);
+      expect(hds.getRuntimeSnapshot().operation_plans.recovery_refresh_status).toBe("pending");
+      expect(hds.operationPlanCommandIsCurrent(selected)).toBe(false);
+      const blocked = review(hds, original, "independent");
+      expect(blocked.command).toBeNull();
+      expect(blocked.log.commit.reason).toBe("plan_control_denied:plan_recovery_refresh_hold");
+
+      const current = restoreWriter.load();
+      if (!current) throw new Error("missing fixture checkpoint");
+      const restoredOrigin = request("plan:compute restored synthetic task");
+      const restored = plan(restoredOrigin.id, root);
+      const restoredCheckpoint = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [{ owner: "fixture-owner", channel: "webchat", goal: "restored synthetic plan",
+          revisions: [{ digest: operationPlanDigest(restored), plan: restored }],
+          receipt_observations: [], bindings: [], results: [] }],
+      });
+      restoreWriter.compareAndSet(operationPlanDigest(current), restoredCheckpoint);
+
+      hds.refreshOperationPlansAfterRecoveryRestore(restoreCommand);
+      expect(hds.getRuntimeSnapshot().operation_plans.recovery_refresh_status).toBe("ready");
+      expect(hds.operationPlanCommandIsCurrent(selected)).toBe(false);
+      expect(hds.beginOperationPlanAttempt(selected)).toBe(false);
+      expect(hds.getRuntimeSnapshot().operation_plans.plans).toMatchObject([
+        { plan_id: operationPlanDigest(restored.plan_id), recovery_hold_reason: "held_unverified" },
+      ]);
+      const held = review(hds, restored, "search");
+      expect(held.command).toBeNull();
+      expect(held.log.commit.reason).toBe("plan_control_denied:plan_recovery_unverified_hold");
+
+      const newOrigin = request("plan:compute new task after restore refresh");
+      const fresh = plan(newOrigin.id, root);
+      await rig(hds, fresh).run(hds.decide(newOrigin).command!);
+      expect(review(hds, fresh, "search").command?.type).toBe("tool_call");
+    } finally {
+      restoreWriter.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to start selected-store restore while a plan action is in flight", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-live-restore-busy-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    try {
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      const origin = request("plan:compute restore busy synthetic task");
+      const candidate = plan(origin.id, root);
+      await rig(hds, candidate).run(hds.decide(origin).command!);
+      const selected = review(hds, candidate, "search").command!;
+      expect(hds.beginOperationPlanAttempt(selected)).toBe(true);
+      expect(hds.beginOperationPlanRecoveryRefresh(operationPlanRestoreCommand())).toBe(false);
+    } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("復元残差は既存plan選択だけをholdし、cleanと新規planも通常HDS判断へ戻す", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-recovery-hold-"));
     const store = new OperationPlanStateStore(join(root, "state.sqlite"));

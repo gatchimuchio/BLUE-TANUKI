@@ -209,7 +209,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <h3>現在のJ計画状態</h3>
             <span id="operation-plan-state-summary" class="badge warn">未読込</span>
           </div>
-          <p class="muted">表示専用の版付きsnapshotです。結果不明の作用はreceipt照合前に再送しません。</p>
+          <p class="muted">表示専用の版付きsnapshotです。selected Operation Plan復元の照合中はstep選択を停止し、未確認ならGateway再起動後の状態点検を案内します。結果不明の作用はreceipt照合前に再送しません。</p>
           <div id="operation-plan-state-list" class="trace-list">
             <div class="trace-item muted">J計画状態はまだ読み込まれていません。</div>
           </div>
