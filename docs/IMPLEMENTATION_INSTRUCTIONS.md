@@ -29,4 +29,4 @@ QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-RESTORE-PREFLIGHT-ATOMICITY`。
 - Gateway recovery focused suite：`recovery_surface.test.ts` 1 file／7 tests PASS。
 - `pnpm typecheck` PASS、`pnpm build` PASS（15 workspace projects）。distを消去する型検査の後にbuildを順次実行した。
 - `pnpm docs:check` PASS（日本語基底通常gate・licenseを含む、移行負債77件）。`git diff --check` PASS。
-- 実装commit=`4bfecebbe162d4ab0543f5cb71d81cebc5e825d8`をpush済み。closeout文書を含む限定docs commitをpushし、再fetch後のlocal／remote main、復元二世代refs、clean treeを最終照合する。
+- 実装commit=`4bfecebbe162d4ab0543f5cb71d81cebc5e825d8`をpush済み。文書closeoutも限定docs-only commitとしてpushし、再fetch後のlocal／remote main一致、復元二世代refs一致、clean treeを確認済み。
