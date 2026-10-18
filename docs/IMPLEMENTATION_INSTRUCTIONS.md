@@ -22,4 +22,4 @@ QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.02-CRON-NO-REPLAY-OWNER-RESOLUTION
 
 復旧参照は `MIGRATION_COMPLETE`（2026-10-12）を維持する。編集前・バッチ開始時のlocal recovery branch二世代とremote backup tag二世代は、今回の開始HEAD `e57633ca34240db6410af9332808d4fd914205f0` と直前世代の組で照合済み。バッチ途中では回転しない。閉鎖時に実SHAを再照合し、local二branch／remote二tag／mainが意図した世代で一致したことを記録する。
 
-未接続の完全なdurable job lifecycle、旧worker／旧approval世代の全回復、実外部結果の照合、D4Pocket UI接続は`BUILD_GAP`として残す。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、C08.03実provider保留を維持する。作業完了時に限定確認とGit同期を記録し、次consumerを具体化する。
+未接続の完全なdurable job lifecycle、旧worker／旧approval世代の全回復、実外部結果の照合、D4Pocket UI接続は`BUILD_GAP`として残す。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、C08.03実provider保留を維持する。実装commit=`9522971b73d86a4b2222de6f44a8014fde1fd38e`を`main`へpush済み。local／remote mainは同SHA、復旧branch二世代とbackup tag二世代は現世代=`e57633ca34240db6410af9332808d4fd914205f0`、前世代=`cb9806464247365ff7a54033e4f12cf92c050fb8`で一致。次consumerはdurable job lifecycleと実外部結果のread-only照合を維持した上で、明示権限がある場合のreconciliation経路を設計・接続する。
