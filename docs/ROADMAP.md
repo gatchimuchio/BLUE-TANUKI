@@ -2,7 +2,7 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
-2026-10-19のQEB-03-E03.03-RESTORE-SCOPE-POST-ACTION-EVIDENCEでは、Recovery restore結果の要求plan digestをComplete History、復元後観測、HDS evidenceと永続hold provenanceまで接続した。HDSはplanごとにrequested／collateralをdigest限定で記録し、scope欠落・不正時は未確認としてrefresh／選択を止める。復元作用はselected SQLite store全体の置換で、plan行単位の復元ではない。29 focused tests、typecheck、build、HDS standalone、serve smoke、docs check、repo-healthはPASS。実restore、実approval、実restartは未実施。E03.03=BUILD_GAP、C08.03 provider保留、P13=PENDING_OWNER_GOを維持する。
+2026-10-19のQEB-03-E03.03-RESTORE-SCOPE-RELATION-OPERATOR-PROJECTIONでは、HDS recovery holdのrequested／collateral／unknown関係をGatewayの固定投影経由でControl Centerへ表示した。指定計画と同一selected store内の巻き添え計画をdigest限定で区別し、欠落時は関係未確認とする。投影は非権威で、hold解除・実行・plan単位復元を示さない。101 focused tests、typecheck、build、HDS standalone、serve smoke、docs check、repo-healthはPASS。実restore、実approval、実restartは未実施。E03.03=BUILD_GAP、C08.03 provider保留、P13=PENDING_OWNER_GOを維持する。
 
 2026-10-19の`QEB-03-E03.03-RECOVERY-JOB-SCOPE-CONSUMER-AUDIT`では、Operation Planの`plan_id`がstep／commandを通じてBroker、M、Cron handoffとbackup dependency inventoryを結ぶ現行のplan範囲identityであることを確認した。汎用`task_id/run_id`はoptional contractに留まり、各機能のtask/event IDは相互のjob identityではない。Recoveryのexact-scope applicabilityはread-only表示で、L3 restore要求はbackup ID／store keyだけを束縛し、selected canonical SQLite store全体を復元する。snapshot間atomicityもない。後続のBUILD_BATCHで既存plan digestをcanonical `operation_plans` restoreのL3要求・実行直前照合へ結んだ。さらにpost-action evidenceまでscope digestを渡し、HDS holdにrequested／collateral関係をdigest限定で残す。これはselected-store復元のscope bindingであり、job単位DB復元を意味しない。E03.03=`BUILD_GAP`、C08.03 provider保留、P13=`PENDING_OWNER_GO`を維持する。
 
