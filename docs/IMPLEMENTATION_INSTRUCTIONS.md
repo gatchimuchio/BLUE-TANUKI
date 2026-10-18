@@ -2,6 +2,21 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-03-E03.03-STARTUP-HOLD-DEVELOPER-REFUSAL-DELIVERY`
+
+開始HEAD／`origin/main`=`dec962da096a175027cf1dc1354e65eecacae0fb`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）と適用`AGENTS.md`、作業標準要領、active指示を再読した。開始local recovery branch／remote backup tagはcurrent=`dec962da096a175027cf1dc1354e65eecacae0fb`、previous=`63999a56543c723dfa55ea6d7d7a14276f7474cf`。
+
+`plan_control_denied:plan_recovery_unverified_hold`のDeveloper向けWebChat応答へ、安全な次操作を追加した。Control Centerで復旧状態を読み取り確認し、状態確認後に続ける場合だけ新しい依頼から新規計画を作る案内を出し、hold中plan reviewの再試行を勧めない。Gateway process／WebSocket回帰testで応答配送、拒否コード、次操作、commandなし、executor履歴なしを確認した。この範囲は`WIRED`（合成fixture）、E03.03全体は`BUILD_GAP`。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `recovery_mutation_entry.test.ts` | PASS、4 tests。 |
+| `pnpm typecheck`／`pnpm build`／`pnpm smoke:serve` | すべてPASS。buildはworkspace 15 projects。 |
+| `docs:check`／`validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実canonical restore／実owner approval／provider credential／外部作用／ブラウザ描画／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+次consumerはControl CenterのRecovery／Operation Plan投影でhold状態と読み取り確認の案内を操作者が確認する画面経路。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の境界を維持する。
+
 ### 最新BUILD_BATCH：`QEB-03-E03.03-STARTUP-HOLD-DEVELOPER-PLAN-REVIEW`
 
 開始HEAD／`origin/main`=`63999a56543c723dfa55ea6d7d7a14276f7474cf`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）と適用`AGENTS.md`、作業標準要領、active指示を再読した。開始時のlocal current／previous recovery branchとremote current／previous backup tagはcurrent=`63999a56543c723dfa55ea6d7d7a14276f7474cf`、previous=`d347acd22ccac67b157b74e22908057c05838d80`。

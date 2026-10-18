@@ -579,6 +579,10 @@ export function humanizeDecision(
     case "OUT_OF_SCOPE":
       return `[out-of-scope] Request not handled. reason=${reason}`;
     case "FAIL":
+      if (reason === "plan_control_denied:plan_recovery_unverified_hold") {
+        return `[rejected] Request blocked by upstream policy. reason=${reason}\n` +
+          "安全な次の操作: Control Centerで復旧状態を読み取り確認してください。状態確認後に続ける場合は、新しい依頼から新規計画を作成してください。保留中の計画レビューは再試行しないでください。";
+      }
       return `[rejected] Request blocked by upstream policy. reason=${reason}`;
     case "ASSERT":
       return `[ok] reason=${reason}`;

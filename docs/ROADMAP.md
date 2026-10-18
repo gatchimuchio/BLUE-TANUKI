@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-03-E03.03-STARTUP-HOLD-DEVELOPER-REFUSAL-DELIVERY`では、起動時の`held_unverified` planに対するHDS拒否をDeveloperのWebChat WebSocketへ送り、拒否理由とControl Centerで復旧状態を読み取り確認する次の操作を表示した。状態確認後に続ける場合は新しい依頼から新規計画を作り、hold中のplan reviewは再試行しない案内を付けた。commandとexecutor履歴は生じず、拒否配送は合成履歴／実Gateway processのfixtureで`WIRED`。focused test 4件、typecheck、15 workspace build、serve smoke、docs／repo-health gateはPASS。ブラウザ描画・実restore・owner approvalは未実施。E03.03=`BUILD_GAP`を維持する。次はControl CenterのRecovery／Operation Plan投影で操作者がhold状態を読み取り確認する画面consumerを検証する。
+
 2026-10-19の`QEB-03-E03.03-STARTUP-HOLD-DEVELOPER-PLAN-REVIEW`では、認証済みWebChat Developer Operator経由の`plan:review`が、起動時に`held_unverified`となった既存planをHDS内で拒否し、command／Executor実行を作らないことを合成Gateway processで確認した。この経路は`WIRED`、E03.03全体は`BUILD_GAP`。実canonical restore、実owner approval、実作用は未実施。次は安全な拒否結果をDeveloper UIへ届ける出力経路を接続する。
 
 2026-10-19の`QEB-03-E03.03-COMPLETE-HISTORY-STARTUP-HOLD-PROCESS-RESTART`では、file-backed Complete Historyの合成restore失敗記録から、Gateway起動時に既存Operation Planをholdする実process経路を確認した。holdはSQLiteへdigest限定で保存され、履歴記録を空にして別processを再起動した後も維持された。これは起動時の保留とprocess再起動のfixture証拠であり、実restore／owner approval／job再開ではない。E03.03=`BUILD_GAP`を維持する。

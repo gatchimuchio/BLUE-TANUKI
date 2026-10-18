@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { CompleteHistoryStore, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
@@ -91,6 +92,7 @@ describe("Recovery mutation HDS L3 entry", () => {
     expect(JSON.stringify(history.replay())).not.toContain("synthetic-backup-id");
 
     let gateway: ReturnType<typeof spawnGateway> | undefined;
+    let webSocket: WebSocket | undefined;
     try {
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(port, gateway);
@@ -127,6 +129,17 @@ describe("Recovery mutation HDS L3 entry", () => {
       expect(restartedRuntime.body.hds.operation_plans.plans, gateway.output.join(""))
         .toMatchObject([{ plan_id: planIdDigest, recovery_hold_reason: "held_unverified" }]);
 
+      const ticketResponse = await requestJson(port, "/ws-ticket", {
+        method: "POST",
+        token: inboundToken,
+        body: { user: "fixture-owner" },
+      });
+      expect(ticketResponse.status, JSON.stringify(ticketResponse.body)).toBe(200);
+      const ticket = ticketResponse.body.ticket as string;
+      webSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?ticket=${encodeURIComponent(ticket)}`);
+      await once(webSocket, "open");
+      const displayedDecision = waitForWebChatSend(webSocket);
+
       const reviewContent = `plan:review ${JSON.stringify({
         plan_id: planIdDigest,
         revision_digest: seededPlan.revision_digest,
@@ -141,6 +154,11 @@ describe("Recovery mutation HDS L3 entry", () => {
       const reviewRequestId = reviewRequest.body.request_id as string;
       expect(reviewRequestId).toEqual(expect.any(String));
       await waitForHistoryDecision(port, gateway, reviewRequestId);
+      const userFacingDecision = await displayedDecision;
+      expect(userFacingDecision).toContain("plan_control_denied:plan_recovery_unverified_hold");
+      expect(userFacingDecision).toContain("Control Centerで復旧状態を読み取り確認してください。");
+      expect(userFacingDecision).toContain("新しい依頼から新規計画を作成してください。");
+      expect(userFacingDecision).toContain("保留中の計画レビューは再試行しないでください。");
 
       await stopChild(gateway.child);
       gateway = undefined;
@@ -168,6 +186,7 @@ describe("Recovery mutation HDS L3 entry", () => {
         restartedStore.close();
       }
     } finally {
+      webSocket?.close();
       if (gateway) await stopChild(gateway.child);
     }
   }, 30_000);
@@ -706,6 +725,40 @@ async function waitForHistoryDecision(
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`Timed out waiting for HDS decision ${requestId}: ${gateway.output.join("")}`);
+}
+
+function waitForWebChatSend(webSocket: WebSocket): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out waiting for Developer decision delivery"));
+    }, 5_000);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      webSocket.off("message", onMessage);
+      webSocket.off("error", onError);
+      webSocket.off("close", onClose);
+    };
+    const onMessage = (data: Buffer) => {
+      let message: unknown;
+      try {
+        message = JSON.parse(data.toString("utf8"));
+      } catch {
+        return;
+      }
+      if (!message || typeof message !== "object" || (message as { kind?: unknown }).kind !== "channel_send") return;
+      cleanup();
+      resolve((message as { content?: string }).content ?? "");
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onClose = () => onError(new Error("WebChat closed before Developer decision delivery"));
+    webSocket.on("message", onMessage);
+    webSocket.once("error", onError);
+    webSocket.once("close", onClose);
+  });
 }
 
 async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
