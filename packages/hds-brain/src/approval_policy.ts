@@ -29,6 +29,7 @@ export type ApprovalOperation =
   | "schedule.create"
   | "schedule.update"
   | "schedule.delete"
+  | "schedule.resolve_event"
   | "github.write"
   | "google.write"
   | "payment.charge"
@@ -124,6 +125,7 @@ export const FINAL_REVIEW_OPERATION_LIST = [
   "schedule.create",
   "schedule.update",
   "schedule.delete",
+  "schedule.resolve_event",
   "browser.automation",
   "github.write",
   "google.write",
@@ -166,6 +168,7 @@ export function operationFromCommand(command: ExecuteCommand, caps: readonly Too
   if (hasAny(caps, ["credential:read", "credential.access", "secrets:read"])) return "credential.access";
   if (hasAny(caps, ["payment:charge", "billing:write"])) return "payment.charge";
   if (hasAny(caps, ["schedule:read"])) return "schedule.list";
+  if (hasAny(caps, ["schedule:resolve_event"])) return "schedule.resolve_event";
   if (hasAny(caps, ["schedule:create", "automation:create"])) return "schedule.create";
   if (hasAny(caps, ["schedule:update", "automation:update"])) return "schedule.update";
   if (hasAny(caps, ["schedule:delete", "automation:delete"])) return "schedule.delete";
@@ -197,6 +200,7 @@ export function operationFromCommand(command: ExecuteCommand, caps: readonly Too
     if (command.payload.tool_name === "schedule.create") return "schedule.create";
     if (command.payload.tool_name === "schedule.update") return "schedule.update";
     if (command.payload.tool_name === "schedule.delete") return "schedule.delete";
+    if (command.payload.tool_name === "schedule.resolve_event") return "schedule.resolve_event";
     if (command.payload.tool_name === "file.search") return "tool.file.search";
     if (command.payload.tool_name === "http.fetch") return "tool.network.http";
     if (command.payload.tool_name === "browser.snapshot") return "browser.snapshot";
@@ -209,7 +213,7 @@ export function operationFromCommand(command: ExecuteCommand, caps: readonly Too
 export function riskForOperation(op: ApprovalOperation, caps: readonly ToolCapability[] = []): ApprovalRisk {
   if (op === "tool.call" || op === "unknown") return "high";
   if (["credential.access", "payment.charge"].includes(op)) return "high";
-  if (["tool.file.delete", "tool.shell.exec", "external.send", "settings.write", "schedule.create", "schedule.update", "schedule.delete", "browser.automation", "github.write", "google.write"].includes(op)) return "high";
+  if (["tool.file.delete", "tool.shell.exec", "external.send", "settings.write", "schedule.create", "schedule.update", "schedule.delete", "schedule.resolve_event", "browser.automation", "github.write", "google.write"].includes(op)) return "high";
   if (
     ["tool.file.write", "tool.network.http", "browser.snapshot", "channel.send"].includes(op) ||
     hasPrefix(caps, "network:")

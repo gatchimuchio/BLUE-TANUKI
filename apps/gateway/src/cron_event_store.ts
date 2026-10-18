@@ -15,6 +15,7 @@ export interface CronEventIdentity {
 }
 
 export type CronEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown";
+export type CronEventResolutionState = "unacknowledged" | "owner_acknowledged_no_replay" | "verification_unavailable";
 
 export interface CronEventCursorSnapshot {
   readonly source_digest: string;
@@ -22,6 +23,7 @@ export interface CronEventCursorSnapshot {
   readonly event_id: string;
   readonly payload_digest: string;
   readonly delivery_state: CronEventDeliveryState;
+  readonly resolution_state: CronEventResolutionState;
   readonly updated_at_ms: number;
 }
 
@@ -58,8 +60,12 @@ export function createCronEventIdentity(
  */
 export class GatewayCronEventStore {
   private readonly db: DatabaseType;
+  private readonly verifyNoReplayDisposition?: (event_id: string, payload_digest: string) => boolean;
 
-  constructor(filepath: string) {
+  constructor(filepath: string, opts: {
+    verifyNoReplayDisposition?: (event_id: string, payload_digest: string) => boolean;
+  } = {}) {
+    this.verifyNoReplayDisposition = opts.verifyNoReplayDisposition;
     mkdirSync(dirname(resolve(filepath)), { recursive: true });
     this.db = new DatabaseSync(filepath);
     if (process.platform !== "win32") chmodSync(filepath, 0o600);
@@ -99,7 +105,10 @@ export class GatewayCronEventStore {
     }
   }
 
-  static fromEnvironment(env: NodeJS.ProcessEnv = process.env): GatewayCronEventStore {
+  static fromEnvironment(
+    env: NodeJS.ProcessEnv = process.env,
+    opts: { verifyNoReplayDisposition?: (event_id: string, payload_digest: string) => boolean } = {},
+  ): GatewayCronEventStore {
     const stateRoot = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
     mkdirSync(stateRoot, { recursive: true });
     const privateRoot = join(realpathSync(stateRoot), "private-state");
@@ -115,7 +124,7 @@ export class GatewayCronEventStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    return new GatewayCronEventStore(filepath);
+    return new GatewayCronEventStore(filepath, opts);
   }
 
   claim(event: CronEventIdentity, now_ms = Date.now()): CronEventClaim {
@@ -131,7 +140,8 @@ export class GatewayCronEventStore {
         }
         return { status: "duplicate", delivery_state: current.delivery_state } as const;
       }
-      if (current && current.delivery_state !== "handler_returned") {
+      if (current && current.delivery_state !== "handler_returned" &&
+          this.resolutionState(current.event_id, current.payload_digest) !== "owner_acknowledged_no_replay") {
         return { status: "blocked_unresolved", delivery_state: current.delivery_state } as const;
       }
 
@@ -190,8 +200,17 @@ export class GatewayCronEventStore {
       LEFT JOIN cron_event_inbox i ON i.source_digest=o.source_digest WHERE i.source_digest IS NULL LIMIT 1`).get();
     if (orphan) throw new Error("cron_event_store_orphan_outbox_detected");
     return rows
-      .map((row) => parseCursorRow(row.source_digest, row))
+      .map((row) => {
+        const cursor = parseCursorRow(row.source_digest, row);
+        return { ...cursor, resolution_state: this.resolutionState(cursor.event_id, cursor.payload_digest) };
+      })
       .filter((row) => row.delivery_state !== "handler_returned");
+  }
+
+  unresolvedEvent(event_id: string, payload_digest: string): CronEventCursorSnapshot | undefined {
+    if (typeof event_id !== "string" || !/^cron-[a-f0-9]{64}$/.test(event_id) ||
+        typeof payload_digest !== "string" || !DIGEST.test(payload_digest)) return undefined;
+    return this.unresolvedEvents().find((event) => event.event_id === event_id && event.payload_digest === payload_digest);
   }
 
   close(): void {
@@ -239,6 +258,17 @@ export class GatewayCronEventStore {
       delivery_state: snapshot.delivery_state,
     };
   }
+
+  private resolutionState(event_id: string, payload_digest: string): CronEventResolutionState {
+    if (!this.verifyNoReplayDisposition) return "unacknowledged";
+    try {
+      return this.verifyNoReplayDisposition(event_id, payload_digest)
+        ? "owner_acknowledged_no_replay"
+        : "unacknowledged";
+    } catch {
+      return "verification_unavailable";
+    }
+  }
 }
 
 function parseCursorRow(
@@ -271,6 +301,7 @@ function parseCursorRow(
     event_id: row.event_id,
     payload_digest: row.payload_digest,
     delivery_state: row.delivery_state,
+    resolution_state: "unacknowledged",
     updated_at_ms: row.updated_at_ms,
   };
 }

@@ -322,6 +322,14 @@ export const OPERATION_DESCRIPTOR_REGISTRY: readonly OperationDescriptor[] = Obj
     ["tool:schedule.delete", "schedule:delete"],
     5_000,
   ),
+  toolDescriptor(
+    "schedule.resolve_event",
+    "apps/gateway/src/cron_event_resolution_tool.ts#createCronEventResolutionTool",
+    "internal_runtime",
+    ["schedule_change", "write"],
+    ["tool:schedule.resolve_event", "schedule:resolve_event"],
+    5_000,
+  ),
   operationDescriptor(
     "llm.call",
     "packages/blue-tanuki/src/executor.ts#executeLLMCall",
@@ -362,6 +370,7 @@ export const OPERATOR_SURFACE_OPERATION_IDS = Object.freeze({
     "schedule.create",
     "schedule.update",
     "schedule.delete",
+    "schedule.resolve_event",
     "gmail.write",
     "google.calendar.write",
     "google.drive.write",

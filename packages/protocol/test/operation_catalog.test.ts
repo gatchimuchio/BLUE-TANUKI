@@ -34,6 +34,7 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
       "schedule.create",
       "schedule.update",
       "schedule.delete",
+      "schedule.resolve_event",
     ];
 
     expect(OPERATION_DESCRIPTOR_REGISTRY.filter((descriptor) => descriptor.tool_name).map((descriptor) => descriptor.tool_name).sort())
@@ -65,6 +66,10 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
       "schedule_change",
       "delete",
       "write",
+    ]);
+    expect(getToolOperationDescriptor("schedule.resolve_event")?.required_capabilities).toEqual([
+      "tool:schedule.resolve_event",
+      "schedule:resolve_event",
     ]);
     expect(getToolOperationDescriptor("gmail.read")?.required_capabilities).toContain(
       "secrets:GOOGLE_ACCESS_TOKEN",

@@ -82,15 +82,22 @@ export function buildResidentNotificationsSnapshot(
       kind: "schedule_delivery_unknown",
       severity: "warning",
       title: "Schedule delivery result is unsettled",
-      message: `Cron event sequence ${event.sequence} remains ${event.delivery_state}; delivery is not confirmed, and later events from this source are blocked without automatic replay. A saved-result link is evidence correlation only, not proof of external success.`,
+      message: event.resolution_state === "owner_acknowledged_no_replay"
+        ? `Cron event sequence ${event.sequence} remains ${event.delivery_state}; the owner recorded a no-replay disposition, so later events may proceed. The original outcome remains unknown. A saved-result link is evidence correlation only.`
+        : event.resolution_state === "verification_unavailable"
+        ? `Cron event sequence ${event.sequence} remains ${event.delivery_state}; the no-replay disposition could not be verified, so later events remain blocked. A saved-result link is evidence correlation only, not proof of external success.`
+        : `Cron event sequence ${event.sequence} remains ${event.delivery_state}; delivery is not confirmed, and later events from this source are blocked without automatic replay. A saved-result link is evidence correlation only, not proof of external success.`,
       timestamp: event.updated_at_ms,
       source: "cron_event_cursor",
       read_only: true,
       authority: "display_only",
       request_id: event.event_id,
       payload_hash: event.payload_digest,
+      cron_resolution_state: event.resolution_state,
       ...cronResultCorrelation(event.event_id, input.operation_plan_projection),
-      next_action: "Inspect Authority Trace for this event ID and verify target delivery before taking any duplicate action.",
+      next_action: event.resolution_state === "owner_acknowledged_no_replay"
+        ? "The next event may proceed, but this result is still unknown; inspect the authorized target independently before treating the action as complete."
+        : "Inspect Authority Trace for this event ID and verify target delivery before taking any duplicate action.",
     });
   }
 

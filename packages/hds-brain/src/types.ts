@@ -511,6 +511,7 @@ export type AuthorityEventKind =
   | "composio_execution_requested"
   | "composio_execution_completed"
   | "composio_execution_failed"
+  | "cron_event_no_replay_acknowledged"
   | "approval_asked"
   | "approval_allowed"
   | "approval_denied";
@@ -527,6 +528,9 @@ export interface AuthorityEventLog {
   target_scope?: ApprovalEvaluation["context"]["target_scope"];
   risk?: ApprovalEvaluation["risk"];
   authority_trace?: ApprovalEvaluation["authority_trace"];
+  cron_event_id?: string;
+  cron_payload_digest?: string;
+  cron_disposition?: "acknowledge_no_replay";
   timestamp: number;
 }
 

@@ -14,6 +14,8 @@
 | QE_QA | QC証拠から対象別・OS別・版別保証 | 未着手 |
 | QE_RELEASE_REVIEW | ownerによる独立公開・出荷判断 | 未着手 |
 
+2026-10-18のQEB-03-E03.02-CRON-NO-REPLAY-OWNER-RESOLUTIONでは、未決Cron eventの正確なevent ID／payload digestに結び付いたL3の「再実行しない」判断をDaily操作として接続した。HDSの永続hash-chain監査で同一command／requestのL3要求と人間承認を検証し、Cron cursorは同じeventの判断が再起動後も検証できた場合に限り次eventを許可する。処理中、stale／重複、監査検証不能はfail-closed。元の結果は`outcome_unknown`のまま保持し、再送・結果成功の推定・M更新はしない。durable job lifecycleと実外部結果の照合を含むE03.02／E01.01全体は`BUILD_GAP`。
+
 2026-10-18のQEB-03-E04.01-CONDITIONED-FAILURE-GATEでは、Gateway command failureからHDS-BRAIN failure memory、次の実行前gateまでを接続した。署名にはgoal・action／target・actor/channel・症状のdigestを分離して保持し、原因分類は候補、原因と予測差は未確認として記録する。異なるtarget／goalや旧request IDで誤照合しないfixtureを追加。raw error・goal・argumentsは新規failure signatureへ保存しない。既存failure-memory-v2は読み込み互換を保つが、条件patternを持たない旧command signatureは新gateで適用しない。予測差を供給するproducerとJの原因・反対仮説採否は未接続のため、E04.01／QEB-03は`BUILD_GAP`。
 
 2026-10-18のQEB-03-E04.02-FAILURE-CAUSE-REVIEWでは、明示したDeveloper要求から保存済みfailure signatureのカテゴリ・allowlist unknown・パターンdigestだけをGatewayが射影し、HDS-issued C computeと署名／projection結合済みJ reviewへ接続した。Cの候補本文は形状・結合確認後に未検証候補としてDeveloperへ表示し、HDS auditには内容でなく各候補のdigestを記録する。Cのscope判断は提案として残し、Jは常に独立観測まで保留する。raw failure patternを渡さず、fallback provider authorization、memory更新、failure gate変更、retry、OperationPlan保持、外部作用へ接続しない。protocol／HDS／Gateway／Compute focused tests、workspace typecheck/buildを確認した。意味に基づく原因確定・独立観測の取得／採否・Memory反映・条件変化後の限定再試行は未接続で、E04.02／QEB-03は`BUILD_GAP`を維持する。

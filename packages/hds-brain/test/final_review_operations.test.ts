@@ -34,6 +34,7 @@ describe("final-review operation single source", () => {
     expect(process.approval_profile.final_review_operations).toEqual(finalReviewOperationList());
     expect(process.approval_profile.final_review_operations).toContain("tool.call");
     expect(process.approval_profile.final_review_operations).toContain("google.write");
+    expect(process.approval_profile.final_review_operations).toContain("schedule.resolve_event");
     expect(process.approval_profile.final_review_operations).toContain("unknown");
   });
 

@@ -37,6 +37,7 @@ describe("GatewayCronEventStore", () => {
       event_id: first.event_id,
       payload_digest: first.payload_digest,
       delivery_state: "dispatching",
+      resolution_state: "unacknowledged",
       updated_at_ms: 100,
     }]);
     expect(store.claim(first)).toEqual({ status: "duplicate", delivery_state: "dispatching" });
@@ -55,6 +56,7 @@ describe("GatewayCronEventStore", () => {
         event_id: next.event_id,
         payload_digest: next.payload_digest,
         delivery_state: "outcome_unknown",
+        resolution_state: "unacknowledged",
         updated_at_ms: 400,
       }]);
       expect(reopened.claim(next)).toEqual({ status: "duplicate", delivery_state: "outcome_unknown" });
@@ -74,6 +76,53 @@ describe("GatewayCronEventStore", () => {
     expect(a.source).toBe("cron:runtime:例");
     expect(a.event_id).toBe(b.event_id);
     expect(a.payload_digest).not.toBe(b.payload_digest);
+  });
+
+  it("advances only after an exact HDS no-replay disposition is verified", () => {
+    const { filepath, store } = makeStore();
+    const unresolved = makeEvent("cron:runtime:ack", 5_000, "synthetic action");
+    const next = makeEvent("cron:runtime:ack", 6_000, "next synthetic action");
+    let acknowledged = false;
+    store.close();
+    const verified = new GatewayCronEventStore(filepath, {
+      verifyNoReplayDisposition: (event_id, payload_digest) =>
+        acknowledged && event_id === unresolved.event_id && payload_digest === unresolved.payload_digest,
+    });
+    try {
+      expect(verified.claim(unresolved, 500)).toEqual({ status: "accepted" });
+      verified.settle(unresolved, "outcome_unknown", 600);
+      expect(verified.claim(next)).toEqual({ status: "blocked_unresolved", delivery_state: "outcome_unknown" });
+      expect(verified.unresolvedEvents()[0]?.resolution_state).toBe("unacknowledged");
+
+      acknowledged = true;
+      expect(verified.unresolvedEvents()[0]?.resolution_state).toBe("owner_acknowledged_no_replay");
+      expect(verified.claim(next)).toEqual({ status: "accepted" });
+      expect(verified.unresolvedEvents()).toEqual([expect.objectContaining({
+        event_id: next.event_id,
+        delivery_state: "dispatching",
+        resolution_state: "unacknowledged",
+      })]);
+    } finally {
+      verified.close();
+    }
+  });
+
+  it("reports unavailable verification and keeps the next event blocked", () => {
+    const { store, filepath } = makeStore();
+    const unresolved = makeEvent("cron:runtime:verify", 7_000, "synthetic action");
+    const next = makeEvent("cron:runtime:verify", 8_000, "next synthetic action");
+    store.claim(unresolved);
+    store.settle(unresolved, "outcome_unknown");
+    store.close();
+    const unavailable = new GatewayCronEventStore(filepath, {
+      verifyNoReplayDisposition: () => { throw new Error("audit unavailable"); },
+    });
+    try {
+      expect(unavailable.unresolvedEvents()[0]?.resolution_state).toBe("verification_unavailable");
+      expect(unavailable.claim(next)).toEqual({ status: "blocked_unresolved", delivery_state: "outcome_unknown" });
+    } finally {
+      unavailable.close();
+    }
   });
 
   it("keeps event payload out of the durable cursor and fails closed on inbox/outbox mismatch", () => {

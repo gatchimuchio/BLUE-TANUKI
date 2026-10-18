@@ -10,6 +10,7 @@ export type DailyOperationKind =
   | "schedule.create"
   | "schedule.update"
   | "schedule.delete"
+  | "schedule.resolve_event"
   | "gmail.write"
   | "google.calendar.write"
   | "google.drive.write"

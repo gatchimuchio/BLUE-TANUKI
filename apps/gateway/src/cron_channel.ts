@@ -120,6 +120,7 @@ export class CronSchedulerChannel implements InboundChannel {
   private readonly runtimes = new Map<string, CronTaskRuntime>();
   private readonly pendingBySource = new Map<string, Promise<void>>();
   private readonly pendingFires = new Set<Promise<void>>();
+  private readonly inFlightEventIds = new Set<string>();
   private readonly logLine?: (line: string) => void;
   private readonly nowFn?: () => Date;
   private handler: InboundHandler | null = null;
@@ -177,6 +178,10 @@ export class CronSchedulerChannel implements InboundChannel {
       next_fire_at_ms: runtime.nextFireAtMs,
       last_fire_at_ms: runtime.lastFireAtMs,
     }));
+  }
+
+  isEventInFlight(event_id: string): boolean {
+    return this.inFlightEventIds.has(event_id);
   }
 
   upsertTask(task: CronTaskOptions): CronTaskSnapshot {
@@ -263,45 +268,50 @@ export class CronSchedulerChannel implements InboundChannel {
       this.log(`[cron] event not dispatched id=${task.id} status=${claim.status}${claim.status === "duplicate" || claim.status === "blocked_unresolved" ? ` delivery_state=${claim.delivery_state}` : ""}`);
       return;
     }
+    this.inFlightEventIds.add(event.event_id);
     try {
-      this.onFire?.(this.snapshotForRuntime(runtime, payloadHash), event);
-    } catch (error) {
-      this.eventStore?.settle(event, "outcome_unknown");
-      throw error;
-    }
-    const metadata: GatewayInternalAuthorityMetadata = {
-      ...resolvedMetadata,
-      "blue_tanuki.authority_context": "gateway_internal_v1",
-      "blue_tanuki.actor_kind": "cron",
-      "blue_tanuki.trust_level": "trusted",
-      "blue_tanuki.process_kind": "cron",
-      ...(task.name === "daily_brief" ? { "blue_tanuki.operator_surface": "daily" as const } : {}),
-      "blue_tanuki.cron.task_id": task.id,
-      "blue_tanuki.cron.origin": task.origin,
-      "blue_tanuki.cron.payload_hash": payloadHash,
-      "blue_tanuki.cron.event_source": event.source,
-      "blue_tanuki.cron.event_id": event.event_id,
-      "blue_tanuki.cron.event_sequence": String(event.sequence),
-      "blue_tanuki.cron.content_source": resolvedMetadata["blue_tanuki.cron.content_source"] ?? "static",
-      "blue_tanuki.channel_send.channel": task.channel,
-      "blue_tanuki.channel_send.target": task.target,
-      "blue_tanuki.channel_send.content": resolved.content,
-    };
-    const inbound: InboundRequest = createGatewayInternalInboundRequest({
-      id: event.event_id,
-      channel: "cron",
-      user: "blue-tanuki-cron",
-      content: resolved.content,
-      timestamp: runtime.lastFireAtMs,
-      metadata,
-    });
-    this.log(`[cron] firing task id=${task.id} channel=${task.channel} target=${task.target}`);
-    try {
-      await handler(inbound);
-      this.eventStore?.settle(event, "handler_returned");
-    } catch (error) {
-      this.eventStore?.settle(event, "outcome_unknown");
-      throw error;
+      try {
+        this.onFire?.(this.snapshotForRuntime(runtime, payloadHash), event);
+      } catch (error) {
+        this.eventStore?.settle(event, "outcome_unknown");
+        throw error;
+      }
+      const metadata: GatewayInternalAuthorityMetadata = {
+        ...resolvedMetadata,
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "cron",
+        "blue_tanuki.trust_level": "trusted",
+        "blue_tanuki.process_kind": "cron",
+        ...(task.name === "daily_brief" ? { "blue_tanuki.operator_surface": "daily" as const } : {}),
+        "blue_tanuki.cron.task_id": task.id,
+        "blue_tanuki.cron.origin": task.origin,
+        "blue_tanuki.cron.payload_hash": payloadHash,
+        "blue_tanuki.cron.event_source": event.source,
+        "blue_tanuki.cron.event_id": event.event_id,
+        "blue_tanuki.cron.event_sequence": String(event.sequence),
+        "blue_tanuki.cron.content_source": resolvedMetadata["blue_tanuki.cron.content_source"] ?? "static",
+        "blue_tanuki.channel_send.channel": task.channel,
+        "blue_tanuki.channel_send.target": task.target,
+        "blue_tanuki.channel_send.content": resolved.content,
+      };
+      const inbound: InboundRequest = createGatewayInternalInboundRequest({
+        id: event.event_id,
+        channel: "cron",
+        user: "blue-tanuki-cron",
+        content: resolved.content,
+        timestamp: runtime.lastFireAtMs,
+        metadata,
+      });
+      this.log(`[cron] firing task id=${task.id} channel=${task.channel} target=${task.target}`);
+      try {
+        await handler(inbound);
+        this.eventStore?.settle(event, "handler_returned");
+      } catch (error) {
+        this.eventStore?.settle(event, "outcome_unknown");
+        throw error;
+      }
+    } finally {
+      this.inFlightEventIds.delete(event.event_id);
     }
   }
 

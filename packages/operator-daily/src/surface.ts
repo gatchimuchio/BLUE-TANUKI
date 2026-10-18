@@ -99,6 +99,16 @@ export const DAILY_OPERATION_SPECS: readonly DailyOperationSpec[] = [
     audit_trace: ["surface", "schedule_id", "payload_hash", "final_review_result"],
   },
   {
+    kind: "schedule.resolve_event",
+    label: "Acknowledge an unsettled cron event without replay through final review",
+    approval_level: "L3_final_review",
+    approval_risk: "high",
+    final_review_required: true,
+    downstream_tools: ["schedule.resolve_event"],
+    capabilities: requireOperationDescriptor("schedule.resolve_event").required_capabilities,
+    audit_trace: ["surface", "event_id", "payload_digest", "no_replay_disposition", "final_review_result"],
+  },
+  {
     kind: "gmail.write",
     label: "Prepare Gmail external write",
     approval_level: "L3_final_review",

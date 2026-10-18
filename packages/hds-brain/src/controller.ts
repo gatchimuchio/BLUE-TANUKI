@@ -797,7 +797,7 @@ ${planControl.question}`,
 
   /** Append an explicit authority-ledger event into the same audit hash-chain. */
   onAuthorityEvent(
-    event: AuthorityEventLog["event"],
+    event: Exclude<AuthorityEventLog["event"], "cron_event_no_replay_acknowledged">,
     opts: {
       request_id?: string | null;
       command_id?: string;
@@ -807,6 +807,9 @@ ${planControl.question}`,
       evaluation?: ApprovalEvaluation;
     } = {},
   ): void {
+    if (String(event) === "cron_event_no_replay_acknowledged") {
+      throw new Error("cron no-replay disposition must use the guarded HDS operation");
+    }
     const log: AuthorityEventLog = {
       kind: "authority_event",
       event,
@@ -824,13 +827,123 @@ ${planControl.question}`,
     this.audit.append(log);
   }
 
+  /**
+   * Persist an owner-reviewed no-replay disposition for one exact unsettled
+   * cron event. The audited HDS record, not the gateway cursor, owns this
+   * disposition. It never claims that the original external effect succeeded.
+   */
+  acknowledgeCronEventNoReplay(
+    command: ExecuteCommand,
+    evaluation: ApprovalEvaluation,
+    actor: string,
+    request_id: string,
+  ): { event_id: string; payload_digest: string; disposition: "acknowledge_no_replay" } {
+    if (command.type !== "tool_call" || command.payload.tool_name !== "schedule.resolve_event" ||
+        !command.payload.arguments || typeof command.payload.arguments !== "object" ||
+        Array.isArray(command.payload.arguments)) {
+      throw new Error("cron event disposition requires a schedule.resolve_event tool command");
+    }
+    const args = command.payload.arguments as Record<string, unknown>;
+    const event_id = args.event_id;
+    const payload_digest = args.payload_digest;
+    if (Object.keys(args).length !== 3 || args.disposition !== "acknowledge_no_replay" ||
+        typeof event_id !== "string" || !/^cron-[a-f0-9]{64}$/.test(event_id) ||
+        typeof payload_digest !== "string" || !/^[a-f0-9]{64}$/.test(payload_digest)) {
+      throw new Error("cron event disposition arguments are invalid");
+    }
+    const normalizedActor = actor.trim();
+    const command_id = command.id;
+    const evaluationBound = evaluation.decision === "ask" &&
+      evaluation.context.operation === "schedule.resolve_event" &&
+      evaluation.context.command_type === "tool_call" &&
+      evaluation.context.command_id === command_id &&
+      evaluation.risk === "high" && evaluation.approval_level === "L3_final_review" &&
+      evaluation.final_review_required &&
+      evaluation.authority_trace.resolved_factors.operation === "schedule.resolve_event" &&
+      evaluation.authority_trace.resolved_factors.final_review_required;
+    if (!normalizedActor || !request_id.trim() || !evaluationBound || !this.audit.isPersistent() || !this.audit.verify()) {
+      throw new Error("cron event disposition lacks a valid bound L3 final-review evaluation");
+    }
+    const entries = this.audit.list();
+    const recordedL3Ask = entries.some(({ log }) => "kind" in log && log.kind === "approval_gate" &&
+      log.request_id === request_id &&
+      log.command_id === command_id && log.evaluation.decision === "ask" &&
+      log.evaluation.context.operation === "schedule.resolve_event" &&
+      log.evaluation.context.command_id === command_id &&
+      log.evaluation.risk === "high" &&
+      log.evaluation.final_review_required && log.evaluation.approval_level === "L3_final_review");
+    const explicitHumanApproval = entries.some(({ log }) => "kind" in log && log.kind === "command_lifecycle" &&
+      log.request_id === request_id &&
+      log.command_id === command_id && log.phase === "approval_approved" &&
+      log.actor === normalizedActor && log.reason === "human_approval:approve");
+    if (!recordedL3Ask || !explicitHumanApproval) {
+      throw new Error("cron event disposition requires a recorded human L3 approval");
+    }
+    if (this.isCronEventNoReplayAcknowledged(event_id, payload_digest)) {
+      throw new Error("cron event already has an owner no-replay disposition");
+    }
+    this.audit.append({
+      kind: "authority_event",
+      event: "cron_event_no_replay_acknowledged",
+      request_id,
+      command_id,
+      actor: normalizedActor,
+      reason: "owner_l3_approved_no_replay; original outcome remains unknown",
+      operation: evaluation.context.operation,
+      target_scope: evaluation.context.target_scope,
+      risk: evaluation.risk,
+      authority_trace: evaluation.authority_trace,
+      cron_event_id: event_id,
+      cron_payload_digest: payload_digest,
+      cron_disposition: "acknowledge_no_replay",
+      timestamp: Date.now(),
+    });
+    return { event_id, payload_digest, disposition: "acknowledge_no_replay" };
+  }
+
+  /** Read-only verification used by the Cron cursor to decide whether it may advance. */
+  isCronEventNoReplayAcknowledged(event_id: string, payload_digest: string): boolean {
+    if (!/^cron-[a-f0-9]{64}$/.test(event_id) || !/^[a-f0-9]{64}$/.test(payload_digest)) return false;
+    if (!this.audit.isPersistent() || !this.audit.verify()) {
+      throw new Error("cron no-replay disposition audit is unavailable or invalid");
+    }
+    const entries = this.audit.list();
+    return entries.some(({ log }) => {
+      if (!("kind" in log) || log.kind !== "authority_event" ||
+          log.event !== "cron_event_no_replay_acknowledged" ||
+          log.cron_event_id !== event_id || log.cron_payload_digest !== payload_digest ||
+          log.cron_disposition !== "acknowledge_no_replay" ||
+          log.operation !== "schedule.resolve_event" || log.risk !== "high" ||
+          log.actor === "system" || !log.command_id || !log.request_id ||
+          log.reason !== "owner_l3_approved_no_replay; original outcome remains unknown" ||
+          log.authority_trace?.resolved_factors.operation !== "schedule.resolve_event" ||
+          !log.authority_trace.resolved_factors.final_review_required) return false;
+      const matchingL3Ask = entries.some(({ log: candidate }) => "kind" in candidate && candidate.kind === "approval_gate" &&
+        candidate.command_id === log.command_id && candidate.request_id === log.request_id &&
+        candidate.evaluation.decision === "ask" &&
+        candidate.evaluation.context.command_id === log.command_id &&
+        candidate.evaluation.context.operation === "schedule.resolve_event" &&
+        candidate.evaluation.risk === "high" &&
+        candidate.evaluation.approval_level === "L3_final_review" && candidate.evaluation.final_review_required);
+      const matchingHumanApproval = entries.some(({ log: candidate }) => "kind" in candidate && candidate.kind === "command_lifecycle" &&
+        candidate.command_id === log.command_id && candidate.request_id === log.request_id &&
+        candidate.phase === "approval_approved" && candidate.actor === log.actor &&
+        candidate.reason === "human_approval:approve");
+      return matchingL3Ask && matchingHumanApproval;
+    });
+  }
+
   /** Record pre-executor command lifecycle events without pretending executor ran. */
-  onCommandLifecycle(command_id: string, phase: CommandLifecyclePhase, opts: { actor?: string; reason?: string } = {}): void {
+  onCommandLifecycle(command_id: string, phase: CommandLifecyclePhase, opts: {
+    actor?: string;
+    reason?: string;
+    request_id?: string | null;
+  } = {}): void {
     const sourceLog = this.inflight.get(command_id);
     const lifecycleLog: CommandLifecycleLog = {
       kind: "command_lifecycle",
       phase,
-      request_id: sourceLog?.request_id ?? null,
+      request_id: opts.request_id ?? sourceLog?.request_id ?? null,
       command_id,
       upstream_commit_hash: sourceLog?.commit.hash ?? null,
       upstream_decision: sourceLog?.commit.decision ?? null,

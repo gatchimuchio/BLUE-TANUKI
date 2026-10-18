@@ -1049,10 +1049,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const riskTone = item.risk === "high" || item.risk === "critical" ? "bad" : item.risk === "medium" ? "warn" : "good";
               const authority = item.authority_trace ? compactJson(redactRuntimeValue(item.authority_trace)) : "not recorded";
               const trace = isObject(item.operation_core) ? item.operation_core : {};
+              const cronReview = isObject(item.cron_no_replay_review) && item.cron_no_replay_review.kind === "cron_no_replay"
+                ? item.cron_no_replay_review
+                : null;
+              const requiresContentReview = item.content_review_required === true;
+              const approveBlocked = requiresContentReview || Boolean(cronReview && cronReview.eligible !== true);
               if (item.command_id && item.approval_token) {
                 state.approvalTokens[item.command_id] = item.approval_token;
               }
-              const requiresContentReview = item.content_review_required === true;
               return '<article class="queue-item" data-command="' + escapeHtml(item.command_id || "") + '">' +
                 '<div class="row"><h3>' + escapeHtml(item.operation || "unknown operation") + '</h3><span>' + finalBadge + '</span></div>' +
                 '<dl class="kv">' +
@@ -1067,11 +1071,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>reason</dt><dd>' + escapeHtml(item.reason || "not recorded") + '</dd>' +
                 '</dl>' +
                 '<pre>' + escapeHtml(authority) + '</pre>' +
+                (cronReview
+                  ? '<section class="approval-content-review"><strong>Exact Cron event reviewed before approval</strong><dl class="kv">' +
+                    (cronReview.event_id ? '<dt>event ID</dt><dd class="mono">' + escapeHtml(cronReview.event_id) + '</dd>' : '') +
+                    (cronReview.payload_digest ? '<dt>payload digest</dt><dd class="mono">' + escapeHtml(cronReview.payload_digest) + '</dd>' : '') +
+                    (cronReview.delivery_state ? '<dt>cursor state</dt><dd>' + escapeHtml(cronReview.delivery_state) + '</dd>' : '') +
+                    '<dt>disposition</dt><dd>acknowledge no replay</dd>' +
+                    '<dt>external outcome</dt><dd>unknown</dd>' +
+                    '<dt>approval readiness</dt><dd>' + escapeHtml(cronReview.status || "unknown") + '</dd>' +
+                    '</dl><p class="muted">Approval allows the next Cron event to proceed; it does not confirm this delivery. The event identity and in-flight state are checked again before recording.</p></section>'
+                  : '') +
                 (requiresContentReview
                   ? '<section class="approval-content-review"><button data-review-content="' + escapeHtml(item.command_id || "") + '">Review exact content</button><div data-content-review-view aria-live="polite">Content has not been revealed.</div></section>'
                   : '') +
                 '<div class="action-row">' +
-                '<button class="primary" data-verdict="approve" data-command="' + escapeHtml(item.command_id || "") + '"' + (requiresContentReview ? ' disabled' : '') + '>Approve</button>' +
+                '<button class="primary" data-verdict="approve" data-command="' + escapeHtml(item.command_id || "") + '"' + (approveBlocked ? ' disabled' : '') + '>Approve</button>' +
                 '<button data-verdict="reject" data-command="' + escapeHtml(item.command_id || "") + '">Reject</button>' +
                 '<button class="danger" data-verdict="block" data-command="' + escapeHtml(item.command_id || "") + '">Block</button>' +
                 '</div>' +
@@ -1195,6 +1209,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               }
               if (item.result_memory_status) {
                 fields.push(["result memory", item.result_memory_status]);
+              }
+              if (item.cron_resolution_state) {
+                fields.push(["Cron resolution", item.cron_resolution_state]);
               }
               return '<article class="notification-item">' +
                 '<div class="row"><h3>' + escapeHtml(item.title || "Notification") + '</h3>' + badge("read only", "good") + '</div>' +

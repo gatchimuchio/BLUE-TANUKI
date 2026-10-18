@@ -1,12 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createGatewayInternalInboundRequest,
+  type ExecuteCommand,
   type ExecuteFeedback,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
 import { createFailureReviewProjection, FailureMemoryStore, failureReviewProjectionDigest } from "../src/failure-memory/index.js";
-import type { AuditEntry } from "../src/audit.js";
+import { AuditLog, type AuditEntry } from "../src/audit.js";
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition } from "../src/policy.js";
 import type { PolicyConfig } from "../src/types.js";
 import { LongTermMemoryStore } from "../src/long-term-memory/index.js";
@@ -636,6 +640,121 @@ describe("HDSUpperController.decide()", () => {
       expect(command!.payload).toMatchObject({
         reason: "unsupported tool: payment.charge",
       });
+    }
+  });
+});
+
+describe("HDS Cron no-replay disposition", () => {
+  function dispositionCommand(event_id: string, payload_digest: string): ExecuteCommand {
+    return {
+      id: "cron-disposition-command-1",
+      type: "tool_call",
+      payload: {
+        tool_name: "schedule.resolve_event",
+        arguments: { event_id, payload_digest, disposition: "acknowledge_no_replay" },
+      },
+      constraints: {
+        allowed_tools: ["schedule.resolve_event"],
+        allowed_capabilities: ["tool:schedule.resolve_event", "schedule:resolve_event"],
+      },
+      upstream_decision: {
+        frame_goal: "owner no-replay decision",
+        model_abstraction: "test",
+        commit_hash: "a".repeat(64),
+        commit_decision: "ASSERT",
+      },
+    };
+  }
+
+  it("records only a current explicit L3 human approval in the verified HDS audit chain", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-disposition-audit-"));
+    const filepath = join(root, "audit.jsonl");
+    const event_id = `cron-${"a".repeat(64)}`;
+    const payload_digest = "b".repeat(64);
+    const command = dispositionCommand(event_id, payload_digest);
+    const evaluation = evaluateApproval(command, [], { actor: "requester", default_mode: "full_access" });
+
+    try {
+      const hds = new HDSUpperController({ audit: new AuditLog({ filepath }) });
+      expect(evaluation.decision).toBe("ask");
+      expect(evaluation.context.operation).toBe("schedule.resolve_event");
+      expect(evaluation.risk).toBe("high");
+      expect(evaluation.approval_level).toBe("L3_final_review");
+      hds.onApprovalEvaluation(evaluation, { request_id: "owner-request" });
+      hds.onCommandLifecycle(command.id, "approval_approved", {
+        actor: "owner",
+        reason: "human_approval:approve",
+        request_id: "owner-request",
+      });
+
+      expect(hds.acknowledgeCronEventNoReplay(command, evaluation, "owner", "owner-request")).toEqual({
+        event_id,
+        payload_digest,
+        disposition: "acknowledge_no_replay",
+      });
+      expect(hds.isCronEventNoReplayAcknowledged(event_id, payload_digest)).toBe(true);
+      expect(hds.isCronEventNoReplayAcknowledged(event_id, "c".repeat(64))).toBe(false);
+      expect(hds.getAudit().verify()).toBe(true);
+      expect(() => hds.acknowledgeCronEventNoReplay(command, evaluation, "owner", "owner-request"))
+        .toThrow(/already has/);
+
+      const restarted = new HDSUpperController({ audit: new AuditLog({ filepath }) });
+      expect(restarted.isCronEventNoReplayAcknowledged(event_id, payload_digest)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an operation that lacks the matching human approval lifecycle", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-disposition-audit-"));
+    const filepath = join(root, "audit.jsonl");
+    const command = dispositionCommand(`cron-${"d".repeat(64)}`, "e".repeat(64));
+    const evaluation = evaluateApproval(command, [], { actor: "owner", default_mode: "full_access" });
+    try {
+      const hds = new HDSUpperController({ audit: new AuditLog({ filepath }) });
+      hds.onApprovalEvaluation(evaluation, { request_id: "owner-request" });
+      hds.onCommandLifecycle(command.id, "approval_approved", {
+        actor: "owner",
+        reason: "approval policy default",
+        request_id: "owner-request",
+      });
+
+      expect(() => hds.acknowledgeCronEventNoReplay(command, evaluation, "owner", "owner-request"))
+        .toThrow(/recorded human L3 approval/);
+      expect(hds.isCronEventNoReplayAcknowledged(`cron-${"d".repeat(64)}`, "e".repeat(64))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not trust a bare audit marker without the matching L3 ask and human approval", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-disposition-audit-"));
+    const filepath = join(root, "audit.jsonl");
+    const event_id = `cron-${"f".repeat(64)}`;
+    const payload_digest = "0".repeat(64);
+    const command = dispositionCommand(event_id, payload_digest);
+    const evaluation = evaluateApproval(command, [], { actor: "owner", default_mode: "full_access" });
+    try {
+      const hds = new HDSUpperController({ audit: new AuditLog({ filepath }) });
+      hds.getAudit().append({
+        kind: "authority_event",
+        event: "cron_event_no_replay_acknowledged",
+        request_id: "owner-request",
+        command_id: command.id,
+        actor: "owner",
+        reason: "owner_l3_approved_no_replay; original outcome remains unknown",
+        operation: "schedule.resolve_event",
+        risk: "high",
+        authority_trace: evaluation.authority_trace,
+        cron_event_id: event_id,
+        cron_payload_digest: payload_digest,
+        cron_disposition: "acknowledge_no_replay",
+        timestamp: Date.now(),
+      });
+
+      expect(hds.isCronEventNoReplayAcknowledged(event_id, payload_digest)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

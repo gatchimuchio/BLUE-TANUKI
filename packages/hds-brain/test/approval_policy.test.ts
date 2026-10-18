@@ -180,6 +180,7 @@ describe("approval policy", () => {
     for (const [tool, cap, operation] of [
       ["schedule.update", "schedule:update", "schedule.update"],
       ["schedule.delete", "schedule:delete", "schedule.delete"],
+      ["schedule.resolve_event", "schedule:resolve_event", "schedule.resolve_event"],
     ] as const) {
       const result = evaluateApproval(
         toolCommand(tool, { id: "runtime-smoke" }, [`tool:${tool}`, cap]),
@@ -203,6 +204,7 @@ describe("approval policy", () => {
       "schedule.create",
       "schedule.update",
       "schedule.delete",
+      "schedule.resolve_event",
       "browser.automation",
       "payment.charge",
     ] as const) {

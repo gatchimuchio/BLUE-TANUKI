@@ -65,6 +65,17 @@ export interface WebChatOperatorSurface {
   getSnapshot: () => Promise<unknown>;
 }
 
+export interface WebChatCronNoReplayReview {
+  kind: "cron_no_replay";
+  status: "eligible" | "in_flight" | "stale_or_resolved" | "already_acknowledged" | "verification_unavailable" | "invalid_request";
+  event_id?: string;
+  payload_digest?: string;
+  delivery_state?: "dispatching" | "outcome_unknown";
+  disposition: "acknowledge_no_replay";
+  original_outcome: "unknown";
+  eligible: boolean;
+}
+
 export interface WebChatApprovalQueueItem {
   command_id: string;
   request_id: string;
@@ -79,6 +90,8 @@ export interface WebChatApprovalQueueItem {
   approval_token_expires_at_ms?: number;
   authority_trace?: unknown;
   operation_core?: OperationCoreApprovalTrace;
+  /** Exact, non-secret identity binding and current cursor eligibility for a no-replay approval. */
+  cron_no_replay_review?: WebChatCronNoReplayReview;
 }
 
 export interface WebChatApprovalContentReview {
@@ -304,6 +317,11 @@ export type WebChatCronResultMemoryStatus =
   | "receipt_confirmed"
   | "mixed_or_unknown";
 
+export type WebChatCronResolutionState =
+  | "unacknowledged"
+  | "owner_acknowledged_no_replay"
+  | "verification_unavailable";
+
 export interface WebChatNotificationItem {
   id: string;
   kind: WebChatNotificationKind;
@@ -322,6 +340,7 @@ export interface WebChatNotificationItem {
   payload_hash?: string;
   result_correlation_status?: WebChatCronResultCorrelationStatus;
   result_memory_status?: WebChatCronResultMemoryStatus;
+  cron_resolution_state?: WebChatCronResolutionState;
   expires_at_ms?: number;
   next_action?: string;
 }

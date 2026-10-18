@@ -97,6 +97,7 @@ import {
 import { createGatewayEvidencePack } from "./evidence_pack.js";
 import { CronSchedulerChannel, cronSchedulesFromEnv } from "./cron_channel.js";
 import { GatewayCronEventStore } from "./cron_event_store.js";
+import { createCronEventResolutionTool } from "./cron_event_resolution_tool.js";
 import { googleDailyBriefProviderFromEnv } from "./google_daily_brief.js";
 import {
   RuntimeScheduleManager,
@@ -444,7 +445,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     throw new Error("BLUE_TANUKI_MAINTENANCE_TOKEN must differ from WebChat tokens");
   }
   const cronTasks = cronSchedulesFromEnv(process.env);
-  const cronEventStore = GatewayCronEventStore.fromEnvironment(process.env);
+  const cronEventStore = GatewayCronEventStore.fromEnvironment(process.env, {
+    verifyNoReplayDisposition: (event_id, payload_digest) =>
+      hds.isCronEventNoReplayAcknowledged(event_id, payload_digest),
+  });
   const cron = new CronSchedulerChannel({
     tasks: [...cronTasks, ...runtimeSchedules.activeCronTasks()],
     log: (line: string) => cronLog.info(line),
@@ -462,6 +466,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     },
   });
   runtimeSchedules.attachScheduler(cron);
+  tools.register(createCronEventResolutionTool(cronEventStore, cron));
 
   // Forward declarations: resume/approval closures resolve at call time.
   // eslint-disable-next-line prefer-const
@@ -970,6 +975,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     try {
       fb = await executionTask;
     } finally { executionControllers.delete(executionController); executionTasks.delete(executionTask); }
+    if (fb.status === "success" && cmd.type === "tool_call" &&
+        cmd.payload.tool_name === "schedule.resolve_event") {
+      if (!executionEvaluation) throw new Error("cron event disposition requires its HDS approval evaluation");
+      hds.acknowledgeCronEventNoReplay(cmd, executionEvaluation, actor, log.request_id);
+    }
     if (planBound) gatewayLog.info("saved execution result reconciliation",
       reconcileExecutionResults(hds, executionStore, ownerLease.executionEpoch));
     if (isComposioExecuteCommand(cmd)) {
@@ -1451,7 +1461,78 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         approval_level: p.evaluation.approval_level,
         final_review_required: p.evaluation.final_review_required,
       }),
+      cron_no_replay_review: cronNoReplayReview(p.command),
     }));
+  }
+
+  function cronNoReplayReview(command: ExecuteCommand): WebChatApprovalQueueItem["cron_no_replay_review"] {
+    if (command.type !== "tool_call" || command.payload.tool_name !== "schedule.resolve_event") return undefined;
+    const rawArgs = command.payload.arguments;
+    const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
+      ? rawArgs as Record<string, unknown>
+      : undefined;
+    if (!args) {
+      return {
+        kind: "cron_no_replay",
+        status: "invalid_request",
+        disposition: "acknowledge_no_replay",
+        original_outcome: "unknown",
+        eligible: false,
+      };
+    }
+    const event_id = args.event_id;
+    const payload_digest = args.payload_digest;
+    if (Object.keys(args).length !== 3 || args.disposition !== "acknowledge_no_replay" ||
+        typeof event_id !== "string" || !/^cron-[a-f0-9]{64}$/.test(event_id) ||
+        typeof payload_digest !== "string" || !/^[a-f0-9]{64}$/.test(payload_digest)) {
+      return {
+        kind: "cron_no_replay",
+        status: "invalid_request",
+        disposition: "acknowledge_no_replay",
+        original_outcome: "unknown",
+        eligible: false,
+      };
+    }
+    const current = cronEventStore.unresolvedEvent(event_id, payload_digest);
+    if (!current) {
+      return {
+        kind: "cron_no_replay",
+        status: "stale_or_resolved",
+        event_id,
+        payload_digest,
+        disposition: "acknowledge_no_replay",
+        original_outcome: "unknown",
+        eligible: false,
+      };
+    }
+    if (current.delivery_state === "handler_returned") {
+      return {
+        kind: "cron_no_replay",
+        status: "stale_or_resolved",
+        event_id,
+        payload_digest,
+        disposition: "acknowledge_no_replay",
+        original_outcome: "unknown",
+        eligible: false,
+      };
+    }
+    const status = current.resolution_state === "verification_unavailable"
+      ? "verification_unavailable"
+      : current.resolution_state === "owner_acknowledged_no_replay"
+      ? "already_acknowledged"
+      : cron.isEventInFlight(event_id)
+      ? "in_flight"
+      : "eligible";
+    return {
+      kind: "cron_no_replay",
+      status,
+      event_id,
+      payload_digest,
+      delivery_state: current.delivery_state,
+      disposition: "acknowledge_no_replay",
+      original_outcome: "unknown",
+      eligible: status === "eligible",
+    };
   }
 
   function authorityTraceSnapshot(): WebChatAuthorityTraceItem[] {

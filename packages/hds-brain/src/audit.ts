@@ -88,6 +88,11 @@ export class AuditLog {
     return this.entries.length;
   }
 
+  /** Whether appended records survive a process restart through this log. */
+  isPersistent(): boolean {
+    return this.filepath !== undefined;
+  }
+
   private computeHash(index: number, log: AuditRecord, prev_hash: string): string {
     return createHash("sha256")
       .update(`${index}|${prev_hash}|${JSON.stringify(log)}`)

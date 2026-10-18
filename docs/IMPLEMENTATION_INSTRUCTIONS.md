@@ -1,26 +1,25 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。owner指定rev2.3三点正本（仕様SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF309F77BABACC56796A1893FE77`、施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`、`docs/作業標準要領.md`、現行ownerの継続指示、直前active指示、E03.02／E03要求、実HEAD・差分、Cron→Gateway→HDS OperationPlan→Broker結果consumerを再読した。前バッチE04.02は`cb9806464247365ff7a54033e4f12cf92c050fb8`で閉鎖済み。対象はBLUE-TANUKIのみ。D4Pocket／ミニドラrepo、実provider・credential、外部業務作用、公開・出荷判断は対象外。
+2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF309F77BABACC56796A1893FE77`、Codex施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用AGENTS.md、作業標準要領、現行ownerの継続開発指示、前batch指示、E03.02／E01.01要求、現物HEAD・差分・Cron／Gateway／HDSの実接続を読み直した。前batch `QEB-03-E03.02-CRON-RESULT-CORRELATION-INSPECTION` は `e57633ca34240db6410af9332808d4fd914205f0` で閉鎖済み。今回の開始HEAD／`origin/main` は同SHA、開始時worktree clean。編集前の復旧refはlocal branch二世代とremote tag二世代を期待SHA付きで回転し、local／remoteの一致を確認した。
 
 ## 今回のBUILD_BATCH
 
-QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.02-CRON-RESULT-CORRELATION-INSPECTION`。関連単位=E03.02「未決作用・M pendingの回復」およびE01.01「永続event／job状態」のCron部分。開始HEAD／`origin/main`=`cb9806464247365ff7a54033e4f12cf92c050fb8`、開始時clean。編集前のlocal復旧branch二世代／remote backup tag二世代を期待SHA付きで回転し一致確認済み。backup-ref state=`MIGRATION_COMPLETE`。
+QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.02-CRON-NO-REPLAY-OWNER-RESOLUTION`。関係単位=E03.02「未決作用・M pendingの回復」、E01.01「永続jobと重複event」。BLUE-TANUKI内だけを対象にし、D4Pocket／ミニドラ、実provider／credential、実外部業務作用、公開・出荷判断を対象外とする。
 
-### 目的と対象
+### 目的と接続先
 
-永続Cron event cursorに残る未決event IDを、同じIDをrequest IDとして保持するHDS OperationPlanの実行binding・保存済みresult deliveryへ、完全一致のread-only照合で結び付ける。結果はresident notificationで固定enumの`result_correlation_status`だけ表示し、Control Centerはその状態をescape済み文字列として描画する。
+未決Cron eventの処理結果を成功へ読み替えたり自動再送したりせず、ownerが正確なevent IDとpayload digestを確認してL3最終レビューで「このeventは再実行しない」と明示した場合に限り、次のsource eventを処理可能にする。HDS-BRAINのhash-chain auditがこの判断の正本を持ち、Cron cursorはHDSの検証済み判断を参照する。イベントが現在処理中、ID/digestがcurrent cursorと異なる、監査が無効・未確認、またはfresh L3承認がない場合はfail-closedで遮断する。
 
-対象：`apps/gateway/src/resident_notifications.ts`、`apps/gateway/src/serve.ts`、`packages/channel-webchat/src/webchat_types.ts`、`packages/channel-webchat/src/control_center_script.ts`、関連focused tests、公開ROADMAPと開発進捗。
+対象候補は `packages/protocol/src/operation_catalog.ts`、`packages/hds-brain/src/approval_policy.ts`・`controller.ts`・監査record型／tool許可policy、`apps/gateway/src/cron_event_store.ts`・`cron_channel.ts`・`serve.ts`、resident notification／WebChat projection、Daily operator projectionと関連focused tests。実callsiteに合わせ最小化する。
 
-照合状態は「planなし」「bindingなし」「複数・不整合」「実行／結果未解決」「terminal bindingだが保存deliveryなし」「delivery digestを持つterminal binding」に区別する。これらはJ/Mの採否、業務作用の成功、完全なjob完了、現在の実行権限を証明しない。UIへraw plan／command／step／payload、target、result本文、追加digestを公開しない。
+### 安全境界・成立条件
 
-### 境界・完了条件
+- 専用operation `schedule.resolve_event` は `FINAL_REVIEW_OPERATION_LIST` の唯一の正本へ追加し、`full_access`・reusable grantでもL3を迂回できない。引数は `event_id`、`payload_digest`、固定値 `acknowledge_no_replay` のみ。入力の不足・余剰・改変、stale cursor、二重ack、in-flight eventを拒否する。
+- Tool adapter自身はcursorを書き換えない。executorが成功した後、HDSが同じcommandへのL3評価と明示承認済みlifecycleを照合して監査recordへno-replay判断を追記する。Cron cursorは起動後も検証済みHDS audit recordとの完全一致を要求する。audit不在・不正・append失敗時は後続eventを通さない。
+- owner判断後も元eventは `outcome_unknown` のまま表示し、外部作用成功・失敗、M commit、再送完了とは扱わない。表示はevent ID・payload digest・固定状態に限定し、raw payload／target／command／秘密を出さない。
+- `handler_returned`、worker停止、外部成功、取消完了、結果確定を混同しない。Cron event再送・旧実作用の再実行・M更新・Approval Gate迂回・別authority pathを追加しない。
+- 検証はevent cursor／active event／HDS L3記録／resident noticeをつなぐ合成fixtureと関連focused tests、型検査、workspace build、docs gate、diff checkまで。live/provider、credential、実外部作用、全suite、QE_QC／QE_QAは実施しない。
 
-- event IDとHDS plan/bindingのrequest IDを完全一致させ、曖昧・欠落・未知状態は保留カテゴリにする。
-- HDS plan projectionから固定状態だけを導出し、既存の認証済みread-only通知へ実接続する。HDS/Broker/M/Cursorの状態変更、event settle、retry/replay、承認、権限、外部作用を追加しない。
-- focused consumer test、型検査、必要なbuild、`pnpm docs:check`、`git diff --check`を行う。全suite、live/provider、credential、外部送信、QE_QC／QE_QAは行わない。
-- E03.02／E01.01の復旧操作・未決作用解消・durable job lifecycle全体は未成立のまま`BUILD_GAP`を保持し、次consumerを記録する。
+復旧参照は `MIGRATION_COMPLETE`（2026-10-12）を維持する。編集前・バッチ開始時のlocal recovery branch二世代とremote backup tag二世代は、今回の開始HEAD `e57633ca34240db6410af9332808d4fd914205f0` と直前世代の組で照合済み。バッチ途中では回転しない。閉鎖時に実SHAを再照合し、local二branch／remote二tag／mainが意図した世代で一致したことを記録する。
 
-### Git閉鎖
-
-実装commit=`f0e5ff366e7eacb79be39e8a1cb575f4fdfb9c3f`を`main`へpush済み。再fetch後のlocal／remote mainは同SHA。local復旧branch二世代とremote backup tag二世代は現世代=`cb9806464247365ff7a54033e4f12cf92c050fb8`、前世代=`58ec78e59b0ddde93e65d0497bb31a2bf21a4a8a`で一致。E03.02のresult相関表示は部分接続したが、event lifecycle reconciliation／回復とdurable job lifecycleは未接続で`BUILD_GAP`を維持する。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+未接続の完全なdurable job lifecycle、旧worker／旧approval世代の全回復、実外部結果の照合、D4Pocket UI接続は`BUILD_GAP`として残す。P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、C08.03実provider保留を維持する。作業完了時に限定確認とGit同期を記録し、次consumerを具体化する。

@@ -52,6 +52,11 @@ describe("Daily Operator surface", () => {
     expect(getDailyOperationSpec("google.drive.read").approval_risk).toBe("high");
     expect(getDailyOperationSpec("reminder.draft").approval_level).toBe("L2_operate");
     expect(getDailyOperationSpec("schedule.create").approval_level).toBe("L3_final_review");
+    expect(getDailyOperationSpec("schedule.resolve_event")).toMatchObject({
+      approval_level: "L3_final_review",
+      approval_risk: "high",
+      final_review_required: true,
+    });
     expect(getDailyOperationSpec("gmail.write").final_review_required).toBe(true);
   });
 

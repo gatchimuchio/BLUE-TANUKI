@@ -211,10 +211,12 @@ describe("CronSchedulerChannel", () => {
       });
       await vi.advanceTimersByTimeAsync(3000);
       expect(seen).toHaveLength(1);
+      expect(ch.isEventInFlight(seen[0]!.id)).toBe(true);
       releaseFirst();
       await ch.stop();
 
       expect(seen).toHaveLength(3);
+      expect(ch.isEventInFlight(seen[0]!.id)).toBe(false);
       expect(seen.map(({ sequence }) => Number(sequence))).toEqual([base + 1000, base + 2000, base + 3000]);
       expect(new Set(seen.map(({ id }) => id)).size).toBe(3);
       expect(maxActive).toBe(1);

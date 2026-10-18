@@ -23,6 +23,7 @@ describe("buildResidentNotificationsSnapshot", () => {
         event_id: "cron-event-42",
         payload_digest: "b".repeat(64),
         delivery_state: "outcome_unknown",
+        resolution_state: "unacknowledged",
         updated_at_ms: 950,
       }],
       operation_plan_projection: {
@@ -85,7 +86,7 @@ describe("buildResidentNotificationsSnapshot", () => {
       authority_trace: [],
       unresolved_cron_events: [{
         source_digest: "a".repeat(64), sequence: 42, event_id: "cron-event-42", payload_digest: "b".repeat(64),
-        delivery_state: "outcome_unknown", updated_at_ms: 950,
+        delivery_state: "outcome_unknown", resolution_state: "unacknowledged", updated_at_ms: 950,
       }],
       operation_plan_projection: operation_plan_projection as never,
     });
@@ -106,7 +107,7 @@ describe("buildResidentNotificationsSnapshot", () => {
       authority_trace: [],
       unresolved_cron_events: [{
         source_digest: "a".repeat(64), sequence: 42, event_id: "cron-event-42", payload_digest: "b".repeat(64),
-        delivery_state: "outcome_unknown", updated_at_ms: 950,
+        delivery_state: "outcome_unknown", resolution_state: "unacknowledged", updated_at_ms: 950,
       }],
       operation_plan_projection: {
         schema_version: "operation-plan-projection.v1",
@@ -132,6 +133,38 @@ describe("buildResidentNotificationsSnapshot", () => {
       authority: "display_only",
     });
     expect(notifications[0]?.message).toContain("not proof of external success");
+  });
+
+  it.each([
+    ["owner_acknowledged_no_replay", "later events may proceed", "original outcome remains unknown"],
+    ["verification_unavailable", "later events remain blocked", "no-replay disposition could not be verified"],
+  ] as const)("keeps Cron no-replay state visible without converting it to success", (resolution_state, message, detail) => {
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 1000,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [],
+      unresolved_cron_events: [{
+        source_digest: "a".repeat(64),
+        sequence: 43,
+        event_id: "cron-event-no-replay",
+        payload_digest: "b".repeat(64),
+        delivery_state: "outcome_unknown",
+        resolution_state,
+        updated_at_ms: 950,
+      }],
+    });
+
+    expect(notifications[0]).toMatchObject({
+      kind: "schedule_delivery_unknown",
+      cron_resolution_state: resolution_state,
+      read_only: true,
+      authority: "display_only",
+      next_action: expect.any(String),
+    });
+    expect(notifications[0]?.message).toContain(message);
+    expect(notifications[0]?.message).toContain(detail);
+    expect(notifications[0]?.message).not.toContain("delivery confirmed");
   });
 
   it("projects approval, schedule, connector, and audit warnings as display-only notifications", () => {
