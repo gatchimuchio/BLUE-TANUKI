@@ -707,7 +707,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 4,
+            schema_version: 5,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -755,6 +755,19 @@ describe("WebChatChannel — Recovery surface", () => {
               cron_approval_correlation: "cron_unverified",
             }],
             omitted_operation_plan_correlation_count: 0,
+            plan_dependency_scopes: [{
+              plan_id_digest: "a".repeat(64),
+              integrity: "residuals_present",
+              plan_record_count: 1,
+              binding_count: 1,
+              inspected_binding_count: 1,
+              omitted_binding_count: 0,
+              residual_binding_count: 1,
+              status: "residuals_present",
+              residual_dependencies: ["operation_plan", "broker"],
+              unobserved_dependencies: ["delivery", "memory", "cron_approval"],
+            }],
+            omitted_plan_dependency_scope_count: 0,
             update_residuals: [{ update_id_digest: "e".repeat(64), disposition: "content_mismatch" }],
             omitted_update_residual_count: 0,
             isolated_update_count: 0,

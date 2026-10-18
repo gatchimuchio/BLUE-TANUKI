@@ -1,8 +1,32 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF309F77BABACC56796A1893FE77`、Codex施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`、作業標準要領、現物、active対象要求を再読した。前回開始HEAD／`origin/main`=`1b8360efe1e4fc11a06ed9fb10283e0b88cb06a2`。今回開始HEAD／`origin/main`=`acc1465cb11e5fec7bf18f15656b86ae1d8117db`、worktree clean。復旧ref移行状態=`MIGRATION_COMPLETE`。ownerは製品開発を続行するよう明示済み。C08.03実provider試験は保留、別repo変更・実業務作用・公開行為・出荷判断はこの委任外。
+2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF309F77BABACC56796A1893FE77`、Codex施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`、作業標準要領、現物、active対象要求を再読した。前回のBUILD_BATCH closeout後と今回開始HEAD／`origin/main`=`e75ea1eb20cb586d189996b400398c7f66b050b9`、worktree clean。編集前local復旧branch／tagとremote backup tagは現世代=`e75ea1eb20cb586d189996b400398c7f66b050b9`、前世代=`acc1465cb11e5fec7bf18f15656b86ae1d8117db`で一致。復旧ref移行状態=`MIGRATION_COMPLETE`。ownerは製品開発を続行するよう明示済み。C08.03実provider試験は保留、別repo変更・実業務作用・公開行為・出荷判断はこの委任外。
 
 ## 今回のBUILD_BATCH
+
+QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-OPERATION-PLAN-DEPENDENCY-SCOPING`。開始HEAD／`origin/main`=`e75ea1eb20cb586d189996b400398c7f66b050b9`、開始worktree clean。編集前のlocal復旧branch／tagおよびremote backup tag二世代を照合済み。
+
+目的は、read-only Recovery inspectionでOperation Planごとの記録整合性と既存Broker／delivery／M／Cron approval相関の残差・未観測範囲をdigest単位で束ね、無関係なPlanへ波及させずCLIとControl Centerへ接続すること。現行OperationPlanにtask/job識別子がないため、表示単位はOperation Plan digestに限定する。`observed`は観測範囲内で残差を検出しなかったという診断statusであり、job復旧可能性、restore point、実行許可を意味しない。
+
+対象はOperation Plan read-only inspectorのplan summary、Gateway recovery report／operator projection、CLIとControl Centerの固定status projection、合成ledger回帰確認。対象外はOperationPlan schema、job/task単位の復旧判定、依存隔離の実操作、restore point確認・復元、Approval／HDS／権限変更、store書込み、外部作用、C08.03 live/provider、別repo、公開・出荷判断。上限超過・不整合は未観測またはinvalid reportとして閉じ、raw ID／path／payloadを出さず、`used_for_authority=false`、`may_execute=false`、`external_backup_restore_point="not_examined"`を保つ。
+
+最小確認は、計画間の破損非波及、計画内のbroker／delivery／memory／cron依存残差、行省略のunobserved表示、operator projectionとControl Centerの件数・digest境界、raw identifier非露出を合成fixtureで確認する。続けて対象test、`pnpm typecheck`→`pnpm build`、Control Center script構文、`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check`を実行する。全suite、credential/live/provider、実復旧、5OS実機、QE_QC／QE_QAは対象外。
+
+## 今回の実績
+
+`OperationPlanRecoveryInspection`にdigest-keyed plan summaryとplan別省略binding件数を追加した。Gateway recovery report schema v6／operator projection schema v5は既存のbinding相関からplan別の`observed`／`residuals_present`／`unobserved` scopeを導出し、residual／unobserved dependency categoryを固定enumで返す。CLIとControl Centerへ接続し、projection側でsummary総数・計画別binding件数・相関所属・UI表示件数を照合する。復旧動作やtask/job識別は接続していない。
+
+| 確認 | 結果 |
+|---|---|
+| Operation Plan recovery inspection／Gateway recovery projection／WebChat Control Center focused tests | PASS、3 files／99 tests。計画別残差隔離、Broker欠損時のDelivery未観測扱い、raw ID非露出、200 binding上限、読み取り専用を確認。 |
+| `pnpm typecheck`→`pnpm build` | PASS。順次実行、15 workspace projects。 |
+| Control Center script構文確認 | PASS。build後の配布scriptをFunction構文解析。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件。 |
+| 全suite、credential/live/provider、job復旧・実外部作用、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+E03.03=`BUILD_GAP`を維持する。Plan digestはjob/task同一性ではなく、独立restore point、job単位の破損依存隔離、guarded selective recoveryも未接続。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。
+
+## 直前のBUILD_BATCH
 
 QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-CANONICAL-SQLITE-SNAPSHOT-INSPECTION`。開始HEAD／`origin/main`=`acc1465cb11e5fec7bf18f15656b86ae1d8117db`、開始worktree clean。編集前復旧refはlocal branch／remote tagとも現世代=`acc1465cb11e5fec7bf18f15656b86ae1d8117db`、前世代=`45b0c9363bac3733366641d174a7d560f27d345a`を確認済み。
 
@@ -12,7 +36,7 @@ QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-CANONICAL-SQLITE-SNAPSHOT-INSPE
 
 最小確認は合成5-store DBのcapture／integrity／digest／元DB bytes不変、欠損・破損を含む部分coverage、archive改変の検出、generic Restoreがcanonical snapshotを適用しないこと。続けて対象test、`pnpm typecheck`→`pnpm build`、`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check`を実行する。全suite、credential/live/provider、実復旧、5OS実機、QE_QC／QE_QAは対象外。
 
-## 今回の実績
+## 直前の実績
 
 `apps/gateway/src/canonical_state_backup.ts`で5つのcanonical SQLiteを専用read-only接続から個別snapshotする。現在の各storeが要求するDELETE journal modeを確認し、read transactionのshared lockを保ってDB fileをcopyする。snapshotを再read-only openし`integrity_check`、byte count、SHA-256を記録する。source pathや行・payloadをinspectionへ出さない。破損／busy／snapshot失敗はそのstoreだけ`unverified`とし、成功した他storeを保つ。
 

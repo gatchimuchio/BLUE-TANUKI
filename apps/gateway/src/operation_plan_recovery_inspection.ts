@@ -22,6 +22,15 @@ export interface OperationPlanMemoryLinkInspection {
   readonly receipt_event_digest: string | null;
 }
 
+export interface OperationPlanRecoveryPlanSummary {
+  readonly plan_id_digest: string;
+  readonly integrity: "verified" | "residuals_present";
+  readonly plan_record_count: number;
+  readonly binding_count: number;
+  readonly residual_binding_count: number;
+  readonly omitted_binding_count: number;
+}
+
 export interface OperationPlanRecoveryInspection {
   readonly owner: "J";
   readonly status: "verified" | "residuals_present" | "corrupt" | "unavailable" | "schema_mismatch";
@@ -33,6 +42,7 @@ export interface OperationPlanRecoveryInspection {
   readonly residual_binding_count: number;
   readonly unverified_memory_link_count: number;
   readonly omitted_binding_count: number;
+  readonly plans: readonly OperationPlanRecoveryPlanSummary[];
   readonly bindings: readonly {
     readonly plan_id_digest: string;
     readonly step_id_digest: string;
@@ -58,7 +68,7 @@ function unavailablePlanInspection(
   return {
     owner: "J", status, reason, plan_count: 0, plan_integrity_residual_count: 0, binding_count: 0,
     verified_binding_count: 0, residual_binding_count: 0, unverified_memory_link_count: 0, omitted_binding_count: 0,
-    bindings: [], used_for_authority: false, may_execute: false,
+    plans: [], bindings: [], used_for_authority: false, may_execute: false,
   };
 }
 
@@ -156,6 +166,7 @@ function inspectResultMemoryLink(
 
 function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
   bindings: OperationPlanRecoveryInspection["bindings"];
+  plans: Omit<OperationPlanRecoveryPlanSummary, "omitted_binding_count">[];
   residualPlanCount: number;
   verifiedCount: number;
   residualCount: number;
@@ -169,6 +180,7 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
     binding.execution_admission ? [binding.execution_admission.ticket_id] : []));
   const duplicateTicketIds = new Set(ticketIds.filter((id, index) => ticketIds.indexOf(id) !== index));
   const bindings: NonNullable<OperationPlanRecoveryInspection["bindings"]>[number][] = [];
+  const planSummaries = new Map<string, Omit<OperationPlanRecoveryPlanSummary, "omitted_binding_count">>();
   let verifiedCount = 0;
   let residualCount = 0;
   let residualPlanCount = 0;
@@ -177,12 +189,15 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
   for (const planState of checkpoint.plans) {
     const firstRevision = planState.revisions[0]!;
     const planId = firstRevision.plan.plan_id;
+    const planIdDigest = operationPlanDigest(planId);
     const requestId = firstRevision.plan.request_id;
     const planRevisionMismatch = duplicatePlanIds.has(planId) || planState.revisions.some((revision) =>
       revision.digest !== operationPlanDigest(revision.plan) || revision.plan.plan_id !== planId || revision.plan.request_id !== requestId ||
       !["planned", "draft"].includes(revision.plan.state) || revision.plan.steps.some((step) =>
         !["planned", "draft"].includes(step.state) || step.result_digest !== undefined));
     if (planRevisionMismatch) residualPlanCount++;
+    let planResidualBindingCount = 0;
+    let planHasResidual = planRevisionMismatch;
     const invalidResultCommands = new Set<string>();
     for (const result of planState.results) {
       const binding = planState.bindings.find((item) => item.step_id === result.step_id && item.status === "verified");
@@ -195,7 +210,10 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
           operationPlanDigest(validation.expected) === operationPlanDigest(result.output));
       if (resultMismatch) {
         if (binding) invalidResultCommands.add(binding.command_id);
-        else residualPlanCount++;
+        else {
+          residualPlanCount++;
+          planHasResidual = true;
+        }
       }
     }
     for (const binding of planState.bindings) {
@@ -215,10 +233,14 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
         admissionMismatch || deliveryMismatch || invalidResultCommands.has(binding.command_id) ||
         ["missing_expected", "residuals_present"].includes(memoryLink.integrity) ||
         (!admission && !["selected", "not_attempted", "invalidated"].includes(binding.status));
-      if (invalid) residualCount++;
+      if (invalid) {
+        residualCount++;
+        planResidualBindingCount++;
+        planHasResidual = true;
+      }
       else verifiedCount++;
       bindings.push({
-        plan_id_digest: operationPlanDigest(planId),
+        plan_id_digest: planIdDigest,
         step_id_digest: operationPlanDigest(binding.step_id),
         command_id_digest: operationPlanDigest(binding.command_id),
         cron_command_id_digest: createHash("sha256").update(binding.command_id).digest("hex"),
@@ -231,8 +253,16 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
         memory_link: memoryLink,
       });
     }
+    const existing = planSummaries.get(planIdDigest);
+    planSummaries.set(planIdDigest, {
+      plan_id_digest: planIdDigest,
+      integrity: planHasResidual || !!existing ? "residuals_present" : "verified",
+      plan_record_count: (existing?.plan_record_count ?? 0) + 1,
+      binding_count: (existing?.binding_count ?? 0) + planState.bindings.length,
+      residual_binding_count: (existing?.residual_binding_count ?? 0) + planResidualBindingCount,
+    });
   }
-  return { bindings, residualPlanCount, verifiedCount, residualCount, unverifiedMemoryLinkCount };
+  return { bindings, plans: [...planSummaries.values()], residualPlanCount, verifiedCount, residualCount, unverifiedMemoryLinkCount };
 }
 
 /** Inspect J's operation-plan checkpoint without constructing its mutating runtime store. */
@@ -282,6 +312,10 @@ export function inspectOperationPlanRecoveryLedger(options: {
     const checkpoint = parsed.data;
     const inspected = inspectCheckpointBindings(checkpoint);
     const capped = inspected.bindings.slice(0, 200);
+    const inspectedBindingsByPlan = new Map<string, number>();
+    for (const binding of capped) {
+      inspectedBindingsByPlan.set(binding.plan_id_digest, (inspectedBindingsByPlan.get(binding.plan_id_digest) ?? 0) + 1);
+    }
     const residual = inspected.residualCount > 0 || inspected.residualPlanCount > 0 || inspected.unverifiedMemoryLinkCount > 0;
     return {
       owner: "J",
@@ -296,6 +330,10 @@ export function inspectOperationPlanRecoveryLedger(options: {
       residual_binding_count: inspected.residualCount,
       unverified_memory_link_count: inspected.unverifiedMemoryLinkCount,
       omitted_binding_count: Math.max(0, inspected.bindings.length - capped.length),
+      plans: inspected.plans.map((plan) => ({
+        ...plan,
+        omitted_binding_count: Math.max(0, plan.binding_count - (inspectedBindingsByPlan.get(plan.plan_id_digest) ?? 0)),
+      })),
       bindings: capped,
       used_for_authority: false,
       may_execute: false,

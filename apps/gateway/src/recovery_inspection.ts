@@ -13,6 +13,7 @@ import {
 import {
   inspectOperationPlanRecoveryLedger,
   type OperationPlanBindingStatus,
+  type OperationPlanRecoveryPlanSummary,
   type OperationPlanRecoveryInspection,
 } from "./operation_plan_recovery_inspection.js";
 import {
@@ -43,7 +44,7 @@ export interface RecoveryUpdateResidual {
 }
 
 export interface GatewayRecoveryInspectionReport {
-  readonly schema_version: 5;
+  readonly schema_version: 6;
   readonly surface: "recovery_inspection";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present";
@@ -55,6 +56,7 @@ export interface GatewayRecoveryInspectionReport {
     readonly cron_events: CronEventRecoveryInspection;
   };
   readonly operation_plan_correlations: readonly OperationPlanBrokerCorrelation[];
+  readonly plan_dependency_scopes: readonly RecoveryPlanDependencyScope[];
   readonly replay_checkpoint: null | {
     readonly verified: true;
     readonly kind: "canonical_replay_checkpoint_not_backup";
@@ -132,6 +134,16 @@ export interface OperationPlanBrokerCorrelation {
     | "plan_binding_unverified";
 }
 
+export type RecoveryPlanDependencyCategory = "operation_plan" | "broker" | "delivery" | "memory" | "cron_approval";
+
+/** Digest-only plan evidence; this is not a job recovery or restore authorization. */
+export interface RecoveryPlanDependencyScope extends OperationPlanRecoveryPlanSummary {
+  readonly status: "observed" | "residuals_present" | "unobserved";
+  readonly inspected_binding_count: number;
+  readonly residual_dependencies: readonly RecoveryPlanDependencyCategory[];
+  readonly unobserved_dependencies: readonly RecoveryPlanDependencyCategory[];
+}
+
 export interface RecoveryLedgerBoundaryObservation {
   readonly reason: PersistenceLedgerInspection["reason"] | ExecutionIntentRecoveryInspection["reason"] | "unknown";
   readonly verified_event_count: number | null;
@@ -141,7 +153,7 @@ export interface RecoveryLedgerBoundaryObservation {
 }
 
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 4;
+  readonly schema_version: 5;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -178,6 +190,8 @@ export interface GatewayRecoveryOperatorProjection {
     readonly cron_approval_correlation: OperationPlanBrokerCorrelation["cron_approval_correlation"];
   }[];
   readonly omitted_operation_plan_correlation_count: number;
+  readonly plan_dependency_scopes: readonly RecoveryPlanDependencyScope[];
+  readonly omitted_plan_dependency_scope_count: number;
   readonly update_residuals: readonly RecoveryUpdateResidual[];
   readonly omitted_update_residual_count: number;
   readonly external_backup_restore_point: "not_examined";
@@ -187,6 +201,7 @@ export interface GatewayRecoveryOperatorProjection {
 }
 
 const OPERATOR_RECORD_LIMIT = 200;
+const OPERATION_PLAN_LIMIT = 64;
 const HEX_DIGEST = /^[0-9a-f]{64}$/i;
 const OPERATION_PLAN_STATUSES: readonly OperationPlanBindingStatus[] = [
   "selected", "intent_committed", "verified", "outcome_unknown", "verification_failed", "not_attempted", "invalidated",
@@ -214,6 +229,9 @@ const CRON_APPROVAL_CORRELATIONS: readonly OperationPlanBrokerCorrelation["cron_
 const CRON_APPROVAL_CORRELATION_RESIDUALS = new Set<OperationPlanBrokerCorrelation["cron_approval_correlation"]>([
   "ambiguous", "not_observed_due_to_limit", "cron_unverified", "plan_binding_unverified",
 ]);
+const PLAN_DEPENDENCY_CATEGORIES: readonly RecoveryPlanDependencyCategory[] = [
+  "operation_plan", "broker", "delivery", "memory", "cron_approval",
+];
 const RECOVERY_LEDGER_REASONS: readonly NonNullable<RecoveryLedgerBoundaryObservation["reason"]>[] = [
   "disk_full", "write_failed", "sync_failed", "schema_mismatch", "ledger_corrupt", "projection_mismatch",
   "store_unavailable", "outbox_mismatch",
@@ -327,6 +345,134 @@ function projectOperatorOperationPlanCorrelations(
   return { rows, omitted: values.length - rows.length };
 }
 
+type RecoveryPlanDependencyCorrelation = Pick<OperationPlanBrokerCorrelation,
+  | "plan_id_digest"
+  | "binding_integrity"
+  | "broker_correlation"
+  | "delivery_correlation"
+  | "memory_correlation"
+  | "cron_approval_correlation"
+>;
+
+/** Group plan evidence without upgrading an observed plan to a recoverable job or restore point. */
+export function buildRecoveryPlanDependencyScopes(
+  plans: readonly OperationPlanRecoveryPlanSummary[],
+  correlations: readonly RecoveryPlanDependencyCorrelation[],
+): RecoveryPlanDependencyScope[] {
+  const correlationsByPlan = new Map<string, RecoveryPlanDependencyCorrelation[]>();
+  for (const correlation of correlations) {
+    correlationsByPlan.set(correlation.plan_id_digest, [
+      ...(correlationsByPlan.get(correlation.plan_id_digest) ?? []), correlation,
+    ]);
+  }
+
+  return plans.map((plan) => {
+    const rows = correlationsByPlan.get(plan.plan_id_digest) ?? [];
+    const residual = new Set<RecoveryPlanDependencyCategory>();
+    const unobserved = new Set<RecoveryPlanDependencyCategory>();
+    if (plan.integrity === "residuals_present" || plan.residual_binding_count > 0) residual.add("operation_plan");
+
+    for (const row of rows) {
+      if (row.binding_integrity === "residuals_present") residual.add("operation_plan");
+
+      if (["matched", "not_admitted"].includes(row.broker_correlation)) {
+        // Broker relationship is either verified or this plan binding was not admitted.
+      } else if (["not_observed_due_to_limit", "broker_unverified", "j_binding_unverified"].includes(row.broker_correlation)) {
+        unobserved.add("broker");
+      } else {
+        residual.add("broker");
+      }
+
+      if (row.broker_correlation === "matched") {
+        if (["matched", "not_recorded"].includes(row.delivery_correlation)) {
+          // No unresolved delivery dependency was observed.
+        } else if (row.delivery_correlation === "not_observed") {
+          unobserved.add("delivery");
+        } else {
+          residual.add("delivery");
+        }
+      } else if (row.broker_correlation !== "not_admitted") {
+        unobserved.add("delivery");
+      }
+
+      if (["not_recorded", "matched"].includes(row.memory_correlation)) {
+        // No unresolved memory dependency was observed.
+      } else if (["binding_unverified", "j_state_unverified", "m_state_unverified"].includes(row.memory_correlation)) {
+        unobserved.add("memory");
+      } else {
+        residual.add("memory");
+      }
+
+      if (["not_recorded", "resolved"].includes(row.cron_approval_correlation)) {
+        // No unresolved approval handoff was observed.
+      } else if (["not_observed_due_to_limit", "cron_unverified", "plan_binding_unverified"].includes(row.cron_approval_correlation)) {
+        unobserved.add("cron_approval");
+      } else {
+        residual.add("cron_approval");
+      }
+    }
+
+    const omittedBindingCount = Math.max(plan.omitted_binding_count, plan.binding_count - rows.length);
+    const expectedObservedBindingCount = Math.max(0, plan.binding_count - omittedBindingCount);
+    if (rows.length !== expectedObservedBindingCount || omittedBindingCount > 0) {
+      for (const category of ["broker", "delivery", "memory", "cron_approval"] as const) unobserved.add(category);
+    }
+
+    const status: RecoveryPlanDependencyScope["status"] = residual.size > 0
+      ? "residuals_present"
+      : unobserved.size > 0 ? "unobserved" : "observed";
+    return {
+      ...plan,
+      omitted_binding_count: omittedBindingCount,
+      status,
+      inspected_binding_count: rows.length,
+      residual_dependencies: PLAN_DEPENDENCY_CATEGORIES.filter((category) => residual.has(category)),
+      unobserved_dependencies: PLAN_DEPENDENCY_CATEGORIES.filter((category) => unobserved.has(category)),
+    };
+  });
+}
+
+function projectOperationPlanSummaries(
+  value: unknown,
+  enabled: boolean,
+): { rows: OperationPlanRecoveryPlanSummary[]; omitted: number; valid: boolean } {
+  if (!Array.isArray(value)) return { rows: [], omitted: 0, valid: false };
+  const rows: OperationPlanRecoveryPlanSummary[] = [];
+  let valid = true;
+  for (const item of enabled ? value.slice(0, OPERATION_PLAN_LIMIT) : []) {
+    if (!isRecord(item)) {
+      valid = false;
+      continue;
+    }
+    const planIdDigest = fixedDigest(item.plan_id_digest);
+    const integrity = fixedEnum(item.integrity, ["verified", "residuals_present"] as const);
+    const planRecordCount = item.plan_record_count;
+    const bindingCount = item.binding_count;
+    const residualBindingCount = item.residual_binding_count;
+    const omittedBindingCount = item.omitted_binding_count;
+    if (!planIdDigest || !integrity || !Number.isSafeInteger(planRecordCount) || (planRecordCount as number) < 1 ||
+        !Number.isSafeInteger(bindingCount) || (bindingCount as number) < 0 ||
+        !Number.isSafeInteger(residualBindingCount) || (residualBindingCount as number) < 0 ||
+        (residualBindingCount as number) > (bindingCount as number) ||
+        !Number.isSafeInteger(omittedBindingCount) || (omittedBindingCount as number) < 0 ||
+        (omittedBindingCount as number) > (bindingCount as number)) {
+      valid = false;
+      continue;
+    }
+    rows.push({
+      plan_id_digest: planIdDigest,
+      integrity,
+      plan_record_count: planRecordCount as number,
+      binding_count: bindingCount as number,
+      residual_binding_count: residualBindingCount as number,
+      omitted_binding_count: omittedBindingCount as number,
+    });
+  }
+  if (value.length > OPERATION_PLAN_LIMIT || rows.length !== value.length ||
+      new Set(rows.map((item) => item.plan_id_digest)).size !== rows.length) valid = false;
+  return { rows, omitted: Math.max(0, value.length - rows.length), valid };
+}
+
 function projectOperatorUpdateResiduals(
   values: readonly unknown[],
   enabled: boolean,
@@ -417,13 +563,40 @@ function projectCronEventSummary(value: unknown): {
 export function projectGatewayRecoveryInspectionForOperator(value: unknown): GatewayRecoveryOperatorProjection {
   const source = isRecord(value) ? value : {};
   const ledgers = isRecord(source.ledgers) ? source.ledgers : {};
-  const reportShapeValid = source.schema_version === 5 && source.surface === "recovery_inspection" && source.mode === "read_only";
+  const reportShapeValid = source.schema_version === 6 && source.surface === "recovery_inspection" && source.mode === "read_only";
   const sourceStatus = fixedEnum(source.status, ["verified", "residuals_present"] as const);
   const cronEvents = projectCronEventSummary(ledgers.cron_events);
   const cronLedgerStatus = fixedEnum(isRecord(ledgers.cron_events) ? ledgers.cron_events.status : null, CRON_RECOVERY_STATUSES);
   const cronResidualCount = source.cron_event_residual_count;
   const cronApprovalCorrelationResidualCount = source.cron_approval_correlation_residual_count;
   const operationPlanSources = Array.isArray(source.operation_plan_correlations) ? source.operation_plan_correlations : [];
+  const operationPlansProjection = projectOperatorOperationPlanCorrelations(operationPlanSources, reportShapeValid);
+  const operationPlanLedger = isRecord(ledgers.operation_plans) ? ledgers.operation_plans : {};
+  const planSummaries = projectOperationPlanSummaries(operationPlanLedger.plans, reportShapeValid);
+  const operationPlanStatus = fixedEnum(operationPlanLedger.status, RECOVERY_LEDGER_STATUSES);
+  const planDependencyScopes = buildRecoveryPlanDependencyScopes(planSummaries.rows, operationPlansProjection.rows);
+  const planCount = operationPlanLedger.plan_count;
+  const bindingCount = operationPlanLedger.binding_count;
+  const residualBindingCount = operationPlanLedger.residual_binding_count;
+  const omittedBindingCount = operationPlanLedger.omitted_binding_count;
+  const planInventoryValid = operationPlanStatus !== null &&
+    Number.isSafeInteger(planCount) && (planCount as number) >= 0 &&
+    Number.isSafeInteger(bindingCount) && (bindingCount as number) >= 0 &&
+    Number.isSafeInteger(residualBindingCount) && (residualBindingCount as number) >= 0 &&
+    Number.isSafeInteger(omittedBindingCount) && (omittedBindingCount as number) >= 0 &&
+    planSummaries.valid &&
+    (operationPlanStatus === "verified" || operationPlanStatus === "residuals_present"
+      ? planSummaries.rows.reduce((sum, item) => sum + item.plan_record_count, 0) === planCount &&
+        planSummaries.rows.reduce((sum, item) => sum + item.binding_count, 0) === bindingCount &&
+        planSummaries.rows.reduce((sum, item) => sum + item.residual_binding_count, 0) === residualBindingCount &&
+        planSummaries.rows.reduce((sum, item) => sum + item.omitted_binding_count, 0) === omittedBindingCount &&
+        planSummaries.rows.every((plan) => operationPlansProjection.rows.filter((row) => row.plan_id_digest === plan.plan_id_digest).length <=
+          plan.binding_count - plan.omitted_binding_count) &&
+        operationPlansProjection.rows.every((row) => planSummaries.rows.some((plan) => plan.plan_id_digest === row.plan_id_digest))
+      : planCount === 0 && bindingCount === 0 && residualBindingCount === 0 && omittedBindingCount === 0 &&
+        planSummaries.rows.length === 0 && operationPlansProjection.rows.length === 0);
+  const planDependencyScopesValid = planInventoryValid && Array.isArray(source.plan_dependency_scopes) &&
+    JSON.stringify(source.plan_dependency_scopes) === JSON.stringify(planDependencyScopes);
   const cronCorrelationStates = operationPlanSources.map((item) =>
     isRecord(item) ? fixedEnum(item.cron_approval_correlation, CRON_APPROVAL_CORRELATIONS) : null,
   );
@@ -434,13 +607,14 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
   const cronBoundaryValid = cronEvents.valid && cronLedgerStatus === cronEvents.summary.status &&
     Number.isSafeInteger(cronResidualCount) && cronResidualCount === cronEvents.summary.residual_count &&
     Number.isSafeInteger(cronApprovalCorrelationResidualCount) && (cronApprovalCorrelationResidualCount as number) >= 0 && cronCorrelationsValid;
-  const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false && sourceStatus !== null && cronBoundaryValid;
+  const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false &&
+    sourceStatus !== null && cronBoundaryValid && planDependencyScopesValid;
   const updateSources = Array.isArray(source.update_residuals) ? source.update_residuals : [];
   const operationPlans = projectOperatorOperationPlanCorrelations(operationPlanSources, boundaryValid);
   const updates = projectOperatorUpdateResiduals(updateSources, boundaryValid);
-  const ledgerStatuses = ["verified", "projection_mismatch", "corrupt", "residuals_present", "unavailable", "schema_mismatch"] as const;
+  const ledgerStatuses = RECOVERY_LEDGER_STATUSES;
   return {
-    schema_version: 4,
+    schema_version: 5,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -468,6 +642,8 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     cron_approval_correlation_residual_count: fixedCount(source.cron_approval_correlation_residual_count),
     operation_plan_correlations: operationPlans.rows,
     omitted_operation_plan_correlation_count: operationPlans.omitted,
+    plan_dependency_scopes: boundaryValid ? planDependencyScopes : [],
+    omitted_plan_dependency_scope_count: 0,
     update_residuals: updates.rows,
     omitted_update_residual_count: updates.omitted,
     external_backup_restore_point: "not_examined",
@@ -566,7 +742,7 @@ export function inspectGatewayRecoveryState(
   const unavailableOperationPlans: OperationPlanRecoveryInspection = {
     owner: "J", status: "unavailable", reason: "store_unavailable", plan_count: 0, plan_integrity_residual_count: 0,
     binding_count: 0, verified_binding_count: 0, residual_binding_count: 0, unverified_memory_link_count: 0,
-    omitted_binding_count: 0,
+    omitted_binding_count: 0, plans: [],
     bindings: [], used_for_authority: false, may_execute: false,
   };
   const unavailableCronEvents: CronEventRecoveryInspection = {
@@ -601,6 +777,7 @@ export function inspectGatewayRecoveryState(
   const { approval_command_matches: cronApprovalMatches, ...cronEvents } = cronInspection;
   const residuals = correlateRecoveryUpdates(j, m);
   const operationPlanCorrelations = correlateOperationPlanBindings(operationPlans, execution, j, m, cronEvents, cronApprovalMatches);
+  const planDependencyScopes = buildRecoveryPlanDependencyScopes(operationPlans.plans, operationPlanCorrelations);
   const operationPlanMemoryLinkResidualCount = operationPlanCorrelations.filter((item) =>
     item.memory_correlation !== "not_recorded" && item.memory_correlation !== "matched",
   ).length;
@@ -641,12 +818,13 @@ export function inspectGatewayRecoveryState(
     !hasHardResidual && operationPlanCorrelationResidualCount === 0 && operationPlanMemoryLinkResidualCount === 0 &&
     operationPlans.omitted_binding_count === 0 && cronApprovalCorrelationResidualCount === 0;
   return {
-    schema_version: 5,
+    schema_version: 6,
     surface: "recovery_inspection",
     mode: "read_only",
     status: checkpointVerified ? "verified" : "residuals_present",
     ledgers: { j, m, execution, operation_plans: operationPlansResolved, cron_events: cronEvents },
     operation_plan_correlations: operationPlanCorrelations,
+    plan_dependency_scopes: planDependencyScopes,
     replay_checkpoint: checkpointVerified
       ? {
           verified: true,

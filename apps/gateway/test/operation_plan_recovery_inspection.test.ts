@@ -8,6 +8,7 @@ import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import {
   OperationPlanCheckpointSchema,
   type ExecutionAdmission,
+  type OperationPlanCheckpoint,
   type OperationPlan,
 } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
@@ -132,6 +133,99 @@ describe("J OperationPlan recovery inspection", () => {
     expect(report.operation_plan_residual_count).toBeGreaterThan(0);
     expect(report.replay_checkpoint).toBeNull();
     expect(await readFile(planPath)).toEqual(before);
+  });
+
+  it("scopes one plan residual without spreading it to a separate inspected plan", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-scopes-"));
+    const { stateRoot, privateRoot, checkpoint } = await createPlanState(temporaryRoot, 1);
+    const brokenPlanState = structuredClone(checkpoint.plans[0]!);
+    brokenPlanState.revisions[0]!.digest = sha256("bad-plan-revision");
+    brokenPlanState.bindings = [];
+
+    const cleanPlan: OperationPlan = {
+      ...planFixture(1),
+      plan_id: "private-plan-clean",
+      request_id: "private-request-clean",
+    };
+    const cleanRevisionDigest = operationPlanDigest(cleanPlan);
+    const cleanStep = cleanPlan.steps[0]!;
+    const baseBinding = checkpoint.plans[0]!.bindings[0]!;
+    const { execution_admission: _admission, ...bindingWithoutAdmission } = baseBinding;
+    const cleanPlanState: OperationPlanCheckpoint["plans"][number] = {
+      owner: "private-owner",
+      channel: "webchat",
+      goal: "private-clean-goal",
+      revisions: [{ digest: cleanRevisionDigest, plan: cleanPlan }],
+      receipt_observations: [],
+      bindings: [{
+        ...bindingWithoutAdmission,
+        step_id: cleanStep.step_id,
+        revision_digest: cleanRevisionDigest,
+        step_digest: stepDefinitionDigest(cleanStep),
+        prepared_step: cleanStep,
+        command_id: "private-command-clean",
+        request_id: cleanPlan.request_id,
+        commit_hash: "private-commit-clean",
+        payload_digest: sha256("clean-payload"),
+        command_digest: sha256("clean-command"),
+        operation: cleanStep.operation,
+        status: "not_attempted",
+      }],
+      results: [],
+    };
+    const combined = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [brokenPlanState, cleanPlanState],
+    });
+    const planPath = path.join(privateRoot, "operation-plans", "j-state.sqlite");
+    const database = new DatabaseSync(planPath);
+    const serialized = JSON.stringify(combined);
+    database.prepare("UPDATE operation_plan_state SET checkpoint_json=?,digest=? WHERE id=1")
+      .run(serialized, operationPlanDigest(combined));
+    database.close();
+
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const cron = new GatewayCronEventStore(path.join(cronDirectory, "cron-events.sqlite"));
+    cron.close();
+
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
+    const brokenPlanDigest = operationPlanDigest("private-plan-id");
+    const cleanPlanDigest = operationPlanDigest("private-plan-clean");
+    expect(report.ledgers.operation_plans).toMatchObject({
+      status: "residuals_present",
+      plan_count: 2,
+      binding_count: 1,
+      plan_integrity_residual_count: 1,
+      residual_binding_count: 0,
+      omitted_binding_count: 0,
+    });
+    expect(report.plan_dependency_scopes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        plan_id_digest: brokenPlanDigest,
+        integrity: "residuals_present",
+        status: "residuals_present",
+        residual_dependencies: ["operation_plan"],
+      }),
+      expect.objectContaining({
+        plan_id_digest: cleanPlanDigest,
+        integrity: "verified",
+        status: "observed",
+        inspected_binding_count: 1,
+        residual_dependencies: [],
+      }),
+    ]));
+    expect(report.external_backup_restore_point).toBe("not_examined");
+    expect(report.used_for_authority).toBe(false);
+    expect(report.may_execute).toBe(false);
+    const projection = projectGatewayRecoveryInspectionForOperator(report);
+    expect(projection).toMatchObject({ boundary_valid: true, used_for_authority: false, may_execute: false });
+    const serializedReport = JSON.stringify(report);
+    const serializedProjection = JSON.stringify(projection);
+    for (const secret of ["private-plan-id", "private-plan-clean", "private-request-clean", "private-command-clean", "private-clean-goal"]) {
+      expect(serializedReport).not.toContain(secret);
+      expect(serializedProjection).not.toContain(secret);
+    }
   });
 
   it("refuses an operation-plan database with SQLite sidecars without opening or changing it", async () => {

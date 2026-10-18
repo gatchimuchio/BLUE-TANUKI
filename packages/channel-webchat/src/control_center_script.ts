@@ -1592,10 +1592,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               (cronReason !== "outbox_mismatch" || cronCounts.orphan_outbox_count > 0));
         const cronLedgerStatus = recoveryInspectionLedgerStatus(ledgers.cron_events, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
         const cronApprovalCorrelationResidualCount = recoveryInspectionCount(source.cron_approval_correlation_residual_count);
-        const boundaryOk = source.schema_version === 4 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && cronApprovalCorrelationResidualCount !== null;
-        const status = boundaryOk
-          ? recoveryInspectionEnum(source.status, ["verified", "residuals_present", "invalid_report"])
-          : "invalid_report";
+        const initialBoundaryOk = source.schema_version === 5 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && cronApprovalCorrelationResidualCount !== null;
         const ledgerStatuses = {
           j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
@@ -1633,6 +1630,74 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               };
             }).filter(function (item) { return item !== null; })
           : [];
+        const dependencyCategories = ["operation_plan", "broker", "delivery", "memory", "cron_approval"];
+        let planDependencyScopesValid = Array.isArray(source.plan_dependency_scopes) && source.plan_dependency_scopes.length <= 64 &&
+          source.omitted_plan_dependency_scope_count === 0;
+        const planDependencyScopes = Array.isArray(source.plan_dependency_scopes)
+          ? source.plan_dependency_scopes.slice(0, 64).map(function (item) {
+              const value = item && typeof item === "object" ? item : {};
+              const planIdDigest = recoveryInspectionDigest(value.plan_id_digest);
+              const planIntegrity = recoveryInspectionEnum(value.integrity, ["verified", "residuals_present"]);
+              const scopeStatus = recoveryInspectionEnum(value.status, ["observed", "residuals_present", "unobserved"]);
+              const planRecordCount = value.plan_record_count;
+              const bindingCount = value.binding_count;
+              const inspectedBindingCount = value.inspected_binding_count;
+              const omittedBindingCount = value.omitted_binding_count;
+              const residualBindingCount = value.residual_binding_count;
+              const readCategories = function (items) {
+                if (!Array.isArray(items)) return null;
+                const safe = items.map(function (entry) { return recoveryInspectionEnum(entry, dependencyCategories); });
+                if (safe.some(function (entry) { return entry === "unknown"; }) || new Set(safe).size !== safe.length) return null;
+                return dependencyCategories.filter(function (entry) { return safe.indexOf(entry) >= 0; });
+              };
+              const residualDependencies = readCategories(value.residual_dependencies);
+              const unobservedDependencies = readCategories(value.unobserved_dependencies);
+              const countsValid = Number.isSafeInteger(planRecordCount) && planRecordCount >= 1 &&
+                Number.isSafeInteger(bindingCount) && bindingCount >= 0 &&
+                Number.isSafeInteger(inspectedBindingCount) && inspectedBindingCount >= 0 &&
+                Number.isSafeInteger(omittedBindingCount) && omittedBindingCount >= 0 &&
+                Number.isSafeInteger(residualBindingCount) && residualBindingCount >= 0 &&
+                residualBindingCount <= bindingCount && omittedBindingCount <= bindingCount &&
+                inspectedBindingCount + omittedBindingCount === bindingCount;
+              const expectedStatus = residualDependencies && residualDependencies.length > 0 ? "residuals_present" :
+                (unobservedDependencies && unobservedDependencies.length > 0) || omittedBindingCount > 0 ? "unobserved" : "observed";
+              const valid = planIdDigest && planIntegrity !== "unknown" && scopeStatus !== "unknown" && countsValid &&
+                residualDependencies !== null && unobservedDependencies !== null && scopeStatus === expectedStatus &&
+                (planIntegrity !== "residuals_present" || residualDependencies.indexOf("operation_plan") >= 0) &&
+                (residualBindingCount === 0 || residualDependencies.indexOf("operation_plan") >= 0);
+              if (!valid) {
+                planDependencyScopesValid = false;
+                return null;
+              }
+              return {
+                plan_id_digest: planIdDigest,
+                integrity: planIntegrity,
+                plan_record_count: planRecordCount,
+                binding_count: bindingCount,
+                inspected_binding_count: inspectedBindingCount,
+                omitted_binding_count: omittedBindingCount,
+                residual_binding_count: residualBindingCount,
+                status: scopeStatus,
+                residual_dependencies: residualDependencies,
+                unobserved_dependencies: unobservedDependencies
+              };
+            }).filter(function (item) { return item !== null; })
+          : [];
+        const scopedCorrelationCount = planDependencyScopes.reduce(function (sum, item) {
+          return sum + planCorrelations.filter(function (correlation) { return correlation.plan_id_digest === item.plan_id_digest; }).length;
+        }, 0);
+        const inspectedBindingCountsMatch = planDependencyScopes.every(function (item) {
+          return planCorrelations.filter(function (correlation) { return correlation.plan_id_digest === item.plan_id_digest; }).length === item.inspected_binding_count;
+        });
+        const planScopeDigests = planDependencyScopes.map(function (item) { return item.plan_id_digest; });
+        if (scopedCorrelationCount !== planCorrelations.length || !inspectedBindingCountsMatch ||
+            new Set(planScopeDigests).size !== planScopeDigests.length) {
+          planDependencyScopesValid = false;
+        }
+        const boundaryOk = initialBoundaryOk && planDependencyScopesValid;
+        const status = boundaryOk
+          ? recoveryInspectionEnum(source.status, ["verified", "residuals_present", "invalid_report"])
+          : "invalid_report";
         const updateResiduals = Array.isArray(source.update_residuals)
           ? source.update_residuals.slice(0, 200).map(function (item) {
               const value = item && typeof item === "object" ? item : {};
@@ -1666,6 +1731,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           },
           operation_plan_correlations: planCorrelations,
           omitted_operation_plan_correlation_count: recoveryInspectionCount(source.omitted_operation_plan_correlation_count),
+          plan_dependency_scopes: planDependencyScopes,
+          omitted_plan_dependency_scope_count: recoveryInspectionCount(source.omitted_plan_dependency_scope_count),
           update_residuals: updateResiduals,
           omitted_update_residual_count: recoveryInspectionCount(source.omitted_update_residual_count),
           external_backup_restore_point: recoveryInspectionEnum(source.external_backup_restore_point, ["not_examined"]),
