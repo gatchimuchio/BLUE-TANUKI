@@ -89,6 +89,8 @@ C01～C08.02、D01.01～D01.02などは現行Gitに局所成果を持つが、AG
 
 2026-10-18の`QEB-03-E03.03-REQUEST-SCOPE-RESIDUAL-SEPARATION`では、Operation Plan dependency scopeと検証済み文書整理checkpointを`request_scope_digest`単位でoperator projection・CLI・Control Centerへ集約した。両台帳一致、片側のみ、相手範囲未解決を分け、残差と未完了checkpointをscope内で数える。相手台帳に未リンク行や省略があれば片側のみと断定せず、不完全inventoryの未リンク件数はunknownとして返す。壊れたcheckpointにscopeを付けず、Control Centerは受信集約を独立再計算して不一致を拒否する。Gateway/WebChat 94 focused tests、typecheck、15 workspace build、分離root CLI smoke、Control Center script構文、docs/repo-health gatesを確認した。read-only診断でありjob identity、restore point、復旧操作・権限は生成しない。独立restore point、store間atomicity、guarded selective recoveryが未接続のためE03.03=`BUILD_GAP`を維持する。
 
+2026-10-18の`QEB-03-E03.03-SNAPSHOT-CAPTURE-CHANGE-DETECTION`では、canonical state 5台帳の独立snapshot取得前後にread-only `PRAGMA data_version`とBigInt精度のsource file identityを照合する。取得途中のcommitまたはsource差異があれば、保存したarchiveを全て除去し、存在する台帳を`snapshot_failed`へ閉じる。合成競合試験と分離root `--recovery-inspect` smokeを確認した。これは途中変更検知でありstore間atomicity、restore point、復旧可能性を証明しない。`cross_store_atomic=false`、E03.03=`BUILD_GAP`を維持する。
+
 ## 旧RCのP13と日本語基底J系列
 
 旧v1.0 RCのP1–P12とP13は独立した出荷履歴・境界。version=1.0.0-rc.1、P13=PENDING_OWNER_GO、public_claim_allowed=false。必要な実機、GA、release bundle、strict日本語基底とowner GOの条件は維持し、旧RCの局所PASSを新AGI構成の品質へ転用しない。

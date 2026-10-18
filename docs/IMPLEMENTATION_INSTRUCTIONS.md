@@ -1,8 +1,33 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77`、Codex施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`、作業標準要領、現物、active対象要求を今回も再読した。今回開始HEAD／`origin/main`=`be85af9f76fe45023954609587a2d49d6fa6a8f4`、worktree clean。編集前local復旧branch／tagとremote backup tagは現世代=`be85af9f76fe45023954609587a2d49d6fa6a8f4`、前世代=`32b8a67c7a141b72dd56ebd18a120fbf569df6e5`で一致。復旧ref移行状態=`MIGRATION_COMPLETE`。ownerの製品開発続行指示を維持する。C08.03実provider試験は保留、別repo変更・実業務作用・公開行為・出荷判断はこの委任外。
+2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表SHA-256=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77`、Codex施工指示SHA-256=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`、作業標準要領、現物、active対象要求を今回も再読した。今回開始HEAD／`origin/main`=`340f96b04717d54d7f4ed4c81da11526d09798a8`、worktree clean。編集前local復旧branch／tagとremote backup tagは現世代=`340f96b04717d54d7f4ed4c81da11526d09798a8`、前世代=`be85af9f76fe45023954609587a2d49d6fa6a8f4`で一致。復旧ref移行状態=`MIGRATION_COMPLETE`。ownerの製品開発続行指示を維持する。C08.03実provider試験は保留、別repo変更・実業務作用・公開行為・出荷判断はこの委任外。
 
 ## 今回のBUILD_BATCH
+
+QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-SNAPSHOT-CAPTURE-CHANGE-DETECTION`。関係単位=E03.03「破損範囲の隔離復旧」、E03.02「未決作用・M pendingの回復」。開始HEAD／`origin/main`=`340f96b04717d54d7f4ed4c81da11526d09798a8`、worktree clean。編集前local recovery branch二世代とremote backup tag二世代を現世代=`340f96b04717d54d7f4ed4c81da11526d09798a8`、前世代=`be85af9f76fe45023954609587a2d49d6fa6a8f4`へ回転し、期待SHA・remote実値を照合した。
+
+目的は、canonical recovery snapshotを5台帳から個別取得する途中でsource DBにcommitがあった場合、異なる時点の混在を成功済みsnapshotとして保存しないこと。各sourceの`PRAGMA data_version`を同一観測connection上で取得前後比較し、いずれかが取得期間中に変わったら保存済みarchiveを除去して全captureを`snapshot_failed`へ閉じる。変化を検出しない場合も`cross_store_atomic=false`は維持し、store間transaction atomicityや復旧可能性は主張しない。
+
+対象は`canonical_state_backup.ts`のread-only source change observation、既存manifest／backup inspectionへの接続、合成5台帳SQLiteでの取得中commit検知・archive非残存・source DB不変確認。observerを開けないstoreはそのstoreを未確認扱いにし、欠損・不整合を補完しない。対象外はstore間write barrier、canonical restore・selective recovery実行、restore pointやjob identityへの昇格、権限変更、実外部作用、C08.03 live/provider、別repo、公開・出荷判断。`used_for_authority=false`、`may_execute=false`、`canonical_state_cross_store_atomic=false`を維持する。
+
+最小確認は、source versionが不変の場合の既存5-store snapshot検査、copy開始後の別台帳commitを検出して全archiveを消すこと、snapshot後のinspectionが全store未確認として表示すること、read-only observerがsource bytesや状態を変更しないこと。対象test、`pnpm typecheck`→`pnpm build`、recovery surface smoke、必要なdocs/repo-health gate、`git diff --check`を実行する。全suite、実restore、credential/live/provider、5OS実機、QE_QC／QE_QAは対象外。
+
+## 今回の実績
+
+取得開始前に5台帳の読取専用観測connectionを開き、各`data_version`とBigInt精度のsource file identityを前後比較する。1台帳のcommitまたはsource file差異を検出した場合、保存済みarchiveを全て除去し、存在していた各台帳を`snapshot_failed`へ閉じる。通常取得は5台帳全てverifiedを保ち、合成commit競合では0 archive・5台帳未確認となることを確認した。`cross_store_atomic=false`は変更していない。
+
+| 限定確認 | 結果 |
+|---|---|
+| `apps/gateway/test/recovery_surface.test.ts` | PASS、12 tests。通常5台帳snapshotと取得中commit検知、archive全破棄、inspectionの未確認表示、sourceの状態不変を確認。 |
+| `pnpm typecheck`→`pnpm build` | PASS。15 workspace projects。 |
+| build後の分離root `--recovery-inspect --json` smoke | PASS。期待exit 2、unavailableを表示しstate rootを作成しない。 |
+| `pnpm docs:check` | PASS。docs check／licensing PASS、日本語基底監査PASS、移行負債76件（既存）。 |
+| `pnpm validate:repo-health`／`git diff --check` | 両方PASS。 |
+| 全suite、実state復旧、credential/live/provider、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+E03.03=`BUILD_GAP`を維持する。source変更を検出しない結果もstore間atomic snapshotやrestore pointの証明ではない。C08.03実provider試験は保留し、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、別repo・実業務作用・公開・出荷判断の境界を維持する。
+
+## 前回のBUILD_BATCH
 
 QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-REQUEST-SCOPE-RESIDUAL-SEPARATION`。関係単位=E03.03「破損範囲の隔離復旧」、E03.02「未決作用・M pendingの回復」。開始HEAD／`origin/main`=`be85af9f76fe45023954609587a2d49d6fa6a8f4`、開始worktree clean。編集前local復旧branch二世代とremote backup tag二世代を現世代=`be85af9f76fe45023954609587a2d49d6fa6a8f4`、前世代=`32b8a67c7a141b72dd56ebd18a120fbf569df6e5`へ回転・照合した。
 

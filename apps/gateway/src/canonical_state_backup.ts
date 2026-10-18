@@ -52,6 +52,21 @@ interface StoreSource {
   readonly present: boolean;
 }
 
+interface StoreDataVersionObservation {
+  readonly database: DatabaseSyncType;
+  readonly initialVersion: number;
+  readonly sourcePath: string;
+  readonly sourceIdentity: StoreSourceIdentity;
+}
+
+interface StoreSourceIdentity {
+  readonly device: bigint;
+  readonly inode: bigint;
+  readonly size: bigint;
+  readonly modifiedAt: bigint;
+  readonly changedAt: bigint;
+}
+
 async function digestFile(filepath: string): Promise<{ bytes: number; sha256: string }> {
   const hash = createHash("sha256");
   let bytes = 0;
@@ -65,6 +80,25 @@ async function digestFile(filepath: string): Promise<{ bytes: number; sha256: st
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && "code" in error && String(error.code) === "ENOENT";
+}
+
+function storeSourceIdentity(sourcePath: string): StoreSourceIdentity {
+  const stat = lstatSync(sourcePath, { bigint: true });
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.ino <= 0n) {
+    throw new Error("canonical_state_source_identity_unavailable");
+  }
+  return {
+    device: stat.dev,
+    inode: stat.ino,
+    size: stat.size,
+    modifiedAt: stat.mtimeNs,
+    changedAt: stat.ctimeNs,
+  };
+}
+
+function sameStoreSourceIdentity(left: StoreSourceIdentity, right: StoreSourceIdentity): boolean {
+  return left.device === right.device && left.inode === right.inode && left.size === right.size &&
+    left.modifiedAt === right.modifiedAt && left.changedAt === right.changedAt;
 }
 
 function safeDirectory(value: string): boolean {
@@ -143,6 +177,14 @@ function integrityCheck(database: DatabaseSyncType): boolean {
   }
 }
 
+function databaseDataVersion(database: DatabaseSyncType): number {
+  const row = database.prepare("PRAGMA data_version").get() as { data_version?: unknown } | undefined;
+  if (row === undefined || !Number.isSafeInteger(row.data_version) || (row.data_version as number) < 0) {
+    throw new Error("canonical_state_data_version_unavailable");
+  }
+  return row.data_version as number;
+}
+
 function copyDeleteJournalSnapshot(database: DatabaseSyncType, sourcePath: string, archivePath: string): void {
   database.exec("PRAGMA busy_timeout=5000");
   const journalMode = database.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined;
@@ -206,12 +248,43 @@ export async function captureCanonicalStateSnapshots(
   const archiveDirectory = join(packDirectory, "canonical-state");
   await fs.mkdir(archiveDirectory, { mode: 0o700 });
   const entries: CanonicalStateSnapshotEntry[] = [];
+  const observations = new Map<CanonicalStateStoreKey, StoreDataVersionObservation>();
+  const observationFailed = new Set<CanonicalStateStoreKey>();
+
+  for (const source of sources) {
+    if (!source.present) continue;
+    let database: DatabaseSyncType | undefined;
+    try {
+      const initialIdentity = storeSourceIdentity(source.path);
+      database = new DatabaseSync(source.path, { readOnly: true });
+      const initialVersion = databaseDataVersion(database);
+      const openedIdentity = storeSourceIdentity(source.path);
+      if (!sameStoreSourceIdentity(initialIdentity, openedIdentity)) throw new Error("canonical_state_source_changed_during_observation");
+      observations.set(source.key, { database, initialVersion, sourcePath: source.path, sourceIdentity: openedIdentity });
+      database = undefined;
+    } catch {
+      try { database?.close(); } catch { /* 観測できなければ当該storeを未確認にする。 */ }
+      observationFailed.add(source.key);
+    }
+  }
 
   for (const source of sources) {
     if (!source.present) {
       entries.push({
         store_key: source.key,
         status: "not_present",
+        archive_rel_path: null,
+        bytes: 0,
+        sha256: null,
+        integrity_check: "not_run",
+      });
+      continue;
+    }
+
+    if (observationFailed.has(source.key) || !observations.has(source.key)) {
+      entries.push({
+        store_key: source.key,
+        status: "snapshot_failed",
         archive_rel_path: null,
         bytes: 0,
         sha256: null,
@@ -255,6 +328,40 @@ export async function captureCanonicalStateSnapshots(
         sha256: null,
         integrity_check: "not_run",
       });
+    }
+  }
+
+  let sourceChangedDuringCapture = false;
+  for (const observation of observations.values()) {
+    try {
+      if (databaseDataVersion(observation.database) !== observation.initialVersion ||
+          !sameStoreSourceIdentity(observation.sourceIdentity, storeSourceIdentity(observation.sourcePath))) {
+        sourceChangedDuringCapture = true;
+      }
+    } catch {
+      sourceChangedDuringCapture = true;
+    }
+  }
+  for (const observation of observations.values()) {
+    try { observation.database.close(); } catch { /* 観測結果を保持する。 */ }
+  }
+
+  if (sourceChangedDuringCapture) {
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index]!;
+      if (entry.archive_rel_path !== null) {
+        await fs.rm(join(packDirectory, entry.archive_rel_path), { force: true });
+      }
+      if (entry.status !== "not_present") {
+        entries[index] = {
+          store_key: entry.store_key,
+          status: "snapshot_failed",
+          archive_rel_path: null,
+          bytes: 0,
+          sha256: null,
+          integrity_check: "not_run",
+        };
+      }
     }
   }
 

@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import { captureCanonicalStateSnapshots, inspectCanonicalStateSnapshots } from "../src/canonical_state_backup.js";
 import {
   buildRecoverySnapshot,
   createRecoveryBackup,
@@ -396,6 +397,57 @@ describe("buildRecoverySnapshot", () => {
       expect(readCanonicalDatabase(jPath)).toEqual(["before-j_control", "after-backup"]);
       expect(JSON.stringify(inspection)).not.toContain(jPath);
       expect(JSON.stringify(inspection)).not.toContain("before-j_control");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("removes every captured archive when a canonical source commits during the multi-store capture", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-canonical-changing-source-"));
+    try {
+      const stateRoot = path.join(root, "state");
+      const packDirectory = path.join(root, "pack");
+      await mkdir(packDirectory);
+      const sourcePaths = new Map<string, string>();
+      for (const [key, relativePath] of CANONICAL_DATABASES) {
+        sourcePaths.set(key, await createCanonicalDatabase(stateRoot, relativePath, `before-${key}`));
+      }
+
+      const capture = captureCanonicalStateSnapshots(stateRoot, packDirectory);
+      const firstArchive = path.join(packDirectory, "canonical-state", "j_control.sqlite");
+      let appeared = false;
+      for (let attempt = 0; attempt < 5_000; attempt += 1) {
+        if (await exists(firstArchive)) {
+          appeared = true;
+          break;
+        }
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+      }
+      expect(appeared).toBe(true);
+
+      const memoryPath = sourcePaths.get("m_state")!;
+      const memoryDatabase: DatabaseSyncType = new DatabaseSync(memoryPath);
+      memoryDatabase.prepare("INSERT INTO snapshot_fixture (value) VALUES (?)").run("changed-during-capture");
+      memoryDatabase.close();
+
+      const manifest = await capture;
+      expect(manifest.cross_store_atomic).toBe(false);
+      expect(manifest.entries).toHaveLength(5);
+      expect(manifest.entries.every((entry) => entry.status === "snapshot_failed")).toBe(true);
+      expect(await readdir(path.join(packDirectory, "canonical-state"))).toEqual([]);
+      expect(readCanonicalDatabase(memoryPath)).toEqual(["before-m_state", "changed-during-capture"]);
+      expect(readCanonicalDatabase(sourcePaths.get("j_control")!)).toEqual(["before-j_control"]);
+
+      const inspection = await inspectCanonicalStateSnapshots(packDirectory, manifest);
+      expect(inspection).toMatchObject({
+        coverage: "partial",
+        captured_store_count: 0,
+        verified_store_count: 0,
+        missing_store_count: 0,
+        unverified_store_count: 5,
+        store_consistency: "independent_sqlite_online_snapshots",
+        cross_store_atomic: false,
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
