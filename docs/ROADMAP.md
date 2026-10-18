@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-03-E03.03-COMPLETE-HISTORY-STARTUP-HOLD-PROCESS-RESTART`では、file-backed Complete Historyの合成restore失敗記録から、Gateway起動時に既存Operation Planをholdする実process経路を確認した。holdはSQLiteへdigest限定で保存され、履歴記録を空にして別processを再起動した後も維持された。これは起動時の保留とprocess再起動のfixture証拠であり、実restore／owner approval／job再開ではない。E03.03=`BUILD_GAP`を維持する。
+
 2026-10-19の`QEB-03-E03.03-JM-RESTORE-HOLD-CLOSED-STORE-RESTART`では、J/M receiptとRecovery startup evidenceを含むOperationPlan holdの回帰testを追加した。J state DBとJ/M memory DBを閉じて開き直し、同一checkpoint・receiptからholdを再構成し、旧selection拒否とfresh HDS review後だけのhold解除を確認した。既存のserve startup→evidence converter→HDS constructor→永続hold接続にコード欠落は見つからなかった。Gateway result reconciliation test file 33件、typecheck、15 workspace build、serve smokeはPASS。OS process restartや実restoreではなくfixtureによる再open検証であり、E03.03=`BUILD_GAP`を維持する。
 
 2026-10-19のQEB-03-E03.03-RESTORE-SCOPE-RELATION-OPERATOR-PROJECTIONでは、HDS recovery holdのrequested／collateral／unknown関係をGatewayの固定投影経由でControl Centerへ表示した。指定計画と同一selected store内の巻き添え計画をdigest限定で区別し、欠落時は関係未確認とする。投影は非権威で、hold解除・実行・plan単位復元を示さない。101 focused tests、typecheck、build、HDS standalone、serve smoke、docs check、repo-healthはPASS。実restore、実approval、実restartは未実施。E03.03=BUILD_GAP、C08.03 provider保留、P13=PENDING_OWNER_GOを維持する。

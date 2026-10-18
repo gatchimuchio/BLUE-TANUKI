@@ -2,7 +2,25 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-03-E03.03-JM-RESTORE-HOLD-CLOSED-STORE-RESTART`
+### 最新BUILD_BATCH：`QEB-03-E03.03-COMPLETE-HISTORY-STARTUP-HOLD-PROCESS-RESTART`
+
+開始HEAD／`origin/main`=`d347acd22ccac67b157b74e22908057c05838d80`、開始worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、Gateway startup／Complete History／HDS hold保存経路を再読した。開始local recovery branchesとremote backup tagsはcurrent=`d347acd22ccac67b157b74e22908057c05838d80`、previous=`209d4ae0f28ffc3d7feb1fd0fd6ed5d79ad0318e`で一致していた。
+
+Gateway子processを実起動し、隔離したfile-backed Complete Historyの合成failed `operation_plans` restore試行からstartup Recovery evidenceを再構成した。認証済みread-only runtime snapshotでは既存planが`held_unverified`となり、SQLite holdに`recovery_restore`と選択storeだけがdigest保護下で保存された。raw backup IDとcommand IDは履歴／holdへ含まれない。Gatewayを停止後、test用Complete Historyを空にして別processを再起動しても、保存holdのprovenanceを保ったまま同planはholdされる。新規の製品接続欠落は見つからず、実Gatewayの起動・停止・再起動とHDS holdの永続consumerを確認した。
+
+この範囲の接続状態は`WIRED`（合成file-backed historyとGateway process restartで確認）。E03.03全体は`BUILD_GAP`。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `recovery_mutation_entry.test.ts` | PASS、4 tests。新規testはComplete History読込→startup observation→runtime projection→SQLite永続hold→履歴を空にした後のprocess restartを確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS、workspace 15 projects。 |
+| `pnpm smoke:serve` | PASS。stub WebChat、channel send、audit persistence／dump chainを確認。 |
+| `docs:check`／`validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実canonical restore／実owner approval／provider credential／外部作用／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+test commit=`3871adb`を`main`へpush済み。実process restartは合成fixtureであり、canonical stateへのrestore、実owner approval、store間atomicity、job単位restore pointを実証しない。E03.03=`BUILD_GAP`、C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。D4Pocket／ミニドラ変更、実業務作用、公開・出荷判断なし。次consumerは、Gateway Developer control inputからHDS `plan:review`へ届く経路で、起動時に復元されたholdが選択を拒否する実接続である。
+
+### 前回BUILD_BATCH：`QEB-03-E03.03-JM-RESTORE-HOLD-CLOSED-STORE-RESTART`
 
 開始HEAD／`origin/main`=`209d4ae0f28ffc3d7feb1fd0fd6ed5d79ad0318e`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、serve起動観測・HDS constructor・OperationPlan/J/M保存経路を再読した。開始時local current recovery branch／remote current backup tagは`209d4ae0f28ffc3d7feb1fd0fd6ed5d79ad0318e`、previousは`d75cddd49b1ff5ed6a14d05fc2f663298a292bfd`。
 
@@ -18,7 +36,7 @@
 
 本単位は再open fixtureによるJ/M hold耐久の検証であり、OS processを終了・再起動した証拠ではない。E03.03=`BUILD_GAP`を維持する。cross-store atomicity、仕事単位restore point、実Gateway restart、復旧可能性、未確定実行のresumeは未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。D4Pocket／ミニドラ、実業務作用、公開・出荷判断なし。次consumerはfile-backed Complete Historyを含むGateway起動統合経路でのplan hold再構成確認である。
 
-回帰test commit=`6ead2087678da7eb4a084d3226c3fafe216fe5a7`を`main`へpush済み。docs-only closeoutを含むBUILD_BATCHのGit閉包と、二世代復旧ref／remote HEAD／clean worktreeの最終照合を続ける。
+回帰test commit=`6ead2087678da7eb4a084d3226c3fafe216fe5a7`とdocs-only closeout commit=`d347acd22ccac67b157b74e22908057c05838d80`を`main`へpush済み。終了時のlocal／remote main・current復旧refは`d347acd22ccac67b157b74e22908057c05838d80`、previous復旧refは`209d4ae0f28ffc3d7feb1fd0fd6ed5d79ad0318e`。
 
 ### 前回BUILD_BATCH：`QEB-03-E03.03-JM-RESTORE-QUIESCE-REOPEN-HDS-HOLD`
 
