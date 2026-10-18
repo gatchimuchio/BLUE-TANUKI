@@ -707,7 +707,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 2,
+            schema_version: 3,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -716,6 +716,24 @@ describe("WebChatChannel — Recovery surface", () => {
               m: "unavailable",
               broker: "verified",
               operation_plans: "residuals_present",
+              cron_events: "unavailable",
+            },
+            cron_event_summary: {
+              status: "unavailable",
+              reason: "store_unavailable",
+              cursor_count: null,
+              verified_cursor_count: null,
+              unverified_cursor_count: null,
+              omitted_cursor_count: null,
+              unresolved_cursor_count: null,
+              orphan_outbox_count: null,
+              approval_handoff_count: null,
+              verified_approval_handoff_count: null,
+              unverified_approval_handoff_count: null,
+              omitted_approval_handoff_count: null,
+              pending_approval_handoff_count: null,
+              interrupted_approval_handoff_count: null,
+              residual_count: 1,
             },
             ledger_boundaries: {
               j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
@@ -741,6 +759,7 @@ describe("WebChatChannel — Recovery surface", () => {
             isolated_update_count: 0,
             execution_residual_count: 0,
             operation_plan_residual_count: 1,
+            cron_event_residual_count: 1,
             external_backup_restore_point: "not_examined",
             boundary_valid: true,
             used_for_authority: false,
@@ -814,6 +833,8 @@ describe("WebChatChannel — Recovery surface", () => {
           broker: { verified_event_count: 2, unverified_event_count: 1, first_unverified_ordinal: 3, last_verified_revision: null },
         },
         operation_plan_residual_count: 1,
+        cron_event_residual_count: 1,
+        cron_event_summary: { status: "unavailable", residual_count: 1, cursor_count: null, pending_approval_handoff_count: null },
         operation_plan_correlations: [{
           memory_update_id_digest: "f".repeat(64),
           memory_correlation: "m_state_unverified",

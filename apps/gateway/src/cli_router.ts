@@ -105,6 +105,9 @@ async function runRecoveryInspectCli(): Promise<void> {
     const operationPlans = report.ledgers.operation_plans;
     writeStdout(`J Operation Plans: ${operationPlans.status}; plans=${operationPlans.plan_count}; plan_residuals=${operationPlans.plan_integrity_residual_count}; bindings=${operationPlans.binding_count}; verified_bindings=${operationPlans.verified_binding_count}; residual_bindings=${operationPlans.residual_binding_count}; unverified_memory_links=${operationPlans.unverified_memory_link_count}; omitted_bindings=${operationPlans.omitted_binding_count}`);
     if (operationPlans.reason) writeStdout(`J Operation Plans reason: ${operationPlans.reason}`);
+    const cronEvents = report.ledgers.cron_events;
+    writeStdout(`Cron events: ${cronEvents.status}; cursors=${cronEvents.verified_cursor_count ?? "unavailable"}/${cronEvents.cursor_count ?? "unavailable"}; unresolved_cursors=${cronEvents.unresolved_cursor_count ?? "unavailable"}; unverified_cursors=${cronEvents.unverified_cursor_count ?? "unavailable"}; orphan_outbox=${cronEvents.orphan_outbox_count ?? "unavailable"}; approvals=${cronEvents.verified_approval_handoff_count ?? "unavailable"}/${cronEvents.approval_handoff_count ?? "unavailable"}; pending_approvals=${cronEvents.pending_approval_handoff_count ?? "unavailable"}; interrupted_approvals=${cronEvents.interrupted_approval_handoff_count ?? "unavailable"}; residuals=${cronEvents.residual_count}`);
+    if (cronEvents.reason) writeStdout(`Cron events reason: ${cronEvents.reason}`);
     for (const correlation of report.operation_plan_correlations) {
       writeStdout(`plan=${correlation.plan_id_digest} step=${correlation.step_id_digest} binding=${correlation.status}/${correlation.binding_integrity} broker=${correlation.broker_correlation} delivery=${correlation.delivery_correlation} memory=${correlation.memory_correlation}${correlation.memory_update_id_digest ? ` update=${correlation.memory_update_id_digest}` : ""}`);
     }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-18 — QEB-03-E03.03 Cron台帳のread-only復旧検査
+
+- Cronのinbox／outbox／approval-handoff台帳を、runtime storeを初期化せずread-onlyで検査し、検証済み・不整合・孤立・未決・省略の件数を`--recovery-inspect`、Recovery Operator、Control Centerへ接続する。
+- path／sidecar／schema／integrityを検証し、行単位の識別子やpayload、command／request参照、path、例外を出さない。未確認・未決のCron状態では統合replay checkpointを成立させず、復旧・再開・権限・外部作用には接続しない。E03.03は`BUILD_GAP`を維持する。
+
 ## 2026-10-18 — QEB-03-E01.01 Cronイベント識別cursor
 
 - Cron schedule発火にsource／予定時刻由来のevent IDを付け、digest-onlyのprivate inbox/outbox cursorで重複・逆順・payload衝突を識別する。未確定consumerは自動再実行せず、cursor不整合時は配送を停止する。

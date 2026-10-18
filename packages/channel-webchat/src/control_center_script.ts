@@ -1563,7 +1563,35 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       function renderRecoveryInspection(report) {
         const source = report && typeof report === "object" ? report : {};
         const ledgers = source.ledgers && typeof source.ledgers === "object" ? source.ledgers : {};
-        const boundaryOk = source.schema_version === 2 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true;
+        const cronSource = source.cron_event_summary && typeof source.cron_event_summary === "object" ? source.cron_event_summary : {};
+        const cronStatus = recoveryInspectionEnum(cronSource.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
+        const cronReason = cronSource.reason === null ? null : recoveryInspectionEnum(cronSource.reason, ["store_unavailable", "schema_mismatch", "ledger_corrupt", "outbox_mismatch"]);
+        const cronCountKeys = ["cursor_count", "verified_cursor_count", "unverified_cursor_count", "omitted_cursor_count", "unresolved_cursor_count", "orphan_outbox_count", "approval_handoff_count", "verified_approval_handoff_count", "unverified_approval_handoff_count", "omitted_approval_handoff_count", "pending_approval_handoff_count", "interrupted_approval_handoff_count"];
+        const cronCounts = {};
+        let cronCountsValid = true;
+        cronCountKeys.forEach(function (key) {
+          const value = cronSource[key];
+          if (value === null || (Number.isSafeInteger(value) && value >= 0)) cronCounts[key] = value;
+          else cronCountsValid = false;
+        });
+        const cronResidualCount = recoveryInspectionCount(cronSource.residual_count);
+        const cronUnavailable = ["unavailable", "schema_mismatch", "corrupt"].includes(cronStatus);
+        const cronExpectedUnavailableReason = cronStatus === "unavailable" ? "store_unavailable" : cronStatus === "schema_mismatch" ? "schema_mismatch" : "ledger_corrupt";
+        const cronCountsUnknown = cronCountKeys.every(function (key) { return cronCounts[key] === null; });
+        const cronCountsNumeric = cronCountKeys.every(function (key) { return Number.isSafeInteger(cronCounts[key]) && cronCounts[key] >= 0; });
+        const cronExpectedResiduals = cronCounts.unverified_cursor_count + cronCounts.omitted_cursor_count + cronCounts.unresolved_cursor_count + cronCounts.orphan_outbox_count + cronCounts.unverified_approval_handoff_count + cronCounts.omitted_approval_handoff_count + cronCounts.pending_approval_handoff_count + cronCounts.interrupted_approval_handoff_count;
+        const cronSummaryValid = cronStatus !== "unknown" && cronCountsValid && Number.isSafeInteger(cronSource.residual_count) && cronSource.residual_count >= 0 &&
+          (cronUnavailable
+            ? cronCountsUnknown && cronResidualCount > 0 && cronReason === cronExpectedUnavailableReason
+            : cronCountsNumeric && cronCounts.verified_cursor_count + cronCounts.unverified_cursor_count + cronCounts.omitted_cursor_count === cronCounts.cursor_count &&
+              cronCounts.verified_approval_handoff_count + cronCounts.unverified_approval_handoff_count + cronCounts.omitted_approval_handoff_count === cronCounts.approval_handoff_count &&
+              cronExpectedResiduals === cronResidualCount && (cronStatus === "verified" ? cronResidualCount === 0 : cronResidualCount > 0) &&
+              (cronStatus !== "verified" || cronReason === null) &&
+              (cronStatus !== "residuals_present" || cronReason === null || cronReason === "ledger_corrupt" || cronReason === "outbox_mismatch") &&
+              (cronReason !== "ledger_corrupt" || cronCounts.unverified_cursor_count + cronCounts.unverified_approval_handoff_count > 0) &&
+              (cronReason !== "outbox_mismatch" || cronCounts.orphan_outbox_count > 0));
+        const cronLedgerStatus = recoveryInspectionLedgerStatus(ledgers.cron_events, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
+        const boundaryOk = source.schema_version === 3 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount;
         const status = boundaryOk
           ? recoveryInspectionEnum(source.status, ["verified", "residuals_present", "invalid_report"])
           : "invalid_report";
@@ -1571,7 +1599,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           broker: recoveryInspectionLedgerStatus(ledgers.broker, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
-          operation_plans: recoveryInspectionLedgerStatus(ledgers.operation_plans, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"])
+          operation_plans: recoveryInspectionLedgerStatus(ledgers.operation_plans, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
+          cron_events: cronLedgerStatus
         };
         const planCorrelations = Array.isArray(source.operation_plan_correlations)
           ? source.operation_plan_correlations.slice(0, 200).map(function (item) {
@@ -1624,6 +1653,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           isolated_update_count: recoveryInspectionCount(source.isolated_update_count),
           execution_residual_count: recoveryInspectionCount(source.execution_residual_count),
           operation_plan_residual_count: recoveryInspectionCount(source.operation_plan_residual_count),
+          cron_event_residual_count: recoveryInspectionCount(source.cron_event_residual_count),
+          cron_event_summary: {
+            status: cronStatus,
+            reason: cronReason,
+            ...cronCounts,
+            residual_count: cronResidualCount
+          },
           operation_plan_correlations: planCorrelations,
           omitted_operation_plan_correlation_count: recoveryInspectionCount(source.omitted_operation_plan_correlation_count),
           update_residuals: updateResiduals,

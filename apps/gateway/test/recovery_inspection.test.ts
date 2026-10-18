@@ -10,6 +10,8 @@ import {
   projectGatewayRecoveryInspectionForOperator,
 } from "../src/recovery_inspection.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
+import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
+import type { CronEventRecoveryInspection } from "../src/cron_event_recovery_inspection.js";
 import type { PersistenceLedgerInspection, PersistenceLedgerInspectionUpdate } from "@blue-tanuki/hds-brain";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -41,6 +43,7 @@ describe("Gateway read-only recovery inspection", () => {
     expect(report.ledgers.m.status).toBe("unavailable");
     expect(report.ledgers.execution.status).toBe("unavailable");
     expect(report.ledgers.operation_plans.status).toBe("unavailable");
+    expect(report.ledgers.cron_events).toMatchObject({ status: "unavailable", residual_count: 1, used_for_authority: false });
     expect(JSON.stringify(report)).not.toContain(stateRoot);
     await expect(stat(stateRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -80,6 +83,116 @@ describe("Gateway read-only recovery inspection", () => {
     expect(serialized).not.toContain(ticket.command_key);
     expect(await readFile(databasePath)).toEqual(before);
     await expect(stat(path.join(privateRoot, "result-memory"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("inspects Cron cursors and approval handoffs read-only, isolating row corruption as counts", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-cron-"));
+    const privateRoot = path.join(temporaryRoot, "state", "private-state");
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const databasePath = path.join(cronDirectory, "cron-events.sqlite");
+    const store = new GatewayCronEventStore(databasePath);
+    const settled = createCronEventIdentity("synthetic-settled-source", 1, sha256("settled-payload"));
+    store.claim(settled, 10);
+    store.settle(settled, "handler_returned", 11);
+    const pending = createCronEventIdentity("synthetic-pending-source", 2, sha256("pending-payload"));
+    store.claim(pending, 12);
+    store.recordPendingApproval(pending.event_id, pending.payload_digest, "private-command-reference", "private-request-reference", 13);
+    store.close();
+    const before = await readFile(databasePath);
+
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: path.dirname(privateRoot) });
+    expect(report.ledgers.cron_events).toMatchObject({
+      status: "residuals_present",
+      cursor_count: 2,
+      verified_cursor_count: 2,
+      unverified_cursor_count: 0,
+      unresolved_cursor_count: 1,
+      orphan_outbox_count: 0,
+      approval_handoff_count: 1,
+      pending_approval_handoff_count: 1,
+      interrupted_approval_handoff_count: 0,
+      residual_count: 2,
+      used_for_authority: false,
+    });
+    expect(report.replay_checkpoint).toBeNull();
+    expect(await readFile(databasePath)).toEqual(before);
+    let serialized = JSON.stringify(report);
+    for (const secret of [settled.event_id, pending.event_id, pending.payload_digest, "private-command-reference", "private-request-reference"]) {
+      expect(serialized).not.toContain(secret);
+    }
+
+    const database = new DatabaseSync(databasePath);
+    database.prepare("UPDATE cron_event_outbox SET payload_digest=? WHERE source_digest=?")
+      .run(sha256("corrupt-outbox-payload"), sha256("synthetic-settled-source"));
+    database.prepare("UPDATE cron_approval_handoff SET event_id=?")
+      .run(`cron-${sha256("malformed-approval-identity")}`);
+    database.exec("PRAGMA foreign_keys=OFF");
+    database.prepare(`INSERT INTO cron_event_outbox
+      (source_digest,event_id,sequence,payload_digest,delivery_state,updated_at_ms)
+      VALUES (?,?,?,?,?,?)`).run(sha256("orphan-source"), `cron-${sha256("orphan-event")}`, 9, sha256("orphan-payload"), "handler_returned", 14);
+    database.close();
+    const corruptBefore = await readFile(databasePath);
+
+    const partial = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: path.dirname(privateRoot) });
+    expect(partial.ledgers.cron_events).toMatchObject({
+      status: "residuals_present",
+      cursor_count: 2,
+      verified_cursor_count: 1,
+      unverified_cursor_count: 1,
+      orphan_outbox_count: 1,
+      approval_handoff_count: 1,
+      verified_approval_handoff_count: 0,
+      unverified_approval_handoff_count: 1,
+      pending_approval_handoff_count: 0,
+      residual_count: 4,
+      used_for_authority: false,
+    });
+    expect(partial.replay_checkpoint).toBeNull();
+    expect(await readFile(databasePath)).toEqual(corruptBefore);
+    serialized = JSON.stringify(partial);
+    for (const secret of [settled.event_id, pending.event_id, "orphan-source", "malformed-approval-identity", "private-command-reference"]) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
+
+  it("refuses Cron inspection when a SQLite sidecar exists and leaves the database unopened", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-cron-sidecar-"));
+    const privateRoot = path.join(temporaryRoot, "state", "private-state");
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const databasePath = path.join(cronDirectory, "cron-events.sqlite");
+    const store = new GatewayCronEventStore(databasePath);
+    store.close();
+    const before = await readFile(databasePath);
+    const sidecarPath = `${databasePath}-wal`;
+    await writeFile(sidecarPath, "synthetic-sidecar", "utf8");
+
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: path.dirname(privateRoot) });
+    expect(report.ledgers.cron_events).toMatchObject({
+      status: "unavailable", reason: "store_unavailable", cursor_count: null, residual_count: 1, used_for_authority: false,
+    });
+    expect(await readFile(databasePath)).toEqual(before);
+    expect(await readFile(sidecarPath, "utf8")).toBe("synthetic-sidecar");
+  });
+
+  it("reports an unknown Cron schema without modifying or exposing its path", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-cron-schema-"));
+    const privateRoot = path.join(temporaryRoot, "state", "private-state");
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const databasePath = path.join(cronDirectory, "cron-events.sqlite");
+    const database = new DatabaseSync(databasePath);
+    database.exec("CREATE TABLE unexpected (value TEXT) STRICT");
+    database.close();
+    const before = await readFile(databasePath);
+
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: path.dirname(privateRoot) });
+    expect(report.ledgers.cron_events).toMatchObject({
+      status: "schema_mismatch", reason: "schema_mismatch", cursor_count: null, residual_count: 1, used_for_authority: false,
+    });
+    expect(await readFile(databasePath)).toEqual(before);
+    expect(JSON.stringify(report)).not.toContain(databasePath);
   });
 
   it("isolates an unverified Broker suffix and never treats its receipt projection as current", async () => {
@@ -220,7 +333,7 @@ describe("Gateway read-only recovery inspection", () => {
 describe("Gateway recovery operator projection", () => {
   it("retains digest-keyed residual rows while omitting raw identifiers and unrelated fields", () => {
     const report = {
-      schema_version: 3,
+      schema_version: 4,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -229,6 +342,7 @@ describe("Gateway recovery operator projection", () => {
         m: { status: "projection_mismatch", reason: "projection_mismatch", verified_event_count: 2, unverified_event_count: 1, first_unverified_ordinal: 3, last_verified_revision: 2 },
         execution: { status: "verified", reason: "RAW_REASON_SENTINEL", verified_event_count: 2, unverified_event_count: 0, first_unverified_ordinal: null },
         operation_plans: { status: "residuals_present" },
+        cron_events: cronEventInspection("verified"),
       },
       replay_checkpoint: null,
       operation_plan_correlations: [{
@@ -253,6 +367,7 @@ describe("Gateway recovery operator projection", () => {
       isolated_update_count: 1,
       execution_residual_count: 0,
       operation_plan_residual_count: 1,
+      cron_event_residual_count: 0,
       external_backup_restore_point: "not_examined",
       used_for_authority: false,
       may_execute: false,
@@ -265,7 +380,7 @@ describe("Gateway recovery operator projection", () => {
       surface: "recovery_inspection_operator",
       mode: "read_only",
       status: "residuals_present",
-      schema_version: 2,
+      schema_version: 3,
       ledgers: { j: "verified", m: "projection_mismatch", broker: "verified", operation_plans: "residuals_present" },
       ledger_boundaries: {
         j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
@@ -313,11 +428,12 @@ describe("Gateway recovery operator projection", () => {
     };
     const update = { update_id_digest: "e".repeat(64), disposition: "blocked_j" };
     const capped = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 3,
+      schema_version: 4,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
-      ledgers: {},
+      ledgers: { cron_events: cronEventInspection("verified") },
+      cron_event_residual_count: 0,
       replay_checkpoint: null,
       operation_plan_correlations: Array.from({ length: 201 }, () => row),
       update_residuals: Array.from({ length: 201 }, () => update),
@@ -330,7 +446,7 @@ describe("Gateway recovery operator projection", () => {
     expect(capped.omitted_update_residual_count).toBe(1);
 
     const invalid = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 3,
+      schema_version: 4,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "verified",
@@ -355,7 +471,7 @@ describe("Gateway recovery operator projection", () => {
 
   it("hides inconsistent or unavailable ledger positions instead of presenting an empty recovery boundary", () => {
     const projection = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 3,
+      schema_version: 4,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -363,7 +479,9 @@ describe("Gateway recovery operator projection", () => {
         j: { status: "corrupt", reason: "ledger_corrupt", verified_event_count: 8, unverified_event_count: 2, first_unverified_ordinal: 12, last_verified_revision: 8 },
         m: { status: "unavailable", reason: "store_unavailable", verified_event_count: 0, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 0 },
         execution: { status: "verified", reason: null, verified_event_count: 4, unverified_event_count: 1, first_unverified_ordinal: null },
+        cron_events: cronEventInspection("verified"),
       },
+      cron_event_residual_count: 0,
       operation_plan_correlations: [],
       update_residuals: [],
       used_for_authority: false,
@@ -374,6 +492,23 @@ describe("Gateway recovery operator projection", () => {
       m: { reason: "store_unavailable", verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
       broker: { reason: null, verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
     });
+  });
+
+  it("invalidates the entire operator boundary when Cron summary counts do not reconcile", () => {
+    const projection = projectGatewayRecoveryInspectionForOperator({
+      schema_version: 4,
+      surface: "recovery_inspection",
+      mode: "read_only",
+      status: "verified",
+      ledgers: { cron_events: { ...cronEventInspection("verified"), cursor_count: 2 } },
+      operation_plan_correlations: [],
+      update_residuals: [],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(projection.status).toBe("invalid_report");
+    expect(projection.boundary_valid).toBe(false);
+    expect(projection.cron_event_summary.cursor_count).toBeNull();
   });
 });
 
@@ -403,6 +538,47 @@ function ledgerInspection(
     last_verified_revision: updates.length,
     last_verified_event_digest: "f".repeat(64),
     updates,
+    used_for_authority: false,
+  };
+}
+
+function cronEventInspection(status: "verified" | "unavailable" = "verified"): CronEventRecoveryInspection {
+  if (status === "unavailable") {
+    return {
+      status,
+      reason: "store_unavailable",
+      cursor_count: null,
+      verified_cursor_count: null,
+      unverified_cursor_count: null,
+      omitted_cursor_count: null,
+      unresolved_cursor_count: null,
+      orphan_outbox_count: null,
+      approval_handoff_count: null,
+      verified_approval_handoff_count: null,
+      unverified_approval_handoff_count: null,
+      omitted_approval_handoff_count: null,
+      pending_approval_handoff_count: null,
+      interrupted_approval_handoff_count: null,
+      residual_count: 1,
+      used_for_authority: false,
+    };
+  }
+  return {
+    status,
+    reason: null,
+    cursor_count: 0,
+    verified_cursor_count: 0,
+    unverified_cursor_count: 0,
+    omitted_cursor_count: 0,
+    unresolved_cursor_count: 0,
+    orphan_outbox_count: 0,
+    approval_handoff_count: 0,
+    verified_approval_handoff_count: 0,
+    unverified_approval_handoff_count: 0,
+    omitted_approval_handoff_count: 0,
+    pending_approval_handoff_count: 0,
+    interrupted_approval_handoff_count: 0,
+    residual_count: 0,
     used_for_authority: false,
   };
 }

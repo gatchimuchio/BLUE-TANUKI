@@ -14,6 +14,12 @@ import {
   type OperationPlanBindingStatus,
   type OperationPlanRecoveryInspection,
 } from "./operation_plan_recovery_inspection.js";
+import {
+  inspectCronEventRecoveryLedger,
+  type CronEventRecoveryInspection,
+  type CronEventRecoveryReason,
+  type CronEventRecoveryStatus,
+} from "./cron_event_recovery_inspection.js";
 
 export interface RecoveryUpdateResidual {
   readonly update_id_digest: string;
@@ -34,7 +40,7 @@ export interface RecoveryUpdateResidual {
 }
 
 export interface GatewayRecoveryInspectionReport {
-  readonly schema_version: 3;
+  readonly schema_version: 4;
   readonly surface: "recovery_inspection";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present";
@@ -43,6 +49,7 @@ export interface GatewayRecoveryInspectionReport {
     readonly m: PersistenceLedgerInspection;
     readonly execution: ExecutionIntentRecoveryInspection;
     readonly operation_plans: OperationPlanRecoveryInspection;
+    readonly cron_events: CronEventRecoveryInspection;
   };
   readonly operation_plan_correlations: readonly OperationPlanBrokerCorrelation[];
   readonly replay_checkpoint: null | {
@@ -60,6 +67,7 @@ export interface GatewayRecoveryInspectionReport {
   readonly isolated_update_count: number;
   readonly execution_residual_count: number;
   readonly operation_plan_residual_count: number;
+  readonly cron_event_residual_count: number;
   readonly external_backup_restore_point: "not_examined";
   readonly used_for_authority: false;
   readonly may_execute: false;
@@ -120,7 +128,7 @@ export interface RecoveryLedgerBoundaryObservation {
 }
 
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 2;
+  readonly schema_version: 3;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -129,7 +137,9 @@ export interface GatewayRecoveryOperatorProjection {
     readonly m: string;
     readonly broker: string;
     readonly operation_plans: string;
+    readonly cron_events: string;
   };
+  readonly cron_event_summary: Omit<CronEventRecoveryInspection, "used_for_authority">;
   readonly ledger_boundaries: {
     readonly j: RecoveryLedgerBoundaryObservation;
     readonly m: RecoveryLedgerBoundaryObservation;
@@ -139,6 +149,7 @@ export interface GatewayRecoveryOperatorProjection {
   readonly isolated_update_count: number;
   readonly execution_residual_count: number;
   readonly operation_plan_residual_count: number;
+  readonly cron_event_residual_count: number;
   readonly operation_plan_correlations: readonly {
     readonly plan_id_digest: string;
     readonly step_id_digest: string;
@@ -187,6 +198,8 @@ const RECOVERY_LEDGER_REASONS: readonly NonNullable<RecoveryLedgerBoundaryObserv
   "store_unavailable", "outbox_mismatch",
 ];
 const RECOVERY_LEDGER_STATUSES = ["verified", "projection_mismatch", "corrupt", "residuals_present", "unavailable", "schema_mismatch"] as const;
+const CRON_RECOVERY_STATUSES: readonly CronEventRecoveryStatus[] = ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"];
+const CRON_RECOVERY_REASONS: readonly CronEventRecoveryReason[] = ["store_unavailable", "schema_mismatch", "ledger_corrupt", "outbox_mismatch"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -306,20 +319,96 @@ function projectOperatorUpdateResiduals(
   return { rows, omitted: values.length - rows.length };
 }
 
+function projectCronEventSummary(value: unknown): {
+  readonly summary: Omit<CronEventRecoveryInspection, "used_for_authority">;
+  readonly valid: boolean;
+} {
+  const unknown: Omit<CronEventRecoveryInspection, "used_for_authority"> = {
+    status: "unavailable",
+    reason: "store_unavailable",
+    cursor_count: null,
+    verified_cursor_count: null,
+    unverified_cursor_count: null,
+    omitted_cursor_count: null,
+    unresolved_cursor_count: null,
+    orphan_outbox_count: null,
+    approval_handoff_count: null,
+    verified_approval_handoff_count: null,
+    unverified_approval_handoff_count: null,
+    omitted_approval_handoff_count: null,
+    pending_approval_handoff_count: null,
+    interrupted_approval_handoff_count: null,
+    residual_count: 1,
+  };
+  if (!isRecord(value)) return { summary: unknown, valid: false };
+  const status = fixedEnum(value.status, CRON_RECOVERY_STATUSES);
+  const reason = value.reason === null ? null : fixedEnum(value.reason, CRON_RECOVERY_REASONS);
+  const countKeys = [
+    "cursor_count", "verified_cursor_count", "unverified_cursor_count", "omitted_cursor_count", "unresolved_cursor_count",
+    "orphan_outbox_count", "approval_handoff_count", "verified_approval_handoff_count", "unverified_approval_handoff_count",
+    "omitted_approval_handoff_count", "pending_approval_handoff_count", "interrupted_approval_handoff_count",
+  ] as const;
+  const counts = Object.fromEntries(countKeys.map((key) => {
+    const item = value[key];
+    return [key, item === null || (typeof item === "number" && Number.isSafeInteger(item) && item >= 0) ? item : undefined];
+  })) as Record<(typeof countKeys)[number], number | null | undefined>;
+  const safeCounts = Object.fromEntries(countKeys.map((key) => [key, counts[key] === undefined ? null : counts[key]])) as
+    Pick<Omit<CronEventRecoveryInspection, "used_for_authority" | "status" | "reason" | "residual_count">, (typeof countKeys)[number]>;
+  const residualCount = value.residual_count;
+  if (!status || (value.reason !== null && !reason) || value.used_for_authority !== false ||
+      !Number.isSafeInteger(residualCount) || (residualCount as number) < 0 ||
+      countKeys.some((key) => counts[key] === undefined)) return { summary: unknown, valid: false };
+  if (["unavailable", "schema_mismatch", "corrupt"].includes(status)) {
+    const countsUnknown = countKeys.every((key) => counts[key] === null);
+    const expectedReason = status === "unavailable" ? "store_unavailable"
+      : status === "schema_mismatch" ? "schema_mismatch" : "ledger_corrupt";
+    if (!countsUnknown || (residualCount as number) < 1 || reason !== expectedReason) return { summary: unknown, valid: false };
+    return { summary: { status, reason, ...safeCounts, residual_count: residualCount as number }, valid: true };
+  }
+  const numeric = countKeys.every((key) => typeof counts[key] === "number");
+  if (!numeric) return { summary: unknown, valid: false };
+  const cursorCount = counts.cursor_count as number;
+  const verifiedCursorCount = counts.verified_cursor_count as number;
+  const unverifiedCursorCount = counts.unverified_cursor_count as number;
+  const omittedCursorCount = counts.omitted_cursor_count as number;
+  const approvalCount = counts.approval_handoff_count as number;
+  const verifiedApprovalCount = counts.verified_approval_handoff_count as number;
+  const unverifiedApprovalCount = counts.unverified_approval_handoff_count as number;
+  const omittedApprovalCount = counts.omitted_approval_handoff_count as number;
+  const expectedResidualCount = unverifiedCursorCount + omittedCursorCount + (counts.unresolved_cursor_count as number) +
+    (counts.orphan_outbox_count as number) + unverifiedApprovalCount + omittedApprovalCount +
+    (counts.pending_approval_handoff_count as number) + (counts.interrupted_approval_handoff_count as number);
+  const consistent = verifiedCursorCount + unverifiedCursorCount + omittedCursorCount === cursorCount &&
+    verifiedApprovalCount + unverifiedApprovalCount + omittedApprovalCount === approvalCount &&
+    Number.isSafeInteger(expectedResidualCount) && expectedResidualCount === residualCount &&
+    ((status === "verified" && residualCount === 0) || (status === "residuals_present" && residualCount > 0)) &&
+    (status !== "verified" || reason === null) &&
+    (status !== "residuals_present" || reason === null || reason === "ledger_corrupt" || reason === "outbox_mismatch") &&
+    (reason !== "ledger_corrupt" || unverifiedCursorCount + unverifiedApprovalCount > 0) &&
+    (reason !== "outbox_mismatch" || (counts.orphan_outbox_count as number) > 0);
+  if (!consistent) return { summary: unknown, valid: false };
+  return { summary: { status, reason, ...safeCounts, residual_count: residualCount as number }, valid: true };
+}
+
 /** Whitelist a digest-only recovery report before exposing per-work residuals to an operator surface. */
 export function projectGatewayRecoveryInspectionForOperator(value: unknown): GatewayRecoveryOperatorProjection {
   const source = isRecord(value) ? value : {};
   const ledgers = isRecord(source.ledgers) ? source.ledgers : {};
-  const reportShapeValid = source.schema_version === 3 && source.surface === "recovery_inspection" && source.mode === "read_only";
+  const reportShapeValid = source.schema_version === 4 && source.surface === "recovery_inspection" && source.mode === "read_only";
   const sourceStatus = fixedEnum(source.status, ["verified", "residuals_present"] as const);
-  const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false && sourceStatus !== null;
+  const cronEvents = projectCronEventSummary(ledgers.cron_events);
+  const cronLedgerStatus = fixedEnum(isRecord(ledgers.cron_events) ? ledgers.cron_events.status : null, CRON_RECOVERY_STATUSES);
+  const cronResidualCount = source.cron_event_residual_count;
+  const cronBoundaryValid = cronEvents.valid && cronLedgerStatus === cronEvents.summary.status &&
+    Number.isSafeInteger(cronResidualCount) && cronResidualCount === cronEvents.summary.residual_count;
+  const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false && sourceStatus !== null && cronBoundaryValid;
   const operationPlanSources = Array.isArray(source.operation_plan_correlations) ? source.operation_plan_correlations : [];
   const updateSources = Array.isArray(source.update_residuals) ? source.update_residuals : [];
   const operationPlans = projectOperatorOperationPlanCorrelations(operationPlanSources, boundaryValid);
   const updates = projectOperatorUpdateResiduals(updateSources, boundaryValid);
   const ledgerStatuses = ["verified", "projection_mismatch", "corrupt", "residuals_present", "unavailable", "schema_mismatch"] as const;
   return {
-    schema_version: 2,
+    schema_version: 3,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -328,7 +417,9 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
       m: fixedEnum(isRecord(ledgers.m) ? ledgers.m.status : null, ledgerStatuses) ?? "unknown",
       broker: fixedEnum(isRecord(ledgers.execution) ? ledgers.execution.status : null, ledgerStatuses) ?? "unknown",
       operation_plans: fixedEnum(isRecord(ledgers.operation_plans) ? ledgers.operation_plans.status : null, ledgerStatuses) ?? "unknown",
+      cron_events: cronLedgerStatus ?? "unknown",
     },
+    cron_event_summary: cronEvents.summary,
     ledger_boundaries: {
       j: projectLedgerBoundary(ledgers.j, boundaryValid, true),
       m: projectLedgerBoundary(ledgers.m, boundaryValid, true),
@@ -341,6 +432,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     isolated_update_count: fixedCount(source.isolated_update_count),
     execution_residual_count: fixedCount(source.execution_residual_count),
     operation_plan_residual_count: fixedCount(source.operation_plan_residual_count),
+    cron_event_residual_count: fixedCount(source.cron_event_residual_count),
     operation_plan_correlations: operationPlans.rows,
     omitted_operation_plan_correlation_count: operationPlans.omitted,
     update_residuals: updates.rows,
@@ -358,6 +450,7 @@ interface StateDatabasePaths {
   readonly mPath: string | null;
   readonly executionPath: string | null;
   readonly operationPlansPath: string | null;
+  readonly cronEventsPath: string | null;
 }
 
 function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths | null {
@@ -376,6 +469,8 @@ function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths |
     const executionPath = path.join(executionDirectory, "executor.sqlite");
     const operationPlansDirectory = path.join(privateRoot, "operation-plans");
     const operationPlansPath = path.join(operationPlansDirectory, "j-state.sqlite");
+    const cronEventsDirectory = path.join(privateRoot, "cron-events");
+    const cronEventsPath = path.join(cronEventsDirectory, "cron-events.sqlite");
     const safeDatabasePath = (directory: string, databasePath: string): string | null => {
       try {
         const directoryStat = lstatSync(directory);
@@ -394,6 +489,7 @@ function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths |
       mPath: safeDatabasePath(resultDirectory, mPath),
       executionPath: safeDatabasePath(executionDirectory, executionPath),
       operationPlansPath: safeDatabasePath(operationPlansDirectory, operationPlansPath),
+      cronEventsPath: safeDatabasePath(cronEventsDirectory, cronEventsPath),
     };
   } catch {
     return null;
@@ -439,6 +535,13 @@ export function inspectGatewayRecoveryState(
     omitted_binding_count: 0,
     bindings: [], used_for_authority: false, may_execute: false,
   };
+  const unavailableCronEvents: CronEventRecoveryInspection = {
+    status: "unavailable", reason: "store_unavailable", cursor_count: null, verified_cursor_count: null,
+    unverified_cursor_count: null, omitted_cursor_count: null, unresolved_cursor_count: null, orphan_outbox_count: null,
+    approval_handoff_count: null, verified_approval_handoff_count: null, unverified_approval_handoff_count: null,
+    omitted_approval_handoff_count: null, pending_approval_handoff_count: null, interrupted_approval_handoff_count: null,
+    residual_count: 1, used_for_authority: false,
+  };
   const j = paths?.jPath
     ? inspectJControlRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.jPath })
     : unavailable("J");
@@ -451,6 +554,9 @@ export function inspectGatewayRecoveryState(
   const operationPlans = paths?.operationPlansPath
     ? inspectOperationPlanRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.operationPlansPath })
     : unavailableOperationPlans;
+  const cronEvents = paths?.cronEventsPath
+    ? inspectCronEventRecoveryLedger({ private_state_root: paths.privateRoot, database_path: paths.cronEventsPath })
+    : unavailableCronEvents;
   const residuals = correlateRecoveryUpdates(j, m);
   const operationPlanCorrelations = correlateOperationPlanBindings(operationPlans, execution, j, m);
   const operationPlanMemoryLinkResidualCount = operationPlanCorrelations.filter((item) =>
@@ -486,14 +592,15 @@ export function inspectGatewayRecoveryState(
     ? 0
     : Math.max(1, operationPlanStructuralResidualCount + operationPlanMemoryLinkResidualCount + operationPlanCorrelationResidualCount);
   const checkpointVerified = storesVerified && execution.status === "verified" && operationPlansResolved.status === "verified" &&
+    cronEvents.status === "verified" &&
     !hasHardResidual && operationPlanCorrelationResidualCount === 0 && operationPlanMemoryLinkResidualCount === 0 &&
     operationPlans.omitted_binding_count === 0;
   return {
-    schema_version: 3,
+    schema_version: 4,
     surface: "recovery_inspection",
     mode: "read_only",
     status: checkpointVerified ? "verified" : "residuals_present",
-    ledgers: { j, m, execution, operation_plans: operationPlansResolved },
+    ledgers: { j, m, execution, operation_plans: operationPlansResolved, cron_events: cronEvents },
     operation_plan_correlations: operationPlanCorrelations,
     replay_checkpoint: checkpointVerified
       ? {
@@ -514,6 +621,7 @@ export function inspectGatewayRecoveryState(
     ).length,
     execution_residual_count: executionResidualCount,
     operation_plan_residual_count: operationPlanResidualCount,
+    cron_event_residual_count: cronEvents.residual_count,
     external_backup_restore_point: "not_examined",
     used_for_authority: false,
     may_execute: false,
