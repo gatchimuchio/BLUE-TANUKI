@@ -1,12 +1,10 @@
-# HDS-BRAIN Failure Memory Control
+# HDS-BRAIN 失敗記憶制御
 
-この文書は HDS-BRAIN failure memory control v2 の境界と運用仕様を固定する。
+この文書は、HDS-BRAIN failure memory control v2の境界と運用を定める。
 
-## Purpose
+## 目的
 
-Failure memory は complete history / command result / tool result / test result / workflow result / LLM output validation / authority boundary decision から failure signature を作り、将来の実行前に deterministic gate として参照する制御資産である。
-
-目的は static blacklist ではない。
+失敗記憶は、complete history、command result、tool result、test result、workflow result、LLM output validation、authority boundary decisionから失敗署名を作り、将来の実行前に決定的なgateとして参照する制御資産である。static blacklistを作ることが目的ではなく、失敗の再発を減らしながら探索と条件付き再試行を保つ。
 
 ```txt
 Complete Log
@@ -20,57 +18,61 @@ Complete Log
 -> Pre-Execution Gate
 ```
 
-この loop は repeated failure を減らすためのものであり、探索を永久凍結するためのものではない。
+## 権限境界
 
-## Authority Boundary
+- LLMはfailure logの要約、分類候補、signature候補の説明を補助できる。
+- LLM proposalは`draft` signatureとして扱い、`suppression_policy`を直接確定できない。
+- HDS-BRAINの決定的なfailure-memory logicが`warn`／`downrank`／`rewrite`／`require_approval`／`block`を選ぶ。
+- Complete historyは証拠であり、権限ではない。
+- Failure memoryは再利用可能な制御資産だが、Approval Gateやfinal-review境界を置き換えない。
 
-- LLM は failure log の要約、分類候補、signature 候補説明を補助してよい。
-- LLM proposal は `draft` signature として扱い、final `suppression_policy` を直接設定できない。
-- HDS-BRAIN の deterministic failure-memory logic だけが `warn` / `downrank` / `rewrite` / `require_approval` / `block` を決める。
-- Complete history は evidence であり authority ではない。
-- Failure memory は reusable control asset だが、Approval Gate や final-review boundary を置き換えない。
+`FailureSeverity`の`critical`はfailure-memory専用の重大度であり、Approval Gateの`ApprovalRisk = low | medium | high`とは別軸である。
 
-`FailureSeverity` の `critical` は failure-memory 専用の severity であり、Approval Gate の `ApprovalRisk = low | medium | high` とは別軸である。
+## 保存
 
-## Store
-
-`FailureMemoryStore` は `packages/hds-brain` 内の standalone component であり、gateway / executor / UI / channel / LLM backend に依存しない。
+`FailureMemoryStore`は`packages/hds-brain`内の単独componentであり、gateway／executor／UI／channel／LLM backendに依存しない。
 
 保存先:
 
 - `BLUE_TANUKI_FAILURE_MEMORY_FILE=/path/to/failure-memory.json`
-- `BLUE_TANUKI_FAILURE_MEMORY_DIR=/path/to/dir` の場合は `failure-memory.json`
-- 未設定時は in-memory
+- `BLUE_TANUKI_FAILURE_MEMORY_DIR=/path/to/dir`の場合は`failure-memory.json`
+- 未設定時はmemory内だけに保持
 
-保存される signature は evidence log id、state、confidence、severity、suppression policy、probe policy、revalidation schedule、TTL/decay を持つ。retired rule は削除せず history として残す。
+signatureはevidence log id、state、confidence、severity、suppression policy、probe policy、再検証予定、TTL／decayを持つ。retired ruleも削除せず履歴として保持する。
 
-## Pre-Execution Gate
+## E04.01：条件付き署名
 
-gateway serve / CLI one-shot は executor 実行前に failure-memory gate を評価する。
+新たに抽出するcommand failureは、目的本文・引数・LLM message・channel宛先／本文・errorをfailure memoryへ保存せず、SHA-256 digestと固定の分類値だけを保持する。署名は`input_pattern`（goal digestとJ decision）、`action_pattern`（operation、制約、target／arguments digest）、`context_pattern`（actor digestとchannel）、`result_pattern`（症状digest）に分ける。`cause_candidates`はerror分類から得た未確定候補、`unknowns`は未観測の原因・予測差などを明示し、原因確定や予測差を捏造しない。
 
-適用:
+command gateは保存済み署名と新候補の目的・action・actor／channel条件がすべて一致した場合だけ照合する。request ID、command ID、surfaceは条件から除く。commandではpath／hashの正規化、operation名だけのLevel 2一致、Level 3の意味類似を使わず、異なるtargetやgoalへfailure ruleを広げない。Complete Historyの`failure_patterns`は同じhelperが作るdigest-only投影であり、履歴自体は引き続きreference／evidenceに留まる。
 
-| Gate result | Runtime behavior |
+`failure-memory-v2`の既存snapshotは読み込み互換を維持し、自動書換え・破棄をしない。旧command signatureに条件付きpatternがない場合、新command gateでは適用せず、`legacy_history_missing_conditioned_patterns`等のunknownを保持する。既存snapshotのraw値をこの変更が遡及消去したとは扱わない。
+
+## 実行前gate
+
+gateway serve／CLI one-shotはexecutorを呼ぶ前にfailure-memory gateを評価する。
+
+| gate結果 | 実行時の扱い |
 |---|---|
-| `allow` | 通常の Approval Gate / executor path へ進む |
-| `warn` / `downrank` / `rewrite` | gate decision を complete history に記録し、現時点では実行を止めない |
-| `require_approval` | WebChat serve では human approval を要求する。CLI one-shot では fail-closed に停止する |
-| `block` | executor を呼ばず、command lifecycle を rejected として audit に残す |
+| `allow` | 通常のApproval Gate／executor経路へ進む |
+| `warn`／`downrank`／`rewrite` | gate判定をcomplete historyへ記録する。現在は実行を止めない |
+| `require_approval` | WebChat serveは人の承認を要求する。CLI one-shotはfail-closedで停止する |
+| `block` | executorを呼ばず、command lifecycleをrejectedとしてauditへ残す |
 
-human approval で再開する場合でも `block` rule は通過できない。`require_approval` はその command に対する人間の明示確認で進める。
+human approvalから再開する場合も`block` ruleは通過できない。`require_approval`はそのcommandへの人の明示確認で進める。
 
-## Match Levels
+## 照合水準
 
-- Level 0: exact match。exact command/path/test/environment/boundary を対象にできる。
-- Level 1: normalized match。UUID、timestamp、hash、path、whitespace を deterministic に正規化する。
-- Level 2: structural match。scope と action structure が同じ場合だけ conservative に一致させる。
-- Level 3: semantic match。似た token shape のみ。auto-block は禁止。
+- Level 0：完全一致。command／path／test／environment／boundaryを対象にできる。
+- Level 1：正規化一致。一般候補ではUUID、timestamp、hash、path、空白を決定的に正規化する。
+- Level 2：構造一致。一般候補についてscopeとaction構造が一致する場合に限る。
+- Level 3：意味的な近似。tokenの類似だけを使い、自動blockは禁止する。
 
-Level 3 は `warn` / `downrank` までであり、`block` / `require_approval` へは昇格しない。
+structured command candidateはLevel 0／1の正規digest一致だけを使い、Level 2／3のfallbackを適用しない。ここでのLevel 1は目的・action・actor／channelの条件一式の厳密一致であり、request IDなど実行ごとに変わる値だけを除外する。Level 3は`warn`／`downrank`までとし、`block`／`require_approval`へ昇格させない。
 
-## Periodic Verification
+## 定期検証
 
-manual / daily / startup / after-test-failure / before-release / post-failure trigger を `runPeriodicFailureMemoryVerification` が受ける。gateway CLI では次を使う。
+manual／daily／startup／after-test-failure／before-release／post-failureのtriggerを`runPeriodicFailureMemoryVerification`が受ける。gateway CLIでは次を使う。
 
 ```bash
 pnpm gateway -- --failure-memory-verify
@@ -78,35 +80,32 @@ pnpm gateway -- --failure-memory-verify --json
 pnpm gateway -- --failure-memory-verify --before-release
 ```
 
-verifier は以下を検出する。
+verifierは次を検出する。
 
 - repeated failures
 - unconverted failure events
-- stale block rules
-- old evidence rules
-- high hit count / low confidence rules
-- aggressive semantic-only rules
-- downgrade candidates for stale block rules
-- repeated warning promotion candidates
-- authority / boundary near-miss review candidates
+- stale block rulesとold evidence rules
+- hit countが高くconfidenceが低いrule
+- semantic-only ruleの過剰適用
+- stale block ruleの緩和候補
+- warningからのpromotion候補
+- authority／boundary near-missのreview候補
 
-report は `PeriodicVerificationReport` として structured output を返す。
+reportは`PeriodicVerificationReport`として構造化出力する。
 
-## Revalidation / Decay / Retirement
+## 再検証・減衰・終了
 
-`block` rule は次のどれかを持つ必要がある。
+`block` ruleは次のいずれかを持つ。
 
 - `next_revalidation_at`
-- `probe_policy = never` と `never_probe_justification:...`
-- critical severity の permanent block justification
+- `probe_policy = never`と`never_probe_justification:...`
+- critical severityに対するpermanent block justification
 
-probe policy:
-
-| Probe policy | Meaning |
+| probe policy | 意味 |
 |---|---|
-| `manual` | 人間確認なしに probing しない |
-| `sandbox` | isolated/safe context で検証できる |
-| `shadow_only` | 実行せず future candidate matching だけを見る |
-| `never` | destructive / credential / security / authority / boundary rule 用 |
+| `manual` | 人の確認なしにprobeしない |
+| `sandbox` | 隔離・安全なcontextで検証できる |
+| `shadow_only` | 実行せず、将来候補との照合だけを行う |
+| `never` | destructive／credential／security／authority／boundary rule用 |
 
-critical rule は automatic retirement しない。low / medium / high は TTL と decay により probation / retired へ移れる。false positive は probation または retired へ移し、audit history は保持する。
+critical ruleは自動終了しない。low／medium／high ruleはTTLとdecayによりprobation／retiredへ移る場合がある。false positiveはprobationまたはretiredへ移すが、audit historyは保持する。

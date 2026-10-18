@@ -25,6 +25,7 @@ import {
   type OperationCorePlannerExecutionProjection,
   type OperationCommandExecutionResult,
 } from "@blue-tanuki/protocol";
+import { commandFailurePatterns } from "@blue-tanuki/hds-brain";
 
 export function metadataKeys(meta: Record<string, unknown> | undefined): string[] {
   return Object.keys(meta ?? {}).sort();
@@ -88,6 +89,7 @@ export function commandHistoryDescriptor(command: ExecuteCommand): Record<string
     operation: commandOperation(command),
     upstream_commit_hash: command.upstream_decision.commit_hash,
     upstream_decision: command.upstream_decision.commit_decision,
+    failure_patterns: commandFailurePatterns(command),
     constraints: {
       max_tokens: command.constraints?.max_tokens,
       timeout_ms: command.constraints?.timeout_ms,

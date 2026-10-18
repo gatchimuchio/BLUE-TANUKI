@@ -1011,7 +1011,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (fb.status === "failed") {
       const extracted = executionHistory
         ? extractFailureSignatures({ kind: "complete_history", entry: executionHistory })
-        : extractFailureSignatures({ kind: "command_result", command: cmd, feedback: fb });
+        : extractFailureSignatures({
+            kind: "command_result",
+            command: cmd,
+            feedback: fb,
+            context: { actor, channel: origin.channel },
+          });
       for (const signature of extracted) failureMemory.upsertSignature(signature);
       runFailureMemoryVerification("post_failure");
     }

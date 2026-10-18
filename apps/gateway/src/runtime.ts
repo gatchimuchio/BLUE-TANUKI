@@ -373,7 +373,12 @@ async function runCliWithExecutionStore(
   }, reviewed.command_digest);
   const feedback = await executor.execute(approvedCommand);
   if (feedback.status === "failed") {
-    for (const signature of extractFailureSignatures({ kind: "command_result", command, feedback })) {
+    for (const signature of extractFailureSignatures({
+      kind: "command_result",
+      command,
+      feedback,
+      context: { actor: inbound.user, channel: inbound.channel },
+    })) {
       failureMemory.upsertSignature(signature);
     }
   }

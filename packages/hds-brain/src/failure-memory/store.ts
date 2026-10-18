@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { stableJson } from "../complete-history/codec.js";
 import {
   candidateFromCommand,
+  commandPatternsMatch,
+  failureSignatureIdentityKey,
   normalizeFailurePattern,
   semanticOverlap,
   structuralKey,
@@ -102,7 +103,10 @@ export class FailureMemoryStore {
       input_pattern: input.input_pattern,
       action_pattern: input.action_pattern,
       context_pattern: input.context_pattern,
+      predicted_difference_digest: input.predicted_difference_digest,
       result_pattern: input.result_pattern,
+      cause_candidates: input.cause_candidates ? [...new Set(input.cause_candidates)] : undefined,
+      unknowns: input.unknowns ? uniqueStrings(input.unknowns) : undefined,
       evidence_log_ids: uniqueStrings(input.evidence_log_ids ?? []),
       match_level,
       suppression_policy,
@@ -157,6 +161,9 @@ export class FailureMemoryStore {
     if (!existing) return this.addSignature(input);
     return this.updateSignature(existing.id, {
       evidence_log_ids: input.evidence_log_ids,
+      cause_candidates: [...new Set([...(existing.cause_candidates ?? []), ...(input.cause_candidates ?? [])])],
+      unknowns: uniqueStrings([...(existing.unknowns ?? []), ...(input.unknowns ?? [])]),
+      predicted_difference_digest: input.predicted_difference_digest ?? existing.predicted_difference_digest,
       last_seen_at: this.now().toISOString(),
       hit_count: existing.hit_count + 1,
       confidence: Math.max(existing.confidence, clampConfidence(input.confidence, existing.confidence)),
@@ -384,6 +391,20 @@ export class FailureMemoryStore {
 
 export function matchSignature(signature: FailureSignature, candidate: FailureGateCandidate): MatchLevel | null {
   if (signature.scope !== candidate.scope) return null;
+  if (candidate.command) {
+    if (!commandPatternsMatch(signature.input_pattern, signature.action_pattern, signature.context_pattern) ||
+      !commandPatternsMatch(candidate.input_pattern, candidate.action_pattern, candidate.context_pattern)) return null;
+    const sameConditions =
+      signature.input_pattern === candidate.input_pattern &&
+      signature.action_pattern === candidate.action_pattern &&
+      signature.context_pattern === candidate.context_pattern;
+    if (!sameConditions) return null;
+    if (
+      signature.result_pattern === candidate.result_pattern &&
+      0 <= signature.match_level
+    ) return 0;
+    return signature.match_level >= 1 ? 1 : null;
+  }
   if (
     signature.input_pattern === candidate.input_pattern &&
     signature.action_pattern === candidate.action_pattern &&
@@ -426,13 +447,8 @@ function strongestDecision(decisions: readonly FailureGateDecision[]): FailureGa
   return decisions.reduce<FailureGateDecision>((best, decision) => rank[decision] > rank[best] ? decision : best, "allow");
 }
 
-function equivalentKey(input: Pick<FailureSignature, "scope" | "failure_type" | "action_pattern" | "result_pattern">): string {
-  return stableJson({
-    scope: input.scope,
-    failure_type: input.failure_type,
-    action: normalizeFailurePattern(input.action_pattern),
-    result: normalizeFailurePattern(input.result_pattern ?? ""),
-  });
+function equivalentKey(input: Pick<FailureSignature, "scope" | "failure_type" | "input_pattern" | "action_pattern" | "context_pattern" | "predicted_difference_digest" | "result_pattern">): string {
+  return failureSignatureIdentityKey(input);
 }
 
 function defaultNextRevalidation(

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -108,14 +108,14 @@ describe("Pre-execution failure gate", () => {
     expect(store.evaluateGate(candidate).decision).toBe("block");
   });
 
-  it("matches normalized command variants and requires approval", () => {
+  it("does not carry a command failure across a different target", () => {
     const store = new FailureMemoryStore();
     const ruleCandidate = candidateFromCommand(toolCommand("cmd-a", "req-a", "file.search", {
       path: "/tmp/a/550e8400-e29b-41d4-a716-446655440000/input.txt",
-    }));
+    }), { actor: "fixture-owner", channel: "webchat", request_id: "req-a" });
     const nextCandidate = candidateFromCommand(toolCommand("cmd-b", "req-b", "file.search", {
       path: "/tmp/a/550e8400-e29b-41d4-a716-446655440001/input.txt",
-    }));
+    }), { actor: "fixture-owner", channel: "webchat", request_id: "req-b" });
     store.addSignature({
       scope: ruleCandidate.scope,
       failure_type: "wrong_file",
@@ -130,8 +130,102 @@ describe("Pre-execution failure gate", () => {
     });
 
     const result = store.evaluateGate(nextCandidate);
-    expect(result.decision).toBe("require_approval");
-    expect(result.matches[0]?.match_level).toBe(1);
+    expect(result.decision).toBe("allow");
+    expect(result.matches).toHaveLength(0);
+  });
+
+  it("matches the same target and goal across request ids while retaining actor and channel conditions", () => {
+    const command = toolCommand("cmd-a", "req-a", "file.search", { path: "/tmp/a/input.txt" });
+    const sourceContext = { actor: "fixture-owner", channel: "webchat", request_id: "req-a", surface: "webchat" };
+    const extracted = extractFailureSignatures({
+      kind: "command_result",
+      command,
+      context: sourceContext,
+      feedback: { command_id: command.id, status: "failed", error: "target unavailable", metrics: { duration_ms: 1 } },
+    })[0]!;
+    const store = new FailureMemoryStore();
+    store.addSignature({
+      ...extracted,
+      state: "active",
+      suppression_policy: "require_approval",
+      severity: "high",
+      confidence: 0.9,
+      match_level: 1,
+    });
+
+    const sameTarget = toolCommand("cmd-b", "req-b", "file.search", { path: "/tmp/a/input.txt" });
+    const sameConditions = store.evaluateCommandGate(sameTarget, {
+      actor: "fixture-owner", channel: "webchat", request_id: "req-b", surface: "webchat",
+    });
+    const differentGoal = toolCommand("cmd-c", "req-c", "file.search", { path: "/tmp/a/input.txt" });
+    differentGoal.upstream_decision.frame_goal = "different purpose";
+    const differentActor = store.evaluateCommandGate(sameTarget, {
+      actor: "another-owner", channel: "webchat", request_id: "req-b", surface: "webchat",
+    });
+    const differentChannel = store.evaluateCommandGate(sameTarget, {
+      actor: "fixture-owner", channel: "cli", request_id: "req-b", surface: "cli",
+    });
+
+    expect(sameConditions.decision).toBe("require_approval");
+    expect(sameConditions.matches[0]?.match_level).toBe(1);
+    expect(store.evaluateCommandGate(differentGoal, sourceContext).decision).toBe("allow");
+    expect(differentActor.decision).toBe("allow");
+    expect(differentChannel.decision).toBe("allow");
+  });
+
+  it("persists digest-only command failure observations and keeps v2 optional fields backward compatible", () => {
+    const dir = mkdtempSync(join(tmpdir(), "failure-memory-redaction-"));
+    const file = join(dir, "failure-memory.json");
+    const privateTarget = "PRIVATE_TARGET_SENTINEL";
+    const privateGoal = "PRIVATE_GOAL_SENTINEL";
+    const privateError = "PRIVATE_ERROR_SENTINEL";
+    try {
+      const command = toolCommand("cmd-private", "req-private", "file.search", {
+        path: privateTarget,
+        query: "PRIVATE_ARGUMENT_SENTINEL",
+      });
+      command.upstream_decision.frame_goal = privateGoal;
+      const observation = extractFailureSignatures({
+        kind: "command_result",
+        command,
+        context: { actor: "PRIVATE_ACTOR_SENTINEL", channel: "webchat", request_id: "PRIVATE_REQUEST_SENTINEL" },
+        feedback: { command_id: command.id, status: "failed", error: privateError, metrics: { duration_ms: 1 } },
+      })[0]!;
+      expect(observation).toMatchObject({
+        cause_candidates: ["repeat_error"],
+        unknowns: expect.arrayContaining(["root_cause_unconfirmed", "predicted_difference_not_observed"]),
+      });
+      expect(observation.result_pattern).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+      const store = new FailureMemoryStore({ filepath: file });
+      store.addSignature(observation);
+      const persisted = readFileSync(file, "utf8");
+      for (const sentinel of [privateTarget, privateGoal, privateError, "PRIVATE_ARGUMENT_SENTINEL", "PRIVATE_ACTOR_SENTINEL", "PRIVATE_REQUEST_SENTINEL"]) {
+        expect(persisted).not.toContain(sentinel);
+      }
+
+      const legacyPath = join(dir, "legacy-v2.json");
+      const legacySnapshot = {
+        schema_version: "failure-memory-v2",
+        exported_at: "2026-01-01T00:00:00.000Z",
+        signatures: [{
+          id: "legacy-signature", scope: "tool", failure_type: "repeat_error",
+          input_pattern: "legacy input", action_pattern: "legacy action", context_pattern: "{}",
+          evidence_log_ids: [], match_level: 1, suppression_policy: "warn", confidence: 0.5,
+          severity: "medium", state: "shadow", created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z", last_seen_at: "2026-01-01T00:00:00.000Z",
+          hit_count: 1, allow_probe: true, probe_policy: "shadow_only",
+        }],
+      };
+      writeFileSync(legacyPath, JSON.stringify(legacySnapshot), "utf8");
+      const legacyStore = new FailureMemoryStore({ filepath: legacyPath });
+      const legacy = legacyStore.get("legacy-signature");
+      expect(legacy?.cause_candidates).toBeUndefined();
+      expect(legacy?.unknowns).toBeUndefined();
+      expect(legacyStore.evaluateCommandGate(toolCommand("legacy-candidate", "legacy-request", "echo")).decision).toBe("allow");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("never auto-blocks broad semantic matches", () => {

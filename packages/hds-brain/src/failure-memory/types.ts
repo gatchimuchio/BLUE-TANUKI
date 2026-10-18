@@ -68,7 +68,10 @@ export type FailureSignature = {
   input_pattern: string;
   action_pattern: string;
   context_pattern: string;
+  predicted_difference_digest?: string;
   result_pattern?: string;
+  cause_candidates?: FailureType[];
+  unknowns?: string[];
 
   evidence_log_ids: string[];
 
@@ -103,7 +106,10 @@ export type FailureSignatureInput = {
   input_pattern: string;
   action_pattern: string;
   context_pattern: string;
+  predicted_difference_digest?: string;
   result_pattern?: string;
+  cause_candidates?: readonly FailureType[];
+  unknowns?: readonly string[];
   evidence_log_ids?: readonly string[];
   match_level?: MatchLevel;
   suppression_policy?: SuppressionPolicy;
@@ -177,7 +183,7 @@ export type FailureGateResult = {
 
 export type FailureExtractionInput =
   | { kind: "complete_history"; entry: CompleteHistoryEntry }
-  | { kind: "command_result"; command: ExecuteCommand; feedback: ExecuteFeedback; evidence_log_id?: string }
+  | { kind: "command_result"; command: ExecuteCommand; feedback: ExecuteFeedback; context?: Record<string, unknown>; evidence_log_id?: string }
   | { kind: "tool_result"; tool_name: string; status: "success" | "failed"; error?: string; evidence_log_id?: string }
   | { kind: "test_result"; test_name: string; status: "passed" | "failed"; error?: string; evidence_log_id?: string }
   | { kind: "workflow_result"; workflow: string; status: "success" | "failed"; error?: string; evidence_log_id?: string }

@@ -24,8 +24,14 @@ export {
 } from "./types.js";
 export {
   commandActionPattern,
+  commandContextPattern,
+  commandFailurePatterns,
+  commandInputPattern,
   commandOperation,
+  commandPatternsMatch,
   candidateFromCommand,
+  failureSignatureIdentityKey,
+  isConditionedFailurePatterns,
   normalizeFailurePattern,
   semanticOverlap,
   structuralKey,

@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HDSUpperController, CompleteHistoryStore, evaluateApproval } from "@blue-tanuki/hds-brain";
+import {
+  CompleteHistoryStore,
+  FailureMemoryStore,
+  HDSUpperController,
+  evaluateApproval,
+  extractFailureSignatures,
+} from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, fileSearchTool, ToolRegistry } from "@blue-tanuki/core";
 import { ExecuteFeedbackSchema, type ExecuteCommand } from "@blue-tanuki/protocol";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
@@ -68,9 +74,13 @@ describe("実Executor結果から既存監査・履歴projectionへの接続", (
       expect(hds.getAudit().verify()).toBe(true);
 
       const history = new CompleteHistoryStore();
+      const historyCommand = commandHistoryDescriptor(command);
+      expect(JSON.stringify(historyCommand)).not.toContain(secret);
+      expect(JSON.stringify(historyCommand)).not.toContain(root);
+      expect(historyCommand).toHaveProperty("failure_patterns.version", "failure-conditioned-patterns-v1");
       history.append({ kind: "execution_history", request_id: log.request_id, command_id: command.id,
         actor: "fixture-owner", source: "executor", timestamp: Date.now(), payload: {
-          command: commandHistoryDescriptor(command), origin_channel: "test", status: feedback.status,
+          command: historyCommand, origin_channel: "test", status: feedback.status,
           operation_core_result: operationCoreResultHistoryProjection(command, feedback),
         } });
       const projection = projectOperationCoreExecutionHistory(history.replay({ kind: "execution_history" }), {
@@ -80,6 +90,60 @@ describe("実Executor結果から既存監査・履歴projectionへの接続", (
       expect(JSON.stringify(projection)).not.toContain(secret);
       expect(JSON.stringify(projection)).not.toContain(root);
     } finally { vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("connects digest-only complete-history failure observations to the next conditioned command gate", () => {
+    const secretTarget = "PRIVATE_FAILURE_TARGET_SENTINEL";
+    const secretGoal = "PRIVATE_FAILURE_GOAL_SENTINEL";
+    const secretError = "PRIVATE_FAILURE_ERROR_SENTINEL";
+    const command = toolDecision(new HDSUpperController(), { root: secretTarget, query: "blue" }).command;
+    command.upstream_decision.frame_goal = secretGoal;
+    const descriptor = commandHistoryDescriptor(command);
+    const history = new CompleteHistoryStore();
+    const failedEntry = history.append({
+      kind: "execution_history",
+      request_id: "failure-request",
+      command_id: command.id,
+      actor: "fixture-owner",
+      source: "executor",
+      timestamp: Date.now(),
+      payload: {
+        command: descriptor,
+        origin_channel: "test",
+        status: "failed",
+        error: secretError,
+      },
+    });
+    expect(failedEntry).not.toBeNull();
+    const signatures = extractFailureSignatures({ kind: "complete_history", entry: failedEntry! });
+    expect(signatures).toHaveLength(1);
+    const serializedSignatures = JSON.stringify(signatures);
+    for (const sentinel of [secretTarget, secretGoal, secretError, "blue"]) {
+      expect(serializedSignatures).not.toContain(sentinel);
+    }
+    expect(signatures[0]?.result_pattern).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(signatures[0]?.unknowns).toContain("predicted_difference_not_observed");
+
+    const store = new FailureMemoryStore();
+    store.addSignature({
+      ...signatures[0]!,
+      state: "active",
+      suppression_policy: "require_approval",
+      severity: "high",
+      confidence: 0.9,
+      match_level: 1,
+    });
+    const retry = toolDecision(new HDSUpperController(), { root: secretTarget, query: "blue" }).command;
+    retry.upstream_decision.frame_goal = secretGoal;
+    const sameCondition = store.evaluateCommandGate(retry, {
+      actor: "fixture-owner", channel: "test", request_id: "retry-request",
+    });
+    const otherTarget = toolDecision(new HDSUpperController(), { root: "different-target", query: "blue" }).command;
+    const differentCondition = store.evaluateCommandGate(otherTarget, {
+      actor: "fixture-owner", channel: "test", request_id: "other-request",
+    });
+    expect(sameCondition.decision).toBe("require_approval");
+    expect(differentCondition.decision).toBe("allow");
   });
 
   it("能力拒否は未呼出し、呼出し後の失敗は作用結果不明として記録する", async () => {

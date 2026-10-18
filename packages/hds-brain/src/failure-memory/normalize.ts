@@ -1,6 +1,12 @@
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
-import { stableJson } from "../complete-history/codec.js";
+import { sha256Hex, stableJson } from "../complete-history/codec.js";
 import type { FailureGateCandidate, FailureScope } from "./types.js";
+
+const COMMAND_ACTION_PATTERN_VERSION = "failure-command-action-v1";
+const COMMAND_INPUT_PATTERN_VERSION = "failure-command-input-v1";
+const COMMAND_CONTEXT_PATTERN_VERSION = "failure-command-context-v1";
+const FAILURE_PATTERN_VERSION = "failure-conditioned-patterns-v1";
+const SHA256_RE = /^sha256:[0-9a-f]{64}$/i;
 
 const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
 const ISO_RE = /\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?z\b/gi;
@@ -31,20 +37,21 @@ export function commandOperation(command: ExecuteCommand): string {
 
 export function commandActionPattern(command: ExecuteCommand): string {
   const base = {
+    pattern_version: COMMAND_ACTION_PATTERN_VERSION,
     type: command.type,
     operation: commandOperation(command),
-    constraints: command.constraints ?? {},
+    constraints: safeCommandConstraints(command),
   };
   if (command.type === "tool_call") {
     return stableJson({
       ...base,
-      arguments: command.payload.arguments,
+      arguments_digest: `sha256:${sha256Hex(command.payload.arguments)}`,
     });
   }
   if (command.type === "llm_call") {
     return stableJson({
       ...base,
-      messages: command.payload.messages,
+      messages_digest: `sha256:${sha256Hex(command.payload.messages)}`,
       backend_hint: command.payload.backend_hint,
       model: command.payload.model,
       temperature: command.payload.temperature,
@@ -54,11 +61,87 @@ export function commandActionPattern(command: ExecuteCommand): string {
     return stableJson({
       ...base,
       channel: command.payload.channel,
-      target: command.payload.target,
-      content: command.payload.content,
+      target_digest: `sha256:${sha256Hex(command.payload.target)}`,
+      content_digest: `sha256:${sha256Hex(command.payload.content)}`,
     });
   }
   return stableJson(base);
+}
+
+export function commandInputPattern(command: ExecuteCommand): string {
+  return stableJson({
+    pattern_version: COMMAND_INPUT_PATTERN_VERSION,
+    upstream_decision: command.upstream_decision.commit_decision,
+    frame_goal_digest: `sha256:${sha256Hex(command.upstream_decision.frame_goal)}`,
+  });
+}
+
+export function commandContextPattern(context: Record<string, unknown> = {}): string {
+  const actor = typeof context.actor === "string"
+    ? context.actor
+    : typeof context.origin_user === "string"
+      ? context.origin_user
+      : undefined;
+  const channel = typeof context.channel === "string" ? context.channel : undefined;
+  return stableJson({
+    pattern_version: COMMAND_CONTEXT_PATTERN_VERSION,
+    actor_digest: actor === undefined ? undefined : `sha256:${sha256Hex(actor)}`,
+    channel,
+  });
+}
+
+export function commandFailurePatterns(command: ExecuteCommand): {
+  version: typeof FAILURE_PATTERN_VERSION;
+  input_pattern: string;
+  action_pattern: string;
+} {
+  return {
+    version: FAILURE_PATTERN_VERSION,
+    input_pattern: commandInputPattern(command),
+    action_pattern: commandActionPattern(command),
+  };
+}
+
+export function isConditionedFailurePatterns(value: unknown): value is {
+  version: typeof FAILURE_PATTERN_VERSION;
+  input_pattern: string;
+  action_pattern: string;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const patterns = value as Record<string, unknown>;
+  return patterns.version === FAILURE_PATTERN_VERSION &&
+    isCommandInputPattern(patterns.input_pattern) &&
+    isCommandActionPattern(patterns.action_pattern);
+}
+
+export function commandPatternsMatch(
+  inputPattern: string,
+  actionPattern: string,
+  contextPattern: string,
+): boolean {
+  return isCommandInputPattern(inputPattern) &&
+    isCommandActionPattern(actionPattern) &&
+    isCommandContextPattern(contextPattern);
+}
+
+export function failureSignatureIdentityKey(input: {
+  scope: FailureScope;
+  failure_type: string;
+  input_pattern: string;
+  action_pattern: string;
+  context_pattern: string;
+  predicted_difference_digest?: string;
+  result_pattern?: string;
+}): string {
+  return stableJson({
+    scope: input.scope,
+    failure_type: input.failure_type,
+    input: identityPattern(input.input_pattern),
+    action: identityPattern(input.action_pattern),
+    context: identityPattern(input.context_pattern),
+    predicted_difference: identityPattern(input.predicted_difference_digest ?? ""),
+    result: identityPattern(input.result_pattern ?? ""),
+  });
 }
 
 export function candidateFromCommand(
@@ -67,12 +150,9 @@ export function candidateFromCommand(
 ): FailureGateCandidate {
   return {
     scope: commandScope(command),
-    input_pattern: stableJson({
-      upstream_decision: command.upstream_decision.commit_decision,
-      frame_goal: command.upstream_decision.frame_goal,
-    }),
+    input_pattern: commandInputPattern(command),
     action_pattern: commandActionPattern(command),
-    context_pattern: stableJson(context),
+    context_pattern: commandContextPattern(context),
     command,
     context,
   };
@@ -132,6 +212,51 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function safeCommandConstraints(command: ExecuteCommand): Record<string, unknown> {
+  return {
+    max_tokens: command.constraints?.max_tokens,
+    timeout_ms: command.constraints?.timeout_ms,
+    allowed_tools: command.constraints?.allowed_tools,
+    allowed_capabilities: command.constraints?.allowed_capabilities,
+  };
+}
+
+function isCommandActionPattern(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = parseJsonObject(value);
+  if (!parsed || parsed.pattern_version !== COMMAND_ACTION_PATTERN_VERSION) return false;
+  if (parsed.type === "tool_call") return isDigest(parsed.arguments_digest);
+  if (parsed.type === "llm_call") return isDigest(parsed.messages_digest);
+  if (parsed.type === "channel_send") return isDigest(parsed.target_digest) && isDigest(parsed.content_digest);
+  return parsed.type === "noop";
+}
+
+function isCommandInputPattern(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = parseJsonObject(value);
+  return parsed?.pattern_version === COMMAND_INPUT_PATTERN_VERSION &&
+    typeof parsed.upstream_decision === "string" &&
+    isDigest(parsed.frame_goal_digest);
+}
+
+function isCommandContextPattern(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = parseJsonObject(value);
+  return parsed?.pattern_version === COMMAND_CONTEXT_PATTERN_VERSION &&
+    (parsed.actor_digest === undefined || isDigest(parsed.actor_digest)) &&
+    (parsed.channel === undefined || typeof parsed.channel === "string");
+}
+
+function isDigest(value: unknown): value is string {
+  return typeof value === "string" && SHA256_RE.test(value);
+}
+
+function identityPattern(value: string): string {
+  const parsed = parseJsonObject(value);
+  if (typeof parsed?.pattern_version === "string" || SHA256_RE.test(value)) return value;
+  return normalizeFailurePattern(value);
 }
 
 function semanticTokens(value: string): string[] {

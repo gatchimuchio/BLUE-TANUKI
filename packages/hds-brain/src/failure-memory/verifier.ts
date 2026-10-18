@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { stableJson } from "../complete-history/codec.js";
-import { normalizeFailurePattern } from "./normalize.js";
+import { failureSignatureIdentityKey } from "./normalize.js";
 import { needsBlockRevalidation } from "./policy.js";
 import { extractFromCompleteHistory } from "./extractor.js";
 import type {
@@ -93,7 +92,10 @@ function materializeRecommendation(input: FailureSignatureInput, now: Date, fall
     input_pattern: input.input_pattern,
     action_pattern: input.action_pattern,
     context_pattern: input.context_pattern,
+    predicted_difference_digest: input.predicted_difference_digest,
     result_pattern: input.result_pattern,
+    cause_candidates: input.cause_candidates ? [...input.cause_candidates] : undefined,
+    unknowns: input.unknowns ? [...input.unknowns] : undefined,
     evidence_log_ids: [...(input.evidence_log_ids ?? [])],
     match_level: input.match_level ?? 1,
     suppression_policy: input.suppression_policy ?? "warn",
@@ -114,13 +116,8 @@ function materializeRecommendation(input: FailureSignatureInput, now: Date, fall
   };
 }
 
-function signatureKey(signature: Pick<FailureSignature, "scope" | "failure_type" | "action_pattern" | "result_pattern">): string {
-  return stableJson({
-    scope: signature.scope,
-    failure_type: signature.failure_type,
-    action: normalizeFailurePattern(signature.action_pattern),
-    result: normalizeFailurePattern(signature.result_pattern ?? ""),
-  });
+function signatureKey(signature: Pick<FailureSignature, "scope" | "failure_type" | "input_pattern" | "action_pattern" | "context_pattern" | "predicted_difference_digest" | "result_pattern">): string {
+  return failureSignatureIdentityKey(signature);
 }
 
 function staleEvidence(signature: FailureSignature, now: Date): boolean {

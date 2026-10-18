@@ -1,9 +1,13 @@
-import { stableJson } from "../complete-history/codec.js";
+import { sha256Hex, stableJson } from "../complete-history/codec.js";
+import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import type {
   CompleteHistoryEntry,
 } from "../complete-history/index.js";
 import {
   commandActionPattern,
+  commandContextPattern,
+  commandInputPattern,
+  isConditionedFailurePatterns,
 } from "./normalize.js";
 import type {
   FailureExtractionInput,
@@ -17,22 +21,30 @@ export function extractFailureSignatures(input: FailureExtractionInput): Failure
   if (input.kind === "complete_history") return extractFromCompleteHistory(input.entry);
   if (input.kind === "command_result") {
     if (input.feedback.status !== "failed") return [];
+    const failureType = classifyFailure(input.feedback.error);
     return [signatureInput({
       scope: commandScope(input.command.type, input.command.type === "tool_call" ? input.command.payload.tool_name : undefined),
-      failure_type: classifyFailure(input.feedback.error),
+      failure_type: failureType,
+      input_pattern: commandInputPattern(input.command),
       action_pattern: commandActionPattern(input.command),
-      result_pattern: input.feedback.error ?? "failed",
+      context_pattern: commandContextPattern(input.context),
+      result_pattern: symptomDigest(input.feedback.error ?? "execution_failed"),
+      cause_candidates: [failureType],
+      unknowns: commandUnknowns(input.command, input.context),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: severityForError(input.feedback.error),
     })];
   }
   if (input.kind === "tool_result") {
     if (input.status !== "failed") return [];
+    const failureType = classifyFailure(input.error);
     return [signatureInput({
       scope: "tool",
-      failure_type: classifyFailure(input.error),
-      action_pattern: input.tool_name,
-      result_pattern: input.error ?? "failed",
+      failure_type: failureType,
+      action_pattern: `sha256:${sha256Hex(input.tool_name)}`,
+      result_pattern: symptomDigest(input.error ?? "failed"),
+      cause_candidates: [failureType],
+      unknowns: commonUnknowns(),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: severityForError(input.error),
     })];
@@ -42,19 +54,24 @@ export function extractFailureSignatures(input: FailureExtractionInput): Failure
     return [signatureInput({
       scope: "test",
       failure_type: "test_regression",
-      action_pattern: input.test_name,
-      result_pattern: input.error ?? "test_failed",
+      action_pattern: `sha256:${sha256Hex(input.test_name)}`,
+      result_pattern: symptomDigest(input.error ?? "test_failed"),
+      cause_candidates: ["test_regression"],
+      unknowns: commonUnknowns(),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: "high",
     })];
   }
   if (input.kind === "workflow_result") {
     if (input.status !== "failed") return [];
+    const failureType = classifyFailure(input.error);
     return [signatureInput({
       scope: "workflow",
-      failure_type: classifyFailure(input.error),
-      action_pattern: input.workflow,
-      result_pattern: input.error ?? "workflow_failed",
+      failure_type: failureType,
+      action_pattern: `sha256:${sha256Hex(input.workflow)}`,
+      result_pattern: symptomDigest(input.error ?? "workflow_failed"),
+      cause_candidates: [failureType],
+      unknowns: commonUnknowns(),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: severityForError(input.error),
     })];
@@ -64,8 +81,10 @@ export function extractFailureSignatures(input: FailureExtractionInput): Failure
     return [signatureInput({
       scope: "llm_output",
       failure_type: classifyLLMFailure(input.error),
-      action_pattern: input.validator,
-      result_pattern: input.error ?? "llm_output_validation_failed",
+      action_pattern: `sha256:${sha256Hex(input.validator)}`,
+      result_pattern: symptomDigest(input.error ?? "llm_output_validation_failed"),
+      cause_candidates: [classifyLLMFailure(input.error)],
+      unknowns: commonUnknowns(),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: "medium",
       match_level: 3,
@@ -76,8 +95,10 @@ export function extractFailureSignatures(input: FailureExtractionInput): Failure
     return [signatureInput({
       scope: input.reason.includes("gateway") ? "boundary" : "authority",
       failure_type: "boundary_violation",
-      action_pattern: input.decision,
-      result_pattern: input.reason,
+      action_pattern: `sha256:${sha256Hex(input.decision)}`,
+      result_pattern: symptomDigest(input.reason),
+      cause_candidates: ["boundary_violation"],
+      unknowns: commonUnknowns(),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: "critical",
       confidence: 0.95,
@@ -95,16 +116,27 @@ export function extractFromCompleteHistory(entry: CompleteHistoryEntry): Failure
     const operation = stringValue(command.operation) || stringValue(command.type) || "unknown_command";
     const commandType = stringValue(command.type);
     const error = stringValue(payload.error) || "execution_failed";
+    const failureType = classifyFailure(error);
+    const conditioned = command.failure_patterns;
+    const hasConditionedPatterns = isConditionedFailurePatterns(conditioned);
+    const safeActionPattern = hasConditionedPatterns
+      ? conditioned.action_pattern
+      : stableJson({ pattern_version: "failure-legacy-action-digest-v1", descriptor_digest: `sha256:${sha256Hex(command)}` });
+    const safeInputPattern = hasConditionedPatterns
+      ? conditioned.input_pattern
+      : stableJson({ pattern_version: "failure-legacy-input-unavailable-v1" });
     return [signatureInput({
       scope: commandScope(commandType, operation),
-      failure_type: classifyFailure(error),
-      action_pattern: stableJson(command),
-      context_pattern: stableJson({
-        actor: entry.actor,
-        source: entry.source,
-        request_id: entry.request_id,
-      }),
-      result_pattern: error,
+      failure_type: failureType,
+      input_pattern: safeInputPattern,
+      action_pattern: safeActionPattern,
+      context_pattern: commandContextPattern({ actor: entry.actor, channel: payload.origin_channel }),
+      result_pattern: symptomDigest(error),
+      cause_candidates: [failureType],
+      unknowns: [
+        ...commonUnknowns(),
+        ...(hasConditionedPatterns ? [] : ["legacy_history_missing_conditioned_patterns"]),
+      ],
       evidence_log_ids: [entry.id],
       severity: severityForError(error),
     })];
@@ -118,15 +150,14 @@ export function extractFromCompleteHistory(entry: CompleteHistoryEntry): Failure
       scope: reason.includes("boundary") ? "boundary" : "authority",
       failure_type: reason.includes("boundary") ? "boundary_violation" : "logic_drift",
       action_pattern: stableJson({
-        decision,
-        reason,
+        decision_digest: `sha256:${sha256Hex(decision)}`,
+        reason_digest: `sha256:${sha256Hex(reason)}`,
         command_present: payload.command !== null,
       }),
-      context_pattern: stableJson({
-        actor: payload.actor,
-        process: payload.process,
-      }),
-      result_pattern: reason,
+      context_pattern: commandContextPattern({ actor: payload.actor, channel: payload.channel }),
+      result_pattern: symptomDigest(reason),
+      cause_candidates: [reason.includes("boundary") ? "boundary_violation" : "logic_drift"],
+      unknowns: commonUnknowns(),
       evidence_log_ids: [entry.id],
       severity: reason.includes("boundary") ? "critical" : "high",
       confidence: reason.includes("boundary") ? 0.95 : 0.8,
@@ -141,13 +172,11 @@ export function extractFromCompleteHistory(entry: CompleteHistoryEntry): Failure
     return [signatureInput({
       scope: "workflow",
       failure_type: reason.includes("manual_correction") ? "repeated_manual_correction" : classifyFailure(reason),
-      action_pattern: stableJson(payload.command ?? {}),
-      context_pattern: stableJson({
-        actor: entry.actor,
-        event,
-        operation: payload.operation,
-      }),
-      result_pattern: reason || event,
+      action_pattern: `sha256:${sha256Hex(payload.command ?? {})}`,
+      context_pattern: commandContextPattern({ actor: entry.actor, channel: payload.origin_channel }),
+      result_pattern: symptomDigest(reason || event),
+      cause_candidates: [reason.includes("manual_correction") ? "repeated_manual_correction" : classifyFailure(reason)],
+      unknowns: commonUnknowns(),
       evidence_log_ids: [entry.id],
       severity: event.includes("denied") ? "high" : "medium",
       match_level: 1,
@@ -162,10 +191,12 @@ export function extractFromCompleteHistory(entry: CompleteHistoryEntry): Failure
       scope: "llm_output",
       failure_type: classifyLLMFailure(reason),
       action_pattern: stableJson({
-        command_type: payload.command_type,
-        output_kind: payload.output_kind,
+        command_type_digest: `sha256:${sha256Hex(payload.command_type)}`,
+        output_kind_digest: `sha256:${sha256Hex(payload.output_kind)}`,
       }),
-      result_pattern: reason || releaseDecision,
+      result_pattern: symptomDigest(reason || releaseDecision),
+      cause_candidates: [classifyLLMFailure(reason)],
+      unknowns: commonUnknowns(),
       evidence_log_ids: [entry.id],
       severity: releaseDecision === "block" ? "high" : "medium",
       match_level: 3,
@@ -178,8 +209,12 @@ function signatureInput(input: {
   scope: FailureScope;
   failure_type: FailureType;
   action_pattern: string;
+  input_pattern?: string;
   result_pattern?: string;
   context_pattern?: string;
+  predicted_difference_digest?: string;
+  cause_candidates?: readonly FailureType[];
+  unknowns?: readonly string[];
   evidence_log_ids?: readonly string[];
   severity?: FailureSeverity;
   confidence?: number;
@@ -188,16 +223,36 @@ function signatureInput(input: {
   return {
     scope: input.scope,
     failure_type: input.failure_type,
-    input_pattern: input.action_pattern,
+    input_pattern: input.input_pattern ?? input.action_pattern,
     action_pattern: input.action_pattern,
     context_pattern: input.context_pattern ?? "{}",
+    predicted_difference_digest: input.predicted_difference_digest,
     result_pattern: input.result_pattern,
+    cause_candidates: input.cause_candidates,
+    unknowns: input.unknowns,
     evidence_log_ids: input.evidence_log_ids ?? [],
     confidence: input.confidence ?? 0.65,
     severity: input.severity ?? "medium",
     state: "shadow",
     match_level: input.match_level ?? 1,
   };
+}
+
+function symptomDigest(symptom: string): string {
+  return `sha256:${sha256Hex(symptom)}`;
+}
+
+function commonUnknowns(): string[] {
+  return ["root_cause_unconfirmed", "predicted_difference_not_observed"];
+}
+
+function commandUnknowns(command: ExecuteCommand, context: Record<string, unknown> = {}): string[] {
+  return [
+    ...commonUnknowns(),
+    ...(command.upstream_decision.frame_goal.trim() ? [] : ["goal_not_available"]),
+    ...(typeof context.actor === "string" || typeof context.origin_user === "string" ? [] : ["actor_not_available"]),
+    ...(typeof context.channel === "string" ? [] : ["channel_not_available"]),
+  ];
 }
 
 function commandScope(commandType: string, operation?: string): FailureScope {
