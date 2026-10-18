@@ -2,7 +2,23 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-03-E03.03-POST-RESTORE-PLAN-REVIEW`
+### 最新BUILD_BATCH：`QEB-03-E03.03-POST-RESTORE-READ-RESULT`
+
+開始HEAD／`origin/main`=`db3556551969d926b933950c2dac3e8c72441ae4`、開始worktree clean。QE rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、E03.03と現物を再読した。編集前にlocal recovery branch／remote backup tagをSHA照合・回転し、開始HEADを復元点として保全した。
+
+前回の復元後review fixtureを、一時sandbox内の一ファイルを読む合成仕事まで延長した。clean planだけを`ask_every_time`でL1承認し、固定file-search child workerが一度検索した。保存結果はOperation Planのbinding／resultへdigest付きで帰り、bindingは`verified`、runtime projectionは`results_verified`になった。Complete Historyは結果digestだけを保持し、生の一致行は含まない。collateral residual planは引き続き`held_residual`で、Executorへ進まない。全経路はloopback Gateway／一時SQLite／sandbox fixtureの試験であり、実owner承認、実業務ファイル、外部provider、外部作用ではない。
+
+| 限定確認 | 結果 |
+|---|---|
+| `pnpm build` | PASS、15 workspace projects。固定file-search childを含む。 |
+| Gateway `recovery_mutation_entry.test.ts` の対象test | PASS、1 test、ほか4件skip。合成L1承認、隔離read-only検索、実結果receiptのHDS帰還、residual hold継続を確認。 |
+| Gateway `typecheck` | PASS。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件。 |
+| 実owner approval／実資格・provider／外部書込み／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+clean planの限定read-only作用→実結果receipt→HDS plan resultまで、合成Gateway経路で`WIRED`。residual planの復旧holdも継続。E03.03全体は`BUILD_GAP`。次consumerはこの検証済み結果を依存stepの実値へ渡し、新しいstep reviewに結ぶ経路。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の境界を維持する。
+
+### 前回BUILD_BATCH：`QEB-03-E03.03-POST-RESTORE-PLAN-REVIEW`
 
 開始HEAD／`origin/main`=`085eedabb6a106fa9ddf9cb80f4590b07f0462aa`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、E03.03と現物を小単位開始時に読み直した。編集前にlocal recovery branch／remote backup tag二世代を照合・回転し、開始HEADを両世代に保全した。
 

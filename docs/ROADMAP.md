@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-03-E03.03-POST-RESTORE-READ-RESULT`では、復元後のclean planを合成L1承認から隔離workspace内のread-only検索へ進め、結果digestとOperation Planの`verified` bindingがHDSへ戻ることをfocused Gateway integration testで確認した。結果projectionは非権威・raw payload非公開で、残差planの`held_residual`は維持される。これは一時fixtureのローカル試験であり、実owner承認・実業務ファイル・provider・外部作用ではない。E03.03=`BUILD_GAP`を維持する。次は検証済み結果を依存stepの実値と次のreviewへ結ぶ。
+
 2026-10-19の`QEB-03-E03.03-POST-RESTORE-PLAN-REVIEW`では、restore後checkpointからclean planのHDS `plan:review`がL1 read-only `tool.file.search`承認待ちへ進み、同checkpointの残差planは`plan_recovery_residual_hold`でcommandなしのまま拒否されることをGateway integration testで確認した。合成Complete Historyでは両requestにExecutor履歴がない。L1承認は未消費、実provider／外部作用なし。E03.03=`BUILD_GAP`を維持する。次はclean planの限定read-only作用とresult receiptのHDS帰還を隔離workspaceで結ぶ。
 
 2026-10-19の`QEB-03-E03.03-MULTI-PLAN-RESTORE-RESIDUAL-HOLD`では、合成Gateway L3 restore経路でclean planを選択scopeに保ったまま、同じOperation Plan storeに残差collateral planを含め、復元後HDS projectionと永続holdが残差planだけを`held_residual`として保持することをfocused integration testで確認した。clean planにはRecovery holdが付かない。fixtureは実owner承認・Executor作用・実restoreではなく、Gateway process／HTTP／一時SQLite上の合成経路。E03.03=`BUILD_GAP`を維持する。次はclean planの通常HDS reviewと残差planの拒否を復元後状態から照合する。

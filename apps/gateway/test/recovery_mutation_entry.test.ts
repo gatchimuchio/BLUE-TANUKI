@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -551,13 +551,31 @@ describe("Recovery mutation HDS L3 entry", () => {
     const historyFile = join(root, "complete-history.jsonl");
     const port = await reserveLoopbackPort();
     writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const fileRoot = join(root, "file-root");
+    const searchRoot = join(fileRoot, "fixture-workspace");
+    const searchQuery = "qe-recovery-result-marker";
+    const searchLine = `isolated recovery result: ${searchQuery}`;
+    mkdirSync(searchRoot, { recursive: true });
+    writeFileSync(join(searchRoot, "receipt.txt"), `${searchLine}\n`, "utf8");
+    const expectedSearchResult = {
+      root: realpathSync(searchRoot),
+      sandbox_root: realpathSync(fileRoot),
+      query: searchQuery,
+      visited_files: 1,
+      matches: [{ path: "receipt.txt", line_number: 1, line: searchLine }],
+    };
     const runtimeEnv = {
       ...isolatedRuntimeEnvironment(root, envFile, historyFile, port),
       BLUE_TANUKI_APPROVAL_MODE: "ask_every_time",
     };
     const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
     const { cleanPlanIdDigest, cleanRevisionDigest, residualPlanIdDigest, residualRevisionDigest } =
-      seedMixedOperationPlanRestoreState(planStatePath);
+      seedMixedOperationPlanRestoreState(planStatePath, {
+        targetId: "fixture-workspace",
+        root: "fixture-workspace",
+        query: searchQuery,
+        expectedResult: expectedSearchResult,
+      });
     const gateway = spawnGateway(runtimeEnv);
     let cleanPlanReviewRequestId: string | undefined;
     let residualPlanReviewRequestId: string | undefined;
@@ -696,12 +714,86 @@ describe("Recovery mutation HDS L3 entry", () => {
         expect.objectContaining({ plan_id: cleanPlanIdDigest }),
         expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
       ]));
+
+      const cleanApprovalQueue = await requestJson(port, "/approval", { token: resumeToken });
+      const cleanPendingApproval = (cleanApprovalQueue.body.pending_approvals as Array<Record<string, unknown>>)
+        .find((item) => item.request_id === cleanPlanReviewRequestId && item.operation === "tool.file.search");
+      expect(cleanApprovalQueue.body.pending_approvals).toEqual([
+        expect.objectContaining({
+          request_id: cleanPlanReviewRequestId,
+          operation: "tool.file.search",
+          approval_level: "L1_observe",
+        }),
+      ]);
+      const approvedCleanSearch = await requestJson(port,
+        `/approval/${encodeURIComponent(String(cleanPendingApproval?.command_id))}`, {
+          method: "POST",
+          token: resumeToken,
+          body: { verdict: "approve", approval_token: cleanPendingApproval?.approval_token },
+        });
+      expect(approvedCleanSearch.status, `${JSON.stringify(approvedCleanSearch.body)}\n${gateway.output.join("")}`).toBe(200);
+      expect(approvedCleanSearch.body, gateway.output.join("")).toMatchObject({
+        ok: true,
+        result: { approval: "approve", executed: true, status: "success" },
+      });
+
+      const afterCleanSearch = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(afterCleanSearch.body.pending_approvals).toEqual([]);
+      const afterSearchPlans = afterCleanSearch.body.hds.operation_plans.plans as Array<Record<string, unknown>>;
+      expect(afterSearchPlans).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          plan_id: cleanPlanIdDigest,
+          status: "results_verified",
+          steps: [expect.objectContaining({ status: "verified" })],
+        }),
+        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
+      ]));
+      expect(afterCleanSearch.body.hds.operation_plans.used_for_authority).toBe(false);
+      expect(afterCleanSearch.body.hds.operation_plans.raw_payload_exposed).toBe(false);
+
+      const resultStore = new OperationPlanStateStore(planStatePath);
+      try {
+        const persisted = resultStore.load();
+        const cleanPlan = persisted?.plans.find((plan) => plan.revisions[0]?.plan.plan_id === "restore-clean-plan");
+        expect(cleanPlan?.bindings).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            step_id: "restore-clean-step",
+            status: "verified",
+            result_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+            delivery_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+          }),
+        ]));
+        expect(cleanPlan?.results).toEqual([
+          expect.objectContaining({
+            plan_id: "restore-clean-plan",
+            request_id: "restore-clean-request",
+            step_id: "restore-clean-step",
+            operation: "file.search",
+            status: "succeeded",
+            output: expectedSearchResult,
+          }),
+        ]);
+        expect(resultStore.loadRecoveryHoldState()).toMatchObject({
+          holds: [{ plan_id_digest: residualPlanIdDigest, reason: "held_residual" }],
+          used_for_authority: false,
+          may_execute: false,
+        });
+      } finally {
+        resultStore.close();
+      }
     } finally {
       await stopChild(gateway.child);
     }
     const reviewHistory = new CompleteHistoryStore({ filepath: historyFile });
     expect(reviewHistory.replay({ kind: "hds_decision", request_id: cleanPlanReviewRequestId! })).toHaveLength(1);
-    expect(reviewHistory.replay({ kind: "execution_history", request_id: cleanPlanReviewRequestId! })).toHaveLength(0);
+    const cleanExecutionHistory = reviewHistory.replay({ kind: "execution_history", request_id: cleanPlanReviewRequestId! });
+    expect(cleanExecutionHistory).toHaveLength(1);
+    expect(cleanExecutionHistory[0]?.payload).toMatchObject({
+      status: "success",
+      result_present: true,
+      result_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(JSON.stringify(cleanExecutionHistory)).not.toContain(searchLine);
     expect(reviewHistory.replay({ kind: "hds_decision", request_id: residualPlanReviewRequestId! })[0]?.payload).toMatchObject({
       decision: "FAIL",
       reason: "plan_control_denied:plan_recovery_residual_hold",
@@ -953,14 +1045,14 @@ function seedOperationPlanState(filepath: string): { plan_id_digest: string; rev
   return { plan_id_digest: operationPlanDigest(plan.plan_id), revision_digest: revisionDigest };
 }
 
-function seedMixedOperationPlanRestoreState(filepath: string): {
+function seedMixedOperationPlanRestoreState(filepath: string, cleanSearch: SyntheticFileSearchFixture): {
   cleanPlanIdDigest: string;
   cleanRevisionDigest: string;
   residualPlanIdDigest: string;
   residualRevisionDigest: string;
 } {
   mkdirSync(dirname(filepath), { recursive: true });
-  const cleanPlan = syntheticOperationPlan("restore-clean-request", "restore-clean-plan", "restore-clean-step");
+  const cleanPlan = syntheticOperationPlan("restore-clean-request", "restore-clean-plan", "restore-clean-step", cleanSearch);
   const residualPlan = syntheticOperationPlan("restore-residual-request", "restore-residual-plan", "restore-residual-step");
   const residualStep = residualPlan.steps[0]!;
   residualPlan.steps.push({
@@ -1028,11 +1120,21 @@ function seedMixedOperationPlanRestoreState(filepath: string): {
   };
 }
 
-function syntheticOperationPlan(requestId: string, planId: string, stepId: string) {
+type SyntheticFileSearchFixture = {
+  targetId: string;
+  root: string;
+  query: string;
+  expectedResult: Record<string, unknown>;
+};
+
+function syntheticOperationPlan(requestId: string, planId: string, stepId: string, search?: SyntheticFileSearchFixture) {
+  const targetId = search?.targetId ?? "fixture-workspace";
+  const root = search?.root ?? "fixture-workspace";
+  const query = search?.query ?? "fixture";
   const step = {
     step_id: stepId,
     operation: "file.search",
-    target: { kind: "directory" as const, id: "fixture-workspace" },
+    target: { kind: "directory" as const, id: targetId },
     state: "planned" as const,
     effects: ["read" as const],
     permission: {
@@ -1045,7 +1147,7 @@ function syntheticOperationPlan(requestId: string, planId: string, stepId: strin
     adapter: "internal_runtime" as const,
     adapter_is_authority: false as const,
     command_generated_by_adapter_only: false,
-    parameters: { root: "fixture-workspace", query: "fixture", max_results: 1 },
+    parameters: { root, query, max_results: 1 },
     preparation: {
       depends_on: [],
       bindings: [],
@@ -1053,8 +1155,8 @@ function syntheticOperationPlan(requestId: string, planId: string, stepId: strin
       validation: [{
         check_id: `${stepId}-check`,
         method: "result_equals" as const,
-        target: { kind: "directory" as const, id: "fixture-workspace" },
-        expected: { count: 0 },
+        target: { kind: "directory" as const, id: targetId },
+        expected: search?.expectedResult ?? { count: 0 },
       }],
       compensation: { available: false, reason: "fixture" },
     },
