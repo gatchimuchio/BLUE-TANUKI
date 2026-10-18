@@ -2,6 +2,18 @@
 
 ## 直近完了分と次のBUILD_BATCH
 
+`QEB-03-E03.03-RECOVERY-HOLD-RESTART-PROVENANCE` は2026-10-19に実装・限定確認を完了。開始HEAD／`origin/main`=`0acfb6b0ef9ee20f629de992ca1e63b84783c4c8`、開始worktree clean。SQLiteにplan digest単位のrecovery holdと、checkpoint／Recovery result／発生commandのdigest provenanceを永続化し、起動時に無関係なprovider／connector／factory resetで隠れない`operation_plans` restoreだけを再観測する。read-only Recovery projectionから内部command／restored-state digestを除外した。選択restoreのHDS refreshはRecovery historyと同じraw command ID SHA-256を比較する。別commandの証拠はrefresh gate・checkpoint・既存holdを変更せず拒否する。実装commit=`2986ad4`を`main`へpush済み。
+
+| 限定確認 | 結果 |
+|---|---|
+| Recovery observation／Operation Plan runtime／evidence／inspection focused tests | PASS、4 files／39 tests。別Recovery reset後のplan restore再観測、hold永続化・新HDS再構築、command identity不一致の拒否、checkpoint／hold維持、raw identity非露出を合成stateで確認。 |
+| `pnpm typecheck`→`pnpm build` | PASS、15 workspace projects。 |
+| `pnpm hds:standalone`／`pnpm smoke:serve` | 両方PASS。HDS standalone／invariants／audit chain、stub WebChat／audit persistenceを確認。Recovery mutationなし。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実canonical restore／実再起動／owner承認／provider credential／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+E03.03=`BUILD_GAP`、C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。store間atomicity、job単位の独立restore point／隔離復旧、実Recovery後の再起動を証明していない。次のBUILD_BATCHは`QEB-03-E03.03-RECOVERY-JOB-SCOPE-CONSUMER-AUDIT`とし、request／plan／Broker／M／Cron／canonical backupの実identity producer・consumerをread-onlyで追跡して、job-scope recoveryに実在する安定identityと具体的次consumerを確定する。resume／権限・Approval／D4Pocket変更／外部作用は対象外。開始時に最新版三点正本・適用AGENTS・active指示・HEAD・差分を再読する。
+
 `QEB-03-E03.03-INPROCESS-RESTORE-PLAN-SELECTION-HOLD` は2026-10-19に実装・限定確認を完了。承認済みのselected `operation_plans` restore開始前にHDSのplan経路を止め、既存plan実行中ならrestore自体を開始しない。実行履歴・最終出力履歴の後でRecovery result digestとcanonical DB fingerprintを照合し、同じserve processの開いたstate storeからcheckpointを意味検証付きで再読込する。保存済みselected bindingを失効、開始済みbindingを結果不明にし、復元時点の全planだけ`held_unverified`にする。restore証拠・history・auditのいずれかが不足すればrefresh gateを解除しない。Control Centerに照合中／step選択停止／再起動点検を表示する。照合後の新規planは通常HDS経路へ戻す。実績は`docs/開発進捗.md`に記録し、E03.03=`BUILD_GAP`を維持する。
 
 `QEB-03-E03.03-INPROCESS-RESTORE-PLAN-DEPENDENCY-EVIDENCE` は2026-10-19に実装・限定確認を完了し、実装commit=`e8e7ec89b6cfeea5b3cd01229bda21409c3f80d1`を`main`へpush済み。同一process内のselected `operation_plans` restoreを完全history chain・expected command・opaque backup digest・再読込checkpointへ照合し、既存read-only plan dependency inspectionをHDSの計画別recovery holdへ接続した。残差／未観測／未確認はholdし、いずれかの整合性を確認できなければrefresh gateを解除しない。read-only evidenceから承認・実行・resume権限は生じず、E03.03=`BUILD_GAP`。限定検証は3 files／26 focused tests、typecheck、15 workspace build、HDS standalone、serve smoke、docs／repo-health gates。実restore／実再起動／実owner承認／provider資格情報／全suite／5OS実機／QE_QC／QE_QAは未実施。
