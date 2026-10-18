@@ -2,23 +2,23 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-03-E03.03-JM-RESTORE-PLAN-DEPENDENCY-REVIEW`
+### 最新BUILD_BATCH：`QEB-03-E03.03-JM-RESTORE-HOLD-CLOSED-STORE-RESTART`
 
-開始HEAD／`origin/main`=`d75cddd49b1ff5ed6a14d05fc2f663298a292bfd`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、J/M復元観測・OperationPlan hold・M receipt読取consumerを再読した。開始時のlocal recovery branchとremote backup tagはcurrent=`d75cddd49b1ff5ed6a14d05fc2f663298a292bfd`、previous=`f8569ebf6219652c7ab89bf1e1581816fc7b93f8`。
+開始HEAD／`origin/main`=`209d4ae0f28ffc3d7feb1fd0fd6ed5d79ad0318e`、worktree clean。owner指定rev2.3三点正本（仕様書SHA-256=`84b470455df396fc33ea7470eb948437a7fe611fcd15cce894c1b5d2720644f0`、工程表=`7ede8d84f34bc42ed183a0f45dbc2971fd5fff3099f77babacc56796a1893fe77`、施工指示書=`d91bf99bd6f54dba04d7fbd4d8d4c53b73cb7420e44d789367de6b212d4498d8`）、適用`AGENTS.md`、作業標準要領、active指示、serve起動観測・HDS constructor・OperationPlan/J/M保存経路を再読した。開始時local current recovery branch／remote current backup tagは`209d4ae0f28ffc3d7feb1fd0fd6ed5d79ad0318e`、previousは`d75cddd49b1ff5ed6a14d05fc2f663298a292bfd`。
 
-J/M全体の再open後、既存OperationPlanごとにJ control lifecycleとM receipt／result recordが同じcommitへ対応するread-only依存確認を接続した。復元前の選択bindingは`invalidated`、開始済みで結果不明のbindingは`outcome_unknown`として保持する。復元観測のstore・command・operation／result／backup／restored-state digestが一致し、J/M ledgerがverified・残差0でも、各planの保存commit・J event・M receipt・result recordが一致しなければholdは続く。未実行計画は結果・commit・receipt・実行開始記録がない場合だけ依存なしと確認する。fresh reviewのrevision・step・target検証を通った場合にのみ該当planのholdを記録上解除し、新しいbindingを作る。古い選択、OperationPlan-storeや他理由のholdをJ/M観測で上書きしない。実行、Approval、resumeを自動生成しない。
+`serve.ts`は起動時に安定したComplete HistoryのRecovery observationとOperationPlan checkpointからstartup evidenceを生成し、HDS constructorへ渡す。HDSは別SQLite表に保存したplan holdをdigest検証して再読し、起動時のRecovery evidenceも加えて非権威holdを保つ。既存コードのこの接続を、J/M receipt/result record付き計画で検証する回帰testを追加した。J state DBとJ/M memory DB接続を閉じて再openし、同一checkpoint、J/M復元のstartup evidence、保存receiptを再構成した。holdは維持され、古いselectionは拒否され、保存receiptとの照合を伴うfresh HDS review後にだけholdが消える。製品コードの接続漏れは確認されなかった。
 
 | 限定確認 | 結果 |
 |---|---|
-| OperationPlan runtime／Recovery evidence／post-action observer／Gateway result reconciliation／L3 restore focused tests | PASS、5 files／71 tests。まとめ実行でCron統合testが既定5秒を超えたが、該当ファイルを単独実行して3/3 PASS。 |
-| `pnpm typecheck`／`pnpm build` | PASS。workspace 15 projects。 |
-| `pnpm hds:standalone`／`pnpm smoke:serve` | PASS。HDS Runtime Invariants／audit chain、stub WebChat、audit persistence／dumpを確認。 |
+| Gateway execution result reconciliation test file | PASS、33 tests。追加testは閉じたJ state DBの再open、J/M receiptの再読、startup evidence付加、古いselection拒否、fresh review後のhold解除を確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS、workspace 15 projects。 |
+| `pnpm smoke:serve` | PASS。stub WebChat、audit persistence／dump chainを確認。 |
 | `docs:check`／`validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
-| 実canonical restore／実owner approval／restart／provider credential／外部作用／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+| 実Gateway process restart／canonical restore／実owner approval／provider credential／外部作用／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
 
-E03.03=`BUILD_GAP`を維持する。cross-store atomicity、仕事単位restore point、復旧可能性、未確定実行のresumeは未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。D4Pocket／ミニドラ、実業務作用、公開・出荷判断なし。次consumerは、このplan依存holdが通常の再起動後も同じcheckpoint・J/M receipt証拠で安全に再構成される経路の現物確認と不足接続である。
+本単位は再open fixtureによるJ/M hold耐久の検証であり、OS processを終了・再起動した証拠ではない。E03.03=`BUILD_GAP`を維持する。cross-store atomicity、仕事単位restore point、実Gateway restart、復旧可能性、未確定実行のresumeは未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`。D4Pocket／ミニドラ、実業務作用、公開・出荷判断なし。次consumerはfile-backed Complete Historyを含むGateway起動統合経路でのplan hold再構成確認である。
 
-実装commit=`70623f91ebb95787e28dfcdc18ecc9e2cbd791ff`を`main`へpush済み。push直後のlocal／remote mainとcurrent recovery branch／tagは同commit、previous recovery branch／tagは開始HEAD=`d75cddd49b1ff5ed6a14d05fc2f663298a292bfd`。この記録を含むdocs-only closeout後、最終refsとworktree状態を再照合する。
+回帰test commit=`6ead2087678da7eb4a084d3226c3fafe216fe5a7`を`main`へpush済み。docs-only closeoutを含むBUILD_BATCHのGit閉包と、二世代復旧ref／remote HEAD／clean worktreeの最終照合を続ける。
 
 ### 前回BUILD_BATCH：`QEB-03-E03.03-JM-RESTORE-QUIESCE-REOPEN-HDS-HOLD`
 
