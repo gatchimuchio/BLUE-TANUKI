@@ -27,6 +27,6 @@ event storeの再open後に重複・逆順・payload衝突を検査する。Cron
 
 ### 停止・復旧・記録
 
-DB破損・schema不整合・event衝突では fail-closed にする。handler開始後に結果が不明なeventは再送しない。処理済み、重複、逆順、衝突、結果不明を区別し、権限や仕事の完了へ昇格させない。完成した技術接続と残るBUILD_GAPを記録し、意味あるbuild batch終了時に限定commitを`main`へpush、remote HEADと復元refsを照合する。今回の変更は検証済みであり、最終diff確認後にpushする。
+DB破損・schema不整合・event衝突では fail-closed にする。handler開始後に結果が不明なeventは再送しない。処理済み、重複、逆順、衝突、結果不明を区別し、権限や仕事の完了へ昇格させない。完成した技術接続と残るBUILD_GAPを記録し、意味あるbuild batch終了時に限定commitを`main`へpush、remote HEADと復元refsを照合する。今回の実装commit=`43bc89f52ef2c8da0bb50f83c962be8e74b17c94`は`origin/main`へpush済み。fetch後のlocal／remote mainは一致し、local二branch／remote二tagは現世代`5370e5e`／直前`cf0458b`を指している。この文書と進捗記録もcloseoutとして次のpushへ含める。
 
 P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
