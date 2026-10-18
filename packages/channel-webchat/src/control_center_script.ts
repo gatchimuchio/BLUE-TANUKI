@@ -1614,6 +1614,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const checkpointStatus = value.checkpoint_status === null ? null : recoveryInspectionEnum(value.checkpoint_status, ["ready", "continuing", "completed", "held"]);
               if ((value.checkpoint_ref_digest !== null && !reference) ||
                   (value.request_scope_digest !== null && !requestScopeDigest) || integrity === "unknown" ||
+                  (requestScopeDigest !== null && (integrity !== "verified" || reason !== null)) ||
                   (value.reason !== null && reason === "unknown") ||
                   (value.checkpoint_status !== null && checkpointStatus === "unknown") ||
                   (integrity === "verified" && (reason !== null || checkpointStatus === null || reference === null)) ||
@@ -1653,7 +1654,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 documentCheckpointResidualCount > 0 && documentCheckpointReason === expectedDocumentCheckpointReason));
         const documentCheckpointLedgerStatus = recoveryInspectionLedgerStatus(ledgers.document_organization_checkpoints, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
         const cronApprovalCorrelationResidualCount = recoveryInspectionCount(source.cron_approval_correlation_residual_count);
-        const initialBoundaryOk = source.schema_version === 7 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
+        const initialBoundaryOk = source.schema_version === 8 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
         const ledgerStatuses = {
           j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
@@ -1758,7 +1759,72 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             new Set(planScopeDigests).size !== planScopeDigests.length) {
           planDependencyScopesValid = false;
         }
-        const boundaryOk = initialBoundaryOk && planDependencyScopesValid;
+        const requestScopeGroups = new Map();
+        let unlinkedOperationPlanScopeCount = 0;
+        let unlinkedDocumentCheckpointCount = 0;
+        const requestScopeGroup = function (digest) {
+          let group = requestScopeGroups.get(digest);
+          if (!group) {
+            group = { planScopes: [], verifiedCheckpoints: 0, unresolvedCheckpoints: 0 };
+            requestScopeGroups.set(digest, group);
+          }
+          return group;
+        };
+        planDependencyScopes.forEach(function (item) {
+          if (item.request_scope_digest === null) unlinkedOperationPlanScopeCount += 1;
+          else requestScopeGroup(item.request_scope_digest).planScopes.push(item);
+        });
+        documentCheckpointRecords.forEach(function (item) {
+          if (item.integrity !== "verified" || item.request_scope_digest === null) {
+            unlinkedDocumentCheckpointCount += 1;
+            return;
+          }
+          const group = requestScopeGroup(item.request_scope_digest);
+          group.verifiedCheckpoints += 1;
+          if (item.checkpoint_status !== "completed") group.unresolvedCheckpoints += 1;
+        });
+        const operationPlanInventoryComplete = ["verified", "residuals_present"].includes(ledgerStatuses.operation_plans) &&
+          source.omitted_plan_dependency_scope_count === 0;
+        const documentCheckpointInventoryComplete = ["verified", "residuals_present"].includes(documentCheckpointStatus) &&
+          documentCheckpointCounts.omitted_checkpoint_count === 0;
+        const requestScopeEntries = Array.from(requestScopeGroups.entries()).map(function (entry) {
+          const digest = entry[0];
+          const group = entry[1];
+          const operationPlanScopeCount = group.planScopes.length;
+          const residualOperationPlanScopeCount = group.planScopes.filter(function (item) { return item.status === "residuals_present"; }).length;
+          const unobservedOperationPlanScopeCount = group.planScopes.filter(function (item) { return item.status === "unobserved"; }).length;
+          const hasPlans = operationPlanScopeCount > 0;
+          const hasCheckpoints = group.verifiedCheckpoints > 0;
+          const relationship = hasPlans && hasCheckpoints ? "both_ledgers" :
+            hasPlans && documentCheckpointInventoryComplete && unlinkedDocumentCheckpointCount === 0 ? "operation_plan_only" :
+            !hasPlans && hasCheckpoints && operationPlanInventoryComplete && unlinkedOperationPlanScopeCount === 0 ? "document_checkpoint_only" :
+            "counterpart_unresolved";
+          const status = residualOperationPlanScopeCount > 0 || group.unresolvedCheckpoints > 0 ? "residuals_present" :
+            relationship === "counterpart_unresolved" || unobservedOperationPlanScopeCount > 0 ? "unobserved" : "observed";
+          return {
+            request_scope_digest: digest,
+            relationship: relationship,
+            status: status,
+            operation_plan_scope_count: operationPlanScopeCount,
+            residual_operation_plan_scope_count: residualOperationPlanScopeCount,
+            unobserved_operation_plan_scope_count: unobservedOperationPlanScopeCount,
+            verified_document_checkpoint_count: group.verifiedCheckpoints,
+            unresolved_document_checkpoint_count: group.unresolvedCheckpoints
+          };
+        }).sort(function (left, right) { return left.request_scope_digest < right.request_scope_digest ? -1 : left.request_scope_digest > right.request_scope_digest ? 1 : 0; });
+        const expectedRequestScopeCorrelation = {
+          status: "available",
+          entries: requestScopeEntries,
+          matched_scope_count: requestScopeEntries.filter(function (item) { return item.relationship === "both_ledgers"; }).length,
+          operation_plan_only_scope_count: requestScopeEntries.filter(function (item) { return item.relationship === "operation_plan_only"; }).length,
+          document_checkpoint_only_scope_count: requestScopeEntries.filter(function (item) { return item.relationship === "document_checkpoint_only"; }).length,
+          counterpart_unresolved_scope_count: requestScopeEntries.filter(function (item) { return item.relationship === "counterpart_unresolved"; }).length,
+          unlinked_operation_plan_scope_count: operationPlanInventoryComplete ? unlinkedOperationPlanScopeCount : null,
+          unlinked_document_checkpoint_count: documentCheckpointInventoryComplete ? unlinkedDocumentCheckpointCount : null
+        };
+        const requestScopeCorrelationValid = source.request_scope_correlation && typeof source.request_scope_correlation === "object" &&
+          JSON.stringify(source.request_scope_correlation) === JSON.stringify(expectedRequestScopeCorrelation);
+        const boundaryOk = initialBoundaryOk && planDependencyScopesValid && requestScopeCorrelationValid;
         const status = boundaryOk
           ? recoveryInspectionEnum(source.status, ["verified", "residuals_present", "invalid_report"])
           : "invalid_report";
@@ -1805,6 +1871,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           omitted_operation_plan_correlation_count: recoveryInspectionCount(source.omitted_operation_plan_correlation_count),
           plan_dependency_scopes: planDependencyScopes,
           omitted_plan_dependency_scope_count: recoveryInspectionCount(source.omitted_plan_dependency_scope_count),
+          request_scope_correlation: boundaryOk ? expectedRequestScopeCorrelation : {
+            status: "not_verified",
+            entries: [],
+            matched_scope_count: null,
+            operation_plan_only_scope_count: null,
+            document_checkpoint_only_scope_count: null,
+            counterpart_unresolved_scope_count: null,
+            unlinked_operation_plan_scope_count: null,
+            unlinked_document_checkpoint_count: null
+          },
           update_residuals: updateResiduals,
           omitted_update_residual_count: recoveryInspectionCount(source.omitted_update_residual_count),
           external_backup_restore_point: recoveryInspectionEnum(source.external_backup_restore_point, ["not_examined"]),

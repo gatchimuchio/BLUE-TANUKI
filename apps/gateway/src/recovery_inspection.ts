@@ -26,6 +26,7 @@ import {
 } from "./cron_event_recovery_inspection.js";
 import {
   inspectDocumentOrganizationCheckpointLedger,
+  type DocumentOrganizationCheckpointRecordInspection,
   type DocumentOrganizationCheckpointRecoveryInspection,
 } from "./document_organization_recovery_inspection.js";
 
@@ -150,6 +151,29 @@ export interface RecoveryPlanDependencyScope extends OperationPlanRecoveryPlanSu
   readonly unobserved_dependencies: readonly RecoveryPlanDependencyCategory[];
 }
 
+export interface RecoveryRequestScopeCorrelationEntry {
+  readonly request_scope_digest: string;
+  readonly relationship: "both_ledgers" | "operation_plan_only" | "document_checkpoint_only" | "counterpart_unresolved";
+  readonly status: "observed" | "residuals_present" | "unobserved";
+  readonly operation_plan_scope_count: number;
+  readonly residual_operation_plan_scope_count: number;
+  readonly unobserved_operation_plan_scope_count: number;
+  readonly verified_document_checkpoint_count: number;
+  readonly unresolved_document_checkpoint_count: number;
+}
+
+/** Read-only cross-ledger correlation; this never identifies a job or authorizes recovery. */
+export interface RecoveryRequestScopeCorrelation {
+  readonly status: "available" | "not_verified";
+  readonly entries: readonly RecoveryRequestScopeCorrelationEntry[];
+  readonly matched_scope_count: number | null;
+  readonly operation_plan_only_scope_count: number | null;
+  readonly document_checkpoint_only_scope_count: number | null;
+  readonly counterpart_unresolved_scope_count: number | null;
+  readonly unlinked_operation_plan_scope_count: number | null;
+  readonly unlinked_document_checkpoint_count: number | null;
+}
+
 export interface RecoveryLedgerBoundaryObservation {
   readonly reason: PersistenceLedgerInspection["reason"] | ExecutionIntentRecoveryInspection["reason"] | "unknown";
   readonly verified_event_count: number | null;
@@ -159,7 +183,7 @@ export interface RecoveryLedgerBoundaryObservation {
 }
 
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 7;
+  readonly schema_version: 8;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -201,6 +225,7 @@ export interface GatewayRecoveryOperatorProjection {
   readonly omitted_operation_plan_correlation_count: number;
   readonly plan_dependency_scopes: readonly RecoveryPlanDependencyScope[];
   readonly omitted_plan_dependency_scope_count: number;
+  readonly request_scope_correlation: RecoveryRequestScopeCorrelation;
   readonly update_residuals: readonly RecoveryUpdateResidual[];
   readonly omitted_update_residual_count: number;
   readonly external_backup_restore_point: "not_examined";
@@ -441,6 +466,84 @@ export function buildRecoveryPlanDependencyScopes(
   });
 }
 
+/** Correlate request scopes for inspection only; incomplete counterpart inventories remain unresolved. */
+export function buildRecoveryRequestScopeCorrelation(
+  planScopes: readonly RecoveryPlanDependencyScope[],
+  documentCheckpointRecords: readonly DocumentOrganizationCheckpointRecordInspection[],
+  options: { readonly operationPlanInventoryComplete: boolean; readonly documentCheckpointInventoryComplete: boolean },
+): RecoveryRequestScopeCorrelation {
+  const groups = new Map<string, {
+    planScopes: RecoveryPlanDependencyScope[];
+    verifiedCheckpoints: number;
+    unresolvedCheckpoints: number;
+  }>();
+  let unlinkedPlanScopes = 0;
+  let unlinkedDocumentCheckpoints = 0;
+  const getGroup = (digest: string) => {
+    const existing = groups.get(digest);
+    if (existing) return existing;
+    const created = { planScopes: [], verifiedCheckpoints: 0, unresolvedCheckpoints: 0 };
+    groups.set(digest, created);
+    return created;
+  };
+
+  for (const scope of planScopes) {
+    if (!scope.request_scope_digest) {
+      unlinkedPlanScopes += 1;
+      continue;
+    }
+    getGroup(scope.request_scope_digest).planScopes.push(scope);
+  }
+  for (const record of documentCheckpointRecords) {
+    if (record.integrity !== "verified" || !record.request_scope_digest) {
+      unlinkedDocumentCheckpoints += 1;
+      continue;
+    }
+    const group = getGroup(record.request_scope_digest);
+    group.verifiedCheckpoints += 1;
+    if (record.checkpoint_status !== "completed") group.unresolvedCheckpoints += 1;
+  }
+
+  const entries: RecoveryRequestScopeCorrelationEntry[] = [...groups.entries()].map(([digest, group]) => {
+    const operationPlanScopeCount = group.planScopes.length;
+    const residualPlanScopeCount = group.planScopes.filter((scope) => scope.status === "residuals_present").length;
+    const unobservedPlanScopeCount = group.planScopes.filter((scope) => scope.status === "unobserved").length;
+    const hasPlans = operationPlanScopeCount > 0;
+    const hasCheckpoints = group.verifiedCheckpoints > 0;
+    const relationship: RecoveryRequestScopeCorrelationEntry["relationship"] = hasPlans && hasCheckpoints
+      ? "both_ledgers"
+      : hasPlans && options.documentCheckpointInventoryComplete && unlinkedDocumentCheckpoints === 0
+        ? "operation_plan_only"
+        : !hasPlans && hasCheckpoints && options.operationPlanInventoryComplete && unlinkedPlanScopes === 0
+          ? "document_checkpoint_only"
+          : "counterpart_unresolved";
+    const status: RecoveryRequestScopeCorrelationEntry["status"] = residualPlanScopeCount > 0 || group.unresolvedCheckpoints > 0
+      ? "residuals_present"
+      : relationship === "counterpart_unresolved" || unobservedPlanScopeCount > 0 ? "unobserved" : "observed";
+    return {
+      request_scope_digest: digest,
+      relationship,
+      status,
+      operation_plan_scope_count: operationPlanScopeCount,
+      residual_operation_plan_scope_count: residualPlanScopeCount,
+      unobserved_operation_plan_scope_count: unobservedPlanScopeCount,
+      verified_document_checkpoint_count: group.verifiedCheckpoints,
+      unresolved_document_checkpoint_count: group.unresolvedCheckpoints,
+    };
+  }).sort((left, right) => left.request_scope_digest < right.request_scope_digest ? -1 : left.request_scope_digest > right.request_scope_digest ? 1 : 0);
+
+  return {
+    status: "available",
+    entries,
+    matched_scope_count: entries.filter((entry) => entry.relationship === "both_ledgers").length,
+    operation_plan_only_scope_count: entries.filter((entry) => entry.relationship === "operation_plan_only").length,
+    document_checkpoint_only_scope_count: entries.filter((entry) => entry.relationship === "document_checkpoint_only").length,
+    counterpart_unresolved_scope_count: entries.filter((entry) => entry.relationship === "counterpart_unresolved").length,
+    unlinked_operation_plan_scope_count: options.operationPlanInventoryComplete ? unlinkedPlanScopes : null,
+    unlinked_document_checkpoint_count: options.documentCheckpointInventoryComplete ? unlinkedDocumentCheckpoints : null,
+  };
+}
+
 function projectOperationPlanSummaries(
   value: unknown,
   enabled: boolean,
@@ -613,6 +716,7 @@ function projectDocumentOrganizationCheckpointSummary(value: unknown): {
     if ((input.checkpoint_ref_digest !== null && !checkpointRefDigest) ||
         (input.request_scope_digest !== null && !requestScopeDigest) || !integrity ||
         (input.reason !== null && !recordReason) || (input.checkpoint_status !== null && !checkpointStatus) ||
+        (requestScopeDigest !== null && (integrity !== "verified" || recordReason !== null)) ||
         (integrity === "verified" && (recordReason !== null || checkpointStatus === null || checkpointRefDigest === null)) ||
         (integrity === "residuals_present" && recordReason === null) ||
         (checkpointRefDigest !== null && seenReferences.has(checkpointRefDigest))) return { summary: unknown, valid: false };
@@ -700,6 +804,17 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
         planSummaries.rows.length === 0 && operationPlansProjection.rows.length === 0);
   const planDependencyScopesValid = planInventoryValid && Array.isArray(source.plan_dependency_scopes) &&
     JSON.stringify(source.plan_dependency_scopes) === JSON.stringify(planDependencyScopes);
+  const operationPlanInventoryComplete = planInventoryValid &&
+    (operationPlanStatus === "verified" || operationPlanStatus === "residuals_present") &&
+    planSummaries.omitted === 0;
+  const documentCheckpointInventoryComplete = documentOrganizationCheckpoints.valid &&
+    (documentOrganizationCheckpoints.summary.status === "verified" || documentOrganizationCheckpoints.summary.status === "residuals_present") &&
+    documentOrganizationCheckpoints.summary.omitted_checkpoint_count === 0;
+  const requestScopeCorrelation = buildRecoveryRequestScopeCorrelation(
+    planDependencyScopes,
+    documentOrganizationCheckpoints.summary.records,
+    { operationPlanInventoryComplete, documentCheckpointInventoryComplete },
+  );
   const cronCorrelationStates = operationPlanSources.map((item) =>
     isRecord(item) ? fixedEnum(item.cron_approval_correlation, CRON_APPROVAL_CORRELATIONS) : null,
   );
@@ -719,8 +834,18 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
   const operationPlans = projectOperatorOperationPlanCorrelations(operationPlanSources, boundaryValid);
   const updates = projectOperatorUpdateResiduals(updateSources, boundaryValid);
   const ledgerStatuses = RECOVERY_LEDGER_STATUSES;
+  const requestScopeCorrelationNotVerified: RecoveryRequestScopeCorrelation = {
+    status: "not_verified",
+    entries: [],
+    matched_scope_count: null,
+    operation_plan_only_scope_count: null,
+    document_checkpoint_only_scope_count: null,
+    counterpart_unresolved_scope_count: null,
+    unlinked_operation_plan_scope_count: null,
+    unlinked_document_checkpoint_count: null,
+  };
   return {
-    schema_version: 7,
+    schema_version: 8,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -753,6 +878,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     omitted_operation_plan_correlation_count: operationPlans.omitted,
     plan_dependency_scopes: boundaryValid ? planDependencyScopes : [],
     omitted_plan_dependency_scope_count: 0,
+    request_scope_correlation: boundaryValid ? requestScopeCorrelation : requestScopeCorrelationNotVerified,
     update_residuals: updates.rows,
     omitted_update_residual_count: updates.omitted,
     external_backup_restore_point: "not_examined",

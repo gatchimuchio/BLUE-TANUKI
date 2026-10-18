@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildRecoveryPlanDependencyScopes,
+  buildRecoveryRequestScopeCorrelation,
   correlateRecoveryUpdates,
   inspectGatewayRecoveryState,
   projectGatewayRecoveryInspectionForOperator,
@@ -415,7 +416,17 @@ describe("Gateway recovery operator projection", () => {
       surface: "recovery_inspection_operator",
       mode: "read_only",
       status: "residuals_present",
-      schema_version: 7,
+      schema_version: 8,
+      request_scope_correlation: {
+        status: "available",
+        entries: [],
+        matched_scope_count: 0,
+        operation_plan_only_scope_count: 0,
+        document_checkpoint_only_scope_count: 0,
+        counterpart_unresolved_scope_count: 0,
+        unlinked_operation_plan_scope_count: 1,
+        unlinked_document_checkpoint_count: 0,
+      },
       ledgers: { j: "verified", m: "projection_mismatch", broker: "verified", operation_plans: "residuals_present", document_organization_checkpoints: "verified" },
       ledger_boundaries: {
         j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
@@ -462,6 +473,98 @@ describe("Gateway recovery operator projection", () => {
     for (const sentinel of ["RAW_COMMAND_SENTINEL", "RAW_TICKET_SENTINEL", "RAW_UPDATE_SENTINEL", "RAW_ACTION_SENTINEL", "RAW_REASON_SENTINEL", "private\\state.sqlite"]) {
       expect(serialized).not.toContain(sentinel);
     }
+
+    const corruptedCheckpointProjection = projectGatewayRecoveryInspectionForOperator({
+      ...report,
+      ledgers: {
+        ...report.ledgers,
+        document_organization_checkpoints: {
+          status: "residuals_present",
+          reason: "ledger_corrupt",
+          checkpoint_count: 1,
+          verified_checkpoint_count: 0,
+          residual_checkpoint_count: 1,
+          omitted_checkpoint_count: 0,
+          unresolved_checkpoint_count: 0,
+          residual_count: 1,
+          records: [{
+            checkpoint_ref_digest: "9".repeat(64),
+            request_scope_digest: "8".repeat(64),
+            integrity: "residuals_present",
+            reason: "checkpoint_identity_mismatch",
+            checkpoint_status: null,
+          }],
+          used_for_authority: false,
+        },
+      },
+      document_organization_checkpoint_residual_count: 1,
+    });
+    expect(corruptedCheckpointProjection.boundary_valid).toBe(false);
+    expect(corruptedCheckpointProjection.request_scope_correlation).toMatchObject({
+      status: "not_verified",
+      entries: [],
+      unlinked_document_checkpoint_count: null,
+    });
+  });
+
+  it("keeps request-scope residuals isolated and marks incomplete counterparts unresolved", () => {
+    const digestA = "a".repeat(64);
+    const digestB = "b".repeat(64);
+    const digestC = "c".repeat(64);
+    const planScopes = buildRecoveryPlanDependencyScopes([
+      { plan_id_digest: "1".repeat(64), request_scope_digest: digestA, integrity: "residuals_present", plan_record_count: 1, binding_count: 0, residual_binding_count: 0, omitted_binding_count: 0 },
+      { plan_id_digest: "2".repeat(64), request_scope_digest: digestB, integrity: "verified", plan_record_count: 1, binding_count: 0, residual_binding_count: 0, omitted_binding_count: 0 },
+    ], []);
+    const checkpoints = [
+      { checkpoint_ref_digest: "4".repeat(64), request_scope_digest: digestA, integrity: "verified", reason: null, checkpoint_status: "held" },
+      { checkpoint_ref_digest: "5".repeat(64), request_scope_digest: digestC, integrity: "verified", reason: null, checkpoint_status: "completed" },
+    ] as const;
+    const complete = buildRecoveryRequestScopeCorrelation(planScopes, checkpoints, {
+      operationPlanInventoryComplete: true,
+      documentCheckpointInventoryComplete: true,
+    });
+    expect(complete).toMatchObject({
+      status: "available",
+      matched_scope_count: 1,
+      operation_plan_only_scope_count: 1,
+      document_checkpoint_only_scope_count: 1,
+      counterpart_unresolved_scope_count: 0,
+      unlinked_operation_plan_scope_count: 0,
+      unlinked_document_checkpoint_count: 0,
+    });
+    expect(complete.entries).toEqual([
+      { request_scope_digest: digestA, relationship: "both_ledgers", status: "residuals_present", operation_plan_scope_count: 1, residual_operation_plan_scope_count: 1, unobserved_operation_plan_scope_count: 0, verified_document_checkpoint_count: 1, unresolved_document_checkpoint_count: 1 },
+      { request_scope_digest: digestB, relationship: "operation_plan_only", status: "observed", operation_plan_scope_count: 1, residual_operation_plan_scope_count: 0, unobserved_operation_plan_scope_count: 0, verified_document_checkpoint_count: 0, unresolved_document_checkpoint_count: 0 },
+      { request_scope_digest: digestC, relationship: "document_checkpoint_only", status: "observed", operation_plan_scope_count: 0, residual_operation_plan_scope_count: 0, unobserved_operation_plan_scope_count: 0, verified_document_checkpoint_count: 1, unresolved_document_checkpoint_count: 0 },
+    ]);
+
+    const incomplete = buildRecoveryRequestScopeCorrelation(planScopes, checkpoints, {
+      operationPlanInventoryComplete: false,
+      documentCheckpointInventoryComplete: false,
+    });
+    expect(incomplete.entries.map((entry) => entry.relationship)).toEqual([
+      "both_ledgers", "counterpart_unresolved", "counterpart_unresolved",
+    ]);
+    expect(incomplete.unlinked_operation_plan_scope_count).toBeNull();
+    expect(incomplete.unlinked_document_checkpoint_count).toBeNull();
+
+    const unlinkedCheckpoint = buildRecoveryRequestScopeCorrelation(planScopes, [
+      ...checkpoints,
+      { checkpoint_ref_digest: null, request_scope_digest: null, integrity: "residuals_present", reason: "row_shape_invalid", checkpoint_status: null },
+    ], { operationPlanInventoryComplete: true, documentCheckpointInventoryComplete: true });
+    expect(unlinkedCheckpoint.entries.find((entry) => entry.request_scope_digest === digestB)?.relationship).toBe("counterpart_unresolved");
+    expect(unlinkedCheckpoint.unlinked_document_checkpoint_count).toBe(1);
+
+    const unlinkedPlanScope = buildRecoveryPlanDependencyScopes([{
+      plan_id_digest: "3".repeat(64), request_scope_digest: null, integrity: "verified", plan_record_count: 1,
+      binding_count: 0, residual_binding_count: 0, omitted_binding_count: 0,
+    }], []);
+    const unlinkedPlan = buildRecoveryRequestScopeCorrelation([...planScopes, ...unlinkedPlanScope], checkpoints, {
+      operationPlanInventoryComplete: true,
+      documentCheckpointInventoryComplete: true,
+    });
+    expect(unlinkedPlan.entries.find((entry) => entry.request_scope_digest === digestC)?.relationship).toBe("counterpart_unresolved");
+    expect(unlinkedPlan.unlinked_operation_plan_scope_count).toBe(1);
   });
 
   it("keeps downstream delivery evidence unobserved when the Broker link is unavailable or absent", () => {

@@ -83,7 +83,7 @@ async function runFailureMemoryVerifyCli(): Promise<void> {
 }
 
 async function runRecoveryInspectCli(): Promise<void> {
-  const { inspectGatewayRecoveryState } = await import("./recovery_inspection.js");
+  const { inspectGatewayRecoveryState, projectGatewayRecoveryInspectionForOperator } = await import("./recovery_inspection.js");
   const report = inspectGatewayRecoveryState(process.env);
   if (process.argv.includes("--json")) {
     writeStdout(JSON.stringify(report, null, 2));
@@ -124,6 +124,11 @@ async function runRecoveryInspectCli(): Promise<void> {
     writeStdout(`Document organization checkpoints: ${checkpoints.status}; records=${checkpoints.checkpoint_count ?? "unavailable"}; verified=${checkpoints.verified_checkpoint_count ?? "unavailable"}; residual=${checkpoints.residual_checkpoint_count ?? "unavailable"}; omitted=${checkpoints.omitted_checkpoint_count ?? "unavailable"}; unresolved=${checkpoints.unresolved_checkpoint_count ?? "unavailable"}`);
     for (const checkpoint of checkpoints.records) {
       writeStdout(`checkpoint=${checkpoint.checkpoint_ref_digest ?? "unidentified"} request_scope=${checkpoint.request_scope_digest ?? "unlinked"} integrity=${checkpoint.integrity} reason=${checkpoint.reason ?? "none"} recorded_status=${checkpoint.checkpoint_status ?? "unknown"}`);
+    }
+    const requestScopeCorrelation = projectGatewayRecoveryInspectionForOperator(report).request_scope_correlation;
+    writeStdout(`Request scope correlation: ${requestScopeCorrelation.status}; matched=${requestScopeCorrelation.matched_scope_count ?? "unavailable"}; plan_only=${requestScopeCorrelation.operation_plan_only_scope_count ?? "unavailable"}; checkpoint_only=${requestScopeCorrelation.document_checkpoint_only_scope_count ?? "unavailable"}; counterpart_unresolved=${requestScopeCorrelation.counterpart_unresolved_scope_count ?? "unavailable"}; unlinked_plan_scopes=${requestScopeCorrelation.unlinked_operation_plan_scope_count ?? "unavailable"}; unlinked_checkpoints=${requestScopeCorrelation.unlinked_document_checkpoint_count ?? "unavailable"}`);
+    for (const scope of requestScopeCorrelation.entries) {
+      writeStdout(`request_scope=${scope.request_scope_digest} relationship=${scope.relationship} status=${scope.status} plan_scopes=${scope.operation_plan_scope_count} residual_plan_scopes=${scope.residual_operation_plan_scope_count} unobserved_plan_scopes=${scope.unobserved_operation_plan_scope_count} verified_checkpoints=${scope.verified_document_checkpoint_count} unresolved_checkpoints=${scope.unresolved_document_checkpoint_count}`);
     }
     writeStdout(`Document organization checkpoint residuals: ${report.document_organization_checkpoint_residual_count}`);
     for (const residual of report.update_residuals) {
