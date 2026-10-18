@@ -551,10 +551,16 @@ describe("Recovery mutation HDS L3 entry", () => {
     const historyFile = join(root, "complete-history.jsonl");
     const port = await reserveLoopbackPort();
     writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
-    const runtimeEnv = isolatedRuntimeEnvironment(root, envFile, historyFile, port);
+    const runtimeEnv = {
+      ...isolatedRuntimeEnvironment(root, envFile, historyFile, port),
+      BLUE_TANUKI_APPROVAL_MODE: "ask_every_time",
+    };
     const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
-    const { cleanPlanIdDigest, residualPlanIdDigest } = seedMixedOperationPlanRestoreState(planStatePath);
+    const { cleanPlanIdDigest, cleanRevisionDigest, residualPlanIdDigest, residualRevisionDigest } =
+      seedMixedOperationPlanRestoreState(planStatePath);
     const gateway = spawnGateway(runtimeEnv);
+    let cleanPlanReviewRequestId: string | undefined;
+    let residualPlanReviewRequestId: string | undefined;
 
     try {
       await waitForHealth(port, gateway);
@@ -652,9 +658,56 @@ describe("Recovery mutation HDS L3 entry", () => {
       expect(runtimePlans.find((plan) => plan.plan_id === cleanPlanIdDigest)?.recovery_hold_reason).toBeUndefined();
       expect(runtime.body.hds.operation_plans.used_for_authority).toBe(false);
       expect(runtime.body.hds.operation_plans.raw_payload_exposed).toBe(false);
+
+      const cleanReview = await requestJson(port, "/operators/developer/invoke", {
+        method: "POST",
+        token: inboundToken,
+        body: { user: "fixture-owner", content: `plan:review ${JSON.stringify({
+          plan_id: cleanPlanIdDigest,
+          revision_digest: cleanRevisionDigest,
+          step_id: "restore-clean-step",
+        })}` },
+      });
+      expect(cleanReview.status, `${JSON.stringify(cleanReview.body)}\n${gateway.output.join("")}`).toBe(202);
+      cleanPlanReviewRequestId = cleanReview.body.request_id as string;
+      await waitForHistoryDecision(port, gateway, cleanPlanReviewRequestId);
+      const cleanReviewRuntime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(cleanReviewRuntime.body.pending_approvals, gateway.output.join("")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ request_id: cleanPlanReviewRequestId, operation: "tool.file.search", approval_level: "L1_observe" }),
+      ]));
+
+      const residualReview = await requestJson(port, "/operators/developer/invoke", {
+        method: "POST",
+        token: inboundToken,
+        body: { user: "fixture-owner", content: `plan:review ${JSON.stringify({
+          plan_id: residualPlanIdDigest,
+          revision_digest: residualRevisionDigest,
+          step_id: "restore-residual-review-step",
+        })}` },
+      });
+      expect(residualReview.status, `${JSON.stringify(residualReview.body)}\n${gateway.output.join("")}`).toBe(202);
+      residualPlanReviewRequestId = residualReview.body.request_id as string;
+      await waitForHistoryDecision(port, gateway, residualPlanReviewRequestId);
+      const afterResidualReview = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(afterResidualReview.body.pending_approvals, gateway.output.join("")).toEqual([
+        expect.objectContaining({ request_id: cleanPlanReviewRequestId, operation: "tool.file.search", approval_level: "L1_observe" }),
+      ]);
+      expect(afterResidualReview.body.hds.operation_plans.plans).toEqual(expect.arrayContaining([
+        expect.objectContaining({ plan_id: cleanPlanIdDigest }),
+        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
+      ]));
     } finally {
       await stopChild(gateway.child);
     }
+    const reviewHistory = new CompleteHistoryStore({ filepath: historyFile });
+    expect(reviewHistory.replay({ kind: "hds_decision", request_id: cleanPlanReviewRequestId! })).toHaveLength(1);
+    expect(reviewHistory.replay({ kind: "execution_history", request_id: cleanPlanReviewRequestId! })).toHaveLength(0);
+    expect(reviewHistory.replay({ kind: "hds_decision", request_id: residualPlanReviewRequestId! })[0]?.payload).toMatchObject({
+      decision: "FAIL",
+      reason: "plan_control_denied:plan_recovery_residual_hold",
+      command: null,
+    });
+    expect(reviewHistory.replay({ kind: "execution_history", request_id: residualPlanReviewRequestId! })).toHaveLength(0);
   }, 30_000);
 
   it("binds plan restore to its exact L3 scope and rejects changed backup before state mutation", async () => {
@@ -902,14 +955,27 @@ function seedOperationPlanState(filepath: string): { plan_id_digest: string; rev
 
 function seedMixedOperationPlanRestoreState(filepath: string): {
   cleanPlanIdDigest: string;
+  cleanRevisionDigest: string;
   residualPlanIdDigest: string;
+  residualRevisionDigest: string;
 } {
   mkdirSync(dirname(filepath), { recursive: true });
   const cleanPlan = syntheticOperationPlan("restore-clean-request", "restore-clean-plan", "restore-clean-step");
   const residualPlan = syntheticOperationPlan("restore-residual-request", "restore-residual-plan", "restore-residual-step");
+  const residualStep = residualPlan.steps[0]!;
+  residualPlan.steps.push({
+    ...residualStep,
+    step_id: "restore-residual-review-step",
+    preparation: {
+      ...residualStep.preparation,
+      validation: residualStep.preparation.validation.map((check) => ({
+        ...check,
+        check_id: "restore-residual-review-step-check",
+      })),
+    },
+  });
   const cleanRevisionDigest = operationPlanDigest(cleanPlan);
   const residualRevisionDigest = operationPlanDigest(residualPlan);
-  const residualStep = residualPlan.steps[0]!;
   const { state: _state, result_digest: _result, ...residualStepDefinition } = residualStep;
   const residualBinding = {
     step_id: residualStep.step_id,
@@ -956,7 +1022,9 @@ function seedMixedOperationPlanRestoreState(filepath: string): {
   }
   return {
     cleanPlanIdDigest: operationPlanDigest(cleanPlan.plan_id),
+    cleanRevisionDigest,
     residualPlanIdDigest: operationPlanDigest(residualPlan.plan_id),
+    residualRevisionDigest,
   };
 }
 
