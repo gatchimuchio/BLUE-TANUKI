@@ -462,6 +462,12 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <div id="recovery-path-list" class="status-grid"></div>
           <pre id="recovery-json">not loaded</pre>
+          <div class="status-grid">
+            <button id="inspect-recovery-ledgers" type="button">回復台帳を読み取り検査</button>
+            <span id="recovery-inspection-status" class="badge warn">未確認</span>
+          </div>
+          <p class="muted">読み取り専用の診断です。権限・実行・復旧は行いません。再生checkpointはbackupではなく、独立backup復元点は未検査です。</p>
+          <pre id="recovery-inspection-json">未確認</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls.</p></div>
             <div class="screen-card"><h3>Secret-bearing</h3><p class="muted">Env files and env backups may contain credentials. Only paths and counts are displayed here.</p></div>

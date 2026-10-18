@@ -1320,6 +1320,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       },
       recovery: {
         getSnapshot: async () => buildRecoverySnapshot(process.env),
+        inspectLedgerState: async () => {
+          const { inspectGatewayRecoveryState } = await import("./recovery_inspection.js");
+          return inspectGatewayRecoveryState(process.env);
+        },
         createBackup: async () => createRecoveryBackup(process.env),
         restoreBackup: async (body: Record<string, unknown>) =>
           restoreRecoveryBackup(process.env, {

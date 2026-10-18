@@ -30,6 +30,8 @@
 
 198小単位（旧192＋Android/iOS各3）は実装索引であり、個別のQC/QAを198回行うための工程ではない。毎作業および各小単位の開始・切替・再開時に最新版の三点セットすべてと適用AGENTS.mdを読み直し、実際の仕事を先へつなぐBUILD_BATCHで施工・限定技術確認・Git保全を行う。
 
+2026-10-18のQEB-03-E03.03-OPERATOR-RECOVERY-INSPECTIONでは、既存Recovery面にmaintenance-token保護のread-only `GET /recovery/inspection`を追加し、J/M/Broker/OperationPlan診断の固定状態・残差件数をallowlistで表示した。権限・実行・復旧actionは行わず、再生checkpointをbackupと誤認させず、外部backup restore pointは`not_examined`のまま示す。Recovery surfaceへの診断投影が成立した部分接続であり、独立backupの確認、task別の復旧判断・restore・E03.03／QEB-03全体は`BUILD_GAP`。
+
 ## 公開可能なBUILD_BATCHの順序案
 
 1. QEB-00：QE規律、現行正本、Git復元、安全と公開制限の同期。

@@ -1492,6 +1492,45 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("recovery-json", compactJson(redactRuntimeValue(result)));
       }
 
+      function recoveryInspectionEnum(value, allowed) {
+        return allowed.indexOf(value) >= 0 ? value : "unknown";
+      }
+
+      function recoveryInspectionCount(value) {
+        return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+      }
+
+      function renderRecoveryInspection(report) {
+        const source = report && typeof report === "object" ? report : {};
+        const ledgers = source.ledgers && typeof source.ledgers === "object" ? source.ledgers : {};
+        const boundaryOk = source.used_for_authority === false && source.may_execute === false;
+        const status = boundaryOk
+          ? recoveryInspectionEnum(source.status, ["verified", "residuals_present"])
+          : "invalid_report";
+        const projection = {
+          mode: recoveryInspectionEnum(source.mode, ["read_only"]),
+          status,
+          ledgers: {
+            j: recoveryInspectionEnum(ledgers.j && ledgers.j.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
+            m: recoveryInspectionEnum(ledgers.m && ledgers.m.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
+            broker: recoveryInspectionEnum(ledgers.execution && ledgers.execution.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
+            operation_plans: recoveryInspectionEnum(ledgers.operation_plans && ledgers.operation_plans.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"])
+          },
+          replay_checkpoint: source.replay_checkpoint && source.replay_checkpoint.verified === true
+            ? "verified_replay_checkpoint_not_backup"
+            : "not_verified",
+          isolated_update_count: recoveryInspectionCount(source.isolated_update_count),
+          execution_residual_count: recoveryInspectionCount(source.execution_residual_count),
+          operation_plan_residual_count: recoveryInspectionCount(source.operation_plan_residual_count),
+          external_backup_restore_point: recoveryInspectionEnum(source.external_backup_restore_point, ["not_examined"]),
+          used_for_authority: false,
+          may_execute: false
+        };
+        setText("recovery-inspection-status", status);
+        byId("recovery-inspection-status").className = "badge " + (status === "verified" ? "review" : "warn");
+        setText("recovery-inspection-json", compactJson(projection));
+      }
+
       function settingsPayload() {
         const llm = {
           provider: byId("settings-provider").value,
@@ -1619,6 +1658,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("recovery-boundary-status", "error");
           byId("recovery-boundary-status").className = "badge bad";
           setText("recovery-json", error.message);
+        }
+      }
+
+      async function inspectRecoveryLedgers() {
+        const token = byId("recovery-token").value.trim();
+        state.recoveryToken = token;
+        sessionStorage.setItem("bt.recoveryToken", token);
+        try {
+          const report = await fetchJson("/recovery/inspection", token);
+          renderRecoveryInspection(report);
+        } catch {
+          setText("recovery-inspection-status", "取得失敗");
+          byId("recovery-inspection-status").className = "badge bad";
+          setText("recovery-inspection-json", "診断を取得できません。Gatewayの状態とmaintenance tokenを確認してください。");
         }
       }
 
@@ -2081,6 +2134,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
       });
       byId("load-recovery").addEventListener("click", loadRecovery);
+      byId("inspect-recovery-ledgers").addEventListener("click", function () {
+        inspectRecoveryLedgers().catch(function () {
+          setText("recovery-inspection-status", "取得失敗");
+          byId("recovery-inspection-status").className = "badge bad";
+          setText("recovery-inspection-json", "診断を取得できません。Gatewayの状態とmaintenance tokenを確認してください。");
+        });
+      });
       byId("create-recovery-backup").addEventListener("click", function () {
         createRecoveryBackup().catch(function (error) {
           setText("recovery-action-status", "error");

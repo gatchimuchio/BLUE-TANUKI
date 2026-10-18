@@ -379,6 +379,8 @@ export interface WebChatUpdateSurface {
 export interface WebChatRecoverySurface {
   /** Return recovery readiness and backup inventory metadata. */
   getSnapshot: () => Promise<unknown>;
+  /** Inspect persisted recovery ledgers without changing them or granting authority. */
+  inspectLedgerState?: () => Promise<unknown>;
   /** Create a local recovery backup pack. */
   createBackup?: () => Promise<unknown>;
   /** Restore from a selected or latest local recovery backup pack. */

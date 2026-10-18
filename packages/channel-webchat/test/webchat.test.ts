@@ -161,9 +161,9 @@ async function getRaw(
   port: number,
   path: string,
   headers: Record<string, string> = {},
-): Promise<{ status: number; text: string }> {
+): Promise<{ status: number; text: string; headers: Headers }> {
   const res = await fetch(`http://127.0.0.1:${port}${path}`, { headers });
-  return { status: res.status, text: await res.text() };
+  return { status: res.status, text: await res.text(), headers: res.headers };
 }
 
 async function getTicket(port: number, user: string): Promise<string> {
@@ -471,6 +471,10 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("recovery-token");
       expect(html).toContain("load-recovery");
       expect(html).toContain("/recovery/snapshot");
+      expect(html).toContain("inspect-recovery-ledgers");
+      expect(html).toContain("/recovery/inspection");
+      expect(html).toContain("recovery-inspection-json");
+      expect(html).toContain("独立backup復元点は未検査です");
       expect(html).toContain("bt.recoveryToken");
       expect(html).toContain("/settings/config");
       expect(html).toContain("/settings/llm/verify");
@@ -630,6 +634,7 @@ describe("Aotanu mascot runtime mapper", () => {
 describe("WebChatChannel — Recovery surface", () => {
   it("serves maintenance-token-gated recovery readiness and control actions with non-authority metadata", async () => {
     const actions: string[] = [];
+    let inspectionReads = 0;
     const ctx = await setup({
       recovery: {
         getSnapshot: async () => ({
@@ -683,6 +688,30 @@ describe("WebChatChannel — Recovery surface", () => {
           next_safe_action: "Review backup inventory.",
           evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
         }),
+        inspectLedgerState: async () => {
+          inspectionReads += 1;
+          return {
+            schema_version: 3,
+            surface: "recovery_inspection",
+            mode: "read_only",
+            status: "residuals_present",
+            ledgers: {
+              j: { status: "verified" },
+              m: { status: "unavailable" },
+              execution: { status: "verified" },
+              operation_plans: { status: "residuals_present" },
+            },
+            replay_checkpoint: null,
+            update_residuals: [],
+            isolated_update_count: 0,
+            execution_residual_count: 0,
+            operation_plan_residual_count: 1,
+            external_backup_restore_point: "not_examined",
+            used_for_authority: false,
+            may_execute: false,
+            next_safe_action: "Preserve the stores.",
+          };
+        },
         createBackup: async () => {
           actions.push("backup");
           return { action: "backup", used_for_authority: false };
@@ -712,6 +741,31 @@ describe("WebChatChannel — Recovery surface", () => {
       expect((await getRaw(ctx.port, "/recovery/snapshot", {
         authorization: `Bearer ${TOKEN}`,
       })).status).toBe(401);
+
+      expect((await getRaw(ctx.port, "/recovery/inspection")).status).toBe(401);
+      expect((await getRaw(ctx.port, "/recovery/inspection", {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+      const inspection = await getRaw(ctx.port, "/recovery/inspection", {
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
+      });
+      expect(inspection.status).toBe(200);
+      expect(inspection.headers.get("cache-control")).toBe("no-store");
+      expect(JSON.parse(inspection.text)).toMatchObject({
+        surface: "recovery_inspection",
+        mode: "read_only",
+        status: "residuals_present",
+        operation_plan_residual_count: 1,
+        external_backup_restore_point: "not_examined",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(inspectionReads).toBe(1);
+      expect(actions).toEqual([]);
+      expect((await postJson(ctx.port, "/recovery/inspection", {}, {
+        authorization: `Bearer ${MAINTENANCE_TOKEN}`,
+      })).status).toBe(405);
+      expect(inspectionReads).toBe(1);
 
       const ok = await getRaw(ctx.port, "/recovery/snapshot", {
         authorization: `Bearer ${MAINTENANCE_TOKEN}`,
