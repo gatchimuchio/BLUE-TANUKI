@@ -1493,7 +1493,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (packs.latest_backup_id) byId("recovery-backup-id").placeholder = packs.latest_backup_id;
         setText("recovery-restore-status", restore.execution_available ? "available" : "blocked");
         setText("recovery-factory-reset-status", restore.factory_reset_available ? "available" : "blocked");
-        setText("recovery-authority-status", authority.used_for_authority === true ? "unsafe" : "HDS gated");
+        setText("recovery-action-guard", restore.blocked_reason === "hds_final_review_not_connected"
+          ? "Restore and reset actions are blocked until HDS L3 final review is connected. Backup and read-only inspection remain available."
+          : "Recovery mutation status is unavailable.");
+        byId("restore-recovery-backup").disabled = restore.execution_available !== true;
+        byId("reset-recovery-provider").disabled = restore.provider_reset_available !== true;
+        byId("reset-recovery-connector").disabled = restore.connector_reset_available !== true;
+        byId("factory-reset-recovery").disabled = restore.factory_reset_available !== true;
+        setText("recovery-authority-status", authority.used_for_authority === true
+          ? "unsafe"
+          : restore.blocked_reason === "hds_final_review_not_connected" ? "HDS L3 required" : "HDS gated");
         setText("recovery-next-action", snapshot.next_safe_action || "review recovery readiness");
         setText("recovery-boundary-status", snapshot.mode || "read only");
         byId("recovery-boundary-status").className = "badge " + (snapshot.mode === "control_available" ? "review" : "good");

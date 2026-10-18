@@ -112,9 +112,10 @@ describe("buildRecoverySnapshot", () => {
         execution_available: false,
         backup_available: true,
         latest_backup_id: null,
-        factory_reset_available: true,
-        provider_reset_available: true,
-        connector_reset_available: true,
+        factory_reset_available: false,
+        provider_reset_available: false,
+        connector_reset_available: false,
+        blocked_reason: "hds_final_review_not_connected",
         destructive_repair_available: false,
         confirmation_required: true,
       });
@@ -198,6 +199,13 @@ describe("buildRecoverySnapshot", () => {
       expect(backup.backup_id).toBeTruthy();
       expect(JSON.stringify(backup)).not.toContain("provider-secret-value");
       expect(JSON.stringify(backup)).not.toContain("connector-secret-value");
+      expect((await buildRecoverySnapshot(env)).restore).toMatchObject({
+        execution_available: false,
+        factory_reset_available: false,
+        provider_reset_available: false,
+        connector_reset_available: false,
+        blocked_reason: "hds_final_review_not_connected",
+      });
 
       const inspection = await inspectLatestRecoveryBackup(env);
       expect(inspection).toMatchObject({

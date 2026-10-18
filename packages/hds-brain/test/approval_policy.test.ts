@@ -205,6 +205,10 @@ describe("approval policy", () => {
       "schedule.update",
       "schedule.delete",
       "schedule.resolve_event",
+      "recovery.restore",
+      "recovery.reset_provider",
+      "recovery.reset_connector",
+      "recovery.factory_reset",
       "browser.automation",
       "payment.charge",
     ] as const) {
@@ -233,6 +237,36 @@ describe("approval policy", () => {
     expect(r.final_review_required).toBe(true);
     expect(r.approval_level).toBe("L3_final_review");
     expect(r.decision).toBe("ask");
+  });
+
+  it("classifies recovery mutations as high-risk L3 operations even under full access", () => {
+    const grant = buildApprovalGrant({
+      mode: "full_access",
+      decision: "allow",
+      operation: "*",
+      target_scope: "*",
+      risk: "*",
+      actor: "*",
+      created_by: "alice",
+      expires_at: null,
+    });
+    for (const operation of [
+      "recovery.restore",
+      "recovery.reset_provider",
+      "recovery.reset_connector",
+      "recovery.factory_reset",
+    ] as const) {
+      const result = evaluateApproval(toolCommand(operation, { backup_id: "opaque" }, [`tool:${operation}`, "fs:write"]), [grant], {
+        actor: "alice",
+        now: 1,
+        default_mode: "full_access",
+      });
+      expect(result.context.operation).toBe(operation);
+      expect(result.risk).toBe("high");
+      expect(result.approval_level).toBe("L3_final_review");
+      expect(result.final_review_required).toBe(true);
+      expect(result.decision).toBe("ask");
+    }
   });
 
   it("maps host-scoped network capability into network tool operation", () => {

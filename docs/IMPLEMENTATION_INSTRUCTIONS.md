@@ -1,8 +1,33 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
+## 次のBUILD_BATCH
+
+前回のRecovery変更経路は、maintenance tokenと確認文字列だけでRestore／resetを呼べ、HDS L3最終審査を経由していなかった。直前バッチで公開Recovery HTTP経路をfail-closedにし、HDSの単一最終審査リストへRecovery操作を登録した。画面表示も実行不可へ揃えた。
+
+次consumerは `recovery.restore`／`recovery.reset_provider`／`recovery.reset_connector`／`recovery.factory_reset` のうち必要な操作を、HDSの目的採否・L3 owner承認・単回消費・hash-chain auditへ接続するGateway経路である。maintenance tokenはendpoint accessだけを認証する。UI確認、設定値、tool名、Approval grantをL3承認の代用にせず、経路が成立するまで公開Recovery mutationはblockedのまま保つ。canonical SQLite snapshotはstore間atomicity・仕事identity・独立restore pointが未成立であり、引き続きgeneric Restoreへ適用しない。
+
+## 直前のBUILD_BATCH実績
+
+`QEB-03-E03.03-RECOVERY-L3-MUTATION-BOUNDARY` は開始HEAD／`origin/main`=`9a9f9fe4b3aa6c76a512dba2eeca1e4e14eaf1df`、開始worktree cleanで開始した。三点正本rev2.3、適用AGENTS.md、作業標準、現行指示、E03.03、HDS Approval GateとRecovery consumerを再読した。編集前local recovery branch二世代とremote backup tag二世代は現世代=`9a9f9fe4b3aa6c76a512dba2eeca1e4e14eaf1df`、前世代=`09800b52c7fa21fb9e41050cb8621f78e00fed06`で一致した。
+
+Recovery Restore／provider reset／connector reset／factory resetのHTTP操作をHDS L3経路がない間はHTTP 403 `hds_final_review_not_connected`で拒否し、backup作成とread-only inspectionは維持した。Control Centerでは変更操作のボタンをdisabledにし、未接続理由を表示する。HDS `FINAL_REVIEW_OPERATION_LIST`に4操作を追加し、tool名をcapabilityより先に固定分類してfull-access grant下でもhigh-risk／L3／askとなるようにした。拒否は操作bodyを読む前に行い、回復handlerを呼ばない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway Recovery／WebChat／HDS Approval focused tests | PASS、3 files／110 tests。認証済みmutation routeの拒否、handler非呼出し、画面disabled状態、capability併記時のL3分類を確認。 |
+| HDS-BRAIN全test | PASS、28 files／298 tests。 |
+| `pnpm hds:standalone` | PASS。HDS standalone出力とRuntime Invariantsを確認。 |
+| `pnpm typecheck`→`pnpm build` | PASS。15 workspace projectsをbuild。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件。 |
+| 実restore／reset、credential/live/provider、全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+E03.03=`BUILD_GAP`。このバッチはHDS審査済みRecovery mutationを実装しておらず、blockを維持する。canonical archiveの適用、仕事identity、独立restore point、store間atomicity、実state復旧、C08.03 provider、P13公開・出荷GOは未成立／対象外。次は実HDS L3経路のproducer・owner resume consumer・audit接続を実装する。
+
+## 直前のBUILD_BATCH：ARCHIVED-PLAN-DEPENDENCY-CORRELATION
+
 2026-10-18。owner指定rev2.3三点正本（統合実装仕様書SHA-256=84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0、工程表SHA-256=7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77、Codex施工指示SHA-256=D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8）、適用AGENTS.md、作業標準要領、現物、active対象要求を再読した。今回開始HEAD／origin/main=09800b52c7fa21fb9e41050cb8621f78e00fed06、worktree clean。local recovery branchとlocal／remote backup tagは現世代=09800b52c7fa21fb9e41050cb8621f78e00fed06、前世代=286588ae050869528885accadbdcc77defadac0fで一致し、remote SHAを照合した。復旧ref移行状態=MIGRATION_COMPLETE。ownerの開発続行指示を維持し、C08.03実provider保留、別repo変更・実業務作用・公開行為・出荷判断は対象外とする。
 
-## 今回のBUILD_BATCH
+### 対象と境界
 
 QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-ARCHIVED-PLAN-DEPENDENCY-CORRELATION`。関係単位=E03.03「破損範囲の隔離復旧」。開始HEAD／`origin/main`=`09800b52c7fa21fb9e41050cb8621f78e00fed06`、worktree clean。編集前local recovery branch二世代とlocal／remote backup tag二世代は現世代=`09800b52c7fa21fb9e41050cb8621f78e00fed06`、前世代=`286588ae050869528885accadbdcc77defadac0f`で一致。
 
@@ -14,7 +39,7 @@ QE_STAGE=`QE_BUILD`。BUILD_BATCH=`QEB-03-E03.03-ARCHIVED-PLAN-DEPENDENCY-CORREL
 
 開始時の到達境界は直前バッチで接続したbackup内J plan inventoryまで。cross-store atomicity、独立restore point、仕事の復元可能性、復元・repair・resume・権限への接続はこのバッチで成立させない。C08.03保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
 
-## 今回の実績
+### 実装と検証
 
 既存のread-only recovery inspectorと`correlateOperationPlanBindings`／`buildRecoveryPlanDependencyScopes`を検証済みcanonical archiveに接続した。fixed archive pathからOperation Plan、J-control、M、Broker、Cronを読み、verified archiveのdigest／byte数をinspection後に再照合する。非verified storeはcorrelation inspectorへ渡さず、依存を未観測とする。Recovery Backup APIとControl Centerへplan digestの短縮形、残差／未観測の固定enum・依存カテゴリ・件数を接続し、1 planに残差と未観測の双方がある表示も維持した。不正境界・status・重複digest・カテゴリ・集約件数ではscopeを抑止する。
 

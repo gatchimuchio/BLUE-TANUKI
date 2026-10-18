@@ -30,6 +30,10 @@ export type ApprovalOperation =
   | "schedule.update"
   | "schedule.delete"
   | "schedule.resolve_event"
+  | "recovery.restore"
+  | "recovery.reset_provider"
+  | "recovery.reset_connector"
+  | "recovery.factory_reset"
   | "github.write"
   | "google.write"
   | "payment.charge"
@@ -126,6 +130,10 @@ export const FINAL_REVIEW_OPERATION_LIST = [
   "schedule.update",
   "schedule.delete",
   "schedule.resolve_event",
+  "recovery.restore",
+  "recovery.reset_provider",
+  "recovery.reset_connector",
+  "recovery.factory_reset",
   "browser.automation",
   "github.write",
   "google.write",
@@ -165,6 +173,12 @@ export function approvalContextFromCommand(command: ExecuteCommand, opts: { acto
 
 export function operationFromCommand(command: ExecuteCommand, caps: readonly ToolCapability[] = command.constraints?.allowed_capabilities ?? []): ApprovalOperation {
   if (command.type === "noop") return "noop";
+  if (command.type === "tool_call") {
+    if (command.payload.tool_name === "recovery.restore") return "recovery.restore";
+    if (command.payload.tool_name === "recovery.reset_provider") return "recovery.reset_provider";
+    if (command.payload.tool_name === "recovery.reset_connector") return "recovery.reset_connector";
+    if (command.payload.tool_name === "recovery.factory_reset") return "recovery.factory_reset";
+  }
   if (hasAny(caps, ["credential:read", "credential.access", "secrets:read"])) return "credential.access";
   if (hasAny(caps, ["payment:charge", "billing:write"])) return "payment.charge";
   if (hasAny(caps, ["schedule:read"])) return "schedule.list";
@@ -213,7 +227,7 @@ export function operationFromCommand(command: ExecuteCommand, caps: readonly Too
 export function riskForOperation(op: ApprovalOperation, caps: readonly ToolCapability[] = []): ApprovalRisk {
   if (op === "tool.call" || op === "unknown") return "high";
   if (["credential.access", "payment.charge"].includes(op)) return "high";
-  if (["tool.file.delete", "tool.shell.exec", "external.send", "settings.write", "schedule.create", "schedule.update", "schedule.delete", "schedule.resolve_event", "browser.automation", "github.write", "google.write"].includes(op)) return "high";
+  if (["tool.file.delete", "tool.shell.exec", "external.send", "settings.write", "schedule.create", "schedule.update", "schedule.delete", "schedule.resolve_event", "recovery.restore", "recovery.reset_provider", "recovery.reset_connector", "recovery.factory_reset", "browser.automation", "github.write", "google.write"].includes(op)) return "high";
   if (
     ["tool.file.write", "tool.network.http", "browser.snapshot", "channel.send"].includes(op) ||
     hasPrefix(caps, "network:")

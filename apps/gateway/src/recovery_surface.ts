@@ -74,6 +74,7 @@ export interface RecoverySnapshot {
     factory_reset_available: boolean;
     provider_reset_available: boolean;
     connector_reset_available: boolean;
+    blocked_reason: "hds_final_review_not_connected";
     destructive_repair_available: false;
     confirmation_required: true;
   };
@@ -1317,9 +1318,6 @@ export async function buildRecoverySnapshot(env: NodeJS.ProcessEnv = process.env
     (env.BLUE_TANUKI_FILE_ROOT ? path.join(env.BLUE_TANUKI_FILE_ROOT, "schedules") : undefined);
   const backups = await recoveryBackupInventory(env);
   const envFile = await envBackups(env.BLUE_TANUKI_ENV_FILE);
-  const envConfigured = Boolean(env.BLUE_TANUKI_ENV_FILE);
-  const canWriteEnv = envConfigured;
-
   return {
     schema_version: 1,
     surface: "recovery",
@@ -1339,20 +1337,18 @@ export async function buildRecoverySnapshot(env: NodeJS.ProcessEnv = process.env
       log_dir: await pathStatus(env.BLUE_TANUKI_LOG_DIR, true),
     },
     restore: {
-      execution_available: backups.backup_count > 0,
+      execution_available: false,
       backup_available: true,
       latest_backup_id: backups.latest_backup_id,
-      factory_reset_available: canWriteEnv,
-      provider_reset_available: canWriteEnv,
-      connector_reset_available: canWriteEnv,
+      factory_reset_available: false,
+      provider_reset_available: false,
+      connector_reset_available: false,
+      blocked_reason: "hds_final_review_not_connected",
       destructive_repair_available: false,
       confirmation_required: true,
     },
     authority_boundary: AUTHORITY_BOUNDARY,
-    next_safe_action:
-      backups.backup_count > 0
-        ? "Use Backup Now before reset, or Restore Latest after confirming the selected recovery pack."
-        : "Create a recovery backup before reset or restore operations.",
+    next_safe_action: "Recovery restore and reset actions are blocked until they use the HDS L3 final-review path. Backup and read-only inspection remain available.",
     evidence_source: ["CONFIG", "LIVE_RUNTIME", "EXTERNAL_EVIDENCE"],
   };
 }

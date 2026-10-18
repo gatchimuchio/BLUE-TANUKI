@@ -129,7 +129,7 @@ function findAotanuAssetRoot(): string {
  *   POST /operators/daily/invoke body:{user,content} auth:Bearer inbound-token
  *   GET  /operators/developer auth:Bearer inbound-token
  *   POST /operators/developer/invoke body:{user,content} auth:Bearer inbound-token
- *   GET/POST /update/* and /recovery/* auth:Bearer maintenance-token
+ *   GET/POST /update/* and /recovery/* auth:Bearer maintenance-token; recovery mutations remain blocked until HDS L3 review is wired
  *   GET  /ws         query:?ticket=...
  *   GET  /healthz    no auth, not rate-limited
  *
@@ -1595,6 +1595,22 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     if (req.method !== "POST") {
       res.writeHead(405, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    if ([
+      "/recovery/restore",
+      "/recovery/reset-provider",
+      "/recovery/reset-connector",
+      "/recovery/factory-reset",
+    ].includes(route)) {
+      res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({
+        error: "hds_final_review_not_connected",
+        status: "blocked_authority",
+        approval_level_required: "L3_final_review",
+        executed: false,
+        used_for_authority: false,
+      }));
       return;
     }
     try {
