@@ -3,6 +3,12 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
+import {
+  captureCanonicalStateSnapshots,
+  inspectCanonicalStateSnapshots,
+  type CanonicalStateSnapshotInspection,
+  type CanonicalStateSnapshotManifest,
+} from "./canonical_state_backup.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
 export type RecoveryAction =
@@ -104,7 +110,14 @@ export interface RecoveryBackupInspection {
   configured_required_item_count: number | null;
   copied_required_item_count: number | null;
   missing_required_item_count: number | null;
-  canonical_state_coverage: "not_included";
+  canonical_state_coverage: "not_included" | "unknown" | CanonicalStateSnapshotInspection["coverage"];
+  canonical_state_expected_store_count: number | null;
+  canonical_state_snapshot_count: number | null;
+  canonical_state_verified_store_count: number | null;
+  canonical_state_missing_store_count: number | null;
+  canonical_state_unverified_store_count: number | null;
+  canonical_state_store_consistency: CanonicalStateSnapshotInspection["store_consistency"] | "not_included";
+  canonical_state_cross_store_atomic: false | null;
   used_for_authority: false;
   may_execute: false;
 }
@@ -157,6 +170,7 @@ interface RecoveryBackupManifest {
   manifest_path: string;
   secret_material: true;
   items: RecoveryBackupManifestItem[];
+  canonical_state_snapshot?: CanonicalStateSnapshotManifest;
   authority_boundary: RecoveryAuthorityBoundary;
   used_for_authority: false;
   hds_brain_remains_authority: true;
@@ -667,6 +681,11 @@ async function createBackupManifest(
     });
   }
 
+  const canonicalStateSnapshot = await captureCanonicalStateSnapshots(
+    env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+    packDir,
+  );
+
   const manifest: RecoveryBackupManifest = {
     schema_version: 1,
     surface: "recovery",
@@ -677,6 +696,7 @@ async function createBackupManifest(
     manifest_path: manifestPath,
     secret_material: true,
     items,
+    canonical_state_snapshot: canonicalStateSnapshot,
     authority_boundary: AUTHORITY_BOUNDARY,
     used_for_authority: false,
     hds_brain_remains_authority: true,
@@ -880,6 +900,13 @@ export async function inspectLatestRecoveryBackup(
     surface: "recovery_backup_inspection" as const,
     mode: "read_only" as const,
     canonical_state_coverage: "not_included" as const,
+    canonical_state_expected_store_count: null,
+    canonical_state_snapshot_count: null,
+    canonical_state_verified_store_count: null,
+    canonical_state_missing_store_count: null,
+    canonical_state_unverified_store_count: null,
+    canonical_state_store_consistency: "not_included" as const,
+    canonical_state_cross_store_atomic: null,
     used_for_authority: false as const,
     may_execute: false as const,
   };
@@ -908,6 +935,9 @@ export async function inspectLatestRecoveryBackup(
       throw new Error("invalid_backup_manifest_boundary");
     }
     await preflightRestoreManifest(env, manifest);
+    const canonicalState = manifest.canonical_state_snapshot
+      ? await inspectCanonicalStateSnapshots(path.dirname(manifest.manifest_path), manifest.canonical_state_snapshot)
+      : null;
     const configuredRequiredItems = manifest.items.filter((item) => item.backup_required && item.source_path !== null);
     const copiedRequiredItems = configuredRequiredItems.filter((item) => item.copied);
     const missingRequiredItemCount = configuredRequiredItems.length - copiedRequiredItems.length;
@@ -921,6 +951,14 @@ export async function inspectLatestRecoveryBackup(
       configured_required_item_count: configuredRequiredItems.length,
       copied_required_item_count: copiedRequiredItems.length,
       missing_required_item_count: missingRequiredItemCount,
+      canonical_state_coverage: canonicalState?.coverage ?? "not_included",
+      canonical_state_expected_store_count: canonicalState?.expected_store_count ?? null,
+      canonical_state_snapshot_count: canonicalState?.captured_store_count ?? null,
+      canonical_state_verified_store_count: canonicalState?.verified_store_count ?? null,
+      canonical_state_missing_store_count: canonicalState?.missing_store_count ?? null,
+      canonical_state_unverified_store_count: canonicalState?.unverified_store_count ?? null,
+      canonical_state_store_consistency: canonicalState?.store_consistency ?? "not_included",
+      canonical_state_cross_store_atomic: canonicalState?.cross_store_atomic ?? null,
     };
   } catch {
     return {
@@ -931,6 +969,7 @@ export async function inspectLatestRecoveryBackup(
       configured_required_item_count: null,
       copied_required_item_count: null,
       missing_required_item_count: null,
+      canonical_state_coverage: "unknown",
     };
   }
 }
@@ -1092,7 +1131,7 @@ export async function createRecoveryBackup(
   return actionResult("backup", {
     backup_id: manifest.backup_id,
     backup_manifest_path: manifest.manifest_path,
-    next_safe_action: "Backup completed. Keep the recovery root private because copied env material may contain secrets.",
+    next_safe_action: "Inspect the pack to verify generic files and each canonical SQLite snapshot. Database snapshots are not atomically aligned across stores and are not applied by generic Restore; keep the recovery root private.",
   });
 }
 
@@ -1113,7 +1152,7 @@ export async function restoreRecoveryBackup(
     removed_paths_count: result.removed,
     pre_action_backup_id: preRestore.backup_id,
     pre_action_backup_manifest_path: preRestore.manifest_path,
-    next_safe_action: "Restart BLUE-TANUKI and run doctor/audit verification after restore.",
+    next_safe_action: "Restart BLUE-TANUKI and run doctor/audit verification after restore. Generic Restore does not apply the canonical SQLite snapshots; do not treat the per-store snapshot set as a job-level restore point.",
   });
 }
 

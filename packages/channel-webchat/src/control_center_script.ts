@@ -1683,29 +1683,52 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const boundaryOk = source.schema_version === 1 &&
           source.surface === "recovery_backup_inspection" &&
           source.mode === "read_only" &&
-          source.canonical_state_coverage === "not_included" &&
           source.used_for_authority === false &&
           source.may_execute === false;
         const rawStatus = recoveryInspectionEnum(source.status, ["verified", "not_found", "invalid"]);
         const status = boundaryOk ? rawStatus : "invalid_report";
         const digest = source.backup_id_digest === null ? null : recoveryInspectionDigest(source.backup_id_digest);
         const coverage = recoveryInspectionEnum(source.coverage, ["complete_for_configured_targets", "partial", "none_configured", "unknown"]);
+        const canonicalCoverage = recoveryInspectionEnum(source.canonical_state_coverage,
+          ["not_included", "complete", "partial", "none_present", "unknown"]);
         const count = function (value) {
           return Number.isSafeInteger(value) && value >= 0 ? value : null;
         };
         let configured = count(source.configured_required_item_count);
         let copied = count(source.copied_required_item_count);
         let missing = count(source.missing_required_item_count);
+        let canonicalExpected = count(source.canonical_state_expected_store_count);
+        let canonicalCaptured = count(source.canonical_state_snapshot_count);
+        let canonicalVerified = count(source.canonical_state_verified_store_count);
+        let canonicalMissing = count(source.canonical_state_missing_store_count);
+        let canonicalUnverified = count(source.canonical_state_unverified_store_count);
+        let canonicalConsistency = recoveryInspectionEnum(source.canonical_state_store_consistency,
+          ["independent_sqlite_online_snapshots", "not_included"]);
+        let canonicalCrossStoreAtomic = source.canonical_state_cross_store_atomic === null ? null : source.canonical_state_cross_store_atomic;
         let safeStatus = status;
         let safeCoverage = coverage;
         if (status === "verified" && (!digest || configured === null || copied === null || missing === null ||
             copied > configured || missing !== configured - copied || coverage === "unknown" ||
             (configured === 0 && coverage !== "none_configured") ||
             (configured > 0 && missing === 0 && coverage !== "complete_for_configured_targets") ||
-            (missing > 0 && coverage !== "partial"))) {
+            (missing > 0 && coverage !== "partial") || canonicalCoverage === "unknown")) {
           safeStatus = "invalid_report";
         }
-        if (status === "not_found" && (digest !== null || configured !== null || copied !== null || missing !== null)) {
+        const canonicalNotIncluded = canonicalCoverage === "not_included" && canonicalExpected === null &&
+          canonicalCaptured === null && canonicalVerified === null && canonicalMissing === null &&
+          canonicalUnverified === null && canonicalConsistency === "not_included" && canonicalCrossStoreAtomic === null;
+        const canonicalIncluded = canonicalCoverage !== "not_included" && canonicalCoverage !== "unknown" &&
+          canonicalExpected === 5 && canonicalCaptured !== null && canonicalVerified !== null &&
+          canonicalMissing !== null && canonicalUnverified !== null && canonicalConsistency === "independent_sqlite_online_snapshots" &&
+          canonicalCrossStoreAtomic === false && canonicalCaptured <= canonicalExpected &&
+          canonicalVerified <= canonicalCaptured && canonicalMissing <= canonicalExpected &&
+          canonicalUnverified <= canonicalExpected && canonicalVerified + canonicalMissing + canonicalUnverified === canonicalExpected &&
+          ((canonicalCoverage === "complete" && canonicalVerified === canonicalExpected && canonicalCaptured === canonicalExpected &&
+            canonicalMissing === 0 && canonicalUnverified === 0) ||
+           (canonicalCoverage === "none_present" && canonicalCaptured === 0 && canonicalVerified === 0 &&
+            canonicalMissing === canonicalExpected && canonicalUnverified === 0) || canonicalCoverage === "partial");
+        if (status === "verified" && !canonicalNotIncluded && !canonicalIncluded) safeStatus = "invalid_report";
+        if (status === "not_found" && (digest !== null || configured !== null || copied !== null || missing !== null || !canonicalNotIncluded)) {
           safeStatus = "invalid_report";
         }
         if (safeStatus !== "verified") {
@@ -1713,6 +1736,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           copied = null;
           missing = null;
           safeCoverage = "unknown";
+          canonicalExpected = null;
+          canonicalCaptured = null;
+          canonicalVerified = null;
+          canonicalMissing = null;
+          canonicalUnverified = null;
+          canonicalConsistency = "not_included";
+          canonicalCrossStoreAtomic = null;
         }
         const projection = {
           mode: boundaryOk ? "read_only" : "invalid_report",
@@ -1722,7 +1752,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           configured_required_item_count: configured,
           copied_required_item_count: copied,
           missing_required_item_count: missing,
-          canonical_state_coverage: "not_included",
+          canonical_state_coverage: safeStatus === "verified" ? canonicalCoverage : safeStatus === "not_found" ? "not_included" : "unknown",
+          canonical_state_expected_store_count: canonicalExpected,
+          canonical_state_snapshot_count: canonicalCaptured,
+          canonical_state_verified_store_count: canonicalVerified,
+          canonical_state_missing_store_count: canonicalMissing,
+          canonical_state_unverified_store_count: canonicalUnverified,
+          canonical_state_store_consistency: canonicalConsistency,
+          canonical_state_cross_store_atomic: canonicalCrossStoreAtomic,
           used_for_authority: false,
           may_execute: false
         };

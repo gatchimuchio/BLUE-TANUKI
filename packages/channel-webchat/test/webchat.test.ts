@@ -482,7 +482,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("memory_correlation");
       expect(html).toContain("update_residuals");
       expect(html).toContain("仕事ごとの参照はdigestと固定状態だけ");
-      expect(html).toContain("独立backup復元点は未検査です");
+      expect(html).toContain("仕事単位の復旧点は確立しません");
       expect(html).toContain("inspect-recovery-backup");
       expect(html).toContain("/recovery/backup-inspection");
       expect(html).toContain("recovery-backup-inspection-json");
@@ -781,7 +781,14 @@ describe("WebChatChannel — Recovery surface", () => {
             configured_required_item_count: 4,
             copied_required_item_count: 4,
             missing_required_item_count: 0,
-            canonical_state_coverage: "not_included",
+            canonical_state_coverage: "complete",
+            canonical_state_expected_store_count: 5,
+            canonical_state_snapshot_count: 5,
+            canonical_state_verified_store_count: 5,
+            canonical_state_missing_store_count: 0,
+            canonical_state_unverified_store_count: 0,
+            canonical_state_store_consistency: "independent_sqlite_online_snapshots",
+            canonical_state_cross_store_atomic: false,
             used_for_authority: false,
             may_execute: false,
           };
@@ -864,7 +871,14 @@ describe("WebChatChannel — Recovery surface", () => {
         mode: "read_only",
         status: "verified",
         coverage: "complete_for_configured_targets",
-        canonical_state_coverage: "not_included",
+        canonical_state_coverage: "complete",
+        canonical_state_expected_store_count: 5,
+        canonical_state_snapshot_count: 5,
+        canonical_state_verified_store_count: 5,
+        canonical_state_missing_store_count: 0,
+        canonical_state_unverified_store_count: 0,
+        canonical_state_store_consistency: "independent_sqlite_online_snapshots",
+        canonical_state_cross_store_atomic: false,
         used_for_authority: false,
         may_execute: false,
       });

@@ -466,13 +466,13 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="inspect-recovery-ledgers" type="button">回復台帳を読み取り検査</button>
             <span id="recovery-inspection-status" class="badge warn">未確認</span>
           </div>
-          <p class="muted">読み取り専用の診断です。権限・実行・復旧は行いません。仕事ごとの参照はdigestと固定状態だけを表示し、台帳別の検証済みprefix／未検証suffixと最初の未検証位置を示します。再生checkpointはbackupではなく、独立backup復元点は未検査です。</p>
+          <p class="muted">読み取り専用の診断です。権限・実行・復旧は行いません。仕事ごとの参照はdigestと固定状態だけを表示し、台帳別の検証済みprefix／未検証suffixと最初の未検証位置を示します。次のbackup pack検査でstore別SQLite snapshotを確認できますが、DB間の原子的同時点や仕事単位の復旧点は確立しません。</p>
           <pre id="recovery-inspection-json">未確認</pre>
           <div class="status-grid">
             <button id="inspect-recovery-backup" type="button">最新backup packの整合性を読み取り検査</button>
             <span id="recovery-backup-inspection-status" class="badge warn">未確認</span>
           </div>
-          <p class="muted">manifestとpack内の保存物だけを検査します。HDS／Broker等の正本状態は含まず、独立復元点・復旧許可・完全なバックアップを意味しません。</p>
+          <p class="muted">manifest、pack内保存物、store別SQLite snapshotのdigestと整合性を読み取り検査します。snapshot間の原子的同時点は保証せず、Restore経路でcanonical stateを適用しません。復旧許可や仕事単位の復旧点を意味しません。</p>
           <pre id="recovery-backup-inspection-json">未確認</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Control Path</h3><p class="muted">Backup, restore, and reset operations are token-gated local recovery controls.</p></div>

@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import * as path from "node:path";
+import { CANONICAL_STATE_STORE_PATHS, type CanonicalStateStoreKey } from "./canonical_state_backup.js";
 import {
   inspectJControlRecoveryLedger,
   inspectMemoryRecoveryLedger,
@@ -494,15 +495,16 @@ function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths |
     const privateRoot = path.join(stateRoot, "private-state");
     const privateStat = lstatSync(privateRoot);
     if (privateStat.isSymbolicLink() || !privateStat.isDirectory()) return null;
-    const resultDirectory = path.join(privateRoot, "result-memory");
-    const executionDirectory = path.join(privateRoot, "execution-intents");
-    const jPath = path.join(resultDirectory, "j-control.sqlite");
-    const mPath = path.join(resultDirectory, "m-state.sqlite");
-    const executionPath = path.join(executionDirectory, "executor.sqlite");
-    const operationPlansDirectory = path.join(privateRoot, "operation-plans");
-    const operationPlansPath = path.join(operationPlansDirectory, "j-state.sqlite");
-    const cronEventsDirectory = path.join(privateRoot, "cron-events");
-    const cronEventsPath = path.join(cronEventsDirectory, "cron-events.sqlite");
+    const canonicalPath = (key: CanonicalStateStoreKey): string => {
+      const store = CANONICAL_STATE_STORE_PATHS.find((item) => item.key === key);
+      if (!store) throw new Error("canonical_state_store_path_missing");
+      return path.join(privateRoot, store.relative_path);
+    };
+    const jPath = canonicalPath("j_control");
+    const mPath = canonicalPath("m_state");
+    const executionPath = canonicalPath("broker");
+    const operationPlansPath = canonicalPath("operation_plans");
+    const cronEventsPath = canonicalPath("cron_events");
     const safeDatabasePath = (directory: string, databasePath: string): string | null => {
       try {
         const directoryStat = lstatSync(directory);
@@ -517,11 +519,11 @@ function hasSafeExistingStatePaths(env: NodeJS.ProcessEnv): StateDatabasePaths |
     };
     return {
       privateRoot,
-      jPath: safeDatabasePath(resultDirectory, jPath),
-      mPath: safeDatabasePath(resultDirectory, mPath),
-      executionPath: safeDatabasePath(executionDirectory, executionPath),
-      operationPlansPath: safeDatabasePath(operationPlansDirectory, operationPlansPath),
-      cronEventsPath: safeDatabasePath(cronEventsDirectory, cronEventsPath),
+      jPath: safeDatabasePath(path.dirname(jPath), jPath),
+      mPath: safeDatabasePath(path.dirname(mPath), mPath),
+      executionPath: safeDatabasePath(path.dirname(executionPath), executionPath),
+      operationPlansPath: safeDatabasePath(path.dirname(operationPlansPath), operationPlansPath),
+      cronEventsPath: safeDatabasePath(path.dirname(cronEventsPath), cronEventsPath),
     };
   } catch {
     return null;
