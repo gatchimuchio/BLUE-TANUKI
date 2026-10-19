@@ -121,11 +121,11 @@ export interface WebChatApprovalQueueItem {
 }
 
 export interface WebChatGmailApprovalContentReview {
-  kind?: "gmail_message_send";
+  kind?: "gmail_write_content";
   command_id: string;
   command_digest: string;
   request_payload_digest: string;
-  operation: "gmail.write.message.send";
+  operation: "gmail.write.draft.create" | "gmail.write.message.send";
   to: string;
   cc?: string;
   bcc?: string;

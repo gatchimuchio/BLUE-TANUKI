@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
-/** 実行権限を与えない、正確なGmail送信要求の観測。 */
+/** 実行権限を与えない、Gmail draft.create / message.send要求のtarget・payload観測。 */
 export const GmailWriteTargetVersionObservationSchema = z.object({
   schema_version: z.literal("blue-tanuki.gmail-write-target-version.v1"),
   target_identity_digest: DigestSchema,

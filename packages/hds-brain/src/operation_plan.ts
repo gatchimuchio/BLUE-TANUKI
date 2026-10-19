@@ -381,7 +381,7 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
   }
   if (step.operation !== "gmail.write" || step.adapter !== "external_api" ||
       step.target.kind !== "external_service" || step.target.id !== "gmail" || !parameters ||
-      parameters.operation !== "message.send" || typeof parameters.to !== "string" ||
+      (parameters.operation !== "message.send" && parameters.operation !== "draft.create") || typeof parameters.to !== "string" ||
       parameters.to.length > 320 || !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$/.test(parameters.to) ||
       typeof parameters.subject !== "string" || parameters.subject.trim().length === 0 ||
       parameters.subject.length > 200 || /[\r\n]/.test(parameters.subject) ||

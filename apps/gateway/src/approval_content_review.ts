@@ -5,7 +5,7 @@ import type {
   WebChatApprovalContentReviewValidation,
 } from "@blue-tanuki/channel-webchat";
 
-const GMAIL_SEND_ARGUMENTS = new Set([
+const GMAIL_WRITE_ARGUMENTS = new Set([
   "operation",
   "to",
   "cc",
@@ -17,27 +17,29 @@ const GMAIL_SEND_ARGUMENTS = new Set([
   "max_bytes",
 ]);
 
-export function isGmailMessageSendCommand(command: ExecuteCommand): boolean {
-  return command.type === "tool_call" &&
-    command.payload.tool_name === "gmail.write" &&
-    typeof command.payload.arguments.operation === "string" &&
-    command.payload.arguments.operation.trim().toLowerCase() === "message.send";
+export function isGmailWriteContentReviewCommand(command: ExecuteCommand): boolean {
+  if (command.type !== "tool_call" || command.payload.tool_name !== "gmail.write" ||
+      typeof command.payload.arguments.operation !== "string") return false;
+  const operation = command.payload.arguments.operation.trim().toLowerCase();
+  return operation === "draft.create" || operation === "message.send";
 }
 
-/** Build a private, explicit-review projection of the exact effective Gmail request. */
-export function projectGmailMessageSendContentReview(
+/** Build a private, explicit-review projection of the exact effective Gmail write request. */
+export function projectGmailWriteContentReview(
   command: ExecuteCommand,
   commandDigest: string,
 ): WebChatApprovalContentReview | null {
-  if (command.type !== "tool_call" || !isGmailMessageSendCommand(command) ||
+  if (command.type !== "tool_call" || !isGmailWriteContentReviewCommand(command) ||
       !/^[a-f0-9]{64}$/.test(commandDigest)) return null;
   const args = command.payload.arguments;
-  if (Object.keys(args).some((key) => !GMAIL_SEND_ARGUMENTS.has(key))) return null;
+  if (Object.keys(args).some((key) => !GMAIL_WRITE_ARGUMENTS.has(key))) return null;
   if (args.max_bytes !== undefined &&
       (typeof args.max_bytes !== "number" || !Number.isInteger(args.max_bytes) || args.max_bytes <= 0)) {
     return null;
   }
 
+  if (typeof args.operation !== "string") return null;
+  const operation = args.operation.trim().toLowerCase() as "draft.create" | "message.send";
   const to = nonEmptyString(args.to);
   const subject = nonEmptyString(args.subject);
   if (!to || !subject) return null;
@@ -54,7 +56,7 @@ export function projectGmailMessageSendContentReview(
       command_id: command.id,
       command_digest: commandDigest,
       request_payload_digest: gmailWriteRequestPayloadDigest(args),
-      operation: "gmail.write.message.send",
+      operation: operation === "draft.create" ? "gmail.write.draft.create" : "gmail.write.message.send",
       to,
       ...(cc ? { cc } : {}),
       ...(bcc ? { bcc } : {}),
@@ -68,16 +70,16 @@ export function projectGmailMessageSendContentReview(
   }
 }
 
-export function validateGmailMessageSendContentReview(
+export function validateGmailWriteContentReview(
   command: ExecuteCommand,
   commandDigest: string,
   current: boolean,
   revealedDigest: string | undefined,
   submittedDigest: string | undefined,
 ): WebChatApprovalContentReviewValidation {
-  if (!isGmailMessageSendCommand(command)) return "not_required";
+  if (!isGmailWriteContentReviewCommand(command)) return "not_required";
   if (!current || !/^[a-f0-9]{64}$/.test(commandDigest)) return "stale";
-  if (!projectGmailMessageSendContentReview(command, commandDigest)) return "unavailable";
+  if (!projectGmailWriteContentReview(command, commandDigest)) return "unavailable";
   if (!revealedDigest || !submittedDigest) return "required";
   return revealedDigest === commandDigest && submittedDigest === commandDigest
     ? "valid"

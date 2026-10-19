@@ -377,20 +377,27 @@ export async function invokeGmailWrite(
   return mutationResult("gmail.write", "gmail", operation, target, response);
 }
 
-/** Return the exact bounded message-send body digest without reading credentials or sending it. */
+/** Gmailのdraft.create / message.sendで送る正確なrequest body digest。資格情報の読取り・送信は行わない。 */
 export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): string {
+  const operation = operationArg(args, ["draft.create", "message.send"]);
   const request = gmailWriteRequest(args);
-  if (request.path !== "/gmail/v1/users/me/messages/send") throw new Error("gmail_receipt_reconciliation_operation_unsupported");
+  if ((operation === "draft.create" && request.path !== "/gmail/v1/users/me/drafts") ||
+      (operation === "message.send" && request.path !== "/gmail/v1/users/me/messages/send")) {
+    throw new Error("gmail_target_version_operation_unsupported");
+  }
   return createHash("sha256").update(request.body, "utf8").digest("hex");
 }
 
-/** recipient文字列そのものを観測へ保持せず、宛先同一性のdigestを作る。 */
+/** 送信先文字列を観測へ保持せず、operationと宛先一式の同一性digestを作る。 */
 export function gmailWriteTargetIdentityDigest(args: Record<string, unknown>): string {
-  const operation = operationArg(args, ["message.send"]);
-  if (operation !== "message.send") throw new Error("gmail_target_version_operation_unsupported");
-  const recipient = stringArg(args, "to")!;
-  return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v1",
-    service: "gmail", operation, recipient });
+  const operation = operationArg(args, ["draft.create", "message.send"]);
+  const recipients: Record<string, string> = { to: stringArg(args, "to")! };
+  for (const name of ["cc", "bcc"] as const) {
+    const recipient = stringArg(args, name, false);
+    if (recipient) recipients[name] = recipient;
+  }
+  return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v2",
+    service: "gmail", operation, recipients });
 }
 
 function inspectGmailWriteTargetVersion(args: Record<string, unknown>, options: {
@@ -615,7 +622,7 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
           typeof context.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(context.command_digest)) {
         throw new Error("gmail.write requires an approved Executor identity; mutation_sent=false");
       }
-      if (operationArg(args, ["draft.create", "message.send", "draft.send"]) === "message.send") {
+      if (["draft.create", "message.send"].includes(operationArg(args, ["draft.create", "message.send", "draft.send"]))) {
         assertGmailWriteTargetVersion(args, context.target_version_observation);
       }
       return await invokeGmailWrite(args, { ...options, idempotency_key: context.idempotency_key,

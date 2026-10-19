@@ -3312,7 +3312,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "task・目的の内容を再確認";
           return;
         }
-        if (review.command_id !== commandId || review.operation !== "gmail.write.message.send" ||
+        if (review.command_id !== commandId ||
+            (review.operation !== "gmail.write.message.send" && review.operation !== "gmail.write.draft.create") ||
             review.used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review.command_digest || "") ||
             !/^[a-f0-9]{64}$/.test(review.request_payload_digest || "") ||
             typeof review.to !== "string" || typeof review.subject !== "string" ||
@@ -3321,7 +3322,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         view.replaceChildren();
         const heading = document.createElement("strong");
-        heading.textContent = "Exact outgoing message";
+        heading.textContent = review.operation === "gmail.write.draft.create"
+          ? "Exact Gmail draft to be created (not sent)"
+          : "Exact outgoing message";
         view.appendChild(heading);
         [["To", review.to], ["Cc", review.cc], ["Bcc", review.bcc], ["From", review.from], ["Subject", review.subject]]
           .forEach(function (field) {

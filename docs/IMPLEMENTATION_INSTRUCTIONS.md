@@ -2,7 +2,29 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-GMAIL-EXECUTOR-STUB-DISPATCH`
+### 最新BUILD_BATCH：`QEB-01-D02.01-GMAIL-DRAFT-CREATE-TARGET-BINDING`
+
+開始HEAD／`origin/main`=`27deeba6cc5f1299bb334d5d8448c41bbf3396dc`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02／F02.02、D4-Pocket現行`AGENTS.md` §3.1を再読した。D4のActions条件は手動`workflow_dispatch`に限り、localにないOS build・artifact生成・localで不足する重い検査の補助に限る。今回の検証はWindows localで実施できたため未使用。
+
+`gmail.write draft.create`を既存のtarget observation経路へ接続した。観測はoperationとto／cc／bccの宛先同一性digest、production serializerが生成するdraft作成HTTP body digest、HDS command digest、J所有Operation Plan source binding digestを保持し、生の宛先・本文・credentialは保持しない。観測は`used_for_authority=false`／`may_execute=false`。HDSはcurrent command／宛先／Operation Plan sourceと観測全体digestをsealへ結び、Executorはapproval ticket発行時にcommand・target identity・request body digestを再計算する。toolはcredential参照・HTTP requestより前にtarget／payloadを再照合し、欠落・変更を拒否する。`draft.create`はOperation Planの狭いtarget候補にも追加した。
+
+差分監査でOperation Planの`draft.create`がL3 approvalへ到達しても、既存WebChat内容previewが`message.send`専用であることを検出した。draft.createも同じresume-authenticated no-store明示previewへ接続し、recipient／subject／bodyとproduction serializer payload digestを表示する。画面には「作成する下書き（送信されない）」と明示し、表示成功後の同一command digestが一致しなければ一回承認tokenを消費できない。通常approval queueには本文を出さない。`draft.send`は引き続きpreview／target resolver対象外。
+
+Operation Plan候補は単一`to`・`subject`・`body_text`に限定され、`cc`／`bcc`／`from`／credentialを含めない。既存`draft.send`の可変本文・provider versionの読取照合は別未接続であり、この経路へ含めていない。Gateway側のplan→HDS binding確認とCore側のExecutor→stub dispatchは別testであるため、両者を一つのGateway実行で通した証拠ではない。`draft.create` target observation／Executor consumerは`WIRED`、D02.01／D02.02全体は`BUILD_GAP`。実provider・credential・HTTP・draft作成・送信なし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+| 限定確認 | 結果 |
+|---|---|
+| Core `gmail_write_target_version.test.ts` | PASS、7/7。draft.create resolver、宛先／本文変更・欠落のfail-closed、Executor dispatch→stubを確認。 |
+| Gateway `operation_plan_runtime.test.ts` | PASS、22/22。draft.create plan source→HDS binding→Executor ticketへ結合し、変更payload観測を拒否。 |
+| Gateway `approval_content_review.test.ts`／WebChat `webchat.test.ts` | PASS、4/4と93/93。下書きのexact-content preview、本文の通常queue非露出を確認。 |
+| 全4 focused suites | PASS、126/126。 |
+| workspace `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | PASS。buildは15 workspace projects。standaloneはbuild後に実行。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は継続。 |
+| Actions／実provider／実credential／HTTP／Gmail副作用 | 未実施。今回の対象外。 |
+
+次は、既存draftを読む実consumerとその本文／version observationを特定し、`draft.send`を別作用としてHDS／Executorへ結ぶ。本文・宛先・添付・reply-toの拡張範囲、account identity、provider version、D02.02 process／host認証、結果→M→帰還は未成立。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-GMAIL-EXECUTOR-STUB-DISPATCH`
 
 開始HEAD／`origin/main`=`04e76912ae2b93f9e7de92aaab777546885f0804`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02／F02.02、D4-Pocket現行`AGENTS.md` §3.1を再読した。Actionsは条件内で使用できるが、今回のstub dispatch test／typecheckはWindows localで実行可能なため未使用。
 

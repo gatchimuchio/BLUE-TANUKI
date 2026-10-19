@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { gmailWriteRequestPayloadDigest } from "@blue-tanuki/core";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import {
-  isGmailMessageSendCommand,
-  projectGmailMessageSendContentReview,
-  validateGmailMessageSendContentReview,
+  isGmailWriteContentReviewCommand,
+  projectGmailWriteContentReview,
+  validateGmailWriteContentReview,
 } from "../src/approval_content_review.js";
 
 function command(arguments_: Record<string, unknown>): ExecuteCommand {
@@ -35,8 +35,8 @@ describe("Gmail approval content review projection", () => {
     const input = command(args);
     const digest = "b".repeat(64);
 
-    expect(isGmailMessageSendCommand(input)).toBe(true);
-    expect(projectGmailMessageSendContentReview(input, digest)).toEqual({
+    expect(isGmailWriteContentReviewCommand(input)).toBe(true);
+    expect(projectGmailWriteContentReview(input, digest)).toEqual({
       command_id: "cmd-content-review",
       command_digest: digest,
       request_payload_digest: gmailWriteRequestPayloadDigest(args),
@@ -73,14 +73,14 @@ describe("Gmail approval content review projection", () => {
       body: "alternate body",
     });
 
-    expect(projectGmailMessageSendContentReview(unsupported, "b".repeat(64))).toBeNull();
-    expect(projectGmailMessageSendContentReview(ambiguousBody, "b".repeat(64))).toBeNull();
-    expect(projectGmailMessageSendContentReview(valid, "not-a-digest")).toBeNull();
-    expect(isGmailMessageSendCommand(command({
+    expect(projectGmailWriteContentReview(unsupported, "b".repeat(64))).toBeNull();
+    expect(projectGmailWriteContentReview(ambiguousBody, "b".repeat(64))).toBeNull();
+    expect(projectGmailWriteContentReview(valid, "not-a-digest")).toBeNull();
+    expect(isGmailWriteContentReviewCommand(command({
       operation: "draft.create",
       to: "owner@example.test",
       subject: "hello",
-    }))).toBe(false);
+    }))).toBe(true);
   });
 
   it("requires a successful explicit reveal before accepting the matching digest", () => {
@@ -92,9 +92,37 @@ describe("Gmail approval content review projection", () => {
     });
     const digest = "d".repeat(64);
 
-    expect(validateGmailMessageSendContentReview(input, digest, true, undefined, digest)).toBe("required");
-    expect(validateGmailMessageSendContentReview(input, digest, true, digest, digest)).toBe("valid");
-    expect(validateGmailMessageSendContentReview(input, digest, true, digest, "e".repeat(64))).toBe("stale");
-    expect(validateGmailMessageSendContentReview(input, digest, false, digest, digest)).toBe("stale");
+    expect(validateGmailWriteContentReview(input, digest, true, undefined, digest)).toBe("required");
+    expect(validateGmailWriteContentReview(input, digest, true, digest, digest)).toBe("valid");
+    expect(validateGmailWriteContentReview(input, digest, true, digest, "e".repeat(64))).toBe("stale");
+    expect(validateGmailWriteContentReview(input, digest, false, digest, digest)).toBe("stale");
+  });
+
+  it("reviews the exact draft.create payload while keeping draft.send outside this route", () => {
+    const args = {
+      operation: "draft.create",
+      to: " recipient@example.test ",
+      subject: "  Draft subject  ",
+      body_text: "  exact draft body\nline two  ",
+    };
+    const draft = command(args);
+    const digest = "f".repeat(64);
+    const review = projectGmailWriteContentReview(draft, digest);
+    expect(isGmailWriteContentReviewCommand(draft)).toBe(true);
+    expect(review).toMatchObject({
+      operation: "gmail.write.draft.create",
+      command_digest: digest,
+      request_payload_digest: gmailWriteRequestPayloadDigest(args),
+      to: "recipient@example.test",
+      subject: "Draft subject",
+      body_text: "exact draft body\nline two",
+      used_for_authority: false,
+    });
+    expect(validateGmailWriteContentReview(draft, digest, true, undefined, digest)).toBe("required");
+    expect(validateGmailWriteContentReview(draft, digest, true, digest, digest)).toBe("valid");
+
+    const unsupported = command({ operation: "draft.send", draft_id: "draft-fixture" });
+    expect(isGmailWriteContentReviewCommand(unsupported)).toBe(false);
+    expect(projectGmailWriteContentReview(unsupported, digest)).toBeNull();
   });
 });

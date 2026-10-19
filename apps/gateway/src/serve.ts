@@ -122,9 +122,9 @@ import {
   runtimeScheduleMutationCommand,
 } from "./runtime_schedule.js";
 import {
-  isGmailMessageSendCommand,
-  projectGmailMessageSendContentReview,
-  validateGmailMessageSendContentReview,
+  isGmailWriteContentReviewCommand,
+  projectGmailWriteContentReview,
+  validateGmailWriteContentReview,
 } from "./approval_content_review.js";
 import { buildRuntimeStatusSnapshot } from "./runtime_status.js";
 import { buildResidentNotificationsSnapshot, readCronNotificationState } from "./resident_notifications.js";
@@ -1739,8 +1739,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: approvalActor, reason: "plan_binding_stale" });
       return { executed: false, status: "plan_binding_stale" };
     }
-    if (verdict === "approve" && isGmailMessageSendCommand(pending.command) &&
-        validateGmailMessageSendContentReview(
+    if (verdict === "approve" && isGmailWriteContentReviewCommand(pending.command) &&
+        validateGmailWriteContentReview(
           pending.command,
           pending.command_digest,
           true,
@@ -2739,10 +2739,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
       return review;
     }
-    if (!pending || !isGmailMessageSendCommand(pending.command) ||
+    if (!pending || !isGmailWriteContentReviewCommand(pending.command) ||
         executorCommandDigest(pending.command) !== pending.command_digest ||
         !hds.operationPlanCommandIsCurrent(pending.command)) return null;
-    const review = projectGmailMessageSendContentReview(pending.command, pending.command_digest);
+    const review = projectGmailWriteContentReview(pending.command, pending.command_digest);
     if (!review) return null;
     pendingApprovals.set(command_id, {
       ...pending,
@@ -2763,7 +2763,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (pending.goal_purpose_proposal) {
       return validateGoalPurposeChangeContentReview(pending, content_review_digest);
     }
-    return validateGmailMessageSendContentReview(
+    return validateGmailWriteContentReview(
       pending.command,
       pending.command_digest,
       executorCommandDigest(pending.command) === pending.command_digest &&
@@ -2788,7 +2788,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       approval_level: p.evaluation.approval_level,
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
-      content_review_required: isGmailMessageSendCommand(p.command) || Boolean(p.goal_purpose_proposal) ||
+      content_review_required: isGmailWriteContentReviewCommand(p.command) || Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal),
       approval_token: p.approval_token,
       approval_token_expires_at_ms: p.approval_token_expires_at_ms,

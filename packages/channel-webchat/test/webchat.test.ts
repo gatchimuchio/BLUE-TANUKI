@@ -2993,6 +2993,57 @@ describe("WebChatChannel — approval API", () => {
     }
   });
 
+  it("reveals exact draft.create content only through the explicit review route", async () => {
+    const draftBody = "synthetic draft body";
+    const digest = "d".repeat(64);
+    const ctx = await setup({
+      approval: {
+        list: async () => [{
+          command_id: "cmd-draft-review",
+          request_id: "req-draft-review",
+          operation: "gmail.write.draft.create",
+          risk: "high",
+          final_review_required: true,
+          reason: "final_review_required",
+          content_review_required: true,
+        }],
+        reviewContent: async (command_id) => command_id === "cmd-draft-review" ? {
+          command_id,
+          command_digest: digest,
+          request_payload_digest: "e".repeat(64),
+          operation: "gmail.write.draft.create",
+          to: "recipient@example.test",
+          subject: "synthetic draft subject",
+          body_text: draftBody,
+          used_for_authority: false,
+        } : null,
+        validateContentReview: async (_command_id, submitted) => submitted === digest ? "valid" : "required",
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      const queue = await getRaw(ctx.port, "/approval", { authorization: `Bearer ${RESUME_TOKEN}` });
+      expect(queue.text).not.toContain(draftBody);
+      expect(queue.text).toContain("gmail.write.draft.create");
+
+      const response = await fetch(`http://127.0.0.1:${ctx.port}/approval/cmd-draft-review/content`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toMatchObject({
+        operation: "gmail.write.draft.create",
+        to: "recipient@example.test",
+        subject: "synthetic draft subject",
+        body_text: draftBody,
+        used_for_authority: false,
+      });
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
   it("validates content binding before consuming the one-time approval token", async () => {
     const calls: unknown[] = [];
     const digest = "c".repeat(64);

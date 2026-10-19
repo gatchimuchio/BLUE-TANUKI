@@ -982,6 +982,44 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     // No executor call is made here: this test binds an outbound message but never sends it.
   });
 
+  it("Gmail draft.createは作成先・正確なpayloadをcurrent plan sourceとHDS・Executor ticketへ結ぶ", async () => {
+    const hds = new HDSUpperController(); const origin = request("plan:compute synthetic draft");
+    const candidate = gmailSendPlan(origin.id, { operation: "draft.create", to: "inspection@example.invalid",
+      subject: "synthetic draft", body_text: "fixture draft body" });
+    const planExecutor = rig(hds, candidate);
+    await planExecutor.run(hds.decide(origin).command!);
+    const selected = review(hds, candidate, "send");
+    if (selected.command?.type !== "tool_call") throw new Error("bounded Gmail draft plan was not connected");
+
+    const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
+    if (!operationPlanBindingDigest) throw new Error("selected Gmail draft plan source binding was unavailable");
+    const tools = new ToolRegistry(); tools.register(gmailWriteTool);
+    const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
+    const executor = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+      tools, approval_authority: authority });
+    const targetObservation = GmailWriteTargetVersionObservationSchema.parse(
+      await executor.inspectCommandTargetVersion(selected.command, undefined, operationPlanBindingDigest));
+    expect(targetObservation).toMatchObject({ operation_plan_binding_digest: operationPlanBindingDigest,
+      used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(targetObservation)).not.toContain("inspection@example.invalid");
+    expect(JSON.stringify(targetObservation)).not.toContain("fixture draft body");
+
+    const binding = hds.createExecutionAuthorityBinding(selected.command, targetObservation);
+    expect(binding.operation_plan_binding_digest).toBe(operationPlanBindingDigest);
+    expect(binding.broker_target_version_observation_digest).toBe(operationPlanDigest(targetObservation));
+    const approval = evaluateApproval(selected.command, [], { actor: "fixture-owner", default_mode: "full_access" });
+    const proof = { source: "human_final_review" as const, decision: "approve" as const, approved_by: "fixture-owner",
+      approved_at_ms: Date.now(), upstream_commit_hash: selected.command.upstream_decision.commit_hash,
+      operation: approval.context.operation, risk: approval.risk, final_review_required: approval.final_review_required,
+      reason: "synthetic draft final review fixture" };
+    const changedObservation = GmailWriteTargetVersionObservationSchema.parse({ ...targetObservation,
+      request_payload_digest: "f".repeat(64) });
+    expect(() => authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, changedObservation))
+      .toThrow(/gmail.write target version does not match command|target version binding does not match evidence/);
+    authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, targetObservation);
+    // No executor call is made here: this test binds a draft request but never creates a provider draft.
+  });
+
   it("実file.search結果を依存入力にし、変更pendingだけ失効して旧版と試行済みを保持", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-")); const workspace = join(root, "workspace");
     await mkdir(workspace); await writeFile(join(workspace, "blue.txt"), "blue\n");

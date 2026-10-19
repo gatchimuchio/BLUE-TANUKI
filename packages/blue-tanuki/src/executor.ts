@@ -259,7 +259,8 @@ function approveCommandForExecution(
         throw new Error("Executor approval rejected: file.search target version does not match command");
       }
       target_version_observation = Object.freeze(observation);
-    } else if (snapshot.payload.tool_name === "gmail.write" && snapshot.payload.arguments.operation === "message.send") {
+    } else if (snapshot.payload.tool_name === "gmail.write" &&
+        ["draft.create", "message.send"].includes(String(snapshot.payload.arguments.operation))) {
       const observation = GmailWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
       if (observation.command_digest !== operationPlanDigest(snapshot) ||
           observation.target_identity_digest !== gmailWriteTargetIdentityDigest(snapshot.payload.arguments) ||
@@ -277,7 +278,7 @@ function approveCommandForExecution(
     throw new Error("Executor approval rejected: HDS target version binding does not match evidence");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "gmail.write" &&
-      snapshot.payload.arguments.operation === "message.send" &&
+      ["draft.create", "message.send"].includes(String(snapshot.payload.arguments.operation)) &&
       target_version_observation?.schema_version !== "blue-tanuki.gmail-write-target-version.v1") {
     throw new Error("Executor approval rejected: gmail.write target version evidence is required");
   }
@@ -454,7 +455,8 @@ export class Executor {
     if (operationPlanBindingDigest !== undefined && !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
       throw new Error("Broker target version resolver received an invalid operation plan binding");
     }
-    if (command.payload.tool_name === "gmail.write" && command.payload.arguments.operation === "message.send") {
+    if (command.payload.tool_name === "gmail.write" &&
+        ["draft.create", "message.send"].includes(String(command.payload.arguments.operation))) {
       const tool = this.deps.tools.get("gmail.write");
       if (tool !== gmailWriteTool || !tool.inspect_target_version) {
         throw new Error("gmail.write target version resolver requires the registered built-in adapter");

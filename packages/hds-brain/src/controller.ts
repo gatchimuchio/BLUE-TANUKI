@@ -1742,15 +1742,22 @@ ${planControl.question}`,
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
-        command.payload.arguments.operation === "message.send") {
+        ["draft.create", "message.send"].includes(String(command.payload.arguments.operation))) {
       if (brokerTargetVersionObservation === undefined) {
         throw new Error("HDS gmail.write target version observation is required");
       }
       const observation = GmailWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+      const operation = String(command.payload.arguments.operation);
       const recipient = command.payload.arguments.to;
-      const expectedTargetIdentityDigest = typeof recipient === "string" && recipient.trim().length > 0
-        ? operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v1",
-            service: "gmail", operation: "message.send", recipient: recipient.trim() }) : undefined;
+      const recipients: Record<string, string> = {};
+      if (typeof recipient === "string" && recipient.trim().length > 0) recipients.to = recipient.trim();
+      for (const name of ["cc", "bcc"] as const) {
+        const value = command.payload.arguments[name];
+        if (typeof value === "string" && value.trim().length > 0) recipients[name] = value.trim();
+      }
+      const expectedTargetIdentityDigest = recipients.to
+        ? operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v2",
+            service: "gmail", operation, recipients }) : undefined;
       if (observation.command_digest !== operationPlanDigest(command) ||
           observation.target_identity_digest !== expectedTargetIdentityDigest) {
         throw new Error("HDS gmail.write target version does not match the issued command");
@@ -2346,7 +2353,7 @@ ${planControl.question}`,
         ...(planPurposeMessage ? [planPurposeMessage] : []),
         ...(planCompute?.requested && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? [{ role: "system" as const,
-          content: `候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan, goal_purpose_relation: {outcome, evidence}}です。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。plan.stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。goal_purpose_relation.outcomeはsupports|conflicts|unknown、evidenceはtask_quoteとpurpose_quoteの原文連続引用（各1〜800文字）の配列です。taskと選択目的の関係を根拠付きで候補化し、根拠を確認できないときはoutcome=unknown、evidence=[]とします。引用が一致しても意味適合を証明せず、この関係候補は非権威で、Jによる独立評価前は実行できません。authority、permission、approvalを出力・推定しないでください。未実行を成功と申告しないこと。plan.planner_output_used_for_authority=false、plan.hds_brain_authority_required=true。plan.raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。plan.rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致、およびgmail.writeのexternal_service target id=gmailでoperation=message.send、単一のto、subject、body_textだけを使う場合に限ります。Gmail計画へcc/bcc/fromやcredentialを含めません。採用・承認・実行はこの計算の責務ではありません。` }] : []),
+          content: `候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan, goal_purpose_relation: {outcome, evidence}}です。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。plan.stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。goal_purpose_relation.outcomeはsupports|conflicts|unknown、evidenceはtask_quoteとpurpose_quoteの原文連続引用（各1〜800文字）の配列です。taskと選択目的の関係を根拠付きで候補化し、根拠を確認できないときはoutcome=unknown、evidence=[]とします。引用が一致しても意味適合を証明せず、この関係候補は非権威で、Jによる独立評価前は実行できません。authority、permission、approvalを出力・推定しないでください。未実行を成功と申告しないこと。plan.planner_output_used_for_authority=false、plan.hds_brain_authority_required=true。plan.raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。plan.rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致、およびgmail.writeのexternal_service target id=gmailでoperation=message.sendまたはdraft.create、単一のto、subject、body_textだけを使う場合に限ります。Gmail計画へcc/bcc/fromやcredentialを含めません。draft.sendは既存draftの内容同一性検査が未接続のため候補にしません。採用・承認・実行はこの計算の責務ではありません。` }] : []),
         { role: "user", content: req.content },
       ],
         ...(log.memory_retrieval_suppressed_for === "transient_document_organization" || planCompute?.requested
