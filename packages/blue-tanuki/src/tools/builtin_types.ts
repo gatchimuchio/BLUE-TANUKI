@@ -125,6 +125,7 @@ export interface BrowserSnapshotOptions extends BrowserAutomationOptions {}
 export interface FileSearchOptions {
   env?: Env;
   expected_target_version?: FileSearchTargetVersionObservation;
+  operation_plan_binding_digest?: string;
   /** Executor-private evidence channel; omitted from ordinary tool results. */
   include_target_version_observation?: boolean;
 }

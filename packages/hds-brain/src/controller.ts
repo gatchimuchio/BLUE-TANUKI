@@ -1707,6 +1707,10 @@ ${planControl.question}`,
     return checkpointDigest;
   }
   isOperationPlanCommand(command_id: string): boolean { return this.operationPlans.isBound(command_id); }
+  /** Current J-selected plan provenance for Broker target binding; this digest never grants authority. */
+  getExecutionOperationPlanBindingDigest(command: ExecuteCommand): string | undefined {
+    return this.operationPlans.executionSourceBindingDigest(command);
+  }
   /**
    * Bind the exact current command to the HDS source that issued it. This is
    * provenance only: the digest never grants permission or identifies an
@@ -1720,6 +1724,7 @@ ${planControl.question}`,
         command.upstream_decision.request_id !== source.request_id) {
       throw new Error("HDS execution authority source is unavailable or no longer current");
     }
+    const operation_plan_binding_digest = this.operationPlans.executionSourceBindingDigest(command);
     let brokerTargetVersionObservationDigest: string | undefined;
     if (command.type === "tool_call" && command.payload.tool_name === "file.search") {
       if (brokerTargetVersionObservation === undefined) {
@@ -1731,6 +1736,9 @@ ${planControl.question}`,
           createHash("sha256").update(requestedRoot, "utf8").digest("hex")) {
         throw new Error("HDS file.search target version does not match the issued command");
       }
+      if (observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
+        throw new Error("HDS file.search target version does not match the current Operation Plan source");
+      }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (brokerTargetVersionObservation !== undefined) {
       throw new Error("HDS target version observation is unsupported for this command");
@@ -1741,7 +1749,6 @@ ${planControl.question}`,
       throw new Error("HDS goal governance projection must remain non-authoritative");
     }
     const goalGovernanceProjectionDigest = goalGovernance ? operationPlanDigest(goalGovernance) : undefined;
-    const operation_plan_binding_digest = this.operationPlans.executionSourceBindingDigest(command);
     const source_context_digest = sha256({
       schema_version: "blue-tanuki.hds-execution-source-context.v3",
       request_id: source.request_id,

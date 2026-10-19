@@ -11,6 +11,8 @@ export const FileSearchTargetVersionObservationSchema = z.object({
   requested_root_digest: DigestSchema,
   canonical_root_digest: DigestSchema,
   resource_version_digest: DigestSchema,
+  /** Non-authority binding to the exact J-selected Operation Plan source, when present. */
+  operation_plan_binding_digest: DigestSchema.optional(),
   files_examined: z.number().int().min(0).max(1_000),
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),

@@ -39,8 +39,9 @@ function rig(store: ExecutionIntentStore, workspace: string, worker?: FileSearch
   return { authority, executor };
 }
 async function approve(authority: ReturnType<typeof createExecutorApprovalAuthority>, executor: Executor,
-  workspace: string, command = source()) {
-  const targetVersion = await executor.inspectCommandTargetVersion(command, { BLUE_TANUKI_FILE_ROOT: workspace });
+  workspace: string, command = source(), operationPlanBindingDigest?: string) {
+  const targetVersion = await executor.inspectCommandTargetVersion(command, { BLUE_TANUKI_FILE_ROOT: workspace },
+    operationPlanBindingDigest);
   return authority.approve(command, proof(command), undefined, undefined, targetVersion);
 }
 
@@ -63,6 +64,18 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
     expect((await executor.execute(approved)).error).toMatch(/already consumed/);
     expect(() => authority.approve(command, proof())).toThrow(/already issued/);
     expect(JSON.stringify(store.snapshot())).not.toContain(workspace);
+  }));
+
+  it("Operation Plan source digestをtarget observationから隔離workerのresult照合まで保持する", async () => temporary(async (store, workspace) => {
+    const { authority, executor } = rig(store, workspace);
+    const command = source();
+    const operationPlanBindingDigest = "d".repeat(64);
+    const approved = await approve(authority, executor, workspace, command, operationPlanBindingDigest);
+    const feedback = await executor.execute(approved);
+    expect(feedback.error).toBeUndefined();
+    expect(feedback.status).toBe("success");
+    expect(feedback.result).toMatchObject({ query: "blue", matches: [{ path: "blue.txt", line_number: 1, line: "blue" }] });
+    expect(JSON.stringify(feedback.result)).not.toContain("operation_plan_binding_digest");
   }));
 
   it("承認ticketのtarget versionから内容が変わった場合は検索結果を返さず再確認を要求する", async () => temporary(async (store, workspace) => {

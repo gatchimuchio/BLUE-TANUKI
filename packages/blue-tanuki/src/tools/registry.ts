@@ -29,6 +29,7 @@ export interface Tool {
   /** Read-only target resolver; Executor only trusts the registered built-in file.search adapter. */
   inspect_target_version?(args: Record<string, unknown>, options?: {
     env?: Readonly<Record<string, string | undefined>>;
+    operation_plan_binding_digest?: string;
   }): Promise<FileSearchTargetVersionObservation>;
   invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 }

@@ -1246,7 +1246,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     let targetVersionObservation: Awaited<ReturnType<Executor["inspectCommandTargetVersion"]>>;
     try {
-      targetVersionObservation = await executor.inspectCommandTargetVersion(cmd);
+      const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(cmd);
+      targetVersionObservation = await executor.inspectCommandTargetVersion(cmd, undefined, operationPlanBindingDigest);
     } catch {
       const reason = "file_search_target_version_unavailable";
       const feedback: ExecuteFeedback = { command_id: cmd.id, status: "failed", error: reason, metrics: { duration_ms: 0 } };

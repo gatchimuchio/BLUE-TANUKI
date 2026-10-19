@@ -144,12 +144,16 @@ describe("built-in tools", () => {
     try {
       const args = { root: ".", query: "needle", max_results: 5 };
       await fs.writeFile(path.join(dir, "a.txt"), "needle original\n", "utf8");
-      const expected = await inspectFileSearchTargetVersion(args, fileSearchEnv(dir));
+      const operationPlanBindingDigest = "a".repeat(64);
+      const expected = await inspectFileSearchTargetVersion(args, {
+        ...fileSearchEnv(dir), operation_plan_binding_digest: operationPlanBindingDigest,
+      });
       expect(Object.keys(expected).sort()).toEqual([
-        "canonical_root_digest", "files_examined", "may_execute", "requested_root_digest",
+        "canonical_root_digest", "files_examined", "may_execute", "operation_plan_binding_digest", "requested_root_digest",
         "resource_version_digest", "schema_version", "used_for_authority",
       ]);
-      expect(expected).toMatchObject({ files_examined: 1, used_for_authority: false, may_execute: false });
+      expect(expected).toMatchObject({ files_examined: 1, operation_plan_binding_digest: operationPlanBindingDigest,
+        used_for_authority: false, may_execute: false });
       const matching = await invokeFileSearch(args, { ...fileSearchEnv(dir), expected_target_version: expected,
         include_target_version_observation: true }) as {
         target_version_observation: typeof expected;

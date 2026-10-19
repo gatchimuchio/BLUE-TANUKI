@@ -1516,7 +1516,8 @@ export async function invokeFileSearch(
     }
   }
 
-  const targetVersion = fileSearchTargetVersionObservation(requestedRoot, root, visited, targetVersionHasher.digest("hex"));
+  const targetVersion = fileSearchTargetVersionObservation(requestedRoot, root, visited, targetVersionHasher.digest("hex"),
+    opts.expected_target_version?.operation_plan_binding_digest);
   if (opts.expected_target_version &&
       canonicalFileSearchTargetVersionObservation(targetVersion) !==
         canonicalFileSearchTargetVersionObservation(opts.expected_target_version)) {
@@ -1552,7 +1553,8 @@ export async function inspectFileSearchTargetVersion(
     appendFileSearchVersionEntry(hasher, root, file, data);
     filesExamined += 1;
   }
-  return fileSearchTargetVersionObservation(requestedRoot, root, filesExamined, hasher.digest("hex"));
+  return fileSearchTargetVersionObservation(requestedRoot, root, filesExamined, hasher.digest("hex"),
+    opts.operation_plan_binding_digest);
 }
 
 function appendFileSearchVersionEntry(hasher: ReturnType<typeof createHash>, root: string, file: string, data: Buffer): void {
@@ -1566,12 +1568,14 @@ function fileSearchTargetVersionObservation(
   canonicalRoot: string,
   filesExamined: number,
   resourceVersionDigest: string,
+  operationPlanBindingDigest?: string,
 ): FileSearchTargetVersionObservation {
   return FileSearchTargetVersionObservationSchema.parse({
     schema_version: "blue-tanuki.file-search-target-version.v1",
     requested_root_digest: createHash("sha256").update(requestedRoot, "utf8").digest("hex"),
     canonical_root_digest: createHash("sha256").update(canonicalRoot, "utf8").digest("hex"),
     resource_version_digest: resourceVersionDigest,
+    ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
     files_examined: filesExamined,
     used_for_authority: false,
     may_execute: false,
@@ -1671,7 +1675,9 @@ export const fileSearchTool: Tool = {
   name: "file.search",
   description: "Read-only text search under a requested root directory.",
   required_capabilities: requireToolOperationDescriptor("file.search").required_capabilities,
-  async inspect_target_version(args: Record<string, unknown>, options?: { env?: Env }): Promise<FileSearchTargetVersionObservation> {
+  async inspect_target_version(args: Record<string, unknown>, options?: {
+    env?: Env; operation_plan_binding_digest?: string;
+  }): Promise<FileSearchTargetVersionObservation> {
     return await inspectFileSearchTargetVersion(args, options);
   },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {

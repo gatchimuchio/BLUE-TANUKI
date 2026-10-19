@@ -163,6 +163,9 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const initialStatePath = join(root, "initial-state.sqlite");
     const verifiedStatePath = join(root, "verified-state.sqlite");
     const incompleteStatePath = join(root, "incomplete-state.sqlite");
+    const workspace = join(root, "workspace");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "blue.txt"), "blue synthetic fixture\n", "utf8");
     const purposeDirectory = join(root, "private-state", "goal-purpose-memory");
     await mkdir(purposeDirectory, { recursive: true });
     const purposeMemory = {
@@ -178,6 +181,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const candidate = gmailSendPlan(planRequestId, {
       operation: "message.send", to: "inspection@example.invalid", subject: "synthetic", body_text: "fixed fixture",
     });
+    candidate.steps.push(plan(planRequestId, workspace).steps[0]!);
     let initialStore: OperationPlanStateStore | undefined;
     let initialHds: HDSUpperController | undefined;
     let verifiedStore: OperationPlanStateStore | undefined;
@@ -312,7 +316,31 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       const executionBinding = verifiedController.createExecutionAuthorityBinding(selected.command);
       expect(executionBinding.operation_plan_binding_digest).toMatch(/^[a-f0-9]{64}$/);
 
+      const selectedSearch = review(verifiedController, candidate, "search", binding);
+      if (selectedSearch.command?.type !== "tool_call" || selectedSearch.command.payload.tool_name !== "file.search") {
+        throw new Error("purpose-bound file.search step was not selected");
+      }
+      const planBindingDigest = verifiedController.getExecutionOperationPlanBindingDigest(selectedSearch.command);
+      if (!planBindingDigest) throw new Error("current purpose-bound plan source was unavailable");
+      const searchTools = new ToolRegistry(); searchTools.register(fileSearchTool);
+      const targetResolver = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+        tools: searchTools, approval_authority: createExecutorApprovalAuthority() });
+      const targetObservation = await targetResolver.inspectCommandTargetVersion(selectedSearch.command,
+        { BLUE_TANUKI_FILE_ROOT: workspace }, planBindingDigest);
+      if (!targetObservation) throw new Error("file.search target resolver returned no observation");
+      expect(targetObservation).toMatchObject({ operation_plan_binding_digest: planBindingDigest,
+        used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(targetObservation)).not.toContain(task);
+      expect(JSON.stringify(targetObservation)).not.toContain(purposeText);
+      const searchExecutionBinding = verifiedController.createExecutionAuthorityBinding(selectedSearch.command, targetObservation);
+      expect(searchExecutionBinding.operation_plan_binding_digest).toBe(planBindingDigest);
+      expect(searchExecutionBinding.broker_target_version_observation_digest).toBe(operationPlanDigest(targetObservation));
+      expect(() => verifiedController.createExecutionAuthorityBinding(selectedSearch.command!, {
+        ...targetObservation, operation_plan_binding_digest: "f".repeat(64),
+      })).toThrow(/current Operation Plan source/);
+
       const reviewedCommand = selected.command;
+      const reviewedSearchCommand = selectedSearch.command;
       const revisedPlan = structuredClone(candidate);
       revisedPlan.steps[0]!.parameters!.subject = "revised synthetic";
       const revision = verifiedController.getRuntimeSnapshot().operation_plans.plans[0]!;
@@ -325,6 +353,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         .not.toBe(initialRevisionDigest);
       expect(verifiedController.operationPlanCommandIsCurrent(reviewedCommand)).toBe(false);
       expect(() => verifiedController.createExecutionAuthorityBinding(reviewedCommand)).toThrow();
+      expect(verifiedController.operationPlanCommandIsCurrent(reviewedSearchCommand)).toBe(false);
+      expect(() => verifiedController.getExecutionOperationPlanBindingDigest(reviewedSearchCommand)).toThrow();
       expect(review(verifiedController, revisedPlan, "send", binding).command).toBeNull();
       expect(verifiedController.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_relation?.status)
         .toBe("stale");

@@ -64,6 +64,13 @@ function issuedPlanCommand() {
     owner: "fixture-owner",
     channel: "webchat",
     goal: "Find the fixture line for the delegated test request.",
+    request_goal_criteria: {
+      status: "not_provided",
+      request_id: plan.request_id,
+      content_sha256: createHash("sha256").update("Find the fixture line for the delegated test request.", "utf8").digest("hex"),
+      criteria: [],
+      used_for_authority: false,
+    },
     revisions: [{ digest: planDigest, plan }],
     receipt_observations: [],
     bindings: [],
@@ -90,7 +97,9 @@ function issuedPlanCommand() {
     metadata: { "blue_tanuki.operator_surface": "developer" },
   });
   const result = hds.decide(request);
-  if (!result.command || result.log.commit.decision !== "ASSERT") throw new Error("fixture HDS did not issue a selected plan command");
+  if (!result.command || result.log.commit.decision !== "ASSERT") {
+    throw new Error(`fixture HDS did not issue a selected plan command: ${result.log.commit.reason}`);
+  }
   const revisePlan = (): void => {
     const revisedPlan = structuredClone(plan);
     revisedPlan.steps[0]!.parameters!.query = "changed fixture query";
@@ -122,7 +131,7 @@ function proofFor(command: ReturnType<typeof issuedCommand>["command"]): Executo
   };
 }
 
-function targetVersionFor(command: ReturnType<typeof issuedCommand>["command"]): FileSearchTargetVersionObservation {
+function targetVersionFor(command: ReturnType<typeof issuedCommand>["command"], operationPlanBindingDigest?: string): FileSearchTargetVersionObservation {
   if (command.type !== "tool_call" || command.payload.tool_name !== "file.search") throw new Error("fixture is not file.search");
   const requestedRoot = command.payload.arguments.root;
   if (typeof requestedRoot !== "string") throw new Error("fixture root is missing");
@@ -132,6 +141,7 @@ function targetVersionFor(command: ReturnType<typeof issuedCommand>["command"]):
     requested_root_digest: digest(requestedRoot),
     canonical_root_digest: digest("C:\\blue-tanuki-fixture"),
     resource_version_digest: digest("fixture-resource-version"),
+    ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
     files_examined: 1,
     used_for_authority: false,
     may_execute: false,
@@ -225,10 +235,14 @@ describe("HDSからExecutorへの非直列化source binding", () => {
 
   it("J選択済みOperationPlanの改訂・step・target・引数bindingを同じExecutor ticketへ結合する", () => {
     const { hds, command, goal, target } = issuedPlanCommand();
-    const targetVersion = targetVersionFor(command);
+    const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
+    if (!operationPlanBindingDigest) throw new Error("selected plan source binding was unavailable");
+    const targetVersion = targetVersionFor(command, operationPlanBindingDigest);
     expect(() => hds.createExecutionAuthorityBinding(command)).toThrow(/file.search target version observation is required/);
+    expect(() => hds.createExecutionAuthorityBinding(command, targetVersionFor(command)))
+      .toThrow(/current Operation Plan source/);
     const binding = hds.createExecutionAuthorityBinding(command, targetVersion);
-    expect(binding.operation_plan_binding_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(binding.operation_plan_binding_digest).toBe(operationPlanBindingDigest);
     expect(binding.broker_target_version_observation_digest).toBe(operationPlanDigest(targetVersion));
     expect(JSON.stringify(binding)).not.toContain("fixture-owner");
     expect(JSON.stringify(binding)).not.toContain(goal);

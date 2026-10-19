@@ -2,7 +2,23 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-RELATION-CHECKPOINT-RESTART-VERIFICATION`
+### 最新BUILD_BATCH：`QEB-01-D02.01-PURPOSE-BOUND-BROKER-TARGET-VERSION`
+
+開始HEAD／`origin/main`=`acec1aaa8a4f81416bc39b733c05ee418ceb0010`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行`AGENTS.md` §3.1を再読した。D4の条件内でActionsを使えるが、Windows localで必要な検査を実施できるためworkflow／Actionsは使っていない。
+
+J所有Operation Planの`executionSourceBindingDigest`（現在選択されたstep・target・引数・goal/purpose版・監査済みtask-purpose relationを含む非権威source digest）をHDSからGatewayへ渡し、`file.search`のread-only target/version resolverのcanonical observationへ結合した。Gateway CLI／serveの双方から同じ経路を通し、HDSはExecutor seal発行前にdigestを自分のcurrent planから再計算して照合する。欠落・不一致・plan改訂後の旧commandは拒否する。Executor ticketは拡張されたtarget observation全体を既存proof digestへ結合し、隔離workerは実file snapshotの再照合時にもそのsource digestを保つ。内部observationは通常resultから除去され、`used_for_authority=false`／`may_execute=false`を維持する。purpose本文・credential・実作用はresolverへ渡さない。この接続は`file.search`に限り、他operationのtarget identity/version、別process／host認証は未接続。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `operation_plan_runtime.test.ts` | PASS、20/20。owner-reviewed current purpose bindingのresolver結合、不一致拒否、plan改訂後の旧source拒否を確認。 |
+| Core `executor_hds_authority_binding.test.ts`／`tools_builtin.test.ts` | PASS、5/5／47/47。HDS再照合、ticket digest、bounded resolver observationを確認。 |
+| Gateway `file_search_worker.test.ts` | PASS、9/9。`--testTimeout 15000`で隔離worker往復を実行（製品timeoutは変更していない）。 |
+| workspace `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | PASS。buildは15 workspace projects。standaloneはtypecheckが清掃するdistを再build後に確認。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件を注意として確認。 |
+
+D02.01の`file.search`経路は今回`WIRED`。D02.01全体とD02.02は`BUILD_GAP`を維持する。これは合成のtemp directory／SQLite／監査とローカルworkerによる限定実装確認であり、外部provider、実資格、業務作用、期限・再送・別host認証、全体結果→M→帰還の証拠ではない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。次は別の既存Broker target resolverへcurrent delegated purpose bindingを結び、実外部書込みを有効化せず内容・対象版のproducer／consumerを進める。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-RELATION-CHECKPOINT-RESTART-VERIFICATION`
 
 開始HEAD／`origin/main`=`f7bc525afbbbed3c6ed2b980c1193d6159803f7b`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行AGENTS §3.1を再読した。D4条件の範囲内利用は許可済みだが、このSQLite／audit checkpoint検証はWindows localで可能なためGitHub Actions／workflowは使っていない。
 

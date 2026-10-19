@@ -365,7 +365,8 @@ async function runCliWithExecutionStore(
 
   let targetVersionObservation: Awaited<ReturnType<Executor["inspectCommandTargetVersion"]>>;
   try {
-    targetVersionObservation = await executor.inspectCommandTargetVersion(command);
+    const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
+    targetVersionObservation = await executor.inspectCommandTargetVersion(command, undefined, operationPlanBindingDigest);
   } catch {
     hds.onCommandLifecycle(command.id, "approval_cancelled", {
       actor: inbound.user,

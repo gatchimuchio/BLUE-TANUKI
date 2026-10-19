@@ -428,19 +428,29 @@ export class Executor {
 
   /** Read-only preflight for the exact registered built-in file.search adapter. */
   async inspectCommandTargetVersion(command: ExecuteCommand,
-    env?: Readonly<Record<string, string | undefined>>): Promise<FileSearchTargetVersionObservation | undefined> {
+    env?: Readonly<Record<string, string | undefined>>,
+    operationPlanBindingDigest?: string): Promise<FileSearchTargetVersionObservation | undefined> {
     if (command.type !== "tool_call" || command.payload.tool_name !== "file.search") return undefined;
+    if (operationPlanBindingDigest !== undefined && !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+      throw new Error("file.search target version resolver received an invalid operation plan binding");
+    }
     const tool = this.deps.tools.get("file.search");
     if (tool !== fileSearchTool || !tool.inspect_target_version) {
       throw new Error("file.search target version resolver requires the registered built-in adapter");
     }
     const observation = FileSearchTargetVersionObservationSchema.parse(
-      await tool.inspect_target_version(command.payload.arguments, env ? { env } : undefined),
+      await tool.inspect_target_version(command.payload.arguments, {
+        ...(env ? { env } : {}),
+        ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
+      }),
     );
     const requestedRoot = command.payload.arguments.root;
     if (typeof requestedRoot !== "string" || observation.requested_root_digest !==
         createHash("sha256").update(requestedRoot, "utf8").digest("hex")) {
       throw new Error("file.search target version resolver returned evidence for another command");
+    }
+    if (observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
+      throw new Error("file.search target version resolver returned evidence for another operation plan source");
     }
     return Object.freeze(observation);
   }
