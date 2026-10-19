@@ -1430,6 +1430,7 @@ export class OperationPlanLedger {
           used_as_world_truth: false, used_for_authority: false, may_execute: false });
         continue;
       }
+      if (b.operation !== "file.search") throw new Error("plan_reflection_operation_not_supported");
       if (b.status !== "verified" || !b.memory_commit || !b.memory_receipt || !verifyResultMemoryCommit(p, b) ||
           !receiptForResultCommit(b.memory_receipt, b.memory_commit)) throw new Error("plan_reflection_observation_not_current");
       const receipt = this.resultMemory.reconcile(b.memory_commit.update_id);

@@ -8,13 +8,13 @@ import {
 type Plan = OperationPlanCheckpoint["plans"][number];
 type Binding = Plan["bindings"][number];
 
-/** 未確定の実作用結果はdigestだけを保存し、反省・成功・権限へ昇格させない。 */
+/** 実作用の結果記録はMを非権威に保ち、記録だけで権限や成功判定を発行しない。 */
 export function resultMemoryEligible(b: Binding): boolean {
-  if (b.status === "verified") return b.operation === "file.search";
+  if (b.status === "verified") return b.operation === "file.search" || b.operation === "file.write";
   return b.status === "outcome_unknown" && !!b.execution_admission && !!b.delivery_digest && !!b.result_digest;
 }
 
-/** Jが同検索の実観測だけを固定する。意味採用・任意記憶変更の入口ではない。 */
+/** Jが受領済みの実結果を非権威観測として固定する。意味採用・任意記憶変更の入口ではない。 */
 export function resultObservation(p: Plan, b: Binding) {
   const result = p.results.find((r) => r.step_id === b.step_id);
   if (b.status === "outcome_unknown" && b.execution_admission && b.delivery_digest && b.result_digest) {
@@ -29,7 +29,20 @@ export function resultObservation(p: Plan, b: Binding) {
     };
   }
   if (b.status !== "verified" || !b.execution_admission || !b.delivery_digest || !b.result_digest ||
-      b.operation !== "file.search" || !result) throw new Error("plan_memory_observation_not_eligible");
+      !result) throw new Error("plan_memory_observation_not_eligible");
+  if (b.operation === "file.write") {
+    return {
+      schema_version: "operation-action-result.v1", record_type: "action_result_observation",
+      plan_revision_digest: b.revision_digest, step_review_request_id: b.request_id,
+      command_id: b.command_id, upstream_commit_hash: b.commit_hash, operation: "file.write",
+      delivery_digest: b.delivery_digest, result_digest: b.result_digest,
+      plan_binding_status: "verified", plan_validation_status: "matched",
+      effect_observation: "reported_success", observed_at_ms: result.observed_at_ms,
+      adoption_status: "observation_only", used_as_world_truth: false,
+      used_for_authority: false, may_execute: false,
+    };
+  }
+  if (b.operation !== "file.search") throw new Error("plan_memory_observation_not_eligible");
   return {
     schema_version: "operation-result-observation.v1", record_type: "action_observation",
     plan_revision_digest: b.revision_digest, step_review_request_id: b.request_id,

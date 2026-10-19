@@ -2,7 +2,23 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-FILE-WRITE-CREATE-TARGET-BINDING`
+### 最新BUILD_BATCH：`QEB-01-D02.01-FILE-WRITE-RESULT-M-RETURN`
+
+開始HEAD／`origin/main`=`403a178daae865c60ca2681616b960ca5a72e43b`、worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示、D02.01／F01.01／D04.02を再読した。D4-Pocketの現行`main`=`4ac39c81328aba1aa1f867d2b7cce8a1d314e8c8`でAGENTS §3.1を確認し、作業差分を保持した。今回のWindows local確認で不足するOS・artifact・重い検査がないため、Actions・workflow追加・一時branchは未実施。
+
+保存済みExecutor result deliveryをJ Operation Planのcurrent bindingへ照合し、明示`result_equals`検証を通った`file.write`だけをMへ返す経路を接続した。MにはPlan／step／commandのdigest結合、`reported_success`という作用報告、`observation_only`／非権威flagsを内容を含まない形で保存し、path・workspace root・bytes_written・file contentは保存しない。`plan:reflect`はfile.search以外を拒否し、write observationからCの解釈・権限・再作用を生成しない。合成temp workspaceで作成結果のread-back、J/M commit、再起動後の保持を確認した。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `execution_result_reconciliation.test.ts` | PASS、36/36。file.write結果をPlanへ照合し、内容なしM観測、raw path/content非保存、C反省拒否、M再起動後の保持、validation不一致時のM昇格拒否を含む。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| `pnpm hds:standalone` | PASS。Runtime Invariants `all_ok=true`。 |
+| `pnpm doctor` | PASS。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は継続注意。 |
+
+このfile.write実行結果→J Plan→digest-only M経路は合成条件で`WIRED`。Mのaction observationをCへ反省入力すること、後続stepからのfile.write本文利用、書込み耐久性・全体一仕事、D02.01／D02.02全体、QE_QC／QE_QA／5OS実機は未成立。実provider／credential／owner workspace書込み、D4変更、公開／出荷判断は行っていない。次consumerは検証済み結果を後続の目的付き計画へ安全に使う経路の現物評価。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-FILE-WRITE-CREATE-TARGET-BINDING`
 
 開始HEAD／`origin/main`=`dec16169bb49c07237d17bbd8fdb5feaa2fff2d4`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示とD02.01／F01.01を再読した。D4-Pocketの現行AGENTS §3.1は`workflow_dispatch`をlocalで不足するOS build・artifact生成・重い検査の補助に限定している。確認時のD4 `main`／`origin/main`は`4ac39c81328aba1aa1f867d2b7cce8a1d314e8c8`で、別作業のdirty差分を保持し読取確認だけを行った。今回のWindows local検証で不足する対象はなく、Actions未使用。C08.03実provider保留、P13 owner-GO保留、他repo変更禁止を維持する。
 
