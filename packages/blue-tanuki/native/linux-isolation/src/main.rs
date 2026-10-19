@@ -1452,6 +1452,13 @@ fn stable_error(error: &str) -> String {
             "workspace_overlay_layers_on_different_filesystems",
             "workspace_overlay_lower_access_denied",
             "workspace_overlay_destination_access_denied",
+            "workspace_overlay_whiteout_probe_setup_failed",
+            "workspace_overlay_whiteout_probe_cleanup_failed",
+            "workspace_overlay_whiteout_probe_access_denied",
+            "workspace_overlay_whiteout_probe_operation_denied",
+            "workspace_overlay_whiteout_probe_invalid_options",
+            "workspace_overlay_whiteout_probe_unsupported",
+            "workspace_overlay_whiteout_probe_failed",
             "workspace_commit_failed",
             "workspace_changed_during_execution",
             "workspace_write_limit_exceeded",
@@ -1609,6 +1616,13 @@ mod tests {
             "workspace_overlay_layers_on_different_filesystems",
             "workspace_overlay_lower_access_denied",
             "workspace_overlay_destination_access_denied",
+            "workspace_overlay_whiteout_probe_setup_failed",
+            "workspace_overlay_whiteout_probe_cleanup_failed",
+            "workspace_overlay_whiteout_probe_access_denied",
+            "workspace_overlay_whiteout_probe_operation_denied",
+            "workspace_overlay_whiteout_probe_invalid_options",
+            "workspace_overlay_whiteout_probe_unsupported",
+            "workspace_overlay_whiteout_probe_failed",
         ] {
             let error =
                 format!("linux_sandbox_start_or_shutdown_failed:linux_isolation_error:{detail}");

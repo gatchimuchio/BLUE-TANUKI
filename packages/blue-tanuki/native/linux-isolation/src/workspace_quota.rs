@@ -129,6 +129,7 @@ pub fn mount_bounded_overlay() -> Result<(), String> {
         .map_err(|_| "workspace_overlay_lower_access_denied".to_string())?;
     verify_overlay_directory_access(Path::new(WORKSPACE_PATH), libc::X_OK)
         .map_err(|_| "workspace_overlay_destination_access_denied".to_string())?;
+    verify_overlay_whiteout_rename(&work)?;
 
     let overlay = CString::new("overlay").map_err(|_| "workspace_quota_unavailable".to_string())?;
     let destination =
@@ -187,6 +188,66 @@ fn verify_overlay_directory_access(path: &Path, mode: libc::c_int) -> Result<(),
         return Ok(());
     }
     Err("workspace_overlay_directory_access_unavailable".to_string())
+}
+
+fn verify_overlay_whiteout_rename(workdir: &Path) -> Result<(), String> {
+    let nonce = crate::read_uuid()
+        .map_err(|_| "workspace_overlay_whiteout_probe_setup_failed".to_string())?;
+    let source = workdir.join(format!(".blue-tanuki-whiteout-probe-{nonce}"));
+    let destination = workdir.join(format!(".blue-tanuki-whiteout-probe-{nonce}-moved"));
+    let source_c = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| "workspace_overlay_whiteout_probe_setup_failed".to_string())?;
+    let destination_c = CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| "workspace_overlay_whiteout_probe_setup_failed".to_string())?;
+    let probe = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&source)
+        .map_err(|_| "workspace_overlay_whiteout_probe_setup_failed".to_string())?;
+    drop(probe);
+
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source_c.as_ptr(),
+            libc::AT_FDCWD,
+            destination_c.as_ptr(),
+            libc::RENAME_WHITEOUT,
+        )
+    };
+    let probe_error =
+        (result != 0).then(|| whiteout_probe_error_code(io::Error::last_os_error().raw_os_error()));
+
+    let source_removed = remove_whiteout_probe_path(&source);
+    let destination_removed = remove_whiteout_probe_path(&destination);
+    if !source_removed || !destination_removed {
+        return Err("workspace_overlay_whiteout_probe_cleanup_failed".to_string());
+    }
+    if let Some(error) = probe_error {
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+fn remove_whiteout_probe_path(path: &Path) -> bool {
+    match fs::remove_file(path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
+}
+
+fn whiteout_probe_error_code(errno: Option<i32>) -> &'static str {
+    match errno {
+        Some(libc::EACCES) => "workspace_overlay_whiteout_probe_access_denied",
+        Some(libc::EPERM) => "workspace_overlay_whiteout_probe_operation_denied",
+        Some(libc::EINVAL) => "workspace_overlay_whiteout_probe_invalid_options",
+        Some(libc::ENOSYS) | Some(libc::EOPNOTSUPP) => {
+            "workspace_overlay_whiteout_probe_unsupported"
+        }
+        _ => "workspace_overlay_whiteout_probe_failed",
+    }
 }
 
 fn storage_mount_error_code(errno: Option<i32>) -> &'static str {
@@ -511,7 +572,7 @@ fn set_file_times(fd: i32, metadata: &Metadata) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{overlay_mount_error_code, storage_mount_error_code};
+    use super::{overlay_mount_error_code, storage_mount_error_code, whiteout_probe_error_code};
 
     #[test]
     fn storage_mount_errno_maps_to_fixed_codes() {
@@ -562,6 +623,34 @@ mod tests {
         assert_eq!(
             overlay_mount_error_code(None),
             "workspace_overlay_mount_failed"
+        );
+    }
+
+    #[test]
+    fn whiteout_probe_errno_maps_to_fixed_codes() {
+        assert_eq!(
+            whiteout_probe_error_code(Some(libc::EACCES)),
+            "workspace_overlay_whiteout_probe_access_denied"
+        );
+        assert_eq!(
+            whiteout_probe_error_code(Some(libc::EPERM)),
+            "workspace_overlay_whiteout_probe_operation_denied"
+        );
+        assert_eq!(
+            whiteout_probe_error_code(Some(libc::EINVAL)),
+            "workspace_overlay_whiteout_probe_invalid_options"
+        );
+        assert_eq!(
+            whiteout_probe_error_code(Some(libc::EOPNOTSUPP)),
+            "workspace_overlay_whiteout_probe_unsupported"
+        );
+        assert_eq!(
+            whiteout_probe_error_code(Some(libc::EIO)),
+            "workspace_overlay_whiteout_probe_failed"
+        );
+        assert_eq!(
+            whiteout_probe_error_code(None),
+            "workspace_overlay_whiteout_probe_failed"
         );
     }
 }
