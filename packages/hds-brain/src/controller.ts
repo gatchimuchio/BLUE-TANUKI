@@ -390,7 +390,7 @@ export class HDSUpperController {
 
   constructor(opts: ControllerOptions = {}) {
     this.operationPlans = new OperationPlanLedger(opts.operation_plan_state, opts.operation_plan_memory,
-      opts.operation_plan_recovery_evidence);
+      opts.operation_plan_recovery_evidence, () => this.goal_governance?.project(Date.now()));
     this.policy = opts.policy ?? DEFAULT_POLICY;
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
@@ -550,6 +550,9 @@ ${planControl.question}`,
           "plan_recovery_residual_hold", "plan_recovery_unobserved_hold", "plan_recovery_unverified_hold",
           "plan_recovery_refresh_hold", "plan_memory_commit_pending",
           "plan_target_resolver_not_connected", "plan_revision_identity_changed", "plan_revision_unchanged",
+          "plan_goal_purpose_binding_required", "plan_goal_purpose_governance_unavailable", "plan_goal_purpose_governance_invalid",
+          "plan_goal_purpose_unknown", "plan_goal_purpose_stale", "plan_goal_purpose_parent_review_required",
+          "plan_goal_purpose_scope_changed",
           "plan_attempted_step_or_dependency_changed", "plan_reflection_memory_unavailable", "plan_reflection_step_identity_mismatch",
           "plan_reflection_observation_not_current", "plan_reflection_record_mismatch", "plan_reflection_observation_expired",
           "plan_reflection_summary_not_available", "plan_receipt_reconciliation_not_outcome_unknown",

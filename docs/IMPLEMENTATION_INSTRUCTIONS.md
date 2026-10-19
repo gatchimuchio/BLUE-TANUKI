@@ -2,7 +2,26 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-WEBCHAT-PURPOSE-CHANGE-L3-J-COMMIT`
+### 最新BUILD_BATCH：`QEB-01-D02.01-OPERATION-PLAN-PURPOSE-VERSION-BINDING`
+
+開始HEAD／`origin/main`=`04b485dd4ddf8e5a934bdf5f1979d55677741136`。作業開始時の差分は、このbatchで継続する`packages/protocol/src/operation_plan_state.ts`のpurpose binding control/checkpoint schemaのみ。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02とOperation Plan→HDS→Executor実経路を再読した。編集前recovery branch／remote tagはcurrent=`04b485d...`／previous=`4d5e852...`。D01.03 stashは未変更。D4-Pocketの現行Actions条件も確認したが、今回のWindows local build／testは条件に該当しないためActions／workflow未使用。
+
+`plan:review`はGoalGovernance設定中に明示`goal_purpose_binding={goal_ref,purpose_version,purpose_digest}`を要求する。HDSは現在のJ GoalGovernance projectionのgoal／版／digestと照合し、親目的が`requires_review`のscope、古いversion、同じ計画への後付けscope差替えを拒否する。選択scopeはJのOperation Plan checkpointへ保存し、target／effects／parameters等を含む既存`operation_plan_binding_digest`へ追加する。したがって既存`file.search`のcanonical target-version観測と同じHDS source context／Executor ticket proofの連鎖に入る。目的版が有効化されると未実行commandはcurrent判定から外れ、HDS execution sealを発行しない。scopeは新しい計画から選び直す。
+
+Control Center向けprojectionは選択候補と計画scopeをgoal ref／version／digestだけで表示し、source refとraw purpose本文を出さない。scopeの状態は`not_configured`／`required`／`current`／`stale`を示す。これは目的版の同一性を結ぶ記録であり、plannerの意味上の適合を証明せず、permission／approvalを付与しない。
+
+| 限定確認 | 結果 |
+|---|---|
+| `pnpm typecheck`／`pnpm build` | PASS。workspace 15 projects。 |
+| Gateway Operation Plan／projectionとHDS Goal Governance／standalone tests | PASS、4 files／40 tests。current purpose binding、effective version更新時の失効、非権威投影を含む。 |
+| `pnpm hds:standalone` | PASS。audit chain／Runtime Invariantsを確認。 |
+| Control Center renderer | 合成VM fixtureで候補・current／stale状態と意味非保証文言を確認。browser DOM実行は未実施。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の既存移行負債76件は注意として残存。 |
+| 全workspace tests／QE_QC／QE_QA／5OS実機／GitHub Actions | 未実施。Actionsは今回のWindows local検証条件では不要。 |
+
+仕事ごとの目的版選択→J計画固定→HDS source sealへの接続はこの範囲で`WIRED`。既存`file.search` target versionは同source contextへ入る。D02.01／D02.02全体は`BUILD_GAP`を維持する。plannerのtask内容と選択purposeの意味的関係、file.search以外のBroker canonical target identity、全仕事の結果→M→帰還は未接続。次consumerはこれらを実経路へ結び、goal projectionのdigestだけを意味判断へ昇格させないこと。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。別repo変更、実credential・業務作用、公開・出荷判断なし。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-WEBCHAT-PURPOSE-CHANGE-L3-J-COMMIT`
 
 開始HEAD／`origin/main`=`4d5e8528b674bc39ed452309f36258e52c97ea78`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、WebChat owner credential、Gateway approval、HDS GoalGovernance実経路を再読した。編集前local recovery branch／remote backup tagはcurrent=`4d5e852...`／previous=`8b996036...`で一致。D01.03 stashは未変更。
 

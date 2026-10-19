@@ -210,11 +210,20 @@ export interface OperationPlanStatusProjection {
   recovery_refresh_status: "ready" | "pending" | "unavailable";
   plan_count: number;
   displayed_count: number;
+  goal_purpose_options: Array<{
+    goal_ref: string;
+    goal_kind: "delegated" | "operational" | "subgoal";
+    purpose_version: number;
+    purpose_digest: string;
+    parent_alignment_status: "not_applicable" | "aligned" | "requires_review";
+  }>;
   plans: Array<{
     plan_id: string;
     revision: number;
     revision_digest: string;
     status: "awaiting_step_review" | "results_verified";
+    goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string };
+    goal_purpose_binding_status: "not_configured" | "required" | "current" | "stale";
     recovery_hold_reason?: "held_residual" | "held_unobserved" | "held_unverified";
     recovery_hold_scope_relation?: "requested" | "collateral" | "unknown";
     step_count: number;
@@ -252,7 +261,7 @@ function invalidOperationPlanStatusProjection(): OperationPlanStatusProjection {
     schema_version: "operation-plan.status.v1", evidence_source: ["INTERNAL_STATE"],
     used_for_authority: false, raw_payload_exposed: false, status: "unavailable",
     recovery_refresh_status: "unavailable",
-    plan_count: 0, displayed_count: 0, plans: [],
+    plan_count: 0, displayed_count: 0, goal_purpose_options: [], plans: [],
   };
 }
 
@@ -268,12 +277,39 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
   if (recoveryRefreshStatus !== "ready" && recoveryRefreshStatus !== "pending") {
     return invalidOperationPlanStatusProjection();
   }
+  const rawGoalPurposeOptions = value.goal_purpose_options === undefined ? [] : value.goal_purpose_options;
+  if (!Array.isArray(rawGoalPurposeOptions) || rawGoalPurposeOptions.length > 256 || !rawGoalPurposeOptions.every(isRecord)) {
+    return invalidOperationPlanStatusProjection();
+  }
+  const goalPurposeOptions: OperationPlanStatusProjection["goal_purpose_options"] = [];
+  for (const option of rawGoalPurposeOptions as Record<string, unknown>[]) {
+    if (Object.keys(option).some((key) => !["goal_ref", "goal_kind", "purpose_version", "purpose_digest", "parent_alignment_status"].includes(key)) ||
+        typeof option.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(option.goal_ref) ||
+        !["delegated", "operational", "subgoal"].includes(String(option.goal_kind)) ||
+        !Number.isSafeInteger(option.purpose_version) || (option.purpose_version as number) < 1 || !isDigest(option.purpose_digest) ||
+        !["not_applicable", "aligned", "requires_review"].includes(String(option.parent_alignment_status))) {
+      return invalidOperationPlanStatusProjection();
+    }
+    goalPurposeOptions.push({ goal_ref: option.goal_ref, goal_kind: option.goal_kind as "delegated" | "operational" | "subgoal",
+      purpose_version: option.purpose_version as number, purpose_digest: option.purpose_digest as string,
+      parent_alignment_status: option.parent_alignment_status as "not_applicable" | "aligned" | "requires_review" });
+  }
   const inputPlans = value.plans;
   if (inputPlans.length > 0 && !inputPlans.every(isRecord)) return invalidOperationPlanStatusProjection();
   const plans: OperationPlanStatusProjection["plans"] = [];
   for (const plan of inputPlans.slice(-20).reverse()) {
     const revision = numberValue(plan.revision);
+    const goalPurposeBinding = plan.goal_purpose_binding;
+    const goalPurposeBindingValid = goalPurposeBinding === undefined || (isRecord(goalPurposeBinding) &&
+      Object.keys(goalPurposeBinding).length === 3 &&
+      Object.keys(goalPurposeBinding).every((key) => ["goal_ref", "purpose_version", "purpose_digest"].includes(key)) &&
+      typeof goalPurposeBinding.goal_ref === "string" && /^goal_[a-f0-9]{16,64}$/.test(goalPurposeBinding.goal_ref) &&
+      Number.isSafeInteger(goalPurposeBinding.purpose_version) && (goalPurposeBinding.purpose_version as number) >= 1 &&
+      isDigest(goalPurposeBinding.purpose_digest));
     if (!isDigest(plan.plan_id) || !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
+        !goalPurposeBindingValid ||
+        !["not_configured", "required", "current", "stale"].includes(String(plan.goal_purpose_binding_status ??
+          (goalPurposeBinding === undefined ? "not_configured" : "current"))) ||
         !["awaiting_step_review", "results_verified"].includes(String(plan.status)) ||
         (plan.recovery_hold_reason !== undefined &&
           !["held_residual", "held_unobserved", "held_unverified"].includes(String(plan.recovery_hold_reason))) ||
@@ -342,6 +378,12 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       });
     }
     plans.push({ plan_id: plan.plan_id, revision: revision!, revision_digest: plan.revision_digest,
+      ...(isRecord(goalPurposeBinding) ? { goal_purpose_binding: {
+        goal_ref: goalPurposeBinding.goal_ref as string, purpose_version: goalPurposeBinding.purpose_version as number,
+        purpose_digest: goalPurposeBinding.purpose_digest as string,
+      } } : {}),
+      goal_purpose_binding_status: (plan.goal_purpose_binding_status ??
+        (goalPurposeBinding === undefined ? "not_configured" : "current")) as "not_configured" | "required" | "current" | "stale",
       ...(plan.recovery_hold_reason ? { recovery_hold_reason: plan.recovery_hold_reason as "held_residual" | "held_unobserved" | "held_unverified" } : {}),
       ...(plan.recovery_hold_scope_relation ? { recovery_hold_scope_relation: plan.recovery_hold_scope_relation as "requested" | "collateral" | "unknown" } : {}),
       status: plan.status as "awaiting_step_review" | "results_verified", step_count: plan.steps.length, steps });
@@ -350,7 +392,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     schema_version: "operation-plan.status.v1", evidence_source: ["INTERNAL_STATE"],
     used_for_authority: false, raw_payload_exposed: false, status: "available",
     recovery_refresh_status: recoveryRefreshStatus,
-    plan_count: inputPlans.length, displayed_count: plans.length, plans,
+    plan_count: inputPlans.length, displayed_count: plans.length, goal_purpose_options: goalPurposeOptions, plans,
   };
 }
 

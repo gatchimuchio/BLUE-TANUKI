@@ -922,14 +922,26 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setHtml("operation-plan-state-list", '<div class="trace-item muted">J計画snapshotの非権威・payload非露出条件を確認できないため表示しません。</div>');
           return;
         }
+        const goalPurposeOptions = Array.isArray(projection.goal_purpose_options) ? projection.goal_purpose_options : [];
+        const goalPurposeGuide = goalPurposeOptions.length === 0 ? '' : '<details class="trace-item"><summary>作業目的版の選択候補（digestのみ）</summary>' +
+          '<p class="muted">plan:reviewのgoal_purpose_bindingへ以下のgoal_ref・purpose_version・purpose_digestを明示します。これは版の同一性を結ぶ記録で、意味上の適合や実行許可を判定しません。</p>' +
+          goalPurposeOptions.map(function (option) {
+            if (!isObject(option) || typeof option.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(option.goal_ref) ||
+                !Number.isSafeInteger(option.purpose_version) || typeof option.purpose_digest !== "string" ||
+                !/^[a-f0-9]{64}$/.test(option.purpose_digest)) return '';
+            const alignment = option.parent_alignment_status === "requires_review" ? "親目的の再確認が必要" : "版を選択可能";
+            return '<div class="trace-item"><code>' + escapeHtml(JSON.stringify({ goal_ref: option.goal_ref,
+              purpose_version: option.purpose_version, purpose_digest: option.purpose_digest })) + '</code><p class="muted">' +
+              escapeHtml(String(option.goal_kind || "goal")) + '・' + escapeHtml(alignment) + '</p></div>';
+          }).join('') + '</details>';
         const refreshNotice = refreshPending
           ? '<div class="trace-item muted">選択したOperation Plan storeの復元結果が未確認です。step選択を停止しています。復元処理完了後にGatewayを再起動して復旧状態を点検してください。</div>'
           : "";
         if (projection.plans.length === 0) {
-          setHtml("operation-plan-state-list", refreshNotice + '<div class="trace-item muted">現在表示できるJ計画はありません。</div>');
+          setHtml("operation-plan-state-list", refreshNotice + goalPurposeGuide + '<div class="trace-item muted">現在表示できるJ計画はありません。</div>');
           return;
         }
-        setHtml("operation-plan-state-list", refreshNotice + projection.plans.map(function (plan) {
+        setHtml("operation-plan-state-list", refreshNotice + goalPurposeGuide + projection.plans.map(function (plan) {
           const steps = Array.isArray(plan.steps) ? plan.steps : [];
           const recoveryHoldLabels = {
             held_residual: "復元残差あり（step選択停止中）",
@@ -949,12 +961,28 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             : null;
           const reconciliationPlanReady = typeof plan.plan_id === "string" && /^[a-f0-9]{64}$/.test(plan.plan_id) &&
             typeof plan.revision_digest === "string" && /^[a-f0-9]{64}$/.test(plan.revision_digest);
+          const purposeBinding = isObject(plan.goal_purpose_binding) ? plan.goal_purpose_binding : null;
+          const purposeBindingStatusLabels = {
+            not_configured: "目的版管理なし",
+            required: "未選択（step reviewを停止）",
+            current: "現行版",
+            stale: "陳腐化または照合不能（step実行を停止）",
+          };
+          const purposeBindingStatus = Object.prototype.hasOwnProperty.call(purposeBindingStatusLabels, plan.goal_purpose_binding_status)
+            ? purposeBindingStatusLabels[plan.goal_purpose_binding_status] : "目的版状態を確認できません";
+          const purposeBindingLabel = purposeBinding && typeof purposeBinding.goal_ref === "string" &&
+            Number.isSafeInteger(purposeBinding.purpose_version) && typeof purposeBinding.purpose_digest === "string"
+            ? '<dt>選択した作業目的版</dt><dd><code>' + escapeHtml(JSON.stringify({ goal_ref: purposeBinding.goal_ref,
+              purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) + '</code><br>' +
+              escapeHtml(purposeBindingStatus) + '</dd>'
+            : plan.goal_purpose_binding_status === "required" ? '<dt>作業目的版</dt><dd>' + escapeHtml(purposeBindingStatus) + '</dd>' : '';
           return '<article class="trace-item">' +
             '<div class="row"><h3>計画 ' + escapeHtml(shortDigest(plan.plan_id)) + '</h3><span>' + badge("revision " + String(plan.revision), "review") + '</span></div>' +
             '<dl class="kv"><dt>計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.revision_digest)) + '</dd>' +
             '<dt>計画状態</dt><dd>' + badge(plan.status || "unknown", operationPlanStatusTone(plan.status)) + '</dd>' +
             (recoveryHold ? '<dt>復元後の選択</dt><dd>' + escapeHtml(recoveryHold) + '</dd>' +
               '<dt>復元scopeとの関係</dt><dd>' + escapeHtml(recoveryScopeRelation) + '</dd>' : '') +
+            purposeBindingLabel +
             '<dt>step数</dt><dd>' + escapeHtml(String(plan.step_count ?? steps.length)) + '</dd></dl>' +
             (recoveryHold ? '<p class="muted">この計画のstep選択は停止中です。復元scopeとの関係表示はplan単位の復元やhold解除を意味しません。状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。</p>' : '') +
             steps.map(function (step) {

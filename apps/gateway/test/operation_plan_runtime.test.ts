@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, ToolRegistry, fileSearchTool } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema, type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
+import { projectOperationPlanStatus } from "../src/serve_projection.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
@@ -85,12 +86,91 @@ function rig(hds: HDSUpperController, candidate: OperationPlan, tool = fileSearc
   }
   return { run };
 }
-function review(hds: HDSUpperController, candidate: OperationPlan, step_id: string) {
+function review(hds: HDSUpperController, candidate: OperationPlan, step_id: string,
+  goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string }) {
   const current = hds.getRuntimeSnapshot().operation_plans.plans.find((p) => p.plan_id === operationPlanDigest(candidate.plan_id))!;
-  return hds.decide(request(`plan:review ${JSON.stringify({ plan_id: current.plan_id, revision_digest: current.revision_digest, step_id: operationPlanDigest(step_id) })}`));
+  return hds.decide(request(`plan:review ${JSON.stringify({ plan_id: current.plan_id, revision_digest: current.revision_digest,
+    step_id: operationPlanDigest(step_id), ...(goal_purpose_binding ? { goal_purpose_binding } : {}) })}`));
+}
+
+function goalGovernanceConfig() {
+  const event = {
+    event_ref: "ge_0123456789abcdef", event_kind: "purpose_change" as const,
+    goal_ref: "goal_0123456789abcdef", source_ref: "F:0123456789abcdef", goal_kind: "delegated" as const,
+    prior_version: 1, new_version: 2, prior_purpose_digest: "a".repeat(64), new_purpose_digest: "e".repeat(64),
+    authority_kind: "owner" as const, authorization_ref: "ga_0123456789abcdef", recorded_at: 100, effective_from: 500,
+  };
+  return {
+    schema_version: "blue-tanuki.goal-governance.v1" as const,
+    goals: [{ goal_ref: "goal_0123456789abcdef", goal_kind: "delegated" as const,
+      source_ref: "F:0123456789abcdef", initial_purpose_digest: "a".repeat(64),
+      initial_interpretation_digest: "b".repeat(64), adopted_at: 0 }],
+    authorizations: [{ authorization_ref: event.authorization_ref, event_ref: event.event_ref,
+      event_digest: goalGovernanceEventDigest(event), goal_ref: event.goal_ref, event_kind: event.event_kind,
+      authority_kind: event.authority_kind, authorized_at: event.recorded_at }],
+    events: [event],
+  };
 }
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
+  it("requires an explicit current purpose-version binding and carries its digest into the HDS execution seal", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(100));
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-purpose-scope-"));
+    const workspace = join(root, "workspace"); await mkdir(workspace); await writeFile(join(workspace, "blue.txt"), "blue\n");
+    vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    try {
+      const hds = new HDSUpperController({ operation_plan_state: store, goal_governance: goalGovernanceConfig() });
+      const origin = request("plan:compute find the fixture token", "fixture-owner");
+      const candidate = plan(origin.id, workspace);
+      const executor = rig(hds, candidate);
+      await executor.run(hds.decide(origin).command!);
+
+      const goal = hds.getGoalGovernanceProjection()?.goals[0];
+      if (!goal) throw new Error("missing synthetic delegated goal");
+      const scope = { goal_ref: goal.goal_ref, purpose_version: goal.current_version, purpose_digest: goal.current_purpose_digest };
+      const projection = hds.getRuntimeSnapshot().operation_plans;
+      expect(projection.goal_purpose_options).toEqual([{ ...scope, goal_kind: "delegated", parent_alignment_status: "not_applicable" }]);
+      expect(projection.plans[0]?.goal_purpose_binding_status).toBe("required");
+      expect(JSON.stringify(projection)).not.toContain("F:0123456789abcdef");
+      expect(projectOperationPlanStatus(projection).goal_purpose_options).toEqual(projection.goal_purpose_options);
+
+      const missing = review(hds, candidate, "search");
+      expect(missing.command).toBeNull();
+      expect(missing.log.commit.reason).toContain("plan_control_denied:plan_goal_purpose_binding_required");
+
+      const selected = review(hds, candidate, "search", scope).command;
+      if (!selected) throw new Error("current goal purpose binding did not produce a reviewed command");
+      expect(hds.operationPlanCommandIsCurrent(selected)).toBe(true);
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_binding).toEqual(scope);
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_binding_status).toBe("current");
+      expect(projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).plans[0]?.goal_purpose_binding_status).toBe("current");
+      const authorityBinding = hds.createExecutionAuthorityBinding(selected, {
+        schema_version: "blue-tanuki.file-search-target-version.v1",
+        requested_root_digest: createHash("sha256").update(workspace, "utf8").digest("hex"),
+        canonical_root_digest: "c".repeat(64), resource_version_digest: "d".repeat(64), files_examined: 1,
+        used_for_authority: false, may_execute: false,
+      });
+      expect(authorityBinding.operation_plan_binding_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(authorityBinding.goal_governance_used_for_authority).toBe(false);
+      vi.setSystemTime(new Date(500));
+      expect(hds.operationPlanCommandIsCurrent(selected)).toBe(false);
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_binding_status).toBe("stale");
+      expect(() => hds.createExecutionAuthorityBinding(selected, {
+        schema_version: "blue-tanuki.file-search-target-version.v1",
+        requested_root_digest: createHash("sha256").update(workspace, "utf8").digest("hex"),
+        canonical_root_digest: "c".repeat(64), resource_version_digest: "d".repeat(64), files_examined: 1,
+        used_for_authority: false, may_execute: false,
+      })).toThrow("plan_execution_source_binding_stale");
+      const updatedScope = { ...scope, purpose_version: 2, purpose_digest: "e".repeat(64) };
+      const rebound = review(hds, candidate, "independent", updatedScope);
+      expect(rebound.command).toBeNull();
+      expect(rebound.log.commit.reason).toContain("plan_control_denied:plan_goal_purpose_scope_changed");
+    } finally {
+      store.close(); vi.unstubAllEnvs(); vi.useRealTimers(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("selected-store restore gates plan use, rebases the live ledger, and holds only restored plans", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-live-restore-refresh-"));
     const store = new OperationPlanStateStore(join(root, "state.sqlite"));

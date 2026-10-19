@@ -3,7 +3,7 @@ import {
   getOperationDescriptor, inspectOperationCommandExecutionResult,
   OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
-  type OperationPlanCheckpoint, type OperationPlanControl, type OperationStep,
+  type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding, type OperationStep,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
@@ -13,6 +13,7 @@ import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { buildResultMemoryCommit, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
 import type { ResultObservationCitation, ResultObservationProjection } from "./operation_result_reflection.js";
+import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
@@ -365,7 +366,8 @@ export class OperationPlanLedger {
   }>();
   private recoveryRefreshPending = false;
   constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage,
-    recoveryEvidence?: OperationPlanRecoveryEvidence) {
+    recoveryEvidence?: OperationPlanRecoveryEvidence,
+    private readonly goalGovernanceReader?: () => ReadonlyGoalGovernanceProjection | undefined) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
     this.memoryStorage = memoryStorage;
     const checkedRecoveryEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
@@ -768,6 +770,7 @@ export class OperationPlanLedger {
 
   inspectControl(control: Extract<OperationPlanControl, { action: "review" | "revise" }>, caller: InboundRequest): {
     plan_id: string; revision_digest: string; step?: OperationStep; goal: string; recovery_hold_released: boolean;
+    goal_purpose_binding?: OperationPlanGoalPurposeBinding;
   } {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const p = this.ownedPlan(control.plan_id, caller);
@@ -794,13 +797,15 @@ export class OperationPlanLedger {
     if (!step || inspected.summary.steps.find((s) => s.step_id === stepId)?.status !== "ready") throw new Error("plan_step_not_ready");
     // 実接続がある、対象と引数を狭く結び付けたadapterだけをcommand化する。
     if (!hasConnectedPlanTarget(step)) throw new Error("plan_target_resolver_not_connected");
+    const goalPurposeBinding = this.resolveGoalPurposeBinding(control.goal_purpose_binding, p.goal_purpose_binding);
     // 期限切れrevisionや不正stepの要求では復元holdを消さない。
     if (recoveryHold && !this.releaseRecoveryHoldForFreshReview(p)) {
       throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
     }
     recoveryHoldReleased = recoveryHold !== undefined;
     return { plan_id: current.plan.plan_id, revision_digest: expected, step, goal: p.goal,
-      recovery_hold_released: recoveryHoldReleased };
+      recovery_hold_released: recoveryHoldReleased,
+      ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}) };
   }
 
   /** Check the current J binding and issue no authority beyond one short-lived read-only lookup. */
@@ -880,6 +885,7 @@ export class OperationPlanLedger {
         operationPlanDigest(command.payload.arguments) !== operationPlanDigest(step.parameters)) throw new Error("plan_command_content_changed");
     this.change((state) => {
       const p = state.plans.find((p) => p.revisions[0]!.plan.plan_id === prepared.plan_id)!;
+      if (prepared.goal_purpose_binding) p.goal_purpose_binding = prepared.goal_purpose_binding;
       p.bindings.push({ step_id: step.step_id, revision_digest: prepared.revision_digest,
         step_digest: stepDigest(p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === step.step_id)!),
         prepared_step: step,
@@ -908,8 +914,8 @@ export class OperationPlanLedger {
   isBound(command_id: string): boolean { return this.binding(command_id) !== undefined; }
   /**
    * Produce non-authority source evidence for the exact J-selected plan step
-   * that produced this command. This deliberately binds the plan revision and
-   * declared target, not a live resource version or delegated purpose version.
+   * that produced this command, including the explicitly selected purpose version.
+   * This remains provenance and does not establish semantic fit or grant authority.
    */
   executionSourceBindingDigest(command: ExecuteCommand): string | undefined {
     const issuedId = this.issuedBindings.get(command);
@@ -924,7 +930,8 @@ export class OperationPlanLedger {
     const revision = match.p.revisions.find((entry) => entry.digest === match.b.revision_digest);
     const step = revision?.plan.steps.find((entry) => entry.step_id === match.b.step_id);
     const descriptor = step ? getOperationDescriptor(step.operation) : undefined;
-    if (match.b.status !== "selected" || !currentRevision || currentRevision.digest !== match.b.revision_digest ||
+    if (!this.goalPurposeBindingIsCurrent(match.p.goal_purpose_binding) ||
+        match.b.status !== "selected" || !currentRevision || currentRevision.digest !== match.b.revision_digest ||
         !revision || !step || stepDigest(step) !== match.b.step_digest || !descriptor ||
         match.b.operation !== descriptor.operation_id || command.type !== "tool_call" ||
         command.payload.tool_name !== descriptor.tool_name || commandPayloadDigest(command) !== match.b.payload_digest ||
@@ -950,6 +957,7 @@ export class OperationPlanLedger {
       effects_digest: operationPlanDigest(match.b.prepared_step.effects),
       parameters_digest: operationPlanDigest(match.b.prepared_step.parameters ?? {}),
       preconditions_digest: operationPlanDigest(match.b.prepared_step.preparation?.preconditions ?? []),
+      goal_purpose_binding: match.p.goal_purpose_binding ?? null,
       command_digest: match.b.command_digest,
     });
   }
@@ -968,6 +976,7 @@ export class OperationPlanLedger {
     if (this.memoryQuiesced || this.recoveryHolds.has(operationPlanDigest(match.p.revisions[0]!.plan.plan_id))) return false;
     if (!this.reconcileMemory()) return false;
     const { p, b } = match;
+    if (!this.goalPurposeBindingIsCurrent(p.goal_purpose_binding)) return false;
     const step = p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === b.step_id);
     const prepared = prepareOperationPlan(p.revisions.at(-1)!.plan, { now_ms: Date.now(), results: p.results, observations: [] });
     const current = prepared.kind === "inspected" ? prepared.plan.steps.find((s) => s.step_id === b.step_id) : undefined;
@@ -1254,8 +1263,13 @@ export class OperationPlanLedger {
   }
 
   projection() {
+    const goalProjection = this.goalGovernanceReader?.();
     return { schema_version: "operation-plan-projection.v1", used_for_authority: false as const, raw_payload_exposed: false as const,
       recovery_refresh_status: this.recoveryRefreshPending ? "pending" as const : "ready" as const,
+      goal_purpose_options: (goalProjection?.used_for_authority === false ? goalProjection.goals : []).map((goal) => ({
+        goal_ref: goal.goal_ref, goal_kind: goal.goal_kind, purpose_version: goal.current_version,
+        purpose_digest: goal.current_purpose_digest, parent_alignment_status: goal.parent_alignment_status,
+      })),
       result_memory: { configured: !!this.resultMemory, status: !this.resultMemory ? "not_configured" : this.memoryReady ? "receipt_confirmed" : "pending_or_unavailable",
         used_for_authority: false as const },
       plans: this.state.plans.map((p) => {
@@ -1265,6 +1279,10 @@ export class OperationPlanLedger {
         return { plan_id: planIdDigest,
         request_id: p.revisions[0]!.plan.request_id, revision: p.revisions.length,
         revision_digest: currentRevision.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),
+        ...(p.goal_purpose_binding ? { goal_purpose_binding: structuredClone(p.goal_purpose_binding) } : {}),
+        goal_purpose_binding_status: p.goal_purpose_binding
+          ? this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) ? "current" as const : "stale" as const
+          : goalProjection?.used_for_authority === false ? "required" as const : "not_configured" as const,
         ...(recoveryHold ? { recovery_hold_reason: recoveryHold.reason,
           recovery_hold_scope_relation: recoveryHold.restore_scope_relation } : {}),
         status: currentRevision.plan.steps.every((s) => p.bindings.some((b) => b.step_id === s.step_id && b.status === "verified"))
@@ -1292,6 +1310,37 @@ export class OperationPlanLedger {
           memory_status: b.memory_receipt ? "receipt_confirmed" : b.memory_commit ? "memory_commit_pending" : "not_recorded",
           memory_content_digest: b.memory_commit?.content_digest, memory_receipt_digest: b.memory_receipt?.receipt_digest })),
       }; }) };
+  }
+
+  private resolveGoalPurposeBinding(
+    requested: OperationPlanGoalPurposeBinding | undefined,
+    existing: OperationPlanGoalPurposeBinding | undefined,
+  ): OperationPlanGoalPurposeBinding | undefined {
+    const projection = this.goalGovernanceReader?.();
+    if (projection === undefined) {
+      if (requested !== undefined || existing !== undefined) throw new Error("plan_goal_purpose_governance_unavailable");
+      return undefined;
+    }
+    if (projection.used_for_authority !== false) throw new Error("plan_goal_purpose_governance_invalid");
+    if (requested === undefined) throw new Error("plan_goal_purpose_binding_required");
+    const goal = projection.goals.find((candidate) => candidate.goal_ref === requested.goal_ref);
+    if (!goal) throw new Error("plan_goal_purpose_unknown");
+    if (goal.parent_alignment_status === "requires_review") throw new Error("plan_goal_purpose_parent_review_required");
+    if (goal.current_version !== requested.purpose_version || goal.current_purpose_digest !== requested.purpose_digest) {
+      throw new Error("plan_goal_purpose_stale");
+    }
+    if (existing && (existing.goal_ref !== requested.goal_ref || existing.purpose_version !== requested.purpose_version ||
+        existing.purpose_digest !== requested.purpose_digest)) {
+      throw new Error("plan_goal_purpose_scope_changed");
+    }
+    return { goal_ref: goal.goal_ref, purpose_version: goal.current_version, purpose_digest: goal.current_purpose_digest };
+  }
+
+  private goalPurposeBindingIsCurrent(binding: OperationPlanGoalPurposeBinding | undefined): boolean {
+    try {
+      this.resolveGoalPurposeBinding(binding, binding);
+      return true;
+    } catch { return false; }
   }
 
   private ownedPlan(id: string, caller: InboundRequest): PlanState {

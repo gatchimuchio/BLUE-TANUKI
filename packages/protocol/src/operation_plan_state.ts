@@ -5,6 +5,13 @@ import { MemoryCommitV2Schema, MemoryUpdateReceiptV1Schema } from "./状態更�
 
 const Id = z.string().min(1).max(200);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
+const GoalRef = z.string().regex(/^goal_[a-f0-9]{16,64}$/);
+export const OperationPlanGoalPurposeBindingSchema = z.object({
+  goal_ref: GoalRef,
+  purpose_version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  purpose_digest: Digest,
+}).strict();
+export type OperationPlanGoalPurposeBinding = z.infer<typeof OperationPlanGoalPurposeBindingSchema>;
 export const OperationPlanExternalReceiptObservationSchema = z.object({
   schema_version: z.literal("external-receipt-observation.v1"),
   source: z.literal("local_inspection"),
@@ -61,7 +68,8 @@ export const OperationPlanExternalReceiptObservationSchema = z.object({
 export type OperationPlanExternalReceiptObservation = z.infer<typeof OperationPlanExternalReceiptObservationSchema>;
 
 export const OperationPlanControlSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("review"), plan_id: Id, revision_digest: Digest, step_id: Id }).strict(),
+  z.object({ action: z.literal("review"), plan_id: Id, revision_digest: Digest, step_id: Id,
+    goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional() }).strict(),
   z.object({ action: z.literal("reconcile"), plan_id: Id, revision_digest: Digest, step_id: Id }).strict(),
   z.object({ action: z.literal("revise"), plan_id: Id, expected_revision_digest: Digest, plan: OperationPlanSchema }).strict(),
   z.object({ action: z.literal("reflect"), plan_id: Id, revision_digest: Digest,
@@ -82,6 +90,7 @@ export const OperationPlanCheckpointSchema = z.object({
   schema_version: z.literal("operation-plan-state.v1"),
   plans: z.array(z.object({
     owner: Id, channel: Id, goal: z.string().min(1).max(200_000),
+    goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),
     revisions: z.array(z.object({ digest: Digest, plan: OperationPlanSchema }).strict()).min(1).max(100),
     receipt_observations: z.array(OperationPlanExternalReceiptObservationSchema).max(100).default([]),
     bindings: z.array(z.object({

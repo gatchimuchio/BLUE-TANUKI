@@ -451,10 +451,14 @@ describe("WebChatChannel — Control Center shell", () => {
       recovery_refresh_status: "ready",
       displayed_count: 2,
       plan_count: 2,
+      goal_purpose_options: [{ goal_ref: "goal_0123456789abcdef", goal_kind: "delegated", purpose_version: 2,
+        purpose_digest: "c".repeat(64), parent_alignment_status: "not_applicable" }],
       private_search_line: "SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER",
       plans: [
         {
           plan_id: "a".repeat(64), revision: 3, revision_digest: "b".repeat(64),
+          goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "c".repeat(64) },
+          goal_purpose_binding_status: "current",
           status: "results_verified", step_count: 2,
           steps: [
             { step_id: "c".repeat(64), operation: "file.search", status: "verified",
@@ -465,6 +469,8 @@ describe("WebChatChannel — Control Center shell", () => {
         },
         {
           plan_id: "5".repeat(64), revision: 1, revision_digest: "6".repeat(64),
+          goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 1, purpose_digest: "d".repeat(64) },
+          goal_purpose_binding_status: "stale",
           status: "held_residual", step_count: 1,
           recovery_hold_reason: "held_residual", recovery_hold_scope_relation: "collateral",
           steps: [{ step_id: "7".repeat(64), operation: "file.search", status: "outcome_unknown",
@@ -490,6 +496,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("新しい依頼から新規計画を作成してください。");
     expect(rendered).toContain("実行結果digest");
     expect(rendered).toContain("J配送digest");
+    expect(rendered).toContain("作業目的版の選択候補（digestのみ）");
+    expect(rendered).toContain("意味上の適合や実行許可を判定しません。");
+    expect(rendered).toContain("\u0026quot;purpose_version\u0026quot;:2");
+    expect(rendered).toContain("陳腐化または照合不能（step実行を停止）");
     expect(rendered).not.toContain("SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER");
   });
 
