@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::{CString, OsStr, OsString};
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -493,6 +493,7 @@ fn run_outer(request: Request) -> Result<String, String> {
 
 fn run_inner(request: InnerRequest) -> Result<InnerResult, String> {
     verify_outer_isolation(&request.namespaces)?;
+    establish_private_mount_namespace()?;
     verify_mount_namespace_owner()?;
     let commit_root = Path::new("/commit-target");
     inspect_root(commit_root)?;
@@ -804,24 +805,54 @@ fn verify_namespace_isolation(expected: &BTreeMap<String, u64>) -> Result<(), St
 fn verify_mount_namespace_owner() -> Result<(), String> {
     // mount privileges are scoped to the user namespace that owns this mount namespace.
     let mount_namespace = fs::File::open("/proc/self/ns/mnt")
-        .map_err(|_| "sandbox_mount_namespace_owner_unverified".to_string())?;
+        .map_err(|_| "sandbox_mount_namespace_open_failed".to_string())?;
     let owner_namespace_fd =
         unsafe { libc::ioctl(mount_namespace.as_raw_fd(), NS_GET_USERNS_IOCTL) };
     if owner_namespace_fd < 0 {
-        return Err("sandbox_mount_namespace_owner_unverified".to_string());
+        return Err(namespace_owner_query_error(io::Error::last_os_error().raw_os_error()).into());
     }
     let owner_namespace = unsafe { fs::File::from_raw_fd(owner_namespace_fd) };
     let owner_metadata = owner_namespace
         .metadata()
-        .map_err(|_| "sandbox_mount_namespace_owner_unverified".to_string())?;
+        .map_err(|_| "sandbox_mount_namespace_owner_metadata_failed".to_string())?;
     let current_user_namespace = fs::metadata("/proc/self/ns/user")
-        .map_err(|_| "sandbox_mount_namespace_owner_unverified".to_string())?;
+        .map_err(|_| "sandbox_user_namespace_metadata_failed".to_string())?;
     if owner_metadata.dev() != current_user_namespace.dev()
         || owner_metadata.ino() != current_user_namespace.ino()
     {
         return Err("sandbox_mount_namespace_owner_mismatch".to_string());
     }
     Ok(())
+}
+
+fn establish_private_mount_namespace() -> Result<(), String> {
+    if unsafe { libc::unshare(libc::CLONE_NEWNS) } != 0 {
+        return Err("sandbox_mount_namespace_unshare_failed".to_string());
+    }
+    let root =
+        CString::new("/").map_err(|_| "sandbox_mount_namespace_private_failed".to_string())?;
+    let made_private = unsafe {
+        libc::mount(
+            std::ptr::null(),
+            root.as_ptr(),
+            std::ptr::null(),
+            (libc::MS_REC | libc::MS_PRIVATE) as libc::c_ulong,
+            std::ptr::null(),
+        )
+    };
+    if made_private != 0 {
+        return Err("sandbox_mount_namespace_private_failed".to_string());
+    }
+    Ok(())
+}
+
+fn namespace_owner_query_error(errno: Option<i32>) -> &'static str {
+    match errno {
+        Some(libc::EPERM) | Some(libc::EACCES) => "sandbox_mount_namespace_owner_query_denied",
+        Some(libc::ENOTTY) => "sandbox_mount_namespace_owner_query_unsupported",
+        Some(libc::EINVAL) => "sandbox_mount_namespace_owner_query_invalid",
+        _ => "sandbox_mount_namespace_owner_query_failed",
+    }
 }
 
 fn verify_environment_allowlist() -> Result<(), String> {
@@ -1368,7 +1399,15 @@ fn stable_error(error: &str) -> String {
             "shell_root_unreadable",
             "shell_root_changed_during_validation",
             "sandbox_mount_capability_unavailable",
-            "sandbox_mount_namespace_owner_unverified",
+            "sandbox_mount_namespace_unshare_failed",
+            "sandbox_mount_namespace_private_failed",
+            "sandbox_mount_namespace_open_failed",
+            "sandbox_mount_namespace_owner_query_denied",
+            "sandbox_mount_namespace_owner_query_unsupported",
+            "sandbox_mount_namespace_owner_query_invalid",
+            "sandbox_mount_namespace_owner_query_failed",
+            "sandbox_mount_namespace_owner_metadata_failed",
+            "sandbox_user_namespace_metadata_failed",
             "sandbox_mount_namespace_owner_mismatch",
             "sandbox_namespace_not_isolated",
             "sandbox_start_or_shutdown_failed",
@@ -1400,7 +1439,7 @@ fn stable_error(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        safe_diagnostic, stable_error, verify_mount_capability_mask, verify_mount_namespace_owner,
+        namespace_owner_query_error, safe_diagnostic, stable_error, verify_mount_capability_mask,
     };
 
     #[test]
@@ -1416,8 +1455,31 @@ mod tests {
     }
 
     #[test]
-    fn current_mount_namespace_has_a_verifiable_user_namespace_owner() {
-        assert!(verify_mount_namespace_owner().is_ok());
+    fn namespace_owner_query_errors_use_fixed_non_sensitive_codes() {
+        assert_eq!(
+            namespace_owner_query_error(Some(libc::EPERM)),
+            "sandbox_mount_namespace_owner_query_denied"
+        );
+        assert_eq!(
+            namespace_owner_query_error(Some(libc::EACCES)),
+            "sandbox_mount_namespace_owner_query_denied"
+        );
+        assert_eq!(
+            namespace_owner_query_error(Some(libc::ENOTTY)),
+            "sandbox_mount_namespace_owner_query_unsupported"
+        );
+        assert_eq!(
+            namespace_owner_query_error(Some(libc::EINVAL)),
+            "sandbox_mount_namespace_owner_query_invalid"
+        );
+        assert_eq!(
+            namespace_owner_query_error(Some(libc::EIO)),
+            "sandbox_mount_namespace_owner_query_failed"
+        );
+        assert_eq!(
+            namespace_owner_query_error(None),
+            "sandbox_mount_namespace_owner_query_failed"
+        );
     }
 
     #[test]
@@ -1438,6 +1500,12 @@ mod tests {
                 "linux_sandbox_start_or_shutdown_failed:linux_isolation_error:workspace_overlay_mount_failed"
             ),
             "linux_sandbox_start_or_shutdown_failed:workspace_overlay_mount_failed"
+        );
+        assert_eq!(
+            stable_error(
+                "linux_sandbox_start_or_shutdown_failed:linux_isolation_error:sandbox_mount_namespace_owner_query_denied"
+            ),
+            "linux_sandbox_start_or_shutdown_failed:sandbox_mount_namespace_owner_query_denied"
         );
         assert_eq!(
             stable_error("linux_sandbox_start_or_shutdown_failed:/tmp/private path"),
