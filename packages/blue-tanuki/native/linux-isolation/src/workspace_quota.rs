@@ -117,7 +117,7 @@ pub fn mount_bounded_overlay() -> Result<(), String> {
     let destination =
         CString::new(WORKSPACE_PATH).map_err(|_| "workspace_quota_unavailable".to_string())?;
     let options = CString::new(format!(
-        "lowerdir={LOWER_PATH},upperdir={},workdir={},userxattr,redirect_dir=off,metacopy=off,index=off",
+        "lowerdir={LOWER_PATH},upperdir={},workdir={},userxattr,redirect_dir=nofollow,metacopy=off,index=off",
         upper.display(),
         work.display()
     ))
