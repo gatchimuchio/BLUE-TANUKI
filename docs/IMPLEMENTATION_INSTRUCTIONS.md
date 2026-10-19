@@ -1,5 +1,9 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
+## 次のBUILD_BATCH（計画中）：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
+
+Windows上ではLinux native runtimeを直接実行できないため、既存`systemd-run LimitFSIZE`設定のproduction consumerを一つの合成shell呼出しで確認する。65 MiBのsparse file作成を試し、64 MiB per-file limitで拒否されることを検証する。GitHub ActionsはD4-Pocket現行AGENTS §3.1に従う一時`workflow_dispatch`だけを使い、対象SHAの検証後にworkflowと一時branchを撤去する。これは単一file上限の証拠であり、aggregate workspace disk quota、Linux installed product、QA／releaseの証拠ではない。
+
 ## 直近の施工・監査結果と次のconsumer
 
 ### 最新BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-HARDLINK-ROOT-GUARD`
