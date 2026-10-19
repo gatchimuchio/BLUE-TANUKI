@@ -98,12 +98,28 @@ jobs:
             --proc /proc --dev /dev --tmpfs /tmp --tmpfs /workspace-lower \
             --dir /workspace-storage --dir /workspace --chdir / --clearenv \
             --setenv PATH /usr/bin:/bin -- \
-            /usr/bin/sh -c 'set -eu; printf fixture > /workspace-lower/probe; mount -o remount,ro /workspace-lower; mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700 tmpfs /workspace-storage; mkdir /workspace-storage/upper /workspace-storage/work; mount -t overlay overlay -o lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work,userxattr,redirect_dir=nofollow,metacopy=off,index=off /workspace; test "$(cat /workspace/probe)" = fixture; printf pass' 2>/dev/null) || result=failed
-          if [[ "$result" = pass ]]; then
-            echo "minimal isolated OverlayFS mount: pass"
-          else
-            echo "minimal isolated OverlayFS mount: fail"
-          fi
+            /usr/bin/sh -c '
+              set -eu
+              fail() { printf "%s" "$1"; exit 1; }
+              printf fixture > /workspace-lower/probe || fail lower_fixture_setup_failed
+              mount -o remount,ro /workspace-lower || fail lower_readonly_remount_denied
+              mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700 tmpfs /workspace-storage || fail upper_tmpfs_mount_denied
+              mkdir /workspace-storage/upper /workspace-storage/work || fail upper_work_layout_failed
+              mount -t overlay overlay -o lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work,userxattr,redirect_dir=nofollow,metacopy=off,index=off /workspace || fail overlay_mount_denied
+              test "$(cat /workspace/probe)" = fixture || fail overlay_readback_failed
+              printf pass
+            ' 2>/dev/null) || result=namespace_or_probe_launch_failed
+          case "$result" in
+            pass)
+              echo "minimal isolated OverlayFS mount: pass"
+              ;;
+            lower_fixture_setup_failed|lower_readonly_remount_denied|upper_tmpfs_mount_denied|upper_work_layout_failed|overlay_mount_denied|overlay_readback_failed)
+              echo "minimal isolated OverlayFS mount: $result"
+              ;;
+            *)
+              echo "minimal isolated OverlayFS mount: namespace_or_probe_launch_failed"
+              ;;
+          esac
 
       - name: Set up Rust toolchain
         run: |
