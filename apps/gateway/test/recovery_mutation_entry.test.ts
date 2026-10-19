@@ -832,6 +832,38 @@ describe("Recovery mutation HDS L3 entry", () => {
       expect(JSON.stringify(afterDependentSearch.body)).not.toContain(searchLine);
       expect(afterDependentSearch.body.hds.operation_plans.used_for_authority).toBe(false);
       expect(afterDependentSearch.body.hds.operation_plans.raw_payload_exposed).toBe(false);
+      expect(afterDependentSearch.body.operation_plan_status).toMatchObject({
+        schema_version: "operation-plan.status.v1",
+        status: "available",
+        used_for_authority: false,
+        raw_payload_exposed: false,
+        plans: expect.arrayContaining([
+          expect.objectContaining({
+            plan_id: cleanPlanIdDigest,
+            status: "results_verified",
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                step_id: operationPlanDigest("restore-clean-step"),
+                status: "verified",
+                binding: expect.objectContaining({
+                  result_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+                  delivery_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+                }),
+              }),
+              expect.objectContaining({
+                step_id: operationPlanDigest("restore-clean-step-dependent"),
+                status: "verified",
+                binding: expect.objectContaining({
+                  result_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+                  delivery_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+                }),
+              }),
+            ]),
+          }),
+          expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
+        ]),
+      });
+      expect(JSON.stringify(afterDependentSearch.body.operation_plan_status)).not.toContain(searchLine);
 
       const resultStore = new OperationPlanStateStore(planStatePath);
       try {

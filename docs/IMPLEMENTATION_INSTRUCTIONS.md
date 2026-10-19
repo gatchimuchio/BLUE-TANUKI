@@ -2,7 +2,25 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-03-E03.03-POST-RESTORE-DEPENDENT-STEP-RESULT`
+### 最新BUILD_BATCH：`QEB-03-E03.03-POST-RESTORE-RESULT-STATUS-PROJECTION`
+
+開始HEAD／`origin/main`=`b565b3a81fc174c36a452da3da21057ee501f954`、開始worktree clean。QE rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、E03.03、Gateway status projectionとControl Center consumerを再読した。編集前にlocal recovery branchとremote backup tagを期待SHA照合・回転し、開始HEADを`backup-main`、直前世代`7b3ac8ffd0509bfd30bb43350e5a9919c80c9585`を`backup-main-prev`へ保全した。
+
+前回の復元後2-step plan fixtureの実結果が、認証済みRuntime Snapshotの`operation_plan_status`へ届くことをintegration testで固定した。clean planは`results_verified`、両stepは`verified`で各result／delivery digestを持ち、同じstoreのcollateral residual planは`held_residual`。projectionは`used_for_authority=false`／`raw_payload_exposed=false`を維持し、検索行本文を含まない。Control Centerはこのprojectionを既に描画し、recovery hold時のstep選択停止と新しい依頼からの新規計画作成案内を持つ。今回の限定確認はGateway API投影までで、browser DOM実行は行っていない。
+
+この経路は既存のloopback Gateway integration fixtureを使用し、合成L3／二つのL1 token、一時SQLite／Complete History、専用sandboxの合成一ファイルに限定。approval tokenは実owner承認ではなく、実provider／credential、業務ファイル、利用者の運転状態へのrestore、外部書込みは使っていない。製品sourceは変更していない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `recovery_mutation_entry.test.ts` の対象test | PASS。`operation_plan_status`に両verified step／result digestと残差holdが投影され、非権威・raw非露出を確認。 |
+| Gateway `typecheck` | PASS。 |
+| `pnpm build` | NOT_RUN。製品sourceは変更していない。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底ゲートは既存の移行負債76件を警告。 |
+| 実owner approval／実provider／credential／業務ファイル／外部書込み／全suite／Control Center browser DOM／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+復旧後の依存2-step実行結果→Gateway status projectionまでfixtureで`WIRED`。E03.03全体は`BUILD_GAP`。次consumerは実際のControl Center rendererがこのRuntime Snapshotを読み、結果状態とheld residualの安全な次操作をどう表示するかを一度の隔離browser smokeで確かめること。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の境界を維持する。
+
+### 前回BUILD_BATCH：`QEB-03-E03.03-POST-RESTORE-DEPENDENT-STEP-RESULT`
 
 開始HEAD／`origin/main`=`7b3ac8ffd0509bfd30bb43350e5a9919c80c9585`、開始worktree clean。QE rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、E03.03と実コードを再読した。編集前にlocal recovery branchとremote backup tagを期待SHA照合・回転し、開始HEADを`backup-main`、直前世代`cf9d2c8c7b11f53e7619d13c6fdbe9680031191a`を`backup-main-prev`へ保全した。
 
