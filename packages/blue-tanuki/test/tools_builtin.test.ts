@@ -1713,6 +1713,30 @@ describe("built-in tools", () => {
   );
 
   it.skipIf(process.platform !== "linux")(
+    "shell.exec enforces the per-file size limit",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-file-size-"));
+      const providerPath = fileURLToPath(
+        new URL("../native/linux-isolation/target/release/blue-tanuki-linux-isolation", import.meta.url),
+      );
+      const oversizedFile = path.join(root, "oversized.bin");
+      try {
+        const result = await invokeShellExec(
+          { cmd: "sh", args: ["-c", "truncate -s 67108865 oversized.bin"] },
+          { env: linuxShellTestEnv(root), nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(result.exit_code).not.toBe(0);
+        expect(result.stderr).toMatch(/File too large/u);
+        expect(result.process_tree_empty).toBe(true);
+        const fileSize = await fs.stat(oversizedFile).then((stat) => stat.size).catch(() => 0);
+        expect(fileSize).toBeLessThanOrEqual(64 * 1024 * 1024);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
     "shell.exec clears inherited credential-like environment values and denies network access",
     async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-boundary-"));
