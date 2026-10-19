@@ -139,7 +139,8 @@ pub fn mount_bounded_overlay() -> Result<(), String> {
 
 fn storage_mount_error_code(errno: Option<i32>) -> &'static str {
     match errno {
-        Some(libc::EPERM) | Some(libc::EACCES) => "workspace_storage_mount_denied",
+        Some(libc::EPERM) => "workspace_storage_mount_operation_denied",
+        Some(libc::EACCES) => "workspace_storage_mount_access_denied",
         Some(libc::EINVAL) => "workspace_storage_mount_invalid_options",
         Some(libc::ENODEV) => "workspace_storage_mount_unsupported",
         _ => "workspace_storage_mount_failed",
@@ -452,7 +453,11 @@ mod tests {
     fn storage_mount_errno_maps_to_fixed_codes() {
         assert_eq!(
             storage_mount_error_code(Some(libc::EPERM)),
-            "workspace_storage_mount_denied"
+            "workspace_storage_mount_operation_denied"
+        );
+        assert_eq!(
+            storage_mount_error_code(Some(libc::EACCES)),
+            "workspace_storage_mount_access_denied"
         );
         assert_eq!(
             storage_mount_error_code(Some(libc::EINVAL)),

@@ -1326,7 +1326,8 @@ fn stable_error(error: &str) -> String {
         const SAFE_DETAILS: &[&str] = &[
             "workspace_quota_unavailable",
             "workspace_storage_mount_failed",
-            "workspace_storage_mount_denied",
+            "workspace_storage_mount_operation_denied",
+            "workspace_storage_mount_access_denied",
             "workspace_storage_mount_invalid_options",
             "workspace_storage_mount_unsupported",
             "workspace_storage_layout_failed",
