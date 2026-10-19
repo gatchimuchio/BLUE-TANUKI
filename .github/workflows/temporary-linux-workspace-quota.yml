@@ -31,7 +31,7 @@ jobs:
       - name: Install native runtime prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes apparmor bubblewrap fuse-overlayfs
+          sudo apt-get install --yes apparmor bubblewrap fuse-overlayfs util-linux
 
       - name: Prepare an ephemeral FUSE device for diagnostics
         id: fuse-device
@@ -419,8 +419,8 @@ jobs:
           #!/bin/sh
           set -u
           capability_value() {
-            while IFS=' ' read -r key value rest; do
-              if [ "$key" = "$1" ]; then
+            while IFS="$(printf ' \t')" read -r key value rest; do
+              if [ "${key%:}" = "$1" ]; then
                 printf '%s' "$value"
                 return 0
               fi
@@ -510,7 +510,7 @@ jobs:
             --setenv PATH /usr/bin:/bin \
             --setenv TMPDIR /tmp \
             --setenv LANG C.UTF-8 \
-            -- /bin/sh /fuse-overlay-no-cap-probe.sh; then
+            -- /usr/bin/setpriv --no-new-privs /bin/sh /fuse-overlay-no-cap-probe.sh; then
             :
           else
             probe_status=$?
