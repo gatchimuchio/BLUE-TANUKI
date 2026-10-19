@@ -905,6 +905,41 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value.slice(0, 12) : "未記録";
       }
 
+      function renderComputeSourceObservations(value) {
+        if (!Array.isArray(value) || value.length === 0) return "";
+        const summaries = value.slice(0, 8).map(function (observation) {
+          const commonSafe = isObject(observation) &&
+            observation.schema_version === "operation-plan-compute-source-observation.v1" &&
+            /^[a-f0-9]{64}$/.test(observation.plan_id_digest || "") &&
+            /^[a-f0-9]{64}$/.test(observation.revision_digest || "") &&
+            /^[a-f0-9]{64}$/.test(observation.step_id_digest || "") &&
+            observation.plan_binding_status === "verified" && observation.plan_validation_status === "matched" &&
+            observation.effect_observation === "reported_success" && /^[a-f0-9]{64}$/.test(observation.record_digest || "") &&
+            Number.isSafeInteger(observation.memory_revision) && observation.memory_revision > 0 &&
+            /^[a-f0-9]{64}$/.test(observation.memory_receipt_digest || "") &&
+            Number.isSafeInteger(observation.observed_at_ms) && observation.observed_at_ms >= 0 &&
+            observation.adoption_status === "observation_only" && observation.used_as_world_truth === false &&
+            observation.used_for_authority === false && observation.may_execute === false;
+          if (!commonSafe) return "照合不能な記録（Jはstep選択と実行を拒否）";
+          if (observation.source === "verified_file_search_result" && observation.operation === "file.search" &&
+              Number.isSafeInteger(observation.expires_at_ms) && observation.expires_at_ms === observation.observed_at_ms + 600000 &&
+              Number.isSafeInteger(observation.match_count) && observation.match_count >= 0 &&
+              Number.isSafeInteger(observation.visited_files) && observation.visited_files >= 0 &&
+              observation.search_completeness === "unknown") {
+            const nowMs = Date.now();
+            const current = observation.observed_at_ms <= nowMs && nowMs < observation.expires_at_ms;
+            return "file.search：" + (current ? "期限内（観測のみ）" : "期限切れ・照合不能（Jはstep選択と実行を拒否）") +
+              "、一致候補 " + observation.match_count + "件、訪問 " + observation.visited_files + "件、検索完全性=unknown";
+          }
+          if (observation.source === "verified_file_write_result" && observation.operation === "file.write") {
+            return "file.write：結果観測のみ（権限・実行を与えません）";
+          }
+          return "照合不能な記録（Jはstep選択と実行を拒否）";
+        });
+        return '<dt>計算元の結果観測</dt><dd>' + summaries.map(escapeHtml).join("<br>") +
+          '<br><span class="muted">観測は世界の真実・意味上の適合・実行権限を確立しません。</span></dd>';
+      }
+
       function renderOperationPlanStatus(value) {
         const projection = isObject(value) ? value : {};
         const safe = projection.schema_version === "operation-plan.status.v1" &&
@@ -1017,6 +1052,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             (recoveryHold ? '<dt>復元後の選択</dt><dd>' + escapeHtml(recoveryHold) + '</dd>' +
               '<dt>復元scopeとの関係</dt><dd>' + escapeHtml(recoveryScopeRelation) + '</dd>' : '') +
             purposeBindingLabel + purposeRelationLabel +
+            renderComputeSourceObservations(plan.compute_source_observations) +
             '<dt>step数</dt><dd>' + escapeHtml(String(plan.step_count ?? steps.length)) + '</dd></dl>' +
             (recoveryHold ? '<p class="muted">この計画のstep選択は停止中です。復元scopeとの関係表示はplan単位の復元やhold解除を意味しません。状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。</p>' : '') +
             purposeRelationReviewActions +

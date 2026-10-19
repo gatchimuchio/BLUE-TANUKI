@@ -121,6 +121,51 @@ function goalGovernanceConfig() {
 }
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
+  it("期限切れfile.search観測をJの再審査・実行・source bindingで拒否する", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(1_000));
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-source-expiry-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    try {
+      const candidate = plan(randomUUID(), root);
+      const goal = "plan:compute use one bounded, synthetic search observation";
+      const observation = {
+        schema_version: "operation-plan-compute-source-observation.v1" as const,
+        source: "verified_file_search_result" as const,
+        operation: "file.search" as const,
+        plan_id_digest: "a".repeat(64), revision_digest: "b".repeat(64), step_id_digest: "c".repeat(64),
+        plan_binding_status: "verified" as const, plan_validation_status: "matched" as const,
+        effect_observation: "reported_success" as const, record_digest: "d".repeat(64),
+        memory_revision: 1, memory_receipt_digest: "e".repeat(64), observed_at_ms: 1_000,
+        expires_at_ms: 601_000, match_count: 1, visited_files: 1, search_completeness: "unknown" as const,
+        adoption_status: "observation_only" as const, used_as_world_truth: false as const,
+        used_for_authority: false as const, may_execute: false as const,
+      };
+      const checkpoint = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [{ owner: "fixture-owner", channel: "webchat", goal,
+          compute_source_observations: [observation], request_goal_criteria: noRequestCriteria(goal, candidate.request_id),
+          revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }],
+          receipt_observations: [], bindings: [], results: [] }],
+      });
+      store.compareAndSet(null, checkpoint);
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      try {
+        const selected = review(hds, candidate, "search");
+        if (selected.command?.type !== "tool_call") throw new Error(`fresh observation was not reviewable: ${selected.log.commit.reason}`);
+        expect(hds.operationPlanCommandIsCurrent(selected.command)).toBe(true);
+        expect(hds.getExecutionOperationPlanBindingDigest(selected.command)).toMatch(/^[a-f0-9]{64}$/);
+
+        vi.setSystemTime(new Date(observation.expires_at_ms));
+        expect(hds.operationPlanCommandIsCurrent(selected.command)).toBe(false);
+        expect(() => hds.getExecutionOperationPlanBindingDigest(selected.command!)).toThrow("plan_execution_source_observation_expired");
+        expect(hds.beginOperationPlanAttempt(selected.command)).toBe(false);
+        const afterExpiry = review(hds, candidate, "independent");
+        expect(afterExpiry.command).toBeNull();
+        expect(afterExpiry.log.commit.reason).toContain("plan_control_denied:plan_compute_source_observation_expired");
+      } finally { hds.close(); }
+    } finally { store.close(); vi.useRealTimers(); await rm(root, { recursive: true, force: true }); }
+  });
+
   it("requires current purpose-version binding and refuses step review without task-purpose evidence", async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date(100));
     const root = await mkdtemp(join(tmpdir(), "blue-plan-purpose-scope-"));

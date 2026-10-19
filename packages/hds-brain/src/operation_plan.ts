@@ -1001,6 +1001,9 @@ export class OperationPlanLedger {
     const current = p.revisions.at(-1)!;
     const expected = control.action === "review" ? control.revision_digest : control.expected_revision_digest;
     if (expected !== current.digest) throw new Error("plan_revision_changed");
+    if (control.action === "review" && !this.computeSourceObservationsAreCurrent(p, Date.now())) {
+      throw new Error("plan_compute_source_observation_expired");
+    }
     if (control.action === "revise") {
       this.revisionImpact(p, control.plan);
       return { plan_id: control.plan_id, revision_digest: expected, goal: p.goal, recovery_hold_released: false };
@@ -1157,6 +1160,10 @@ export class OperationPlanLedger {
     const revision = match.p.revisions.find((entry) => entry.digest === match.b.revision_digest);
     const step = revision?.plan.steps.find((entry) => entry.step_id === match.b.step_id);
     const descriptor = step ? getOperationDescriptor(step.operation) : undefined;
+    const computeSourceObservations = match.p.compute_source_observations ?? [];
+    if (!this.computeSourceObservationsAreCurrent(match.p, Date.now())) {
+      throw new Error("plan_execution_source_observation_expired");
+    }
     if (!this.goalPurposeBindingIsCurrent(match.p.goal_purpose_binding) ||
         this.goalPurposeRelationIssue(match.p) !== undefined ||
         match.b.status !== "selected" || !currentRevision || currentRevision.digest !== match.b.revision_digest ||
@@ -1189,6 +1196,7 @@ export class OperationPlanLedger {
       goal_purpose_binding: match.p.goal_purpose_binding ?? null,
       goal_purpose_relation_digest: operationPlanDigest(match.p.goal_purpose_relation ?? null),
       request_goal_criteria_digest: operationPlanDigest(match.p.request_goal_criteria ?? null),
+      compute_source_observations_digest: operationPlanDigest(computeSourceObservations),
       command_digest: match.b.command_digest,
     });
   }
@@ -1208,9 +1216,11 @@ export class OperationPlanLedger {
     if (!this.reconcileMemory()) return false;
     const { p, b } = match;
     if (!this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) || this.goalPurposeRelationIssue(p) !== undefined) return false;
+    const nowMs = Date.now();
+    if (!this.computeSourceObservationsAreCurrent(p, nowMs)) return false;
     const step = p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === b.step_id);
     if (!step || this.requestGoalCriteriaIssue(p, step) !== undefined) return false;
-    const prepared = prepareOperationPlan(p.revisions.at(-1)!.plan, { now_ms: Date.now(), results: p.results, observations: [] });
+    const prepared = prepareOperationPlan(p.revisions.at(-1)!.plan, { now_ms: nowMs, results: p.results, observations: [] });
     const current = prepared.kind === "inspected" ? prepared.plan.steps.find((s) => s.step_id === b.step_id) : undefined;
     return command.id === b.command_id && b.status === "selected" && !!step && stepDigest(step) === b.step_digest &&
       prepared.kind === "inspected" && prepared.summary.steps.find((s) => s.step_id === b.step_id)?.status === "ready" &&
@@ -1936,6 +1946,16 @@ export class OperationPlanLedger {
     }
     // C claims and exact citations remain non-authoritative; only a current, audited owner review can settle this relation.
     return "plan_goal_purpose_relation_unverified";
+  }
+
+  /** A search-derived candidate cannot be reviewed or executed after its bounded source window closes. */
+  private computeSourceObservationsAreCurrent(p: PlanState, nowMs: number): boolean {
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0) return false;
+    return (p.compute_source_observations ?? []).every((observation) =>
+      observation.source !== "verified_file_search_result" ||
+      (observation.operation === "file.search" &&
+        observation.expires_at_ms === observation.observed_at_ms + 600_000 &&
+        observation.observed_at_ms <= nowMs && nowMs < observation.expires_at_ms));
   }
 
   private goalPurposeRelationProjection(p: PlanState) {

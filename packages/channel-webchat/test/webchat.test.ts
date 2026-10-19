@@ -457,6 +457,17 @@ describe("WebChatChannel — Control Center shell", () => {
       "operation-plan-state-list": { textContent: "", className: "", innerHTML: "" },
     };
     const document = { getElementById: (id: string) => nodes[id] ?? null };
+    const nowMs = Date.now();
+    const sourceObservation = (observedAtMs: number, expiresAtMs: number, privatePath: string) => ({
+      schema_version: "operation-plan-compute-source-observation.v1",
+      source: "verified_file_search_result", operation: "file.search",
+      plan_id_digest: "1".repeat(64), revision_digest: "2".repeat(64), step_id_digest: "3".repeat(64),
+      plan_binding_status: "verified", plan_validation_status: "matched", effect_observation: "reported_success",
+      record_digest: "4".repeat(64), memory_revision: 1, memory_receipt_digest: "5".repeat(64),
+      observed_at_ms: observedAtMs, expires_at_ms: expiresAtMs, match_count: 2, visited_files: 7,
+      search_completeness: "unknown", adoption_status: "observation_only", used_as_world_truth: false,
+      used_for_authority: false, may_execute: false, private_path: privatePath, private_query: "hidden query",
+    });
     const observation = {
       schema_version: "operation-plan.status.v1",
       status: "available",
@@ -474,6 +485,7 @@ describe("WebChatChannel — Control Center shell", () => {
           goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "c".repeat(64) },
           goal_purpose_binding_status: "current",
           status: "results_verified", step_count: 2,
+          compute_source_observations: [sourceObservation(nowMs, nowMs + 600_000, "SYNTHETIC PRIVATE SOURCE PATH MUST NOT RENDER")],
           steps: [
             { step_id: "c".repeat(64), operation: "file.search", status: "verified",
               binding: { command_digest: "d".repeat(64), result_digest: "e".repeat(64), delivery_digest: "f".repeat(64) } },
@@ -489,6 +501,7 @@ describe("WebChatChannel — Control Center shell", () => {
             evidence_status: "exact_spans_present", evidence_count: 1, semantic_assessment_status: "not_assessed",
             record_digest: "5".repeat(64), used_for_authority: false, may_execute: false },
           status: "held_residual", step_count: 1,
+          compute_source_observations: [sourceObservation(nowMs - 600_001, nowMs - 1, "EXPIRED PRIVATE SOURCE PATH MUST NOT RENDER")],
           recovery_hold_reason: "held_residual", recovery_hold_scope_relation: "collateral",
           steps: [{ step_id: "7".repeat(64), operation: "file.search", status: "outcome_unknown",
             external_receipt_observation: "not_recorded",
@@ -519,6 +532,11 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("引用照合=exact_spans_present");
     expect(rendered).toContain("\u0026quot;purpose_version\u0026quot;:2");
     expect(rendered).toContain("陳腐化または照合不能（step実行を停止）");
+    expect(rendered).toContain("期限内（観測のみ）");
+    expect(rendered).toContain("期限切れ・照合不能（Jはstep選択と実行を拒否）");
+    expect(rendered).toContain("一致候補 2件、訪問 7件、検索完全性=unknown");
+    expect(rendered).not.toContain("SYNTHETIC PRIVATE SOURCE PATH MUST NOT RENDER");
+    expect(rendered).not.toContain("EXPIRED PRIVATE SOURCE PATH MUST NOT RENDER");
     expect(rendered).not.toContain("SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER");
   });
 
