@@ -40,9 +40,10 @@ import {
   type ComputeInputSource,
   type ComputeRequest,
 } from "./llm/compute.js";
-import type { BrokerTargetVersionObservation, ToolRegistry } from "./tools/registry.js";
+import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolRegistry } from "./tools/registry.js";
 import { fileSearchTool, gmailWriteTool } from "./tools/builtin.js";
-import { gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest } from "./tools/google_write.js";
+import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
+  gmailWriteTargetIdentityDigest } from "./tools/google_write.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
@@ -260,11 +261,17 @@ function approveCommandForExecution(
       }
       target_version_observation = Object.freeze(observation);
     } else if (snapshot.payload.tool_name === "gmail.write" &&
-        ["draft.create", "message.send"].includes(String(snapshot.payload.arguments.operation))) {
+        ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation))) {
       const observation = GmailWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      const operation = String(snapshot.payload.arguments.operation);
+      const payloadMismatch = operation === "draft.send"
+        ? !observation.provider_state_digest || !observation.provider_raw_digest ||
+          observation.request_payload_digest !== gmailDraftSendRequestPayloadDigest(
+            snapshot.payload.arguments, observation.provider_raw_digest)
+        : observation.request_payload_digest !== gmailWriteRequestPayloadDigest(snapshot.payload.arguments);
       if (observation.command_digest !== operationPlanDigest(snapshot) ||
           observation.target_identity_digest !== gmailWriteTargetIdentityDigest(snapshot.payload.arguments) ||
-          observation.request_payload_digest !== gmailWriteRequestPayloadDigest(snapshot.payload.arguments)) {
+          payloadMismatch) {
         throw new Error("Executor approval rejected: gmail.write target version does not match command");
       }
       target_version_observation = Object.freeze(observation);
@@ -278,7 +285,7 @@ function approveCommandForExecution(
     throw new Error("Executor approval rejected: HDS target version binding does not match evidence");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "gmail.write" &&
-      ["draft.create", "message.send"].includes(String(snapshot.payload.arguments.operation)) &&
+      ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation)) &&
       target_version_observation?.schema_version !== "blue-tanuki.gmail-write-target-version.v1") {
     throw new Error("Executor approval rejected: gmail.write target version evidence is required");
   }
@@ -456,7 +463,7 @@ export class Executor {
       throw new Error("Broker target version resolver received an invalid operation plan binding");
     }
     if (command.payload.tool_name === "gmail.write" &&
-        ["draft.create", "message.send"].includes(String(command.payload.arguments.operation))) {
+        ["draft.create", "message.send", "draft.send"].includes(String(command.payload.arguments.operation))) {
       const tool = this.deps.tools.get("gmail.write");
       if (tool !== gmailWriteTool || !tool.inspect_target_version) {
         throw new Error("gmail.write target version resolver requires the registered built-in adapter");
@@ -468,9 +475,15 @@ export class Executor {
           command_digest: operationPlanDigest(command),
         }),
       );
+      const operation = String(command.payload.arguments.operation);
+      const payloadMismatch = operation === "draft.send"
+        ? !observation.provider_state_digest || !observation.provider_raw_digest ||
+          observation.request_payload_digest !== gmailDraftSendRequestPayloadDigest(
+            command.payload.arguments, observation.provider_raw_digest)
+        : observation.request_payload_digest !== gmailWriteRequestPayloadDigest(command.payload.arguments);
       if (observation.command_digest !== operationPlanDigest(command) ||
           observation.target_identity_digest !== gmailWriteTargetIdentityDigest(command.payload.arguments) ||
-          observation.request_payload_digest !== gmailWriteRequestPayloadDigest(command.payload.arguments) ||
+          payloadMismatch ||
           observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
         throw new Error("gmail.write target version resolver returned evidence for another command or plan source");
       }
@@ -496,6 +509,18 @@ export class Executor {
       throw new Error("file.search target version resolver returned evidence for another operation plan source");
     }
     return Object.freeze(observation);
+  }
+
+  /** Exact content projection for an existing draft; only the registered Gmail adapter may provide it. */
+  async inspectCommandContentReview(command: ExecuteCommand,
+    env?: Readonly<Record<string, string | undefined>>): Promise<GmailDraftContentReview | undefined> {
+    if (command.type !== "tool_call" || command.payload.tool_name !== "gmail.write" ||
+        command.payload.arguments.operation !== "draft.send") return undefined;
+    const tool = this.deps.tools.get("gmail.write");
+    if (tool !== gmailWriteTool || !tool.inspect_content_review) {
+      throw new Error("gmail.write content review requires the registered built-in adapter");
+    }
+    return await tool.inspect_content_review(command.payload.arguments, env ? { env } : undefined);
   }
 
   async execute(cmd: ApprovedCommand, context: ExecutorExecutionContext = {}): Promise<ExecuteFeedback> {

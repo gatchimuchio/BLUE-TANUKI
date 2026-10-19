@@ -3313,9 +3313,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           return;
         }
         if (review.command_id !== commandId ||
-            (review.operation !== "gmail.write.message.send" && review.operation !== "gmail.write.draft.create") ||
+            (review.operation !== "gmail.write.message.send" && review.operation !== "gmail.write.draft.create" &&
+              review.operation !== "gmail.write.draft.send") ||
             review.used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review.command_digest || "") ||
             !/^[a-f0-9]{64}$/.test(review.request_payload_digest || "") ||
+            (review.review_digest !== undefined && !/^[a-f0-9]{64}$/.test(review.review_digest)) ||
+            (review.provider_state_digest !== undefined && !/^[a-f0-9]{64}$/.test(review.provider_state_digest)) ||
+            (review.provider_raw_digest !== undefined && !/^[a-f0-9]{64}$/.test(review.provider_raw_digest)) ||
             typeof review.to !== "string" || typeof review.subject !== "string" ||
             typeof review.body_text !== "string") {
           throw new Error("content review response is not bound to this approval");
@@ -3324,8 +3328,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const heading = document.createElement("strong");
         heading.textContent = review.operation === "gmail.write.draft.create"
           ? "Exact Gmail draft to be created (not sent)"
-          : "Exact outgoing message";
+          : review.operation === "gmail.write.draft.send"
+            ? "Exact existing Gmail draft to be sent"
+            : "Exact outgoing message";
         view.appendChild(heading);
+        if (review.account_email) {
+          const account = document.createElement("p");
+          account.textContent = "Authenticated Gmail account: " + review.account_email;
+          view.appendChild(account);
+        }
         [["To", review.to], ["Cc", review.cc], ["Bcc", review.bcc], ["From", review.from], ["Subject", review.subject]]
           .forEach(function (field) {
             if (field[1] === undefined) return;
@@ -3337,6 +3348,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             row.append(label, value);
             view.appendChild(row);
           });
+        if (review.reply_to) {
+          const replyTo = document.createElement("p");
+          replyTo.textContent = "Reply-To: " + review.reply_to;
+          view.appendChild(replyTo);
+        }
         const bodyLabel = document.createElement("strong");
         bodyLabel.textContent = "Body";
         view.appendChild(bodyLabel);
@@ -3344,11 +3360,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         body.textContent = review.body_text;
         view.appendChild(body);
         const digests = document.createElement("small");
-        digests.textContent = "Command digest: " + review.command_digest + " | Request payload digest: " + review.request_payload_digest;
+        digests.textContent = "Command digest: " + review.command_digest +
+          " | Provider state digest: " + (review.provider_state_digest || "not applicable") +
+          " | Request payload digest: " + review.request_payload_digest;
         view.appendChild(digests);
-        state.approvalContentDigests[commandId] = review.command_digest;
+        state.approvalContentDigests[commandId] = review.review_digest || review.command_digest;
         approve.disabled = false;
-        button.textContent = "Refresh exact content";
+        button.textContent = review.operation === "gmail.write.draft.send"
+          ? "Refresh existing draft content" : "Refresh exact content";
       }
 
       async function revokeApprovalGrant(grantId) {

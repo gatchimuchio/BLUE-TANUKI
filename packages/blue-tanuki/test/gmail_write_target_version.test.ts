@@ -22,6 +22,26 @@ const response: GoogleWriteResponse = {
   request_id: "fixture-request",
 };
 
+const draftArgs = { operation: "draft.send", draft_id: "fixture-draft" };
+const draftRaw = Buffer.from([
+  "From: owner@example.invalid",
+  "To: recipient@example.invalid",
+  "Cc: copy@example.invalid",
+  "Bcc: blind@example.invalid",
+  "Reply-To: replies@example.invalid",
+  "Subject: =?UTF-8?B?5pel5pys6Kqe?=",
+  "MIME-Version: 1.0",
+  'Content-Type: text/plain; charset="UTF-8"',
+  "Content-Transfer-Encoding: 8bit",
+  "",
+  "合成本文だけを使う。",
+].join("\r\n")).toString("base64url");
+
+function draftReadResponse(path: string, raw = draftRaw, messageId = "fixture-message-v1"): GoogleWriteResponse {
+  if (path.endsWith("/profile")) return { ...response, body: JSON.stringify({ emailAddress: "owner@example.invalid" }) };
+  return { ...response, body: JSON.stringify({ id: "fixture-draft", message: { id: messageId, raw } }) };
+}
+
 describe("Gmail write target observation", () => {
   it("credentialを読まずexact plan sourceと送信payloadのdigestを作り、同じpayloadだけstubへ渡す", async () => {
     const request = vi.fn(async (_target: GoogleWriteTarget) => response);
@@ -194,12 +214,73 @@ describe("Gmail write target observation", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("draft.sendは既存draft内容の照合がないためtarget observationを発行しない", async () => {
-    const request = vi.fn(async (_target: GoogleWriteTarget) => response);
+  it("draft.sendは認証account・可変draft version・MIME全体をresume内容確認とtarget observationへ結ぶ", async () => {
+    const request = vi.fn(async (target: GoogleWriteTarget) =>
+      draftReadResponse(target.path));
     const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
-    await expect(tool.inspect_target_version!({ operation: "draft.send", draft_id: "fixture-draft" }, {
+    const review = await tool.inspect_content_review!(draftArgs);
+    expect(review).toMatchObject({ account_email: "owner@example.invalid", from: "owner@example.invalid",
+      to: "recipient@example.invalid", cc: "copy@example.invalid", bcc: "blind@example.invalid",
+      reply_to: "replies@example.invalid", subject: "日本語", body_text: "合成本文だけを使う。" });
+    expect(review.provider_state_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(review.provider_raw_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(review).not.toHaveProperty("raw");
+
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(draftArgs, {
+      command_digest: "a".repeat(64), operation_plan_binding_digest: "b".repeat(64),
+    }));
+    expect(observation).toMatchObject({ provider_state_digest: review.provider_state_digest,
+      provider_raw_digest: review.provider_raw_digest, command_digest: "a".repeat(64),
+      operation_plan_binding_digest: "b".repeat(64), used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(observation)).not.toContain("recipient@example.invalid");
+    expect(JSON.stringify(observation)).not.toContain("合成本文だけ");
+
+    const result = await tool.invoke(draftArgs, { command_id: "fixture-draft-send-command",
+      upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64),
+      command_digest: "e".repeat(64), target_version_observation: observation });
+    expect(result).toMatchObject({ service: "gmail", operation: "draft.send", mutation_sent: true });
+    const sendTarget = request.mock.calls.at(-1)?.[0];
+    expect(sendTarget).toMatchObject({ method: "POST", path: "/gmail/v1/users/me/drafts/send" });
+    expect(JSON.parse(sendTarget?.body ?? "{}")).toEqual({ id: "fixture-draft", message: { raw: draftRaw } });
+  });
+
+  it("承認済み内容・内側Message IDが変わるとdraft.sendをHTTP mutation前に停止する", async () => {
+    let draftReadCount = 0;
+    const changedRaw = Buffer.from("From: owner@example.invalid\r\nTo: changed@example.invalid\r\n\r\nchanged")
+      .toString("base64url");
+    const request = vi.fn(async (target: GoogleWriteTarget) => {
+      if (target.path.endsWith("/profile")) return draftReadResponse(target.path);
+      if (target.path.endsWith("?format=raw")) {
+        draftReadCount += 1;
+        return draftReadResponse(target.path, draftReadCount <= 1 ? draftRaw : changedRaw,
+          draftReadCount <= 1 ? "fixture-message-v1" : "fixture-message-v2");
+      }
+      return response;
+    });
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
+    const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(draftArgs, {
       command_digest: "a".repeat(64),
-    })).rejects.toThrow();
-    expect(request).not.toHaveBeenCalled();
+    }));
+    await expect(tool.invoke(draftArgs, { command_id: "fixture-draft-send-command",
+      upstream_commit_hash: "c".repeat(64), idempotency_key: "d".repeat(64),
+      command_digest: "e".repeat(64), target_version_observation: observation })).rejects
+      .toThrow(/content or provider version changed.*mutation_sent=false/);
+    expect(request.mock.calls.filter(([target]) => target.method === "POST")).toHaveLength(0);
+  });
+
+  it("HTML、multipart、添付、送信元不明のdraftは内容を推定せず審査不能にする", async () => {
+    for (const rawText of [
+      "From: owner@example.invalid\r\nTo: recipient@example.invalid\r\nContent-Type: text/html\r\n\r\n<b>hidden</b>",
+      "From: owner@example.invalid\r\nTo: recipient@example.invalid\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x",
+      "From: owner@example.invalid\r\nTo: recipient@example.invalid\r\nX-Unreviewed-Action: enabled\r\nContent-Type: text/plain\r\n\r\nbody",
+      "From: owner@example.invalid\r\nTo: recipient@example.invalid\r\nContent-Type: text/plain; format=flowed\r\n\r\nbody",
+      "To: recipient@example.invalid\r\nContent-Type: text/plain\r\n\r\nno sender",
+    ]) {
+      const encoded = Buffer.from(rawText).toString("base64url");
+      const request = vi.fn(async (target: GoogleWriteTarget) => draftReadResponse(target.path, encoded));
+      const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
+      await expect(tool.inspect_content_review!(draftArgs)).rejects.toThrow();
+      expect(request.mock.calls.some(([target]) => target.method === "POST")).toBe(false);
+    }
   });
 });

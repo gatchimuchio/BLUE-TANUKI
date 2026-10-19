@@ -3,6 +3,21 @@ import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | GmailWriteTargetVersionObservation;
 
+/** Resume-authenticated, no-store-only projection of a fetched existing Gmail draft. */
+export interface GmailDraftContentReview {
+  account_email: string;
+  from: string;
+  to?: string;
+  cc?: string;
+  bcc?: string;
+  reply_to?: string;
+  subject: string;
+  body_text: string;
+  provider_state_digest: string;
+  provider_raw_digest: string;
+  request_payload_digest: string;
+}
+
 /**
  * Tool registry.
  *
@@ -35,6 +50,10 @@ export interface Tool {
     operation_plan_binding_digest?: string;
     command_digest?: string;
   }): Promise<BrokerTargetVersionObservation>;
+  /** Exact plain-text-only content projection for a resume-authenticated draft review. */
+  inspect_content_review?(args: Record<string, unknown>, options?: {
+    env?: Readonly<Record<string, string | undefined>>;
+  }): Promise<GmailDraftContentReview>;
   invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 }
 

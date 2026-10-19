@@ -1,4 +1,5 @@
 import { gmailWriteRequestPayloadDigest } from "@blue-tanuki/core";
+import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import type {
   WebChatApprovalContentReview,
@@ -22,6 +23,76 @@ export function isGmailWriteContentReviewCommand(command: ExecuteCommand): boole
       typeof command.payload.arguments.operation !== "string") return false;
   const operation = command.payload.arguments.operation.trim().toLowerCase();
   return operation === "draft.create" || operation === "message.send";
+}
+
+export function isGmailDraftSendReviewCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
+    typeof command.payload.arguments.operation === "string" &&
+    command.payload.arguments.operation.trim().toLowerCase() === "draft.send";
+}
+
+/** Project only a supported provider snapshot; raw MIME and credentials stay inside the Gmail adapter. */
+export function projectGmailDraftSendContentReview(
+  command: ExecuteCommand,
+  commandDigest: string,
+  snapshot: {
+    account_email: string;
+    from: string;
+    to?: string;
+    cc?: string;
+    bcc?: string;
+    reply_to?: string;
+    subject: string;
+    body_text: string;
+    provider_state_digest: string;
+    provider_raw_digest: string;
+    request_payload_digest: string;
+  },
+): WebChatApprovalContentReview | null {
+  if (!isGmailDraftSendReviewCommand(command) || !/^[a-f0-9]{64}$/.test(commandDigest) ||
+      !/^[a-f0-9]{64}$/.test(snapshot.provider_state_digest) ||
+      !/^[a-f0-9]{64}$/.test(snapshot.provider_raw_digest) ||
+      !/^[a-f0-9]{64}$/.test(snapshot.request_payload_digest) ||
+      !snapshot.account_email || !snapshot.from || typeof snapshot.subject !== "string" ||
+      typeof snapshot.body_text !== "string") return null;
+  const reviewDigest = operationPlanDigest({
+    schema_version: "blue-tanuki.gmail-draft-content-review.v1",
+    command_digest: commandDigest,
+    provider_state_digest: snapshot.provider_state_digest,
+    request_payload_digest: snapshot.request_payload_digest,
+  });
+  return {
+    kind: "gmail_write_content",
+    command_id: command.id,
+    command_digest: commandDigest,
+    review_digest: reviewDigest,
+    request_payload_digest: snapshot.request_payload_digest,
+    provider_state_digest: snapshot.provider_state_digest,
+    provider_raw_digest: snapshot.provider_raw_digest,
+    account_email: snapshot.account_email,
+    operation: "gmail.write.draft.send",
+    from: snapshot.from,
+    to: snapshot.to ?? "(no To header)",
+    ...(snapshot.cc ? { cc: snapshot.cc } : {}),
+    ...(snapshot.bcc ? { bcc: snapshot.bcc } : {}),
+    ...(snapshot.reply_to ? { reply_to: snapshot.reply_to } : {}),
+    subject: snapshot.subject,
+    body_text: snapshot.body_text,
+    used_for_authority: false,
+  };
+}
+
+export function validateGmailDraftSendContentReview(
+  command: ExecuteCommand,
+  commandDigest: string,
+  current: boolean,
+  revealedDigest: string | undefined,
+  submittedDigest: string | undefined,
+): WebChatApprovalContentReviewValidation {
+  if (!isGmailDraftSendReviewCommand(command)) return "not_required";
+  if (!current || !/^[a-f0-9]{64}$/.test(commandDigest)) return "stale";
+  if (!revealedDigest || !submittedDigest) return "required";
+  return /^[a-f0-9]{64}$/.test(revealedDigest) && submittedDigest === revealedDigest ? "valid" : "stale";
 }
 
 /** Build a private, explicit-review projection of the exact effective Gmail write request. */

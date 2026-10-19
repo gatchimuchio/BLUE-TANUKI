@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { Executor, createExecutorApprovalAuthority, executorCommandDigest, ToolRegistry, fileSearchTool, gmailWriteTool } from "@blue-tanuki/core";
+import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
+  ToolRegistry, fileSearchTool, gmailWriteTool } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, GmailWriteTargetVersionObservationSchema, OperationPlanCheckpointSchema,
   type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -1018,6 +1019,47 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       .toThrow(/gmail.write target version does not match command|target version binding does not match evidence/);
     authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, targetObservation);
     // No executor call is made here: this test binds a draft request but never creates a provider draft.
+  });
+
+  it("Gmail draft.sendは既存draft idだけをJ計画へ結び、provider内容stateをHDS・Executor ticketへsealする", async () => {
+    const hds = new HDSUpperController(); const origin = request("plan:compute fixture draftを内容確認後に送る");
+    const candidate = gmailSendPlan(origin.id, { operation: "draft.send", draft_id: "fixture-draft-id" });
+    const planExecutor = rig(hds, candidate);
+    await planExecutor.run(hds.decide(origin).command!);
+    const selected = review(hds, candidate, "send");
+    if (selected.command?.type !== "tool_call") throw new Error("existing Gmail draft send plan was not connected");
+    expect(selected.command.payload.arguments).toEqual({ operation: "draft.send", draft_id: "fixture-draft-id" });
+
+    const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
+    if (!operationPlanBindingDigest) throw new Error("selected existing Gmail draft source binding was unavailable");
+    const targetObservation = GmailWriteTargetVersionObservationSchema.parse({
+      schema_version: "blue-tanuki.gmail-write-target-version.v1",
+      target_identity_digest: operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v3",
+        service: "gmail", operation: "draft.send", draft_id: "fixture-draft-id" }),
+      request_payload_digest: gmailDraftSendRequestPayloadDigest({ operation: "draft.send", draft_id: "fixture-draft-id" }, "d".repeat(64)),
+      provider_state_digest: "c".repeat(64),
+      provider_raw_digest: "d".repeat(64), command_digest: operationPlanDigest(selected.command),
+      operation_plan_binding_digest: operationPlanBindingDigest, used_for_authority: false, may_execute: false,
+    });
+    const binding = hds.createExecutionAuthorityBinding(selected.command, targetObservation);
+    expect(binding.broker_target_version_observation_digest).toBe(operationPlanDigest(targetObservation));
+    const changedPayload = GmailWriteTargetVersionObservationSchema.parse({ ...targetObservation,
+      request_payload_digest: "e".repeat(64) });
+    expect(() => hds.createExecutionAuthorityBinding(selected.command!, changedPayload))
+      .toThrow(/target version does not match/);
+
+    const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
+    const approval = evaluateApproval(selected.command, [], { actor: "fixture-owner", default_mode: "full_access" });
+    const proof = { source: "human_final_review" as const, decision: "approve" as const, approved_by: "fixture-owner",
+      approved_at_ms: Date.now(), upstream_commit_hash: selected.command.upstream_decision.commit_hash,
+      operation: approval.context.operation, risk: approval.risk, final_review_required: approval.final_review_required,
+      reason: "synthetic existing draft content-review fixture" };
+    const changedProviderState = GmailWriteTargetVersionObservationSchema.parse({ ...targetObservation,
+      provider_state_digest: "e".repeat(64) });
+    expect(() => authority.approve(selected.command!, proof, executorCommandDigest(selected.command!), binding, changedProviderState))
+      .toThrow(/target version binding does not match evidence/);
+    authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, targetObservation);
+    // The fixture binds the existing draft state only; no Gmail provider request is issued.
   });
 
   it("実file.search結果を依存入力にし、変更pendingだけ失効して旧版と試行済みを保持", async () => {

@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import { gmailWriteRequestPayloadDigest } from "@blue-tanuki/core";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import {
+  isGmailDraftSendReviewCommand,
   isGmailWriteContentReviewCommand,
+  projectGmailDraftSendContentReview,
   projectGmailWriteContentReview,
+  validateGmailDraftSendContentReview,
   validateGmailWriteContentReview,
 } from "../src/approval_content_review.js";
 
@@ -98,7 +101,7 @@ describe("Gmail approval content review projection", () => {
     expect(validateGmailWriteContentReview(input, digest, false, digest, digest)).toBe("stale");
   });
 
-  it("reviews the exact draft.create payload while keeping draft.send outside this route", () => {
+  it("reviews draft.create command content and projects existing draft.send provider content separately", () => {
     const args = {
       operation: "draft.create",
       to: " recipient@example.test ",
@@ -124,5 +127,41 @@ describe("Gmail approval content review projection", () => {
     const unsupported = command({ operation: "draft.send", draft_id: "draft-fixture" });
     expect(isGmailWriteContentReviewCommand(unsupported)).toBe(false);
     expect(projectGmailWriteContentReview(unsupported, digest)).toBeNull();
+    expect(isGmailDraftSendReviewCommand(unsupported)).toBe(true);
+
+    const providerReview = projectGmailDraftSendContentReview(unsupported, digest, {
+      account_email: "owner@example.test",
+      from: "sender@example.test",
+      to: "recipient@example.test",
+      cc: "copy@example.test",
+      bcc: "hidden@example.test",
+      reply_to: "replies@example.test",
+      subject: "Existing subject",
+      body_text: "Existing exact body",
+      provider_state_digest: "1".repeat(64),
+      provider_raw_digest: "2".repeat(64),
+      request_payload_digest: "3".repeat(64),
+    });
+    expect(providerReview).toMatchObject({
+      kind: "gmail_write_content",
+      operation: "gmail.write.draft.send",
+      account_email: "owner@example.test",
+      from: "sender@example.test",
+      to: "recipient@example.test",
+      cc: "copy@example.test",
+      bcc: "hidden@example.test",
+      reply_to: "replies@example.test",
+      subject: "Existing subject",
+      body_text: "Existing exact body",
+      provider_state_digest: "1".repeat(64),
+      provider_raw_digest: "2".repeat(64),
+      request_payload_digest: "3".repeat(64),
+      used_for_authority: false,
+    });
+    expect(providerReview?.review_digest).toMatch(/^[a-f0-9]{64}$/);
+    const reviewDigest = providerReview?.review_digest;
+    expect(validateGmailDraftSendContentReview(unsupported, digest, true, reviewDigest, reviewDigest)).toBe("valid");
+    expect(validateGmailDraftSendContentReview(unsupported, digest, true, reviewDigest, "4".repeat(64))).toBe("stale");
+    expect(validateGmailDraftSendContentReview(unsupported, digest, true, undefined, reviewDigest)).toBe("required");
   });
 });

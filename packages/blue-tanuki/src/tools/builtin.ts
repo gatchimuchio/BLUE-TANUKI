@@ -111,6 +111,7 @@ export {
   googleCalendarWriteTool,
   googleDriveWriteTool,
   invokeGmailWrite,
+  gmailDraftSendRequestPayloadDigest,
   gmailWriteRequestPayloadDigest,
   invokeGoogleCalendarWrite,
   invokeGoogleDriveWrite,

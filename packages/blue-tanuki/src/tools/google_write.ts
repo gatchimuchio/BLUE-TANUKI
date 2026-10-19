@@ -3,12 +3,12 @@ import * as https from "node:https";
 import { GmailWriteTargetVersionObservationSchema, requireToolOperationDescriptor,
   type GmailWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
-import type { Tool } from "./registry.js";
+import type { GmailDraftContentReview, Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
 
 export type GoogleWriteService = "gmail" | "calendar" | "drive";
-export type GoogleWriteMethod = "POST" | "PATCH" | "DELETE";
+export type GoogleWriteMethod = "GET" | "POST" | "PATCH" | "DELETE";
 
 export interface GoogleWriteTarget {
   service: GoogleWriteService;
@@ -86,6 +86,145 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : null;
+}
+
+function sha256String(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+interface GmailDraftSnapshot {
+  draft_id: string;
+  raw: string;
+  state_digest: string;
+  raw_digest: string;
+  request_payload_digest: string;
+  content_review: GmailDraftContentReview;
+}
+
+function decodeMimeHeaderValue(value: string): string {
+  const decoded = value.replace(/=\?([^?]+)\?([bq])\?([^?]*)\?=/gi, (_match, charset: string, encoding: string, payload: string) => {
+    try {
+      const bytes = encoding.toLowerCase() === "b"
+        ? Buffer.from(payload, "base64")
+        : Buffer.from(payload.replace(/_/g, " ").replace(/=([a-f0-9]{2})/gi,
+          (_hexMatch, hex: string) => String.fromCharCode(Number.parseInt(hex, 16))), "binary");
+      return new TextDecoder(charset, { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error("gmail_draft_header_encoding_unsupported");
+    }
+  });
+  if (decoded.includes("=?")) throw new Error("gmail_draft_header_encoding_unsupported");
+  return decoded;
+}
+
+function decodeQuotedPrintable(value: string): Buffer {
+  if (/=(?![a-f0-9]{2}|\r?\n)/i.test(value)) throw new Error("gmail_draft_body_encoding_unsupported");
+  const unescaped = value.replace(/=\r?\n/g, "").replace(/=([a-f0-9]{2})/gi,
+    (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+  return Buffer.from(unescaped, "binary");
+}
+
+function decodeGmailDraftMime(raw: string): Omit<GmailDraftContentReview, "account_email" | "provider_state_digest" |
+  "provider_raw_digest" | "request_payload_digest"> {
+  if (!/^[A-Za-z0-9_-]+$/.test(raw)) throw new Error("gmail_draft_raw_message_invalid");
+  const bytes = Buffer.from(raw, "base64url");
+  if (!bytes.length || bytes.length > MAX_CONTENT_BYTES || bytes.toString("base64url") !== raw) {
+    throw new Error("gmail_draft_raw_message_invalid");
+  }
+  let message: string;
+  try { message = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch { throw new Error("gmail_draft_message_encoding_unsupported"); }
+  const crlfSeparator = message.indexOf("\r\n\r\n");
+  const lfSeparator = message.indexOf("\n\n");
+  const separator = crlfSeparator >= 0 && (lfSeparator < 0 || crlfSeparator <= lfSeparator)
+    ? crlfSeparator : lfSeparator;
+  if (separator < 0) throw new Error("gmail_draft_mime_headers_missing");
+  const separatorLength = message.startsWith("\r\n\r\n", separator) ? 4 : 2;
+  const headerText = message.slice(0, separator);
+  const bodySource = message.slice(separator + separatorLength);
+  const unfolded: string[] = [];
+  for (const line of headerText.split(/\r?\n/)) {
+    if (/^[ \t]/.test(line)) {
+      const previous = unfolded.at(-1);
+      if (!previous) throw new Error("gmail_draft_mime_headers_invalid");
+      unfolded[unfolded.length - 1] = `${previous} ${line.trim()}`;
+    } else {
+      unfolded.push(line);
+    }
+  }
+  const headers = new Map<string, string[]>();
+  const supportedHeaders = new Set([
+    "from", "to", "cc", "bcc", "reply-to", "subject", "mime-version",
+    "content-type", "content-transfer-encoding", "content-disposition",
+  ]);
+  for (const line of unfolded) {
+    const match = /^([A-Za-z0-9-]+):[ \t]*(.*)$/.exec(line);
+    if (!match) throw new Error("gmail_draft_mime_headers_invalid");
+    const name = match[1]!.toLowerCase();
+    if (!supportedHeaders.has(name)) throw new Error("gmail_draft_mime_header_unsupported");
+    headers.set(name, [...(headers.get(name) ?? []), decodeMimeHeaderValue(match[2]!.trim())]);
+  }
+  const single = (name: string): string | undefined => {
+    const values = headers.get(name);
+    if (!values?.length) return undefined;
+    if (values.length !== 1) throw new Error("gmail_draft_mime_header_ambiguous");
+    return values[0];
+  };
+  const mimeVersion = single("mime-version");
+  if (mimeVersion !== undefined && mimeVersion !== "1.0") {
+    throw new Error("gmail_draft_mime_version_unsupported");
+  }
+  const contentType = single("content-type") ?? "text/plain; charset=utf-8";
+  const contentTypeParts = contentType.split(";").map((part) => part.trim());
+  const mediaType = contentTypeParts.shift()?.toLowerCase();
+  const charsetParams = contentTypeParts.filter((part) => /^charset\s*=/i.test(part));
+  if (mediaType !== "text/plain" || charsetParams.length !== contentTypeParts.length || charsetParams.length > 1) {
+    throw new Error("gmail_draft_mime_content_unsupported");
+  }
+  const disposition = single("content-disposition");
+  if (disposition !== undefined && disposition.toLowerCase() !== "inline") {
+    throw new Error("gmail_draft_mime_content_unsupported");
+  }
+  const charset = charsetParams.length === 1
+    ? /^charset\s*=\s*(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^;\s]+))$/i.exec(charsetParams[0]!)
+    : null;
+  if (charsetParams.length === 1 && !charset) throw new Error("gmail_draft_mime_content_unsupported");
+  const charsetName = (charset?.[1] ?? charset?.[2] ?? charset?.[3] ?? "utf-8").toLowerCase();
+  const transferEncoding = (single("content-transfer-encoding") ?? "7bit").toLowerCase();
+  let bodyBytes: Buffer;
+  if (transferEncoding === "base64") {
+    const compact = bodySource.replace(/[\r\n\t ]/g, "");
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(compact)) {
+      throw new Error("gmail_draft_body_encoding_unsupported");
+    }
+    bodyBytes = Buffer.from(compact, "base64");
+    if (bodyBytes.toString("base64") !== compact) throw new Error("gmail_draft_body_encoding_unsupported");
+  } else if (transferEncoding === "quoted-printable") {
+    bodyBytes = decodeQuotedPrintable(bodySource);
+  } else if (["7bit", "8bit", "binary"].includes(transferEncoding)) {
+    bodyBytes = Buffer.from(bodySource, "utf8");
+  } else {
+    throw new Error("gmail_draft_body_encoding_unsupported");
+  }
+  if (bodyBytes.length > MAX_CONTENT_BYTES) throw new Error("gmail_draft_content_size_unsupported");
+  let bodyText: string;
+  try { bodyText = new TextDecoder(charsetName, { fatal: true }).decode(bodyBytes); }
+  catch { throw new Error("gmail_draft_body_charset_unsupported"); }
+  const from = single("from");
+  if (!from) throw new Error("gmail_draft_sender_unresolved");
+  const to = single("to");
+  const cc = single("cc");
+  const bcc = single("bcc");
+  if (!to && !cc && !bcc) throw new Error("gmail_draft_recipients_missing");
+  return {
+    from,
+    ...(to ? { to } : {}),
+    ...(cc ? { cc } : {}),
+    ...(bcc ? { bcc } : {}),
+    ...(single("reply-to") ? { reply_to: single("reply-to") } : {}),
+    subject: single("subject") ?? "",
+    body_text: bodyText,
+  };
 }
 
 function stableJson(value: unknown): string {
@@ -232,6 +371,71 @@ async function defaultGoogleWriteRequest(
   });
 }
 
+async function readGmailDraftSnapshot(
+  args: Record<string, unknown>,
+  options: GoogleWriteOptions = {},
+  tokenOverride?: string,
+): Promise<GmailDraftSnapshot> {
+  const draftId = stringArg(args, "draft_id")!;
+  if (draftId.length > 256 || /[\r\n]/.test(draftId)) throw new Error("gmail_draft_id_invalid");
+  const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
+  const env = options.env ?? process.env;
+  const token = tokenOverride ?? googleToken(env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "gmail.write draft review");
+  const request = options.request ?? defaultGoogleWriteRequest;
+  const get = async (path: string): Promise<unknown> => {
+    let response: GoogleWriteResponse;
+    try {
+      response = await request({ service: "gmail", hostname: "gmail.googleapis.com", path, method: "GET",
+        maxBytes, token });
+    } catch {
+      throw new Error("gmail_draft_read_unavailable; request_sent=false; mutation_sent=false");
+    }
+    if (!response.ok || response.truncated) {
+      throw new Error(`gmail_draft_read_unavailable; http_status=${response.status}; request_sent=false; mutation_sent=false`);
+    }
+    try { return JSON.parse(response.body) as unknown; }
+    catch { throw new Error("gmail_draft_read_response_invalid; request_sent=false; mutation_sent=false"); }
+  };
+  const profile = await get("/gmail/v1/users/me/profile");
+  if (!isRecord(profile) || typeof profile.emailAddress !== "string" || !profile.emailAddress.trim() ||
+      profile.emailAddress.trim().length > 320 || /[\r\n]/.test(profile.emailAddress)) {
+    throw new Error("gmail_account_identity_unavailable; request_sent=false; mutation_sent=false");
+  }
+  const accountEmail = profile.emailAddress.trim();
+  const resource = await get(`/gmail/v1/users/me/drafts/${encodeURIComponent(draftId)}?format=raw`);
+  if (!isRecord(resource) || resource.id !== draftId || !isRecord(resource.message) ||
+      typeof resource.message.id !== "string" || !resource.message.id.trim() ||
+      typeof resource.message.raw !== "string") {
+    throw new Error("gmail_draft_resource_invalid; request_sent=false; mutation_sent=false");
+  }
+  const raw = resource.message.raw;
+  const content = decodeGmailDraftMime(raw);
+  const rawDigest = sha256String(raw);
+  const accountIdentityDigest = sha256String(accountEmail.toLowerCase());
+  const stateDigest = operationPlanDigest({
+    schema_version: "blue-tanuki.gmail-draft-provider-state.v1",
+    account_identity_digest: accountIdentityDigest,
+    draft_id: draftId,
+    message_id: resource.message.id,
+    raw_digest: rawDigest,
+  });
+  const requestPayloadDigest = gmailDraftSendRequestPayloadDigest({ operation: "draft.send", draft_id: draftId }, rawDigest);
+  return {
+    draft_id: draftId,
+    raw,
+    state_digest: stateDigest,
+    raw_digest: rawDigest,
+    request_payload_digest: requestPayloadDigest,
+    content_review: {
+      account_email: accountEmail,
+      ...content,
+      provider_state_digest: stateDigest,
+      provider_raw_digest: rawDigest,
+      request_payload_digest: requestPayloadDigest,
+    },
+  };
+}
+
 function googleWriteResponseError(toolName: string, response: GoogleWriteResponse): Error {
   let message = "";
   try {
@@ -352,6 +556,7 @@ function mutationResult(
 export async function invokeGmailWrite(
   args: Record<string, unknown>,
   opts: GoogleWriteOptions = {},
+  expectedDraftObservation?: GmailWriteTargetVersionObservation,
 ): Promise<unknown> {
   const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
@@ -359,7 +564,21 @@ export async function invokeGmailWrite(
   const token = googleToken(env, ["GMAIL_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"], "gmail.write");
   const sendRequest = opts.request ?? defaultGoogleWriteRequest;
 
-  const builtRequest = gmailWriteRequest(args);
+  let draftSnapshot: GmailDraftSnapshot | undefined;
+  if (operation === "draft.send") {
+    if (!expectedDraftObservation || expectedDraftObservation.provider_state_digest === undefined ||
+        expectedDraftObservation.provider_raw_digest === undefined) {
+      throw new Error("gmail.write draft.send target state evidence is required; request_sent=false; mutation_sent=false");
+    }
+    draftSnapshot = await readGmailDraftSnapshot(args, opts, token);
+    if (draftSnapshot.state_digest !== expectedDraftObservation.provider_state_digest ||
+        draftSnapshot.raw_digest !== expectedDraftObservation.provider_raw_digest ||
+        draftSnapshot.request_payload_digest !== expectedDraftObservation.request_payload_digest ||
+        gmailWriteTargetIdentityDigest(args) !== expectedDraftObservation.target_identity_digest) {
+      throw new Error("gmail.write draft.send content or provider version changed; request_sent=false; mutation_sent=false");
+    }
+  }
+  const builtRequest = gmailWriteRequest(args, draftSnapshot?.raw);
   const { path, body } = builtRequest;
 
   const target = {
@@ -388,9 +607,25 @@ export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): s
   return createHash("sha256").update(request.body, "utf8").digest("hex");
 }
 
+/** draft.sendの正確なrequest intentをdraft IDとprovider MIME digestで束ねる。MIME本文は保持しない。 */
+export function gmailDraftSendRequestPayloadDigest(args: Record<string, unknown>, rawDigest: string): string {
+  if (operationArg(args, ["draft.send"]) !== "draft.send" || !/^[a-f0-9]{64}$/.test(rawDigest)) {
+    throw new Error("gmail_target_version_operation_unsupported");
+  }
+  return operationPlanDigest({
+    schema_version: "blue-tanuki.gmail-draft-send-payload.v1",
+    draft_id: stringArg(args, "draft_id")!,
+    provider_raw_digest: rawDigest,
+  });
+}
+
 /** 送信先文字列を観測へ保持せず、operationと宛先一式の同一性digestを作る。 */
 export function gmailWriteTargetIdentityDigest(args: Record<string, unknown>): string {
-  const operation = operationArg(args, ["draft.create", "message.send"]);
+  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+  if (operation === "draft.send") {
+    return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v3",
+      service: "gmail", operation, draft_id: stringArg(args, "draft_id")! });
+  }
   const recipients: Record<string, string> = { to: stringArg(args, "to")! };
   for (const name of ["cc", "bcc"] as const) {
     const recipient = stringArg(args, name, false);
@@ -400,41 +635,63 @@ export function gmailWriteTargetIdentityDigest(args: Record<string, unknown>): s
     service: "gmail", operation, recipients });
 }
 
-function inspectGmailWriteTargetVersion(args: Record<string, unknown>, options: {
+async function inspectGmailWriteTargetVersion(args: Record<string, unknown>, options: {
+  env?: Readonly<Record<string, string | undefined>>;
+  request?: (target: GoogleWriteTarget) => Promise<GoogleWriteResponse>;
   operation_plan_binding_digest?: string;
   command_digest?: string;
-}): GmailWriteTargetVersionObservation {
+}): Promise<GmailWriteTargetVersionObservation> {
   const commandDigest = options.command_digest;
   if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest)) {
     throw new Error("gmail.write target resolver requires an exact HDS command digest");
   }
-  return GmailWriteTargetVersionObservationSchema.parse({
+  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+  const observation: Record<string, unknown> = {
     schema_version: "blue-tanuki.gmail-write-target-version.v1",
     target_identity_digest: gmailWriteTargetIdentityDigest(args),
-    request_payload_digest: gmailWriteRequestPayloadDigest(args),
     command_digest: commandDigest,
     ...(options.operation_plan_binding_digest
       ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
     used_for_authority: false,
     may_execute: false,
-  });
+  };
+  if (operation === "draft.send") {
+    const snapshot = await readGmailDraftSnapshot(args, {
+      ...(options.env ? { env: { ...options.env } } : {}),
+      ...(options.request ? { request: options.request } : {}),
+    });
+    observation.request_payload_digest = snapshot.request_payload_digest;
+    observation.provider_state_digest = snapshot.state_digest;
+    observation.provider_raw_digest = snapshot.raw_digest;
+  } else {
+    observation.request_payload_digest = gmailWriteRequestPayloadDigest(args);
+  }
+  return GmailWriteTargetVersionObservationSchema.parse(observation);
 }
 
-function assertGmailWriteTargetVersion(args: Record<string, unknown>, value: unknown): void {
+function assertGmailWriteTargetVersion(args: Record<string, unknown>, value: unknown): GmailWriteTargetVersionObservation {
   let observation: GmailWriteTargetVersionObservation;
   try { observation = GmailWriteTargetVersionObservationSchema.parse(value); }
   catch { throw new Error("gmail.write target version evidence is required; request_sent=false; mutation_sent=false"); }
+  const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
   if (observation.target_identity_digest !== gmailWriteTargetIdentityDigest(args) ||
-      observation.request_payload_digest !== gmailWriteRequestPayloadDigest(args)) {
+      (operation === "draft.send"
+        ? !observation.provider_state_digest || !observation.provider_raw_digest
+          || observation.request_payload_digest !== gmailDraftSendRequestPayloadDigest(args, observation.provider_raw_digest)
+        : observation.request_payload_digest !== gmailWriteRequestPayloadDigest(args))) {
     throw new Error("gmail.write target version changed; request_sent=false; mutation_sent=false");
   }
+  return observation;
 }
 
-function gmailWriteRequest(args: Record<string, unknown>): { path: string; body: string } {
+function gmailWriteRequest(args: Record<string, unknown>, draftRaw?: string): { path: string; body: string } {
   const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
   if (operation === "draft.create") return { path: "/gmail/v1/users/me/drafts", body: jsonBody({ message: { raw: encodedMimeMessage(args) } }) };
   if (operation === "message.send") return { path: "/gmail/v1/users/me/messages/send", body: jsonBody({ raw: encodedMimeMessage(args) }) };
-  return { path: "/gmail/v1/users/me/drafts/send", body: jsonBody({ id: stringArg(args, "draft_id")! }) };
+  if (!draftRaw) throw new Error("gmail.write draft.send requires a reviewed provider snapshot; mutation_sent=false");
+  return { path: "/gmail/v1/users/me/drafts/send", body: jsonBody({
+    id: stringArg(args, "draft_id")!, message: { raw: draftRaw },
+  }) };
 }
 
 function calendarEventBody(args: Record<string, unknown>, requireTime: boolean): Record<string, unknown> {
@@ -615,18 +872,28 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
     description: "Create Gmail drafts or send Gmail messages with an operator-provided OAuth token.",
     required_capabilities: requireToolOperationDescriptor("gmail.write").required_capabilities,
     async inspect_target_version(args, resolverOptions = {}): Promise<GmailWriteTargetVersionObservation> {
-      return inspectGmailWriteTargetVersion(args, resolverOptions);
+      return await inspectGmailWriteTargetVersion(args, {
+        ...options,
+        ...resolverOptions,
+        env: resolverOptions.env ? { ...resolverOptions.env } : options.env,
+      });
+    },
+    async inspect_content_review(args, reviewOptions = {}): Promise<GmailDraftContentReview> {
+      const snapshot = await readGmailDraftSnapshot(args, {
+        ...options,
+        ...(reviewOptions.env ? { env: { ...reviewOptions.env } } : {}),
+      });
+      return snapshot.content_review;
     },
     async invoke(args, context): Promise<unknown> {
       if (typeof context.idempotency_key !== "string" || !/^[a-f0-9]{64}$/.test(context.idempotency_key) ||
           typeof context.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(context.command_digest)) {
         throw new Error("gmail.write requires an approved Executor identity; mutation_sent=false");
       }
-      if (["draft.create", "message.send"].includes(operationArg(args, ["draft.create", "message.send", "draft.send"]))) {
-        assertGmailWriteTargetVersion(args, context.target_version_observation);
-      }
+      const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
+      const observation = assertGmailWriteTargetVersion(args, context.target_version_observation);
       return await invokeGmailWrite(args, { ...options, idempotency_key: context.idempotency_key,
-        command_digest: context.command_digest });
+        command_digest: context.command_digest }, operation === "draft.send" ? observation : undefined);
     },
   };
 }

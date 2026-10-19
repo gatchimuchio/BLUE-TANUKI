@@ -2,7 +2,26 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-GMAIL-DRAFT-CREATE-TARGET-BINDING`
+### 最新BUILD_BATCH：`QEB-01-D02.01-GMAIL-DRAFT-SEND-CONTENT-BINDING`
+
+開始HEAD／`origin/main`=`75af6958142a236951594a810f7d15a5dbb9c240`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示・D02.01／D02.02／F02.02、D4-Pocket現行AGENTS §3.1を再読した。GitHub ActionsはD4条件の範囲で使用可能だが、今回の検証はWindows localで完結するためworkflowを起動していない。
+
+既存draft read→`gmail.write draft.send`について、認証済みprovider profileのアカウント識別digest、外側draft ID、内側Gmail message ID、限定MIME parserが読み取った単一part `text/plain` raw digestをprovider-state observationへ結び、J Operation Plan／HDS／Executorのapproval ticketで拘束した。内容previewにはFrom／To／Cc／Bcc／Reply-To／Subject／本文と認証済みaccountを表示する。raw MIMEや本文を通常approval queue・監査へ複製せず、previewをresume-authenticated no-store経路に限定した。HTML、multipart、添付、不明のcharset／transfer encoding／MIME parameter／headerはpreview・送信対象にせずfail-closed。
+
+承認後のpreflightで同じcredentialを用いてprofileとdraftを再読し、account・draft/message ID・raw MIME digest・command／review digestが一致する場合だけ進む。最後の作用直前にもprovider状態を再照合し、変化があればGoogle write request前に停止する。`drafts.send`へ渡すのはreview時と一致確認したraw MIMEで、request-intent digestはdraft IDとraw digestから導出する。送信toolがこれを再検証し、HDSもdraft ID／provider observation／request intentをexecution sealへ結ぶ。これは合成transportの経路確認であり、実送信・実providerの証拠ではない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Core `gmail_write_target_version.test.ts` | PASS、9/9。profileとdraftを読み、内容を限定projectionし、本文またはinner message IDの変更でPOST前に停止、同一snapshotのraw MIMEだけをstubへ一度送ることを確認。 |
+| Gateway `approval_content_review.test.ts`／`operation_plan_runtime.test.ts` | PASS、4/4と23/23。preview projectionとJ Operation Plan→HDS binding／approval ticketを確認。 |
+| WebChat `webchat.test.ts` | PASS、94/94。resume-auth/no-store preview、本文を通常queueから除くこと、review bindingを確認。 |
+| 合計4 focused suites | PASS、130/130。 |
+| `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | PASS。buildは15 workspace projects。standaloneでRuntime Invariants全件PASS。 |
+| Actions／実provider／実credential／HTTP／Gmail送信 | 未実施。 |
+
+この限定的なsinglepart `text/plain` 経路は`WIRED`。MIME multipart／HTML／添付、独立したOAuth principalと権限・失効証明、D02.02 process／host認証、送信結果の曖昧窓・provider read-back、結果→M→帰還、goalから実作用までの統合Gateway一仕事は未成立。D02.01／D02.02は`BUILD_GAP`のまま。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、QE_QC／QE_QA／5OS実機未実施。次consumerは送信結果・不確定応答の安全な照合／回復境界であり、実provider呼出しは対象にしない。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-GMAIL-DRAFT-CREATE-TARGET-BINDING`
 
 開始HEAD／`origin/main`=`27deeba6cc5f1299bb334d5d8448c41bbf3396dc`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02／F02.02、D4-Pocket現行`AGENTS.md` §3.1を再読した。D4のActions条件は手動`workflow_dispatch`に限り、localにないOS build・artifact生成・localで不足する重い検査の補助に限る。今回の検証はWindows localで実施できたため未使用。
 
@@ -24,7 +43,7 @@ Operation Plan候補は単一`to`・`subject`・`body_text`に限定され、`cc
 
 次は、既存draftを読む実consumerとその本文／version observationを特定し、`draft.send`を別作用としてHDS／Executorへ結ぶ。本文・宛先・添付・reply-toの拡張範囲、account identity、provider version、D02.02 process／host認証、結果→M→帰還は未成立。
 
-### 前回BUILD_BATCH：`QEB-01-D02.01-GMAIL-EXECUTOR-STUB-DISPATCH`
+### 以前のBUILD_BATCH：`QEB-01-D02.01-GMAIL-EXECUTOR-STUB-DISPATCH`
 
 開始HEAD／`origin/main`=`04e76912ae2b93f9e7de92aaab777546885f0804`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02／F02.02、D4-Pocket現行`AGENTS.md` §3.1を再読した。Actionsは条件内で使用できるが、今回のstub dispatch test／typecheckはWindows localで実行可能なため未使用。
 

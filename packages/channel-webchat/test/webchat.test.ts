@@ -3044,6 +3044,83 @@ describe("WebChatChannel — approval API", () => {
     }
   });
 
+  it("reveals existing draft.send content and provider digests through resume-authenticated no-store review", async () => {
+    const draftBody = "synthetic existing draft body";
+    const commandDigest = "f".repeat(64);
+    const reviewDigest = "1".repeat(64);
+    const calls: unknown[] = [];
+    const ctx = await setup({
+      approval: {
+        list: async () => [{
+          command_id: "cmd-existing-draft-send",
+          request_id: "req-existing-draft-send",
+          operation: "gmail.write.draft.send",
+          risk: "high",
+          final_review_required: true,
+          reason: "final_review_required",
+          content_review_required: true,
+        }],
+        reviewContent: async (command_id) => command_id === "cmd-existing-draft-send" ? {
+          kind: "gmail_write_content",
+          command_id,
+          command_digest: commandDigest,
+          review_digest: reviewDigest,
+          request_payload_digest: "2".repeat(64),
+          provider_state_digest: "3".repeat(64),
+          provider_raw_digest: "4".repeat(64),
+          account_email: "owner@example.test",
+          operation: "gmail.write.draft.send",
+          from: "sender@example.test",
+          to: "recipient@example.test",
+          cc: "copy@example.test",
+          bcc: "hidden@example.test",
+          reply_to: "replies@example.test",
+          subject: "synthetic existing subject",
+          body_text: draftBody,
+          used_for_authority: false,
+        } : null,
+        validateContentReview: async (_command_id, submitted) => submitted === reviewDigest ? "valid" : "required",
+      },
+      onResume: async (id, verdict, resumeCtx) => { calls.push({ id, verdict, resumeCtx }); return { handled: true }; },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      const queue = await getRaw(ctx.port, "/approval", { authorization: `Bearer ${RESUME_TOKEN}` });
+      expect(queue.text).not.toContain(draftBody);
+
+      const review = await fetch(`http://127.0.0.1:${ctx.port}/approval/cmd-existing-draft-send/content`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+      });
+      expect(review.status).toBe(200);
+      expect(review.headers.get("cache-control")).toBe("no-store");
+      expect(await review.json()).toMatchObject({
+        operation: "gmail.write.draft.send",
+        account_email: "owner@example.test",
+        from: "sender@example.test",
+        to: "recipient@example.test",
+        cc: "copy@example.test",
+        bcc: "hidden@example.test",
+        reply_to: "replies@example.test",
+        subject: "synthetic existing subject",
+        body_text: draftBody,
+        provider_state_digest: "3".repeat(64),
+        provider_raw_digest: "4".repeat(64),
+        used_for_authority: false,
+      });
+
+      const issued = await ctx.ch.issueResumeApprovalToken("cmd-existing-draft-send");
+      const approved = await postJson(ctx.port, "/approval/cmd-existing-draft-send", {
+        verdict: "approve", approval_token: issued?.token, content_review_digest: reviewDigest,
+      }, { authorization: `Bearer ${RESUME_TOKEN}` });
+      expect(approved.status).toBe(200);
+      expect(calls).toMatchObject([{ id: "cmd-existing-draft-send", verdict: "approve",
+        resumeCtx: { content_review_digest: reviewDigest, actor: "webchat-resume-token-holder" } }]);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
   it("validates content binding before consuming the one-time approval token", async () => {
     const calls: unknown[] = [];
     const digest = "c".repeat(64);

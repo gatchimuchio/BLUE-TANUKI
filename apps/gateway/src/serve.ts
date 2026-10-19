@@ -122,8 +122,11 @@ import {
   runtimeScheduleMutationCommand,
 } from "./runtime_schedule.js";
 import {
+  isGmailDraftSendReviewCommand,
   isGmailWriteContentReviewCommand,
+  projectGmailDraftSendContentReview,
   projectGmailWriteContentReview,
+  validateGmailDraftSendContentReview,
   validateGmailWriteContentReview,
 } from "./approval_content_review.js";
 import { buildRuntimeStatusSnapshot } from "./runtime_status.js";
@@ -195,6 +198,7 @@ interface PendingApproval {
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   content_review_digest?: string;
+  content_review_provider_state_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
   goal_purpose_proposal?: {
     goal_ref: string;
@@ -973,6 +977,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       actor?: string;
       approval_evaluation?: ApprovalEvaluation;
       command_digest?: string;
+      expected_gmail_draft_provider_state_digest?: string;
       goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
       goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
     } = {},
@@ -1262,6 +1267,17 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         { channel: origin.channel, target: replyTarget(origin), content: finalized.rendered_output },
         { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
       );
+      return { status: reason };
+    }
+    const observedGmailDraftStateDigest = targetVersionObservation?.schema_version ===
+      "blue-tanuki.gmail-write-target-version.v1" ? targetVersionObservation.provider_state_digest : undefined;
+    if (opts.expected_gmail_draft_provider_state_digest &&
+        observedGmailDraftStateDigest !== opts.expected_gmail_draft_provider_state_digest) {
+      const reason = "gmail_draft_content_review_stale";
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason });
+      recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+        used_for_authority: false, may_execute: false,
+      });
       return { status: reason };
     }
     const hdsBinding = hds.createExecutionAuthorityBinding(cmd, targetVersionObservation);
@@ -1739,19 +1755,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       hds.onCommandLifecycle(command_id, "approval_cancelled", { actor: approvalActor, reason: "plan_binding_stale" });
       return { executed: false, status: "plan_binding_stale" };
     }
-    if (verdict === "approve" && isGmailWriteContentReviewCommand(pending.command) &&
-        validateGmailWriteContentReview(
-          pending.command,
-          pending.command_digest,
-          true,
-          pending.content_review_digest,
-          ctx.content_review_digest,
-        ) !== "valid") {
-      return {
-        executed: false,
-        pending: true,
-        status: "approval_content_review_required",
-      };
+    if (verdict === "approve" && (isGmailWriteContentReviewCommand(pending.command) ||
+        isGmailDraftSendReviewCommand(pending.command))) {
+      const contentReview = await validatePendingApprovalContentReview(command_id, ctx.content_review_digest);
+      if (contentReview !== "valid") {
+        return { executed: false, pending: true, status: `approval_content_review_${contentReview}` };
+      }
     }
     if (verdict === "approve" && pending.goal_purpose_proposal &&
         validateGoalPurposeChangeContentReview(pending, ctx.content_review_digest) !== "valid") {
@@ -1924,6 +1933,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       actor: approvalActor,
       approval_evaluation: pending.evaluation,
       command_digest: pending.command_digest,
+      ...(pending.content_review_provider_state_digest
+        ? { expected_gmail_draft_provider_state_digest: pending.content_review_provider_state_digest } : {}),
     });
     return { approval: "approve", executed: true, status: r.status };
   }
@@ -2685,7 +2696,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pending.content_review_digest === pending.command_digest ? "valid" : "stale";
   }
 
-  function pendingApprovalContentReview(command_id: string): WebChatApprovalContentReview | null {
+  async function pendingApprovalContentReview(command_id: string): Promise<WebChatApprovalContentReview | null> {
     const pending = pendingApprovals.get(command_id);
     if (pending?.goal_purpose_relation_review_proposal) {
       const proposal = pending.goal_purpose_relation_review_proposal;
@@ -2739,6 +2750,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
       return review;
     }
+    if (pending && isGmailDraftSendReviewCommand(pending.command) &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      const snapshot = await executor.inspectCommandContentReview(pending.command);
+      if (!snapshot) return null;
+      const review = projectGmailDraftSendContentReview(pending.command, pending.command_digest, snapshot);
+      if (!review || review.kind !== "gmail_write_content" || !review.provider_state_digest || !review.review_digest) return null;
+      pendingApprovals.set(command_id, {
+        ...pending,
+        content_review_digest: review.review_digest,
+        content_review_provider_state_digest: review.provider_state_digest,
+      });
+      return review;
+    }
     if (!pending || !isGmailWriteContentReviewCommand(pending.command) ||
         executorCommandDigest(pending.command) !== pending.command_digest ||
         !hds.operationPlanCommandIsCurrent(pending.command)) return null;
@@ -2751,10 +2776,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     return review;
   }
 
-  function validatePendingApprovalContentReview(
+  async function validatePendingApprovalContentReview(
     command_id: string,
     content_review_digest: string | undefined,
-  ): WebChatApprovalContentReviewValidation {
+  ): Promise<WebChatApprovalContentReviewValidation> {
     const pending = pendingApprovals.get(command_id);
     if (!pending) return "stale";
     if (pending.goal_purpose_relation_review_proposal) {
@@ -2762,6 +2787,30 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     if (pending.goal_purpose_proposal) {
       return validateGoalPurposeChangeContentReview(pending, content_review_digest);
+    }
+    if (isGmailDraftSendReviewCommand(pending.command)) {
+      const validation = validateGmailDraftSendContentReview(
+        pending.command,
+        pending.command_digest,
+        executorCommandDigest(pending.command) === pending.command_digest &&
+          hds.operationPlanCommandIsCurrent(pending.command),
+        pending.content_review_digest,
+        content_review_digest,
+      );
+      if (validation !== "valid") return validation;
+      if (!pending.content_review_provider_state_digest) return "required";
+      try {
+        const observation = await executor.inspectCommandTargetVersion(
+          pending.command,
+          undefined,
+          hds.getExecutionOperationPlanBindingDigest(pending.command),
+        );
+        return observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
+          observation.provider_state_digest === pending.content_review_provider_state_digest
+          ? "valid" : "stale";
+      } catch {
+        return "unavailable";
+      }
     }
     return validateGmailWriteContentReview(
       pending.command,
@@ -2788,7 +2837,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       approval_level: p.evaluation.approval_level,
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
-      content_review_required: isGmailWriteContentReviewCommand(p.command) || Boolean(p.goal_purpose_proposal) ||
+      content_review_required: isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
+        Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal),
       approval_token: p.approval_token,
       approval_token_expires_at_ms: p.approval_token_expires_at_ms,

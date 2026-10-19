@@ -380,8 +380,14 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
       parameters?.root === step.target.id;
   }
   if (step.operation !== "gmail.write" || step.adapter !== "external_api" ||
-      step.target.kind !== "external_service" || step.target.id !== "gmail" || !parameters ||
-      (parameters.operation !== "message.send" && parameters.operation !== "draft.create") || typeof parameters.to !== "string" ||
+      step.target.kind !== "external_service" || step.target.id !== "gmail" || !parameters) return false;
+  if (parameters.operation === "draft.send") {
+    return typeof parameters.draft_id === "string" && parameters.draft_id.trim().length > 0 &&
+      parameters.draft_id.trim() === parameters.draft_id &&
+      parameters.draft_id.length <= 256 && !/[\r\n]/.test(parameters.draft_id) &&
+      Object.keys(parameters).every((key) => ["operation", "draft_id"].includes(key));
+  }
+  if ((parameters.operation !== "message.send" && parameters.operation !== "draft.create") || typeof parameters.to !== "string" ||
       parameters.to.length > 320 || !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$/.test(parameters.to) ||
       typeof parameters.subject !== "string" || parameters.subject.trim().length === 0 ||
       parameters.subject.length > 200 || /[\r\n]/.test(parameters.subject) ||
