@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { approvalContextFromCommand, HDSUpperController, operationPlanDigest, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
-import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, FileSearchTargetVersionObservationSchema, OperationPlanCheckpointSchema,
+  type FileSearchTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { ExecutionIntentStore, ExecutionIntentTicket } from "../src/execution_intent.js";
 import { createExecutorApprovalAuthority, executorCommandDigest, type ExecutorApprovalProof } from "../src/executor.js";
 
@@ -105,6 +106,22 @@ function proofFor(command: ReturnType<typeof issuedCommand>["command"]): Executo
   };
 }
 
+function targetVersionFor(command: ReturnType<typeof issuedCommand>["command"]): FileSearchTargetVersionObservation {
+  if (command.type !== "tool_call" || command.payload.tool_name !== "file.search") throw new Error("fixture is not file.search");
+  const requestedRoot = command.payload.arguments.root;
+  if (typeof requestedRoot !== "string") throw new Error("fixture root is missing");
+  const digest = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+  return FileSearchTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.file-search-target-version.v1",
+    requested_root_digest: digest(requestedRoot),
+    canonical_root_digest: digest("C:\\blue-tanuki-fixture"),
+    resource_version_digest: digest("fixture-resource-version"),
+    files_examined: 1,
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
 function recordingIntentStore(tickets: ExecutionIntentTicket[]): ExecutionIntentStore {
   return {
     issue(ticket) { tickets.push({ ...ticket }); },
@@ -136,7 +153,7 @@ describe("HDSからExecutorへの非直列化source binding", () => {
     expect(tickets).toHaveLength(1);
     expect(tickets[0]!.command_digest).toBe(digest);
     expect(tickets[0]!.proof_digest).toBe(createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v1",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v2",
       command_digest: digest,
       proof,
       hds_source_context_digest: binding.source_context_digest,
@@ -167,8 +184,11 @@ describe("HDSからExecutorへの非直列化source binding", () => {
 
   it("J選択済みOperationPlanの改訂・step・target・引数bindingを同じExecutor ticketへ結合する", () => {
     const { hds, command, goal, target } = issuedPlanCommand();
-    const binding = hds.createExecutionAuthorityBinding(command);
+    const targetVersion = targetVersionFor(command);
+    expect(() => hds.createExecutionAuthorityBinding(command)).toThrow(/file.search target version observation is required/);
+    const binding = hds.createExecutionAuthorityBinding(command, targetVersion);
     expect(binding.operation_plan_binding_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(binding.broker_target_version_observation_digest).toBe(operationPlanDigest(targetVersion));
     expect(JSON.stringify(binding)).not.toContain("fixture-owner");
     expect(JSON.stringify(binding)).not.toContain(goal);
     expect(JSON.stringify(binding)).not.toContain(target);
@@ -180,14 +200,19 @@ describe("HDSからExecutorへの非直列化source binding", () => {
     });
     const proof = proofFor(command);
     const digest = executorCommandDigest(command);
-    authority.approve(command, proof, digest, binding);
+    const changedTargetVersion = FileSearchTargetVersionObservationSchema.parse({ ...targetVersion,
+      resource_version_digest: createHash("sha256").update("changed target version").digest("hex") });
+    expect(() => authority.approve(command, proof, digest, binding, changedTargetVersion))
+      .toThrow(/HDS target version binding does not match evidence/);
+    authority.approve(command, proof, digest, binding, targetVersion);
 
     expect(tickets).toHaveLength(1);
     expect(tickets[0]!.proof_digest).toBe(createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v1",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v2",
       command_digest: digest,
       proof,
       hds_source_context_digest: binding.source_context_digest,
+      target_version_observation_digest: operationPlanDigest(targetVersion),
     })).digest("hex"));
   });
 

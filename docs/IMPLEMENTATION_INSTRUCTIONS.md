@@ -2,7 +2,26 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-OPERATION-PLAN-SOURCE-CONTEXT`
+### 最新BUILD_BATCH：`QEB-01-D02.01-BROKER-TARGET-VERSION-BINDING`
+
+開始HEAD／`origin/main`=`0fccd1dbf5aee520e5e771e1e79b69eecd7d34a2`、開始worktree clean。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準要領、active指示、D02.01とfile.searchの実経路を再読した。local recovery branchはcurrent=`0fccd1d...`／previous=`709bb3f...`、remote backup tagも同じ二世代を指す。D01.03 stashは保持。
+
+Brokerの組込み`file.search`に限定した読取専用target-version observationを追加した。承認前にsandbox内rootをcanonical pathへ解決し、最大1,000 fileの相対path・byte size・content digestからresource digestを作る。requested root digest、canonical root digest、file count、固定の`used_for_authority=false`／`may_execute=false`を持つstrict protocolとした。HDSの非直列化sealとExecutorの永続ticket proof digestへ同じobservation digestを結び、専用Gateway worker v2はIPCでprivate evidenceを渡す。childは検索時に同じ観測を再計算し、差異があれば結果を返さずfresh reviewを要求する。内部evidenceはworker envelope内だけで照合し、既存のpublic `file.search` result schemaは維持した。
+
+これは限定されたfile.search対象の版観測結合であり、権限ではない。1,000 file上限を超える対象全体のsnapshot保証、file IDを含む安定したOS資源同一性、filesystem全般のatomic snapshot、owner delegation／semantic purpose version、全tool target、独立Broker audience／OS Permissionの実証は未成立。D02.01=`BUILD_GAP`を維持する。次consumerは信頼されたdelegation／purpose-version producerと、他target種別を含むBrokerのcanonical resolver・独立認証を同一HDS-J→Approval→Executor経路へ接続すること。
+
+| 限定確認 | 結果 |
+|---|---|
+| Core `executor_hds_authority_binding.test.ts`／`tools_builtin.test.ts` | PASS、51/51。 |
+| Gateway `file_search_worker.test.ts` | PASS、8/8。Vitest実行時のみ`--testTimeout 15000`を指定。既定5秒実行の一件は5.1秒でtimeoutしたが、個別実行と全件再実行で通過。製品timeout設定は変更していない。 |
+| Gateway `execution_result_reconciliation.test.ts` | PASS、33/33。実worker結果・receiptからJ/M帰還までの結合試験。 |
+| `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | PASS。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件を警告。 |
+| 全workspace test suite／QE_QC／QE_QA／5OS実機 | 未実施。 |
+
+実provider／credential／実owner承認／実業務ファイル／外部作用、D4Pocket／ミニドラ変更、公開・出荷判断なし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-OPERATION-PLAN-SOURCE-CONTEXT`
 
 開始HEAD／`origin/main`=`709bb3fbd63b9346745be223fb34c2b4a61cc668`、worktree clean。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準要領、active指示、D02.01／D02要求、OperationPlan・HDS・Executorの実経路を再読した。開始時local recovery branch／remote backup tagはcurrent=`709bb3f...`、previous=`61dc819...`へ期待値照合して回転。D01.03 stashは保持。
 

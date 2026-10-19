@@ -21,6 +21,7 @@ import {
   LLMFallbackAuthorizationSchema,
   inspectOperationCommandExecutionResult,
   OperationPlanExternalReceiptObservationSchema,
+  FileSearchTargetVersionObservationSchema,
   OperationPlanControlSchema,
   type OperationPlanControl,
   getOperationDescriptor,
@@ -152,15 +153,17 @@ export interface HDSRuntimeSnapshot {
 
 /** An in-process, non-serializable provenance seal for one exact HDS-issued command. */
 export interface HDSExecutionAuthorityBinding {
-  readonly schema_version: "blue-tanuki.hds-execution-authority-binding.v1";
+  readonly schema_version: "blue-tanuki.hds-execution-authority-binding.v2";
   readonly source_context_digest: string;
   readonly operation_plan_binding_digest?: string;
+  readonly broker_target_version_observation_digest?: string;
 }
 
 interface HDSExecutionAuthorityBindingRecord {
   readonly command: ExecuteCommand;
   readonly source_context_digest: string;
   readonly operation_plan_binding_digest?: string;
+  readonly broker_target_version_observation_digest?: string;
   consumed: boolean;
 }
 
@@ -176,9 +179,10 @@ export function consumeHdsExecutionAuthorityBinding(
 ): string {
   const record = HDS_EXECUTION_AUTHORITY_BINDINGS.get(binding as object);
   if (!record || record.command !== command || record.consumed ||
-      binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v1" ||
+      binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v2" ||
       binding.source_context_digest !== record.source_context_digest ||
-      binding.operation_plan_binding_digest !== record.operation_plan_binding_digest) {
+      binding.operation_plan_binding_digest !== record.operation_plan_binding_digest ||
+      binding.broker_target_version_observation_digest !== record.broker_target_version_observation_digest) {
     throw new Error("HDS execution authority binding is invalid, copied, or already consumed");
   }
   record.consumed = true;
@@ -1295,7 +1299,7 @@ ${planControl.question}`,
    * provenance only: the digest never grants permission or identifies an
    * adopted semantic purpose version.
    */
-  createExecutionAuthorityBinding(command: ExecuteCommand): HDSExecutionAuthorityBinding {
+  createExecutionAuthorityBinding(command: ExecuteCommand, brokerTargetVersionObservation?: unknown): HDSExecutionAuthorityBinding {
     const source = this.issuedExecutionCommands.get(command);
     if (!source || this.inflight.get(command.id) !== source || source.commit.decision !== "ASSERT" ||
         command.upstream_decision.commit_decision !== "ASSERT" ||
@@ -1303,10 +1307,25 @@ ${planControl.question}`,
         command.upstream_decision.request_id !== source.request_id) {
       throw new Error("HDS execution authority source is unavailable or no longer current");
     }
+    let brokerTargetVersionObservationDigest: string | undefined;
+    if (command.type === "tool_call" && command.payload.tool_name === "file.search") {
+      if (brokerTargetVersionObservation === undefined) {
+        throw new Error("HDS file.search target version observation is required");
+      }
+      const observation = FileSearchTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+      const requestedRoot = command.payload.arguments.root;
+      if (typeof requestedRoot !== "string" || observation.requested_root_digest !==
+          createHash("sha256").update(requestedRoot, "utf8").digest("hex")) {
+        throw new Error("HDS file.search target version does not match the issued command");
+      }
+      brokerTargetVersionObservationDigest = operationPlanDigest(observation);
+    } else if (brokerTargetVersionObservation !== undefined) {
+      throw new Error("HDS target version observation is unsupported for this command");
+    }
     const projection = source.frame.goal_projection;
     const operation_plan_binding_digest = this.operationPlans.executionSourceBindingDigest(command);
     const source_context_digest = sha256({
-      schema_version: "blue-tanuki.hds-execution-source-context.v1",
+      schema_version: "blue-tanuki.hds-execution-source-context.v2",
       request_id: source.request_id,
       command_id: command.id,
       commit_hash: source.commit.hash,
@@ -1324,14 +1343,20 @@ ${planControl.question}`,
       goal_projection_state: projection.state,
       goal_authority_status: projection.authority.status,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
+      ...(brokerTargetVersionObservationDigest
+        ? { broker_target_version_observation_digest: brokerTargetVersionObservationDigest } : {}),
     });
     const binding: HDSExecutionAuthorityBinding = Object.freeze({
-      schema_version: "blue-tanuki.hds-execution-authority-binding.v1",
+      schema_version: "blue-tanuki.hds-execution-authority-binding.v2",
       source_context_digest,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
+      ...(brokerTargetVersionObservationDigest
+        ? { broker_target_version_observation_digest: brokerTargetVersionObservationDigest } : {}),
     });
     HDS_EXECUTION_AUTHORITY_BINDINGS.set(binding, { command, source_context_digest,
-      ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}), consumed: false });
+      ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
+      ...(brokerTargetVersionObservationDigest
+        ? { broker_target_version_observation_digest: brokerTargetVersionObservationDigest } : {}), consumed: false });
     return binding;
   }
   beginOperationPlanAttempt(command: ExecuteCommand, admission?: ExecutionAdmission): boolean {

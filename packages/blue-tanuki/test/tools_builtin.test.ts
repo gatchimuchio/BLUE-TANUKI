@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   invokeFileSearch,
+  inspectFileSearchTargetVersion,
   invokeFileWrite,
   invokeFileEdit,
   invokeHttpFetch,
@@ -136,6 +137,29 @@ describe("built-in tools", () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("file.search binds the bounded observed directory version and rejects a changed target before returning results", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-search-version-"));
+    try {
+      const args = { root: ".", query: "needle", max_results: 5 };
+      await fs.writeFile(path.join(dir, "a.txt"), "needle original\n", "utf8");
+      const expected = await inspectFileSearchTargetVersion(args, fileSearchEnv(dir));
+      expect(Object.keys(expected).sort()).toEqual([
+        "canonical_root_digest", "files_examined", "may_execute", "requested_root_digest",
+        "resource_version_digest", "schema_version", "used_for_authority",
+      ]);
+      expect(expected).toMatchObject({ files_examined: 1, used_for_authority: false, may_execute: false });
+      const matching = await invokeFileSearch(args, { ...fileSearchEnv(dir), expected_target_version: expected,
+        include_target_version_observation: true }) as {
+        target_version_observation: typeof expected;
+      };
+      expect(matching.target_version_observation).toEqual(expected);
+
+      await fs.writeFile(path.join(dir, "a.txt"), "needle changed\n", "utf8");
+      await expect(invokeFileSearch(args, { ...fileSearchEnv(dir), expected_target_version: expected }))
+        .rejects.toThrow(/target version changed/);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 
   it("file.search requires BLUE_TANUKI_FILE_ROOT", async () => {

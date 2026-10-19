@@ -5,14 +5,17 @@ import type { ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocation
 import {
   BOUNDARY_EXCHANGE_SCHEMA_VERSION,
   BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
+  canonicalFileSearchTargetVersionObservation,
+  FileSearchTargetVersionObservationSchema,
   parseBoundaryExchangeAtBoundary,
   inspectExecutionResultDelivery,
 } from "@blue-tanuki/protocol";
-import { approvalContextFromCommand, consumeHdsExecutionAuthorityBinding, finalReviewRequired } from "@blue-tanuki/hds-brain";
+import { approvalContextFromCommand, consumeHdsExecutionAuthorityBinding, finalReviewRequired, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { ApprovalOperation, ApprovalRisk, HDSExecutionAuthorityBinding } from "@blue-tanuki/hds-brain";
 import type {
   ExecuteCommand,
   ExecuteFeedback,
+  FileSearchTargetVersionObservation,
   LLMCallFailure,
   LLMCallPayload,
   ChannelSendPayload,
@@ -106,6 +109,7 @@ export interface ExecutorDeps {
 
 export interface FileSearchWorkerRequest {
   command: Extract<ExecuteCommand, { type: "tool_call" }>;
+  target_version_observation: FileSearchTargetVersionObservation;
   ticket: Readonly<ExecutionIntentTicket>;
   signal?: AbortSignal;
   on_started(worker: Readonly<ExecutionWorkerIdentity>): void;
@@ -149,6 +153,7 @@ interface ApprovedCommandRecord {
   ticket: Readonly<ExecutionIntentTicket>;
   issued_monotonic_ms: number;
   runtime: ApprovalRuntime;
+  target_version_observation?: FileSearchTargetVersionObservation;
 }
 
 interface ApprovalRuntime {
@@ -172,7 +177,7 @@ export type ApprovedCommand = ExecuteCommand & {
 
 export interface ExecutorApprovalAuthority {
   approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string,
-    hds_binding?: HDSExecutionAuthorityBinding): ApprovedCommand;
+    hds_binding?: HDSExecutionAuthorityBinding, target_version_observation?: FileSearchTargetVersionObservation): ApprovedCommand;
   /** 再照会は実行しない。未完の消費は結果不明として表示する。 */
   receipt(command: ApprovedCommand): ExecutionIntentReceipt | null;
 }
@@ -191,8 +196,8 @@ export function createExecutorApprovalAuthority(options: ExecutorApprovalOptions
   readApprovalClock(runtime);
   const authority = Object.freeze({
     approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string,
-      hds_binding?: HDSExecutionAuthorityBinding): ApprovedCommand {
-      return approveCommandForExecution(command, proof, runtime, expected_command_digest, hds_binding);
+      hds_binding?: HDSExecutionAuthorityBinding, target_version_observation?: FileSearchTargetVersionObservation): ApprovedCommand {
+      return approveCommandForExecution(command, proof, runtime, expected_command_digest, hds_binding, target_version_observation);
     },
     receipt(command: ApprovedCommand): ExecutionIntentReceipt | null {
       const record = APPROVED_COMMAND_RECORDS.get(command);
@@ -213,6 +218,7 @@ function approveCommandForExecution(
   runtime: ApprovalRuntime,
   expected_command_digest?: string,
   hds_binding?: HDSExecutionAuthorityBinding,
+  rawTargetVersionObservation?: FileSearchTargetVersionObservation,
 ): ApprovedCommand {
   runtime.assert_execution_owner?.();
   const snapshot = approvalCommandSnapshot(command);
@@ -238,6 +244,27 @@ function approveCommandForExecution(
   if (expected_command_digest !== undefined && expected_command_digest !== command_digest) {
     throw new Error("Executor approval rejected: reviewed command content changed");
   }
+  let target_version_observation: FileSearchTargetVersionObservation | undefined;
+  if (rawTargetVersionObservation !== undefined) {
+    if (snapshot.type !== "tool_call" || snapshot.payload.tool_name !== "file.search") {
+      throw new Error("Executor approval rejected: target version evidence is only valid for built-in file.search");
+    }
+    target_version_observation = Object.freeze(FileSearchTargetVersionObservationSchema.parse(rawTargetVersionObservation));
+    const requestedRoot = snapshot.payload.arguments.root;
+    if (typeof requestedRoot !== "string" || target_version_observation.requested_root_digest !==
+        createHash("sha256").update(requestedRoot, "utf8").digest("hex")) {
+      throw new Error("Executor approval rejected: file.search target version does not match command");
+    }
+  }
+  const target_version_observation_digest = target_version_observation
+    ? operationPlanDigest(target_version_observation) : undefined;
+  if (hds_binding && hds_binding.broker_target_version_observation_digest !== target_version_observation_digest) {
+    throw new Error("Executor approval rejected: HDS target version binding does not match evidence");
+  }
+  if (runtime.require_hds_execution_binding && snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.search" &&
+      !target_version_observation) {
+    throw new Error("Executor approval rejected: file.search target version evidence is required");
+  }
   if (!hds_binding && runtime.require_hds_execution_binding) {
     throw new Error("Executor approval rejected: HDS execution authority binding is required");
   }
@@ -251,10 +278,11 @@ function approveCommandForExecution(
     command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", snapshot.id])).digest("hex"),
     command_digest,
     proof_digest: createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v1",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v2",
       command_digest,
       proof,
       hds_source_context_digest,
+      ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
     })).digest("hex"),
     issued_at_ms: clock.wall, expires_at_ms: clock.wall + runtime.ttl_ms,
   });
@@ -262,6 +290,7 @@ function approveCommandForExecution(
   APPROVED_COMMAND_RECORDS.set(approved, {
     proof, authority_id: runtime.authority_id, command_digest, consumed: false,
     ticket, issued_monotonic_ms: clock.monotonic, runtime,
+    ...(target_version_observation ? { target_version_observation } : {}),
   });
   freezeApprovalContent(approved);
   return approved;
@@ -364,6 +393,26 @@ function freezeApprovalContent(value: unknown): void {
   Object.freeze(value);
 }
 
+function stripFileSearchTargetVersionObservation(value: unknown, expected: FileSearchTargetVersionObservation): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      canonicalFileSearchTargetVersionObservation((value as Record<string, unknown>).target_version_observation) !==
+        canonicalFileSearchTargetVersionObservation(expected)) {
+    throw new Error("file.search result target version does not match approved evidence");
+  }
+  const publicResult = { ...(value as Record<string, unknown>) };
+  delete publicResult.target_version_observation;
+  return publicResult;
+}
+
+function readFileSearchWorkerResult(value: unknown, expected: FileSearchTargetVersionObservation): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      canonicalFileSearchTargetVersionObservation((value as Record<string, unknown>).target_version_observation) !==
+        canonicalFileSearchTargetVersionObservation(expected) || !Object.hasOwn(value, "result")) {
+    throw new Error("file.search worker target version does not match approved evidence");
+  }
+  return (value as Record<string, unknown>).result;
+}
+
 /**
  * Executor: the top-level dispatcher for BLUE-TANUKI.
  *
@@ -376,6 +425,25 @@ function freezeApprovalContent(value: unknown): void {
  */
 export class Executor {
   constructor(private readonly deps: ExecutorDeps) {}
+
+  /** Read-only preflight for the exact registered built-in file.search adapter. */
+  async inspectCommandTargetVersion(command: ExecuteCommand,
+    env?: Readonly<Record<string, string | undefined>>): Promise<FileSearchTargetVersionObservation | undefined> {
+    if (command.type !== "tool_call" || command.payload.tool_name !== "file.search") return undefined;
+    const tool = this.deps.tools.get("file.search");
+    if (tool !== fileSearchTool || !tool.inspect_target_version) {
+      throw new Error("file.search target version resolver requires the registered built-in adapter");
+    }
+    const observation = FileSearchTargetVersionObservationSchema.parse(
+      await tool.inspect_target_version(command.payload.arguments, env ? { env } : undefined),
+    );
+    const requestedRoot = command.payload.arguments.root;
+    if (typeof requestedRoot !== "string" || observation.requested_root_digest !==
+        createHash("sha256").update(requestedRoot, "utf8").digest("hex")) {
+      throw new Error("file.search target version resolver returned evidence for another command");
+    }
+    return Object.freeze(observation);
+  }
 
   async execute(cmd: ApprovedCommand, context: ExecutorExecutionContext = {}): Promise<ExecuteFeedback> {
     const start = Date.now();
@@ -665,11 +733,13 @@ export class Executor {
     if (payload.tool_name === "file.search" && this.deps.file_search_worker) {
       if (tool !== fileSearchTool) throw new Error("File search worker requires the registered built-in adapter");
       const record = APPROVED_COMMAND_RECORDS.get(command)!;
+      if (!record.target_version_observation) throw new Error("File search worker requires bound target version evidence");
       const store = record.runtime.store;
       if (!store?.bindWorker || !store.observeWorkerExit) throw new Error("File search worker requires durable worker receipts");
       let worker: Readonly<ExecutionWorkerIdentity> | undefined;
       let dispatched = false; let exited = false;
-      const result = await this.deps.file_search_worker.invoke({ command, ticket: record.ticket, signal,
+      const workerResponse = await this.deps.file_search_worker.invoke({ command, target_version_observation: record.target_version_observation,
+        ticket: record.ticket, signal,
         on_started: (identity) => {
           if (worker || exited) throw new Error("File search worker start repeated");
           record.runtime.assert_execution_owner?.();
@@ -700,6 +770,7 @@ export class Executor {
         },
       });
       if (!worker || !dispatched || !exited) throw new Error("File search worker lifecycle incomplete");
+      const result = readFileSearchWorkerResult(workerResponse, record.target_version_observation);
       return { command_id: id, status: "success", result, metrics: { duration_ms: Date.now() - start, tool_calls: 1 } };
     }
     const controller = new AbortController();
@@ -710,15 +781,18 @@ export class Executor {
         upstream_commit_hash: commit_hash,
         idempotency_key: APPROVED_COMMAND_RECORDS.get(command)!.ticket.command_key,
         command_digest: APPROVED_COMMAND_RECORDS.get(command)!.ticket.command_digest,
+        target_version_observation: APPROVED_COMMAND_RECORDS.get(command)!.target_version_observation,
         signal: controller.signal,
       }),
       constraints?.timeout_ms,
       controller,
     );
+    const targetVersion = APPROVED_COMMAND_RECORDS.get(command)!.target_version_observation;
+    const publicResult = targetVersion ? stripFileSearchTargetVersionObservation(result, targetVersion) : result;
     return {
       command_id: id,
       status: "success",
-      result,
+      result: publicResult,
       metrics: { duration_ms: Date.now() - start, tool_calls: 1 },
     };
   }

@@ -5,7 +5,12 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import * as path from "node:path";
-import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
+import {
+  canonicalFileSearchTargetVersionObservation,
+  FileSearchTargetVersionObservationSchema,
+  requireToolOperationDescriptor,
+  type FileSearchTargetVersionObservation,
+} from "@blue-tanuki/protocol";
 import { echoTool, type Tool } from "./registry.js";
 import {
   gmailReadTool,
@@ -1477,7 +1482,8 @@ export async function invokeFileSearch(
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
   const sandboxRoot = await sandboxRootFromEnv(env);
-  const root = await resolveFileSearchRoot(stringArg(args, "root")!, sandboxRoot);
+  const requestedRoot = stringArg(args, "root")!;
+  const root = await resolveFileSearchRoot(requestedRoot, sandboxRoot);
   const query = stringArg(args, "query")!;
   const maxResults = positiveIntArg(args, "max_results", 20, 100);
   const stat = await fs.stat(root);
@@ -1485,12 +1491,15 @@ export async function invokeFileSearch(
     throw new Error("root must be a directory");
   }
 
+  const targetVersionHasher = createHash("sha256").update("blue-tanuki.file-search-resource-version.v1\n", "utf8");
   const matches: Array<{ path: string; line_number: number; line: string }> = [];
   let visited = 0;
   for await (const file of walkFiles(root, sandboxRoot)) {
-    if (matches.length >= maxResults || visited >= 1_000) break;
+    if (visited >= 1_000) break;
     visited += 1;
     const data = await fs.readFile(file);
+    appendFileSearchVersionEntry(targetVersionHasher, root, file, data);
+    if (matches.length >= maxResults) continue;
     if (data.includes(0)) continue;
     const text = data.toString("utf8");
     const lines = text.split(/\r?\n/);
@@ -1507,13 +1516,66 @@ export async function invokeFileSearch(
     }
   }
 
-  return {
+  const targetVersion = fileSearchTargetVersionObservation(requestedRoot, root, visited, targetVersionHasher.digest("hex"));
+  if (opts.expected_target_version &&
+      canonicalFileSearchTargetVersionObservation(targetVersion) !==
+        canonicalFileSearchTargetVersionObservation(opts.expected_target_version)) {
+    throw new Error("file.search target version changed; request fresh review");
+  }
+
+  const result = {
     root,
     sandbox_root: sandboxRoot,
     query,
     visited_files: visited,
     matches,
   };
+  return opts.include_target_version_observation ? { ...result, target_version_observation: targetVersion } : result;
+}
+
+/** Read-only broker observation; it records only digests and the bounded file count. */
+export async function inspectFileSearchTargetVersion(
+  args: Record<string, unknown>,
+  opts: FileSearchOptions = {},
+): Promise<FileSearchTargetVersionObservation> {
+  const env = opts.env ?? process.env;
+  const sandboxRoot = await sandboxRootFromEnv(env);
+  const requestedRoot = stringArg(args, "root")!;
+  const root = await resolveFileSearchRoot(requestedRoot, sandboxRoot);
+  const stat = await fs.stat(root);
+  if (!stat.isDirectory()) throw new Error("root must be a directory");
+  const hasher = createHash("sha256").update("blue-tanuki.file-search-resource-version.v1\n", "utf8");
+  let filesExamined = 0;
+  for await (const file of walkFiles(root, sandboxRoot)) {
+    if (filesExamined >= 1_000) break;
+    const data = await fs.readFile(file);
+    appendFileSearchVersionEntry(hasher, root, file, data);
+    filesExamined += 1;
+  }
+  return fileSearchTargetVersionObservation(requestedRoot, root, filesExamined, hasher.digest("hex"));
+}
+
+function appendFileSearchVersionEntry(hasher: ReturnType<typeof createHash>, root: string, file: string, data: Buffer): void {
+  const relative = path.relative(root, file).replace(/\\/g, "/");
+  const contentDigest = createHash("sha256").update(data).digest("hex");
+  hasher.update(`${JSON.stringify([relative, data.length, contentDigest])}\n`, "utf8");
+}
+
+function fileSearchTargetVersionObservation(
+  requestedRoot: string,
+  canonicalRoot: string,
+  filesExamined: number,
+  resourceVersionDigest: string,
+): FileSearchTargetVersionObservation {
+  return FileSearchTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.file-search-target-version.v1",
+    requested_root_digest: createHash("sha256").update(requestedRoot, "utf8").digest("hex"),
+    canonical_root_digest: createHash("sha256").update(canonicalRoot, "utf8").digest("hex"),
+    resource_version_digest: resourceVersionDigest,
+    files_examined: filesExamined,
+    used_for_authority: false,
+    may_execute: false,
+  });
 }
 
 export async function invokeFileWrite(
@@ -1609,8 +1671,12 @@ export const fileSearchTool: Tool = {
   name: "file.search",
   description: "Read-only text search under a requested root directory.",
   required_capabilities: requireToolOperationDescriptor("file.search").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeFileSearch(args);
+  async inspect_target_version(args: Record<string, unknown>, options?: { env?: Env }): Promise<FileSearchTargetVersionObservation> {
+    return await inspectFileSearchTargetVersion(args, options);
+  },
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeFileSearch(args, { expected_target_version: context.target_version_observation,
+      include_target_version_observation: context.target_version_observation !== undefined });
   },
 };
 

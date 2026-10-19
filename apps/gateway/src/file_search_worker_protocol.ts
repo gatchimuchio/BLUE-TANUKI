@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { executorCommandDigest, type ExecutionIntentTicket } from "@blue-tanuki/core";
-import { requireToolOperationDescriptor, type ExecuteCommand } from "@blue-tanuki/protocol";
+import { canonicalFileSearchTargetVersionObservation, FileSearchTargetVersionObservationSchema,
+  requireToolOperationDescriptor, type ExecuteCommand, type FileSearchTargetVersionObservation } from "@blue-tanuki/protocol";
 
-export const FILE_SEARCH_WORKER_PROFILE = "blue-file-search-worker.v1";
+export const FILE_SEARCH_WORKER_PROFILE = "blue-file-search-worker.v2";
 export const FILE_SEARCH_WORKER_PACKET_LIMIT = 262_144;
 export const workerPacket = (packet: Record<string, unknown>): string => {
   const text = JSON.stringify({ profile: FILE_SEARCH_WORKER_PROFILE, ...packet });
@@ -18,12 +19,18 @@ export function readWorkerPacket(value: unknown): Record<string, unknown> {
   return packet as Record<string, unknown>;
 }
 export function validateWorkerRequest(packet: Record<string, unknown>, worker_id: string, now_ms: number): {
-  command: Extract<ExecuteCommand, { type: "tool_call" }>; ticket: ExecutionIntentTicket;
+  command: Extract<ExecuteCommand, { type: "tool_call" }>;
+  ticket: ExecutionIntentTicket;
+  target_version_observation: FileSearchTargetVersionObservation;
 } {
   if (packet.type !== "execute" || packet.worker_id !== worker_id ||
-      Object.keys(packet).some((key) => !["profile", "type", "worker_id", "ticket", "command"].includes(key))) throw new Error("file_search_worker_request_invalid");
+      Object.keys(packet).some((key) => !["profile", "type", "worker_id", "ticket", "command", "target_version_observation"].includes(key))) throw new Error("file_search_worker_request_invalid");
   const ticket = packet.ticket as ExecutionIntentTicket;
   const command = packet.command as Extract<ExecuteCommand, { type: "tool_call" }>;
+  let target_version_observation: FileSearchTargetVersionObservation;
+  try { target_version_observation = FileSearchTargetVersionObservationSchema.parse(packet.target_version_observation); }
+  catch { throw new Error("file_search_worker_target_version_invalid"); }
+  const requestedRoot = command?.payload?.arguments?.root;
   if (!ticket || Object.keys(ticket).some((key) => !["ticket_id", "command_key", "command_digest", "proof_digest", "execution_epoch", "issued_at_ms", "expires_at_ms"].includes(key)) ||
       !/^[0-9a-f-]{36}$/.test(ticket.ticket_id) || !/^[0-9a-f-]{36}$/.test(ticket.execution_epoch) ||
       ![ticket.command_key, ticket.command_digest, ticket.proof_digest].every((value) => /^[0-9a-f]{64}$/.test(value)) ||
@@ -31,6 +38,7 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
       ticket.issued_at_ms <= 0 || ticket.expires_at_ms <= ticket.issued_at_ms || ticket.expires_at_ms - ticket.issued_at_ms > 600_000 ||
       now_ms < ticket.issued_at_ms || now_ms >= ticket.expires_at_ms || command?.type !== "tool_call" ||
       command.payload?.tool_name !== "file.search" || command.upstream_decision?.commit_decision !== "ASSERT" ||
+      typeof requestedRoot !== "string" || target_version_observation.requested_root_digest !== createHash("sha256").update(requestedRoot, "utf8").digest("hex") ||
       ticket.command_digest !== executorCommandDigest(command) ||
       ticket.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex")) {
     throw new Error("file_search_worker_ticket_invalid");
@@ -40,13 +48,22 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
       !requireToolOperationDescriptor("file.search").required_capabilities.every((cap) => constraints.allowed_capabilities?.includes(cap))) {
     throw new Error("file_search_worker_capability_denied");
   }
-  return { command, ticket };
+  return { command, ticket, target_version_observation };
 }
 
-export function validateWorkerResult(value: unknown, command: Extract<ExecuteCommand, { type: "tool_call" }>): void {
+export function validateWorkerResult(value: unknown, command: Extract<ExecuteCommand, { type: "tool_call" }>,
+  observedTargetVersion: unknown, expectedTargetVersion: FileSearchTargetVersionObservation): FileSearchTargetVersionObservation {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("file_search_worker_result_invalid");
   const result = value as Record<string, unknown>;
-  if (Object.keys(result).some((key) => !["root", "sandbox_root", "query", "visited_files", "matches"].includes(key)) ||
+  let observedTargetVersionCanonical: string;
+  let observedTargetVersionParsed: FileSearchTargetVersionObservation;
+  try {
+    observedTargetVersionParsed = FileSearchTargetVersionObservationSchema.parse(observedTargetVersion);
+    observedTargetVersionCanonical = canonicalFileSearchTargetVersionObservation(observedTargetVersionParsed);
+  }
+  catch { throw new Error("file_search_worker_result_invalid"); }
+  if (observedTargetVersionCanonical !== canonicalFileSearchTargetVersionObservation(expectedTargetVersion) ||
+      Object.keys(result).some((key) => !["root", "sandbox_root", "query", "visited_files", "matches"].includes(key)) ||
       typeof result.root !== "string" || typeof result.sandbox_root !== "string" || result.query !== command.payload.arguments.query ||
       !Number.isSafeInteger(result.visited_files) || (result.visited_files as number) < 0 || (result.visited_files as number) > 1000 ||
       !Array.isArray(result.matches) || result.matches.length > 100) throw new Error("file_search_worker_result_invalid");
@@ -57,4 +74,5 @@ export function validateWorkerResult(value: unknown, command: Extract<ExecuteCom
       throw new Error("file_search_worker_result_invalid");
     }
   }
+  return observedTargetVersionParsed;
 }

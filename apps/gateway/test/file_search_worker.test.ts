@@ -38,11 +38,16 @@ function rig(store: ExecutionIntentStore, workspace: string, worker?: FileSearch
       NODE_OPTIONS: "--blue-forbidden-parent-option" }) });
   return { authority, executor };
 }
+async function approve(authority: ReturnType<typeof createExecutorApprovalAuthority>, executor: Executor,
+  workspace: string, command = source()) {
+  const targetVersion = await executor.inspectCommandTargetVersion(command, { BLUE_TANUKI_FILE_ROOT: workspace });
+  return authority.approve(command, proof(command), undefined, undefined, targetVersion);
+}
 
 describe("Gateway組込みfile.searchの専用process境界", () => {
   it("実検索→異なるPID/世代→実exit→receiptを返し、再起動照会と再送では再作用しない", async () => temporary(async (store, workspace, filename) => {
     const { authority, executor } = rig(store, workspace);
-    const command = source(); const approved = authority.approve(command, proof());
+    const command = source(); const approved = await approve(authority, executor, workspace, command);
     const feedback = await executor.execute(approved);
     expect(feedback.status).toBe("success");
     expect(feedback.result).toMatchObject({ query: "blue", visited_files: 1, matches: [{ path: "blue.txt", line_number: 1, line: "blue" }] });
@@ -60,9 +65,22 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
     expect(JSON.stringify(store.snapshot())).not.toContain(workspace);
   }));
 
+  it("承認ticketのtarget versionから内容が変わった場合は検索結果を返さず再確認を要求する", async () => temporary(async (store, workspace) => {
+    const { authority, executor } = rig(store, workspace);
+    const approved = await approve(authority, executor, workspace);
+    writeFileSync(join(workspace, "blue.txt"), "blue changed after preflight\n");
+
+    const feedback = await executor.execute(approved);
+    expect(feedback.status).toBe("failed");
+    expect(feedback.result).toBeUndefined();
+    expect(feedback.error).toMatch(/target_version_changed.*fresh review/);
+    expect(authority.receipt(approved)).toMatchObject({ state: "outcome_unknown", invocation_boundary: "tool_adapter" });
+    expect(authority.receipt(approved)?.worker_exit_observed_at_ms).toBeGreaterThan(0);
+  }));
+
   it("起動待ち後の停止確認を通らなければexecuteを送らず、実exit付き未呼出しへ戻す", async () => temporary(async (store, workspace) => {
     const { authority, executor } = rig(store, workspace);
-    const approved = authority.approve(source(), proof());
+    const approved = await approve(authority, executor, workspace);
     const feedback = await executor.execute(approved, { before_tool_dispatch: () => { throw new Error("owner emergency stop active"); } });
     expect(feedback.status).toBe("failed"); expect(feedback.error).toMatch(/emergency stop/);
     const receipt = authority.receipt(approved)!;
@@ -83,7 +101,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
     const tools = new ToolRegistry(); tools.register(fileSearchTool);
     const executor = new Executor({ llm, tools, approval_authority: authority,
       file_search_worker: createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace }) });
-    const approved = authority.approve(source(), proof());
+    const approved = await approve(authority, executor, workspace);
     expect((await executor.execute(approved)).error).toMatch(/expired/);
     expect(authority.receipt(approved)).toMatchObject({ state: "not_attempted", worker_platform: process.platform });
     expect(authority.receipt(approved)?.worker_exit_observed_at_ms).toBeGreaterThan(0);
@@ -98,12 +116,12 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
       observeWorkerExit: () => { throw new Error("fixture exit persistence failed"); },
     };
     const { authority, executor } = rig(wrapped, workspace);
-    const approved = authority.approve(source(), proof());
+    const approved = await approve(authority, executor, workspace);
     expect((await executor.execute(approved, { signal: controller.signal })).status).toBe("failed");
     expect(authority.receipt(approved)?.state).toBe("not_attempted");
     expect(authority.receipt(approved)?.worker_exit_observed_at_ms).toBeUndefined();
     const incomplete = rig(store, workspace, { invoke: async () => ({ matches: [] }) });
-    expect((await incomplete.executor.execute(incomplete.authority.approve(source(), proof()))).error).toMatch(/lifecycle incomplete/);
+    expect((await incomplete.executor.execute(await approve(incomplete.authority, incomplete.executor, workspace))).error).toMatch(/lifecycle incomplete/);
   }));
 
   it("invocation保存の待機後にも期限を再検査し、消費済みの不明窓を復活させない", async () => temporary(async (store, workspace) => {
@@ -118,7 +136,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
     const tools = new ToolRegistry(); tools.register(fileSearchTool);
     const executor = new Executor({ llm, tools, approval_authority: authority,
       file_search_worker: createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace }) });
-    const approved = authority.approve(source(), proof());
+    const approved = await approve(authority, executor, workspace);
     expect((await executor.execute(approved)).error).toMatch(/expired/);
     expect(authority.receipt(approved)).toMatchObject({ state: "outcome_unknown", worker_platform: process.platform });
     expect(authority.receipt(approved)?.worker_exit_observed_at_ms).toBeGreaterThan(0);
@@ -128,10 +146,8 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
   it("現在のroot権限外、同名custom adapterを実built-inへ差替える経路を拒否する", async () => temporary(async (store, workspace) => {
     const { authority, executor } = rig(store, workspace);
     const outside = source(); outside.payload.arguments.root = "..";
-    const approved = authority.approve(outside, proof());
-    expect((await executor.execute(approved)).status).toBe("failed");
-    expect(authority.receipt(approved)).toMatchObject({ state: "outcome_unknown", worker_platform: process.platform });
-    expect(authority.receipt(approved)?.worker_exit_observed_at_ms).toBeGreaterThan(0);
+    await expect(executor.inspectCommandTargetVersion(outside, { BLUE_TANUKI_FILE_ROOT: workspace }))
+      .rejects.toThrow(/BLUE_TANUKI_FILE_ROOT/);
     const tools = new ToolRegistry(); let customCalls = 0;
     tools.register({ ...fileSearchTool, invoke: async () => { customCalls++; return {}; } });
     const custom = new Executor({ llm, tools, approval_authority: authority, file_search_worker: createFileSearchWorker({ BLUE_TANUKI_FILE_ROOT: workspace }) });
@@ -142,7 +158,10 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
   it("実IPC childは改変内容・別worker・期限切れのpacketから結果を返さない", async () => temporary(async (store, workspace) => {
     for (const kind of ["content", "worker", "expired"]) {
       const authority = createExecutorApprovalAuthority({ execution_store: store });
-      const approved = authority.approve(source(), proof());
+      const commandSource = source();
+      const { executor } = rig(store, workspace);
+      const targetVersion = await executor.inspectCommandTargetVersion(commandSource, { BLUE_TANUKI_FILE_ROOT: workspace });
+      const approved = authority.approve(commandSource, proof(commandSource), undefined, undefined, targetVersion);
       const ticket = authority.receipt(approved)!;
       const worker_id = randomUUID();
       const child = spawn(process.execPath, [fileURLToPath(new URL("../dist/file_search_worker_child.js", import.meta.url))], {
@@ -159,7 +178,8 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
           proof_digest: ticket.proof_digest, execution_epoch: ticket.execution_epoch, issued_at_ms: ticket.issued_at_ms, expires_at_ms: ticket.expires_at_ms };
         if (kind === "content") command.payload.arguments.query = "changed";
         if (kind === "expired") packetTicket.expires_at_ms = packetTicket.issued_at_ms + 1;
-        child.send(workerPacket({ type: "execute", worker_id: kind === "worker" ? randomUUID() : worker_id, ticket: packetTicket, command }));
+        child.send(workerPacket({ type: "execute", worker_id: kind === "worker" ? randomUUID() : worker_id,
+          ticket: packetTicket, command, target_version_observation: targetVersion }));
         const [code] = await closed; expect(code).toBe(2); expect(results).toBe(0);
       } finally { clearTimeout(timer); if (child.exitCode === null && child.signalCode === null) { child.kill(); await closed; } }
     }

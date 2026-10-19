@@ -1,3 +1,5 @@
+import type { FileSearchTargetVersionObservation } from "@blue-tanuki/protocol";
+
 export type Env = Record<string, string | undefined>;
 
 export interface ResolvedAddress {
@@ -122,6 +124,9 @@ export interface BrowserSnapshotOptions extends BrowserAutomationOptions {}
 
 export interface FileSearchOptions {
   env?: Env;
+  expected_target_version?: FileSearchTargetVersionObservation;
+  /** Executor-private evidence channel; omitted from ordinary tool results. */
+  include_target_version_observation?: boolean;
 }
 
 export interface FileWriteOptions {

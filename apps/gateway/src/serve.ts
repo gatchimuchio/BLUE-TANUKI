@@ -1144,6 +1144,25 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       });
       return { status: "canonical_state_restore_in_progress" };
     }
+    let targetVersionObservation: Awaited<ReturnType<Executor["inspectCommandTargetVersion"]>>;
+    try {
+      targetVersionObservation = await executor.inspectCommandTargetVersion(cmd);
+    } catch {
+      const reason = "file_search_target_version_unavailable";
+      const feedback: ExecuteFeedback = { command_id: cmd.id, status: "failed", error: reason, metrics: { duration_ms: 0 } };
+      const finalized = finalizeCommandOutput({ hds, command: cmd, feedback, target_surface: "channel", request_id: log.request_id });
+      recordApprovalHistory("file_search_target_version_unavailable", cmd, log, origin, actor, executionEvaluation, {
+        used_for_authority: false, may_execute: false,
+      });
+      recordFinalOutputHistory(log, origin, actor, finalized.output_audit, cmd);
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason });
+      if (finalized.rendered_output) await dispatcher.dispatch(
+        { channel: origin.channel, target: replyTarget(origin), content: finalized.rendered_output },
+        { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
+      );
+      return { status: reason };
+    }
+    const hdsBinding = hds.createExecutionAuthorityBinding(cmd, targetVersionObservation);
     const approvedCommand = executorApproval.approve(cmd, {
       source: opts.skip_approval ? "human_final_review" : "approval_gate",
       decision: opts.skip_approval ? "approve" : "allow",
@@ -1154,7 +1173,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       risk: executionEvaluation.risk,
       final_review_required: executionEvaluation.final_review_required,
       reason: executionEvaluation.reason,
-    }, reviewedDigest, hds.createExecutionAuthorityBinding(cmd));
+    }, reviewedDigest, hdsBinding, targetVersionObservation);
     const planBound = hds.isOperationPlanCommand(cmd.id);
     const admission = planBound ? executionAdmissionForCommand(cmd, executorApproval.receipt(approvedCommand)) : undefined;
     if (!hds.beginOperationPlanAttempt(cmd, admission)) {

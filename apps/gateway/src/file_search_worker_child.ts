@@ -14,14 +14,30 @@ process.on("message", async (value: unknown) => {
   let request: ReturnType<typeof validateWorkerRequest>;
   try { request = validateWorkerRequest(readWorkerPacket(value), worker_id, Date.now()); }
   catch { process.exit(2); return; }
-  const { command, ticket } = request;
+  const { command, ticket, target_version_observation } = request;
   let result: unknown;
-  try { result = await invokeFileSearch(command.payload.arguments); }
-  catch { process.exit(3); return; }
+  try { result = await invokeFileSearch(command.payload.arguments, {
+    expected_target_version: target_version_observation,
+    include_target_version_observation: true,
+  }); }
+  catch (error) {
+    if (error instanceof Error && error.message === "file.search target version changed; request fresh review" && process.connected) {
+      process.send!(workerPacket({ type: "error", worker_id, pid: process.pid, ticket_id: ticket.ticket_id,
+        execution_epoch: ticket.execution_epoch, command_digest: ticket.command_digest, code: "target_version_changed" }),
+      () => process.exit(4));
+      return;
+    }
+    process.exit(3);
+    return;
+  }
   if (!process.connected) { process.exit(2); return; }
   try {
+    if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("file_search_worker_result_invalid");
+    const { target_version_observation: observedTargetVersion, ...publicResult } = result as Record<string, unknown>;
+    if (!observedTargetVersion) throw new Error("file_search_worker_target_version_invalid");
     process.send!(workerPacket({ type: "result", worker_id, pid: process.pid, execution_epoch: ticket.execution_epoch,
-      ticket_id: ticket.ticket_id, command_digest: ticket.command_digest, result }), (error) => {
+      ticket_id: ticket.ticket_id, command_digest: ticket.command_digest, result: publicResult,
+      target_version_observation: observedTargetVersion }), (error) => {
       process.exit(error ? 2 : 0);
     });
   } catch { process.exit(2); }

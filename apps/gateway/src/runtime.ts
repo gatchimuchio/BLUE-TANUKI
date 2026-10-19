@@ -361,6 +361,18 @@ async function runCliWithExecutionStore(
   }
   hds.onCommandLifecycle(command.id, "approval_approved", { actor: inbound.user, reason: approvalEval.reason });
 
+  let targetVersionObservation: Awaited<ReturnType<Executor["inspectCommandTargetVersion"]>>;
+  try {
+    targetVersionObservation = await executor.inspectCommandTargetVersion(command);
+  } catch {
+    hds.onCommandLifecycle(command.id, "approval_cancelled", {
+      actor: inbound.user,
+      reason: "file_search_target_version_unavailable",
+    });
+    coreLog.warn("file.search target version preflight failed", { command_id: command.id });
+    return;
+  }
+  const hdsBinding = hds.createExecutionAuthorityBinding(command, targetVersionObservation);
   const approvedCommand = executorApproval.approve(command, {
     source: "approval_gate",
     decision: "allow",
@@ -371,7 +383,7 @@ async function runCliWithExecutionStore(
     risk: approvalEval.risk,
     final_review_required: approvalEval.final_review_required,
     reason: approvalEval.reason,
-  }, reviewed.command_digest, hds.createExecutionAuthorityBinding(command));
+  }, reviewed.command_digest, hdsBinding, targetVersionObservation);
   const feedback = await executor.execute(approvedCommand);
   if (feedback.status === "failed") {
     for (const signature of extractFailureSignatures({

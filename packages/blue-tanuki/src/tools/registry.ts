@@ -1,4 +1,4 @@
-import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
+import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation } from "@blue-tanuki/protocol";
 
 /**
  * Tool registry.
@@ -15,6 +15,8 @@ export interface ToolContext {
   idempotency_key?: string;
   /** Digest of the exact approved command; adapters may bind external receipts to it. */
   command_digest?: string;
+  /** Broker evidence bound to the exact HDS-issued file.search command. */
+  target_version_observation?: FileSearchTargetVersionObservation;
   signal?: AbortSignal;
 }
 
@@ -24,6 +26,10 @@ export interface Tool {
   readonly name: string;
   readonly description: string;
   readonly required_capabilities?: readonly ToolCapability[];
+  /** Read-only target resolver; Executor only trusts the registered built-in file.search adapter. */
+  inspect_target_version?(args: Record<string, unknown>, options?: {
+    env?: Readonly<Record<string, string | undefined>>;
+  }): Promise<FileSearchTargetVersionObservation>;
   invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 }
 

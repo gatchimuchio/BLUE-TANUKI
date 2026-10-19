@@ -67,20 +67,23 @@ async function setup(root: string, workspace: string) {
   }
   const hds = createHds(); const origin = request("plan:compute 合成の検索結果を後続stepへ渡す");
   const plan = candidate(origin.id, workspace); const tools = new ToolRegistry(); tools.register(fileSearchTool);
-  const authority = createExecutorApprovalAuthority({ execution_store: execution });
+  const authority = createExecutorApprovalAuthority({ execution_store: execution, require_hds_execution_binding: true });
   const actualWorker = createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace });
   const invoke = vi.fn(actualWorker.invoke); const worker = { invoke };
   const executor = new Executor({ tools, approval_authority: authority, file_search_worker: worker,
     llm: { name: "fixture", call: async () => ({ content: JSON.stringify(plan), model: "fixture", tokens_used: 0 }) } });
-  function approve(cmd: ExecuteCommand) {
+  async function approve(cmd: ExecuteCommand) {
     const a = evaluateApproval(cmd, [], { actor: "fixture-owner", default_mode: "full_access" });
+    const targetVersion = await executor.inspectCommandTargetVersion(cmd);
+    const hdsBinding = hds.createExecutionAuthorityBinding(cmd, targetVersion);
     return authority.approve(cmd, { source: a.final_review_required ? "human_final_review" : "approval_gate", decision: "allow",
       approved_by: "fixture-owner", approved_at_ms: Date.now(), upstream_commit_hash: cmd.upstream_decision.commit_hash,
-      operation: a.context.operation, risk: a.risk, final_review_required: a.final_review_required, reason: "fixture" });
+      operation: a.context.operation, risk: a.risk, final_review_required: a.final_review_required, reason: "fixture" },
+      undefined, hdsBinding, targetVersion);
   }
-  const initial = hds.decide(origin).command!; const first = await executor.execute(approve(initial));
+  const initial = hds.decide(origin).command!; const first = await executor.execute(await approve(initial));
   finalizeCommandOutput({ hds, command: initial, feedback: first, request_id: origin.id, target_surface: "channel" });
-  const cmd = review(hds, plan, "search")!; const approved = approve(cmd);
+  const cmd = review(hds, plan, "search")!; const approved = await approve(cmd);
   const admission = executionAdmissionForCommand(cmd, authority.receipt(approved));
   return { root, workspace, executionPath, jPath, execution, j, hds, plan, cmd, approved, admission, authority, executor, invoke, memory, controllers, createHds, approve, oldMemory };
 }
@@ -592,7 +595,7 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
     for (const raw of [c.workspace, "blue.txt", '"matches"', c.admission.ticket_id, c.cmd.id, c.plan.plan_id]) expect(visible).not.toContain(raw);
     expect(visible).toContain('completeness'); expect(visible).toContain('not_assessed');
     expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(true);
-    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(c.approve(command));
+    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(await c.approve(command));
     expect(feedback.status).toBe("success"); expect(runner.call).toHaveBeenCalledTimes(1);
     expect(runner.history.getMessages).not.toHaveBeenCalled(); expect(runner.history.append).not.toHaveBeenCalled();
     const result = finalizeCommandOutput({ hds: c.hds, command, feedback, request_id: decision.log.request_id, target_surface: "channel" });
@@ -617,7 +620,7 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
   }));
   it("送信待機・返答待機中の計画改訂と再起動旧commandを拒否する", async () => fixture(async (c) => {
     await recordActualObservation(c); const decision = reflect(c); const command = decision.command!;
-    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(c.approve(command));
+    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(await c.approve(command));
     const altered = structuredClone(command); if (altered.type === "llm_call") altered.payload.compute_context!.local_p_version = "forged";
     expect(c.hds.operationPlanCommandIsCurrent(altered)).toBe(false);
     const changed = structuredClone(c.plan); changed.steps[1]!.parameters!.max_results = 2;
@@ -631,8 +634,8 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
   }));
   it("参照しない別M観測の追加で同じ引用射影を全失効しない", async () => fixture(async (c) => {
     await recordActualObservation(c); const decision = reflect(c); const command = decision.command!;
-    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(c.approve(command));
-    const next = review(c.hds, c.plan, "dependent")!; const approved = c.approve(next);
+    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(await c.approve(command));
+    const next = review(c.hds, c.plan, "dependent")!; const approved = await c.approve(next);
     const admission = executionAdmissionForCommand(next, c.authority.receipt(approved));
     expect(c.hds.beginOperationPlanAttempt(next, admission)).toBe(true);
     expect((await c.executor.execute(approved, { save_result_delivery: true })).status).toBe("success");
@@ -658,7 +661,7 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
       if (failure === "duplicate") candidate.citations.push(candidate.citations[0]);
       return { ...response, content: JSON.stringify(candidate) };
     });
-    const feedback = await runner.executor.execute(c.approve(command));
+    const feedback = await runner.executor.execute(await c.approve(command));
     const value = feedback.result as Record<string, any>;
     if (failure === "compute_request") value.execution_identity.request_id = "other-command";
     if (failure === "compute_output") value.execution_identity.output_digest = "0".repeat(64);
@@ -674,7 +677,7 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
   }));
   it("関連M破損・J読取不能・観測期限切れはC送信と返答を遮断する", async () => fixture(async (c) => {
     await recordActualObservation(c); const decision = reflect(c); const command = decision.command!;
-    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(c.approve(command));
+    const runner = reflectionExecutor(c); const feedback = await runner.executor.execute(await c.approve(command));
     const unreadable = vi.spyOn(c.j, "load").mockImplementation(() => { throw new Error("fixture read failure"); });
     expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(false); unreadable.mockRestore();
     const observed = c.j.load()!.plans[0]!.results[0]!; const clock = vi.spyOn(Date, "now").mockReturnValue(observed.expires_at_ms);
