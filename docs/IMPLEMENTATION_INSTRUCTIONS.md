@@ -2,7 +2,25 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-OPERATION-PLAN-PURPOSE-VERSION-BINDING`
+### 最新BUILD_BATCH：`QEB-01-D02.01-REQUEST-CRITERIA-PLAN-SELECTION`
+
+開始HEAD／`origin/main`=`c5038636ff9cec4a72a4adf9d9d944bba048721a`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02とGoalCriteria→J Operation Plan→HDS source seal／Executor経路を再読した。編集前recovery branch／remote tagはcurrent=`c503863...`／previous=`04b485d...`。D01.03 stashは未変更。D4-PocketのGitHub Actions条件を確認したが、本batchはWindows上で検査でき、対象OS不足・artifact生成・ローカルで実行困難な重い検査に該当しないためActions／workflow未使用。
+
+元inbound requestの任意GoalCriteriaをdigest-only `request_goal_criteria`としてJ所有Operation Plan checkpointへ保持する。元本文digestとrequest IDの両方を保存済みplanに結合し、restore時も一致を検証する。登録済みoperation descriptorに対する明示`conflicts`は`plan:review`を拒否し、同条件を`canExecute`とHDS source binding発行時にも再確認する。projection digestはOperation Plan execution source bindingに含まれ、既存HDS seal／Executor ticket proofの検査鎖へ入る。criteriaが欠落・不正・別request由来なら実行経路を閉じる。recovery holdはcriteria検査より先に維持し、criteria失敗でholdを解消しない。raw criterion refはcheckpoint projectionとoperator projection／拒否理由に出さない。
+
+`supports`申告は仮定・未検証のままで、適合や権限へ使わない。この接続が示すのはrequest-scopedな明示競合の拒否だけであり、task内容と持続的goal purposeの意味適合、file.search以外のBroker target identityを成立させない。D02.01／D02.02=`BUILD_GAP`を維持する。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway Operation Plan focused test | PASS、19/19。明示競合拒否、raw ref非露出、restart後の拒否維持、別request ID projectionのrestore拒否を含む。 |
+| `pnpm typecheck`／`pnpm build` | PASS。workspace 15 projects。 |
+| `pnpm hds:standalone` | PASS。audit chain／Runtime Invariantsを確認。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の移行負債76件は既存注意として残存。 |
+| 全workspace tests／QE_QC／QE_QA／5OS実機／GitHub Actions | 未実施。ActionsはD4条件に該当せず未使用。 |
+
+実装commit=`63a1093b03a2f2704085c036c3a7b1671844a720`。active指示・進捗・公開ロードマップを同batchの施工結果へ同期する。文書commit後にmain push、recovery refとclean worktreeを確認する。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持。実credential・実業務作用・他repo変更・公開／出荷判断なし。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-OPERATION-PLAN-PURPOSE-VERSION-BINDING`
 
 開始HEAD／`origin/main`=`04b485dd4ddf8e5a934bdf5f1979d55677741136`。作業開始時の差分は、このbatchで継続する`packages/protocol/src/operation_plan_state.ts`のpurpose binding control/checkpoint schemaのみ。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02とOperation Plan→HDS→Executor実経路を再読した。編集前recovery branch／remote tagはcurrent=`04b485d...`／previous=`4d5e852...`。D01.03 stashは未変更。D4-Pocketの現行Actions条件も確認したが、今回のWindows local build／testは条件に該当しないためActions／workflow未使用。
 

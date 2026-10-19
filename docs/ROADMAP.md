@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-01-D02.01-REQUEST-CRITERIA-PLAN-SELECTION`では、request-scoped GoalCriteriaをdigest-onlyでJ所有Operation Plan checkpointへ束縛し、登録済みoperationに対する明示`conflicts`をHDS plan reviewとexecution sealで拒否する。別request由来・欠落・不正なprojectionは実行経路を閉じ、raw criterion refをoperator projectionへ出さない。`supports`申告は仮定のままであり、意味上のtask-purpose適合やpermissionを証明しない。D02.01／D02.02=`BUILD_GAP`を維持する。Gateway focused tests 19/19、typecheck、workspace build、HDS standaloneはPASS。QE_QC／QE_QA／5OS実機・GitHub Actionsは未実施。
+
 2026-10-19の`QEB-01-D02.01-J-GOAL-PURPOSE-APPEND-REPLAY`では、delegated goalの目的変更digestをexact L3 approval recordへ束縛し、HDS監査鎖へJ所有eventとして永続append・再起動後に再構成する入口を追加した。raw purpose textは保持せず、本文を表示するproposal review、目的digestとの一致、仕事別purpose-version適用、Broker target接続は未成立。HDS-BRAIN tests 304/304、workspace typecheck／build 15 projects、standalone、docs／repo-health gateはPASS。D02.01=`BUILD_GAP`を維持する。
 
 2026-10-19の`QEB-01-D02.02-WEBCHAT-OWNER-CREDENTIAL-INGRESS`では、setupで別生成した`BLUE_TANUKI_OWNER_TOKEN`を検証するWebChat入力口をGateway→HDSへ接続した。callerのactor／trust metadataは採用せず、`webchat-owner-token-holder`というcredential保有クラスを記録する。人間identityの証明や権限昇格ではなく、Approval／L3／Brokerの既存境界を保つ。合成Gateway E2E、WebChat 87/87、setup config 12/12、typecheck、buildはPASS。永続GoalGovernance producer、仕事別purpose-version適用、他targetのBroker identityは未成立。
