@@ -135,6 +135,27 @@ jobs:
             }
           ' | tail -n 20
 
+      - name: Capture redacted OverlayFS kernel diagnostics after test failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo journalctl -k -b --no-pager -n 800 | awk '
+            /overlayfs:/ {
+              line = $0
+              gsub(/\/tmp\/btnk-shell-[^[:space:],]*/, "<fixture-path>", line)
+              gsub(/\/workspace[^[:space:],]*/, "<workspace-path>", line)
+              gsub(/lowerdir=[^ ,]*/, "lowerdir=<redacted>", line)
+              gsub(/upperdir=[^ ,]*/, "upperdir=<redacted>", line)
+              gsub(/workdir=[^ ,]*/, "workdir=<redacted>", line)
+              print line
+              found = 1
+            }
+            END {
+              if (!found) print "no OverlayFS-specific kernel diagnostic was present in the kernel journal window"
+            }
+          ' | tail -n 20
+
       - name: Remove and verify temporary Bubblewrap AppArmor profile
         if: always()
         shell: bash
