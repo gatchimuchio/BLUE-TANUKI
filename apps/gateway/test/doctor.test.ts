@@ -868,7 +868,7 @@ describe("runDoctor — file_root probe", () => {
   });
 });
 
-describe("runDoctor — shell_root probe", () => {
+describe("runDoctor — shell isolation state", () => {
   let dir: string;
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-root-"));
@@ -877,38 +877,28 @@ describe("runDoctor — shell_root probe", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it("ok when unset (shell.exec disabled until configured)", async () => {
+  it("warns that shell.exec is disabled when no root is configured", async () => {
     const r = await runDoctor({
       env: baseEnv(),
       probe_port: false,
       node_version: "22.14.0",
     });
     const c = r.checks.find((x) => x.id === "shell_root");
-    expect(c?.level).toBe("ok");
-    expect(c?.detail).toContain("unset");
+    expect(c?.level).toBe("warn");
+    expect(c?.detail).toContain("disabled");
+    expect(c?.detail).toContain("no verified OS-level process isolation provider");
   });
 
-  it("ok when BLUE_TANUKI_SHELL_ROOT is an existing directory", async () => {
+  it("does not inspect or disclose a configured root", async () => {
     const r = await runDoctor({
       env: { ...baseEnv(), BLUE_TANUKI_SHELL_ROOT: dir },
       probe_port: false,
       node_version: "22.14.0",
     });
     const c = r.checks.find((x) => x.id === "shell_root");
-    expect(c?.level).toBe("ok");
-    expect(c?.detail).toContain("directory");
-  });
-
-  it("errors when BLUE_TANUKI_SHELL_ROOT is not a directory", async () => {
-    const filepath = path.join(dir, "not-dir");
-    await fs.writeFile(filepath, "x", "utf8");
-    const r = await runDoctor({
-      env: { ...baseEnv(), BLUE_TANUKI_SHELL_ROOT: filepath },
-      probe_port: false,
-      node_version: "22.14.0",
-    });
-    expect(r.checks.find((x) => x.id === "shell_root")?.level).toBe("error");
-    expect(r.exit_code).toBe(2);
+    expect(c?.level).toBe("warn");
+    expect(c?.detail).toContain("no verified OS-level process isolation provider");
+    expect(c?.detail).not.toContain(dir);
   });
 });
 

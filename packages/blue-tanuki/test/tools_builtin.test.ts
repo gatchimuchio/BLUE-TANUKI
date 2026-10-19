@@ -1396,75 +1396,32 @@ describe("built-in tools", () => {
     ).rejects.toThrow(/preview-quarantined.*mutation_sent=false/);
   });
 
-  it("shell.exec runs a bounded non-shell command under BLUE_TANUKI_SHELL_ROOT", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-"));
+  it("shell.exec does not start a host process without OS-level isolation", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-disabled-"));
+    const marker = path.join(parent, "host-process-ran.txt");
     try {
-      const result = (await invokeShellExec(
-        {
-          cmd: "node",
-          args: ["-e", "console.log(process.cwd()); console.error('warn')"],
-          cwd: ".",
-          timeout_ms: 10_000,
-          max_bytes: 4096,
-        },
-        { env: { BLUE_TANUKI_SHELL_ROOT: dir } },
-      )) as {
-        cwd: string;
-        exit_code: number;
-        stdout: string;
-        stderr: string;
-        timed_out: boolean;
-        operation_core: {
-          role: string;
-          adapter: string;
-          operation: string;
-          state: string;
-          adapter_is_authority: boolean;
-          raw_command_is_core_operation: boolean;
-          adapter_result_used_for_authority: boolean;
-        };
-      };
-
-      expect(result.cwd).toBe(".");
-      expect(result.exit_code).toBe(0);
-      expect(result.stdout.replace(/\\/g, "/")).toContain(
-        (await fs.realpath(dir)).replace(/\\/g, "/"),
-      );
-      expect(result.stderr).toContain("warn");
-      expect(result.timed_out).toBe(false);
-      expect(result.operation_core).toMatchObject({
-        role: "execution_adapter",
-        adapter: "shell",
-        operation: "tool.shell.exec",
-        state: "succeeded",
-        adapter_is_authority: false,
-        raw_command_is_core_operation: false,
-        adapter_result_used_for_authority: false,
-      });
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("shell.exec fails closed without a shell root or when cwd escapes", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-"));
-    const root = path.join(parent, "root");
-    const outside = path.join(parent, "outside");
-    try {
-      await fs.mkdir(root);
-      await fs.mkdir(outside);
-      await expect(
-        invokeShellExec({ cmd: "node", args: ["-v"] }, { env: {} }),
-      ).rejects.toThrow(/BLUE_TANUKI_SHELL_ROOT/);
       await expect(
         invokeShellExec(
-          { cmd: "node", args: ["-v"], cwd: outside },
-          { env: { BLUE_TANUKI_SHELL_ROOT: root } },
+          {
+            cmd: "node",
+            args: ["-e", "require('node:fs').writeFileSync(process.argv[1], 'executed')", marker],
+            cwd: ".",
+          },
         ),
-      ).rejects.toThrow(/cwd/);
+      ).rejects.toThrow(/no verified OS-level process isolation provider.*no process was started/);
+      await expect(fs.access(marker)).rejects.toThrow();
     } finally {
       await fs.rm(parent, { recursive: true, force: true });
     }
+  });
+
+  it("shell.exec rejects before reading a root or resolving cwd", async () => {
+    await expect(
+      invokeShellExec({ cmd: "node", args: ["-v"] }),
+    ).rejects.toThrow(/no verified OS-level process isolation provider.*no process was started/);
+    await expect(
+      invokeShellExec({ cmd: "node", args: ["-v"], cwd: "../outside" }),
+    ).rejects.toThrow(/no verified OS-level process isolation provider.*no process was started/);
   });
 
   it("shell.exec rejects absolute commands and destructive command shapes", async () => {
@@ -1473,19 +1430,16 @@ describe("built-in tools", () => {
       await expect(
         invokeShellExec(
           { cmd: process.execPath, args: ["-v"] },
-          { env: { BLUE_TANUKI_SHELL_ROOT: dir } },
         ),
       ).rejects.toThrow(/command name on PATH/);
       await expect(
         invokeShellExec(
           { cmd: "rm", args: ["-rf", "/"] },
-          { env: { BLUE_TANUKI_SHELL_ROOT: dir } },
         ),
       ).rejects.toThrow(/destructive-command policy/);
       await expect(
         invokeShellExec(
           { cmd: "node", args: ["../escape"] },
-          { env: { BLUE_TANUKI_SHELL_ROOT: dir } },
         ),
       ).rejects.toThrow(/destructive-argument policy/);
     } finally {

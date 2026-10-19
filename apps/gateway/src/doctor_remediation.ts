@@ -181,10 +181,10 @@ export function remediationFor(check: CheckDraft): Remediation {
   if (check.id === "shell_root") {
     return {
       cause: check.detail,
-      impact: "shell.exec may be disabled or fail closed.",
-      next_action: "Set BLUE_TANUKI_SHELL_ROOT to the intended command root, or leave it unset to disable shell.exec.",
+      impact: "shell.exec is unavailable and every invocation fails closed before process creation.",
+      next_action: "No environment setting enables shell.exec. Wait for a verified native isolation provider and process-tree termination path.",
       doc_ref: "CONFIG.md#Shell-exec-tool",
-      safe_to_ignore: check.level === "warn",
+      safe_to_ignore: true,
     };
   }
 

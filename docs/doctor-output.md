@@ -111,7 +111,7 @@ Exit code: 1
 | `session_dir` | session directory writability |
 | `audit_dir` | audit directory writability |
 | `file_root` | file tool sandbox root |
-| `shell_root` | shell exec root |
+| `shell_root` | shell process-isolation availability (currently disabled) |
 | `manifests` | bundled plugin manifest/package consistency |
 | `compatibility_matrix` | channel scope and preview quarantine |
 | `port` | WebChat bind address availability |

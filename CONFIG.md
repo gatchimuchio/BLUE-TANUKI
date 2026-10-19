@@ -451,14 +451,16 @@ Policy:
 BLUE_TANUKI_SHELL_ROOT=/path/to/workspace
 ```
 
-`shell.exec` runs a cwd-bounded non-shell spawn (`cmd` + `args[]`) with its
-working directory resolved under this root. It is always a final-review
-operation.
+`shell.exec` is currently disabled on every OS because the production adapter
+does not connect a verified OS-level process-isolation provider or process-tree
+termination supervisor. Every invocation fails closed before creating a
+process. Setting `BLUE_TANUKI_SHELL_ROOT` does not enable execution.
 
-This is not an OS sandbox. The cwd boundary prevents BLUE-TANUKI from choosing
-an outside working directory, but it does not stop the spawned program from
-reading cwd-external paths such as `/etc/passwd` unless the operating system or
-an external sandbox separately enforces that isolation.
+The existing cwd check is only a path-selection constraint; it is not an OS
+sandbox and cannot stop a process from reading or changing files outside that
+directory, using the network, inheriting environment secrets, or leaving child
+processes running. The tool will be re-enabled only after those boundaries are
+enforced by a supported native provider and its production consumer.
 
 ```text
 tool:shell.exec {"cmd":"git","args":["status","-sb"],"cwd":"."}

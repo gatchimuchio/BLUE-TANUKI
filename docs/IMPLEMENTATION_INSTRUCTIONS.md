@@ -2,6 +2,22 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-01-F01.02-SHELL-UNISOLATED-EXECUTION-FAIL-CLOSED`
+
+開始HEAD／`origin/main`=`4f1431d42f4a924e1a3f5c407cdf46d5c4226734`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.02／D07.03とshell／doctorの現行consumerを再読した。D4-Pocket現行AGENTS §3.1の条件はworkflow_dispatch限定。今回のWindows TypeScript経路はローカルで検査できるためActions／workflow追加なし。編集前のlocal recovery branch／remote backup tagはcurrent=`4f1431d42f4a924e1a3f5c407cdf46d5c4226734`、previous=`a3e71bebc22ac756fa78afafe409fd5de0e1ac14`。
+
+既存`shell.exec`はhost上で`spawn(..., shell:false)`しており、`BLUE_TANUKI_SHELL_ROOT`はcwdだけを制約し、filesystem／network／child environment／descendant processをOS隔離していなかった。Windows timeout／abortは直接PIDへの`process.kill`要求後、process closeを待たず結果を返していた。F01.02とD07.03の「隔離不能時にhost実行へfallbackしない」に従い、現在の全OSで実行を閉じ、command/argsの形状検査後に固定理由で拒否する。停止中はroot／cwdを解決せず、環境変数やfilesystemも参照しない。doctorは`BLUE_TANUKI_SHELL_ROOT`の値に関わらず同じ警告を表示する。これは`DISABLED_UNTIL_SAFE`で、shell機能を完成・削除した判定ではない。
+
+| 限定確認 | 結果 |
+|---|---|
+| `packages/blue-tanuki/test/tools_builtin.test.ts` | PASS、50/50。実行要求にNodeからtemp markerを書かせる合成commandを渡して拒否され、markerが作られないことを確認。 |
+| `apps/gateway/test/doctor.test.ts` | PASS、49/49。rootの未設定・設定済みの両方で隔離未接続警告を確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の移行負債76件は継続注意。 |
+| GitHub Actions／実provider／credential／外部作用／他repo変更 | 未実施。今回のWindows変更はローカルで検証できるためActions条件外。 |
+
+F01.02全体とD07.03は`BUILD_GAP`。次consumerはWindowsの実native isolation／process-tree lifecycle providerを既存shell adapterへ統合し、`file root`・secret・network・environment・resource・cancel/kill confirmationを実際のOS enforcementへ接続すること。ローカルにC++／.NET toolchainがないため、native build検証がローカルで不足する段階ではowner許可済みのD4 §3.1に従い、目的をactive指示へ記録した`workflow_dispatch`限定Actionsを使える。Actions結果は対象commitの補助証拠に限る。C08.03 provider保留、P13 owner-GO／公開保留、D4-Pocket／ミニドラ別repo変更なしを維持する。
+
 ### 最新BUILD_BATCH：`QEB-01-F01.02-PLANNED-FILE-DELETE-TARGET-BINDING`
 
 開始HEAD／`origin/main`=`a3e71bebc22ac756fa78afafe409fd5de0e1ac14`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.02と対象コードを読み直した。D4-Pocket AGENTS §3.1はlocalで不足するOS build、artifact、重い検査向けの手動Actionsを許す条件。今回のWindows合成対象はlocalで検査可能なためworkflow追加・実行なし。編集前recovery branch／remote backup tag二世代はcurrent=`a3e71bebc22ac756fa78afafe409fd5de0e1ac14`、previous=`1a05d0c3b647516725777d11d5100693343f40a2`。

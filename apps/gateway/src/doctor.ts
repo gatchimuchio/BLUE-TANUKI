@@ -39,7 +39,7 @@ import { remediationFor } from "./doctor_remediation.js";
  *   - WEBCHAT_PORT is bindable (probe by binding then closing)
  *   - BLUE_TANUKI_SESSION_DIR (if set) is writable / can be created
  *   - BLUE_TANUKI_AUDIT_DIR   (if set) is writable / can be created
- *   - BLUE_TANUKI_FILE_ROOT and BLUE_TANUKI_SHELL_ROOT (if set) are directories
+ *   - BLUE_TANUKI_FILE_ROOT (if set) is a directory
  *   - BLUE_TANUKI_SCHEDULES_JSON parses as scheduled-message config
  *   - LLM_BACKEND consistency (stub / anthropic / openai-compatible / openrouter)
  *   - Distribution readiness docs, release-bundle gates, channel promotion,
@@ -1023,42 +1023,13 @@ async function checkFileRoot(env: NodeJS.ProcessEnv): Promise<CheckDraft> {
   }
 }
 
-async function checkShellRoot(env: NodeJS.ProcessEnv): Promise<CheckDraft> {
-  const dir = env.BLUE_TANUKI_SHELL_ROOT;
-  if (!dir) {
-    return {
-      id: "shell_root",
-      level: "ok",
-      label: "BLUE_TANUKI_SHELL_ROOT",
-      detail: "unset (shell.exec disabled until configured)",
-    };
-  }
-  const resolved = path.resolve(dir);
-  try {
-    const real = await fs.realpath(resolved);
-    const stat = await fs.stat(real);
-    if (!stat.isDirectory()) {
-      return {
-        id: "shell_root",
-        level: "error",
-        label: "BLUE_TANUKI_SHELL_ROOT",
-        detail: `${real} is not a directory`,
-      };
-    }
-    return {
-      id: "shell_root",
-      level: "ok",
-      label: "BLUE_TANUKI_SHELL_ROOT",
-      detail: `${real} (directory)`,
-    };
-  } catch (e) {
-    return {
-      id: "shell_root",
-      level: "error",
-      label: "BLUE_TANUKI_SHELL_ROOT",
-      detail: `invalid at '${resolved}': ${e instanceof Error ? e.message : String(e)}`,
-    };
-  }
+function checkShellRoot(): CheckDraft {
+  return {
+    id: "shell_root",
+    level: "warn",
+    label: "shell.exec isolation",
+    detail: "disabled: no verified OS-level process isolation provider is connected",
+  };
 }
 
 async function locateRepoRoot(): Promise<string | null> {
@@ -1410,7 +1381,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorReport>
   draftChecks.push(await checkSessionDir(env));
   draftChecks.push(await checkAuditDir(env));
   draftChecks.push(await checkFileRoot(env));
-  draftChecks.push(await checkShellRoot(env));
+  draftChecks.push(checkShellRoot());
   draftChecks.push(await checkBundledManifests(opts.manifest_root));
   draftChecks.push(await checkCompatibilityMatrix(opts.manifest_root));
   draftChecks.push(await checkDistributionReadiness(opts.distribution_root));
