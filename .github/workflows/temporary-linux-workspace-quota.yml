@@ -31,7 +31,7 @@ jobs:
       - name: Install native runtime prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes apparmor bubblewrap
+          sudo apt-get install --yes apparmor bubblewrap fuse-overlayfs
 
       - name: Start and verify the systemd user manager
         shell: bash
@@ -250,6 +250,101 @@ jobs:
               libc.umount(workspace.encode())
           PY
           sudo unshare --mount --propagation private /usr/bin/python3 "$root_script" "$RUNNER_TEMP/overlay-lower" "$root_base"
+
+      - name: Probe FUSE OverlayFS in the production user namespace
+        shell: bash
+        run: |
+          set -u
+          lower_source="$RUNNER_TEMP/overlay-fuse-lower"
+          probe_script="$RUNNER_TEMP/overlay-fuse-probe.sh"
+          mkdir -m 0700 "$lower_source"
+          printf fixture > "$lower_source/probe"
+          chmod 0444 "$lower_source/probe"
+          chmod 0555 "$lower_source"
+          if [[ ! -c /dev/fuse || ! -r /dev/fuse || ! -w /dev/fuse ]]; then
+            echo "fuse_device_unavailable"
+            exit 0
+          fi
+          cat > "$probe_script" <<'SH'
+          #!/bin/sh
+          set -eu
+          mkdir -p /workspace /workspace-storage
+          mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700 tmpfs /workspace-storage || {
+            echo "fuse_probe_storage_mount_failed"
+            exit 0
+          }
+          mkdir /workspace-storage/upper /workspace-storage/work
+          fuse_pid=""
+          cleanup() {
+            fusermount3 -u /workspace 2>/dev/null || true
+            if [ -n "$fuse_pid" ]; then
+              kill "$fuse_pid" 2>/dev/null || true
+              wait "$fuse_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+          /usr/bin/fuse-overlayfs -f -o lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work /workspace >/tmp/fuse-overlayfs.log 2>&1 &
+          fuse_pid=$!
+          mounted=0
+          for attempt in $(seq 1 40); do
+            if grep -q ' /workspace ' /proc/self/mountinfo; then
+              mounted=1
+              break
+            fi
+            if ! kill -0 "$fuse_pid" 2>/dev/null; then break; fi
+            sleep 0.1
+          done
+          if [ "$mounted" = 1 ]; then
+            readback="$(cat /workspace/probe 2>/dev/null)"
+            printf 'fuse_overlay_readback=%s\n' "$readback"
+            if ! printf write > /workspace/created || ! rm /workspace/probe || [ -e /workspace/probe ] || [ "$(cat /workspace/created 2>/dev/null || true)" != write ]; then
+              echo "fuse_overlay_write_and_whiteout=failed"
+              exit 0
+            fi
+            echo "fuse_overlay_write_and_whiteout=success"
+            exit 0
+          fi
+          echo "fuse_overlay_mount=failed"
+          sed -E 's#(/home/runner/[^[:space:]]+)#<runner-path>#g' /tmp/fuse-overlayfs.log | head -c 1024
+          kill "$fuse_pid" 2>/dev/null || true
+          wait "$fuse_pid" 2>/dev/null || true
+          exit 0
+          SH
+          chmod 0700 "$probe_script"
+          bwrap \
+            --unshare-user \
+            --unshare-pid \
+            --unshare-net \
+            --unshare-ipc \
+            --unshare-uts \
+            --new-session \
+            --die-with-parent \
+            --cap-drop ALL \
+            --cap-add CAP_SYS_ADMIN \
+            --cap-add CAP_MKNOD \
+            --cap-add CAP_SETPCAP \
+            --ro-bind /usr /usr \
+            --symlink usr/bin /bin \
+            --symlink usr/sbin /sbin \
+            --symlink usr/lib /lib \
+            --symlink usr/lib64 /lib64 \
+            --proc /proc \
+            --dev /dev \
+            --dev-bind-try /dev/fuse /dev/fuse \
+            --size 67108864 \
+            --perms 1777 \
+            --tmpfs /tmp \
+            --dir /workspace \
+            --dir /workspace-lower \
+            --ro-bind "$lower_source" /workspace-lower \
+            --dir /workspace-storage \
+            --ro-bind "$probe_script" /fuse-overlay-probe.sh \
+            --chdir / \
+            --clearenv \
+            --setenv PATH /usr/bin:/bin \
+            --setenv TMPDIR /tmp \
+            --setenv LANG C.UTF-8 \
+            -- /bin/sh /fuse-overlay-probe.sh
 
       - name: Set up Rust toolchain
         run: |
