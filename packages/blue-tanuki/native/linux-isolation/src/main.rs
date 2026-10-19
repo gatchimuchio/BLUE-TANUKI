@@ -1389,6 +1389,10 @@ fn stable_error(error: &str) -> String {
             "workspace_storage_mount_unsupported",
             "workspace_storage_layout_failed",
             "workspace_overlay_mount_failed",
+            "workspace_overlay_mount_operation_denied",
+            "workspace_overlay_mount_access_denied",
+            "workspace_overlay_mount_invalid_options",
+            "workspace_overlay_mount_unsupported",
             "workspace_commit_failed",
             "workspace_changed_during_execution",
             "workspace_write_limit_exceeded",
@@ -1500,6 +1504,12 @@ mod tests {
                 "linux_sandbox_start_or_shutdown_failed:linux_isolation_error:workspace_overlay_mount_failed"
             ),
             "linux_sandbox_start_or_shutdown_failed:workspace_overlay_mount_failed"
+        );
+        assert_eq!(
+            stable_error(
+                "linux_sandbox_start_or_shutdown_failed:linux_isolation_error:workspace_overlay_mount_operation_denied"
+            ),
+            "linux_sandbox_start_or_shutdown_failed:workspace_overlay_mount_operation_denied"
         );
         assert_eq!(
             stable_error(

@@ -132,7 +132,9 @@ pub fn mount_bounded_overlay() -> Result<(), String> {
         )
     };
     if mounted != 0 {
-        return Err("workspace_overlay_mount_failed".to_string());
+        return Err(
+            overlay_mount_error_code(io::Error::last_os_error().raw_os_error()).to_string(),
+        );
     }
     Ok(())
 }
@@ -144,6 +146,18 @@ fn storage_mount_error_code(errno: Option<i32>) -> &'static str {
         Some(libc::EINVAL) => "workspace_storage_mount_invalid_options",
         Some(libc::ENODEV) => "workspace_storage_mount_unsupported",
         _ => "workspace_storage_mount_failed",
+    }
+}
+
+fn overlay_mount_error_code(errno: Option<i32>) -> &'static str {
+    match errno {
+        Some(libc::EPERM) => "workspace_overlay_mount_operation_denied",
+        Some(libc::EACCES) => "workspace_overlay_mount_access_denied",
+        Some(libc::EINVAL) => "workspace_overlay_mount_invalid_options",
+        Some(libc::ENODEV) | Some(libc::EOPNOTSUPP) | Some(libc::ENOSYS) => {
+            "workspace_overlay_mount_unsupported"
+        }
+        _ => "workspace_overlay_mount_failed",
     }
 }
 
@@ -447,7 +461,7 @@ fn set_file_times(fd: i32, metadata: &Metadata) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::storage_mount_error_code;
+    use super::{overlay_mount_error_code, storage_mount_error_code};
 
     #[test]
     fn storage_mount_errno_maps_to_fixed_codes() {
@@ -470,6 +484,34 @@ mod tests {
         assert_eq!(
             storage_mount_error_code(Some(libc::EIO)),
             "workspace_storage_mount_failed"
+        );
+    }
+
+    #[test]
+    fn overlay_mount_errno_maps_to_fixed_codes() {
+        assert_eq!(
+            overlay_mount_error_code(Some(libc::EPERM)),
+            "workspace_overlay_mount_operation_denied"
+        );
+        assert_eq!(
+            overlay_mount_error_code(Some(libc::EACCES)),
+            "workspace_overlay_mount_access_denied"
+        );
+        assert_eq!(
+            overlay_mount_error_code(Some(libc::EINVAL)),
+            "workspace_overlay_mount_invalid_options"
+        );
+        assert_eq!(
+            overlay_mount_error_code(Some(libc::EOPNOTSUPP)),
+            "workspace_overlay_mount_unsupported"
+        );
+        assert_eq!(
+            overlay_mount_error_code(Some(libc::EIO)),
+            "workspace_overlay_mount_failed"
+        );
+        assert_eq!(
+            overlay_mount_error_code(None),
+            "workspace_overlay_mount_failed"
         );
     }
 }
