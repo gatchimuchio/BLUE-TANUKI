@@ -2,7 +2,26 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-FILE-SEARCH-FRESH-OBSERVATION-PLAN-COMPUTE`
+### 最新BUILD_BATCH：`QEB-01-D02.01-FILE-SEARCH-OBSERVATION-EXPIRY-ENFORCEMENT`
+
+開始HEAD／`origin/main`=`94952ece08ce3f14c98b4b509af0dcbaddbfe1ba`、開始worktree clean。QE rev2.3三点正本（SHA-256=`779452ac46ed2e42040afdcbb5f4e918b71b6fccf436c194a69ed16d07f5e249`）、適用AGENTS／作業標準／active指示、D02.01／D02.02関連実物を読み直した。作業前recovery branch／remote tagはcurrent=`94952ece08ce3f14c98b4b509af0dcbaddbfe1ba`、previous=`44b511f7df202cbb9ee6841197c2492b3a232586`。D4-Pocketの現行Actions条件を照合し、このWindows local環境で不足するOS検査・artifact・重い検査がないためActionsは未使用。C08.03実provider保留、P13 owner-GO保留、別repo変更なしを維持する。
+
+Jの`OperationPlanLedger.inspectControl`で期限切れ検索観測を持つplanのstep reviewを拒否し、選択済みcommandも`canExecute`と`executionSourceBindingDigest`で有効期限を再検証する。期限切れ後は実行可否をfalseとし、Brokerへ渡すsource digestを発行しない。current observation digestをexecution source digestに含め、後段のtarget/version observationが別の観測へすり替わることを防ぐ。HDS監査理由は`plan_compute_source_observation_expired`として保持する。Control Centerは許可された件数・訪問数・期限・検索完全性unknownのみを表示し、path／query／snippet／本文は表示しない。期限切れまたは不正記録はJの選択・実行拒否として表示する。観測は世界の真実・意味上の適合・権限を確立しない。
+
+| 限定確認 | 結果 |
+|---|---|
+| `operation_plan_runtime.test.ts`／`webchat.test.ts` | PASS、2 files／119 tests。期限前のsource binding、期限到達後のcommand失効・binding拒否・attempt拒否・再review拒否、Control Centerのfresh／expired表示とraw path/query非露出を確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| `pnpm hds:standalone` | PASS。standalone audit chain／Runtime Invariantsを確認。 |
+| `pnpm docs:check`／`pnpm validate:repo-health` | PASS。docs／日本語基底／license gate、repo-health gate。既存の日本語基底移行負債76件は継続注意。 |
+| `git diff --check` | PASS。 |
+| 全workspace tests／GitHub Actions／実provider／実credential／外部作用 | 未実施。Windows localの対象検証が成立し、Actions条件に該当しない。 |
+
+この合成checkpoint条件で、受領済み検索観測の保持→J review→execution source binding→attempt gateが`WIRED`であることを確認した。実file.search→M→plan:compute→candidate→review→Brokerの一連同時実行、D02.01／D02.02全体、BUILD_COVERED、QE_QC／QE_QA／5OS実機は未成立。次consumerは、最新三点正本と現物を再同期してD02.01／D02.02の未接続producer／consumerを選び直すこと。前回batchのGateway reconciliation全suite失敗（37件中6 PASS・31 FAIL）は原因／clean baselineが未確定のQC候補であり、今回再実行していない。
+
+実装commit=`59a8edc17af4d245dbe234885ca145687e89237c`を`main`へpushし、remote `refs/heads/main`一致を確認した。local recovery branch／remote backup tagはcurrent=`94952ece08ce3f14c98b4b509af0dcbaddbfe1ba`、previous=`44b511f7df202cbb9ee6841197c2492b3a232586`で一致。文書closeoutをdocs-only commitとして保存・pushし、最後にmain・二世代ref・clean worktreeを再確認する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-FILE-SEARCH-FRESH-OBSERVATION-PLAN-COMPUTE`
 
 開始HEAD／`origin/main`=`44b511f7df202cbb9ee6841197c2492b3a232586`、開始worktree clean。編集前のlocal recovery branch／remote backup tagはcurrent=`44b511f7df202cbb9ee6841197c2492b3a232586`、previous=`12ace531d88ad7a309bdced915e9af06bf49cda8`へ照合した。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示、D02.01／F01.01／D04.02を再読した。D4-Pocketの現行AGENTS §3.1を読取確認したが、この変更はWindows localで検証できるためActionsは未使用。C08.03実provider保留、P13 owner-GO保留、別repo変更なしを維持する。
 
