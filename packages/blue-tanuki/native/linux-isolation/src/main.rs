@@ -18,6 +18,7 @@ const MAX_OUTPUT_BYTES: usize = 512 * 1024;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ROOT_ENTRIES: usize = 100_000;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const MOUNT_CAPABILITY_MASK: u64 = 1 << 21;
 const MAX_TASKS: &str = "64";
 const MEMORY_MAX: &str = "512M";
 const CPU_QUOTA: &str = "100%";
@@ -768,14 +769,22 @@ fn verify_outer_isolation(expected: &BTreeMap<String, u64>) -> Result<(), String
         .find_map(|line| line.strip_prefix("CapPrm:").map(str::trim))
         .and_then(|value| u64::from_str_radix(value, 16).ok())
         .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
+    let inheritable = status
+        .lines()
+        .find_map(|line| line.strip_prefix("CapInh:").map(str::trim))
+        .and_then(|value| u64::from_str_radix(value, 16).ok())
+        .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
+    let bounding = status
+        .lines()
+        .find_map(|line| line.strip_prefix("CapBnd:").map(str::trim))
+        .and_then(|value| u64::from_str_radix(value, 16).ok())
+        .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
     let ambient = status
         .lines()
         .find_map(|line| line.strip_prefix("CapAmb:").map(str::trim))
         .and_then(|value| u64::from_str_radix(value, 16).ok())
         .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
-    if capabilities != (1 << 21) || permitted != (1 << 21) || ambient != 0 {
-        return Err("sandbox_mount_capability_unavailable".to_string());
-    }
+    verify_mount_capability_mask(capabilities, permitted, inheritable, bounding, ambient)?;
     verify_environment_allowlist()
 }
 
@@ -798,6 +807,25 @@ fn verify_environment_allowlist() -> Result<(), String> {
         ) {
             return Err("sandbox_environment_not_allowlisted".to_string());
         }
+    }
+    Ok(())
+}
+
+fn verify_mount_capability_mask(
+    effective: u64,
+    permitted: u64,
+    inheritable: u64,
+    bounding: u64,
+    ambient: u64,
+) -> Result<(), String> {
+    let unexpected = !MOUNT_CAPABILITY_MASK;
+    if effective != MOUNT_CAPABILITY_MASK
+        || permitted != MOUNT_CAPABILITY_MASK
+        || bounding != MOUNT_CAPABILITY_MASK
+        || inheritable & unexpected != 0
+        || ambient & unexpected != 0
+    {
+        return Err("sandbox_mount_capability_unavailable".to_string());
     }
     Ok(())
 }
@@ -1336,7 +1364,19 @@ fn stable_error(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{safe_diagnostic, stable_error};
+    use super::{safe_diagnostic, stable_error, verify_mount_capability_mask};
+
+    #[test]
+    fn mount_setup_allows_only_sys_admin_in_capability_sets() {
+        let sys_admin = 1 << 21;
+        assert!(verify_mount_capability_mask(sys_admin, sys_admin, 0, sys_admin, 0).is_ok());
+        assert!(verify_mount_capability_mask(
+            sys_admin, sys_admin, sys_admin, sys_admin, sys_admin
+        )
+        .is_ok());
+        assert!(verify_mount_capability_mask(sys_admin | 1, sys_admin, 0, sys_admin, 0).is_err());
+        assert!(verify_mount_capability_mask(0, sys_admin, 0, sys_admin, 0).is_err());
+    }
 
     #[test]
     fn diagnostics_keep_only_allowlisted_failure_codes() {
