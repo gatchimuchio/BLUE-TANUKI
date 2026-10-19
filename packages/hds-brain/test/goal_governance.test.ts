@@ -469,20 +469,50 @@ describe("HDS goal governance consumer", () => {
       expect(decision.log.commit.decision).toBe("ASSERT");
       expect(decision.command?.type).toBe("llm_call");
       if (decision.command?.type !== "llm_call") throw new Error("plan computation did not produce a C request");
+      expect(decision.command.payload.session_id).toBeUndefined();
+      expect(decision.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-purpose-relation.v1");
       expect(decision.command.payload.messages.at(-1)).toEqual({ role: "user", content: task });
       expect(decision.command.payload.messages.some((message) => message.role === "system" &&
         message.content.includes(purposeText))).toBe(true);
+      expect(decision.command.payload.messages.some((message) => message.role === "system" &&
+        message.content.includes("goal_purpose_relation") && message.content.includes("非権威"))).toBe(true);
       expect(decision.command.payload.compute_context?.data_exposure.input_sources).toContain("selected_memory_references");
       expect(JSON.stringify(controller.getAudit().list())).not.toContain(purposeText);
 
       controller.onFeedback({
         command_id: decision.command.id,
         status: "success",
-        result: { operation_core: { status: "valid_plan", plan: operationPlanCandidate("purpose-plan-request-1") } },
+        result: { operation_core: { status: "valid_plan", plan: operationPlanCandidate("purpose-plan-request-1"),
+          goal_purpose_relation: { outcome: "supports", evidence: [{ task_quote: task,
+            purpose_quote: "Use only the delegated scope." }] } } },
         metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 },
       });
       const plan = controller.getRuntimeSnapshot().operation_plans.plans[0];
-      expect(plan).toMatchObject({ goal_purpose_binding: binding, goal_purpose_binding_status: "current" });
+      expect(plan).toMatchObject({ goal_purpose_binding: binding, goal_purpose_binding_status: "current",
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "supports", candidate_status: "present",
+          evidence_status: "exact_spans_present", evidence_count: 1, semantic_assessment_status: "not_assessed",
+          used_for_authority: false, may_execute: false } });
+      expect(JSON.stringify(plan)).not.toContain(task);
+      expect(JSON.stringify(plan)).not.toContain("Use only the delegated scope.");
+      const review = createGatewayInternalInboundRequest({
+        id: "purpose-plan-review",
+        channel: "webchat",
+        user: "fixture-owner",
+        content: `plan:review ${JSON.stringify({ plan_id: plan.plan_id, revision_digest: plan.revision_digest,
+          step_id: operationPlanDigest("send-one"), goal_purpose_binding: binding })}`,
+        timestamp: Date.now() + 1_500,
+        metadata: {
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner",
+          "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.operator_surface": "developer",
+          "blue_tanuki.operation_core.version": "operation-core.v1",
+        },
+      });
+      const blockedReview = controller.decide(review);
+      expect(blockedReview.command).toBeNull();
+      expect(blockedReview.log.commit.reason).toContain("plan_control_denied:plan_goal_purpose_relation_unverified");
       expect(JSON.stringify(controller.getRuntimeSnapshot())).not.toContain(purposeText);
 
       const stale = createGatewayInternalInboundRequest({

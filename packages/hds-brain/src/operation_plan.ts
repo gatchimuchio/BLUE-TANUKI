@@ -3,10 +3,13 @@ import {
   getOperationDescriptor, inspectOperationCommandExecutionResult,
   GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
-  type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding, type OperationStep,
+  type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
+  type OperationPlanGoalPurposeRelationCandidate, type OperationPlanGoalPurposeRelationRecord, type OperationStep,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema,
   OperationPlanGoalPurposeBindingSchema,
+  OperationPlanGoalPurposeRelationCandidateSchema,
+  OperationPlanGoalPurposeRelationRecordSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
   type OperationPlanReceiptReconciliationControl,
 } from "@blue-tanuki/protocol";
@@ -30,6 +33,14 @@ export interface OperationPlanMemoryStorage {
   readonly private_state_root: string;
   readonly database_path: string;
   readonly memory_database_path: string;
+}
+
+export interface OperationPlanGoalPurposeContent {
+  readonly goal_ref: string;
+  readonly version: number;
+  readonly purpose_digest: string;
+  readonly purpose_text: string;
+  readonly used_for_authority: false;
 }
 
 export type OperationPlanRecoveryHoldReason = "held_residual" | "held_unobserved" | "held_unverified";
@@ -373,7 +384,8 @@ export class OperationPlanLedger {
   private recoveryRefreshPending = false;
   constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage,
     recoveryEvidence?: OperationPlanRecoveryEvidence,
-    private readonly goalGovernanceReader?: () => ReadonlyGoalGovernanceProjection | undefined) {
+    private readonly goalGovernanceReader?: () => ReadonlyGoalGovernanceProjection | undefined,
+    private readonly goalPurposeContentReader?: (goalRef: string, version: number) => OperationPlanGoalPurposeContent | null | undefined) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
     this.memoryStorage = memoryStorage;
     const checkedRecoveryEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
@@ -763,7 +775,7 @@ export class OperationPlanLedger {
     this.port.compareAndSetRecoveryHoldState(current ? operationPlanDigest(current) : null, state);
   }
 
-  retainCandidate(value: unknown, origin: InboundRequest): void {
+  retainCandidate(value: unknown, origin: InboundRequest, rawPurposeRelationCandidate?: unknown): void {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const plan = candidatePlan(value);
     const expected = origin.metadata?.["blue_tanuki.operation_core.request_id"] ?? origin.id;
@@ -781,9 +793,13 @@ export class OperationPlanLedger {
       if (!parsedBinding.success) throw new Error("plan_goal_purpose_binding_invalid");
       goalPurposeBinding = this.resolveGoalPurposeBinding(parsedBinding.data, undefined);
     }
+    const goalPurposeRelation = goalPurposeBinding
+      ? this.recordGoalPurposeRelation(plan, origin.content, goalPurposeBinding, rawPurposeRelationCandidate)
+      : undefined;
     const requestGoalCriteria = GoalCriteriaProjectionSchema.parse(projectRequestGoalCriteria(origin, origin.content));
     this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: origin.content,
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
+      ...(goalPurposeRelation ? { goal_purpose_relation: goalPurposeRelation } : {}),
       request_goal_criteria: requestGoalCriteria,
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
   }
@@ -818,6 +834,8 @@ export class OperationPlanLedger {
     // 実接続がある、対象と引数を狭く結び付けたadapterだけをcommand化する。
     if (!hasConnectedPlanTarget(step)) throw new Error("plan_target_resolver_not_connected");
     const goalPurposeBinding = this.resolveGoalPurposeBinding(control.goal_purpose_binding, p.goal_purpose_binding);
+    const goalPurposeRelationIssue = this.goalPurposeRelationIssue(p, goalPurposeBinding);
+    if (goalPurposeRelationIssue) throw new Error(goalPurposeRelationIssue);
     // 期限切れrevisionや不正stepの要求では復元holdを消さない。
     if (recoveryHold && !this.recoveryDependenciesVerified(p, recoveryHold)) {
       throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
@@ -956,6 +974,7 @@ export class OperationPlanLedger {
     const step = revision?.plan.steps.find((entry) => entry.step_id === match.b.step_id);
     const descriptor = step ? getOperationDescriptor(step.operation) : undefined;
     if (!this.goalPurposeBindingIsCurrent(match.p.goal_purpose_binding) ||
+        this.goalPurposeRelationIssue(match.p) !== undefined ||
         match.b.status !== "selected" || !currentRevision || currentRevision.digest !== match.b.revision_digest ||
         !revision || !step || stepDigest(step) !== match.b.step_digest || !descriptor ||
         this.requestGoalCriteriaIssue(match.p, step) !== undefined ||
@@ -984,6 +1003,7 @@ export class OperationPlanLedger {
       parameters_digest: operationPlanDigest(match.b.prepared_step.parameters ?? {}),
       preconditions_digest: operationPlanDigest(match.b.prepared_step.preparation?.preconditions ?? []),
       goal_purpose_binding: match.p.goal_purpose_binding ?? null,
+      goal_purpose_relation_digest: operationPlanDigest(match.p.goal_purpose_relation ?? null),
       request_goal_criteria_digest: operationPlanDigest(match.p.request_goal_criteria ?? null),
       command_digest: match.b.command_digest,
     });
@@ -1003,7 +1023,7 @@ export class OperationPlanLedger {
     if (this.memoryQuiesced || this.recoveryHolds.has(operationPlanDigest(match.p.revisions[0]!.plan.plan_id))) return false;
     if (!this.reconcileMemory()) return false;
     const { p, b } = match;
-    if (!this.goalPurposeBindingIsCurrent(p.goal_purpose_binding)) return false;
+    if (!this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) || this.goalPurposeRelationIssue(p) !== undefined) return false;
     const step = p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === b.step_id);
     if (!step || this.requestGoalCriteriaIssue(p, step) !== undefined) return false;
     const prepared = prepareOperationPlan(p.revisions.at(-1)!.plan, { now_ms: Date.now(), results: p.results, observations: [] });
@@ -1311,6 +1331,7 @@ export class OperationPlanLedger {
         goal_purpose_binding_status: p.goal_purpose_binding
           ? this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) ? "current" as const : "stale" as const
           : goalProjection?.used_for_authority === false ? "required" as const : "not_configured" as const,
+        goal_purpose_relation: this.goalPurposeRelationProjection(p),
         ...(recoveryHold ? { recovery_hold_reason: recoveryHold.reason,
           recovery_hold_scope_relation: recoveryHold.restore_scope_relation } : {}),
         status: currentRevision.plan.steps.every((s) => p.bindings.some((b) => b.step_id === s.step_id && b.status === "verified"))
@@ -1369,6 +1390,97 @@ export class OperationPlanLedger {
       this.resolveGoalPurposeBinding(binding, binding);
       return true;
     } catch { return false; }
+  }
+
+  private recordGoalPurposeRelation(
+    plan: OperationPlan,
+    task: string,
+    binding: OperationPlanGoalPurposeBinding,
+    rawCandidate: unknown,
+  ): OperationPlanGoalPurposeRelationRecord {
+    const parsed = rawCandidate === undefined
+      ? undefined
+      : OperationPlanGoalPurposeRelationCandidateSchema.safeParse(rawCandidate);
+    const candidate = parsed?.success ? parsed.data : undefined;
+    let candidateStatus: OperationPlanGoalPurposeRelationRecord["candidate_status"] = rawCandidate === undefined
+      ? "missing" : parsed?.success ? "present" : "invalid";
+    let evidenceStatus: OperationPlanGoalPurposeRelationRecord["evidence_status"] = "not_provided";
+    const evidenceDigests: OperationPlanGoalPurposeRelationRecord["evidence_digests"] = [];
+    if (candidate?.evidence.length) {
+      let purpose: OperationPlanGoalPurposeContent | undefined;
+      try { purpose = this.goalPurposeContentReader?.(binding.goal_ref, binding.purpose_version) ?? undefined; }
+      catch { purpose = undefined; }
+      const purposeIsCurrent = purpose?.used_for_authority === false && purpose.goal_ref === binding.goal_ref &&
+        purpose.version === binding.purpose_version && purpose.purpose_digest === binding.purpose_digest &&
+        createHash("sha256").update(purpose.purpose_text, "utf8").digest("hex") === binding.purpose_digest;
+      if (!purposeIsCurrent || !purpose) {
+        evidenceStatus = "purpose_unavailable";
+      } else if (candidate.evidence.some((entry) => !task.includes(entry.task_quote) || !purpose!.purpose_text.includes(entry.purpose_quote))) {
+        evidenceStatus = "citation_mismatch";
+      } else {
+        evidenceStatus = "exact_spans_present";
+        for (const entry of candidate.evidence) evidenceDigests.push({
+          task_span_digest: createHash("sha256").update(entry.task_quote, "utf8").digest("hex"),
+          purpose_span_digest: createHash("sha256").update(entry.purpose_quote, "utf8").digest("hex"),
+        });
+      }
+    }
+    return OperationPlanGoalPurposeRelationRecordSchema.parse({
+      schema_version: "operation-plan-goal-purpose-relation.v1",
+      task_digest: createHash("sha256").update(task, "utf8").digest("hex"),
+      plan_digest: operationPlanDigest(plan),
+      goal_purpose_binding: binding,
+      candidate_outcome: candidate?.outcome ?? "unknown",
+      candidate_status: candidateStatus,
+      evidence_status: evidenceStatus,
+      evidence_digests: evidenceDigests,
+      semantic_assessment_status: "not_assessed",
+      used_for_authority: false,
+      may_execute: false,
+    });
+  }
+
+  private goalPurposeRelationIssue(
+    p: PlanState,
+    effectiveBinding: OperationPlanGoalPurposeBinding | undefined = p.goal_purpose_binding,
+  ): string | undefined {
+    if (!effectiveBinding) return undefined;
+    const record = p.goal_purpose_relation;
+    if (!record) return "plan_goal_purpose_relation_unavailable";
+    const current = p.revisions.at(-1)!;
+    if (record.task_digest !== createHash("sha256").update(p.goal, "utf8").digest("hex") ||
+        record.plan_digest !== current.digest ||
+        record.goal_purpose_binding.goal_ref !== effectiveBinding.goal_ref ||
+        record.goal_purpose_binding.purpose_version !== effectiveBinding.purpose_version ||
+        record.goal_purpose_binding.purpose_digest !== effectiveBinding.purpose_digest) {
+      return "plan_goal_purpose_relation_stale";
+    }
+    if (record.candidate_outcome === "conflicts" && record.candidate_status === "present" &&
+        record.evidence_status === "exact_spans_present") {
+      return "plan_goal_purpose_relation_conflicts";
+    }
+    // Exact citations establish provenance only. No independent J semantic assessor is connected yet.
+    return "plan_goal_purpose_relation_unverified";
+  }
+
+  private goalPurposeRelationProjection(p: PlanState) {
+    const record = p.goal_purpose_relation;
+    if (!p.goal_purpose_binding) return {
+      status: "not_required" as const, used_for_authority: false as const, may_execute: false as const,
+    };
+    if (!record) return {
+      status: "unavailable" as const, candidate_outcome: "unknown" as const,
+      candidate_status: "missing" as const, evidence_status: "not_provided" as const, evidence_count: 0,
+      semantic_assessment_status: "not_assessed" as const, used_for_authority: false as const, may_execute: false as const,
+    };
+    const issue = this.goalPurposeRelationIssue(p);
+    return {
+      status: issue === "plan_goal_purpose_relation_stale" ? "stale" as const : "unverified" as const,
+      candidate_outcome: record.candidate_outcome, candidate_status: record.candidate_status,
+      evidence_status: record.evidence_status, evidence_count: record.evidence_digests.length,
+      semantic_assessment_status: record.semantic_assessment_status,
+      record_digest: operationPlanDigest(record), used_for_authority: false as const, may_execute: false as const,
+    };
   }
 
   /** Request-declared conflicts constrain plan selection; support remains an unverified claim. */

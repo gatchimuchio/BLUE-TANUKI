@@ -353,6 +353,9 @@ describe("Operation Core execution projection", () => {
         revision: 2,
         revision_digest: "b".repeat(64),
         status: "awaiting_step_review",
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "supports", candidate_status: "present",
+          evidence_status: "exact_spans_present", evidence_count: 1, semantic_assessment_status: "not_assessed",
+          record_digest: "5".repeat(64), used_for_authority: false, may_execute: false },
         recovery_hold_reason: "held_unobserved",
         recovery_hold_scope_relation: "collateral",
         steps: [{
@@ -373,7 +376,11 @@ describe("Operation Core execution projection", () => {
       used_for_authority: false, raw_payload_exposed: false, status: "available",
       recovery_refresh_status: "ready",
       plan_count: 1, displayed_count: 1,
-      plans: [{ revision: 2, revision_digest: "b".repeat(64), steps: [{
+      plans: [{ revision: 2, revision_digest: "b".repeat(64), goal_purpose_relation: {
+        status: "unverified", candidate_outcome: "supports", candidate_status: "present",
+        evidence_status: "exact_spans_present", evidence_count: 1, semantic_assessment_status: "not_assessed",
+        record_digest: "5".repeat(64), used_for_authority: false, may_execute: false,
+      }, steps: [{
         operation: "gmail.write", status: "outcome_unknown", external_receipt_observation: "not_recorded",
         binding: { command_digest: "e".repeat(64), result_digest: "f".repeat(64), delivery_digest: "1".repeat(64) },
       }], recovery_hold_reason: "held_unobserved", recovery_hold_scope_relation: "collateral" }],
@@ -418,6 +425,9 @@ describe("Operation Core execution projection", () => {
       raw_payload_exposed: false, plans: [] })).toMatchObject({ status: "unavailable", plans: [] });
     expect(projectOperationPlanStatus({ schema_version: "operation-plan-projection.v1", used_for_authority: false,
       raw_payload_exposed: false, plans: [{ plan_id: "a".repeat(64), revision: 1, revision_digest: "b".repeat(64),
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "supports", candidate_status: "present",
+          evidence_status: "exact_spans_present", evidence_count: 1, semantic_assessment_status: "not_assessed",
+          record_digest: "5".repeat(64), used_for_authority: false, may_execute: true },
         status: "awaiting_step_review", recovery_hold_reason: "raw-state", steps: [], bindings: [] }] }))
       .toMatchObject({ status: "unavailable", plans: [] });
     expect(projectOperationPlanStatus({ schema_version: "operation-plan-projection.v1", used_for_authority: false,

@@ -406,7 +406,8 @@ export class HDSUpperController {
 
   constructor(opts: ControllerOptions = {}) {
     this.operationPlans = new OperationPlanLedger(opts.operation_plan_state, opts.operation_plan_memory,
-      opts.operation_plan_recovery_evidence, () => this.goal_governance?.project(Date.now()));
+      opts.operation_plan_recovery_evidence, () => this.goal_governance?.project(Date.now()),
+      (goalRef, version) => this.readGoalPurposeContent(goalRef, version));
     this.policy = opts.policy ?? DEFAULT_POLICY;
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
@@ -588,6 +589,8 @@ ${planControl.question}`,
           "plan_goal_purpose_binding_required", "plan_goal_purpose_governance_unavailable", "plan_goal_purpose_governance_invalid",
           "plan_goal_purpose_unknown", "plan_goal_purpose_stale", "plan_goal_purpose_parent_review_required",
           "plan_goal_purpose_scope_changed",
+          "plan_goal_purpose_relation_unavailable", "plan_goal_purpose_relation_stale",
+          "plan_goal_purpose_relation_conflicts", "plan_goal_purpose_relation_unverified",
           "plan_attempted_step_or_dependency_changed", "plan_reflection_memory_unavailable", "plan_reflection_step_identity_mismatch",
           "plan_reflection_observation_not_current", "plan_reflection_record_mismatch", "plan_reflection_observation_expired",
           "plan_reflection_summary_not_available", "plan_receipt_reconciliation_not_outcome_unknown",
@@ -1618,7 +1621,7 @@ ${planControl.question}`,
         ? result.operation_core as Record<string, unknown> : undefined;
       if (planner?.status === "valid_plan") {
         try {
-          this.operationPlans.retainCandidate(planner.plan, issued.origin);
+          this.operationPlans.retainCandidate(planner.plan, issued.origin, planner.goal_purpose_relation);
           this.planEvent("candidate_retained", fb.command_id);
         } catch {
           this.planEvent("candidate_rejected", fb.command_id);
@@ -2150,10 +2153,10 @@ ${planControl.question}`,
         ...(planPurposeMessage ? [planPurposeMessage] : []),
         ...(planCompute?.requested && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? [{ role: "system" as const,
-          content: `OperationPlanの候補だけをoperation-core.v1のJSONで返してください。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。未実行を成功と申告しないこと。planner_output_used_for_authority=false、hds_brain_authority_required=true。raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致、およびgmail.writeのexternal_service target id=gmailでoperation=message.send、単一のto、subject、body_textだけを使う場合に限ります。Gmail計画へcc/bcc/fromやcredentialを含めません。採用・承認・実行はこの計算の責務ではありません。` }] : []),
+          content: `候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan, goal_purpose_relation: {outcome, evidence}}です。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。plan.stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。goal_purpose_relation.outcomeはsupports|conflicts|unknown、evidenceはtask_quoteとpurpose_quoteの原文連続引用（各1〜800文字）の配列です。taskと選択目的の関係を根拠付きで候補化し、根拠を確認できないときはoutcome=unknown、evidence=[]とします。引用が一致しても意味適合を証明せず、この関係候補は非権威で、Jによる独立評価前は実行できません。authority、permission、approvalを出力・推定しないでください。未実行を成功と申告しないこと。plan.planner_output_used_for_authority=false、plan.hds_brain_authority_required=true。plan.raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。plan.rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致、およびgmail.writeのexternal_service target id=gmailでoperation=message.send、単一のto、subject、body_textだけを使う場合に限ります。Gmail計画へcc/bcc/fromやcredentialを含めません。採用・承認・実行はこの計算の責務ではありません。` }] : []),
         { role: "user", content: req.content },
       ],
-      ...(log.memory_retrieval_suppressed_for === "transient_document_organization"
+        ...(log.memory_retrieval_suppressed_for === "transient_document_organization" || planCompute?.requested
         ? {}
         : { session_id: `${req.channel}:${req.user}` }),
       backend_hint: backendHint,
@@ -2165,7 +2168,9 @@ ${planControl.question}`,
           log.frame.goal_projection.projection_id,
           computeContextMessages,
         ),
-        local_p_version: "blue-tanuki.c-input-rules.v1",
+        local_p_version: planCompute?.requested
+          ? "blue-tanuki.plan-compute-purpose-relation.v1"
+          : "blue-tanuki.c-input-rules.v1",
         data_exposure: {
           input_sources: [
             "accepted_inbound_request",

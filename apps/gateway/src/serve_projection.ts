@@ -224,6 +224,17 @@ export interface OperationPlanStatusProjection {
     status: "awaiting_step_review" | "results_verified";
     goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string };
     goal_purpose_binding_status: "not_configured" | "required" | "current" | "stale";
+    goal_purpose_relation?: {
+      status: "not_required" | "unavailable" | "stale" | "unverified";
+      candidate_outcome?: "supports" | "conflicts" | "unknown";
+      candidate_status?: "present" | "missing" | "invalid";
+      evidence_status?: "exact_spans_present" | "not_provided" | "citation_mismatch" | "purpose_unavailable";
+      evidence_count?: number;
+      semantic_assessment_status?: "not_assessed";
+      record_digest?: string;
+      used_for_authority: false;
+      may_execute: false;
+    };
     recovery_hold_reason?: "held_residual" | "held_unobserved" | "held_unverified";
     recovery_hold_scope_relation?: "requested" | "collateral" | "unknown";
     step_count: number;
@@ -300,14 +311,32 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
   for (const plan of inputPlans.slice(-20).reverse()) {
     const revision = numberValue(plan.revision);
     const goalPurposeBinding = plan.goal_purpose_binding;
+    const goalPurposeRelation = plan.goal_purpose_relation;
     const goalPurposeBindingValid = goalPurposeBinding === undefined || (isRecord(goalPurposeBinding) &&
       Object.keys(goalPurposeBinding).length === 3 &&
       Object.keys(goalPurposeBinding).every((key) => ["goal_ref", "purpose_version", "purpose_digest"].includes(key)) &&
       typeof goalPurposeBinding.goal_ref === "string" && /^goal_[a-f0-9]{16,64}$/.test(goalPurposeBinding.goal_ref) &&
       Number.isSafeInteger(goalPurposeBinding.purpose_version) && (goalPurposeBinding.purpose_version as number) >= 1 &&
       isDigest(goalPurposeBinding.purpose_digest));
+    const goalPurposeRelationValid = goalPurposeRelation === undefined || (isRecord(goalPurposeRelation) &&
+      Object.keys(goalPurposeRelation).every((key) => ["status", "candidate_outcome", "candidate_status", "evidence_status",
+        "evidence_count", "semantic_assessment_status", "record_digest", "used_for_authority", "may_execute"].includes(key)) &&
+      ["not_required", "unavailable", "stale", "unverified"].includes(String(goalPurposeRelation.status)) &&
+      goalPurposeRelation.used_for_authority === false && goalPurposeRelation.may_execute === false &&
+      (goalPurposeRelation.candidate_outcome === undefined || ["supports", "conflicts", "unknown"].includes(String(goalPurposeRelation.candidate_outcome))) &&
+      (goalPurposeRelation.candidate_status === undefined || ["present", "missing", "invalid"].includes(String(goalPurposeRelation.candidate_status))) &&
+      (goalPurposeRelation.evidence_status === undefined || ["exact_spans_present", "not_provided", "citation_mismatch", "purpose_unavailable"].includes(String(goalPurposeRelation.evidence_status))) &&
+      (goalPurposeRelation.evidence_count === undefined || (Number.isInteger(goalPurposeRelation.evidence_count) &&
+        (goalPurposeRelation.evidence_count as number) >= 0 && (goalPurposeRelation.evidence_count as number) <= 8)) &&
+      (goalPurposeRelation.semantic_assessment_status === undefined || goalPurposeRelation.semantic_assessment_status === "not_assessed") &&
+      (goalPurposeRelation.record_digest === undefined || isDigest(goalPurposeRelation.record_digest)) &&
+      (goalPurposeRelation.status !== "unverified" || (goalPurposeRelation.candidate_outcome !== undefined &&
+        goalPurposeRelation.candidate_status !== undefined && goalPurposeRelation.evidence_status !== undefined &&
+        goalPurposeRelation.evidence_count !== undefined && goalPurposeRelation.semantic_assessment_status === "not_assessed" &&
+        isDigest(goalPurposeRelation.record_digest))) &&
+      (goalPurposeRelation.status !== "not_required" || goalPurposeRelation.candidate_outcome === undefined));
     if (!isDigest(plan.plan_id) || !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
-        !goalPurposeBindingValid ||
+        !goalPurposeBindingValid || !goalPurposeRelationValid ||
         !["not_configured", "required", "current", "stale"].includes(String(plan.goal_purpose_binding_status ??
           (goalPurposeBinding === undefined ? "not_configured" : "current"))) ||
         !["awaiting_step_review", "results_verified"].includes(String(plan.status)) ||
@@ -384,6 +413,16 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       } } : {}),
       goal_purpose_binding_status: (plan.goal_purpose_binding_status ??
         (goalPurposeBinding === undefined ? "not_configured" : "current")) as "not_configured" | "required" | "current" | "stale",
+      ...(isRecord(goalPurposeRelation) ? { goal_purpose_relation: {
+        status: goalPurposeRelation.status as "not_required" | "unavailable" | "stale" | "unverified",
+        ...(goalPurposeRelation.candidate_outcome !== undefined ? { candidate_outcome: goalPurposeRelation.candidate_outcome as "supports" | "conflicts" | "unknown" } : {}),
+        ...(goalPurposeRelation.candidate_status !== undefined ? { candidate_status: goalPurposeRelation.candidate_status as "present" | "missing" | "invalid" } : {}),
+        ...(goalPurposeRelation.evidence_status !== undefined ? { evidence_status: goalPurposeRelation.evidence_status as "exact_spans_present" | "not_provided" | "citation_mismatch" | "purpose_unavailable" } : {}),
+        ...(goalPurposeRelation.evidence_count !== undefined ? { evidence_count: goalPurposeRelation.evidence_count as number } : {}),
+        ...(goalPurposeRelation.semantic_assessment_status !== undefined ? { semantic_assessment_status: "not_assessed" as const } : {}),
+        ...(goalPurposeRelation.record_digest !== undefined ? { record_digest: goalPurposeRelation.record_digest as string } : {}),
+        used_for_authority: false as const, may_execute: false as const,
+      } } : {}),
       ...(plan.recovery_hold_reason ? { recovery_hold_reason: plan.recovery_hold_reason as "held_residual" | "held_unobserved" | "held_unverified" } : {}),
       ...(plan.recovery_hold_scope_relation ? { recovery_hold_scope_relation: plan.recovery_hold_scope_relation as "requested" | "collateral" | "unknown" } : {}),
       status: plan.status as "awaiting_step_review" | "results_verified", step_count: plan.steps.length, steps });

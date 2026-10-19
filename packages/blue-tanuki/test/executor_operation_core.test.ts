@@ -180,6 +180,18 @@ describe("Executor Operation Core planner output boundary", () => {
     });
   });
 
+  it("preserves the task-purpose relation candidate beside the validated OperationPlan", async () => {
+    const relation = { outcome: "supports", evidence: [{ task_quote: "find the runbook",
+      purpose_quote: "Use the delegated scope." }] };
+    const exec = new Executor({ approval_authority: executorApproval,
+      llm: new FixedBackend(JSON.stringify({ plan: operationPlan(), goal_purpose_relation: relation })),
+      tools: new ToolRegistry() });
+    const feedback = await exec.execute(approved(llmCmd("plan with purpose context")));
+    const result = feedback.result as { operation_core?: { goal_purpose_relation?: unknown } };
+    expect(feedback.status).toBe("success");
+    expect(result.operation_core?.goal_purpose_relation).toEqual(relation);
+  });
+
   it("BT-U-D01.02-P connects literal preparation to ordinary Executor feedback", async () => {
     const plan = operationPlan();
     plan.steps[0]!.target = { kind: "runtime", id: "session:synthetic" };

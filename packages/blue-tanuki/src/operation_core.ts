@@ -40,6 +40,8 @@ export interface OperationCorePlannerEvidence {
   role: "planner_output";
   status: "valid_plan";
   plan: OperationPlan;
+  /** C's task-purpose claim is an untrusted candidate retained only for HDS digesting. */
+  goal_purpose_relation?: unknown;
   adapter_registry: OperationAdapterRegistryEvidence;
   preparation: OperationPreparationSummary;
   planner_output_used_for_authority: false;
@@ -80,9 +82,10 @@ export function inspectOperationCorePlannerOutput(
     return rejectPlannerOutput(`raw command field is not allowed in planner output: ${rawCommandPath}`);
   }
 
-  if (!plannerLike(parsed)) return { kind: "none" };
+  const envelope = plannerEnvelope(parsed);
+  if (!envelope && !plannerLike(parsed)) return { kind: "none" };
 
-  const plan = OperationPlanSchema.safeParse(parsed);
+  const plan = OperationPlanSchema.safeParse(envelope?.plan ?? parsed);
   if (!plan.success) {
     const issue = plan.error.issues[0];
     const location = issue?.path.length ? issue.path.join(".") : "<root>";
@@ -105,6 +108,9 @@ export function inspectOperationCorePlannerOutput(
       role: "planner_output",
       status: "valid_plan",
       plan: prepared.plan,
+      ...(envelope && Object.prototype.hasOwnProperty.call(envelope, "goal_purpose_relation")
+        ? { goal_purpose_relation: envelope.goal_purpose_relation }
+        : {}),
       adapter_registry: adapterRegistryInspection.evidence,
       preparation: prepared.summary,
       planner_output_used_for_authority: false,
@@ -143,11 +149,24 @@ function plannerLike(value: unknown): boolean {
   const obj = value as Record<string, unknown>;
   return (
     obj.version === "operation-core.v1" ||
+    ("plan" in obj && plannerLike(obj.plan)) ||
     "plan_id" in obj ||
     "steps" in obj ||
     "raw_command_policy" in obj ||
     "planner_output_used_for_authority" in obj
   );
+}
+
+function plannerEnvelope(value: unknown): { plan: unknown; goal_purpose_relation?: unknown } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const object = value as Record<string, unknown>;
+  if (!("plan" in object) || "version" in object ||
+      Object.keys(object).some((key) => key !== "plan" && key !== "goal_purpose_relation") ||
+      !plannerLike(object.plan)) return undefined;
+  return { plan: object.plan,
+    ...(Object.prototype.hasOwnProperty.call(object, "goal_purpose_relation")
+      ? { goal_purpose_relation: object.goal_purpose_relation }
+      : {}) };
 }
 
 function rawCommandKeyPath(value: unknown, path: readonly string[] = []): string | null {

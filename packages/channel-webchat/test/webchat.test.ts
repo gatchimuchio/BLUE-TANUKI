@@ -471,6 +471,9 @@ describe("WebChatChannel — Control Center shell", () => {
           plan_id: "5".repeat(64), revision: 1, revision_digest: "6".repeat(64),
           goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 1, purpose_digest: "d".repeat(64) },
           goal_purpose_binding_status: "stale",
+          goal_purpose_relation: { status: "unverified", candidate_outcome: "supports", candidate_status: "present",
+            evidence_status: "exact_spans_present", evidence_count: 1, semantic_assessment_status: "not_assessed",
+            record_digest: "5".repeat(64), used_for_authority: false, may_execute: false },
           status: "held_residual", step_count: 1,
           recovery_hold_reason: "held_residual", recovery_hold_scope_relation: "collateral",
           steps: [{ step_id: "7".repeat(64), operation: "file.search", status: "outcome_unknown",
@@ -498,6 +501,8 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("J配送digest");
     expect(rendered).toContain("作業目的版の選択候補（digestのみ）");
     expect(rendered).toContain("意味上の適合や実行許可を判定しません。");
+    expect(rendered).toContain("C候補は非権威。J意味評価未実装のためstep確認を停止");
+    expect(rendered).toContain("引用照合=exact_spans_present");
     expect(rendered).toContain("\u0026quot;purpose_version\u0026quot;:2");
     expect(rendered).toContain("陳腐化または照合不能（step実行を停止）");
     expect(rendered).not.toContain("SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER");

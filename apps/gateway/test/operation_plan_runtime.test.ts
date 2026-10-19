@@ -118,7 +118,7 @@ function goalGovernanceConfig() {
 }
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
-  it("requires an explicit current purpose-version binding and carries its digest into the HDS execution seal", async () => {
+  it("requires current purpose-version binding and refuses step review without task-purpose evidence", async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date(100));
     const root = await mkdtemp(join(tmpdir(), "blue-plan-purpose-scope-"));
     const workspace = join(root, "workspace"); await mkdir(workspace); await writeFile(join(workspace, "blue.txt"), "blue\n");
@@ -144,33 +144,13 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(missing.command).toBeNull();
       expect(missing.log.commit.reason).toContain("plan_control_denied:plan_goal_purpose_binding_required");
 
-      const selected = review(hds, candidate, "search", scope).command;
-      if (!selected) throw new Error("current goal purpose binding did not produce a reviewed command");
-      expect(hds.operationPlanCommandIsCurrent(selected)).toBe(true);
-      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_binding).toEqual(scope);
-      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_binding_status).toBe("current");
-      expect(projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).plans[0]?.goal_purpose_binding_status).toBe("current");
-      const authorityBinding = hds.createExecutionAuthorityBinding(selected, {
-        schema_version: "blue-tanuki.file-search-target-version.v1",
-        requested_root_digest: createHash("sha256").update(workspace, "utf8").digest("hex"),
-        canonical_root_digest: "c".repeat(64), resource_version_digest: "d".repeat(64), files_examined: 1,
-        used_for_authority: false, may_execute: false,
-      });
-      expect(authorityBinding.operation_plan_binding_digest).toMatch(/^[a-f0-9]{64}$/);
-      expect(authorityBinding.goal_governance_used_for_authority).toBe(false);
-      vi.setSystemTime(new Date(500));
-      expect(hds.operationPlanCommandIsCurrent(selected)).toBe(false);
-      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_binding_status).toBe("stale");
-      expect(() => hds.createExecutionAuthorityBinding(selected, {
-        schema_version: "blue-tanuki.file-search-target-version.v1",
-        requested_root_digest: createHash("sha256").update(workspace, "utf8").digest("hex"),
-        canonical_root_digest: "c".repeat(64), resource_version_digest: "d".repeat(64), files_examined: 1,
-        used_for_authority: false, may_execute: false,
-      })).toThrow("plan_execution_source_binding_stale");
-      const updatedScope = { ...scope, purpose_version: 2, purpose_digest: "e".repeat(64) };
-      const rebound = review(hds, candidate, "independent", updatedScope);
-      expect(rebound.command).toBeNull();
-      expect(rebound.log.commit.reason).toContain("plan_control_denied:plan_goal_purpose_scope_changed");
+      const selected = review(hds, candidate, "search", scope);
+      expect(selected.command).toBeNull();
+      expect(selected.log.commit.reason).toContain("plan_control_denied:plan_goal_purpose_relation_unavailable");
+      const current = hds.getRuntimeSnapshot().operation_plans.plans[0];
+      expect(current?.goal_purpose_binding_status).toBe("required");
+      expect(current?.goal_purpose_relation).toMatchObject({ status: "not_required", used_for_authority: false, may_execute: false });
+      expect(projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).plans[0]?.goal_purpose_binding_status).toBe("required");
     } finally {
       store.close(); vi.unstubAllEnvs(); vi.useRealTimers(); await rm(root, { recursive: true, force: true });
     }

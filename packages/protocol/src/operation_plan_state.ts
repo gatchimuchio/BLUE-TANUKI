@@ -19,6 +19,46 @@ export const OperationPlanComputeInputSchema = z.object({
   goal_purpose_binding: OperationPlanGoalPurposeBindingSchema,
 }).strict();
 export type OperationPlanComputeInput = z.infer<typeof OperationPlanComputeInputSchema>;
+/** C's task-purpose relation claim is a candidate only; exact citations do not verify semantic fit. */
+export const OperationPlanGoalPurposeRelationCandidateSchema = z.object({
+  outcome: z.enum(["supports", "conflicts", "unknown"]),
+  evidence: z.array(z.object({
+    task_quote: z.string().min(1).max(800).refine((value) => value.trim().length > 0),
+    purpose_quote: z.string().min(1).max(800).refine((value) => value.trim().length > 0),
+  }).strict()).max(8),
+}).strict().superRefine((candidate, context) => {
+  if (candidate.outcome !== "unknown" && candidate.evidence.length === 0) {
+    context.addIssue({ code: "custom", message: "non_unknown_purpose_relation_requires_cited_evidence" });
+  }
+});
+export type OperationPlanGoalPurposeRelationCandidate = z.infer<typeof OperationPlanGoalPurposeRelationCandidateSchema>;
+/** J's digest-only record of a C claim. It remains unassessed and cannot admit execution. */
+export const OperationPlanGoalPurposeRelationRecordSchema = z.object({
+  schema_version: z.literal("operation-plan-goal-purpose-relation.v1"),
+  task_digest: Digest,
+  plan_digest: Digest,
+  goal_purpose_binding: OperationPlanGoalPurposeBindingSchema,
+  candidate_outcome: z.enum(["supports", "conflicts", "unknown"]),
+  candidate_status: z.enum(["present", "missing", "invalid"]),
+  evidence_status: z.enum(["exact_spans_present", "not_provided", "citation_mismatch", "purpose_unavailable"]),
+  evidence_digests: z.array(z.object({ task_span_digest: Digest, purpose_span_digest: Digest }).strict()).max(8),
+  semantic_assessment_status: z.literal("not_assessed"),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().superRefine((record, context) => {
+  if ((record.candidate_status !== "present" || record.evidence_status !== "exact_spans_present") &&
+      record.evidence_digests.length > 0) {
+    context.addIssue({ code: "custom", message: "unverified_purpose_relation_must_not_keep_evidence_digests" });
+  }
+  if ((record.candidate_status === "missing" || record.candidate_status === "invalid") &&
+      record.candidate_outcome !== "unknown") {
+    context.addIssue({ code: "custom", message: "missing_or_invalid_purpose_relation_must_be_unknown" });
+  }
+  if (record.evidence_status === "exact_spans_present" && record.evidence_digests.length === 0) {
+    context.addIssue({ code: "custom", message: "exact_purpose_relation_evidence_requires_digests" });
+  }
+});
+export type OperationPlanGoalPurposeRelationRecord = z.infer<typeof OperationPlanGoalPurposeRelationRecordSchema>;
 export const OperationPlanExternalReceiptObservationSchema = z.object({
   schema_version: z.literal("external-receipt-observation.v1"),
   source: z.literal("local_inspection"),
@@ -98,6 +138,7 @@ export const OperationPlanCheckpointSchema = z.object({
   plans: z.array(z.object({
     owner: Id, channel: Id, goal: z.string().min(1).max(200_000),
     goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),
+    goal_purpose_relation: OperationPlanGoalPurposeRelationRecordSchema.optional(),
     request_goal_criteria: GoalCriteriaProjectionSchema.optional(),
     revisions: z.array(z.object({ digest: Digest, plan: OperationPlanSchema }).strict()).min(1).max(100),
     receipt_observations: z.array(OperationPlanExternalReceiptObservationSchema).max(100).default([]),

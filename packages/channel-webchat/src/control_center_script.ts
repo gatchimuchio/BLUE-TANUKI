@@ -976,13 +976,30 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest })) + '</code><br>' +
               escapeHtml(purposeBindingStatus) + '</dd>'
             : plan.goal_purpose_binding_status === "required" ? '<dt>作業目的版</dt><dd>' + escapeHtml(purposeBindingStatus) + '</dd>' : '';
+          const purposeRelation = isObject(plan.goal_purpose_relation) ? plan.goal_purpose_relation : null;
+          const purposeRelationStatusLabels = {
+            not_required: "作業目的版未選択のためrelation未記録",
+            unavailable: "C候補のrelation記録なし（step確認を停止）",
+            stale: "task・計画・目的版との対応が古い（step確認を停止）",
+            unverified: "C候補は非権威。J意味評価未実装のためstep確認を停止",
+          };
+          const purposeRelationDetail = purposeRelation && purposeRelation.status === "unverified"
+            ? '<br>' + escapeHtml([
+              "候補=" + String(purposeRelation.candidate_outcome || "unknown"),
+              "引用照合=" + String(purposeRelation.evidence_status || "not_provided"),
+              "引用数=" + String(purposeRelation.evidence_count ?? 0),
+              "意味評価=" + String(purposeRelation.semantic_assessment_status || "not_assessed"),
+            ].join("・")) : "";
+          const purposeRelationLabel = purposeRelation && Object.prototype.hasOwnProperty.call(purposeRelationStatusLabels, purposeRelation.status)
+            ? '<dt>taskと作業目的の関係</dt><dd>' + escapeHtml(purposeRelationStatusLabels[purposeRelation.status]) + purposeRelationDetail + '</dd>'
+            : '';
           return '<article class="trace-item">' +
             '<div class="row"><h3>計画 ' + escapeHtml(shortDigest(plan.plan_id)) + '</h3><span>' + badge("revision " + String(plan.revision), "review") + '</span></div>' +
             '<dl class="kv"><dt>計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(plan.revision_digest)) + '</dd>' +
             '<dt>計画状態</dt><dd>' + badge(plan.status || "unknown", operationPlanStatusTone(plan.status)) + '</dd>' +
             (recoveryHold ? '<dt>復元後の選択</dt><dd>' + escapeHtml(recoveryHold) + '</dd>' +
               '<dt>復元scopeとの関係</dt><dd>' + escapeHtml(recoveryScopeRelation) + '</dd>' : '') +
-            purposeBindingLabel +
+            purposeBindingLabel + purposeRelationLabel +
             '<dt>step数</dt><dd>' + escapeHtml(String(plan.step_count ?? steps.length)) + '</dd></dl>' +
             (recoveryHold ? '<p class="muted">この計画のstep選択は停止中です。復元scopeとの関係表示はplan単位の復元やhold解除を意味しません。状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。</p>' : '') +
             steps.map(function (step) {
