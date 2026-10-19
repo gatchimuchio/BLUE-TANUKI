@@ -2,7 +2,27 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-FILE-SEARCH-OBSERVATION-EXPIRY-ENFORCEMENT`
+### 最新BUILD_BATCH：`QEB-01-D02.02-PERSISTED-TICKET-OWNER-EPOCH-BINDING`
+
+開始HEAD／`origin/main`=`a1ecf73bd6b251afd63c81fd5a556fb85ffd2789`、開始worktree clean。QE rev2.3三点正本、適用AGENTS／作業標準／active指示、D02.01／D02.02関連実物を再読した。D4-Pocketの現行AGENTS §3.1を確認し、Actionsは`workflow_dispatch`限定でOS不足・artifact・localでは不足する重い検査の補助に使えることを確認した。今回のWindows検査で必要な対象を確認できたためActions未使用。編集前recovery current／previous branch・tagは`a1ecf73...`／`94952ec...`で照合済み。
+
+`GatewayExecutionIntentStore`へGateway起動時の`GatewayRuntimeOwnerLease.executionEpoch`を必須で渡し、CLI／serveの両production経路で同じowner世代をExecutor authorityと永続storeに使用する。ticket発行、consume／markInvocation／bindWorker、worker終了観測、結果確定、result acknowledgement、復旧時の現行receipt検査はstoreがticket世代を直接照合し、別世代の旧ticketを拒否する。旧receiptは読取・監査用に残り、execution eligibleへ戻さない。旧世代結果は既存のstale-generation evidence隔離経路を保つ。
+
+| 限定確認 | 結果 |
+|---|---|
+| `execution_intent_runtime.test.ts` | PASS、7/7。旧世代ticketの発行・consume・invocation・worker bind／exit・completeを再起動後に拒否し、receiptは照会可能でevent chainが維持されることを確認。 |
+| `file_search_worker.test.ts`／`recovery_broker_restore.test.ts`／`recovery_inspection.test.ts`／`operation_plan_recovery_inspection.test.ts` | PASS、9/9、3/3、17/17、11/11。実IPC、再送・worker identity、復旧snapshot、読取専用検査、J admission相関を確認。 |
+| `external_action_reconciliation.test.ts` | PASS、単独実行1/1。合成loopback受理照合と世代交代後の結果隔離を確認。最初の複数suite実行では失敗したが単独再実行で再現せず、全workspace／全Gateway回帰を証明しない。 |
+| `execution_result_reconciliation.test.ts` | PASS、対象2/2、残り36件skip。旧世代結果の隔離と保存結果のJ調停を確認。 |
+| `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | PASS。buildは15 workspace projects、HDS Runtime Invariants `all_ok=true`。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は継続注意。 |
+| 全workspace tests／GitHub Actions／実provider／実credential／外部業務作用 | 未実施。 |
+
+Gateway owner世代→永続Executor ticket storeの接続はこの範囲で`WIRED`。D02.02全体、独立したhost/device認証、別Task・別host間の明示的audience binding、親所有固定child IPCを超えるprocess認証は未成立。次consumerは`apps/gateway/src/file_search_worker.ts`→`file_search_worker_child.ts`の実IPCで、task identityと実行host/audienceのproducerを特定し、現在owner世代と同じ認証済み契約へ接続すること。D02.01／D02.02全体、BUILD_COVERED、QE_QC／QE_QA／5OS実機は未成立。C08.03 provider保留、P13 owner-GO保留を維持する。
+
+実装commit=`f0ee4b012f3cc6acc65dc921f6338f7cc1d662dc`を`main`へpushし、直後のremote HEAD一致を確認。local recovery branch／remote backup tagはcurrent=`a1ecf73bd6b251afd63c81fd5a556fb85ffd2789`、previous=`94952ece08ce3f14c98b4b509af0dcbaddbfe1ba`で一致。文書closeoutをdocs-only commitとしてpush後、最終remote HEAD・二世代ref・clean worktreeを再確認する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-FILE-SEARCH-OBSERVATION-EXPIRY-ENFORCEMENT`
 
 開始HEAD／`origin/main`=`94952ece08ce3f14c98b4b509af0dcbaddbfe1ba`、開始worktree clean。QE rev2.3三点正本（SHA-256=`779452ac46ed2e42040afdcbb5f4e918b71b6fccf436c194a69ed16d07f5e249`）、適用AGENTS／作業標準／active指示、D02.01／D02.02関連実物を読み直した。作業前recovery branch／remote tagはcurrent=`94952ece08ce3f14c98b4b509af0dcbaddbfe1ba`、previous=`44b511f7df202cbb9ee6841197c2492b3a232586`。D4-Pocketの現行Actions条件を照合し、このWindows local環境で不足するOS検査・artifact・重い検査がないためActionsは未使用。C08.03実provider保留、P13 owner-GO保留、別repo変更なしを維持する。
 
