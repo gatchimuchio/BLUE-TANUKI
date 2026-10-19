@@ -1167,6 +1167,9 @@ fn ensure_runtime_prerequisites() -> Result<(), String> {
             return Err("linux_isolation_prerequisite_missing".to_string());
         }
     }
+    if !bubblewrap_advertises_option("--size")? {
+        return Err("linux_bubblewrap_tmpfs_size_unsupported".to_string());
+    }
     let uid = unsafe { libc::geteuid() };
     let runtime_dir = format!("/run/user/{uid}");
     let manager_socket = Path::new(&runtime_dir).join("systemd/private");
@@ -1182,6 +1185,33 @@ fn ensure_runtime_prerequisites() -> Result<(), String> {
         return Err("linux_resource_controllers_unavailable".to_string());
     }
     Ok(())
+}
+
+fn bubblewrap_advertises_option(option: &str) -> Result<bool, String> {
+    let output = Command::new("/usr/bin/bwrap")
+        .arg("--help")
+        .current_dir("/")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("LANG", "C")
+        .output()
+        .map_err(|_| "linux_bubblewrap_capability_probe_failed".to_string())?;
+    if !output.status.success() {
+        return Err("linux_bubblewrap_capability_probe_failed".to_string());
+    }
+
+    let mut help = output.stdout;
+    help.extend(output.stderr);
+    Ok(help_advertises_option(&help, option))
+}
+
+fn help_advertises_option(help: &[u8], option: &str) -> bool {
+    String::from_utf8_lossy(help).lines().any(|line| {
+        line.trim_start()
+            .split_whitespace()
+            .next()
+            .is_some_and(|token| token.split('=').next() == Some(option))
+    })
 }
 
 fn namespace_ids() -> Result<BTreeMap<String, u64>, String> {
@@ -1510,9 +1540,26 @@ fn stable_error(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        namespace_owner_query_error, safe_diagnostic, stable_error, verify_mount_capability_mask,
-        CapabilitySnapshot, MOUNT_CAPABILITY_MASK, MOUNT_SETUP_CAPABILITY_MASK,
+        help_advertises_option, namespace_owner_query_error, safe_diagnostic, stable_error,
+        verify_mount_capability_mask, CapabilitySnapshot, MOUNT_CAPABILITY_MASK,
+        MOUNT_SETUP_CAPABILITY_MASK,
     };
+
+    #[test]
+    fn bubblewrap_help_must_advertise_the_tmpfs_size_option() {
+        assert!(help_advertises_option(
+            b"Usage: bwrap [OPTIONS...]\n  --size BYTES  Set size of next tmpfs\n",
+            "--size"
+        ));
+        assert!(help_advertises_option(
+            b"Usage: bwrap [OPTIONS...]\n  --size=BYTES  Set size of next tmpfs\n",
+            "--size"
+        ));
+        assert!(!help_advertises_option(
+            b"Usage: bwrap [OPTIONS...]\n  --tmpfs DEST  Mount a tmpfs\n  --help  Show help for --size\n",
+            "--size"
+        ));
+    }
 
     #[test]
     fn mount_setup_caps_are_removed_before_nested_shell() {
@@ -1589,6 +1636,10 @@ mod tests {
             "operation_not_permitted"
         );
         assert_eq!(safe_diagnostic(b"/tmp/private path: rejected\n"), "");
+        assert_eq!(
+            stable_error("linux_bubblewrap_tmpfs_size_unsupported"),
+            "linux_bubblewrap_tmpfs_size_unsupported"
+        );
         assert_eq!(
             stable_error(
                 "linux_sandbox_start_or_shutdown_failed:linux_isolation_error:workspace_quota_unavailable"
