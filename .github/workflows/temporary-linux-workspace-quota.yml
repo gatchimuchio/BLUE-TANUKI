@@ -85,6 +85,26 @@ jobs:
             echo "managed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Diagnose a minimal OverlayFS mount in a user namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          result=$(/usr/bin/bwrap \
+            --unshare-user --unshare-mnt --unshare-pid --die-with-parent \
+            --cap-drop ALL --cap-add CAP_SYS_ADMIN --cap-add CAP_MKNOD --cap-add CAP_SETPCAP \
+            --ro-bind /usr /usr \
+            --symlink usr/bin /bin --symlink usr/sbin /sbin \
+            --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
+            --proc /proc --dev /dev --tmpfs /tmp --tmpfs /workspace-lower \
+            --dir /workspace-storage --dir /workspace --chdir / --clearenv \
+            --setenv PATH /usr/bin:/bin -- \
+            /usr/bin/sh -c 'set -eu; printf fixture > /workspace-lower/probe; mount -o remount,ro /workspace-lower; mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700 tmpfs /workspace-storage; mkdir /workspace-storage/upper /workspace-storage/work; mount -t overlay overlay -o lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work,userxattr,redirect_dir=nofollow,metacopy=off,index=off /workspace; test "$(cat /workspace/probe)" = fixture; printf pass' 2>/dev/null) || result=failed
+          if [[ "$result" = pass ]]; then
+            echo "minimal isolated OverlayFS mount: pass"
+          else
+            echo "minimal isolated OverlayFS mount: fail"
+          fi
+
       - name: Set up Rust toolchain
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt
