@@ -189,6 +189,7 @@ export {
   FINAL_REVIEW_OPERATION_LIST,
   FINAL_REVIEW_OPERATIONS,
   finalReviewOperationList,
+  goalPurposeChangeApprovalTarget,
   type ApprovalMode,
   type ApprovalDecision,
   type ApprovalRisk,

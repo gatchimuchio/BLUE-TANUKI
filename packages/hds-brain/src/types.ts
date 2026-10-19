@@ -1,4 +1,12 @@
-import type { CommandConstraints, Decision, ExecuteCommand, ExecuteFeedback, OperationRequest } from "@blue-tanuki/protocol";
+import type {
+  CommandConstraints,
+  Decision,
+  ExecuteCommand,
+  ExecuteFeedback,
+  GoalGovernanceAuthorization,
+  GoalGovernanceEvent,
+  OperationRequest,
+} from "@blue-tanuki/protocol";
 import type { OutputAuditLog, ProjectionOutputAuditLog } from "./output_audit.js";
 import type { RuntimeInvariantEvidenceReport, RuntimeInvariantValues } from "./runtime_invariants.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
@@ -512,6 +520,7 @@ export type AuthorityEventKind =
   | "composio_execution_completed"
   | "composio_execution_failed"
   | "cron_event_no_replay_acknowledged"
+  | "goal_purpose_change_committed"
   | "approval_asked"
   | "approval_allowed"
   | "approval_denied";
@@ -531,6 +540,8 @@ export interface AuthorityEventLog {
   cron_event_id?: string;
   cron_payload_digest?: string;
   cron_disposition?: "acknowledge_no_replay";
+  goal_governance_event?: Extract<GoalGovernanceEvent, { event_kind: "purpose_change" }>;
+  goal_governance_authorization?: GoalGovernanceAuthorization;
   timestamp: number;
 }
 

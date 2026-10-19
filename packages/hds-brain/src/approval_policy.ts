@@ -148,6 +148,21 @@ export function finalReviewOperationList(): ApprovalOperation[] {
   return [...FINAL_REVIEW_OPERATION_LIST];
 }
 
+export function goalPurposeChangeApprovalTarget(input: {
+  goal_ref: string;
+  prior_version: number;
+  prior_purpose_digest: string;
+  new_purpose_digest: string;
+}): string {
+  return [
+    "goal.governance.change",
+    input.goal_ref,
+    String(input.prior_version),
+    input.prior_purpose_digest,
+    input.new_purpose_digest,
+  ].join(":");
+}
+
 export function approvalContextFromCommand(command: ExecuteCommand, opts: { actor?: string; now?: number } = {}): ApprovalContext {
   const actor = opts.actor?.trim() || "local-user";
   const now = opts.now ?? Date.now();
@@ -361,6 +376,22 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
   if (command.type === "channel_send") return { target_scope: "channel", channel: command.payload.channel, target: `${command.payload.channel}:${command.payload.target}` };
   if (command.type === "tool_call") {
     const args = command.payload.arguments;
+    if (command.payload.tool_name === "goal.governance.change") {
+      const goal_ref = typeof args.goal_ref === "string" ? args.goal_ref : "invalid-goal";
+      const prior_version = typeof args.prior_version === "number" && Number.isSafeInteger(args.prior_version) && args.prior_version > 0
+        ? args.prior_version
+        : 0;
+      const prior_purpose_digest = typeof args.prior_purpose_digest === "string" && /^[a-f0-9]{64}$/.test(args.prior_purpose_digest)
+        ? args.prior_purpose_digest
+        : "invalid-prior-digest";
+      const new_purpose_digest = typeof args.new_purpose_digest === "string" && /^[a-f0-9]{64}$/.test(args.new_purpose_digest)
+        ? args.new_purpose_digest
+        : "invalid-new-digest";
+      return {
+        target_scope: "task_type",
+        target: goalPurposeChangeApprovalTarget({ goal_ref, prior_version, prior_purpose_digest, new_purpose_digest }),
+      };
+    }
     if (op === "github.write") {
       const ownerValue = typeof args.owner === "string" ? args.owner : undefined;
       const repoValue = typeof args.repo === "string" ? args.repo : undefined;

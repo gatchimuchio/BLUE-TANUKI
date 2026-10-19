@@ -82,7 +82,10 @@ interface CompiledGoal {
  * matches a separately supplied, prevalidated authorization record.
  */
 export class GoalGovernanceLedger {
-  private constructor(private readonly goals: readonly CompiledGoal[]) {}
+  private constructor(
+    private readonly config: GoalGovernanceConfig,
+    private readonly goals: readonly CompiledGoal[],
+  ) {}
 
   static create(input: unknown): GoalGovernanceBuildResult {
     const parsed = parseGoalGovernanceAtBoundary(input);
@@ -90,9 +93,22 @@ export class GoalGovernanceLedger {
 
     const validation = validateAuthorizations(parsed.config);
     if (!validation.ok) return validation;
+    deepFreeze(parsed.config);
     const compiledGoals = compileGoals(parsed.config);
     deepFreeze(compiledGoals);
-    return { ok: true, ledger: new GoalGovernanceLedger(compiledGoals) };
+    return { ok: true, ledger: new GoalGovernanceLedger(parsed.config, compiledGoals) };
+  }
+
+  /** Rebuilds an immutable ledger after an independently verified J-owned event append. */
+  appendAuthorizedEvent(
+    event: GoalGovernanceEvent,
+    authorization: GoalGovernanceAuthorization,
+  ): GoalGovernanceBuildResult {
+    return GoalGovernanceLedger.create({
+      ...this.config,
+      events: [...this.config.events, event],
+      authorizations: [...this.config.authorizations, authorization],
+    });
   }
 
   project(asOf: number): ReadonlyGoalGovernanceProjection {

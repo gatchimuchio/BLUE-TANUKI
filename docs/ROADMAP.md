@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-01-D02.01-J-GOAL-PURPOSE-APPEND-REPLAY`では、delegated goalの目的変更digestをexact L3 approval recordへ束縛し、HDS監査鎖へJ所有eventとして永続append・再起動後に再構成する入口を追加した。raw purpose textは保持せず、本文を表示するproposal review、目的digestとの一致、仕事別purpose-version適用、Broker target接続は未成立。HDS-BRAIN tests 304/304、workspace typecheck／build 15 projects、standalone、docs／repo-health gateはPASS。D02.01=`BUILD_GAP`を維持する。
+
 2026-10-19の`QEB-01-D02.02-WEBCHAT-OWNER-CREDENTIAL-INGRESS`では、setupで別生成した`BLUE_TANUKI_OWNER_TOKEN`を検証するWebChat入力口をGateway→HDSへ接続した。callerのactor／trust metadataは採用せず、`webchat-owner-token-holder`というcredential保有クラスを記録する。人間identityの証明や権限昇格ではなく、Approval／L3／Brokerの既存境界を保つ。合成Gateway E2E、WebChat 87/87、setup config 12/12、typecheck、buildはPASS。永続GoalGovernance producer、仕事別purpose-version適用、他targetのBroker identityは未成立。
 
 2026-10-19の`QEB-01-D02.02-WEBCHAT-INBOUND-PRINCIPAL-PROVENANCE`では、検証済みWebChat inbound／webhook bearerのcredential classをGateway actorへ渡し、caller bodyのuser／actorラベルを監査主体として使わない。body userはreply routingに残る。これは共有token保有者クラスであり個人identity・owner証明ではない。task purpose version／GoalGovernance source／Broker target identityは未成立。WebChat 84/84、Gateway integration 3/3、typecheck、buildはPASS。

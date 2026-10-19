@@ -33,6 +33,7 @@ export interface AuditOptions {
 export class AuditLog {
   private entries: AuditEntry[] = [];
   private readonly filepath?: string;
+  private persistenceFailure = false;
 
   constructor(opts: AuditOptions = {}) {
     this.filepath = opts.filepath;
@@ -49,6 +50,9 @@ export class AuditLog {
   }
 
   append(log: AuditRecord): AuditEntry {
+    if (this.persistenceFailure) {
+      throw new Error("AuditLog persistence has failed; refusing further appends");
+    }
     const prev_hash =
       this.entries.length === 0
         ? "GENESIS"
@@ -57,11 +61,16 @@ export class AuditLog {
     const index = this.entries.length;
     const entry_hash = this.computeHash(index, log, prev_hash);
     const entry: AuditEntry = { index, log, prev_hash, entry_hash };
-    this.entries.push(entry);
 
     if (this.filepath) {
-      appendFileSync(this.filepath, JSON.stringify(entry) + "\n");
+      try {
+        appendFileSync(this.filepath, JSON.stringify(entry) + "\n");
+      } catch (error) {
+        this.persistenceFailure = true;
+        throw error;
+      }
     }
+    this.entries.push(entry);
     return entry;
   }
 
@@ -69,6 +78,7 @@ export class AuditLog {
    * Verify the chain. Returns true iff all hashes are consistent.
    */
   verify(): boolean {
+    if (this.persistenceFailure) return false;
     let prev_hash = "GENESIS";
     for (const entry of this.entries) {
       const expected = this.computeHash(entry.index, entry.log, prev_hash);

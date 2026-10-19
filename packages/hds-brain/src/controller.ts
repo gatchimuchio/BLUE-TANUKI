@@ -1,5 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type {
+  GoalGovernanceAuthorization,
+  GoalGovernanceEvent,
+  GoalGovernanceConfig,
   InboundRequest,
   ExecuteCommand,
   ExecuteFeedback,
@@ -52,14 +55,15 @@ import type {
   ScheduleLifecycleLog,
   SuspendedRequest,
   LLMToolCandidateAssessment,
+  AuditRecord,
 } from "./types.js";
-import type { GoalGovernanceConfig } from "@blue-tanuki/protocol";
 import { frame } from "./frame.js";
 import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
-import { GoalGovernanceLedger } from "./goal_governance.js";
+import { GoalGovernanceLedger, goalGovernanceEventDigest } from "./goal_governance.js";
+import { goalPurposeChangeApprovalTarget } from "./approval_policy.js";
 import { model } from "./model.js";
 import { commit } from "./commit.js";
-import { AuditLog } from "./audit.js";
+import { AuditLog, type AuditEntry } from "./audit.js";
 import { normalizeForDetection } from "./normalization.js";
 import {
   DetectorRegistry,
@@ -261,6 +265,97 @@ export interface ResumeAuditOptions {
   token_kind?: ResumeAuditTrace["token_kind"];
 }
 
+type GoalPurposeChangeEvent = Extract<GoalGovernanceEvent, { event_kind: "purpose_change" }>;
+type GoalPurposeChangeCommitLog = AuthorityEventLog & {
+  event: "goal_purpose_change_committed";
+  goal_governance_event: GoalPurposeChangeEvent;
+  goal_governance_authorization: GoalGovernanceAuthorization;
+};
+
+type GoalPurposeChangeCommitResult =
+  | { readonly ok: true; readonly event_ref: string; readonly goal_ref: string; readonly version: number; readonly purpose_digest: string; readonly effective_from: number }
+  | { readonly ok: false; readonly reason: "goal_governance_unavailable" | "audit_not_persistent" | "audit_invalid" | "approval_not_verified" | "purpose_version_conflict" | "event_invalid" | "audit_append_failed" };
+
+function goalPurposeChangeReviewTarget(input: {
+  goal_ref: string;
+  prior_version: number;
+  prior_purpose_digest: string;
+  new_purpose_digest: string;
+}): string {
+  return goalPurposeChangeApprovalTarget(input);
+}
+
+function isGoalPurposeChangeCommitLog(log: AuditRecord): log is GoalPurposeChangeCommitLog {
+  return isGoalPurposeChangeCommitMarker(log) &&
+    log.goal_governance_event?.event_kind === "purpose_change" &&
+    log.goal_governance_authorization !== undefined;
+}
+
+function isGoalPurposeChangeCommitMarker(log: AuditRecord): log is AuthorityEventLog {
+  return "kind" in log && log.kind === "authority_event" && log.event === "goal_purpose_change_committed";
+}
+
+function goalPurposeChangeApprovalEvidence(
+  entries: readonly AuditEntry[],
+  input: {
+    request_id: string;
+    command_id: string;
+    actor: string;
+    target: string;
+    before_index?: number;
+  },
+): { readonly timestamp: number; readonly evaluation: ApprovalEvaluation } | null {
+  const asks = entries.filter(({ index, log }) => index < (input.before_index ?? Number.POSITIVE_INFINITY) &&
+    "kind" in log && log.kind === "approval_gate" && log.request_id === input.request_id &&
+    log.command_id === input.command_id && log.evaluation.decision === "ask" &&
+    log.evaluation.context.operation === "tool.call" && log.evaluation.context.command_id === input.command_id &&
+    log.evaluation.context.actor === input.actor && log.evaluation.context.target === input.target && log.evaluation.risk === "high" &&
+    log.evaluation.approval_level === "L3_final_review" && log.evaluation.final_review_required);
+  const approvals = entries.filter(({ index, log }) => index < (input.before_index ?? Number.POSITIVE_INFINITY) &&
+    "kind" in log && log.kind === "command_lifecycle" && log.request_id === input.request_id &&
+    log.command_id === input.command_id && log.phase === "approval_approved" &&
+    log.actor === input.actor && log.reason === "human_approval:approve");
+  const ask = asks[0];
+  const approved = approvals.find(({ index }) => !ask || index > ask.index);
+  const askLog = ask && "kind" in ask.log && ask.log.kind === "approval_gate" ? ask.log : null;
+  return askLog && approved ? { timestamp: approved.log.timestamp, evaluation: askLog.evaluation } : null;
+}
+
+function replayGoalPurposeChanges(audit: AuditLog, initial: GoalGovernanceLedger): GoalGovernanceLedger {
+  let ledger = initial;
+  const entries = audit.list();
+  for (const { index, log } of entries) {
+    if (!isGoalPurposeChangeCommitMarker(log)) continue;
+    if (!isGoalPurposeChangeCommitLog(log)) throw new Error("persisted goal purpose change record is malformed");
+    const event = log.goal_governance_event;
+    const authorization = log.goal_governance_authorization;
+    const target = goalPurposeChangeReviewTarget({
+      goal_ref: event.goal_ref,
+      prior_version: event.prior_version,
+      prior_purpose_digest: event.prior_purpose_digest,
+      new_purpose_digest: event.new_purpose_digest,
+    });
+    const approvalEvidence = log.request_id && log.command_id
+      ? goalPurposeChangeApprovalEvidence(entries, {
+        request_id: log.request_id,
+        command_id: log.command_id,
+        actor: log.actor,
+        target,
+        before_index: index,
+      })
+      : null;
+    if (approvalEvidence === null || event.authority_kind !== "owner" || event.recorded_at !== approvalEvidence.timestamp ||
+        authorization.authority_kind !== "owner" || authorization.authorized_at !== approvalEvidence.timestamp ||
+        authorization.event_digest !== goalGovernanceEventDigest(event)) {
+      throw new Error("persisted goal purpose change lacks a matching L3 approval record");
+    }
+    const appended = ledger.appendAuthorizedEvent(event, authorization);
+    if (!appended.ok) throw new Error("persisted goal purpose change does not extend the current J ledger");
+    ledger = appended.ledger;
+  }
+  return ledger;
+}
+
 export class HDSUpperController {
   private state: ControllerState = "IDLE";
   private readonly audit: AuditLog;
@@ -270,7 +365,7 @@ export class HDSUpperController {
   private readonly llm_route: LLMCommandRoute;
   private readonly self_health: ControllerSelfHealthOptions;
   private readonly goal_relation_tree?: ReadonlyGoalRelationTreeView;
-  private readonly goal_governance?: GoalGovernanceLedger;
+  private goal_governance?: GoalGovernanceLedger;
   private readonly operationPlans: OperationPlanLedger;
   private readonly issuedLLM = new Map<string, {
     command: ExecuteCommand;
@@ -309,7 +404,10 @@ export class HDSUpperController {
     if (opts.goal_governance !== undefined) {
       const built = GoalGovernanceLedger.create(opts.goal_governance);
       if (!built.ok) throw new Error("invalid goal governance configuration");
-      this.goal_governance = built.ledger;
+      if (!this.audit.verify()) throw new Error("goal governance requires a valid audit chain");
+      this.goal_governance = replayGoalPurposeChanges(this.audit, built.ledger);
+    } else if (this.audit.list().some(({ log }) => isGoalPurposeChangeCommitMarker(log))) {
+      throw new Error("persisted goal purpose changes require a base goal governance ledger");
     }
     this.self_health = {
       ...STANDALONE_SELF_HEALTH_DEFAULTS,
@@ -852,7 +950,7 @@ ${planControl.question}`,
 
   /** Append an explicit authority-ledger event into the same audit hash-chain. */
   onAuthorityEvent(
-    event: Exclude<AuthorityEventLog["event"], "cron_event_no_replay_acknowledged">,
+    event: Exclude<AuthorityEventLog["event"], "cron_event_no_replay_acknowledged" | "goal_purpose_change_committed">,
     opts: {
       request_id?: string | null;
       command_id?: string;
@@ -862,9 +960,6 @@ ${planControl.question}`,
       evaluation?: ApprovalEvaluation;
     } = {},
   ): void {
-    if (String(event) === "cron_event_no_replay_acknowledged") {
-      throw new Error("cron no-replay disposition must use the guarded HDS operation");
-    }
     const log: AuthorityEventLog = {
       kind: "authority_event",
       event,
@@ -880,6 +975,113 @@ ${planControl.question}`,
       timestamp: Date.now(),
     };
     this.audit.append(log);
+  }
+
+  /**
+   * Commit a delegated goal purpose change only after a matching, recorded L3
+   * review. The audit chain is the durable J event source; caller-supplied
+   * identity labels are compared with the reviewed lifecycle record and are
+   * not treated as proof of a person's identity.
+   */
+  commitGoalPurposeChangeAfterL3(input: {
+    readonly goal_ref: string;
+    readonly prior_version: number;
+    readonly prior_purpose_digest: string;
+    readonly new_purpose_digest: string;
+    readonly request_id: string;
+    readonly command_id: string;
+    readonly actor: string;
+    readonly evaluation: ApprovalEvaluation;
+  }): GoalPurposeChangeCommitResult {
+    const ledger = this.goal_governance;
+    if (!ledger) return { ok: false, reason: "goal_governance_unavailable" };
+    if (!this.audit.isPersistent()) return { ok: false, reason: "audit_not_persistent" };
+    if (!this.audit.verify()) return { ok: false, reason: "audit_invalid" };
+
+    const actor = input.actor.trim();
+    const request_id = input.request_id.trim();
+    const command_id = input.command_id.trim();
+    const target = goalPurposeChangeReviewTarget(input);
+    const evaluation = input.evaluation;
+    if (!actor || actor === "system" || !request_id || !command_id ||
+        evaluation.decision !== "ask" || evaluation.context.operation !== "tool.call" ||
+        evaluation.context.command_id !== command_id || evaluation.context.actor !== actor ||
+        evaluation.context.target !== target || evaluation.risk !== "high" ||
+        evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required) {
+      return { ok: false, reason: "approval_not_verified" };
+    }
+    const entries = this.audit.list();
+    const approvalEvidence = goalPurposeChangeApprovalEvidence(entries, { request_id, command_id, actor, target });
+    if (!approvalEvidence || JSON.stringify(approvalEvidence.evaluation) !== JSON.stringify(evaluation)) {
+      return { ok: false, reason: "approval_not_verified" };
+    }
+    const approvedAt = approvalEvidence.timestamp;
+
+    const current = ledger.project(Date.now()).goals.find((goal) => goal.goal_ref === input.goal_ref);
+    if (!current || current.goal_kind !== "delegated" || current.current_version !== input.prior_version ||
+        current.current_purpose_digest !== input.prior_purpose_digest ||
+        !/^[a-f0-9]{64}$/.test(input.new_purpose_digest) || input.new_purpose_digest === input.prior_purpose_digest) {
+      return { ok: false, reason: "purpose_version_conflict" };
+    }
+
+    const effective_from = Math.max(Date.now(), approvedAt);
+    const authorization_ref = `ga_${randomBytes(16).toString("hex")}`;
+    const event: GoalPurposeChangeEvent = {
+      event_ref: `ge_${randomBytes(16).toString("hex")}`,
+      event_kind: "purpose_change",
+      goal_ref: input.goal_ref,
+      source_ref: current.source_ref,
+      goal_kind: "delegated",
+      prior_version: input.prior_version,
+      new_version: input.prior_version + 1,
+      prior_purpose_digest: input.prior_purpose_digest,
+      new_purpose_digest: input.new_purpose_digest,
+      authority_kind: "owner",
+      authorization_ref,
+      recorded_at: approvedAt,
+      effective_from,
+    };
+    const authorization: GoalGovernanceAuthorization = {
+      authorization_ref,
+      event_ref: event.event_ref,
+      event_digest: goalGovernanceEventDigest(event),
+      goal_ref: event.goal_ref,
+      event_kind: event.event_kind,
+      authority_kind: event.authority_kind,
+      authorized_at: approvedAt,
+    };
+    const appended = ledger.appendAuthorizedEvent(event, authorization);
+    if (!appended.ok) return { ok: false, reason: "event_invalid" };
+
+    const commitLog: GoalPurposeChangeCommitLog = {
+      kind: "authority_event",
+      event: "goal_purpose_change_committed",
+      request_id,
+      command_id,
+      actor,
+      reason: "matching_l3_review_committed_delegated_goal_purpose_change",
+      operation: evaluation.context.operation,
+      target_scope: evaluation.context.target_scope,
+      risk: evaluation.risk,
+      authority_trace: evaluation.authority_trace,
+      goal_governance_event: event,
+      goal_governance_authorization: authorization,
+      timestamp: effective_from,
+    };
+    try {
+      this.audit.append(commitLog);
+    } catch {
+      return { ok: false, reason: "audit_append_failed" };
+    }
+    this.goal_governance = appended.ledger;
+    return {
+      ok: true,
+      event_ref: event.event_ref,
+      goal_ref: event.goal_ref,
+      version: event.new_version,
+      purpose_digest: event.new_purpose_digest,
+      effective_from: event.effective_from,
+    };
   }
 
   /**

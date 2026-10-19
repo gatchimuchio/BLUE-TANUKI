@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { GoalGovernanceConfig, GoalGovernanceEvent } from "@blue-tanuki/protocol";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ExecuteCommand, GoalGovernanceAuthorization, GoalGovernanceConfig, GoalGovernanceEvent } from "@blue-tanuki/protocol";
 import { GOAL_GOVERNANCE_SCHEMA_VERSION } from "@blue-tanuki/protocol";
+import { evaluateApproval } from "../src/approval_policy.js";
+import { AuditLog } from "../src/audit.js";
 import { HDSUpperController } from "../src/controller.js";
 import { GoalGovernanceLedger, goalGovernanceEventDigest, purposeVersionForEventTime } from "../src/goal_governance.js";
 import { operationPlanDigest } from "../src/operation_plan.js";
@@ -278,7 +283,205 @@ describe("HDS goal governance consumer", () => {
     expect(withoutConfiguration.log.frame.goal_governance).toBeUndefined();
     expect(configured.log.frame.goal_governance?.goals.find((goal) => goal.goal_ref === delegated)?.current_version).toBe(2);
   });
+
+  it("commits a delegated purpose change only from the exact L3 review and replays it from the durable audit chain", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-goal-governance-audit-"));
+    const filepath = join(root, "audit.jsonl");
+    try {
+      const controller = new HDSUpperController({
+        audit: new AuditLog({ filepath }),
+        goal_governance: createConfig(),
+      });
+      const command = purposeChangeCommand(digest("7"));
+      const evaluation = evaluateApproval(command, [], { actor: "owner", default_mode: "full_access" });
+      expect(evaluation).toMatchObject({ decision: "ask", risk: "high", approval_level: "L3_final_review", final_review_required: true });
+      controller.onApprovalEvaluation(evaluation, { request_id: "owner-request" });
+      controller.onCommandLifecycle(command.id, "approval_approved", {
+        actor: "owner",
+        reason: "human_approval:approve",
+        request_id: "owner-request",
+      });
+
+      const committed = controller.commitGoalPurposeChangeAfterL3({
+        goal_ref: delegated,
+        prior_version: 2,
+        prior_purpose_digest: digest("3"),
+        new_purpose_digest: digest("7"),
+        request_id: "owner-request",
+        command_id: command.id,
+        actor: "owner",
+        evaluation,
+      });
+      expect(committed).toMatchObject({ ok: true, goal_ref: delegated, version: 3, purpose_digest: digest("7") });
+      expect(controller.getAudit().verify()).toBe(true);
+
+      const restarted = new HDSUpperController({
+        audit: new AuditLog({ filepath }),
+        goal_governance: createConfig(),
+      });
+      const projection = restarted.decide({ ...request, timestamp: Date.now() + 1_000 }).log.frame.goal_governance;
+      expect(projection?.goals.find((goal) => goal.goal_ref === delegated)).toMatchObject({
+        current_version: 3,
+        current_purpose_digest: digest("7"),
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a purpose change when the approved digest differs from the requested digest", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-goal-governance-audit-"));
+    const filepath = join(root, "audit.jsonl");
+    try {
+      const controller = new HDSUpperController({
+        audit: new AuditLog({ filepath }),
+        goal_governance: createConfig(),
+      });
+      const command = purposeChangeCommand(digest("7"));
+      const evaluation = evaluateApproval(command, [], { actor: "owner", default_mode: "full_access" });
+      controller.onApprovalEvaluation(evaluation, { request_id: "owner-request" });
+      controller.onCommandLifecycle(command.id, "approval_approved", {
+        actor: "owner",
+        reason: "human_approval:approve",
+        request_id: "owner-request",
+      });
+
+      expect(controller.commitGoalPurposeChangeAfterL3({
+        goal_ref: delegated,
+        prior_version: 2,
+        prior_purpose_digest: digest("3"),
+        new_purpose_digest: digest("8"),
+        request_id: "owner-request",
+        command_id: command.id,
+        actor: "owner",
+        evaluation,
+      })).toEqual({ ok: false, reason: "approval_not_verified" });
+      expect(controller.getAudit().list().some(({ log }) => "kind" in log && log.kind === "authority_event" &&
+        log.event === "goal_purpose_change_committed")).toBe(false);
+      expect(controller.getAudit().verify()).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not replay a bare goal event without its matching recorded L3 approval", () => {
+    const audit = new AuditLog();
+    const event: Extract<GoalGovernanceEvent, { event_kind: "purpose_change" }> = {
+      event_ref: "ge_0000000000000005",
+      event_kind: "purpose_change",
+      goal_ref: delegated,
+      source_ref: "F:0000000000000001",
+      goal_kind: "delegated",
+      prior_version: 2,
+      new_version: 3,
+      prior_purpose_digest: digest("3"),
+      new_purpose_digest: digest("8"),
+      authority_kind: "owner",
+      authorization_ref: "ga_0000000000000005",
+      recorded_at: 400,
+      effective_from: 450,
+    };
+    const authorization: GoalGovernanceAuthorization = {
+      authorization_ref: event.authorization_ref,
+      event_ref: event.event_ref,
+      event_digest: goalGovernanceEventDigest(event),
+      goal_ref: event.goal_ref,
+      event_kind: event.event_kind,
+      authority_kind: event.authority_kind,
+      authorized_at: event.recorded_at,
+    };
+    audit.append({
+      kind: "authority_event",
+      event: "goal_purpose_change_committed",
+      request_id: "owner-request",
+      command_id: "goal-purpose-change-command",
+      actor: "owner",
+      reason: "forged_without_review",
+      operation: "tool.call",
+      risk: "high",
+      goal_governance_event: event,
+      goal_governance_authorization: authorization,
+      timestamp: event.effective_from,
+    });
+
+    expect(() => new HDSUpperController({ audit, goal_governance: createConfig() }))
+      .toThrow(/matching L3 approval record/);
+  });
+
+  it("rejects a malformed goal event marker instead of silently skipping it during startup", () => {
+    const audit = new AuditLog();
+    audit.append({
+      kind: "authority_event",
+      event: "goal_purpose_change_committed",
+      request_id: "owner-request",
+      command_id: "goal-purpose-change-command",
+      actor: "owner",
+      reason: "incomplete_event",
+      timestamp: 500,
+    });
+    expect(() => new HDSUpperController({ audit, goal_governance: createConfig() }))
+      .toThrow(/record is malformed/);
+  });
+
+  it("fails closed when a persistent audit append fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-goal-governance-audit-"));
+    const filepath = join(root, "audit.jsonl");
+    const controller = new HDSUpperController({
+      audit: new AuditLog({ filepath }),
+      goal_governance: createConfig(),
+    });
+    const command = purposeChangeCommand(digest("7"));
+    const evaluation = evaluateApproval(command, [], { actor: "owner", default_mode: "full_access" });
+    controller.onApprovalEvaluation(evaluation, { request_id: "owner-request" });
+    controller.onCommandLifecycle(command.id, "approval_approved", {
+      actor: "owner",
+      reason: "human_approval:approve",
+      request_id: "owner-request",
+    });
+    rmSync(root, { recursive: true, force: true });
+
+    expect(controller.commitGoalPurposeChangeAfterL3({
+      goal_ref: delegated,
+      prior_version: 2,
+      prior_purpose_digest: digest("3"),
+      new_purpose_digest: digest("7"),
+      request_id: "owner-request",
+      command_id: command.id,
+      actor: "owner",
+      evaluation,
+    })).toEqual({ ok: false, reason: "audit_append_failed" });
+    expect(controller.getAudit().verify()).toBe(false);
+    expect(controller.getAudit().list().some(({ log }) => "kind" in log && log.kind === "authority_event" &&
+      log.event === "goal_purpose_change_committed")).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
 });
+
+function purposeChangeCommand(new_purpose_digest: string): ExecuteCommand {
+  return {
+    id: "goal-purpose-change-command",
+    type: "tool_call",
+    payload: {
+      tool_name: "goal.governance.change",
+      arguments: {
+        goal_ref: delegated,
+        prior_version: 2,
+        prior_purpose_digest: digest("3"),
+        new_purpose_digest,
+      },
+    },
+    constraints: {
+      allowed_tools: ["goal.governance.change"],
+      allowed_capabilities: ["tool:goal.governance.change"],
+    },
+    upstream_decision: {
+      frame_goal: "Review a delegated goal purpose update.",
+      model_abstraction: "test",
+      commit_hash: "a".repeat(64),
+      commit_decision: "ASSERT",
+    },
+  };
+}
 
 function withEvent(config: GoalGovernanceConfig, event: GoalGovernanceEvent): GoalGovernanceConfig {
   return {

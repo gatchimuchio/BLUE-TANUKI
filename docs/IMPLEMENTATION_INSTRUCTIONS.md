@@ -2,7 +2,26 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-GATEWAY-GOAL-GOVERNANCE-SOURCE`
+### 最新BUILD_BATCH：`QEB-01-D02.01-J-GOAL-PURPOSE-APPEND-REPLAY`
+
+開始HEAD／`origin/main`=`8b996036ee38d5fa11515d06fa1c424a81ee7df7`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、root`AGENTS.md`、作業標準、active指示、D02.01／D02.02、Gateway→HDSとApproval／Auditの接続実体を再読した。編集前のlocal recovery branch／remote backup tagはcurrent=`8b996036...`／previous=`73b8b858...`で一致。D01.03 stashは未変更。
+
+HDS `GoalGovernanceLedger`に、検証済みのowner purpose-change event／authorizationを追記して再構成するJ所有入口を追加した。HDS controllerは`goal.governance.change` tool callの承認targetをgoal ref・prior version・prior/new purpose digestへ束縛し、同一request／command／actor／targetのL3 `ask`評価と、同じ評価内容・actorの明示`human_approval:approve` lifecycle記録が監査鎖にある場合だけeventを永続appendする。再起動時はbase ledgerへ保存済みeventを順序通り再適用し、対応するL3監査証拠がなければ起動を拒否する。commit eventは任意の`onAuthorityEvent`から記録できない。
+
+eventはraw purpose textを保持せずdigestのみを保存する。これは credential-holder labelの一致を確認するもので、人間本人identityの証明やowner本人認証ではない。またHDS入口は永続audit pathが必要で、WebChat proposal入力・レビューUIから呼ぶconsumer、目的本文とdigestの一致検査、仕事ごとのpurpose-version選択・適用、Broker target identityはまだ未接続。したがってD02.01／D02.02は`BUILD_GAP`のまま。
+
+| 限定確認 | 結果 |
+|---|---|
+| HDS-BRAIN typecheck／build／workspace `pnpm typecheck`／`pnpm build` | PASS。workspace 15 projects。 |
+| HDS-BRAIN全test | PASS、28 files／304 tests。目的変更の承認束縛・再起動replay・裸event拒否・digest不一致拒否・audit append失敗時停止を含む。 |
+| `pnpm hds:standalone` | PASS。standalone出力のaudit chainとRuntime Invariantsを確認。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | すべてPASS。日本語基底の既存移行負債76件は注意として残存。 |
+| 全workspace tests／Gateway consumer接続／owner approval／実credential／実業務作用／QE_QC／QE_QA／5OS実機 | 未実施。 |
+| GitHub Actions | 未使用。今回の関連build・test・standaloneはWindows localで実行可能。D4-Pocket現行AGENTS §3.1の`workflow_dispatch`限定条件と、BLUE側へ反映済みのowner許可を確認した。 |
+
+C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実credential・実業務作用・公開／出荷判断なし。次consumerは専用owner credential由来のpurpose proposalを、目的本文が見える明示L3 reviewへ接続し、その承認後だけこのHDS入口を呼ぶGateway routeを実装すること。credential-holder classを人間identityと扱わない。続いてtaskごとのgoal/version選択・適用とBroker targetを同じHDS→Executor bindingへ接続する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-GATEWAY-GOAL-GOVERNANCE-SOURCE`
 
 開始HEAD／`origin/main`=`73b8b858e5196132232ae8565dd7eb2388352157`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、root`AGENTS.md`、作業標準、active指示、D02.01／D02.02、Gateway→HDSのgoal governance構成経路を再読した。編集前にlocal recovery branchとremote backup tagをcurrent=`73b8b858...`／previous=`40ca1061...`へ更新し、local／remote SHAを照合した。D01.03 stashは未変更。
 
