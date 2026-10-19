@@ -13,8 +13,9 @@ import { projectOperationPlanStatus } from "../src/serve_projection.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
-function request(content: string, user = "fixture-owner"): InboundRequest {
+function request(content: string, user = "fixture-owner", goal_criteria?: InboundRequest["goal_criteria"]): InboundRequest {
   return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user, timestamp: Date.now(), content,
+    ...(goal_criteria ? { goal_criteria } : {}),
     metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer" } });
 }
 function operationPlanRestoreCommand(): ExecuteCommand {
@@ -33,6 +34,10 @@ function canonicalMemoryRestoreCommand(store_key: "j_control" | "m_state" = "j_c
 }
 function recoveryCommandIdDigest(commandId: string): string {
   return createHash("sha256").update(commandId).digest("hex");
+}
+function noRequestCriteria(content: string, requestId: string) {
+  return { status: "not_provided" as const, request_id: requestId,
+    content_sha256: createHash("sha256").update(content, "utf8").digest("hex"), criteria: [], used_for_authority: false as const };
 }
 function plan(id: string, root: string): OperationPlan {
   const target = { kind: "directory" as const, id: root };
@@ -171,6 +176,51 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     }
   });
 
+  it("retains request criteria as a digest-only plan source and refuses an explicitly conflicting step", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-goal-criteria-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const criteria = { schema_version: "blue-tanuki.goal-criteria.v1" as const,
+      criteria: [{ criterion_ref: "private-criterion-reference", criterion_kind: "safety" as const,
+        tool_relations: [{ tool_name: "file.search", relation: "conflicts" as const }] }] };
+    try {
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      const origin = request("plan:compute find the fixture token", "fixture-owner", criteria);
+      const candidate = plan(origin.id, root);
+      await rig(hds, candidate).run(hds.decide(origin).command!);
+      const projection = hds.getRuntimeSnapshot().operation_plans;
+      expect(JSON.stringify(projection)).not.toContain("private-criterion-reference");
+
+      const restarted = new HDSUpperController({ operation_plan_state: store });
+      const reviewed = review(restarted, candidate, "search");
+      expect(reviewed.command).toBeNull();
+      expect(reviewed.log.commit.reason).toContain("plan_control_denied:plan_goal_criteria_conflict");
+      expect(reviewed.log.commit.reason).not.toContain("private-criterion-reference");
+      expect(JSON.stringify(restarted.getRuntimeSnapshot().operation_plans)).not.toContain("private-criterion-reference");
+    } finally {
+      store.close(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects restored criteria projected from a different request identity", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-goal-criteria-source-mismatch-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const candidate = plan("criteria-source-mismatch", root);
+    const projection = noRequestCriteria("synthetic request", candidate.request_id);
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal: "synthetic request",
+        request_goal_criteria: { ...projection, request_id: "another-request" },
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] }],
+    });
+    try {
+      store.compareAndSet(null, checkpoint);
+      expect(() => new HDSUpperController({ operation_plan_state: store }))
+        .toThrow("plan_checkpoint_goal_criteria_source_mismatch");
+    } finally {
+      store.close(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("selected-store restore gates plan use, rebases the live ledger, and holds only restored plans", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-live-restore-refresh-"));
     const store = new OperationPlanStateStore(join(root, "state.sqlite"));
@@ -197,6 +247,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       const restoredCheckpoint = OperationPlanCheckpointSchema.parse({
         schema_version: "operation-plan-state.v1",
         plans: [{ owner: "fixture-owner", channel: "webchat", goal: "restored synthetic plan",
+          request_goal_criteria: noRequestCriteria("restored synthetic plan", restored.request_id),
           revisions: [{ digest: operationPlanDigest(restored), plan: restored }],
           receipt_observations: [], bindings: [], results: [] }],
       });
@@ -308,6 +359,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const checkpoint = OperationPlanCheckpointSchema.parse({
       schema_version: "operation-plan-state.v1",
       plans: [{ owner: "fixture-owner", channel: "webchat", goal: "unresolved plan-store restore",
+        request_goal_criteria: noRequestCriteria("unresolved plan-store restore", candidate.request_id),
         revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] }],
     });
     const planIdDigest = operationPlanDigest(candidate.plan_id);
@@ -358,6 +410,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const restoredCheckpoint = OperationPlanCheckpointSchema.parse({
       schema_version: "operation-plan-state.v1",
       plans: candidates.map((candidate) => ({ owner: "fixture-owner", channel: "webchat", goal: "synthetic restored plan",
+        request_goal_criteria: noRequestCriteria("synthetic restored plan", candidate.request_id),
         revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] })),
     });
     try {
@@ -536,6 +589,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const checkpoint = OperationPlanCheckpointSchema.parse({
       schema_version: "operation-plan-state.v1",
       plans: [residual, clean, afterRestore].map((candidate) => ({ owner: "fixture-owner", channel: "webchat", goal: "synthetic recovery test",
+        request_goal_criteria: noRequestCriteria("synthetic recovery test", candidate.request_id),
         revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] })),
     });
     store.compareAndSet(null, checkpoint);

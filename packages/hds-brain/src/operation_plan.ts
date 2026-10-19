@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   getOperationDescriptor, inspectOperationCommandExecutionResult,
-  OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
+  GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding, type OperationStep,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
@@ -11,6 +11,7 @@ import {
 } from "@blue-tanuki/protocol";
 import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
+import { assessCandidateGoalCriteria, projectRequestGoalCriteria } from "./candidate_criteria.js";
 import { buildResultMemoryCommit, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
 import type { ResultObservationCitation, ResultObservationProjection } from "./operation_result_reflection.js";
 import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
@@ -284,6 +285,10 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
     const first = p.revisions[0]!.plan;
     if (ids.has(first.plan_id)) throw new Error("plan_checkpoint_duplicate_identity");
     ids.add(first.plan_id);
+    if (p.request_goal_criteria && (p.request_goal_criteria.request_id !== first.request_id ||
+        p.request_goal_criteria.content_sha256 !== createHash("sha256").update(p.goal, "utf8").digest("hex"))) {
+      throw new Error("plan_checkpoint_goal_criteria_source_mismatch");
+    }
     for (const revision of p.revisions) {
       candidatePlan(revision.plan);
       if (revision.digest !== operationPlanDigest(revision.plan) || revision.plan.plan_id !== first.plan_id ||
@@ -764,7 +769,9 @@ export class OperationPlanLedger {
     if (plan.request_id !== expected || this.state.plans.some((p) => p.revisions[0]!.plan.plan_id === plan.plan_id)) {
       throw new Error("plan_source_binding_mismatch");
     }
+    const requestGoalCriteria = GoalCriteriaProjectionSchema.parse(projectRequestGoalCriteria(origin, origin.content));
     this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: origin.content,
+      request_goal_criteria: requestGoalCriteria,
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
   }
 
@@ -799,6 +806,11 @@ export class OperationPlanLedger {
     if (!hasConnectedPlanTarget(step)) throw new Error("plan_target_resolver_not_connected");
     const goalPurposeBinding = this.resolveGoalPurposeBinding(control.goal_purpose_binding, p.goal_purpose_binding);
     // 期限切れrevisionや不正stepの要求では復元holdを消さない。
+    if (recoveryHold && !this.recoveryDependenciesVerified(p, recoveryHold)) {
+      throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
+    }
+    const goalCriteriaIssue = this.requestGoalCriteriaIssue(p, step);
+    if (goalCriteriaIssue) throw new Error(goalCriteriaIssue);
     if (recoveryHold && !this.releaseRecoveryHoldForFreshReview(p)) {
       throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
     }
@@ -933,6 +945,7 @@ export class OperationPlanLedger {
     if (!this.goalPurposeBindingIsCurrent(match.p.goal_purpose_binding) ||
         match.b.status !== "selected" || !currentRevision || currentRevision.digest !== match.b.revision_digest ||
         !revision || !step || stepDigest(step) !== match.b.step_digest || !descriptor ||
+        this.requestGoalCriteriaIssue(match.p, step) !== undefined ||
         match.b.operation !== descriptor.operation_id || command.type !== "tool_call" ||
         command.payload.tool_name !== descriptor.tool_name || commandPayloadDigest(command) !== match.b.payload_digest ||
         operationPlanDigest(command) !== match.b.command_digest ||
@@ -958,6 +971,7 @@ export class OperationPlanLedger {
       parameters_digest: operationPlanDigest(match.b.prepared_step.parameters ?? {}),
       preconditions_digest: operationPlanDigest(match.b.prepared_step.preparation?.preconditions ?? []),
       goal_purpose_binding: match.p.goal_purpose_binding ?? null,
+      request_goal_criteria_digest: operationPlanDigest(match.p.request_goal_criteria ?? null),
       command_digest: match.b.command_digest,
     });
   }
@@ -978,6 +992,7 @@ export class OperationPlanLedger {
     const { p, b } = match;
     if (!this.goalPurposeBindingIsCurrent(p.goal_purpose_binding)) return false;
     const step = p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === b.step_id);
+    if (!step || this.requestGoalCriteriaIssue(p, step) !== undefined) return false;
     const prepared = prepareOperationPlan(p.revisions.at(-1)!.plan, { now_ms: Date.now(), results: p.results, observations: [] });
     const current = prepared.kind === "inspected" ? prepared.plan.steps.find((s) => s.step_id === b.step_id) : undefined;
     return command.id === b.command_id && b.status === "selected" && !!step && stepDigest(step) === b.step_digest &&
@@ -1341,6 +1356,27 @@ export class OperationPlanLedger {
       this.resolveGoalPurposeBinding(binding, binding);
       return true;
     } catch { return false; }
+  }
+
+  /** Request-declared conflicts constrain plan selection; support remains an unverified claim. */
+  private requestGoalCriteriaIssue(p: PlanState, step: OperationStep): string | undefined {
+    const projection = p.request_goal_criteria;
+    if (!projection) return "plan_goal_criteria_source_unavailable";
+    const requestId = p.revisions[0]!.plan.request_id;
+    const contentSha256 = createHash("sha256").update(p.goal, "utf8").digest("hex");
+    if (projection.request_id !== requestId || projection.content_sha256 !== contentSha256 || projection.status === "invalid") {
+      return "plan_goal_criteria_source_invalid";
+    }
+    if (projection.status === "not_provided") return undefined;
+    const descriptor = getOperationDescriptor(step.operation);
+    if (!descriptor) return "plan_goal_criteria_operation_unavailable";
+    const assessment = assessCandidateGoalCriteria(descriptor.tool_name ?? descriptor.operation_id, projection, {
+      request_id: requestId,
+      content_sha256: contentSha256,
+    });
+    if (assessment.reason_code === "criteria_invalid") return "plan_goal_criteria_source_invalid";
+    if (assessment.outcome === "conflicts") return "plan_goal_criteria_conflict";
+    return undefined;
   }
 
   private ownedPlan(id: string, caller: InboundRequest): PlanState {

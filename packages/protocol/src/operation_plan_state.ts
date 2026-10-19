@@ -2,6 +2,7 @@ import { z } from "zod";
 import { OperationPlanSchema, OperationJsonValueSchema, OperationTargetSchema, OperationStepSchema } from "./operation_core.js";
 import { ExecutionAdmissionSchema } from "./execution_result_delivery.js";
 import { MemoryCommitV2Schema, MemoryUpdateReceiptV1Schema } from "./状態更新契約.js";
+import { GoalCriteriaProjectionSchema } from "./goal_criteria.js";
 
 const Id = z.string().min(1).max(200);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -91,6 +92,7 @@ export const OperationPlanCheckpointSchema = z.object({
   plans: z.array(z.object({
     owner: Id, channel: Id, goal: z.string().min(1).max(200_000),
     goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),
+    request_goal_criteria: GoalCriteriaProjectionSchema.optional(),
     revisions: z.array(z.object({ digest: Digest, plan: OperationPlanSchema }).strict()).min(1).max(100),
     receipt_observations: z.array(OperationPlanExternalReceiptObservationSchema).max(100).default([]),
     bindings: z.array(z.object({

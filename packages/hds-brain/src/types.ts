@@ -5,6 +5,7 @@ import type {
   ExecuteFeedback,
   GoalGovernanceAuthorization,
   GoalGovernanceEvent,
+  GoalCriteriaProjection,
   OperationRequest,
 } from "@blue-tanuki/protocol";
 import type { OutputAuditLog, ProjectionOutputAuditLog } from "./output_audit.js";
@@ -365,21 +366,7 @@ export type CandidateCheckOutcome = "pass" | "fail" | "unknown";
 export type CandidateSemanticOutcome = "supports" | "conflicts" | "not_assessed";
 export type CandidateAdoptionDisposition = "eligible_for_goal_review" | "held" | "rejected";
 
-export interface RequestGoalCriteriaProjection {
-  status: "not_provided" | "provided" | "invalid";
-  request_id: string;
-  content_sha256: string;
-  criteria_digest?: string;
-  criteria: Array<{
-    criterion_ref_digest: string;
-    criterion_kind: "objective" | "safety";
-    tool_relations: Array<{
-      tool_name_digest: string;
-      relation: "supports" | "conflicts";
-    }>;
-  }>;
-  used_for_authority: false;
-}
+export type RequestGoalCriteriaProjection = GoalCriteriaProjection;
 
 export interface CandidateGoalCriteriaAssessment {
   outcome: "supports" | "conflicts" | "unknown";
