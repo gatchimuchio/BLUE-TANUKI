@@ -2,7 +2,24 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-J-GOAL-PURPOSE-APPEND-REPLAY`
+### 最新BUILD_BATCH：`QEB-01-D02.01-WEBCHAT-PURPOSE-CHANGE-L3-J-COMMIT`
+
+開始HEAD／`origin/main`=`4d5e8528b674bc39ed452309f36258e52c97ea78`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、WebChat owner credential、Gateway approval、HDS GoalGovernance実経路を再読した。編集前local recovery branch／remote backup tagはcurrent=`4d5e852...`／previous=`8b996036...`で一致。D01.03 stashは未変更。
+
+専用`POST /owner/goal-purpose-change`経路からowner credential-holderのgoal目的案を受け、HDSには固定説明文とgoal ref／現行version／旧新purpose digestだけを渡す。提案者labelとL3 reviewer labelを監査上区別するが、どちらも人間本人identityの証明ではない。本文はGatewayのpending approvalメモリに限って保持し、queue／Complete History／HDS auditには本文を載せない。本文確認は認証済みのno-store content-review経路で正確なUnicode本文を表示し、現在の目的版・digest・command digestが一致したレビューだけを承認へ渡す。明示L3承認後に限りJの永続append入口を呼び、version 2以降の投影と再起動replayを確認した。この用途はExecutor／LLM／providerを呼ばず、実行済みの仕事や外部作用を表さない。Gateway再起動でpending本文を失った場合は復旧せず、新しい提案を要求する。
+
+| 限定確認 | 結果 |
+|---|---|
+| `pnpm typecheck`／`pnpm build` | PASS。workspace 15 projects。 |
+| HDS `goal_governance.test.ts`／WebChat `webchat.test.ts`／Gateway `document_organization_entry.test.ts` | PASS、3 files／107 tests。 |
+| `pnpm hds:standalone` | PASS。standalone audit chain／Runtime Invariantsを確認。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は注意として残存。 |
+| 全workspace tests／ownerの実操作／実credential／provider／Executor／QE_QC／QE_QA／5OS実機 | 未実施。 |
+| GitHub Actions | 未使用。必要なWindows build・対象testはlocalで実行可能。D4-Pocket条件に従い、OS不足・artifact生成・localでは不足する重い検査に該当しないためworkflowを起動していない。 |
+
+D02.01／D02.02は`BUILD_GAP`を維持する。今回のpurpose proposal→no-store本文確認→明示L3→J append/replayはこの範囲で`WIRED`。次consumerは仕事ごとにpurpose versionを選び、Brokerのcanonical target identityと同じHDS→Executor bindingへ接続すること。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。別repo変更、実業務作用、公開・出荷判断なし。実装commit=`a81abe4f8ae4d82b833c559b4cdcf8f143d7b404`を`main`へpush済み。push直後remote `main`は同commit。開始HEADはcurrent recovery branch／tagに、previous=`8b996036...`はprevious recovery branch／tagに保全。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-J-GOAL-PURPOSE-APPEND-REPLAY`
 
 開始HEAD／`origin/main`=`8b996036ee38d5fa11515d06fa1c424a81ee7df7`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、root`AGENTS.md`、作業標準、active指示、D02.01／D02.02、Gateway→HDSとApproval／Auditの接続実体を再読した。編集前のlocal recovery branch／remote backup tagはcurrent=`8b996036...`／previous=`73b8b858...`で一致。D01.03 stashは未変更。
 
