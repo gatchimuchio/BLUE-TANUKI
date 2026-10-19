@@ -2,7 +2,15 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-TASK-PURPOSE-OWNER-L3-GATE`
+### 最新BUILD_BATCH：`QEB-01-D02.01-RELATION-CHECKPOINT-RESTART-VERIFICATION`
+
+開始HEAD／`origin/main`=`f7bc525afbbbed3c6ed2b980c1193d6159803f7b`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行AGENTS §3.1を再読した。D4条件の範囲内利用は許可済みだが、このSQLite／audit checkpoint検証はWindows localで可能なためGitHub Actions／workflowは使っていない。
+
+`apps/gateway/test/operation_plan_runtime.test.ts`へ、合成task・目的・宛先を使う永続HDS／OperationPlan統合確認を追加した。ownerのL3 task-purpose reviewを監査鎖とSQLite checkpointへ保存してprocess restart相当の新規controller／storeで再読込し、同じrevisionでは`owner_review_status=verified`となってstep reviewが通常の別L3 operationへ進み、HDS execution source binding digestが作られることを確認する。作用commandは実行しない。revisionを更新するとrelationはstaleになり、旧commandはcurrentでなくなってexecution source bindingの再発行とstep reviewが拒否される。同じcheckpointを最終relationイベントだけ欠く有効なaudit prefixで再読込した場合はowner reviewがinvalid／relationがunverifiedとなり、step reviewが拒否される。raw purpose本文・実credential・provider・外部作用は使わない。
+
+確認結果：Gateway `operation_plan_runtime.test.ts` 20/20 PASS、test sourceへの直接TypeScript検査PASS、workspace `pnpm typecheck` PASS、`pnpm build` PASS（15 workspace projects）、`pnpm docs:check` PASS、日本語基底移行負債76件の既存注意を確認、`pnpm validate:repo-health` PASS、`git diff --check` PASS。D02.01／D02.02は`BUILD_GAP`を維持する。これは一つの永続L3 review/checkpoint経路の確認であり、D02.02のprocess境界認証・epoch／期限・再送／別host拒否、他Broker targetのcanonical identity、全仕事の結果→M→帰還を証明しない。次は委任済みgoal／purpose版をBrokerのcanonical target／version resolverへつなぐproducer・consumerを現物から特定して進める。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-TASK-PURPOSE-OWNER-L3-GATE`
 
 開始HEAD／`origin/main`=`be91748f04ddb04980c8f865bd7eafd9caeb075b`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行AGENTS §3.1を本batch開始時に再読した。ownerはD4のGitHub Actions使用条件の参照と条件内利用を許可した。D4条件はローカルで実行困難なOS検査・artifact生成・重い試験に限定し、`workflow_dispatch`のみとする。本batchの対象確認はWindowsローカルで可能なためActions／workflowは使っていない。
 
@@ -14,7 +22,7 @@ HDSは持続監査鎖、L3 ask、同じcommandのcontent-reviewed記録、resume
 
 限定確認: HDS `goal_governance.test.ts` 14/14、WebChat `webchat.test.ts` 92/92、workspace `pnpm typecheck` PASS、`pnpm build` PASS（15 workspace projects）、`pnpm hds:standalone` PASS、`pnpm smoke:serve` PASS（stub応答・audit persistence／verify）、`pnpm doctor` exit 0、`pnpm docs:check` PASS、`pnpm validate:repo-health` PASS、`git diff --check` PASS。日本語基底の移行負債76件は既存注意。全workspace tests、QE_QC／QE_QA、5OS実機、実providerはこのbatchの証拠範囲外。D02.01／D02.02を`BUILD_GAP`のままとし、次はaudit-backed relation reviewのOperation Plan checkpoint再読込・process restart後も同じrevisionにだけ結び付くこと、および未審査・stale stateがstep review／execution sealで閉じることを検証する。全Broker target canonical identityと仕事全体の結果→M→帰還も未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。開始復元点=`be91748...`。GitHub Actions未使用。
 
-### 前回BUILD_BATCH：`QEB-01-D02.01-TASK-PURPOSE-RELATION-CANDIDATE`
+### 前々回BUILD_BATCH：`QEB-01-D02.01-TASK-PURPOSE-RELATION-CANDIDATE`
 
 開始HEAD／`origin/main`=`d895b27cd2cb7f5140ef318b2cbeed6ac4d560cd`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行AGENTS §3.1を再読した。開始時の復元点はHEAD `d895b27...`。D4 §3.1とBLUE向け反映済み条件を再照合した。対象の局所確認はWindowsで実行できるためGitHub Actions／workflowは使用していない。
 

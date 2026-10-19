@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { Executor, createExecutorApprovalAuthority, ToolRegistry, fileSearchTool } from "@blue-tanuki/core";
+import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { Executor, createExecutorApprovalAuthority, executorCommandDigest, ToolRegistry, fileSearchTool } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema, type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
@@ -153,6 +153,198 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).plans[0]?.goal_purpose_binding_status).toBe("required");
     } finally {
       store.close(); vi.unstubAllEnvs(); vi.useRealTimers(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("revalidates durable owner task-purpose review after restart and blocks missing-audit or stale-revision bindings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-purpose-review-restart-"));
+    const auditPath = join(root, "audit.jsonl");
+    const incompleteAuditPath = join(root, "audit-before-relation-review.jsonl");
+    const initialStatePath = join(root, "initial-state.sqlite");
+    const verifiedStatePath = join(root, "verified-state.sqlite");
+    const incompleteStatePath = join(root, "incomplete-state.sqlite");
+    const purposeDirectory = join(root, "private-state", "goal-purpose-memory");
+    await mkdir(purposeDirectory, { recursive: true });
+    const purposeMemory = {
+      private_state_root: join(root, "private-state"),
+      database_path: join(purposeDirectory, "j-control.sqlite"),
+      memory_database_path: join(purposeDirectory, "m-state.sqlite"),
+    };
+    const purposeText = "Send only this fixed synthetic message to inspection@example.invalid after separate owner approval.";
+    const purposeDigest = createHash("sha256").update(purposeText, "utf8").digest("hex");
+    const task = "Send the fixed synthetic message to inspection@example.invalid after separate owner approval.";
+    const binding = { goal_ref: "goal_0123456789abcdef", purpose_version: 3, purpose_digest: purposeDigest };
+    const planRequestId = randomUUID();
+    const candidate = gmailSendPlan(planRequestId, {
+      operation: "message.send", to: "inspection@example.invalid", subject: "synthetic", body_text: "fixed fixture",
+    });
+    let initialStore: OperationPlanStateStore | undefined;
+    let initialHds: HDSUpperController | undefined;
+    let verifiedStore: OperationPlanStateStore | undefined;
+    let verifiedHds: HDSUpperController | undefined;
+    let incompleteStore: OperationPlanStateStore | undefined;
+    let incompleteHds: HDSUpperController | undefined;
+    try {
+      initialStore = new OperationPlanStateStore(initialStatePath);
+      initialHds = new HDSUpperController({
+        audit: new AuditLog({ filepath: auditPath }),
+        operation_plan_state: initialStore,
+        goal_governance: goalGovernanceConfig(),
+        goal_purpose_memory: purposeMemory,
+      });
+
+      const purposeChangeRequestId = randomUUID();
+      const purposeChangeCommand: ExecuteCommand = {
+        id: randomUUID(), type: "tool_call",
+        payload: { tool_name: "goal.governance.change", arguments: {
+          goal_ref: binding.goal_ref, prior_version: 2, prior_purpose_digest: "e".repeat(64),
+          new_purpose_digest: purposeDigest,
+        } },
+        constraints: { allowed_tools: ["goal.governance.change"], allowed_capabilities: ["tool:goal.governance.change"] },
+        upstream_decision: { request_id: purposeChangeRequestId, frame_goal: "Review a delegated goal purpose update.",
+          model_abstraction: "test", commit_hash: "a".repeat(64), commit_decision: "ASSERT" },
+      };
+      const purposeEvaluation = evaluateApproval(purposeChangeCommand, [], {
+        actor: "webchat-owner-token-holder", default_mode: "full_access",
+      });
+      expect(purposeEvaluation).toMatchObject({ decision: "ask", risk: "high",
+        approval_level: "L3_final_review", final_review_required: true });
+      initialHds.onApprovalEvaluation(purposeEvaluation, { request_id: purposeChangeRequestId });
+      initialHds.onCommandLifecycle(purposeChangeCommand.id, "approval_approved", {
+        actor: "webchat-resume-token-holder", reason: "human_approval:approve", request_id: purposeChangeRequestId,
+      });
+      expect(initialHds.commitGoalPurposeChangeAfterL3({
+        goal_ref: binding.goal_ref, prior_version: 2, prior_purpose_digest: "e".repeat(64),
+        new_purpose_digest: purposeDigest, purpose_text: purposeText, request_id: purposeChangeRequestId,
+        command_id: purposeChangeCommand.id, proposal_actor: "webchat-owner-token-holder",
+        actor: "webchat-resume-token-holder", evaluation: purposeEvaluation,
+      })).toMatchObject({ ok: true, version: 3, purpose_digest: purposeDigest });
+
+      const computeRequest = createGatewayInternalInboundRequest({
+        id: randomUUID(), channel: "webchat", user: "fixture-owner",
+        content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: binding })}`, timestamp: Date.now(),
+        metadata: {
+          "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.version": "operation-core.v1",
+          "blue_tanuki.operation_core.request_id": planRequestId,
+        },
+      });
+      const computeDecision = initialHds.decide(computeRequest);
+      if (computeDecision.command?.type !== "llm_call") throw new Error("plan computation did not produce a C request");
+      initialHds.onFeedback({
+        command_id: computeDecision.command.id, status: "success",
+        result: { operation_core: { status: "valid_plan", plan: candidate,
+          goal_purpose_relation: { outcome: "supports", evidence: [{ task_quote: task, purpose_quote: purposeText }] } } },
+        metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 },
+      });
+      expect(review(initialHds, candidate, "send", binding).log.commit.reason)
+        .toContain("plan_control_denied:plan_goal_purpose_relation_unverified");
+
+      const currentPlan = initialHds.getRuntimeSnapshot().operation_plans.plans[0];
+      if (!currentPlan) throw new Error("computed plan checkpoint was not persisted");
+      const initialRevisionDigest = currentPlan.revision_digest;
+      const prepared = initialHds.prepareOperationPlanGoalPurposeRelationReview(
+        currentPlan.plan_id, currentPlan.revision_digest, "supports");
+      const relationRequestId = randomUUID();
+      const proposalActor = "webchat-owner-token-holder";
+      const reviewerActor = "webchat-resume-token-holder";
+      const relationDecision = initialHds.decide(createGatewayInternalInboundRequest({
+        id: relationRequestId, channel: "webchat", user: proposalActor,
+        content: "Owner submitted a task-purpose relation assessment for L3 review.", timestamp: Date.now() + 1,
+        metadata: {
+          "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "approval",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.goal_purpose_relation_review.version": "v1",
+          "blue_tanuki.tool_call": { tool_name: "goal.governance.review_task_purpose", arguments: prepared.args },
+        },
+      }));
+      if (!relationDecision.command) throw new Error("owner task-purpose review did not produce an HDS command");
+      const relationEvaluation = evaluateApproval(relationDecision.command, [], {
+        actor: proposalActor, default_mode: "full_access",
+      });
+      expect(relationEvaluation).toMatchObject({ decision: "ask", risk: "high",
+        approval_level: "L3_final_review", final_review_required: true });
+      initialHds.onApprovalEvaluation(relationEvaluation, { request_id: relationRequestId });
+      const relationCommandDigest = executorCommandDigest(relationDecision.command);
+      expect(initialHds.recordOperationPlanGoalPurposeRelationContentReview({
+        args: prepared.args, request_id: relationRequestId, command_id: relationDecision.command.id,
+        proposal_actor: proposalActor, command_digest: relationCommandDigest,
+      })).toBe(true);
+      initialHds.onCommandLifecycle(relationDecision.command.id, "approval_approved", {
+        actor: reviewerActor, reason: "human_approval:approve", request_id: relationRequestId,
+      });
+      // This valid audit prefix includes the exact L3 ask, content review, and owner approval, but not the final relation event.
+      await copyFile(auditPath, incompleteAuditPath);
+      expect(initialHds.commitOperationPlanGoalPurposeRelationReviewAfterL3({
+        args: prepared.args, request_id: relationRequestId, command_id: relationDecision.command.id,
+        command_digest: relationCommandDigest, proposal_actor: proposalActor, reviewer_actor: reviewerActor,
+        content_review_digest: relationCommandDigest, evaluation: relationEvaluation,
+      })).toEqual({ ok: true, outcome: "supports" });
+      expect(initialHds.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_relation).toMatchObject({
+        status: "owner_reviewed_supports", owner_review_status: "verified", used_for_authority: false, may_execute: false,
+      });
+      expect(initialHds.getAudit().verify()).toBe(true);
+
+      initialHds.close(); initialHds = undefined;
+      initialStore.close(); initialStore = undefined;
+      await copyFile(initialStatePath, verifiedStatePath);
+      await copyFile(initialStatePath, incompleteStatePath);
+
+      verifiedStore = new OperationPlanStateStore(verifiedStatePath);
+      const verifiedController = new HDSUpperController({ audit: new AuditLog({ filepath: auditPath }),
+        operation_plan_state: verifiedStore, goal_governance: goalGovernanceConfig(), goal_purpose_memory: purposeMemory });
+      verifiedHds = verifiedController;
+      expect(verifiedController.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({
+        revision_digest: initialRevisionDigest,
+        goal_purpose_relation: {
+          status: "owner_reviewed_supports", owner_review_status: "verified", used_for_authority: false, may_execute: false,
+        },
+      });
+      const selected = review(verifiedController, candidate, "send", binding);
+      if (selected.command?.type !== "tool_call") throw new Error("verified plan did not reach its separately gated operation");
+      const operationApproval = evaluateApproval(selected.command, [], {
+        actor: "fixture-owner", default_mode: "full_access",
+      });
+      expect(operationApproval).toMatchObject({ decision: "ask", risk: "high",
+        approval_level: "L3_final_review", final_review_required: true });
+      expect(verifiedController.operationPlanCommandIsCurrent(selected.command)).toBe(true);
+      const executionBinding = verifiedController.createExecutionAuthorityBinding(selected.command);
+      expect(executionBinding.operation_plan_binding_digest).toMatch(/^[a-f0-9]{64}$/);
+
+      const reviewedCommand = selected.command;
+      const revisedPlan = structuredClone(candidate);
+      revisedPlan.steps[0]!.parameters!.subject = "revised synthetic";
+      const revision = verifiedController.getRuntimeSnapshot().operation_plans.plans[0]!;
+      const revisionDecision = verifiedController.decide(request(`plan:revise ${JSON.stringify({
+        plan_id: candidate.plan_id, expected_revision_digest: revision.revision_digest, plan: revisedPlan,
+      })}`));
+      if (!revisionDecision.command) throw new Error("plan revision did not produce its local commit command");
+      await rig(verifiedController, revisedPlan).run(revisionDecision.command);
+      expect(verifiedController.getRuntimeSnapshot().operation_plans.plans[0]?.revision_digest)
+        .not.toBe(initialRevisionDigest);
+      expect(verifiedController.operationPlanCommandIsCurrent(reviewedCommand)).toBe(false);
+      expect(() => verifiedController.createExecutionAuthorityBinding(reviewedCommand)).toThrow();
+      expect(review(verifiedController, revisedPlan, "send", binding).command).toBeNull();
+      expect(verifiedController.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_relation?.status)
+        .toBe("stale");
+
+      verifiedController.close(); verifiedHds = undefined;
+      verifiedStore.close(); verifiedStore = undefined;
+
+      incompleteStore = new OperationPlanStateStore(incompleteStatePath);
+      incompleteHds = new HDSUpperController({ audit: new AuditLog({ filepath: incompleteAuditPath }),
+        operation_plan_state: incompleteStore, goal_governance: goalGovernanceConfig(), goal_purpose_memory: purposeMemory });
+      expect(incompleteHds.getAudit().verify()).toBe(true);
+      expect(incompleteHds.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_relation).toMatchObject({
+        status: "unverified", owner_review_status: "invalid", used_for_authority: false, may_execute: false,
+      });
+      expect(review(incompleteHds, candidate, "send", binding).command).toBeNull();
+    } finally {
+      incompleteHds?.close(); incompleteStore?.close();
+      verifiedHds?.close(); verifiedStore?.close();
+      initialHds?.close(); initialStore?.close();
+      await rm(root, { recursive: true, force: true });
     }
   });
 
