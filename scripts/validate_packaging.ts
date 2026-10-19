@@ -290,6 +290,12 @@ function main(): void {
   const packageWindows = read("scripts/package_windows.ts");
   requireIncludes("scripts/package_windows.ts", packageWindows, "windows-x64-zip-installer");
   requireIncludes("scripts/package_windows.ts", packageWindows, "win-x64.zip");
+  requireIncludes(
+    "scripts/package_windows.ts",
+    packageWindows,
+    "packages/blue-tanuki/dist/native/blue-tanuki-windows-isolation.exe",
+  );
+  requireIncludes("scripts/package_windows.ts", packageWindows, "--work-root must be a child of .codex-tmp");
   requireIncludes("scripts/package_windows.ts", packageWindows, "requires_node_pnpm_git_from_user: false");
   requireIncludes("scripts/package_windows.ts", packageWindows, "installer_autostart: false");
   requireIncludes("scripts/package_windows.ts", packageWindows, "README_INSTALL_WINDOWS.txt");
@@ -363,6 +369,11 @@ function main(): void {
 
   const verifyWindowsPackage = read("scripts/verify_windows_package.ts");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "verifyWindowsPackage");
+  requireIncludes(
+    "scripts/verify_windows_package.ts",
+    verifyWindowsPackage,
+    "app/node_modules/@blue-tanuki/core/dist/native/blue-tanuki-windows-isolation.exe",
+  );
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "GUI-Shell");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "Start Menu");
   requireIncludes("scripts/verify_windows_package.ts", verifyWindowsPackage, "README_INSTALL_WINDOWS.txt");

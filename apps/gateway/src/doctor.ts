@@ -7,6 +7,7 @@ import {
   manifestPathFor,
   readManifest,
 } from "@blue-tanuki/protocol";
+import { shellExecIsolationProviderAvailable } from "@blue-tanuki/core";
 import {
   buildLLMCommandRouteFromEnv,
   listConfiguredLLMProviders,
@@ -1023,12 +1024,29 @@ async function checkFileRoot(env: NodeJS.ProcessEnv): Promise<CheckDraft> {
   }
 }
 
-function checkShellRoot(): CheckDraft {
+async function checkShellRoot(): Promise<CheckDraft> {
+  if (process.platform !== "win32") {
+    return {
+      id: "shell_root",
+      level: "warn",
+      label: "shell.exec isolation",
+      detail: "disabled: this OS does not have a verified shell isolation provider",
+    };
+  }
+  if (!(await shellExecIsolationProviderAvailable())) {
+    return {
+      id: "shell_root",
+      level: "warn",
+      label: "shell.exec isolation",
+      detail: "disabled: Windows AppContainer provider is not installed",
+    };
+  }
   return {
     id: "shell_root",
     level: "warn",
     label: "shell.exec isolation",
-    detail: "disabled: no verified OS-level process isolation provider is connected",
+    detail:
+      "Windows AppContainer/Job Object provider is installed; doctor does not launch a command or inspect the configured root, and each invocation still enforces its own root and lifecycle checks",
   };
 }
 
@@ -1381,7 +1399,7 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorReport>
   draftChecks.push(await checkSessionDir(env));
   draftChecks.push(await checkAuditDir(env));
   draftChecks.push(await checkFileRoot(env));
-  draftChecks.push(checkShellRoot());
+  draftChecks.push(await checkShellRoot());
   draftChecks.push(await checkBundledManifests(opts.manifest_root));
   draftChecks.push(await checkCompatibilityMatrix(opts.manifest_root));
   draftChecks.push(await checkDistributionReadiness(opts.distribution_root));

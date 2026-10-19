@@ -96,6 +96,7 @@ export type {
 } from "./builtin_types.js";
 export {
   invokeShellExec,
+  shellExecIsolationProviderAvailable,
   shellExecTool,
   type ShellExecOptions,
 } from "./shell_exec.js";

@@ -85,6 +85,7 @@ const REQUIRED_BUILT_FILES = [
   "packages/protocol/dist/index.js",
   "packages/hds-brain/dist/index.js",
   "packages/blue-tanuki/dist/index.js",
+  "packages/blue-tanuki/dist/native/blue-tanuki-windows-isolation.exe",
   "packages/channel-base/dist/index.js",
   "packages/channel-webchat/dist/index.js",
   "packages/channel-telegram/dist/index.js",
@@ -368,7 +369,24 @@ async function main(): Promise<void> {
   const nodeVersion = argValue("--node-version") ?? DEFAULT_NODE_VERSION;
   const defaultOut = path.join(root, "release/windows", `blue-tanuki-${pkg.version}-windows-x64-installer.zip`);
   const outFile = path.resolve(argValue("--out") ?? defaultOut);
-  const workRoot = path.join(root, ".codex-tmp/windows-package");
+  const tempRoot = path.join(root, ".codex-tmp");
+  const requestedWorkRoot = argValue("--work-root");
+  const workRoot = path.resolve(
+    root,
+    requestedWorkRoot ?? path.join(".codex-tmp", "windows-package"),
+  );
+  const workRootRelative = path.relative(tempRoot, workRoot);
+  if (
+    workRootRelative.length === 0 ||
+    workRootRelative === ".." ||
+    workRootRelative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(workRootRelative)
+  ) {
+    throw new Error("--work-root must be a child of .codex-tmp");
+  }
+  if (requestedWorkRoot && existsSync(workRoot)) {
+    throw new Error("--work-root already exists; choose a new temporary directory");
+  }
   const packageRoot = path.join(workRoot, "package");
   const appRoot = path.join(packageRoot, "app");
   const cacheDir = path.join(root, ".codex-tmp/windows-runtime-cache");

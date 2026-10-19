@@ -65,6 +65,7 @@ export {
   invokeBrowserSnapshot,
   invokeBrowserAutomation,
   invokeShellExec,
+  shellExecIsolationProviderAvailable,
   registerBuiltinTools,
   type FileWriteOptions,
   type FileDeleteOptions,

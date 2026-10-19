@@ -77,7 +77,7 @@
     { "path": "docs/WINDOWS_EVIDENCE_PACK.md", "sha256": "5c6567d6bb776b9e409c13885e532e2a2420efd5319a913ee1446c8495a044dd" },
     { "path": "docs/WINDOWS_FIRST_RUN.md", "sha256": "ff519a05e6a0560e26c5f37ecd661af687232a058ad85aa8817ea45a06bb3625" },
     { "path": "docs/WINDOWS_INSTALLER_GUIDE.md", "sha256": "9cbe3d91ae4582df5f80e6f23130a21483f1017bd2e56a57b6a16101bb506380" },
-    { "path": "docs/WINDOWS_PACKAGING_AUDIT.md", "sha256": "a74fc869abc10bc2e4551d820dc2078ad8f4be72694bc9f2becf60346ca71460" },
+    { "path": "docs/WINDOWS_PACKAGING_AUDIT.md", "sha256": "6e5b2cee67bf98bfcc96e0510f8dd25781dbe94338f37871184ac36f7ea06d46" },
     { "path": "docs/WINDOWS_UNINSTALL.md", "sha256": "7f8943b54f1381ea767d0132856357871204a45d8ac1cd2ee9a9ea37c3d50aea" },
     { "path": "install/installer/README.md", "sha256": "491e92311640f1c761292f22d6673f811ddf8194f82f5d9969ab678c4e66cd91" },
     { "path": "install/README.md", "sha256": "e3b9c8a6904a82c5bdb5a3f12587390fd71a593fec2475bdd698638dde779e66" },

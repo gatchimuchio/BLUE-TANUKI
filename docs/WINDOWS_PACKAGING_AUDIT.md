@@ -19,6 +19,7 @@ The package contains:
 - `BlueTanukiSetup.ps1`,
 - launcher and uninstall scripts,
 - built gateway and package `dist` outputs,
+- Windows `shell.exec` AppContainer and Job Object isolation helper in the `@blue-tanuki/core` runtime package,
 - physical runtime `node_modules` for `@blue-tanuki/*`, `ws`, and `zod`,
 - bundled Windows Node runtime zip,
 - docs and packaging scripts needed for diagnostics.
@@ -29,6 +30,7 @@ The package contains:
 
 - required installer entries,
 - required runtime package entries,
+- bundled Windows shell isolation helper,
 - bundled Node runtime declaration,
 - Start Menu and uninstall registration source text,
 - explicit owner autostart commands and default-disabled autostart boundary,

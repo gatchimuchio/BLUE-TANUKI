@@ -86,6 +86,7 @@ const REQUIRED_ENTRIES = [
   "app/node_modules/@blue-tanuki/protocol/package.json",
   "app/node_modules/@blue-tanuki/hds-brain/package.json",
   "app/node_modules/@blue-tanuki/core/package.json",
+  "app/node_modules/@blue-tanuki/core/dist/native/blue-tanuki-windows-isolation.exe",
   "app/node_modules/@blue-tanuki/channel-base/package.json",
   "app/node_modules/@blue-tanuki/channel-webchat/package.json",
   "app/node_modules/@blue-tanuki/channel-telegram/package.json",

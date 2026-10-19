@@ -2,7 +2,26 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-F01.02-SHELL-UNISOLATED-EXECUTION-FAIL-CLOSED`
+### 最新BUILD_BATCH：`QEB-01-F01.02-WINDOWS-APPCONTAINER-SHELL-PROCESS-LIFECYCLE`
+
+開始HEAD／`origin/main`=`67cd8a44a2eb1016772c2b081b13e829cb1c2694`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.02／D07.03、shell・doctor consumerを読み直した。D4-PocketのGitHub Actions条件はmanual `workflow_dispatch`限定。今回のWindows native buildと隔離経路はlocalで検証可能なためActions／workflow変更なし。編集前の復旧refsはlocal branch／remote backup tagともcurrent=`67cd8a44a2eb1016772c2b081b13e829cb1c2694`、previous=`4f1431d42f4a924e1a3f5c407cdf46d5c4226734`。
+
+`packages/blue-tanuki/native/windows-isolation`にRust `1.95.0-x86_64-pc-windows-msvc`／`Cargo.lock`固定のWindows providerを追加した。`shell.exec`はWindowsでのみnative providerを呼び、AppContainer（capabilityなし）とJob Objectへ対象を割当て、secret-like path／reparse pointを拒否し、合成shell rootだけへ読取・書込・実行ACLを一時付与する。コマンド環境はallowlistで組み直し、stdout／stderr・実行時間・memory・process countを上限化する。timeout／cancelまたは親終了後の直接子残留をJob単位で終了し、Job空とroot ACL復元が確認できない場合は成功結果を返さない。Windows以外は引き続きfail-closed。doctorはbuilt helper有無を確認するが、コマンド実行やroot inspectionは行わない。
+
+| 限定確認 | 結果 |
+|---|---|
+| `tools_builtin.test.ts` | PASS、56/56。AppContainer root内外の書込み、root ACL復元、credential様env非伝播、loopback接続拒否、親終了後の直接子終了、cancel／timeout後のJob空と遅延marker不在をWindows上で確認。 |
+| `doctor.test.ts` | PASS、49/49。built helper／未設定条件でdoctor projectionを確認。 |
+| Rust helper `cargo fmt -- --check`／`cargo test --locked --offline` | PASS。crate unit testsは0件。runtimeのOS確認はfocused TypeScript testsで行った。 |
+| `pnpm typecheck`／`pnpm build` | TypeScript compileは成功。後段の`clean.mjs`がOneDrive配下のreparsepoint `hds-brain/dist/goal_relations.js.map`で`EBUSY`となり、生成物掃除は不完全。HDSを`tsc -b --force`で再構築後、全workspace／15 projectの`pnpm build`はPASS。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は継続注意。 |
+| `pnpm validate:packaging`／`npm pack --dry-run --json` | PASS。npm package一覧に`dist/native/blue-tanuki-windows-isolation.exe`（283,136 bytes）を確認。 |
+| `pnpm package:windows`／`pnpm package:windows:verify` | PASS。新規一時work-rootからunsigned Windows installerを生成し、2,282 entries・helper同梱を検証。local証拠であり公開・配布していない。 |
+| GitHub Actions／実provider／実credential／業務作用／別repo変更 | 未実施。 |
+
+Windowsのこのshell consumer経路は`WIRED`。F01.02とD07.03全体は`BUILD_GAP`で、Linux native／macOS／Mobile provider、BUILD_COVERED、QE_QC／QE_QA、5OS実機、release readinessを示さない。AppContainer profileはWindows user単位で残る。異常なhelper強制終了ではroot ACLのSID ACEが残る可能性があり、次回provider呼出しのrevokeで回復する設計上の限界をREADMEに記録した。C08.03実provider保留、P13 owner-GO／公開保留、D4-Pocket／ミニドラ変更なし。次consumerはF01.02の残るOS execution boundaryを現物・OS別証拠から接続する。localで対象OSが使えない場合のみ、Active指示へ対象commit・目的・手動triggerを記録したActionsをD4条件の範囲で補助利用できる。
+
+### 前回BUILD_BATCH：`QEB-01-F01.02-SHELL-UNISOLATED-EXECUTION-FAIL-CLOSED`
 
 開始HEAD／`origin/main`=`4f1431d42f4a924e1a3f5c407cdf46d5c4226734`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.02／D07.03とshell／doctorの現行consumerを再読した。D4-Pocket現行AGENTS §3.1の条件はworkflow_dispatch限定。今回のWindows TypeScript経路はローカルで検査できるためActions／workflow追加なし。編集前のlocal recovery branch／remote backup tagはcurrent=`4f1431d42f4a924e1a3f5c407cdf46d5c4226734`、previous=`a3e71bebc22ac756fa78afafe409fd5de0e1ac14`。
 

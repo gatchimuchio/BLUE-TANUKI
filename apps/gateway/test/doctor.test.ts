@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { shellExecIsolationProviderAvailable } from "@blue-tanuki/core";
 import {
   runDoctor,
   formatTextReport,
@@ -885,8 +886,12 @@ describe("runDoctor — shell isolation state", () => {
     });
     const c = r.checks.find((x) => x.id === "shell_root");
     expect(c?.level).toBe("warn");
-    expect(c?.detail).toContain("disabled");
-    expect(c?.detail).toContain("no verified OS-level process isolation provider");
+    if (process.platform === "win32" && (await shellExecIsolationProviderAvailable())) {
+      expect(c?.detail).toContain("provider is installed");
+      expect(c?.detail).not.toContain("disabled");
+    } else {
+      expect(c?.detail).toContain("disabled");
+    }
   });
 
   it("does not inspect or disclose a configured root", async () => {
@@ -897,7 +902,11 @@ describe("runDoctor — shell isolation state", () => {
     });
     const c = r.checks.find((x) => x.id === "shell_root");
     expect(c?.level).toBe("warn");
-    expect(c?.detail).toContain("no verified OS-level process isolation provider");
+    if (process.platform === "win32" && (await shellExecIsolationProviderAvailable())) {
+      expect(c?.detail).toContain("provider is installed");
+    } else {
+      expect(c?.detail).toContain("disabled");
+    }
     expect(c?.detail).not.toContain(dir);
   });
 });

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   invokeFileSearch,
   inspectFileSearchTargetVersion,
@@ -1396,57 +1399,273 @@ describe("built-in tools", () => {
     ).rejects.toThrow(/preview-quarantined.*mutation_sent=false/);
   });
 
-  it("shell.exec does not start a host process without OS-level isolation", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-disabled-"));
+  it("shell.exec does not start a host process when the native provider is missing", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-provider-missing-"));
+    const root = path.join(parent, "root");
+    await fs.mkdir(root);
     const marker = path.join(parent, "host-process-ran.txt");
     try {
       await expect(
         invokeShellExec(
           {
-            cmd: "node",
-            args: ["-e", "require('node:fs').writeFileSync(process.argv[1], 'executed')", marker],
+            cmd: "cmd.exe",
+            args: ["/c", `echo executed>${marker}`],
             cwd: ".",
           },
+          {
+            env: shellTestEnv(root),
+            nativeProviderPath: path.join(root, "missing-provider.exe"),
+          },
         ),
-      ).rejects.toThrow(/no verified OS-level process isolation provider.*no process was started/);
+      ).rejects.toThrow(/Windows isolation provider is not installed.*no process was started/);
       await expect(fs.access(marker)).rejects.toThrow();
     } finally {
       await fs.rm(parent, { recursive: true, force: true });
     }
   });
 
-  it("shell.exec rejects before reading a root or resolving cwd", async () => {
+  it("shell.exec requires an explicit root before resolving a cwd", async () => {
     await expect(
-      invokeShellExec({ cmd: "node", args: ["-v"] }),
-    ).rejects.toThrow(/no verified OS-level process isolation provider.*no process was started/);
+      invokeShellExec({ cmd: "node", args: ["-v"] }, { env: {} }),
+    ).rejects.toThrow(/BLUE_TANUKI_SHELL_ROOT is required/);
     await expect(
-      invokeShellExec({ cmd: "node", args: ["-v"], cwd: "../outside" }),
-    ).rejects.toThrow(/no verified OS-level process isolation provider.*no process was started/);
+      invokeShellExec({ cmd: "node", args: ["-v"], cwd: "../outside" }, { env: {} }),
+    ).rejects.toThrow(/BLUE_TANUKI_SHELL_ROOT is required/);
   });
 
   it("shell.exec rejects absolute commands and destructive command shapes", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-policy-"));
     try {
+      const env = shellTestEnv(dir);
       await expect(
-        invokeShellExec(
-          { cmd: process.execPath, args: ["-v"] },
-        ),
+        invokeShellExec({ cmd: process.execPath, args: ["-v"] }, { env }),
       ).rejects.toThrow(/command name on PATH/);
       await expect(
-        invokeShellExec(
-          { cmd: "rm", args: ["-rf", "/"] },
-        ),
+        invokeShellExec({ cmd: "rm", args: ["-rf", "/"] }, { env }),
       ).rejects.toThrow(/destructive-command policy/);
       await expect(
-        invokeShellExec(
-          { cmd: "node", args: ["../escape"] },
-        ),
+        invokeShellExec({ cmd: "node", args: ["../escape"] }, { env }),
       ).rejects.toThrow(/destructive-argument policy/);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "shell.exec writes only inside its AppContainer root and restores the root ACL",
+    async () => {
+      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-appcontainer-"));
+      const root = path.join(parent, "root");
+      const outside = path.join(parent, "outside.txt");
+      await fs.mkdir(root);
+      const providerPath = fileURLToPath(
+        new URL("../native/windows-isolation/target/release/blue-tanuki-windows-isolation.exe", import.meta.url),
+      );
+      const icacls = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+      const aclBefore = execFileSync(icacls, [root], { encoding: "utf8" });
+      const env = shellTestEnv(root);
+      try {
+        const inside = await invokeShellExec(
+          { cmd: "cmd.exe", args: ["/c", "echo inside>inside.txt"] },
+          { env, nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(inside.exit_code).toBe(0);
+        expect(inside.process_tree_empty).toBe(true);
+        expect(await fs.readFile(path.join(root, "inside.txt"), "utf8")).toContain("inside");
+
+        const denied = await invokeShellExec(
+          { cmd: "cmd.exe", args: ["/c", `echo outside>${outside}`] },
+          { env, nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(denied.exit_code).not.toBe(0);
+        await expect(fs.access(outside)).rejects.toThrow();
+        expect(execFileSync(icacls, [root], { encoding: "utf8" })).toBe(aclBefore);
+        const fileAcl = execFileSync(icacls, [path.join(root, "inside.txt")], { encoding: "utf8" });
+        expect(fileAcl).not.toMatch(/S-1-15-2-/);
+      } finally {
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "shell.exec does not pass credential-like parent environment values to the child",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-environment-"));
+      const providerPath = fileURLToPath(
+        new URL("../native/windows-isolation/target/release/blue-tanuki-windows-isolation.exe", import.meta.url),
+      );
+      try {
+        const result = await invokeShellExec(
+          { cmd: "cmd.exe", args: ["/c", "set"] },
+          {
+            env: shellTestEnv(root, {
+              OPENAI_API_KEY: "synthetic-never-forward-this",
+              BLUE_TANUKI_TEST_SECRET: "synthetic-never-forward-this-either",
+            }),
+            nativeProviderPath: providerPath,
+          },
+        ) as Record<string, unknown>;
+        expect(result.exit_code).toBe(0);
+        expect(result.stdout).toContain(`TEMP=${root}`);
+        expect(result.stdout).not.toContain("OPENAI_API_KEY");
+        expect(result.stdout).not.toContain("BLUE_TANUKI_TEST_SECRET");
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "shell.exec cannot connect to a local loopback listener without network capabilities",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-network-"));
+      const providerPath = fileURLToPath(
+        new URL("../native/windows-isolation/target/release/blue-tanuki-windows-isolation.exe", import.meta.url),
+      );
+      const server = createServer((socket) => socket.end("unexpected connection"));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        const address = server.address();
+        if (!address || typeof address === "string") throw new Error("loopback test server did not bind");
+        const result = await invokeShellExec(
+          {
+            cmd: "curl.exe",
+            args: ["--max-time", "2", `http://127.0.0.1:${address.port}/`],
+            timeout_ms: 5_000,
+          },
+          { env: shellTestEnv(root), nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(result.exit_code).not.toBe(0);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "shell.exec terminates a direct child process when its parent exits",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-process-tree-"));
+      const providerPath = fileURLToPath(
+        new URL("../native/windows-isolation/target/release/blue-tanuki-windows-isolation.exe", import.meta.url),
+      );
+      const fixturePath = fileURLToPath(
+        new URL("../native/windows-isolation/target/release/process-tree-fixture.exe", import.meta.url),
+      );
+      try {
+        await fs.copyFile(fixturePath, path.join(root, "process-tree-fixture.exe"));
+        const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+        const env = shellTestEnv(root, {
+          PATH: `${root};${path.join(systemRoot, "System32")}`,
+        });
+        const result = await invokeShellExec(
+          { cmd: "process-tree-fixture.exe", args: ["parent"], timeout_ms: 5_000 },
+          { env, nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(result.exit_code).toBe(0);
+        expect(result.process_tree_empty).toBe(true);
+        expect(result.descendants_terminated).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 4_200));
+        await expect(fs.access(path.join(root, "late-child.txt"))).rejects.toThrow();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "shell.exec cancellation and timeout empty the process job before returning",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-cancel-"));
+      const providerPath = fileURLToPath(
+        new URL("../native/windows-isolation/target/release/blue-tanuki-windows-isolation.exe", import.meta.url),
+      );
+      const lateMarker = path.join(root, "late.txt");
+      const windowsPowerShell = path.join(
+        process.env.SystemRoot ?? "C:\\Windows",
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+      );
+      const env = shellTestEnv(root, {
+        PATH: `${path.join(process.env.SystemRoot ?? "C:\\Windows", "System32")};${windowsPowerShell}`,
+      });
+      let cancelTimer: NodeJS.Timeout | undefined;
+      try {
+        const controller = new AbortController();
+        cancelTimer = setTimeout(() => controller.abort(), 400);
+        const result = await invokeShellExec(
+          {
+            cmd: "powershell.exe",
+            args: ["-NoProfile", "-Command", "Start-Sleep -Seconds 15; Set-Content -Path late.txt -Value late"],
+            timeout_ms: 30_000,
+          },
+          { env, nativeProviderPath: providerPath, signal: controller.signal },
+        ) as Record<string, unknown>;
+        expect(result.signal).toBe("aborted");
+        expect(result.process_tree_empty).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await expect(fs.access(lateMarker)).rejects.toThrow();
+
+        const timedOut = await invokeShellExec(
+          {
+            cmd: "powershell.exe",
+            args: ["-NoProfile", "-Command", "Start-Sleep -Seconds 15; Set-Content -Path late.txt -Value late"],
+            timeout_ms: 400,
+          },
+          { env, nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(timedOut.signal).toBe("timeout");
+        expect(timedOut.process_tree_empty).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await expect(fs.access(lateMarker)).rejects.toThrow();
+      } finally {
+        if (cancelTimer) clearTimeout(cancelTimer);
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "shell.exec refuses roots containing secret-like files before creating a process",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-secret-root-"));
+      const providerPath = fileURLToPath(
+        new URL("../native/windows-isolation/target/release/blue-tanuki-windows-isolation.exe", import.meta.url),
+      );
+      const marker = path.join(root, "must-not-run.txt");
+      await fs.mkdir(path.join(root, ".env"));
+      try {
+        await expect(
+          invokeShellExec(
+            { cmd: "cmd.exe", args: ["/c", `echo ran>${marker}`] },
+            { env: shellTestEnv(root), nativeProviderPath: providerPath },
+          ),
+        ).rejects.toThrow(/isolation failed before a verified result/);
+        await expect(fs.access(marker)).rejects.toThrow();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });
+
+function shellTestEnv(root: string, additional: Record<string, string> = {}): Record<string, string> {
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows";
+  return {
+    BLUE_TANUKI_SHELL_ROOT: root,
+    PATH: path.join(systemRoot, "System32"),
+    SystemRoot: systemRoot,
+    ...additional,
+  };
+}
 
 function fakeHttp(
   records: Record<string, { address: string; family: 4 | 6 }>,
