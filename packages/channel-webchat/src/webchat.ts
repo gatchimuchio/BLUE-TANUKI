@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import {
@@ -89,6 +89,13 @@ const OWNER_TOKEN_ACTOR = "webchat-owner-token-holder";
 const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
 const AOTANU_ASSET_ROOT = findAotanuAssetRoot();
+
+function bearerTokenMatches(candidate: string | undefined, expected: string | undefined): boolean {
+  if (candidate === undefined || expected === undefined) return false;
+  const candidateBytes = Buffer.from(candidate, "utf8");
+  const expectedBytes = Buffer.from(expected, "utf8");
+  return candidateBytes.byteLength === expectedBytes.byteLength && timingSafeEqual(candidateBytes, expectedBytes);
+}
 
 function isDirectToolShortcutContent(content: string): boolean {
   return /^(?:tool:[A-Za-z0-9_.-]+|\/tool(?:\s|$))/.test(content.trim());
@@ -905,21 +912,21 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         : kind === "webhook"
         ? this.opts.webhook_token
         : this.opts.token;
-    return typeof expected === "string" && m[1] === expected;
+    return bearerTokenMatches(m[1], expected);
   }
 
   private checkSettingsAuth(req: IncomingMessage): boolean {
     const h = req.headers["authorization"];
     if (typeof h !== "string") return false;
     const m = /^Bearer\s+(.+)$/i.exec(h);
-    return Boolean(m && this.opts.settings && m[1] === this.opts.settings.token);
+    return Boolean(m && bearerTokenMatches(m[1], this.opts.settings?.token));
   }
 
   private checkMaintenanceAuth(req: IncomingMessage): boolean {
     const h = req.headers["authorization"];
     if (typeof h !== "string") return false;
     const m = /^Bearer\s+(.+)$/i.exec(h);
-    return Boolean(m && this.opts.maintenance_token && m[1] === this.opts.maintenance_token);
+    return Boolean(m && bearerTokenMatches(m[1], this.opts.maintenance_token));
   }
 
   private async handleApproval(

@@ -82,7 +82,9 @@ BLUE-TANUKIの目標は、目的を持つ仕事を計算・判断・作用・観
 
 BLUE-TANUKIでは自動CIを廃止している。.github/workflowsへの新たなworkflowやpush／PR必須checkを無断追加しない。ローカル開発・限定実行・実機証拠を各々の条件で扱い、他環境の成功を転記しない。
 
-D4Pocketの手動workflow_dispatchや一時検証branchの運用を、BLUEへ自動採用しない。BLUEで特別なOS検査のため必要となる場合は、ownerの個別承認により、trigger・権限・対象commit・削除条件を限定してから扱う。品質基準面の変更や試験の削除・常時skipはこのQE移行に含めない。
+ownerの2026-10-19指示により、D4-Pocket現行AGENTS.md §3.1のActions使用条件をBLUE向けに適用する。GitHub ActionsはローカルにないOSのbuild、artifact生成、ローカルでは不足する重い検査・testの補助に必要な場合に限り、`workflow_dispatch`のみで使用できる。push／pull_request／merge_group等の自動trigger、必須status check、自動CI、CI greenによる完成判定は禁止し、ローカル検証を品質基準面とする。
+
+手動Actions検査で一時branchを使う場合は検査対象commitの固定だけに用い、PRや自動triggerを作らない。失敗中のcommitをmainへ入れず、同branchで修正・再検査し、対象検査が閉じた後に成功した正確なcommitだけをmainへfast-forwardする。remote HEAD照合後、一時branchをlocal／remote双方で削除する。必要性、対象commit、trigger、結果、artifact、証明する範囲としない範囲を記録する。workflow追加時はactive ROADMAPまたはphase instructionに目的を置き、手動起動限定をlocal conformanceで検査する。この使用許可はD4のActions条件に限定し、BLUE固有のAuthority、Approval、Audit、秘密、QE段階、release gate、owner GOを変更しない。品質基準面の変更や試験の削除・常時skipはこのQE移行に含めない。
 
 QE_BUILD中は限定した技術疎通と重大な安全欠陥の阻止、QE_QC中は全体品質の観測と改良、QE_QA中は個別対象の保証判定を行う。危険な未接続実行路は有効化せず、合成・隔離端点で全体実装を先行する。
 

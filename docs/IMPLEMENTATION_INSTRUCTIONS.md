@@ -10,10 +10,15 @@ Setupが専用の`BLUE_TANUKI_OWNER_TOKEN`を生成・保存する。`POST /owne
 
 | 限定確認 | 結果 |
 |---|---|
-| WebChat `webchat.test.ts`／setup config tests | PASS、87/87・12/12。credential分離、未設定時拒否、body authority metadataの非採用を確認。 |
+| WebChat `webchat.test.ts`／setup config tests | PASS、88/88・12/12。credential分離、未設定時拒否、body authority metadataの非採用、bearer比較の不一致拒否を確認。 |
 | Gateway `BT-U-C08.01-P-E2E` | PASS。合成資料整理が専用owner credential routeからHDS・Complete Historyまで通過し、固定actor classと既存非権限出力を確認。 |
 | `pnpm typecheck`／`pnpm build` | PASS、15 workspace projects。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は注意として残存。 |
 | 全workspace tests／QE_QC／QE_QA／5OS実機 | 未実施。 |
+
+2026-10-19の追加hardeningはHEAD=`40ca1061c5ad83bbb8b9e537e848de113b8229fa`、clean worktreeから開始し、編集前のrecovery pairをcurrent=`40ca106...`／previous=`26fa7b4...`へlocal branch／remote tagとも照合して保全した。WebChatのinbound、settings、maintenance bearer比較を、同じUTF-8 byte長の場合に`timingSafeEqual`で比較する共通関数へ集約した。byte長の不一致と未設定tokenはfalseで拒否する。先頭・中間・末尾の1 byte差と短長差を`POST /inbound`で確認し、handlerに要求が届かないことを確認する。これは比較hardeningであり、credential holderをowner本人identityへ昇格させない。
+
+D4-Pocket `main`=`c3fefca7f64fd1d9d5572efaf27c08b23940a2fe`の現行AGENTS §3.1を読み、ownerの2026-10-19指示によりActions使用条件をBLUEのAGENTS／作業標準へ反映した。今回の対象はWindows localでbuild・test可能なためActionsは実行していない。workflow追加、OS runner、artifact取得なし。
 
 D02.01／D02.02=`BUILD_GAP`。owner-governance eventの永続producer、仕事ごとのpurpose-version選択・適用、file.search以外のBroker target identityは未接続。次consumerは、専用credential由来のowner-governance eventをJ所有状態へ永続化し、明示L3を通した後に仕事別目的版とBroker targetを同じHDS→Executor bindingへ結ぶこと。実credential／業務作用、他repo変更、公開・出荷判断なし。C08.03保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。
 

@@ -1907,6 +1907,27 @@ describe("WebChatChannel — HTTP inbound", () => {
     expect(r.status).toBe(401);
   });
 
+  it("rejects bearer values with prefix, middle, suffix, or length differences", async () => {
+    const middle = Math.floor(TOKEN.length / 2);
+    const candidates = [
+      `x${TOKEN.slice(1)}`,
+      `${TOKEN.slice(0, middle)}x${TOKEN.slice(middle + 1)}`,
+      `${TOKEN.slice(0, -1)}x`,
+      TOKEN.slice(1),
+      `${TOKEN}x`,
+    ];
+    for (const candidate of candidates) {
+      const response = await postJson(
+        ctx.port,
+        "/inbound",
+        { user: "u1", content: "hello" },
+        { authorization: `Bearer ${candidate}` },
+      );
+      expect(response.status).toBe(401);
+    }
+    expect(ctx.received).toHaveLength(0);
+  });
+
   it("accepts POST /inbound with valid auth and separates credential actor from reply destination", async () => {
     const r = await postJson(
       ctx.port,
