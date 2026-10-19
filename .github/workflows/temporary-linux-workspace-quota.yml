@@ -269,10 +269,19 @@ jobs:
           #!/bin/sh
           set -eu
           mkdir -p /workspace /workspace-storage
-          mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700 tmpfs /workspace-storage || {
+          if ! /usr/bin/python3 - <<'PY'
+          import ctypes
+          import errno
+          libc = ctypes.CDLL(None, use_errno=True)
+          result = libc.mount(b'tmpfs', b'/workspace-storage', b'tmpfs', 2 | 4, b'size=134217728,nr_inodes=100000,mode=0700')
+          error = ctypes.get_errno()
+          print(f'fuse_probe_tmpfs_mount: result={result} errno={error} {errno.errorcode.get(error, "OK")}', flush=True)
+          raise SystemExit(result != 0)
+          PY
+          then
             echo "fuse_probe_storage_mount_failed"
             exit 0
-          }
+          fi
           mkdir /workspace-storage/upper /workspace-storage/work
           fuse_pid=""
           cleanup() {
