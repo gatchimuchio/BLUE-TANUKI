@@ -50,6 +50,8 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 33回目の[run 39339789595](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39339789595)（対象SHA `af1f3e2550597a767654c39ccbf4782bacdfea42`）ではbuild／helper buildとLinux診断testsがPASSし、focused production `shell.exec` tests 3件は同じ`workspace_overlay_mount_access_denied_paths_accessible`（OverlayFS EACCES）で失敗した。修正版readerはshellとdaemonの`CapEff`／`CapPrm`／`CapBnd`を正しく取得し、no-cap probeのshellは三mask全て0、`NoNewPrivs=1`だったが、FUSE OverlayFS mountは`operation_not_permitted`で拒否された。`util-linux`の`setpriv --no-new-privs`でNNPを明示しても結果は変わらず、no-cap FUSEはこのUbuntu 24.04 hosted runner条件では成立しない。これは全Linux環境への一般化やLinux native製品のQA証拠ではない。cleanup stepは通過し、artifactは0件。capabilityを持つdaemonをproduction shellと同じ信頼境界に統合する案は採用しない。D07.02／F01.02は`BUILD_GAP`のままとし、次consumerはLinux nativeで安全に成立するaggregate quotaと実行境界の設計・検証である。未成功SHAはmainへ統合しない。
 
+次の補助runはUbuntu 22.04 hosted runnerで、同じmanual workflowとproduction `shell.exec` focused testsを固定SHA上で一度比較する。目的は24.04 runnerの実行制限とnamespace OverlayFSの共通失敗を切り分けること。いずれのhosted runner結果もLinux native installed productのQAに代用しない。
+
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
 WindowsではLinux native runtimeを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1条件のmanual `workflow_dispatch`を使った。一時workflow登録commitは`088733474aa34f69d37bedd9c95c1b6258331d8a`。最初の[run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は既存runner AppArmor profileを変更しないガードで停止し、build/test未実行。修正版の[run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)ではpolicyを保ったnamespace probeとbuildは成功したが、stderrのOS文言差でtest期待値が不一致だった。

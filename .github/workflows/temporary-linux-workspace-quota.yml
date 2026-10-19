@@ -14,7 +14,7 @@ concurrency:
 jobs:
   linux-workspace-quota:
     name: Native Linux build and focused shell tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 25
     steps:
       - name: Check out selected commit
