@@ -1657,6 +1657,34 @@ describe("built-in tools", () => {
   );
 
   it.skipIf(process.platform !== "linux")(
+    "shell.exec rejects a hard-linked root entry before starting a process",
+    async () => {
+      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-hard-link-"));
+      const root = path.join(parent, "root");
+      const outside = path.join(parent, "outside.txt");
+      const marker = path.join(root, "must-not-run.txt");
+      await fs.mkdir(root);
+      await fs.writeFile(outside, "outside remains unchanged", "utf8");
+      await fs.link(outside, path.join(root, "workspace-copy.txt"));
+      const providerPath = fileURLToPath(
+        new URL("../native/linux-isolation/target/release/blue-tanuki-linux-isolation", import.meta.url),
+      );
+      try {
+        await expect(
+          invokeShellExec(
+            { cmd: "sh", args: ["-c", `printf ran > '${marker}'`] },
+            { env: linuxShellTestEnv(root), nativeProviderPath: providerPath },
+          ),
+        ).rejects.toThrow(/hard.link/);
+        await expect(fs.access(marker)).rejects.toThrow();
+        expect(await fs.readFile(outside, "utf8")).toBe("outside remains unchanged");
+      } finally {
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
     "shell.exec uses Linux namespaces and writes only inside its dedicated root",
     async () => {
       const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-root-"));

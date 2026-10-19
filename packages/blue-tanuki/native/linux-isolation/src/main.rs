@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -810,6 +811,9 @@ fn inspect_root(root: &Path) -> Result<(), String> {
             let file_type = metadata.file_type();
             if file_type.is_symlink() || !(file_type.is_file() || file_type.is_dir()) {
                 return Err("shell_root_contains_unsupported_entry".to_string());
+            }
+            if file_type.is_file() && metadata.nlink() != 1 {
+                return Err("shell_root_contains_hard_link".to_string());
             }
             if file_type.is_dir() {
                 pending.push(path);

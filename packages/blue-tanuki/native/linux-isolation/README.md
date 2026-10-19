@@ -2,7 +2,7 @@
 
 `blue-tanuki-linux-isolation`は、production adapterの`shell.exec`が使うLinux native providerである。許可されたcommand形状だけをBubblewrapのnamespaceと一時systemd user serviceの中で起動する。対象commandには専用の書込み領域`/workspace`を渡し、hostのfilesystemはnamespaceへmountしない。network namespaceも分離し、host loopbackと外部networkへの接続を防ぐ。
 
-起動にはBubblewrap、稼働中のsystemd user manager、`cpu`・`memory`・`pids` controllerを持つcgroup v2が必要である。systemdが完了を返し、service cgroupが空であることを確認するまで通常結果を返さない。実行時間、CPU、memory、process数、出力、単一fileサイズを制限し、`/tmp`は容量制限付きtmpfsとする。command環境は小さなallowlistから構成し、Gatewayのcredentialを継承しない。
+起動にはBubblewrap、稼働中のsystemd user manager、`cpu`・`memory`・`pids` controllerを持つcgroup v2が必要である。systemdが完了を返し、service cgroupが空であることを確認するまで通常結果を返さない。実行時間、CPU、memory、process数、出力、単一fileサイズを制限し、`/tmp`は容量制限付きtmpfsとする。command環境は小さなallowlistから構成し、Gatewayのcredentialを継承しない。shell root内の通常fileはhard linkを拒否し、root外のinodeを共有するfileの読取・変更を防ぐ。
 
 書込み可能workspaceはhost上の領域をbind mountしており、現在aggregate disk quotaを持たない。`LimitFSIZE`は単一fileの上限であり、複数file合計の容量制限ではない。このためdisk exhaustionに対するresource containmentが残る。rootには小さく専用のworkspaceを指定すること。この制約が残る間、D07.02全体の成立やrelease evidenceとは扱わない。
 
