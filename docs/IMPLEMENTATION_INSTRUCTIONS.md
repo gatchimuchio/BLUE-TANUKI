@@ -2,6 +2,12 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-BUBBLEWRAP-SYSTEMD-SHELL-PROCESS-LIFECYCLE`
+
+開始HEAD／`origin/main`=`f58b77fca2148e7e03439668280c6f8f977d9cd7`。今回の作業目的はLinux shell隔離providerとproduction consumerをつなぐこと。QE rev2.3三点正本と適用AGENTS／作業標準／active指示、D07.02、shell・doctor consumerを再読した。D4-Pocket現行AGENTS §3.1では、localにないOSのbuild／artifactまたはlocalで不足する重い検査を手動`workflow_dispatch`で補助できる。D07.02はWSLをLinux nativeの代用にしないため、今回のLinux native buildとfocused runtime testに限って一時workflowを用意する。GitHubはworkflow_dispatchのworkflowをdefault branchから手動起動し、選択したbranchのcommitで実行するため、Run workflowを有効にするworkflow-only commitを先にdefault branchへ置く。その後、対象コードを一時検証branchへ固定してdispatchする。PR・push等の自動trigger、必須check、release判定、artifact公開は行わない。workflow triggerのlocal conformanceを検査し、対象block閉鎖後に成功commitをmainへfast-forward、workflowを削除し、一時branchをlocal／remote双方から削除する。開始時backup tagはcurrent=`f58b77fca2148e7e03439668280c6f8f977d9cd7`、previous=`67cd8a44a2eb1016772c2b081b13e829cb1c2694`。
+
+検査対象はLinux providerのnative buildとfocused shell runtime tests。writable workspaceにaggregate disk quotaがない制約を記録し、D07.02全体とF01.02全体は`BUILD_GAP`を維持する。WSL runtime証拠とhosted Ubuntu Actions証拠は環境限定であり、Linux installed product、native実機QA、release readinessへ昇格しない。C08.03 provider保留、P13 owner-GO／公開保留、D4-Pocket／ミニドラ変更なし。
+
 ### 最新BUILD_BATCH：`QEB-01-F01.02-WINDOWS-APPCONTAINER-SHELL-PROCESS-LIFECYCLE`
 
 開始HEAD／`origin/main`=`67cd8a44a2eb1016772c2b081b13e829cb1c2694`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.02／D07.03、shell・doctor consumerを読み直した。D4-PocketのGitHub Actions条件はmanual `workflow_dispatch`限定。今回のWindows native buildと隔離経路はlocalで検証可能なためActions／workflow変更なし。編集前の復旧refsはlocal branch／remote backup tagともcurrent=`67cd8a44a2eb1016772c2b081b13e829cb1c2694`、previous=`4f1431d42f4a924e1a3f5c407cdf46d5c4226734`。
