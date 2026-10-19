@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-01-D02.01-TASK-PURPOSE-OWNER-L3-GATE`では、task・plan revision・目的版に結び付く明示owner-token L3 relation reviewをControl CenterからJ Operation Planへ接続した。exact content確認、監査証拠、current bindingが揃った場合のみ`supports`がHDS step reviewへ進み、実操作の承認は別に必要。これは人間の明示判断を記録する経路で、自動意味評価器・execution approval・owner GOではない。HDS 14/14、WebChat 92/92、workspace typecheck/build、HDS standalone、stub serve smoke、doctor、docs／repo-health gateはPASS。D02.01／D02.02=`BUILD_GAP`、C08.03実provider保留、P13=`PENDING_OWNER_GO`を維持する。D4条件を確認したがWindows localで必要検査が可能なためGitHub Actions／workflow未使用。
+
 2026-10-19の`QEB-01-D02.01-TASK-PURPOSE-RELATION-CANDIDATE`では、Cのtask-purpose関係申告とtask／purpose引用候補を、Executorのplan検証後にJへ渡し、J所有planへ引用span digestだけを記録する接続を追加した。引用照合は意味的適合や権限を証明しない。Jの独立した意味評価器が未接続のためpurpose-bound step reviewとexecutionはfail-closedのまま。WebChat status projectionとrenderer fixtureへ候補・未評価状態を反映した。focused tests 137/137、workspace typecheck／build、HDS standalone、docs／repo-health gateはPASS。D02.01／D02.02=`BUILD_GAP`を維持し、全Broker target identityと仕事全体の結果→M→帰還も未成立。QE_QC／QE_QA／5OS実機・実provider・GitHub Actionsは未実施。
 
 2026-10-19の`QEB-01-D02.01-PURPOSE-CONTENT-J-M-REPLAY`では、purpose本文digestとL3承認記録が一致した後にだけ本文をprivate J/M保存へ渡し、J-owned goal eventから参照して再起動後に内容・digest・版・承認との結び付きを検証する。本文をaudit／history／通常projectionに出さず、記憶をauthorityへ昇格させない。Protocol／HDS／Gateway focused tests 21/21、workspace typecheck／build、HDS standaloneはPASS。task-purposeの意味的適用、他Broker target、全仕事の結果→M→帰還は未成立で、D02.01／D02.02=`BUILD_GAP`を維持する。

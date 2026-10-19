@@ -70,6 +70,19 @@ async function setup(
         request_id?: string;
         command_id?: string;
       }>;
+      onGoalPurposeRelationReviewProposal?: (input: {
+        plan_id_digest: string;
+        revision_digest: string;
+        outcome: "supports" | "conflicts" | "unknown";
+        actor: string;
+      }) => Promise<{
+        accepted: boolean;
+        status: string;
+        plan_id_digest?: string;
+        outcome?: "supports" | "conflicts" | "unknown";
+        request_id?: string;
+        command_id?: string;
+      }>;
       resume_token?: string;
       owner_token?: string;
       webhook_token?: string;
@@ -106,6 +119,7 @@ async function setup(
     host: "127.0.0.1",
     onResume: opts.onResume as never,
     onGoalPurposeChangeProposal: opts.onGoalPurposeChangeProposal,
+    onGoalPurposeRelationReviewProposal: opts.onGoalPurposeRelationReviewProposal,
     resume_approval_tokens: opts.resume_approval_tokens,
     resume_approval_token_ttl_ms: opts.resume_approval_token_ttl_ms,
     ws_ticket_ttl_ms: opts.ws_ticket_ttl_ms,
@@ -501,7 +515,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("J配送digest");
     expect(rendered).toContain("作業目的版の選択候補（digestのみ）");
     expect(rendered).toContain("意味上の適合や実行許可を判定しません。");
-    expect(rendered).toContain("C候補は非権威。J意味評価未実装のためstep確認を停止");
+    expect(rendered).toContain("C候補は非権威。明示確認までstep選択を停止");
     expect(rendered).toContain("引用照合=exact_spans_present");
     expect(rendered).toContain("\u0026quot;purpose_version\u0026quot;:2");
     expect(rendered).toContain("陳腐化または照合不能（step実行を停止）");
@@ -626,6 +640,86 @@ describe("WebChatChannel — Control Center shell", () => {
     const purposePre = view.children.find((child) => child.tagName === "pre");
     expect(purposePre?.textContent).toBe(purposeText);
     expect(state.approvalContentDigests["goal-purpose-command"]).toBe(commandDigest);
+    expect(approve.disabled).toBe(false);
+  });
+
+  it("renders task-purpose relation review against its queued digests without treating it as execution authority", async () => {
+    const commandId = "relation-command";
+    const commandDigest = "c".repeat(64);
+    const review = {
+      kind: "goal_purpose_relation",
+      command_id: commandId,
+      command_digest: commandDigest,
+      request_payload_digest: "d".repeat(64),
+      operation: "goal.governance.review_task_purpose",
+      plan_id_digest: "a".repeat(64),
+      task_digest: "b".repeat(64),
+      revision_digest: "e".repeat(64),
+      goal_ref: "goal_0000000000000001",
+      purpose_version: 3,
+      purpose_digest: "f".repeat(64),
+      outcome: "supports",
+      task: '<img src=x onerror="alert(1)"> task text',
+      purpose_text: "Exact purpose text",
+      plan: { version: "operation-core.v1", plan_id: "fixture-plan", request_id: "fixture-request", steps: [] },
+      candidate_outcome: "conflicts",
+      candidate_status: "present",
+      evidence_status: "exact_spans_present",
+      evidence_count: 2,
+      used_for_authority: false,
+      may_execute: false,
+    };
+    const makeNode = (tagName: string) => ({
+      tagName,
+      textContent: "",
+      children: [] as Array<Record<string, unknown>>,
+      replaceChildren() { this.children = []; },
+      appendChild(child: Record<string, unknown>) { this.children.push(child); return child; },
+      append(...children: Array<Record<string, unknown>>) { this.children.push(...children); },
+    });
+    const view = makeNode("section");
+    const approve = { disabled: true };
+    const card = {
+      dataset: {
+        planIdDigest: review.plan_id_digest,
+        taskDigest: review.task_digest,
+        revisionDigest: review.revision_digest,
+        goalRef: review.goal_ref,
+        purposeVersion: String(review.purpose_version),
+        purposeDigest: review.purpose_digest,
+        relationOutcome: review.outcome,
+      },
+      getAttribute: (name: string) => name === "data-command" ? commandId : null,
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? view :
+        selector === '[data-verdict="approve"]' ? approve : null,
+    };
+    const state = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function reviewApprovalContent(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function revokeApprovalGrant(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const run = new Script(`
+      async function runReview() {
+        const state = reviewState;
+        function byId(id) { return id === "approval-token" ? { value: "resume-token" } : null; }
+        function authHeaders(value) { return { authorization: "Bearer " + value }; }
+        function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+        const document = {
+          querySelectorAll() { return [reviewCard]; },
+          createElement(tagName) { return makeNode(tagName); },
+        };
+        const fetch = async () => ({ ok: true, json: async () => reviewData });
+        ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+        await reviewApprovalContent("${commandId}", { textContent: "Review exact task-purpose relation" });
+      }
+      runReview();
+    `);
+    await run.runInNewContext({ reviewState: state, reviewCard: card, reviewData: review, makeNode });
+    const values = view.children.filter((child) => child.tagName === "pre").map((child) => child.textContent);
+    expect(values).toContain(review.task);
+    expect(values).toContain(review.purpose_text);
+    expect(values.some((value) => value?.includes('"plan_id": "fixture-plan"'))).toBe(true);
+    expect(state.approvalContentDigests[commandId]).toBe(commandDigest);
     expect(approve.disabled).toBe(false);
   });
 
@@ -2220,6 +2314,60 @@ describe("WebChatChannel — HTTP inbound", () => {
         purpose_text: "\uD800",
       }, { authorization: `Bearer ${OWNER_TOKEN}` });
       expect(malformedUnicode.status).toBe(400);
+      expect(proposals).toHaveLength(1);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("routes a task-purpose relation review only through the dedicated owner credential", async () => {
+    const proposals: Array<{ plan_id_digest: string; revision_digest: string; outcome: string; actor: string }> = [];
+    const ownerCtx = await setup({
+      owner_token: OWNER_TOKEN,
+      onGoalPurposeRelationReviewProposal: async (input) => {
+        proposals.push(input);
+        return {
+          accepted: true,
+          status: "approval_required",
+          plan_id_digest: input.plan_id_digest,
+          outcome: input.outcome,
+          request_id: "relation-request-id",
+          command_id: "relation-command-id",
+        };
+      },
+    });
+    try {
+      await ownerCtx.ch.start(async () => undefined);
+      const input = {
+        plan_id_digest: "a".repeat(64),
+        revision_digest: "b".repeat(64),
+        outcome: "supports",
+        actor: "forged",
+      };
+      expect((await postJson(ownerCtx.port, "/owner/goal-purpose-relation-review", input, {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+      const accepted = await postJson(ownerCtx.port, "/owner/goal-purpose-relation-review", input, {
+        authorization: `Bearer ${OWNER_TOKEN}`,
+      });
+      expect(accepted.status).toBe(202);
+      expect(accepted.body).toMatchObject({
+        accepted: true,
+        status: "approval_required",
+        command_id: "relation-command-id",
+      });
+      expect(proposals).toEqual([{
+        plan_id_digest: input.plan_id_digest,
+        revision_digest: input.revision_digest,
+        outcome: "supports",
+        actor: "webchat-owner-token-holder",
+      }]);
+      expect((await postJson(ownerCtx.port, "/owner/goal-purpose-relation-review", {
+        ...input, outcome: "APPROVE",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(400);
+      expect((await postJson(ownerCtx.port, "/owner/goal-purpose-relation-review", {
+        ...input, plan_id_digest: "not-a-digest",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(400);
       expect(proposals).toHaveLength(1);
     } finally {
       await ownerCtx.teardown();

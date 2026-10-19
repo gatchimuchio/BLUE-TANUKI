@@ -1,5 +1,5 @@
 import type { Clock } from "@blue-tanuki/channel-base";
-import type { OperationCoreApprovalTrace } from "@blue-tanuki/protocol";
+import type { OperationCoreApprovalTrace, OperationPlan } from "@blue-tanuki/protocol";
 import type { TicketStore } from "./ticket_store.js";
 import type { ResumeApprovalTokenStore } from "./resume_approval_token_store.js";
 
@@ -98,6 +98,20 @@ export interface WebChatApprovalQueueItem {
     review_status: "required" | "reviewed" | "stale";
     used_for_authority: false;
   };
+  /** Digest-only status for a task-purpose relation awaiting or holding an explicit L3 review. */
+  goal_purpose_relation_review?: {
+    kind: "task_purpose_relation";
+    plan_id_digest: string;
+    task_digest: string;
+    revision_digest: string;
+    goal_ref: string;
+    purpose_version: number;
+    purpose_digest: string;
+    outcome: "supports" | "conflicts" | "unknown";
+    review_status: "required" | "reviewed" | "stale";
+    used_for_authority: false;
+    may_execute: false;
+  };
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   authority_trace?: unknown;
@@ -135,7 +149,32 @@ export interface WebChatGoalPurposeChangeContentReview {
   used_for_authority: false;
 }
 
-export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview;
+export interface WebChatGoalPurposeRelationContentReview {
+  kind: "goal_purpose_relation";
+  command_id: string;
+  command_digest: string;
+  request_payload_digest: string;
+  operation: "goal.governance.review_task_purpose";
+  plan_id_digest: string;
+  task_digest: string;
+  revision_digest: string;
+  goal_ref: string;
+  purpose_version: number;
+  purpose_digest: string;
+  outcome: "supports" | "conflicts" | "unknown";
+  task: string;
+  purpose_text: string;
+  plan: OperationPlan;
+  candidate_outcome: "supports" | "conflicts" | "unknown";
+  candidate_status: "present" | "missing" | "invalid";
+  evidence_status: "exact_spans_present" | "not_provided" | "citation_mismatch" | "purpose_unavailable";
+  evidence_count: number;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
+  WebChatGoalPurposeRelationContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"
@@ -512,6 +551,20 @@ export interface WebChatOptions {
     prior_version?: number;
     prior_purpose_digest?: string;
     new_purpose_digest?: string;
+    request_id?: string;
+    command_id?: string;
+  }>;
+  /** Dedicated owner endpoint for an exact, one-plan task-purpose relation review. */
+  onGoalPurposeRelationReviewProposal?: (input: {
+    plan_id_digest: string;
+    revision_digest: string;
+    outcome: "supports" | "conflicts" | "unknown";
+    actor: string;
+  }) => Promise<{
+    accepted: boolean;
+    status: string;
+    plan_id_digest?: string;
+    outcome?: "supports" | "conflicts" | "unknown";
     request_id?: string;
     command_id?: string;
   }>;

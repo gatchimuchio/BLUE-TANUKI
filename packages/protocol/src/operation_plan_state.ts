@@ -32,7 +32,34 @@ export const OperationPlanGoalPurposeRelationCandidateSchema = z.object({
   }
 });
 export type OperationPlanGoalPurposeRelationCandidate = z.infer<typeof OperationPlanGoalPurposeRelationCandidateSchema>;
-/** J's digest-only record of a C claim. It remains unassessed and cannot admit execution. */
+/** Content-bound request accepted for an explicit owner-token-holder purpose relation review. */
+export const OperationPlanGoalPurposeRelationReviewArgumentsSchema = z.object({
+  plan_id_digest: Digest,
+  task_digest: Digest,
+  revision_digest: Digest,
+  goal_ref: z.string().regex(/^goal_[a-f0-9]{16,64}$/),
+  purpose_version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  purpose_digest: Digest,
+  outcome: z.enum(["supports", "conflicts", "unknown"]),
+}).strict();
+export type OperationPlanGoalPurposeRelationReviewArguments = z.infer<typeof OperationPlanGoalPurposeRelationReviewArgumentsSchema>;
+
+/** J-owned digest reference to an explicit, content-bound L3 relation review. */
+export const OperationPlanGoalPurposeRelationOwnerReviewSchema = z.object({
+  outcome: z.enum(["supports", "conflicts", "unknown"]),
+  request_id: z.string().min(1).max(128),
+  command_id: z.string().min(1).max(128),
+  command_digest: Digest,
+  target_digest: Digest,
+  proposal_actor_digest: Digest,
+  reviewer_actor_digest: Digest,
+  content_review_digest: Digest,
+  reviewed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  audit_event_digest: Digest,
+}).strict();
+export type OperationPlanGoalPurposeRelationOwnerReview = z.infer<typeof OperationPlanGoalPurposeRelationOwnerReviewSchema>;
+
+/** J's digest-only record of a C claim and any separate owner-reviewed evidence. */
 export const OperationPlanGoalPurposeRelationRecordSchema = z.object({
   schema_version: z.literal("operation-plan-goal-purpose-relation.v1"),
   task_digest: Digest,
@@ -42,6 +69,7 @@ export const OperationPlanGoalPurposeRelationRecordSchema = z.object({
   candidate_status: z.enum(["present", "missing", "invalid"]),
   evidence_status: z.enum(["exact_spans_present", "not_provided", "citation_mismatch", "purpose_unavailable"]),
   evidence_digests: z.array(z.object({ task_span_digest: Digest, purpose_span_digest: Digest }).strict()).max(8),
+  owner_review: OperationPlanGoalPurposeRelationOwnerReviewSchema.optional(),
   semantic_assessment_status: z.literal("not_assessed"),
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),

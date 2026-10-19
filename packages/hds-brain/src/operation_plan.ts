@@ -4,12 +4,15 @@ import {
   GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
-  type OperationPlanGoalPurposeRelationCandidate, type OperationPlanGoalPurposeRelationRecord, type OperationStep,
+  type OperationPlanGoalPurposeRelationCandidate, type OperationPlanGoalPurposeRelationOwnerReview,
+  type OperationPlanGoalPurposeRelationRecord, type OperationPlanGoalPurposeRelationReviewArguments, type OperationStep,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema,
   OperationPlanGoalPurposeBindingSchema,
   OperationPlanGoalPurposeRelationCandidateSchema,
+  OperationPlanGoalPurposeRelationOwnerReviewSchema,
   OperationPlanGoalPurposeRelationRecordSchema,
+  OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
   type OperationPlanReceiptReconciliationControl,
 } from "@blue-tanuki/protocol";
@@ -22,6 +25,23 @@ import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
+
+export interface OperationPlanGoalPurposeRelationReviewContent {
+  readonly task: string;
+  readonly purpose_text: string;
+  readonly plan: OperationPlan;
+  readonly goal_purpose_binding: OperationPlanGoalPurposeBinding;
+  readonly candidate_outcome: OperationPlanGoalPurposeRelationRecord["candidate_outcome"];
+  readonly candidate_status: OperationPlanGoalPurposeRelationRecord["candidate_status"];
+  readonly evidence_status: OperationPlanGoalPurposeRelationRecord["evidence_status"];
+  readonly evidence_count: number;
+}
+
+type OperationPlanGoalPurposeRelationReviewVerifier = (input: {
+  readonly request_id: string;
+  readonly command_id: string;
+  readonly audit_event_digest: string;
+}) => boolean;
 /** 私有の回復状態。保存内容は現在の承認・実行権限ではない。 */
 export interface OperationPlanStatePort {
   load(): unknown | null;
@@ -254,6 +274,19 @@ export interface OperationPlanReceiptReconciliationAuthorization {
 export function operationPlanDigest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
+
+export type OperationPlanGoalPurposeRelationOwnerReviewDraft = Omit<OperationPlanGoalPurposeRelationOwnerReview, "audit_event_digest">;
+
+export function operationPlanGoalPurposeRelationReviewAuditDigest(
+  args: OperationPlanGoalPurposeRelationReviewArguments,
+  review: OperationPlanGoalPurposeRelationOwnerReviewDraft,
+): string {
+  return operationPlanDigest({
+    schema_version: "operation-plan-goal-purpose-relation-review.v1",
+    ...args,
+    ...review,
+  });
+}
 function recoveryCommandIdDigest(commandId: string): string {
   // Match Recovery history and Cron handoff identity: hash the raw command ID bytes.
   return createHash("sha256").update(commandId).digest("hex");
@@ -385,7 +418,8 @@ export class OperationPlanLedger {
   constructor(private readonly port?: OperationPlanStatePort, memoryStorage?: OperationPlanMemoryStorage,
     recoveryEvidence?: OperationPlanRecoveryEvidence,
     private readonly goalGovernanceReader?: () => ReadonlyGoalGovernanceProjection | undefined,
-    private readonly goalPurposeContentReader?: (goalRef: string, version: number) => OperationPlanGoalPurposeContent | null | undefined) {
+    private readonly goalPurposeContentReader?: (goalRef: string, version: number) => OperationPlanGoalPurposeContent | null | undefined,
+    private readonly goalPurposeRelationReviewVerifier?: OperationPlanGoalPurposeRelationReviewVerifier) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
     this.memoryStorage = memoryStorage;
     const checkedRecoveryEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
@@ -796,12 +830,90 @@ export class OperationPlanLedger {
     const goalPurposeRelation = goalPurposeBinding
       ? this.recordGoalPurposeRelation(plan, origin.content, goalPurposeBinding, rawPurposeRelationCandidate)
       : undefined;
-    const requestGoalCriteria = GoalCriteriaProjectionSchema.parse(projectRequestGoalCriteria(origin, origin.content));
+    const requestGoalCriteria = GoalCriteriaProjectionSchema.parse(projectRequestGoalCriteria(
+      { ...origin, id: expected }, origin.content));
     this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: origin.content,
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
       ...(goalPurposeRelation ? { goal_purpose_relation: goalPurposeRelation } : {}),
       request_goal_criteria: requestGoalCriteria,
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
+  }
+
+  prepareGoalPurposeRelationReview(
+    planIdDigest: string,
+    revisionDigest: string,
+    outcome: "supports" | "conflicts" | "unknown",
+  ): { readonly args: OperationPlanGoalPurposeRelationReviewArguments; readonly content: OperationPlanGoalPurposeRelationReviewContent } {
+    if (!/^[a-f0-9]{64}$/.test(planIdDigest) || !/^[a-f0-9]{64}$/.test(revisionDigest)) {
+      throw new Error("plan_goal_purpose_relation_unavailable");
+    }
+    const matches = this.state.plans.filter((candidate) =>
+      operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === planIdDigest);
+    if (matches.length !== 1) throw new Error("plan_goal_purpose_relation_unavailable");
+    const p = matches[0]!;
+    const binding = p.goal_purpose_binding;
+    const relation = p.goal_purpose_relation;
+    if (!binding || !relation) throw new Error("plan_goal_purpose_relation_unavailable");
+    const args = OperationPlanGoalPurposeRelationReviewArgumentsSchema.parse({
+      plan_id_digest: planIdDigest,
+      task_digest: relation.task_digest,
+      revision_digest: revisionDigest,
+      goal_ref: binding.goal_ref,
+      purpose_version: binding.purpose_version,
+      purpose_digest: binding.purpose_digest,
+      outcome,
+    });
+    return { args, content: this.inspectGoalPurposeRelationReview(args) };
+  }
+
+  inspectGoalPurposeRelationReview(args: OperationPlanGoalPurposeRelationReviewArguments): OperationPlanGoalPurposeRelationReviewContent {
+    const p = this.goalPurposeRelationReviewPlan(args);
+    const binding = p.goal_purpose_binding!;
+    const relation = p.goal_purpose_relation!;
+    const purpose = this.goalPurposeContentReader?.(binding.goal_ref, binding.purpose_version) ?? undefined;
+    if (!purpose || purpose.used_for_authority !== false || purpose.goal_ref !== binding.goal_ref ||
+        purpose.version !== binding.purpose_version || purpose.purpose_digest !== binding.purpose_digest ||
+        createHash("sha256").update(purpose.purpose_text, "utf8").digest("hex") !== binding.purpose_digest) {
+      throw new Error("plan_goal_purpose_content_invalid");
+    }
+    return {
+      task: p.goal,
+      purpose_text: purpose.purpose_text,
+      plan: structuredClone(p.revisions.at(-1)!.plan),
+      goal_purpose_binding: structuredClone(binding),
+      candidate_outcome: relation.candidate_outcome,
+      candidate_status: relation.candidate_status,
+      evidence_status: relation.evidence_status,
+      evidence_count: relation.evidence_digests.length,
+    };
+  }
+
+  isGoalPurposeRelationReviewCurrent(args: OperationPlanGoalPurposeRelationReviewArguments): boolean {
+    try {
+      this.goalPurposeRelationReviewPlan(args);
+      return true;
+    } catch { return false; }
+  }
+
+  recordGoalPurposeRelationOwnerReview(
+    args: OperationPlanGoalPurposeRelationReviewArguments,
+    review: OperationPlanGoalPurposeRelationOwnerReview,
+  ): boolean {
+    const parsedArgs = OperationPlanGoalPurposeRelationReviewArgumentsSchema.parse(args);
+    const parsedReview = OperationPlanGoalPurposeRelationOwnerReviewSchema.parse(review);
+    const p = this.goalPurposeRelationReviewPlan(parsedArgs);
+    const { audit_event_digest, ...reviewDraft } = parsedReview;
+    if (parsedReview.outcome !== parsedArgs.outcome ||
+        audit_event_digest !== operationPlanGoalPurposeRelationReviewAuditDigest(parsedArgs, reviewDraft) ||
+        this.goalPurposeRelationReviewVerifier?.({ request_id: parsedReview.request_id,
+          command_id: parsedReview.command_id, audit_event_digest }) !== true) return false;
+    const planId = p.revisions[0]!.plan.plan_id;
+    this.change((state) => {
+      const target = state.plans.find((candidate) => candidate.revisions[0]!.plan.plan_id === planId);
+      if (!target?.goal_purpose_relation) throw new Error("plan_goal_purpose_relation_unavailable");
+      target.goal_purpose_relation.owner_review = parsedReview;
+    });
+    return true;
   }
 
   inspectControl(control: Extract<OperationPlanControl, { action: "review" | "revise" }>, caller: InboundRequest): {
@@ -1440,6 +1552,57 @@ export class OperationPlanLedger {
     });
   }
 
+  private goalPurposeRelationReviewPlan(args: OperationPlanGoalPurposeRelationReviewArguments): PlanState {
+    const parsed = OperationPlanGoalPurposeRelationReviewArgumentsSchema.parse(args);
+    if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
+    if (this.port) {
+      const loaded = this.port.load();
+      if ((loaded === null ? null : operationPlanDigest(loaded)) !== this.savedDigest) throw new Error("plan_state_changed");
+    }
+    const matches = this.state.plans.filter((candidate) =>
+      operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === parsed.plan_id_digest);
+    if (matches.length !== 1) throw new Error("plan_goal_purpose_relation_unavailable");
+    const p = matches[0]!;
+    if (p.bindings.some((binding) => this.activePlanAttempts.has(binding.command_id))) {
+      throw new Error("plan_recovery_refresh_hold");
+    }
+    const current = p.revisions.at(-1)!;
+    const relation = p.goal_purpose_relation;
+    const binding = p.goal_purpose_binding;
+    if (!relation || !binding) throw new Error("plan_goal_purpose_relation_unavailable");
+    if (current.digest !== parsed.revision_digest || relation.plan_digest !== current.digest ||
+        relation.task_digest !== parsed.task_digest || relation.task_digest !== createHash("sha256").update(p.goal, "utf8").digest("hex") ||
+        relation.goal_purpose_binding.goal_ref !== parsed.goal_ref ||
+        relation.goal_purpose_binding.purpose_version !== parsed.purpose_version ||
+        relation.goal_purpose_binding.purpose_digest !== parsed.purpose_digest ||
+        binding.goal_ref !== parsed.goal_ref || binding.purpose_version !== parsed.purpose_version ||
+        binding.purpose_digest !== parsed.purpose_digest || !this.goalPurposeBindingIsCurrent(binding)) {
+      throw new Error("plan_goal_purpose_relation_stale");
+    }
+    const planIdDigest = operationPlanDigest(p.revisions[0]!.plan.plan_id);
+    if (this.recoveryHolds.has(planIdDigest)) throw new Error("plan_recovery_unverified_hold");
+    return p;
+  }
+
+  private goalPurposeRelationOwnerReviewIsVerified(p: PlanState, relation: OperationPlanGoalPurposeRelationRecord): boolean {
+    const review = relation.owner_review;
+    if (!review || !p.goal_purpose_binding) return false;
+    const current = p.revisions.at(-1)!;
+    const args: OperationPlanGoalPurposeRelationReviewArguments = {
+      plan_id_digest: operationPlanDigest(p.revisions[0]!.plan.plan_id),
+      task_digest: relation.task_digest,
+      revision_digest: current.digest,
+      goal_ref: p.goal_purpose_binding.goal_ref,
+      purpose_version: p.goal_purpose_binding.purpose_version,
+      purpose_digest: p.goal_purpose_binding.purpose_digest,
+      outcome: review.outcome,
+    };
+    const { audit_event_digest, ...reviewDraft } = review;
+    return audit_event_digest === operationPlanGoalPurposeRelationReviewAuditDigest(args, reviewDraft) &&
+      this.goalPurposeRelationReviewVerifier?.({ request_id: review.request_id,
+        command_id: review.command_id, audit_event_digest }) === true;
+  }
+
   private goalPurposeRelationIssue(
     p: PlanState,
     effectiveBinding: OperationPlanGoalPurposeBinding | undefined = p.goal_purpose_binding,
@@ -1455,11 +1618,14 @@ export class OperationPlanLedger {
         record.goal_purpose_binding.purpose_digest !== effectiveBinding.purpose_digest) {
       return "plan_goal_purpose_relation_stale";
     }
-    if (record.candidate_outcome === "conflicts" && record.candidate_status === "present" &&
-        record.evidence_status === "exact_spans_present") {
+    const ownerReviewVerified = this.goalPurposeRelationOwnerReviewIsVerified(p, record);
+    if (ownerReviewVerified && record.owner_review?.outcome === "supports") return undefined;
+    if ((ownerReviewVerified && record.owner_review?.outcome === "conflicts") ||
+        (!ownerReviewVerified && record.candidate_outcome === "conflicts" && record.candidate_status === "present" &&
+          record.evidence_status === "exact_spans_present")) {
       return "plan_goal_purpose_relation_conflicts";
     }
-    // Exact citations establish provenance only. No independent J semantic assessor is connected yet.
+    // C claims and exact citations remain non-authoritative; only a current, audited owner review can settle this relation.
     return "plan_goal_purpose_relation_unverified";
   }
 
@@ -1474,10 +1640,17 @@ export class OperationPlanLedger {
       semantic_assessment_status: "not_assessed" as const, used_for_authority: false as const, may_execute: false as const,
     };
     const issue = this.goalPurposeRelationIssue(p);
+    const ownerReviewVerified = this.goalPurposeRelationOwnerReviewIsVerified(p, record);
     return {
-      status: issue === "plan_goal_purpose_relation_stale" ? "stale" as const : "unverified" as const,
+      status: issue === "plan_goal_purpose_relation_stale" ? "stale" as const
+        : issue === "plan_goal_purpose_relation_conflicts" ? "conflicts" as const
+          : ownerReviewVerified && record.owner_review?.outcome === "supports" ? "owner_reviewed_supports" as const
+            : ownerReviewVerified && record.owner_review?.outcome === "unknown" ? "owner_reviewed_unknown" as const
+              : "unverified" as const,
       candidate_outcome: record.candidate_outcome, candidate_status: record.candidate_status,
       evidence_status: record.evidence_status, evidence_count: record.evidence_digests.length,
+      ...(ownerReviewVerified && record.owner_review ? { owner_review_outcome: record.owner_review.outcome } : {}),
+      owner_review_status: !record.owner_review ? "not_reviewed" as const : ownerReviewVerified ? "verified" as const : "invalid" as const,
       semantic_assessment_status: record.semantic_assessment_status,
       record_digest: operationPlanDigest(record), used_for_authority: false as const, may_execute: false as const,
     };

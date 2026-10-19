@@ -8,7 +8,8 @@ export {
 export { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
   type OperationPlanRecoveryEvidence, type OperationPlanRecoveryEvidenceProvenance,
   type OperationPlanRecoveryHoldState, type OperationPlanRecoveryHoldProvenance,
-  type OperationPlanReceiptReconciliationAuthorization } from "./operation_plan.js";
+  type OperationPlanReceiptReconciliationAuthorization,
+  type OperationPlanGoalPurposeRelationReviewContent } from "./operation_plan.js";
 export { verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
 export {
   DOCUMENT_ORGANIZATION_MAX_CYCLES,
@@ -190,6 +191,7 @@ export {
   FINAL_REVIEW_OPERATIONS,
   finalReviewOperationList,
   goalPurposeChangeApprovalTarget,
+  goalPurposeRelationReviewApprovalTarget,
   type ApprovalMode,
   type ApprovalDecision,
   type ApprovalRisk,

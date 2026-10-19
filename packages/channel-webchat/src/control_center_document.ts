@@ -213,6 +213,12 @@ ${CONTROL_CENTER_STYLE}    </style>
           <div id="operation-plan-state-list" class="trace-list">
             <div class="trace-item muted">J計画状態はまだ読み込まれていません。</div>
           </div>
+          <section class="approval-content-review">
+            <strong>taskと作業目的の関係確認</strong>
+            <p class="muted">owner tokenを使って対象task・plan・目的版を固定したL3確認を申請します。supportsの確認はJのplan審査にだけ反映され、Broker permissionや外部作用の承認にはなりません。</p>
+            <input id="purpose-relation-owner-token" type="password" autocomplete="off" placeholder="owner token" />
+            <span id="purpose-relation-submit-status" class="badge warn">未申請</span>
+          </section>
         </section>
 
         <section class="card" data-screen-group="channels">

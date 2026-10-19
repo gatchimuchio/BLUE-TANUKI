@@ -515,6 +515,111 @@ describe("HDS goal governance consumer", () => {
       expect(blockedReview.log.commit.reason).toContain("plan_control_denied:plan_goal_purpose_relation_unverified");
       expect(JSON.stringify(controller.getRuntimeSnapshot())).not.toContain(purposeText);
 
+      const preparedRelationReview = controller.prepareOperationPlanGoalPurposeRelationReview(
+        plan.plan_id, plan.revision_digest, "supports");
+      expect(controller.isOperationPlanGoalPurposeRelationReviewCurrent({
+        ...preparedRelationReview.args, revision_digest: digest("f"),
+      })).toBe(false);
+      expect(preparedRelationReview.content).toMatchObject({
+        task,
+        purpose_text: purposeText,
+        candidate_outcome: "supports",
+        evidence_status: "exact_spans_present",
+      });
+      const relationReviewRequestId = "purpose-plan-relation-review-request";
+      const relationReviewActor = "webchat-owner-token-holder";
+      const relationReviewRequest = createGatewayInternalInboundRequest({
+        id: relationReviewRequestId,
+        channel: "webchat",
+        user: relationReviewActor,
+        content: "Owner submitted a task-purpose relation assessment for L3 review.",
+        timestamp: Date.now() + 1_700,
+        metadata: {
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner",
+          "blue_tanuki.process_kind": "approval",
+          "blue_tanuki.goal_purpose_relation_review.version": "v1",
+          "blue_tanuki.tool_call": {
+            tool_name: "goal.governance.review_task_purpose",
+            arguments: preparedRelationReview.args,
+          },
+        },
+      });
+      const relationReviewDecision = controller.decide(relationReviewRequest);
+      expect(relationReviewDecision.command).toMatchObject({
+        type: "tool_call",
+        payload: { tool_name: "goal.governance.review_task_purpose", arguments: preparedRelationReview.args },
+      });
+      if (!relationReviewDecision.command) throw new Error("task-purpose review did not produce an HDS command");
+      const relationReviewEvaluation = evaluateApproval(relationReviewDecision.command, [], {
+        actor: relationReviewActor, default_mode: "full_access",
+      });
+      expect(relationReviewEvaluation).toMatchObject({
+        decision: "ask", risk: "high", approval_level: "L3_final_review", final_review_required: true,
+      });
+      controller.onApprovalEvaluation(relationReviewEvaluation, { request_id: relationReviewRequestId });
+      const relationReviewCommandDigest = digest("e");
+      const relationReviewCommit = {
+        args: preparedRelationReview.args,
+        request_id: relationReviewRequestId,
+        command_id: relationReviewDecision.command.id,
+        command_digest: relationReviewCommandDigest,
+        proposal_actor: relationReviewActor,
+        reviewer_actor: "webchat-resume-token-holder",
+        content_review_digest: relationReviewCommandDigest,
+        evaluation: relationReviewEvaluation,
+      };
+      expect(controller.commitOperationPlanGoalPurposeRelationReviewAfterL3(relationReviewCommit)).toEqual({
+        ok: false, reason: "approval_not_verified",
+      });
+      expect(controller.recordOperationPlanGoalPurposeRelationContentReview({
+        args: preparedRelationReview.args,
+        request_id: relationReviewRequestId,
+        command_id: relationReviewDecision.command.id,
+        proposal_actor: relationReviewActor,
+        command_digest: relationReviewCommandDigest,
+      })).toBe(true);
+      controller.onCommandLifecycle(relationReviewDecision.command.id, "approval_approved", {
+        actor: "webchat-resume-token-holder",
+        reason: "human_approval:approve",
+        request_id: relationReviewRequestId,
+      });
+      expect(controller.commitOperationPlanGoalPurposeRelationReviewAfterL3(relationReviewCommit))
+        .toEqual({ ok: true, outcome: "supports" });
+      expect(controller.getRuntimeSnapshot().operation_plans.plans[0]?.goal_purpose_relation).toMatchObject({
+        status: "owner_reviewed_supports",
+        owner_review_outcome: "supports",
+        owner_review_status: "verified",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(controller.getAudit().verify()).toBe(true);
+      expect(JSON.stringify(controller.getAudit().list())).not.toContain(purposeText);
+
+      const reviewAfterOwnerAssessment = controller.decide(createGatewayInternalInboundRequest({
+        id: "purpose-plan-review-after-owner-assessment",
+        channel: "webchat",
+        user: "fixture-owner",
+        content: `plan:review ${JSON.stringify({ plan_id: plan.plan_id, revision_digest: plan.revision_digest,
+          step_id: operationPlanDigest("send-one"), goal_purpose_binding: binding })}`,
+        timestamp: Date.now() + 1_800,
+        metadata: {
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner",
+          "blue_tanuki.process_kind": "tool",
+          "blue_tanuki.operator_surface": "developer",
+          "blue_tanuki.operation_core.version": "operation-core.v1",
+        },
+      }));
+      if (!reviewAfterOwnerAssessment.command) throw new Error(
+        `current owner-reviewed plan did not reach J step review: ${reviewAfterOwnerAssessment.log.commit.reason}`);
+      expect(reviewAfterOwnerAssessment.command.type).toBe("tool_call");
+      expect(evaluateApproval(reviewAfterOwnerAssessment.command, [], {
+        actor: "fixture-owner", default_mode: "full_access",
+      })).toMatchObject({ decision: "ask", approval_level: "L3_final_review", final_review_required: true });
+
       const stale = createGatewayInternalInboundRequest({
         id: "purpose-plan-compute-stale",
         channel: "webchat",

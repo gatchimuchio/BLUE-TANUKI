@@ -27,8 +27,11 @@ import {
   FileSearchTargetVersionObservationSchema,
   OperationPlanControlSchema,
   OperationPlanComputeInputSchema,
+  OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   type OperationPlanControl,
   type OperationPlanGoalPurposeBinding,
+  type OperationPlanGoalPurposeRelationOwnerReview,
+  type OperationPlanGoalPurposeRelationReviewArguments,
   getOperationDescriptor,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   FAILURE_REVIEW_LOCAL_P_VERSION,
@@ -37,7 +40,8 @@ import {
 } from "@blue-tanuki/protocol";
 import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
   type OperationPlanRecoveryEvidence, type OperationPlanReceiptReconciliationAuthorization,
-  type OperationPlanCanonicalMemoryRestoreObservation } from "./operation_plan.js";
+  type OperationPlanCanonicalMemoryRestoreObservation, type OperationPlanGoalPurposeRelationReviewContent,
+  operationPlanGoalPurposeRelationReviewAuditDigest } from "./operation_plan.js";
 import { reviewResultReflection, type ResultObservationProjection } from "./operation_result_reflection.js";
 import type {
   ApprovalGateLog,
@@ -62,7 +66,7 @@ import type {
 import { frame } from "./frame.js";
 import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
 import { GoalGovernanceLedger, goalGovernanceEventDigest, type ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
-import { goalPurposeChangeApprovalTarget } from "./approval_policy.js";
+import { goalPurposeChangeApprovalTarget, goalPurposeRelationReviewApprovalTarget } from "./approval_policy.js";
 import { model } from "./model.js";
 import { commit } from "./commit.js";
 import { AuditLog, type AuditEntry } from "./audit.js";
@@ -330,6 +334,34 @@ function goalPurposeChangeApprovalEvidence(
   return askLog && approved ? { timestamp: approved.log.timestamp, evaluation: askLog.evaluation } : null;
 }
 
+function goalPurposeRelationReviewApprovalEvidence(
+  entries: readonly AuditEntry[],
+  input: {
+    request_id: string;
+    command_id: string;
+    proposal_actor: string;
+    reviewer_actor: string;
+    target: string;
+    command_digest: string;
+  },
+): { readonly timestamp: number; readonly evaluation: ApprovalEvaluation } | null {
+  const ask = entries.find(({ log }) => "kind" in log && log.kind === "approval_gate" &&
+    log.request_id === input.request_id && log.command_id === input.command_id &&
+    log.evaluation.decision === "ask" && log.evaluation.context.operation === "tool.call" &&
+    log.evaluation.context.command_id === input.command_id && log.evaluation.context.actor === input.proposal_actor &&
+    log.evaluation.context.target === input.target && log.evaluation.risk === "high" &&
+    log.evaluation.approval_level === "L3_final_review" && log.evaluation.final_review_required);
+  if (!ask || !("kind" in ask.log) || ask.log.kind !== "approval_gate") return null;
+  const contentReview = entries.find(({ index, log }) => index > ask.index && "kind" in log && log.kind === "operation_plan" &&
+    log.event === "goal_purpose_relation_content_reviewed" && log.request_id === input.request_id &&
+    log.command_id === input.command_id && log.projection_digest === input.command_digest && log.used_for_authority === false);
+  if (!contentReview) return null;
+  const approved = entries.find(({ index, log }) => index > contentReview.index && "kind" in log && log.kind === "command_lifecycle" &&
+    log.request_id === input.request_id && log.command_id === input.command_id && log.phase === "approval_approved" &&
+    log.actor === input.reviewer_actor && log.reason === "human_approval:approve");
+  return approved ? { timestamp: approved.log.timestamp, evaluation: ask.log.evaluation } : null;
+}
+
 function replayGoalPurposeChanges(
   audit: AuditLog,
   initial: GoalGovernanceLedger,
@@ -407,7 +439,8 @@ export class HDSUpperController {
   constructor(opts: ControllerOptions = {}) {
     this.operationPlans = new OperationPlanLedger(opts.operation_plan_state, opts.operation_plan_memory,
       opts.operation_plan_recovery_evidence, () => this.goal_governance?.project(Date.now()),
-      (goalRef, version) => this.readGoalPurposeContent(goalRef, version));
+      (goalRef, version) => this.readGoalPurposeContent(goalRef, version),
+      (evidence) => this.operationPlanGoalPurposeRelationReviewAuditEventExists(evidence));
     this.policy = opts.policy ?? DEFAULT_POLICY;
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
@@ -1904,6 +1937,18 @@ ${planControl.question}`,
     return this.audit;
   }
 
+  private operationPlanGoalPurposeRelationReviewAuditEventExists(input: {
+    readonly request_id: string;
+    readonly command_id: string;
+    readonly audit_event_digest: string;
+  }): boolean {
+    if (!this.audit.isPersistent() || !this.audit.verify()) return false;
+    return this.audit.list().some(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+      log.event === "goal_purpose_relation_reviewed" && log.request_id === input.request_id &&
+      log.command_id === input.command_id && log.projection_digest === input.audit_event_digest &&
+      log.used_for_authority === false);
+  }
+
   getGoalGovernanceProjection(asOf = Date.now()): ReadonlyGoalGovernanceProjection | undefined {
     return this.goal_governance?.project(asOf);
   }
@@ -1932,6 +1977,128 @@ ${planControl.question}`,
       purpose_text: record.purpose_text,
       used_for_authority: false,
     });
+  }
+
+  inspectOperationPlanGoalPurposeRelationReview(
+    args: OperationPlanGoalPurposeRelationReviewArguments,
+  ): OperationPlanGoalPurposeRelationReviewContent {
+    const parsed = OperationPlanGoalPurposeRelationReviewArgumentsSchema.parse(args);
+    if (!this.audit.isPersistent() || !this.audit.verify()) throw new Error("plan_goal_purpose_relation_audit_unavailable");
+    return this.operationPlans.inspectGoalPurposeRelationReview(parsed);
+  }
+
+  prepareOperationPlanGoalPurposeRelationReview(
+    planIdDigest: string,
+    revisionDigest: string,
+    outcome: "supports" | "conflicts" | "unknown",
+  ): { readonly args: OperationPlanGoalPurposeRelationReviewArguments; readonly content: OperationPlanGoalPurposeRelationReviewContent } {
+    if (!this.audit.isPersistent() || !this.audit.verify()) throw new Error("plan_goal_purpose_relation_audit_unavailable");
+    return this.operationPlans.prepareGoalPurposeRelationReview(planIdDigest, revisionDigest, outcome);
+  }
+
+  isOperationPlanGoalPurposeRelationReviewCurrent(args: OperationPlanGoalPurposeRelationReviewArguments): boolean {
+    try {
+      const parsed = OperationPlanGoalPurposeRelationReviewArgumentsSchema.parse(args);
+      return this.audit.isPersistent() && this.audit.verify() && this.operationPlans.isGoalPurposeRelationReviewCurrent(parsed);
+    } catch { return false; }
+  }
+
+  recordOperationPlanGoalPurposeRelationContentReview(input: {
+    readonly args: OperationPlanGoalPurposeRelationReviewArguments;
+    readonly request_id: string;
+    readonly command_id: string;
+    readonly proposal_actor: string;
+    readonly command_digest: string;
+  }): boolean {
+    try {
+      const args = OperationPlanGoalPurposeRelationReviewArgumentsSchema.parse(input.args);
+      const request_id = input.request_id.trim();
+      const command_id = input.command_id.trim();
+      const proposal_actor = input.proposal_actor.trim();
+      if (!request_id || !command_id || !proposal_actor || proposal_actor === "system" ||
+          !/^[a-f0-9]{64}$/.test(input.command_digest) || !this.audit.isPersistent() || !this.audit.verify() ||
+          !this.operationPlans.isGoalPurposeRelationReviewCurrent(args)) return false;
+      const target = goalPurposeRelationReviewApprovalTarget(args);
+      const ask = this.audit.list().some(({ log }) => "kind" in log && log.kind === "approval_gate" &&
+        log.request_id === request_id && log.command_id === command_id && log.evaluation.decision === "ask" &&
+        log.evaluation.context.operation === "tool.call" && log.evaluation.context.command_id === command_id &&
+        log.evaluation.context.actor === proposal_actor && log.evaluation.context.target === target &&
+        log.evaluation.risk === "high" && log.evaluation.approval_level === "L3_final_review" &&
+        log.evaluation.final_review_required);
+      if (!ask) return false;
+      this.audit.append({ kind: "operation_plan", event: "goal_purpose_relation_content_reviewed", request_id,
+        command_id, projection_digest: input.command_digest, used_for_authority: false, timestamp: Date.now() });
+      return this.audit.verify();
+    } catch { return false; }
+  }
+
+  commitOperationPlanGoalPurposeRelationReviewAfterL3(input: {
+    readonly args: OperationPlanGoalPurposeRelationReviewArguments;
+    readonly request_id: string;
+    readonly command_id: string;
+    readonly command_digest: string;
+    readonly proposal_actor: string;
+    readonly reviewer_actor: string;
+    readonly content_review_digest: string;
+    readonly evaluation: ApprovalEvaluation;
+  }): { readonly ok: true; readonly outcome: "supports" | "conflicts" | "unknown" }
+    | { readonly ok: false; readonly reason: string } {
+    try {
+      const args = OperationPlanGoalPurposeRelationReviewArgumentsSchema.parse(input.args);
+      const request_id = input.request_id.trim();
+      const command_id = input.command_id.trim();
+      const proposalActor = input.proposal_actor.trim();
+      const reviewerActor = input.reviewer_actor.trim();
+      const target = goalPurposeRelationReviewApprovalTarget(args);
+      const evaluation = input.evaluation;
+      if (!request_id || !command_id || !proposalActor || proposalActor === "system" ||
+          !reviewerActor || reviewerActor === "system" || !/^[a-f0-9]{64}$/.test(input.command_digest) ||
+          input.content_review_digest !== input.command_digest || !this.audit.isPersistent() || !this.audit.verify() ||
+          evaluation.decision !== "ask" || evaluation.context.operation !== "tool.call" ||
+          evaluation.context.command_id !== command_id || evaluation.context.actor !== proposalActor ||
+          evaluation.context.target !== target || evaluation.risk !== "high" ||
+          evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required) {
+        return { ok: false, reason: "approval_not_verified" };
+      }
+      const entries = this.audit.list();
+      const approvalEvidence = goalPurposeRelationReviewApprovalEvidence(entries, {
+        request_id, command_id, proposal_actor: proposalActor, reviewer_actor: reviewerActor, target,
+        command_digest: input.command_digest,
+      });
+      if (!approvalEvidence || JSON.stringify(approvalEvidence.evaluation) !== JSON.stringify(evaluation)) {
+        return { ok: false, reason: "approval_not_verified" };
+      }
+      if (!this.operationPlans.isGoalPurposeRelationReviewCurrent(args)) return { ok: false, reason: "plan_binding_stale" };
+
+      const reviewDraft = {
+        outcome: args.outcome,
+        request_id,
+        command_id,
+        command_digest: input.command_digest,
+        target_digest: createHash("sha256").update(target, "utf8").digest("hex"),
+        proposal_actor_digest: createHash("sha256").update(proposalActor, "utf8").digest("hex"),
+        reviewer_actor_digest: createHash("sha256").update(reviewerActor, "utf8").digest("hex"),
+        content_review_digest: input.content_review_digest,
+        reviewed_at_ms: approvalEvidence.timestamp,
+      };
+      const audit_event_digest = operationPlanGoalPurposeRelationReviewAuditDigest(args, reviewDraft);
+      const priorEvent = entries.find(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+        log.event === "goal_purpose_relation_reviewed" && log.request_id === request_id && log.command_id === command_id);
+      if (priorEvent) {
+        if (!priorEvent || !("kind" in priorEvent.log) || priorEvent.log.kind !== "operation_plan" ||
+            priorEvent.log.projection_digest !== audit_event_digest) return { ok: false, reason: "review_event_conflict" };
+      } else {
+        this.audit.append({ kind: "operation_plan", event: "goal_purpose_relation_reviewed", request_id, command_id,
+          projection_digest: audit_event_digest, used_for_authority: false, timestamp: approvalEvidence.timestamp });
+      }
+      const review: OperationPlanGoalPurposeRelationOwnerReview = { ...reviewDraft, audit_event_digest };
+      if (!this.operationPlans.recordGoalPurposeRelationOwnerReview(args, review)) {
+        return { ok: false, reason: "review_record_rejected" };
+      }
+      return { ok: true, outcome: args.outcome };
+    } catch {
+      return { ok: false, reason: "review_commit_failed" };
+    }
   }
 
   close(): void {

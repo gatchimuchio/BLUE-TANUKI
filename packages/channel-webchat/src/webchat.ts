@@ -616,7 +616,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const tokenKind =
       url.pathname === "/resume"
         ? "resume"
-        : url.pathname === "/owner/inbound" || url.pathname === "/owner/goal-purpose-change"
+        : url.pathname === "/owner/inbound" || url.pathname === "/owner/goal-purpose-change" ||
+          url.pathname === "/owner/goal-purpose-relation-review"
         ? "owner"
         : url.pathname === "/webhook"
         ? "webhook"
@@ -681,6 +682,42 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       } catch {
         res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ accepted: false, status: "goal_purpose_change_unavailable" }));
+      }
+      return;
+    }
+
+    if (url.pathname === "/owner/goal-purpose-relation-review") {
+      const plan_id_digest = typeof body?.plan_id_digest === "string" ? body.plan_id_digest : "";
+      const revision_digest = typeof body?.revision_digest === "string" ? body.revision_digest : "";
+      const outcome = body?.outcome;
+      if (!this.opts.onGoalPurposeRelationReviewProposal) {
+        res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "goal_purpose_relation_review_not_configured" }));
+        return;
+      }
+      if (!/^[a-f0-9]{64}$/.test(plan_id_digest) || !/^[a-f0-9]{64}$/.test(revision_digest) ||
+          !["supports", "conflicts", "unknown"].includes(String(outcome))) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "valid plan/revision digests and outcome are required" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, "owner-purpose-relation-token-holder", res)) return;
+      try {
+        const result = await this.opts.onGoalPurposeRelationReviewProposal({
+          plan_id_digest,
+          revision_digest,
+          outcome: outcome as "supports" | "conflicts" | "unknown",
+          actor: OWNER_TOKEN_ACTOR,
+        });
+        res.writeHead(result.accepted ? 202 : 409, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify(result));
+      } catch {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, status: "goal_purpose_relation_review_unavailable" }));
       }
       return;
     }

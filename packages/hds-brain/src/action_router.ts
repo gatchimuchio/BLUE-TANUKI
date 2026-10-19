@@ -1,5 +1,6 @@
 import type { InboundRequest } from "@blue-tanuki/protocol";
-import { getToolOperationDescriptor, isGatewayInternalInboundRequest } from "@blue-tanuki/protocol";
+import { getToolOperationDescriptor, isGatewayInternalInboundRequest,
+  OperationPlanGoalPurposeRelationReviewArgumentsSchema } from "@blue-tanuki/protocol";
 
 export interface ToolActionRoute {
   type: "tool_call";
@@ -75,6 +76,9 @@ function routeMetadata(req: InboundRequest): ActionRoute {
   if (toolName === "goal.governance.change") {
     return routeInternalGoalPurposeChange(req, argsRaw);
   }
+  if (toolName === "goal.governance.review_task_purpose") {
+    return routeInternalGoalPurposeRelationReview(req, argsRaw);
+  }
   return buildToolRoute(toolName, { ...argsRaw });
 }
 
@@ -103,6 +107,27 @@ function routeInternalGoalPurposeChange(req: InboundRequest, args: Record<string
     tool_name: "goal.governance.change",
     arguments: { ...args },
     allowed_capabilities: ["tool:goal.governance.change"],
+    timeout_ms: 10_000,
+  };
+}
+
+function routeInternalGoalPurposeRelationReview(req: InboundRequest, args: Record<string, unknown>): ActionRoute {
+  const metadata = req.metadata ?? {};
+  if (!isGatewayInternalInboundRequest(req) ||
+      metadata["blue_tanuki.authority_context"] !== "gateway_internal_v1" ||
+      metadata["blue_tanuki.actor_kind"] !== "owner" ||
+      metadata["blue_tanuki.process_kind"] !== "approval" ||
+      metadata["blue_tanuki.goal_purpose_relation_review.version"] !== "v1" ||
+      req.content !== "Owner submitted a task-purpose relation assessment for L3 review.") {
+    return { type: "noop", reason: "task-purpose relation review requires a trusted Gateway approval request" };
+  }
+  const parsed = OperationPlanGoalPurposeRelationReviewArgumentsSchema.safeParse(args);
+  if (!parsed.success) return { type: "noop", reason: "task-purpose relation review arguments are invalid" };
+  return {
+    type: "tool_call",
+    tool_name: "goal.governance.review_task_purpose",
+    arguments: parsed.data,
+    allowed_capabilities: ["tool:goal.governance.review_task_purpose"],
     timeout_ms: 10_000,
   };
 }

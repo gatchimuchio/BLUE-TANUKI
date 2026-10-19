@@ -981,17 +981,34 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             not_required: "作業目的版未選択のためrelation未記録",
             unavailable: "C候補のrelation記録なし（step確認を停止）",
             stale: "task・計画・目的版との対応が古い（step確認を停止）",
-            unverified: "C候補は非権威。J意味評価未実装のためstep確認を停止",
+            unverified: "C候補は非権威。明示確認までstep選択を停止",
+            conflicts: "確認結果は作業目的と競合（step選択を停止）",
+            owner_reviewed_supports: "owner-token holderがtask・plan・目的版を確認済み（Jのplan審査へ進行可能）",
+            owner_reviewed_unknown: "確認結果は不明（step選択を停止）",
           };
-          const purposeRelationDetail = purposeRelation && purposeRelation.status === "unverified"
+          const purposeRelationDetail = purposeRelation && ["unverified", "conflicts", "owner_reviewed_supports", "owner_reviewed_unknown"].includes(purposeRelation.status)
             ? '<br>' + escapeHtml([
               "候補=" + String(purposeRelation.candidate_outcome || "unknown"),
               "引用照合=" + String(purposeRelation.evidence_status || "not_provided"),
               "引用数=" + String(purposeRelation.evidence_count ?? 0),
               "意味評価=" + String(purposeRelation.semantic_assessment_status || "not_assessed"),
+              "owner確認=" + String(purposeRelation.owner_review_outcome || purposeRelation.owner_review_status || "not_reviewed"),
             ].join("・")) : "";
           const purposeRelationLabel = purposeRelation && Object.prototype.hasOwnProperty.call(purposeRelationStatusLabels, purposeRelation.status)
             ? '<dt>taskと作業目的の関係</dt><dd>' + escapeHtml(purposeRelationStatusLabels[purposeRelation.status]) + purposeRelationDetail + '</dd>'
+            : '';
+          const purposeRelationReviewReady = purposeRelation && purposeBinding &&
+            ["unverified", "conflicts", "owner_reviewed_supports", "owner_reviewed_unknown"].includes(purposeRelation.status) &&
+            purposeBinding.goal_ref && Number.isSafeInteger(purposeBinding.purpose_version) &&
+            /^[a-f0-9]{64}$/.test(purposeBinding.purpose_digest || "") && reconciliationPlanReady && !recoveryHold;
+          const purposeRelationReviewActions = purposeRelationReviewReady
+            ? '<section class="approval-content-review"><label>task・plan・目的版の関係を選択 ' +
+              '<select data-purpose-relation-outcome="true"><option value="supports">目的に沿う</option>' +
+              '<option value="conflicts">目的と競合</option><option value="unknown">不明・保留</option></select></label> ' +
+              '<button type="button" class="secondary" data-purpose-relation-review="true" data-plan-id="' +
+              escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) + '">内容を確認してL3審査へ</button>' +
+              '<span class="badge" data-purpose-relation-status="true" aria-live="polite"></span>' +
+              '<p class="muted">申請後、承認キューでtask・目的本文・planを再確認します。承認結果はこのplan revisionにだけ結び付きます。</p></section>'
             : '';
           return '<article class="trace-item">' +
             '<div class="row"><h3>計画 ' + escapeHtml(shortDigest(plan.plan_id)) + '</h3><span>' + badge("revision " + String(plan.revision), "review") + '</span></div>' +
@@ -1002,6 +1019,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             purposeBindingLabel + purposeRelationLabel +
             '<dt>step数</dt><dd>' + escapeHtml(String(plan.step_count ?? steps.length)) + '</dd></dl>' +
             (recoveryHold ? '<p class="muted">この計画のstep選択は停止中です。復元scopeとの関係表示はplan単位の復元やhold解除を意味しません。状態を確認後に続ける場合は、新しい依頼から新規計画を作成してください。</p>' : '') +
+            purposeRelationReviewActions +
             steps.map(function (step) {
               const binding = isObject(step.binding) ? step.binding : {};
               const unknown = step.status === "outcome_unknown";
@@ -1125,12 +1143,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const goalPurposeReview = isObject(item.goal_purpose_change_review) && item.goal_purpose_change_review.kind === "goal_purpose_change"
                 ? item.goal_purpose_change_review
                 : null;
+              const goalPurposeRelationReview = isObject(item.goal_purpose_relation_review) &&
+                item.goal_purpose_relation_review.kind === "task_purpose_relation" ? item.goal_purpose_relation_review : null;
               const requiresContentReview = item.content_review_required === true;
               const approveBlocked = requiresContentReview || Boolean(cronReview && cronReview.eligible !== true);
               if (item.command_id && item.approval_token) {
                 state.approvalTokens[item.command_id] = item.approval_token;
               }
-              return '<article class="queue-item" data-command="' + escapeHtml(item.command_id || "") + '">' +
+              return '<article class="queue-item" data-command="' + escapeHtml(item.command_id || "") + '"' +
+                (goalPurposeRelationReview ? ' data-plan-id-digest="' + escapeHtml(goalPurposeRelationReview.plan_id_digest) +
+                  '" data-task-digest="' + escapeHtml(goalPurposeRelationReview.task_digest) +
+                  '" data-revision-digest="' + escapeHtml(goalPurposeRelationReview.revision_digest) +
+                  '" data-goal-ref="' + escapeHtml(goalPurposeRelationReview.goal_ref) +
+                  '" data-purpose-version="' + escapeHtml(goalPurposeRelationReview.purpose_version) +
+                  '" data-purpose-digest="' + escapeHtml(goalPurposeRelationReview.purpose_digest) +
+                  '" data-relation-outcome="' + escapeHtml(goalPurposeRelationReview.outcome) + '"' : '') + '>' +
                 '<div class="row"><h3>' + escapeHtml(item.operation || "unknown operation") + '</h3><span>' + finalBadge + '</span></div>' +
                 '<dl class="kv">' +
                 '<dt>command</dt><dd class="mono">' + escapeHtml(item.command_id || "unknown") + '</dd>' +
@@ -1164,8 +1191,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                     '<dt>content review</dt><dd>' + escapeHtml(goalPurposeReview.review_status || "required") + '</dd>' +
                     '</dl><p class="muted">The exact purpose text is held in memory until this approval ends and is revealed only after selecting Review exact purpose.</p></section>'
                   : '') +
+                (goalPurposeRelationReview
+                  ? '<section class="approval-content-review"><strong>taskと作業目的の関係確認</strong><dl class="kv">' +
+                    '<dt>plan digest</dt><dd class="mono">' + escapeHtml(shortDigest(goalPurposeRelationReview.plan_id_digest)) + '</dd>' +
+                    '<dt>revision digest</dt><dd class="mono">' + escapeHtml(shortDigest(goalPurposeRelationReview.revision_digest)) + '</dd>' +
+                    '<dt>目的版</dt><dd>' + escapeHtml(goalPurposeRelationReview.goal_ref) + ' v' + escapeHtml(goalPurposeRelationReview.purpose_version) + '</dd>' +
+                    '<dt>選択した関係</dt><dd>' + escapeHtml(goalPurposeRelationReview.outcome) + '</dd>' +
+                    '<dt>内容確認</dt><dd>' + escapeHtml(goalPurposeRelationReview.review_status || "required") + '</dd>' +
+                    '</dl><p class="muted">task・目的本文・planはプロセス内だけに保持し、「task・目的の内容を確認」を選んだ後に表示します。承認はこのrevisionへの関係記録だけを行い、実行権限を与えません。</p></section>'
+                  : '') +
                 (requiresContentReview
-                  ? '<section class="approval-content-review"><button data-review-content="' + escapeHtml(item.command_id || "") + '">' + (goalPurposeReview ? 'Review exact purpose' : 'Review exact content') + '</button><div data-content-review-view aria-live="polite">Content has not been revealed.</div></section>'
+                  ? '<section class="approval-content-review"><button data-review-content="' + escapeHtml(item.command_id || "") + '">' +
+                    (goalPurposeReview ? 'Review exact purpose' : goalPurposeRelationReview ? 'task・目的の内容を確認' : 'Review exact content') +
+                    '</button><div data-content-review-view aria-live="polite">Content has not been revealed.</div></section>'
                   : '') +
                 '<div class="action-row">' +
                 '<button class="primary" data-verdict="approve" data-command="' + escapeHtml(item.command_id || "") + '"' + (approveBlocked ? ' disabled' : '') + '>Approve</button>' +
@@ -3207,6 +3245,73 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.textContent = "Refresh exact purpose";
           return;
         }
+        if (review.kind === "goal_purpose_relation") {
+          if (review.command_id !== commandId || review.operation !== "goal.governance.review_task_purpose" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !/^[a-f0-9]{64}$/.test(review.command_digest || "") ||
+              !/^[a-f0-9]{64}$/.test(review.request_payload_digest || "") ||
+              !/^[a-f0-9]{64}$/.test(review.plan_id_digest || "") ||
+              !/^[a-f0-9]{64}$/.test(review.task_digest || "") ||
+              !/^[a-f0-9]{64}$/.test(review.revision_digest || "") ||
+              !/^[a-f0-9]{64}$/.test(review.purpose_digest || "") ||
+              typeof review.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(review.goal_ref) ||
+              !Number.isSafeInteger(review.purpose_version) || review.purpose_version <= 0 ||
+              !["supports", "conflicts", "unknown"].includes(review.outcome) ||
+              typeof review.task !== "string" || typeof review.purpose_text !== "string" || !isObject(review.plan) ||
+              review.plan_id_digest !== card.dataset.planIdDigest || review.task_digest !== card.dataset.taskDigest ||
+              review.revision_digest !== card.dataset.revisionDigest || review.goal_ref !== card.dataset.goalRef ||
+              String(review.purpose_version) !== card.dataset.purposeVersion ||
+              review.purpose_digest !== card.dataset.purposeDigest || review.outcome !== card.dataset.relationOutcome ||
+              !["supports", "conflicts", "unknown"].includes(review.candidate_outcome) ||
+              !["present", "missing", "invalid"].includes(review.candidate_status) ||
+              !["exact_spans_present", "not_provided", "citation_mismatch", "purpose_unavailable"].includes(review.evidence_status) ||
+              !Number.isSafeInteger(review.evidence_count) || review.evidence_count < 0) {
+            throw new Error("task・目的確認の内容がこの承認要求と一致しません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "正確なtask・委任目的・操作計画";
+          view.appendChild(heading);
+          [
+            ["L3確認に選択した関係", review.outcome],
+            ["plan digest", review.plan_id_digest],
+            ["revision digest", review.revision_digest],
+            ["task digest", review.task_digest],
+            ["作業目的", review.goal_ref + " v" + String(review.purpose_version)],
+            ["目的digest", review.purpose_digest],
+            ["C候補", String(review.candidate_outcome) + " / " + String(review.candidate_status)],
+            ["引用照合", String(review.evidence_status) + " / " + String(review.evidence_count)]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          [["正確なtask", review.task], ["正確な委任目的", review.purpose_text]].forEach(function (field) {
+            const label = document.createElement("strong");
+            label.textContent = field[0];
+            view.appendChild(label);
+            const content = document.createElement("pre");
+            content.textContent = field[1];
+            view.appendChild(content);
+          });
+          const planLabel = document.createElement("strong");
+          planLabel.textContent = "正確な操作計画";
+          view.appendChild(planLabel);
+          const plan = document.createElement("pre");
+          plan.textContent = JSON.stringify(review.plan, null, 2);
+          view.appendChild(plan);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | 審査payload digest: " + review.request_payload_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.command_digest;
+          approve.disabled = false;
+          button.textContent = "task・目的の内容を再確認";
+          return;
+        }
         if (review.command_id !== commandId || review.operation !== "gmail.write.message.send" ||
             review.used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review.command_digest || "") ||
             !/^[a-f0-9]{64}$/.test(review.request_payload_digest || "") ||
@@ -3369,6 +3474,51 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           } catch (error) {
             appendChat("error", error.message);
           } finally {
+            target.disabled = false;
+          }
+          return;
+        }
+        if (target.dataset.purposeRelationReview === "true") {
+          target.disabled = true;
+          const container = target.closest(".trace-item");
+          const outcome = container && container.querySelector("[data-purpose-relation-outcome]");
+          const status = container && container.querySelector("[data-purpose-relation-status]");
+          const ownerTokenInput = byId("purpose-relation-owner-token");
+          const ownerToken = ownerTokenInput.value.trim();
+          if (status) {
+            status.textContent = "送信中";
+            status.className = "badge warn";
+          }
+          try {
+            if (!(outcome instanceof HTMLSelectElement) || !["supports", "conflicts", "unknown"].includes(outcome.value)) {
+              throw new Error("確認結果を選択してください");
+            }
+            const response = await fetch("/owner/goal-purpose-relation-review", {
+              method: "POST",
+              headers: { "content-type": "application/json", ...authHeaders(ownerToken) },
+              body: JSON.stringify({
+                plan_id_digest: target.dataset.planId || "",
+                revision_digest: target.dataset.revisionDigest || "",
+                outcome: outcome.value
+              })
+            });
+            const result = await response.json().catch(function () { return null; });
+            if (!response.ok || !result || result.accepted !== true) {
+              throw new Error(result && (result.status || result.error) || "L3審査依頼を受け付けませんでした (HTTP " + response.status + ")");
+            }
+            if (status) {
+              status.textContent = "L3審査キューへ登録: " + (result.command_id || "command id unavailable");
+              status.className = "badge good";
+            }
+            await loadApprovals();
+            await loadRuntime();
+          } catch (error) {
+            if (status) {
+              status.textContent = error && error.message ? error.message : "審査依頼に失敗しました";
+              status.className = "badge bad";
+            }
+          } finally {
+            ownerTokenInput.value = "";
             target.disabled = false;
           }
           return;

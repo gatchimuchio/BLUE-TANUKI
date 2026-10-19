@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ExecuteCommand, ToolCapability } from "@blue-tanuki/protocol";
+import { OperationPlanGoalPurposeRelationReviewArgumentsSchema, type ExecuteCommand, type OperationPlanGoalPurposeRelationReviewArguments, type ToolCapability } from "@blue-tanuki/protocol";
 
 /** Approval policy is the human-authority layer above HDS ASSERT. */
 export type ApprovalMode = "ask_every_time" | "remember_this_decision" | "full_access";
@@ -161,6 +161,12 @@ export function goalPurposeChangeApprovalTarget(input: {
     input.prior_purpose_digest,
     input.new_purpose_digest,
   ].join(":");
+}
+
+export function goalPurposeRelationReviewApprovalTarget(input: OperationPlanGoalPurposeRelationReviewArguments): string {
+  const parsed = OperationPlanGoalPurposeRelationReviewArgumentsSchema.parse(input);
+  return ["goal.governance.review_task_purpose", parsed.plan_id_digest, parsed.task_digest, parsed.revision_digest,
+    parsed.goal_ref, String(parsed.purpose_version), parsed.purpose_digest, parsed.outcome].join(":");
 }
 
 export function approvalContextFromCommand(command: ExecuteCommand, opts: { actor?: string; now?: number } = {}): ApprovalContext {
@@ -390,6 +396,13 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
       return {
         target_scope: "task_type",
         target: goalPurposeChangeApprovalTarget({ goal_ref, prior_version, prior_purpose_digest, new_purpose_digest }),
+      };
+    }
+    if (command.payload.tool_name === "goal.governance.review_task_purpose") {
+      const parsed = OperationPlanGoalPurposeRelationReviewArgumentsSchema.safeParse(args);
+      return {
+        target_scope: "task_type",
+        target: parsed.success ? goalPurposeRelationReviewApprovalTarget(parsed.data) : "goal.governance.review_task_purpose:invalid",
       };
     }
     if (op === "github.write") {
