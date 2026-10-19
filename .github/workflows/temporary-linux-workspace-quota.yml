@@ -419,12 +419,21 @@ jobs:
           #!/bin/sh
           set -u
           capability_value() {
-            awk -v key="$1" '$1 == key { print $2 }' "$2"
+            while IFS=' ' read -r key value rest; do
+              if [ "$key" = "$1" ]; then
+                printf '%s' "$value"
+                return 0
+              fi
+            done < "$2"
+            return 1
           }
-          printf 'fuse_probe_shell_caps=%s/%s/%s\n' \
-            "$(capability_value CapEff /proc/self/status)" \
-            "$(capability_value CapPrm /proc/self/status)" \
-            "$(capability_value CapBnd /proc/self/status)"
+          shell_caps="$(capability_value CapEff /proc/self/status)/$(capability_value CapPrm /proc/self/status)/$(capability_value CapBnd /proc/self/status)"
+          no_new_privs="$(capability_value NoNewPrivs /proc/self/status)"
+          printf 'fuse_probe_shell_caps=%s no_new_privs=%s\n' "$shell_caps" "$no_new_privs"
+          if [ "$shell_caps" != '0000000000000000/0000000000000000/0000000000000000' ] || [ "$no_new_privs" != '1' ]; then
+            echo "fuse_overlay_no_cap_precondition=failed"
+            exit 0
+          fi
           mkdir -p /workspace /workspace-storage/upper /workspace-storage/work
           fuse_pid=""
           cleanup() {
@@ -447,8 +456,14 @@ jobs:
             sleep 0.1
           done
           if [ "$mounted" != 1 ]; then
-            echo "fuse_overlay_no_cap_mount=failed"
-            sed -E 's#(/home/runner/[^[:space:]]+)#<runner-path>#g' /tmp/fuse-overlayfs-no-cap.log | head -c 1024
+            failure_class=other
+            while IFS= read -r line; do
+              case "$line" in
+                *"Operation not permitted"*) failure_class=operation_not_permitted ;;
+                *"Permission denied"*) failure_class=permission_denied ;;
+              esac
+            done < /tmp/fuse-overlayfs-no-cap.log
+            printf 'fuse_overlay_no_cap_mount=failed class=%s\n' "$failure_class"
             exit 0
           fi
           daemon_caps="$(capability_value CapEff "/proc/$fuse_pid/status")/$(capability_value CapPrm "/proc/$fuse_pid/status")/$(capability_value CapBnd "/proc/$fuse_pid/status")"
