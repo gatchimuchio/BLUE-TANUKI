@@ -57,6 +57,46 @@ jobs:
           done
           test -x /usr/bin/bwrap
 
+      - name: Diagnose delegated cgroup and bubblewrap startup
+        shell: bash
+        run: |
+          set +e
+          uid="$(id -u)"
+          user_cgroup="$(systemctl --user show --property=ControlGroup --value)"
+          user_cgroup_path="/sys/fs/cgroup${user_cgroup}"
+          for control_file in cgroup.controllers cgroup.subtree_control; do
+            if [[ -r "$user_cgroup_path/$control_file" ]]; then
+              printf '%s=%s\n' "$control_file" "$(cat "$user_cgroup_path/$control_file")"
+            else
+              printf '%s=unavailable\n' "$control_file"
+            fi
+          done
+          probe_unit="blue-tanuki-limit-probe-$$.service"
+          systemd-run --user --pipe --wait --unit="$probe_unit" \
+            --property=LimitCORE=0 --property=LimitNOFILE=128 \
+            --property=LimitFSIZE=67108864 --property=MemoryMax=536870912 \
+            --property=TasksMax=64 --property=CPUQuota=100% \
+            --property=RuntimeMaxSec=10s -- /usr/bin/true
+          printf 'systemd_resource_limit_probe_exit=%s\n' "$?"
+          systemctl --user show --no-pager --property=Result \
+            --property=ExecMainCode --property=ExecMainStatus "$probe_unit" 2>/dev/null
+          bwrap_unit="blue-tanuki-bwrap-probe-$$.service"
+          systemd-run --user --pipe --wait --unit="$bwrap_unit" \
+            --property=LimitCORE=0 --property=LimitNOFILE=128 \
+            --property=LimitFSIZE=67108864 --property=MemoryMax=536870912 \
+            --property=TasksMax=64 --property=CPUQuota=100% \
+            --property=RuntimeMaxSec=10s -- /usr/bin/bwrap \
+            --unshare-user --unshare-pid --unshare-net --unshare-ipc --unshare-uts \
+            --new-session --die-with-parent --disable-userns --assert-userns-disabled \
+            --cap-drop ALL --ro-bind /usr /usr --symlink /usr/bin /bin \
+            --symlink /usr/sbin /sbin --symlink /usr/lib /lib --symlink /usr/lib64 /lib64 \
+            --proc /proc --dev /dev --size 67108864 --perms 1777 --tmpfs /tmp \
+            --dir /workspace --chdir /workspace --clearenv \
+            --setenv PATH /usr/bin:/bin -- /usr/bin/true
+          printf 'systemd_bubblewrap_probe_exit=%s\n' "$?"
+          systemctl --user show --no-pager --property=Result \
+            --property=ExecMainCode --property=ExecMainStatus "$bwrap_unit" 2>/dev/null
+
       - name: Set up Rust toolchain
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt
