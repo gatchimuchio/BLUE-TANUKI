@@ -14,6 +14,8 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 2回目の[run 39313672857](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39313672857)もworkspace build／helper buildはPASS、focused shell testは全件failure。failure-only user journalでは対象3 unitが開始後exit-codeとなる以外のprovider診断がなく、既存AppArmor profileの一時適用・cleanupは成功。raw stderrは外へ出さずallowlist済みfailure codeだけを保持する診断修正と、その局所testを追加し、次回Linux runで原因を再確認する。
 
+3回目の[run 39314211580](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39314211580)はworkspace build／helper buildとdiagnostic unit test（1 passed）がPASS。focused shell test 3件は`sandbox_mount_capability_unavailable`でfail-closedした。outer Bubblewrapが全capabilityを明示的に落とさず`CAP_SYS_ADMIN`を追加していたため、`--cap-drop ALL`後に同capabilityだけ追加する修正を次SHAで検証する。cleanupはPASS、未成功commitはmainへ統合しない。
+
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
 WindowsではLinux native runtimeを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1条件のmanual `workflow_dispatch`を使った。一時workflow登録commitは`088733474aa34f69d37bedd9c95c1b6258331d8a`。最初の[run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は既存runner AppArmor profileを変更しないガードで停止し、build/test未実行。修正版の[run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)ではpolicyを保ったnamespace probeとbuildは成功したが、stderrのOS文言差でtest期待値が不一致だった。
