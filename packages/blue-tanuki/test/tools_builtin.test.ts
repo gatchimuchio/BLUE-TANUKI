@@ -1726,7 +1726,7 @@ describe("built-in tools", () => {
           { env: linuxShellTestEnv(root), nativeProviderPath: providerPath },
         ) as Record<string, unknown>;
         expect(result.exit_code).not.toBe(0);
-        expect(result.stderr).toMatch(/File too large/u);
+        expect(result.stderr).toMatch(/File (?:too large|size limit exceeded)/iu);
         expect(result.process_tree_empty).toBe(true);
         const fileSize = await fs.stat(oversizedFile).then((stat) => stat.size).catch(() => 0);
         expect(fileSize).toBeLessThanOrEqual(64 * 1024 * 1024);
