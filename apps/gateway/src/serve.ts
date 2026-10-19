@@ -31,7 +31,7 @@ import {
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "./reconcile_execution_results.js";
-import { operationResultMemoryStorage } from "./operation_result_memory_config.js";
+import { goalPurposeMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
@@ -518,6 +518,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const hds = new HDSUpperController({
     operation_plan_state: operationPlanState,
     operation_plan_memory: operationResultMemoryStorage(),
+    goal_purpose_memory: goalPurposeMemoryStorage(),
     operation_plan_recovery_evidence: startupOperationPlanRecoveryEvidence,
     audit: buildAuditLog(),
     memory: buildHDSMemoryStore(process.env),
@@ -1849,6 +1850,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         prior_version: proposal.prior_version,
         prior_purpose_digest: proposal.prior_purpose_digest,
         new_purpose_digest: proposal.purpose_digest,
+        purpose_text: proposal.purpose_text,
         request_id: pending.log.request_id,
         command_id,
         proposal_actor: proposal.proposal_actor,

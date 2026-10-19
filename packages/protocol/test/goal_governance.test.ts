@@ -91,4 +91,25 @@ describe("goal governance protocol", () => {
     };
     expect(parseGoalGovernanceAtBoundary({ ...config, events: [invalidEvent] }).ok).toBe(false);
   });
+
+  it("accepts only the fixed opaque reference shape for persisted purpose text", () => {
+    const event = {
+      event_ref: "ge_0000000000000001",
+      event_kind: "purpose_change",
+      goal_ref: delegated,
+      source_ref: source,
+      goal_kind: "delegated",
+      prior_version: 1,
+      new_version: 2,
+      prior_purpose_digest: digest("a"),
+      new_purpose_digest: digest("1"),
+      purpose_memory_ref: `F:${"2".repeat(32)}`,
+      authority_kind: "owner",
+      authorization_ref: "ga_0000000000000001",
+      recorded_at: 110,
+      effective_from: 110,
+    };
+    expect(parseGoalGovernanceAtBoundary({ ...config, events: [event] }).ok).toBe(true);
+    expect(parseGoalGovernanceAtBoundary({ ...config, events: [{ ...event, purpose_memory_ref: "F:0000000000000001" }] }).ok).toBe(false);
+  });
 });

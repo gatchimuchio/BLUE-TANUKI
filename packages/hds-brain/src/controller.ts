@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   GoalGovernanceAuthorization,
   GoalGovernanceEvent,
@@ -64,6 +64,8 @@ import { goalPurposeChangeApprovalTarget } from "./approval_policy.js";
 import { model } from "./model.js";
 import { commit } from "./commit.js";
 import { AuditLog, type AuditEntry } from "./audit.js";
+import { GoalPurposeMemoryConsumer, type GoalPurposeMemoryApprovalContext } from "./goal_purpose_memory.js";
+import type { JMemoryApprovalReference } from "./保存取引.js";
 import { normalizeForDetection } from "./normalization.js";
 import {
   DetectorRegistry,
@@ -224,6 +226,8 @@ export interface ControllerOptions {
   goal_relation_graph?: unknown;
   /** Trusted HDS construction input; exact event-to-authorization digests are checked at creation. */
   goal_governance?: GoalGovernanceConfig;
+  /** Private J/M store for exact purpose content, written only after matching L3 review. */
+  goal_purpose_memory?: OperationPlanMemoryStorage;
   operation_plan_state?: OperationPlanStatePort;
   operation_plan_memory?: OperationPlanMemoryStorage;
   /** Verified startup evidence can only hold existing plan selection; it never grants or resumes authority. */
@@ -275,7 +279,7 @@ type GoalPurposeChangeCommitLog = AuthorityEventLog & {
 
 type GoalPurposeChangeCommitResult =
   | { readonly ok: true; readonly event_ref: string; readonly goal_ref: string; readonly version: number; readonly purpose_digest: string; readonly effective_from: number }
-  | { readonly ok: false; readonly reason: "goal_governance_unavailable" | "audit_not_persistent" | "audit_invalid" | "approval_not_verified" | "purpose_version_conflict" | "event_invalid" | "audit_append_failed" };
+  | { readonly ok: false; readonly reason: "goal_governance_unavailable" | "goal_purpose_memory_unavailable" | "audit_not_persistent" | "audit_invalid" | "approval_not_verified" | "purpose_version_conflict" | "event_invalid" | "purpose_memory_commit_failed" | "audit_append_failed" };
 
 function goalPurposeChangeReviewTarget(input: {
   goal_ref: string;
@@ -324,7 +328,11 @@ function goalPurposeChangeApprovalEvidence(
   return askLog && approved ? { timestamp: approved.log.timestamp, evaluation: askLog.evaluation } : null;
 }
 
-function replayGoalPurposeChanges(audit: AuditLog, initial: GoalGovernanceLedger): GoalGovernanceLedger {
+function replayGoalPurposeChanges(
+  audit: AuditLog,
+  initial: GoalGovernanceLedger,
+  purposeMemory?: GoalPurposeMemoryConsumer,
+): GoalGovernanceLedger {
   let ledger = initial;
   const entries = audit.list();
   for (const { index, log } of entries) {
@@ -353,6 +361,10 @@ function replayGoalPurposeChanges(audit: AuditLog, initial: GoalGovernanceLedger
         authorization.event_digest !== goalGovernanceEventDigest(event)) {
       throw new Error("persisted goal purpose change lacks a matching L3 approval record");
     }
+    if (event.purpose_memory_ref) {
+      if (!purposeMemory) throw new Error("persisted goal purpose change requires its private M store");
+      if (!purposeMemory.read(event)) throw new Error("persisted goal purpose change has an invalid private M reference");
+    }
     const appended = ledger.appendAuthorizedEvent(event, authorization);
     if (!appended.ok) throw new Error("persisted goal purpose change does not extend the current J ledger");
     ledger = appended.ledger;
@@ -370,6 +382,8 @@ export class HDSUpperController {
   private readonly self_health: ControllerSelfHealthOptions;
   private readonly goal_relation_tree?: ReadonlyGoalRelationTreeView;
   private goal_governance?: GoalGovernanceLedger;
+  private readonly goalPurposeMemory?: GoalPurposeMemoryConsumer;
+  private goalPurposeMemoryApprovalContext?: GoalPurposeMemoryApprovalContext;
   private readonly operationPlans: OperationPlanLedger;
   private readonly issuedLLM = new Map<string, {
     command: ExecuteCommand;
@@ -395,6 +409,12 @@ export class HDSUpperController {
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
     this.memory = opts.memory;
+    if (opts.goal_purpose_memory) {
+      this.goalPurposeMemory = new GoalPurposeMemoryConsumer(opts.goal_purpose_memory, {
+        readVerifiedMemoryApproval: (reference) => this.readGoalPurposeMemoryApproval(reference),
+      });
+      if (!this.goalPurposeMemory.recoverPending()) throw new Error("goal purpose J/M recovery is not verified");
+    }
     const llmRoute = opts.llm_route ?? {};
     this.llm_route = {
       ...llmRoute,
@@ -409,7 +429,13 @@ export class HDSUpperController {
       const built = GoalGovernanceLedger.create(opts.goal_governance);
       if (!built.ok) throw new Error("invalid goal governance configuration");
       if (!this.audit.verify()) throw new Error("goal governance requires a valid audit chain");
-      this.goal_governance = replayGoalPurposeChanges(this.audit, built.ledger);
+      for (const event of opts.goal_governance.events) {
+        if (event.event_kind === "purpose_change" && event.purpose_memory_ref) {
+          if (!this.goalPurposeMemory) throw new Error("configured goal purpose events require their private M store");
+          if (!this.goalPurposeMemory.read(event)) throw new Error("configured goal purpose event has an invalid private M reference");
+        }
+      }
+      this.goal_governance = replayGoalPurposeChanges(this.audit, built.ledger, this.goalPurposeMemory);
     } else if (this.audit.list().some(({ log }) => isGoalPurposeChangeCommitMarker(log))) {
       throw new Error("persisted goal purpose changes require a base goal governance ledger");
     }
@@ -997,6 +1023,7 @@ ${planControl.question}`,
     readonly prior_version: number;
     readonly prior_purpose_digest: string;
     readonly new_purpose_digest: string;
+    readonly purpose_text: string;
     readonly request_id: string;
     readonly command_id: string;
     readonly proposal_actor: string;
@@ -1033,6 +1060,30 @@ ${planControl.question}`,
       return { ok: false, reason: "approval_not_verified" };
     }
     const approvedAt = approvalEvidence.timestamp;
+    if (Buffer.byteLength(input.purpose_text, "utf8") < 1 || Buffer.byteLength(input.purpose_text, "utf8") > 16 * 1024 ||
+        createHash("sha256").update(Buffer.from(input.purpose_text, "utf8")).digest("hex") !== input.new_purpose_digest) {
+      return { ok: false, reason: "approval_not_verified" };
+    }
+    if (!this.goalPurposeMemory) return { ok: false, reason: "goal_purpose_memory_unavailable" };
+
+    const priorCommit = entries.find(({ log }) => isGoalPurposeChangeCommitLog(log) &&
+      log.request_id === request_id && log.command_id === command_id);
+    if (priorCommit && isGoalPurposeChangeCommitLog(priorCommit.log)) {
+      const priorEvent = priorCommit.log.goal_governance_event;
+      const stored = this.goalPurposeMemory.read(priorEvent);
+      if (priorEvent.goal_ref !== input.goal_ref || priorEvent.prior_version !== input.prior_version ||
+          priorEvent.new_purpose_digest !== input.new_purpose_digest || stored?.purpose_text !== input.purpose_text) {
+        return { ok: false, reason: "approval_not_verified" };
+      }
+      return {
+        ok: true,
+        event_ref: priorEvent.event_ref,
+        goal_ref: priorEvent.goal_ref,
+        version: priorEvent.new_version,
+        purpose_digest: priorEvent.new_purpose_digest,
+        effective_from: priorEvent.effective_from,
+      };
+    }
 
     const current = ledger.project(Date.now()).goals.find((goal) => goal.goal_ref === input.goal_ref);
     if (!current || current.goal_kind !== "delegated" || current.current_version !== input.prior_version ||
@@ -1041,10 +1092,16 @@ ${planControl.question}`,
       return { ok: false, reason: "purpose_version_conflict" };
     }
 
-    const effective_from = Math.max(Date.now(), approvedAt);
-    const authorization_ref = `ga_${randomBytes(16).toString("hex")}`;
+    const effective_from = Math.max(current.effective_from + 1, approvedAt);
+    if (!Number.isSafeInteger(effective_from)) return { ok: false, reason: "event_invalid" };
+    const identityDigest = createHash("sha256").update(JSON.stringify([
+      request_id, command_id, input.goal_ref, input.prior_version,
+      input.prior_purpose_digest, input.new_purpose_digest,
+    ])).digest("hex");
+    const recordId = identityDigest.slice(32, 64);
+    const authorization_ref = `ga_${identityDigest.slice(0, 32)}`;
     const event: GoalPurposeChangeEvent = {
-      event_ref: `ge_${randomBytes(16).toString("hex")}`,
+      event_ref: `ge_${identityDigest.slice(0, 32)}`,
       event_kind: "purpose_change",
       goal_ref: input.goal_ref,
       source_ref: current.source_ref,
@@ -1053,6 +1110,7 @@ ${planControl.question}`,
       new_version: input.prior_version + 1,
       prior_purpose_digest: input.prior_purpose_digest,
       new_purpose_digest: input.new_purpose_digest,
+      purpose_memory_ref: `F:${recordId}`,
       authority_kind: "owner",
       authorization_ref,
       recorded_at: approvedAt,
@@ -1069,6 +1127,26 @@ ${planControl.question}`,
     };
     const appended = ledger.appendAuthorizedEvent(event, authorization);
     if (!appended.ok) return { ok: false, reason: "event_invalid" };
+
+    let memoryCommitted: { readonly ok: true } | { readonly ok: false; readonly reason: string };
+    try {
+      memoryCommitted = this.goalPurposeMemory.commit(event, input.purpose_text, (reference) => {
+        this.goalPurposeMemoryApprovalContext = {
+          ...reference,
+          request_id,
+          command_id,
+          proposal_actor: proposalActor,
+          actor,
+          target,
+          evaluation,
+        };
+      });
+    } catch {
+      memoryCommitted = { ok: false, reason: "purpose_memory_commit_failed" };
+    } finally {
+      this.goalPurposeMemoryApprovalContext = undefined;
+    }
+    if (!memoryCommitted.ok) return { ok: false, reason: "purpose_memory_commit_failed" };
 
     const commitLog: GoalPurposeChangeCommitLog = {
       kind: "authority_event",
@@ -1100,6 +1178,21 @@ ${planControl.question}`,
       purpose_digest: event.new_purpose_digest,
       effective_from: event.effective_from,
     };
+  }
+
+  private readGoalPurposeMemoryApproval(reference: JMemoryApprovalReference): unknown {
+    const context = this.goalPurposeMemoryApprovalContext;
+    if (!context || context.update_id !== reference.update_id || context.j_event_id !== reference.j_event_id ||
+        context.content_digest !== reference.content_digest || !this.audit.isPersistent() || !this.audit.verify()) return null;
+    const evidence = goalPurposeChangeApprovalEvidence(this.audit.list(), {
+      request_id: context.request_id,
+      command_id: context.command_id,
+      proposal_actor: context.proposal_actor,
+      reviewer_actor: context.actor,
+      target: context.target,
+    });
+    if (!evidence || JSON.stringify(evidence.evaluation) !== JSON.stringify(context.evaluation)) return null;
+    return Object.freeze({ ...reference });
   }
 
   /**
@@ -1752,6 +1845,36 @@ ${planControl.question}`,
 
   getGoalGovernanceProjection(asOf = Date.now()): ReadonlyGoalGovernanceProjection | undefined {
     return this.goal_governance?.project(asOf);
+  }
+
+  /** Read exact purpose content from J-approved M storage; references and content grant no authority. */
+  readGoalPurposeContent(goalRef: string, version: number): {
+    readonly goal_ref: string;
+    readonly version: number;
+    readonly purpose_digest: string;
+    readonly purpose_text: string;
+    readonly used_for_authority: false;
+  } | null {
+    if (!this.goalPurposeMemory || !/^goal_[a-f0-9]{16,64}$/.test(goalRef) ||
+        !Number.isSafeInteger(version) || version < 2) return null;
+    const event = this.audit.list().map(({ log }) => log)
+      .filter(isGoalPurposeChangeCommitLog)
+      .map((log) => log.goal_governance_event)
+      .find((candidate) => candidate.goal_ref === goalRef && candidate.new_version === version);
+    if (!event?.purpose_memory_ref) return null;
+    const record = this.goalPurposeMemory.read(event);
+    if (!record) return null;
+    return Object.freeze({
+      goal_ref: record.goal_ref,
+      version: record.purpose_version,
+      purpose_digest: record.purpose_digest,
+      purpose_text: record.purpose_text,
+      used_for_authority: false,
+    });
+  }
+
+  close(): void {
+    this.goalPurposeMemory?.close();
   }
 
   /**

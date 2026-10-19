@@ -5,6 +5,7 @@ export const GOAL_GOVERNANCE_SCHEMA_VERSION = "blue-tanuki.goal-governance.v1" a
 const GoalRefSchema = z.string().regex(/^goal_[a-f0-9]{16,64}$/);
 const EventRefSchema = z.string().regex(/^ge_[a-f0-9]{16,64}$/);
 const AuthorizationRefSchema = z.string().regex(/^ga_[a-f0-9]{16,64}$/);
+const GoalPurposeMemoryRefSchema = z.string().regex(/^F:[a-f0-9]{32}$/);
 const SourceRefSchema = z.string().regex(/^F:(?:[a-f0-9]{16,64}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i);
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const TimestampSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -49,6 +50,8 @@ export const GoalPurposeChangeEventSchema = z.object({
   new_version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   prior_purpose_digest: DigestSchema,
   new_purpose_digest: DigestSchema,
+  /** Opaque F-reference to a J-approved M content record; never authority by itself. */
+  purpose_memory_ref: GoalPurposeMemoryRefSchema.optional(),
   authority_kind: z.enum(["owner", "hds_j"]),
   parent_goal_version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
   authorization_ref: AuthorizationRefSchema,

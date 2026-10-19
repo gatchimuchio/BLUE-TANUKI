@@ -454,7 +454,6 @@ describe("delegated goal purpose owner review", () => {
       ].join("\n");
       expect(durableBeforeRestart).not.toContain(proposedPurpose);
       expect(durableBeforeRestart).toContain(proposedDigest);
-
       await stopChild(gateway.child);
       gateway = undefined;
       gateway = spawnGateway(runtimeEnv);

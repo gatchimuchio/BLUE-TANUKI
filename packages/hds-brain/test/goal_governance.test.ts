@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecuteCommand, GoalGovernanceAuthorization, GoalGovernanceConfig, GoalGovernanceEvent } from "@blue-tanuki/protocol";
@@ -123,6 +124,21 @@ function createConfig(): GoalGovernanceConfig {
     authorizations,
     events,
   };
+}
+
+function purposeMemoryStorage(root: string) {
+  const privateStateRoot = join(root, "private-state");
+  const purposeDirectory = join(privateStateRoot, "goal-purpose-memory");
+  mkdirSync(purposeDirectory, { recursive: true });
+  return {
+    private_state_root: privateStateRoot,
+    database_path: join(purposeDirectory, "j-control.sqlite"),
+    memory_database_path: join(purposeDirectory, "m-state.sqlite"),
+  };
+}
+
+function contentDigest(text: string): string {
+  return createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
 }
 
 const request = {
@@ -333,12 +349,18 @@ describe("HDS goal governance consumer", () => {
   it("commits a delegated purpose change only from the exact L3 review and replays it from the durable audit chain", () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-goal-governance-audit-"));
     const filepath = join(root, "audit.jsonl");
+    const purposeText = "Exact purpose content retained in M.";
+    const purposeDigest = contentDigest(purposeText);
+    const memoryStorage = purposeMemoryStorage(root);
+    let controller: HDSUpperController | undefined;
+    let restarted: HDSUpperController | undefined;
     try {
-      const controller = new HDSUpperController({
+      controller = new HDSUpperController({
         audit: new AuditLog({ filepath }),
         goal_governance: createConfig(),
+        goal_purpose_memory: memoryStorage,
       });
-      const command = purposeChangeCommand(digest("7"));
+      const command = purposeChangeCommand(purposeDigest);
       const proposalActor = "webchat-owner-token-holder";
       const reviewerActor = "webchat-resume-token-holder";
       const evaluation = evaluateApproval(command, [], { actor: proposalActor, default_mode: "full_access" });
@@ -354,26 +376,38 @@ describe("HDS goal governance consumer", () => {
         goal_ref: delegated,
         prior_version: 2,
         prior_purpose_digest: digest("3"),
-        new_purpose_digest: digest("7"),
+        new_purpose_digest: purposeDigest,
+        purpose_text: purposeText,
         request_id: "owner-request",
         command_id: command.id,
         proposal_actor: proposalActor,
         actor: reviewerActor,
         evaluation,
       });
-      expect(committed).toMatchObject({ ok: true, goal_ref: delegated, version: 3, purpose_digest: digest("7") });
+      expect(committed).toMatchObject({ ok: true, goal_ref: delegated, version: 3, purpose_digest: purposeDigest });
+      expect(controller.readGoalPurposeContent(delegated, 3)).toEqual({
+        goal_ref: delegated,
+        version: 3,
+        purpose_digest: purposeDigest,
+        purpose_text: purposeText,
+        used_for_authority: false,
+      });
       expect(controller.getAudit().verify()).toBe(true);
 
-      const restarted = new HDSUpperController({
+      restarted = new HDSUpperController({
         audit: new AuditLog({ filepath }),
         goal_governance: createConfig(),
+        goal_purpose_memory: memoryStorage,
       });
       const projection = restarted.decide({ ...request, timestamp: Date.now() + 1_000 }).log.frame.goal_governance;
       expect(projection?.goals.find((goal) => goal.goal_ref === delegated)).toMatchObject({
         current_version: 3,
-        current_purpose_digest: digest("7"),
+        current_purpose_digest: purposeDigest,
       });
+      expect(restarted.readGoalPurposeContent(delegated, 3)?.purpose_text).toBe(purposeText);
     } finally {
+      restarted?.close();
+      controller?.close();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -402,6 +436,7 @@ describe("HDS goal governance consumer", () => {
         prior_version: 2,
         prior_purpose_digest: digest("3"),
         new_purpose_digest: digest("8"),
+        purpose_text: "Purpose text whose digest is not the reviewed value.",
         request_id: "owner-request",
         command_id: command.id,
         proposal_actor: proposalActor,
@@ -478,12 +513,18 @@ describe("HDS goal governance consumer", () => {
 
   it("fails closed when a persistent audit append fails", () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-goal-governance-audit-"));
-    const filepath = join(root, "audit.jsonl");
+    const auditDirectory = join(root, "audit");
+    mkdirSync(auditDirectory, { recursive: true });
+    const filepath = join(auditDirectory, "audit.jsonl");
+    const memoryStorage = purposeMemoryStorage(root);
+    const purposeText = "purpose with a computed digest";
+    const purposeDigest = contentDigest(purposeText);
     const controller = new HDSUpperController({
       audit: new AuditLog({ filepath }),
       goal_governance: createConfig(),
+      goal_purpose_memory: memoryStorage,
     });
-    const command = purposeChangeCommand(digest("7"));
+    const command = purposeChangeCommand(purposeDigest);
     const proposalActor = "webchat-owner-token-holder";
     const reviewerActor = "webchat-resume-token-holder";
     const evaluation = evaluateApproval(command, [], { actor: proposalActor, default_mode: "full_access" });
@@ -493,13 +534,14 @@ describe("HDS goal governance consumer", () => {
       reason: "human_approval:approve",
       request_id: "owner-request",
     });
-    rmSync(root, { recursive: true, force: true });
+    rmSync(auditDirectory, { recursive: true, force: true });
 
     expect(controller.commitGoalPurposeChangeAfterL3({
       goal_ref: delegated,
       prior_version: 2,
       prior_purpose_digest: digest("3"),
-      new_purpose_digest: digest("7"),
+      new_purpose_digest: purposeDigest,
+      purpose_text: purposeText,
       request_id: "owner-request",
       command_id: command.id,
       proposal_actor: proposalActor,
@@ -509,6 +551,7 @@ describe("HDS goal governance consumer", () => {
     expect(controller.getAudit().verify()).toBe(false);
     expect(controller.getAudit().list().some(({ log }) => "kind" in log && log.kind === "authority_event" &&
       log.event === "goal_purpose_change_committed")).toBe(false);
+    controller.close();
     rmSync(root, { recursive: true, force: true });
   });
 });
