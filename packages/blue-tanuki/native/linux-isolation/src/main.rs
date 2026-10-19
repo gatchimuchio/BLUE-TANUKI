@@ -1267,7 +1267,22 @@ fn safe_diagnostic(bytes: &[u8]) -> String {
     {
         value
     } else {
-        String::new()
+        let lower = value.to_ascii_lowercase();
+        if lower.contains("operation not permitted") {
+            "operation_not_permitted".to_string()
+        } else if lower.contains("permission denied") {
+            "permission_denied".to_string()
+        } else if lower.contains("no space left on device") {
+            "no_space_left".to_string()
+        } else if lower.contains("invalid argument") {
+            "invalid_argument".to_string()
+        } else if lower.starts_with("bwrap:") {
+            "bubblewrap_launch_failed".to_string()
+        } else if lower.contains("systemd") {
+            "systemd_launch_failed".to_string()
+        } else {
+            String::new()
+        }
     }
 }
 
@@ -1277,8 +1292,66 @@ fn stable_error(error: &str) -> String {
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
     {
-        code.to_string()
+        let detail = error.rsplit(':').next().unwrap_or_default();
+        const SAFE_DETAILS: &[&str] = &[
+            "workspace_quota_unavailable",
+            "workspace_commit_failed",
+            "workspace_changed_during_execution",
+            "workspace_write_limit_exceeded",
+            "shell_root_size_limit_exceeded",
+            "shell_root_entry_limit_exceeded",
+            "shell_root_contains_hard_link",
+            "shell_root_contains_unsupported_entry",
+            "shell_root_unreadable",
+            "shell_root_changed_during_validation",
+            "sandbox_mount_capability_unavailable",
+            "sandbox_namespace_not_isolated",
+            "sandbox_start_or_shutdown_failed",
+            "sandbox_command_start_failed",
+            "sandbox_command_wait_failed",
+            "sandbox_output_capture_failed",
+            "sandbox_result_exceeded_bound",
+            "operation_not_permitted",
+            "permission_denied",
+            "no_space_left",
+            "invalid_argument",
+            "bubblewrap_launch_failed",
+            "systemd_launch_failed",
+        ];
+        if matches!(
+            code,
+            "linux_sandbox_start_or_shutdown_failed" | "sandbox_start_or_shutdown_failed"
+        ) && SAFE_DETAILS.contains(&detail)
+        {
+            format!("{code}:{detail}")
+        } else {
+            code.to_string()
+        }
     } else {
         "provider_error".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{safe_diagnostic, stable_error};
+
+    #[test]
+    fn diagnostics_keep_only_allowlisted_failure_codes() {
+        assert_eq!(
+            safe_diagnostic(b"bwrap: setting up uid map: Operation not permitted\n"),
+            "operation_not_permitted"
+        );
+        assert_eq!(safe_diagnostic(b"/tmp/private path: rejected\n"), "");
+        assert_eq!(
+            stable_error(
+                "linux_sandbox_start_or_shutdown_failed:linux_isolation_error:workspace_quota_unavailable"
+            ),
+            "linux_sandbox_start_or_shutdown_failed:workspace_quota_unavailable"
+        );
+        assert_eq!(
+            stable_error("linux_sandbox_start_or_shutdown_failed:/tmp/private path"),
+            "linux_sandbox_start_or_shutdown_failed"
+        );
     }
 }
