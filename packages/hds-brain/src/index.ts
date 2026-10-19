@@ -139,6 +139,8 @@ export {
   type LLMCommandRoute,
   type ResumeAuditOptions,
   type HDSRuntimeSnapshot,
+  type HDSExecutionAuthorityBinding,
+  consumeHdsExecutionAuthorityBinding,
 } from "./controller.js";
 export {
   routeAction,

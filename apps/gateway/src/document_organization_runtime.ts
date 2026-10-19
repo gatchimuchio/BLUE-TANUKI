@@ -293,7 +293,7 @@ export async function runDocumentOrganizationTask(
       risk: evaluation.risk,
       final_review_required: evaluation.final_review_required,
       reason: evaluation.reason,
-    }, reviewed.command_digest);
+    }, reviewed.command_digest, input.hds.createExecutionAuthorityBinding(command));
     const feedback = await input.executor.execute(approvedCommand);
     lastFeedback = feedback;
     const reviewedFeedback = input.hds.reviewMemoryCitations(command, feedback);

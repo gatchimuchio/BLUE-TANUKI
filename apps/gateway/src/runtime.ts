@@ -165,6 +165,7 @@ async function runCliWithExecutionStore(
     execution_store: executionStore,
     execution_epoch: ownerLease.executionEpoch,
     assert_execution_owner: () => ownerLease.assertActive(),
+    require_hds_execution_binding: true,
   });
   const executor = new Executor({
     llm,
@@ -370,7 +371,7 @@ async function runCliWithExecutionStore(
     risk: approvalEval.risk,
     final_review_required: approvalEval.final_review_required,
     reason: approvalEval.reason,
-  }, reviewed.command_digest);
+  }, reviewed.command_digest, hds.createExecutionAuthorityBinding(command));
   const feedback = await executor.execute(approvedCommand);
   if (feedback.status === "failed") {
     for (const signature of extractFailureSignatures({

@@ -2,6 +2,24 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-01-D02.01-HDS-EXECUTION-SOURCE-BINDING`
+
+開始HEAD／`origin/main`=`61dc8191a5f6d7be629f6e0a53dd876c5bd51e4f`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、D02.01と実callsiteを再読した。開始時local recovery branch二世代とremote backup tag二世代は`61dc819...`／`2e080b6...`で一致。旧D01.03 stashは保持。
+
+HDS `ASSERT`から実際に返した同じcommand objectだけをprivate WeakMapへ登録し、source DecisionLogのrequest／subject digest／actor種別・trust・channel／process／goal projectionと元依頼digestのsource-context sealを発行する。JSON copy、別command、再利用sealを拒否する。GatewayのHDS→Approval→Executor、CLI、資料整理経路でsealを必須化し、Executorの永続ticket proof digestがseal digest、canonical command digest、Approval proofを結合する。sealはissuer provenanceのみで、permissionやpurpose versionを推論しない。
+
+| 限定確認 | 結果 |
+|---|---|
+| HDS／Core／Gateway build、Core／Gateway typecheck | PASS。 |
+| Core approval/source-binding tests | PASS、15/15。 |
+| Gateway `execution_intent_runtime.test.ts` | PASS、6/6。 |
+| Gateway `document_organization_entry.test.ts` | PASS、3/3。root起点・1 workerでCLI／WebChat E2Eを確認。 |
+| `pnpm hds:standalone` | PASS。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件。 |
+| 全workspace build／HDS standalone test suite | 未実施。 |
+
+D02.01のこのsource binding局所部分は`WIRED`だが、委任・意味上の目的版・実体版resolver・独立Broker process認証は`BUILD_GAP`。次は信頼されたdelegation/purpose-version producerからcanonical target version resolverを同一Approval→Executor作用経路へ結ぶ。E03.03のControl Center browser DOM未確認、C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実provider／credential／業務作用、他repo、公開・出荷判断なし。
+
 ### 最新BUILD_BATCH：`QEB-03-E03.03-POST-RESTORE-RESULT-STATUS-PROJECTION`
 
 開始HEAD／`origin/main`=`b565b3a81fc174c36a452da3da21057ee501f954`、開始worktree clean。QE rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、E03.03、Gateway status projectionとControl Center consumerを再読した。編集前にlocal recovery branchとremote backup tagを期待SHA照合・回転し、開始HEADを`backup-main`、直前世代`7b3ac8ffd0509bfd30bb43350e5a9919c80c9585`を`backup-main-prev`へ保全した。

@@ -8,8 +8,8 @@ import {
   parseBoundaryExchangeAtBoundary,
   inspectExecutionResultDelivery,
 } from "@blue-tanuki/protocol";
-import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
-import type { ApprovalOperation, ApprovalRisk } from "@blue-tanuki/hds-brain";
+import { approvalContextFromCommand, consumeHdsExecutionAuthorityBinding, finalReviewRequired } from "@blue-tanuki/hds-brain";
+import type { ApprovalOperation, ApprovalRisk, HDSExecutionAuthorityBinding } from "@blue-tanuki/hds-brain";
 import type {
   ExecuteCommand,
   ExecuteFeedback,
@@ -157,6 +157,7 @@ interface ApprovalRuntime {
   assert_execution_owner?: () => void;
   clock: ExecutorApprovalClock;
   ttl_ms: number;
+  require_hds_execution_binding: boolean;
   last_wall_ms: number;
   last_monotonic_ms: number;
   store?: ExecutionIntentStore;
@@ -170,7 +171,8 @@ export type ApprovedCommand = ExecuteCommand & {
 };
 
 export interface ExecutorApprovalAuthority {
-  approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string): ApprovedCommand;
+  approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string,
+    hds_binding?: HDSExecutionAuthorityBinding): ApprovedCommand;
   /** 再照会は実行しない。未完の消費は結果不明として表示する。 */
   receipt(command: ApprovedCommand): ExecutionIntentReceipt | null;
 }
@@ -184,11 +186,13 @@ export function createExecutorApprovalAuthority(options: ExecutorApprovalOptions
   const runtime: ApprovalRuntime = { authority_id: authorityId, execution_epoch,
     assert_execution_owner: options.assert_execution_owner,
     clock: options.clock ?? { wallNow: Date.now, monotonicNow: () => performance.now() }, ttl_ms,
+    require_hds_execution_binding: options.require_hds_execution_binding ?? false,
     last_wall_ms: 0, last_monotonic_ms: 0, store: options.execution_store };
   readApprovalClock(runtime);
   const authority = Object.freeze({
-    approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string): ApprovedCommand {
-      return approveCommandForExecution(command, proof, runtime, expected_command_digest);
+    approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string,
+      hds_binding?: HDSExecutionAuthorityBinding): ApprovedCommand {
+      return approveCommandForExecution(command, proof, runtime, expected_command_digest, hds_binding);
     },
     receipt(command: ApprovedCommand): ExecutionIntentReceipt | null {
       const record = APPROVED_COMMAND_RECORDS.get(command);
@@ -208,6 +212,7 @@ function approveCommandForExecution(
   inputProof: ExecutorApprovalProof,
   runtime: ApprovalRuntime,
   expected_command_digest?: string,
+  hds_binding?: HDSExecutionAuthorityBinding,
 ): ApprovedCommand {
   runtime.assert_execution_owner?.();
   const snapshot = approvalCommandSnapshot(command);
@@ -233,12 +238,24 @@ function approveCommandForExecution(
   if (expected_command_digest !== undefined && expected_command_digest !== command_digest) {
     throw new Error("Executor approval rejected: reviewed command content changed");
   }
+  if (!hds_binding && runtime.require_hds_execution_binding) {
+    throw new Error("Executor approval rejected: HDS execution authority binding is required");
+  }
+  const hds_source_context_digest = hds_binding
+    ? consumeHdsExecutionAuthorityBinding(command, hds_binding)
+    : null;
   const approved = snapshot as ApprovedCommand;
   const clock = readApprovalClock(runtime);
   const ticket: Readonly<ExecutionIntentTicket> = Object.freeze({
     ticket_id: randomUUID(), execution_epoch: runtime.execution_epoch,
     command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", snapshot.id])).digest("hex"),
-    command_digest, proof_digest: createHash("sha256").update(JSON.stringify(proof)).digest("hex"),
+    command_digest,
+    proof_digest: createHash("sha256").update(JSON.stringify({
+      schema_version: "blue-tanuki.executor-authority-content-binding.v1",
+      command_digest,
+      proof,
+      hds_source_context_digest,
+    })).digest("hex"),
     issued_at_ms: clock.wall, expires_at_ms: clock.wall + runtime.ttl_ms,
   });
   runtime.store?.issue(ticket);

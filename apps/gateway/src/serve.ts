@@ -577,6 +577,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     execution_store: executionStore,
     execution_epoch: ownerLease.executionEpoch,
     assert_execution_owner: () => ownerLease.assertActive(),
+    require_hds_execution_binding: true,
   });
   const startupRecovery = reconcileStartupExecutionState(hds, executionStore, ownerLease.executionEpoch);
   gatewayLog.info("startup saved-result reconciliation", {
@@ -1153,7 +1154,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       risk: executionEvaluation.risk,
       final_review_required: executionEvaluation.final_review_required,
       reason: executionEvaluation.reason,
-    }, reviewedDigest);
+    }, reviewedDigest, hds.createExecutionAuthorityBinding(cmd));
     const planBound = hds.isOperationPlanCommand(cmd.id);
     const admission = planBound ? executionAdmissionForCommand(cmd, executorApproval.receipt(approvedCommand)) : undefined;
     if (!hds.beginOperationPlanAttempt(cmd, admission)) {

@@ -67,6 +67,8 @@ export interface ExecutorApprovalOptions {
   execution_epoch?: string;
   /** Persisted intentを書き込むGateway所有権を、発行・作用境界・結果保存で同期確認する。 */
   assert_execution_owner?: () => void;
+  /** Production Gateway requires the one-use HDS seal for the exact issued command. */
+  require_hds_execution_binding?: boolean;
   clock?: ExecutorApprovalClock;
   /** 発行から実adapter呼出しまでの上限。実行中timeoutとは別。 */
   ticket_ttl_ms?: number;

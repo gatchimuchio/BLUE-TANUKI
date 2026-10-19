@@ -150,6 +150,38 @@ export interface HDSRuntimeSnapshot {
   operation_plans: ReturnType<OperationPlanLedger["projection"]>;
 }
 
+/** An in-process, non-serializable provenance seal for one exact HDS-issued command. */
+export interface HDSExecutionAuthorityBinding {
+  readonly schema_version: "blue-tanuki.hds-execution-authority-binding.v1";
+  readonly source_context_digest: string;
+}
+
+interface HDSExecutionAuthorityBindingRecord {
+  readonly command: ExecuteCommand;
+  readonly source_context_digest: string;
+  consumed: boolean;
+}
+
+const HDS_EXECUTION_AUTHORITY_BINDINGS = new WeakMap<object, HDSExecutionAuthorityBindingRecord>();
+
+/**
+ * Consume the private seal once. Copying its public digest cannot recreate the
+ * HDS issuer record or its binding to the exact command object.
+ */
+export function consumeHdsExecutionAuthorityBinding(
+  command: ExecuteCommand,
+  binding: HDSExecutionAuthorityBinding,
+): string {
+  const record = HDS_EXECUTION_AUTHORITY_BINDINGS.get(binding as object);
+  if (!record || record.command !== command || record.consumed ||
+      binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v1" ||
+      binding.source_context_digest !== record.source_context_digest) {
+    throw new Error("HDS execution authority binding is invalid, copied, or already consumed");
+  }
+  record.consumed = true;
+  return record.source_context_digest;
+}
+
 /**
  * HDSUpperController — Phase 1.
  *
@@ -232,6 +264,8 @@ export class HDSUpperController {
     origin: InboundRequest;
     failure_review_projection?: FailureReviewProjection;
   }>();
+  /** Exact HDS-returned command object -> source log; never serialized. */
+  private readonly issuedExecutionCommands = new WeakMap<ExecuteCommand, DecisionLog>();
 
   /** Commands awaiting executor feedback (already ASSERTed). */
   private readonly inflight = new Map<string, DecisionLog>();
@@ -608,6 +642,7 @@ ${planControl.question}`,
         }
         this.state = "DECIDED";
         this.inflight.set(command.id, log);
+        this.issuedExecutionCommands.set(command, log);
         if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
             req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
           this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req),
@@ -762,6 +797,7 @@ ${planControl.question}`,
       const failureReviewProjection = failureReviewProjectionFromRequest(req);
       const command = this.buildCommand(req, resumeLog, undefined, failureReviewProjection);
       this.inflight.set(command.id, resumeLog);
+      this.issuedExecutionCommands.set(command, resumeLog);
       if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
         this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req),
@@ -1251,6 +1287,46 @@ ${planControl.question}`,
     return checkpointDigest;
   }
   isOperationPlanCommand(command_id: string): boolean { return this.operationPlans.isBound(command_id); }
+  /**
+   * Bind the exact current command to the HDS source that issued it. This is
+   * provenance only: the digest never grants permission or identifies an
+   * adopted semantic purpose version.
+   */
+  createExecutionAuthorityBinding(command: ExecuteCommand): HDSExecutionAuthorityBinding {
+    const source = this.issuedExecutionCommands.get(command);
+    if (!source || this.inflight.get(command.id) !== source || source.commit.decision !== "ASSERT" ||
+        command.upstream_decision.commit_decision !== "ASSERT" ||
+        command.upstream_decision.commit_hash !== source.commit.hash ||
+        command.upstream_decision.request_id !== source.request_id) {
+      throw new Error("HDS execution authority source is unavailable or no longer current");
+    }
+    const projection = source.frame.goal_projection;
+    const source_context_digest = sha256({
+      schema_version: "blue-tanuki.hds-execution-source-context.v1",
+      request_id: source.request_id,
+      command_id: command.id,
+      commit_hash: source.commit.hash,
+      actor_id_digest: sha256(source.frame.actor.actor_id),
+      ...(source.frame.actor.external_user_id
+        ? { external_user_id_digest: sha256(source.frame.actor.external_user_id) }
+        : {}),
+      actor_kind: source.frame.actor.actor_kind,
+      channel: source.frame.actor.channel,
+      actor_trust_level: source.frame.actor.trust_level,
+      process_id: source.frame.process.process_id,
+      goal_projection_id: projection.projection_id,
+      goal_projection_digest: sha256(projection),
+      source_content_sha256: projection.original_request_ref.content_sha256,
+      goal_projection_state: projection.state,
+      goal_authority_status: projection.authority.status,
+    });
+    const binding: HDSExecutionAuthorityBinding = Object.freeze({
+      schema_version: "blue-tanuki.hds-execution-authority-binding.v1",
+      source_context_digest,
+    });
+    HDS_EXECUTION_AUTHORITY_BINDINGS.set(binding, { command, source_context_digest, consumed: false });
+    return binding;
+  }
   beginOperationPlanAttempt(command: ExecuteCommand, admission?: ExecutionAdmission): boolean {
     const known = this.inflight.get(command.id);
     if (this.operationPlans.isBound(command.id) && (!known || known.commit.hash !== command.upstream_decision.commit_hash)) return false;
