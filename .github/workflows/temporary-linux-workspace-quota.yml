@@ -261,14 +261,17 @@ jobs:
           printf fixture > "$lower_source/probe"
           chmod 0444 "$lower_source/probe"
           chmod 0555 "$lower_source"
-          if [[ ! -c /dev/fuse || ! -r /dev/fuse || ! -w /dev/fuse ]]; then
-            echo "fuse_device_unavailable"
-            exit 0
-          fi
           cat > "$probe_script" <<'SH'
           #!/bin/sh
           set -eu
           mkdir -p /workspace /workspace-storage
+          if [ ! -c /dev/fuse ]; then
+            if ! mknod /dev/fuse c 10 229; then
+              echo "fuse_device_node_unavailable"
+              exit 0
+            fi
+          fi
+          chmod 0666 /dev/fuse
           if ! /usr/bin/python3 - <<'PY'
           import ctypes
           import errno
@@ -322,6 +325,7 @@ jobs:
           chmod 0700 "$probe_script"
           bwrap \
             --unshare-user \
+            --unshare-mnt \
             --unshare-pid \
             --unshare-net \
             --unshare-ipc \
@@ -339,7 +343,6 @@ jobs:
             --symlink usr/lib64 /lib64 \
             --proc /proc \
             --dev /dev \
-            --dev-bind-try /dev/fuse /dev/fuse \
             --size 67108864 \
             --perms 1777 \
             --tmpfs /tmp \
@@ -353,7 +356,7 @@ jobs:
             --setenv PATH /usr/bin:/bin \
             --setenv TMPDIR /tmp \
             --setenv LANG C.UTF-8 \
-            -- /bin/sh /fuse-overlay-probe.sh
+            -- /usr/bin/unshare --mount --propagation private /bin/sh /fuse-overlay-probe.sh
 
       - name: Set up Rust toolchain
         run: |
