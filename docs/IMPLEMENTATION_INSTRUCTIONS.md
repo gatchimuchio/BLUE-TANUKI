@@ -17,6 +17,7 @@
 | WebChat `webchat.test.ts` | PASS、94/94。resume-auth/no-store preview、本文を通常queueから除くこと、review bindingを確認。 |
 | 合計4 focused suites | PASS、130/130。 |
 | `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | PASS。buildは15 workspace projects。standaloneでRuntime Invariants全件PASS。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は継続。 |
 | Actions／実provider／実credential／HTTP／Gmail送信 | 未実施。 |
 
 この限定的なsinglepart `text/plain` 経路は`WIRED`。MIME multipart／HTML／添付、独立したOAuth principalと権限・失効証明、D02.02 process／host認証、送信結果の曖昧窓・provider read-back、結果→M→帰還、goalから実作用までの統合Gateway一仕事は未成立。D02.01／D02.02は`BUILD_GAP`のまま。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、QE_QC／QE_QA／5OS実機未実施。次consumerは送信結果・不確定応答の安全な照合／回復境界であり、実provider呼出しは対象にしない。
