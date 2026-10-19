@@ -101,6 +101,9 @@ jobs:
       - name: Build workspace and Linux isolation helper
         run: pnpm build
 
+      - name: Verify Linux isolation diagnostic filtering
+        run: cargo test --locked --offline --manifest-path packages/blue-tanuki/native/linux-isolation/Cargo.toml
+
       - name: Verify Linux shell workspace and aggregate quotas
         run: pnpm exec vitest run packages/blue-tanuki/test/tools_builtin.test.ts --testNamePattern='shell\.exec (uses Linux namespaces and writes only inside its dedicated root|enforces the per-file size limit|bounds aggregate workspace writes and commits only the sandbox view)'
 

@@ -12,6 +12,8 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 初回Actions [run 39313183295](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39313183295) はLinux workspace build／helper buildがPASSし、focused shell test 3件はproviderがverified resultを返す前に全件failure。既存workflow cleanup stepはPASSし、tmpfs／overlay runtimeの成立は未確認。原因特定用に次回だけuser service journalの限定出力を追加する。成功commitへのmain統合はまだ行わない。
 
+2回目の[run 39313672857](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39313672857)もworkspace build／helper buildはPASS、focused shell testは全件failure。failure-only user journalでは対象3 unitが開始後exit-codeとなる以外のprovider診断がなく、既存AppArmor profileの一時適用・cleanupは成功。raw stderrは外へ出さずallowlist済みfailure codeだけを保持する診断修正と、その局所testを追加し、次回Linux runで原因を再確認する。
+
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
 WindowsではLinux native runtimeを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1条件のmanual `workflow_dispatch`を使った。一時workflow登録commitは`088733474aa34f69d37bedd9c95c1b6258331d8a`。最初の[run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は既存runner AppArmor profileを変更しないガードで停止し、build/test未実行。修正版の[run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)ではpolicyを保ったnamespace probeとbuildは成功したが、stderrのOS文言差でtest期待値が不一致だった。
