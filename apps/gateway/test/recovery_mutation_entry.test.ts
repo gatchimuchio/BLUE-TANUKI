@@ -794,6 +794,45 @@ describe("Recovery mutation HDS L3 entry", () => {
       expect(afterDependentReview.body.hds.operation_plans.used_for_authority).toBe(false);
       expect(afterDependentReview.body.hds.operation_plans.raw_payload_exposed).toBe(false);
 
+      const dependentApprovalQueue = await requestJson(port, "/approval", { token: resumeToken });
+      const dependentPendingApproval = (dependentApprovalQueue.body.pending_approvals as Array<Record<string, unknown>>)
+        .find((item) => item.request_id === dependentReviewRequestId && item.operation === "tool.file.search");
+      expect(dependentApprovalQueue.body.pending_approvals).toEqual([
+        expect.objectContaining({
+          request_id: dependentReviewRequestId,
+          operation: "tool.file.search",
+          approval_level: "L1_observe",
+        }),
+      ]);
+      const approvedDependentSearch = await requestJson(port,
+        `/approval/${encodeURIComponent(String(dependentPendingApproval?.command_id))}`, {
+          method: "POST",
+          token: resumeToken,
+          body: { verdict: "approve", approval_token: dependentPendingApproval?.approval_token },
+        });
+      expect(approvedDependentSearch.status, `${JSON.stringify(approvedDependentSearch.body)}\n${gateway.output.join("")}`).toBe(200);
+      expect(approvedDependentSearch.body, gateway.output.join("")).toMatchObject({
+        ok: true,
+        result: { approval: "approve", executed: true, status: "success" },
+      });
+
+      const afterDependentSearch = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(afterDependentSearch.body.pending_approvals).toEqual([]);
+      expect(afterDependentSearch.body.hds.operation_plans.plans).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          plan_id: cleanPlanIdDigest,
+          status: "results_verified",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step_id: operationPlanDigest("restore-clean-step"), status: "verified" }),
+            expect.objectContaining({ step_id: operationPlanDigest("restore-clean-step-dependent"), status: "verified" }),
+          ]),
+        }),
+        expect.objectContaining({ plan_id: residualPlanIdDigest, recovery_hold_reason: "held_residual" }),
+      ]));
+      expect(JSON.stringify(afterDependentSearch.body)).not.toContain(searchLine);
+      expect(afterDependentSearch.body.hds.operation_plans.used_for_authority).toBe(false);
+      expect(afterDependentSearch.body.hds.operation_plans.raw_payload_exposed).toBe(false);
+
       const resultStore = new OperationPlanStateStore(planStatePath);
       try {
         const persisted = resultStore.load();
@@ -807,7 +846,9 @@ describe("Recovery mutation HDS L3 entry", () => {
           }),
           expect.objectContaining({
             step_id: "restore-clean-step-dependent",
-            status: "selected",
+            status: "verified",
+            result_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+            delivery_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
             prepared_step: expect.objectContaining({
               parameters: expect.objectContaining({ query: searchLine }),
             }),
@@ -821,6 +862,14 @@ describe("Recovery mutation HDS L3 entry", () => {
             operation: "file.search",
             status: "succeeded",
             output: expectedSearchResult,
+          }),
+          expect.objectContaining({
+            plan_id: "restore-clean-plan",
+            request_id: "restore-clean-request",
+            step_id: "restore-clean-step-dependent",
+            operation: "file.search",
+            status: "succeeded",
+            output: { ...expectedSearchResult, query: searchLine },
           }),
         ]);
         expect(resultStore.loadRecoveryHoldState()).toMatchObject({
@@ -844,6 +893,14 @@ describe("Recovery mutation HDS L3 entry", () => {
       result_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
     expect(JSON.stringify(cleanExecutionHistory)).not.toContain(searchLine);
+    const dependentExecutionHistory = reviewHistory.replay({ kind: "execution_history", request_id: dependentReviewRequestId! });
+    expect(dependentExecutionHistory).toHaveLength(1);
+    expect(dependentExecutionHistory[0]?.payload).toMatchObject({
+      status: "success",
+      result_present: true,
+      result_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(JSON.stringify(dependentExecutionHistory)).not.toContain(searchLine);
     expect(reviewHistory.replay({ kind: "hds_decision", request_id: residualPlanReviewRequestId! })[0]?.payload).toMatchObject({
       decision: "FAIL",
       reason: "plan_control_denied:plan_recovery_residual_hold",
@@ -856,7 +913,7 @@ describe("Recovery mutation HDS L3 entry", () => {
     });
     expect(reviewHistory.replay({ kind: "execution_history", request_id: residualPlanReviewRequestId! })).toHaveLength(0);
     expect(reviewHistory.replay({ kind: "execution_history", request_id: prematureDependentReviewRequestId! })).toHaveLength(0);
-    expect(reviewHistory.replay({ kind: "execution_history", request_id: dependentReviewRequestId! })).toHaveLength(0);
+    expect(reviewHistory.replay({ kind: "execution_history", request_id: dependentReviewRequestId! })).toHaveLength(1);
   }, 30_000);
 
   it("binds plan restore to its exact L3 scope and rejects changed backup before state mutation", async () => {

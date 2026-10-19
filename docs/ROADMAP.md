@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-03-E03.03-POST-RESTORE-DEPENDENT-STEP-RESULT`では、復元後planの二つ目の依存read-only stepを合成L1 approval後に実行し、前段結果からの実値束縛、二つのresult receipt／bindingの保存、clean planの`results_verified`到達をfocused Gateway integration testで確認した。Runtime SnapshotとComplete Historyは検索行本文を含まず、残差planのholdも維持された。loopback／stub／一時SQLite／合成sandboxの試験であり、実owner承認、provider、credential、業務ファイル、利用者運転状態へのrestore、外部作用ではない。E03.03=`BUILD_GAP`を維持する。
+
 2026-10-19の`QEB-03-E03.03-POST-RESTORE-DEPENDENT-STEP-REVIEW`では、復元後planの依存stepについて、先行read-only検索receiptがないreviewはHDSが拒否し、receiptの`matches[0].line`が保存済みbindingを通じて次stepの検索queryへ実値として渡ると、新しいHDS reviewがL1承認待ちになることをfocused Gateway integration testで確認した。後段承認・実行は未実施。Runtime Snapshotに検索行本文は出ず、残差planのholdも維持される。loopback／stub provider／一時SQLite／合成sandbox上の試験であり、実owner承認、provider、業務ファイル、外部作用ではない。E03.03=`BUILD_GAP`を維持する。
 
 2026-10-19の`QEB-03-E03.03-POST-RESTORE-READ-RESULT`では、復元後のclean planを合成L1承認から隔離workspace内のread-only検索へ進め、結果digestとOperation Planの`verified` bindingがHDSへ戻ることをfocused Gateway integration testで確認した。結果projectionは非権威・raw payload非公開で、残差planの`held_residual`は維持される。これは一時fixtureのローカル試験であり、実owner承認・実業務ファイル・provider・外部作用ではない。E03.03=`BUILD_GAP`を維持する。次は検証済み結果を依存stepの実値と次のreviewへ結ぶ。

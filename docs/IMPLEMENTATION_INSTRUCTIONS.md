@@ -2,7 +2,25 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-03-E03.03-POST-RESTORE-DEPENDENT-STEP-REVIEW`
+### 最新BUILD_BATCH：`QEB-03-E03.03-POST-RESTORE-DEPENDENT-STEP-RESULT`
+
+開始HEAD／`origin/main`=`7b3ac8ffd0509bfd30bb43350e5a9919c80c9585`、開始worktree clean。QE rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、E03.03と実コードを再読した。編集前にlocal recovery branchとremote backup tagを期待SHA照合・回転し、開始HEADを`backup-main`、直前世代`cf9d2c8c7b11f53e7619d13c6fdbe9680031191a`を`backup-main-prev`へ保全した。
+
+前回の2-step復元後plan fixtureを、後段依存stepの合成L1 approval消費・Executor・実結果receiptまで接続した。前段結果から`matches[0].line`を`parameters.query`へ束縛した後段stepを、同じ一時sandbox内でread-only検索し、第二resultとdelivery digestをOperation Plan storeへ保存した。二つのbindingが`verified`となり、HDS projectionはclean planを`results_verified`とした。Runtime SnapshotとComplete Historyに検索行本文は含まれず、`used_for_authority=false`／`raw_payload_exposed=false`を維持した。同じstoreのcollateral residual planは`held_residual`のまま。
+
+この経路はloopback Gateway process、stub provider設定、合成L3／二つのL1 approval token、一時SQLite／Complete History、専用sandbox内の合成一ファイルによる試験。合成approvalは実owner承認ではない。後段stepは隔離ファイルだけをread-only検索した。利用者の運転状態へのrestore、実provider／credential、業務ファイル、外部書込みは使っていない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `recovery_mutation_entry.test.ts` の対象test | PASS。依存結果前の拒否、二段の実値束縛、二つのbinding／resultの検証、後段read-only実行、残差holdとraw非露出を確認。 |
+| Gateway `typecheck` | PASS。 |
+| `pnpm build` | NOT_RUN。製品sourceは変更していない。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件。 |
+| 実owner approval／実provider／credential／業務ファイル／外部書込み／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+この合成復元後planは依存する二つのread-only stepの実結果receiptまで`WIRED`。E03.03全体は`BUILD_GAP`。次consumerは復旧後に検証済みplan結果を操作者向けの仕事状態・次の安全な操作へ結ぶ既存経路を確認し、残差planのholdを維持すること。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の境界を維持する。
+
+### 前回BUILD_BATCH：`QEB-03-E03.03-POST-RESTORE-DEPENDENT-STEP-REVIEW`
 
 開始HEAD／`origin/main`=`cf9d2c8c7b11f53e7619d13c6fdbe9680031191a`、開始worktree clean。QE rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、E03.03と実コードを再読した。編集前にlocal recovery branch／remote backup tagを期待SHA照合・回転し、開始HEADを復元点として保全した。
 
