@@ -89,7 +89,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          result=$(/usr/bin/bwrap \
+          probe_output=
+          if probe_output=$(/usr/bin/bwrap \
             --unshare-user --unshare-mnt --unshare-pid --die-with-parent \
             --cap-drop ALL --cap-add CAP_SYS_ADMIN --cap-add CAP_MKNOD --cap-add CAP_SETPCAP \
             --ro-bind /usr /usr \
@@ -108,7 +109,13 @@ jobs:
               mount -t overlay overlay -o lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work,userxattr,redirect_dir=nofollow,metacopy=off,index=off /workspace || fail overlay_mount_denied
               test "$(cat /workspace/probe)" = fixture || fail overlay_readback_failed
               printf pass
-            ' 2>/dev/null) || result=namespace_or_probe_launch_failed
+            ' 2>/dev/null); then
+            result=$probe_output
+          elif [[ -n "$probe_output" ]]; then
+            result=$probe_output
+          else
+            result=namespace_or_probe_launch_failed
+          fi
           case "$result" in
             pass)
               echo "minimal isolated OverlayFS mount: pass"
