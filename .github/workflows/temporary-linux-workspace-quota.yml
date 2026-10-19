@@ -33,6 +33,43 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes apparmor bubblewrap fuse-overlayfs
 
+      - name: Prepare an ephemeral FUSE device for diagnostics
+        id: fuse-device
+        shell: bash
+        run: |
+          set -u
+          created=false
+          available=false
+          if [[ -c /dev/fuse ]]; then
+            available=true
+            echo "runner_fuse_device=preexisting"
+          else
+            module_available=false
+            if grep -Eq '^[[:space:]]*nodev[[:space:]]+fuse$' /proc/filesystems; then
+              module_available=true
+            elif sudo modprobe fuse >/dev/null 2>&1; then
+              module_available=true
+            fi
+            if [[ "$module_available" = true ]]; then
+              if sudo mknod /dev/fuse c 10 229; then
+                created=true
+                if sudo chmod 0666 /dev/fuse; then
+                  available=true
+                  echo "runner_fuse_device=created_for_ephemeral_probe"
+                else
+                  echo "runner_fuse_device_permission_setup_failed"
+                  if sudo rm -f /dev/fuse; then created=false; fi
+                fi
+              else
+                echo "runner_fuse_device_creation_unavailable"
+              fi
+            else
+              echo "runner_fuse_filesystem_unavailable"
+            fi
+          fi
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+
       - name: Start and verify the systemd user manager
         shell: bash
         run: |
@@ -255,6 +292,10 @@ jobs:
         shell: bash
         run: |
           set -u
+          if [[ ! -c /dev/fuse ]]; then
+            echo "fuse_device_unavailable"
+            exit 0
+          fi
           lower_source="$RUNNER_TEMP/overlay-fuse-lower"
           probe_script="$RUNNER_TEMP/overlay-fuse-probe.sh"
           mkdir -m 0700 "$lower_source"
@@ -266,12 +307,9 @@ jobs:
           set -eu
           mkdir -p /workspace /workspace-storage
           if [ ! -c /dev/fuse ]; then
-            if ! mknod /dev/fuse c 10 229; then
-              echo "fuse_device_node_unavailable"
-              exit 0
-            fi
+            echo "fuse_device_unavailable_in_namespace"
+            exit 0
           fi
-          chmod 0666 /dev/fuse
           if ! /usr/bin/python3 - <<'PY'
           import ctypes
           import errno
@@ -342,6 +380,7 @@ jobs:
             --symlink usr/lib64 /lib64 \
             --proc /proc \
             --dev /dev \
+            --dev-bind /dev/fuse /dev/fuse \
             --size 67108864 \
             --perms 1777 \
             --tmpfs /tmp \
@@ -456,4 +495,16 @@ jobs:
             fi
             if [[ -e "$profile_path" ]]; then sudo rm "$profile_path"; fi
             test ! -e "$profile_path"
+          fi
+
+      - name: Remove the temporary runner FUSE device
+        if: always()
+        shell: bash
+        env:
+          FUSE_DEVICE_CREATED: ${{ steps.fuse-device.outputs.created }}
+        run: |
+          set -euo pipefail
+          if [[ "${FUSE_DEVICE_CREATED:-false}" = true ]]; then
+            if [[ -c /dev/fuse ]]; then sudo rm /dev/fuse; fi
+            test ! -e /dev/fuse
           fi
