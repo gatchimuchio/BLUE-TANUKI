@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { GmailWriteTargetVersionObservationSchema } from "@blue-tanuki/protocol";
+import { approvalContextFromCommand, finalReviewRequired, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { GmailWriteTargetVersionObservationSchema, type ExecuteCommand } from "@blue-tanuki/protocol";
+import { Executor, createExecutorApprovalAuthority, executorCommandDigest } from "../src/executor.js";
+import { StubBackend } from "../src/llm/stub.js";
+import { ToolRegistry } from "../src/tools/registry.js";
 import { createGmailWriteTool, type GoogleWriteResponse, type GoogleWriteTarget } from "../src/tools/google_write.js";
 
 const args = {
@@ -59,5 +63,46 @@ describe("Gmail送信target observation", () => {
     await expect(tool.invoke(args, { ...context, target_version_observation: undefined })).rejects
       .toThrow(/target version evidence is required.*request_sent=false/);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("標準Executor dispatchはticket内の観測をGmail adapterへ渡してからstub transportを呼ぶ", async () => {
+    const request = vi.fn(async (_target: GoogleWriteTarget) => response);
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
+    const tools = new ToolRegistry();
+    tools.register(tool);
+    const command: ExecuteCommand = {
+      id: "fixture-gmail-dispatch-command",
+      type: "tool_call",
+      payload: { tool_name: "gmail.write", arguments: args },
+      constraints: { allowed_tools: ["gmail.write"],
+        allowed_capabilities: [...(tool.required_capabilities ?? [])] },
+      upstream_decision: { frame_goal: "fixture", model_abstraction: "fixture",
+        commit_hash: "c".repeat(64), commit_decision: "ASSERT" },
+    };
+    const observation = await tool.inspect_target_version!(args, {
+      command_digest: operationPlanDigest(command),
+    });
+    const context = approvalContextFromCommand(command);
+    const finalReviewRequiredForCommand = finalReviewRequired(context);
+    const authority = createExecutorApprovalAuthority();
+    const approved = authority.approve(command, {
+      source: finalReviewRequiredForCommand ? "human_final_review" : "approval_gate",
+      decision: finalReviewRequiredForCommand ? "approve" : "allow",
+      approved_by: "fixture-owner",
+      approved_at_ms: 1,
+      upstream_commit_hash: command.upstream_decision.commit_hash,
+      operation: context.operation,
+      risk: context.risk,
+      final_review_required: finalReviewRequiredForCommand,
+      reason: "fixture-only dispatch check",
+    }, executorCommandDigest(command), undefined, observation);
+    const executor = new Executor({ approval_authority: authority, tools, llm: new StubBackend() });
+
+    const feedback = await executor.execute(approved);
+
+    expect(feedback.status).toBe("success");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]?.[0]).toMatchObject({ service: "gmail",
+      path: "/gmail/v1/users/me/messages/send", token: "fixture-token" });
   });
 });

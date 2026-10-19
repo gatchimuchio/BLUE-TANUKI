@@ -2,7 +2,23 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-GMAIL-WRITE-TARGET-OBSERVATION-BINDING`
+### 最新BUILD_BATCH：`QEB-01-D02.01-GMAIL-EXECUTOR-STUB-DISPATCH`
+
+開始HEAD／`origin/main`=`04e76912ae2b93f9e7de92aaab777546885f0804`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02／F02.02、D4-Pocket現行`AGENTS.md` §3.1を再読した。Actionsは条件内で使用できるが、今回のstub dispatch test／typecheckはWindows localで実行可能なため未使用。
+
+fixtureの`gmail.write` adapter、宛先・要求本文のtarget observation、L3承認fixtureを標準`Executor.execute`へ渡し、Executorが承認ticketに結んだ観測を`ToolContext`へ運び、Gmail toolの再照合後にstub transportが一度だけ呼ばれることを確認した。test専用token／stub transportでありHTTP・Google provider・実送信はない。直前batchのGateway testはOperation Plan source→target resolver→HDS binding→Executor ticketの発行までを別途確認している。このtest単体ではGateway／HDS plan bindingからExecutorまでを一緒に駆動していない。
+
+adapter設定をコード上で調べたが、現在のGmail write経路が受け取るのは`GMAIL_ACCESS_TOKEN`／`GOOGLE_ACCESS_TOKEN`のみで、秘密なしのaccount principal metadataは見つからなかった。providerプロフィール照会やcredential読出しは行わず、account identity／provider resource versionは未接続のまま維持する。
+
+| 限定確認 | 結果 |
+|---|---|
+| Core `gmail_write_target_version.test.ts` | PASS、3/3。resolver、欠落／変更のfail-closed、標準Executor dispatch→Gmail adapter→stub transportを確認。 |
+| workspace `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| Actions／実provider／実credential／HTTP／Gmail送信 | 未実施。今回の対象外。 |
+
+D02.01のmessage.send観測とExecutor consumerは引き続き`WIRED`。D02.01／D02.02全体は`BUILD_GAP`。単体dispatch testとGateway HDS-binding testは別々の限定証拠であり、一仕事全体のSYSTEM_SHAPEDを示さない。次は`gmail.write draft.create`の宛先・厳密な要求本文を同じHDS／Executor bindingへ結び、既存draftの可変本文を読む必要がある`draft.send`とは分けて扱う。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-GMAIL-WRITE-TARGET-OBSERVATION-BINDING`
 
 開始HEAD／`origin/main`=`4f17bcaef855a33b3c15f519f7920027835f9c87`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行`AGENTS.md` §3.1を再読した。D4の条件内でActionsを使えるが、Windows localで必要な検査を実行できるためActions／workflowは使っていない。
 
