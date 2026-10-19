@@ -89,48 +89,102 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          stderr_file=$(mktemp)
-          trap 'rm -f "$stderr_file"' EXIT
-          probe_output=
-          if probe_output=$(/usr/bin/bwrap \
-            --unshare-user --unshare-mnt --unshare-pid --die-with-parent \
-            --ro-bind / / --tmpfs /tmp \
-            --dir /tmp/workspace-lower --dir /tmp/workspace-storage --dir /tmp/workspace \
-            --chdir /tmp --clearenv \
-            --setenv PATH /usr/bin:/bin -- \
-            /usr/bin/sh -c '
-              set -eu
-              exec 2>/dev/null
-              fail() { printf "%s" "$1"; exit 1; }
-              printf fixture > /tmp/workspace-lower/probe || fail lower_fixture_setup_failed
-              mount -o remount,ro /tmp/workspace-lower || fail lower_readonly_remount_denied
-              mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700 tmpfs /tmp/workspace-storage || fail upper_tmpfs_mount_denied
-              mkdir /tmp/workspace-storage/upper /tmp/workspace-storage/work || fail upper_work_layout_failed
-              mount -t overlay overlay -o lowerdir=/tmp/workspace-lower,upperdir=/tmp/workspace-storage/upper,workdir=/tmp/workspace-storage/work,userxattr,redirect_dir=nofollow,metacopy=off,index=off /tmp/workspace || fail overlay_mount_denied
-              test "$(cat /tmp/workspace/probe)" = fixture || fail overlay_readback_failed
-              printf pass
-            ' 2>"$stderr_file"); then
-            result=$probe_output
-          elif [[ -n "$probe_output" ]]; then
-            result=$probe_output
-          elif grep -Eiq 'creating new namespace failed|setting up uid map|operation not permitted|permission denied' "$stderr_file"; then
-            result=namespace_setup_denied
-          elif [[ -s "$stderr_file" ]]; then
-            result=bubblewrap_setup_failed
-          else
-            result=namespace_or_probe_launch_failed
+          lower_source="$RUNNER_TEMP/overlay-lower"
+          probe_script="$RUNNER_TEMP/overlay-probe.py"
+          stderr_file="$RUNNER_TEMP/overlay-probe.stderr"
+          mkdir -m 0700 "$lower_source"
+          printf fixture > "$lower_source/probe"
+          chmod 0444 "$lower_source/probe"
+          chmod 0555 "$lower_source"
+          cat > "$probe_script" <<'PY'
+          import ctypes
+          import errno
+          import os
+
+          libc = ctypes.CDLL(None, use_errno=True)
+          libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p]
+          libc.renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+          libc.umount.argtypes = [ctypes.c_char_p]
+
+          def mount(source, target, filesystem, flags=0, options=None):
+              result = libc.mount(
+                  source.encode() if source else None,
+                  target.encode(),
+                  filesystem.encode() if filesystem else None,
+                  flags,
+                  options.encode() if options else None,
+              )
+              return result, ctypes.get_errno()
+
+          def report(name, result, error):
+              print(f"{name}: result={result} errno={error} {errno.errorcode.get(error, 'OK')}", flush=True)
+
+          print(f"uid={os.getuid()} euid={os.geteuid()} gid={os.getgid()}", flush=True)
+          with open('/proc/self/status', encoding='ascii') as status:
+              print(next(line.strip() for line in status if line.startswith('CapEff:')), flush=True)
+
+          result, error = mount('tmpfs', '/workspace-storage', 'tmpfs', 2 | 4, 'size=134217728,nr_inodes=100000,mode=0700')
+          report('tmpfs_mount', result, error)
+          if result != 0:
+              raise SystemExit(0)
+          os.mkdir('/workspace-storage/upper')
+          os.mkdir('/workspace-storage/work')
+          os.chmod('/workspace-storage/upper', 0o700)
+          os.chmod('/workspace-storage/work', 0o700)
+
+          source = b'/workspace-storage/work/.whiteout-probe'
+          destination = b'/workspace-storage/work/.whiteout-probe-moved'
+          fd = os.open(source, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0)
+          os.close(fd)
+          result = libc.renameat2(-100, source, -100, destination, 4)
+          error = ctypes.get_errno()
+          report('rename_whiteout', result, error)
+          for path in (source, destination):
+              try:
+                  os.unlink(path)
+              except FileNotFoundError:
+                  pass
+          if result != 0:
+              raise SystemExit(0)
+
+          options = 'lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work,userxattr,redirect_dir=nofollow,metacopy=off,index=off'
+          result, error = mount('overlay', '/workspace', 'overlay', 2 | 4, options)
+          report('overlay_mount', result, error)
+          if result == 0:
+              try:
+                  print(f"overlay_readback={open('/workspace/probe', encoding='utf-8').read()}", flush=True)
+              finally:
+                  libc.umount(b'/workspace')
+          PY
+          chmod 0600 "$probe_script"
+          set +e
+          /usr/bin/bwrap \
+            --unshare-user --unshare-pid --unshare-net --unshare-ipc --unshare-uts \
+            --new-session --die-with-parent --cap-drop ALL \
+            --cap-add CAP_SYS_ADMIN --cap-add CAP_MKNOD --cap-add CAP_SETPCAP \
+            --ro-bind /usr /usr \
+            --symlink usr/bin /bin --symlink usr/sbin /sbin \
+            --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
+            --proc /proc --dev /dev --size 1073741824 --perms 1777 --tmpfs /tmp \
+            --dir /workspace --dir /workspace-lower \
+            --ro-bind "$lower_source" /workspace-lower \
+            --dir /workspace-storage --dir /commit-target \
+            --ro-bind "$probe_script" /overlay-probe.py \
+            --chdir / --clearenv --setenv PATH /usr/bin:/bin \
+            --setenv HOME /workspace --setenv TMPDIR /tmp --setenv LANG C.UTF-8 \
+            -- /usr/bin/unshare --mount --propagation private /usr/bin/python3 /overlay-probe.py \
+            >"$RUNNER_TEMP/overlay-probe.stdout" 2>"$stderr_file"
+          probe_status=$?
+          set -e
+          if [[ -s "$RUNNER_TEMP/overlay-probe.stdout" ]]; then
+            cat "$RUNNER_TEMP/overlay-probe.stdout"
           fi
-          case "$result" in
-            pass)
-              echo "minimal isolated OverlayFS mount: pass"
-              ;;
-            lower_fixture_setup_failed|lower_readonly_remount_denied|upper_tmpfs_mount_denied|upper_work_layout_failed|overlay_mount_denied|overlay_readback_failed|namespace_setup_denied|bubblewrap_setup_failed)
-              echo "minimal isolated OverlayFS mount: $result"
-              ;;
-            *)
-              echo "minimal isolated OverlayFS mount: namespace_or_probe_launch_failed"
-              ;;
-          esac
+          if [[ "$probe_status" != 0 ]]; then
+            printf 'bubblewrap_probe_exit=%s\n' "$probe_status"
+            if [[ -s "$stderr_file" ]]; then
+              sed -E 's#(/home/runner/[^[:space:]]+)#<runner-path>#g' "$stderr_file"
+            fi
+          fi
 
       - name: Set up Rust toolchain
         run: |
