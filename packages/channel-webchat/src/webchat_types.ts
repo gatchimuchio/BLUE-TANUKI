@@ -471,6 +471,8 @@ export interface WebChatOptions {
    * disabled; webhook-origin metadata is never allowed to carry authority.
    */
   webhook_token?: string;
+  /** Optional dedicated credential for owner-originated inbound requests. */
+  owner_token?: string;
   /**
    * Dedicated bearer token for update/recovery maintenance surfaces.
    * Required when update or recovery surfaces are enabled.

@@ -1935,6 +1935,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       port,
       token,
       resume_token: resumeToken,
+      owner_token: process.env.BLUE_TANUKI_OWNER_TOKEN,
       maintenance_token: maintenanceToken,
       webhook_token: process.env.WEBHOOK_TOKEN,
       host: process.env.WEBCHAT_HOST ?? "127.0.0.1",

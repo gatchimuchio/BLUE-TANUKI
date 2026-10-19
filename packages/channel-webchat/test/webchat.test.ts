@@ -45,6 +45,7 @@ async function allocateTestPort(): Promise<number> {
 
 const TOKEN = "test-token-1234";
 const RESUME_TOKEN = "resume-token-1234";
+const OWNER_TOKEN = "owner-token-1234567890";
 const SETTINGS_TOKEN = "settings-token-1234";
 const WEBHOOK_TOKEN = "webhook-token-1234";
 const MAINTENANCE_TOKEN = "maintenance-token-1234";
@@ -60,6 +61,7 @@ async function setup(
     Ctx & {
       onResume?: (id: string, v: string, ctx: { actor: string; token_kind: "resume" }) => Promise<unknown>;
       resume_token?: string;
+      owner_token?: string;
       webhook_token?: string;
       maintenance_token?: string;
       resume_approval_tokens?: false;
@@ -88,6 +90,7 @@ async function setup(
     port: p,
     token: TOKEN,
     resume_token: opts.resume_token ?? RESUME_TOKEN,
+    owner_token: opts.owner_token,
     webhook_token: opts.webhook_token,
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
@@ -281,6 +284,12 @@ describe("WebChatChannel — construction", () => {
           webhook_token: RESUME_TOKEN,
         }),
     ).toThrow(/webhook_token/);
+  });
+
+  it("requires the owner ingress credential to be separate and sufficiently long", () => {
+    expect(() => new WebChatChannel({ port: 1234, token: TOKEN, owner_token: "short" })).toThrow(/owner_token/);
+    expect(() => new WebChatChannel({ port: 1234, token: TOKEN, owner_token: TOKEN })).toThrow(/owner_token/);
+    expect(() => new WebChatChannel({ port: 1234, token: TOKEN, resume_token: RESUME_TOKEN, owner_token: RESUME_TOKEN })).toThrow(/owner_token/);
   });
 
   it("rejects bad port", () => {
@@ -1943,6 +1952,60 @@ describe("WebChatChannel — HTTP inbound", () => {
     });
     await new Promise((r) => setTimeout(r, 30));
     expect(ctx.received).toHaveLength(0);
+  });
+
+  it("keeps owner ingress disabled without a dedicated credential", async () => {
+    const r = await postJson(
+      ctx.port,
+      "/owner/inbound",
+      { user: "owner-ui", content: "Review this task" },
+      { authorization: `Bearer ${TOKEN}` },
+    );
+    expect(r.status).toBe(404);
+    expect(r.body).toMatchObject({ error: "owner_inbound_not_configured" });
+    expect(ctx.received).toHaveLength(0);
+  });
+
+  it("routes dedicated owner credential input to HDS as a credential-holder class", async () => {
+    const ownerCtx = await setup({ owner_token: OWNER_TOKEN });
+    try {
+      await ownerCtx.ch.start(async (req) => {
+        ownerCtx.received.push(req);
+      });
+      for (const token of [TOKEN, RESUME_TOKEN]) {
+        const rejected = await postJson(
+          ownerCtx.port,
+          "/owner/inbound",
+          { user: "owner-ui", content: "Review this task" },
+          { authorization: `Bearer ${token}` },
+        );
+        expect(rejected.status).toBe(401);
+      }
+      const accepted = await postJson(
+        ownerCtx.port,
+        "/owner/inbound",
+        {
+          user: "owner-ui",
+          content: "Review this task",
+          actor: "owner",
+          metadata: { trust_level: "owner", authority: "bypass" },
+        },
+        { authorization: `Bearer ${OWNER_TOKEN}` },
+      );
+      expect(accepted.status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(ownerCtx.received).toHaveLength(1);
+      expect(ownerCtx.received[0]).toMatchObject({
+        channel: "webchat",
+        user: "webchat-owner-token-holder",
+        content: "Review this task",
+        metadata: { reply_to: "owner-ui" },
+      });
+      expect(ownerCtx.received[0]?.metadata).not.toHaveProperty("actor");
+      expect(ownerCtx.received[0]?.metadata).not.toHaveProperty("trust_level");
+    } finally {
+      await ownerCtx.teardown();
+    }
   });
 
   it("/healthz needs no auth", async () => {

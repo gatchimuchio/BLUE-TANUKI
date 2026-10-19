@@ -15,8 +15,11 @@ describe("setup_config", () => {
     expect(config.schema_version).toBe(1);
     expect(config.llm.provider).toBe("stub");
     expect(config.webchat.token).not.toBe(config.webchat.resume_token);
+    expect(config.webchat.owner_token).not.toBe(config.webchat.token);
+    expect(config.webchat.owner_token).not.toBe(config.webchat.resume_token);
     expect(config.webchat.maintenance_token).not.toBe(config.webchat.token);
     expect(config.webchat.maintenance_token).not.toBe(config.webchat.resume_token);
+    expect(config.webchat.owner_token).not.toBe(config.webchat.maintenance_token);
     expect(config.settings.token).not.toBe(config.webchat.token);
     expect(config.webchat.token.length).toBeGreaterThanOrEqual(16);
 
@@ -25,6 +28,7 @@ describe("setup_config", () => {
     expect(env.BLUE_TANUKI_APPROVAL_MODE).toBe("full_access");
     expect(env.BLUE_TANUKI_FILE_ROOT).toBe(path.resolve("local-data", "files"));
     expect(env.WEBCHAT_TOKEN).toBe(config.webchat.token);
+    expect(env.BLUE_TANUKI_OWNER_TOKEN).toBe(config.webchat.owner_token);
     expect(env.BLUE_TANUKI_MAINTENANCE_TOKEN).toBe(config.webchat.maintenance_token);
     expect(env.BLUE_TANUKI_SETTINGS_TOKEN).toBe(config.settings.token);
   });
@@ -51,6 +55,7 @@ describe("setup_config", () => {
     const file = renderSetupEnvFile(config);
     expect(file).toContain("OPENAI_COMPAT_ENDPOINT=http://localhost:11434/v1");
     expect(file).toContain("WEBCHAT_RESUME_TOKEN=");
+    expect(file).toContain("BLUE_TANUKI_OWNER_TOKEN=");
     expect(file).toContain("BLUE_TANUKI_MAINTENANCE_TOKEN=");
     expect(file).toContain("BLUE_TANUKI_SETTINGS_TOKEN=");
     expect(file).toContain("BLUE_TANUKI_APPROVAL_MODE=full_access");
@@ -217,6 +222,19 @@ describe("setup_config", () => {
     const badTokens: BlueTanukiSetupConfig = createDefaultSetupConfig();
     badTokens.webchat.resume_token = badTokens.webchat.token;
     expect(() => validateSetupConfig(badTokens)).toThrow(/differ/);
+
+    const duplicateOwnerToken: BlueTanukiSetupConfig = createDefaultSetupConfig();
+    duplicateOwnerToken.webchat.owner_token = duplicateOwnerToken.webchat.token;
+    expect(() => validateSetupConfig(duplicateOwnerToken)).toThrow(/owner_token.*differ/);
+  });
+
+  it("adds an owner credential when loading a schema-v1 config created before owner ingress", () => {
+    const legacy = createDefaultSetupConfig();
+    delete (legacy.webchat as Partial<typeof legacy.webchat>).owner_token;
+    const migrated = validateSetupConfig(legacy);
+    expect(migrated.webchat.owner_token).toHaveLength(43);
+    expect(migrated.webchat.owner_token).not.toBe(migrated.webchat.token);
+    expect(setupConfigToEnv(migrated).BLUE_TANUKI_OWNER_TOKEN).toBe(migrated.webchat.owner_token);
   });
 
   it("fails closed when api_key_env is declared but unavailable", () => {

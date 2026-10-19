@@ -2,7 +2,22 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.02-WEBCHAT-INBOUND-PRINCIPAL-PROVENANCE`
+### 最新BUILD_BATCH：`QEB-01-D02.02-WEBCHAT-OWNER-CREDENTIAL-INGRESS`
+
+開始HEAD／`origin/main`=`26fa7b4d59b88f1e17b90a056956c4d9e1887856`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS、作業標準、active指示、D02.01／D02.02とWebChat→Gateway→HDSの実経路を再読した。編集前のlocal recovery branch／remote backup tagはcurrent=`26fa7b4...`／previous=`f0d1023...`。D01.03 stash保持。
+
+Setupが専用の`BLUE_TANUKI_OWNER_TOKEN`を生成・保存する。`POST /owner/inbound`はそのcredentialだけを受け付け、bodyのactor／trust metadataを捨て、固定actor id=`webchat-owner-token-holder`とreply-toだけでGateway→HDS→Complete Historyへ渡す。旧schema-v1 setup configにはowner tokenを一度だけ補完する。HDS上はWebChat userのままであり、このcredential-holder labelは人間identity・owner本人認証ではなく、approval／L3／Broker権限を付与しない。
+
+| 限定確認 | 結果 |
+|---|---|
+| WebChat `webchat.test.ts`／setup config tests | PASS、87/87・12/12。credential分離、未設定時拒否、body authority metadataの非採用を確認。 |
+| Gateway `BT-U-C08.01-P-E2E` | PASS。合成資料整理が専用owner credential routeからHDS・Complete Historyまで通過し、固定actor classと既存非権限出力を確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS、15 workspace projects。 |
+| 全workspace tests／QE_QC／QE_QA／5OS実機 | 未実施。 |
+
+D02.01／D02.02=`BUILD_GAP`。owner-governance eventの永続producer、仕事ごとのpurpose-version選択・適用、file.search以外のBroker target identityは未接続。次consumerは、専用credential由来のowner-governance eventをJ所有状態へ永続化し、明示L3を通した後に仕事別目的版とBroker targetを同じHDS→Executor bindingへ結ぶこと。実credential／業務作用、他repo変更、公開・出荷判断なし。C08.03保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。
+
+### 前回BUILD_BATCH：`QEB-01-D02.02-WEBCHAT-INBOUND-PRINCIPAL-PROVENANCE`
 
 開始HEAD／`origin/main`=`f0d1023d8645bd9febd465ef91a62fadfb22a2d3`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、root`AGENTS.md`、作業標準、active指示、D02とWebChat→Gateway→HDS/Executorの実経路を再読した。編集前に開始HEADをlocal `backup-main`／remote tag `codex/backup-main`へ、前世代`059899f...`を各`backup-main-prev`へ期待値照合して保全した。旧remote backup branchは存在しないことを確認。D01.03 stash保持。
 
@@ -16,7 +31,7 @@
 | Gateway `document_organization_entry.test.ts` | PASS、3/3。workspace rootから再実行し、WebChat route→Gateway→HDS/historyまでcredential-class actorを確認。package cwdからの初回実行はroot相対script解決で失敗したため、test harnessを変更せず正しいroot cwdで再実行。 |
 | `pnpm typecheck`／`pnpm build` | PASS。 |
 | 全workspace tests／Gateway live serve／QE_QC／QE_QA／5OS実機 | 未実施。 |
-| Git | 本記録は次commitに含め、BUILD_BATCH単位で`main`へpushする。 |
+| Git | commit=`26fa7b4d59b88f1e17b90a056956c4d9e1887856`を`main`へpush済み。 |
 
 実provider／実credential／業務作用、D4Pocket／ミニドラ変更、公開・出荷判断なし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はcredential-classを人間identityへ昇格させず、信頼できるowner-governance source・適用purpose version・taskとBroker targetを結ぶ実consumerを進める。
 

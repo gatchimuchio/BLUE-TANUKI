@@ -12,7 +12,7 @@
     { "path": "AUDIT.md", "sha256": "be19096bae5d022ba0ed72a34ca6c7d7bf3fd758fb8e494514290cb4ce6f5608" },
     { "path": "CHANGELOG.md", "sha256": "1f298adf76514c47755726ca3655bcf99d7fb054e1257bba0a0c45c54dbb73dd" },
     { "path": "CLAIM.md", "sha256": "432c86c3ff177af5e1116de7571fe5779507c21917ddebede2c19d9a601c5c93" },
-    { "path": "CONFIG.md", "sha256": "3e50adece1a67bfc6f9897314b44dfb63af7f0fed63e851dc4c9410c6ee9b450" },
+    { "path": "CONFIG.md", "sha256": "3076859b6787843c343a1d92bd6a96632b1fda0c4c5e031468d28311bf41e848" },
     { "path": "deploy/systemd/README.md", "sha256": "041412c5b66118a358486f24a6a4ac44f93288c5eb43f342603522a860c6a425" },
     { "path": "docs/ADAPTER_CONTRACT.md", "sha256": "593489f2c1555d86efb5ca617cccdd54844e661b41d86cd7bf4bd4bc978efcfa" },
     { "path": "docs/BLUE_TANUKI_AUTHORITY_MODEL.md", "sha256": "f4f66c41a2ba0df24f879729318fb1ee6f81b43d46d16ce50027f621d9c08e21" },

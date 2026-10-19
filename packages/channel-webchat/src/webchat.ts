@@ -84,6 +84,7 @@ const DEFAULT_RATE_LIMITS: Required<WebChatRateLimits> = {
 const INBOUND_TOKEN_ACTOR = "webchat-inbound-token-holder";
 const WEBHOOK_TOKEN_ACTOR = "webchat-webhook-token-holder";
 const RESUME_TOKEN_ACTOR = "webchat-resume-token-holder";
+const OWNER_TOKEN_ACTOR = "webchat-owner-token-holder";
 
 const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
@@ -110,6 +111,7 @@ function findAotanuAssetRoot(): string {
  * Endpoint summary:
  *   POST /ws-ticket  body:{user}  auth:Bearer  rate-limited per-user
  *   POST /inbound    body:{user, content}  auth:Bearer  rate-limited per-user
+ *   POST /owner/inbound body:{user, content} auth:dedicated owner bearer
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
  *   POST /resume     body:{request_id, verdict, approval_token}  auth:Bearer  rate-limited (global)
  *   GET  /approval   auth:Bearer resume-token
@@ -186,6 +188,19 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     ) {
       throw new Error("WebChatChannel: opts.webhook_token must differ from WebChat tokens");
     }
+    if (opts.owner_token !== undefined && opts.owner_token.length < 16) {
+      throw new Error("WebChatChannel: opts.owner_token must be >=16 chars when set");
+    }
+    if (
+      opts.owner_token !== undefined &&
+      (opts.owner_token === opts.token ||
+        opts.owner_token === opts.resume_token ||
+        opts.owner_token === opts.webhook_token ||
+        opts.owner_token === opts.maintenance_token ||
+        opts.owner_token === opts.settings?.token)
+    ) {
+      throw new Error("WebChatChannel: opts.owner_token must differ from other WebChat tokens");
+    }
     if ((opts.update || opts.recovery) && !opts.maintenance_token) {
       throw new Error("WebChatChannel: opts.maintenance_token is required when update or recovery surfaces are set");
     }
@@ -211,6 +226,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       (opts.settings.token === opts.token ||
         opts.settings.token === opts.resume_token ||
         opts.settings.token === opts.webhook_token ||
+        opts.settings.token === opts.owner_token ||
         opts.settings.token === opts.maintenance_token)
     ) {
       throw new Error("WebChatChannel: opts.settings.token must differ from WebChat tokens");
@@ -592,6 +608,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const tokenKind =
       url.pathname === "/resume"
         ? "resume"
+        : url.pathname === "/owner/inbound"
+        ? "owner"
         : url.pathname === "/webhook"
         ? "webhook"
         : url.pathname === "/inbound" || url.pathname === "/ws-ticket"
@@ -605,6 +623,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     if (tokenKind === "webhook" && !this.opts.webhook_token) {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "webhook_not_configured" }));
+      return;
+    }
+    if (tokenKind === "owner" && !this.opts.owner_token) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "owner_inbound_not_configured" }));
       return;
     }
 
@@ -674,6 +697,42 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(
         JSON.stringify({ accepted: true, request_id: inboundReq.id }),
       );
+      return;
+    }
+
+    if (url.pathname === "/owner/inbound") {
+      const replyTo = typeof body?.user === "string" ? body.user : null;
+      const content = typeof body?.content === "string" ? body.content : null;
+      if (!replyTo || !content) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "user and content are required strings" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, "owner-token-holder", res)) return;
+      if (isDirectToolShortcutContent(content)) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          error: "tool_shortcut_not_allowed_on_webchat_inbound",
+          accepted: false,
+          operation_core_required: true,
+        }));
+        return;
+      }
+      const inboundReq: InboundRequest = {
+        id: randomUUID(),
+        channel: "webchat",
+        // Credential possession marks source class only; HDS still decides and authorizes.
+        user: OWNER_TOKEN_ACTOR,
+        content,
+        timestamp: Date.now(),
+        metadata: { reply_to: replyTo },
+      };
+      this.handler?.(inboundReq).catch((e: unknown) => {
+        // eslint-disable-next-line no-console
+        console.error("[webchat] owner inbound handler error:", e);
+      });
+      res.writeHead(202, { "content-type": "application/json" });
+      res.end(JSON.stringify({ accepted: true, request_id: inboundReq.id }));
       return;
     }
 
@@ -832,7 +891,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
   private checkAuth(
     req: IncomingMessage,
-    kind: "inbound" | "resume" | "webhook",
+    kind: "inbound" | "resume" | "webhook" | "owner",
   ): boolean {
     const h = req.headers["authorization"];
     if (typeof h !== "string") return false;
@@ -841,6 +900,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const expected =
       kind === "resume"
         ? this.opts.resume_token
+        : kind === "owner"
+        ? this.opts.owner_token
         : kind === "webhook"
         ? this.opts.webhook_token
         : this.opts.token;

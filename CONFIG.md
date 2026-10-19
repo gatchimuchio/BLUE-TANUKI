@@ -30,6 +30,14 @@ WEBCHAT_RESUME_TOKEN=...
 
 Tokens must differ.
 
+Setup also creates a separate owner-ingress credential:
+
+```bash
+BLUE_TANUKI_OWNER_TOKEN=...
+```
+
+`POST /owner/inbound` uses this credential to mark the request source as `webchat-owner-token-holder` before passing it through the normal HDS path. The label records possession of that dedicated credential; it does not identify a person or grant authority, bypass approval, or alter Broker permissions. Keep it separate from all other WebChat credentials.
+
 ## Optional local receipt inspection
 
 ```bash
@@ -219,7 +227,7 @@ WEBHOOK_TOKEN=...
 ```
 
 When set, `POST /webhook` accepts JSON with `content`, `text`, or `event`.
-The webhook token must differ from the WebChat inbound, resume, and settings tokens.
+The webhook token must differ from the WebChat inbound, resume, owner-ingress, and settings tokens.
 Webhook metadata is normalized and cannot carry authority.
 
 ## File tools
