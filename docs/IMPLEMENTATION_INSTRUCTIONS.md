@@ -1,5 +1,15 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
+### 実施中BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-AGGREGATE-WORKSPACE-QUOTA`
+
+開始main／`origin/main`=`6d1099955c53b66161497b26fb3aabf44e81ddeb`、開始worktree clean。対象はLinux `shell.exec`の既存workspace consumer。rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、D07.02／F01.02、`packages/blue-tanuki/native/linux-isolation/src/main.rs`と`packages/blue-tanuki/src/tools/shell_exec.ts`を再読した。
+
+目的は、元workspaceの読取とshell commandの書込を分離し、実行中の全書込をsize／inode上限付きtmpfs overlayに閉じ込めたうえで、検証済み差分だけをworker helperが元rootへ反映すること。1回の変更上限は128 MiB、専用workspace全体はlogical／allocated合計1 GiB・100,000 entryまでとし、未対応root、容量超過、隔離不能、実行中の外部変更、反映失敗はfail-closedとする。command側へcommit対象rootとoverlay内部領域を公開しない。
+
+WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS §3.1に従い、Linux 24.04 native buildとproduction `shell.exec` focused testsを固定commitで補助実行する一時workflowを`workflow_dispatch`のみで用意する。PR、自動trigger、required check、artifact、credential、provider／業務作用は対象外。runner AppArmor既存policyは置換せず、必要なときだけ一時profileを識別・解除確認する。対象テストとcleanupが成功した正確なcommitだけをmainへfast-forwardし、workflowと一時branchを除去してremote HEADを照合する。
+
+実施中確認：Windows Rust cross-target `cargo check`／`cargo fmt --check`、`pnpm typecheck`、`pnpm build`はPASS。Linux runtime／tmpfs上限／commit path isolationは未確認のため、D07.02／F01.02は引き続き`BUILD_GAP`。installed Linux product、native実機QA、QE_QC／QE_QA、P13 owner-GOは主張しない。
+
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
 WindowsではLinux native runtimeを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1条件のmanual `workflow_dispatch`を使った。一時workflow登録commitは`088733474aa34f69d37bedd9c95c1b6258331d8a`。最初の[run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は既存runner AppArmor profileを変更しないガードで停止し、build/test未実行。修正版の[run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)ではpolicyを保ったnamespace probeとbuildは成功したが、stderrのOS文言差でtest期待値が不一致だった。
