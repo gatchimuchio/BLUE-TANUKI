@@ -2,7 +2,19 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-EXPLICIT-PURPOSE-BOUND-PLAN-COMPUTE`
+### 最新BUILD_BATCH：`QEB-01-D02.01-TASK-PURPOSE-RELATION-CANDIDATE`
+
+開始HEAD／`origin/main`=`d895b27cd2cb7f5140ef318b2cbeed6ac4d560cd`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行AGENTS §3.1を再読した。開始時の復元点はHEAD `d895b27...`。D4 §3.1とBLUE向け反映済み条件を再照合した。対象の局所確認はWindowsで実行できるためGitHub Actions／workflowは使用していない。
+
+`plan:compute`のC出力を、OperationPlanと`supports`／`conflicts`／`unknown`およびtask/purposeの連続引用候補を持つwrapperへ拡張した。Executorは計画schemaを引き続き厳格検証した上で候補を非権威evidenceとしてHDSへ渡す。Jはtask本文、現行J/M purpose本文、選択版、正規化済みplanへのbindingを検査し、引用を保存せず正確なspan digestだけをOperation Plan checkpointへ記録する。`plan:compute`はローカルLLM session historyへ入れず、private purpose本文や引用の会話履歴保存を避ける。Operator projectionは候補・引用照合状態・意味評価未実施を示し、raw本文を出さない。
+
+Jに独立したtask-purpose意味評価器はまだない。そのため正確な引用、Cの`supports`申告、既存bindingのいずれも適合・authorityに昇格せず、purpose-bound `plan:review`、`canExecute`、HDS execution source bindingをfail-closedにした。`conflicts`は明示拒否、欠落・不正・不一致・staleは保留理由へ分ける。これは安全境界の接続であり、意味的適合や仕事実行の完成ではない。
+
+限定確認: workspace `pnpm typecheck` PASS、`pnpm build` PASS（15 workspace projects）。Core executor / HDS goal governance / Gateway plan runtime・projection / WebChat focused testsは5 files・137/137 PASS。`pnpm hds:standalone`、`pnpm docs:check`、`pnpm validate:repo-health`、`git diff --check` PASS。日本語基底の移行負債76件は既存注意として残存。全workspace tests、QE_QC／QE_QA、5OS実機、実provider・credential・外部作用は未実施。
+
+D02.01／D02.02=`BUILD_GAP`を維持する。次consumerは、C自己申告や引用の存在に依存せず、J所有のtask-purpose適用判定を同一task／plan／目的版へ結び、審査済み結果を既存HDS→Executor bindingへ渡す経路。判定可能な非LLM根拠のproducerは未成立。全Broker targetのcanonical identityと仕事全体の結果→M→帰還も未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。実credential／業務作用、別repo変更、公開・出荷判断なし。実装commit=`42770184cfbcf7ec287fc8492f449a8b3d1615e6`。文書closeoutを同batchのpushに含める。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-EXPLICIT-PURPOSE-BOUND-PLAN-COMPUTE`
 
 開始HEAD／`origin/main`=`46b8c2c9fd3950eee941836c0bcf6963f0793ab9`、開始worktree clean。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行AGENTS §3.1を再読した。編集前にlocal recovery branch二本／remote backup tag二本をCAS更新して開始HEADへ照合した。Windows localで必要な検査ができるためGitHub Actions／workflowは使用していない。
 
