@@ -89,6 +89,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          stderr_file=$(mktemp)
+          trap 'rm -f "$stderr_file"' EXIT
           probe_output=
           if probe_output=$(/usr/bin/bwrap \
             --unshare-user --unshare-mnt --unshare-pid --die-with-parent \
@@ -101,6 +103,7 @@ jobs:
             --setenv PATH /usr/bin:/bin -- \
             /usr/bin/sh -c '
               set -eu
+              exec 2>/dev/null
               fail() { printf "%s" "$1"; exit 1; }
               printf fixture > /workspace-lower/probe || fail lower_fixture_setup_failed
               mount -o remount,ro /workspace-lower || fail lower_readonly_remount_denied
@@ -109,10 +112,14 @@ jobs:
               mount -t overlay overlay -o lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work,userxattr,redirect_dir=nofollow,metacopy=off,index=off /workspace || fail overlay_mount_denied
               test "$(cat /workspace/probe)" = fixture || fail overlay_readback_failed
               printf pass
-            ' 2>/dev/null); then
+            ' 2>"$stderr_file"); then
             result=$probe_output
           elif [[ -n "$probe_output" ]]; then
             result=$probe_output
+          elif grep -Eiq 'creating new namespace failed|setting up uid map|operation not permitted|permission denied' "$stderr_file"; then
+            result=namespace_setup_denied
+          elif [[ -s "$stderr_file" ]]; then
+            result=bubblewrap_setup_failed
           else
             result=namespace_or_probe_launch_failed
           fi
@@ -120,7 +127,7 @@ jobs:
             pass)
               echo "minimal isolated OverlayFS mount: pass"
               ;;
-            lower_fixture_setup_failed|lower_readonly_remount_denied|upper_tmpfs_mount_denied|upper_work_layout_failed|overlay_mount_denied|overlay_readback_failed)
+            lower_fixture_setup_failed|lower_readonly_remount_denied|upper_tmpfs_mount_denied|upper_work_layout_failed|overlay_mount_denied|overlay_readback_failed|namespace_setup_denied|bubblewrap_setup_failed)
               echo "minimal isolated OverlayFS mount: $result"
               ;;
             *)
