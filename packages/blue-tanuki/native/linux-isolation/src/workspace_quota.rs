@@ -103,7 +103,9 @@ pub fn mount_bounded_overlay() -> Result<(), String> {
         )
     };
     if mounted != 0 {
-        return Err("workspace_storage_mount_failed".to_string());
+        return Err(
+            storage_mount_error_code(io::Error::last_os_error().raw_os_error()).to_string(),
+        );
     }
 
     let upper = Path::new(STORAGE_PATH).join("upper");
@@ -133,6 +135,15 @@ pub fn mount_bounded_overlay() -> Result<(), String> {
         return Err("workspace_overlay_mount_failed".to_string());
     }
     Ok(())
+}
+
+fn storage_mount_error_code(errno: Option<i32>) -> &'static str {
+    match errno {
+        Some(libc::EPERM) | Some(libc::EACCES) => "workspace_storage_mount_denied",
+        Some(libc::EINVAL) => "workspace_storage_mount_invalid_options",
+        Some(libc::ENODEV) => "workspace_storage_mount_unsupported",
+        _ => "workspace_storage_mount_failed",
+    }
 }
 
 pub fn commit_tree(
@@ -431,4 +442,29 @@ fn set_file_times(fd: i32, metadata: &Metadata) -> Result<(), String> {
         return Err("workspace_commit_failed".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::storage_mount_error_code;
+
+    #[test]
+    fn storage_mount_errno_maps_to_fixed_codes() {
+        assert_eq!(
+            storage_mount_error_code(Some(libc::EPERM)),
+            "workspace_storage_mount_denied"
+        );
+        assert_eq!(
+            storage_mount_error_code(Some(libc::EINVAL)),
+            "workspace_storage_mount_invalid_options"
+        );
+        assert_eq!(
+            storage_mount_error_code(Some(libc::ENODEV)),
+            "workspace_storage_mount_unsupported"
+        );
+        assert_eq!(
+            storage_mount_error_code(Some(libc::EIO)),
+            "workspace_storage_mount_failed"
+        );
+    }
 }
