@@ -2,7 +2,23 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-PURPOSE-BOUND-BROKER-TARGET-VERSION`
+### 最新BUILD_BATCH：`QEB-01-D02.01-GMAIL-WRITE-TARGET-OBSERVATION-BINDING`
+
+開始HEAD／`origin/main`=`4f17bcaef855a33b3c15f519f7920027835f9c87`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行`AGENTS.md` §3.1を再読した。D4の条件内でActionsを使えるが、Windows localで必要な検査を実行できるためActions／workflowは使っていない。
+
+J所有Operation Planのcurrent source digestを、既存`gmail.write message.send`のread-only target observationへ結合した。観測は宛先同一性digest、厳密な送信要求本文digest、HDS command digest、現在のplan binding digestだけを持ち、生の宛先・本文・credentialを保持しない。HDSはcommand／宛先／現在のplan sourceを再照合し、Executorは観測全体を承認ticket proofへ結合する。Gmail toolは実行直前にも宛先・本文digestを再計算し、観測欠落・変更時はcredential／HTTP requestより前に拒否する。観測は`used_for_authority=false`／`may_execute=false`で、L3承認や実送信許可を与えない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Core `gmail_write_target_version.test.ts`／Gateway `operation_plan_runtime.test.ts` | PASS、2/2／23/23。stub requestで一致した送信要求だけを渡し、不一致・欠落はrequest前に拒否。plan source→HDS binding→Executor ticketの結合と、実行しないL3承認経路を確認。 |
+| Core `executor_hds_authority_binding.test.ts`／`tools_builtin.test.ts`／Gmail resolver | PASS、54/54。 |
+| Gateway `file_search_worker.test.ts` | PASS、9/9（`--testTimeout 15000`、製品timeout変更なし）。 |
+| workspace `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | PASS。buildは15 workspace projects。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は注意として残存。 |
+
+D02.01のGmail `message.send` target observation経路は`WIRED`。D02.01／D02.02全体は`BUILD_GAP`のまま。OAuth account principal／provider resource version、Gmailの他write操作、cross-process／hostの期限・epoch・再送・認証、実provider、全仕事の結果→M→帰還は未成立。試験は資格情報を使わずfixture tokenとstub transportのみで、実HTTP／送信なし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。次は標準Executor dispatchからstub transportまで観測の保持を確かめ、秘密を読まずに取得できるaccount principal metadataの有無を調査する。見つからない場合は未接続を維持する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-PURPOSE-BOUND-BROKER-TARGET-VERSION`
 
 開始HEAD／`origin/main`=`acec1aaa8a4f81416bc39b733c05ee418ceb0010`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行`AGENTS.md` §3.1を再読した。D4の条件内でActionsを使えるが、Windows localで必要な検査を実施できるためworkflow／Actionsは使っていない。
 

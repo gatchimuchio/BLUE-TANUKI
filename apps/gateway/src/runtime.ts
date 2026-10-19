@@ -368,11 +368,13 @@ async function runCliWithExecutionStore(
     const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
     targetVersionObservation = await executor.inspectCommandTargetVersion(command, undefined, operationPlanBindingDigest);
   } catch {
+    const reason = command.type === "tool_call" && command.payload.tool_name === "gmail.write"
+      ? "gmail_write_target_version_unavailable" : "file_search_target_version_unavailable";
     hds.onCommandLifecycle(command.id, "approval_cancelled", {
       actor: inbound.user,
-      reason: "file_search_target_version_unavailable",
+      reason,
     });
-    coreLog.warn("file.search target version preflight failed", { command_id: command.id });
+    coreLog.warn("Broker target version preflight failed", { command_id: command.id, reason });
     return;
   }
   const hdsBinding = hds.createExecutionAuthorityBinding(command, targetVersionObservation);

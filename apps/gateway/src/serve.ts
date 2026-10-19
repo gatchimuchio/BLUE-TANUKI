@@ -1249,10 +1249,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(cmd);
       targetVersionObservation = await executor.inspectCommandTargetVersion(cmd, undefined, operationPlanBindingDigest);
     } catch {
-      const reason = "file_search_target_version_unavailable";
+      const reason = cmd.type === "tool_call" && cmd.payload.tool_name === "gmail.write"
+        ? "gmail_write_target_version_unavailable" : "file_search_target_version_unavailable";
       const feedback: ExecuteFeedback = { command_id: cmd.id, status: "failed", error: reason, metrics: { duration_ms: 0 } };
       const finalized = finalizeCommandOutput({ hds, command: cmd, feedback, target_surface: "channel", request_id: log.request_id });
-      recordApprovalHistory("file_search_target_version_unavailable", cmd, log, origin, actor, executionEvaluation, {
+      recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
         used_for_authority: false, may_execute: false,
       });
       recordFinalOutputHistory(log, origin, actor, finalized.output_audit, cmd);

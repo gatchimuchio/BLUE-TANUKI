@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { Executor, createExecutorApprovalAuthority, executorCommandDigest, ToolRegistry, fileSearchTool } from "@blue-tanuki/core";
-import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema, type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
+import { Executor, createExecutorApprovalAuthority, executorCommandDigest, ToolRegistry, fileSearchTool, gmailWriteTool } from "@blue-tanuki/core";
+import { createGatewayInternalInboundRequest, GmailWriteTargetVersionObservationSchema, OperationPlanCheckpointSchema,
+  type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { projectOperationPlanStatus } from "../src/serve_projection.js";
@@ -313,8 +314,18 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(operationApproval).toMatchObject({ decision: "ask", risk: "high",
         approval_level: "L3_final_review", final_review_required: true });
       expect(verifiedController.operationPlanCommandIsCurrent(selected.command)).toBe(true);
-      const executionBinding = verifiedController.createExecutionAuthorityBinding(selected.command);
-      expect(executionBinding.operation_plan_binding_digest).toMatch(/^[a-f0-9]{64}$/);
+      const sendPlanBindingDigest = verifiedController.getExecutionOperationPlanBindingDigest(selected.command);
+      if (!sendPlanBindingDigest) throw new Error("current Gmail plan source was unavailable");
+      const sendTools = new ToolRegistry(); sendTools.register(gmailWriteTool);
+      const sendResolver = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+        tools: sendTools, approval_authority: createExecutorApprovalAuthority() });
+      const sendTargetObservation = await sendResolver.inspectCommandTargetVersion(selected.command, undefined, sendPlanBindingDigest);
+      if (!sendTargetObservation) throw new Error("Gmail target resolver returned no observation");
+      expect(sendTargetObservation).toMatchObject({ operation_plan_binding_digest: sendPlanBindingDigest,
+        used_for_authority: false, may_execute: false });
+      const executionBinding = verifiedController.createExecutionAuthorityBinding(selected.command, sendTargetObservation);
+      expect(executionBinding.operation_plan_binding_digest).toBe(sendPlanBindingDigest);
+      expect(executionBinding.broker_target_version_observation_digest).toBe(operationPlanDigest(sendTargetObservation));
 
       const selectedSearch = review(verifiedController, candidate, "search", binding);
       if (selectedSearch.command?.type !== "tool_call" || selectedSearch.command.payload.tool_name !== "file.search") {
@@ -931,6 +942,44 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const rejected = review(unsafeHds, unsafe, "send");
     expect(rejected.command).toBeNull();
     expect(rejected.log.commit.decision).not.toBe("ASSERT");
+  });
+
+  it("Gmail message.sendのpurpose sourceとcanonical payload observationをHDS・Executor ticketへ結ぶ", async () => {
+    const hds = new HDSUpperController(); const origin = request("plan:compute synthetic send");
+    const candidate = gmailSendPlan(origin.id, { operation: "message.send", to: "inspection@example.invalid",
+      subject: "synthetic", body_text: "fixture" });
+    const planExecutor = rig(hds, candidate);
+    await planExecutor.run(hds.decide(origin).command!);
+    const selected = review(hds, candidate, "send");
+    if (selected.command?.type !== "tool_call") throw new Error("bounded Gmail plan was not connected");
+
+    const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
+    if (!operationPlanBindingDigest) throw new Error("selected Gmail plan source binding was unavailable");
+    const tools = new ToolRegistry(); tools.register(gmailWriteTool);
+    const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
+    const executor = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+      tools, approval_authority: authority });
+    const targetObservation = GmailWriteTargetVersionObservationSchema.parse(
+      await executor.inspectCommandTargetVersion(selected.command, undefined, operationPlanBindingDigest));
+    expect(targetObservation).toMatchObject({ operation_plan_binding_digest: operationPlanBindingDigest,
+      used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(targetObservation)).not.toContain("inspection@example.invalid");
+    expect(JSON.stringify(targetObservation)).not.toContain("fixture");
+
+    const binding = hds.createExecutionAuthorityBinding(selected.command, targetObservation);
+    expect(binding.operation_plan_binding_digest).toBe(operationPlanBindingDigest);
+    expect(binding.broker_target_version_observation_digest).toBe(operationPlanDigest(targetObservation));
+    const approval = evaluateApproval(selected.command, [], { actor: "fixture-owner", default_mode: "full_access" });
+    const proof = { source: "human_final_review" as const, decision: "approve" as const, approved_by: "fixture-owner",
+      approved_at_ms: Date.now(), upstream_commit_hash: selected.command.upstream_decision.commit_hash,
+      operation: approval.context.operation, risk: approval.risk, final_review_required: approval.final_review_required,
+      reason: "synthetic final review fixture" };
+    const changedObservation = GmailWriteTargetVersionObservationSchema.parse({ ...targetObservation,
+      request_payload_digest: "f".repeat(64) });
+    expect(() => authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, changedObservation))
+      .toThrow(/gmail.write target version does not match command|target version binding does not match evidence/);
+    authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, targetObservation);
+    // No executor call is made here: this test binds an outbound message but never sends it.
   });
 
   it("実file.search結果を依存入力にし、変更pendingだけ失効して旧版と試行済みを保持", async () => {

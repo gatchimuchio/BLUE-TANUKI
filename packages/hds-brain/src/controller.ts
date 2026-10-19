@@ -25,6 +25,7 @@ import {
   inspectOperationCommandExecutionResult,
   OperationPlanExternalReceiptObservationSchema,
   FileSearchTargetVersionObservationSchema,
+  GmailWriteTargetVersionObservationSchema,
   OperationPlanControlSchema,
   OperationPlanComputeInputSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
@@ -1738,6 +1739,24 @@ ${planControl.question}`,
       }
       if (observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
         throw new Error("HDS file.search target version does not match the current Operation Plan source");
+      }
+      brokerTargetVersionObservationDigest = operationPlanDigest(observation);
+    } else if (command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
+        command.payload.arguments.operation === "message.send") {
+      if (brokerTargetVersionObservation === undefined) {
+        throw new Error("HDS gmail.write target version observation is required");
+      }
+      const observation = GmailWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+      const recipient = command.payload.arguments.to;
+      const expectedTargetIdentityDigest = typeof recipient === "string" && recipient.trim().length > 0
+        ? operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v1",
+            service: "gmail", operation: "message.send", recipient: recipient.trim() }) : undefined;
+      if (observation.command_digest !== operationPlanDigest(command) ||
+          observation.target_identity_digest !== expectedTargetIdentityDigest) {
+        throw new Error("HDS gmail.write target version does not match the issued command");
+      }
+      if (observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
+        throw new Error("HDS gmail.write target version does not match the current Operation Plan source");
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (brokerTargetVersionObservation !== undefined) {

@@ -7,6 +7,7 @@ import {
   BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
   canonicalFileSearchTargetVersionObservation,
   FileSearchTargetVersionObservationSchema,
+  GmailWriteTargetVersionObservationSchema,
   parseBoundaryExchangeAtBoundary,
   inspectExecutionResultDelivery,
 } from "@blue-tanuki/protocol";
@@ -39,8 +40,9 @@ import {
   type ComputeInputSource,
   type ComputeRequest,
 } from "./llm/compute.js";
-import type { ToolRegistry } from "./tools/registry.js";
-import { fileSearchTool } from "./tools/builtin.js";
+import type { BrokerTargetVersionObservation, ToolRegistry } from "./tools/registry.js";
+import { fileSearchTool, gmailWriteTool } from "./tools/builtin.js";
+import { gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest } from "./tools/google_write.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
@@ -153,7 +155,7 @@ interface ApprovedCommandRecord {
   ticket: Readonly<ExecutionIntentTicket>;
   issued_monotonic_ms: number;
   runtime: ApprovalRuntime;
-  target_version_observation?: FileSearchTargetVersionObservation;
+  target_version_observation?: BrokerTargetVersionObservation;
 }
 
 interface ApprovalRuntime {
@@ -177,7 +179,7 @@ export type ApprovedCommand = ExecuteCommand & {
 
 export interface ExecutorApprovalAuthority {
   approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string,
-    hds_binding?: HDSExecutionAuthorityBinding, target_version_observation?: FileSearchTargetVersionObservation): ApprovedCommand;
+    hds_binding?: HDSExecutionAuthorityBinding, target_version_observation?: BrokerTargetVersionObservation): ApprovedCommand;
   /** 再照会は実行しない。未完の消費は結果不明として表示する。 */
   receipt(command: ApprovedCommand): ExecutionIntentReceipt | null;
 }
@@ -196,7 +198,7 @@ export function createExecutorApprovalAuthority(options: ExecutorApprovalOptions
   readApprovalClock(runtime);
   const authority = Object.freeze({
     approve(command: ExecuteCommand, proof: ExecutorApprovalProof, expected_command_digest?: string,
-      hds_binding?: HDSExecutionAuthorityBinding, target_version_observation?: FileSearchTargetVersionObservation): ApprovedCommand {
+      hds_binding?: HDSExecutionAuthorityBinding, target_version_observation?: BrokerTargetVersionObservation): ApprovedCommand {
       return approveCommandForExecution(command, proof, runtime, expected_command_digest, hds_binding, target_version_observation);
     },
     receipt(command: ApprovedCommand): ExecutionIntentReceipt | null {
@@ -218,7 +220,7 @@ function approveCommandForExecution(
   runtime: ApprovalRuntime,
   expected_command_digest?: string,
   hds_binding?: HDSExecutionAuthorityBinding,
-  rawTargetVersionObservation?: FileSearchTargetVersionObservation,
+  rawTargetVersionObservation?: BrokerTargetVersionObservation,
 ): ApprovedCommand {
   runtime.assert_execution_owner?.();
   const snapshot = approvalCommandSnapshot(command);
@@ -244,16 +246,29 @@ function approveCommandForExecution(
   if (expected_command_digest !== undefined && expected_command_digest !== command_digest) {
     throw new Error("Executor approval rejected: reviewed command content changed");
   }
-  let target_version_observation: FileSearchTargetVersionObservation | undefined;
+  let target_version_observation: BrokerTargetVersionObservation | undefined;
   if (rawTargetVersionObservation !== undefined) {
-    if (snapshot.type !== "tool_call" || snapshot.payload.tool_name !== "file.search") {
-      throw new Error("Executor approval rejected: target version evidence is only valid for built-in file.search");
+    if (snapshot.type !== "tool_call") {
+      throw new Error("Executor approval rejected: target version evidence is only valid for a tool command");
     }
-    target_version_observation = Object.freeze(FileSearchTargetVersionObservationSchema.parse(rawTargetVersionObservation));
-    const requestedRoot = snapshot.payload.arguments.root;
-    if (typeof requestedRoot !== "string" || target_version_observation.requested_root_digest !==
-        createHash("sha256").update(requestedRoot, "utf8").digest("hex")) {
-      throw new Error("Executor approval rejected: file.search target version does not match command");
+    if (snapshot.payload.tool_name === "file.search") {
+      const observation = FileSearchTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      const requestedRoot = snapshot.payload.arguments.root;
+      if (typeof requestedRoot !== "string" || observation.requested_root_digest !==
+          createHash("sha256").update(requestedRoot, "utf8").digest("hex")) {
+        throw new Error("Executor approval rejected: file.search target version does not match command");
+      }
+      target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "gmail.write" && snapshot.payload.arguments.operation === "message.send") {
+      const observation = GmailWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      if (observation.command_digest !== operationPlanDigest(snapshot) ||
+          observation.target_identity_digest !== gmailWriteTargetIdentityDigest(snapshot.payload.arguments) ||
+          observation.request_payload_digest !== gmailWriteRequestPayloadDigest(snapshot.payload.arguments)) {
+        throw new Error("Executor approval rejected: gmail.write target version does not match command");
+      }
+      target_version_observation = Object.freeze(observation);
+    } else {
+      throw new Error("Executor approval rejected: target version evidence is unsupported for this tool command");
     }
   }
   const target_version_observation_digest = target_version_observation
@@ -261,8 +276,13 @@ function approveCommandForExecution(
   if (hds_binding && hds_binding.broker_target_version_observation_digest !== target_version_observation_digest) {
     throw new Error("Executor approval rejected: HDS target version binding does not match evidence");
   }
+  if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "gmail.write" &&
+      snapshot.payload.arguments.operation === "message.send" &&
+      target_version_observation?.schema_version !== "blue-tanuki.gmail-write-target-version.v1") {
+    throw new Error("Executor approval rejected: gmail.write target version evidence is required");
+  }
   if (runtime.require_hds_execution_binding && snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.search" &&
-      !target_version_observation) {
+      target_version_observation?.schema_version !== "blue-tanuki.file-search-target-version.v1") {
     throw new Error("Executor approval rejected: file.search target version evidence is required");
   }
   if (!hds_binding && runtime.require_hds_execution_binding) {
@@ -429,11 +449,32 @@ export class Executor {
   /** Read-only preflight for the exact registered built-in file.search adapter. */
   async inspectCommandTargetVersion(command: ExecuteCommand,
     env?: Readonly<Record<string, string | undefined>>,
-    operationPlanBindingDigest?: string): Promise<FileSearchTargetVersionObservation | undefined> {
-    if (command.type !== "tool_call" || command.payload.tool_name !== "file.search") return undefined;
+    operationPlanBindingDigest?: string): Promise<BrokerTargetVersionObservation | undefined> {
+    if (command.type !== "tool_call") return undefined;
     if (operationPlanBindingDigest !== undefined && !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
-      throw new Error("file.search target version resolver received an invalid operation plan binding");
+      throw new Error("Broker target version resolver received an invalid operation plan binding");
     }
+    if (command.payload.tool_name === "gmail.write" && command.payload.arguments.operation === "message.send") {
+      const tool = this.deps.tools.get("gmail.write");
+      if (tool !== gmailWriteTool || !tool.inspect_target_version) {
+        throw new Error("gmail.write target version resolver requires the registered built-in adapter");
+      }
+      const observation = GmailWriteTargetVersionObservationSchema.parse(
+        await tool.inspect_target_version(command.payload.arguments, {
+          ...(env ? { env } : {}),
+          ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
+          command_digest: operationPlanDigest(command),
+        }),
+      );
+      if (observation.command_digest !== operationPlanDigest(command) ||
+          observation.target_identity_digest !== gmailWriteTargetIdentityDigest(command.payload.arguments) ||
+          observation.request_payload_digest !== gmailWriteRequestPayloadDigest(command.payload.arguments) ||
+          observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
+        throw new Error("gmail.write target version resolver returned evidence for another command or plan source");
+      }
+      return Object.freeze(observation);
+    }
+    if (command.payload.tool_name !== "file.search") return undefined;
     const tool = this.deps.tools.get("file.search");
     if (tool !== fileSearchTool || !tool.inspect_target_version) {
       throw new Error("file.search target version resolver requires the registered built-in adapter");
@@ -743,7 +784,9 @@ export class Executor {
     if (payload.tool_name === "file.search" && this.deps.file_search_worker) {
       if (tool !== fileSearchTool) throw new Error("File search worker requires the registered built-in adapter");
       const record = APPROVED_COMMAND_RECORDS.get(command)!;
-      if (!record.target_version_observation) throw new Error("File search worker requires bound target version evidence");
+      if (record.target_version_observation?.schema_version !== "blue-tanuki.file-search-target-version.v1") {
+        throw new Error("File search worker requires bound target version evidence");
+      }
       const store = record.runtime.store;
       if (!store?.bindWorker || !store.observeWorkerExit) throw new Error("File search worker requires durable worker receipts");
       let worker: Readonly<ExecutionWorkerIdentity> | undefined;
@@ -798,7 +841,8 @@ export class Executor {
       controller,
     );
     const targetVersion = APPROVED_COMMAND_RECORDS.get(command)!.target_version_observation;
-    const publicResult = targetVersion ? stripFileSearchTargetVersionObservation(result, targetVersion) : result;
+    const publicResult = targetVersion?.schema_version === "blue-tanuki.file-search-target-version.v1"
+      ? stripFileSearchTargetVersionObservation(result, targetVersion) : result;
     return {
       command_id: id,
       status: "success",

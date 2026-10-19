@@ -1676,13 +1676,17 @@ export const fileSearchTool: Tool = {
   description: "Read-only text search under a requested root directory.",
   required_capabilities: requireToolOperationDescriptor("file.search").required_capabilities,
   async inspect_target_version(args: Record<string, unknown>, options?: {
-    env?: Env; operation_plan_binding_digest?: string;
+    env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
   }): Promise<FileSearchTargetVersionObservation> {
     return await inspectFileSearchTargetVersion(args, options);
   },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
-    return await invokeFileSearch(args, { expected_target_version: context.target_version_observation,
-      include_target_version_observation: context.target_version_observation !== undefined });
+    const targetVersion = context.target_version_observation;
+    if (targetVersion !== undefined && targetVersion.schema_version !== "blue-tanuki.file-search-target-version.v1") {
+      throw new Error("file.search received unsupported Broker target version evidence");
+    }
+    return await invokeFileSearch(args, { expected_target_version: targetVersion,
+      include_target_version_observation: targetVersion !== undefined });
   },
 };
 

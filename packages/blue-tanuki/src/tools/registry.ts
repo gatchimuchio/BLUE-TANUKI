@@ -1,4 +1,7 @@
-import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation } from "@blue-tanuki/protocol";
+import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation,
+  type GmailWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+
+export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | GmailWriteTargetVersionObservation;
 
 /**
  * Tool registry.
@@ -15,8 +18,8 @@ export interface ToolContext {
   idempotency_key?: string;
   /** Digest of the exact approved command; adapters may bind external receipts to it. */
   command_digest?: string;
-  /** Broker evidence bound to the exact HDS-issued file.search command. */
-  target_version_observation?: FileSearchTargetVersionObservation;
+  /** 実行権限を与えず、HDS発行commandへ結ぶBroker観測。 */
+  target_version_observation?: BrokerTargetVersionObservation;
   signal?: AbortSignal;
 }
 
@@ -26,11 +29,12 @@ export interface Tool {
   readonly name: string;
   readonly description: string;
   readonly required_capabilities?: readonly ToolCapability[];
-  /** Read-only target resolver; Executor only trusts the registered built-in file.search adapter. */
+  /** Read-only target resolver; Executor only trusts registered built-in adapters. */
   inspect_target_version?(args: Record<string, unknown>, options?: {
     env?: Readonly<Record<string, string | undefined>>;
     operation_plan_binding_digest?: string;
-  }): Promise<FileSearchTargetVersionObservation>;
+    command_digest?: string;
+  }): Promise<BrokerTargetVersionObservation>;
   invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 }
 

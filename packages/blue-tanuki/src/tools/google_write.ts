@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
-import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
+import { GmailWriteTargetVersionObservationSchema, requireToolOperationDescriptor,
+  type GmailWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
@@ -382,6 +384,45 @@ export function gmailWriteRequestPayloadDigest(args: Record<string, unknown>): s
   return createHash("sha256").update(request.body, "utf8").digest("hex");
 }
 
+/** recipient文字列そのものを観測へ保持せず、宛先同一性のdigestを作る。 */
+export function gmailWriteTargetIdentityDigest(args: Record<string, unknown>): string {
+  const operation = operationArg(args, ["message.send"]);
+  if (operation !== "message.send") throw new Error("gmail_target_version_operation_unsupported");
+  const recipient = stringArg(args, "to")!;
+  return operationPlanDigest({ schema_version: "blue-tanuki.gmail-write-target-identity.v1",
+    service: "gmail", operation, recipient });
+}
+
+function inspectGmailWriteTargetVersion(args: Record<string, unknown>, options: {
+  operation_plan_binding_digest?: string;
+  command_digest?: string;
+}): GmailWriteTargetVersionObservation {
+  const commandDigest = options.command_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest)) {
+    throw new Error("gmail.write target resolver requires an exact HDS command digest");
+  }
+  return GmailWriteTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.gmail-write-target-version.v1",
+    target_identity_digest: gmailWriteTargetIdentityDigest(args),
+    request_payload_digest: gmailWriteRequestPayloadDigest(args),
+    command_digest: commandDigest,
+    ...(options.operation_plan_binding_digest
+      ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
+function assertGmailWriteTargetVersion(args: Record<string, unknown>, value: unknown): void {
+  let observation: GmailWriteTargetVersionObservation;
+  try { observation = GmailWriteTargetVersionObservationSchema.parse(value); }
+  catch { throw new Error("gmail.write target version evidence is required; request_sent=false; mutation_sent=false"); }
+  if (observation.target_identity_digest !== gmailWriteTargetIdentityDigest(args) ||
+      observation.request_payload_digest !== gmailWriteRequestPayloadDigest(args)) {
+    throw new Error("gmail.write target version changed; request_sent=false; mutation_sent=false");
+  }
+}
+
 function gmailWriteRequest(args: Record<string, unknown>): { path: string; body: string } {
   const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
   if (operation === "draft.create") return { path: "/gmail/v1/users/me/drafts", body: jsonBody({ message: { raw: encodedMimeMessage(args) } }) };
@@ -566,10 +607,16 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
     name: "gmail.write",
     description: "Create Gmail drafts or send Gmail messages with an operator-provided OAuth token.",
     required_capabilities: requireToolOperationDescriptor("gmail.write").required_capabilities,
+    async inspect_target_version(args, resolverOptions = {}): Promise<GmailWriteTargetVersionObservation> {
+      return inspectGmailWriteTargetVersion(args, resolverOptions);
+    },
     async invoke(args, context): Promise<unknown> {
       if (typeof context.idempotency_key !== "string" || !/^[a-f0-9]{64}$/.test(context.idempotency_key) ||
           typeof context.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(context.command_digest)) {
         throw new Error("gmail.write requires an approved Executor identity; mutation_sent=false");
+      }
+      if (operationArg(args, ["draft.create", "message.send", "draft.send"]) === "message.send") {
+        assertGmailWriteTargetVersion(args, context.target_version_observation);
       }
       return await invokeGmailWrite(args, { ...options, idempotency_key: context.idempotency_key,
         command_digest: context.command_digest });
