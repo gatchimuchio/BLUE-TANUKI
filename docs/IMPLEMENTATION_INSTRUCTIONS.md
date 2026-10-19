@@ -32,6 +32,10 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 11回目の[run 39320235029](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39320235029)はworkspace／helper buildとLinux isolation diagnostic tests 4件がPASS。focused shell tests 3件はoverlay mount段階の`workspace_overlay_mount_failed`でfail-closedした。mount namespace owner照合とtmpfs mountを越えており、filtered kernel journalにAppArmorのmount／CAP_SYS_ADMIN denialはない。cleanup PASS、artifact 0件。overlay mountのerrnoを非機密の固定分類へ分け、失敗層を再確認する。失敗中実装はmainへ統合しない。
 
+12回目の[run 39320723147](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39320723147)（対象SHA `b8917f284e67899b6df3327b949ac73cf9644ce9`）はworkspace／helper buildとLinux isolation diagnostic tests 5件がPASS。focused shell tests 3件は`workspace_overlay_mount_invalid_options`（EINVAL）でfail-closedした。AppArmor denialなし。OverlayFS詳細ログは未収集、cleanup PASS、artifact 0件。
+
+13回目の[run 39321257644](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39321257644)（対象SHA `49d00502e22cc02b9021be4a23eb25f2bcebad59`）は同じbuild／diagnostic 5件がPASSし、focused tests 3件は同じEINVALでfail-closedした。failure-onlyのpath-redacted kernel logに`userxattr`と`redirect_dir=follow`の競合が出ており、run cleanup PASS、artifact 0件。現行mount optionの`redirect_dir=off`がrunner kernel設定によりfollowへ解釈されることが原因と特定した。Linux kernelの[OverlayFS documentation](https://docs.kernel.org/filesystems/overlayfs.html#renaming-directories)に従い、redirectを生成・追跡しない`redirect_dir=nofollow`へ変更してfocused testsを再実行する。未成功の対象SHAはmainへ統合しない。
+
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
 WindowsではLinux native runtimeを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1条件のmanual `workflow_dispatch`を使った。一時workflow登録commitは`088733474aa34f69d37bedd9c95c1b6258331d8a`。最初の[run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は既存runner AppArmor profileを変更しないガードで停止し、build/test未実行。修正版の[run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)ではpolicyを保ったnamespace probeとbuildは成功したが、stderrのOS文言差でtest期待値が不一致だった。
