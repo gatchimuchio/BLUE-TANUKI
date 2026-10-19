@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
@@ -19,6 +20,7 @@ const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ROOT_ENTRIES: usize = 100_000;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MOUNT_CAPABILITY_MASK: u64 = 1 << 21;
+const NS_GET_USERNS_IOCTL: libc::c_ulong = 0xb701;
 const MAX_TASKS: &str = "64";
 const MEMORY_MAX: &str = "512M";
 const CPU_QUOTA: &str = "100%";
@@ -491,6 +493,7 @@ fn run_outer(request: Request) -> Result<String, String> {
 
 fn run_inner(request: InnerRequest) -> Result<InnerResult, String> {
     verify_outer_isolation(&request.namespaces)?;
+    verify_mount_namespace_owner()?;
     let commit_root = Path::new("/commit-target");
     inspect_root(commit_root)?;
     let baseline = workspace_quota::snapshot_tree(commit_root)?;
@@ -794,6 +797,29 @@ fn verify_namespace_isolation(expected: &BTreeMap<String, u64>) -> Result<(), St
         if expected.get(name).copied() == Some(actual) {
             return Err("sandbox_namespace_not_isolated".to_string());
         }
+    }
+    Ok(())
+}
+
+fn verify_mount_namespace_owner() -> Result<(), String> {
+    // mount privileges are scoped to the user namespace that owns this mount namespace.
+    let mount_namespace = fs::File::open("/proc/self/ns/mnt")
+        .map_err(|_| "sandbox_mount_namespace_owner_unverified".to_string())?;
+    let owner_namespace_fd =
+        unsafe { libc::ioctl(mount_namespace.as_raw_fd(), NS_GET_USERNS_IOCTL) };
+    if owner_namespace_fd < 0 {
+        return Err("sandbox_mount_namespace_owner_unverified".to_string());
+    }
+    let owner_namespace = unsafe { fs::File::from_raw_fd(owner_namespace_fd) };
+    let owner_metadata = owner_namespace
+        .metadata()
+        .map_err(|_| "sandbox_mount_namespace_owner_unverified".to_string())?;
+    let current_user_namespace = fs::metadata("/proc/self/ns/user")
+        .map_err(|_| "sandbox_mount_namespace_owner_unverified".to_string())?;
+    if owner_metadata.dev() != current_user_namespace.dev()
+        || owner_metadata.ino() != current_user_namespace.ino()
+    {
+        return Err("sandbox_mount_namespace_owner_mismatch".to_string());
     }
     Ok(())
 }
@@ -1342,6 +1368,8 @@ fn stable_error(error: &str) -> String {
             "shell_root_unreadable",
             "shell_root_changed_during_validation",
             "sandbox_mount_capability_unavailable",
+            "sandbox_mount_namespace_owner_unverified",
+            "sandbox_mount_namespace_owner_mismatch",
             "sandbox_namespace_not_isolated",
             "sandbox_start_or_shutdown_failed",
             "sandbox_command_start_failed",
@@ -1371,7 +1399,9 @@ fn stable_error(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{safe_diagnostic, stable_error, verify_mount_capability_mask};
+    use super::{
+        safe_diagnostic, stable_error, verify_mount_capability_mask, verify_mount_namespace_owner,
+    };
 
     #[test]
     fn mount_setup_allows_only_sys_admin_in_capability_sets() {
@@ -1383,6 +1413,11 @@ mod tests {
         .is_ok());
         assert!(verify_mount_capability_mask(sys_admin | 1, sys_admin, 0, sys_admin, 0).is_err());
         assert!(verify_mount_capability_mask(0, sys_admin, 0, sys_admin, 0).is_err());
+    }
+
+    #[test]
+    fn current_mount_namespace_has_a_verifiable_user_namespace_owner() {
+        assert!(verify_mount_namespace_owner().is_ok());
     }
 
     #[test]
