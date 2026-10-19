@@ -906,6 +906,53 @@ export class OperationPlanLedger {
   }
 
   isBound(command_id: string): boolean { return this.binding(command_id) !== undefined; }
+  /**
+   * Produce non-authority source evidence for the exact J-selected plan step
+   * that produced this command. This deliberately binds the plan revision and
+   * declared target, not a live resource version or delegated purpose version.
+   */
+  executionSourceBindingDigest(command: ExecuteCommand): string | undefined {
+    const issuedId = this.issuedBindings.get(command);
+    if (issuedId === undefined) {
+      if (this.issuedBindingIds.has(command.id)) throw new Error("plan_execution_source_binding_unavailable");
+      return undefined;
+    }
+    if (issuedId !== command.id) throw new Error("plan_execution_source_binding_identity_mismatch");
+    const match = this.binding(issuedId);
+    if (!match) throw new Error("plan_execution_source_binding_stale");
+    const currentRevision = match.p.revisions.at(-1);
+    const revision = match.p.revisions.find((entry) => entry.digest === match.b.revision_digest);
+    const step = revision?.plan.steps.find((entry) => entry.step_id === match.b.step_id);
+    const descriptor = step ? getOperationDescriptor(step.operation) : undefined;
+    if (match.b.status !== "selected" || !currentRevision || currentRevision.digest !== match.b.revision_digest ||
+        !revision || !step || stepDigest(step) !== match.b.step_digest || !descriptor ||
+        match.b.operation !== descriptor.operation_id || command.type !== "tool_call" ||
+        command.payload.tool_name !== descriptor.tool_name || commandPayloadDigest(command) !== match.b.payload_digest ||
+        operationPlanDigest(command) !== match.b.command_digest ||
+        command.upstream_decision.request_id !== match.b.request_id ||
+        command.upstream_decision.commit_hash !== match.b.commit_hash) {
+      throw new Error("plan_execution_source_binding_stale");
+    }
+    return operationPlanDigest({
+      schema_version: "blue-tanuki.operation-plan-execution-source.v1",
+      owner_digest: operationPlanDigest(match.p.owner),
+      channel: match.p.channel,
+      original_goal_digest: operationPlanDigest(match.p.goal),
+      plan_id_digest: operationPlanDigest(revision.plan.plan_id),
+      plan_request_id_digest: operationPlanDigest(revision.plan.request_id),
+      revision_digest: match.b.revision_digest,
+      step_id_digest: operationPlanDigest(match.b.step_id),
+      step_digest: match.b.step_digest,
+      prepared_step_digest: operationPlanDigest(match.b.prepared_step),
+      operation: match.b.operation,
+      adapter: step.adapter,
+      target_digest: operationPlanDigest(match.b.prepared_step.target),
+      effects_digest: operationPlanDigest(match.b.prepared_step.effects),
+      parameters_digest: operationPlanDigest(match.b.prepared_step.parameters ?? {}),
+      preconditions_digest: operationPlanDigest(match.b.prepared_step.preparation?.preconditions ?? []),
+      command_digest: match.b.command_digest,
+    });
+  }
   canExecute(command: ExecuteCommand): boolean {
     const reflectionCommand = this.reflections.has(command.id) || (command.type === "llm_call" &&
       command.payload.compute_context?.local_p_version === OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION);

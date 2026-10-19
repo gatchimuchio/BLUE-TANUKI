@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { approvalContextFromCommand, HDSUpperController } from "@blue-tanuki/hds-brain";
+import { approvalContextFromCommand, HDSUpperController, operationPlanDigest, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
+import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import type { ExecutionIntentStore, ExecutionIntentTicket } from "../src/execution_intent.js";
 import { createExecutorApprovalAuthority, executorCommandDigest, type ExecutorApprovalProof } from "../src/executor.js";
 
@@ -9,6 +10,84 @@ function issuedCommand(id: string) {
   const result = hds.decide({ id, channel: "webchat", user: "fixture-owner", content: "hello world", timestamp: 1 });
   if (!result.command || result.log.commit.decision !== "ASSERT") throw new Error("fixture HDS did not issue an ASSERT command");
   return { hds, command: result.command };
+}
+
+function issuedPlanCommand() {
+  const plan = {
+    version: "operation-core.v1" as const,
+    plan_id: "fixture-plan-id",
+    request_id: "fixture-plan-request",
+    state: "planned" as const,
+    steps: [{
+      step_id: "fixture-search-step",
+      operation: "file.search",
+      target: { kind: "directory" as const, id: "C:\\blue-tanuki-fixture" },
+      state: "planned" as const,
+      effects: ["read" as const],
+      permission: { risk: "low" as const, approval_level: "L1_observe" as const, final_review_required: false,
+        hds_brain_authority_required: true as const, approval_gate_required: true },
+      adapter: "internal_runtime" as const,
+      adapter_is_authority: false as const,
+      command_generated_by_adapter_only: false,
+      parameters: { root: "C:\\blue-tanuki-fixture", query: "fixture query", max_results: 1 },
+      preparation: { depends_on: [], bindings: [], preconditions: [], validation: [{
+        check_id: "fixture-search-result",
+        method: "result_equals" as const,
+        target: { kind: "directory" as const, id: "C:\\blue-tanuki-fixture" },
+        expected: { count: 0 },
+      }], compensation: { available: false as const, reason: "read-only fixture" } },
+    }],
+    rollback: { available: false },
+    raw_command_policy: { raw_command_is_core_operation: false as const, command_generation_location: "not_applicable" as const },
+    planner_output_used_for_authority: false as const,
+    hds_brain_authority_required: true as const,
+  };
+  const planDigest = operationPlanDigest(plan);
+  let checkpoint = OperationPlanCheckpointSchema.parse({ schema_version: "operation-plan-state.v1", plans: [{
+    owner: "fixture-owner",
+    channel: "webchat",
+    goal: "Find the fixture line for the delegated test request.",
+    revisions: [{ digest: planDigest, plan }],
+    receipt_observations: [],
+    bindings: [],
+    results: [],
+  }] });
+  let savedDigest: string | null = operationPlanDigest(checkpoint);
+  const statePort: OperationPlanStatePort = {
+    load: () => checkpoint,
+    compareAndSet(expectedDigest, next) {
+      if (expectedDigest !== savedDigest) throw new Error("fixture operation-plan revision changed");
+      checkpoint = OperationPlanCheckpointSchema.parse(next);
+      savedDigest = operationPlanDigest(checkpoint);
+    },
+    loadRecoveryHoldState: () => null,
+    compareAndSetRecoveryHoldState() { throw new Error("not used by source-binding fixture"); },
+  };
+  const hds = new HDSUpperController({ operation_plan_state: statePort });
+  const request = createGatewayInternalInboundRequest({
+    id: "fixture-plan-review-request",
+    channel: "webchat",
+    user: "fixture-owner",
+    content: `plan:review ${JSON.stringify({ plan_id: plan.plan_id, revision_digest: planDigest, step_id: "fixture-search-step" })}`,
+    timestamp: 1,
+    metadata: { "blue_tanuki.operator_surface": "developer" },
+  });
+  const result = hds.decide(request);
+  if (!result.command || result.log.commit.decision !== "ASSERT") throw new Error("fixture HDS did not issue a selected plan command");
+  const revisePlan = (): void => {
+    const revisedPlan = structuredClone(plan);
+    revisedPlan.steps[0]!.parameters!.query = "changed fixture query";
+    const revised = createGatewayInternalInboundRequest({
+      id: "fixture-plan-revision-request",
+      channel: "webchat",
+      user: "fixture-owner",
+      content: `plan:revise ${JSON.stringify({ plan_id: plan.plan_id, expected_revision_digest: planDigest, plan: revisedPlan })}`,
+      timestamp: 2,
+      metadata: { "blue_tanuki.operator_surface": "developer" },
+    });
+    hds.decide(revised);
+  };
+  return { hds, command: result.command, goal: checkpoint.plans[0]!.goal, target: plan.steps[0]!.target.id, revisePlan };
 }
 
 function proofFor(command: ReturnType<typeof issuedCommand>["command"]): ExecutorApprovalProof {
@@ -84,5 +163,37 @@ describe("HDSからExecutorへの非直列化source binding", () => {
 
     authority.approve(command, proof, executorCommandDigest(command), binding);
     expect(tickets).toHaveLength(1);
+  });
+
+  it("J選択済みOperationPlanの改訂・step・target・引数bindingを同じExecutor ticketへ結合する", () => {
+    const { hds, command, goal, target } = issuedPlanCommand();
+    const binding = hds.createExecutionAuthorityBinding(command);
+    expect(binding.operation_plan_binding_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(binding)).not.toContain("fixture-owner");
+    expect(JSON.stringify(binding)).not.toContain(goal);
+    expect(JSON.stringify(binding)).not.toContain(target);
+
+    const tickets: ExecutionIntentTicket[] = [];
+    const authority = createExecutorApprovalAuthority({
+      execution_store: recordingIntentStore(tickets),
+      require_hds_execution_binding: true,
+    });
+    const proof = proofFor(command);
+    const digest = executorCommandDigest(command);
+    authority.approve(command, proof, digest, binding);
+
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0]!.proof_digest).toBe(createHash("sha256").update(JSON.stringify({
+      schema_version: "blue-tanuki.executor-authority-content-binding.v1",
+      command_digest: digest,
+      proof,
+      hds_source_context_digest: binding.source_context_digest,
+    })).digest("hex"));
+  });
+
+  it("plan改訂で失効した旧commandにはsource sealを発行しない", () => {
+    const { hds, command, revisePlan } = issuedPlanCommand();
+    revisePlan();
+    expect(() => hds.createExecutionAuthorityBinding(command)).toThrow(/source is unavailable|no longer current/);
   });
 });

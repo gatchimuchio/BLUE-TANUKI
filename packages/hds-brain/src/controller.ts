@@ -154,11 +154,13 @@ export interface HDSRuntimeSnapshot {
 export interface HDSExecutionAuthorityBinding {
   readonly schema_version: "blue-tanuki.hds-execution-authority-binding.v1";
   readonly source_context_digest: string;
+  readonly operation_plan_binding_digest?: string;
 }
 
 interface HDSExecutionAuthorityBindingRecord {
   readonly command: ExecuteCommand;
   readonly source_context_digest: string;
+  readonly operation_plan_binding_digest?: string;
   consumed: boolean;
 }
 
@@ -175,7 +177,8 @@ export function consumeHdsExecutionAuthorityBinding(
   const record = HDS_EXECUTION_AUTHORITY_BINDINGS.get(binding as object);
   if (!record || record.command !== command || record.consumed ||
       binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v1" ||
-      binding.source_context_digest !== record.source_context_digest) {
+      binding.source_context_digest !== record.source_context_digest ||
+      binding.operation_plan_binding_digest !== record.operation_plan_binding_digest) {
     throw new Error("HDS execution authority binding is invalid, copied, or already consumed");
   }
   record.consumed = true;
@@ -1301,6 +1304,7 @@ ${planControl.question}`,
       throw new Error("HDS execution authority source is unavailable or no longer current");
     }
     const projection = source.frame.goal_projection;
+    const operation_plan_binding_digest = this.operationPlans.executionSourceBindingDigest(command);
     const source_context_digest = sha256({
       schema_version: "blue-tanuki.hds-execution-source-context.v1",
       request_id: source.request_id,
@@ -1319,12 +1323,15 @@ ${planControl.question}`,
       source_content_sha256: projection.original_request_ref.content_sha256,
       goal_projection_state: projection.state,
       goal_authority_status: projection.authority.status,
+      ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
     });
     const binding: HDSExecutionAuthorityBinding = Object.freeze({
       schema_version: "blue-tanuki.hds-execution-authority-binding.v1",
       source_context_digest,
+      ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
     });
-    HDS_EXECUTION_AUTHORITY_BINDINGS.set(binding, { command, source_context_digest, consumed: false });
+    HDS_EXECUTION_AUTHORITY_BINDINGS.set(binding, { command, source_context_digest,
+      ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}), consumed: false });
     return binding;
   }
   beginOperationPlanAttempt(command: ExecuteCommand, admission?: ExecutionAdmission): boolean {

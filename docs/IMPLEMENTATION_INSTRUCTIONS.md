@@ -2,7 +2,26 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-HDS-EXECUTION-SOURCE-BINDING`
+### 最新BUILD_BATCH：`QEB-01-D02.01-OPERATION-PLAN-SOURCE-CONTEXT`
+
+開始HEAD／`origin/main`=`709bb3fbd63b9346745be223fb34c2b4a61cc668`、worktree clean。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準要領、active指示、D02.01／D02要求、OperationPlan・HDS・Executorの実経路を再読した。開始時local recovery branch／remote backup tagはcurrent=`709bb3f...`、previous=`61dc819...`へ期待値照合して回転。D01.03 stashは保持。
+
+J所有`OperationPlanLedger`がexact HDS commandに結んだowner／channel／元goal digest／plan id・request id／revision／step digest／prepared target・effects・parameters・preconditions／command digestをsource provenanceとして計算する。current revision・selected状態・command/payload/upstream identityが一致しなければseal発行を拒否する。HDSの非直列化sealへplan binding digestを加え、既存Executor ticketの`proof_digest`（canonical command＋Approval proof＋HDS source digest）へ結合した。digestのみを渡し、plan本文やtarget pathをticketへ追加しない。これは宣言されたOperationPlan targetとplan revisionの結合であり、live resource version／owner delegation／意味上のpurpose version／独立Broker audience認証ではない。権限・Approval・L3・実行epoch・単回消費境界は変更していない。
+
+このsource→consumerは`WIRED`。D02.01全体は`BUILD_GAP`を維持する。次は信頼されたdelegation／purpose-version producerを、Broker側のcanonical target identity/version resolverと既存HDS-J→Approval→Executor経路へ接続する。C08.03実provider保留、E03.03のControl Center browser DOM未確認、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+| 限定確認 | 結果 |
+|---|---|
+| HDS build／Core build／Gateway typecheck | PASS。 |
+| `executor_hds_authority_binding.test.ts` | PASS、4/4。汎用command／OperationPlan選択command、digest-only seal、ticket proof digest、plan改訂後の旧command拒否を確認。 |
+| Gateway `recovery_mutation_entry.test.ts -t "restores a verified Operation Plan store"` | PASS、対象1件。ほか4件skip。復元後plan選択→HDS→Approval→Executorの既存経路。 |
+| `pnpm hds:standalone` | PASS。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件。 |
+| 全workspace build／全test suite／HDS standalone test suite | 未実施。 |
+
+実provider／credential／実owner承認／業務ファイル／外部作用、他repo変更、公開・出荷判断なし。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-HDS-EXECUTION-SOURCE-BINDING`
 
 開始HEAD／`origin/main`=`61dc8191a5f6d7be629f6e0a53dd876c5bd51e4f`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`、作業標準要領、active指示、D02.01と実callsiteを再読した。開始時local recovery branch二世代とremote backup tag二世代は`61dc819...`／`2e080b6...`で一致。旧D01.03 stashは保持。
 
