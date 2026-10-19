@@ -1737,6 +1737,42 @@ describe("built-in tools", () => {
   );
 
   it.skipIf(process.platform !== "linux")(
+    "shell.exec bounds aggregate workspace writes and commits only the sandbox view",
+    async () => {
+      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-workspace-quota-"));
+      const root = path.join(parent, "root");
+      await fs.mkdir(root);
+      const providerPath = fileURLToPath(
+        new URL("../native/linux-isolation/target/release/blue-tanuki-linux-isolation", import.meta.url),
+      );
+      try {
+        const result = await invokeShellExec(
+          {
+            cmd: "sh",
+            args: [
+              "-c",
+              "dd if=/dev/zero of=first.bin bs=1M count=48 status=none && dd if=/dev/zero of=second.bin bs=1M count=48 status=none && (dd if=/dev/zero of=third.bin bs=1M count=48 status=none 2>/dev/null || true); printf escaped > /commit-target/escaped.bin 2>/dev/null || true",
+            ],
+          },
+          { env: linuxShellTestEnv(root), nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(result.exit_code).toBe(0);
+        expect(result.process_tree_empty).toBe(true);
+        const names = await fs.readdir(root);
+        expect(names).toEqual(expect.arrayContaining(["first.bin", "second.bin", "third.bin"]));
+        expect(names).not.toContain("escaped.bin");
+        const sizes = await Promise.all(names.map(async (name) => (await fs.stat(path.join(root, name))).size));
+        const totalBytes = sizes.reduce((total, size) => total + size, 0);
+        expect(totalBytes).toBeGreaterThan(96 * 1024 * 1024);
+        expect(totalBytes).toBeLessThanOrEqual(128 * 1024 * 1024);
+      } finally {
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform !== "linux")(
     "shell.exec clears inherited credential-like environment values and denies network access",
     async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-boundary-"));

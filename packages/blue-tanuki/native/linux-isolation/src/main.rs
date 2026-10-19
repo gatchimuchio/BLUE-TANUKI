@@ -3,12 +3,15 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+mod workspace_quota;
 
 const MAX_TIMEOUT_MS: u64 = 60_000;
 const MAX_OUTPUT_BYTES: usize = 512 * 1024;
@@ -77,6 +80,16 @@ fn run() -> Result<Option<String>, String> {
     if args.first().map(|arg| arg == "--inner").unwrap_or(false) {
         let request = parse_inner(args.into_iter().skip(1).collect())?;
         let result = run_inner(request)?;
+        write_inner_frame(&result)?;
+        return Ok(None);
+    }
+    if args
+        .first()
+        .map(|arg| arg == "--command-inner")
+        .unwrap_or(false)
+    {
+        let request = parse_inner(args.into_iter().skip(1).collect())?;
+        let result = run_command_inner(request)?;
         write_inner_frame(&result)?;
         return Ok(None);
     }
@@ -166,6 +179,7 @@ fn parse_outer(args: Vec<OsString>) -> Result<Request, String> {
 
 fn parse_inner(args: Vec<OsString>) -> Result<InnerRequest, String> {
     let mut namespaces = BTreeMap::new();
+    let mut cwd = None;
     let mut command = None;
     let mut command_args = Vec::new();
     let mut index = 0usize;
@@ -180,26 +194,44 @@ fn parse_inner(args: Vec<OsString>) -> Result<InnerRequest, String> {
             command_args.extend(args[index + 1..].iter().cloned());
             break;
         }
-        let (key, value) = arg
-            .strip_prefix("--expect-")
-            .and_then(|key| key.split_once('='))
-            .ok_or_else(|| "invalid_inner_request".to_string())?;
-        let parsed = value
-            .parse::<u64>()
-            .map_err(|_| "invalid_inner_request".to_string())?;
-        if !matches!(key, "user" | "mnt" | "pid" | "net" | "ipc" | "uts") {
-            return Err("invalid_inner_request".to_string());
+        if arg == "--cwd" {
+            index += 1;
+            let value = args
+                .get(index)
+                .ok_or_else(|| "invalid_inner_request".to_string())?;
+            let parsed = PathBuf::from(value);
+            if !parsed.is_absolute()
+                || !parsed.starts_with("/workspace")
+                || parsed
+                    .components()
+                    .any(|component| component == Component::ParentDir)
+            {
+                return Err("invalid_inner_request".to_string());
+            }
+            cwd = Some(parsed);
+        } else {
+            let (key, value) = arg
+                .strip_prefix("--expect-")
+                .and_then(|key| key.split_once('='))
+                .ok_or_else(|| "invalid_inner_request".to_string())?;
+            let parsed = value
+                .parse::<u64>()
+                .map_err(|_| "invalid_inner_request".to_string())?;
+            if !matches!(key, "user" | "mnt" | "pid" | "net" | "ipc" | "uts") {
+                return Err("invalid_inner_request".to_string());
+            }
+            namespaces.insert(key.to_string(), parsed);
         }
-        namespaces.insert(key.to_string(), parsed);
         index += 1;
     }
-    if namespaces.len() != 6 {
+    if namespaces.len() != 6 || cwd.is_none() {
         return Err("invalid_inner_request".to_string());
     }
     let command = command.ok_or_else(|| "invalid_inner_request".to_string())?;
     validate_command(&command, &command_args)?;
     Ok(InnerRequest {
         namespaces,
+        cwd: cwd.ok_or_else(|| "invalid_inner_request".to_string())?,
         command,
         args: command_args,
     })
@@ -207,6 +239,7 @@ fn parse_inner(args: Vec<OsString>) -> Result<InnerRequest, String> {
 
 struct InnerRequest {
     namespaces: BTreeMap<String, u64>,
+    cwd: PathBuf,
     command: OsString,
     args: Vec<OsString>,
 }
@@ -245,10 +278,8 @@ fn run_outer(request: Request) -> Result<String, String> {
         "--unshare-uts".into(),
         "--new-session".into(),
         "--die-with-parent".into(),
-        "--disable-userns".into(),
-        "--assert-userns-disabled".into(),
-        "--cap-drop".into(),
-        "ALL".into(),
+        "--cap-add".into(),
+        "CAP_SYS_ADMIN".into(),
         "--ro-bind".into(),
         "/usr".into(),
         "/usr".into(),
@@ -277,14 +308,23 @@ fn run_outer(request: Request) -> Result<String, String> {
         "/tmp".into(),
         "--dir".into(),
         "/workspace".into(),
+        "--dir".into(),
+        "/workspace-lower".into(),
+        "--ro-bind".into(),
+        request.root.as_os_str().to_owned(),
+        "/workspace-lower".into(),
+        "--dir".into(),
+        "/workspace-storage".into(),
+        "--dir".into(),
+        "/commit-target".into(),
         "--bind".into(),
         request.root.as_os_str().to_owned(),
-        "/workspace".into(),
+        "/commit-target".into(),
         "--ro-bind".into(),
         helper.as_os_str().to_owned(),
         "/bt-linux-isolation-helper".into(),
         "--chdir".into(),
-        sandbox_cwd.into(),
+        "/".into(),
         "--clearenv".into(),
         "--setenv".into(),
         "PATH".into(),
@@ -304,6 +344,8 @@ fn run_outer(request: Request) -> Result<String, String> {
         "--".into(),
         "/bt-linux-isolation-helper".into(),
         "--inner".into(),
+        "--cwd".into(),
+        sandbox_cwd.into(),
     ]);
     for (name, inode) in host_namespaces.iter() {
         bwrap_args.push(format!("--expect-{name}={inode}").into());
@@ -327,7 +369,10 @@ fn run_outer(request: Request) -> Result<String, String> {
             "--property=TimeoutStopSec=2s",
             "--property=LimitCORE=0",
             "--property=LimitNOFILE=128",
-            &format!("--property=LimitFSIZE={MAX_FILE_BYTES}"),
+            &format!(
+                "--property=LimitFSIZE={}",
+                workspace_quota::MAX_WORKSPACE_BYTES
+            ),
             &format!("--property=MemoryMax={MEMORY_MAX}"),
             &format!("--property=TasksMax={MAX_TASKS}"),
             &format!("--property=CPUQuota={CPU_QUOTA}"),
@@ -442,17 +487,185 @@ fn run_outer(request: Request) -> Result<String, String> {
 }
 
 fn run_inner(request: InnerRequest) -> Result<InnerResult, String> {
+    verify_outer_isolation(&request.namespaces)?;
+    let commit_root = Path::new("/commit-target");
+    inspect_root(commit_root)?;
+    let baseline = workspace_quota::snapshot_tree(commit_root)?;
+    workspace_quota::mount_bounded_overlay()?;
+    set_dumpable(false)?;
+
+    let result = run_nested_command(&request)?;
+    inspect_root(Path::new("/workspace"))?;
+    let final_tree = workspace_quota::snapshot_tree(Path::new("/workspace"))?;
+    workspace_quota::commit_tree(commit_root, Path::new("/workspace"), &baseline, &final_tree)?;
+    Ok(result)
+}
+
+fn run_nested_command(request: &InnerRequest) -> Result<InnerResult, String> {
+    let mut args: Vec<OsString> = vec![
+        "--unshare-mnt".into(),
+        "--unshare-pid".into(),
+        "--unshare-net".into(),
+        "--unshare-ipc".into(),
+        "--unshare-uts".into(),
+        "--new-session".into(),
+        "--die-with-parent".into(),
+        "--disable-userns".into(),
+        "--cap-drop".into(),
+        "ALL".into(),
+        "--ro-bind".into(),
+        "/usr".into(),
+        "/usr".into(),
+    ];
+    for (source, destination) in [
+        ("usr/bin", "/bin"),
+        ("usr/sbin", "/sbin"),
+        ("usr/lib", "/lib"),
+        ("usr/lib64", "/lib64"),
+    ] {
+        let source_path = Path::new("/usr").join(source.strip_prefix("usr/").unwrap_or(source));
+        if source_path.exists() {
+            args.extend(["--symlink".into(), source.into(), destination.into()]);
+        }
+    }
+    args.extend([
+        "--proc".into(),
+        "/proc".into(),
+        "--dev".into(),
+        "/dev".into(),
+        "--size".into(),
+        MAX_FILE_BYTES.to_string().into(),
+        "--perms".into(),
+        "1777".into(),
+        "--tmpfs".into(),
+        "/tmp".into(),
+        "--dir".into(),
+        "/workspace".into(),
+        "--bind".into(),
+        "/workspace".into(),
+        "/workspace".into(),
+        "--ro-bind".into(),
+        "/bt-linux-isolation-helper".into(),
+        "/bt-linux-isolation-helper".into(),
+        "--chdir".into(),
+        request.cwd.as_os_str().to_owned(),
+        "--clearenv".into(),
+        "--setenv".into(),
+        "PATH".into(),
+        "/usr/bin:/bin".into(),
+        "--setenv".into(),
+        "HOME".into(),
+        "/workspace".into(),
+        "--setenv".into(),
+        "TMPDIR".into(),
+        "/tmp".into(),
+        "--setenv".into(),
+        "LANG".into(),
+        "C.UTF-8".into(),
+        "--setenv".into(),
+        "BT_MAX_OUTPUT_BYTES".into(),
+        std::env::var("BT_MAX_OUTPUT_BYTES")
+            .unwrap_or_else(|_| "64000".to_string())
+            .into(),
+        "--".into(),
+        "/bt-linux-isolation-helper".into(),
+        "--command-inner".into(),
+        "--cwd".into(),
+        request.cwd.as_os_str().to_owned(),
+    ]);
+    for (name, inode) in request.namespaces.iter() {
+        args.push(format!("--expect-{name}={inode}").into());
+    }
+    args.push("--".into());
+    args.push(request.command.clone());
+    args.extend(request.args.iter().cloned());
+
+    let mut child = Command::new("/usr/bin/bwrap")
+        .args(args)
+        .current_dir("/")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", "/workspace")
+        .env("TMPDIR", "/tmp")
+        .env("LANG", "C.UTF-8")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "sandbox_command_start_failed".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "sandbox_output_unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "sandbox_output_unavailable".to_string())?;
+    let output = Arc::new(Mutex::new(CapturedOutput::default()));
+    let stdout_thread = spawn_reader(stdout, Arc::clone(&output), true, MAX_RESPONSE_BYTES);
+    let stderr_thread = spawn_reader(stderr, Arc::clone(&output), false, MAX_RESPONSE_BYTES);
+    let status = child
+        .wait()
+        .map_err(|_| "sandbox_command_wait_failed".to_string())?;
+    let (_, tree_clean) = kill_sandbox_descendants()?;
+    if !tree_clean {
+        return Err("sandbox_process_tree_shutdown_unconfirmed".to_string());
+    }
+    let stdout_thread = stdout_thread
+        .join()
+        .map_err(|_| "sandbox_output_capture_failed".to_string())?;
+    let stderr_thread = stderr_thread
+        .join()
+        .map_err(|_| "sandbox_output_capture_failed".to_string())?;
+    if stdout_thread.is_err() || stderr_thread.is_err() {
+        return Err("sandbox_output_capture_failed".to_string());
+    }
+    let output = output
+        .lock()
+        .map_err(|_| "sandbox_output_capture_failed".to_string())?;
+    if output.truncated {
+        return Err("sandbox_result_exceeded_bound".to_string());
+    }
+    if !status.success() {
+        let diagnostic = safe_diagnostic(&output.stderr);
+        return Err(if diagnostic.is_empty() {
+            "sandbox_start_or_shutdown_failed".to_string()
+        } else {
+            format!("sandbox_start_or_shutdown_failed:{diagnostic}")
+        });
+    }
+    parse_inner_frame(&output.stdout)
+}
+
+fn run_command_inner(request: InnerRequest) -> Result<InnerResult, String> {
     verify_inner_isolation(&request.namespaces)?;
-    let command = Command::new(&request.command)
+    set_dumpable(false)?;
+    let mut command = Command::new(&request.command);
+    command
         .args(&request.args)
-        .current_dir(std::env::current_dir().map_err(|_| "sandbox_cwd_invalid".to_string())?)
+        .current_dir(&request.cwd)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", "/workspace")
         .env("TMPDIR", "/tmp")
         .env("LANG", "C.UTF-8")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    unsafe {
+        command.pre_exec(|| {
+            let file_size = libc::rlimit {
+                rlim_cur: MAX_FILE_BYTES as libc::rlim_t,
+                rlim_max: MAX_FILE_BYTES as libc::rlim_t,
+            };
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &file_size) != 0
+                || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let command = command
         .spawn()
         .map_err(|_| "sandbox_command_start_failed".to_string())?;
     let mut command = command;
@@ -501,23 +714,26 @@ fn run_inner(request: InnerRequest) -> Result<InnerResult, String> {
 }
 
 fn verify_inner_isolation(expected: &BTreeMap<String, u64>) -> Result<(), String> {
-    for name in ["user", "mnt", "pid", "net", "ipc", "uts"] {
-        let actual = namespace_inode(name)?;
-        if expected.get(name).copied() == Some(actual) {
-            return Err("sandbox_namespace_not_isolated".to_string());
-        }
-    }
+    verify_namespace_isolation(expected)?;
     let status = fs::read_to_string("/proc/self/status")
         .map_err(|_| "sandbox_status_unavailable".to_string())?;
     let cap_eff = status
         .lines()
         .find_map(|line| line.strip_prefix("CapEff:").map(str::trim))
         .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
-    if cap_eff.bytes().any(|byte| byte != b'0') {
+    if cap_eff.bytes().any(|byte| byte != b'0')
+        || status.lines().any(|line| {
+            ["CapPrm:", "CapAmb:"].iter().any(|key| {
+                line.strip_prefix(key)
+                    .is_some_and(|value| value.trim().chars().any(|ch| ch != '0'))
+            })
+        })
+    {
         return Err("sandbox_capabilities_unverified".to_string());
     }
-    let cwd = fs::canonicalize("/proc/self/cwd").map_err(|_| "sandbox_cwd_invalid".to_string())?;
-    if !cwd.starts_with("/workspace") {
+    let current_dir =
+        fs::canonicalize("/proc/self/cwd").map_err(|_| "sandbox_cwd_invalid".to_string())?;
+    if !current_dir.starts_with("/workspace") {
         return Err("sandbox_cwd_invalid".to_string());
     }
     for (key, _) in std::env::vars_os() {
@@ -528,6 +744,67 @@ fn verify_inner_isolation(expected: &BTreeMap<String, u64>) -> Result<(), String
         ) {
             return Err("sandbox_environment_not_allowlisted".to_string());
         }
+    }
+    Ok(())
+}
+
+fn verify_outer_isolation(expected: &BTreeMap<String, u64>) -> Result<(), String> {
+    verify_namespace_isolation(expected)?;
+    let cwd = fs::canonicalize("/proc/self/cwd").map_err(|_| "sandbox_cwd_invalid".to_string())?;
+    if cwd != Path::new("/") {
+        return Err("sandbox_cwd_invalid".to_string());
+    }
+    let status = fs::read_to_string("/proc/self/status")
+        .map_err(|_| "sandbox_status_unavailable".to_string())?;
+    let capabilities = status
+        .lines()
+        .find_map(|line| line.strip_prefix("CapEff:").map(str::trim))
+        .and_then(|value| u64::from_str_radix(value, 16).ok())
+        .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
+    let permitted = status
+        .lines()
+        .find_map(|line| line.strip_prefix("CapPrm:").map(str::trim))
+        .and_then(|value| u64::from_str_radix(value, 16).ok())
+        .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
+    let ambient = status
+        .lines()
+        .find_map(|line| line.strip_prefix("CapAmb:").map(str::trim))
+        .and_then(|value| u64::from_str_radix(value, 16).ok())
+        .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
+    if capabilities != (1 << 21) || permitted != (1 << 21) || ambient != 0 {
+        return Err("sandbox_mount_capability_unavailable".to_string());
+    }
+    verify_environment_allowlist()
+}
+
+fn verify_namespace_isolation(expected: &BTreeMap<String, u64>) -> Result<(), String> {
+    for name in ["user", "mnt", "pid", "net", "ipc", "uts"] {
+        let actual = namespace_inode(name)?;
+        if expected.get(name).copied() == Some(actual) {
+            return Err("sandbox_namespace_not_isolated".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn verify_environment_allowlist() -> Result<(), String> {
+    for (key, _) in std::env::vars_os() {
+        let key = key.to_string_lossy();
+        if !matches!(
+            key.as_ref(),
+            "PATH" | "HOME" | "TMPDIR" | "LANG" | "PWD" | "BT_MAX_OUTPUT_BYTES"
+        ) {
+            return Err("sandbox_environment_not_allowlisted".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn set_dumpable(dumpable: bool) -> Result<(), String> {
+    let result =
+        unsafe { libc::prctl(libc::PR_SET_DUMPABLE, if dumpable { 1 } else { 0 }, 0, 0, 0) };
+    if result != 0 {
+        return Err("sandbox_process_protection_unavailable".to_string());
     }
     Ok(())
 }
