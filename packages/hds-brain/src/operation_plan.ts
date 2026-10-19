@@ -1164,9 +1164,10 @@ export class OperationPlanLedger {
     if (!this.computeSourceObservationsAreCurrent(match.p, Date.now())) {
       throw new Error("plan_execution_source_observation_expired");
     }
-    if (!this.goalPurposeBindingIsCurrent(match.p.goal_purpose_binding) ||
+    if (!this.canExecute(command) ||
+        !this.goalPurposeBindingIsCurrent(match.p.goal_purpose_binding) ||
         this.goalPurposeRelationIssue(match.p) !== undefined ||
-        match.b.status !== "selected" || !currentRevision || currentRevision.digest !== match.b.revision_digest ||
+        match.b.status !== "selected" || !currentRevision ||
         !revision || !step || stepDigest(step) !== match.b.step_digest || !descriptor ||
         this.requestGoalCriteriaIssue(match.p, step) !== undefined ||
         match.b.operation !== descriptor.operation_id || command.type !== "tool_call" ||

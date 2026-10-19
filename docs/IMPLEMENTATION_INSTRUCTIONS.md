@@ -2,6 +2,21 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 2026-10-19 QEB-01-D01.03-UNCHANGED-STEP-BROKER-BINDING：無関係な改訂後の未実行stepをBrokerへ接続
+
+開始HEAD／`origin/main`=`1a05d0c3b647516725777d11d5100693343f40a2`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`・作業標準・active指示・D01.03、OperationPlan改訂とfile.search target resolverの実経路を読み直した。編集前local復元branch／remote tagはcurrent=`1a05d0c3b647516725777d11d5100693343f40a2`、previous=`e16a0479052f08def31c5bf334aae9c7ce94335e`へ期待値照合して更新。
+
+plan改訂で変更された未実行stepの旧commandは失効し、実行済みstepまたはその依存を変更する改訂は拒否する。一方、改訂範囲外でstep digest・依存結果・準備済み内容が現行planにも一致する選択済みstepは、既存J判定上引き続き有効だったが、Broker向けsource-bindingがplan全体revisionの不一致だけで拒否していた。source-binding発行時に同じ`canExecute`のcurrent-step再検証を適用し、元の選択revisionを来歴として保持したまま、変更されていないstepのdigestをBroker target resolver／HDS execution bindingへ接続した。意味・目的関係、依存結果、target version、Approval／実行条件は従来どおり別途検査する。
+
+| 限定確認 | 結果 |
+|---|---|
+| `operation_plan_runtime.test.ts` | PASS、25/25。実file.search結果を依存stepへ渡し、無関係な独立stepの改訂後も不変stepのsource digest、Broker target observation、HDS execution bindingが成立すること、変更stepの旧command拒否、改訂後の依存step実行を確認。変更stepのsource-binding拒否を追加した後、対象caseを1/1再実行してPASS。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| `pnpm hds:standalone` | PASS。audit chain valid、Runtime Invariants `all_ok=true`。 |
+| GitHub Actions／外部provider／credential／業務作用／D4変更 | 未実施。今回のWindows対象経路をローカルで確認でき、D4 §3.1のActions条件に該当しない。 |
+
+この接続は未実行stepの再利用条件であり、変更済み・試行済みstepを再実行可能にしない。D01.03全体、別hostのtask identity、D02.02全体、D4 Runtime task input、BUILD_COVERED、QE_QC／QE_QAは未成立。次consumerはD02.02とは独立したBLUE所有の現行producer→consumerを現物から選び、host/task identityや実providerを架空・実使用せずQE_BUILDを続ける。C08.03実provider保留、P13 owner-GO／公開保留、別repo変更なしを維持する。
+
 ### 2026-10-19 D02.02 host/task identity producer監査
 
 開始HEAD／origin/mainは`e16a0479052f08def31c5bf334aae9c7ce94335e`、BLUE worktreeはclean。QE rev2.3三点正本と適用AGENTS／作業標準／active指示を再読し、D02.02要求とGatewayのticket・worker経路、D4の現行契約を読取照合した。

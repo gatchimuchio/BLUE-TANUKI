@@ -1200,6 +1200,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(dependent.type).toBe("tool_call");
       if (dependent.type !== "tool_call") throw new Error("missing tool");
       expect(dependent.payload.arguments.query).toBe("blue");
+      const dependentSourceDigest = hds.getExecutionOperationPlanBindingDigest(dependent);
+      expect(dependentSourceDigest).toMatch(/^[a-f0-9]{64}$/);
       const next = structuredClone(candidate); next.steps[2]!.parameters!.max_results = 2;
       const before = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
       const revised = hds.decide(request(`plan:revise ${JSON.stringify({ plan_id: candidate.plan_id,
@@ -1207,7 +1209,21 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(revised.command?.type).toBe("noop");
       expect((await exec.run(revised.command!)).status).toBe("success");
       expect(hds.operationPlanCommandIsCurrent(independent)).toBe(false);
+      expect(() => hds.getExecutionOperationPlanBindingDigest(independent)).toThrow("plan_execution_source_binding_stale");
       expect(hds.operationPlanCommandIsCurrent(dependent)).toBe(true);
+      expect(hds.getExecutionOperationPlanBindingDigest(dependent)).toBe(dependentSourceDigest);
+      const searchTools = new ToolRegistry(); searchTools.register(fileSearchTool);
+      const targetResolver = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+        tools: searchTools, approval_authority: createExecutorApprovalAuthority() });
+      const targetObservation = await targetResolver.inspectCommandTargetVersion(dependent,
+        { BLUE_TANUKI_FILE_ROOT: workspace }, dependentSourceDigest);
+      if (!targetObservation) throw new Error("unchanged dependent step target resolver returned no observation after revision");
+      expect(targetObservation).toMatchObject({ operation_plan_binding_digest: dependentSourceDigest,
+        used_for_authority: false, may_execute: false });
+      expect(hds.createExecutionAuthorityBinding(dependent, targetObservation)).toMatchObject({
+        operation_plan_binding_digest: dependentSourceDigest,
+        broker_target_version_observation_digest: operationPlanDigest(targetObservation),
+      });
       expect(hds.beginOperationPlanAttempt(independent)).toBe(false);
       await exec.run(dependent);
       const snapshot = hds.getRuntimeSnapshot().operation_plans;
