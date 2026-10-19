@@ -20,6 +20,11 @@ const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ROOT_ENTRIES: usize = 100_000;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MOUNT_CAPABILITY_MASK: u64 = 1 << 21;
+const MOUNT_SETUP_CAPABILITY_MASK: u64 = MOUNT_CAPABILITY_MASK | (1 << 27) | (1 << 8);
+const CAP_MKNOD: libc::c_int = 27;
+const CAP_SETPCAP: libc::c_int = 8;
+const PR_CAPBSET_DROP: libc::c_int = 24;
+const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const NS_GET_USERNS_IOCTL: libc::c_ulong = 0xb701;
 const MAX_TASKS: &str = "64";
 const MEMORY_MAX: &str = "512M";
@@ -285,6 +290,10 @@ fn run_outer(request: Request) -> Result<String, String> {
         "ALL".into(),
         "--cap-add".into(),
         "CAP_SYS_ADMIN".into(),
+        "--cap-add".into(),
+        "CAP_MKNOD".into(),
+        "--cap-add".into(),
+        "CAP_SETPCAP".into(),
         "--ro-bind".into(),
         "/usr".into(),
         "/usr".into(),
@@ -499,6 +508,7 @@ fn run_inner(request: InnerRequest) -> Result<InnerResult, String> {
     inspect_root(commit_root)?;
     let baseline = workspace_quota::snapshot_tree(commit_root)?;
     workspace_quota::mount_bounded_overlay()?;
+    drop_mount_setup_capabilities()?;
     set_dumpable(false)?;
 
     let result = run_nested_command(&request)?;
@@ -761,34 +771,7 @@ fn verify_outer_isolation(expected: &BTreeMap<String, u64>) -> Result<(), String
     if cwd != Path::new("/") {
         return Err("sandbox_cwd_invalid".to_string());
     }
-    let status = fs::read_to_string("/proc/self/status")
-        .map_err(|_| "sandbox_status_unavailable".to_string())?;
-    let capabilities = status
-        .lines()
-        .find_map(|line| line.strip_prefix("CapEff:").map(str::trim))
-        .and_then(|value| u64::from_str_radix(value, 16).ok())
-        .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
-    let permitted = status
-        .lines()
-        .find_map(|line| line.strip_prefix("CapPrm:").map(str::trim))
-        .and_then(|value| u64::from_str_radix(value, 16).ok())
-        .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
-    let inheritable = status
-        .lines()
-        .find_map(|line| line.strip_prefix("CapInh:").map(str::trim))
-        .and_then(|value| u64::from_str_radix(value, 16).ok())
-        .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
-    let bounding = status
-        .lines()
-        .find_map(|line| line.strip_prefix("CapBnd:").map(str::trim))
-        .and_then(|value| u64::from_str_radix(value, 16).ok())
-        .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
-    let ambient = status
-        .lines()
-        .find_map(|line| line.strip_prefix("CapAmb:").map(str::trim))
-        .and_then(|value| u64::from_str_radix(value, 16).ok())
-        .ok_or_else(|| "sandbox_capabilities_unverified".to_string())?;
-    verify_mount_capability_mask(capabilities, permitted, inheritable, bounding, ambient)?;
+    verify_mount_capability_mask(&capability_snapshot()?, MOUNT_SETUP_CAPABILITY_MASK)?;
     verify_environment_allowlist()
 }
 
@@ -869,22 +852,90 @@ fn verify_environment_allowlist() -> Result<(), String> {
 }
 
 fn verify_mount_capability_mask(
+    capabilities: &CapabilitySnapshot,
+    expected_mask: u64,
+) -> Result<(), String> {
+    let unexpected = !expected_mask;
+    if capabilities.effective != expected_mask
+        || capabilities.permitted != expected_mask
+        || capabilities.bounding != expected_mask
+        || capabilities.inheritable & unexpected != 0
+        || capabilities.ambient & unexpected != 0
+    {
+        return Err("sandbox_mount_capability_unavailable".to_string());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct CapabilitySnapshot {
     effective: u64,
     permitted: u64,
     inheritable: u64,
     bounding: u64,
     ambient: u64,
-) -> Result<(), String> {
-    let unexpected = !MOUNT_CAPABILITY_MASK;
-    if effective != MOUNT_CAPABILITY_MASK
-        || permitted != MOUNT_CAPABILITY_MASK
-        || bounding != MOUNT_CAPABILITY_MASK
-        || inheritable & unexpected != 0
-        || ambient & unexpected != 0
-    {
-        return Err("sandbox_mount_capability_unavailable".to_string());
+}
+
+fn capability_snapshot() -> Result<CapabilitySnapshot, String> {
+    let status = fs::read_to_string("/proc/self/status")
+        .map_err(|_| "sandbox_status_unavailable".to_string())?;
+    let value = |name: &str| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(name).map(str::trim))
+            .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+            .ok_or_else(|| "sandbox_capabilities_unverified".to_string())
+    };
+    Ok(CapabilitySnapshot {
+        effective: value("CapEff:")?,
+        permitted: value("CapPrm:")?,
+        inheritable: value("CapInh:")?,
+        bounding: value("CapBnd:")?,
+        ambient: value("CapAmb:")?,
+    })
+}
+
+#[repr(C)]
+struct LinuxCapabilityHeader {
+    version: u32,
+    pid: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxCapabilityData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
+}
+
+fn drop_mount_setup_capabilities() -> Result<(), String> {
+    for capability in [CAP_MKNOD, CAP_SETPCAP] {
+        if unsafe { libc::prctl(PR_CAPBSET_DROP, capability, 0, 0, 0) } != 0 {
+            return Err("sandbox_mount_capability_reduction_failed".to_string());
+        }
     }
-    Ok(())
+
+    let header = LinuxCapabilityHeader {
+        version: LINUX_CAPABILITY_VERSION_3,
+        pid: 0,
+    };
+    let mut data = [LinuxCapabilityData::default(); 2];
+    data[0].effective = MOUNT_CAPABILITY_MASK as u32;
+    data[0].permitted = MOUNT_CAPABILITY_MASK as u32;
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_capset,
+            &header as *const LinuxCapabilityHeader,
+            data.as_ptr(),
+        )
+    };
+    if result != 0 {
+        return Err("sandbox_mount_capability_reduction_failed".to_string());
+    }
+
+    verify_mount_capability_mask(&capability_snapshot()?, MOUNT_CAPABILITY_MASK)
+        .map_err(|_| "sandbox_mount_capability_reduction_failed".to_string())
 }
 
 fn set_dumpable(dumpable: bool) -> Result<(), String> {
@@ -1403,6 +1454,7 @@ fn stable_error(error: &str) -> String {
             "shell_root_unreadable",
             "shell_root_changed_during_validation",
             "sandbox_mount_capability_unavailable",
+            "sandbox_mount_capability_reduction_failed",
             "sandbox_mount_namespace_unshare_failed",
             "sandbox_mount_namespace_private_failed",
             "sandbox_mount_namespace_open_failed",
@@ -1444,18 +1496,47 @@ fn stable_error(error: &str) -> String {
 mod tests {
     use super::{
         namespace_owner_query_error, safe_diagnostic, stable_error, verify_mount_capability_mask,
+        CapabilitySnapshot, MOUNT_CAPABILITY_MASK, MOUNT_SETUP_CAPABILITY_MASK,
     };
 
     #[test]
-    fn mount_setup_allows_only_sys_admin_in_capability_sets() {
+    fn mount_setup_caps_are_removed_before_nested_shell() {
         let sys_admin = 1 << 21;
-        assert!(verify_mount_capability_mask(sys_admin, sys_admin, 0, sys_admin, 0).is_ok());
+        assert_eq!(MOUNT_CAPABILITY_MASK, sys_admin);
+        assert_eq!(
+            MOUNT_SETUP_CAPABILITY_MASK,
+            sys_admin | (1 << 27) | (1 << 8)
+        );
+        let snapshot = |mask| CapabilitySnapshot {
+            effective: mask,
+            permitted: mask,
+            inheritable: 0,
+            bounding: mask,
+            ambient: 0,
+        };
         assert!(verify_mount_capability_mask(
-            sys_admin, sys_admin, sys_admin, sys_admin, sys_admin
+            &snapshot(MOUNT_SETUP_CAPABILITY_MASK),
+            MOUNT_SETUP_CAPABILITY_MASK
         )
         .is_ok());
-        assert!(verify_mount_capability_mask(sys_admin | 1, sys_admin, 0, sys_admin, 0).is_err());
-        assert!(verify_mount_capability_mask(0, sys_admin, 0, sys_admin, 0).is_err());
+        assert!(verify_mount_capability_mask(
+            &snapshot(MOUNT_CAPABILITY_MASK),
+            MOUNT_CAPABILITY_MASK
+        )
+        .is_ok());
+        assert!(verify_mount_capability_mask(
+            &snapshot(MOUNT_SETUP_CAPABILITY_MASK | 1),
+            MOUNT_SETUP_CAPABILITY_MASK
+        )
+        .is_err());
+        assert!(verify_mount_capability_mask(
+            &snapshot(MOUNT_SETUP_CAPABILITY_MASK),
+            MOUNT_CAPABILITY_MASK
+        )
+        .is_err());
+        let mut inherited = snapshot(MOUNT_SETUP_CAPABILITY_MASK);
+        inherited.inheritable = 1;
+        assert!(verify_mount_capability_mask(&inherited, MOUNT_SETUP_CAPABILITY_MASK).is_err());
     }
 
     #[test]
