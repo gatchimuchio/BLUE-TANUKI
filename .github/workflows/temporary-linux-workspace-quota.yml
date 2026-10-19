@@ -94,23 +94,20 @@ jobs:
           probe_output=
           if probe_output=$(/usr/bin/bwrap \
             --unshare-user --unshare-mnt --unshare-pid --die-with-parent \
-            --cap-drop ALL --cap-add CAP_SYS_ADMIN --cap-add CAP_MKNOD --cap-add CAP_SETPCAP \
-            --ro-bind /usr /usr \
-            --symlink usr/bin /bin --symlink usr/sbin /sbin \
-            --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
-            --proc /proc --dev /dev --tmpfs /tmp --tmpfs /workspace-lower \
-            --dir /workspace-storage --dir /workspace --chdir / --clearenv \
+            --ro-bind / / --tmpfs /tmp \
+            --dir /tmp/workspace-lower --dir /tmp/workspace-storage --dir /tmp/workspace \
+            --chdir /tmp --clearenv \
             --setenv PATH /usr/bin:/bin -- \
             /usr/bin/sh -c '
               set -eu
               exec 2>/dev/null
               fail() { printf "%s" "$1"; exit 1; }
-              printf fixture > /workspace-lower/probe || fail lower_fixture_setup_failed
-              mount -o remount,ro /workspace-lower || fail lower_readonly_remount_denied
-              mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700 tmpfs /workspace-storage || fail upper_tmpfs_mount_denied
-              mkdir /workspace-storage/upper /workspace-storage/work || fail upper_work_layout_failed
-              mount -t overlay overlay -o lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work,userxattr,redirect_dir=nofollow,metacopy=off,index=off /workspace || fail overlay_mount_denied
-              test "$(cat /workspace/probe)" = fixture || fail overlay_readback_failed
+              printf fixture > /tmp/workspace-lower/probe || fail lower_fixture_setup_failed
+              mount -o remount,ro /tmp/workspace-lower || fail lower_readonly_remount_denied
+              mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700 tmpfs /tmp/workspace-storage || fail upper_tmpfs_mount_denied
+              mkdir /tmp/workspace-storage/upper /tmp/workspace-storage/work || fail upper_work_layout_failed
+              mount -t overlay overlay -o lowerdir=/tmp/workspace-lower,upperdir=/tmp/workspace-storage/upper,workdir=/tmp/workspace-storage/work,userxattr,redirect_dir=nofollow,metacopy=off,index=off /tmp/workspace || fail overlay_mount_denied
+              test "$(cat /tmp/workspace/probe)" = fixture || fail overlay_readback_failed
               printf pass
             ' 2>"$stderr_file"); then
             result=$probe_output
