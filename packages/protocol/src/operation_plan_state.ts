@@ -13,21 +13,19 @@ export const OperationPlanGoalPurposeBindingSchema = z.object({
   purpose_digest: Digest,
 }).strict();
 export type OperationPlanGoalPurposeBinding = z.infer<typeof OperationPlanGoalPurposeBindingSchema>;
-/** Explicit, non-authority reference to one J/M-verified prior file.write result. */
+/** Explicit, non-authority reference to one J/M-verified file result. */
 export const OperationPlanComputeSourceObservationReferenceSchema = z.object({
   plan_id_digest: Digest,
   revision_digest: Digest,
   step_id_digest: Digest,
 }).strict();
 export type OperationPlanComputeSourceObservationReference = z.infer<typeof OperationPlanComputeSourceObservationReferenceSchema>;
-/** Finite historical projection; it deliberately carries no target, path, or content. */
-export const OperationPlanComputeSourceObservationSchema = z.object({
+/** Finite projections carry no target, path, query, or file content. */
+const OperationPlanComputeSourceObservationCommon = {
   schema_version: z.literal("operation-plan-compute-source-observation.v1"),
-  source: z.literal("verified_file_write_result"),
   plan_id_digest: Digest,
   revision_digest: Digest,
   step_id_digest: Digest,
-  operation: z.literal("file.write"),
   plan_binding_status: z.literal("verified"),
   plan_validation_status: z.literal("matched"),
   effect_observation: z.literal("reported_success"),
@@ -39,10 +37,21 @@ export const OperationPlanComputeSourceObservationSchema = z.object({
   used_as_world_truth: z.literal(false),
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),
-}).strict();
+};
+export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion("source", [
+  z.object({ ...OperationPlanComputeSourceObservationCommon,
+    source: z.literal("verified_file_write_result"), operation: z.literal("file.write") }).strict(),
+  z.object({ ...OperationPlanComputeSourceObservationCommon,
+    source: z.literal("verified_file_search_result"), operation: z.literal("file.search"),
+    expires_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    match_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    visited_files: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    search_completeness: z.literal("unknown"),
+  }).strict(),
+]);
 export type OperationPlanComputeSourceObservation = z.infer<typeof OperationPlanComputeSourceObservationSchema>;
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
-  "blue-tanuki.plan-compute-source-observations.v1";
+  "blue-tanuki.plan-compute-source-observations.v2";
 /** Explicit task input for internal plan computation; the binding selects context, not authority. */
 export const OperationPlanComputeInputSchema = z.object({
   task: z.string().trim().min(1).max(20_000),

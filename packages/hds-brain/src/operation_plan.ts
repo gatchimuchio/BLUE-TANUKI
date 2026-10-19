@@ -1425,6 +1425,7 @@ export class OperationPlanLedger {
       throw new Error("plan_compute_source_observation_reference_invalid");
     }
     const observations: OperationPlanComputeSourceObservation[] = [];
+    const inspectedAtMs = Date.now();
     for (const reference of references) {
       const matches = this.state.plans.filter((plan) =>
         operationPlanDigest(plan.revisions[0]!.plan.plan_id) === reference.plan_id_digest);
@@ -1447,7 +1448,8 @@ export class OperationPlanLedger {
         binding.revision_digest === revision.digest && binding.step_id === step.step_id);
       if (bindings.length !== 1) throw new Error("plan_compute_source_observation_binding_unavailable");
       const binding = bindings[0]!;
-      if (step.operation !== "file.write" || binding.operation !== "file.write" || binding.status !== "verified" ||
+      const operation = step.operation;
+      if ((operation !== "file.write" && operation !== "file.search") || binding.operation !== operation || binding.status !== "verified" ||
           binding.step_digest !== stepDigest(step) || !binding.execution_admission || !binding.delivery_digest ||
           !binding.result_digest || !binding.memory_commit || !binding.memory_receipt ||
           !verifyResultMemoryCommit(plan, binding) || !receiptForResultCommit(binding.memory_receipt, binding.memory_commit)) {
@@ -1455,8 +1457,11 @@ export class OperationPlanLedger {
       }
       const result = plan.results.find((candidate) => candidate.plan_id === revision.plan.plan_id &&
         candidate.request_id === revision.plan.request_id && candidate.step_id === step.step_id &&
-        candidate.operation === "file.write" && candidate.status === "succeeded");
-      if (!result || result.observed_at_ms > Date.now()) throw new Error("plan_compute_source_observation_result_unavailable");
+        candidate.operation === operation && candidate.status === "succeeded");
+      if (!result || result.observed_at_ms > inspectedAtMs) throw new Error("plan_compute_source_observation_result_unavailable");
+      if (operation === "file.search" && inspectedAtMs >= result.expires_at_ms) {
+        throw new Error("plan_compute_source_observation_expired");
+      }
       const reconciled = this.resultMemory.reconcile(binding.memory_commit.update_id);
       if (!reconciled.ok || reconciled.status !== "ready" ||
           !receiptForResultCommit(reconciled.receipt, binding.memory_commit) ||
@@ -1470,29 +1475,45 @@ export class OperationPlanLedger {
       if (!stored?.exists || expected === undefined || operationPlanDigest(stored.value) !== operationPlanDigest(expected)) {
         throw new Error("plan_compute_source_observation_record_mismatch");
       }
-      observations.push(OperationPlanComputeSourceObservationSchema.parse({
-        schema_version: "operation-plan-compute-source-observation.v1",
-        source: "verified_file_write_result",
+      const common = {
+        schema_version: "operation-plan-compute-source-observation.v1" as const,
         plan_id_digest: reference.plan_id_digest,
         revision_digest: revision.digest,
         step_id_digest: reference.step_id_digest,
-        operation: "file.write",
-        plan_binding_status: "verified",
-        plan_validation_status: "matched",
-        effect_observation: "reported_success",
+        plan_binding_status: "verified" as const,
+        plan_validation_status: "matched" as const,
+        effect_observation: "reported_success" as const,
         record_digest: operationPlanDigest(stored.value),
         memory_revision: binding.memory_receipt.revision,
         memory_receipt_digest: binding.memory_receipt.receipt_digest,
         observed_at_ms: result.observed_at_ms,
-        adoption_status: "observation_only",
-        used_as_world_truth: false,
-        used_for_authority: false,
-        may_execute: false,
-      }));
+        adoption_status: "observation_only" as const,
+        used_as_world_truth: false as const,
+        used_for_authority: false as const,
+        may_execute: false as const,
+      };
+      if (operation === "file.write") {
+        observations.push(OperationPlanComputeSourceObservationSchema.parse({
+          ...common, source: "verified_file_write_result", operation,
+        }));
+      } else {
+        const output = result.output;
+        if (!output || typeof output !== "object" || Array.isArray(output) || !Array.isArray(output.matches) ||
+            typeof output.visited_files !== "number" || !Number.isSafeInteger(output.visited_files) || output.visited_files < 0) {
+          throw new Error("plan_compute_source_observation_result_unavailable");
+        }
+        observations.push(OperationPlanComputeSourceObservationSchema.parse({
+          ...common, source: "verified_file_search_result", operation,
+          expires_at_ms: result.expires_at_ms, match_count: output.matches.length,
+          visited_files: output.visited_files, search_completeness: "unknown",
+        }));
+      }
     }
     if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
       throw new Error("plan_compute_source_observation_stale");
     }
+    if (observations.some((observation) => observation.source === "verified_file_search_result" &&
+        Date.now() >= observation.expires_at_ms)) throw new Error("plan_compute_source_observation_expired");
     return observations;
   }
 

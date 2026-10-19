@@ -326,6 +326,81 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     }
   }, fileWriteCandidate));
 
+  it("有効期限内のJ/M照合済みfile.search要約だけを後続plan:computeへ渡す", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
+      .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+
+    const sourceCheckpoint = c.j.load()!.plans[0]!;
+    const sourceResult = sourceCheckpoint.results[0]!;
+    expect(sourceResult.operation).toBe("file.search");
+    c.hds.closeOperationPlanMemory();
+    c.hds = c.createHds(c.j, true);
+    c.purposeBinding = installTestPurpose(c.hds);
+
+    const sourceRevision = sourceCheckpoint.revisions.at(-1)!;
+    const sourceRef = { plan_id_digest: operationPlanDigest(c.plan.plan_id), revision_digest: sourceRevision.digest,
+      step_id_digest: operationPlanDigest(c.plan.steps[0]!.step_id) };
+    const task = "Plan a follow-up from a selected, bounded search observation; do not claim complete coverage.";
+    const makeComputeRequest = (requestId: string) => createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat",
+      user: "fixture-owner", content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: c.purposeBinding,
+        source_observation_refs: [sourceRef] })}`, timestamp: Date.now(), metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.request_id": requestId,
+      } });
+
+    const destinationRequestId = randomUUID();
+    const compute = c.hds.decide(makeComputeRequest(destinationRequestId));
+    if (compute.command?.type !== "llm_call") throw new Error(`selected search observation was not routed to C: ${compute.log.commit.reason}`);
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v2");
+    expect(compute.command.payload.compute_context?.data_exposure.input_sources)
+      .toContain("selected_operation_result_observations");
+    const observationMessage = compute.command.payload.messages.find((message) =>
+      message.role === "system" && message.content.includes("verified_file_search_result"));
+    expect(observationMessage).toBeDefined();
+    const observationPayload = JSON.parse(observationMessage!.content.slice(observationMessage!.content.indexOf("\n") + 1)) as {
+      observations: Array<Record<string, unknown>>;
+    };
+    expect(observationPayload.observations).toHaveLength(1);
+    expect(observationPayload.observations[0]).toMatchObject({ source: "verified_file_search_result",
+      operation: "file.search", plan_binding_status: "verified", plan_validation_status: "matched",
+      effect_observation: "reported_success", match_count: 1, visited_files: 1,
+      expires_at_ms: sourceResult.expires_at_ms, search_completeness: "unknown",
+      adoption_status: "observation_only", used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    const serializedInput = compute.command.payload.messages.map((message) => message.content).join("\n");
+    for (const privateValue of [c.workspace, "blue.txt", '"line_number"', '"sandbox_root"']) {
+      expect(serializedInput).not.toContain(privateValue);
+    }
+
+    const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
+    c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
+      metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+    const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
+      entry.plan_id === operationPlanDigest(nextCandidate.plan_id));
+    expect(retained?.compute_source_observations).toEqual(observationPayload.observations);
+
+    const secondRequestId = randomUUID();
+    const secondCompute = c.hds.decide(makeComputeRequest(secondRequestId));
+    if (secondCompute.command?.type !== "llm_call") throw new Error("fresh search observation was not reusable before expiry");
+    const expiredCandidate = fileWriteCandidate(secondRequestId, c.workspace);
+    const now = vi.spyOn(Date, "now").mockReturnValue(sourceResult.expires_at_ms);
+    c.hds.onFeedback({ command_id: secondCompute.command.id, status: "success",
+      result: { operation_core: { status: "valid_plan", plan: expiredCandidate } },
+      metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+    expect(c.hds.getRuntimeSnapshot().operation_plans.plans.some((entry) =>
+      entry.plan_id === operationPlanDigest(expiredCandidate.plan_id))).toBe(false);
+
+    const expired = c.hds.decide(makeComputeRequest(randomUUID()));
+    expect(expired.command?.type).not.toBe("llm_call");
+    expect(expired.log.commit.reason).toContain("plan_control_denied:plan_compute_source_observation_expired");
+    now.mockRestore();
+  }));
+
   it("file.writeの応答が計画のresult_equals条件に合わない場合はMへ昇格しない", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });

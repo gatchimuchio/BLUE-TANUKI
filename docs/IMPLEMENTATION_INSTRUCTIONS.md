@@ -2,9 +2,27 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-FILE-WRITE-OBSERVATION-PLAN-COMPUTE`
+### 最新BUILD_BATCH：`QEB-01-D02.01-FILE-SEARCH-FRESH-OBSERVATION-PLAN-COMPUTE`
 
-開始HEAD／`origin/main`=`12ace531d88ad7a309bdced915e9af06bf49cda8`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示、D02.01／F01.01／D04.02を再読した。D4-Pocket現行AGENTS §3.1を照合したが、Windows localで検証可能なためGitHub Actionsは未使用。C08.03実provider保留、P13 owner-GO保留、別repo変更なしを維持する。
+開始HEAD／`origin/main`=`44b511f7df202cbb9ee6841197c2492b3a232586`、開始worktree clean。編集前のlocal recovery branch／remote backup tagはcurrent=`44b511f7df202cbb9ee6841197c2492b3a232586`、previous=`12ace531d88ad7a309bdced915e9af06bf49cda8`へ照合した。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示、D02.01／F01.01／D04.02を再読した。D4-Pocketの現行AGENTS §3.1を読取確認したが、この変更はWindows localで検証できるためActionsは未使用。C08.03実provider保留、P13 owner-GO保留、別repo変更なしを維持する。
+
+Jがcurrent plan revision・step、callerのowner/channel、recovery holdなし、verified binding、`result_equals`一致、M commit／receipt／recordを照合した`file.search`結果を、目的付き後続`plan:compute`へ有限の非権威要約として渡す。C入力と候補履歴へ含めるのはplan／revision／step／record／receipt digest、M revision、観測・失効時刻、match count、visited file count、検索完全性unknownと非権威flagsだけ。target／root／path／query／match snippet／本文は出さない。検索要約は観測時点の限定情報で、完全性・観測後の状態・目的達成・意味適合・権限を示さない。sourceが期限切れならC呼出し前に拒否し、C応答中に期限が切れた場合はJが候補保持前に再照合して候補を拒否する。実行時の対象状態は別途J／Brokerで再照合する。既存`file.write`過去報告入力も維持する。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `execution_result_reconciliation.test.ts` 変更対象2ケース | PASS、2/2（残り36件はskip）。`file.write`過去報告の既存経路、新しいfile.search要約、raw file情報非露出、C応答後の失効による候補拒否、期限切れ後のC呼出し拒否を確認。 |
+| `pnpm typecheck` | PASS、exit code 0。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| `pnpm hds:standalone` | PASS。audit chain有効、Runtime Invariants `all_ok=true`。 |
+| Gateway全suite（現在38件） | 今回は未再実行。直前の37件時点では6/37 PASS・31/37 FAIL（Windows、1 worker）。file.search実行・配送fixture・SQLite `EBUSY`等の原因と変更前baselineは未確定で、QC候補として保持。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は継続注意。 |
+| GitHub Actions／実provider／実credential／外部送信 | 未実施。D4条件の範囲内だが、今回必要なローカル検証が成立。 |
+
+期限付きfile.search要約から後続候補の保持までをこの合成条件で`WIRED`。生ファイル内容のCへの開示、意味採用、行動権限、実行、目的達成、仕事完了は示さない。owner review、Approval Gate、Executor許可とtarget再照合は独立して必要。D02.01／D02.02全体、BUILD_COVERED、QE_QC／QE_QA／5OS実機は未成立。次consumerでは、後続候補のreview／作用対象を現物から再同期し、期限切れ観測を行動根拠へ残さずJ／Brokerへ接続する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-FILE-WRITE-OBSERVATION-PLAN-COMPUTE`
+
+前回batchの開始HEAD／`origin/main`=`12ace531d88ad7a309bdced915e9af06bf49cda8`、開始worktree clean。owner指定QE rev2.3三点正本、適用AGENTS・作業標準・active指示、D02.01／F01.01／D04.02を再読した。D4-Pocket現行AGENTS §3.1を照合したが、Windows localで検証可能なためGitHub Actionsは未使用。C08.03実provider保留、P13 owner-GO保留、別repo変更なしを維持する。
 
 直前batchでJ/M receiptまで照合した`file.write`結果を、後続の明示的な目的付き`plan:compute`へ選択入力として接続した。callerと同じowner/channelに属するcurrent plan revision・step、recovery holdなし、verified binding、結果一致、receiptとM recordの完全照合をJが確認する。Cへ渡すのは`reported_success`という過去の作用報告、plan／revision／step／record／receipt digest、M revision、観測時刻、非権威flagsだけであり、path・target・workspace・content・payloadは含めない。これは現在のファイル状態、目的達成、意味適合、権限、再実行可能性を証明しない。C応答を候補として保持する直前にJが同じJ/M照合を再実施し、source observationを候補計画へ来歴として保存する。invalid refはCへ送らない。fallback providerへの入力source認可も省略時に付与しない。
 
@@ -18,7 +36,7 @@ Gatewayの厳格なoperator projectionがJの安全な`compute_source_observatio
 | `pnpm hds:standalone` | PASS。audit chain有効、Runtime Invariants `all_ok=true`。 |
 | Actions／実provider／実credential／外部送信 | 未実施。localで対象検証を実施。 |
 
-この合成経路は過去の作用報告を後続計画の非権威contextへ接続した段階であり、Cの意味採用・現在状態の再確認・次の作用・仕事完了を証明しない。owner review、Approval Gate、Executor許可は独立して必要。全体一仕事、D02.01／D02.02、BUILD_COVERED、QE_QC／QE_QA／5OS実機は未成立。次consumerは、後続計画が要求する現在状態をfresh observationへ結び、J/C・Brokerの再検査から結果・M・帰還までの不足接続を現物で選び直す。
+この合成経路は過去の作用報告を後続計画の非権威contextへ接続した段階であり、Cの意味採用・現在状態の再確認・次の作用・仕事完了を証明しない。owner review、Approval Gate、Executor許可は独立して必要。全体一仕事、D02.01／D02.02、BUILD_COVERED、QE_QC／QE_QA／5OS実機は未成立。前回batchの次consumerだった期限付きcurrent-state observationは、今回のbatchで限定要約として接続した。
 
 ### 前回BUILD_BATCH：`QEB-01-D02.01-FILE-WRITE-RESULT-M-RETURN`
 

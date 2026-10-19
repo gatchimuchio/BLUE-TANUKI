@@ -693,6 +693,7 @@ ${planControl.question}`,
               "plan_compute_source_observation_unavailable", "plan_compute_source_observation_identity_mismatch",
               "plan_compute_source_observation_recovery_hold", "plan_compute_source_observation_stale",
               "plan_compute_source_observation_step_mismatch", "plan_compute_source_observation_binding_unavailable",
+              "plan_compute_source_observation_expired",
               "plan_compute_source_observation_not_verified", "plan_compute_source_observation_result_unavailable",
               "plan_compute_source_observation_receipt_unavailable", "plan_compute_source_observation_record_mismatch",
             ].includes(reason) ? reason : "plan_compute_input_invalid";
@@ -2405,7 +2406,7 @@ ${planControl.question}`,
     const planComputeObservationMessage: LLMCallPayload["messages"][number] | undefined =
       planCompute?.source_observations?.length ? {
         role: "system",
-        content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した過去のfile.write作用報告です。検証結果とM保存のdigest照合が一致した記録ですが、現在のファイルの存在・内容・世界状態、目的達成、taskとの意味適合、承認、権限、再実行可能性を証明しません。対象・path・本文・payloadは意図的に含めていません。報告を現在状態へ読み替えず、現在状態が必要なら別の新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
+        content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。file.writeは過去の作用報告、file.searchは観測時刻と有効期限の付いた検索件数要約です。file.searchの件数は検索の完全性や、観測後の状態を保証しません。どちらも目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、作用時点の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payloadは意図的に含めていません。期限切れや追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
           used_as_world_truth: false, used_for_authority: false, may_execute: false })}`,
       } : undefined;
     const computeContextMessages = [...memoryMessages, ...(planPurposeMessage ? [planPurposeMessage] : []),
