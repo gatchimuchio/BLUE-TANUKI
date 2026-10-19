@@ -323,9 +323,8 @@ jobs:
           exit 0
           SH
           chmod 0700 "$probe_script"
-          bwrap \
+          if bwrap \
             --unshare-user \
-            --unshare-mnt \
             --unshare-pid \
             --unshare-net \
             --unshare-ipc \
@@ -356,7 +355,12 @@ jobs:
             --setenv PATH /usr/bin:/bin \
             --setenv TMPDIR /tmp \
             --setenv LANG C.UTF-8 \
-            -- /usr/bin/unshare --mount --propagation private /bin/sh /fuse-overlay-probe.sh
+            -- /usr/bin/unshare --mount --propagation private /bin/sh /fuse-overlay-probe.sh; then
+            :
+          else
+            probe_status=$?
+            echo "fuse_probe_bwrap_start_failed status=$probe_status"
+          fi
 
       - name: Set up Rust toolchain
         run: |

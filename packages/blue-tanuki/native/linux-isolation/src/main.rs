@@ -520,7 +520,6 @@ fn run_inner(request: InnerRequest) -> Result<InnerResult, String> {
 
 fn run_nested_command(request: &InnerRequest) -> Result<InnerResult, String> {
     let mut args: Vec<OsString> = vec![
-        "--unshare-mnt".into(),
         "--unshare-pid".into(),
         "--unshare-net".into(),
         "--unshare-ipc".into(),
