@@ -2,9 +2,13 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 実施中BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-HARDLINK-ROOT-GUARD`
+### 最新BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-HARDLINK-ROOT-GUARD`
 
-Linux shell providerのroot検査が通常fileのhard linkを許し、workspace root外の同じinodeを共有し得る。`inspect_root`で複数linkを拒否し、production consumerがprocessを開始しない経路を確認する。Windows上ではLinux native helperを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1の条件に従い、一時workflowを`workflow_dispatch`限定で追加する。対象はLinux helperのbuildと合成hard-link拒否testだけ、branchで対象commitを固定し、PR・自動trigger・artifact・release判定は作らない。Actions結果は対象commitの補助証拠で、Linux installed product／実機QAを証明しない。成功した正確なcommitをmainへfast-forwardし、remote HEAD照合後にworkflowと一時branchを撤去する。
+開始HEAD／`origin/main`=`aaf0f45fe9a81a8f15cd2513e051f15b5a210a15`、開始worktree clean。Linux helperの`inspect_root`が複数linkを持つ通常fileを拒否しないため、root外の同一inodeを共有できた。Linux native process実行前に`nlink != 1`を拒否し、合成root外fileが不変・marker command未起動であるconsumer testを追加した。
+
+Windows上でLinux native helperを実行できないため、D4-Pocket現行AGENTS §3.1の条件に従い、一時`workflow_dispatch` workflowをdefault branchへ登録したcommitは`aaf0f45fe9a81a8f15cd2513e051f15b5a210a15`。検査対象の正確なcommit `64ce42838b9180a39fb54be2ac99f07995bc6b96`に対する[Actions run 39305590245](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39305590245)はsuccess。`pnpm build`とLinux helper buildがPASSし、focused testは1 passed／60 skipped。artifact 0件、credentialなし、外部作用なし。D4 workflow検査器、Windows `pnpm typecheck`、Rust `cargo fmt --check`、`pnpm docs:check`もPASS。対象commitをmainへfast-forwardし、remote SHA一致を確認した。workflowと一時branchは成功後に削除した。
+
+この変更はLinux root内の既存hard linkを拒否する一つの境界を保護する。workspace aggregate disk quota欠落は残るため、D07.02／F01.02は`BUILD_GAP`。Actionsはhosted Linuxでのbuild・単一合成testの証拠で、Linux installed product／実機QA／release readinessを示さない。C08.03 provider保留、P13 owner-GO／公開保留、D4-Pocket／ミニドラ変更なしを維持する。
 
 ### 最新BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-BUBBLEWRAP-SYSTEMD-SHELL-PROCESS-LIFECYCLE`
 
