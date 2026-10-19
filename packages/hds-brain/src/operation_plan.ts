@@ -19,7 +19,7 @@ import {
 import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { assessCandidateGoalCriteria, projectRequestGoalCriteria } from "./candidate_criteria.js";
-import { buildResultMemoryCommit, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
+import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
 import type { ResultObservationCitation, ResultObservationProjection } from "./operation_result_reflection.js";
 import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 
@@ -1201,7 +1201,7 @@ export class OperationPlanLedger {
       for (const p of this.state.plans) {
         if (this.recoveryHolds.has(operationPlanDigest(p.revisions[0]!.plan.plan_id))) continue;
         for (const original of p.bindings) {
-          if (original.status !== "verified") continue;
+          if (!resultMemoryEligible(original)) continue;
           if (!original.execution_admission || !original.delivery_digest) return false;
           let b = this.binding(original.command_id)!.b;
           if (!b.memory_commit) {
@@ -1249,7 +1249,7 @@ export class OperationPlanLedger {
       if (this.port && operationPlanDigest(this.port.load()) !== this.savedDigest) return false;
       const match = this.binding(command_id);
       if (!match) return false;
-      return !this.resultMemory || match.b.status !== "verified" || verifyResultMemoryCommit(match.p, match.b);
+      return !this.resultMemory || !resultMemoryEligible(match.b) || verifyResultMemoryCommit(match.p, match.b);
     } catch { return false; }
   }
   closeMemory(): void {

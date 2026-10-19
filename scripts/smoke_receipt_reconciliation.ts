@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "../packages/hds-brain/dist/index.js";
-import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, ToolRegistry } from "../packages/blue-tanuki/dist/index.js";
+import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, executorCommandDigest, ToolRegistry } from "../packages/blue-tanuki/dist/index.js";
 import { createGatewayInternalInboundRequest, type ExecuteCommand, type InboundRequest, type OperationPlan } from "../packages/protocol/dist/index.js";
 import { GatewayExecutionIntentStore } from "../apps/gateway/src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../apps/gateway/src/operation_plan_store.js";
@@ -104,14 +104,17 @@ function candidate(requestId: string): OperationPlan {
   };
 }
 
-function approvedFixture(command: ExecuteCommand, authority: ReturnType<typeof createExecutorApprovalAuthority>) {
+type FixtureAuthority = ReturnType<typeof createExecutorApprovalAuthority>;
+function approvedFixture(command: ExecuteCommand, authority: FixtureAuthority,
+  hdsBinding?: Parameters<FixtureAuthority["approve"]>[3],
+  targetVersion?: Parameters<FixtureAuthority["approve"]>[4]) {
   const evaluation = evaluateApproval(command, [], { actor: "fixture-owner", default_mode: "full_access" });
   return authority.approve(command, {
     source: evaluation.final_review_required ? "human_final_review" : "approval_gate",
     decision: evaluation.final_review_required ? "approve" : "allow", approved_by: "fixture-owner", approved_at_ms: Date.now(),
     upstream_commit_hash: command.upstream_decision.commit_hash, operation: evaluation.context.operation, risk: evaluation.risk,
     final_review_required: evaluation.final_review_required, reason: "synthetic local smoke fixture",
-  });
+  }, executorCommandDigest(command), hdsBinding, targetVersion);
 }
 
 async function seedOutcomeUnknown(stateRoot: string, inspectionEndpoint: string): Promise<void> {
@@ -120,15 +123,16 @@ async function seedOutcomeUnknown(stateRoot: string, inspectionEndpoint: string)
   try {
     const hds = new HDSUpperController({ operation_plan_state: planStore });
     const tools = new ToolRegistry();
-    tools.register(createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: FIXTURE_TOKEN }, request: async (target) => {
+    const gmailTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: FIXTURE_TOKEN }, request: async (target) => {
       const response = await fetch(new URL("/send", inspectionEndpoint), { method: target.method,
         headers: { authorization: `Bearer ${target.token}`, "content-type": target.contentType ?? "application/json",
           "idempotency-key": target.idempotency_key!, "x-command-digest": target.command_digest!, "x-google-path": target.path },
         body: target.body ?? "" });
       return { status: response.status, ok: response.ok, content_type: response.headers.get("content-type"),
         body: await response.text(), truncated: false, request_id: response.headers.get("x-request-id") };
-    } }));
-    const authority = createExecutorApprovalAuthority({ execution_store: executionStore });
+    } });
+    tools.register(gmailTool);
+    const authority = createExecutorApprovalAuthority({ execution_store: executionStore, require_hds_execution_binding: true });
     const source = internalRequest("plan:compute send one synthetic message and retain its uncertain outcome");
     const plan = candidate(source.id);
     const executor = new Executor({ approval_authority: authority, tools,
@@ -136,7 +140,8 @@ async function seedOutcomeUnknown(stateRoot: string, inspectionEndpoint: string)
 
     const compute = hds.decide(source).command;
     if (!compute || compute.type !== "llm_call") throw new Error("fixture_plan_candidate_not_requested");
-    const computeFeedback = await executor.execute(approvedFixture(compute, authority));
+    const computeBinding = hds.createExecutionAuthorityBinding(compute);
+    const computeFeedback = await executor.execute(approvedFixture(compute, authority, computeBinding));
     if (computeFeedback.result?.operation_core?.status !== "valid_plan") throw new Error("fixture_plan_candidate_rejected");
     finalizeCommandOutput({ hds, command: compute, feedback: computeFeedback, request_id: source.id, target_surface: "channel" });
 
@@ -147,7 +152,15 @@ async function seedOutcomeUnknown(stateRoot: string, inspectionEndpoint: string)
     const review = hds.decide(reviewRequest);
     const command = review.command;
     if (!command || command.type !== "tool_call") throw new Error("fixture_send_not_selected_by_j");
-    const approved = approvedFixture(command, authority);
+    const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
+    if (!operationPlanBindingDigest) throw new Error("fixture_operation_plan_source_unavailable");
+    const targetVersion = await gmailTool.inspect_target_version?.(command.payload.arguments, {
+      env: { GMAIL_ACCESS_TOKEN: FIXTURE_TOKEN }, operation_plan_binding_digest: operationPlanBindingDigest,
+      command_digest: operationPlanDigest(command),
+    });
+    if (!targetVersion) throw new Error("fixture_gmail_target_observation_unavailable");
+    const hdsBinding = hds.createExecutionAuthorityBinding(command, targetVersion);
+    const approved = approvedFixture(command, authority, hdsBinding, targetVersion);
     const admission = executionAdmissionForCommand(command, authority.receipt(approved));
     if (!hds.beginOperationPlanAttempt(command, admission)) throw new Error("fixture_execution_not_admitted");
     const feedback = await executor.execute(approved, { save_result_delivery: true });

@@ -74,7 +74,8 @@ async function setup(root: string, workspace: string) {
     llm: { name: "fixture", call: async () => ({ content: JSON.stringify(plan), model: "fixture", tokens_used: 0 }) } });
   async function approve(cmd: ExecuteCommand) {
     const a = evaluateApproval(cmd, [], { actor: "fixture-owner", default_mode: "full_access" });
-    const targetVersion = await executor.inspectCommandTargetVersion(cmd);
+    const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(cmd);
+    const targetVersion = await executor.inspectCommandTargetVersion(cmd, undefined, operationPlanBindingDigest);
     const hdsBinding = hds.createExecutionAuthorityBinding(cmd, targetVersion);
     return authority.approve(cmd, { source: a.final_review_required ? "human_final_review" : "approval_gate", decision: "allow",
       approved_by: "fixture-owner", approved_at_ms: Date.now(), upstream_commit_hash: cmd.upstream_decision.commit_hash,
@@ -384,6 +385,48 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
     expect(c.j.load()?.plans[0]?.bindings[0]?.status).toBe("not_attempted"); expect(c.j.load()?.plans[0]?.results).toHaveLength(0);
     expect(review(c.hds, c.plan, "dependent")).toBeNull(); expect((await c.executor.execute(c.approved)).error).toMatch(/already consumed/);
+  }));
+
+  it("呼出し後の不明結果をdigestだけMへ記録し、成功・反省・再作用へ昇格させない", async () => fixture(async (c) => {
+    const privateFailure = "synthetic response lost after dispatch";
+    c.invoke.mockImplementationOnce(async (workerRequest) => {
+      const identity = { worker_id: randomUUID(), worker_pid: process.pid,
+        worker_platform: process.platform, worker_started_at_ms: Date.now() };
+      workerRequest.on_started(identity);
+      workerRequest.before_dispatch();
+      workerRequest.on_exit(identity, Date.now());
+      throw new Error(privateFailure);
+    });
+    c.hds.beginOperationPlanAttempt(c.cmd, c.admission);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("failed");
+    expect(feedback.operation_core_result).toMatchObject({ action_outcome: "unknown", execution_boundary: "tool_adapter" });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+    const saved = c.execution.lookup(c.admission.ticket_id)!;
+    const checkpoint = c.j.load()!.plans[0]!;
+    expect(checkpoint.bindings[0]).toMatchObject({ status: "outcome_unknown", delivery_digest: saved.result_delivery_digest });
+    expect(checkpoint.results).toHaveLength(0);
+    expect(checkpoint.bindings[0]?.memory_receipt).toBeDefined();
+    const memory = inspectMemory(c);
+    expect(memory.revision).toBe(1); expect(memory.records).toHaveLength(1);
+    const observation = memory.records[0];
+    expect(observation).toMatchObject({ schema_version: "operation-action-outcome.v1", record_type: "action_outcome_observation",
+      plan_revision_digest: operationPlanDigest(c.plan), step_review_request_id: c.cmd.upstream_decision.request_id,
+      command_id: c.cmd.id, upstream_commit_hash: c.cmd.upstream_decision.commit_hash,
+      operation: "file.search", delivery_digest: saved.result_delivery_digest,
+      result_digest: checkpoint.bindings[0]?.result_digest, plan_binding_status: "outcome_unknown",
+      effect_observation: "unknown", adoption_status: "observation_only", used_as_world_truth: false,
+      used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(observation)).not.toContain(privateFailure);
+    expect(review(c.hds, c.plan, "dependent")).toBeNull();
+    expect((await c.executor.execute(c.approved)).error).toMatch(/already consumed/);
+    expect(c.invoke).toHaveBeenCalledTimes(1);
+    c.hds.closeOperationPlanMemory();
+    const restarted = c.createHds();
+    expect(restarted.reconcileOperationPlanMemory()).toBe(true);
+    expect(inspectMemory(c)).toEqual(memory);
+    expect(restarted.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("outcome_unknown");
+    expect(review(restarted, c.plan, "dependent")).toBeNull();
   }));
 
   it("outbox挿入後のreceipt保存故障を同じ取引でrollbackし、実結果を成功へ昇格しない", async () => fixture(async (c) => {
