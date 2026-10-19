@@ -6,8 +6,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
-  ToolRegistry, fileSearchTool, fileWriteTool, gmailWriteTool } from "@blue-tanuki/core";
-import { createGatewayInternalInboundRequest, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
+  ToolRegistry, fileDeleteTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "@blue-tanuki/core";
+import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservationSchema, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
   OperationPlanCheckpointSchema,
   type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -1171,6 +1171,74 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       const overwritePlanExecutor = rig(hds, overwriteCandidate);
       await overwritePlanExecutor.run(hds.decide(overwriteOrigin).command!);
       expect(review(hds, overwriteCandidate, "create-note").command).toBeNull();
+      expect(hds.getAudit().verify()).toBe(true);
+    } finally {
+      hds.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("J計画のfile.deleteはL3 final reviewと変更前hashを結び、合成workspaceの対象へ接続する", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-delete-"));
+    const workspace = join(root, "workspace");
+    await mkdir(workspace);
+      const originalContent = "synthetic delete target\n";
+      await writeFile(join(workspace, "notes.txt"), originalContent);
+    vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+    const hds = new HDSUpperController();
+    try {
+      const origin = request("plan:compute 合成workspaceのnotes.txtを削除する");
+      const target = { kind: "file" as const, id: "notes.txt" };
+      const candidate: OperationPlan = {
+        version: "operation-core.v1", plan_id: `file-delete-plan-${origin.id}`, request_id: origin.id,
+        state: "planned", steps: [{ step_id: "delete-note", operation: "file.delete", target, state: "planned",
+          effects: ["delete"], permission: { risk: "high", approval_level: "L3_final_review",
+            final_review_required: true, hds_brain_authority_required: true, approval_gate_required: true },
+          adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
+          parameters: { path: "notes.txt", max_bytes: 128 },
+          preparation: { depends_on: [], bindings: [], preconditions: [],
+            validation: [{ check_id: "deleted-note", method: "result_equals", target, expected: { deleted: true } }],
+            compensation: { available: false, reason: "file deletion requires a new owner-reviewed create operation to recover" } } }],
+        rollback: { available: false },
+        raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+        planner_output_used_for_authority: false, hds_brain_authority_required: true,
+      };
+      const planExecutor = rig(hds, candidate, fileDeleteTool);
+      await planExecutor.run(hds.decide(origin).command!);
+      const selected = review(hds, candidate, "delete-note");
+      if (selected.command?.type !== "tool_call" || selected.command.payload.tool_name !== "file.delete") {
+        throw new Error("bounded file.delete plan was not connected");
+      }
+      const planBindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
+      if (!planBindingDigest) throw new Error("selected file.delete plan source was unavailable");
+      const tools = new ToolRegistry(); tools.register(fileDeleteTool);
+      const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
+      const executor = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+        tools, approval_authority: authority });
+      const observation = FileDeleteTargetVersionObservationSchema.parse(await executor.inspectCommandTargetVersion(
+        selected.command, { BLUE_TANUKI_FILE_ROOT: workspace }, planBindingDigest));
+      expect(observation).toMatchObject({ operation_plan_binding_digest: planBindingDigest, target_state: "present",
+        used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(observation)).not.toContain("notes.txt");
+      expect(JSON.stringify(observation)).not.toContain("synthetic delete target");
+      expect(() => hds.createExecutionAuthorityBinding(selected.command!, { ...observation, target_identity_digest: "f".repeat(64) }))
+        .toThrow(/file.delete target version does not match/);
+      const binding = hds.createExecutionAuthorityBinding(selected.command, observation);
+      expect(binding.broker_target_version_observation_digest).toBe(operationPlanDigest(observation));
+      expect(hds.beginOperationPlanAttempt(selected.command)).toBe(true);
+      const approval = evaluateApproval(selected.command, [], { actor: "fixture-owner", default_mode: "full_access" });
+      expect(approval).toMatchObject({ decision: "ask", risk: "high", approval_level: "L3_final_review", final_review_required: true });
+      const proof = { source: "human_final_review" as const, decision: "approve" as const, approved_by: "fixture-owner",
+        approved_at_ms: Date.now(), upstream_commit_hash: selected.command.upstream_decision.commit_hash,
+        operation: approval.context.operation, risk: approval.risk, final_review_required: approval.final_review_required,
+        reason: "synthetic exact-target final review fixture" };
+      const approved = authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, observation);
+      const feedback = await executor.execute(approved);
+      expect(feedback.status).toBe("success");
+      expect(feedback.result).toEqual({ deleted: true });
+      await expect(readFile(join(workspace, "notes.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+      finalizeCommandOutput({ hds, command: selected.command, feedback,
+        request_id: selected.command.upstream_decision.request_id ?? null, target_surface: "channel" });
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("verified");
       expect(hds.getAudit().verify()).toBe(true);
     } finally {
       hds.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true });

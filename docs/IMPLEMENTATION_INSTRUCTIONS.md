@@ -2,6 +2,22 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-01-F01.02-PLANNED-FILE-DELETE-TARGET-BINDING`
+
+開始HEAD／`origin/main`=`a3e71bebc22ac756fa78afafe409fd5de0e1ac14`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.02と対象コードを読み直した。D4-Pocket AGENTS §3.1はlocalで不足するOS build、artifact、重い検査向けの手動Actionsを許す条件。今回のWindows合成対象はlocalで検査可能なためworkflow追加・実行なし。編集前recovery branch／remote backup tag二世代はcurrent=`a3e71bebc22ac756fa78afafe409fd5de0e1ac14`、previous=`1a05d0c3b647516725777d11d5100693343f40a2`。
+
+JのOperation Planから選択された`file.delete`だけを、internal runtimeの単一relative file targetへ接続した。HDSは`delete`単独effect、high risk、`L3_final_review`、final-review／Approval Gate必須を要求し、Broker target observation（変更前content hash、file／parent／root identity、commandとplan sourceのdigest）をexecution bindingへ含める。adapterはsandbox root内のregular fileに限定し、secret-like／private-state／symlink／directory／root escape／size超過／観測後変更を拒否する。上限付き再読込を行い、観測が一致した時だけ削除する。普通のresultは成功状態だけ。合成temp workspaceのGateway統合testで、正しいL3 proof後の削除とHDS result/audit帰還まで確認した。
+
+| 限定確認 | 結果 |
+|---|---|
+| focused tests | PASS、6 files／147 tests。`execution_result_reconciliation.test.ts`全39件を含み、delete結果のM帰還も確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS、15 workspace projects。 |
+| `pnpm hds:standalone` | PASS、audit chain valid、Runtime Invariants `all_ok=true`。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。 |
+| GitHub Actions／実provider／資格／実workspaceへの削除／全workspace tests | 未実施。 |
+
+このbounded file.delete consumerは`WIRED`。F01.02全体はOS process isolation／process lifecycle接続を含めて`BUILD_GAP`。次consumerではshell/process effectをfile deletionから分離し、実行隔離・終了と取消監視の既存producer／consumerを確認する。C08.03 provider保留、P13 owner-GO／公開保留、D4-Pocket／ミニドラへの変更なしを維持する。
+
 ### 2026-10-19 QEB-01-D01.03-UNCHANGED-STEP-BROKER-BINDING：無関係な改訂後の未実行stepをBrokerへ接続
 
 開始HEAD／`origin/main`=`1a05d0c3b647516725777d11d5100693343f40a2`、開始worktree clean。owner指定QE rev2.3三点正本、適用`AGENTS.md`・作業標準・active指示・D01.03、OperationPlan改訂とfile.search target resolverの実経路を読み直した。編集前local復元branch／remote tagはcurrent=`1a05d0c3b647516725777d11d5100693343f40a2`、previous=`e16a0479052f08def31c5bf334aae9c7ce94335e`へ期待値照合して更新。

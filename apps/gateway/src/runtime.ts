@@ -373,7 +373,9 @@ async function runCliWithExecutionStore(
       : command.type === "tool_call" && command.payload.tool_name === "file.search"
         ? "file_search_target_version_unavailable"
         : command.type === "tool_call" && command.payload.tool_name === "file.write"
-          ? "file_write_target_version_unavailable" : "broker_target_version_unavailable";
+          ? "file_write_target_version_unavailable"
+          : command.type === "tool_call" && command.payload.tool_name === "file.delete"
+            ? "file_delete_target_version_unavailable" : "broker_target_version_unavailable";
     hds.onCommandLifecycle(command.id, "approval_cancelled", {
       actor: inbound.user,
       reason,

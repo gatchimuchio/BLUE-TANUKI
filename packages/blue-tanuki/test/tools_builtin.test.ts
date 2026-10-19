@@ -7,6 +7,8 @@ import {
   inspectFileSearchTargetVersion,
   inspectFileWriteTargetVersion,
   invokeFileWrite,
+  inspectFileDeleteTargetVersion,
+  invokeFileDelete,
   invokeFileEdit,
   invokeHttpFetch,
   invokeWebSearch,
@@ -47,6 +49,7 @@ describe("built-in tools", () => {
     expect(registry.get("echo")).toBeDefined();
     expect(registry.get("file.search")).toBeDefined();
     expect(registry.get("file.write")).toBeDefined();
+    expect(registry.get("file.delete")).toBeDefined();
     expect(registry.get("file.edit")).toBeDefined();
     expect(registry.get("http.fetch")).toBeDefined();
     expect(registry.get("web.search")).toBeDefined();
@@ -69,6 +72,7 @@ describe("built-in tools", () => {
       "browser:snapshot",
       "email:send",
       "external:send",
+      "fs:delete",
       "fs:read",
       "fs:write",
       "github:comment.write",
@@ -97,6 +101,7 @@ describe("built-in tools", () => {
       "tool:composio.execute",
       "tool:composio.search",
       "tool:echo",
+      "tool:file.delete",
       "tool:file.edit",
       "tool:file.search",
       "tool:file.write",
@@ -291,6 +296,67 @@ describe("built-in tools", () => {
       expect(await fs.readFile(path.join(dir, "notes.txt"), "utf8")).toBe("concurrent owner content\n");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("J計画のfile.deleteはroot・対象identity・変更前hashを結び、競合後の削除を拒否する", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-plan-delete-"));
+    const env = { BLUE_TANUKI_FILE_ROOT: dir };
+    const args = { path: "notes.txt", max_bytes: 128 };
+    const operationPlanBindingDigest = "a".repeat(64);
+    const commandDigest = "b".repeat(64);
+    const evidence = { env, operation_plan_binding_digest: operationPlanBindingDigest, command_digest: commandDigest };
+    try {
+      await fs.writeFile(path.join(dir, "notes.txt"), "reviewed delete target\n", "utf8");
+      const observation = await inspectFileDeleteTargetVersion(args, evidence);
+      expect(observation).toMatchObject({
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: commandDigest,
+        target_state: "present",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(observation.file_content_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.stringify(observation)).not.toContain("reviewed delete target");
+
+      await fs.writeFile(path.join(dir, "notes.txt"), "changed after final review\n", "utf8");
+      await expect(invokeFileDelete(args, { ...evidence, expected_target_version: observation }))
+        .rejects.toThrow(/target version changed/);
+      expect(await fs.readFile(path.join(dir, "notes.txt"), "utf8")).toBe("changed after final review\n");
+
+      const current = await inspectFileDeleteTargetVersion(args, evidence);
+      await expect(invokeFileDelete(args, { ...evidence, command_digest: "c".repeat(64), expected_target_version: current }))
+        .rejects.toThrow(/matching J-selected target evidence/);
+      const deleted = await invokeFileDelete(args, { ...evidence, expected_target_version: current });
+      expect(deleted).toEqual({ deleted: true });
+      await expect(fs.stat(path.join(dir, "notes.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("file.delete fails closed for unplanned, secret, directory, oversized, and symlink targets", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-delete-target-"));
+    const sandbox = path.join(parent, "sandbox");
+    const outside = path.join(parent, "outside.txt");
+    const binding = "a".repeat(64);
+    const command = "b".repeat(64);
+    try {
+      await fs.mkdir(sandbox);
+      await fs.writeFile(path.join(sandbox, ".env"), "secret", "utf8");
+      await fs.writeFile(path.join(sandbox, "large.txt"), "x".repeat(20), "utf8");
+      await fs.writeFile(outside, "outside", "utf8");
+      await fs.symlink(outside, path.join(sandbox, "link.txt"), "file");
+      const opts = { env: { BLUE_TANUKI_FILE_ROOT: sandbox }, operation_plan_binding_digest: binding, command_digest: command };
+      await expect(inspectFileDeleteTargetVersion({ path: "../outside.txt" }, opts)).rejects.toThrow(/relative path|traversal/);
+      await expect(inspectFileDeleteTargetVersion({ path: ".env" }, opts)).rejects.toThrow(/secret-like path/);
+      await expect(inspectFileDeleteTargetVersion({ path: "large.txt", max_bytes: 8 }, opts)).rejects.toThrow(/max_bytes/);
+      await expect(inspectFileDeleteTargetVersion({ path: "link.txt" }, opts)).rejects.toThrow(/symlink/);
+      await expect(inspectFileDeleteTargetVersion({ path: "missing.txt" }, opts)).rejects.toThrow();
+      await expect(inspectFileDeleteTargetVersion({ path: outside }, opts)).rejects.toThrow(/relative path|BLUE_TANUKI_FILE_ROOT/);
+      expect(await fs.readFile(outside, "utf8")).toBe("outside");
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
     }
   });
 

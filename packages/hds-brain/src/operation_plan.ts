@@ -429,6 +429,20 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
         Buffer.byteLength(parameters.content, "utf8") > maxBytes) return false;
     return Object.keys(parameters).every((key) => ["path", "content", "mode", "max_bytes"].includes(key));
   }
+  if (step.operation === "file.delete") {
+    if (step.adapter !== "internal_runtime" || step.target.kind !== "file" || !parameters ||
+        typeof parameters.path !== "string" || parameters.path.length === 0 || parameters.path.length > 512 ||
+        parameters.path !== step.target.id || parameters.path.startsWith("/") || parameters.path.includes("\\") ||
+        parameters.path.includes(":") || parameters.path.includes("\0") ||
+        parameters.path.split("/").some((part) => part.length === 0 || part === "." || part === "..") ||
+        step.effects.length !== 1 || step.effects[0] !== "delete" ||
+        step.permission.risk !== "high" || step.permission.approval_level !== "L3_final_review" ||
+        !step.permission.final_review_required || !step.permission.approval_gate_required ||
+        !step.permission.hds_brain_authority_required) return false;
+    const maxBytes = parameters.max_bytes ?? 256_000;
+    if (typeof maxBytes !== "number" || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 1_000_000) return false;
+    return Object.keys(parameters).every((key) => ["path", "max_bytes"].includes(key));
+  }
   if (step.operation !== "gmail.write" || step.adapter !== "external_api" ||
       step.target.kind !== "external_service" || step.target.id !== "gmail" || !parameters) return false;
   if (parameters.operation === "draft.send") {

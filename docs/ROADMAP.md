@@ -1,6 +1,8 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
-2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
+2026-10-20。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
+
+2026-10-20の`QEB-01-F01.02-PLANNED-FILE-DELETE-TARGET-BINDING`では、選択済みOperation Planの単一sandbox file deletionをhigh-risk L3 review、変更前target観測、Executor、結果検証へ接続し、合成workspace上のfocused testsで確認した。secret-like／private-state／root外／symlink等はfail-closed。file.delete経路の当該範囲は`WIRED`だが、F01.02全体はprocess isolation／lifecycle接続を含めて`BUILD_GAP`であり、全体構築・QC・QA・5OS実機を示さない。Windows localで確認できたためGitHub Actionsは使用していない。実credential・外部provider・実workspace削除は未実施。
 
 2026-10-19の`QEB-01-D02.02-PERSISTED-TICKET-OWNER-EPOCH-BINDING`で、Gateway CLI／serveの現行owner epochを永続Executor ticket storeへ渡し、発行・消費・開始・worker lifecycle・結果確定のstore境界でticket generationを照合する。世代交代後も旧receiptは読取証拠として保持するが、旧ticketの再消費・開始・確定を拒否する。focused suitesはexecution intent 7/7、worker IPC 9/9、recovery 3/3＋17/17＋11/11、external-action loopback 1/1、result reconciliation対象2/2 PASS。最初の複数suite実行で2件FAIL（wrapperのowner世代不整合1件、合成receipt照合1件）があり、wrapperを修正後に該当suiteを単独実行してPASS。receipt照合の失敗は単独実行で再現せず原因未特定。typecheck／15-project build／HDS standalone／docs／repo-healthもPASS。D4-Pocketの現行Actions条件は`workflow_dispatch`限定で確認したが、Windows localで対象検証ができたため未使用。D02.02全体、独立host/device・task audience認証、実provider・実credential・外部業務作用、QE_QC／QE_QA／5OS実機は未成立。
 

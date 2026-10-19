@@ -13,6 +13,7 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
       "echo",
       "file.search",
       "file.write",
+      "file.delete",
       "file.edit",
       "http.fetch",
       "web.search",
@@ -60,6 +61,8 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
   });
 
   it("keeps the complete mixed effects and runtime capabilities for known operations", () => {
+    expect(getToolOperationDescriptor("file.delete")?.effects).toEqual(["delete"]);
+    expect(getToolOperationDescriptor("file.delete")?.required_capabilities).toEqual(["tool:file.delete", "fs:delete"]);
     expect(getToolOperationDescriptor("file.edit")?.effects).toEqual(["read", "write"]);
     expect(getToolOperationDescriptor("gmail.read")?.effects).toEqual([
       "external_send",

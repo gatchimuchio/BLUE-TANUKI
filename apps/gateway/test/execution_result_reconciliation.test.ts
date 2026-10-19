@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileSearchTool, fileWriteTool, LLMComputeAdapter, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
+import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileSearchTool, fileWriteTool, LLMComputeAdapter, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -61,14 +61,29 @@ function fileWriteCandidate(id: string, root: string, expectedByteAdjustment = 0
     rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
+function fileDeleteCandidate(id: string): OperationPlan {
+  const target = { kind: "file" as const, id: "notes.txt" };
+  return { version: "operation-core.v1", plan_id: "plan-" + id, request_id: id, state: "planned",
+    steps: [{ step_id: "delete-note", operation: "file.delete", target, state: "planned", effects: ["delete"],
+      permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+        hds_brain_authority_required: true, approval_gate_required: true },
+      adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
+      parameters: { path: "notes.txt", max_bytes: 128 }, preparation: { depends_on: [], bindings: [], preconditions: [],
+        validation: [{ check_id: "deleted-note", method: "result_equals", target, expected: { deleted: true } }],
+        compensation: { available: false, reason: "file deletion requires a new owner-reviewed create operation to recover" } } }],
+    rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false, hds_brain_authority_required: true };
+}
 function review(hds: HDSUpperController, plan: OperationPlan, step_id: string) {
   const p = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
   return hds.decide(request(`plan:review ${JSON.stringify({ plan_id: plan.plan_id, revision_digest: p.revision_digest, step_id })}`)).command;
 }
 async function fixture(run: (context: Awaited<ReturnType<typeof setup>>) => Promise<void>,
-  planFactory: (id: string, root: string) => OperationPlan = candidate) {
+  planFactory: (id: string, root: string) => OperationPlan = candidate,
+  prepareWorkspace?: (workspace: string) => void) {
   const root = mkdtempSync(join(tmpdir(), "blue-result-reconcile-")); const workspace = join(root, "workspace");
   mkdirSync(workspace); writeFileSync(join(workspace, "blue.txt"), "blue\n");
+  prepareWorkspace?.(workspace);
   vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
   const context = await setup(root, workspace, planFactory);
   try { await run(context); } finally {
@@ -91,10 +106,12 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   }
   const hds = createHds();
   const origin = request("plan:compute 合成の実行結果を後続へ安全に返す");
-  const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry(); tools.register(fileSearchTool); tools.register(fileWriteTool);
+  const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry();
+  tools.register(fileSearchTool); tools.register(fileWriteTool); tools.register(fileDeleteTool);
   const authority = createExecutorApprovalAuthority({ execution_store: execution, execution_epoch: executionEpoch,
     require_hds_execution_binding: true });
-  const actualWorker = createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace });
+  const actualWorker = createFileSearchWorker({ execution_epoch: executionEpoch,
+    env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace } });
   const invoke = vi.fn(actualWorker.invoke); const worker = { invoke };
   const executor = new Executor({ tools, approval_authority: authority, file_search_worker: worker,
     llm: { name: "fixture", call: async () => ({ content: JSON.stringify(plan), model: "fixture", tokens_used: 0 }) } });
@@ -103,7 +120,8 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
     const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(cmd);
     const targetVersion = await executor.inspectCommandTargetVersion(cmd, undefined, operationPlanBindingDigest);
     const hdsBinding = hds.createExecutionAuthorityBinding(cmd, targetVersion);
-    return authority.approve(cmd, { source: a.final_review_required ? "human_final_review" : "approval_gate", decision: "allow",
+    return authority.approve(cmd, { source: a.final_review_required ? "human_final_review" : "approval_gate",
+      decision: a.final_review_required ? "approve" : "allow",
       approved_by: "fixture-owner", approved_at_ms: Date.now(), upstream_commit_hash: cmd.upstream_decision.commit_hash,
       operation: a.context.operation, risk: a.risk, final_review_required: a.final_review_required, reason: "fixture" },
       undefined, hdsBinding, targetVersion);
@@ -265,6 +283,35 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(inspectMemory(c)).toEqual(memory);
     expect(restarted.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("verified");
   }, fileWriteCandidate));
+
+  it("Jで検証したfile.delete結果をdigest限定の非権威観測としてMへ返す", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    expect(feedback.result).toEqual({ deleted: true });
+    expect(() => readFileSync(join(c.workspace, "notes.txt"), "utf8")).toThrow();
+
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
+      .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+    const checkpoint = c.j.load()!.plans[0]!;
+    const binding = checkpoint.bindings[0]!;
+    expect(binding).toMatchObject({ status: "verified", delivery_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      memory_receipt: expect.objectContaining({ revision: 1 }) });
+    expect(checkpoint.results[0]?.output).toEqual({ deleted: true });
+    const memory = inspectMemory(c);
+    expect(memory.revision).toBe(1);
+    expect(memory.records).toHaveLength(1);
+    const observation = memory.records[0];
+    expect(observation).toMatchObject({ schema_version: "operation-action-result.v1", record_type: "action_result_observation",
+      plan_revision_digest: operationPlanDigest(c.plan), step_review_request_id: c.cmd.upstream_decision.request_id,
+      command_id: c.cmd.id, upstream_commit_hash: c.cmd.upstream_decision.commit_hash,
+      operation: "file.delete", delivery_digest: binding.delivery_digest, result_digest: binding.result_digest,
+      plan_binding_status: "verified", plan_validation_status: "matched", effect_observation: "reported_success",
+      adoption_status: "observation_only", used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    const memoryJson = JSON.stringify(observation);
+    for (const raw of [c.workspace, "notes.txt", "synthetic delete target"]) expect(memoryJson).not.toContain(raw);
+    expect(c.execution.pendingResults()).toHaveLength(0);
+  }, fileDeleteCandidate, (workspace) => writeFileSync(join(workspace, "notes.txt"), "synthetic delete target\n")));
 
   it("明示選択されたfile.write履歴はdigestだけを後続plan:computeへ渡し、候補保持前にも再照合する", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);

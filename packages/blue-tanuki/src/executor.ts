@@ -7,8 +7,10 @@ import {
   BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
   canonicalFileSearchTargetVersionObservation,
   FileWriteTargetVersionObservationSchema,
+  FileDeleteTargetVersionObservationSchema,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
+  fileDeleteTargetIdentityDigest,
   FileSearchTargetVersionObservationSchema,
   GmailWriteTargetVersionObservationSchema,
   parseBoundaryExchangeAtBoundary,
@@ -44,7 +46,7 @@ import {
   type ComputeRequest,
 } from "./llm/compute.js";
 import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolRegistry } from "./tools/registry.js";
-import { fileSearchTool, fileWriteTool, gmailWriteTool } from "./tools/builtin.js";
+import { fileDeleteTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest } from "./tools/google_write.js";
 import type { SessionStore } from "./sessions/types.js";
@@ -276,6 +278,17 @@ function approveCommandForExecution(
         throw new Error("Executor approval rejected: file.write target version does not match command or plan source");
       }
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "file.delete") {
+      const observation = FileDeleteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      const args = snapshot.payload.arguments;
+      if (!hds_binding?.operation_plan_binding_digest || typeof args.path !== "string" ||
+          Object.keys(args).some((key) => !["path", "max_bytes"].includes(key)) ||
+          observation.command_digest !== operationPlanDigest(snapshot) ||
+          observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
+          observation.target_identity_digest !== fileDeleteTargetIdentityDigest(args.path)) {
+        throw new Error("Executor approval rejected: file.delete target version does not match command or plan source");
+      }
+      target_version_observation = Object.freeze(observation);
     } else if (snapshot.payload.tool_name === "gmail.write" &&
         ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation))) {
       const observation = GmailWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
@@ -313,6 +326,10 @@ function approveCommandForExecution(
       hds_binding?.operation_plan_binding_digest &&
       target_version_observation?.schema_version !== "blue-tanuki.file-write-target-version.v1") {
     throw new Error("Executor approval rejected: planned file.write target version evidence is required");
+  }
+  if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.delete" &&
+      target_version_observation?.schema_version !== "blue-tanuki.file-delete-target-version.v1") {
+    throw new Error("Executor approval rejected: file.delete target version evidence is required");
   }
   if (!hds_binding && runtime.require_hds_execution_binding) {
     throw new Error("Executor approval rejected: HDS execution authority binding is required");
@@ -527,6 +544,28 @@ export class Executor {
           observation.payload_digest !== fileWritePayloadDigest(String(command.payload.arguments.content ?? "")) ||
           observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
         throw new Error("file.write target version resolver returned evidence for another command or plan source");
+      }
+      return Object.freeze(observation);
+    }
+    if (command.payload.tool_name === "file.delete") {
+      if (operationPlanBindingDigest === undefined) {
+        throw new Error("file.delete requires a selected Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("file.delete");
+      if (tool !== fileDeleteTool || !tool.inspect_target_version) {
+        throw new Error("file.delete target version resolver requires the registered built-in adapter");
+      }
+      const observation = FileDeleteTargetVersionObservationSchema.parse(
+        await tool.inspect_target_version(command.payload.arguments, {
+          ...(env ? { env } : {}),
+          operation_plan_binding_digest: operationPlanBindingDigest,
+          command_digest: operationPlanDigest(command),
+        }),
+      );
+      if (observation.command_digest !== operationPlanDigest(command) ||
+          observation.target_identity_digest !== fileDeleteTargetIdentityDigest(String(command.payload.arguments.path ?? "")) ||
+          observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
+        throw new Error("file.delete target version resolver returned evidence for another command or plan source");
       }
       return Object.freeze(observation);
     }

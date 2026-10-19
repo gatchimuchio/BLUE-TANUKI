@@ -11,6 +11,7 @@ export * from "./common_record.js";
 export * from "./goal_projection.js";
 export * from "./file_search_target_version.js";
 export * from "./file_write_target_version.js";
+export * from "./file_delete_target_version.js";
 export * from "./gmail_write_target_version.js";
 export * from "./goal_relations.js";
 export * from "./goal_governance.js";

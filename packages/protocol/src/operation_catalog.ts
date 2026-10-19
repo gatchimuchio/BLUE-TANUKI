@@ -96,6 +96,14 @@ export const OPERATION_DESCRIPTOR_REGISTRY: readonly OperationDescriptor[] = Obj
     15_000,
   ),
   toolDescriptor(
+    "file.delete",
+    "packages/blue-tanuki/src/tools/builtin.ts#fileDeleteTool",
+    "internal_runtime",
+    ["delete"],
+    ["tool:file.delete", "fs:delete"],
+    15_000,
+  ),
+  toolDescriptor(
     "file.edit",
     "packages/blue-tanuki/src/tools/builtin.ts#fileEditTool",
     "internal_runtime",

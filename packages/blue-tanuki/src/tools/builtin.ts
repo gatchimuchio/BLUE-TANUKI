@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import * as http from "node:http";
 import * as https from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
@@ -8,13 +8,17 @@ import * as path from "node:path";
 import {
   canonicalFileSearchTargetVersionObservation,
   canonicalFileWriteTargetVersionObservation,
+  canonicalFileDeleteTargetVersionObservation,
   FileSearchTargetVersionObservationSchema,
   FileWriteTargetVersionObservationSchema,
+  FileDeleteTargetVersionObservationSchema,
+  fileDeleteTargetIdentityDigest,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
   requireToolOperationDescriptor,
   type FileSearchTargetVersionObservation,
   type FileWriteTargetVersionObservation,
+  type FileDeleteTargetVersionObservation,
 } from "@blue-tanuki/protocol";
 import { echoTool, type Tool } from "./registry.js";
 import {
@@ -49,6 +53,7 @@ import type {
   Env,
   FileSearchOptions,
   FileWriteOptions,
+  FileDeleteOptions,
   GitHubReadOptions,
   GitHubReadResponse,
   GitHubReadTarget,
@@ -74,6 +79,7 @@ export type {
   Env,
   FileSearchOptions,
   FileWriteOptions,
+  FileDeleteOptions,
   GitHubReadOptions,
   GitHubReadResponse,
   GitHubReadTarget,
@@ -1711,6 +1717,140 @@ export async function inspectFileWriteTargetVersion(
   return (await resolveFileWriteTargetVersion(args, opts)).observation;
 }
 
+interface ResolvedFileDeleteTargetVersion {
+  filepath: string;
+  observation: FileDeleteTargetVersionObservation;
+}
+
+/** J計画で選ばれた、sandbox内の単一regular file削除対象をdigestだけで観測する。 */
+async function resolveFileDeleteTargetVersion(
+  args: Record<string, unknown>,
+  opts: Pick<FileDeleteOptions, "env" | "command_digest" | "operation_plan_binding_digest">,
+): Promise<ResolvedFileDeleteTargetVersion> {
+  const pathArg = stringArg(args, "path")!;
+  if (!opts.command_digest || !opts.operation_plan_binding_digest ||
+      !/^[a-f0-9]{64}$/.test(opts.command_digest) || !/^[a-f0-9]{64}$/.test(opts.operation_plan_binding_digest) ||
+      Object.keys(args).some((key) => !["path", "max_bytes"].includes(key))) {
+    throw new Error("file.delete target resolver requires a bounded planned command");
+  }
+  assertPlannedFileDeletePath(pathArg);
+  const maxBytes = positiveIntArg(args, "max_bytes", 256_000, 1_000_000);
+  const sandboxRoot = await sandboxRootFromEnv(opts.env ?? process.env);
+  const resolved = await resolveSandboxFilePath(pathArg, sandboxRoot);
+  const realParent = await fs.realpath(path.dirname(resolved.filepath));
+  if (!isPathWithin(sandboxRoot, realParent)) throw new Error("file.delete parent escapes BLUE_TANUKI_FILE_ROOT");
+  const filepath = path.join(realParent, path.basename(resolved.filepath));
+  const before = await fs.lstat(filepath, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error("file.delete target must be a regular non-symlink file");
+  if (before.size > BigInt(maxBytes)) throw new Error("file.delete target exceeds max_bytes");
+  const realFile = await fs.realpath(filepath);
+  if (!isPathWithin(sandboxRoot, realFile)) throw new Error("file.delete target escapes BLUE_TANUKI_FILE_ROOT");
+
+  const handle = await fs.open(filepath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  let contents: Buffer;
+  let openedIdentity: string;
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || fileDeleteStatIdentity(opened) !== fileDeleteStatIdentity(before)) {
+      throw new Error("file.delete target changed while being observed");
+    }
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let position = 0;
+    while (totalBytes <= maxBytes) {
+      const chunk = Buffer.alloc(Math.min(64_000, maxBytes + 1 - totalBytes));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      totalBytes += bytesRead;
+      position += bytesRead;
+      if (totalBytes > maxBytes) throw new Error("file.delete target exceeds max_bytes");
+    }
+    contents = Buffer.concat(chunks, totalBytes);
+    openedIdentity = fileDeleteStatIdentity(await handle.stat({ bigint: true }));
+  } finally {
+    await handle.close();
+  }
+  const after = await fs.lstat(filepath, { bigint: true });
+  if (!after.isFile() || fileDeleteStatIdentity(after) !== openedIdentity || contents.length > maxBytes) {
+    throw new Error("file.delete target changed while being observed");
+  }
+  const rootStat = await fs.stat(sandboxRoot, { bigint: true });
+  const parentStat = await fs.stat(realParent, { bigint: true });
+  const observation = FileDeleteTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.file-delete-target-version.v1",
+    target_identity_digest: fileDeleteTargetIdentityDigest(pathArg),
+    file_content_digest: createHash("sha256").update(contents).digest("hex"),
+    file_identity_digest: openedIdentity,
+    canonical_root_digest: createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.file-delete-root-identity.v1", sandboxRoot, rootStat.dev.toString(), rootStat.ino.toString(),
+    ]), "utf8").digest("hex"),
+    parent_identity_digest: createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.file-delete-parent-identity.v1", realParent, parentStat.dev.toString(), parentStat.ino.toString(),
+    ]), "utf8").digest("hex"),
+    command_digest: opts.command_digest,
+    operation_plan_binding_digest: opts.operation_plan_binding_digest,
+    target_state: "present",
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return { filepath, observation };
+}
+
+export async function inspectFileDeleteTargetVersion(
+  args: Record<string, unknown>,
+  opts: Pick<FileDeleteOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
+): Promise<FileDeleteTargetVersionObservation> {
+  return (await resolveFileDeleteTargetVersion(args, opts)).observation;
+}
+
+/** Delete only after a J-selected planned command and its exact pre-delete observation are rechecked. */
+export async function invokeFileDelete(
+  args: Record<string, unknown>,
+  opts: FileDeleteOptions = {},
+): Promise<unknown> {
+  const expected = FileDeleteTargetVersionObservationSchema.parse(opts.expected_target_version);
+  if (!opts.command_digest || !opts.operation_plan_binding_digest ||
+      expected.command_digest !== opts.command_digest ||
+      expected.operation_plan_binding_digest !== opts.operation_plan_binding_digest) {
+    throw new Error("file.delete requires matching J-selected target evidence");
+  }
+  const resolved = await resolveFileDeleteTargetVersion(args, opts);
+  if (canonicalFileDeleteTargetVersionObservation(resolved.observation) !==
+      canonicalFileDeleteTargetVersionObservation(expected)) {
+    throw new Error("file.delete target version changed; request fresh review");
+  }
+  await fs.unlink(resolved.filepath);
+  // Target identity and prior-content evidence stay in the bound HDS/Broker trace;
+  // the ordinary result reports only the effect status for exact J validation.
+  return { deleted: true };
+}
+
+function assertPlannedFileDeletePath(pathArg: string): void {
+  if (pathArg.length === 0 || pathArg.length > 512 || path.isAbsolute(pathArg) || pathArg.includes("\\") ||
+      pathArg.includes(":") || pathArg.includes("\0") || pathArg.startsWith("/")) {
+    throw new Error("file.delete path must be a bounded relative path");
+  }
+  const segments = pathArg.split("/");
+  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+    throw new Error("file.delete path must not contain empty or traversal segments");
+  }
+}
+
+function fileDeleteStatIdentity(stat: {
+  dev: bigint; ino: bigint; size: bigint; mode: bigint; nlink: bigint; mtimeNs: bigint; ctimeNs: bigint;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.file-delete-file-identity.v1", stat.dev.toString(), stat.ino.toString(), stat.size.toString(),
+    stat.mode.toString(), stat.nlink.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString(),
+  ]), "utf8").digest("hex");
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
 function assertPlannedFileWritePath(pathArg: string): void {
   if (pathArg.length === 0 || pathArg.length > 512 || path.isAbsolute(pathArg) || pathArg.includes("\\") ||
       pathArg.includes(":") || pathArg.includes("\0") || pathArg.startsWith("/")) {
@@ -1819,6 +1959,31 @@ export const fileWriteTool: Tool = {
   },
 };
 
+export const fileDeleteTool: Tool = {
+  name: "file.delete",
+  description: "Delete one regular file under BLUE_TANUKI_FILE_ROOT after final review and target recheck.",
+  required_capabilities: requireToolOperationDescriptor("file.delete").required_capabilities,
+  async inspect_target_version(args: Record<string, unknown>, options?: {
+    env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
+  }): Promise<FileDeleteTargetVersionObservation> {
+    return await inspectFileDeleteTargetVersion(args, options);
+  },
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    const targetVersion = context.target_version_observation;
+    if (targetVersion?.schema_version !== "blue-tanuki.file-delete-target-version.v1") {
+      throw new Error("file.delete requires Broker target version evidence");
+    }
+    if (typeof context.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(context.command_digest)) {
+      throw new Error("file.delete requires an approved Executor command identity");
+    }
+    return await invokeFileDelete(args, {
+      expected_target_version: targetVersion,
+      command_digest: targetVersion.command_digest,
+      operation_plan_binding_digest: targetVersion.operation_plan_binding_digest,
+    });
+  },
+};
+
 export const fileEditTool: Tool = {
   name: "file.edit",
   description: "Perform an exact UTF-8 text replacement under BLUE_TANUKI_FILE_ROOT.",
@@ -1897,6 +2062,7 @@ export function registerBuiltinTools(registry: {
   registry.register(echoTool);
   registry.register(fileSearchTool);
   registry.register(fileWriteTool);
+  registry.register(fileDeleteTool);
   registry.register(fileEditTool);
   registry.register(httpFetchTool);
   registry.register(webSearchTool);
