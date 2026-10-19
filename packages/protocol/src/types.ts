@@ -109,8 +109,9 @@ export const LLMFallbackAuthorizationSchema = z.object({
   allowed_input_sources: z.array(z.enum([
     "accepted_inbound_request",
     "selected_memory_references",
+    "selected_operation_result_observations",
     "session_history",
-  ])).min(1).max(3),
+  ])).min(1).max(4),
   required_capabilities: z.array(z.string().trim().min(1).max(120)).min(1).max(16),
   max_total_cost: z.object({
     amount: z.number().finite().nonnegative(),
@@ -139,7 +140,8 @@ export const LLMComputeContextSchema = z.object({
       "accepted_inbound_request",
       "selected_memory_references",
       "failure_memory_digest_projection",
-    ])).min(1).max(2),
+      "selected_operation_result_observations",
+    ])).min(1).max(3),
     requested_egress_provider: z.string().trim().min(1).max(120),
   }).strict(),
   /** HDS-issued constraints for an alternate provider; absent means no fallback authorization. */

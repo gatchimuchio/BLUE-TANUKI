@@ -23,6 +23,7 @@ export interface ComputeProfile {
 export type ComputeInputSource =
   | "accepted_inbound_request"
   | "selected_memory_references"
+  | "selected_operation_result_observations"
   | "failure_memory_digest_projection"
   | "session_history";
 

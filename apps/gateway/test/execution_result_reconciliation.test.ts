@@ -4,7 +4,7 @@ import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
-import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileSearchTool, fileWriteTool, LLMComputeAdapter, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
@@ -12,7 +12,8 @@ import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "../src/reconcile_execution_results.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
-import { operationResultMemoryStorage } from "../src/operation_result_memory_config.js";
+import { projectOperationPlanStatus } from "../src/serve_projection.js";
+import { goalPurposeMemoryStorage, operationResultMemoryStorage } from "../src/operation_result_memory_config.js";
 import { operationPlanRecoveryEvidenceFromObservation } from "../src/operation_plan_recovery_evidence.js";
 import { correlateOperationPlanBindings, inspectGatewayRecoveryState } from "../src/recovery_inspection.js";
 
@@ -70,7 +71,10 @@ async function fixture(run: (context: Awaited<ReturnType<typeof setup>>) => Prom
   mkdirSync(workspace); writeFileSync(join(workspace, "blue.txt"), "blue\n");
   vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
   const context = await setup(root, workspace, planFactory);
-  try { await run(context); } finally { for (const hds of context.controllers) hds.closeOperationPlanMemory(); context.execution.close(); context.j.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); }
+  try { await run(context); } finally {
+    for (const hds of context.controllers) { hds.closeOperationPlanMemory(); hds.close(); }
+    context.execution.close(); context.j.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true });
+  }
 }
 async function setup(root: string, workspace: string, planFactory: (id: string, root: string) => OperationPlan = candidate) {
   const executionPath = join(root, "executor.sqlite"); const jPath = join(root, "j.sqlite");
@@ -78,11 +82,15 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   const memory = operationResultMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") });
   const controllers: HDSUpperController[] = [];
   const oldMemory = { capture: vi.fn(), recent: vi.fn(() => []), all: vi.fn(() => []) };
-  function createHds(state = j) {
-    const controller = new HDSUpperController({ operation_plan_state: state, operation_plan_memory: memory, memory: oldMemory });
+  function createHds(state = j, installPurpose = false) {
+    const controller = new HDSUpperController({ operation_plan_state: state, operation_plan_memory: memory, memory: oldMemory,
+      ...(installPurpose ? { audit: new AuditLog({ filepath: join(root, "audit.jsonl") }),
+        goal_purpose_memory: goalPurposeMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") }),
+        goal_governance: testGoalGovernance() } : {}) });
     controllers.push(controller); return controller;
   }
-  const hds = createHds(); const origin = request("plan:compute 合成の実行結果を後続へ安全に返す");
+  const hds = createHds();
+  const origin = request("plan:compute 合成の実行結果を後続へ安全に返す");
   const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry(); tools.register(fileSearchTool); tools.register(fileWriteTool);
   const authority = createExecutorApprovalAuthority({ execution_store: execution, require_hds_execution_binding: true });
   const actualWorker = createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace });
@@ -103,7 +111,45 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   finalizeCommandOutput({ hds, command: initial, feedback: first, request_id: origin.id, target_surface: "channel" });
   const cmd = review(hds, plan, plan.steps[0]!.step_id)!; const approved = await approve(cmd);
   const admission = executionAdmissionForCommand(cmd, authority.receipt(approved));
-  return { root, workspace, executionPath, jPath, execution, j, hds, plan, cmd, approved, admission, authority, executor, invoke, memory, controllers, createHds, approve, oldMemory };
+  return { root, workspace, executionPath, jPath, execution, j, hds, plan, cmd, approved, admission, authority, executor, invoke, memory,
+    controllers, createHds, approve, oldMemory, purposeBinding: undefined as
+      { goal_ref: string; purpose_version: number; purpose_digest: string } | undefined };
+}
+
+function testGoalGovernance() {
+  const event = { event_ref: "ge_0123456789abcdef", event_kind: "purpose_change" as const,
+    goal_ref: "goal_0123456789abcdef", source_ref: "F:0123456789abcdef", goal_kind: "delegated" as const,
+    prior_version: 1, new_version: 2, prior_purpose_digest: "a".repeat(64), new_purpose_digest: "e".repeat(64),
+    authority_kind: "owner" as const, authorization_ref: "ga_0123456789abcdef", recorded_at: 100, effective_from: 500 };
+  return { schema_version: "blue-tanuki.goal-governance.v1" as const,
+    goals: [{ goal_ref: event.goal_ref, goal_kind: event.goal_kind, source_ref: event.source_ref,
+      initial_purpose_digest: "a".repeat(64), initial_interpretation_digest: "b".repeat(64), adopted_at: 0 }],
+    authorizations: [{ authorization_ref: event.authorization_ref, event_ref: event.event_ref,
+      event_digest: goalGovernanceEventDigest(event), goal_ref: event.goal_ref, event_kind: event.event_kind,
+      authority_kind: event.authority_kind, authorized_at: event.recorded_at }], events: [event] };
+}
+
+function installTestPurpose(hds: HDSUpperController) {
+  const purposeText = "Keep synthetic file-write results as non-authoritative history and ask for fresh evidence before claiming current state.";
+  const purposeDigest = createHash("sha256").update(purposeText, "utf8").digest("hex");
+  const binding = { goal_ref: "goal_0123456789abcdef", purpose_version: 3, purpose_digest: purposeDigest };
+  const requestId = randomUUID();
+  const command: ExecuteCommand = { id: randomUUID(), type: "tool_call",
+    payload: { tool_name: "goal.governance.change", arguments: { goal_ref: binding.goal_ref,
+      prior_version: 2, prior_purpose_digest: "e".repeat(64), new_purpose_digest: purposeDigest } },
+    constraints: { allowed_tools: ["goal.governance.change"], allowed_capabilities: ["tool:goal.governance.change"] },
+    upstream_decision: { request_id: requestId, frame_goal: "Review a synthetic delegated-goal purpose update.",
+      model_abstraction: "test", commit_hash: "a".repeat(64), commit_decision: "ASSERT" } };
+  const evaluation = evaluateApproval(command, [], { actor: "webchat-owner-token-holder", default_mode: "full_access" });
+  hds.onApprovalEvaluation(evaluation, { request_id: requestId });
+  hds.onCommandLifecycle(command.id, "approval_approved", { actor: "webchat-resume-token-holder",
+    reason: "human_approval:approve", request_id: requestId });
+  const committed = hds.commitGoalPurposeChangeAfterL3({ goal_ref: binding.goal_ref, prior_version: 2,
+    prior_purpose_digest: "e".repeat(64), new_purpose_digest: purposeDigest, purpose_text: purposeText,
+    request_id: requestId, command_id: command.id, proposal_actor: "webchat-owner-token-holder",
+    actor: "webchat-resume-token-holder", evaluation });
+  if (!committed.ok) throw new Error(`synthetic purpose setup failed: ${committed.reason}`);
+  return binding;
 }
 
 function inspectMemory(c: Awaited<ReturnType<typeof setup>>) {
@@ -217,6 +263,67 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(restarted.reconcileOperationPlanMemory()).toBe(true);
     expect(inspectMemory(c)).toEqual(memory);
     expect(restarted.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("verified");
+  }, fileWriteCandidate));
+
+  it("明示選択されたfile.write履歴はdigestだけを後続plan:computeへ渡し、候補保持前にも再照合する", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
+      .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+
+    c.hds.closeOperationPlanMemory();
+    c.hds = c.createHds(c.j, true);
+    c.purposeBinding = installTestPurpose(c.hds);
+
+    const sourceCheckpoint = c.j.load()!.plans[0]!;
+    const sourceRevision = sourceCheckpoint.revisions.at(-1)!;
+    const sourceRef = { plan_id_digest: operationPlanDigest(c.plan.plan_id), revision_digest: sourceRevision.digest,
+      step_id_digest: operationPlanDigest(c.plan.steps[0]!.step_id) };
+    const destinationRequestId = randomUUID();
+    const task = "Plan a safe follow-up from a selected historical action report; require fresh observation before claiming current file state.";
+    const computeRequest = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: "fixture-owner",
+      content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: c.purposeBinding, source_observation_refs: [sourceRef] })}`,
+      timestamp: Date.now(), metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.request_id": destinationRequestId } });
+    const compute = c.hds.decide(computeRequest);
+    if (compute.command?.type !== "llm_call") throw new Error(`selected observation was not routed to C: ${compute.log.commit.reason}`);
+    const context = compute.command.payload.compute_context;
+    expect(context?.data_exposure.input_sources).toContain("selected_operation_result_observations");
+    const serializedInput = JSON.stringify(compute.command.payload.messages);
+    expect(serializedInput).toContain("reported_success");
+    expect(serializedInput).toContain(sourceRef.plan_id_digest);
+    expect(serializedInput).not.toContain(c.workspace);
+    expect(serializedInput).not.toContain("notes.txt");
+    expect(serializedInput).not.toContain("synthetic planned file content");
+
+    const invalidRequest = createGatewayInternalInboundRequest({ ...computeRequest, id: randomUUID(),
+      content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: c.purposeBinding,
+        source_observation_refs: [{ ...sourceRef, step_id_digest: "f".repeat(64) }] })}`, timestamp: Date.now() });
+    const invalid = c.hds.decide(invalidRequest);
+    expect(invalid.command?.type).not.toBe("llm_call");
+    expect(invalid.log.commit.reason).toContain("plan_control_denied:plan_compute_source_observation_step_mismatch");
+
+    const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
+    c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
+      metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+    const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
+      entry.plan_id === operationPlanDigest(nextCandidate.plan_id));
+    expect(retained?.compute_source_observations).toHaveLength(1);
+    expect(retained?.compute_source_observations?.[0]).toMatchObject({ source: "verified_file_write_result",
+      operation: "file.write", effect_observation: "reported_success", adoption_status: "observation_only",
+      used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    const publicProjection = projectOperationPlanStatus(c.hds.getRuntimeSnapshot().operation_plans);
+    expect(publicProjection.status).toBe("available");
+    expect(publicProjection.plans.find((entry) => entry.plan_id === operationPlanDigest(nextCandidate.plan_id))
+      ?.compute_source_observations).toEqual(retained?.compute_source_observations);
+    const safeObservation = JSON.stringify(retained?.compute_source_observations);
+    for (const forbidden of [c.workspace, "notes.txt", "synthetic planned file content", "sandbox_root", "target"]) {
+      expect(safeObservation).not.toContain(forbidden);
+    }
   }, fileWriteCandidate));
 
   it("file.writeの応答が計画のresult_equals条件に合わない場合はMへ昇格しない", async () => fixture(async (c) => {

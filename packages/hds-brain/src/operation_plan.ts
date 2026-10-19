@@ -4,11 +4,14 @@ import {
   GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
+  type OperationPlanComputeSourceObservation, type OperationPlanComputeSourceObservationReference,
   type OperationPlanGoalPurposeRelationCandidate, type OperationPlanGoalPurposeRelationOwnerReview,
   type OperationPlanGoalPurposeRelationRecord, type OperationPlanGoalPurposeRelationReviewArguments, type OperationStep,
   type MemoryCommitV2, type MemoryUpdateReceiptV1,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema,
+  OperationPlanComputeSourceObservationSchema,
+  OperationPlanComputeSourceObservationReferenceSchema,
   OperationPlanGoalPurposeBindingSchema,
   OperationPlanGoalPurposeRelationCandidateSchema,
   OperationPlanGoalPurposeRelationOwnerReviewSchema,
@@ -862,7 +865,8 @@ export class OperationPlanLedger {
     this.port.compareAndSetRecoveryHoldState(current ? operationPlanDigest(current) : null, state);
   }
 
-  retainCandidate(value: unknown, origin: InboundRequest, rawPurposeRelationCandidate?: unknown): void {
+  retainCandidate(value: unknown, origin: InboundRequest, rawPurposeRelationCandidate?: unknown,
+    computeSourceObservations?: readonly OperationPlanComputeSourceObservation[]): void {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const plan = candidatePlan(value);
     const expected = origin.metadata?.["blue_tanuki.operation_core.request_id"] ?? origin.id;
@@ -880,6 +884,20 @@ export class OperationPlanLedger {
       if (!parsedBinding.success) throw new Error("plan_goal_purpose_binding_invalid");
       goalPurposeBinding = this.resolveGoalPurposeBinding(parsedBinding.data, undefined);
     }
+    let verifiedComputeSourceObservations: OperationPlanComputeSourceObservation[] | undefined;
+    if (computeSourceObservations?.length) {
+      if (!goalPurposeBinding || computeSourceObservations.length > 8) {
+        throw new Error("plan_compute_source_observation_binding_invalid");
+      }
+      const references = computeSourceObservations.map(({ plan_id_digest, revision_digest, step_id_digest }) => ({
+        plan_id_digest, revision_digest, step_id_digest,
+      }));
+      const current = this.inspectComputeSourceObservations(references, origin);
+      if (operationPlanDigest(current) !== operationPlanDigest(computeSourceObservations)) {
+        throw new Error("plan_compute_source_observation_stale");
+      }
+      verifiedComputeSourceObservations = current;
+    }
     const goalPurposeRelation = goalPurposeBinding
       ? this.recordGoalPurposeRelation(plan, origin.content, goalPurposeBinding, rawPurposeRelationCandidate)
       : undefined;
@@ -888,6 +906,7 @@ export class OperationPlanLedger {
     this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: origin.content,
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
       ...(goalPurposeRelation ? { goal_purpose_relation: goalPurposeRelation } : {}),
+      ...(verifiedComputeSourceObservations ? { compute_source_observations: verifiedComputeSourceObservations } : {}),
       request_goal_criteria: requestGoalCriteria,
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
   }
@@ -1388,6 +1407,95 @@ export class OperationPlanLedger {
     this.resultMemory = undefined;
   }
 
+  /** Resolve explicit references to durable, J-verified file.write observations without exposing targets or content. */
+  inspectComputeSourceObservations(
+    rawReferences: readonly OperationPlanComputeSourceObservationReference[],
+    caller: InboundRequest,
+  ): OperationPlanComputeSourceObservation[] {
+    const references = rawReferences.map((reference) => OperationPlanComputeSourceObservationReferenceSchema.parse(reference));
+    if (references.length === 0) return [];
+    if (references.length > 8 || this.recoveryRefreshPending || this.memoryQuiesced || !this.resultMemory || !this.port ||
+        !this.memoryReady || operationPlanDigest(this.port.load()) !== this.savedDigest ||
+        this.resultMemory.snapshot()?.status !== "ready" || !this.resultMemory.verify()) {
+      throw new Error("plan_compute_source_observation_memory_unavailable");
+    }
+    const referenceKeys = references.map((reference) =>
+      `${reference.plan_id_digest}:${reference.revision_digest}:${reference.step_id_digest}`);
+    if (new Set(referenceKeys).size !== referenceKeys.length) {
+      throw new Error("plan_compute_source_observation_reference_invalid");
+    }
+    const observations: OperationPlanComputeSourceObservation[] = [];
+    for (const reference of references) {
+      const matches = this.state.plans.filter((plan) =>
+        operationPlanDigest(plan.revisions[0]!.plan.plan_id) === reference.plan_id_digest);
+      if (matches.length !== 1) throw new Error("plan_compute_source_observation_unavailable");
+      const plan = matches[0]!;
+      if (plan.owner !== caller.user || plan.channel !== caller.channel) {
+        throw new Error("plan_compute_source_observation_identity_mismatch");
+      }
+      if (this.recoveryHolds.has(reference.plan_id_digest)) {
+        throw new Error("plan_compute_source_observation_recovery_hold");
+      }
+      const revision = plan.revisions.at(-1);
+      if (!revision || revision.digest !== reference.revision_digest) {
+        throw new Error("plan_compute_source_observation_stale");
+      }
+      const steps = revision.plan.steps.filter((step) => operationPlanDigest(step.step_id) === reference.step_id_digest);
+      if (steps.length !== 1) throw new Error("plan_compute_source_observation_step_mismatch");
+      const step = steps[0]!;
+      const bindings = plan.bindings.filter((binding) =>
+        binding.revision_digest === revision.digest && binding.step_id === step.step_id);
+      if (bindings.length !== 1) throw new Error("plan_compute_source_observation_binding_unavailable");
+      const binding = bindings[0]!;
+      if (step.operation !== "file.write" || binding.operation !== "file.write" || binding.status !== "verified" ||
+          binding.step_digest !== stepDigest(step) || !binding.execution_admission || !binding.delivery_digest ||
+          !binding.result_digest || !binding.memory_commit || !binding.memory_receipt ||
+          !verifyResultMemoryCommit(plan, binding) || !receiptForResultCommit(binding.memory_receipt, binding.memory_commit)) {
+        throw new Error("plan_compute_source_observation_not_verified");
+      }
+      const result = plan.results.find((candidate) => candidate.plan_id === revision.plan.plan_id &&
+        candidate.request_id === revision.plan.request_id && candidate.step_id === step.step_id &&
+        candidate.operation === "file.write" && candidate.status === "succeeded");
+      if (!result || result.observed_at_ms > Date.now()) throw new Error("plan_compute_source_observation_result_unavailable");
+      const reconciled = this.resultMemory.reconcile(binding.memory_commit.update_id);
+      if (!reconciled.ok || reconciled.status !== "ready" ||
+          !receiptForResultCommit(reconciled.receipt, binding.memory_commit) ||
+          operationPlanDigest(reconciled.receipt) !== operationPlanDigest(binding.memory_receipt)) {
+        throw new Error("plan_compute_source_observation_receipt_unavailable");
+      }
+      const identity = resultMemoryIdentity(binding);
+      const stored = this.resultMemory.readMemoryRecord(identity.record_id);
+      const committed = binding.memory_commit.changes[0];
+      const expected = committed?.operation === "upsert" ? committed.value : undefined;
+      if (!stored?.exists || expected === undefined || operationPlanDigest(stored.value) !== operationPlanDigest(expected)) {
+        throw new Error("plan_compute_source_observation_record_mismatch");
+      }
+      observations.push(OperationPlanComputeSourceObservationSchema.parse({
+        schema_version: "operation-plan-compute-source-observation.v1",
+        source: "verified_file_write_result",
+        plan_id_digest: reference.plan_id_digest,
+        revision_digest: revision.digest,
+        step_id_digest: reference.step_id_digest,
+        operation: "file.write",
+        plan_binding_status: "verified",
+        plan_validation_status: "matched",
+        effect_observation: "reported_success",
+        record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt.revision,
+        memory_receipt_digest: binding.memory_receipt.receipt_digest,
+        observed_at_ms: result.observed_at_ms,
+        adoption_status: "observation_only",
+        used_as_world_truth: false,
+        used_for_authority: false,
+        may_execute: false,
+      }));
+    }
+    if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+      throw new Error("plan_compute_source_observation_stale");
+    }
+    return observations;
+  }
+
   /** 同仕事・現版の受領済み観測だけをJが選択する。全履歴やraw検索内容をCへ渡さない。 */
   inspectReflection(control: OperationPlanReflectionControl, caller: InboundRequest): ResultObservationProjection {
     if (this.recoveryRefreshPending || !this.resultMemory || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest ||
@@ -1622,6 +1730,8 @@ export class OperationPlanLedger {
           ? this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) ? "current" as const : "stale" as const
           : goalProjection?.used_for_authority === false ? "required" as const : "not_configured" as const,
         goal_purpose_relation: this.goalPurposeRelationProjection(p),
+        ...(p.compute_source_observations?.length
+          ? { compute_source_observations: structuredClone(p.compute_source_observations) } : {}),
         ...(recoveryHold ? { recovery_hold_reason: recoveryHold.reason,
           recovery_hold_scope_relation: recoveryHold.restore_scope_relation } : {}),
         status: currentRevision.plan.steps.every((s) => p.bindings.some((b) => b.step_id === s.step_id && b.status === "verified"))

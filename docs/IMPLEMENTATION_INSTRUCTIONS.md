@@ -2,7 +2,25 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-FILE-WRITE-RESULT-M-RETURN`
+### 最新BUILD_BATCH：`QEB-01-D02.01-FILE-WRITE-OBSERVATION-PLAN-COMPUTE`
+
+開始HEAD／`origin/main`=`12ace531d88ad7a309bdced915e9af06bf49cda8`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示、D02.01／F01.01／D04.02を再読した。D4-Pocket現行AGENTS §3.1を照合したが、Windows localで検証可能なためGitHub Actionsは未使用。C08.03実provider保留、P13 owner-GO保留、別repo変更なしを維持する。
+
+直前batchでJ/M receiptまで照合した`file.write`結果を、後続の明示的な目的付き`plan:compute`へ選択入力として接続した。callerと同じowner/channelに属するcurrent plan revision・step、recovery holdなし、verified binding、結果一致、receiptとM recordの完全照合をJが確認する。Cへ渡すのは`reported_success`という過去の作用報告、plan／revision／step／record／receipt digest、M revision、観測時刻、非権威flagsだけであり、path・target・workspace・content・payloadは含めない。これは現在のファイル状態、目的達成、意味適合、権限、再実行可能性を証明しない。C応答を候補として保持する直前にJが同じJ/M照合を再実施し、source observationを候補計画へ来歴として保存する。invalid refはCへ送らない。fallback providerへの入力source認可も省略時に付与しない。
+
+Gatewayの厳格なoperator projectionがJの安全な`compute_source_observations`来歴を受け取れるようにし、現行J投影に含まれるowner review status/outcomeの許可値を追加した。両者とも権威判断・実行の入力にはならない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `execution_result_reconciliation.test.ts` 新規統合ケース | PASS、1/1。J/Mで検証済みのsynthetic file.write報告だけを目的付き後続Cへ渡し、path/content非露出、誤ったstep digestの送信拒否、候補保持時の再照合、status projectionへの限定来歴を確認。 |
+| Gateway `execution_result_reconciliation.test.ts` 全37件 | FAIL、6/37 PASS・31/37 FAIL（Windows、1 worker）。主な失敗は合成file.search実行の`failed`、配送fixture不成立、SQLiteの`EBUSY`後始末。新規ケースと既存`旧generation`代表ケースは個別実行でPASSし、全suite時との違いはあるがorder／load原因の切分けは未完。変更前clean baselineとの比較も未実施のため原因未確定で、QC候補として保持する。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| `pnpm hds:standalone` | PASS。audit chain有効、Runtime Invariants `all_ok=true`。 |
+| Actions／実provider／実credential／外部送信 | 未実施。localで対象検証を実施。 |
+
+この合成経路は過去の作用報告を後続計画の非権威contextへ接続した段階であり、Cの意味採用・現在状態の再確認・次の作用・仕事完了を証明しない。owner review、Approval Gate、Executor許可は独立して必要。全体一仕事、D02.01／D02.02、BUILD_COVERED、QE_QC／QE_QA／5OS実機は未成立。次consumerは、後続計画が要求する現在状態をfresh observationへ結び、J/C・Brokerの再検査から結果・M・帰還までの不足接続を現物で選び直す。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-FILE-WRITE-RESULT-M-RETURN`
 
 開始HEAD／`origin/main`=`403a178daae865c60ca2681616b960ca5a72e43b`、worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示、D02.01／F01.01／D04.02を再読した。D4-Pocketの現行`main`=`4ac39c81328aba1aa1f867d2b7cce8a1d314e8c8`でAGENTS §3.1を確認し、作業差分を保持した。今回のWindows local確認で不足するOS・artifact・重い検査がないため、Actions・workflow追加・一時branchは未実施。
 

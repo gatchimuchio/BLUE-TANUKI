@@ -16,6 +16,7 @@ import {
   OperationCoreExecutionProjectionSchema,
   OperationCorePlannerExecutionProjectionSchema,
   OperationPlanSchema,
+  OperationPlanComputeSourceObservationSchema,
   prepareOperationPlan,
   inspectOperationCommandExecutionResult,
   type ExecuteCommand,
@@ -24,6 +25,7 @@ import {
   type OperationCoreExecutionProjection,
   type OperationCorePlannerExecutionProjection,
   type OperationCommandExecutionResult,
+  type OperationPlanComputeSourceObservation,
 } from "@blue-tanuki/protocol";
 import { commandFailurePatterns } from "@blue-tanuki/hds-brain";
 
@@ -225,16 +227,19 @@ export interface OperationPlanStatusProjection {
     goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string };
     goal_purpose_binding_status: "not_configured" | "required" | "current" | "stale";
     goal_purpose_relation?: {
-      status: "not_required" | "unavailable" | "stale" | "unverified";
+      status: "not_required" | "unavailable" | "stale" | "unverified" | "conflicts" | "owner_reviewed_supports" | "owner_reviewed_unknown";
       candidate_outcome?: "supports" | "conflicts" | "unknown";
       candidate_status?: "present" | "missing" | "invalid";
       evidence_status?: "exact_spans_present" | "not_provided" | "citation_mismatch" | "purpose_unavailable";
       evidence_count?: number;
+      owner_review_status?: "not_reviewed" | "verified" | "invalid";
+      owner_review_outcome?: "supports" | "conflicts" | "unknown";
       semantic_assessment_status?: "not_assessed";
       record_digest?: string;
       used_for_authority: false;
       may_execute: false;
     };
+    compute_source_observations?: OperationPlanComputeSourceObservation[];
     recovery_hold_reason?: "held_residual" | "held_unobserved" | "held_unverified";
     recovery_hold_scope_relation?: "requested" | "collateral" | "unknown";
     step_count: number;
@@ -312,6 +317,18 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     const revision = numberValue(plan.revision);
     const goalPurposeBinding = plan.goal_purpose_binding;
     const goalPurposeRelation = plan.goal_purpose_relation;
+    const rawComputeSourceObservations = plan.compute_source_observations;
+    const computeSourceObservations: OperationPlanComputeSourceObservation[] = [];
+    if (rawComputeSourceObservations !== undefined) {
+      if (!Array.isArray(rawComputeSourceObservations) || rawComputeSourceObservations.length > 8) {
+        return invalidOperationPlanStatusProjection();
+      }
+      for (const observation of rawComputeSourceObservations) {
+        const parsed = OperationPlanComputeSourceObservationSchema.safeParse(observation);
+        if (!parsed.success) return invalidOperationPlanStatusProjection();
+        computeSourceObservations.push(parsed.data);
+      }
+    }
     const goalPurposeBindingValid = goalPurposeBinding === undefined || (isRecord(goalPurposeBinding) &&
       Object.keys(goalPurposeBinding).length === 3 &&
       Object.keys(goalPurposeBinding).every((key) => ["goal_ref", "purpose_version", "purpose_digest"].includes(key)) &&
@@ -320,21 +337,29 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       isDigest(goalPurposeBinding.purpose_digest));
     const goalPurposeRelationValid = goalPurposeRelation === undefined || (isRecord(goalPurposeRelation) &&
       Object.keys(goalPurposeRelation).every((key) => ["status", "candidate_outcome", "candidate_status", "evidence_status",
-        "evidence_count", "semantic_assessment_status", "record_digest", "used_for_authority", "may_execute"].includes(key)) &&
-      ["not_required", "unavailable", "stale", "unverified"].includes(String(goalPurposeRelation.status)) &&
+        "evidence_count", "owner_review_status", "owner_review_outcome", "semantic_assessment_status", "record_digest",
+        "used_for_authority", "may_execute"].includes(key)) &&
+      ["not_required", "unavailable", "stale", "unverified", "conflicts", "owner_reviewed_supports", "owner_reviewed_unknown"]
+        .includes(String(goalPurposeRelation.status)) &&
       goalPurposeRelation.used_for_authority === false && goalPurposeRelation.may_execute === false &&
       (goalPurposeRelation.candidate_outcome === undefined || ["supports", "conflicts", "unknown"].includes(String(goalPurposeRelation.candidate_outcome))) &&
       (goalPurposeRelation.candidate_status === undefined || ["present", "missing", "invalid"].includes(String(goalPurposeRelation.candidate_status))) &&
       (goalPurposeRelation.evidence_status === undefined || ["exact_spans_present", "not_provided", "citation_mismatch", "purpose_unavailable"].includes(String(goalPurposeRelation.evidence_status))) &&
       (goalPurposeRelation.evidence_count === undefined || (Number.isInteger(goalPurposeRelation.evidence_count) &&
         (goalPurposeRelation.evidence_count as number) >= 0 && (goalPurposeRelation.evidence_count as number) <= 8)) &&
+      (goalPurposeRelation.owner_review_status === undefined || ["not_reviewed", "verified", "invalid"].includes(String(goalPurposeRelation.owner_review_status))) &&
+      (goalPurposeRelation.owner_review_outcome === undefined || ["supports", "conflicts", "unknown"].includes(String(goalPurposeRelation.owner_review_outcome))) &&
       (goalPurposeRelation.semantic_assessment_status === undefined || goalPurposeRelation.semantic_assessment_status === "not_assessed") &&
       (goalPurposeRelation.record_digest === undefined || isDigest(goalPurposeRelation.record_digest)) &&
       (goalPurposeRelation.status !== "unverified" || (goalPurposeRelation.candidate_outcome !== undefined &&
         goalPurposeRelation.candidate_status !== undefined && goalPurposeRelation.evidence_status !== undefined &&
         goalPurposeRelation.evidence_count !== undefined && goalPurposeRelation.semantic_assessment_status === "not_assessed" &&
         isDigest(goalPurposeRelation.record_digest))) &&
-      (goalPurposeRelation.status !== "not_required" || goalPurposeRelation.candidate_outcome === undefined));
+      (goalPurposeRelation.status !== "not_required" || goalPurposeRelation.candidate_outcome === undefined) &&
+      (!String(goalPurposeRelation.status).startsWith("owner_reviewed_") ||
+        (goalPurposeRelation.owner_review_status === "verified" &&
+          ((goalPurposeRelation.status === "owner_reviewed_supports" && goalPurposeRelation.owner_review_outcome === "supports") ||
+            (goalPurposeRelation.status === "owner_reviewed_unknown" && goalPurposeRelation.owner_review_outcome === "unknown")))));
     if (!isDigest(plan.plan_id) || !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
         !goalPurposeBindingValid || !goalPurposeRelationValid ||
         !["not_configured", "required", "current", "stale"].includes(String(plan.goal_purpose_binding_status ??
@@ -419,10 +444,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         ...(goalPurposeRelation.candidate_status !== undefined ? { candidate_status: goalPurposeRelation.candidate_status as "present" | "missing" | "invalid" } : {}),
         ...(goalPurposeRelation.evidence_status !== undefined ? { evidence_status: goalPurposeRelation.evidence_status as "exact_spans_present" | "not_provided" | "citation_mismatch" | "purpose_unavailable" } : {}),
         ...(goalPurposeRelation.evidence_count !== undefined ? { evidence_count: goalPurposeRelation.evidence_count as number } : {}),
+        ...(goalPurposeRelation.owner_review_status !== undefined ? { owner_review_status: goalPurposeRelation.owner_review_status as "not_reviewed" | "verified" | "invalid" } : {}),
+        ...(goalPurposeRelation.owner_review_outcome !== undefined ? { owner_review_outcome: goalPurposeRelation.owner_review_outcome as "supports" | "conflicts" | "unknown" } : {}),
         ...(goalPurposeRelation.semantic_assessment_status !== undefined ? { semantic_assessment_status: "not_assessed" as const } : {}),
         ...(goalPurposeRelation.record_digest !== undefined ? { record_digest: goalPurposeRelation.record_digest as string } : {}),
         used_for_authority: false as const, may_execute: false as const,
       } } : {}),
+      ...(computeSourceObservations.length ? { compute_source_observations: computeSourceObservations } : {}),
       ...(plan.recovery_hold_reason ? { recovery_hold_reason: plan.recovery_hold_reason as "held_residual" | "held_unobserved" | "held_unverified" } : {}),
       ...(plan.recovery_hold_scope_relation ? { recovery_hold_scope_relation: plan.recovery_hold_scope_relation as "requested" | "collateral" | "unknown" } : {}),
       status: plan.status as "awaiting_step_review" | "results_verified", step_count: plan.steps.length, steps });

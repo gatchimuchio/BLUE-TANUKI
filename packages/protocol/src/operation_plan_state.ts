@@ -13,11 +13,49 @@ export const OperationPlanGoalPurposeBindingSchema = z.object({
   purpose_digest: Digest,
 }).strict();
 export type OperationPlanGoalPurposeBinding = z.infer<typeof OperationPlanGoalPurposeBindingSchema>;
+/** Explicit, non-authority reference to one J/M-verified prior file.write result. */
+export const OperationPlanComputeSourceObservationReferenceSchema = z.object({
+  plan_id_digest: Digest,
+  revision_digest: Digest,
+  step_id_digest: Digest,
+}).strict();
+export type OperationPlanComputeSourceObservationReference = z.infer<typeof OperationPlanComputeSourceObservationReferenceSchema>;
+/** Finite historical projection; it deliberately carries no target, path, or content. */
+export const OperationPlanComputeSourceObservationSchema = z.object({
+  schema_version: z.literal("operation-plan-compute-source-observation.v1"),
+  source: z.literal("verified_file_write_result"),
+  plan_id_digest: Digest,
+  revision_digest: Digest,
+  step_id_digest: Digest,
+  operation: z.literal("file.write"),
+  plan_binding_status: z.literal("verified"),
+  plan_validation_status: z.literal("matched"),
+  effect_observation: z.literal("reported_success"),
+  record_digest: Digest,
+  memory_revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  memory_receipt_digest: Digest,
+  observed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  adoption_status: z.literal("observation_only"),
+  used_as_world_truth: z.literal(false),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+export type OperationPlanComputeSourceObservation = z.infer<typeof OperationPlanComputeSourceObservationSchema>;
+export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
+  "blue-tanuki.plan-compute-source-observations.v1";
 /** Explicit task input for internal plan computation; the binding selects context, not authority. */
 export const OperationPlanComputeInputSchema = z.object({
   task: z.string().trim().min(1).max(20_000),
   goal_purpose_binding: OperationPlanGoalPurposeBindingSchema,
-}).strict();
+  source_observation_refs: z.array(OperationPlanComputeSourceObservationReferenceSchema).max(8).optional(),
+}).strict().superRefine((input, context) => {
+  const references = input.source_observation_refs ?? [];
+  const identities = references.map((reference) =>
+    `${reference.plan_id_digest}:${reference.revision_digest}:${reference.step_id_digest}`);
+  if (new Set(identities).size !== identities.length) {
+    context.addIssue({ code: "custom", message: "duplicate_plan_compute_source_observation_reference" });
+  }
+});
 export type OperationPlanComputeInput = z.infer<typeof OperationPlanComputeInputSchema>;
 /** C's task-purpose relation claim is a candidate only; exact citations do not verify semantic fit. */
 export const OperationPlanGoalPurposeRelationCandidateSchema = z.object({
@@ -179,6 +217,7 @@ export const OperationPlanCheckpointSchema = z.object({
     owner: Id, channel: Id, goal: z.string().min(1).max(200_000),
     goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),
     goal_purpose_relation: OperationPlanGoalPurposeRelationRecordSchema.optional(),
+    compute_source_observations: z.array(OperationPlanComputeSourceObservationSchema).max(8).optional(),
     request_goal_criteria: GoalCriteriaProjectionSchema.optional(),
     revisions: z.array(z.object({ digest: Digest, plan: OperationPlanSchema }).strict()).min(1).max(100),
     receipt_observations: z.array(OperationPlanExternalReceiptObservationSchema).max(100).default([]),
