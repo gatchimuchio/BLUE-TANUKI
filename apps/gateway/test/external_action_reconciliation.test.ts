@@ -152,13 +152,14 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
     const planPath = join(root, "j.sqlite");
     const memory = operationResultMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") });
     const inspection = inspectionServer();
+    const initialExecutionEpoch = randomUUID();
     let executionStore: GatewayExecutionIntentStore | undefined;
     let planStore: OperationPlanStateStore | undefined;
     let closeMemory: (() => void) | undefined;
     let hds: HDSUpperController;
     try {
       const endpoint = await inspection.url;
-      executionStore = new GatewayExecutionIntentStore(executionPath);
+      executionStore = new GatewayExecutionIntentStore(executionPath, initialExecutionEpoch);
       planStore = new OperationPlanStateStore(planPath);
       const createHds = (state: OperationPlanStateStore) => {
         const controller = new HDSUpperController({ operation_plan_state: state, operation_plan_memory: memory });
@@ -182,7 +183,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       } });
       vi.spyOn(gmailWriteTool, "invoke").mockImplementation(fixtureGmailTool.invoke);
       tools.register(gmailWriteTool);
-      const authority = createExecutorApprovalAuthority({ execution_store: executionStore });
+      const authority = createExecutorApprovalAuthority({ execution_store: executionStore, execution_epoch: initialExecutionEpoch });
       const source = request("plan:compute 合成宛先へ一件送信し、受理状態を読取照合する");
       const plan = candidate(source.id);
       const executor = new Executor({ approval_authority: authority, tools,
@@ -234,7 +235,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         planStore.close();
         executionStore.close();
         planStore = new OperationPlanStateStore(planPath);
-        executionStore = new GatewayExecutionIntentStore(executionPath);
+        executionStore = new GatewayExecutionIntentStore(executionPath, currentEpoch);
         hds = createHds(planStore);
         const jState = hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status;
         expect(jState).toBe("outcome_unknown");
@@ -288,7 +289,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         if (!reconciliationCommand) throw new Error("J did not issue the read-only reconciliation control");
         const reconciliation = await runLocalInspectionReconciliation({ hds, command: reconciliationCommand,
           caller: reconciliationRequest, endpoint });
-        expect(reconciliation.status).toBe("observed");
+        expect(reconciliation.status, JSON.stringify(reconciliation)).toBe("observed");
         if (reconciliation.status !== "observed") throw new Error("local read-only reconciliation did not record an observation");
         expect(reconciliation.memory_status).toBe("committed");
         const observation = reconciliation.observation;

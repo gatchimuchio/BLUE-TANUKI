@@ -6,12 +6,12 @@ import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hd
 import { Executor, createExecutorApprovalAuthority, ToolRegistry } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "../../src/execution_intent_store.js";
 
-const [root, id, mode] = process.argv.slice(2);
-if (!root || !id || !["complete", "hold"].includes(mode)) throw new Error("invalid fixture arguments");
+const [root, id, mode, executionEpoch] = process.argv.slice(2);
+if (!root || !id || !executionEpoch || !["complete", "hold"].includes(mode)) throw new Error("invalid fixture arguments");
 process.send?.("ready"); await once(process, "message");
-const store = new GatewayExecutionIntentStore(join(root, "executor.sqlite"));
+const store = new GatewayExecutionIntentStore(join(root, "executor.sqlite"), executionEpoch);
 try {
-  const authority = createExecutorApprovalAuthority({ execution_store: store });
+  const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: executionEpoch });
   const tools = new ToolRegistry();
   tools.register({ name: "synthetic.read", description: "合成process作用", required_capabilities: ["tool:synthetic.read"],
     invoke: async () => {

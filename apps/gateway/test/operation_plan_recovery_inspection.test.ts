@@ -31,6 +31,7 @@ import {
 } from "../src/recovery_inspection.js";
 
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
+const recoveryExecutionEpoch = randomUUID();
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 describe("J OperationPlan recovery inspection", () => {
@@ -262,7 +263,7 @@ describe("J OperationPlan recovery inspection", () => {
     const executionDirectory = path.join(privateRoot, "execution-intents");
     await mkdir(executionDirectory, { recursive: true });
     const brokerPath = path.join(executionDirectory, "executor.sqlite");
-    const broker = new GatewayExecutionIntentStore(brokerPath);
+    const broker = new GatewayExecutionIntentStore(brokerPath, admissions[0]!.execution_epoch);
     broker.issue(admissions[0]!);
     broker.close();
     const sourcePlanPath = path.join(privateRoot, "operation-plans", "j-state.sqlite");
@@ -340,7 +341,7 @@ describe("J OperationPlan recovery inspection", () => {
     const executionDirectory = path.join(privateRoot, "execution-intents");
     await mkdir(executionDirectory, { recursive: true });
     const executionPath = path.join(executionDirectory, "executor.sqlite");
-    const execution = new GatewayExecutionIntentStore(executionPath);
+    const execution = new GatewayExecutionIntentStore(executionPath, admissions[0]!.execution_epoch);
     execution.issue(admissions[0]!);
     // Same command key, different ticket identity: it must not satisfy the second J binding.
     execution.issue({ ...admissions[1]!, ticket_id: randomUUID() });
@@ -758,7 +759,7 @@ function admissionFor(commandId: string): ExecutionAdmission {
     command_key: sha256(JSON.stringify(["gateway-executor-command.v1", commandId])),
     command_digest: sha256(`admitted-command-${commandId}`),
     proof_digest: sha256(`proof-${commandId}`),
-    execution_epoch: randomUUID(),
+    execution_epoch: recoveryExecutionEpoch,
     issued_at_ms: 10_000,
     expires_at_ms: 20_000,
   };

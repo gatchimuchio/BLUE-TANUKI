@@ -647,7 +647,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   // Forward declarations: resume/approval closures resolve at call time.
   // eslint-disable-next-line prefer-const
   let executor: Executor;
-  const executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
+  const executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
   recoveryExecutionStore = executionStore;
   const executorApproval = createExecutorApprovalAuthority({
     execution_store: executionStore,

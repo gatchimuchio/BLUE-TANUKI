@@ -101,7 +101,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   let executionStore: GatewayExecutionIntentStore | undefined;
   try {
     Object.assign(process.env, resolveAllSecretRefs(process.env));
-    executionStore = GatewayExecutionIntentStore.fromEnvironment(process.env);
+    executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
     await runCliWithExecutionStore(argv, executionStore, ownerLease);
   } finally {
     executionStore?.close();

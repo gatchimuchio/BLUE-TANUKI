@@ -69,7 +69,7 @@ describe("Gateway read-only recovery inspection", () => {
     await mkdir(executionDirectory, { recursive: true });
     const databasePath = path.join(executionDirectory, "executor.sqlite");
     const ticket = executionTicket();
-    const store = new GatewayExecutionIntentStore(databasePath);
+    const store = new GatewayExecutionIntentStore(databasePath, ticket.execution_epoch);
     store.issue(ticket);
     store.close();
     const before = await readFile(databasePath);
@@ -215,8 +215,9 @@ describe("Gateway read-only recovery inspection", () => {
     const executionDirectory = path.join(privateRoot, "execution-intents");
     await mkdir(executionDirectory, { recursive: true });
     const databasePath = path.join(executionDirectory, "executor.sqlite");
-    const store = new GatewayExecutionIntentStore(databasePath);
-    store.issue(executionTicket());
+    const ticket = executionTicket();
+    const store = new GatewayExecutionIntentStore(databasePath, ticket.execution_epoch);
+    store.issue(ticket);
     store.close();
     const database = new DatabaseSync(databasePath);
     database.prepare("UPDATE execution_events SET event_json='{}' WHERE sequence=1").run();
@@ -246,8 +247,9 @@ describe("Gateway read-only recovery inspection", () => {
     const executionDirectory = path.join(privateRoot, "execution-intents");
     await mkdir(executionDirectory, { recursive: true });
     const databasePath = path.join(executionDirectory, "executor.sqlite");
-    const store = new GatewayExecutionIntentStore(databasePath);
-    store.issue(executionTicket());
+    const ticket = executionTicket();
+    const store = new GatewayExecutionIntentStore(databasePath, ticket.execution_epoch);
+    store.issue(ticket);
     store.close();
     const before = await readFile(databasePath);
     const sidecarPath = `${databasePath}-wal`;
@@ -265,8 +267,8 @@ describe("Gateway read-only recovery inspection", () => {
     const executionDirectory = path.join(privateRoot, "execution-intents");
     await mkdir(executionDirectory, { recursive: true });
     const databasePath = path.join(executionDirectory, "executor.sqlite");
-    const store = new GatewayExecutionIntentStore(databasePath);
     const ticket = executionTicket();
+    const store = new GatewayExecutionIntentStore(databasePath, ticket.execution_epoch);
     store.issue(ticket);
     store.close();
     const database = new DatabaseSync(databasePath);
@@ -298,7 +300,7 @@ describe("Gateway read-only recovery inspection", () => {
     await mkdir(executionDirectory, { recursive: true });
     const databasePath = path.join(executionDirectory, "executor.sqlite");
     const ticket = executionTicket();
-    const store = new GatewayExecutionIntentStore(databasePath);
+    const store = new GatewayExecutionIntentStore(databasePath, ticket.execution_epoch);
     store.issue(ticket);
     store.close();
     const database = new DatabaseSync(databasePath);

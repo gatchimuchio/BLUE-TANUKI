@@ -77,8 +77,8 @@ async function fixture(run: (context: Awaited<ReturnType<typeof setup>>) => Prom
   }
 }
 async function setup(root: string, workspace: string, planFactory: (id: string, root: string) => OperationPlan = candidate) {
-  const executionPath = join(root, "executor.sqlite"); const jPath = join(root, "j.sqlite");
-  const execution = new GatewayExecutionIntentStore(executionPath); const j = new OperationPlanStateStore(jPath);
+  const executionPath = join(root, "executor.sqlite"); const jPath = join(root, "j.sqlite"); const executionEpoch = randomUUID();
+  const execution = new GatewayExecutionIntentStore(executionPath, executionEpoch); const j = new OperationPlanStateStore(jPath);
   const memory = operationResultMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") });
   const controllers: HDSUpperController[] = [];
   const oldMemory = { capture: vi.fn(), recent: vi.fn(() => []), all: vi.fn(() => []) };
@@ -92,7 +92,8 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   const hds = createHds();
   const origin = request("plan:compute 合成の実行結果を後続へ安全に返す");
   const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry(); tools.register(fileSearchTool); tools.register(fileWriteTool);
-  const authority = createExecutorApprovalAuthority({ execution_store: execution, require_hds_execution_binding: true });
+  const authority = createExecutorApprovalAuthority({ execution_store: execution, execution_epoch: executionEpoch,
+    require_hds_execution_binding: true });
   const actualWorker = createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace });
   const invoke = vi.fn(actualWorker.invoke); const worker = { invoke };
   const executor = new Executor({ tools, approval_authority: authority, file_search_worker: worker,
@@ -207,7 +208,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(hash(saved.delivery.feedback.result)).toBe(feedback.operation_core_result?.output_digest);
     expect(saved.delivery.feedback.operation_core_result).toEqual(feedback.operation_core_result);
     expect(c.execution.lookup(c.admission.ticket_id)?.result_delivery_acknowledged).toBe(false);
-    const reopened = new GatewayExecutionIntentStore(c.executionPath); const j = new OperationPlanStateStore(c.jPath);
+    const reopened = new GatewayExecutionIntentStore(c.executionPath, c.execution.executionEpoch); const j = new OperationPlanStateStore(c.jPath);
     try {
       c.hds.closeOperationPlanMemory(); const hds = c.createHds(j);
       hds.onFeedback(feedback); // 通常のinflight保護は維持し、この遅延feedbackを採用しない。

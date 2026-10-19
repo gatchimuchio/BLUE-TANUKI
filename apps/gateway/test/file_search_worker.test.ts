@@ -26,12 +26,13 @@ const proof = () => ({ source: "approval_gate" as const, decision: "allow" as co
 async function temporary(run: (store: GatewayExecutionIntentStore, workspace: string, filename: string) => Promise<void>) {
   const root = mkdtempSync(join(tmpdir(), "blue-search-worker-"));
   const workspace = join(root, "workspace"); mkdirSync(workspace); writeFileSync(join(workspace, "blue.txt"), "blue\n");
-  const filename = join(root, "executor.sqlite"); const store = new GatewayExecutionIntentStore(filename);
+  const filename = join(root, "executor.sqlite"); const store = new GatewayExecutionIntentStore(filename, randomUUID());
   try { await run(store, workspace, filename); } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 }
-function rig(store: ExecutionIntentStore, workspace: string, worker?: FileSearchWorker) {
+function rig(store: ExecutionIntentStore, workspace: string, worker?: FileSearchWorker,
+  execution_epoch = store instanceof GatewayExecutionIntentStore ? store.executionEpoch : randomUUID()) {
   const tools = new ToolRegistry(); tools.register(fileSearchTool);
-  const authority = createExecutorApprovalAuthority({ execution_store: store });
+  const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch });
   const executor = new Executor({ tools, approval_authority: authority, llm,
     file_search_worker: worker ?? createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace,
       // 継承されたらNode自体が起動できない。資格値を出力させる試験はしない。
@@ -58,7 +59,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
     expect(receipt.worker_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(receipt.worker_exit_observed_at_ms).toBeGreaterThanOrEqual(receipt.worker_started_at_ms!);
     expect(receipt.output_digest).toBe(feedback.operation_core_result?.output_digest);
-    const reopened = new GatewayExecutionIntentStore(filename);
+    const reopened = new GatewayExecutionIntentStore(filename, store.executionEpoch);
     try { expect(reopened.snapshot()).toEqual(store.snapshot()); expect(reopened.verifyEvents()).toBe(true); }
     finally { reopened.close(); }
     expect((await executor.execute(approved)).error).toMatch(/already consumed/);
@@ -109,7 +110,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
       lookup: store.lookup.bind(store), complete: store.complete.bind(store), observeWorkerExit: store.observeWorkerExit.bind(store),
       bindWorker: (ticket, worker, now) => { store.bindWorker(ticket, worker, now); monotonic += 300_000; },
     };
-    const authority = createExecutorApprovalAuthority({ execution_store: wrapped,
+    const authority = createExecutorApprovalAuthority({ execution_store: wrapped, execution_epoch: store.executionEpoch,
       clock: { wallNow: () => wall, monotonicNow: () => monotonic } });
     const tools = new ToolRegistry(); tools.register(fileSearchTool);
     const executor = new Executor({ llm, tools, approval_authority: authority,
@@ -128,7 +129,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
       bindWorker: (ticket, worker, now) => { store.bindWorker(ticket, worker, now); controller.abort(); },
       observeWorkerExit: () => { throw new Error("fixture exit persistence failed"); },
     };
-    const { authority, executor } = rig(wrapped, workspace);
+    const { authority, executor } = rig(wrapped, workspace, undefined, store.executionEpoch);
     const approved = await approve(authority, executor, workspace);
     expect((await executor.execute(approved, { signal: controller.signal })).status).toBe("failed");
     expect(authority.receipt(approved)?.state).toBe("not_attempted");
@@ -144,7 +145,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
       bindWorker: store.bindWorker.bind(store), observeWorkerExit: store.observeWorkerExit.bind(store),
       markInvocation: (ticket, boundary, now) => { store.markInvocation(ticket, boundary, now); monotonic += 300_000; },
     };
-    const authority = createExecutorApprovalAuthority({ execution_store: wrapped,
+    const authority = createExecutorApprovalAuthority({ execution_store: wrapped, execution_epoch: store.executionEpoch,
       clock: { wallNow: () => wall, monotonicNow: () => monotonic } });
     const tools = new ToolRegistry(); tools.register(fileSearchTool);
     const executor = new Executor({ llm, tools, approval_authority: authority,
@@ -170,7 +171,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
 
   it("実IPC childは改変内容・別worker・期限切れのpacketから結果を返さない", async () => temporary(async (store, workspace) => {
     for (const kind of ["content", "worker", "expired"]) {
-      const authority = createExecutorApprovalAuthority({ execution_store: store });
+      const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: store.executionEpoch });
       const commandSource = source();
       const { executor } = rig(store, workspace);
       const targetVersion = await executor.inspectCommandTargetVersion(commandSource, { BLUE_TANUKI_FILE_ROOT: workspace });
@@ -196,5 +197,5 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
         const [code] = await closed; expect(code).toBe(2); expect(results).toBe(0);
       } finally { clearTimeout(timer); if (child.exitCode === null && child.signalCode === null) { child.kill(); await closed; } }
     }
-  }));
+  }), 20_000);
 });

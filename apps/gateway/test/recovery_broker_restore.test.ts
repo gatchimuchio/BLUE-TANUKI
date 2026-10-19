@@ -92,20 +92,20 @@ describe("Broker canonical snapshot restore transaction", () => {
       BLUE_TANUKI_RECOVERY_DIR: recoveryRoot,
       BLUE_TANUKI_ENV_FILE: envFile,
     };
+    const epoch = randomUUID();
     await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
-    const store = GatewayExecutionIntentStore.fromEnvironment(env);
+    const store = GatewayExecutionIntentStore.fromEnvironment(epoch, env);
     try {
       const backup = await createRecoveryBackup(env);
       expect(backup.backup_id).toBeTruthy();
 
       // Add a completed entry after the selected point; full-store restore must remove it.
-      completedFixtureReceipt(store, "post-snapshot-fixture", randomUUID());
+      completedFixtureReceipt(store, "post-snapshot-fixture", epoch);
 
       const restoreTool = createRecoveryMutationTools(env, () => store).find((tool) => tool.name === "recovery.restore");
       expect(restoreTool).toBeDefined();
       const tools = new ToolRegistry();
       tools.register(restoreTool!);
-      const epoch = randomUUID();
       const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: epoch });
       const executor = new Executor({
         approval_authority: authority,
@@ -134,9 +134,9 @@ describe("Broker canonical snapshot restore transaction", () => {
 
   it("leaves the live Broker unchanged when another current-epoch execution is active", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-broker-restore-active-"));
-    const live = new GatewayExecutionIntentStore(join(root, "live.sqlite"));
-    const archive = new GatewayExecutionIntentStore(join(root, "selected.sqlite"));
     const epoch = randomUUID();
+    const live = new GatewayExecutionIntentStore(join(root, "live.sqlite"), epoch);
+    const archive = new GatewayExecutionIntentStore(join(root, "selected.sqlite"), epoch);
     try {
       archive.close();
       const other = activeFixtureReceipt(live, "other-active-fixture", epoch);
@@ -157,9 +157,9 @@ describe("Broker canonical snapshot restore transaction", () => {
 
   it("rejects a selected snapshot carrying unfinished work from this owner epoch", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-broker-restore-archive-active-"));
-    const archive = new GatewayExecutionIntentStore(join(root, "selected.sqlite"));
-    const live = new GatewayExecutionIntentStore(join(root, "live.sqlite"));
     const epoch = randomUUID();
+    const archive = new GatewayExecutionIntentStore(join(root, "selected.sqlite"), epoch);
+    const live = new GatewayExecutionIntentStore(join(root, "live.sqlite"), epoch);
     try {
       activeFixtureReceipt(archive, "archived-active-fixture", epoch);
       archive.close();

@@ -23,7 +23,8 @@ const sameTicket = (a: ExecutionIntentTicket, b: ExecutionIntentTicket): boolean
 export class GatewayExecutionIntentStore implements ExecutionIntentStore {
   private readonly db: DatabaseType;
   private readonly filepath: string;
-  constructor(filepath: string) {
+  constructor(filepath: string, readonly executionEpoch: string) {
+    if (!/^[0-9a-f-]{36}$/i.test(executionEpoch)) throw new Error("execution_owner_epoch_invalid");
     this.filepath = resolve(filepath);
     mkdirSync(dirname(this.filepath), { recursive: true });
     this.db = new DatabaseSync(this.filepath);
@@ -44,7 +45,8 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     try { this.transaction(() => {}); }
     catch (error) { this.db.close(); throw error; }
   }
-  static fromEnvironment(env: NodeJS.ProcessEnv = process.env): GatewayExecutionIntentStore {
+  static fromEnvironment(executionEpoch: string, env: NodeJS.ProcessEnv = process.env): GatewayExecutionIntentStore {
+    if (!/^[0-9a-f-]{36}$/i.test(executionEpoch)) throw new Error("execution_owner_epoch_invalid");
     const stateRoot = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
     mkdirSync(stateRoot, { recursive: true });
     const privateRoot = join(realpathSync(stateRoot), "private-state");
@@ -58,11 +60,12 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     try {
       if (lstatSync(filepath).isSymbolicLink()) throw new Error("execution_state_file_must_not_be_symlink");
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    return new GatewayExecutionIntentStore(filepath);
+    return new GatewayExecutionIntentStore(filepath, executionEpoch);
   }
   issue(ticket: Readonly<ExecutionIntentTicket>): void {
     this.transaction(() => {
       validateTicket(ticket);
+      this.assertOwnerEpoch(ticket);
       if (this.db.prepare("SELECT ticket_id FROM execution_intents WHERE command_key=?").get(ticket.command_key)) {
         throw new Error("Executor ticket issue rejected: command already issued; inspect existing receipt");
       }
@@ -99,6 +102,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
   }
   observeWorkerExit(ticket: Readonly<ExecutionIntentTicket>, worker: Readonly<ExecutionWorkerIdentity>, now_ms: number): void {
     this.transaction(() => {
+      this.assertOwnerEpoch(ticket);
       const receipt = this.lookup(ticket.ticket_id);
       if (!receipt || !sameTicket(receipt, ticket) || receipt.worker_exit_observed_at_ms !== undefined ||
           (receipt.state !== "intent_committed" && receipt.state !== "invocation_attempted") ||
@@ -114,6 +118,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     "state" | "feedback_status" | "output_digest" | "error_digest" | "observed_at_ms">,
     delivery?: ExecutionResultDelivery): void {
     this.transaction(() => {
+      this.assertOwnerEpoch(ticket);
       const receipt = this.lookup(ticket.ticket_id);
       if (!receipt || !sameTicket(receipt, ticket)) throw new Error("Executor receipt rejected: ticket mismatch");
       if ((receipt.state === "intent_committed" && result.state !== "not_attempted") ||
@@ -155,6 +160,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     this.transaction(() => {
       const receipt = this.lookup(ticket_id);
       if (!receipt?.result_delivery_digest || receipt.result_delivery_digest !== delivery_digest) throw new Error("execution_delivery_ack_mismatch");
+      this.assertOwnerEpoch(receipt);
       if (receipt.result_delivery_acknowledged) return;
       receipt.result_delivery_acknowledged = true;
       receipt.result_delivery_disposition = "reconciled";
@@ -269,7 +275,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
           .get(executionCommandKey) as { ticket_id: string } | undefined;
         const current = currentRow ? this.lookup(currentRow.ticket_id) : null;
         if (!current || current.command_key !== executionCommandKey || current.state !== "invocation_attempted" ||
-            current.invocation_boundary !== "tool_adapter") {
+            current.invocation_boundary !== "tool_adapter" || current.execution_epoch !== this.executionEpoch) {
           throw new Error("broker_restore_active_executor_receipt_required");
         }
 
@@ -324,10 +330,14 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
   private current(ticket: Readonly<ExecutionIntentTicket>, now_ms: number): ExecutionIntentReceipt {
     const receipt = this.lookup(ticket.ticket_id);
     if (!receipt || !sameTicket(receipt, ticket)) throw new Error("Executor ticket rejected: content or epoch mismatch");
+    this.assertOwnerEpoch(ticket);
     if (!Number.isSafeInteger(now_ms) || now_ms < receipt.issued_at_ms || now_ms >= receipt.expires_at_ms) {
       throw new Error("Executor ticket rejected: expired or clock invalid");
     }
     return receipt;
+  }
+  private assertOwnerEpoch(ticket: Readonly<ExecutionIntentTicket>): void {
+    if (ticket.execution_epoch !== this.executionEpoch) throw new Error("Executor ticket rejected: owner generation mismatch");
   }
   private save(receipt: ExecutionIntentReceipt, insert = false): void {
     validateReceipt(receipt);

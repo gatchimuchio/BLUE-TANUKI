@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,8 +26,9 @@ const proof = (source: ExecuteCommand = command()) => {
     approved_at_ms: Date.now(), upstream_commit_hash: source.upstream_decision.commit_hash, operation: context.operation,
     risk: context.risk, final_review_required, reason: "fixture" };
 };
-function rig(store: ExecutionIntentStore, clock?: ExecutorApprovalClock, invoke = async (_args: Record<string, unknown>) => "青") {
-  const authority = createExecutorApprovalAuthority({ execution_store: store, clock, ticket_ttl_ms: clock ? 100 : 300_000 });
+function rig(store: ExecutionIntentStore, clock?: ExecutorApprovalClock, invoke = async (_args: Record<string, unknown>) => "青",
+  execution_epoch = store instanceof GatewayExecutionIntentStore ? store.executionEpoch : randomUUID()) {
+  const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch, clock, ticket_ttl_ms: clock ? 100 : 300_000 });
   const tools = new ToolRegistry();
   tools.register({ name: "synthetic.read", description: "合成読取り", required_capabilities: ["tool:synthetic.read"], invoke });
   const executor = new Executor({ approval_authority: authority, tools, llm: { name: "fixture", call: async () => ({ content: "青", model: "fixture", tokens_used: 0 }) } });
@@ -35,7 +36,7 @@ function rig(store: ExecutionIntentStore, clock?: ExecutorApprovalClock, invoke 
 }
 async function temporary(run: (store: GatewayExecutionIntentStore, root: string) => Promise<void>) {
   const root = mkdtempSync(join(tmpdir(), "blue-intent-"));
-  const store = new GatewayExecutionIntentStore(join(root, "executor.sqlite"));
+  const store = new GatewayExecutionIntentStore(join(root, "executor.sqlite"), randomUUID());
   try { await run(store, root); } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 }
 const key = (id: string): string => createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", id])).digest("hex");
@@ -46,7 +47,7 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
     const prior = process.env.BLUE_TANUKI_FILE_ROOT; process.env.BLUE_TANUKI_FILE_ROOT = workspace;
     try {
       const tools = new ToolRegistry(); tools.register(fileSearchTool);
-      const authority = createExecutorApprovalAuthority({ execution_store: store });
+      const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: store.executionEpoch });
       const executor = new Executor({ approval_authority: authority, tools, llm: { name: "fixture", call: async () => { throw new Error("not used"); } } });
       const source = command();
       source.payload = { tool_name: "file.search", arguments: { root: workspace, query: "blue", max_results: 1 } };
@@ -87,7 +88,7 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
 
   it("LLMのhistory待機後にも期限を再照合し、消費後の未呼出しを復活させない", async () => temporary(async (store) => {
     let wall = 1000; let monotonic = 1000; let calls = 0;
-    const authority = createExecutorApprovalAuthority({ execution_store: store, ticket_ttl_ms: 100,
+    const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: store.executionEpoch, ticket_ttl_ms: 100,
       clock: { wallNow: () => wall, monotonicNow: () => monotonic } });
     const executor = new Executor({ approval_authority: authority, tools: new ToolRegistry(),
       llm: { name: "fixture", call: async () => { calls++; return { content: "青", model: "fixture", tokens_used: 0 }; } },
@@ -99,6 +100,37 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
     expect(() => authority.approve(source, proof(source))).toThrow(/command already issued/);
   }));
 
+  it("新owner世代の永続storeは期限内でも旧世代ticketの発行・消費・開始・確定を拒否する", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-intent-generation-"));
+    const filepath = join(root, "executor.sqlite");
+    const originalEpoch = randomUUID(); const currentEpoch = randomUUID();
+    const original = new GatewayExecutionIntentStore(filepath, originalEpoch);
+    try {
+      const { authority } = rig(original);
+      const approved = authority.approve(command(), proof());
+      const oldTicket = authority.receipt(approved)!;
+      original.close();
+
+      const restarted = new GatewayExecutionIntentStore(filepath, currentEpoch);
+      try {
+        const worker = { worker_id: randomUUID(), worker_pid: process.pid + 1, worker_platform: process.platform, worker_started_at_ms: Date.now() };
+        expect(restarted.lookup(oldTicket.ticket_id)?.execution_epoch).toBe(originalEpoch);
+        expect(() => restarted.issue(oldTicket)).toThrow(/owner generation mismatch/);
+        expect(() => restarted.consume(oldTicket, Date.now())).toThrow(/owner generation mismatch/);
+        expect(() => restarted.markInvocation(oldTicket, "tool_adapter", Date.now())).toThrow(/owner generation mismatch/);
+        expect(() => restarted.bindWorker(oldTicket, worker, Date.now())).toThrow(/owner generation mismatch/);
+        expect(() => restarted.observeWorkerExit(oldTicket, worker, Date.now())).toThrow(/owner generation mismatch/);
+        expect(() => restarted.complete(oldTicket, { state: "not_attempted", feedback_status: "failed", observed_at_ms: Date.now() }))
+          .toThrow(/owner generation mismatch/);
+        expect(restarted.lookup(oldTicket.ticket_id)?.state).toBe("issued");
+        expect(restarted.verifyEvents()).toBe(true);
+      } finally { restarted.close(); }
+    } finally {
+      try { original.close(); } catch { /* already closed before reopen */ }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("consume commit後の返却喪失では下流0、receipt保存喪失では成功を返さず再作用0", async () => {
     for (const failure of ["consume", "complete"]) await temporary(async (store) => {
       let calls = 0;
@@ -107,7 +139,7 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
         consume: (t, n) => { store.consume(t, n); if (failure === "consume") throw new Error("fixture commit acknowledgement lost"); },
         complete: (t, r) => { if (failure === "complete") throw new Error("fixture receipt lost"); store.complete(t, r); },
       };
-      const { authority, executor } = rig(port, undefined, async () => { calls++; return "青"; });
+      const { authority, executor } = rig(port, undefined, async () => { calls++; return "青"; }, store.executionEpoch);
       const approved = authority.approve(command(), proof());
       const feedback = await executor.execute(approved);
       expect(feedback.status).toBe("failed");
@@ -128,18 +160,19 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
       const db = new DatabaseSync(join(root, "executor.sqlite"));
       db.exec(corruption === "delete" ? "DELETE FROM execution_events" : "UPDATE execution_events SET event_json='{}'"); db.close();
       expect((await executor.execute(approved)).error).toMatch(/integrity_failed/); expect(calls).toBe(0);
-      expect(() => new GatewayExecutionIntentStore(join(root, "executor.sqlite"))).toThrow(/integrity_failed/);
+      expect(() => new GatewayExecutionIntentStore(join(root, "executor.sqlite"), store.executionEpoch)).toThrow(/integrity_failed/);
     });
   });
 
   it("別processの同ID競合と実invoke中killを私有SQLiteへ保持し、再照会は作用しない", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-intent-process-"));
+    const executionEpoch = randomUUID();
     const children: ChildProcess[] = [];
     const env: NodeJS.ProcessEnv = {};
     for (const name of ["PATH", "Path", "SystemRoot", "SYSTEMROOT", "ComSpec", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA"])
       if (process.env[name]) env[name] = process.env[name];
     const spawnWorker = (id: string, mode: string) => {
-      const child = fork(join(process.cwd(), "apps/gateway/test/fixtures/execution_intent_worker.ts"), [root, id, mode],
+      const child = fork(join(process.cwd(), "apps/gateway/test/fixtures/execution_intent_worker.ts"), [root, id, mode, executionEpoch],
         { execArgv: ["--import", "tsx"], env, windowsHide: true, stdio: ["ignore", "ignore", "ignore", "ipc"] });
       children.push(child); return child;
     };
@@ -156,7 +189,7 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
       const invoked = once(interrupted, "message"); interrupted.send("start");
       expect((await invoked)[0]).toEqual("invoked");
       const exited = once(interrupted, "exit"); interrupted.kill(); await exited;
-      const reopened = new GatewayExecutionIntentStore(join(root, "executor.sqlite"));
+      const reopened = new GatewayExecutionIntentStore(join(root, "executor.sqlite"), executionEpoch);
       try {
         expect(reopened.lookupCommand(key("race"))?.state).toBe("adapter_returned");
         expect(reopened.lookupCommand(key("crash"))?.state).toBe("outcome_unknown");
