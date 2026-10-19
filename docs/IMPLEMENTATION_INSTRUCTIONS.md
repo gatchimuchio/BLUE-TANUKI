@@ -1,14 +1,12 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 直近のActions環境確認
+### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
-一時workflow登録commit `088733474aa34f69d37bedd9c95c1b6258331d8a`に対するLinux検査commit `b4756cccdf43bab4ce76d28475976b311de6c549`の[Actions run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は、Ubuntu 24.04 runnerのAppArmor user namespace確認段階で停止した。runnerに既存Bubblewrap profileファイルまたはロード済profileがあったためで、Linux helper buildとfocused testは未実行。製品／testの失敗とは判定しない。既存profileを上書き・解除しないよう、一時workflow内で既存runner policyを変更せずBubblewrap namespaceの最小probeを行い、未設定時だけjob内一時profileを作成する。probeが既存policyで通らない場合はそのままfail-closedし、既存policyを改変しない。検査対象branchは`codex/linux-per-file-size-bound`。Actions許可はD4-Pocket現行AGENTS §3.1条件に限り、successful exact SHAを確認するまでmainへ製品commitを入れない。
+WindowsではLinux native runtimeを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1条件のmanual `workflow_dispatch`を使った。一時workflow登録commitは`088733474aa34f69d37bedd9c95c1b6258331d8a`。最初の[run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は既存runner AppArmor profileを変更しないガードで停止し、build/test未実行。修正版の[run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)ではpolicyを保ったnamespace probeとbuildは成功したが、stderrのOS文言差でtest期待値が不一致だった。
 
-修正したrunner-policy確認を含むcommit `3577658e9b9cdc02deddb9bfec88d3ed4e54370f`の[Actions run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)では、既存policyを変えずnamespace probeとLinux workspace/helper buildがPASSした。focused testは実行され、exit code非0の確認後、stderrが`File size limit exceeded (core dumped)`だったため固定期待値`File too large`で失敗した。file size上限とprocess-tree回収の後続assertionは未到達で、まだ未確認。test期待値を両Linux文言へ広げ、file size／process回収を再実行して確認する。
+[run 39309408466](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309408466)は検査対象SHA `7f064af4acfaa6e94c58529ed123c7c2ee8babbe`で成功。`pnpm build`とLinux helper buildがPASSし、production `shell.exec`経由のfocused testは`1 passed / 61 skipped`。65 MiBのfile作成要求が64 MiBの`LimitFSIZE`で止まり、非0終了、上限内のfileサイズ、空のprocess treeを確認した。既存AppArmor policyは変更せず、artifact／credential／外部作用なし。この証拠は単一file上限に限り、workspace aggregate disk quota、Linux installed product、QE_QC／QE_QA、releaseを証明しない。検証用workflowと一時branchはsuccess後に削除した。
 
-## 次のBUILD_BATCH（計画中）：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
-
-Windows上ではLinux native runtimeを直接実行できないため、既存`systemd-run LimitFSIZE`設定のproduction consumerを一つの合成shell呼出しで確認する。65 MiBのsparse file作成を試し、64 MiB per-file limitで拒否されることを検証する。GitHub ActionsはD4-Pocket現行AGENTS §3.1に従う一時`workflow_dispatch`だけを使い、対象SHAの検証後にworkflowと一時branchを撤去する。これは単一file上限の証拠であり、aggregate workspace disk quota、Linux installed product、QA／releaseの証拠ではない。
+**次consumerの未接続:** writable workspaceにはaggregate disk quotaがない。D07.02／F01.02は`BUILD_GAP`を維持し、次の実装では既存workspace consumerにaggregate容量制御をどう接続できるかを調査する。今回のper-file testを全体隔離の完成証拠へ昇格させない。
 
 ## 直近の施工・監査結果と次のconsumer
 
