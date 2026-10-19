@@ -2,11 +2,23 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 2026-10-19 D02.02 host/task identity producer監査
+
+開始HEAD／origin/mainは`e16a0479052f08def31c5bf334aae9c7ce94335e`、BLUE worktreeはclean。QE rev2.3三点正本と適用AGENTS／作業標準／active指示を再読し、D02.02要求とGatewayのticket・worker経路、D4の現行契約を読取照合した。
+
+BLUEではGateway起動時のexecution epoch、永続ticketの単回消費、固定file-search childとの継承IPC、parentによるchild PID／worker ID照合、HDS upstream decision request IDへのcommand digest結合が存在する。これはローカルGateway世代・worker・要求の境界であり、task_id、安定host/device identity、独立issuer／remote audienceを発行するproducerではない。upstream decision request IDを別概念のtask_idへ読み替えない。D02.02全体はBUILD_GAPのまま。
+
+D4のHost registryはHost ID等の表示metadataだけでPermission／Authority／接続資格を生成しない。Device Linkには別の認証transport契約と実装部品があるが、BLUE側にそれを消費する接続は見つからなかった。D4のAgent Runtime契約はRuntime／Session／登録Workspaceの現在関係を要求し、現行BLUE Adapterにはread-only projection群だけがあり、Runtime登録／task input consumerはない。D4は通常Release task_execution=unsupported、release_ready=falseを維持しているため、D4 metadataをBLUEのaudienceとして流用しない。
+
+D4 AGENTS §3.1のActions条件を確認した。今回必要なWindows実IPC確認はlocalで対象化でき、未対応OS build、artifact生成、localでは不足する重い検査に該当しないため、GitHub Actions／一時検証branch／workflow追加は未実施。D4 worktreeには別進行中B5差分があり、読取だけでBLUE・D4双方に変更していない。
+
+次の接続は、認証済みhost/task identityの実producerとconsumerが揃うまで架空IDで補わない。D03.01のD4 task inputは現行consumerがないため未接続。これはD02.02全体の完了やQE_BUILD停止を意味せず、別のBLUE所有consumerは独立して進める。C08.03 provider保留、P13 owner-GO／公開保留、他repo変更なしを維持する。
+
 ### 最新BUILD_BATCH：`QEB-01-D02.02-FILE-SEARCH-WORKER-OWNER-AUDIENCE-AND-TASK-BINDING`
 
 開始HEAD／`origin/main`=`0784acc3214df505eaeb7e33f307503512eaab7e`、開始worktree clean。QE rev2.3三点正本（ZIP SHA-256=`779452ac46ed2e42040afdcbb5f4e918b71b6fccf436c194a69ed16d07f5e249`）、適用AGENTS／作業標準／active指示、D02.02要求とfile.search producer→worker実物を読み直した。D4-Pocket現行AGENTS §3.1を確認し、Actionsはworkflow_dispatch限定の補助手段と判断。Windows上の実IPCを対象検査できるためActions未使用。編集前local recovery branch／remote backup tagはcurrent=`0784acc3214df505eaeb7e33f307503512eaab7e`、previous=`a1ecf73bd6b251afd63c81fd5a556fb85ffd2789`で一致。
 
-CLIとserveのfile.search worker生成へ、`GatewayRuntimeOwnerLease.executionEpoch`を必須の実行audienceとして渡す。親は固定childへその世代を環境経由で限定伝達し、childはticketの`execution_epoch`を同じ現行世代と照合してから要求を検証する。file.search child要求にはHDS `upstream_decision.request_id`を必須化した。既存のcanonical `command_digest`はrequest IDを含むcommand全体に結合されるため、同じticketの別request IDへの差替えはIPC consumerで拒否される。永続消費、親側worker PID／世代／exit照合は既存経路を維持する。
+CLIとserveのfile.search worker生成へ、`GatewayRuntimeOwnerLease.executionEpoch`を必須のローカル実行世代fenceとして渡す。親は固定childへその世代を環境経由で限定伝達し、childはticketの`execution_epoch`を同じ現行世代と照合してから要求を検証する。file.search child要求にはHDS `upstream_decision.request_id`を必須化した。既存のcanonical `command_digest`はrequest IDを含むcommand全体に結合されるため、同じticketの別request IDへの差替えはIPC consumerで拒否される。永続消費、親側worker PID／世代／exit照合は既存経路を維持する。
 
 | 限定確認 | 結果 |
 |---|---|
@@ -15,7 +27,7 @@ CLIとserveのfile.search worker生成へ、`GatewayRuntimeOwnerLease.executionE
 | `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
 | Gateway全suite／GitHub Actions／実provider／実credential／外部業務作用 | 未実施。ローカルの実IPC検査で今回の範囲を確認でき、Actions条件に該当しない。 |
 
-このaudienceはGateway ownerの実行世代であり、安定した物理host/device identityやD4 Broker Permission、OS sandboxを確立しない。repository内に独立host identity producerまたは別hostの正規実行経路は見つからず、D02.02全体とD02.01は`BUILD_GAP`。C08.03 provider保留、P13 owner-GO保留、別repo変更なしを維持する。次consumerは、実在するhost/device identityまたはremote-host issuer/audience producerの有無と、既存Gateway owner世代・継承IPCとの責務分界を現物で再確認すること。
+このexecution epochはGateway ownerの起動世代であり、安定した物理host/device identityやD4 Broker Permission、OS sandboxを確立しない。2026-10-19の再監査で、独立host identity producerや別hostの正規実行経路はBLUE内に見つからず、D4 Host registry metadataも認証済みaudienceではないと確認した。D02.02全体とD02.01は`BUILD_GAP`。実producer／consumerが現れない限り架空IDで埋めず、同じ検索を反復しない。C08.03 provider保留、P13 owner-GO保留、別repo変更なしを維持する。
 
 実装commit=`ab5d829e4c29263e8d611d29e4b2d4c858c4b11d`を`main`へpushし、直後のremote HEAD一致を確認。docs-only closeout commit=`fa12797e873d50c79e0316f462717a66367d7ac0`もpushし、その直後のremote mainとbackup tag二世代（current=`0784acc3214df505eaeb7e33f307503512eaab7e`、previous=`a1ecf73bd6b251afd63c81fd5a556fb85ffd2789`）、clean worktreeを照合した。
 
