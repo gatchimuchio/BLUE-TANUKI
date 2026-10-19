@@ -1458,6 +1458,7 @@ fn stable_error(error: &str) -> String {
             "workspace_overlay_whiteout_probe_operation_denied",
             "workspace_overlay_whiteout_probe_invalid_options",
             "workspace_overlay_whiteout_probe_unsupported",
+            "workspace_overlay_whiteout_probe_result_invalid",
             "workspace_overlay_whiteout_probe_failed",
             "workspace_commit_failed",
             "workspace_changed_during_execution",
@@ -1622,6 +1623,7 @@ mod tests {
             "workspace_overlay_whiteout_probe_operation_denied",
             "workspace_overlay_whiteout_probe_invalid_options",
             "workspace_overlay_whiteout_probe_unsupported",
+            "workspace_overlay_whiteout_probe_result_invalid",
             "workspace_overlay_whiteout_probe_failed",
         ] {
             let error =

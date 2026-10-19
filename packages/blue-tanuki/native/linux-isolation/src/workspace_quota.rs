@@ -4,7 +4,7 @@ use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
 pub const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -202,7 +202,7 @@ fn verify_overlay_whiteout_rename(workdir: &Path) -> Result<(), String> {
     let probe = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .mode(0)
         .open(&source)
         .map_err(|_| "workspace_overlay_whiteout_probe_setup_failed".to_string())?;
     drop(probe);
@@ -216,8 +216,16 @@ fn verify_overlay_whiteout_rename(workdir: &Path) -> Result<(), String> {
             libc::RENAME_WHITEOUT,
         )
     };
-    let probe_error =
-        (result != 0).then(|| whiteout_probe_error_code(io::Error::last_os_error().raw_os_error()));
+    let probe_error = if result != 0 {
+        Some(whiteout_probe_error_code(
+            io::Error::last_os_error().raw_os_error(),
+        ))
+    } else {
+        match fs::symlink_metadata(&source) {
+            Ok(metadata) if metadata.file_type().is_char_device() && metadata.rdev() == 0 => None,
+            _ => Some("workspace_overlay_whiteout_probe_result_invalid"),
+        }
+    };
 
     let source_removed = remove_whiteout_probe_path(&source);
     let destination_removed = remove_whiteout_probe_path(&destination);
