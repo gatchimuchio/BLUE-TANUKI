@@ -6,12 +6,21 @@ import { performance } from "node:perf_hooks";
 import type { FileSearchWorker, FileSearchWorkerRequest, ExecutionWorkerIdentity } from "@blue-tanuki/core";
 import { readWorkerPacket, workerPacket, validateWorkerResult } from "./file_search_worker_protocol.js";
 
+export interface FileSearchWorkerOptions {
+  /** Gateway起動時に所有leaseから得た、現在世代のworker audience。 */
+  execution_epoch: string;
+  env?: NodeJS.ProcessEnv;
+}
+
 /** 限定read-only worker。OS sandboxや独立D4 Broker Permissionを代替しない。 */
-export function createFileSearchWorker(env: NodeJS.ProcessEnv = process.env): FileSearchWorker {
+export function createFileSearchWorker(options: FileSearchWorkerOptions): FileSearchWorker {
+  if (!/^[0-9a-f-]{36}$/i.test(options.execution_epoch)) throw new Error("file_search_worker_execution_epoch_invalid");
+  const env = options.env ?? process.env;
   // 親の資格・NODE_OPTIONS・任意loader・plugin registryは継承しない。
   const workerEnv: NodeJS.ProcessEnv = {};
   for (const key of ["SystemRoot", "SYSTEMROOT", "WINDIR"]) if (env[key]) workerEnv[key] = env[key];
   if (env.BLUE_TANUKI_FILE_ROOT) workerEnv.BLUE_TANUKI_FILE_ROOT = resolve(env.BLUE_TANUKI_FILE_ROOT);
+  workerEnv.BLUE_TANUKI_EXECUTION_EPOCH = options.execution_epoch;
   return Object.freeze({ invoke: (request: FileSearchWorkerRequest) => invoke(request, workerEnv) });
 }
 

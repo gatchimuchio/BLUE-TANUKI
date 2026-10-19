@@ -18,7 +18,7 @@ export function readWorkerPacket(value: unknown): Record<string, unknown> {
       (packet as Record<string, unknown>).profile !== FILE_SEARCH_WORKER_PROFILE) throw new Error("file_search_worker_profile_mismatch");
   return packet as Record<string, unknown>;
 }
-export function validateWorkerRequest(packet: Record<string, unknown>, worker_id: string, now_ms: number): {
+export function validateWorkerRequest(packet: Record<string, unknown>, worker_id: string, expected_execution_epoch: string, now_ms: number): {
   command: Extract<ExecuteCommand, { type: "tool_call" }>;
   ticket: ExecutionIntentTicket;
   target_version_observation: FileSearchTargetVersionObservation;
@@ -38,6 +38,8 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
       ticket.issued_at_ms <= 0 || ticket.expires_at_ms <= ticket.issued_at_ms || ticket.expires_at_ms - ticket.issued_at_ms > 600_000 ||
       now_ms < ticket.issued_at_ms || now_ms >= ticket.expires_at_ms || command?.type !== "tool_call" ||
       command.payload?.tool_name !== "file.search" || command.upstream_decision?.commit_decision !== "ASSERT" ||
+      typeof command.upstream_decision.request_id !== "string" || command.upstream_decision.request_id.length < 1 ||
+      command.upstream_decision.request_id.length > 200 || ticket.execution_epoch !== expected_execution_epoch ||
       typeof requestedRoot !== "string" || target_version_observation.requested_root_digest !== createHash("sha256").update(requestedRoot, "utf8").digest("hex") ||
       ticket.command_digest !== executorCommandDigest(command) ||
       ticket.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex")) {

@@ -174,7 +174,7 @@ async function runCliWithExecutionStore(
     compute: new LLMComputeAdapter(llm),
     tools,
     approval_authority: executorApproval,
-    file_search_worker: createFileSearchWorker(process.env),
+    file_search_worker: createFileSearchWorker({ execution_epoch: ownerLease.executionEpoch, env: process.env }),
     session_store,
   });
 

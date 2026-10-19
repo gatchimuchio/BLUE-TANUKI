@@ -3,7 +3,9 @@ import { FILE_SEARCH_WORKER_PROFILE, readWorkerPacket, validateWorkerRequest, wo
 
 // 通常Gatewayから固定artifactと専用の継承IPCでだけ起動する。一般CLIではない。
 const worker_id = process.env.BLUE_TANUKI_WORKER_ID ?? "";
+const execution_epoch = process.env.BLUE_TANUKI_EXECUTION_EPOCH ?? "";
 if (!process.send || !process.connected || !/^[0-9a-f-]{36}$/.test(worker_id) ||
+    !/^[0-9a-f-]{36}$/i.test(execution_epoch) ||
     !["win32", "linux", "darwin"].includes(process.platform)) process.exit(2);
 let accepted = false;
 process.on("disconnect", () => process.exit(2));
@@ -12,7 +14,7 @@ process.on("message", async (value: unknown) => {
   if (accepted) { process.exit(2); return; }
   accepted = true;
   let request: ReturnType<typeof validateWorkerRequest>;
-  try { request = validateWorkerRequest(readWorkerPacket(value), worker_id, Date.now()); }
+  try { request = validateWorkerRequest(readWorkerPacket(value), worker_id, execution_epoch, Date.now()); }
   catch { process.exit(2); return; }
   const { command, ticket, target_version_observation } = request;
   let result: unknown;

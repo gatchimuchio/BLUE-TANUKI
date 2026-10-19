@@ -2,7 +2,24 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.02-PERSISTED-TICKET-OWNER-EPOCH-BINDING`
+### 最新BUILD_BATCH：`QEB-01-D02.02-FILE-SEARCH-WORKER-OWNER-AUDIENCE-AND-TASK-BINDING`
+
+開始HEAD／`origin/main`=`0784acc3214df505eaeb7e33f307503512eaab7e`、開始worktree clean。QE rev2.3三点正本（ZIP SHA-256=`779452ac46ed2e42040afdcbb5f4e918b71b6fccf436c194a69ed16d07f5e249`）、適用AGENTS／作業標準／active指示、D02.02要求とfile.search producer→worker実物を読み直した。D4-Pocket現行AGENTS §3.1を確認し、Actionsはworkflow_dispatch限定の補助手段と判断。Windows上の実IPCを対象検査できるためActions未使用。編集前local recovery branch／remote backup tagはcurrent=`0784acc3214df505eaeb7e33f307503512eaab7e`、previous=`a1ecf73bd6b251afd63c81fd5a556fb85ffd2789`で一致。
+
+CLIとserveのfile.search worker生成へ、`GatewayRuntimeOwnerLease.executionEpoch`を必須の実行audienceとして渡す。親は固定childへその世代を環境経由で限定伝達し、childはticketの`execution_epoch`を同じ現行世代と照合してから要求を検証する。file.search child要求にはHDS `upstream_decision.request_id`を必須化した。既存のcanonical `command_digest`はrequest IDを含むcommand全体に結合されるため、同じticketの別request IDへの差替えはIPC consumerで拒否される。永続消費、親側worker PID／世代／exit照合は既存経路を維持する。
+
+| 限定確認 | 結果 |
+|---|---|
+| `file_search_worker.test.ts` | PASS、9/9。実child IPCの正常検索に加え、内容変更、別request ID、request ID欠落、別owner世代、別worker、期限切れを拒否。再build前の初回負例実行では古い`dist` childが動いて1件失敗したため、Gatewayをbuildし直して再実行し9/9を確認。 |
+| `execution_intent_runtime.test.ts` | PASS、7/7。永続ticketの世代・期限・単回消費とprocess再起動時の拒否を確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| Gateway全suite／GitHub Actions／実provider／実credential／外部業務作用 | 未実施。ローカルの実IPC検査で今回の範囲を確認でき、Actions条件に該当しない。 |
+
+このaudienceはGateway ownerの実行世代であり、安定した物理host/device identityやD4 Broker Permission、OS sandboxを確立しない。repository内に独立host identity producerまたは別hostの正規実行経路は見つからず、D02.02全体とD02.01は`BUILD_GAP`。C08.03 provider保留、P13 owner-GO保留、別repo変更なしを維持する。次consumerは、実在するhost/device identityまたはremote-host issuer/audience producerの有無と、既存Gateway owner世代・継承IPCとの責務分界を現物で再確認すること。
+
+実装・文書のcommit／pushとremote HEAD照合はこのBUILD_BATCHのcloseout時に追記する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.02-PERSISTED-TICKET-OWNER-EPOCH-BINDING`
 
 開始HEAD／`origin/main`=`a1ecf73bd6b251afd63c81fd5a556fb85ffd2789`、開始worktree clean。QE rev2.3三点正本、適用AGENTS／作業標準／active指示、D02.01／D02.02関連実物を再読した。D4-Pocketの現行AGENTS §3.1を確認し、Actionsは`workflow_dispatch`限定でOS不足・artifact・localでは不足する重い検査の補助に使えることを確認した。今回のWindows検査で必要な対象を確認できたためActions未使用。編集前recovery current／previous branch・tagは`a1ecf73...`／`94952ec...`で照合済み。
 

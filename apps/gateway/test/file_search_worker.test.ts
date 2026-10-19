@@ -34,9 +34,10 @@ function rig(store: ExecutionIntentStore, workspace: string, worker?: FileSearch
   const tools = new ToolRegistry(); tools.register(fileSearchTool);
   const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch });
   const executor = new Executor({ tools, approval_authority: authority, llm,
-    file_search_worker: worker ?? createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace,
+    file_search_worker: worker ?? createFileSearchWorker({ execution_epoch,
+      env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace,
       // 継承されたらNode自体が起動できない。資格値を出力させる試験はしない。
-      NODE_OPTIONS: "--blue-forbidden-parent-option" }) });
+      NODE_OPTIONS: "--blue-forbidden-parent-option" } }) });
   return { authority, executor };
 }
 async function approve(authority: ReturnType<typeof createExecutorApprovalAuthority>, executor: Executor,
@@ -114,7 +115,8 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
       clock: { wallNow: () => wall, monotonicNow: () => monotonic } });
     const tools = new ToolRegistry(); tools.register(fileSearchTool);
     const executor = new Executor({ llm, tools, approval_authority: authority,
-      file_search_worker: createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace }) });
+      file_search_worker: createFileSearchWorker({ execution_epoch: store.executionEpoch,
+        env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace } }) });
     const approved = await approve(authority, executor, workspace);
     expect((await executor.execute(approved)).error).toMatch(/expired/);
     expect(authority.receipt(approved)).toMatchObject({ state: "not_attempted", worker_platform: process.platform });
@@ -149,7 +151,8 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
       clock: { wallNow: () => wall, monotonicNow: () => monotonic } });
     const tools = new ToolRegistry(); tools.register(fileSearchTool);
     const executor = new Executor({ llm, tools, approval_authority: authority,
-      file_search_worker: createFileSearchWorker({ SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace }) });
+      file_search_worker: createFileSearchWorker({ execution_epoch: store.executionEpoch,
+        env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace } }) });
     const approved = await approve(authority, executor, workspace);
     expect((await executor.execute(approved)).error).toMatch(/expired/);
     expect(authority.receipt(approved)).toMatchObject({ state: "outcome_unknown", worker_platform: process.platform });
@@ -164,13 +167,14 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
       .rejects.toThrow(/BLUE_TANUKI_FILE_ROOT/);
     const tools = new ToolRegistry(); let customCalls = 0;
     tools.register({ ...fileSearchTool, invoke: async () => { customCalls++; return {}; } });
-    const custom = new Executor({ llm, tools, approval_authority: authority, file_search_worker: createFileSearchWorker({ BLUE_TANUKI_FILE_ROOT: workspace }) });
+    const custom = new Executor({ llm, tools, approval_authority: authority,
+      file_search_worker: createFileSearchWorker({ execution_epoch: store.executionEpoch, env: { BLUE_TANUKI_FILE_ROOT: workspace } }) });
     expect((await custom.execute(authority.approve(source(), proof()))).error).toMatch(/registered built-in/);
     expect(customCalls).toBe(0);
   }));
 
   it("実IPC childは改変内容・別worker・期限切れのpacketから結果を返さない", async () => temporary(async (store, workspace) => {
-    for (const kind of ["content", "worker", "expired"]) {
+    for (const kind of ["content", "task", "missing-task", "epoch", "worker", "expired"]) {
       const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: store.executionEpoch });
       const commandSource = source();
       const { executor } = rig(store, workspace);
@@ -179,7 +183,8 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
       const ticket = authority.receipt(approved)!;
       const worker_id = randomUUID();
       const child = spawn(process.execPath, [fileURLToPath(new URL("../dist/file_search_worker_child.js", import.meta.url))], {
-        env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace, BLUE_TANUKI_WORKER_ID: worker_id },
+        env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace,
+          BLUE_TANUKI_WORKER_ID: worker_id, BLUE_TANUKI_EXECUTION_EPOCH: store.executionEpoch },
         stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true,
       });
       const closed = once(child, "close"); const timer = setTimeout(() => child.kill(), 10_000);
@@ -191,6 +196,12 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
         const packetTicket = { ticket_id: ticket.ticket_id, command_key: ticket.command_key, command_digest: executorCommandDigest(command),
           proof_digest: ticket.proof_digest, execution_epoch: ticket.execution_epoch, issued_at_ms: ticket.issued_at_ms, expires_at_ms: ticket.expires_at_ms };
         if (kind === "content") command.payload.arguments.query = "changed";
+        if (kind === "task") command.upstream_decision.request_id = randomUUID();
+        if (kind === "missing-task") {
+          delete command.upstream_decision.request_id;
+          packetTicket.command_digest = executorCommandDigest(command);
+        }
+        if (kind === "epoch") packetTicket.execution_epoch = randomUUID();
         if (kind === "expired") packetTicket.expires_at_ms = packetTicket.issued_at_ms + 1;
         child.send(workerPacket({ type: "execute", worker_id: kind === "worker" ? randomUUID() : worker_id,
           ticket: packetTicket, command, target_version_observation: targetVersion }));
