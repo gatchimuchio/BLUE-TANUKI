@@ -102,6 +102,8 @@ describe("document organization ordinary entries", () => {
         : "";
       expect(persistedAudit).not.toContain(firstExcerpt);
       expect(persistedAudit).not.toContain(secondExcerpt);
+      expect(persistedHistory).toContain('"actor":"webchat-inbound-token-holder"');
+      expect(persistedHistory).not.toContain('"actor":"c0801-owner"');
       expect(persistedHistory).not.toContain(firstExcerpt);
       expect(persistedHistory).not.toContain(secondExcerpt);
       expect(persistedSessions).not.toContain(firstExcerpt);

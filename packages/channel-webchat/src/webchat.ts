@@ -81,6 +81,8 @@ const DEFAULT_RATE_LIMITS: Required<WebChatRateLimits> = {
   resume: { capacity: 5, refill_per_sec: 0.5 },
   ws_ticket: { capacity: 3, refill_per_sec: 10 / 60 },
 };
+const INBOUND_TOKEN_ACTOR = "webchat-inbound-token-holder";
+const WEBHOOK_TOKEN_ACTOR = "webchat-webhook-token-holder";
 const RESUME_TOKEN_ACTOR = "webchat-resume-token-holder";
 
 const RESUME_GLOBAL_KEY = "*";
@@ -657,11 +659,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const inboundReq: InboundRequest = {
         id: randomUUID(),
         channel: "webchat",
-        user,
+        // `user` is an unauthenticated reply destination. Keep it in metadata;
+        // the audit/approval actor is only the credential class validated above.
+        user: INBOUND_TOKEN_ACTOR,
         content,
         timestamp: Date.now(),
-        // WebChat targets users by literal user name (the WS connection map
-        // is keyed on it). reply_to mirrors that for symmetry with Slack/Discord.
         metadata: { reply_to: user },
       };
       this.handler?.(inboundReq).catch((e: unknown) => {
@@ -686,13 +688,13 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         );
         return;
       }
-      const user = nonEmptyString(body?.user) ?? "webhook";
+      const replyUser = nonEmptyString(body?.user) ?? "webhook";
       const source = nonEmptyString(body?.source) ?? "generic";
-      const reply_to = nonEmptyString(body?.reply_to) ?? user;
+      const reply_to = nonEmptyString(body?.reply_to) ?? replyUser;
       if (
         !this.rateLimitOr429(
           this.buckets.inbound,
-          `webhook:${source}:${user}`,
+          `webhook:${source}:${replyUser}`,
           res,
         )
       )
@@ -700,7 +702,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const inboundReq: InboundRequest = {
         id: randomUUID(),
         channel: "webchat",
-        user,
+        // The authenticated webhook credential identifies only its holder class;
+        // payload labels remain reply-routing metadata, never an audit identity.
+        user: WEBHOOK_TOKEN_ACTOR,
         content,
         timestamp: Date.now(),
         metadata: {

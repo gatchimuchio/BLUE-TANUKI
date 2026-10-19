@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-01-D02.02-WEBCHAT-INBOUND-PRINCIPAL-PROVENANCE`では、検証済みWebChat inbound／webhook bearerのcredential classをGateway actorへ渡し、caller bodyのuser／actorラベルを監査主体として使わない。body userはreply routingに残る。これは共有token保有者クラスであり個人identity・owner証明ではない。task purpose version／GoalGovernance source／Broker target identityは未成立。WebChat 84/84、Gateway integration 3/3、typecheck、buildはPASS。
+
 2026-10-19の`QEB-01-D02.02-WEBCHAT-RESUME-PRINCIPAL-PROVENANCE`では、WebChatのresume bearerと単回approval tokenを通過した操作について、caller-supplied actor文字列を監査主体にせず固定credential-class actorをGatewayへ渡す。個人identity証明ではなく、初期InboundRequest actor／GoalGovernance source／task purpose-version／Broker targetの接続は未成立。D02.01=`BUILD_GAP`を維持する。WebChat tests 83/83、typecheck、buildはPASS。
 
 2026-10-19の`QEB-01-D02.01-GOAL-GOVERNANCE-SOURCE-BINDING`では、設定済みHDS GoalGovernance projectionのdigestをHDS source sealとExecutor ticket proofへ結合した。projectionは`used_for_authority=false`で、判断・権限は変わらない。Gateway productionでのGoalGovernance設定、owner本人認証、purpose版の実仕事への適用、Broker target identity接続は未成立であり、D02.01=`BUILD_GAP`を維持する。HDS／Executor focused tests 12/12、typecheck、build、standaloneはPASS。

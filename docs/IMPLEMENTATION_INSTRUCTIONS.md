@@ -2,7 +2,25 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.02-WEBCHAT-RESUME-PRINCIPAL-PROVENANCE`
+### 最新BUILD_BATCH：`QEB-01-D02.02-WEBCHAT-INBOUND-PRINCIPAL-PROVENANCE`
+
+開始HEAD／`origin/main`=`f0d1023d8645bd9febd465ef91a62fadfb22a2d3`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、root`AGENTS.md`、作業標準、active指示、D02とWebChat→Gateway→HDS/Executorの実経路を再読した。編集前に開始HEADをlocal `backup-main`／remote tag `codex/backup-main`へ、前世代`059899f...`を各`backup-main-prev`へ期待値照合して保全した。旧remote backup branchは存在しないことを確認。D01.03 stash保持。
+
+検証済みinbound bearerを通った`POST /inbound`は、本文の`user`をGateway actorへ使わず`webchat-inbound-token-holder`を設定し、本文userは`reply_to`だけに保持する。専用webhook bearerの`/webhook`も`webchat-webhook-token-holder`をactorとし、本文のuser/source/metadataをactorにしない。Gatewayの通常handlerはこの`InboundRequest.user`をHDS・complete history・approval evaluationへ渡す。合成のGateway/WebChat E2Eでcomplete historyのactorがcredential classとなり、caller指定`c0801-owner`を使わないことを確認した。
+
+これは共有bearerの検証済み保有者クラスであり、個人identity、owner本人、委任権限を証明しない。`/ws-ticket`のbody userとWebSocket接続先は既存の返信routingに残るため、個人別session認証は未成立。GoalGovernance production source、task-specific purpose version、Brokerの独立target identityも未接続で、D02.01／D02.02とも`BUILD_GAP`。
+
+| 限定確認 | 結果 |
+|---|---|
+| WebChat `webchat.test.ts` | PASS、84/84。inbound body user/actorを監査主体にせず、返信先metadataを維持。webhookもcredential classを分離。 |
+| Gateway `document_organization_entry.test.ts` | PASS、3/3。workspace rootから再実行し、WebChat route→Gateway→HDS/historyまでcredential-class actorを確認。package cwdからの初回実行はroot相対script解決で失敗したため、test harnessを変更せず正しいroot cwdで再実行。 |
+| `pnpm typecheck`／`pnpm build` | PASS。 |
+| 全workspace tests／Gateway live serve／QE_QC／QE_QA／5OS実機 | 未実施。 |
+| Git | 本記録は次commitに含め、BUILD_BATCH単位で`main`へpushする。 |
+
+実provider／実credential／業務作用、D4Pocket／ミニドラ変更、公開・出荷判断なし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はcredential-classを人間identityへ昇格させず、信頼できるowner-governance source・適用purpose version・taskとBroker targetを結ぶ実consumerを進める。
+
+### 前回BUILD_BATCH：`QEB-01-D02.02-WEBCHAT-RESUME-PRINCIPAL-PROVENANCE`
 
 開始HEAD／`origin/main`=`059899f2c065dbc05322f31535d30cb617ef20c8`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、root`AGENTS.md`、作業標準、active指示、D02.02、WebChat→Gateway→Executorの実経路を再読した。編集前の復元ref回転を編集差分作成後に気づいたため、commit前に開始HEADをCASで復元点へ追加した。終了前確認時のlocal branch／remote backup tagはcurrent=`059899f...`／previous=`3002c42...`。D01.03 stashは保持。
 
@@ -13,7 +31,7 @@ resume bearerを検証し、一回限りのapproval tokenを消費した`POST /r
 | WebChat `webchat.test.ts` | PASS、83/83。二つのresume routeでcaller-supplied actorを監査主体に採用せず、credential classを記録。 |
 | `pnpm typecheck`／`pnpm build` | PASS。 |
 | 全workspace tests／Gateway live serve／QE_QC／QE_QA／5OS実機 | 未実施。 |
-| Git | 本記録は次commitに含め、BUILD_BATCH単位で`main`へpushする。 |
+| Git | commit=`f0d1023d8645bd9febd465ef91a62fadfb22a2d3`を`main`へpush済み。後続バッチ開始時に復元refを回転。 |
 
 実provider／credential／業務作用、D4Pocket／ミニドラ変更、公開・出荷判断なし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次は認証済みresume principalをJ所有の委任・目的版sourceへ接続し、task-specific goal/versionとBroker targetまで結ぶ。resume principalだけから人間identityや権限を推定しない。
 

@@ -1898,7 +1898,7 @@ describe("WebChatChannel — HTTP inbound", () => {
     expect(r.status).toBe(401);
   });
 
-  it("accepts POST /inbound with valid auth and stamps reply_to in metadata", async () => {
+  it("accepts POST /inbound with valid auth and separates credential actor from reply destination", async () => {
     const r = await postJson(
       ctx.port,
       "/inbound",
@@ -1909,8 +1909,23 @@ describe("WebChatChannel — HTTP inbound", () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(ctx.received).toHaveLength(1);
     const got = ctx.received[0]!;
-    expect(got.user).toBe("u1");
+    expect(got.user).toBe("webchat-inbound-token-holder");
     expect(got.metadata?.reply_to).toBe("u1");
+  });
+
+  it("does not accept a caller-selected actor label on authenticated inbound", async () => {
+    const r = await postJson(
+      ctx.port,
+      "/inbound",
+      { user: "forged-owner", actor: "owner", content: "hello" },
+      { authorization: `Bearer ${TOKEN}` },
+    );
+    expect(r.status).toBe(202);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(ctx.received).toHaveLength(1);
+    expect(ctx.received[0]?.user).toBe("webchat-inbound-token-holder");
+    expect(ctx.received[0]?.metadata?.reply_to).toBe("forged-owner");
+    expect(ctx.received[0]?.metadata).not.toHaveProperty("actor");
   });
 
   it("rejects direct tool shortcuts from normal WebChat inbound", async () => {
@@ -2011,7 +2026,7 @@ describe("WebChatChannel - HTTP webhook inbound", () => {
       expect(ctx.received).toHaveLength(1);
       const got = ctx.received[0]!;
       expect(got.channel).toBe("webchat");
-      expect(got.user).toBe("ci-bot");
+      expect(got.user).toBe("webchat-webhook-token-holder");
       expect(got.content).toBe("deploy finished");
       expect(got.metadata).toEqual({
         reply_to: "ops",
@@ -2036,7 +2051,7 @@ describe("WebChatChannel - HTTP webhook inbound", () => {
       );
       expect(r.status).toBe(202);
       await new Promise((r) => setTimeout(r, 30));
-      expect(ctx.received[0]?.user).toBe("webhook");
+      expect(ctx.received[0]?.user).toBe("webchat-webhook-token-holder");
       expect(ctx.received[0]?.content).toBe('{"kind":"build","status":"green"}');
       expect(ctx.received[0]?.metadata).toEqual({
         reply_to: "webhook",
