@@ -186,6 +186,71 @@ jobs:
             fi
           fi
 
+      - name: Compare root namespace OverlayFS in a throwaway mount namespace
+        shell: bash
+        run: |
+          set -u
+          root_base="$RUNNER_TEMP/overlay-root-probe"
+          root_script="$RUNNER_TEMP/overlay-root-probe.py"
+          mkdir -m 0700 "$root_base"
+          cat > "$root_script" <<'PY'
+          import ctypes
+          import errno
+          import os
+          import sys
+
+          libc = ctypes.CDLL(None, use_errno=True)
+          libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p]
+          libc.umount.argtypes = [ctypes.c_char_p]
+
+          def mount(source, target, filesystem, flags=0, options=None):
+              result = libc.mount(
+                  source.encode() if source else None,
+                  target.encode(),
+                  filesystem.encode() if filesystem else None,
+                  flags,
+                  options.encode() if options else None,
+              )
+              return result, ctypes.get_errno()
+
+          def report(name, result, error):
+              print(f"{name}: result={result} errno={error} {errno.errorcode.get(error, 'OK')}", flush=True)
+
+          base = sys.argv[2]
+          lower_source = sys.argv[1]
+          lower = os.path.join(base, 'lower')
+          storage = os.path.join(base, 'storage')
+          upper = os.path.join(storage, 'upper')
+          work = os.path.join(storage, 'work')
+          workspace = os.path.join(base, 'workspace')
+          for path in (lower, storage, workspace):
+              os.mkdir(path, 0o700)
+
+          result, error = mount(lower_source, lower, None, 4096)
+          report('root_lower_bind', result, error)
+          if result != 0:
+              raise SystemExit(0)
+          result, error = mount(None, lower, None, 4096 | 32 | 1)
+          report('root_lower_readonly', result, error)
+          if result != 0:
+              raise SystemExit(0)
+
+          result, error = mount('tmpfs', storage, 'tmpfs', 2 | 4, 'size=134217728,nr_inodes=100000,mode=0700')
+          report('root_tmpfs_mount', result, error)
+          if result != 0:
+              raise SystemExit(0)
+          os.mkdir(upper, 0o700)
+          os.mkdir(work, 0o700)
+
+          options = f'lowerdir={lower},upperdir={upper},workdir={work},userxattr,redirect_dir=nofollow,metacopy=off,index=off'
+          result, error = mount('overlay', workspace, 'overlay', 2 | 4, options)
+          report('root_overlay_mount', result, error)
+          if result == 0:
+              print(f"root_overlay_readback={open(os.path.join(workspace, 'probe'), encoding='utf-8').read()}", flush=True)
+              libc.umount(workspace.encode())
+          PY
+          sudo unshare --mount --propagation private /usr/bin/python3 "$root_script" "$RUNNER_TEMP/overlay-lower" "$root_base"
+
       - name: Set up Rust toolchain
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt
