@@ -404,6 +404,75 @@ describe("WebChatChannel — Control Center shell", () => {
       .toBe("未確認（表示を抑止）");
   });
 
+  it("renders a verified result plan beside a held residual plan in one snapshot", () => {
+    const helperStart = CONTROL_CENTER_SCRIPT.indexOf("function byId(");
+    const helperEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function toneForBoolean(", helperStart + 1);
+    const objectHelperStart = CONTROL_CENTER_SCRIPT.indexOf("function isObject(");
+    const objectHelperEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", objectHelperStart + 1);
+    const rendererStart = CONTROL_CENTER_SCRIPT.indexOf("function operationPlanStatusTone(");
+    const rendererEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function renderRuntime(", rendererStart + 1);
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    expect(objectHelperStart).toBeGreaterThanOrEqual(0);
+    expect(objectHelperEnd).toBeGreaterThan(objectHelperStart);
+    expect(rendererStart).toBeGreaterThanOrEqual(0);
+    expect(rendererEnd).toBeGreaterThan(rendererStart);
+
+    const nodes: Record<string, { textContent?: string; className?: string; innerHTML?: string }> = {
+      "operation-plan-state-summary": { textContent: "", className: "" },
+      "operation-plan-state-list": { textContent: "", className: "", innerHTML: "" },
+    };
+    const document = { getElementById: (id: string) => nodes[id] ?? null };
+    const observation = {
+      schema_version: "operation-plan.status.v1",
+      status: "available",
+      used_for_authority: false,
+      raw_payload_exposed: false,
+      recovery_refresh_status: "ready",
+      displayed_count: 2,
+      plan_count: 2,
+      private_search_line: "SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER",
+      plans: [
+        {
+          plan_id: "a".repeat(64), revision: 3, revision_digest: "b".repeat(64),
+          status: "results_verified", step_count: 2,
+          steps: [
+            { step_id: "c".repeat(64), operation: "file.search", status: "verified",
+              binding: { command_digest: "d".repeat(64), result_digest: "e".repeat(64), delivery_digest: "f".repeat(64) } },
+            { step_id: "1".repeat(64), operation: "file.search", status: "verified",
+              binding: { command_digest: "2".repeat(64), result_digest: "3".repeat(64), delivery_digest: "4".repeat(64) } },
+          ],
+        },
+        {
+          plan_id: "5".repeat(64), revision: 1, revision_digest: "6".repeat(64),
+          status: "held_residual", step_count: 1,
+          recovery_hold_reason: "held_residual", recovery_hold_scope_relation: "collateral",
+          steps: [{ step_id: "7".repeat(64), operation: "file.search", status: "outcome_unknown",
+            external_receipt_observation: "not_recorded",
+            binding: { command_digest: "8".repeat(64), result_digest: "9".repeat(64), delivery_digest: "a".repeat(64) } }],
+        },
+      ],
+    };
+    const script = [
+      CONTROL_CENTER_SCRIPT.slice(helperStart, helperEnd),
+      CONTROL_CENTER_SCRIPT.slice(objectHelperStart, objectHelperEnd),
+      CONTROL_CENTER_SCRIPT.slice(rendererStart, rendererEnd),
+      "renderOperationPlanStatus(observation);",
+    ].join("\n");
+    new Script(script).runInNewContext({ document, observation });
+
+    expect(nodes["operation-plan-state-summary"]?.textContent).toBe("2 / 2 件");
+    expect(nodes["operation-plan-state-summary"]?.className).toBe("badge good");
+    const rendered = nodes["operation-plan-state-list"]?.innerHTML ?? "";
+    expect(rendered).toContain('<span class="badge good">results_verified</span>');
+    expect(rendered).toContain('<span class="badge review">held_residual</span>');
+    expect(rendered).toContain("復元残差あり（step選択停止中）");
+    expect(rendered).toContain("新しい依頼から新規計画を作成してください。");
+    expect(rendered).toContain("実行結果digest");
+    expect(rendered).toContain("J配送digest");
+    expect(rendered).not.toContain("SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER");
+  });
+
   it("projects only verified scope-applicability enums and digest fields", () => {
     const functionSource = (name: string): string => {
       const start = CONTROL_CENTER_SCRIPT.indexOf(`function ${name}(`);

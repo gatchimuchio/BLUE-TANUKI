@@ -14,7 +14,8 @@
 |---|---|
 | Gateway `recovery_mutation_entry.test.ts` の対象test | PASS。`operation_plan_status`に両verified step／result digestと残差holdが投影され、非権威・raw非露出を確認。 |
 | Gateway `typecheck` | PASS。 |
-| `pnpm --filter @blue-tanuki/channel-webchat test -- test/webchat.test.ts` | PASS。82/82。既存shell/API確認でありcombined snapshotのDOM描画を含まない。 |
+| `pnpm --filter @blue-tanuki/channel-webchat test -- test/webchat.test.ts` | PASS。83/83。Control Centerのrenderer関数へcombined snapshotを渡すVM fixtureを含む。 |
+| VM renderer output（`results_verified`＋`held_residual`） | PASS。実`renderOperationPlanStatus`のHTML文字列出力と安全な新規計画案内を確認。in-memory sinkでありbrowser DOM実行ではない。 |
 | 隔離Control Center combined-snapshot DOM smoke | NOT_RUN。in-app browserのURL policyがsynthetic loopback URLを拒否。迂回なし。 |
 | `pnpm build` | NOT_RUN。製品sourceは変更していない。 |
 | `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底ゲートは既存の移行負債76件を警告。 |
@@ -22,7 +23,7 @@
 
 復旧後の依存2-step実行結果→Gateway status projectionまでfixtureで`WIRED`。E03.03全体は`BUILD_GAP`。次consumerは実際のControl Center rendererがこのRuntime Snapshotを読み、結果状態とheld residualの安全な次操作を一つの表示で確かめること。
 
-後続確認として`pnpm --filter @blue-tanuki/channel-webchat test -- test/webchat.test.ts`は82/82 PASS。既存shell内容・Runtime Snapshot APIの確認であり、`results_verified`と`held_residual`を同時に渡したControl Center DOM描画の証拠ではない。隔離fixtureページをin-app browserで開く試みはbrowser URL policyに拒否され、DOM実行は`NOT_RUN`。保護を迂回する操作はしていない。この拒否は製品動作の失敗を示すものではないが、UI consumerの結合証拠は未成立のため`BUILD_GAP`を維持する。次は許可された既存UI／DOM検証経路が使える場合に同じ合成snapshotを確認する。経路が使えなければ迂回を追加せず、残るQE_BUILD consumerを進めて未確認を維持する。
+後続確認として同test fileは83/83 PASS。追加したVM fixtureは実`renderOperationPlanStatus`へ`results_verified`と`held_residual`を同時に渡し、status/digest、held residualのstep停止、新しい依頼から新規計画を作る案内、raw検索行非露出を文字列sinkで確認する。これは`FIXTURE`のrenderer出力であり、browser DOM証拠ではない。隔離fixtureページをin-app browserで開く試みはbrowser URL policyに拒否され、DOM実行は`NOT_RUN`。保護を迂回する操作はしていない。この拒否は製品動作の失敗を示すものではないが、実UI DOM consumerは未確認のため`BUILD_GAP`を維持する。次は許可された既存UI／DOM検証経路が使える場合に同じ合成snapshotを確認し、経路が使えなければ迂回を追加せず、残るQE_BUILD consumerを進めて未確認を維持する。
 
 C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実業務作用・公開／出荷判断の境界を維持する。
 
