@@ -16,7 +16,7 @@ Setupが専用の`BLUE_TANUKI_OWNER_TOKEN`を生成・保存する。`POST /owne
 | `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は注意として残存。 |
 | 全workspace tests／QE_QC／QE_QA／5OS実機 | 未実施。 |
 
-2026-10-19の追加hardeningはHEAD=`40ca1061c5ad83bbb8b9e537e848de113b8229fa`、clean worktreeから開始し、編集前のrecovery pairをcurrent=`40ca106...`／previous=`26fa7b4...`へlocal branch／remote tagとも照合して保全した。WebChatのinbound、settings、maintenance bearer比較を、同じUTF-8 byte長の場合に`timingSafeEqual`で比較する共通関数へ集約した。byte長の不一致と未設定tokenはfalseで拒否する。先頭・中間・末尾の1 byte差と短長差を`POST /inbound`で確認し、handlerに要求が届かないことを確認する。これは比較hardeningであり、credential holderをowner本人identityへ昇格させない。
+2026-10-19の追加hardeningはHEAD=`40ca1061c5ad83bbb8b9e537e848de113b8229fa`、clean worktreeから開始し、編集前のrecovery pairをcurrent=`40ca106...`／previous=`26fa7b4...`へlocal branch／remote tagとも照合して保全した。WebChatのinbound、settings、maintenance bearer比較を、同じUTF-8 byte長の場合に`timingSafeEqual`で比較する共通関数へ集約した。byte長の不一致と未設定tokenはfalseで拒否する。先頭・中間・末尾の1 byte差と短長差を`POST /inbound`で確認し、handlerに要求が届かないことを確認する。これは比較hardeningであり、credential holderをowner本人identityへ昇格させない。実装commit=`b955db4dc7b9a647bf0d5ce7050ba07400a4b47b`を`main`へpushし、直後のlocal／remote `main`一致を確認した。commit直後のcurrent／previous recovery branchとremote tagはそれぞれ開始HEAD=`40ca106...`／`26fa7b4...`を保持する。
 
 D4-Pocket `main`=`c3fefca7f64fd1d9d5572efaf27c08b23940a2fe`の現行AGENTS §3.1を読み、ownerの2026-10-19指示によりActions使用条件をBLUEのAGENTS／作業標準へ反映した。今回の対象はWindows localでbuild・test可能なためActionsは実行していない。workflow追加、OS runner、artifact取得なし。
 
