@@ -1,0 +1,12 @@
+[package]
+name = "blue-tanuki-linux-isolation"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+libc = "=0.2.177"
+
+[[bin]]
+name = "blue-tanuki-linux-isolation"
+path = "src/main.rs"

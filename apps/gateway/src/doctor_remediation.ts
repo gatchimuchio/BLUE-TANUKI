@@ -182,7 +182,7 @@ export function remediationFor(check: CheckDraft): Remediation {
     return {
       cause: check.detail,
       impact: "shell.exec is unavailable and every invocation fails closed before process creation.",
-      next_action: "No environment setting enables shell.exec. Wait for a verified native isolation provider and process-tree termination path.",
+      next_action: "No environment setting enables shell.exec. Install or restore the OS isolation provider and its required resource/process-tree controls; unavailable isolation never falls back to host execution.",
       doc_ref: "CONFIG.md#Shell-exec-tool",
       safe_to_ignore: true,
     };

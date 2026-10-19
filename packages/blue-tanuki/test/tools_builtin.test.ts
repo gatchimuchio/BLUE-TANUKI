@@ -1417,7 +1417,7 @@ describe("built-in tools", () => {
             nativeProviderPath: path.join(root, "missing-provider.exe"),
           },
         ),
-      ).rejects.toThrow(/Windows isolation provider is not installed.*no process was started/);
+      ).rejects.toThrow(/(?:[Ww]indows|[Ll]inux) isolation provider is not installed.*no process was started/);
       await expect(fs.access(marker)).rejects.toThrow();
     } finally {
       await fs.rm(parent, { recursive: true, force: true });
@@ -1655,6 +1655,130 @@ describe("built-in tools", () => {
       }
     },
   );
+
+  it.skipIf(process.platform !== "linux")(
+    "shell.exec uses Linux namespaces and writes only inside its dedicated root",
+    async () => {
+      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-root-"));
+      const root = path.join(parent, "root");
+      const outside = path.join(parent, "outside.txt");
+      await fs.mkdir(root);
+      const providerPath = fileURLToPath(
+        new URL("../native/linux-isolation/target/release/blue-tanuki-linux-isolation", import.meta.url),
+      );
+      try {
+        const result = await invokeShellExec(
+          {
+            cmd: "sh",
+            args: ["-c", `printf inside > inside.txt; printf outside > '${outside}' || true`],
+          },
+          { env: linuxShellTestEnv(root), nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(result.exit_code).toBe(0);
+        expect(result.process_tree_empty).toBe(true);
+        expect(await fs.readFile(path.join(root, "inside.txt"), "utf8")).toBe("inside");
+        await expect(fs.access(outside)).rejects.toThrow();
+      } finally {
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "shell.exec clears inherited credential-like environment values and denies network access",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-boundary-"));
+      const providerPath = fileURLToPath(
+        new URL("../native/linux-isolation/target/release/blue-tanuki-linux-isolation", import.meta.url),
+      );
+      const server = createServer((socket) => socket.end("unexpected connection"));
+      try {
+        const environment = linuxShellTestEnv(root, {
+          OPENAI_API_KEY: "synthetic-never-forward-this",
+          BLUE_TANUKI_TEST_SECRET: "synthetic-never-forward-this-either",
+        });
+        const envResult = await invokeShellExec(
+          { cmd: "env", args: [] },
+          { env: environment, nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(envResult.exit_code).toBe(0);
+        expect(envResult.stdout).not.toContain("OPENAI_API_KEY");
+        expect(envResult.stdout).not.toContain("BLUE_TANUKI_TEST_SECRET");
+        expect(envResult.stdout).not.toContain("synthetic-never-forward-this");
+
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        const address = server.address();
+        if (!address || typeof address === "string") throw new Error("loopback test server did not bind");
+        const networkResult = await invokeShellExec(
+          { cmd: "curl", args: ["--connect-timeout", "1", "--max-time", "2", `http://127.0.0.1:${address.port}/`] },
+          { env: linuxShellTestEnv(root), nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(networkResult.exit_code).not.toBe(0);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "shell.exec terminates sandbox descendants before returning",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-process-tree-"));
+      const providerPath = fileURLToPath(
+        new URL("../native/linux-isolation/target/release/blue-tanuki-linux-isolation", import.meta.url),
+      );
+      try {
+        const result = await invokeShellExec(
+          { cmd: "sh", args: ["-c", "(sleep 2; printf late > late.marker) & exit 0"] },
+          { env: linuxShellTestEnv(root), nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(result.exit_code).toBe(0);
+        expect(result.descendants_terminated).toBe(true);
+        expect(result.process_tree_empty).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 2_200));
+        await expect(fs.access(path.join(root, "late.marker"))).rejects.toThrow();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "shell.exec reports timeout and cancellation only after the service cgroup is empty",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-linux-stop-"));
+      const providerPath = fileURLToPath(
+        new URL("../native/linux-isolation/target/release/blue-tanuki-linux-isolation", import.meta.url),
+      );
+      let cancelTimer: NodeJS.Timeout | undefined;
+      try {
+        const timedOut = await invokeShellExec(
+          { cmd: "sleep", args: ["10"], timeout_ms: 500 },
+          { env: linuxShellTestEnv(root), nativeProviderPath: providerPath },
+        ) as Record<string, unknown>;
+        expect(timedOut.signal).toBe("timeout");
+        expect(timedOut.process_tree_empty).toBe(true);
+
+        const controller = new AbortController();
+        cancelTimer = setTimeout(() => controller.abort(), 700);
+        const aborted = await invokeShellExec(
+          { cmd: "sleep", args: ["10"], timeout_ms: 20_000 },
+          { env: linuxShellTestEnv(root), nativeProviderPath: providerPath, signal: controller.signal },
+        ) as Record<string, unknown>;
+        expect(aborted.signal).toBe("aborted");
+        expect(aborted.process_tree_empty).toBe(true);
+      } finally {
+        if (cancelTimer) clearTimeout(cancelTimer);
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+    20_000,
+  );
 });
 
 function shellTestEnv(root: string, additional: Record<string, string> = {}): Record<string, string> {
@@ -1663,6 +1787,14 @@ function shellTestEnv(root: string, additional: Record<string, string> = {}): Re
     BLUE_TANUKI_SHELL_ROOT: root,
     PATH: path.join(systemRoot, "System32"),
     SystemRoot: systemRoot,
+    ...additional,
+  };
+}
+
+function linuxShellTestEnv(root: string, additional: Record<string, string> = {}): Record<string, string> {
+  return {
+    BLUE_TANUKI_SHELL_ROOT: root,
+    PATH: "/usr/bin:/bin",
     ...additional,
   };
 }

@@ -2,6 +2,8 @@
 
 2026-10-20。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-20の`QEB-01-F01.02-D07.02-LINUX-BUBBLEWRAP-SYSTEMD-SHELL-PROCESS-LIFECYCLE`では、Linux `shell.exec`をBubblewrap user/mount/pid/network namespaces、systemd user service、cgroup v2 resource limitsへ接続する。WSL2 focused runtime testsはPASS。Linux native build／focused runtime checkを、D4-Pocket条件に沿う一時branch上の手動`workflow_dispatch`で補助確認する。Actions証拠は対象commit・hosted Ubuntu環境に限り、Linux installed product／native実機QAを証明しない。writable workspaceのaggregate disk quotaは未実装のためD07.02／F01.02は`BUILD_GAP`。workflowは検査後に撤去する。
+
 2026-10-20の`QEB-01-F01.02-WINDOWS-APPCONTAINER-SHELL-PROCESS-LIFECYCLE`では、Windows `shell.exec`をnetwork capabilityなしのAppContainer、root内限定ACL、環境allowlist、resource limits、Job Object lifecycleへ接続した。focused Windows testsでroot外書込みとloopback接続を拒否し、ACL復元、secret様envの非伝播、親終了後child終了、cancel／timeout後のJob空を確認した。Rust toolchain／Cargo.lockからhelperをWindows上でbuildでき、doctor testもPASS。Windows native shell consumerはこの範囲で`WIRED`。F01.02／D07.03全体は他OSを含め`BUILD_GAP`。Actionsは使っていない。強制helper終了後のACL残留可能性、実provider／credential、別OS、実機、QE_QC／QE_QA、release判定は未確認。
 
 2026-10-20の`QEB-01-F01.02-PLANNED-FILE-DELETE-TARGET-BINDING`では、選択済みOperation Planの単一sandbox file deletionをhigh-risk L3 review、変更前target観測、Executor、結果検証へ接続し、合成workspace上のfocused testsで確認した。secret-like／private-state／root外／symlink等はfail-closed。file.delete経路の当該範囲は`WIRED`だが、F01.02全体はprocess isolation／lifecycle接続を含めて`BUILD_GAP`であり、全体構築・QC・QA・5OS実機を示さない。Windows localで確認できたためGitHub Actionsは使用していない。実credential・外部provider・実workspace削除は未実施。

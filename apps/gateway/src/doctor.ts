@@ -1025,28 +1025,28 @@ async function checkFileRoot(env: NodeJS.ProcessEnv): Promise<CheckDraft> {
 }
 
 async function checkShellRoot(): Promise<CheckDraft> {
-  if (process.platform !== "win32") {
-    return {
-      id: "shell_root",
-      level: "warn",
-      label: "shell.exec isolation",
-      detail: "disabled: this OS does not have a verified shell isolation provider",
-    };
-  }
   if (!(await shellExecIsolationProviderAvailable())) {
+    const reason = process.platform === "win32"
+      ? "Windows AppContainer provider is not installed"
+      : process.platform === "linux"
+        ? "Linux provider, bubblewrap, systemd user manager, or cgroup limits are unavailable"
+        : "this OS does not have a verified shell isolation provider";
     return {
       id: "shell_root",
       level: "warn",
       label: "shell.exec isolation",
-      detail: "disabled: Windows AppContainer provider is not installed",
+      detail: `disabled: ${reason}`,
     };
   }
+  const provider = process.platform === "linux"
+    ? "Linux bubblewrap/systemd provider"
+    : "Windows AppContainer/Job Object provider";
   return {
     id: "shell_root",
     level: "warn",
     label: "shell.exec isolation",
     detail:
-      "Windows AppContainer/Job Object provider is installed; doctor does not launch a command or inspect the configured root, and each invocation still enforces its own root and lifecycle checks",
+      `${provider} is installed; doctor does not launch a command or inspect the configured root, and each invocation still enforces its own root and lifecycle checks`,
   };
 }
 

@@ -17,9 +17,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "node scripts/build-windows-isolation.mjs && node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
+    "build": "node scripts/build-windows-isolation.mjs && node scripts/build-linux-isolation.mjs && node ../../node_modules/typescript/bin/tsc -p tsconfig.json",
     "typecheck": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
-    "test": "node scripts/build-windows-isolation.mjs --fixtures && node ../../node_modules/vitest/vitest.mjs run"
+    "test": "node scripts/build-windows-isolation.mjs --fixtures && node scripts/build-linux-isolation.mjs && node ../../node_modules/vitest/vitest.mjs run"
   },
   "dependencies": {
     "@blue-tanuki/hds-brain": "workspace:*",

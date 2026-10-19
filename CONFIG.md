@@ -451,16 +451,24 @@ Policy:
 BLUE_TANUKI_SHELL_ROOT=/path/to/workspace
 ```
 
-`shell.exec` is currently disabled on every OS because the production adapter
-does not connect a verified OS-level process-isolation provider or process-tree
-termination supervisor. Every invocation fails closed before creating a
-process. Setting `BLUE_TANUKI_SHELL_ROOT` does not enable execution.
+`shell.exec` is available only when the platform's native isolation helper and
+its runtime prerequisites are present. Otherwise it fails closed before process
+creation. `BLUE_TANUKI_SHELL_ROOT` selects the only writable workspace; it does
+not grant host execution when isolation is unavailable.
 
-The existing cwd check is only a path-selection constraint; it is not an OS
-sandbox and cannot stop a process from reading or changing files outside that
-directory, using the network, inheriting environment secrets, or leaving child
-processes running. The tool will be re-enabled only after those boundaries are
-enforced by a supported native provider and its production consumer.
+On Windows, the helper uses an AppContainer without network capabilities and a
+Job Object for resource limits and process-tree cleanup. On Linux, it uses
+Bubblewrap namespaces, a systemd user service, and cgroup v2 limits. Linux also
+requires `/usr/bin/bwrap`, a running user systemd manager, and the `cpu`,
+`memory`, and `pids` cgroup controllers. The helper rejects secret-like paths,
+clears inherited command environment, isolates networking, and confirms the
+service cgroup is empty before reporting completion. Unsupported platforms and
+missing prerequisites remain disabled; there is no host-execution fallback.
+
+Linux currently limits individual files and the temporary filesystem, but the
+workspace bind itself has no aggregate disk quota. Keep the configured root a
+small, dedicated workspace; aggregate disk exhaustion remains an implementation
+gap and this provider is not a release or Linux-native QA claim.
 
 ```text
 tool:shell.exec {"cmd":"git","args":["status","-sb"],"cwd":"."}

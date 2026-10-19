@@ -886,7 +886,7 @@ describe("runDoctor — shell isolation state", () => {
     });
     const c = r.checks.find((x) => x.id === "shell_root");
     expect(c?.level).toBe("warn");
-    if (process.platform === "win32" && (await shellExecIsolationProviderAvailable())) {
+    if ((process.platform === "win32" || process.platform === "linux") && (await shellExecIsolationProviderAvailable())) {
       expect(c?.detail).toContain("provider is installed");
       expect(c?.detail).not.toContain("disabled");
     } else {
@@ -902,7 +902,7 @@ describe("runDoctor — shell isolation state", () => {
     });
     const c = r.checks.find((x) => x.id === "shell_root");
     expect(c?.level).toBe("warn");
-    if (process.platform === "win32" && (await shellExecIsolationProviderAvailable())) {
+    if ((process.platform === "win32" || process.platform === "linux") && (await shellExecIsolationProviderAvailable())) {
       expect(c?.detail).toContain("provider is installed");
     } else {
       expect(c?.detail).toContain("disabled");

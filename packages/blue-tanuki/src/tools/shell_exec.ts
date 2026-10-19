@@ -38,6 +38,7 @@ interface NativeShellResult {
 }
 
 const WINDOWS_ISOLATOR_FILENAME = "blue-tanuki-windows-isolation.exe";
+const LINUX_ISOLATOR_FILENAME = "blue-tanuki-linux-isolation";
 const MAX_NATIVE_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_NATIVE_ERROR_BYTES = 16 * 1024;
 const PROCESS_TREE_SHUTDOWN_GRACE_MS = 5_000;
@@ -57,17 +58,20 @@ export async function invokeShellExec(
   const timeoutMs = positiveIntArg(args, "timeout_ms", 15_000, 60_000);
   const maxBytes = positiveIntArg(args, "max_bytes", 64_000, 512_000);
 
-  if (process.platform !== "win32") {
+  if (process.platform !== "win32" && process.platform !== "linux") {
     throw new Error(SHELL_EXEC_DISABLED_REASON);
   }
   if (opts.signal?.aborted) {
     throw new Error("shell.exec aborted before isolated process creation");
   }
 
-  const providerPath = opts.nativeProviderPath ?? packagedWindowsProviderPath();
-  await assertProviderOutsideRoot(providerPath, shellRoot);
-  const safeEnv = safeHelperEnvironment(env, shellRoot);
-  const native = await invokeWindowsProvider(
+  const providerPath = opts.nativeProviderPath ??
+    (process.platform === "win32" ? packagedWindowsProviderPath() : packagedLinuxProviderPath());
+  await assertProviderOutsideRoot(providerPath, shellRoot, process.platform);
+  const safeEnv = process.platform === "win32"
+    ? safeHelperEnvironment(env, shellRoot)
+    : safeLinuxHelperEnvironment();
+  const native = await invokeNativeProvider(
     providerPath,
     {
       root: shellRoot,
@@ -79,6 +83,7 @@ export async function invokeShellExec(
     },
     safeEnv,
     opts.signal,
+    process.platform,
   );
 
   return {
@@ -98,18 +103,37 @@ export async function invokeShellExec(
 }
 
 export async function shellExecIsolationProviderAvailable(): Promise<boolean> {
-  if (process.platform !== "win32") return false;
-  const providerPath = packagedWindowsProviderPath();
-  return await fs
-    .stat(providerPath)
-    .then((stat) => stat.isFile())
-    .catch(() => false);
+  if (process.platform === "win32") {
+    return await fs
+      .stat(packagedWindowsProviderPath())
+      .then((stat) => stat.isFile())
+      .catch(() => false);
+  }
+  if (process.platform !== "linux" || typeof process.getuid !== "function") return false;
+  const uid = process.getuid();
+  const runtimeDirectory = `/run/user/${uid}`;
+  const required = [
+    packagedLinuxProviderPath(),
+    "/usr/bin/bwrap",
+    "/usr/bin/systemd-run",
+    "/usr/bin/systemctl",
+    `${runtimeDirectory}/bus`,
+    `${runtimeDirectory}/systemd/private`,
+  ];
+  const available = await Promise.all(required.map(async (filepath, index) => {
+    const stat = await fs.stat(filepath).catch(() => null);
+    if (!stat) return false;
+    return index >= required.length - 2 ? stat.isSocket() : stat.isFile();
+  }));
+  if (available.some((value) => !value)) return false;
+  const controllers = await fs.readFile("/sys/fs/cgroup/cgroup.controllers", "utf8").catch(() => "");
+  return ["cpu", "memory", "pids"].every((controller) => controllers.split(/\s+/u).includes(controller));
 }
 
 export const shellExecTool: Tool = {
   name: "shell.exec",
   description:
-    "Run a bounded Windows command inside an AppContainer and Job Object; unavailable when native isolation is not built.",
+    "Run a bounded command inside the verified Windows or Linux isolation provider; unavailable when native isolation is not built.",
   required_capabilities: requireToolOperationDescriptor("shell.exec").required_capabilities,
   async invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> {
     return await invokeShellExec(args, { signal: ctx.signal });
@@ -124,14 +148,45 @@ function packagedWindowsProviderPath(): string {
   );
 }
 
-async function assertProviderOutsideRoot(providerPath: string, shellRoot: string): Promise<void> {
+function packagedLinuxProviderPath(): string {
+  return path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../native",
+    LINUX_ISOLATOR_FILENAME,
+  );
+}
+
+async function assertProviderOutsideRoot(
+  providerPath: string,
+  shellRoot: string,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  const platformLabel = isolationPlatformLabel(platform);
   const realProvider = await fs.realpath(providerPath).catch(() => {
-    throw new Error("shell.exec Windows isolation provider is not installed; no process was started");
+    throw new Error(`shell.exec ${platformLabel} isolation provider is not installed; no process was started`);
   });
   const stat = await fs.stat(realProvider);
   if (!stat.isFile() || pathInside(shellRoot, realProvider)) {
-    throw new Error("shell.exec Windows isolation provider path is invalid; no process was started");
+    throw new Error(`shell.exec ${platformLabel} isolation provider path is invalid; no process was started`);
   }
+}
+
+function isolationPlatformLabel(platform: NodeJS.Platform): string {
+  if (platform === "win32") return "Windows";
+  if (platform === "linux") return "Linux";
+  return platform;
+}
+
+function safeLinuxHelperEnvironment(): NodeJS.ProcessEnv {
+  const uid = process.getuid?.();
+  if (uid === undefined) throw new Error("shell.exec Linux isolation requires a user session");
+  const runtimeDirectory = `/run/user/${uid}`;
+  return {
+    PATH: "/usr/bin:/bin",
+    XDG_RUNTIME_DIR: runtimeDirectory,
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtimeDirectory}/bus`,
+    LANG: "C.UTF-8",
+  };
 }
 
 function safeHelperEnvironment(env: Env, shellRoot: string): NodeJS.ProcessEnv {
@@ -169,11 +224,12 @@ interface NativeRequest {
   maxBytes: number;
 }
 
-function invokeWindowsProvider(
+function invokeNativeProvider(
   providerPath: string,
   request: NativeRequest,
   env: NodeJS.ProcessEnv,
   signal?: AbortSignal,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<NativeShellResult> {
   const child = spawn(
     providerPath,
@@ -257,7 +313,7 @@ function invokeWindowsProvider(
       if (code !== 0) {
         const diagnostic = Buffer.concat(stderr).toString("utf8").trim();
         const safeDiagnostic = /^[a-zA-Z0-9_:.-]{1,256}$/.test(diagnostic) ? ` (${diagnostic})` : "";
-        reject(new Error(`shell.exec Windows isolation failed before a verified result was produced${safeDiagnostic}`));
+        reject(new Error(`shell.exec ${isolationPlatformLabel(platform)} isolation failed before a verified result was produced${safeDiagnostic}`));
         return;
       }
       let parsed: unknown;
