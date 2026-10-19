@@ -21,6 +21,8 @@ eventはraw purpose textを保持せずdigestのみを保存する。これは c
 
 C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実credential・実業務作用・公開／出荷判断なし。次consumerは専用owner credential由来のpurpose proposalを、目的本文が見える明示L3 reviewへ接続し、その承認後だけこのHDS入口を呼ぶGateway routeを実装すること。credential-holder classを人間identityと扱わない。続いてtaskごとのgoal/version選択・適用とBroker targetを同じHDS→Executor bindingへ接続する。
 
+実装commit=`dff89894074396cdbf63f77eaf29b96afa62943d`を`main`へpush済み。push直後のlocal／remote `main`一致とworktree cleanを確認した。開始HEAD=`8b996036...`はcurrent recovery branch／remote tag、previous=`73b8b858...`はprevious recovery branch／remote tagに保全した。
+
 ### 前回BUILD_BATCH：`QEB-01-D02.01-GATEWAY-GOAL-GOVERNANCE-SOURCE`
 
 開始HEAD／`origin/main`=`73b8b858e5196132232ae8565dd7eb2388352157`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、root`AGENTS.md`、作業標準、active指示、D02.01／D02.02、Gateway→HDSのgoal governance構成経路を再読した。編集前にlocal recovery branchとremote backup tagをcurrent=`73b8b858...`／previous=`40ca1061...`へ更新し、local／remote SHAを照合した。D01.03 stashは未変更。
