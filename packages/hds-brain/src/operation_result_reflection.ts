@@ -1,14 +1,19 @@
 import { createHash } from "node:crypto";
 import { OperationPlanReflectionCandidateSchema, type ExecuteCommand, type ExecuteFeedback } from "@blue-tanuki/protocol";
 
-export interface ResultObservationCitation {
+interface ResultObservationCitationBase {
   record_id: string; record_digest: string; memory_revision: number; receipt_digest: string;
-  source_revision_digest: string; step_digest: string; delivery_digest: string;
-  observed_at_ms: number; expires_at_ms: number; operation: "file.search";
-  observation: { reported_status: "succeeded"; match_count: number; visited_files: number; completeness: "unknown" };
+  source_revision_digest: string; step_digest: string; observed_at_ms: number;
   adoption_status: "observation_only"; counterevidence_status: "not_assessed";
   used_as_world_truth: false; used_for_authority: false; may_execute: false;
 }
+export type ResultObservationCitation = ResultObservationCitationBase & (
+  | { evidence_type: "file_search"; delivery_digest: string; expires_at_ms: number; operation: "file.search";
+      observation: { reported_status: "succeeded"; match_count: number; visited_files: number; completeness: "unknown" } }
+  | { evidence_type: "external_receipt"; evidence_digest: string; operation: string;
+      observation: { source: "local_inspection"; reconciliation_status: "matched" | "not_found" | "mismatch" | "ambiguous";
+        match_count: number; observed_receipt_digest?: string; action_outcome: "outcome_unknown" } }
+);
 export interface ResultObservationProjection {
   schema_version: "operation-result-current-projection.v1";
   scope: { plan_handle: string; revision_digest: string; owner_digest: string; channel_digest: string };
@@ -50,7 +55,7 @@ function computeMatches(command: Extract<ExecuteCommand, { type: "llm_call" }>, 
 /** 表示前の引用照合。失敗内容やCの任意metadataを返さず、解釈候補のみ保持する。 */
 export function reviewResultReflection(command: ExecuteCommand, feedback: ExecuteFeedback,
   projection: ResultObservationProjection | undefined, projectionDigest: string | undefined): { content: string; accepted: boolean } {
-  const rejected = { content: "観測の解釈候補を採用できませんでした。仕事の現在版・観測期限・保存状態を確認して再要求してください。記憶や作用は変更していません。", accepted: false };
+  const rejected = { content: "観測の解釈候補を採用できませんでした。仕事の現在版・保存状態を確認して再要求してください。記憶や作用は変更していません。", accepted: false };
   try {
     if (command.type !== "llm_call" || feedback.command_id !== command.id || feedback.status !== "success" ||
         !projection || !projectionDigest || feedback.llm_tool_candidates !== undefined ||

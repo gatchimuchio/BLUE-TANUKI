@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, gmailWriteTool, ToolRegistry } from "@blue-tanuki/core";
+import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, gmailWriteTool, LLMComputeAdapter,
+  ToolRegistry, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, type InboundRequest, type OperationPlan } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -327,6 +328,56 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         expect(planStore.load()?.plans[0]?.receipt_memory).toHaveLength(1);
         expect(planStore.load()?.plans[0]?.receipt_memory?.[0]?.memory_receipt).toBeDefined();
         expect(hds.operationPlanReceiptObservationMemoryIsDurable(observation.evidence_digest)).toBe(true);
+        const reflectionRequest = request(`plan:reflect ${JSON.stringify({ plan_id: currentPlan.plan_id,
+          revision_digest: currentPlan.revision_digest, step_ids: [currentPlan.steps[0]!.step_id],
+          question: "外部照合が示すことと、結果不明のまま残ること" })}`);
+        const reflectionDecision = hds.decide(reflectionRequest);
+        const reflectionCommand = reflectionDecision.command;
+        if (!reflectionCommand || reflectionCommand.type !== "llm_call") throw new Error("J did not issue the receipt reflection Compute command");
+        const reflectionProvider = {
+          name: "fixture-receipt-reflection",
+          call: vi.fn(async (input: LLMRequest): Promise<LLMResponse> => {
+            const prompt = input.messages.find((message) => message.role === "system")?.content;
+            if (!prompt) throw new Error("reflection projection prompt missing");
+            const projection = JSON.parse(prompt.split("\n").at(-1)!) as {
+              citations?: Array<{ record_id: string; record_digest: string }>;
+            };
+            return { content: JSON.stringify({ schema_version: "operation-result-reflection-candidate.v1",
+              projection_digest: operationPlanDigest(projection),
+              citations: projection.citations?.map((citation) => ({ record_id: citation.record_id, record_digest: citation.record_digest,
+                interpretation: "ローカル照合ではdigestが1件一致したと報告された。",
+                uncertainty: "外部作用の結果はoutcome_unknownのままで、成功や完了は未確認。" })) ?? [] }),
+              model: "fixture", tokens_used: 0 };
+          }),
+        };
+        const reflectionAuthority = createExecutorApprovalAuthority();
+        const reflectionExecutor = new Executor({ tools: new ToolRegistry(), approval_authority: reflectionAuthority,
+          llm: reflectionProvider, compute: new LLMComputeAdapter(reflectionProvider) });
+        const systemPrompt = reflectionCommand.payload.messages.find((message) => message.role === "system")?.content;
+        if (!systemPrompt) throw new Error("receipt reflection system prompt missing");
+        const projection = JSON.parse(systemPrompt.split("\n").at(-1)!);
+        const projectionText = JSON.stringify(projection);
+        expect(reflectionCommand.payload.session_id).toBeUndefined();
+        expect(projectionText).toContain('"evidence_type":"external_receipt"');
+        expect(projectionText).toContain('"reconciliation_status":"matched"');
+        expect(projectionText).toContain('"action_outcome":"outcome_unknown"');
+        expect(projectionText).toContain('"used_for_authority":false');
+        expect(projectionText).toContain('"may_execute":false');
+        for (const raw of [originalReceiptId!, FIXTURE_TOKEN, "local inspection fixture only", "inspection@example.invalid"]) {
+          expect(projectionText).not.toContain(raw);
+        }
+        expect(hds.operationPlanCommandIsCurrent(reflectionCommand)).toBe(true);
+        const reflectionFeedback = await reflectionExecutor.execute(approvedByFixture(reflectionCommand, reflectionAuthority));
+        expect(reflectionFeedback.status).toBe("success");
+        const reflectionOutput = finalizeCommandOutput({ hds, command: reflectionCommand, feedback: reflectionFeedback,
+          request_id: reflectionDecision.log.request_id, target_surface: "channel" });
+        expect(reflectionOutput.reviewed_feedback.status).toBe("success");
+        expect(reflectionOutput.rendered_output).toContain("references_verified_interpretation_unverified");
+        expect(reflectionOutput.rendered_output).toContain("candidate_only");
+        expect(reflectionOutput.rendered_output).not.toContain(originalReceiptId!);
+        expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("outcome_unknown");
+        expect(hds.operationPlanReceiptObservationMemoryIsDurable(observation.evidence_digest)).toBe(true);
+        expect(inspection.status().effects).toBe(1);
         const memoryDb = new DatabaseSync(memory.memory_database_path);
         try {
           const records = memoryDb.prepare("SELECT value_json FROM m_records").all()

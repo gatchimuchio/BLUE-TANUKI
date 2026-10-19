@@ -21,7 +21,8 @@ import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { assessCandidateGoalCriteria, projectRequestGoalCriteria } from "./candidate_criteria.js";
 import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
-import { buildReceiptMemoryCommit, receiptForReceiptMemoryCommit, receiptMemoryIdentity, verifyReceiptMemoryCommit } from "./operation_receipt_memory.js";
+import { buildReceiptMemoryCommit, receiptForReceiptMemoryCommit, receiptMemoryIdentity, receiptMemoryObservation,
+  verifyReceiptMemoryCommit } from "./operation_receipt_memory.js";
 import type { ResultObservationCitation, ResultObservationProjection } from "./operation_result_reflection.js";
 import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 
@@ -1387,10 +1388,37 @@ export class OperationPlanLedger {
       const steps = current.plan.steps.filter((step) => step.step_id === id || operationPlanDigest(step.step_id) === id);
       if (steps.length !== 1 || ids.has(steps[0]!.step_id)) throw new Error("plan_reflection_step_identity_mismatch");
       const step = steps[0]!; ids.add(step.step_id);
-      const bindings = p.bindings.filter((b) => b.step_id === step.step_id && b.status === "verified" && b.revision_digest === current.digest);
+      const bindings = p.bindings.filter((b) => b.step_id === step.step_id && b.revision_digest === current.digest);
       const b = bindings[0];
-      if (bindings.length !== 1 || !b || !b.memory_commit || !b.memory_receipt || !verifyResultMemoryCommit(p, b) ||
-          !receiptForResultCommit(b.memory_receipt, b.memory_commit) || b.step_digest !== stepDigest(step)) throw new Error("plan_reflection_observation_not_current");
+      if (bindings.length !== 1 || !b || b.step_digest !== stepDigest(step)) throw new Error("plan_reflection_observation_not_current");
+      if (b.status === "outcome_unknown") {
+        const observations = p.receipt_observations.filter((entry) => entry.revision_digest === current.digest &&
+          entry.step_id_digest === operationPlanDigest(step.step_id) && entry.command_digest === b.command_digest &&
+          entry.executor_command_digest === b.execution_admission?.command_digest);
+        const observation = observations.at(-1);
+        if (!b.execution_admission || !observation || observations.length === 0 ||
+            !this.receiptObservationMemoryIsDurable(observation.evidence_digest)) {
+          throw new Error("plan_reflection_receipt_observation_not_current");
+        }
+        const delivery = this.receiptMemoryDelivery(current.plan.plan_id, observation.evidence_digest);
+        const identity = receiptMemoryIdentity(observation);
+        const record = this.resultMemory.readMemoryRecord(identity.record_id);
+        const expectedValue = receiptMemoryObservation(observation);
+        if (!delivery?.memory_receipt || !record?.exists || operationPlanDigest(record.value) !== operationPlanDigest(expectedValue)) {
+          throw new Error("plan_reflection_record_mismatch");
+        }
+        citations.push({ evidence_type: "external_receipt", record_id: identity.record_id,
+          record_digest: operationPlanDigest(record.value), memory_revision: delivery.memory_receipt.revision,
+          receipt_digest: delivery.memory_receipt.receipt_digest, source_revision_digest: current.digest,
+          step_digest: b.step_digest, observed_at_ms: observation.observed_at_ms, evidence_digest: observation.evidence_digest,
+          operation: step.operation, observation: { source: "local_inspection", reconciliation_status: observation.status,
+            match_count: observation.match_count, ...(observation.receipt_digest ? { observed_receipt_digest: observation.receipt_digest } : {}),
+            action_outcome: "outcome_unknown" }, adoption_status: "observation_only", counterevidence_status: "not_assessed",
+          used_as_world_truth: false, used_for_authority: false, may_execute: false });
+        continue;
+      }
+      if (b.status !== "verified" || !b.memory_commit || !b.memory_receipt || !verifyResultMemoryCommit(p, b) ||
+          !receiptForResultCommit(b.memory_receipt, b.memory_commit)) throw new Error("plan_reflection_observation_not_current");
       const receipt = this.resultMemory.reconcile(b.memory_commit.update_id);
       if (!receipt.ok || receipt.status !== "ready" || operationPlanDigest(receipt.receipt) !== operationPlanDigest(b.memory_receipt)) {
         throw new Error("plan_reflection_record_mismatch");
@@ -1401,14 +1429,14 @@ export class OperationPlanLedger {
         throw new Error("plan_reflection_record_mismatch");
       }
       const result = p.results.find((r) => r.step_id === b.step_id)!;
-      if (Date.now() < result.observed_at_ms || Date.now() >= result.expires_at_ms) throw new Error("plan_reflection_observation_expired");
+      if (!result || Date.now() < result.observed_at_ms || Date.now() >= result.expires_at_ms) throw new Error("plan_reflection_observation_expired");
       const output = result.output;
       if (!output || typeof output !== "object" || Array.isArray(output) || !Array.isArray(output.matches) ||
           typeof output.visited_files !== "number" || !Number.isSafeInteger(output.visited_files) || output.visited_files < 0) {
         throw new Error("plan_reflection_summary_not_available");
       }
-      citations.push({ record_id: resultMemoryIdentity(b).record_id, record_digest: operationPlanDigest(record.value),
-        memory_revision: b.memory_receipt.revision, receipt_digest: b.memory_receipt.receipt_digest,
+      citations.push({ evidence_type: "file_search", record_id: resultMemoryIdentity(b).record_id,
+        record_digest: operationPlanDigest(record.value), memory_revision: b.memory_receipt.revision, receipt_digest: b.memory_receipt.receipt_digest,
         source_revision_digest: b.revision_digest, step_digest: b.step_digest, delivery_digest: b.delivery_digest!,
         observed_at_ms: result.observed_at_ms, expires_at_ms: result.expires_at_ms, operation: "file.search",
         observation: { reported_status: "succeeded", match_count: output.matches.length,

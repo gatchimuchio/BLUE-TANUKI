@@ -2,7 +2,17 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D04.02-E03.02-RECEIPT-OBSERVATION-M-RETURN`
+### 最新BUILD_BATCH：`QEB-01-D04.02-E03.02-RECEIPT-REFLECTION`
+
+開始HEAD／`origin/main`=`36448721a80af3049f6e7c213c9757a25a153e7d`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示とD04.02／D08.01／E03.02を再読した。D4-Pocket `main`=`71e1278439cab16bf6f7e5514679e4756500b9af`のAGENTS §3.1を確認した。D4作業ツリーには別作業のLinux workflow等の未commit差分があり、触れていない。今回の検査はWindows localで可能なためActions未使用。C08.03実provider保留とP13 owner-GO保留を維持する。
+
+明示的な`plan:reflect`で、Jの現在plan／revision／step、`outcome_unknown` binding、J/Mのreceipt observation／M receipt／recordの完全一致が揃った場合だけ、receiptを有限projectionへ含める。Cへ渡すのはsource・status・件数・digest・観測時刻と`action_outcome=outcome_unknown`等に限り、raw receipt ID・本文・宛先・credential・provider応答は含めない。`matched`はdigest照合の一致であって外部作用の成功ではない。Cの引用は既存どおり表示前にJがexact照合し、候補は未検証のまま保持する。file.searchの既存reflection経路も維持する。
+
+Gateway `external_action_reconciliation.test.ts` 1/1、`execution_result_reconciliation.test.ts`と同時実行した2ファイル35/35 PASS。Mからの再起動後projection、raw値の非露出、exact引用、候補表示、Jの`outcome_unknown`維持、合成作用1回を確認。workspace `pnpm typecheck`／`pnpm build`（15 workspace）／`pnpm hds:standalone`／`pnpm docs:check`／`pnpm validate:repo-health`はPASS。日本語基底の既存移行負債76件は継続注意。
+
+実provider・実credential・Gmail接続・実送信は未実施。receiptの意味・外部postcondition評価と成功判定、実receipt adapter、目標から結果までの全体一仕事、QE_QC／QE_QA／5OS実機は未成立。Cの解釈候補はmemory adoption・権限・実行を生成しない。次batchの対象は最新版正本と現物から選び直し、未確認のreceipt意味判定を仮定しない。
+
+### 前回BUILD_BATCH：`QEB-01-D04.02-E03.02-RECEIPT-OBSERVATION-M-RETURN`
 
 開始HEAD／`origin/main`=`a72b01debc4f0e2fd6002bdaf85391a11fd6b78a`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示、D04.02／D08.01／E03.02を再読した。D4-Pocket AGENTS §3.1のActions条件は`workflow_dispatch`によるlocalにないOS検査・artifact生成・localで不足する重い検査の補助に限る。今回の検証はWindows localで可能なためActions未使用。C08.03実provider保留とP13 owner-GO保留を維持する。
 
