@@ -278,6 +278,8 @@ fn run_outer(request: Request) -> Result<String, String> {
         "--unshare-uts".into(),
         "--new-session".into(),
         "--die-with-parent".into(),
+        "--cap-drop".into(),
+        "ALL".into(),
         "--cap-add".into(),
         "CAP_SYS_ADMIN".into(),
         "--ro-bind".into(),
