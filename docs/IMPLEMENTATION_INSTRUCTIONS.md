@@ -42,7 +42,7 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 16～29回目のActions runもすべてfailureであり、成功したLinux runtime証拠は得られていない。30回目の[run 39335631975](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39335631975)（対象SHA `a51e4ede7e7bb7b29e37d83cfc6e09db3ffef890`）ではworkspace／helper buildとRust診断testsがPASSしたが、production `shell.exec` focused tests 3件は`workspace_overlay_mount_access_denied_paths_accessible`で失敗した。root user namespace内のOverlayFS probeは成功し、production相当のuser namespace内ではkernel OverlayFSがEACCESを返した。AppArmorの該当mount／CAP_SYS_ADMIN拒否はfiltered journalに現れず、cleanupは成功した。FUSE OverlayFS診断はtmpfs upperで読取・書込・whiteoutまで通ったが、これは診断probeであり製品統合の安全性を証明しない。
 
-補助確認としてWSL Ubuntu 24.04のext4上に作った一時rootで同じuser-namespace OverlayFS probeを実行したところ、mountはEPERMで拒否された。これはWSL環境限定の診断でありLinux native実機の証拠ではない。FUSE daemonへmount権限を持たせたまま製品shellと同じ信頼境界へ置く設計は、権限境界の安全な縮小・検証ができていないため採用しない。kernel OverlayFS経路もFUSE経路もproduction `shell.exec`の安全なaggregate quotaとして成立していないので、D07.02／F01.02は`BUILD_GAP`を維持し、未成功SHAはmainへ統合しない。次consumerはLinux nativeで成立する安全なquota実装・実行境界の確定であり、diagnostic FUSE probeを製品成立証拠へ昇格させない。
+補助確認としてWSL Ubuntu 24.04のext4上に作った一時rootで同じuser-namespace OverlayFS probeを実行したところ、mountはEPERMで拒否された。これはWSL環境限定の診断でありLinux native実機の証拠ではない。FUSE daemonへmount権限を持たせたまま製品shellと同じ信頼境界へ置く設計は、権限境界の安全な縮小・検証ができていないため採用しない。次の一回の補助probeではFUSE OverlayFSを全process capabilityなしで起動し、mount・読取・書込・whiteoutとdaemonのeffective／permitted／bounding capability maskを確認する。これは製品統合や安全性の合格試験ではない。kernel OverlayFS経路もFUSE経路もproduction `shell.exec`の安全なaggregate quotaとして成立していないので、D07.02／F01.02は`BUILD_GAP`を維持し、未成功SHAはmainへ統合しない。次consumerはLinux nativeで成立する安全なquota実装・実行境界の確定であり、diagnostic FUSE probeを製品成立証拠へ昇格させない。
 
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 

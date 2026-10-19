@@ -401,6 +401,107 @@ jobs:
             echo "fuse_probe_bwrap_start_failed status=$probe_status"
           fi
 
+      - name: Probe FUSE OverlayFS with no process capabilities
+        shell: bash
+        run: |
+          set -u
+          if [[ ! -c /dev/fuse ]]; then
+            echo "fuse_device_unavailable"
+            exit 0
+          fi
+          lower_source="$RUNNER_TEMP/overlay-no-cap-lower"
+          probe_script="$RUNNER_TEMP/overlay-no-cap-probe.sh"
+          mkdir -m 0700 "$lower_source"
+          printf fixture > "$lower_source/probe"
+          chmod 0444 "$lower_source/probe"
+          chmod 0555 "$lower_source"
+          cat > "$probe_script" <<'SH'
+          #!/bin/sh
+          set -u
+          capability_value() {
+            awk -v key="$1" '$1 == key { print $2 }' "$2"
+          }
+          printf 'fuse_probe_shell_caps=%s/%s/%s\n' \
+            "$(capability_value CapEff /proc/self/status)" \
+            "$(capability_value CapPrm /proc/self/status)" \
+            "$(capability_value CapBnd /proc/self/status)"
+          mkdir -p /workspace /workspace-storage/upper /workspace-storage/work
+          fuse_pid=""
+          cleanup() {
+            fusermount3 -u /workspace 2>/dev/null || true
+            if [ -n "$fuse_pid" ]; then
+              kill "$fuse_pid" 2>/dev/null || true
+              wait "$fuse_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+          /usr/bin/fuse-overlayfs -f -o lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work /workspace >/tmp/fuse-overlayfs-no-cap.log 2>&1 &
+          fuse_pid=$!
+          mounted=0
+          for attempt in $(seq 1 40); do
+            if grep -q ' /workspace ' /proc/self/mountinfo; then
+              mounted=1
+              break
+            fi
+            if ! kill -0 "$fuse_pid" 2>/dev/null; then break; fi
+            sleep 0.1
+          done
+          if [ "$mounted" != 1 ]; then
+            echo "fuse_overlay_no_cap_mount=failed"
+            sed -E 's#(/home/runner/[^[:space:]]+)#<runner-path>#g' /tmp/fuse-overlayfs-no-cap.log | head -c 1024
+            exit 0
+          fi
+          daemon_caps="$(capability_value CapEff "/proc/$fuse_pid/status")/$(capability_value CapPrm "/proc/$fuse_pid/status")/$(capability_value CapBnd "/proc/$fuse_pid/status")"
+          printf 'fuse_probe_daemon_caps=%s\n' "$daemon_caps"
+          printf 'fuse_overlay_readback=%s\n' "$(cat /workspace/probe 2>/dev/null || true)"
+          if [ "$daemon_caps" != '0000000000000000/0000000000000000/0000000000000000' ]; then
+            echo "fuse_overlay_no_cap_result=daemon_capabilities_present"
+            exit 0
+          fi
+          if ! printf write > /workspace/created || ! rm /workspace/probe || [ -e /workspace/probe ] || [ "$(cat /workspace/created 2>/dev/null || true)" != write ]; then
+            echo "fuse_overlay_no_cap_write_and_whiteout=failed"
+            exit 0
+          fi
+          echo "fuse_overlay_no_cap_write_and_whiteout=success"
+          SH
+          chmod 0700 "$probe_script"
+          if bwrap \
+            --unshare-user \
+            --unshare-pid \
+            --unshare-net \
+            --unshare-ipc \
+            --unshare-uts \
+            --new-session \
+            --die-with-parent \
+            --cap-drop ALL \
+            --ro-bind /usr /usr \
+            --symlink usr/bin /bin \
+            --symlink usr/sbin /sbin \
+            --symlink usr/lib /lib \
+            --symlink usr/lib64 /lib64 \
+            --proc /proc \
+            --dev /dev \
+            --dev-bind /dev/fuse /dev/fuse \
+            --size 134217728 \
+            --perms 0700 \
+            --tmpfs /workspace-storage \
+            --tmpfs /tmp \
+            --dir /workspace \
+            --dir /workspace-lower \
+            --ro-bind "$lower_source" /workspace-lower \
+            --ro-bind "$probe_script" /fuse-overlay-no-cap-probe.sh \
+            --chdir / \
+            --clearenv \
+            --setenv PATH /usr/bin:/bin \
+            --setenv TMPDIR /tmp \
+            --setenv LANG C.UTF-8 \
+            -- /bin/sh /fuse-overlay-no-cap-probe.sh; then
+            :
+          else
+            probe_status=$?
+            echo "fuse_probe_no_cap_bwrap_start_failed status=$probe_status"
+          fi
+
       - name: Set up Rust toolchain
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt
