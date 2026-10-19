@@ -22,6 +22,8 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 6回目の[run 39315548702](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39315548702)もbuildとRust unit tests（2 passed）がPASS。focused shell test 3件は最初のstorage tmpfs mountで`workspace_storage_mount_failed`となり、overlay mountには未到達。次はkernel errnoをraw出力せず許可済みcodeへ分類し、runnerでの拒否理由を確認する。cleanupはPASS、未成功commitはmainへ統合しない。
 
+7回目の[run 39315969237](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39315969237)はworkspace build／helper buildとRust diagnostic・capability・errno分類tests（2 passed）がPASS。focused shell tests 3件は`workspace_storage_mount_denied`でfail-closedした。tmpfs mountのerrnoはEPERM/EACCESへ分類されたが、kernel AppArmor監査記録をまだ採取していない。次はfailure-onlyのkernel journal出力を、mount／CAP_SYS_ADMIN denialに限定した固定field filterで追加し、policy denialの有無を確認する。cleanupはPASS、未成功commitはmainへ統合しない。
+
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
 WindowsではLinux native runtimeを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1条件のmanual `workflow_dispatch`を使った。一時workflow登録commitは`088733474aa34f69d37bedd9c95c1b6258331d8a`。最初の[run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は既存runner AppArmor profileを変更しないガードで停止し、build/test未実行。修正版の[run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)ではpolicyを保ったnamespace probeとbuildは成功したが、stderrのOS文言差でtest期待値が不一致だった。

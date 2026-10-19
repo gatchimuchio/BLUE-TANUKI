@@ -114,6 +114,27 @@ jobs:
           systemctl --user --failed --no-pager || true
           journalctl --user -b --no-pager -n 100 || true
 
+      - name: Capture filtered AppArmor mount diagnostics after test failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo journalctl -k -b --no-pager -n 400 | awk '
+            /apparmor="DENIED"/ && (/operation="mount"/ || (/operation="capable"/ && /capability=21/)) {
+              line = ""
+              for (i = 1; i <= NF; i++) {
+                if ($i ~ /^(apparmor|operation|class|info|error|profile|comm|capability|capname|requested|denied|fstype)=/) {
+                  line = line (line == "" ? "" : " ") $i
+                }
+              }
+              print line
+              found = 1
+            }
+            END {
+              if (!found) print "no filtered AppArmor mount/CAP_SYS_ADMIN denial was present in the kernel journal window"
+            }
+          ' | tail -n 20
+
       - name: Remove and verify temporary Bubblewrap AppArmor profile
         if: always()
         shell: bash
