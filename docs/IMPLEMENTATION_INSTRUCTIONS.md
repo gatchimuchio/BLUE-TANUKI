@@ -1,5 +1,9 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
+### 直近のActions環境確認
+
+一時workflow登録commit `088733474aa34f69d37bedd9c95c1b6258331d8a`に対するLinux検査commit `b4756cccdf43bab4ce76d28475976b311de6c549`の[Actions run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は、Ubuntu 24.04 runnerのAppArmor user namespace確認段階で停止した。runnerに既存Bubblewrap profileファイルまたはロード済profileがあったためで、Linux helper buildとfocused testは未実行。製品／testの失敗とは判定しない。既存profileを上書き・解除しないよう、一時workflow内で既存runner policyを変更せずBubblewrap namespaceの最小probeを行い、未設定時だけjob内一時profileを作成する。probeが既存policyで通らない場合はそのままfail-closedし、既存policyを改変しない。検査対象branchは`codex/linux-per-file-size-bound`。Actions許可はD4-Pocket現行AGENTS §3.1条件に限り、successful exact SHAを確認するまでmainへ製品commitを入れない。
+
 ## 次のBUILD_BATCH（計画中）：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
 Windows上ではLinux native runtimeを直接実行できないため、既存`systemd-run LimitFSIZE`設定のproduction consumerを一つの合成shell呼出しで確認する。65 MiBのsparse file作成を試し、64 MiB per-file limitで拒否されることを検証する。GitHub ActionsはD4-Pocket現行AGENTS §3.1に従う一時`workflow_dispatch`だけを使い、対象SHAの検証後にworkflowと一時branchを撤去する。これは単一file上限の証拠であり、aggregate workspace disk quota、Linux installed product、QA／releaseの証拠ではない。

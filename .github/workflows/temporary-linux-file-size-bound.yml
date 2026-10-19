@@ -55,7 +55,7 @@ jobs:
           for controller in cpu memory pids; do grep -qw "$controller" <<< "$controllers"; done
           test -x /usr/bin/bwrap
 
-      - name: Allow Bubblewrap user namespaces in this runner
+      - name: Check Bubblewrap user namespaces without replacing runner policy
         id: bwrap-profile
         shell: bash
         run: |
@@ -64,20 +64,23 @@ jobs:
           profile_path=/etc/apparmor.d/usr.bin.bwrap
           profiles=/sys/kernel/security/apparmor/profiles
           if [[ -r "$restriction" && "$(cat "$restriction")" = 1 ]]; then
-            if [[ -e "$profile_path" ]] || sudo grep -q '^usr.bin.bwrap ' "$profiles"; then
-              echo "refusing to replace a pre-existing Bubblewrap profile" >&2
-              exit 1
-            fi
-            echo "managed=true" >> "$GITHUB_OUTPUT"
-            sudo tee "$profile_path" >/dev/null <<'PROFILE'
+            if [[ -e "$profile_path" ]] || sudo grep -Eq '^(/usr/bin/bwrap|usr.bin.bwrap) ' "$profiles"; then
+              echo "managed=false" >> "$GITHUB_OUTPUT"
+              echo "using the existing runner policy without modifying it"
+              /usr/bin/bwrap --unshare-user --ro-bind / / -- /usr/bin/true
+            else
+              echo "managed=true" >> "$GITHUB_OUTPUT"
+              sudo tee "$profile_path" >/dev/null <<'PROFILE'
           abi <abi/4.0>,
           include <tunables/global>
           /usr/bin/bwrap flags=(default_allow) {
             userns,
           }
           PROFILE
-            sudo apparmor_parser -r "$profile_path"
-            sudo grep -q '^usr.bin.bwrap ' "$profiles"
+              sudo apparmor_parser -r "$profile_path"
+              sudo grep -Eq '^(/usr/bin/bwrap|usr.bin.bwrap) ' "$profiles"
+              /usr/bin/bwrap --unshare-user --ro-bind / / -- /usr/bin/true
+            fi
           else
             echo "managed=false" >> "$GITHUB_OUTPUT"
           fi
@@ -111,14 +114,14 @@ jobs:
           if [[ "${PROFILE_MANAGED:-false}" = true ]]; then
             profile_path=/etc/apparmor.d/usr.bin.bwrap
             profiles=/sys/kernel/security/apparmor/profiles
-            if sudo grep -q '^usr.bin.bwrap ' "$profiles"; then
+            if sudo grep -Eq '^(/usr/bin/bwrap|usr.bin.bwrap) ' "$profiles"; then
               sudo apparmor_parser -R "$profile_path"
             fi
             for attempt in {1..20}; do
-              if ! sudo grep -q '^usr.bin.bwrap ' "$profiles"; then break; fi
+              if ! sudo grep -Eq '^(/usr/bin/bwrap|usr.bin.bwrap) ' "$profiles"; then break; fi
               sleep 0.25
             done
-            if sudo grep -q '^usr.bin.bwrap ' "$profiles"; then
+            if sudo grep -Eq '^(/usr/bin/bwrap|usr.bin.bwrap) ' "$profiles"; then
               echo "temporary Bubblewrap AppArmor profile is still loaded" >&2
               exit 1
             fi
