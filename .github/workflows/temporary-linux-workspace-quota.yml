@@ -104,6 +104,13 @@ jobs:
       - name: Verify Linux shell workspace and aggregate quotas
         run: pnpm exec vitest run packages/blue-tanuki/test/tools_builtin.test.ts --testNamePattern='shell\.exec (uses Linux namespaces and writes only inside its dedicated root|enforces the per-file size limit|bounds aggregate workspace writes and commits only the sandbox view)'
 
+      - name: Capture transient user-service diagnostics after test failure
+        if: failure()
+        shell: bash
+        run: |
+          systemctl --user --failed --no-pager || true
+          journalctl --user -b --no-pager -n 100 || true
+
       - name: Remove and verify temporary Bubblewrap AppArmor profile
         if: always()
         shell: bash

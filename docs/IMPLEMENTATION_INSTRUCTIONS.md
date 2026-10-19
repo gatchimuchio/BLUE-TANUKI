@@ -10,6 +10,8 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 実施中確認：Windows Rust cross-target `cargo check`／`cargo fmt --check`、`pnpm typecheck`、`pnpm build`はPASS。Linux runtime／tmpfs上限／commit path isolationは未確認のため、D07.02／F01.02は引き続き`BUILD_GAP`。installed Linux product、native実機QA、QE_QC／QE_QA、P13 owner-GOは主張しない。
 
+初回Actions [run 39313183295](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39313183295) はLinux workspace build／helper buildがPASSし、focused shell test 3件はproviderがverified resultを返す前に全件failure。既存workflow cleanup stepはPASSし、tmpfs／overlay runtimeの成立は未確認。原因特定用に次回だけuser service journalの限定出力を追加する。成功commitへのmain統合はまだ行わない。
+
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
 WindowsではLinux native runtimeを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1条件のmanual `workflow_dispatch`を使った。一時workflow登録commitは`088733474aa34f69d37bedd9c95c1b6258331d8a`。最初の[run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は既存runner AppArmor profileを変更しないガードで停止し、build/test未実行。修正版の[run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)ではpolicyを保ったnamespace probeとbuildは成功したが、stderrのOS文言差でtest期待値が不一致だった。
