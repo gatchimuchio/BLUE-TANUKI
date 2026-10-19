@@ -1442,8 +1442,16 @@ fn stable_error(error: &str) -> String {
             "workspace_overlay_mount_failed",
             "workspace_overlay_mount_operation_denied",
             "workspace_overlay_mount_access_denied",
+            "workspace_overlay_mount_access_denied_paths_accessible",
             "workspace_overlay_mount_invalid_options",
             "workspace_overlay_mount_unsupported",
+            "workspace_overlay_directory_metadata_unavailable",
+            "workspace_overlay_directory_type_invalid",
+            "workspace_overlay_directory_owner_mismatch",
+            "workspace_overlay_directory_access_unavailable",
+            "workspace_overlay_layers_on_different_filesystems",
+            "workspace_overlay_lower_access_denied",
+            "workspace_overlay_destination_access_denied",
             "workspace_commit_failed",
             "workspace_changed_during_execution",
             "workspace_write_limit_exceeded",
@@ -1592,6 +1600,23 @@ mod tests {
             ),
             "linux_sandbox_start_or_shutdown_failed:workspace_overlay_mount_operation_denied"
         );
+        for detail in [
+            "workspace_overlay_mount_access_denied_paths_accessible",
+            "workspace_overlay_directory_metadata_unavailable",
+            "workspace_overlay_directory_type_invalid",
+            "workspace_overlay_directory_owner_mismatch",
+            "workspace_overlay_directory_access_unavailable",
+            "workspace_overlay_layers_on_different_filesystems",
+            "workspace_overlay_lower_access_denied",
+            "workspace_overlay_destination_access_denied",
+        ] {
+            let error =
+                format!("linux_sandbox_start_or_shutdown_failed:linux_isolation_error:{detail}");
+            assert_eq!(
+                stable_error(&error),
+                format!("linux_sandbox_start_or_shutdown_failed:{detail}")
+            );
+        }
         assert_eq!(
             stable_error(
                 "linux_sandbox_start_or_shutdown_failed:linux_isolation_error:sandbox_mount_namespace_owner_query_denied"

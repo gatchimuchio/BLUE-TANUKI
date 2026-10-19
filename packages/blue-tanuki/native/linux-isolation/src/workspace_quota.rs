@@ -112,6 +112,23 @@ pub fn mount_bounded_overlay() -> Result<(), String> {
     let work = Path::new(STORAGE_PATH).join("work");
     fs::create_dir(&upper).map_err(|_| "workspace_storage_layout_failed".to_string())?;
     fs::create_dir(&work).map_err(|_| "workspace_storage_layout_failed".to_string())?;
+    let storage_metadata = verify_owned_overlay_directory(Path::new(STORAGE_PATH))?;
+    let upper_metadata = verify_owned_overlay_directory(&upper)?;
+    let work_metadata = verify_owned_overlay_directory(&work)?;
+    if upper_metadata.dev() != storage_metadata.dev()
+        || work_metadata.dev() != storage_metadata.dev()
+    {
+        return Err("workspace_overlay_layers_on_different_filesystems".to_string());
+    }
+    verify_overlay_directory_type(Path::new(LOWER_PATH))?;
+    verify_overlay_directory_type(Path::new(WORKSPACE_PATH))?;
+    verify_overlay_directory_access(Path::new(STORAGE_PATH), libc::W_OK | libc::X_OK)?;
+    verify_overlay_directory_access(&upper, libc::W_OK | libc::X_OK)?;
+    verify_overlay_directory_access(&work, libc::W_OK | libc::X_OK)?;
+    verify_overlay_directory_access(Path::new(LOWER_PATH), libc::R_OK | libc::X_OK)
+        .map_err(|_| "workspace_overlay_lower_access_denied".to_string())?;
+    verify_overlay_directory_access(Path::new(WORKSPACE_PATH), libc::X_OK)
+        .map_err(|_| "workspace_overlay_destination_access_denied".to_string())?;
 
     let overlay = CString::new("overlay").map_err(|_| "workspace_quota_unavailable".to_string())?;
     let destination =
@@ -132,11 +149,44 @@ pub fn mount_bounded_overlay() -> Result<(), String> {
         )
     };
     if mounted != 0 {
-        return Err(
-            overlay_mount_error_code(io::Error::last_os_error().raw_os_error()).to_string(),
-        );
+        let error_code = overlay_mount_error_code(io::Error::last_os_error().raw_os_error());
+        return Err(if error_code == "workspace_overlay_mount_access_denied" {
+            "workspace_overlay_mount_access_denied_paths_accessible".to_string()
+        } else {
+            error_code.to_string()
+        });
     }
     Ok(())
+}
+
+fn verify_owned_overlay_directory(path: &Path) -> Result<Metadata, String> {
+    let metadata = verify_overlay_directory_type(path)?;
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.gid() != unsafe { libc::getegid() }
+    {
+        return Err("workspace_overlay_directory_owner_mismatch".to_string());
+    }
+    if metadata.mode() & 0o700 != 0o700 {
+        return Err("workspace_overlay_directory_access_unavailable".to_string());
+    }
+    Ok(metadata)
+}
+
+fn verify_overlay_directory_type(path: &Path) -> Result<Metadata, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "workspace_overlay_directory_metadata_unavailable".to_string())?;
+    if !metadata.file_type().is_dir() {
+        return Err("workspace_overlay_directory_type_invalid".to_string());
+    }
+    Ok(metadata)
+}
+
+fn verify_overlay_directory_access(path: &Path, mode: libc::c_int) -> Result<(), String> {
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| "workspace_overlay_directory_metadata_unavailable".to_string())?;
+    if unsafe { libc::faccessat(libc::AT_FDCWD, path.as_ptr(), mode, libc::AT_EACCESS) } == 0 {
+        return Ok(());
+    }
+    Err("workspace_overlay_directory_access_unavailable".to_string())
 }
 
 fn storage_mount_error_code(errno: Option<i32>) -> &'static str {
