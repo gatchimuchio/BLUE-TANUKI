@@ -17,7 +17,7 @@ CLIとserveのfile.search worker生成へ、`GatewayRuntimeOwnerLease.executionE
 
 このaudienceはGateway ownerの実行世代であり、安定した物理host/device identityやD4 Broker Permission、OS sandboxを確立しない。repository内に独立host identity producerまたは別hostの正規実行経路は見つからず、D02.02全体とD02.01は`BUILD_GAP`。C08.03 provider保留、P13 owner-GO保留、別repo変更なしを維持する。次consumerは、実在するhost/device identityまたはremote-host issuer/audience producerの有無と、既存Gateway owner世代・継承IPCとの責務分界を現物で再確認すること。
 
-実装・文書のcommit／pushとremote HEAD照合はこのBUILD_BATCHのcloseout時に追記する。
+実装・文書commit=`ab5d829e4c29263e8d611d29e4b2d4c858c4b11d`を`main`へpushし、直後のremote HEAD一致を確認。local recovery branch／remote backup tagはcurrent=`0784acc3214df505eaeb7e33f307503512eaab7e`、previous=`a1ecf73bd6b251afd63c81fd5a556fb85ffd2789`で一致。次のdocs-only closeout push後にfinal main・ref・worktreeを再確認する。
 
 ### 前回BUILD_BATCH：`QEB-01-D02.02-PERSISTED-TICKET-OWNER-EPOCH-BINDING`
 
