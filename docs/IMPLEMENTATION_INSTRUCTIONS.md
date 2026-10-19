@@ -2,7 +2,19 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-PURPOSE-CONTENT-J-M-REPLAY`
+### 最新BUILD_BATCH：`QEB-01-D02.01-EXPLICIT-PURPOSE-BOUND-PLAN-COMPUTE`
+
+開始HEAD／`origin/main`=`46b8c2c9fd3950eee941836c0bcf6963f0793ab9`、開始worktree clean。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、D4-Pocket現行AGENTS §3.1を再読した。編集前にlocal recovery branch二本／remote backup tag二本をCAS更新して開始HEADへ照合した。Windows localで必要な検査ができるためGitHub Actions／workflowは使用していない。
+
+内部Developer `plan:compute`へtaskとgoal ref／version／digestを明示する厳密入力を追加した。HDSは目的の現行版・親整合・J/M receipt本文digestをC呼出し前に検査し、選択した本文を非権威の計算入力としてのみ渡す。Compute exposureに`selected_memory_references`を記録し、projection digestにもこの文脈を含める。C候補の保存時にJが現在bindingを再検証し、task内容とref／version／digestを同じJ計画へ保存する。外部requestからbinding metadataを注入できず、audit／plan projection／runtime snapshotに本文を出さない。C08.03の実provider呼出しは行っていない。
+
+限定確認: `pnpm typecheck` PASS、`pnpm build` PASS（15 workspace projects）、HDS `goal_governance.test.ts` PASS（14件）、protocol `types.test.ts` PASS（34件）、`pnpm docs:check` PASS（日本語基底の移行負債76件の既存注意あり）、`pnpm validate:repo-health` PASS、`git diff --check` PASS。全suite／実provider／実credential／外部作用／5OS実機／QE_QC／QE_QAは未実施。
+
+D02.01／D02.02=`BUILD_GAP`を維持する。この接続は選択目的本文をC候補計算へ渡してtask-scoped J planへ版bindingを保持するが、taskとpurposeの意味的適合を判定せず、Cの自己申告を採用しない。全operationのBroker canonical targetと仕事全体の結果→M→帰還も未成立。次consumerはCの支持／競合／不明候補とtask本文・目的版・根拠をJの非権威関係recordへ結び、適合根拠が不明なら実行を許可しない境界。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。実credential／業務作用、別repo変更、公開・出荷判断なし。
+
+実装・文書commit後に`main`、local recovery branch二世代、remote backup tag二世代、clean worktreeを照合して記録する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-PURPOSE-CONTENT-J-M-REPLAY`
 
 開始HEAD／`origin/main`=`8f003b6a6906591b05138f468aca8dbd76196d3f`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02およびGoalGovernance→L3 approval→J/M経路を再読した。編集前のlocal recovery branch／remote tagはcurrent=`8f003b6...`／previous=`c503863...`。D01.03 stashは保持。D4-Pocket現行AGENTS §3.1を確認し、Windows localで検査可能なためGitHub Actions／workflowは使用していない。
 

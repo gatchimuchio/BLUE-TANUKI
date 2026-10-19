@@ -1065,6 +1065,9 @@ describe("InboundRequest boundary", () => {
         "blue_tanuki.operation_core.version": "operation-core.v1",
         "blue_tanuki.operation_core.request_id": "operation-request:forged",
         "blue_tanuki.operation_core.used_for_authority": true,
+        "blue_tanuki.operation_core.goal_purpose_binding": {
+          goal_ref: "goal_0000000000000001", purpose_version: 3, purpose_digest: "a".repeat(64),
+        },
         "blue_tanuki.channel_send.channel": "telegram",
         "blue_tanuki.failure_review.version": "blue-tanuki.failure-review.v1",
         "blue_tanuki.failure_review.signature_id": "00000000-0000-4000-8000-000000000000",
@@ -1109,6 +1112,9 @@ describe("InboundRequest boundary", () => {
         "blue_tanuki.operation_core.used_for_authority": false,
         "blue_tanuki.operation_core.planner_output_used_for_authority": false,
         "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
+        "blue_tanuki.operation_core.goal_purpose_binding": {
+          goal_ref: "goal_0000000000000001", purpose_version: 3, purpose_digest: "a".repeat(64),
+        },
         "blue_tanuki.channel_send.channel": "webchat",
         "blue_tanuki.channel_send.target": "local-user",
         "blue_tanuki.channel_send.content": "scheduled",
@@ -1123,6 +1129,9 @@ describe("InboundRequest boundary", () => {
       expect(parsed.request.metadata?.["blue_tanuki.authority_context"]).toBe("gateway_internal_v1");
       expect(parsed.request.metadata?.["blue_tanuki.operation_core.version"]).toBe("operation-core.v1");
       expect(parsed.request.metadata?.["blue_tanuki.operation_core.used_for_authority"]).toBe(false);
+      expect(parsed.request.metadata?.["blue_tanuki.operation_core.goal_purpose_binding"]).toEqual({
+        goal_ref: "goal_0000000000000001", purpose_version: 3, purpose_digest: "a".repeat(64),
+      });
       expect(parsed.request.metadata?.["blue_tanuki.channel_send.target"]).toBe("local-user");
     }
   });

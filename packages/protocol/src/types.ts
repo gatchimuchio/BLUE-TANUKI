@@ -20,6 +20,7 @@ export const RESERVED_EXTERNAL_METADATA_KEYS = [
   "blue_tanuki.process_kind",
   "blue_tanuki.operator_surface",
   "blue_tanuki.operation_core",
+  "blue_tanuki.operation_core.goal_purpose_binding",
   "blue_tanuki.channel_send",
   "blue_tanuki.failure_review",
   "blue_tanuki.goal_purpose_change.version",
@@ -43,6 +44,11 @@ export interface GatewayInternalAuthorityMetadata extends MetadataObject {
   "blue_tanuki.operation_core.used_for_authority"?: false;
   "blue_tanuki.operation_core.planner_output_used_for_authority"?: false;
   "blue_tanuki.operation_core.ui_projection_used_for_authority"?: false;
+  "blue_tanuki.operation_core.goal_purpose_binding"?: {
+    goal_ref: string;
+    purpose_version: number;
+    purpose_digest: string;
+  };
   "blue_tanuki.channel_send.channel"?: string;
   "blue_tanuki.channel_send.target"?: string;
   "blue_tanuki.channel_send.content"?: string;

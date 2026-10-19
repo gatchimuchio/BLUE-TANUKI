@@ -6,6 +6,7 @@ import {
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding, type OperationStep,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema,
+  OperationPlanGoalPurposeBindingSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
   type OperationPlanReceiptReconciliationControl,
 } from "@blue-tanuki/protocol";
@@ -769,8 +770,20 @@ export class OperationPlanLedger {
     if (plan.request_id !== expected || this.state.plans.some((p) => p.revisions[0]!.plan.plan_id === plan.plan_id)) {
       throw new Error("plan_source_binding_mismatch");
     }
+    const rawGoalPurposeBinding = origin.metadata?.["blue_tanuki.operation_core.goal_purpose_binding"];
+    let goalPurposeBinding: OperationPlanGoalPurposeBinding | undefined;
+    if (rawGoalPurposeBinding !== undefined) {
+      if (origin.metadata?.["blue_tanuki.authority_context"] !== "gateway_internal_v1" ||
+          origin.metadata?.["blue_tanuki.operator_surface"] !== "developer") {
+        throw new Error("plan_goal_purpose_binding_origin_invalid");
+      }
+      const parsedBinding = OperationPlanGoalPurposeBindingSchema.safeParse(rawGoalPurposeBinding);
+      if (!parsedBinding.success) throw new Error("plan_goal_purpose_binding_invalid");
+      goalPurposeBinding = this.resolveGoalPurposeBinding(parsedBinding.data, undefined);
+    }
     const requestGoalCriteria = GoalCriteriaProjectionSchema.parse(projectRequestGoalCriteria(origin, origin.content));
     this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: origin.content,
+      ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
       request_goal_criteria: requestGoalCriteria,
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
   }

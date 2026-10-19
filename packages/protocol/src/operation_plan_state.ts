@@ -13,6 +13,12 @@ export const OperationPlanGoalPurposeBindingSchema = z.object({
   purpose_digest: Digest,
 }).strict();
 export type OperationPlanGoalPurposeBinding = z.infer<typeof OperationPlanGoalPurposeBindingSchema>;
+/** Explicit task input for internal plan computation; the binding selects context, not authority. */
+export const OperationPlanComputeInputSchema = z.object({
+  task: z.string().trim().min(1).max(20_000),
+  goal_purpose_binding: OperationPlanGoalPurposeBindingSchema,
+}).strict();
+export type OperationPlanComputeInput = z.infer<typeof OperationPlanComputeInputSchema>;
 export const OperationPlanExternalReceiptObservationSchema = z.object({
   schema_version: z.literal("external-receipt-observation.v1"),
   source: z.literal("local_inspection"),
