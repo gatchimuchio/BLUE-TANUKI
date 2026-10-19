@@ -2,6 +2,10 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 実施中BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-HARDLINK-ROOT-GUARD`
+
+Linux shell providerのroot検査が通常fileのhard linkを許し、workspace root外の同じinodeを共有し得る。`inspect_root`で複数linkを拒否し、production consumerがprocessを開始しない経路を確認する。Windows上ではLinux native helperを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1の条件に従い、一時workflowを`workflow_dispatch`限定で追加する。対象はLinux helperのbuildと合成hard-link拒否testだけ、branchで対象commitを固定し、PR・自動trigger・artifact・release判定は作らない。Actions結果は対象commitの補助証拠で、Linux installed product／実機QAを証明しない。成功した正確なcommitをmainへfast-forwardし、remote HEAD照合後にworkflowと一時branchを撤去する。
+
 ### 最新BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-BUBBLEWRAP-SYSTEMD-SHELL-PROCESS-LIFECYCLE`
 
 開始HEAD／`origin/main`=`f58b77fca2148e7e03439668280c6f8f977d9cd7`。今回の作業目的はLinux shell隔離providerとproduction consumerをつなぐこと。QE rev2.3三点正本と適用AGENTS／作業標準／active指示、D07.02、shell・doctor consumerを再読した。D4-Pocket現行AGENTS §3.1では、localにないOSのbuild／artifactまたはlocalで不足する重い検査を手動`workflow_dispatch`で補助できる。D07.02はWSLをLinux nativeの代用にしないため、今回のLinux native buildとfocused runtime testに限って一時workflowを用意した。GitHubの手動実行にはworkflowをdefault branchへ置く必要があるため、workflow-only commit `e3dc9a0c12667900c9bfcef14d8050dbb4d3c7b5`を先に反映し、検査commitを一時branch上に固定した。PR・push等の自動trigger、必須check、release判定、artifact公開は設定しなかった。workflow triggerはlocal conformanceで確認し、対象commitの検査成功後にその正確なSHAをmainへfast-forwardする。

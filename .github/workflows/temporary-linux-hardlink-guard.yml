@@ -1,0 +1,44 @@
+name: Temporary Linux hardlink guard
+run-name: Linux hardlink guard on ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-hardlink-guard:
+    name: Native Linux helper build and focused boundary test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out selected commit
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.3
+          package-manager-cache: false
+
+      - name: Set up Rust toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component rustfmt
+          rustup default 1.95.0
+          rustc --version
+
+      - name: Install locked workspace dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.12.0 --activate
+          pnpm --version
+          pnpm install --frozen-lockfile
+
+      - name: Build workspace and Linux isolation helper
+        run: pnpm build
+
+      - name: Verify hard-link rejection before process start
+        run: pnpm exec vitest run packages/blue-tanuki/test/tools_builtin.test.ts --testNamePattern='shell.exec rejects a hard-linked root entry before starting a process'
