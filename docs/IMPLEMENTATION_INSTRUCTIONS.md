@@ -21,6 +21,8 @@ Control Center向けprojectionは選択候補と計画scopeをgoal ref／version
 
 仕事ごとの目的版選択→J計画固定→HDS source sealへの接続はこの範囲で`WIRED`。既存`file.search` target versionは同source contextへ入る。D02.01／D02.02全体は`BUILD_GAP`を維持する。plannerのtask内容と選択purposeの意味的関係、file.search以外のBroker canonical target identity、全仕事の結果→M→帰還は未接続。次consumerはこれらを実経路へ結び、goal projectionのdigestだけを意味判断へ昇格させないこと。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。別repo変更、実credential・業務作用、公開・出荷判断なし。
 
+実装commit=`a61aea27f082fdf78dbdcab3833409a81d62fef1`を`main`へpushし、remote `refs/heads/main`との一致を確認した。local recovery branch current／previous=`04b485d...`／`4d5e852...`、remote backup tag二本も同じSHA。worktree clean。Actions未使用。
+
 ### 前回BUILD_BATCH：`QEB-01-D02.01-WEBCHAT-PURPOSE-CHANGE-L3-J-COMMIT`
 
 開始HEAD／`origin/main`=`4d5e8528b674bc39ed452309f36258e52c97ea78`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02、WebChat owner credential、Gateway approval、HDS GoalGovernance実経路を再読した。編集前local recovery branch／remote backup tagはcurrent=`4d5e852...`／previous=`8b996036...`で一致。D01.03 stashは未変更。
