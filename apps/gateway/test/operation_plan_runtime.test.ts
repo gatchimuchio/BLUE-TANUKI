@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
-import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
-  ToolRegistry, fileSearchTool, gmailWriteTool } from "@blue-tanuki/core";
-import { createGatewayInternalInboundRequest, GmailWriteTargetVersionObservationSchema, OperationPlanCheckpointSchema,
+  ToolRegistry, fileSearchTool, fileWriteTool, gmailWriteTool } from "@blue-tanuki/core";
+import { createGatewayInternalInboundRequest, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
+  OperationPlanCheckpointSchema,
   type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
@@ -1060,6 +1061,75 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       .toThrow(/target version binding does not match evidence/);
     authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, targetObservation);
     // The fixture binds the existing draft state only; no Gmail provider request is issued.
+  });
+
+  it("J計画のfile.writeは未存在のcreate対象とpayloadをHDS・Executor ticketへ結び実ファイルへ接続する", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-write-"));
+    const workspace = join(root, "workspace"); const content = "synthetic planned file content\n";
+    await mkdir(workspace);
+    vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+    const hds = new HDSUpperController();
+    try {
+      const origin = request("plan:compute synthetic noteを新規作成");
+      const target = { kind: "file" as const, id: "notes.txt" };
+      const candidate: OperationPlan = {
+        version: "operation-core.v1", plan_id: `file-write-plan-${origin.id}`, request_id: origin.id,
+        state: "planned", steps: [{ step_id: "create-note", operation: "file.write", target, state: "planned",
+          effects: ["write"], permission: { risk: "medium", approval_level: "L2_operate",
+            final_review_required: false, hds_brain_authority_required: true, approval_gate_required: true },
+          adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
+          parameters: { path: "notes.txt", content, mode: "create" },
+          preparation: { depends_on: [], bindings: [], preconditions: [],
+            validation: [{ check_id: "created-note", method: "result_equals", target,
+              expected: { path: "notes.txt", sandbox_root: workspace, mode: "create", bytes_written: Buffer.byteLength(content) } }],
+            compensation: { available: false, reason: "a newly created file requires owner-directed cleanup" } } }],
+        rollback: { available: false },
+        raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+        planner_output_used_for_authority: false, hds_brain_authority_required: true,
+      };
+      const planExecutor = rig(hds, candidate); await planExecutor.run(hds.decide(origin).command!);
+      const selected = review(hds, candidate, "create-note");
+      if (selected.command?.type !== "tool_call" || selected.command.payload.tool_name !== "file.write") {
+        throw new Error("bounded file.write plan was not connected");
+      }
+      const planBindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
+      if (!planBindingDigest) throw new Error("selected file.write plan source was unavailable");
+      const tools = new ToolRegistry(); tools.register(fileWriteTool);
+      const authority = createExecutorApprovalAuthority();
+      const executor = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+        tools, approval_authority: authority });
+      const observation = FileWriteTargetVersionObservationSchema.parse(await executor.inspectCommandTargetVersion(
+        selected.command, { BLUE_TANUKI_FILE_ROOT: workspace }, planBindingDigest));
+      expect(observation).toMatchObject({ operation_plan_binding_digest: planBindingDigest,
+        target_state: "absent", used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(observation)).not.toContain(content);
+      expect(() => hds.createExecutionAuthorityBinding(selected.command!, { ...observation, payload_digest: "f".repeat(64) }))
+        .toThrow(/file.write target version does not match/);
+      const binding = hds.createExecutionAuthorityBinding(selected.command, observation);
+      expect(binding.broker_target_version_observation_digest).toBe(operationPlanDigest(observation));
+      expect(hds.beginOperationPlanAttempt(selected.command)).toBe(true);
+      const approval = evaluateApproval(selected.command, [], { actor: "fixture-owner", default_mode: "full_access" });
+      const proof = { source: "approval_gate" as const, decision: "allow" as const, approved_by: "fixture-owner",
+        approved_at_ms: Date.now(), upstream_commit_hash: selected.command.upstream_decision.commit_hash,
+        operation: approval.context.operation, risk: approval.risk, final_review_required: approval.final_review_required,
+        reason: "synthetic create-only file plan fixture" };
+      const approved = authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, observation);
+      const feedback = await executor.execute(approved);
+      if (feedback.status !== "success") throw new Error(`planned file.write failed: ${feedback.error ?? "unknown"}`);
+      expect(feedback.status).toBe("success");
+      expect(await readFile(join(workspace, "notes.txt"), "utf8")).toBe(content);
+      const overwriteOrigin = request("plan:compute overwrite an existing note");
+      const overwriteCandidate = structuredClone(candidate);
+      overwriteCandidate.plan_id = `file-write-overwrite-${overwriteOrigin.id}`;
+      overwriteCandidate.request_id = overwriteOrigin.id;
+      overwriteCandidate.steps[0]!.parameters!.mode = "overwrite";
+      const overwritePlanExecutor = rig(hds, overwriteCandidate);
+      await overwritePlanExecutor.run(hds.decide(overwriteOrigin).command!);
+      expect(review(hds, overwriteCandidate, "create-note").command).toBeNull();
+      expect(hds.getAudit().verify()).toBe(true);
+    } finally {
+      hds.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("実file.search結果を依存入力にし、変更pendingだけ失効して旧版と試行済みを保持", async () => {

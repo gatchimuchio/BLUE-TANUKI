@@ -5,6 +5,7 @@ import * as path from "node:path";
 import {
   invokeFileSearch,
   inspectFileSearchTargetVersion,
+  inspectFileWriteTargetVersion,
   invokeFileWrite,
   invokeFileEdit,
   invokeHttpFetch,
@@ -267,6 +268,27 @@ describe("built-in tools", () => {
       expect(await fs.readFile(path.join(dir, "notes", "a.txt"), "utf8")).toBe(
         "gamma\n",
       );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("J計画のfile.writeはpayload変更と実行直前の競合を拒否し、既存内容を保つ", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-plan-write-"));
+    const env = { BLUE_TANUKI_FILE_ROOT: dir };
+    const args = { path: "notes.txt", content: "reviewed content\n", mode: "create" };
+    const operationPlanBindingDigest = "a".repeat(64);
+    const commandDigest = "b".repeat(64);
+    const evidence = { env, operation_plan_binding_digest: operationPlanBindingDigest, command_digest: commandDigest };
+    try {
+      const observation = await inspectFileWriteTargetVersion(args, evidence);
+      await expect(invokeFileWrite({ ...args, content: "changed after review\n" }, {
+        ...evidence, expected_target_version: observation,
+      })).rejects.toThrow(/target version changed/);
+      await fs.writeFile(path.join(dir, "notes.txt"), "concurrent owner content\n", "utf8");
+      await expect(invokeFileWrite(args, { ...evidence, expected_target_version: observation }))
+        .rejects.toThrow(/must be absent|target version changed/);
+      expect(await fs.readFile(path.join(dir, "notes.txt"), "utf8")).toBe("concurrent owner content\n");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

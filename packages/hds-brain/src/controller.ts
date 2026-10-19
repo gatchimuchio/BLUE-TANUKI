@@ -25,6 +25,9 @@ import {
   inspectOperationCommandExecutionResult,
   OperationPlanExternalReceiptObservationSchema,
   FileSearchTargetVersionObservationSchema,
+  FileWriteTargetVersionObservationSchema,
+  fileWritePayloadDigest,
+  fileWriteTargetIdentityDigest,
   GmailWriteTargetVersionObservationSchema,
   OperationPlanControlSchema,
   OperationPlanComputeInputSchema,
@@ -1741,6 +1744,26 @@ ${planControl.question}`,
         throw new Error("HDS file.search target version does not match the current Operation Plan source");
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
+    } else if (command.type === "tool_call" && command.payload.tool_name === "file.write" &&
+        operation_plan_binding_digest !== undefined) {
+      if (brokerTargetVersionObservation === undefined) {
+        throw new Error("HDS planned file.write target version observation is required");
+      }
+      const observation = FileWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+      const args = command.payload.arguments;
+      const commandPath = args.path;
+      const commandContent = args.content;
+      if (args.mode !== "create" || typeof commandPath !== "string" || typeof commandContent !== "string" ||
+          Object.keys(args).some((key) => !["path", "content", "mode", "max_bytes"].includes(key)) ||
+          observation.command_digest !== operationPlanDigest(command) ||
+          observation.target_identity_digest !== fileWriteTargetIdentityDigest(commandPath) ||
+          observation.payload_digest !== fileWritePayloadDigest(commandContent)) {
+        throw new Error("HDS file.write target version does not match the issued command");
+      }
+      if (observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
+        throw new Error("HDS file.write target version does not match the current Operation Plan source");
+      }
+      brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&
         ["draft.create", "message.send", "draft.send"].includes(String(command.payload.arguments.operation))) {
       if (brokerTargetVersionObservation === undefined) {
@@ -2367,7 +2390,7 @@ ${planControl.question}`,
         ...(planPurposeMessage ? [planPurposeMessage] : []),
         ...(planCompute?.requested && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? [{ role: "system" as const,
-          content: `候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan, goal_purpose_relation: {outcome, evidence}}です。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。plan.stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。goal_purpose_relation.outcomeはsupports|conflicts|unknown、evidenceはtask_quoteとpurpose_quoteの原文連続引用（各1〜800文字）の配列です。taskと選択目的の関係を根拠付きで候補化し、根拠を確認できないときはoutcome=unknown、evidence=[]とします。引用が一致しても意味適合を証明せず、この関係候補は非権威で、Jによる独立評価前は実行できません。authority、permission、approvalを出力・推定しないでください。未実行を成功と申告しないこと。plan.planner_output_used_for_authority=false、plan.hds_brain_authority_required=true。plan.raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。plan.rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致、およびgmail.writeのexternal_service target id=gmailでoperation=message.sendまたはdraft.createを単一のto、subject、body_textに限って扱い、draft.sendはdraft_idだけを指定して既存draftのresume-authenticated no-store内容確認を通す場合に限ります。draft.sendのMIME本文・宛先・送信元・reply-to・provider版を再読照合し、HTML／multipart／添付はfail-closedです。Gmail計画へcc/bcc/fromやcredentialを含めません。採用・承認・実行はこの計算の責務ではありません。` }] : []),
+          content: `候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan, goal_purpose_relation: {outcome, evidence}}です。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。plan.stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。goal_purpose_relation.outcomeはsupports|conflicts|unknown、evidenceはtask_quoteとpurpose_quoteの原文連続引用（各1〜800文字）の配列です。taskと選択目的の関係を根拠付きで候補化し、根拠を確認できないときはoutcome=unknown、evidence=[]とします。引用が一致しても意味適合を証明せず、この関係候補は非権威で、Jによる独立評価前は実行できません。authority、permission、approvalを出力・推定しないでください。未実行を成功と申告しないこと。plan.planner_output_used_for_authority=false、plan.hds_brain_authority_required=true。plan.raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。plan.rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致、file.writeのinternal_runtime file targetによる相対path指定・mode=createのみ（未存在対象を新規作成し、overwrite／appendは選択不可）、およびgmail.writeのexternal_service target id=gmailでoperation=message.sendまたはdraft.createを単一のto、subject、body_textに限って扱い、draft.sendはdraft_idだけを指定して既存draftのresume-authenticated no-store内容確認を通す場合に限ります。file.writeではpath・content・root・親directory状態をdigestのみで観測し、実行直前に再照合します。draft.sendのMIME本文・宛先・送信元・reply-to・provider版を再読照合し、HTML／multipart／添付はfail-closedです。Gmail計画へcc/bcc/fromやcredentialを含めません。採用・承認・実行はこの計算の責務ではありません。` }] : []),
         { role: "user", content: req.content },
       ],
         ...(log.memory_retrieval_suppressed_for === "transient_document_organization" || planCompute?.requested

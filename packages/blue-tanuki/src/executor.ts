@@ -6,6 +6,9 @@ import {
   BOUNDARY_EXCHANGE_SCHEMA_VERSION,
   BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
   canonicalFileSearchTargetVersionObservation,
+  FileWriteTargetVersionObservationSchema,
+  fileWritePayloadDigest,
+  fileWriteTargetIdentityDigest,
   FileSearchTargetVersionObservationSchema,
   GmailWriteTargetVersionObservationSchema,
   parseBoundaryExchangeAtBoundary,
@@ -41,7 +44,7 @@ import {
   type ComputeRequest,
 } from "./llm/compute.js";
 import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolRegistry } from "./tools/registry.js";
-import { fileSearchTool, gmailWriteTool } from "./tools/builtin.js";
+import { fileSearchTool, fileWriteTool, gmailWriteTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest } from "./tools/google_write.js";
 import type { SessionStore } from "./sessions/types.js";
@@ -260,6 +263,19 @@ function approveCommandForExecution(
         throw new Error("Executor approval rejected: file.search target version does not match command");
       }
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "file.write") {
+      const observation = FileWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      const args = snapshot.payload.arguments;
+      if (!hds_binding?.operation_plan_binding_digest || args.mode !== "create" ||
+          typeof args.path !== "string" || typeof args.content !== "string" ||
+          Object.keys(args).some((key) => !["path", "content", "mode", "max_bytes"].includes(key)) ||
+          observation.command_digest !== operationPlanDigest(snapshot) ||
+          observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
+          observation.target_identity_digest !== fileWriteTargetIdentityDigest(args.path) ||
+          observation.payload_digest !== fileWritePayloadDigest(args.content)) {
+        throw new Error("Executor approval rejected: file.write target version does not match command or plan source");
+      }
+      target_version_observation = Object.freeze(observation);
     } else if (snapshot.payload.tool_name === "gmail.write" &&
         ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation))) {
       const observation = GmailWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
@@ -292,6 +308,11 @@ function approveCommandForExecution(
   if (runtime.require_hds_execution_binding && snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.search" &&
       target_version_observation?.schema_version !== "blue-tanuki.file-search-target-version.v1") {
     throw new Error("Executor approval rejected: file.search target version evidence is required");
+  }
+  if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.write" &&
+      hds_binding?.operation_plan_binding_digest &&
+      target_version_observation?.schema_version !== "blue-tanuki.file-write-target-version.v1") {
+    throw new Error("Executor approval rejected: planned file.write target version evidence is required");
   }
   if (!hds_binding && runtime.require_hds_execution_binding) {
     throw new Error("Executor approval rejected: HDS execution authority binding is required");
@@ -454,7 +475,7 @@ function readFileSearchWorkerResult(value: unknown, expected: FileSearchTargetVe
 export class Executor {
   constructor(private readonly deps: ExecutorDeps) {}
 
-  /** Read-only preflight for the exact registered built-in file.search adapter. */
+  /** Read-only preflight for exact registered built-in target resolvers. */
   async inspectCommandTargetVersion(command: ExecuteCommand,
     env?: Readonly<Record<string, string | undefined>>,
     operationPlanBindingDigest?: string): Promise<BrokerTargetVersionObservation | undefined> {
@@ -486,6 +507,26 @@ export class Executor {
           payloadMismatch ||
           observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
         throw new Error("gmail.write target version resolver returned evidence for another command or plan source");
+      }
+      return Object.freeze(observation);
+    }
+    if (command.payload.tool_name === "file.write" && operationPlanBindingDigest !== undefined) {
+      const tool = this.deps.tools.get("file.write");
+      if (tool !== fileWriteTool || !tool.inspect_target_version) {
+        throw new Error("file.write target version resolver requires the registered built-in adapter");
+      }
+      const observation = FileWriteTargetVersionObservationSchema.parse(
+        await tool.inspect_target_version(command.payload.arguments, {
+          ...(env ? { env } : {}),
+          operation_plan_binding_digest: operationPlanBindingDigest,
+          command_digest: operationPlanDigest(command),
+        }),
+      );
+      if (command.payload.arguments.mode !== "create" || observation.command_digest !== operationPlanDigest(command) ||
+          observation.target_identity_digest !== fileWriteTargetIdentityDigest(String(command.payload.arguments.path ?? "")) ||
+          observation.payload_digest !== fileWritePayloadDigest(String(command.payload.arguments.content ?? "")) ||
+          observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
+        throw new Error("file.write target version resolver returned evidence for another command or plan source");
       }
       return Object.freeze(observation);
     }

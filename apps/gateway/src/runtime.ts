@@ -369,7 +369,11 @@ async function runCliWithExecutionStore(
     targetVersionObservation = await executor.inspectCommandTargetVersion(command, undefined, operationPlanBindingDigest);
   } catch {
     const reason = command.type === "tool_call" && command.payload.tool_name === "gmail.write"
-      ? "gmail_write_target_version_unavailable" : "file_search_target_version_unavailable";
+      ? "gmail_write_target_version_unavailable"
+      : command.type === "tool_call" && command.payload.tool_name === "file.search"
+        ? "file_search_target_version_unavailable"
+        : command.type === "tool_call" && command.payload.tool_name === "file.write"
+          ? "file_write_target_version_unavailable" : "broker_target_version_unavailable";
     hds.onCommandLifecycle(command.id, "approval_cancelled", {
       actor: inbound.user,
       reason,

@@ -2,7 +2,22 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D04.02-E03.02-RECEIPT-REFLECTION`
+### 最新BUILD_BATCH：`QEB-01-D02.01-FILE-WRITE-CREATE-TARGET-BINDING`
+
+開始HEAD／`origin/main`=`dec16169bb49c07237d17bbd8fdb5feaa2fff2d4`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示とD02.01／F01.01を再読した。D4-Pocketの現行AGENTS §3.1は`workflow_dispatch`をlocalで不足するOS build・artifact生成・重い検査の補助に限定している。確認時のD4 `main`／`origin/main`は`4ac39c81328aba1aa1f867d2b7cce8a1d314e8c8`で、別作業のdirty差分を保持し読取確認だけを行った。今回のWindows local検証で不足する対象はなく、Actions未使用。C08.03実provider保留、P13 owner-GO保留、他repo変更禁止を維持する。
+
+J Operation Planの`file.write` target resolverを、`internal_runtime`／相対file target／`mode=create`だけに限定して接続した。未存在target、path、content digest、canonical workspace root、親directory identity、current plan source、正確なcommand digestを非権威observationへ結び、HDS execution sealとExecutor ticketで同じ観測を固定する。adapterは実行直前に再観測し、payloadまたはtarget stateが変化したら拒否する。ファイル生成は`wx`で行うため競合時に既存内容を上書きしない。Operation Planのoverwrite／append選択は未接続のまま維持する。通常resultへ観測やraw contentは出さない。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `operation_plan_runtime.test.ts`／Core `tools_builtin.test.ts` | PASS、24/24と48/48、合計72/72。J plan→target observation→HDS seal→Executor approval→隔離temp workspace新規作成、payload差替え・対象競合拒否、overwrite plan選択拒否を確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| `pnpm hds:standalone` | PASS。Runtime Invariants `all_ok=true`。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語基底の既存移行負債76件は継続注意。 |
+
+実provider・実credential・owner workspaceへのfile write・GitHub Actionsは未実施。計画file.write create-only経路はこの合成temp条件で`WIRED`。file.write結果を依存step／Mへ返す一般経路、全体一仕事、D02.01／D02.02全体、QE_QC／QE_QA／5OS実機は未成立。次はfile.writeの実結果を現在Planへどう帰属・検証し、観測だけを成功へ読み替えずにMへ帰還できるかを接続対象として再評価する。
+
+### 前回BUILD_BATCH：`QEB-01-D04.02-E03.02-RECEIPT-REFLECTION`
 
 開始HEAD／`origin/main`=`36448721a80af3049f6e7c213c9757a25a153e7d`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示とD04.02／D08.01／E03.02を再読した。D4-Pocket `main`=`71e1278439cab16bf6f7e5514679e4756500b9af`のAGENTS §3.1を確認した。D4作業ツリーには別作業のLinux workflow等の未commit差分があり、触れていない。今回の検査はWindows localで可能なためActions未使用。C08.03実provider保留とP13 owner-GO保留を維持する。
 

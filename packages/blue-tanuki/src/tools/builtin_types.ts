@@ -1,4 +1,4 @@
-import type { FileSearchTargetVersionObservation } from "@blue-tanuki/protocol";
+import type { FileSearchTargetVersionObservation, FileWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 
 export type Env = Record<string, string | undefined>;
 
@@ -132,4 +132,7 @@ export interface FileSearchOptions {
 
 export interface FileWriteOptions {
   env?: Env;
+  expected_target_version?: FileWriteTargetVersionObservation;
+  operation_plan_binding_digest?: string;
+  command_digest?: string;
 }

@@ -7,9 +7,14 @@ import { BlockList, isIP, type LookupFunction } from "node:net";
 import * as path from "node:path";
 import {
   canonicalFileSearchTargetVersionObservation,
+  canonicalFileWriteTargetVersionObservation,
   FileSearchTargetVersionObservationSchema,
+  FileWriteTargetVersionObservationSchema,
+  fileWritePayloadDigest,
+  fileWriteTargetIdentityDigest,
   requireToolOperationDescriptor,
   type FileSearchTargetVersionObservation,
+  type FileWriteTargetVersionObservation,
 } from "@blue-tanuki/protocol";
 import { echoTool, type Tool } from "./registry.js";
 import {
@@ -1588,11 +1593,9 @@ export async function invokeFileWrite(
   opts: FileWriteOptions = {},
 ): Promise<unknown> {
   const env = opts.env ?? process.env;
-  const sandboxRoot = await sandboxRootFromEnv(env);
-  const { filepath, relative_path } = await resolveSandboxFilePath(
-    stringArg(args, "path")!,
-    sandboxRoot,
-  );
+  let sandboxRoot: string;
+  let filepath: string;
+  let relative_path: string;
   const content = stringArg(args, "content")!;
   const modeRaw = stringArg(args, "mode", false) ?? "create";
   if (modeRaw !== "create" && modeRaw !== "overwrite" && modeRaw !== "append") {
@@ -1602,6 +1605,29 @@ export async function invokeFileWrite(
   const bytes = Buffer.byteLength(content, "utf8");
   if (bytes > maxBytes) {
     throw new Error(`file.write content exceeds max_bytes (${bytes} > ${maxBytes})`);
+  }
+
+  if (opts.expected_target_version) {
+    const expected = FileWriteTargetVersionObservationSchema.parse(opts.expected_target_version);
+    if (modeRaw !== "create" || !opts.command_digest || !opts.operation_plan_binding_digest ||
+        expected.command_digest !== opts.command_digest ||
+        expected.operation_plan_binding_digest !== opts.operation_plan_binding_digest) {
+      throw new Error("file.write plan target evidence does not match the approved command");
+    }
+    const resolved = await resolveFileWriteTargetVersion(args, {
+      env,
+      command_digest: opts.command_digest,
+      operation_plan_binding_digest: opts.operation_plan_binding_digest,
+    });
+    if (canonicalFileWriteTargetVersionObservation(resolved.observation) !==
+        canonicalFileWriteTargetVersionObservation(expected)) {
+      throw new Error("file.write target version changed; request fresh review");
+    }
+    ({ sandbox_root: sandboxRoot, filepath, relative_path } = resolved);
+  } else {
+    sandboxRoot = await sandboxRootFromEnv(env);
+    const resolved = await resolveSandboxFilePath(stringArg(args, "path")!, sandboxRoot);
+    ({ filepath, relative_path } = resolved);
   }
 
   if (modeRaw === "create") {
@@ -1618,6 +1644,82 @@ export async function invokeFileWrite(
     mode: modeRaw,
     bytes_written: bytes,
   };
+}
+
+interface ResolvedFileWriteTargetVersion {
+  sandbox_root: string;
+  filepath: string;
+  relative_path: string;
+  observation: FileWriteTargetVersionObservation;
+}
+
+/** J計画で使う、上限付きcreate-only file.writeだけを観測する。 */
+async function resolveFileWriteTargetVersion(
+  args: Record<string, unknown>,
+  opts: Pick<FileWriteOptions, "env" | "command_digest" | "operation_plan_binding_digest">,
+): Promise<ResolvedFileWriteTargetVersion> {
+  const pathArg = stringArg(args, "path")!;
+  const content = stringArg(args, "content")!;
+  const mode = stringArg(args, "mode", false);
+  if (mode !== "create" || !opts.command_digest || !opts.operation_plan_binding_digest ||
+      !/^[a-f0-9]{64}$/.test(opts.command_digest) || !/^[a-f0-9]{64}$/.test(opts.operation_plan_binding_digest) ||
+      Object.keys(args).some((key) => !["path", "content", "mode", "max_bytes"].includes(key))) {
+    throw new Error("file.write plan target resolver supports only bounded create commands");
+  }
+  assertPlannedFileWritePath(pathArg);
+  const env = opts.env ?? process.env;
+  const sandboxRoot = await sandboxRootFromEnv(env);
+  const { filepath: resolvedPath, relative_path } = await resolveSandboxFilePath(pathArg, sandboxRoot);
+  const realParent = await fs.realpath(path.dirname(resolvedPath));
+  const filepath = path.join(realParent, path.basename(resolvedPath));
+  const maxBytes = positiveIntArg(args, "max_bytes", 256_000, 1_000_000);
+  const payloadBytes = Buffer.byteLength(content, "utf8");
+  if (payloadBytes > maxBytes) throw new Error("file.write plan payload exceeds max_bytes");
+
+  const existing = await fs.lstat(filepath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (existing) throw new Error("file.write planned create target must be absent");
+
+  const parentStat = await fs.stat(realParent, { bigint: true });
+  if (!parentStat.isDirectory()) throw new Error("file.write parent must be a directory");
+  const rootStat = await fs.stat(sandboxRoot, { bigint: true });
+  const observation = FileWriteTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.file-write-target-version.v1",
+    target_identity_digest: fileWriteTargetIdentityDigest(pathArg),
+    payload_digest: fileWritePayloadDigest(content),
+    canonical_root_digest: createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.file-write-root-identity.v1", sandboxRoot, rootStat.dev.toString(), rootStat.ino.toString(),
+    ]), "utf8").digest("hex"),
+    parent_identity_digest: createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.file-write-parent-identity.v1", realParent, parentStat.dev.toString(), parentStat.ino.toString(),
+    ]), "utf8").digest("hex"),
+    command_digest: opts.command_digest,
+    operation_plan_binding_digest: opts.operation_plan_binding_digest,
+    target_state: "absent",
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return { sandbox_root: sandboxRoot, filepath, relative_path, observation };
+}
+
+export async function inspectFileWriteTargetVersion(
+  args: Record<string, unknown>,
+  opts: Pick<FileWriteOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
+): Promise<FileWriteTargetVersionObservation> {
+  return (await resolveFileWriteTargetVersion(args, opts)).observation;
+}
+
+function assertPlannedFileWritePath(pathArg: string): void {
+  if (pathArg.length === 0 || pathArg.length > 512 || path.isAbsolute(pathArg) || pathArg.includes("\\") ||
+      pathArg.includes(":") || pathArg.includes("\0") || pathArg.startsWith("/")) {
+    throw new Error("file.write plan path must be a bounded relative path");
+  }
+  const segments = pathArg.split("/");
+  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+    throw new Error("file.write plan path must not contain empty or traversal segments");
+  }
 }
 
 export async function invokeFileEdit(
@@ -1695,8 +1797,25 @@ export const fileWriteTool: Tool = {
   name: "file.write",
   description: "Create, overwrite, or append a UTF-8 file under BLUE_TANUKI_FILE_ROOT.",
   required_capabilities: requireToolOperationDescriptor("file.write").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeFileWrite(args);
+  async inspect_target_version(args: Record<string, unknown>, options?: {
+    env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
+  }): Promise<FileWriteTargetVersionObservation> {
+    return await inspectFileWriteTargetVersion(args, options);
+  },
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    const targetVersion = context.target_version_observation;
+    if (targetVersion === undefined) return await invokeFileWrite(args);
+    if (targetVersion.schema_version !== "blue-tanuki.file-write-target-version.v1") {
+      throw new Error("file.write received unsupported Broker target version evidence");
+    }
+    if (typeof context.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(context.command_digest)) {
+      throw new Error("file.write requires an approved Executor command identity");
+    }
+    return await invokeFileWrite(args, {
+      expected_target_version: targetVersion,
+      command_digest: targetVersion.command_digest,
+      operation_plan_binding_digest: targetVersion.operation_plan_binding_digest,
+    });
   },
 };
 
