@@ -103,13 +103,13 @@ pub fn mount_bounded_overlay() -> Result<(), String> {
         )
     };
     if mounted != 0 {
-        return Err("workspace_quota_unavailable".to_string());
+        return Err("workspace_storage_mount_failed".to_string());
     }
 
     let upper = Path::new(STORAGE_PATH).join("upper");
     let work = Path::new(STORAGE_PATH).join("work");
-    fs::create_dir(&upper).map_err(|_| "workspace_quota_unavailable".to_string())?;
-    fs::create_dir(&work).map_err(|_| "workspace_quota_unavailable".to_string())?;
+    fs::create_dir(&upper).map_err(|_| "workspace_storage_layout_failed".to_string())?;
+    fs::create_dir(&work).map_err(|_| "workspace_storage_layout_failed".to_string())?;
 
     let overlay = CString::new("overlay").map_err(|_| "workspace_quota_unavailable".to_string())?;
     let destination =
@@ -130,7 +130,7 @@ pub fn mount_bounded_overlay() -> Result<(), String> {
         )
     };
     if mounted != 0 {
-        return Err("workspace_quota_unavailable".to_string());
+        return Err("workspace_overlay_mount_failed".to_string());
     }
     Ok(())
 }

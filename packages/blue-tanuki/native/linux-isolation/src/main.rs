@@ -1325,6 +1325,9 @@ fn stable_error(error: &str) -> String {
         let detail = error.rsplit(':').next().unwrap_or_default();
         const SAFE_DETAILS: &[&str] = &[
             "workspace_quota_unavailable",
+            "workspace_storage_mount_failed",
+            "workspace_storage_layout_failed",
+            "workspace_overlay_mount_failed",
             "workspace_commit_failed",
             "workspace_changed_during_execution",
             "workspace_write_limit_exceeded",
@@ -1390,6 +1393,12 @@ mod tests {
                 "linux_sandbox_start_or_shutdown_failed:linux_isolation_error:workspace_quota_unavailable"
             ),
             "linux_sandbox_start_or_shutdown_failed:workspace_quota_unavailable"
+        );
+        assert_eq!(
+            stable_error(
+                "linux_sandbox_start_or_shutdown_failed:linux_isolation_error:workspace_overlay_mount_failed"
+            ),
+            "linux_sandbox_start_or_shutdown_failed:workspace_overlay_mount_failed"
         );
         assert_eq!(
             stable_error("linux_sandbox_start_or_shutdown_failed:/tmp/private path"),
