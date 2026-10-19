@@ -3,6 +3,7 @@ import type { GoalGovernanceConfig, GoalGovernanceEvent } from "@blue-tanuki/pro
 import { GOAL_GOVERNANCE_SCHEMA_VERSION } from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
 import { GoalGovernanceLedger, goalGovernanceEventDigest, purposeVersionForEventTime } from "../src/goal_governance.js";
+import { operationPlanDigest } from "../src/operation_plan.js";
 
 const delegated = "goal_0000000000000001";
 const operational = "goal_0000000000000002";
@@ -255,6 +256,11 @@ describe("HDS goal governance consumer", () => {
     expect(configured.command?.type ?? null).toBe(baseline.command?.type ?? null);
     expect(configured.command && { ...configured.command, id: "same" })
       .toEqual(baseline.command && { ...baseline.command, id: "same" });
+    if (!configured.command) throw new Error("configured HDS decision did not issue a command");
+    const binding = controller.createExecutionAuthorityBinding(configured.command);
+    expect(binding.goal_governance_projection_digest).toBe(operationPlanDigest(projection));
+    expect(binding.goal_governance_used_for_authority).toBe(false);
+    expect(JSON.stringify(binding)).not.toContain(delegated);
     expect(JSON.stringify(controller.getAudit().list())).toContain("ge_0000000000000002");
     expect(controller.getAudit().verify()).toBe(true);
   });

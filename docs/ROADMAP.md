@@ -2,6 +2,8 @@
 
 2026-10-19。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-19の`QEB-01-D02.01-GOAL-GOVERNANCE-SOURCE-BINDING`では、設定済みHDS GoalGovernance projectionのdigestをHDS source sealとExecutor ticket proofへ結合した。projectionは`used_for_authority=false`で、判断・権限は変わらない。Gateway productionでのGoalGovernance設定、owner本人認証、purpose版の実仕事への適用、Broker target identity接続は未成立であり、D02.01=`BUILD_GAP`を維持する。HDS／Executor focused tests 12/12、typecheck、build、standaloneはPASS。
+
 2026-10-19の`QEB-01-D02.01-BROKER-TARGET-VERSION-BINDING`では、組込みread-only `file.search`の最大1,000 file観測をHDS source seal、Executor ticket、Gateway専用workerの実検索へ結合した。承認後に観測対象が変われば結果を返さず再確認を求め、内部evidenceは公開resultから分離した。focused Core tests 51/51、Gateway worker tests 8/8、result reconciliation 33/33、typecheck、build、HDS standaloneはPASS。worker suiteは実行時だけtimeoutを15秒に拡張し、既定5秒の一件timeoutを個別・全件再実行で確認した。これは全対象snapshot、delegation／purpose version、独立Broker認証の実証ではない。D02.01=`BUILD_GAP`を維持する。
 
 2026-10-19の`QEB-01-D02.01-OPERATION-PLAN-SOURCE-CONTEXT`では、J所有OperationPlanのexact selected revision／step／declared target・effects・argumentsのdigestをHDS source seal経由でExecutorの既存ticket proofへ結合した。古いplan revision、selected状態、command内容、upstream identityの不一致はseal発行時に拒否する。これは計画sourceと宣言targetの結合であり、実resource version・owner delegation・意味上のpurpose version・独立Broker認証ではない。focused source-binding tests 4/4、復元後の既存Gateway plan review／Executor test 1件、HDS/Core build、Gateway typecheck、HDS standalone smokeはPASS。D02.01=`BUILD_GAP`を維持し、次は信頼されたdelegation/purpose-version producerをBrokerのcanonical target version resolverへ接続する。

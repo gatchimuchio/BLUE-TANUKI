@@ -2,7 +2,25 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-BROKER-TARGET-VERSION-BINDING`
+### 最新BUILD_BATCH：`QEB-01-D02.01-GOAL-GOVERNANCE-SOURCE-BINDING`
+
+開始HEAD／`origin/main`=`3002c42dc666b80ab2e8547be86fd5d42e54f108`、開始worktree clean。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準要領、active指示、GoalGovernance・HDS source seal・Executor ticketの実経路を再読した。local recovery branch／remote backup tagはcurrent=`3002c42...`／previous=`0fccd1d...`へ期待値照合して更新。D01.03 stashは保持。
+
+HDS constructorへ設定されたGoalGovernanceLedgerが生成するimmutable projection（`used_for_authority=false`）を、exact commandのsource-context digestへ加えた。新HDS binding v3はprojection digestとnon-authority flagを単回sealへ保持し、Executor ticket proof v3は既存HDS source digestを介して同じ版履歴を束縛する。decision内容、権限、Approval、L3境界は変えていない。
+
+これは設定済みHDS内のGoalGovernance projection→source seal→Executor ticketのprovenance接続である。Gatewayのproduction composition rootはまだGoalGovernanceを設定しておらず、現契約のauthorization recordはauthorityラベルとevent digestであってowner本人認証ではない。委任の認証、仕事に適用するgoal/versionの選定・永続producer、Broker target identityとの意味結合は未成立。D02.01=`BUILD_GAP`を維持する。次はowner-governance情報の信頼できるproduction sourceと適用範囲をHDSへ接続し、Brokerの対象解決まで結ぶこと。要求metadataや過去のapprovalから権限を推定しない。
+
+| 限定確認 | 結果 |
+|---|---|
+| HDS `goal_governance.test.ts` | PASS、7/7。governance投影をdecisionへ添付してもdecisionは変わらず、source sealのdigestと`used_for_authority=false`を確認。 |
+| Core `executor_hds_authority_binding.test.ts` | PASS、5/5。governance digestがHDS sealとticket proofへ結合。 |
+| `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | PASS。 |
+| `pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。日本語移行負債76件は既存警告。 |
+| 全workspace test suite／QE_QC／QE_QA／5OS実機 | 未実施。 |
+
+実provider／credential／owner認証／業務作用、D4Pocket／ミニドラ変更、公開・出荷判断なし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-BROKER-TARGET-VERSION-BINDING`
 
 開始HEAD／`origin/main`=`0fccd1dbf5aee520e5e771e1e79b69eecd7d34a2`、開始worktree clean。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準要領、active指示、D02.01とfile.searchの実経路を再読した。local recovery branchはcurrent=`0fccd1d...`／previous=`709bb3f...`、remote backup tagも同じ二世代を指す。D01.03 stashは保持。
 

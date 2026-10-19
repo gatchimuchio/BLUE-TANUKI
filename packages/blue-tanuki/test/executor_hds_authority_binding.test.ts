@@ -2,15 +2,31 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { approvalContextFromCommand, HDSUpperController, operationPlanDigest, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest, FileSearchTargetVersionObservationSchema, OperationPlanCheckpointSchema,
-  type FileSearchTargetVersionObservation } from "@blue-tanuki/protocol";
+  type FileSearchTargetVersionObservation, type GoalGovernanceConfig } from "@blue-tanuki/protocol";
 import type { ExecutionIntentStore, ExecutionIntentTicket } from "../src/execution_intent.js";
 import { createExecutorApprovalAuthority, executorCommandDigest, type ExecutorApprovalProof } from "../src/executor.js";
 
-function issuedCommand(id: string) {
-  const hds = new HDSUpperController();
+function issuedCommand(id: string, goal_governance?: GoalGovernanceConfig) {
+  const hds = new HDSUpperController(goal_governance ? { goal_governance } : {});
   const result = hds.decide({ id, channel: "webchat", user: "fixture-owner", content: "hello world", timestamp: 1 });
   if (!result.command || result.log.commit.decision !== "ASSERT") throw new Error("fixture HDS did not issue an ASSERT command");
-  return { hds, command: result.command };
+  return { hds, command: result.command, log: result.log };
+}
+
+function goalGovernanceConfig(purposeDigest = "a".repeat(64)): GoalGovernanceConfig {
+  return {
+    schema_version: "blue-tanuki.goal-governance.v1",
+    goals: [{
+      goal_ref: "goal_0000000000000001",
+      goal_kind: "delegated",
+      source_ref: "F:0000000000000001",
+      initial_purpose_digest: purposeDigest,
+      initial_interpretation_digest: "b".repeat(64),
+      adopted_at: 1,
+    }],
+    authorizations: [],
+    events: [],
+  };
 }
 
 function issuedPlanCommand() {
@@ -134,7 +150,7 @@ function recordingIntentStore(tickets: ExecutionIntentTicket[]): ExecutionIntent
 
 describe("HDSからExecutorへの非直列化source binding", () => {
   it("正確なHDS発行commandのsource digestをcanonical command/proofと同じticketへ結合する", () => {
-    const { hds, command } = issuedCommand("source-binding-1");
+    const { hds, command, log } = issuedCommand("source-binding-1", goalGovernanceConfig());
     const binding = hds.createExecutionAuthorityBinding(command);
     const digest = executorCommandDigest(command);
     const tickets: ExecutionIntentTicket[] = [];
@@ -144,7 +160,11 @@ describe("HDSからExecutorへの非直列化source binding", () => {
     });
     const proof = proofFor(command);
 
-    expect(Object.keys(binding).sort()).toEqual(["schema_version", "source_context_digest"]);
+    expect(binding.goal_governance_projection_digest).toBe(operationPlanDigest(log.frame.goal_governance));
+    expect(binding.goal_governance_used_for_authority).toBe(false);
+    expect(Object.keys(binding).sort()).toEqual([
+      "goal_governance_projection_digest", "goal_governance_used_for_authority", "schema_version", "source_context_digest",
+    ]);
     expect(JSON.stringify(binding)).not.toContain("fixture-owner");
     expect(JSON.stringify(binding)).not.toContain("hello world");
     expect(() => authority.approve(command, proof, digest)).toThrow(/binding is required/);
@@ -153,7 +173,7 @@ describe("HDSからExecutorへの非直列化source binding", () => {
     expect(tickets).toHaveLength(1);
     expect(tickets[0]!.command_digest).toBe(digest);
     expect(tickets[0]!.proof_digest).toBe(createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v2",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v3",
       command_digest: digest,
       proof,
       hds_source_context_digest: binding.source_context_digest,
@@ -182,6 +202,27 @@ describe("HDSからExecutorへの非直列化source binding", () => {
     expect(tickets).toHaveLength(1);
   });
 
+  it("purpose versionの再構成が変わるとHDS source sealとExecutor ticket proofも変わる", () => {
+    const first = issuedCommand("source-binding-purpose-1", goalGovernanceConfig("a".repeat(64)));
+    const second = issuedCommand("source-binding-purpose-2", goalGovernanceConfig("c".repeat(64)));
+    const firstBinding = first.hds.createExecutionAuthorityBinding(first.command);
+    const secondBinding = second.hds.createExecutionAuthorityBinding(second.command);
+    expect(firstBinding.goal_governance_projection_digest)
+      .toBe(operationPlanDigest(first.log.frame.goal_governance));
+    expect(secondBinding.goal_governance_projection_digest)
+      .toBe(operationPlanDigest(second.log.frame.goal_governance));
+    expect(firstBinding.goal_governance_projection_digest).not.toBe(secondBinding.goal_governance_projection_digest);
+    expect(firstBinding.source_context_digest).not.toBe(secondBinding.source_context_digest);
+
+    const firstTickets: ExecutionIntentTicket[] = [];
+    const secondTickets: ExecutionIntentTicket[] = [];
+    const firstAuthority = createExecutorApprovalAuthority({ execution_store: recordingIntentStore(firstTickets), require_hds_execution_binding: true });
+    const secondAuthority = createExecutorApprovalAuthority({ execution_store: recordingIntentStore(secondTickets), require_hds_execution_binding: true });
+    firstAuthority.approve(first.command, proofFor(first.command), executorCommandDigest(first.command), firstBinding);
+    secondAuthority.approve(second.command, proofFor(second.command), executorCommandDigest(second.command), secondBinding);
+    expect(firstTickets[0]!.proof_digest).not.toBe(secondTickets[0]!.proof_digest);
+  });
+
   it("J選択済みOperationPlanの改訂・step・target・引数bindingを同じExecutor ticketへ結合する", () => {
     const { hds, command, goal, target } = issuedPlanCommand();
     const targetVersion = targetVersionFor(command);
@@ -208,7 +249,7 @@ describe("HDSからExecutorへの非直列化source binding", () => {
 
     expect(tickets).toHaveLength(1);
     expect(tickets[0]!.proof_digest).toBe(createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v2",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v3",
       command_digest: digest,
       proof,
       hds_source_context_digest: binding.source_context_digest,

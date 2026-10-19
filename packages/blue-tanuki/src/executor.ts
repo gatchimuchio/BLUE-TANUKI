@@ -278,7 +278,7 @@ function approveCommandForExecution(
     command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", snapshot.id])).digest("hex"),
     command_digest,
     proof_digest: createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v2",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v3",
       command_digest,
       proof,
       hds_source_context_digest,
