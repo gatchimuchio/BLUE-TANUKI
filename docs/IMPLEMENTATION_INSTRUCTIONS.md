@@ -2,7 +2,24 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-REQUEST-CRITERIA-PLAN-SELECTION`
+### 最新BUILD_BATCH：`QEB-01-D02.01-PURPOSE-CONTENT-J-M-REPLAY`
+
+開始HEAD／`origin/main`=`8f003b6a6906591b05138f468aca8dbd76196d3f`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02およびGoalGovernance→L3 approval→J/M経路を再読した。編集前のlocal recovery branch／remote tagはcurrent=`8f003b6...`／previous=`c503863...`。D01.03 stashは保持。D4-Pocket現行AGENTS §3.1を確認し、Windows localで検査可能なためGitHub Actions／workflowは使用していない。
+
+目的変更のraw本文は、Gateway process内の提案と明示L3 content reviewの間だけ保持し、本文digest一致と対応するL3監査証拠をHDSが再確認した後に、専用J/M private storeへ保存する。J-owned goal eventには固定形式のopaque F-referenceを持たせ、purpose本文はaudit／history／通常projectionへ出さない。起動時はJ/M receipt、event digest、目的digest、version、goal、authorization参照の一致を検証してからaudit eventを再生する。不整合または欠落はfail-closedとし、本文・memory参照を権限として扱わない。Gateway再起動後、復元されたversionを基に新しい提案が作られ、合成rejectで終了することを確認した。
+
+| 限定確認 | 結果 |
+|---|---|
+| `pnpm typecheck`／`pnpm build` | PASS。workspace 15 projects。 |
+| Protocol／HDS `goal_governance.test.ts` とGateway `document_organization_entry.test.ts` | PASS、3 files／21 tests。exact L3、digest不一致拒否、J/M保存、audit replay、Gateway process restartを確認。 |
+| `pnpm hds:standalone`／`pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check` | PASS。standalone audit chain／Runtime Invariantsを確認。日本語基底の既存移行負債76件は注意として残存。 |
+| 全workspace tests／QE_QC／QE_QA／5OS実機／GitHub Actions | 未実施。本batchはWindows localの関連検査で成立し、Actions条件に該当しない。 |
+
+D02.01／D02.02=`BUILD_GAP`を維持する。仕事ごとの目的版・本文を選択したOperation Planへ意味的に適用する経路、未接続Broker target種別のcanonical identity、仕事全体の結果→M→帰還は未成立。次consumerは選択目的と実タスクの関係を過大解釈せず、task-scoped J planとBroker targetを同じHDS→Executor bindingへ接続すること。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。実credential／業務作用、別repo変更、公開・出荷判断なし。
+
+実装commit=`055b022049d9ad725b20e65140168d81aa96ddbe`を`main`へpush済み。push直後のremote `main`とrecovery current／previous tagはそれぞれ`055b022...`／開始HEAD `8f003b6...`。文書closeout後にmainへ同期し、二世代refとclean worktreeを再確認する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-REQUEST-CRITERIA-PLAN-SELECTION`
 
 開始HEAD／`origin/main`=`c5038636ff9cec4a72a4adf9d9d944bba048721a`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、D02.01／D02.02とGoalCriteria→J Operation Plan→HDS source seal／Executor経路を再読した。編集前recovery branch／remote tagはcurrent=`c503863...`／previous=`04b485d...`。D01.03 stashは未変更。D4-PocketのGitHub Actions条件を確認したが、本batchはWindows上で検査でき、対象OS不足・artifact生成・ローカルで実行困難な重い検査に該当しないためActions／workflow未使用。
 
