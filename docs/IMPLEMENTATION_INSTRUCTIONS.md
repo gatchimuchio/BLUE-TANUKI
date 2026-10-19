@@ -2,6 +2,23 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
+### 最新BUILD_BATCH：`QEB-01-D02.01-GATEWAY-GOAL-GOVERNANCE-SOURCE`
+
+開始HEAD／`origin/main`=`73b8b858e5196132232ae8565dd7eb2388352157`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、root`AGENTS.md`、作業標準、active指示、D02.01／D02.02、Gateway→HDSのgoal governance構成経路を再読した。編集前にlocal recovery branchとremote backup tagをcurrent=`73b8b858...`／previous=`40ca1061...`へ更新し、local／remote SHAを照合した。D01.03 stashは未変更。
+
+`BLUE_TANUKI_STATE_ROOT/private-state/goal-governance.json`を任意のprivate sourceとして読み、Gateway serve／CLI composition rootからHDS `GoalGovernanceLedger`へ渡す経路を追加した。protocol boundaryのstrict validation、1 MiB上限、通常ファイル・symlink拒否を適用する。raw purpose textはprotocol boundaryで拒否される。構成がない場合は既存動作を保ち、HDS projectionは`used_for_authority=false`のまま既存source sealへ結合される。
+
+この接続はGateway production consumerへの非権威projection配線であり、owner-governance eventの認証・J所有永続producerではない。設定ファイルの存在やdigest一致をowner承認・本人identity・現在権限へ昇格させず、task別purpose version適用とfile.search以外のBroker target identityも未接続。D02.01／D02.02は`BUILD_GAP`を維持する。
+
+| 限定確認 | 結果 |
+|---|---|
+| Gateway `goal_governance_config.test.ts` | PASS、5/5。未設定、private source読取、HDS non-authority projection、raw purpose text拒否、size上限を確認。 |
+| `pnpm --filter @blue-tanuki/gateway typecheck`／`build` | PASS。 |
+| 全workspace tests／Gateway live serve／QE_QC／QE_QA／5OS実機 | 未実施。 |
+| GitHub Actions | 未使用。対象確認はWindows localで実施可能。 |
+
+C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、D4Pocket／ミニドラ変更・実credential・実業務作用・公開／出荷判断なし。次consumerは、専用owner credential由来の目的変更proposalを意味内容が見える明示L3 reviewへ結び、L3 auditと一致するJ所有の永続eventへappendする経路。credential-holder classを人間identityと扱わない。続いてtaskごとのgoal/version選択・適用とBroker targetを同じHDS→Executor bindingへ接続する。
+
 ### 最新BUILD_BATCH：`QEB-01-D02.02-WEBCHAT-OWNER-CREDENTIAL-INGRESS`
 
 開始HEAD／`origin/main`=`26fa7b4d59b88f1e17b90a056956c4d9e1887856`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS、作業標準、active指示、D02.01／D02.02とWebChat→Gateway→HDSの実経路を再読した。編集前のlocal recovery branch／remote backup tagはcurrent=`26fa7b4...`／previous=`f0d1023...`。D01.03 stash保持。

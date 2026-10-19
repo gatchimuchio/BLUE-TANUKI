@@ -36,6 +36,7 @@ import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { buildAuditLog } from "./audit_config.js";
+import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 import {
   buildLLMBackendFromEnv,
   buildLLMCommandRouteFromEnv,
@@ -468,6 +469,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     audit: buildAuditLog(),
     memory: buildHDSMemoryStore(process.env),
     llm_route: buildLLMCommandRouteFromEnv(),
+    goal_governance: goalGovernanceConfigFromEnvironment(process.env),
     self_health: runtimeSelfHealth,
   });
   const failureMemory = buildFailureMemoryStore(process.env);

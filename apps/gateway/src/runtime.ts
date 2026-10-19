@@ -44,6 +44,7 @@ import { DocumentOrganizationCheckpointStore } from "./document_organization_che
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
+import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -158,6 +159,7 @@ async function runCliWithExecutionStore(
     audit: buildAuditLog(),
     memory: buildHDSMemoryStore(process.env),
     llm_route: buildLLMCommandRouteFromEnv(),
+    goal_governance: goalGovernanceConfigFromEnvironment(process.env),
   });
   const failureMemory = buildFailureMemoryStore(process.env);
   const approval = buildApprovalRuntime(process.env);
