@@ -30,7 +30,7 @@ jobs:
       - name: Install native runtime prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap curl
+          sudo apt-get install --yes apparmor bubblewrap curl
 
       - name: Start and verify the systemd user manager
         shell: bash
@@ -56,6 +56,24 @@ jobs:
             grep -qw "$controller" <<< "$controllers"
           done
           test -x /usr/bin/bwrap
+
+      - name: Allow Bubblewrap user namespaces in this runner
+        shell: bash
+        run: |
+          restriction=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [[ -r "$restriction" && "$(cat "$restriction")" = 1 ]]; then
+            sudo tee /etc/apparmor.d/usr.bin.bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          /usr/bin/bwrap flags=(default_allow) {
+            userns,
+          }
+          PROFILE
+            sudo apparmor_parser -r /etc/apparmor.d/usr.bin.bwrap
+            echo "loaded a temporary AppArmor userns profile for /usr/bin/bwrap"
+          else
+            echo "AppArmor unprivileged-userns restriction is not enabled"
+          fi
 
       - name: Diagnose delegated cgroup and bubblewrap startup
         shell: bash
@@ -118,3 +136,12 @@ jobs:
 
       - name: Run focused doctor state tests
         run: pnpm exec vitest run apps/gateway/test/doctor.test.ts --testNamePattern='shell isolation state'
+
+      - name: Remove temporary Bubblewrap AppArmor profile
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f /etc/apparmor.d/usr.bin.bwrap ]]; then
+            sudo apparmor_parser -R /etc/apparmor.d/usr.bin.bwrap || true
+            sudo rm -f /etc/apparmor.d/usr.bin.bwrap
+          fi
