@@ -2,7 +2,17 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D04.02-E03.02-UNKNOWN-ACTION-OUTCOME-M-OBSERVATION`
+### 最新BUILD_BATCH：`QEB-01-D04.02-E03.02-RECEIPT-OBSERVATION-M-RETURN`
+
+開始HEAD／`origin/main`=`a72b01debc4f0e2fd6002bdaf85391a11fd6b78a`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示、D04.02／D08.01／E03.02を再読した。D4-Pocket AGENTS §3.1のActions条件は`workflow_dispatch`によるlocalにないOS検査・artifact生成・localで不足する重い検査の補助に限る。今回の検証はWindows localで可能なためActions未使用。C08.03実provider保留とP13 owner-GO保留を維持する。
+
+owner要求後に取得した合成local inspection receipt観測を、J checkpointで現在のplan・revision・step・`outcome_unknown`実行bindingへ照合し、Jの既存memory coordinator経由でMへdigest-onlyの`operation-receipt-observation.v1`として保存するconsumerを接続した。M recordは状態・候補数・receipt digest等の限定digest evidenceと非権威flagsだけを保持し、raw receipt ID・本文・provider応答を保存しない。JはM commit／receiptをcheckpointに結び、再起動・再調停で回復可能にする。M保存が確認できない場合は`pending`を返し、成功・目標達成・再送許可に変換しない。
+
+Gateway `external_receipt_observation.test.ts`／`external_action_reconciliation.test.ts`は合計7/7 PASS。`execution_result_reconciliation.test.ts`は34/34 PASS。receipt記録のplan／revision拘束、Mへの非権威保存、raw receipt ID非保存、再起動後の保持、同ticket再作用拒否を確認した。`pnpm typecheck`／`pnpm build`（15 workspace）／`pnpm hds:standalone`／`pnpm smoke:receipt-reconciliation`／`pnpm doctor`／`pnpm docs:check`／`pnpm validate:repo-health`／`git diff --check`はPASS。日本語基底の既存移行負債76件は継続注意。loopback smokeの作用は合成endpointに対する1回だけで、read-only照合後も結果不明を維持した。
+
+実provider・実credential・Gmail接続・実送信・GitHub Actionsは未実施。照合対象は開発用合成endpointのみ。receiptの意味採用・成功判定、実provider取得、目標から結果までの全体一仕事、QE_QC／QE_QA／5OS実機は未成立。次consumerは、Mに保存されたreceipt evidenceをJが明示的な再評価時に参照できる経路であり、証拠だけで権限・成功を生成しない。
+
+### 前回BUILD_BATCH：`QEB-01-D04.02-E03.02-UNKNOWN-ACTION-OUTCOME-M-OBSERVATION`
 
 開始HEAD／`origin/main`=`231fec739a681c9e0f0f7e31610f8fdde233e7c4`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用AGENTS・作業標準・active指示とD04.02／D08.01／E03.02／F02.02を再読した。D4-Pocket AGENTS §3.1のActions条件は、workflow_dispatchでローカルにないOS検査・artifact生成・ローカルで不足する重い検査を補助する場合に限る。今回のWindows検証はlocalで可能なためActions未使用。
 

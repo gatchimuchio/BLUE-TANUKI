@@ -6,6 +6,7 @@ import {
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
   type OperationPlanGoalPurposeRelationCandidate, type OperationPlanGoalPurposeRelationOwnerReview,
   type OperationPlanGoalPurposeRelationRecord, type OperationPlanGoalPurposeRelationReviewArguments, type OperationStep,
+  type MemoryCommitV2, type MemoryUpdateReceiptV1,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema,
   OperationPlanGoalPurposeBindingSchema,
@@ -20,6 +21,7 @@ import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { assessCandidateGoalCriteria, projectRequestGoalCriteria } from "./candidate_criteria.js";
 import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
+import { buildReceiptMemoryCommit, receiptForReceiptMemoryCommit, receiptMemoryIdentity, verifyReceiptMemoryCommit } from "./operation_receipt_memory.js";
 import type { ResultObservationCitation, ResultObservationProjection } from "./operation_result_reflection.js";
 import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 
@@ -357,6 +359,37 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
       if (b.memory_receipt && (!b.memory_commit || !receiptForResultCommit(b.memory_receipt, b.memory_commit))) {
         throw new Error("plan_checkpoint_memory_receipt_mismatch");
       }
+    }
+    const receiptObservationDigests = new Set<string>();
+    for (const observation of p.receipt_observations) {
+      const { evidence_digest, observed_at_ms, ...evidence } = observation;
+      if (receiptObservationDigests.has(evidence_digest) || operationPlanDigest(evidence) !== evidence_digest ||
+          observation.plan_id_digest !== operationPlanDigest(first.plan_id)) {
+        throw new Error("plan_checkpoint_receipt_observation_integrity_mismatch");
+      }
+      receiptObservationDigests.add(evidence_digest);
+      const revision = p.revisions.find((entry) => entry.digest === observation.revision_digest);
+      const step = revision?.plan.steps.find((entry) => operationPlanDigest(entry.step_id) === observation.step_id_digest);
+      const binding = step ? p.bindings.filter((entry) => entry.step_id === step.step_id &&
+        entry.revision_digest === observation.revision_digest).at(-1) : undefined;
+      if (!revision || !step || !binding || stepDigest(step) !== binding.step_digest ||
+          binding.status !== "outcome_unknown" || !binding.execution_admission ||
+          binding.command_digest !== observation.command_digest ||
+          binding.execution_admission.command_digest !== observation.executor_command_digest ||
+          observed_at_ms < binding.execution_admission.issued_at_ms) {
+        throw new Error("plan_checkpoint_receipt_observation_binding_mismatch");
+      }
+    }
+    const receiptMemoryDigests = new Set<string>();
+    for (const delivery of p.receipt_memory ?? []) {
+      const observations = p.receipt_observations.filter((entry) => entry.evidence_digest === delivery.evidence_digest);
+      if (receiptMemoryDigests.has(delivery.evidence_digest) || observations.length !== 1 ||
+          (delivery.memory_commit && (!memoryAvailable || !verifyReceiptMemoryCommit(observations[0]!, delivery))) ||
+          (delivery.memory_receipt && (!delivery.memory_commit ||
+            !receiptForReceiptMemoryCommit(delivery.memory_receipt, delivery.memory_commit)))) {
+        throw new Error("plan_checkpoint_receipt_memory_mismatch");
+      }
+      receiptMemoryDigests.add(delivery.evidence_digest);
     }
     for (const result of p.results) {
       const binding = p.bindings.find((b) => b.step_id === result.step_id && b.status === "verified");
@@ -1238,6 +1271,66 @@ export class OperationPlanLedger {
             this.change((state) => { state.plans.flatMap((entry) => entry.bindings).find((entry) => entry.command_id === b.command_id)!.memory_receipt = receipt; });
           }
         }
+        for (const observation of p.receipt_observations) {
+          const planId = p.revisions[0]!.plan.plan_id;
+          let delivery = this.receiptMemoryDelivery(planId, observation.evidence_digest);
+          if (!delivery) {
+            this.change((state) => {
+              const target = state.plans.find((entry) => entry.revisions[0]!.plan.plan_id === planId)!;
+              target.receipt_memory ??= [];
+              target.receipt_memory.push({ evidence_digest: observation.evidence_digest });
+            });
+            delivery = this.receiptMemoryDelivery(planId, observation.evidence_digest);
+          }
+          if (!delivery) return false;
+          if (!delivery.memory_commit) {
+            const lifecycle = this.resultMemory.snapshot();
+            const identity = receiptMemoryIdentity(observation);
+            const stored = this.resultMemory.readMemoryRecord(identity.record_id);
+            if (!lifecycle || lifecycle.status !== "ready" || !stored || stored.exists) return false;
+            const commit = buildReceiptMemoryCommit(observation, stored.revision);
+            this.change((state) => {
+              const target = state.plans.find((entry) => entry.revisions[0]!.plan.plan_id === planId)!;
+              const receiptDelivery = target.receipt_memory?.find((entry) => entry.evidence_digest === observation.evidence_digest);
+              if (!receiptDelivery) throw new Error("plan_receipt_memory_delivery_missing");
+              receiptDelivery.memory_commit = commit;
+            });
+            delivery = this.receiptMemoryDelivery(planId, observation.evidence_digest);
+          }
+          if (!delivery?.memory_commit || !verifyReceiptMemoryCommit(observation, delivery)) return false;
+          const commit = delivery.memory_commit;
+          const lifecycle = this.resultMemory.snapshot();
+          if (!lifecycle) return false;
+          const existing = lifecycle.pending.find((entry) => entry.update_id === commit.update_id);
+          if (!existing) {
+            const staged = this.resultMemory.stage(commit);
+            if (!staged.ok || staged.status === "blocked") return false;
+          }
+          let reconciled = this.resultMemory.reconcile(commit.update_id);
+          if (!reconciled.ok) return false;
+          if (reconciled.status === "memory_commit_pending") {
+            const applied = this.resultMemory.apply(commit);
+            if (!applied.ok) return false;
+            reconciled = this.resultMemory.reconcile(commit.update_id);
+          }
+          if (!reconciled.ok || reconciled.status !== "ready" ||
+              !receiptForReceiptMemoryCommit(reconciled.receipt, commit)) return false;
+          const identity = receiptMemoryIdentity(observation);
+          const record = this.resultMemory.readMemoryRecord(identity.record_id);
+          const expectedValue = commit.changes[0]!.operation === "upsert" ? commit.changes[0]!.value : null;
+          if (!record?.exists || operationPlanDigest(record.value) !== operationPlanDigest(expectedValue)) return false;
+          if (delivery.memory_receipt) {
+            if (operationPlanDigest(delivery.memory_receipt) !== operationPlanDigest(reconciled.receipt)) return false;
+          } else {
+            const receipt = reconciled.receipt;
+            this.change((state) => {
+              const target = state.plans.find((entry) => entry.revisions[0]!.plan.plan_id === planId)!;
+              const receiptDelivery = target.receipt_memory?.find((entry) => entry.evidence_digest === observation.evidence_digest);
+              if (!receiptDelivery) throw new Error("plan_receipt_memory_delivery_missing");
+              receiptDelivery.memory_receipt = receipt;
+            });
+          }
+        }
       }
       this.memoryReady = this.resultMemory.snapshot()?.status === "ready";
       return this.memoryReady;
@@ -1250,6 +1343,28 @@ export class OperationPlanLedger {
       const match = this.binding(command_id);
       if (!match) return false;
       return !this.resultMemory || !resultMemoryEligible(match.b) || verifyResultMemoryCommit(match.p, match.b);
+    } catch { return false; }
+  }
+  receiptObservationMemoryIsDurable(evidence_digest: string): boolean {
+    try {
+      if (!this.resultMemory || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return false;
+      const matches = this.state.plans.flatMap((plan) => plan.receipt_observations
+        .filter((observation) => observation.evidence_digest === evidence_digest)
+        .map((observation) => ({ plan, observation })));
+      if (matches.length !== 1) return false;
+      const { plan, observation } = matches[0]!;
+      if (this.recoveryHolds.has(operationPlanDigest(plan.revisions[0]!.plan.plan_id))) return false;
+      const delivery = this.receiptMemoryDelivery(plan.revisions[0]!.plan.plan_id, evidence_digest);
+      if (!delivery?.memory_commit || !delivery.memory_receipt || !verifyReceiptMemoryCommit(observation, delivery) ||
+          !receiptForReceiptMemoryCommit(delivery.memory_receipt, delivery.memory_commit)) return false;
+      const reconciled = this.resultMemory.reconcile(delivery.memory_commit.update_id);
+      if (!reconciled.ok || reconciled.status !== "ready" ||
+          operationPlanDigest(reconciled.receipt) !== operationPlanDigest(delivery.memory_receipt)) return false;
+      const identity = receiptMemoryIdentity(observation);
+      const record = this.resultMemory.readMemoryRecord(identity.record_id);
+      const expectedValue = delivery.memory_commit.changes[0]!.operation === "upsert"
+        ? delivery.memory_commit.changes[0]!.value : null;
+      return !!record?.exists && operationPlanDigest(record.value) === operationPlanDigest(expectedValue);
     } catch { return false; }
   }
   closeMemory(): void {
@@ -1360,12 +1475,27 @@ export class OperationPlanLedger {
 
   private readResultMemoryApproval(reference: JMemoryApprovalReference): unknown {
     if (!this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return null;
-    for (const p of this.state.plans) for (const b of p.bindings) {
-      const c = b.memory_commit;
-      if (c && c.update_id === reference.update_id && c.j_event_id === reference.j_event_id &&
-          c.content_digest === reference.content_digest && verifyResultMemoryCommit(p, b)) return Object.freeze({ ...reference });
+    for (const p of this.state.plans) {
+      for (const b of p.bindings) {
+        const c = b.memory_commit;
+        if (c && c.update_id === reference.update_id && c.j_event_id === reference.j_event_id &&
+            c.content_digest === reference.content_digest && verifyResultMemoryCommit(p, b)) return Object.freeze({ ...reference });
+      }
+      for (const observation of p.receipt_observations) {
+        const delivery = this.receiptMemoryDelivery(p.revisions[0]!.plan.plan_id, observation.evidence_digest);
+        const c = delivery?.memory_commit;
+        if (c && c.update_id === reference.update_id && c.j_event_id === reference.j_event_id &&
+            c.content_digest === reference.content_digest && verifyReceiptMemoryCommit(observation, delivery)) {
+          return Object.freeze({ ...reference });
+        }
+      }
     }
     return null;
+  }
+
+  private receiptMemoryDelivery(planId: string, evidenceDigest: string): NonNullable<PlanState["receipt_memory"]>[number] | undefined {
+    return this.state.plans.find((plan) => plan.revisions[0]!.plan.plan_id === planId)?.receipt_memory
+      ?.find((delivery) => delivery.evidence_digest === evidenceDigest);
   }
 
   /** 起動時の私有結果調停。inflightや承認を復元せず、作用を一切呼ばない。 */

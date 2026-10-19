@@ -1863,6 +1863,9 @@ ${planControl.question}`,
     this.operationPlans.inspectReceiptReconciliationForControl(control, caller);
   }
   reconcileOperationPlanMemory(): boolean { return this.operationPlans.reconcileMemory(); }
+  operationPlanReceiptObservationMemoryIsDurable(evidence_digest: string): boolean {
+    return this.operationPlans.receiptObservationMemoryIsDurable(evidence_digest);
+  }
   closeOperationPlanMemory(): void { this.operationPlans.closeMemory(); }
   holdOperationPlansForCanonicalMemoryRestore(command: ExecuteCommand): boolean {
     return this.operationPlans.holdForCanonicalMemoryRestore(command);

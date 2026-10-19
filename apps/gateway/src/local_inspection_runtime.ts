@@ -5,7 +5,8 @@ import { ingestLocalInspectionReceipt } from "./external_receipt_observation.js"
 import { queryLocalInspectionReceipt } from "./local_inspection_adapter.js";
 
 export type LocalInspectionReconciliationResult =
-  | { readonly status: "observed"; readonly observation: OperationPlanExternalReceiptObservation }
+  | { readonly status: "observed"; readonly observation: OperationPlanExternalReceiptObservation;
+      readonly memory_status: "committed" | "pending" }
   | { readonly status: "not_run"; readonly reason: "local_inspection_endpoint_not_configured" }
   | { readonly status: "failed"; readonly reason: string }
   | { readonly status: "rejected"; readonly reason: "plan_receipt_reconciliation_authorization_expired_or_stale" };
@@ -13,7 +14,10 @@ export type LocalInspectionReconciliationResult =
 /** Result text shared by the live Developer route and the local smoke boundary. */
 export function localInspectionReconciliationMessage(result: LocalInspectionReconciliationResult): string {
   if (result.status === "observed") {
-    return `合成local inspectionの読取照合を1回記録しました。観測=${result.observation.status}、候補数=${result.observation.match_count}。HDSのstep状態はoutcome_unknownのままです。これは成功・目標達成・再実行許可を意味せず、作用の再送もしていません。`;
+    const memory = result.memory_status === "committed"
+      ? "digest-onlyの非権威観測をMへ保存しました。"
+      : "観測はJへ記録済みですがMへの保存は未確認で、再調停が必要です。";
+    return `合成local inspectionの読取照合を1回記録しました。観測=${result.observation.status}、候補数=${result.observation.match_count}。${memory} HDSのstep状態はoutcome_unknownのままです。これは成功・目標達成・再実行許可を意味せず、作用の再送もしていません。`;
   }
   if (result.status === "not_run") {
     return `照合は未実施です（${result.reason}）。loopback endpointが設定されていないため通信していません。HDSのstep状態はoutcome_unknownのままです。`;
@@ -25,7 +29,8 @@ export function localInspectionReconciliationMessage(result: LocalInspectionReco
 }
 
 type ReconciliationHDS = Pick<HDSUpperController,
-  "takeOperationPlanReceiptReconciliationAuthorization" | "recordOperationPlanExternalReceiptObservation">;
+  "takeOperationPlanReceiptReconciliationAuthorization" | "recordOperationPlanExternalReceiptObservation" |
+  "reconcileOperationPlanMemory" | "operationPlanReceiptObservationMemoryIsDurable">;
 
 /** Consume one fresh J permit, issue at most one loopback GET, and retain digest-only evidence. */
 export async function runLocalInspectionReconciliation(input: {
@@ -68,5 +73,8 @@ async function queryAndRecord(
     request_payload_digest: requestPayloadDigest,
     response,
   });
-  return { status: "observed", observation };
+  const memory_status = hds.reconcileOperationPlanMemory() &&
+      hds.operationPlanReceiptObservationMemoryIsDurable(observation.evidence_digest)
+    ? "committed" : "pending";
+  return { status: "observed", observation, memory_status };
 }

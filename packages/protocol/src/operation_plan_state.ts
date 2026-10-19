@@ -142,6 +142,18 @@ export const OperationPlanExternalReceiptObservationSchema = z.object({
 });
 export type OperationPlanExternalReceiptObservation = z.infer<typeof OperationPlanExternalReceiptObservationSchema>;
 
+/** J-owned linkage for delivering digest-only receipt evidence to M. It grants no authority. */
+export const OperationPlanReceiptMemoryDeliverySchema = z.object({
+  evidence_digest: Digest,
+  memory_commit: MemoryCommitV2Schema.optional(),
+  memory_receipt: MemoryUpdateReceiptV1Schema.optional(),
+}).strict().superRefine((delivery, context) => {
+  if (delivery.memory_receipt && !delivery.memory_commit) {
+    context.addIssue({ code: "custom", message: "receipt_memory_receipt_requires_commit" });
+  }
+});
+export type OperationPlanReceiptMemoryDelivery = z.infer<typeof OperationPlanReceiptMemoryDeliverySchema>;
+
 export const OperationPlanControlSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("review"), plan_id: Id, revision_digest: Digest, step_id: Id,
     goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional() }).strict(),
@@ -170,6 +182,7 @@ export const OperationPlanCheckpointSchema = z.object({
     request_goal_criteria: GoalCriteriaProjectionSchema.optional(),
     revisions: z.array(z.object({ digest: Digest, plan: OperationPlanSchema }).strict()).min(1).max(100),
     receipt_observations: z.array(OperationPlanExternalReceiptObservationSchema).max(100).default([]),
+    receipt_memory: z.array(OperationPlanReceiptMemoryDeliverySchema).max(100).optional(),
     bindings: z.array(z.object({
       step_id: Id, revision_digest: Digest, step_digest: Digest, prepared_step: OperationStepSchema,
       command_id: Id, request_id: Id, commit_hash: Id, payload_digest: Digest, command_digest: Digest,

@@ -5,12 +5,13 @@ import { createRequire } from "node:module";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, ToolRegistry } from "@blue-tanuki/core";
+import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, gmailWriteTool, ToolRegistry } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, type InboundRequest, type OperationPlan } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
+import { operationResultMemoryStorage } from "../src/operation_result_memory_config.js";
 import { ingestLocalInspectionReceipt } from "../src/external_receipt_observation.js";
 import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "../src/local_inspection_runtime.js";
 import { executionAdmissionForCommand, reconcileExecutionResults } from "../src/reconcile_execution_results.js";
@@ -148,17 +149,26 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
     const root = mkdtempSync(join(tmpdir(), "blue-external-action-reconcile-"));
     const executionPath = join(root, "executor.sqlite");
     const planPath = join(root, "j.sqlite");
+    const memory = operationResultMemoryStorage({ BLUE_TANUKI_STATE_ROOT: join(root, "state") });
     const inspection = inspectionServer();
     let executionStore: GatewayExecutionIntentStore | undefined;
     let planStore: OperationPlanStateStore | undefined;
+    let closeMemory: (() => void) | undefined;
+    let hds: HDSUpperController;
     try {
       const endpoint = await inspection.url;
       executionStore = new GatewayExecutionIntentStore(executionPath);
       planStore = new OperationPlanStateStore(planPath);
-      let hds = new HDSUpperController({ operation_plan_state: planStore });
+      const createHds = (state: OperationPlanStateStore) => {
+        const controller = new HDSUpperController({ operation_plan_state: state, operation_plan_memory: memory });
+        closeMemory = () => controller.closeOperationPlanMemory();
+        return controller;
+      };
+      hds = createHds(planStore);
       const tools = new ToolRegistry();
       const observedRequests: Array<{ idempotency_key?: string; command_digest?: string; request_payload_digest?: string }> = [];
-      tools.register(createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: FIXTURE_TOKEN }, request: async (target) => {
+      vi.stubEnv("GMAIL_ACCESS_TOKEN", FIXTURE_TOKEN);
+      const fixtureGmailTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: FIXTURE_TOKEN }, request: async (target) => {
         const requestPayload = target.body ?? "";
         observedRequests.push({ idempotency_key: target.idempotency_key, command_digest: target.command_digest,
           request_payload_digest: digest(requestPayload) });
@@ -168,7 +178,9 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
             "x-google-path": target.path }, body: requestPayload });
         return { status: response.status, ok: response.ok, content_type: response.headers.get("content-type"),
           body: await response.text(), truncated: false, request_id: response.headers.get("x-request-id") };
-      } }));
+      } });
+      vi.spyOn(gmailWriteTool, "invoke").mockImplementation(fixtureGmailTool.invoke);
+      tools.register(gmailWriteTool);
       const authority = createExecutorApprovalAuthority({ execution_store: executionStore });
       const source = request("plan:compute 合成宛先へ一件送信し、受理状態を読取照合する");
       const plan = candidate(source.id);
@@ -189,7 +201,16 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       const approvalEvaluation = evaluateApproval(command, [], { actor: "fixture-owner", default_mode: "full_access" });
       expect(approvalEvaluation.context.operation).toBe("google.write");
       expect(approvalEvaluation.final_review_required).toBe(true);
-      const approved = approvedByFixture(command, authority);
+      const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
+      const targetVersion = await executor.inspectCommandTargetVersion(command, undefined, operationPlanBindingDigest);
+      const hdsBinding = hds.createExecutionAuthorityBinding(command, targetVersion);
+      const approved = authority.approve(command, {
+        source: approvalEvaluation.final_review_required ? "human_final_review" : "approval_gate",
+        decision: "approve", approved_by: "fixture-owner", approved_at_ms: Date.now(),
+        upstream_commit_hash: command.upstream_decision.commit_hash, operation: approvalEvaluation.context.operation,
+        risk: approvalEvaluation.risk, final_review_required: approvalEvaluation.final_review_required,
+        reason: "synthetic local inspection confirmation",
+      }, undefined, hdsBinding, targetVersion);
       const admission = executionAdmissionForCommand(command, authority.receipt(approved));
       expect(hds.beginOperationPlanAttempt(command, admission)).toBe(true);
       const feedback = await executor.execute(approved, { save_result_delivery: true });
@@ -208,11 +229,12 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       const originalReceiptId = inspection.status().accepted[0]?.receipt_id;
       const currentEpoch = randomUUID();
       for (let restart = 0; restart < 3; restart += 1) {
+        hds.closeOperationPlanMemory();
         planStore.close();
         executionStore.close();
         planStore = new OperationPlanStateStore(planPath);
         executionStore = new GatewayExecutionIntentStore(executionPath);
-        hds = new HDSUpperController({ operation_plan_state: planStore });
+        hds = createHds(planStore);
         const jState = hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status;
         expect(jState).toBe("outcome_unknown");
         expect(reconcileExecutionResults(hds, executionStore, currentEpoch)).toEqual({
@@ -267,6 +289,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
           caller: reconciliationRequest, endpoint });
         expect(reconciliation.status).toBe("observed");
         if (reconciliation.status !== "observed") throw new Error("local read-only reconciliation did not record an observation");
+        expect(reconciliation.memory_status).toBe("committed");
         const observation = reconciliation.observation;
         if (restart === 0) {
           expect(await runLocalInspectionReconciliation({ hds, command: reconciliationCommand,
@@ -301,12 +324,23 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         expect(JSON.stringify(hds.getRuntimeSnapshot().operation_plans)).not.toContain(originalReceiptId);
         expect(JSON.stringify(planStore.load())).not.toContain(originalReceiptId);
         expect(planStore.load()?.plans[0]?.receipt_observations).toHaveLength(1);
-        const reissuedAuthority = createExecutorApprovalAuthority({ execution_store: executionStore });
-        expect(() => reissuedAuthority.approve(command, {
-          source: "human_final_review", decision: "approve", approved_by: "fixture-owner", approved_at_ms: Date.now(),
-          upstream_commit_hash: command.upstream_decision.commit_hash, operation: approvalEvaluation.context.operation,
-          risk: approvalEvaluation.risk, final_review_required: true, reason: "duplicate approval attempt fixture",
-        })).toThrow(/command already issued/);
+        expect(planStore.load()?.plans[0]?.receipt_memory).toHaveLength(1);
+        expect(planStore.load()?.plans[0]?.receipt_memory?.[0]?.memory_receipt).toBeDefined();
+        expect(hds.operationPlanReceiptObservationMemoryIsDurable(observation.evidence_digest)).toBe(true);
+        const memoryDb = new DatabaseSync(memory.memory_database_path);
+        try {
+          const records = memoryDb.prepare("SELECT value_json FROM m_records").all()
+            .map((row) => JSON.parse(String(row.value_json)) as Record<string, unknown>);
+          const receiptRecord = records.find((record) => record.record_type === "external_receipt_observation");
+          expect(records).toHaveLength(1);
+          expect(receiptRecord).toMatchObject({ schema_version: "operation-receipt-observation.v1",
+            record_type: "external_receipt_observation", source: "local_inspection",
+            plan_id_digest: currentPlan.plan_id, plan_revision_digest: currentPlan.revision_digest,
+            status: "matched", adoption_status: "observation_only", used_as_world_truth: false,
+            used_for_authority: false, may_execute: false });
+          expect(JSON.stringify(receiptRecord)).not.toContain(originalReceiptId);
+        } finally { memoryDb.close(); }
+        expect((await executor.execute(approved)).error).toMatch(/already consumed/);
         expect(inspection.status().effects).toBe(1);
       }
       expect(inspection.status().effects).toBe(1);
@@ -315,9 +349,11 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       expect(JSON.stringify(hds.getAudit().list())).not.toContain(FIXTURE_TOKEN);
       expect(executionStore.verifyEvents()).toBe(true);
     } finally {
+      closeMemory?.();
       executionStore?.close();
       planStore?.close();
       await closeServer(inspection.server);
+      vi.restoreAllMocks(); vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }
   }, 20_000);
