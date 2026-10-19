@@ -36,6 +36,7 @@ export interface WebChatResumeApprovalOptions {
 }
 
 export interface WebChatResumeContext {
+  /** Derived from the validated resume bearer token; caller-supplied actor labels are ignored. */
   actor: string;
   token_kind: "resume";
   content_review_digest?: string;

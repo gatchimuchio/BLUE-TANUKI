@@ -81,6 +81,7 @@ const DEFAULT_RATE_LIMITS: Required<WebChatRateLimits> = {
   resume: { capacity: 5, refill_per_sec: 0.5 },
   ws_ticket: { capacity: 3, refill_per_sec: 10 / 60 },
 };
+const RESUME_TOKEN_ACTOR = "webchat-resume-token-holder";
 
 const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
@@ -739,10 +740,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "resume_not_configured" }));
         return;
       }
-      const actor =
-        typeof body?.actor === "string" && body.actor.trim().length > 0
-          ? body.actor.trim()
-          : "webchat-human";
+      // The actor label comes from the credential that passed checkAuth above.
+      // A request-body actor is display input and must not become audit identity.
+      const actor = RESUME_TOKEN_ACTOR;
       if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res))
         return;
       if (this.resumeApprovalTokenStore) {
@@ -1109,10 +1109,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     if (!(await this.consumeResumeApprovalToken(approval_id, body, res))) return;
 
-    const actor =
-      typeof body?.actor === "string" && body.actor.trim().length > 0
-        ? body.actor.trim()
-        : "webchat-human";
+    // The actor label comes from the credential that passed checkAuth above.
+    // A request-body actor is display input and must not become audit identity.
+    const actor = RESUME_TOKEN_ACTOR;
     try {
       const result = await this.opts.onResume(approval_id, verdict, {
         actor,

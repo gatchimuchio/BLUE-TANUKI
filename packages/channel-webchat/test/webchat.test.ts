@@ -2627,7 +2627,7 @@ describe("WebChatChannel — approval API", () => {
         id: "cmd-content-approve",
         verdict: "approve",
         resumeCtx: {
-          actor: "webchat-human",
+          actor: "webchat-resume-token-holder",
           token_kind: "resume",
           content_review_digest: digest,
           approval: undefined,
@@ -2781,7 +2781,7 @@ describe("WebChatChannel — approval API", () => {
         {
           verdict: "approve",
           approval_token: issued?.token,
-          actor: "alice",
+          actor: "forged-owner",
         },
         { authorization: `Bearer ${RESUME_TOKEN}` },
       );
@@ -2792,7 +2792,7 @@ describe("WebChatChannel — approval API", () => {
           id: "cmd-approve",
           verdict: "approve",
           resumeCtx: {
-            actor: "alice",
+            actor: "webchat-resume-token-holder",
             token_kind: "resume",
             approval: undefined,
           },
@@ -3131,7 +3131,7 @@ describe("WebChatChannel — POST /resume", () => {
       {
         request_id: "rA",
         verdict: "approve",
-        actor: "alice",
+        actor: "forged-owner",
         approval_token: issued?.token,
       },
       { authorization: `Bearer ${RESUME_TOKEN}` },
@@ -3141,7 +3141,7 @@ describe("WebChatChannel — POST /resume", () => {
     expect(body.ok).toBe(true);
     expect(body.result.decision).toBe("ASSERT");
     expect(calls).toEqual([
-      { id: "rA", v: "approve", actor: "alice", token_kind: "resume" },
+      { id: "rA", v: "approve", actor: "webchat-resume-token-holder", token_kind: "resume" },
     ]);
     await ctx.teardown();
   });

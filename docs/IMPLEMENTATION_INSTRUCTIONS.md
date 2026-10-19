@@ -2,11 +2,28 @@
 
 ## 直近の施工・監査結果と次のconsumer
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-GOAL-GOVERNANCE-SOURCE-BINDING`
+### 最新BUILD_BATCH：`QEB-01-D02.02-WEBCHAT-RESUME-PRINCIPAL-PROVENANCE`
+
+開始HEAD／`origin/main`=`059899f2c065dbc05322f31535d30cb617ef20c8`、開始worktree clean。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、root`AGENTS.md`、作業標準、active指示、D02.02、WebChat→Gateway→Executorの実経路を再読した。編集前の復元ref回転を編集差分作成後に気づいたため、commit前に開始HEADをCASで復元点へ追加した。終了前確認時のlocal branch／remote backup tagはcurrent=`059899f...`／previous=`3002c42...`。D01.03 stashは保持。
+
+resume bearerを検証し、一回限りのapproval tokenを消費した`POST /resume`と`POST /approval/:id`は、request bodyの`actor`文字列ではなく、検証済み資格の種別を表す固定`webchat-resume-token-holder`をcallbackへ渡す。通常のGateway承認再開経路はこのactorをHDSの承認記録とExecutor proofの`approved_by`へ伝える。これはresume bearer保有者という認証情報の記録であり、人間の固有identity証明ではない。受信時の`InboundRequest.user`、GoalGovernanceの本番producer、Taskへの目的版適用、Broker targetとの結合は未成立。D02.01=`BUILD_GAP`、D02.02はWebChat resume経路の部分接続に留める。
+
+| 限定確認 | 結果 |
+|---|---|
+| WebChat `webchat.test.ts` | PASS、83/83。二つのresume routeでcaller-supplied actorを監査主体に採用せず、credential classを記録。 |
+| `pnpm typecheck`／`pnpm build` | PASS。 |
+| 全workspace tests／Gateway live serve／QE_QC／QE_QA／5OS実機 | 未実施。 |
+| Git | 本記録は次commitに含め、BUILD_BATCH単位で`main`へpushする。 |
+
+実provider／credential／業務作用、D4Pocket／ミニドラ変更、公開・出荷判断なし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次は認証済みresume principalをJ所有の委任・目的版sourceへ接続し、task-specific goal/versionとBroker targetまで結ぶ。resume principalだけから人間identityや権限を推定しない。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-GOAL-GOVERNANCE-SOURCE-BINDING`
 
 開始HEAD／`origin/main`=`3002c42dc666b80ab2e8547be86fd5d42e54f108`、開始worktree clean。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準要領、active指示、GoalGovernance・HDS source seal・Executor ticketの実経路を再読した。local recovery branch／remote backup tagはcurrent=`3002c42...`／previous=`0fccd1d...`へ期待値照合して更新。D01.03 stashは保持。
 
 HDS constructorへ設定されたGoalGovernanceLedgerが生成するimmutable projection（`used_for_authority=false`）を、exact commandのsource-context digestへ加えた。新HDS binding v3はprojection digestとnon-authority flagを単回sealへ保持し、Executor ticket proof v3は既存HDS source digestを介して同じ版履歴を束縛する。decision内容、権限、Approval、L3境界は変えていない。
+
+閉包: commit=`059899f2c065dbc05322f31535d30cb617ef20c8`を`main`へpushし、push後の`HEAD`／`origin/main`一致を確認。次バッチ開始時のbackup refsはcurrent=`3002c42...`／previous=`0fccd1d...`で、編集前に期待値照合したCAS回転を行った。
 
 これは設定済みHDS内のGoalGovernance projection→source seal→Executor ticketのprovenance接続である。Gatewayのproduction composition rootはまだGoalGovernanceを設定しておらず、現契約のauthorization recordはauthorityラベルとevent digestであってowner本人認証ではない。委任の認証、仕事に適用するgoal/versionの選定・永続producer、Broker target identityとの意味結合は未成立。D02.01=`BUILD_GAP`を維持する。次はowner-governance情報の信頼できるproduction sourceと適用範囲をHDSへ接続し、Brokerの対象解決まで結ぶこと。要求metadataや過去のapprovalから権限を推定しない。
 
