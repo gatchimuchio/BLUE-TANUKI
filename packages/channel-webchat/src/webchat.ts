@@ -119,6 +119,7 @@ function findAotanuAssetRoot(): string {
  *   POST /ws-ticket  body:{user}  auth:Bearer  rate-limited per-user
  *   POST /inbound    body:{user, content}  auth:Bearer  rate-limited per-user
  *   POST /owner/inbound body:{user, content} auth:dedicated owner bearer
+ *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
  *   POST /resume     body:{request_id, verdict, approval_token}  auth:Bearer  rate-limited (global)
  *   GET  /approval   auth:Bearer resume-token
@@ -615,7 +616,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const tokenKind =
       url.pathname === "/resume"
         ? "resume"
-        : url.pathname === "/owner/inbound"
+        : url.pathname === "/owner/inbound" || url.pathname === "/owner/goal-purpose-change"
         ? "owner"
         : url.pathname === "/webhook"
         ? "webhook"
@@ -645,6 +646,44 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
 
     const body = await readJson(req);
+
+    if (url.pathname === "/owner/goal-purpose-change") {
+      const goal_ref = typeof body?.goal_ref === "string" ? body.goal_ref : "";
+      const purpose_text = typeof body?.purpose_text === "string" ? body.purpose_text : "";
+      if (!this.opts.onGoalPurposeChangeProposal) {
+        res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "goal_purpose_change_not_configured" }));
+        return;
+      }
+      if (!/^goal_[a-f0-9]{16,64}$/.test(goal_ref) || !purpose_text.trim() || !isWellFormedUnicode(purpose_text)) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "valid goal_ref and well-formed purpose_text are required" }));
+        return;
+      }
+      if (Buffer.byteLength(purpose_text, "utf8") > 16 * 1024) {
+        res.writeHead(413, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "purpose_text_too_large" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, "owner-goal-purpose-token-holder", res)) return;
+      try {
+        const result = await this.opts.onGoalPurposeChangeProposal({
+          goal_ref,
+          purpose_text,
+          actor: OWNER_TOKEN_ACTOR,
+        });
+        res.writeHead(result.accepted ? 202 : 409, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify(result));
+      } catch {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, status: "goal_purpose_change_unavailable" }));
+      }
+      return;
+    }
 
     if (url.pathname === "/ws-ticket") {
       const user = typeof body?.user === "string" ? body.user.trim() : "";
@@ -1836,4 +1875,18 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     });
     res.end(JSON.stringify({ ok: true, result }));
   }
+}
+
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xDC00 && next <= 0xDFFF)) return false;
+      index += 1;
+    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+      return false;
+    }
+  }
+  return true;
 }

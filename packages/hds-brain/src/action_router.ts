@@ -1,5 +1,5 @@
 import type { InboundRequest } from "@blue-tanuki/protocol";
-import { getToolOperationDescriptor } from "@blue-tanuki/protocol";
+import { getToolOperationDescriptor, isGatewayInternalInboundRequest } from "@blue-tanuki/protocol";
 
 export interface ToolActionRoute {
   type: "tool_call";
@@ -72,7 +72,39 @@ function routeMetadata(req: InboundRequest): ActionRoute {
   if (!isRecord(argsRaw)) {
     return { type: "noop", reason: "tool_call metadata arguments must be an object" };
   }
+  if (toolName === "goal.governance.change") {
+    return routeInternalGoalPurposeChange(req, argsRaw);
+  }
   return buildToolRoute(toolName, { ...argsRaw });
+}
+
+function routeInternalGoalPurposeChange(req: InboundRequest, args: Record<string, unknown>): ActionRoute {
+  const metadata = req.metadata ?? {};
+  if (!isGatewayInternalInboundRequest(req) ||
+      metadata["blue_tanuki.authority_context"] !== "gateway_internal_v1" ||
+      metadata["blue_tanuki.actor_kind"] !== "owner" ||
+      metadata["blue_tanuki.process_kind"] !== "approval" ||
+      metadata["blue_tanuki.goal_purpose_change.version"] !== "v1" ||
+      req.content !== "Owner submitted a delegated goal purpose change for L3 review.") {
+    return { type: "noop", reason: "goal purpose change requires a trusted Gateway approval request" };
+  }
+  const expectedKeys = ["goal_ref", "prior_version", "prior_purpose_digest", "new_purpose_digest"];
+  if (Object.keys(args).length !== expectedKeys.length ||
+      expectedKeys.some((key) => !Object.hasOwn(args, key)) ||
+      typeof args.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(args.goal_ref) ||
+      typeof args.prior_version !== "number" || !Number.isSafeInteger(args.prior_version) || args.prior_version <= 0 ||
+      typeof args.prior_purpose_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.prior_purpose_digest) ||
+      typeof args.new_purpose_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.new_purpose_digest) ||
+      args.new_purpose_digest === args.prior_purpose_digest) {
+    return { type: "noop", reason: "goal purpose change arguments are invalid" };
+  }
+  return {
+    type: "tool_call",
+    tool_name: "goal.governance.change",
+    arguments: { ...args },
+    allowed_capabilities: ["tool:goal.governance.change"],
+    timeout_ms: 10_000,
+  };
 }
 
 function routeContent(content: string): ActionRoute {

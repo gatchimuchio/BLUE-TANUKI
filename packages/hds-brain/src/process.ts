@@ -135,6 +135,14 @@ function allowedActorKinds(process_kind: ProcessKind): ActorKind[] {
 }
 
 function executionPolicy(process_kind: ProcessKind): HDSProcessDefinition["execution_policy"] {
+  if (process_kind === "approval") {
+    return {
+      allowed_command_types: ["tool_call", "noop"],
+      allowed_tools: ["goal.governance.change"],
+      allowed_capabilities: ["tool:goal.governance.change"],
+      timeout_ms: 10_000,
+    };
+  }
   if (process_kind === "tool") {
     return {
       allowed_command_types: ["tool_call", "noop"],

@@ -88,6 +88,16 @@ export interface WebChatApprovalQueueItem {
   reason: string;
   /** True when this approval requires an explicit, digest-bound content review before approval. */
   content_review_required?: boolean;
+  /** Digest-only projection for a delegated goal purpose change requiring explicit review. */
+  goal_purpose_change_review?: {
+    kind: "goal_purpose_change";
+    goal_ref: string;
+    prior_version: number;
+    prior_purpose_digest: string;
+    new_purpose_digest: string;
+    review_status: "required" | "reviewed" | "stale";
+    used_for_authority: false;
+  };
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   authority_trace?: unknown;
@@ -96,7 +106,8 @@ export interface WebChatApprovalQueueItem {
   cron_no_replay_review?: WebChatCronNoReplayReview;
 }
 
-export interface WebChatApprovalContentReview {
+export interface WebChatGmailApprovalContentReview {
+  kind?: "gmail_message_send";
   command_id: string;
   command_digest: string;
   request_payload_digest: string;
@@ -109,6 +120,22 @@ export interface WebChatApprovalContentReview {
   body_text: string;
   used_for_authority: false;
 }
+
+export interface WebChatGoalPurposeChangeContentReview {
+  kind: "goal_purpose_change";
+  command_id: string;
+  command_digest: string;
+  request_payload_digest: string;
+  operation: "goal.governance.change";
+  goal_ref: string;
+  prior_version: number;
+  prior_purpose_digest: string;
+  new_purpose_digest: string;
+  purpose_text: string;
+  used_for_authority: false;
+}
+
+export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"
@@ -473,6 +500,21 @@ export interface WebChatOptions {
   webhook_token?: string;
   /** Optional dedicated credential for owner-originated inbound requests. */
   owner_token?: string;
+  /** Dedicated proposal route for owner-governed delegated goal purpose changes. */
+  onGoalPurposeChangeProposal?: (input: {
+    goal_ref: string;
+    purpose_text: string;
+    actor: string;
+  }) => Promise<{
+    accepted: boolean;
+    status: string;
+    goal_ref?: string;
+    prior_version?: number;
+    prior_purpose_digest?: string;
+    new_purpose_digest?: string;
+    request_id?: string;
+    command_id?: string;
+  }>;
   /**
    * Dedicated bearer token for update/recovery maintenance surfaces.
    * Required when update or recovery surfaces are enabled.

@@ -22,6 +22,7 @@ export const RESERVED_EXTERNAL_METADATA_KEYS = [
   "blue_tanuki.operation_core",
   "blue_tanuki.channel_send",
   "blue_tanuki.failure_review",
+  "blue_tanuki.goal_purpose_change.version",
   "actor_kind",
   "trust_level",
   "process_kind",
@@ -48,6 +49,7 @@ export interface GatewayInternalAuthorityMetadata extends MetadataObject {
   "blue_tanuki.failure_review.version"?: "blue-tanuki.failure-review.v1";
   "blue_tanuki.failure_review.signature_id"?: string;
   "blue_tanuki.failure_review.projection_json"?: string;
+  "blue_tanuki.goal_purpose_change.version"?: "v1";
 }
 
 export interface GatewayInternalInboundRequestInput extends Omit<InboundRequest, "metadata"> {

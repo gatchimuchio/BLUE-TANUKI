@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecuteCommand, GoalGovernanceAuthorization, GoalGovernanceConfig, GoalGovernanceEvent } from "@blue-tanuki/protocol";
-import { GOAL_GOVERNANCE_SCHEMA_VERSION } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, GOAL_GOVERNANCE_SCHEMA_VERSION } from "@blue-tanuki/protocol";
 import { evaluateApproval } from "../src/approval_policy.js";
 import { AuditLog } from "../src/audit.js";
 import { HDSUpperController } from "../src/controller.js";
@@ -284,6 +284,52 @@ describe("HDS goal governance consumer", () => {
     expect(configured.log.frame.goal_governance?.goals.find((goal) => goal.goal_ref === delegated)?.current_version).toBe(2);
   });
 
+  it("routes delegated purpose changes only from a branded Gateway approval request", () => {
+    const controller = new HDSUpperController({ goal_governance: createConfig() });
+    const args = {
+      goal_ref: delegated,
+      prior_version: 2,
+      prior_purpose_digest: digest("3"),
+      new_purpose_digest: digest("8"),
+    };
+    const trusted = createGatewayInternalInboundRequest({
+      ...request,
+      user: "webchat-owner-token-holder",
+      channel: "webchat",
+      content: "Owner submitted a delegated goal purpose change for L3 review.",
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "approval",
+        "blue_tanuki.goal_purpose_change.version": "v1",
+        "blue_tanuki.tool_call": { tool_name: "goal.governance.change", arguments: args },
+      },
+    });
+    const allowed = controller.decide(trusted);
+    expect(allowed.command).toMatchObject({
+      type: "tool_call",
+      payload: { tool_name: "goal.governance.change", arguments: args },
+      constraints: {
+        allowed_tools: ["goal.governance.change"],
+        allowed_capabilities: ["tool:goal.governance.change"],
+      },
+    });
+    if (!allowed.command) throw new Error("trusted goal purpose change did not produce an HDS command");
+    expect(evaluateApproval(allowed.command, [], { actor: trusted.user, default_mode: "full_access" })).toMatchObject({
+      decision: "ask",
+      risk: "high",
+      approval_level: "L3_final_review",
+      final_review_required: true,
+    });
+
+    const forged = controller.decide({
+      ...trusted,
+      metadata: trusted.metadata,
+    });
+    expect(forged.command?.type === "tool_call" && forged.command.payload.tool_name === "goal.governance.change").toBe(false);
+  });
+
   it("commits a delegated purpose change only from the exact L3 review and replays it from the durable audit chain", () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-goal-governance-audit-"));
     const filepath = join(root, "audit.jsonl");
@@ -293,11 +339,13 @@ describe("HDS goal governance consumer", () => {
         goal_governance: createConfig(),
       });
       const command = purposeChangeCommand(digest("7"));
-      const evaluation = evaluateApproval(command, [], { actor: "owner", default_mode: "full_access" });
+      const proposalActor = "webchat-owner-token-holder";
+      const reviewerActor = "webchat-resume-token-holder";
+      const evaluation = evaluateApproval(command, [], { actor: proposalActor, default_mode: "full_access" });
       expect(evaluation).toMatchObject({ decision: "ask", risk: "high", approval_level: "L3_final_review", final_review_required: true });
       controller.onApprovalEvaluation(evaluation, { request_id: "owner-request" });
       controller.onCommandLifecycle(command.id, "approval_approved", {
-        actor: "owner",
+        actor: reviewerActor,
         reason: "human_approval:approve",
         request_id: "owner-request",
       });
@@ -309,7 +357,8 @@ describe("HDS goal governance consumer", () => {
         new_purpose_digest: digest("7"),
         request_id: "owner-request",
         command_id: command.id,
-        actor: "owner",
+        proposal_actor: proposalActor,
+        actor: reviewerActor,
         evaluation,
       });
       expect(committed).toMatchObject({ ok: true, goal_ref: delegated, version: 3, purpose_digest: digest("7") });
@@ -338,10 +387,12 @@ describe("HDS goal governance consumer", () => {
         goal_governance: createConfig(),
       });
       const command = purposeChangeCommand(digest("7"));
-      const evaluation = evaluateApproval(command, [], { actor: "owner", default_mode: "full_access" });
+      const proposalActor = "webchat-owner-token-holder";
+      const reviewerActor = "webchat-resume-token-holder";
+      const evaluation = evaluateApproval(command, [], { actor: proposalActor, default_mode: "full_access" });
       controller.onApprovalEvaluation(evaluation, { request_id: "owner-request" });
       controller.onCommandLifecycle(command.id, "approval_approved", {
-        actor: "owner",
+        actor: reviewerActor,
         reason: "human_approval:approve",
         request_id: "owner-request",
       });
@@ -353,7 +404,8 @@ describe("HDS goal governance consumer", () => {
         new_purpose_digest: digest("8"),
         request_id: "owner-request",
         command_id: command.id,
-        actor: "owner",
+        proposal_actor: proposalActor,
+        actor: reviewerActor,
         evaluation,
       })).toEqual({ ok: false, reason: "approval_not_verified" });
       expect(controller.getAudit().list().some(({ log }) => "kind" in log && log.kind === "authority_event" &&
@@ -395,7 +447,8 @@ describe("HDS goal governance consumer", () => {
       event: "goal_purpose_change_committed",
       request_id: "owner-request",
       command_id: "goal-purpose-change-command",
-      actor: "owner",
+      actor: "webchat-resume-token-holder",
+      proposal_actor: "webchat-owner-token-holder",
       reason: "forged_without_review",
       operation: "tool.call",
       risk: "high",
@@ -431,10 +484,12 @@ describe("HDS goal governance consumer", () => {
       goal_governance: createConfig(),
     });
     const command = purposeChangeCommand(digest("7"));
-    const evaluation = evaluateApproval(command, [], { actor: "owner", default_mode: "full_access" });
+    const proposalActor = "webchat-owner-token-holder";
+    const reviewerActor = "webchat-resume-token-holder";
+    const evaluation = evaluateApproval(command, [], { actor: proposalActor, default_mode: "full_access" });
     controller.onApprovalEvaluation(evaluation, { request_id: "owner-request" });
     controller.onCommandLifecycle(command.id, "approval_approved", {
-      actor: "owner",
+      actor: reviewerActor,
       reason: "human_approval:approve",
       request_id: "owner-request",
     });
@@ -447,7 +502,8 @@ describe("HDS goal governance consumer", () => {
       new_purpose_digest: digest("7"),
       request_id: "owner-request",
       command_id: command.id,
-      actor: "owner",
+      proposal_actor: proposalActor,
+      actor: reviewerActor,
       evaluation,
     })).toEqual({ ok: false, reason: "audit_append_failed" });
     expect(controller.getAudit().verify()).toBe(false);

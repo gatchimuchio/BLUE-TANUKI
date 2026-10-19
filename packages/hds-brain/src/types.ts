@@ -532,6 +532,8 @@ export interface AuthorityEventLog {
   command_id?: string;
   grant_id?: string;
   actor: string;
+  /** Source credential class that submitted a proposal distinct from its L3 reviewer. */
+  proposal_actor?: string;
   reason: string;
   operation?: ApprovalEvaluation["context"]["operation"];
   target_scope?: ApprovalEvaluation["context"]["target_scope"];

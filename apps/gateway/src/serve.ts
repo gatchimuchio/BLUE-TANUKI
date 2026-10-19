@@ -5,6 +5,7 @@ import {
   HDSUpperController,
   DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
   extractFailureSignatures,
+  goalPurposeChangeApprovalTarget,
   runPeriodicFailureMemoryVerification,
 } from "@blue-tanuki/hds-brain";
 import type {
@@ -57,6 +58,7 @@ import type {
 } from "@blue-tanuki/protocol";
 import {
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
+  createGatewayInternalInboundRequest,
   parseInboundRequestAtBoundary,
   parseMeaningUpdateProposal,
   parseObservationAcquisitionRecord,
@@ -189,6 +191,14 @@ interface PendingApproval {
   approval_token_expires_at_ms?: number;
   content_review_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
+  goal_purpose_proposal?: {
+    goal_ref: string;
+    purpose_text: string;
+    purpose_digest: string;
+    prior_version: number;
+    prior_purpose_digest: string;
+    proposal_actor: string;
+  };
 }
 
 interface EmergencyStopState {
@@ -234,6 +244,49 @@ function cronApprovalEventReference(request: InboundRequest): { event_id: string
     throw new Error("cron approval request is missing a valid durable event identity");
   }
   return { event_id, payload_digest };
+}
+
+interface GoalPurposeChangeArguments {
+  goal_ref: string;
+  prior_version: number;
+  prior_purpose_digest: string;
+  new_purpose_digest: string;
+}
+
+function getGoalPurposeChangeArguments(command: ExecuteCommand): GoalPurposeChangeArguments | null {
+  if (command.type !== "tool_call" || command.payload.tool_name !== "goal.governance.change") return null;
+  const args = command.payload.arguments;
+  const keys = Object.keys(args).sort();
+  if (keys.join(",") !== ["goal_ref", "new_purpose_digest", "prior_purpose_digest", "prior_version"].join(",") ||
+      typeof args.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(args.goal_ref) ||
+      typeof args.prior_version !== "number" || !Number.isSafeInteger(args.prior_version) || args.prior_version <= 0 ||
+      typeof args.prior_purpose_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.prior_purpose_digest) ||
+      typeof args.new_purpose_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.new_purpose_digest) ||
+      args.new_purpose_digest === args.prior_purpose_digest) return null;
+  return {
+    goal_ref: args.goal_ref,
+    prior_version: args.prior_version,
+    prior_purpose_digest: args.prior_purpose_digest,
+    new_purpose_digest: args.new_purpose_digest,
+  };
+}
+
+function isGoalPurposeChangeCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "goal.governance.change";
+}
+
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xDC00 && next <= 0xDFFF)) return false;
+      index += 1;
+    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function canonicalizeGatewayInbound(raw: unknown): GatewayInboundBoundaryResult {
@@ -898,7 +951,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     cmd: ExecuteCommand,
     log: DecisionLog,
     origin: InboundRequest,
-    opts: { skip_approval?: boolean; actor?: string; approval_evaluation?: ApprovalEvaluation; command_digest?: string } = {},
+    opts: {
+      skip_approval?: boolean;
+      actor?: string;
+      approval_evaluation?: ApprovalEvaluation;
+      command_digest?: string;
+      goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
+    } = {},
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
     if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
@@ -1030,6 +1089,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         if (content) await dispatcher.dispatch({ channel: origin.channel, target: replyTarget(origin), content }, { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
         return { status: "approval_denied" };
       }
+      if (isGoalPurposeChangeCommand(cmd) &&
+          (evaluation.decision !== "ask" || evaluation.risk !== "high" ||
+           evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required)) {
+        hds.onCommandLifecycle(cmd.id, "approval_rejected", {
+          actor,
+          reason: "goal_purpose_change_requires_l3_final_review",
+          request_id: log.request_id,
+        });
+        return { status: "goal_purpose_change_requires_l3_final_review" };
+      }
       const failureMemoryRequiresApproval = failureGate.decision === "require_approval";
       if (evaluation.decision === "ask" || failureMemoryRequiresApproval) {
         if (runtimeScheduleMutationCommand(cmd)) {
@@ -1099,6 +1168,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           approval_token: issued?.token,
           approval_token_expires_at_ms: issued?.expires_at_ms,
           ...(cronEvent ? { cron_event: cronEvent } : {}),
+          ...(opts.goal_purpose_proposal ? { goal_purpose_proposal: opts.goal_purpose_proposal } : {}),
         });
         const approvalContent = failureMemoryRequiresApproval
           ? `${approvalRequiredMessage(evaluation, cmd.id, issued?.token)} failure_memory_gate=${failureGate.reason}`
@@ -1138,6 +1208,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     if (!executionEvaluation) {
       throw new Error("approval evaluation proof is required before executor execution");
+    }
+    if (isGoalPurposeChangeCommand(cmd)) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
+        actor,
+        reason: "goal_purpose_change_has_no_executor_path",
+        request_id: log.request_id,
+      });
+      return { status: "goal_purpose_change_has_no_executor_path" };
     }
     if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
@@ -1614,6 +1692,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       if (cronEventStore.hasCronApprovalReference(command_id)) {
         return { executed: false, status: "approval_unavailable_after_restart", fresh_request_required: true };
       }
+      const missingGoalPurposeProposal = hds.getAudit().list().some(({ log }) =>
+        "kind" in log && log.kind === "approval_gate" && log.command_id === command_id &&
+        log.evaluation.context.target?.startsWith("goal.governance.change:"));
+      if (missingGoalPurposeProposal) {
+        return { executed: false, status: "approval_unavailable_after_restart", fresh_request_required: true };
+      }
       return hds.isOperationPlanCommand(command_id) ? { executed: false, status: "plan_binding_stale" } : null;
     }
     const approvalActor = pending.command.type === "tool_call" &&
@@ -1640,6 +1724,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           pending.content_review_digest,
           ctx.content_review_digest,
         ) !== "valid") {
+      return {
+        executed: false,
+        pending: true,
+        status: "approval_content_review_required",
+      };
+    }
+    if (verdict === "approve" && pending.goal_purpose_proposal &&
+        validateGoalPurposeChangeContentReview(pending, ctx.content_review_digest) !== "valid") {
       return {
         executed: false,
         pending: true,
@@ -1726,7 +1818,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         evaluation: pending.evaluation,
       });
     }
-    hds.onCommandLifecycle(command_id, "approval_approved", { actor: approvalActor, reason: "human_approval:approve" });
+    hds.onCommandLifecycle(command_id, "approval_approved", {
+      actor: approvalActor,
+      reason: "human_approval:approve",
+      request_id: pending.log.request_id,
+    });
     recordApprovalHistory("human_resume_approved", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
       verdict,
       token_kind: ctx.token_kind,
@@ -1734,6 +1830,43 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       remember_ignored_final_review: rememberRequested && pending.evaluation.final_review_required,
       ...(ctx.content_review_digest ? { content_review_digest: ctx.content_review_digest } : {}),
     });
+    if (pending.goal_purpose_proposal) {
+      const proposal = pending.goal_purpose_proposal;
+      const args = getGoalPurposeChangeArguments(pending.command);
+      const current = hds.getGoalGovernanceProjection()?.goals.find((goal) => goal.goal_ref === proposal.goal_ref);
+      if (!args || !current || current.goal_kind !== "delegated" ||
+          current.current_version !== proposal.prior_version ||
+          current.current_purpose_digest !== proposal.prior_purpose_digest ||
+          digestString(proposal.purpose_text) !== proposal.purpose_digest ||
+          args.goal_ref !== proposal.goal_ref || args.prior_version !== proposal.prior_version ||
+          args.prior_purpose_digest !== proposal.prior_purpose_digest ||
+          args.new_purpose_digest !== proposal.purpose_digest ||
+          !hds.getAudit().isPersistent() || !hds.getAudit().verify()) {
+        return { approval: "approve", executed: false, status: "goal_purpose_change_stale" };
+      }
+      const committed = hds.commitGoalPurposeChangeAfterL3({
+        goal_ref: proposal.goal_ref,
+        prior_version: proposal.prior_version,
+        prior_purpose_digest: proposal.prior_purpose_digest,
+        new_purpose_digest: proposal.purpose_digest,
+        request_id: pending.log.request_id,
+        command_id,
+        proposal_actor: proposal.proposal_actor,
+        actor: approvalActor,
+        evaluation: pending.evaluation,
+      });
+      if (!committed.ok) {
+        return { approval: "approve", executed: false, status: `goal_purpose_change_${committed.reason}` };
+      }
+      return {
+        approval: "approve",
+        executed: false,
+        status: "goal_purpose_change_committed",
+        goal_ref: committed.goal_ref,
+        version: committed.version,
+        purpose_digest: committed.purpose_digest,
+      };
+    }
     const r = await executeAndEcho(pending.command, pending.log, pending.origin, {
       skip_approval: true,
       actor: approvalActor,
@@ -1938,6 +2071,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       token,
       resume_token: resumeToken,
       owner_token: process.env.BLUE_TANUKI_OWNER_TOKEN,
+      onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string }) =>
+        submitGoalPurposeChangeProposal(input),
       maintenance_token: maintenanceToken,
       webhook_token: process.env.WEBHOOK_TOKEN,
       host: process.env.WEBCHAT_HOST ?? "127.0.0.1",
@@ -2194,8 +2329,205 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }],
   });
 
+  async function submitGoalPurposeChangeProposal(input: {
+    goal_ref: string;
+    purpose_text: string;
+    actor: string;
+  }): Promise<{
+    accepted: boolean;
+    status: string;
+    goal_ref?: string;
+    prior_version?: number;
+    prior_purpose_digest?: string;
+    new_purpose_digest?: string;
+    request_id?: string;
+    command_id?: string;
+  }> {
+    if (input.actor !== "webchat-owner-token-holder" || !/^goal_[a-f0-9]{16,64}$/.test(input.goal_ref) ||
+        !input.purpose_text.trim() || !isWellFormedUnicode(input.purpose_text) ||
+        Buffer.byteLength(input.purpose_text, "utf8") > 16 * 1024) {
+      return { accepted: false, status: "goal_purpose_change_input_invalid" };
+    }
+    const purposeDigest = digestString(input.purpose_text);
+    const audit = hds.getAudit();
+    const currentProjection = hds.getGoalGovernanceProjection();
+    const currentGoal = currentProjection?.goals.find((goal) => goal.goal_ref === input.goal_ref);
+    if (!audit.isPersistent() || !audit.verify()) {
+      return { accepted: false, status: "goal_purpose_change_audit_unavailable" };
+    }
+    if (!currentGoal || currentGoal.goal_kind !== "delegated") {
+      return { accepted: false, status: "delegated_goal_unavailable" };
+    }
+    if (currentGoal.current_purpose_digest === purposeDigest) {
+      return { accepted: false, status: "goal_purpose_unchanged" };
+    }
+
+    const args: GoalPurposeChangeArguments = {
+      goal_ref: input.goal_ref,
+      prior_version: currentGoal.current_version,
+      prior_purpose_digest: currentGoal.current_purpose_digest,
+      new_purpose_digest: purposeDigest,
+    };
+    const inbound = createGatewayInternalInboundRequest({
+      id: randomUUID(),
+      channel: "webchat",
+      user: input.actor,
+      content: "Owner submitted a delegated goal purpose change for L3 review.",
+      timestamp: Date.now(),
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "approval",
+        "blue_tanuki.goal_purpose_change.version": "v1",
+        "blue_tanuki.tool_call": {
+          tool_name: "goal.governance.change",
+          arguments: {
+            goal_ref: args.goal_ref,
+            prior_version: args.prior_version,
+            prior_purpose_digest: args.prior_purpose_digest,
+            new_purpose_digest: args.new_purpose_digest,
+          },
+        },
+      },
+    });
+    const boundary = planGatewayInboundBoundary(inbound);
+    if (!boundary.boundary_ok) {
+      return { accepted: false, status: "goal_purpose_change_boundary_rejected" };
+    }
+    const { log, command } = hds.decide(boundary.hdsBoundaryInput);
+    recordCompleteHistory({
+      kind: "user_input",
+      request_id: inbound.id,
+      actor: input.actor,
+      source: "webchat-owner-goal-purpose-change",
+      timestamp: inbound.timestamp,
+      payload: {
+        goal_ref: args.goal_ref,
+        purpose_text_digest: purposeDigest,
+        purpose_text_bytes: Buffer.byteLength(input.purpose_text, "utf8"),
+        boundary_status: "canonical_record_contract_passed",
+        raw_payload_exposed: false,
+        used_for_authority: false,
+      },
+    });
+    recordCompleteHistory({
+      kind: "hds_decision",
+      request_id: log.request_id,
+      command_id: command?.id,
+      actor: input.actor,
+      source: "hds-brain",
+      timestamp: log.timestamp,
+      payload: hdsDecisionHistoryPayload(log, command),
+    });
+    const routedArgs = command ? getGoalPurposeChangeArguments(command) : null;
+    if (!command || !routedArgs || JSON.stringify(routedArgs) !== JSON.stringify(args)) {
+      if (command) hds.onCommandLifecycle(command.id, "approval_rejected", {
+        actor: input.actor,
+        reason: "goal_purpose_change_hds_operation_mismatch",
+        request_id: log.request_id,
+      });
+      return { accepted: false, status: "goal_purpose_change_authority_rejected" };
+    }
+
+    const evaluation = approval.evaluate(command, input.actor);
+    const expectedTarget = goalPurposeChangeApprovalTarget(args);
+    const l3Ready = evaluation.decision === "ask" && evaluation.context.operation === "tool.call" &&
+      evaluation.context.actor === input.actor && evaluation.context.command_id === command.id &&
+      evaluation.context.target === expectedTarget && evaluation.risk === "high" &&
+      evaluation.approval_level === "L3_final_review" && evaluation.final_review_required;
+    if (!l3Ready) {
+      hds.onApprovalEvaluation(evaluation, { request_id: log.request_id });
+      hds.onCommandLifecycle(command.id, "approval_rejected", {
+        actor: input.actor,
+        reason: "goal_purpose_change_l3_review_unavailable",
+        request_id: log.request_id,
+      });
+      return { accepted: false, status: "goal_purpose_change_l3_review_unavailable" };
+    }
+
+    const result = await executeAndEcho(command, log, inbound, {
+      actor: input.actor,
+      approval_evaluation: evaluation,
+      goal_purpose_proposal: {
+        goal_ref: args.goal_ref,
+        purpose_text: input.purpose_text,
+        purpose_digest: purposeDigest,
+        prior_version: args.prior_version,
+        prior_purpose_digest: args.prior_purpose_digest,
+        proposal_actor: input.actor,
+      },
+    });
+    const pending = pendingApprovals.get(command.id);
+    if (result.status !== "approval_required" || !pending?.goal_purpose_proposal || !pending.approval_token) {
+      if (pending) pendingApprovals.delete(command.id);
+      hds.onCommandLifecycle(command.id, "approval_cancelled", {
+        actor: input.actor,
+        reason: "goal_purpose_change_approval_queue_unavailable",
+        request_id: log.request_id,
+      });
+      return { accepted: false, status: "goal_purpose_change_approval_unavailable" };
+    }
+    return {
+      accepted: true,
+      status: "approval_required",
+      goal_ref: args.goal_ref,
+      prior_version: args.prior_version,
+      prior_purpose_digest: args.prior_purpose_digest,
+      new_purpose_digest: purposeDigest,
+      request_id: log.request_id,
+      command_id: command.id,
+    };
+  }
+
+  function goalPurposeProposalIsCurrent(pending: PendingApproval): boolean {
+    const proposal = pending.goal_purpose_proposal;
+    const args = getGoalPurposeChangeArguments(pending.command);
+    if (!proposal || !args || !hds.getAudit().isPersistent() || !hds.getAudit().verify() ||
+        digestString(proposal.purpose_text) !== proposal.purpose_digest) return false;
+    const current = hds.getGoalGovernanceProjection()?.goals.find((goal) => goal.goal_ref === proposal.goal_ref);
+    return Boolean(current && current.goal_kind === "delegated" &&
+      current.current_version === proposal.prior_version &&
+      current.current_purpose_digest === proposal.prior_purpose_digest &&
+      proposal.purpose_digest === args.new_purpose_digest &&
+      args.goal_ref === proposal.goal_ref && args.prior_version === proposal.prior_version &&
+      args.prior_purpose_digest === proposal.prior_purpose_digest);
+  }
+
+  function validateGoalPurposeChangeContentReview(
+    pending: PendingApproval,
+    content_review_digest: string | undefined,
+  ): WebChatApprovalContentReviewValidation {
+    if (!pending.goal_purpose_proposal) return "not_required";
+    if (!goalPurposeProposalIsCurrent(pending) ||
+        executorCommandDigest(pending.command) !== pending.command_digest) return "stale";
+    if (!content_review_digest || !pending.content_review_digest) return "required";
+    return content_review_digest === pending.command_digest &&
+      pending.content_review_digest === pending.command_digest ? "valid" : "stale";
+  }
+
   function pendingApprovalContentReview(command_id: string): WebChatApprovalContentReview | null {
     const pending = pendingApprovals.get(command_id);
+    if (pending?.goal_purpose_proposal) {
+      if (!goalPurposeProposalIsCurrent(pending) || executorCommandDigest(pending.command) !== pending.command_digest) return null;
+      const args = getGoalPurposeChangeArguments(pending.command);
+      if (!args) return null;
+      const review: WebChatApprovalContentReview = {
+        kind: "goal_purpose_change",
+        command_id,
+        command_digest: pending.command_digest,
+        request_payload_digest: pending.goal_purpose_proposal.purpose_digest,
+        operation: "goal.governance.change",
+        goal_ref: pending.goal_purpose_proposal.goal_ref,
+        prior_version: pending.goal_purpose_proposal.prior_version,
+        prior_purpose_digest: pending.goal_purpose_proposal.prior_purpose_digest,
+        new_purpose_digest: pending.goal_purpose_proposal.purpose_digest,
+        purpose_text: pending.goal_purpose_proposal.purpose_text,
+        used_for_authority: false,
+      };
+      pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
+      return review;
+    }
     if (!pending || !isGmailMessageSendCommand(pending.command) ||
         executorCommandDigest(pending.command) !== pending.command_digest ||
         !hds.operationPlanCommandIsCurrent(pending.command)) return null;
@@ -2214,6 +2546,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   ): WebChatApprovalContentReviewValidation {
     const pending = pendingApprovals.get(command_id);
     if (!pending) return "stale";
+    if (pending.goal_purpose_proposal) {
+      return validateGoalPurposeChangeContentReview(pending, content_review_digest);
+    }
     return validateGmailMessageSendContentReview(
       pending.command,
       pending.command_digest,
@@ -2239,7 +2574,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       approval_level: p.evaluation.approval_level,
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
-      content_review_required: isGmailMessageSendCommand(p.command),
+      content_review_required: isGmailMessageSendCommand(p.command) || Boolean(p.goal_purpose_proposal),
       approval_token: p.approval_token,
       approval_token_expires_at_ms: p.approval_token_expires_at_ms,
       authority_trace: p.evaluation.authority_trace,
@@ -2252,6 +2587,19 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         final_review_required: p.evaluation.final_review_required,
       }),
       cron_no_replay_review: cronNoReplayReview(p.command),
+      ...(p.goal_purpose_proposal ? {
+        goal_purpose_change_review: {
+          kind: "goal_purpose_change" as const,
+          goal_ref: p.goal_purpose_proposal.goal_ref,
+          prior_version: p.goal_purpose_proposal.prior_version,
+          prior_purpose_digest: p.goal_purpose_proposal.prior_purpose_digest,
+          new_purpose_digest: p.goal_purpose_proposal.purpose_digest,
+          review_status: !goalPurposeProposalIsCurrent(p)
+            ? "stale" as const
+            : p.content_review_digest === p.command_digest ? "reviewed" as const : "required" as const,
+          used_for_authority: false as const,
+        },
+      } : {}),
     }));
   }
 

@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -301,6 +302,190 @@ describe("document organization ordinary entries", () => {
     } finally {
       await stopChild(childOne.child);
       if (providerOne.listening) await closeServer(providerOne);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe("delegated goal purpose owner review", () => {
+  it("holds exact proposal text in memory, requires reviewed L3 approval, commits to J, and replays the new version", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-goal-purpose-change-"));
+    const auditDir = join(tempRoot, "audit");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const sessionDir = join(tempRoot, "sessions");
+    const stateRoot = join(tempRoot, "state");
+    const privateState = join(stateRoot, "private-state");
+    mkdirSync(privateState, { recursive: true });
+    const goalRef = "goal_0000000000000042";
+    const initialPurpose = "Initial delegated purpose";
+    const initialDigest = createHash("sha256").update(Buffer.from(initialPurpose, "utf8")).digest("hex");
+    writeFileSync(join(privateState, "goal-governance.json"), JSON.stringify({
+      schema_version: "blue-tanuki.goal-governance.v1",
+      goals: [{
+        goal_ref: goalRef,
+        goal_kind: "delegated",
+        source_ref: "F:0000000000000042",
+        initial_purpose_digest: initialDigest,
+        initial_interpretation_digest: "c".repeat(64),
+        adopted_at: Date.now() - 10_000,
+      }],
+      authorizations: [],
+      events: [],
+    }), "utf8");
+
+    let providerCalls = 0;
+    const provider = createServer((_request, response) => {
+      providerCalls += 1;
+      response.writeHead(503).end();
+    });
+    const providerPort = await listenOnLoopback(provider);
+    const gatewayPort = await reserveLoopbackPort();
+    const runtimeEnv = isolatedRuntimeEnvironment(providerPort, gatewayPort, auditDir, historyFile, sessionDir);
+    runtimeEnv.BLUE_TANUKI_STATE_ROOT = stateRoot;
+    let gateway: CapturedProcess | undefined;
+    const proposedPurpose = "新しい委任目的\n未確定条件を保持する。";
+    const proposedDigest = createHash("sha256").update(Buffer.from(proposedPurpose, "utf8")).digest("hex");
+
+    try {
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      const proposalResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/goal-purpose-change`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ goal_ref: goalRef, purpose_text: proposedPurpose }),
+      });
+      expect(proposalResponse.status).toBe(202);
+      const proposal = await proposalResponse.json() as Record<string, unknown>;
+      expect(proposal).toMatchObject({
+        accepted: true,
+        status: "approval_required",
+        goal_ref: goalRef,
+        prior_version: 1,
+        prior_purpose_digest: initialDigest,
+        new_purpose_digest: proposedDigest,
+      });
+      expect(JSON.stringify(proposal)).not.toContain(proposedPurpose);
+      expect(providerCalls).toBe(0);
+
+      const loadQueue = async () => {
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/approval`, {
+          headers: { authorization: `Bearer ${resumeToken}` },
+        });
+        expect(response.status).toBe(200);
+        return await response.json() as { pending_approvals: Array<Record<string, unknown>> };
+      };
+      const queue = await loadQueue();
+      const pending = queue.pending_approvals.find((item) => item.command_id === proposal.command_id);
+      expect(pending).toMatchObject({
+        content_review_required: true,
+        approval_level: "L3_final_review",
+        final_review_required: true,
+        goal_purpose_change_review: {
+          kind: "goal_purpose_change",
+          goal_ref: goalRef,
+          prior_version: 1,
+          prior_purpose_digest: initialDigest,
+          new_purpose_digest: proposedDigest,
+          review_status: "required",
+          used_for_authority: false,
+        },
+      });
+      expect(JSON.stringify(queue)).not.toContain(proposedPurpose);
+      const approvalToken = pending?.approval_token;
+      expect(typeof approvalToken).toBe("string");
+
+      const approvePath = `http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(proposal.command_id))}`;
+      const blockedBeforeReview = await fetch(approvePath, {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: approvalToken }),
+      });
+      expect(blockedBeforeReview.status).toBe(409);
+      expect(await blockedBeforeReview.json()).toMatchObject({ error: "approval_content_review_required" });
+      expect((await loadQueue()).pending_approvals.some((item) => item.command_id === proposal.command_id)).toBe(true);
+
+      const reviewResponse = await fetch(`${approvePath}/content`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}` },
+      });
+      expect(reviewResponse.status).toBe(200);
+      expect(reviewResponse.headers.get("cache-control")).toContain("no-store");
+      const review = await reviewResponse.json() as Record<string, unknown>;
+      expect(review).toMatchObject({
+        kind: "goal_purpose_change",
+        command_id: proposal.command_id,
+        operation: "goal.governance.change",
+        goal_ref: goalRef,
+        prior_version: 1,
+        prior_purpose_digest: initialDigest,
+        new_purpose_digest: proposedDigest,
+        request_payload_digest: proposedDigest,
+        purpose_text: proposedPurpose,
+        used_for_authority: false,
+      });
+
+      const approved = await fetch(approvePath, {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          verdict: "approve",
+          approval_token: approvalToken,
+          content_review_digest: review.command_digest,
+        }),
+      });
+      expect(approved.status).toBe(200);
+      expect(await approved.json()).toMatchObject({
+        ok: true,
+        result: {
+          approval: "approve",
+          executed: false,
+          status: "goal_purpose_change_committed",
+          goal_ref: goalRef,
+          version: 2,
+          purpose_digest: proposedDigest,
+        },
+      });
+      expect(providerCalls).toBe(0);
+
+      const durableBeforeRestart = [
+        readFileSync(join(auditDir, "audit.jsonl"), "utf8"),
+        existsSync(historyFile) ? readFileSync(historyFile, "utf8") : "",
+        existsSync(sessionDir) ? readdirSync(sessionDir).map((name) => readFileSync(join(sessionDir, name), "utf8")).join("\n") : "",
+      ].join("\n");
+      expect(durableBeforeRestart).not.toContain(proposedPurpose);
+      expect(durableBeforeRestart).toContain(proposedDigest);
+
+      await stopChild(gateway.child);
+      gateway = undefined;
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      const secondPurpose = "目的変更後の再起動時に確認する次の提案。";
+      const secondDigest = createHash("sha256").update(Buffer.from(secondPurpose, "utf8")).digest("hex");
+      const secondResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/goal-purpose-change`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ goal_ref: goalRef, purpose_text: secondPurpose }),
+      });
+      expect(secondResponse.status).toBe(202);
+      const secondProposal = await secondResponse.json() as Record<string, unknown>;
+      expect(secondProposal).toMatchObject({
+        accepted: true,
+        prior_version: 2,
+        prior_purpose_digest: proposedDigest,
+        new_purpose_digest: secondDigest,
+      });
+      const secondQueue = await loadQueue();
+      const secondPending = secondQueue.pending_approvals.find((item) => item.command_id === secondProposal.command_id);
+      const rejected = await fetch(`http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(secondProposal.command_id))}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "reject", approval_token: secondPending?.approval_token }),
+      });
+      expect(rejected.status).toBe(200);
+      expect(providerCalls).toBe(0);
+    } finally {
+      if (gateway) await stopChild(gateway.child);
+      await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
     }
   }, 60_000);

@@ -59,7 +59,7 @@ import type {
 } from "./types.js";
 import { frame } from "./frame.js";
 import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
-import { GoalGovernanceLedger, goalGovernanceEventDigest } from "./goal_governance.js";
+import { GoalGovernanceLedger, goalGovernanceEventDigest, type ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 import { goalPurposeChangeApprovalTarget } from "./approval_policy.js";
 import { model } from "./model.js";
 import { commit } from "./commit.js";
@@ -268,6 +268,7 @@ export interface ResumeAuditOptions {
 type GoalPurposeChangeEvent = Extract<GoalGovernanceEvent, { event_kind: "purpose_change" }>;
 type GoalPurposeChangeCommitLog = AuthorityEventLog & {
   event: "goal_purpose_change_committed";
+  proposal_actor: string;
   goal_governance_event: GoalPurposeChangeEvent;
   goal_governance_authorization: GoalGovernanceAuthorization;
 };
@@ -287,6 +288,7 @@ function goalPurposeChangeReviewTarget(input: {
 
 function isGoalPurposeChangeCommitLog(log: AuditRecord): log is GoalPurposeChangeCommitLog {
   return isGoalPurposeChangeCommitMarker(log) &&
+    typeof log.proposal_actor === "string" && log.proposal_actor.trim().length > 0 &&
     log.goal_governance_event?.event_kind === "purpose_change" &&
     log.goal_governance_authorization !== undefined;
 }
@@ -300,7 +302,8 @@ function goalPurposeChangeApprovalEvidence(
   input: {
     request_id: string;
     command_id: string;
-    actor: string;
+    proposal_actor: string;
+    reviewer_actor: string;
     target: string;
     before_index?: number;
   },
@@ -309,12 +312,12 @@ function goalPurposeChangeApprovalEvidence(
     "kind" in log && log.kind === "approval_gate" && log.request_id === input.request_id &&
     log.command_id === input.command_id && log.evaluation.decision === "ask" &&
     log.evaluation.context.operation === "tool.call" && log.evaluation.context.command_id === input.command_id &&
-    log.evaluation.context.actor === input.actor && log.evaluation.context.target === input.target && log.evaluation.risk === "high" &&
+    log.evaluation.context.actor === input.proposal_actor && log.evaluation.context.target === input.target && log.evaluation.risk === "high" &&
     log.evaluation.approval_level === "L3_final_review" && log.evaluation.final_review_required);
   const approvals = entries.filter(({ index, log }) => index < (input.before_index ?? Number.POSITIVE_INFINITY) &&
     "kind" in log && log.kind === "command_lifecycle" && log.request_id === input.request_id &&
     log.command_id === input.command_id && log.phase === "approval_approved" &&
-    log.actor === input.actor && log.reason === "human_approval:approve");
+    log.actor === input.reviewer_actor && log.reason === "human_approval:approve");
   const ask = asks[0];
   const approved = approvals.find(({ index }) => !ask || index > ask.index);
   const askLog = ask && "kind" in ask.log && ask.log.kind === "approval_gate" ? ask.log : null;
@@ -339,7 +342,8 @@ function replayGoalPurposeChanges(audit: AuditLog, initial: GoalGovernanceLedger
       ? goalPurposeChangeApprovalEvidence(entries, {
         request_id: log.request_id,
         command_id: log.command_id,
-        actor: log.actor,
+        proposal_actor: log.proposal_actor,
+        reviewer_actor: log.actor,
         target,
         before_index: index,
       })
@@ -990,6 +994,7 @@ ${planControl.question}`,
     readonly new_purpose_digest: string;
     readonly request_id: string;
     readonly command_id: string;
+    readonly proposal_actor: string;
     readonly actor: string;
     readonly evaluation: ApprovalEvaluation;
   }): GoalPurposeChangeCommitResult {
@@ -999,19 +1004,26 @@ ${planControl.question}`,
     if (!this.audit.verify()) return { ok: false, reason: "audit_invalid" };
 
     const actor = input.actor.trim();
+    const proposalActor = input.proposal_actor.trim();
     const request_id = input.request_id.trim();
     const command_id = input.command_id.trim();
     const target = goalPurposeChangeReviewTarget(input);
     const evaluation = input.evaluation;
-    if (!actor || actor === "system" || !request_id || !command_id ||
+    if (!actor || actor === "system" || !proposalActor || proposalActor === "system" || !request_id || !command_id ||
         evaluation.decision !== "ask" || evaluation.context.operation !== "tool.call" ||
-        evaluation.context.command_id !== command_id || evaluation.context.actor !== actor ||
+        evaluation.context.command_id !== command_id || evaluation.context.actor !== proposalActor ||
         evaluation.context.target !== target || evaluation.risk !== "high" ||
         evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required) {
       return { ok: false, reason: "approval_not_verified" };
     }
     const entries = this.audit.list();
-    const approvalEvidence = goalPurposeChangeApprovalEvidence(entries, { request_id, command_id, actor, target });
+    const approvalEvidence = goalPurposeChangeApprovalEvidence(entries, {
+      request_id,
+      command_id,
+      proposal_actor: proposalActor,
+      reviewer_actor: actor,
+      target,
+    });
     if (!approvalEvidence || JSON.stringify(approvalEvidence.evaluation) !== JSON.stringify(evaluation)) {
       return { ok: false, reason: "approval_not_verified" };
     }
@@ -1059,6 +1071,7 @@ ${planControl.question}`,
       request_id,
       command_id,
       actor,
+      proposal_actor: proposalActor,
       reason: "matching_l3_review_committed_delegated_goal_purpose_change",
       operation: evaluation.context.operation,
       target_scope: evaluation.context.target_scope,
@@ -1730,6 +1743,10 @@ ${planControl.question}`,
 
   getAudit(): AuditLog {
     return this.audit;
+  }
+
+  getGoalGovernanceProjection(asOf = Date.now()): ReadonlyGoalGovernanceProjection | undefined {
+    return this.goal_governance?.project(asOf);
   }
 
   /**

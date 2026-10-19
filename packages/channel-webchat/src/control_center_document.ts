@@ -602,6 +602,17 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="activate-emergency-stop" class="danger" type="button">Emergency Stop</button>
             <button id="clear-emergency-stop" type="button">Clear Stop</button>
           </div>
+          <section class="approval-content-review">
+            <h3>Delegated goal purpose proposal</h3>
+            <p class="muted">Submit the exact proposed purpose for a separate L3 review. Submission does not change the delegated goal.</p>
+            <input id="goal-purpose-owner-token" type="password" autocomplete="off" placeholder="owner proposal token" />
+            <input id="goal-purpose-goal-ref" type="text" autocomplete="off" placeholder="delegated goal reference" />
+            <textarea id="goal-purpose-text" rows="5" autocomplete="off" placeholder="Exact proposed purpose text"></textarea>
+            <div class="action-row">
+              <button id="submit-goal-purpose-change" class="primary" type="button">Submit for L3 review</button>
+              <span id="goal-purpose-submit-status" class="badge warn">not submitted</span>
+            </div>
+          </section>
           <div id="approval-list" class="queue-list"></div>
           <h2>Reusable Grants</h2>
           <div id="approval-grant-list" class="queue-list"></div>

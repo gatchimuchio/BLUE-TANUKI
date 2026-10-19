@@ -1077,6 +1077,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const cronReview = isObject(item.cron_no_replay_review) && item.cron_no_replay_review.kind === "cron_no_replay"
                 ? item.cron_no_replay_review
                 : null;
+              const goalPurposeReview = isObject(item.goal_purpose_change_review) && item.goal_purpose_change_review.kind === "goal_purpose_change"
+                ? item.goal_purpose_change_review
+                : null;
               const requiresContentReview = item.content_review_required === true;
               const approveBlocked = requiresContentReview || Boolean(cronReview && cronReview.eligible !== true);
               if (item.command_id && item.approval_token) {
@@ -1107,8 +1110,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                     '<dt>approval readiness</dt><dd>' + escapeHtml(cronReview.status || "unknown") + '</dd>' +
                     '</dl><p class="muted">Approval allows the next Cron event to proceed; it does not confirm this delivery. The event identity and in-flight state are checked again before recording.</p></section>'
                   : '') +
+                (goalPurposeReview
+                  ? '<section class="approval-content-review"><strong>Delegated goal purpose change</strong><dl class="kv">' +
+                    '<dt>goal reference</dt><dd class="mono">' + escapeHtml(goalPurposeReview.goal_ref) + '</dd>' +
+                    '<dt>current version</dt><dd>' + escapeHtml(goalPurposeReview.prior_version) + '</dd>' +
+                    '<dt>current purpose digest</dt><dd class="mono">' + escapeHtml(goalPurposeReview.prior_purpose_digest) + '</dd>' +
+                    '<dt>proposed purpose digest</dt><dd class="mono">' + escapeHtml(goalPurposeReview.new_purpose_digest) + '</dd>' +
+                    '<dt>content review</dt><dd>' + escapeHtml(goalPurposeReview.review_status || "required") + '</dd>' +
+                    '</dl><p class="muted">The exact purpose text is held in memory until this approval ends and is revealed only after selecting Review exact purpose.</p></section>'
+                  : '') +
                 (requiresContentReview
-                  ? '<section class="approval-content-review"><button data-review-content="' + escapeHtml(item.command_id || "") + '">Review exact content</button><div data-content-review-view aria-live="polite">Content has not been revealed.</div></section>'
+                  ? '<section class="approval-content-review"><button data-review-content="' + escapeHtml(item.command_id || "") + '">' + (goalPurposeReview ? 'Review exact purpose' : 'Review exact content') + '</button><div data-content-review-view aria-live="polite">Content has not been revealed.</div></section>'
                   : '') +
                 '<div class="action-row">' +
                 '<button class="primary" data-verdict="approve" data-command="' + escapeHtml(item.command_id || "") + '"' + (approveBlocked ? ' disabled' : '') + '>Approve</button>' +
@@ -3013,6 +3025,43 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      async function submitGoalPurposeChange() {
+        const ownerTokenInput = byId("goal-purpose-owner-token");
+        const purposeInput = byId("goal-purpose-text");
+        const status = byId("goal-purpose-submit-status");
+        const ownerToken = ownerTokenInput.value.trim();
+        const goalRef = byId("goal-purpose-goal-ref").value.trim();
+        const purposeText = purposeInput.value;
+        status.textContent = "submitting";
+        status.className = "badge warn";
+        try {
+          const response = await fetch("/owner/goal-purpose-change", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              ...authHeaders(ownerToken)
+            },
+            body: JSON.stringify({ goal_ref: goalRef, purpose_text: purposeText })
+          });
+          const result = await response.json().catch(function () { return null; });
+          if (!response.ok || !result || result.accepted !== true) {
+            status.textContent = result && (result.status || result.error) || "proposal was not accepted (HTTP " + response.status + ")";
+            status.className = "badge bad";
+            return;
+          }
+          purposeInput.value = "";
+          status.textContent = "L3 review queued: " + (result.command_id || "command id unavailable") +
+            " | goal " + result.goal_ref + " v" + result.prior_version + " | purpose digest " + result.new_purpose_digest;
+          status.className = "badge good";
+          await loadApprovals();
+        } catch (error) {
+          status.textContent = error && error.message ? error.message : "proposal request failed";
+          status.className = "badge bad";
+        } finally {
+          ownerTokenInput.value = "";
+        }
+      }
+
       async function loadNotifications() {
         const token = byId("notifications-token").value.trim();
         state.notificationsToken = token;
@@ -3070,6 +3119,49 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("content review failed: HTTP " + response.status + " " + text);
         }
         const review = await response.json();
+        if (review.kind === "goal_purpose_change") {
+          if (review.command_id !== commandId || review.operation !== "goal.governance.change" ||
+              review.used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review.command_digest || "") ||
+              !/^[a-f0-9]{64}$/.test(review.request_payload_digest || "") ||
+              review.request_payload_digest !== review.new_purpose_digest ||
+              !/^[a-f0-9]{64}$/.test(review.prior_purpose_digest || "") ||
+              typeof review.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(review.goal_ref) ||
+              !Number.isSafeInteger(review.prior_version) || review.prior_version <= 0 ||
+              typeof review.purpose_text !== "string") {
+            throw new Error("purpose review response is not bound to this approval");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "Exact delegated goal purpose proposed for change";
+          view.appendChild(heading);
+          [
+            ["Goal reference", review.goal_ref],
+            ["Current version", String(review.prior_version)],
+            ["Current purpose digest", review.prior_purpose_digest],
+            ["Proposed purpose digest", review.new_purpose_digest]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const purposeLabel = document.createElement("strong");
+          purposeLabel.textContent = "Exact proposed purpose";
+          view.appendChild(purposeLabel);
+          const purpose = document.createElement("pre");
+          purpose.textContent = review.purpose_text;
+          view.appendChild(purpose);
+          const digests = document.createElement("small");
+          digests.textContent = "Command digest: " + review.command_digest + " | Purpose digest: " + review.request_payload_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.command_digest;
+          approve.disabled = false;
+          button.textContent = "Refresh exact purpose";
+          return;
+        }
         if (review.command_id !== commandId || review.operation !== "gmail.write.message.send" ||
             review.used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review.command_digest || "") ||
             !/^[a-f0-9]{64}$/.test(review.request_payload_digest || "") ||
@@ -3276,6 +3368,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("load-runtime").addEventListener("click", loadRuntime);
       byId("load-notifications").addEventListener("click", loadNotifications);
       byId("load-approvals").addEventListener("click", loadApprovals);
+      byId("submit-goal-purpose-change").addEventListener("click", function () {
+        submitGoalPurposeChange().catch(function () {
+          const status = byId("goal-purpose-submit-status");
+          status.textContent = "proposal request failed";
+          status.className = "badge bad";
+          byId("goal-purpose-owner-token").value = "";
+        });
+      });
       byId("activate-emergency-stop").addEventListener("click", function () {
         setEmergencyStop("activate").catch(function (error) {
           alert(error.message);

@@ -60,6 +60,16 @@ async function setup(
   opts: Partial<
     Ctx & {
       onResume?: (id: string, v: string, ctx: { actor: string; token_kind: "resume" }) => Promise<unknown>;
+      onGoalPurposeChangeProposal?: (input: { goal_ref: string; purpose_text: string; actor: string }) => Promise<{
+        accepted: boolean;
+        status: string;
+        goal_ref?: string;
+        prior_version?: number;
+        prior_purpose_digest?: string;
+        new_purpose_digest?: string;
+        request_id?: string;
+        command_id?: string;
+      }>;
       resume_token?: string;
       owner_token?: string;
       webhook_token?: string;
@@ -95,6 +105,7 @@ async function setup(
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
     onResume: opts.onResume as never,
+    onGoalPurposeChangeProposal: opts.onGoalPurposeChangeProposal,
     resume_approval_tokens: opts.resume_approval_tokens,
     resume_approval_token_ttl_ms: opts.resume_approval_token_ttl_ms,
     ws_ticket_ttl_ms: opts.ws_ticket_ttl_ms,
@@ -480,6 +491,127 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("実行結果digest");
     expect(rendered).toContain("J配送digest");
     expect(rendered).not.toContain("SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER");
+  });
+
+  it("shows digest-only goal change metadata and reveals the exact reviewed purpose as text", async () => {
+    const renderStart = CONTROL_CENTER_SCRIPT.indexOf("function renderApprovals(body)");
+    const renderEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function renderApprovalGrants(", renderStart + 1);
+    expect(renderStart).toBeGreaterThanOrEqual(0);
+    expect(renderEnd).toBeGreaterThan(renderStart);
+    const queueNodes: Record<string, { textContent: string; className: string; innerHTML: string }> = Object.create(null);
+    const queueState = { approvalTokens: Object.create(null), approvalContentDigests: Object.create(null) };
+    const queueRender = new Script(`
+      const state = queueState;
+      function byId(id) { return queueNodes[id] || (queueNodes[id] = { textContent: "", className: "", innerHTML: "" }); }
+      function setText(id, value) { byId(id).textContent = String(value); }
+      function setHtml(id, value) { byId(id).innerHTML = value; }
+      function escapeHtml(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
+      function badge(value, tone) { return '<span class="badge ' + (tone || '') + '">' + escapeHtml(value) + '</span>'; }
+      function formatDate(value) { return String(value ?? "not set"); }
+      function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+      function compactJson(value) { return JSON.stringify(value); }
+      function redactRuntimeValue(value) { return value; }
+      function renderApprovalGrants() {}
+      function renderApprovalHistory() {}
+      ${CONTROL_CENTER_SCRIPT.slice(renderStart, renderEnd)}
+      renderApprovals(queueBody);
+    `);
+    const commandDigest = "d".repeat(64);
+    const priorDigest = "a".repeat(64);
+    const purposeDigest = "b".repeat(64);
+    queueRender.runInNewContext({
+      queueState,
+      queueNodes,
+      queueBody: {
+        pending_approvals: [{
+          command_id: "goal-purpose-command",
+          request_id: "goal-purpose-request",
+          operation: "tool.call",
+          target: "goal.governance.change:goal_0000000000000001:1:" + priorDigest + ":" + purposeDigest,
+          risk: "high",
+          approval_level: "L3_final_review",
+          final_review_required: true,
+          reason: "no_matching_approval_grant",
+          content_review_required: true,
+          approval_token: "opaque-test-token",
+          approval_token_expires_at_ms: 100,
+          goal_purpose_change_review: {
+            kind: "goal_purpose_change",
+            goal_ref: "goal_0000000000000001",
+            prior_version: 1,
+            prior_purpose_digest: priorDigest,
+            new_purpose_digest: purposeDigest,
+            review_status: "required",
+            used_for_authority: false,
+          },
+        }],
+        grants: [],
+        approval_history: [],
+        emergency_stop: { active: false },
+      },
+    });
+    const queueHtml = queueNodes["approval-list"]?.innerHTML ?? "";
+    expect(queueHtml).toContain("Delegated goal purpose change");
+    expect(queueHtml).toContain(priorDigest);
+    expect(queueHtml).toContain(purposeDigest);
+    expect(queueHtml).toContain("Review exact purpose");
+    expect(queueHtml).toContain("data-verdict=\"approve\" data-command=\"goal-purpose-command\" disabled");
+    expect(queueHtml).not.toContain("raw proposal text");
+
+    const purposeText = '<img src=x onerror="alert(1)"> exact purpose';
+    const review = {
+      kind: "goal_purpose_change",
+      command_id: "goal-purpose-command",
+      command_digest: commandDigest,
+      request_payload_digest: purposeDigest,
+      operation: "goal.governance.change",
+      goal_ref: "goal_0000000000000001",
+      prior_version: 1,
+      prior_purpose_digest: priorDigest,
+      new_purpose_digest: purposeDigest,
+      purpose_text: purposeText,
+      used_for_authority: false,
+    };
+    const makeNode = (tagName: string) => ({
+      tagName,
+      textContent: "",
+      children: [] as Array<Record<string, unknown>>,
+      replaceChildren() { this.children = []; },
+      appendChild(child: Record<string, unknown>) { this.children.push(child); return child; },
+      append(...children: Array<Record<string, unknown>>) { this.children.push(...children); },
+    });
+    const view = makeNode("section");
+    const approve = { disabled: true };
+    const card = {
+      getAttribute: (name: string) => name === "data-command" ? "goal-purpose-command" : null,
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? view : selector === '[data-verdict="approve"]' ? approve : null,
+    };
+    const button = { textContent: "Review exact purpose" };
+    const state = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    const functionStart = CONTROL_CENTER_SCRIPT.indexOf("async function reviewApprovalContent(");
+    const functionEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      async function revokeApprovalGrant(", functionStart + 1);
+    expect(functionStart).toBeGreaterThanOrEqual(0);
+    expect(functionEnd).toBeGreaterThan(functionStart);
+    const reviewFunction = new Script(`
+      async function run() {
+        const state = reviewState;
+        function byId(id) { return id === "approval-token" ? { value: "resume-token" } : null; }
+        function authHeaders(value) { return { authorization: "Bearer " + value }; }
+        const document = {
+          querySelectorAll() { return [reviewCard]; },
+          createElement(tagName) { return makeNode(tagName); },
+        };
+        const fetch = async () => ({ ok: true, json: async () => reviewData });
+        ${CONTROL_CENTER_SCRIPT.slice(functionStart, functionEnd)}
+        await reviewApprovalContent("goal-purpose-command", reviewButton);
+      }
+      run();
+    `);
+    await reviewFunction.runInNewContext({ reviewState: state, reviewCard: card, makeNode, reviewButton: button, reviewData: review });
+    const purposePre = view.children.find((child) => child.tagName === "pre");
+    expect(purposePre?.textContent).toBe(purposeText);
+    expect(state.approvalContentDigests["goal-purpose-command"]).toBe(commandDigest);
+    expect(approve.disabled).toBe(false);
   });
 
   it("projects only verified scope-applicability enums and digest fields", () => {
@@ -2024,6 +2156,56 @@ describe("WebChatChannel — HTTP inbound", () => {
       });
       expect(ownerCtx.received[0]?.metadata).not.toHaveProperty("actor");
       expect(ownerCtx.received[0]?.metadata).not.toHaveProperty("trust_level");
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("routes a bounded delegated-purpose proposal only through the dedicated owner credential", async () => {
+    const proposalText = "Exact purpose proposal: retain the delegated objective and record uncertainty.";
+    const proposals: Array<{ goal_ref: string; purpose_text: string; actor: string }> = [];
+    const ownerCtx = await setup({
+      owner_token: OWNER_TOKEN,
+      onGoalPurposeChangeProposal: async (input) => {
+        proposals.push(input);
+        return {
+          accepted: true,
+          status: "approval_required",
+          goal_ref: input.goal_ref,
+          prior_version: 4,
+          prior_purpose_digest: "a".repeat(64),
+          new_purpose_digest: "b".repeat(64),
+          request_id: "safe-request-id",
+          command_id: "safe-command-id",
+        };
+      },
+    });
+    try {
+      await ownerCtx.ch.start(async () => undefined);
+      const input = { goal_ref: "goal_0000000000000001", purpose_text: proposalText, actor: "forged" };
+      expect((await postJson(ownerCtx.port, "/owner/goal-purpose-change", input, {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+      expect((await postJson(ownerCtx.port, "/owner/goal-purpose-change", input, {
+        authorization: `Bearer ${OWNER_TOKEN}`,
+      })).status).toBe(202);
+      expect(proposals).toEqual([{
+        goal_ref: input.goal_ref,
+        purpose_text: proposalText,
+        actor: "webchat-owner-token-holder",
+      }]);
+      const oversized = await postJson(ownerCtx.port, "/owner/goal-purpose-change", {
+        goal_ref: input.goal_ref,
+        purpose_text: "x".repeat(16 * 1024 + 1),
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(oversized.status).toBe(413);
+      expect(proposals).toHaveLength(1);
+      const malformedUnicode = await postJson(ownerCtx.port, "/owner/goal-purpose-change", {
+        goal_ref: input.goal_ref,
+        purpose_text: "\uD800",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(malformedUnicode.status).toBe(400);
+      expect(proposals).toHaveLength(1);
     } finally {
       await ownerCtx.teardown();
     }
