@@ -623,15 +623,15 @@ jobs:
             exit 1
           fi
           echo "fuse_boundary_root_mount_private=success"
-          if ! mkdir -p /workspace-shared/view; then
+          if ! mkdir -p /workspace-shared/view /tmp/fuse-boundary-storage/isolation-upper /tmp/fuse-boundary-storage/isolation-work; then
             echo "fuse_boundary_directories=failed"
             exit 1
           fi
-          if ! awk '$5 == "/workspace-storage" { for (i = 1; i <= NF; i++) if ($i == "-") { if ($(i + 1) == "tmpfs") found = 1; break } } END { exit !found }' /proc/self/mountinfo; then
+          chmod 0700 /tmp/fuse-boundary-storage /tmp/fuse-boundary-storage/isolation-upper /tmp/fuse-boundary-storage/isolation-work
+          if ! awk '$5 == "/tmp" { for (i = 1; i <= NF; i++) if ($i == "-") { if ($(i + 1) == "tmpfs") found = 1; break } } END { exit !found }' /proc/self/mountinfo; then
             echo "fuse_boundary_storage_tmpfs=failed"
             exit 1
           fi
-          mkdir -p /workspace-storage/isolation-upper /workspace-storage/isolation-work
           if ! mount --bind /workspace-shared /workspace-shared 2>/dev/null; then
             echo "fuse_boundary_shared_bind=failed"
             exit 1
@@ -772,7 +772,7 @@ jobs:
           chmod 0644 /commit-target/sentinel
           mount_helper_pid=""
           /usr/sbin/mount.fuse3 /usr/bin/fuse-overlayfs# /workspace-shared/view \
-            -o drop_privileges,lowerdir=/workspace-lower,upperdir=/workspace-storage/isolation-upper,workdir=/workspace-storage/isolation-work \
+            -o drop_privileges,lowerdir=/workspace-lower,upperdir=/tmp/fuse-boundary-storage/isolation-upper,workdir=/tmp/fuse-boundary-storage/isolation-work \
             >/tmp/fuse-boundary-mount.log 2>&1 &
           mount_helper_pid=$!
           cleanup_child_ns() {
@@ -874,7 +874,7 @@ jobs:
             --proc /proc --dev /dev --dev-bind /dev/fuse /dev/fuse \
             --size 134217728 --perms 1777 --tmpfs /tmp \
             --dir /workspace-lower --ro-bind "$lower_source" /workspace-lower \
-            --dir /workspace-shared --dir /workspace-storage --size 134217728 --perms 0700 --tmpfs /workspace-storage --dir /commit-target \
+            --dir /workspace-shared --dir /commit-target \
             --bind "$commit_source" /commit-target \
             --ro-bind "$probe_root/outer.sh" /fuse-boundary-outer.sh \
             --ro-bind "$probe_root/child.sh" /fuse-boundary-child.sh \
