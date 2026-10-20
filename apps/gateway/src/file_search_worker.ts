@@ -26,6 +26,10 @@ export function createFileSearchWorker(options: FileSearchWorkerOptions): FileSe
 
 function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promise<unknown> {
   if (request.signal?.aborted) return Promise.reject(new Error("file_search_worker_cancelled"));
+  if (request.task_identity_digest !== request.ticket.task_identity_digest ||
+      (request.task_identity_digest !== undefined && !/^[a-f0-9]{64}$/.test(request.task_identity_digest))) {
+    return Promise.reject(new Error("file_search_worker_task_identity_mismatch"));
+  }
   if (request.operation_plan_binding_digest !== request.target_version_observation.operation_plan_binding_digest) {
     return Promise.reject(new Error("file_search_worker_operation_plan_binding_mismatch"));
   }
@@ -36,7 +40,8 @@ function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promi
   if (remaining <= 0) return Promise.reject(new Error("file_search_worker_ticket_expired"));
   // built artifactだけを使用。srcへ黙示fallbackしない。
   const child = spawn(process.execPath, [fileURLToPath(new URL("../dist/file_search_worker_child.js", import.meta.url))], {
-    cwd: fileURLToPath(new URL("../dist/", import.meta.url)), env: { ...env, BLUE_TANUKI_WORKER_ID: worker_id },
+    cwd: fileURLToPath(new URL("../dist/", import.meta.url)), env: { ...env, BLUE_TANUKI_WORKER_ID: worker_id,
+      BLUE_TANUKI_TASK_IDENTITY_DIGEST: request.task_identity_digest ?? "" },
     windowsHide: true, stdio: ["ignore", "ignore", "ignore", "ipc"], serialization: "json",
   });
   return new Promise((resolveResult, reject) => {
@@ -66,10 +71,14 @@ function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promi
         if (packet.worker_id !== worker_id || packet.pid !== child.pid) throw new Error("file_search_worker_identity_mismatch");
         if (!worker) {
           if (packet.type !== "ready" || packet.platform !== process.platform || !child.pid ||
-              Object.keys(packet).some((key) => !["profile", "type", "worker_id", "pid", "platform"].includes(key))) throw new Error("file_search_worker_ready_invalid");
+              packet.task_identity_digest !== request.task_identity_digest ||
+              Object.keys(packet).some((key) => !["profile", "type", "worker_id", "pid", "platform", "task_identity_digest"].includes(key))) {
+            throw new Error("file_search_worker_ready_invalid");
+          }
           const identity = Object.freeze({ worker_id, worker_pid: child.pid, worker_platform: process.platform,
             worker_started_at_ms: started_at_ms,
-            ...(request.operation_plan_binding_digest ? { operation_plan_binding_digest: request.operation_plan_binding_digest } : {}) });
+            ...(request.operation_plan_binding_digest ? { operation_plan_binding_digest: request.operation_plan_binding_digest } : {}),
+            ...(request.task_identity_digest ? { task_identity_digest: request.task_identity_digest } : {}) });
           request.on_started(identity);
           worker = identity;
           // 同期保存や起動待機で消費した時間を送信直前に再照合する。
@@ -78,7 +87,8 @@ function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promi
           }
           const execute = workerPacket({ type: "execute", worker_id, ticket: request.ticket, command: request.command,
             target_version_observation: request.target_version_observation,
-            ...(request.operation_plan_binding_digest ? { operation_plan_binding_digest: request.operation_plan_binding_digest } : {}) });
+            ...(request.operation_plan_binding_digest ? { operation_plan_binding_digest: request.operation_plan_binding_digest } : {}),
+            ...(request.task_identity_digest ? { task_identity_digest: request.task_identity_digest } : {}) });
           request.before_dispatch();
           if (failure || request.signal?.aborted) throw new Error("file_search_worker_cancelled");
           dispatched = true;
@@ -89,15 +99,17 @@ function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promi
               packet.ticket_id === request.ticket.ticket_id && packet.execution_epoch === request.ticket.execution_epoch &&
               packet.command_digest === request.ticket.command_digest &&
               packet.operation_plan_binding_digest === request.operation_plan_binding_digest &&
+              packet.task_identity_digest === request.task_identity_digest &&
               Object.keys(packet).every((key) => ["profile", "type", "worker_id", "pid", "ticket_id", "execution_epoch", "command_digest",
-                "operation_plan_binding_digest", "code"].includes(key))) {
+                "operation_plan_binding_digest", "task_identity_digest", "code"].includes(key))) {
             throw new Error("file_search_worker_target_version_changed; request fresh review");
           }
           if (!dispatched || received || packet.type !== "result" || packet.ticket_id !== request.ticket.ticket_id ||
               packet.execution_epoch !== request.ticket.execution_epoch || packet.command_digest !== request.ticket.command_digest ||
               packet.operation_plan_binding_digest !== request.operation_plan_binding_digest ||
+              packet.task_identity_digest !== request.task_identity_digest ||
               Object.keys(packet).some((key) => !["profile", "type", "worker_id", "pid", "ticket_id", "execution_epoch", "command_digest",
-                "operation_plan_binding_digest", "result", "target_version_observation"].includes(key))) {
+                "operation_plan_binding_digest", "task_identity_digest", "result", "target_version_observation"].includes(key))) {
             throw new Error("file_search_worker_result_mismatch");
           }
           const targetVersionObservation = validateWorkerResult(packet.result, request.command,

@@ -1,16 +1,16 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 実施中BUILD_BATCH：`QEB-01-D02.02-OPERATION-PLAN-WORKER-BINDING`
+### 実施中BUILD_BATCH：`QEB-01-D02.02-PLAN-TASK-IDENTITY-WORKER-AUDIENCE`
 
-開始`main`／`origin/main`=`25d051597026c86801231e1c5aa0540508ae10b6`、local recovery branch／remote backup tagはcurrent=`25d051597026c86801231e1c5aa0540508ae10b6`、previous=`71a531777024038a4f213c262d0c86d5d4c6303a`で一致。owner指定QE rev2.3三点セット（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、D02.02、Executor→file-search worker実IPCを再読した。既存untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持する。
+開始`main`／`origin/main`=`5de4f3e64859140006e04d5a0839e90f6f9b51c8`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／本指示、D02.02、HDS Operation Plan→Executor→Gateway file-search child→durable receiptを再読した。開始時のdirty差分は同じD02.02 BUILD_BATCHのtask-identity実装であり、未追跡`packages/blue-tanuki/native/linux-isolation/target/`は保持する。
 
-目的は、HDSが選んだOperation Plan binding digestをfile.searchのtarget observationからworker要求へ渡し、childが同じdigestを照合し、result/errorへ返し、parentが検査した後にdigest-onlyの実行receiptへ保存すること。これは仕事のsource bindingを運ぶ非権威証拠であり、stable task ID、host/device identity、D4Pocket audience、OS隔離、実行権限の代替ではない。
+J所有の永続Operation Planから、owner/channel/goal/plan/requestのdigest tupleでstep・改訂をまたぐ非権威task identityを作る。HDS execution sealとExecutor ticket proofへ結合し、ExecutionAdmissionにも載せる。Jはplan taskとadmission digestが一致する場合だけattemptを開始する。Executorは同じdigestを専用childの起動環境とIPC要求へ渡し、child／親がready・request・result・errorで同一値を照合し、SQLite receiptとdigest-only snapshotへ保存する。
 
-この範囲では`ExecutionWorkerIdentity`とSQLite receiptへ`worker_operation_plan_binding_digest`を追加した。plan-bound検索で親→child要求→result→receiptが一致し、DB reopen後も読み戻せる。欠落／変更bindingのchild要求は拒否する。未計画file.searchにdigestを捏造せず、未接続範囲は残す。
+確認できたaudienceは、HDS由来task digest、親所有の専用worker UUID、実child PID、execution epochを組み合わせた同一Windows process audienceに限る。task digestは権限ではない。物理host/device identityの独立producer、D4Pocket audience認証、別hostへの転送認証、OS隔離は未成立で、D02.02全体は`BUILD_GAP`。
 
-Windows上の`pnpm typecheck`、`pnpm build`、`apps/gateway/test/file_search_worker.test.ts`（9/9）、変更した永続receipt caseのfocused再実行（1/1）がPASS。D4-Pocket AGENTS §3.1のActions条件は確認済みだが、本対象はWindows localで必要なconsumer疎通を確認できるためActions／workflow追加なし。全体test、QE_QC、QE_QA、OS実機、実provider／credential、外部業務作用は未実施。
+Windowsの`pnpm typecheck`／`pnpm build`、Gateway `file_search_worker.test.ts`（9/9）、`operation_plan_runtime.test.ts`（26/26）、Core `executor_hds_authority_binding.test.ts`（5/5）がPASS。初回Core試験のv4 proof digest期待値ずれはfixtureを更新後、同試験を再実行してPASS。実child IPCとSQLite reopen、Jのadmission欠落／別task digest拒否、step間・plan revision後のtask identity継続を確認した。Actionsは未使用。全workspace suite／QE_QC／QE_QA／5OS実機／provider・credential／外部業務作用は未実施。
 
-次consumerはD02.02に残る安定task identityとcurrent host/audienceの実producer／認証consumer。Gateway execution epochは起動世代でありhost identityではない。HDS request ID、D4の表示metadata、memory/historyからtaskやhost権限を推定しない。Linux aggregate workspace quota／D07.02／F01.02は別の`BUILD_GAP`として保留し、失敗した同一runner診断をこのバッチで再開しない。
+次consumerはBLUE所有の信頼できるcurrent host/audience identity producerと、その値をprocess audienceへ認証して結ぶ実経路。execution epochは起動世代でありhost identityではない。HDS request ID、D4表示metadata、memory/historyからtaskやhost権限を推定しない。別repo変更、C08.03実provider、P13公開・出荷判断、Linux aggregate workspace quota／D07.02／F01.02はこのbatchの対象外。
 
 ### 保留中の前回BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-AGGREGATE-WORKSPACE-QUOTA`
 

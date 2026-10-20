@@ -119,6 +119,7 @@ export interface FileSearchWorkerRequest {
   command: Extract<ExecuteCommand, { type: "tool_call" }>;
   target_version_observation: FileSearchTargetVersionObservation;
   operation_plan_binding_digest?: string;
+  task_identity_digest?: string;
   ticket: Readonly<ExecutionIntentTicket>;
   signal?: AbortSignal;
   on_started(worker: Readonly<ExecutionWorkerIdentity>): void;
@@ -338,6 +339,11 @@ function approveCommandForExecution(
   const hds_source_context_digest = hds_binding
     ? consumeHdsExecutionAuthorityBinding(command, hds_binding)
     : null;
+  if (hds_binding &&
+      ((hds_binding.operation_plan_binding_digest === undefined) !== (hds_binding.task_identity_digest === undefined) ||
+        (hds_binding.task_identity_digest !== undefined && !/^[a-f0-9]{64}$/.test(hds_binding.task_identity_digest)))) {
+    throw new Error("Executor approval rejected: HDS task identity does not match its Operation Plan source");
+  }
   const approved = snapshot as ApprovedCommand;
   const clock = readApprovalClock(runtime);
   const ticket: Readonly<ExecutionIntentTicket> = Object.freeze({
@@ -345,12 +351,14 @@ function approveCommandForExecution(
     command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", snapshot.id])).digest("hex"),
     command_digest,
     proof_digest: createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v3",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v4",
       command_digest,
       proof,
       hds_source_context_digest,
+      ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
       ...(target_version_observation_digest ? { target_version_observation_digest } : {}),
     })).digest("hex"),
+    ...(hds_binding?.task_identity_digest ? { task_identity_digest: hds_binding.task_identity_digest } : {}),
     issued_at_ms: clock.wall, expires_at_ms: clock.wall + runtime.ttl_ms,
   });
   runtime.store?.issue(ticket);
@@ -898,21 +906,27 @@ export class Executor {
       const store = record.runtime.store;
       if (!store?.bindWorker || !store.observeWorkerExit) throw new Error("File search worker requires durable worker receipts");
       const operationPlanBindingDigest = record.target_version_observation.operation_plan_binding_digest;
+      const taskIdentityDigest = record.ticket.task_identity_digest;
       let worker: Readonly<ExecutionWorkerIdentity> | undefined;
       let dispatched = false; let exited = false;
       const workerResponse = await this.deps.file_search_worker.invoke({ command, target_version_observation: record.target_version_observation,
         ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
+        ...(taskIdentityDigest ? { task_identity_digest: taskIdentityDigest } : {}),
         ticket: record.ticket, signal,
         on_started: (identity) => {
           if (worker || exited) throw new Error("File search worker start repeated");
           if (identity.operation_plan_binding_digest !== operationPlanBindingDigest) {
             throw new Error("File search worker Operation Plan identity mismatch");
           }
+          if (identity.task_identity_digest !== taskIdentityDigest) {
+            throw new Error("File search worker task identity mismatch");
+          }
           record.runtime.assert_execution_owner?.();
           const now = assertTicketCurrent(record);
           const captured = Object.freeze({ worker_id: identity.worker_id, worker_pid: identity.worker_pid,
             worker_platform: identity.worker_platform, worker_started_at_ms: identity.worker_started_at_ms,
-            ...(identity.operation_plan_binding_digest ? { operation_plan_binding_digest: identity.operation_plan_binding_digest } : {}) });
+            ...(identity.operation_plan_binding_digest ? { operation_plan_binding_digest: identity.operation_plan_binding_digest } : {}),
+            ...(identity.task_identity_digest ? { task_identity_digest: identity.task_identity_digest } : {}) });
           store.bindWorker!(record.ticket, captured, now);
           worker = captured;
         },

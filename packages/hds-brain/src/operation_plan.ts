@@ -1215,6 +1215,23 @@ export class OperationPlanLedger {
       command_digest: match.b.command_digest,
     });
   }
+  /** J所有計画のstep・改訂をまたぐ安定した非権威task identity。 */
+  executionTaskIdentityDigest(command: ExecuteCommand): string | undefined {
+    // Reuse the current-source checks so stale or unselected plans cannot mint
+    // a task identity for a worker request.
+    if (this.executionSourceBindingDigest(command) === undefined) return undefined;
+    const match = this.binding(command.id);
+    if (!match) throw new Error("plan_execution_task_identity_unavailable");
+    const first = match.p.revisions[0]!.plan;
+    return operationPlanDigest({
+      schema_version: "blue-tanuki.operation-plan-task-identity.v1",
+      owner_digest: operationPlanDigest(match.p.owner),
+      channel_digest: operationPlanDigest(match.p.channel),
+      task_digest: operationPlanDigest(match.p.goal),
+      plan_id_digest: operationPlanDigest(first.plan_id),
+      request_id_digest: operationPlanDigest(first.request_id),
+    });
+  }
   canExecute(command: ExecuteCommand): boolean {
     const reflectionCommand = this.reflections.has(command.id) || (command.type === "llm_call" &&
       command.payload.compute_context?.local_p_version === OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION);
@@ -1250,6 +1267,7 @@ export class OperationPlanLedger {
     if (!this.isBound(command.id)) return true;
     const admitted = admission === undefined ? undefined : ExecutionAdmissionSchema.parse(admission);
     if (admitted && (admitted.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
+        admitted.task_identity_digest !== this.executionTaskIdentityDigest(command) ||
         Date.now() < admitted.issued_at_ms || Date.now() >= admitted.expires_at_ms)) return false;
     this.change((state) => { for (const p of state.plans) {
       const b = p.bindings.find((b) => b.command_id === command.id);

@@ -10,8 +10,9 @@ export function executionAdmissionForCommand(command: ExecuteCommand, receipt: E
       receipt.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex")) {
     throw new Error("plan_executor_admission_mismatch");
   }
-  const { ticket_id, command_key, command_digest, proof_digest, execution_epoch, issued_at_ms, expires_at_ms } = receipt;
-  return ExecutionAdmissionSchema.parse({ ticket_id, command_key, command_digest, proof_digest, execution_epoch, issued_at_ms, expires_at_ms });
+  const { ticket_id, command_key, command_digest, proof_digest, task_identity_digest, execution_epoch, issued_at_ms, expires_at_ms } = receipt;
+  return ExecutionAdmissionSchema.parse({ ticket_id, command_key, command_digest, proof_digest,
+    ...(task_identity_digest ? { task_identity_digest } : {}), execution_epoch, issued_at_ms, expires_at_ms });
 }
 
 /** 別DB間の配送。現世代だけJへ渡し、旧世代はprivate evidenceへ隔離する。 */

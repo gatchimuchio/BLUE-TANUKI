@@ -181,7 +181,8 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
   }));
 
   it("実IPC childは改変内容・別worker・期限切れのpacketから結果を返さない", async () => temporary(async (store, workspace) => {
-    for (const kind of ["content", "task", "missing-task", "missing-plan-binding", "changed-plan-binding", "epoch", "worker", "expired"]) {
+    for (const kind of ["content", "task", "missing-task", "missing-task-identity", "changed-task-identity",
+      "missing-plan-binding", "changed-plan-binding", "epoch", "worker", "expired"]) {
       const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: store.executionEpoch });
       const commandSource = source();
       const { executor } = rig(store, workspace);
@@ -191,9 +192,11 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
       const approved = authority.approve(commandSource, proof(commandSource), undefined, undefined, targetVersion);
       const ticket = authority.receipt(approved)!;
       const worker_id = randomUUID();
+      const expectedTaskIdentityDigest = kind === "missing-task-identity" || kind === "changed-task-identity" ? "a".repeat(64) : undefined;
       const child = spawn(process.execPath, [fileURLToPath(new URL("../dist/file_search_worker_child.js", import.meta.url))], {
         env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace,
-          BLUE_TANUKI_WORKER_ID: worker_id, BLUE_TANUKI_EXECUTION_EPOCH: store.executionEpoch },
+          BLUE_TANUKI_WORKER_ID: worker_id, BLUE_TANUKI_EXECUTION_EPOCH: store.executionEpoch,
+          BLUE_TANUKI_TASK_IDENTITY_DIGEST: expectedTaskIdentityDigest ?? "" },
         stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true,
       });
       const closed = once(child, "close"); const timer = setTimeout(() => child.kill(), 10_000);
@@ -202,7 +205,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
         const [value] = await once(child, "message"); expect(readWorkerPacket(value).pid).toBe(child.pid);
         child.on("message", () => results++);
         const command = structuredClone(approved);
-        const packetTicket = { ticket_id: ticket.ticket_id, command_key: ticket.command_key, command_digest: executorCommandDigest(command),
+        const packetTicket: Record<string, unknown> = { ticket_id: ticket.ticket_id, command_key: ticket.command_key, command_digest: executorCommandDigest(command),
           proof_digest: ticket.proof_digest, execution_epoch: ticket.execution_epoch, issued_at_ms: ticket.issued_at_ms, expires_at_ms: ticket.expires_at_ms };
         if (kind === "content") command.payload.arguments.query = "changed";
         if (kind === "task") command.upstream_decision.request_id = randomUUID();
@@ -211,9 +214,11 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
           packetTicket.command_digest = executorCommandDigest(command);
         }
         if (kind === "epoch") packetTicket.execution_epoch = randomUUID();
-        if (kind === "expired") packetTicket.expires_at_ms = packetTicket.issued_at_ms + 1;
+        if (kind === "expired") packetTicket.expires_at_ms = ticket.issued_at_ms + 1;
+        if (kind === "changed-task-identity") packetTicket.task_identity_digest = "b".repeat(64);
         const packet = { type: "execute", worker_id: kind === "worker" ? randomUUID() : worker_id,
           ticket: packetTicket, command, target_version_observation: targetVersion,
+          ...(kind === "changed-task-identity" ? { task_identity_digest: "b".repeat(64) } : {}),
           ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}) };
         if (kind === "missing-plan-binding") delete packet.operation_plan_binding_digest;
         if (kind === "changed-plan-binding") packet.operation_plan_binding_digest = "e".repeat(64);

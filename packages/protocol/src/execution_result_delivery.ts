@@ -6,6 +6,7 @@ const Time = z.number().int().positive().safe();
 /** Executorで発行された同一性を、作用前にJの私有bindingへ結合する。権限ではない。 */
 export const ExecutionAdmissionSchema = z.object({
   ticket_id: z.string().uuid(), command_key: Digest, command_digest: Digest, proof_digest: Digest,
+  task_identity_digest: Digest.optional(),
   execution_epoch: z.string().uuid(), issued_at_ms: Time, expires_at_ms: Time,
 }).strict().refine((v) => v.expires_at_ms > v.issued_at_ms && v.expires_at_ms - v.issued_at_ms <= 600_000);
 export type ExecutionAdmission = z.infer<typeof ExecutionAdmissionSchema>;

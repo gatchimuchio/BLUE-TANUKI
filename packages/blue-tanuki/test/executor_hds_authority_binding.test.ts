@@ -183,7 +183,7 @@ describe("HDSからExecutorへの非直列化source binding", () => {
     expect(tickets).toHaveLength(1);
     expect(tickets[0]!.command_digest).toBe(digest);
     expect(tickets[0]!.proof_digest).toBe(createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v3",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v4",
       command_digest: digest,
       proof,
       hds_source_context_digest: binding.source_context_digest,
@@ -243,6 +243,7 @@ describe("HDSからExecutorへの非直列化source binding", () => {
       .toThrow(/current Operation Plan source/);
     const binding = hds.createExecutionAuthorityBinding(command, targetVersion);
     expect(binding.operation_plan_binding_digest).toBe(operationPlanBindingDigest);
+    expect(binding.task_identity_digest).toMatch(/^[a-f0-9]{64}$/);
     expect(binding.broker_target_version_observation_digest).toBe(operationPlanDigest(targetVersion));
     expect(JSON.stringify(binding)).not.toContain("fixture-owner");
     expect(JSON.stringify(binding)).not.toContain(goal);
@@ -263,10 +264,11 @@ describe("HDSからExecutorへの非直列化source binding", () => {
 
     expect(tickets).toHaveLength(1);
     expect(tickets[0]!.proof_digest).toBe(createHash("sha256").update(JSON.stringify({
-      schema_version: "blue-tanuki.executor-authority-content-binding.v3",
+      schema_version: "blue-tanuki.executor-authority-content-binding.v4",
       command_digest: digest,
       proof,
       hds_source_context_digest: binding.source_context_digest,
+      task_identity_digest: binding.task_identity_digest,
       target_version_observation_digest: operationPlanDigest(targetVersion),
     })).digest("hex"));
   });

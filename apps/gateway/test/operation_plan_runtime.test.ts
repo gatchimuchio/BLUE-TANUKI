@@ -11,6 +11,9 @@ import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservation
   OperationPlanCheckpointSchema,
   type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
+import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
+import { executionAdmissionForCommand } from "../src/reconcile_execution_results.js";
+import { createFileSearchWorker } from "../src/file_search_worker.js";
 import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { projectOperationPlanStatus } from "../src/serve_projection.js";
 
@@ -236,6 +239,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     let verifiedHds: HDSUpperController | undefined;
     let incompleteStore: OperationPlanStateStore | undefined;
     let incompleteHds: HDSUpperController | undefined;
+    let executionStore: GatewayExecutionIntentStore | undefined;
     try {
       initialStore = new OperationPlanStateStore(initialStatePath);
       initialHds = new HDSUpperController({
@@ -392,10 +396,54 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(JSON.stringify(targetObservation)).not.toContain(purposeText);
       const searchExecutionBinding = verifiedController.createExecutionAuthorityBinding(selectedSearch.command, targetObservation);
       expect(searchExecutionBinding.operation_plan_binding_digest).toBe(planBindingDigest);
+      const taskIdentityDigest = verifiedController.getExecutionOperationPlanTaskIdentityDigest(selectedSearch.command);
+      if (!taskIdentityDigest) throw new Error("current J-owned task identity was unavailable");
+      expect(taskIdentityDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(searchExecutionBinding.task_identity_digest).toBe(taskIdentityDigest);
+      expect(verifiedController.getExecutionOperationPlanTaskIdentityDigest(selected.command!)).toBe(taskIdentityDigest);
       expect(searchExecutionBinding.broker_target_version_observation_digest).toBe(operationPlanDigest(targetObservation));
       expect(() => verifiedController.createExecutionAuthorityBinding(selectedSearch.command!, {
         ...targetObservation, operation_plan_binding_digest: "f".repeat(64),
       })).toThrow(/current Operation Plan source/);
+
+      const searchExecutionEpoch = randomUUID();
+      executionStore = new GatewayExecutionIntentStore(join(root, "execution-intents.sqlite"), searchExecutionEpoch);
+      const searchAuthority = createExecutorApprovalAuthority({ execution_store: executionStore,
+        execution_epoch: searchExecutionEpoch, require_hds_execution_binding: true });
+      const searchExecutor = new Executor({
+        llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
+        tools: searchTools, approval_authority: searchAuthority,
+        file_search_worker: createFileSearchWorker({ execution_epoch: searchExecutionEpoch,
+          env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace } }),
+      });
+      const searchApproval = evaluateApproval(selectedSearch.command, [], { actor: "fixture-owner", default_mode: "full_access" });
+      const approvedSearch = searchAuthority.approve(selectedSearch.command, {
+        source: searchApproval.final_review_required ? "human_final_review" : "approval_gate", decision: "allow",
+        approved_by: "fixture-owner", approved_at_ms: Date.now(), upstream_commit_hash: selectedSearch.command.upstream_decision.commit_hash,
+        operation: searchApproval.context.operation, risk: searchApproval.risk,
+        final_review_required: searchApproval.final_review_required, reason: "synthetic plan-bound file.search fixture",
+      }, executorCommandDigest(selectedSearch.command), searchExecutionBinding, targetObservation);
+      const searchAdmission = executionAdmissionForCommand(selectedSearch.command, searchAuthority.receipt(approvedSearch));
+      expect(searchAdmission.task_identity_digest).toBe(taskIdentityDigest);
+      const { task_identity_digest: _missingTaskIdentity, ...admissionWithoutTaskIdentity } = searchAdmission;
+      expect(verifiedController.beginOperationPlanAttempt(selectedSearch.command, admissionWithoutTaskIdentity)).toBe(false);
+      expect(verifiedController.beginOperationPlanAttempt(selectedSearch.command, {
+        ...searchAdmission, task_identity_digest: "f".repeat(64),
+      })).toBe(false);
+      expect(verifiedController.beginOperationPlanAttempt(selectedSearch.command, searchAdmission)).toBe(true);
+      const searchFeedback = await searchExecutor.execute(approvedSearch);
+      expect(searchFeedback.status).toBe("success");
+      finalizeCommandOutput({ hds: verifiedController, command: selectedSearch.command, feedback: searchFeedback,
+        request_id: selectedSearch.command.upstream_decision.request_id ?? null, target_surface: "channel" });
+      expect(searchAuthority.receipt(approvedSearch)).toMatchObject({ state: "adapter_returned",
+        task_identity_digest: taskIdentityDigest, worker_task_identity_digest: taskIdentityDigest,
+        worker_operation_plan_binding_digest: planBindingDigest });
+      expect(executionStore.verifyEvents()).toBe(true);
+      const reopenedExecutionStore = new GatewayExecutionIntentStore(join(root, "execution-intents.sqlite"), searchExecutionEpoch);
+      try {
+        expect(reopenedExecutionStore.snapshot()).toEqual(executionStore.snapshot());
+        expect(reopenedExecutionStore.verifyEvents()).toBe(true);
+      } finally { reopenedExecutionStore.close(); }
 
       const reviewedCommand = selected.command;
       const reviewedSearchCommand = selectedSearch.command;
@@ -429,6 +477,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       });
       expect(review(incompleteHds, candidate, "send", binding).command).toBeNull();
     } finally {
+      executionStore?.close();
       incompleteHds?.close(); incompleteStore?.close();
       verifiedHds?.close(); verifiedStore?.close();
       initialHds?.close(); initialStore?.close();
@@ -1270,6 +1319,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(dependent.payload.arguments.query).toBe("blue");
       const dependentSourceDigest = hds.getExecutionOperationPlanBindingDigest(dependent);
       expect(dependentSourceDigest).toMatch(/^[a-f0-9]{64}$/);
+      const taskIdentityDigest = hds.getExecutionOperationPlanTaskIdentityDigest(dependent);
+      expect(taskIdentityDigest).toMatch(/^[a-f0-9]{64}$/);
       const next = structuredClone(candidate); next.steps[2]!.parameters!.max_results = 2;
       const before = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
       const revised = hds.decide(request(`plan:revise ${JSON.stringify({ plan_id: candidate.plan_id,
@@ -1280,6 +1331,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(() => hds.getExecutionOperationPlanBindingDigest(independent)).toThrow("plan_execution_source_binding_stale");
       expect(hds.operationPlanCommandIsCurrent(dependent)).toBe(true);
       expect(hds.getExecutionOperationPlanBindingDigest(dependent)).toBe(dependentSourceDigest);
+      expect(hds.getExecutionOperationPlanTaskIdentityDigest(dependent)).toBe(taskIdentityDigest);
       const searchTools = new ToolRegistry(); searchTools.register(fileSearchTool);
       const targetResolver = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
         tools: searchTools, approval_authority: createExecutorApprovalAuthority() });

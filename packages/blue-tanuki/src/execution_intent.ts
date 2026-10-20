@@ -5,6 +5,8 @@ export interface ExecutionIntentTicket {
   command_key: string;
   command_digest: string;
   proof_digest: string;
+  /** J所有計画のtask digest。未計画の要求では省略する。 */
+  task_identity_digest?: string;
   execution_epoch: string;
   issued_at_ms: number;
   expires_at_ms: number;
@@ -22,6 +24,8 @@ export interface ExecutionWorkerIdentity {
   worker_started_at_ms: number;
   /** Digest of the current HDS Operation Plan source when this worker executes a planned step. */
   operation_plan_binding_digest?: string;
+  /** このworker audienceへ渡すJ所有task identity。 */
+  task_identity_digest?: string;
 }
 
 export interface ExecutionIntentReceipt extends ExecutionIntentTicket {
@@ -36,6 +40,7 @@ export interface ExecutionIntentReceipt extends ExecutionIntentTicket {
   worker_pid?: number;
   worker_platform?: string;
   worker_started_at_ms?: number;
+  worker_task_identity_digest?: string;
   worker_operation_plan_binding_digest?: string;
   worker_exit_observed_at_ms?: number;
   used_for_authority: false;

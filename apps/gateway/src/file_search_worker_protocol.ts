@@ -18,22 +18,25 @@ export function readWorkerPacket(value: unknown): Record<string, unknown> {
       (packet as Record<string, unknown>).profile !== FILE_SEARCH_WORKER_PROFILE) throw new Error("file_search_worker_profile_mismatch");
   return packet as Record<string, unknown>;
 }
-export function validateWorkerRequest(packet: Record<string, unknown>, worker_id: string, expected_execution_epoch: string, now_ms: number): {
+export function validateWorkerRequest(packet: Record<string, unknown>, worker_id: string, expected_execution_epoch: string, now_ms: number,
+  expected_task_identity_digest?: string): {
   command: Extract<ExecuteCommand, { type: "tool_call" }>;
   ticket: ExecutionIntentTicket;
   target_version_observation: FileSearchTargetVersionObservation;
   operation_plan_binding_digest?: string;
+  task_identity_digest?: string;
 } {
   if (packet.type !== "execute" || packet.worker_id !== worker_id ||
       Object.keys(packet).some((key) => !["profile", "type", "worker_id", "ticket", "command", "target_version_observation",
-        "operation_plan_binding_digest"].includes(key))) throw new Error("file_search_worker_request_invalid");
+        "operation_plan_binding_digest", "task_identity_digest"].includes(key))) throw new Error("file_search_worker_request_invalid");
   const ticket = packet.ticket as ExecutionIntentTicket;
   const command = packet.command as Extract<ExecuteCommand, { type: "tool_call" }>;
   let target_version_observation: FileSearchTargetVersionObservation;
   try { target_version_observation = FileSearchTargetVersionObservationSchema.parse(packet.target_version_observation); }
   catch { throw new Error("file_search_worker_target_version_invalid"); }
   const requestedRoot = command?.payload?.arguments?.root;
-  if (!ticket || Object.keys(ticket).some((key) => !["ticket_id", "command_key", "command_digest", "proof_digest", "execution_epoch", "issued_at_ms", "expires_at_ms"].includes(key)) ||
+  if (!ticket || Object.keys(ticket).some((key) => !["ticket_id", "command_key", "command_digest", "proof_digest", "task_identity_digest",
+      "execution_epoch", "issued_at_ms", "expires_at_ms"].includes(key)) ||
       !/^[0-9a-f-]{36}$/.test(ticket.ticket_id) || !/^[0-9a-f-]{36}$/.test(ticket.execution_epoch) ||
       ![ticket.command_key, ticket.command_digest, ticket.proof_digest].every((value) => /^[0-9a-f]{64}$/.test(value)) ||
       !Number.isSafeInteger(ticket.issued_at_ms) || !Number.isSafeInteger(ticket.expires_at_ms) ||
@@ -46,6 +49,9 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
       ticket.command_digest !== executorCommandDigest(command) ||
       ticket.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
       packet.operation_plan_binding_digest !== target_version_observation.operation_plan_binding_digest ||
+      packet.task_identity_digest !== ticket.task_identity_digest || packet.task_identity_digest !== expected_task_identity_digest ||
+      (packet.task_identity_digest !== undefined &&
+        (typeof packet.task_identity_digest !== "string" || !/^[a-f0-9]{64}$/.test(packet.task_identity_digest))) ||
       (packet.operation_plan_binding_digest !== undefined &&
         (typeof packet.operation_plan_binding_digest !== "string" || !/^[0-9a-f]{64}$/.test(packet.operation_plan_binding_digest)))) {
     throw new Error("file_search_worker_ticket_invalid");
@@ -56,7 +62,8 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
     throw new Error("file_search_worker_capability_denied");
   }
   return { command, ticket, target_version_observation,
-    ...(typeof packet.operation_plan_binding_digest === "string" ? { operation_plan_binding_digest: packet.operation_plan_binding_digest } : {}) };
+    ...(typeof packet.operation_plan_binding_digest === "string" ? { operation_plan_binding_digest: packet.operation_plan_binding_digest } : {}),
+    ...(typeof packet.task_identity_digest === "string" ? { task_identity_digest: packet.task_identity_digest } : {}) };
 }
 
 export function validateWorkerResult(value: unknown, command: Extract<ExecuteCommand, { type: "tool_call" }>,

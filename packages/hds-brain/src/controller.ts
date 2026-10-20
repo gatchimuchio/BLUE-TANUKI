@@ -173,9 +173,10 @@ export interface HDSRuntimeSnapshot {
 
 /** An in-process, non-serializable provenance seal for one exact HDS-issued command. */
 export interface HDSExecutionAuthorityBinding {
-  readonly schema_version: "blue-tanuki.hds-execution-authority-binding.v3";
+  readonly schema_version: "blue-tanuki.hds-execution-authority-binding.v4";
   readonly source_context_digest: string;
   readonly operation_plan_binding_digest?: string;
+  readonly task_identity_digest?: string;
   readonly broker_target_version_observation_digest?: string;
   readonly goal_governance_projection_digest?: string;
   readonly goal_governance_used_for_authority?: false;
@@ -185,6 +186,7 @@ interface HDSExecutionAuthorityBindingRecord {
   readonly command: ExecuteCommand;
   readonly source_context_digest: string;
   readonly operation_plan_binding_digest?: string;
+  readonly task_identity_digest?: string;
   readonly broker_target_version_observation_digest?: string;
   readonly goal_governance_projection_digest?: string;
   readonly goal_governance_used_for_authority?: false;
@@ -203,9 +205,10 @@ export function consumeHdsExecutionAuthorityBinding(
 ): string {
   const record = HDS_EXECUTION_AUTHORITY_BINDINGS.get(binding as object);
   if (!record || record.command !== command || record.consumed ||
-      binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v3" ||
+      binding.schema_version !== "blue-tanuki.hds-execution-authority-binding.v4" ||
       binding.source_context_digest !== record.source_context_digest ||
       binding.operation_plan_binding_digest !== record.operation_plan_binding_digest ||
+      binding.task_identity_digest !== record.task_identity_digest ||
       binding.broker_target_version_observation_digest !== record.broker_target_version_observation_digest ||
       binding.goal_governance_projection_digest !== record.goal_governance_projection_digest ||
       binding.goal_governance_used_for_authority !== record.goal_governance_used_for_authority) {
@@ -1737,6 +1740,10 @@ ${planControl.question}`,
   getExecutionOperationPlanBindingDigest(command: ExecuteCommand): string | undefined {
     return this.operationPlans.executionSourceBindingDigest(command);
   }
+  /** Stable digest for the J-owned plan task instance; it is identity evidence, never authority. */
+  getExecutionOperationPlanTaskIdentityDigest(command: ExecuteCommand): string | undefined {
+    return this.operationPlans.executionTaskIdentityDigest(command);
+  }
   /**
    * Bind the exact current command to the HDS source that issued it. This is
    * provenance only: the digest never grants permission or identifies an
@@ -1751,6 +1758,10 @@ ${planControl.question}`,
       throw new Error("HDS execution authority source is unavailable or no longer current");
     }
     const operation_plan_binding_digest = this.operationPlans.executionSourceBindingDigest(command);
+    const task_identity_digest = this.operationPlans.executionTaskIdentityDigest(command);
+    if ((operation_plan_binding_digest === undefined) !== (task_identity_digest === undefined)) {
+      throw new Error("HDS task identity does not match the current Operation Plan source");
+    }
     let brokerTargetVersionObservationDigest: string | undefined;
     if (command.type === "tool_call" && command.payload.tool_name === "file.search") {
       if (brokerTargetVersionObservation === undefined) {
@@ -1849,7 +1860,7 @@ ${planControl.question}`,
     }
     const goalGovernanceProjectionDigest = goalGovernance ? operationPlanDigest(goalGovernance) : undefined;
     const source_context_digest = sha256({
-      schema_version: "blue-tanuki.hds-execution-source-context.v3",
+      schema_version: "blue-tanuki.hds-execution-source-context.v4",
       request_id: source.request_id,
       command_id: command.id,
       commit_hash: source.commit.hash,
@@ -1867,15 +1878,17 @@ ${planControl.question}`,
       goal_projection_state: projection.state,
       goal_authority_status: projection.authority.status,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
+      ...(task_identity_digest ? { task_identity_digest } : {}),
       ...(brokerTargetVersionObservationDigest
         ? { broker_target_version_observation_digest: brokerTargetVersionObservationDigest } : {}),
       ...(goalGovernanceProjectionDigest
         ? { goal_governance_projection_digest: goalGovernanceProjectionDigest, goal_governance_used_for_authority: false } : {}),
     });
     const binding: HDSExecutionAuthorityBinding = Object.freeze({
-      schema_version: "blue-tanuki.hds-execution-authority-binding.v3",
+      schema_version: "blue-tanuki.hds-execution-authority-binding.v4",
       source_context_digest,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
+      ...(task_identity_digest ? { task_identity_digest } : {}),
       ...(brokerTargetVersionObservationDigest
         ? { broker_target_version_observation_digest: brokerTargetVersionObservationDigest } : {}),
       ...(goalGovernanceProjectionDigest
@@ -1883,6 +1896,7 @@ ${planControl.question}`,
     });
     HDS_EXECUTION_AUTHORITY_BINDINGS.set(binding, { command, source_context_digest,
       ...(operation_plan_binding_digest ? { operation_plan_binding_digest } : {}),
+      ...(task_identity_digest ? { task_identity_digest } : {}),
       ...(brokerTargetVersionObservationDigest
         ? { broker_target_version_observation_digest: brokerTargetVersionObservationDigest } : {}),
       ...(goalGovernanceProjectionDigest

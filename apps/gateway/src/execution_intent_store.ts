@@ -10,13 +10,17 @@ import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VE
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
-/** Stable opaque join key for J's saved admission and the verified Broker receipt. */
+/** JのadmissionとBroker receiptを結ぶ非権威digest。旧ticket形式も維持する。 */
 export function executionAdmissionDigest(admission: ExecutionAdmission): string {
-  return digest(JSON.stringify(["blue-tanuki.execution-admission.v1", admission.ticket_id, admission.command_key,
-    admission.command_digest, admission.proof_digest, admission.execution_epoch, admission.issued_at_ms, admission.expires_at_ms]));
+  return admission.task_identity_digest
+    ? digest(JSON.stringify(["blue-tanuki.execution-admission.v2", admission.ticket_id, admission.command_key,
+        admission.command_digest, admission.proof_digest, admission.task_identity_digest, admission.execution_epoch,
+        admission.issued_at_ms, admission.expires_at_ms]))
+    : digest(JSON.stringify(["blue-tanuki.execution-admission.v1", admission.ticket_id, admission.command_key,
+        admission.command_digest, admission.proof_digest, admission.execution_epoch, admission.issued_at_ms, admission.expires_at_ms]));
 }
 const sameTicket = (a: ExecutionIntentTicket, b: ExecutionIntentTicket): boolean =>
-  ["ticket_id", "command_key", "command_digest", "proof_digest", "execution_epoch", "issued_at_ms", "expires_at_ms"]
+  ["ticket_id", "command_key", "command_digest", "proof_digest", "task_identity_digest", "execution_epoch", "issued_at_ms", "expires_at_ms"]
     .every((key) => a[key as keyof ExecutionIntentTicket] === b[key as keyof ExecutionIntentTicket]);
 
 /** 私有の実行所有記録。Jのcheckpointと別取引であり、権限の復元元ではない。 */
@@ -94,9 +98,11 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
   bindWorker(ticket: Readonly<ExecutionIntentTicket>, worker: Readonly<ExecutionWorkerIdentity>, now_ms: number): void {
     this.transaction(() => {
       const receipt = this.current(ticket, now_ms);
-      if (receipt.state !== "intent_committed" || receipt.worker_id !== undefined) throw new Error("Executor worker binding rejected");
+      if (receipt.state !== "intent_committed" || receipt.worker_id !== undefined ||
+          worker.task_identity_digest !== ticket.task_identity_digest) throw new Error("Executor worker binding rejected");
       Object.assign(receipt, { worker_id: worker.worker_id, worker_pid: worker.worker_pid,
         worker_platform: worker.worker_platform, worker_started_at_ms: worker.worker_started_at_ms,
+        ...(worker.task_identity_digest ? { worker_task_identity_digest: worker.task_identity_digest } : {}),
         ...(worker.operation_plan_binding_digest ? { worker_operation_plan_binding_digest: worker.operation_plan_binding_digest } : {}) });
       this.save(receipt); this.appendEvent(receipt, now_ms);
     });
@@ -107,6 +113,7 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       const receipt = this.lookup(ticket.ticket_id);
       if (!receipt || !sameTicket(receipt, ticket) || receipt.worker_exit_observed_at_ms !== undefined ||
           (receipt.state !== "intent_committed" && receipt.state !== "invocation_attempted") ||
+          receipt.task_identity_digest !== worker.task_identity_digest ||
           (["worker_id", "worker_pid", "worker_platform", "worker_started_at_ms"] as const).some((key) =>
             receipt[key as keyof ExecutionIntentReceipt] !== worker[key as keyof ExecutionWorkerIdentity]) ||
           receipt.worker_operation_plan_binding_digest !== worker.operation_plan_binding_digest) {
@@ -209,9 +216,11 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
   /** 認証済みControl Center snapshot用。raw command、ticket handle、現在権限を返さない。 */
   snapshot(limit = 50): { used_for_authority: false; execution_eligible: false; records: Array<{
     ticket_digest: string; command_digest: string; execution_epoch_digest: string; state: ExecutionIntentReceipt["state"];
+    task_identity_digest?: string;
     invocation_boundary?: ExecutionInvocationBoundary; feedback_status?: ExecutionIntentReceipt["feedback_status"];
     output_digest?: string; error_digest?: string;
-    worker_id_digest?: string; worker_pid?: number; worker_platform?: string; worker_operation_plan_binding_digest?: string;
+    worker_id_digest?: string; worker_pid?: number; worker_platform?: string; worker_task_identity_digest?: string;
+    worker_operation_plan_binding_digest?: string;
     worker_exit_observed: boolean;
     result_delivery_digest?: string; result_delivery_acknowledged?: boolean;
     result_delivery_disposition?: ExecutionIntentReceipt["result_delivery_disposition"];
@@ -225,10 +234,12 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
         const receipt = this.lookupCommand(command_key)!;
         return { ticket_digest: digest(receipt.ticket_id), command_digest: receipt.command_digest,
           execution_epoch_digest: digest(receipt.execution_epoch), state: receipt.state,
+          task_identity_digest: receipt.task_identity_digest,
           invocation_boundary: receipt.invocation_boundary, feedback_status: receipt.feedback_status,
           output_digest: receipt.output_digest, error_digest: receipt.error_digest,
           worker_id_digest: receipt.worker_id ? digest(receipt.worker_id) : undefined,
           worker_pid: receipt.worker_pid, worker_platform: receipt.worker_platform,
+          worker_task_identity_digest: receipt.worker_task_identity_digest,
           worker_operation_plan_binding_digest: receipt.worker_operation_plan_binding_digest,
           worker_exit_observed: receipt.worker_exit_observed_at_ms !== undefined,
           result_delivery_digest: receipt.result_delivery_digest, result_delivery_acknowledged: receipt.result_delivery_acknowledged,
@@ -719,6 +730,7 @@ export function inspectExecutionIntentRecoveryLedger(options: {
 function validateTicket(ticket: ExecutionIntentTicket): void {
   if (!ticket || !/^[0-9a-f-]{36}$/.test(ticket.ticket_id) || !/^[0-9a-f-]{36}$/.test(ticket.execution_epoch) ||
       ![ticket.command_key, ticket.command_digest, ticket.proof_digest].every((v) => /^[0-9a-f]{64}$/.test(v)) ||
+      (ticket.task_identity_digest !== undefined && !/^[0-9a-f]{64}$/.test(ticket.task_identity_digest)) ||
       !Number.isSafeInteger(ticket.issued_at_ms) || ticket.issued_at_ms <= 0 || !Number.isSafeInteger(ticket.expires_at_ms) ||
       ticket.expires_at_ms <= ticket.issued_at_ms || ticket.expires_at_ms - ticket.issued_at_ms > 600_000) {
     throw new Error("execution_ticket_invalid");
@@ -726,9 +738,10 @@ function validateTicket(ticket: ExecutionIntentTicket): void {
 }
 function validateReceipt(receipt: ExecutionIntentReceipt): void {
   validateTicket(receipt);
-  const fields = ["ticket_id", "command_key", "command_digest", "proof_digest", "execution_epoch", "issued_at_ms", "expires_at_ms",
+  const fields = ["ticket_id", "command_key", "command_digest", "proof_digest", "task_identity_digest", "execution_epoch", "issued_at_ms", "expires_at_ms",
     "state", "invocation_boundary", "feedback_status", "output_digest", "error_digest", "consumed_at_ms", "observed_at_ms", "used_for_authority",
-    "worker_id", "worker_pid", "worker_platform", "worker_started_at_ms", "worker_operation_plan_binding_digest", "worker_exit_observed_at_ms",
+    "worker_id", "worker_pid", "worker_platform", "worker_started_at_ms", "worker_task_identity_digest",
+    "worker_operation_plan_binding_digest", "worker_exit_observed_at_ms",
     "result_delivery_digest", "result_delivery_acknowledged", "result_delivery_disposition", "result_archived_by_epoch_digest"];
   const workerFields = [receipt.worker_id, receipt.worker_pid, receipt.worker_platform, receipt.worker_started_at_ms];
   const hasWorker = workerFields.some((value) => value !== undefined);
@@ -738,6 +751,8 @@ function validateReceipt(receipt: ExecutionIntentReceipt): void {
       (receipt.feedback_status !== undefined && !["success", "failed", "suspended"].includes(receipt.feedback_status)) ||
       (receipt.invocation_boundary !== undefined && !["tool_adapter", "channel_adapter", "llm_adapter", "console_preview"].includes(receipt.invocation_boundary)) ||
       [receipt.output_digest, receipt.error_digest, receipt.result_delivery_digest].some((v) => v !== undefined && !/^[0-9a-f]{64}$/.test(v)) ||
+      (receipt.worker_task_identity_digest !== undefined &&
+        (!/^[0-9a-f]{64}$/.test(receipt.worker_task_identity_digest) || receipt.worker_task_identity_digest !== receipt.task_identity_digest)) ||
       (receipt.worker_operation_plan_binding_digest !== undefined && !/^[0-9a-f]{64}$/.test(receipt.worker_operation_plan_binding_digest)) ||
       ((receipt.result_delivery_digest !== undefined) !== (receipt.result_delivery_acknowledged !== undefined)) ||
       (receipt.result_delivery_acknowledged !== undefined && typeof receipt.result_delivery_acknowledged !== "boolean") ||
@@ -749,6 +764,7 @@ function validateReceipt(receipt: ExecutionIntentReceipt): void {
         .some((v) => v !== undefined && (!Number.isSafeInteger(v) || v <= 0)) ||
       (hasWorker && (!/^[0-9a-f-]{36}$/.test(receipt.worker_id ?? "") || !Number.isSafeInteger(receipt.worker_pid) || receipt.worker_pid! <= 0 ||
         !["win32", "linux", "darwin"].includes(receipt.worker_platform ?? "") || !receipt.worker_started_at_ms || receipt.state === "issued")) ||
+      (hasWorker && receipt.task_identity_digest !== receipt.worker_task_identity_digest) ||
       (receipt.worker_exit_observed_at_ms !== undefined && (!hasWorker || receipt.worker_exit_observed_at_ms < receipt.worker_started_at_ms!))) {
     throw new Error("execution_receipt_invalid");
   }
