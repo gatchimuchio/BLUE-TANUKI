@@ -450,8 +450,72 @@ jobs:
           fi
           echo "fuse_overlay_shell_read_write_whiteout=success"
           WORKLOAD
+            cat > /tmp/fuse-overlay-drop-caps-exec.py <<'PY'
+          import ctypes
+          import os
+          import platform
+          import sys
+
+          PR_CAPBSET_DROP = 24
+          PR_CAP_AMBIENT = 47
+          PR_CAP_AMBIENT_CLEAR_ALL = 4
+          PR_SET_DUMPABLE = 4
+          CAP_SYS_ADMIN = 21
+          CAP_MKNOD = 27
+          CAP_SETPCAP = 8
+
+          def fail(code):
+              print(f"fuse_nested_bwrap_capability_drop={code}", flush=True)
+              raise SystemExit(125)
+
+          class Header(ctypes.Structure):
+              _fields_ = [("version", ctypes.c_uint), ("pid", ctypes.c_int)]
+
+          class Data(ctypes.Structure):
+              _fields_ = [
+                  ("effective", ctypes.c_uint),
+                  ("permitted", ctypes.c_uint),
+                  ("inheritable", ctypes.c_uint),
+              ]
+
+          machine = platform.machine().lower()
+          capset_syscall = {"x86_64": 126, "aarch64": 91}.get(machine)
+          if capset_syscall is None or len(sys.argv) < 2:
+              fail("unsupported_invocation")
+
+          libc = ctypes.CDLL(None, use_errno=True)
+          libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+          libc.prctl.restype = ctypes.c_int
+          libc.syscall.restype = ctypes.c_long
+
+          for capability in (CAP_SYS_ADMIN, CAP_MKNOD, CAP_SETPCAP):
+              if libc.prctl(PR_CAPBSET_DROP, capability, 0, 0, 0) != 0:
+                  fail(f"bounding_errno_{ctypes.get_errno()}")
+          if libc.prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0:
+              fail(f"ambient_errno_{ctypes.get_errno()}")
+
+          header = Header(0x20080522, 0)
+          data = (Data * 2)()
+          if libc.syscall(ctypes.c_long(capset_syscall), ctypes.byref(header), ctypes.byref(data)) != 0:
+              fail(f"capset_errno_{ctypes.get_errno()}")
+          if libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+              fail(f"dumpable_errno_{ctypes.get_errno()}")
+
+          status = {}
+          with open("/proc/self/status", encoding="ascii") as stream:
+              for line in stream:
+                  key, separator, value = line.partition(":")
+                  if separator and key in {"CapEff", "CapPrm", "CapInh", "CapBnd", "CapAmb"}:
+                      status[key] = int(value.strip(), 16)
+          if set(status) != {"CapEff", "CapPrm", "CapInh", "CapBnd", "CapAmb"} or any(status.values()):
+              fail("mask_verification_failed")
+
+          print("fuse_nested_bwrap_capability_drop=success", flush=True)
+          os.execv(sys.argv[1], sys.argv[1:])
+          PY
             chmod 0500 /tmp/fuse-overlay-capless-workload.sh
-            if bwrap \
+            chmod 0500 /tmp/fuse-overlay-drop-caps-exec.py
+            if /usr/bin/python3 /tmp/fuse-overlay-drop-caps-exec.py /usr/bin/bwrap \
               --unshare-pid --unshare-net --unshare-ipc --unshare-uts \
               --new-session --die-with-parent --disable-userns --cap-drop ALL \
               --ro-bind /usr /usr \

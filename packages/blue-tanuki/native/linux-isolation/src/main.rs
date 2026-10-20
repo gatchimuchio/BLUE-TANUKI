@@ -19,10 +19,11 @@ const MAX_OUTPUT_BYTES: usize = 512 * 1024;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ROOT_ENTRIES: usize = 100_000;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
-const MOUNT_CAPABILITY_MASK: u64 = 1 << 21;
-const MOUNT_SETUP_CAPABILITY_MASK: u64 = MOUNT_CAPABILITY_MASK | (1 << 27) | (1 << 8);
+const CAP_SYS_ADMIN: libc::c_int = 21;
 const CAP_MKNOD: libc::c_int = 27;
 const CAP_SETPCAP: libc::c_int = 8;
+const MOUNT_SETUP_CAPABILITY_MASK: u64 =
+    (1 << CAP_SYS_ADMIN) | (1 << CAP_MKNOD) | (1 << CAP_SETPCAP);
 const PR_CAPBSET_DROP: libc::c_int = 24;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const NS_GET_USERNS_IOCTL: libc::c_ulong = 0xb701;
@@ -909,7 +910,9 @@ struct LinuxCapabilityData {
 }
 
 fn drop_mount_setup_capabilities() -> Result<(), String> {
-    for capability in [CAP_MKNOD, CAP_SETPCAP] {
+    // Mount setup is complete. The nested bwrap caller must have no permitted
+    // capabilities; bubblewrap rejects a non-root caller that still has any.
+    for capability in [CAP_SYS_ADMIN, CAP_MKNOD, CAP_SETPCAP] {
         if unsafe { libc::prctl(PR_CAPBSET_DROP, capability, 0, 0, 0) } != 0 {
             return Err("sandbox_mount_capability_reduction_failed".to_string());
         }
@@ -919,9 +922,7 @@ fn drop_mount_setup_capabilities() -> Result<(), String> {
         version: LINUX_CAPABILITY_VERSION_3,
         pid: 0,
     };
-    let mut data = [LinuxCapabilityData::default(); 2];
-    data[0].effective = MOUNT_CAPABILITY_MASK as u32;
-    data[0].permitted = MOUNT_CAPABILITY_MASK as u32;
+    let data = [LinuxCapabilityData::default(); 2];
     let result = unsafe {
         libc::syscall(
             libc::SYS_capset,
@@ -933,7 +934,7 @@ fn drop_mount_setup_capabilities() -> Result<(), String> {
         return Err("sandbox_mount_capability_reduction_failed".to_string());
     }
 
-    verify_mount_capability_mask(&capability_snapshot()?, MOUNT_CAPABILITY_MASK)
+    verify_mount_capability_mask(&capability_snapshot()?, 0)
         .map_err(|_| "sandbox_mount_capability_reduction_failed".to_string())
 }
 
@@ -1541,8 +1542,7 @@ fn stable_error(error: &str) -> String {
 mod tests {
     use super::{
         help_advertises_option, namespace_owner_query_error, safe_diagnostic, stable_error,
-        verify_mount_capability_mask, CapabilitySnapshot, MOUNT_CAPABILITY_MASK,
-        MOUNT_SETUP_CAPABILITY_MASK,
+        verify_mount_capability_mask, CapabilitySnapshot, MOUNT_SETUP_CAPABILITY_MASK,
     };
 
     #[test]
@@ -1564,7 +1564,6 @@ mod tests {
     #[test]
     fn mount_setup_caps_are_removed_before_nested_shell() {
         let sys_admin = 1 << 21;
-        assert_eq!(MOUNT_CAPABILITY_MASK, sys_admin);
         assert_eq!(
             MOUNT_SETUP_CAPABILITY_MASK,
             sys_admin | (1 << 27) | (1 << 8)
@@ -1581,21 +1580,13 @@ mod tests {
             MOUNT_SETUP_CAPABILITY_MASK
         )
         .is_ok());
-        assert!(verify_mount_capability_mask(
-            &snapshot(MOUNT_CAPABILITY_MASK),
-            MOUNT_CAPABILITY_MASK
-        )
-        .is_ok());
+        assert!(verify_mount_capability_mask(&snapshot(0), 0).is_ok());
         assert!(verify_mount_capability_mask(
             &snapshot(MOUNT_SETUP_CAPABILITY_MASK | 1),
             MOUNT_SETUP_CAPABILITY_MASK
         )
         .is_err());
-        assert!(verify_mount_capability_mask(
-            &snapshot(MOUNT_SETUP_CAPABILITY_MASK),
-            MOUNT_CAPABILITY_MASK
-        )
-        .is_err());
+        assert!(verify_mount_capability_mask(&snapshot(MOUNT_SETUP_CAPABILITY_MASK), 0).is_err());
         let mut inherited = snapshot(MOUNT_SETUP_CAPABILITY_MASK);
         inherited.inheritable = 1;
         assert!(verify_mount_capability_mask(&inherited, MOUNT_SETUP_CAPABILITY_MASK).is_err());
