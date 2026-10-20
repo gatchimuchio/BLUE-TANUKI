@@ -13,7 +13,7 @@
 | `git diff --check` | PASS。 |
 | 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部作用 | 未実施。BUILD_COVERED後へ配置。 |
 
-このbatchはtest consumerと状態記録だけを変更したため、前batch commit=`34b1d071808a222fd76b7eee8bb9ad348256d87d`でPASSしたproduction `typecheck`／15-project buildを繰り返さない。実装差分、commit／push、remote HEAD、二世代backup refsのcloseoutを下記へ記録する。次consumerはF01.02の現行実装から選ぶ。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読する。
+このbatchはtest consumerと状態記録だけを変更したため、前batch commit=`34b1d071808a222fd76b7eee8bb9ad348256d87d`でPASSしたproduction `typecheck`／15-project buildを繰り返さない。test／記録commit=`e7f939e1df43d7acb6e0cca73176ebb6a19f0e90`を`main`へpushし、push後remote mainが同SHAであることを確認した。local／remote backup refsはcurrent=`c11d7e455a37286d940f3f0db61f4c19677591e0`、previous=`fd09258e08793eea9efb7a363be15d4774844446`を保持した。untracked Linux `target/`はcommitへ含めていない。このcloseout記録を含む文書commitもmainへpushする。次consumerはF01.02の現行実装から選ぶ。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読する。
 
 ### 前回BUILD_BATCH：`QEB-01-F01.01-OWNER-REVIEWED-EDIT-CONSUMER`
 
