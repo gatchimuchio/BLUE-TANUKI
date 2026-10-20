@@ -1,23 +1,23 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-F01.02-SHELL-ROOT-IDENTITY-BINDING`
+### 最新BUILD_BATCH：`QEB-01-F01.02-SHELL-RESULT-J-M-EXPLICIT-C-CONSUMER`
 
-開始HEAD／`main`／`origin/main`=`57c33f6a7476366b6ee6748bfb76c7a772265322`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.02、shell実行とfile.deleteの現行producer・consumerを再読した。Windows localで施工し、既存untracked Linux `target/`は保持した。
+開始HEAD／`main`／`origin/main`=`014b5fdfe8526094c5aee26f35116151bfaca58b`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、F01.02、shell結果producerからJ/Mと後続`plan:compute` consumerまでを再読した。Windows localで施工し、既存untracked Linux `target/`を保持した。
 
-既存shell実行はHDS L3最終レビュー後にOS隔離providerへ接続し、provider終了時にはprocess treeの空を要求する。別作用の`file.delete`はOperation Plan→J→Brokerの対象版・変更前hash照合→L3→Executor→M結果経路を持つ。一方、shell実行はowner確認時のsandbox root/cwd実体が実行直前にも同一であることを結んでいなかった。Broker観測へcommand digestとroot/cwdの実体digestを加え、HDS source bindingおよびExecutorの承認proofへ束縛した。raw pathは観測・監査へ出さない。承認後の`Tool.invoke`がroot/cwdを再解決し、不一致ならnative provider起動前にfail-closedとする。これにより「HDS発行shell command→L3→Broker root/cwd観測→Executor承認→実行直前再照合→隔離provider」の限定経路を`WIRED`とする。
+直接の`shell.exec`の結果契約はHDSのfeedbackへ届くが、J/Mに残して次のC計算が明示選択する経路がなかった。HDSが発行した同一shell command、request、upstream commit、payload digest、feedback result digest、型付きadapter結果の相関後に限り、J checkpointへdigest-only観測を保持し、既存J/M coordinatorからM commit／receiptを結ぶ。owner／channelが一致する次の`plan:compute`がcommand digestを明示した場合だけ、J checkpoint・M receipt・保存recordを再照合したmetadata／digest-onlyの`verified_shell_exec_result`をCへ投影する。候補保持時にも同じrefを再照合する。raw command、stdout／stderr、raw outputはJ/M/Cの観測へ保存・投影しない。WebChat表示はadapter success reportと結果digestに限定し、出力・終了状態・目的達成を未確認と明示する。
 
-F01.02全体は`BUILD_GAP`のまま。shellの実行結果からJ検証済みのdigest限定M記録、明示選択を経た後続C consumerはまだ未接続で、今回の作業を全体成立とは扱わない。file.deleteの既存別作用経路は維持する。C08.03実provider保留、別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+合成feedbackの縦断fixtureで「HDS発行shell command→J相関→M commit／receipt→再起動→明示選択→C投影→次candidate保持」を接続確認した。fixtureは実processを起動していないため、OS process lifecycleや独立した終了証明ではない。このresult observation consumerを`WIRED`とする。F01.02／D07.03全体は`BUILD_GAP`のまま（Linux writable workspaceのaggregate disk quota等が未接続）。shell結果のadapter報告を作用・task達成の真実へ昇格させず、file.deleteの別作用経路を維持する。C08.03実provider保留、別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
 | `pnpm typecheck` | PASS。 |
-| `pnpm build` | PASS、15 workspace projects。Windows isolation release buildを含む。 |
-| root/cwd差替え時のprocess未起動確認 | PASS、対象shell.exec test 1件。 |
-| HDS command／Broker root identity／L3 Executor proof binding | PASS、対象HDS→Executor test 1件。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| J/Mから明示選択後Cへのshell result consumer | PASS、Gateway focused test 1件（同file 42件は今回対象外）。 |
+| WebChat digest-only result表示 | PASS、focused renderer test 1件（同file 94件は今回対象外）。 |
 | `git diff --check` | PASS。 |
-| 全workspace suite／全体QE_QC／QE_QA／全OS実機／実provider・credential／外部作用 | 未実施。BUILD_COVERED後へ配置。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実process／実provider・credential／外部作用 | 未実施。全体形状成立後へ配置。 |
 
-実装commit=`6d44913c513e23ef1468337fb2dad040c2e14288`を`main`へpushし、remote mainが同SHAであることを確認した。local／remote backup refsはcurrent=`57c33f6a7476366b6ee6748bfb76c7a772265322`、previous=`c11d7e455a37286d940f3f0db61f4c19677591e0`。未追跡Linux `target/`はcommitへ含めていない。次consumerはshell実行結果からJ検証済み非権威M観測、明示選択後Cへ返す経路。次batch開始時に三点正本、適用AGENTS、active指示、HEAD／差分を再読する。
+実装commit=`e23752b6b4d258a3be0ad7f9fe1bb73c0fa1909c`を`main`へpushし、push後remote main=`e23752b6b4d258a3be0ad7f9fe1bb73c0fa1909c`を確認した。local recovery branches／remote backup tagsはcurrent=`014b5fdfe8526094c5aee26f35116151bfaca58b`、previous=`57c33f6a7476366b6ee6748bfb76c7a772265322`で、編集前二世代を保持した。未追跡Linux `target/`はcommitへ含めていない。このcloseout文書commitもmainへpushする。次はF01.02／D07.03のaggregate workspace quotaをproducer／consumerから確認する。次batch開始時に三点正本、適用AGENTS、active指示、HEAD／差分を再読する。
 
 ### 最新BUILD_BATCH：`QEB-01-F01.01-REVIEWED-DIFF-TO-WORKSPACE-RESULT`
 
