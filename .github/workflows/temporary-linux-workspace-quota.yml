@@ -612,12 +612,27 @@ jobs:
           cat > "$probe_root/outer.sh" <<'OUTER'
           #!/bin/bash
           set -euo pipefail
-          mount --make-rprivate /
-          mkdir -p /workspace-shared/view /workspace-storage
-          mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700 tmpfs /workspace-storage
+          if ! mount --make-rprivate / 2>/dev/null; then
+            echo "fuse_boundary_root_private=failed"
+            exit 1
+          fi
+          if ! mkdir -p /workspace-shared/view /workspace-storage; then
+            echo "fuse_boundary_directories=failed"
+            exit 1
+          fi
+          if ! mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700,nodev,nosuid,noexec tmpfs /workspace-storage 2>/dev/null; then
+            echo "fuse_boundary_storage_tmpfs=failed"
+            exit 1
+          fi
           mkdir -p /workspace-storage/isolation-upper /workspace-storage/isolation-work
-          mount --bind /workspace-shared /workspace-shared
-          mount --make-shared /workspace-shared
+          if ! mount --bind /workspace-shared /workspace-shared 2>/dev/null; then
+            echo "fuse_boundary_shared_bind=failed"
+            exit 1
+          fi
+          if ! mount --make-shared /workspace-shared 2>/dev/null; then
+            echo "fuse_boundary_shared_mark=failed"
+            exit 1
+          fi
           if ! awk '$5 == "/workspace-shared" { for (i = 7; i <= NF; i++) if ($i ~ /^shared:/) shared = 1 } END { exit !shared }' /proc/self/mountinfo; then
             echo "fuse_boundary_parent_mount_shared=failed"
             exit 1
@@ -662,6 +677,13 @@ jobs:
           if [ "$ready" != 1 ]; then
             echo "fuse_boundary_child_setup=failed"
             grep -E '^fuse_boundary_[a-z0-9_]+=[a-z0-9_-]+$' /tmp/fuse-boundary-child.log | tail -n 8 || true
+            if grep -Eiq 'Operation not permitted|Permission denied' /tmp/fuse-boundary-child.log; then
+              echo "fuse_boundary_child_error=permission_denied"
+            elif grep -Eiq 'No such file or directory' /tmp/fuse-boundary-child.log; then
+              echo "fuse_boundary_child_error=missing_path"
+            else
+              echo "fuse_boundary_child_error=other"
+            fi
             exit 1
           fi
 
@@ -731,8 +753,14 @@ jobs:
           cat > "$probe_root/child.sh" <<'CHILD'
           #!/bin/bash
           set -euo pipefail
-          mount -t proc proc /proc
-          mount -t tmpfs -o size=1048576,nr_inodes=64,mode=0755 tmpfs /commit-target
+          if ! mount -t proc proc /proc 2>/dev/null; then
+            echo "fuse_boundary_child_proc=failed"
+            exit 1
+          fi
+          if ! mount -t tmpfs -o size=1048576,nr_inodes=64,mode=0755,nodev,nosuid,noexec tmpfs /commit-target 2>/dev/null; then
+            echo "fuse_boundary_child_target_mask=failed"
+            exit 1
+          fi
           printf masked-only > /commit-target/sentinel
           chmod 0644 /commit-target/sentinel
           mount_helper_pid=""
@@ -830,7 +858,8 @@ jobs:
           CHILD
           chmod 0700 "$probe_root/outer.sh" "$probe_root/child.sh"
 
-          if ! bwrap \
+          bwrap_status=0
+          bwrap \
             --unshare-user --unshare-pid --unshare-net --unshare-ipc --unshare-uts \
             --new-session --die-with-parent --cap-drop ALL --cap-add CAP_SYS_ADMIN --cap-add CAP_SETPCAP \
             --ro-bind /usr /usr \
@@ -843,9 +872,20 @@ jobs:
             --ro-bind "$probe_root/outer.sh" /fuse-boundary-outer.sh \
             --ro-bind "$probe_root/child.sh" /fuse-boundary-child.sh \
             --chdir / --clearenv --setenv PATH /usr/bin:/bin --setenv LANG C.UTF-8 \
-            -- /bin/bash /fuse-boundary-outer.sh >"$probe_root/bwrap.log" 2>&1; then
+            -- /bin/bash /fuse-boundary-outer.sh >"$probe_root/bwrap.log" 2>&1 || bwrap_status=$?
+          if [ "$bwrap_status" -ne 0 ]; then
             echo "fuse_boundary_namespace_probe=failed"
             grep -E '^fuse_boundary_[a-z0-9_]+=[a-z0-9_-]+$' "$probe_root/bwrap.log" | tail -n 8 || true
+            echo "fuse_boundary_bwrap_exit=$bwrap_status"
+            if grep -Eiq 'Operation not permitted|Permission denied' "$probe_root/bwrap.log"; then
+              echo "fuse_boundary_bwrap_error=permission_denied"
+            elif grep -Eiq 'No such file or directory' "$probe_root/bwrap.log"; then
+              echo "fuse_boundary_bwrap_error=missing_path"
+            elif grep -Eiq 'invalid (option|argument)|unknown option' "$probe_root/bwrap.log"; then
+              echo "fuse_boundary_bwrap_error=invalid_argument"
+            else
+              echo "fuse_boundary_bwrap_error=other"
+            fi
             exit 1
           fi
 
