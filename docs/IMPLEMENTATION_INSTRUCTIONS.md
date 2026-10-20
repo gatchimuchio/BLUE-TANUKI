@@ -1,5 +1,22 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
+### 最新BUILD_BATCH：`QEB-01-D03.01-BLUE-RUNTIME-INTENT-INGRESS`
+
+開始HEAD／`main`／`origin/main`=`b3a57f589dfb034dbb3ec2136e9cf61b0607c5d4`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、D03.01とD4 Runtime対話契約、BLUE WebChat→Gateway→HDS入口を再読した。開始時から残る同単位のtracked差分は保持して統合し、untracked Linux `target/`には触れていない。Windows localで施工した。
+
+BLUE Gatewayに任意の`POST /runtime/intent`受け口を追加した。専用の`BLUE_TANUKI_D4_RUNTIME_TOKEN`と固定`BLUE_TANUKI_D4_RUNTIME_ID`が揃う場合だけ有効になり、入力は`runtime_id`／`session_id`／`intent`に限定する。固定Runtime IDとの照合後、Runtime／Session参照をtoken keyed HMAC digestへ変換し、固定`d4-runtime-adapter-token-holder` actor、`user`／`limited`／`chat`としてGateway内部Inboundへ渡す。任意command・path・Approval・Permissionを受けず、直指定tool shortcutも拒否する。内部Builder印のないInboundRequestでは外部session指定をHDSのsession bindingに採用しない。秘密tokenの値は設定せず、setupファイルやrepositoryへ保存していない。
+
+BLUE入力consumerはGateway内部Inbound入口まで接続するが、D4 Adapterからこのendpointを呼ぶproducerは未接続である。D4側Runtime/Session/Workspace登録の実照合、D4への応答帰還も未接続のためD03.01全体は`BUILD_GAP`。D4 repoは変更していない。次consumerは既存D4対話送信IPCからBLUE Gatewayへの限定Adapter呼出しと、その後の応答consumer。D4 repoの実変更はownerの別repo限定委任が必要なため保留する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Protocol `types.test.ts`、WebChat `webchat.test.ts`、Gateway `plugin_loader.test.ts` | PASS、3 files／141 tests。入力境界、session scope、専用token、固定Runtime、disabled default、plugin secret permissionを確認。 |
+| `pnpm typecheck` | PASS。既存dist削除を確認。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| QE_QC／QE_QA／全workspace suite／D4実接続／5OS runtime・実機／実provider・credential／外部作用 | 未実施。全体形状成立後へ配置。 |
+
+製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は引き続き未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
 ### 最新BUILD_BATCH：`QEB-01-F01.03-WINDOWS-WORKSPACE-EDIT-SHELL-RESULT-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`168db4f0921ffea9a57f40912d8ea9532ab88680`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.03とfile.edit→shell.exec→J/M/Cの現行producer／consumerを再読した。Windows localで作業し、既存untracked Linux `target/`を保持した。

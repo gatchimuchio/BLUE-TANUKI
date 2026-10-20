@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import {
@@ -12,6 +12,7 @@ import { URL } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   createGatewayInternalInboundRequest,
+  RuntimeIntentInputSchema,
   type InboundRequest,
   type ChannelSendPayload,
 } from "@blue-tanuki/protocol";
@@ -85,6 +86,7 @@ const INBOUND_TOKEN_ACTOR = "webchat-inbound-token-holder";
 const WEBHOOK_TOKEN_ACTOR = "webchat-webhook-token-holder";
 const RESUME_TOKEN_ACTOR = "webchat-resume-token-holder";
 const OWNER_TOKEN_ACTOR = "webchat-owner-token-holder";
+const D4_RUNTIME_TOKEN_ACTOR = "d4-runtime-adapter-token-holder";
 
 const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
@@ -95,6 +97,13 @@ function bearerTokenMatches(candidate: string | undefined, expected: string | un
   const candidateBytes = Buffer.from(candidate, "utf8");
   const expectedBytes = Buffer.from(expected, "utf8");
   return candidateBytes.byteLength === expectedBytes.byteLength && timingSafeEqual(candidateBytes, expectedBytes);
+}
+
+function d4RuntimeReferenceDigest(token: string, kind: "runtime" | "session", value: string): string {
+  return createHmac("sha256", token)
+    .update(`blue-tanuki.d4-runtime.${kind}.v1\0`, "utf8")
+    .update(value, "utf8")
+    .digest("hex");
 }
 
 function isDirectToolShortcutContent(content: string): boolean {
@@ -119,6 +128,7 @@ function findAotanuAssetRoot(): string {
  *   POST /ws-ticket  body:{user}  auth:Bearer  rate-limited per-user
  *   POST /inbound    body:{user, content}  auth:Bearer  rate-limited per-user
  *   POST /owner/inbound body:{user, content} auth:dedicated owner bearer
+ *   POST /runtime/intent body:{runtime_id, session_id, intent} auth:dedicated D4 Runtime bearer
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
  *   POST /resume     body:{request_id, verdict, approval_token}  auth:Bearer  rate-limited (global)
@@ -238,6 +248,25 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         opts.settings.token === opts.maintenance_token)
     ) {
       throw new Error("WebChatChannel: opts.settings.token must differ from WebChat tokens");
+    }
+    if (opts.d4_runtime_intent) {
+      const { token: d4RuntimeToken, runtime_id: d4RuntimeId } = opts.d4_runtime_intent;
+      if (d4RuntimeToken.length < 32) {
+        throw new Error("WebChatChannel: d4_runtime_intent.token must be >=32 chars");
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(d4RuntimeId)) {
+        throw new Error("WebChatChannel: d4_runtime_intent.runtime_id is invalid");
+      }
+      if ([
+        opts.token,
+        opts.resume_token,
+        opts.webhook_token,
+        opts.owner_token,
+        opts.maintenance_token,
+        opts.settings?.token,
+      ].some((candidate) => candidate !== undefined && candidate === d4RuntimeToken)) {
+        throw new Error("WebChatChannel: d4_runtime_intent.token must differ from other WebChat tokens");
+      }
     }
     if (!Number.isInteger(opts.port) || opts.port < 1 || opts.port > 65535) {
       throw new Error("WebChatChannel: opts.port must be a valid TCP port");
@@ -621,6 +650,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         ? "owner"
         : url.pathname === "/webhook"
         ? "webhook"
+        : url.pathname === "/runtime/intent"
+        ? "d4_runtime"
         : url.pathname === "/inbound" || url.pathname === "/ws-ticket"
         ? "inbound"
         : null;
@@ -639,6 +670,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "owner_inbound_not_configured" }));
       return;
     }
+    if (tokenKind === "d4_runtime" && !this.opts.d4_runtime_intent) {
+      res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "runtime_intent_not_configured" }));
+      return;
+    }
 
     if (!this.checkAuth(req, tokenKind)) {
       res.writeHead(401, { "content-type": "application/json" });
@@ -647,6 +683,70 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
 
     const body = await readJson(req);
+
+    if (url.pathname === "/runtime/intent") {
+      const parsed = RuntimeIntentInputSchema.safeParse(body);
+      if (!parsed.success || !parsed.data.intent.trim() || !isWellFormedUnicode(parsed.data.intent)) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "invalid_runtime_intent" }));
+        return;
+      }
+      const config = this.opts.d4_runtime_intent!;
+      if (parsed.data.runtime_id !== config.runtime_id) {
+        res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "runtime_not_registered" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, D4_RUNTIME_TOKEN_ACTOR, res)) return;
+      if (isDirectToolShortcutContent(parsed.data.intent)) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({
+          accepted: false,
+          error: "tool_shortcut_not_allowed_on_runtime_intent",
+          operation_core_required: true,
+        }));
+        return;
+      }
+
+      const runtimeIdDigest = d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id);
+      const sessionIdDigest = d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id);
+      const sessionScope = `d4-runtime:${sessionIdDigest}`;
+      const inboundReq = createGatewayInternalInboundRequest({
+        id: randomUUID(),
+        channel: "webchat",
+        user: D4_RUNTIME_TOKEN_ACTOR,
+        content: parsed.data.intent,
+        timestamp: Date.now(),
+        session_id: sessionScope,
+        metadata: {
+          reply_to: sessionScope,
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "user",
+          "blue_tanuki.trust_level": "limited",
+          "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.runtime_ingress.version": "d4-runtime-intent.v1",
+          "blue_tanuki.runtime_ingress.runtime_id_digest": runtimeIdDigest,
+          "blue_tanuki.runtime_ingress.session_id_digest": sessionIdDigest,
+          "blue_tanuki.runtime_ingress.used_for_authority": false,
+        },
+      });
+      this.handler?.(inboundReq).catch(() => {
+        // Keep caller-provided Runtime/Session references and intent out of logs.
+        // eslint-disable-next-line no-console
+        console.error("[webchat] D4 Runtime intent handler error");
+      });
+      res.writeHead(202, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      res.end(JSON.stringify({
+        accepted: true,
+        request_id: inboundReq.id,
+        session_ref_digest: sessionIdDigest,
+      }));
+      return;
+    }
 
     if (url.pathname === "/owner/goal-purpose-change") {
       const goal_ref = typeof body?.goal_ref === "string" ? body.goal_ref : "";
@@ -974,7 +1074,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
   private checkAuth(
     req: IncomingMessage,
-    kind: "inbound" | "resume" | "webhook" | "owner",
+    kind: "inbound" | "resume" | "webhook" | "owner" | "d4_runtime",
   ): boolean {
     const h = req.headers["authorization"];
     if (typeof h !== "string") return false;
@@ -987,6 +1087,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         ? this.opts.owner_token
         : kind === "webhook"
         ? this.opts.webhook_token
+        : kind === "d4_runtime"
+        ? this.opts.d4_runtime_intent?.token
         : this.opts.token;
     return bearerTokenMatches(m[1], expected);
   }

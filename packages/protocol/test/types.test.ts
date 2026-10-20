@@ -957,6 +957,7 @@ describe("InboundRequest boundary", () => {
       user: "owner",
       content: "ＡＢＣ",
       timestamp: 1,
+      session_id: "external-session-must-not-bind",
       metadata: { note: "ｔｅｓｔ" },
     });
 
@@ -964,6 +965,7 @@ describe("InboundRequest boundary", () => {
     if (result.ok) {
       expect(result.request.id).toBe("req-1");
       expect(result.request.content).toBe("ABC");
+      expect(result.request.session_id).toBeUndefined();
       expect(result.request.metadata?.note).toBe("test");
     }
   });
@@ -1099,6 +1101,7 @@ describe("InboundRequest boundary", () => {
       user: "blue-tanuki-cron",
       content: "scheduled",
       timestamp: 1,
+      session_id: "internal-session-scope",
       metadata: {
         "blue_tanuki.authority_context": "gateway_internal_v1",
         "blue_tanuki.actor_kind": "cron",
@@ -1133,6 +1136,7 @@ describe("InboundRequest boundary", () => {
         goal_ref: "goal_0000000000000001", purpose_version: 3, purpose_digest: "a".repeat(64),
       });
       expect(parsed.request.metadata?.["blue_tanuki.channel_send.target"]).toBe("local-user");
+      expect(parsed.request.session_id).toBe("internal-session-scope");
     }
   });
 });

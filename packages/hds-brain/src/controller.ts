@@ -3485,7 +3485,11 @@ ${planControl.question}`,
       ],
         ...(log.memory_retrieval_suppressed_for === "transient_document_organization" || planCompute?.requested
         ? {}
-        : { session_id: `${req.channel}:${req.user}` }),
+        : {
+            session_id: isGatewayInternalInboundRequest(req) && req.session_id
+              ? req.session_id
+              : `${req.channel}:${req.user}`,
+          }),
       backend_hint: backendHint,
       model: this.llm_route.model,
       temperature: this.llm_route.temperature,

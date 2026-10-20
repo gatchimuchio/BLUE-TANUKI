@@ -22,6 +22,10 @@ export const RESERVED_EXTERNAL_METADATA_KEYS = [
   "blue_tanuki.operation_core",
   "blue_tanuki.operation_core.goal_purpose_binding",
   "blue_tanuki.channel_send",
+  "blue_tanuki.runtime_ingress.version",
+  "blue_tanuki.runtime_ingress.runtime_id_digest",
+  "blue_tanuki.runtime_ingress.session_id_digest",
+  "blue_tanuki.runtime_ingress.used_for_authority",
   "blue_tanuki.failure_review",
   "blue_tanuki.goal_purpose_change.version",
   "blue_tanuki.meaning_update_adoption.version",
@@ -53,6 +57,10 @@ export interface GatewayInternalAuthorityMetadata extends MetadataObject {
   };
   "blue_tanuki.channel_send.channel"?: string;
   "blue_tanuki.channel_send.target"?: string;
+  "blue_tanuki.runtime_ingress.version"?: "d4-runtime-intent.v1";
+  "blue_tanuki.runtime_ingress.runtime_id_digest"?: string;
+  "blue_tanuki.runtime_ingress.session_id_digest"?: string;
+  "blue_tanuki.runtime_ingress.used_for_authority"?: false;
   "blue_tanuki.channel_send.content"?: string;
   "blue_tanuki.failure_review.version"?: "blue-tanuki.failure-review.v1";
   "blue_tanuki.failure_review.signature_id"?: string;
@@ -412,10 +420,26 @@ export const InboundRequestSchema = z.object({
   user: z.string().min(1).max(200),
   content: z.string().max(200_000),
   timestamp: z.number().finite().nonnegative(),
+  // Executor conversation scope is accepted only from the Gateway's internal
+  // request builder. External channel payloads are stripped at normalization.
+  session_id: z.string().min(1).max(200).optional(),
   goal_criteria: GoalCriteriaSchema.optional(),
   metadata: z.record(DangerousObjectKeySchema, JsonValueSchema.optional()).optional(),
 }).strict();
 export type InboundRequest = z.infer<typeof InboundRequestSchema>;
+
+const RegisteredRuntimeReferenceSchema = z.string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/);
+
+/** Authenticated D4 Runtime dialogue input; identifiers are context only. */
+export const RuntimeIntentInputSchema = z.object({
+  runtime_id: RegisteredRuntimeReferenceSchema,
+  session_id: RegisteredRuntimeReferenceSchema,
+  intent: z.string().min(1).max(4_096),
+}).strict();
+export type RuntimeIntentInput = z.infer<typeof RuntimeIntentInputSchema>;
 
 export type InboundRequestBoundaryFailureReason =
   | "schema_validation_failed"
@@ -476,6 +500,9 @@ export function normalizeInboundRequestForAuthority(
     user: normalizeScalar(request.user, "user"),
     content: request.content.normalize("NFKC"),
     timestamp: request.timestamp,
+    ...(opts.internal_authority_metadata === true && request.session_id !== undefined
+      ? { session_id: normalizeScalar(request.session_id, "session_id") }
+      : {}),
     ...(request.goal_criteria ? { goal_criteria: GoalCriteriaSchema.parse(request.goal_criteria) } : {}),
     ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
   };

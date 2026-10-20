@@ -11,10 +11,11 @@ export interface WebChatRateLimit {
 }
 
 /**
- * Rate-limit configuration for the three authenticated endpoints.
+ * Rate-limit configuration for inbound, resume, and WebSocket-ticket endpoints.
  *
  * Defaults (Phase 4):
  *   - inbound:    capacity 10, refill 1.0/sec  ≈ 60/min/user with burst
+ *                 (D4 Runtime intent ingress shares this bucket)
  *   - resume:     capacity  5, refill 0.5/sec  ≈ 30/min global with burst
  *   - ws_ticket:  capacity  3, refill 10/60/sec ≈ 10/min/user with burst
  *
@@ -24,6 +25,13 @@ export interface WebChatRateLimits {
   inbound?: WebChatRateLimit;
   resume?: WebChatRateLimit;
   ws_ticket?: WebChatRateLimit;
+}
+
+export interface WebChatD4RuntimeIntentConfig {
+  /** Dedicated secret held by the registered D4 Runtime Adapter. */
+  token: string;
+  /** The single D4 Runtime ID registered for this Gateway instance. */
+  runtime_id: string;
 }
 
 export interface WebChatResumeApprovalOptions {
@@ -636,6 +644,8 @@ export interface WebChatOptions {
   webhook_token?: string;
   /** Optional dedicated credential for owner-originated inbound requests. */
   owner_token?: string;
+  /** Optional authenticated, input-only D4 Runtime ingress. */
+  d4_runtime_intent?: WebChatD4RuntimeIntentConfig;
   /** Dedicated proposal route for owner-governed delegated goal purpose changes. */
   onGoalPurposeChangeProposal?: (input: {
     goal_ref: string;

@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as net from "node:net";
-import { createHash, webcrypto } from "node:crypto";
+import { createHash, createHmac, webcrypto } from "node:crypto";
 import { Script } from "node:vm";
 import { WebSocket } from "ws";
-import type { InboundRequest } from "@blue-tanuki/protocol";
+import {
+  isGatewayInternalInboundRequest,
+  parseInboundRequestAtBoundary,
+  type InboundRequest,
+} from "@blue-tanuki/protocol";
 import type { SendMeta } from "@blue-tanuki/channel-base";
 import { CONTROL_CENTER_SCRIPT } from "../src/control_center_script.js";
 import {
@@ -50,6 +54,7 @@ const OWNER_TOKEN = "owner-token-1234567890";
 const SETTINGS_TOKEN = "settings-token-1234";
 const WEBHOOK_TOKEN = "webhook-token-1234";
 const MAINTENANCE_TOKEN = "maintenance-token-1234";
+const D4_RUNTIME_TOKEN = "d4-runtime-token-test-value-1234567890";
 
 interface Ctx {
   ch: WebChatChannel;
@@ -87,6 +92,7 @@ async function setup(
       resume_token?: string;
       owner_token?: string;
       webhook_token?: string;
+      d4_runtime_intent?: { token: string; runtime_id: string };
       maintenance_token?: string;
       resume_approval_tokens?: false;
       resume_approval_token_ttl_ms?: number;
@@ -116,6 +122,7 @@ async function setup(
     resume_token: opts.resume_token ?? RESUME_TOKEN,
     owner_token: opts.owner_token,
     webhook_token: opts.webhook_token,
+    d4_runtime_intent: opts.d4_runtime_intent,
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
     onResume: opts.onResume as never,
@@ -2281,6 +2288,17 @@ describe("WebChatChannel — HTTP inbound", () => {
     expect(r.status).toBe(401);
   });
 
+  it("keeps D4 Runtime ingress disabled until its dedicated credential is configured", async () => {
+    const r = await postJson(ctx.port, "/runtime/intent", {
+      runtime_id: "blue_tanuki",
+      session_id: "session-1234-abcd",
+      intent: "hello",
+    }, { authorization: `Bearer ${TOKEN}` });
+    expect(r.status).toBe(404);
+    expect(r.body).toMatchObject({ error: "runtime_intent_not_configured" });
+    expect(ctx.received).toHaveLength(0);
+  });
+
   it("rejects bearer values with prefix, middle, suffix, or length differences", async () => {
     const middle = Math.floor(TOKEN.length / 2);
     const candidates = [
@@ -2315,6 +2333,106 @@ describe("WebChatChannel — HTTP inbound", () => {
     const got = ctx.received[0]!;
     expect(got.user).toBe("webchat-inbound-token-holder");
     expect(got.metadata?.reply_to).toBe("u1");
+  });
+
+  it("routes authenticated D4 Runtime intent to HDS with opaque session scope and limited actor", async () => {
+    const runtimeCtx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+    });
+    try {
+      await runtimeCtx.ch.start(async (req) => {
+        runtimeCtx.received.push(req);
+      });
+      const response = await postJson(runtimeCtx.port, "/runtime/intent", {
+        runtime_id: "blue_tanuki",
+        session_id: "session-1234-abcd",
+        intent: "整理して要点を教えて",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(response.status).toBe(202);
+      expect(response.body).toMatchObject({ accepted: true });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(runtimeCtx.received).toHaveLength(1);
+
+      const received = runtimeCtx.received[0]!;
+      const sessionDigest = createHmac("sha256", D4_RUNTIME_TOKEN)
+        .update("blue-tanuki.d4-runtime.session.v1\0", "utf8")
+        .update("session-1234-abcd", "utf8")
+        .digest("hex");
+      const runtimeDigest = createHmac("sha256", D4_RUNTIME_TOKEN)
+        .update("blue-tanuki.d4-runtime.runtime.v1\0", "utf8")
+        .update("blue_tanuki", "utf8")
+        .digest("hex");
+      expect(received).toMatchObject({
+        channel: "webchat",
+        user: "d4-runtime-adapter-token-holder",
+        content: "整理して要点を教えて",
+        session_id: `d4-runtime:${sessionDigest}`,
+        metadata: {
+          reply_to: `d4-runtime:${sessionDigest}`,
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "user",
+          "blue_tanuki.trust_level": "limited",
+          "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.runtime_ingress.version": "d4-runtime-intent.v1",
+          "blue_tanuki.runtime_ingress.runtime_id_digest": runtimeDigest,
+          "blue_tanuki.runtime_ingress.session_id_digest": sessionDigest,
+          "blue_tanuki.runtime_ingress.used_for_authority": false,
+        },
+      });
+      expect(isGatewayInternalInboundRequest(received)).toBe(true);
+      const normalized = parseInboundRequestAtBoundary(received);
+      expect(normalized.ok).toBe(true);
+      if (normalized.ok) expect(normalized.request.session_id).toBe(`d4-runtime:${sessionDigest}`);
+      const serialized = JSON.stringify(received);
+      expect(serialized).not.toContain("session-1234-abcd");
+      expect(serialized).not.toContain(D4_RUNTIME_TOKEN);
+      expect(Object.values(received.metadata ?? {})).not.toContain("blue_tanuki");
+      expect(JSON.stringify(response.body)).not.toContain("blue_tanuki");
+      expect(response.body).toMatchObject({ session_ref_digest: sessionDigest });
+    } finally {
+      await runtimeCtx.teardown();
+    }
+  });
+
+  it("requires the dedicated D4 Runtime credential and rejects authority-shaped input", async () => {
+    expect(() => new WebChatChannel({
+      port: 1234,
+      token: D4_RUNTIME_TOKEN,
+      resume_token: RESUME_TOKEN,
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+    })).toThrow(/d4_runtime_intent\.token must differ/);
+
+    const runtimeCtx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+    });
+    try {
+      await runtimeCtx.ch.start(async (req) => {
+        runtimeCtx.received.push(req);
+      });
+      const request = {
+        runtime_id: "blue_tanuki",
+        session_id: "session-1234-abcd",
+        intent: "整理して要点を教えて",
+      };
+      expect((await postJson(runtimeCtx.port, "/runtime/intent", request, {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+      expect((await postJson(runtimeCtx.port, "/runtime/intent", {
+        ...request,
+        command: { type: "tool.call", operation: "shell.exec" },
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` })).status).toBe(400);
+      expect((await postJson(runtimeCtx.port, "/runtime/intent", {
+        ...request,
+        runtime_id: "unregistered-runtime",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` })).status).toBe(403);
+      expect((await postJson(runtimeCtx.port, "/runtime/intent", {
+        ...request,
+        intent: 'tool:shell.exec {"cmd":"whoami"}',
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` })).status).toBe(400);
+      expect(runtimeCtx.received).toHaveLength(0);
+    } finally {
+      await runtimeCtx.teardown();
+    }
   });
 
   it("does not accept a caller-selected actor label on authenticated inbound", async () => {

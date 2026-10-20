@@ -2,6 +2,8 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-21の`QEB-01-D03.01-BLUE-RUNTIME-INTENT-INGRESS`では、任意の専用認証入口からRuntime／Session参照とintentだけをBLUE Gatewayの内部Inboundへ渡すconsumerを追加した。固定Runtime allowlist、HMAC化した参照、limited user actor、tool shortcut拒否を実装し、WebChat／Protocol／plugin loader focused tests 141件、typecheck、15-project buildを確認した。D4 Adapter producer、D4 Runtime/Session/Workspaceとの実接続、応答帰還が未接続のためD03.01および全体`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。D4 repoは変更していない。QE_QC／QE_QA、5OS実機、実provider・credential・外部作用は未実施。
+
 2026-10-21の`QEB-01-F01.03-WINDOWS-WORKSPACE-EDIT-SHELL-RESULT-CONSUMER`では、合成workspaceの編集適用後にWindows隔離processで同じfileを確認し、結果をdigest-onlyでJ/Mへ返した後、明示選択されたC入力と次候補保持までを限定integration test 1件で接続した。このconsumerは`WIRED`。C候補・承認はfixtureで、実LLMやGUI-live経路ではない。F01.03全体、Linux quota、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、全体QE_QC／QE_QAは未成立。製品コードはこのbatchで変更していない。詳細は[`docs/開発進捗.md`](開発進捗.md)。
 
 2026-10-21の`QEB-01-F01.02-SHELL-RESULT-J-M-EXPLICIT-C-CONSUMER`では、HDS発行の直接`shell.exec`結果をJのdigest-only checkpointからM commit／receiptへ結び、owner／channel一致と明示source refの再照合後に限って次の`plan:compute`へmetadata／digestを返す経路を接続した。合成feedback fixtureは再起動・候補保持まで通過し、Gateway／WebChat focused test各1件、typecheck、15-project buildはPASS。fixtureは実processを起動しておらず、shellの終了状態やtask達成を証明しない。F01.02／D07.03はLinux writable workspaceのaggregate disk quota等が残り`BUILD_GAP`。全体QC／QA、5OS実機、実provider、外部作用の証拠ではない。詳細は[`docs/開発進捗.md`](開発進捗.md)。

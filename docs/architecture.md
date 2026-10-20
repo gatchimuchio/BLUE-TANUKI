@@ -139,6 +139,7 @@ OpenClaw と同様のチャネル多様性を、**LLM 結合なし**で再実装
 設計上の制約:
 - bind 既定 `127.0.0.1` (loopback only)。外部公開は明示的に `WEBCHAT_HOST` を変える必要がある
 - `WEBCHAT_TOKEN` は `/inbound` と `/ws-ticket` 用に8文字以上必須。`WEBCHAT_RESUME_TOKEN` は `/resume` 用、`BLUE_TANUKI_MAINTENANCE_TOKEN` は `/update/*` と `/recovery/*` 用に別 secret として必須で、同値設定はコンストラクタ/serve boot が throw
+- `POST /runtime/intent` は専用の `BLUE_TANUKI_D4_RUNTIME_TOKEN` と固定 `BLUE_TANUKI_D4_RUNTIME_ID` が両方ある場合だけ有効になる。D4 Runtime/session参照をHMAC digestへ変換してlimited user入力としてGatewayへ渡す。D4側producerと応答帰還は未接続で、D03.01は`BUILD_GAP`。
 - WS 認証は token クエリ。Phase 3 で「初回 HTTP ハンドシェイクで一回限り token を発行 → WS で交換」方式に置き換え予定
 - セッションは in-memory (`Map<user, Set<WebSocket>>`)。プロセス再起動で切断
 - HTTP body の hard cap 1MB

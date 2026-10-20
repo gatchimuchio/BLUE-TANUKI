@@ -647,6 +647,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const dispatcher = new OutboundDispatcher();
 
   const port = parseInt(process.env.WEBCHAT_PORT ?? "8787", 10);
+  const d4RuntimeToken = process.env.BLUE_TANUKI_D4_RUNTIME_TOKEN;
+  const d4RuntimeId = process.env.BLUE_TANUKI_D4_RUNTIME_ID;
+  if (Boolean(d4RuntimeToken) !== Boolean(d4RuntimeId)) {
+    throw new Error("BLUE_TANUKI_D4_RUNTIME_TOKEN and BLUE_TANUKI_D4_RUNTIME_ID must be configured together");
+  }
   const webchatPermissions = [
     "network:listen",
     "secrets:WEBCHAT_TOKEN",
@@ -656,6 +661,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     ...(process.env.BLUE_TANUKI_SETTINGS_TOKEN
       ? ["secrets:BLUE_TANUKI_SETTINGS_TOKEN"]
       : []),
+    ...(d4RuntimeToken ? ["secrets:BLUE_TANUKI_D4_RUNTIME_TOKEN"] : []),
   ] as const;
   plugins.requirePermissions(
     "@blue-tanuki/channel-webchat",
@@ -2328,6 +2334,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       token,
       resume_token: resumeToken,
       owner_token: process.env.BLUE_TANUKI_OWNER_TOKEN,
+      ...(d4RuntimeToken && d4RuntimeId
+        ? { d4_runtime_intent: { token: d4RuntimeToken, runtime_id: d4RuntimeId } }
+        : {}),
       onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string }) =>
         submitGoalPurposeChangeProposal(input),
       onGoalPurposeRelationReviewProposal: async (input: { plan_id_digest: string; revision_digest: string;
