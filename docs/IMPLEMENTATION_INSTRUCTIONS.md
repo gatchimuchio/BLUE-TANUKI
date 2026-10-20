@@ -1,6 +1,28 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-C04-CURRENT-M-DEPENDENCY-RECHECK`
+### 最新BUILD_BATCH：`QEB-01-C07.01-CANDIDATE-CONTENT-TO-HDS-REVIEW`
+
+開始`main`／`origin/main`=`c33d695b85c305248573b4064abc6bf659e30411`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、C07.01の意味更新proposal、およびC候補→HDS feedback→CompleteHistoryの現行経路を読み直した。既存untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持する。
+
+Cの意味更新proposalをV3へ拡張し、候補本文（最大16 KiB）とUTF-8 SHA-256 digestを受け取り、HDSの現在M参照レビュー前に本文・digest一致を検証する。HDS CompleteHistoryには本文を保存せず、digest・byte数・既存参照等の専用metadata projectionを保存する。V1/V2の後方互換を維持し、V3のcurrent target referenceも照合する。semantic relationは未評価、adoptionは未採用、`may_apply=false`、`used_for_authority=false`を維持する。
+
+このbatchではV3候補内容→digest検証→Jの現在M参照レビュー→本文を除いたCompleteHistory projectionを`WIRED`確認した。owner L3 reviewから原文確認・M確定へのtransactionは未接続であり、C07.01およびC07全体、目的から結果・M・再計画へ至る一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`を維持する。次consumerはowner L3 reviewで同じcandidate digestを表示・拘束し、current M version再確認を経てJ認可後のM transactionへ接続すること。候補本文を履歴や監査へ保存せず、過去承認の再利用や自動採用を行わない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Protocol `状態更新契約.test.ts` | PASS、10/10。V3 digest bindingと不一致／不正本文を確認。 |
+| HDS `controller.test.ts -t BT-U-C07.01` | PASS、2件（73件skip）。候補digest検証と監査本文非保存を確認。 |
+| HDS `memory_citation_review.test.ts` | PASS、16/16。V3 targetのcurrent M照合と意味未評価・非採用を確認。 |
+| Gateway `serve_boundary.test.ts`／Core `executor_dispatch.test.ts` | PASS、9/9／14/14。metadata projection保存とExecutor→HDS伝送後の表示抑制を確認。 |
+| `pnpm typecheck`／`pnpm build`／`git diff --check` | PASS。buildは15 workspace projectsとWindows native helperを含む。 |
+| HDS関連3-file run | 101 passed、1 failed。単独再実行でもgateway-internal authority contextの`ASSERT`期待が`FAIL`となる。今回変更したfeedback/proposal経路からの影響は差分上見当たらず、原因と開始HEADでの再現性は未確定。authority policyを本batchで変更しない。 |
+| 全workspace tests／QE_QC／QE_QA／5OS実機／Actions／実provider・credential／外部業務作用 | 未実施。 |
+
+全体実装が`BUILD_COVERED`になる前のQC／QAには進まない。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+実装commit=`ec7dd247f0e2731acff487c896d8747deb166796`を`main`へpushした。実装push後のlocal recovery branch／remote backup tagはcurrent=`ec7dd247f0e2731acff487c896d8747deb166796`、previous=`c33d695b85c305248573b4064abc6bf659e30411`で一致。closeout docs-only commitをpush後、remote `main`・両世代ref・作業ツリーを再照合する。
+
+### 前回BUILD_BATCH：`QEB-01-C04-CURRENT-M-DEPENDENCY-RECHECK`
 
 開始`main`／`origin/main`=`37b684c85f628c9f1988491414bf088c936f5464`。最新版の施工正本、適用`AGENTS.md`／作業標準／active指示と、C04の記憶引用・意味更新proposalの現行producer／consumerを読み直した。既存の未追跡`packages/blue-tanuki/native/linux-isolation/target/`は保持する。
 
