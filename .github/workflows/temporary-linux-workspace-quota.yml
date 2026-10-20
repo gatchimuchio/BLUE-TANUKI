@@ -648,8 +648,22 @@ jobs:
             echo "fuse_boundary_storage_tmpfs=failed"
             exit 1
           fi
-          if ! mount --bind /workspace-shared /workspace-shared 2>/dev/null; then
-            echo "fuse_boundary_shared_bind=failed"
+          if ! python3 - <<'PY'
+          found = False
+          with open('/proc/self/mountinfo', encoding='ascii') as stream:
+              for line in stream:
+                  fields = line.split()
+                  try:
+                      separator = fields.index('-')
+                  except ValueError:
+                      continue
+                  if fields[4] == '/workspace-shared' and fields[separator + 1] == 'tmpfs':
+                      found = True
+                      break
+          raise SystemExit(0 if found else 1)
+          PY
+          then
+            echo "fuse_boundary_shared_tmpfs=failed"
             exit 1
           fi
           if ! mount --make-shared /workspace-shared 2>/dev/null; then
@@ -890,7 +904,7 @@ jobs:
             --proc /proc --dev /dev --dev-bind /dev/fuse /dev/fuse \
             --size 134217728 --perms 1777 --tmpfs /tmp \
             --dir /workspace-lower --ro-bind "$lower_source" /workspace-lower \
-            --dir /workspace-shared --dir /commit-target \
+            --size 134217728 --tmpfs /workspace-shared --dir /commit-target \
             --bind "$commit_source" /commit-target \
             --ro-bind "$probe_root/outer.sh" /fuse-boundary-outer.sh \
             --ro-bind "$probe_root/child.sh" /fuse-boundary-child.sh \
