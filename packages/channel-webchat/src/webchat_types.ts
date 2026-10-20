@@ -112,6 +112,19 @@ export interface WebChatApprovalQueueItem {
     used_for_authority: false;
     may_execute: false;
   };
+  /** Digest-only status for a C candidate awaiting exact owner L3 adoption review. */
+  meaning_update_review?: {
+    kind: "meaning_update_adoption";
+    proposal_digest: string;
+    candidate_digest: string;
+    target_record_id: string;
+    target_version: string;
+    review_status: "required" | "reviewed" | "stale";
+    semantic_relation_status: "not_assessed";
+    adoption_status: "not_adopted";
+    may_execute: false;
+    used_for_authority: false;
+  };
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   authority_trace?: unknown;
@@ -178,8 +191,37 @@ export interface WebChatGoalPurposeRelationContentReview {
   may_execute: false;
 }
 
+export interface WebChatMeaningUpdateContentReview {
+  kind: "meaning_update_adoption";
+  command_id: string;
+  command_digest: string;
+  request_payload_digest: string;
+  operation: "memory.meaning.adopt";
+  proposal_ref: string;
+  candidate_ref: string;
+  proposal_digest: string;
+  candidate_digest: string;
+  candidate_meaning: string;
+  target_record_id: string;
+  target_version: string;
+  prior_version_ref: string;
+  supporting_evidence: readonly { reference: string; digest: string }[];
+  counterevidence_review: {
+    status: "reviewed_with_references" | "reviewed_none_found";
+    review_scope: { reference: string; digest: string };
+    references: readonly { reference: string; digest: string }[];
+  };
+  applicability_scope: { reference: string; digest: string };
+  reflection_target_ref: string;
+  reference_review_status: "prior_version_unverified" | "counterevidence_absence_unverified";
+  semantic_relation_status: "not_assessed";
+  adoption_status: "not_adopted";
+  may_execute: false;
+  used_for_authority: false;
+}
+
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
-  WebChatGoalPurposeRelationContentReview;
+  WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

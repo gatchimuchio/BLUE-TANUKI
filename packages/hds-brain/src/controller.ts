@@ -13,6 +13,7 @@ import type {
   LLMFallbackAuthorization,
   ExecutionAdmission, ExecutionResultDelivery,
   OperationPlanComputeSourceObservation,
+  MeaningUpdateProposalV3,
 } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
@@ -74,11 +75,14 @@ import type {
 import { frame } from "./frame.js";
 import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
 import { GoalGovernanceLedger, goalGovernanceEventDigest, type ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
-import { goalPurposeChangeApprovalTarget, goalPurposeRelationReviewApprovalTarget } from "./approval_policy.js";
+import { goalPurposeChangeApprovalTarget, goalPurposeRelationReviewApprovalTarget,
+  meaningUpdateAdoptionApprovalTarget } from "./approval_policy.js";
 import { model } from "./model.js";
 import { commit } from "./commit.js";
 import { AuditLog, type AuditEntry } from "./audit.js";
 import { GoalPurposeMemoryConsumer, type GoalPurposeMemoryApprovalContext } from "./goal_purpose_memory.js";
+import { buildMeaningUpdateMemoryRecord, isMeaningUpdateMemoryRecord, meaningUpdateMemoryRecordId,
+  meaningUpdateProposalDigest, MeaningUpdateMemoryConsumer, type MeaningUpdateMemoryRecord } from "./meaning_update_memory.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { normalizeForDetection } from "./normalization.js";
 import {
@@ -124,6 +128,7 @@ import {
   buildMemoryCitationSystemMessages,
   redactUnverifiedReferences,
   reviewMeaningUpdateProposalReferences,
+  type MeaningUpdateProposalReferenceReview,
   reviewMemoryCitationOutput,
 } from "./memory_citation_review.js";
 import {
@@ -247,6 +252,8 @@ export interface ControllerOptions {
   goal_governance?: GoalGovernanceConfig;
   /** Private J/M store for exact purpose content, written only after matching L3 review. */
   goal_purpose_memory?: OperationPlanMemoryStorage;
+  /** Private J/M store for exact owner-approved meaning candidates. */
+  meaning_update_memory?: OperationPlanMemoryStorage;
   operation_plan_state?: OperationPlanStatePort;
   operation_plan_memory?: OperationPlanMemoryStorage;
   /** Verified startup evidence can only hold existing plan selection; it never grants or resumes authority. */
@@ -299,6 +306,48 @@ type GoalPurposeChangeCommitLog = AuthorityEventLog & {
 type GoalPurposeChangeCommitResult =
   | { readonly ok: true; readonly event_ref: string; readonly goal_ref: string; readonly version: number; readonly purpose_digest: string; readonly effective_from: number }
   | { readonly ok: false; readonly reason: "goal_governance_unavailable" | "goal_purpose_memory_unavailable" | "audit_not_persistent" | "audit_invalid" | "approval_not_verified" | "purpose_version_conflict" | "event_invalid" | "purpose_memory_commit_failed" | "audit_append_failed" };
+
+interface PendingMeaningUpdateCandidate {
+  readonly request_id: string;
+  readonly source_command_id: string;
+  readonly proposal: MeaningUpdateProposalV3;
+  readonly proposal_digest: string;
+  readonly memory_trace: DecisionLog["frame"]["memory_trace"];
+}
+
+export interface OwnerMeaningUpdateProposalReview {
+  readonly request_id: string;
+  readonly source_command_id: string;
+  readonly proposal: MeaningUpdateProposalV3;
+  readonly proposal_digest: string;
+  readonly reference_review: MeaningUpdateProposalReferenceReview;
+}
+
+export interface MeaningUpdateAdoptionArguments {
+  readonly proposal_digest: string;
+  readonly candidate_digest: string;
+  readonly target_record_id: string;
+  readonly target_version: string;
+}
+
+interface MeaningUpdateMemoryApprovalContext extends JMemoryApprovalReference {
+  readonly request_id: string;
+  readonly command_id: string;
+  readonly source_command_id: string;
+  readonly command_digest: string;
+  readonly proposal_actor: string;
+  readonly reviewer_actor: string;
+  readonly proposal_digest: string;
+  readonly candidate_digest: string;
+  readonly target: string;
+  readonly evaluation: ApprovalEvaluation;
+}
+
+type MeaningUpdateCommitResult =
+  | { readonly ok: true; readonly proposal_digest: string; readonly candidate_digest: string;
+      readonly approval_status: "approved"; readonly memory_application_status: "applied";
+      readonly follow_up_action_status: "unconfirmed" }
+  | { readonly ok: false; readonly reason: string };
 
 function goalPurposeChangeReviewTarget(input: {
   goal_ref: string;
@@ -375,6 +424,56 @@ function goalPurposeRelationReviewApprovalEvidence(
   return approved ? { timestamp: approved.log.timestamp, evaluation: ask.log.evaluation } : null;
 }
 
+function meaningUpdateAdoptionApprovalEvidence(
+  entries: readonly AuditEntry[],
+  input: { request_id: string; command_id: string; proposal_actor: string; reviewer_actor: string;
+    target: string; command_digest: string; proposal_digest: string; candidate_digest: string;
+    review_status: MeaningUpdateProposalReferenceReview["review_status"];
+    before_index?: number },
+): { readonly timestamp: number; readonly evaluation: ApprovalEvaluation } | null {
+  const limit = input.before_index ?? Number.POSITIVE_INFINITY;
+  const ask = entries.find(({ index, log }) => index < limit && "kind" in log && log.kind === "approval_gate" &&
+    log.request_id === input.request_id && log.command_id === input.command_id &&
+    log.evaluation.decision === "ask" && log.evaluation.context.operation === "tool.call" &&
+    log.evaluation.context.command_id === input.command_id && log.evaluation.context.actor === input.proposal_actor &&
+    log.evaluation.context.target === input.target && log.evaluation.risk === "high" &&
+    log.evaluation.approval_level === "L3_final_review" && log.evaluation.final_review_required);
+  if (!ask || !("kind" in ask.log) || ask.log.kind !== "approval_gate") return null;
+  const review = entries.find(({ index, log }) => index > ask.index && index < limit && "kind" in log &&
+    log.kind === "operation_plan" && log.event === "meaning_update_content_reviewed" &&
+    log.request_id === input.request_id && log.command_id === input.command_id &&
+    log.projection_digest === input.command_digest && log.proposal_digest === input.proposal_digest &&
+    log.candidate_digest === input.candidate_digest && log.review_status === input.review_status &&
+    log.used_for_authority === false);
+  if (!review) return null;
+  const approved = entries.find(({ index, log }) => index > review.index && index < limit && "kind" in log &&
+    log.kind === "command_lifecycle" && log.request_id === input.request_id && log.command_id === input.command_id &&
+    log.phase === "approval_approved" && log.actor === input.reviewer_actor && log.reason === "human_approval:approve");
+  return approved ? { timestamp: approved.log.timestamp, evaluation: ask.log.evaluation } : null;
+}
+
+function isMeaningUpdateReviewReady(review: {
+  readonly review_status: string;
+  readonly supporting_reference_count: number;
+  readonly supporting_references_verified: number;
+  readonly counterevidence_reference_count: number;
+  readonly counterevidence_references_verified: number;
+  readonly scope_digests_verified: boolean;
+  readonly target_reference_matches_current_projection: boolean;
+  readonly candidate_content_digest_status: string;
+  readonly used_for_authority: boolean;
+  readonly may_apply: boolean;
+  readonly adoption_status: string;
+  readonly semantic_relation_status: string;
+}): boolean {
+  return (review.review_status === "prior_version_unverified" || review.review_status === "counterevidence_absence_unverified") &&
+    review.supporting_reference_count > 0 && review.supporting_reference_count === review.supporting_references_verified &&
+    review.counterevidence_reference_count === review.counterevidence_references_verified &&
+    review.scope_digests_verified && review.target_reference_matches_current_projection &&
+    review.candidate_content_digest_status === "verified" && review.used_for_authority === false &&
+    review.may_apply === false && review.adoption_status === "not_adopted" && review.semantic_relation_status === "not_assessed";
+}
+
 function replayGoalPurposeChanges(
   audit: AuditLog,
   initial: GoalGovernanceLedger,
@@ -419,6 +518,49 @@ function replayGoalPurposeChanges(
   return ledger;
 }
 
+function replayMeaningUpdateMemoryCommits(audit: AuditLog, memory: MeaningUpdateMemoryConsumer): void {
+  const entries = audit.list();
+  for (const { index, log } of entries) {
+    if (!("kind" in log) || log.kind !== "operation_plan" || log.event !== "meaning_update_adoption_committed") continue;
+    if (!log.request_id || !log.command_id || !log.proposal_digest || !log.candidate_digest ||
+        !log.target_digest || !log.review_status || !log.projection_digest ||
+        log.approval_status !== "approved" || log.memory_application_status !== "applied" ||
+        log.follow_up_action_status !== "unconfirmed" || log.used_for_authority !== false) {
+      throw new Error("persisted meaning update commit marker is malformed");
+    }
+    const record = memory.read(meaningUpdateMemoryRecordId(log.proposal_digest));
+    if (!record || !isMeaningUpdateMemoryRecord(record) || record.proposal_digest !== log.proposal_digest ||
+        record.candidate_digest !== log.candidate_digest) {
+      throw new Error("persisted meaning update commit does not match its private M record");
+    }
+    const target = meaningUpdateAdoptionApprovalTarget({ proposal_digest: record.proposal_digest,
+      candidate_digest: record.candidate_digest, target_record_id: record.proposal.target_reference.record_id,
+      target_version: record.proposal.target_reference.version });
+    if (createHash("sha256").update(target, "utf8").digest("hex") !== log.target_digest) {
+      throw new Error("persisted meaning update target binding is invalid");
+    }
+    const ask = entries.find(({ log: candidate }) => "kind" in candidate && candidate.kind === "approval_gate" &&
+      candidate.request_id === log.request_id && candidate.command_id === log.command_id);
+    const approval = entries.find(({ log: candidate }) => "kind" in candidate && candidate.kind === "command_lifecycle" &&
+      candidate.request_id === log.request_id && candidate.command_id === log.command_id &&
+      candidate.phase === "approval_approved");
+    if (!ask || !("kind" in ask.log) || ask.log.kind !== "approval_gate" || !approval ||
+        !("kind" in approval.log) || approval.log.kind !== "command_lifecycle") {
+      throw new Error("persisted meaning update commit lacks its L3 approval lifecycle");
+    }
+    const evidence = meaningUpdateAdoptionApprovalEvidence(entries, {
+      request_id: log.request_id, command_id: log.command_id,
+      proposal_actor: ask.log.evaluation.context.actor, reviewer_actor: approval.log.actor, target,
+      command_digest: log.projection_digest, proposal_digest: log.proposal_digest,
+      candidate_digest: log.candidate_digest,
+      review_status: log.review_status as MeaningUpdateProposalReferenceReview["review_status"], before_index: index,
+    });
+    if (!evidence || evidence.timestamp !== log.timestamp || evidence.evaluation !== ask.log.evaluation) {
+      throw new Error("persisted meaning update commit lacks matching content review and L3 approval");
+    }
+  }
+}
+
 export class HDSUpperController {
   private state: ControllerState = "IDLE";
   private readonly audit: AuditLog;
@@ -431,6 +573,9 @@ export class HDSUpperController {
   private goal_governance?: GoalGovernanceLedger;
   private readonly goalPurposeMemory?: GoalPurposeMemoryConsumer;
   private goalPurposeMemoryApprovalContext?: GoalPurposeMemoryApprovalContext;
+  private readonly meaningUpdateMemory?: MeaningUpdateMemoryConsumer;
+  private meaningUpdateMemoryApprovalContext?: MeaningUpdateMemoryApprovalContext;
+  private readonly pendingMeaningUpdateCandidates = new Map<string, PendingMeaningUpdateCandidate>();
   private readonly operationPlans: OperationPlanLedger;
   private readonly issuedLLM = new Map<string, {
     command: ExecuteCommand;
@@ -464,6 +609,16 @@ export class HDSUpperController {
         readVerifiedMemoryApproval: (reference) => this.readGoalPurposeMemoryApproval(reference),
       });
       if (!this.goalPurposeMemory.recoverPending()) throw new Error("goal purpose J/M recovery is not verified");
+    }
+    if (opts.meaning_update_memory) {
+      this.meaningUpdateMemory = new MeaningUpdateMemoryConsumer(opts.meaning_update_memory, {
+        readVerifiedMemoryApproval: (reference) => this.readMeaningUpdateMemoryApproval(reference),
+      });
+      if (!this.meaningUpdateMemory.recoverPending()) throw new Error("meaning update J/M recovery is not verified");
+      replayMeaningUpdateMemoryCommits(this.audit, this.meaningUpdateMemory);
+    } else if (this.audit.list().some(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+        log.event === "meaning_update_adoption_committed")) {
+      throw new Error("persisted meaning updates require their private M store");
     }
     const llmRoute = opts.llm_route ?? {};
     this.llm_route = {
@@ -1319,6 +1474,165 @@ ${planControl.question}`,
     return Object.freeze({ ...reference });
   }
 
+  getMeaningUpdateProposalForOwnerReview(sourceCommandId: string): OwnerMeaningUpdateProposalReview | null {
+    const pending = this.pendingMeaningUpdateCandidates.get(sourceCommandId);
+    if (!pending) return null;
+    const review = reviewMeaningUpdateProposalReferences(pending.proposal, pending.memory_trace,
+      this.currentMemoryReferenceVersions(pending.memory_trace));
+    if (!isMeaningUpdateReviewReady(review)) {
+      this.pendingMeaningUpdateCandidates.delete(sourceCommandId);
+      return null;
+    }
+    return Object.freeze({ request_id: pending.request_id, source_command_id: pending.source_command_id,
+      proposal: structuredClone(pending.proposal), proposal_digest: pending.proposal_digest, reference_review: review });
+  }
+
+  discardMeaningUpdateProposal(sourceCommandId: string): void {
+    this.pendingMeaningUpdateCandidates.delete(sourceCommandId);
+  }
+
+  recordMeaningUpdateProposalContentReview(input: {
+    readonly source_command_id: string;
+    readonly args: MeaningUpdateAdoptionArguments;
+    readonly request_id: string;
+    readonly command_id: string;
+    readonly proposal_actor: string;
+    readonly command_digest: string;
+  }): boolean {
+    try {
+      const review = this.getMeaningUpdateProposalForOwnerReview(input.source_command_id);
+      const request_id = input.request_id.trim();
+      const command_id = input.command_id.trim();
+      const proposal_actor = input.proposal_actor.trim();
+      if (!review || !request_id || !command_id || !proposal_actor || proposal_actor === "system" ||
+          !/^[a-f0-9]{64}$/.test(input.command_digest) ||
+          input.args.proposal_digest !== review.proposal_digest ||
+          input.args.candidate_digest !== review.proposal.candidate_digest ||
+          input.args.target_record_id !== review.proposal.target_reference.record_id ||
+          input.args.target_version !== review.proposal.target_reference.version ||
+          !this.audit.isPersistent() || !this.audit.verify()) return false;
+      const target = meaningUpdateAdoptionApprovalTarget(input.args);
+      const ask = this.audit.list().some(({ log }) => "kind" in log && log.kind === "approval_gate" &&
+        log.request_id === request_id && log.command_id === command_id && log.evaluation.decision === "ask" &&
+        log.evaluation.context.operation === "tool.call" && log.evaluation.context.command_id === command_id &&
+        log.evaluation.context.actor === proposal_actor && log.evaluation.context.target === target &&
+        log.evaluation.risk === "high" && log.evaluation.approval_level === "L3_final_review" &&
+        log.evaluation.final_review_required);
+      if (!ask) return false;
+      this.audit.append({ kind: "operation_plan", event: "meaning_update_content_reviewed", request_id, command_id,
+        projection_digest: input.command_digest, proposal_digest: review.proposal_digest,
+        candidate_digest: review.proposal.candidate_digest,
+        target_digest: createHash("sha256").update(target, "utf8").digest("hex"),
+        review_status: review.reference_review.review_status, used_for_authority: false, timestamp: Date.now() });
+      return this.audit.verify();
+    } catch { return false; }
+  }
+
+  commitMeaningUpdateAfterL3(input: {
+    readonly source_command_id: string;
+    readonly args: MeaningUpdateAdoptionArguments;
+    readonly request_id: string;
+    readonly command_id: string;
+    readonly command_digest: string;
+    readonly content_review_digest: string;
+    readonly proposal_actor: string;
+    readonly reviewer_actor: string;
+    readonly evaluation: ApprovalEvaluation;
+  }): MeaningUpdateCommitResult {
+    if (!this.meaningUpdateMemory) return { ok: false, reason: "meaning_update_memory_unavailable" };
+    if (!this.audit.isPersistent()) return { ok: false, reason: "audit_not_persistent" };
+    if (!this.audit.verify()) return { ok: false, reason: "audit_invalid" };
+    const review = this.getMeaningUpdateProposalForOwnerReview(input.source_command_id);
+    const request_id = input.request_id.trim();
+    const command_id = input.command_id.trim();
+    const proposal_actor = input.proposal_actor.trim();
+    const reviewer_actor = input.reviewer_actor.trim();
+    if (!review || !request_id || !command_id || !proposal_actor || proposal_actor === "system" || !reviewer_actor ||
+        !/^[a-f0-9]{64}$/.test(input.command_digest) || input.content_review_digest !== input.command_digest ||
+        input.args.proposal_digest !== review.proposal_digest || input.args.candidate_digest !== review.proposal.candidate_digest ||
+        input.args.target_record_id !== review.proposal.target_reference.record_id ||
+        input.args.target_version !== review.proposal.target_reference.version ||
+        input.evaluation.decision !== "ask" || input.evaluation.context.operation !== "tool.call" ||
+        input.evaluation.context.command_id !== command_id || input.evaluation.context.actor !== proposal_actor ||
+        input.evaluation.context.target !== meaningUpdateAdoptionApprovalTarget(input.args) ||
+        input.evaluation.risk !== "high" || input.evaluation.approval_level !== "L3_final_review" ||
+        !input.evaluation.final_review_required) return { ok: false, reason: "approval_not_verified" };
+
+    const entries = this.audit.list();
+    const evidence = meaningUpdateAdoptionApprovalEvidence(entries, {
+      request_id, command_id, proposal_actor, reviewer_actor, target: meaningUpdateAdoptionApprovalTarget(input.args),
+      command_digest: input.command_digest, proposal_digest: review.proposal_digest,
+      candidate_digest: review.proposal.candidate_digest, review_status: review.reference_review.review_status,
+    });
+    if (!evidence || JSON.stringify(evidence.evaluation) !== JSON.stringify(input.evaluation)) {
+      return { ok: false, reason: "approval_not_verified" };
+    }
+
+    const priorCommit = entries.find(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+      log.event === "meaning_update_adoption_committed" && log.request_id === request_id &&
+      log.command_id === command_id && log.proposal_digest === review.proposal_digest);
+    if (priorCommit) {
+      const existing = this.meaningUpdateMemory.read(meaningUpdateMemoryRecordId(review.proposal_digest));
+      if (!existing || !isMeaningUpdateMemoryRecord(existing) ||
+          existing.candidate_digest !== review.proposal.candidate_digest) return { ok: false, reason: "commit_record_conflict" };
+      this.pendingMeaningUpdateCandidates.delete(input.source_command_id);
+      return { ok: true, proposal_digest: existing.proposal_digest, candidate_digest: existing.candidate_digest,
+        approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed" };
+    }
+
+    const record = buildMeaningUpdateMemoryRecord(review.proposal);
+    let committed: ReturnType<MeaningUpdateMemoryConsumer["commit"]>;
+    try {
+      committed = this.meaningUpdateMemory.commit(record, (reference) => {
+        this.meaningUpdateMemoryApprovalContext = { ...reference, request_id, command_id,
+          source_command_id: input.source_command_id, command_digest: input.command_digest, proposal_actor,
+          reviewer_actor, proposal_digest: review.proposal_digest, candidate_digest: review.proposal.candidate_digest,
+          target: meaningUpdateAdoptionApprovalTarget(input.args), evaluation: input.evaluation };
+      });
+    } catch { committed = { ok: false, reason: "meaning_update_commit_failed" }; }
+    finally { this.meaningUpdateMemoryApprovalContext = undefined; }
+    if (!committed.ok) {
+      this.audit.append({ kind: "operation_plan", event: "meaning_update_commit_blocked", request_id, command_id,
+        projection_digest: input.command_digest, proposal_digest: review.proposal_digest,
+        candidate_digest: review.proposal.candidate_digest,
+        target_digest: createHash("sha256").update(meaningUpdateAdoptionApprovalTarget(input.args), "utf8").digest("hex"),
+        review_status: review.reference_review.review_status,
+        approval_status: "approved", memory_application_status: "blocked", follow_up_action_status: "unconfirmed",
+        reason: committed.reason, used_for_authority: false, timestamp: Date.now() });
+      return { ok: false, reason: committed.reason };
+    }
+    this.audit.append({ kind: "operation_plan", event: "meaning_update_adoption_committed", request_id, command_id,
+      projection_digest: input.command_digest, proposal_digest: review.proposal_digest,
+      candidate_digest: review.proposal.candidate_digest,
+      target_digest: createHash("sha256").update(meaningUpdateAdoptionApprovalTarget(input.args), "utf8").digest("hex"),
+      review_status: review.reference_review.review_status,
+      approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed",
+      used_for_authority: false, timestamp: evidence.timestamp });
+    this.pendingMeaningUpdateCandidates.delete(input.source_command_id);
+    return { ok: true, proposal_digest: review.proposal_digest, candidate_digest: review.proposal.candidate_digest,
+      approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed" };
+  }
+
+  private readMeaningUpdateMemoryApproval(reference: JMemoryApprovalReference): unknown {
+    const context = this.meaningUpdateMemoryApprovalContext;
+    if (!context || context.update_id !== reference.update_id || context.j_event_id !== reference.j_event_id ||
+        context.content_digest !== reference.content_digest || !this.audit.isPersistent() || !this.audit.verify()) return null;
+    const review = this.getMeaningUpdateProposalForOwnerReview(context.source_command_id);
+    if (!review || review.proposal_digest !== context.proposal_digest ||
+        review.proposal.candidate_digest !== context.candidate_digest ||
+        meaningUpdateAdoptionApprovalTarget({ proposal_digest: context.proposal_digest,
+          candidate_digest: context.candidate_digest, target_record_id: review.proposal.target_reference.record_id,
+          target_version: review.proposal.target_reference.version }) !== context.target) return null;
+    const evidence = meaningUpdateAdoptionApprovalEvidence(this.audit.list(), {
+      request_id: context.request_id, command_id: context.command_id, proposal_actor: context.proposal_actor,
+      reviewer_actor: context.reviewer_actor, target: context.target, command_digest: context.command_digest,
+      proposal_digest: context.proposal_digest, candidate_digest: context.candidate_digest,
+      review_status: review.reference_review.review_status,
+    });
+    return evidence && JSON.stringify(evidence.evaluation) === JSON.stringify(context.evaluation)
+      ? Object.freeze({ ...reference }) : null;
+  }
+
   /**
    * Persist an owner-reviewed no-replay disposition for one exact unsettled
    * cron event. The audited HDS record, not the gateway cursor, owns this
@@ -1696,6 +2010,27 @@ ${planControl.question}`,
       timestamp: Date.now(),
     };
     this.audit.append(feedbackLog);
+
+    if (sourceLog && issued && issued.command.id === fb.command_id && sourceLog.commit.decision === "ASSERT" &&
+        issued.command.upstream_decision.commit_hash === sourceLog.commit.hash &&
+        meaningUpdateProposalContractStatus === "passed" && meaningUpdateProposalParse?.ok &&
+        meaningUpdateProposalParse.record.schema_version === "blue-tanuki.meaning-update-proposal.v3" &&
+        isMeaningUpdateReviewReady(meaningUpdateProposalReferenceReview)) {
+      while (this.pendingMeaningUpdateCandidates.size >= 64) {
+        const oldest = this.pendingMeaningUpdateCandidates.keys().next().value as string | undefined;
+        if (!oldest) break;
+        this.pendingMeaningUpdateCandidates.delete(oldest);
+      }
+      this.pendingMeaningUpdateCandidates.set(fb.command_id, {
+        request_id: sourceLog.request_id,
+        source_command_id: fb.command_id,
+        proposal: structuredClone(meaningUpdateProposalParse.record),
+        proposal_digest: meaningUpdateProposalDigest(meaningUpdateProposalParse.record),
+        memory_trace: structuredClone(sourceLog.frame.memory_trace),
+      });
+    } else {
+      this.pendingMeaningUpdateCandidates.delete(fb.command_id);
+    }
 
     if (sourceLog && issued && issued.command.type === "llm_call" &&
         issued.command.payload.compute_context?.local_p_version !== OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION &&
@@ -2250,6 +2585,7 @@ ${planControl.question}`,
 
   close(): void {
     this.goalPurposeMemory?.close();
+    this.meaningUpdateMemory?.close();
   }
 
   /**

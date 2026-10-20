@@ -169,6 +169,16 @@ export function goalPurposeRelationReviewApprovalTarget(input: OperationPlanGoal
     parsed.goal_ref, String(parsed.purpose_version), parsed.purpose_digest, parsed.outcome].join(":");
 }
 
+export function meaningUpdateAdoptionApprovalTarget(input: {
+  proposal_digest: string;
+  candidate_digest: string;
+  target_record_id: string;
+  target_version: string;
+}): string {
+  return ["memory.meaning.adopt", input.proposal_digest, input.candidate_digest,
+    input.target_record_id, input.target_version].join(":");
+}
+
 export function approvalContextFromCommand(command: ExecuteCommand, opts: { actor?: string; now?: number } = {}): ApprovalContext {
   const actor = opts.actor?.trim() || "local-user";
   const now = opts.now ?? Date.now();
@@ -404,6 +414,19 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
         target_scope: "task_type",
         target: parsed.success ? goalPurposeRelationReviewApprovalTarget(parsed.data) : "goal.governance.review_task_purpose:invalid",
       };
+    }
+    if (command.payload.tool_name === "memory.meaning.adopt") {
+      const proposal_digest = typeof args.proposal_digest === "string" && /^[a-f0-9]{64}$/.test(args.proposal_digest)
+        ? args.proposal_digest : "invalid-proposal-digest";
+      const candidate_digest = typeof args.candidate_digest === "string" && /^[a-f0-9]{64}$/.test(args.candidate_digest)
+        ? args.candidate_digest : "invalid-candidate-digest";
+      const target_record_id = typeof args.target_record_id === "string" && /^F:[A-Za-z0-9_.:-]{1,96}$/.test(args.target_record_id)
+        ? args.target_record_id : "invalid-target-record";
+      const target_version = typeof args.target_version === "string" && /^[a-f0-9]{64}$/.test(args.target_version)
+        ? args.target_version : "invalid-target-version";
+      return { target_scope: "task_type", target: meaningUpdateAdoptionApprovalTarget({
+        proposal_digest, candidate_digest, target_record_id, target_version,
+      }) };
     }
     if (op === "github.write") {
       const ownerValue = typeof args.owner === "string" ? args.owner : undefined;

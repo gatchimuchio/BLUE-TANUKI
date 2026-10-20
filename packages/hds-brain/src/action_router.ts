@@ -79,6 +79,9 @@ function routeMetadata(req: InboundRequest): ActionRoute {
   if (toolName === "goal.governance.review_task_purpose") {
     return routeInternalGoalPurposeRelationReview(req, argsRaw);
   }
+  if (toolName === "memory.meaning.adopt") {
+    return routeInternalMeaningUpdateAdoption(req, argsRaw);
+  }
   return buildToolRoute(toolName, { ...argsRaw });
 }
 
@@ -130,6 +133,28 @@ function routeInternalGoalPurposeRelationReview(req: InboundRequest, args: Recor
     allowed_capabilities: ["tool:goal.governance.review_task_purpose"],
     timeout_ms: 10_000,
   };
+}
+
+function routeInternalMeaningUpdateAdoption(req: InboundRequest, args: Record<string, unknown>): ActionRoute {
+  const metadata = req.metadata ?? {};
+  if (!isGatewayInternalInboundRequest(req) ||
+      metadata["blue_tanuki.authority_context"] !== "gateway_internal_v1" ||
+      metadata["blue_tanuki.actor_kind"] !== "owner" ||
+      metadata["blue_tanuki.process_kind"] !== "approval" ||
+      metadata["blue_tanuki.meaning_update_adoption.version"] !== "v1" ||
+      req.content !== "Owner submitted a C meaning-update candidate for L3 review.") {
+    return { type: "noop", reason: "meaning update adoption requires a trusted Gateway approval request" };
+  }
+  const expectedKeys = ["proposal_digest", "candidate_digest", "target_record_id", "target_version"];
+  if (Object.keys(args).length !== expectedKeys.length || expectedKeys.some((key) => !Object.hasOwn(args, key)) ||
+      typeof args.proposal_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.proposal_digest) ||
+      typeof args.candidate_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.candidate_digest) ||
+      typeof args.target_record_id !== "string" || !/^F:[A-Za-z0-9_.:-]{1,96}$/.test(args.target_record_id) ||
+      typeof args.target_version !== "string" || !/^[a-f0-9]{64}$/.test(args.target_version)) {
+    return { type: "noop", reason: "meaning update adoption arguments are invalid" };
+  }
+  return { type: "tool_call", tool_name: "memory.meaning.adopt", arguments: { ...args },
+    allowed_capabilities: ["tool:memory.meaning.adopt"], timeout_ms: 10_000 };
 }
 
 function routeContent(content: string): ActionRoute {

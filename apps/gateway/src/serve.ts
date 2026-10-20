@@ -7,6 +7,7 @@ import {
   extractFailureSignatures,
   goalPurposeChangeApprovalTarget,
   goalPurposeRelationReviewApprovalTarget,
+  meaningUpdateAdoptionApprovalTarget,
   runPeriodicFailureMemoryVerification,
 } from "@blue-tanuki/hds-brain";
 import type {
@@ -18,6 +19,7 @@ import type {
   OutputAuditLog,
   PeriodicVerificationTrigger,
   OperationPlanGoalPurposeRelationReviewContent,
+  MeaningUpdateAdoptionArguments,
 } from "@blue-tanuki/hds-brain";
 import {
   buildOperationCoreApprovalTrace,
@@ -33,7 +35,7 @@ import {
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "./reconcile_execution_results.js";
-import { goalPurposeMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
+import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
@@ -57,6 +59,7 @@ import type {
   ExecuteFeedback,
   InboundRequest,
   OperationPlanGoalPurposeRelationReviewArguments,
+  MeaningUpdateProposalV3,
   ObservationAcquisitionRecord,
 } from "@blue-tanuki/protocol";
 import {
@@ -77,6 +80,7 @@ import type {
   WebChatApprovalContentReview,
   WebChatApprovalContentReviewValidation,
   WebChatGoalPurposeRelationContentReview,
+  WebChatMeaningUpdateContentReview,
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
   WebChatAuthorityTraceItem,
@@ -215,6 +219,13 @@ interface PendingApproval {
     content: OperationPlanGoalPurposeRelationReviewContent;
     proposal_actor: string;
   };
+  /** Raw candidate remains process-local until the exact owner L3 review resolves. */
+  meaning_update_proposal?: {
+    source_command_id: string;
+    proposal: MeaningUpdateProposalV3;
+    proposal_digest: string;
+    proposal_actor: string;
+  };
 }
 
 interface EmergencyStopState {
@@ -293,8 +304,25 @@ function getGoalPurposeRelationReviewArguments(command: ExecuteCommand): Operati
   return parsed.success ? parsed.data : null;
 }
 
+function getMeaningUpdateAdoptionArguments(command: ExecuteCommand): MeaningUpdateAdoptionArguments | null {
+  if (command.type !== "tool_call" || command.payload.tool_name !== "memory.meaning.adopt") return null;
+  const args = command.payload.arguments;
+  const keys = Object.keys(args).sort();
+  if (keys.join(",") !== ["candidate_digest", "proposal_digest", "target_record_id", "target_version"].join(",") ||
+      typeof args.proposal_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.proposal_digest) ||
+      typeof args.candidate_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.candidate_digest) ||
+      typeof args.target_record_id !== "string" || !/^F:[A-Za-z0-9_.:-]{1,96}$/.test(args.target_record_id) ||
+      typeof args.target_version !== "string" || !/^[a-f0-9]{64}$/.test(args.target_version)) return null;
+  return { proposal_digest: args.proposal_digest, candidate_digest: args.candidate_digest,
+    target_record_id: args.target_record_id, target_version: args.target_version };
+}
+
 function isGoalPurposeChangeCommand(command: ExecuteCommand): boolean {
   return command.type === "tool_call" && command.payload.tool_name === "goal.governance.change";
+}
+
+function isMeaningUpdateAdoptionCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "memory.meaning.adopt";
 }
 
 function isWellFormedUnicode(value: string): boolean {
@@ -544,6 +572,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     operation_plan_state: operationPlanState,
     operation_plan_memory: operationResultMemoryStorage(),
     goal_purpose_memory: goalPurposeMemoryStorage(),
+    meaning_update_memory: meaningUpdateMemoryStorage(),
     operation_plan_recovery_evidence: startupOperationPlanRecoveryEvidence,
     audit: buildAuditLog(),
     memory: buildHDSMemoryStore(process.env),
@@ -985,6 +1014,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       expected_gmail_draft_provider_state_digest?: string;
       goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
       goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
+      meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
+      quiet_approval_notice?: boolean;
     } = {},
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
@@ -1127,6 +1158,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         });
         return { status: "goal_purpose_change_requires_l3_final_review" };
       }
+      if (isMeaningUpdateAdoptionCommand(cmd) &&
+          (evaluation.decision !== "ask" || evaluation.risk !== "high" ||
+           evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required)) {
+        hds.onCommandLifecycle(cmd.id, "approval_rejected", { actor,
+          reason: "meaning_update_adoption_requires_l3_final_review", request_id: log.request_id });
+        return { status: "meaning_update_adoption_requires_l3_final_review" };
+      }
       const failureMemoryRequiresApproval = failureGate.decision === "require_approval";
       if (evaluation.decision === "ask" || failureMemoryRequiresApproval) {
         if (runtimeScheduleMutationCommand(cmd)) {
@@ -1199,11 +1237,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           ...(opts.goal_purpose_proposal ? { goal_purpose_proposal: opts.goal_purpose_proposal } : {}),
           ...(opts.goal_purpose_relation_review_proposal
             ? { goal_purpose_relation_review_proposal: opts.goal_purpose_relation_review_proposal } : {}),
+          ...(opts.meaning_update_proposal ? { meaning_update_proposal: opts.meaning_update_proposal } : {}),
         });
         const approvalContent = failureMemoryRequiresApproval
           ? `${approvalRequiredMessage(evaluation, cmd.id, issued?.token)} failure_memory_gate=${failureGate.reason}`
           : approvalRequiredMessage(evaluation, cmd.id, issued?.token);
-        await dispatcher.dispatch(
+        if (!opts.quiet_approval_notice) await dispatcher.dispatch(
           { channel: origin.channel, target: replyTarget(origin), content: approvalContent },
           { command_id: `approval-${cmd.id}`, upstream_commit_hash: log.commit.hash },
         );
@@ -1246,6 +1285,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         request_id: log.request_id,
       });
       return { status: "goal_purpose_change_has_no_executor_path" };
+    }
+    if (isMeaningUpdateAdoptionCommand(cmd)) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor,
+        reason: "meaning_update_adoption_has_no_executor_path", request_id: log.request_id });
+      return { status: "meaning_update_adoption_has_no_executor_path" };
     }
     if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
@@ -1728,6 +1772,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
       await finishCronEventRestore(observationVerified);
     }
+    if (cmd.type === "llm_call" && fb.status === "success" &&
+        finalized.reviewed_feedback.meaning_update_proposal !== undefined &&
+        hds.getMeaningUpdateProposalForOwnerReview(cmd.id)) {
+      const queued = await submitMeaningUpdateAdoptionProposal({ source_command_id: cmd.id });
+      if (!queued.accepted) gatewayLog.info("meaning update candidate was not queued for owner review", {
+        source_command_id_digest: digestString(cmd.id), status: queued.status,
+      });
+    }
     if (content) await dispatcher.dispatch({ channel: origin.channel, target: replyTarget(origin), content }, { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
     return { status: finalized.reviewed_feedback.status };
   }
@@ -1744,7 +1796,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       const missingGoalPurposeProposal = hds.getAudit().list().some(({ log }) =>
         "kind" in log && log.kind === "approval_gate" && log.command_id === command_id &&
         (log.evaluation.context.target?.startsWith("goal.governance.change:") ||
-         log.evaluation.context.target?.startsWith("goal.governance.review_task_purpose:")));
+         log.evaluation.context.target?.startsWith("goal.governance.review_task_purpose:") ||
+         log.evaluation.context.target?.startsWith("memory.meaning.adopt:")));
       if (missingGoalPurposeProposal) {
         return { executed: false, status: "approval_unavailable_after_restart", fresh_request_required: true };
       }
@@ -1783,6 +1836,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     if (verdict === "approve" && pending.goal_purpose_relation_review_proposal &&
         validateGoalPurposeRelationContentReview(pending, ctx.content_review_digest) !== "valid") {
+      return { executed: false, pending: true, status: "approval_content_review_required" };
+    }
+    if (verdict === "approve" && pending.meaning_update_proposal &&
+        validateMeaningUpdateContentReview(pending, ctx.content_review_digest) !== "valid") {
       return { executed: false, pending: true, status: "approval_content_review_required" };
     }
     if (verdict === "approve" && emergencyStop.active) {
@@ -1830,6 +1887,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (verdict !== "approve") {
       resolveCronApprovalHandoff(pending, "rejected");
       pendingApprovals.delete(command_id);
+      if (pending.meaning_update_proposal) {
+        hds.discardMeaningUpdateProposal(pending.meaning_update_proposal.source_command_id);
+      }
       runtimeSchedules.rejectPending(command_id, approvalActor, `human_approval:${verdict}`);
       hds.onCommandLifecycle(command_id, "approval_rejected", { actor: approvalActor, reason: `human_approval:${verdict}` });
       recordApprovalHistory("human_resume_rejected", pending.command, pending.log, pending.origin, approvalActor, pending.evaluation, {
@@ -1877,6 +1937,27 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       remember_ignored_final_review: rememberRequested && pending.evaluation.final_review_required,
       ...(ctx.content_review_digest ? { content_review_digest: ctx.content_review_digest } : {}),
     });
+    if (pending.meaning_update_proposal) {
+      const proposal = pending.meaning_update_proposal;
+      const args = getMeaningUpdateAdoptionArguments(pending.command);
+      const current = hds.getMeaningUpdateProposalForOwnerReview(proposal.source_command_id);
+      if (!args || !current || current.proposal_digest !== proposal.proposal_digest ||
+          args.proposal_digest !== proposal.proposal_digest || args.candidate_digest !== current.proposal.candidate_digest ||
+          args.target_record_id !== current.proposal.target_reference.record_id ||
+          args.target_version !== current.proposal.target_reference.version ||
+          validateMeaningUpdateContentReview(pending, ctx.content_review_digest) !== "valid") {
+        return { approval: "approve", executed: false, status: "meaning_update_adoption_stale" };
+      }
+      const committed = hds.commitMeaningUpdateAfterL3({ source_command_id: proposal.source_command_id, args,
+        request_id: pending.log.request_id, command_id, command_digest: pending.command_digest,
+        content_review_digest: ctx.content_review_digest ?? "", proposal_actor: proposal.proposal_actor,
+        reviewer_actor: approvalActor, evaluation: pending.evaluation });
+      if (!committed.ok) return { approval: "approve", executed: false, status: `meaning_update_${committed.reason}` };
+      return { approval: "approve", executed: false, status: "meaning_update_adoption_committed",
+        proposal_digest: committed.proposal_digest, candidate_digest: committed.candidate_digest,
+        approval_status: committed.approval_status, memory_application_status: committed.memory_application_status,
+        follow_up_action_status: committed.follow_up_action_status, used_for_authority: false, may_execute: false };
+    }
     if (pending.goal_purpose_relation_review_proposal) {
       const proposal = pending.goal_purpose_relation_review_proposal;
       const args = getGoalPurposeRelationReviewArguments(pending.command);
@@ -2405,6 +2486,87 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }],
   });
 
+  async function submitMeaningUpdateAdoptionProposal(input: { source_command_id: string }): Promise<{
+    accepted: boolean; status: string; proposal_digest?: string; candidate_digest?: string;
+    request_id?: string; command_id?: string;
+  }> {
+    const current = hds.getMeaningUpdateProposalForOwnerReview(input.source_command_id);
+    if (!current) return { accepted: false, status: "meaning_update_candidate_stale_or_unavailable" };
+    const duplicate = Array.from(pendingApprovals.values()).find((pending) =>
+      pending.meaning_update_proposal?.proposal_digest === current.proposal_digest);
+    if (duplicate) return { accepted: true, status: "approval_required", proposal_digest: current.proposal_digest,
+      candidate_digest: current.proposal.candidate_digest, request_id: duplicate.log.request_id,
+      command_id: duplicate.command.id };
+    if (current.proposal.schema_version !== MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION ||
+        !isWellFormedUnicode(current.proposal.candidate_meaning)) {
+      hds.discardMeaningUpdateProposal(input.source_command_id);
+      return { accepted: false, status: "meaning_update_candidate_invalid" };
+    }
+    const args: MeaningUpdateAdoptionArguments = {
+      proposal_digest: current.proposal_digest,
+      candidate_digest: current.proposal.candidate_digest,
+      target_record_id: current.proposal.target_reference.record_id,
+      target_version: current.proposal.target_reference.version,
+    };
+    const inbound = createGatewayInternalInboundRequest({
+      id: randomUUID(), channel: "webchat", user: "webchat-owner-token-holder",
+      content: "Owner submitted a C meaning-update candidate for L3 review.", timestamp: Date.now(),
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "approval",
+        "blue_tanuki.meaning_update_adoption.version": "v1",
+        "blue_tanuki.tool_call": { tool_name: "memory.meaning.adopt", arguments: { ...args } },
+      },
+    });
+    const boundary = planGatewayInboundBoundary(inbound);
+    if (!boundary.boundary_ok) return { accepted: false, status: "meaning_update_boundary_rejected" };
+    const { log, command } = hds.decide(boundary.hdsBoundaryInput);
+    recordCompleteHistory({ kind: "user_input", request_id: inbound.id, actor: "webchat-owner-token-holder",
+      source: "webchat-owner-meaning-update-adoption", timestamp: inbound.timestamp,
+      payload: { proposal_digest: current.proposal_digest, candidate_digest: current.proposal.candidate_digest,
+        source_command_id_digest: digestString(input.source_command_id),
+        candidate_meaning_bytes: Buffer.byteLength(current.proposal.candidate_meaning, "utf8"),
+        raw_payload_exposed: false, used_for_authority: false } });
+    recordCompleteHistory({ kind: "hds_decision", request_id: log.request_id, command_id: command?.id,
+      actor: "webchat-owner-token-holder", source: "hds-brain", timestamp: log.timestamp,
+      payload: hdsDecisionHistoryPayload(log, command) });
+    const routedArgs = command ? getMeaningUpdateAdoptionArguments(command) : null;
+    if (!command || !routedArgs || JSON.stringify(routedArgs) !== JSON.stringify(args)) {
+      if (command) hds.onCommandLifecycle(command.id, "approval_rejected", { actor: "webchat-owner-token-holder",
+        reason: "meaning_update_adoption_hds_operation_mismatch", request_id: log.request_id });
+      return { accepted: false, status: "meaning_update_adoption_authority_rejected" };
+    }
+    const evaluation = approval.evaluate(command, "webchat-owner-token-holder");
+    const expectedTarget = meaningUpdateAdoptionApprovalTarget(args);
+    const l3Ready = evaluation.decision === "ask" && evaluation.context.operation === "tool.call" &&
+      evaluation.context.actor === "webchat-owner-token-holder" && evaluation.context.command_id === command.id &&
+      evaluation.context.target === expectedTarget && evaluation.risk === "high" &&
+      evaluation.approval_level === "L3_final_review" && evaluation.final_review_required;
+    if (!l3Ready) {
+      hds.onApprovalEvaluation(evaluation, { request_id: log.request_id });
+      hds.onCommandLifecycle(command.id, "approval_rejected", { actor: "webchat-owner-token-holder",
+        reason: "meaning_update_adoption_l3_review_unavailable", request_id: log.request_id });
+      return { accepted: false, status: "meaning_update_adoption_l3_review_unavailable" };
+    }
+    const result = await executeAndEcho(command, log, inbound, {
+      actor: "webchat-owner-token-holder", approval_evaluation: evaluation, quiet_approval_notice: true,
+      meaning_update_proposal: { source_command_id: input.source_command_id,
+        proposal: current.proposal, proposal_digest: current.proposal_digest, proposal_actor: "webchat-owner-token-holder" },
+    });
+    const pending = pendingApprovals.get(command.id);
+    if (result.status !== "approval_required" || !pending?.meaning_update_proposal || !pending.approval_token) {
+      if (pending) pendingApprovals.delete(command.id);
+      hds.discardMeaningUpdateProposal(input.source_command_id);
+      hds.onCommandLifecycle(command.id, "approval_cancelled", { actor: "webchat-owner-token-holder",
+        reason: "meaning_update_adoption_approval_queue_unavailable", request_id: log.request_id });
+      return { accepted: false, status: "meaning_update_adoption_approval_unavailable" };
+    }
+    return { accepted: true, status: "approval_required", proposal_digest: current.proposal_digest,
+      candidate_digest: current.proposal.candidate_digest, request_id: log.request_id, command_id: command.id };
+  }
+
   async function submitGoalPurposeChangeProposal(input: {
     goal_ref: string;
     purpose_text: string;
@@ -2707,6 +2869,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pending.content_review_digest === pending.command_digest ? "valid" : "stale";
   }
 
+  function validateMeaningUpdateContentReview(
+    pending: PendingApproval,
+    content_review_digest: string | undefined,
+  ): WebChatApprovalContentReviewValidation {
+    const proposal = pending.meaning_update_proposal;
+    if (!proposal) return "not_required";
+    if (executorCommandDigest(pending.command) !== pending.command_digest ||
+        getMeaningUpdateAdoptionArguments(pending.command)?.proposal_digest !== proposal.proposal_digest ||
+        !hds.getMeaningUpdateProposalForOwnerReview(proposal.source_command_id)) return "stale";
+    if (!content_review_digest || !pending.content_review_digest) return "required";
+    return content_review_digest === pending.command_digest && pending.content_review_digest === pending.command_digest
+      ? "valid" : "stale";
+  }
+
   async function pendingApprovalContentReview(command_id: string): Promise<WebChatApprovalContentReview | null> {
     const pending = pendingApprovals.get(command_id);
     if (pending?.goal_purpose_relation_review_proposal) {
@@ -2761,6 +2937,46 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
       return review;
     }
+    if (pending?.meaning_update_proposal) {
+      if (executorCommandDigest(pending.command) !== pending.command_digest) return null;
+      const args = getMeaningUpdateAdoptionArguments(pending.command);
+      const current = hds.getMeaningUpdateProposalForOwnerReview(pending.meaning_update_proposal.source_command_id);
+      if (!args || !current || current.proposal_digest !== pending.meaning_update_proposal.proposal_digest ||
+          current.proposal.candidate_digest !== args.candidate_digest ||
+          current.proposal.target_reference.record_id !== args.target_record_id ||
+          current.proposal.target_reference.version !== args.target_version) return null;
+      if (current.reference_review.review_status !== "prior_version_unverified" &&
+          current.reference_review.review_status !== "counterevidence_absence_unverified") return null;
+      const review: WebChatMeaningUpdateContentReview = {
+        kind: "meaning_update_adoption",
+        command_id,
+        command_digest: pending.command_digest,
+        request_payload_digest: current.proposal_digest,
+        operation: "memory.meaning.adopt",
+        proposal_ref: current.proposal.proposal_ref,
+        candidate_ref: current.proposal.candidate_ref,
+        proposal_digest: current.proposal_digest,
+        candidate_digest: current.proposal.candidate_digest,
+        candidate_meaning: current.proposal.candidate_meaning,
+        target_record_id: current.proposal.target_reference.record_id,
+        target_version: current.proposal.target_reference.version,
+        prior_version_ref: current.proposal.prior_version_ref,
+        supporting_evidence: current.proposal.supporting_evidence,
+        counterevidence_review: current.proposal.counterevidence_review,
+        applicability_scope: current.proposal.applicability_scope,
+        reflection_target_ref: current.proposal.reflection_target_ref,
+        reference_review_status: current.reference_review.review_status,
+        semantic_relation_status: "not_assessed",
+        adoption_status: "not_adopted",
+        may_execute: false,
+        used_for_authority: false,
+      };
+      if (!hds.recordMeaningUpdateProposalContentReview({ source_command_id: current.source_command_id, args,
+        request_id: pending.log.request_id, command_id: pending.command.id,
+        proposal_actor: pending.meaning_update_proposal.proposal_actor, command_digest: pending.command_digest })) return null;
+      pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
+      return review;
+    }
     if (pending && isGmailDraftSendReviewCommand(pending.command) &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -2799,6 +3015,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (pending.goal_purpose_proposal) {
       return validateGoalPurposeChangeContentReview(pending, content_review_digest);
     }
+    if (pending.meaning_update_proposal) return validateMeaningUpdateContentReview(pending, content_review_digest);
     if (isGmailDraftSendReviewCommand(pending.command)) {
       const validation = validateGmailDraftSendContentReview(
         pending.command,
@@ -2850,7 +3067,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       reason: p.evaluation.reason,
       content_review_required: isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
         Boolean(p.goal_purpose_proposal) ||
-        Boolean(p.goal_purpose_relation_review_proposal),
+        Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal),
       approval_token: p.approval_token,
       approval_token_expires_at_ms: p.approval_token_expires_at_ms,
       authority_trace: p.evaluation.authority_trace,
@@ -2891,6 +3108,22 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             : p.content_review_digest === p.command_digest ? "reviewed" as const : "required" as const,
           used_for_authority: false as const,
           may_execute: false as const,
+        },
+      } : {}),
+      ...(p.meaning_update_proposal ? {
+        meaning_update_review: {
+          kind: "meaning_update_adoption" as const,
+          proposal_digest: p.meaning_update_proposal.proposal_digest,
+          candidate_digest: p.meaning_update_proposal.proposal.candidate_digest,
+          target_record_id: p.meaning_update_proposal.proposal.target_reference.record_id,
+          target_version: p.meaning_update_proposal.proposal.target_reference.version,
+          review_status: !hds.getMeaningUpdateProposalForOwnerReview(p.meaning_update_proposal.source_command_id)
+            ? "stale" as const
+            : p.content_review_digest === p.command_digest ? "reviewed" as const : "required" as const,
+          semantic_relation_status: "not_assessed" as const,
+          adoption_status: "not_adopted" as const,
+          may_execute: false as const,
+          used_for_authority: false as const,
         },
       } : {}),
     }));

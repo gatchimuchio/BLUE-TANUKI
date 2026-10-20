@@ -12,6 +12,11 @@ export function goalPurposeMemoryStorage(env: NodeJS.ProcessEnv = process.env): 
   return privateJMMemoryStorage(env, "goal-purpose-memory");
 }
 
+/** Private J/M namespace for owner-approved meaning-update candidates. */
+export function meaningUpdateMemoryStorage(env: NodeJS.ProcessEnv = process.env): OperationPlanMemoryStorage {
+  return privateJMMemoryStorage(env, "meaning-update-memory");
+}
+
 function privateJMMemoryStorage(env: NodeJS.ProcessEnv, directoryName: string): OperationPlanMemoryStorage {
   const stateRoot = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
   mkdirSync(stateRoot, { recursive: true });

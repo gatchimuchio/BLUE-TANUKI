@@ -620,7 +620,9 @@ export type AuditRecord =
   | CommandLifecycleLog
   | ScheduleLifecycleLog
   | { kind: "operation_plan"; event: string; request_id: string | null; command_id: string; projection_digest: string;
-      used_for_authority: false; timestamp: number };
+      used_for_authority: false; timestamp: number; proposal_digest?: string; candidate_digest?: string;
+      target_digest?: string; review_status?: string; approval_status?: "approved";
+      memory_application_status?: "applied" | "blocked"; follow_up_action_status?: "unconfirmed"; reason?: string };
 
 /**
  * Per-axis policy entry.

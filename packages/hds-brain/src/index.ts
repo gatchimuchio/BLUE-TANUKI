@@ -141,6 +141,8 @@ export {
   type ResumeAuditOptions,
   type HDSRuntimeSnapshot,
   type HDSExecutionAuthorityBinding,
+  type MeaningUpdateAdoptionArguments,
+  type OwnerMeaningUpdateProposalReview,
   consumeHdsExecutionAuthorityBinding,
 } from "./controller.js";
 export {
@@ -192,6 +194,7 @@ export {
   finalReviewOperationList,
   goalPurposeChangeApprovalTarget,
   goalPurposeRelationReviewApprovalTarget,
+  meaningUpdateAdoptionApprovalTarget,
   type ApprovalMode,
   type ApprovalDecision,
   type ApprovalRisk,

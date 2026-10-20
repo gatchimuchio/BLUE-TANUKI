@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as net from "node:net";
+import { createHash, webcrypto } from "node:crypto";
 import { Script } from "node:vm";
 import { WebSocket } from "ws";
 import type { InboundRequest } from "@blue-tanuki/protocol";
@@ -739,6 +740,107 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(values.some((value) => value?.includes('"plan_id": "fixture-plan"'))).toBe(true);
     expect(state.approvalContentDigests[commandId]).toBe(commandDigest);
     expect(approve.disabled).toBe(false);
+  });
+
+  it("reveals a meaning-update candidate only after digest-bound owner content review", async () => {
+    const commandId = "meaning-update-command";
+    const commandDigest = "c".repeat(64);
+    const proposalDigest = "d".repeat(64);
+    const candidateMeaning = '<img src=x onerror="alert(1)"> revised meaning';
+    const candidateDigest = createHash("sha256").update(candidateMeaning, "utf8").digest("hex");
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    const review = {
+      kind: "meaning_update_adoption",
+      command_id: commandId,
+      command_digest: commandDigest,
+      request_payload_digest: proposalDigest,
+      operation: "memory.meaning.adopt",
+      proposal_ref: "proposal-c07-02",
+      candidate_ref: "candidate:c07-02",
+      proposal_digest: proposalDigest,
+      candidate_digest: candidateDigest,
+      candidate_meaning: candidateMeaning,
+      target_record_id: "F:fact-001",
+      target_version: "2".repeat(64),
+      prior_version_ref: "F:fact-001@1",
+      supporting_evidence: [{ reference: "F:evidence-001", digest: digest("support") }],
+      counterevidence_review: {
+        status: "reviewed_none_found",
+        review_scope: { reference: "F:scope-001", digest: digest("counter-scope") },
+        references: [],
+      },
+      applicability_scope: { reference: "F:scope-001", digest: digest("applicability") },
+      reflection_target_ref: "reflection:goal-001",
+      reference_review_status: "counterevidence_absence_unverified",
+      semantic_relation_status: "not_assessed",
+      adoption_status: "not_adopted",
+      may_execute: false,
+      used_for_authority: false,
+    };
+    const makeNode = (tagName: string) => ({
+      tagName,
+      textContent: "",
+      children: [] as Array<Record<string, unknown>>,
+      replaceChildren() { this.children = []; },
+      appendChild(child: Record<string, unknown>) { this.children.push(child); return child; },
+      append(...children: Array<Record<string, unknown>>) { this.children.push(...children); },
+    });
+    const view = makeNode("section");
+    const approve = { disabled: true };
+    const card = {
+      dataset: {
+        proposalDigest,
+        candidateDigest,
+        targetRecordId: review.target_record_id,
+        targetVersion: review.target_version,
+      },
+      getAttribute: (name: string) => name === "data-command" ? commandId : null,
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? view :
+        selector === '[data-verdict="approve"]' ? approve : null,
+    };
+    const state = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function reviewApprovalContent(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function revokeApprovalGrant(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const run = new Script(`
+      async function runReview() {
+        const state = reviewState;
+        function byId(id) { return id === "approval-token" ? { value: "resume-token" } : null; }
+        function authHeaders(value) { return { authorization: "Bearer " + value }; }
+        function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+        const document = {
+          querySelectorAll() { return [reviewCard]; },
+          createElement(tagName) { return makeNode(tagName); },
+        };
+        const fetch = async () => ({ ok: true, json: async () => reviewData });
+        ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+        await reviewApprovalContent("${commandId}", reviewButton);
+      }
+      runReview();
+    `);
+    await run.runInNewContext({
+      reviewState: state, reviewCard: card, reviewData: review, makeNode,
+      reviewButton: { textContent: "候補本文を確認" }, crypto: webcrypto, TextEncoder,
+    });
+    const body = view.children.find((child) => child.tagName === "pre");
+    expect(body?.textContent).toBe(candidateMeaning);
+    expect(state.approvalContentDigests[commandId]).toBe(commandDigest);
+    expect(approve.disabled).toBe(false);
+
+    review.candidate_digest = "f".repeat(64);
+    const rejectedApprove = { disabled: true };
+    const rejectedView = makeNode("section");
+    const rejectedCard = { ...card, dataset: { ...card.dataset, candidateDigest: review.candidate_digest },
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? rejectedView :
+      selector === '[data-verdict="approve"]' ? rejectedApprove : null };
+    const rejectedState = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    await expect(run.runInNewContext({
+      reviewState: rejectedState, reviewCard: rejectedCard, reviewData: review, makeNode,
+      reviewButton: { textContent: "候補本文を確認" }, crypto: webcrypto, TextEncoder,
+    })).rejects.toThrow("意味更新候補本文のdigestが一致しません");
+    expect(rejectedApprove.disabled).toBe(true);
+    expect(rejectedState.approvalContentDigests[commandId]).toBeUndefined();
   });
 
   it("projects only verified scope-applicability enums and digest fields", () => {

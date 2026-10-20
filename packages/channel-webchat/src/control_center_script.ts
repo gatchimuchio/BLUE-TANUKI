@@ -1181,13 +1181,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 : null;
               const goalPurposeRelationReview = isObject(item.goal_purpose_relation_review) &&
                 item.goal_purpose_relation_review.kind === "task_purpose_relation" ? item.goal_purpose_relation_review : null;
+              const meaningUpdateReview = isObject(item.meaning_update_review) &&
+                item.meaning_update_review.kind === "meaning_update_adoption" ? item.meaning_update_review : null;
               const requiresContentReview = item.content_review_required === true;
-              const approveBlocked = requiresContentReview || Boolean(cronReview && cronReview.eligible !== true);
+              const approveBlocked = requiresContentReview || Boolean(cronReview && cronReview.eligible !== true) ||
+                Boolean(meaningUpdateReview && meaningUpdateReview.review_status === "stale");
               if (item.command_id && item.approval_token) {
                 state.approvalTokens[item.command_id] = item.approval_token;
               }
               return '<article class="queue-item" data-command="' + escapeHtml(item.command_id || "") + '"' +
-                (goalPurposeRelationReview ? ' data-plan-id-digest="' + escapeHtml(goalPurposeRelationReview.plan_id_digest) +
+                 (meaningUpdateReview ? ' data-proposal-digest="' + escapeHtml(meaningUpdateReview.proposal_digest) +
+                   '" data-candidate-digest="' + escapeHtml(meaningUpdateReview.candidate_digest) +
+                   '" data-target-record-id="' + escapeHtml(meaningUpdateReview.target_record_id) +
+                   '" data-target-version="' + escapeHtml(meaningUpdateReview.target_version) + '"' : '') +
+                 (goalPurposeRelationReview ? ' data-plan-id-digest="' + escapeHtml(goalPurposeRelationReview.plan_id_digest) +
                   '" data-task-digest="' + escapeHtml(goalPurposeRelationReview.task_digest) +
                   '" data-revision-digest="' + escapeHtml(goalPurposeRelationReview.revision_digest) +
                   '" data-goal-ref="' + escapeHtml(goalPurposeRelationReview.goal_ref) +
@@ -1236,9 +1243,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                     '<dt>内容確認</dt><dd>' + escapeHtml(goalPurposeRelationReview.review_status || "required") + '</dd>' +
                     '</dl><p class="muted">task・目的本文・planはプロセス内だけに保持し、「task・目的の内容を確認」を選んだ後に表示します。承認はこのrevisionへの関係記録だけを行い、実行権限を与えません。</p></section>'
                   : '') +
+                (meaningUpdateReview
+                  ? '<section class="approval-content-review"><strong>意味更新候補のowner L3確認</strong><dl class="kv">' +
+                    '<dt>proposal digest</dt><dd class="mono">' + escapeHtml(meaningUpdateReview.proposal_digest) + '</dd>' +
+                    '<dt>candidate digest</dt><dd class="mono">' + escapeHtml(meaningUpdateReview.candidate_digest) + '</dd>' +
+                    '<dt>対象記録</dt><dd class="mono">' + escapeHtml(meaningUpdateReview.target_record_id) + '</dd>' +
+                    '<dt>対象版</dt><dd class="mono">' + escapeHtml(meaningUpdateReview.target_version) + '</dd>' +
+                    '<dt>内容確認</dt><dd>' + escapeHtml(meaningUpdateReview.review_status || "required") + '</dd>' +
+                    '<dt>意味関係</dt><dd>not_assessed</dd><dt>採用状態</dt><dd>not_adopted</dd>' +
+                    '<dt>実行可能性</dt><dd>false</dd><dt>権限への利用</dt><dd>false</dd>' +
+                    '</dl><p class="muted">候補本文は「候補本文を確認」を選ぶまで表示されません。承認前に参照証拠と適用範囲を確認してください。</p></section>'
+                  : '') +
                 (requiresContentReview
                   ? '<section class="approval-content-review"><button data-review-content="' + escapeHtml(item.command_id || "") + '">' +
-                    (goalPurposeReview ? 'Review exact purpose' : goalPurposeRelationReview ? 'task・目的の内容を確認' : 'Review exact content') +
+                     (goalPurposeReview ? 'Review exact purpose' : goalPurposeRelationReview ? 'task・目的の内容を確認' :
+                       meaningUpdateReview ? '候補本文を確認' : 'Review exact content') +
                     '</button><div data-content-review-view aria-live="polite">Content has not been revealed.</div></section>'
                   : '') +
                 '<div class="action-row">' +
@@ -3346,6 +3365,91 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           state.approvalContentDigests[commandId] = review.command_digest;
           approve.disabled = false;
           button.textContent = "task・目的の内容を再確認";
+          return;
+        }
+        if (review.kind === "meaning_update_adoption") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const isEvidence = function (value) {
+            return Array.isArray(value) && value.every(function (entry) {
+              return isObject(entry) && typeof entry.reference === "string" && entry.reference.length > 0 &&
+                isDigest(entry.digest);
+            });
+          };
+          if (review.command_id !== commandId || review.operation !== "memory.meaning.adopt" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              review.semantic_relation_status !== "not_assessed" || review.adoption_status !== "not_adopted" ||
+              !isDigest(review.command_digest) || !isDigest(review.request_payload_digest) ||
+              !isDigest(review.proposal_digest) || !isDigest(review.candidate_digest) ||
+              review.request_payload_digest !== review.proposal_digest ||
+              review.proposal_digest !== card.dataset.proposalDigest ||
+              review.candidate_digest !== card.dataset.candidateDigest ||
+              review.target_record_id !== card.dataset.targetRecordId ||
+              review.target_version !== card.dataset.targetVersion || !isDigest(review.target_version) ||
+              typeof review.proposal_ref !== "string" || review.proposal_ref.length === 0 ||
+              typeof review.candidate_ref !== "string" || review.candidate_ref.length === 0 ||
+              typeof review.candidate_meaning !== "string" || review.candidate_meaning.length === 0 ||
+              typeof review.target_record_id !== "string" || review.target_record_id.length === 0 ||
+              typeof review.prior_version_ref !== "string" || review.prior_version_ref.length === 0 ||
+              !isEvidence(review.supporting_evidence) || !isEvidence(review.counterevidence_review?.references) ||
+              !isObject(review.counterevidence_review?.review_scope) ||
+              typeof review.counterevidence_review.review_scope.reference !== "string" ||
+              !isDigest(review.counterevidence_review.review_scope.digest) ||
+              !["reviewed_with_references", "reviewed_none_found"].includes(review.counterevidence_review.status) ||
+              !isObject(review.applicability_scope) || typeof review.applicability_scope.reference !== "string" ||
+              !isDigest(review.applicability_scope.digest) || typeof review.reflection_target_ref !== "string" ||
+              review.reflection_target_ref.length === 0 ||
+              !["prior_version_unverified", "counterevidence_absence_unverified"].includes(review.reference_review_status)) {
+            throw new Error("意味更新候補の内容がこの承認要求と一致しません");
+          }
+          const candidateDigestBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(review.candidate_meaning));
+          const candidateDigest = Array.from(new Uint8Array(candidateDigestBuffer))
+            .map(function (value) { return value.toString(16).padStart(2, "0"); }).join("");
+          if (candidateDigest !== review.candidate_digest) {
+            throw new Error("意味更新候補本文のdigestが一致しません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "正確な意味更新候補（採用はこのL3承認の後に実施）";
+          view.appendChild(heading);
+          [
+            ["proposal reference", review.proposal_ref], ["candidate reference", review.candidate_ref],
+            ["proposal digest", review.proposal_digest], ["candidate digest", review.candidate_digest],
+            ["対象記録", review.target_record_id], ["対象版", review.target_version],
+            ["参照照合", review.reference_review_status], ["prior version reference", review.prior_version_ref],
+            ["適用範囲", review.applicability_scope.reference + " / " + review.applicability_scope.digest],
+            ["反映先 reference", review.reflection_target_ref],
+            ["反証確認", review.counterevidence_review.status + " / " + review.counterevidence_review.review_scope.reference],
+            ["意味関係", review.semantic_relation_status], ["採用状態", review.adoption_status],
+            ["実行可能性", String(review.may_execute)], ["権限への利用", String(review.used_for_authority)]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const meaningLabel = document.createElement("strong");
+          meaningLabel.textContent = "正確な候補本文";
+          view.appendChild(meaningLabel);
+          const meaning = document.createElement("pre");
+          meaning.textContent = review.candidate_meaning;
+          view.appendChild(meaning);
+          [["支持証拠", review.supporting_evidence], ["反証参照", review.counterevidence_review.references]].forEach(function (section) {
+            const label = document.createElement("strong");
+            label.textContent = section[0];
+            view.appendChild(label);
+            const refs = document.createElement("pre");
+            refs.textContent = JSON.stringify(section[1], null, 2);
+            view.appendChild(refs);
+          });
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | proposal digest: " + review.proposal_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.command_digest;
+          approve.disabled = false;
+          button.textContent = "候補本文を再確認";
           return;
         }
         if (review.command_id !== commandId ||
