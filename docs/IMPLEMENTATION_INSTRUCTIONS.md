@@ -4,7 +4,26 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
 
-### 最新BUILD_BATCH：`QEB-04-D05.03-EMERGENCY-STOP-AUDIT-GAP-RECOVERY`
+### 最新BUILD_BATCH：`QEB-04-E02.01-COMPUTE-BUDGET-RESERVATION-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`f9588dd1ddba436f8eeabfbc45d5e787ca6e03f5`。rev2.3三点正本の現行ポインタは [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。適用AGENTS、作業標準、E02.01の親子予算予約と実C呼出しへの接続条件、およびGatewayのHDS→Executor→Compute現行経路を確認した。Windows localでBLUE-TANUKIのみを編集し、保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。
+
+HDSが作成したtask scopeと信頼済みparent scopeをCのComputeRequestへ渡し、実provider呼出し前にsystem／parent／task予算を永続予約する。未知provider価格は設定済み上限がなければ呼出し前に停止する。LLM retry／許可済みfallback倍率を予約へ含め、provider usageが不明または複数attemptの場合は予約を保持する。失敗も上限を消費したunknownとして記録し、同一settlementだけを冪等化する。Gateway CLIとserveの実C adapterへstoreを接続した。SQLiteにはprompt等を保存せず、scope digestと予算証跡のみを保持する。既定のstub経路は無償で、実provider呼出しは行っていない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| 予算store／adapter／provider usage／setup config focused tests | PASS、4 files／32 tests。 |
+| `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| local CLI実consumer smoke | PASS。HDS→Executor→ComputeAdapter→stub provider→永続settlementを確認。stubのみ、実providerなし。 |
+| `pnpm smoke:serve` | 未成立。2回とも`/healthz` ready timeout。現在port 40889の残留listenerなし。serveのprocess startupは未確認として残す。 |
+| `pnpm docs:check`／`git diff --check` | 両方PASS。日本語基底の既存移行負債76件は継続管理。 |
+| 全workspace suite、実credential／provider、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後に配置。 |
+
+system／parent／task予算の予約・精算→stubを用いた実CLI C呼出しを、この範囲で`WIRED`とする。serve processのready経路は`BUILD_GAP`として残す。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`も未成立。次consumerは現行rev2.3工程表順のE02.02「backpressureと停止用余白」：E02.01の予約容量を使ってqueue／provider限界時に新規仕事を抑止しつつ、安全停止・receipt・audit用余白を維持する。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOを保留し、QE_QC／QE_QAへ先行しない。
+
+実装commit=`b8b58c33c4c7540c618a21e421bce9fb9e8efed8`を`main`へatomic push済み。実装push後のremote `main`とlocal復旧branch／remote backup tag二世代はcurrent=`b8b58c33c4c7540c618a21e421bce9fb9e8efed8`、previous=`f9588dd1ddba436f8eeabfbc45d5e787ca6e03f5`で一致。このcloseout文書commitをpush後にcurrentを文書commit、previousを実装commitへ更新する。保護対象Linux `target/`はcommitへ含めない。
+
+### 履歴ログ：`QEB-04-D05.03-EMERGENCY-STOP-AUDIT-GAP-RECOVERY`
 
 開始HEAD／`main`／`origin/main`=`5933eb9e93275581437d4bdbe717436cbf9457aa`。owner指定rev2.3三点、適用AGENTS／作業標準／active指示、D05.03の停止・監査保存要求とGatewayの緊急停止producer／consumerを再読した。Windows localでBLUE-TANUKIのみを編集し、保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。
 
