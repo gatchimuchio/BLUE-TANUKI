@@ -1,6 +1,23 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-C07.03-POST-REASSESSMENT-FRESH-J-PLAN-EXECUTION-RESULT-RETURN`
+### 最新BUILD_BATCH：`QEB-01-C07.03-DELETE-RESULT-TO-NEXT-PLAN-CONSUMER`
+
+開始HEAD／`origin/main`=`5dcb2b3d5d2a724792bb04512c2fad1f843159c9`。owner指定のQE rev2.3三点正本、適用`AGENTS.md`／作業標準、C07.03単位、現行のM result producerと`plan:compute` consumerを再読した。Windows localで施工し、既存untracked Linux `target/`を保持する。QE_BUILDの全体実装先行を維持し、QE_QC／QE_QAへ移行しない。
+
+明示選択されたJ検証済み`file.delete`結果を、後続taskの`plan:compute`が非権威の履歴観測として受け取るconsumerを接続した。選択時と候補保持前に、現在のJ checkpoint／revision／step／binding、成功結果、ExecutionAdmission、M commit／receipt／record、owner・channelを照合する。C向けprojectionにはtask identityとdigest参照だけを渡し、path／本文を除外する。削除報告は当時の結果であり、現在の不存在や再実行可否を示さない。`used_as_world_truth=false`／`used_for_authority=false`／`may_execute=false`を維持する。このbounded consumer routeを`WIRED`とする。C07.03全体、C07親、purposeを含む一仕事、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `execution_result_reconciliation.test.ts` 新consumer | PASS、1 test。合成一時workspaceでfile.delete結果をM receiptから再読し、Cへ明示選択、誤step参照拒否、対象path／本文非露出を確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／実owner承認／外部業務作用 | 未実施。全体実装形状成立後へ配置。 |
+
+GitHub ActionsはD4 Pocketの確認済み条件を参照したが、Windows localで必要なconsumer疎通とcompileができるため未使用。C08.03実provider保留、D4 Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。内部QE原典・全要求対応表・秘密・資格・raw結果はPublic Gitへ含めない。
+
+次consumerはD01.03「計画改訂と未実行部分の再審査」。最新HEADから旧plan revision／実行済みstep／未実行stepのproducer-consumerを確認し、改訂後に未実行部分だけが再審査され、実行済み作用が再実行可能にならない経路を現物から選定する。次単位開始時に三点正本・適用AGENTS・active指示・現行差分を再読する。
+
+### 前回BUILD_BATCH：`QEB-01-C07.03-POST-REASSESSMENT-FRESH-J-PLAN-EXECUTION-RESULT-RETURN`
 
 batch開始HEAD／`origin/main`=`7436d648fb55a8823bb9a15bb525e8ad49c51d30`。owner指定QE rev2.3三点正本のZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`、仕様書=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77`、Codex施工指示書=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`を現行owner提供ZIPと照合した。C07.03単位SHA-256=`2AAD082DE9FC2AD69FD65AC850A665334475803B21F21D0EF58CF103479F83C3`。適用`AGENTS.md`／作業標準／active指示、C07.03、fresh citation→plan→Approval→Executor→result→Mの現行callsiteとdirty差分を読み直した。Windows localで施工。既存untracked Linux `target/`は保持。
 

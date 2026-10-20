@@ -2,6 +2,8 @@
 
 2026-10-20。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-20の`QEB-01-C07.03-DELETE-RESULT-TO-NEXT-PLAN-CONSUMER`では、明示選択されたJ検証済み`file.delete`結果を、J/M receipt・record・task identityの再照合後に後続`plan:compute`へ非権威観測として返す経路を接続した。合成一時workspaceのGateway consumer test 1件、typecheck、15-project buildはPASS。path／本文をCへ渡さず、削除報告を現在の不存在・意味採用・権限へ昇格させない。C07.03全体、C07親、目的→結果→M→帰還の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。全workspace suite／QE_QC／QE_QA、5OS実機、実provider、実外部作用の証拠ではない。次はD01.03の旧plan改訂と未実行stepの再審査consumerを現行HEADから選ぶ。
+
 2026-10-20の`QEB-01-C07.03-POST-REASSESSMENT-FRESH-J-PLAN-EXECUTION-RESULT-RETURN`では、M再評価後のfresh J citationをplanへ結び、実行直前にもJ/M lineageを再照合する。合成Gatewayの隔離HTTP経路はL3待ちからBroker target観測・ExecutionAdmission・一時workspaceのfile.delete・J結果検証・digest-only M観測とreceiptまで到達し、公開snapshotは`results_verified`／`receipt_confirmed`を示す。C07.03のこの限定consumer経路は`WIRED`。C07親、全能力の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`で、全体QC／QA・5OS実機・実provider・実業務作用の証拠ではない。
 
 2026-10-20の`QEB-01-C07.03-OWNER-L3-REASSESSMENT-M-COMMIT`では、新解釈のfresh J citation judgmentからowner L3 content reviewを経て指定旧判断を追記式にprivate Mで再評価するconsumerを接続した。owner L3前のM不変、L3後の新旧judgment lineage更新、non-authority flagsを隔離smokeで確認した。focused HDS 5 tests、Gateway smoke 1 test、workspace typecheck／15-project build、HDS standaloneはPASS。次consumerはM追記後のfresh J judgmentを使う新規planの`plan:review`で、古いplanは再利用しない。C07親、全体の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。全workspace suite／QE_QC／QE_QA、5OS実機、実provider、外部作用の証拠ではない。
