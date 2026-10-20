@@ -612,10 +612,17 @@ jobs:
           cat > "$probe_root/outer.sh" <<'OUTER'
           #!/bin/bash
           set -euo pipefail
-          if ! mount --make-rprivate / 2>/dev/null; then
-            echo "fuse_boundary_root_private=failed"
+          if awk '$5 == "/" { for (i = 7; i <= NF && $i != "-"; i++) if ($i ~ /^shared:[0-9]+$/) found = 1 } END { exit !found }' /proc/self/mountinfo; then
+            if ! mount --make-rprivate / 2>/dev/null; then
+              echo "fuse_boundary_root_private=failed"
+              exit 1
+            fi
+          fi
+          if awk '$5 == "/" { for (i = 7; i <= NF && $i != "-"; i++) if ($i ~ /^shared:[0-9]+$/) found = 1 } END { exit !found }' /proc/self/mountinfo; then
+            echo "fuse_boundary_root_mount_private=failed"
             exit 1
           fi
+          echo "fuse_boundary_root_mount_private=success"
           if ! mkdir -p /workspace-shared/view /workspace-storage; then
             echo "fuse_boundary_directories=failed"
             exit 1
