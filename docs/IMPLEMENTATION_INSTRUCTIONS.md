@@ -4,7 +4,24 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
 
-### 最新BUILD_BATCH：`QEB-03-E01.03-OWNER-STEP-REVIEW-CALLER`
+### 最新BUILD_BATCH：`QEB-04-D05.03-EMERGENCY-STOP-AUDIT-GAP-RECOVERY`
+
+開始HEAD／`main`／`origin/main`=`5933eb9e93275581437d4bdbe717436cbf9457aa`。owner指定rev2.3三点、適用AGENTS／作業標準／active指示、D05.03の停止・監査保存要求とGatewayの緊急停止producer／consumerを再読した。Windows localでBLUE-TANUKIのみを編集し、保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。
+
+緊急停止をdeny-onlyのdurable latchへ接続した。実行中controllerのabort後に専用SQLite状態を先にactiveへ保存し、HDS authority auditへ安定control event ID付きで記録する。監査保存が失敗してもlatchはactive／pendingのまま残り、再起動後に監査が利用可能になれば元のevent IDで欠損事実を追記する。永続監査とactivation記録が検証できない間はclearを拒否する。HDSが権威のまま、停止状態は承認・権限を生成しない。WebChat projectionにはaudit recoveryの固定状態だけを加えた。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `emergency_stop_control.test.ts` | PASS、4 tests。実HDS `AuditLog`の永続化失敗をまたぐ再起動・gap補記とclear、監査復旧前の解除拒否、HDS記録からの状態復元を確認。 |
+| `pnpm typecheck`→`pnpm build` | 両方PASS。buildは15 workspace projects。初回型検査で見つかった未宣言zod依存は追加せず、保存形式の局所検証へ修正。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite、実Gateway再起動、実credential／provider、外部作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後に配置。 |
+
+D05.03の緊急停止監査欠損回復consumerをこの範囲で`WIRED`とする。E02.01は未着手のまま、次consumerは親子予算予約を実C呼出しへ接続する経路。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。開始時復旧refはlocal／remote current=`5933eb9e93275581437d4bdbe717436cbf9457aa`、previous=`720f2fa73d4b152c4d97cf033f13b3ceb0f61b5e`。
+
+実装commit=`bde6a98a4c8c367f99200963f4797d46b8b67e99`を`main`へatomic push済み。実装push直後のremote `main`とlocal `codex/backup-main`／`codex/backup-main-prev`、remote `codex/backup-main`／`codex/backup-main-prev`はcurrent=`bde6a98a4c8c367f99200963f4797d46b8b67e99`、previous=`5933eb9e93275581437d4bdbe717436cbf9457aa`。このactive指示のcloseout文書commitは同じBUILD_BATCHの後続pushで保全する。protected Linux `target/`は未追跡のまま保持しcommitへ含めていない。
+
+### 直前完了BUILD_BATCH：`QEB-03-E01.03-OWNER-STEP-REVIEW-CALLER`
 
 開始HEAD／`main`／`origin/main`=`60b525e76dcc615b4a79efa29dbc20f1f243761f`。現行rev2.3三点は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の配布ZIP・各文書SHAで固定。適用AGENTS／作業標準／E01.03の該当節、owner向けwait投影、Operation Plan review、Developer invokeの現行consumerを確認した。Windows localでBLUE-TANUKIだけを編集し、保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。
 
