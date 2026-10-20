@@ -408,6 +408,44 @@ describe("WebChatChannel — construction", () => {
 });
 
 describe("WebChatChannel — Control Center shell", () => {
+  it("sends explicit digest-bound plan step review through the existing Developer invoke path", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanReview(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    const calls: Array<{ path: string; token: string; body: unknown }> = [];
+    const messages: Array<[string, string]> = [];
+    const nodes = { "chat-token": { value: "owner-token" }, "chat-user": { value: "fixture-owner" } };
+    const state: Record<string, string> = {};
+    await new Script(`${helper}\ninvokeOperationPlanReview(planId, revisionDigest, stepId, bindingText)`)
+      .runInNewContext({
+        state,
+        planId: "a".repeat(64),
+        revisionDigest: "b".repeat(64),
+        stepId: "c".repeat(64),
+        bindingText: JSON.stringify({ goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "d".repeat(64) }),
+        byId: (id: keyof typeof nodes) => nodes[id],
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+        postJson: async (path: string, token: string, body: unknown) => {
+          calls.push({ path, token, body });
+          return { request_id: "request-review-1" };
+        },
+        appendChat: (kind: string, content: string) => messages.push([kind, content]),
+      });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: "/operators/developer/invoke", token: "owner-token" });
+    const body = calls[0]!.body as { user: string; content: string };
+    expect(body.user).toBe("fixture-owner");
+    expect(body.content.startsWith("plan:review ")).toBe(true);
+    expect(JSON.parse(body.content.slice("plan:review ".length))).toEqual({
+      plan_id: "a".repeat(64), revision_digest: "b".repeat(64), step_id: "c".repeat(64),
+      goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "d".repeat(64) },
+    });
+    expect(messages).toEqual([["owner", body.content], ["accepted", "request-review-1"]]);
+  });
+
   it("renders only bounded Operation Plan digests, fixed statuses, and residual counts after selected-store restore", () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("function formatRecoveryPostActionPlanResiduals(");
     const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
@@ -492,8 +530,8 @@ describe("WebChatChannel — Control Center shell", () => {
       used_for_authority: false,
       raw_payload_exposed: false,
       recovery_refresh_status: "ready",
-      displayed_count: 2,
-      plan_count: 2,
+      displayed_count: 3,
+      plan_count: 3,
       waits: [
         { wait_id: "9".repeat(64), plan_id: "8".repeat(64), task_identity_digest: "7".repeat(64),
           state: "resumed", deadline_at_ms: nowMs + 60_000, resumed_at_ms: nowMs, wake_reason: "reply",
@@ -536,6 +574,12 @@ describe("WebChatChannel — Control Center shell", () => {
             external_receipt_observation: "not_recorded",
             binding: { command_digest: "8".repeat(64), result_digest: "9".repeat(64), delivery_digest: "a".repeat(64) } }],
         },
+        {
+          plan_id: "e".repeat(64), revision: 1, revision_digest: "f".repeat(64),
+          goal_purpose_binding_status: "not_configured", status: "awaiting_step_review", step_count: 1,
+          steps: [{ step_id: "9".repeat(64), operation: "file.search", status: "not_selected",
+            external_receipt_observation: "not_applicable" }],
+        },
       ],
     };
     const script = [
@@ -546,7 +590,7 @@ describe("WebChatChannel — Control Center shell", () => {
     ].join("\n");
     new Script(script).runInNewContext({ document, observation });
 
-    expect(nodes["operation-plan-state-summary"]?.textContent).toBe("2 / 2 件");
+    expect(nodes["operation-plan-state-summary"]?.textContent).toBe("3 / 3 件");
     expect(nodes["operation-plan-state-summary"]?.className).toBe("badge good");
     const rendered = nodes["operation-plan-state-list"]?.innerHTML ?? "";
     expect(rendered).toContain('<span class="badge good">results_verified</span>');
@@ -571,6 +615,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("期限切れ・照合不能（Jはstep選択と実行を拒否）");
     expect(rendered).toContain("一致候補 2件、訪問 7件、検索完全性=unknown");
     expect(rendered).toContain("shell.exec：adapter成功報告と結果digestのみ（raw出力・終了状態・目的達成は未確認）");
+    expect(rendered.match(/data-operation-plan-review="true"/g)).toHaveLength(1);
+    expect(rendered).toContain('data-plan-id="' + "e".repeat(64) + '" data-revision-digest="' + "f".repeat(64) + '"');
+    expect(rendered).toContain('data-step-id="' + "9".repeat(64) + '"');
+    expect(rendered).toContain("Jが現在のrevision・依存・対象を再確認します。");
     expect(rendered).not.toContain("SYNTHETIC PRIVATE SOURCE PATH MUST NOT RENDER");
     expect(rendered).not.toContain("EXPIRED PRIVATE SOURCE PATH MUST NOT RENDER");
     expect(rendered).not.toContain("RAW SHELL OUTPUT MUST NOT RENDER");

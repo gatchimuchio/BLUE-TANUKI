@@ -567,6 +567,32 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "read-only reconciliation accepted");
       }
 
+      async function invokeOperationPlanReview(planId, revisionDigest, stepId, rawGoalPurposeBinding) {
+        state.chatToken = byId("chat-token").value.trim();
+        state.chatUser = byId("chat-user").value.trim() || "owner";
+        if (!state.chatToken) throw new Error("webchat token is required");
+        const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+        if (!isDigest(planId) || !isDigest(revisionDigest) || !isDigest(stepId)) {
+          throw new Error("current plan and step digests are unavailable");
+        }
+        const control = { plan_id: planId, revision_digest: revisionDigest, step_id: stepId };
+        if (rawGoalPurposeBinding) {
+          let binding;
+          try { binding = JSON.parse(rawGoalPurposeBinding); } catch (_) { throw new Error("goal-purpose binding is invalid"); }
+          if (!isObject(binding) || typeof binding.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(binding.goal_ref) ||
+              !Number.isSafeInteger(binding.purpose_version) || binding.purpose_version < 1 || !isDigest(binding.purpose_digest)) {
+            throw new Error("goal-purpose binding is invalid");
+          }
+          control.goal_purpose_binding = { goal_ref: binding.goal_ref, purpose_version: binding.purpose_version,
+            purpose_digest: binding.purpose_digest };
+        }
+        const content = "plan:review " + JSON.stringify(control);
+        const result = await postJson("/operators/developer/invoke", state.chatToken,
+          { user: state.chatUser, content });
+        appendChat("owner", content);
+        appendChat("accepted", result.request_id || "J step review request accepted");
+      }
+
       function syncInputs() {
         byId("runtime-token").value = state.runtimeToken;
         byId("approval-token").value = state.approvalToken;
@@ -1059,6 +1085,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               escapeHtml(purposeBindingStatus) + '</dd>'
             : plan.goal_purpose_binding_status === "required" ? '<dt>作業目的版</dt><dd>' + escapeHtml(purposeBindingStatus) + '</dd>' : '';
           const purposeRelation = isObject(plan.goal_purpose_relation) ? plan.goal_purpose_relation : null;
+          const purposeReviewBindingStatus = plan.goal_purpose_binding_status ?? (purposeBinding ? "current" : "not_configured");
+          const purposeRelationAllowsStepReview = purposeBinding
+            ? purposeRelation?.status === "owner_reviewed_supports"
+            : !purposeRelation || purposeRelation.status === "not_required";
+          const planReviewReady = !refreshPending && !recoveryHold && reconciliationPlanReady &&
+            plan.status === "awaiting_step_review" && ["not_configured", "current"].includes(purposeReviewBindingStatus) &&
+            purposeRelationAllowsStepReview;
           const purposeRelationStatusLabels = {
             not_required: "作業目的版未選択のためrelation未記録",
             unavailable: "C候補のrelation記録なし（step確認を停止）",
@@ -1131,6 +1164,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   escapeHtml(String(externalReceipt.match_count)) + '</dd>' +
                   (externalReceipt.receipt_digest ? '<dt>receipt digest</dt><dd class="mono">' + escapeHtml(shortDigest(externalReceipt.receipt_digest)) + '</dd>' : '')
                 : '';
+              const stepReviewButton = planReviewReady && step.status === "not_selected" &&
+                typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id)
+                ? '<button type="button" class="secondary" data-operation-plan-review="true" data-plan-id="' +
+                  escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) +
+                  '" data-step-id="' + escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
+                  escapeHtml(purposeBinding ? JSON.stringify({ goal_ref: purposeBinding.goal_ref,
+                    purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest }) : '') +
+                  '">Jでstep審査を開始</button><p class="muted">Jが現在のrevision・依存・対象を再確認します。L1/L2はowner設定により実行へ進む場合があり、L3はApproval待ちです。</p>'
+                : '';
               return '<div class="trace-item"><div class="row"><h4>' + escapeHtml(step.operation || "operation") + '</h4>' +
                 badge(unknown ? "結果不明" : step.status || "unknown", operationPlanStatusTone(step.status)) + '</div>' +
                 '<dl class="kv"><dt>step digest</dt><dd class="mono">' + escapeHtml(shortDigest(step.step_id)) + '</dd>' +
@@ -1142,6 +1184,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 (unknown && reconciliationStepReady ? '<button type="button" class="secondary" data-operation-plan-reconcile="true" data-plan-id="' +
                   escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) + '" data-step-id="' +
                   escapeHtml(step.step_id) + '">loopbackで読取照合</button>' : '') +
+                stepReviewButton +
                 '</div>';
             }).join("") +
             '</article>';
@@ -3803,6 +3846,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           target.disabled = true;
           try {
             await invokeReceiptReconciliation(target.dataset.planId || "", target.dataset.revisionDigest || "", target.dataset.stepId || "");
+          } catch (error) {
+            appendChat("error", error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
+        if (target.dataset.operationPlanReview === "true") {
+          target.disabled = true;
+          try {
+            await invokeOperationPlanReview(target.dataset.planId || "", target.dataset.revisionDigest || "",
+              target.dataset.stepId || "", target.dataset.goalPurposeBinding || "");
           } catch (error) {
             appendChat("error", error.message);
           } finally {
