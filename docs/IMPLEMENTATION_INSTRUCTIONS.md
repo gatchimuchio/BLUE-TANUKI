@@ -2,7 +2,26 @@
 
 ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
 
-### 最新BUILD_BATCH：`QEB-03-E01.03-WAIT-C-OUTCOME-OWNER-PROJECTION`
+現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
+
+### 最新BUILD_BATCH：`QEB-03-E01.03-OWNER-STEP-REVIEW-CALLER`
+
+開始HEAD／`main`／`origin/main`=`60b525e76dcc615b4a79efa29dbc20f1f243761f`。現行rev2.3三点は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の配布ZIP・各文書SHAで固定。適用AGENTS／作業標準／E01.03の該当節、owner向けwait投影、Operation Plan review、Developer invokeの現行consumerを確認した。Windows localでBLUE-TANUKIだけを編集し、保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。
+
+Control Centerの条件付き操作から、`awaiting_step_review`かつ`not_selected`のdigest-bound stepを既存`/operators/developer/invoke`へ`plan:review`として送る。plan・revision・step digest、任意の現行goal-purpose bindingを検査し、復旧保留または不整合時はボタンを表示しない。Jは現行revision・依存・対象を再検証し、既存J／Approval Gateへ渡す。L1/L2がowner設定で実行へ進み得ること、L3はApproval待ちであることをUIに表示する。候補本文・goal本文は追加投影せず、実providerや外部作用を使わない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| WebChat `webchat.test.ts`のcaller／owner projection確認 | PASS、対象2件。残り98件は未実行。 |
+| `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `pnpm docs:check`／`git diff --check` | PASS。 |
+| 全suite、実Gateway再起動、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後へ配置。 |
+
+Control Centerのowner step review callerをこの範囲で`WIRED`とする。J採否後の仕事状態・実行結果・M帰還・owner応答全体、E01.03全体、および製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。次consumerはJ review後の結果・未実行step・owner応答を永続仕事状態と結び、M／再開経路へ戻す実caller。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。
+
+実装commit=`64759b14e9b64227690010dae3d39680be463272`を`main`へatomic push済み。実装後のlocal復旧branch／remote backup tagはcurrent=`64759b14e9b64227690010dae3d39680be463272`、previous=`60b525e76dcc615b4a79efa29dbc20f1f243761f`。正本ピンとcloseout文書commitをpush後にremote main・二世代ref・worktreeを再照合する。保護対象Linux `target/`はcommitへ含めない。
+
+### 直前完了BUILD_BATCH：`QEB-03-E01.03-WAIT-C-OUTCOME-OWNER-PROJECTION`
 
 開始`HEAD`／`main`／`origin/main`=`394a34780e310ae4c4b1421c2374426fbadb3f42`。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E420AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、E01.03の次consumerとwait／C feedbackの現行callsiteを再読。Windows localでBLUE-TANUKIのみを変更し、保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。
 
