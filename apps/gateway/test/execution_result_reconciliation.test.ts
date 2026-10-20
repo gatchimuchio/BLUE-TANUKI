@@ -2,10 +2,10 @@ import { describe, it, expect, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, LLMComputeAdapter, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
+import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool, LLMComputeAdapter, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -132,7 +132,7 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   const hds = createHds();
   const origin = request("plan:compute 合成の実行結果を後続へ安全に返す");
   const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry();
-  tools.register(fileSearchTool); tools.register(fileWriteTool); tools.register(fileDeleteTool); tools.register(fileEditTool);
+  tools.register(fileSearchTool); tools.register(fileWriteTool); tools.register(fileDeleteTool); tools.register(fileEditTool); tools.register(shellExecTool);
   const authority = createExecutorApprovalAuthority({ execution_store: execution, execution_epoch: executionEpoch,
     require_hds_execution_binding: true });
   const actualWorker = createFileSearchWorker({ execution_epoch: executionEpoch,
@@ -525,6 +525,88 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       used_as_world_truth: false, used_for_authority: false, may_execute: false }]);
     expect(JSON.stringify(retained?.compute_source_observations)).not.toContain("PRIVATE_SYNTHETIC_SHELL_STDOUT");
   }, fileWriteCandidate));
+
+  it.skipIf(process.platform !== "win32")("承認済みworkspace編集をWindows隔離shellで確かめ、その結果をJ/Mへ返す", async () => fixture(async (c) => {
+    const editBindingDigest = c.hds.getExecutionOperationPlanBindingDigest(c.cmd);
+    const editReview = await c.executor.inspectCommandContentReview(c.cmd, undefined, editBindingDigest);
+    if (!editReview || !("diff" in editReview)) throw new Error("planned workspace edit has no owner-review diff");
+    expect(editReview.diff).toContain("-original\n+edited\n");
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const editFeedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(editFeedback.status).toBe("success");
+    expect(readFileSync(join(c.workspace, "notes.txt"), "utf8")).toBe("synthetic edited text\n");
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
+      .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+
+    vi.stubEnv("BLUE_TANUKI_SHELL_ROOT", c.workspace);
+    const providerPath = resolve(process.cwd(), "packages/blue-tanuki/native/windows-isolation/target/release/blue-tanuki-windows-isolation.exe");
+    vi.spyOn(shellExecTool, "invoke").mockImplementation((args, context) => invokeShellExec(args, {
+      signal: context.signal, targetVersionObservation: context.target_version_observation, nativeProviderPath: providerPath,
+    }));
+    const shellArgs = { cmd: "node", args: ["-e",
+      "const fs = require('node:fs'); if (fs.readFileSync('notes.txt', 'utf8') !== 'synthetic edited text\\n') process.exit(7);"], cwd: "." };
+    const shellRequest = request(`tool:shell.exec ${JSON.stringify(shellArgs)}`);
+    const shellDecision = c.hds.decide(shellRequest);
+    if (shellDecision.command?.type !== "tool_call") {
+      throw new Error(`workspace verification shell command was not issued: ${shellDecision.log.commit.reason}`);
+    }
+    const shellCommand = shellDecision.command;
+    const shellApproval = await c.approve(shellCommand);
+    const shellFeedback = await c.executor.execute(shellApproval, { save_result_delivery: true });
+    expect(shellFeedback.status, shellFeedback.error).toBe("success");
+    expect(shellFeedback.result).toMatchObject({ exit_code: 0, signal: null, timed_out: false,
+      process_tree_empty: true, operation_core: { state: "succeeded", adapter_is_authority: false } });
+
+    const finalized = finalizeCommandOutput({ hds: c.hds, command: shellCommand, feedback: shellFeedback,
+      target_surface: "channel", request_id: shellRequest.id });
+    expect(finalized.output_audit.used_for_authority).toBe(false);
+    const observation = c.j.load()?.shell_exec_result_observations?.[0];
+    expect(observation).toMatchObject({ command_id_digest: operationPlanDigest(shellCommand.id),
+      execution_status: "succeeded", execution_boundary: "tool_adapter", action_outcome: "reported_success",
+      used_for_authority: false, may_execute: false, memory_receipt: expect.objectContaining({ revision: 2 }) });
+    const memory = inspectMemory(c);
+    expect(memory.revision).toBe(2);
+    expect(memory.records.map((record) => record.record_type)).toEqual([
+      "action_result_observation", "shell_exec_result_observation",
+    ]);
+    for (const record of memory.records) {
+      expect(JSON.stringify(record)).not.toContain(c.workspace);
+      expect(JSON.stringify(record)).not.toContain("synthetic edited text");
+    }
+
+    c.hds.closeOperationPlanMemory();
+    c.hds = c.createHds(c.j, true);
+    c.purposeBinding = installTestPurpose(c.hds);
+    const destinationRequestId = randomUUID();
+    const task = "Use the successful workspace check as non-authority context and require fresh evidence before claiming current state.";
+    const computeRequest = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: "fixture-owner",
+      content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: c.purposeBinding,
+        source_observation_refs: [{ command_id_digest: operationPlanDigest(shellCommand.id) }] })}`,
+      timestamp: Date.now(), metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.request_id": destinationRequestId } });
+    const compute = c.hds.decide(computeRequest);
+    if (compute.command?.type !== "llm_call") {
+      throw new Error(`workspace result did not reach explicit C selection: ${compute.log.commit.reason}`);
+    }
+    const serializedInput = JSON.stringify(compute.command.payload.messages);
+    expect(serializedInput).toContain("verified_shell_exec_result");
+    expect(serializedInput).toContain(operationPlanDigest(shellCommand.id));
+    for (const privateValue of [c.workspace, "node", "synthetic edited text"]) {
+      expect(serializedInput).not.toContain(privateValue);
+    }
+    const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
+    c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
+      metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+    const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
+      entry.plan_id === operationPlanDigest(nextCandidate.plan_id));
+    expect(retained?.compute_source_observations).toMatchObject([{ source: "verified_shell_exec_result",
+      effect_observation: "reported_success", adoption_status: "observation_only",
+      used_as_world_truth: false, used_for_authority: false, may_execute: false }]);
+    expect(readFileSync(join(c.workspace, "notes.txt"), "utf8")).toBe("synthetic edited text\n");
+  }, fileEditCandidate, (workspace) => writeFileSync(join(workspace, "notes.txt"), "synthetic original text\n")));
 
   it("明示選択されたfile.write履歴はdigestだけを後続plan:computeへ渡し、候補保持前にも再照合する", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
