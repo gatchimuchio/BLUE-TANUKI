@@ -2072,20 +2072,31 @@ describe("HDS process/memory authority hardening", () => {
       id: "r-internal-owner",
       channel: "webchat",
       user: "u1",
-      content: "approve pending",
+      content: "Owner submitted a delegated goal purpose change for L3 review.",
       timestamp: Date.now(),
       metadata: {
         "blue_tanuki.authority_context": "gateway_internal_v1",
         "blue_tanuki.actor_kind": "owner",
         "blue_tanuki.trust_level": "owner",
         "blue_tanuki.process_kind": "approval",
+        "blue_tanuki.goal_purpose_change.version": "v1",
+        "blue_tanuki.tool_call": {
+          tool_name: "goal.governance.change",
+          arguments: {
+            goal_ref: `goal_${"1".repeat(16)}`,
+            prior_version: 1,
+            prior_purpose_digest: "a".repeat(64),
+            new_purpose_digest: "b".repeat(64),
+          },
+        },
       },
     }));
 
     expect(log.frame.actor.actor_kind).toBe("owner");
     expect(log.frame.process.process_id).toBe("approval.process");
     expect(log.commit.decision).toBe("ASSERT");
-    expect(command?.type).toBe("llm_call");
+    expect(command?.type).toBe("tool_call");
+    if (command?.type === "tool_call") expect(command.payload.tool_name).toBe("goal.governance.change");
   });
 
   it("enforces process execution policy before emitting commands", () => {

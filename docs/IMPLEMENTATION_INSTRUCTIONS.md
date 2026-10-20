@@ -15,7 +15,7 @@ Cの意味更新proposalをV3へ拡張し、候補本文（最大16 KiB）とUTF
 | HDS `memory_citation_review.test.ts` | PASS、16/16。V3 targetのcurrent M照合と意味未評価・非採用を確認。 |
 | Gateway `serve_boundary.test.ts`／Core `executor_dispatch.test.ts` | PASS、9/9／14/14。metadata projection保存とExecutor→HDS伝送後の表示抑制を確認。 |
 | `pnpm typecheck`／`pnpm build`／`git diff --check` | PASS。buildは15 workspace projectsとWindows native helperを含む。 |
-| HDS関連3-file run | 101 passed、1 failed。単独再実行でもgateway-internal authority contextの`ASSERT`期待が`FAIL`となる。今回変更したfeedback/proposal経路からの影響は差分上見当たらず、原因と開始HEADでの再現性は未確定。authority policyを本batchで変更しない。 |
+| HDS関連3-file run | 初回は101 passed、1 failed。失敗fixtureが`approval.process`で許可されないLLM callを期待していたことを現行policyから特定。fail-closed動作は維持し、fixtureをallowlistedな`goal.governance.change` tool callへ修正。該当testの単独再実行はPASS、1/1。3-file run全体は再実行していない。 |
 | 全workspace tests／QE_QC／QE_QA／5OS実機／Actions／実provider・credential／外部業務作用 | 未実施。 |
 
 全体実装が`BUILD_COVERED`になる前のQC／QAには進まない。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
