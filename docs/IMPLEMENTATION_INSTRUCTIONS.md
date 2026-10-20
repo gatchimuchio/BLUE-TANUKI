@@ -1,6 +1,24 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-D02.02-C04-TASK-IDENTITY-M-TO-C-PROJECTION`
+### 最新BUILD_BATCH：`QEB-01-C04-CURRENT-M-DEPENDENCY-RECHECK`
+
+開始`main`／`origin/main`=`37b684c85f628c9f1988491414bf088c936f5464`。最新版の施工正本、適用`AGENTS.md`／作業標準／active指示と、C04の記憶引用・意味更新proposalの現行producer／consumerを読み直した。既存の未追跡`packages/blue-tanuki/native/linux-isolation/target/`は保持する。
+
+JがCへ渡した引用参照について、C応答の採否時に現在のM台帳を再読し、hash-chainを検証して要求されたrequest IDの版だけを返すconsumerを追加した。通常の追記は既存entry hashを変えないため無関係なM追加で引用を一律失効させない。採用しようとする引用元の現在版が変わった場合、または現台帳を検証できない場合は引用を受け入れない。同じcurrent-version snapshotをmeaning-update proposalのJ参照レビューにも渡し、変化した証拠を未検証として記録する。Mのraw内容・新recordは出力せず、意味採用、権限化、自動M適用はしない。
+
+このbatchではmemory citationとmeaning-update evidenceの現在版照合consumerを`WIRED`。C04全体、意味関係の独立評価、owner L3後のM更新・復旧経路、目的から結果・M・再計画へ至る一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立で`BUILD_GAP`を維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `memory_citation_review.test.ts` | PASS、15/15。無関係な永続追記後の参照維持、該当record版変更後のcitation拒否、meaning-update evidenceの再照合を確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projectsとWindows native helperを含む。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。Actionsは不要なWindows local接続確認のため未使用。 |
+
+次consumerは、Cの非権威meaning-update proposalからJ所有のowner L3 review／M transactionへの接続を現物から再評価する。過去承認の再利用や自動適用は行わず、commit前に最新の三点正本・AGENTS・active指示・HEADを読み直す。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+実装commit=`f2bbd1b428d94b2ff148e527679d3340aea0bb62`を`main`へpushし、remote main一致を確認した。実装push後のlocal recovery branch／local・remote backup tagはcurrent=`f2bbd1b428d94b2ff148e527679d3340aea0bb62`、previous=`37b684c85f628c9f1988491414bf088c936f5464`。このcloseoutをdocs-only commitとしてpushし、main・remote HEAD・local recovery branch二世代・remote backup tag二世代・保持対象だけのuntracked stateを最終照合する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.02-C04-TASK-IDENTITY-M-TO-C-PROJECTION`
 
 開始`main`／`origin/main`=`d1a7f96b2c7f4c3ad3a572e2fcc49772e1ce71ea`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／本指示、C04.01–03、J Operation Plan→M verified result observation→C projection／reflection経路を再読した。開始時の同一作業差分は引き継ぎ、既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。
 

@@ -2,6 +2,8 @@
 
 2026-10-20。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-20の`QEB-01-C04-CURRENT-M-DEPENDENCY-RECHECK`では、Cの回答引用とmeaning-update proposalをJが扱う時点で、Mの現在hash-chainを読み直し、使われたrecord IDごとの版を照合するconsumerを追加した。無関係な追記は選択済み参照を失効させず、変更された依存版や検証できない台帳は引用・証拠採否から除く。focused test 15/15、workspace typecheck／15-project buildはPASS。意味評価・M更新の承認済み適用・C04全体は未成立で`BUILD_GAP`。QE_QC／QE_QA／5OS実機や実providerの証拠ではない。
+
 2026-10-20の`QEB-01-D02.02-C04-TASK-IDENTITY-M-TO-C-PROJECTION`では、Jが同一Operation Plan taskから導出する非権威digestを、J/M照合済みfile.write／期限内file.searchのC向けprojectionとresult-reflection projectionへ渡した。限定Gateway接続3件、workspace typecheck、15-project buildはPASS。raw記録・権限・M永続形式は変更していない。C04.01–03全体、意味上の採否を含む一仕事、結果→M→帰還、`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立で`BUILD_GAP`。全体QC・QA・5OS実機・実provider・外部業務作用の証拠ではない。
 
 2026-10-20の`QEB-01-F01.02-D07.02-LINUX-HARDLINK-ROOT-GUARD`では、Linux `shell.exec`の隔離root内にある複数link通常fileをprovider起動前に拒否する。root外の同一inodeを指す合成hard linkに対し、外側file不変・command未起動をLinux hosted runnerで確認した。Actions run [`39305590245`](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39305590245) は正確な対象SHA `64ce42838b9180a39fb54be2ac99f07995bc6b96`でbuildとfocused test 1件が成功し、artifactなし。workflowと一時branchは撤去済み。これは当該pathの境界確認に限る。aggregate disk quota欠落が残り、D07.02／F01.02=`BUILD_GAP`。Linux installed product／実機QA／release readinessを示さない。
