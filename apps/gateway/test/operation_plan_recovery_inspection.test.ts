@@ -663,21 +663,78 @@ describe("J OperationPlan recovery inspection", () => {
     expect(await readFile(planPath)).toEqual(planBefore);
     expect(await readFile(cronPath)).toEqual(cronBefore);
   });
+
+  it("joins Cron-origin Operation Plans to the current event cursor by request digest without implying task success", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-cron-event-"));
+    const event = createCronEventIdentity("synthetic-cron-plan-source", 17, sha256("synthetic-cron-plan-payload"));
+    const { stateRoot, privateRoot } = await createPlanState(temporaryRoot, 1, { channel: "cron", requestId: event.event_id });
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const cronPath = path.join(cronDirectory, "cron-events.sqlite");
+    const cron = new GatewayCronEventStore(cronPath);
+    expect(cron.claim(event, 10).status).toBe("accepted");
+    cron.settle(event, "outcome_unknown", 11);
+    cron.close();
+
+    const planPath = path.join(privateRoot, "operation-plans", "j-state.sqlite");
+    const planBefore = await readFile(planPath);
+    const cronBefore = await readFile(cronPath);
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
+    const correlation = report.operation_plan_correlations[0]!;
+    expect(correlation.cron_event_correlation).toBe("matched");
+    expect(correlation.cron_event_delivery_state).toBe("outcome_unknown");
+    expect(correlation.status).toBe("intent_committed");
+    expect(report.plan_dependency_scopes[0]?.unobserved_dependencies).toContain("delivery");
+    expect(report.used_for_authority).toBe(false);
+    expect(report.may_execute).toBe(false);
+    const projection = projectGatewayRecoveryInspectionForOperator(report);
+    expect(projection.operation_plan_correlations[0]).toMatchObject({
+      cron_event_correlation: "matched",
+      cron_event_delivery_state: "outcome_unknown",
+    });
+    for (const serialized of [JSON.stringify(report), JSON.stringify(projection)]) {
+      expect(serialized).not.toContain(event.event_id);
+      expect(serialized).not.toContain(event.source);
+    }
+    expect(await readFile(planPath)).toEqual(planBefore);
+    expect(await readFile(cronPath)).toEqual(cronBefore);
+  });
+
+  it("reports absent historical Cron event identity as outside the current cursor, not as no event", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-cron-cursor-"));
+    const { stateRoot, privateRoot } = await createPlanState(temporaryRoot, 1, {
+      channel: "cron", requestId: "old-cron-event-no-longer-current",
+    });
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const cron = new GatewayCronEventStore(path.join(cronDirectory, "cron-events.sqlite"));
+    cron.close();
+
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
+    expect(report.operation_plan_correlations[0]?.cron_event_correlation).toBe("not_in_current_cursor");
+    expect(report.operation_plan_correlations[0]?.cron_event_delivery_state).toBeNull();
+    expect(report.plan_dependency_scopes[0]?.status).toBe("unobserved");
+    expect(report.plan_dependency_scopes[0]?.unobserved_dependencies).toContain("cron_event");
+  });
 });
 
-async function createPlanState(temporaryRoot: string, bindingCount: number) {
+async function createPlanState(
+  temporaryRoot: string,
+  bindingCount: number,
+  options: { readonly channel?: string; readonly requestId?: string } = {},
+) {
   const stateRoot = path.join(temporaryRoot, "state");
   const privateRoot = path.join(stateRoot, "private-state");
   const plansDirectory = path.join(privateRoot, "operation-plans");
   await mkdir(plansDirectory, { recursive: true });
-  const plan = planFixture(bindingCount);
+  const plan = planFixture(bindingCount, options.requestId);
   const revisionDigest = operationPlanDigest(plan);
   const admissions = plan.steps.map((step, index) => admissionFor(`private-command-${index + 1}`));
   const checkpoint = OperationPlanCheckpointSchema.parse({
     schema_version: "operation-plan-state.v1",
     plans: [{
       owner: "private-owner",
-      channel: "webchat",
+      channel: options.channel ?? "webchat",
       goal: "private-goal",
       revisions: [{ digest: revisionDigest, plan }],
       receipt_observations: [],
@@ -704,7 +761,7 @@ async function createPlanState(temporaryRoot: string, bindingCount: number) {
   return { stateRoot, privateRoot, checkpoint, admissions };
 }
 
-function planFixture(bindingCount: number): OperationPlan {
+function planFixture(bindingCount: number, requestId = "operation-request:private-request-id"): OperationPlan {
   const steps = Array.from({ length: bindingCount }, (_, index) => ({
     step_id: `private-step-${index + 1}`,
     operation: "file.search",
@@ -738,7 +795,7 @@ function planFixture(bindingCount: number): OperationPlan {
   return {
     version: "operation-core.v1",
     plan_id: "private-plan-id",
-    request_id: "operation-request:private-request-id",
+    request_id: requestId,
     state: "planned",
     steps,
     rollback: { available: false },

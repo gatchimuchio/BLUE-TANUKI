@@ -1384,6 +1384,9 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("operation_plan_correlations");
       expect(html).toContain("memory_update_id_digest");
       expect(html).toContain("memory_correlation");
+      expect(html).toContain("cron_event_correlation");
+      expect(html).toContain("cron_event_delivery_state");
+      expect(html).toContain("過去イベントの不存在や仕事の成功を示しません");
       expect(html).toContain("update_residuals");
       expect(html).toContain("仕事ごとの参照はdigestと固定状態だけ");
       expect(html).toContain("仕事単位の復旧点は確立しません");
@@ -1700,7 +1703,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 9,
+            schema_version: 10,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -1767,6 +1770,8 @@ describe("WebChatChannel — Recovery surface", () => {
               memory_update_id_digest: "f".repeat(64),
               memory_correlation: "m_state_unverified",
               cron_approval_correlation: "cron_unverified",
+              cron_event_correlation: "cron_unverified",
+              cron_event_delivery_state: null,
             }],
             omitted_operation_plan_correlation_count: 0,
             plan_dependency_scopes: [{
@@ -1942,6 +1947,8 @@ describe("WebChatChannel — Recovery surface", () => {
           memory_update_id_digest: "f".repeat(64),
           memory_correlation: "m_state_unverified",
           cron_approval_correlation: "cron_unverified",
+          cron_event_correlation: "cron_unverified",
+          cron_event_delivery_state: null,
         }],
         external_backup_restore_point: "not_examined",
         used_for_authority: false,

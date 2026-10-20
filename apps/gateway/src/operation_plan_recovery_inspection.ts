@@ -51,6 +51,9 @@ export interface OperationPlanRecoveryInspection {
     readonly command_id_digest: string;
     /** SHA-256 of the raw command ID, matching the digest stored by Cron approval handoffs. */
     readonly cron_command_id_digest: string;
+    /** SHA-256 of the originating request ID; only current-cursor Cron correlation consumes it. */
+    readonly request_id_digest: string | null;
+    readonly cron_origin: boolean;
     readonly revision_digest: string;
     readonly step_digest: string;
     readonly status: OperationPlanBindingStatus;
@@ -272,6 +275,10 @@ function inspectCheckpointBindings(checkpoint: OperationPlanCheckpoint): {
         step_id_digest: operationPlanDigest(binding.step_id),
         command_id_digest: operationPlanDigest(binding.command_id),
         cron_command_id_digest: createHash("sha256").update(binding.command_id).digest("hex"),
+        request_id_digest: !planRevisionMismatch && planState.channel === "cron"
+          ? createHash("sha256").update(requestId).digest("hex")
+          : null,
+        cron_origin: !planRevisionMismatch && planState.channel === "cron",
         revision_digest: binding.revision_digest,
         step_digest: binding.step_digest,
         status: binding.status,

@@ -2054,7 +2054,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           snapshot_unverified: "snapshot未検証", unavailable: "J計画検査不能", no_plan_scopes: "計画scopeなし",
           correlated: "観測範囲内で残差なし", residuals_present: "残差あり", unobserved: "未観測あり" };
         const dependencyLabels = { operation_plan: "J計画", broker: "Broker", delivery: "結果配送",
-          memory: "J/M記憶", cron_approval: "Cron承認" };
+          memory: "J/M記憶", cron_approval: "Cron承認", cron_event: "Cron仕事配送状態" };
         const rows = inventory.plan_scopes.map(function (item) {
           const residual = item.residual_dependencies.map(function (category) { return dependencyLabels[category]; });
           const unobserved = item.unobserved_dependencies.map(function (category) { return dependencyLabels[category]; });
@@ -2127,7 +2127,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           broker: "Broker",
           delivery: "結果配送",
           memory: "J/M記憶連結",
-          cron_approval: "Cron承認handoff"
+          cron_approval: "Cron承認handoff",
+          cron_event: "Cron仕事配送状態"
         };
         const allowedCategories = Object.keys(categoryLabels);
         const safeOmittedCount = Number.isSafeInteger(omittedCount) && omittedCount >= 0 ? omittedCount : null;
@@ -2201,7 +2202,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           summary = "現行台帳で観測したOperation Plan依存scope（仕事ID・backup復旧点ではありません）\\n" + rows.join("\\n");
         }
         if (safeOmittedCount > 0) summary += "\\n省略scope件数: " + safeOmittedCount;
-        summary += "\\n読み取り専用の診断です。復旧可能性・復元・再開許可を示しません。";
+        summary += "\\n読み取り専用の診断です。復旧可能性・復元・再開許可を示しません。Cron配送状態は現行cursorの観測であり、過去イベントの不存在や仕事の成功を示しません。";
         return summary;
       }
 
@@ -2362,7 +2363,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const documentCheckpointLedgerStatus = recoveryInspectionLedgerStatus(ledgers.document_organization_checkpoints, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
         const cronApprovalCorrelationResidualCount = recoveryInspectionCount(source.cron_approval_correlation_residual_count);
         const executionArchiveEvidence = projectRecoveryExecutionArchiveEvidence(source.execution_archive_evidence);
-        const initialBoundaryOk = source.schema_version === 9 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && executionArchiveEvidence !== null && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
+        const initialBoundaryOk = source.schema_version === 10 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && executionArchiveEvidence !== null && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
         const ledgerStatuses = {
           j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
@@ -2385,7 +2386,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const memoryUpdateIdDigest = value.memory_update_id_digest === null ? null : recoveryInspectionDigest(value.memory_update_id_digest);
               const memoryCorrelation = recoveryInspectionEnum(value.memory_correlation, ["not_recorded", "missing_plan_memory_link", "binding_unverified", "j_state_unverified", "m_state_unverified", "missing_verified_j_link", "missing_verified_m_link", "pending_m_commit", "pending_j_receipt", "blocked_j", "m_present_for_blocked_j", "content_mismatch", "event_identity_mismatch", "revision_mismatch", "receipt_mismatch", "ambiguous", "matched"]);
               const cronApprovalCorrelation = recoveryInspectionEnum(value.cron_approval_correlation, ["not_recorded", "pending", "interrupted", "resolved", "ambiguous", "not_observed_due_to_limit", "cron_unverified", "plan_binding_unverified"]);
-              if (!planIdDigest || !stepIdDigest || !commandIdDigest || (value.admission_digest !== null && !admissionDigest) || (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || bindingStatus === "unknown" || bindingIntegrity === "unknown" || brokerCorrelation === "unknown" || deliveryCorrelation === "unknown" || memoryCorrelation === "unknown" || cronApprovalCorrelation === "unknown") return null;
+              const cronEventCorrelation = recoveryInspectionEnum(value.cron_event_correlation, ["not_applicable", "matched", "not_in_current_cursor", "not_observed_due_to_limit", "ambiguous", "cron_unverified", "plan_binding_unverified"]);
+              const cronEventDeliveryState = value.cron_event_delivery_state === null ? null : recoveryInspectionEnum(value.cron_event_delivery_state, ["dispatching", "handler_returned", "outcome_unknown"]);
+              if (!planIdDigest || !stepIdDigest || !commandIdDigest || (value.admission_digest !== null && !admissionDigest) || (value.memory_update_id_digest !== null && !memoryUpdateIdDigest) || bindingStatus === "unknown" || bindingIntegrity === "unknown" || brokerCorrelation === "unknown" || deliveryCorrelation === "unknown" || memoryCorrelation === "unknown" || cronApprovalCorrelation === "unknown" || cronEventCorrelation === "unknown" || (value.cron_event_delivery_state !== null && cronEventDeliveryState === "unknown") || ((cronEventCorrelation === "matched") !== (cronEventDeliveryState !== null))) return null;
               return {
                 plan_id_digest: planIdDigest,
                 step_id_digest: stepIdDigest,
@@ -2397,7 +2400,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 delivery_correlation: deliveryCorrelation,
                 memory_update_id_digest: memoryUpdateIdDigest,
                 memory_correlation: memoryCorrelation,
-                cron_approval_correlation: cronApprovalCorrelation
+                cron_approval_correlation: cronApprovalCorrelation,
+                cron_event_correlation: cronEventCorrelation,
+                cron_event_delivery_state: cronEventDeliveryState
               };
             }).filter(function (item) { return item !== null; })
           : [];

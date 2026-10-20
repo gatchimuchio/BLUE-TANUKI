@@ -10,6 +10,8 @@ const CRON_INSPECTION_ROW_LIMIT = 10_000;
 
 export type CronEventRecoveryStatus = "verified" | "residuals_present" | "corrupt" | "unavailable" | "schema_mismatch";
 export type CronEventRecoveryReason = "store_unavailable" | "schema_mismatch" | "ledger_corrupt" | "outbox_mismatch";
+export type CronEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown";
+export type CronEventRequestMatchStatus = "matched" | "not_in_current_cursor" | "not_observed_due_to_limit" | "ambiguous" | "unverified";
 
 export interface CronEventRecoveryInspection {
   readonly status: CronEventRecoveryStatus;
@@ -38,9 +40,17 @@ export interface CronApprovalCommandMatch {
   readonly states: readonly CronApprovalHandoffState[];
 }
 
+export interface CronEventRequestMatch {
+  readonly request_id_digest: string;
+  readonly status: CronEventRequestMatchStatus;
+  readonly delivery_state: CronEventDeliveryState | null;
+}
+
 export interface CronEventRecoveryLedgerInspection extends CronEventRecoveryInspection {
   /** Digest-only matches requested by the recovery aggregator; never contains command IDs. */
   readonly approval_command_matches: readonly CronApprovalCommandMatch[];
+  /** Digest-only matches against each source's current cursor; this is not historical event proof. */
+  readonly event_request_matches: readonly CronEventRequestMatch[];
 }
 
 interface CronCursorRow {
@@ -95,6 +105,7 @@ function unavailableInspection(
     residual_count: 1,
     used_for_authority: false,
     approval_command_matches: [],
+    event_request_matches: [],
   };
 }
 
@@ -214,6 +225,7 @@ export function inspectCronEventRecoveryLedger(options: {
   readonly private_state_root: string;
   readonly database_path: string;
   readonly command_id_digests?: readonly string[];
+  readonly request_id_digests?: readonly string[];
 }): CronEventRecoveryLedgerInspection {
   let database: DatabaseType | undefined;
   let databasePath = "";
@@ -268,7 +280,11 @@ export function inspectCronEventRecoveryLedger(options: {
     const wantedCommandDigests = new Set((options.command_id_digests ?? [])
       .filter((value) => typeof value === "string" && DIGEST.test(value))
       .map((value) => value.toLowerCase()));
+    const wantedRequestDigests = new Set((options.request_id_digests ?? [])
+      .filter((value) => typeof value === "string" && DIGEST.test(value))
+      .map((value) => value.toLowerCase()));
     const approvalMatches = new Map<string, { row_count: number; states: Set<CronApprovalHandoffState> }>();
+    const eventMatches = new Map<string, { row_count: number; states: Set<CronEventDeliveryState>; unverified: boolean }>();
 
     let verifiedCursorCount = 0;
     let unverifiedCursorCount = 0;
@@ -276,8 +292,24 @@ export function inspectCronEventRecoveryLedger(options: {
     for (const row of cursorRows) {
       if (!validCursor(row)) {
         unverifiedCursorCount++;
+        if (typeof row.event_id === "string") {
+          const requestDigest = sha256(row.event_id);
+          if (wantedRequestDigests.has(requestDigest)) {
+            const match = eventMatches.get(requestDigest) ?? { row_count: 0, states: new Set<CronEventDeliveryState>(), unverified: false };
+            match.row_count++;
+            match.unverified = true;
+            eventMatches.set(requestDigest, match);
+          }
+        }
       } else {
         verifiedCursorCount++;
+        const requestDigest = sha256(String(row.event_id));
+        if (wantedRequestDigests.has(requestDigest)) {
+          const match = eventMatches.get(requestDigest) ?? { row_count: 0, states: new Set<CronEventDeliveryState>(), unverified: false };
+          match.row_count++;
+          match.states.add(row.delivery_state as CronEventDeliveryState);
+          eventMatches.set(requestDigest, match);
+        }
         if (row.delivery_state !== "handler_returned") unresolvedCursorCount++;
       }
     }
@@ -329,6 +361,20 @@ export function inspectCronEventRecoveryLedger(options: {
         row_count: match.row_count,
         states: [...match.states].sort(),
       })),
+      event_request_matches: [...wantedRequestDigests].sort().map((request_id_digest): CronEventRequestMatch => {
+        const match = eventMatches.get(request_id_digest);
+        if (match) {
+          if (match.row_count !== 1) return { request_id_digest, status: "ambiguous", delivery_state: null };
+          if (match.unverified || match.states.size !== 1) return { request_id_digest, status: "unverified", delivery_state: null };
+          return { request_id_digest, status: "matched", delivery_state: [...match.states][0]! };
+        }
+        return {
+          request_id_digest,
+          status: omittedCursorCount > 0 ? "not_observed_due_to_limit"
+            : unverifiedCursorCount > 0 ? "unverified" : "not_in_current_cursor",
+          delivery_state: null,
+        };
+      }),
     };
   } catch {
     return unavailableInspection("unavailable", "store_unavailable");

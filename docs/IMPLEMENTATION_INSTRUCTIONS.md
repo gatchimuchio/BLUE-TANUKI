@@ -2,7 +2,22 @@
 
 ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
 
-### 最新BUILD_BATCH：`QEB-03-E01.01-INTERRUPTED-CRON-DISPATCH-RECOVERY`
+### 最新BUILD_BATCH：`QEB-03-E01.01-E03.02-CRON-REQUEST-CORRELATION-RECOVERY-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`ccf42a3630e4692af2a96f39b6217f9967f0289a`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E01.01・E03.02要求、Cron event・Operation Plan・Recovery inspectionの現行producer／consumerを再読した。Windows localでBLUE-TANUKIだけを変更し、既存untracked Linux `target/`は保持した。
+
+Cron由来Operation Planの`request_id`とCron event IDがGateway入力経路で同一であることを確認し、raw IDを出さずdigestでRecovery inspectionへ接続した。read-only inspectorは各sourceの現在cursorにある検証済みeventだけから`dispatching`／`handler_returned`／`outcome_unknown`を投影する。現在cursorにないeventは不存在と断定せず未観測とし、`handler_returned`も仕事の成功扱いしない。Operation Plan correlationをRecovery operator schema 10へ、CLI／Control Centerへ接続し、権限・再実行・復旧判定は追加していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `operation_plan_recovery_inspection.test.ts`／`recovery_inspection.test.ts` | PASS、2 files／31 tests。現cursor照合、古いeventの未観測扱い、read-only性、digest限定を確認。 |
+| WebChat `webchat.test.ts` | PASS、99/99。operator projectionのschema境界と仕事成功へ誤読させない案内を確認。 |
+| Gateway／WebChat `typecheck`／`build` | すべてPASS。 |
+| 全suite、実Gateway再起動、QE_QC／QE_QA、credential／provider／外部作用 | 未実施。 |
+
+この読取専用相関consumerを`WIRED`とする。E01.01／E03.02の全体job lifecycleと結果→M→帰還、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。全体実装が未完了のためQC／QAへ進まない。C08.03実provider、D4／ミニドラ別repo変更、外部作用、P13公開・出荷GOは保留。
+
+### 前回BUILD_BATCH：`QEB-03-E01.01-INTERRUPTED-CRON-DISPATCH-RECOVERY`
 
 開始HEAD／`main`／`origin/main`=`04fb4865920fafa6a7070026504bccbe1cb09c0b`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E01.01とCron scheduler・durable event cursor・起動callsiteを再読した。Windows localでBLUE-TANUKIだけを変更し、既存untracked Linux `target/`は保持。
 

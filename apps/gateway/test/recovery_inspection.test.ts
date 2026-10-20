@@ -441,6 +441,8 @@ describe("Gateway recovery operator projection", () => {
       memory_update_id_digest: "f".repeat(64),
       memory_correlation: "missing_plan_memory_link",
       cron_approval_correlation: "plan_binding_unverified",
+      cron_event_correlation: "plan_binding_unverified",
+      cron_event_delivery_state: null,
       command_id: "RAW_COMMAND_SENTINEL",
       ticket_id: "RAW_TICKET_SENTINEL",
     } as const;
@@ -454,7 +456,7 @@ describe("Gateway recovery operator projection", () => {
       omitted_binding_count: 0,
     } as const;
     const report = {
-      schema_version: 8,
+      schema_version: 9,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -509,7 +511,7 @@ describe("Gateway recovery operator projection", () => {
       surface: "recovery_inspection_operator",
       mode: "read_only",
       status: "residuals_present",
-      schema_version: 9,
+      schema_version: 10,
       request_scope_correlation: {
         status: "available",
         entries: [],
@@ -547,6 +549,8 @@ describe("Gateway recovery operator projection", () => {
         memory_update_id_digest: "f".repeat(64),
         memory_correlation: "missing_plan_memory_link",
         cron_approval_correlation: "plan_binding_unverified",
+        cron_event_correlation: "plan_binding_unverified",
+        cron_event_delivery_state: null,
       }],
       omitted_operation_plan_correlation_count: 0,
       plan_dependency_scopes: [{
@@ -560,7 +564,7 @@ describe("Gateway recovery operator projection", () => {
         inspected_binding_count: 1,
         status: "residuals_present",
         residual_dependencies: ["operation_plan", "broker", "memory"],
-        unobserved_dependencies: ["delivery", "cron_approval"],
+        unobserved_dependencies: ["delivery", "cron_approval", "cron_event"],
       }],
       omitted_plan_dependency_scope_count: 0,
       cron_approval_correlation_residual_count: 1,
@@ -686,6 +690,8 @@ describe("Gateway recovery operator projection", () => {
       delivery_correlation: "not_observed",
       memory_correlation: "not_recorded",
       cron_approval_correlation: "not_recorded",
+      cron_event_correlation: "not_applicable",
+      cron_event_delivery_state: null,
     } as const;
     expect(buildRecoveryPlanDependencyScopes([plan], [row])).toMatchObject([{
       status: "unobserved",
@@ -726,6 +732,8 @@ describe("Gateway recovery operator projection", () => {
       memory_update_id_digest: null,
       memory_correlation: "not_recorded",
       cron_approval_correlation: "not_recorded",
+      cron_event_correlation: "not_applicable",
+      cron_event_delivery_state: null,
     };
     const update = { update_id_digest: "e".repeat(64), disposition: "blocked_j" };
     const omittedPlanSummary = {
@@ -739,7 +747,7 @@ describe("Gateway recovery operator projection", () => {
     } as const;
     const inspectedRows = Array.from({ length: 200 }, () => row);
     const capped = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 8,
+      schema_version: 9,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -771,7 +779,7 @@ describe("Gateway recovery operator projection", () => {
     expect(capped.omitted_update_residual_count).toBe(1);
 
     const invalid = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 8,
+      schema_version: 9,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "verified",
@@ -796,7 +804,7 @@ describe("Gateway recovery operator projection", () => {
 
   it("hides inconsistent or unavailable ledger positions instead of presenting an empty recovery boundary", () => {
     const projection = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 8,
+      schema_version: 9,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -826,7 +834,7 @@ describe("Gateway recovery operator projection", () => {
 
   it("invalidates the entire operator boundary when Cron summary counts do not reconcile", () => {
     const projection = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 8,
+      schema_version: 9,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "verified",
@@ -849,7 +857,7 @@ describe("Gateway recovery operator projection", () => {
 
   it("invalidates the operator boundary when the Cron correlation residual count disagrees with its rows", () => {
     const projection = projectGatewayRecoveryInspectionForOperator({
-      schema_version: 8,
+      schema_version: 9,
       surface: "recovery_inspection",
       mode: "read_only",
       status: "residuals_present",
@@ -872,6 +880,8 @@ describe("Gateway recovery operator projection", () => {
         memory_update_id_digest: null,
         memory_correlation: "not_recorded",
         cron_approval_correlation: "ambiguous",
+        cron_event_correlation: "not_applicable",
+        cron_event_delivery_state: null,
       }],
       update_residuals: [],
       used_for_authority: false,
