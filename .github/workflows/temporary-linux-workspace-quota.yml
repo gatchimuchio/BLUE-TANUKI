@@ -628,7 +628,23 @@ jobs:
             exit 1
           fi
           chmod 0700 /tmp/fuse-boundary-storage /tmp/fuse-boundary-storage/isolation-upper /tmp/fuse-boundary-storage/isolation-work
-          if ! awk '$5 == "/tmp" { for (i = 1; i <= NF; i++) if ($i == "-") { if ($(i + 1) == "tmpfs") found = 1; break } } END { exit !found }' /proc/self/mountinfo; then
+          tmp_mount_type="$(python3 - <<'PY'
+          mount_type = 'missing'
+          with open('/proc/self/mountinfo', encoding='ascii') as stream:
+              for line in stream:
+                  fields = line.split()
+                  try:
+                      separator = fields.index('-')
+                  except ValueError:
+                      continue
+                  if fields[4] == '/tmp':
+                      mount_type = 'tmpfs' if fields[separator + 1] == 'tmpfs' else 'other'
+                      break
+          print(mount_type)
+          PY
+          )"
+          echo "fuse_boundary_tmp_mount_type=$tmp_mount_type"
+          if [ "$tmp_mount_type" != tmpfs ]; then
             echo "fuse_boundary_storage_tmpfs=failed"
             exit 1
           fi
