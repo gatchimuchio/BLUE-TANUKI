@@ -8,6 +8,8 @@
 
 この通知経路は`WIRED`、E03.02および製品全体は`BUILD_GAP`。旧worker遅延結果の世代照合と証拠保存、M pending復旧、実再起動、全体QC／QAは未成立。次consumerは現行outbox／generation callsiteにある旧worker結果の隔離・記録経路を選ぶ。D4別repo変更、C08.03実provider試験、外部作用、P13公開・出荷GOは保留する。
 
+実装commit=`14ca7f838ea8af3c5c92bd25cc064e2001241661`を`main`へpush済み。local recovery branch／remote backup tagはcurrent=`14ca7f838ea8af3c5c92bd25cc064e2001241661`、previous=`3d2e7dd20566dce6f77d7529b1c28d28d3e5b1f3`。文書閉鎖push後にHEAD・二世代・作業ツリーを再照合する。
+
 ### 最新BUILD_BATCH：`QEB-01-D03.01-BLUE-RUNTIME-INTENT-INGRESS`
 
 開始HEAD／`main`／`origin/main`=`b3a57f589dfb034dbb3ec2136e9cf61b0607c5d4`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、D03.01とD4 Runtime対話契約、BLUE WebChat→Gateway→HDS入口を再読した。開始時から残る同単位のtracked差分は保持して統合し、untracked Linux `target/`には触れていない。Windows localで施工した。
