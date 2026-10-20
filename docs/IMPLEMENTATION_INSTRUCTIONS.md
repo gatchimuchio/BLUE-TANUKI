@@ -17,6 +17,8 @@ Cron由来Operation Planの`request_id`とCron event IDがGateway入力経路で
 
 この読取専用相関consumerを`WIRED`とする。E01.01／E03.02の全体job lifecycleと結果→M→帰還、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。全体実装が未完了のためQC／QAへ進まない。C08.03実provider、D4／ミニドラ別repo変更、外部作用、P13公開・出荷GOは保留。
 
+実装commit=`1afc0e3aef523d80c34cf98cd759c3f39437cf25`を`main`へpushし、直後のremote main一致を確認した。local復旧branchとremote backup tagはcurrent=`1afc0e3aef523d80c34cf98cd759c3f39437cf25`、previous=`ccf42a3630e4692af2a96f39b6217f9967f0289a`。作業ツリーには保護対象のuntracked Linux `target/`だけを残し、commitへ含めていない。
+
 ### 前回BUILD_BATCH：`QEB-03-E01.01-INTERRUPTED-CRON-DISPATCH-RECOVERY`
 
 開始HEAD／`main`／`origin/main`=`04fb4865920fafa6a7070026504bccbe1cb09c0b`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E01.01とCron scheduler・durable event cursor・起動callsiteを再読した。Windows localでBLUE-TANUKIだけを変更し、既存untracked Linux `target/`は保持。
