@@ -312,6 +312,11 @@ function invokeNativeProvider(
       cleanup();
       if (code !== 0) {
         const diagnostic = Buffer.concat(stderr).toString("utf8").trim();
+        const workspaceLockFailure = linuxWorkspaceLockFailure(platform, diagnostic);
+        if (workspaceLockFailure) {
+          reject(new Error(workspaceLockFailure));
+          return;
+        }
         const safeDiagnostic = /^[a-zA-Z0-9_:.-]{1,256}$/.test(diagnostic) ? ` (${diagnostic})` : "";
         reject(new Error(`shell.exec ${isolationPlatformLabel(platform)} isolation failed before a verified result was produced${safeDiagnostic}`));
         return;
@@ -334,6 +339,17 @@ function invokeNativeProvider(
     watchdog = setTimeout(cancel, request.timeoutMs + PROCESS_TREE_SHUTDOWN_GRACE_MS);
     if (signal?.aborted) onAbort();
   });
+}
+
+function linuxWorkspaceLockFailure(platform: NodeJS.Platform, diagnostic: string): string | undefined {
+  if (platform !== "linux") return undefined;
+  if (diagnostic === "linux_sandbox_start_or_shutdown_failed:workspace_lock_busy") {
+    return "shell.exec Linux workspace is in use by another isolated operation; this command was not started. Retry after that operation finishes.";
+  }
+  if (diagnostic === "linux_sandbox_start_or_shutdown_failed:workspace_lock_unavailable") {
+    return "shell.exec could not establish exclusive access to the Linux workspace; this command was not started. Check workspace access and filesystem lock support, then retry.";
+  }
+  return undefined;
 }
 
 function validateNativeResult(value: unknown): NativeShellResult {
