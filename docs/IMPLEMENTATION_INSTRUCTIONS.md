@@ -17,7 +17,7 @@ Operation Planの`file.edit`候補から、Approval Gate／WebChat owner確認�
 | `git diff --check` | PASS。 |
 | 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部作用 | 未実施。BUILD_COVERED後へ配置。 |
 
-ActionsはWindows localでconsumer疎通とbuildが成立するため未使用。実装commit、push、remote HEAD、二世代backup refsのcloseout照合は未完了。次consumerはF01.01の隔離destination適用・再読・復旧へ進める。Git closeout後に実commit／remote SHAを追記する。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読する。
+ActionsはWindows localでconsumer疎通とbuildが成立するため未使用。実装commit=`34b1d071808a222fd76b7eee8bb9ad348256d87d`を`main`へpushし、push後remote main=`34b1d071808a222fd76b7eee8bb9ad348256d87d`と照合した。local／remote backup tagはcurrent=`fd09258e08793eea9efb7a363be15d4774844446`、previous=`2ca5413d45ef4479c63092231248d9a5263ed8d9`で、開始時の二世代を保持した。作業ツリーには保護対象のuntracked Linux `target/`だけを残し、commitへ含めていない。このcloseout記録を含む文書commitもmainへpushする。次consumerはF01.01の隔離destination適用・再読・復旧。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読する。
 
 ### 前回BUILD_BATCH：`QEB-01-F01.01-PLAN-BOUND-FILE-EDIT-RESULT-CONSUMER`
 
