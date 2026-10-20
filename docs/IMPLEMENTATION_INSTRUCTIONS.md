@@ -1,6 +1,26 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-D02.02-HOST-AUDIENCE-BINDING`
+### 最新BUILD_BATCH：`QEB-01-F01.01-PLAN-BOUND-FILE-EDIT-RESULT-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`a4d1906b5fc5be604a87881e9e9ce92ce7ee4c25`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／本指示、F01.01とファイル編集の現行producer・consumerを読み直した。Windows localで施工し、既存untracked Linux `target/`を保持した。
+
+既存`file.edit`は現在のOperation Plan target versionへ結合されず、J/M/Cの結果経路にも含まれていなかった。相対path、編集payload、変更前後の内容digest、file/root/parent identity、command digest、plan bindingを含む非権威Broker観測を追加し、HDSとExecutorでcommand／plan sourceを照合する。実行直前に対象版と内容を再取得し、承認された観測から変化していれば拒否する。成功結果はpath・本文を含まない形でJ検証後にMへ保存し、後続`plan:compute`が明示選択した場合だけ非権威の`verified_file_edit_result`としてCへ投影する。これにより「Operation Plan→J→Broker/Executor→ファイル編集→J検証→M→明示選択→C」の限定consumerを`WIRED`とする。
+
+F01.01全体、単一の実用仕事、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。原文目的との編集案の束縛、隔離workspaceへの適用、差分検査・再読・復旧は未接続で`BUILD_GAP`。D03.01のRuntime登録・意図入力も別途未接続のまま。C08.03実provider保留、他repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm typecheck` | PASS。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| file.edit組込み／J-M-C接続の限定Vitest | PASS、2 files／4 tests。101 testsは対象外skip。 |
+| `pnpm hds:standalone` | PASS。standalone、audit chain、Runtime Invariants、non-authority flagsを確認。 |
+| `pnpm docs:check` | PASS。docs、日本語基底監査、licensing。日本語移行負債76件は既存継続項目。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部作用 | 未実施。BUILD_COVERED後へ配置。 |
+
+実装commit=`2ca5413d45ef4479c63092231248d9a5263ed8d9`。closeoutで当該commitを含む`main`をpushし、remote HEADと二世代backup tagを照合する。closeout後の復旧世代はcurrent=`closeout後のmain HEAD`／previous=`2ca5413d45ef4479c63092231248d9a5263ed8d9`へ揃える。GitHub Actions、D4 Pocket／ミニドラ別repo編集、実credential、実owner承認、外部業務作用はなし。次のBLUE側consumerはF01.01のpurpose-bound編集案から隔離workspace差分確認・再読・復旧への接続。各単位開始時に三点正本、適用AGENTS、active指示、HEAD／差分を再読する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.02-HOST-AUDIENCE-BINDING`
 
 開始HEAD／`origin/main`=`90940906066c563056832194c0f1cdc08671c534`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準、active指示、D02.02とGateway owner lease→file-search childの現行consumerを再読した。Windows localで施工し、保護対象のuntracked Linux `target/`を保持した。
 
