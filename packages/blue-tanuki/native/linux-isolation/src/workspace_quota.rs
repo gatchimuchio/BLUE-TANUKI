@@ -14,6 +14,26 @@ const STORAGE_PATH: &str = "/workspace-storage";
 const LOWER_PATH: &str = "/workspace-lower";
 const WORKSPACE_PATH: &str = "/workspace";
 
+pub fn lock_workspace_root(root: &Path) -> Result<File, String> {
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(root)
+        .map_err(|_| "workspace_lock_unavailable".to_string())?;
+    if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(directory);
+    }
+    Err(workspace_lock_error_code(io::Error::last_os_error().raw_os_error()).to_string())
+}
+
+fn workspace_lock_error_code(errno: Option<i32>) -> &'static str {
+    if errno == Some(libc::EWOULDBLOCK) || errno == Some(libc::EAGAIN) {
+        "workspace_lock_busy"
+    } else {
+        "workspace_lock_unavailable"
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EntryKind {
     File,
@@ -580,7 +600,26 @@ fn set_file_times(fd: i32, metadata: &Metadata) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{overlay_mount_error_code, storage_mount_error_code, whiteout_probe_error_code};
+    use super::{
+        overlay_mount_error_code, storage_mount_error_code, whiteout_probe_error_code,
+        workspace_lock_error_code,
+    };
+
+    #[test]
+    fn workspace_lock_errno_maps_to_fixed_codes() {
+        assert_eq!(
+            workspace_lock_error_code(Some(libc::EWOULDBLOCK)),
+            "workspace_lock_busy"
+        );
+        assert_eq!(
+            workspace_lock_error_code(Some(libc::EIO)),
+            "workspace_lock_unavailable"
+        );
+        assert_eq!(
+            workspace_lock_error_code(None),
+            "workspace_lock_unavailable"
+        );
+    }
 
     #[test]
     fn storage_mount_errno_maps_to_fixed_codes() {

@@ -506,6 +506,7 @@ fn run_inner(request: InnerRequest) -> Result<InnerResult, String> {
     establish_private_mount_namespace()?;
     verify_mount_namespace_owner()?;
     let commit_root = Path::new("/commit-target");
+    let _workspace_lock = workspace_quota::lock_workspace_root(commit_root)?;
     inspect_root(commit_root)?;
     let baseline = workspace_quota::snapshot_tree(commit_root)?;
     workspace_quota::mount_bounded_overlay()?;
@@ -1464,6 +1465,8 @@ fn stable_error(error: &str) -> String {
         let detail = error.rsplit(':').next().unwrap_or_default();
         const SAFE_DETAILS: &[&str] = &[
             "workspace_quota_unavailable",
+            "workspace_lock_busy",
+            "workspace_lock_unavailable",
             "workspace_storage_mount_failed",
             "workspace_storage_mount_operation_denied",
             "workspace_storage_mount_access_denied",
@@ -1651,6 +1654,8 @@ mod tests {
             "linux_sandbox_start_or_shutdown_failed:workspace_overlay_mount_operation_denied"
         );
         for detail in [
+            "workspace_lock_busy",
+            "workspace_lock_unavailable",
             "workspace_overlay_mount_access_denied_paths_accessible",
             "workspace_overlay_directory_metadata_unavailable",
             "workspace_overlay_directory_type_invalid",
