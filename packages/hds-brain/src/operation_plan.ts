@@ -5,6 +5,8 @@ import {
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
   type OperationPlanComputeSourceObservation, type OperationPlanComputeSourceObservationReference,
+  OperationPlanShellExecResultObservationSchema, type OperationPlanShellExecResultObservation,
+  type OperationCommandExecutionResult,
   type OperationPlanGoalPurposeRelationCandidate, type OperationPlanGoalPurposeRelationOwnerReview,
   type OperationPlanGoalPurposeRelationRecord, type OperationPlanGoalPurposeRelationReviewArguments, type OperationStep,
   type MemoryCommitV2, type MemoryUpdateReceiptV1,
@@ -26,7 +28,9 @@ import {
 import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { assessCandidateGoalCriteria, projectRequestGoalCriteria } from "./candidate_criteria.js";
-import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
+import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit,
+  buildShellExecResultMemoryCommit, shellExecResultMemoryIdentity, shellExecResultMemoryObservation,
+  verifyShellExecResultMemoryCommit } from "./operation_result_memory.js";
 import { buildReceiptMemoryCommit, receiptForReceiptMemoryCommit, receiptMemoryIdentity, receiptMemoryObservation,
   verifyReceiptMemoryCommit } from "./operation_receipt_memory.js";
 import type { ResultObservationCitation, ResultObservationProjection } from "./operation_result_reflection.js";
@@ -449,6 +453,16 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
             operationPlanDigest(v.expected) === operationPlanDigest(result.output))) throw new Error("plan_checkpoint_result_mismatch");
     }
   }
+  const shellResultCommands = new Set<string>();
+  for (const observation of state.shell_exec_result_observations ?? []) {
+    if (shellResultCommands.has(observation.command_id_digest) ||
+        (observation.memory_commit && (!memoryAvailable || !verifyShellExecResultMemoryCommit(observation))) ||
+        (observation.memory_receipt && (!observation.memory_commit ||
+          !receiptForResultCommit(observation.memory_receipt, observation.memory_commit)))) {
+      throw new Error("plan_checkpoint_shell_result_observation_mismatch");
+    }
+    shellResultCommands.add(observation.command_id_digest);
+  }
   return state;
 }
 
@@ -525,7 +539,7 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
 
 /** J所有の計画・版・単回試行。LLM、I/O作用、Approvalの代行は行わない。 */
 export class OperationPlanLedger {
-  private state: OperationPlanCheckpoint = { schema_version: "operation-plan-state.v1", plans: [] };
+  private state: OperationPlanCheckpoint = { schema_version: "operation-plan-state.v1", plans: [], shell_exec_result_observations: [] };
   private savedDigest: string | null = null;
   private readonly issuedBindings = new WeakMap<ExecuteCommand, string>();
   private readonly issuedBindingIds = new Set<string>();
@@ -970,9 +984,11 @@ export class OperationPlanLedger {
       if (!goalPurposeBinding || computeSourceObservations.length > 8) {
         throw new Error("plan_compute_source_observation_binding_invalid");
       }
-      const references = computeSourceObservations.map(({ plan_id_digest, revision_digest, step_id_digest }) => ({
-        plan_id_digest, revision_digest, step_id_digest,
-      }));
+      const references = computeSourceObservations.map((observation) =>
+        observation.source === "verified_shell_exec_result"
+          ? { command_id_digest: observation.command_id_digest }
+          : { plan_id_digest: observation.plan_id_digest, revision_digest: observation.revision_digest,
+            step_id_digest: observation.step_id_digest });
       const current = this.inspectComputeSourceObservations(references, origin);
       if (operationPlanDigest(current) !== operationPlanDigest(computeSourceObservations)) {
         throw new Error("plan_compute_source_observation_stale");
@@ -1397,14 +1413,122 @@ export class OperationPlanLedger {
     }
   }
 
+  /** Retain one exact HDS-issued shell result report as digest-only non-authority memory. */
+  recordShellExecResultObservation(input: {
+    command: ExecuteCommand;
+    owner: string;
+    channel: string;
+    result: OperationCommandExecutionResult;
+    result_digest: string;
+  }): boolean {
+    const { command, result } = input;
+    if (this.recoveryRefreshPending || command.type !== "tool_call" || command.payload.tool_name !== "shell.exec" ||
+        command.upstream_decision.commit_decision !== "ASSERT" || !/^[a-f0-9]{64}$/.test(input.result_digest)) return false;
+    const matched = inspectOperationCommandExecutionResult(result, {
+      request_id: command.upstream_decision.request_id ?? null,
+      command_id: command.id,
+      upstream_commit_hash: command.upstream_decision.commit_hash,
+      status: "success",
+      operation: "shell.exec",
+    });
+    if (!matched || matched.adapter !== "shell" || matched.execution_boundary !== "tool_adapter" ||
+        matched.action_outcome !== "reported_success" || matched.plan_step_binding !== "unbound" ||
+        matched.command_payload_digest !== commandPayloadDigest(command) || matched.output_digest !== input.result_digest ||
+        !Number.isSafeInteger(matched.observed_at_ms) || matched.observed_at_ms > Date.now()) return false;
+    const observation = OperationPlanShellExecResultObservationSchema.parse({
+      schema_version: "operation-plan-shell-exec-result.v1",
+      owner_digest: operationPlanDigest(input.owner),
+      channel_digest: operationPlanDigest(input.channel),
+      request_id_digest: operationPlanDigest(matched.request_id),
+      command_id_digest: operationPlanDigest(matched.command_id),
+      upstream_commit_hash_digest: operationPlanDigest(matched.upstream_commit_hash),
+      command_payload_digest: matched.command_payload_digest,
+      result_id_digest: operationPlanDigest(matched.result_id),
+      result_contract_digest: operationPlanDigest(matched),
+      result_digest: input.result_digest,
+      execution_status: "succeeded",
+      execution_boundary: "tool_adapter",
+      action_outcome: "reported_success",
+      plan_step_binding: "unbound",
+      observed_at_ms: matched.observed_at_ms,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    const existing = (this.state.shell_exec_result_observations ?? []).find((entry) =>
+      entry.command_id_digest === observation.command_id_digest);
+    if (existing) {
+      const { memory_commit: _commit, memory_receipt: _receipt, ...saved } = existing;
+      return operationPlanDigest(saved) === operationPlanDigest(observation);
+    }
+    if ((this.state.shell_exec_result_observations?.length ?? 0) >= 256) {
+      throw new Error("plan_shell_result_observation_capacity_reached");
+    }
+    this.change((state) => {
+      state.shell_exec_result_observations ??= [];
+      state.shell_exec_result_observations.push(observation);
+    });
+    return true;
+  }
+
   /** 保存済みの同内容だけをJ→Mへ配送。作用・意味更新・承認復元は呼ばない。 */
   reconcileMemory(): boolean {
     if (this.recoveryRefreshPending) return false;
     if (this.memoryQuiesced) return false;
-    if (!this.resultMemory) return true;
+    if (!this.resultMemory) return (this.state.shell_exec_result_observations?.length ?? 0) === 0;
     this.memoryReady = false;
     try {
       if (this.port && operationPlanDigest(this.port.load()) !== this.savedDigest && this.savedDigest !== null) return false;
+      for (const original of this.state.shell_exec_result_observations ?? []) {
+        let observation = this.state.shell_exec_result_observations?.find((entry) =>
+          entry.command_id_digest === original.command_id_digest);
+        if (!observation) return false;
+        if (!observation.memory_commit) {
+          const lifecycle = this.resultMemory.snapshot();
+          const stored = this.resultMemory.readMemoryRecord(shellExecResultMemoryIdentity(observation).record_id);
+          if (!lifecycle || lifecycle.status !== "ready" || !stored || stored.exists) return false;
+          const commit = buildShellExecResultMemoryCommit(observation, stored.revision);
+          this.change((state) => {
+            const target = state.shell_exec_result_observations?.find((entry) =>
+              entry.command_id_digest === observation!.command_id_digest);
+            if (!target) throw new Error("plan_shell_result_observation_missing");
+            target.memory_commit = commit;
+          });
+          observation = this.state.shell_exec_result_observations?.find((entry) =>
+            entry.command_id_digest === original.command_id_digest);
+        }
+        if (!observation?.memory_commit || !verifyShellExecResultMemoryCommit(observation)) return false;
+        const commit = observation.memory_commit;
+        const lifecycle = this.resultMemory.snapshot();
+        if (!lifecycle) return false;
+        const existing = lifecycle.pending.find((entry) => entry.update_id === commit.update_id);
+        if (!existing) {
+          const staged = this.resultMemory.stage(commit);
+          if (!staged.ok || staged.status === "blocked") return false;
+        }
+        let reconciled = this.resultMemory.reconcile(commit.update_id);
+        if (!reconciled.ok) return false;
+        if (reconciled.status === "memory_commit_pending") {
+          const applied = this.resultMemory.apply(commit);
+          if (!applied.ok) return false;
+          reconciled = this.resultMemory.reconcile(commit.update_id);
+        }
+        if (!reconciled.ok || reconciled.status !== "ready" || !receiptForResultCommit(reconciled.receipt, commit)) return false;
+        const identity = shellExecResultMemoryIdentity(observation);
+        const expectedValue = commit.changes[0]?.operation === "upsert" ? commit.changes[0].value : null;
+        const stored = this.resultMemory.readMemoryRecord(identity.record_id);
+        if (!stored?.exists || operationPlanDigest(stored.value) !== operationPlanDigest(expectedValue)) return false;
+        if (observation.memory_receipt) {
+          if (operationPlanDigest(observation.memory_receipt) !== operationPlanDigest(reconciled.receipt)) return false;
+        } else {
+          const receipt = reconciled.receipt;
+          this.change((state) => {
+            const target = state.shell_exec_result_observations?.find((entry) =>
+              entry.command_id_digest === observation!.command_id_digest);
+            if (!target) throw new Error("plan_shell_result_observation_missing");
+            target.memory_receipt = receipt;
+          });
+        }
+      }
       for (const p of this.state.plans) {
         if (this.recoveryHolds.has(operationPlanDigest(p.revisions[0]!.plan.plan_id))) continue;
         for (const original of p.bindings) {
@@ -1561,13 +1685,66 @@ export class OperationPlanLedger {
       throw new Error("plan_compute_source_observation_memory_unavailable");
     }
     const referenceKeys = references.map((reference) =>
-      `${reference.plan_id_digest}:${reference.revision_digest}:${reference.step_id_digest}`);
+      "command_id_digest" in reference ? `shell:${reference.command_id_digest}`
+        : `plan:${reference.plan_id_digest}:${reference.revision_digest}:${reference.step_id_digest}`);
     if (new Set(referenceKeys).size !== referenceKeys.length) {
       throw new Error("plan_compute_source_observation_reference_invalid");
     }
     const observations: OperationPlanComputeSourceObservation[] = [];
     const inspectedAtMs = Date.now();
     for (const reference of references) {
+      if ("command_id_digest" in reference) {
+        const matches = (this.state.shell_exec_result_observations ?? []).filter((entry) =>
+          entry.command_id_digest === reference.command_id_digest &&
+          entry.owner_digest === operationPlanDigest(caller.user) && entry.channel_digest === operationPlanDigest(caller.channel));
+        if (matches.length !== 1) throw new Error("plan_compute_shell_result_unavailable");
+        const entry = matches[0]!;
+        if (!entry.memory_commit || !entry.memory_receipt || !verifyShellExecResultMemoryCommit(entry) ||
+            !receiptForResultCommit(entry.memory_receipt, entry.memory_commit)) {
+          throw new Error("plan_compute_shell_result_not_verified");
+        }
+        const reconciled = this.resultMemory.reconcile(entry.memory_commit.update_id);
+        if (!reconciled.ok || reconciled.status !== "ready" ||
+            !receiptForResultCommit(reconciled.receipt, entry.memory_commit) ||
+            operationPlanDigest(reconciled.receipt) !== operationPlanDigest(entry.memory_receipt)) {
+          throw new Error("plan_compute_shell_result_receipt_unavailable");
+        }
+        const identity = shellExecResultMemoryIdentity(entry);
+        const stored = this.resultMemory.readMemoryRecord(identity.record_id);
+        const expectedValue = entry.memory_commit.changes[0]?.operation === "upsert"
+          ? entry.memory_commit.changes[0].value : undefined;
+        if (!stored?.exists || expectedValue === undefined || operationPlanDigest(stored.value) !== operationPlanDigest(expectedValue)) {
+          throw new Error("plan_compute_shell_result_record_mismatch");
+        }
+        observations.push(OperationPlanComputeSourceObservationSchema.parse({
+          schema_version: "operation-plan-compute-source-observation.v1",
+          source: "verified_shell_exec_result",
+          operation: "shell.exec",
+          task_identity_digest: operationPlanDigest({ schema_version: "shell-exec-result-task-identity.v1",
+            owner_digest: entry.owner_digest, channel_digest: entry.channel_digest,
+            request_id_digest: entry.request_id_digest, command_id_digest: entry.command_id_digest }),
+          effect_observation: "reported_success",
+          record_digest: operationPlanDigest(stored.value),
+          memory_revision: entry.memory_receipt.revision,
+          memory_receipt_digest: entry.memory_receipt.receipt_digest,
+          observed_at_ms: entry.observed_at_ms,
+          command_id_digest: entry.command_id_digest,
+          request_id_digest: entry.request_id_digest,
+          upstream_commit_hash_digest: entry.upstream_commit_hash_digest,
+          command_payload_digest: entry.command_payload_digest,
+          result_id_digest: entry.result_id_digest,
+          result_contract_digest: entry.result_contract_digest,
+          result_digest: entry.result_digest,
+          execution_status: entry.execution_status,
+          execution_boundary: entry.execution_boundary,
+          action_outcome: entry.action_outcome,
+          adoption_status: "observation_only",
+          used_as_world_truth: false,
+          used_for_authority: false,
+          may_execute: false,
+        }));
+        continue;
+      }
       const matches = this.state.plans.filter((plan) =>
         operationPlanDigest(plan.revisions[0]!.plan.plan_id) === reference.plan_id_digest);
       if (matches.length !== 1) throw new Error("plan_compute_source_observation_unavailable");
@@ -1793,6 +1970,13 @@ export class OperationPlanLedger {
 
   private readResultMemoryApproval(reference: JMemoryApprovalReference): unknown {
     if (!this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return null;
+    for (const observation of this.state.shell_exec_result_observations ?? []) {
+      const commit = observation.memory_commit;
+      if (commit && commit.update_id === reference.update_id && commit.j_event_id === reference.j_event_id &&
+          commit.content_digest === reference.content_digest && verifyShellExecResultMemoryCommit(observation)) {
+        return Object.freeze({ ...reference });
+      }
+    }
     for (const p of this.state.plans) {
       for (const b of p.bindings) {
         const c = b.memory_commit;

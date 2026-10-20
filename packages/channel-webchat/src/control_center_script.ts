@@ -910,10 +910,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const summaries = value.slice(0, 8).map(function (observation) {
           const commonSafe = isObject(observation) &&
             observation.schema_version === "operation-plan-compute-source-observation.v1" &&
-            /^[a-f0-9]{64}$/.test(observation.plan_id_digest || "") &&
-            /^[a-f0-9]{64}$/.test(observation.revision_digest || "") &&
-            /^[a-f0-9]{64}$/.test(observation.step_id_digest || "") &&
-            observation.plan_binding_status === "verified" && observation.plan_validation_status === "matched" &&
             observation.effect_observation === "reported_success" && /^[a-f0-9]{64}$/.test(observation.record_digest || "") &&
             Number.isSafeInteger(observation.memory_revision) && observation.memory_revision > 0 &&
             /^[a-f0-9]{64}$/.test(observation.memory_receipt_digest || "") &&
@@ -921,6 +917,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             observation.adoption_status === "observation_only" && observation.used_as_world_truth === false &&
             observation.used_for_authority === false && observation.may_execute === false;
           if (!commonSafe) return "照合不能な記録（Jはstep選択と実行を拒否）";
+          if (observation.source === "verified_shell_exec_result" && observation.operation === "shell.exec" &&
+              /^[a-f0-9]{64}$/.test(observation.command_id_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.request_id_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.upstream_commit_hash_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.command_payload_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.result_id_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.result_contract_digest || "") &&
+              /^[a-f0-9]{64}$/.test(observation.result_digest || "") &&
+              observation.execution_status === "succeeded" && observation.execution_boundary === "tool_adapter" &&
+              observation.action_outcome === "reported_success") {
+            return "shell.exec：adapter成功報告と結果digestのみ（raw出力・終了状態・目的達成は未確認）";
+          }
+          const planBindingSafe = /^[a-f0-9]{64}$/.test(observation.plan_id_digest || "") &&
+            /^[a-f0-9]{64}$/.test(observation.revision_digest || "") &&
+            /^[a-f0-9]{64}$/.test(observation.step_id_digest || "") &&
+            observation.plan_binding_status === "verified" && observation.plan_validation_status === "matched";
+          if (!planBindingSafe) return "照合不能な記録（Jはstep選択と実行を拒否）";
           if (observation.source === "verified_file_search_result" && observation.operation === "file.search" &&
               Number.isSafeInteger(observation.expires_at_ms) && observation.expires_at_ms === observation.observed_at_ms + 600000 &&
               Number.isSafeInteger(observation.match_count) && observation.match_count >= 0 &&

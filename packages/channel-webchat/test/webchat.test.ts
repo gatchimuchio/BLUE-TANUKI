@@ -469,6 +469,16 @@ describe("WebChatChannel — Control Center shell", () => {
       search_completeness: "unknown", adoption_status: "observation_only", used_as_world_truth: false,
       used_for_authority: false, may_execute: false, private_path: privatePath, private_query: "hidden query",
     });
+    const shellResultObservation = {
+      schema_version: "operation-plan-compute-source-observation.v1", source: "verified_shell_exec_result",
+      operation: "shell.exec", task_identity_digest: "6".repeat(64), effect_observation: "reported_success",
+      record_digest: "7".repeat(64), memory_revision: 3, memory_receipt_digest: "8".repeat(64), observed_at_ms: nowMs,
+      command_id_digest: "9".repeat(64), request_id_digest: "a".repeat(64), upstream_commit_hash_digest: "b".repeat(64),
+      command_payload_digest: "c".repeat(64), result_id_digest: "d".repeat(64), result_contract_digest: "e".repeat(64),
+      result_digest: "f".repeat(64), execution_status: "succeeded", execution_boundary: "tool_adapter",
+      action_outcome: "reported_success", adoption_status: "observation_only", used_as_world_truth: false,
+      used_for_authority: false, may_execute: false, private_stdout: "RAW SHELL OUTPUT MUST NOT RENDER",
+    };
     const observation = {
       schema_version: "operation-plan.status.v1",
       status: "available",
@@ -486,7 +496,8 @@ describe("WebChatChannel — Control Center shell", () => {
           goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "c".repeat(64) },
           goal_purpose_binding_status: "current",
           status: "results_verified", step_count: 2,
-          compute_source_observations: [sourceObservation(nowMs, nowMs + 600_000, "SYNTHETIC PRIVATE SOURCE PATH MUST NOT RENDER")],
+          compute_source_observations: [sourceObservation(nowMs, nowMs + 600_000, "SYNTHETIC PRIVATE SOURCE PATH MUST NOT RENDER"),
+            shellResultObservation],
           steps: [
             { step_id: "c".repeat(64), operation: "file.search", status: "verified",
               binding: { command_digest: "d".repeat(64), result_digest: "e".repeat(64), delivery_digest: "f".repeat(64) } },
@@ -536,8 +547,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("期限内（観測のみ）");
     expect(rendered).toContain("期限切れ・照合不能（Jはstep選択と実行を拒否）");
     expect(rendered).toContain("一致候補 2件、訪問 7件、検索完全性=unknown");
+    expect(rendered).toContain("shell.exec：adapter成功報告と結果digestのみ（raw出力・終了状態・目的達成は未確認）");
     expect(rendered).not.toContain("SYNTHETIC PRIVATE SOURCE PATH MUST NOT RENDER");
     expect(rendered).not.toContain("EXPIRED PRIVATE SOURCE PATH MUST NOT RENDER");
+    expect(rendered).not.toContain("RAW SHELL OUTPUT MUST NOT RENDER");
     expect(rendered).not.toContain("SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER");
   });
 

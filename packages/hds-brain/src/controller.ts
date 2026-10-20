@@ -753,6 +753,8 @@ export class HDSUpperController {
   }>();
   /** Exact HDS-returned command object -> source log; never serialized. */
   private readonly issuedExecutionCommands = new WeakMap<ExecuteCommand, DecisionLog>();
+  /** Exact HDS-issued command retained only until its feedback is reconciled. */
+  private readonly issuedExecutionCommandsById = new Map<string, { command: ExecuteCommand; owner: string; channel: string }>();
 
   /** Commands awaiting executor feedback (already ASSERTed). */
   private readonly inflight = new Map<string, DecisionLog>();
@@ -1044,6 +1046,8 @@ ${planControl.question}`,
               "plan_compute_source_observation_expired",
               "plan_compute_source_observation_not_verified", "plan_compute_source_observation_result_unavailable",
               "plan_compute_source_observation_receipt_unavailable", "plan_compute_source_observation_record_mismatch",
+              "plan_compute_shell_result_unavailable", "plan_compute_shell_result_not_verified",
+              "plan_compute_shell_result_receipt_unavailable", "plan_compute_shell_result_record_mismatch",
               "plan_compute_source_citation_request_unavailable", "plan_compute_source_citation_actor_mismatch",
               "plan_compute_source_citation_judgment_not_current",
             ].includes(reason) ? reason : "plan_compute_input_invalid";
@@ -1255,6 +1259,7 @@ ${planControl.question}`,
         this.state = "DECIDED";
         this.inflight.set(command.id, log);
         this.issuedExecutionCommands.set(command, log);
+        this.issuedExecutionCommandsById.set(command.id, { command, owner: req.user, channel: req.channel });
         if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
             req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
           this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req),
@@ -1414,6 +1419,7 @@ ${planControl.question}`,
       const command = this.buildCommand(req, resumeLog, undefined, failureReviewProjection);
       this.inflight.set(command.id, resumeLog);
       this.issuedExecutionCommands.set(command, resumeLog);
+      this.issuedExecutionCommandsById.set(command.id, { command, owner: req.user, channel: req.channel });
       if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
         this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req),
@@ -2650,7 +2656,25 @@ ${planControl.question}`,
       this.operationPlans.recordResult(fb);
       this.planEvent("result_observed", fb.command_id);
     }
+    const issuedCommandContext = this.issuedExecutionCommandsById.get(fb.command_id);
+    const issuedCommand = issuedCommandContext?.command;
+    if (sourceLog && issuedCommandContext && issuedCommand && sourceLog.commit.decision === "ASSERT" &&
+        sourceLog.commit.hash === issuedCommand.upstream_decision.commit_hash &&
+        operationResult?.operation === "shell.exec" && fb.status === "success" && fb.result !== undefined) {
+      const resultDigest = createHash("sha256").update(JSON.stringify(fb.result)).digest("hex");
+      if (operationResult.output_digest === resultDigest) {
+        const recorded = this.operationPlans.recordShellExecResultObservation({
+          command: issuedCommand,
+          owner: issuedCommandContext.owner,
+          channel: issuedCommandContext.channel,
+          result: operationResult,
+          result_digest: resultDigest,
+        });
+        if (recorded && this.operationPlans.reconcileMemory()) this.planEvent("shell_result_memory_recorded", fb.command_id);
+      }
+    }
     this.issuedLLM.delete(fb.command_id);
+    this.issuedExecutionCommandsById.delete(fb.command_id);
     this.operationPlans.forgetReflection(fb.command_id);
 
     if (sourceLog) {
@@ -3441,7 +3465,7 @@ ${planControl.question}`,
     const planComputeObservationMessage: LLMCallPayload["messages"][number] | undefined =
       planCompute?.source_observations?.length ? {
         role: "system",
-        content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。file.writeとfile.editは過去の作用報告で、観測後の対象状態を証明しません。file.deleteは当時のJ検証済み削除報告であり、その後の再作成や現在の不存在を証明しません。file.searchは観測時刻と有効期限の付いた検索件数要約で、検索の完全性や観測後の状態を保証しません。いずれも目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、現在の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payloadは意図的に含めていません。期限切れや追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
+        content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。file.writeとfile.editは過去の作用報告で、観測後の対象状態を証明しません。file.deleteは当時のJ検証済み削除報告であり、その後の再作成や現在の不存在を証明しません。file.searchは観測時刻と有効期限の付いた検索件数要約で、検索の完全性や観測後の状態を保証しません。shell.execはHDS発行commandに相関したtool adapterの成功報告と結果digestだけを示し、stdout/stderr、exit code、process終了の独立証明、目的達成を示しません。全観測は目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、現在の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payload、raw process outputは意図的に含めていません。追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
           used_as_world_truth: false, used_for_authority: false, may_execute: false })}`,
       } : undefined;
     const computeContextMessages = [...memoryMessages, ...(planPurposeMessage ? [planPurposeMessage] : []),

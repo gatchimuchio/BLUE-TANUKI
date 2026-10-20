@@ -13,23 +13,26 @@ export const OperationPlanGoalPurposeBindingSchema = z.object({
   purpose_digest: Digest,
 }).strict();
 export type OperationPlanGoalPurposeBinding = z.infer<typeof OperationPlanGoalPurposeBindingSchema>;
-/** Explicit, non-authority reference to one J/M-verified file result. */
-export const OperationPlanComputeSourceObservationReferenceSchema = z.object({
+/** Explicit, non-authority reference to one J/M-verified plan result. */
+const OperationPlanPlanComputeSourceObservationReferenceSchema = z.object({
   plan_id_digest: Digest,
   revision_digest: Digest,
   step_id_digest: Digest,
 }).strict();
+/** Explicit selection of one digest-only shell result report. */
+const OperationPlanShellResultComputeSourceObservationReferenceSchema = z.object({
+  command_id_digest: Digest,
+}).strict();
+export const OperationPlanComputeSourceObservationReferenceSchema = z.union([
+  OperationPlanPlanComputeSourceObservationReferenceSchema,
+  OperationPlanShellResultComputeSourceObservationReferenceSchema,
+]);
 export type OperationPlanComputeSourceObservationReference = z.infer<typeof OperationPlanComputeSourceObservationReferenceSchema>;
 /** Finite projections carry no target, path, query, or file content. */
 const OperationPlanComputeSourceObservationCommon = {
   schema_version: z.literal("operation-plan-compute-source-observation.v1"),
-  plan_id_digest: Digest,
   /** Stable J-owned task correlation; it does not establish semantic fit or authority. */
   task_identity_digest: Digest.optional(),
-  revision_digest: Digest,
-  step_id_digest: Digest,
-  plan_binding_status: z.literal("verified"),
-  plan_validation_status: z.literal("matched"),
   effect_observation: z.literal("reported_success"),
   record_digest: Digest,
   memory_revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
@@ -40,22 +43,61 @@ const OperationPlanComputeSourceObservationCommon = {
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),
 };
+const OperationPlanPlanComputeSourceObservation = {
+  ...OperationPlanComputeSourceObservationCommon,
+  plan_id_digest: Digest,
+  revision_digest: Digest,
+  step_id_digest: Digest,
+  plan_binding_status: z.literal("verified"),
+  plan_validation_status: z.literal("matched"),
+};
 export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion("source", [
-  z.object({ ...OperationPlanComputeSourceObservationCommon,
+  z.object({ ...OperationPlanPlanComputeSourceObservation,
     source: z.literal("verified_file_write_result"), operation: z.literal("file.write") }).strict(),
-  z.object({ ...OperationPlanComputeSourceObservationCommon,
+  z.object({ ...OperationPlanPlanComputeSourceObservation,
     source: z.literal("verified_file_delete_result"), operation: z.literal("file.delete") }).strict(),
-  z.object({ ...OperationPlanComputeSourceObservationCommon,
+  z.object({ ...OperationPlanPlanComputeSourceObservation,
     source: z.literal("verified_file_edit_result"), operation: z.literal("file.edit") }).strict(),
-  z.object({ ...OperationPlanComputeSourceObservationCommon,
+  z.object({ ...OperationPlanPlanComputeSourceObservation,
     source: z.literal("verified_file_search_result"), operation: z.literal("file.search"),
     expires_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     match_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     visited_files: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     search_completeness: z.literal("unknown"),
   }).strict(),
+  z.object({ ...OperationPlanComputeSourceObservationCommon,
+    source: z.literal("verified_shell_exec_result"), operation: z.literal("shell.exec"),
+    command_id_digest: Digest, request_id_digest: Digest, upstream_commit_hash_digest: Digest,
+    command_payload_digest: Digest, result_id_digest: Digest, result_contract_digest: Digest,
+    result_digest: Digest, execution_status: z.literal("succeeded"),
+    execution_boundary: z.literal("tool_adapter"), action_outcome: z.literal("reported_success"),
+  }).strict(),
 ]);
 export type OperationPlanComputeSourceObservation = z.infer<typeof OperationPlanComputeSourceObservationSchema>;
+
+/** J-source-matched, digest-only shell result; no command or process output is retained. */
+export const OperationPlanShellExecResultObservationSchema = z.object({
+  schema_version: z.literal("operation-plan-shell-exec-result.v1"),
+  owner_digest: Digest,
+  channel_digest: Digest,
+  request_id_digest: Digest,
+  command_id_digest: Digest,
+  upstream_commit_hash_digest: Digest,
+  command_payload_digest: Digest,
+  result_id_digest: Digest,
+  result_contract_digest: Digest,
+  result_digest: Digest,
+  execution_status: z.literal("succeeded"),
+  execution_boundary: z.literal("tool_adapter"),
+  action_outcome: z.literal("reported_success"),
+  plan_step_binding: z.literal("unbound"),
+  observed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+  memory_commit: MemoryCommitV2Schema.optional(),
+  memory_receipt: MemoryUpdateReceiptV1Schema.optional(),
+}).strict();
+export type OperationPlanShellExecResultObservation = z.infer<typeof OperationPlanShellExecResultObservationSchema>;
 /** J記録済みの記憶引用が依存した解釈版。依存情報は権限ではない。 */
 export const OperationPlanMemoryInterpretationDependencySchema = z.object({
   reference: z.object({ record_id: Id, version: Digest }).strict(),
@@ -70,7 +112,7 @@ export const OperationPlanMemoryInterpretationDependencySchema = z.object({
 });
 export type OperationPlanMemoryInterpretationDependency = z.infer<typeof OperationPlanMemoryInterpretationDependencySchema>;
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
-  "blue-tanuki.plan-compute-source-observations.v5";
+  "blue-tanuki.plan-compute-source-observations.v6";
 export const OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-memory-citation.v1";
 /** Explicit task input for internal plan computation; the binding selects context, not authority. */
@@ -87,8 +129,9 @@ export const OperationPlanComputeInputSchema = z.object({
   if (references.length > 0 && !input.goal_purpose_binding) {
     context.addIssue({ code: "custom", message: "plan_compute_source_observation_requires_purpose_binding" });
   }
-  const identities = references.map((reference) =>
-    `${reference.plan_id_digest}:${reference.revision_digest}:${reference.step_id_digest}`);
+  const identities = references.map((reference) => "command_id_digest" in reference
+    ? `shell:${reference.command_id_digest}`
+    : `plan:${reference.plan_id_digest}:${reference.revision_digest}:${reference.step_id_digest}`);
   if (new Set(identities).size !== identities.length) {
     context.addIssue({ code: "custom", message: "duplicate_plan_compute_source_observation_reference" });
   }
@@ -250,6 +293,7 @@ export const OperationPlanReflectionCandidateSchema = z.object({
 
 export const OperationPlanCheckpointSchema = z.object({
   schema_version: z.literal("operation-plan-state.v1"),
+  shell_exec_result_observations: z.array(OperationPlanShellExecResultObservationSchema).max(256).optional(),
   plans: z.array(z.object({
     owner: Id, channel: Id, goal: z.string().min(1).max(200_000),
     goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),

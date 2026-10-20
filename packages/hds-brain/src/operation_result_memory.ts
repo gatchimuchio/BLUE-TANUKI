@@ -7,6 +7,7 @@ import {
 
 type Plan = OperationPlanCheckpoint["plans"][number];
 type Binding = Plan["bindings"][number];
+type ShellExecObservation = NonNullable<OperationPlanCheckpoint["shell_exec_result_observations"]>[number];
 
 /** 実作用の結果記録はMを非権威に保ち、記録だけで権限や成功判定を発行しない。 */
 export function resultMemoryEligible(b: Binding): boolean {
@@ -81,4 +82,54 @@ export function receiptForResultCommit(receipt: MemoryUpdateReceiptV1, commit: M
   const parsed = parseMemoryUpdateReceipt(receipt);
   return parsed.ok && parsed.receipt.update_id === commit.update_id &&
     parsed.receipt.content_digest === commit.content_digest && parsed.receipt.previous_revision === commit.expected_version;
+}
+
+/** A direct shell result is retained as a digest-only report, never as authority or world truth. */
+export function shellExecResultMemoryObservation(observation: ShellExecObservation) {
+  return {
+    schema_version: "shell-exec-result-observation.v1",
+    record_type: "shell_exec_result_observation",
+    command_id_digest: observation.command_id_digest,
+    request_id_digest: observation.request_id_digest,
+    upstream_commit_hash_digest: observation.upstream_commit_hash_digest,
+    command_payload_digest: observation.command_payload_digest,
+    result_id_digest: observation.result_id_digest,
+    result_contract_digest: observation.result_contract_digest,
+    result_digest: observation.result_digest,
+    execution_status: observation.execution_status,
+    execution_boundary: observation.execution_boundary,
+    action_outcome: observation.action_outcome,
+    plan_step_binding: observation.plan_step_binding,
+    observed_at_ms: observation.observed_at_ms,
+    adoption_status: "observation_only",
+    used_as_world_truth: false,
+    used_for_authority: false,
+    may_execute: false,
+  } as const;
+}
+
+export function shellExecResultMemoryIdentity(observation: ShellExecObservation) {
+  const id = createHash("sha256").update(JSON.stringify([
+    "shell-exec-result-memory.v1", observation.command_id_digest, observation.result_contract_digest,
+  ])).digest("hex");
+  return { update_id: `shell-result-update:${id}`, j_event_id: `shell-result-observation:${id}`,
+    record_id: `shell-result-observation:${id}` };
+}
+
+export function buildShellExecResultMemoryCommit(observation: ShellExecObservation, expected_version: number): MemoryCommitV2 {
+  const id = shellExecResultMemoryIdentity(observation);
+  const content = { schema_version: MEMORY_COMMIT_V2_SCHEMA_VERSION, expected_version,
+    update_id: id.update_id, j_event_id: id.j_event_id,
+    changes: [{ operation: "upsert" as const, record_id: id.record_id,
+      value: shellExecResultMemoryObservation(observation) as unknown as MemoryCommitJsonValue }],
+  };
+  return { ...content, content_digest: memoryCommitContentDigest(content) };
+}
+
+export function verifyShellExecResultMemoryCommit(observation: ShellExecObservation): boolean {
+  if (!observation.memory_commit) return false;
+  const parsed = parseMemoryCommitV2(observation.memory_commit);
+  if (!parsed.ok) return false;
+  return parsed.content_digest === buildShellExecResultMemoryCommit(observation,
+    parsed.commit.expected_version).content_digest;
 }

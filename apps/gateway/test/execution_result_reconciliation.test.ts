@@ -409,7 +409,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
         "blue_tanuki.operation_core.request_id": destinationRequestId } });
     const compute = c.hds.decide(computeRequest);
     if (compute.command?.type !== "llm_call") throw new Error(`selected edit observation was not routed to C: ${compute.log.commit.reason}`);
-    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v5");
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v6");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const serializedInput = JSON.stringify(compute.command.payload.messages);
@@ -443,6 +443,88 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       expect(retainedJson).not.toContain(forbidden);
     }
   }, fileEditCandidate, (workspace) => writeFileSync(join(workspace, "notes.txt"), "synthetic original text\n")));
+
+  it("直接shell.execの結果報告をdigest限定でJ/Mへ保持し、明示選択後にCの次計画へ渡す", async () => fixture(async (c) => {
+    const shellRequest = request(`tool:shell.exec ${JSON.stringify({ cmd: "node", args: ["--version"], cwd: "." })}`);
+    const shellDecision = c.hds.decide(shellRequest);
+    if (shellDecision.command?.type !== "tool_call") throw new Error(`shell command was not issued: ${shellDecision.log.commit.reason}`);
+    const shellCommand = shellDecision.command;
+    expect(shellCommand.payload.tool_name).toBe("shell.exec");
+    expect(shellDecision.log.commit.decision).toBe("ASSERT");
+
+    // Fixture feedback only: no process is launched here, and the output is deliberately private.
+    const privateOutput = { stdout: "PRIVATE_SYNTHETIC_SHELL_STDOUT", stderr: "", exit_code: 0 };
+    const operationCoreResult = {
+      version: "operation-core.v1" as const, role: "command_execution_result" as const,
+      result_id: randomUUID(), request_id: shellDecision.log.request_id, command_id: shellCommand.id,
+      upstream_commit_hash: shellDecision.log.commit.hash, operation: "shell.exec",
+      state: "succeeded" as const, adapter: "shell" as const, execution_boundary: "tool_adapter" as const,
+      action_outcome: "reported_success" as const, observed_at_ms: Date.now(),
+      command_payload_digest: hash(shellCommand.payload), output_digest: hash(privateOutput), plan_step_binding: "unbound" as const,
+      adapter_result_used_for_authority: false as const, used_for_authority: false as const,
+      evidence_source: ["INTERNAL_STATE"] as ["INTERNAL_STATE"],
+    };
+    c.hds.onFeedback({ command_id: shellCommand.id, status: "success", result: privateOutput,
+      operation_core_result: operationCoreResult, metrics: { duration_ms: 1 } });
+
+    const checkpoint = c.j.load()!;
+    const shellObservation = checkpoint.shell_exec_result_observations?.[0];
+    expect(checkpoint.shell_exec_result_observations).toHaveLength(1);
+    expect(shellObservation).toMatchObject({ command_id_digest: operationPlanDigest(shellCommand.id),
+      request_id_digest: operationPlanDigest(shellDecision.log.request_id),
+      result_digest: hash(privateOutput), execution_status: "succeeded", execution_boundary: "tool_adapter",
+      action_outcome: "reported_success", plan_step_binding: "unbound", used_for_authority: false, may_execute: false,
+      memory_receipt: expect.objectContaining({ revision: 1 }) });
+    const memory = inspectMemory(c);
+    expect(memory.revision).toBe(1);
+    expect(memory.records).toHaveLength(1);
+    expect(memory.records[0]).toMatchObject({ record_type: "shell_exec_result_observation",
+      command_id_digest: operationPlanDigest(shellCommand.id), result_digest: hash(privateOutput),
+      adoption_status: "observation_only", used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    for (const serialized of [JSON.stringify(shellObservation), JSON.stringify(memory.records[0])]) {
+      for (const forbidden of ["node", "--version", "PRIVATE_SYNTHETIC_SHELL_STDOUT", c.workspace]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+    }
+
+    c.hds.closeOperationPlanMemory();
+    c.hds = c.createHds(c.j, true);
+    c.purposeBinding = installTestPurpose(c.hds);
+    const destinationRequestId = randomUUID();
+    const task = "Use this explicitly selected shell result report only as historical context; verify any current-state claim with fresh evidence.";
+    const computeRequest = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: "fixture-owner",
+      content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: c.purposeBinding,
+        source_observation_refs: [{ command_id_digest: operationPlanDigest(shellCommand.id) }] })}`,
+      timestamp: Date.now(), metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.request_id": destinationRequestId } });
+    const compute = c.hds.decide(computeRequest);
+    if (compute.command?.type !== "llm_call") throw new Error(`selected shell observation was not routed to C: ${compute.log.commit.reason}`);
+    expect(compute.command.payload.compute_context?.local_p_version)
+      .toBe("blue-tanuki.plan-compute-source-observations.v6");
+    expect(compute.command.payload.compute_context?.data_exposure.input_sources)
+      .toContain("selected_operation_result_observations");
+    const serializedInput = JSON.stringify(compute.command.payload.messages);
+    expect(serializedInput).toContain("verified_shell_exec_result");
+    expect(serializedInput).toContain("reported_success");
+    expect(serializedInput).toContain(operationPlanDigest(shellCommand.id));
+    for (const forbidden of ["node", "--version", "PRIVATE_SYNTHETIC_SHELL_STDOUT", c.workspace]) {
+      expect(serializedInput).not.toContain(forbidden);
+    }
+
+    const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
+    c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
+      metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+    const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
+      entry.plan_id === operationPlanDigest(nextCandidate.plan_id));
+    expect(retained?.compute_source_observations).toMatchObject([{ source: "verified_shell_exec_result",
+      operation: "shell.exec", command_id_digest: operationPlanDigest(shellCommand.id),
+      effect_observation: "reported_success", adoption_status: "observation_only",
+      used_as_world_truth: false, used_for_authority: false, may_execute: false }]);
+    expect(JSON.stringify(retained?.compute_source_observations)).not.toContain("PRIVATE_SYNTHETIC_SHELL_STDOUT");
+  }, fileWriteCandidate));
 
   it("明示選択されたfile.write履歴はdigestだけを後続plan:computeへ渡し、候補保持前にも再照合する", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
@@ -541,7 +623,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     expect(compute.command.payload.compute_context?.local_p_version)
-      .toBe("blue-tanuki.plan-compute-source-observations.v5");
+      .toBe("blue-tanuki.plan-compute-source-observations.v6");
     const serializedInput = JSON.stringify(compute.command.payload.messages);
     expect(serializedInput).toContain("verified_file_delete_result");
     expect(serializedInput).toContain("reported_success");
@@ -607,7 +689,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const destinationRequestId = randomUUID();
     const compute = c.hds.decide(makeComputeRequest(destinationRequestId));
     if (compute.command?.type !== "llm_call") throw new Error(`selected search observation was not routed to C: ${compute.log.commit.reason}`);
-    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v5");
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v6");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const observationMessage = compute.command.payload.messages.find((message) =>
