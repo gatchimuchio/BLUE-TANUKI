@@ -333,6 +333,17 @@ jobs:
           cat > "$probe_script" <<'SH'
           #!/bin/sh
           set -eu
+          capability_value() {
+            key="$1"
+            file="$2"
+            while read -r label value rest; do
+              if [ "$label" = "$key:" ]; then
+                printf '%s' "$value"
+                return 0
+              fi
+            done < "$file"
+            return 1
+          }
           mkdir -p /workspace /workspace-storage
           if [ ! -c /dev/fuse ]; then
             echo "fuse_device_unavailable_in_namespace"
@@ -373,13 +384,66 @@ jobs:
             sleep 0.1
           done
           if [ "$mounted" = 1 ]; then
-            readback="$(cat /workspace/probe 2>/dev/null)"
-            printf 'fuse_overlay_readback=%s\n' "$readback"
-            if ! printf write > /workspace/created || ! rm /workspace/probe || [ -e /workspace/probe ] || [ "$(cat /workspace/created 2>/dev/null || true)" != write ]; then
-              echo "fuse_overlay_write_and_whiteout=failed"
+            if [ ! -r "/proc/$fuse_pid/status" ]; then
+              echo "fuse_overlay_daemon_state=unavailable"
               exit 0
             fi
-            echo "fuse_overlay_write_and_whiteout=success"
+            daemon_caps="$(capability_value CapEff "/proc/$fuse_pid/status")/$(capability_value CapPrm "/proc/$fuse_pid/status")/$(capability_value CapBnd "/proc/$fuse_pid/status")"
+            daemon_nnp="$(capability_value NoNewPrivs "/proc/$fuse_pid/status")"
+            printf 'fuse_overlay_daemon_caps=%s no_new_privs=%s\n' "$daemon_caps" "$daemon_nnp"
+            if [ "$daemon_caps" != '0000000000000000/0000000000000000/0000000000000000' ] || [ "$daemon_nnp" != 1 ]; then
+              echo "fuse_overlay_daemon_privilege_drop=failed"
+              exit 0
+            fi
+            echo "fuse_overlay_daemon_privilege_drop=success"
+            cat > /tmp/fuse-overlay-capless-workload.sh <<'WORKLOAD'
+          #!/bin/sh
+          set -eu
+          capability_value() {
+            key="$1"
+            while read -r label value rest; do
+              if [ "$label" = "$key:" ]; then
+                printf '%s' "$value"
+                return 0
+              fi
+            done < /proc/self/status
+            return 1
+          }
+          shell_caps="$(capability_value CapEff)/$(capability_value CapPrm)/$(capability_value CapBnd)"
+          shell_nnp="$(capability_value NoNewPrivs)"
+          printf 'fuse_overlay_shell_caps=%s no_new_privs=%s\n' "$shell_caps" "$shell_nnp"
+          if [ "$shell_caps" != '0000000000000000/0000000000000000/0000000000000000' ] || [ "$shell_nnp" != 1 ]; then
+            echo "fuse_overlay_shell_privilege_boundary=failed"
+            exit 1
+          fi
+          if [ "$(cat /workspace/probe 2>/dev/null || true)" != fixture ]; then
+            echo "fuse_overlay_shell_read=failed"
+            exit 1
+          fi
+          if ! printf write > /workspace/created || ! rm /workspace/probe || [ -e /workspace/probe ] || [ "$(cat /workspace/created 2>/dev/null || true)" != write ]; then
+            echo "fuse_overlay_shell_write_whiteout=failed"
+            exit 1
+          fi
+          echo "fuse_overlay_shell_read_write_whiteout=success"
+          WORKLOAD
+            chmod 0500 /tmp/fuse-overlay-capless-workload.sh
+            if bwrap \
+              --unshare-pid --unshare-net --unshare-ipc --unshare-uts \
+              --new-session --die-with-parent --disable-userns --cap-drop ALL \
+              --ro-bind /usr /usr \
+              --symlink usr/bin /bin --symlink usr/sbin /sbin \
+              --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
+              --proc /proc --dev /dev \
+              --ro-bind /tmp/fuse-overlay-capless-workload.sh /capless-workload.sh \
+              --size 67108864 --perms 1777 --tmpfs /tmp \
+              --dir /workspace --bind /workspace /workspace \
+              --chdir / --clearenv --setenv PATH /usr/bin:/bin --setenv LANG C.UTF-8 \
+              -- /usr/bin/setpriv --no-new-privs /bin/sh /capless-workload.sh; then
+              echo "fuse_overlay_capless_shell=success"
+            else
+              workload_status=$?
+              echo "fuse_overlay_capless_shell=failed status=$workload_status"
+            fi
             exit 0
           fi
           echo "fuse_overlay_mount=failed"
@@ -399,7 +463,6 @@ jobs:
             --die-with-parent \
             --cap-drop ALL \
             --cap-add CAP_SYS_ADMIN \
-            --cap-add CAP_MKNOD \
             --cap-add CAP_SETPCAP \
             --ro-bind /usr /usr \
             --symlink usr/bin /bin \

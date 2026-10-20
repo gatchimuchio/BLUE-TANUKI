@@ -60,7 +60,7 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 WSL Ubuntu 24.04／Bubblewrap 0.9.0のLinux `/tmp`に置いた合成fixtureで、Actions probeと同じ外側の`unshare --mount --propagation private`から比較した。外側namespaceだけの場合と、さらに`establish_private_mount_namespace()`相当のmount namespaceを追加した場合の両方でbounded tmpfs mountは成功し、production OverlayFS mountは`EACCES`で失敗した。従ってこのWSL環境では二段目namespaceだけが拒否原因という仮説を支持しない。このWSL診断はnative Linuxの証拠ではなく、Actions run 39346435570のhosted Ubuntu結果も書き換えない。
 
-次consumerはrootless OverlayFSを成立済みと扱わず、shell processへmount capabilityを渡さないLinux aggregate quota経路を特定すること。追加Actionsはローカル比較後に別の具体的仮説を検査する必要が生じた場合だけ、D4-Pocket現行AGENTS §3.1に従って目的・固定SHAを記録した手動検査として使う。D07.02／F01.02は引き続き`BUILD_GAP`とする。
+次の限定Actions検査はD4-Pocket現行AGENTS §3.1に従い、一時branch上の固定SHAをmanual `workflow_dispatch`で実行する。検査する仮説は、隔離setup helperが`CAP_SYS_ADMIN`／`CAP_SETPCAP`だけでtmpfs上のFUSE OverlayFSを準備し、libfuseがdaemonをcapability 0／`NoNewPrivs=1`で起動した後、productionと同じnested Bubblewrap（全capability drop、user namespace再作成禁止）から`NoNewPrivs=1`のshellが合成fixtureを読取り・書込み・whiteoutできること。ログは固定status・mask・errnoのみ、credential／外部作用／artifactなし。これはFUSE経路の限定診断であり、製品統合・Linux native product成立・D07.02／F01.02完了を証明しない。検査結果にかかわらず、shellへmount capabilityを渡さない境界を維持し、D07.02／F01.02は`BUILD_GAP`とする。
 
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
