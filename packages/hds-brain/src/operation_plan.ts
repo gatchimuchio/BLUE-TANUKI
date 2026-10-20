@@ -521,7 +521,8 @@ export class OperationPlanLedger {
     private readonly goalGovernanceReader?: () => ReadonlyGoalGovernanceProjection | undefined,
     private readonly goalPurposeContentReader?: (goalRef: string, version: number) => OperationPlanGoalPurposeContent | null | undefined,
     private readonly goalPurposeRelationReviewVerifier?: OperationPlanGoalPurposeRelationReviewVerifier,
-    private readonly memoryInterpretationReader?: (lineageId: string) => MemoryInterpretationReviewSnapshot | null | undefined) {
+    private readonly memoryInterpretationReader?: (lineageId: string) => MemoryInterpretationReviewSnapshot | null | undefined,
+    private readonly memoryCitationJudgmentVerifier?: (dependency: OperationPlanMemoryInterpretationDependency) => boolean) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
     this.memoryStorage = memoryStorage;
     const checkedRecoveryEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
@@ -1107,6 +1108,7 @@ export class OperationPlanLedger {
       }
       const judgment = snapshot.record.dependent_judgments.find((item) => item.judgment_ref === dependency.judgment_ref);
       if (!judgment || judgment.basis_interpretation_id !== dependency.interpretation_id) {
+        if (!judgment && this.memoryCitationJudgmentVerifier?.(dependency) === true) continue;
         throw new Error("plan_memory_interpretation_state_unavailable");
       }
       if (snapshot.record.application_state !== "active" ||

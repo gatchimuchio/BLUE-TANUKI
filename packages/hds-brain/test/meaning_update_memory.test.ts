@@ -299,6 +299,30 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
         interpretation_id: meaningUpdateInterpretationId(buildMeaningUpdateMemoryRecord(nextOwnerReview!.proposal)),
         reassesses_judgment_refs: citationJudgmentRefs,
       }]);
+      const freshPlan = citedMemoryPlan(freshRequest.id);
+      hds.onFeedback({ command_id: freshDecision.command.id, status: "success",
+        result: { content: freshCitationContent, operation_core: { status: "valid_plan", plan: freshPlan } },
+        metrics: { duration_ms: 1 } });
+      const freshPlanReview = hds.decide(createGatewayInternalInboundRequest({
+        id: "fresh-current-plan-review", channel: "test", user: "webchat-owner-token-holder",
+        content: `plan:review ${JSON.stringify({ plan_id: operationPlanDigest(freshPlan.plan_id),
+          revision_digest: operationPlanDigest(freshPlan), step_id: operationPlanDigest("search") })}`,
+        timestamp: 9,
+        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer",
+          "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner" },
+      }));
+      expect(freshPlanReview.command, freshPlanReview.log.commit.reason).not.toBeNull();
+      const stillBlockedOldPlanReview = hds.decide(createGatewayInternalInboundRequest({
+        id: "old-plan-review-after-fresh-decision", channel: "test", user: "webchat-owner-token-holder",
+        content: `plan:review ${JSON.stringify({ plan_id: operationPlanDigest(citationPlan.plan_id),
+          revision_digest: operationPlanDigest(citationPlan), step_id: operationPlanDigest("search") })}`,
+        timestamp: 10,
+        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer",
+          "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner" },
+      }));
+      expect(stillBlockedOldPlanReview.command).toBeNull();
+      expect(stillBlockedOldPlanReview.log.commit.reason)
+        .toContain("plan_control_denied:plan_memory_interpretation_reassessment_required");
 
       const auditText = JSON.stringify(hds.getAudit().list());
       expect(auditText).not.toContain(candidateMeaning);

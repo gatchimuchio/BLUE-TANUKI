@@ -13,6 +13,7 @@ import type {
   LLMFallbackAuthorization,
   ExecutionAdmission, ExecutionResultDelivery,
   OperationPlanComputeSourceObservation,
+  OperationPlanMemoryInterpretationDependency,
   MeaningUpdateProposalV3,
 } from "@blue-tanuki/protocol";
 import {
@@ -651,7 +652,8 @@ export class HDSUpperController {
       opts.operation_plan_recovery_evidence, () => this.goal_governance?.project(Date.now()),
       (goalRef, version) => this.readGoalPurposeContent(goalRef, version),
       (evidence) => this.operationPlanGoalPurposeRelationReviewAuditEventExists(evidence),
-      (lineageId) => this.meaningUpdateMemory?.readInterpretation(lineageId) ?? null);
+      (lineageId) => this.meaningUpdateMemory?.readInterpretation(lineageId) ?? null,
+      (dependency) => this.verifyCurrentMemoryCitationJudgment(dependency));
     const llmRoute = opts.llm_route ?? {};
     this.llm_route = {
       ...llmRoute,
@@ -1920,6 +1922,61 @@ ${planControl.question}`,
         ...(interpretationDependencies.length ? { interpretation_dependencies: interpretationDependencies } : {}) });
     }
     return withLlmResultContent(feedback, reviewed.content);
+  }
+
+  private verifyCurrentMemoryCitationJudgment(dependency: OperationPlanMemoryInterpretationDependency): boolean {
+    const record = this.meaningUpdateMemory?.readInterpretation(dependency.reference.record_id)?.record;
+    const interpretation = record?.interpretations.find((item) => item.interpretation_id === dependency.interpretation_id);
+    if (!record || record.application_state !== "active" || record.current_interpretation_id !== dependency.interpretation_id ||
+        interpretation?.basis_ref !== `${dependency.reference.record_id}#${dependency.reference.version}`) return false;
+    const entries = this.audit.list().map(({ log }) => log).filter((log) => isMemoryCitationReviewLog(log) && log.request_id &&
+      (log.status === "accepted" || log.status === "accepted_with_rejections") &&
+      (log.interpretation_dependencies ?? []).some((candidate) =>
+        candidate.reference.record_id === dependency.reference.record_id &&
+        candidate.reference.version === dependency.reference.version &&
+        candidate.interpretation_id === dependency.interpretation_id && candidate.judgment_ref === dependency.judgment_ref));
+    if (entries.length !== 1) return false;
+    const currentLog = entries[0];
+    if (!isMemoryCitationReviewLog(currentLog) || !currentLog.request_id) return false;
+    const currentDependencies = (currentLog.interpretation_dependencies ?? []).filter((candidate) =>
+      candidate.reference.record_id === dependency.reference.record_id &&
+      candidate.reference.version === dependency.reference.version &&
+      candidate.interpretation_id === dependency.interpretation_id && candidate.judgment_ref === dependency.judgment_ref);
+    if (currentDependencies.length !== 1) return false;
+    const currentDependency = currentDependencies[0];
+    if (!currentDependency ||
+        currentDependency.judgment_ref !== memoryCitationJudgmentRef(currentLog.request_id, currentLog.command_id,
+          dependency.reference.record_id, dependency.reference.version) ||
+        !memoryCitationReviewUsesReference(currentLog, dependency.reference)) return false;
+    const exactBasisRef = `${dependency.reference.record_id}#${dependency.reference.version}`;
+    const expectedReassessments = this.audit.list().flatMap(({ log }) => {
+      if (!isMemoryCitationReviewLog(log) || !log.request_id ||
+          (log.status !== "accepted" && log.status !== "accepted_with_rejections")) return [];
+      return (log.interpretation_dependencies ?? []).filter((candidate) =>
+        candidate.reference.record_id === dependency.reference.record_id &&
+        candidate.reference.version === dependency.reference.version &&
+        candidate.interpretation_id !== dependency.interpretation_id &&
+        record.interpretations.some((item) => item.interpretation_id === candidate.interpretation_id &&
+          item.basis_ref === exactBasisRef) &&
+        candidate.judgment_ref === memoryCitationJudgmentRef(log.request_id!, log.command_id,
+          candidate.reference.record_id, candidate.reference.version) &&
+        memoryCitationReviewUsesReference(log, candidate.reference))
+        .map((candidate) => candidate.judgment_ref);
+    }).sort();
+    if (new Set(expectedReassessments).size !== expectedReassessments.length) return false;
+    const memoryCitationReassessments = record.dependent_judgments.filter((judgment) => {
+      const basis = record.interpretations.find((item) => item.interpretation_id === judgment.basis_interpretation_id);
+      return basis?.basis_ref === exactBasisRef && judgment.judgment_ref.startsWith("memory-citation-review:");
+    });
+    const memoryReassessmentRefs = memoryCitationReassessments.map((judgment) => judgment.judgment_ref).sort();
+    if (new Set(memoryReassessmentRefs).size !== memoryReassessmentRefs.length ||
+        memoryCitationReassessments.some((judgment) => !judgment.reassessment_required) ||
+        expectedReassessments.length !== memoryReassessmentRefs.length ||
+        expectedReassessments.some((judgmentRef, index) => judgmentRef !== memoryReassessmentRefs[index])) return false;
+    const recordedReassessments = currentDependency.reassesses_judgment_refs ?? [];
+    if (new Set(recordedReassessments).size !== recordedReassessments.length) return false;
+    return expectedReassessments.length === recordedReassessments.length &&
+      expectedReassessments.every((judgmentRef, index) => judgmentRef === [...recordedReassessments].sort()[index]);
   }
 
   private captureMemoryReference(log: DecisionLog): void {

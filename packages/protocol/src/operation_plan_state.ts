@@ -57,7 +57,13 @@ export const OperationPlanMemoryInterpretationDependencySchema = z.object({
   reference: z.object({ record_id: Id, version: Digest }).strict(),
   interpretation_id: Id,
   judgment_ref: Id,
-}).strict();
+  reassesses_judgment_refs: z.array(Id).max(64).optional(),
+}).strict().superRefine((dependency, context) => {
+  const reassessed = dependency.reassesses_judgment_refs ?? [];
+  if (new Set(reassessed).size !== reassessed.length || reassessed.includes(dependency.judgment_ref)) {
+    context.addIssue({ code: "custom", message: "invalid_memory_interpretation_reassessment_references" });
+  }
+});
 export type OperationPlanMemoryInterpretationDependency = z.infer<typeof OperationPlanMemoryInterpretationDependencySchema>;
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-source-observations.v3";
