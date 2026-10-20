@@ -623,11 +623,11 @@ jobs:
             exit 1
           fi
           echo "fuse_boundary_root_mount_private=success"
-          if ! mkdir -p /workspace-shared/view /workspace-storage; then
+          if ! mkdir -p /workspace-shared/view; then
             echo "fuse_boundary_directories=failed"
             exit 1
           fi
-          if ! mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700,nodev,nosuid,noexec tmpfs /workspace-storage 2>/dev/null; then
+          if ! awk '$5 == "/workspace-storage" { for (i = 1; i <= NF; i++) if ($i == "-") { if ($(i + 1) == "tmpfs") found = 1; break } } END { exit !found }' /proc/self/mountinfo; then
             echo "fuse_boundary_storage_tmpfs=failed"
             exit 1
           fi
@@ -874,7 +874,7 @@ jobs:
             --proc /proc --dev /dev --dev-bind /dev/fuse /dev/fuse \
             --size 134217728 --perms 1777 --tmpfs /tmp \
             --dir /workspace-lower --ro-bind "$lower_source" /workspace-lower \
-            --dir /workspace-shared --dir /workspace-storage --dir /commit-target \
+            --dir /workspace-shared --dir /workspace-storage --size 134217728 --perms 0700 --tmpfs /workspace-storage --dir /commit-target \
             --bind "$commit_source" /commit-target \
             --ro-bind "$probe_root/outer.sh" /fuse-boundary-outer.sh \
             --ro-bind "$probe_root/child.sh" /fuse-boundary-child.sh \
