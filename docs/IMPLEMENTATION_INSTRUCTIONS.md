@@ -2,7 +2,26 @@
 
 ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
 
-### 最新BUILD_BATCH：`QEB-03-E01.02-INTERVAL-CADENCE-RESTART-CONSUMER`
+### 最新BUILD_BATCH：`QEB-03-E01.02-DAILY-WALL-CLOCK-RESTART-CONSUMER`
+
+開始`HEAD`／`main`／`origin/main`=`3bb0f8f988e64f7ea0de357052ffa3246138b27d`。開始時のworktreeには保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`だけがあり、これを維持した。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／本指示、E01.02とCron／Runtime Scheduleの日次producer・consumerを再同期した。Windows localでBLUE-TANUKIのみを変更。
+
+runtime daily scheduleはIANA `time_zone`をL3承認対象のcommandに含め、作成時に指定値またはホストローカルzoneを永続化する。zoneはpayload digestに束縛し、新規intervalには許さない。zone未保存の従来daily recordは既存digestを保って読み込み、ホストローカル動作を継続する。Cronの日次consumerはDST gapを欠落時間分だけ前進、overlapは最初の瞬間一回に固定する。durable event cursorより後の次回だけを選び、時計変更・suspend後は最大1分間隔で再確認し、過ぎた複数日のtriggerは一度だけdispatchして未来へ進む。発火は外部作用の承認にならず、既存のcron→HDS／Approval経路を維持する。schedule snapshot／Control Centerへzoneを表示する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `cron_channel.test.ts`／`runtime_schedule.test.ts` | PASS、2 files／28 tests。DST gap／overlap、時計を2日進めた際の一回dispatch、L3に結ばれた明示zone、host-zone捕捉、旧timezoneなし保存形式の読込みを確認。 |
+| WebChat Control Center script | PASS、`webchat.test.ts`の対象syntax／recovery test 1/1。残り98件は実行対象外。 |
+| `pnpm typecheck`→`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `pnpm docs:check` | PASS。日本語基底監査は移行負債76件を注意表示。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite、実Gateway再起動・実OS時計変更、実資格／provider／外部作用、5OS実機、QE_QC／QE_QA | 未実施。全体形状成立後に対象範囲を決める。 |
+
+このdaily wall-clock／restart consumerを`WIRED`とする。E01.02のtrigger delegation bindingと製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。次consumerは承認済みschedule mutationからdurable delegated job identity／scopeを保持し、Cron actorを通じJの既存consumerへ束ねる経路。C08.03実provider、別repo書込み、実外部作用、P13公開・出荷GOは保留。QE_QC／QE_QAへ進まない。
+
+実装commit=`6da18a24edb86cf141b434b4f1d8c9cec3e7843a`を`main`へatomic pushし、remote main一致を確認した。実装push時のlocal recovery branch／remote backup tagはcurrent=`6da18a24edb86cf141b434b4f1d8c9cec3e7843a`、previous=`3bb0f8f988e64f7ea0de357052ffa3246138b27d`。実装・文書どちらのcommitにも保護対象Linux `target/`を含めていない。
+
+### 直前BUILD_BATCH：`QEB-03-E01.02-INTERVAL-CADENCE-RESTART-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`1f19638356212b0aaf38b8d8f1e83d1a34a6d3a9`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E01.02とCron interval scheduler・永続event cursorの現行producer／consumerを再読した。Windows localでBLUE-TANUKIだけを変更し、既存untracked Linux `target/`は保持した。
 
