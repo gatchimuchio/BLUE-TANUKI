@@ -1,5 +1,13 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
+### 最新BUILD_BATCH：`QEB-03-E03.02-INTERRUPTED-APPROVAL-RESTART-NOTICE-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`3d2e7dd20566dce6f77d7529b1c28d28d3e5b1f3`。最新版rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E03.02とHDS audit→Gateway resident notificationのconsumerを再読した。Windows localで施工し、untracked Linux `target/`は保持。
+
+起動時の検証済み監査鎖から起動前の未解決`approval_pending`だけを抽出し、Cron以外をGatewayのread-only／`display_only`通知へ接続した。古いresume token・承認判定は復元せず、旧requestを新規requestへ案内する。単回resume要求も再起動後利用不可として返す。Gateway focused test 22/22、typecheck、buildはPASS。テストは合成audit fixtureであり、実Gateway再起動・永続audit serveの検証ではない。
+
+この通知経路は`WIRED`、E03.02および製品全体は`BUILD_GAP`。旧worker遅延結果の世代照合と証拠保存、M pending復旧、実再起動、全体QC／QAは未成立。次consumerは現行outbox／generation callsiteにある旧worker結果の隔離・記録経路を選ぶ。D4別repo変更、C08.03実provider試験、外部作用、P13公開・出荷GOは保留する。
+
 ### 最新BUILD_BATCH：`QEB-01-D03.01-BLUE-RUNTIME-INTENT-INGRESS`
 
 開始HEAD／`main`／`origin/main`=`b3a57f589dfb034dbb3ec2136e9cf61b0607c5d4`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、D03.01とD4 Runtime対話契約、BLUE WebChat→Gateway→HDS入口を再読した。開始時から残る同単位のtracked差分は保持して統合し、untracked Linux `target/`には触れていない。Windows localで施工した。

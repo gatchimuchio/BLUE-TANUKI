@@ -44,12 +44,64 @@ export interface ResidentNotificationInput {
   now_ms?: number;
   audit_chain_valid: boolean;
   pending_approvals: readonly WebChatApprovalQueueItem[];
+  interrupted_approvals?: readonly InterruptedApprovalSnapshot[];
   authority_trace: readonly WebChatAuthorityTraceItem[];
   unresolved_cron_events?: readonly CronEventCursorSnapshot[];
   interrupted_cron_approvals?: readonly CronApprovalHandoffSnapshot[];
   cron_state_read_failures?: readonly CronNotificationStateReadFailure[];
   operation_plan_projection?: OperationPlanCorrelationProjection;
   limit?: number;
+}
+
+export interface InterruptedApprovalSnapshot {
+  readonly command_id: string;
+  readonly request_id: string | null;
+  readonly timestamp_ms: number;
+}
+
+/**
+ * Project only approvals whose latest durable HDS lifecycle is still pending
+ * at the previous Gateway boundary. This is display evidence, never a token,
+ * approval, or execution recovery path.
+ */
+export function interruptedApprovalsFromAudit(
+  entries: readonly { readonly index: number; readonly log: unknown }[],
+  startupEntryCount: number,
+  activeCommandIds: ReadonlySet<string> = new Set(),
+): InterruptedApprovalSnapshot[] {
+  if (!Number.isSafeInteger(startupEntryCount) || startupEntryCount < 0) return [];
+  const latest = new Map<string, {
+    index: number;
+    phase: string;
+    request_id: string | null;
+    timestamp_ms: number;
+  }>();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object" || !Number.isSafeInteger(entry.index) || entry.index < 0) continue;
+    const rawLog = entry.log;
+    if (!rawLog || typeof rawLog !== "object" || Array.isArray(rawLog)) continue;
+    const log = rawLog as Record<string, unknown>;
+    const commandId = log.command_id;
+    const phase = log.phase;
+    const timestamp = log.timestamp;
+    if (log.kind !== "command_lifecycle" || typeof commandId !== "string" || commandId.length === 0 ||
+        typeof phase !== "string" ||
+        !["approval_pending", "approval_approved", "approval_rejected", "approval_cancelled"].includes(phase) ||
+        typeof timestamp !== "number" || !Number.isFinite(timestamp)) continue;
+    const current = latest.get(commandId);
+    if (current && current.index >= entry.index) continue;
+    latest.set(commandId, {
+      index: entry.index,
+      phase,
+      request_id: typeof log.request_id === "string" ? log.request_id : null,
+      timestamp_ms: timestamp,
+    });
+  }
+  return [...latest.entries()]
+    .filter(([commandId, state]) => state.index < startupEntryCount && state.phase === "approval_pending" &&
+      !activeCommandIds.has(commandId))
+    .map(([command_id, state]) => ({ command_id, request_id: state.request_id, timestamp_ms: state.timestamp_ms }))
+    .sort((left, right) => left.timestamp_ms - right.timestamp_ms || left.command_id.localeCompare(right.command_id));
 }
 
 export type CronNotificationStateReadFailure =
@@ -159,6 +211,23 @@ export function buildResidentNotificationsSnapshot(
       risk: item.risk,
       expires_at_ms: item.approval_token_expires_at_ms,
       next_action: "Open Approval Queue and submit approve, reject, or block through the Approval Gate.",
+    });
+  }
+
+  for (const approval of input.interrupted_approvals ?? []) {
+    notifications.push({
+      id: `approval-interrupted:${approval.command_id}`,
+      kind: "approval_interrupted",
+      severity: "warning",
+      title: "Approval was interrupted by Gateway restart",
+      message: "An approval was pending before Gateway restarted. Its prior one-time token was not restored, and no approval verdict was recovered.",
+      timestamp: approval.timestamp_ms,
+      source: "approval_lifecycle",
+      read_only: true,
+      authority: "display_only",
+      request_id: approval.request_id,
+      command_id: approval.command_id,
+      next_action: "Review Authority Trace and any saved result. If the work is still needed, submit a new request and review its current target before approving.",
     });
   }
 

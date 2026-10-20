@@ -1,7 +1,52 @@
 import { describe, expect, it } from "vitest";
-import { buildResidentNotificationsSnapshot, readCronNotificationState } from "../src/resident_notifications.js";
+import {
+  buildResidentNotificationsSnapshot,
+  interruptedApprovalsFromAudit,
+  readCronNotificationState,
+} from "../src/resident_notifications.js";
 
 describe("buildResidentNotificationsSnapshot", () => {
+  it("surfaces only prior unresolved approval lifecycles without restoring a token", () => {
+    const lifecycle = (command_id: string, phase: string, timestamp: number) => ({
+      kind: "command_lifecycle", command_id, phase, request_id: `request-${command_id}`, timestamp,
+    });
+    const interrupted = interruptedApprovalsFromAudit([
+      { index: 0, log: lifecycle("resolved-before-restart", "approval_pending", 10) },
+      { index: 1, log: lifecycle("resolved-before-restart", "approval_cancelled", 11) },
+      { index: 2, log: lifecycle("stale-pending", "approval_pending", 20) },
+      { index: 3, log: lifecycle("active-pending", "approval_pending", 30) },
+      { index: 4, log: lifecycle("resolved-after-start", "approval_pending", 40) },
+      { index: 5, log: lifecycle("resolved-after-start", "approval_rejected", 50) },
+      { index: 6, log: lifecycle("new-pending", "approval_pending", 60) },
+      { index: 7, log: { ...lifecycle("invalid", "approval_pending", 70), secret: "must-not-project" } },
+    ], 5, new Set(["active-pending"]));
+
+    expect(interrupted).toEqual([{
+      command_id: "stale-pending",
+      request_id: "request-stale-pending",
+      timestamp_ms: 20,
+    }]);
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 100,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      interrupted_approvals: interrupted,
+      authority_trace: [],
+    });
+    expect(notifications).toContainEqual(expect.objectContaining({
+      kind: "approval_interrupted",
+      source: "approval_lifecycle",
+      request_id: "request-stale-pending",
+      command_id: "stale-pending",
+      read_only: true,
+      authority: "display_only",
+      timestamp: 20,
+      next_action: expect.stringContaining("submit a new request"),
+    }));
+    expect(JSON.stringify(notifications)).not.toContain("approval_token");
+    expect(JSON.stringify(notifications)).not.toContain("must-not-project");
+  });
+
   it("keeps verified Cron projections and unrelated notices when one Cron projection fails", () => {
     const approval = {
       source_digest: "d".repeat(64),

@@ -2,6 +2,8 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-21の`QEB-03-E03.02-INTERRUPTED-APPROVAL-RESTART-NOTICE-CONSUMER`では、起動前から未解決の承認をHDS監査鎖から検出し、Gateway再起動後にread-only通知として表示するconsumerを接続した。resume tokenや承認判定を復元せず、fresh requestを求める。合成fixtureによる通知投影22/22、Gateway typecheck／buildはPASS。実Gateway再起動の検証ではない。旧worker結果・M pending復旧を含むE03.02全体と`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。詳細は[`docs/開発進捗.md`](開発進捗.md)。
+
 2026-10-21の`QEB-01-D03.01-BLUE-RUNTIME-INTENT-INGRESS`では、任意の専用認証入口からRuntime／Session参照とintentだけをBLUE Gatewayの内部Inboundへ渡すconsumerを追加した。固定Runtime allowlist、HMAC化した参照、limited user actor、tool shortcut拒否を実装し、WebChat／Protocol／plugin loader focused tests 141件、typecheck、15-project buildを確認した。D4 Adapter producer、D4 Runtime/Session/Workspaceとの実接続、応答帰還が未接続のためD03.01および全体`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。D4 repoは変更していない。QE_QC／QE_QA、5OS実機、実provider・credential・外部作用は未実施。
 
 2026-10-21の`QEB-01-F01.03-WINDOWS-WORKSPACE-EDIT-SHELL-RESULT-CONSUMER`では、合成workspaceの編集適用後にWindows隔離processで同じfileを確認し、結果をdigest-onlyでJ/Mへ返した後、明示選択されたC入力と次候補保持までを限定integration test 1件で接続した。このconsumerは`WIRED`。C候補・承認はfixtureで、実LLMやGUI-live経路ではない。F01.03全体、Linux quota、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、全体QE_QC／QE_QAは未成立。製品コードはこのbatchで変更していない。詳細は[`docs/開発進捗.md`](開発進捗.md)。

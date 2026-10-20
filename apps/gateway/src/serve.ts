@@ -142,7 +142,11 @@ import {
   validateGmailWriteContentReview,
 } from "./approval_content_review.js";
 import { buildRuntimeStatusSnapshot } from "./runtime_status.js";
-import { buildResidentNotificationsSnapshot, readCronNotificationState } from "./resident_notifications.js";
+import {
+  buildResidentNotificationsSnapshot,
+  interruptedApprovalsFromAudit,
+  readCronNotificationState,
+} from "./resident_notifications.js";
 import { probeGatewaySelfHealth } from "./runtime_health.js";
 import { resolveAllSecretRefs } from "./secret_store.js";
 import {
@@ -616,6 +620,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     goal_governance: goalGovernanceConfigFromEnvironment(process.env),
     self_health: runtimeSelfHealth,
   });
+  const startupAuditEntryCount = hds.getAudit().list().length;
   const failureMemory = buildFailureMemoryStore(process.env);
   gatewayLog.info("complete history", {
     persistence: completeHistoryFile ? "jsonl" : "memory",
@@ -692,6 +697,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       hds.isCronEventNoReplayAcknowledged(event_id, payload_digest),
   });
   cronEventStore.recoverPendingApprovalHandoffs();
+  const startupAudit = hds.getAudit();
+  const startupInterruptedApprovals = startupAudit.verify()
+    ? interruptedApprovalsFromAudit(startupAudit.list(), startupAuditEntryCount).filter((item) => {
+      try {
+        return !cronEventStore.hasCronApprovalReference(item.command_id);
+      } catch {
+        return true;
+      }
+    })
+    : [];
   const cron = new CronSchedulerChannel({
     tasks: [...cronTasks, ...runtimeSchedules.activeCronTasks()],
     log: (line: string) => cronLog.info(line),
@@ -1878,6 +1893,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     const pending = pendingApprovals.get(command_id);
     if (!pending) {
+      if (interruptedApprovalSnapshot().some((item) => item.command_id === command_id)) {
+        return { executed: false, status: "approval_unavailable_after_restart", fresh_request_required: true };
+      }
       if (cronEventStore.hasCronApprovalReference(command_id)) {
         return { executed: false, status: "approval_unavailable_after_restart", fresh_request_required: true };
       }
@@ -3703,12 +3721,17 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     return buildResidentNotificationsSnapshot({
       audit_chain_valid: hds.getAudit().verify(),
       pending_approvals: pendingApprovalSnapshot(),
+      interrupted_approvals: interruptedApprovalSnapshot(),
       authority_trace: authorityTrace,
       unresolved_cron_events: cronState.unresolved_events,
       interrupted_cron_approvals: cronState.interrupted_approvals,
       cron_state_read_failures: cronState.read_failures,
       operation_plan_projection: operationPlanProjection,
     });
+  }
+
+  function interruptedApprovalSnapshot() {
+    return startupInterruptedApprovals.filter((item) => !pendingApprovals.has(item.command_id));
   }
 
   function resolveCronApprovalHandoff(
