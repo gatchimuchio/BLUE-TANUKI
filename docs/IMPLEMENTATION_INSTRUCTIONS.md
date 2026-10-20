@@ -1,24 +1,25 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-C07.03-OWNER-L3-REASSESSMENT-M-COMMIT`
+### 最新BUILD_BATCH：`QEB-01-C07.03-POST-REASSESSMENT-FRESH-J-PLAN-REVIEW`
 
-batch開始時`main`／`origin/main`=`0f2d21334b4bed4a862e1d05f68efc933489411d`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、C07.03／C07要求、J citation audit・M interpretation・plan review・Gateway approvalの現行producer／consumerを再読した。Windows localで施工し、既存untracked Linux `target/`を保持した。
+batch開始時`main`／`origin/main`=`483a4fe473a547600ab3dc2ebe9915975d67f1c6`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、C07.03／C07要求、直前M再評価後のfresh J citation・plan compute・plan reviewの現行producer／consumerを再読した。開始local recovery branch／remote backup tagはcurrent=`483a4fe473a547600ab3dc2ebe9915975d67f1c6`、previous=`79c6e9c795dcc0cdd8aa1ec8dee9bed863e12607`で一致。Windows localで施工し、既存untracked Linux `target/`を保持した。
 
-目的は、新解釈に基づくfresh J citation judgmentから、明示的owner L3・digest結合content reviewを経て、指定された旧判断だけを追記式に再評価しprivate Mへ反映する経路を接続すること。owner L3前はMを書かず、M transaction後は新旧judgment refを同じinterpretation lineageで照合する。`used_for_authority=false`／`may_execute=false`を維持し、内部操作をExecutorへ送らない。
+目的は、owner L3後に更新されたcurrent M interpretationに対し、同一ownerのfresh J citation judgmentだけを`plan:compute`へ結び、内容を含まないJ/M dependencyを新規plan checkpointへ保持すること。HDSはsource citation requestのactor/channel、J受理状態、参照版、現在interpretationを再検証し、不一致・取得不能・古い判断を拒否する。plan候補のretention時と`plan:review`でもcurrent J/M dependencyを確認する。引用は意味の真実・権限・承認・実行可能性ではなく、`used_for_authority=false`／`may_execute=false`を維持する。
 
-対象はC07.03のfresh citation judgment→owner L3 content review→HDS検証済みM reassessment transaction。対象外はC07親と目的→C→J→Broker／Executor→結果→M→帰還の全経路、新しいplan review／plan実行、D4Pocket／別repo、実provider・credential、外部作用、全体QE_QC／QE_QA、公開・出荷判断。今回のreassessment consumerを`WIRED`とする。C07親、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。
+対象はfresh J citation→source-bound plan compute→J/M dependency付きplan review→high-risk L3 Approval待ちまで。合成Gateway上で`tool.file.delete`のL3要求へ到達したが、owner承認・Executor dispatch・ファイル削除は行わない。対象外はC07親と目的→C→J→Broker／Executor→結果→M→帰還の全経路、D4Pocket／別repo、実provider・credential、実外部作用、全体QE_QC／QE_QA、公開・出荷判断。この限定consumer経路を`WIRED`、C07親と`SYSTEM_SHAPED`／`BUILD_COVERED`を`BUILD_GAP`とする。
 
-次consumerは今回のM追記後に新しいJ citation judgmentを現在interpretationへ結び、新規planだけを`plan:review`へ通す経路。古いplanを再利用せず、plan reviewは最新J/M lineageを再照合し、実行 consumer は別途未接続のまま扱う。
+次consumerはfresh planのL3 Approval判断から、同じcurrent J/M dependencyとBroker target bindingを保ってguarded Executorへ接続し、隔離workspaceの実結果をJ/Mへ帰還させる経路。実workspaceの削除・外部作用・公開は別途owner判断を要する。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| HDS `meaning_update_memory.test.ts`／`operation_plan_interpretation_reassessment.test.ts`／`記憶再解釈.test.ts` | PASS、3 files／5 tests。指定旧judgmentの追記再評価と新旧lineageの更新を確認。 |
-| Gateway `meaning_update_gateway_smoke.test.ts` | PASS、1 test。owner L3前のM不変、content review必須、L3後のM追記、audit/historyへの候補本文非露出を確認。 |
-| `pnpm hds:standalone`／`pnpm typecheck`／`pnpm build` | PASS。standaloneのnon-authority invariantsを確認、workspace 15 projectsをbuild。 |
-| `git diff --check` | PASS。 |
-| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。全体形状成立後へ配置。Windows localで必要な技術確認ができるためActions未使用。 |
+| Protocol `状態更新契約.test.ts` | PASS、10 tests。plan computeのcitation context binding schemaを確認。 |
+| HDS `meaning_update_memory.test.ts`／`operation_plan_interpretation_reassessment.test.ts` | PASS、2 files／2 tests。current interpretation後のfresh citation dependencyと再評価lineageを確認。 |
+| Gateway `meaning_update_gateway_smoke.test.ts` | PASS、1 test。別actorのsource citation拒否、current J/M dependencyのplan checkpoint保持、新plan reviewのhigh-risk L3待ち、対象ファイル不変を確認。 |
+| `pnpm hds:standalone`／`pnpm typecheck`／`pnpm build` | PASS。HDS standalone non-authority invariantsを確認、workspace 15 projectsをbuild。 |
+| `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査PASS（移行負債76件は継続管理）、licensing PASS。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／実外部作用 | 未実施。全体実装形状成立後へ配置。Windows localで限定疎通できるためGitHub Actions未使用。 |
 
-C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`79c6e9c795dcc0cdd8aa1ec8dee9bed863e12607`を`main`へpushし、remote HEAD一致を確認した。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。closeout後の復元refはcurrent=`closeout後のmain HEAD`／previous=`79c6e9c795dcc0cdd8aa1ec8dee9bed863e12607`へ揃える。
+C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`e4a9b5e`を含むこのBUILD_BATCHを`main`へpushし、remote HEADを照合する。closeout後のlocal recovery branch／remote backup tagはcurrent=`closeout後のmain HEAD`／previous=`e4a9b5e`へ揃える。内部QE原典・全要求対応表・実資格・外部作用・公開／出荷判断は含めない。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
