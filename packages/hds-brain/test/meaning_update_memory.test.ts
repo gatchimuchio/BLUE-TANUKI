@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { executorCommandDigest } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, meaningUpdateCandidateDigest, type OperationPlan } from "@blue-tanuki/protocol";
-import { HDSUpperController } from "../src/controller.js";
+import { HDSUpperController, memoryCitationReviewAuditDigest } from "../src/controller.js";
 import { AuditLog } from "../src/audit.js";
-import { evaluateApproval, meaningUpdateAdoptionApprovalTarget } from "../src/approval_policy.js";
+import { evaluateApproval, meaningUpdateAdoptionApprovalTarget,
+  memoryJudgmentReassessmentApprovalTarget } from "../src/approval_policy.js";
 import { LongTermMemoryStore } from "../src/long-term-memory/index.js";
 import { buildMeaningUpdateMemoryRecord, MeaningUpdateMemoryConsumer, meaningUpdateInterpretationId,
   meaningUpdateMemoryRecordId } from "../src/meaning_update_memory.js";
@@ -324,6 +326,72 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
       expect(stillBlockedOldPlanReview.log.commit.reason)
         .toContain("plan_control_denied:plan_memory_interpretation_reassessment_required");
 
+      const reassessmentProposals = hds.getMemoryJudgmentReassessmentProposals(freshDecision.command.id);
+      expect(reassessmentProposals).toHaveLength(1);
+      const reassessmentProposal = reassessmentProposals[0]!;
+      expect(reassessmentProposal.args.citation_audit_digest).toBe(memoryCitationReviewAuditDigest(
+        freshCitationReview as NonNullable<typeof freshCitationReview> & { kind: "memory_citation_review" }));
+      const pendingMemory = new MeaningUpdateMemoryConsumer(storage, {
+        readVerifiedMemoryApproval: (reference) => ({ ...reference }),
+      });
+      try {
+        const beforeExplicitReview = pendingMemory.readInterpretation(support.f_reference)?.record;
+        expect(beforeExplicitReview?.dependent_judgments).toContainEqual({ judgment_ref: citationJudgmentRefs[0],
+          basis_interpretation_id: meaningUpdateInterpretationId(buildMeaningUpdateMemoryRecord(ownerReview!.proposal)),
+          reassessment_required: true });
+        expect(beforeExplicitReview?.dependent_judgments.some((row) => row.judgment_ref === reassessmentProposal.args.judgment_ref))
+          .toBe(false);
+      } finally { pendingMemory.close(); }
+
+      const reassessmentRequestId = "fresh-citation-reassessment-l3";
+      const reassessmentActor = "webchat-owner-token-holder";
+      const reassessmentRequest = createGatewayInternalInboundRequest({
+        id: reassessmentRequestId, channel: "webchat", user: reassessmentActor,
+        content: "Owner submitted a fresh J citation judgment for explicit M reassessment.", timestamp: 11,
+        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "approval",
+          "blue_tanuki.memory_judgment_reassessment.version": "v1",
+          "blue_tanuki.tool_call": { tool_name: "memory.citation.reassess", arguments: { ...reassessmentProposal.args } } },
+      });
+      const reassessmentDecision = hds.decide(reassessmentRequest);
+      expect(reassessmentDecision.command?.type, reassessmentDecision.log.commit.reason).toBe("tool_call");
+      if (!reassessmentDecision.command) throw new Error("expected owner L3 citation reassessment command");
+      const reassessmentEvaluation = evaluateApproval(reassessmentDecision.command, [], { actor: reassessmentActor,
+        default_mode: "full_access" });
+      expect(reassessmentEvaluation).toMatchObject({ decision: "ask", risk: "high", approval_level: "L3_final_review",
+        final_review_required: true, context: { operation: "tool.call",
+          target: memoryJudgmentReassessmentApprovalTarget(reassessmentProposal.args) } });
+      hds.onApprovalEvaluation(reassessmentEvaluation, { request_id: reassessmentRequestId });
+      hds.onCommandLifecycle(reassessmentDecision.command.id, "approval_pending", { actor: reassessmentActor,
+        reason: reassessmentEvaluation.reason, request_id: reassessmentRequestId });
+      const reassessmentCommandDigest = executorCommandDigest(reassessmentDecision.command);
+      expect(hds.recordMemoryJudgmentReassessmentContentReview({ args: reassessmentProposal.args,
+        reassesses_judgment_refs: reassessmentProposal.reassesses_judgment_refs,
+        request_id: reassessmentRequestId, command_id: reassessmentDecision.command.id,
+        proposal_actor: reassessmentActor, command_digest: reassessmentCommandDigest })).toBe(true);
+      hds.onCommandLifecycle(reassessmentDecision.command.id, "approval_approved", { actor: reassessmentActor,
+        reason: "human_approval:approve", request_id: reassessmentRequestId });
+      const reassessmentCommit = hds.commitMemoryJudgmentReassessmentAfterL3({ args: reassessmentProposal.args,
+        request_id: reassessmentRequestId, command_id: reassessmentDecision.command.id,
+        command_digest: reassessmentCommandDigest, content_review_digest: reassessmentCommandDigest,
+        proposal_actor: reassessmentActor, reviewer_actor: reassessmentActor, evaluation: reassessmentEvaluation });
+      expect(reassessmentCommit).toMatchObject({ ok: true, judgment_ref: reassessmentProposal.args.judgment_ref,
+        used_for_authority: false, may_execute: false });
+      const registeredMemory = new MeaningUpdateMemoryConsumer(storage, {
+        readVerifiedMemoryApproval: (reference) => ({ ...reference }),
+      });
+      try {
+        const afterExplicitReview = registeredMemory.readInterpretation(support.f_reference)?.record;
+        expect(afterExplicitReview?.dependent_judgments).toContainEqual({ judgment_ref: citationJudgmentRefs[0],
+          basis_interpretation_id: meaningUpdateInterpretationId(buildMeaningUpdateMemoryRecord(ownerReview!.proposal)),
+          reassessment_required: false });
+        expect(afterExplicitReview?.dependent_judgments).toContainEqual({
+          judgment_ref: reassessmentProposal.args.judgment_ref,
+          basis_interpretation_id: reassessmentProposal.args.interpretation_id, reassessment_required: false });
+        expect(afterExplicitReview?.events.at(-1)).toMatchObject({ kind: "reassessed",
+          reassessment_judgment_ref: reassessmentProposal.args.judgment_ref,
+          affected_judgment_refs: citationJudgmentRefs });
+      } finally { registeredMemory.close(); }
       const auditText = JSON.stringify(hds.getAudit().list());
       expect(auditText).not.toContain(candidateMeaning);
       expect(auditText).toContain(ownerReview!.proposal.candidate_digest);
@@ -345,34 +413,27 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
           used_for_authority: false, may_execute: false, proposal: { candidate_meaning: candidateMeaning } });
         const initialInterpretationId = meaningUpdateInterpretationId(record!);
         const nextRecord = buildMeaningUpdateMemoryRecord(nextOwnerReview!.proposal);
-        const nextCommit = persisted.commit(nextRecord, () => {}, citationJudgmentRefs);
-        expect(nextCommit.ok).toBe(true);
         const correctedInterpretation = persisted.readInterpretation(support.f_reference);
         const nextInterpretationId = meaningUpdateInterpretationId(nextRecord);
-        expect(correctedInterpretation?.record).toMatchObject({
-          application_state: "active",
+        expect(correctedInterpretation?.record).toMatchObject({ application_state: "active",
           current_interpretation_id: nextInterpretationId,
           interpretations: [
             { interpretation_id: initialInterpretationId, meaning: { candidate_meaning: candidateMeaning } },
             { interpretation_id: nextInterpretationId, meaning: { candidate_meaning: nextMeaning } },
           ],
-          events: [
-            { kind: "quarantined", prior_interpretation_id: initialInterpretationId, resulting_interpretation_id: null,
-              affected_judgment_refs: ["meaning-update-approval:" + ownerReview!.proposal_digest, ...citationJudgmentRefs] },
-            { kind: "restored", prior_interpretation_id: initialInterpretationId, resulting_interpretation_id: nextInterpretationId,
-              affected_judgment_refs: ["meaning-update-approval:" + ownerReview!.proposal_digest, ...citationJudgmentRefs] },
-          ],
-          dependent_judgments: [
-            { judgment_ref: "meaning-update-approval:" + ownerReview!.proposal_digest,
-              basis_interpretation_id: initialInterpretationId, reassessment_required: true },
-            ...citationJudgmentRefs.map((judgment_ref) => ({ judgment_ref,
-              basis_interpretation_id: initialInterpretationId, reassessment_required: true })),
-            { judgment_ref: "meaning-update-approval:" + nextRecord.proposal_digest,
-              basis_interpretation_id: nextInterpretationId, reassessment_required: false },
-          ],
-          used_for_authority: false,
-          may_execute: false,
-        });
+          used_for_authority: false, may_execute: false });
+        expect(correctedInterpretation?.record?.events.map((event) => event.kind))
+          .toEqual(["quarantined", "restored", "reassessed"]);
+        expect(correctedInterpretation?.record?.events.at(-1)).toMatchObject({ kind: "reassessed",
+          reassessment_judgment_ref: reassessmentProposal.args.judgment_ref,
+          affected_judgment_refs: citationJudgmentRefs });
+        for (const judgmentRef of citationJudgmentRefs) {
+          expect(correctedInterpretation?.record?.dependent_judgments.find((row) => row.judgment_ref === judgmentRef))
+            .toMatchObject({ basis_interpretation_id: initialInterpretationId, reassessment_required: false });
+        }
+        expect(correctedInterpretation?.record?.dependent_judgments.find((row) =>
+          row.judgment_ref === reassessmentProposal.args.judgment_ref)).toMatchObject({
+          basis_interpretation_id: nextInterpretationId, reassessment_required: false });
         expect(persisted.verify()).toBe(true);
       } finally {
         persisted.close();

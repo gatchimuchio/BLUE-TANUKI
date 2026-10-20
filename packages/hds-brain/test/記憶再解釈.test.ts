@@ -14,6 +14,7 @@ import { JMemoryCommitCoordinator } from "../src/制御状態.js";
 import {
   MemoryInterpretationConsumer,
   buildMemoryInterpretationCommit,
+  buildMemoryInterpretationReassessmentCommit,
   createInitialMemoryInterpretationRecord,
   interpretationContentDigest,
   memoryInterpretationRecordId,
@@ -230,6 +231,74 @@ describe("追記型記憶再解釈consumer", () => {
       used_for_authority: false,
     });
     expect(coordinator.verify()).toBe(true);
+  });
+
+  it("新しいJ判断で指定された旧M判断だけを追記式に再評価する", () => {
+    const coordinator = createCoordinator(approvingReader(), directory, databasePath);
+    const consumer = new MemoryInterpretationConsumer(coordinator);
+    const initial = createInitialMemoryInterpretationRecord({
+      lineage_id: "lineage:reassessment",
+      interpretation: {
+        interpretation_id: "interpretation:before",
+        basis_ref: "F:policy#" + digest("source-version"),
+        meaning: { statement: "Old interpretation remains historical." },
+        content_digest: interpretationContentDigest({ statement: "Old interpretation remains historical." }),
+      },
+      dependent_judgment_refs: ["judgment:old"],
+    });
+    expect(initial).not.toBeNull();
+    if (!initial) return;
+    expect(applyCommitThroughJ(coordinator, makeCommit("seed-reassessment", "j-seed-reassessment", 0, [
+      { operation: "upsert", record_id: memoryInterpretationRecordId(initial.lineage_id), value: asJsonValue(initial) },
+    ]))).toMatchObject({ ok: true, status: "ready" });
+    const seeded = consumer.read(initial.lineage_id);
+    if (!seeded) return;
+    const quarantine = buildMemoryInterpretationCommit({ current: seeded, lineage_id: initial.lineage_id,
+      update_id: "reassessment-quarantine", j_event_id: "j-reassessment-quarantine", transition: {
+        kind: "quarantine", event_id: "event-reassessment-quarantine", reason_digest: digest("new evidence"),
+        evidence_refs: [{ reference: "evidence:new-version", digest: digest("new-version") }],
+        affected_judgment_refs: ["judgment:old"],
+      } });
+    expect(quarantine.ok).toBe(true);
+    if (!quarantine.ok) return;
+    const quarantined = consumer.apply(quarantine.commit);
+    expect(quarantined.ok).toBe(true);
+    if (!quarantined.ok) return;
+    const restore = buildMemoryInterpretationCommit({ current: consumer.read(initial.lineage_id)!,
+      lineage_id: initial.lineage_id, update_id: "reassessment-restore", j_event_id: "j-reassessment-restore",
+      transition: { kind: "restore", event_id: "event-reassessment-restore", reason_digest: digest("restore verified"),
+        evidence_refs: [{ reference: "evidence:verified-version", digest: digest("verified-version") }],
+        interpretation: { interpretation_id: "interpretation:current",
+          basis_ref: "F:policy#" + digest("current-source-version"),
+          meaning: { statement: "Current interpretation." },
+          content_digest: interpretationContentDigest({ statement: "Current interpretation." }) } } });
+    expect(restore.ok).toBe(true);
+    if (!restore.ok) return;
+    expect(consumer.apply(restore.commit).ok).toBe(true);
+    const active = consumer.read(initial.lineage_id);
+    if (!active) return;
+    expect(active.record?.dependent_judgments).toContainEqual({ judgment_ref: "judgment:old",
+      basis_interpretation_id: "interpretation:before", reassessment_required: true });
+    const reassessment = buildMemoryInterpretationReassessmentCommit({ current: active,
+      lineage_id: initial.lineage_id, update_id: "reassessment-transaction", j_event_id: "j-reassessment-transaction",
+      event_id: "event-reassessment-transaction", reason_digest: digest("fresh citation reviewed by owner"),
+      evidence_refs: [{ reference: "J-audit:" + digest("fresh J citation audit"), digest: digest("fresh J citation audit") }],
+      affected_judgment_refs: ["judgment:old"], reassessment_judgment_ref: "judgment:fresh" });
+    expect(reassessment.ok).toBe(true);
+    if (!reassessment.ok) return;
+    const committed = consumer.apply(reassessment.commit);
+    expect(committed).toMatchObject({ ok: true, record: {
+      application_state: "active", current_interpretation_id: "interpretation:current",
+      interpretations: [{ interpretation_id: "interpretation:before" }, { interpretation_id: "interpretation:current" }],
+      events: [{ kind: "quarantined" }, { kind: "restored" }, { kind: "reassessed",
+        reassessment_judgment_ref: "judgment:fresh", affected_judgment_refs: ["judgment:old"] }],
+      dependent_judgments: [
+        { judgment_ref: "judgment:old", basis_interpretation_id: "interpretation:before", reassessment_required: false },
+        { judgment_ref: "judgment:fresh", basis_interpretation_id: "interpretation:current", reassessment_required: false },
+      ], used_for_authority: false, may_execute: false,
+    } });
+    expect(coordinator.verify()).toBe(true);
+    expect(consumer.read(initial.lineage_id)?.record).toEqual(committed.ok ? committed.record : null);
   });
 });
 

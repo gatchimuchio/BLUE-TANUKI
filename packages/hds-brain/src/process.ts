@@ -138,9 +138,10 @@ function executionPolicy(process_kind: ProcessKind): HDSProcessDefinition["execu
   if (process_kind === "approval") {
     return {
       allowed_command_types: ["tool_call", "noop"],
-      allowed_tools: ["goal.governance.change", "goal.governance.review_task_purpose", "memory.meaning.adopt"],
+      allowed_tools: ["goal.governance.change", "goal.governance.review_task_purpose", "memory.meaning.adopt",
+        "memory.citation.reassess"],
       allowed_capabilities: ["tool:goal.governance.change", "tool:goal.governance.review_task_purpose",
-        "tool:memory.meaning.adopt"],
+        "tool:memory.meaning.adopt", "tool:memory.citation.reassess"],
       timeout_ms: 10_000,
     };
   }

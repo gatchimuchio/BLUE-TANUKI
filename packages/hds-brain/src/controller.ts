@@ -78,7 +78,7 @@ import { frame } from "./frame.js";
 import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
 import { GoalGovernanceLedger, goalGovernanceEventDigest, type ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 import { goalPurposeChangeApprovalTarget, goalPurposeRelationReviewApprovalTarget,
-  meaningUpdateAdoptionApprovalTarget } from "./approval_policy.js";
+  meaningUpdateAdoptionApprovalTarget, memoryJudgmentReassessmentApprovalTarget } from "./approval_policy.js";
 import { model } from "./model.js";
 import { commit } from "./commit.js";
 import { AuditLog, type AuditEntry } from "./audit.js";
@@ -333,6 +333,21 @@ export interface MeaningUpdateAdoptionArguments {
   readonly target_version: string;
 }
 
+export interface MemoryJudgmentReassessmentArguments {
+  readonly citation_request_id: string;
+  readonly citation_command_id: string;
+  readonly target_record_id: string;
+  readonly target_version: string;
+  readonly interpretation_id: string;
+  readonly judgment_ref: string;
+  readonly citation_audit_digest: string;
+}
+
+export interface OwnerMemoryJudgmentReassessmentProposal {
+  readonly args: MemoryJudgmentReassessmentArguments;
+  readonly reassesses_judgment_refs: readonly string[];
+}
+
 interface MeaningUpdateMemoryApprovalContext extends JMemoryApprovalReference {
   readonly request_id: string;
   readonly command_id: string;
@@ -344,6 +359,21 @@ interface MeaningUpdateMemoryApprovalContext extends JMemoryApprovalReference {
   readonly candidate_digest: string;
   readonly target: string;
   readonly evaluation: ApprovalEvaluation;
+}
+
+interface MemoryJudgmentReassessmentApprovalContext extends JMemoryApprovalReference {
+  readonly request_id: string;
+  readonly command_id: string;
+  readonly command_digest: string;
+  readonly proposal_actor: string;
+  readonly reviewer_actor: string;
+  readonly args: MemoryJudgmentReassessmentArguments;
+  readonly reassesses_judgment_refs: readonly string[];
+  readonly evaluation: ApprovalEvaluation;
+}
+
+export function memoryCitationReviewAuditDigest(log: MemoryCitationReviewLog): string {
+  return createHash("sha256").update(JSON.stringify(log), "utf8").digest("hex");
 }
 
 type MeaningUpdateCommitResult =
@@ -453,6 +483,36 @@ function meaningUpdateAdoptionApprovalEvidence(
     log.kind === "command_lifecycle" && log.request_id === input.request_id && log.command_id === input.command_id &&
     log.phase === "approval_approved" && log.actor === input.reviewer_actor && log.reason === "human_approval:approve");
   return approved ? { timestamp: approved.log.timestamp, evaluation: ask.log.evaluation } : null;
+}
+
+function memoryJudgmentReassessmentApprovalEvidence(
+  entries: readonly AuditEntry[],
+  input: { request_id: string; command_id: string; proposal_actor: string; reviewer_actor: string;
+    target: string; command_digest: string; citation_audit_digest: string; reassesses_digest: string;
+    before_index?: number },
+): { readonly timestamp: number; readonly evaluation: ApprovalEvaluation } | null {
+  const limit = input.before_index ?? Number.POSITIVE_INFINITY;
+  const ask = entries.find(({ index, log }) => index < limit && "kind" in log && log.kind === "approval_gate" &&
+    log.request_id === input.request_id && log.command_id === input.command_id &&
+    log.evaluation.decision === "ask" && log.evaluation.context.operation === "tool.call" &&
+    log.evaluation.context.command_id === input.command_id && log.evaluation.context.actor === input.proposal_actor &&
+    log.evaluation.context.target === input.target && log.evaluation.risk === "high" &&
+    log.evaluation.approval_level === "L3_final_review" && log.evaluation.final_review_required);
+  if (!ask || !("kind" in ask.log) || ask.log.kind !== "approval_gate") return null;
+  const review = entries.find(({ index, log }) => index > ask.index && index < limit && "kind" in log &&
+    log.kind === "operation_plan" && log.event === "memory_judgment_reassessment_content_reviewed" &&
+    log.request_id === input.request_id && log.command_id === input.command_id &&
+    log.projection_digest === input.command_digest && log.citation_audit_digest === input.citation_audit_digest &&
+    log.reassesses_digest === input.reassesses_digest && log.used_for_authority === false);
+  if (!review) return null;
+  const approved = entries.find(({ index, log }) => index > review.index && index < limit && "kind" in log &&
+    log.kind === "command_lifecycle" && log.request_id === input.request_id && log.command_id === input.command_id &&
+    log.phase === "approval_approved" && log.actor === input.reviewer_actor && log.reason === "human_approval:approve");
+  return approved ? { timestamp: approved.log.timestamp, evaluation: ask.log.evaluation } : null;
+}
+
+function memoryJudgmentRefsDigest(references: readonly string[]): string {
+  return createHash("sha256").update(JSON.stringify([...references].sort()), "utf8").digest("hex");
 }
 
 function isMeaningUpdateReviewReady(review: {
@@ -577,6 +637,75 @@ function replayMeaningUpdateMemoryCommits(audit: AuditLog, memory: MeaningUpdate
   }
 }
 
+function replayMemoryJudgmentReassessments(audit: AuditLog, memory: MeaningUpdateMemoryConsumer): void {
+  const entries = audit.list();
+  for (const { index, log } of entries) {
+    if (!("kind" in log) || log.kind !== "operation_plan" || log.event !== "memory_judgment_reassessment_committed") continue;
+    if (!log.request_id || !log.command_id || !log.projection_digest || !log.citation_request_id ||
+        !log.citation_command_id || !log.citation_audit_digest || !log.target_record_id || !log.target_version ||
+        !log.interpretation_id || !log.judgment_ref || !log.target_digest || !log.reassesses_digest ||
+        log.reassessment_status !== "applied" || log.approval_status !== "approved" ||
+        log.memory_application_status !== "applied" || log.follow_up_action_status !== "unconfirmed" ||
+        log.used_for_authority !== false || log.may_execute !== false) {
+      throw new Error("persisted memory judgment reassessment marker is malformed");
+    }
+    const args: MemoryJudgmentReassessmentArguments = {
+      citation_request_id: log.citation_request_id, citation_command_id: log.citation_command_id,
+      target_record_id: log.target_record_id, target_version: log.target_version,
+      interpretation_id: log.interpretation_id, judgment_ref: log.judgment_ref,
+      citation_audit_digest: log.citation_audit_digest,
+    };
+    const target = memoryJudgmentReassessmentApprovalTarget(args);
+    if (createHash("sha256").update(target, "utf8").digest("hex") !== log.target_digest) {
+      throw new Error("persisted memory judgment reassessment target binding is invalid");
+    }
+    const citations = entries.map(({ log: candidate }) => candidate).filter((candidate) =>
+      isMemoryCitationReviewLog(candidate) && candidate.request_id === args.citation_request_id &&
+      candidate.command_id === args.citation_command_id &&
+      (candidate.status === "accepted" || candidate.status === "accepted_with_rejections"));
+    if (citations.length !== 1 || !isMemoryCitationReviewLog(citations[0]) ||
+        memoryCitationReviewAuditDigest(citations[0]) !== args.citation_audit_digest) {
+      throw new Error("persisted memory judgment reassessment has no matching J citation record");
+    }
+    const dependency = (citations[0].interpretation_dependencies ?? []).find((item) =>
+      item.reference.record_id === args.target_record_id && item.reference.version === args.target_version &&
+      item.interpretation_id === args.interpretation_id && item.judgment_ref === args.judgment_ref);
+    const affectedRefs = [...(dependency?.reassesses_judgment_refs ?? [])].sort();
+    if (!dependency || !affectedRefs.length || memoryJudgmentRefsDigest(affectedRefs) !== log.reassesses_digest) {
+      throw new Error("persisted memory judgment reassessment does not match its J dependency set");
+    }
+    const record = memory.readInterpretation(args.target_record_id)?.record;
+    const event = record?.events.find((item) => item.event_id === `memory-citation-reassessed:${args.citation_audit_digest}` &&
+      item.kind === "reassessed");
+    const newJudgment = record?.dependent_judgments.find((item) => item.judgment_ref === args.judgment_ref);
+    if (!record || record.application_state !== "active" || record.current_interpretation_id !== args.interpretation_id ||
+        !event || event.reassessment_judgment_ref !== args.judgment_ref ||
+        memoryJudgmentRefsDigest(event.affected_judgment_refs) !== log.reassesses_digest ||
+        !newJudgment || newJudgment.basis_interpretation_id !== args.interpretation_id || newJudgment.reassessment_required ||
+        affectedRefs.some((reference) => record.dependent_judgments.find((item) => item.judgment_ref === reference)?.reassessment_required !== false)) {
+      throw new Error("persisted memory judgment reassessment does not match its private M transaction");
+    }
+    const ask = entries.find(({ log: candidate }) => "kind" in candidate && candidate.kind === "approval_gate" &&
+      candidate.request_id === log.request_id && candidate.command_id === log.command_id);
+    const approved = entries.find(({ log: candidate }) => "kind" in candidate && candidate.kind === "command_lifecycle" &&
+      candidate.request_id === log.request_id && candidate.command_id === log.command_id &&
+      candidate.phase === "approval_approved");
+    if (!ask || !("kind" in ask.log) || ask.log.kind !== "approval_gate" || !approved ||
+        !("kind" in approved.log) || approved.log.kind !== "command_lifecycle") {
+      throw new Error("persisted memory judgment reassessment lacks its L3 approval lifecycle");
+    }
+    const evidence = memoryJudgmentReassessmentApprovalEvidence(entries, {
+      request_id: log.request_id, command_id: log.command_id,
+      proposal_actor: ask.log.evaluation.context.actor, reviewer_actor: approved.log.actor, target,
+      command_digest: log.projection_digest, citation_audit_digest: args.citation_audit_digest,
+      reassesses_digest: log.reassesses_digest, before_index: index,
+    });
+    if (!evidence || evidence.timestamp !== log.timestamp || evidence.evaluation !== ask.log.evaluation) {
+      throw new Error("persisted memory judgment reassessment lacks matching content review and owner approval");
+    }
+  }
+}
+
 function memoryCitationJudgmentRef(requestId: string, commandId: string, recordId: string, version: string): string {
   return `memory-citation-review:${sha256({ schema_version: "memory-citation-judgment.v1", request_id: requestId,
     command_id: commandId, record_id: recordId, version })}`;
@@ -607,6 +736,7 @@ export class HDSUpperController {
   private goalPurposeMemoryApprovalContext?: GoalPurposeMemoryApprovalContext;
   private readonly meaningUpdateMemory?: MeaningUpdateMemoryConsumer;
   private meaningUpdateMemoryApprovalContext?: MeaningUpdateMemoryApprovalContext;
+  private memoryJudgmentReassessmentApprovalContext?: MemoryJudgmentReassessmentApprovalContext;
   private readonly pendingMeaningUpdateCandidates = new Map<string, PendingMeaningUpdateCandidate>();
   private readonly operationPlans: OperationPlanLedger;
   private readonly issuedLLM = new Map<string, {
@@ -640,12 +770,14 @@ export class HDSUpperController {
     }
     if (opts.meaning_update_memory) {
       this.meaningUpdateMemory = new MeaningUpdateMemoryConsumer(opts.meaning_update_memory, {
-        readVerifiedMemoryApproval: (reference) => this.readMeaningUpdateMemoryApproval(reference),
+        readVerifiedMemoryApproval: (reference) => this.readMeaningUpdateMemoryApproval(reference) ??
+          this.readMemoryJudgmentReassessmentApproval(reference),
       });
       if (!this.meaningUpdateMemory.recoverPending()) throw new Error("meaning update J/M recovery is not verified");
       replayMeaningUpdateMemoryCommits(this.audit, this.meaningUpdateMemory);
+      replayMemoryJudgmentReassessments(this.audit, this.meaningUpdateMemory);
     } else if (this.audit.list().some(({ log }) => "kind" in log && log.kind === "operation_plan" &&
-        log.event === "meaning_update_adoption_committed")) {
+        (log.event === "meaning_update_adoption_committed" || log.event === "memory_judgment_reassessment_committed"))) {
       throw new Error("persisted meaning updates require their private M store");
     }
     this.operationPlans = new OperationPlanLedger(opts.operation_plan_state, opts.operation_plan_memory,
@@ -1665,6 +1797,158 @@ ${planControl.question}`,
       approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed" };
   }
 
+  getMemoryJudgmentReassessmentProposals(sourceCommandId: string): OwnerMemoryJudgmentReassessmentProposal[] {
+    if (!this.meaningUpdateMemory || !sourceCommandId || !this.audit.isPersistent() || !this.audit.verify()) return [];
+    const reviews = this.audit.list().map(({ log }) => log).filter((log) => isMemoryCitationReviewLog(log) &&
+      log.command_id === sourceCommandId && log.request_id &&
+      (log.status === "accepted" || log.status === "accepted_with_rejections"));
+    if (reviews.length !== 1) return [];
+    const review = reviews[0];
+    if (!isMemoryCitationReviewLog(review) || !review.request_id) return [];
+    const auditDigest = memoryCitationReviewAuditDigest(review);
+    const results: OwnerMemoryJudgmentReassessmentProposal[] = [];
+    const seen = new Set<string>();
+    for (const dependency of review.interpretation_dependencies ?? []) {
+      const oldRefs = dependency.reassesses_judgment_refs ?? [];
+      const key = `${dependency.reference.record_id}#${dependency.reference.version}`;
+      if (!oldRefs.length || seen.has(key) || !this.verifyCurrentMemoryCitationJudgment(dependency)) continue;
+      seen.add(key);
+      results.push({
+        args: Object.freeze({ citation_request_id: review.request_id, citation_command_id: review.command_id,
+          target_record_id: dependency.reference.record_id, target_version: dependency.reference.version,
+          interpretation_id: dependency.interpretation_id, judgment_ref: dependency.judgment_ref,
+          citation_audit_digest: auditDigest }),
+        reassesses_judgment_refs: Object.freeze([...oldRefs].sort()),
+      });
+    }
+    return results;
+  }
+
+  recordMemoryJudgmentReassessmentContentReview(input: {
+    args: MemoryJudgmentReassessmentArguments;
+    reassesses_judgment_refs: readonly string[];
+    request_id: string;
+    command_id: string;
+    proposal_actor: string;
+    command_digest: string;
+  }): boolean {
+    if (!this.meaningUpdateMemory || !this.audit.isPersistent() || !this.audit.verify() || !input.request_id ||
+        !input.command_id || !input.proposal_actor || input.proposal_actor === "system" ||
+        !/^[a-f0-9]{64}$/.test(input.command_digest)) return false;
+    const proposal = this.getMemoryJudgmentReassessmentProposals(input.args.citation_command_id)
+      .find((item) => JSON.stringify(item.args) === JSON.stringify(input.args) &&
+        JSON.stringify(item.reassesses_judgment_refs) === JSON.stringify([...input.reassesses_judgment_refs].sort()));
+    if (!proposal) return false;
+    const target = memoryJudgmentReassessmentApprovalTarget(input.args);
+    const existing = this.audit.list().find(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+      log.event === "memory_judgment_reassessment_content_reviewed" && log.request_id === input.request_id &&
+      log.command_id === input.command_id && log.projection_digest === input.command_digest &&
+      log.citation_audit_digest === input.args.citation_audit_digest &&
+      log.reassesses_digest === memoryJudgmentRefsDigest(proposal.reassesses_judgment_refs));
+    if (existing) return true;
+    this.audit.append({ kind: "operation_plan", event: "memory_judgment_reassessment_content_reviewed",
+      request_id: input.request_id, command_id: input.command_id, projection_digest: input.command_digest,
+      citation_request_id: input.args.citation_request_id, citation_command_id: input.args.citation_command_id,
+      citation_audit_digest: input.args.citation_audit_digest,
+      target_digest: createHash("sha256").update(target, "utf8").digest("hex"),
+      reassesses_digest: memoryJudgmentRefsDigest(proposal.reassesses_judgment_refs),
+      used_for_authority: false, timestamp: Date.now() });
+    return this.audit.verify();
+  }
+
+  commitMemoryJudgmentReassessmentAfterL3(input: {
+    args: MemoryJudgmentReassessmentArguments;
+    request_id: string;
+    command_id: string;
+    command_digest: string;
+    content_review_digest: string;
+    proposal_actor: string;
+    reviewer_actor: string;
+    evaluation: ApprovalEvaluation;
+  }): { readonly ok: true; readonly judgment_ref: string; readonly reassesses_digest: string;
+      readonly used_for_authority: false; readonly may_execute: false } | { readonly ok: false; readonly reason: string } {
+    if (!this.meaningUpdateMemory) return { ok: false, reason: "meaning_update_memory_unavailable" };
+    if (!this.audit.isPersistent()) return { ok: false, reason: "audit_not_persistent" };
+    if (!this.audit.verify()) return { ok: false, reason: "audit_invalid" };
+    const requestId = input.request_id.trim();
+    const commandId = input.command_id.trim();
+    const proposalActor = input.proposal_actor.trim();
+    const reviewerActor = input.reviewer_actor.trim();
+    const args = input.args;
+    const target = memoryJudgmentReassessmentApprovalTarget(args);
+    const proposal = this.getMemoryJudgmentReassessmentProposals(args.citation_command_id)
+      .find((item) => JSON.stringify(item.args) === JSON.stringify(args));
+    if (!proposal || !requestId || !commandId || !proposalActor || proposalActor === "system" || !reviewerActor ||
+        !/^[a-f0-9]{64}$/.test(input.command_digest) || input.content_review_digest !== input.command_digest ||
+        input.evaluation.decision !== "ask" || input.evaluation.context.operation !== "tool.call" ||
+        input.evaluation.context.command_id !== commandId || input.evaluation.context.actor !== proposalActor ||
+        input.evaluation.context.target !== target || input.evaluation.risk !== "high" ||
+        input.evaluation.approval_level !== "L3_final_review" || !input.evaluation.final_review_required) {
+      return { ok: false, reason: "approval_not_verified" };
+    }
+    const reassessesDigest = memoryJudgmentRefsDigest(proposal.reassesses_judgment_refs);
+    const entries = this.audit.list();
+    const prior = entries.find(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+      log.event === "memory_judgment_reassessment_committed" && log.request_id === requestId &&
+      log.command_id === commandId && log.citation_audit_digest === args.citation_audit_digest &&
+      log.judgment_ref === args.judgment_ref);
+    if (prior) {
+      const record = this.meaningUpdateMemory.readInterpretation(args.target_record_id)?.record;
+      const eventId = `memory-citation-reassessed:${args.citation_audit_digest}`;
+      const event = record?.events.find((item) => item.event_id === eventId && item.kind === "reassessed");
+      return event?.reassessment_judgment_ref === args.judgment_ref &&
+        memoryJudgmentRefsDigest(event.affected_judgment_refs) === reassessesDigest
+        ? { ok: true, judgment_ref: args.judgment_ref, reassesses_digest: reassessesDigest,
+          used_for_authority: false, may_execute: false }
+        : { ok: false, reason: "reassessment_commit_conflict" };
+    }
+    const evidence = memoryJudgmentReassessmentApprovalEvidence(entries, {
+      request_id: requestId, command_id: commandId, proposal_actor: proposalActor, reviewer_actor: reviewerActor,
+      target, command_digest: input.command_digest, citation_audit_digest: args.citation_audit_digest,
+      reassesses_digest: reassessesDigest,
+    });
+    if (!evidence || JSON.stringify(evidence.evaluation) !== JSON.stringify(input.evaluation)) {
+      return { ok: false, reason: "approval_not_verified" };
+    }
+    const dependency = {
+      reference: { record_id: args.target_record_id, version: args.target_version },
+      interpretation_id: args.interpretation_id, judgment_ref: args.judgment_ref,
+      reassesses_judgment_refs: [...proposal.reassesses_judgment_refs],
+    };
+    if (!this.verifyCurrentMemoryCitationJudgment(dependency)) return { ok: false, reason: "reassessment_source_stale" };
+    let committed: ReturnType<MeaningUpdateMemoryConsumer["reassessJudgments"]>;
+    try {
+      committed = this.meaningUpdateMemory.reassessJudgments({
+        lineage_id: args.target_record_id,
+        update_id: `memory-citation-reassessment:${args.citation_audit_digest}`,
+        j_event_id: `memory-citation-reassessment-approval:${args.citation_audit_digest}`,
+        event_id: `memory-citation-reassessed:${args.citation_audit_digest}`,
+        reason_digest: createHash("sha256").update(`owner-l3:${target}`, "utf8").digest("hex"),
+        evidence_refs: [{ reference: `J-audit:${args.citation_audit_digest}`, digest: args.citation_audit_digest }],
+        affected_judgment_refs: proposal.reassesses_judgment_refs,
+        reassessment_judgment_ref: args.judgment_ref,
+      }, (reference) => {
+        this.memoryJudgmentReassessmentApprovalContext = { ...reference, request_id: requestId, command_id: commandId,
+          command_digest: input.command_digest, proposal_actor: proposalActor, reviewer_actor: reviewerActor,
+          args: structuredClone(args), reassesses_judgment_refs: [...proposal.reassesses_judgment_refs],
+          evaluation: input.evaluation };
+      });
+    } catch { committed = { ok: false, reason: "memory_judgment_reassessment_commit_failed" }; }
+    finally { this.memoryJudgmentReassessmentApprovalContext = undefined; }
+    if (!committed.ok) return { ok: false, reason: committed.reason };
+    this.audit.append({ kind: "operation_plan", event: "memory_judgment_reassessment_committed",
+      request_id: requestId, command_id: commandId, projection_digest: input.command_digest,
+      citation_request_id: args.citation_request_id, citation_command_id: args.citation_command_id,
+      citation_audit_digest: args.citation_audit_digest, target_record_id: args.target_record_id,
+      target_version: args.target_version, interpretation_id: args.interpretation_id,
+      judgment_ref: args.judgment_ref, target_digest: createHash("sha256").update(target, "utf8").digest("hex"),
+      reassesses_digest: reassessesDigest, reassessment_status: "applied",
+      approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed",
+      used_for_authority: false, may_execute: false, timestamp: evidence.timestamp });
+    return { ok: true, judgment_ref: args.judgment_ref, reassesses_digest: reassessesDigest,
+      used_for_authority: false, may_execute: false };
+  }
+
   private readMeaningUpdateMemoryApproval(reference: JMemoryApprovalReference): unknown {
     const context = this.meaningUpdateMemoryApprovalContext;
     if (!context || context.update_id !== reference.update_id || context.j_event_id !== reference.j_event_id ||
@@ -1680,6 +1964,29 @@ ${planControl.question}`,
       reviewer_actor: context.reviewer_actor, target: context.target, command_digest: context.command_digest,
       proposal_digest: context.proposal_digest, candidate_digest: context.candidate_digest,
       review_status: review.reference_review.review_status,
+    });
+    return evidence && JSON.stringify(evidence.evaluation) === JSON.stringify(context.evaluation)
+      ? Object.freeze({ ...reference }) : null;
+  }
+
+  private readMemoryJudgmentReassessmentApproval(reference: JMemoryApprovalReference): unknown {
+    const context = this.memoryJudgmentReassessmentApprovalContext;
+    if (!context || context.update_id !== reference.update_id || context.j_event_id !== reference.j_event_id ||
+        context.content_digest !== reference.content_digest || !this.audit.isPersistent() || !this.audit.verify()) return null;
+    const proposal = this.getMemoryJudgmentReassessmentProposals(context.args.citation_command_id)
+      .find((item) => JSON.stringify(item.args) === JSON.stringify(context.args) &&
+        JSON.stringify(item.reassesses_judgment_refs) === JSON.stringify(context.reassesses_judgment_refs));
+    if (!proposal || !this.verifyCurrentMemoryCitationJudgment({
+      reference: { record_id: context.args.target_record_id, version: context.args.target_version },
+      interpretation_id: context.args.interpretation_id, judgment_ref: context.args.judgment_ref,
+      reassesses_judgment_refs: [...context.reassesses_judgment_refs],
+    })) return null;
+    const target = memoryJudgmentReassessmentApprovalTarget(context.args);
+    const evidence = memoryJudgmentReassessmentApprovalEvidence(this.audit.list(), {
+      request_id: context.request_id, command_id: context.command_id, proposal_actor: context.proposal_actor,
+      reviewer_actor: context.reviewer_actor, target, command_digest: context.command_digest,
+      citation_audit_digest: context.args.citation_audit_digest,
+      reassesses_digest: memoryJudgmentRefsDigest(context.reassesses_judgment_refs),
     });
     return evidence && JSON.stringify(evidence.evaluation) === JSON.stringify(context.evaluation)
       ? Object.freeze({ ...reference }) : null;
@@ -1929,7 +2236,8 @@ ${planControl.question}`,
     const interpretation = record?.interpretations.find((item) => item.interpretation_id === dependency.interpretation_id);
     if (!record || record.application_state !== "active" || record.current_interpretation_id !== dependency.interpretation_id ||
         interpretation?.basis_ref !== `${dependency.reference.record_id}#${dependency.reference.version}`) return false;
-    const entries = this.audit.list().map(({ log }) => log).filter((log) => isMemoryCitationReviewLog(log) && log.request_id &&
+    const auditEntries = this.audit.list();
+    const entries = auditEntries.map(({ log }) => log).filter((log) => isMemoryCitationReviewLog(log) && log.request_id &&
       (log.status === "accepted" || log.status === "accepted_with_rejections") &&
       (log.interpretation_dependencies ?? []).some((candidate) =>
         candidate.reference.record_id === dependency.reference.record_id &&
@@ -1949,7 +2257,7 @@ ${planControl.question}`,
           dependency.reference.record_id, dependency.reference.version) ||
         !memoryCitationReviewUsesReference(currentLog, dependency.reference)) return false;
     const exactBasisRef = `${dependency.reference.record_id}#${dependency.reference.version}`;
-    const expectedReassessments = this.audit.list().flatMap(({ log }) => {
+    const expectedReassessments = auditEntries.flatMap(({ log }) => {
       if (!isMemoryCitationReviewLog(log) || !log.request_id ||
           (log.status !== "accepted" && log.status !== "accepted_with_rejections")) return [];
       return (log.interpretation_dependencies ?? []).filter((candidate) =>
@@ -1970,13 +2278,53 @@ ${planControl.question}`,
     });
     const memoryReassessmentRefs = memoryCitationReassessments.map((judgment) => judgment.judgment_ref).sort();
     if (new Set(memoryReassessmentRefs).size !== memoryReassessmentRefs.length ||
-        memoryCitationReassessments.some((judgment) => !judgment.reassessment_required) ||
         expectedReassessments.length !== memoryReassessmentRefs.length ||
         expectedReassessments.some((judgmentRef, index) => judgmentRef !== memoryReassessmentRefs[index])) return false;
     const recordedReassessments = currentDependency.reassesses_judgment_refs ?? [];
     if (new Set(recordedReassessments).size !== recordedReassessments.length) return false;
-    return expectedReassessments.length === recordedReassessments.length &&
-      expectedReassessments.every((judgmentRef, index) => judgmentRef === [...recordedReassessments].sort()[index]);
+    if (expectedReassessments.length !== recordedReassessments.length ||
+        !expectedReassessments.every((judgmentRef, index) => judgmentRef === [...recordedReassessments].sort()[index])) return false;
+    const currentJudgment = record.dependent_judgments.find((judgment) => judgment.judgment_ref === dependency.judgment_ref);
+    if (!currentJudgment) return memoryCitationReassessments.every((judgment) => judgment.reassessment_required);
+    if (currentJudgment.basis_interpretation_id !== dependency.interpretation_id || currentJudgment.reassessment_required ||
+        memoryCitationReassessments.some((judgment) => judgment.reassessment_required)) return false;
+    const reassessesDigest = memoryJudgmentRefsDigest(expectedReassessments);
+    const citationAuditDigest = memoryCitationReviewAuditDigest(currentLog);
+    const target = memoryJudgmentReassessmentApprovalTarget({
+      citation_request_id: currentLog.request_id, citation_command_id: currentLog.command_id,
+      target_record_id: dependency.reference.record_id, target_version: dependency.reference.version,
+      interpretation_id: dependency.interpretation_id, judgment_ref: dependency.judgment_ref,
+      citation_audit_digest: citationAuditDigest,
+    });
+    const committed = auditEntries.filter(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+      log.event === "memory_judgment_reassessment_committed" && log.judgment_ref === dependency.judgment_ref &&
+      log.citation_audit_digest === citationAuditDigest &&
+      log.target_record_id === dependency.reference.record_id && log.target_version === dependency.reference.version &&
+      log.interpretation_id === dependency.interpretation_id && log.reassesses_digest === reassessesDigest);
+    if (committed.length !== 1) return false;
+    const markerEntry = committed[0]!;
+    const marker = markerEntry.log;
+    if (!("kind" in marker) || marker.kind !== "operation_plan" ||
+        marker.event !== "memory_judgment_reassessment_committed" || !marker.request_id || !marker.command_id ||
+        !marker.projection_digest || marker.reassessment_status !== "applied" || marker.approval_status !== "approved" ||
+        marker.memory_application_status !== "applied" || marker.used_for_authority !== false || marker.may_execute !== false) return false;
+    const event = record.events.find((item) => item.event_id === `memory-citation-reassessed:${citationAuditDigest}` &&
+      item.kind === "reassessed");
+    if (!event || event.reassessment_judgment_ref !== dependency.judgment_ref ||
+        memoryJudgmentRefsDigest(event.affected_judgment_refs) !== reassessesDigest) return false;
+    const askEntry = auditEntries.find(({ log }) => "kind" in log && log.kind === "approval_gate" &&
+      log.request_id === marker.request_id && log.command_id === marker.command_id);
+    const approvedEntry = auditEntries.find(({ log }) => "kind" in log && log.kind === "command_lifecycle" &&
+      log.request_id === marker.request_id && log.command_id === marker.command_id && log.phase === "approval_approved");
+    if (!askEntry || !("kind" in askEntry.log) || askEntry.log.kind !== "approval_gate" || !approvedEntry ||
+        !("kind" in approvedEntry.log) || approvedEntry.log.kind !== "command_lifecycle") return false;
+    const evidence = memoryJudgmentReassessmentApprovalEvidence(auditEntries, {
+      request_id: marker.request_id, command_id: marker.command_id,
+      proposal_actor: askEntry.log.evaluation.context.actor, reviewer_actor: approvedEntry.log.actor,
+      target, command_digest: marker.projection_digest, citation_audit_digest: citationAuditDigest,
+      reassesses_digest: reassessesDigest, before_index: markerEntry.index,
+    });
+    return evidence !== null && evidence.timestamp === marker.timestamp && evidence.evaluation === askEntry.log.evaluation;
   }
 
   private captureMemoryReference(log: DecisionLog): void {

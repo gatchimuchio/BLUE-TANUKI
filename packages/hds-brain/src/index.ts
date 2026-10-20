@@ -142,8 +142,11 @@ export {
   type HDSRuntimeSnapshot,
   type HDSExecutionAuthorityBinding,
   type MeaningUpdateAdoptionArguments,
+  type MemoryJudgmentReassessmentArguments,
+  type OwnerMemoryJudgmentReassessmentProposal,
   type OwnerMeaningUpdateProposalReview,
   consumeHdsExecutionAuthorityBinding,
+  memoryCitationReviewAuditDigest,
 } from "./controller.js";
 export {
   routeAction,
@@ -195,6 +198,7 @@ export {
   goalPurposeChangeApprovalTarget,
   goalPurposeRelationReviewApprovalTarget,
   meaningUpdateAdoptionApprovalTarget,
+  memoryJudgmentReassessmentApprovalTarget,
   type ApprovalMode,
   type ApprovalDecision,
   type ApprovalRisk,

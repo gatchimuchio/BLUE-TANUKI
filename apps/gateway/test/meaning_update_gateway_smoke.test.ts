@@ -28,8 +28,8 @@ afterEach(async () => {
   await Promise.all([...childProcesses].map(stopChild));
 });
 
-describe("C07.02 Gateway producer-to-private-M consumer", () => {
-  it("routes a C candidate through explicit owner L3 review into private M", async () => {
+describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
+  it("persists a meaning candidate, then explicitly reassesses prior citation judgments", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-c0702-gateway-"));
     const auditDir = join(tempRoot, "audit");
     const stateRoot = join(tempRoot, "state");
@@ -37,6 +37,7 @@ describe("C07.02 Gateway producer-to-private-M consumer", () => {
     const historyFile = join(tempRoot, "complete-history.jsonl");
     const sessionDir = join(tempRoot, "sessions");
     const candidateMeaning = "Synthetic owner-reviewed meaning; no external effect.";
+    const revisedMeaning = "Synthetic revised meaning after fresh evidence; no external effect.";
     let providerCalls = 0;
     let providerFailure: unknown;
 
@@ -56,14 +57,18 @@ describe("C07.02 Gateway producer-to-private-M consumer", () => {
         providerCalls += 1;
         const raw = await readRequest(request);
         const body = JSON.parse(raw) as { messages?: Array<{ content?: unknown }> };
-        const contextMessage = body.messages?.find((message) => typeof message.content === "string" &&
-          message.content.includes("blue-tanuki.memory-candidates.v1"));
-        if (typeof contextMessage?.content !== "string") throw new Error("current-M projection was not sent to C");
-        const jsonStart = contextMessage.content.indexOf("\n") + 1;
-        const context = JSON.parse(contextMessage.content.slice(jsonStart)) as {
+        const contexts = (body.messages ?? []).flatMap((message) => {
+          if (typeof message.content !== "string" || !message.content.includes("blue-tanuki.memory-candidates.v1")) return [];
+          const jsonStart = message.content.indexOf("\n") + 1;
+          try { return [JSON.parse(message.content.slice(jsonStart)) as {
           search_plan?: { plan_id?: string; application_scope_id?: string };
           records?: Array<{ record_id: string; version: string }>;
-        };
+          }]; } catch { return []; }
+        }).filter((context) => context.records?.some((item) => item.record_id === support.f_reference &&
+          item.version === support.entry_hash) && context.records?.some((item) => item.record_id === counter.f_reference &&
+          item.version === counter.entry_hash));
+        const context = contexts.at(-1);
+        if (!context) throw new Error("current-M projection with both synthetic references was not sent to C");
         const planId = context.search_plan?.plan_id;
         const applicationScopeId = context.search_plan?.application_scope_id;
         const records = context.records ?? [];
@@ -73,26 +78,27 @@ describe("C07.02 Gateway producer-to-private-M consumer", () => {
         const currentSupport = records.find((item) => item.record_id === support.f_reference && item.version === support.entry_hash);
         const currentCounter = records.find((item) => item.record_id === counter.f_reference && item.version === counter.entry_hash);
         if (!currentSupport || !currentCounter) throw new Error("requested synthetic M references were not projected");
-        const proposal = {
+        const candidateForCall = providerCalls === 1 ? candidateMeaning : revisedMeaning;
+        const proposal = providerCalls <= 2 ? {
           schema_version: "blue-tanuki.meaning-update-proposal.v3",
           record_type: "meaning_update_proposal",
-          proposal_ref: "proposal:c0702-gateway-smoke",
-          candidate_ref: "candidate:c0702-gateway-smoke",
-          candidate_digest: meaningUpdateCandidateDigest(candidateMeaning),
-          candidate_meaning: candidateMeaning,
+          proposal_ref: `proposal:c0702-gateway-smoke:${providerCalls}`,
+          candidate_ref: `candidate:c0702-gateway-smoke:${providerCalls}`,
+          candidate_digest: meaningUpdateCandidateDigest(candidateForCall),
+          candidate_meaning: candidateForCall,
           target_reference: { record_id: currentSupport.record_id, version: currentSupport.version },
-          prior_version_ref: "version:c0702-synthetic-prior",
+          prior_version_ref: `version:c0702-synthetic-prior:${providerCalls}`,
           supporting_evidence: [{ reference: currentSupport.record_id, digest: currentSupport.version }],
           counterevidence_review: { status: "reviewed_with_references" as const,
             review_scope: { reference: applicationScopeId, digest: planId },
             references: [{ reference: currentCounter.record_id, digest: currentCounter.version }] },
           applicability_scope: { reference: applicationScopeId, digest: planId },
-          reflection_target_ref: "reflection:c0702-gateway-smoke",
+          reflection_target_ref: `reflection:c0702-gateway-smoke:${providerCalls}`,
           proposal_status: "unverified" as const,
           adoption_status: "not_adopted" as const,
           may_apply: false as const,
           used_for_authority: false as const,
-        };
+        } : undefined;
         const content = JSON.stringify({ schema_version: "blue-tanuki.memory-citation-response.v1",
           answer: "Synthetic C response with current references.", citations: [{
             claim: "Synthetic candidate statement.",
@@ -103,7 +109,7 @@ describe("C07.02 Gateway producer-to-private-M consumer", () => {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({ id: "c0702-local-fixture", object: "chat.completion", created: 1,
           model: "c0702-local-fixture", choices: [{ index: 0, message: { role: "assistant", content,
-            meaning_update_proposal: proposal }, finish_reason: "stop" }],
+            ...(proposal ? { meaning_update_proposal: proposal } : {}) }, finish_reason: "stop" }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
       })().catch((error: unknown) => {
         providerFailure = error;
@@ -181,10 +187,104 @@ describe("C07.02 Gateway producer-to-private-M consumer", () => {
       } finally {
         db.close();
       }
+
+      const secondInvocation = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST", headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0702-owner", content:
+          "Review the same synthetic references again and propose a revised candidate after the first adoption." }),
+      });
+      expect(secondInvocation.status).toBe(202);
+      const secondPending = await waitForMeaningUpdateApproval(gatewayPort, gateway, () => providerFailure,
+        () => providerCalls, auditDir);
+      expect(secondPending.meaning_update_review).toMatchObject({ kind: "meaning_update_adoption", review_status: "required" });
+      const secondApprovalPath = `http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(secondPending.command_id))}`;
+      const secondReviewResponse = await fetch(`${secondApprovalPath}/content`, {
+        method: "POST", headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+      });
+      expect(secondReviewResponse.status).toBe(200);
+      const secondReview = await secondReviewResponse.json() as Record<string, unknown>;
+      expect(secondReview).toMatchObject({ kind: "meaning_update_adoption", candidate_meaning: revisedMeaning,
+        used_for_authority: false, may_execute: false });
+      const secondApproved = await fetch(secondApprovalPath, { method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: secondPending.approval_token,
+          content_review_digest: secondReview.command_digest }) });
+      expect(secondApproved.status).toBe(200);
+      expect(await secondApproved.json()).toMatchObject({ ok: true, result: { executed: false,
+        status: "meaning_update_adoption_committed", memory_application_status: "applied" } });
+
+      const thirdInvocation = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST", headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0702-owner", content:
+          "Use the current interpretation of F:c0702-support and F:c0702-counter to reassess the prior synthetic citation decision." }),
+      });
+      expect(thirdInvocation.status).toBe(202);
+      const reassessmentPending = await waitForMemoryJudgmentReassessmentApproval(gatewayPort, gateway,
+        () => providerFailure, () => providerCalls, auditDir);
+      expect(reassessmentPending).toMatchObject({ operation: "tool.call", approval_level: "L3_final_review",
+        final_review_required: true, content_review_required: true,
+        memory_judgment_reassessment_review: { kind: "memory_judgment_reassessment", review_status: "required",
+          used_for_authority: false, may_execute: false } });
+      expect(String(reassessmentPending.target)).toMatch(/^memory\.citation\.reassess:/);
+      const reassessmentPath = `http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(reassessmentPending.command_id))}`;
+      const reassessmentRequest = { method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: reassessmentPending.approval_token }) };
+      const reassessmentBlocked = await fetchRespectingRetryAfter(reassessmentPath, reassessmentRequest);
+      expect(reassessmentBlocked.status).toBe(409);
+      expect(await reassessmentBlocked.json()).toMatchObject({ error: "approval_content_review_required" });
+      const reassessmentReviewResponse = await fetchRespectingRetryAfter(`${reassessmentPath}/content`, {
+        method: "POST", headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+      });
+      expect(reassessmentReviewResponse.status).toBe(200);
+      const reassessmentReview = await reassessmentReviewResponse.json() as Record<string, unknown>;
+      expect(reassessmentReview).toMatchObject({ kind: "memory_judgment_reassessment",
+        operation: "memory.citation.reassess", used_for_authority: false, may_execute: false });
+      const reviewPriorRefs = reassessmentReview.reassesses_judgment_refs as string[];
+      const freshJudgmentRef = String(reassessmentReview.judgment_ref);
+      expect(reviewPriorRefs.length).toBeGreaterThan(0);
+      const beforeReassessment = new DatabaseSync(memoryDatabase, { readOnly: true });
+      try {
+        const row = beforeReassessment.prepare("SELECT value_json FROM m_records WHERE record_id = ?")
+          .get(`memory-interpretation:${support.f_reference}`) as { value_json?: string } | undefined;
+        const interpretation = JSON.parse(row?.value_json ?? "null") as {
+          dependent_judgments?: Array<{ judgment_ref: string; reassessment_required: boolean }>;
+        };
+        expect(interpretation.dependent_judgments?.find((item) => item.judgment_ref === freshJudgmentRef)).toBeUndefined();
+        for (const oldRef of reviewPriorRefs) {
+          expect(interpretation.dependent_judgments?.find((item) => item.judgment_ref === oldRef)?.reassessment_required).toBe(true);
+        }
+      } finally { beforeReassessment.close(); }
+      const reassessmentApproved = await fetchRespectingRetryAfter(reassessmentPath, { method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: reassessmentPending.approval_token,
+          content_review_digest: reassessmentReview.command_digest }) });
+      expect(reassessmentApproved.status).toBe(200);
+      expect(await reassessmentApproved.json()).toMatchObject({ ok: true, result: { approval: "approve",
+        executed: false, status: "memory_judgment_reassessment_committed", judgment_ref: freshJudgmentRef,
+        used_for_authority: false, may_execute: false } });
+      const afterReassessment = new DatabaseSync(memoryDatabase, { readOnly: true });
+      try {
+        const row = afterReassessment.prepare("SELECT value_json FROM m_records WHERE record_id = ?")
+          .get(`memory-interpretation:${support.f_reference}`) as { value_json?: string } | undefined;
+        const interpretation = JSON.parse(row?.value_json ?? "null") as {
+          events?: Array<{ kind?: string; reassessment_judgment_ref?: string }>;
+          dependent_judgments?: Array<{ judgment_ref: string; reassessment_required: boolean }>;
+        };
+        expect(interpretation.events?.at(-1)).toMatchObject({ kind: "reassessed", reassessment_judgment_ref: freshJudgmentRef });
+        expect(interpretation.dependent_judgments?.find((item) => item.judgment_ref === freshJudgmentRef)?.reassessment_required)
+          .toBe(false);
+        for (const oldRef of reviewPriorRefs) {
+          expect(interpretation.dependent_judgments?.find((item) => item.judgment_ref === oldRef)?.reassessment_required)
+            .toBe(false);
+        }
+      } finally { afterReassessment.close(); }
+
       for (const persistedFile of [join(auditDir, "audit.jsonl"), historyFile]) {
         expect(readFileSync(persistedFile, "utf8")).not.toContain(candidateMeaning);
+        expect(readFileSync(persistedFile, "utf8")).not.toContain(revisedMeaning);
       }
-      expect(providerCalls).toBe(1);
+      expect(providerCalls).toBe(3);
     } finally {
       if (gateway) await stopChild(gateway.child);
       await closeServer(provider);
@@ -227,10 +327,44 @@ async function waitForMeaningUpdateApproval(port: number, gateway: CapturedProce
     `gateway_stdout=${gateway.stdout.join("")}; gateway_stderr=${gateway.stderr.join("")}`);
 }
 
+async function waitForMemoryJudgmentReassessmentApproval(port: number, gateway: CapturedProcess,
+  providerFailure: () => unknown, providerCalls: () => number, auditDir: string): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);
+    const failure = providerFailure();
+    if (failure) throw failure;
+    const response = await fetch(`http://127.0.0.1:${port}/approval`, {
+      headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+    });
+    if (response.ok) {
+      const queue = await response.json() as { pending_approvals?: Array<Record<string, unknown>> };
+      const pending = queue.pending_approvals?.find((item) => item.operation === "tool.call" &&
+        typeof item.target === "string" && item.target.startsWith("memory.citation.reassess:"));
+      if (pending) return pending;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const auditText = existsSync(join(auditDir, "audit.jsonl")) ? readFileSync(join(auditDir, "audit.jsonl"), "utf8") : "";
+  throw new Error(`memory judgment reassessment did not reach the owner L3 queue; provider_calls=${providerCalls()}; ` +
+    `audit_tail=${auditText.slice(-2500)}; ` +
+    `gateway_stdout=${gateway.stdout.join("")}; gateway_stderr=${gateway.stderr.join("")}`);
+}
+
 async function readRequest(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks).toString("utf8");
+}
+
+async function fetchRespectingRetryAfter(input: string | URL, init: RequestInit, maxRetries = 4): Promise<Response> {
+  for (let retry = 0; ; retry += 1) {
+    const response = await fetch(input, init);
+    if (response.status !== 429 || retry >= maxRetries) return response;
+    const retryAfterSeconds = Number(response.headers.get("retry-after"));
+    const delayMs = Math.max(1000, Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 + 100 : 1000);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
 }
 
 function isolatedEnvironment(providerPort: number, gatewayPort: number, auditDir: string, stateRoot: string,

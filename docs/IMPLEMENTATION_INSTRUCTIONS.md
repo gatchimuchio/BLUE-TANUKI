@@ -1,14 +1,24 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-C07.03-FRESH-JUDGMENT-PLAN-REVIEW-CONSUMER`
+### 最新BUILD_BATCH：`QEB-01-C07.03-OWNER-L3-REASSESSMENT-M-COMMIT`
 
-batch開始`main`／`origin/main`=`dcae5c33781299aeae374887ea1432c3a185dc41`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、C07.03／C07要求、citation review・M interpretation・plan reviewの現行producer／consumerを再読した。Windows localで実装し、既存untracked Linux `target/`を保持する。
+batch開始時`main`／`origin/main`=`0f2d21334b4bed4a862e1d05f68efc933489411d`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、C07.03／C07要求、J citation audit・M interpretation・plan review・Gateway approvalの現行producer／consumerを再読した。Windows localで施工し、既存untracked Linux `target/`を保持した。
 
-目的は、新しいJ citation判断から受け取る解釈依存をstrictなplan dependency契約に通し、`plan:review`で現M解釈と現J監査を照合するconsumerへ接続すること。Mに判断がない場合も、現在のinterpretation・record/version・judgment refを受理済みJ auditで一意に再検証し、旧引用judgment集合がJ auditとMの再評価待ち集合の双方に一致するときだけreviewを通す。旧planは引き続き拒否する。M書込み・旧判断の解除・plan実行は行わず、引用判断を真実・承認・権限へ昇格させない。
+目的は、新解釈に基づくfresh J citation judgmentから、明示的owner L3・digest結合content reviewを経て、指定された旧判断だけを追記式に再評価しprivate Mへ反映する経路を接続すること。owner L3前はMを書かず、M transaction後は新旧judgment refを同じinterpretation lineageで照合する。`used_for_authority=false`／`may_execute=false`を維持し、内部操作をExecutorへ送らない。
 
-対象はC07.03のfresh citation audit→current M interpretation→new plan review consumerと、その再評価参照を運ぶprotocol契約。対象外はC07親の全経路、現判断のM登録・旧判断解消、plan実行、D4Pocket／別repo、実provider・credential、外部作用、全体QE_QC／QE_QA、公開・出荷判断。fresh plan review consumerを`WIRED`とし、目的→C→J→Broker／Executor→結果→M→帰還の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は引き続き`BUILD_GAP`。
+対象はC07.03のfresh citation judgment→owner L3 content review→HDS検証済みM reassessment transaction。対象外はC07親と目的→C→J→Broker／Executor→結果→M→帰還の全経路、新しいplan review／plan実行、D4Pocket／別repo、実provider・credential、外部作用、全体QE_QC／QE_QA、公開・出荷判断。今回のreassessment consumerを`WIRED`とする。C07親、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。
 
-次consumerはfresh current J judgmentから明示再評価transactionを経てprivate Mへ新判断を追記する経路。owner L3検証済みApproval／M transactionを保ち、引用の受理だけからM書込みを起こさない。
+次consumerは今回のM追記後に新しいJ citation judgmentを現在interpretationへ結び、新規planだけを`plan:review`へ通す経路。古いplanを再利用せず、plan reviewは最新J/M lineageを再照合し、実行 consumer は別途未接続のまま扱う。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| HDS `meaning_update_memory.test.ts`／`operation_plan_interpretation_reassessment.test.ts`／`記憶再解釈.test.ts` | PASS、3 files／5 tests。指定旧judgmentの追記再評価と新旧lineageの更新を確認。 |
+| Gateway `meaning_update_gateway_smoke.test.ts` | PASS、1 test。owner L3前のM不変、content review必須、L3後のM追記、audit/historyへの候補本文非露出を確認。 |
+| `pnpm hds:standalone`／`pnpm typecheck`／`pnpm build` | PASS。standaloneのnon-authority invariantsを確認、workspace 15 projectsをbuild。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。全体形状成立後へ配置。Windows localで必要な技術確認ができるためActions未使用。 |
+
+C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。実装と文書closeout後の復元refはremote mainおよび二世代tagを照合して記録する。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|

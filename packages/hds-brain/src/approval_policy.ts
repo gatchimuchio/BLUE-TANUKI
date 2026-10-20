@@ -179,6 +179,20 @@ export function meaningUpdateAdoptionApprovalTarget(input: {
     input.target_record_id, input.target_version].join(":");
 }
 
+export function memoryJudgmentReassessmentApprovalTarget(input: {
+  citation_request_id: string;
+  citation_command_id: string;
+  target_record_id: string;
+  target_version: string;
+  interpretation_id: string;
+  judgment_ref: string;
+  citation_audit_digest: string;
+}): string {
+  const binding = [input.citation_request_id, input.citation_command_id, input.target_record_id,
+    input.target_version, input.interpretation_id, input.judgment_ref, input.citation_audit_digest].join("\n");
+  return `memory.citation.reassess:${createHash("sha256").update(binding, "utf8").digest("hex")}`;
+}
+
 export function approvalContextFromCommand(command: ExecuteCommand, opts: { actor?: string; now?: number } = {}): ApprovalContext {
   const actor = opts.actor?.trim() || "local-user";
   const now = opts.now ?? Date.now();
@@ -426,6 +440,22 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
         ? args.target_version : "invalid-target-version";
       return { target_scope: "task_type", target: meaningUpdateAdoptionApprovalTarget({
         proposal_digest, candidate_digest, target_record_id, target_version,
+      }) };
+    }
+    if (command.payload.tool_name === "memory.citation.reassess") {
+      const fields = ["citation_request_id", "citation_command_id", "target_record_id", "target_version",
+        "interpretation_id", "judgment_ref", "citation_audit_digest"] as const;
+      if (fields.some((field) => typeof args[field] !== "string")) {
+        return { target_scope: "task_type", target: "memory.citation.reassess:invalid" };
+      }
+      return { target_scope: "task_type", target: memoryJudgmentReassessmentApprovalTarget({
+        citation_request_id: args.citation_request_id as string,
+        citation_command_id: args.citation_command_id as string,
+        target_record_id: args.target_record_id as string,
+        target_version: args.target_version as string,
+        interpretation_id: args.interpretation_id as string,
+        judgment_ref: args.judgment_ref as string,
+        citation_audit_digest: args.citation_audit_digest as string,
       }) };
     }
     if (op === "github.write") {

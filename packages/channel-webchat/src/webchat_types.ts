@@ -125,6 +125,19 @@ export interface WebChatApprovalQueueItem {
     may_execute: false;
     used_for_authority: false;
   };
+  /** Digest-only status for an owner-reviewed J-to-M citation reassessment transaction. */
+  memory_judgment_reassessment_review?: {
+    kind: "memory_judgment_reassessment";
+    citation_audit_digest: string;
+    target_record_id: string;
+    target_version: string;
+    interpretation_id: string;
+    judgment_ref: string;
+    reassesses_judgment_refs: readonly string[];
+    review_status: "required" | "reviewed" | "stale";
+    used_for_authority: false;
+    may_execute: false;
+  };
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   authority_trace?: unknown;
@@ -220,8 +233,26 @@ export interface WebChatMeaningUpdateContentReview {
   used_for_authority: false;
 }
 
+export interface WebChatMemoryJudgmentReassessmentContentReview {
+  kind: "memory_judgment_reassessment";
+  command_id: string;
+  command_digest: string;
+  request_payload_digest: string;
+  operation: "memory.citation.reassess";
+  citation_request_id: string;
+  citation_command_id: string;
+  citation_audit_digest: string;
+  target_record_id: string;
+  target_version: string;
+  interpretation_id: string;
+  judgment_ref: string;
+  reassesses_judgment_refs: readonly string[];
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
-  WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview;
+  WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

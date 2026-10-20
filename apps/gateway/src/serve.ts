@@ -8,6 +8,8 @@ import {
   goalPurposeChangeApprovalTarget,
   goalPurposeRelationReviewApprovalTarget,
   meaningUpdateAdoptionApprovalTarget,
+  memoryJudgmentReassessmentApprovalTarget,
+  memoryCitationReviewAuditDigest,
   runPeriodicFailureMemoryVerification,
 } from "@blue-tanuki/hds-brain";
 import type {
@@ -20,6 +22,8 @@ import type {
   PeriodicVerificationTrigger,
   OperationPlanGoalPurposeRelationReviewContent,
   MeaningUpdateAdoptionArguments,
+  MemoryJudgmentReassessmentArguments,
+  OwnerMemoryJudgmentReassessmentProposal,
 } from "@blue-tanuki/hds-brain";
 import {
   buildOperationCoreApprovalTrace,
@@ -81,6 +85,7 @@ import type {
   WebChatApprovalContentReviewValidation,
   WebChatGoalPurposeRelationContentReview,
   WebChatMeaningUpdateContentReview,
+  WebChatMemoryJudgmentReassessmentContentReview,
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
   WebChatAuthorityTraceItem,
@@ -226,6 +231,11 @@ interface PendingApproval {
     proposal_digest: string;
     proposal_actor: string;
   };
+  memory_judgment_reassessment_proposal?: {
+    args: MemoryJudgmentReassessmentArguments;
+    reassesses_judgment_refs: readonly string[];
+    proposal_actor: string;
+  };
 }
 
 interface EmergencyStopState {
@@ -317,12 +327,36 @@ function getMeaningUpdateAdoptionArguments(command: ExecuteCommand): MeaningUpda
     target_record_id: args.target_record_id, target_version: args.target_version };
 }
 
+function getMemoryJudgmentReassessmentArguments(command: ExecuteCommand): MemoryJudgmentReassessmentArguments | null {
+  if (command.type !== "tool_call" || command.payload.tool_name !== "memory.citation.reassess") return null;
+  const args = command.payload.arguments;
+  const keys = Object.keys(args).sort();
+  const expected = ["citation_audit_digest", "citation_command_id", "citation_request_id", "interpretation_id",
+    "judgment_ref", "target_record_id", "target_version"].sort();
+  if (keys.join(",") !== expected.join(",") ||
+      typeof args.citation_request_id !== "string" || !/^[A-Za-z0-9_.:-]{1,200}$/.test(args.citation_request_id) ||
+      typeof args.citation_command_id !== "string" || !/^[A-Za-z0-9_.:-]{1,200}$/.test(args.citation_command_id) ||
+      typeof args.target_record_id !== "string" || !/^F:[A-Za-z0-9_.:-]{1,96}$/.test(args.target_record_id) ||
+      typeof args.target_version !== "string" || !/^[a-f0-9]{64}$/.test(args.target_version) ||
+      typeof args.interpretation_id !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(args.interpretation_id) ||
+      typeof args.judgment_ref !== "string" || !/^memory-citation-review:[A-Za-z0-9_.:-]{1,200}$/.test(args.judgment_ref) ||
+      typeof args.citation_audit_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.citation_audit_digest)) return null;
+  return { citation_request_id: args.citation_request_id, citation_command_id: args.citation_command_id,
+    target_record_id: args.target_record_id, target_version: args.target_version,
+    interpretation_id: args.interpretation_id, judgment_ref: args.judgment_ref,
+    citation_audit_digest: args.citation_audit_digest };
+}
+
 function isGoalPurposeChangeCommand(command: ExecuteCommand): boolean {
   return command.type === "tool_call" && command.payload.tool_name === "goal.governance.change";
 }
 
 function isMeaningUpdateAdoptionCommand(command: ExecuteCommand): boolean {
   return command.type === "tool_call" && command.payload.tool_name === "memory.meaning.adopt";
+}
+
+function isMemoryJudgmentReassessmentCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "memory.citation.reassess";
 }
 
 function isWellFormedUnicode(value: string): boolean {
@@ -1015,6 +1049,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
       goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
       meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
+      memory_judgment_reassessment_proposal?: PendingApproval["memory_judgment_reassessment_proposal"];
       quiet_approval_notice?: boolean;
     } = {},
   ): Promise<{ status: string }> {
@@ -1165,6 +1200,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           reason: "meaning_update_adoption_requires_l3_final_review", request_id: log.request_id });
         return { status: "meaning_update_adoption_requires_l3_final_review" };
       }
+      if (isMemoryJudgmentReassessmentCommand(cmd) &&
+          (evaluation.decision !== "ask" || evaluation.risk !== "high" ||
+           evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required)) {
+        hds.onCommandLifecycle(cmd.id, "approval_rejected", { actor,
+          reason: "memory_judgment_reassessment_requires_l3_final_review", request_id: log.request_id });
+        return { status: "memory_judgment_reassessment_requires_l3_final_review" };
+      }
       const failureMemoryRequiresApproval = failureGate.decision === "require_approval";
       if (evaluation.decision === "ask" || failureMemoryRequiresApproval) {
         if (runtimeScheduleMutationCommand(cmd)) {
@@ -1238,6 +1280,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           ...(opts.goal_purpose_relation_review_proposal
             ? { goal_purpose_relation_review_proposal: opts.goal_purpose_relation_review_proposal } : {}),
           ...(opts.meaning_update_proposal ? { meaning_update_proposal: opts.meaning_update_proposal } : {}),
+          ...(opts.memory_judgment_reassessment_proposal
+            ? { memory_judgment_reassessment_proposal: opts.memory_judgment_reassessment_proposal } : {}),
         });
         const approvalContent = failureMemoryRequiresApproval
           ? `${approvalRequiredMessage(evaluation, cmd.id, issued?.token)} failure_memory_gate=${failureGate.reason}`
@@ -1290,6 +1334,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor,
         reason: "meaning_update_adoption_has_no_executor_path", request_id: log.request_id });
       return { status: "meaning_update_adoption_has_no_executor_path" };
+    }
+    if (isMemoryJudgmentReassessmentCommand(cmd)) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor,
+        reason: "memory_judgment_reassessment_has_no_executor_path", request_id: log.request_id });
+      return { status: "memory_judgment_reassessment_has_no_executor_path" };
     }
     if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
@@ -1782,6 +1831,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         source_command_id_digest: digestString(cmd.id), status: queued.status,
       });
     }
+    if (cmd.type === "llm_call" && fb.status === "success") {
+      for (const proposal of hds.getMemoryJudgmentReassessmentProposals(cmd.id)) {
+        const queued = await submitMemoryJudgmentReassessmentProposal(proposal);
+        if (!queued.accepted) gatewayLog.info("fresh citation judgment was not queued for owner reassessment", {
+          source_command_id_digest: digestString(cmd.id),
+          citation_audit_digest: proposal.args.citation_audit_digest,
+          status: queued.status,
+        });
+      }
+    }
     if (content) await dispatcher.dispatch({ channel: origin.channel, target: replyTarget(origin), content }, { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
     return { status: finalized.reviewed_feedback.status };
   }
@@ -1959,6 +2018,23 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         proposal_digest: committed.proposal_digest, candidate_digest: committed.candidate_digest,
         approval_status: committed.approval_status, memory_application_status: committed.memory_application_status,
         follow_up_action_status: committed.follow_up_action_status, used_for_authority: false, may_execute: false };
+    }
+    if (pending.memory_judgment_reassessment_proposal) {
+      const proposal = pending.memory_judgment_reassessment_proposal;
+      const args = getMemoryJudgmentReassessmentArguments(pending.command);
+      if (!args || JSON.stringify(args) !== JSON.stringify(proposal.args) ||
+          !memoryJudgmentReassessmentProposalIsCurrent(pending) ||
+          validateMemoryJudgmentReassessmentContentReview(pending, ctx.content_review_digest) !== "valid") {
+        return { approval: "approve", executed: false, status: "memory_judgment_reassessment_stale" };
+      }
+      const committed = hds.commitMemoryJudgmentReassessmentAfterL3({ args, request_id: pending.log.request_id,
+        command_id, command_digest: pending.command_digest, content_review_digest: ctx.content_review_digest ?? "",
+        proposal_actor: proposal.proposal_actor, reviewer_actor: approvalActor, evaluation: pending.evaluation });
+      if (!committed.ok) return { approval: "approve", executed: false,
+        status: `memory_judgment_reassessment_${committed.reason}` };
+      return { approval: "approve", executed: false, status: "memory_judgment_reassessment_committed",
+        judgment_ref: committed.judgment_ref, reassesses_digest: committed.reassesses_digest,
+        used_for_authority: false, may_execute: false };
     }
     if (pending.goal_purpose_relation_review_proposal) {
       const proposal = pending.goal_purpose_relation_review_proposal;
@@ -2569,6 +2645,76 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       candidate_digest: current.proposal.candidate_digest, request_id: log.request_id, command_id: command.id };
   }
 
+  async function submitMemoryJudgmentReassessmentProposal(proposal: OwnerMemoryJudgmentReassessmentProposal): Promise<{
+    accepted: boolean; status: string; request_id?: string; command_id?: string;
+  }> {
+    const current = hds.getMemoryJudgmentReassessmentProposals(proposal.args.citation_command_id).find((item) =>
+      JSON.stringify(item.args) === JSON.stringify(proposal.args) &&
+      JSON.stringify(item.reassesses_judgment_refs) === JSON.stringify(proposal.reassesses_judgment_refs));
+    if (!current) return { accepted: false, status: "memory_judgment_reassessment_stale_or_unavailable" };
+    const duplicate = Array.from(pendingApprovals.values()).find((pending) => {
+      const queued = pending.memory_judgment_reassessment_proposal;
+      return queued?.args.citation_audit_digest === proposal.args.citation_audit_digest &&
+        queued.args.target_record_id === proposal.args.target_record_id;
+    });
+    if (duplicate) return { accepted: true, status: "approval_required", request_id: duplicate.log.request_id,
+      command_id: duplicate.command.id };
+    const inbound = createGatewayInternalInboundRequest({
+      id: randomUUID(), channel: "webchat", user: "webchat-owner-token-holder",
+      content: "Owner submitted a fresh J citation judgment for explicit M reassessment.", timestamp: Date.now(),
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "approval",
+        "blue_tanuki.memory_judgment_reassessment.version": "v1",
+        "blue_tanuki.tool_call": { tool_name: "memory.citation.reassess", arguments: { ...proposal.args } },
+      },
+    });
+    const boundary = planGatewayInboundBoundary(inbound);
+    if (!boundary.boundary_ok) return { accepted: false, status: "memory_judgment_reassessment_boundary_rejected" };
+    const { log, command } = hds.decide(boundary.hdsBoundaryInput);
+    recordCompleteHistory({ kind: "user_input", request_id: inbound.id, actor: "webchat-owner-token-holder",
+      source: "webchat-owner-memory-judgment-reassessment", timestamp: inbound.timestamp,
+      payload: { citation_audit_digest: proposal.args.citation_audit_digest,
+        target_record_digest: digestString(proposal.args.target_record_id),
+        judgment_ref_digest: digestString(proposal.args.judgment_ref),
+        reassesses_count: proposal.reassesses_judgment_refs.length,
+        reassesses_digest: digestValue([...proposal.reassesses_judgment_refs].sort()),
+        raw_payload_exposed: false, used_for_authority: false } });
+    recordCompleteHistory({ kind: "hds_decision", request_id: log.request_id, command_id: command?.id,
+      actor: "webchat-owner-token-holder", source: "hds-brain", timestamp: log.timestamp,
+      payload: hdsDecisionHistoryPayload(log, command) });
+    const routedArgs = command ? getMemoryJudgmentReassessmentArguments(command) : null;
+    if (!command || !routedArgs || JSON.stringify(routedArgs) !== JSON.stringify(proposal.args)) {
+      if (command) hds.onCommandLifecycle(command.id, "approval_rejected", { actor: "webchat-owner-token-holder",
+        reason: "memory_judgment_reassessment_hds_operation_mismatch", request_id: log.request_id });
+      return { accepted: false, status: "memory_judgment_reassessment_authority_rejected" };
+    }
+    const evaluation = approval.evaluate(command, "webchat-owner-token-holder");
+    const expectedTarget = memoryJudgmentReassessmentApprovalTarget(proposal.args);
+    const l3Ready = evaluation.decision === "ask" && evaluation.context.operation === "tool.call" &&
+      evaluation.context.actor === "webchat-owner-token-holder" && evaluation.context.command_id === command.id &&
+      evaluation.context.target === expectedTarget && evaluation.risk === "high" &&
+      evaluation.approval_level === "L3_final_review" && evaluation.final_review_required;
+    if (!l3Ready) {
+      hds.onApprovalEvaluation(evaluation, { request_id: log.request_id });
+      hds.onCommandLifecycle(command.id, "approval_rejected", { actor: "webchat-owner-token-holder",
+        reason: "memory_judgment_reassessment_l3_unavailable", request_id: log.request_id });
+      return { accepted: false, status: "memory_judgment_reassessment_l3_unavailable" };
+    }
+    const result = await executeAndEcho(command, log, inbound, {
+      actor: "webchat-owner-token-holder", approval_evaluation: evaluation, quiet_approval_notice: true,
+      memory_judgment_reassessment_proposal: { ...proposal, proposal_actor: "webchat-owner-token-holder" },
+    });
+    const pending = pendingApprovals.get(command.id);
+    if (result.status !== "approval_required" || !pending?.memory_judgment_reassessment_proposal || !pending.approval_token) {
+      if (pending) pendingApprovals.delete(command.id);
+      hds.onCommandLifecycle(command.id, "approval_cancelled", { actor: "webchat-owner-token-holder",
+        reason: "memory_judgment_reassessment_approval_queue_unavailable", request_id: log.request_id });
+      return { accepted: false, status: "memory_judgment_reassessment_approval_unavailable" };
+    }
+    return { accepted: true, status: "approval_required", request_id: log.request_id, command_id: command.id };
+  }
+
   async function submitGoalPurposeChangeProposal(input: {
     goal_ref: string;
     purpose_text: string;
@@ -2885,6 +3031,28 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ? "valid" : "stale";
   }
 
+  function memoryJudgmentReassessmentProposalIsCurrent(pending: PendingApproval): boolean {
+    const proposal = pending.memory_judgment_reassessment_proposal;
+    const args = getMemoryJudgmentReassessmentArguments(pending.command);
+    if (!proposal || !args || JSON.stringify(args) !== JSON.stringify(proposal.args) ||
+        executorCommandDigest(pending.command) !== pending.command_digest ||
+        !hds.getAudit().isPersistent() || !hds.getAudit().verify()) return false;
+    return hds.getMemoryJudgmentReassessmentProposals(args.citation_command_id).some((current) =>
+      JSON.stringify(current.args) === JSON.stringify(proposal.args) &&
+      JSON.stringify(current.reassesses_judgment_refs) === JSON.stringify(proposal.reassesses_judgment_refs));
+  }
+
+  function validateMemoryJudgmentReassessmentContentReview(
+    pending: PendingApproval,
+    content_review_digest: string | undefined,
+  ): WebChatApprovalContentReviewValidation {
+    if (!pending.memory_judgment_reassessment_proposal) return "not_required";
+    if (!memoryJudgmentReassessmentProposalIsCurrent(pending)) return "stale";
+    if (!content_review_digest || !pending.content_review_digest) return "required";
+    return content_review_digest === pending.command_digest && pending.content_review_digest === pending.command_digest
+      ? "valid" : "stale";
+  }
+
   async function pendingApprovalContentReview(command_id: string): Promise<WebChatApprovalContentReview | null> {
     const pending = pendingApprovals.get(command_id);
     if (pending?.goal_purpose_relation_review_proposal) {
@@ -2979,6 +3147,26 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
       return review;
     }
+    if (pending?.memory_judgment_reassessment_proposal) {
+      const proposal = pending.memory_judgment_reassessment_proposal;
+      const args = getMemoryJudgmentReassessmentArguments(pending.command);
+      if (!args || !memoryJudgmentReassessmentProposalIsCurrent(pending)) return null;
+      const review: WebChatMemoryJudgmentReassessmentContentReview = {
+        kind: "memory_judgment_reassessment", command_id, command_digest: pending.command_digest,
+        request_payload_digest: args.citation_audit_digest, operation: "memory.citation.reassess",
+        citation_request_id: args.citation_request_id, citation_command_id: args.citation_command_id,
+        citation_audit_digest: args.citation_audit_digest, target_record_id: args.target_record_id,
+        target_version: args.target_version, interpretation_id: args.interpretation_id,
+        judgment_ref: args.judgment_ref, reassesses_judgment_refs: [...proposal.reassesses_judgment_refs],
+        used_for_authority: false, may_execute: false,
+      };
+      if (!hds.recordMemoryJudgmentReassessmentContentReview({ args,
+        reassesses_judgment_refs: proposal.reassesses_judgment_refs, request_id: pending.log.request_id,
+        command_id: pending.command.id, proposal_actor: proposal.proposal_actor,
+        command_digest: pending.command_digest })) return null;
+      pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
+      return review;
+    }
     if (pending && isGmailDraftSendReviewCommand(pending.command) &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -3013,6 +3201,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (!pending) return "stale";
     if (pending.goal_purpose_relation_review_proposal) {
       return validateGoalPurposeRelationContentReview(pending, content_review_digest);
+    }
+    if (pending.memory_judgment_reassessment_proposal) {
+      return validateMemoryJudgmentReassessmentContentReview(pending, content_review_digest);
     }
     if (pending.goal_purpose_proposal) {
       return validateGoalPurposeChangeContentReview(pending, content_review_digest);
@@ -3069,7 +3260,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       reason: p.evaluation.reason,
       content_review_required: isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
         Boolean(p.goal_purpose_proposal) ||
-        Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal),
+        Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal) ||
+        Boolean(p.memory_judgment_reassessment_proposal),
       approval_token: p.approval_token,
       approval_token_expires_at_ms: p.approval_token_expires_at_ms,
       authority_trace: p.evaluation.authority_trace,
@@ -3126,6 +3318,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           adoption_status: "not_adopted" as const,
           may_execute: false as const,
           used_for_authority: false as const,
+        },
+      } : {}),
+      ...(p.memory_judgment_reassessment_proposal ? {
+        memory_judgment_reassessment_review: {
+          kind: "memory_judgment_reassessment" as const,
+          citation_audit_digest: p.memory_judgment_reassessment_proposal.args.citation_audit_digest,
+          target_record_id: p.memory_judgment_reassessment_proposal.args.target_record_id,
+          target_version: p.memory_judgment_reassessment_proposal.args.target_version,
+          interpretation_id: p.memory_judgment_reassessment_proposal.args.interpretation_id,
+          judgment_ref: p.memory_judgment_reassessment_proposal.args.judgment_ref,
+          reassesses_judgment_refs: [...p.memory_judgment_reassessment_proposal.reassesses_judgment_refs],
+          review_status: !memoryJudgmentReassessmentProposalIsCurrent(p) ? "stale" as const
+            : p.content_review_digest === p.command_digest ? "reviewed" as const : "required" as const,
+          used_for_authority: false as const, may_execute: false as const,
         },
       } : {}),
     }));

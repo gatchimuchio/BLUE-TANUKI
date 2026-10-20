@@ -32,12 +32,14 @@ export interface MemoryInterpretation {
 
 export interface MemoryInterpretationEvent {
   readonly event_id: string;
-  readonly kind: "quarantined" | "restored";
+  readonly kind: "quarantined" | "restored" | "reassessed";
   readonly prior_interpretation_id: string;
   readonly resulting_interpretation_id: string | null;
   readonly reason_digest: string;
   readonly evidence_refs: readonly MemoryInterpretationEvidenceReference[];
   readonly affected_judgment_refs: readonly string[];
+  /** The fresh J judgment that explicitly resolves the affected older judgments. */
+  readonly reassessment_judgment_ref?: string;
 }
 
 export interface MemoryInterpretationJudgment {
@@ -90,6 +92,14 @@ export type MemoryInterpretationTransition =
       readonly evidence_refs: readonly MemoryInterpretationEvidenceReference[];
       readonly affected_judgment_refs: readonly string[];
       readonly interpretation: MemoryInterpretation;
+      readonly reassessment_judgment_ref: string;
+    }
+  | {
+      readonly kind: "reassess";
+      readonly event_id: string;
+      readonly reason_digest: string;
+      readonly evidence_refs: readonly MemoryInterpretationEvidenceReference[];
+      readonly affected_judgment_refs: readonly string[];
       readonly reassessment_judgment_ref: string;
     };
 
@@ -223,6 +233,38 @@ export function buildMemoryInterpretationCommit(input: {
   }
 }
 
+/** Build one append-only M transaction from a fresh J judgment to explicit prior-judgment reassessment. */
+export function buildMemoryInterpretationReassessmentCommit(input: {
+  readonly current: MemoryInterpretationSnapshot;
+  readonly lineage_id: string;
+  readonly update_id: string;
+  readonly j_event_id: string;
+  readonly event_id: string;
+  readonly reason_digest: string;
+  readonly evidence_refs: readonly MemoryInterpretationEvidenceReference[];
+  readonly affected_judgment_refs: readonly string[];
+  readonly reassessment_judgment_ref: string;
+}): MemoryInterpretationBuildResult {
+  const record = input.current.record;
+  if (!record || record.application_state !== "active" || !record.current_interpretation_id) {
+    return { ok: false, reason: "invalid_current_record" };
+  }
+  return buildMemoryInterpretationCommit({
+    current: input.current,
+    lineage_id: input.lineage_id,
+    update_id: input.update_id,
+    j_event_id: input.j_event_id,
+    transition: {
+      kind: "reassess",
+      event_id: input.event_id,
+      reason_digest: input.reason_digest,
+      evidence_refs: input.evidence_refs,
+      affected_judgment_refs: input.affected_judgment_refs,
+      reassessment_judgment_ref: input.reassessment_judgment_ref,
+    },
+  });
+}
+
 /**
  * Package-internal persistence consumer. It validates an append-only semantic transition before
  * staging the exact commit through J approval, M persistence, and receipt reconciliation.
@@ -351,10 +393,12 @@ export function parseMemoryInterpretationRecord(value: unknown): MemoryInterpret
 
   const events: MemoryInterpretationEvent[] = [];
   for (const item of value.events) {
+    const reassessment = isPlainRecord(item) && item.kind === "reassessed";
     if (!isPlainRecord(item) || !hasExactKeys(item, [
       "event_id", "kind", "prior_interpretation_id", "resulting_interpretation_id", "reason_digest",
-      "evidence_refs", "affected_judgment_refs",
-    ]) || !isIdentifier(item.event_id) || (item.kind !== "quarantined" && item.kind !== "restored") ||
+      "evidence_refs", "affected_judgment_refs", ...(reassessment ? ["reassessment_judgment_ref"] : []),
+    ]) || !isIdentifier(item.event_id) ||
+        (item.kind !== "quarantined" && item.kind !== "restored" && item.kind !== "reassessed") ||
         !isIdentifier(item.prior_interpretation_id) ||
         !(item.resulting_interpretation_id === null || isIdentifier(item.resulting_interpretation_id)) ||
         !isDigest(item.reason_digest) || !Array.isArray(item.evidence_refs) || item.evidence_refs.length < 1 ||
@@ -374,6 +418,11 @@ export function parseMemoryInterpretationRecord(value: unknown): MemoryInterpret
     if (!priorExists || !resultingExists ||
         (item.kind === "quarantined" && item.resulting_interpretation_id !== null) ||
         (item.kind === "restored" && item.resulting_interpretation_id === null) ||
+        (item.kind === "reassessed" && (!item.resulting_interpretation_id ||
+          item.resulting_interpretation_id !== item.prior_interpretation_id ||
+          !isReference(item.reassessment_judgment_ref) ||
+          !judgments.some((judgment) => judgment.judgment_ref === item.reassessment_judgment_ref &&
+            judgment.basis_interpretation_id === item.resulting_interpretation_id && !judgment.reassessment_required))) ||
         item.affected_judgment_refs.some((reference) => !judgments.some((judgment) => judgment.judgment_ref === reference))) return null;
     events.push(item as unknown as MemoryInterpretationEvent);
   }
@@ -382,10 +431,12 @@ export function parseMemoryInterpretationRecord(value: unknown): MemoryInterpret
   const currentId = value.current_interpretation_id as string | null;
   if (value.application_state === "quarantined" && (currentId !== null || events.at(-1)?.kind !== "quarantined")) return null;
   if (value.application_state === "active" && (currentId === null || !interpretationIds.has(currentId) ||
-      (events.length > 0 && (events.at(-1)?.kind !== "restored" || events.at(-1)?.resulting_interpretation_id !== currentId)))) return null;
+      (events.length > 0 && ((events.at(-1)?.kind !== "restored" && events.at(-1)?.kind !== "reassessed") ||
+        events.at(-1)?.resulting_interpretation_id !== currentId)))) return null;
   for (const judgment of judgments) {
-    const wasAffected = events.some((event) => event.affected_judgment_refs.includes(judgment.judgment_ref));
-    if (judgment.reassessment_required !== wasAffected) return null;
+    const lastDisposition = [...events].reverse().find((event) => event.affected_judgment_refs.includes(judgment.judgment_ref));
+    const reassessmentRequired = lastDisposition !== undefined && lastDisposition.kind !== "reassessed";
+    if (judgment.reassessment_required !== reassessmentRequired) return null;
   }
 
   return value as unknown as MemoryInterpretationRecord;
@@ -422,6 +473,18 @@ function transitionFromRecord(
   }
   const event = candidate.events.at(-1);
   if (!event) return null;
+  if (event.kind === "reassessed") {
+    if (!isReference(event.reassessment_judgment_ref) || addedJudgments.length !== 1 ||
+        addedJudgments[0]!.judgment_ref !== event.reassessment_judgment_ref) return null;
+    return {
+      kind: "reassess",
+      event_id: event.event_id,
+      reason_digest: event.reason_digest,
+      evidence_refs: event.evidence_refs,
+      affected_judgment_refs: event.affected_judgment_refs,
+      reassessment_judgment_ref: event.reassessment_judgment_ref,
+    };
+  }
   if (event.kind === "quarantined") {
     if (addedJudgments.length !== 0) return null;
     return {
@@ -521,6 +584,42 @@ function applyTransition(
       dependent_judgments: Object.freeze(current.dependent_judgments.map((judgment) => affected.has(judgment.judgment_ref)
         ? Object.freeze({ ...judgment, reassessment_required: true })
         : judgment)),
+    });
+  }
+
+  if (transition.kind === "reassess") {
+    if (!hasExactKeys(transition as unknown as Record<string, unknown>, [
+      "kind", "event_id", "reason_digest", "evidence_refs", "affected_judgment_refs", "reassessment_judgment_ref",
+    ]) || current.application_state !== "active" || current.current_interpretation_id === null ||
+        !isReference(transition.reassessment_judgment_ref) ||
+        current.dependent_judgments.length >= MAX_JUDGMENTS ||
+        current.dependent_judgments.some((judgment) => judgment.judgment_ref === transition.reassessment_judgment_ref) ||
+        !isReferenceArray(transition.affected_judgment_refs, MAX_JUDGMENTS, 1) ||
+        new Set(transition.affected_judgment_refs).size !== transition.affected_judgment_refs.length) return null;
+    const affected = new Set(transition.affected_judgment_refs);
+    if (current.dependent_judgments.some((judgment) => affected.has(judgment.judgment_ref) &&
+        (!judgment.reassessment_required || judgment.basis_interpretation_id === current.current_interpretation_id)) ||
+        [...affected].some((reference) => !current.dependent_judgments.some((judgment) => judgment.judgment_ref === reference))) return null;
+    const event: MemoryInterpretationEvent = Object.freeze({
+      event_id: transition.event_id,
+      kind: "reassessed",
+      prior_interpretation_id: current.current_interpretation_id,
+      resulting_interpretation_id: current.current_interpretation_id,
+      reason_digest: transition.reason_digest,
+      evidence_refs: Object.freeze(transition.evidence_refs.map((reference) => Object.freeze({ ...reference }))),
+      affected_judgment_refs: Object.freeze([...transition.affected_judgment_refs]),
+      reassessment_judgment_ref: transition.reassessment_judgment_ref,
+    });
+    return Object.freeze({
+      ...current,
+      events: Object.freeze([...current.events, event]),
+      dependent_judgments: Object.freeze([
+        ...current.dependent_judgments.map((judgment) => affected.has(judgment.judgment_ref)
+          ? Object.freeze({ ...judgment, reassessment_required: false })
+          : judgment),
+        Object.freeze({ judgment_ref: transition.reassessment_judgment_ref,
+          basis_interpretation_id: current.current_interpretation_id, reassessment_required: false }),
+      ]),
     });
   }
 

@@ -11,7 +11,8 @@ import type { OperationPlanMemoryStorage } from "./operation_plan.js";
 import { JMemoryCommitCoordinator, type JMemoryCommitReconciliationResult } from "./制御状態.js";
 import type { JMemoryApprovalReference, JMemoryApprovalReader } from "./保存取引.js";
 import { buildInitialMemoryInterpretationCommit, buildMemoryInterpretationCommit, interpretationContentDigest,
-  MemoryInterpretationConsumer, type MemoryInterpretation } from "./記憶再解釈.js";
+  buildMemoryInterpretationReassessmentCommit, MemoryInterpretationConsumer, type MemoryInterpretation,
+  type MemoryInterpretationEvidenceReference, type MemoryInterpretationRecord } from "./記憶再解釈.js";
 
 export const MEANING_UPDATE_MEMORY_SCHEMA_VERSION = "blue-tanuki.meaning-update-memory.v1" as const;
 
@@ -32,6 +33,22 @@ export interface MeaningUpdateMemoryRecord {
 
 export type MeaningUpdateMemoryCommitResult =
   | { readonly ok: true; readonly record: MeaningUpdateMemoryRecord;
+      readonly reconciliation: Extract<JMemoryCommitReconciliationResult, { readonly ok: true; readonly status: "ready" }> }
+  | { readonly ok: false; readonly reason: string };
+
+export interface MemoryJudgmentReassessmentTransaction {
+  readonly lineage_id: string;
+  readonly update_id: string;
+  readonly j_event_id: string;
+  readonly event_id: string;
+  readonly reason_digest: string;
+  readonly evidence_refs: readonly MemoryInterpretationEvidenceReference[];
+  readonly affected_judgment_refs: readonly string[];
+  readonly reassessment_judgment_ref: string;
+}
+
+export type MemoryJudgmentReassessmentResult =
+  | { readonly ok: true; readonly record: MemoryInterpretationRecord;
       readonly reconciliation: Extract<JMemoryCommitReconciliationResult, { readonly ok: true; readonly status: "ready" }> }
   | { readonly ok: false; readonly reason: string };
 
@@ -170,6 +187,41 @@ export class MeaningUpdateMemoryConsumer {
       : { ok: false, reason: "meaning_update_reconciliation_failed" };
   }
 
+  /** Persist a fresh, explicitly reviewed J judgment and resolve only its named prior M dependencies. */
+  reassessJudgments(
+    transaction: MemoryJudgmentReassessmentTransaction,
+    authorize: (reference: JMemoryApprovalReference) => void,
+  ): MemoryJudgmentReassessmentResult {
+    if (!isMemoryJudgmentReassessmentTransaction(transaction)) {
+      return { ok: false, reason: "memory_judgment_reassessment_invalid" };
+    }
+    const refs = transaction.affected_judgment_refs;
+    const current = this.interpretations.read(transaction.lineage_id);
+    if (!current?.record || current.record.application_state !== "active" || !current.record.current_interpretation_id) {
+      return { ok: false, reason: "memory_judgment_reassessment_state_unavailable" };
+    }
+    const rows = new Map(current.record.dependent_judgments.map((judgment) => [judgment.judgment_ref, judgment]));
+    if (new Set(refs).size !== refs.length || refs.some((reference) => {
+      const row = rows.get(reference);
+      return !row || !row.reassessment_required || row.basis_interpretation_id === current.record!.current_interpretation_id;
+    }) || rows.has(transaction.reassessment_judgment_ref)) {
+      return { ok: false, reason: "memory_judgment_reassessment_stale" };
+    }
+    const built = buildMemoryInterpretationReassessmentCommit({
+      current, lineage_id: transaction.lineage_id, update_id: transaction.update_id,
+      j_event_id: transaction.j_event_id, event_id: transaction.event_id,
+      reason_digest: transaction.reason_digest, evidence_refs: transaction.evidence_refs,
+      affected_judgment_refs: refs, reassessment_judgment_ref: transaction.reassessment_judgment_ref,
+    });
+    if (!built.ok) return { ok: false, reason: "memory_judgment_reassessment_invalid" };
+    const commit = built.commit;
+    authorize({ update_id: commit.update_id, j_event_id: commit.j_event_id, content_digest: commit.content_digest });
+    const applied = this.interpretations.apply(commit);
+    return applied.ok && applied.reconciliation.status === "ready"
+      ? { ok: true, record: applied.record, reconciliation: applied.reconciliation }
+      : { ok: false, reason: applied.ok ? "memory_judgment_reassessment_pending" : applied.reason };
+  }
+
   read(recordId: string): MeaningUpdateMemoryRecord | null {
     const stored = this.coordinator.readMemoryRecord(recordId);
     if (!stored?.exists || !isMeaningUpdateMemoryRecord(stored.value)) return null;
@@ -193,6 +245,24 @@ export class MeaningUpdateMemoryConsumer {
 
   verify(): boolean { return this.coordinator.verify(); }
   close(): void { this.coordinator.close(); }
+}
+
+function isMemoryJudgmentReassessmentTransaction(value: unknown): value is MemoryJudgmentReassessmentTransaction {
+  if (!isRecord(value) || !hasExactKeys(value, ["lineage_id", "update_id", "j_event_id", "event_id", "reason_digest",
+      "evidence_refs", "affected_judgment_refs", "reassessment_judgment_ref"]) ||
+      typeof value.lineage_id !== "string" || typeof value.update_id !== "string" ||
+      typeof value.j_event_id !== "string" || typeof value.event_id !== "string" ||
+      typeof value.reason_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.reason_digest) ||
+      typeof value.reassessment_judgment_ref !== "string" || !Array.isArray(value.evidence_refs) ||
+      !Array.isArray(value.affected_judgment_refs) || value.affected_judgment_refs.length < 1 ||
+      value.affected_judgment_refs.length > 256 || value.evidence_refs.length < 1 || value.evidence_refs.length > 32) return false;
+  const isRef = (item: unknown): item is string => typeof item === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/.test(item);
+  if (![value.lineage_id, value.update_id, value.j_event_id, value.event_id, value.reassessment_judgment_ref].every(isRef) ||
+      !value.affected_judgment_refs.every(isRef) || new Set(value.affected_judgment_refs).size !== value.affected_judgment_refs.length ||
+      !value.evidence_refs.every((item) => isRecord(item) && hasExactKeys(item, ["reference", "digest"]) &&
+        isRef(item.reference) && typeof item.digest === "string" && /^[a-f0-9]{64}$/.test(item.digest))) return false;
+  return true;
 }
 
 export function meaningUpdateMemoryRecordId(proposalDigest: string): string {

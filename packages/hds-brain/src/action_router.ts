@@ -82,6 +82,9 @@ function routeMetadata(req: InboundRequest): ActionRoute {
   if (toolName === "memory.meaning.adopt") {
     return routeInternalMeaningUpdateAdoption(req, argsRaw);
   }
+  if (toolName === "memory.citation.reassess") {
+    return routeInternalMemoryCitationReassessment(req, argsRaw);
+  }
   return buildToolRoute(toolName, { ...argsRaw });
 }
 
@@ -155,6 +158,30 @@ function routeInternalMeaningUpdateAdoption(req: InboundRequest, args: Record<st
   }
   return { type: "tool_call", tool_name: "memory.meaning.adopt", arguments: { ...args },
     allowed_capabilities: ["tool:memory.meaning.adopt"], timeout_ms: 10_000 };
+}
+
+function routeInternalMemoryCitationReassessment(req: InboundRequest, args: Record<string, unknown>): ActionRoute {
+  const metadata = req.metadata ?? {};
+  if (!isGatewayInternalInboundRequest(req) || metadata["blue_tanuki.authority_context"] !== "gateway_internal_v1" ||
+      metadata["blue_tanuki.actor_kind"] !== "owner" || metadata["blue_tanuki.process_kind"] !== "approval" ||
+      metadata["blue_tanuki.memory_judgment_reassessment.version"] !== "v1" ||
+      req.content !== "Owner submitted a fresh J citation judgment for explicit M reassessment.") {
+    return { type: "noop", reason: "memory judgment reassessment requires a trusted Gateway approval request" };
+  }
+  const keys = ["citation_request_id", "citation_command_id", "target_record_id", "target_version",
+    "interpretation_id", "judgment_ref", "citation_audit_digest"];
+  if (Object.keys(args).length !== keys.length || keys.some((key) => !Object.hasOwn(args, key)) ||
+      typeof args.citation_request_id !== "string" || !/^[A-Za-z0-9_.:-]{1,200}$/.test(args.citation_request_id) ||
+      typeof args.citation_command_id !== "string" || !/^[A-Za-z0-9_.:-]{1,200}$/.test(args.citation_command_id) ||
+      typeof args.target_record_id !== "string" || !/^F:[A-Za-z0-9_.:-]{1,96}$/.test(args.target_record_id) ||
+      typeof args.target_version !== "string" || !/^[a-f0-9]{64}$/.test(args.target_version) ||
+      typeof args.interpretation_id !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(args.interpretation_id) ||
+      typeof args.judgment_ref !== "string" || !/^memory-citation-review:[A-Za-z0-9_.:-]{1,200}$/.test(args.judgment_ref) ||
+      typeof args.citation_audit_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.citation_audit_digest)) {
+    return { type: "noop", reason: "memory judgment reassessment arguments are invalid" };
+  }
+  return { type: "tool_call", tool_name: "memory.citation.reassess", arguments: { ...args },
+    allowed_capabilities: ["tool:memory.citation.reassess"], timeout_ms: 10_000 };
 }
 
 function routeContent(content: string): ActionRoute {
