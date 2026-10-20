@@ -7,7 +7,8 @@ import { HDSUpperController } from "../src/controller.js";
 import { AuditLog } from "../src/audit.js";
 import { evaluateApproval, meaningUpdateAdoptionApprovalTarget } from "../src/approval_policy.js";
 import { LongTermMemoryStore } from "../src/long-term-memory/index.js";
-import { MeaningUpdateMemoryConsumer, meaningUpdateMemoryRecordId } from "../src/meaning_update_memory.js";
+import { buildMeaningUpdateMemoryRecord, MeaningUpdateMemoryConsumer, meaningUpdateInterpretationId,
+  meaningUpdateMemoryRecordId } from "../src/meaning_update_memory.js";
 import type { OperationPlanMemoryStorage } from "../src/operation_plan.js";
 
 const temporaryRoots: string[] = [];
@@ -168,6 +169,53 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
         expect(record).toMatchObject({ approval_status: "approved", memory_application_status: "applied",
           follow_up_action_status: "unconfirmed", semantic_relation_status: "not_assessed",
           used_for_authority: false, may_execute: false, proposal: { candidate_meaning: candidateMeaning } });
+        const initialInterpretation = persisted.readInterpretation(support.f_reference);
+        const initialInterpretationId = meaningUpdateInterpretationId(record!);
+        expect(initialInterpretation?.record).toMatchObject({
+          application_state: "active",
+          current_interpretation_id: initialInterpretationId,
+          interpretations: [{ interpretation_id: initialInterpretationId, meaning: { candidate_meaning: candidateMeaning } }],
+          events: [],
+          dependent_judgments: [{ judgment_ref: "meaning-update-approval:" + ownerReview!.proposal_digest,
+            basis_interpretation_id: initialInterpretationId, reassessment_required: false }],
+          used_for_authority: false,
+          may_execute: false,
+        });
+
+        const nextMeaning = "Synthetic corrected candidate meaning.";
+        const nextRecord = buildMeaningUpdateMemoryRecord({ ...ownerReview!.proposal,
+          proposal_ref: "proposal-c07-03-corrected",
+          candidate_ref: "candidate:c07-03-corrected",
+          candidate_digest: meaningUpdateCandidateDigest(nextMeaning),
+          candidate_meaning: nextMeaning,
+          prior_version_ref: "version:meaning-support-after-correction",
+        });
+        const nextCommit = persisted.commit(nextRecord, () => {});
+        expect(nextCommit.ok).toBe(true);
+        const correctedInterpretation = persisted.readInterpretation(support.f_reference);
+        const nextInterpretationId = meaningUpdateInterpretationId(nextRecord);
+        expect(correctedInterpretation?.record).toMatchObject({
+          application_state: "active",
+          current_interpretation_id: nextInterpretationId,
+          interpretations: [
+            { interpretation_id: initialInterpretationId, meaning: { candidate_meaning: candidateMeaning } },
+            { interpretation_id: nextInterpretationId, meaning: { candidate_meaning: nextMeaning } },
+          ],
+          events: [
+            { kind: "quarantined", prior_interpretation_id: initialInterpretationId, resulting_interpretation_id: null,
+              affected_judgment_refs: ["meaning-update-approval:" + ownerReview!.proposal_digest] },
+            { kind: "restored", prior_interpretation_id: initialInterpretationId, resulting_interpretation_id: nextInterpretationId,
+              affected_judgment_refs: ["meaning-update-approval:" + ownerReview!.proposal_digest] },
+          ],
+          dependent_judgments: [
+            { judgment_ref: "meaning-update-approval:" + ownerReview!.proposal_digest,
+              basis_interpretation_id: initialInterpretationId, reassessment_required: true },
+            { judgment_ref: "meaning-update-approval:" + nextRecord.proposal_digest,
+              basis_interpretation_id: nextInterpretationId, reassessment_required: false },
+          ],
+          used_for_authority: false,
+          may_execute: false,
+        });
         expect(persisted.verify()).toBe(true);
       } finally {
         persisted.close();

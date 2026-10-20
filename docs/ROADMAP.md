@@ -2,6 +2,8 @@
 
 2026-10-20。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-20の`QEB-01-C07.03-MEMORY-REINTERPRETATION-CONSUMER`では、owner L3承認済みmeaning-updateと同一のprivate M transactionへ解釈lineageを接続した。改訂で旧解釈を保持し、quarantine／restore eventを追記して依存する旧判断を再評価必須にする経路をHDS consumerで`WIRED`。HDS/Jのtask・plan reviewからflagを実際の再評価へつなぐconsumer、C07親、一仕事の全体経路、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。focused HDS 3 tests、typecheck、15-project buildはPASS。全体QC／QA、5OS実機、実provider、外部作用の証拠ではない。
+
 2026-10-20の`QEB-01-C07.02-OWNER-L3-MEMORY-TRANSACTION`では、C meaning-update候補をHDSのcurrent-M reviewからdigest-only owner L3 queue、明示content review、J承認後のprivate M適用へ接続した。Windows localのloopback Gateway HTTP smokeで候補からprivate M recordまで一回通し、candidate本文がqueue・audit・CompleteHistoryへ出ないことを確認。focused tests、typecheck、15-project buildはPASS。C07.02対象経路は`WIRED`。C07.03、C07親、目的から結果・M・帰還までの一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は引き続き`BUILD_GAP`。実provider、外部作用、全体QC／QA、5OS実機の証拠ではない。
 
 2026-10-20の`QEB-01-C04-CURRENT-M-DEPENDENCY-RECHECK`では、Cの回答引用とmeaning-update proposalをJが扱う時点で、Mの現在hash-chainを読み直し、使われたrecord IDごとの版を照合するconsumerを追加した。無関係な追記は選択済み参照を失効させず、変更された依存版や検証できない台帳は引用・証拠採否から除く。focused test 15/15、workspace typecheck／15-project buildはPASS。意味評価・M更新の承認済み適用・C04全体は未成立で`BUILD_GAP`。QE_QC／QE_QA／5OS実機や実providerの証拠ではない。

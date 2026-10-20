@@ -82,7 +82,8 @@ import { commit } from "./commit.js";
 import { AuditLog, type AuditEntry } from "./audit.js";
 import { GoalPurposeMemoryConsumer, type GoalPurposeMemoryApprovalContext } from "./goal_purpose_memory.js";
 import { buildMeaningUpdateMemoryRecord, isMeaningUpdateMemoryRecord, meaningUpdateMemoryRecordId,
-  meaningUpdateProposalDigest, MeaningUpdateMemoryConsumer, type MeaningUpdateMemoryRecord } from "./meaning_update_memory.js";
+  meaningUpdateInterpretationForRecord, meaningUpdateInterpretationId, meaningUpdateProposalDigest,
+  MeaningUpdateMemoryConsumer, type MeaningUpdateMemoryRecord } from "./meaning_update_memory.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { normalizeForDetection } from "./normalization.js";
 import {
@@ -532,6 +533,19 @@ function replayMeaningUpdateMemoryCommits(audit: AuditLog, memory: MeaningUpdate
     if (!record || !isMeaningUpdateMemoryRecord(record) || record.proposal_digest !== log.proposal_digest ||
         record.candidate_digest !== log.candidate_digest) {
       throw new Error("persisted meaning update commit does not match its private M record");
+    }
+    const interpretationSnapshot = memory.readInterpretation(record.proposal.target_reference.record_id);
+    if (!interpretationSnapshot) throw new Error("persisted meaning update interpretation state is unavailable");
+    const judgmentRef = "meaning-update-approval:" + record.proposal_digest;
+    const interpretationWasRecorded = interpretationSnapshot.record?.dependent_judgments.some((judgment) =>
+      judgment.judgment_ref === judgmentRef) === true;
+    if (interpretationWasRecorded) {
+      const expectedInterpretation = meaningUpdateInterpretationForRecord(record);
+      if (!interpretationSnapshot.record?.interpretations.some((item) =>
+          item.interpretation_id === meaningUpdateInterpretationId(record) &&
+          item.content_digest === expectedInterpretation.content_digest)) {
+        throw new Error("persisted meaning update interpretation does not match its private M record");
+      }
     }
     const target = meaningUpdateAdoptionApprovalTarget({ proposal_digest: record.proposal_digest,
       candidate_digest: record.candidate_digest, target_record_id: record.proposal.target_reference.record_id,

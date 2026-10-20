@@ -80,6 +80,17 @@ export type MemoryInterpretationTransition =
       readonly reason_digest: string;
       readonly evidence_refs: readonly MemoryInterpretationEvidenceReference[];
       readonly interpretation: MemoryInterpretation;
+      readonly reassessment_judgment_ref?: string;
+    }
+  | {
+      readonly kind: "replace";
+      readonly quarantine_event_id: string;
+      readonly restoration_event_id: string;
+      readonly reason_digest: string;
+      readonly evidence_refs: readonly MemoryInterpretationEvidenceReference[];
+      readonly affected_judgment_refs: readonly string[];
+      readonly interpretation: MemoryInterpretation;
+      readonly reassessment_judgment_ref: string;
     };
 
 export type MemoryInterpretationBuildResult =
@@ -125,6 +136,43 @@ export function createInitialMemoryInterpretationRecord(input: {
     used_for_authority: false,
     may_execute: false,
   });
+}
+
+/** Build an initial interpretation record into the same J-approved M transaction as its meaning. */
+export function buildInitialMemoryInterpretationCommit(input: {
+  readonly current: MemoryInterpretationSnapshot;
+  readonly lineage_id: string;
+  readonly update_id: string;
+  readonly j_event_id: string;
+  readonly interpretation: MemoryInterpretation;
+  readonly dependent_judgment_refs: readonly string[];
+}): MemoryInterpretationBuildResult {
+  if (!Number.isSafeInteger(input.current.revision) || input.current.revision < 0 || input.current.record !== null) {
+    return { ok: false, reason: "invalid_current_record" };
+  }
+  if (!isIdentifier(input.update_id) || !isIdentifier(input.j_event_id)) {
+    return { ok: false, reason: "invalid_commit_reference" };
+  }
+  const record = createInitialMemoryInterpretationRecord({
+    lineage_id: input.lineage_id,
+    interpretation: input.interpretation,
+    dependent_judgment_refs: input.dependent_judgment_refs,
+  });
+  if (!record) return { ok: false, reason: "invalid_transition" };
+  const content = {
+    schema_version: MEMORY_COMMIT_V2_SCHEMA_VERSION,
+    expected_version: input.current.revision,
+    update_id: input.update_id,
+    j_event_id: input.j_event_id,
+    changes: [{ operation: "upsert" as const, record_id: memoryInterpretationRecordId(input.lineage_id),
+      value: toCommitJsonValue(record) }],
+  };
+  try {
+    const commit: MemoryCommitV2 = { ...content, content_digest: memoryCommitContentDigest(content) };
+    return { ok: true, record_id: memoryInterpretationRecordId(input.lineage_id), record, commit };
+  } catch {
+    return { ok: false, reason: "invalid_commit_reference" };
+  }
 }
 
 export function interpretationContentDigest(meaning: Readonly<Record<string, MemoryCommitJsonValue>>): string {
@@ -347,12 +395,35 @@ function transitionFromRecord(
   current: MemoryInterpretationRecord,
   candidate: MemoryInterpretationRecord,
 ): MemoryInterpretationTransition | null {
-  if (candidate.events.length !== current.events.length + 1 ||
+  if (candidate.events.length !== current.events.length + 1 && candidate.events.length !== current.events.length + 2) return null;
+  if (
       candidate.events.slice(0, current.events.length).some((event, index) =>
         canonicalJson(event) !== canonicalJson(current.events[index]))) return null;
+  const addedJudgments = candidate.dependent_judgments.filter((judgment) =>
+    !current.dependent_judgments.some((existing) => existing.judgment_ref === judgment.judgment_ref));
+  if (candidate.events.length === current.events.length + 2) {
+    const quarantine = candidate.events.at(-2);
+    const restoration = candidate.events.at(-1);
+    const interpretation = restoration?.resulting_interpretation_id
+      ? candidate.interpretations.find((item) => item.interpretation_id === restoration.resulting_interpretation_id)
+      : undefined;
+    if (!quarantine || quarantine.kind !== "quarantined" || !restoration || restoration.kind !== "restored" ||
+        !interpretation || addedJudgments.length !== 1) return null;
+    return {
+      kind: "replace",
+      quarantine_event_id: quarantine.event_id,
+      restoration_event_id: restoration.event_id,
+      reason_digest: quarantine.reason_digest,
+      evidence_refs: quarantine.evidence_refs,
+      affected_judgment_refs: quarantine.affected_judgment_refs,
+      interpretation,
+      reassessment_judgment_ref: addedJudgments[0]!.judgment_ref,
+    };
+  }
   const event = candidate.events.at(-1);
   if (!event) return null;
   if (event.kind === "quarantined") {
+    if (addedJudgments.length !== 0) return null;
     return {
       kind: "quarantine",
       event_id: event.event_id,
@@ -362,13 +433,14 @@ function transitionFromRecord(
     };
   }
   const interpretation = candidate.interpretations.find((item) => item.interpretation_id === event.resulting_interpretation_id);
-  if (!interpretation) return null;
+  if (!interpretation || addedJudgments.length > 1) return null;
   return {
     kind: "restore",
     event_id: event.event_id,
     reason_digest: event.reason_digest,
     evidence_refs: event.evidence_refs,
     interpretation,
+    ...(addedJudgments[0] ? { reassessment_judgment_ref: addedJudgments[0].judgment_ref } : {}),
   };
 }
 
@@ -376,11 +448,42 @@ function applyTransition(
   current: MemoryInterpretationRecord,
   transition: MemoryInterpretationTransition,
 ): MemoryInterpretationRecord | null {
-  if (!isPlainRecord(transition) || !isIdentifier(transition.event_id) ||
-      !isDigest(transition.reason_digest) || !Array.isArray(transition.evidence_refs) ||
+  if (!isPlainRecord(transition)) return null;
+  const eventId = transition.kind === "replace" ? transition.quarantine_event_id : transition.event_id;
+  if (!isIdentifier(eventId) || !isDigest(transition.reason_digest) || !Array.isArray(transition.evidence_refs) ||
       transition.evidence_refs.length < 1 || transition.evidence_refs.length > 32 ||
       !validateEvidence(transition.evidence_refs) || current.events.length >= MAX_EVENTS ||
-      current.events.some((event) => event.event_id === transition.event_id)) return null;
+      current.events.some((event) => event.event_id === eventId)) return null;
+
+  if (transition.kind === "replace") {
+    if (!hasExactKeys(transition as unknown as Record<string, unknown>, [
+      "kind", "quarantine_event_id", "restoration_event_id", "reason_digest", "evidence_refs",
+      "affected_judgment_refs", "interpretation", "reassessment_judgment_ref",
+    ]) || !isIdentifier(transition.quarantine_event_id) || !isIdentifier(transition.restoration_event_id) ||
+        transition.quarantine_event_id === transition.restoration_event_id || !isReference(transition.reassessment_judgment_ref) ||
+        transition.reassessment_judgment_ref === undefined || current.application_state !== "active" ||
+        current.current_interpretation_id === null || !isInterpretation(transition.interpretation) ||
+        current.interpretations.length >= MAX_INTERPRETATIONS ||
+        current.interpretations.some((item) => item.interpretation_id === transition.interpretation.interpretation_id) ||
+        current.dependent_judgments.length >= MAX_JUDGMENTS ||
+        current.dependent_judgments.some((judgment) => judgment.judgment_ref === transition.reassessment_judgment_ref)) return null;
+    const quarantined = applyTransition(current, {
+      kind: "quarantine",
+      event_id: transition.quarantine_event_id,
+      reason_digest: transition.reason_digest,
+      evidence_refs: transition.evidence_refs,
+      affected_judgment_refs: transition.affected_judgment_refs,
+    });
+    if (!quarantined) return null;
+    return applyTransition(quarantined, {
+      kind: "restore",
+      event_id: transition.restoration_event_id,
+      reason_digest: transition.reason_digest,
+      evidence_refs: transition.evidence_refs,
+      interpretation: transition.interpretation,
+      reassessment_judgment_ref: transition.reassessment_judgment_ref,
+    });
+  }
 
   if (transition.kind === "quarantine") {
     if (!hasExactKeys(transition as unknown as Record<string, unknown>, [
@@ -413,11 +516,16 @@ function applyTransition(
     });
   }
 
-  if (transition.kind !== "restore" || !hasExactKeys(transition as unknown as Record<string, unknown>, [
-    "kind", "event_id", "reason_digest", "evidence_refs", "interpretation",
-  ]) || current.application_state !== "quarantined" || current.current_interpretation_id !== null ||
+  const restoreKeys = ["kind", "event_id", "reason_digest", "evidence_refs", "interpretation"];
+  const hasReassessmentRef = Object.prototype.hasOwnProperty.call(transition, "reassessment_judgment_ref");
+  if (transition.kind !== "restore" || !hasExactKeys(transition as unknown as Record<string, unknown>,
+    hasReassessmentRef ? [...restoreKeys, "reassessment_judgment_ref"] : restoreKeys) ||
+      current.application_state !== "quarantined" || current.current_interpretation_id !== null ||
       !isInterpretation(transition.interpretation) || current.interpretations.length >= MAX_INTERPRETATIONS ||
-      current.interpretations.some((item) => item.interpretation_id === transition.interpretation.interpretation_id)) return null;
+      current.interpretations.some((item) => item.interpretation_id === transition.interpretation.interpretation_id) ||
+      (hasReassessmentRef && (!isReference(transition.reassessment_judgment_ref) ||
+        current.dependent_judgments.length >= MAX_JUDGMENTS ||
+        current.dependent_judgments.some((judgment) => judgment.judgment_ref === transition.reassessment_judgment_ref)))) return null;
   const quarantine = current.events.at(-1);
   if (!quarantine || quarantine.kind !== "quarantined") return null;
   const event: MemoryInterpretationEvent = Object.freeze({
@@ -435,6 +543,13 @@ function applyTransition(
     current_interpretation_id: transition.interpretation.interpretation_id,
     interpretations: Object.freeze([...current.interpretations, Object.freeze({ ...transition.interpretation })]),
     events: Object.freeze([...current.events, event]),
+    dependent_judgments: hasReassessmentRef
+      ? Object.freeze([...current.dependent_judgments, Object.freeze({
+        judgment_ref: transition.reassessment_judgment_ref!,
+        basis_interpretation_id: transition.interpretation.interpretation_id,
+        reassessment_required: false,
+      })])
+      : current.dependent_judgments,
   });
 }
 

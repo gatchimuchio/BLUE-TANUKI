@@ -1,6 +1,23 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-C07.02-OWNER-L3-MEMORY-TRANSACTION`
+### 最新BUILD_BATCH：`QEB-01-C07.03-MEMORY-REINTERPRETATION-CONSUMER`
+
+batch開始`main`／`origin/main`=`051607afb188e0d46ef2db7af5f28b40a902b676`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、C07.03とC07要求を読み直した。Windows localで実装し、既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持する。全体実装形状の成立前に詳細QC／QAを行わない。
+
+C07.02のowner L3承認済みmeaning-updateからprivate Mへ保存する同一J/M transactionへ、解釈lineageの初期登録・改訂を接続した。改訂時は旧解釈本文を保持し、同transactionでquarantine／restore eventを追記し、現解釈を根拠にした過去判断を再評価必須にし、新判断を新解釈へ結び付ける。M解釈は`used_for_authority=false`／`may_execute=false`。失敗時はtransactionを拒否し、L3／J承認・監査・fail-closedを維持する。
+
+C07.03の承認済みproducer→private M解釈consumerはこの範囲で`WIRED`。次consumerはHDS/Jのtask・plan review経路で`reassessment_required`を読み、依存する過去判断の再評価へ実際につなぐこと。C07親、目的→C→J→作用→結果→M→帰還の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| HDS `meaning_update_memory.test.ts`／`記憶再解釈.test.ts` | PASS、2 files／3 tests。初回M登録と改訂時の旧判断flagを確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS、workspace 15 projects。 |
+| `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査=PASS（移行負債76件は継続管理）、licensing=PASS。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。全体構築後へ配置。Windows localで必要な限定疎通ができるためActions未使用。 |
+
+C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。
+
+### 前回BUILD_BATCH：`QEB-01-C07.02-OWNER-L3-MEMORY-TRANSACTION`
 
 元のbatch開始`main`／`origin/main`=`abd4e333cdbb54dd0b0a1efd1024101476823c62`。先行C07.02実装commit=`29c5f4cb7239ee252270d3f1e0aef3d0d609261c`、その記録commit=`bec04e4d3bdb2040c80fa3876e052302b535e4b8`。今回のconsumer接続は`bec04e4`から再開した。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、C07.02とC07要求を読み直した。Windows localで実装し、既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持する。全体実装形状成立前に詳細QC／QAへ進まない。
 

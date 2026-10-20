@@ -10,6 +10,8 @@ import {
 import type { OperationPlanMemoryStorage } from "./operation_plan.js";
 import { JMemoryCommitCoordinator, type JMemoryCommitReconciliationResult } from "./制御状態.js";
 import type { JMemoryApprovalReference, JMemoryApprovalReader } from "./保存取引.js";
+import { buildInitialMemoryInterpretationCommit, buildMemoryInterpretationCommit, interpretationContentDigest,
+  MemoryInterpretationConsumer, type MemoryInterpretation } from "./記憶再解釈.js";
 
 export const MEANING_UPDATE_MEMORY_SCHEMA_VERSION = "blue-tanuki.meaning-update-memory.v1" as const;
 
@@ -36,9 +38,11 @@ export type MeaningUpdateMemoryCommitResult =
 /** The approved candidate is persisted only through the J-approved M transaction path. */
 export class MeaningUpdateMemoryConsumer {
   private readonly coordinator: JMemoryCommitCoordinator;
+  private readonly interpretations: MemoryInterpretationConsumer;
 
   constructor(storage: OperationPlanMemoryStorage, approvalReader: JMemoryApprovalReader) {
     this.coordinator = new JMemoryCommitCoordinator({ ...storage, j_approval_reader: approvalReader });
+    this.interpretations = new MemoryInterpretationConsumer(this.coordinator);
   }
 
   commit(
@@ -54,6 +58,13 @@ export class MeaningUpdateMemoryConsumer {
       if (canonicalJson(existing.value) !== canonicalJson(record)) {
         return { ok: false, reason: "meaning_update_record_conflict" };
       }
+      const snapshot = this.interpretations.read(record.proposal.target_reference.record_id);
+      if (!snapshot) return { ok: false, reason: "meaning_update_interpretation_unavailable" };
+      const linked = snapshot.record?.dependent_judgments.some((judgment) => judgment.judgment_ref === eventId) === true;
+      if (linked && !snapshot.record?.interpretations.some((item) => item.interpretation_id === meaningUpdateInterpretationId(record) &&
+          item.content_digest === meaningUpdateInterpretationForRecord(record).content_digest)) {
+        return { ok: false, reason: "meaning_update_interpretation_conflict" };
+      }
       const pending = this.coordinator.snapshot()?.pending.find((item) => item.update_id === updateId);
       if (!pending || pending.j_event_id !== eventId) return { ok: false, reason: "meaning_update_receipt_missing" };
       const reconciliation = this.coordinator.reconcile(updateId);
@@ -62,13 +73,72 @@ export class MeaningUpdateMemoryConsumer {
         : { ok: false, reason: "meaning_update_reconciliation_failed" };
     }
 
+    const interpretationSnapshot = this.interpretations.read(record.proposal.target_reference.record_id);
+    if (!interpretationSnapshot) return { ok: false, reason: "meaning_update_interpretation_unavailable" };
+    if (interpretationSnapshot.revision !== existing.revision) {
+      return { ok: false, reason: "meaning_update_version_changed" };
+    }
+    const interpretation = meaningUpdateInterpretationForRecord(record);
+    const judgmentRef = eventId;
+    let interpretationBuild: ReturnType<typeof buildInitialMemoryInterpretationCommit>;
+    if (!interpretationSnapshot.record) {
+      interpretationBuild = buildInitialMemoryInterpretationCommit({
+        current: interpretationSnapshot,
+        lineage_id: record.proposal.target_reference.record_id,
+        update_id: updateId,
+        j_event_id: eventId,
+        interpretation,
+        dependent_judgment_refs: [judgmentRef],
+      });
+    } else if (interpretationSnapshot.record.application_state === "active") {
+      const currentId = interpretationSnapshot.record.current_interpretation_id;
+      const affected = interpretationSnapshot.record.dependent_judgments
+        .filter((judgment) => judgment.basis_interpretation_id === currentId && !judgment.reassessment_required)
+        .map((judgment) => judgment.judgment_ref);
+      if (affected.length === 0) return { ok: false, reason: "meaning_update_reassessment_pending" };
+      interpretationBuild = buildMemoryInterpretationCommit({
+        current: interpretationSnapshot,
+        lineage_id: record.proposal.target_reference.record_id,
+        update_id: updateId,
+        j_event_id: eventId,
+        transition: {
+          kind: "replace",
+          quarantine_event_id: "meaning-update-quarantine:" + record.proposal_digest,
+          restoration_event_id: "meaning-update-restore:" + record.proposal_digest,
+          reason_digest: meaningUpdateInterpretationReasonDigest(record.proposal_digest),
+          evidence_refs: meaningUpdateInterpretationEvidence(record),
+          affected_judgment_refs: affected,
+          interpretation,
+          reassessment_judgment_ref: judgmentRef,
+        },
+      });
+    } else {
+      interpretationBuild = buildMemoryInterpretationCommit({
+        current: interpretationSnapshot,
+        lineage_id: record.proposal.target_reference.record_id,
+        update_id: updateId,
+        j_event_id: eventId,
+        transition: {
+          kind: "restore",
+          event_id: "meaning-update-restore:" + record.proposal_digest,
+          reason_digest: meaningUpdateInterpretationReasonDigest(record.proposal_digest),
+          evidence_refs: meaningUpdateInterpretationEvidence(record),
+          interpretation,
+          reassessment_judgment_ref: judgmentRef,
+        },
+      });
+    }
+    if (!interpretationBuild.ok) return { ok: false, reason: "meaning_update_interpretation_invalid" };
+    const interpretationChange = interpretationBuild.commit.changes[0];
+    if (!interpretationChange) return { ok: false, reason: "meaning_update_interpretation_invalid" };
+
     const content = {
       schema_version: MEMORY_COMMIT_V2_SCHEMA_VERSION,
       expected_version: existing.revision,
       update_id: updateId,
       j_event_id: eventId,
       changes: [{ operation: "upsert" as const, record_id: record.record_id,
-        value: record as unknown as MemoryCommitJsonValue }],
+        value: record as unknown as MemoryCommitJsonValue }, interpretationChange],
     };
     let commit: MemoryCommitV2;
     try { commit = { ...content, content_digest: memoryCommitContentDigest(content) }; }
@@ -100,6 +170,10 @@ export class MeaningUpdateMemoryConsumer {
     const stored = this.coordinator.readMemoryRecord(recordId);
     if (!stored?.exists || !isMeaningUpdateMemoryRecord(stored.value)) return null;
     return stored.value;
+  }
+
+  readInterpretation(lineageId: string) {
+    return this.interpretations.read(lineageId);
   }
 
   recoverPending(): boolean {
@@ -146,6 +220,41 @@ export function buildMeaningUpdateMemoryRecord(proposal: MeaningUpdateProposalV3
     proposal: structuredClone(proposal), approval_status: "approved", memory_application_status: "applied",
     follow_up_action_status: "unconfirmed", semantic_relation_status: "not_assessed", used_for_authority: false,
     may_execute: false });
+}
+
+export function meaningUpdateInterpretationId(record: MeaningUpdateMemoryRecord): string {
+  return "meaning-update-interpretation:" + record.proposal_digest;
+}
+
+export function meaningUpdateInterpretationForRecord(record: MeaningUpdateMemoryRecord): MemoryInterpretation {
+  const proposal = record.proposal;
+  const meaning = Object.freeze({
+    proposal_digest: record.proposal_digest,
+    candidate_ref: proposal.candidate_ref,
+    candidate_digest: proposal.candidate_digest,
+    candidate_meaning: proposal.candidate_meaning,
+    target_reference: proposal.target_reference,
+    prior_version_ref: proposal.prior_version_ref,
+    supporting_evidence: proposal.supporting_evidence,
+    counterevidence_review: proposal.counterevidence_review,
+  });
+  return Object.freeze({
+    interpretation_id: meaningUpdateInterpretationId(record),
+    basis_ref: proposal.target_reference.record_id + "#" + proposal.target_reference.version,
+    meaning,
+    content_digest: interpretationContentDigest(meaning),
+  });
+}
+
+function meaningUpdateInterpretationEvidence(record: MeaningUpdateMemoryRecord) {
+  const references = record.proposal.counterevidence_review.status === "reviewed_with_references"
+    ? record.proposal.counterevidence_review.references
+    : record.proposal.supporting_evidence;
+  return references.map((reference) => ({ reference: reference.reference, digest: reference.digest }));
+}
+
+function meaningUpdateInterpretationReasonDigest(proposalDigest: string): string {
+  return createHash("sha256").update("approved-meaning-update-reinterpretation:" + proposalDigest, "utf8").digest("hex");
 }
 
 function canonicalJson(value: unknown): string {
