@@ -580,7 +580,7 @@ jobs:
             echo "fuse_probe_bwrap_start_failed status=$probe_status"
           fi
 
-      - name: Probe isolated FUSE mount propagation and commit target masking
+      - name: Probe inherited FUSE mount and commit target masking
         shell: bash
         run: |
           set -euo pipefail
@@ -663,29 +663,7 @@ jobs:
           raise SystemExit(0 if found else 1)
           PY
           then
-            echo "fuse_boundary_shared_tmpfs=failed"
-            exit 1
-          fi
-          shared_mark_error=/tmp/fuse-boundary-shared-mark.err
-          if mount --make-shared /workspace-shared 2>"$shared_mark_error"; then
-            :
-          else
-            shared_mark_status=$?
-            echo "fuse_boundary_shared_mark=failed"
-            echo "fuse_boundary_shared_mark_exit=$shared_mark_status"
-            if grep -Eiq 'Operation not permitted|Permission denied' "$shared_mark_error"; then
-              echo "fuse_boundary_shared_mark_error=permission_denied"
-            elif grep -Eiq 'Invalid argument' "$shared_mark_error"; then
-              echo "fuse_boundary_shared_mark_error=invalid_argument"
-            elif grep -Eiq 'not a mountpoint|not mounted|No such file or directory' "$shared_mark_error"; then
-              echo "fuse_boundary_shared_mark_error=invalid_mount_target"
-            else
-              echo "fuse_boundary_shared_mark_error=other"
-            fi
-            exit 1
-          fi
-          if ! awk '$5 == "/workspace-shared" { for (i = 7; i <= NF; i++) if ($i ~ /^shared:/) shared = 1 } END { exit !shared }' /proc/self/mountinfo; then
-            echo "fuse_boundary_parent_mount_shared=failed"
+            echo "fuse_boundary_mount_target_tmpfs=failed"
             exit 1
           fi
           if awk '$5 == "/" { for (i = 7; i <= NF; i++) if ($i ~ /^shared:/) shared = 1 } END { exit !shared }' /proc/self/mountinfo; then
@@ -694,7 +672,8 @@ jobs:
           fi
 
           child_pid=""
-          cleanup_child() {
+          mount_helper_pid=""
+          cleanup_boundary() {
             if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
               : > /tmp/fuse-boundary-stop
               for attempt in $(seq 1 50); do
@@ -709,8 +688,107 @@ jobs:
               fi
               wait "$child_pid" 2>/dev/null || true
             fi
+            if python3 - <<'PY'
+          found = False
+          with open('/proc/self/mountinfo', encoding='ascii') as stream:
+              for line in stream:
+                  fields = line.split()
+                  try:
+                      separator = fields.index('-')
+                  except ValueError:
+                      continue
+                  if len(fields) > separator + 1 and fields[4] == '/workspace-shared/view' and fields[separator + 1].startswith('fuse'):
+                      found = True
+          raise SystemExit(0 if found else 1)
+          PY
+            then
+              if ! umount /workspace-shared/view 2>/dev/null; then
+                echo "fuse_boundary_supervisor_unmount=failed"
+                return 1
+              fi
+              echo "fuse_boundary_supervisor_unmount=success"
+            fi
+            if [ -n "$mount_helper_pid" ]; then
+              wait "$mount_helper_pid" 2>/dev/null || true
+              mount_helper_pid=""
+            fi
           }
-          trap cleanup_child EXIT
+          trap cleanup_boundary EXIT
+
+          /usr/sbin/mount.fuse3 /usr/bin/fuse-overlayfs# /workspace-shared/view \
+            -o drop_privileges,lowerdir=/workspace-lower,upperdir=/tmp/fuse-boundary-storage/isolation-upper,workdir=/tmp/fuse-boundary-storage/isolation-work \
+            >/tmp/fuse-boundary-mount.log 2>&1 &
+          mount_helper_pid=$!
+          fuse_mounted=0
+          for attempt in $(seq 1 100); do
+            if python3 - <<'PY'
+          found = False
+          with open('/proc/self/mountinfo', encoding='ascii') as stream:
+              for line in stream:
+                  fields = line.split()
+                  try:
+                      separator = fields.index('-')
+                  except ValueError:
+                      continue
+                  if len(fields) > separator + 1 and fields[4] == '/workspace-shared/view' and fields[separator + 1].startswith('fuse'):
+                      found = True
+          raise SystemExit(0 if found else 1)
+          PY
+            then
+              fuse_mounted=1
+              break
+            fi
+            if ! kill -0 "$mount_helper_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$fuse_mounted" != 1 ]; then
+            echo "fuse_boundary_supervisor_mount=failed"
+            if grep -Eiq 'Operation not permitted|Permission denied' /tmp/fuse-boundary-mount.log; then
+              echo "fuse_boundary_supervisor_mount_error=permission_denied"
+            elif grep -Eiq 'Invalid argument' /tmp/fuse-boundary-mount.log; then
+              echo "fuse_boundary_supervisor_mount_error=invalid_argument"
+            else
+              echo "fuse_boundary_supervisor_mount_error=other"
+            fi
+            exit 1
+          fi
+          echo "fuse_boundary_supervisor_mount=success"
+
+          fuse_pid=""
+          for attempt in $(seq 1 100); do
+            for process in /proc/[0-9]*; do
+              if IFS= read -r process_name < "$process/comm" 2>/dev/null && [ "$process_name" = fuse-overlayfs ]; then
+                fuse_pid="${process#/proc/}"
+                break 2
+              fi
+            done
+            sleep 0.1
+          done
+          if [ -z "$fuse_pid" ]; then
+            echo "fuse_boundary_daemon_state=unavailable"
+            exit 1
+          fi
+          FUSE_PID="$fuse_pid" python3 - <<'PY'
+          import os
+
+          pid = os.environ['FUSE_PID']
+          status = {}
+          with open(f'/proc/{pid}/status', encoding='ascii') as stream:
+              for line in stream:
+                  key, separator, value = line.partition(':')
+                  if separator:
+                      status[key] = value.strip()
+          required = {'CapEff': '0000000000000000', 'CapPrm': '0000000000000000', 'CapBnd': '0000000000000000', 'NoNewPrivs': '1'}
+          if any(status.get(key) != value for key, value in required.items()):
+              print('fuse_boundary_daemon_privilege_drop=failed', flush=True)
+              raise SystemExit(1)
+          if os.readlink(f'/proc/{pid}/ns/mnt') != os.readlink('/proc/self/ns/mnt') or os.readlink(f'/proc/{pid}/ns/pid') != os.readlink('/proc/self/ns/pid'):
+              print('fuse_boundary_daemon_namespace=failed', flush=True)
+              raise SystemExit(1)
+          print('fuse_boundary_daemon_supervisor_namespace=success', flush=True)
+          PY
 
           /usr/bin/setsid /usr/bin/unshare --mount --pid --fork --propagation unchanged /bin/bash /fuse-boundary-child.sh >/tmp/fuse-boundary-child.log 2>&1 &
           child_pid=$!
@@ -748,22 +826,22 @@ jobs:
                       separator = fields.index('-')
                   except ValueError:
                       continue
-                  if len(fields) > separator + 1 and fields[4] == '/workspace-shared/view' and fields[separator + 1].startswith('fuse') and any(value.startswith('shared:') for value in fields[6:separator]):
+                  if len(fields) > separator + 1 and fields[4] == '/workspace-shared/view' and fields[separator + 1].startswith('fuse'):
                       found = True
           if not found:
-              print('fuse_boundary_mount_propagation=failed', flush=True)
+              print('fuse_boundary_mount_inherited=failed', flush=True)
               raise SystemExit(1)
-          print('fuse_boundary_mount_propagation=success', flush=True)
+          print('fuse_boundary_mount_inherited=success', flush=True)
           PY
           then
             exit 1
           fi
 
-          if [ "$(cat /workspace-shared/view/probe 2>/dev/null || true)" != fixture ]; then
+          if [ "$(cat /workspace-shared/view/created 2>/dev/null || true)" != child-write ] || [ -e /workspace-shared/view/probe ]; then
             echo "fuse_boundary_parent_read=failed"
             exit 1
           fi
-          if ! printf write > /workspace-shared/view/created || ! rm /workspace-shared/view/probe || [ -e /workspace-shared/view/probe ] || [ "$(cat /workspace-shared/view/created 2>/dev/null || true)" != write ]; then
+          if ! printf parent-write > /workspace-shared/view/parent-created || [ "$(cat /workspace-shared/view/parent-created 2>/dev/null || true)" != parent-write ]; then
             echo "fuse_boundary_parent_write_whiteout=failed"
             exit 1
           fi
@@ -771,7 +849,7 @@ jobs:
             echo "fuse_boundary_parent_target_changed=failed"
             exit 1
           fi
-          echo "fuse_boundary_parent_read_write_whiteout=success"
+          echo "fuse_boundary_parent_observed_child_write_whiteout=success"
 
           : > /tmp/fuse-boundary-stop
           if ! wait "$child_pid"; then
@@ -791,13 +869,41 @@ jobs:
                       continue
                   if len(fields) > separator + 1 and fields[4] == '/workspace-shared/view' and fields[separator + 1].startswith('fuse'):
                       found = True
+          raise SystemExit(0 if found else 1)
+          PY
+          then
+            echo "fuse_boundary_supervisor_mount_survived_child=success"
+          else
+            echo "fuse_boundary_supervisor_mount_survived_child=failed"
+            exit 1
+          fi
+          if ! umount /workspace-shared/view 2>/dev/null; then
+            echo "fuse_boundary_supervisor_unmount=failed"
+            exit 1
+          fi
+          if [ -n "$mount_helper_pid" ]; then
+            wait "$mount_helper_pid" 2>/dev/null || true
+            mount_helper_pid=""
+          fi
+          if python3 - <<'PY'
+          found = False
+          with open('/proc/self/mountinfo', encoding='ascii') as stream:
+              for line in stream:
+                  fields = line.split()
+                  try:
+                      separator = fields.index('-')
+                  except ValueError:
+                      continue
+                  if len(fields) > separator + 1 and fields[4] == '/workspace-shared/view' and fields[separator + 1].startswith('fuse'):
+                      found = True
           raise SystemExit(1 if found else 0)
           PY
           then
-            echo "fuse_boundary_mount_cleanup=failed"
+            echo "fuse_boundary_supervisor_unmount=failed"
             exit 1
           fi
-          echo "fuse_boundary_child_cleanup=success"
+          echo "fuse_boundary_child_namespace_cleanup=success"
+          echo "fuse_boundary_supervisor_unmount=success"
           trap - EXIT
           OUTER
 
@@ -814,18 +920,6 @@ jobs:
           fi
           printf masked-only > /commit-target/sentinel
           chmod 0644 /commit-target/sentinel
-          mount_helper_pid=""
-          /usr/sbin/mount.fuse3 /usr/bin/fuse-overlayfs# /workspace-shared/view \
-            -o drop_privileges,lowerdir=/workspace-lower,upperdir=/tmp/fuse-boundary-storage/isolation-upper,workdir=/tmp/fuse-boundary-storage/isolation-work \
-            >/tmp/fuse-boundary-mount.log 2>&1 &
-          mount_helper_pid=$!
-          cleanup_child_ns() {
-            umount /workspace-shared/view 2>/dev/null || true
-            if [ -n "$mount_helper_pid" ]; then
-              wait "$mount_helper_pid" 2>/dev/null || true
-            fi
-          }
-          trap cleanup_child_ns EXIT
           fuse_mounted=0
           for attempt in $(seq 1 100); do
             if python3 - <<'PY'
@@ -848,64 +942,48 @@ jobs:
             sleep 0.1
           done
           if [ "$fuse_mounted" != 1 ]; then
-            echo "fuse_boundary_child_mount=failed"
+            echo "fuse_boundary_mount_inherited=failed"
             exit 1
           fi
-
-          fuse_pid=""
-          for attempt in $(seq 1 100); do
-            for process in /proc/[0-9]*; do
-              if IFS= read -r process_name < "$process/comm" 2>/dev/null && [ "$process_name" = fuse-overlayfs ]; then
-                fuse_pid="${process#/proc/}"
-                break 2
-              fi
-            done
-            sleep 0.1
-          done
-          if [ -z "$fuse_pid" ]; then
-            echo "fuse_boundary_daemon_state=unavailable"
+          echo "fuse_boundary_mount_inherited=success"
+          if [ "$(cat /workspace-shared/view/probe 2>/dev/null || true)" != fixture ] || [ "$(cat /commit-target/sentinel 2>/dev/null || true)" != masked-only ]; then
+            echo "fuse_boundary_child_view=failed"
             exit 1
           fi
-          FUSE_PID="$fuse_pid" python3 - <<'PY'
-          import os
-
-          pid = os.environ['FUSE_PID']
-          status = {}
-          with open(f'/proc/{pid}/status', encoding='ascii') as stream:
-              for line in stream:
-                  key, separator, value = line.partition(':')
-                  if separator:
-                      status[key] = value.strip()
-          required = {'CapEff': '0000000000000000', 'CapPrm': '0000000000000000', 'CapBnd': '0000000000000000', 'NoNewPrivs': '1'}
-          if any(status.get(key) != value for key, value in required.items()):
-              print('fuse_boundary_daemon_privilege_drop=failed', flush=True)
-              raise SystemExit(1)
-          if os.readlink(f'/proc/{pid}/ns/mnt') != os.readlink('/proc/self/ns/mnt') or os.readlink(f'/proc/{pid}/ns/pid') != os.readlink('/proc/self/ns/pid'):
-              print('fuse_boundary_daemon_namespace=failed', flush=True)
-              raise SystemExit(1)
-          with open(f'/proc/{pid}/mountinfo', encoding='ascii') as stream:
-              target_is_tmpfs = any(
-                  fields[4] == '/commit-target' and fields[fields.index('-') + 1] == 'tmpfs'
-                  for line in stream
-                  if (fields := line.split()) and '-' in fields
-              )
-          try:
-              with open(f'/proc/{pid}/root/commit-target/sentinel', encoding='ascii') as stream:
-                  masked_target = stream.read() == 'masked-only'
-          except OSError:
-              masked_target = False
-          if not target_is_tmpfs or not masked_target:
-              print('fuse_boundary_daemon_target_view=failed', flush=True)
-              raise SystemExit(1)
-          print('fuse_boundary_daemon_privilege_namespace_target=success', flush=True)
-          PY
+          if ! printf child-write > /workspace-shared/view/created || ! rm /workspace-shared/view/probe || [ -e /workspace-shared/view/probe ] || [ "$(cat /workspace-shared/view/created 2>/dev/null || true)" != child-write ]; then
+            echo "fuse_boundary_child_read_write_whiteout=failed"
+            exit 1
+          fi
+          echo "fuse_boundary_child_target_mask=success"
+          echo "fuse_boundary_child_read_write_whiteout=success"
           : > /tmp/fuse-boundary-ready
           while [ ! -f /tmp/fuse-boundary-stop ]; do
             sleep 0.1
           done
+          if [ "$(cat /workspace-shared/view/parent-created 2>/dev/null || true)" != parent-write ]; then
+            echo "fuse_boundary_child_observed_parent_write=failed"
+            exit 1
+          fi
+          echo "fuse_boundary_child_observed_parent_write=success"
           umount /workspace-shared/view
-          wait "$mount_helper_pid" 2>/dev/null || true
-          trap - EXIT
+          if python3 - <<'PY'
+          found = False
+          with open('/proc/self/mountinfo', encoding='ascii') as stream:
+              for line in stream:
+                  fields = line.split()
+                  try:
+                      separator = fields.index('-')
+                  except ValueError:
+                      continue
+                  if len(fields) > separator + 1 and fields[4] == '/workspace-shared/view' and fields[separator + 1].startswith('fuse'):
+                      found = True
+          raise SystemExit(1 if found else 0)
+          PY
+          then
+            echo "fuse_boundary_child_namespace_cleanup=failed"
+            exit 1
+          fi
+          echo "fuse_boundary_child_namespace_cleanup=success"
           CHILD
           chmod 0700 "$probe_root/outer.sh" "$probe_root/child.sh"
 
