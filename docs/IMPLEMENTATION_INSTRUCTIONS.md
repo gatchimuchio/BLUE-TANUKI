@@ -1,21 +1,29 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-C07.03-MEMORY-REINTERPRETATION-CONSUMER`
+### 最新BUILD_BATCH：`QEB-01-C07.03-PLAN-REASSESSMENT-CONSUMER`
 
-batch開始`main`／`origin/main`=`051607afb188e0d46ef2db7af5f28b40a902b676`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、C07.03とC07要求を読み直した。Windows localで実装し、既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持する。全体実装形状の成立前に詳細QC／QAを行わない。
+batch開始`main`／`origin/main`=`0e84b57bc6e5f78d27ff32a5fa7a62383561e31d`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、C07.03とC07要求を再読した。Windows localで実装し、既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。全体実装形状の成立前に詳細QC／QAを行わない。
 
-C07.02のowner L3承認済みmeaning-updateからprivate Mへ保存する同一J/M transactionへ、解釈lineageの初期登録・改訂を接続した。改訂時は旧解釈本文を保持し、同transactionでquarantine／restore eventを追記し、現解釈を根拠にした過去判断を再評価必須にし、新判断を新解釈へ結び付ける。M解釈は`used_for_authority=false`／`may_execute=false`。失敗時はtransactionを拒否し、L3／J承認・監査・fail-closedを維持する。
+Jが受理した記憶引用へ、引用したM record/versionと当時のprivate interpretation IDを非権威audit dependencyとして結び付ける。owner L3承認済みmeaning-updateのM transactionは、そのcurrent interpretationへ依存する引用判断を同じ改訂で`reassessment_required=true`にする。plan candidateは内容を含まない依存参照をJ checkpointへ保持し、`plan:review`は発行前にprivate Mの現在lineage・判断参照・basisを再照合する。再評価待ち、隔離、現解釈との不一致、状態・判断欠落や取得不能はplan reviewをfail-closedする。interpretation／dependencyは権限ではなく、`used_for_authority=false`／`may_execute=false`を維持する。
 
-C07.03の承認済みproducer→private M解釈consumerはこの範囲で`WIRED`。次consumerはHDS/Jのtask・plan review経路で`reassessment_required`を読み、依存する過去判断の再評価へ実際につなぐこと。C07親、目的→C→J→作用→結果→M→帰還の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。
+古い解釈に依存するplanの実行前review拒否まで当該consumerを`WIRED`。fresh reviewの結果から旧判断を明示再評価して置換・閉鎖する経路、C07親、目的→C→J→作用→結果→M→帰還の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は引き続き`BUILD_GAP`。次consumerはfresh citation/meaning decisionと旧judgmentの再評価結果をJ/M lineageへ結ぶこと。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| HDS `meaning_update_memory.test.ts`／`記憶再解釈.test.ts` | PASS、2 files／3 tests。初回M登録と改訂時の旧判断flagを確認。 |
+| HDS `meaning_update_memory.test.ts`／`operation_plan_interpretation_reassessment.test.ts`／`記憶再解釈.test.ts` | PASS、3 files／4 tests。引用判断のM依存記録、改訂後の古いplan review拒否、依存判断の欠落時fail-closedを確認。 |
 | `pnpm typecheck`／`pnpm build` | PASS、workspace 15 projects。 |
-| `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査=PASS（移行負債76件は継続管理）、licensing=PASS。 |
-| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。全体構築後へ配置。Windows localで必要な限定疎通ができるためActions未使用。 |
+| `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査PASS（移行負債76件は継続管理）、licensing PASS。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。全体構築後へ配置。Windows localで必要な接続確認ができるためActions未使用。 |
 
-C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。実装commit=`795f6d80db37527e7739b3b209afccc09da39cbd`を`main`へfast-forward pushしremote一致を確認した。文書closeout後のlocal recovery branch二世代とremote backup tag二世代はcurrent=`final main HEAD`／previous=`051607afb188e0d46ef2db7af5f28b40a902b676`へ揃える。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。
+C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。実装commit=`bc325537e68d8004730aab4d21423eb57b50c051`を`main`へpushし、remote HEAD一致を確認した。文書closeout後のlocal recovery branch二世代とremote backup tag二世代はcurrent=`final main HEAD`／previous=`bc325537e68d8004730aab4d21423eb57b50c051`へ揃える。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。
+
+### 前回BUILD_BATCH：`QEB-01-C07.03-MEMORY-REINTERPRETATION-CONSUMER`
+
+batch開始`main`／`origin/main`=`051607afb188e0d46ef2db7af5f28b40a902b676`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、C07.03とC07要求を読み直した。Windows localで実装し、Linux `target/`を保持した。全体実装形状の成立前に詳細QC／QAを行わなかった。
+
+C07.02のowner L3承認済みmeaning-updateからprivate Mへ保存する同一J/M transactionへ解釈lineageの初期登録・改訂を接続した。改訂時は旧解釈本文を保持し、quarantine／restore eventを追記して現解釈に依存する過去判断を再評価必須にし、新判断を新解釈へ結び付ける。当batch開始時は過去判断のtask／plan consumerが未接続だった。producer→private M解釈consumerは`WIRED`、C07親と一仕事の全体経路は`BUILD_GAP`。
+
+HDS `meaning_update_memory.test.ts`／`記憶再解釈.test.ts` 2 files／3 tests、typecheck、15-project build、docs checkがPASS。全体suite／QC／QA／5OS実機／実provider／外部作用は未実施。実装commit=`795f6d80db37527e7739b3b209afccc09da39cbd`を`main`へfast-forward push済み。closeout後の復元refはこの次batchの記録に統合する。
 
 ### 前回BUILD_BATCH：`QEB-01-C07.02-OWNER-L3-MEMORY-TRANSACTION`
 
