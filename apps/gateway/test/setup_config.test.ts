@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as path from "node:path";
+import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import {
   createDefaultSetupConfig,
   renderSetupEnvFile,
@@ -78,6 +79,23 @@ describe("setup_config", () => {
 
     config.approval.mode = "invalid" as never;
     expect(() => validateSetupConfig(config)).toThrow(/approval.mode/);
+  });
+
+  it("preserves the owner compute-budget policy through setup env rendering", () => {
+    const policy = JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY);
+    const profiles = JSON.stringify({
+      "owner-provider": { capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.02, currency: "USD" } },
+    });
+    const config = setupConfigFromEnv({
+      BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: policy,
+      BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: profiles,
+    });
+    expect(config.llm.compute_budget_policy_json).toBe(policy);
+    expect(config.llm.provider_cost_profiles_json).toBe(profiles);
+    expect(setupConfigToEnv(config).BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON).toBe(policy);
+    expect(setupConfigToEnv(config).BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON).toBe(profiles);
+    expect(renderSetupEnvFile(config)).toContain("BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON=");
+    expect(renderSetupEnvFile(config)).toContain("BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON=");
   });
 
   it("renders OpenRouter and Composio settings into runtime env", () => {

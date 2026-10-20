@@ -140,6 +140,8 @@ a stop-ship event and inspect the workspace before distributing an archive.
 | `BLUE_TANUKI_LLM_TEMPERATURE` | optional   | Per-command temperature override (`0..2`)             | provider default   |
 | `BLUE_TANUKI_LLM_MAX_TOKENS` | optional    | Per-command max token constraint                      | `1024`             |
 | `BLUE_TANUKI_LLM_TIMEOUT_MS` | optional    | Per-command timeout constraint                        | `30000`            |
+| `BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON` | 任意上書き | system／parent／task別のtoken・時間・費用上限 | 有限のoffline上限、金銭費用`0 USD` |
+| `BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON` | 任意 | providerごとの1 attempt最大費用。費用が発生するproviderでは設定必須 | 未設定時はprovider呼出しを保留 |
 | `BLUE_TANUKI_LIVE_REQUIRED` | live smoke   | `=1` fails `smoke:live` if every live check is skipped | unset              |
 | `BLUE_TANUKI_LIVE_TIMEOUT_MS` | live smoke | Timeout for Slack/Discord/Teams/LINE live start/send checks | `30000`       |
 | `BLUE_TANUKI_LIVE_LLM_TIMEOUT_MS` | live smoke | Timeout for the configured live LLM call          | `BLUE_TANUKI_LIVE_TIMEOUT_MS` |
@@ -148,6 +150,10 @@ a stop-ship event and inspect the workspace before distributing an archive.
 Empty-string values are treated as unset for the `BLUE_TANUKI_*` directory
 variables. This lets smoke scripts wipe a parent process's setting without
 touching disk.
+
+計算予算の既定値は、有限のoffline上限と金銭費用`0 USD`である。有償providerはownerが明示上限とprovider最大費用profileを設定するまで保留する。上書き値は`window_ms`、`currency`、`system`／`parent`／`task`を持つstrict JSONで、各scopeに`max_tokens`、`max_compute_ms`、`max_cost: { amount, currency }`を指定する。各LLM providerには`BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON`で1 attemptあたりの最大費用を設定する。この値は予約上限であり請求実額ではない。有限なprovider費用上限がない呼出しはnetworkへ出る前に保留する。実額が不明なprovider呼出しは、そのaccounting window内では予約上限全額を消費として残す。
+
+provider profileはcanonical provider名をkeyとし、valueを`{ "capabilities": ["llm.text.generate"], "max_cost_per_attempt": { "amount": <ownerが確認した上限>, "currency": "USD" } }`とする。上限は1 attemptを覆う必要があり、retryと承認済みfallbackのattempt数は予約時に乗算する。setupはこの設定を保持するが、provider価格の決定や請求照合は行わない。
 
 ---
 

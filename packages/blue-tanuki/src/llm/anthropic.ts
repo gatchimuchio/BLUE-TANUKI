@@ -69,6 +69,7 @@ function parseResponse(provider: string, data: unknown, requestedModel: string):
   return {
     content,
     tokens_used: tokensUsed,
+    tokens_usage_status: "provider_reported",
     model: typeof data.model === "string" ? data.model : requestedModel,
     ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
   };

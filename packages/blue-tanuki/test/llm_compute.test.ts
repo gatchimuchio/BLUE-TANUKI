@@ -6,6 +6,7 @@ import {
   LLMComputeAdapter,
   LLM_COMPUTE_PROFILE,
   type ComputeBackend,
+  type ComputeBudgetPort,
   type ComputeRequest,
 } from "../src/llm/compute.js";
 
@@ -48,6 +49,131 @@ function computeRequest(): ComputeRequest<LLMRequest> {
 }
 
 describe("LLMComputeAdapter", () => {
+  it("reserves configured system/parent/task resources before the provider and settles the result", async () => {
+    const events: string[] = [];
+    class OrderedBackend extends CapturingBackend {
+      private callCount = 0;
+      override async call(request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
+        events.push("provider");
+        this.callCount += 1;
+        if (this.callCount === 1) {
+          throw new LLMProviderError("temporary provider outage", {
+            provider: this.name,
+            kind: "remote_service_unavailable",
+            retryable: true,
+            status: 503,
+          });
+        }
+        return { ...(await super.call(request, signal)), tokens_usage_status: "provider_reported" };
+      }
+    }
+    const backend = new OrderedBackend();
+    const registry = new LLMRegistry({ retry: { max_attempts: 2 }, sleep: async () => {} })
+      .register(backend, [], {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+      })
+      .setDefault("fixture-provider");
+    const budget: ComputeBudgetPort = {
+      reserve(input) {
+        events.push("reserve");
+        expect(input.scope.parent_task_identity_digest).toBe("c".repeat(64));
+        expect(input.scope.task_identity_digest).toBe("d".repeat(64));
+        expect(input.reserved_tokens).toBe(256);
+        expect(input.reserved_cost).toEqual({ amount: 0.5, currency: "USD", source: "CONFIG" });
+        return {
+          reservation_id: "e".repeat(64),
+          reserved_tokens: input.reserved_tokens,
+          reserved_compute_ms: input.reserved_compute_ms,
+          reserved_cost: input.reserved_cost,
+        };
+      },
+      settle(id, settlement) {
+        events.push("settle");
+        expect(id).toBe("e".repeat(64));
+        expect(settlement.tokens_usage_status).toBe("unknown");
+        expect(settlement.cost.status).toBe("unknown");
+      },
+    };
+    const request = computeRequest();
+    request.budget_scope = {
+      parent_task_identity_digest: "c".repeat(64),
+      task_identity_digest: "d".repeat(64),
+    };
+
+    await new LLMComputeAdapter(registry, budget).compute(request);
+    expect(events).toEqual(["reserve", "provider", "provider", "settle"]);
+  });
+
+  it("holds before provider invocation when no configured cost upper bound exists", async () => {
+    const backend = new CapturingBackend();
+    const registry = new LLMRegistry().register(backend).setDefault("fixture-provider");
+    let reservations = 0;
+    const budget: ComputeBudgetPort = {
+      reserve() {
+        reservations += 1;
+        throw new Error("reserve should not be reached without a cost bound");
+      },
+      settle() {},
+    };
+    const request = computeRequest();
+    request.budget_scope = {
+      parent_task_identity_digest: "c".repeat(64),
+      task_identity_digest: "d".repeat(64),
+    };
+
+    await expect(new LLMComputeAdapter(registry, budget).compute(request))
+      .rejects.toThrow("llm_compute_budget_cost_upper_bound_unavailable");
+    expect(backend.seen).toHaveLength(0);
+    expect(reservations).toBe(0);
+  });
+
+  it("keeps the full reservation when the provider call outcome is unknown", async () => {
+    class FailingBackend implements LLMBackend {
+      readonly name = "fixture-provider";
+      async call(): Promise<LLMResponse> {
+        throw new LLMProviderError("provider outcome uncertain", {
+          provider: this.name,
+          kind: "remote_service_unavailable",
+          retryable: false,
+          status: 503,
+        });
+      }
+    }
+    const registry = new LLMRegistry().register(new FailingBackend(), [], {
+      capabilities: ["llm.text.generate"],
+      max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const events: string[] = [];
+    const budget: ComputeBudgetPort = {
+      reserve() {
+        events.push("reserve");
+        return {
+          reservation_id: "f".repeat(64),
+          reserved_tokens: 128,
+          reserved_compute_ms: 2_000,
+          reserved_cost: { amount: 0.25, currency: "USD", source: "CONFIG" },
+        };
+      },
+      settle(id, settlement) {
+        events.push("settle");
+        expect(id).toBe("f".repeat(64));
+        expect(settlement.state).toBe("unknown");
+        expect(settlement.tokens_usage_status).toBe("unknown");
+        expect(settlement.cost.status).toBe("unknown");
+      },
+    };
+    const request = computeRequest();
+    request.budget_scope = {
+      parent_task_identity_digest: "c".repeat(64),
+      task_identity_digest: "d".repeat(64),
+    };
+
+    await expect(new LLMComputeAdapter(registry, budget).compute(request))
+      .rejects.toMatchObject({ kind: "remote_service_unavailable" });
+    expect(events).toEqual(["reserve", "settle"]);
+  });
+
   it("binds provider execution identity and keeps compute metadata local", async () => {
     const backend = new CapturingBackend();
     const controller = new AbortController();
@@ -129,6 +255,12 @@ describe("LLMComputeAdapter", () => {
       required_capabilities: ["llm.text.generate"],
       max_total_cost: { amount: 0.3, currency: "USD" },
     };
+    expect(registry.maximumCostForCall(request.input, request.fallback_authorization)).toEqual({
+      amount: 0.3,
+      currency: "USD",
+      source: "CONFIG",
+    });
+    expect(registry.maximumCallsForRequest(request.input, request.fallback_authorization)).toBe(2);
 
     const result = await new LLMComputeAdapter(registry).compute(request);
 

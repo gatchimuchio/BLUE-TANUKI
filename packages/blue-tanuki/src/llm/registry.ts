@@ -246,6 +246,41 @@ export class LLMRegistry implements LLMBackend {
     return this.callWithFallbackAuthorization(req, signal);
   }
 
+  /** Upper cost bound for every provider attempt that this routed call may make. */
+  maximumCostForCall(
+    req: LLMRequest,
+    fallbackAuthorization?: LLMFallbackAuthorization,
+  ): LLMFallbackCostBound | undefined {
+    const selected = this.resolveWithName(req.backend_hint);
+    const primaryProfile = this.fallbackProfiles.get(selected.name);
+    if (!primaryProfile) return undefined;
+    const fallbackBound = this.authorizedFallbackCost(
+      selected.name,
+      this.fallbackName ?? "",
+      req,
+      fallbackAuthorization,
+    );
+    if (fallbackBound) return fallbackBound;
+    const amount = primaryProfile.max_cost_per_attempt.amount * this.retryPolicy.max_attempts;
+    if (!Number.isFinite(amount) || amount < 0) return undefined;
+    return { amount, currency: primaryProfile.max_cost_per_attempt.currency, source: "CONFIG" };
+  }
+
+  /** Maximum number of bounded provider attempts, including an authorized fallback. */
+  maximumCallsForRequest(
+    req: LLMRequest,
+    fallbackAuthorization?: LLMFallbackAuthorization,
+  ): number {
+    const selected = this.resolveWithName(req.backend_hint);
+    const canFallback = Boolean(this.fallbackName && this.authorizedFallbackCost(
+      selected.name,
+      this.fallbackName,
+      req,
+      fallbackAuthorization,
+    ));
+    return this.retryPolicy.max_attempts * (canFallback ? 2 : 1);
+  }
+
   /** @internal HDS fallback authorization is consumed here and never forwarded to a provider. */
   async callWithFallbackAuthorization(
     req: LLMRequest,

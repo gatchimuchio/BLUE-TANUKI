@@ -13,6 +13,7 @@ export class StubBackend implements LLMBackend {
     return {
       content: `[STUB:${this.name}] ${echo}`,
       tokens_used: 0,
+      tokens_usage_status: "provider_reported",
       model: "stub-v0",
     };
   }

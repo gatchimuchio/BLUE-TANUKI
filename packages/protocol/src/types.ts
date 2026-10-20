@@ -160,6 +160,11 @@ export const LLMComputeContextSchema = z.object({
     ])).min(1).max(3),
     requested_egress_provider: z.string().trim().min(1).max(120),
   }).strict(),
+  /** Non-authority correlation scope for aggregate C resource accounting. */
+  budget_scope: z.object({
+    parent_task_identity_digest: z.string().regex(/^[a-f0-9]{64}$/),
+    task_identity_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  }).strict().optional(),
   /** HDS-issued constraints for an alternate provider; absent means no fallback authorization. */
   fallback_authorization: LLMFallbackAuthorizationSchema.optional(),
 }).strict();

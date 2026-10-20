@@ -51,8 +51,8 @@ function extractText(provider: string, content: unknown): string {
   return invalidStructuredOutput(provider);
 }
 
-function tokenCount(provider: string, usage: unknown): number {
-  if (usage === undefined || usage === null) return 0;
+function tokenUsage(provider: string, usage: unknown): { count: number; status: "provider_reported" | "unknown" } {
+  if (usage === undefined || usage === null) return { count: 0, status: "unknown" };
   if (!isRecord(usage)) invalidStructuredOutput(provider);
   const read = (value: unknown): number | undefined => {
     if (value === undefined) return undefined;
@@ -62,10 +62,13 @@ function tokenCount(provider: string, usage: unknown): number {
     return value;
   };
   const total = read(usage.total_tokens);
-  if (total !== undefined) return total;
+  if (total !== undefined) return { count: total, status: "provider_reported" };
   const sum = (read(usage.prompt_tokens) ?? 0) + (read(usage.completion_tokens) ?? 0);
   if (!Number.isSafeInteger(sum)) invalidStructuredOutput(provider);
-  return sum;
+  const status = usage.prompt_tokens !== undefined || usage.completion_tokens !== undefined
+    ? "provider_reported"
+    : "unknown";
+  return { count: sum, status };
 }
 
 function parseToolCalls(provider: string, raw: unknown): NonNullable<LLMResponse["tool_calls"]> {
@@ -118,9 +121,11 @@ function parseResponse(provider: string, data: unknown, requestedModel: string):
   if (responseModel !== undefined && (typeof responseModel !== "string" || !responseModel.trim())) {
     invalidStructuredOutput(provider);
   }
+  const usage = tokenUsage(provider, data.usage);
   return {
     content,
-    tokens_used: tokenCount(provider, data.usage),
+    tokens_used: usage.count,
+    tokens_usage_status: usage.status,
     model: typeof responseModel === "string" ? responseModel : requestedModel,
     ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
     // Optional provider extension carrying an untrusted C candidate. Executor

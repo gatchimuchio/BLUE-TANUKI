@@ -58,6 +58,8 @@ export interface LLMFallbackTrace {
 export interface LLMResponse {
   content: string;
   tokens_used: number;
+  /** True only when the provider explicitly returned usage; absence means unknown. */
+  tokens_usage_status?: "provider_reported" | "unknown";
   model: string;
   /** Native provider calls are data for J review, never dispatched here. */
   tool_calls?: LLMToolCallCandidate[];

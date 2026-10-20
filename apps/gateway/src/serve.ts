@@ -37,6 +37,7 @@ import {
   type ExecutionIntentReceipt,
 } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
+import { GatewayComputeBudgetStore } from "./compute_budget_store.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "./reconcile_execution_results.js";
 import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
@@ -3831,9 +3832,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   dispatcher.register(telegram);
   for (const channel of previewChannels) dispatcher.register(channel);
 
+  const computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
   executor = new Executor({
     llm,
-    compute: new LLMComputeAdapter(llm),
+    compute: new LLMComputeAdapter(llm, computeBudget),
     tools,
     approval_authority: executorApproval,
     file_search_worker: createFileSearchWorker({ execution_epoch: ownerLease.executionEpoch,
@@ -4151,6 +4153,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);
       cronEventStore.close();
+      computeBudget.close();
       documentOrganizationCheckpointStore?.close();
       documentOrganizationCheckpointStore = null;
       operationPlanState.close();

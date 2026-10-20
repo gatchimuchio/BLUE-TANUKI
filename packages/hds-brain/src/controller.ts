@@ -3618,6 +3618,7 @@ ${planControl.question}`,
             schema_version: "blue-tanuki.compute-context.v1",
             projection_digest: projectionDigest,
             local_p_version: FAILURE_REVIEW_LOCAL_P_VERSION,
+            budget_scope: computeBudgetScope(req),
             data_exposure: {
               input_sources: ["failure_memory_digest_projection"],
               requested_egress_provider: backendHint ?? "registry-default",
@@ -3646,6 +3647,7 @@ ${planControl.question}`,
           { role: "user", content: req.content }], backend_hint: backendHint, model: this.llm_route.model,
           temperature: this.llm_route.temperature, compute_context: { schema_version: "blue-tanuki.compute-context.v1",
             projection_digest: digest, local_p_version: OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
+            budget_scope: computeBudgetScope(req),
             data_exposure: { input_sources: ["accepted_inbound_request", "selected_memory_references"],
               requested_egress_provider: backendHint ?? "registry-default" } } } };
     }
@@ -3772,6 +3774,7 @@ ${planControl.question}`,
           : planCompute?.requested
           ? "blue-tanuki.plan-compute-purpose-relation.v1"
           : "blue-tanuki.c-input-rules.v1",
+        budget_scope: computeBudgetScope(req),
         data_exposure: {
           input_sources: [
             "accepted_inbound_request",
@@ -3815,6 +3818,27 @@ function computeCurrentProjectionDigest(
       memory_context_digest: memoryContextDigest,
     }))
     .digest("hex");
+}
+
+function computeBudgetScope(req: InboundRequest): {
+  parent_task_identity_digest: string;
+  task_identity_digest: string;
+} {
+  const taskIdentityDigest = createHash("sha256")
+    .update(`blue-tanuki.compute-budget.task.v1\0${req.id}`)
+    .digest("hex");
+  const parentMetadata = isGatewayInternalInboundRequest(req)
+    ? req.metadata?.["blue_tanuki.operation_core.parent_task_identity_digest"]
+    : undefined;
+  const parentIdentity = typeof parentMetadata === "string" && /^[a-f0-9]{64}$/.test(parentMetadata)
+    ? parentMetadata
+    : req.id;
+  return {
+    parent_task_identity_digest: createHash("sha256")
+      .update(`blue-tanuki.compute-budget.parent.v1\0${parentIdentity}`)
+      .digest("hex"),
+    task_identity_digest: taskIdentityDigest,
+  };
 }
 
 function assessLLMToolCandidates(

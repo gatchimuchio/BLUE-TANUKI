@@ -26,9 +26,17 @@ export {
 export {
   LLMComputeAdapter,
   LLM_COMPUTE_PROFILE,
+  DEFAULT_COMPUTE_BUDGET_POLICY,
 } from "./compute.js";
 export type {
   ComputeBackend,
+  ComputeBudgetCostBound,
+  ComputeBudgetLimit,
+  ComputeBudgetPolicy,
+  ComputeBudgetPort,
+  ComputeBudgetReservation,
+  ComputeBudgetScope,
+  ComputeBudgetSettlement,
   ComputeCost,
   ComputeDataExposureScope,
   ComputeInputSource,

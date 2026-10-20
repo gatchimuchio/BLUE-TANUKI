@@ -58,6 +58,18 @@ describe("OpenAICompatibleBackend", () => {
     });
   });
 
+  it("does not treat a missing usage object as reported zero tokens", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      model: "provider-model",
+      choices: [{ message: { content: "usage omitted" }, finish_reason: "stop" }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+    const backend = new OpenAICompatibleBackend({ endpoint: "https://example.test/v1", defaultModel: "configured-model" });
+    const response = await backend.call({ messages: [{ role: "user", content: "ping" }] });
+    expect(response.tokens_used).toBe(0);
+    expect(response.tokens_usage_status).toBe("unknown");
+  });
+
   it("preserves an optional meaning-update candidate extension for HDS review", async () => {
     const proposal = { schema_version: "blue-tanuki.meaning-update-proposal.v3", candidate_meaning: "synthetic" };
     globalThis.fetch = (async () => new Response(JSON.stringify({

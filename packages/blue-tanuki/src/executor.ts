@@ -1380,6 +1380,7 @@ function buildComputeRequest(input: {
     ...(context.fallback_authorization
       ? { fallback_authorization: context.fallback_authorization }
       : {}),
+    ...(context.budget_scope ? { budget_scope: { ...context.budget_scope } } : {}),
     resource_limits: {
       ...(input.max_tokens !== undefined ? { max_tokens: input.max_tokens } : {}),
       ...(input.timeout_ms !== undefined ? { timeout_ms: input.timeout_ms } : {}),

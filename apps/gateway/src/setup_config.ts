@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import type { ApprovalMode } from "@blue-tanuki/hds-brain";
+import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
+import { parseComputeBudgetPolicy } from "./compute_budget_store.js";
 
 export type SetupProviderKind =
   | "stub"
@@ -22,6 +24,8 @@ export interface SetupLlmConfig {
   temperature?: number;
   max_tokens?: number;
   timeout_ms?: number;
+  compute_budget_policy_json?: string;
+  provider_cost_profiles_json?: string;
 }
 
 export interface SetupWebChatConfig {
@@ -166,6 +170,7 @@ export function createDefaultSetupConfig(
     schema_version: 1,
     llm: {
       provider: "stub",
+      compute_budget_policy_json: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
     },
     approval: {
       mode: "full_access",
@@ -215,6 +220,23 @@ export function validateSetupConfig(
   validateOptionalTemperature(config.llm.temperature);
   validateOptionalPositiveInt(config.llm.max_tokens, "llm.max_tokens");
   validateOptionalPositiveInt(config.llm.timeout_ms, "llm.timeout_ms");
+  if (config.llm.compute_budget_policy_json !== undefined) {
+    if (!isNonEmptyString(config.llm.compute_budget_policy_json) || config.llm.compute_budget_policy_json.length > 16_384) {
+      throw new Error("llm.compute_budget_policy_json must be a non-empty JSON string up to 16384 characters");
+    }
+    try {
+      parseComputeBudgetPolicy(config.llm.compute_budget_policy_json);
+    } catch {
+      throw new Error("llm.compute_budget_policy_json must be a valid compute-budget policy");
+    }
+  }
+  if (config.llm.provider_cost_profiles_json !== undefined) {
+    if (!isNonEmptyString(config.llm.provider_cost_profiles_json) || config.llm.provider_cost_profiles_json.length > 16_384) {
+      throw new Error("llm.provider_cost_profiles_json must be a non-empty JSON string up to 16384 characters");
+    }
+    try { JSON.parse(config.llm.provider_cost_profiles_json) as unknown; }
+    catch { throw new Error("llm.provider_cost_profiles_json must be valid JSON"); }
+  }
 
   if (provider === "anthropic") {
     if (
@@ -355,6 +377,8 @@ export function setupConfigFromEnv(
   config.llm.temperature = parseOptionalNumber(env.BLUE_TANUKI_LLM_TEMPERATURE);
   config.llm.max_tokens = parseOptionalInt(env.BLUE_TANUKI_LLM_MAX_TOKENS);
   config.llm.timeout_ms = parseOptionalInt(env.BLUE_TANUKI_LLM_TIMEOUT_MS);
+  config.llm.compute_budget_policy_json = env.BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON ?? config.llm.compute_budget_policy_json;
+  config.llm.provider_cost_profiles_json = env.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON;
   config.approval.mode = normalizeApprovalMode(
     env.BLUE_TANUKI_APPROVAL_MODE ?? config.approval.mode,
   );
@@ -468,6 +492,12 @@ export function setupConfigToEnv(
   if (config.llm.timeout_ms !== undefined) {
     env.BLUE_TANUKI_LLM_TIMEOUT_MS = String(config.llm.timeout_ms);
   }
+  if (config.llm.compute_budget_policy_json !== undefined) {
+    env.BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON = config.llm.compute_budget_policy_json;
+  }
+  if (config.llm.provider_cost_profiles_json !== undefined) {
+    env.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON = config.llm.provider_cost_profiles_json;
+  }
   if (config.composio.api_key) {
     env.COMPOSIO_API_KEY = config.composio.api_key;
   }
@@ -528,6 +558,8 @@ export function renderSetupEnvFile(
     "BLUE_TANUKI_LLM_TEMPERATURE",
     "BLUE_TANUKI_LLM_MAX_TOKENS",
     "BLUE_TANUKI_LLM_TIMEOUT_MS",
+    "BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON",
+    "BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON",
     "BLUE_TANUKI_APPROVAL_MODE",
     "WEBCHAT_HOST",
     "WEBCHAT_PORT",

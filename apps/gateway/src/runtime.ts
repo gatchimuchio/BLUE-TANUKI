@@ -32,6 +32,7 @@ import { approvalDeniedFeedback, buildApprovalRuntime } from "./approval_runtime
 import { loadPluginRuntime, type PluginRuntime } from "./plugin_loader.js";
 import { stripEnvFileArgs } from "./env_file.js";
 import { RuntimeScheduleManager } from "./runtime_schedule.js";
+import { GatewayComputeBudgetStore } from "./compute_budget_store.js";
 import { resolveAllSecretRefs } from "./secret_store.js";
 import {
   documentOrganizationSourceFromRequest,
@@ -99,11 +100,14 @@ export function buildSessionStore(
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const ownerLease = GatewayRuntimeOwnerLease.fromEnvironment(process.env);
   let executionStore: GatewayExecutionIntentStore | undefined;
+  let computeBudget: GatewayComputeBudgetStore | undefined;
   try {
     Object.assign(process.env, resolveAllSecretRefs(process.env));
     executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
-    await runCliWithExecutionStore(argv, executionStore, ownerLease);
+    computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
+    await runCliWithExecutionStore(argv, executionStore, ownerLease, computeBudget);
   } finally {
+    computeBudget?.close();
     executionStore?.close();
     ownerLease.close();
   }
@@ -113,6 +117,7 @@ async function runCliWithExecutionStore(
   argv: readonly string[],
   executionStore: GatewayExecutionIntentStore,
   ownerLease: GatewayRuntimeOwnerLease,
+  computeBudget: GatewayComputeBudgetStore,
 ): Promise<void> {
   const cleanArgs = stripEnvFileArgs([...argv]);
   const organizeIndex = cleanArgs.indexOf("--organize");
@@ -171,7 +176,7 @@ async function runCliWithExecutionStore(
   });
   const executor = new Executor({
     llm,
-    compute: new LLMComputeAdapter(llm),
+    compute: new LLMComputeAdapter(llm, computeBudget),
     tools,
     approval_authority: executorApproval,
     file_search_worker: createFileSearchWorker({ execution_epoch: ownerLease.executionEpoch,
