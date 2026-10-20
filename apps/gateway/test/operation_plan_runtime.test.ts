@@ -1316,9 +1316,13 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       const independent = review(hds, candidate, "independent").command!;
       expect(dependent.type).toBe("tool_call");
       if (dependent.type !== "tool_call") throw new Error("missing tool");
+      expect(independent.type).toBe("tool_call");
+      if (independent.type !== "tool_call") throw new Error("missing independent tool");
       expect(dependent.payload.arguments.query).toBe("blue");
       const dependentSourceDigest = hds.getExecutionOperationPlanBindingDigest(dependent);
+      const independentSourceDigest = hds.getExecutionOperationPlanBindingDigest(independent);
       expect(dependentSourceDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(independentSourceDigest).toMatch(/^[a-f0-9]{64}$/);
       const taskIdentityDigest = hds.getExecutionOperationPlanTaskIdentityDigest(dependent);
       expect(taskIdentityDigest).toMatch(/^[a-f0-9]{64}$/);
       const next = structuredClone(candidate); next.steps[2]!.parameters!.max_results = 2;
@@ -1345,12 +1349,20 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         broker_target_version_observation_digest: operationPlanDigest(targetObservation),
       });
       expect(hds.beginOperationPlanAttempt(independent)).toBe(false);
+      const revisedIndependent = review(hds, next, "independent").command;
+      expect(revisedIndependent?.type).toBe("tool_call");
+      if (revisedIndependent?.type !== "tool_call") throw new Error("revised pending step was not re-reviewed");
+      expect(revisedIndependent.payload.arguments.max_results).toBe(2);
+      expect(hds.operationPlanCommandIsCurrent(revisedIndependent)).toBe(true);
+      expect(hds.getExecutionOperationPlanBindingDigest(revisedIndependent)).not.toBe(independentSourceDigest);
+      await exec.run(revisedIndependent);
       await exec.run(dependent);
       const snapshot = hds.getRuntimeSnapshot().operation_plans;
       expect(snapshot.plans[0]?.revision).toBe(2);
       expect(snapshot.plans[0]?.previous_revision_digests).toEqual([operationPlanDigest(candidate)]);
       expect(snapshot.plans[0]?.steps[0]?.status).toBe("verified");
       expect(snapshot.plans[0]?.steps[1]?.status).toBe("verified");
+      expect(snapshot.plans[0]?.steps[2]?.status).toBe("verified");
       expect(JSON.stringify(snapshot)).not.toContain(workspace);
       expect(JSON.stringify(snapshot)).not.toContain('"goal"');
       expect(hds.getAudit().verify()).toBe(true);
