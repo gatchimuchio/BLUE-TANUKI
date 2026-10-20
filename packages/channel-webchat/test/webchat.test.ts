@@ -1199,6 +1199,42 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(prefixCollision).not.toContain("Plan aaaaaaaaaaaa");
   });
 
+  it("renders old-generation result archives as digest-only recovery evidence", () => {
+    const functionSource = (name: string): string => {
+      const start = CONTROL_CENTER_SCRIPT.indexOf(`function ${name}(`);
+      const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
+      const end = next < 0 ? CONTROL_CENTER_SCRIPT.length : next;
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      return CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    };
+    const helper = [functionSource("recoveryInspectionEnum"), functionSource("recoveryInspectionDigest"),
+      functionSource("projectRecoveryExecutionArchiveEvidence"), functionSource("formatRecoveryExecutionArchiveEvidence")].join("\n");
+    const evidence = {
+      status: "available",
+      omitted_record_count: 2,
+      records: [{
+        ticket_digest: "1".repeat(64), command_key_digest: "2".repeat(64),
+        prior_execution_epoch_digest: "3".repeat(64), archived_by_execution_epoch_digest: "4".repeat(64),
+        delivery_digest: "5".repeat(64), disposition: "stale_generation_evidence",
+        ticket_id: "RAW_TICKET_SENTINEL", result: "RAW_RESULT_SENTINEL",
+      }],
+    };
+    const evaluated = new Script(`${helper}\nconst safe = projectRecoveryExecutionArchiveEvidence(evidence); ({ safe, text: formatRecoveryExecutionArchiveEvidence(safe, true) })`)
+      .runInNewContext({ evidence }) as { safe: { records: Array<Record<string, unknown>> }; text: string };
+    expect(evaluated.safe.records).toMatchObject([{ ticket_digest: "1".repeat(64), disposition: "stale_generation_evidence" }]);
+    expect(JSON.stringify(evaluated.safe)).not.toContain("RAW_TICKET_SENTINEL");
+    expect(JSON.stringify(evaluated.safe)).not.toContain("RAW_RESULT_SENTINEL");
+    expect(evaluated.text).toContain("ticket 111111111111");
+    expect(evaluated.text).toContain("旧epoch 333333333333");
+    expect(evaluated.text).toContain("隔離先epoch 444444444444");
+    expect(evaluated.text).toContain("検査上限による省略: 2件");
+    expect(evaluated.text).toContain("作用・承認・再実行を行いません");
+
+    const invalid = { ...evidence, records: [{ ...evidence.records[0], archived_by_execution_epoch_digest: "3".repeat(64) }] };
+    expect(new Script(`${helper}\nprojectRecoveryExecutionArchiveEvidence(evidence)`).runInNewContext({ evidence: invalid })).toBeNull();
+  });
+
   it("serves the local resident app shell at /app", async () => {
     const ctx = await setup();
     try {
@@ -1337,6 +1373,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("inspect-recovery-ledgers");
       expect(html).toContain("/recovery/inspection");
       expect(html).toContain("recovery-inspection-json");
+      expect(html).toContain("recovery-execution-archive-evidence");
+      expect(html).toContain("旧世代結果の隔離証拠");
       expect(html).toContain("recovery-plan-dependency-scopes");
       expect(html).toContain("Operation Plan依存scope（現行台帳検査）");
       expect(html).toContain("復元・再開許可を行いません");
@@ -1662,7 +1700,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 8,
+            schema_version: 9,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -1706,6 +1744,15 @@ describe("WebChatChannel — Recovery surface", () => {
               j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
               m: { reason: "store_unavailable", verified_event_count: null, unverified_event_count: null, first_unverified_ordinal: null, last_verified_revision: null },
               broker: { reason: null, verified_event_count: 2, unverified_event_count: 1, first_unverified_ordinal: 3, last_verified_revision: null },
+            },
+            execution_archive_evidence: {
+              status: "available",
+              omitted_record_count: 0,
+              records: [{
+                ticket_digest: "1".repeat(64), command_key_digest: "2".repeat(64),
+                prior_execution_epoch_digest: "3".repeat(64), archived_by_execution_epoch_digest: "4".repeat(64),
+                delivery_digest: "5".repeat(64), disposition: "stale_generation_evidence",
+              }],
             },
             replay_checkpoint: "not_verified",
             operation_plan_correlations: [{
@@ -1868,6 +1915,10 @@ describe("WebChatChannel — Recovery surface", () => {
         cron_event_summary: { status: "unavailable", residual_count: 1, cursor_count: null, pending_approval_handoff_count: null },
         document_organization_checkpoint_summary: { status: "unavailable", residual_count: 1, checkpoint_count: null, unresolved_checkpoint_count: null },
         plan_dependency_scopes: [{ request_scope_digest: "9".repeat(64) }],
+        execution_archive_evidence: {
+          status: "available",
+          records: [{ ticket_digest: "1".repeat(64), disposition: "stale_generation_evidence" }],
+        },
         request_scope_correlation: {
           status: "available",
           matched_scope_count: 0,

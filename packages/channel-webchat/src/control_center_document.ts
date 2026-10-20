@@ -494,6 +494,9 @@ ${CONTROL_CENTER_STYLE}    </style>
           <p class="muted">現行の読み取り専用台帳で観測したPlan digest短縮形、固定状態、依存分類と件数を表示します。仕事ID、backup内の復旧点、復旧可能性を示さず、復元・再開許可を行いません。</p>
           <pre id="recovery-plan-dependency-scopes">未確認</pre>
           <pre id="recovery-inspection-json">未確認</pre>
+          <h3>旧世代結果の隔離証拠</h3>
+          <p class="muted">Broker台帳で検証できたdigestだけを表示します。結果本文は表示せず、承認・作用・再実行・復旧可否を判断しません。</p>
+          <pre id="recovery-execution-archive-evidence">未確認</pre>
           <div class="status-grid">
             <button id="inspect-recovery-backup" type="button">最新backup packの整合性を読み取り検査</button>
             <span id="recovery-backup-inspection-status" class="badge warn">未確認</span>

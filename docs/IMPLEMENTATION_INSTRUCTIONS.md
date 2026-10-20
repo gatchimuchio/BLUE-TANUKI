@@ -1,6 +1,23 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-03-E03.02-INTERRUPTED-APPROVAL-RESTART-NOTICE-CONSUMER`
+ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
+
+### 最新BUILD_BATCH：`QEB-03-E03.02-STALE-GENERATION-RECOVERY-EVIDENCE-UI`
+
+開始HEAD／`main`／`origin/main`=`7bc43075c0a3f5f407eb9c9bb8390421821d08ad`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E03.02、Broker旧世代結果archive、Gateway recovery inspector、Control Centerのread-only表示を再読した。Windows localでBLUE-TANUKIのみを編集。untracked Linux `target/`は保持。
+
+検証済みBroker receiptの固定digest・旧execution epoch・隔離した世代digest・result delivery digestをoperator recovery inspectionへ接続した。投影schemaを9へ上げ、Control Centerは結果本文やraw IDを表示せず、read-only証拠として表示する。未検証のBroker台帳では記録を出さない。承認、作用、再実行、復旧可否の判定は追加しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `recovery_inspection.test.ts` | PASS、18/18。検証済みBroker ledgerから旧世代receiptをdigestだけで投影するconsumerを確認。 |
+| WebChat `webchat.test.ts` | PASS、99/99。固定digest表示、raw ID／結果本文の除外、read-only境界を確認。 |
+| `pnpm typecheck`→`pnpm build` | 両方PASS。workspace 15 projects。 |
+| 全suite、live Gateway再起動、実credential／provider／外部作用、QE_QC／QE_QA | 未実施。 |
+
+旧世代結果の証拠表示は`WIRED`、E03.02と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。次consumerはM pendingのproducer→回復→M commit／receipt経路を現行コードから再照合して確定する。C08.03実provider、D4／ミニドラ別repo変更、外部作用、P13公開・出荷GOは保留。作業ごとに最新版三点セットと適用AGENTS.mdを読み直し、全体実装前のQC／QAへ進まない。
+
+### 前回BUILD_BATCH：`QEB-03-E03.02-INTERRUPTED-APPROVAL-RESTART-NOTICE-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`3d2e7dd20566dce6f77d7529b1c28d28d3e5b1f3`。最新版rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E03.02とHDS audit→Gateway resident notificationのconsumerを再読した。Windows localで施工し、untracked Linux `target/`は保持。
 

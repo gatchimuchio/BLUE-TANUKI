@@ -457,6 +457,8 @@ export interface ExecutionIntentRecoveryInspection {
     readonly reconciliation_required: boolean;
     readonly result_delivery_pending: boolean;
     readonly result_delivery_digest: string | null;
+    readonly result_delivery_disposition: "reconciled" | "stale_generation_evidence" | null;
+    readonly result_archived_by_epoch_digest: string | null;
   }[];
   readonly used_for_authority: false;
   readonly execution_eligible: false;
@@ -701,6 +703,8 @@ export function inspectExecutionIntentRecoveryLedger(options: {
           receipt.result_delivery_acknowledged === false,
         result_delivery_pending: receipt.result_delivery_acknowledged === false,
         result_delivery_digest: receipt.result_delivery_digest ?? null,
+        result_delivery_disposition: receipt.result_delivery_disposition ?? null,
+        result_archived_by_epoch_digest: receipt.result_archived_by_epoch_digest ?? null,
       }));
     return {
       owner: "Broker",

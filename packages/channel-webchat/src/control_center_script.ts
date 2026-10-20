@@ -2205,6 +2205,68 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return summary;
       }
 
+      function projectRecoveryExecutionArchiveEvidence(value) {
+        if (!value || typeof value !== "object" || Array.isArray(value) || !Array.isArray(value.records)) return null;
+        const status = recoveryInspectionEnum(value.status, ["available", "not_verified"]);
+        if (status === "unknown") return null;
+        if (status === "not_verified") {
+          return value.records.length === 0 && value.omitted_record_count === null
+            ? { status: status, records: [], omitted_record_count: null }
+            : null;
+        }
+        if (value.records.length > 200 || !Number.isSafeInteger(value.omitted_record_count) || value.omitted_record_count < 0) return null;
+        const seenTickets = new Set();
+        const records = [];
+        for (const item of value.records) {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+          const ticket = recoveryInspectionDigest(item.ticket_digest);
+          const command = recoveryInspectionDigest(item.command_key_digest);
+          const priorEpoch = recoveryInspectionDigest(item.prior_execution_epoch_digest);
+          const archivedByEpoch = recoveryInspectionDigest(item.archived_by_execution_epoch_digest);
+          const delivery = recoveryInspectionDigest(item.delivery_digest);
+          if (!ticket || !command || !priorEpoch || !archivedByEpoch || !delivery ||
+              item.disposition !== "stale_generation_evidence" || priorEpoch === archivedByEpoch || seenTickets.has(ticket)) return null;
+          seenTickets.add(ticket);
+          records.push({ ticket_digest: ticket, command_key_digest: command, prior_execution_epoch_digest: priorEpoch,
+            archived_by_execution_epoch_digest: archivedByEpoch, delivery_digest: delivery,
+            disposition: "stale_generation_evidence" });
+        }
+        return { status: status, records: records, omitted_record_count: value.omitted_record_count };
+      }
+
+      function formatRecoveryExecutionArchiveEvidence(evidence, boundaryValid) {
+        const unverified = "旧世代結果の隔離証拠: 未確認（読み取り検査またはBroker台帳境界を検証できません）";
+        if (boundaryValid !== true || !evidence || typeof evidence !== "object" || Array.isArray(evidence) ||
+            !["available", "not_verified"].includes(evidence.status) || !Array.isArray(evidence.records)) return unverified;
+        if (evidence.status === "not_verified") {
+          return evidence.records.length === 0 && evidence.omitted_record_count === null
+            ? unverified + "\\n読み取り専用です。作用・承認・再実行を行いません。"
+            : unverified;
+        }
+        if (evidence.records.length > 200 || !Number.isSafeInteger(evidence.omitted_record_count) || evidence.omitted_record_count < 0) return unverified;
+        const seenTickets = new Set();
+        const rows = [];
+        for (const item of evidence.records) {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return unverified;
+          const ticket = recoveryInspectionDigest(item.ticket_digest);
+          const command = recoveryInspectionDigest(item.command_key_digest);
+          const priorEpoch = recoveryInspectionDigest(item.prior_execution_epoch_digest);
+          const archivedByEpoch = recoveryInspectionDigest(item.archived_by_execution_epoch_digest);
+          const delivery = recoveryInspectionDigest(item.delivery_digest);
+          if (!ticket || !command || !priorEpoch || !archivedByEpoch || !delivery ||
+              item.disposition !== "stale_generation_evidence" || priorEpoch === archivedByEpoch || seenTickets.has(ticket)) return unverified;
+          seenTickets.add(ticket);
+          rows.push("ticket " + ticket.slice(0, 12) + " / command " + command.slice(0, 12) +
+            " / 旧epoch " + priorEpoch.slice(0, 12) + " / 隔離先epoch " + archivedByEpoch.slice(0, 12) +
+            " / 結果digest " + delivery.slice(0, 12));
+        }
+        let summary = rows.length === 0
+          ? "検証済みBroker記録内に旧世代結果の隔離証拠はありません。"
+          : "旧世代結果の隔離証拠（raw結果なし・digestのみ）\\n" + rows.join("\\n");
+        if (evidence.omitted_record_count > 0) summary += "\\nBroker記録の検査上限による省略: " + evidence.omitted_record_count + "件";
+        return summary + "\\n読み取り専用です。作用・承認・再実行を行いません。";
+      }
+
       function renderRecoveryInspection(report) {
         const source = report && typeof report === "object" ? report : {};
         const ledgers = source.ledgers && typeof source.ledgers === "object" ? source.ledgers : {};
@@ -2299,7 +2361,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 documentCheckpointResidualCount > 0 && documentCheckpointReason === expectedDocumentCheckpointReason));
         const documentCheckpointLedgerStatus = recoveryInspectionLedgerStatus(ledgers.document_organization_checkpoints, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
         const cronApprovalCorrelationResidualCount = recoveryInspectionCount(source.cron_approval_correlation_residual_count);
-        const initialBoundaryOk = source.schema_version === 8 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
+        const executionArchiveEvidence = projectRecoveryExecutionArchiveEvidence(source.execution_archive_evidence);
+        const initialBoundaryOk = source.schema_version === 9 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && executionArchiveEvidence !== null && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
         const ledgerStatuses = {
           j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
@@ -2495,6 +2558,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             : "not_verified",
           isolated_update_count: recoveryInspectionCount(source.isolated_update_count),
           execution_residual_count: recoveryInspectionCount(source.execution_residual_count),
+          execution_archive_evidence: boundaryOk ? executionArchiveEvidence : { status: "not_verified", records: [], omitted_record_count: null },
           operation_plan_residual_count: recoveryInspectionCount(source.operation_plan_residual_count),
           cron_event_residual_count: recoveryInspectionCount(source.cron_event_residual_count),
           cron_approval_correlation_residual_count: cronApprovalCorrelationResidualCount,
@@ -2536,6 +2600,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("recovery-inspection-status", status);
         byId("recovery-inspection-status").className = "badge " + (status === "verified" ? "review" : "warn");
         setText("recovery-inspection-json", compactJson(projection));
+        setText("recovery-execution-archive-evidence", formatRecoveryExecutionArchiveEvidence(
+          projection.execution_archive_evidence,
+          boundaryOk
+        ));
         setText("recovery-plan-dependency-scopes", formatRecoveryPlanDependencyScopes(
           projection.plan_dependency_scopes,
           boundaryOk,

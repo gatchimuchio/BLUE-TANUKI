@@ -188,7 +188,7 @@ export interface RecoveryLedgerBoundaryObservation {
 }
 
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 8;
+  readonly schema_version: 9;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -210,6 +210,18 @@ export interface GatewayRecoveryOperatorProjection {
   readonly replay_checkpoint: "verified_replay_checkpoint_not_backup" | "not_verified";
   readonly isolated_update_count: number;
   readonly execution_residual_count: number;
+  readonly execution_archive_evidence: {
+    readonly status: "available" | "not_verified";
+    readonly records: readonly {
+      readonly ticket_digest: string;
+      readonly command_key_digest: string;
+      readonly prior_execution_epoch_digest: string;
+      readonly archived_by_execution_epoch_digest: string;
+      readonly delivery_digest: string;
+      readonly disposition: "stale_generation_evidence";
+    }[];
+    readonly omitted_record_count: number | null;
+  };
   readonly operation_plan_residual_count: number;
   readonly cron_event_residual_count: number;
   readonly cron_approval_correlation_residual_count: number;
@@ -765,10 +777,79 @@ function projectDocumentOrganizationCheckpointSummary(value: unknown): {
   return { summary: { status, reason, ...safeCounts, residual_count: residualCount as number, records }, valid: true };
 }
 
+function projectOperatorExecutionArchiveEvidence(value: unknown): {
+  readonly valid: boolean;
+  readonly evidence: GatewayRecoveryOperatorProjection["execution_archive_evidence"];
+} {
+  const unavailable = {
+    status: "not_verified" as const,
+    records: [],
+    omitted_record_count: null,
+  };
+  const execution = isRecord(value) ? value : {};
+  const status = fixedEnum(execution.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"] as const);
+  if (execution.current_state_available !== true) {
+    return {
+      valid: true,
+      evidence: unavailable,
+    };
+  }
+  if (status !== "verified" || !Array.isArray(execution.records) || execution.records.length > OPERATOR_RECORD_LIMIT ||
+      !Number.isSafeInteger(execution.omitted_record_count) || (execution.omitted_record_count as number) < 0) {
+    return { valid: false, evidence: unavailable };
+  }
+
+  const seenTickets = new Set<string>();
+  const records: GatewayRecoveryOperatorProjection["execution_archive_evidence"]["records"][number][] = [];
+  for (const candidate of execution.records) {
+    if (!isRecord(candidate)) return { valid: false, evidence: unavailable };
+    const ticketDigest = fixedDigest(candidate.ticket_digest);
+    const commandKeyDigest = fixedDigest(candidate.command_key_digest);
+    const priorEpochDigest = fixedDigest(candidate.execution_epoch_digest);
+    const deliveryDigest = candidate.result_delivery_digest === null ? null : fixedDigest(candidate.result_delivery_digest);
+    const disposition = candidate.result_delivery_disposition === null
+      ? null
+      : fixedEnum(candidate.result_delivery_disposition, ["reconciled", "stale_generation_evidence"] as const);
+    const archivedByEpochDigest = candidate.result_archived_by_epoch_digest === null
+      ? null
+      : fixedDigest(candidate.result_archived_by_epoch_digest);
+    if (!ticketDigest || !commandKeyDigest || !priorEpochDigest ||
+        (candidate.result_delivery_digest !== null && !deliveryDigest) ||
+        (candidate.result_delivery_disposition !== null && disposition === null) ||
+        (candidate.result_archived_by_epoch_digest !== null && !archivedByEpochDigest) ||
+        seenTickets.has(ticketDigest) ||
+        ((disposition === "stale_generation_evidence") !== (archivedByEpochDigest !== null)) ||
+        (disposition === "stale_generation_evidence" && (!deliveryDigest || archivedByEpochDigest === priorEpochDigest)) ||
+        (disposition !== "stale_generation_evidence" && archivedByEpochDigest !== null)) {
+      return { valid: false, evidence: unavailable };
+    }
+    seenTickets.add(ticketDigest);
+    if (disposition === "stale_generation_evidence") {
+      records.push({
+        ticket_digest: ticketDigest,
+        command_key_digest: commandKeyDigest,
+        prior_execution_epoch_digest: priorEpochDigest,
+        archived_by_execution_epoch_digest: archivedByEpochDigest!,
+        delivery_digest: deliveryDigest!,
+        disposition,
+      });
+    }
+  }
+  return {
+    valid: true,
+    evidence: {
+      status: "available",
+      records,
+      omitted_record_count: execution.omitted_record_count as number,
+    },
+  };
+}
+
 /** Whitelist a digest-only recovery report before exposing per-work residuals to an operator surface. */
 export function projectGatewayRecoveryInspectionForOperator(value: unknown): GatewayRecoveryOperatorProjection {
   const source = isRecord(value) ? value : {};
   const ledgers = isRecord(source.ledgers) ? source.ledgers : {};
+  const executionArchiveEvidence = projectOperatorExecutionArchiveEvidence(ledgers.execution);
   const reportShapeValid = source.schema_version === 8 && source.surface === "recovery_inspection" && source.mode === "read_only";
   const sourceStatus = fixedEnum(source.status, ["verified", "residuals_present"] as const);
   const cronEvents = projectCronEventSummary(ledgers.cron_events);
@@ -831,7 +912,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     Number.isSafeInteger(cronResidualCount) && cronResidualCount === cronEvents.summary.residual_count &&
     Number.isSafeInteger(cronApprovalCorrelationResidualCount) && (cronApprovalCorrelationResidualCount as number) >= 0 && cronCorrelationsValid;
   const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false &&
-    sourceStatus !== null && cronBoundaryValid && planDependencyScopesValid && documentOrganizationCheckpoints.valid &&
+    sourceStatus !== null && cronBoundaryValid && planDependencyScopesValid && documentOrganizationCheckpoints.valid && executionArchiveEvidence.valid &&
     documentOrganizationLedgerStatus === documentOrganizationCheckpoints.summary.status &&
     Number.isSafeInteger(documentOrganizationResidualCount) &&
     documentOrganizationResidualCount === documentOrganizationCheckpoints.summary.residual_count;
@@ -850,7 +931,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     unlinked_document_checkpoint_count: null,
   };
   return {
-    schema_version: 8,
+    schema_version: 9,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -875,6 +956,11 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
       : "not_verified",
     isolated_update_count: fixedCount(source.isolated_update_count),
     execution_residual_count: fixedCount(source.execution_residual_count),
+    execution_archive_evidence: boundaryValid ? executionArchiveEvidence.evidence : {
+      status: "not_verified",
+      records: [],
+      omitted_record_count: null,
+    },
     operation_plan_residual_count: fixedCount(source.operation_plan_residual_count),
     cron_event_residual_count: fixedCount(source.cron_event_residual_count),
     cron_approval_correlation_residual_count: fixedCount(source.cron_approval_correlation_residual_count),

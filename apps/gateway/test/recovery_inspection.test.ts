@@ -99,6 +99,87 @@ describe("Gateway read-only recovery inspection", () => {
     await expect(stat(path.join(privateRoot, "result-memory"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("exposes an archived old-generation Broker receipt only as digest evidence", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-stale-evidence-"));
+    const privateRoot = path.join(temporaryRoot, "state", "private-state");
+    const executionDirectory = path.join(privateRoot, "execution-intents");
+    await mkdir(executionDirectory, { recursive: true });
+    const databasePath = path.join(executionDirectory, "executor.sqlite");
+    const commandId = randomUUID();
+    const now = Date.now();
+    const ticket = {
+      ...executionTicket(),
+      command_key: sha256(JSON.stringify(["gateway-executor-command.v1", commandId])),
+      issued_at_ms: now,
+      expires_at_ms: now + 60_000,
+    };
+    const store = new GatewayExecutionIntentStore(databasePath, ticket.execution_epoch);
+    store.issue(ticket);
+    store.consume(ticket, now + 1);
+    store.markInvocation(ticket, "tool_adapter", now + 2);
+    const result = {};
+    const outputDigest = sha256(JSON.stringify(result));
+    const observedAt = now + 3;
+    const delivery = {
+      profile: "tool-adapter-result-delivery.v1" as const,
+      admission: ticket,
+      feedback: {
+        command_id: commandId,
+        status: "success" as const,
+        result,
+        metrics: { duration_ms: 1 },
+        operation_core_result: {
+          version: "operation-core.v1" as const,
+          role: "command_execution_result" as const,
+          result_id: randomUUID(),
+          request_id: randomUUID(),
+          command_id: commandId,
+          upstream_commit_hash: sha256("synthetic-commit"),
+          operation: "shell.exec",
+          state: "succeeded" as const,
+          adapter: "shell" as const,
+          execution_boundary: "tool_adapter" as const,
+          action_outcome: "reported_success" as const,
+          observed_at_ms: observedAt,
+          command_payload_digest: ticket.command_digest,
+          output_digest: outputDigest,
+          plan_step_binding: "unbound" as const,
+          adapter_result_used_for_authority: false as const,
+          used_for_authority: false as const,
+          evidence_source: ["INTERNAL_STATE"] as ["INTERNAL_STATE"],
+        },
+      },
+    };
+    store.complete(ticket, {
+      state: "adapter_returned",
+      feedback_status: "success",
+      output_digest: outputDigest,
+      observed_at_ms: observedAt,
+    }, delivery);
+    const archivedByEpoch = randomUUID();
+    const deliveryDigest = store.lookup(ticket.ticket_id)!.result_delivery_digest!;
+    store.archiveStaleGenerationResult(ticket.ticket_id, deliveryDigest, archivedByEpoch);
+    store.close();
+
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: path.dirname(privateRoot) });
+    expect(report.ledgers.execution).toMatchObject({
+      status: "verified",
+      current_state_available: true,
+      records: [{
+        ticket_digest: sha256(ticket.ticket_id),
+        command_key_digest: sha256(ticket.command_key),
+        execution_epoch_digest: sha256(ticket.execution_epoch),
+        result_delivery_digest: deliveryDigest,
+        result_delivery_disposition: "stale_generation_evidence",
+        result_archived_by_epoch_digest: sha256(archivedByEpoch),
+      }],
+    });
+    const serialized = JSON.stringify(report.ledgers.execution);
+    expect(serialized).not.toContain(ticket.ticket_id);
+    expect(serialized).not.toContain(commandId);
+    expect(serialized).not.toContain(databasePath);
+  });
+
   it("inspects Cron cursors and approval handoffs read-only, isolating row corruption as counts", async () => {
     temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-cron-"));
     const privateRoot = path.join(temporaryRoot, "state", "private-state");
@@ -380,7 +461,17 @@ describe("Gateway recovery operator projection", () => {
       ledgers: {
         j: { status: "verified", reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
         m: { status: "projection_mismatch", reason: "projection_mismatch", verified_event_count: 2, unverified_event_count: 1, first_unverified_ordinal: 3, last_verified_revision: 2 },
-        execution: { status: "verified", reason: "RAW_REASON_SENTINEL", verified_event_count: 2, unverified_event_count: 0, first_unverified_ordinal: null },
+        execution: {
+          status: "verified", reason: null, verified_event_count: 2, unverified_event_count: 0, first_unverified_ordinal: null,
+          current_state_available: true, omitted_record_count: 0,
+          records: [{
+            ticket_digest: "1".repeat(64), command_key_digest: "2".repeat(64), execution_epoch_digest: "3".repeat(64),
+            admission_digest: "4".repeat(64), state: "outcome_unknown", reconciliation_required: false,
+            result_delivery_pending: false, result_delivery_digest: "5".repeat(64),
+            result_delivery_disposition: "stale_generation_evidence", result_archived_by_epoch_digest: "6".repeat(64),
+            ticket_id: "RAW_TICKET_SENTINEL", result: "RAW_RESULT_SENTINEL",
+          }],
+        },
         operation_plans: {
           status: "residuals_present",
           plan_count: 1,
@@ -418,7 +509,7 @@ describe("Gateway recovery operator projection", () => {
       surface: "recovery_inspection_operator",
       mode: "read_only",
       status: "residuals_present",
-      schema_version: 8,
+      schema_version: 9,
       request_scope_correlation: {
         status: "available",
         entries: [],
@@ -430,10 +521,19 @@ describe("Gateway recovery operator projection", () => {
         unlinked_document_checkpoint_count: 0,
       },
       ledgers: { j: "verified", m: "projection_mismatch", broker: "verified", operation_plans: "residuals_present", document_organization_checkpoints: "verified" },
+      execution_archive_evidence: {
+        status: "available",
+        omitted_record_count: 0,
+        records: [{
+          ticket_digest: "1".repeat(64), command_key_digest: "2".repeat(64),
+          prior_execution_epoch_digest: "3".repeat(64), archived_by_execution_epoch_digest: "6".repeat(64),
+          delivery_digest: "5".repeat(64), disposition: "stale_generation_evidence",
+        }],
+      },
       ledger_boundaries: {
         j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
         m: { reason: "projection_mismatch", verified_event_count: 2, unverified_event_count: 1, first_unverified_ordinal: 3, last_verified_revision: 2 },
-        broker: { reason: "unknown", verified_event_count: 2, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: null },
+        broker: { reason: null, verified_event_count: 2, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: null },
       },
       operation_plan_correlations: [{
         plan_id_digest: "a".repeat(64),
@@ -472,7 +572,7 @@ describe("Gateway recovery operator projection", () => {
       may_execute: false,
     });
     const serialized = JSON.stringify(projection);
-    for (const sentinel of ["RAW_COMMAND_SENTINEL", "RAW_TICKET_SENTINEL", "RAW_UPDATE_SENTINEL", "RAW_ACTION_SENTINEL", "RAW_REASON_SENTINEL", "private\\state.sqlite"]) {
+    for (const sentinel of ["RAW_COMMAND_SENTINEL", "RAW_TICKET_SENTINEL", "RAW_RESULT_SENTINEL", "RAW_UPDATE_SENTINEL", "RAW_ACTION_SENTINEL", "RAW_REASON_SENTINEL", "private\\state.sqlite"]) {
       expect(serialized).not.toContain(sentinel);
     }
 
