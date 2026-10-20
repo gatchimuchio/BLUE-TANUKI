@@ -4,7 +4,26 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
 
-### 最新BUILD_BATCH：`QEB-04-E02.01-COMPUTE-BUDGET-RESERVATION-CONSUMER`
+### 最新BUILD_BATCH：`QEB-04-E02.02-RESOURCE-BACKPRESSURE-STOP-RESERVE-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`00a59fdc727039156a543c5c6c3b3a96163b1b44`。rev2.3三点正本の現行ピンは [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。適用AGENTS／作業標準と、現行工程表のE02.02にある資源上限・停止用余白・provider queue要件だけを対象にした。既存のHDS→Executor、Gateway CLI／serve、LLMComputeAdapter、setup/recovery設定経路を確認し、Windows localでBLUE-TANUKIのみ変更した。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持し、Git対象へ含めない。
+
+Gatewayに資源backpressure consumerを追加した。通常実行は`max_active_executions - reserved_control_execution_slots`までに制限し、pending approvalは最大数とL3 final-review予約枠を守る。低memory／低diskまたはprobe不能では新規実行・承認をfail-closedにする。memoryはOS空きとV8 heap headroomの小さい方を用い、state root・audit・complete-history保存先の空きdiskを確認する。provider呼出しは最大同時数と有界FIFO待ち行列・期限・cancelを持つComputeCapacityPortへ接続し、LLMComputeAdapterはprovider呼出し前にleaseを得て終了時に解放する。Executorはauthority確認後・実処理前に実行枠を取得するため、容量不足でも発行ticketを`not_attempted` receiptとして閉じる。緊急停止／control endpointは通常work queueと独立した既存経路を保つ。policyは既定値を使い、setup設定JSONで明示的に上書きできる。実provider・credential・外部作用は使用していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| resource backpressure／Executor refusal receipt／LLM compute admission focused tests | PASS、3 files／28 tests。実行・承認上限、L3予約、memory/disk/probe fail-closed、provider concurrency/queue/cancel、拒否時未実行、provider前取得・終了時解放を確認。 |
+| setup config／recovery policy retention focused tests | PASS、2 files／27 tests。 |
+| `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `pnpm smoke:serve` | PASS。Gateway起動、WebChat要求、Executor経由の応答、audit永続化、audit-dump chain verification。stub経路のみ。 |
+| `pnpm docs:check`／`git diff --check` | 両方PASS。日本語基底の移行負債76件は継続管理。 |
+| 全workspace suite、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。BUILD_COVERED後の工程へ配置。 |
+
+E02.02「backpressureと停止用余白」のうち、このGateway実行・approval・provider consumerを`WIRED`とする。QE_BUILDは継続し、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOを保留する。次はrev2.3工程表上のE02.03を、開始時に該当節だけ確認してconsumerを選ぶ。
+
+実装commit=`f4f8cc3e5237f1ade6aab730d201ace929125754`を`main`へpush済み。続くcloseout文書commitもpushし、local recovery branch／remote backup tag二世代のcurrentをcloseout commit、previousをこの実装commitへ同期してSHAを再照合する。保護対象Linux `target/`はcommitへ含めない。
+
+### 履歴ログ：`QEB-04-E02.01-COMPUTE-BUDGET-RESERVATION-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`f9588dd1ddba436f8eeabfbc45d5e787ca6e03f5`。rev2.3三点正本の現行ポインタは [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。適用AGENTS、作業標準、E02.01の親子予算予約と実C呼出しへの接続条件、およびGatewayのHDS→Executor→Compute現行経路を確認した。Windows localでBLUE-TANUKIのみを編集し、保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。
 
