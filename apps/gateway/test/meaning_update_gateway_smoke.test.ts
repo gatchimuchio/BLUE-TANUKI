@@ -400,6 +400,37 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
       expect(readFileSync(join(fileRoot, "delete-target.txt"), "utf8")).toBe("synthetic pending-delete target\n");
       expect(providerCalls).toBe(5);
 
+      const deleteApprovalPath = `http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(pendingDeleteApproval.command_id))}`;
+      const deleteApproved = await fetchRespectingRetryAfter(deleteApprovalPath, { method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: pendingDeleteApproval.approval_token }) });
+      expect(deleteApproved.status).toBe(200);
+      expect(await deleteApproved.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: true, status: "success",
+      } });
+      expect(existsSync(join(fileRoot, "delete-target.txt"))).toBe(false);
+
+      const completedRuntime = await waitForOperationPlanExecution(gatewayPort, gateway, () => providerFailure);
+      expect(completedRuntime.plans).toMatchObject([{
+        plan_id: planIdDigest, status: "results_verified",
+        steps: [expect.objectContaining({ operation: "file.delete", status: "verified",
+          binding: expect.objectContaining({ memory_status: "receipt_confirmed" }) })],
+      }]);
+
+      const resultMemoryDatabase = join(stateRoot, "private-state", "result-memory", "m-state.sqlite");
+      expect(existsSync(resultMemoryDatabase)).toBe(true);
+      const resultMemoryDb: DatabaseSyncType = new DatabaseSync(resultMemoryDatabase, { readOnly: true });
+      try {
+        const observations = resultMemoryDb.prepare("SELECT value_json FROM m_records").all() as Array<{ value_json?: string }>;
+        const observation = observations.map((row) => JSON.parse(row.value_json ?? "null") as Record<string, unknown>)
+          .find((record) => record.record_type === "action_result_observation" && record.operation === "file.delete");
+        expect(observation).toMatchObject({ schema_version: "operation-action-result.v1",
+          plan_binding_status: "verified", plan_validation_status: "matched", effect_observation: "reported_success",
+          adoption_status: "observation_only", used_as_world_truth: false, used_for_authority: false, may_execute: false });
+        expect(JSON.stringify(observation)).not.toContain("delete-target.txt");
+        expect(JSON.stringify(observation)).not.toContain("synthetic pending-delete target");
+      } finally { resultMemoryDb.close(); }
+
       for (const persistedFile of [join(auditDir, "audit.jsonl"), historyFile]) {
         expect(readFileSync(persistedFile, "utf8")).not.toContain(candidateMeaning);
         expect(readFileSync(persistedFile, "utf8")).not.toContain(revisedMeaning);
@@ -532,6 +563,32 @@ async function waitForOperationPlan(port: number, gateway: CapturedProcess, prov
   }
   throw new Error(`post-reassessment plan candidate was not retained; provider_calls=${providerCalls()}; ` +
     `gateway_stdout=${gateway.stdout.join("")}; gateway_stderr=${gateway.stderr.join("")}`);
+}
+
+async function waitForOperationPlanExecution(port: number, gateway: CapturedProcess,
+  providerFailure: () => unknown): Promise<{ plans?: Array<Record<string, unknown>> }> {
+  const deadline = Date.now() + 15_000;
+  let lastSnapshot = "unavailable";
+  while (Date.now() < deadline) {
+    if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);
+    const failure = providerFailure();
+    if (failure) throw failure;
+    const response = await fetch(`http://127.0.0.1:${port}/runtime/snapshot`, {
+      headers: { authorization: `Bearer ${WEBCHAT_TOKEN}` },
+    });
+    if (response.ok) {
+      const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+      lastSnapshot = JSON.stringify(snapshot.operation_plan_status ?? null);
+      const operationPlans = snapshot.operation_plan_status;
+      if (operationPlans?.plans?.some((plan) => plan.status === "results_verified" &&
+          Array.isArray(plan.steps) && plan.steps.some((step) => typeof step === "object" && step !== null &&
+            "binding" in step && typeof step.binding === "object" && step.binding !== null &&
+            (step.binding as Record<string, unknown>).memory_status === "receipt_confirmed"))) return operationPlans;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`approved plan execution and J/M receipt did not complete: gateway_stdout=${gateway.stdout.join("")}; ` +
+    `last_snapshot=${lastSnapshot}; gateway_stderr=${gateway.stderr.join("")}`);
 }
 
 async function waitForPendingFileDeleteApproval(port: number, gateway: CapturedProcess,

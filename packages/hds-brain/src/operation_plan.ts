@@ -1306,6 +1306,9 @@ export class OperationPlanLedger {
     if (this.memoryQuiesced || this.recoveryHolds.has(operationPlanDigest(match.p.revisions[0]!.plan.plan_id))) return false;
     if (!this.reconcileMemory()) return false;
     const { p, b } = match;
+    // J/M evidence may change while the selected command waits at its L3 gate.
+    try { this.assertMemoryInterpretationDependenciesCurrent(p); }
+    catch { return false; }
     if (!this.goalPurposeBindingIsCurrent(p.goal_purpose_binding) || this.goalPurposeRelationIssue(p) !== undefined) return false;
     const nowMs = Date.now();
     if (!this.computeSourceObservationsAreCurrent(p, nowMs)) return false;

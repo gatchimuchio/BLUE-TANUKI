@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createGatewayInternalInboundRequest, type OperationPlan, type OperationPlanMemoryInterpretationDependency } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, type ExecuteCommand, type OperationPlan,
+  type OperationPlanMemoryInterpretationDependency } from "@blue-tanuki/protocol";
 import { OperationPlanLedger, operationPlanDigest } from "../src/operation_plan.js";
 
 describe("plan review consumes memory interpretation reassessment", () => {
@@ -43,8 +44,18 @@ describe("plan review consumes memory interpretation reassessment", () => {
       revision_digest: operationPlanDigest(plan), step_id: "search" };
     expect(ledger.inspectControl(control, origin).step?.step_id).toBe("search");
 
+    const command: ExecuteCommand = {
+      id: "selected-plan-command", type: "tool_call",
+      payload: { tool_name: "file.search", arguments: { root: "fixture-root", query: "blue", max_results: 1 } },
+      upstream_decision: { frame_goal: origin.content, model_abstraction: "fixture", commit_hash: "commit",
+        commit_decision: "ASSERT", request_id: origin.id },
+    };
+    ledger.bind(control, origin, command);
+    expect(ledger.canExecute(command)).toBe(true);
+
     reassessmentRequired = true;
     expect(() => ledger.inspectControl(control, origin)).toThrow("plan_memory_interpretation_reassessment_required");
+    expect(ledger.canExecute(command)).toBe(false);
 
     judgmentPresent = false;
     expect(() => ledger.inspectControl(control, origin)).toThrow("plan_memory_interpretation_state_unavailable");
