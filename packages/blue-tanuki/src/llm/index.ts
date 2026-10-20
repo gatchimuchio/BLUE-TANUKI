@@ -37,6 +37,8 @@ export type {
   ComputeBudgetReservation,
   ComputeBudgetScope,
   ComputeBudgetSettlement,
+  ComputeCapacityLease,
+  ComputeCapacityPort,
   ComputeCost,
   ComputeDataExposureScope,
   ComputeInputSource,

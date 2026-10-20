@@ -38,6 +38,7 @@ import {
 } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { GatewayComputeBudgetStore } from "./compute_budget_store.js";
+import { GatewayResourceBackpressure } from "./resource_backpressure.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "./reconcile_execution_results.js";
 import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
@@ -1204,6 +1205,27 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
       const failureMemoryRequiresApproval = failureGate.decision === "require_approval";
       if (evaluation.decision === "ask" || failureMemoryRequiresApproval) {
+        const approvalAdmission = resourceBackpressure.reservePendingApprovalSlot(
+          pendingApprovals.size,
+          evaluation.final_review_required,
+        );
+        if (!approvalAdmission.ok) {
+          hds.onCommandLifecycle(cmd.id, "approval_rejected", {
+            actor,
+            reason: approvalAdmission.reason,
+            request_id: log.request_id,
+          });
+          recordApprovalHistory("approval_rejected", cmd, log, origin, actor, evaluation, {
+            resource_backpressure: true,
+            reason: approvalAdmission.reason,
+          });
+          await dispatcher.dispatch(
+            { channel: origin.channel, target: replyTarget(origin), content: "[busy] approval queue is full; no action was approved or executed. Retry after pending approvals are resolved." },
+            { command_id: `approval-capacity-${cmd.id}`, upstream_commit_hash: log.commit.hash },
+          );
+          return { status: "approval_queue_backpressure" };
+        }
+        try {
         if (runtimeScheduleMutationCommand(cmd)) {
           const prepared = runtimeSchedules.preparePending(cmd, evaluation, {
             request_id: log.request_id,
@@ -1278,6 +1300,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           ...(opts.memory_judgment_reassessment_proposal
             ? { memory_judgment_reassessment_proposal: opts.memory_judgment_reassessment_proposal } : {}),
         });
+        approvalAdmission.lease.release();
         const approvalContent = failureMemoryRequiresApproval
           ? `${approvalRequiredMessage(evaluation, cmd.id, issued?.token)} failure_memory_gate=${failureGate.reason}`
           : approvalRequiredMessage(evaluation, cmd.id, issued?.token);
@@ -1286,6 +1309,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           { command_id: `approval-${cmd.id}`, upstream_commit_hash: log.commit.hash },
         );
         return { status: "approval_required" };
+        } finally {
+          approvalAdmission.lease.release();
+        }
       }
       hds.onCommandLifecycle(cmd.id, "approval_approved", { actor, reason: evaluation.reason });
       recordApprovalHistory("approval_approved", cmd, log, origin, actor, evaluation);
@@ -1487,37 +1513,50 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         throw new Error("j_m_operation_plan_hold_unavailable");
       }
     }
+    let fb: ExecuteFeedback;
     const executionController = new AbortController();
     if (emergencyStop.active) executionController.abort();
     executionControllers.add(executionController);
-    let fb: ExecuteFeedback;
-    let executionTask: Promise<ExecuteFeedback>;
+    let executionTask: Promise<ExecuteFeedback> | undefined;
+    let executionAdmissionLease: { release(): void } | undefined;
     try {
-      executionTask = executor.execute(approvedCommand, { save_result_delivery: planBound,
-        signal: executionController.signal, before_tool_dispatch: () => {
-          if (emergencyStop.active) throw new Error("file_search_worker_emergency_stop_active");
-        } });
-    } catch (error) {
       try {
-        reopenCronEventStoreAfterRestore();
-        await finishCronEventRestore(false);
-      } catch {
-        throw new Error("cron_event_store_reopen_failed");
+        executionTask = executor.execute(approvedCommand, { save_result_delivery: planBound,
+          signal: executionController.signal,
+          before_execute: () => {
+            const resourceAdmission = resourceBackpressure.tryAcquireExecution();
+            if (!resourceAdmission.ok) throw new Error(resourceAdmission.reason);
+            executionAdmissionLease = resourceAdmission.lease;
+          },
+          before_tool_dispatch: () => {
+            if (emergencyStop.active) throw new Error("file_search_worker_emergency_stop_active");
+          } });
+      } catch (error) {
+        try {
+          reopenCronEventStoreAfterRestore();
+          await finishCronEventRestore(false);
+        } catch {
+          throw new Error("cron_event_store_reopen_failed");
+        }
+        throw error;
       }
-      throw error;
+      executionTasks.add(executionTask);
+      try {
+        fb = await executionTask;
+      } catch (error) {
+        try {
+          reopenCronEventStoreAfterRestore();
+          await finishCronEventRestore(false);
+        } catch {
+          throw new Error("cron_event_store_reopen_failed");
+        }
+        throw error;
+      }
+    } finally {
+      executionControllers.delete(executionController);
+      if (executionTask) executionTasks.delete(executionTask);
+      executionAdmissionLease?.release();
     }
-    executionTasks.add(executionTask);
-    try {
-      fb = await executionTask;
-    } catch (error) {
-      try {
-        reopenCronEventStoreAfterRestore();
-        await finishCronEventRestore(false);
-      } catch {
-        throw new Error("cron_event_store_reopen_failed");
-      }
-      throw error;
-    } finally { executionControllers.delete(executionController); executionTasks.delete(executionTask); }
     reopenCronEventStoreAfterRestore();
     if (fb.status === "success" && cmd.type === "tool_call" &&
         cmd.payload.tool_name === "schedule.resolve_event") {
@@ -3833,9 +3872,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   for (const channel of previewChannels) dispatcher.register(channel);
 
   const computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
+  const resourceBackpressure = GatewayResourceBackpressure.fromEnvironment(process.env);
   executor = new Executor({
     llm,
-    compute: new LLMComputeAdapter(llm, computeBudget),
+    compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
     tools,
     approval_authority: executorApproval,
     file_search_worker: createFileSearchWorker({ execution_epoch: ownerLease.executionEpoch,

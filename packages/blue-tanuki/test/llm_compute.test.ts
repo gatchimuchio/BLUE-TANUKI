@@ -7,6 +7,7 @@ import {
   LLM_COMPUTE_PROFILE,
   type ComputeBackend,
   type ComputeBudgetPort,
+  type ComputeCapacityPort,
   type ComputeRequest,
 } from "../src/llm/compute.js";
 
@@ -49,6 +50,26 @@ function computeRequest(): ComputeRequest<LLMRequest> {
 }
 
 describe("LLMComputeAdapter", () => {
+  it("acquires provider capacity before the provider and releases it after completion", async () => {
+    const events: string[] = [];
+    class OrderedBackend extends CapturingBackend {
+      override async call(request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
+        events.push("provider");
+        return super.call(request, signal);
+      }
+    }
+    const capacity: ComputeCapacityPort = {
+      async acquire(input) {
+        expect(input.timeout_ms).toBe(2_000);
+        events.push("admitted");
+        return { release: () => events.push("released") };
+      },
+    };
+
+    await new LLMComputeAdapter(new OrderedBackend(), undefined, capacity).compute(computeRequest());
+    expect(events).toEqual(["admitted", "provider", "released"]);
+  });
+
   it("reserves configured system/parent/task resources before the provider and settles the result", async () => {
     const events: string[] = [];
     class OrderedBackend extends CapturingBackend {

@@ -84,6 +84,28 @@ function approved(command: ExecuteCommand) {
 }
 
 describe("Executor.executeChannelSend — dispatcher path", () => {
+  it("records resource admission refusal as a failed, not-invoked execution", async () => {
+    let providerCalled = false;
+    const llm: LLMBackend = {
+      name: "admission-test-provider",
+      async call(): Promise<LLMResponse> {
+        providerCalled = true;
+        return { content: "unexpected", tokens_used: 1, model: "test", provider: "test" };
+      },
+    };
+    const command = llmCallCmd();
+    const exec = new Executor({
+      approval_authority: executorApproval,
+      llm,
+      tools: new ToolRegistry(),
+    });
+    const fb = await exec.execute(approved(command), {
+      before_execute: () => { throw new Error("gateway_memory_backpressure_reserved"); },
+    });
+    expect(fb).toMatchObject({ status: "failed", error: "gateway_memory_backpressure_reserved" });
+    expect(providerCalled).toBe(false);
+  });
+
   it("routes channel_send through dispatcher when provided", async () => {
     const calls: Array<{ channel: string; meta_hash: string }> = [];
     const dispatcher: ChannelDispatcher = {

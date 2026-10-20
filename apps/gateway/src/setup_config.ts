@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { ApprovalMode } from "@blue-tanuki/hds-brain";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { parseComputeBudgetPolicy } from "./compute_budget_store.js";
+import { DEFAULT_GATEWAY_RESOURCE_BACKPRESSURE_POLICY, parseGatewayResourceBackpressurePolicy } from "./resource_backpressure.js";
 
 export type SetupProviderKind =
   | "stub"
@@ -25,6 +26,7 @@ export interface SetupLlmConfig {
   max_tokens?: number;
   timeout_ms?: number;
   compute_budget_policy_json?: string;
+  resource_backpressure_policy_json?: string;
   provider_cost_profiles_json?: string;
 }
 
@@ -171,6 +173,7 @@ export function createDefaultSetupConfig(
     llm: {
       provider: "stub",
       compute_budget_policy_json: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+      resource_backpressure_policy_json: JSON.stringify(DEFAULT_GATEWAY_RESOURCE_BACKPRESSURE_POLICY),
     },
     approval: {
       mode: "full_access",
@@ -229,6 +232,13 @@ export function validateSetupConfig(
     } catch {
       throw new Error("llm.compute_budget_policy_json must be a valid compute-budget policy");
     }
+  }
+  if (config.llm.resource_backpressure_policy_json !== undefined) {
+    if (!isNonEmptyString(config.llm.resource_backpressure_policy_json) || config.llm.resource_backpressure_policy_json.length > 16_384) {
+      throw new Error("llm.resource_backpressure_policy_json must be a non-empty JSON string up to 16384 characters");
+    }
+    try { parseGatewayResourceBackpressurePolicy(config.llm.resource_backpressure_policy_json); }
+    catch { throw new Error("llm.resource_backpressure_policy_json must be a valid resource backpressure policy"); }
   }
   if (config.llm.provider_cost_profiles_json !== undefined) {
     if (!isNonEmptyString(config.llm.provider_cost_profiles_json) || config.llm.provider_cost_profiles_json.length > 16_384) {
@@ -378,6 +388,7 @@ export function setupConfigFromEnv(
   config.llm.max_tokens = parseOptionalInt(env.BLUE_TANUKI_LLM_MAX_TOKENS);
   config.llm.timeout_ms = parseOptionalInt(env.BLUE_TANUKI_LLM_TIMEOUT_MS);
   config.llm.compute_budget_policy_json = env.BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON ?? config.llm.compute_budget_policy_json;
+  config.llm.resource_backpressure_policy_json = env.BLUE_TANUKI_RESOURCE_BACKPRESSURE_POLICY_JSON ?? config.llm.resource_backpressure_policy_json;
   config.llm.provider_cost_profiles_json = env.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON;
   config.approval.mode = normalizeApprovalMode(
     env.BLUE_TANUKI_APPROVAL_MODE ?? config.approval.mode,
@@ -495,6 +506,9 @@ export function setupConfigToEnv(
   if (config.llm.compute_budget_policy_json !== undefined) {
     env.BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON = config.llm.compute_budget_policy_json;
   }
+  if (config.llm.resource_backpressure_policy_json !== undefined) {
+    env.BLUE_TANUKI_RESOURCE_BACKPRESSURE_POLICY_JSON = config.llm.resource_backpressure_policy_json;
+  }
   if (config.llm.provider_cost_profiles_json !== undefined) {
     env.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON = config.llm.provider_cost_profiles_json;
   }
@@ -559,6 +573,7 @@ export function renderSetupEnvFile(
     "BLUE_TANUKI_LLM_MAX_TOKENS",
     "BLUE_TANUKI_LLM_TIMEOUT_MS",
     "BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON",
+    "BLUE_TANUKI_RESOURCE_BACKPRESSURE_POLICY_JSON",
     "BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON",
     "BLUE_TANUKI_APPROVAL_MODE",
     "WEBCHAT_HOST",

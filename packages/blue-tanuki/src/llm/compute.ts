@@ -106,6 +106,15 @@ export interface ComputeBudgetPort {
   settle(reservation_id: string, settlement: ComputeBudgetSettlement): Promise<void> | void;
 }
 
+export interface ComputeCapacityLease {
+  release(): void;
+}
+
+/** Bounded provider admission; it can refuse or queue work but grants no authority. */
+export interface ComputeCapacityPort {
+  acquire(input: { timeout_ms: number; signal?: AbortSignal }): Promise<ComputeCapacityLease>;
+}
+
 export interface ComputeRequest<TInput extends object = Record<string, never>> {
   request_id: string;
   current_projection_digest: string;
@@ -178,10 +187,27 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
   constructor(
     private readonly backend: LLMBackend,
     private readonly budget?: ComputeBudgetPort,
+    private readonly capacity?: ComputeCapacityPort,
   ) {}
 
   async compute(request: ComputeRequest<LLMRequest>, signal?: AbortSignal): Promise<ComputeResult<LLMResponse>> {
     const fallbackAuthorization = validateComputeRequest(request);
+    const timeoutMs = request.resource_limits.timeout_ms;
+    const capacityLease = this.capacity
+      ? await this.capacity.acquire({ timeout_ms: timeoutMs ?? 30_000, signal })
+      : undefined;
+    try {
+      return await this.computeWithCapacity(request, signal, fallbackAuthorization);
+    } finally {
+      capacityLease?.release();
+    }
+  }
+
+  private async computeWithCapacity(
+    request: ComputeRequest<LLMRequest>,
+    signal: AbortSignal | undefined,
+    fallbackAuthorization: LLMFallbackAuthorization | undefined,
+  ): Promise<ComputeResult<LLMResponse>> {
     let reservation: ComputeBudgetReservation | undefined;
     let maximumCalls = 1;
     if (this.budget) {

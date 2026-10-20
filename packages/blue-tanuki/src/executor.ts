@@ -134,6 +134,8 @@ export interface FileSearchWorker { invoke(request: FileSearchWorkerRequest): Pr
 export interface ExecutorExecutionContext {
   /** Caller cancellation for the current LLM request. */
   signal?: AbortSignal;
+  /** Synchronous resource admission after ticket validation but before any command work. */
+  before_execute?: () => void;
   /** worker起動待ち後にもGatewayの現在停止条件を同期検査する。 */
   before_tool_dispatch?: () => void;
   /** Gatewayの永続J bindingがあるtool adapter結果だけ、私有outboxへ渡す。 */
@@ -681,6 +683,7 @@ export class Executor {
     let feedback: ExecuteFeedback;
     try {
       proof = this.assertExecutionApproved(cmd);
+      context.before_execute?.();
       observation = captureOperationCommandObservation(cmd);
       switch (cmd.type) {
         case "llm_call":

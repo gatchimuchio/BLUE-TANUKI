@@ -33,6 +33,7 @@ import { loadPluginRuntime, type PluginRuntime } from "./plugin_loader.js";
 import { stripEnvFileArgs } from "./env_file.js";
 import { RuntimeScheduleManager } from "./runtime_schedule.js";
 import { GatewayComputeBudgetStore } from "./compute_budget_store.js";
+import { GatewayResourceBackpressure } from "./resource_backpressure.js";
 import { resolveAllSecretRefs } from "./secret_store.js";
 import {
   documentOrganizationSourceFromRequest,
@@ -101,11 +102,13 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   const ownerLease = GatewayRuntimeOwnerLease.fromEnvironment(process.env);
   let executionStore: GatewayExecutionIntentStore | undefined;
   let computeBudget: GatewayComputeBudgetStore | undefined;
+  let resourceBackpressure: GatewayResourceBackpressure | undefined;
   try {
     Object.assign(process.env, resolveAllSecretRefs(process.env));
     executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
     computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
-    await runCliWithExecutionStore(argv, executionStore, ownerLease, computeBudget);
+    resourceBackpressure = GatewayResourceBackpressure.fromEnvironment(process.env);
+    await runCliWithExecutionStore(argv, executionStore, ownerLease, computeBudget, resourceBackpressure);
   } finally {
     computeBudget?.close();
     executionStore?.close();
@@ -118,6 +121,7 @@ async function runCliWithExecutionStore(
   executionStore: GatewayExecutionIntentStore,
   ownerLease: GatewayRuntimeOwnerLease,
   computeBudget: GatewayComputeBudgetStore,
+  resourceBackpressure: GatewayResourceBackpressure,
 ): Promise<void> {
   const cleanArgs = stripEnvFileArgs([...argv]);
   const organizeIndex = cleanArgs.indexOf("--organize");
@@ -176,7 +180,7 @@ async function runCliWithExecutionStore(
   });
   const executor = new Executor({
     llm,
-    compute: new LLMComputeAdapter(llm, computeBudget),
+    compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
     tools,
     approval_authority: executorApproval,
     file_search_worker: createFileSearchWorker({ execution_epoch: ownerLease.executionEpoch,
@@ -405,7 +409,19 @@ async function runCliWithExecutionStore(
     final_review_required: approvalEval.final_review_required,
     reason: approvalEval.reason,
   }, reviewed.command_digest, hdsBinding, targetVersionObservation);
-  const feedback = await executor.execute(approvedCommand);
+  let executionAdmissionLease: { release(): void } | undefined;
+  let feedback: Awaited<ReturnType<Executor["execute"]>>;
+  try {
+    feedback = await executor.execute(approvedCommand, {
+      before_execute: () => {
+        const admission = resourceBackpressure.tryAcquireExecution();
+        if (!admission.ok) throw new Error(admission.reason);
+        executionAdmissionLease = admission.lease;
+      },
+    });
+  } finally {
+    executionAdmissionLease?.release();
+  }
   if (feedback.status === "failed") {
     for (const signature of extractFailureSignatures({
       kind: "command_result",
