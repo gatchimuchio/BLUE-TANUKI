@@ -67,13 +67,22 @@ export const OperationPlanMemoryInterpretationDependencySchema = z.object({
 export type OperationPlanMemoryInterpretationDependency = z.infer<typeof OperationPlanMemoryInterpretationDependencySchema>;
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-source-observations.v3";
+export const OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION =
+  "blue-tanuki.plan-compute-memory-citation.v1";
 /** Explicit task input for internal plan computation; the binding selects context, not authority. */
 export const OperationPlanComputeInputSchema = z.object({
   task: z.string().trim().min(1).max(20_000),
-  goal_purpose_binding: OperationPlanGoalPurposeBindingSchema,
+  goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),
+  source_citation_request_id: z.string().trim().min(1).max(128).optional(),
   source_observation_refs: z.array(OperationPlanComputeSourceObservationReferenceSchema).max(8).optional(),
 }).strict().superRefine((input, context) => {
+  if (!input.goal_purpose_binding && !input.source_citation_request_id) {
+    context.addIssue({ code: "custom", message: "plan_compute_context_binding_required" });
+  }
   const references = input.source_observation_refs ?? [];
+  if (references.length > 0 && !input.goal_purpose_binding) {
+    context.addIssue({ code: "custom", message: "plan_compute_source_observation_requires_purpose_binding" });
+  }
   const identities = references.map((reference) =>
     `${reference.plan_id_digest}:${reference.revision_digest}:${reference.step_id_digest}`);
   if (new Set(identities).size !== identities.length) {

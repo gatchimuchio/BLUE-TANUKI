@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { createRequire } from "node:module";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -36,10 +36,15 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
     const memoryFile = join(tempRoot, "memory.jsonl");
     const historyFile = join(tempRoot, "complete-history.jsonl");
     const sessionDir = join(tempRoot, "sessions");
+    const fileRoot = join(auditDir, "file-root");
+    mkdirSync(fileRoot, { recursive: true });
+    writeFileSync(join(fileRoot, "delete-target.txt"), "synthetic pending-delete target\n", "utf8");
     const candidateMeaning = "Synthetic owner-reviewed meaning; no external effect.";
     const revisedMeaning = "Synthetic revised meaning after fresh evidence; no external effect.";
     let providerCalls = 0;
     let providerFailure: unknown;
+    let planComputeRequestId: string | undefined;
+    let currentInterpretationId: string | undefined;
 
     const memory = new LongTermMemoryStore({ filepath: memoryFile });
     const seedHds = new HDSUpperController({ memory });
@@ -99,7 +104,31 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
           may_apply: false as const,
           used_for_authority: false as const,
         } : undefined;
-        const content = JSON.stringify({ schema_version: "blue-tanuki.memory-citation-response.v1",
+        const plan = providerCalls === 5 ? {
+          version: "operation-core.v1",
+          plan_id: `c0702-post-reassessment-plan:${planComputeRequestId ?? "missing"}`,
+          request_id: planComputeRequestId,
+          state: "planned",
+          steps: [{ step_id: "delete-synthetic-target", operation: "file.delete",
+            target: { kind: "file", id: "delete-target.txt" }, state: "planned", effects: ["delete"],
+            permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+              hds_brain_authority_required: true, approval_gate_required: true },
+            adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
+            parameters: { path: "delete-target.txt", max_bytes: 128 },
+            preparation: { depends_on: [], bindings: [], preconditions: [],
+              validation: [{ check_id: "deleted-synthetic-target", method: "result_equals",
+                target: { kind: "file", id: "delete-target.txt" }, expected: { deleted: true } }],
+              compensation: { available: false,
+                reason: "deletion requires a separate owner-reviewed create operation to recover" } } }],
+          rollback: { available: false },
+          raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+          planner_output_used_for_authority: false,
+          hds_brain_authority_required: true,
+        } : undefined;
+        if (providerCalls === 5 && (!planComputeRequestId || !context)) {
+          throw new Error("post-reassessment plan compute context was not available");
+        }
+        const content = plan ? JSON.stringify({ plan }) : JSON.stringify({ schema_version: "blue-tanuki.memory-citation-response.v1",
           answer: "Synthetic C response with current references.", citations: [{
             claim: "Synthetic candidate statement.",
             supporting: { record_id: currentSupport.record_id, version: currentSupport.version },
@@ -268,9 +297,12 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
         const row = afterReassessment.prepare("SELECT value_json FROM m_records WHERE record_id = ?")
           .get(`memory-interpretation:${support.f_reference}`) as { value_json?: string } | undefined;
         const interpretation = JSON.parse(row?.value_json ?? "null") as {
+          current_interpretation_id?: string;
           events?: Array<{ kind?: string; reassessment_judgment_ref?: string }>;
           dependent_judgments?: Array<{ judgment_ref: string; reassessment_required: boolean }>;
         };
+        currentInterpretationId = interpretation.current_interpretation_id;
+        expect(currentInterpretationId).toBeTruthy();
         expect(interpretation.events?.at(-1)).toMatchObject({ kind: "reassessed", reassessment_judgment_ref: freshJudgmentRef });
         expect(interpretation.dependent_judgments?.find((item) => item.judgment_ref === freshJudgmentRef)?.reassessment_required)
           .toBe(false);
@@ -280,11 +312,99 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
         }
       } finally { afterReassessment.close(); }
 
+      const freshCitationInvocation = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST", headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0702-owner", content:
+          "Make a fresh J citation judgment under the current M interpretation for F:c0702-support and F:c0702-counter." }),
+      });
+      expect(freshCitationInvocation.status).toBe(202);
+      const freshCitationAccepted = await freshCitationInvocation.json() as { request_id?: string };
+      expect(freshCitationAccepted.request_id).toBeTruthy();
+      const freshCitationRequestId = String(freshCitationAccepted.request_id);
+      const freshCitationReview = await waitForMemoryCitationReview(auditDir, freshCitationRequestId,
+        gateway, () => providerFailure, () => providerCalls);
+      const currentDependencies = freshCitationReview.interpretation_dependencies as Array<Record<string, unknown>>;
+      expect(currentDependencies).toHaveLength(1);
+      expect(currentDependencies[0]).toMatchObject({
+        reference: { record_id: support.f_reference, version: support.entry_hash },
+        interpretation_id: currentInterpretationId,
+      });
+      expect(currentDependencies[0]?.reassesses_judgment_refs ?? []).toEqual([]);
+
+      const sourceCitationPlanTask =
+        "Create one bounded plan to remove the synthetic delete target after a separate owner final review. F:c0702-support F:c0702-counter";
+      const rejectedPlanCompute = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST", headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0702-other", content: `plan:compute ${JSON.stringify({
+          task: sourceCitationPlanTask, source_citation_request_id: freshCitationRequestId,
+        })}` }),
+      });
+      expect(rejectedPlanCompute.status).toBe(202);
+      const rejectedPlanComputeAccepted = await rejectedPlanCompute.json() as { request_id?: string };
+      const rejectedPlanDecision = await waitForDecision(auditDir, String(rejectedPlanComputeAccepted.request_id),
+        gateway, () => providerFailure);
+      expect(rejectedPlanDecision).toMatchObject({
+        commit: { decision: "FAIL", reason: "plan_control_denied:plan_compute_source_citation_actor_mismatch" },
+      });
+      expect(providerCalls).toBe(4);
+
+      const planCompute = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST", headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0702-owner", content: `plan:compute ${JSON.stringify({
+          task: sourceCitationPlanTask, source_citation_request_id: freshCitationRequestId,
+        })}` }),
+      });
+      expect(planCompute.status).toBe(202);
+      const planComputeAccepted = await planCompute.json() as { request_id?: string };
+      planComputeRequestId = `operation-request:${String(planComputeAccepted.request_id)}`;
+      const planComputeDecision = await waitForDecision(auditDir, String(planComputeAccepted.request_id),
+        gateway, () => providerFailure);
+      expect(planComputeDecision.commit, JSON.stringify(planComputeDecision)).toMatchObject({ decision: "ASSERT" });
+      const currentPlan = await waitForOperationPlan(gatewayPort, gateway, () => providerFailure, () => providerCalls);
+      expect(currentPlan).toMatchObject({ status: "awaiting_step_review", goal_purpose_binding_status: "not_configured",
+        steps: [expect.objectContaining({ operation: "file.delete", status: "not_selected" })] });
+      const planIdDigest = String(currentPlan.plan_id);
+      const revisionDigest = String(currentPlan.revision_digest);
+      const step = (currentPlan.steps as Array<Record<string, unknown>>)[0];
+      expect(step?.step_id).toBeTruthy();
+
+      const planStateDatabase = new DatabaseSync(join(stateRoot, "private-state", "operation-plans", "j-state.sqlite"),
+        { readOnly: true });
+      try {
+        const row = planStateDatabase.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id = 1")
+          .get() as { checkpoint_json?: string } | undefined;
+        const checkpoint = JSON.parse(row?.checkpoint_json ?? "null") as {
+          plans?: Array<{ memory_interpretation_dependencies?: Array<Record<string, unknown>> }>;
+        };
+        expect(checkpoint.plans?.at(-1)?.memory_interpretation_dependencies).toEqual([
+          expect.objectContaining({
+            reference: { record_id: support.f_reference, version: support.entry_hash },
+            interpretation_id: currentInterpretationId,
+            judgment_ref: currentDependencies[0]?.judgment_ref,
+          }),
+        ]);
+      } finally { planStateDatabase.close(); }
+
+      const planReview = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST", headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0702-owner", content: `plan:review ${JSON.stringify({
+          plan_id: planIdDigest, revision_digest: revisionDigest, step_id: step?.step_id,
+        })}` }),
+      });
+      expect(planReview.status).toBe(202);
+      const pendingDeleteApproval = await waitForPendingFileDeleteApproval(gatewayPort, gateway,
+        () => providerFailure, auditDir);
+      expect(pendingDeleteApproval).toMatchObject({ operation: "tool.file.delete", risk: "high",
+        approval_level: "L3_final_review", final_review_required: true, content_review_required: false });
+      expect(existsSync(join(fileRoot, "delete-target.txt"))).toBe(true);
+      expect(readFileSync(join(fileRoot, "delete-target.txt"), "utf8")).toBe("synthetic pending-delete target\n");
+      expect(providerCalls).toBe(5);
+
       for (const persistedFile of [join(auditDir, "audit.jsonl"), historyFile]) {
         expect(readFileSync(persistedFile, "utf8")).not.toContain(candidateMeaning);
         expect(readFileSync(persistedFile, "utf8")).not.toContain(revisedMeaning);
       }
-      expect(providerCalls).toBe(3);
+      expect(providerCalls).toBe(5);
     } finally {
       if (gateway) await stopChild(gateway.child);
       await closeServer(provider);
@@ -348,6 +468,91 @@ async function waitForMemoryJudgmentReassessmentApproval(port: number, gateway: 
   const auditText = existsSync(join(auditDir, "audit.jsonl")) ? readFileSync(join(auditDir, "audit.jsonl"), "utf8") : "";
   throw new Error(`memory judgment reassessment did not reach the owner L3 queue; provider_calls=${providerCalls()}; ` +
     `audit_tail=${auditText.slice(-2500)}; ` +
+    `gateway_stdout=${gateway.stdout.join("")}; gateway_stderr=${gateway.stderr.join("")}`);
+}
+
+async function waitForMemoryCitationReview(auditDir: string, requestId: string, gateway: CapturedProcess,
+  providerFailure: () => unknown, providerCalls: () => number): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);
+    const failure = providerFailure();
+    if (failure) throw failure;
+    const auditText = existsSync(join(auditDir, "audit.jsonl")) ? readFileSync(join(auditDir, "audit.jsonl"), "utf8") : "";
+    const review = auditText.split("\n").filter(Boolean).map((line) => JSON.parse(line) as {
+      log?: Record<string, unknown>;
+    }).map((entry) => entry.log).find((log) => log?.kind === "memory_citation_review" && log.request_id === requestId);
+    if (review) {
+      if (!["accepted", "accepted_with_rejections"].includes(String(review.status))) {
+        throw new Error(`fresh current-M citation review was not accepted: ${JSON.stringify(review)}`);
+      }
+      return review;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`fresh current-M citation review did not finish; provider_calls=${providerCalls()}; ` +
+    `gateway_stdout=${gateway.stdout.join("")}; gateway_stderr=${gateway.stderr.join("")}`);
+}
+
+async function waitForDecision(auditDir: string, requestId: string, gateway: CapturedProcess,
+  providerFailure: () => unknown): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);
+    const failure = providerFailure();
+    if (failure) throw failure;
+    const auditText = existsSync(join(auditDir, "audit.jsonl")) ? readFileSync(join(auditDir, "audit.jsonl"), "utf8") : "";
+    const decision = auditText.split("\n").filter(Boolean).map((line) => JSON.parse(line) as {
+      log?: Record<string, unknown>;
+    }).map((entry) => entry.log).find((log) => log?.request_id === requestId && log.commit !== undefined);
+    if (decision) return decision;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`HDS decision did not finish for ${requestId}; gateway_stderr=${gateway.stderr.join("")}`);
+}
+
+async function waitForOperationPlan(port: number, gateway: CapturedProcess, providerFailure: () => unknown,
+  providerCalls: () => number): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);
+    const failure = providerFailure();
+    if (failure) throw failure;
+    const response = await fetch(`http://127.0.0.1:${port}/runtime/snapshot`, {
+      headers: { authorization: `Bearer ${WEBCHAT_TOKEN}` },
+    });
+    if (response.ok) {
+      const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+      const plan = snapshot.operation_plan_status?.plans?.[0];
+      if (providerCalls() >= 5 && plan?.status === "awaiting_step_review" && Array.isArray(plan.steps) && plan.steps.length > 0) {
+        return plan;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`post-reassessment plan candidate was not retained; provider_calls=${providerCalls()}; ` +
+    `gateway_stdout=${gateway.stdout.join("")}; gateway_stderr=${gateway.stderr.join("")}`);
+}
+
+async function waitForPendingFileDeleteApproval(port: number, gateway: CapturedProcess,
+  providerFailure: () => unknown, auditDir: string): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);
+    const failure = providerFailure();
+    if (failure) throw failure;
+    const response = await fetch(`http://127.0.0.1:${port}/approval`, {
+      headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+    });
+    if (response.ok) {
+      const queue = await response.json() as { pending_approvals?: Array<Record<string, unknown>> };
+      const pending = queue.pending_approvals?.find((item) => item.operation === "tool.file.delete");
+      if (pending) return pending;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const auditText = existsSync(join(auditDir, "audit.jsonl")) ? readFileSync(join(auditDir, "audit.jsonl"), "utf8") : "";
+  throw new Error(`current-M/J plan did not reach its L3 approval gate; audit_tail=${auditText.slice(-2500)}; ` +
     `gateway_stdout=${gateway.stdout.join("")}; gateway_stderr=${gateway.stderr.join("")}`);
 }
 
