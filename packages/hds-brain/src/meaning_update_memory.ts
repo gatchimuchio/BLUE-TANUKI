@@ -236,7 +236,7 @@ export class MeaningUpdateMemoryConsumer {
     const snapshot = this.coordinator.snapshot();
     if (!snapshot) return false;
     for (const item of snapshot.pending) {
-      const result = this.coordinator.reconcile(item.update_id);
+      const result = this.coordinator.recoverPending(item.update_id);
       if (!result.ok || result.status !== "ready") return false;
     }
     const recovered = this.coordinator.snapshot();

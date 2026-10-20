@@ -141,6 +141,79 @@ describe("J制御状態とM receipt再照合", () => {
     database.close();
   });
 
+  it("再起動後にJ pendingのprivate配送outboxから同一commitをMへ届けreceiptを確定する", () => {
+    const jPath = join(directory, "j.sqlite");
+    const mPath = join(directory, "m.sqlite");
+    const options = { private_state_root: directory, database_path: jPath,
+      memory_database_path: mPath, j_approval_reader: approvingReader() };
+    let coordinator = createCoordinator(options);
+    const commit = makeCommit("restart-outbox-001", "private-pending-value");
+    expect(coordinator.stage(commit)).toMatchObject({ ok: true, status: "memory_commit_pending" });
+    expect(coordinator.reconcile(commit.update_id)).toMatchObject({ ok: true, status: "memory_commit_pending" });
+
+    const jDatabase: InstanceType<typeof DatabaseSync> = new DatabaseSync(jPath, { readOnly: true });
+    const outboxRow = jDatabase.prepare("SELECT commit_json FROM j_commit_outbox WHERE update_id = ?").get(commit.update_id);
+    expect(outboxRow && JSON.parse(String(outboxRow.commit_json))).toEqual(commit);
+    expect(JSON.stringify(inspectJControlRecoveryLedger({ private_state_root: directory, database_path: jPath })))
+      .not.toContain("private-pending-value");
+    expect(jDatabase.prepare("SELECT event_payload_json FROM j_events WHERE revision = 1").get()?.event_payload_json)
+      .not.toContain("private-pending-value");
+    jDatabase.close();
+
+    coordinator.close();
+    coordinator = createCoordinator(options);
+    expect(coordinator.recoverPending(commit.update_id)).toMatchObject({
+      ok: true, status: "ready", update_id: commit.update_id, receipt: { content_digest: commit.content_digest },
+    });
+    expect(coordinator.readMemoryRecord("synthetic-fact")).toMatchObject({
+      exists: true, value: "private-pending-value", used_for_authority: false,
+    });
+    const outbox: InstanceType<typeof DatabaseSync> = new DatabaseSync(jPath, { readOnly: true });
+    expect(outbox.prepare("SELECT COUNT(*) AS count FROM j_commit_outbox").get()?.count).toBe(0);
+    outbox.close();
+    const memory: InstanceType<typeof DatabaseSync> = new DatabaseSync(mPath, { readOnly: true });
+    expect(memory.prepare("SELECT COUNT(*) AS count FROM m_receipts").get()?.count).toBe(1);
+    memory.close();
+  });
+
+  it("新しいJ pendingの配送outbox欠落ではM適用前にprojection mismatchで止める", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory, database_path: databasePath, j_approval_reader: approvingReader(),
+    });
+    const commit = makeCommit("missing-outbox-001", "must-remain-unapplied");
+    expect(coordinator.stage(commit).ok).toBe(true);
+    coordinator.close();
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    damaged.prepare("DELETE FROM j_commit_outbox WHERE update_id = ?").run(commit.update_id);
+    damaged.close();
+    expect(() => createCoordinator({
+      private_state_root: directory, database_path: databasePath, j_approval_reader: approvingReader(),
+    })).toThrow("projection_mismatch");
+    const memory: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(memory.prepare("SELECT COUNT(*) AS count FROM m_events").get()?.count).toBe(0);
+    memory.close();
+  });
+
+  it("J schema v1を既存イベントを保持したまま配送outbox対応へ移行する", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory, database_path: databasePath, j_approval_reader: approvingReader(),
+    });
+    coordinator.close();
+    const legacy: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    legacy.exec("DROP TABLE j_commit_outbox");
+    legacy.exec("UPDATE j_schema SET schema_version = 1 WHERE singleton = 1");
+    legacy.close();
+
+    const migrated = createCoordinator({
+      private_state_root: directory, database_path: databasePath, j_approval_reader: approvingReader(),
+    });
+    expect(migrated.snapshot()).toMatchObject({ status: "ready", active_update_id: null, pending: [] });
+    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(checked.prepare("SELECT schema_version FROM j_schema WHERE singleton = 1").get()?.schema_version).toBe(2);
+    expect(checked.prepare("SELECT COUNT(*) AS count FROM j_events").get()?.count).toBe(0);
+    checked.close();
+  });
+
   it("Mの既存receiptがJ pendingのdigestと異なる場合は進行を止める", () => {
     const previousCommit = makeCommit("reused-id", "previous-value");
     const previousM = new MemoryUpdateLedger({

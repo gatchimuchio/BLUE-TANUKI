@@ -5,6 +5,7 @@ import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import {
   parseMemoryCommitV2,
   parseMemoryUpdateReceipt,
+  type MemoryCommitV2,
   type MemoryUpdateReceiptV1,
 } from "@blue-tanuki/protocol";
 import {
@@ -23,10 +24,12 @@ import {
 import { MemoryUpdateLedger } from "./記憶更新.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
-const J_STORAGE_SCHEMA_VERSION = 1;
+const J_STORAGE_SCHEMA_VERSION = 2;
+const LEGACY_J_STORAGE_SCHEMA_VERSION = 1;
 const J_EVENT_SCHEMA_VERSION = "blue-tanuki.j-control-event.v1" as const;
+const J_OUTBOX_EVENT_SCHEMA_VERSION = "blue-tanuki.j-control-event.v2" as const;
 const GENESIS_EVENT_DIGEST = "GENESIS";
-const J_TABLES = ["j_events", "j_pending", "j_schema", "j_state"] as const;
+const J_TABLES = ["j_commit_outbox", "j_events", "j_pending", "j_schema", "j_state"] as const;
 
 type JControlStatus = "ready" | "memory_commit_pending" | "blocked";
 type PendingStatus = "pending" | "receipt_confirmed" | "blocked";
@@ -91,6 +94,8 @@ interface JStateProjection {
   status: JControlStatus;
   active_update_id: string | null;
   pending: Map<string, JPendingSnapshot>;
+  /** New pending events require a digest-bound durable delivery envelope. */
+  outboxRequired: Set<string>;
 }
 
 interface JEventCommon {
@@ -109,6 +114,15 @@ interface JPendingEvent extends JEventCommon {
   readonly expected_version: number;
 }
 
+interface JPendingOutboxEvent extends Omit<JEventCommon, "schema_version"> {
+  readonly schema_version: typeof J_OUTBOX_EVENT_SCHEMA_VERSION;
+  readonly event_type: "memory_commit_pending";
+  readonly j_event_id: string;
+  readonly content_digest: string;
+  readonly expected_version: number;
+  readonly delivery_envelope_digest: string;
+}
+
 interface JReceiptEvent extends JEventCommon {
   readonly event_type: "memory_commit_receipt_confirmed";
   readonly receipt: MemoryUpdateReceiptV1;
@@ -119,7 +133,7 @@ interface JBlockedEvent extends JEventCommon {
   readonly reason: JBlockReason;
 }
 
-type JEventBody = JPendingEvent | JReceiptEvent | JBlockedEvent;
+type JEventBody = JPendingEvent | JPendingOutboxEvent | JReceiptEvent | JBlockedEvent;
 type JStoredEvent = JEventBody & { readonly event_digest: string };
 
 /**
@@ -174,7 +188,7 @@ export class JMemoryCommitCoordinator {
     this.jApprovalVerifier = options.j_approval_reader;
   }
 
-  /** M書込み前に、検証済みJ参照の不透明な識別情報だけを保存する。 */
+  /** 承認済みcommitをprivate配送outboxへ封印し、J pending digestと同一取引で確定する。 */
   stage(input: unknown): JMemoryCommitStageResult {
     if (this.closed || !this.store.health().available || !this.memoryLedger.health().available) {
       return { ok: false, reason: "store_unavailable" };
@@ -212,6 +226,17 @@ export class JMemoryCommitCoordinator {
       return { ok: false, status: "blocked", revision: null, update_id: updateId, reason: "store_unavailable" };
     }
     return this.store.reconcile(updateId, this.memoryLedger);
+  }
+
+  /** Recover the exact approved J→M delivery envelope before confirming its M receipt. */
+  recoverPending(updateId: string): JMemoryCommitReconciliationResult {
+    const current = this.reconcile(updateId);
+    if (!current.ok || current.status !== "memory_commit_pending") return current;
+    const commit = this.store.readPendingCommit(updateId);
+    if (!commit) return current;
+    const applied = this.apply(commit);
+    if (!applied.ok) return this.reconcile(updateId);
+    return this.reconcile(updateId);
   }
 
   snapshot(): JMemoryCommitLifecycleSnapshot | null {
@@ -356,8 +381,15 @@ class JControlStateStore {
           transactionStarted = false;
           return { ok: false, reason: "update_id_content_conflict" };
         }
-        this.database.exec("ROLLBACK");
-        transactionStarted = false;
+        if (existing.status === "pending" && !this.readCommitOutbox(parsed.commit.update_id)) {
+          this.insertCommitOutbox(parsed.commit, parsed.content_digest);
+          commitAttempted = true;
+          this.database.exec("COMMIT");
+          transactionStarted = false;
+        } else {
+          this.database.exec("ROLLBACK");
+          transactionStarted = false;
+        }
         return {
           ok: true,
           status: existing.status === "pending" ? "memory_commit_pending" : existing.status === "receipt_confirmed" ? "ready" : "blocked",
@@ -371,8 +403,8 @@ class JControlStateStore {
         return { ok: false, reason: "pending_update_exists" };
       }
 
-      const eventBody: JPendingEvent = {
-        schema_version: J_EVENT_SCHEMA_VERSION,
+      const eventBody: JPendingOutboxEvent = {
+        schema_version: J_OUTBOX_EVENT_SCHEMA_VERSION,
         event_type: "memory_commit_pending",
         event_id: `j-control:${randomUUID()}`,
         revision: projection.revision + 1,
@@ -381,6 +413,7 @@ class JControlStateStore {
         j_event_id: parsed.commit.j_event_id,
         content_digest: parsed.content_digest,
         expected_version: parsed.commit.expected_version,
+        delivery_envelope_digest: parsed.content_digest,
         occurred_at_utc: this.now().toISOString(),
       };
       const event = storeEvent(eventBody);
@@ -388,6 +421,7 @@ class JControlStateStore {
       this.database.prepare(
         "INSERT INTO j_pending (update_id, j_event_id, content_digest, expected_version, status, receipt_json, block_reason) VALUES (?, ?, ?, ?, 'pending', NULL, NULL)",
       ).run(parsed.commit.update_id, parsed.commit.j_event_id, parsed.content_digest, parsed.commit.expected_version);
+      this.insertCommitOutbox(parsed.commit, parsed.content_digest);
       this.database.prepare(
         "UPDATE j_state SET revision = ?, event_digest = ?, status = 'memory_commit_pending', active_update_id = ? WHERE singleton = 1",
       ).run(event.revision, event.event_digest, parsed.commit.update_id);
@@ -493,6 +527,7 @@ class JControlStateStore {
       this.database.prepare(
         "UPDATE j_pending SET status = 'blocked', block_reason = ? WHERE update_id = ?",
       ).run(reason, updateId);
+      this.database.prepare("DELETE FROM j_commit_outbox WHERE update_id = ?").run(updateId);
       this.database.prepare(
         "UPDATE j_state SET revision = ?, event_digest = ?, status = 'blocked', active_update_id = ? WHERE singleton = 1",
       ).run(event.revision, event.event_digest, updateId);
@@ -611,6 +646,7 @@ class JControlStateStore {
         this.database.prepare(
           "UPDATE j_pending SET status = 'blocked', block_reason = 'm_receipt_mismatch' WHERE update_id = ?",
         ).run(updateId);
+        this.database.prepare("DELETE FROM j_commit_outbox WHERE update_id = ?").run(updateId);
         this.database.prepare(
           "UPDATE j_state SET revision = ?, event_digest = ?, status = 'blocked', active_update_id = ? WHERE singleton = 1",
         ).run(event.revision, event.event_digest, updateId);
@@ -635,6 +671,7 @@ class JControlStateStore {
       this.database.prepare(
         "UPDATE j_pending SET status = 'receipt_confirmed', receipt_json = ?, block_reason = NULL WHERE update_id = ?",
       ).run(canonicalJson(receipt), updateId);
+      this.database.prepare("DELETE FROM j_commit_outbox WHERE update_id = ?").run(updateId);
       this.database.prepare(
         "UPDATE j_state SET revision = ?, event_digest = ?, status = 'ready', active_update_id = NULL WHERE singleton = 1",
       ).run(event.revision, event.event_digest);
@@ -671,6 +708,55 @@ class JControlStateStore {
       active_update_id: projection.active_update_id,
       pending: Object.freeze([...projection.pending.values()].map((item) => Object.freeze({ ...item }))),
     });
+  }
+
+  readPendingCommit(updateId: string): MemoryCommitV2 | null {
+    if (this.closed || this.unavailable || !isIdentifier(updateId)) return null;
+    const inspection = inspectJDatabase(this.database);
+    if (!inspection.ok) {
+      this.stop(inspection.reason);
+      return null;
+    }
+    const pending = inspection.projection.pending.get(updateId);
+    if (!pending || pending.status !== "pending" || inspection.projection.active_update_id !== updateId) return null;
+    const saved = this.readCommitOutbox(updateId);
+    if (!saved || saved.content_digest !== pending.content_digest) return null;
+    return saved.commit;
+  }
+
+  private readCommitOutbox(updateId: string): { readonly content_digest: string; readonly commit: MemoryCommitV2 } | null {
+    const row = this.database.prepare(
+      "SELECT content_digest, commit_json FROM j_commit_outbox WHERE update_id = ?",
+    ).get(updateId);
+    if (!row) return null;
+    const contentDigest = stringValue(row.content_digest);
+    const commitJson = stringValue(row.commit_json);
+    if (!contentDigest || !commitJson) return null;
+    try {
+      const parsed = parseMemoryCommitV2(JSON.parse(commitJson) as unknown);
+      if (!parsed.ok || canonicalJson(parsed.commit) !== commitJson || parsed.content_digest !== contentDigest ||
+          parsed.commit.update_id !== updateId) {
+        this.stop("projection_mismatch");
+        return null;
+      }
+      return { content_digest: contentDigest, commit: parsed.commit };
+    } catch {
+      this.stop("projection_mismatch");
+      return null;
+    }
+  }
+
+  private insertCommitOutbox(commit: MemoryCommitV2, contentDigest: string): void {
+    const saved = this.readCommitOutbox(commit.update_id);
+    if (saved) {
+      if (saved.content_digest !== contentDigest || canonicalJson(saved.commit) !== canonicalJson(commit)) {
+        throw new Error("j_commit_outbox_conflict");
+      }
+      return;
+    }
+    this.database.prepare(
+      "INSERT INTO j_commit_outbox (update_id, content_digest, commit_json) VALUES (?, ?, ?)",
+    ).run(commit.update_id, contentDigest, canonicalJson(commit));
   }
 
   verify(): boolean {
@@ -803,14 +889,14 @@ export function rebuildJControlProjection(options: {
   let commitAttempted = false;
   try {
     database = openJRecoveryDatabase(options);
-    if (!verifyJTableSchema(database) || !verifyNoJRecoveryTriggers(database)) {
+    if (!verifySupportedJTableSchema(database) || !verifyNoJRecoveryTriggers(database)) {
       return { ok: false, reason: "schema_mismatch" };
     }
     if (!replayDatabase(database)) return { ok: false, reason: "ledger_corrupt" };
 
     database.exec("BEGIN EXCLUSIVE");
     transactionStarted = true;
-    if (!verifyJTableSchema(database) || !verifyNoJRecoveryTriggers(database)) {
+    if (!verifySupportedJTableSchema(database) || !verifyNoJRecoveryTriggers(database)) {
       database.exec("ROLLBACK");
       transactionStarted = false;
       return { ok: false, reason: "schema_mismatch" };
@@ -909,7 +995,7 @@ export function inspectJControlRecoveryLedger(options: {
     if (stringValue(firstValue(database.prepare("PRAGMA journal_mode").get()))?.toLowerCase() !== "delete") {
       return unavailableLedgerInspection("J", "store_unavailable");
     }
-    if (!verifyJTableSchema(database) || !verifyNoJRecoveryTriggers(database)) {
+    if (!verifySupportedJTableSchema(database) || !verifyNoJRecoveryTriggers(database)) {
       return unavailableLedgerInspection("J", "schema_mismatch");
     }
 
@@ -931,6 +1017,7 @@ export function inspectJControlRecoveryLedger(options: {
       status: "ready" as const,
       active_update_id: null,
       pending: new Map<string, JPendingSnapshot>(),
+      outboxRequired: new Set<string>(),
     };
     if (projection === null) {
       return {
@@ -976,6 +1063,19 @@ function initializeJStorageSchema(database: DatabaseSyncType): void {
     .all().map((row) => stringValue(row.name)).filter((name): name is string => name !== null);
   const schemaExists = tables.includes("j_schema");
   if (schemaExists) {
+    if (verifyJTableSchema(database)) return;
+    if (!verifyLegacyJTableSchema(database)) throw new PersistenceStoreError("J", "schema_mismatch");
+    database.exec("BEGIN EXCLUSIVE");
+    try {
+      if (!verifyLegacyJTableSchema(database)) throw new PersistenceStoreError("J", "schema_mismatch");
+      database.exec("CREATE TABLE j_commit_outbox (update_id TEXT PRIMARY KEY, content_digest TEXT NOT NULL CHECK (length(content_digest) = 64), commit_json TEXT NOT NULL)");
+      database.prepare("UPDATE j_schema SET schema_version = ? WHERE singleton = 1").run(J_STORAGE_SCHEMA_VERSION);
+      database.exec("COMMIT");
+    } catch (error) {
+      try { database.exec("ROLLBACK"); } catch { /* connection is closed by caller */ }
+      if (error instanceof PersistenceStoreError) throw error;
+      throw new PersistenceStoreError("J", classifyPersistenceFailure(error));
+    }
     if (!verifyJTableSchema(database)) throw new PersistenceStoreError("J", "schema_mismatch");
     return;
   }
@@ -1014,6 +1114,11 @@ function initializeJStorageSchema(database: DatabaseSyncType): void {
                (status = 'receipt_confirmed' AND receipt_json IS NOT NULL AND block_reason IS NULL) OR
                (status = 'blocked' AND receipt_json IS NULL AND block_reason IN ('m_receipt_mismatch', 'm_update_rejected')))
       );
+      CREATE TABLE j_commit_outbox (
+        update_id TEXT PRIMARY KEY,
+        content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+        commit_json TEXT NOT NULL
+      );
       INSERT INTO j_schema (singleton, schema_version) VALUES (1, ${J_STORAGE_SCHEMA_VERSION});
       INSERT INTO j_state (singleton, revision, event_digest, status, active_update_id)
         VALUES (1, 0, '${GENESIS_EVENT_DIGEST}', 'ready', NULL);
@@ -1030,6 +1135,14 @@ function initializeJStorageSchema(database: DatabaseSyncType): void {
 }
 
 const J_TABLE_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  j_commit_outbox: ["update_id", "content_digest", "commit_json"],
+  j_events: ["event_id", "revision", "previous_event_digest", "event_digest", "event_payload_json"],
+  j_pending: ["update_id", "j_event_id", "content_digest", "expected_version", "status", "receipt_json", "block_reason"],
+  j_schema: ["singleton", "schema_version"],
+  j_state: ["singleton", "revision", "event_digest", "status", "active_update_id"],
+});
+
+const LEGACY_J_TABLE_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   j_events: ["event_id", "revision", "previous_event_digest", "event_digest", "event_payload_json"],
   j_pending: ["update_id", "j_event_id", "content_digest", "expected_version", "status", "receipt_json", "block_reason"],
   j_schema: ["singleton", "schema_version"],
@@ -1041,22 +1154,35 @@ type JDatabaseInspection =
   | { readonly ok: false; readonly reason: PersistenceFailureReason };
 
 function verifyJTableSchema(database: DatabaseSyncType): boolean {
+  return verifyJTableSchemaVersion(database, J_TABLE_COLUMNS, J_STORAGE_SCHEMA_VERSION);
+}
+
+function verifyLegacyJTableSchema(database: DatabaseSyncType): boolean {
+  return verifyJTableSchemaVersion(database, LEGACY_J_TABLE_COLUMNS, LEGACY_J_STORAGE_SCHEMA_VERSION);
+}
+
+function verifySupportedJTableSchema(database: DatabaseSyncType): boolean {
+  return verifyJTableSchema(database) || verifyLegacyJTableSchema(database);
+}
+
+function verifyJTableSchemaVersion(database: DatabaseSyncType,
+  expectedColumns: Readonly<Record<string, readonly string[]>>, schemaVersion: number): boolean {
   const actualTables = database.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'j_*' ORDER BY name",
   ).all().map((row) => stringValue(row.name)).filter((name): name is string => name !== null);
-  const expectedTables = Object.keys(J_TABLE_COLUMNS).sort();
+  const expectedTables = Object.keys(expectedColumns).sort();
   if (actualTables.length !== expectedTables.length ||
       actualTables.some((name, index) => name !== expectedTables[index])) return false;
   for (const tableName of expectedTables) {
     const columns = database.prepare("PRAGMA table_info(" + tableName + ")").all()
       .map((row) => stringValue(row.name));
-    const expected = J_TABLE_COLUMNS[tableName];
+    const expected = expectedColumns[tableName];
     if (!expected || columns.length !== expected.length ||
         columns.some((name, index) => name !== expected[index])) return false;
   }
   const schemaRows = database.prepare("SELECT singleton, schema_version FROM j_schema").all();
   return schemaRows.length === 1 && integerValue(schemaRows[0]?.singleton) === 1 &&
-    integerValue(schemaRows[0]?.schema_version) === J_STORAGE_SCHEMA_VERSION;
+    integerValue(schemaRows[0]?.schema_version) === schemaVersion;
 }
 
 function verifyNoJRecoveryTriggers(database: DatabaseSyncType): boolean {
@@ -1105,12 +1231,36 @@ function verifyJDerivedProjection(database: DatabaseSyncType, projection: JState
           canonicalJson(parsed.receipt) !== receiptJson) return false;
     }
   }
+  const hasOutboxTable = database.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'j_commit_outbox'",
+  ).get() !== undefined;
+  if (!hasOutboxTable) return projection.outboxRequired.size === 0;
+  const outboxRows = database.prepare("SELECT update_id, content_digest, commit_json FROM j_commit_outbox ORDER BY update_id").all();
+  const outboxIds = new Set<string>();
+  for (const row of outboxRows) {
+    const updateId = stringValue(row.update_id);
+    const contentDigest = stringValue(row.content_digest);
+    const commitJson = stringValue(row.commit_json);
+    const item = updateId === null ? undefined : projection.pending.get(updateId);
+    if (!updateId || !contentDigest || !commitJson || !item || item.status !== "pending" ||
+        item.content_digest !== contentDigest || outboxIds.has(updateId)) return false;
+    try {
+      const parsed = parseMemoryCommitV2(JSON.parse(commitJson) as unknown);
+      if (!parsed.ok || canonicalJson(parsed.commit) !== commitJson || parsed.content_digest !== contentDigest ||
+          parsed.commit.update_id !== item.update_id || parsed.commit.j_event_id !== item.j_event_id ||
+          parsed.commit.expected_version !== item.expected_version) return false;
+    } catch {
+      return false;
+    }
+    outboxIds.add(updateId);
+  }
+  if ([...projection.outboxRequired].some((updateId) => !outboxIds.has(updateId))) return false;
   return true;
 }
 
 function inspectJDatabase(database: DatabaseSyncType): JDatabaseInspection {
   try {
-    if (!verifyJTableSchema(database)) return { ok: false, reason: "schema_mismatch" };
+    if (!verifySupportedJTableSchema(database)) return { ok: false, reason: "schema_mismatch" };
     const projection = replayDatabase(database);
     if (!projection) return { ok: false, reason: "ledger_corrupt" };
     if (!verifyJDerivedProjection(database, projection)) return { ok: false, reason: "projection_mismatch" };
@@ -1138,6 +1288,7 @@ function replayDatabase(
       status: "ready",
       active_update_id: null,
       pending: new Map(),
+      outboxRequired: new Set(),
     };
     for (const row of events) {
       const json = stringValue(row.event_payload_json);
@@ -1166,6 +1317,7 @@ function replayDatabase(
 
 function applyEvent(current: JStateProjection, event: JStoredEvent): JStateProjection | null {
   const pending = new Map(current.pending);
+  const outboxRequired = new Set(current.outboxRequired);
   if (event.event_type === "memory_commit_pending") {
     if (current.status !== "ready" || current.active_update_id !== null || pending.has(event.update_id)) return null;
     pending.set(event.update_id, {
@@ -1177,12 +1329,14 @@ function applyEvent(current: JStateProjection, event: JStoredEvent): JStateProje
       receipt: null,
       block_reason: null,
     });
+    if (event.schema_version === J_OUTBOX_EVENT_SCHEMA_VERSION) outboxRequired.add(event.update_id);
     return {
       revision: event.revision,
       event_digest: event.event_digest,
       status: "memory_commit_pending",
       active_update_id: event.update_id,
       pending,
+      outboxRequired,
     };
   }
   const existing = pending.get(event.update_id);
@@ -1190,22 +1344,26 @@ function applyEvent(current: JStateProjection, event: JStoredEvent): JStateProje
       current.active_update_id !== event.update_id) return null;
   if (event.event_type === "memory_commit_blocked") {
     pending.set(event.update_id, { ...existing, status: "blocked", block_reason: event.reason });
+    outboxRequired.delete(event.update_id);
     return {
       revision: event.revision,
       event_digest: event.event_digest,
       status: "blocked",
       active_update_id: event.update_id,
       pending,
+      outboxRequired,
     };
   }
   if (!receiptMatchesPending(event.receipt, existing)) return null;
   pending.set(event.update_id, { ...existing, status: "receipt_confirmed", receipt: event.receipt });
+  outboxRequired.delete(event.update_id);
   return {
     revision: event.revision,
     event_digest: event.event_digest,
     status: "ready",
     active_update_id: null,
     pending,
+    outboxRequired,
   };
 }
 
@@ -1239,16 +1397,20 @@ function parseStoredEvent(raw: unknown, row: SqlRow): JStoredEvent | null {
       integerValue(row.revision) !== integerValue(raw.revision) ||
       stringValue(row.previous_event_digest) !== stringValue(raw.previous_event_digest) ||
       stringValue(row.event_digest) !== eventDigest) return null;
-  if (raw.schema_version !== J_EVENT_SCHEMA_VERSION || !isIdentifier(raw.event_id) ||
+  if ((raw.schema_version !== J_EVENT_SCHEMA_VERSION && raw.schema_version !== J_OUTBOX_EVENT_SCHEMA_VERSION) || !isIdentifier(raw.event_id) ||
       !Number.isSafeInteger(raw.revision) || (raw.revision as number) < 1 ||
       !isDigest(raw.previous_event_digest) && raw.previous_event_digest !== GENESIS_EVENT_DIGEST ||
       !isIdentifier(raw.update_id) || !isIsoDate(raw.occurred_at_utc)) return null;
   if (raw.event_type === "memory_commit_pending") {
-    if (!hasExactKeys(raw, ["schema_version", "event_type", "event_id", "revision", "previous_event_digest", "update_id", "j_event_id", "content_digest", "expected_version", "occurred_at_utc", "event_digest"]) ||
-        !isIdentifier(raw.j_event_id) || !isDigest(raw.content_digest) ||
-        !Number.isSafeInteger(raw.expected_version) || (raw.expected_version as number) < 0) return null;
+    const commonKeys = ["schema_version", "event_type", "event_id", "revision", "previous_event_digest", "update_id", "j_event_id", "content_digest", "expected_version", "occurred_at_utc", "event_digest"];
+    const keys = raw.schema_version === J_OUTBOX_EVENT_SCHEMA_VERSION
+      ? [...commonKeys, "delivery_envelope_digest"] : commonKeys;
+    if (!hasExactKeys(raw, keys) || !isIdentifier(raw.j_event_id) || !isDigest(raw.content_digest) ||
+        !Number.isSafeInteger(raw.expected_version) || (raw.expected_version as number) < 0 ||
+        (raw.schema_version === J_OUTBOX_EVENT_SCHEMA_VERSION && raw.delivery_envelope_digest !== raw.content_digest)) return null;
     return raw as unknown as JStoredEvent;
   }
+  if (raw.schema_version !== J_EVENT_SCHEMA_VERSION) return null;
   if (raw.event_type === "memory_commit_receipt_confirmed") {
     if (!hasExactKeys(raw, ["schema_version", "event_type", "event_id", "revision", "previous_event_digest", "update_id", "receipt", "occurred_at_utc", "event_digest"])) return null;
     const parsedReceipt = parseMemoryUpdateReceipt(raw.receipt);

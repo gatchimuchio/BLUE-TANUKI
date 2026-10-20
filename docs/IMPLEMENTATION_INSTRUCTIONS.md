@@ -2,20 +2,19 @@
 
 ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
 
-### 最新BUILD_BATCH：`QEB-03-E03.02-STALE-GENERATION-RECOVERY-EVIDENCE-UI`
+### 最新BUILD_BATCH：`QEB-03-E03.02-J-M-PENDING-RECOVERY-OUTBOX`
 
-開始HEAD／`main`／`origin/main`=`7bc43075c0a3f5f407eb9c9bb8390421821d08ad`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E03.02、Broker旧世代結果archive、Gateway recovery inspector、Control Centerのread-only表示を再読した。Windows localでBLUE-TANUKIのみを編集。untracked Linux `target/`は保持。
+開始HEAD／`main`／`origin/main`=`c0857d60ea43acfd3a1a8730633a94db0605e7ae`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E03.02、J→M commit producer、HDS起動時のrecovery consumerを再読した。Windows localでBLUE-TANUKIのみを編集し、untracked Linux `target/`は保持。
 
-検証済みBroker receiptの固定digest・旧execution epoch・隔離した世代digest・result delivery digestをoperator recovery inspectionへ接続した。投影schemaを9へ上げ、Control Centerは結果本文やraw IDを表示せず、read-only証拠として表示する。未検証のBroker台帳では記録を出さない。承認、作用、再実行、復旧可否の判定は追加しない。
+Jが承認済みM commitをpendingとして記録した後、M適用前に停止した場合に備え、完全なcommitをprivate `j_commit_outbox`へJ pending eventと同一transactionで保存する。v2 pending eventのdigestへ配送commitを結び、HDSのgoal-purpose／meaning-update起動consumerは、M receiptを先に照合し、未適用なら同じcommitだけを適用してreceiptを再照合する。receipt確定後・blocked後はoutbox本文を削除し、J event／recovery inspectionにはcommit本文を出さない。旧J schema v1は保持してv2へ移行する。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| Gateway `recovery_inspection.test.ts` | PASS、18/18。検証済みBroker ledgerから旧世代receiptをdigestだけで投影するconsumerを確認。 |
-| WebChat `webchat.test.ts` | PASS、99/99。固定digest表示、raw ID／結果本文の除外、read-only境界を確認。 |
-| `pnpm typecheck`→`pnpm build` | 両方PASS。workspace 15 projects。 |
-| 全suite、live Gateway再起動、実credential／provider／外部作用、QE_QC／QE_QA | 未実施。 |
+| HDS `制御状態.test.ts`／`meaning_update_memory.test.ts`／`goal_governance.test.ts` | PASS、3 files／32 tests。再起動後の同一commit配送・receipt、本文の非投影、outbox欠落時のfail-closed、schema v1移行と既存consumerを確認。 |
+| `pnpm typecheck`→`pnpm build` | 両方PASS。 |
+| 全suite、実サービス再起動、実credential／provider／外部作用、QE_QC／QE_QA | 未実施。 |
 
-旧世代結果の証拠表示は`WIRED`、E03.02と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。次consumerはM pendingのproducer→回復→M commit／receipt経路を現行コードから再照合して確定する。C08.03実provider、D4／ミニドラ別repo変更、外部作用、P13公開・出荷GOは保留。作業ごとに最新版三点セットと適用AGENTS.mdを読み直し、全体実装前のQC／QAへ進まない。
+J→Mのpending復旧delivery consumerは`WIRED`。E03.02のdurable job lifecycleと製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。次はE03.02の未接続job／旧worker結果の世代帰属と復旧consumerを、現行コードから選ぶ。C08.03実provider、D4／ミニドラ別repo変更、外部作用、P13公開・出荷GOは保留。全体実装前にQC／QAへ進まない。
 
 ### 前回BUILD_BATCH：`QEB-03-E03.02-INTERRUPTED-APPROVAL-RESTART-NOTICE-CONSUMER`
 

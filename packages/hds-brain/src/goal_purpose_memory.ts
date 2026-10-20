@@ -167,7 +167,7 @@ export class GoalPurposeMemoryConsumer {
     const snapshot = this.coordinator.snapshot();
     if (!snapshot) return false;
     for (const item of snapshot.pending) {
-      const reconciled = this.coordinator.reconcile(item.update_id);
+      const reconciled = this.coordinator.recoverPending(item.update_id);
       if (!reconciled.ok || reconciled.status !== "ready") return false;
     }
     const recovered = this.coordinator.snapshot();
