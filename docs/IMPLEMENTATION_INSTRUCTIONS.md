@@ -1,5 +1,24 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
+### 最新BUILD_BATCH：`QEB-01-F01.02-SHELL-ROOT-IDENTITY-BINDING`
+
+開始HEAD／`main`／`origin/main`=`57c33f6a7476366b6ee6748bfb76c7a772265322`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.02、shell実行とfile.deleteの現行producer・consumerを再読した。Windows localで施工し、既存untracked Linux `target/`は保持した。
+
+既存shell実行はHDS L3最終レビュー後にOS隔離providerへ接続し、provider終了時にはprocess treeの空を要求する。別作用の`file.delete`はOperation Plan→J→Brokerの対象版・変更前hash照合→L3→Executor→M結果経路を持つ。一方、shell実行はowner確認時のsandbox root/cwd実体が実行直前にも同一であることを結んでいなかった。Broker観測へcommand digestとroot/cwdの実体digestを加え、HDS source bindingおよびExecutorの承認proofへ束縛した。raw pathは観測・監査へ出さない。承認後の`Tool.invoke`がroot/cwdを再解決し、不一致ならnative provider起動前にfail-closedとする。これにより「HDS発行shell command→L3→Broker root/cwd観測→Executor承認→実行直前再照合→隔離provider」の限定経路を`WIRED`とする。
+
+F01.02全体は`BUILD_GAP`のまま。shellの実行結果からJ検証済みのdigest限定M記録、明示選択を経た後続C consumerはまだ未接続で、今回の作業を全体成立とは扱わない。file.deleteの既存別作用経路は維持する。C08.03実provider保留、別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm typecheck` | PASS。 |
+| `pnpm build` | PASS、15 workspace projects。Windows isolation release buildを含む。 |
+| root/cwd差替え時のprocess未起動確認 | PASS、対象shell.exec test 1件。 |
+| HDS command／Broker root identity／L3 Executor proof binding | PASS、対象HDS→Executor test 1件。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite／全体QE_QC／QE_QA／全OS実機／実provider・credential／外部作用 | 未実施。BUILD_COVERED後へ配置。 |
+
+実装commit=`6d44913c513e23ef1468337fb2dad040c2e14288`を`main`へpushし、remote mainが同SHAであることを確認した。local／remote backup refsはcurrent=`57c33f6a7476366b6ee6748bfb76c7a772265322`、previous=`c11d7e455a37286d940f3f0db61f4c19677591e0`。未追跡Linux `target/`はcommitへ含めていない。次consumerはshell実行結果からJ検証済み非権威M観測、明示選択後Cへ返す経路。次batch開始時に三点正本、適用AGENTS、active指示、HEAD／差分を再読する。
+
 ### 最新BUILD_BATCH：`QEB-01-F01.01-REVIEWED-DIFF-TO-WORKSPACE-RESULT`
 
 開始HEAD／`main`／`origin/main`=`c11d7e455a37286d940f3f0db61f4c19677591e0`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`、仕様書=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77`、施工指示書=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`／作業標準／active指示、F01.01要求と実装consumerを再読した。Windows localで施工し、untracked Linux `target/`は保持した。
