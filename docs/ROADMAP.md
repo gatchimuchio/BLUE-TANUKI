@@ -2,6 +2,8 @@
 
 2026-10-20。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-20の`QEB-01-C07.02-OWNER-L3-MEMORY-TRANSACTION`では、C meaning-update候補をHDSのcurrent-M reviewからdigest-only owner L3 queue、明示content review、J承認後のprivate M適用へコード上接続した。承認・適用・意味関係・後続作用確認を別状態に保ち、候補本文をqueue／監査／CompleteHistoryへ出さない。HDS合成transactionとWebChat digest-bound reviewのfocused test、typecheck、15-project buildはPASS。Gateway HTTPからMまでの統合smokeは未実施で`BUILD_GAP`。C07.03、C07親、`SYSTEM_SHAPED`／`BUILD_COVERED`も未成立。これは実provider、外部作用、全体QC／QA、5OS実機の証拠ではない。
+
 2026-10-20の`QEB-01-C04-CURRENT-M-DEPENDENCY-RECHECK`では、Cの回答引用とmeaning-update proposalをJが扱う時点で、Mの現在hash-chainを読み直し、使われたrecord IDごとの版を照合するconsumerを追加した。無関係な追記は選択済み参照を失効させず、変更された依存版や検証できない台帳は引用・証拠採否から除く。focused test 15/15、workspace typecheck／15-project buildはPASS。意味評価・M更新の承認済み適用・C04全体は未成立で`BUILD_GAP`。QE_QC／QE_QA／5OS実機や実providerの証拠ではない。
 
 2026-10-20の`QEB-01-D02.02-C04-TASK-IDENTITY-M-TO-C-PROJECTION`では、Jが同一Operation Plan taskから導出する非権威digestを、J/M照合済みfile.write／期限内file.searchのC向けprojectionとresult-reflection projectionへ渡した。限定Gateway接続3件、workspace typecheck、15-project buildはPASS。raw記録・権限・M永続形式は変更していない。C04.01–03全体、意味上の採否を含む一仕事、結果→M→帰還、`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立で`BUILD_GAP`。全体QC・QA・5OS実機・実provider・外部業務作用の証拠ではない。
