@@ -3401,7 +3401,7 @@ ${planControl.question}`,
     const planComputeObservationMessage: LLMCallPayload["messages"][number] | undefined =
       planCompute?.source_observations?.length ? {
         role: "system",
-        content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。file.writeは過去の作用報告、file.searchは観測時刻と有効期限の付いた検索件数要約です。file.searchの件数は検索の完全性や、観測後の状態を保証しません。どちらも目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、作用時点の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payloadは意図的に含めていません。期限切れや追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
+        content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。file.writeは過去の作用報告、file.deleteは当時のJ検証済み削除報告であり、その後の再作成や現在の不存在を証明しません。file.searchは観測時刻と有効期限の付いた検索件数要約で、検索の完全性や観測後の状態を保証しません。いずれも目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、現在の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payloadは意図的に含めていません。期限切れや追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
           used_as_world_truth: false, used_for_authority: false, may_execute: false })}`,
       } : undefined;
     const computeContextMessages = [...memoryMessages, ...(planPurposeMessage ? [planPurposeMessage] : []),

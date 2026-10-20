@@ -1512,7 +1512,7 @@ export class OperationPlanLedger {
     this.resultMemory = undefined;
   }
 
-  /** Resolve explicit references to durable, J-verified file.write observations without exposing targets or content. */
+  /** Resolve explicit references to durable, J-verified file action observations without exposing targets or content. */
   inspectComputeSourceObservations(
     rawReferences: readonly OperationPlanComputeSourceObservationReference[],
     caller: InboundRequest,
@@ -1554,7 +1554,8 @@ export class OperationPlanLedger {
       if (bindings.length !== 1) throw new Error("plan_compute_source_observation_binding_unavailable");
       const binding = bindings[0]!;
       const operation = step.operation;
-      if ((operation !== "file.write" && operation !== "file.search") || binding.operation !== operation || binding.status !== "verified" ||
+      if ((operation !== "file.write" && operation !== "file.delete" && operation !== "file.search") ||
+          binding.operation !== operation || binding.status !== "verified" ||
           binding.step_digest !== stepDigest(step) || !binding.execution_admission || !binding.delivery_digest ||
           !binding.result_digest || !binding.memory_commit || !binding.memory_receipt ||
           !verifyResultMemoryCommit(plan, binding) || !receiptForResultCommit(binding.memory_receipt, binding.memory_commit)) {
@@ -1598,9 +1599,11 @@ export class OperationPlanLedger {
         used_for_authority: false as const,
         may_execute: false as const,
       };
-      if (operation === "file.write") {
+      if (operation === "file.write" || operation === "file.delete") {
         observations.push(OperationPlanComputeSourceObservationSchema.parse({
-          ...common, source: "verified_file_write_result", operation,
+          ...common,
+          source: operation === "file.write" ? "verified_file_write_result" : "verified_file_delete_result",
+          operation,
         }));
       } else {
         const output = result.output;

@@ -388,6 +388,72 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     }
   }, fileWriteCandidate));
 
+  it("明示選択されたfile.delete履歴を現在J/M照合後に非権威入力として後続plan:computeへ渡す", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    expect(feedback.result).toEqual({ deleted: true });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
+      .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+
+    c.hds.closeOperationPlanMemory();
+    c.hds = c.createHds(c.j, true);
+    expect(c.hds.reconcileOperationPlanMemory()).toBe(true);
+    c.purposeBinding = installTestPurpose(c.hds);
+
+    const sourceCheckpoint = c.j.load()!.plans[0]!;
+    const sourceRevision = sourceCheckpoint.revisions.at(-1)!;
+    const sourceRef = { plan_id_digest: operationPlanDigest(c.plan.plan_id), revision_digest: sourceRevision.digest,
+      step_id_digest: operationPlanDigest(c.plan.steps[0]!.step_id) };
+    const expectedTaskIdentityDigest = planTaskIdentityDigest(sourceCheckpoint.owner, sourceCheckpoint.channel,
+      sourceCheckpoint.goal, c.plan.plan_id, c.plan.request_id);
+    const destinationRequestId = randomUUID();
+    const task = "Use the selected historical deletion report as context; require fresh observation before claiming current file state.";
+    const computeRequest = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: "fixture-owner",
+      content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: c.purposeBinding, source_observation_refs: [sourceRef] })}`,
+      timestamp: Date.now(), metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.request_id": destinationRequestId } });
+    const compute = c.hds.decide(computeRequest);
+    if (compute.command?.type !== "llm_call") throw new Error(`selected delete observation was not routed to C: ${compute.log.commit.reason}`);
+    expect(compute.command.payload.compute_context?.data_exposure.input_sources)
+      .toContain("selected_operation_result_observations");
+    expect(compute.command.payload.compute_context?.local_p_version)
+      .toBe("blue-tanuki.plan-compute-source-observations.v4");
+    const serializedInput = JSON.stringify(compute.command.payload.messages);
+    expect(serializedInput).toContain("verified_file_delete_result");
+    expect(serializedInput).toContain("reported_success");
+    expect(serializedInput).toContain(expectedTaskIdentityDigest);
+    expect(serializedInput).toContain(sourceRef.plan_id_digest);
+    for (const forbidden of [c.workspace, "notes.txt", "synthetic delete target"]) {
+      expect(serializedInput).not.toContain(forbidden);
+    }
+
+    const invalidRequest = createGatewayInternalInboundRequest({ ...computeRequest, id: randomUUID(),
+      content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: c.purposeBinding,
+        source_observation_refs: [{ ...sourceRef, step_id_digest: "f".repeat(64) }] })}`, timestamp: Date.now() });
+    const invalid = c.hds.decide(invalidRequest);
+    expect(invalid.command?.type).not.toBe("llm_call");
+    expect(invalid.log.commit.reason).toContain("plan_control_denied:plan_compute_source_observation_step_mismatch");
+
+    const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
+    c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
+      metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+    const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
+      entry.plan_id === operationPlanDigest(nextCandidate.plan_id));
+    expect(retained?.compute_source_observations).toHaveLength(1);
+    expect(retained?.compute_source_observations?.[0]).toMatchObject({ source: "verified_file_delete_result",
+      operation: "file.delete", task_identity_digest: expectedTaskIdentityDigest,
+      effect_observation: "reported_success", adoption_status: "observation_only",
+      used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    const safeObservation = JSON.stringify(retained?.compute_source_observations);
+    for (const forbidden of [c.workspace, "notes.txt", "synthetic delete target", "sandbox_root", "target"]) {
+      expect(safeObservation).not.toContain(forbidden);
+    }
+  }, fileDeleteCandidate, (workspace) => writeFileSync(join(workspace, "notes.txt"), "synthetic delete target\n")));
+
   it("有効期限内のJ/M照合済みfile.search要約だけを後続plan:computeへ渡す", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
@@ -420,7 +486,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const destinationRequestId = randomUUID();
     const compute = c.hds.decide(makeComputeRequest(destinationRequestId));
     if (compute.command?.type !== "llm_call") throw new Error(`selected search observation was not routed to C: ${compute.log.commit.reason}`);
-    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v3");
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v4");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const observationMessage = compute.command.payload.messages.find((message) =>

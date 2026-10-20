@@ -44,6 +44,8 @@ export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion(
   z.object({ ...OperationPlanComputeSourceObservationCommon,
     source: z.literal("verified_file_write_result"), operation: z.literal("file.write") }).strict(),
   z.object({ ...OperationPlanComputeSourceObservationCommon,
+    source: z.literal("verified_file_delete_result"), operation: z.literal("file.delete") }).strict(),
+  z.object({ ...OperationPlanComputeSourceObservationCommon,
     source: z.literal("verified_file_search_result"), operation: z.literal("file.search"),
     expires_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     match_count: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
@@ -66,7 +68,7 @@ export const OperationPlanMemoryInterpretationDependencySchema = z.object({
 });
 export type OperationPlanMemoryInterpretationDependency = z.infer<typeof OperationPlanMemoryInterpretationDependencySchema>;
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
-  "blue-tanuki.plan-compute-source-observations.v3";
+  "blue-tanuki.plan-compute-source-observations.v4";
 export const OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-memory-citation.v1";
 /** Explicit task input for internal plan computation; the binding selects context, not authority. */
