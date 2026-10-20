@@ -1,6 +1,21 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-D02.01-SHARED-CANONICAL-ACTION-DIGEST`
+### 最新BUILD_BATCH：`QEB-01-D02.02-CROSS-PROCESS-DURABLE-EXECUTION-INTENT`
+
+開始HEAD／`origin/main`=`81a90e2b488e8e5b1b1aca83b18c05fdafe032fe`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準、active指示、D02.02、ExecutionIntent発行から永続消費・Executor invocation・receipt・owner世代切替までの現行producer／consumerを再読した。Windows localで施工し、保護対象のuntracked Linux `target/`を保持した。
+
+D02.02の必要経路は現HEADに既に実装済みだった。ExecutionIntent ticketはtask identity・execution epoch・wall expiryを束縛し、Executor側はmonotonic期限も検査する。GatewayのSQLite storeは一意command key、event chain、atomic consume／invocation境界を永続化し、新owner世代は旧ticketを拒否する。初回のprocess試験timeoutは、試験workerが読む`@blue-tanuki/core/dist/index.js`未生成による起動失敗と特定した。標準Core build後、D02.02の限定consumer routeを`WIRED`と確認した。D02.02親要件全体と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/core build`（Windows isolation release buildとCore emit） | PASS。Linux isolation buildはWindows上の標準scriptにより対象外。 |
+| Gateway `execution_intent_runtime.test.ts` | PASS、7/7。期限・owner世代・永続再送拒否・process競合・invoke中断後の再実行拒否を含む。 |
+| 初回process試験timeout | Core `dist`未生成でchild workerがmodule解決失敗。コード・timeoutを変更せず、通常build後に再確認PASS。 |
+| 全workspace suite／全体QC／QA／5OS実機／実provider・外部作用 | 未実施。全体実装形状成立後へ配置。 |
+
+C08.03実provider保留、D4 Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。Actions未使用。次consumer候補はD02.03「新しい実行境界に沿った旧L3分類の移行」。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読して現物照合する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.01-SHARED-CANONICAL-ACTION-DIGEST`
 
 開始HEAD／`origin/main`=`ef44183666582bcf826538eca3ab4b0b98e1993f`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準、active指示、D02.01、J選択からExecutionAdmissionまでの現行producer／consumerを再読した。先行D03.01の現物調査では、BLUEにBearer認証済み`/inbound`はあるがRuntime／Session／Workspace登録IPC consumerはなく、D4 Agent Taskは`unsupported`だったため、未接続を`BUILD_GAP`として維持し実装経路を創作しなかった。Windows localで施工し、保護対象のuntracked Linux `target/`を保持した。
 
