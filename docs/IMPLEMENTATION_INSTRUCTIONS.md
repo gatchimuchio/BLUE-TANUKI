@@ -17,7 +17,7 @@ Jが同一Operation Plan taskから導出する非権威`task_identity_digest`�
 
 次はC04.01–03の未接続consumerを現行callsiteから再特定し、選択引用の出所・復帰参照を保ったままJ/M/C間の実仕事をさらに先へつなぐ。ホスト同一性探索は反復しない。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
 
-実装commit=`<このBUILD_BATCHの直前commit>`。push後のremote HEAD／二世代復元ref／作業ツリーはcloseoutで照合する。
+実装commit=`ea47371ab99184d128fdf9db124dffd7aa1de36d`を`main`へpushし、remote HEAD一致を確認した。実装push後のcurrent recovery branch／backup tagは同commit、previous branch／tagは開始HEAD=`d1a7f96b2c7f4c3ad3a572e2fcc49772e1ce71ea`。docs-only closeout push後に最終HEADとrefsを再照合する。
 
 ### 前回BUILD_BATCH：`QEB-01-D02.02-PLAN-TASK-IDENTITY-WORKER-AUDIENCE`
 
