@@ -31,6 +31,7 @@ import {
   FileWriteTargetVersionObservationSchema,
   FileDeleteTargetVersionObservationSchema,
   FileEditTargetVersionObservationSchema,
+  ShellExecTargetVersionObservationSchema,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
   fileDeleteTargetIdentityDigest,
@@ -2793,6 +2794,16 @@ ${planControl.question}`,
       }
       if (observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
         throw new Error("HDS file.edit target version does not match the current Operation Plan source");
+      }
+      brokerTargetVersionObservationDigest = operationPlanDigest(observation);
+    } else if (command.type === "tool_call" && command.payload.tool_name === "shell.exec") {
+      if (brokerTargetVersionObservation === undefined) {
+        throw new Error("HDS shell.exec target version observation is required");
+      }
+      const observation = ShellExecTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
+      if (observation.command_digest !== operationPlanDigest(command) ||
+          observation.operation_plan_binding_digest !== (operation_plan_binding_digest ?? null)) {
+        throw new Error("HDS shell.exec target version does not match the issued command or Operation Plan source");
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (command.type === "tool_call" && command.payload.tool_name === "gmail.write" &&

@@ -1,9 +1,11 @@
 import { requireToolOperationDescriptor, type FileSearchTargetVersionObservation,
   type FileWriteTargetVersionObservation, type FileDeleteTargetVersionObservation,
   type FileEditTargetVersionObservation, type GmailWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
-  FileDeleteTargetVersionObservation | FileEditTargetVersionObservation | GmailWriteTargetVersionObservation;
+  FileDeleteTargetVersionObservation | FileEditTargetVersionObservation | ShellExecTargetVersionObservation |
+  GmailWriteTargetVersionObservation;
 
 /** Resume-authenticated, no-store-only projection of a fetched existing Gmail draft. */
 export interface GmailDraftContentReview {

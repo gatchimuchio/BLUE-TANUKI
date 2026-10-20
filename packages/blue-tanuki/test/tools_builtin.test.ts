@@ -321,6 +321,7 @@ describe("built-in tools", () => {
         used_for_authority: false,
         may_execute: false,
       });
+      expect(JSON.stringify(observation)).not.toContain(root);
       expect(observation.file_content_digest).toMatch(/^[a-f0-9]{64}$/);
       expect(JSON.stringify(observation)).not.toContain("reviewed delete target");
 
@@ -1483,6 +1484,44 @@ describe("built-in tools", () => {
     await expect(
       invokeShellExec({ cmd: "node", args: ["-v"], cwd: "../outside" }, { env: {} }),
     ).rejects.toThrow(/BLUE_TANUKI_SHELL_ROOT is required/);
+  });
+
+  it("shell.exec requires a reviewed sandbox identity and refuses a replaced cwd before process creation", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-target-version-"));
+    const root = path.join(parent, "root");
+    const cwd = path.join(root, "work");
+    const retiredCwd = path.join(root, "work-reviewed");
+    const marker = path.join(parent, "process-started.txt");
+    await fs.mkdir(cwd, { recursive: true });
+    const env = shellTestEnv(root);
+    const priorRoot = process.env.BLUE_TANUKI_SHELL_ROOT;
+    process.env.BLUE_TANUKI_SHELL_ROOT = root;
+    const shell = new ToolRegistry();
+    registerBuiltinTools(shell);
+    const tool = shell.get("shell.exec");
+    const args = { cmd: "node", args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`], cwd: "work" };
+    try {
+      if (!tool?.inspect_target_version) throw new Error("built-in shell target resolver was not registered");
+      const observation = await tool.inspect_target_version(args, { env, command_digest: "a".repeat(64) });
+      expect(observation).toMatchObject({
+        schema_version: "blue-tanuki.shell-exec-target-version.v1",
+        operation_plan_binding_digest: null,
+        used_for_authority: false,
+        may_execute: false,
+      });
+      const invocation = { command_id: "cmd-shell-target", upstream_commit_hash: "a".repeat(64) };
+      await expect(tool.invoke(args, invocation)).rejects.toThrow(/requires Broker target version evidence/);
+
+      await fs.rename(cwd, retiredCwd);
+      await fs.mkdir(cwd);
+      await expect(tool.invoke(args, { ...invocation, target_version_observation: observation }))
+        .rejects.toThrow(/sandbox root or cwd changed after owner review/);
+      await expect(fs.access(marker)).rejects.toThrow();
+    } finally {
+      if (priorRoot === undefined) delete process.env.BLUE_TANUKI_SHELL_ROOT;
+      else process.env.BLUE_TANUKI_SHELL_ROOT = priorRoot;
+      await fs.rm(parent, { recursive: true, force: true });
+    }
   });
 
   it("shell.exec rejects absolute commands and destructive command shapes", async () => {

@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
+import { requireToolOperationDescriptor, ShellExecTargetVersionObservationSchema,
+  type ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { Tool, ToolContext } from "./registry.js";
 import { isSecretLikeRelativePath } from "./file_safety.js";
 
@@ -13,6 +15,7 @@ export interface ShellExecOptions {
   signal?: AbortSignal;
   /** Native test seam; production uses the package-local, built helper. */
   nativeProviderPath?: string;
+  targetVersionObservation?: ShellExecTargetVersionObservation;
 }
 
 export interface ShellOperationAdapterMetadata {
@@ -63,6 +66,18 @@ export async function invokeShellExec(
   }
   if (opts.signal?.aborted) {
     throw new Error("shell.exec aborted before isolated process creation");
+  }
+  if (opts.targetVersionObservation) {
+    const expected = ShellExecTargetVersionObservationSchema.parse(opts.targetVersionObservation);
+    const current = await inspectShellExecTargetVersion(args, {
+      env,
+      command_digest: expected.command_digest,
+      ...(expected.operation_plan_binding_digest
+        ? { operation_plan_binding_digest: expected.operation_plan_binding_digest } : {}),
+    });
+    if (JSON.stringify(current) !== JSON.stringify(expected)) {
+      throw new Error("shell.exec sandbox root or cwd changed after owner review; request fresh review");
+    }
   }
 
   const providerPath = opts.nativeProviderPath ??
@@ -135,10 +150,65 @@ export const shellExecTool: Tool = {
   description:
     "Run a bounded command inside the verified Windows or Linux isolation provider; unavailable when native isolation is not built.",
   required_capabilities: requireToolOperationDescriptor("shell.exec").required_capabilities,
+  async inspect_target_version(args, options = {}) {
+    return await inspectShellExecTargetVersion(args, options);
+  },
   async invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> {
-    return await invokeShellExec(args, { signal: ctx.signal });
+    if (ctx.target_version_observation?.schema_version !== "blue-tanuki.shell-exec-target-version.v1") {
+      throw new Error("shell.exec requires Broker target version evidence; no process was started");
+    }
+    return await invokeShellExec(args, { signal: ctx.signal, targetVersionObservation: ctx.target_version_observation });
   },
 };
+
+export async function inspectShellExecTargetVersion(
+  args: Record<string, unknown>,
+  options: { env?: Readonly<Env>; operation_plan_binding_digest?: string; command_digest?: string } = {},
+): Promise<ShellExecTargetVersionObservation> {
+  const commandDigest = options.command_digest;
+  if (!commandDigest || !/^[a-f0-9]{64}$/.test(commandDigest)) {
+    throw new Error("shell.exec target resolver requires the exact command digest");
+  }
+  const operationPlanBindingDigest = options.operation_plan_binding_digest;
+  if (operationPlanBindingDigest !== undefined && !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+    throw new Error("shell.exec target resolver received an invalid Operation Plan binding");
+  }
+  const env = options.env ?? process.env;
+  const command = stringArg(args, "cmd", false) ?? stringArg(args, "command")!;
+  const argv = shellArgs(args);
+  validateShellCommand(command, argv);
+  positiveIntArg(args, "timeout_ms", 15_000, 60_000);
+  positiveIntArg(args, "max_bytes", 64_000, 512_000);
+  const shellRoot = await shellRootFromEnv(env);
+  const cwd = await resolveShellCwd(stringArg(args, "cwd", false), shellRoot);
+  const [rootIdentityDigest, cwdIdentityDigest] = await Promise.all([
+    directoryIdentityDigest(shellRoot), directoryIdentityDigest(cwd),
+  ]);
+  return ShellExecTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.shell-exec-target-version.v1",
+    command_digest: commandDigest,
+    root_identity_digest: rootIdentityDigest,
+    cwd_identity_digest: cwdIdentityDigest,
+    operation_plan_binding_digest: operationPlanBindingDigest ?? null,
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
+async function directoryIdentityDigest(directory: string): Promise<string> {
+  const real = await fs.realpath(directory);
+  const stat = await fs.stat(real, { bigint: true });
+  if (!stat.isDirectory() || stat.ino <= 0n) {
+    throw new Error("shell.exec cannot establish a stable sandbox directory identity");
+  }
+  const canonicalPath = process.platform === "win32" ? path.win32.normalize(real).toLowerCase() : path.posix.normalize(real);
+  return createHash("sha256").update(JSON.stringify({
+    schema_version: "blue-tanuki.shell-directory-identity.v1",
+    path: canonicalPath,
+    device: stat.dev.toString(),
+    file_id: stat.ino.toString(),
+  }), "utf8").digest("hex");
+}
 
 function packagedWindowsProviderPath(): string {
   return path.resolve(

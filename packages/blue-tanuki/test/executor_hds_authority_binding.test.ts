@@ -1,10 +1,17 @@
 import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { approvalContextFromCommand, HDSUpperController, operationPlanDigest, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest, FileSearchTargetVersionObservationSchema, OperationPlanCheckpointSchema,
+  ShellExecTargetVersionObservationSchema,
   type FileSearchTargetVersionObservation, type GoalGovernanceConfig } from "@blue-tanuki/protocol";
 import type { ExecutionIntentStore, ExecutionIntentTicket } from "../src/execution_intent.js";
-import { createExecutorApprovalAuthority, executorCommandDigest, type ExecutorApprovalProof } from "../src/executor.js";
+import { createExecutorApprovalAuthority, Executor, executorCommandDigest, type ExecutorApprovalProof } from "../src/executor.js";
+import { StubBackend } from "../src/llm/stub.js";
+import { registerBuiltinTools } from "../src/tools/builtin.js";
+import { ToolRegistry } from "../src/tools/registry.js";
 
 function issuedCommand(id: string, goal_governance?: GoalGovernanceConfig) {
   const hds = new HDSUpperController(goal_governance ? { goal_governance } : {});
@@ -159,6 +166,56 @@ function recordingIntentStore(tickets: ExecutionIntentTicket[]): ExecutionIntent
 }
 
 describe("HDSからExecutorへの非直列化source binding", () => {
+  it("shell.execの実行root/cwdをBroker観測し、HDS sourceとowner-reviewed commandへ結ぶ", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-hds-binding-"));
+    const priorRoot = process.env.BLUE_TANUKI_SHELL_ROOT;
+    process.env.BLUE_TANUKI_SHELL_ROOT = root;
+    const hds = new HDSUpperController();
+    const request = createGatewayInternalInboundRequest({
+      id: "shell-binding-request",
+      channel: "webchat",
+      user: "fixture-owner",
+      content: 'tool:shell.exec {"cmd":"node","args":["-v"],"cwd":"."}',
+      timestamp: 1,
+      metadata: { "blue_tanuki.operator_surface": "developer" },
+    });
+    try {
+      const issued = hds.decide(request);
+      if (issued.command?.type !== "tool_call" || issued.command.payload.tool_name !== "shell.exec" ||
+          issued.log.commit.decision !== "ASSERT") throw new Error("fixture HDS did not issue the shell command");
+
+      const tools = new ToolRegistry();
+      registerBuiltinTools(tools);
+      const executor = new Executor({ approval_authority: createExecutorApprovalAuthority(), llm: new StubBackend(), tools });
+      const observation = ShellExecTargetVersionObservationSchema.parse(
+        await executor.inspectCommandTargetVersion(issued.command, { ...process.env, BLUE_TANUKI_SHELL_ROOT: root }),
+      );
+      expect(observation).toMatchObject({ command_digest: operationPlanDigest(issued.command),
+        operation_plan_binding_digest: null, used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(observation)).not.toContain(root);
+      const binding = hds.createExecutionAuthorityBinding(issued.command, observation);
+      const context = approvalContextFromCommand(issued.command, { actor: "fixture-owner" });
+      const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
+      const approved = authority.approve(issued.command, {
+        source: "human_final_review",
+        decision: "approve",
+        approved_by: "fixture-owner",
+        approved_at_ms: 1,
+        upstream_commit_hash: issued.command.upstream_decision.commit_hash,
+        operation: context.operation,
+        risk: context.risk,
+        final_review_required: true,
+        reason: "synthetic final review",
+      }, executorCommandDigest(issued.command), binding, observation);
+      expect(approved).toMatchObject({ id: issued.command.id, payload: issued.command.payload });
+    } finally {
+      if (priorRoot === undefined) delete process.env.BLUE_TANUKI_SHELL_ROOT;
+      else process.env.BLUE_TANUKI_SHELL_ROOT = priorRoot;
+      hds.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("正確なHDS発行commandのsource digestをcanonical command/proofと同じticketへ結合する", () => {
     const { hds, command, log } = issuedCommand("source-binding-1", goalGovernanceConfig());
     const binding = hds.createExecutionAuthorityBinding(command);
