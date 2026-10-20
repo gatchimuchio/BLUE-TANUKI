@@ -585,6 +585,13 @@ function isMemoryCitationReviewLog(value: unknown): value is MemoryCitationRevie
   return value !== null && typeof value === "object" && "kind" in value && value.kind === "memory_citation_review";
 }
 
+function memoryCitationReviewUsesReference(log: MemoryCitationReviewLog,
+  reference: MemoryCitationReviewLog["accepted_citations"][number]["supporting"]): boolean {
+  return log.accepted_citations.some((citation) =>
+    (citation.supporting.record_id === reference.record_id && citation.supporting.version === reference.version) ||
+    (citation.counterevidence.record_id === reference.record_id && citation.counterevidence.version === reference.version));
+}
+
 export class HDSUpperController {
   private state: ControllerState = "IDLE";
   private readonly audit: AuditLog;
@@ -1621,11 +1628,7 @@ ${planControl.question}`,
           dependency.interpretation_id === currentInterpretationId &&
           dependency.judgment_ref === memoryCitationJudgmentRef(log.request_id!, log.command_id,
             dependency.reference.record_id, dependency.reference.version) &&
-          log.accepted_citations.some((citation) =>
-            (citation.supporting.record_id === dependency.reference.record_id &&
-              citation.supporting.version === dependency.reference.version) ||
-            (citation.counterevidence.record_id === dependency.reference.record_id &&
-              citation.counterevidence.version === dependency.reference.version))).map((dependency) => dependency.judgment_ref);
+          memoryCitationReviewUsesReference(log, dependency.reference)).map((dependency) => dependency.judgment_ref);
       }))]
       : [];
     let committed: ReturnType<MeaningUpdateMemoryConsumer["commit"]>;
@@ -1896,8 +1899,22 @@ ${planControl.question}`,
           : undefined;
         if (!snapshot?.record || snapshot.record.application_state !== "active" || !interpretationId ||
             interpretation?.basis_ref !== `${reference.record_id}#${reference.version}`) continue;
+        const reassessesJudgmentRefs = [...new Set(this.audit.list().flatMap(({ log }) => {
+          if (!isMemoryCitationReviewLog(log) || !log.request_id ||
+              (log.status !== "accepted" && log.status !== "accepted_with_rejections")) return [];
+          return (log.interpretation_dependencies ?? []).filter((dependency) =>
+            dependency.reference.record_id === reference.record_id && dependency.reference.version === reference.version &&
+            dependency.interpretation_id !== interpretationId &&
+            dependency.judgment_ref === memoryCitationJudgmentRef(log.request_id!, log.command_id,
+              dependency.reference.record_id, dependency.reference.version) &&
+            memoryCitationReviewUsesReference(log, dependency.reference) &&
+            snapshot.record!.dependent_judgments.some((judgment) => judgment.judgment_ref === dependency.judgment_ref &&
+              judgment.basis_interpretation_id === dependency.interpretation_id && judgment.reassessment_required))
+            .map((dependency) => dependency.judgment_ref);
+        }))];
         interpretationDependencies.push({ reference, interpretation_id: interpretationId,
-          judgment_ref: memoryCitationJudgmentRef(sourceLog.request_id, command.id, reference.record_id, reference.version) });
+          judgment_ref: memoryCitationJudgmentRef(sourceLog.request_id, command.id, reference.record_id, reference.version),
+          ...(reassessesJudgmentRefs.length ? { reassesses_judgment_refs: reassessesJudgmentRefs } : {}) });
       }
       this.audit.append({ ...reviewed.audit_log,
         ...(interpretationDependencies.length ? { interpretation_dependencies: interpretationDependencies } : {}) });

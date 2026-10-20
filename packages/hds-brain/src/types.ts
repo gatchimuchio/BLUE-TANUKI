@@ -175,6 +175,8 @@ export interface MemoryCitationReviewLog {
     reference: MemoryCitationReference;
     interpretation_id: string;
     judgment_ref: string;
+    /** Prior citation judgments explicitly reconsidered by this current-interpretation review. */
+    reassesses_judgment_refs?: string[];
   }>;
   /** Per-record context disposition and reversible, content-free projection differences. */
   /** Missing only on legacy C04.01 audit entries written before this projection was added. */

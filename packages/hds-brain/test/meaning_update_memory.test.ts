@@ -252,6 +252,15 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
         evaluation: nextApprovalEntry.log.evaluation })).toEqual({ ok: true, proposal_digest: nextOwnerReview!.proposal_digest,
         candidate_digest: nextOwnerReview!.proposal.candidate_digest, approval_status: "approved",
         memory_application_status: "applied", follow_up_action_status: "unconfirmed" });
+      const interpretationAfterUpdate = new MeaningUpdateMemoryConsumer(storage, {
+        readVerifiedMemoryApproval: (reference) => ({ ...reference }),
+      });
+      try {
+        expect(interpretationAfterUpdate.readInterpretation(support.f_reference)?.record?.dependent_judgments)
+          .toContainEqual({ judgment_ref: citationJudgmentRefs[0],
+            basis_interpretation_id: meaningUpdateInterpretationId(buildMeaningUpdateMemoryRecord(ownerReview!.proposal)),
+            reassessment_required: true });
+      } finally { interpretationAfterUpdate.close(); }
       const blockedPlanReview = hds.decide(createGatewayInternalInboundRequest({
         id: "plan-review-after-meaning-change", channel: "test", user: "webchat-owner-token-holder",
         content: `plan:review ${JSON.stringify({ plan_id: operationPlanDigest(citationPlan.plan_id),
@@ -262,6 +271,34 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
       }));
       expect(blockedPlanReview.command).toBeNull();
       expect(blockedPlanReview.log.commit.reason).toContain("plan_control_denied:plan_memory_interpretation_reassessment_required");
+
+      const freshRequest = createGatewayInternalInboundRequest({ id: "citation-after-meaning-change",
+        channel: "test", user: "webchat-owner-token-holder",
+        content: `compare ${support.f_reference} with ${counter.f_reference}`, timestamp: 8,
+        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner" },
+      });
+      const freshDecision = hds.decide(freshRequest);
+      if (!freshDecision.command || freshDecision.command.type !== "llm_call") {
+        throw new Error("expected the fresh cited-memory C request");
+      }
+      const freshTrace = freshDecision.log.frame.memory_trace;
+      const freshCitationContent = JSON.stringify({ schema_version: "blue-tanuki.memory-citation-response.v1",
+        answer: "Synthetic reassessment.", citations: [{ claim: "Synthetic reassessment claim.",
+          supporting: { record_id: support.f_reference, version: support.entry_hash },
+          counterevidence: { record_id: counter.f_reference, version: counter.entry_hash },
+          application_scope_id: freshTrace.search_plan!.application_scope_id }] });
+      hds.reviewMemoryCitations(freshDecision.command, { command_id: freshDecision.command.id,
+        status: "success", result: { content: freshCitationContent }, metrics: { duration_ms: 1 } });
+      const freshCitationReview = hds.getAudit().list().map(({ log }) => log).find((log) => "kind" in log &&
+        log.kind === "memory_citation_review" && log.command_id === freshDecision.command!.id);
+      expect(freshCitationReview && "interpretation_dependencies" in freshCitationReview
+        ? freshCitationReview.interpretation_dependencies : undefined).toMatchObject([{
+        reference: { record_id: support.f_reference, version: support.entry_hash },
+        interpretation_id: meaningUpdateInterpretationId(buildMeaningUpdateMemoryRecord(nextOwnerReview!.proposal)),
+        reassesses_judgment_refs: citationJudgmentRefs,
+      }]);
 
       const auditText = JSON.stringify(hds.getAudit().list());
       expect(auditText).not.toContain(candidateMeaning);
