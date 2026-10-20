@@ -1,8 +1,8 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 実施中BUILD_BATCH：`QEB-01-D02.02-PLAN-TASK-IDENTITY-WORKER-AUDIENCE`
+### 直近の完了BUILD_BATCH：`QEB-01-D02.02-PLAN-TASK-IDENTITY-WORKER-AUDIENCE`
 
-開始`main`／`origin/main`=`5de4f3e64859140006e04d5a0839e90f6f9b51c8`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／本指示、D02.02、HDS Operation Plan→Executor→Gateway file-search child→durable receiptを再読した。開始時のdirty差分は同じD02.02 BUILD_BATCHのtask-identity実装であり、未追跡`packages/blue-tanuki/native/linux-isolation/target/`は保持する。
+開始`main`／`origin/main`=`5de4f3e64859140006e04d5a0839e90f6f9b51c8`、実装commit=`620d57fdccce45d91f631844c06dc88d4d2f2e43`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／本指示、D02.02、HDS Operation Plan→Executor→Gateway file-search child→durable receiptを再読した。開始時のdirty差分は同じD02.02 BUILD_BATCHのtask-identity実装であり、未追跡`packages/blue-tanuki/native/linux-isolation/target/`は保持する。
 
 J所有の永続Operation Planから、owner/channel/goal/plan/requestのdigest tupleでstep・改訂をまたぐ非権威task identityを作る。HDS execution sealとExecutor ticket proofへ結合し、ExecutionAdmissionにも載せる。Jはplan taskとadmission digestが一致する場合だけattemptを開始する。Executorは同じdigestを専用childの起動環境とIPC要求へ渡し、child／親がready・request・result・errorで同一値を照合し、SQLite receiptとdigest-only snapshotへ保存する。
 
@@ -10,7 +10,9 @@ J所有の永続Operation Planから、owner/channel/goal/plan/requestのdigest 
 
 Windowsの`pnpm typecheck`／`pnpm build`、Gateway `file_search_worker.test.ts`（9/9）、`operation_plan_runtime.test.ts`（26/26）、Core `executor_hds_authority_binding.test.ts`（5/5）がPASS。初回Core試験のv4 proof digest期待値ずれはfixtureを更新後、同試験を再実行してPASS。実child IPCとSQLite reopen、Jのadmission欠落／別task digest拒否、step間・plan revision後のtask identity継続を確認した。Actionsは未使用。全workspace suite／QE_QC／QE_QA／5OS実機／provider・credential／外部業務作用は未実施。
 
-次consumerはBLUE所有の信頼できるcurrent host/audience identity producerと、その値をprocess audienceへ認証して結ぶ実経路。execution epochは起動世代でありhost identityではない。HDS request ID、D4表示metadata、memory/historyからtaskやhost権限を推定しない。別repo変更、C08.03実provider、P13公開・出荷判断、Linux aggregate workspace quota／D07.02／F01.02はこのbatchの対象外。
+Git閉包：commit `620d57f`を`main`へpushし、remote `main`と`codex/backup-main` tagが同SHA、前世代`codex/backup-main-prev`が開始HEAD `5de4f3e64859140006e04d5a0839e90f6f9b51c8`であることを確認した。作業ツリーの唯一の残差は保持対象の未追跡`packages/blue-tanuki/native/linux-isolation/target/`。
+
+次回開始時は、三点正本・AGENTS・active指示・HEADと差分を読み直す。独立したcurrent host/device identity producerが現物で確認できない限り、D02.02全体は`BUILD_GAP`のままとし、同じhost探索を反復せず、別のBLUE所有producer→consumer接続を選ぶ。execution epochをhost identityと呼ばない。別repo変更、C08.03実provider、P13公開・出荷判断、Linux aggregate workspace quota／D07.02／F01.02はこのbatchの対象外。
 
 ### 保留中の前回BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-AGGREGATE-WORKSPACE-QUOTA`
 
