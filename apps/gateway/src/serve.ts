@@ -1359,7 +1359,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           : cmd.type === "tool_call" && cmd.payload.tool_name === "file.write"
             ? "file_write_target_version_unavailable"
             : cmd.type === "tool_call" && cmd.payload.tool_name === "file.delete"
-              ? "file_delete_target_version_unavailable" : "broker_target_version_unavailable";
+              ? "file_delete_target_version_unavailable"
+              : cmd.type === "tool_call" && cmd.payload.tool_name === "file.edit"
+                ? "file_edit_target_version_unavailable" : "broker_target_version_unavailable";
       const feedback: ExecuteFeedback = { command_id: cmd.id, status: "failed", error: reason, metrics: { duration_ms: 0 } };
       const finalized = finalizeCommandOutput({ hds, command: cmd, feedback, target_surface: "channel", request_id: log.request_id });
       recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {

@@ -9,16 +9,21 @@ import {
   canonicalFileSearchTargetVersionObservation,
   canonicalFileWriteTargetVersionObservation,
   canonicalFileDeleteTargetVersionObservation,
+  canonicalFileEditTargetVersionObservation,
   FileSearchTargetVersionObservationSchema,
   FileWriteTargetVersionObservationSchema,
   FileDeleteTargetVersionObservationSchema,
+  FileEditTargetVersionObservationSchema,
   fileDeleteTargetIdentityDigest,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
+  fileEditPayloadDigest,
+  fileEditTargetIdentityDigest,
   requireToolOperationDescriptor,
   type FileSearchTargetVersionObservation,
   type FileWriteTargetVersionObservation,
   type FileDeleteTargetVersionObservation,
+  type FileEditTargetVersionObservation,
 } from "@blue-tanuki/protocol";
 import { echoTool, type Tool } from "./registry.js";
 import {
@@ -54,6 +59,7 @@ import type {
   FileSearchOptions,
   FileWriteOptions,
   FileDeleteOptions,
+  FileEditOptions,
   GitHubReadOptions,
   GitHubReadResponse,
   GitHubReadTarget,
@@ -80,6 +86,7 @@ export type {
   FileSearchOptions,
   FileWriteOptions,
   FileDeleteOptions,
+  FileEditOptions,
   GitHubReadOptions,
   GitHubReadResponse,
   GitHubReadTarget,
@@ -1863,56 +1870,206 @@ function assertPlannedFileWritePath(pathArg: string): void {
   }
 }
 
-export async function invokeFileEdit(
+interface ResolvedFileEditTargetVersion {
+  readonly sandbox_root: string;
+  readonly filepath: string;
+  readonly relative_path: string;
+  readonly before_buffer: Buffer;
+  readonly after_buffer: Buffer;
+  readonly observation: FileEditTargetVersionObservation;
+}
+
+async function readBoundedFileHandle(handle: Awaited<ReturnType<typeof fs.open>>, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (total <= maxBytes) {
+    const length = Math.min(64_000, maxBytes + 1 - total);
+    if (length <= 0) break;
+    const chunk = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(chunk, 0, length, total);
+    if (bytesRead === 0) break;
+    chunks.push(chunk.subarray(0, bytesRead));
+    total += bytesRead;
+    if (total > maxBytes) throw new Error("file.edit input exceeds max_bytes");
+  }
+  return Buffer.concat(chunks, total);
+}
+
+function fileEditStatIdentity(stat: {
+  dev: bigint; ino: bigint; size: bigint; mode: bigint; nlink: bigint; mtimeNs: bigint; ctimeNs: bigint;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.file-edit-file-identity.v1", stat.dev.toString(), stat.ino.toString(), stat.size.toString(),
+    stat.mode.toString(), stat.nlink.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString(),
+  ]), "utf8").digest("hex");
+}
+
+function sameFileEditInode(left: { dev: bigint; ino: bigint }, right: { dev: bigint; ino: bigint }): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function assertPlannedFileEditPath(pathArg: string): void {
+  if (pathArg.length === 0 || pathArg.length > 512 || path.isAbsolute(pathArg) || pathArg.includes("\\") ||
+      pathArg.includes(":") || pathArg.includes("\0") || pathArg.startsWith("/")) {
+    throw new Error("file.edit plan path must be a bounded relative path");
+  }
+  if (pathArg.split("/").some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+    throw new Error("file.edit plan path must not contain empty or traversal segments");
+  }
+}
+
+async function resolveFileEditTargetVersion(
   args: Record<string, unknown>,
-  opts: FileWriteOptions = {},
-): Promise<unknown> {
-  const env = opts.env ?? process.env;
-  const sandboxRoot = await sandboxRootFromEnv(env);
-  const { filepath, relative_path } = await resolveSandboxFilePath(
-    stringArg(args, "path")!,
-    sandboxRoot,
-  );
+  opts: Pick<FileEditOptions, "env" | "command_digest" | "operation_plan_binding_digest">,
+): Promise<ResolvedFileEditTargetVersion> {
+  const pathArg = stringArg(args, "path")!;
   const search = stringArg(args, "search")!;
   const replace = stringArg(args, "replace")!;
-  if (search === replace) {
-    throw new Error("search and replace must differ");
+  if (search.length === 0 || search === replace || search.length > 1_000_000 || replace.length > 1_000_000 ||
+      !opts.command_digest || !/^[a-f0-9]{64}$/.test(opts.command_digest) ||
+      !opts.operation_plan_binding_digest || !/^[a-f0-9]{64}$/.test(opts.operation_plan_binding_digest) ||
+      Object.keys(args).some((key) => !["path", "search", "replace", "expected_replacements", "max_bytes"].includes(key))) {
+    throw new Error("file.edit target resolver requires a bounded planned command");
   }
-  const expectedReplacements = positiveIntArg(
-    args,
-    "expected_replacements",
-    1,
-    100,
-  );
+  assertPlannedFileEditPath(pathArg);
+  const expectedReplacements = positiveIntArg(args, "expected_replacements", 1, 100);
   const maxBytes = positiveIntArg(args, "max_bytes", 512_000, 1_000_000);
+  const sandboxRoot = await sandboxRootFromEnv(opts.env ?? process.env);
+  const requested = await resolveSandboxFilePath(pathArg, sandboxRoot);
+  const realParent = await fs.realpath(path.dirname(requested.filepath));
+  if (!isPathWithin(sandboxRoot, realParent)) throw new Error("file.edit parent escapes BLUE_TANUKI_FILE_ROOT");
+  const filepath = path.join(realParent, path.basename(requested.filepath));
+  const beforeStat = await fs.lstat(filepath, { bigint: true });
+  if (!beforeStat.isFile() || beforeStat.isSymbolicLink() || beforeStat.nlink !== 1n) {
+    throw new Error("file.edit target must be a regular, non-symlink, single-link file");
+  }
+  if (beforeStat.size > BigInt(maxBytes)) throw new Error("file.edit input exceeds max_bytes");
+  const realFile = await fs.realpath(filepath);
+  if (!isPathWithin(sandboxRoot, realFile)) throw new Error("file.edit target escapes BLUE_TANUKI_FILE_ROOT");
 
-  const beforeBuffer = await fs.readFile(filepath);
-  if (beforeBuffer.includes(0)) {
-    throw new Error("file.edit refuses binary-looking files");
+  const handle = await fs.open(filepath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  let beforeBuffer: Buffer;
+  let observation: FileEditTargetVersionObservation;
+  try {
+    const openedStat = await handle.stat({ bigint: true });
+    if (!openedStat.isFile() || fileEditStatIdentity(openedStat) !== fileEditStatIdentity(beforeStat)) {
+      throw new Error("file.edit target changed while being observed");
+    }
+    beforeBuffer = await readBoundedFileHandle(handle, maxBytes);
+    if (beforeBuffer.includes(0)) throw new Error("file.edit refuses binary-looking files");
+    const before = beforeBuffer.toString("utf8");
+    if (!Buffer.from(before, "utf8").equals(beforeBuffer)) throw new Error("file.edit requires valid UTF-8 input");
+    const parts = before.split(search);
+    const replacements = parts.length - 1;
+    if (replacements !== expectedReplacements) {
+      throw new Error(`file.edit expected ${expectedReplacements} replacement(s), found ${replacements}`);
+    }
+    const afterBuffer = Buffer.from(parts.join(replace), "utf8");
+    if (afterBuffer.length > maxBytes) throw new Error("file.edit output exceeds max_bytes");
+
+    const afterReadStat = await handle.stat({ bigint: true });
+    const afterReadPathStat = await fs.lstat(filepath, { bigint: true });
+    if (fileEditStatIdentity(afterReadStat) !== fileEditStatIdentity(openedStat) ||
+        fileEditStatIdentity(afterReadPathStat) !== fileEditStatIdentity(openedStat)) {
+      throw new Error("file.edit target changed while being observed");
+    }
+    const rootStat = await fs.stat(sandboxRoot, { bigint: true });
+    const parentStat = await fs.stat(realParent, { bigint: true });
+    observation = FileEditTargetVersionObservationSchema.parse({
+      schema_version: "blue-tanuki.file-edit-target-version.v1",
+      target_identity_digest: fileEditTargetIdentityDigest(pathArg),
+      before_content_digest: createHash("sha256").update(beforeBuffer).digest("hex"),
+      after_content_digest: createHash("sha256").update(afterBuffer).digest("hex"),
+      file_identity_digest: fileEditStatIdentity(openedStat),
+      canonical_root_digest: createHash("sha256").update(JSON.stringify([
+        "blue-tanuki.file-edit-root-identity.v1", sandboxRoot, rootStat.dev.toString(), rootStat.ino.toString(),
+      ]), "utf8").digest("hex"),
+      parent_identity_digest: createHash("sha256").update(JSON.stringify([
+        "blue-tanuki.file-edit-parent-identity.v1", realParent, parentStat.dev.toString(), parentStat.ino.toString(),
+      ]), "utf8").digest("hex"),
+      edit_payload_digest: fileEditPayloadDigest({ search, replace, expected_replacements: expectedReplacements, max_bytes: maxBytes }),
+      command_digest: opts.command_digest,
+      operation_plan_binding_digest: opts.operation_plan_binding_digest,
+      replacement_count: replacements,
+      target_state: "present",
+      used_for_authority: false,
+      may_execute: false,
+    });
+    return { sandbox_root: sandboxRoot, filepath, relative_path: requested.relative_path, before_buffer: beforeBuffer,
+      after_buffer: afterBuffer, observation };
+  } finally {
+    await handle.close();
   }
-  if (beforeBuffer.length > maxBytes) {
-    throw new Error(`file.edit input exceeds max_bytes (${beforeBuffer.length} > ${maxBytes})`);
+}
+
+export async function inspectFileEditTargetVersion(
+  args: Record<string, unknown>,
+  opts: Pick<FileEditOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
+): Promise<FileEditTargetVersionObservation> {
+  return (await resolveFileEditTargetVersion(args, opts)).observation;
+}
+
+/** Edit only the exact J-selected file version and payload; raw content stays out of the observation. */
+export async function invokeFileEdit(
+  args: Record<string, unknown>,
+  opts: FileEditOptions = {},
+): Promise<unknown> {
+  if (!opts.expected_target_version || !opts.command_digest || !opts.operation_plan_binding_digest) {
+    throw new Error("file.edit requires matching J-selected target evidence");
   }
-  const before = beforeBuffer.toString("utf8");
-  const parts = before.split(search);
-  const replacements = parts.length - 1;
-  if (replacements !== expectedReplacements) {
-    throw new Error(
-      `file.edit expected ${expectedReplacements} replacement(s), found ${replacements}`,
-    );
+  const expected = FileEditTargetVersionObservationSchema.parse(opts.expected_target_version);
+  if (!/^[a-f0-9]{64}$/.test(opts.command_digest) || !/^[a-f0-9]{64}$/.test(opts.operation_plan_binding_digest) ||
+      expected.command_digest !== opts.command_digest ||
+      expected.operation_plan_binding_digest !== opts.operation_plan_binding_digest) {
+    throw new Error("file.edit target evidence does not match the approved command or plan source");
   }
-  const after = parts.join(replace);
-  const afterBytes = Buffer.byteLength(after, "utf8");
-  if (afterBytes > maxBytes) {
-    throw new Error(`file.edit output exceeds max_bytes (${afterBytes} > ${maxBytes})`);
+  const resolved = await resolveFileEditTargetVersion(args, opts);
+  if (canonicalFileEditTargetVersionObservation(resolved.observation) !==
+      canonicalFileEditTargetVersionObservation(expected)) {
+    throw new Error("file.edit target version changed; request fresh review");
   }
-  await fs.writeFile(filepath, after, { encoding: "utf8", flag: "w" });
-  return {
-    path: relative_path,
-    sandbox_root: sandboxRoot,
-    replacements,
-    bytes_written: afterBytes,
-  };
+
+  const handle = await fs.open(resolved.filepath, fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const openedStat = await handle.stat({ bigint: true });
+    const pathStat = await fs.lstat(resolved.filepath, { bigint: true });
+    if (!openedStat.isFile() || fileEditStatIdentity(openedStat) !== expected.file_identity_digest ||
+        fileEditStatIdentity(pathStat) !== expected.file_identity_digest) {
+      throw new Error("file.edit target version changed; request fresh review");
+    }
+    const currentBuffer = await readBoundedFileHandle(handle, positiveIntArg(args, "max_bytes", 512_000, 1_000_000));
+    if (createHash("sha256").update(currentBuffer).digest("hex") !== expected.before_content_digest ||
+        !currentBuffer.equals(resolved.before_buffer)) {
+      throw new Error("file.edit target version changed; request fresh review");
+    }
+    const beforeWriteStat = await handle.stat({ bigint: true });
+    const beforeWritePathStat = await fs.lstat(resolved.filepath, { bigint: true });
+    if (fileEditStatIdentity(beforeWriteStat) !== expected.file_identity_digest ||
+        fileEditStatIdentity(beforeWritePathStat) !== expected.file_identity_digest) {
+      throw new Error("file.edit target version changed; request fresh review");
+    }
+    let offset = 0;
+    while (offset < resolved.after_buffer.length) {
+      const { bytesWritten } = await handle.write(resolved.after_buffer, offset,
+        resolved.after_buffer.length - offset, offset);
+      if (bytesWritten <= 0) throw new Error("file.edit write did not make progress");
+      offset += bytesWritten;
+    }
+    await handle.truncate(resolved.after_buffer.length);
+    await handle.sync();
+    const finalBuffer = await readBoundedFileHandle(handle, Math.max(resolved.after_buffer.length, 1));
+    if (createHash("sha256").update(finalBuffer).digest("hex") !== expected.after_content_digest) {
+      throw new Error("file.edit result could not be confirmed; request fresh review");
+    }
+    const finalStat = await handle.stat({ bigint: true });
+    const finalPathStat = await fs.lstat(resolved.filepath, { bigint: true });
+    if (!sameFileEditInode(finalStat, finalPathStat) || !finalPathStat.isFile() || finalPathStat.isSymbolicLink()) {
+      throw new Error("file.edit target changed during commit; result is uncertain");
+    }
+    return { edited: true, replacements: expected.replacement_count, bytes_written: resolved.after_buffer.length };
+  } finally {
+    await handle.close();
+  }
 }
 
 export const fileSearchTool: Tool = {
@@ -1989,8 +2146,25 @@ export const fileEditTool: Tool = {
   name: "file.edit",
   description: "Perform an exact UTF-8 text replacement under BLUE_TANUKI_FILE_ROOT.",
   required_capabilities: requireToolOperationDescriptor("file.edit").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeFileEdit(args);
+  async inspect_target_version(args: Record<string, unknown>, options?: {
+    env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
+  }): Promise<FileEditTargetVersionObservation> {
+    return await inspectFileEditTargetVersion(args, options);
+  },
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    const targetVersion = context.target_version_observation;
+    if (targetVersion?.schema_version !== "blue-tanuki.file-edit-target-version.v1") {
+      throw new Error("file.edit requires Broker target version evidence");
+    }
+    if (typeof context.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(context.command_digest)) {
+      throw new Error("file.edit requires an approved Executor command identity");
+    }
+    return await invokeFileEdit(args, {
+      ...(context.target_version_observation ? {} : {}),
+      expected_target_version: targetVersion,
+      command_digest: targetVersion.command_digest,
+      operation_plan_binding_digest: targetVersion.operation_plan_binding_digest,
+    });
   },
 };
 

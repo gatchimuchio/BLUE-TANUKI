@@ -10,7 +10,8 @@ type Binding = Plan["bindings"][number];
 
 /** 実作用の結果記録はMを非権威に保ち、記録だけで権限や成功判定を発行しない。 */
 export function resultMemoryEligible(b: Binding): boolean {
-  if (b.status === "verified") return b.operation === "file.search" || b.operation === "file.write" || b.operation === "file.delete";
+  if (b.status === "verified") return b.operation === "file.search" || b.operation === "file.write" ||
+    b.operation === "file.delete" || b.operation === "file.edit";
   return b.status === "outcome_unknown" && !!b.execution_admission && !!b.delivery_digest && !!b.result_digest;
 }
 
@@ -30,7 +31,7 @@ export function resultObservation(p: Plan, b: Binding) {
   }
   if (b.status !== "verified" || !b.execution_admission || !b.delivery_digest || !b.result_digest ||
       !result) throw new Error("plan_memory_observation_not_eligible");
-  if (b.operation === "file.write" || b.operation === "file.delete") {
+  if (b.operation === "file.write" || b.operation === "file.delete" || b.operation === "file.edit") {
     return {
       schema_version: "operation-action-result.v1", record_type: "action_result_observation",
       plan_revision_digest: b.revision_digest, step_review_request_id: b.request_id,

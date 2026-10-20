@@ -12,6 +12,7 @@ import {
   invokeFileWrite,
   inspectFileDeleteTargetVersion,
   invokeFileDelete,
+  inspectFileEditTargetVersion,
   invokeFileEdit,
   invokeHttpFetch,
   invokeWebSearch,
@@ -430,18 +431,23 @@ describe("built-in tools", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-tool-"));
     try {
       await fs.writeFile(path.join(dir, "a.txt"), "one fish\none bird\n", "utf8");
-      const edited = await invokeFileEdit(
-        {
-          path: "a.txt",
-          search: "one",
-          replace: "blue",
-          expected_replacements: 2,
-        },
-        fileSearchEnv(dir),
-      );
-      expect(edited).toMatchObject({
+      const args = {
         path: "a.txt",
+        search: "one",
+        replace: "blue",
+        expected_replacements: 2,
+      };
+      const options = { ...fileSearchEnv(dir), command_digest: "a".repeat(64),
+        operation_plan_binding_digest: "b".repeat(64) };
+      const targetVersion = await inspectFileEditTargetVersion(args, options);
+      const edited = await invokeFileEdit(
+        args,
+        { ...options, expected_target_version: targetVersion },
+      );
+      expect(edited).toEqual({
+        edited: true,
         replacements: 2,
+        bytes_written: Buffer.byteLength("blue fish\nblue bird\n"),
       });
       expect(await fs.readFile(path.join(dir, "a.txt"), "utf8")).toBe(
         "blue fish\nblue bird\n",
@@ -454,21 +460,40 @@ describe("built-in tools", () => {
   it("file.edit refuses replacement-count mismatch and binary-looking files", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-tool-"));
     try {
+      const options = { ...fileSearchEnv(dir), command_digest: "a".repeat(64),
+        operation_plan_binding_digest: "b".repeat(64) };
       await fs.writeFile(path.join(dir, "a.txt"), "one one\n", "utf8");
       await expect(
-        invokeFileEdit(
+        inspectFileEditTargetVersion(
           { path: "a.txt", search: "one", replace: "two" },
-          fileSearchEnv(dir),
+          options,
         ),
       ).rejects.toThrow(/expected 1 replacement/);
 
       await fs.writeFile(path.join(dir, "b.bin"), Buffer.from([0, 1, 2]));
       await expect(
-        invokeFileEdit(
+        inspectFileEditTargetVersion(
           { path: "b.bin", search: "x", replace: "y" },
-          fileSearchEnv(dir),
+          options,
         ),
       ).rejects.toThrow(/binary/);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("file.edit rejects a target changed after J-selected preflight and preserves the changed content", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-tool-"));
+    try {
+      const args = { path: "a.txt", search: "one", replace: "blue" };
+      const options = { ...fileSearchEnv(dir), command_digest: "a".repeat(64),
+        operation_plan_binding_digest: "b".repeat(64) };
+      await fs.writeFile(path.join(dir, "a.txt"), "one fish\n", "utf8");
+      const targetVersion = await inspectFileEditTargetVersion(args, options);
+      await fs.writeFile(path.join(dir, "a.txt"), "one owner changed this\n", "utf8");
+      await expect(invokeFileEdit(args, { ...options, expected_target_version: targetVersion }))
+        .rejects.toThrow(/target version changed/);
+      expect(await fs.readFile(path.join(dir, "a.txt"), "utf8")).toBe("one owner changed this\n");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

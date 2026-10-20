@@ -6,6 +6,9 @@ import {
   canonicalFileSearchTargetVersionObservation,
   FileWriteTargetVersionObservationSchema,
   FileDeleteTargetVersionObservationSchema,
+  FileEditTargetVersionObservationSchema,
+  fileEditPayloadDigest,
+  fileEditTargetIdentityDigest,
   fileWritePayloadDigest,
   fileWriteTargetIdentityDigest,
   fileDeleteTargetIdentityDigest,
@@ -45,7 +48,7 @@ import {
   type ComputeRequest,
 } from "./llm/compute.js";
 import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolRegistry } from "./tools/registry.js";
-import { fileDeleteTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "./tools/builtin.js";
+import { fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest } from "./tools/google_write.js";
 import type { SessionStore } from "./sessions/types.js";
@@ -290,6 +293,25 @@ function approveCommandForExecution(
         throw new Error("Executor approval rejected: file.delete target version does not match command or plan source");
       }
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "file.edit") {
+      const observation = FileEditTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      const args = snapshot.payload.arguments;
+      const expectedReplacements = args.expected_replacements === undefined ? 1 : args.expected_replacements;
+      const maxBytes = args.max_bytes === undefined ? 512_000 : args.max_bytes;
+      if (!hds_binding?.operation_plan_binding_digest || typeof args.path !== "string" ||
+          typeof args.search !== "string" || args.search.length === 0 || typeof args.replace !== "string" ||
+          args.search === args.replace || !Number.isInteger(expectedReplacements) ||
+          (expectedReplacements as number) < 1 || (expectedReplacements as number) > 100 ||
+          !Number.isInteger(maxBytes) || (maxBytes as number) < 1 || (maxBytes as number) > 1_000_000 ||
+          Object.keys(args).some((key) => !["path", "search", "replace", "expected_replacements", "max_bytes"].includes(key)) ||
+          observation.command_digest !== operationPlanDigest(snapshot) ||
+          observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest ||
+          observation.target_identity_digest !== fileEditTargetIdentityDigest(args.path) ||
+          observation.edit_payload_digest !== fileEditPayloadDigest({ search: args.search, replace: args.replace,
+            expected_replacements: expectedReplacements as number, max_bytes: maxBytes as number })) {
+        throw new Error("Executor approval rejected: file.edit target version does not match command or plan source");
+      }
+      target_version_observation = Object.freeze(observation);
     } else if (snapshot.payload.tool_name === "gmail.write" &&
         ["draft.create", "message.send", "draft.send"].includes(String(snapshot.payload.arguments.operation))) {
       const observation = GmailWriteTargetVersionObservationSchema.parse(rawTargetVersionObservation);
@@ -331,6 +353,11 @@ function approveCommandForExecution(
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.delete" &&
       target_version_observation?.schema_version !== "blue-tanuki.file-delete-target-version.v1") {
     throw new Error("Executor approval rejected: file.delete target version evidence is required");
+  }
+  if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.edit" &&
+      (!hds_binding?.operation_plan_binding_digest ||
+        target_version_observation?.schema_version !== "blue-tanuki.file-edit-target-version.v1")) {
+    throw new Error("Executor approval rejected: file.edit requires an Operation Plan-bound target version observation");
   }
   if (!hds_binding && runtime.require_hds_execution_binding) {
     throw new Error("Executor approval rejected: HDS execution authority binding is required");
@@ -519,6 +546,34 @@ export class Executor {
           observation.target_identity_digest !== fileDeleteTargetIdentityDigest(String(command.payload.arguments.path ?? "")) ||
           observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
         throw new Error("file.delete target version resolver returned evidence for another command or plan source");
+      }
+      return Object.freeze(observation);
+    }
+    if (command.payload.tool_name === "file.edit") {
+      if (operationPlanBindingDigest === undefined) {
+        throw new Error("file.edit requires a selected Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("file.edit");
+      if (tool !== fileEditTool || !tool.inspect_target_version) {
+        throw new Error("file.edit target version resolver requires the registered built-in adapter");
+      }
+      const observation = FileEditTargetVersionObservationSchema.parse(
+        await tool.inspect_target_version(command.payload.arguments, {
+          ...(env ? { env } : {}),
+          operation_plan_binding_digest: operationPlanBindingDigest,
+          command_digest: operationPlanDigest(command),
+        }),
+      );
+      const args = command.payload.arguments;
+      const expectedReplacements = args.expected_replacements === undefined ? 1 : args.expected_replacements;
+      const maxBytes = args.max_bytes === undefined ? 512_000 : args.max_bytes;
+      if (typeof args.path !== "string" || typeof args.search !== "string" || typeof args.replace !== "string" ||
+          observation.command_digest !== operationPlanDigest(command) ||
+          observation.target_identity_digest !== fileEditTargetIdentityDigest(args.path) ||
+          observation.edit_payload_digest !== fileEditPayloadDigest({ search: args.search, replace: args.replace,
+            expected_replacements: expectedReplacements as number, max_bytes: maxBytes as number }) ||
+          observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
+        throw new Error("file.edit target version resolver returned evidence for another command or plan source");
       }
       return Object.freeze(observation);
     }

@@ -486,6 +486,24 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
     if (typeof maxBytes !== "number" || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 1_000_000) return false;
     return Object.keys(parameters).every((key) => ["path", "max_bytes"].includes(key));
   }
+  if (step.operation === "file.edit") {
+    if (step.adapter !== "internal_runtime" || step.target.kind !== "file" || !parameters ||
+        typeof parameters.path !== "string" || parameters.path.length === 0 || parameters.path.length > 512 ||
+        parameters.path !== step.target.id || parameters.path.startsWith("/") || parameters.path.includes("\\") ||
+        parameters.path.includes(":") || parameters.path.includes("\0") ||
+        parameters.path.split("/").some((part) => part.length === 0 || part === "." || part === "..") ||
+        typeof parameters.search !== "string" || parameters.search.length === 0 ||
+        typeof parameters.replace !== "string" || parameters.search === parameters.replace ||
+        Buffer.byteLength(parameters.search, "utf8") > 1_000_000 || Buffer.byteLength(parameters.replace, "utf8") > 1_000_000 ||
+        step.effects.length !== 2 || step.effects[0] !== "read" || step.effects[1] !== "write") return false;
+    const expectedReplacements = parameters.expected_replacements ?? 1;
+    const maxBytes = parameters.max_bytes ?? 512_000;
+    if (typeof expectedReplacements !== "number" || !Number.isInteger(expectedReplacements) ||
+        expectedReplacements < 1 || expectedReplacements > 100 || typeof maxBytes !== "number" ||
+        !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 1_000_000) return false;
+    return Object.keys(parameters).every((key) =>
+      ["path", "search", "replace", "expected_replacements", "max_bytes"].includes(key));
+  }
   if (step.operation !== "gmail.write" || step.adapter !== "external_api" ||
       step.target.kind !== "external_service" || step.target.id !== "gmail" || !parameters) return false;
   if (parameters.operation === "draft.send") {
@@ -1569,7 +1587,7 @@ export class OperationPlanLedger {
       if (bindings.length !== 1) throw new Error("plan_compute_source_observation_binding_unavailable");
       const binding = bindings[0]!;
       const operation = step.operation;
-      if ((operation !== "file.write" && operation !== "file.delete" && operation !== "file.search") ||
+      if ((operation !== "file.write" && operation !== "file.delete" && operation !== "file.edit" && operation !== "file.search") ||
           binding.operation !== operation || binding.status !== "verified" ||
           binding.step_digest !== stepDigest(step) || !binding.execution_admission || !binding.delivery_digest ||
           !binding.result_digest || !binding.memory_commit || !binding.memory_receipt ||
@@ -1614,10 +1632,11 @@ export class OperationPlanLedger {
         used_for_authority: false as const,
         may_execute: false as const,
       };
-      if (operation === "file.write" || operation === "file.delete") {
+      if (operation === "file.write" || operation === "file.delete" || operation === "file.edit") {
         observations.push(OperationPlanComputeSourceObservationSchema.parse({
           ...common,
-          source: operation === "file.write" ? "verified_file_write_result" : "verified_file_delete_result",
+          source: operation === "file.write" ? "verified_file_write_result" :
+            operation === "file.delete" ? "verified_file_delete_result" : "verified_file_edit_result",
           operation,
         }));
       } else {

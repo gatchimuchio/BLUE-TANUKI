@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileSearchTool, fileWriteTool, LLMComputeAdapter, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
+import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, LLMComputeAdapter, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -84,6 +84,21 @@ function fileDeleteCandidate(id: string): OperationPlan {
     rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
+function fileEditCandidate(id: string): OperationPlan {
+  const target = { kind: "file" as const, id: "notes.txt" };
+  const output = { edited: true, replacements: 1, bytes_written: Buffer.byteLength("synthetic edited text\n") };
+  return { version: "operation-core.v1", plan_id: "plan-" + id, request_id: id, state: "planned",
+    steps: [{ step_id: "edit-note", operation: "file.edit", target, state: "planned", effects: ["read", "write"],
+      permission: { risk: "medium", approval_level: "L2_operate", final_review_required: false,
+        hds_brain_authority_required: true, approval_gate_required: true },
+      adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
+      parameters: { path: "notes.txt", search: "original", replace: "edited", expected_replacements: 1, max_bytes: 128 },
+      preparation: { depends_on: [], bindings: [], preconditions: [],
+        validation: [{ check_id: "edited-note", method: "result_equals", target, expected: output }],
+        compensation: { available: false, reason: "an in-place edit requires a newly reviewed edit to restore" } } }],
+    rollback: { available: false }, raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false, hds_brain_authority_required: true };
+}
 function review(hds: HDSUpperController, plan: OperationPlan, step_id: string) {
   const p = hds.getRuntimeSnapshot().operation_plans.plans[0]!;
   return hds.decide(request(`plan:review ${JSON.stringify({ plan_id: plan.plan_id, revision_digest: p.revision_digest, step_id })}`)).command;
@@ -117,7 +132,7 @@ async function setup(root: string, workspace: string, planFactory: (id: string, 
   const hds = createHds();
   const origin = request("plan:compute 合成の実行結果を後続へ安全に返す");
   const plan = planFactory(origin.id, workspace); const tools = new ToolRegistry();
-  tools.register(fileSearchTool); tools.register(fileWriteTool); tools.register(fileDeleteTool);
+  tools.register(fileSearchTool); tools.register(fileWriteTool); tools.register(fileDeleteTool); tools.register(fileEditTool);
   const authority = createExecutorApprovalAuthority({ execution_store: execution, execution_epoch: executionEpoch,
     require_hds_execution_binding: true });
   const actualWorker = createFileSearchWorker({ execution_epoch: executionEpoch,
@@ -159,7 +174,7 @@ function testGoalGovernance() {
 }
 
 function installTestPurpose(hds: HDSUpperController) {
-  const purposeText = "Keep synthetic file-write results as non-authoritative history and ask for fresh evidence before claiming current state.";
+  const purposeText = "Keep synthetic file action results as non-authoritative history and ask for fresh evidence before claiming current state.";
   const purposeDigest = createHash("sha256").update(purposeText, "utf8").digest("hex");
   const binding = { goal_ref: "goal_0123456789abcdef", purpose_version: 3, purpose_digest: purposeDigest };
   const requestId = randomUUID();
@@ -328,6 +343,97 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(c.execution.pendingResults()).toHaveLength(0);
   }, fileDeleteCandidate, (workspace) => writeFileSync(join(workspace, "notes.txt"), "synthetic delete target\n")));
 
+  it("Operation Planから実行したfile.edit結果をJ/Mへ返し、明示選択後に非権威観測としてCへ渡す", async () => fixture(async (c) => {
+    const operationPlanBindingDigest = c.hds.getExecutionOperationPlanBindingDigest(c.cmd);
+    const observedTarget = await c.executor.inspectCommandTargetVersion(c.cmd, undefined, operationPlanBindingDigest);
+    expect(observedTarget?.schema_version).toBe("blue-tanuki.file-edit-target-version.v1");
+    expect(() => c.hds.createExecutionAuthorityBinding(c.cmd, { ...observedTarget!,
+      operation_plan_binding_digest: "f".repeat(64) })).toThrow(/current Operation Plan source/);
+
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    expect(feedback.result).toEqual({ edited: true, replacements: 1,
+      bytes_written: Buffer.byteLength("synthetic edited text\n") });
+    expect(readFileSync(join(c.workspace, "notes.txt"), "utf8")).toBe("synthetic edited text\n");
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
+      .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
+
+    const checkpoint = c.j.load()!.plans[0]!;
+    const binding = checkpoint.bindings[0]!;
+    expect(binding).toMatchObject({ status: "verified", operation: "file.edit",
+      delivery_digest: expect.stringMatching(/^[a-f0-9]{64}$/), memory_receipt: expect.objectContaining({ revision: 1 }) });
+    expect(checkpoint.results[0]?.output).toEqual(feedback.result);
+    const memory = inspectMemory(c);
+    expect(memory.revision).toBe(1);
+    expect(memory.records).toHaveLength(1);
+    const observation = memory.records[0];
+    expect(observation).toMatchObject({ schema_version: "operation-action-result.v1", record_type: "action_result_observation",
+      plan_revision_digest: operationPlanDigest(c.plan), step_review_request_id: c.cmd.upstream_decision.request_id,
+      command_id: c.cmd.id, upstream_commit_hash: c.cmd.upstream_decision.commit_hash,
+      operation: "file.edit", delivery_digest: binding.delivery_digest, result_digest: binding.result_digest,
+      plan_binding_status: "verified", plan_validation_status: "matched", effect_observation: "reported_success",
+      adoption_status: "observation_only", used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    const memoryJson = JSON.stringify(observation);
+    for (const raw of [c.workspace, "notes.txt", "synthetic original text", "synthetic edited text"]) {
+      expect(memoryJson).not.toContain(raw);
+    }
+    expect(c.execution.pendingResults()).toHaveLength(0);
+
+    c.hds.closeOperationPlanMemory();
+    c.hds = c.createHds(c.j, true);
+    c.purposeBinding = installTestPurpose(c.hds);
+    const sourceCheckpoint = c.j.load()!.plans[0]!;
+    const sourceRevision = sourceCheckpoint.revisions.at(-1)!;
+    const sourceRef = { plan_id_digest: operationPlanDigest(c.plan.plan_id), revision_digest: sourceRevision.digest,
+      step_id_digest: operationPlanDigest(c.plan.steps[0]!.step_id) };
+    const expectedTaskIdentityDigest = planTaskIdentityDigest(sourceCheckpoint.owner, sourceCheckpoint.channel,
+      sourceCheckpoint.goal, c.plan.plan_id, c.plan.request_id);
+    const destinationRequestId = randomUUID();
+    const task = "Use the selected historical edit report only as context; require fresh observation before claiming current file state.";
+    const computeRequest = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: "fixture-owner",
+      content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: c.purposeBinding, source_observation_refs: [sourceRef] })}`,
+      timestamp: Date.now(), metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.version": "operation-core.v1",
+        "blue_tanuki.operation_core.request_id": destinationRequestId } });
+    const compute = c.hds.decide(computeRequest);
+    if (compute.command?.type !== "llm_call") throw new Error(`selected edit observation was not routed to C: ${compute.log.commit.reason}`);
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v5");
+    expect(compute.command.payload.compute_context?.data_exposure.input_sources)
+      .toContain("selected_operation_result_observations");
+    const serializedInput = JSON.stringify(compute.command.payload.messages);
+    expect(serializedInput).toContain("verified_file_edit_result");
+    expect(serializedInput).toContain("reported_success");
+    expect(serializedInput).toContain(expectedTaskIdentityDigest);
+    expect(serializedInput).toContain(sourceRef.plan_id_digest);
+    for (const forbidden of [c.workspace, "notes.txt", "synthetic original text", "synthetic edited text"]) {
+      expect(serializedInput).not.toContain(forbidden);
+    }
+
+    const invalidRequest = createGatewayInternalInboundRequest({ ...computeRequest, id: randomUUID(),
+      content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: c.purposeBinding,
+        source_observation_refs: [{ ...sourceRef, step_id_digest: "f".repeat(64) }] })}`, timestamp: Date.now() });
+    const invalid = c.hds.decide(invalidRequest);
+    expect(invalid.command?.type).not.toBe("llm_call");
+    expect(invalid.log.commit.reason).toContain("plan_control_denied:plan_compute_source_observation_step_mismatch");
+
+    const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
+    c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
+      metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+    const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
+      entry.plan_id === operationPlanDigest(nextCandidate.plan_id));
+    expect(retained?.compute_source_observations).toMatchObject([{ source: "verified_file_edit_result",
+      operation: "file.edit", task_identity_digest: expectedTaskIdentityDigest,
+      effect_observation: "reported_success", adoption_status: "observation_only",
+      used_as_world_truth: false, used_for_authority: false, may_execute: false }]);
+    const retainedJson = JSON.stringify(retained?.compute_source_observations);
+    for (const forbidden of [c.workspace, "notes.txt", "synthetic original text", "synthetic edited text"]) {
+      expect(retainedJson).not.toContain(forbidden);
+    }
+  }, fileEditCandidate, (workspace) => writeFileSync(join(workspace, "notes.txt"), "synthetic original text\n")));
+
   it("明示選択されたfile.write履歴はdigestだけを後続plan:computeへ渡し、候補保持前にも再照合する", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
@@ -425,7 +531,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     expect(compute.command.payload.compute_context?.local_p_version)
-      .toBe("blue-tanuki.plan-compute-source-observations.v4");
+      .toBe("blue-tanuki.plan-compute-source-observations.v5");
     const serializedInput = JSON.stringify(compute.command.payload.messages);
     expect(serializedInput).toContain("verified_file_delete_result");
     expect(serializedInput).toContain("reported_success");
@@ -491,7 +597,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const destinationRequestId = randomUUID();
     const compute = c.hds.decide(makeComputeRequest(destinationRequestId));
     if (compute.command?.type !== "llm_call") throw new Error(`selected search observation was not routed to C: ${compute.log.commit.reason}`);
-    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v4");
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v5");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const observationMessage = compute.command.payload.messages.find((message) =>

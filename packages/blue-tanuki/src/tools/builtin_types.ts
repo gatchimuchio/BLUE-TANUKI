@@ -1,5 +1,5 @@
 import type { FileSearchTargetVersionObservation, FileWriteTargetVersionObservation,
-  FileDeleteTargetVersionObservation } from "@blue-tanuki/protocol";
+  FileDeleteTargetVersionObservation, FileEditTargetVersionObservation } from "@blue-tanuki/protocol";
 
 export type Env = Record<string, string | undefined>;
 
@@ -141,6 +141,13 @@ export interface FileWriteOptions {
 export interface FileDeleteOptions {
   env?: Env;
   expected_target_version?: FileDeleteTargetVersionObservation;
+  operation_plan_binding_digest?: string;
+  command_digest?: string;
+}
+
+export interface FileEditOptions {
+  env?: Env;
+  expected_target_version?: FileEditTargetVersionObservation;
   operation_plan_binding_digest?: string;
   command_digest?: string;
 }
