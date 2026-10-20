@@ -646,6 +646,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   ["channel", item.channel || "unknown", false],
                   ["target", item.target || "unknown", false],
                   ["time", item.time || "not set", false],
+                  ["time zone", item.time_zone || "host local", false],
                   ["interval", formatInterval(item.interval_ms), false],
                   ["pending", pending, true],
                   ["approval", item.pending_command_id || "none", false],

@@ -4,7 +4,13 @@ import * as path from "node:path";
 import type { Tool } from "@blue-tanuki/core";
 import type { ApprovalEvaluation } from "@blue-tanuki/hds-brain";
 import { requireToolOperationDescriptor, type ExecuteCommand } from "@blue-tanuki/protocol";
-import { cronPayloadHash, type CronSchedulerChannel, type CronTaskOptions } from "./cron_channel.js";
+import {
+  canonicalizeCronTimeZone,
+  cronPayloadHash,
+  systemCronTimeZone,
+  type CronSchedulerChannel,
+  type CronTaskOptions,
+} from "./cron_channel.js";
 
 type Env = Record<string, string | undefined>;
 type RuntimeScheduleOperation = "create" | "update" | "delete";
@@ -17,6 +23,7 @@ export interface RuntimeSchedule {
   target: string;
   content: string;
   time?: string;
+  time_zone?: string;
   interval_ms?: number;
   created_at_ms: number;
   updated_at_ms: number;
@@ -31,6 +38,7 @@ export interface RuntimeScheduleSnapshot {
   channel: string;
   target: string;
   time: string;
+  time_zone?: string;
   interval_ms?: number;
   created_at_ms: number;
   updated_at_ms: number;
@@ -139,13 +147,13 @@ export class RuntimeScheduleManager {
       },
       {
         name: "schedule.create",
-        description: "Activate a previously approved runtime schedule create request.",
+        description: "Activate a previously approved runtime schedule create request. Daily time schedules bind an IANA time_zone; omitted values capture the host local zone.",
         required_capabilities: requireToolOperationDescriptor("schedule.create").required_capabilities,
         invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
       },
       {
         name: "schedule.update",
-        description: "Activate a previously approved runtime schedule update request.",
+        description: "Activate a previously approved runtime schedule update request. Daily time schedules bind an IANA time_zone; omitted values capture the host local zone.",
         required_capabilities: requireToolOperationDescriptor("schedule.update").required_capabilities,
         invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
       },
@@ -394,6 +402,7 @@ export class RuntimeScheduleManager {
       target: schedule.target,
       content: schedule.content,
       time: schedule.time,
+      time_zone: schedule.time_zone,
       interval_ms: schedule.interval_ms,
       payload_hash: schedule.payload_hash,
     };
@@ -408,6 +417,7 @@ export class RuntimeScheduleManager {
       channel: schedule.channel,
       target: schedule.target,
       time: schedule.time ?? "07:00",
+      time_zone: schedule.time_zone,
       interval_ms: schedule.interval_ms,
       created_at_ms: schedule.created_at_ms,
       updated_at_ms: schedule.updated_at_ms,
@@ -464,6 +474,7 @@ function buildScheduleFromArgs(
   const content = stringArg(args, "content", previous?.content);
   const time = optionalTime(args.time, previous?.time);
   const interval_ms = optionalInterval(args.interval_ms, previous?.interval_ms);
+  const requestedTimeZone = optionalTimeZone(args.time_zone, previous?.time_zone);
   const timeWasProvided = args.time !== undefined;
   const intervalWasProvided = args.interval_ms !== undefined;
   const selectedTime = timeWasProvided && args.time !== null ? time :
@@ -473,6 +484,10 @@ function buildScheduleFromArgs(
   if ((selectedTime === undefined) === (selectedInterval === undefined)) {
     throw new Error("schedule requires exactly one trigger: time=HH:MM or interval_ms; nothing was activated");
   }
+  if (selectedTime === undefined && args.time_zone !== undefined && args.time_zone !== null) {
+    throw new Error("time_zone applies only to daily time schedules; nothing was activated");
+  }
+  const time_zone = selectedTime === undefined ? undefined : requestedTimeZone ?? systemCronTimeZone();
   return {
     id,
     origin: "runtime",
@@ -481,10 +496,11 @@ function buildScheduleFromArgs(
     target,
     content,
     time: selectedTime,
+    time_zone,
     interval_ms: selectedInterval,
     created_at_ms: previous?.created_at_ms ?? now,
     updated_at_ms: now,
-    payload_hash: cronPayloadHash({ channel, target, content, time: selectedTime, interval_ms: selectedInterval }),
+    payload_hash: cronPayloadHash({ channel, target, content, time: selectedTime, time_zone, interval_ms: selectedInterval }),
     status: "pending",
   };
 }
@@ -538,6 +554,7 @@ function parseStoredSchedule(value: unknown): RuntimeSchedule {
   const target = requiredString(value.target, "target");
   const content = requiredString(value.content, "content");
   const time = optionalTime(value.time, undefined);
+  const time_zone = optionalTimeZone(value.time_zone, undefined);
   const interval_ms = optionalInterval(value.interval_ms, undefined);
   const status = runtimeStatus(value.status);
   if (typeof value.enabled !== "boolean" || value.enabled !== (status === "active")) {
@@ -546,9 +563,12 @@ function parseStoredSchedule(value: unknown): RuntimeSchedule {
   if ((time === undefined) === (interval_ms === undefined)) {
     throw new Error("runtime schedule store must contain exactly one trigger");
   }
+  if (time === undefined && time_zone !== undefined) {
+    throw new Error("runtime schedule store time_zone requires a daily time trigger");
+  }
   const created_at_ms = storedTimestamp(value.created_at_ms, "created_at_ms");
   const updated_at_ms = storedTimestamp(value.updated_at_ms, "updated_at_ms");
-  const expectedPayloadHash = cronPayloadHash({ channel, target, content, time, interval_ms });
+  const expectedPayloadHash = cronPayloadHash({ channel, target, content, time, time_zone, interval_ms });
   if (typeof value.payload_hash !== "string" || !/^[a-f0-9]{64}$/.test(value.payload_hash) || value.payload_hash !== expectedPayloadHash) {
     throw new Error("runtime schedule store payload hash does not match its trigger content");
   }
@@ -560,6 +580,7 @@ function parseStoredSchedule(value: unknown): RuntimeSchedule {
     target,
     content,
     time,
+    time_zone,
     interval_ms,
     created_at_ms,
     updated_at_ms,
@@ -614,6 +635,15 @@ function optionalInterval(value: unknown, fallback: number | undefined): number 
     throw new Error("interval_ms must be a positive integer no greater than 2147483647");
   }
   return value;
+}
+
+function optionalTimeZone(value: unknown, fallback: string | undefined): string | undefined {
+  if (value === undefined) return fallback;
+  if (value === null) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("time_zone must be a valid IANA time zone when set");
+  }
+  return canonicalizeCronTimeZone(value);
 }
 
 function runtimeStatus(value: unknown): RuntimeSchedule["status"] {

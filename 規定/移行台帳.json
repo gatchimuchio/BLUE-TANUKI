@@ -48,7 +48,7 @@
     { "path": "docs/LLM_EXTENSION_SURFACE.md", "sha256": "873a10c4126c0f994256e19a225e8b16f102072463bd1178c94f8ea62fe98243" },
     { "path": "docs/OPENCLAW_REJECTION_AUDIT.md", "sha256": "b9c5c68999ee10df9d0fddf1213d2388e16f33fabc1dbc838d333dc07612fc8d" },
     { "path": "docs/OPENROUTER_BACKEND.md", "sha256": "fa6dc4c151af4128b921f4a275edf3922dcc7d1e620eac2d7756fd324885fc95" },
-    { "path": "docs/operator-surfaces/DAILY_OPERATOR.md", "sha256": "9d088cfc236d1438332a008dcc2fd05363251641775e6a76c368c6b2b8ee6366" },
+    { "path": "docs/operator-surfaces/DAILY_OPERATOR.md", "sha256": "d46d58f7cc08692c066bf7b82e83b68ec6aa9f585a44c91f97d25e1aaa8b52d6" },
     { "path": "docs/operator-surfaces/DEVELOPER_OPERATOR.md", "sha256": "c6bffe250d9c7c601d0b6bd7a0745d88cd3c4541ca7e307aa1ad41e67a6af31f" },
     { "path": "docs/operator-surfaces/INDEX.md", "sha256": "08501456592905fe584ccbb0eea5cd8f0b20cb7387ab7e46e8881f8261fc9fa4" },
     { "path": "docs/operator-surfaces/SHARED_SUBSTRATE.md", "sha256": "0b8f2ae50b9d570f322b4d35cb2c43227c3634449b69e5e6458cb3ea3fd54fc2" },

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { evaluateApproval } from "@blue-tanuki/hds-brain";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
-import { CronSchedulerChannel } from "../src/cron_channel.js";
+import { cronPayloadHash, CronSchedulerChannel } from "../src/cron_channel.js";
 import {
   RuntimeScheduleManager,
   runtimeScheduleMutationCommand,
@@ -115,6 +115,73 @@ describe("RuntimeScheduleManager", () => {
     expect(m.preparePending(cmd, downgraded, { request_id: "req-review", actor: "alice" })).toMatchObject({ ok: false });
     expect(m.pendingCount()).toBe(0);
     expect(m.activeCount()).toBe(0);
+  });
+
+  it("binds a daily IANA time zone into the approved schedule and payload identity", async () => {
+    const m = await manager();
+    const cmd = command("schedule.create", {
+      id: "daily-zone",
+      channel: "webchat",
+      target: "local-user",
+      content: "synthetic daily content",
+      time: "08:30",
+      time_zone: "America/New_York",
+    });
+    const prepared = m.preparePending(cmd, evaluation(cmd), { request_id: "req-daily-zone", actor: "alice" });
+    expect(prepared).toMatchObject({ ok: true, pending: { approval_level: "L3_final_review" } });
+    await approve(m, cmd);
+    expect(m.snapshot()[0]).toMatchObject({
+      id: "daily-zone",
+      time: "08:30",
+      time_zone: "America/New_York",
+      status: "active",
+    });
+    expect(m.snapshot()[0]?.payload_hash).toBe(cronPayloadHash({
+      channel: "webchat",
+      target: "local-user",
+      content: "synthetic daily content",
+      time: "08:30",
+      time_zone: "America/New_York",
+    }));
+
+    const defaultZone = command("schedule.create", {
+      id: "daily-zone-default",
+      channel: "webchat",
+      target: "local-user",
+      content: "synthetic local daily content",
+      time: "09:00",
+    });
+    expect(m.preparePending(defaultZone, evaluation(defaultZone), { request_id: "req-daily-zone-default", actor: "alice" }).ok).toBe(true);
+    await approve(m, defaultZone);
+    expect(m.snapshot().find((schedule) => schedule.id === "daily-zone-default")?.time_zone)
+      .toBe(new Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+
+  it("continues to load a legacy daily schedule without a stored time zone", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bt-runtime-schedules-legacy-daily-"));
+    const env = { BLUE_TANUKI_SCHEDULES_DIR: dir };
+    const entry = {
+      id: "legacy-daily",
+      origin: "runtime",
+      enabled: true,
+      channel: "webchat",
+      target: "local-user",
+      content: "legacy content",
+      time: "07:00",
+      created_at_ms: 1,
+      updated_at_ms: 1,
+      payload_hash: cronPayloadHash({ channel: "webchat", target: "local-user", content: "legacy content", time: "07:00" }),
+      status: "active",
+    };
+    writeFileSync(join(dir, "runtime-schedules.json"), `${JSON.stringify([entry])}\n`, "utf8");
+    try {
+      const m = await RuntimeScheduleManager.open({ env });
+      expect(m.activeCount()).toBe(1);
+      expect(m.snapshot()[0]).toMatchObject({ id: "legacy-daily", time: "07:00", status: "active" });
+      expect(m.activeCronTasks()[0]?.time_zone).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects duplicate active schedules and pending conflicts without activation", async () => {
@@ -271,6 +338,8 @@ describe("RuntimeScheduleManager", () => {
     for (const args of [
       { id: "../bad", channel: "webchat", target: "local-user", content: "x", interval_ms: 1 },
       { id: "bad-time", channel: "webchat", target: "local-user", content: "x", time: "25:00" },
+      { id: "bad-time-zone", channel: "webchat", target: "local-user", content: "x", time: "07:00", time_zone: "Mars/Olympus" },
+      { id: "interval-time-zone", channel: "webchat", target: "local-user", content: "x", interval_ms: 1000, time_zone: "UTC" },
       { id: "bad-interval", channel: "webchat", target: "local-user", content: "x", interval_ms: 0 },
       { id: "missing-content", channel: "webchat", target: "local-user", interval_ms: 1 },
     ]) {

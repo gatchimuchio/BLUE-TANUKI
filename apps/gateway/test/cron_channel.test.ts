@@ -9,6 +9,7 @@ import {
   cronPayloadHash,
   cronSchedulesFromEnv,
   dailyBriefCronFromEnv,
+  nextDailyFireAtMs,
 } from "../src/cron_channel.js";
 import { GatewayCronEventStore } from "../src/cron_event_store.js";
 import { InboundRouter } from "@blue-tanuki/channel-base";
@@ -76,6 +77,52 @@ describe("DailyBriefCronChannel snapshot", () => {
 describe("dailyBriefCronFromEnv", () => {
   it("returns null when Daily Brief is disabled", () => {
     expect(dailyBriefCronFromEnv({})).toBeNull();
+  });
+});
+
+describe("daily wall-clock scheduling", () => {
+  it("resolves DST gaps forward and uses only the first instant in an overlap", () => {
+    const beforeSpringChange = Date.UTC(2026, 2, 7, 12, 0);
+    expect(nextDailyFireAtMs(beforeSpringChange, "02:30", "America/Los_Angeles", null))
+      .toBe(Date.UTC(2026, 2, 8, 10, 30)); // 02:30 does not exist; shift by the one-hour gap.
+
+    const beforeFallChange = Date.UTC(2026, 9, 31, 12, 0);
+    expect(nextDailyFireAtMs(beforeFallChange, "01:30", "America/Los_Angeles", null))
+      .toBe(Date.UTC(2026, 10, 1, 8, 30));
+    expect(nextDailyFireAtMs(Date.UTC(2026, 10, 1, 8, 45), "01:30", "America/Los_Angeles", null))
+      .toBe(Date.UTC(2026, 10, 2, 9, 30)); // The repeated second 01:30 is skipped.
+  });
+
+  it("dispatches one due occurrence after a forward clock jump and skips missed days", async () => {
+    vi.useFakeTimers();
+    const targetAt = Date.UTC(2026, 4, 9, 7, 0);
+    vi.setSystemTime(targetAt - 5 * 60_000);
+    const received: number[] = [];
+    const ch = new CronSchedulerChannel({
+      tasks: [{
+        id: "clock-jump",
+        channel: "webchat",
+        target: "local-user",
+        content: "synthetic daily event",
+        time: "07:00",
+        time_zone: "UTC",
+      }],
+      log: () => undefined,
+    });
+    try {
+      await ch.start(async (request) => { received.push(request.timestamp); });
+      expect(ch.snapshot()[0]?.next_fire_at_ms).toBe(targetAt);
+      vi.setSystemTime(targetAt + 2 * 24 * 60 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(received).toEqual([targetAt]);
+      expect(ch.snapshot()[0]).toMatchObject({
+        last_fire_at_ms: targetAt,
+        next_fire_at_ms: Date.UTC(2026, 4, 12, 7, 0),
+      });
+    } finally {
+      await ch.stop();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -497,6 +544,7 @@ describe("cronSchedulesFromEnv", () => {
     const tasks = cronSchedulesFromEnv({
       BLUE_TANUKI_DAILY_BRIEF_ENABLED: "1",
       BLUE_TANUKI_DAILY_BRIEF_TARGET: "telegram-chat",
+      BLUE_TANUKI_DAILY_BRIEF_TIME_ZONE: "UTC",
       BLUE_TANUKI_SCHEDULES_JSON: JSON.stringify([
         {
           id: "ops-smoke",
@@ -513,6 +561,7 @@ describe("cronSchedulesFromEnv", () => {
         name: "daily_brief",
         channel: "telegram",
         target: "telegram-chat",
+        time_zone: "UTC",
       },
       {
         id: "ops-smoke",

@@ -20,8 +20,10 @@ export interface CronTaskOptions {
   channel: string;
   target: string;
   content: string;
-  /** HH:MM local time. Default 07:00. */
+  /** HH:MM wall-clock time. Default 07:00. */
   time?: string;
+  /** IANA time zone for daily schedules. Omitted boot schedules follow the host local zone. */
+  time_zone?: string;
   /** For tests or smoke. If set, triggers every N ms instead of daily. */
   interval_ms?: number;
   payload_hash?: string;
@@ -41,8 +43,10 @@ export interface DailyBriefCronOptions {
   channel: string;
   target: string;
   content: string;
-  /** HH:MM local time. Default 07:00. */
+  /** HH:MM wall-clock time. Default 07:00. */
   time?: string;
+  /** IANA time zone for daily schedules. Omitted values follow the host local zone. */
+  time_zone?: string;
   /** For tests or smoke. If set, triggers every N ms instead of daily. */
   interval_ms?: number;
   log?: (line: string) => void;
@@ -58,6 +62,7 @@ export interface CronTaskSnapshot {
   channel: string;
   target: string;
   time: string;
+  time_zone?: string;
   interval_ms?: number;
   payload_hash: string;
   next_fire_at_ms: number | null;
@@ -91,6 +96,7 @@ export interface CronContentProviderTask {
   target: string;
   content: string;
   time: string;
+  time_zone?: string;
   interval_ms?: number;
 }
 
@@ -112,6 +118,7 @@ interface NormalizedCronTask {
   target: string;
   content: string;
   time: string;
+  time_zone?: string;
   interval_ms?: number;
   payload_hash: string;
 }
@@ -122,7 +129,10 @@ interface CronTaskRuntime {
   running: boolean;
   nextFireAtMs: number | null;
   lastFireAtMs: number | null;
+  scheduledTimeZone: string | null;
 }
+
+const DAILY_CLOCK_RECHECK_MS = 60_000;
 
 /**
  * Runtime cron source.
@@ -232,6 +242,7 @@ export class CronSchedulerChannel implements InboundChannel {
       channel: runtime.task.channel,
       target: runtime.task.target,
       time: runtime.task.time,
+      time_zone: runtime.scheduledTimeZone ?? runtime.task.time_zone,
       interval_ms: runtime.task.interval_ms,
       payload_hash: runtime.task.payload_hash,
       next_fire_at_ms: runtime.nextFireAtMs,
@@ -277,6 +288,8 @@ export class CronSchedulerChannel implements InboundChannel {
       this.log(`[cron] task interval enabled id=${task.id} interval_ms=${task.interval_ms}`);
       return;
     }
+    const source = `cron:${task.origin}:${task.id}`;
+    runtime.lastFireAtMs = this.eventStore?.latestSequenceForSource(source) ?? null;
     this.scheduleNextDaily(runtime, handler);
   }
 
@@ -300,19 +313,33 @@ export class CronSchedulerChannel implements InboundChannel {
 
   private scheduleNextDaily(runtime: CronTaskRuntime, handler: InboundHandler): void {
     const task = runtime.task;
-    const now = this.now();
-    const delay = delayUntilLocalTime(task.time, now);
-    runtime.nextFireAtMs = now.getTime() + delay;
+    if (!this.started || !runtime.running || this.runtimes.get(task.id) !== runtime) return;
+    const nowMs = this.nowMs();
+    const timeZone = task.time_zone ?? systemCronTimeZone();
+    const scheduledAtMs = nextDailyFireAtMs(nowMs, task.time, timeZone, runtime.lastFireAtMs);
+    runtime.scheduledTimeZone = timeZone;
+    runtime.nextFireAtMs = scheduledAtMs;
+    const delay = Math.max(0, Math.min(DAILY_CLOCK_RECHECK_MS, scheduledAtMs - nowMs));
     runtime.timer = setTimeout(() => {
-      const scheduledAtMs = runtime.nextFireAtMs ?? this.nowMs();
-      this.enqueueFire(runtime, handler, scheduledAtMs).finally(() => {
-        if (this.started && task.enabled && this.runtimes.get(task.id) === runtime) {
+      if (!this.started || !runtime.running || !task.enabled || this.runtimes.get(task.id) !== runtime) return;
+      const firedAtMs = this.nowMs();
+      const currentTimeZone = task.time_zone ?? systemCronTimeZone();
+      const targetAtMs = runtime.nextFireAtMs;
+      if (currentTimeZone !== runtime.scheduledTimeZone || targetAtMs === null || firedAtMs < targetAtMs) {
+        // Re-evaluate wall time after clock changes, early timer wakeups, or suspend/resume.
+        this.scheduleNextDaily(runtime, handler);
+        return;
+      }
+      runtime.timer = null;
+      runtime.lastFireAtMs = targetAtMs;
+      this.enqueueFire(runtime, handler, targetAtMs).finally(() => {
+        if (this.started && runtime.running && task.enabled && this.runtimes.get(task.id) === runtime) {
           this.scheduleNextDaily(runtime, handler);
         }
       });
     }, delay);
     runtime.timer.unref?.();
-    this.log(`[cron] task scheduled id=${task.id} time=${task.time} delay_ms=${delay}`);
+    this.log(`[cron] task scheduled id=${task.id} time=${task.time} time_zone=${timeZone} delay_ms=${delay}`);
   }
 
   private enqueueFire(runtime: CronTaskRuntime, handler: InboundHandler, scheduledAtMs: number): Promise<void> {
@@ -335,7 +362,7 @@ export class CronSchedulerChannel implements InboundChannel {
   private async fire(runtime: CronTaskRuntime, handler: InboundHandler, scheduledAtMs: number): Promise<void> {
     const task = runtime.task;
     runtime.lastFireAtMs = scheduledAtMs;
-    const resolved = await this.resolveContent(task);
+    const resolved = await this.resolveContent(task, runtime.scheduledTimeZone ?? task.time_zone);
     const resolvedMetadata = safeCronProviderMetadata(resolved.metadata ?? {});
     const payloadHash = cronPayloadHash({ ...task, content: resolved.content });
     const event = createCronEventIdentity(`cron:${task.origin}:${task.id}`, scheduledAtMs, payloadHash);
@@ -403,7 +430,7 @@ export class CronSchedulerChannel implements InboundChannel {
     return this.now().getTime();
   }
 
-  private async resolveContent(task: NormalizedCronTask): Promise<CronContentProviderResult> {
+  private async resolveContent(task: NormalizedCronTask, timeZone?: string): Promise<CronContentProviderResult> {
     if (!this.contentProvider) {
       return { content: task.content, metadata: { "blue_tanuki.cron.content_source": "static" } };
     }
@@ -416,6 +443,7 @@ export class CronSchedulerChannel implements InboundChannel {
         target: task.target,
         content: task.content,
         time: task.time,
+        time_zone: timeZone,
         interval_ms: task.interval_ms,
       });
       if (resolved === null || resolved === undefined) {
@@ -464,6 +492,7 @@ export class CronSchedulerChannel implements InboundChannel {
       channel: runtime.task.channel,
       target: runtime.task.target,
       time: runtime.task.time,
+      time_zone: runtime.scheduledTimeZone ?? runtime.task.time_zone,
       interval_ms: runtime.task.interval_ms,
       payload_hash: payloadHash ?? runtime.task.payload_hash,
       next_fire_at_ms: runtime.nextFireAtMs,
@@ -521,6 +550,7 @@ export function dailyBriefCronFromEnv(env: Record<string, string | undefined> = 
     target,
     content: env.BLUE_TANUKI_DAILY_BRIEF_CONTENT ?? "Daily Brief: scheduled smoke from BLUE-TANUKI v1.0 RC.",
     time: env.BLUE_TANUKI_DAILY_BRIEF_TIME ?? "07:00",
+    time_zone: env.BLUE_TANUKI_DAILY_BRIEF_TIME_ZONE,
     interval_ms: parsePositiveInt(env.BLUE_TANUKI_DAILY_BRIEF_INTERVAL_MS),
   };
 }
@@ -548,6 +578,7 @@ function dailyBriefTaskFromOptions(opts: DailyBriefCronOptions): CronTaskOptions
     target: opts.target,
     content: opts.content,
     time: opts.time ?? "07:00",
+    time_zone: opts.time_zone,
     interval_ms: opts.interval_ms,
   };
 }
@@ -577,6 +608,7 @@ function parseScheduleObject(item: unknown, index: number): CronTaskOptions {
     target: requiredString(item.target, `BLUE_TANUKI_SCHEDULES_JSON[${index}].target`),
     content: requiredString(item.content, `BLUE_TANUKI_SCHEDULES_JSON[${index}].content`),
     time: optionalString(item.time, `BLUE_TANUKI_SCHEDULES_JSON[${index}].time`),
+    time_zone: optionalString(item.time_zone, `BLUE_TANUKI_SCHEDULES_JSON[${index}].time_zone`),
     interval_ms: optionalPositiveInteger(item.interval_ms, `BLUE_TANUKI_SCHEDULES_JSON[${index}].interval_ms`),
   };
 }
@@ -592,6 +624,10 @@ function normalizeCronTasks(tasks: CronTaskOptions[]): NormalizedCronTask[] {
     seen.add(id);
     const time = task.time ?? "07:00";
     parseLocalTime(time);
+    const timeZone = task.time_zone === undefined ? undefined : canonicalizeCronTimeZone(task.time_zone);
+    if (task.interval_ms !== undefined && timeZone !== undefined) {
+      throw new Error(`cron task ${id} cannot set time_zone for an interval schedule`);
+    }
     return {
       id,
       name: task.name ?? "scheduled_message",
@@ -601,6 +637,7 @@ function normalizeCronTasks(tasks: CronTaskOptions[]): NormalizedCronTask[] {
       target: requireTrimmed(task.target, `cron task ${id} target`),
       content: requireTrimmed(task.content, `cron task ${id} content`),
       time,
+      time_zone: timeZone,
       interval_ms: task.interval_ms,
       payload_hash: task.payload_hash ?? cronPayloadHash(task),
     };
@@ -614,19 +651,39 @@ function createRuntime(task: NormalizedCronTask): CronTaskRuntime {
     running: false,
     nextFireAtMs: null,
     lastFireAtMs: null,
+    scheduledTimeZone: null,
   };
 }
 
-export function cronPayloadHash(task: Pick<CronTaskOptions, "channel" | "target" | "content" | "time" | "interval_ms">): string {
+export function cronPayloadHash(task: Pick<CronTaskOptions, "channel" | "target" | "content" | "time" | "interval_ms" | "time_zone">): string {
+  const payload: Record<string, unknown> = {
+    channel: task.channel,
+    target: task.target,
+    content: task.content,
+    time: task.time ?? "07:00",
+    interval_ms: task.interval_ms,
+  };
+  // Preserve hashes of schedules written before timezone was added.
+  if (task.time_zone !== undefined) payload.time_zone = canonicalizeCronTimeZone(task.time_zone);
   return createHash("sha256")
-    .update(JSON.stringify({
-      channel: task.channel,
-      target: task.target,
-      content: task.content,
-      time: task.time ?? "07:00",
-      interval_ms: task.interval_ms,
-    }))
+    .update(JSON.stringify(payload))
     .digest("hex");
+}
+
+export function canonicalizeCronTimeZone(timeZone: string): string {
+  const normalized = timeZone.trim();
+  if (!normalized) throw new Error("time_zone must be a valid IANA time zone");
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: normalized }).resolvedOptions().timeZone;
+  } catch {
+    throw new Error("time_zone must be a valid IANA time zone");
+  }
+}
+
+export function systemCronTimeZone(): string {
+  const timeZone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!timeZone) throw new Error("host local time zone could not be determined");
+  return canonicalizeCronTimeZone(timeZone);
 }
 
 function requiredString(value: unknown, label: string): string {
@@ -694,6 +751,120 @@ export function delayUntilLocalTime(hhmm: string, now: Date): number {
   next.setHours(hour, minute, 0, 0);
   if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
   return next.getTime() - now.getTime();
+}
+
+/**
+ * Returns the next daily wall-clock occurrence. Missed occurrences are skipped;
+ * overlap dates use their first instant and gaps move forward by the gap size.
+ */
+export function nextDailyFireAtMs(
+  nowMs: number,
+  hhmm: string,
+  timeZone: string,
+  lastScheduledAtMs: number | null,
+): number {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0 ||
+      (lastScheduledAtMs !== null && (!Number.isSafeInteger(lastScheduledAtMs) || lastScheduledAtMs < 0))) {
+    throw new Error("invalid cron daily schedule state");
+  }
+  const zone = canonicalizeCronTimeZone(timeZone);
+  const { hour, minute } = parseLocalTime(hhmm);
+  const cutoff = Math.max(nowMs, lastScheduledAtMs ?? nowMs);
+  const localNow = wallPartsAt(cutoff, zone);
+  let date = { year: localNow.year, month: localNow.month, day: localNow.day };
+  for (let attempt = 0; attempt < 370; attempt += 1) {
+    const occurrence = dailyOccurrenceForDate(date, hour, minute, zone);
+    if (occurrence > cutoff) return occurrence;
+    date = addCivilDays(date, 1);
+  }
+  throw new Error("could not find the next daily cron occurrence");
+}
+
+interface WallDateTime {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+}
+
+const timeZoneFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function wallPartsAt(timestampMs: number, timeZone: string): WallDateTime {
+  let formatter = timeZoneFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      calendar: "gregory",
+      numberingSystem: "latn",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
+    timeZoneFormatters.set(timeZone, formatter);
+  }
+  const parts = Object.fromEntries(formatter.formatToParts(new Date(timestampMs)).map((part) => [part.type, part.value]));
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+  };
+}
+
+function wallTimestamp(value: WallDateTime): number {
+  const date = new Date(0);
+  date.setUTCFullYear(value.year, value.month - 1, value.day);
+  date.setUTCHours(value.hour, value.minute, value.second, 0);
+  return date.getTime();
+}
+
+function wallDateTimestamp(year: number, month: number, day: number, hour: number, minute: number): number {
+  return wallTimestamp({ year, month, day, hour, minute, second: 0 });
+}
+
+function addCivilDays(date: Pick<WallDateTime, "year" | "month" | "day">, days: number): Pick<WallDateTime, "year" | "month" | "day"> {
+  const next = new Date(0);
+  next.setUTCFullYear(date.year, date.month - 1, date.day + days);
+  return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() };
+}
+
+function dailyOccurrenceForDate(
+  date: Pick<WallDateTime, "year" | "month" | "day">,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): number {
+  const targetWall = wallDateTimestamp(date.year, date.month, date.day, hour, minute);
+  const offsets = new Set<number>();
+  for (const offsetHours of [-48, -36, -24, -12, -6, 0, 6, 12, 24, 36, 48]) {
+    offsets.add(timeZoneOffsetAt(targetWall + offsetHours * 60 * 60 * 1000, timeZone));
+  }
+  const exact: number[] = [];
+  const afterGap: Array<{ instant: number; wall: number }> = [];
+  for (const offset of offsets) {
+    const instant = targetWall - offset;
+    const actualWall = wallTimestamp(wallPartsAt(instant, timeZone));
+    if (actualWall === targetWall) exact.push(instant);
+    else if (actualWall > targetWall) afterGap.push({ instant, wall: actualWall });
+  }
+  if (exact.length > 0) return Math.min(...exact);
+  afterGap.sort((a, b) => a.wall - b.wall || a.instant - b.instant);
+  const shifted = afterGap[0]?.instant;
+  if (shifted !== undefined) return shifted;
+  throw new Error("could not resolve daily cron time in its IANA time zone");
+}
+
+function timeZoneOffsetAt(timestampMs: number, timeZone: string): number {
+  const wall = wallPartsAt(timestampMs, timeZone);
+  return wallTimestamp(wall) - Math.floor(timestampMs / 1000) * 1000;
 }
 
 /** Keeps a persisted interval cadence across restarts while skipping missed ticks. */

@@ -40,6 +40,12 @@ Daily Operator reuses:
 - `channel_send`
 - `BLUE_TANUKI_DAILY_BRIEF_*` env configuration
 
+## 4.1 日次予定の時刻
+
+日次予定の`time`はIANAタイムゾーンにおける壁時計時刻である。`schedule.create`／`schedule.update`では`time_zone`を指定でき、省略時は作成・更新時点のホストローカルIANAタイムゾーンを保存する。従来の保存済み予定で`time_zone`がないものは、引き続きホストローカル時刻を使う。Daily Briefの起動時設定では`BLUE_TANUKI_DAILY_BRIEF_TIME_ZONE`を指定でき、省略時はホストローカル時刻を使う。
+
+DSTで指定した壁時計時刻が存在しない日は、欠落した時間幅だけ先へ進める（例：02:30が存在しない日は03:30）。同じ壁時計時刻が二度現れる日は最初の時刻だけを使う。時計変更・スリープ復帰後は最大1分間隔で時刻を再確認し、経過した複数日の予定を連続実行せず一回だけ扱い、次の未来の予定へ進む。予定の発火は外部作用の承認を意味せず、通常のHDS／Approval経路を通る。
+
 ## 5. Approval Levels per Operation (L1/L2/L3 ApprovalLevel + ApprovalRisk)
 
 | Operation | ApprovalLevel | ApprovalRisk | Notes |
