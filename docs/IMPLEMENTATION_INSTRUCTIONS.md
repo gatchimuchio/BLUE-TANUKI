@@ -16,7 +16,7 @@ C07.02の当該producer-consumer経路は`WIRED`。C07.03の誤記憶隔離・�
 | `pnpm typecheck`／`pnpm build` | PASS。workspace 15 projects。 |
 | 全workspace suite／QE_QC／QE_QA／5OS実機／Actions／実provider・credential／外部業務作用 | 未実施。Windows localで限定疎通できたためActionsは未使用。 |
 
-C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。作業再開時のHEAD=`bec04e4d3bdb2040c80fa3876e052302b535e4b8`。local recovery branchはcurrent=`bec04e4d3bdb2040c80fa3876e052302b535e4b8`／previous=`29c5f4cb7239ee252270d3f1e0aef3d0d609261c`、remote backup tagも同じ二世代（実測済み）。このbatchをpush後、HEAD・remote refs・worktree・保持対象untracked stateを再照合して記録する。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。
+C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。作業再開時のHEAD=`bec04e4d3bdb2040c80fa3876e052302b535e4b8`。local recovery branchはcurrent=`bec04e4d3bdb2040c80fa3876e052302b535e4b8`／previous=`29c5f4cb7239ee252270d3f1e0aef3d0d609261c`、remote backup tagも同じ二世代（実測済み）。実装commit=`beb6957d541df4090e329b4824cd0c35f88d5793`を`main`へpushしremote HEAD一致を確認。closeout docs-only commitのpush後、local recovery branchとremote backup tagはcurrent=`HEAD`／previous=実装commitを照合済み。worktreeの唯一のuntrackedは保持対象Linux `target/`。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。
 
 ### 前回BUILD_BATCH：`QEB-01-C07.01-CANDIDATE-CONTENT-TO-HDS-REVIEW`
 
