@@ -58,7 +58,9 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 第35回の[run 39346435570](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39346435570)は固定SHA `2d47b20b1b1bf12b8620ba3c2ebc8266744a4b3b`、Ubuntu 24.04.5、manual `workflow_dispatch`で実行した。workspace/helper buildとLinux isolation diagnostic testsはPASSし、tmpfs mountと`RENAME_WHITEOUT`事前確認も成功した。Bubblewrap内のuser namespaceでは`userxattr`のみからproduction optionまで全4段階がEACCESで失敗し、option差は原因でない。別のroot namespace probeでは同じOverlayFS mountとfixture readbackが成功した。CAP_SYS_ADMIN等を持つ隔離user namespaceのFUSE probeは読取・書込・whiteoutが成功した一方、全capability 0／`NoNewPrivs=1`のFUSE probeは`operation_not_permitted`でmount不能だった。production `shell.exec` focused test 3件はOverlayFS EACCESでverified result前にfail-closedした。AppArmor一時profileのcleanup stepは成功し、事前から存在した`/dev/fuse`は変更せず、artifactは0件。結果はhosted Ubuntu環境の診断であり、Linux native installed product、aggregate quota成立、QE_QC／QE_QA、releaseを証明しない。D07.02／F01.02は`BUILD_GAP`を維持し、失敗SHAはmainへ統合しない。
 
-次consumerは、production helperがBubblewrap内ですでに得ているprivate mount namespaceに加えて`establish_private_mount_namespace()`が二つ目のmount namespaceを作る差がOverlayFS EACCESに影響するか、WSL上の合成fixtureで切り分けること。そこで差が出なければ、rootless OverlayFSの実行境界を保守的に未成立とし、shellへmount capabilityを渡さない別のquota経路を設計する。追加Actionsはこのlocal比較が新しい有効な仮説を残す場合だけ、D4-Pocket現行AGENTS §3.1に従って手動・固定SHAで補助利用する。
+WSL Ubuntu 24.04／Bubblewrap 0.9.0のLinux `/tmp`に置いた合成fixtureで、Actions probeと同じ外側の`unshare --mount --propagation private`から比較した。外側namespaceだけの場合と、さらに`establish_private_mount_namespace()`相当のmount namespaceを追加した場合の両方でbounded tmpfs mountは成功し、production OverlayFS mountは`EACCES`で失敗した。従ってこのWSL環境では二段目namespaceだけが拒否原因という仮説を支持しない。このWSL診断はnative Linuxの証拠ではなく、Actions run 39346435570のhosted Ubuntu結果も書き換えない。
+
+次consumerはrootless OverlayFSを成立済みと扱わず、shell processへmount capabilityを渡さないLinux aggregate quota経路を特定すること。追加Actionsはローカル比較後に別の具体的仮説を検査する必要が生じた場合だけ、D4-Pocket現行AGENTS §3.1に従って目的・固定SHAを記録した手動検査として使う。D07.02／F01.02は引き続き`BUILD_GAP`とする。
 
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
