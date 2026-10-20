@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   MEANING_UPDATE_PROPOSAL_V2_SCHEMA_VERSION,
+  MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION,
   type LLMCallPayload,
   type MeaningUpdateProposal,
 } from "@blue-tanuki/protocol";
@@ -61,6 +62,7 @@ export interface MeaningUpdateProposalReferenceReview {
   readonly counterevidence_claim_status: "references_verified" | "references_unverified" | "none_found_unverified";
   readonly scope_digests_verified: boolean;
   readonly target_reference_matches_current_projection: boolean;
+  readonly candidate_content_digest_status: "verified" | "unavailable";
   readonly target_and_prior_version_verified: false;
   readonly semantic_relation_status: "not_assessed";
   readonly adoption_status: "not_adopted";
@@ -332,7 +334,8 @@ export function reviewMeaningUpdateProposalReferences(
     ? proposal.counterevidence_review.references
     : [];
   const counterevidenceVerified = counterevidenceReferences.filter(verified).length;
-  const hasTypedTargetReference = proposal.schema_version === MEANING_UPDATE_PROPOSAL_V2_SCHEMA_VERSION;
+  const hasTypedTargetReference = proposal.schema_version === MEANING_UPDATE_PROPOSAL_V2_SCHEMA_VERSION ||
+    proposal.schema_version === MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION;
   const targetReferenceMatchesCurrentProjection = hasTypedTargetReference &&
     candidates.some((candidate) => candidate.reference.record_id === proposal.target_reference.record_id &&
       candidate.reference.version === proposal.target_reference.version) &&
@@ -381,6 +384,8 @@ export function reviewMeaningUpdateProposalReferences(
         ? "references_verified" : "references_unverified",
     scope_digests_verified: scopeDigestsVerified,
     target_reference_matches_current_projection: targetReferenceMatchesCurrentProjection,
+    candidate_content_digest_status: proposal.schema_version === MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION
+      ? "verified" : "unavailable",
     target_and_prior_version_verified: false,
     semantic_relation_status: "not_assessed",
     adoption_status: "not_adopted",

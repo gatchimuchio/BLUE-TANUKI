@@ -350,6 +350,7 @@ export interface ExecutorFeedbackAuditTrace {
       "none_found_unverified" | "invalid_contract";
     scope_digests_verified: boolean;
     target_reference_matches_current_projection: boolean;
+    candidate_content_digest_status: "not_present" | "unavailable" | "verified" | "invalid";
     target_and_prior_version_verified: false;
     semantic_relation_status: "not_assessed";
     adoption_status: "not_adopted";

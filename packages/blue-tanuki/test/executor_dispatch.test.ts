@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import { meaningUpdateCandidateDigest, type ExecuteCommand } from "@blue-tanuki/protocol";
 import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, type ChannelDispatcher } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
@@ -381,13 +381,15 @@ describe("Executor.executeToolCall - permission envelope", () => {
 
 describe("Executor meaning-update proposal transport", () => {
   it("forwards an untrusted structured proposal to HDS while removing it from the visible result", async () => {
+    const candidateMeaning = "Executor synthetic candidate meaning.";
     const proposal = {
-      schema_version: "blue-tanuki.meaning-update-proposal.v1",
+      schema_version: "blue-tanuki.meaning-update-proposal.v3",
       record_type: "meaning_update_proposal",
       proposal_ref: "proposal-executor-001",
       candidate_ref: "candidate:executor-001",
-      candidate_digest: "c".repeat(64),
-      target_ref: "memory:fact-001",
+      candidate_digest: meaningUpdateCandidateDigest(candidateMeaning),
+      candidate_meaning: candidateMeaning,
+      target_reference: { record_id: "F:fact-001", version: "2".repeat(64) },
       prior_version_ref: "version:4",
       supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
       counterevidence_review: {
@@ -425,5 +427,6 @@ describe("Executor meaning-update proposal transport", () => {
     expect(feedback.result).toMatchObject({ content: "synthetic answer" });
     expect(feedback.result).not.toHaveProperty("meaning_update_proposal");
     expect(JSON.stringify(feedback.result)).not.toContain("candidate:executor-001");
+    expect(JSON.stringify(feedback.result)).not.toContain(candidateMeaning);
   });
 });

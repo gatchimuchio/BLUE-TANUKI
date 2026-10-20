@@ -4,10 +4,13 @@ import {
   MEMORY_COMMIT_V1_SCHEMA_VERSION,
   MEANING_UPDATE_PROPOSAL_SCHEMA_VERSION,
   MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION,
+  MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION,
+  MeaningUpdateProposalV3Schema,
   OBSERVATION_ACQUISITION_SCHEMA_VERSION,
   MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION,
   createMemoryUpdateReceipt,
   memoryCommitContentDigest,
+  meaningUpdateCandidateDigest,
   parseMeaningUpdateProposal,
   parseObservationAcquisitionRecord,
   parseMemoryCommit,
@@ -57,6 +60,16 @@ function validMeaningUpdateProposal() {
     adoption_status: "not_adopted" as const,
     may_apply: false as const,
     used_for_authority: false as const,
+  };
+}
+
+function validContentMeaningUpdateProposal() {
+  const candidateMeaning = "The reviewed synthetic candidate meaning.";
+  return {
+    ...validMeaningUpdateProposal(),
+    schema_version: MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION,
+    candidate_meaning: candidateMeaning,
+    candidate_digest: meaningUpdateCandidateDigest(candidateMeaning),
   };
 }
 
@@ -117,6 +130,18 @@ describe("状態更新契約", () => {
       schema_version: MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION,
       target_ref: "memory:fact-001",
     })).toMatchObject({ ok: true, record: { schema_version: MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION } });
+  });
+
+  it("v3意味更新案は候補内容をdigestへ結合し、未承認のまま運ぶ", () => {
+    const proposal = validContentMeaningUpdateProposal();
+    expect(parseMeaningUpdateProposal(proposal)).toMatchObject({
+      ok: true,
+      record: { schema_version: MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION, adoption_status: "not_adopted", may_apply: false },
+    });
+    expect(MeaningUpdateProposalV3Schema.safeParse({ ...proposal, candidate_digest: "c".repeat(64) }).success).toBe(false);
+    expect(parseMeaningUpdateProposal({ ...proposal, candidate_digest: "c".repeat(64) }).ok).toBe(false);
+    expect(parseMeaningUpdateProposal({ ...proposal, candidate_meaning: "" }).ok).toBe(false);
+    expect(parseMeaningUpdateProposal({ ...proposal, raw_candidate_text: "private claim" }).ok).toBe(false);
   });
 
   it("canonical digestで内容を検査し、正常なMemoryCommitを解析する", () => {

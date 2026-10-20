@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CompleteHistoryStore, HDSUpperController } from "@blue-tanuki/hds-brain";
 import {
   createGatewayInternalInboundRequest,
+  meaningUpdateCandidateDigest,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   type ExecuteCommand,
   type ExecuteFeedback,
@@ -16,12 +17,14 @@ import {
 } from "../src/serve.js";
 
 function meaningUpdateProposal() {
+  const candidateMeaning = "Synthetic meaning candidate, not adopted.";
   return {
-    schema_version: "blue-tanuki.meaning-update-proposal.v2",
+    schema_version: "blue-tanuki.meaning-update-proposal.v3",
     record_type: "meaning_update_proposal",
     proposal_ref: "proposal-gateway-001",
     candidate_ref: "candidate:gateway-001",
-    candidate_digest: "c".repeat(64),
+    candidate_digest: meaningUpdateCandidateDigest(candidateMeaning),
+    candidate_meaning: candidateMeaning,
     target_reference: { record_id: "F:fact-001", version: "2".repeat(64) },
     prior_version_ref: "version:4",
     supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
@@ -120,7 +123,7 @@ describe("gateway inbound boundary", () => {
       command_id: command.id,
       source: "llm_meaning_update_proposal",
       payload: {
-        record_type: "meaning_update_proposal",
+        record_type: "meaning_update_proposal_audit",
         adoption_status: "not_adopted",
         may_apply: false,
       },
@@ -129,6 +132,8 @@ describe("gateway inbound boundary", () => {
     const stored = history.append(input!);
     expect(stored?.kind).toBe("audit_history");
     expect(JSON.stringify(history.replayAsCommonRecords())).not.toContain("candidate:gateway-001");
+    expect(JSON.stringify(history.exportSnapshot())).not.toContain("Synthetic meaning candidate, not adopted.");
+    expect(stored?.payload).not.toHaveProperty("candidate_meaning");
 
     const reflectionCommand: ExecuteCommand = {
       ...command,

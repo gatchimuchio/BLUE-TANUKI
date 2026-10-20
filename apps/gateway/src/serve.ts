@@ -63,6 +63,8 @@ import {
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   createGatewayInternalInboundRequest,
+  MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION,
+  meaningUpdateProposalAuditProjection,
   parseInboundRequestAtBoundary,
   parseMeaningUpdateProposal,
   parseObservationAcquisitionRecord,
@@ -385,6 +387,9 @@ export function buildMeaningUpdateProposalHistoryInput(
   ) return null;
   const parsed = parseMeaningUpdateProposal(feedback.meaning_update_proposal);
   if (!parsed.ok) return null;
+  const payload = parsed.record.schema_version === MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION
+    ? meaningUpdateProposalAuditProjection(parsed.record)
+    : parsed.record;
   return {
     kind: "audit_history",
     request_id,
@@ -392,7 +397,7 @@ export function buildMeaningUpdateProposalHistoryInput(
     actor,
     source: "llm_meaning_update_proposal",
     timestamp,
-    payload: parsed.record,
+    payload,
   };
 }
 

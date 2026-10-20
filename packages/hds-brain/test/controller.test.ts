@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createGatewayInternalInboundRequest,
+  meaningUpdateCandidateDigest,
   type ExecuteCommand,
   type ExecuteFeedback,
   type InboundRequest,
@@ -41,6 +42,32 @@ function meaningUpdateProposal() {
     candidate_ref: "candidate:001",
     candidate_digest: "c".repeat(64),
     target_ref: "memory:fact-001",
+    prior_version_ref: "version:4",
+    supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
+    counterevidence_review: {
+      status: "reviewed_with_references",
+      review_scope: { reference: "scope:counterevidence-001", digest: "e".repeat(64) },
+      references: [{ reference: "evidence:counter-001", digest: "f".repeat(64) }],
+    },
+    applicability_scope: { reference: "scope:applicability-001", digest: "1".repeat(64) },
+    reflection_target_ref: "reflection:goal-001",
+    proposal_status: "unverified",
+    adoption_status: "not_adopted",
+    may_apply: false,
+    used_for_authority: false,
+  };
+}
+
+function contentMeaningUpdateProposal() {
+  const candidateMeaning = "Synthetic HDS candidate meaning.";
+  return {
+    schema_version: "blue-tanuki.meaning-update-proposal.v3",
+    record_type: "meaning_update_proposal",
+    proposal_ref: "proposal-controller-content-001",
+    candidate_ref: "candidate:content-001",
+    candidate_digest: meaningUpdateCandidateDigest(candidateMeaning),
+    candidate_meaning: candidateMeaning,
+    target_reference: { record_id: "F:fact-001", version: "2".repeat(64) },
     prior_version_ref: "version:4",
     supporting_evidence: [{ reference: "evidence:support-001", digest: "d".repeat(64) }],
     counterevidence_review: {
@@ -1057,7 +1084,7 @@ describe("HDSUpperController.onFeedback()", () => {
     c.onFeedback({
       command_id: command!.id,
       status: "success",
-      meaning_update_proposal: meaningUpdateProposal(),
+      meaning_update_proposal: contentMeaningUpdateProposal(),
       metrics: { duration_ms: 1 },
     });
 
@@ -1066,12 +1093,14 @@ describe("HDSUpperController.onFeedback()", () => {
     if ("kind" in entry && entry.kind === "executor_feedback") {
       expect(entry.feedback.meaning_update_proposal_contract_status).toBe("passed");
       expect(entry.feedback.meaning_update_proposal_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(entry.feedback.meaning_update_proposal_reference_review.candidate_content_digest_status).toBe("verified");
       expect(entry.feedback.meaning_update_proposal_used_for_authority).toBe(false);
       expect(entry.feedback.meaning_update_proposal_applied).toBe(false);
       expect(entry.known_command).toBe(true);
     }
     const auditText = JSON.stringify(c.getAudit().list());
     expect(auditText).not.toContain("candidate:001");
+    expect(auditText).not.toContain("Synthetic HDS candidate meaning.");
     expect(c.getAudit().verify()).toBe(true);
   });
 

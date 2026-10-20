@@ -16,6 +16,8 @@ const ReferenceSchema = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9
 export const OBSERVATION_ACQUISITION_SCHEMA_VERSION = "blue-tanuki.observation-acquisition.v1" as const;
 export const MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION = "blue-tanuki.meaning-update-proposal.v1" as const;
 export const MEANING_UPDATE_PROPOSAL_V2_SCHEMA_VERSION = "blue-tanuki.meaning-update-proposal.v2" as const;
+export const MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION = "blue-tanuki.meaning-update-proposal.v3" as const;
+export const MEANING_UPDATE_PROPOSAL_AUDIT_V1_SCHEMA_VERSION = "blue-tanuki.meaning-update-proposal-audit.v1" as const;
 export const MEANING_UPDATE_PROPOSAL_SCHEMA_VERSION = MEANING_UPDATE_PROPOSAL_V2_SCHEMA_VERSION;
 
 /** 正規化済み入力を取得した記録。内容の真実性・採用・権限利用を主張しない。 */
@@ -97,15 +99,82 @@ export const MeaningUpdateProposalV2Schema = z.object({
   prior_version_ref: ReferenceSchema,
 }).strict();
 
-/** digest and references only: parsing checks shape, never truth, approval, adoption, or execution. */
+/** v3 carries the exact candidate meaning transiently and binds it to candidate_digest. */
+const MeaningUpdateProposalV3BaseSchema = z.object({
+  schema_version: z.literal(MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION),
+  ...MeaningUpdateProposalCommonFields,
+  candidate_meaning: z.string().min(1).max(16_384),
+  target_reference: MeaningUpdateTargetReferenceSchema,
+  prior_version_ref: ReferenceSchema,
+}).strict();
+export const MeaningUpdateProposalV3Schema = MeaningUpdateProposalV3BaseSchema.superRefine(
+  validateMeaningUpdateCandidate,
+);
+
+/** Audit projection retains the candidate digest and evidence, never candidate content. */
+export const MeaningUpdateProposalAuditV1Schema = z.object({
+  schema_version: z.literal(MEANING_UPDATE_PROPOSAL_AUDIT_V1_SCHEMA_VERSION),
+  source_schema_version: z.literal(MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION),
+  record_type: z.literal("meaning_update_proposal_audit"),
+  proposal_ref: IdentifierSchema,
+  candidate_ref: ReferenceSchema,
+  candidate_digest: DigestSchema,
+  candidate_meaning_bytes: z.number().int().min(1).max(16_384).safe(),
+  target_reference: MeaningUpdateTargetReferenceSchema,
+  prior_version_ref: ReferenceSchema,
+  supporting_evidence: z.array(EvidenceReferenceSchema).min(1).max(32),
+  counterevidence_review: CounterevidenceReviewSchema,
+  applicability_scope: EvidenceReferenceSchema,
+  reflection_target_ref: ReferenceSchema,
+  proposal_status: z.literal("unverified"),
+  adoption_status: z.literal("not_adopted"),
+  may_apply: z.literal(false),
+  used_for_authority: z.literal(false),
+}).strict();
+
+/** Parsing checks shape and content binding, never truth, approval, adoption, or execution. */
 export const MeaningUpdateProposalSchema = z.discriminatedUnion("schema_version", [
   MeaningUpdateProposalV1Schema,
   MeaningUpdateProposalV2Schema,
-]);
+  MeaningUpdateProposalV3BaseSchema,
+]).superRefine((proposal, context) => {
+  if (proposal.schema_version !== MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION) return;
+  validateMeaningUpdateCandidate(proposal, context);
+});
 
 export type MeaningUpdateProposalV1 = z.infer<typeof MeaningUpdateProposalV1Schema>;
 export type MeaningUpdateProposalV2 = z.infer<typeof MeaningUpdateProposalV2Schema>;
+export type MeaningUpdateProposalV3 = z.infer<typeof MeaningUpdateProposalV3Schema>;
 export type MeaningUpdateProposal = z.infer<typeof MeaningUpdateProposalSchema>;
+export type MeaningUpdateProposalAuditV1 = z.infer<typeof MeaningUpdateProposalAuditV1Schema>;
+
+export function meaningUpdateCandidateDigest(candidateMeaning: string): string {
+  return sha256(candidateMeaning);
+}
+
+export function meaningUpdateProposalAuditProjection(
+  proposal: MeaningUpdateProposalV3,
+): MeaningUpdateProposalAuditV1 {
+  return {
+    schema_version: MEANING_UPDATE_PROPOSAL_AUDIT_V1_SCHEMA_VERSION,
+    source_schema_version: MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION,
+    record_type: "meaning_update_proposal_audit",
+    proposal_ref: proposal.proposal_ref,
+    candidate_ref: proposal.candidate_ref,
+    candidate_digest: proposal.candidate_digest,
+    candidate_meaning_bytes: Buffer.byteLength(proposal.candidate_meaning, "utf8"),
+    target_reference: proposal.target_reference,
+    prior_version_ref: proposal.prior_version_ref,
+    supporting_evidence: proposal.supporting_evidence,
+    counterevidence_review: proposal.counterevidence_review,
+    applicability_scope: proposal.applicability_scope,
+    reflection_target_ref: proposal.reflection_target_ref,
+    proposal_status: proposal.proposal_status,
+    adoption_status: proposal.adoption_status,
+    may_apply: proposal.may_apply,
+    used_for_authority: proposal.used_for_authority,
+  };
+}
 
 export type SemanticRecordParseResult<T> =
   | { ok: true; record: T }
@@ -125,6 +194,17 @@ export function parseObservationAcquisitionRecord(value: unknown): SemanticRecor
 export function parseMeaningUpdateProposal(value: unknown): SemanticRecordParseResult<MeaningUpdateProposal> {
   try {
     const parsed = MeaningUpdateProposalSchema.safeParse(value);
+    return parsed.success
+      ? { ok: true, record: parsed.data }
+      : { ok: false, reason: "schema_validation_failed" };
+  } catch {
+    return { ok: false, reason: "schema_validation_failed" };
+  }
+}
+
+export function parseMeaningUpdateProposalAudit(value: unknown): SemanticRecordParseResult<MeaningUpdateProposalAuditV1> {
+  try {
+    const parsed = MeaningUpdateProposalAuditV1Schema.safeParse(value);
     return parsed.success
       ? { ok: true, record: parsed.data }
       : { ok: false, reason: "schema_validation_failed" };
@@ -480,4 +560,31 @@ function canonicalJson(value: unknown): string {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value.charCodeAt(index);
+    if (current >= 0xD800 && current <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xDC00 && next <= 0xDFFF)) return false;
+      index += 1;
+    } else if (current >= 0xDC00 && current <= 0xDFFF) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function validateMeaningUpdateCandidate(
+  proposal: { readonly candidate_meaning: string; readonly candidate_digest: string },
+  context: z.RefinementCtx,
+): void {
+  if (!proposal.candidate_meaning.trim() || !isWellFormedUnicode(proposal.candidate_meaning)) {
+    context.addIssue({ code: "custom", path: ["candidate_meaning"], message: "candidate_content_invalid" });
+  }
+  if (Buffer.byteLength(proposal.candidate_meaning, "utf8") > 16_384 ||
+      meaningUpdateCandidateDigest(proposal.candidate_meaning) !== proposal.candidate_digest) {
+    context.addIssue({ code: "custom", path: ["candidate_digest"], message: "candidate_content_digest_mismatch" });
+  }
 }

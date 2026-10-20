@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
-import { MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION } from "@blue-tanuki/protocol";
+import {
+  MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION,
+  meaningUpdateCandidateDigest,
+} from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
 import {
   canonicalizeMemoryEntry,
@@ -210,6 +213,40 @@ describe("J-side memory citation review", () => {
     expect(feedbackAuditText).not.toContain(counter.f_reference);
     expect(feedbackAuditText).not.toContain(support.entry_hash);
     expect(feedbackAuditText).not.toContain(scopePlanDigest);
+    expect(hds.getAudit().verify()).toBe(true);
+  });
+
+  it("checks v3 content-bound proposal targets against current M without assessing meaning or adoption", () => {
+    const { hds, command, support, counter, scopeId, scopePlanDigest } = setup();
+    const candidateMeaning = "候補の意味内容";
+    const proposal = {
+      ...meaningUpdateProposal(support, counter, scopeId, scopePlanDigest),
+      schema_version: "blue-tanuki.meaning-update-proposal.v3",
+      candidate_meaning: candidateMeaning,
+      candidate_digest: meaningUpdateCandidateDigest(candidateMeaning),
+    };
+    hds.onFeedback({
+      ...feedback(command.id, { content: "synthetic" }),
+      meaning_update_proposal: proposal,
+    });
+
+    const entry = hds.getAudit().list().map((item) => item.log).find((log) =>
+      "kind" in log && log.kind === "executor_feedback" && log.command_id === command.id,
+    );
+    expect(entry && "kind" in entry && entry.kind === "executor_feedback" ? entry.feedback : undefined).toMatchObject({
+      meaning_update_proposal_contract_status: "passed",
+      meaning_update_proposal_reference_review: {
+        review_status: "prior_version_unverified",
+        target_reference_matches_current_projection: true,
+        candidate_content_digest_status: "verified",
+        semantic_relation_status: "not_assessed",
+        adoption_status: "not_adopted",
+        may_apply: false,
+        used_for_authority: false,
+      },
+      meaning_update_proposal_applied: false,
+      meaning_update_proposal_used_for_authority: false,
+    });
     expect(hds.getAudit().verify()).toBe(true);
   });
 

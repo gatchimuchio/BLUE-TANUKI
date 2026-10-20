@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   parseJsonTextAtBoundary,
   parseMeaningUpdateProposal,
+  parseMeaningUpdateProposalAudit,
   parseObservationAcquisitionRecord,
 } from "@blue-tanuki/protocol";
 import type { CompleteHistoryEntry, CompleteHistoryKind } from "./types.js";
@@ -76,6 +77,9 @@ export function isValidCompleteHistorySemanticPayload(
     }
     if (descriptor.value === "meaning_update_proposal" && kind === "audit_history") {
       return parseMeaningUpdateProposal(payload).ok;
+    }
+    if (descriptor.value === "meaning_update_proposal_audit" && kind === "audit_history") {
+      return parseMeaningUpdateProposalAudit(payload).ok;
     }
     return false;
   } catch {
