@@ -197,6 +197,7 @@ describe("approval policy", () => {
   it("includes defensive final-review placeholders", () => {
     for (const operation of [
       "tool.file.delete",
+      "tool.file.edit",
       "tool.shell.exec",
       "external.send",
       "credential.access",
@@ -214,6 +215,27 @@ describe("approval policy", () => {
     ] as const) {
       expect(FINAL_REVIEW_OPERATIONS.has(operation)).toBe(true);
     }
+  });
+
+  it("requires an exact owner review for planned file edits even under full access", () => {
+    const cmd = toolCommand("file.edit", { path: "src/example.ts", search: "old", replace: "new" },
+      ["tool:file.edit", "fs:read", "fs:write"]);
+    const result = evaluateApproval(cmd, [], { actor: "alice", now: 1, default_mode: "full_access" });
+    expect(result.context.operation).toBe("tool.file.edit");
+    expect(result.risk).toBe("medium");
+    expect(result.approval_level).toBe("L3_final_review");
+    expect(result.final_review_required).toBe(true);
+    expect(result.decision).toBe("ask");
+
+    const grant = buildApprovalGrant({ mode: "remember_this_decision", decision: "allow",
+      operation: "tool.file.edit", target_scope: "file", target: "src/example.ts", risk: "medium",
+      actor: "alice", created_by: "alice", expires_at: null });
+    const granted = evaluateApproval(cmd, [grant], { actor: "alice", now: 1 });
+    expect(granted.context.operation).toBe("tool.file.edit");
+    expect(granted.approval_level).toBe("L3_final_review");
+    expect(granted.final_review_required).toBe(true);
+    expect(granted.decision).toBe("ask");
+    expect(granted.reason).toContain("grant_matched_but_final_review_required");
   });
 
   it("does not let reusable grants bypass schedule final review", () => {

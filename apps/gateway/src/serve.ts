@@ -67,6 +67,7 @@ import type {
   ObservationAcquisitionRecord,
 } from "@blue-tanuki/protocol";
 import {
+  canonicalFileEditTargetVersionObservation,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   createGatewayInternalInboundRequest,
@@ -210,6 +211,7 @@ interface PendingApproval {
   approval_token_expires_at_ms?: number;
   content_review_digest?: string;
   content_review_provider_state_digest?: string;
+  content_review_file_edit_target_version_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
   goal_purpose_proposal?: {
     goal_ref: string;
@@ -1046,6 +1048,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       approval_evaluation?: ApprovalEvaluation;
       command_digest?: string;
       expected_gmail_draft_provider_state_digest?: string;
+      expected_file_edit_target_version_digest?: string;
       goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
       goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
       meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
@@ -1385,6 +1388,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         used_for_authority: false, may_execute: false,
       });
       return { status: reason };
+    }
+    if (opts.expected_file_edit_target_version_digest) {
+      const observedFileEditTargetVersionDigest = targetVersionObservation?.schema_version ===
+        "blue-tanuki.file-edit-target-version.v1"
+        ? createHash("sha256").update(canonicalFileEditTargetVersionObservation(targetVersionObservation), "utf8").digest("hex")
+        : undefined;
+      if (observedFileEditTargetVersionDigest !== opts.expected_file_edit_target_version_digest) {
+        const reason = "file_edit_content_review_stale";
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+        recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+          used_for_authority: false, may_execute: false,
+        });
+        return { status: reason };
+      }
     }
     const hdsBinding = hds.createExecutionAuthorityBinding(cmd, targetVersionObservation);
     const approvedCommand = executorApproval.approve(cmd, {
@@ -1883,7 +1900,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       return { executed: false, status: "plan_binding_stale" };
     }
     if (verdict === "approve" && (isGmailWriteContentReviewCommand(pending.command) ||
-        isGmailDraftSendReviewCommand(pending.command))) {
+        isGmailDraftSendReviewCommand(pending.command) ||
+        (pending.command.type === "tool_call" && pending.command.payload.tool_name === "file.edit"))) {
       const contentReview = await validatePendingApprovalContentReview(command_id, ctx.content_review_digest);
       if (contentReview !== "valid") {
         return { executed: false, pending: true, status: `approval_content_review_${contentReview}` };
@@ -2107,6 +2125,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       command_digest: pending.command_digest,
       ...(pending.content_review_provider_state_digest
         ? { expected_gmail_draft_provider_state_digest: pending.content_review_provider_state_digest } : {}),
+      ...(pending.content_review_file_edit_target_version_digest
+        ? { expected_file_edit_target_version_digest: pending.content_review_file_edit_target_version_digest } : {}),
     });
     return { approval: "approve", executed: true, status: r.status };
   }
@@ -3169,11 +3189,43 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
       return review;
     }
+    if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "file.edit" &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        if (!snapshot || !("diff" in snapshot) || snapshot.command_digest !== pending.command_digest ||
+            snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
+        const review: WebChatApprovalContentReview = {
+          kind: "file_edit_diff",
+          command_id,
+          command_digest: pending.command_digest,
+          review_digest: snapshot.review_digest,
+          request_payload_digest: snapshot.request_payload_digest,
+          operation: "file.edit",
+          path: snapshot.path,
+          before_content_digest: snapshot.before_content_digest,
+          after_content_digest: snapshot.after_content_digest,
+          target_version_digest: snapshot.target_version_digest,
+          operation_plan_binding_digest: snapshot.operation_plan_binding_digest,
+          replacement_count: snapshot.replacement_count,
+          diff: snapshot.diff,
+          used_for_authority: false,
+          may_execute: false,
+        };
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest,
+          content_review_file_edit_target_version_digest: snapshot.target_version_digest });
+        return review;
+      } catch {
+        return null;
+      }
+    }
     if (pending && isGmailDraftSendReviewCommand(pending.command) &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
       const snapshot = await executor.inspectCommandContentReview(pending.command);
-      if (!snapshot) return null;
+      if (!snapshot || "diff" in snapshot) return null;
       const review = projectGmailDraftSendContentReview(pending.command, pending.command_digest, snapshot);
       if (!review || review.kind !== "gmail_write_content" || !review.provider_state_digest || !review.review_digest) return null;
       pendingApprovals.set(command_id, {
@@ -3206,6 +3258,22 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     if (pending.memory_judgment_reassessment_proposal) {
       return validateMemoryJudgmentReassessmentContentReview(pending, content_review_digest);
+    }
+    if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "file.edit") {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest ||
+          !pending.content_review_file_edit_target_version_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const current = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        return current && "diff" in current && current.review_digest === pending.content_review_digest &&
+          current.target_version_digest === pending.content_review_file_edit_target_version_digest
+          ? "valid" : "stale";
+      } catch {
+        return "unavailable";
+      }
     }
     if (pending.goal_purpose_proposal) {
       return validateGoalPurposeChangeContentReview(pending, content_review_digest);
@@ -3261,6 +3329,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
       content_review_required: isGmailWriteContentReviewCommand(p.command) || isGmailDraftSendReviewCommand(p.command) ||
+        (p.command.type === "tool_call" && p.command.payload.tool_name === "file.edit") ||
         Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal) ||
         Boolean(p.memory_judgment_reassessment_proposal),

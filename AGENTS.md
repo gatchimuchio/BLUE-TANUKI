@@ -239,7 +239,7 @@ type ApprovalLevel = "L1_observe" | "L2_operate" | "L3_final_review";
 
 最終レビュー操作の唯一の実装正本は `packages/hds-brain/src/approval_policy.ts` の `FINAL_REVIEW_OPERATION_LIST` である。gateway、UI、channel、plugin、operator などが並行リストを持たない。
 
-少なくとも file delete、shell exec、external send、credential access、settings write、payment charge、schedule create/update/delete、unknown tool call、GitHub 公開書込み、破壊的 browser 操作、Gmail/Calendar/Drive/Teams/LINE 書込み、daemon/service install、credential 永続化、network exposure、installed code/service metadata/authority policy update を含む。追加時は operation 名、risk、level、full-access containment、reusable-grant non-bypass、audit、docs、rollback/failure を同時に成立させる。
+少なくとも file delete、`file.edit`、shell exec、external send、credential access、settings write、payment charge、schedule create/update/delete、unknown tool call、GitHub 公開書込み、破壊的 browser 操作、Gmail/Calendar/Drive/Teams/LINE 書込み、daemon/service install、credential 永続化、network exposure、installed code/service metadata/authority policy update を含む。`file.edit`は`tool.file.edit`としてL3最終確認を必須にし、認証済みno-store画面でOperation Plan目的束縛digest・対象版・実差分を確認する。承認前・作用直前の再照合に失敗したら編集しない。差分本文は監査・M・historyへ保存せず、確認projectionは権限ではない。追加時は operation 名、risk、level、full-access containment、reusable-grant non-bypass、audit、docs、rollback/failure を同時に成立させる。
 
 ## 15. Operator usability
 

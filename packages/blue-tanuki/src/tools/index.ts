@@ -4,6 +4,8 @@ export {
   type Tool,
   type ToolCapability,
   type ToolContext,
+  type FileEditDiffContentReview,
+  type ToolContentReview,
 } from "./registry.js";
 export {
   composioAllowedToolkits,

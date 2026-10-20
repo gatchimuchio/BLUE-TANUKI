@@ -16,6 +16,7 @@ export type ApprovalOperation =
   | "tool.file.read"
   | "tool.file.search"
   | "tool.file.write"
+  | "tool.file.edit"
   | "tool.file.delete"
   | "tool.shell.exec"
   | "tool.network.http"
@@ -121,6 +122,7 @@ const RISK_ORDER: Record<ApprovalRisk, number> = { low: 1, medium: 2, high: 3 };
 
 export const FINAL_REVIEW_OPERATION_LIST = [
   "tool.call",
+  "tool.file.edit",
   "tool.file.delete",
   "tool.shell.exec",
   "external.send",
@@ -245,6 +247,9 @@ export function operationFromCommand(command: ExecuteCommand, caps: readonly Too
   if (hasAny(caps, ["settings:write"])) return "settings.write";
   if (hasAny(caps, ["shell:exec", "process:exec"])) return "tool.shell.exec";
   if (hasAny(caps, ["fs:delete", "file:delete"])) return "tool.file.delete";
+  if (hasAny(caps, ["tool:file.edit"]) || (command.type === "tool_call" && command.payload.tool_name === "file.edit")) {
+    return "tool.file.edit";
+  }
   if (hasAny(caps, ["fs:write", "file:write"])) return "tool.file.write";
   if (hasAny(caps, ["fs:read", "file:read"])) {
     if (command.type === "tool_call" && command.payload.tool_name === "file.search") return "tool.file.search";
@@ -274,7 +279,7 @@ export function riskForOperation(op: ApprovalOperation, caps: readonly ToolCapab
   if (["credential.access", "payment.charge"].includes(op)) return "high";
   if (["tool.file.delete", "tool.shell.exec", "external.send", "settings.write", "schedule.create", "schedule.update", "schedule.delete", "schedule.resolve_event", "recovery.restore", "recovery.reset_provider", "recovery.reset_connector", "recovery.factory_reset", "browser.automation", "github.write", "google.write"].includes(op)) return "high";
   if (
-    ["tool.file.write", "tool.network.http", "browser.snapshot", "channel.send"].includes(op) ||
+    ["tool.file.write", "tool.file.edit", "tool.network.http", "browser.snapshot", "channel.send"].includes(op) ||
     hasPrefix(caps, "network:")
   ) return "medium";
   return "low";

@@ -89,7 +89,7 @@ function fileEditCandidate(id: string): OperationPlan {
   const output = { edited: true, replacements: 1, bytes_written: Buffer.byteLength("synthetic edited text\n") };
   return { version: "operation-core.v1", plan_id: "plan-" + id, request_id: id, state: "planned",
     steps: [{ step_id: "edit-note", operation: "file.edit", target, state: "planned", effects: ["read", "write"],
-      permission: { risk: "medium", approval_level: "L2_operate", final_review_required: false,
+      permission: { risk: "medium", approval_level: "L3_final_review", final_review_required: true,
         hds_brain_authority_required: true, approval_gate_required: true },
       adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
       parameters: { path: "notes.txt", search: "original", replace: "edited", expected_replacements: 1, max_bytes: 128 },
@@ -347,6 +347,14 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const operationPlanBindingDigest = c.hds.getExecutionOperationPlanBindingDigest(c.cmd);
     const observedTarget = await c.executor.inspectCommandTargetVersion(c.cmd, undefined, operationPlanBindingDigest);
     expect(observedTarget?.schema_version).toBe("blue-tanuki.file-edit-target-version.v1");
+    const contentReview = await c.executor.inspectCommandContentReview(c.cmd, undefined, operationPlanBindingDigest);
+    if (!contentReview || !("diff" in contentReview)) throw new Error("selected file.edit has no owner-review diff");
+    expect(contentReview).toMatchObject({ path: "notes.txt", replacement_count: 1,
+      command_digest: operationPlanDigest(c.cmd), operation_plan_binding_digest: operationPlanBindingDigest,
+      used_for_authority: false, may_execute: false });
+    expect(contentReview.diff).toContain("-original\n+edited\n");
+    expect(contentReview.target_version_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(readFileSync(join(c.workspace, "notes.txt"), "utf8")).toBe("synthetic original text\n");
     expect(() => c.hds.createExecutionAuthorityBinding(c.cmd, { ...observedTarget!,
       operation_plan_binding_digest: "f".repeat(64) })).toThrow(/current Operation Plan source/);
 

@@ -25,7 +25,7 @@ import {
   type FileDeleteTargetVersionObservation,
   type FileEditTargetVersionObservation,
 } from "@blue-tanuki/protocol";
-import { echoTool, type Tool } from "./registry.js";
+import { echoTool, type FileEditDiffContentReview, type Tool } from "./registry.js";
 import {
   gmailReadTool,
   googleCalendarReadTool,
@@ -2009,6 +2009,67 @@ export async function inspectFileEditTargetVersion(
   return (await resolveFileEditTargetVersion(args, opts)).observation;
 }
 
+const MAX_FILE_EDIT_REVIEW_DIFF_BYTES = 128_000;
+
+function diffLines(prefix: "-" | "+", value: string): string {
+  return value.split("\n").map((line) => `${prefix}${line.replace(/\r/g, "\\r").replace(/\u001b/g, "\\x1b")}`).join("\n") + "\n";
+}
+
+function fileEditReplacementDiff(relativePath: string, before: string, search: string, replace: string,
+  replacementCount: number): string {
+  const safePath = JSON.stringify(relativePath);
+  let diff = `--- a/${safePath}\n+++ b/${safePath}\n`;
+  let sourceOffset = 0;
+  let lineDelta = 0;
+  const oldLines = search.split("\n");
+  const newLines = replace.split("\n");
+  for (let index = 0; index < replacementCount; index += 1) {
+    const matchAt = before.indexOf(search, sourceOffset);
+    if (matchAt < 0) throw new Error("file.edit review could not reconstruct the observed replacement diff");
+    const oldLine = before.slice(0, matchAt).split("\n").length;
+    const newLine = oldLine + lineDelta;
+    diff += `@@ -${oldLine},${oldLines.length} +${newLine},${newLines.length} @@ replacement ${index + 1}/${replacementCount}\n`;
+    diff += diffLines("-", search) + diffLines("+", replace);
+    if (Buffer.byteLength(diff, "utf8") > MAX_FILE_EDIT_REVIEW_DIFF_BYTES) {
+      throw new Error("file.edit diff exceeds the owner-review size limit");
+    }
+    sourceOffset = matchAt + search.length;
+    lineDelta += newLines.length - oldLines.length;
+  }
+  return diff;
+}
+
+export async function inspectFileEditContentReview(
+  args: Record<string, unknown>,
+  opts: Pick<FileEditOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
+): Promise<FileEditDiffContentReview> {
+  if (!opts.command_digest || !/^[a-f0-9]{64}$/.test(opts.command_digest) ||
+      !opts.operation_plan_binding_digest || !/^[a-f0-9]{64}$/.test(opts.operation_plan_binding_digest)) {
+    throw new Error("file.edit content review requires a bound command and Operation Plan source");
+  }
+  const resolved = await resolveFileEditTargetVersion(args, opts);
+  const search = stringArg(args, "search")!;
+  const replace = stringArg(args, "replace")!;
+  const diff = fileEditReplacementDiff(resolved.relative_path, resolved.before_buffer.toString("utf8"), search, replace,
+    resolved.observation.replacement_count);
+  const targetVersionDigest = createHash("sha256").update(
+    canonicalFileEditTargetVersionObservation(resolved.observation), "utf8").digest("hex");
+  const reviewDigest = createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.file-edit-diff-review.v1", opts.command_digest, opts.operation_plan_binding_digest,
+    targetVersionDigest, diff,
+  ]), "utf8").digest("hex");
+  return Object.freeze({ path: resolved.relative_path, diff,
+    replacement_count: resolved.observation.replacement_count,
+    before_content_digest: resolved.observation.before_content_digest,
+    after_content_digest: resolved.observation.after_content_digest,
+    target_version_digest: targetVersionDigest,
+    operation_plan_binding_digest: opts.operation_plan_binding_digest,
+    request_payload_digest: resolved.observation.edit_payload_digest,
+    command_digest: opts.command_digest,
+    review_digest: reviewDigest,
+    used_for_authority: false, may_execute: false });
+}
+
 /** Edit only the exact J-selected file version and payload; raw content stays out of the observation. */
 export async function invokeFileEdit(
   args: Record<string, unknown>,
@@ -2150,6 +2211,9 @@ export const fileEditTool: Tool = {
     env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
   }): Promise<FileEditTargetVersionObservation> {
     return await inspectFileEditTargetVersion(args, options);
+  },
+  async inspect_content_review(args, options): Promise<FileEditDiffContentReview> {
+    return await inspectFileEditContentReview(args, options);
   },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     const targetVersion = context.target_version_observation;

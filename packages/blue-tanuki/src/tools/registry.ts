@@ -20,6 +20,24 @@ export interface GmailDraftContentReview {
   request_payload_digest: string;
 }
 
+/** Exact plan-bound replacement diff revealed only through the authenticated owner-review endpoint. */
+export interface FileEditDiffContentReview {
+  path: string;
+  diff: string;
+  replacement_count: number;
+  before_content_digest: string;
+  after_content_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  request_payload_digest: string;
+  command_digest: string;
+  review_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview;
+
 /**
  * Tool registry.
  *
@@ -55,7 +73,9 @@ export interface Tool {
   /** Exact plain-text-only content projection for a resume-authenticated draft review. */
   inspect_content_review?(args: Record<string, unknown>, options?: {
     env?: Readonly<Record<string, string | undefined>>;
-  }): Promise<GmailDraftContentReview>;
+    operation_plan_binding_digest?: string;
+    command_digest?: string;
+  }): Promise<ToolContentReview>;
   invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 }
 

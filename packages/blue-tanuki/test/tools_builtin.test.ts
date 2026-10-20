@@ -13,6 +13,7 @@ import {
   inspectFileDeleteTargetVersion,
   invokeFileDelete,
   inspectFileEditTargetVersion,
+  inspectFileEditContentReview,
   invokeFileEdit,
   invokeHttpFetch,
   invokeWebSearch,
@@ -452,6 +453,32 @@ describe("built-in tools", () => {
       expect(await fs.readFile(path.join(dir, "a.txt"), "utf8")).toBe(
         "blue fish\nblue bird\n",
       );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reveals a purpose-bound file.edit diff without applying it", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-tool-"));
+    const before = "one fish\none bird\n";
+    try {
+      await fs.writeFile(path.join(dir, "a.txt"), before, "utf8");
+      const args = { path: "a.txt", search: "one", replace: "blue", expected_replacements: 2 };
+      const options = { ...fileSearchEnv(dir), command_digest: "a".repeat(64),
+        operation_plan_binding_digest: "b".repeat(64) };
+      const review = await inspectFileEditContentReview(args, options);
+      expect(review).toMatchObject({ path: "a.txt", replacement_count: 2,
+        before_content_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        after_content_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        target_version_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        operation_plan_binding_digest: options.operation_plan_binding_digest,
+        command_digest: options.command_digest,
+        used_for_authority: false, may_execute: false });
+      expect(review.review_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(review.diff).toContain("@@ -1,1 +1,1 @@ replacement 1/2");
+      expect(review.diff).toContain("-one\n+blue\n");
+      expect(review.diff).toContain("@@ -2,1 +2,1 @@ replacement 2/2");
+      expect(await fs.readFile(path.join(dir, "a.txt"), "utf8")).toBe(before);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

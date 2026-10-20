@@ -166,6 +166,24 @@ export interface WebChatGmailApprovalContentReview {
   used_for_authority: false;
 }
 
+export interface WebChatFileEditDiffContentReview {
+  kind: "file_edit_diff";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  request_payload_digest: string;
+  operation: "file.edit";
+  path: string;
+  before_content_digest: string;
+  after_content_digest: string;
+  target_version_digest: string;
+  operation_plan_binding_digest: string;
+  replacement_count: number;
+  diff: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 export interface WebChatGoalPurposeChangeContentReview {
   kind: "goal_purpose_change";
   command_id: string;
@@ -252,7 +270,8 @@ export interface WebChatMemoryJudgmentReassessmentContentReview {
 }
 
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGoalPurposeChangeContentReview |
-  WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview;
+  WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
+  WebChatFileEditDiffContentReview;
 
 export type WebChatApprovalContentReviewValidation =
   | "not_required"

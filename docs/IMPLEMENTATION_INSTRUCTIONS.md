@@ -1,6 +1,25 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-F01.01-PLAN-BOUND-FILE-EDIT-RESULT-CONSUMER`
+### 最新BUILD_BATCH：`QEB-01-F01.01-OWNER-REVIEWED-EDIT-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`fd09258e08793eea9efb7a363be15d4774844446`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.01と`file.edit`のproducer・consumerを再読した。Windows localで施工し、既存untracked Linux `target/`は保持した。
+
+Operation Planの`file.edit`候補から、Approval Gate／WebChat owner確認画面へ現在の対象版に結び付いた置換差分を渡す経路を接続した。`tool.file.edit`はrisk=mediumのL3 final reviewとし、full-access・再利用grantで迂回できない。no-storeの認証済み画面は対象・置換数・変更前後digest・Operation Plan binding digest・変更差分を表示し、承認直前に差分／対象版を再検査する。作用直前にも同じ対象版digestを再照合し、変更済みなら編集を拒否する。差分の生成はファイルを変更せず、本文をaudit／M／historyへ保存しない。既存の成功結果→J検証→M→明示選択後のC観測経路を維持する。
+
+この差分確認から実編集までの限定consumerを`WIRED`とする。F01.01の隔離destinationへの適用・独立再読・復旧は未接続で`BUILD_GAP`のまま。F01.01全体、単一の実用仕事、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| file.edit／Approval Gate／J-M-C接続の限定Vitest | PASS、5 files／10 tests。対象外147 testsはskip。旧L2計画のcommand昇格拒否も確認。 |
+| `pnpm typecheck` | PASS。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| `pnpm docs:check` | PASS。docs、日本語基底監査、licensing。日本語移行負債76件は既存継続項目。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部作用 | 未実施。BUILD_COVERED後へ配置。 |
+
+ActionsはWindows localでconsumer疎通とbuildが成立するため未使用。実装commit、push、remote HEAD、二世代backup refsのcloseout照合は未完了。次consumerはF01.01の隔離destination適用・再読・復旧へ進める。Git closeout後に実commit／remote SHAを追記する。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読する。
+
+### 前回BUILD_BATCH：`QEB-01-F01.01-PLAN-BOUND-FILE-EDIT-RESULT-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`a4d1906b5fc5be604a87881e9e9ce92ce7ee4c25`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／本指示、F01.01とファイル編集の現行producer・consumerを読み直した。Windows localで施工し、既存untracked Linux `target/`を保持した。
 

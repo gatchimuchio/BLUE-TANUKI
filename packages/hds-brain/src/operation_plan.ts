@@ -495,7 +495,10 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
         typeof parameters.search !== "string" || parameters.search.length === 0 ||
         typeof parameters.replace !== "string" || parameters.search === parameters.replace ||
         Buffer.byteLength(parameters.search, "utf8") > 1_000_000 || Buffer.byteLength(parameters.replace, "utf8") > 1_000_000 ||
-        step.effects.length !== 2 || step.effects[0] !== "read" || step.effects[1] !== "write") return false;
+        step.effects.length !== 2 || step.effects[0] !== "read" || step.effects[1] !== "write" ||
+        step.permission.risk !== "medium" || step.permission.approval_level !== "L3_final_review" ||
+        !step.permission.final_review_required || !step.permission.approval_gate_required ||
+        !step.permission.hds_brain_authority_required) return false;
     const expectedReplacements = parameters.expected_replacements ?? 1;
     const maxBytes = parameters.max_bytes ?? 512_000;
     if (typeof expectedReplacements !== "number" || !Number.isInteger(expectedReplacements) ||

@@ -1257,7 +1257,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 (requiresContentReview
                   ? '<section class="approval-content-review"><button data-review-content="' + escapeHtml(item.command_id || "") + '">' +
                      (goalPurposeReview ? 'Review exact purpose' : goalPurposeRelationReview ? 'task・目的の内容を確認' :
-                       meaningUpdateReview ? '候補本文を確認' : 'Review exact content') +
+                       meaningUpdateReview ? '候補本文を確認' : item.operation === 'tool.file.edit' ? '変更差分を確認' : 'Review exact content') +
                     '</button><div data-content-review-view aria-live="polite">Content has not been revealed.</div></section>'
                   : '') +
                 '<div class="action-row">' +
@@ -3257,6 +3257,56 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("content review failed: HTTP " + response.status + " " + text);
         }
         const review = await response.json();
+        if (review.kind === "file_edit_diff") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          if (review.command_id !== commandId || review.operation !== "file.edit" ||
+              review.used_for_authority !== false || review.may_execute !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.before_content_digest) ||
+              !isDigest(review.after_content_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) || typeof review.path !== "string" ||
+              review.path.length === 0 || review.path.length > 512 ||
+              !Number.isSafeInteger(review.replacement_count) || review.replacement_count < 1 ||
+              review.replacement_count > 100 || typeof review.diff !== "string" || review.diff.length === 0 ||
+              new TextEncoder().encode(review.diff).byteLength > 128000) {
+            throw new Error("変更差分の内容がこの承認要求に結び付いていません");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "目的に結び付いたファイル変更差分（適用前）";
+          view.appendChild(heading);
+          [
+            ["対象", review.path],
+            ["置換数", String(review.replacement_count)],
+            ["変更前digest", review.before_content_digest],
+            ["変更後digest", review.after_content_digest],
+            ["対象版digest", review.target_version_digest],
+            ["Operation Plan目的束縛digest", review.operation_plan_binding_digest]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const diff = document.createElement("pre");
+          diff.className = "mono";
+          diff.textContent = review.diff;
+          view.appendChild(diff);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "この差分確認は権限を作らず、承認直前と適用直前に対象版を再照合します。";
+          view.appendChild(note);
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | diff review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "変更差分を再確認";
+          return;
+        }
         if (review.kind === "goal_purpose_change") {
           if (review.command_id !== commandId || review.operation !== "goal.governance.change" ||
               review.used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review.command_digest || "") ||

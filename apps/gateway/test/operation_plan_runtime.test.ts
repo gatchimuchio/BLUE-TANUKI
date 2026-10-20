@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
-  ToolRegistry, fileDeleteTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "@blue-tanuki/core";
+  ToolRegistry, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservationSchema, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
   OperationPlanCheckpointSchema,
   type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
@@ -1155,6 +1155,35 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       .toThrow(/target version binding does not match evidence/);
     authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, targetObservation);
     // The fixture binds the existing draft state only; no Gmail provider request is issued.
+  });
+
+  it("旧L2のfile.edit計画は明示選択commandへ昇格しない", async () => {
+    const origin = request("plan:compute synthetic noteの限定編集");
+    const target = { kind: "file" as const, id: "notes.txt" };
+    const candidate: OperationPlan = {
+      version: "operation-core.v1", plan_id: `legacy-file-edit-${origin.id}`, request_id: origin.id,
+      state: "planned", steps: [{ step_id: "edit-note", operation: "file.edit", target, state: "planned",
+        effects: ["read", "write"], permission: { risk: "medium", approval_level: "L2_operate",
+          final_review_required: false, hds_brain_authority_required: true, approval_gate_required: true },
+        adapter: "internal_runtime", adapter_is_authority: false, command_generated_by_adapter_only: false,
+        parameters: { path: "notes.txt", search: "old", replace: "new", expected_replacements: 1, max_bytes: 128 },
+        preparation: { depends_on: [], bindings: [], preconditions: [],
+          validation: [{ check_id: "edited-note", method: "result_equals", target,
+            expected: { edited: true, replacements: 1, bytes_written: 3 } }],
+          compensation: { available: false, reason: "an in-place edit requires a new owner-reviewed edit" } } }],
+      rollback: { available: false },
+      raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+      planner_output_used_for_authority: false, hds_brain_authority_required: true,
+    };
+    const hds = new HDSUpperController();
+    try {
+      const planExecutor = rig(hds, candidate, fileEditTool);
+      await planExecutor.run(hds.decide(origin).command!);
+      const rejected = review(hds, candidate, "edit-note");
+      expect(rejected.command).toBeNull();
+      expect(rejected.log.commit.reason).toContain("plan_target_resolver_not_connected");
+      expect(hds.getAudit().verify()).toBe(true);
+    } finally { hds.close(); }
   });
 
   it("J計画のfile.writeは未存在のcreate対象とpayloadをHDS・Executor ticketへ結び実ファイルへ接続する", async () => {

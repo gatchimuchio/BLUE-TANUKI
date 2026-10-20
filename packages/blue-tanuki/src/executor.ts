@@ -47,7 +47,7 @@ import {
   type ComputeInputSource,
   type ComputeRequest,
 } from "./llm/compute.js";
-import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolRegistry } from "./tools/registry.js";
+import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolContentReview, ToolRegistry } from "./tools/registry.js";
 import { fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest } from "./tools/google_write.js";
@@ -599,16 +599,39 @@ export class Executor {
     return Object.freeze(observation);
   }
 
-  /** Exact content projection for an existing draft; only the registered Gmail adapter may provide it. */
+  /** Exact content projection for a bound local edit or the registered Gmail draft adapter. */
   async inspectCommandContentReview(command: ExecuteCommand,
-    env?: Readonly<Record<string, string | undefined>>): Promise<GmailDraftContentReview | undefined> {
-    if (command.type !== "tool_call" || command.payload.tool_name !== "gmail.write" ||
-        command.payload.arguments.operation !== "draft.send") return undefined;
+    env?: Readonly<Record<string, string | undefined>>,
+    operationPlanBindingDigest?: string): Promise<ToolContentReview | undefined> {
+    if (command.type !== "tool_call") return undefined;
+    if (command.payload.tool_name === "file.edit") {
+      if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+        throw new Error("file.edit content review requires a selected Operation Plan binding");
+      }
+      const tool = this.deps.tools.get("file.edit");
+      if (tool !== fileEditTool || !tool.inspect_content_review) {
+        throw new Error("file.edit content review requires the registered built-in adapter");
+      }
+      const review = await tool.inspect_content_review(command.payload.arguments, {
+        ...(env ? { env } : {}),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      });
+      if (!("diff" in review) || review.command_digest !== operationPlanDigest(command) ||
+          review.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          !/^[a-f0-9]{64}$/.test(review.review_digest) || !/^[a-f0-9]{64}$/.test(review.target_version_digest) ||
+          review.used_for_authority !== false || review.may_execute !== false) {
+        throw new Error("file.edit content review returned evidence for another command or plan source");
+      }
+      return review;
+    }
+    if (command.payload.tool_name !== "gmail.write" || command.payload.arguments.operation !== "draft.send") return undefined;
     const tool = this.deps.tools.get("gmail.write");
     if (tool !== gmailWriteTool || !tool.inspect_content_review) {
       throw new Error("gmail.write content review requires the registered built-in adapter");
     }
-    return await tool.inspect_content_review(command.payload.arguments, env ? { env } : undefined);
+    const review = await tool.inspect_content_review(command.payload.arguments, env ? { env } : undefined);
+    return "diff" in review ? undefined : review;
   }
 
   async execute(cmd: ApprovedCommand, context: ExecutorExecutionContext = {}): Promise<ExecuteFeedback> {
