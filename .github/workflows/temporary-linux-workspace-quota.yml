@@ -580,6 +580,285 @@ jobs:
             echo "fuse_probe_bwrap_start_failed status=$probe_status"
           fi
 
+      - name: Probe isolated FUSE mount propagation and commit target masking
+        shell: bash
+        run: |
+          set -euo pipefail
+          lower_source="$(mktemp -d "$RUNNER_TEMP/blue-tanuki-fuse-lower.XXXXXX")"
+          commit_source="$(mktemp -d "$RUNNER_TEMP/blue-tanuki-fuse-target.XXXXXX")"
+          probe_root="$(mktemp -d "$RUNNER_TEMP/blue-tanuki-fuse-boundary.XXXXXX")"
+          cleanup() {
+            for path in "$lower_source" "$commit_source" "$probe_root"; do
+              case "$path" in
+                "$RUNNER_TEMP"/blue-tanuki-fuse-lower.*|"$RUNNER_TEMP"/blue-tanuki-fuse-target.*|"$RUNNER_TEMP"/blue-tanuki-fuse-boundary.*)
+                  rm -rf -- "$path"
+                  ;;
+                *)
+                  echo "fuse_boundary_cleanup=path_check_failed"
+                  return 1
+                  ;;
+              esac
+            done
+          }
+          trap cleanup EXIT
+
+          printf fixture > "$lower_source/probe"
+          printf immutable-sentinel > "$commit_source/sentinel"
+          chmod 0644 "$commit_source/sentinel"
+          target_digest_before="$(sha256sum "$commit_source/sentinel" | cut -d ' ' -f1)"
+          target_metadata_before="$(stat -c '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "$commit_source" "$commit_source/sentinel")"
+          target_entries_before="$(find "$commit_source" -mindepth 1 -maxdepth 1 -printf '%y:%f\n' | LC_ALL=C sort)"
+
+          cat > "$probe_root/outer.sh" <<'OUTER'
+          #!/bin/bash
+          set -euo pipefail
+          mount --make-rprivate /
+          mkdir -p /workspace-shared/view /workspace-storage
+          mount -t tmpfs -o size=134217728,nr_inodes=100000,mode=0700 tmpfs /workspace-storage
+          mkdir -p /workspace-storage/isolation-upper /workspace-storage/isolation-work
+          mount --bind /workspace-shared /workspace-shared
+          mount --make-shared /workspace-shared
+          if ! awk '$5 == "/workspace-shared" { for (i = 7; i <= NF; i++) if ($i ~ /^shared:/) shared = 1 } END { exit !shared }' /proc/self/mountinfo; then
+            echo "fuse_boundary_parent_mount_shared=failed"
+            exit 1
+          fi
+          if awk '$5 == "/" { for (i = 7; i <= NF; i++) if ($i ~ /^shared:/) shared = 1 } END { exit !shared }' /proc/self/mountinfo; then
+            echo "fuse_boundary_root_mount_private=failed"
+            exit 1
+          fi
+
+          child_pid=""
+          cleanup_child() {
+            if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+              : > /tmp/fuse-boundary-stop
+              for attempt in $(seq 1 50); do
+                if ! kill -0 "$child_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.1
+              done
+              if kill -0 "$child_pid" 2>/dev/null; then
+                kill -TERM -- "-$child_pid" 2>/dev/null || true
+                kill -KILL -- "-$child_pid" 2>/dev/null || true
+              fi
+              wait "$child_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_child EXIT
+
+          /usr/bin/setsid /usr/bin/unshare --mount --pid --fork --propagation unchanged /bin/bash /fuse-boundary-child.sh >/tmp/fuse-boundary-child.log 2>&1 &
+          child_pid=$!
+          ready=0
+          for attempt in $(seq 1 100); do
+            if [ -f /tmp/fuse-boundary-ready ]; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$child_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" != 1 ]; then
+            echo "fuse_boundary_child_setup=failed"
+            grep -E '^fuse_boundary_[a-z0-9_]+=[a-z0-9_-]+$' /tmp/fuse-boundary-child.log | tail -n 8 || true
+            exit 1
+          fi
+
+          if ! python3 - <<'PY'
+          import sys
+          found = False
+          with open('/proc/self/mountinfo', encoding='ascii') as stream:
+              for line in stream:
+                  fields = line.split()
+                  try:
+                      separator = fields.index('-')
+                  except ValueError:
+                      continue
+                  if len(fields) > separator + 1 and fields[4] == '/workspace-shared/view' and fields[separator + 1].startswith('fuse') and any(value.startswith('shared:') for value in fields[6:separator]):
+                      found = True
+          if not found:
+              print('fuse_boundary_mount_propagation=failed', flush=True)
+              raise SystemExit(1)
+          print('fuse_boundary_mount_propagation=success', flush=True)
+          PY
+          then
+            exit 1
+          fi
+
+          if [ "$(cat /workspace-shared/view/probe 2>/dev/null || true)" != fixture ]; then
+            echo "fuse_boundary_parent_read=failed"
+            exit 1
+          fi
+          if ! printf write > /workspace-shared/view/created || ! rm /workspace-shared/view/probe || [ -e /workspace-shared/view/probe ] || [ "$(cat /workspace-shared/view/created 2>/dev/null || true)" != write ]; then
+            echo "fuse_boundary_parent_write_whiteout=failed"
+            exit 1
+          fi
+          if [ "$(cat /commit-target/sentinel 2>/dev/null || true)" != immutable-sentinel ]; then
+            echo "fuse_boundary_parent_target_changed=failed"
+            exit 1
+          fi
+          echo "fuse_boundary_parent_read_write_whiteout=success"
+
+          : > /tmp/fuse-boundary-stop
+          if ! wait "$child_pid"; then
+            echo "fuse_boundary_child_cleanup=failed"
+            child_pid=""
+            exit 1
+          fi
+          child_pid=""
+          if python3 - <<'PY'
+          found = False
+          with open('/proc/self/mountinfo', encoding='ascii') as stream:
+              for line in stream:
+                  fields = line.split()
+                  try:
+                      separator = fields.index('-')
+                  except ValueError:
+                      continue
+                  if len(fields) > separator + 1 and fields[4] == '/workspace-shared/view' and fields[separator + 1].startswith('fuse'):
+                      found = True
+          raise SystemExit(1 if found else 0)
+          PY
+          then
+            echo "fuse_boundary_mount_cleanup=failed"
+            exit 1
+          fi
+          echo "fuse_boundary_child_cleanup=success"
+          trap - EXIT
+          OUTER
+
+          cat > "$probe_root/child.sh" <<'CHILD'
+          #!/bin/bash
+          set -euo pipefail
+          mount -t proc proc /proc
+          mount -t tmpfs -o size=1048576,nr_inodes=64,mode=0755 tmpfs /commit-target
+          printf masked-only > /commit-target/sentinel
+          chmod 0644 /commit-target/sentinel
+          mount_helper_pid=""
+          /usr/sbin/mount.fuse3 /usr/bin/fuse-overlayfs# /workspace-shared/view \
+            -o drop_privileges,lowerdir=/workspace-lower,upperdir=/workspace-storage/isolation-upper,workdir=/workspace-storage/isolation-work \
+            >/tmp/fuse-boundary-mount.log 2>&1 &
+          mount_helper_pid=$!
+          cleanup_child_ns() {
+            umount /workspace-shared/view 2>/dev/null || true
+            if [ -n "$mount_helper_pid" ]; then
+              wait "$mount_helper_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_child_ns EXIT
+          fuse_mounted=0
+          for attempt in $(seq 1 100); do
+            if python3 - <<'PY'
+          found = False
+          with open('/proc/self/mountinfo', encoding='ascii') as stream:
+              for line in stream:
+                  fields = line.split()
+                  try:
+                      separator = fields.index('-')
+                  except ValueError:
+                      continue
+                  if len(fields) > separator + 1 and fields[4] == '/workspace-shared/view' and fields[separator + 1].startswith('fuse'):
+                      found = True
+          raise SystemExit(0 if found else 1)
+          PY
+            then
+              fuse_mounted=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$fuse_mounted" != 1 ]; then
+            echo "fuse_boundary_child_mount=failed"
+            exit 1
+          fi
+
+          fuse_pid=""
+          for attempt in $(seq 1 100); do
+            for process in /proc/[0-9]*; do
+              if IFS= read -r process_name < "$process/comm" 2>/dev/null && [ "$process_name" = fuse-overlayfs ]; then
+                fuse_pid="${process#/proc/}"
+                break 2
+              fi
+            done
+            sleep 0.1
+          done
+          if [ -z "$fuse_pid" ]; then
+            echo "fuse_boundary_daemon_state=unavailable"
+            exit 1
+          fi
+          FUSE_PID="$fuse_pid" python3 - <<'PY'
+          import os
+
+          pid = os.environ['FUSE_PID']
+          status = {}
+          with open(f'/proc/{pid}/status', encoding='ascii') as stream:
+              for line in stream:
+                  key, separator, value = line.partition(':')
+                  if separator:
+                      status[key] = value.strip()
+          required = {'CapEff': '0000000000000000', 'CapPrm': '0000000000000000', 'CapBnd': '0000000000000000', 'NoNewPrivs': '1'}
+          if any(status.get(key) != value for key, value in required.items()):
+              print('fuse_boundary_daemon_privilege_drop=failed', flush=True)
+              raise SystemExit(1)
+          if os.readlink(f'/proc/{pid}/ns/mnt') != os.readlink('/proc/self/ns/mnt') or os.readlink(f'/proc/{pid}/ns/pid') != os.readlink('/proc/self/ns/pid'):
+              print('fuse_boundary_daemon_namespace=failed', flush=True)
+              raise SystemExit(1)
+          with open(f'/proc/{pid}/mountinfo', encoding='ascii') as stream:
+              target_is_tmpfs = any(
+                  fields[4] == '/commit-target' and fields[fields.index('-') + 1] == 'tmpfs'
+                  for line in stream
+                  if (fields := line.split()) and '-' in fields
+              )
+          try:
+              with open(f'/proc/{pid}/root/commit-target/sentinel', encoding='ascii') as stream:
+                  masked_target = stream.read() == 'masked-only'
+          except OSError:
+              masked_target = False
+          if not target_is_tmpfs or not masked_target:
+              print('fuse_boundary_daemon_target_view=failed', flush=True)
+              raise SystemExit(1)
+          print('fuse_boundary_daemon_privilege_namespace_target=success', flush=True)
+          PY
+          : > /tmp/fuse-boundary-ready
+          while [ ! -f /tmp/fuse-boundary-stop ]; do
+            sleep 0.1
+          done
+          umount /workspace-shared/view
+          wait "$mount_helper_pid" 2>/dev/null || true
+          trap - EXIT
+          CHILD
+          chmod 0700 "$probe_root/outer.sh" "$probe_root/child.sh"
+
+          if ! bwrap \
+            --unshare-user --unshare-pid --unshare-net --unshare-ipc --unshare-uts \
+            --new-session --die-with-parent --cap-drop ALL --cap-add CAP_SYS_ADMIN --cap-add CAP_SETPCAP \
+            --ro-bind /usr /usr \
+            --symlink usr/bin /bin --symlink usr/sbin /sbin --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
+            --proc /proc --dev /dev --dev-bind /dev/fuse /dev/fuse \
+            --size 134217728 --perms 1777 --tmpfs /tmp \
+            --dir /workspace-lower --ro-bind "$lower_source" /workspace-lower \
+            --dir /workspace-shared --dir /workspace-storage --dir /commit-target \
+            --bind "$commit_source" /commit-target \
+            --ro-bind "$probe_root/outer.sh" /fuse-boundary-outer.sh \
+            --ro-bind "$probe_root/child.sh" /fuse-boundary-child.sh \
+            --chdir / --clearenv --setenv PATH /usr/bin:/bin --setenv LANG C.UTF-8 \
+            -- /bin/bash /fuse-boundary-outer.sh >"$probe_root/bwrap.log" 2>&1; then
+            echo "fuse_boundary_namespace_probe=failed"
+            grep -E '^fuse_boundary_[a-z0-9_]+=[a-z0-9_-]+$' "$probe_root/bwrap.log" | tail -n 8 || true
+            exit 1
+          fi
+
+          target_digest_after="$(sha256sum "$commit_source/sentinel" | cut -d ' ' -f1)"
+          target_metadata_after="$(stat -c '%d:%i:%f:%u:%g:%h:%s:%Y:%Z' "$commit_source" "$commit_source/sentinel")"
+          target_entries_after="$(find "$commit_source" -mindepth 1 -maxdepth 1 -printf '%y:%f\n' | LC_ALL=C sort)"
+          if [ "$target_digest_before" != "$target_digest_after" ] || [ "$target_metadata_before" != "$target_metadata_after" ] || [ "$target_entries_before" != "$target_entries_after" ]; then
+            echo "fuse_boundary_host_target_integrity=failed"
+            exit 1
+          fi
+          echo "fuse_boundary_host_target_integrity=success"
+          echo "fuse_boundary_probe=success"
+
       - name: Probe FUSE OverlayFS with no process capabilities
         shell: bash
         run: |
