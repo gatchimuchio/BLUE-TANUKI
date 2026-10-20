@@ -2,7 +2,7 @@
 
 2026-10-20。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
-2026-10-20の`QEB-01-C07.03-POST-REASSESSMENT-FRESH-J-PLAN-REVIEW`では、M再評価後のcurrent interpretationに対するfresh J citation judgmentをsource-bound plan computeへ結び、依存を新しいplan checkpointへ保存した。別actorの引用再利用は拒否され、plan reviewは合成file.deleteをhigh-risk L3待ちに留めて対象を変更しない。consumerはこの範囲で`WIRED`。owner承認後のExecutor実行・結果帰還、C07親、一仕事全体、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。focused checksとworkspace buildはPASS。全体QC／QA、5OS実機、実provider・実作用の証拠ではない。
+2026-10-20の`QEB-01-C07.03-POST-REASSESSMENT-FRESH-J-PLAN-EXECUTION-RESULT-RETURN`では、M再評価後のfresh J citationをplanへ結び、実行直前にもJ/M lineageを再照合する。合成Gatewayの隔離HTTP経路はL3待ちからBroker target観測・ExecutionAdmission・一時workspaceのfile.delete・J結果検証・digest-only M観測とreceiptまで到達し、公開snapshotは`results_verified`／`receipt_confirmed`を示す。C07.03のこの限定consumer経路は`WIRED`。C07親、全能力の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`で、全体QC／QA・5OS実機・実provider・実業務作用の証拠ではない。
 
 2026-10-20の`QEB-01-C07.03-OWNER-L3-REASSESSMENT-M-COMMIT`では、新解釈のfresh J citation judgmentからowner L3 content reviewを経て指定旧判断を追記式にprivate Mで再評価するconsumerを接続した。owner L3前のM不変、L3後の新旧judgment lineage更新、non-authority flagsを隔離smokeで確認した。focused HDS 5 tests、Gateway smoke 1 test、workspace typecheck／15-project build、HDS standaloneはPASS。次consumerはM追記後のfresh J judgmentを使う新規planの`plan:review`で、古いplanは再利用しない。C07親、全体の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。全workspace suite／QE_QC／QE_QA、5OS実機、実provider、外部作用の証拠ではない。
 

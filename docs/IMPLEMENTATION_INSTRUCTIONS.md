@@ -1,36 +1,25 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-C07.03-POST-REASSESSMENT-FRESH-J-PLAN-REVIEW`
+### 最新BUILD_BATCH：`QEB-01-C07.03-POST-REASSESSMENT-FRESH-J-PLAN-EXECUTION-RESULT-RETURN`
 
-batch開始時`main`／`origin/main`=`483a4fe473a547600ab3dc2ebe9915975d67f1c6`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、C07.03／C07要求、直前M再評価後のfresh J citation・plan compute・plan reviewの現行producer／consumerを再読した。開始local recovery branch／remote backup tagはcurrent=`483a4fe473a547600ab3dc2ebe9915975d67f1c6`、previous=`79c6e9c795dcc0cdd8aa1ec8dee9bed863e12607`で一致。Windows localで施工し、既存untracked Linux `target/`を保持した。
+batch開始HEAD／`origin/main`=`7436d648fb55a8823bb9a15bb525e8ad49c51d30`。owner指定QE rev2.3三点正本のZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`、仕様書=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77`、Codex施工指示書=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`を現行owner提供ZIPと照合した。C07.03単位SHA-256=`2AAD082DE9FC2AD69FD65AC850A665334475803B21F21D0EF58CF103479F83C3`。適用`AGENTS.md`／作業標準／active指示、C07.03、fresh citation→plan→Approval→Executor→result→Mの現行callsiteとdirty差分を読み直した。Windows localで施工。既存untracked Linux `target/`は保持。
 
-目的は、owner L3後に更新されたcurrent M interpretationに対し、同一ownerのfresh J citation judgmentだけを`plan:compute`へ結び、内容を含まないJ/M dependencyを新規plan checkpointへ保持すること。HDSはsource citation requestのactor/channel、J受理状態、参照版、現在interpretationを再検証し、不一致・取得不能・古い判断を拒否する。plan候補のretention時と`plan:review`でもcurrent J/M dependencyを確認する。引用は意味の真実・権限・承認・実行可能性ではなく、`used_for_authority=false`／`may_execute=false`を維持する。
+目的は、M再評価後のfresh J citationから作ったplanがL3待ちの間に古くなっていないことをExecutionAdmission／Executor直前にも確認し、current J/M lineage、Broker target/version observation、ExecutionAdmission、隔離workspaceのfile.delete、Jの結果検証、private M receiptとownerへの完了帰還を同一実経路でつなぐこと。`OperationPlanLedger.canExecute()`がplan review時だけでなく実行可能性判定でも`assertMemoryInterpretationDependenciesCurrent()`を呼ぶ。J/M状態の欠落・不一致・再評価要求は実行不可とする。引用・結果・M observationは権限や世界の真実ではなく、`used_for_authority=false`／`may_execute=false`を維持する。
 
-対象はfresh J citation→source-bound plan compute→J/M dependency付きplan review→high-risk L3 Approval待ちまで。合成Gateway上で`tool.file.delete`のL3要求へ到達したが、owner承認・Executor dispatch・ファイル削除は行わない。対象外はC07親と目的→C→J→Broker／Executor→結果→M→帰還の全経路、D4Pocket／別repo、実provider・credential、実外部作用、全体QE_QC／QE_QA、公開・出荷判断。この限定consumer経路を`WIRED`、C07親と`SYSTEM_SHAPED`／`BUILD_COVERED`を`BUILD_GAP`とする。
+合成Gateway processのloopback providerと一時workspaceで、fresh J citation→source-bound plan compute→dependency付きcheckpoint→plan review→L3待ち→test-only resume tokenによる明示承認経路→Broker target observation→ExecutionAdmission→隔離file.delete→Jのresult validation→digest-only action-result observationのM保存・receipt→`results_verified`／`receipt_confirmed` projectionとGateway成功応答までを通した。M observationにはtarget path・内容を含めない。これはテスト内の一時ファイルとlocal fixtureだけであり、ownerの実承認、実provider／credential、実workspace、外部業務作用ではない。このbounded consumer routeを`WIRED`とする。C07.03全体、専用goal-purpose bindingを含む一仕事、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立で`BUILD_GAP`。
 
-次consumerはfresh planのL3 Approval判断から、同じcurrent J/M dependencyとBroker target bindingを保ってguarded Executorへ接続し、隔離workspaceの実結果をJ/Mへ帰還させる経路。実workspaceの削除・外部作用・公開は別途owner判断を要する。
+次consumerは、検証済み`file.delete` action-result observationをJ/Mが新しい要求の対象taskとして明示選択した場合、現在receipt／record／task identityを再照合したうえでCの次計画・反省projectionへ非権威入力として返す責任を現行producer／consumerから確定し、既存の`file.search`／`file.write`結果経路と整合して接続すること。pathや本文を露出せず、結果観測を意味採用・承認・権限にしない。実provider検証C08.03、D4Pocket／ミニドラ変更、実資格・実作用、P13の公開・出荷判断は対象外。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| Protocol `状態更新契約.test.ts` | PASS、10 tests。plan computeのcitation context binding schemaを確認。 |
-| HDS `meaning_update_memory.test.ts`／`operation_plan_interpretation_reassessment.test.ts` | PASS、2 files／2 tests。current interpretation後のfresh citation dependencyと再評価lineageを確認。 |
-| Gateway `meaning_update_gateway_smoke.test.ts` | PASS、1 test。別actorのsource citation拒否、current J/M dependencyのplan checkpoint保持、新plan reviewのhigh-risk L3待ち、対象ファイル不変を確認。 |
-| `pnpm hds:standalone`／`pnpm typecheck`／`pnpm build` | PASS。HDS standalone non-authority invariantsを確認、workspace 15 projectsをbuild。 |
+| HDS `operation_plan_interpretation_reassessment.test.ts` | PASS、1/1。review後に引用が再評価必須へ変わると、選択commandの`canExecute`がfail-closedする。 |
+| Gateway `meaning_update_gateway_smoke.test.ts` | PASS、1/1。fresh citationからL3・隔離file.delete・J検証・M receiptまで実process経路を確認。最初のpackage cwd起動はtest harnessのroot相対path不一致で失敗し、repo rootから再実行してPASS。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| `pnpm hds:standalone` | PASS。standalone／audit chain／runtime invariants／non-authority flagsを確認。 |
 | `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査PASS（移行負債76件は継続管理）、licensing PASS。 |
-| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／実外部作用 | 未実施。全体実装形状成立後へ配置。Windows localで限定疎通できるためGitHub Actions未使用。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／実owner承認／実外部作用 | 未実施。全体実装形状成立後へ配置。今回必要なGateway file.deleteは一時workspaceだけで実行。ローカルで疎通可能なためActions未使用。 |
 
-C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`e4a9b5e`を含むこのBUILD_BATCHを`main`へpushし、remote HEADを照合する。closeout後のlocal recovery branch／remote backup tagはcurrent=`closeout後のmain HEAD`／previous=`e4a9b5e`へ揃える。内部QE原典・全要求対応表・実資格・外部作用・公開／出荷判断は含めない。
-
-| QE_BUILDの必要最小確認 | 結果 |
-|---|---|
-| HDS `meaning_update_memory.test.ts`／`operation_plan_interpretation_reassessment.test.ts`／`記憶再解釈.test.ts` | PASS、3 files／4 tests。fresh plan review受理、旧plan拒否、Mの再評価待ち維持を確認。 |
-| `pnpm hds:standalone` | PASS。standalone decision、audit chain、runtime invariantsとnon-authority flagsを確認。 |
-| `pnpm typecheck`／`pnpm build` | PASS、workspace 15 projects。 |
-| `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査PASS、移行負債76件は継続管理、licensing PASS。 |
-| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。全体形状成立後へ配置。Windows localで対象consumerを検証できるためActions未使用。 |
-
-C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。実装commit=`520d07a3b10afb5946bf33a0b5159443346df3aa`を`main`へpushし、remote HEAD一致を確認した。文書closeout後のlocal recovery branches／remote backup tagsはcurrent=`closeout後のmain HEAD`／previous=`520d07a3b10afb5946bf33a0b5159443346df3aa`へ更新する。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。
-
+C08.03実provider保留、別repo書込みなし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`e452136`を`main`へpush済み。closeout docs commit後にlocal recovery branch二世代／remote backup tag二世代をcurrent=`closeout後のmain HEAD`／previous=`e452136`に揃え、remote HEADとworktreeを照合する。内部QE原典・全要求対応表・秘密・資格・実運転情報はPublic Gitへ含めない。
 ### 前回BUILD_BATCH：`QEB-01-C07.03-FRESH-JUDGMENT-REASSESSMENT-LINK`
 
 現在のprivate interpretationでJが新たに受理した引用判断から、同じM record/versionの旧interpretationに依存する旧judgment refへ非権威audit関係を記録した。旧M判断の再評価待ちと旧plan拒否を維持し、旧判断のM上の解消・置換、新判断のM登録、新plan review、C07親、一仕事の全体経路は次consumerへ残した。実装commit=`0997f3a`を`main`へpush済み。
