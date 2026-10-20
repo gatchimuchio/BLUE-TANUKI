@@ -219,6 +219,21 @@ export interface OperationPlanStatusProjection {
     purpose_digest: string;
     parent_alignment_status: "not_applicable" | "aligned" | "requires_review";
   }>;
+  waits: Array<{
+    wait_id: string;
+    plan_id: string;
+    task_identity_digest: string;
+    state: "waiting" | "resumed";
+    deadline_at_ms: number;
+    resumed_at_ms?: number;
+    wake_reason?: "reply" | "deadline";
+    compute_outcome: "not_started" | "pending" | "candidate_retained" | "candidate_rejected" | "failed" | "not_recorded";
+    compute_result_digest?: string;
+    candidate_plan_id?: string;
+    compute_completed_at_ms?: number;
+    used_for_authority: false;
+    may_execute: false;
+  }>;
   plans: Array<{
     plan_id: string;
     revision: number;
@@ -277,7 +292,7 @@ function invalidOperationPlanStatusProjection(): OperationPlanStatusProjection {
     schema_version: "operation-plan.status.v1", evidence_source: ["INTERNAL_STATE"],
     used_for_authority: false, raw_payload_exposed: false, status: "unavailable",
     recovery_refresh_status: "unavailable",
-    plan_count: 0, displayed_count: 0, goal_purpose_options: [], plans: [],
+    plan_count: 0, displayed_count: 0, goal_purpose_options: [], waits: [], plans: [],
   };
 }
 
@@ -309,6 +324,52 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     goalPurposeOptions.push({ goal_ref: option.goal_ref, goal_kind: option.goal_kind as "delegated" | "operational" | "subgoal",
       purpose_version: option.purpose_version as number, purpose_digest: option.purpose_digest as string,
       parent_alignment_status: option.parent_alignment_status as "not_applicable" | "aligned" | "requires_review" });
+  }
+  const rawWaits = value.waits === undefined ? [] : value.waits;
+  if (!Array.isArray(rawWaits) || rawWaits.length > 256 || !rawWaits.every(isRecord)) {
+    return invalidOperationPlanStatusProjection();
+  }
+  const waits: OperationPlanStatusProjection["waits"] = [];
+  for (const wait of rawWaits as Record<string, unknown>[]) {
+    const allowedKeys = new Set(["wait_id", "plan_id", "task_identity_digest", "state", "deadline_at_ms",
+      "resumed_at_ms", "wake_reason", "compute_outcome", "compute_result_digest", "candidate_plan_id",
+      "compute_completed_at_ms", "used_for_authority", "may_execute"]);
+    const state = wait.state;
+    const outcome = wait.compute_outcome;
+    const resumed = state === "resumed";
+    const resumedAt = wait.resumed_at_ms;
+    const completedAt = wait.compute_completed_at_ms;
+    if (Object.keys(wait).some((key) => !allowedKeys.has(key)) || !isDigest(wait.wait_id) || !isDigest(wait.plan_id) ||
+        !isDigest(wait.task_identity_digest) || (state !== "waiting" && !resumed) ||
+        !Number.isSafeInteger(wait.deadline_at_ms) || (wait.deadline_at_ms as number) < 0 ||
+        wait.used_for_authority !== false || wait.may_execute !== false ||
+        (resumed && (!Number.isSafeInteger(resumedAt) || (resumedAt as number) < 0 ||
+          !["reply", "deadline"].includes(String(wait.wake_reason)))) ||
+        (!resumed && (resumedAt !== undefined || wait.wake_reason !== undefined)) ||
+        (outcome !== "not_started" && outcome !== "pending" && outcome !== "candidate_retained" &&
+          outcome !== "candidate_rejected" && outcome !== "failed" && outcome !== "not_recorded") ||
+        (state === "waiting" && outcome !== "not_started") ||
+        (resumed && outcome === "not_started") ||
+        (wait.compute_result_digest !== undefined && !isDigest(wait.compute_result_digest)) ||
+        (wait.candidate_plan_id !== undefined && !isDigest(wait.candidate_plan_id)) ||
+        (completedAt !== undefined && (!Number.isSafeInteger(completedAt) || (completedAt as number) < (resumedAt as number))) ||
+        ((outcome === "candidate_retained" || outcome === "candidate_rejected" || outcome === "failed") !== (completedAt !== undefined)) ||
+        ((outcome === "candidate_retained") !== (wait.candidate_plan_id !== undefined)) ||
+        (outcome === "pending" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined)) ||
+        ((outcome === "not_started" || outcome === "not_recorded") &&
+          (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined))) {
+      return invalidOperationPlanStatusProjection();
+    }
+    waits.push({ wait_id: wait.wait_id as string, plan_id: wait.plan_id as string,
+      task_identity_digest: wait.task_identity_digest as string, state: state as "waiting" | "resumed",
+      deadline_at_ms: wait.deadline_at_ms as number,
+      ...(typeof resumedAt === "number" ? { resumed_at_ms: resumedAt } : {}),
+      ...(wait.wake_reason === "reply" || wait.wake_reason === "deadline" ? { wake_reason: wait.wake_reason } : {}),
+      compute_outcome: outcome as OperationPlanStatusProjection["waits"][number]["compute_outcome"],
+      ...(typeof wait.compute_result_digest === "string" ? { compute_result_digest: wait.compute_result_digest } : {}),
+      ...(typeof wait.candidate_plan_id === "string" ? { candidate_plan_id: wait.candidate_plan_id } : {}),
+      ...(typeof completedAt === "number" ? { compute_completed_at_ms: completedAt } : {}),
+      used_for_authority: false, may_execute: false });
   }
   const inputPlans = value.plans;
   if (inputPlans.length > 0 && !inputPlans.every(isRecord)) return invalidOperationPlanStatusProjection();
@@ -459,7 +520,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     schema_version: "operation-plan.status.v1", evidence_source: ["INTERNAL_STATE"],
     used_for_authority: false, raw_payload_exposed: false, status: "available",
     recovery_refresh_status: recoveryRefreshStatus,
-    plan_count: inputPlans.length, displayed_count: plans.length, goal_purpose_options: goalPurposeOptions, plans,
+    plan_count: inputPlans.length, displayed_count: plans.length, goal_purpose_options: goalPurposeOptions, waits, plans,
   };
 }
 

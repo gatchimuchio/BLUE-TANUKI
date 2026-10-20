@@ -986,11 +986,44 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const refreshNotice = refreshPending
           ? '<div class="trace-item muted">選択したOperation Plan storeの復元結果が未確認です。step選択を停止しています。復元処理完了後にGatewayを再起動して復旧状態を点検してください。</div>'
           : "";
+        const waitCards = (Array.isArray(projection.waits) ? projection.waits : []).map(function (wait) {
+          if (!isObject(wait) || !/^[a-f0-9]{64}$/.test(wait.wait_id || "") ||
+              !/^[a-f0-9]{64}$/.test(wait.plan_id || "") || !/^[a-f0-9]{64}$/.test(wait.task_identity_digest || "") ||
+              wait.used_for_authority !== false || wait.may_execute !== false ||
+              !Number.isSafeInteger(wait.deadline_at_ms) || !["waiting", "resumed"].includes(wait.state)) return "";
+          const outcomeLabels = {
+            not_started: "返信／期限待機中",
+            pending: "J再開済み・C結果未記録",
+            candidate_retained: "計画候補をJ台帳へ保存（採用・実行未許可）",
+            candidate_rejected: "C候補はJへ保存されず",
+            failed: "C計算失敗",
+            not_recorded: "再開結果未記録",
+          };
+          if (!Object.prototype.hasOwnProperty.call(outcomeLabels, wait.compute_outcome)) return "";
+          const resultDigest = wait.compute_result_digest;
+          const candidateDigest = wait.candidate_plan_id;
+          if ((resultDigest !== undefined && !/^[a-f0-9]{64}$/.test(resultDigest)) ||
+              (candidateDigest !== undefined && !/^[a-f0-9]{64}$/.test(candidateDigest))) return "";
+          const wakeReason = wait.wake_reason === "reply" ? "返信" : wait.wake_reason === "deadline" ? "期限" : "未記録";
+          const deadlineDate = new Date(wait.deadline_at_ms);
+          const deadline = Number.isNaN(deadlineDate.getTime())
+            ? String(wait.deadline_at_ms) + " ms" : deadlineDate.toISOString();
+          return '<article class="trace-item"><div class="row"><h3>返信／期限wait ' +
+            escapeHtml(shortDigest(wait.wait_id)) + '</h3>' + badge(outcomeLabels[wait.compute_outcome], "review") + '</div>' +
+            '<dl class="kv"><dt>task digest</dt><dd class="mono">' + escapeHtml(shortDigest(wait.task_identity_digest)) +
+            '</dd><dt>元計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(wait.plan_id)) +
+            '</dd><dt>期限</dt><dd>' + escapeHtml(deadline) + '</dd>' +
+            (wait.state === "resumed" ? '<dt>再開理由</dt><dd>' + escapeHtml(wakeReason) + '</dd>' : '') +
+            (resultDigest ? '<dt>C結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(resultDigest)) + '</dd>' : '') +
+            (candidateDigest ? '<dt>保存候補digest</dt><dd class="mono">' + escapeHtml(shortDigest(candidateDigest)) + '</dd>' : '') +
+            '</dl><p class="muted">J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。</p></article>';
+        }).join("");
         if (projection.plans.length === 0) {
-          setHtml("operation-plan-state-list", refreshNotice + goalPurposeGuide + '<div class="trace-item muted">現在表示できるJ計画はありません。</div>');
+          setHtml("operation-plan-state-list", refreshNotice + goalPurposeGuide + waitCards +
+            '<div class="trace-item muted">現在表示できるJ計画はありません。</div>');
           return;
         }
-        setHtml("operation-plan-state-list", refreshNotice + goalPurposeGuide + projection.plans.map(function (plan) {
+        setHtml("operation-plan-state-list", refreshNotice + goalPurposeGuide + waitCards + projection.plans.map(function (plan) {
           const steps = Array.isArray(plan.steps) ? plan.steps : [];
           const recoveryHoldLabels = {
             held_residual: "復元残差あり（step選択停止中）",

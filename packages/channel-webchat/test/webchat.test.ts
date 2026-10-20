@@ -494,6 +494,16 @@ describe("WebChatChannel — Control Center shell", () => {
       recovery_refresh_status: "ready",
       displayed_count: 2,
       plan_count: 2,
+      waits: [
+        { wait_id: "9".repeat(64), plan_id: "8".repeat(64), task_identity_digest: "7".repeat(64),
+          state: "resumed", deadline_at_ms: nowMs + 60_000, resumed_at_ms: nowMs, wake_reason: "reply",
+          compute_outcome: "candidate_retained", compute_result_digest: "6".repeat(64),
+          candidate_plan_id: "5".repeat(64), compute_completed_at_ms: nowMs + 1,
+          used_for_authority: false, may_execute: false, private_goal: "PRIVATE WAIT GOAL MUST NOT RENDER" },
+        { wait_id: "4".repeat(64), plan_id: "3".repeat(64), task_identity_digest: "2".repeat(64),
+          state: "waiting", deadline_at_ms: nowMs + 120_000, compute_outcome: "not_started",
+          used_for_authority: false, may_execute: false },
+      ],
       goal_purpose_options: [{ goal_ref: "goal_0123456789abcdef", goal_kind: "delegated", purpose_version: 2,
         purpose_digest: "c".repeat(64), parent_alignment_status: "not_applicable" }],
       private_search_line: "SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER",
@@ -540,6 +550,12 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(nodes["operation-plan-state-summary"]?.className).toBe("badge good");
     const rendered = nodes["operation-plan-state-list"]?.innerHTML ?? "";
     expect(rendered).toContain('<span class="badge good">results_verified</span>');
+    expect(rendered).toContain("計画候補をJ台帳へ保存（採用・実行未許可）");
+    expect(rendered).toContain("返信／期限待機中");
+    expect(rendered).toContain("C結果digest");
+    expect(rendered).toContain("保存候補digest");
+    expect(rendered).toContain("J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。");
+    expect(rendered).not.toContain("PRIVATE WAIT GOAL MUST NOT RENDER");
     expect(rendered).toContain('<span class="badge review">held_residual</span>');
     expect(rendered).toContain("復元残差あり（step選択停止中）");
     expect(rendered).toContain("新しい依頼から新規計画を作成してください。");

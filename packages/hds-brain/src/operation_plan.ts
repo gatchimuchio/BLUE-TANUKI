@@ -703,14 +703,16 @@ export class OperationPlanLedger {
   }
 
   /** Consume a canonical reply or due-deadline event once; the event ID is correlation only. */
-  resumeWait(waitId: string, eventId: string, reason: "reply" | "deadline", nowMs = Date.now()): OperationPlanWaitState | null {
-    if (!/^[a-f0-9]{64}$/.test(waitId) || !eventId.trim()) return null;
+  resumeWait(waitId: string, eventId: string, commandId: string, reason: "reply" | "deadline",
+    nowMs = Date.now()): OperationPlanWaitState | null {
+    if (!/^[a-f0-9]{64}$/.test(waitId) || !eventId.trim() || !commandId.trim()) return null;
     const current = (this.state.waits ?? []).find((wait) => wait.wait_id === waitId);
     if (!current || current.state !== "waiting" || current.revision_digest !== this.currentRevisionDigest(current.plan_id_digest)) return null;
     if ((reason === "deadline" && nowMs < current.deadline_at_ms) || (reason === "reply" && nowMs >= current.deadline_at_ms)) return null;
     const eventDigest = operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: eventId });
     const resumed = OperationPlanWaitStateSchema.parse({ ...current, state: "resumed", resumed_at_ms: nowMs,
-      wake_reason: reason, wake_event_id_digest: eventDigest });
+      wake_reason: reason, wake_event_id_digest: eventDigest,
+      resume_command_id_digest: operationPlanDigest(commandId), compute_outcome: "pending" });
     this.change((state) => {
       const waits = state.waits ?? [];
       const index = waits.findIndex((wait) => wait.wait_id === waitId && wait.state === "waiting");
@@ -719,6 +721,52 @@ export class OperationPlanLedger {
       state.waits = waits;
     });
     return structuredClone(resumed);
+  }
+
+  /** Bind the returned C candidate or failure to the exact resumed wait in J's durable state. */
+  recordWaitComputeOutcome(waitId: string, commandId: string,
+    outcome: "candidate_retained" | "candidate_rejected" | "failed", resultDigest?: string,
+    candidatePlanIdDigest?: string, nowMs = Date.now()): OperationPlanWaitState {
+    if (!/^[a-f0-9]{64}$/.test(waitId) || !commandId.trim() ||
+        (resultDigest !== undefined && !/^[a-f0-9]{64}$/.test(resultDigest)) ||
+        (candidatePlanIdDigest !== undefined && !/^[a-f0-9]{64}$/.test(candidatePlanIdDigest)) ||
+        !Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("plan_wait_compute_outcome_invalid");
+    const current = (this.state.waits ?? []).find((wait) => wait.wait_id === waitId);
+    if (!current || current.state !== "resumed" || current.resume_command_id_digest !== operationPlanDigest(commandId)) {
+      throw new Error("plan_wait_compute_binding_mismatch");
+    }
+    if (current.compute_outcome !== "pending") {
+      if (current.compute_outcome === outcome && current.compute_result_digest === resultDigest &&
+          current.candidate_plan_id_digest === candidatePlanIdDigest) return structuredClone(current);
+      throw new Error("plan_wait_compute_state_changed");
+    }
+    if ((outcome === "candidate_retained") !== (candidatePlanIdDigest !== undefined)) {
+      throw new Error("plan_wait_candidate_binding_invalid");
+    }
+    if (candidatePlanIdDigest) {
+      const candidate = this.state.plans.find((plan) =>
+        operationPlanDigest(plan.revisions[0]!.plan.plan_id) === candidatePlanIdDigest);
+      if (!candidate || operationPlanTaskIdentityDigest(candidate) !== current.task_identity_digest ||
+          operationPlanDigest(candidate.owner) !== current.owner_digest ||
+          operationPlanDigest(candidate.channel) !== current.channel_digest ||
+          operationPlanDigest({ schema_version: "operation-plan-wait-event.v1",
+            event_id: candidate.revisions[0]!.plan.request_id }) !== current.wake_event_id_digest) {
+        throw new Error("plan_wait_candidate_binding_invalid");
+      }
+    }
+    const updated = OperationPlanWaitStateSchema.parse({ ...current, compute_outcome: outcome,
+      ...(resultDigest ? { compute_result_digest: resultDigest } : {}),
+      ...(candidatePlanIdDigest ? { candidate_plan_id_digest: candidatePlanIdDigest } : {}),
+      compute_completed_at_ms: nowMs });
+    this.change((state) => {
+      const waits = state.waits ?? [];
+      const index = waits.findIndex((wait) => wait.wait_id === waitId && wait.compute_outcome === "pending" &&
+        wait.resume_command_id_digest === current.resume_command_id_digest);
+      if (index < 0) throw new Error("plan_wait_compute_state_changed");
+      waits[index] = updated;
+      state.waits = waits;
+    });
+    return structuredClone(updated);
   }
 
   listWaits(): readonly OperationPlanWaitState[] {
@@ -1088,7 +1136,7 @@ export class OperationPlanLedger {
 
   retainCandidate(value: unknown, origin: InboundRequest, rawPurposeRelationCandidate?: unknown,
     computeSourceObservations?: readonly OperationPlanComputeSourceObservation[],
-    memoryInterpretationDependencies?: readonly OperationPlanMemoryInterpretationDependency[]): void {
+    memoryInterpretationDependencies?: readonly OperationPlanMemoryInterpretationDependency[]): string {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const plan = candidatePlan(value);
     const expected = origin.metadata?.["blue_tanuki.operation_core.request_id"] ?? origin.id;
@@ -1152,6 +1200,7 @@ export class OperationPlanLedger {
       ...(parsedMemoryDependencies?.length ? { memory_interpretation_dependencies: parsedMemoryDependencies } : {}),
       request_goal_criteria: requestGoalCriteria,
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
+    return operationPlanDigest(plan.plan_id);
   }
 
   prepareGoalPurposeRelationReview(
@@ -2214,6 +2263,17 @@ export class OperationPlanLedger {
       })),
       result_memory: { configured: !!this.resultMemory, status: !this.resultMemory ? "not_configured" : this.memoryReady ? "receipt_confirmed" : "pending_or_unavailable",
         used_for_authority: false as const },
+      waits: (this.state.waits ?? []).slice(-256).reverse().map((wait) => ({
+        wait_id: wait.wait_id, plan_id: wait.plan_id_digest, task_identity_digest: wait.task_identity_digest,
+        state: wait.state, deadline_at_ms: wait.deadline_at_ms,
+        ...(wait.resumed_at_ms !== undefined ? { resumed_at_ms: wait.resumed_at_ms } : {}),
+        ...(wait.wake_reason ? { wake_reason: wait.wake_reason } : {}),
+        compute_outcome: wait.compute_outcome ?? (wait.state === "waiting" ? "not_started" as const : "not_recorded" as const),
+        ...(wait.compute_result_digest ? { compute_result_digest: wait.compute_result_digest } : {}),
+        ...(wait.candidate_plan_id_digest ? { candidate_plan_id: wait.candidate_plan_id_digest } : {}),
+        ...(wait.compute_completed_at_ms !== undefined ? { compute_completed_at_ms: wait.compute_completed_at_ms } : {}),
+        used_for_authority: false as const, may_execute: false as const,
+      })),
       plans: this.state.plans.map((p) => {
         const currentRevision = p.revisions.at(-1)!;
         const planIdDigest = operationPlanDigest(p.revisions[0]!.plan.plan_id);

@@ -287,20 +287,42 @@ export const OperationPlanWaitStateSchema = z.object({
   resumed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   wake_reason: z.enum(["reply", "deadline"]).optional(),
   wake_event_id_digest: Digest.optional(),
+  resume_command_id_digest: Digest.optional(),
+  compute_outcome: z.enum(["pending", "candidate_retained", "candidate_rejected", "failed"]).optional(),
+  compute_result_digest: Digest.optional(),
+  candidate_plan_id_digest: Digest.optional(),
+  compute_completed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),
 }).strict().superRefine((wait, context) => {
   const resumedFieldsPresent = wait.resumed_at_ms !== undefined && wait.wake_reason !== undefined &&
     wait.wake_event_id_digest !== undefined;
+  const computeOutcomeFieldsPresent = wait.resume_command_id_digest !== undefined || wait.compute_outcome !== undefined ||
+    wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined || wait.compute_completed_at_ms !== undefined;
   if (wait.deadline_at_ms <= wait.created_at_ms) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_deadline_must_follow_creation" });
   }
   if ((wait.state === "waiting" && (wait.resumed_at_ms !== undefined || wait.wake_reason !== undefined ||
-      wait.wake_event_id_digest !== undefined)) || (wait.state === "resumed" && !resumedFieldsPresent)) {
+      wait.wake_event_id_digest !== undefined || computeOutcomeFieldsPresent)) || (wait.state === "resumed" && !resumedFieldsPresent)) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_state_fields_mismatch" });
+  }
+  if ((wait.compute_outcome !== undefined) !== (wait.resume_command_id_digest !== undefined) ||
+      (wait.compute_outcome === undefined && (wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined ||
+        wait.compute_completed_at_ms !== undefined)) ||
+      (wait.compute_outcome === "pending" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined ||
+        wait.compute_completed_at_ms !== undefined)) ||
+      ((wait.compute_outcome === "candidate_retained" || wait.compute_outcome === "candidate_rejected" || wait.compute_outcome === "failed") &&
+        wait.compute_completed_at_ms === undefined) ||
+      (wait.compute_outcome === "candidate_retained" && wait.candidate_plan_id_digest === undefined) ||
+      (wait.compute_outcome !== undefined && wait.compute_outcome !== "candidate_retained" && wait.candidate_plan_id_digest !== undefined)) {
+    context.addIssue({ code: "custom", message: "operation_plan_wait_compute_outcome_fields_mismatch" });
   }
   if (wait.resumed_at_ms !== undefined && wait.resumed_at_ms < wait.created_at_ms) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_resume_precedes_creation" });
+  }
+  if (wait.compute_completed_at_ms !== undefined &&
+      (wait.resumed_at_ms === undefined || wait.compute_completed_at_ms < wait.resumed_at_ms)) {
+    context.addIssue({ code: "custom", message: "operation_plan_wait_compute_completion_precedes_resume" });
   }
 });
 export type OperationPlanWaitState = z.infer<typeof OperationPlanWaitStateSchema>;

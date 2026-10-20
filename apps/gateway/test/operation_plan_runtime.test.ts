@@ -1465,6 +1465,15 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         result: { operation_core: { status: "valid_plan", plan: next } }, metrics: { duration_ms: 1 } });
       expect(store.load()?.plans.find((candidate) => candidate.revisions[0]?.plan.plan_id === next.plan_id)
         ?.task_identity_digest).toBe(wait?.task_identity_digest);
+      const replyWait = hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === wait?.wait_id);
+      expect(replyWait).toMatchObject({ state: "resumed", compute_outcome: "candidate_retained",
+        candidate_plan_id_digest: operationPlanDigest(next.plan_id), used_for_authority: false, may_execute: false });
+      expect(replyWait?.compute_result_digest).toMatch(/^[a-f0-9]{64}$/);
+      const ownerProjection = projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans);
+      expect(ownerProjection.status).toBe("available");
+      expect(ownerProjection.waits).toMatchObject([{ compute_outcome: "candidate_retained",
+        candidate_plan_id: operationPlanDigest(next.plan_id), used_for_authority: false, may_execute: false }]);
+      expect(JSON.stringify(ownerProjection)).not.toContain(goal);
 
       const secondDeadlineAt = Date.now() + 60_000;
       const secondWaitRegistration = hds.decide(request(`plan:wait ${JSON.stringify({ plan_id: next.plan_id,
@@ -1480,12 +1489,17 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
           "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_plan.wait_deadline_id": deadlineWait!.wait_id },
       });
       const deadlineClock = vi.spyOn(Date, "now").mockReturnValue(secondDeadlineAt);
+      let deadlineResume: ReturnType<typeof hds.decide>;
       try {
-        const deadlineResume = hds.decide(duplicateDeadline);
+        deadlineResume = hds.decide(duplicateDeadline);
         expect(deadlineResume.command?.type).toBe("llm_call");
         expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === deadlineWait!.wait_id))
           .toMatchObject({ state: "resumed", wake_reason: "deadline" });
+        hds.onFeedback({ command_id: deadlineResume.command!.id, status: "failed",
+          error: "synthetic planner failure", metrics: { duration_ms: 1 } });
       } finally { deadlineClock.mockRestore(); }
+      expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === deadlineWait!.wait_id))
+        .toMatchObject({ state: "resumed", compute_outcome: "failed", used_for_authority: false, may_execute: false });
       expect(hds.decide(duplicateDeadline).command).toBeNull();
     } finally {
       hds.close();

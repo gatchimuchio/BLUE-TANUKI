@@ -752,6 +752,8 @@ export class HDSUpperController {
     failure_review_projection?: FailureReviewProjection;
     compute_source_observations?: OperationPlanComputeSourceObservation[];
     compute_memory_interpretation_dependencies?: OperationPlanMemoryInterpretationDependency[];
+    wait_resume?: { readonly wait_id: string; readonly task_identity_digest: string;
+      readonly reason: "reply" | "deadline" };
   }>();
   /** Exact HDS-returned command object -> source log; never serialized. */
   private readonly issuedExecutionCommands = new WeakMap<ExecuteCommand, DecisionLog>();
@@ -1309,7 +1311,7 @@ ${planControl.question}`,
             req.metadata?.["blue_tanuki.operation_core.parent_task_identity_digest"] !== planComputeWaitResume.task_identity_digest) {
           throw new Error("plan_wait_resume_command_invalid");
         }
-        const resumed = this.operationPlans.resumeWait(planComputeWaitResume.wait_id, req.id,
+        const resumed = this.operationPlans.resumeWait(planComputeWaitResume.wait_id, req.id, command.id,
           planComputeWaitResume.reason);
         if (!resumed) throw new Error("plan_wait_state_changed");
         this.audit.append({ kind: "operation_plan", event: "wait_resumed", request_id: req.id,
@@ -1371,6 +1373,7 @@ ${planControl.question}`,
           this.issuedLLM.set(command.id, { command: structuredClone(command),
             origin: retainedOrigin,
             ...(failureReviewProjection ? { failure_review_projection: failureReviewProjection } : {}),
+            ...(planComputeWaitResume ? { wait_resume: structuredClone(planComputeWaitResume) } : {}),
             ...(planComputeSourceObservations?.length
               ? { compute_source_observations: structuredClone(planComputeSourceObservations) } : {}),
             ...(planComputeMemoryInterpretationDependencies?.length
@@ -2695,6 +2698,11 @@ ${planControl.question}`,
       : parseMeaningUpdateProposal(fb.meaning_update_proposal);
     const sourceLog = this.inflight.get(fb.command_id);
     const issued = this.issuedLLM.get(fb.command_id);
+    let waitComputeOutcome: "candidate_retained" | "candidate_rejected" | "failed" | undefined = issued?.wait_resume
+      ? fb.status === "success" ? "candidate_rejected" : "failed"
+      : undefined;
+    let waitCandidatePlanIdDigest: string | undefined;
+    let planCandidateEvent: "candidate_retained" | "candidate_rejected" | undefined;
     const resultAudit: { digest?: string; status: "not_present" | "recorded" | "unavailable" } = fb.result === undefined ? { status: "not_present" } : (() => {
       try { return { digest: sha256(fb.result), status: "recorded" as const }; }
       catch { return { status: "unavailable" as const }; }
@@ -2839,6 +2847,7 @@ ${planControl.question}`,
       const planner = result?.operation_core && typeof result.operation_core === "object"
         ? result.operation_core as Record<string, unknown> : undefined;
       if (planner?.status === "valid_plan") {
+        let retainedPlanIdDigest: string | undefined;
         try {
           const citationReview = this.audit.list().map((entry) => entry.log)
             .find((entry) => isMemoryCitationReviewLog(entry) && entry.command_id === fb.command_id &&
@@ -2851,14 +2860,30 @@ ${planControl.question}`,
             !this.verifyCurrentMemoryCitationJudgment(dependency))) {
             throw new Error("plan_memory_interpretation_dependency_invalid");
           }
-          this.operationPlans.retainCandidate(planner.plan, issued.origin, planner.goal_purpose_relation,
+          retainedPlanIdDigest = this.operationPlans.retainCandidate(planner.plan, issued.origin, planner.goal_purpose_relation,
             issued.compute_source_observations, memoryInterpretationDependencies);
-          this.planEvent("candidate_retained", fb.command_id);
-        } catch {
-          this.planEvent("candidate_rejected", fb.command_id);
+        } catch { /* Candidate rejection is recorded below without exposing raw C output. */ }
+        if (retainedPlanIdDigest) {
+          waitComputeOutcome = issued.wait_resume ? "candidate_retained" : waitComputeOutcome;
+          waitCandidatePlanIdDigest = retainedPlanIdDigest;
+          planCandidateEvent = "candidate_retained";
+        } else {
+          waitComputeOutcome = issued.wait_resume ? "candidate_rejected" : waitComputeOutcome;
+          planCandidateEvent = "candidate_rejected";
         }
       }
     }
+    if (issued?.wait_resume && waitComputeOutcome) {
+      const recorded = this.operationPlans.recordWaitComputeOutcome(issued.wait_resume.wait_id, fb.command_id,
+        waitComputeOutcome, resultAudit.digest, waitCandidatePlanIdDigest);
+      this.audit.append({ kind: "operation_plan", event: "wait_compute_outcome_recorded",
+        request_id: sourceLog?.request_id ?? null, command_id: fb.command_id,
+        projection_digest: operationPlanDigest(recorded), proposal_digest: recorded.compute_result_digest,
+        candidate_digest: recorded.task_identity_digest,
+        target_digest: recorded.candidate_plan_id_digest ?? recorded.plan_id_digest,
+        reason: waitComputeOutcome, used_for_authority: false, timestamp: Date.now() });
+    }
+    if (planCandidateEvent) this.planEvent(planCandidateEvent, fb.command_id);
     if (sourceLog && this.operationPlans.isBound(fb.command_id)) {
       this.operationPlans.recordResult(fb);
       this.planEvent("result_observed", fb.command_id);
