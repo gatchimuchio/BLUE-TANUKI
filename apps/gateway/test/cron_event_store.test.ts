@@ -93,6 +93,30 @@ describe("GatewayCronEventStore", () => {
     }
   });
 
+  it("recovers an interrupted dispatch as outcome-unknown without replaying it", () => {
+    const { filepath, store } = makeStore();
+    const interrupted = makeEvent("cron:runtime:interrupted", 1_000, "synthetic in-flight work");
+    const next = makeEvent("cron:runtime:interrupted", 2_000, "synthetic next work");
+    expect(store.claim(interrupted, 100)).toEqual({ status: "accepted" });
+    store.close();
+
+    const reopened = new GatewayCronEventStore(filepath);
+    try {
+      expect(reopened.recoverInterruptedDispatches(200)).toBe(1);
+      expect(reopened.recoverInterruptedDispatches(300)).toBe(0);
+      expect(reopened.unresolvedEvents()).toEqual([expect.objectContaining({
+        event_id: interrupted.event_id,
+        payload_digest: interrupted.payload_digest,
+        delivery_state: "outcome_unknown",
+        updated_at_ms: 200,
+      })]);
+      expect(reopened.claim(interrupted)).toEqual({ status: "duplicate", delivery_state: "outcome_unknown" });
+      expect(reopened.claim(next)).toEqual({ status: "blocked_unresolved", delivery_state: "outcome_unknown" });
+    } finally {
+      reopened.close();
+    }
+  });
+
   it("derives canonical identity from source and scheduled time, not payload", () => {
     const a = makeEvent(" cron:runtime:例 " , 123, "payload one");
     const b = makeEvent("cron:runtime:例", 123, "payload two");

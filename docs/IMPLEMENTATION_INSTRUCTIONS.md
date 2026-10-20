@@ -2,7 +2,21 @@
 
 ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
 
-### 最新BUILD_BATCH：`QEB-03-E03.02-J-M-PENDING-RECOVERY-OUTBOX`
+### 最新BUILD_BATCH：`QEB-03-E01.01-INTERRUPTED-CRON-DISPATCH-RECOVERY`
+
+開始HEAD／`main`／`origin/main`=`04fb4865920fafa6a7070026504bccbe1cb09c0b`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E01.01とCron scheduler・durable event cursor・起動callsiteを再読した。Windows localでBLUE-TANUKIだけを変更し、既存untracked Linux `target/`は保持。
+
+Gateway起動時、Cron scheduler／routerが動き始める前に、永続inbox/outboxで`dispatching`のまま残ったeventを照合し、同一transactionで`outcome_unknown`へ移すconsumerを接続した。event identity・payload digest・inbox/outboxの対応が壊れていれば起動をfail-closedにする。handlerを再実行せず、成功・失敗を推定せず、HDSの正確なevent ID／payload digestに対するno-replay判断が検証されるまで同一sourceの次eventをblockedのまま保つ。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `cron_event_store.test.ts` | PASS、9/9。store再open後の`dispatching`→`outcome_unknown`遷移、再実行なし、冪等再調停、後続eventの停止を確認。実Gateway processの再起動ではない。 |
+| Gateway `typecheck`／`build` | 両方PASS。 |
+| 全suite、実Gateway再起動、QE_QC／QE_QA、credential／provider／外部作用 | 未実施。 |
+
+中断dispatchの復旧consumerは`WIRED`。E01.01のdurable job lifecycle／全trigger・結果接続と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。次はCron eventと既存Operation Plan／結果復旧projectionの結合から、仕事単位の状態をconsumerへ接続する。C08.03実provider、D4／ミニドラ別repo変更、外部作用、P13公開・出荷GOは保留。QC／QAへ先行しない。
+
+### 前回BUILD_BATCH：`QEB-03-E03.02-J-M-PENDING-RECOVERY-OUTBOX`
 
 開始HEAD／`main`／`origin/main`=`c0857d60ea43acfd3a1a8730633a94db0605e7ae`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E03.02、J→M commit producer、HDS起動時のrecovery consumerを再読した。Windows localでBLUE-TANUKIのみを編集し、untracked Linux `target/`は保持。
 

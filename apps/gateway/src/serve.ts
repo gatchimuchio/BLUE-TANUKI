@@ -696,6 +696,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     verifyNoReplayDisposition: (event_id, payload_digest) =>
       hds.isCronEventNoReplayAcknowledged(event_id, payload_digest),
   });
+  cronEventStore.recoverInterruptedDispatches();
   cronEventStore.recoverPendingApprovalHandoffs();
   const startupAudit = hds.getAudit();
   const startupInterruptedApprovals = startupAudit.verify()

@@ -227,6 +227,34 @@ export class GatewayCronEventStore {
     });
   }
 
+  /**
+   * Gateway再起動時にdispatchingのまま残ったeventをoutcome_unknownへ移す。
+   * 成功を推定せず、handlerを再実行しない。
+   */
+  recoverInterruptedDispatches(now_ms = Date.now()): number {
+    if (!Number.isSafeInteger(now_ms) || now_ms < 0) throw new Error("invalid cron event recovery time");
+    return this.transaction(() => {
+      if (this.readOrphanOutboxCount() > 0) throw new Error("cron_event_store_orphan_outbox_detected");
+      const rows = this.readUnresolvedEventRows();
+      let recovered = 0;
+      for (const row of rows) {
+        const cursor = parseCursorRow(row.source_digest, row);
+        if (cursor.delivery_state !== "dispatching") continue;
+        const inbox = this.db.prepare(`UPDATE cron_event_inbox SET delivery_state='outcome_unknown',updated_at_ms=?
+          WHERE source_digest=? AND sequence=? AND event_id=? AND payload_digest=? AND delivery_state='dispatching'`)
+          .run(now_ms, cursor.source_digest, cursor.sequence, cursor.event_id, cursor.payload_digest);
+        const outbox = this.db.prepare(`UPDATE cron_event_outbox SET delivery_state='outcome_unknown',updated_at_ms=?
+          WHERE source_digest=? AND sequence=? AND event_id=? AND payload_digest=? AND delivery_state='dispatching'`)
+          .run(now_ms, cursor.source_digest, cursor.sequence, cursor.event_id, cursor.payload_digest);
+        if (Number(inbox.changes) !== 1 || Number(outbox.changes) !== 1) {
+          throw new Error("cron event recovery does not match the current dispatch");
+        }
+        recovered += 1;
+      }
+      return recovered;
+    });
+  }
+
   unresolvedEvents(): CronEventCursorSnapshot[] {
     if (this.readOrphanOutboxCount() > 0) throw new Error("cron_event_store_orphan_outbox_detected");
     return this.readUnresolvedEventRows()
