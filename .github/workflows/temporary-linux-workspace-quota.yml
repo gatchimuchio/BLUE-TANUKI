@@ -31,7 +31,7 @@ jobs:
       - name: Install native runtime prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes apparmor bubblewrap fuse-overlayfs util-linux
+          sudo apt-get install --yes apparmor bubblewrap fuse3 fuse-overlayfs util-linux
 
       - name: Prepare an ephemeral FUSE device for diagnostics
         id: fuse-device
@@ -364,26 +364,50 @@ jobs:
           fi
           mkdir /workspace-storage/upper /workspace-storage/work
           fuse_pid=""
+          mount_helper_pid=""
           cleanup() {
             fusermount3 -u /workspace 2>/dev/null || true
             if [ -n "$fuse_pid" ]; then
               kill "$fuse_pid" 2>/dev/null || true
               wait "$fuse_pid" 2>/dev/null || true
             fi
+            if [ -n "$mount_helper_pid" ]; then
+              kill "$mount_helper_pid" 2>/dev/null || true
+              wait "$mount_helper_pid" 2>/dev/null || true
+            fi
           }
           trap cleanup EXIT
-          /usr/bin/fuse-overlayfs -f -o lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work /workspace >/tmp/fuse-overlayfs.log 2>&1 &
-          fuse_pid=$!
+          mount_helper="$(command -v mount.fuse3 || true)"
+          if [ -z "$mount_helper" ]; then
+            echo "fuse_mount_helper_unavailable"
+            exit 0
+          fi
+          "$mount_helper" /usr/bin/fuse-overlayfs# /workspace \
+            -o drop_privileges,lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work \
+            >/tmp/fuse-overlayfs.log 2>&1 &
+          mount_helper_pid=$!
           mounted=0
           for attempt in $(seq 1 40); do
             if grep -q ' /workspace ' /proc/self/mountinfo; then
               mounted=1
               break
             fi
-            if ! kill -0 "$fuse_pid" 2>/dev/null; then break; fi
             sleep 0.1
           done
           if [ "$mounted" = 1 ]; then
+            for attempt in $(seq 1 40); do
+              for process in /proc/[0-9]*; do
+                if IFS= read -r process_name < "$process/comm" 2>/dev/null && [ "$process_name" = fuse-overlayfs ]; then
+                  fuse_pid="${process#/proc/}"
+                  break 2
+                fi
+              done
+              sleep 0.1
+            done
+            if [ -z "$fuse_pid" ]; then
+              echo "fuse_overlay_daemon_state=unavailable"
+              exit 0
+            fi
             if [ ! -r "/proc/$fuse_pid/status" ]; then
               echo "fuse_overlay_daemon_state=unavailable"
               exit 0
