@@ -21,6 +21,7 @@ import {
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
   type OperationPlanMemoryInterpretationDependency,
   type OperationPlanReceiptReconciliationControl,
+  canonicalExecutorCommandBytes,
 } from "@blue-tanuki/protocol";
 import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
@@ -312,6 +313,16 @@ export function operationPlanDigest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
 
+function canonicalExecutorCommandDigest(command: ExecuteCommand): string {
+  return createHash("sha256").update(canonicalExecutorCommandBytes(command)).digest("hex");
+}
+
+function matchesCanonicalExecutorCommandDigest(command: ExecuteCommand, expected: string | undefined): boolean {
+  if (!expected) return false;
+  try { return canonicalExecutorCommandDigest(command) === expected; }
+  catch { return false; }
+}
+
 export type OperationPlanGoalPurposeRelationOwnerReviewDraft = Omit<OperationPlanGoalPurposeRelationOwnerReview, "audit_event_digest">;
 
 export function operationPlanGoalPurposeRelationReviewAuditDigest(
@@ -386,6 +397,7 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
       if (b.execution_admission) {
         if (tickets.has(b.execution_admission.ticket_id) || b.execution_admission.command_key !==
             createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", b.command_id])).digest("hex") ||
+            (b.executor_command_digest !== undefined && b.execution_admission.command_digest !== b.executor_command_digest) ||
             b.status === "selected" || b.status === "invalidated") throw new Error("plan_checkpoint_admission_mismatch");
         tickets.add(b.execution_admission.ticket_id);
       }
@@ -1203,6 +1215,7 @@ export class OperationPlanLedger {
         command_id: command.id, request_id: command.upstream_decision.request_id!,
         commit_hash: command.upstream_decision.commit_hash, payload_digest: commandPayloadDigest(command),
         command_digest: operationPlanDigest(command),
+        executor_command_digest: canonicalExecutorCommandDigest(command),
         operation: descriptor.operation_id, status: "selected" });
     });
     this.issuedBindings.set(command, command.id);
@@ -1322,13 +1335,15 @@ export class OperationPlanLedger {
       command.upstream_decision.request_id === b.request_id && command.upstream_decision.commit_hash === b.commit_hash &&
       command.upstream_decision.commit_decision === "ASSERT" && command.type === "tool_call" &&
       command.payload.tool_name === b.operation && commandPayloadDigest(command) === b.payload_digest &&
-      operationPlanDigest(command) === b.command_digest;
+      operationPlanDigest(command) === b.command_digest && matchesCanonicalExecutorCommandDigest(command, b.executor_command_digest);
   }
   beginAttempt(command: ExecuteCommand, admission?: ExecutionAdmission): boolean {
     if (!this.canExecute(command)) return false;
     if (!this.isBound(command.id)) return true;
     const admitted = admission === undefined ? undefined : ExecutionAdmissionSchema.parse(admission);
-    if (admitted && (admitted.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
+    const binding = this.binding(command.id)?.b;
+    if (admitted && (!binding?.executor_command_digest || admitted.command_digest !== binding.executor_command_digest ||
+        admitted.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
         admitted.task_identity_digest !== this.executionTaskIdentityDigest(command) ||
         Date.now() < admitted.issued_at_ms || Date.now() >= admitted.expires_at_ms)) return false;
     this.change((state) => { for (const p of state.plans) {

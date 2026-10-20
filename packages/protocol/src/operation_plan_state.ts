@@ -261,6 +261,7 @@ export const OperationPlanCheckpointSchema = z.object({
     bindings: z.array(z.object({
       step_id: Id, revision_digest: Digest, step_digest: Digest, prepared_step: OperationStepSchema,
       command_id: Id, request_id: Id, commit_hash: Id, payload_digest: Digest, command_digest: Digest,
+      executor_command_digest: Digest.optional(),
       operation: Id,
       status: z.enum(["selected", "intent_committed", "verified", "outcome_unknown", "verification_failed", "not_attempted", "invalidated"]),
       result_digest: Digest.optional(),

@@ -16,4 +16,5 @@ export * from "./gmail_write_target_version.js";
 export * from "./goal_relations.js";
 export * from "./goal_governance.js";
 export * from "./境界交換契約.js";
+export * from "./executor_command_content.js";
 export * from "./状態更新契約.js";

@@ -192,6 +192,11 @@ function inspectMemory(c: Awaited<ReturnType<typeof setup>>) {
 }
 
 describe("保存実結果→再起動J→依存stepの非作用調停", () => {
+  it("Jが保持するcanonical action digestとExecutor ticket digestが一致しない限りattemptを開始しない", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, { ...c.admission!, command_digest: "0".repeat(64) })).toBe(false);
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+  }));
+
   it("旧generationの遅延結果をprivate evidenceへ隔離し、現行J/Mへ適用しない", async () => fixture(async (c) => {
     c.hds.beginOperationPlanAttempt(c.cmd, c.admission);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });

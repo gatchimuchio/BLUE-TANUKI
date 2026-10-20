@@ -1,6 +1,22 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-D01.03-REVISED-UNEXECUTED-STEP-REVIEW`
+### 最新BUILD_BATCH：`QEB-01-D02.01-SHARED-CANONICAL-ACTION-DIGEST`
+
+開始HEAD／`origin/main`=`ef44183666582bcf826538eca3ab4b0b98e1993f`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準、active指示、D02.01、J選択からExecutionAdmissionまでの現行producer／consumerを再読した。先行D03.01の現物調査では、BLUEにBearer認証済み`/inbound`はあるがRuntime／Session／Workspace登録IPC consumerはなく、D4 Agent Taskは`unsupported`だったため、未接続を`BUILD_GAP`として維持し実装経路を創作しなかった。Windows localで施工し、保護対象のuntracked Linux `target/`を保持した。
+
+Executorだけが生成していたcanonical action digestをProtocolの共有canonical byte関数へ移し、HDSのJ選択台帳にも同じdigestを保持するようにした。計画状態整合用digestは別に維持する。Jは開始時に現在commandのcanonical digestを再計算し、保持値とExecutionAdmission ticket digestが一致しなければattemptを拒否する。既存のcommand key、task identity、有効期限確認も維持した。このJ選択→ticket受入のconsumerを`WIRED`とする。D02.01親要件全部や製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Protocol／HDS `build` | PASS。 |
+| Core／Gateway `typecheck` | PASS。 |
+| Gateway `execution_result_reconciliation.test.ts` のdigest境界 | PASS、対象1 test。ticketとの不一致を拒否し、一致時だけ開始。対象ファイル内40件はskip。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite／全体QC／QA／5OS実機／実provider・外部作用 | 未実施。全体実装形状成立後へ配置。 |
+
+C08.03実provider保留、D4 Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。Actions未使用。次consumerはD02.02「認証・期限・再送の権限検証」。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読する。
+
+### 前回BUILD_BATCH：`QEB-01-D01.03-REVISED-UNEXECUTED-STEP-REVIEW`
 
 開始HEAD／`origin/main`=`2cc96244942d0aa405f65481769a77420734de9f`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準、active指示、D01.03単位、OperationPlan revision／実行結果／step reviewの現行callsiteを再読した。Windows localで施工し、保護対象のuntracked Linux `target/`を保持した。
 
