@@ -280,6 +280,7 @@ describe("CronSchedulerChannel", () => {
         channel: "cron",
         user: "blue-tanuki-cron",
         content: "scheduled hello",
+        session_id: expect.stringMatching(/^cron-task:[a-f0-9]{64}$/),
         metadata: {
           "blue_tanuki.authority_context": "gateway_internal_v1",
           "blue_tanuki.actor_kind": "cron",
@@ -291,6 +292,50 @@ describe("CronSchedulerChannel", () => {
         },
       });
       expect(ch.snapshot()[0]?.last_fire_at_ms).toBe(new Date(2026, 4, 9, 6, 30, 1, 0).getTime());
+    } finally {
+      await ch.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("wakes only at scheduled events and keeps executor context stable per schedule", async () => {
+    vi.useFakeTimers();
+    const base = Date.UTC(2026, 4, 9, 6, 30);
+    vi.setSystemTime(base);
+    const received: Array<{ task_id: string; session_id: string | undefined }> = [];
+    const ch = new CronSchedulerChannel({
+      tasks: [
+        { id: "wait-task-a", channel: "webchat", target: "local-user", content: "event a", interval_ms: 1000 },
+        { id: "wait-task-b", channel: "webchat", target: "local-user", content: "event b", interval_ms: 1000 },
+      ],
+      log: () => undefined,
+    });
+
+    try {
+      await ch.start(async (request) => {
+        received.push({
+          task_id: String(request.metadata?.["blue_tanuki.cron.task_id"]),
+          session_id: request.session_id,
+        });
+      });
+      expect(received).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(received).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(received).toHaveLength(4);
+
+      const sessionsByTask = new Map<string, Set<string>>();
+      for (const item of received) {
+        expect(item.session_id).toMatch(/^cron-task:[a-f0-9]{64}$/);
+        const sessions = sessionsByTask.get(item.task_id) ?? new Set<string>();
+        sessions.add(item.session_id!);
+        sessionsByTask.set(item.task_id, sessions);
+      }
+      expect(sessionsByTask.size).toBe(2);
+      expect(sessionsByTask.get("wait-task-a")?.size).toBe(1);
+      expect(sessionsByTask.get("wait-task-b")?.size).toBe(1);
+      const distinctSessions = new Set([...sessionsByTask.values()].map((sessions) => [...sessions][0]));
+      expect(distinctSessions.size).toBe(2);
     } finally {
       await ch.stop();
       vi.useRealTimers();

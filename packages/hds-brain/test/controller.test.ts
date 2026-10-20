@@ -106,6 +106,24 @@ function inboundWithMetadata(
 }
 
 describe("HDSUpperController.decide()", () => {
+  it("passes a trusted Gateway event's explicit session scope only to C context", () => {
+    const sessionId = `cron-task:${"a".repeat(64)}`;
+    const { log, command } = new HDSUpperController().decide(createGatewayInternalInboundRequest({
+      id: "event-bound-session-request",
+      channel: "webchat",
+      user: "gateway-event",
+      content: "continue from this event",
+      timestamp: Date.now(),
+      session_id: sessionId,
+      metadata: { "blue_tanuki.authority_context": "gateway_internal_v1" },
+    }));
+
+    expect(command?.type).toBe("llm_call");
+    if (!command || command.type !== "llm_call") return;
+    expect(command.payload.session_id).toBe(sessionId);
+    expect(JSON.stringify(log)).not.toContain(sessionId);
+  });
+
   it("ASSERTs benign requests and emits a command", () => {
     const c = new HDSUpperController();
     const { log, command } = c.decide(inbound("hello world"));

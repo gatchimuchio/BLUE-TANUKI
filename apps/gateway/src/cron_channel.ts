@@ -412,6 +412,7 @@ export class CronSchedulerChannel implements InboundChannel {
         user: "blue-tanuki-cron",
         content: resolved.content,
         timestamp: runtime.lastFireAtMs,
+        session_id: cronTaskSessionId(task),
         metadata,
       });
       this.log(`[cron] firing task id=${task.id} channel=${task.channel} target=${task.target}`);
@@ -678,6 +679,19 @@ export function cronPayloadHash(task: Pick<CronTaskOptions, "channel" | "target"
   return createHash("sha256")
     .update(JSON.stringify(payload))
     .digest("hex");
+}
+
+/** Stable executor-history scope for one persistent schedule; this is context, never HDS authority. */
+function cronTaskSessionId(task: Pick<NormalizedCronTask, "origin" | "id" | "payload_hash">): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify([
+      "blue-tanuki.cron-task-session.v1",
+      task.origin,
+      task.id,
+      task.payload_hash,
+    ]), "utf8")
+    .digest("hex");
+  return `cron-task:${digest}`;
 }
 
 export function canonicalizeCronTimeZone(timeZone: string): string {
