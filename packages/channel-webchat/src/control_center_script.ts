@@ -1240,8 +1240,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("approval-token-expiry", expiries.length > 0 ? formatDate(expiries[0]) : "not set");
         setText("approval-summary", String(pending.length) + " pending");
         byId("approval-summary").className = "badge " + (pending.length > 0 ? "review" : "good");
-        setText("approval-emergency-status", emergencyStop && emergencyStop.active ? "active" : "clear");
-        byId("approval-emergency-status").className = "badge " + (emergencyStop && emergencyStop.active ? "bad" : "good");
+        const emergencyStopActive = Boolean(emergencyStop && emergencyStop.active);
+        const emergencyStopStatus = emergencyStopActive
+          ? emergencyStop.audit_recovery_status === "pending" ? "active · audit pending"
+            : emergencyStop.audit_recovery_status === "state_unavailable" ? "active · state unavailable" : "active"
+          : "clear";
+        setText("approval-emergency-status", emergencyStopStatus);
+        byId("approval-emergency-status").className = "badge " + (emergencyStopActive ? "bad" : "good");
         setText("approval-grant-count", grants.length);
         setText("approval-history-count", approvalHistory.length);
         state.approvalTokens = Object.create(null);

@@ -157,6 +157,8 @@ import {
 } from "./document_organization_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { OperationPlanStateStore } from "./operation_plan_store.js";
+import { EmergencyStopControl } from "./emergency_stop_control.js";
+import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
 import { OperationPlanWaitDeadlineScheduler } from "./operation_plan_wait_scheduler.js";
 import { operationPlanRecoveryEvidenceFromObservation } from "./operation_plan_recovery_evidence.js";
 import type { CanonicalStateStoreKey } from "./canonical_state_backup.js";
@@ -243,16 +245,6 @@ interface PendingApproval {
     reassesses_judgment_refs: readonly string[];
     proposal_actor: string;
   };
-}
-
-interface EmergencyStopState {
-  active: boolean;
-  activated_at: number | null;
-  activated_by: string | null;
-  reason: string | null;
-  cleared_at: number | null;
-  cleared_by: string | null;
-  clear_reason: string | null;
 }
 
 type OperatorSnapshot = Record<string, unknown>;
@@ -640,15 +632,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const pendingApprovals = new Map<string, PendingApproval>();
   const executionControllers = new Set<AbortController>();
   const executionTasks = new Set<Promise<ExecuteFeedback>>();
-  const emergencyStop: EmergencyStopState = {
-    active: false,
-    activated_at: null,
-    activated_by: null,
-    reason: null,
-    cleared_at: null,
-    cleared_by: null,
-    clear_reason: null,
-  };
+  const emergencyStopStateStore = EmergencyStopStateStore.fromEnvironment(process.env);
+  const emergencyStop = new EmergencyStopControl({
+    store: emergencyStopStateStore,
+    authority: hds,
+    abortRunningExecutions: () => {
+      for (const controller of executionControllers) controller.abort();
+    },
+  });
   const router = new InboundRouter({ propagateHandlerErrorsForChannels: ["cron"] });
   const dispatcher = new OutboundDispatcher();
 
@@ -764,6 +755,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       result_store_readable: startupRecovery.result_store_readable,
     });
     cronEventStore.close();
+    emergencyStopStateStore.close();
     operationPlanState.close();
     hds.closeOperationPlanMemory();
     executionStore.close();
@@ -884,56 +876,31 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     });
   }
 
-  function emergencyStopSnapshot(): WebChatEmergencyStopSnapshot {
-    return {
-      active: emergencyStop.active,
-      activated_at: emergencyStop.activated_at,
-      activated_by: emergencyStop.activated_by,
-      reason: emergencyStop.reason,
-      cleared_at: emergencyStop.cleared_at,
-      cleared_by: emergencyStop.cleared_by,
-      clear_reason: emergencyStop.clear_reason,
-      execution_blocked: emergencyStop.active,
-      hds_brain_remains_authority: true,
-      used_for_authority: false,
-      evidence_source: ["INTERNAL_STATE", "LIVE_RUNTIME"],
-    };
-  }
+  function emergencyStopSnapshot(): WebChatEmergencyStopSnapshot { return emergencyStop.snapshot(); }
 
   function activateEmergencyStop(ctx: WebChatApprovalControlContext): WebChatEmergencyStopSnapshot {
-    emergencyStop.active = true;
-    // worker停止は監査・history保存の成功に依存させない。
-    for (const controller of executionControllers) controller.abort();
-    emergencyStop.activated_at = Date.now();
-    emergencyStop.activated_by = ctx.actor;
-    emergencyStop.reason = ctx.reason ?? "owner emergency stop";
-    hds.onAuthorityEvent("emergency_stop_activated", {
-      actor: ctx.actor,
-      reason: emergencyStop.reason,
-    });
-    recordApprovalControlHistory("emergency_stop_activated", ctx.actor, {
-      reason: emergencyStop.reason,
-      token_kind: ctx.token_kind,
-      execution_blocked: true,
-    });
-    return emergencyStopSnapshot();
+    const snapshot = emergencyStop.activate(ctx);
+    try {
+      recordApprovalControlHistory("emergency_stop_activated", ctx.actor, {
+        reason: ctx.reason ?? "owner emergency stop",
+        token_kind: ctx.token_kind,
+        execution_blocked: true,
+        audit_recovery_status: snapshot.audit_recovery_status,
+      });
+    } catch { gatewayLog.error("emergency-stop history record unavailable; execution remains blocked"); }
+    return snapshot;
   }
 
   function clearEmergencyStop(ctx: WebChatApprovalControlContext): WebChatEmergencyStopSnapshot {
-    emergencyStop.active = false;
-    emergencyStop.cleared_at = Date.now();
-    emergencyStop.cleared_by = ctx.actor;
-    emergencyStop.clear_reason = ctx.reason ?? "owner emergency stop cleared";
-    hds.onAuthorityEvent("emergency_stop_cleared", {
-      actor: ctx.actor,
-      reason: emergencyStop.clear_reason,
-    });
-    recordApprovalControlHistory("emergency_stop_cleared", ctx.actor, {
-      reason: emergencyStop.clear_reason,
-      token_kind: ctx.token_kind,
-      execution_blocked: false,
-    });
-    return emergencyStopSnapshot();
+    const snapshot = emergencyStop.clear(ctx);
+    try {
+      recordApprovalControlHistory("emergency_stop_cleared", ctx.actor, {
+        reason: ctx.reason ?? "owner emergency stop cleared",
+        token_kind: ctx.token_kind,
+        execution_blocked: false,
+      });
+    } catch { gatewayLog.error("emergency-stop clear history record unavailable"); }
+    return snapshot;
   }
 
   function approvalGrantsSnapshot(): WebChatApprovalGrantItem[] {
@@ -4179,7 +4146,6 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       gatewayShuttingDown = true;
       waitDeadlineScheduler.stop();
       clearInterval(failureMemoryVerificationTimer);
-      emergencyStop.active = true;
       for (const controller of executionControllers) controller.abort();
       await router.stop();
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
@@ -4188,6 +4154,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       documentOrganizationCheckpointStore?.close();
       documentOrganizationCheckpointStore = null;
       operationPlanState.close();
+      emergencyStopStateStore.close();
       hds.closeOperationPlanMemory();
       executionStore.close();
       auditLog.info("summary", {

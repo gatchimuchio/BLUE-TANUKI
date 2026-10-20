@@ -538,6 +538,12 @@ export interface AuthorityEventLog {
   cron_event_id?: string;
   cron_payload_digest?: string;
   cron_disposition?: "acknowledge_no_replay";
+  /** Stable correlation for a local, deny-only safety-control event. */
+  control_event_id?: string;
+  /** Original event time when a durable safety-control event is reconciled after recovery. */
+  occurred_at_ms?: number;
+  /** True when this record closes an earlier audit persistence gap. */
+  audit_gap_recovered?: boolean;
   goal_governance_event?: Extract<GoalGovernanceEvent, { event_kind: "purpose_change" }>;
   goal_governance_authorization?: GoalGovernanceAuthorization;
   timestamp: number;

@@ -1578,9 +1578,21 @@ ${planControl.question}`,
       grant_id?: string;
       actor?: string;
       reason?: string;
+      control_event_id?: string;
+      occurred_at_ms?: number;
+      audit_gap_recovered?: boolean;
       evaluation?: ApprovalEvaluation;
     } = {},
   ): void {
+    if (opts.control_event_id !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(opts.control_event_id)) {
+      throw new Error("authority control event id is invalid");
+    }
+    if (opts.occurred_at_ms !== undefined && (!Number.isSafeInteger(opts.occurred_at_ms) || opts.occurred_at_ms <= 0)) {
+      throw new Error("authority control event time is invalid");
+    }
+    if (opts.audit_gap_recovered !== undefined && typeof opts.audit_gap_recovered !== "boolean") {
+      throw new Error("authority control event recovery marker is invalid");
+    }
     const log: AuthorityEventLog = {
       kind: "authority_event",
       event,
@@ -1589,6 +1601,9 @@ ${planControl.question}`,
       grant_id: opts.grant_id,
       actor: opts.actor?.trim() || "system",
       reason: opts.reason ?? event,
+      ...(opts.control_event_id ? { control_event_id: opts.control_event_id } : {}),
+      ...(opts.occurred_at_ms !== undefined ? { occurred_at_ms: opts.occurred_at_ms } : {}),
+      ...(opts.audit_gap_recovered !== undefined ? { audit_gap_recovered: opts.audit_gap_recovered } : {}),
       operation: opts.evaluation?.context.operation,
       target_scope: opts.evaluation?.context.target_scope,
       risk: opts.evaluation?.risk,

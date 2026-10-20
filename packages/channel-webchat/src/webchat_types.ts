@@ -334,6 +334,7 @@ export interface WebChatEmergencyStopSnapshot {
   cleared_at: number | null;
   cleared_by: string | null;
   clear_reason: string | null;
+  audit_recovery_status: "not_required" | "recorded" | "pending" | "state_unavailable";
   execution_blocked: boolean;
   hds_brain_remains_authority: true;
   used_for_authority: false;
