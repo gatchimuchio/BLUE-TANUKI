@@ -12,7 +12,7 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 ownerの2026-10-20指示に従い、QE_BUILDでは全体の実consumer接続を先に進め、BUILD_COVERED前の品質検証反復を作業の主軸にしない。Actions run [#49](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39357047193)はFUSE境界診断で失敗し、production `shell.exec` focused testsへ到達していない。同じrunner環境診断は反復せず、Linux quotaは`BUILD_GAP`を維持して製品実装へ戻る。
 
-今回、helperがcommand開始前に返す固定workspace lock codeを`packages/blue-tanuki/src/tools/shell_exec.ts`で利用者向け案内へ接続する。次consumerはquota制御の実行経路。限定確認は型検査と差分整合にとどめ、FUSE診断・Actions・runtime quota試験を反復しない。quota実runtime、D07.02／F01.02全体は`BUILD_GAP`のままとする。
+今回、helperがcommand開始前に返す固定workspace lock／bounded-mount setup codeを`packages/blue-tanuki/src/tools/shell_exec.ts`で利用者向け案内へ接続する。quota実runtimeの接続は未成立。限定確認は型検査と差分整合にとどめ、FUSE診断・Actions・runtime quota試験を反復しない。quota実runtime、D07.02／F01.02全体は`BUILD_GAP`のままとする。
 
 初回Actions [run 39313183295](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39313183295) はLinux workspace build／helper buildがPASSし、focused shell test 3件はproviderがverified resultを返す前に全件failure。既存workflow cleanup stepはPASSし、tmpfs／overlay runtimeの成立は未確認。原因特定用に次回だけuser service journalの限定出力を追加する。成功commitへのmain統合はまだ行わない。
 

@@ -44,6 +44,36 @@ const MAX_NATIVE_ERROR_BYTES = 16 * 1024;
 const PROCESS_TREE_SHUTDOWN_GRACE_MS = 5_000;
 const SHELL_EXEC_DISABLED_REASON =
   "shell.exec is disabled because no verified OS-level process isolation provider is connected; no process was started";
+const LINUX_WORKSPACE_SETUP_FAILURES: ReadonlySet<string> = new Set([
+  "workspace_quota_unavailable",
+  "workspace_storage_mount_failed",
+  "workspace_storage_mount_operation_denied",
+  "workspace_storage_mount_access_denied",
+  "workspace_storage_mount_invalid_options",
+  "workspace_storage_mount_unsupported",
+  "workspace_storage_layout_failed",
+  "workspace_overlay_mount_failed",
+  "workspace_overlay_mount_operation_denied",
+  "workspace_overlay_mount_access_denied",
+  "workspace_overlay_mount_access_denied_paths_accessible",
+  "workspace_overlay_mount_invalid_options",
+  "workspace_overlay_mount_unsupported",
+  "workspace_overlay_directory_metadata_unavailable",
+  "workspace_overlay_directory_type_invalid",
+  "workspace_overlay_directory_owner_mismatch",
+  "workspace_overlay_directory_access_unavailable",
+  "workspace_overlay_layers_on_different_filesystems",
+  "workspace_overlay_lower_access_denied",
+  "workspace_overlay_destination_access_denied",
+  "workspace_overlay_whiteout_probe_setup_failed",
+  "workspace_overlay_whiteout_probe_cleanup_failed",
+  "workspace_overlay_whiteout_probe_access_denied",
+  "workspace_overlay_whiteout_probe_operation_denied",
+  "workspace_overlay_whiteout_probe_invalid_options",
+  "workspace_overlay_whiteout_probe_unsupported",
+  "workspace_overlay_whiteout_probe_result_invalid",
+  "workspace_overlay_whiteout_probe_failed",
+]);
 
 export async function invokeShellExec(
   args: Record<string, unknown>,
@@ -312,9 +342,9 @@ function invokeNativeProvider(
       cleanup();
       if (code !== 0) {
         const diagnostic = Buffer.concat(stderr).toString("utf8").trim();
-        const workspaceLockFailure = linuxWorkspaceLockFailure(platform, diagnostic);
-        if (workspaceLockFailure) {
-          reject(new Error(workspaceLockFailure));
+        const workspaceSetupFailure = linuxWorkspaceSetupFailure(platform, diagnostic);
+        if (workspaceSetupFailure) {
+          reject(new Error(workspaceSetupFailure));
           return;
         }
         const safeDiagnostic = /^[a-zA-Z0-9_:.-]{1,256}$/.test(diagnostic) ? ` (${diagnostic})` : "";
@@ -341,13 +371,20 @@ function invokeNativeProvider(
   });
 }
 
-function linuxWorkspaceLockFailure(platform: NodeJS.Platform, diagnostic: string): string | undefined {
+function linuxWorkspaceSetupFailure(platform: NodeJS.Platform, diagnostic: string): string | undefined {
   if (platform !== "linux") return undefined;
   if (diagnostic === "linux_sandbox_start_or_shutdown_failed:workspace_lock_busy") {
     return "shell.exec Linux workspace is in use by another isolated operation; this command was not started. Retry after that operation finishes.";
   }
   if (diagnostic === "linux_sandbox_start_or_shutdown_failed:workspace_lock_unavailable") {
     return "shell.exec could not establish exclusive access to the Linux workspace; this command was not started. Check workspace access and filesystem lock support, then retry.";
+  }
+  const prefix = "linux_sandbox_start_or_shutdown_failed:";
+  if (diagnostic.startsWith(prefix)) {
+    const detail = diagnostic.slice(prefix.length);
+    if (LINUX_WORKSPACE_SETUP_FAILURES.has(detail)) {
+      return `shell.exec could not prepare a bounded writable workspace on this Linux system; this command was not started. Check workspace access and support for private tmpfs/OverlayFS mounts under Bubblewrap. Keep isolation enabled and retry on a supported Linux environment. (workspace setup: ${detail})`;
+    }
   }
   return undefined;
 }
