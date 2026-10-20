@@ -54,6 +54,8 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 34回目の結果を受け、Bubblewrapの最低条件は版番号でなく`/usr/bin/bwrap --help`が`--size`を列挙する機能条件として固定した。providerは不足時に`linux_bubblewrap_tmpfs_size_unsupported`でshell起動前にfail-closedする。upstreamの`--size`追加はv0.7.0のrelease noteに記録されている。helperのRust unit testsはWSL Ubuntu 24.04で7 passed、`cargo fmt --check`もPASS。`pnpm docs:check`と`pnpm validate:repo-health`、`git diff --check`もPASS。これはoption parser／Rust構文／文書整合の確認であり、Linux helperのproduction `shell.exec`、OverlayFS mount、quota runtime成立の証拠ではない。日本語helper READMEを実装と証拠に同期し、英語runbookはruntime quota未成立の保守的な記述を維持した。次consumerは、この機能条件を満たし、同じ隔離user namespaceでOverlayFSを実行できるLinux runtime経路を確定してquotaを通すこと。D07.02／F01.02は`BUILD_GAP`を維持する。
 
+2026-10-20、WSL Ubuntu 24.04／Bubblewrap 0.9.0で現行helperを`cargo build --locked --offline`し、空の一時rootに対して合成`true`要求を一回実行した。`--size`の機能preflightを通過した後、production相当のOverlayFS mountで`linux_sandbox_start_or_shutdown_failed:workspace_overlay_mount_access_denied_paths_accessible`（exit 2）となり、commandは実行されなかった。一時rootが空であることを確認して作成した正確なdirectoryだけを除去した。これはWSL限定の起動経路診断であり、Linux native runtimeの証拠ではない。
+
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
 WindowsではLinux native runtimeを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1条件のmanual `workflow_dispatch`を使った。一時workflow登録commitは`088733474aa34f69d37bedd9c95c1b6258331d8a`。最初の[run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は既存runner AppArmor profileを変更しないガードで停止し、build/test未実行。修正版の[run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)ではpolicyを保ったnamespace probeとbuildは成功したが、stderrのOS文言差でtest期待値が不一致だった。
