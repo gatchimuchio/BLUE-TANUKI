@@ -2,7 +2,24 @@
 
 ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
 
-### 最新BUILD_BATCH：`QEB-03-E01.02-L3-RUNTIME-SCHEDULE-DELEGATION-CONSUMER`
+### 最新BUILD_BATCH：`QEB-03-E01.03-SCHEDULE-BOUND-DEADLINE-SESSION-CONSUMER`
+
+開始`HEAD`／`main`／`origin/main`=`cf427b86f58bd6b6f6f6d463ccde8515fa941b8b`。開始時の追跡ファイル差分はなく、保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E420AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、E01.03と実Cron→Gateway handler→HDS/C consumerを再読した。Windows localでBLUE-TANUKIのみ変更。
+
+Cron期限イベントは既存durable event identity／inbox-outboxを通り、期限時だけGateway handlerへ届く。Cron由来要求に、schedule origin／ID／payload hashからdomain-separated SHA-256で作った安定の`session_id`を付与し、同じscopeのC会話文脈を続け、scope変更時は分け直し、別schedule間の履歴混線を防ぐ。HDSはこのsession scopeをLLM commandの実行文脈へ渡すが、J判断・監査・権限には含めない。通常返信も実受信event時だけ既存handlerからHDSへ届き、待機中のC pollerは存在しない。
+
+期限event→schedule別C文脈の次consumerはこの範囲で`WIRED`。ただし、返信／期限を同じJ所有の永続wait/job状態へ相関し再開するproducerは未接続なので、E01.03およびE01親は`BUILD_GAP`を維持する。session historyはC向け非権威文脈であり、job/J状態、返信相関、期限状態、再開許可の代替ではない。C08.03実provider、D4／ミニドラ別repo変更、実外部作用、P13公開・出荷GOを保留し、QE_QC／QE_QAへ進まない。次consumerは永続jobのJ所有wait状態と正規返信／期限eventの対応付け。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway Cron event／HDS decision focused tests | PASS、2 files／93 tests。期限前はdispatchなし、期限eventのsession scopeが同scheduleでは安定・異schedule間で分離されること、HDSが内部Gateway session IDをC commandへ渡しdecision logには保存しないことを確認。 |
+| `pnpm typecheck`→`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `pnpm docs:check`／`git diff --check` | 両方PASS。日本語基底の既存移行負債76件は注意として残る。 |
+| 全workspace suite、実Gateway再起動／実返信／実期限job、実provider／credential、外部作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後に配置。 |
+
+実装commit=`e53d766240d7973f5d1090f951b5d2ab22fc4cee`をmainへatomic pushし、remote main一致を確認した。実装push後のlocal recovery branch／remote backup tagはcurrent=`e53d766240d7973f5d1090f951b5d2ab22fc4cee`、previous=`cf427b86f58bd6b6f6f6d463ccde8515fa941b8b`。このcloseout文書commitもpush後にcurrentを文書commit、previousを実装commitへ同期する。保護対象Linux `target/`はcommitへ含めない。
+
+### 直前BUILD_BATCH：`QEB-03-E01.02-L3-RUNTIME-SCHEDULE-DELEGATION-CONSUMER`
 
 開始`HEAD`／`main`／`origin/main`=`5b8960c2e4485cb221820a308d1bbf76f5862923`。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、E01.02と実Cron→HDS producer／consumerを再読した。Windows localでBLUE-TANUKIのみ変更。
 
