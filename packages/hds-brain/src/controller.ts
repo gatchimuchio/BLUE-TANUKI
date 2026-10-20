@@ -71,6 +71,7 @@ import type {
   SuspendedRequest,
   LLMToolCandidateAssessment,
   AuditRecord,
+  MemoryCitationReviewLog,
 } from "./types.js";
 import { frame } from "./frame.js";
 import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
@@ -575,6 +576,15 @@ function replayMeaningUpdateMemoryCommits(audit: AuditLog, memory: MeaningUpdate
   }
 }
 
+function memoryCitationJudgmentRef(requestId: string, commandId: string, recordId: string, version: string): string {
+  return `memory-citation-review:${sha256({ schema_version: "memory-citation-judgment.v1", request_id: requestId,
+    command_id: commandId, record_id: recordId, version })}`;
+}
+
+function isMemoryCitationReviewLog(value: unknown): value is MemoryCitationReviewLog {
+  return value !== null && typeof value === "object" && "kind" in value && value.kind === "memory_citation_review";
+}
+
 export class HDSUpperController {
   private state: ControllerState = "IDLE";
   private readonly audit: AuditLog;
@@ -610,10 +620,6 @@ export class HDSUpperController {
   private readonly suspendedRequests = new Map<string, InboundRequest>();
 
   constructor(opts: ControllerOptions = {}) {
-    this.operationPlans = new OperationPlanLedger(opts.operation_plan_state, opts.operation_plan_memory,
-      opts.operation_plan_recovery_evidence, () => this.goal_governance?.project(Date.now()),
-      (goalRef, version) => this.readGoalPurposeContent(goalRef, version),
-      (evidence) => this.operationPlanGoalPurposeRelationReviewAuditEventExists(evidence));
     this.policy = opts.policy ?? DEFAULT_POLICY;
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
@@ -634,6 +640,11 @@ export class HDSUpperController {
         log.event === "meaning_update_adoption_committed")) {
       throw new Error("persisted meaning updates require their private M store");
     }
+    this.operationPlans = new OperationPlanLedger(opts.operation_plan_state, opts.operation_plan_memory,
+      opts.operation_plan_recovery_evidence, () => this.goal_governance?.project(Date.now()),
+      (goalRef, version) => this.readGoalPurposeContent(goalRef, version),
+      (evidence) => this.operationPlanGoalPurposeRelationReviewAuditEventExists(evidence),
+      (lineageId) => this.meaningUpdateMemory?.readInterpretation(lineageId) ?? null);
     const llmRoute = opts.llm_route ?? {};
     this.llm_route = {
       ...llmRoute,
@@ -800,6 +811,8 @@ ${planControl.question}`,
           "plan_revision_changed", "plan_step_identity_mismatch", "plan_step_already_selected_or_attempted", "plan_step_not_ready",
           "plan_recovery_residual_hold", "plan_recovery_unobserved_hold", "plan_recovery_unverified_hold",
           "plan_recovery_refresh_hold", "plan_memory_commit_pending",
+          "plan_memory_interpretation_reassessment_required", "plan_memory_interpretation_state_unavailable",
+          "plan_memory_interpretation_dependency_invalid",
           "plan_target_resolver_not_connected", "plan_revision_identity_changed", "plan_revision_unchanged",
           "plan_goal_criteria_source_unavailable", "plan_goal_criteria_source_invalid",
           "plan_goal_criteria_operation_unavailable", "plan_goal_criteria_conflict",
@@ -1595,6 +1608,26 @@ ${planControl.question}`,
     }
 
     const record = buildMeaningUpdateMemoryRecord(review.proposal);
+    const currentInterpretation = this.meaningUpdateMemory.readInterpretation(input.args.target_record_id)?.record;
+    const currentInterpretationId = currentInterpretation?.application_state === "active"
+      ? currentInterpretation.current_interpretation_id : null;
+    const affectedJudgmentRefs = currentInterpretationId
+      ? [...new Set(entries.flatMap(({ log }) => {
+        if (!isMemoryCitationReviewLog(log) || !log.request_id ||
+            (log.status !== "accepted" && log.status !== "accepted_with_rejections")) return [];
+        return (log.interpretation_dependencies ?? []).filter((dependency) =>
+          dependency.reference.record_id === input.args.target_record_id &&
+          dependency.reference.version === input.args.target_version &&
+          dependency.interpretation_id === currentInterpretationId &&
+          dependency.judgment_ref === memoryCitationJudgmentRef(log.request_id!, log.command_id,
+            dependency.reference.record_id, dependency.reference.version) &&
+          log.accepted_citations.some((citation) =>
+            (citation.supporting.record_id === dependency.reference.record_id &&
+              citation.supporting.version === dependency.reference.version) ||
+            (citation.counterevidence.record_id === dependency.reference.record_id &&
+              citation.counterevidence.version === dependency.reference.version))).map((dependency) => dependency.judgment_ref);
+      }))]
+      : [];
     let committed: ReturnType<MeaningUpdateMemoryConsumer["commit"]>;
     try {
       committed = this.meaningUpdateMemory.commit(record, (reference) => {
@@ -1602,7 +1635,7 @@ ${planControl.question}`,
           source_command_id: input.source_command_id, command_digest: input.command_digest, proposal_actor,
           reviewer_actor, proposal_digest: review.proposal_digest, candidate_digest: review.proposal.candidate_digest,
           target: meaningUpdateAdoptionApprovalTarget(input.args), evaluation: input.evaluation };
-      });
+      }, affectedJudgmentRefs);
     } catch { committed = { ok: false, reason: "meaning_update_commit_failed" }; }
     finally { this.meaningUpdateMemoryApprovalContext = undefined; }
     if (!committed.ok) {
@@ -1846,7 +1879,29 @@ ${planControl.question}`,
       content: rawContent,
       current_reference_versions: this.currentMemoryReferenceVersions(memoryTrace),
     });
-    if (reviewed.audit_log) this.audit.append(reviewed.audit_log);
+    if (reviewed.audit_log) {
+      const references = new Map<string, MemoryCitationReviewLog["accepted_citations"][number]["supporting"]>();
+      if (reviewed.audit_log.status === "accepted" || reviewed.audit_log.status === "accepted_with_rejections") {
+        for (const citation of reviewed.audit_log.accepted_citations) {
+          references.set(`${citation.supporting.record_id}\0${citation.supporting.version}`, citation.supporting);
+          references.set(`${citation.counterevidence.record_id}\0${citation.counterevidence.version}`, citation.counterevidence);
+        }
+      }
+      const interpretationDependencies: NonNullable<MemoryCitationReviewLog["interpretation_dependencies"]> = [];
+      for (const reference of references.values()) {
+        const snapshot = this.meaningUpdateMemory?.readInterpretation(reference.record_id);
+        const interpretationId = snapshot?.record?.current_interpretation_id;
+        const interpretation = interpretationId
+          ? snapshot?.record?.interpretations.find((item) => item.interpretation_id === interpretationId)
+          : undefined;
+        if (!snapshot?.record || snapshot.record.application_state !== "active" || !interpretationId ||
+            interpretation?.basis_ref !== `${reference.record_id}#${reference.version}`) continue;
+        interpretationDependencies.push({ reference, interpretation_id: interpretationId,
+          judgment_ref: memoryCitationJudgmentRef(sourceLog.request_id, command.id, reference.record_id, reference.version) });
+      }
+      this.audit.append({ ...reviewed.audit_log,
+        ...(interpretationDependencies.length ? { interpretation_dependencies: interpretationDependencies } : {}) });
+    }
     return withLlmResultContent(feedback, reviewed.content);
   }
 
@@ -2055,8 +2110,14 @@ ${planControl.question}`,
         ? result.operation_core as Record<string, unknown> : undefined;
       if (planner?.status === "valid_plan") {
         try {
+          const citationReview = this.audit.list().map((entry) => entry.log)
+            .find((entry) => isMemoryCitationReviewLog(entry) && entry.command_id === fb.command_id &&
+              entry.request_id === sourceLog?.request_id &&
+              (entry.status === "accepted" || entry.status === "accepted_with_rejections"));
+          const memoryInterpretationDependencies = citationReview && isMemoryCitationReviewLog(citationReview)
+            ? citationReview.interpretation_dependencies ?? [] : [];
           this.operationPlans.retainCandidate(planner.plan, issued.origin, planner.goal_purpose_relation,
-            issued.compute_source_observations);
+            issued.compute_source_observations, memoryInterpretationDependencies);
           this.planEvent("candidate_retained", fb.command_id);
         } catch {
           this.planEvent("candidate_rejected", fb.command_id);

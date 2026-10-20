@@ -52,6 +52,13 @@ export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion(
   }).strict(),
 ]);
 export type OperationPlanComputeSourceObservation = z.infer<typeof OperationPlanComputeSourceObservationSchema>;
+/** J記録済みの記憶引用が依存した解釈版。依存情報は権限ではない。 */
+export const OperationPlanMemoryInterpretationDependencySchema = z.object({
+  reference: z.object({ record_id: Id, version: Digest }).strict(),
+  interpretation_id: Id,
+  judgment_ref: Id,
+}).strict();
+export type OperationPlanMemoryInterpretationDependency = z.infer<typeof OperationPlanMemoryInterpretationDependencySchema>;
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
   "blue-tanuki.plan-compute-source-observations.v3";
 /** Explicit task input for internal plan computation; the binding selects context, not authority. */
@@ -229,6 +236,7 @@ export const OperationPlanCheckpointSchema = z.object({
     goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),
     goal_purpose_relation: OperationPlanGoalPurposeRelationRecordSchema.optional(),
     compute_source_observations: z.array(OperationPlanComputeSourceObservationSchema).max(8).optional(),
+    memory_interpretation_dependencies: z.array(OperationPlanMemoryInterpretationDependencySchema).max(64).optional(),
     request_goal_criteria: GoalCriteriaProjectionSchema.optional(),
     revisions: z.array(z.object({ digest: Digest, plan: OperationPlanSchema }).strict()).min(1).max(100),
     receipt_observations: z.array(OperationPlanExternalReceiptObservationSchema).max(100).default([]),

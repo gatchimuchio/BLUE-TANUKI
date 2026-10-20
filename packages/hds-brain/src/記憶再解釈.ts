@@ -467,7 +467,15 @@ function applyTransition(
         current.interpretations.some((item) => item.interpretation_id === transition.interpretation.interpretation_id) ||
         current.dependent_judgments.length >= MAX_JUDGMENTS ||
         current.dependent_judgments.some((judgment) => judgment.judgment_ref === transition.reassessment_judgment_ref)) return null;
-    const quarantined = applyTransition(current, {
+    const existingJudgments = new Set(current.dependent_judgments.map((judgment) => judgment.judgment_ref));
+    const additionalJudgments = transition.affected_judgment_refs.filter((reference) => !existingJudgments.has(reference));
+    if (current.dependent_judgments.length + additionalJudgments.length > MAX_JUDGMENTS) return null;
+    const withCurrentDependents = additionalJudgments.length === 0 ? current : Object.freeze({
+      ...current,
+      dependent_judgments: Object.freeze([...current.dependent_judgments, ...additionalJudgments.map((judgment_ref) =>
+        Object.freeze({ judgment_ref, basis_interpretation_id: current.current_interpretation_id!, reassessment_required: false }))]),
+    });
+    const quarantined = applyTransition(withCurrentDependents, {
       kind: "quarantine",
       event_id: transition.quarantine_event_id,
       reason_digest: transition.reason_digest,

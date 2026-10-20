@@ -17,7 +17,9 @@ import {
   OperationPlanGoalPurposeRelationOwnerReviewSchema,
   OperationPlanGoalPurposeRelationRecordSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
+  OperationPlanMemoryInterpretationDependencySchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
+  type OperationPlanMemoryInterpretationDependency,
   type OperationPlanReceiptReconciliationControl,
 } from "@blue-tanuki/protocol";
 import { JMemoryCommitCoordinator } from "./制御状態.js";
@@ -31,6 +33,22 @@ import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
+
+type MemoryInterpretationReviewSnapshot = {
+  readonly record: {
+    readonly application_state: "active" | "quarantined";
+    readonly current_interpretation_id: string | null;
+    readonly interpretations: readonly { readonly interpretation_id: string; readonly basis_ref: string }[];
+    readonly dependent_judgments: readonly {
+      readonly judgment_ref: string;
+      readonly basis_interpretation_id: string;
+      readonly reassessment_required: boolean;
+    }[];
+    readonly used_for_authority: false;
+    readonly may_execute: false;
+  } | null;
+  readonly used_for_authority: false;
+};
 
 /** Stable across plan revisions; the digests correlate a task but confer no authority. */
 function operationPlanTaskIdentityDigest(plan: PlanState): string {
@@ -502,7 +520,8 @@ export class OperationPlanLedger {
     recoveryEvidence?: OperationPlanRecoveryEvidence,
     private readonly goalGovernanceReader?: () => ReadonlyGoalGovernanceProjection | undefined,
     private readonly goalPurposeContentReader?: (goalRef: string, version: number) => OperationPlanGoalPurposeContent | null | undefined,
-    private readonly goalPurposeRelationReviewVerifier?: OperationPlanGoalPurposeRelationReviewVerifier) {
+    private readonly goalPurposeRelationReviewVerifier?: OperationPlanGoalPurposeRelationReviewVerifier,
+    private readonly memoryInterpretationReader?: (lineageId: string) => MemoryInterpretationReviewSnapshot | null | undefined) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
     this.memoryStorage = memoryStorage;
     const checkedRecoveryEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
@@ -893,7 +912,8 @@ export class OperationPlanLedger {
   }
 
   retainCandidate(value: unknown, origin: InboundRequest, rawPurposeRelationCandidate?: unknown,
-    computeSourceObservations?: readonly OperationPlanComputeSourceObservation[]): void {
+    computeSourceObservations?: readonly OperationPlanComputeSourceObservation[],
+    memoryInterpretationDependencies?: readonly OperationPlanMemoryInterpretationDependency[]): void {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const plan = candidatePlan(value);
     const expected = origin.metadata?.["blue_tanuki.operation_core.request_id"] ?? origin.id;
@@ -925,6 +945,11 @@ export class OperationPlanLedger {
       }
       verifiedComputeSourceObservations = current;
     }
+    const parsedMemoryDependencies = memoryInterpretationDependencies?.map((dependency) =>
+      OperationPlanMemoryInterpretationDependencySchema.parse(dependency));
+    if ((parsedMemoryDependencies?.length ?? 0) > 64 ||
+        new Set((parsedMemoryDependencies ?? []).map((dependency) => dependency.judgment_ref)).size !==
+          (parsedMemoryDependencies?.length ?? 0)) throw new Error("plan_memory_interpretation_dependency_invalid");
     const goalPurposeRelation = goalPurposeBinding
       ? this.recordGoalPurposeRelation(plan, origin.content, goalPurposeBinding, rawPurposeRelationCandidate)
       : undefined;
@@ -934,6 +959,7 @@ export class OperationPlanLedger {
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
       ...(goalPurposeRelation ? { goal_purpose_relation: goalPurposeRelation } : {}),
       ...(verifiedComputeSourceObservations ? { compute_source_observations: verifiedComputeSourceObservations } : {}),
+      ...(parsedMemoryDependencies?.length ? { memory_interpretation_dependencies: parsedMemoryDependencies } : {}),
       request_goal_criteria: requestGoalCriteria,
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
   }
@@ -1031,6 +1057,7 @@ export class OperationPlanLedger {
     if (control.action === "review" && !this.computeSourceObservationsAreCurrent(p, Date.now())) {
       throw new Error("plan_compute_source_observation_expired");
     }
+    if (control.action === "review") this.assertMemoryInterpretationDependenciesCurrent(p);
     if (control.action === "revise") {
       this.revisionImpact(p, control.plan);
       return { plan_id: control.plan_id, revision_digest: expected, goal: p.goal, recovery_hold_released: false };
@@ -1063,6 +1090,31 @@ export class OperationPlanLedger {
     return { plan_id: current.plan.plan_id, revision_digest: expected, step, goal: p.goal,
       recovery_hold_released: recoveryHoldReleased,
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}) };
+  }
+
+  private assertMemoryInterpretationDependenciesCurrent(plan: PlanState): void {
+    const dependencies = plan.memory_interpretation_dependencies ?? [];
+    if (dependencies.length === 0) return;
+    if (!this.memoryInterpretationReader) throw new Error("plan_memory_interpretation_state_unavailable");
+    for (const dependency of dependencies) {
+      const snapshot = this.memoryInterpretationReader(dependency.reference.record_id);
+      const interpretation = snapshot?.record?.interpretations.find((item) =>
+        item.interpretation_id === dependency.interpretation_id);
+      if (!snapshot || snapshot.used_for_authority !== false || !snapshot.record ||
+          snapshot.record.used_for_authority !== false || snapshot.record.may_execute !== false ||
+          !interpretation || interpretation.basis_ref !== `${dependency.reference.record_id}#${dependency.reference.version}`) {
+        throw new Error("plan_memory_interpretation_state_unavailable");
+      }
+      const judgment = snapshot.record.dependent_judgments.find((item) => item.judgment_ref === dependency.judgment_ref);
+      if (!judgment || judgment.basis_interpretation_id !== dependency.interpretation_id) {
+        throw new Error("plan_memory_interpretation_state_unavailable");
+      }
+      if (snapshot.record.application_state !== "active" ||
+          snapshot.record.current_interpretation_id !== dependency.interpretation_id ||
+          judgment?.reassessment_required) {
+        throw new Error("plan_memory_interpretation_reassessment_required");
+      }
+    }
   }
 
   /** Check the current J binding and issue no authority beyond one short-lived read-only lookup. */

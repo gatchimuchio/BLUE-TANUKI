@@ -170,6 +170,12 @@ export interface MemoryCitationReviewLog {
   candidate_references: MemoryCitationReference[];
   /** Exact immutable versions supplied to C for this projection; absent only on legacy review entries. */
   dependency_versions?: MemoryCitationReference[];
+  /** Current private M interpretation versions consulted when J accepted these citations. */
+  interpretation_dependencies?: Array<{
+    reference: MemoryCitationReference;
+    interpretation_id: string;
+    judgment_ref: string;
+  }>;
   /** Per-record context disposition and reversible, content-free projection differences. */
   /** Missing only on legacy C04.01 audit entries written before this projection was added. */
   projection_records?: MemoryCitationProjectionRecord[];

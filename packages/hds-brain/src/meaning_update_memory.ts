@@ -48,6 +48,7 @@ export class MeaningUpdateMemoryConsumer {
   commit(
     record: MeaningUpdateMemoryRecord,
     authorize: (reference: JMemoryApprovalReference) => void,
+    affectedJudgmentRefs: readonly string[] = [],
   ): MeaningUpdateMemoryCommitResult {
     if (!isMeaningUpdateMemoryRecord(record)) return { ok: false, reason: "meaning_update_record_invalid" };
     const updateId = `meaning-update:${record.proposal_digest}`;
@@ -95,6 +96,9 @@ export class MeaningUpdateMemoryConsumer {
       const affected = interpretationSnapshot.record.dependent_judgments
         .filter((judgment) => judgment.basis_interpretation_id === currentId && !judgment.reassessment_required)
         .map((judgment) => judgment.judgment_ref);
+      for (const judgmentRef of affectedJudgmentRefs) {
+        if (!affected.includes(judgmentRef)) affected.push(judgmentRef);
+      }
       if (affected.length === 0) return { ok: false, reason: "meaning_update_reassessment_pending" };
       interpretationBuild = buildMemoryInterpretationCommit({
         current: interpretationSnapshot,
