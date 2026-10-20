@@ -19,7 +19,7 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 D05.03の緊急停止監査欠損回復consumerをこの範囲で`WIRED`とする。E02.01は未着手のまま、次consumerは親子予算予約を実C呼出しへ接続する経路。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。開始時復旧refはlocal／remote current=`5933eb9e93275581437d4bdbe717436cbf9457aa`、previous=`720f2fa73d4b152c4d97cf033f13b3ceb0f61b5e`。
 
-実装commit=`bde6a98a4c8c367f99200963f4797d46b8b67e99`を`main`へatomic push済み。実装push直後のremote `main`とlocal `codex/backup-main`／`codex/backup-main-prev`、remote `codex/backup-main`／`codex/backup-main-prev`はcurrent=`bde6a98a4c8c367f99200963f4797d46b8b67e99`、previous=`5933eb9e93275581437d4bdbe717436cbf9457aa`。このactive指示のcloseout文書commitは同じBUILD_BATCHの後続pushで保全する。protected Linux `target/`は未追跡のまま保持しcommitへ含めていない。
+実装commit=`bde6a98a4c8c367f99200963f4797d46b8b67e99`を`main`へatomic push済み。実装push直後のremote `main`とlocal `codex/backup-main`／`codex/backup-main-prev`、remote `codex/backup-main`／`codex/backup-main-prev`はcurrent=`bde6a98a4c8c367f99200963f4797d46b8b67e99`、previous=`5933eb9e93275581437d4bdbe717436cbf9457aa`。続くcloseout文書commitも`main`へatomic pushし、remote `main`とlocal／remote recovery refsのcurrentをこの文書commit、previousを直前commit=`ce5cd5841201c19bb0c6badb2ed0fbedfbd13d1a`にそろえた。protected Linux `target/`は未追跡のまま保持しcommitへ含めていない。
 
 ### 直前完了BUILD_BATCH：`QEB-03-E01.03-OWNER-STEP-REVIEW-CALLER`
 
