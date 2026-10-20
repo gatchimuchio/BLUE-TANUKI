@@ -2,7 +2,17 @@
 
 ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
 
-### 最新BUILD_BATCH：`QEB-03-E01.03-SCHEDULE-BOUND-DEADLINE-SESSION-CONSUMER`
+### 最新BUILD_BATCH：`QEB-03-E01.03-PERSISTENT-WAIT-REPLY-DEADLINE-CONSUMER`
+
+開始`HEAD`／`main`／`origin/main`=`249cc6f1f83f3d1a345dd80a714e944c5d782689`。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E420AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、E01.03の実装到達条件とOperation Plan wait・返信・期限の現行producer／consumerを再読した。Windows localでBLUE-TANUKIのみ変更し、保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。
+
+J永続checkpointへwaitを保存し、plan revision／task identity／owner／channel／session／期限を結合する。正規返信または期限eventを一回だけJで消費し、元の目的と未信頼返信／期限をCの計画候補計算へ渡す。C候補は同じtask identityでJ ledgerへ保持する。期限schedulerは永続waitだけを起点とし、待機中にCをpollしない。waitは承認・実行権限を持たず、既存J／Approval／Executor境界を維持する。SQLite close／reopen fixtureは通したが、実Gateway process再起動は未確認。
+
+限定focused tests、`pnpm typecheck`、15 workspace `pnpm build`、`git diff --check`はPASS。全workspace suite、実Gateway再起動、実provider／credential、外部作用、5OS実機、QE_QC／QE_QAは未実施。返信／期限→J一回再開→C候補→J task identity保持を限定consumerで`WIRED`とする。E01親と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。次は再開後C候補のJ採否から永続仕事状態・観測結果・M・owner応答へつながる実callerを特定する。C08.03、他repo変更、実外部作用、P13は保留。
+
+実装commit=`98eac0b1267271113b541aa8c5c11f98f965abd2`を`main`へpush済み。実装push後のlocal復旧branch／remote backup tagはcurrent=`98eac0b1267271113b541aa8c5c11f98f965abd2`、previous=`249cc6f1f83f3d1a345dd80a714e944c5d782689`。この文書closeout commitをpush後にremote HEADと二世代refを再照合する。保護対象Linux `target/`はcommitへ含めない。
+
+### 直前BUILD_BATCH：`QEB-03-E01.03-SCHEDULE-BOUND-DEADLINE-SESSION-CONSUMER`
 
 開始`HEAD`／`main`／`origin/main`=`cf427b86f58bd6b6f6f6d463ccde8515fa941b8b`。開始時の追跡ファイル差分はなく、保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E420AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、E01.03と実Cron→Gateway handler→HDS/C consumerを再読した。Windows localでBLUE-TANUKIのみ変更。
 
