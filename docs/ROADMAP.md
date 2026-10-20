@@ -2,6 +2,8 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-21の`QEB-01-F01.03-WINDOWS-WORKSPACE-EDIT-SHELL-RESULT-CONSUMER`では、合成workspaceの編集適用後にWindows隔離processで同じfileを確認し、結果をdigest-onlyでJ/Mへ返した後、明示選択されたC入力と次候補保持までを限定integration test 1件で接続した。このconsumerは`WIRED`。C候補・承認はfixtureで、実LLMやGUI-live経路ではない。F01.03全体、Linux quota、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、全体QE_QC／QE_QAは未成立。製品コードはこのbatchで変更していない。詳細は[`docs/開発進捗.md`](開発進捗.md)。
+
 2026-10-21の`QEB-01-F01.02-SHELL-RESULT-J-M-EXPLICIT-C-CONSUMER`では、HDS発行の直接`shell.exec`結果をJのdigest-only checkpointからM commit／receiptへ結び、owner／channel一致と明示source refの再照合後に限って次の`plan:compute`へmetadata／digestを返す経路を接続した。合成feedback fixtureは再起動・候補保持まで通過し、Gateway／WebChat focused test各1件、typecheck、15-project buildはPASS。fixtureは実processを起動しておらず、shellの終了状態やtask達成を証明しない。F01.02／D07.03はLinux writable workspaceのaggregate disk quota等が残り`BUILD_GAP`。全体QC／QA、5OS実機、実provider、外部作用の証拠ではない。詳細は[`docs/開発進捗.md`](開発進捗.md)。
 
 2026-10-20の`QEB-01-F01.01-PLAN-BOUND-FILE-EDIT-RESULT-CONSUMER`では、plan-selected `file.edit`を対象版確認からJ検証・digest-only M保存・明示選択後のC向け観測まで接続した。限定fixture、typecheck、15-project build、HDS standalone、docs checkはPASS。F01.01の隔離workspace差分適用・確認・復旧、D03.01、目的から帰還までの一仕事、および`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細な施工記録は[`docs/開発進捗.md`](開発進捗.md)を参照する。

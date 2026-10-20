@@ -1,6 +1,20 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-F01.02-SHELL-RESULT-J-M-EXPLICIT-C-CONSUMER`
+### 最新BUILD_BATCH：`QEB-01-F01.03-WINDOWS-WORKSPACE-EDIT-SHELL-RESULT-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`168db4f0921ffea9a57f40912d8ea9532ab88680`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.03とfile.edit→shell.exec→J/M/Cの現行producer／consumerを再読した。Windows localで作業し、既存untracked Linux `target/`を保持した。
+
+GatewayのWindows限定integration testで、合成workspaceのfile.edit差分review→Executor適用→同じworkspace内のWindows AppContainer processによる内容照合→HDS結果受領→J/M digest-only記録→HDS再生成後の明示選択→C入力→次候補保持を一経路でつないだ。Cの候補応答はfixtureであり、実LLM providerではない。隔離helperはsource-based Vitestのtest seamから明示指定し、製品コードは変更していない。対象path、本文、commandをM／C projectionに出さず、観測を非権威に保つ。この限定Windows consumerを`WIRED`とする。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `execution_result_reconciliation.test.ts` の実workspace consumer | PASS、対象1件。43件は対象外skip。Windows AppContainer processが編集後fileを読み、J/Mへdigest-only結果を返した。 |
+| `git diff --check` | PASS。 |
+| production `typecheck`／`build`、全suite、QE_QC／QE_QA、Linux／macOS／Mobile実機、実LLM、実credential、外部作用 | 未実施。このtest-only変更には不要で、全体build成立後の検査へ配置。 |
+
+実装test commit=`ea88b93245edf60ad9b1665245ef8abddf12c11c`を`main`へpushし、remote main一致を確認した。push後local recovery branches／remote backup tagsはcurrent=`ea88b93245edf60ad9b1665245ef8abddf12c11c`、previous=`168db4f0921ffea9a57f40912d8ea9532ab88680`。closeout docs-only commitをpush後にremote HEADと復元二世代を再照合する。F01.03全体、Linux aggregate workspace quota、製品の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。同じLinux mount denial診断を反復せず、次はD03.01のBLUE側Runtime登録／意図入力consumerを選ぶ。C08.03実provider保留、D4 Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+### 前回BUILD_BATCH：`QEB-01-F01.02-SHELL-RESULT-J-M-EXPLICIT-C-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`014b5fdfe8526094c5aee26f35116151bfaca58b`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、F01.02、shell結果producerからJ/Mと後続`plan:compute` consumerまでを再読した。Windows localで施工し、既存untracked Linux `target/`を保持した。
 
