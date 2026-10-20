@@ -516,7 +516,7 @@ jobs:
             chmod 0500 /tmp/fuse-overlay-capless-workload.sh
             chmod 0500 /tmp/fuse-overlay-drop-caps-exec.py
             if /usr/bin/python3 /tmp/fuse-overlay-drop-caps-exec.py /usr/bin/bwrap \
-              --unshare-pid --unshare-net --unshare-ipc --unshare-uts \
+              --unshare-user --unshare-pid --unshare-net --unshare-ipc --unshare-uts \
               --new-session --die-with-parent --disable-userns --cap-drop ALL \
               --ro-bind /usr /usr \
               --symlink usr/bin /bin --symlink usr/sbin /sbin \
