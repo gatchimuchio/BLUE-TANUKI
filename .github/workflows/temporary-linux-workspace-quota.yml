@@ -666,8 +666,22 @@ jobs:
             echo "fuse_boundary_shared_tmpfs=failed"
             exit 1
           fi
-          if ! mount --make-shared /workspace-shared 2>/dev/null; then
+          shared_mark_error=/tmp/fuse-boundary-shared-mark.err
+          if mount --make-shared /workspace-shared 2>"$shared_mark_error"; then
+            :
+          else
+            shared_mark_status=$?
             echo "fuse_boundary_shared_mark=failed"
+            echo "fuse_boundary_shared_mark_exit=$shared_mark_status"
+            if grep -Eiq 'Operation not permitted|Permission denied' "$shared_mark_error"; then
+              echo "fuse_boundary_shared_mark_error=permission_denied"
+            elif grep -Eiq 'Invalid argument' "$shared_mark_error"; then
+              echo "fuse_boundary_shared_mark_error=invalid_argument"
+            elif grep -Eiq 'not a mountpoint|not mounted|No such file or directory' "$shared_mark_error"; then
+              echo "fuse_boundary_shared_mark_error=invalid_mount_target"
+            else
+              echo "fuse_boundary_shared_mark_error=other"
+            fi
             exit 1
           fi
           if ! awk '$5 == "/workspace-shared" { for (i = 7; i <= NF; i++) if ($i ~ /^shared:/) shared = 1 } END { exit !shared }' /proc/self/mountinfo; then
