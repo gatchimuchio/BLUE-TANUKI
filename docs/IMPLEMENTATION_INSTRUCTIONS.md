@@ -10,7 +10,7 @@ J所有の永続Operation Planから、owner/channel/goal/plan/requestのdigest 
 
 Windowsの`pnpm typecheck`／`pnpm build`、Gateway `file_search_worker.test.ts`（9/9）、`operation_plan_runtime.test.ts`（26/26）、Core `executor_hds_authority_binding.test.ts`（5/5）がPASS。初回Core試験のv4 proof digest期待値ずれはfixtureを更新後、同試験を再実行してPASS。実child IPCとSQLite reopen、Jのadmission欠落／別task digest拒否、step間・plan revision後のtask identity継続を確認した。Actionsは未使用。全workspace suite／QE_QC／QE_QA／5OS実機／provider・credential／外部業務作用は未実施。
 
-Git閉包：実装commit `620d57f`とdocs-only closeout commit `70ba751`を順に`main`へpushした。現在のremote `main`／`codex/backup-main` tagは`70ba7511aa7b2be273ac2a33fb7eafa7fd44c31e`、前世代tagは実装commit `620d57fdccce45d91f631844c06dc88d4d2f2e43`。作業ツリーの唯一の残差は保持対象の未追跡`packages/blue-tanuki/native/linux-isolation/target/`。
+Git閉包：実装commit `620d57f`とdocs-only closeout commit `70ba751`を順に`main`へpushした。closeout記録を実測に合わせる補正もpushし、その後にremote `main`／二世代backup tagとlocal復元branch二世代を再照合した。作業ツリーの唯一の残差は保持対象の未追跡`packages/blue-tanuki/native/linux-isolation/target/`。
 
 次回開始時は、三点正本・AGENTS・active指示・HEADと差分を読み直す。独立したcurrent host/device identity producerが現物で確認できない限り、D02.02全体は`BUILD_GAP`のままとし、同じhost探索を反復せず、別のBLUE所有producer→consumer接続を選ぶ。execution epochをhost identityと呼ばない。別repo変更、C08.03実provider、P13公開・出荷判断、Linux aggregate workspace quota／D07.02／F01.02はこのbatchの対象外。
 
