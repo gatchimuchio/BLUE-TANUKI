@@ -18,7 +18,7 @@ runtime schedule mutationの同一L3 command／requestと送信scope（schedule 
 | `git diff --check` | PASS。 |
 | 全workspace suite、実Gateway再起動／実承認／実送信、実provider／credential、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状の後段へ配置。 |
 
-実装commitとpush後のSHA／backup refsはcloseout追記に記録する。実装・文書commitへ保護対象Linux `target/`を含めない。
+実装commit=`87bcc774ae60b70bd21343acd6c77c74679530d6`を`main`へatomic pushし、remote main一致を確認した。実装push後のlocal recovery branch／remote backup tagはcurrent=`87bcc774ae60b70bd21343acd6c77c74679530d6`、previous=`5b8960c2e4485cb221820a308d1bbf76f5862923`へ同期した。push時に同名local tagが古い世代を指していることが判明したため、remoteの実SHAを再照合し旧SHAを明示した`--force-with-lease`で2 tagを正しい世代へ更新し、再度remote SHA一致を確認した。remote backup branchは使用していない。保護対象Linux `target/`はcommitへ含めていない。この文書closeout commitもpushし、refsとHEADを再照合する。
 
 ### 直前BUILD_BATCH：`QEB-03-E01.02-DAILY-WALL-CLOCK-RESTART-CONSUMER`
 
