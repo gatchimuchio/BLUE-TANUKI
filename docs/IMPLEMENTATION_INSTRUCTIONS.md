@@ -1,6 +1,20 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 実施中BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-AGGREGATE-WORKSPACE-QUOTA`
+### 実施中BUILD_BATCH：`QEB-01-D02.02-OPERATION-PLAN-WORKER-BINDING`
+
+開始`main`／`origin/main`=`25d051597026c86801231e1c5aa0540508ae10b6`、local recovery branch／remote backup tagはcurrent=`25d051597026c86801231e1c5aa0540508ae10b6`、previous=`71a531777024038a4f213c262d0c86d5d4c6303a`で一致。owner指定QE rev2.3三点セット（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、D02.02、Executor→file-search worker実IPCを再読した。既存untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持する。
+
+目的は、HDSが選んだOperation Plan binding digestをfile.searchのtarget observationからworker要求へ渡し、childが同じdigestを照合し、result/errorへ返し、parentが検査した後にdigest-onlyの実行receiptへ保存すること。これは仕事のsource bindingを運ぶ非権威証拠であり、stable task ID、host/device identity、D4Pocket audience、OS隔離、実行権限の代替ではない。
+
+この範囲では`ExecutionWorkerIdentity`とSQLite receiptへ`worker_operation_plan_binding_digest`を追加した。plan-bound検索で親→child要求→result→receiptが一致し、DB reopen後も読み戻せる。欠落／変更bindingのchild要求は拒否する。未計画file.searchにdigestを捏造せず、未接続範囲は残す。
+
+Windows上の`pnpm typecheck`、`pnpm build`、`apps/gateway/test/file_search_worker.test.ts`（9/9）、変更した永続receipt caseのfocused再実行（1/1）がPASS。D4-Pocket AGENTS §3.1のActions条件は確認済みだが、本対象はWindows localで必要なconsumer疎通を確認できるためActions／workflow追加なし。全体test、QE_QC、QE_QA、OS実機、実provider／credential、外部業務作用は未実施。
+
+次consumerはD02.02に残る安定task identityとcurrent host/audienceの実producer／認証consumer。Gateway execution epochは起動世代でありhost identityではない。HDS request ID、D4の表示metadata、memory/historyからtaskやhost権限を推定しない。Linux aggregate workspace quota／D07.02／F01.02は別の`BUILD_GAP`として保留し、失敗した同一runner診断をこのバッチで再開しない。
+
+### 保留中の前回BUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-AGGREGATE-WORKSPACE-QUOTA`
+
+以下はquota実runtimeが未成立であることを記録した履歴であり、最新active指示ではない。同一runner診断を反復せず、安全なproduction consumer／実行環境の新しい根拠が得られるまで`BUILD_GAP`を維持する。
 
 開始main／`origin/main`=`6d1099955c53b66161497b26fb3aabf44e81ddeb`、開始worktree clean。対象はLinux `shell.exec`の既存workspace consumer。rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、D07.02／F01.02、`packages/blue-tanuki/native/linux-isolation/src/main.rs`と`packages/blue-tanuki/src/tools/shell_exec.ts`を再読した。
 

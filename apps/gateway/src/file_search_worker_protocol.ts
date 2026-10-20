@@ -22,9 +22,11 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
   command: Extract<ExecuteCommand, { type: "tool_call" }>;
   ticket: ExecutionIntentTicket;
   target_version_observation: FileSearchTargetVersionObservation;
+  operation_plan_binding_digest?: string;
 } {
   if (packet.type !== "execute" || packet.worker_id !== worker_id ||
-      Object.keys(packet).some((key) => !["profile", "type", "worker_id", "ticket", "command", "target_version_observation"].includes(key))) throw new Error("file_search_worker_request_invalid");
+      Object.keys(packet).some((key) => !["profile", "type", "worker_id", "ticket", "command", "target_version_observation",
+        "operation_plan_binding_digest"].includes(key))) throw new Error("file_search_worker_request_invalid");
   const ticket = packet.ticket as ExecutionIntentTicket;
   const command = packet.command as Extract<ExecuteCommand, { type: "tool_call" }>;
   let target_version_observation: FileSearchTargetVersionObservation;
@@ -42,7 +44,10 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
       command.upstream_decision.request_id.length > 200 || ticket.execution_epoch !== expected_execution_epoch ||
       typeof requestedRoot !== "string" || target_version_observation.requested_root_digest !== createHash("sha256").update(requestedRoot, "utf8").digest("hex") ||
       ticket.command_digest !== executorCommandDigest(command) ||
-      ticket.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex")) {
+      ticket.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
+      packet.operation_plan_binding_digest !== target_version_observation.operation_plan_binding_digest ||
+      (packet.operation_plan_binding_digest !== undefined &&
+        (typeof packet.operation_plan_binding_digest !== "string" || !/^[0-9a-f]{64}$/.test(packet.operation_plan_binding_digest)))) {
     throw new Error("file_search_worker_ticket_invalid");
   }
   const constraints = command.constraints;
@@ -50,7 +55,8 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
       !requireToolOperationDescriptor("file.search").required_capabilities.every((cap) => constraints.allowed_capabilities?.includes(cap))) {
     throw new Error("file_search_worker_capability_denied");
   }
-  return { command, ticket, target_version_observation };
+  return { command, ticket, target_version_observation,
+    ...(typeof packet.operation_plan_binding_digest === "string" ? { operation_plan_binding_digest: packet.operation_plan_binding_digest } : {}) };
 }
 
 export function validateWorkerResult(value: unknown, command: Extract<ExecuteCommand, { type: "tool_call" }>,

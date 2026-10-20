@@ -26,6 +26,9 @@ export function createFileSearchWorker(options: FileSearchWorkerOptions): FileSe
 
 function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promise<unknown> {
   if (request.signal?.aborted) return Promise.reject(new Error("file_search_worker_cancelled"));
+  if (request.operation_plan_binding_digest !== request.target_version_observation.operation_plan_binding_digest) {
+    return Promise.reject(new Error("file_search_worker_operation_plan_binding_mismatch"));
+  }
   const worker_id = randomUUID();
   const started_at_ms = Date.now();
   const started_monotonic = performance.now();
@@ -64,7 +67,9 @@ function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promi
         if (!worker) {
           if (packet.type !== "ready" || packet.platform !== process.platform || !child.pid ||
               Object.keys(packet).some((key) => !["profile", "type", "worker_id", "pid", "platform"].includes(key))) throw new Error("file_search_worker_ready_invalid");
-          const identity = Object.freeze({ worker_id, worker_pid: child.pid, worker_platform: process.platform, worker_started_at_ms: started_at_ms });
+          const identity = Object.freeze({ worker_id, worker_pid: child.pid, worker_platform: process.platform,
+            worker_started_at_ms: started_at_ms,
+            ...(request.operation_plan_binding_digest ? { operation_plan_binding_digest: request.operation_plan_binding_digest } : {}) });
           request.on_started(identity);
           worker = identity;
           // 同期保存や起動待機で消費した時間を送信直前に再照合する。
@@ -72,7 +77,8 @@ function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promi
             throw new Error("file_search_worker_ticket_expired");
           }
           const execute = workerPacket({ type: "execute", worker_id, ticket: request.ticket, command: request.command,
-            target_version_observation: request.target_version_observation });
+            target_version_observation: request.target_version_observation,
+            ...(request.operation_plan_binding_digest ? { operation_plan_binding_digest: request.operation_plan_binding_digest } : {}) });
           request.before_dispatch();
           if (failure || request.signal?.aborted) throw new Error("file_search_worker_cancelled");
           dispatched = true;
@@ -82,12 +88,16 @@ function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promi
           if (packet.type === "error" && packet.code === "target_version_changed" &&
               packet.ticket_id === request.ticket.ticket_id && packet.execution_epoch === request.ticket.execution_epoch &&
               packet.command_digest === request.ticket.command_digest &&
-              Object.keys(packet).every((key) => ["profile", "type", "worker_id", "pid", "ticket_id", "execution_epoch", "command_digest", "code"].includes(key))) {
+              packet.operation_plan_binding_digest === request.operation_plan_binding_digest &&
+              Object.keys(packet).every((key) => ["profile", "type", "worker_id", "pid", "ticket_id", "execution_epoch", "command_digest",
+                "operation_plan_binding_digest", "code"].includes(key))) {
             throw new Error("file_search_worker_target_version_changed; request fresh review");
           }
           if (!dispatched || received || packet.type !== "result" || packet.ticket_id !== request.ticket.ticket_id ||
               packet.execution_epoch !== request.ticket.execution_epoch || packet.command_digest !== request.ticket.command_digest ||
-              Object.keys(packet).some((key) => !["profile", "type", "worker_id", "pid", "ticket_id", "execution_epoch", "command_digest", "result", "target_version_observation"].includes(key))) {
+              packet.operation_plan_binding_digest !== request.operation_plan_binding_digest ||
+              Object.keys(packet).some((key) => !["profile", "type", "worker_id", "pid", "ticket_id", "execution_epoch", "command_digest",
+                "operation_plan_binding_digest", "result", "target_version_observation"].includes(key))) {
             throw new Error("file_search_worker_result_mismatch");
           }
           const targetVersionObservation = validateWorkerResult(packet.result, request.command,

@@ -118,6 +118,7 @@ export interface ExecutorDeps {
 export interface FileSearchWorkerRequest {
   command: Extract<ExecuteCommand, { type: "tool_call" }>;
   target_version_observation: FileSearchTargetVersionObservation;
+  operation_plan_binding_digest?: string;
   ticket: Readonly<ExecutionIntentTicket>;
   signal?: AbortSignal;
   on_started(worker: Readonly<ExecutionWorkerIdentity>): void;
@@ -896,16 +897,22 @@ export class Executor {
       }
       const store = record.runtime.store;
       if (!store?.bindWorker || !store.observeWorkerExit) throw new Error("File search worker requires durable worker receipts");
+      const operationPlanBindingDigest = record.target_version_observation.operation_plan_binding_digest;
       let worker: Readonly<ExecutionWorkerIdentity> | undefined;
       let dispatched = false; let exited = false;
       const workerResponse = await this.deps.file_search_worker.invoke({ command, target_version_observation: record.target_version_observation,
+        ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}),
         ticket: record.ticket, signal,
         on_started: (identity) => {
           if (worker || exited) throw new Error("File search worker start repeated");
+          if (identity.operation_plan_binding_digest !== operationPlanBindingDigest) {
+            throw new Error("File search worker Operation Plan identity mismatch");
+          }
           record.runtime.assert_execution_owner?.();
           const now = assertTicketCurrent(record);
           const captured = Object.freeze({ worker_id: identity.worker_id, worker_pid: identity.worker_pid,
-            worker_platform: identity.worker_platform, worker_started_at_ms: identity.worker_started_at_ms });
+            worker_platform: identity.worker_platform, worker_started_at_ms: identity.worker_started_at_ms,
+            ...(identity.operation_plan_binding_digest ? { operation_plan_binding_digest: identity.operation_plan_binding_digest } : {}) });
           store.bindWorker!(record.ticket, captured, now);
           worker = captured;
         },

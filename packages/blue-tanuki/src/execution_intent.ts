@@ -20,6 +20,8 @@ export interface ExecutionWorkerIdentity {
   worker_pid: number;
   worker_platform: string;
   worker_started_at_ms: number;
+  /** Digest of the current HDS Operation Plan source when this worker executes a planned step. */
+  operation_plan_binding_digest?: string;
 }
 
 export interface ExecutionIntentReceipt extends ExecutionIntentTicket {
@@ -34,6 +36,7 @@ export interface ExecutionIntentReceipt extends ExecutionIntentTicket {
   worker_pid?: number;
   worker_platform?: string;
   worker_started_at_ms?: number;
+  worker_operation_plan_binding_digest?: string;
   worker_exit_observed_at_ms?: number;
   used_for_authority: false;
   result_delivery_digest?: string;

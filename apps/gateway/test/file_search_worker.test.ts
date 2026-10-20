@@ -68,7 +68,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
     expect(JSON.stringify(store.snapshot())).not.toContain(workspace);
   }));
 
-  it("Operation Plan source digestをtarget observationから隔離workerのresult照合まで保持する", async () => temporary(async (store, workspace) => {
+  it("Operation Plan source digestをtarget observationから隔離workerのresultと永続receiptまで保持する", async () => temporary(async (store, workspace, filename) => {
     const { authority, executor } = rig(store, workspace);
     const command = source();
     const operationPlanBindingDigest = "d".repeat(64);
@@ -77,6 +77,13 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
     expect(feedback.error).toBeUndefined();
     expect(feedback.status).toBe("success");
     expect(feedback.result).toMatchObject({ query: "blue", matches: [{ path: "blue.txt", line_number: 1, line: "blue" }] });
+    expect(authority.receipt(approved)?.worker_operation_plan_binding_digest).toBe(operationPlanBindingDigest);
+    const reopened = new GatewayExecutionIntentStore(filename, store.executionEpoch);
+    try {
+      expect(reopened.snapshot()).toEqual(store.snapshot());
+      expect(reopened.snapshot().records[0]?.worker_operation_plan_binding_digest).toBe(operationPlanBindingDigest);
+      expect(reopened.verifyEvents()).toBe(true);
+    } finally { reopened.close(); }
     expect(JSON.stringify(feedback.result)).not.toContain("operation_plan_binding_digest");
   }));
 
@@ -174,11 +181,13 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
   }));
 
   it("実IPC childは改変内容・別worker・期限切れのpacketから結果を返さない", async () => temporary(async (store, workspace) => {
-    for (const kind of ["content", "task", "missing-task", "epoch", "worker", "expired"]) {
+    for (const kind of ["content", "task", "missing-task", "missing-plan-binding", "changed-plan-binding", "epoch", "worker", "expired"]) {
       const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: store.executionEpoch });
       const commandSource = source();
       const { executor } = rig(store, workspace);
-      const targetVersion = await executor.inspectCommandTargetVersion(commandSource, { BLUE_TANUKI_FILE_ROOT: workspace });
+      const operationPlanBindingDigest = kind === "missing-plan-binding" || kind === "changed-plan-binding" ? "d".repeat(64) : undefined;
+      const targetVersion = await executor.inspectCommandTargetVersion(commandSource,
+        { BLUE_TANUKI_FILE_ROOT: workspace }, operationPlanBindingDigest);
       const approved = authority.approve(commandSource, proof(commandSource), undefined, undefined, targetVersion);
       const ticket = authority.receipt(approved)!;
       const worker_id = randomUUID();
@@ -203,8 +212,12 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
         }
         if (kind === "epoch") packetTicket.execution_epoch = randomUUID();
         if (kind === "expired") packetTicket.expires_at_ms = packetTicket.issued_at_ms + 1;
-        child.send(workerPacket({ type: "execute", worker_id: kind === "worker" ? randomUUID() : worker_id,
-          ticket: packetTicket, command, target_version_observation: targetVersion }));
+        const packet = { type: "execute", worker_id: kind === "worker" ? randomUUID() : worker_id,
+          ticket: packetTicket, command, target_version_observation: targetVersion,
+          ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}) };
+        if (kind === "missing-plan-binding") delete packet.operation_plan_binding_digest;
+        if (kind === "changed-plan-binding") packet.operation_plan_binding_digest = "e".repeat(64);
+        child.send(workerPacket(packet));
         const [code] = await closed; expect(code).toBe(2); expect(results).toBe(0);
       } finally { clearTimeout(timer); if (child.exitCode === null && child.signalCode === null) { child.kill(); await closed; } }
     }
