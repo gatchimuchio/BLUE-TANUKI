@@ -3761,7 +3761,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     compute: new LLMComputeAdapter(llm),
     tools,
     approval_authority: executorApproval,
-    file_search_worker: createFileSearchWorker({ execution_epoch: ownerLease.executionEpoch, env: process.env }),
+    file_search_worker: createFileSearchWorker({ execution_epoch: ownerLease.executionEpoch,
+      host_audience_digest: ownerLease.hostAudienceDigest, env: process.env }),
     dispatcher,
     session_store: buildSessionStore(plugins),
   });

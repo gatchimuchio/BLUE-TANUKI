@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -72,5 +72,53 @@ catch (error) { console.log(error instanceof Error ? error.message : "unknown");
     try { db.exec("PRAGMA user_version=99"); } finally { db.close(); }
     expect(() => GatewayRuntimeOwnerLease.fromEnvironment({ BLUE_TANUKI_STATE_ROOT: root }))
       .toThrow("gateway_runtime_owner_state_unavailable");
+  });
+
+  it("rejects persisted owner state on a different host audience", () => {
+    const root = temporaryStateRoot();
+    const env = { BLUE_TANUKI_STATE_ROOT: root };
+    const first = GatewayRuntimeOwnerLease.fromEnvironment(env, "a".repeat(64));
+    first.close();
+    expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env, "b".repeat(64)))
+      .toThrow("gateway_runtime_owner_host_identity_mismatch");
+    const sameHost = GatewayRuntimeOwnerLease.fromEnvironment(env, "a".repeat(64));
+    try {
+      expect(sameHost.generation).toBe(2);
+      expect(sameHost.hostAudienceDigest).toBe("a".repeat(64));
+      expect(sameHost.executionEpoch).not.toBe(first.executionEpoch);
+      sameHost.assertActive();
+    } finally { sameHost.close(); }
+  });
+
+  it("migrates v1 state by binding the current host and rotating the execution epoch", () => {
+    const root = temporaryStateRoot();
+    const runtimeDirectory = join(root, "private-state", "gateway-runtime");
+    mkdirSync(runtimeDirectory, { recursive: true });
+    const dbPath = join(runtimeDirectory, "owner-state.sqlite");
+    const legacy = new DatabaseSync(dbPath);
+    const oldEpoch = "10000000-0000-4000-8000-000000000001";
+    try {
+      legacy.exec(`CREATE TABLE gateway_owner_state (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1), generation INTEGER NOT NULL CHECK(generation > 0),
+        execution_epoch TEXT NOT NULL, updated_at_ms INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO gateway_owner_state(singleton,generation,execution_epoch,updated_at_ms)
+        VALUES(1,4,'${oldEpoch}',1);
+      PRAGMA user_version=1;`);
+    } finally { legacy.close(); }
+
+    const migrated = GatewayRuntimeOwnerLease.fromEnvironment({ BLUE_TANUKI_STATE_ROOT: root }, "c".repeat(64));
+    try {
+      expect(migrated.generation).toBe(5);
+      expect(migrated.executionEpoch).not.toBe(oldEpoch);
+      expect(migrated.hostAudienceDigest).toBe("c".repeat(64));
+      migrated.assertActive();
+    } finally { migrated.close(); }
+    const verified = new DatabaseSync(dbPath);
+    try {
+      expect((verified.prepare("PRAGMA user_version").get() as Record<string, unknown>).user_version).toBe(2);
+      expect((verified.prepare("SELECT host_audience_digest FROM gateway_owner_state WHERE singleton=1").get() as { host_audience_digest: string })
+        .host_audience_digest).toBe("c".repeat(64));
+    } finally { verified.close(); }
   });
 });

@@ -1,6 +1,22 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-D02.03-HDS-FINAL-REVIEW-SOURCE-MIGRATION`
+### 最新BUILD_BATCH：`QEB-01-D02.02-HOST-AUDIENCE-BINDING`
+
+開始HEAD／`origin/main`=`90940906066c563056832194c0f1cdc08671c534`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準、active指示、D02.02とGateway owner lease→file-search childの現行consumerを再読した。Windows localで施工し、保護対象のuntracked Linux `target/`を保持した。
+
+D02.02の永続owner stateはexecution epochを持つ一方、別hostへstateを複製した場合のaudience束縛がなかった。Windows MachineGuid／Linux machine-id／macOS IOPlatformUUIDをplatform別domain付きSHA-256 digestへ変換し、raw IDを保存・IPCせずprivate owner state schema v2へ保存する。v1は初回移行時に現hostへ束縛し、owner generation／execution epochを回転する。v2の異なるdigestはfail-closedで拒否する。Gatewayから起動したfile-search childもOS IDから独立にdigestを作り、親の設定・execute packet・ready/result/error packetを相互照合する。このowner state→専用child IPCの限定consumerを`WIRED`とする。これはOS由来IDの一致検査であり、hardware attestationではない。同一IDを持つ複製VM等は識別しない。Android／iOS、D4 Broker、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway TypeScript build references | PASS。`node node_modules/typescript/bin/tsc -b apps/gateway/tsconfig.json`。 |
+| Gateway typecheck | PASS。`node node_modules/typescript/bin/tsc -p apps/gateway/tsconfig.json --noEmit`。 |
+| host identity／owner lease／file-search workerの限定試験 | PASS、3 files／16 tests。v1 migration、owner host mismatch拒否、異なるchild audienceの未実行、IPC負例を確認。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite／全体QE_QC／QE_QA／5OS実機／実provider・外部作用 | 未実施。全体実装形状成立後へ配置。 |
+
+`pnpm` shimは`pnpm --version`でもWindows process異常終了となるため、同一のworkspace TypeScript／Vitest entry pointをNodeから直接実行した。Actions、D4 Pocket／ミニドラ別repo変更、実credential、実owner承認、外部業務作用はなし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次consumerはD03.01「Runtime登録と意図入力Adapter」。BLUE側の現物から接続可能なconsumerを特定し、D4 Pocketは読取参照に限る。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.03-HDS-FINAL-REVIEW-SOURCE-MIGRATION`
 
 開始HEAD／`origin/main`=`069193cc301ab9d4260afb7f7be6dcd0c23827e5`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準、active指示、D02.03・D02親要求、HDS final-review正本とApproval Gate→Executorの現行consumerを再読した。Windows localで施工し、保護対象のuntracked Linux `target/`を保持した。
 

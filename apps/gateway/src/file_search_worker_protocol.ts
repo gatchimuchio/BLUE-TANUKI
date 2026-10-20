@@ -3,8 +3,9 @@ import { isAbsolute } from "node:path";
 import { executorCommandDigest, type ExecutionIntentTicket } from "@blue-tanuki/core";
 import { canonicalFileSearchTargetVersionObservation, FileSearchTargetVersionObservationSchema,
   requireToolOperationDescriptor, type ExecuteCommand, type FileSearchTargetVersionObservation } from "@blue-tanuki/protocol";
+import { isHostAudienceDigest } from "./host_audience_identity.js";
 
-export const FILE_SEARCH_WORKER_PROFILE = "blue-file-search-worker.v2";
+export const FILE_SEARCH_WORKER_PROFILE = "blue-file-search-worker.v3";
 export const FILE_SEARCH_WORKER_PACKET_LIMIT = 262_144;
 export const workerPacket = (packet: Record<string, unknown>): string => {
   const text = JSON.stringify({ profile: FILE_SEARCH_WORKER_PROFILE, ...packet });
@@ -19,16 +20,17 @@ export function readWorkerPacket(value: unknown): Record<string, unknown> {
   return packet as Record<string, unknown>;
 }
 export function validateWorkerRequest(packet: Record<string, unknown>, worker_id: string, expected_execution_epoch: string, now_ms: number,
-  expected_task_identity_digest?: string): {
+  expected_task_identity_digest?: string, expected_host_audience_digest?: string): {
   command: Extract<ExecuteCommand, { type: "tool_call" }>;
   ticket: ExecutionIntentTicket;
   target_version_observation: FileSearchTargetVersionObservation;
   operation_plan_binding_digest?: string;
   task_identity_digest?: string;
+  host_audience_digest: string;
 } {
   if (packet.type !== "execute" || packet.worker_id !== worker_id ||
       Object.keys(packet).some((key) => !["profile", "type", "worker_id", "ticket", "command", "target_version_observation",
-        "operation_plan_binding_digest", "task_identity_digest"].includes(key))) throw new Error("file_search_worker_request_invalid");
+        "operation_plan_binding_digest", "task_identity_digest", "host_audience_digest"].includes(key))) throw new Error("file_search_worker_request_invalid");
   const ticket = packet.ticket as ExecutionIntentTicket;
   const command = packet.command as Extract<ExecuteCommand, { type: "tool_call" }>;
   let target_version_observation: FileSearchTargetVersionObservation;
@@ -50,6 +52,7 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
       ticket.command_key !== createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex") ||
       packet.operation_plan_binding_digest !== target_version_observation.operation_plan_binding_digest ||
       packet.task_identity_digest !== ticket.task_identity_digest || packet.task_identity_digest !== expected_task_identity_digest ||
+      !isHostAudienceDigest(packet.host_audience_digest) || packet.host_audience_digest !== expected_host_audience_digest ||
       (packet.task_identity_digest !== undefined &&
         (typeof packet.task_identity_digest !== "string" || !/^[a-f0-9]{64}$/.test(packet.task_identity_digest))) ||
       (packet.operation_plan_binding_digest !== undefined &&
@@ -63,7 +66,8 @@ export function validateWorkerRequest(packet: Record<string, unknown>, worker_id
   }
   return { command, ticket, target_version_observation,
     ...(typeof packet.operation_plan_binding_digest === "string" ? { operation_plan_binding_digest: packet.operation_plan_binding_digest } : {}),
-    ...(typeof packet.task_identity_digest === "string" ? { task_identity_digest: packet.task_identity_digest } : {}) };
+    ...(typeof packet.task_identity_digest === "string" ? { task_identity_digest: packet.task_identity_digest } : {}),
+    host_audience_digest: packet.host_audience_digest };
 }
 
 export function validateWorkerResult(value: unknown, command: Extract<ExecuteCommand, { type: "tool_call" }>,

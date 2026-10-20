@@ -11,6 +11,7 @@ import { Executor, ToolRegistry, fileSearchTool, createExecutorApprovalAuthority
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
+import { currentHostAudienceDigest } from "../src/host_audience_identity.js";
 import { readWorkerPacket, workerPacket } from "../src/file_search_worker_protocol.js";
 
 const llm = { name: "fixture", call: async () => { throw new Error("C is not used"); } };
@@ -48,6 +49,19 @@ async function approve(authority: ReturnType<typeof createExecutorApprovalAuthor
 }
 
 describe("Gateway組込みfile.searchの専用process境界", () => {
+  it("親が別host audienceを渡してもchildがfile.searchを開始しない", async () => temporary(async (store, workspace) => {
+    const worker = createFileSearchWorker({ execution_epoch: store.executionEpoch,
+      host_audience_digest: "0".repeat(64), env: { SystemRoot: process.env.SystemRoot,
+        BLUE_TANUKI_FILE_ROOT: workspace } });
+    const { authority, executor } = rig(store, workspace, worker);
+    const approved = await approve(authority, executor, workspace);
+    const feedback = await executor.execute(approved);
+    expect(feedback.status).toBe("failed");
+    expect(feedback.result).toBeUndefined();
+    expect(authority.receipt(approved)).toMatchObject({ state: "not_attempted" });
+    expect(authority.receipt(approved)?.worker_id).toBeUndefined();
+  }));
+
   it("実検索→異なるPID/世代→実exit→receiptを返し、再起動照会と再送では再作用しない", async () => temporary(async (store, workspace, filename) => {
     const { authority, executor } = rig(store, workspace);
     const command = source(); const approved = await approve(authority, executor, workspace, command);
@@ -181,6 +195,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
   }));
 
   it("実IPC childは改変内容・別worker・期限切れのpacketから結果を返さない", async () => temporary(async (store, workspace) => {
+    const hostAudienceDigest = currentHostAudienceDigest();
     for (const kind of ["content", "task", "missing-task", "missing-task-identity", "changed-task-identity",
       "missing-plan-binding", "changed-plan-binding", "epoch", "worker", "expired"]) {
       const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: store.executionEpoch });
@@ -196,6 +211,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
       const child = spawn(process.execPath, [fileURLToPath(new URL("../dist/file_search_worker_child.js", import.meta.url))], {
         env: { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace,
           BLUE_TANUKI_WORKER_ID: worker_id, BLUE_TANUKI_EXECUTION_EPOCH: store.executionEpoch,
+          BLUE_TANUKI_HOST_AUDIENCE_DIGEST: hostAudienceDigest,
           BLUE_TANUKI_TASK_IDENTITY_DIGEST: expectedTaskIdentityDigest ?? "" },
         stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true,
       });
@@ -218,6 +234,7 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
         if (kind === "changed-task-identity") packetTicket.task_identity_digest = "b".repeat(64);
         const packet = { type: "execute", worker_id: kind === "worker" ? randomUUID() : worker_id,
           ticket: packetTicket, command, target_version_observation: targetVersion,
+          host_audience_digest: hostAudienceDigest,
           ...(kind === "changed-task-identity" ? { task_identity_digest: "b".repeat(64) } : {}),
           ...(operationPlanBindingDigest ? { operation_plan_binding_digest: operationPlanBindingDigest } : {}) };
         if (kind === "missing-plan-binding") delete packet.operation_plan_binding_digest;

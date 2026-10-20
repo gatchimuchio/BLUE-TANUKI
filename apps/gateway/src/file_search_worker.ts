@@ -5,26 +5,32 @@ import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { FileSearchWorker, FileSearchWorkerRequest, ExecutionWorkerIdentity } from "@blue-tanuki/core";
 import { readWorkerPacket, workerPacket, validateWorkerResult } from "./file_search_worker_protocol.js";
+import { currentHostAudienceDigest, isHostAudienceDigest } from "./host_audience_identity.js";
 
 export interface FileSearchWorkerOptions {
   /** Gateway起動時に所有leaseから得た、現在世代のworker audience。 */
   execution_epoch: string;
+  /** OS-sourced stable host identity, distinct from the process execution epoch. */
+  host_audience_digest?: string;
   env?: NodeJS.ProcessEnv;
 }
 
 /** 限定read-only worker。OS sandboxや独立D4 Broker Permissionを代替しない。 */
 export function createFileSearchWorker(options: FileSearchWorkerOptions): FileSearchWorker {
   if (!/^[0-9a-f-]{36}$/i.test(options.execution_epoch)) throw new Error("file_search_worker_execution_epoch_invalid");
+  const hostAudienceDigest = options.host_audience_digest ?? currentHostAudienceDigest();
+  if (!isHostAudienceDigest(hostAudienceDigest)) throw new Error("file_search_worker_host_audience_invalid");
   const env = options.env ?? process.env;
   // 親の資格・NODE_OPTIONS・任意loader・plugin registryは継承しない。
   const workerEnv: NodeJS.ProcessEnv = {};
   for (const key of ["SystemRoot", "SYSTEMROOT", "WINDIR"]) if (env[key]) workerEnv[key] = env[key];
   if (env.BLUE_TANUKI_FILE_ROOT) workerEnv.BLUE_TANUKI_FILE_ROOT = resolve(env.BLUE_TANUKI_FILE_ROOT);
   workerEnv.BLUE_TANUKI_EXECUTION_EPOCH = options.execution_epoch;
-  return Object.freeze({ invoke: (request: FileSearchWorkerRequest) => invoke(request, workerEnv) });
+  workerEnv.BLUE_TANUKI_HOST_AUDIENCE_DIGEST = hostAudienceDigest;
+  return Object.freeze({ invoke: (request: FileSearchWorkerRequest) => invoke(request, workerEnv, hostAudienceDigest) });
 }
 
-function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promise<unknown> {
+function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv, hostAudienceDigest: string): Promise<unknown> {
   if (request.signal?.aborted) return Promise.reject(new Error("file_search_worker_cancelled"));
   if (request.task_identity_digest !== request.ticket.task_identity_digest ||
       (request.task_identity_digest !== undefined && !/^[a-f0-9]{64}$/.test(request.task_identity_digest))) {
@@ -72,7 +78,9 @@ function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promi
         if (!worker) {
           if (packet.type !== "ready" || packet.platform !== process.platform || !child.pid ||
               packet.task_identity_digest !== request.task_identity_digest ||
-              Object.keys(packet).some((key) => !["profile", "type", "worker_id", "pid", "platform", "task_identity_digest"].includes(key))) {
+              packet.host_audience_digest !== hostAudienceDigest ||
+              Object.keys(packet).some((key) => !["profile", "type", "worker_id", "pid", "platform", "task_identity_digest",
+                "host_audience_digest"].includes(key))) {
             throw new Error("file_search_worker_ready_invalid");
           }
           const identity = Object.freeze({ worker_id, worker_pid: child.pid, worker_platform: process.platform,
@@ -87,6 +95,7 @@ function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promi
           }
           const execute = workerPacket({ type: "execute", worker_id, ticket: request.ticket, command: request.command,
             target_version_observation: request.target_version_observation,
+            host_audience_digest: hostAudienceDigest,
             ...(request.operation_plan_binding_digest ? { operation_plan_binding_digest: request.operation_plan_binding_digest } : {}),
             ...(request.task_identity_digest ? { task_identity_digest: request.task_identity_digest } : {}) });
           request.before_dispatch();
@@ -100,16 +109,18 @@ function invoke(request: FileSearchWorkerRequest, env: NodeJS.ProcessEnv): Promi
               packet.command_digest === request.ticket.command_digest &&
               packet.operation_plan_binding_digest === request.operation_plan_binding_digest &&
               packet.task_identity_digest === request.task_identity_digest &&
+              packet.host_audience_digest === hostAudienceDigest &&
               Object.keys(packet).every((key) => ["profile", "type", "worker_id", "pid", "ticket_id", "execution_epoch", "command_digest",
-                "operation_plan_binding_digest", "task_identity_digest", "code"].includes(key))) {
+                "operation_plan_binding_digest", "task_identity_digest", "host_audience_digest", "code"].includes(key))) {
             throw new Error("file_search_worker_target_version_changed; request fresh review");
           }
           if (!dispatched || received || packet.type !== "result" || packet.ticket_id !== request.ticket.ticket_id ||
               packet.execution_epoch !== request.ticket.execution_epoch || packet.command_digest !== request.ticket.command_digest ||
               packet.operation_plan_binding_digest !== request.operation_plan_binding_digest ||
               packet.task_identity_digest !== request.task_identity_digest ||
+              packet.host_audience_digest !== hostAudienceDigest ||
               Object.keys(packet).some((key) => !["profile", "type", "worker_id", "pid", "ticket_id", "execution_epoch", "command_digest",
-                "operation_plan_binding_digest", "task_identity_digest", "result", "target_version_observation"].includes(key))) {
+                "operation_plan_binding_digest", "task_identity_digest", "host_audience_digest", "result", "target_version_observation"].includes(key))) {
             throw new Error("file_search_worker_result_mismatch");
           }
           const targetVersionObservation = validateWorkerResult(packet.result, request.command,
