@@ -2,6 +2,8 @@
 
 2026-10-20。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-20の`QEB-01-D01.03-REVISED-UNEXECUTED-STEP-REVIEW`では、実行結果を保持したplan revisionから、変更された未実行stepだけを新revisionで再レビューする既存consumerを合成`file.search`経路で一回つないだ。旧成功stepと影響外commandは保持し、変更されたstepの旧commandは失効、新parametersのcommandだけが再選択・実行された。focused Gateway integration test 1件とtypecheckはPASS。production codeの変更、全suite、全体QC／QA、5OS実機、実provider、外部作用はない。D01.03のbounded routeは`WIRED`。次はD03.01のRuntime登録と意図入力AdapterをBLUE側現物から選ぶ。
+
 2026-10-20の`QEB-01-C07.03-DELETE-RESULT-TO-NEXT-PLAN-CONSUMER`では、明示選択されたJ検証済み`file.delete`結果を、J/M receipt・record・task identityの再照合後に後続`plan:compute`へ非権威観測として返す経路を接続した。合成一時workspaceのGateway consumer test 1件、typecheck、15-project buildはPASS。path／本文をCへ渡さず、削除報告を現在の不存在・意味採用・権限へ昇格させない。C07.03全体、C07親、目的→結果→M→帰還の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。全workspace suite／QE_QC／QE_QA、5OS実機、実provider、実外部作用の証拠ではない。次はD01.03の旧plan改訂と未実行stepの再審査consumerを現行HEADから選ぶ。
 
 2026-10-20の`QEB-01-C07.03-POST-REASSESSMENT-FRESH-J-PLAN-EXECUTION-RESULT-RETURN`では、M再評価後のfresh J citationをplanへ結び、実行直前にもJ/M lineageを再照合する。合成Gatewayの隔離HTTP経路はL3待ちからBroker target観測・ExecutionAdmission・一時workspaceのfile.delete・J結果検証・digest-only M観測とreceiptまで到達し、公開snapshotは`results_verified`／`receipt_confirmed`を示す。C07.03のこの限定consumer経路は`WIRED`。C07親、全能力の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`で、全体QC／QA・5OS実機・実provider・実業務作用の証拠ではない。

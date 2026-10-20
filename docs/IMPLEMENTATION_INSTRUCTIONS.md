@@ -1,6 +1,21 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-C07.03-DELETE-RESULT-TO-NEXT-PLAN-CONSUMER`
+### 最新BUILD_BATCH：`QEB-01-D01.03-REVISED-UNEXECUTED-STEP-REVIEW`
+
+開始HEAD／`origin/main`=`2cc96244942d0aa405f65481769a77420734de9f`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準、active指示、D01.03単位、OperationPlan revision／実行結果／step reviewの現行callsiteを再読した。Windows localで施工し、保護対象のuntracked Linux `target/`を保持した。
+
+現行の`OperationPlanLedger.revisionImpact()`は新旧step digestと依存stepを比較し、変更された試行済みstepを拒否する。`revise()`は旧revisionと成功結果を保持し、影響を受けた未実行stepの選択済みcommandだけを無効化する。既存の合成`file.search`経路を一段進め、旧command拒否→変更pending stepの新revision review→新parametersのcommand発行・実行→旧成功step保持までを一回つないだ。生産runtime実装は既存HEADで接続済みと確認し、このbatchは欠けていたconsumerの限定統合証拠を追加した。D01.03のこのbounded routeを`WIRED`とする。D01.03親要件すべてや製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は別途未成立。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `operation_plan_runtime.test.ts` の改訂consumer | PASS、1 test（対象ファイル内25件をskip）。新revisionの変更step再reviewと新command実行、旧成功step保持を確認。 |
+| `pnpm typecheck` | PASS。 |
+| `git diff --check` | PASS。 |
+| 本番コードbuild／全workspace suite／QE_QC／QE_QA／5OS実機／実provider・外部作用 | 未実施。生産コード変更がないためbuildは対象外とし、全体実装形状成立後に全体品質検査を行う。 |
+
+C08.03実provider保留、D4 Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。Actions未使用。次consumerはD03.01「Runtime登録と意図入力Adapter」。BLUE側の登録元・認証IPC・意図入力consumerを現行コードで特定し、D4側は現行契約を読取参照するだけにする。別repo書込みは行わない。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読する。
+
+### 前回BUILD_BATCH：`QEB-01-C07.03-DELETE-RESULT-TO-NEXT-PLAN-CONSUMER`
 
 開始HEAD／`origin/main`=`5dcb2b3d5d2a724792bb04512c2fad1f843159c9`。owner指定のQE rev2.3三点正本、適用`AGENTS.md`／作業標準、C07.03単位、現行のM result producerと`plan:compute` consumerを再読した。Windows localで施工し、既存untracked Linux `target/`を保持する。QE_BUILDの全体実装先行を維持し、QE_QC／QE_QAへ移行しない。
 
