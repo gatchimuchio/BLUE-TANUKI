@@ -210,6 +210,15 @@ export class GatewayCronEventStore {
     });
   }
 
+  /** Returns the durable high-water sequence for a source without exposing its content. */
+  latestSequenceForSource(source: string): number | null {
+    if (typeof source !== "string" || source.trim().length === 0 || source.length > 200) {
+      throw new Error("invalid cron event source");
+    }
+    const source_digest = sha256(source.normalize("NFKC").trim());
+    return this.readCurrentCursor(source_digest)?.sequence ?? null;
+  }
+
   settle(event: CronEventIdentity, state: Exclude<CronEventDeliveryState, "dispatching">, now_ms = Date.now()): void {
     validateEvent(event);
     if (!Number.isSafeInteger(now_ms) || now_ms < 0) throw new Error("invalid cron event receipt time");

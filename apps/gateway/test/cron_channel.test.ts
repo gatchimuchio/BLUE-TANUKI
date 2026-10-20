@@ -393,6 +393,48 @@ describe("CronSchedulerChannel", () => {
     }
   });
 
+  it("preserves an interval cadence after restart and skips missed ticks instead of catching them up", async () => {
+    vi.useFakeTimers();
+    const base = new Date(2026, 4, 9, 6, 30, 0, 0).getTime();
+    vi.setSystemTime(base);
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-interval-restart-"));
+    const store = new GatewayCronEventStore(join(root, "private", "cron-events.sqlite"));
+    const received: number[] = [];
+    const makeChannel = () => new CronSchedulerChannel({
+      tasks: [{
+        id: "interval-restart",
+        origin: "runtime",
+        channel: "webchat",
+        target: "local-user",
+        content: "synthetic interval content",
+        interval_ms: 1000,
+      }],
+      now: () => new Date(),
+      event_store: store,
+      log: () => undefined,
+    });
+
+    try {
+      const first = makeChannel();
+      await first.start(async (req) => { received.push(Number(req.metadata?.["blue_tanuki.cron.event_sequence"])); });
+      await vi.advanceTimersByTimeAsync(1000);
+      await first.stop();
+
+      await vi.advanceTimersByTimeAsync(2500);
+      const restarted = makeChannel();
+      await restarted.start(async (req) => { received.push(Number(req.metadata?.["blue_tanuki.cron.event_sequence"])); });
+      expect(restarted.snapshot()[0]?.next_fire_at_ms).toBe(base + 4000);
+      await vi.advanceTimersByTimeAsync(500);
+      await restarted.stop();
+
+      expect(received).toEqual([base + 1000, base + 4000]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
   it("uses a dynamic content provider without exposing content in snapshots", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 9, 6, 30, 0, 0));

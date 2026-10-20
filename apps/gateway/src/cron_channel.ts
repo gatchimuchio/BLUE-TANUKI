@@ -269,17 +269,33 @@ export class CronSchedulerChannel implements InboundChannel {
     const task = runtime.task;
     runtime.running = true;
     if (task.interval_ms && task.interval_ms > 0) {
-      runtime.nextFireAtMs = this.nowMs() + task.interval_ms;
-      runtime.timer = setInterval(() => {
-        const scheduledAtMs = runtime.nextFireAtMs ?? this.nowMs();
-        runtime.nextFireAtMs = scheduledAtMs + task.interval_ms!;
-        this.enqueueFire(runtime, handler, scheduledAtMs);
-      }, task.interval_ms);
-      runtime.timer.unref?.();
+      const source = `cron:${task.origin}:${task.id}`;
+      const lastScheduledAt = this.eventStore?.latestSequenceForSource(source) ?? null;
+      runtime.lastFireAtMs = lastScheduledAt;
+      runtime.nextFireAtMs = nextIntervalFireAtMs(this.nowMs(), task.interval_ms, lastScheduledAt);
+      this.scheduleNextInterval(runtime, handler);
       this.log(`[cron] task interval enabled id=${task.id} interval_ms=${task.interval_ms}`);
       return;
     }
     this.scheduleNextDaily(runtime, handler);
+  }
+
+  private scheduleNextInterval(runtime: CronTaskRuntime, handler: InboundHandler): void {
+    const intervalMs = runtime.task.interval_ms;
+    const scheduledAtMs = runtime.nextFireAtMs;
+    if (!intervalMs || scheduledAtMs === null || !this.started || !runtime.running ||
+        this.runtimes.get(runtime.task.id) !== runtime) return;
+    const delay = Math.max(0, scheduledAtMs - this.nowMs());
+    runtime.timer = setTimeout(() => {
+      if (!this.started || !runtime.running || this.runtimes.get(runtime.task.id) !== runtime) return;
+      const nowMs = this.nowMs();
+      const actualScheduledAtMs = scheduledAtMs + Math.floor(Math.max(0, nowMs - scheduledAtMs) / intervalMs) * intervalMs;
+      runtime.lastFireAtMs = actualScheduledAtMs;
+      runtime.nextFireAtMs = actualScheduledAtMs + intervalMs;
+      void this.enqueueFire(runtime, handler, actualScheduledAtMs);
+      this.scheduleNextInterval(runtime, handler);
+    }, delay);
+    runtime.timer.unref?.();
   }
 
   private scheduleNextDaily(runtime: CronTaskRuntime, handler: InboundHandler): void {
@@ -678,4 +694,19 @@ export function delayUntilLocalTime(hhmm: string, now: Date): number {
   next.setHours(hour, minute, 0, 0);
   if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
   return next.getTime() - now.getTime();
+}
+
+/** Keeps a persisted interval cadence across restarts while skipping missed ticks. */
+export function nextIntervalFireAtMs(nowMs: number, intervalMs: number, lastScheduledAtMs: number | null): number {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0 || !Number.isSafeInteger(intervalMs) || intervalMs <= 0 ||
+      (lastScheduledAtMs !== null && (!Number.isSafeInteger(lastScheduledAtMs) || lastScheduledAtMs < 0))) {
+    throw new Error("invalid cron interval schedule state");
+  }
+  const firstAfterLast = (lastScheduledAtMs ?? nowMs) + intervalMs;
+  if (!Number.isSafeInteger(firstAfterLast)) throw new Error("cron interval schedule exceeds safe timestamp range");
+  if (firstAfterLast > nowMs) return firstAfterLast;
+  const skippedTicks = Math.floor((nowMs - firstAfterLast) / intervalMs) + 1;
+  const next = firstAfterLast + skippedTicks * intervalMs;
+  if (!Number.isSafeInteger(next)) throw new Error("cron interval schedule exceeds safe timestamp range");
+  return next;
 }
