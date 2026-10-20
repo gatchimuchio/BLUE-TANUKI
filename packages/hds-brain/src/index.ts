@@ -50,6 +50,7 @@ export {
   type ReadonlyGoalGovernanceProjection,
 } from "./goal_governance.js";
 export { resolveActor, resolveProcess } from "./process.js";
+export { runtimeScheduleScopeDigest, type RuntimeScheduleDelegation, type RuntimeScheduleScopeInput } from "./controller_security.js";
 export { buildMemoryTrace, type MemoryReaderPort } from "./memory_trace.js";
 export {
   fReferenceForId,

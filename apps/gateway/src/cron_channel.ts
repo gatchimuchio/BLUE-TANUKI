@@ -6,6 +6,7 @@ import {
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import type { InboundChannel, InboundHandler } from "@blue-tanuki/channel-base";
+import type { RuntimeScheduleDelegation } from "@blue-tanuki/hds-brain";
 import {
   createCronEventIdentity,
   type CronEventIdentity,
@@ -27,13 +28,14 @@ export interface CronTaskOptions {
   /** For tests or smoke. If set, triggers every N ms instead of daily. */
   interval_ms?: number;
   payload_hash?: string;
+  delegation?: RuntimeScheduleDelegation;
 }
 
 export interface CronSchedulerOptions {
   tasks: CronTaskOptions[];
   log?: (line: string) => void;
   now?: () => Date;
-  onFire?: (task: CronTaskSnapshot, event: CronEventIdentity) => void;
+  onFire?: (task: CronTaskSnapshot, event: CronEventIdentity, delegation?: RuntimeScheduleDelegation) => void;
   content_provider?: CronContentProvider;
   event_store?: GatewayCronEventStore;
 }
@@ -121,6 +123,7 @@ interface NormalizedCronTask {
   time_zone?: string;
   interval_ms?: number;
   payload_hash: string;
+  delegation?: RuntimeScheduleDelegation;
 }
 
 interface CronTaskRuntime {
@@ -138,8 +141,9 @@ const DAILY_CLOCK_RECHECK_MS = 60_000;
  * Runtime cron source.
  *
  * It emits internal cron InboundRequests. HDS-BRAIN still owns authority:
- * a cron request must pass cron.process and becomes a channel_send only via
- * the trusted gateway-internal metadata marker.
+ * runtime schedules carry their approved scope reference and become channel_send
+ * only after J verifies the durable L3 delegation; boot schedules retain their
+ * existing trusted internal route.
  */
 export class CronSchedulerChannel implements InboundChannel {
   readonly name = "cron";
@@ -151,7 +155,7 @@ export class CronSchedulerChannel implements InboundChannel {
   private readonly logLine?: (line: string) => void;
   private readonly nowFn?: () => Date;
   private handler: InboundHandler | null = null;
-  private readonly onFire?: (task: CronTaskSnapshot, event: CronEventIdentity) => void;
+  private readonly onFire?: (task: CronTaskSnapshot, event: CronEventIdentity, delegation?: RuntimeScheduleDelegation) => void;
   private readonly contentProvider?: CronContentProvider;
   private readonly eventStore?: GatewayCronEventStore;
   private recoveryHold: CronTaskSnapshot["recovery_hold"] = null;
@@ -374,7 +378,7 @@ export class CronSchedulerChannel implements InboundChannel {
     this.inFlightEventIds.add(event.event_id);
     try {
       try {
-        this.onFire?.(this.snapshotForRuntime(runtime, payloadHash), event);
+        this.onFire?.(this.snapshotForRuntime(runtime, payloadHash), event, task.delegation);
       } catch (error) {
         this.eventStore?.settle(event, "outcome_unknown");
         throw error;
@@ -389,6 +393,11 @@ export class CronSchedulerChannel implements InboundChannel {
         "blue_tanuki.cron.task_id": task.id,
         "blue_tanuki.cron.origin": task.origin,
         "blue_tanuki.cron.payload_hash": payloadHash,
+        ...(task.delegation ? {
+          "blue_tanuki.cron.delegation.command_id": task.delegation.command_id,
+          "blue_tanuki.cron.delegation.request_id": task.delegation.request_id,
+          "blue_tanuki.cron.delegation.scope_digest": task.delegation.scope_digest,
+        } : {}),
         "blue_tanuki.cron.event_source": event.source,
         "blue_tanuki.cron.event_id": event.event_id,
         "blue_tanuki.cron.event_sequence": String(event.sequence),
@@ -640,6 +649,7 @@ function normalizeCronTasks(tasks: CronTaskOptions[]): NormalizedCronTask[] {
       time_zone: timeZone,
       interval_ms: task.interval_ms,
       payload_hash: task.payload_hash ?? cronPayloadHash(task),
+      delegation: task.delegation,
     };
   });
 }

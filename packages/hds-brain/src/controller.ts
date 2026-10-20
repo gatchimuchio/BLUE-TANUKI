@@ -151,6 +151,7 @@ import {
   securityCommit,
   sha256,
   suspendCommit,
+  runtimeScheduleScopeDigest,
   trustedChannelSendFromMetadata,
 } from "./controller_security.js";
 
@@ -1181,6 +1182,7 @@ ${planControl.question}`,
     const m = model(authorityReq, f, this.policy, this.detectors);
 
     const processViolation = processAuthorityViolation(f);
+    const runtimeScheduleFailure = this.runtimeScheduleDelegationFailure(req);
     let c = failureReviewControlFailure
       ? securityCommit("failure_review_control_denied", failureReviewControlFailure, { request_id: req.id })
       : planControlFailure
@@ -1191,6 +1193,8 @@ ${planControl.question}`,
           actor: f.actor,
           process: f.process.process_id,
         })
+      : runtimeScheduleFailure
+      ? securityCommit("runtime_schedule_delegation_denied", runtimeScheduleFailure, { request_id: req.id })
       : commit(m, this.policy);
 
     let log: DecisionLog = {
@@ -2154,11 +2158,14 @@ ${planControl.question}`,
     }
   }
 
-  /** Record runtime schedule lifecycle without feeding it back into authority. */
+  /** Record durable runtime schedule evidence that J rechecks before scheduled sends. */
   onScheduleLifecycle(
     event: ScheduleLifecycleEvent,
     opts: Omit<ScheduleLifecycleLog, "kind" | "event" | "timestamp">,
   ): void {
+    if (opts.origin === "runtime" && (!this.audit.isPersistent() || !this.audit.verify())) {
+      throw new Error("runtime_schedule_audit_unavailable_or_invalid");
+    }
     const log: ScheduleLifecycleLog = {
       kind: "schedule_lifecycle",
       event,
@@ -2166,6 +2173,103 @@ ${planControl.question}`,
       timestamp: Date.now(),
     };
     this.audit.append(log);
+  }
+
+  private runtimeScheduleDelegationFailure(req: InboundRequest): string | null {
+    const metadata = req.metadata ?? {};
+    if (metadata["blue_tanuki.cron.origin"] !== "runtime") return null;
+    if (!isGatewayInternalInboundRequest(req) || req.channel !== "cron" || req.user !== "blue-tanuki-cron") {
+      return "runtime_schedule_internal_cron_origin_required";
+    }
+    const scheduleId = metadata["blue_tanuki.cron.task_id"];
+    const payloadHash = metadata["blue_tanuki.cron.payload_hash"];
+    const commandId = metadata["blue_tanuki.cron.delegation.command_id"];
+    const requestId = metadata["blue_tanuki.cron.delegation.request_id"];
+    const scopeDigest = metadata["blue_tanuki.cron.delegation.scope_digest"];
+    const send = trustedChannelSendFromMetadata(req);
+    if (typeof scheduleId !== "string" || !scheduleId.trim() ||
+        typeof payloadHash !== "string" || !/^[a-f0-9]{64}$/.test(payloadHash) ||
+        typeof commandId !== "string" || !commandId.trim() ||
+        typeof requestId !== "string" || !requestId.trim() ||
+        typeof scopeDigest !== "string" || !/^[a-f0-9]{64}$/.test(scopeDigest) || !send ||
+        req.content !== send.content) {
+      return "runtime_schedule_delegation_metadata_invalid";
+    }
+    let actualScopeDigest: string;
+    try {
+      actualScopeDigest = runtimeScheduleScopeDigest({
+        schedule_id: scheduleId,
+        channel: send.channel,
+        target: send.target,
+        content: send.content,
+        payload_hash: payloadHash,
+      });
+    } catch {
+      return "runtime_schedule_delegation_scope_invalid";
+    }
+    if (actualScopeDigest !== scopeDigest) return "runtime_schedule_delegation_scope_mismatch";
+    if (!this.audit.isPersistent()) return "runtime_schedule_audit_not_persistent";
+    if (!this.audit.verify()) return "runtime_schedule_audit_invalid";
+
+    const entries = this.audit.list();
+    const scheduleEntries = entries.filter(({ log }) => "kind" in log && log.kind === "schedule_lifecycle" &&
+      log.origin === "runtime" && log.schedule_id === scheduleId)
+      .map((entry) => ({ ...entry, log: entry.log as ScheduleLifecycleLog }));
+    const mutationEvents = new Set([
+      "schedule.lifecycle.approved",
+      "schedule.lifecycle.activated",
+      "schedule.lifecycle.updated",
+      "schedule.lifecycle.deleted",
+    ]);
+    const latestMutation = scheduleEntries.filter(({ log }) => mutationEvents.has(log.event)).at(-1);
+    if (!latestMutation) {
+      return "runtime_schedule_mutation_not_recorded";
+    }
+    const finalState = latestMutation.log;
+    const operation = finalState.operation;
+    if ((finalState.event !== "schedule.lifecycle.activated" && finalState.event !== "schedule.lifecycle.updated") ||
+        (operation !== "create" && operation !== "update") ||
+        finalState.command_id !== commandId || finalState.request_id !== requestId ||
+        finalState.payload_hash !== payloadHash ||
+        finalState.delegation?.command_id !== commandId || finalState.delegation.request_id !== requestId ||
+        finalState.delegation.scope_digest !== scopeDigest) {
+      return "runtime_schedule_latest_mutation_not_active_scope";
+    }
+
+    const matchesDelegation = (log: ScheduleLifecycleLog): boolean =>
+      log.origin === "runtime" && log.schedule_id === scheduleId && log.operation === operation &&
+      log.command_id === commandId && log.request_id === requestId && log.payload_hash === payloadHash &&
+      log.delegation?.command_id === commandId && log.delegation.request_id === requestId &&
+      log.delegation.scope_digest === scopeDigest;
+    const requested = scheduleEntries.filter(({ log }) =>
+      log.event === "schedule.lifecycle.requested" && matchesDelegation(log));
+    const approvedMutation = scheduleEntries.filter(({ log }) =>
+      log.event === "schedule.lifecycle.approved" && matchesDelegation(log));
+    const finalMutation = scheduleEntries.filter(({ index, log }) =>
+      index === latestMutation.index && log.event === finalState.event && matchesDelegation(log));
+    const requesterActor = requested.length === 1 ? requested[0]!.log.actor : undefined;
+    const matchingAsks = entries.filter(({ log }) => "kind" in log && log.kind === "approval_gate" &&
+      log.command_id === commandId && log.request_id === requestId && log.evaluation.decision === "ask" &&
+      log.evaluation.context.command_id === commandId && log.evaluation.context.operation === `schedule.${operation}` &&
+      log.evaluation.context.command_type === "tool_call" && log.evaluation.context.actor === requesterActor &&
+      log.evaluation.context.risk === "high" && log.evaluation.risk === "high" &&
+      log.evaluation.approval_level === "L3_final_review" && log.evaluation.final_review_required);
+    const matchingApprovals = entries.filter(({ log }) => "kind" in log && log.kind === "command_lifecycle" &&
+      log.command_id === commandId && log.request_id === requestId && log.phase === "approval_approved" &&
+      log.actor !== "system" && log.actor !== "cron" && log.reason === "human_approval:approve");
+    if (requested.length !== 1 || approvedMutation.length !== 1 || finalMutation.length !== 1 ||
+        matchingAsks.length !== 1 || matchingApprovals.length !== 1) {
+      return "runtime_schedule_l3_approval_evidence_ambiguous_or_missing";
+    }
+    const requestEntry = requested[0]!;
+    const approvalAsk = matchingAsks[0]!;
+    const humanApproval = matchingApprovals[0]!;
+    const mutationApproval = approvedMutation[0]!;
+    if (!(approvalAsk.index < requestEntry.index && requestEntry.index < humanApproval.index &&
+          humanApproval.index < mutationApproval.index && mutationApproval.index < latestMutation.index)) {
+      return "runtime_schedule_l3_approval_order_invalid";
+    }
+    return null;
   }
 
   /**

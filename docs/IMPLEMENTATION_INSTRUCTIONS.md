@@ -2,7 +2,25 @@
 
 ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
 
-### 最新BUILD_BATCH：`QEB-03-E01.02-DAILY-WALL-CLOCK-RESTART-CONSUMER`
+### 最新BUILD_BATCH：`QEB-03-E01.02-L3-RUNTIME-SCHEDULE-DELEGATION-CONSUMER`
+
+開始`HEAD`／`main`／`origin/main`=`5b8960c2e4485cb221820a308d1bbf76f5862923`。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、E01.02と実Cron→HDS producer／consumerを再読した。Windows localでBLUE-TANUKIのみ変更。
+
+runtime schedule mutationの同一L3 command／requestと送信scope（schedule ID・channel・target・content・payload hash）からdigest付きdelegationを生成し、schedule store／lifecycle audit／Cron内部要求を経由してHDS-Jへ渡す。Jはscope digestを実要求から再計算し、永続・整合した監査鎖に同一scopeのL3 ask、人間承認、schedule requested→approved→activated/updatedの順序がある場合だけ既存channel_send候補を出す。deleteまたは中断した更新の新しいapproved mutationは旧scopeも閉じる。runtime scheduleのauditが永続化できない場合は登録・発火ともfail-closed。旧delegationなしのactive scheduleは運転対象から除き、一覧でもdisabled表示する。再登録にはchannel／target／content／triggerを明示したL3 updateを要求し、dailyはtime_zoneも明示させる。HDS lifecycleにはraw contentを保存せずscope digestのみ記録する。
+
+このscope delegation→Cron actor→HDS-J consumerを`WIRED`とする。テストは合成audit／Cron要求による接続確認で、実Gateway運転・ownerの実承認・実際の外部送信の証拠ではない。E01全体、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。C08.03実provider、D4／ミニドラ別repo変更、実外部作用、P13公開・出荷GOを保留し、QE_QC／QE_QAへ進まない。次consumerはE01.03「待機中C呼出しゼロ」—期限／正規eventからJを再開し、待機中のC反復を発生させない既存callsite。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm typecheck` | PASS。初回に見つかったCron `onFire` callbackの引数型ずれを修正して再実行。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| HDS runtime schedule delegation／Gateway runtime schedule focused tests | PASS、2 files／14 tests。合成L3証拠、scope改変拒否、audit不永続時拒否、delete後の旧scope拒否、legacy unbound schedule停止と明示再承認を確認。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite、実Gateway再起動／実承認／実送信、実provider／credential、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状の後段へ配置。 |
+
+実装commitとpush後のSHA／backup refsはcloseout追記に記録する。実装・文書commitへ保護対象Linux `target/`を含めない。
+
+### 直前BUILD_BATCH：`QEB-03-E01.02-DAILY-WALL-CLOCK-RESTART-CONSUMER`
 
 開始`HEAD`／`main`／`origin/main`=`3bb0f8f988e64f7ea0de357052ffa3246138b27d`。開始時のworktreeには保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`だけがあり、これを維持した。owner指定rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／本指示、E01.02とCron／Runtime Scheduleの日次producer・consumerを再同期した。Windows localでBLUE-TANUKIのみを変更。
 

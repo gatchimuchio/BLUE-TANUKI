@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { Tool } from "@blue-tanuki/core";
-import type { ApprovalEvaluation } from "@blue-tanuki/hds-brain";
+import { runtimeScheduleScopeDigest, type ApprovalEvaluation, type RuntimeScheduleDelegation } from "@blue-tanuki/hds-brain";
 import { requireToolOperationDescriptor, type ExecuteCommand } from "@blue-tanuki/protocol";
 import {
   canonicalizeCronTimeZone,
@@ -28,6 +28,7 @@ export interface RuntimeSchedule {
   created_at_ms: number;
   updated_at_ms: number;
   payload_hash: string;
+  delegation?: RuntimeScheduleDelegation;
   status: "pending" | "active" | "disabled" | "deleted" | "rejected";
 }
 
@@ -60,6 +61,7 @@ export interface RuntimeScheduleLifecycle {
   previous_payload_hash?: string;
   command_id?: string;
   request_id?: string | null;
+  delegation?: RuntimeScheduleDelegation;
 }
 
 interface PendingRuntimeScheduleOperation {
@@ -133,7 +135,7 @@ export class RuntimeScheduleManager {
 
   activeCronTasks(): CronTaskOptions[] {
     return Array.from(this.schedules.values())
-      .filter((schedule) => schedule.status === "active" && schedule.enabled)
+      .filter((schedule) => schedule.status === "active" && schedule.enabled && schedule.delegation !== undefined)
       .map((schedule) => this.toCronTask(schedule));
   }
 
@@ -183,7 +185,8 @@ export class RuntimeScheduleManager {
   }
 
   activeCount(): number {
-    return Array.from(this.schedules.values()).filter((schedule) => schedule.status === "active" && schedule.enabled).length;
+    return Array.from(this.schedules.values()).filter((schedule) =>
+      schedule.status === "active" && schedule.enabled && schedule.delegation !== undefined).length;
   }
 
   pendingCount(): number {
@@ -236,6 +239,13 @@ export class RuntimeScheduleManager {
       this.onLifecycle?.("schedule.lifecycle.requested", lifecycleFromPending(pending));
       return { ok: true, pending };
     } catch (e) {
+      const pending = this.pending.get(command.id);
+      if (pending) {
+        this.pending.delete(command.id);
+        if (this.pendingBySchedule.get(pending.schedule_id) === command.id) {
+          this.pendingBySchedule.delete(pending.schedule_id);
+        }
+      }
       return {
         ok: false,
         message: scheduleErrorMessage(e instanceof Error ? e.message : String(e)),
@@ -281,6 +291,7 @@ export class RuntimeScheduleManager {
       if (!previous || previous.status !== "active") {
         throw new Error("schedule.delete target is no longer active; nothing was deleted; run tool:schedule.list and retry");
       }
+      this.onLifecycle?.("schedule.lifecycle.approved", lifecycleFromPending(pending));
       const deleted: RuntimeSchedule = {
         ...previous,
         enabled: false,
@@ -292,7 +303,6 @@ export class RuntimeScheduleManager {
       await this.persist(nextSchedules.values());
       this.schedules.set(deleted.id, deleted);
       this.scheduler?.removeTask(deleted.id);
-      this.onLifecycle?.("schedule.lifecycle.approved", lifecycleFromPending(pending));
       this.onLifecycle?.("schedule.lifecycle.deleted", lifecycleFromPending(pending));
       return {
         schedule_id: deleted.id,
@@ -309,16 +319,16 @@ export class RuntimeScheduleManager {
       enabled: true,
       updated_at_ms: this.now(),
     };
+    this.onLifecycle?.("schedule.lifecycle.approved", lifecycleFromPending(pending));
     const nextSchedules = new Map(this.schedules);
     nextSchedules.set(activated.id, activated);
     await this.persist(nextSchedules.values());
     this.schedules.set(activated.id, activated);
-    const schedulerSnapshot = this.scheduler?.upsertTask(this.toCronTask(activated));
-    this.onLifecycle?.("schedule.lifecycle.approved", lifecycleFromPending(pending));
     this.onLifecycle?.(
       pending.operation === "create" ? "schedule.lifecycle.activated" : "schedule.lifecycle.updated",
       lifecycleFromPending(pending),
     );
+    const schedulerSnapshot = this.scheduler?.upsertTask(this.toCronTask(activated));
     return {
       schedule_id: activated.id,
       status: "active",
@@ -365,6 +375,15 @@ export class RuntimeScheduleManager {
       };
       return this.pendingFromSchedule(command, evaluation, operation, proposed, previous, opts.request_id ?? null, actor);
     }
+    if (!previous.delegation) {
+      const hasFullScope = ["channel", "target", "content"].every((key) =>
+        typeof args[key] === "string" && (args[key] as string).trim().length > 0);
+      const hasTime = args.time !== undefined && args.time !== null;
+      const hasInterval = args.interval_ms !== undefined && args.interval_ms !== null;
+      if (!hasFullScope || hasTime === hasInterval || (hasTime && typeof args.time_zone !== "string")) {
+        throw new Error("legacy schedule has no durable approved scope; repeat channel, target, content and exactly one trigger (include time_zone for daily schedules) before requesting update");
+      }
+    }
     const schedule = buildScheduleFromArgs(id, args, now, previous);
     return this.pendingFromSchedule(command, evaluation, operation, schedule, previous, opts.request_id ?? null, actor);
   }
@@ -378,13 +397,31 @@ export class RuntimeScheduleManager {
     request_id: string | null,
     actor: string,
   ): PendingRuntimeScheduleOperation {
+    let proposed = schedule;
+    if (operation !== "delete") {
+      if (typeof request_id !== "string" || !request_id.trim()) {
+        throw new Error("schedule mutation requires a request id before delegation can be recorded");
+      }
+      const delegation: RuntimeScheduleDelegation = {
+        command_id: command.id,
+        request_id,
+        scope_digest: runtimeScheduleScopeDigest({
+          schedule_id: schedule.id,
+          channel: schedule.channel,
+          target: schedule.target,
+          content: schedule.content,
+          payload_hash: schedule.payload_hash,
+        }),
+      };
+      proposed = { ...schedule, delegation };
+    }
     return {
       command_id: command.id,
       request_id,
       actor,
       operation,
       schedule_id: schedule.id,
-      proposed: schedule,
+      proposed,
       previous,
       approval_level: evaluation.approval_level,
       risk: evaluation.risk,
@@ -405,15 +442,17 @@ export class RuntimeScheduleManager {
       time_zone: schedule.time_zone,
       interval_ms: schedule.interval_ms,
       payload_hash: schedule.payload_hash,
+      delegation: schedule.delegation,
     };
   }
 
   private scheduleSnapshot(schedule: RuntimeSchedule, pending?: PendingRuntimeScheduleOperation): RuntimeScheduleSnapshot {
     const op = pending ?? this.pending.get(this.pendingBySchedule.get(schedule.id) ?? "");
+    const legacyUnbound = schedule.status === "active" && schedule.delegation === undefined;
     return {
       id: schedule.id,
       origin: "runtime",
-      enabled: schedule.enabled,
+      enabled: legacyUnbound ? false : schedule.enabled,
       channel: schedule.channel,
       target: schedule.target,
       time: schedule.time ?? "07:00",
@@ -422,7 +461,7 @@ export class RuntimeScheduleManager {
       created_at_ms: schedule.created_at_ms,
       updated_at_ms: schedule.updated_at_ms,
       payload_hash: schedule.payload_hash,
-      status: op ? "pending" : schedule.status,
+      status: op ? "pending" : legacyUnbound ? "disabled" : schedule.status,
       pending_operation: op?.operation,
       pending_command_id: op?.command_id,
       approval_expires_at_ms: op?.expires_at_ms,
@@ -517,6 +556,9 @@ function lifecycleFromPending(pending: PendingRuntimeScheduleOperation): Runtime
     previous_payload_hash: pending.previous?.payload_hash,
     command_id: pending.command_id,
     request_id: pending.request_id,
+    ...(pending.operation !== "delete" && pending.proposed.delegation
+      ? { delegation: pending.proposed.delegation }
+      : {}),
   };
 }
 
@@ -572,6 +614,14 @@ function parseStoredSchedule(value: unknown): RuntimeSchedule {
   if (typeof value.payload_hash !== "string" || !/^[a-f0-9]{64}$/.test(value.payload_hash) || value.payload_hash !== expectedPayloadHash) {
     throw new Error("runtime schedule store payload hash does not match its trigger content");
   }
+  const delegation = value.delegation === undefined ? undefined : parseRuntimeScheduleDelegation(value.delegation);
+  if (delegation && delegation.scope_digest !== runtimeScheduleScopeDigest({
+    schedule_id: id,
+    channel,
+    target,
+    content,
+    payload_hash: value.payload_hash,
+  })) throw new Error("runtime schedule store delegation does not match its persisted scope");
   return {
     id,
     origin: "runtime",
@@ -585,7 +635,21 @@ function parseStoredSchedule(value: unknown): RuntimeSchedule {
     created_at_ms,
     updated_at_ms,
     payload_hash: value.payload_hash,
+    ...(delegation ? { delegation } : {}),
     status,
+  };
+}
+
+function parseRuntimeScheduleDelegation(value: unknown): RuntimeScheduleDelegation {
+  if (!isRecord(value) || typeof value.command_id !== "string" || !value.command_id.trim() ||
+      typeof value.request_id !== "string" || !value.request_id.trim() ||
+      typeof value.scope_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.scope_digest)) {
+    throw new Error("runtime schedule store delegation is invalid");
+  }
+  return {
+    command_id: value.command_id,
+    request_id: value.request_id,
+    scope_digest: value.scope_digest,
   };
 }
 

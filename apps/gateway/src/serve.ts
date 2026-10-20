@@ -713,7 +713,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     log: (line: string) => cronLog.info(line),
     content_provider: googleDailyBriefProviderFromEnv(process.env),
     event_store: cronEventStore,
-    onFire: (task, event) => {
+    onFire: (task, event, delegation) => {
       hds.onScheduleLifecycle("schedule.lifecycle.fired", {
         schedule_id: task.id,
         origin: task.origin,
@@ -721,6 +721,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         actor: "blue-tanuki-cron",
         payload_hash: task.payload_hash,
         request_id: event.event_id,
+        ...(delegation ? { delegation } : {}),
       });
     },
   });

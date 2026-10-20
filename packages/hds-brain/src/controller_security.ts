@@ -106,6 +106,40 @@ export function trustedChannelSendFromMetadata(req: InboundRequest): ChannelSend
   return { channel, target, content };
 }
 
+export interface RuntimeScheduleScopeInput {
+  readonly schedule_id: string;
+  readonly channel: string;
+  readonly target: string;
+  readonly content: string;
+  readonly payload_hash: string;
+}
+
+export interface RuntimeScheduleDelegation {
+  readonly command_id: string;
+  readonly request_id: string;
+  readonly scope_digest: string;
+}
+
+/** Digest the exact runtime-schedule identity and effect scope without retaining message content in HDS audit. */
+export function runtimeScheduleScopeDigest(input: RuntimeScheduleScopeInput): string {
+  if (typeof input.schedule_id !== "string" || !input.schedule_id.trim() ||
+      typeof input.channel !== "string" || !input.channel.trim() ||
+      typeof input.target !== "string" || !input.target.trim() ||
+      typeof input.content !== "string" || !input.content.trim() ||
+      typeof input.payload_hash !== "string" || !/^[a-f0-9]{64}$/.test(input.payload_hash)) {
+    throw new Error("runtime_schedule_scope_invalid");
+  }
+  return sha256({
+    schema_version: "blue-tanuki.runtime-schedule-scope.v1",
+    origin: "runtime",
+    schedule_id: input.schedule_id,
+    channel: input.channel,
+    target: input.target,
+    content: input.content,
+    payload_hash: input.payload_hash,
+  });
+}
+
 function stableJson(value: unknown): string {
   const seen = new WeakSet<object>();
   const normalize = (v: unknown): unknown => {

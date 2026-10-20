@@ -565,6 +565,11 @@ export interface ScheduleLifecycleLog {
   previous_payload_hash?: string;
   command_id?: string;
   request_id?: string | null;
+  delegation?: {
+    command_id: string;
+    request_id: string;
+    scope_digest: string;
+  };
   timestamp: number;
 }
 

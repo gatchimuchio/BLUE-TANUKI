@@ -90,8 +90,8 @@ describe("RuntimeScheduleManager", () => {
     expect(JSON.stringify(m.snapshot())).not.toContain("private runtime content");
     expect(lifecycle).toEqual(expect.arrayContaining([
       expect.objectContaining({ event: "schedule.lifecycle.requested", operation: "create", approval_level: "L3_final_review" }),
-      expect.objectContaining({ event: "schedule.lifecycle.approved", operation: "create" }),
-      expect.objectContaining({ event: "schedule.lifecycle.activated", operation: "create" }),
+      expect.objectContaining({ event: "schedule.lifecycle.approved", operation: "create", delegation: expect.objectContaining({ command_id: cmd.id, request_id: "req-1" }) }),
+      expect.objectContaining({ event: "schedule.lifecycle.activated", operation: "create", delegation: expect.objectContaining({ command_id: cmd.id, request_id: "req-1" }) }),
     ]));
   });
 
@@ -176,9 +176,28 @@ describe("RuntimeScheduleManager", () => {
     writeFileSync(join(dir, "runtime-schedules.json"), `${JSON.stringify([entry])}\n`, "utf8");
     try {
       const m = await RuntimeScheduleManager.open({ env });
+      expect(m.activeCount()).toBe(0);
+      expect(m.snapshot()[0]).toMatchObject({ id: "legacy-daily", time: "07:00", status: "disabled", enabled: false });
+      expect(m.activeCronTasks()).toEqual([]);
+      const partialUpdate = command("schedule.update", { id: "legacy-daily", content: "new content" });
+      expect(m.preparePending(partialUpdate, evaluation(partialUpdate), {
+        request_id: "req-legacy-partial", actor: "alice",
+      })).toMatchObject({ ok: false });
+      const update = command("schedule.update", {
+        id: "legacy-daily",
+        channel: "webchat",
+        target: "local-user",
+        content: "legacy content",
+        time: "07:00",
+        time_zone: "Asia/Tokyo",
+      });
+      expect(m.preparePending(update, evaluation(update), { request_id: "req-legacy-upgrade", actor: "alice" }).ok).toBe(true);
+      await approve(m, update);
       expect(m.activeCount()).toBe(1);
-      expect(m.snapshot()[0]).toMatchObject({ id: "legacy-daily", time: "07:00", status: "active" });
-      expect(m.activeCronTasks()[0]?.time_zone).toBeUndefined();
+      expect(m.activeCronTasks()[0]?.delegation).toMatchObject({
+        command_id: update.id,
+        request_id: "req-legacy-upgrade",
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -400,6 +419,8 @@ describe("RuntimeScheduleManager", () => {
           "blue_tanuki.cron.task_id": "runtime-fire",
           "blue_tanuki.cron.origin": "runtime",
           "blue_tanuki.channel_send.content": "runtime hello",
+          "blue_tanuki.cron.delegation.command_id": cmd.id,
+          "blue_tanuki.cron.delegation.request_id": "req-fire",
         },
       });
     } finally {
