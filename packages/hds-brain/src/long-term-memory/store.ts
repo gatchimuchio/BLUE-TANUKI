@@ -14,6 +14,12 @@ import { fReferenceForId } from "../f_reference.js";
 
 const DEFAULT_MAX_ENTRIES = 10_000;
 
+/** Digest-only view of exact M records, freshly read from the current store. */
+export interface CurrentMemoryReferenceVersionSnapshot {
+  readonly status: "verified" | "unverified";
+  readonly records: readonly { readonly request_id: string; readonly version: string | null }[];
+}
+
 export class LongTermMemoryStore {
   private readonly filepath?: string;
   private readonly max_entries: number;
@@ -104,6 +110,37 @@ export class LongTermMemoryStore {
   /** Deterministic request id lookup. */
   findByRequestId(request_id: string): MemoryEntry | null {
     return this.entries.find((entry) => entry.request_id === request_id) ?? null;
+  }
+
+  /**
+   * Re-read and verify the current M chain, returning only requested versions.
+   * A valid append to another record does not invalidate existing references.
+   */
+  currentReferenceVersions(requestIds: readonly string[]): CurrentMemoryReferenceVersionSnapshot {
+    if (requestIds.length > 100 || requestIds.some((id) => !/^[A-Za-z0-9_.:-]{1,96}$/.test(id))) {
+      return { status: "unverified", records: [] };
+    }
+    const ids = [...new Set(requestIds)];
+    let currentEntries: readonly MemoryEntry[];
+    try {
+      if (!this.filepath) {
+        currentEntries = this.entries;
+      } else {
+        const raw = existsSync(this.filepath) ? readFileSync(this.filepath, "utf8") : "";
+        currentEntries = raw.split("\n").filter((line) => line.trim().length > 0).map(decodeMemoryEntry);
+      }
+    } catch {
+      return { status: "unverified", records: [] };
+    }
+    if (!verifyMemoryEntrySequence(currentEntries)) return { status: "unverified", records: [] };
+
+    return {
+      status: "verified",
+      records: ids.map((request_id) => {
+        const matches = currentEntries.filter((entry) => entry.request_id === request_id);
+        return { request_id, version: matches.length === 1 ? matches[0]!.entry_hash : null };
+      }),
+    };
   }
 
   size(): number {

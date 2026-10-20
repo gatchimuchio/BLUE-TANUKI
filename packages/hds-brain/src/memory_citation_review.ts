@@ -16,6 +16,7 @@ import type {
   MemoryRecordProvenance,
   MemoryTrace,
 } from "./types.js";
+import { idFromFReference } from "./f_reference.js";
 
 const RESPONSE_SCHEMA = "blue-tanuki.memory-citation-response.v1";
 const MAX_RESPONSE_CHARS = 32_000;
@@ -40,6 +41,7 @@ export interface MemoryCitationReviewResult {
 export interface MeaningUpdateProposalReferenceReview {
   readonly review_status:
     | "no_current_projection"
+    | "current_m_unverified"
     | "evidence_version_mismatch"
     | "target_reference_unverified"
     | "target_reference_mismatch"
@@ -164,6 +166,8 @@ export function reviewMemoryCitationOutput(input: {
   request_id: string;
   command_id: string;
   content: string;
+  /** Exact current M versions read at J admission; null means the source could not be verified. */
+  current_reference_versions?: ReadonlyMap<string, string | null> | null;
   timestamp?: number;
 }): MemoryCitationReviewResult {
   const { trace } = input;
@@ -215,6 +219,17 @@ export function reviewMemoryCitationOutput(input: {
               if (!checked.ok) {
                 rejectedCount += 1;
                 rejectionReasons.add(checked.reason);
+                continue;
+              }
+              if (input.current_reference_versions === null) {
+                rejectedCount += 1;
+                rejectionReasons.add("memory_dependency_store_unverified");
+                continue;
+              }
+              if (input.current_reference_versions !== undefined &&
+                  !citationReferencesAreCurrent(checked.citation, input.current_reference_versions)) {
+                rejectedCount += 1;
+                rejectionReasons.add("memory_dependency_version_changed");
                 continue;
               }
               accepted.push(checked.citation);
@@ -302,12 +317,16 @@ export function reviewMemoryCitationOutput(input: {
 export function reviewMeaningUpdateProposalReferences(
   proposal: MeaningUpdateProposal,
   trace: MemoryTrace | undefined,
+  currentReferenceVersions?: ReadonlyMap<string, string | null> | null,
 ): MeaningUpdateProposalReferenceReview {
   const plan = trace?.search_plan;
   const candidates = trace ? currentProjectionCandidates(trace, verifiedCandidates(trace)) : [];
   const verified = (reference: { readonly reference: string; readonly digest: string }): boolean =>
     candidates.some((candidate) => candidate.reference.record_id === reference.reference &&
-      candidate.reference.version === reference.digest);
+      candidate.reference.version === reference.digest) &&
+    (currentReferenceVersions === undefined || (currentReferenceVersions !== null &&
+      idFromFReference(reference.reference) !== null &&
+      currentReferenceVersions.get(idFromFReference(reference.reference)!) === reference.digest));
   const supportingVerified = proposal.supporting_evidence.filter(verified).length;
   const counterevidenceReferences = proposal.counterevidence_review.status === "reviewed_with_references"
     ? proposal.counterevidence_review.references
@@ -316,7 +335,10 @@ export function reviewMeaningUpdateProposalReferences(
   const hasTypedTargetReference = proposal.schema_version === MEANING_UPDATE_PROPOSAL_V2_SCHEMA_VERSION;
   const targetReferenceMatchesCurrentProjection = hasTypedTargetReference &&
     candidates.some((candidate) => candidate.reference.record_id === proposal.target_reference.record_id &&
-      candidate.reference.version === proposal.target_reference.version);
+      candidate.reference.version === proposal.target_reference.version) &&
+    (currentReferenceVersions === undefined || (currentReferenceVersions !== null &&
+      idFromFReference(proposal.target_reference.record_id) !== null &&
+      currentReferenceVersions.get(idFromFReference(proposal.target_reference.record_id)!) === proposal.target_reference.version));
   const hasOverlap = proposal.supporting_evidence.some((support) => counterevidenceReferences.some((counter) =>
     support.reference === counter.reference && support.digest === counter.digest));
   const applicabilityScopeMatches = plan !== undefined &&
@@ -334,6 +356,7 @@ export function reviewMeaningUpdateProposalReferences(
     counterevidenceVerified !== counterevidenceReferences.length || hasOverlap;
   let reviewStatus: MeaningUpdateProposalReferenceReview["review_status"];
   if (!plan || candidates.length === 0) reviewStatus = "no_current_projection";
+  else if (currentReferenceVersions === null) reviewStatus = "current_m_unverified";
   else if (evidenceMismatch) reviewStatus = "evidence_version_mismatch";
   else if (hasTypedTargetReference && !targetReferenceMatchesCurrentProjection) reviewStatus = "target_reference_mismatch";
   else if (!applicabilityScopeMatches || !counterevidenceScopeMatches) reviewStatus = "scope_reference_mismatch";
@@ -664,6 +687,17 @@ function inline(value: string): string {
 
 function referenceKey(reference: MemoryCitationReference): string {
   return `${reference.record_id}\u0000${reference.version}`;
+}
+
+function citationReferencesAreCurrent(
+  citation: AcceptedCitation,
+  currentVersions: ReadonlyMap<string, string | null>,
+): boolean {
+  const supportingId = idFromFReference(citation.supporting.reference.record_id);
+  const counterevidenceId = idFromFReference(citation.counterevidence.reference.record_id);
+  return supportingId !== null && counterevidenceId !== null &&
+    currentVersions.get(supportingId) === citation.supporting.reference.version &&
+    currentVersions.get(counterevidenceId) === citation.counterevidence.reference.version;
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: string[]): boolean {

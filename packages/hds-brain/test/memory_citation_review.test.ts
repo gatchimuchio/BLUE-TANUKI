@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -6,7 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
 import { MEANING_UPDATE_PROPOSAL_V1_SCHEMA_VERSION } from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
-import { LongTermMemoryStore } from "../src/long-term-memory/index.js";
+import {
+  canonicalizeMemoryEntry,
+  encodeMemoryEntry,
+  LongTermMemoryStore,
+  type MemoryEntry,
+  type MemoryEntryHashInput,
+} from "../src/long-term-memory/index.js";
 import { buildMemoryCitationSystemMessages } from "../src/memory_citation_review.js";
 
 const tempDirectories: string[] = [];
@@ -19,8 +25,7 @@ function inbound(content: string, id: string): InboundRequest {
   return { id, channel: "test", user: "fixture-user", content, timestamp: Date.now() };
 }
 
-function setup() {
-  const memory = new LongTermMemoryStore();
+function setup(memory = new LongTermMemoryStore()) {
   const hds = new HDSUpperController({ memory });
   hds.decide(inbound("first source fact", "citation-support"));
   hds.decide(inbound("second source counterpoint", "citation-counter"));
@@ -35,8 +40,25 @@ function setup() {
   const counter = decided.log.frame.memory_trace.hits.find((hit) => hit.memory_id === "citation-counter");
   const searchPlan = decided.log.frame.memory_trace.search_plan;
   if (!support || !counter || !searchPlan) throw new Error("expected two scoped memory candidates");
-  return { hds, command: decided.command, support, counter,
+  return { hds, memory, command: decided.command, support, counter,
     scopeId: searchPlan.application_scope_id, scopePlanDigest: searchPlan.plan_id };
+}
+
+function rewriteMemoryRecord(filepath: string, requestId: string, goal: string): void {
+  const sourceEntries = readFileSync(filepath, "utf8").split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as MemoryEntry);
+  let previousHash = "GENESIS";
+  const rewritten = sourceEntries.map((entry) => {
+    const updated = { ...entry, ...(entry.request_id === requestId ? { goal } : {}), prev_hash: previousHash };
+    const canonical = canonicalizeMemoryEntry(updated as MemoryEntryHashInput);
+    const entryHash = createHash("sha256")
+      .update(`${updated.index}|${previousHash}|${canonical}`, "utf8")
+      .digest("hex");
+    previousHash = entryHash;
+    const hashed = { ...updated, entry_hash: entryHash };
+    return encodeMemoryEntry(hashed);
+  });
+  writeFileSync(filepath, `${rewritten.join("\n")}\n`, "utf8");
 }
 
 function feedback(command_id: string, content: string): ExecuteFeedback {
@@ -97,6 +119,57 @@ function meaningUpdateProposal(
 }
 
 describe("J-side memory citation review", () => {
+  it("keeps citations current after an unrelated append to the file-backed M store", () => {
+    const directory = mkdtempSync(join(tmpdir(), "memory-current-reference-append-"));
+    tempDirectories.push(directory);
+    const memory = new LongTermMemoryStore({ filepath: join(directory, "memory.jsonl") });
+    const { hds, command, support, counter, scopeId } = setup(memory);
+    hds.decide(inbound("unrelated later record", "citation-unrelated-later"));
+
+    const current = memory.currentReferenceVersions([support.memory_id, counter.memory_id]);
+    expect(current).toMatchObject({
+      status: "verified",
+      records: [
+        { request_id: support.memory_id, version: support.entry_hash },
+        { request_id: counter.memory_id, version: counter.entry_hash },
+      ],
+    });
+    const reviewed = hds.reviewMemoryCitations(command, feedback(command.id, envelope(
+      { record_id: support.f_reference, version: support.entry_hash },
+      { record_id: counter.f_reference, version: counter.entry_hash },
+      scopeId,
+    )));
+    expect((reviewed.result as { content: string }).content).toContain("【HDS照合済みの記憶参照】");
+    expect(hds.getAudit().list().some(({ log }) => "kind" in log && log.kind === "memory_citation_review" && log.status === "accepted")).toBe(true);
+  });
+
+  it("rejects a citation when its exact persisted M dependency changed after C received the projection", () => {
+    const directory = mkdtempSync(join(tmpdir(), "memory-current-reference-change-"));
+    tempDirectories.push(directory);
+    const filepath = join(directory, "memory.jsonl");
+    const memory = new LongTermMemoryStore({ filepath });
+    const { hds, command, support, counter, scopeId } = setup(memory);
+    rewriteMemoryRecord(filepath, counter.memory_id, "updated source version");
+
+    const current = memory.currentReferenceVersions([support.memory_id, counter.memory_id]);
+    expect(current.status).toBe("verified");
+    expect(current.records.find((record) => record.request_id === support.memory_id)?.version).toBe(support.entry_hash);
+    expect(current.records.find((record) => record.request_id === counter.memory_id)?.version).not.toBe(counter.entry_hash);
+
+    const reviewed = hds.reviewMemoryCitations(command, feedback(command.id, envelope(
+      { record_id: support.f_reference, version: support.entry_hash },
+      { record_id: counter.f_reference, version: counter.entry_hash },
+      scopeId,
+    )));
+    const content = (reviewed.result as { content: string }).content;
+    expect(content).not.toContain("【HDS照合済みの記憶参照】");
+    const review = hds.getAudit().list().map((entry) => entry.log).find((entry) =>
+      "kind" in entry && entry.kind === "memory_citation_review",
+    );
+    expect(review && "rejection_reasons" in review ? review.rejection_reasons : [])
+      .toContain("memory_dependency_version_changed");
+  });
+
   it("checks proposal record versions against the current M projection without assessing meaning or adoption", () => {
     const { hds, command, support, counter, scopeId, scopePlanDigest } = setup();
     hds.onFeedback({
@@ -138,6 +211,37 @@ describe("J-side memory citation review", () => {
     expect(feedbackAuditText).not.toContain(support.entry_hash);
     expect(feedbackAuditText).not.toContain(scopePlanDigest);
     expect(hds.getAudit().verify()).toBe(true);
+  });
+
+  it("rechecks meaning-update evidence against current M without invalidating unchanged dependencies", () => {
+    const directory = mkdtempSync(join(tmpdir(), "memory-current-meaning-update-"));
+    tempDirectories.push(directory);
+    const filepath = join(directory, "memory.jsonl");
+    const memory = new LongTermMemoryStore({ filepath });
+    const { hds, command, support, counter, scopeId, scopePlanDigest } = setup(memory);
+    rewriteMemoryRecord(filepath, counter.memory_id, "updated counterevidence version");
+    hds.onFeedback({
+      ...feedback(command.id, { content: "synthetic" }),
+      meaning_update_proposal: meaningUpdateProposal(support, counter, scopeId, scopePlanDigest),
+    });
+
+    const entry = hds.getAudit().list().map((item) => item.log).find((log) =>
+      "kind" in log && log.kind === "executor_feedback" && log.command_id === command.id,
+    );
+    expect(entry && "kind" in entry && entry.kind === "executor_feedback" ? entry.feedback : undefined).toMatchObject({
+      meaning_update_proposal_reference_review: {
+        review_status: "evidence_version_mismatch",
+        supporting_references_verified: 1,
+        counterevidence_references_verified: 0,
+        target_reference_matches_current_projection: true,
+        target_and_prior_version_verified: false,
+        semantic_relation_status: "not_assessed",
+        adoption_status: "not_adopted",
+        may_apply: false,
+        used_for_authority: false,
+      },
+      meaning_update_proposal_applied: false,
+    });
   });
 
   it("requires an exact current M target version in v2 while leaving the prior version unverified", () => {

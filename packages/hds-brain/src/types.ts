@@ -335,7 +335,7 @@ export interface ExecutorFeedbackAuditTrace {
   meaning_update_proposal_contract_status: "not_present" | "passed" | "failed";
   meaning_update_proposal_digest?: string;
   meaning_update_proposal_reference_review: {
-    review_status: "not_present" | "invalid_contract" | "not_reviewed" | "no_current_projection" | "evidence_version_mismatch" |
+    review_status: "not_present" | "invalid_contract" | "not_reviewed" | "no_current_projection" | "current_m_unverified" | "evidence_version_mismatch" |
       "target_reference_unverified" | "target_reference_mismatch" | "prior_version_unverified" |
       "scope_reference_mismatch" | "scope_digest_mismatch" | "counterevidence_absence_unverified" | "references_verified_unadopted";
     supporting_reference_count: number;

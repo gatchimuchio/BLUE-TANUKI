@@ -119,6 +119,7 @@ import {
   type DocumentOrganizationProjection,
 } from "./document_organization.js";
 import type { MemoryStoreStateVersion } from "./long-term-memory/types.js";
+import type { CurrentMemoryReferenceVersionSnapshot } from "./long-term-memory/store.js";
 import {
   buildMemoryCitationSystemMessages,
   redactUnverifiedReferences,
@@ -144,6 +145,7 @@ interface LongTermMemoryPort {
   capture(log: DecisionLog): unknown;
   recent(n: number): readonly unknown[];
   all?: () => readonly unknown[];
+  currentReferenceVersions?: (requestIds: readonly string[]) => CurrentMemoryReferenceVersionSnapshot;
   size?: () => number;
   verify?: () => boolean;
   stateVersion?: () => MemoryStoreStateVersion;
@@ -1508,11 +1510,13 @@ ${planControl.question}`,
       return withLlmResultContent(feedback, redactUnverifiedReferences(rawContent));
     }
 
+    const memoryTrace = sourceLog.frame.memory_trace;
     const reviewed = reviewMemoryCitationOutput({
-      trace: sourceLog.frame.memory_trace,
+      trace: memoryTrace,
       request_id: sourceLog.request_id,
       command_id: command.id,
       content: rawContent,
+      current_reference_versions: this.currentMemoryReferenceVersions(memoryTrace),
     });
     if (reviewed.audit_log) this.audit.append(reviewed.audit_log);
     return withLlmResultContent(feedback, reviewed.content);
@@ -1539,6 +1543,22 @@ ${planControl.question}`,
       timestamp: Date.now(),
     };
     this.audit.append(referenceLog);
+  }
+
+  private currentMemoryReferenceVersions(
+    trace: DecisionLog["frame"]["memory_trace"],
+  ): ReadonlyMap<string, string | null> | null | undefined {
+    const requestIds = [...new Set(trace.hits
+      .filter((hit) => hit.source === "hds_ltm")
+      .map((hit) => hit.memory_id))];
+    if (requestIds.length === 0) return undefined;
+    const snapshot = this.memory?.currentReferenceVersions?.(requestIds);
+    if (snapshot?.status !== "verified") return null;
+    const recordsById = new Map(snapshot.records.map((record) => [record.request_id, record.version] as const));
+    if (recordsById.size !== requestIds.length || !requestIds.every((requestId) => recordsById.has(requestId))) {
+      return null;
+    }
+    return recordsById;
   }
 
   /**
@@ -1588,7 +1608,8 @@ ${planControl.question}`,
           adoption_status: "not_adopted" as const, may_apply: false as const, used_for_authority: false as const }
       : meaningUpdateProposalParse?.ok
         ? meaningUpdateProposalContractStatus === "passed"
-          ? reviewMeaningUpdateProposalReferences(meaningUpdateProposalParse.record, sourceLog?.frame.memory_trace)
+          ? reviewMeaningUpdateProposalReferences(meaningUpdateProposalParse.record, sourceLog?.frame.memory_trace,
+            sourceLog ? this.currentMemoryReferenceVersions(sourceLog.frame.memory_trace) : undefined)
           : { review_status: "not_reviewed" as const, supporting_reference_count: 0, supporting_references_verified: 0,
               counterevidence_reference_count: 0, counterevidence_references_verified: 0,
               applicability_scope_matches_current: false, counterevidence_scope_matches_current: false,
