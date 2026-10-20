@@ -17,9 +17,9 @@ Control Centerの条件付き操作から、`awaiting_step_review`かつ`not_sel
 | `pnpm docs:check`／`git diff --check` | PASS。 |
 | 全suite、実Gateway再起動、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後へ配置。 |
 
-Control Centerのowner step review callerをこの範囲で`WIRED`とする。J採否後の仕事状態・実行結果・M帰還・owner応答全体、E01.03全体、および製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。次consumerはJ review後の結果・未実行step・owner応答を永続仕事状態と結び、M／再開経路へ戻す実caller。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。
+Control Centerのowner step review callerをこの範囲で`WIRED`とする。その後の現行コード再照合で、返信／期限イベントによるJ再開（`operation_plan_wait_scheduler.ts`／`controller.ts`）、owner step選択の永続binding、Executor実結果から`reconcileExecutionResults`→`HDS.reconcileOperationPlanResult`→Operation Plan状態／M receiptへ戻すconsumerが既に存在することを確認した。したがって、直前に記録した「J review後の結果・未実行step・owner応答を永続仕事状態と結び、M／再開経路へ戻す実caller」は、現行の未接続consumerではない。E01.03の待機中C呼出しゼロと返信／期限でのJ再開は`WIRED`とする。この確認だけでE01親、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を完了扱いしない。次consumerは工程表順のE02.01（D05.03／E01.03依存）にある親子予算予約と、実C呼出しへの接続。D05.03の実装状態は同バッチ開始時に現物から再確認する。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。
 
-実装commit=`64759b14e9b64227690010dae3d39680be463272`を`main`へatomic push済み。実装後のlocal復旧branch／remote backup tagはcurrent=`64759b14e9b64227690010dae3d39680be463272`、previous=`60b525e76dcc615b4a79efa29dbc20f1f243761f`。正本ピンとcloseout文書commitをpush後にremote main・二世代ref・worktreeを再照合する。保護対象Linux `target/`はcommitへ含めない。
+実装commit=`64759b14e9b64227690010dae3d39680be463272`を`main`へatomic push済み。その後の正本ピン／closeout文書commit=`720f2fa73d4b152c4d97cf033f13b3ceb0f61b5e`もpush済み。現在のlocal／remote `main`は`720f2fa73d4b152c4d97cf033f13b3ceb0f61b5e`で一致し、local復旧branch／remote backup tag二世代はcurrent=`720f2fa73d4b152c4d97cf033f13b3ceb0f61b5e`、previous=`64759b14e9b64227690010dae3d39680be463272`で一致する。作業treeには保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`だけを残し、commitへ含めていない。
 
 ### 直前完了BUILD_BATCH：`QEB-03-E01.03-WAIT-C-OUTCOME-OWNER-PROJECTION`
 
