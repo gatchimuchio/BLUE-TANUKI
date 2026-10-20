@@ -2,6 +2,8 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-21のQEB-03-E01.02-INTERVAL-CADENCE-RESTART-CONSUMERでは、Cron interval taskのrestart後も永続event cursorからscheduled cadenceを継続し、停止中に過ぎた時間枠を一括dispatchしない経路を接続した。Gateway focused 14/14、typecheck、buildはPASS。これはintervalの限定consumerであり、daily時刻変更・DST・clock-jump方針を含むE01.02全体、製品全体のSYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAの証拠ではない。詳細は[開発進捗](開発進捗.md)。
+
 2026-10-21の`QEB-03-E01.01-E03.02-CRON-REQUEST-CORRELATION-RECOVERY-CONSUMER`では、Cron由来Operation Planのrequest digestをCronの現在cursorへつなぎ、read-only Recovery inspector／CLI／Control Centerへ配送状態を渡した。current cursorにない場合は過去イベントの不存在と断定せず、`handler_returned`も仕事成功と扱わない。Gateway focused 31/31、WebChat focused 99/99、Gateway／WebChat typecheckとbuildはPASS。E01.01／E03.02全体、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、全体QE_QC／QE_QAは未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。
 
 2026-10-21の`QEB-03-E01.01-INTERRUPTED-CRON-DISPATCH-RECOVERY`では、Gateway起動時にprivate Cron inbox/outboxで前processから`dispatching`のまま残ったeventを照合し、同じtransactionで`outcome_unknown`へ移すconsumerを追加した。handler再実行や成功推定を行わず、HDSの正確なeventに対するno-replay判断まで同sourceの次eventを止める。Gateway store reopen fixture 9/9、Gateway typecheck／buildはPASS。実Gateway再起動・E01.01全体・全体QC／QA・`SYSTEM_SHAPED`／`BUILD_COVERED`の証拠ではない。詳細は[`docs/開発進捗.md`](開発進捗.md)。

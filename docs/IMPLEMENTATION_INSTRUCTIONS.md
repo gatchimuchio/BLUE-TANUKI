@@ -2,7 +2,24 @@
 
 ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
 
-### 最新BUILD_BATCH：`QEB-03-E01.01-E03.02-CRON-REQUEST-CORRELATION-RECOVERY-CONSUMER`
+### 最新BUILD_BATCH：`QEB-03-E01.02-INTERVAL-CADENCE-RESTART-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`1f19638356212b0aaf38b8d8f1e83d1a34a6d3a9`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E01.02とCron interval scheduler・永続event cursorの現行producer／consumerを再読した。Windows localでBLUE-TANUKIだけを変更し、既存untracked Linux `target/`は保持した。
+
+Cron event storeに、source内容を返さずinbox/outboxの整合を検査して現在の検証済み高水位sequenceを読むconsumerを追加した。interval taskは再起動時に最後のscheduled timestampから元のcadenceを継ぎ、停止中に過ぎた時間枠をまとめて実行せず、現在時刻より後の最初のintervalへ進む。稼働中のtimer遅延も期限切れ分を個別burstにせず、到達した最新時間枠を一回だけdispatchする。event claim／unresolved gateとsource単位の直列処理は維持する。last_fireはscheduled attemptの観測であり、仕事成功を意味しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `cron_channel.test.ts` | PASS、14/14。固定cadence、再起動後の次時刻、停止中のmissed tickを一括再実行しないことを確認。 |
+| Gateway `typecheck`／`build` | 両方PASS。 |
+| `git diff --check` | PASS。 |
+| 全suite、実Gateway process再起動、daily local-time/DST・clock-jump、QE_QC／QE_QA、credential／provider／外部作用 | 未実施。全体実装形状成立後に必要な対象へ行う。 |
+
+E01.02のinterval restart cadence consumerを`WIRED`とする。daily triggerの時刻変更・DST・clock-jump方針を含むE01.02全体、および製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。全体実装が未完了のためQE_QC／QE_QAへ進まない。次consumerはdaily triggerの現行local-time経路と時刻変更・復帰時のtrigger処理から選ぶ。C08.03実provider、D4／ミニドラ別repo変更、外部作用、P13公開・出荷GOは保留。
+
+実装commit=`8007f7e1e1e81baa2a5832d4bffcd957b867c31e`を`main`へpushし、remote main一致を確認した。local復旧branchとremote backup tagはcurrent=`8007f7e1e1e81baa2a5832d4bffcd957b867c31e`、previous=`1f19638356212b0aaf38b8d8f1e83d1a34a6d3a9`。既存untracked Linux `target/`は保持し、commitへ含めていない。
+
+### 前回BUILD_BATCH：`QEB-03-E01.01-E03.02-CRON-REQUEST-CORRELATION-RECOVERY-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`ccf42a3630e4692af2a96f39b6217f9967f0289a`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E01.01・E03.02要求、Cron event・Operation Plan・Recovery inspectionの現行producer／consumerを再読した。Windows localでBLUE-TANUKIだけを変更し、既存untracked Linux `target/`は保持した。
 
@@ -19,7 +36,7 @@ Cron由来Operation Planの`request_id`とCron event IDがGateway入力経路で
 
 実装commit=`1afc0e3aef523d80c34cf98cd759c3f39437cf25`を`main`へpushし、直後のremote main一致を確認した。local復旧branchとremote backup tagはcurrent=`1afc0e3aef523d80c34cf98cd759c3f39437cf25`、previous=`ccf42a3630e4692af2a96f39b6217f9967f0289a`。作業ツリーには保護対象のuntracked Linux `target/`だけを残し、commitへ含めていない。
 
-### 前回BUILD_BATCH：`QEB-03-E01.01-INTERRUPTED-CRON-DISPATCH-RECOVERY`
+### 前々回BUILD_BATCH：`QEB-03-E01.01-INTERRUPTED-CRON-DISPATCH-RECOVERY`
 
 開始HEAD／`main`／`origin/main`=`04fb4865920fafa6a7070026504bccbe1cb09c0b`。owner指定rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、E01.01とCron scheduler・durable event cursor・起動callsiteを再読した。Windows localでBLUE-TANUKIだけを変更し、既存untracked Linux `target/`は保持。
 
