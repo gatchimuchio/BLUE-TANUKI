@@ -1,6 +1,20 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-D02.02-CROSS-PROCESS-DURABLE-EXECUTION-INTENT`
+### 最新BUILD_BATCH：`QEB-01-D02.03-HDS-FINAL-REVIEW-SOURCE-MIGRATION`
+
+開始HEAD／`origin/main`=`069193cc301ab9d4260afb7f7be6dcd0c23827e5`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準、active指示、D02.03・D02親要求、HDS final-review正本とApproval Gate→Executorの現行consumerを再読した。Windows localで施工し、保護対象のuntracked Linux `target/`を保持した。
+
+現行コードでは、旧Executor固有`commandRequiresHumanFinalReview`のtool/capability一覧をcommit `bd20d98`で除去し、HDS-BRAINの`finalReviewRequired`／`FINAL_REVIEW_OPERATION_LIST`へ分類を統合済みだった。Executorの独立境界検証は残り、proof source／decision／operation／risk／final-review必須値を実commandから再計算した分類へ照合し、不正proofを拒否する。この分類統合と拒否consumerを`WIRED`とする。D02親要求の全profile・全scenarioのcoverage、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| HDS `final_review_operations.test.ts` | PASS、3 tests。単一正本、process approval profile・authority trace・Runtime Invariantsへの共有を確認。 |
+| Core `executor_approval_content.test.ts` | PASS、13 tests。HDS分類／内容一致proofの受理と、不一致・無効proof拒否を確認。 |
+| 全workspace suite／全体QC／QA／5OS実機／実provider・外部作用 | 未実施。全体実装形状成立後へ配置。 |
+
+C08.03実provider保留、D4 Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。Actions未使用。次consumerはD03.01「Runtime登録と意図入力Adapter」。BLUE側の入口／登録consumerを再確認し、D4 Pocketは読取参照に限る。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.02-CROSS-PROCESS-DURABLE-EXECUTION-INTENT`
 
 開始HEAD／`origin/main`=`81a90e2b488e8e5b1b1aca83b18c05fdafe032fe`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準、active指示、D02.02、ExecutionIntent発行から永続消費・Executor invocation・receipt・owner世代切替までの現行producer／consumerを再読した。Windows localで施工し、保護対象のuntracked Linux `target/`を保持した。
 
