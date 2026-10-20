@@ -2,6 +2,8 @@
 
 2026-10-20。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-20の`QEB-01-C07.03-FRESH-JUDGMENT-PLAN-REVIEW-CONSUMER`では、新しいJ citation auditから現在のprivate M interpretationに依存するplanをreviewするconsumerを接続した。現在のJ audit・M interpretation・旧citation judgement再評価集合が一致したfresh planだけがreviewを通り、旧planの拒否と旧M flagを維持する。M判断の新規登録・旧判断解消・plan実行は未接続。次consumerはowner L3検証済みApproval／M transactionによる明示判断追記で、引用受理だけではMへ書かない。focused HDS 4 tests、workspace typecheck、15-project buildはPASS。全体QE_QC／QE_QA、5OS実機、実provider、外部作用の証拠ではない。
+
 2026-10-20の`QEB-01-C07.03-FRESH-JUDGMENT-REASSESSMENT-LINK`では、現在のprivate interpretationでJが新たに受理した引用判断から、同じM record/versionの旧interpretationに依存する旧judgment refへ非権威audit関係を記録した。旧M判断の再評価待ちと旧plan拒否は維持される。旧判断のM上の解消・置換、新判断のM登録、新しいplan review、C07親、一仕事の全体経路、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。focused HDS 4 tests、typecheck、15-project buildはPASS。全体QC／QA、5OS実機、実provider、外部作用の証拠ではない。
 
 2026-10-20の`QEB-01-C07.03-PLAN-REASSESSMENT-CONSUMER`では、Jが受理したM引用判断に解釈版依存を記録し、owner L3 meaning-updateと同一のprivate M transactionで旧依存判断を再評価必須にする。Jの`plan:review`は現在のM lineageと判断参照を再照合し、古い解釈に依存するplanを実行前に拒否するconsumerまで`WIRED`。fresh decisionから旧判断を明示再評価する経路、C07親、一仕事の全体経路、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。focused HDS 4 tests、typecheck、15-project buildはPASS。全体QC／QA、5OS実機、実provider、外部作用の証拠ではない。

@@ -1,21 +1,28 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-C07.03-FRESH-JUDGMENT-REASSESSMENT-LINK`
+### 最新BUILD_BATCH：`QEB-01-C07.03-FRESH-JUDGMENT-PLAN-REVIEW-CONSUMER`
 
-開始`main`／`origin/main`=`6952fb3832d9dd46943a2441c5885ece72eddd1f`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、C07.03／C07要求、該当するcitation review・M interpretation・plan reviewのproducer／consumerを再読した。Windows localで実装し、既存untracked Linux `target/`を保持した。
+batch開始`main`／`origin/main`=`dcae5c33781299aeae374887ea1432c3a185dc41`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、C07.03／C07要求、citation review・M interpretation・plan reviewの現行producer／consumerを再読した。Windows localで実装し、既存untracked Linux `target/`を保持する。
 
-目的は、現在のprivate interpretationでJが新たに受理した引用判断から、同じM record/versionの旧interpretationに依存し、Mで`reassessment_required=true`となった旧判断IDへの明示audit関係を記録すること。旧判断のM状態は変更せず、旧planの拒否とfail-closedを維持する。新しいdependencyは現interpretation IDと新しいjudgment refへ結ぶ。citationが新しい判断を意味する範囲を超えて意味上の真実・承認・権限へ昇格させない。
+目的は、新しいJ citation判断から受け取る解釈依存をstrictなplan dependency契約に通し、`plan:review`で現M解釈と現J監査を照合するconsumerへ接続すること。Mに判断がない場合も、現在のinterpretation・record/version・judgment refを受理済みJ auditで一意に再検証し、旧引用judgment集合がJ auditとMの再評価待ち集合の双方に一致するときだけreviewを通す。旧planは引き続き拒否する。M書込み・旧判断の解除・plan実行は行わず、引用判断を真実・承認・権限へ昇格させない。
 
-対象はJ citation auditへの`reassesses_judgment_refs`接続と、C07.03のproducer→review consumer境界の限定回帰確認。対象外は旧M判断の解消・置換、旧planの再開、新planの実行、D4Pocket／別repo、実provider・credential、外部作用、全体QE_QC／QE_QA、公開・出荷判断。旧M flagの解除と新しいcurrent judgmentをMへ登録するconsumer、C07親、目的→C→J→作用→結果→M→帰還の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`のまま。
+対象はC07.03のfresh citation audit→current M interpretation→new plan review consumerと、その再評価参照を運ぶprotocol契約。対象外はC07親の全経路、現判断のM登録・旧判断解消、plan実行、D4Pocket／別repo、実provider・credential、外部作用、全体QE_QC／QE_QA、公開・出荷判断。fresh plan review consumerを`WIRED`とし、目的→C→J→Broker／Executor→結果→M→帰還の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は引き続き`BUILD_GAP`。
+
+次consumerはfresh current J judgmentから明示再評価transactionを経てprivate Mへ新判断を追記する経路。owner L3検証済みApproval／M transactionを保ち、引用の受理だけからM書込みを起こさない。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| HDS `meaning_update_memory.test.ts`／`operation_plan_interpretation_reassessment.test.ts`／`記憶再解釈.test.ts` | PASS、3 files／4 tests。改訂後の古いplan review拒否、旧M判断の再評価待ち保持、新しい引用auditから旧判断IDへの関係を確認。 |
+| HDS `meaning_update_memory.test.ts`／`operation_plan_interpretation_reassessment.test.ts`／`記憶再解釈.test.ts` | PASS、3 files／4 tests。fresh plan review受理、旧plan拒否、Mの再評価待ち維持を確認。 |
+| `pnpm hds:standalone` | PASS。standalone decision、audit chain、runtime invariantsとnon-authority flagsを確認。 |
 | `pnpm typecheck`／`pnpm build` | PASS、workspace 15 projects。 |
 | `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査PASS、移行負債76件は継続管理、licensing PASS。 |
-| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。全体形状成立後へ配置。Windows localで必要な接続確認ができるためActions未使用。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。全体形状成立後へ配置。Windows localで対象consumerを検証できるためActions未使用。 |
 
-C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。実装commit=`0997f3a`を`main`へpushしremote HEAD一致を確認した。文書closeout後のlocal recovery branch二世代とremote backup tag二世代はcurrent=`final main HEAD`／previous=`0997f3a`へ揃える。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。
+C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。実装commit=`520d07a3b10afb5946bf33a0b5159443346df3aa`を`main`へpushし、remote HEAD一致を確認した。文書closeout後のlocal recovery branches／remote backup tagsはcurrent=`closeout後のmain HEAD`／previous=`520d07a3b10afb5946bf33a0b5159443346df3aa`へ更新する。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。
+
+### 前回BUILD_BATCH：`QEB-01-C07.03-FRESH-JUDGMENT-REASSESSMENT-LINK`
+
+現在のprivate interpretationでJが新たに受理した引用判断から、同じM record/versionの旧interpretationに依存する旧judgment refへ非権威audit関係を記録した。旧M判断の再評価待ちと旧plan拒否を維持し、旧判断のM上の解消・置換、新判断のM登録、新plan review、C07親、一仕事の全体経路は次consumerへ残した。実装commit=`0997f3a`を`main`へpush済み。
 
 ### 前回BUILD_BATCH：`QEB-01-C07.03-PLAN-REASSESSMENT-CONSUMER`
 
