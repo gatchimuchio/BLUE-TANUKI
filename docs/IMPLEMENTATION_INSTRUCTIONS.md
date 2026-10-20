@@ -1,6 +1,23 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-C07.03-PLAN-REASSESSMENT-CONSUMER`
+### 最新BUILD_BATCH：`QEB-01-C07.03-FRESH-JUDGMENT-REASSESSMENT-LINK`
+
+開始`main`／`origin/main`=`6952fb3832d9dd46943a2441c5885ece72eddd1f`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／active指示、C07.03／C07要求、該当するcitation review・M interpretation・plan reviewのproducer／consumerを再読した。Windows localで実装し、既存untracked Linux `target/`を保持した。
+
+目的は、現在のprivate interpretationでJが新たに受理した引用判断から、同じM record/versionの旧interpretationに依存し、Mで`reassessment_required=true`となった旧判断IDへの明示audit関係を記録すること。旧判断のM状態は変更せず、旧planの拒否とfail-closedを維持する。新しいdependencyは現interpretation IDと新しいjudgment refへ結ぶ。citationが新しい判断を意味する範囲を超えて意味上の真実・承認・権限へ昇格させない。
+
+対象はJ citation auditへの`reassesses_judgment_refs`接続と、C07.03のproducer→review consumer境界の限定回帰確認。対象外は旧M判断の解消・置換、旧planの再開、新planの実行、D4Pocket／別repo、実provider・credential、外部作用、全体QE_QC／QE_QA、公開・出荷判断。旧M flagの解除と新しいcurrent judgmentをMへ登録するconsumer、C07親、目的→C→J→作用→結果→M→帰還の一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`のまま。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| HDS `meaning_update_memory.test.ts`／`operation_plan_interpretation_reassessment.test.ts`／`記憶再解釈.test.ts` | PASS、3 files／4 tests。改訂後の古いplan review拒否、旧M判断の再評価待ち保持、新しい引用auditから旧判断IDへの関係を確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS、workspace 15 projects。 |
+| `git diff --check`／`pnpm docs:check` | PASS。日本語基底監査PASS、移行負債76件は継続管理、licensing PASS。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。全体形状成立後へ配置。Windows localで必要な接続確認ができるためActions未使用。 |
+
+C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`。実装commit=`0997f3a`を`main`へpushしremote HEAD一致を確認した。文書closeout後のlocal recovery branch二世代とremote backup tag二世代はcurrent=`final main HEAD`／previous=`0997f3a`へ揃える。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。
+
+### 前回BUILD_BATCH：`QEB-01-C07.03-PLAN-REASSESSMENT-CONSUMER`
 
 batch開始`main`／`origin/main`=`0e84b57bc6e5f78d27ff32a5fa7a62383561e31d`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、C07.03とC07要求を再読した。Windows localで実装し、既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。全体実装形状の成立前に詳細QC／QAを行わない。
 
