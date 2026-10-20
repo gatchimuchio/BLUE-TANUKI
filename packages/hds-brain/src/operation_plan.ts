@@ -32,6 +32,19 @@ import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
 
+/** Stable across plan revisions; the digests correlate a task but confer no authority. */
+function operationPlanTaskIdentityDigest(plan: PlanState): string {
+  const first = plan.revisions[0]!.plan;
+  return operationPlanDigest({
+    schema_version: "blue-tanuki.operation-plan-task-identity.v1",
+    owner_digest: operationPlanDigest(plan.owner),
+    channel_digest: operationPlanDigest(plan.channel),
+    task_digest: operationPlanDigest(plan.goal),
+    plan_id_digest: operationPlanDigest(first.plan_id),
+    request_id_digest: operationPlanDigest(first.request_id),
+  });
+}
+
 export interface OperationPlanGoalPurposeRelationReviewContent {
   readonly task: string;
   readonly purpose_text: string;
@@ -1222,15 +1235,7 @@ export class OperationPlanLedger {
     if (this.executionSourceBindingDigest(command) === undefined) return undefined;
     const match = this.binding(command.id);
     if (!match) throw new Error("plan_execution_task_identity_unavailable");
-    const first = match.p.revisions[0]!.plan;
-    return operationPlanDigest({
-      schema_version: "blue-tanuki.operation-plan-task-identity.v1",
-      owner_digest: operationPlanDigest(match.p.owner),
-      channel_digest: operationPlanDigest(match.p.channel),
-      task_digest: operationPlanDigest(match.p.goal),
-      plan_id_digest: operationPlanDigest(first.plan_id),
-      request_id_digest: operationPlanDigest(first.request_id),
-    });
+    return operationPlanTaskIdentityDigest(match.p);
   }
   canExecute(command: ExecuteCommand): boolean {
     const reflectionCommand = this.reflections.has(command.id) || (command.type === "llm_call" &&
@@ -1521,6 +1526,7 @@ export class OperationPlanLedger {
       const common = {
         schema_version: "operation-plan-compute-source-observation.v1" as const,
         plan_id_digest: reference.plan_id_digest,
+        task_identity_digest: operationPlanTaskIdentityDigest(plan),
         revision_digest: revision.digest,
         step_id_digest: reference.step_id_digest,
         plan_binding_status: "verified" as const,
@@ -1629,7 +1635,8 @@ export class OperationPlanLedger {
           visited_files: output.visited_files, completeness: "unknown" }, adoption_status: "observation_only",
         counterevidence_status: "not_assessed", used_as_world_truth: false, used_for_authority: false, may_execute: false });
     }
-    return { schema_version: "operation-result-current-projection.v1", scope: { plan_handle: operationPlanDigest(current.plan.plan_id),
+    return { schema_version: "operation-result-current-projection.v2", scope: { plan_handle: operationPlanDigest(current.plan.plan_id),
+      task_identity_digest: operationPlanTaskIdentityDigest(p),
       revision_digest: current.digest, owner_digest: operationPlanDigest(p.owner), channel_digest: operationPlanDigest(p.channel) },
       citations, used_for_authority: false, memory_adoption: false, may_execute: false };
   }

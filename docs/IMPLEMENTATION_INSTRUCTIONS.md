@@ -1,6 +1,25 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 直近の完了BUILD_BATCH：`QEB-01-D02.02-PLAN-TASK-IDENTITY-WORKER-AUDIENCE`
+### 最新BUILD_BATCH：`QEB-01-D02.02-C04-TASK-IDENTITY-M-TO-C-PROJECTION`
+
+開始`main`／`origin/main`=`d1a7f96b2c7f4c3ad3a572e2fcc49772e1ce71ea`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`／作業標準／本指示、C04.01–03、J Operation Plan→M verified result observation→C projection／reflection経路を再読した。開始時の同一作業差分は引き継ぎ、既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持した。
+
+Jが同一Operation Plan taskから導出する非権威`task_identity_digest`を、J/M照合済み`file.write`／期限内`file.search`のC向けcompute-source projectionと、Jが作るresult-reflection projectionへ含めた。C向けprojectionのlocal versionをそれぞれv3／v2へ更新し、旧保存checkpointとの読込互換性のため新digest fieldはoptionalとした。Cへの指示にも、このdigestは相関値であり意味適合・権限・実行を証明しない旨を明記した。raw記録・path・query・本文・credential、M永続record形式、HDS採否・実行許可は変更していない。
+
+この限定経路では、選択済みJ/M observation→C入力、result-reflection候補→Jのprojection digest／citation照合までを`WIRED`として確認した。C04.01–03全体、意味上の引用採否を含む仕事全体、結果→M→帰還の一気通貫、`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立で`BUILD_GAP`を維持する。task digestは権限ではなく、物理host/device identityやaudience認証の証拠でもない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `execution_result_reconciliation.test.ts` のfile.write compute／file.search compute／result reflection 3ケース | PASS、3/3（他36件skip）。digest保持、C向けraw/path非露出、Jのcitation照合を確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildはworkspace 15 projectsとWindows native helperを含む。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／Actions／実provider・credential／外部業務作用 | 未実施。Windows localで限定確認できるためActionsは未使用。 |
+
+次はC04.01–03の未接続consumerを現行callsiteから再特定し、選択引用の出所・復帰参照を保ったままJ/M/C間の実仕事をさらに先へつなぐ。ホスト同一性探索は反復しない。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+実装commit=`<このBUILD_BATCHの直前commit>`。push後のremote HEAD／二世代復元ref／作業ツリーはcloseoutで照合する。
+
+### 前回BUILD_BATCH：`QEB-01-D02.02-PLAN-TASK-IDENTITY-WORKER-AUDIENCE`
 
 開始`main`／`origin/main`=`5de4f3e64859140006e04d5a0839e90f6f9b51c8`、実装commit=`620d57fdccce45d91f631844c06dc88d4d2f2e43`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／本指示、D02.02、HDS Operation Plan→Executor→Gateway file-search child→durable receiptを再読した。開始時のdirty差分は同じD02.02 BUILD_BATCHのtask-identity実装であり、未追跡`packages/blue-tanuki/native/linux-isolation/target/`は保持する。
 

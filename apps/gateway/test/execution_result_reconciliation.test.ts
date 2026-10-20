@@ -18,6 +18,16 @@ import { operationPlanRecoveryEvidenceFromObservation } from "../src/operation_p
 import { correlateOperationPlanBindings, inspectGatewayRecoveryState } from "../src/recovery_inspection.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+function planTaskIdentityDigest(owner: string, channel: string, task: string, planId: string, requestId: string): string {
+  return operationPlanDigest({
+    schema_version: "blue-tanuki.operation-plan-task-identity.v1",
+    owner_digest: operationPlanDigest(owner),
+    channel_digest: operationPlanDigest(channel),
+    task_digest: operationPlanDigest(task),
+    plan_id_digest: operationPlanDigest(planId),
+    request_id_digest: operationPlanDigest(requestId),
+  });
+}
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 function request(content: string): InboundRequest {
   return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: "fixture-owner", timestamp: Date.now(), content,
@@ -328,6 +338,8 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const sourceRevision = sourceCheckpoint.revisions.at(-1)!;
     const sourceRef = { plan_id_digest: operationPlanDigest(c.plan.plan_id), revision_digest: sourceRevision.digest,
       step_id_digest: operationPlanDigest(c.plan.steps[0]!.step_id) };
+    const expectedTaskIdentityDigest = planTaskIdentityDigest(sourceCheckpoint.owner, sourceCheckpoint.channel,
+      sourceCheckpoint.goal, c.plan.plan_id, c.plan.request_id);
     const destinationRequestId = randomUUID();
     const task = "Plan a safe follow-up from a selected historical action report; require fresh observation before claiming current file state.";
     const computeRequest = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: "fixture-owner",
@@ -342,6 +354,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(context?.data_exposure.input_sources).toContain("selected_operation_result_observations");
     const serializedInput = JSON.stringify(compute.command.payload.messages);
     expect(serializedInput).toContain("reported_success");
+    expect(serializedInput).toContain(expectedTaskIdentityDigest);
     expect(serializedInput).toContain(sourceRef.plan_id_digest);
     expect(serializedInput).not.toContain(c.workspace);
     expect(serializedInput).not.toContain("notes.txt");
@@ -362,7 +375,8 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       entry.plan_id === operationPlanDigest(nextCandidate.plan_id));
     expect(retained?.compute_source_observations).toHaveLength(1);
     expect(retained?.compute_source_observations?.[0]).toMatchObject({ source: "verified_file_write_result",
-      operation: "file.write", effect_observation: "reported_success", adoption_status: "observation_only",
+      operation: "file.write", task_identity_digest: expectedTaskIdentityDigest,
+      effect_observation: "reported_success", adoption_status: "observation_only",
       used_as_world_truth: false, used_for_authority: false, may_execute: false });
     const publicProjection = projectOperationPlanStatus(c.hds.getRuntimeSnapshot().operation_plans);
     expect(publicProjection.status).toBe("available");
@@ -384,6 +398,8 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const sourceCheckpoint = c.j.load()!.plans[0]!;
     const sourceResult = sourceCheckpoint.results[0]!;
     expect(sourceResult.operation).toBe("file.search");
+    const expectedTaskIdentityDigest = planTaskIdentityDigest(sourceCheckpoint.owner, sourceCheckpoint.channel,
+      sourceCheckpoint.goal, c.plan.plan_id, c.plan.request_id);
     c.hds.closeOperationPlanMemory();
     c.hds = c.createHds(c.j, true);
     c.purposeBinding = installTestPurpose(c.hds);
@@ -404,7 +420,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const destinationRequestId = randomUUID();
     const compute = c.hds.decide(makeComputeRequest(destinationRequestId));
     if (compute.command?.type !== "llm_call") throw new Error(`selected search observation was not routed to C: ${compute.log.commit.reason}`);
-    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v2");
+    expect(compute.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-source-observations.v3");
     expect(compute.command.payload.compute_context?.data_exposure.input_sources)
       .toContain("selected_operation_result_observations");
     const observationMessage = compute.command.payload.messages.find((message) =>
@@ -415,7 +431,8 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     };
     expect(observationPayload.observations).toHaveLength(1);
     expect(observationPayload.observations[0]).toMatchObject({ source: "verified_file_search_result",
-      operation: "file.search", plan_binding_status: "verified", plan_validation_status: "matched",
+      operation: "file.search", task_identity_digest: expectedTaskIdentityDigest,
+      plan_binding_status: "verified", plan_validation_status: "matched",
       effect_observation: "reported_success", match_count: 1, visited_files: 1,
       expires_at_ms: sourceResult.expires_at_ms, search_completeness: "unknown",
       adoption_status: "observation_only", used_as_world_truth: false, used_for_authority: false, may_execute: false });
@@ -940,6 +957,11 @@ describe("受領済みM実観測→有限C射影→表示前J照合", () => {
     expect(decision.log.memory_capture_suppressed_for).toBe("operation_result_reflection");
     expect(c.oldMemory.capture).toHaveBeenCalledTimes(calls.capture); expect(c.oldMemory.recent).toHaveBeenCalledTimes(calls.recent);
     const visible = JSON.stringify(command.payload);
+    const planState = c.j.load()!.plans[0]!;
+    expect(visible).toContain("operation-result-current-projection.v2");
+    expect(command.payload.compute_context?.local_p_version).toBe("blue-tanuki.result-reflection.v2");
+    expect(visible).toContain(planTaskIdentityDigest(planState.owner, planState.channel, planState.goal,
+      c.plan.plan_id, c.plan.request_id));
     for (const raw of [c.workspace, "blue.txt", '"matches"', c.admission.ticket_id, c.cmd.id, c.plan.plan_id]) expect(visible).not.toContain(raw);
     expect(visible).toContain('completeness'); expect(visible).toContain('not_assessed');
     expect(c.hds.operationPlanCommandIsCurrent(command)).toBe(true);

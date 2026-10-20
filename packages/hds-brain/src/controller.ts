@@ -2365,7 +2365,7 @@ ${planControl.question}`,
       const digest = operationPlanDigest(reflection);
       return { id: randomUUID(), type: "llm_call", upstream_decision,
         constraints: { max_tokens: this.llm_route.max_tokens ?? 1024, timeout_ms: this.llm_route.timeout_ms ?? 30000 },
-        payload: { messages: [{ role: "system", content: `受領確認済みの限定観測から解釈候補だけを返してください。検索件数は観測値で、完全走査・不存在・世界真理・反証不存在・承認を証明しません。external_receiptのmatchedは限定digestの照合一致だけを表し、外部作用の成功・失敗・完了を証明しません。action_outcomeがoutcome_unknownなら、その不明状態を成功へ読み替えてはいけません。出力はJSONのみ: {"schema_version":"operation-result-reflection-candidate.v1","projection_digest":"${digest}","citations":[{"record_id":"引用元ID","record_digest":"引用元digest","interpretation":"未検証の解釈候補","uncertainty":"不確実性と追加観測の必要性"}]}。引用は下記だけ。tool・計画・意味更新・実行を発行しない。各解釈/不確実性は800文字以内。\n${JSON.stringify(reflection)}` },
+        payload: { messages: [{ role: "system", content: `受領確認済みの限定観測から解釈候補だけを返してください。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。検索件数は観測値で、完全走査・不存在・世界真理・反証不存在・承認を証明しません。external_receiptのmatchedは限定digestの照合一致だけを表し、外部作用の成功・失敗・完了を証明しません。action_outcomeがoutcome_unknownなら、その不明状態を成功へ読み替えてはいけません。出力はJSONのみ: {"schema_version":"operation-result-reflection-candidate.v1","projection_digest":"${digest}","citations":[{"record_id":"引用元ID","record_digest":"引用元digest","interpretation":"未検証の解釈候補","uncertainty":"不確実性と追加観測の必要性"}]}。引用は下記だけ。tool・計画・意味更新・実行を発行しない。各解釈/不確実性は800文字以内。\n${JSON.stringify(reflection)}` },
           { role: "user", content: req.content }], backend_hint: backendHint, model: this.llm_route.model,
           temperature: this.llm_route.temperature, compute_context: { schema_version: "blue-tanuki.compute-context.v1",
             projection_digest: digest, local_p_version: OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
@@ -2440,7 +2440,7 @@ ${planControl.question}`,
     const planComputeObservationMessage: LLMCallPayload["messages"][number] | undefined =
       planCompute?.source_observations?.length ? {
         role: "system",
-        content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。file.writeは過去の作用報告、file.searchは観測時刻と有効期限の付いた検索件数要約です。file.searchの件数は検索の完全性や、観測後の状態を保証しません。どちらも目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、作用時点の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payloadは意図的に含めていません。期限切れや追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
+        content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。file.writeは過去の作用報告、file.searchは観測時刻と有効期限の付いた検索件数要約です。file.searchの件数は検索の完全性や、観測後の状態を保証しません。どちらも目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、作用時点の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payloadは意図的に含めていません。期限切れや追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
           used_as_world_truth: false, used_for_authority: false, may_execute: false })}`,
       } : undefined;
     const computeContextMessages = [...memoryMessages, ...(planPurposeMessage ? [planPurposeMessage] : []),

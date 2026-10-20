@@ -24,6 +24,8 @@ export type OperationPlanComputeSourceObservationReference = z.infer<typeof Oper
 const OperationPlanComputeSourceObservationCommon = {
   schema_version: z.literal("operation-plan-compute-source-observation.v1"),
   plan_id_digest: Digest,
+  /** Stable J-owned task correlation; it does not establish semantic fit or authority. */
+  task_identity_digest: Digest.optional(),
   revision_digest: Digest,
   step_id_digest: Digest,
   plan_binding_status: z.literal("verified"),
@@ -51,7 +53,7 @@ export const OperationPlanComputeSourceObservationSchema = z.discriminatedUnion(
 ]);
 export type OperationPlanComputeSourceObservation = z.infer<typeof OperationPlanComputeSourceObservationSchema>;
 export const OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION =
-  "blue-tanuki.plan-compute-source-observations.v2";
+  "blue-tanuki.plan-compute-source-observations.v3";
 /** Explicit task input for internal plan computation; the binding selects context, not authority. */
 export const OperationPlanComputeInputSchema = z.object({
   task: z.string().trim().min(1).max(20_000),
@@ -212,7 +214,7 @@ export const OperationPlanControlSchema = z.discriminatedUnion("action", [
 export type OperationPlanControl = z.infer<typeof OperationPlanControlSchema>;
 export type OperationPlanReflectionControl = Extract<OperationPlanControl, { action: "reflect" }>;
 export type OperationPlanReceiptReconciliationControl = Extract<OperationPlanControl, { action: "reconcile" }>;
-export const OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION = "blue-tanuki.result-reflection.v1";
+export const OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION = "blue-tanuki.result-reflection.v2";
 /** Cの解釈候補。形状・引用一致は意味採用や実行許可を表さない。 */
 export const OperationPlanReflectionCandidateSchema = z.object({
   schema_version: z.literal("operation-result-reflection-candidate.v1"), projection_digest: Digest,

@@ -15,8 +15,8 @@ export type ResultObservationCitation = ResultObservationCitationBase & (
         match_count: number; observed_receipt_digest?: string; action_outcome: "outcome_unknown" } }
 );
 export interface ResultObservationProjection {
-  schema_version: "operation-result-current-projection.v1";
-  scope: { plan_handle: string; revision_digest: string; owner_digest: string; channel_digest: string };
+  schema_version: "operation-result-current-projection.v2";
+  scope: { plan_handle: string; task_identity_digest: string; revision_digest: string; owner_digest: string; channel_digest: string };
   citations: ResultObservationCitation[];
   used_for_authority: false; memory_adoption: false; may_execute: false;
 }
