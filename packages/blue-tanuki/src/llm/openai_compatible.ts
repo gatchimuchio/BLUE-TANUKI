@@ -123,6 +123,11 @@ function parseResponse(provider: string, data: unknown, requestedModel: string):
     tokens_used: tokenCount(provider, data.usage),
     model: typeof responseModel === "string" ? responseModel : requestedModel,
     ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    // Optional provider extension carrying an untrusted C candidate. Executor
+    // removes it from user-visible content and HDS remains its only consumer.
+    ...(Object.hasOwn(choice.message, "meaning_update_proposal")
+      ? { meaning_update_proposal: choice.message.meaning_update_proposal }
+      : {}),
   };
 }
 

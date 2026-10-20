@@ -58,6 +58,20 @@ describe("OpenAICompatibleBackend", () => {
     });
   });
 
+  it("preserves an optional meaning-update candidate extension for HDS review", async () => {
+    const proposal = { schema_version: "blue-tanuki.meaning-update-proposal.v3", candidate_meaning: "synthetic" };
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      model: "provider-model",
+      choices: [{ message: { content: "safe user-facing answer", meaning_update_proposal: proposal } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+    const backend = new OpenAICompatibleBackend({ endpoint: "https://example.test/v1", defaultModel: "configured-model" });
+    const response = await backend.call({ messages: [{ role: "user", content: "ping" }] });
+
+    expect(response).toMatchObject({ content: "safe user-facing answer", meaning_update_proposal: proposal });
+  });
+
   it("surfaces provider errors without making the provider authoritative", async () => {
     globalThis.fetch = (async () =>
       new Response("bad request", { status: 400 })) as typeof fetch;

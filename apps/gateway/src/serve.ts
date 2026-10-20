@@ -1772,8 +1772,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
       await finishCronEventRestore(observationVerified);
     }
+    // Citation-reviewed feedback is the operator-facing projection and may
+    // intentionally omit this untrusted C extension. HDS exposes an eligible
+    // candidate here only after its contract and current-M checks pass.
     if (cmd.type === "llm_call" && fb.status === "success" &&
-        finalized.reviewed_feedback.meaning_update_proposal !== undefined &&
         hds.getMeaningUpdateProposalForOwnerReview(cmd.id)) {
       const queued = await submitMeaningUpdateAdoptionProposal({ source_command_id: cmd.id });
       if (!queued.accepted) gatewayLog.info("meaning update candidate was not queued for owner review", {

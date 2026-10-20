@@ -2,20 +2,21 @@
 
 ### 最新BUILD_BATCH：`QEB-01-C07.02-OWNER-L3-MEMORY-TRANSACTION`
 
-開始`main`／`origin/main`=`abd4e333cdbb54dd0b0a1efd1024101476823c62`。owner指定QE rev2.3三点正本（現物ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71B6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、C07.02とC07要求、C候補→HDS current-M review→owner L3→private M consumerを再読した。Windows localで実装し、既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持する。全体実装形状成立前に詳細QC／QAへ進まない。
+元のbatch開始`main`／`origin/main`=`abd4e333cdbb54dd0b0a1efd1024101476823c62`。先行C07.02実装commit=`29c5f4cb7239ee252270d3f1e0aef3d0d609261c`、その記録commit=`bec04e4d3bdb2040c80fa3876e052302b535e4b8`。今回のconsumer接続は`bec04e4`から再開した。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`）、適用`AGENTS.md`、作業標準、active指示、C07.02とC07要求を読み直した。Windows localで実装し、既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保持する。全体実装形状成立前に詳細QC／QAへ進まない。
 
-C V3 meaning-update候補をHDSの現在M参照で照合し、digestだけのowner L3 queueへ登録、明示的なcontent review、同一target/current-M版の再照合、JのL3承認後にprivate Mへ適用するGateway/HDS経路を追加した。承認操作は固定targetのL3 final reviewに限定し、Executorへ配送しない。queue・audit・CompleteHistoryへ候補本文を保存せず、承認とM適用後だけprivate Mに候補を保存する。semantic relation=`not_assessed`、follow-up=`unconfirmed`、`used_for_authority=false`、`may_execute=false`を維持する。拒否・stale・digest不一致はfail-closed。
+C V3 meaning-update候補をHDSの現在M参照で照合し、digestだけのowner L3 queueへ登録、明示的なcontent review、同一target/current-M版の再照合、JのL3承認後にprivate Mへ適用するGateway/HDS経路を追加した。Gatewayの出力用citation-reviewed projectionが候補fieldを除くため、L3 handoffはその投影に依存させず、HDS owner-review取得APIから起動する。隔離loopback HTTP経路で候補→current-M照合→digest-only L3 queue→resume tokenによる明示content review→approve→private M recordを一回通し、候補本文がqueue・audit・CompleteHistoryにないことを確認した。承認操作はExecutorへ配送しない。semantic relation=`not_assessed`、follow-up=`unconfirmed`、`used_for_authority=false`、`may_execute=false`を維持する。拒否・stale・digest不一致はfail-closed。
 
-実consumerのコード接続は`WIRED`。HDS合成transaction testとWebChatのdigest-bound content-review test、workspace typecheck／buildはPASS。ただしGatewayのHTTP serve routeからprivate M commitまでの一体runtime smokeは未実行であり、その実経路の観測は`BUILD_GAP`。C07.03の汚染隔離・旧解釈・再帰還、C07親、目的から作用結果・M・帰還へ至る一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`も`BUILD_GAP`。次は隔離されたGateway HTTP経路で候補→owner L3→Mを一回通し、以後C07.03の次consumerへ進む。
+C07.02の当該producer-consumer経路は`WIRED`。C07.03の誤記憶隔離・旧解釈・再帰還、C07親、目的から作用結果・M・帰還へ至る一仕事、`SYSTEM_SHAPED`／`BUILD_COVERED`は`BUILD_GAP`。次はC07.03の実consumerを接続する。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
-| HDS `meaning_update_memory.test.ts` | PASS、1/1。合成C候補、current-M review、L3未承認／content digest不一致拒否、承認後のprivate M recordとrestart/replayを確認。 |
-| WebChat focused content-review test | PASS、1/1（同fileの他94件skip）。digest-bound候補本文の明示review後表示とdigest mismatch時のapproval抑止を確認。 |
+| HDS `meaning_update_memory.test.ts`／WebChat focused content-review test | 先行C07.02実装で各1件PASS（WebChat同fileの他94件skip）。 |
+| Core `openai_compatible.test.ts` optional extension selector | PASS、1件（同fileの他4件skip）。 |
+| Gateway `meaning_update_gateway_smoke.test.ts` | PASS、1件。build後再実行もPASS。実HTTP serve process、L3/content review、private M、候補本文のaudit／CompleteHistory非保存を確認。 |
 | `pnpm typecheck`／`pnpm build` | PASS。workspace 15 projects。 |
-| Gateway HTTP integration smoke／全workspace suite／QE_QC／QE_QA／5OS実機／Actions／実provider・credential／外部業務作用 | 未実施。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／Actions／実provider・credential／外部業務作用 | 未実施。Windows localで限定疎通できたためActionsは未使用。 |
 
-C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`29c5f4cb7239ee252270d3f1e0aef3d0d609261c`を`main`へpushし、remote HEAD一致を確認した。local recovery branch／remote backup tagはcurrent=`29c5f4cb7239ee252270d3f1e0aef3d0d609261c`、previous=`abd4e333cdbb54dd0b0a1efd1024101476823c62`。closeout docs-only commitのpush後、main・refs・worktree・保持対象のuntracked stateを最終照合する。
+C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。作業再開時のHEAD=`bec04e4d3bdb2040c80fa3876e052302b535e4b8`。local recovery branchはcurrent=`bec04e4d3bdb2040c80fa3876e052302b535e4b8`／previous=`29c5f4cb7239ee252270d3f1e0aef3d0d609261c`、remote backup tagも同じ二世代（実測済み）。このbatchをpush後、HEAD・remote refs・worktree・保持対象untracked stateを再照合して記録する。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。
 
 ### 前回BUILD_BATCH：`QEB-01-C07.01-CANDIDATE-CONTENT-TO-HDS-REVIEW`
 
