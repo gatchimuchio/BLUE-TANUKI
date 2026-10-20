@@ -157,6 +157,7 @@ import {
 } from "./document_organization_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { OperationPlanStateStore } from "./operation_plan_store.js";
+import { OperationPlanWaitDeadlineScheduler } from "./operation_plan_wait_scheduler.js";
 import { operationPlanRecoveryEvidenceFromObservation } from "./operation_plan_recovery_evidence.js";
 import type { CanonicalStateStoreKey } from "./canonical_state_backup.js";
 import {
@@ -3880,7 +3881,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     return documentOrganizationCheckpointStore;
   };
 
-  const handler = async (req: InboundRequest): Promise<void> => {
+  const handleInbound = async (req: InboundRequest): Promise<void> => {
     const boundary = planGatewayInboundBoundary(req);
     const authorityReq = boundary.request;
     // Gateway history, reply, and execution paths use only authorityReq, which
@@ -4109,10 +4110,31 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       return;
     }
 
+    if (command?.type === "noop" && command.payload.control_event === "operation_plan_wait_registered") {
+      const waitId = command.payload.wait_id;
+      const wait = typeof waitId === "string"
+        ? hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === waitId && candidate.state === "waiting")
+        : undefined;
+      if (!wait) throw new Error("operation plan wait registration was not durable");
+      const content = `この仕事の返信／期限待機をJの永続状態へ登録しました。期限: ${new Date(wait.deadline_at_ms).toISOString()}。待機中にLLMは呼び出しません。`;
+      const feedback: ExecuteFeedback = { command_id: command.id, status: "success", result: { content },
+        metrics: { duration_ms: 0 } };
+      const finalized = finalizeCommandOutput({ hds, command, feedback, target_surface: "channel", request_id: log.request_id });
+      recordFinalOutputHistory(log, authorityReq, authorityReq.user, finalized.output_audit, command);
+      if (finalized.rendered_output) await dispatcher.dispatch({ channel: authorityReq.channel,
+        target: replyTarget(authorityReq), content: finalized.rendered_output },
+      { command_id: command.id, upstream_commit_hash: log.commit.hash });
+      return;
+    }
+
     if (command) {
       await executeAndEcho(command, log, authorityReq);
       return;
     }
+
+    // A deadline wake is a private system event. A rejected/stale wake must not
+    // produce a user-facing reply or fall through to an ordinary C call.
+    if (authorityReq.metadata?.["blue_tanuki.operation_plan.wait_deadline_id"] !== undefined) return;
 
     // No command means the upstream decision is sent back to the user.
     const issued =
@@ -4131,7 +4153,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     );
   };
 
-  await router.start(handler);
+  const waitDeadlineScheduler = new OperationPlanWaitDeadlineScheduler({
+    list_waits: () => hds.listOperationPlanWaits(),
+    wait_context: (waitId) => {
+      const context = hds.operationPlanWaitContext(waitId);
+      return context ? { goal: context.goal, owner: context.owner, channel: context.channel } : null;
+    },
+    dispatch: handleInbound,
+    log: (message, waitId) => gatewayLog.warn(message, { wait_id: waitId }),
+  });
+  await router.start(async (req) => {
+    try { await handleInbound(req); }
+    finally { waitDeadlineScheduler.refresh(); }
+  });
+  waitDeadlineScheduler.start();
   gatewayLog.info("inbound channels", { channels: router.list().join(", ") });
   gatewayLog.info("outbound channels", { channels: dispatcher.list().join(", ") });
   gatewayLog.info("webchat listening", {
@@ -4142,6 +4177,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     shutdown: async () => {
       gatewayLog.info("shutting down");
       gatewayShuttingDown = true;
+      waitDeadlineScheduler.stop();
       clearInterval(failureMemoryVerificationTimer);
       emergencyStop.active = true;
       for (const controller of executionControllers) controller.abort();

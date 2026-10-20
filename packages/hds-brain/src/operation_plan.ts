@@ -20,10 +20,13 @@ import {
   OperationPlanGoalPurposeRelationRecordSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   OperationPlanMemoryInterpretationDependencySchema,
+  OperationPlanWaitStateSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
   type OperationPlanMemoryInterpretationDependency,
   type OperationPlanReceiptReconciliationControl,
+  type OperationPlanWaitState,
   canonicalExecutorCommandBytes,
+  isGatewayInternalInboundRequest,
 } from "@blue-tanuki/protocol";
 import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
@@ -57,6 +60,7 @@ type MemoryInterpretationReviewSnapshot = {
 
 /** Stable across plan revisions; the digests correlate a task but confer no authority. */
 function operationPlanTaskIdentityDigest(plan: PlanState): string {
+  if (plan.task_identity_digest) return plan.task_identity_digest;
   const first = plan.revisions[0]!.plan;
   return operationPlanDigest({
     schema_version: "blue-tanuki.operation-plan-task-identity.v1",
@@ -618,6 +622,129 @@ export class OperationPlanLedger {
     return true;
   }
 
+  /** Validate a bounded, explicit J wait request without changing plan or execution authority. */
+  inspectWait(control: Extract<OperationPlanControl, { action: "wait" }>, caller: InboundRequest, nowMs = Date.now()): {
+    readonly wait_id: string;
+    readonly plan_id_digest: string;
+    readonly task_identity_digest: string;
+    readonly revision_digest: string;
+    readonly deadline_at_ms: number;
+    readonly goal: string;
+  } {
+    if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
+    if (!this.port) throw new Error("plan_wait_state_not_durable");
+    const plan = this.ownedPlan(control.plan_id, caller);
+    const current = plan.revisions.at(-1)!;
+    if (control.revision_digest !== current.digest) throw new Error("plan_revision_changed");
+    if (!Number.isSafeInteger(control.deadline_at_ms) || control.deadline_at_ms <= nowMs) {
+      throw new Error("plan_wait_deadline_invalid");
+    }
+    if (plan.bindings.some((binding) => ["selected", "intent_committed", "outcome_unknown"].includes(binding.status))) {
+      throw new Error("plan_wait_execution_unresolved");
+    }
+    const planIdDigest = operationPlanDigest(current.plan.plan_id);
+    const taskIdentityDigest = operationPlanTaskIdentityDigest(plan);
+    const sessionScope = caller.session_id ?? `${caller.channel}:${caller.user}`;
+    const sessionIdDigest = operationPlanDigest({ schema_version: "operation-plan-wait-session.v1", session_scope: sessionScope });
+    const waitId = operationPlanDigest({ schema_version: "operation-plan-wait.v1", plan_id_digest: planIdDigest,
+      task_identity_digest: taskIdentityDigest, revision_digest: current.digest, owner_digest: operationPlanDigest(plan.owner),
+      channel_digest: operationPlanDigest(plan.channel), session_id_digest: sessionIdDigest,
+      deadline_at_ms: control.deadline_at_ms });
+    if ((this.state.waits ?? []).some((wait) => wait.state === "waiting" &&
+        (wait.wait_id === waitId || wait.task_identity_digest === taskIdentityDigest))) {
+      throw new Error("plan_wait_already_active");
+    }
+    return { wait_id: waitId, plan_id_digest: planIdDigest, task_identity_digest: taskIdentityDigest,
+      revision_digest: current.digest, deadline_at_ms: control.deadline_at_ms, goal: plan.goal };
+  }
+
+  /** Persist one J-owned wait state against the exact current plan revision. */
+  registerWait(control: Extract<OperationPlanControl, { action: "wait" }>, caller: InboundRequest,
+    nowMs = Date.now()): OperationPlanWaitState {
+    const inspected = this.inspectWait(control, caller, nowMs);
+    const plan = this.ownedPlan(control.plan_id, caller);
+    const sessionScope = caller.session_id ?? `${caller.channel}:${caller.user}`;
+    const wait = OperationPlanWaitStateSchema.parse({
+      wait_id: inspected.wait_id,
+      plan_id_digest: inspected.plan_id_digest,
+      task_identity_digest: inspected.task_identity_digest,
+      revision_digest: inspected.revision_digest,
+      owner_digest: operationPlanDigest(plan.owner),
+      channel_digest: operationPlanDigest(plan.channel),
+      session_id_digest: operationPlanDigest({ schema_version: "operation-plan-wait-session.v1", session_scope: sessionScope }),
+      deadline_at_ms: inspected.deadline_at_ms,
+      created_at_ms: nowMs,
+      state: "waiting",
+      used_for_authority: false,
+      may_execute: false,
+    });
+    this.change((state) => { state.waits = [...(state.waits ?? []), wait]; });
+    return structuredClone(wait);
+  }
+
+  /** One unambiguous inbound event can wake a wait in its owner/channel session. */
+  matchWaitForInbound(caller: InboundRequest, nowMs = Date.now()): OperationPlanWaitState | null {
+    const sessionScope = caller.session_id ?? `${caller.channel}:${caller.user}`;
+    const ownerDigest = operationPlanDigest(caller.user);
+    const channelDigest = operationPlanDigest(caller.channel);
+    const sessionIdDigest = operationPlanDigest({ schema_version: "operation-plan-wait-session.v1", session_scope: sessionScope });
+    const matches = (this.state.waits ?? []).filter((wait) => wait.state === "waiting" &&
+      nowMs < wait.deadline_at_ms &&
+      wait.owner_digest === ownerDigest && wait.channel_digest === channelDigest && wait.session_id_digest === sessionIdDigest &&
+      wait.revision_digest === this.currentRevisionDigest(wait.plan_id_digest));
+    return matches.length === 1 ? structuredClone(matches[0]!) : null;
+  }
+
+  activeWait(waitId: string): OperationPlanWaitState | null {
+    if (!/^[a-f0-9]{64}$/.test(waitId)) return null;
+    const wait = (this.state.waits ?? []).find((candidate) => candidate.wait_id === waitId &&
+      candidate.state === "waiting" && candidate.revision_digest === this.currentRevisionDigest(candidate.plan_id_digest));
+    return wait ? structuredClone(wait) : null;
+  }
+
+  /** Consume a canonical reply or due-deadline event once; the event ID is correlation only. */
+  resumeWait(waitId: string, eventId: string, reason: "reply" | "deadline", nowMs = Date.now()): OperationPlanWaitState | null {
+    if (!/^[a-f0-9]{64}$/.test(waitId) || !eventId.trim()) return null;
+    const current = (this.state.waits ?? []).find((wait) => wait.wait_id === waitId);
+    if (!current || current.state !== "waiting" || current.revision_digest !== this.currentRevisionDigest(current.plan_id_digest)) return null;
+    if ((reason === "deadline" && nowMs < current.deadline_at_ms) || (reason === "reply" && nowMs >= current.deadline_at_ms)) return null;
+    const eventDigest = operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: eventId });
+    const resumed = OperationPlanWaitStateSchema.parse({ ...current, state: "resumed", resumed_at_ms: nowMs,
+      wake_reason: reason, wake_event_id_digest: eventDigest });
+    this.change((state) => {
+      const waits = state.waits ?? [];
+      const index = waits.findIndex((wait) => wait.wait_id === waitId && wait.state === "waiting");
+      if (index < 0) throw new Error("plan_wait_state_changed");
+      waits[index] = resumed;
+      state.waits = waits;
+    });
+    return structuredClone(resumed);
+  }
+
+  listWaits(): readonly OperationPlanWaitState[] {
+    return structuredClone(this.state.waits ?? []);
+  }
+
+  resumedWaitTaskIdentityDigest(waitId: string, eventId: string): string | null {
+    if (!/^[a-f0-9]{64}$/.test(waitId) || !eventId.trim()) return null;
+    const eventDigest = operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: eventId });
+    const wait = (this.state.waits ?? []).find((candidate) => candidate.wait_id === waitId &&
+      candidate.state === "resumed" && candidate.wake_event_id_digest === eventDigest);
+    return wait?.task_identity_digest ?? null;
+  }
+
+  waitContext(wait: OperationPlanWaitState): { readonly goal: string; readonly owner: string; readonly channel: string } | null {
+    const plan = this.state.plans.find((candidate) => operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
+    if (wait.state !== "waiting" || !plan || operationPlanTaskIdentityDigest(plan) !== wait.task_identity_digest ||
+        plan.revisions.at(-1)?.digest !== wait.revision_digest) return null;
+    return { goal: plan.goal, owner: plan.owner, channel: plan.channel };
+  }
+
+  private currentRevisionDigest(planIdDigest: string): string | null {
+    const plan = this.state.plans.find((candidate) => operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === planIdDigest);
+    return plan?.revisions.at(-1)?.digest ?? null;
+  }
+
   /** Persist a non-authority hold before restoring either J or M as a whole store. */
   holdForCanonicalMemoryRestore(command: ExecuteCommand): boolean {
     if (command.type !== "tool_call" || command.payload.tool_name !== "recovery.restore" ||
@@ -968,6 +1095,18 @@ export class OperationPlanLedger {
     if (plan.request_id !== expected || this.state.plans.some((p) => p.revisions[0]!.plan.plan_id === plan.plan_id)) {
       throw new Error("plan_source_binding_mismatch");
     }
+    const parentWaitId = origin.metadata?.["blue_tanuki.operation_core.parent_wait_id"];
+    let parentTaskIdentityDigest: string | undefined;
+    if (parentWaitId !== undefined) {
+      if (!isGatewayInternalInboundRequest(origin) || typeof parentWaitId !== "string") {
+        throw new Error("plan_wait_resume_origin_invalid");
+      }
+      parentTaskIdentityDigest = this.resumedWaitTaskIdentityDigest(parentWaitId, origin.id) ?? undefined;
+      if (!parentTaskIdentityDigest ||
+          origin.metadata?.["blue_tanuki.operation_core.parent_task_identity_digest"] !== parentTaskIdentityDigest) {
+        throw new Error("plan_wait_resume_binding_invalid");
+      }
+    }
     const rawGoalPurposeBinding = origin.metadata?.["blue_tanuki.operation_core.goal_purpose_binding"];
     let goalPurposeBinding: OperationPlanGoalPurposeBinding | undefined;
     if (rawGoalPurposeBinding !== undefined) {
@@ -1006,6 +1145,7 @@ export class OperationPlanLedger {
     const requestGoalCriteria = GoalCriteriaProjectionSchema.parse(projectRequestGoalCriteria(
       { ...origin, id: expected }, origin.content));
     this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: origin.content,
+      ...(parentTaskIdentityDigest ? { task_identity_digest: parentTaskIdentityDigest } : {}),
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
       ...(goalPurposeRelation ? { goal_purpose_relation: goalPurposeRelation } : {}),
       ...(verifiedComputeSourceObservations ? { compute_source_observations: verifiedComputeSourceObservations } : {}),
@@ -1109,6 +1249,10 @@ export class OperationPlanLedger {
     }
     if (control.action === "review") this.assertMemoryInterpretationDependenciesCurrent(p);
     if (control.action === "revise") {
+      const planIdDigest = operationPlanDigest(p.revisions[0]!.plan.plan_id);
+      if ((this.state.waits ?? []).some((wait) => wait.plan_id_digest === planIdDigest && wait.state === "waiting")) {
+        throw new Error("plan_wait_active");
+      }
       this.revisionImpact(p, control.plan);
       return { plan_id: control.plan_id, revision_digest: expected, goal: p.goal, recovery_hold_released: false };
     }

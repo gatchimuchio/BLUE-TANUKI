@@ -21,6 +21,7 @@ export const RESERVED_EXTERNAL_METADATA_KEYS = [
   "blue_tanuki.operator_surface",
   "blue_tanuki.operation_core",
   "blue_tanuki.operation_core.goal_purpose_binding",
+  "blue_tanuki.operation_plan",
   "blue_tanuki.channel_send",
   "blue_tanuki.runtime_ingress.version",
   "blue_tanuki.runtime_ingress.runtime_id_digest",
@@ -50,6 +51,9 @@ export interface GatewayInternalAuthorityMetadata extends MetadataObject {
   "blue_tanuki.operation_core.used_for_authority"?: false;
   "blue_tanuki.operation_core.planner_output_used_for_authority"?: false;
   "blue_tanuki.operation_core.ui_projection_used_for_authority"?: false;
+  "blue_tanuki.operation_core.parent_wait_id"?: string;
+  "blue_tanuki.operation_core.parent_task_identity_digest"?: string;
+  "blue_tanuki.operation_plan.wait_deadline_id"?: string;
   "blue_tanuki.operation_core.goal_purpose_binding"?: {
     goal_ref: string;
     purpose_version: number;
@@ -532,6 +536,7 @@ export function metadataKeyReservedForInternalAuthority(key: string): boolean {
   return (
     RESERVED_EXTERNAL_METADATA_KEY_SET.has(normalized) ||
     normalized.startsWith("blue_tanuki.operation_core.") ||
+    normalized.startsWith("blue_tanuki.operation_plan.") ||
     normalized.startsWith("blue_tanuki.channel_send.") ||
     normalized.startsWith("blue_tanuki.failure_review.")
   );

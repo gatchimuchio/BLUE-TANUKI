@@ -272,11 +272,46 @@ export const OperationPlanReceiptMemoryDeliverySchema = z.object({
 });
 export type OperationPlanReceiptMemoryDelivery = z.infer<typeof OperationPlanReceiptMemoryDeliverySchema>;
 
+/** J-owned durable wait linkage. It correlates one plan task with a reply or deadline and grants no authority. */
+export const OperationPlanWaitStateSchema = z.object({
+  wait_id: Digest,
+  plan_id_digest: Digest,
+  task_identity_digest: Digest,
+  revision_digest: Digest,
+  owner_digest: Digest,
+  channel_digest: Digest,
+  session_id_digest: Digest,
+  deadline_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  created_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  state: z.enum(["waiting", "resumed"]),
+  resumed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  wake_reason: z.enum(["reply", "deadline"]).optional(),
+  wake_event_id_digest: Digest.optional(),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().superRefine((wait, context) => {
+  const resumedFieldsPresent = wait.resumed_at_ms !== undefined && wait.wake_reason !== undefined &&
+    wait.wake_event_id_digest !== undefined;
+  if (wait.deadline_at_ms <= wait.created_at_ms) {
+    context.addIssue({ code: "custom", message: "operation_plan_wait_deadline_must_follow_creation" });
+  }
+  if ((wait.state === "waiting" && (wait.resumed_at_ms !== undefined || wait.wake_reason !== undefined ||
+      wait.wake_event_id_digest !== undefined)) || (wait.state === "resumed" && !resumedFieldsPresent)) {
+    context.addIssue({ code: "custom", message: "operation_plan_wait_state_fields_mismatch" });
+  }
+  if (wait.resumed_at_ms !== undefined && wait.resumed_at_ms < wait.created_at_ms) {
+    context.addIssue({ code: "custom", message: "operation_plan_wait_resume_precedes_creation" });
+  }
+});
+export type OperationPlanWaitState = z.infer<typeof OperationPlanWaitStateSchema>;
+
 export const OperationPlanControlSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("review"), plan_id: Id, revision_digest: Digest, step_id: Id,
     goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional() }).strict(),
   z.object({ action: z.literal("reconcile"), plan_id: Id, revision_digest: Digest, step_id: Id }).strict(),
   z.object({ action: z.literal("revise"), plan_id: Id, expected_revision_digest: Digest, plan: OperationPlanSchema }).strict(),
+  z.object({ action: z.literal("wait"), plan_id: Id, revision_digest: Digest,
+    deadline_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict(),
   z.object({ action: z.literal("reflect"), plan_id: Id, revision_digest: Digest,
     step_ids: z.array(Id).min(1).max(8), question: z.string().trim().min(1).max(4000) }).strict(),
 ]);
@@ -293,9 +328,12 @@ export const OperationPlanReflectionCandidateSchema = z.object({
 
 export const OperationPlanCheckpointSchema = z.object({
   schema_version: z.literal("operation-plan-state.v1"),
+  waits: z.array(OperationPlanWaitStateSchema).max(256).optional(),
   shell_exec_result_observations: z.array(OperationPlanShellExecResultObservationSchema).max(256).optional(),
   plans: z.array(z.object({
     owner: Id, channel: Id, goal: z.string().min(1).max(200_000),
+    /** Stable task lineage across J-authorized wait/resume plan candidates; non-authority identity only. */
+    task_identity_digest: Digest.optional(),
     goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),
     goal_purpose_relation: OperationPlanGoalPurposeRelationRecordSchema.optional(),
     compute_source_observations: z.array(OperationPlanComputeSourceObservationSchema).max(8).optional(),

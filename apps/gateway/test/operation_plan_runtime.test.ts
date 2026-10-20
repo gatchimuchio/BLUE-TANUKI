@@ -1419,6 +1419,81 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     expect(hds.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
   });
 
+  it("永続waitを再起動後に正規返信から一度だけCへつなぎ、期限eventも再利用しない", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-wait-resume-"));
+    const databasePath = join(root, "state.sqlite");
+    const goal = "Wait for the owner reply before generating the next plan candidate";
+    const seed = plan(randomUUID(), "synthetic-root");
+    const seedCheckpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal,
+        revisions: [{ digest: operationPlanDigest(seed), plan: seed }], receipt_observations: [], bindings: [], results: [] }],
+    });
+    let store = new OperationPlanStateStore(databasePath);
+    let hds = new HDSUpperController({ operation_plan_state: store });
+    try {
+      store.compareAndSet(null, seedCheckpoint);
+      hds.close();
+      store.close();
+
+      store = new OperationPlanStateStore(databasePath);
+      hds = new HDSUpperController({ operation_plan_state: store });
+      const deadlineAt = Date.now() + 60_000;
+      const register = hds.decide(request(`plan:wait ${JSON.stringify({ plan_id: seed.plan_id,
+        revision_digest: operationPlanDigest(seed), deadline_at_ms: deadlineAt })}`));
+      expect(register.command?.type).toBe("noop");
+      const wait = hds.listOperationPlanWaits()[0];
+      expect(wait).toMatchObject({ state: "waiting", deadline_at_ms: deadlineAt,
+        used_for_authority: false, may_execute: false });
+
+      const persisted = store.load();
+      expect(persisted?.waits?.[0]?.wait_id).toBe(wait?.wait_id);
+      hds.close();
+      store.close();
+      store = new OperationPlanStateStore(databasePath);
+      hds = new HDSUpperController({ operation_plan_state: store });
+
+      const reply = request("The owner supplied the awaited synthetic detail");
+      const resumed = hds.decide(reply);
+      expect(resumed.command?.type).toBe("llm_call");
+      expect(resumed.command?.type === "llm_call" && resumed.command.payload.compute_context?.local_p_version)
+        .toBe("blue-tanuki.plan-compute-purpose-relation.v1");
+      expect(hds.listOperationPlanWaits()[0]).toMatchObject({ state: "resumed", wake_reason: "reply" });
+
+      const next = plan(reply.id, "synthetic-root");
+      hds.onFeedback({ command_id: resumed.command!.id, status: "success",
+        result: { operation_core: { status: "valid_plan", plan: next } }, metrics: { duration_ms: 1 } });
+      expect(store.load()?.plans.find((candidate) => candidate.revisions[0]?.plan.plan_id === next.plan_id)
+        ?.task_identity_digest).toBe(wait?.task_identity_digest);
+
+      const secondDeadlineAt = Date.now() + 60_000;
+      const secondWaitRegistration = hds.decide(request(`plan:wait ${JSON.stringify({ plan_id: next.plan_id,
+        revision_digest: operationPlanDigest(next), deadline_at_ms: secondDeadlineAt })}`));
+      expect(secondWaitRegistration.command?.type).toBe("noop");
+      const deadlineWait = hds.listOperationPlanWaits().find((candidate) => candidate.state === "waiting");
+      expect(deadlineWait).toBeDefined();
+      const duplicateDeadline = createGatewayInternalInboundRequest({
+        id: `plan-wait-deadline-${deadlineWait!.wait_id}`, channel: "webchat", user: "fixture-owner",
+        content: "Persistent operation-plan wait deadline event", timestamp: Date.now(),
+        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "system",
+          "blue_tanuki.trust_level": "trusted", "blue_tanuki.process_kind": "cron",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_plan.wait_deadline_id": deadlineWait!.wait_id },
+      });
+      const deadlineClock = vi.spyOn(Date, "now").mockReturnValue(secondDeadlineAt);
+      try {
+        const deadlineResume = hds.decide(duplicateDeadline);
+        expect(deadlineResume.command?.type).toBe("llm_call");
+        expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === deadlineWait!.wait_id))
+          .toMatchObject({ state: "resumed", wake_reason: "deadline" });
+      } finally { deadlineClock.mockRestore(); }
+      expect(hds.decide(duplicateDeadline).command).toBeNull();
+    } finally {
+      hds.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("SUSPENDした計画選択はresumeで未結合commandへ変わらない", async () => {
     const hds = new HDSUpperController(); const origin = request("plan:compute fixture"); const candidate = plan(origin.id, "synthetic-root");
     candidate.steps[0]!.parameters!.query = "rm -rf foo";
