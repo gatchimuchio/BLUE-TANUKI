@@ -14,7 +14,7 @@ concurrency:
 jobs:
   linux-workspace-quota:
     name: Native Linux build and focused shell tests
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Check out selected commit
@@ -122,7 +122,7 @@ jobs:
             echo "managed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Diagnose a minimal OverlayFS mount in a user namespace
+      - name: Diagnose OverlayFS options incrementally in a user namespace
         shell: bash
         run: |
           set -euo pipefail
@@ -184,14 +184,42 @@ jobs:
           if result != 0:
               raise SystemExit(0)
 
-          options = 'lowerdir=/workspace-lower,upperdir=/workspace-storage/upper,workdir=/workspace-storage/work,userxattr,redirect_dir=nofollow,metacopy=off,index=off'
-          result, error = mount('overlay', '/workspace', 'overlay', 2 | 4, options)
-          report('overlay_mount', result, error)
-          if result == 0:
+          variants = (
+              ('userxattr', 'userxattr'),
+              ('redirect_nofollow', 'userxattr,redirect_dir=nofollow'),
+              ('metacopy_off', 'userxattr,redirect_dir=nofollow,metacopy=off'),
+              ('production', 'userxattr,redirect_dir=nofollow,metacopy=off,index=off'),
+          )
+          for name, extra_options in variants:
+              upper = f'/workspace-storage/upper-{name}'
+              work = f'/workspace-storage/work-{name}'
+              os.mkdir(upper, 0o700)
+              os.mkdir(work, 0o700)
+              options = f'lowerdir=/workspace-lower,upperdir={upper},workdir={work},{extra_options}'
+              result, error = mount('overlay', '/workspace', 'overlay', 2 | 4, options)
+              report(f'overlay_mount_{name}', result, error)
+              if result != 0:
+                  continue
               try:
-                  print(f"overlay_readback={open('/workspace/probe', encoding='utf-8').read()}", flush=True)
+                  readback = open('/workspace/probe', encoding='utf-8').read()
+                  with open('/workspace/write-probe', 'w', encoding='utf-8') as output:
+                      output.write('fixture-write')
+                  writeback = open('/workspace/write-probe', encoding='utf-8').read()
+                  os.unlink('/workspace/probe')
+                  io_ok = (
+                      readback == 'fixture'
+                      and writeback == 'fixture-write'
+                      and not os.path.exists('/workspace/probe')
+                  )
+                  print(f'overlay_io_{name}={"success" if io_ok else "failed"}', flush=True)
+              except OSError as exc:
+                  print(f'overlay_io_{name}=errno_{exc.errno}', flush=True)
               finally:
-                  libc.umount(b'/workspace')
+                  result = libc.umount(b'/workspace')
+                  error = ctypes.get_errno()
+                  report(f'overlay_unmount_{name}', result, error)
+                  if result != 0:
+                      raise SystemExit(2)
           PY
           chmod 0600 "$probe_script"
           set +e

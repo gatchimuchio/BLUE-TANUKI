@@ -56,6 +56,8 @@ WindowsではLinux native runtimeを実行できない。D4-Pocket現行AGENTS �
 
 2026-10-20、WSL Ubuntu 24.04／Bubblewrap 0.9.0で現行helperを`cargo build --locked --offline`し、空の一時rootに対して合成`true`要求を一回実行した。`--size`の機能preflightを通過した後、production相当のOverlayFS mountで`linux_sandbox_start_or_shutdown_failed:workspace_overlay_mount_access_denied_paths_accessible`（exit 2）となり、commandは実行されなかった。一時rootが空であることを確認して作成した正確なdirectoryだけを除去した。これはWSL限定の起動経路診断であり、Linux native runtimeの証拠ではない。
 
+次の補助検証は、D4-Pocket現行AGENTS §3.1の条件内で`workflow_dispatch`のみを使う。第34回はUbuntu 22.04 runnerのBubblewrap 0.6.1が`--size`を認識せずOverlayFSへ未到達であり、WSL 24.04では実mountがEACCESとなった。既存workflowはroot namespaceとuser namespaceの本番option一括probeを持つが、user namespace内でOverlayFS optionを段階追加する比較はない。そのため一回の新規診断でUbuntu 24.04 runner上の合成lower／tmpfs upper・workに`userxattr`、`redirect_dir=nofollow`、`metacopy=off`、`index=off`を順番に加え、mount errnoとfixture read/write/whiteout結果だけを記録する。runnerは機能条件`bwrap --help`に`--size`を含むUbuntu 24.04に固定する。PR／自動trigger／artifact／credential／外部作用は作らない。これはmount optionの原因層を特定する補助診断であり、製品runtimeの合格やLinux native QAを示さない。Action実行前にpush済みbranch HEADを固定し、run後は正確なSHA・結果・cleanup・証明範囲を記録する。production focused testが失敗するSHAはmainへ統合しない。
+
 ### 完了したBUILD_BATCH：`QEB-01-F01.02-D07.02-LINUX-PER-FILE-SIZE-BOUND`
 
 WindowsではLinux native runtimeを実行できないため、ownerが許可したD4-Pocket現行AGENTS §3.1条件のmanual `workflow_dispatch`を使った。一時workflow登録commitは`088733474aa34f69d37bedd9c95c1b6258331d8a`。最初の[run 39308397980](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39308397980)は既存runner AppArmor profileを変更しないガードで停止し、build/test未実行。修正版の[run 39309019591](https://github.com/gatchimuchio/BLUE-TANUKI/actions/runs/39309019591)ではpolicyを保ったnamespace probeとbuildは成功したが、stderrのOS文言差でtest期待値が不一致だった。
