@@ -18,7 +18,7 @@ batch開始時`main`／`origin/main`=`0f2d21334b4bed4a862e1d05f68efc933489411d`�
 | `git diff --check` | PASS。 |
 | 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部業務作用 | 未実施。全体形状成立後へ配置。Windows localで必要な技術確認ができるためActions未使用。 |
 
-C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。実装と文書closeout後の復元refはremote mainおよび二世代tagを照合して記録する。
+C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`79c6e9c795dcc0cdd8aa1ec8dee9bed863e12607`を`main`へpushし、remote HEAD一致を確認した。内部QE原典・全要求対応表・実資格・外部業務作用・公開／出荷判断は含めない。closeout後の復元refはcurrent=`closeout後のmain HEAD`／previous=`79c6e9c795dcc0cdd8aa1ec8dee9bed863e12607`へ揃える。
 
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
