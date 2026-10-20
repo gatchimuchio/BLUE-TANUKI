@@ -1,6 +1,21 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-### 最新BUILD_BATCH：`QEB-01-F01.01-OWNER-REVIEWED-EDIT-CONSUMER`
+### 最新BUILD_BATCH：`QEB-01-F01.01-REVIEWED-DIFF-TO-WORKSPACE-RESULT`
+
+開始HEAD／`main`／`origin/main`=`c11d7e455a37286d940f3f0db61f4c19677591e0`。owner指定QE rev2.3三点正本（ZIP SHA-256=`779452AC46ED2E42040AFDCBBF5F4E918B71F6FCCF436C194A69ED16D07F5E249`、仕様書=`84B470455DF396FC33EA7470EB948437A7FE611FCD15CCE894C1B5D2720644F0`、工程表=`7EDE8D84F34BC42ED183A0F45DBC2971FD5FFF3099F77BABACC56796A1893FE77`、施工指示書=`D91BF99BD6F54DBA04D7FBD4D8D4C53B73CB7420E44D789367DE6B212D4498D8`）、適用`AGENTS.md`／作業標準／active指示、F01.01要求と実装consumerを再読した。Windows localで施工し、untracked Linux `target/`は保持した。
+
+前batchで実装したowner向け差分確認のafter-content digestを、今回のOperation Plan→Approval→Executor→workspace書込み後の実データ再読へ結合した。隔離fixtureの実適用結果digestが、レビュー対象のafter digestと一致することを接続確認した。F01.01の`adapter-fixture`範囲で「目的・対象版束縛→差分確認→承認経路→限定workspace編集→再読→J/M結果」を`WIRED`とする。これはGUI/native-liveのWorkspace往復を含むF01全体の完成ではない。F01.02のprocess／削除別作用、F01.03の実Workspace GUI・test・失敗復帰は後続consumerとして残る。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| file.edit差分→適用結果の限定Vitest | PASS、2 files／5 tests。対象外101 testsはskip。 |
+| `pnpm docs:check` | PASS。docs、日本語基底監査、licensing。日本語移行負債76件は既存継続項目。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite／QE_QC／QE_QA／5OS実機／実provider・credential／外部作用 | 未実施。BUILD_COVERED後へ配置。 |
+
+このbatchはtest consumerと状態記録だけを変更したため、前batch commit=`34b1d071808a222fd76b7eee8bb9ad348256d87d`でPASSしたproduction `typecheck`／15-project buildを繰り返さない。実装差分、commit／push、remote HEAD、二世代backup refsのcloseoutを下記へ記録する。次consumerはF01.02の現行実装から選ぶ。次単位開始時に三点正本・適用AGENTS・active指示・HEAD／差分を再読する。
+
+### 前回BUILD_BATCH：`QEB-01-F01.01-OWNER-REVIEWED-EDIT-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`fd09258e08793eea9efb7a363be15d4774844446`。owner指定QE rev2.3三点正本、適用`AGENTS.md`／作業標準／active指示、F01.01と`file.edit`のproducer・consumerを再読した。Windows localで施工し、既存untracked Linux `target/`は保持した。
 

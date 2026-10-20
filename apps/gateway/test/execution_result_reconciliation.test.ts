@@ -363,7 +363,9 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(feedback.status).toBe("success");
     expect(feedback.result).toEqual({ edited: true, replacements: 1,
       bytes_written: Buffer.byteLength("synthetic edited text\n") });
-    expect(readFileSync(join(c.workspace, "notes.txt"), "utf8")).toBe("synthetic edited text\n");
+    const appliedContent = readFileSync(join(c.workspace, "notes.txt"));
+    expect(appliedContent.toString("utf8")).toBe("synthetic edited text\n");
+    expect(createHash("sha256").update(appliedContent).digest("hex")).toBe(contentReview.after_content_digest);
     expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch))
       .toEqual({ adopted: 1, deferred: 0, stale_generation_archived: 0 });
 
