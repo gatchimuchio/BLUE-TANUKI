@@ -377,8 +377,8 @@ jobs:
             fi
           }
           trap cleanup EXIT
-          mount_helper="$(command -v mount.fuse3 || true)"
-          if [ -z "$mount_helper" ]; then
+          mount_helper=/usr/sbin/mount.fuse3
+          if [ ! -x "$mount_helper" ]; then
             echo "fuse_mount_helper_unavailable"
             exit 0
           fi
