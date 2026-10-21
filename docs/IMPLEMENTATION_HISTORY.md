@@ -2555,3 +2555,21 @@ HDSの開発者向け内部plan:computeが、親task・current purpose・plan cr
 E07.01のHDS producer→Executor C child compute→親candidate入力を`WIRED`とする。子roleの内容は権威・独立監査証明ではなく、各roleの効果・耐久・費用・provider差は未評価。E07親要求全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はE07.02「共有targetの直列確定」。
 
 ---
+
+### 履歴ログ：`QEB-36-E07.02-SHARED-TARGET-SERIALIZATION`
+
+開始HEAD／`main`／`origin/main`=`9e628e0c4164fce4196e879a7187beb51b0298ca`。現行rev2.3三点セット、適用`AGENTS.md`、active指示、E07.02とBroker target-version producer／Executor consumerを再同期した。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持し変更対象に含めていない。
+
+Executorの承認済みtool dispatch前にprocess-local keyed resource lockを取得する。file.write／file.edit／file.deleteはsandbox内で解決した実体pathのdigestを共通keyにし、異なるExecutor instanceでも同一Node.js process内で同じfile targetを直列化する。gmail.writeは既存のtarget identity digestをkeyに使う。lock待ち時間をexecution timeoutへ含め、呼出し元がtimeoutになっても実際のadapter promiseがsettleするまでlockを解放しない。既存のfile expected-target-version再照合、create-only、Gmail draft provider-state再確認を変更せず、lock後のconsumerで期待版が変わった作用を拒否する。pathやtarget内容をlock key・ログへ露出しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `executor_target_resource_lock.test.ts` | PASS、1 test。2つのExecutorから同じfile targetへ同時dispatchしてもadapterの同時実行数が1であることを確認。 |
+| `gmail_write_target_version.test.ts` | PASS、10 tests。合成draftへの並列sendは先行1回だけがPOSTし、後続はdraft消費後の古いprovider版で作用前に失敗することを確認。network接続なし。 |
+| `tools_builtin.test.ts` のfile.write／file.delete／file.edit選択確認 | PASS、3 tests。payload／対象版の差し替えを作用前に拒否し、競合後の対象を保持することを確認。既存delete fixtureの未定義`root`を`dir`へ修正。 |
+| `pnpm --filter @blue-tanuki/core run typecheck`／`git diff --check` | PASS。workspace build／全workspace suiteは未実施。 |
+| 実provider／credential、外部業務作用、5OS実機、QE_QC／QE_QA | 未実施。C08.03保留を維持し、全体形状成立後へ保持。 |
+
+E07.02のfile target mutationと既存Gmail write targetについて、Executor→resource lock→version-checking adapterを`WIRED`とする。lockはprocess-localであり別process間排他の証拠ではない。任意shell commandおよび未接続adapterの共有target coverageは`BUILD_GAP`。E07親要求全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はE07.03「親取消と子processの収束」。
+
+---

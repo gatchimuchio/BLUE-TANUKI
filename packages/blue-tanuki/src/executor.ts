@@ -54,7 +54,8 @@ import {
   type ComputeRequest,
 } from "./llm/compute.js";
 import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolContentReview, ToolRegistry } from "./tools/registry.js";
-import { fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool, shellExecTool } from "./tools/builtin.js";
+import { brokerFileResourceLockDigest, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool,
+  shellExecTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest } from "./tools/google_write.js";
 import type { SessionStore } from "./sessions/types.js";
@@ -190,6 +191,36 @@ interface ApprovalRuntime {
 
 // 権限記録をreflection可能なpropertyや直列化commandへ載せない。
 const APPROVED_COMMAND_RECORDS = new WeakMap<ExecuteCommand, ApprovedCommandRecord>();
+const TARGET_RESOURCE_LOCK_TAILS = new Map<string, Promise<void>>();
+
+async function acquireTargetResourceLock(key: string): Promise<() => void> {
+  const previous = TARGET_RESOURCE_LOCK_TAILS.get(key) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => { releaseCurrent = resolve; });
+  const tail = previous.then(() => current);
+  TARGET_RESOURCE_LOCK_TAILS.set(key, tail);
+  await previous;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releaseCurrent();
+    if (TARGET_RESOURCE_LOCK_TAILS.get(key) === tail) TARGET_RESOURCE_LOCK_TAILS.delete(key);
+  };
+}
+
+async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "tool_call" }>,
+  observation: BrokerTargetVersionObservation | undefined): Promise<string | undefined> {
+  const { tool_name, arguments: args } = command.payload;
+  if (tool_name === "file.write" || tool_name === "file.edit" || tool_name === "file.delete") {
+    return `file:${await brokerFileResourceLockDigest(tool_name, args)}`;
+  }
+  if (tool_name === "gmail.write" && observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
+      ["draft.create", "message.send", "draft.send"].includes(String(args.operation))) {
+    return `gmail:${observation.target_identity_digest}`;
+  }
+  return undefined;
+}
 
 export type ApprovedCommand = ExecuteCommand & {
   readonly [APPROVED_COMMAND_BRAND]: ApprovedCommandRecord;
@@ -1047,29 +1078,58 @@ export class Executor {
       const result = readFileSearchWorkerResult(workerResponse, record.target_version_observation);
       return { command_id: id, status: "success", result, metrics: { duration_ms: Date.now() - start, tool_calls: 1 } };
     }
+    const record = APPROVED_COMMAND_RECORDS.get(command)!;
     const controller = new AbortController();
-    markInvoked("tool_adapter");
-    const result = await this.withTimeout(
-      tool.invoke(payload.arguments, {
+    const remainingTimeoutMs = (): number | undefined => {
+      if (constraints?.timeout_ms === undefined) return undefined;
+      const remaining = constraints.timeout_ms - (Date.now() - start);
+      if (remaining <= 0) throw new Error(`timeout after ${constraints.timeout_ms}ms`);
+      return remaining;
+    };
+    const lockKey = await targetResourceLockKey(command, record.target_version_observation);
+    let releaseTargetLock: (() => void) | undefined;
+    let adapterOwnsTargetLock = false;
+    try {
+      if (lockKey) {
+        const pendingLock = acquireTargetResourceLock(lockKey);
+        try {
+          releaseTargetLock = await this.withTimeout(pendingLock, remainingTimeoutMs(), controller);
+        } catch (error) {
+          // If this waiter times out, release its queue position once it reaches the head.
+          void pendingLock.then((release) => release(), () => undefined);
+          throw error;
+        }
+      }
+      if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
+      const adapterTimeout = remainingTimeoutMs();
+      markInvoked("tool_adapter");
+      const invocation = Promise.resolve().then(() => tool.invoke(payload.arguments, {
         command_id: id,
         upstream_commit_hash: commit_hash,
-        idempotency_key: APPROVED_COMMAND_RECORDS.get(command)!.ticket.command_key,
-        command_digest: APPROVED_COMMAND_RECORDS.get(command)!.ticket.command_digest,
-        target_version_observation: APPROVED_COMMAND_RECORDS.get(command)!.target_version_observation,
+        idempotency_key: record.ticket.command_key,
+        command_digest: record.ticket.command_digest,
+        target_version_observation: record.target_version_observation,
         signal: controller.signal,
-      }),
-      constraints?.timeout_ms,
-      controller,
-    );
-    const targetVersion = APPROVED_COMMAND_RECORDS.get(command)!.target_version_observation;
-    const publicResult = targetVersion?.schema_version === "blue-tanuki.file-search-target-version.v1"
-      ? stripFileSearchTargetVersionObservation(result, targetVersion) : result;
-    return {
-      command_id: id,
-      status: "success",
-      result: publicResult,
-      metrics: { duration_ms: Date.now() - start, tool_calls: 1 },
-    };
+      }));
+      if (releaseTargetLock) {
+        adapterOwnsTargetLock = true;
+        // Keep the target serialized until the real adapter promise settles, even if
+        // the caller's timeout has already returned an outcome-unknown receipt.
+        void invocation.then(releaseTargetLock, releaseTargetLock);
+      }
+      const result = await this.withTimeout(invocation, adapterTimeout, controller);
+      const targetVersion = record.target_version_observation;
+      const publicResult = targetVersion?.schema_version === "blue-tanuki.file-search-target-version.v1"
+        ? stripFileSearchTargetVersionObservation(result, targetVersion) : result;
+      return {
+        command_id: id,
+        status: "success",
+        result: publicResult,
+        metrics: { duration_ms: Date.now() - start, tool_calls: 1 },
+      };
+    } finally {
+      if (!adapterOwnsTargetLock) releaseTargetLock?.();
+    }
   }
 
   private async executeChannelSend(

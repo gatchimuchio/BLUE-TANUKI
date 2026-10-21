@@ -321,7 +321,7 @@ describe("built-in tools", () => {
         used_for_authority: false,
         may_execute: false,
       });
-      expect(JSON.stringify(observation)).not.toContain(root);
+      expect(JSON.stringify(observation)).not.toContain(dir);
       expect(observation.file_content_digest).toMatch(/^[a-f0-9]{64}$/);
       expect(JSON.stringify(observation)).not.toContain("reviewed delete target");
 

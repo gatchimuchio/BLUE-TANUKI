@@ -244,6 +244,62 @@ describe("Gmail write target observation", () => {
     expect(JSON.parse(sendTarget?.body ?? "{}")).toEqual({ id: "fixture-draft", message: { raw: draftRaw } });
   });
 
+  it("同じdraftへの並列sendを直列化し、先行送信後の古い期待版を二重送信しない", async () => {
+    let draftSent = false;
+    const request = vi.fn(async (target: GoogleWriteTarget) => {
+      if (target.path.endsWith("/profile")) return draftReadResponse(target.path);
+      if (target.path.endsWith("?format=raw")) {
+        return draftSent
+          ? { ...response, status: 404, ok: false, body: JSON.stringify({ error: "draft no longer exists" }) }
+          : draftReadResponse(target.path);
+      }
+      if (target.method === "POST" && target.path.endsWith("/drafts/send")) {
+        draftSent = true;
+        return response;
+      }
+      return response;
+    });
+    const tool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: "fixture-token" }, request });
+    const tools = new ToolRegistry();
+    tools.register(tool);
+    const authority = createExecutorApprovalAuthority();
+    const executor = new Executor({ approval_authority: authority, tools, llm: new StubBackend() });
+    const commands: ExecuteCommand[] = ["fixture-draft-send-1", "fixture-draft-send-2"].map((id) => ({
+      id,
+      type: "tool_call",
+      payload: { tool_name: "gmail.write", arguments: draftArgs },
+      constraints: { allowed_tools: ["gmail.write"],
+        allowed_capabilities: [...(tool.required_capabilities ?? [])] },
+      upstream_decision: { frame_goal: "fixture", model_abstraction: "fixture",
+        commit_hash: "c".repeat(64), commit_decision: "ASSERT" },
+    }));
+    const approvals = await Promise.all(commands.map(async (command) => {
+      const observation = GmailWriteTargetVersionObservationSchema.parse(await tool.inspect_target_version!(draftArgs, {
+        command_digest: operationPlanDigest(command),
+      }));
+      const context = approvalContextFromCommand(command, { actor: "fixture-owner" });
+      const finalReview = finalReviewRequired(context);
+      return authority.approve(command, {
+        source: finalReview ? "human_final_review" : "approval_gate",
+        decision: finalReview ? "approve" : "allow",
+        approved_by: "fixture-owner",
+        approved_at_ms: 1,
+        upstream_commit_hash: command.upstream_decision.commit_hash,
+        operation: context.operation,
+        risk: context.risk,
+        final_review_required: finalReview,
+        reason: "isolated synthetic draft target concurrency fixture",
+      }, executorCommandDigest(command), undefined, observation);
+    }));
+
+    const feedback = await Promise.all(approvals.map((approval) => executor.execute(approval)));
+
+    expect(feedback.filter((entry) => entry.status === "success")).toHaveLength(1);
+    expect(feedback.filter((entry) => entry.status === "failed")).toHaveLength(1);
+    expect(request.mock.calls.filter(([target]) => target.method === "POST" && target.path.endsWith("/drafts/send")))
+      .toHaveLength(1);
+  });
+
   it("承認済み内容・内側Message IDが変わるとdraft.sendをHTTP mutation前に停止する", async () => {
     let draftReadCount = 0;
     const changedRaw = Buffer.from("From: owner@example.invalid\r\nTo: changed@example.invalid\r\n\r\nchanged")

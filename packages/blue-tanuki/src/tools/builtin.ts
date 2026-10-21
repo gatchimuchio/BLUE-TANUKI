@@ -1859,6 +1859,45 @@ function isPathWithin(root: string, candidate: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+/**
+ * Resolve one in-process Broker lock identity for file mutations. The returned
+ * value is a digest; filesystem paths remain inside the adapter process.
+ */
+export async function brokerFileResourceLockDigest(
+  toolName: string,
+  args: Record<string, unknown>,
+  env: Env = process.env,
+): Promise<string> {
+  const pathArg = stringArg(args, "path")!;
+  if (toolName === "file.write" && args.mode === "create") assertPlannedFileWritePath(pathArg);
+  else if (toolName === "file.edit") assertPlannedFileEditPath(pathArg);
+  else if (toolName === "file.delete") assertPlannedFileDeletePath(pathArg);
+  else if (toolName !== "file.write") throw new Error("Broker file resource lock received an unsupported tool");
+
+  try {
+    const sandboxRoot = await sandboxRootFromEnv(env);
+    const candidate = await resolveSandboxFilePath(pathArg, sandboxRoot);
+    const realParent = await fs.realpath(path.dirname(candidate.filepath));
+    if (!isPathWithin(sandboxRoot, realParent)) throw new Error("outside sandbox");
+    const lexicalTarget = path.join(realParent, path.basename(candidate.filepath));
+    let canonicalTarget = lexicalTarget;
+    try {
+      const realTarget = await fs.realpath(lexicalTarget);
+      if (!isPathWithin(sandboxRoot, realTarget)) throw new Error("outside sandbox");
+      canonicalTarget = realTarget;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const lockTarget = process.platform === "win32" ? canonicalTarget.toLocaleLowerCase("en-US") : canonicalTarget;
+    return createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.broker-file-resource-lock.v1", lockTarget,
+    ]), "utf8").digest("hex");
+  } catch {
+    // Do not leak filesystem paths through the Broker error projection.
+    throw new Error("Broker file target resource could not be resolved");
+  }
+}
+
 function assertPlannedFileWritePath(pathArg: string): void {
   if (pathArg.length === 0 || pathArg.length > 512 || path.isAbsolute(pathArg) || pathArg.includes("\\") ||
       pathArg.includes(":") || pathArg.includes("\0") || pathArg.startsWith("/")) {

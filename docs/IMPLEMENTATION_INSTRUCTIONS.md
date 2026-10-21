@@ -4,11 +4,14 @@
 
 ## 現行状態
 
-QE_STAGE=`QE_BUILD`。owner指定rev2.3三点セットのpinとbackup ref移行は維持。`QEB-35-E07.01-PARENT-GOAL-DELEGATION`では、開発者の内部plan:computeだけに固定4 role（division／independent comparison／audit／redundancy）を発行し、親task・criteria・termination digestへ束縛した。ExecutorはC計算経路で子要求を最大2件ずつ処理し、各子を固有task digest・個別token/time上限・共有parent budget digestへ予約する。budget reservation能力がないC実装はprovider呼出し前に拒否する。子にtool・再委任・実行・権限能力はなく、出力は候補として親計算へ渡す。親のplan候補は既存HDS inspectionと採否経路に留まる。これを当該consumer経路の`WIRED`とするが、E07親全体と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+QE_STAGE=`QE_BUILD`。owner指定rev2.3三点セットのpinを維持する。backup refsは`MIGRATION_COMPLETE`（2026-10-12）で、local recovery branchesとremote tagsの二世代SHAが照合済み。`QEB-36-E07.02-SHARED-TARGET-SERIALIZATION`では、Executorのadapter dispatch前に同一target resource lockを取得する。file.write／file.edit／file.deleteはsandbox内の実体pathから非公開digestを作り、同一Node.js process内の複数Executor間で直列化する。gmail.writeは承認済みtarget identity digestで直列化する。lock待ちはexecution timeoutに含め、timeout後も実adapter promiseの終了までlockを保持する。各adapterの既存target-version再照合は維持し、期待版が変われば後続作用を拒否する。
 
-HDS `goal_governance.test.ts` 15 tests、Executor `executor_compute.test.ts` 8 tests、workspace `pnpm typecheck`／`pnpm build`はPASS。実provider／credential、全workspace suite、外部業務作用、5OS実機、QE_QC／QE_QAは未実施。製品全体は`BUILD_GAP`のまま。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+QE_BUILDの現行経路ではファイルtarget mutationとGmail writeの該当target dispatchを`WIRED`とする。lockはprocess-localであり別processとの排他を証明しない。任意shell commandや未接続adapterの共有target識別は`BUILD_GAP`として保持する。E07親要求全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+確認済み：Executor target-lock fixture 1 test、Gmail target-version suite 10 tests、file target-versionの選択確認3 tests、core package typecheck、`git diff --check`はPASS。全workspace suite、workspace build、provider／credential、外部業務作用、5OS実機、QE_QC／QE_QAは未実施。
+
 ## 次のBUILD_BATCH
 
-`QEB-36-E07.02-SHARED-TARGET-SERIALIZATION`として、同じ実体への作用をresource lockと期待版で直列確定するconsumerを現行Broker／operation-plan経路から調査・接続する。既存target identityとversion preconditionを再利用し、未接続をschemaだけで閉じない。対象・consumer・停止条件は次batch開始時に現行rev2.3三点セットとE07.02から再同期する。
+`QEB-37-E07.03-PARENT-CANCELLATION-CONVERGENCE`として、E07.01子computeからE07.03の実worker lifecycle consumerを追い、親取消後の遅延結果を非権威証拠として保持し、未完了childを停止・観測する。現行rev2.3三点セットとE07.03、最新HEAD・差分を開始時に再同期する。E07.02で残る任意shell／未接続adapterのresource coverageは、後続の実target接続時に具体化する。
 
 HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closedを維持する。実provider／credential、外部業務作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は含めない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。全体実装形状の前に詳細QC／QAへ進まない。
