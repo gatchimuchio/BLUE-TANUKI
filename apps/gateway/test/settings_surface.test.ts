@@ -6,6 +6,7 @@ import { PluginRuntime } from "../src/plugin_loader.js";
 import {
   buildSettingsSnapshot,
   createWebChatSettingsSurface,
+  renderSettingsHtml,
   settingsSurfaceAllowed,
   updateSettingsEnvFile,
 } from "../src/settings_surface.js";
@@ -62,6 +63,22 @@ function runtime(): PluginRuntime {
         entry: "./dist/index.js",
         exports: {},
         permissions: ["network:llm-provider"],
+      },
+    },
+    {
+      package_dir: "/tmp/blue-tanuki/packages/channel-slack",
+      package_json: {
+        name: "@blue-tanuki/channel-slack",
+        version: "1.0.0-rc.1",
+        main: "./dist/index.js",
+      },
+      manifest: {
+        name: "@blue-tanuki/channel-slack",
+        version: "1.0.0-rc.1",
+        kind: "channel",
+        entry: "./dist/index.js",
+        exports: { channel: "SlackChannel" },
+        permissions: ["network:slack.com", "secrets:SLACK_BOT_TOKEN", "secrets:SLACK_APP_TOKEN"],
       },
     },
   ]);
@@ -134,6 +151,72 @@ describe("settings surface", () => {
     expect(snapshot.plugins[0]?.permissions).toContain(
       "secrets:BLUE_TANUKI_MAINTENANCE_TOKEN",
     );
+  });
+
+  it("projects Slack setup state without probing, exposing credentials, or granting authority", () => {
+    const unconfigured = buildSettingsSnapshot({}, runtime()).integrations.slack;
+    expect(unconfigured).toMatchObject({
+      status: "not_configured",
+      plugin_available: true,
+      bot_token_set: false,
+      app_token_set: false,
+      inbound_grants: "deny_all",
+      preview_only: true,
+      live_connection_checked: false,
+      used_for_authority: false,
+    });
+
+    const partial = buildSettingsSnapshot({ SLACK_BOT_TOKEN_REF: "protected-token-ref" }, runtime()).integrations.slack;
+    expect(partial).toMatchObject({
+      status: "incomplete_credentials",
+      bot_token_set: true,
+      app_token_set: false,
+    });
+
+    const invalidGrants = buildSettingsSnapshot({
+      SLACK_BOT_TOKEN: "xoxb-secret-fixture",
+      SLACK_APP_TOKEN: "xapp-secret-fixture",
+      SLACK_INBOUND_GRANTS_JSON: "not-json",
+    }, runtime()).integrations.slack;
+    expect(invalidGrants).toMatchObject({
+      status: "invalid_inbound_grants",
+      inbound_grants: "invalid",
+      live_connection_checked: false,
+    });
+
+    const grant = {
+      team_id: "T12345",
+      channel_id: "C12345",
+      user_id: "U12345",
+      thread_ts: null,
+    };
+    const configuredSnapshot = buildSettingsSnapshot({
+      SLACK_BOT_TOKEN: "xoxb-secret-fixture",
+      SLACK_APP_TOKEN: "xapp-secret-fixture",
+      SLACK_INBOUND_GRANTS_JSON: JSON.stringify([grant]),
+    }, runtime());
+    expect(configuredSnapshot.integrations.slack).toMatchObject({
+      status: "configured_unverified",
+      inbound_grants: "configured",
+      preview_only: true,
+      live_connection_checked: false,
+      used_for_authority: false,
+    });
+    expect(JSON.stringify(configuredSnapshot)).not.toContain("xoxb-secret-fixture");
+    expect(JSON.stringify(configuredSnapshot)).not.toContain("xapp-secret-fixture");
+    expect(JSON.stringify(configuredSnapshot)).not.toContain("T12345");
+    expect(JSON.stringify(configuredSnapshot)).not.toContain("C12345");
+    expect(JSON.stringify(configuredSnapshot)).not.toContain("U12345");
+
+    const missingPlugin = buildSettingsSnapshot({}, new PluginRuntime("/tmp/blue-tanuki", [])).integrations.slack;
+    expect(missingPlugin).toMatchObject({ status: "plugin_unavailable", plugin_available: false });
+  });
+
+  it("shows Slack setup guidance as read-only in Control Center Connections", () => {
+    const html = renderSettingsHtml();
+    expect(html).toContain('id="slack-status"');
+    expect(html).toContain('id="slack-next-action"');
+    expect(html).toContain("This is configuration status only. It does not test Slack connectivity");
   });
 
   it("writes settings updates back to BLUE_TANUKI_ENV_FILE", async () => {

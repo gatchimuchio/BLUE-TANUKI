@@ -4,6 +4,23 @@
 
 ---
 
+### 履歴ログ：`QEB-65-F11.03-SLACK-SETUP-STATUS-CONSUMER`
+
+開始`main`／`origin/main`=`7e8bc20119d0fa2be6f801fdb39acd2751d23cb8`。owner指定rev2.3の現行pin、適用`AGENTS.md`、active instruction、F11.03の設定／運用案内consumerだけを再同期した。旧版・完了ログは参照せず、現行工程表の直後F12.01依存条件だけを確認した。保護対象untracked Linux isolation `target/`を維持した。
+
+Gateway SettingsSnapshotへSlack configuration projectionを加え、Control Center Connections UIにplugin可用性、Bot／App token有無、inbound grantsがdeny-all／invalid／configuredのいずれか、状態ごとの次行動を表示する。既存`parseSlackInboundGrants`を再利用して設定形状だけを確認し、秘密値・grant内のteam／channel／user IDはsnapshotへ含めない。状態は接続性を主張せず、`live_connection_checked=false`、`preview_only=true`、`used_for_authority=false`を固定する。設定画面はSlack credentialを書き込まず、環境のprotected secret reference経路とGateway restartを案内する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/gateway exec vitest run test/settings_surface.test.ts` | PASS、11 tests。redaction、grant parse状態、plugin不在、live probeなし、authority非使用、Connections案内表示。 |
+| `pnpm --filter @blue-tanuki/gateway typecheck`／`build` | PASS。 |
+| `git diff --check` | PASS。 |
+| 実Slack credential／API／Socket Mode、dedicated test spaceの受信・返信・failure recovery・disconnect、provider、外部作用 | 未実施。OD-03条件がなく実環境受入は未成立。 |
+
+F11.03のread-only設定案内consumerのみ部分`WIRED`。Slackは引き続き`first-party-preview`、F11.03全体は`BUILD_GAP`。これはSlackのcredentialed-live acceptance／promotionを証明せず、全体QE_QC／QE_QAも開始しない。次のconsumer実装は工程表上F11.03と依存を共有しないF12.01へ進める。
+
+---
+
 ### 履歴ログ：`QEB-63-F11.01-SLACK-TEAM-CHANNEL-USER-THREAD-ADMISSION-CONSUMER`
 
 開始`main`／`origin/main`=`28da277025dd12716ce160d08f5bcdeb10847ce0`。owner指定rev2.3現行三点セットのpin/hash、適用AGENTS、active instruction、Slack identity/admissionの関係節を再同期した。旧版と完了ログは再読せず、Slack adapter・Gateway inbound wiring・既存Telegram durable admission契約を必要範囲だけ照合した。保護対象untracked Linux isolation `target/`を維持。

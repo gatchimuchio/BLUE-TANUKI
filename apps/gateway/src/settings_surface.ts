@@ -23,6 +23,7 @@ import {
 } from "./control_center/setup/api_settings.js";
 import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
 import { llmSecretStorageStatus } from "./secret_store.js";
+import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -58,6 +59,23 @@ export interface SettingsSnapshot {
   };
   integrations: {
     native_first: true;
+    slack: {
+      status:
+        | "plugin_unavailable"
+        | "not_configured"
+        | "incomplete_credentials"
+        | "invalid_inbound_grants"
+        | "inbound_denied"
+        | "configured_unverified";
+      plugin_available: boolean;
+      bot_token_set: boolean;
+      app_token_set: boolean;
+      inbound_grants: "deny_all" | "invalid" | "configured";
+      preview_only: true;
+      live_connection_checked: false;
+      used_for_authority: false;
+      next_action: string;
+    };
     openrouter: {
       configured: boolean;
       api_key_set: boolean;
@@ -172,6 +190,44 @@ export function buildSettingsSnapshot(
   const config = setupConfigFromEnv(env);
   const composio = composioStatus(env);
   const composioKeyConfigured = composio.configured || Boolean(envValue(env, "COMPOSIO_API_KEY_REF"));
+  const slackPluginAvailable = plugins.plugins.some(
+    (plugin) => plugin.manifest.name === "@blue-tanuki/channel-slack",
+  );
+  const slackBotTokenSet = Boolean(envValue(env, "SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN_REF"));
+  const slackAppTokenSet = Boolean(envValue(env, "SLACK_APP_TOKEN", "SLACK_APP_TOKEN_REF"));
+  let slackInboundGrants: SettingsSnapshot["integrations"]["slack"]["inbound_grants"] = "deny_all";
+  if (envValue(env, "SLACK_INBOUND_GRANTS_JSON")) {
+    try {
+      slackInboundGrants = parseSlackInboundGrants(env.SLACK_INBOUND_GRANTS_JSON).length > 0
+        ? "configured"
+        : "deny_all";
+    } catch {
+      slackInboundGrants = "invalid";
+    }
+  }
+  const slackCredentialsComplete = slackBotTokenSet && slackAppTokenSet;
+  const slackStatus: SettingsSnapshot["integrations"]["slack"]["status"] = !slackPluginAvailable
+    ? "plugin_unavailable"
+    : !slackBotTokenSet && !slackAppTokenSet
+      ? "not_configured"
+      : !slackCredentialsComplete
+        ? "incomplete_credentials"
+        : slackInboundGrants === "invalid"
+          ? "invalid_inbound_grants"
+          : slackInboundGrants === "deny_all"
+            ? "inbound_denied"
+            : "configured_unverified";
+  const slackNextAction = slackStatus === "plugin_unavailable"
+    ? "Install or enable @blue-tanuki/channel-slack, then reload this status."
+    : slackStatus === "not_configured"
+      ? "To configure Slack, set both protected SLACK_BOT_TOKEN_REF and SLACK_APP_TOKEN_REF values, then restart the Gateway."
+      : slackStatus === "incomplete_credentials"
+        ? "Configure both Slack tokens through protected local secret references, then restart the Gateway."
+        : slackStatus === "invalid_inbound_grants"
+          ? "Correct SLACK_INBOUND_GRANTS_JSON; invalid grants fail closed and are not admitted."
+          : slackStatus === "inbound_denied"
+            ? "Inbound is deny-all. Add exact owner-maintained grants only if Slack inbound is intended."
+            : "Configuration is present but unverified. Use an approved dedicated Slack test workspace to check connect, receive, reply, recovery, and disconnect.";
   return {
     schema_version: 1,
     env_file: envFilePath(env) ?? null,
@@ -197,6 +253,17 @@ export function buildSettingsSnapshot(
     },
     integrations: {
       native_first: true,
+      slack: {
+        status: slackStatus,
+        plugin_available: slackPluginAvailable,
+        bot_token_set: slackBotTokenSet,
+        app_token_set: slackAppTokenSet,
+        inbound_grants: slackInboundGrants,
+        preview_only: true,
+        live_connection_checked: false,
+        used_for_authority: false,
+        next_action: slackNextAction,
+      },
       openrouter: {
         configured: Boolean(
           envValue(env, "OPENROUTER_API_KEY", "OPENROUTER_API_KEY_REF") &&
@@ -612,7 +679,21 @@ export function renderSettingsHtml(): string {
             <label>Native-first policy
               <input id="native-first-status" readonly>
             </label>
+            <label>Slack setup status
+              <input id="slack-status" readonly>
+            </label>
+            <label>Slack bot token
+              <input id="slack-bot-token-status" readonly>
+            </label>
+            <label>Slack app token
+              <input id="slack-app-token-status" readonly>
+            </label>
+            <label>Slack inbound grants
+              <input id="slack-inbound-grants-status" readonly>
+            </label>
           </div>
+          <p id="slack-next-action" role="status"></p>
+          <p class="muted">This is configuration status only. It does not test Slack connectivity or change Slack preview status.</p>
         </section>
         <section id="tab-paths">
           <h2>Paths</h2>
@@ -676,6 +757,11 @@ export function renderSettingsHtml(): string {
       composioStatus: document.querySelector("#composio-status"),
       openrouterStatus: document.querySelector("#openrouter-status"),
       nativeFirstStatus: document.querySelector("#native-first-status"),
+      slackStatus: document.querySelector("#slack-status"),
+      slackBotTokenStatus: document.querySelector("#slack-bot-token-status"),
+      slackAppTokenStatus: document.querySelector("#slack-app-token-status"),
+      slackInboundGrantsStatus: document.querySelector("#slack-inbound-grants-status"),
+      slackNextAction: document.querySelector("#slack-next-action"),
       host: document.querySelector("#webchat-host"),
       port: document.querySelector("#webchat-port"),
       fileRoot: document.querySelector("#path-file-root"),
@@ -748,6 +834,11 @@ export function renderSettingsHtml(): string {
         (snapshot.integrations.openrouter.configured ? "configured" : "missing") +
         "; key=" + (snapshot.integrations.openrouter.api_key_set ? "set" : "missing");
       fields.nativeFirstStatus.value = snapshot.integrations.native_first ? "native/direct paths remain canonical" : "invalid";
+      fields.slackStatus.value = snapshot.integrations.slack.status.replaceAll("_", " ");
+      fields.slackBotTokenStatus.value = snapshot.integrations.slack.bot_token_set ? "configured; value hidden" : "not set";
+      fields.slackAppTokenStatus.value = snapshot.integrations.slack.app_token_set ? "configured; value hidden" : "not set";
+      fields.slackInboundGrantsStatus.value = snapshot.integrations.slack.inbound_grants.replaceAll("_", " ");
+      fields.slackNextAction.textContent = snapshot.integrations.slack.next_action;
       fields.host.value = snapshot.webchat.host;
       fields.port.value = snapshot.webchat.port;
       fields.fileRoot.value = snapshot.paths.file_root;
