@@ -4,6 +4,25 @@
 
 ---
 
+### 履歴ログ：`QEB-67-F12.02-DISCORD-REPLY-PERSISTENT-OUTBOX-CONSUMER`
+
+開始`main`／`origin/main`=`f4ccdc7d542143df4709e2e403272183b06ae27b`。現行pin rev2.3の三点セットと適用`AGENTS.md`、active指示、F12.02のreply／persistent delivery consumerを再同期した。旧版・完了ログは通常参照せず、今回のDiscord adapter、Gateway outbox、直前F12.01 admissionとの接続だけを照合した。保護対象untracked Linux isolation `target/`を維持した。
+
+Gatewayのadmitted Discord inboundからreply builder、OutboundDispatcher、Discord adapter、Gateway private SQLite outboxまでをsynthetic fixtureで接続した。元message IDはnative reply referenceとして渡す。outboxはqueued／dispatching／retry_wait中だけpayloadを保持し、terminal settlementでpayloadを消去する。確認済みrate-limit rejectionと有限の有効Retry-Afterだけを永続待機後に再試行し、timeout／5xx／通信例外／中断等の結果不明を自動再送しない。discord.js RESTの隠れたretryを無効化して、明示的なrate-limit rejectionをoutboxへ返す。送信試験はfixture transport内に閉じ、実API・credential・HDS・外部作用は使用しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Discord adapter focused tests | PASS、20 tests。native reply、明示429／Retry-After、曖昧な結果の自動再送禁止。 |
+| Gateway outbox／served synthetic fixture | PASS、6 tests。retry waitの永続化・再起動復帰、terminal payload消去、曖昧な結果の非再送。 |
+| Protocol payload contract | PASS、1 test。optional native reply reference。 |
+| Protocol／Discord／Gateway typecheck・build、`git diff --check` | PASS。 |
+| `pnpm docs:check` | docs形状検査PASS。日本語基底gateは未変更の`docs/CHANNEL_READINESS_MATRIX.md` migration hash不整合でFAIL、licensing gate未到達。 |
+| workspace全suite／実Discord API・credential・HDS／実provider／外部送信／OS別実機／QE_QC・QE_QA | 未実施。Protocol `test/types.test.ts`の既存別領域テスト1件の失敗を観測した。 |
+
+F12.02のnative reply＋durable outbox consumerをsynthetic fixture範囲で部分的に`WIRED`とする。F12.02全体、F12.03 live acceptance／promotion、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。Discord=`first-party-preview`、QE_QC／QE_QA未開始、C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開・出荷判断保留を維持する。次のBUILD_BATCHは現行工程表の独立依存からF13.01 Teams entry identity/admission consumerとする。QEB-67の実装・記録を同一batchとしてcommit／pushし、remote HEADおよびlocal復旧branch／remote backup tag二世代を照合して閉じる。
+
+---
+
 ### 履歴ログ：`QEB-66-F12.01-DISCORD-INBOUND-IDENTITY-ADMISSION-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`bd3d662b0104eed7c009e2ec1be23afff98129aa`。現行pin rev2.3の三点セットと適用`AGENTS.md`、active instruction、F12.01のDiscord admission要求を再同期した。旧版・完了ログは通常参照せず、今回のadapter／Gateway境界とDiscord authenticated Gateway event契約だけを照合した。保護対象untracked Linux isolation `target/`を維持した。

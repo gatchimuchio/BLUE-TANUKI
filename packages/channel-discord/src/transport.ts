@@ -53,17 +53,65 @@ export interface DiscordPostResult {
   error?: string;
   error_kind?: ChannelDeliveryErrorKind;
   error_code?: string;
-  /**
-   * If the underlying transport recognized a rate-limit signal (HTTP 429
-   * with `retry_after`), it MAY surface that here in milliseconds. The
-   * DiscordChannel uses this to schedule a backoff retry.
-   */
+  /** `not_delivered` is only used when the transport knows Discord rejected the request. */
+  delivery_status?: "not_delivered" | "unknown";
+  /** True only for a confirmed HTTP 429 rejection, never inferred from error text. */
+  rate_limit_rejected?: boolean;
+  /** True when a confirmed HTTP 429 carried a missing or invalid Retry-After hint. */
+  retry_after_invalid?: boolean;
   retry_after_ms?: number;
+}
+
+export type DiscordOutboundDeliveryState = "queued" | "dispatching" | "retry_wait" | "delivered" |
+  "not_delivered" | "outcome_unknown" | "retry_exhausted";
+
+export interface DiscordOutboundDeliveryInput {
+  readonly delivery_id: string;
+  readonly channel: "discord";
+  readonly target: string;
+  readonly text: string;
+  readonly reply_to_message_id?: string;
+}
+
+export interface DiscordOutboundDeliveryClaim extends DiscordOutboundDeliveryInput {
+  readonly payload_digest: string;
+  readonly attempt_count: number;
+}
+
+export interface DiscordPendingDelivery {
+  readonly delivery_id: string;
+  readonly delivery_state: "queued" | "retry_wait";
+  readonly not_before_ms: number;
+}
+
+export interface DiscordOutboundDeliveryStatus {
+  readonly delivery_id: string;
+  readonly payload_digest: string;
+  readonly delivery_state: DiscordOutboundDeliveryState;
+  readonly attempt_count: number;
+  readonly not_before_ms: number;
+  readonly retry_after_ms?: number;
+  readonly external_message_id?: string;
+  readonly error_code?: string;
+}
+
+/** Gateway-owned durable outbound boundary; payload is removed after terminal settlement. */
+export interface DiscordOutboundDeliveryStore {
+  enqueue(input: DiscordOutboundDeliveryInput, now_ms?: number): void;
+  pending(): readonly DiscordPendingDelivery[];
+  claimDelivery(delivery_id: string, now_ms?: number): DiscordOutboundDeliveryClaim | null;
+  scheduleRetry(delivery_id: string, not_before_ms: number, retry_after_ms: number, now_ms?: number): void;
+  settleDelivery(delivery_id: string,
+    state: "delivered" | "not_delivered" | "outcome_unknown" | "retry_exhausted",
+    result?: { readonly external_message_id?: string; readonly error_code?: string; readonly retry_after_ms?: number },
+    now_ms?: number): void;
+  cancelPending(delivery_id: string, now_ms?: number): void;
+  status(delivery_id: string): DiscordOutboundDeliveryStatus | null;
 }
 
 export interface DiscordTransport {
   start(handler: DiscordInboundHandler): Promise<void>;
   stop(): Promise<void>;
-  postMessage(args: { channel: string; text: string }): Promise<DiscordPostResult>;
+  postMessage(args: { channel: string; text: string; reply_to_message_id?: string }): Promise<DiscordPostResult>;
   getBotUserId(): string | undefined;
 }

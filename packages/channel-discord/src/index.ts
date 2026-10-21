@@ -8,5 +8,11 @@ export {
   type DiscordEventInbox,
   type DiscordEventClaim,
   type DiscordEventDeliveryState,
+  type DiscordOutboundDeliveryStore,
+  type DiscordOutboundDeliveryInput,
+  type DiscordOutboundDeliveryClaim,
+  type DiscordOutboundDeliveryStatus,
+  type DiscordOutboundDeliveryState,
+  type DiscordPendingDelivery,
 } from "./transport.js";
 export { DiscordJsTransport } from "./discordjs_transport.js";

@@ -185,6 +185,7 @@ async function smokeDiscord(plugins: PluginRuntime): Promise<string | null> {
         // This smoke only sends a message; never admit inbound events here.
         inbound_grants: [],
         inbox,
+        delivery_store: inbox,
         log: (line: string) => console.log(`[live:discord:transport] ${line}`),
       }],
     });

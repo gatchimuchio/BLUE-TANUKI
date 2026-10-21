@@ -264,6 +264,8 @@ export const ChannelSendPayloadSchema = z.object({
   content: z.string(),
   /** Optional provider-native reply thread, used only by channels that support it. */
   thread_ts: z.string().optional(),
+  /** Optional provider-native message reference, used for a direct reply to an inbound message. */
+  reply_to_message_id: z.string().optional(),
 });
 export type ChannelSendPayload = z.infer<typeof ChannelSendPayloadSchema>;
 

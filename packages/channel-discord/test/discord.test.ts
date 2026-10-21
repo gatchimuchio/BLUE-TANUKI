@@ -33,7 +33,7 @@ class FakeDiscordTransport implements DiscordTransport {
     if (this.nextPostFails) {
       const err = this.nextPostFails;
       this.nextPostFails = null;
-      return { ok: false, error: err };
+      return { ok: false, delivery_status: "not_delivered", error: err };
     }
     this.posted.push({ ...args });
     return { ok: true, message_id: `mid-${this.posted.length}` };
@@ -95,6 +95,27 @@ describe("DiscordChannel — silent mode", () => {
     expect(r.error_code).toBe("discord_not_configured");
     expect(r.next_action).toContain("DISCORD_BOT_TOKEN");
     await ch.stop();
+  });
+});
+
+describe("DiscordChannel — live configuration boundary", () => {
+  it("requires the Gateway durable outbox whenever a bot token is configured", async () => {
+    const transport = new FakeDiscordTransport();
+    const ch = new DiscordChannel({
+      bot_token: "synthetic-token",
+      transport,
+      inbox: new MemoryDiscordEventInbox(),
+      log: () => {},
+    });
+    await expect(ch.start(async () => {})).rejects.toThrow("discord_durable_delivery_store_required_for_live_sends");
+    expect(transport.startCalls).toBe(0);
+  });
+
+  it("rejects an unbounded retry configuration before opening the transport", async () => {
+    const transport = new FakeDiscordTransport();
+    const ch = new DiscordChannel({ transport, retry: { max_retries: Number.POSITIVE_INFINITY }, log: () => {} });
+    await expect(ch.start(async () => {})).rejects.toThrow("discord_retry_config_invalid");
+    expect(transport.startCalls).toBe(0);
   });
 });
 
@@ -264,7 +285,8 @@ describe("DiscordChannel — retry / backoff", () => {
     t.postMessage = async (): Promise<DiscordPostResult> => {
       calls++;
       if (calls < 3) {
-        return { ok: false, error: "rate_limited", retry_after_ms: 150 };
+        return { ok: false, delivery_status: "not_delivered", rate_limit_rejected: true,
+          error: "rate_limited", retry_after_ms: 150 };
       }
       return { ok: true, message_id: `mid-${calls}` };
     };
@@ -274,13 +296,9 @@ describe("DiscordChannel — retry / backoff", () => {
       log: () => {},
       retry: {
         max_retries: 5,
-        base_delay_ms: 100,
-        max_delay_ms: 10_000,
-        jitter_ratio: 0,
         sleep: async (ms) => {
           sleeps.push(ms);
         },
-        random: () => 0.5,
       },
     });
     await ch.start(async () => {});
@@ -299,18 +317,14 @@ describe("DiscordChannel — retry / backoff", () => {
     let calls = 0;
     t.postMessage = async (): Promise<DiscordPostResult> => {
       calls++;
-      return { ok: false, error: "missing_access" };
+      return { ok: false, delivery_status: "not_delivered", error: "missing_access" };
     };
     const ch = new DiscordChannel({
       transport: t,
       log: () => {},
       retry: {
         max_retries: 3,
-        base_delay_ms: 10,
-        max_delay_ms: 100,
-        jitter_ratio: 0,
         sleep: async () => {},
-        random: () => 0.5,
       },
     });
     await ch.start(async () => {});
@@ -325,12 +339,35 @@ describe("DiscordChannel — retry / backoff", () => {
     await ch.stop();
   });
 
+  it("does not infer retry safety from rate-limit-looking error text", async () => {
+    const t = new FakeDiscordTransport();
+    let calls = 0;
+    t.postMessage = async (): Promise<DiscordPostResult> => {
+      calls++;
+      return { ok: false, error: "rate_limited", retry_after_ms: 10 };
+    };
+    const ch = new DiscordChannel({ transport: t, log: () => {}, retry: {
+      max_retries: 3,
+      sleep: async () => {},
+    } });
+    await ch.start(async () => {});
+    const result = await ch.send(
+      { channel: "discord", target: "777", content: "x" },
+      { command_id: "c", upstream_commit_hash: "h" },
+    );
+    expect(result).toMatchObject({ delivered: false, delivery_status: "unknown", error_code: "delivery_outcome_unknown" });
+    expect(result.next_action).toContain("before deciding whether to resend");
+    expect(calls).toBe(1);
+    await ch.stop();
+  });
+
   it("retry: false disables retries", async () => {
     const t = new FakeDiscordTransport();
     let calls = 0;
     t.postMessage = async (): Promise<DiscordPostResult> => {
       calls++;
-      return { ok: false, error: "rate_limited", retry_after_ms: 50 };
+      return { ok: false, delivery_status: "not_delivered", rate_limit_rejected: true,
+        error: "rate_limited", retry_after_ms: 50 };
     };
     const ch = new DiscordChannel({ transport: t, log: () => {}, retry: false });
     await ch.start(async () => {});
@@ -354,11 +391,12 @@ describe("DiscordChannel — retry / backoff", () => {
     t.postMessage = async (): Promise<DiscordPostResult> => {
       calls++;
       controller.abort();
-      return { ok: false, error: "rate_limited", retry_after_ms: 1 };
+      return { ok: false, delivery_status: "not_delivered", rate_limit_rejected: true,
+        error: "rate_limited", retry_after_ms: 1 };
     };
     const ch = new DiscordChannel({ transport: t, log: () => {}, retry: {
-      max_retries: 3, base_delay_ms: 0, max_delay_ms: 1, jitter_ratio: 0,
-      sleep: async () => {}, random: () => 0.5,
+      max_retries: 3,
+      sleep: async () => {},
     } });
     await ch.start(async () => {});
     const r = await ch.send({ channel: "discord", target: "777", content: "x" },

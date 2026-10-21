@@ -5,9 +5,6 @@ import type {
 } from "@blue-tanuki/protocol";
 import {
   classifyChannelDeliveryError,
-  isRecoverableChannelDeliveryError,
-  withRetryBackoff,
-  type BackoffOptions,
   type InboundChannel,
   type InboundHandler,
   type OutboundChannel,
@@ -21,16 +18,14 @@ import type {
   DiscordInboundMessage,
   DiscordTransport,
   DiscordPostResult,
+  DiscordOutboundDeliveryStore,
 } from "./transport.js";
 import { DiscordJsTransport } from "./discordjs_transport.js";
 
 export interface DiscordRetryConfig {
   max_retries: number;
-  base_delay_ms: number;
-  max_delay_ms: number;
-  jitter_ratio: number;
+  /** Testable delay hook; production wait is driven by Discord's Retry-After. */
   sleep?: (ms: number) => Promise<void>;
-  random?: () => number;
 }
 
 export interface DiscordOptions {
@@ -42,22 +37,15 @@ export interface DiscordOptions {
   inbound_grants?: readonly DiscordInboundGrant[];
   /** Gateway-owned durable message replay boundary; required for the live transport. */
   inbox?: DiscordEventInbox;
-  /**
-   * Outbound retry/backoff for rate-limit failures. discord.js itself
-   * queues internally on 429; this is a *fallback* layer for the rare
-   * cases where the SDK surfaces a rate-limit error rather than queueing.
-   * Pass `false` to disable retries entirely. Default: 3 retries with
-   * exponential backoff capped at 30s, ±20% jitter.
-   */
+  /** Gateway-owned durable outbound queue; required when a bot token enables Discord. */
+  delivery_store?: DiscordOutboundDeliveryStore;
+  /** Durable retry budget for confirmed Discord rate-limit rejections. */
   retry?: DiscordRetryConfig | false;
   log?: (line: string) => void;
 }
 
 const DEFAULT_RETRY: DiscordRetryConfig = {
   max_retries: 3,
-  base_delay_ms: 500,
-  max_delay_ms: 30_000,
-  jitter_ratio: 0.2,
 };
 
 interface SentRecord {
@@ -96,16 +84,20 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
   private started = false;
   private counter = 0;
   private transport: DiscordTransport | null = null;
+  private lifecycleAbort = new AbortController();
 
   constructor(private readonly opts: DiscordOptions = {}) {}
 
   async start(handler: InboundHandler): Promise<void> {
     if (this.started) return;
 
+    if (this.opts.bot_token && !this.opts.inbox) throw new Error("discord_durable_inbox_required_for_live_events");
+    if (this.opts.bot_token && !this.opts.delivery_store) throw new Error("discord_durable_delivery_store_required_for_live_sends");
+    if (this.opts.transport || this.opts.bot_token) validateRetryConfig(this.opts.retry);
+
     if (this.opts.transport) {
       this.transport = this.opts.transport;
     } else if (this.opts.bot_token) {
-      if (!this.opts.inbox) throw new Error("discord_durable_inbox_required_for_live_events");
       this.transport = new DiscordJsTransport({
         bot_token: this.opts.bot_token,
         log: this.opts.log,
@@ -117,6 +109,9 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
       );
       return;
     }
+
+    this.lifecycleAbort = new AbortController();
+    this.silent = false;
 
     if (!this.opts.inbound_grants?.length) {
       this.log("[discord] WARN DISCORD_INBOUND_GRANTS_JSON unset/empty — inbound messages are rejected");
@@ -185,8 +180,15 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
         }
       });
       this.log("[discord] active");
+      for (const pending of this.opts.delivery_store?.pending() ?? []) {
+        void this.dispatchPersistedDelivery(pending.delivery_id).then((result) => {
+          this.log(`[discord] recovered outbound delivery state=${result.ok ? "delivered" : result.delivery_status ?? "unknown"}`);
+        }).catch(() => this.log("[discord] recovered outbound delivery remains unresolved"));
+      }
     } catch (e) {
       this.silent = true;
+      this.started = false;
+      try { await this.transport?.stop(); } catch { /* failed startup remains closed */ }
       this.log(
         `[discord] WARN transport start failed (${e instanceof Error ? e.message : String(e)}); falling back to silent`,
       );
@@ -197,6 +199,7 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
+    this.lifecycleAbort.abort();
     if (this.transport) {
       try {
         await this.transport.stop();
@@ -243,47 +246,20 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
       };
     }
 
-    const transport = this.transport;
-    const retryCfg = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
-
-    const callOnce = (): Promise<DiscordPostResult> => {
-      if (context?.signal?.aborted) return Promise.reject(new Error("channel_send_cancelled_before_transport_dispatch"));
-      return transport.postMessage({
-        channel: payload.target,
-        text: payload.content,
-      });
-    };
-
     let r: DiscordPostResult;
-    if (!retryCfg) {
-      r = await callOnce();
+    const deliveryStore = this.opts.delivery_store;
+    if (deliveryStore) {
+      const delivery_id = randomUUID();
+      deliveryStore.enqueue({
+        delivery_id,
+        channel: "discord",
+        target: payload.target,
+        text: payload.content,
+        ...(payload.reply_to_message_id ? { reply_to_message_id: payload.reply_to_message_id } : {}),
+      });
+      r = await this.dispatchPersistedDelivery(delivery_id, context?.signal);
     } else {
-      const opts: BackoffOptions<DiscordPostResult> = {
-        max_retries: retryCfg.max_retries,
-        base_delay_ms: retryCfg.base_delay_ms,
-        max_delay_ms: retryCfg.max_delay_ms,
-        jitter_ratio: retryCfg.jitter_ratio,
-        sleep: retryCfg.sleep,
-        random: retryCfg.random,
-        is_retryable: (signal) => {
-          if (context?.signal?.aborted) return false;
-          if (signal.kind === "throw") return true;
-          const v = signal.value;
-          if (v.ok) return false;
-          return isRecoverableChannelDeliveryError({
-            error: v.error,
-            retry_after_ms: v.retry_after_ms,
-          });
-        },
-        extract_retry_after_ms: (signal) =>
-          signal.kind === "value" ? (signal.value.retry_after_ms ?? null) : null,
-        on_retry: ({ attempt, delay_ms }) => {
-          this.log(
-            `[discord] retry attempt=${attempt} delay_ms=${delay_ms} target=${payload.target}`,
-          );
-        },
-      };
-      r = await withRetryBackoff(callOnce, opts);
+      r = await this.dispatchTransient(payload, context?.signal);
     }
 
     const failureDetails = r.ok
@@ -292,6 +268,7 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
           error: r.error ?? "post_failed",
           retry_after_ms: r.retry_after_ms,
         });
+    const outcomeKnown = r.delivery_status === "not_delivered";
     const external_id = r.message_id ?? `discord-${meta.command_id}-${this.counter}`;
     this.history.push({
       payload,
@@ -300,16 +277,18 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
       external_id,
       ok: r.ok,
       error: r.error,
-      error_kind: r.error_kind ?? failureDetails?.error_kind,
-      error_code: r.error_code ?? failureDetails?.error_code,
+      error_kind: r.ok ? undefined : outcomeKnown ? r.error_kind ?? failureDetails?.error_kind : "non_recoverable",
+      error_code: r.ok ? undefined : outcomeKnown ? r.error_code ?? failureDetails?.error_code : "delivery_outcome_unknown",
       retry_after_ms: r.retry_after_ms ?? failureDetails?.retry_after_ms,
-      next_action: r.ok ? undefined : discordNextAction(r),
+      next_action: r.ok ? undefined : outcomeKnown
+        ? discordNextAction(r)
+        : "Check the destination's delivery status before deciding whether to resend.",
     });
     if (r.ok) {
       this.log(
         `[discord] sent target=${payload.target} message_id=${r.message_id ?? ""} commit=${meta.upstream_commit_hash.slice(0, 8)}…`,
       );
-      return { delivered: true, external_id };
+      return { delivered: true, delivery_status: "delivered", external_id };
     }
     this.log(
       `[discord] FAILED target=${payload.target} error=${r.error ?? "unknown"}`,
@@ -321,11 +300,14 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
     });
     return {
       delivered: false,
+      delivery_status: outcomeKnown ? "not_delivered" : "unknown",
       error,
-      error_kind: r.error_kind ?? details.error_kind,
-      error_code: r.error_code ?? details.error_code,
+      error_kind: outcomeKnown ? r.error_kind ?? details.error_kind : "non_recoverable",
+      error_code: outcomeKnown ? r.error_code ?? details.error_code : "delivery_outcome_unknown",
       retry_after_ms: r.retry_after_ms ?? details.retry_after_ms,
-      next_action: discordNextAction(r),
+      next_action: outcomeKnown
+        ? discordNextAction(r)
+        : "Check the destination's delivery status before deciding whether to resend.",
     };
   }
 
@@ -340,6 +322,158 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
   private log(line: string): void {
     (this.opts.log ?? console.log)(line);
   }
+
+  private async dispatchTransient(payload: ChannelSendPayload, signal?: AbortSignal): Promise<DiscordPostResult> {
+    const retry = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
+    let attempt = 0;
+    while (true) {
+      if (signal?.aborted) return { ok: false, delivery_status: "not_delivered", error: "cancelled_before_dispatch", error_code: "cancelled_before_dispatch" };
+      let result: DiscordPostResult;
+      try {
+        result = await this.transport!.postMessage({
+          channel: payload.target,
+          text: payload.content,
+          ...(payload.reply_to_message_id ? { reply_to_message_id: payload.reply_to_message_id } : {}),
+        });
+      } catch {
+        return { ok: false, delivery_status: "unknown", error: "discord_transport_outcome_unknown", error_code: "delivery_outcome_unknown" };
+      }
+      if (!isExplicitRateLimitRejection(result)) return result;
+      const retryAfter = validRetryAfter(result);
+      if (!retry || result.retry_after_invalid || retryAfter === null || attempt >= retry.max_retries) {
+        return { ...result, delivery_status: "not_delivered", error_code: result.retry_after_invalid || retryAfter === null ? "invalid_retry_after" : "rate_limited" };
+      }
+      attempt += 1;
+      this.log(`[discord] retry attempt=${attempt} delay_ms=${retryAfter} target=${payload.target}`);
+      if (!await sleepWithSignal(retryAfter, signal, retry.sleep)) {
+        return { ...result, delivery_status: "not_delivered", error: "cancelled_before_retry", error_code: "cancelled_before_retry" };
+      }
+    }
+  }
+
+  private async dispatchPersistedDelivery(deliveryId: string, callerSignal?: AbortSignal): Promise<DiscordPostResult> {
+    const store = this.opts.delivery_store!;
+    const retry = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
+    while (true) {
+      if (callerSignal?.aborted) {
+        try { store.cancelPending(deliveryId); } catch { /* dispatch may already be claimed */ }
+        return { ok: false, delivery_status: "not_delivered", error: "cancelled_before_dispatch", error_code: "cancelled_before_dispatch" };
+      }
+      const pending = store.pending().find((row) => row.delivery_id === deliveryId);
+      if (!pending) {
+        const status = store.status(deliveryId);
+        if (status?.delivery_state === "delivered") return { ok: true, message_id: status.external_message_id };
+        const delivery_status = status?.delivery_state === "not_delivered" || status?.delivery_state === "retry_exhausted"
+          ? "not_delivered" : "unknown";
+        return { ok: false, delivery_status, error: status?.error_code ?? "discord_delivery_state_unavailable",
+          error_code: status?.error_code, ...(status?.retry_after_ms ? { retry_after_ms: status.retry_after_ms } : {}) };
+      }
+      const delayMs = Math.max(0, pending.not_before_ms - Date.now());
+      if (delayMs > 0 && !await sleepWithSignal(delayMs, combineSignals(callerSignal, this.lifecycleAbort.signal), retry?.sleep)) {
+        if (callerSignal?.aborted) {
+          try { store.cancelPending(deliveryId); } catch { /* already claimed or settled */ }
+          return { ok: false, delivery_status: "not_delivered", error: "cancelled_before_retry", error_code: "cancelled_before_retry" };
+        }
+        return { ok: false, delivery_status: "not_delivered", error: "discord_delivery_wait_interrupted",
+          error_code: "delivery_wait_interrupted", retry_after_ms: Math.max(1, pending.not_before_ms - Date.now()) };
+      }
+      if (callerSignal?.aborted) {
+        try { store.cancelPending(deliveryId); } catch { /* already claimed or settled */ }
+        return { ok: false, delivery_status: "not_delivered", error: "cancelled_before_dispatch", error_code: "cancelled_before_dispatch" };
+      }
+      if (this.lifecycleAbort.signal.aborted) {
+        return { ok: false, delivery_status: "not_delivered", error: "discord_delivery_wait_interrupted",
+          error_code: "delivery_wait_interrupted", retry_after_ms: pending.not_before_ms > Date.now()
+            ? pending.not_before_ms - Date.now() : undefined };
+      }
+      const claim = store.claimDelivery(deliveryId);
+      if (!claim) continue;
+      if (callerSignal?.aborted) {
+        store.settleDelivery(deliveryId, "not_delivered", { error_code: "cancelled_before_dispatch" });
+        return { ok: false, delivery_status: "not_delivered", error: "cancelled_before_dispatch", error_code: "cancelled_before_dispatch" };
+      }
+      let result: DiscordPostResult;
+      try {
+        result = await this.transport!.postMessage({
+          channel: claim.target,
+          text: claim.text,
+          ...(claim.reply_to_message_id ? { reply_to_message_id: claim.reply_to_message_id } : {}),
+        });
+      } catch {
+        result = { ok: false, delivery_status: "unknown", error: "discord_transport_outcome_unknown", error_code: "delivery_outcome_unknown" };
+      }
+      if (result.ok) {
+        store.settleDelivery(deliveryId, "delivered", { ...(result.message_id ? { external_message_id: result.message_id } : {}) });
+        return result;
+      }
+      if (isExplicitRateLimitRejection(result)) {
+        const retryAfter = validRetryAfter(result);
+        if (result.retry_after_invalid || retryAfter === null) {
+          store.settleDelivery(deliveryId, "retry_exhausted", { error_code: "invalid_retry_after" });
+          return { ...result, delivery_status: "not_delivered", error_code: "invalid_retry_after" };
+        }
+        if (retry && claim.attempt_count <= retry.max_retries) {
+          store.scheduleRetry(deliveryId, Date.now() + retryAfter, retryAfter);
+          if (callerSignal?.aborted) {
+            try { store.cancelPending(deliveryId); } catch { /* already settled elsewhere */ }
+            return { ...result, delivery_status: "not_delivered", retry_after_ms: retryAfter };
+          }
+          if (this.lifecycleAbort.signal.aborted) return { ...result, delivery_status: "not_delivered", retry_after_ms: retryAfter };
+          this.log(`[discord] persisted retry attempt=${claim.attempt_count} delay_ms=${retryAfter} target=${claim.target}`);
+          continue;
+        }
+        store.settleDelivery(deliveryId, "retry_exhausted", { error_code: "rate_limited", retry_after_ms: retryAfter });
+        return { ...result, delivery_status: "not_delivered", error_code: "rate_limited", retry_after_ms: retryAfter };
+      }
+      const state = result.delivery_status === "not_delivered" ? "not_delivered" : "outcome_unknown";
+      store.settleDelivery(deliveryId, state, { ...(result.error_code ? { error_code: result.error_code } : {}) });
+      return result;
+    }
+  }
+}
+
+function isExplicitRateLimitRejection(result: DiscordPostResult): boolean {
+  return !result.ok && result.delivery_status === "not_delivered" && result.rate_limit_rejected === true;
+}
+
+function validRetryAfter(result: DiscordPostResult): number | null {
+  const retryAfter = result.retry_after_ms;
+  return Number.isSafeInteger(retryAfter) && retryAfter! > 0 && retryAfter! <= Number.MAX_SAFE_INTEGER - Date.now()
+    ? retryAfter!
+    : null;
+}
+
+function validateRetryConfig(retry: DiscordRetryConfig | false | undefined): void {
+  if (retry === false || retry === undefined) return;
+  if (!Number.isSafeInteger(retry.max_retries) || retry.max_retries < 0 || retry.max_retries > 100) {
+    throw new Error("discord_retry_config_invalid");
+  }
+}
+
+function combineSignals(first?: AbortSignal, second?: AbortSignal): AbortSignal | undefined {
+  if (!first) return second;
+  if (!second) return first;
+  return AbortSignal.any([first, second]);
+}
+
+async function sleepWithSignal(ms: number, signal?: AbortSignal, injectedSleep?: (ms: number) => Promise<void>): Promise<boolean> {
+  if (!Number.isSafeInteger(ms) || ms < 0 || signal?.aborted) return false;
+  if (ms === 0) return true;
+  if (injectedSleep) {
+    await injectedSleep(ms);
+    return !signal?.aborted;
+  }
+  return new Promise<boolean>((resolve) => {
+    const finish = (completed: boolean) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      resolve(completed);
+    };
+    const abort = () => finish(false);
+    const timer = setTimeout(() => finish(true), ms);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+  });
 }
 
 const UINT64_MAX = 18_446_744_073_709_551_615n;
@@ -397,6 +531,9 @@ function truncate(s: string, n: number): string {
 }
 
 function discordNextAction(result: DiscordPostResult): string {
+  if (result.error_code === "invalid_retry_after") {
+    return "Discord rejected the send but supplied an invalid Retry-After value; inspect rate limits before retrying.";
+  }
   const error = result.error ?? "post_failed";
   const details = classifyChannelDeliveryError({
     error,

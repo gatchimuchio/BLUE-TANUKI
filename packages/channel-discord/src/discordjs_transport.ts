@@ -34,7 +34,7 @@ export class DiscordJsTransport implements DiscordTransport {
     if (this.started) return;
 
     const djs = (await import("discord.js")) as {
-      Client: new (cfg: { intents: number[] }) => unknown;
+      Client: new (cfg: { intents: number[]; rest: { rejectOnRateLimit: string[]; retries: number } }) => unknown;
       GatewayIntentBits: {
         Guilds: number;
         GuildMessages: number;
@@ -50,7 +50,9 @@ export class DiscordJsTransport implements DiscordTransport {
       djs.GatewayIntentBits.MessageContent,
       djs.GatewayIntentBits.DirectMessages,
     ];
-    const client = new djs.Client({ intents }) as {
+    // The Gateway outbox owns delivery retry. Throw on channel-route rate limits and disable
+    // the SDK's automatic timeout/5xx retries so an ambiguous send cannot be replayed silently.
+    const client = new djs.Client({ intents, rest: { rejectOnRateLimit: ["/channels"], retries: 0 } }) as {
       once: (e: string, fn: (...a: unknown[]) => void) => void;
       on: (e: string, fn: (...a: unknown[]) => void) => void;
       login: (t: string) => Promise<string>;
@@ -59,7 +61,7 @@ export class DiscordJsTransport implements DiscordTransport {
       channels: {
         fetch: (id: string) => Promise<{
           isTextBased: () => boolean;
-          send: (text: string) => Promise<{ id: string }>;
+          send: (payload: string | { content: string; reply: { messageReference: string } }) => Promise<{ id: string }>;
         } | null>;
       };
     };
@@ -141,12 +143,13 @@ export class DiscordJsTransport implements DiscordTransport {
   async postMessage(args: {
     channel: string;
     text: string;
+    reply_to_message_id?: string;
   }): Promise<DiscordPostResult> {
     const c = this.client as {
       channels: {
         fetch: (id: string) => Promise<{
           isTextBased: () => boolean;
-          send: (text: string) => Promise<{ id: string }>;
+          send: (payload: string | { content: string; reply: { messageReference: string } }) => Promise<{ id: string }>;
         } | null>;
       };
     } | null;
@@ -154,6 +157,7 @@ export class DiscordJsTransport implements DiscordTransport {
       const error = "not_started";
       return {
         ok: false,
+        delivery_status: "not_delivered",
         error,
         ...classifyChannelDeliveryError({ error }),
       };
@@ -164,17 +168,30 @@ export class DiscordJsTransport implements DiscordTransport {
         const error = "channel_not_text_based";
         return {
           ok: false,
+          delivery_status: "not_delivered",
           error,
           ...classifyChannelDeliveryError({ error }),
         };
       }
-      const sent = await ch.send(args.text);
+      const sent = await ch.send(args.reply_to_message_id
+        ? { content: args.text, reply: { messageReference: args.reply_to_message_id } }
+        : args.text);
       return { ok: true, message_id: sent.id };
     } catch (e) {
       const error = discordErrorMessage(e);
-      const retry_after_ms = retryAfterMs(e);
+      const status = httpStatus(e);
+      const isRateLimit = status === 429 || isRateLimitError(e);
+      const retryHint = retryAfterHint(e);
+      const retry_after_ms = retryHint.retry_after_ms;
       const details = classifyChannelDeliveryError({ error, retry_after_ms });
-      return { ok: false, error, ...details };
+      return {
+        ok: false,
+        error,
+        ...details,
+        delivery_status: isRateLimit || (status !== undefined && status >= 400 && status < 500) ? "not_delivered" : "unknown",
+        ...(isRateLimit ? { rate_limit_rejected: true, retry_after_invalid: retryHint.invalid || retry_after_ms === undefined } : {}),
+        ...(isRateLimit && retry_after_ms === undefined ? { error_code: "rate_limited" } : {}),
+      };
     }
   }
 
@@ -209,15 +226,29 @@ function discordErrorMessage(error: unknown): string {
   return candidate || "discord_post_failed";
 }
 
-function retryAfterMs(error: unknown): number | undefined {
+function retryAfterHint(error: unknown): { retry_after_ms?: number; invalid: boolean } {
   const record = asRecord(error);
   const raw = asRecord(record?.rawError);
-  return (
-    positiveMs(record?.retry_after_ms) ??
+  const hasHint = [record, raw].some((item) => item &&
+    (Object.hasOwn(item, "retry_after_ms") || Object.hasOwn(item, "retry_after") || Object.hasOwn(item, "retryAfter")));
+  const retry_after_ms = positiveMs(record?.retry_after_ms) ??
+    positiveMs(record?.retryAfter) ??
     secondsToMs(record?.retry_after) ??
     positiveMs(raw?.retry_after_ms) ??
-    secondsToMs(raw?.retry_after)
-  );
+    secondsToMs(raw?.retry_after);
+  return { ...(retry_after_ms === undefined ? {} : { retry_after_ms }), invalid: hasHint && retry_after_ms === undefined };
+}
+
+function isRateLimitError(error: unknown): boolean {
+  const record = asRecord(error);
+  return record?.name === "RateLimitError" && typeof record.retryAfter === "number";
+}
+
+function httpStatus(error: unknown): number | undefined {
+  const record = asRecord(error);
+  const raw = asRecord(record?.rawError);
+  const status = record?.status ?? record?.statusCode ?? record?.httpStatus ?? raw?.status;
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
 }
 
 function secondsToMs(value: unknown): number | undefined {
@@ -227,11 +258,12 @@ function secondsToMs(value: unknown): number | undefined {
       : typeof value === "string" && value.trim() !== ""
       ? Number(value)
       : NaN;
-  return Number.isFinite(n) && n > 0 ? Math.ceil(n * 1000) : undefined;
+  const ms = Math.ceil(n * 1000);
+  return Number.isFinite(n) && n > 0 && Number.isSafeInteger(ms) ? ms : undefined;
 }
 
 function positiveMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
     ? Math.ceil(value)
     : undefined;
 }

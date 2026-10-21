@@ -305,14 +305,19 @@ function replyTarget(req: InboundRequest): string {
   return typeof m === "string" && m.length > 0 ? m : req.user;
 }
 
-function replyPayload(req: InboundRequest, content: string): ChannelSendPayload {
+export function replyPayload(req: InboundRequest, content: string): ChannelSendPayload {
   const replyThread = req.channel === "slack" ? req.metadata?.["slack_reply_thread_ts"] : undefined;
+  const discordReply = req.channel === "discord" ? req.metadata?.["discord_message_id"] : undefined;
   return {
     channel: req.channel,
     target: replyTarget(req),
     content,
     ...(typeof replyThread === "string" && /^(?:0|[1-9]\d{0,19})\.\d{1,20}$/u.test(replyThread)
       ? { thread_ts: replyThread }
+      : {}),
+    ...(typeof discordReply === "string" && /^(?:0|[1-9]\d{0,19})$/u.test(discordReply) &&
+      BigInt(discordReply) <= 18_446_744_073_709_551_615n
+      ? { reply_to_message_id: discordReply }
       : {}),
   };
 }
@@ -4428,6 +4433,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       bot_token: discordBotToken,
       inbound_grants: discordInboundGrants,
       ...(discordEventStore ? { inbox: discordEventStore } : {}),
+      ...(discordEventStore ? { delivery_store: discordEventStore } : {}),
       log: (line: string) => discordLog.info(line),
     }),
     optionalPreviewChannel("@blue-tanuki/channel-teams", [

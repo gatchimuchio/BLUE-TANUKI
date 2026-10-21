@@ -22,9 +22,11 @@ F11.03の設定consumerを部分的に`WIRED`。Control Center ConnectionsはSla
 
 F12.01 Discord inbound identity/admissionは、authenticated Gateway eventのguild/channel/user/message identity、owner設定の完全一致grant、Gateway durable Inboxを通す局所consumerまで部分的に`WIRED`。stable actorにmutable display nameを使わず、Inboxにはidentity／payload digestとdelivery stateのみを保持する。Discord実credential／Gateway接続／HDS運転は未実施のため、Discordは`first-party-preview`、F12.01全体の実環境受入は未成立。受入結果の詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)に記録する。
 
+F12.02はsynthetic fixture上で部分的に`WIRED`。admitted Discord inputからGateway inbound boundary、`replyPayload`、OutboundDispatcher、Discord channel、Gateway private SQLite outboxまでを接続し、元message IDをnative reply referenceとしてconsumerへ渡す。outbox本文はpending中だけ保存してterminal settlementで消去する。確認済みrate-limit拒否と有効Retry-Afterのみをdurable wait後に再試行し、dispatch中断・timeout・通信例外等の結果不明は自動再送しない。discord.jsのchannel-route rate-limit rejectionをoutboxへ返し、REST SDK内の自動再送を無効化した。これはsynthetic transport／Gateway boundaryの接続証拠で、実Discord API／credential／HDS運転を証明しない。Discordは`first-party-preview`、F12.02全体とF12.03のlive受入は未成立。
+
 ## 次のBUILD_BATCH
 
-F12.01のDiscord inbound admission consumerはsynthetic fixtureで部分的に`WIRED`だが、実credential／Gateway接続／HDS運転を含む全体受入は未成立で、Discordは`first-party-preview`を維持する。次のBUILD_BATCHは現行工程表の`F12.02 Discord inbound／reply／persistent retry consumer`とし、admitted messageからGateway仕事処理・返信・永続待機までを接続する。F11.03 Slack live受入はOD-03条件が明示された場合だけ別途実施し、F16.03はD4-Pocket側native producer変更を要するため`BLOCKED_AUTHORITY`のまま別repoへ書き込まない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。QE_BUILDを維持し、製品全体の結合形状成立前に詳細QC／QAを開始しない。次の独立作業・切替・再開時は`QE_CURRENT_AUTHORITY.md`の現行pinと現行三点セットを再同期する。旧版・完了記録は必要な依存・変更系譜・矛盾の解消時だけ参照する。
+DiscordのF12.01 inbound admissionとF12.02 inbound→Gateway boundary→native reply/outbox subpathはsynthetic fixture上で部分的に`WIRED`だが、実credential／Discord API／実HDS運転は未確認で`first-party-preview`を維持する。ownerの実装先行指示に従い、F12.03のlive受入・昇格判定は製品全体の実装が成立しOD-03条件が別途整うまで行わない。次のBUILD_BATCHは現行工程表で依存が独立した`F13.01 Teams入口認証・同一性consumer`とし、tenant/chat/user/conversationの真正性・共有空間境界を現物のTeams adapterと公式契約に接続する。F11.03 Slack live受入もOD-03条件が明示された場合だけ別途実施する。F16.03はD4-Pocket側native producer変更を要するため`BLOCKED_AUTHORITY`のまま別repoへ書き込まない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。QE_BUILDを維持し、製品全体の結合形状成立前に詳細QC／QAを開始しない。次の独立作業・切替・再開時は`QE_CURRENT_AUTHORITY.md`の現行pin、現行三点セット、適用`AGENTS.md`を再同期する。旧版・完了記録は必要な依存・変更系譜・矛盾の解消時だけ参照する。
 
 ## 共通の保護とGit
 
