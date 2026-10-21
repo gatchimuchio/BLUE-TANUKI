@@ -2674,3 +2674,20 @@ task cancellation requestとExecutor settlementを、task本文・tool結果・�
 | 全workspace suite、provider／credential、外部業務作用、5OS実機、QE_QC／QE_QA | 未実施。全体形状成立後へ保持。 |
 
 D05.02のtask cancellation evidence recovery producer→consumerをこの範囲で`WIRED`とする。local storeとCompleteHistoryが同時に使用不能な場合の永続証拠は保証しない。remote providerの処理停止は外部証拠なしに主張せず、AbortSignal非協調toolはsettlement前に停止済みとしない。D05.02全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+---
+
+### 履歴ログ：QEB-43-D05.02-FIRST-PARTY-ADAPTER-CANCEL-PROPAGATION
+
+開始HEAD／`main`／`origin/main`=`17eb6969bc5755b53cac5c971c40092475bf4ef8`。owner指定rev2.3の三点セット現行pin、適用AGENTSと作業標準、active指示、D05.02の取消境界、Executorのsignal供給元およびfirst-party request consumerを再同期した。旧版・完了履歴は全体を読み直さず、今回の依存となるQEB-42の該当箇所だけを参照。保護対象untracked Linux `target/`を維持した。
+
+通常のToolContextから受け取ったAbortSignalをHTTP／web search／browser read、GitHub read/write、Google Gmail／Calendar／Drive read/write、Composio executeのrequest adapterまで伝播した。Node HTTP(S) requestもsignalを受ける。HTTP redirectごと・DNS解決後・Google Gmailの複数message取得ごとに既キャンセルを再確認し、新しいrequestをdispatchしない。Google daily briefは取消をservice unavailableの成功要約へ変換せず、中断を不完全として返す。Executor既存のlate-result境界は取消後の結果を破棄し、非冪等の外部作用を再送しない。外部provider内処理の停止は証明しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `tools_builtin.test.ts -t "propagates cancellation|does not convert a cancelled"` | PASS、2 tests。HTTP／GitHub／Google request adapterへのsignal到達、中断したGoogle daily briefを確認。 |
+| `composio_connector.test.ts -t "passes cancellation"` | PASS、1 test。Composioへのsignal到達、abort時の非成功、既キャンセルdispatch拒否を確認。 |
+| package `pnpm build`／typecheck／`git diff --check` | PASS。Windows isolation release buildとTypeScript build。Linux isolation build scriptはWindows上でno-op。 |
+| 全workspace suite、実provider／credential、外部業務作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後へ保持。 |
+
+first-party adapter cancellation producer→request consumerをこの範囲で`WIRED`とする。これはlocal request cancellationの確認であり、remote providerの停止証拠ではない。外部処理状態は`unknown`のまま。C08.03実provider試験、AbortSignal非協調toolの強制停止、D05.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。実装commit=`b0623921ea071b3b23b332232a5ca5edd3c6f0c0`。C08.03保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
