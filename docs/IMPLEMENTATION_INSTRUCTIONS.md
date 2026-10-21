@@ -21,7 +21,7 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 E02.03の「資源消費が進捗へつながらない場合にJへ戻す」を、このwait→receipt→J re-review consumer範囲で`WIRED`とする。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider試験、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留する。次はrev2.3工程表順のE02.04を対象に、必要節と現物consumerを同期してQE_BUILDを続ける。
 
-実装commit=`9a62f8fbb663177fe5d0f5c307ec31613555ecca`を`main`へatomic push済み。push後のremote `main`／backup current=`9a62f8fbb663177fe5d0f5c307ec31613555ecca`、backup previous=`10d2b1cb0a2e312282640cca0b69ddd42a507bf0`をlocal recovery branch・remote tag双方で照合した。closeout文書commitをpush後、currentをその文書commit、previousをこの実装commitへ回転して再照合する。保護対象Linux `target/`はcommit対象外。
+実装commit=`9a62f8fbb663177fe5d0f5c307ec31613555ecca`とcloseout文書commitを`main`へatomic push済み。closeout push後のremote HEAD／backup currentをlocal recovery branch・remote tag双方で照合し、previousにはこのBUILD_BATCHの実装commitを保持した。保護対象Linux `target/`はcommit対象外。
 
 ### 履歴ログ：`QEB-04-E02.02-RESOURCE-BACKPRESSURE-STOP-RESERVE-CONSUMER`
 
