@@ -89,6 +89,7 @@ import type {
   WebChatApprovalContentReview,
   WebChatApprovalContentReviewValidation,
   WebChatGoalPurposeRelationContentReview,
+  WebChatGoalPurposeChangeCandidate,
   WebChatMeaningUpdateContentReview,
   WebChatMemoryJudgmentReassessmentContentReview,
   WebChatEmergencyStopSnapshot,
@@ -237,6 +238,14 @@ interface PendingApproval {
     prior_version: number;
     prior_purpose_digest: string;
     proposal_actor: string;
+    source_skeptical_review?: {
+      source_command_id: string;
+      source_request_id: string;
+      candidate_digest: string;
+      review_digest: string;
+      affected_criterion_ref_digests: readonly string[];
+      conflicting_criterion_ref_digests: readonly string[];
+    };
   };
   goal_purpose_relation_review_proposal?: {
     args: OperationPlanGoalPurposeRelationReviewArguments;
@@ -2642,8 +2651,17 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ...(d4RuntimeToken && d4RuntimeId
         ? { d4_runtime_intent: { token: d4RuntimeToken, runtime_id: d4RuntimeId } }
         : {}),
-      onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string }) =>
+      onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string;
+        source_command_id?: string }) =>
         submitGoalPurposeChangeProposal(input),
+      onGoalPurposeChangeCandidates: async (input: { actor: string }) => {
+        if (input.actor !== "webchat-owner-token-holder") return [];
+        const alreadySubmitted = new Set([...pendingApprovals.values()]
+          .map((pending) => pending.goal_purpose_proposal?.source_skeptical_review?.source_command_id)
+          .filter((sourceCommandId): sourceCommandId is string => Boolean(sourceCommandId)));
+        return hds.getSkepticalReviewGoalPurposeChangeCandidatesForOwnerReview()
+          .filter((candidate) => !alreadySubmitted.has(candidate.source_command_id)) as WebChatGoalPurposeChangeCandidate[];
+      },
       onGoalPurposeRelationReviewProposal: async (input: { plan_id_digest: string; revision_digest: string;
         outcome: "supports" | "conflicts" | "unknown"; actor: string }) => submitGoalPurposeRelationReviewProposal(input),
       maintenance_token: maintenanceToken,
@@ -3057,6 +3075,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     goal_ref: string;
     purpose_text: string;
     actor: string;
+    source_command_id?: string;
   }): Promise<{
     accepted: boolean;
     status: string;
@@ -3073,6 +3092,27 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       return { accepted: false, status: "goal_purpose_change_input_invalid" };
     }
     const purposeDigest = digestString(input.purpose_text);
+    let sourceSkepticalReview: NonNullable<PendingApproval["goal_purpose_proposal"]>["source_skeptical_review"];
+    if (input.source_command_id) {
+      if ([...pendingApprovals.values()].some((pending) =>
+        pending.goal_purpose_proposal?.source_skeptical_review?.source_command_id === input.source_command_id)) {
+        return { accepted: false, status: "goal_purpose_change_candidate_already_submitted" };
+      }
+      const candidate = hds.getSkepticalReviewGoalPurposeChangeCandidateForOwnerReview(input.source_command_id);
+      if (!candidate || candidate.goal_ref !== input.goal_ref || candidate.purpose_text !== input.purpose_text ||
+          candidate.purpose_digest !== purposeDigest || candidate.used_for_authority !== false ||
+          candidate.may_execute !== false) {
+        return { accepted: false, status: "goal_purpose_change_candidate_stale_or_mismatched" };
+      }
+      sourceSkepticalReview = {
+        source_command_id: candidate.source_command_id,
+        source_request_id: candidate.request_id,
+        candidate_digest: candidate.candidate_digest,
+        review_digest: candidate.source_review_digest,
+        affected_criterion_ref_digests: [...candidate.affected_criterion_ref_digests],
+        conflicting_criterion_ref_digests: [...candidate.conflicting_criterion_ref_digests],
+      };
+    }
     const audit = hds.getAudit();
     const currentProjection = hds.getGoalGovernanceProjection();
     const currentGoal = currentProjection?.goals.find((goal) => goal.goal_ref === input.goal_ref);
@@ -3130,6 +3170,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         goal_ref: args.goal_ref,
         purpose_text_digest: purposeDigest,
         purpose_text_bytes: Buffer.byteLength(input.purpose_text, "utf8"),
+        ...(sourceSkepticalReview ? {
+          source_skeptical_review: {
+            source_command_id: sourceSkepticalReview.source_command_id,
+            source_request_id: sourceSkepticalReview.source_request_id,
+            candidate_digest: sourceSkepticalReview.candidate_digest,
+            review_digest: sourceSkepticalReview.review_digest,
+            affected_criterion_ref_digests: sourceSkepticalReview.affected_criterion_ref_digests,
+            conflicting_criterion_ref_digests: sourceSkepticalReview.conflicting_criterion_ref_digests,
+          },
+        } : {}),
         boundary_status: "canonical_record_contract_passed",
         raw_payload_exposed: false,
         used_for_authority: false,
@@ -3180,6 +3230,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         prior_version: args.prior_version,
         prior_purpose_digest: args.prior_purpose_digest,
         proposal_actor: input.actor,
+        ...(sourceSkepticalReview ? { source_skeptical_review: sourceSkepticalReview } : {}),
       },
     });
     const pending = pendingApprovals.get(command.id);
@@ -3304,7 +3355,21 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (!proposal || !args || !hds.getAudit().isPersistent() || !hds.getAudit().verify() ||
         digestString(proposal.purpose_text) !== proposal.purpose_digest) return false;
     const current = hds.getGoalGovernanceProjection()?.goals.find((goal) => goal.goal_ref === proposal.goal_ref);
-    return Boolean(current && current.goal_kind === "delegated" &&
+    const source = proposal.source_skeptical_review
+      ? hds.getSkepticalReviewGoalPurposeChangeCandidateForOwnerReview(
+        proposal.source_skeptical_review.source_command_id)
+      : undefined;
+    const sourceMatches = !proposal.source_skeptical_review || Boolean(source &&
+      source.request_id === proposal.source_skeptical_review.source_request_id &&
+      source.goal_ref === proposal.goal_ref && source.purpose_text === proposal.purpose_text &&
+      source.purpose_digest === proposal.purpose_digest &&
+      source.candidate_digest === proposal.source_skeptical_review.candidate_digest &&
+      source.source_review_digest === proposal.source_skeptical_review.review_digest &&
+      JSON.stringify(source.affected_criterion_ref_digests) ===
+        JSON.stringify(proposal.source_skeptical_review.affected_criterion_ref_digests) &&
+      JSON.stringify(source.conflicting_criterion_ref_digests) ===
+        JSON.stringify(proposal.source_skeptical_review.conflicting_criterion_ref_digests));
+    return Boolean(sourceMatches && current && current.goal_kind === "delegated" &&
       current.current_version === proposal.prior_version &&
       current.current_purpose_digest === proposal.prior_purpose_digest &&
       proposal.purpose_digest === args.new_purpose_digest &&
@@ -3440,6 +3505,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         prior_purpose_digest: pending.goal_purpose_proposal.prior_purpose_digest,
         new_purpose_digest: pending.goal_purpose_proposal.purpose_digest,
         purpose_text: pending.goal_purpose_proposal.purpose_text,
+        ...(pending.goal_purpose_proposal.source_skeptical_review ? {
+          source_skeptical_review: {
+            source_command_id: pending.goal_purpose_proposal.source_skeptical_review.source_command_id,
+            source_request_id: pending.goal_purpose_proposal.source_skeptical_review.source_request_id,
+            candidate_digest: pending.goal_purpose_proposal.source_skeptical_review.candidate_digest,
+            review_digest: pending.goal_purpose_proposal.source_skeptical_review.review_digest,
+            affected_criterion_ref_digests: [...pending.goal_purpose_proposal.source_skeptical_review.affected_criterion_ref_digests],
+            conflicting_criterion_ref_digests: [...pending.goal_purpose_proposal.source_skeptical_review.conflicting_criterion_ref_digests],
+          },
+        } : {}),
         used_for_authority: false,
       };
       pendingApprovals.set(command_id, { ...pending, content_review_digest: review.command_digest });
@@ -3668,6 +3743,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           prior_version: p.goal_purpose_proposal.prior_version,
           prior_purpose_digest: p.goal_purpose_proposal.prior_purpose_digest,
           new_purpose_digest: p.goal_purpose_proposal.purpose_digest,
+          ...(p.goal_purpose_proposal.source_skeptical_review ? {
+            source_skeptical_review: {
+              source_command_id: p.goal_purpose_proposal.source_skeptical_review.source_command_id,
+              source_request_id: p.goal_purpose_proposal.source_skeptical_review.source_request_id,
+              candidate_digest: p.goal_purpose_proposal.source_skeptical_review.candidate_digest,
+              review_digest: p.goal_purpose_proposal.source_skeptical_review.review_digest,
+              affected_criterion_ref_digests: [...p.goal_purpose_proposal.source_skeptical_review.affected_criterion_ref_digests],
+              conflicting_criterion_ref_digests: [...p.goal_purpose_proposal.source_skeptical_review.conflicting_criterion_ref_digests],
+            },
+          } : {}),
           review_status: !goalPurposeProposalIsCurrent(p)
             ? "stale" as const
             : p.content_review_digest === p.command_digest ? "reviewed" as const : "required" as const,

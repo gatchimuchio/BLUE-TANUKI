@@ -851,6 +851,14 @@ export class Executor {
       resp = safeResponse;
     }
 
+    const skepticalReviewPresent = Object.prototype.hasOwnProperty.call(resp, "skeptical_review");
+    const skepticalReview = skepticalReviewPresent ? resp.skeptical_review : undefined;
+    if (skepticalReviewPresent) {
+      const safeResponse = { ...resp };
+      delete safeResponse.skeptical_review;
+      resp = safeResponse;
+    }
+
     let toolCandidates: NonNullable<LLMResponse["tool_calls"]> | undefined;
     try {
       toolCandidates = normalizeLLMToolCallCandidates(
@@ -912,6 +920,7 @@ export class Executor {
         ? { ...resp, operation_core: plannerInspection.evidence }
         : resp,
       ...(toolCandidates?.length ? { llm_tool_candidates: toolCandidates } : {}),
+      ...(skepticalReviewPresent ? { skeptical_review: skepticalReview } : {}),
       ...(meaningUpdateProposalPresent ? { meaning_update_proposal: meaningUpdateProposal } : {}),
       ...(computeResourceUse ? { compute_resource_use: computeResourceUse } : {}),
       metrics: {

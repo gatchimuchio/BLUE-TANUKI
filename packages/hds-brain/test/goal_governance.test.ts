@@ -286,6 +286,112 @@ describe("HDS goal governance consumer", () => {
     expect(controller.getAudit().verify()).toBe(true);
   });
 
+  it("keeps a conflicting C purpose proposal non-authoritative until owner retrieval and exact L3 submission", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-skeptical-purpose-") );
+    try {
+      const controller = new HDSUpperController({
+        audit: new AuditLog({ filepath: join(root, "audit.jsonl") }),
+        goal_governance: createConfig(),
+      });
+      const criterionRef = "criterion-purpose-conflict";
+      const purposeText = "PRIVATE_SYNTHETIC_PURPOSE_PROPOSAL";
+      const { log, command } = controller.decide({
+        ...request,
+        id: "goal-purpose-candidate-source",
+        content: "Review the delegated task scope.",
+        goal_criteria: {
+          schema_version: "blue-tanuki.goal-criteria.v1",
+          criteria: [{
+            criterion_ref: criterionRef,
+            criterion_kind: "objective",
+            tool_relations: [{ tool_name: "echo", relation: "supports" }],
+          }],
+        },
+      });
+      expect(command?.type).toBe("llm_call");
+      if (!command) throw new Error("goal-purpose source decision did not issue an LLM command");
+
+      controller.onFeedback({
+        command_id: command.id,
+        status: "success",
+        skeptical_review: {
+          schema_version: "blue-tanuki.skeptical-review.v1",
+          observation_reports: [{ criterion_ref: criterionRef, finding: "synthetic unverified conflict", relation: "conflicts" }],
+          goal_purpose_change_proposal: { goal_ref: delegated, purpose_text: purposeText },
+        },
+        metrics: { duration_ms: 1 },
+      });
+
+      const feedbackLog = controller.getAudit().list().map(({ log: entry }) => entry)
+        .find((entry) => "kind" in entry && entry.kind === "executor_feedback");
+      if (!feedbackLog || !("kind" in feedbackLog) || feedbackLog.kind !== "executor_feedback") {
+        throw new Error("skeptical feedback audit entry missing");
+      }
+      expect(feedbackLog.feedback.skeptical_review).toMatchObject({
+        status: "recorded",
+        goal_purpose_change_proposal: {
+          status: "candidate_recorded",
+          prior_version: 2,
+          prior_purpose_digest: digest("3"),
+          used_for_authority: false,
+          may_execute: false,
+        },
+      });
+      const candidates = controller.getSkepticalReviewGoalPurposeChangeCandidatesForOwnerReview();
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]).toMatchObject({
+        request_id: log.request_id,
+        source_command_id: command.id,
+        goal_ref: delegated,
+        purpose_text: purposeText,
+        conflicting_criterion_ref_digests: expect.arrayContaining([expect.any(String)]),
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(controller.getSkepticalReviewGoalPurposeChangeCandidateForOwnerReview("missing-command")).toBeNull();
+      expect(controller.getGoalGovernanceProjection()?.goals.find((goal) => goal.goal_ref === delegated))
+        .toMatchObject({ current_version: 2, current_purpose_digest: digest("3") });
+      expect(JSON.stringify(controller.getAudit().list())).not.toContain(purposeText);
+      expect(controller.getAudit().verify()).toBe(true);
+
+      const noConflictDecision = controller.decide({
+        ...request,
+        id: "goal-purpose-candidate-no-conflict",
+        goal_criteria: {
+          schema_version: "blue-tanuki.goal-criteria.v1",
+          criteria: [{
+            criterion_ref: criterionRef,
+            criterion_kind: "objective",
+            tool_relations: [{ tool_name: "echo", relation: "supports" }],
+          }],
+        },
+      });
+      if (!noConflictDecision.command) throw new Error("no-conflict decision did not issue an LLM command");
+      controller.onFeedback({
+        command_id: noConflictDecision.command.id,
+        status: "success",
+        skeptical_review: {
+          schema_version: "blue-tanuki.skeptical-review.v1",
+          observation_reports: [{ criterion_ref: criterionRef, finding: "synthetic support", relation: "supports" }],
+          goal_purpose_change_proposal: { goal_ref: delegated, purpose_text: "unused synthetic proposal" },
+        },
+        metrics: { duration_ms: 1 },
+      });
+      const noConflictFeedback = controller.getAudit().list().map(({ log: entry }) => entry)
+        .find((entry) => "kind" in entry && entry.kind === "executor_feedback" &&
+          entry.command_id === noConflictDecision.command!.id);
+      if (!noConflictFeedback || !("kind" in noConflictFeedback) || noConflictFeedback.kind !== "executor_feedback") {
+        throw new Error("no-conflict feedback audit entry missing");
+      }
+      expect(noConflictFeedback.feedback.skeptical_review?.goal_purpose_change_proposal.status)
+        .toBe("no_conflicting_scope");
+      expect(controller.getSkepticalReviewGoalPurposeChangeCandidateForOwnerReview(noConflictDecision.command.id))
+        .toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not accept governance state from inbound metadata and omits it when unconfigured", () => {
     const forged = { ...createConfig(), schema_version: "SENTINEL_UNTRUSTED_GOVERNANCE" };
     const withoutConfiguration = new HDSUpperController().decide({

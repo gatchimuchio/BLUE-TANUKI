@@ -625,8 +625,14 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <section class="approval-content-review">
             <h3>Delegated goal purpose proposal</h3>
-            <p class="muted">Submit the exact proposed purpose for a separate L3 review. Submission does not change the delegated goal.</p>
+            <p class="muted">C proposals are unverified candidates. Select one explicitly, inspect its conflict scope and exact text, then submit it for a separate L3 review. Submission does not change the delegated goal.</p>
             <input id="goal-purpose-owner-token" type="password" autocomplete="off" placeholder="owner proposal token" />
+            <div class="action-row">
+              <button id="load-goal-purpose-candidates" type="button">Load C proposals</button>
+              <select id="goal-purpose-candidate" aria-label="Unverified purpose proposals">
+                <option value="">No C proposal selected</option>
+              </select>
+            </div>
             <input id="goal-purpose-goal-ref" type="text" autocomplete="off" placeholder="delegated goal reference" />
             <textarea id="goal-purpose-text" rows="5" autocomplete="off" placeholder="Exact proposed purpose text"></textarea>
             <div class="action-row">

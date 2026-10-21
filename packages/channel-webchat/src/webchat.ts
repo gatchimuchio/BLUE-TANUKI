@@ -130,6 +130,7 @@ function findAotanuAssetRoot(): string {
  *   POST /owner/inbound body:{user, content} auth:dedicated owner bearer
  *   POST /runtime/intent body:{runtime_id, session_id, intent} auth:dedicated D4 Runtime bearer
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
+ *   GET  /owner/goal-purpose-change-candidates auth:dedicated owner bearer, no-store
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
  *   POST /resume     body:{request_id, verdict, approval_token}  auth:Bearer  rate-limited (global)
  *   GET  /approval   auth:Bearer resume-token
@@ -636,6 +637,38 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    if (url.pathname === "/owner/goal-purpose-change-candidates") {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.opts.owner_token || !this.opts.onGoalPurposeChangeCandidates) {
+        res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "goal_purpose_change_candidates_not_configured" }));
+        return;
+      }
+      if (!this.checkAuth(req, "owner")) {
+        res.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, "owner-goal-purpose-token-holder", res)) return;
+      try {
+        const candidates = await this.opts.onGoalPurposeChangeCandidates({ actor: OWNER_TOKEN_ACTOR });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify({ candidates }));
+      } catch {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "goal_purpose_change_candidates_unavailable" }));
+      }
+      return;
+    }
+
     if (req.method !== "POST") {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "not_found" }));
@@ -751,6 +784,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     if (url.pathname === "/owner/goal-purpose-change") {
       const goal_ref = typeof body?.goal_ref === "string" ? body.goal_ref : "";
       const purpose_text = typeof body?.purpose_text === "string" ? body.purpose_text : "";
+      const source_command_id = typeof body?.source_command_id === "string" ? body.source_command_id : undefined;
       if (!this.opts.onGoalPurposeChangeProposal) {
         res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "goal_purpose_change_not_configured" }));
@@ -766,12 +800,18 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "purpose_text_too_large" }));
         return;
       }
+      if (source_command_id !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(source_command_id)) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "invalid_source_command_id" }));
+        return;
+      }
       if (!this.rateLimitOr429(this.buckets.inbound, "owner-goal-purpose-token-holder", res)) return;
       try {
         const result = await this.opts.onGoalPurposeChangeProposal({
           goal_ref,
           purpose_text,
           actor: OWNER_TOKEN_ACTOR,
+          ...(source_command_id ? { source_command_id } : {}),
         });
         res.writeHead(result.accepted ? 202 : 409, {
           "content-type": "application/json",

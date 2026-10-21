@@ -128,6 +128,9 @@ function parseResponse(provider: string, data: unknown, requestedModel: string):
     tokens_usage_status: usage.status,
     model: typeof responseModel === "string" ? responseModel : requestedModel,
     ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    ...(Object.hasOwn(choice.message, "skeptical_review")
+      ? { skeptical_review: choice.message.skeptical_review }
+      : {}),
     // Optional provider extension carrying an untrusted C candidate. Executor
     // removes it from user-visible content and HDS remains its only consumer.
     ...(Object.hasOwn(choice.message, "meaning_update_proposal")

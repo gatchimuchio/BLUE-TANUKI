@@ -83,6 +83,7 @@ import type {
   ScheduleLifecycleLog,
   SuspendedRequest,
   LLMToolCandidateAssessment,
+  SkepticalReviewAuditTrace,
   AuditRecord,
   MemoryCitationReviewLog,
 } from "./types.js";
@@ -105,7 +106,7 @@ import {
   createDefaultDetectorRegistry,
 } from "./detectors/index.js";
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy } from "./policy.js";
-import { assessCandidateGoalCriteria } from "./candidate_criteria.js";
+import { assessCandidateGoalCriteria, digestGoalCriteriaValue } from "./candidate_criteria.js";
 import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
 import {
   assessFailureReviewCandidate,
@@ -340,6 +341,26 @@ interface PendingMeaningUpdateCandidate {
   readonly proposal: MeaningUpdateProposalV3;
   readonly proposal_digest: string;
   readonly memory_trace: DecisionLog["frame"]["memory_trace"];
+}
+
+interface PendingSkepticalReviewGoalPurposeChangeCandidate {
+  readonly request_id: string;
+  readonly source_command_id: string;
+  readonly goal_ref: string;
+  readonly purpose_text: string;
+  readonly purpose_digest: string;
+  readonly candidate_digest: string;
+  readonly prior_version: number;
+  readonly prior_purpose_digest: string;
+  readonly source_review_digest: string;
+  readonly affected_criterion_ref_digests: readonly string[];
+  readonly conflicting_criterion_ref_digests: readonly string[];
+}
+
+export interface OwnerSkepticalReviewGoalPurposeChangeCandidate
+  extends PendingSkepticalReviewGoalPurposeChangeCandidate {
+  readonly used_for_authority: false;
+  readonly may_execute: false;
 }
 
 export interface OwnerMeaningUpdateProposalReview {
@@ -763,6 +784,9 @@ export class HDSUpperController {
   private meaningUpdateMemoryApprovalContext?: MeaningUpdateMemoryApprovalContext;
   private memoryJudgmentReassessmentApprovalContext?: MemoryJudgmentReassessmentApprovalContext;
   private readonly pendingMeaningUpdateCandidates = new Map<string, PendingMeaningUpdateCandidate>();
+  private readonly pendingSkepticalReviewGoalPurposeChangeCandidates =
+    new Map<string, PendingSkepticalReviewGoalPurposeChangeCandidate>();
+  private readonly issuedLLMFeedbackCommands = new Set<string>();
   private readonly operationPlans: OperationPlanLedger;
   private readonly issuedLLM = new Map<string, {
     command: ExecuteCommand;
@@ -1434,6 +1458,7 @@ ${planControl.question}`,
         this.inflight.set(command.id, log);
         this.issuedExecutionCommands.set(command, log);
         this.issuedExecutionCommandsById.set(command.id, { command, owner: req.user, channel: req.channel });
+        if (command.type === "llm_call") this.issuedLLMFeedbackCommands.add(command.id);
         if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
             req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
           const issuedOrigin = structuredClone(req);
@@ -1605,6 +1630,7 @@ ${planControl.question}`,
       this.inflight.set(command.id, resumeLog);
       this.issuedExecutionCommands.set(command, resumeLog);
       this.issuedExecutionCommandsById.set(command.id, { command, owner: req.user, channel: req.channel });
+      if (command.type === "llm_call") this.issuedLLMFeedbackCommands.add(command.id);
       if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
         this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req),
@@ -2350,6 +2376,7 @@ ${planControl.question}`,
       this.operationPlans.abandon(command_id);
       this.operationPlans.forgetReflection(command_id);
       this.issuedLLM.delete(command_id);
+      this.issuedLLMFeedbackCommands.delete(command_id);
       this.inflight.delete(command_id);
     }
   }
@@ -2854,7 +2881,7 @@ ${planControl.question}`,
     const candidateAssessments = toolCandidates
       ? assessLLMToolCandidates(toolCandidates, sourceLog)
       : [];
-    const skepticalReview = fb.skeptical_review === undefined
+    let skepticalReview = fb.skeptical_review === undefined
       ? undefined
       : skepticalReviewParse?.success
         ? assessSkepticalReview({
@@ -2864,6 +2891,85 @@ ${planControl.question}`,
           assessments: candidateAssessments,
         })
         : invalidSkepticalReviewTrace();
+    let pendingSkepticalReviewGoalPurposeChangeCandidate:
+      PendingSkepticalReviewGoalPurposeChangeCandidate | undefined;
+    const goalPurposeChangeInput = skepticalReviewParse?.success
+      ? skepticalReviewParse.data.goal_purpose_change_proposal
+      : undefined;
+    if (skepticalReview && skepticalReviewParse?.success && goalPurposeChangeInput) {
+      const sourceReviewDigest = sha256(skepticalReview);
+      const conflictingCriterionDigests = [...new Set(skepticalReviewParse.data.observation_reports
+        .filter((report) => report.relation === "conflicts")
+        .map((report) => digestGoalCriteriaValue(report.criterion_ref)))].sort();
+      const goal = this.getGoalGovernanceProjection()?.goals.find((candidate) =>
+        candidate.goal_ref === goalPurposeChangeInput.goal_ref);
+      const purposeDigest = createHash("sha256").update(goalPurposeChangeInput.purpose_text, "utf8").digest("hex");
+      let proposalStatus: SkepticalReviewAuditTrace["goal_purpose_change_proposal"]["status"];
+      if (!goalPurposeChangeInput.purpose_text.trim() ||
+          Buffer.byteLength(goalPurposeChangeInput.purpose_text, "utf8") > 16 * 1024 ||
+          !isWellFormedUnicodeText(goalPurposeChangeInput.purpose_text)) {
+        proposalStatus = "invalid";
+      } else if (!this.audit.isPersistent() || !this.audit.verify()) {
+        proposalStatus = "source_unavailable";
+      } else if (!sourceLog || !this.issuedLLMFeedbackCommands.has(fb.command_id) ||
+          sourceLog.commit.decision !== "ASSERT" || fb.status !== "success") {
+        proposalStatus = "source_unavailable";
+      } else if (skepticalReview.status !== "recorded" || skepticalReview.unmatched_criterion_ref_digests.length > 0) {
+        proposalStatus = "unmatched_scope";
+      } else if (conflictingCriterionDigests.length === 0 ||
+          conflictingCriterionDigests.some((digest) =>
+            !skepticalReview!.affected_criterion_ref_digests.includes(digest))) {
+        proposalStatus = "no_conflicting_scope";
+      } else if (!goal || goal.goal_kind !== "delegated") {
+        proposalStatus = "delegated_goal_unavailable";
+      } else if (purposeDigest === goal.current_purpose_digest) {
+        proposalStatus = "purpose_unchanged";
+      } else {
+        proposalStatus = "candidate_recorded";
+        const candidateDigest = sha256({
+          schema_version: "blue-tanuki.skeptical-review-goal-purpose-change.v1",
+          request_id: sourceLog.request_id,
+          source_command_id: fb.command_id,
+          goal_ref_digest: sha256(goalPurposeChangeInput.goal_ref),
+          purpose_digest: purposeDigest,
+          prior_version: goal.current_version,
+          prior_purpose_digest: goal.current_purpose_digest,
+          source_review_digest: sourceReviewDigest,
+          affected_criterion_ref_digests: skepticalReview.affected_criterion_ref_digests,
+          conflicting_criterion_ref_digests: conflictingCriterionDigests,
+        });
+        pendingSkepticalReviewGoalPurposeChangeCandidate = {
+          request_id: sourceLog.request_id,
+          source_command_id: fb.command_id,
+          goal_ref: goalPurposeChangeInput.goal_ref,
+          purpose_text: goalPurposeChangeInput.purpose_text,
+          purpose_digest: purposeDigest,
+          candidate_digest: candidateDigest,
+          prior_version: goal.current_version,
+          prior_purpose_digest: goal.current_purpose_digest,
+          source_review_digest: sourceReviewDigest,
+          affected_criterion_ref_digests: [...skepticalReview.affected_criterion_ref_digests],
+          conflicting_criterion_ref_digests: conflictingCriterionDigests,
+        };
+      }
+      skepticalReview = {
+        ...skepticalReview,
+        goal_purpose_change_proposal: {
+          status: proposalStatus,
+          goal_ref_digest: sha256(goalPurposeChangeInput.goal_ref),
+          purpose_digest: purposeDigest,
+          ...(proposalStatus === "candidate_recorded" && goal
+            ? { candidate_digest: pendingSkepticalReviewGoalPurposeChangeCandidate?.candidate_digest,
+                prior_version: goal.current_version, prior_purpose_digest: goal.current_purpose_digest,
+                source_review_digest: sourceReviewDigest }
+            : {}),
+          affected_criterion_ref_digests: [...skepticalReview.affected_criterion_ref_digests],
+          conflicting_criterion_ref_digests: conflictingCriterionDigests,
+          may_execute: false,
+          used_for_authority: false,
+        },
+      };
+    }
     const failureReviewTrace = issued?.failure_review_projection
       ? assessFailureReviewCandidate({
           projection: issued.failure_review_projection,
@@ -2991,6 +3097,19 @@ ${planControl.question}`,
       timestamp: Date.now(),
     };
     this.audit.append(feedbackLog);
+    this.issuedLLMFeedbackCommands.delete(fb.command_id);
+
+    if (pendingSkepticalReviewGoalPurposeChangeCandidate && this.audit.isPersistent() && this.audit.verify()) {
+      while (this.pendingSkepticalReviewGoalPurposeChangeCandidates.size >= 64) {
+        const oldest = this.pendingSkepticalReviewGoalPurposeChangeCandidates.keys().next().value as string | undefined;
+        if (!oldest) break;
+        this.pendingSkepticalReviewGoalPurposeChangeCandidates.delete(oldest);
+      }
+      this.pendingSkepticalReviewGoalPurposeChangeCandidates.set(fb.command_id,
+        structuredClone(pendingSkepticalReviewGoalPurposeChangeCandidate));
+    } else {
+      this.pendingSkepticalReviewGoalPurposeChangeCandidates.delete(fb.command_id);
+    }
 
     if (sourceLog && issued && issued.command.id === fb.command_id && sourceLog.commit.decision === "ASSERT" &&
         issued.command.upstream_decision.commit_hash === sourceLog.commit.hash &&
@@ -3564,6 +3683,73 @@ ${planControl.question}`,
 
   getGoalGovernanceProjection(asOf = Date.now()): ReadonlyGoalGovernanceProjection | undefined {
     return this.goal_governance?.project(asOf);
+  }
+
+  /** Owner-only consumer data for a C proposal; the candidate itself grants no authority. */
+  getSkepticalReviewGoalPurposeChangeCandidateForOwnerReview(
+    sourceCommandId: string,
+  ): OwnerSkepticalReviewGoalPurposeChangeCandidate | null {
+    const candidate = this.pendingSkepticalReviewGoalPurposeChangeCandidates.get(sourceCommandId);
+    if (!candidate) return null;
+    if (!this.skepticalReviewGoalPurposeChangeCandidateIsCurrent(candidate)) {
+      this.pendingSkepticalReviewGoalPurposeChangeCandidates.delete(sourceCommandId);
+      return null;
+    }
+    return Object.freeze({ ...structuredClone(candidate), used_for_authority: false, may_execute: false });
+  }
+
+  getSkepticalReviewGoalPurposeChangeCandidatesForOwnerReview():
+    readonly OwnerSkepticalReviewGoalPurposeChangeCandidate[] {
+    return [...this.pendingSkepticalReviewGoalPurposeChangeCandidates.keys()]
+      .map((sourceCommandId) => this.getSkepticalReviewGoalPurposeChangeCandidateForOwnerReview(sourceCommandId))
+      .filter((candidate): candidate is OwnerSkepticalReviewGoalPurposeChangeCandidate => candidate !== null);
+  }
+
+  discardSkepticalReviewGoalPurposeChangeCandidate(sourceCommandId: string): void {
+    this.pendingSkepticalReviewGoalPurposeChangeCandidates.delete(sourceCommandId);
+  }
+
+  private skepticalReviewGoalPurposeChangeCandidateIsCurrent(
+    candidate: PendingSkepticalReviewGoalPurposeChangeCandidate,
+  ): boolean {
+    if (!this.audit.isPersistent() || !this.audit.verify() ||
+        createHash("sha256").update(candidate.purpose_text, "utf8").digest("hex") !== candidate.purpose_digest) {
+      return false;
+    }
+    const current = this.getGoalGovernanceProjection()?.goals.find((goal) => goal.goal_ref === candidate.goal_ref);
+    if (!current || current.goal_kind !== "delegated" || current.current_version !== candidate.prior_version ||
+        current.current_purpose_digest !== candidate.prior_purpose_digest) return false;
+    const feedback = this.audit.list().map(({ log }) => log).find((log) => {
+      if (!log || typeof log !== "object" || !("kind" in log) || log.kind !== "executor_feedback" ||
+          !("command_id" in log) || log.command_id !== candidate.source_command_id ||
+          !("request_id" in log) || log.request_id !== candidate.request_id || !("feedback" in log)) return false;
+      const payload = log.feedback as { skeptical_review?: SkepticalReviewAuditTrace };
+      const trace = payload?.skeptical_review;
+      const proposalTrace = trace?.goal_purpose_change_proposal;
+      const sourceReview = trace ? {
+        ...trace,
+        goal_purpose_change_proposal: {
+          status: "not_proposed" as const,
+          affected_criterion_ref_digests: [],
+          conflicting_criterion_ref_digests: [],
+          may_execute: false as const,
+          used_for_authority: false as const,
+        },
+      } : undefined;
+      return trace?.status === "recorded" && proposalTrace?.status === "candidate_recorded" &&
+        proposalTrace.goal_ref_digest === sha256(candidate.goal_ref) &&
+        proposalTrace.purpose_digest === candidate.purpose_digest &&
+        proposalTrace.candidate_digest === candidate.candidate_digest &&
+        proposalTrace.prior_version === candidate.prior_version &&
+        proposalTrace.prior_purpose_digest === candidate.prior_purpose_digest &&
+        proposalTrace.source_review_digest === candidate.source_review_digest &&
+        sourceReview !== undefined && sha256(sourceReview) === candidate.source_review_digest &&
+        JSON.stringify(proposalTrace.affected_criterion_ref_digests) ===
+          JSON.stringify(candidate.affected_criterion_ref_digests) &&
+        JSON.stringify(proposalTrace.conflicting_criterion_ref_digests) ===
+          JSON.stringify(candidate.conflicting_criterion_ref_digests);
+    });
+    return Boolean(feedback);
   }
 
   /** Read exact purpose content from J-approved M storage; references and content grant no authority. */
@@ -4241,4 +4427,18 @@ function isCapturedMemoryReference(value: unknown): value is CapturedMemoryRefer
     typeof (value as Partial<CapturedMemoryReference>).request_id === "string" &&
     typeof (value as Partial<CapturedMemoryReference>).entry_hash === "string"
   );
+}
+
+function isWellFormedUnicodeText(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
 }

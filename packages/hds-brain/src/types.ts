@@ -437,6 +437,20 @@ export interface SkepticalReviewAuditTrace {
     original_goal_binding_preserved: boolean;
   };
   candidate_reviews: SkepticalReviewCandidateTrace[];
+  goal_purpose_change_proposal: {
+    status: "not_proposed" | "invalid" | "source_unavailable" | "unmatched_scope" | "no_conflicting_scope" |
+      "delegated_goal_unavailable" | "purpose_unchanged" | "candidate_recorded";
+    goal_ref_digest?: string;
+    purpose_digest?: string;
+    candidate_digest?: string;
+    prior_version?: number;
+    prior_purpose_digest?: string;
+    source_review_digest?: string;
+    affected_criterion_ref_digests: string[];
+    conflicting_criterion_ref_digests: string[];
+    may_execute: false;
+    used_for_authority: false;
+  };
   follow_up_required: "none" | "independent_observation";
   may_execute: false;
   used_for_authority: false;

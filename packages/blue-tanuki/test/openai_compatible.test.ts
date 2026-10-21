@@ -84,6 +84,24 @@ describe("OpenAICompatibleBackend", () => {
     expect(response).toMatchObject({ content: "safe user-facing answer", meaning_update_proposal: proposal });
   });
 
+  it("preserves an optional skeptical review extension as untrusted structured data", async () => {
+    const proposal = {
+      schema_version: "blue-tanuki.skeptical-review.v1",
+      observation_reports: [{ criterion_ref: "criterion-1", finding: "synthetic conflict", relation: "conflicts" }],
+      goal_purpose_change_proposal: { goal_ref: "goal_0000000000000001", purpose_text: "synthetic purpose" },
+    };
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      model: "provider-model",
+      choices: [{ message: { content: "safe user-facing answer", skeptical_review: proposal } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+    const backend = new OpenAICompatibleBackend({ endpoint: "https://example.test/v1", defaultModel: "configured-model" });
+    const response = await backend.call({ messages: [{ role: "user", content: "ping" }] });
+
+    expect(response).toMatchObject({ content: "safe user-facing answer", skeptical_review: proposal });
+  });
+
   it("surfaces provider errors without making the provider authoritative", async () => {
     globalThis.fetch = (async () =>
       new Response("bad request", { status: 400 })) as typeof fetch;

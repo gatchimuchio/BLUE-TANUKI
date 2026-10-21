@@ -103,6 +103,14 @@ export interface WebChatApprovalQueueItem {
     prior_version: number;
     prior_purpose_digest: string;
     new_purpose_digest: string;
+    source_skeptical_review?: {
+      source_command_id: string;
+      source_request_id: string;
+      candidate_digest: string;
+      review_digest: string;
+      affected_criterion_ref_digests: readonly string[];
+      conflicting_criterion_ref_digests: readonly string[];
+    };
     review_status: "required" | "reviewed" | "stale";
     used_for_authority: false;
   };
@@ -203,7 +211,31 @@ export interface WebChatGoalPurposeChangeContentReview {
   prior_purpose_digest: string;
   new_purpose_digest: string;
   purpose_text: string;
+  source_skeptical_review?: {
+    source_command_id: string;
+    source_request_id: string;
+    candidate_digest: string;
+    review_digest: string;
+    affected_criterion_ref_digests: readonly string[];
+    conflicting_criterion_ref_digests: readonly string[];
+  };
   used_for_authority: false;
+}
+
+export interface WebChatGoalPurposeChangeCandidate {
+  source_command_id: string;
+  request_id: string;
+  goal_ref: string;
+  purpose_text: string;
+  purpose_digest: string;
+  candidate_digest: string;
+  prior_version: number;
+  prior_purpose_digest: string;
+  source_review_digest: string;
+  affected_criterion_ref_digests: readonly string[];
+  conflicting_criterion_ref_digests: readonly string[];
+  used_for_authority: false;
+  may_execute: false;
 }
 
 export interface WebChatGoalPurposeRelationContentReview {
@@ -653,6 +685,7 @@ export interface WebChatOptions {
     goal_ref: string;
     purpose_text: string;
     actor: string;
+    source_command_id?: string;
   }) => Promise<{
     accepted: boolean;
     status: string;
@@ -663,6 +696,8 @@ export interface WebChatOptions {
     request_id?: string;
     command_id?: string;
   }>;
+  /** Read owner-only, unverified C candidates for an explicit owner-selected L3 proposal. */
+  onGoalPurposeChangeCandidates?: (input: { actor: string }) => Promise<readonly WebChatGoalPurposeChangeCandidate[]>;
   /** Dedicated owner endpoint for an exact, one-plan task-purpose relation review. */
   onGoalPurposeRelationReviewProposal?: (input: {
     plan_id_digest: string;

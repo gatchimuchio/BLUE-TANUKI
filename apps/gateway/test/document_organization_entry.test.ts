@@ -349,6 +349,18 @@ describe("delegated goal purpose owner review", () => {
     try {
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
+      const unauthorizedCandidates = await fetch(
+        `http://127.0.0.1:${gatewayPort}/owner/goal-purpose-change-candidates`,
+        { headers: { authorization: `Bearer ${token}` } },
+      );
+      expect(unauthorizedCandidates.status).toBe(401);
+      const ownerCandidates = await fetch(
+        `http://127.0.0.1:${gatewayPort}/owner/goal-purpose-change-candidates`,
+        { headers: { authorization: `Bearer ${ownerToken}` } },
+      );
+      expect(ownerCandidates.status).toBe(200);
+      expect(ownerCandidates.headers.get("cache-control")).toBe("no-store");
+      expect(await ownerCandidates.json()).toEqual({ candidates: [] });
       const proposalResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/goal-purpose-change`, {
         method: "POST",
         headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },

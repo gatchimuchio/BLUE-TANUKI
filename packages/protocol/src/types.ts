@@ -345,6 +345,11 @@ export const SkepticalReviewRequestSchema = z.object({
   }).strict()).min(1).max(32),
   alternative_hypotheses: z.array(z.string().min(1).max(4_000)).max(16).optional(),
   proposed_goal_criteria: GoalCriteriaSchema.optional(),
+  /** Untrusted C candidate for a delegated purpose change; J may only queue it for owner review. */
+  goal_purpose_change_proposal: z.object({
+    goal_ref: z.string().regex(/^goal_[a-f0-9]{16,64}$/),
+    purpose_text: z.string().min(1).max(16 * 1024),
+  }).strict().optional(),
 }).strict();
 export type SkepticalReviewRequest = z.infer<typeof SkepticalReviewRequestSchema>;
 
@@ -554,7 +559,8 @@ export const ExecuteFeedbackSchema = z.object({
   llm_failure: LLMCallFailureSchema.optional(),
   compute_resource_use: ComputeResourceUseSchema.optional(),
   llm_tool_candidates: z.array(LLMToolCallCandidateSchema).max(32).optional(),
-  skeptical_review: SkepticalReviewRequestSchema.optional(),
+  /** C output is deliberately unchecked until HDS applies the source-bound review contract. */
+  skeptical_review: z.unknown().optional(),
   /** C由来の未信頼出力。提案を記録する前にHDS-BRAINが検証する。 */
   meaning_update_proposal: z.unknown().optional(),
   metrics: z.object({

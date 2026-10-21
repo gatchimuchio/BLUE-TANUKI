@@ -78,6 +78,7 @@ export function assessSkepticalReview(input: {
       frame_correction: frameCorrection,
       candidate_reviews: input.assessments.map((assessment) =>
         preservedCandidate(assessment, "source_scope_unavailable")),
+      goal_purpose_change_proposal: noGoalPurposeChangeProposal("source_unavailable"),
       follow_up_required: "none",
       may_execute: false,
       used_for_authority: false,
@@ -101,6 +102,7 @@ export function assessSkepticalReview(input: {
         assessment,
         proposedProjection?.status === "invalid" ? "proposed_criteria_invalid" : "review_scope_unmatched",
       )),
+      goal_purpose_change_proposal: noGoalPurposeChangeProposal("unmatched_scope"),
       follow_up_required: "none",
       may_execute: false,
       used_for_authority: false,
@@ -180,6 +182,7 @@ export function assessSkepticalReview(input: {
     alternative_hypothesis_digests: hypothesisDigests,
     frame_correction: frameCorrection,
     candidate_reviews: candidateReviews,
+    goal_purpose_change_proposal: noGoalPurposeChangeProposal("not_proposed"),
     follow_up_required: affectedCriterionDigests.length > 0 ? "independent_observation" : "none",
     may_execute: false,
     used_for_authority: false,
@@ -200,7 +203,20 @@ export function invalidSkepticalReviewTrace(): SkepticalReviewAuditTrace {
     alternative_hypothesis_digests: [],
     frame_correction: { status: "not_proposed", original_goal_binding_preserved: false },
     candidate_reviews: [],
+    goal_purpose_change_proposal: noGoalPurposeChangeProposal("invalid"),
     follow_up_required: "none",
+    may_execute: false,
+    used_for_authority: false,
+  };
+}
+
+function noGoalPurposeChangeProposal(
+  status: SkepticalReviewAuditTrace["goal_purpose_change_proposal"]["status"],
+): SkepticalReviewAuditTrace["goal_purpose_change_proposal"] {
+  return {
+    status,
+    affected_criterion_ref_digests: [],
+    conflicting_criterion_ref_digests: [],
     may_execute: false,
     used_for_authority: false,
   };

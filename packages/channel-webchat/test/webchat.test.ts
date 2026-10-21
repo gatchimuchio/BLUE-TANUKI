@@ -66,7 +66,7 @@ async function setup(
   opts: Partial<
     Ctx & {
       onResume?: (id: string, v: string, ctx: { actor: string; token_kind: "resume" }) => Promise<unknown>;
-      onGoalPurposeChangeProposal?: (input: { goal_ref: string; purpose_text: string; actor: string }) => Promise<{
+      onGoalPurposeChangeProposal?: (input: { goal_ref: string; purpose_text: string; actor: string; source_command_id?: string }) => Promise<{
         accepted: boolean;
         status: string;
         goal_ref?: string;
@@ -76,6 +76,21 @@ async function setup(
         request_id?: string;
         command_id?: string;
       }>;
+      onGoalPurposeChangeCandidates?: (input: { actor: string }) => Promise<readonly {
+        source_command_id: string;
+        request_id: string;
+        goal_ref: string;
+        purpose_text: string;
+        purpose_digest: string;
+        candidate_digest: string;
+        prior_version: number;
+        prior_purpose_digest: string;
+        source_review_digest: string;
+        affected_criterion_ref_digests: readonly string[];
+        conflicting_criterion_ref_digests: readonly string[];
+        used_for_authority: false;
+        may_execute: false;
+      }[]>;
       onGoalPurposeRelationReviewProposal?: (input: {
         plan_id_digest: string;
         revision_digest: string;
@@ -127,6 +142,7 @@ async function setup(
     host: "127.0.0.1",
     onResume: opts.onResume as never,
     onGoalPurposeChangeProposal: opts.onGoalPurposeChangeProposal,
+    onGoalPurposeChangeCandidates: opts.onGoalPurposeChangeCandidates,
     onGoalPurposeRelationReviewProposal: opts.onGoalPurposeRelationReviewProposal,
     resume_approval_tokens: opts.resume_approval_tokens,
     resume_approval_token_ttl_ms: opts.resume_approval_token_ttl_ms,
@@ -2816,7 +2832,7 @@ describe("WebChatChannel — HTTP inbound", () => {
 
   it("routes a bounded delegated-purpose proposal only through the dedicated owner credential", async () => {
     const proposalText = "Exact purpose proposal: retain the delegated objective and record uncertainty.";
-    const proposals: Array<{ goal_ref: string; purpose_text: string; actor: string }> = [];
+    const proposals: Array<{ goal_ref: string; purpose_text: string; actor: string; source_command_id?: string }> = [];
     const ownerCtx = await setup({
       owner_token: OWNER_TOKEN,
       onGoalPurposeChangeProposal: async (input) => {
@@ -2835,7 +2851,12 @@ describe("WebChatChannel — HTTP inbound", () => {
     });
     try {
       await ownerCtx.ch.start(async () => undefined);
-      const input = { goal_ref: "goal_0000000000000001", purpose_text: proposalText, actor: "forged" };
+      const input = {
+        goal_ref: "goal_0000000000000001",
+        purpose_text: proposalText,
+        source_command_id: "source-command-001",
+        actor: "forged",
+      };
       expect((await postJson(ownerCtx.port, "/owner/goal-purpose-change", input, {
         authorization: `Bearer ${TOKEN}`,
       })).status).toBe(401);
@@ -2846,6 +2867,7 @@ describe("WebChatChannel — HTTP inbound", () => {
         goal_ref: input.goal_ref,
         purpose_text: proposalText,
         actor: "webchat-owner-token-holder",
+        source_command_id: input.source_command_id,
       }]);
       const oversized = await postJson(ownerCtx.port, "/owner/goal-purpose-change", {
         goal_ref: input.goal_ref,
@@ -2859,6 +2881,41 @@ describe("WebChatChannel — HTTP inbound", () => {
       }, { authorization: `Bearer ${OWNER_TOKEN}` });
       expect(malformedUnicode.status).toBe(400);
       expect(proposals).toHaveLength(1);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("returns unverified C purpose candidates only to the dedicated owner credential without caching", async () => {
+    const candidate = {
+      source_command_id: "source-command-001",
+      request_id: "source-request-001",
+      goal_ref: "goal_0000000000000001",
+      purpose_text: "Synthetic unverified delegated purpose",
+      purpose_digest: "a".repeat(64),
+      candidate_digest: "b".repeat(64),
+      prior_version: 2,
+      prior_purpose_digest: "c".repeat(64),
+      source_review_digest: "d".repeat(64),
+      affected_criterion_ref_digests: ["e".repeat(64)],
+      conflicting_criterion_ref_digests: ["e".repeat(64)],
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    const ownerCtx = await setup({
+      owner_token: OWNER_TOKEN,
+      onGoalPurposeChangeCandidates: async ({ actor }) => actor === "webchat-owner-token-holder" ? [candidate] : [],
+    });
+    try {
+      await ownerCtx.ch.start(async () => undefined);
+      const unauthenticated = await fetch(`http://127.0.0.1:${ownerCtx.port}/owner/goal-purpose-change-candidates`);
+      expect(unauthenticated.status).toBe(401);
+      const response = await fetch(`http://127.0.0.1:${ownerCtx.port}/owner/goal-purpose-change-candidates`, {
+        headers: { authorization: `Bearer ${OWNER_TOKEN}` },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({ candidates: [candidate] });
     } finally {
       await ownerCtx.teardown();
     }

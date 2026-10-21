@@ -452,3 +452,31 @@ describe("Executor meaning-update proposal transport", () => {
     expect(JSON.stringify(feedback.result)).not.toContain(candidateMeaning);
   });
 });
+
+describe("Executor skeptical-review proposal transport", () => {
+  it("forwards the untrusted review to HDS and removes it from the visible result", async () => {
+    const proposal = {
+      schema_version: "blue-tanuki.skeptical-review.v1",
+      observation_reports: [{ criterion_ref: "criterion-1", finding: "synthetic conflict", relation: "conflicts" }],
+      goal_purpose_change_proposal: {
+        goal_ref: "goal_0000000000000001",
+        purpose_text: "synthetic proposed delegated purpose",
+      },
+    };
+    const llm: LLMBackend = {
+      name: "skeptical-review-fixture",
+      async call(_request: LLMRequest): Promise<LLMResponse> {
+        return { content: "synthetic answer", tokens_used: 1, model: "fixture-model", skeptical_review: proposal };
+      },
+    };
+    const exec = new Executor({ approval_authority: executorApproval, llm, tools: new ToolRegistry() });
+
+    const feedback = await exec.execute(approved(llmCallCmd()));
+
+    expect(feedback.status).toBe("success");
+    expect(feedback.skeptical_review).toEqual(proposal);
+    expect(feedback.result).toMatchObject({ content: "synthetic answer" });
+    expect(feedback.result).not.toHaveProperty("skeptical_review");
+    expect(JSON.stringify(feedback.result)).not.toContain("synthetic proposed delegated purpose");
+  });
+});

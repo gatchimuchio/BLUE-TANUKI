@@ -2519,3 +2519,22 @@ E06.01の限定feedback→goal-criterion→candidate impact returnを監査記�
 | 全workspace suite、provider／credential、実送信、5OS実機、QE_QC／QE_QA | 未実施。外部作用・全体品質判定は含めず、親scenarioのQC候補へ保持。 |
 
 E06.02の意味復元consumerとJの外部作用状態projectionの分離を、実controller経路の合成fixtureで`WIRED`とする。これは実送信証拠やE06親全体の受入ではない。E06.03の限定再開放consumer、E06親要求全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はrev2.3 E06.03「目的変更提案と限定再開放」。
+
+## 2026-10-21 QEB-34-E06.03-GOAL-CHANGE-PROPOSAL-BOUNDED-REOPEN
+
+開始HEAD／`main`／`origin/main`=`adf520d07a07479b05e95052bcd3da9c78609204`。現行rev2.3の三点セット・適用`AGENTS.md`・active指示とE06.03/E07.01を照合。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持し、施工対象外とした。
+
+LLM由来の目的変更提案を表示結果から分離してHDSへ渡し、実発行済みLLM command・成功feedback・監査鎖・一致したconflict scope・現行delegated goalを照合する。条件を満たす候補だけをboundedなprocess-local保留へ記録し、digest-onlyの監査traceを残す。候補はowner専用no-store endpointで読み出し、ownerが内容を完全一致で選択した場合だけ既存のgoal change L3/content reviewへ送る。L3前のJ/M目的変更、自動再計算、自動実行はない。HDSでは合成purpose本文を監査へ保存しない。C出力のconflict主張は未検証のままで、候補は権限ではない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| HDS `goal_governance.test.ts` | PASS、15 tests。合成C proposalの限定候補化、conflict scope、no-conflict拒否、監査へのraw本文非保存、J目的未変更を確認。 |
+| Executor／OpenAI-compatible adapter suites | PASS、2 files／23 tests。未信頼proposalのHDS伝達とuser-visible resultからの除外を確認。 |
+| WebChat `webchat.test.ts` | PASS、105 tests。owner credential限定・no-store候補取得経路を確認。 |
+| Gateway `document_organization_entry.test.ts -t "holds exact proposal text"` | PASS、1 test。既存goal-purpose L3/content review経路を確認。C proposal由来の実承認は行っていない。 |
+| workspace `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| full workspace suite、実provider／credential、外部業務作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後へ保持。 |
+
+E06.03のC proposal→HDS検証→owner選択→既存L3 queueという限定経路をコード接続済みとする。E06親要求全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。Gateway ordinary C08 cases 3件は先行実行でprovider呼出し前の`cycle_failed`を観測済みで、今回の変更対象外として再実行していない。次はrev2.3 E07.01「親目的付きAgent分担」。
+
+---

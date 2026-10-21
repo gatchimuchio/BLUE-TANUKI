@@ -52,7 +52,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         chatConnectionGeneration: 0,
         runtimeSnapshotRequestId: 0,
         approvalTokens: Object.create(null),
-        approvalContentDigests: Object.create(null)
+        approvalContentDigests: Object.create(null),
+        goalPurposeCandidates: []
       };
 
       const redactKeyParts = ["token", "secret", "authorization", "cookie", "content", "credential", "password"];
@@ -1398,6 +1399,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const goalPurposeReview = isObject(item.goal_purpose_change_review) && item.goal_purpose_change_review.kind === "goal_purpose_change"
                 ? item.goal_purpose_change_review
                 : null;
+              const purposeSource = goalPurposeReview && isObject(goalPurposeReview.source_skeptical_review)
+                ? goalPurposeReview.source_skeptical_review : null;
               const goalPurposeRelationReview = isObject(item.goal_purpose_relation_review) &&
                 item.goal_purpose_relation_review.kind === "task_purpose_relation" ? item.goal_purpose_relation_review : null;
               const meaningUpdateReview = isObject(item.meaning_update_review) &&
@@ -1450,8 +1453,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                     '<dt>current version</dt><dd>' + escapeHtml(goalPurposeReview.prior_version) + '</dd>' +
                     '<dt>current purpose digest</dt><dd class="mono">' + escapeHtml(goalPurposeReview.prior_purpose_digest) + '</dd>' +
                     '<dt>proposed purpose digest</dt><dd class="mono">' + escapeHtml(goalPurposeReview.new_purpose_digest) + '</dd>' +
+                    (purposeSource ? '<dt>C review digest</dt><dd class="mono">' + escapeHtml(purposeSource.review_digest) + '</dd>' +
+                      '<dt>conflict criteria</dt><dd>' + escapeHtml(Array.isArray(purposeSource.conflicting_criterion_ref_digests)
+                        ? purposeSource.conflicting_criterion_ref_digests.length : 0) + '</dd>' : '') +
                     '<dt>content review</dt><dd>' + escapeHtml(goalPurposeReview.review_status || "required") + '</dd>' +
-                    '</dl><p class="muted">The exact purpose text is held in memory until this approval ends and is revealed only after selecting Review exact purpose.</p></section>'
+                    '</dl><p class="muted">The exact purpose text is held in memory until this approval ends and is revealed only after selecting Review exact purpose. An attached C review is unverified and grants no authority.</p></section>'
                   : '') +
                 (goalPurposeRelationReview
                   ? '<section class="approval-content-review"><strong>taskと作業目的の関係確認</strong><dl class="kv">' +
@@ -3604,6 +3610,77 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      async function loadGoalPurposeCandidates() {
+        const ownerTokenInput = byId("goal-purpose-owner-token");
+        const status = byId("goal-purpose-submit-status");
+        const select = byId("goal-purpose-candidate");
+        const ownerToken = ownerTokenInput.value.trim();
+        status.textContent = "loading unverified C proposals";
+        status.className = "badge warn";
+        try {
+          const body = await fetchJson("/owner/goal-purpose-change-candidates", ownerToken, { cache: "no-store" });
+          if (!body || !Array.isArray(body.candidates)) throw new Error("candidate response is invalid");
+          state.goalPurposeCandidates = body.candidates.filter(function (candidate) {
+            return candidate && typeof candidate.source_command_id === "string" &&
+              /^[A-Za-z0-9_-]{1,128}$/.test(candidate.source_command_id) &&
+              typeof candidate.request_id === "string" && candidate.request_id.length <= 200 &&
+              /^goal_[a-f0-9]{16,64}$/.test(candidate.goal_ref || "") &&
+              typeof candidate.purpose_text === "string" && candidate.purpose_text.length > 0 &&
+              /^[a-f0-9]{64}$/.test(candidate.purpose_digest || "") &&
+              /^[a-f0-9]{64}$/.test(candidate.candidate_digest || "") &&
+              /^[a-f0-9]{64}$/.test(candidate.source_review_digest || "") &&
+              Number.isSafeInteger(candidate.prior_version) && candidate.prior_version > 0 &&
+              /^[a-f0-9]{64}$/.test(candidate.prior_purpose_digest || "") &&
+              Array.isArray(candidate.affected_criterion_ref_digests) &&
+              candidate.affected_criterion_ref_digests.length > 0 && candidate.affected_criterion_ref_digests.length <= 32 &&
+              candidate.affected_criterion_ref_digests.every(function (digest) { return /^[a-f0-9]{64}$/.test(digest); }) &&
+              Array.isArray(candidate.conflicting_criterion_ref_digests) &&
+              candidate.conflicting_criterion_ref_digests.length > 0 && candidate.conflicting_criterion_ref_digests.length <= 32 &&
+              candidate.conflicting_criterion_ref_digests.every(function (digest) { return /^[a-f0-9]{64}$/.test(digest); }) &&
+              candidate.used_for_authority === false && candidate.may_execute === false;
+          });
+          select.replaceChildren();
+          const empty = document.createElement("option");
+          empty.value = "";
+          empty.textContent = "No C proposal selected";
+          select.appendChild(empty);
+          state.goalPurposeCandidates.forEach(function (candidate) {
+            const option = document.createElement("option");
+            option.value = candidate.source_command_id;
+            option.textContent = candidate.goal_ref + " | conflict criteria " +
+              (Array.isArray(candidate.conflicting_criterion_ref_digests) ? candidate.conflicting_criterion_ref_digests.length : 0) +
+              " | " + candidate.candidate_digest.slice(0, 12);
+            select.appendChild(option);
+          });
+          status.textContent = state.goalPurposeCandidates.length + " unverified C proposal(s) loaded; no goal changed";
+          status.className = "badge warn";
+        } catch (error) {
+          state.goalPurposeCandidates = [];
+          select.replaceChildren();
+          const empty = document.createElement("option");
+          empty.value = "";
+          empty.textContent = "No C proposal selected";
+          select.appendChild(empty);
+          status.textContent = error && error.message ? error.message : "candidate load failed";
+          status.className = "badge bad";
+        } finally {
+          ownerTokenInput.value = "";
+        }
+      }
+
+      function selectGoalPurposeCandidate() {
+        const sourceCommandId = byId("goal-purpose-candidate").value;
+        const candidate = state.goalPurposeCandidates.find(function (item) {
+          return item.source_command_id === sourceCommandId;
+        });
+        if (!candidate) return;
+        byId("goal-purpose-goal-ref").value = candidate.goal_ref;
+        byId("goal-purpose-text").value = candidate.purpose_text;
+        const status = byId("goal-purpose-submit-status");
+        status.textContent = "unverified C proposal selected; inspect exact text and conflict scope before L3 submission";
+        status.className = "badge warn";
+      }
+
       async function submitGoalPurposeChange() {
         const ownerTokenInput = byId("goal-purpose-owner-token");
         const purposeInput = byId("goal-purpose-text");
@@ -3611,6 +3688,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const ownerToken = ownerTokenInput.value.trim();
         const goalRef = byId("goal-purpose-goal-ref").value.trim();
         const purposeText = purposeInput.value;
+        const sourceCommandId = byId("goal-purpose-candidate").value;
         status.textContent = "submitting";
         status.className = "badge warn";
         try {
@@ -3620,7 +3698,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               "content-type": "application/json",
               ...authHeaders(ownerToken)
             },
-            body: JSON.stringify({ goal_ref: goalRef, purpose_text: purposeText })
+            body: JSON.stringify({
+              goal_ref: goalRef,
+              purpose_text: purposeText,
+              ...(sourceCommandId ? { source_command_id: sourceCommandId } : {})
+            })
           });
           const result = await response.json().catch(function () { return null; });
           if (!response.ok || !result || result.accepted !== true) {
@@ -3629,6 +3711,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             return;
           }
           purposeInput.value = "";
+          byId("goal-purpose-candidate").value = "";
           status.textContent = "L3 review queued: " + (result.command_id || "command id unavailable") +
             " | goal " + result.goal_ref + " v" + result.prior_version + " | purpose digest " + result.new_purpose_digest;
           status.className = "badge good";
@@ -3749,6 +3832,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           return;
         }
         if (review.kind === "goal_purpose_change") {
+          const sourceReview = review.source_skeptical_review;
           if (review.command_id !== commandId || review.operation !== "goal.governance.change" ||
               review.used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review.command_digest || "") ||
               !/^[a-f0-9]{64}$/.test(review.request_payload_digest || "") ||
@@ -3756,7 +3840,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               !/^[a-f0-9]{64}$/.test(review.prior_purpose_digest || "") ||
               typeof review.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(review.goal_ref) ||
               !Number.isSafeInteger(review.prior_version) || review.prior_version <= 0 ||
-              typeof review.purpose_text !== "string") {
+              typeof review.purpose_text !== "string" ||
+              (sourceReview !== undefined && (!isObject(sourceReview) ||
+                typeof sourceReview.source_command_id !== "string" ||
+                typeof sourceReview.source_request_id !== "string" ||
+                !/^[a-f0-9]{64}$/.test(sourceReview.candidate_digest || "") ||
+                !/^[a-f0-9]{64}$/.test(sourceReview.review_digest || "") ||
+                !Array.isArray(sourceReview.affected_criterion_ref_digests) ||
+                sourceReview.affected_criterion_ref_digests.length > 32 ||
+                !sourceReview.affected_criterion_ref_digests.every(function (digest) { return /^[a-f0-9]{64}$/.test(digest); }) ||
+                !Array.isArray(sourceReview.conflicting_criterion_ref_digests) ||
+                sourceReview.conflicting_criterion_ref_digests.length === 0 ||
+                sourceReview.conflicting_criterion_ref_digests.length > 32 ||
+                !sourceReview.conflicting_criterion_ref_digests.every(function (digest) { return /^[a-f0-9]{64}$/.test(digest); })))) {
             throw new Error("purpose review response is not bound to this approval");
           }
           view.replaceChildren();
@@ -3777,6 +3873,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             row.append(label, value);
             view.appendChild(row);
           });
+          if (sourceReview) {
+            const sourceHeading = document.createElement("strong");
+            sourceHeading.textContent = "Unverified C review source scope";
+            view.appendChild(sourceHeading);
+            const source = document.createElement("pre");
+            source.textContent = JSON.stringify({
+              source_command_id: sourceReview.source_command_id,
+              source_request_id: sourceReview.source_request_id,
+              candidate_digest: sourceReview.candidate_digest,
+              review_digest: sourceReview.review_digest,
+              affected_criterion_ref_digests: sourceReview.affected_criterion_ref_digests,
+              conflicting_criterion_ref_digests: sourceReview.conflicting_criterion_ref_digests
+            }, null, 2);
+            view.appendChild(source);
+          }
           const purposeLabel = document.createElement("strong");
           purposeLabel.textContent = "Exact proposed purpose";
           view.appendChild(purposeLabel);
@@ -4254,6 +4365,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("load-runtime").addEventListener("click", loadRuntime);
       byId("load-notifications").addEventListener("click", loadNotifications);
       byId("load-approvals").addEventListener("click", loadApprovals);
+      byId("load-goal-purpose-candidates").addEventListener("click", function () {
+        loadGoalPurposeCandidates().catch(function () {
+          const status = byId("goal-purpose-submit-status");
+          status.textContent = "candidate load failed";
+          status.className = "badge bad";
+          byId("goal-purpose-owner-token").value = "";
+        });
+      });
+      byId("goal-purpose-candidate").addEventListener("change", selectGoalPurposeCandidate);
       byId("submit-goal-purpose-change").addEventListener("click", function () {
         submitGoalPurposeChange().catch(function () {
           const status = byId("goal-purpose-submit-status");
