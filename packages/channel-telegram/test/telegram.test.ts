@@ -10,20 +10,39 @@ interface FixtureUpdate {
     text?: string;
     chat: { id: number | string; type?: string };
     from?: { id: number | string; username?: string; first_name?: string; is_bot?: boolean };
+    document?: { file_id: string; file_unique_id?: string; file_name?: string; file_size?: number; mime_type?: string };
   };
 }
 
-async function receiveOnePoll(updates: FixtureUpdate[]): Promise<{
+async function receiveOnePoll(updates: FixtureUpdate[], telegramFile?: { file_path: string; bytes: Uint8Array; reported_size?: number }): Promise<{
   received: InboundRequest[];
   offsets: Array<number | null>;
   inbox: MemoryTelegramInbox;
+  fileRequests: string[];
+  fileDownloads: string[];
 }> {
   const received: InboundRequest[] = [];
   const offsets: Array<number | null> = [];
+  const fileRequests: string[] = [];
+  const fileDownloads: string[] = [];
   let pollCount = 0;
   let resolveSecondPoll!: () => void;
   const secondPoll = new Promise<void>((resolve) => { resolveSecondPoll = resolve; });
   const fetch: TelegramFetch = async (_input, init) => {
+    const url = String(_input);
+    if (url.endsWith("/getFile")) {
+      const request = JSON.parse(String(init?.body ?? "{}")) as { file_id?: unknown };
+      fileRequests.push(String(request.file_id ?? ""));
+      return new Response(JSON.stringify({ ok: true, result: telegramFile ? {
+        file_path: telegramFile.file_path, file_size: telegramFile.reported_size ?? telegramFile.bytes.byteLength,
+      } : {} }), { headers: { "content-type": "application/json" } });
+    }
+    if (url.includes("/file/botfixture-token/")) {
+      fileDownloads.push(url);
+      return new Response(telegramFile?.bytes ?? new Uint8Array(), {
+        headers: { "content-type": "application/octet-stream" },
+      });
+    }
     pollCount += 1;
     const body = JSON.parse(String(init?.body ?? "{}")) as { offset?: unknown };
     offsets.push(typeof body.offset === "number" ? body.offset : null);
@@ -50,7 +69,7 @@ async function receiveOnePoll(updates: FixtureUpdate[]): Promise<{
   await channel.start(async (request) => { received.push(request); });
   await secondPoll;
   await channel.stop();
-  return { received, offsets, inbox };
+  return { received, offsets, inbox, fileRequests, fileDownloads };
 }
 
 class MemoryTelegramInbox implements TelegramUpdateInbox {
@@ -121,17 +140,69 @@ describe("Telegram inbound identity and update handoff", () => {
     expect(received).toHaveLength(0);
   });
 
-  it("keeps attachment presence explicit without retaining Telegram file identifiers", async () => {
+  it("keeps unsupported attachment presence explicit without retaining Telegram file identifiers", async () => {
     const { received } = await receiveOnePoll([
       { update_id: 21, message: { message_id: 8, chat: { id: -1007 }, from: { id: 12345 },
         document: { file_id: "private-file-capability", file_name: "secret.txt" } } },
     ]);
     expect(received).toHaveLength(1);
-    expect(received[0]?.content).toContain("添付ファイルを受信しました");
+    expect(received[0]?.content).toContain("未対応形式");
     expect(received[0]?.metadata?.telegram_attachment_kinds).toEqual(["document"]);
     expect(received[0]?.metadata?.telegram_attachment_content_available).toBe(false);
+    expect(received[0]?.metadata?.telegram_attachment_processing_status).toBe("unsupported_type");
     expect(JSON.stringify(received[0])).not.toContain("private-file-capability");
     expect(JSON.stringify(received[0])).not.toContain("secret.txt");
+  });
+
+  it("passes bounded UTF-8 text documents to Gateway as explicitly untrusted content", async () => {
+    const bytes = new TextEncoder().encode("決定事項: 青\n未確認: 期限");
+    const { received, fileRequests } = await receiveOnePoll([
+      { update_id: 22, message: { message_id: 9, chat: { id: 12345, type: "private" }, from: { id: 12345 },
+        document: { file_id: "private-file-capability", file_name: "secret.txt", file_size: bytes.byteLength, mime_type: "text/plain" } } },
+    ], { file_path: "documents/file_1.txt", bytes });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.content).toContain("未信頼データ");
+    expect(received[0]?.content).toContain(JSON.stringify("決定事項: 青\n未確認: 期限"));
+    expect(received[0]?.metadata?.telegram_attachment_content_available).toBe(true);
+    expect(received[0]?.metadata?.telegram_attachment_processing_status).toBe("read");
+    expect(fileRequests).toEqual(["private-file-capability"]);
+    expect(JSON.stringify(received[0])).not.toContain("private-file-capability");
+    expect(JSON.stringify(received[0])).not.toContain("secret.txt");
+  });
+
+  it("does not download declared text attachments above the local byte limit", async () => {
+    const { received, fileRequests } = await receiveOnePoll([
+      { update_id: 23, message: { message_id: 10, chat: { id: 12345, type: "private" }, from: { id: 12345 },
+        document: { file_id: "private-file-capability", file_size: 65_537, mime_type: "text/plain" } } },
+    ]);
+
+    expect(received[0]?.content).toContain("上限");
+    expect(received[0]?.metadata?.telegram_attachment_processing_status).toBe("too_large");
+    expect(fileRequests).toEqual([]);
+  });
+
+  it("enforces the byte limit on the downloaded stream even when Telegram reports a smaller size", async () => {
+    const bytes = new Uint8Array(65_537);
+    const { received } = await receiveOnePoll([
+      { update_id: 24, message: { message_id: 11, chat: { id: 12345, type: "private" }, from: { id: 12345 },
+        document: { file_id: "private-file-capability", file_size: 1, mime_type: "text/plain" } } },
+    ], { file_path: "documents/file_2.txt", bytes, reported_size: 1 });
+
+    expect(received[0]?.content).toContain("上限");
+    expect(received[0]?.metadata?.telegram_attachment_processing_status).toBe("too_large");
+    expect(received[0]?.content).not.toContain("\u0000");
+  });
+
+  it("rejects an unsafe Telegram file path before sending the token-bearing download request", async () => {
+    const { received, fileDownloads } = await receiveOnePoll([
+      { update_id: 25, message: { message_id: 12, chat: { id: 12345, type: "private" }, from: { id: 12345 },
+        document: { file_id: "private-file-capability", file_size: 1, mime_type: "text/plain" } } },
+    ], { file_path: "../../outside", bytes: new TextEncoder().encode("x") });
+
+    expect(received[0]?.metadata?.telegram_attachment_processing_status).toBe("unavailable");
+    expect(received[0]?.content).toContain("未読取");
+    expect(fileDownloads).toEqual([]);
   });
 
   it("scopes the same sender to each group chat entry", async () => {

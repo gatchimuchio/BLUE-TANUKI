@@ -2847,3 +2847,22 @@ Gateway private SQLite cursorをTelegram update admissionへ注入した。crede
 F10.02のdurable admission・entry-scoped identity・返信分割経路を部分的に`WIRED`とするが、添付本文consumer未接続のためF10.02全体=`BUILD_GAP`、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、D4-Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。実装commit=`58371e3`。次は`F10.02-TELEGRAM-ATTACHMENT-CONTENT-CONSUMER`。
 
 ---
+
+### 履歴ログ：QEB-52-F10.02-TELEGRAM-TEXT-ATTACHMENT-CONSUMER
+
+開始`main`／`origin/main`=`7a1c7508de79378961937ceec7b223518128dd9e`。owner指定rev2.3の現行pin、三点セット、適用`AGENTS.md`、active指示、F10.02／F16.01の現行要求、Telegram adapterからGateway inbound handler・HDSへの呼出しを再同期した。旧版・閉じた作業は再読せず、依存と直前状態の確認にQEB-51だけを参照した。保護対象untracked Linux `target/`は維持した。
+
+Telegram Bot APIの`getFile`から得たrelative pathで添付を取得し、UTF-8 `text/plain`文書のみを最大64 KiBまで処理する。file IDはAPI呼出し中だけ使い、filename・file ID・credential・raw bytesをinbound metadata、通常履歴、専用diskへ保存しない。downloadは固定host、redirect拒否、path segment検査、宣言size照合、stream実測上限、timeoutを通す。decoded contentはJSON文字列として「未信頼データ」と明示してcaptionの後ろへ加えるため、添付本文単独の`tool:`文字列は直接tool routeにならない。未対応形式、size超過、invalid UTF-8、path／取得異常は未読取statusを明示する。画像・音声・他mediaは未対応のまま保持する。
+
+channel fixtureは添付本文がGateway inbound callbackへ届くことを確認。Gateway fixtureは実Gateway boundaryから`HDSUpperController.decide`まで受け渡し、添付本文が直接`tool_call`へならないことを確認した。実Telegram API／credential／外部業務作用は使用していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| channel-telegram `telegram.test.ts` | PASS、16 tests。UTF-8 text consumer、unsupported／oversize、stream上限、unsafe path、既存identity／reply／dedupe挙動。 |
+| Gateway `telegram_attachment_ingress.test.ts` | PASS、1 test。Gateway boundaryからHDSへのfixture入力、添付の未信頼分類、direct tool-route不成立。 |
+| channel-telegram typecheck／build、Gateway typecheck／build | PASS。 |
+| 全workspace suite、実Telegram API／資格／業務作用、非text media、5OS、QE_QC／QE_QA | 未実施。 |
+
+F10.02のテキスト添付producer→Gateway→HDS入力を部分的に`WIRED`とする。画像／音声／他形式のC media consumer、live Telegram経路、複数入口のlive運用は残り、F10.02全体=`BUILD_GAP`。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、D4-Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次は`F16.01-IMAGE-PRODUCER-TO-C-CONSUMER`。
+
+---
