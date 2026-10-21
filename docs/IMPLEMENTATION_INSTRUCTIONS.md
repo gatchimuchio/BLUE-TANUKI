@@ -4,7 +4,7 @@
 
 ## 現行状態
 
-`QEB-13-E03.03-WAIT-RECOVERY-HOLD-ROUTING`、`QEB-14-E03.03-BROKER-RESULT-RECOVERY-HOLD`、`QEB-15-E03.03-J-PLAN-RESIDUAL-ISOLATION`、`QEB-16-E03.03-J-PLAN-SCHEMA-RESIDUAL-ISOLATION`は完了し、詳細をIMPLEMENTATION_HISTORY.mdへ移した。復元holdはwait／遅延C候補／Broker保存結果の返却・plan再利用を止める。Jの意味不整合または個別schema-invalidなplanは実行viewから隔離し、raw recordを保持してclean sibling planの判断・保存を続け、識別可能な対象だけをplan-scoped restoreできる。Recoveryは不正planのrecord digestと取得可能なplan ID digestだけを表示する。plan IDを安全に得られないrecordは表示のみでrestore対象にできない。checkpoint全体digest不一致と共有state schema破損は全体fail-closed。E03.03／QEB-03全体のjob単位復旧は未成立で`BUILD_GAP`。`operation_plan_runtime.test.ts`の関連2ケース、Recovery 3 suite 48/48、WebChat Recovery consumer 1件、workspace typecheck/build、HDS standaloneはPASS。既存runtime suiteはWindows localで既定5秒timeoutが2件残り、timeout変更で隠していない。現行ピンrev2.3、backup ref移行状態=`MIGRATION_COMPLETE`。
+`QEB-13-E03.03-WAIT-RECOVERY-HOLD-ROUTING`〜`QEB-17-E03.03-BROKER-RESTORE-QUIESCENCE-OBSERVATION`は完了し、詳細をIMPLEMENTATION_HISTORY.mdへ移した。復元holdはwait／遅延C候補／Broker保存結果の返却・plan再利用を止める。Jの意味不整合または個別schema-invalidなplanは実行viewから隔離し、raw recordを保持してclean sibling planの判断・保存を続け、識別可能な対象だけにplan-scoped restoreできる。Recoveryは不正planのrecord digestと取得可能なplan ID digestだけを表示する。Broker restoreは未処理Approvalがある場合に拒否し、保守中は新規commandを停止して実行中commandの完了処理とExecutor taskを排出する。復元後は完全な監査履歴、restore結果・backup・state digest、Broker台帳を照合し、一致しない場合は保守holdを維持する。plan IDを安全に得られないrecordは表示のみでrestore対象にできない。checkpoint全体digest不一致と共有state schema破損は全体fail-closed。Broker restoreのquiescence／検証consumerは`WIRED`だが、E03.03／QEB-03全体のjob単位復旧は未成立で`BUILD_GAP`。Recovery 3 suite 48/48、WebChat Recovery consumer 1件、QEB-17対象3 suite 20/20、Gateway typecheck/buildはPASS。既存runtime suiteにWindows local既定5秒timeoutが2件残る記録は履歴へ保持し、timeout変更で隠していない。現行ピンrev2.3、backup ref移行状態=`MIGRATION_COMPLETE`。
 
 ## 次の接続
 

@@ -4,6 +4,24 @@
 
 ---
 
+### 履歴ログ：`QEB-17-E03.03-BROKER-RESTORE-QUIESCENCE-OBSERVATION`
+
+開始HEAD／`main`／`origin/main`=`2cb309ed329e793b7a4155ef420adef4969e0247`。開始時のlocal recovery branchとremote tagはcurrent=`2cb309ed329e793b7a4155ef420adef4969e0247`、previous=`a1d5d2e28848046e5b59cd32fd0e415ea8d8bde6`で一致。現行pinはrev2.3、関係単位E03.03。保護対象untracked Linux isolation `target/`は未変更・未追跡のまま保持。
+
+Recovery mutation toolはBroker restoreにもGatewayの実quiesce receiptを要求する。Broker restoreを開始する前に未処理Approvalがあれば拒否し、maintenance lockを立てて進行中commandの完了処理とExecutor taskを排出する。承認前に開始した別commandがtarget観測後に進行しないようmaintenance lockを再検査する。Restore後は完全・安定したCompleteHistoryからpost-action observationを実行し、command／backup／restored-state digest、Broker selected-store ledgerの`verified`／residual 0を再照合する。一致時のみmaintenance lockを解き、結果不明・履歴不備・台帳残差があればlockを維持する。Recovery post-action inspectorはin-process Broker restoreのreadbackを許容し、復元結果はnon-authority evidenceのまま扱う。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Recovery mutation quiesce gate、Broker post-action readback、既存Broker restore consumer | `recovery_tools.test.ts`、`recovery_post_action_observation.test.ts`、`recovery_broker_restore.test.ts`の20/20 PASS。Broker restoreはlive quiesceなしでは拒否し、readbackは合成private SQLite snapshotでdigestとBroker台帳を照合。 |
+| Gateway typecheck／build／`git diff --check` | PASS。 |
+| 全workspace suite、全体QC／QA、実provider／credential、実外部作用、OS実機 | 未実施。QE_BUILDの該当経路確認を超える品質判定は行っていない。 |
+
+Broker restore quiescenceとstore readback consumerを限定的に`WIRED`とする。GatewayのBroker readback mismatch時のin-process maintenance lockはfail-closedだが、再起動を越えるjob単位のJ/M/Broker依存復旧・回復判断は未接続で、E03.03／QEB-03のjob単位Recoveryは`BUILD_GAP`。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`も未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+実装commit=`7d5d9d4093d3790ff236d3a558f39ceeca2f3f50`。本履歴を含むcloseout commit、push先HEAD、backup refはcloseout後の報告に記録する。
+
+---
+
 ### 履歴ログ：`QEB-16-E03.03-J-PLAN-SCHEMA-RESIDUAL-ISOLATION`
 
 開始HEAD／`main`／`origin/main`=`a1d5d2e28848046e5b59cd32fd0e415ea8d8bde6`。現行pinはrev2.3、関係単位E03.03。開始時の復旧refはcurrent=`a1d5d2e28848046e5b59cd32fd0e415ea8d8bde6`、previous=`f43d83aff5214e2036274dfb38384857e779626d`。保護対象untracked Linux isolation `target/`を保持し、Gitへ含めない。
