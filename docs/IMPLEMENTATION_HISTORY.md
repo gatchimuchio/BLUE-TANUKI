@@ -3040,3 +3040,20 @@ F10.02のtext attachment served consumerを部分的に`WIRED`とする。F10.02
 | 実Telegram API／credential、実provider、外部作用、全workspace suite、5OS実機、QE_QC／QE_QA | 未実施。 |
 
 F10.02のtext attachment→同一topic wait→同一job候補／結果返却のserved subpathを部分的に`WIRED`とする。F10.02全体はcredentialed-live残差により`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`と公開・出荷保留を維持する。次のBUILD_BATCHは`F10.03-WEBCHAT-DISCONNECT-RECONNECT-SAVED-RESULT-CONSUMER`とする。
+
+### 履歴ログ：QEB-62-F10.03-WEBCHAT-DISCONNECT-RECONNECT-SAVED-RESULT-CONSUMER
+
+開始`main`／`origin/main`=`fd737fa55f5aae8611484d67e6ca90e0247b7ac1`。現行pin rev2.3の三点セットhash、適用`AGENTS.md`、active instruction、F10.03の実装対象とWebChat／Gateway consumerを再同期した。旧版・完了記録は直前依存QEB-61の履歴形式と保存結果経路の確認に限って参照した。開始時local復旧branch／remote backup tag二世代はcurrent=`fd737fa`、previous=`30edf1f`で一致。保護対象untracked Linux `target/`を維持した。
+
+`apps/gateway/test/same_job_result_return.integration.test.ts`のserved process integrationを拡張した。合成Telegram attachment由来の同一jobについて、WebChat socketをcloseし、別のtask cancellation要求を行わずにownerのread-only plan reviewをHTTP routeから実行した。切断中にも`file.search`の結果がverified状態・M receiptまで保存された。その後、同じuser identityでWebChat ticketを再取得して再接続し、fresh socketの`hello`を確認したうえで同じplan／revision／step／origin bindingを使ってsaved resultを要求した。保存時点の`file.search`結果が再送され、current filesystemを再検索しない旨・検索完全性不明の表示が保たれた。再接続・結果読取によるC provider追加callはなかった。Telegram duplicate updateのmetadata／binary fetchと返信が各一回である既存assertionも維持した。production runtime codeの変更はない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm exec vitest run apps/gateway/test/same_job_result_return.integration.test.ts` | PASS、3 tests。QEB-62 testはserved disconnect／reconnect／same saved resultを含む。 |
+| `pnpm --filter @blue-tanuki/gateway typecheck` | PASS。 |
+| `pnpm --filter @blue-tanuki/gateway build` | PASS。 |
+| `git diff --check` | PASS。 |
+| `pnpm docs:check` | docs shape PASS。日本語基底gate FAIL：未変更の`docs/CHANNEL_READINESS_MATRIX.md`が登録済み移行hashと不一致。今回差分外なので変更していない。licensing gate未到達。 |
+| 実Telegram API／credential、実provider、外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。C08.03 provider保留、製品全体`BUILD_COVERED`前の全体QC／QAは開始しない。 |
+
+F10.03のWebChat切断・再接続から同一jobの保存結果をownerへ返すserved synthetic subpathを部分的に`WIRED`とする。切断とtask cancellationを分離し、保存結果の再読取でC providerを追加呼出ししない。F10.03全体はcredentialed-live残差により`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次のBUILD_BATCHは`F11.01-SLACK-TEAM-CHANNEL-USER-THREAD-ADMISSION-CONSUMER`とする。

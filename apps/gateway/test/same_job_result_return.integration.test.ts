@@ -48,7 +48,7 @@ afterEach(async () => {
 });
 
 describe("served Telegram result return and request-bound media ingress", () => {
-  it("deduplicates a Telegram text attachment while resuming its topic-bound HDS wait and returning the same job result", async () => {
+  it("deduplicates a Telegram text attachment and returns the same saved job result after WebChat reconnect", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-f1003-same-job-"));
     const auditDir = join(tempRoot, "audit");
     const stateRoot = join(tempRoot, "state");
@@ -120,6 +120,7 @@ describe("served Telegram result return and request-bound media ingress", () => 
     env.BT_F1003_TELEGRAM_FILES = JSON.stringify(telegramFiles);
     let gateway: CapturedProcess | undefined;
     let socket: WebSocket | undefined;
+    let reconnectedSocket: WebSocket | undefined;
     const socketFrames: WebSocketFrame[] = [];
 
     try {
@@ -171,6 +172,13 @@ describe("served Telegram result return and request-bound media ingress", () => 
       expect(steps).toHaveLength(1);
       const stepId = requiredString(steps[0]?.step_id, "candidate step digest");
 
+      const disconnectedSocket = socket;
+      const disconnected = once(disconnectedSocket, "close");
+      disconnectedSocket.close();
+      await disconnected;
+      expect(disconnectedSocket.readyState).toBe(WebSocket.CLOSED);
+      socket = undefined;
+
       const review = await invokeOwnerControl(gatewayPort, "served-f1003-owner-session", OWNER_TOKEN,
         "review", { plan_id: planId, revision_digest: revisionDigest, step_id: stepId,
           owner_reauthentication: sourceBinding });
@@ -187,15 +195,20 @@ describe("served Telegram result return and request-bound media ingress", () => 
       expect(resultReady.planStep).toMatchObject({ operation: "file.search", status: "verified" });
 
       const providerCallsBeforeResultRead = providerCalls;
+      const reconnectedFrames: WebSocketFrame[] = [];
+      reconnectedSocket = await connectWebChat(gatewayPort, reconnectedFrames);
+      await waitFor(() => reconnectedFrames.some((frame) => frame.kind === "hello" &&
+        frame.user === "served-f1003-owner-session") ? true : null, gateway,
+      "WebChat did not reauthenticate the same owner identity after reconnect");
       const resultReturn = await invokeOwnerControl(gatewayPort, "served-f1003-owner-session", OWNER_TOKEN,
         "result", { plan_id: planId, revision_digest: revisionDigest, step_id: stepId,
           owner_reauthentication: sourceBinding });
       expect(resultReturn.status).toBe(202);
       const returnedFrame = await waitFor(() => {
-        const frame = socketFrames.find((item) => item.kind === "channel_send" &&
+        const frame = reconnectedFrames.find((item) => item.kind === "channel_send" &&
           typeof item.content === "string" && item.content.includes("保存時点のfile.search結果"));
         return frame ? frame : null;
-      }, gateway, () => `WebChat did not receive the saved-result return; frames=${JSON.stringify(socketFrames)}; ` +
+      }, gateway, () => `reconnected WebChat did not receive the saved-result return; frames=${JSON.stringify(reconnectedFrames)}; ` +
         `gatewayStdout=${gateway.stdout.join("")}`);
       expect(returnedFrame.content).toContain('"blue.txt":1');
       expect(returnedFrame.content).toContain("synthetic blue result for the same Telegram task");
@@ -222,6 +235,7 @@ describe("served Telegram result return and request-bound media ingress", () => 
       expect(telegramReplies[0]?.message_thread_id).toBe(TELEGRAM_THREAD_ID);
     } finally {
       if (socket?.readyState === WebSocket.OPEN) socket.close();
+      if (reconnectedSocket?.readyState === WebSocket.OPEN) reconnectedSocket.close();
       if (gateway) await stopChild(gateway);
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
