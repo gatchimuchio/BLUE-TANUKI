@@ -468,7 +468,7 @@ describe("Gateway recovery operator projection", () => {
           current_state_available: true, omitted_record_count: 0,
           records: [{
             ticket_digest: "1".repeat(64), command_key_digest: "2".repeat(64), execution_epoch_digest: "3".repeat(64),
-            admission_digest: "4".repeat(64), state: "outcome_unknown", reconciliation_required: false,
+            admission_digest: "4".repeat(64), state: "outcome_unknown", reconciliation_required: true,
             result_delivery_pending: false, result_delivery_digest: "5".repeat(64),
             result_delivery_disposition: "stale_generation_evidence", result_archived_by_epoch_digest: "6".repeat(64),
             ticket_id: "RAW_TICKET_SENTINEL", result: "RAW_RESULT_SENTINEL",
@@ -511,7 +511,7 @@ describe("Gateway recovery operator projection", () => {
       surface: "recovery_inspection_operator",
       mode: "read_only",
       status: "residuals_present",
-      schema_version: 10,
+      schema_version: 11,
       request_scope_correlation: {
         status: "available",
         entries: [],
@@ -531,6 +531,10 @@ describe("Gateway recovery operator projection", () => {
           prior_execution_epoch_digest: "3".repeat(64), archived_by_execution_epoch_digest: "6".repeat(64),
           delivery_digest: "5".repeat(64), disposition: "stale_generation_evidence",
         }],
+      },
+      unbound_execution_evidence: {
+        status: "not_verified", outcome_unknown_count: null, result_delivery_pending_count: null,
+        omitted_record_count: null, records: [],
       },
       ledger_boundaries: {
         j: { reason: null, verified_event_count: 3, unverified_event_count: 0, first_unverified_ordinal: null, last_verified_revision: 3 },
@@ -579,6 +583,64 @@ describe("Gateway recovery operator projection", () => {
     for (const sentinel of ["RAW_COMMAND_SENTINEL", "RAW_TICKET_SENTINEL", "RAW_RESULT_SENTINEL", "RAW_UPDATE_SENTINEL", "RAW_ACTION_SENTINEL", "RAW_REASON_SENTINEL", "private\\state.sqlite"]) {
       expect(serialized).not.toContain(sentinel);
     }
+
+    const verifiedPlanSummary = { ...planSummary, integrity: "verified", residual_binding_count: 0 };
+    const verifiedPlanCorrelation = {
+      ...planCorrelation,
+      status: "outcome_unknown",
+      binding_integrity: "verified",
+      admission_digest: "9".repeat(64),
+      broker_correlation: "matched",
+      delivery_correlation: "not_recorded",
+    };
+    const verifiedPlanScopes = buildRecoveryPlanDependencyScopes([verifiedPlanSummary], [verifiedPlanCorrelation]);
+    const operationPlanUnboundReport = {
+      ...report,
+      ledgers: {
+        ...report.ledgers,
+        execution: {
+          ...report.ledgers.execution,
+          records: [
+            {
+              ticket_digest: "1".repeat(64), command_key_digest: "2".repeat(64), execution_epoch_digest: "3".repeat(64),
+              admission_digest: "7".repeat(64), state: "outcome_unknown", reconciliation_required: true,
+              result_delivery_pending: true, result_delivery_digest: "8".repeat(64),
+              result_delivery_disposition: null, result_archived_by_epoch_digest: null,
+            },
+            {
+              ticket_digest: "a".repeat(64), command_key_digest: "b".repeat(64), execution_epoch_digest: "c".repeat(64),
+              admission_digest: "9".repeat(64), state: "outcome_unknown", reconciliation_required: true,
+              result_delivery_pending: false, result_delivery_digest: null,
+              result_delivery_disposition: null, result_archived_by_epoch_digest: null,
+            },
+          ],
+        },
+        operation_plans: {
+          status: "verified", reason: null, plan_count: 1, plan_integrity_residual_count: 0,
+          binding_count: 1, verified_binding_count: 1, residual_binding_count: 0, unverified_memory_link_count: 0,
+          omitted_binding_count: 0, plans: [verifiedPlanSummary], bindings: [], used_for_authority: false, may_execute: false,
+        },
+      },
+      operation_plan_correlations: [verifiedPlanCorrelation],
+      plan_dependency_scopes: verifiedPlanScopes,
+      operation_plan_residual_count: 1,
+      cron_approval_correlation_residual_count: 1,
+      request_scope_correlation: buildRecoveryRequestScopeCorrelation(verifiedPlanScopes, [], {
+        operationPlanInventoryComplete: true,
+        documentCheckpointInventoryComplete: true,
+      }),
+    };
+    const unboundProjection = projectGatewayRecoveryInspectionForOperator(operationPlanUnboundReport);
+    expect(unboundProjection).toMatchObject({
+      boundary_valid: true,
+      unbound_execution_evidence: {
+        status: "available", outcome_unknown_count: 1, result_delivery_pending_count: 1,
+        omitted_record_count: 0,
+        records: [{ ticket_digest: "1".repeat(64), command_key_digest: "2".repeat(64),
+          state: "outcome_unknown", result_delivery_pending: true, result_delivery_digest: "8".repeat(64) }],
+      },
+    });
+    expect(JSON.stringify(unboundProjection)).not.toContain("RAW_TICKET_SENTINEL");
 
     const corruptedCheckpointProjection = projectGatewayRecoveryInspectionForOperator({
       ...report,

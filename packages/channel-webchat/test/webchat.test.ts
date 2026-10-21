@@ -625,6 +625,41 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).not.toContain("SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER");
   });
 
+  it("renders unbound Broker recovery evidence as digest-only and preserves unknown status", () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function projectRecoveryUnboundExecutionEvidence");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function renderRecoveryInspection", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const script = `
+      function recoveryInspectionDigest(value) {
+        return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : null;
+      }
+      function recoveryInspectionEnum(value, allowed) {
+        return typeof value === "string" && allowed.includes(value) ? value : "unknown";
+      }
+      ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+      const evidence = projectRecoveryUnboundExecutionEvidence({
+        status: "available", outcome_unknown_count: 1, result_delivery_pending_count: 1,
+        omitted_record_count: 2,
+        records: [{ ticket_digest: "${"1".repeat(64)}", command_key_digest: "${"2".repeat(64)}",
+          state: "outcome_unknown", result_delivery_pending: true, result_delivery_digest: "${"3".repeat(64)}",
+          raw_result: "RAW RESULT MUST NOT RENDER" }]
+      });
+      ({ evidence, formatted: formatRecoveryUnboundExecutionEvidence(evidence, true),
+        unverified: formatRecoveryUnboundExecutionEvidence({ status: "not_verified" }, true) });
+    `;
+    const result = JSON.parse(JSON.stringify(new Script(script).runInNewContext()));
+    expect(result.evidence).toMatchObject({
+      status: "available", outcome_unknown_count: 1, result_delivery_pending_count: 1,
+      records: [{ ticket_digest: "1".repeat(64), state: "outcome_unknown", result_delivery_pending: true }],
+    });
+    expect(result.formatted).toContain("ticket 111111111111 / command 222222222222");
+    expect(result.formatted).toContain("Brokerの表示上限による省略: 2件");
+    expect(result.formatted).toContain("結果不明は成功・失敗へ推定せず");
+    expect(result.formatted).not.toContain("RAW RESULT MUST NOT RENDER");
+    expect(result.unverified).toContain("未確認");
+  });
+
   it("shows digest-only goal change metadata and reveals the exact reviewed purpose as text", async () => {
     const renderStart = CONTROL_CENTER_SCRIPT.indexOf("function renderApprovals(body)");
     const renderEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function renderApprovalGrants(", renderStart + 1);
@@ -1767,7 +1802,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 10,
+            schema_version: 11,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -1820,6 +1855,13 @@ describe("WebChatChannel — Recovery surface", () => {
                 prior_execution_epoch_digest: "3".repeat(64), archived_by_execution_epoch_digest: "4".repeat(64),
                 delivery_digest: "5".repeat(64), disposition: "stale_generation_evidence",
               }],
+            },
+            unbound_execution_evidence: {
+              status: "not_verified",
+              outcome_unknown_count: null,
+              result_delivery_pending_count: null,
+              omitted_record_count: null,
+              records: [],
             },
             replay_checkpoint: "not_verified",
             operation_plan_correlations: [{

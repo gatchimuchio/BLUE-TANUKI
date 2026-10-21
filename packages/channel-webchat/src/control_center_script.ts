@@ -2364,6 +2364,72 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return summary + "\\n読み取り専用です。作用・承認・再実行を行いません。";
       }
 
+      function projectRecoveryUnboundExecutionEvidence(value) {
+        const unavailable = {
+          status: "not_verified",
+          outcome_unknown_count: null,
+          result_delivery_pending_count: null,
+          omitted_record_count: null,
+          records: []
+        };
+        const unverified = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+        if (unverified.status === "not_verified") {
+          return unverified.outcome_unknown_count === null && unverified.result_delivery_pending_count === null &&
+            unverified.omitted_record_count === null && Array.isArray(unverified.records) && unverified.records.length === 0
+            ? unavailable
+            : null;
+        }
+        if (unverified.status !== "available" || !Array.isArray(unverified.records) || unverified.records.length > 200 ||
+            !Number.isSafeInteger(unverified.outcome_unknown_count) || unverified.outcome_unknown_count < 0 ||
+            !Number.isSafeInteger(unverified.result_delivery_pending_count) || unverified.result_delivery_pending_count < 0 ||
+            !Number.isSafeInteger(unverified.omitted_record_count) || unverified.omitted_record_count < 0) return null;
+        const seenTickets = new Set();
+        const records = [];
+        let outcomeUnknownCount = 0;
+        let resultDeliveryPendingCount = 0;
+        for (const item of unverified.records) {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+          const ticket = recoveryInspectionDigest(item.ticket_digest);
+          const command = recoveryInspectionDigest(item.command_key_digest);
+          const state = recoveryInspectionEnum(item.state, ["intent_committed", "invocation_attempted", "outcome_unknown", "adapter_returned"]);
+          const deliveryPending = item.result_delivery_pending;
+          const delivery = item.result_delivery_digest === null ? null : recoveryInspectionDigest(item.result_delivery_digest);
+          const stateUnknown = ["intent_committed", "invocation_attempted", "outcome_unknown"].includes(state);
+          if (!ticket || !command || state === "unknown" || typeof deliveryPending !== "boolean" ||
+              (item.result_delivery_digest !== null && !delivery) || (deliveryPending && !delivery) ||
+              (!stateUnknown && !deliveryPending) || seenTickets.has(ticket)) return null;
+          seenTickets.add(ticket);
+          if (stateUnknown) outcomeUnknownCount++;
+          if (deliveryPending) resultDeliveryPendingCount++;
+          records.push({ ticket_digest: ticket, command_key_digest: command, state: state,
+            result_delivery_pending: deliveryPending, result_delivery_digest: delivery });
+        }
+        if (outcomeUnknownCount !== unverified.outcome_unknown_count || resultDeliveryPendingCount !== unverified.result_delivery_pending_count) return null;
+        return { status: "available", outcome_unknown_count: outcomeUnknownCount,
+          result_delivery_pending_count: resultDeliveryPendingCount,
+          omitted_record_count: unverified.omitted_record_count, records: records };
+      }
+
+      function formatRecoveryUnboundExecutionEvidence(evidence, boundaryValid) {
+        const unverified = "未束縛Broker未決receipt: 未確認（Broker／Operation Plan台帳の完全照合が成立していません）";
+        if (boundaryValid !== true || !evidence || typeof evidence !== "object" || Array.isArray(evidence)) return unverified;
+        if (evidence.status === "not_verified") return unverified + "\\n読み取り専用です。再送・承認復元・状態変更を行いません。";
+        if (evidence.status !== "available" || !Array.isArray(evidence.records)) return unverified;
+        const rows = evidence.records.map(function (item) {
+          return "ticket " + item.ticket_digest.slice(0, 12) + " / command " + item.command_key_digest.slice(0, 12) +
+            " / 状態 " + item.state + (item.result_delivery_pending
+              ? " / J・Mへの結果受領待ち" + (item.result_delivery_digest ? " (digest " + item.result_delivery_digest.slice(0, 12) + ")" : "")
+              : " / 結果未確定");
+        });
+        let summary = "Operation Plan未束縛・未決receipt: " + rows.length + "件 / 結果不明 " +
+          evidence.outcome_unknown_count + "件 / J・M配送待ち " + evidence.result_delivery_pending_count + "件（分類は重複する場合があります）";
+        if (rows.length > 0) summary += "\\n" + rows.join("\\n");
+        else if (evidence.omitted_record_count === 0) summary += "\\n照合済み範囲に未決receiptはありません。";
+        if (evidence.omitted_record_count > 0) summary += "\\nBrokerの表示上限による省略: " + evidence.omitted_record_count + "件（全台帳での不在は断定しません）";
+        summary += "\\n結果不明は成功・失敗へ推定せず、自動再送・承認復元・状態変更を行いません。";
+        return summary;
+      }
+
       function renderRecoveryInspection(report) {
         const source = report && typeof report === "object" ? report : {};
         const ledgers = source.ledgers && typeof source.ledgers === "object" ? source.ledgers : {};
@@ -2459,7 +2525,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const documentCheckpointLedgerStatus = recoveryInspectionLedgerStatus(ledgers.document_organization_checkpoints, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]);
         const cronApprovalCorrelationResidualCount = recoveryInspectionCount(source.cron_approval_correlation_residual_count);
         const executionArchiveEvidence = projectRecoveryExecutionArchiveEvidence(source.execution_archive_evidence);
-        const initialBoundaryOk = source.schema_version === 10 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && executionArchiveEvidence !== null && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
+        const unboundExecutionEvidence = projectRecoveryUnboundExecutionEvidence(source.unbound_execution_evidence);
+        const initialBoundaryOk = source.schema_version === 11 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && executionArchiveEvidence !== null && unboundExecutionEvidence !== null && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
         const ledgerStatuses = {
           j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
@@ -2468,6 +2535,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           cron_events: cronLedgerStatus,
           document_organization_checkpoints: documentCheckpointLedgerStatus
         };
+        const unboundEvidenceConsistent = unboundExecutionEvidence !== null &&
+          (unboundExecutionEvidence.status !== "available" ||
+            (ledgerStatuses.broker === "verified" && ledgerStatuses.operation_plans === "verified" &&
+              source.omitted_operation_plan_correlation_count === 0 && source.omitted_plan_dependency_scope_count === 0));
         const planCorrelations = Array.isArray(source.operation_plan_correlations)
           ? source.operation_plan_correlations.slice(0, 200).map(function (item) {
               const value = item && typeof item === "object" ? item : {};
@@ -2633,7 +2704,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         };
         const requestScopeCorrelationValid = source.request_scope_correlation && typeof source.request_scope_correlation === "object" &&
           JSON.stringify(source.request_scope_correlation) === JSON.stringify(expectedRequestScopeCorrelation);
-        const boundaryOk = initialBoundaryOk && planDependencyScopesValid && requestScopeCorrelationValid;
+        const boundaryOk = initialBoundaryOk && unboundEvidenceConsistent && planDependencyScopesValid && requestScopeCorrelationValid;
         const status = boundaryOk
           ? recoveryInspectionEnum(source.status, ["verified", "residuals_present", "invalid_report"])
           : "invalid_report";
@@ -2660,6 +2731,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           isolated_update_count: recoveryInspectionCount(source.isolated_update_count),
           execution_residual_count: recoveryInspectionCount(source.execution_residual_count),
           execution_archive_evidence: boundaryOk ? executionArchiveEvidence : { status: "not_verified", records: [], omitted_record_count: null },
+          unbound_execution_evidence: boundaryOk ? unboundExecutionEvidence : {
+            status: "not_verified", outcome_unknown_count: null, result_delivery_pending_count: null,
+            omitted_record_count: null, records: []
+          },
           operation_plan_residual_count: recoveryInspectionCount(source.operation_plan_residual_count),
           cron_event_residual_count: recoveryInspectionCount(source.cron_event_residual_count),
           cron_approval_correlation_residual_count: cronApprovalCorrelationResidualCount,
@@ -2703,6 +2778,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("recovery-inspection-json", compactJson(projection));
         setText("recovery-execution-archive-evidence", formatRecoveryExecutionArchiveEvidence(
           projection.execution_archive_evidence,
+          boundaryOk
+        ));
+        setText("recovery-unbound-execution-evidence", formatRecoveryUnboundExecutionEvidence(
+          projection.unbound_execution_evidence,
           boundaryOk
         ));
         setText("recovery-plan-dependency-scopes", formatRecoveryPlanDependencyScopes(

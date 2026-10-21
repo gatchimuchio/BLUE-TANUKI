@@ -199,7 +199,7 @@ export interface RecoveryLedgerBoundaryObservation {
 }
 
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 10;
+  readonly schema_version: 11;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -232,6 +232,19 @@ export interface GatewayRecoveryOperatorProjection {
       readonly disposition: "stale_generation_evidence";
     }[];
     readonly omitted_record_count: number | null;
+  };
+  readonly unbound_execution_evidence: {
+    readonly status: "available" | "not_verified";
+    readonly outcome_unknown_count: number | null;
+    readonly result_delivery_pending_count: number | null;
+    readonly omitted_record_count: number | null;
+    readonly records: readonly {
+      readonly ticket_digest: string;
+      readonly command_key_digest: string;
+      readonly state: "intent_committed" | "invocation_attempted" | "outcome_unknown" | "adapter_returned";
+      readonly result_delivery_pending: boolean;
+      readonly result_delivery_digest: string | null;
+    }[];
   };
   readonly operation_plan_residual_count: number;
   readonly cron_event_residual_count: number;
@@ -883,6 +896,81 @@ function projectOperatorExecutionArchiveEvidence(value: unknown): {
   };
 }
 
+function projectOperatorUnboundExecutionEvidence(
+  executionValue: unknown,
+  operationPlanValue: unknown,
+  operationPlanCorrelations: readonly GatewayRecoveryOperatorProjection["operation_plan_correlations"][number][],
+  operationPlanCorrelationsOmitted: number,
+  enabled: boolean,
+): { readonly valid: boolean; readonly evidence: GatewayRecoveryOperatorProjection["unbound_execution_evidence"] } {
+  const unavailable: GatewayRecoveryOperatorProjection["unbound_execution_evidence"] = {
+    status: "not_verified", outcome_unknown_count: null, result_delivery_pending_count: null,
+    omitted_record_count: null, records: [],
+  };
+  if (!enabled || !isRecord(executionValue) || !isRecord(operationPlanValue)) return { valid: true, evidence: unavailable };
+  const executionStatus = fixedEnum(executionValue.status, ["verified", "residuals_present", "corrupt", "unavailable", "schema_mismatch"] as const);
+  const planStatus = fixedEnum(operationPlanValue.status, RECOVERY_LEDGER_STATUSES);
+  if (executionValue.current_state_available !== true || executionStatus !== "verified" || planStatus !== "verified") {
+    return { valid: true, evidence: unavailable };
+  }
+
+  const bindingCount = operationPlanValue.binding_count;
+  const omittedBindingCount = operationPlanValue.omitted_binding_count;
+  const planInventoryComplete = Number.isSafeInteger(bindingCount) && (bindingCount as number) >= 0 &&
+    omittedBindingCount === 0 && operationPlanCorrelationsOmitted === 0 &&
+    operationPlanCorrelations.length === bindingCount &&
+    operationPlanCorrelations.every((item) => item.binding_integrity === "verified");
+  if (!planInventoryComplete || !Array.isArray(executionValue.records) || executionValue.records.length > OPERATOR_RECORD_LIMIT ||
+      !Number.isSafeInteger(executionValue.omitted_record_count) || (executionValue.omitted_record_count as number) < 0) {
+    return { valid: false, evidence: unavailable };
+  }
+
+  const boundAdmissions = new Set(operationPlanCorrelations.flatMap((item) => item.admission_digest === null ? [] : [item.admission_digest]));
+  const seenTickets = new Set<string>();
+  const records: GatewayRecoveryOperatorProjection["unbound_execution_evidence"]["records"][number][] = [];
+  let outcomeUnknownCount = 0;
+  let resultDeliveryPendingCount = 0;
+  for (const candidate of executionValue.records) {
+    if (!isRecord(candidate)) return { valid: false, evidence: unavailable };
+    const ticketDigest = fixedDigest(candidate.ticket_digest);
+    const commandKeyDigest = fixedDigest(candidate.command_key_digest);
+    const admissionDigest = fixedDigest(candidate.admission_digest);
+    const state = fixedEnum(candidate.state, ["issued", "intent_committed", "invocation_attempted", "adapter_returned", "not_attempted", "outcome_unknown"] as const);
+    const reconciliationRequired = candidate.reconciliation_required;
+    const resultDeliveryPending = candidate.result_delivery_pending;
+    const deliveryDigest = candidate.result_delivery_digest === null ? null : fixedDigest(candidate.result_delivery_digest);
+    const stateUnknown = state === "intent_committed" || state === "invocation_attempted" || state === "outcome_unknown";
+    if (!ticketDigest || !commandKeyDigest || !admissionDigest || !state ||
+        typeof reconciliationRequired !== "boolean" || typeof resultDeliveryPending !== "boolean" ||
+        (candidate.result_delivery_digest !== null && !deliveryDigest) ||
+        reconciliationRequired !== (stateUnknown || resultDeliveryPending) ||
+        (resultDeliveryPending && !deliveryDigest) || seenTickets.has(ticketDigest)) {
+      return { valid: false, evidence: unavailable };
+    }
+    seenTickets.add(ticketDigest);
+    if (boundAdmissions.has(admissionDigest) || (!stateUnknown && !resultDeliveryPending)) continue;
+    if (stateUnknown) outcomeUnknownCount++;
+    if (resultDeliveryPending) resultDeliveryPendingCount++;
+    records.push({
+      ticket_digest: ticketDigest,
+      command_key_digest: commandKeyDigest,
+      state: state as GatewayRecoveryOperatorProjection["unbound_execution_evidence"]["records"][number]["state"],
+      result_delivery_pending: resultDeliveryPending,
+      result_delivery_digest: deliveryDigest,
+    });
+  }
+  return {
+    valid: true,
+    evidence: {
+      status: "available",
+      outcome_unknown_count: outcomeUnknownCount,
+      result_delivery_pending_count: resultDeliveryPendingCount,
+      omitted_record_count: executionValue.omitted_record_count as number,
+      records,
+    },
+  };
+}
+
 /** Whitelist a digest-only recovery report before exposing per-work residuals to an operator surface. */
 export function projectGatewayRecoveryInspectionForOperator(value: unknown): GatewayRecoveryOperatorProjection {
   const source = isRecord(value) ? value : {};
@@ -926,6 +1014,13 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
         operationPlansProjection.rows.every((row) => planSummaries.rows.some((plan) => plan.plan_id_digest === row.plan_id_digest))
       : planCount === 0 && bindingCount === 0 && residualBindingCount === 0 && omittedBindingCount === 0 &&
         planSummaries.rows.length === 0 && operationPlansProjection.rows.length === 0);
+  const unboundExecutionEvidence = projectOperatorUnboundExecutionEvidence(
+    ledgers.execution,
+    operationPlanLedger,
+    operationPlansProjection.rows,
+    operationPlansProjection.omitted,
+    reportShapeValid,
+  );
   const planDependencyScopesValid = planInventoryValid && Array.isArray(source.plan_dependency_scopes) &&
     JSON.stringify(source.plan_dependency_scopes) === JSON.stringify(planDependencyScopes);
   const operationPlanInventoryComplete = planInventoryValid &&
@@ -964,6 +1059,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     cronCorrelationsValid && cronEventCorrelationsValid;
   const boundaryValid = reportShapeValid && source.used_for_authority === false && source.may_execute === false &&
     sourceStatus !== null && cronBoundaryValid && planDependencyScopesValid && documentOrganizationCheckpoints.valid && executionArchiveEvidence.valid &&
+    unboundExecutionEvidence.valid &&
     documentOrganizationLedgerStatus === documentOrganizationCheckpoints.summary.status &&
     Number.isSafeInteger(documentOrganizationResidualCount) &&
     documentOrganizationResidualCount === documentOrganizationCheckpoints.summary.residual_count;
@@ -982,7 +1078,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     unlinked_document_checkpoint_count: null,
   };
   return {
-    schema_version: 10,
+    schema_version: 11,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -1011,6 +1107,13 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
       status: "not_verified",
       records: [],
       omitted_record_count: null,
+    },
+    unbound_execution_evidence: boundaryValid ? unboundExecutionEvidence.evidence : {
+      status: "not_verified",
+      outcome_unknown_count: null,
+      result_delivery_pending_count: null,
+      omitted_record_count: null,
+      records: [],
     },
     operation_plan_residual_count: fixedCount(source.operation_plan_residual_count),
     cron_event_residual_count: fixedCount(source.cron_event_residual_count),

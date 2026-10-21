@@ -497,6 +497,9 @@ ${CONTROL_CENTER_STYLE}    </style>
           <h3>旧世代結果の隔離証拠</h3>
           <p class="muted">Broker台帳で検証できたdigestだけを表示します。結果本文は表示せず、承認・作用・再実行・復旧可否を判断しません。</p>
           <pre id="recovery-execution-archive-evidence">未確認</pre>
+          <h3>Operation Planに未束縛のBroker未決receipt</h3>
+          <p class="muted">Broker台帳とOperation Plan台帳の読取検証・全結合照合が成立した範囲だけをdigestで表示します。結果不明を成功・失敗へ推定せず、再送・承認復元・状態変更は行いません。台帳件数が表示上限を超えた場合は省略数を示します。</p>
+          <pre id="recovery-unbound-execution-evidence">未確認</pre>
           <div class="status-grid">
             <button id="inspect-recovery-backup" type="button">最新backup packの整合性を読み取り検査</button>
             <span id="recovery-backup-inspection-status" class="badge warn">未確認</span>
