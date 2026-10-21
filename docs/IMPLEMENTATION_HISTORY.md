@@ -2907,3 +2907,21 @@ Cの文字起こし結果は確度情報がproviderから返っていない候�
 `packages/protocol/test/types.test.ts`全体を含む広いfixture runでは、今回変更していない`ExecuteFeedback skeptical review boundary > rejects malformed or unbounded review fields`が失敗した。現行schemaの該当fieldは`z.unknown().optional()`であり、このbatchの音声schema変更とは無関係。新規`user_audio` fallback schema試験は個別にPASSした。この既存契約／test不整合は全体QE_QC候補として保持し、本BUILD_BATCHの範囲外実装修正は行っていない。
 
 F16.02のTelegram音声→C transcription→Output Audit経路をsynthetic fixture範囲で部分的に`WIRED`とする。exact model capabilityの実endpoint対応・実provider／served runtime、別channel、transcriptを使う後続HDS要求経路は未確認／非実装。F10.02全体=`BUILD_GAP`、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03保留、D4-Pocket／ミニドラ変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留。次のBUILD_BATCHは現行工程表の`F16.03`。
+
+---
+
+### 履歴ログ：QEB-55-F10.02-TELEGRAM-EXACT-OWNER-ENTRY-GRANTS
+
+開始`main`／`origin/main`=`c7ec14cdf6e6a94eb16c9daa603ada8d74dcbc3d`。現行pin rev2.3の三点セットと適用`AGENTS.md`、active instruction、F10.02のowner委任・entry identity・添付・重複要求を再同期した。rev2.3配布ZIP SHA-256とpin記載の三文書SHA-256を確認した。保護対象untracked Linux `target/`を保持した。F16.03が要求するmobile native producerはD4-Pocket側であり、今回のBLUE内委任に含まれないため、D4側はread-only参照にとどめ書き込まなかった。
+
+Telegram inboundの入口に、`TELEGRAM_INBOUND_GRANTS_JSON`から読む厳密なowner設定gateを接続した。各grantは正規数値`user_id`・`chat_id`・`message_thread_id`の完全一致であり、usernameや表示名を使わない。設定なしはdeny-all、形式不正・未知field・重複・上限超過はTelegram有効時にGateway起動をfail-closedにする。無許可messageはHDSへ渡さず、添付の`getFile`要求前に拒否する。ID値はlogへ出さない。grantは入口 admissionだけで、本人確認、J/HDS判断、操作許可、Approval Gate、L3 reviewの代替にしない。WebChat等の別入口で同じjobを参照・操作する認可は別途consumerで評価する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| channel-telegram typecheck／build | PASS。 |
+| Telegram adapter fixture | PASS、21 tests。完全一致user/chat/topic、deny-all、拒否前の添付非取得を確認。 |
+| Gateway grant parser／添付ingress／durable update-store fixture | PASS、3 files／8 tests。Gateway ingress→HDS合成経路と既存重複admissionを確認。 |
+| Gateway typecheck／build、`git diff --check` | PASS。 |
+| 実Telegram API／credential、実provider、owner実操作、全workspace suite、全OS、`pnpm docs:check`、QE_QC／QE_QA | 未実施。C08.03実provider保留を維持。 |
+
+F10.02のTelegram exact owner entry gateを部分的に`WIRED`とするが、F10.02全体は他media・live経路・job/sessionの複数入口再評価が残るため`BUILD_GAP`。F16.03=`BLOCKED_AUTHORITY`（別repoのnative producer変更に限定委任なし）。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留。実装commit=`78f1a5cd9e50e3d09fe8e47ae1b48d447c7be3ab`。次のBLUE内BUILD_BATCHはF10.02を続け、admitted Telegram requestから実job/session consumerを結び、別user/chat/topicの参照・作用権限を各入口で再評価する。復旧branchとremote backup tag二世代、保護対象untrackedを維持した。
