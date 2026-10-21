@@ -2966,3 +2966,24 @@ Gateway testは合成Telegram由来planに対し、実WebChat HTTP owner endpoin
 | 実Telegram API／credential／実provider／外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
 
 F10.03のcross-channel reauthentication／WebChat owner controlを部分的に`WIRED`とする。Telegram-admitted同一jobのserved共有、保存結果をWebChatへ返すconsumer、credentialed-live profileは未接続／未検証のためF10.03全体=`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。実装commit=`c5b8f50`。次のBUILD_BATCHは`F10.03-SERVED-SAME-JOB-RESULT-RETURN`として、合成Telegram admission→共有HDS plan/wait→WebChat owner control→保存結果consumerを一つのserved経路へ接続する。
+
+---
+
+### 履歴ログ：QEB-58-F10.03-SERVED-SAME-JOB-RESULT-RETURN
+
+開始`main`／`origin/main`=`1ed3b6c9af8dcd7d031ed0cd90c51409af216028`。owner指定rev2.3の現行三点pin、適用`AGENTS.md`、active instruction、今回のGateway/HDS実物を照合し、旧ログは直前QEB-57との依存確認だけに使った。local復旧branchとremote backup tagのcurrentは開始HEAD、previousは`64f786d67f73ec19a3dfdf901e454d41b049a4ff`で一致。保護対象untracked Linux `target/`を保持した。
+
+合成Telegram admissionからserved Gateway内の共有HDS plan/wait、WebChat owner再認証、保存結果consumerまでを一仕事として接続した。test用Telegram endpoint／providerだけを隔離し、実credential、外部API、実provider、外部業務作用は使わない。Telegram-admitted jobのwaitが同一request IDで候補化し、WebChat owner review後にread-only file searchを実行、J/M receiptを待ってからWebChat owner result requestで保存済み結果を返す。保存結果を読む際にC providerを再呼出ししないこともprovider request countで確認した。
+
+保存結果のbind時に caller のinternal-brandを `structuredClone` が失い、後続の保存結果再照合で横断channelのowner identity検査が拒否する欠陥を修正した。bind前にHDSがinternal inbound callerを含む全origin／owner条件を検査しているため、その検査済み入力をledger内で再度internal requestとして再構成して保持し、読取時も同じHDS検査を通す。外部入力をinternal callerとして認定する経路は追加していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `apps/gateway/test/same_job_result_return.integration.test.ts` | PASS、1 served integration test。Telegram mock admission→共有wait→WebChat owner review→read-only実行／M receipt→保存結果返却を実Gatewayで確認。result readによるprovider再呼出しなし。 |
+| HDS-BRAIN build、Gateway typecheck／build | PASS。 |
+| `apps/gateway/test/execution_result_reconciliation.test.ts`の既存補助確認 | 2件ともconsumerへ到達せずFAIL。共通fixtureの初回plan生成にagent delegationが付く一方、直接Executor fixtureにcompute adapterがなく、`agent_delegation_compute_unavailable`で停止。今回の保存結果consumer検査として成立しないため修正・PASS計上しない。 |
+| `git diff --check` | PASS。 |
+| `pnpm docs:check` | FAIL。文書形状検査はPASS。日本語基底gateは未変更の`docs/CHANNEL_READINESS_MATRIX.md`で、移行台帳の期待SHA-256 `4017e75214bb9095db3d366f6c69a478cc962d5a1dc3033bbd1133a58e201439`と現物`8ca8706c173aefd774bdecd60b378288222a53b3ea19f327ced42665433f0268`の不一致を検出。今回変更外で、移行台帳と当該ファイルは修正していない。licensing gate未到達。 |
+| 実Telegram API／credential／実provider／外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+F10.03の合成served同一job共有・保存結果consumerを部分的に`WIRED`とする。credentialed-live操作と実provider証拠は未実施のためF10.03全体=`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。実装・本履歴は同一BUILD_BATCH閉鎖commitに同梱する。次のBUILD_BATCHは`F10.02-TELEGRAM-MEDIA-SERVED-CONSUMER`とし、合成Telegram admissionからrequest-bound画像／音声をserved Gateway経由でC consumerへ接続する。

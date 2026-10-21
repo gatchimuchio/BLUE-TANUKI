@@ -9,6 +9,7 @@ import {
   type OperationPlanComputeSourceObservation, type OperationPlanComputeSourceObservationReference,
   OperationPlanShellExecResultObservationSchema, type OperationPlanShellExecResultObservation,
   type OperationCommandExecutionResult,
+  type GatewayInternalInboundRequestInput,
   type OperationPlanGoalPurposeRelationCandidate, type OperationPlanGoalPurposeRelationOwnerReview,
   type OperationPlanGoalPurposeRelationRecord, type OperationPlanGoalPurposeRelationReviewArguments, type OperationStep,
   type MemoryCommitV2, type MemoryUpdateReceiptV1,
@@ -28,6 +29,7 @@ import {
   type OperationPlanReceiptReconciliationControl,
   type ComputeResourceUse,
   canonicalExecutorCommandBytes,
+  createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
 } from "@blue-tanuki/protocol";
 import { JMemoryCommitCoordinator } from "./制御状態.js";
@@ -2733,7 +2735,9 @@ export class OperationPlanLedger {
       throw new Error("plan_saved_result_return_binding_failed");
     }
     this.savedResultReturns.set(command.id, { command_digest: operationPlanDigest(command),
-      control: structuredClone(control), caller: structuredClone(caller), projection_digest: operationPlanDigest(projection) });
+      control: structuredClone(control),
+      caller: createGatewayInternalInboundRequest(structuredClone(caller) as GatewayInternalInboundRequestInput),
+      projection_digest: operationPlanDigest(projection) });
   }
   readSavedResultReturn(command: ExecuteCommand): OperationPlanSavedResultReturnProjection | undefined {
     try {
