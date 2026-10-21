@@ -27,6 +27,7 @@ export interface TaskExecutionCancellationResult extends ActiveTaskExecutionSnap
 export interface FinishedTaskExecutionCancellation {
   command_id: string;
   cancel_requested_by: string;
+  cancel_requested_at_ms: number;
   executor_settled: boolean;
   executor_status: ExecuteFeedback["status"] | "unknown";
   local_worker_stop: LocalWorkerStopObservation;
@@ -118,10 +119,11 @@ export class ActiveTaskExecutionRegistry {
     const execution = this.active.get(command_id);
     if (!execution) return null;
     this.active.delete(command_id);
-    if (!execution.cancel_requested_by) return null;
+    if (!execution.cancel_requested_by || execution.cancel_requested_at_ms === null) return null;
     return {
       command_id,
       cancel_requested_by: execution.cancel_requested_by,
+      cancel_requested_at_ms: execution.cancel_requested_at_ms,
       executor_settled: execution.executor_settled,
       executor_status: execution.executor_status,
       local_worker_stop: execution.local_worker_state,

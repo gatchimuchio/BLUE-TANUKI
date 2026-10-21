@@ -13,6 +13,7 @@ import { Executor, createExecutorApprovalAuthority, ToolRegistry, fileSearchTool
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore, inspectExecutionIntentRecoveryLedger } from "../src/execution_intent_store.js";
 import { recoverPendingToolLifecycleHistory } from "../src/tool_lifecycle_history.js";
+import { recoverPendingTaskCancellationHistory, taskCancellationHistoryInput } from "../src/task_cancellation_history.js";
 
 function command(id = "synthetic-command"): Extract<ExecuteCommand, { type: "tool_call" }> {
   return { id, type: "tool_call", payload: { tool_name: "synthetic.read", arguments: { target: "青" } },
@@ -103,6 +104,81 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
         { kind: "audit_history", command_id: source.id, payload: { lifecycle_event_id: lifecycleEventId,
           state: "cancel_requested", used_for_authority: false, may_execute: false } },
       ]);
+      expect(inspectExecutionIntentRecoveryLedger({ private_state_root: root, database_path: filepath })).toMatchObject({
+        status: "verified", used_for_authority: false, execution_eligible: false,
+      });
+    } finally {
+      try { store.close(); } catch { /* closed before reopening */ }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("task cancellation要求とExecutor終了観測を再起動後に重複なく回復し、永続履歴後だけackする", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-task-cancel-recovery-"));
+    const filepath = join(root, "execution-intents", "executor.sqlite");
+    const epoch = randomUUID();
+    let store = new GatewayExecutionIntentStore(filepath, epoch);
+    try {
+      const source = command();
+      const { authority } = rig(store);
+      authority.approve(source, proof(source));
+      const request = {
+        cancellation_event_id: randomUUID(), command_id: source.id, event: "execution_cancel_requested" as const,
+        actor: "webchat-resume-token-holder", token_kind: "resume" as const, observed_at_ms: 10_000,
+        cancel_requested_at_ms: 10_000, cancel_request_accepted: true as const, executor_settled: false,
+        executor_status: "unknown" as const, local_worker_stop: "not_observed" as const,
+        external_processing_stop: "unknown" as const, used_for_authority: false as const, may_execute: false as const,
+      };
+      const settlement = {
+        cancellation_event_id: randomUUID(), command_id: source.id, event: "execution_cancel_observed" as const,
+        actor: "webchat-resume-token-holder", token_kind: "resume" as const, observed_at_ms: 10_001,
+        cancel_requested_at_ms: 10_000, cancel_request_accepted: true as const, executor_settled: true,
+        executor_status: "failed" as const, local_worker_stop: "process_tree_empty_confirmed" as const,
+        external_processing_stop: "unknown" as const, used_for_authority: false as const, may_execute: false as const,
+      };
+      const fallback = {
+        cancellation_event_id: randomUUID(), command_id: source.id, event: "execution_cancel_requested" as const,
+        actor: "webchat-resume-token-holder", token_kind: "resume" as const, observed_at_ms: 10_002,
+        cancel_requested_at_ms: 10_002, cancel_request_accepted: true as const, executor_settled: false,
+        executor_status: "unknown" as const, local_worker_stop: "not_observed" as const,
+        external_processing_stop: "unknown" as const, used_for_authority: false as const, may_execute: false as const,
+      };
+      store.recordTaskExecutionCancellationEvidence(request);
+      store.recordTaskExecutionCancellationEvidence(settlement);
+      const failedHistoryPath = join(root, "unwritable-cancellation-history.jsonl");
+      const failedHistory = new CompleteHistoryStore({ filepath: failedHistoryPath });
+      mkdirSync(failedHistoryPath);
+      expect(recoverPendingTaskCancellationHistory({ execution_store: store, complete_history: failedHistory,
+        complete_history_persistent: true, append_history: (input) => {
+          try { return failedHistory.append(input); } catch { return null; }
+        } })).toMatchObject({ recovered: 0, still_pending: 2,
+        issues: [{ cancellation_event_id: request.cancellation_event_id, reason: "append_failed" }] });
+      expect(store.pendingTaskExecutionCancellationEvidence()).toHaveLength(2);
+      store.close();
+
+      store = new GatewayExecutionIntentStore(filepath, epoch);
+      const historyFile = join(root, "complete-history.jsonl");
+      const history = new CompleteHistoryStore({ filepath: historyFile });
+      expect(recoverPendingTaskCancellationHistory({ execution_store: store, complete_history: history,
+        complete_history_persistent: false, append_history: (input) => history.append(input) }))
+        .toMatchObject({ recovered: 0, still_pending: 2, issues: [] });
+      expect(history.all()).toMatchObject([
+        { kind: "audit_history", command_id: source.id, actor: "webchat-resume-token-holder", timestamp: 10_000,
+          payload: { cancellation_event_id: request.cancellation_event_id, event: "execution_cancel_requested",
+            executor_settled: false, external_processing_stop: "unknown", used_for_authority: false, may_execute: false } },
+        { kind: "audit_history", command_id: source.id, timestamp: 10_001,
+          payload: { cancellation_event_id: settlement.cancellation_event_id, event: "execution_cancel_observed",
+            executor_settled: true, executor_status: "failed", local_worker_stop: "process_tree_empty_confirmed",
+            external_processing_stop: "unknown", used_for_authority: false, may_execute: false } },
+      ]);
+      expect(store.pendingTaskExecutionCancellationEvidence()).toHaveLength(2);
+      history.append(taskCancellationHistoryInput(fallback));
+      expect(recoverPendingTaskCancellationHistory({ execution_store: store, complete_history: history,
+        complete_history_persistent: true, append_history: (input) => history.append(input) }))
+        .toMatchObject({ recovered: 3, still_pending: 0, issues: [] });
+      expect(store.pendingTaskExecutionCancellationEvidence()).toEqual([]);
+      expect(history.size()).toBe(3);
+      expect(store.verifyEvents()).toBe(true);
       expect(inspectExecutionIntentRecoveryLedger({ private_state_root: root, database_path: filepath })).toMatchObject({
         status: "verified", used_for_authority: false, execution_eligible: false,
       });

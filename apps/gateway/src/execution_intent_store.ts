@@ -14,6 +14,8 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
 const MAX_PENDING_TOOL_LIFECYCLE_EVENTS = 1_000;
 const MAX_PENDING_TOOL_LIFECYCLE_BYTES = 8_388_608;
+const MAX_PENDING_TASK_CANCELLATION_EVENTS = 1_000;
+const MAX_PENDING_TASK_CANCELLATION_BYTES = 8_388_608;
 interface ToolLifecycleEvidenceEvent {
   lifecycle_event_id: string;
   command_id: string;
@@ -26,15 +28,41 @@ interface ToolLifecycleHistoryAcknowledgement {
   used_for_authority: false;
   may_execute: false;
 }
+export interface TaskExecutionCancellationEvidence {
+  cancellation_event_id: string;
+  command_id: string;
+  event: "execution_cancel_requested" | "execution_cancel_observed";
+  actor: string;
+  token_kind: "resume";
+  observed_at_ms: number;
+  cancel_requested_at_ms: number;
+  cancel_request_accepted: true;
+  executor_settled: boolean;
+  executor_status: "success" | "failed" | "suspended" | "unknown";
+  local_worker_stop: "not_observed" | "worker_exit_observed" | "process_tree_empty_confirmed" | "provider_state_unknown";
+  external_processing_stop: "unknown";
+  used_for_authority: false;
+  may_execute: false;
+}
+interface TaskExecutionCancellationHistoryAcknowledgement {
+  cancellation_event_id: string;
+  history_entry_id: string;
+  observed_at_ms: number;
+  used_for_authority: false;
+  may_execute: false;
+}
 type ExecutionLedgerContent =
   | { profile: "executor-intent-event.v1"; receipt: ExecutionIntentReceipt }
   | { profile: "executor-tool-lifecycle-event.v1"; event: ToolLifecycleEvidenceEvent }
-  | { profile: "executor-tool-lifecycle-history-ack.v1"; acknowledgement: ToolLifecycleHistoryAcknowledgement };
+  | { profile: "executor-tool-lifecycle-history-ack.v1"; acknowledgement: ToolLifecycleHistoryAcknowledgement }
+  | { profile: "executor-task-cancellation-event.v1"; event: TaskExecutionCancellationEvidence }
+  | { profile: "executor-task-cancellation-history-ack.v1"; acknowledgement: TaskExecutionCancellationHistoryAcknowledgement };
 export interface PendingToolLifecycleEvidence {
   lifecycle_event_id: string;
   command_id: string;
   observation: ToolExecutionLifecycleObservation;
 }
+export type PendingTaskExecutionCancellationEvidence = TaskExecutionCancellationEvidence;
 /** JのadmissionとBroker receiptを結ぶ非権威digest。旧ticket形式も維持する。 */
 export function executionAdmissionDigest(admission: ExecutionAdmission): string {
   return admission.task_identity_digest
@@ -211,6 +239,71 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       };
       this.appendLedgerContent(event.ticket_id, {
         profile: "executor-tool-lifecycle-history-ack.v1", acknowledgement,
+      }, observed_at_ms);
+    });
+  }
+  /** Keep task cancellation and settlement observations recoverable until durable CompleteHistory projection. */
+  recordTaskExecutionCancellationEvidence(event: TaskExecutionCancellationEvidence): void {
+    validateTaskExecutionCancellationEvidence(event);
+    const commandKey = digest(JSON.stringify(["gateway-executor-command.v1", event.command_id]));
+    this.transaction(() => {
+      const row = this.db.prepare("SELECT ticket_id FROM execution_intents WHERE command_key=?").get(commandKey) as
+        { ticket_id: string } | undefined;
+      const receipt = row ? this.lookup(row.ticket_id) : null;
+      if (!row || !receipt || receipt.command_key !== commandKey) throw new Error("execution_task_cancellation_receipt_missing");
+
+      const state = collectTaskExecutionCancellationEvidence(this.db);
+      const prior = state.events.get(event.cancellation_event_id);
+      if (prior) {
+        if (prior.ticket_id === row.ticket_id && isDeepStrictEqual(prior.event, event)) return;
+        throw new Error("execution_task_cancellation_event_conflict");
+      }
+      const pending = [...state.events.entries()].filter(([id]) => !state.acknowledgements.has(id));
+      const pendingBytes = pending.reduce((sum, [, record]) => sum + Buffer.byteLength(JSON.stringify(record.event)), 0);
+      if (pending.length >= MAX_PENDING_TASK_CANCELLATION_EVENTS ||
+          pendingBytes + Buffer.byteLength(JSON.stringify(event)) > MAX_PENDING_TASK_CANCELLATION_BYTES) {
+        throw new Error("execution_task_cancellation_store_full");
+      }
+      this.appendLedgerContent(row.ticket_id, { profile: "executor-task-cancellation-event.v1", event }, event.observed_at_ms);
+    });
+  }
+  pendingTaskExecutionCancellationEvidence(limit = MAX_PENDING_TASK_CANCELLATION_EVENTS): PendingTaskExecutionCancellationEvidence[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PENDING_TASK_CANCELLATION_EVENTS) {
+      throw new Error("execution_task_cancellation_limit_invalid");
+    }
+    let pending: PendingTaskExecutionCancellationEvidence[] = [];
+    this.transaction(() => {
+      const state = collectTaskExecutionCancellationEvidence(this.db);
+      pending = [...state.events.entries()]
+        .filter(([id]) => !state.acknowledgements.has(id))
+        .slice(0, limit)
+        .map(([, record]) => ({ ...record.event }));
+    });
+    return pending;
+  }
+  taskExecutionCancellationEvidenceIds(): ReadonlySet<string> {
+    let ids: ReadonlySet<string> = new Set();
+    this.transaction(() => { ids = new Set(collectTaskExecutionCancellationEvidence(this.db).events.keys()); });
+    return ids;
+  }
+  acknowledgeTaskExecutionCancellationHistory(cancellation_event_id: string, history_entry_id: string, observed_at_ms: number): void {
+    if (!isUuid(cancellation_event_id) || !isUuid(history_entry_id) || !isSafeTimestamp(observed_at_ms)) {
+      throw new Error("execution_task_cancellation_history_ack_invalid");
+    }
+    this.transaction(() => {
+      const state = collectTaskExecutionCancellationEvidence(this.db);
+      const event = state.events.get(cancellation_event_id);
+      if (!event) throw new Error("execution_task_cancellation_event_missing");
+      const prior = state.acknowledgements.get(cancellation_event_id);
+      if (prior) {
+        if (prior.ticket_id === event.ticket_id && prior.history_entry_id === history_entry_id) return;
+        throw new Error("execution_task_cancellation_history_ack_conflict");
+      }
+      const acknowledgement: TaskExecutionCancellationHistoryAcknowledgement = {
+        cancellation_event_id, history_entry_id, observed_at_ms, used_for_authority: false, may_execute: false,
+      };
+      this.appendLedgerContent(event.ticket_id, {
+        profile: "executor-task-cancellation-history-ack.v1", acknowledgement,
       }, observed_at_ms);
     });
   }
@@ -664,6 +757,40 @@ function validateToolLifecycleHistoryAcknowledgement(value: unknown): asserts va
   }
 }
 
+function validateTaskExecutionCancellationEvidence(value: unknown): asserts value is TaskExecutionCancellationEvidence {
+  const event = asRecord(value);
+  if (!event || !hasOnlyKeys(event, ["cancellation_event_id", "command_id", "event", "actor", "token_kind", "observed_at_ms",
+      "cancel_requested_at_ms", "cancel_request_accepted", "executor_settled", "executor_status", "local_worker_stop",
+      "external_processing_stop", "used_for_authority", "may_execute"]) ||
+      !isUuid(event.cancellation_event_id) || typeof event.command_id !== "string" ||
+      !/^[^\u0000-\u001f\u007f]{1,256}$/.test(event.command_id) ||
+      (event.event !== "execution_cancel_requested" && event.event !== "execution_cancel_observed") ||
+      typeof event.actor !== "string" || !/^[^\u0000-\u001f\u007f]{1,128}$/.test(event.actor) ||
+      event.token_kind !== "resume" || !isSafeTimestamp(event.observed_at_ms) ||
+      !isSafeTimestamp(event.cancel_requested_at_ms) || event.cancel_request_accepted !== true ||
+      typeof event.executor_settled !== "boolean" ||
+      !["success", "failed", "suspended", "unknown"].includes(String(event.executor_status)) ||
+      !["not_observed", "worker_exit_observed", "process_tree_empty_confirmed", "provider_state_unknown"]
+        .includes(String(event.local_worker_stop)) || event.external_processing_stop !== "unknown" ||
+      event.used_for_authority !== false || event.may_execute !== false ||
+      (event.event === "execution_cancel_requested" && (event.executor_settled !== false || event.executor_status !== "unknown"))) {
+    throw new Error("execution_task_cancellation_event_invalid");
+  }
+}
+
+function validateTaskExecutionCancellationHistoryAcknowledgement(
+  value: unknown,
+): asserts value is TaskExecutionCancellationHistoryAcknowledgement {
+  const acknowledgement = asRecord(value);
+  if (!acknowledgement || !hasOnlyKeys(acknowledgement,
+      ["cancellation_event_id", "history_entry_id", "observed_at_ms", "used_for_authority", "may_execute"]) ||
+      !isUuid(acknowledgement.cancellation_event_id) || !isUuid(acknowledgement.history_entry_id) ||
+      !isSafeTimestamp(acknowledgement.observed_at_ms) || acknowledgement.used_for_authority !== false ||
+      acknowledgement.may_execute !== false) {
+    throw new Error("execution_task_cancellation_history_ack_invalid");
+  }
+}
+
 function parseExecutionLedgerContent(event_json: string): ExecutionLedgerContent | null {
   try {
     const envelope = asRecord(JSON.parse(event_json));
@@ -687,6 +814,18 @@ function parseExecutionLedgerContent(event_json: string): ExecutionLedgerContent
         const acknowledgement = content.acknowledgement as ToolLifecycleHistoryAcknowledgement;
         validateToolLifecycleHistoryAcknowledgement(acknowledgement);
         return { profile: "executor-tool-lifecycle-history-ack.v1", acknowledgement };
+      }
+      case "executor-task-cancellation-event.v1": {
+        if (!hasOnlyKeys(content, ["profile", "event"])) return null;
+        const event = content.event as TaskExecutionCancellationEvidence;
+        validateTaskExecutionCancellationEvidence(event);
+        return { profile: "executor-task-cancellation-event.v1", event };
+      }
+      case "executor-task-cancellation-history-ack.v1": {
+        if (!hasOnlyKeys(content, ["profile", "acknowledgement"])) return null;
+        const acknowledgement = content.acknowledgement as TaskExecutionCancellationHistoryAcknowledgement;
+        validateTaskExecutionCancellationHistoryAcknowledgement(acknowledgement);
+        return { profile: "executor-task-cancellation-history-ack.v1", acknowledgement };
       }
       default:
         return null;
@@ -724,6 +863,34 @@ function collectToolLifecycleEvidence(database: DatabaseType): ToolLifecycleEvid
   return state;
 }
 
+interface TaskExecutionCancellationEvidenceLedgerState {
+  events: Map<string, { ticket_id: string; event: TaskExecutionCancellationEvidence }>;
+  acknowledgements: Map<string, { ticket_id: string; history_entry_id: string }>;
+}
+
+function collectTaskExecutionCancellationEvidence(database: DatabaseType): TaskExecutionCancellationEvidenceLedgerState {
+  const state: TaskExecutionCancellationEvidenceLedgerState = { events: new Map(), acknowledgements: new Map() };
+  const rows = database.prepare("SELECT ticket_id,event_json FROM execution_events ORDER BY sequence")
+    .all() as { ticket_id: string; event_json: string }[];
+  for (const row of rows) {
+    const content = parseExecutionLedgerContent(row.event_json);
+    if (!content) throw new Error("execution_event_integrity_failed");
+    if (content.profile === "executor-task-cancellation-event.v1") {
+      if (state.events.has(content.event.cancellation_event_id)) throw new Error("execution_task_cancellation_event_conflict");
+      state.events.set(content.event.cancellation_event_id, { ticket_id: row.ticket_id, event: content.event });
+    } else if (content.profile === "executor-task-cancellation-history-ack.v1") {
+      const id = content.acknowledgement.cancellation_event_id;
+      const event = state.events.get(id);
+      if (!event || event.ticket_id !== row.ticket_id || state.acknowledgements.has(id)) {
+        throw new Error("execution_task_cancellation_history_ack_conflict");
+      }
+      state.acknowledgements.set(id, { ticket_id: row.ticket_id,
+        history_entry_id: content.acknowledgement.history_entry_id });
+    }
+  }
+  return state;
+}
+
 function verifyExecutionIntentDatabase(database: DatabaseType, checkSchema: boolean): boolean {
   try {
     if (checkSchema && !verifyExecutionRecoverySchema(database)) return false;
@@ -732,6 +899,8 @@ function verifyExecutionIntentDatabase(database: DatabaseType, checkSchema: bool
     const latest = new Map<string, ExecutionIntentReceipt>();
     const lifecycleEvents = new Map<string, { ticket_id: string; event: ToolLifecycleEvidenceEvent }>();
     const lifecycleAcknowledgements = new Set<string>();
+    const cancellationEvents = new Map<string, { ticket_id: string; event: TaskExecutionCancellationEvidence }>();
+    const cancellationAcknowledgements = new Set<string>();
     const rows = database.prepare("SELECT sequence,ticket_id,event_json,previous_hash,event_hash FROM execution_events ORDER BY sequence").all() as
       { sequence: number; ticket_id: string; event_json: string; previous_hash: string; event_hash: string }[];
     for (const row of rows) {
@@ -747,11 +916,21 @@ function verifyExecutionIntentDatabase(database: DatabaseType, checkSchema: bool
         if (!receipt || receipt.command_key !== digest(JSON.stringify(["gateway-executor-command.v1", content.event.command_id])) ||
             lifecycleEvents.has(content.event.lifecycle_event_id)) return false;
         lifecycleEvents.set(content.event.lifecycle_event_id, { ticket_id: row.ticket_id, event: content.event });
-      } else {
+      } else if (content.profile === "executor-tool-lifecycle-history-ack.v1") {
         const eventId = content.acknowledgement.lifecycle_event_id;
         const event = lifecycleEvents.get(eventId);
         if (!event || event.ticket_id !== row.ticket_id || lifecycleAcknowledgements.has(eventId)) return false;
         lifecycleAcknowledgements.add(eventId);
+      } else if (content.profile === "executor-task-cancellation-event.v1") {
+        const receipt = latest.get(row.ticket_id);
+        if (!receipt || receipt.command_key !== digest(JSON.stringify(["gateway-executor-command.v1", content.event.command_id])) ||
+            cancellationEvents.has(content.event.cancellation_event_id)) return false;
+        cancellationEvents.set(content.event.cancellation_event_id, { ticket_id: row.ticket_id, event: content.event });
+      } else {
+        const eventId = content.acknowledgement.cancellation_event_id;
+        const event = cancellationEvents.get(eventId);
+        if (!event || event.ticket_id !== row.ticket_id || cancellationAcknowledgements.has(eventId)) return false;
+        cancellationAcknowledgements.add(eventId);
       }
       previous = row.event_hash;
     }
@@ -930,6 +1109,8 @@ export function inspectExecutionIntentRecoveryLedger(options: {
     const latest = new Map<string, VerifiedExecutionEvent>();
     const lifecycleEvents = new Map<string, { ticket_id: string; event: ToolLifecycleEvidenceEvent }>();
     const lifecycleAcknowledgements = new Set<string>();
+    const cancellationEvents = new Map<string, { ticket_id: string; event: TaskExecutionCancellationEvidence }>();
+    const cancellationAcknowledgements = new Set<string>();
     let previous = "0".repeat(64);
     let verifiedEventCount = 0;
     for (const row of rows) {
@@ -948,11 +1129,21 @@ export function inspectExecutionIntentRecoveryLedger(options: {
           if (!receipt || receipt.command_key !== digest(JSON.stringify(["gateway-executor-command.v1", content.event.command_id])) ||
               lifecycleEvents.has(content.event.lifecycle_event_id)) break;
           lifecycleEvents.set(content.event.lifecycle_event_id, { ticket_id: row.ticket_id, event: content.event });
-        } else {
+        } else if (content.profile === "executor-tool-lifecycle-history-ack.v1") {
           const eventId = content.acknowledgement.lifecycle_event_id;
           const event = lifecycleEvents.get(eventId);
           if (!event || event.ticket_id !== row.ticket_id || lifecycleAcknowledgements.has(eventId)) break;
           lifecycleAcknowledgements.add(eventId);
+        } else if (content.profile === "executor-task-cancellation-event.v1") {
+          const receipt = latest.get(row.ticket_id)?.receipt;
+          if (!receipt || receipt.command_key !== digest(JSON.stringify(["gateway-executor-command.v1", content.event.command_id])) ||
+              cancellationEvents.has(content.event.cancellation_event_id)) break;
+          cancellationEvents.set(content.event.cancellation_event_id, { ticket_id: row.ticket_id, event: content.event });
+        } else {
+          const eventId = content.acknowledgement.cancellation_event_id;
+          const event = cancellationEvents.get(eventId);
+          if (!event || event.ticket_id !== row.ticket_id || cancellationAcknowledgements.has(eventId)) break;
+          cancellationAcknowledgements.add(eventId);
         }
         verifiedEventCount++;
         previous = row.event_hash;

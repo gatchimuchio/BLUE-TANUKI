@@ -39,8 +39,9 @@ import {
   type ExecutorToolExecutionLifecycleEvent,
   type ExecutionIntentReceipt,
 } from "@blue-tanuki/core";
-import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
+import { GatewayExecutionIntentStore, type TaskExecutionCancellationEvidence } from "./execution_intent_store.js";
 import { recoverPendingToolLifecycleHistory, toolLifecycleHistoryInput } from "./tool_lifecycle_history.js";
+import { recoverPendingTaskCancellationHistory, taskCancellationHistoryInput } from "./task_cancellation_history.js";
 import { GatewayComputeBudgetStore } from "./compute_budget_store.js";
 import { GatewayResourceBackpressure } from "./resource_backpressure.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
@@ -858,6 +859,19 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       error: error instanceof Error ? error.message : String(error), used_for_authority: false,
     });
   }
+  try {
+    const recovery = recoverPendingTaskCancellationHistory({ execution_store: executionStore, complete_history: completeHistory,
+      complete_history_persistent: Boolean(completeHistoryFile), append_history: recordCompleteHistory });
+    for (const issue of recovery.issues) gatewayLog.error("task cancellation history recovery incomplete", { ...issue });
+    if (recovery.recovered > 0 || recovery.still_pending > 0) gatewayLog.info("task cancellation history recovery", {
+      recovered: recovery.recovered, still_pending: recovery.still_pending,
+      history_persistence: completeHistoryFile ? "file" : "memory", used_for_authority: false,
+    });
+  } catch (error) {
+    gatewayLog.error("task cancellation history recovery unavailable", {
+      error: error instanceof Error ? error.message : String(error), used_for_authority: false,
+    });
+  }
   const executorApproval = createExecutorApprovalAuthority({
     execution_store: executionStore,
     execution_epoch: ownerLease.executionEpoch,
@@ -1011,27 +1025,27 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const cancellation = activeTaskExecutions.requestCancel(command_id, ctx.actor);
     if (!cancellation) return null;
     if (cancellation.status === "cancel_requested") {
-      try {
-        const recorded = recordApprovalControlHistory("execution_cancel_requested", ctx.actor, {
+      const requestedAt = cancellation.cancel_requested_at_ms;
+      if (requestedAt === null) {
+        gatewayLog.error("task cancellation timestamp missing; cancellation signal remains delivered", {
+          command_id, used_for_authority: false,
+        });
+      } else {
+        recordTaskExecutionCancellationEvidence({
+          cancellation_event_id: randomUUID(),
           command_id,
-          reason: "cancel request accepted; executor_settled=false; local_worker_stop=unknown; external_processing_stop=unknown",
+          event: "execution_cancel_requested",
+          actor: ctx.actor,
           token_kind: ctx.token_kind,
+          observed_at_ms: requestedAt,
+          cancel_requested_at_ms: requestedAt,
           cancel_request_accepted: true,
           executor_settled: false,
+          executor_status: "unknown",
           local_worker_stop: "not_observed",
           external_processing_stop: "unknown",
           used_for_authority: false,
-        });
-        if (!recorded) {
-          gatewayLog.error("task cancellation request was not added to complete history; cancellation signal remains delivered", {
-            command_id,
-            used_for_authority: false,
-          });
-        }
-      } catch {
-        gatewayLog.error("task cancellation history unavailable; cancellation signal remains delivered", {
-          command_id,
-          used_for_authority: false,
+          may_execute: false,
         });
       }
     }
@@ -1042,33 +1056,60 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     finished: ReturnType<ActiveTaskExecutionRegistry["finish"]>,
   ): void {
     if (!finished) return;
+    recordTaskExecutionCancellationEvidence({
+      cancellation_event_id: randomUUID(),
+      command_id: finished.command_id,
+      event: "execution_cancel_observed",
+      actor: finished.cancel_requested_by,
+      token_kind: "resume",
+      observed_at_ms: Date.now(),
+      cancel_requested_at_ms: finished.cancel_requested_at_ms,
+      cancel_request_accepted: true,
+      executor_settled: finished.executor_settled,
+      executor_status: finished.executor_status,
+      local_worker_stop: finished.local_worker_stop,
+      external_processing_stop: finished.external_processing_stop,
+      used_for_authority: false,
+      may_execute: false,
+    });
+  }
+
+  function recordTaskExecutionCancellationEvidence(event: TaskExecutionCancellationEvidence): void {
     try {
-      const recorded = recordApprovalControlHistory("execution_cancel_observed", finished.cancel_requested_by, {
-        command_id: finished.command_id,
-        reason: `executor_settled=${finished.executor_settled}; executor_status=${finished.executor_status}; local_worker_stop=${finished.local_worker_stop}; external_processing_stop=${finished.external_processing_stop}`,
-        token_kind: "resume",
-        cancel_request_accepted: true,
-        executor_settled: finished.executor_settled,
-        executor_status: finished.executor_status,
-        local_worker_stop: finished.local_worker_stop,
-        external_processing_stop: finished.external_processing_stop,
+      executionStore.recordTaskExecutionCancellationEvidence(event);
+    } catch (error) {
+      const fallback = recordCompleteHistory(taskCancellationHistoryInput(event));
+      gatewayLog.error("task cancellation evidence ledger unavailable; cancellation signal remains delivered", {
+        command_id: event.command_id,
+        event: event.event,
+        error: error instanceof Error ? error.message : String(error),
+        complete_history_fallback: fallback ? (completeHistoryFile ? "persistent" : "memory_only") : "unavailable",
         used_for_authority: false,
       });
-      if (!recorded) {
-        gatewayLog.error("task cancellation settlement was not added to complete history", {
-          command_id: finished.command_id,
-          executor_settled: finished.executor_settled,
-          local_worker_stop: finished.local_worker_stop,
-          external_processing_stop: finished.external_processing_stop,
-          used_for_authority: false,
-        });
+      if (fallback) {
+        try {
+          const recovery = recoverPendingTaskCancellationHistory({ execution_store: executionStore, complete_history: completeHistory,
+            complete_history_persistent: Boolean(completeHistoryFile), append_history: recordCompleteHistory });
+          for (const issue of recovery.issues) gatewayLog.error("task cancellation history fallback recovery incomplete", { ...issue });
+        } catch (recoveryError) {
+          gatewayLog.error("task cancellation history fallback recovery unavailable", {
+            command_id: event.command_id,
+            error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+            used_for_authority: false,
+          });
+        }
       }
-    } catch {
-      gatewayLog.error("task cancellation settlement history unavailable", {
-        command_id: finished.command_id,
-        executor_settled: finished.executor_settled,
-        local_worker_stop: finished.local_worker_stop,
-        external_processing_stop: finished.external_processing_stop,
+      return;
+    }
+    try {
+      const recovery = recoverPendingTaskCancellationHistory({ execution_store: executionStore, complete_history: completeHistory,
+        complete_history_persistent: Boolean(completeHistoryFile), append_history: recordCompleteHistory });
+      for (const issue of recovery.issues) gatewayLog.error("task cancellation history projection incomplete", { ...issue });
+    } catch (error) {
+      gatewayLog.error("task cancellation history projection unavailable", {
+        command_id: event.command_id,
+        event: event.event,
+        error: error instanceof Error ? error.message : String(error),
         used_for_authority: false,
       });
     }

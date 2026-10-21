@@ -109,7 +109,7 @@ Recovery mutation toolはBroker restoreにもGatewayの実quiesce receiptを要�
 | QE_BUILDの必要最小確認 | 結果 |
 |---|---|
 | Recovery mutation quiesce gate、Broker post-action readback、既存Broker restore consumer | `recovery_tools.test.ts`、`recovery_post_action_observation.test.ts`、`recovery_broker_restore.test.ts`の20/20 PASS。Broker restoreはlive quiesceなしでは拒否し、readbackは合成private SQLite snapshotでdigestとBroker台帳を照合。 |
-| Gateway typecheck／build／`git diff --check` | PASS。 |
+| Gateway typecheck／build／`git diff --check`／`pnpm docs:check` | PASS。日本語基底監査の移行負債76件は継続管理。 |
 | 全workspace suite、全体QC／QA、実provider／credential、実外部作用、OS実機 | 未実施。QE_BUILDの該当経路確認を超える品質判定は行っていない。 |
 
 Broker restore quiescenceとstore readback consumerを限定的に`WIRED`とする。GatewayのBroker readback mismatch時のin-process maintenance lockはfail-closedだが、再起動を越えるjob単位のJ/M/Broker依存復旧・回復判断は未接続で、E03.03／QEB-03のjob単位Recoveryは`BUILD_GAP`。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`も未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
@@ -2657,3 +2657,20 @@ D05.02のCompleteHistory欠損回復producer→consumerを`WIRED`とする。D05
 | 全workspace suite、実provider／credential、外部業務作用、5OS実機、QE_QC／QE_QA | 未実施。全体形状成立後へ保持。 |
 
 owner-facing task cancel producer→consumerをWindows／WebChatの範囲で`WIRED`とする。取消受付だけでは停止済みとしない。remote provider内の停止は証拠がない限り不明であり、AbortSignal非協調toolはsettleするまでactiveになり得る。D05.02全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次consumerはtask cancel request／Executor settlementの監査証拠を既存private execution-ledger recoveryへ接続すること。
+
+---
+
+### 履歴ログ：QEB-42-D05.02-CANCEL-EVIDENCE-RECOVERY
+
+開始HEAD／`main`／`origin/main`=`c76145525f9463b50e03908d4239461c562497db`。現行pin rev2.3、適用AGENTS／作業標準、active指示、QEB-41の取消callsite、既存private execution-ledger／CompleteHistory recoveryを照合した。保護対象untracked Linux `target/`は維持した。旧版と完了履歴全体は読み直さず、依存するQEB-40／41の該当記録だけを参照した。
+
+task cancellation requestとExecutor settlementを、task本文・tool結果・理由文を持たない別々の非権威eventとして`GatewayExecutionIntentStore`のhash-chainへ保存する。CompleteHistory fileへ投影し、安定event IDで既存entryを照合し、永続entryを確認した場合だけack eventを追加する。memory-only projectionはackしない。private ledgerへの書込みが失敗した場合もcancel signalは継続し、限定metadataをCompleteHistoryへ直接保存して次回起動時にprivate ledgerへ補完する。CompleteHistoryとprivate ledgerの両方が使えない場合は不足をerror logに残し、成功記録を捏造しない。cancel request、Executor settlement、local worker stop、external processing stopは別々に保持し、external stopは`unknown`のまま。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `execution_intent_runtime.test.ts` | PASS、9 tests。append失敗後の保持、再起動後の投影・重複防止、persistent ack、history-only fallbackのledger補完、hash-chain inspectionを確認。 |
+| `active_task_execution_registry.test.ts`／`active_task_execution_webchat_integration.test.ts` | PASS、計2 tests。exact task cancel、resume認証、signal到達、対象外taskの継続を確認。 |
+| Gateway typecheck／build／`git diff --check` | PASS。 |
+| 全workspace suite、provider／credential、外部業務作用、5OS実機、QE_QC／QE_QA | 未実施。全体形状成立後へ保持。 |
+
+D05.02のtask cancellation evidence recovery producer→consumerをこの範囲で`WIRED`とする。local storeとCompleteHistoryが同時に使用不能な場合の永続証拠は保証しない。remote providerの処理停止は外部証拠なしに主張せず、AbortSignal非協調toolはsettlement前に停止済みとしない。D05.02全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
