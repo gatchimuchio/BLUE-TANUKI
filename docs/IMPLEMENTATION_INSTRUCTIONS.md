@@ -1,19 +1,13 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-作業正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) が固定するowner指定rev2.3三点セット。独立した作業の開始・切替・再開時は現行pin、適用AGENTS、owner指示、このactive指示、HEAD・差分を確認し、三点セットの全文を読み直す。同一作業内の連続する小単位では関係する節を再確認する。完了済み作業と旧版は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) 等のログに保持し、依存・系譜・矛盾の確認時だけ該当箇所を参照する。
+作業正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) が固定するowner指定rev2.3三点セット。独立した作業の開始・切替・再開時は、三点セットの全文を読み直す。適用`AGENTS.md`、owner指示、active task、最新HEAD・差分も確認する。同一BUILD_BATCH内の連続作業では関係要求と現物を再同期する。完了作業と旧版は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md) にログとして保持し、依存・系譜・矛盾の確認時だけ必要な箇所を参照する。
 
 ## 現行状態
 
-QE_STAGE=`QE_BUILD`。現行pinはrev2.3、backup ref移行=`MIGRATION_COMPLETE`。`QEB-24-E03.03-TASK-M-RESTORE-POINT-J-REOBSERVATION`でtask-scoped M restore point producerをHDS fresh J review gateへ接続し、同一taskのbackup plan集合・現在のJ binding・M receiptが揃う範囲だけを再審査へ通した。`QEB-25-E03.03-TASK-M-RESTORE-POINT-OPERATOR-PROJECTION`では、Recovery snapshotのM task restore pointをControl Centerのread-only表示へ接続した。raw IDやpayloadを出さず、不正projectionは表示を抑止し、権限や自動resumeを作らない。`QEB-26-E04.01-FAILURE-SYMPTOM-CAUSE-SEPARATION`では、FailureMemory抽出器が観測failure categoryをcause candidateとして重複記録するのをやめ、症状digestと`root_cause_unconfirmed`を保ったまま、原因候補は明示的なdigest-only C reviewに分離した。FailureMemory focused 14/14、HDS failure-review consumer 1/1、HDS typecheck/buildはPASS。全suiteは未実施。E03.03/QEB-03および製品全体は`BUILD_GAP`、QE_QC／QE_QA未開始。
+QE_STAGE=`QE_BUILD`。rev2.3 pinとbackup ref移行=`MIGRATION_COMPLETE`。`QEB-30-E05.02-LEARNING-IMPROVEMENT-EXTERNAL-CHANGE-SEPARATION`でFailureMemory lineageのcandidate記録、妥当性、改善、汎化、C結果受領、内部導出帰属、外部改修、教師入力の状態を分離し、次回C projectionとHDS auditまで接続した。focused tests 100/100、workspace typecheck/buildはPASS。候補記録は学習効果を証明せず、内部導出帰属は未確立、外部改修寄与は未評価。全workspace suite、QE_QC／QE_QAは未実施。製品全体は`BUILD_GAP`で、`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。
 
-`QEB-27-E04.02-J-INDEPENDENT-OBSERVATION-ADOPTION`では、chain検証済みComplete HistoryからFailureMemory署名が参照するrecordだけをfailure category／scopeとdigestへ限定射影し、HDS-JのFailureReview consumerに接続した。参照集合全件と分類が一致し、Cのscope提案も`same_scope`の場合だけscope reviewをobservation-boundとし、counterexample／resume conditionは事実・許可ではなく将来の観測対象として保持する。原因は未採用、実行・再試行権限なし。HDS focused 92/92、Gateway focused 6/6、protocol/HDS/Gateway typecheckとHDS/Gateway buildはPASS。E04.02の全品質保証、製品全体の`BUILD_COVERED`、QE_QC／QE_QAは未開始。
+## 次のBUILD_BATCH
 
-`QEB-28-E04.03-CONDITION-CHANGE-REOBSERVATION`では、同じ完全一致action／targetに対し、新しいHDS `ASSERT`のgoal／actor／channel fingerprint差をFailureMemory gateで検出する。activeなblock／require-approval署名は旧記録のまま保持し、通常のfresh Approval Gateへ渡す。`probe_policy=never`のblockは解除せず、異なるaction／targetへ適用を広げない。fingerprint差は外部条件の解消証明や実行権限ではない。FailureMemory focused 17/17、Gateway operation-result focused 7/7、HDS／Gateway typecheck/buildはPASS。全suite、実provider／credential／外部作用、E04.03の対象別QC／QA、製品全体の`BUILD_COVERED`とQE_QC／QE_QAは未実施。
+`QEB-31-E05.03-VERSION-CANDIDATE-TO-DEVELOPMENT-PRINCIPAL`として、コード／Pの次版候補をruntime状態から分け、開発主体へ渡す実producer→consumerを現物から特定する。Jが推薦した次版を無審査昇格させない。E05.03の範囲、次consumer、変更対象、停止条件は作業開始時に現行三点セットと最新コードから再構成する。
 
-`QEB-29-E05.01-RETENTION-DERIVATION-APPLICATION-LINEAGE`では、Jがrequest-bound C候補を非採用のまま確認した後、FailureMemoryへdigest-only lineageとして保存し、次回のFailureReview projectionからCへ参照を返すproducer→consumerを接続した。署名・pre-state・保持期間・経験digest・導出digest・適用先を一つの記録へ束ね、採用・承認・M参照保存・follow-upを別状態で保持する。同じ署名・経験・導出の再表示だけをreplay扱いとし、FailureGateはlineageを参照しない。旧v2 snapshotとの互換を維持。FailureMemory／HDS controller／Gateway focused 100/100、workspace typecheck/buildはPASS。全workspace suite、provider／credential／外部作用、QE_QC／QE_QAは未実施。
-
-## 次の接続
-
-次の`BUILD_BATCH`は`QEB-30-E05.02-LEARNING-IMPROVEMENT-EXTERNAL-CHANGE-SEPARATION`とし、E05.01の保持済みlineageを踏まえ、学習候補の成立と通常の改善・外部改修作用を分離する実consumerを現物から特定して接続する。開始時に現行三点セット・適用AGENTS.md・owner指示・active指示・HEAD／差分を再同期し、E05.02の該当要求・対象コード・次consumerを確定する。旧ログは依存・系譜・矛盾の解決時だけ参照する。
-
-HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closed、`cross_store_atomic=false`を維持する。provider実試験、実credential、外部作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は対象外。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closedを維持する。実provider／credential、外部業務作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は含めない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。全体実装形状の前に詳細QC／QAへ進まない。

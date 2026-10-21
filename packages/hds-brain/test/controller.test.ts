@@ -1014,6 +1014,14 @@ describe("HDSUpperController.onFeedback()", () => {
     expect(feedbackEntry && "kind" in feedbackEntry && feedbackEntry.kind === "executor_feedback"
       ? feedbackEntry.feedback.failure_learning_lineage : undefined).toMatchObject({
       status: "stored",
+      learning_action_status: "candidate_derivation_recorded",
+      validity_status: "not_assessed",
+      improvement_status: "not_measured",
+      generalization_status: "not_assessed",
+      c_result_binding_status: "request_bound",
+      internal_derivation_attribution_status: "not_established",
+      external_change_contribution_status: "not_assessed",
+      teacher_input_contribution_status: "excluded_from_c_projection",
       adoption_status: "not_adopted",
       approval_status: "not_requested",
       memory_application_status: "stored_for_future_reference",
@@ -1043,6 +1051,14 @@ describe("HDSUpperController.onFeedback()", () => {
     const replayProjection = createFailureReviewProjection(signature, [], "unavailable",
       retainedLineages.map(failureLearningLineageReference));
     expect(replayProjection.prior_learning_lineages).toHaveLength(1);
+    expect(replayProjection.prior_learning_lineages[0]).toMatchObject({
+      learning_action_status: "candidate_derivation_recorded",
+      validity_status: "not_assessed",
+      improvement_status: "not_measured",
+      generalization_status: "not_assessed",
+      external_change_contribution_status: "not_assessed",
+      teacher_input_contribution_status: "excluded_from_c_projection",
+    });
     const replayController = new HDSUpperController({ failure_memory_store: store });
     const replayDecision = replayController.decide(createGatewayInternalInboundRequest({
       id: "failure-review-replay-request",
@@ -1060,6 +1076,9 @@ describe("HDSUpperController.onFeedback()", () => {
     }));
     expect(replayDecision.command?.type).toBe("llm_call");
     if (!replayDecision.command || replayDecision.command.type !== "llm_call") return;
+    expect(JSON.stringify(replayDecision.command.payload.messages)).toContain("妥当性・改善・汎化");
+    expect(JSON.stringify(replayDecision.command.payload.messages)).toContain("外部改修");
+    expect(JSON.stringify(replayDecision.command.payload.messages)).toContain("教師入力");
     const replayCandidate = { ...candidate, projection_digest: failureReviewProjectionDigest(replayProjection) };
     replayController.onFeedback(feedback(replayDecision.command.id, { content: JSON.stringify(replayCandidate) }));
     const replayFeedbackEntry = replayController.getAudit().list().find((entry) =>
@@ -1067,7 +1086,13 @@ describe("HDSUpperController.onFeedback()", () => {
     expect(replayFeedbackEntry && "kind" in replayFeedbackEntry && replayFeedbackEntry.kind === "executor_feedback"
       ? replayFeedbackEntry.feedback.failure_learning_lineage : undefined).toMatchObject({
       status: "replayed_prior_derivation",
+      learning_action_status: "candidate_derivation_recorded",
       memory_application_status: "stored_for_future_reference",
+    });
+    expect(replayFeedbackEntry && "kind" in replayFeedbackEntry && replayFeedbackEntry.kind === "executor_feedback"
+      ? replayFeedbackEntry.feedback.failure_review : undefined).toMatchObject({
+      prior_learning_lineage_digests: [retainedLineages[0]?.record_id],
+      prior_learning_lineage_connection_status: "candidate_bound_to_projection",
     });
     expect(store.listLearningLineageForSignature(signature.id)).toHaveLength(1);
   });

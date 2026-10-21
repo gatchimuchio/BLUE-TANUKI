@@ -2454,3 +2454,19 @@ GatewayがFailureMemory signatureからdigest-only projectionを作り、HDSがr
 | 全workspace suite、live provider／credential、外部作用、QE_QC／QE_QA、5OS実機 | 未実施。完成した全体形状成立後の工程に配置。 |
 
 E05.01のFailureMemory→C→J→M→後続C参照のこのproducer→consumerを`WIRED`とする。E05.01親要求の全範囲、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立／未開始。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はrev2.3 E05.02「学習成立と改善・外部改修の分離」の実consumerを再同期後に選ぶ。
+
+---
+
+### 履歴ログ：`QEB-30-E05.02-LEARNING-IMPROVEMENT-EXTERNAL-CHANGE-SEPARATION`
+
+開始HEAD／`main`／`origin/main`=`481500c85cf3512b8b9821372027bd0568f656e4`。現行pin rev2.3、適用AGENTS、active instruction、E05.02とFailureReview／FailureMemoryの実コード経路を再同期した。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持し、変更対象へ含めていない。
+
+FailureLearningLineage recordと次回C向けlineage referenceに、`candidate_derivation_recorded`、validity=`not_assessed`、improvement=`not_measured`、generalization=`not_assessed`を分離して保持する。C結果はrequest-boundの受領経路としてだけ記録し、内部導出の帰属は`not_established`、外部改修の寄与は`not_assessed`、教師入力はC projectionから除外した状態にする。旧v1 recordでは新フィールドをoptionalにして既存digest検証を維持し、参照生成時は保守的な状態を補う。Cへは状態とlineage digestを含むprojectionを渡し、候補応答が同projection digestへ結合した場合だけ、HDS auditにprior lineage digestとbinding statusを残す。FailureGateは従来どおりlineageを参照せず、採用・Approval・L3・Broker・実行経路を変更しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| FailureMemory／HDS controller／Gateway focused tests | PASS、3 suites／100 tests。状態軸の永続化、次回C projectionへの継送、同projectionへ結合した応答の監査記録を確認。 |
+| workspace `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| 全workspace suite、provider／credential、外部作用、QE_QC／QE_QA、5OS実機 | 未実施。全体実装形状成立後の工程に保持。 |
+
+E05.02のFailureMemory→次回C projection→projection-bound C response→J auditの接続を`WIRED`とする。candidate recordは学習の妥当性、改善、汎化を証明せず、内部導出帰属は未確立、外部変更寄与は未評価。E05.02親要求の全範囲と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はrev2.3 E05.03「版候補の開発系への移譲」で、現行コードから実際の次consumerを特定する。

@@ -11,10 +11,12 @@ import {
   candidateFromCommand,
   createFailureReviewProjection,
   extractFailureSignatures,
+  failureLearningLineageReference,
   failureReviewProjectionDigest,
   sha256Hex,
   runPeriodicFailureMemoryVerification,
 } from "../src/index.js";
+import { stableJson } from "../src/complete-history/codec.js";
 
 function toolCommand(id = "cmd-1", requestId = "req-1", tool = "file.search", args: Record<string, unknown> = { query: "needle" }): ExecuteCommand {
   return {
@@ -108,6 +110,16 @@ describe("FailureMemoryStore", () => {
         command_id: "private-command-id",
         derived_at: new Date("2026-10-21T00:00:00.000Z"),
       });
+      expect(failureLearningLineageReference(record)).toMatchObject({
+        learning_action_status: "candidate_derivation_recorded",
+        validity_status: "not_assessed",
+        improvement_status: "not_measured",
+        generalization_status: "not_assessed",
+        c_result_binding_status: "request_bound",
+        internal_derivation_attribution_status: "not_established",
+        external_change_contribution_status: "not_assessed",
+        teacher_input_contribution_status: "excluded_from_c_projection",
+      });
       expect(store.appendLearningLineage(record)).toMatchObject({ status: "stored" });
 
       const saved = JSON.parse(readFileSync(file, "utf8")) as { learning_lineage_records: unknown[] };
@@ -118,6 +130,23 @@ describe("FailureMemoryStore", () => {
       const reloaded = new FailureMemoryStore({ filepath: file });
       expect(reloaded.listLearningLineageForSignature(signature.id)).toEqual([record]);
       expect(reloaded.evaluateGate(candidateFromCommand(toolCommand())).decision).toBe("allow");
+
+      const legacyContent = Object.fromEntries(Object.entries(record).filter(([key]) =>
+        !["record_id", "learning_action_status", "validity_status", "improvement_status", "generalization_status",
+          "c_result_binding_status", "internal_derivation_attribution_status", "external_change_contribution_status",
+          "teacher_input_contribution_status"].includes(key)));
+      const legacyRecord = { ...legacyContent, record_id: sha256Hex(stableJson(legacyContent)) };
+      writeFileSync(file, JSON.stringify({ ...saved, learning_lineage_records: [legacyRecord] }));
+      const legacyReloaded = new FailureMemoryStore({ filepath: file });
+      expect(legacyReloaded.listLearningLineageForSignature(signature.id)).toEqual([legacyRecord]);
+      expect(failureLearningLineageReference(legacyRecord as typeof record)).toMatchObject({
+        validity_status: "not_assessed",
+        improvement_status: "not_measured",
+        generalization_status: "not_assessed",
+        internal_derivation_attribution_status: "not_established",
+        external_change_contribution_status: "not_assessed",
+        teacher_input_contribution_status: "excluded_from_c_projection",
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

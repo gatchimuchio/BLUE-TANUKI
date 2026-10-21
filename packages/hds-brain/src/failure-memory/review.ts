@@ -170,6 +170,14 @@ export function buildFailureLearningLineageRecord(input: {
     application_target: "failure-memory.learning-lineage.v1" as const,
     derivation_categories: [...new Set(candidate.cause_hypotheses.map((hypothesis) => hypothesis.category))].sort() as FailureType[],
     derived_at: (input.derived_at ?? new Date()).toISOString(),
+    learning_action_status: "candidate_derivation_recorded" as const,
+    validity_status: "not_assessed" as const,
+    improvement_status: "not_measured" as const,
+    generalization_status: "not_assessed" as const,
+    c_result_binding_status: "request_bound" as const,
+    internal_derivation_attribution_status: "not_established" as const,
+    external_change_contribution_status: "not_assessed" as const,
+    teacher_input_contribution_status: "excluded_from_c_projection" as const,
     adoption_status: "not_adopted" as const,
     approval_status: "not_requested" as const,
     memory_application_status: "stored_for_future_reference" as const,
@@ -194,6 +202,14 @@ export function failureLearningLineageReference(record: FailureLearningLineageRe
     derivation_digest: parsed.derivation_digest,
     derived_at: parsed.derived_at,
     candidate_categories: parsed.derivation_categories,
+    learning_action_status: parsed.learning_action_status ?? "candidate_derivation_recorded",
+    validity_status: parsed.validity_status ?? "not_assessed",
+    improvement_status: parsed.improvement_status ?? "not_measured",
+    generalization_status: parsed.generalization_status ?? "not_assessed",
+    c_result_binding_status: parsed.c_result_binding_status ?? "request_bound",
+    internal_derivation_attribution_status: parsed.internal_derivation_attribution_status ?? "not_established",
+    external_change_contribution_status: parsed.external_change_contribution_status ?? "not_assessed",
+    teacher_input_contribution_status: parsed.teacher_input_contribution_status ?? "excluded_from_c_projection",
     adoption_status: parsed.adoption_status,
     approval_status: parsed.approval_status,
     memory_application_status: parsed.memory_application_status,
@@ -233,6 +249,10 @@ export function assessFailureReviewCandidate(input: {
     independent_observation_count: observation.count,
     independent_observation_digest: observation.digest,
     prior_learning_lineage_count: input.projection.prior_learning_lineages.length,
+    prior_learning_lineage_digests: input.projection.prior_learning_lineages.map((lineage) => lineage.record_digest),
+    prior_learning_lineage_connection_status: input.projection.prior_learning_lineages.length === 0
+      ? "no_prior_lineages"
+      : "candidate_bound_to_projection",
     counterexample_review_target_status: candidate.counterexamples.length === 0
       ? "not_present"
       : scopeBound ? "retained_for_future_observation" : "held_for_scope",
@@ -313,6 +333,10 @@ function emptyFailureReviewTrace(
     independent_observation_count: observation.count,
     independent_observation_digest: observation.digest,
     prior_learning_lineage_count: projection.prior_learning_lineages.length,
+    prior_learning_lineage_digests: projection.prior_learning_lineages.map((lineage) => lineage.record_digest),
+    prior_learning_lineage_connection_status: projection.prior_learning_lineages.length === 0
+      ? "no_prior_lineages"
+      : "not_bound",
     counterexample_review_target_status: "not_present",
     resume_condition_review_target_status: "not_present",
     cause_hypothesis_count: 0,

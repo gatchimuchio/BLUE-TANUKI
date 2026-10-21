@@ -2880,6 +2880,14 @@ ${planControl.question}`,
       const projection = issued?.failure_review_projection;
       const base = {
         prior_reference_count: projection?.prior_learning_lineages.length ?? 0,
+        learning_action_status: "not_established" as const,
+        validity_status: "not_assessed" as const,
+        improvement_status: "not_measured" as const,
+        generalization_status: "not_assessed" as const,
+        c_result_binding_status: "unavailable" as const,
+        internal_derivation_attribution_status: "not_established" as const,
+        external_change_contribution_status: "not_assessed" as const,
+        teacher_input_contribution_status: "excluded_from_c_projection" as const,
         adoption_status: "not_adopted" as const,
         approval_status: "not_requested" as const,
         memory_application_status: "not_applied" as const,
@@ -2897,7 +2905,9 @@ ${planControl.question}`,
         const prior = projection.prior_learning_lineages.find((item) =>
           item.derivation_digest === derivationDigest && item.experience_digest === experienceDigest);
         if (prior) {
-          failureLearningLineage = { ...base, status: "replayed_prior_derivation", record_digest: prior.record_digest,
+          failureLearningLineage = { ...base, status: "replayed_prior_derivation",
+            learning_action_status: "candidate_derivation_recorded", c_result_binding_status: "request_bound",
+            record_digest: prior.record_digest,
             derivation_digest: derivationDigest, memory_application_status: "stored_for_future_reference" };
         } else if (!this.failureMemoryStore) {
           failureLearningLineage = { ...base, status: "store_unavailable", derivation_digest: derivationDigest };
@@ -2907,10 +2917,14 @@ ${planControl.question}`,
               command_id: fb.command_id });
             const appended = this.failureMemoryStore.appendLearningLineage(record);
             if (appended.status === "stored") {
-              failureLearningLineage = { ...base, status: "stored", record_digest: appended.record.record_id,
+              failureLearningLineage = { ...base, status: "stored",
+                learning_action_status: "candidate_derivation_recorded", c_result_binding_status: "request_bound",
+                record_digest: appended.record.record_id,
                 derivation_digest: record.derivation_digest, memory_application_status: "stored_for_future_reference" };
             } else if (appended.status === "replayed") {
-              failureLearningLineage = { ...base, status: "replayed_prior_derivation", record_digest: appended.record.record_id,
+              failureLearningLineage = { ...base, status: "replayed_prior_derivation",
+                learning_action_status: "candidate_derivation_recorded", c_result_binding_status: "request_bound",
+                record_digest: appended.record.record_id,
                 derivation_digest: appended.record.derivation_digest, memory_application_status: "stored_for_future_reference" };
             } else {
               failureLearningLineage = { ...base, status: appended.status, derivation_digest: derivationDigest };
@@ -3788,7 +3802,7 @@ ${planControl.question}`,
       const projectionDigest = failureReviewProjectionDigest(failureReview);
       const systemContent = [
         "失敗署名を検討する未信頼計算です。入力は失敗カテゴリ・SHA-256 digest・Complete History由来のdigest限定失敗分類だけで、元のgoal/action/context/resultは読めません。digestに意味を見立てず、カテゴリに基づく一般的な原因候補・別仮説・目的同定/評価器/観測方法の誤り候補、範囲、反例、独立観測、条件付き再開条件をJSONで提案してください。Complete History分類も限定観測で、原因や世界事実を証明しません。原因を事実として断定しないでください。",
-        "prior_learning_lineagesは以前の未採用候補への非権威参照です。事実、原因、許可、独立証拠として扱わず、同じ候補の再表示を新しい導出や観測として数えないでください。",
+        "prior_learning_lineagesは以前の未採用候補への非権威参照です。candidate_derivation_recordedは候補保持と今回の投影への接続だけを示し、妥当性・改善・汎化を示しません。C結果のrequest bindingは受領経路だけを示し、内部導出の帰属は未確立です。外部改修の寄与は未評価で、教師入力はこのC投影に含まれません。外部変更や教師入力を機械内部の導出として数えず、事実、原因、許可、独立証拠として扱わず、同じ候補の再表示を新しい導出や観測として数えないでください。",
         "raw内容・tool・計画・意味更新・実行・再試行・権限提案を出さないでください。空欄や不明は不明のままにしてください。",
         `出力schema: {"schema_version":"blue-tanuki.failure-review-candidate.v1","signature_id":${JSON.stringify(failureReview.signature_id)},"signature_digest":${JSON.stringify(failureReview.signature_digest)},"projection_digest":${JSON.stringify(projectionDigest)},"cause_hypotheses":[{"category":${JSON.stringify(failureReview.failure_type)},"rationale":"未検証候補"}],"alternative_hypotheses":["未検証の別仮説"],"observation_error_hypotheses":["目的/評価/観測の未検証候補"],"scope_assessment":"uncertain","counterexamples":["未検証の反例候補"],"resume_conditions":["独立観測で確認する条件候補"],"additional_observations":["必要な追加観測候補"],"authority_boundary":{"candidate_only":true,"may_execute":false,"used_for_authority":false}}。scope_assessmentはsame_scope / uncertain / different_scopeの一つを選択してください。各配列は最大16件、各自由文は1200文字以内。`,
         `FailureReviewProjection=${JSON.stringify(failureReview)}`,

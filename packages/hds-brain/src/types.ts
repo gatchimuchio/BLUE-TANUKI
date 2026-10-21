@@ -465,6 +465,8 @@ export interface FailureReviewAuditTrace {
   independent_observation_count: number;
   independent_observation_digest: string;
   prior_learning_lineage_count: number;
+  prior_learning_lineage_digests: string[];
+  prior_learning_lineage_connection_status: "no_prior_lineages" | "candidate_bound_to_projection" | "not_bound";
   counterexample_review_target_status: "not_present" | "held_for_scope" | "retained_for_future_observation";
   resume_condition_review_target_status: "not_present" | "held_for_scope" | "retained_for_future_observation";
   cause_hypothesis_count: number;
@@ -487,6 +489,14 @@ export interface FailureLearningLineageAuditTrace {
   record_digest?: string;
   derivation_digest?: string;
   prior_reference_count: number;
+  learning_action_status: "candidate_derivation_recorded" | "not_established";
+  validity_status: "not_assessed";
+  improvement_status: "not_measured";
+  generalization_status: "not_assessed";
+  c_result_binding_status: "request_bound" | "unavailable";
+  internal_derivation_attribution_status: "not_established";
+  external_change_contribution_status: "not_assessed";
+  teacher_input_contribution_status: "excluded_from_c_projection";
   adoption_status: "not_adopted";
   approval_status: "not_requested";
   memory_application_status: "stored_for_future_reference" | "not_applied";

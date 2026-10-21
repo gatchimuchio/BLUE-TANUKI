@@ -159,12 +159,19 @@ describe("prepareFailureReviewInbound", () => {
     hds.onFeedback(rawFeedback);
     const next = prepareFailureReviewInbound(developerRequest("failure:review " + signature.id), store) as InboundRequest;
     const nextProjection = JSON.parse(String(next.metadata?.["blue_tanuki.failure_review.projection_json"])) as {
-      prior_learning_lineages: Array<{ derivation_digest: string; adoption_status: string; may_execute: boolean }>;
+      prior_learning_lineages: Array<{ derivation_digest: string; adoption_status: string; may_execute: boolean;
+        validity_status: string; improvement_status: string; generalization_status: string;
+        external_change_contribution_status: string; teacher_input_contribution_status: string }>;
     };
     expect(nextProjection.prior_learning_lineages).toHaveLength(1);
     expect(nextProjection.prior_learning_lineages[0]).toMatchObject({
       adoption_status: "not_adopted",
       may_execute: false,
+      validity_status: "not_assessed",
+      improvement_status: "not_measured",
+      generalization_status: "not_assessed",
+      external_change_contribution_status: "not_assessed",
+      teacher_input_contribution_status: "excluded_from_c_projection",
     });
   });
 

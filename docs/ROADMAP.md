@@ -2,7 +2,7 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
-2026-10-21の`QEB-29-E05.01-RETENTION-DERIVATION-APPLICATION-LINEAGE`では、J確認済みの未採用C導出をFailureMemoryへdigest-only lineageとして保存し、後続FailureReview projectionからCへ返すconsumerを接続した。署名／pre-state／期間／経験／導出／適用先を束ね、採用・承認・M参照保存・follow-upを別状態に保つ。同じ署名・経験・導出の再表示のみ重複扱いとし、FailureGateや権限へ結ばない。FailureMemory／HDS／Gateway focused 100/100、workspace typecheck／buildはPASS。全workspace suite、QE_QC／QE_QAは未実施。次はE05.02「学習成立と改善・外部改修の分離」。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+2026-10-21の`QEB-30-E05.02-LEARNING-IMPROVEMENT-EXTERNAL-CHANGE-SEPARATION`では、C候補の記録・後続projectionへの接続と、妥当性・改善・汎化を別状態で保持した。C結果はrequest-bound受領として記録し、内部導出帰属は未確立、外部改修寄与は未評価、教師入力はC projectionから除外する。次回C候補が同じprojectionへ結び付いたことと参照lineage digestをHDS監査へ残す。focused tests 100/100、workspace typecheck/buildはPASS。全workspace suite、QE_QC／QE_QAは未実施。次はE05.03「版候補の開発系への移譲」。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-21の`QEB-28-E04.03-CONDITION-CHANGE-REOBSERVATION`では、同一action／targetへの新しいHDS `ASSERT`でgoal／actor／channel fingerprintが変わった場合をFailureMemory gateが条件変化候補として検出し、fresh Approval Gateへ接続した。activeなblock／require-approval署名は保持し、never-probe blockは継続する。異なるaction／targetへ広げず、fingerprint差を外部条件解消の証明や実行権限にしない。FailureMemory focused 17/17、Gateway operation-result focused 7/7、HDS／Gateway typecheck/buildはPASS。全suiteとE04.03の個別QC／QA、全体`BUILD_COVERED`、QE_QC／QE_QAは未実施。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
