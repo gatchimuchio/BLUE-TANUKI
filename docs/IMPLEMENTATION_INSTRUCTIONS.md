@@ -21,7 +21,7 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 | `git diff --check`／`pnpm docs:check` | 両方PASS。日本語基底の移行負債76件は継続管理。 |
 | 実LLM／credential／外部作用、全workspace suite、実Gateway再起動、QE_QC／QE_QA | 未実施。実物全体の形状成立後の工程に置く。 |
 
-このInterrupted wait restart consumerを`WIRED`とする。E03.02 durable job lifecycleの全producer／consumerおよび製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider、実外部作用、D4Pocket／ミニドラ別repo変更、P13公開・出荷GOは保留。commit／push後にremote mainとbackup refを記録する。
+このInterrupted wait restart consumerを`WIRED`とする。E03.02 durable job lifecycleの全producer／consumerおよび製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider、実外部作用、D4Pocket／ミニドラ別repo変更、P13公開・出荷GOは保留。実装commit=`28bc149acfa512300987d6a54738ba2aee464cd9`。このcloseoutを含むmain push後にremote main／backup refを照合する。
 
 ### 履歴ログ：`QEB-09-E03.02-RECOVERED-SAVED-RESULT-RETURN`
 
