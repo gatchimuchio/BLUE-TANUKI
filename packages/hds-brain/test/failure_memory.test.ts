@@ -7,6 +7,7 @@ import {
   CompleteHistoryStore,
   FailureMemoryStore,
   candidateFromCommand,
+  createFailureReviewProjection,
   extractFailureSignatures,
   runPeriodicFailureMemoryVerification,
 } from "../src/index.js";
@@ -191,11 +192,16 @@ describe("Pre-execution failure gate", () => {
         context: { actor: "PRIVATE_ACTOR_SENTINEL", channel: "webchat", request_id: "PRIVATE_REQUEST_SENTINEL" },
         feedback: { command_id: command.id, status: "failed", error: privateError, metrics: { duration_ms: 1 } },
       })[0]!;
-      expect(observation).toMatchObject({
-        cause_candidates: ["repeat_error"],
-        unknowns: expect.arrayContaining(["root_cause_unconfirmed", "predicted_difference_not_observed"]),
-      });
+      expect(observation.cause_candidates).toBeUndefined();
+      expect(observation.unknowns).toEqual(expect.arrayContaining([
+        "root_cause_unconfirmed", "predicted_difference_not_observed",
+      ]));
       expect(observation.result_pattern).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(createFailureReviewProjection({ ...observation, id: "123e4567-e89b-42d3-a456-426614174000" })).toMatchObject({
+        failure_type: "repeat_error",
+        cause_candidates: [],
+        unknowns: expect.arrayContaining(["root_cause_unconfirmed"]),
+      });
 
       const store = new FailureMemoryStore({ filepath: file });
       store.addSignature(observation);

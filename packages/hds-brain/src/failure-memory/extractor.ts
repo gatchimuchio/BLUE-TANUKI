@@ -29,7 +29,6 @@ export function extractFailureSignatures(input: FailureExtractionInput): Failure
       action_pattern: commandActionPattern(input.command),
       context_pattern: commandContextPattern(input.context),
       result_pattern: symptomDigest(input.feedback.error ?? "execution_failed"),
-      cause_candidates: [failureType],
       unknowns: commandUnknowns(input.command, input.context),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: severityForError(input.feedback.error),
@@ -43,7 +42,6 @@ export function extractFailureSignatures(input: FailureExtractionInput): Failure
       failure_type: failureType,
       action_pattern: `sha256:${sha256Hex(input.tool_name)}`,
       result_pattern: symptomDigest(input.error ?? "failed"),
-      cause_candidates: [failureType],
       unknowns: commonUnknowns(),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: severityForError(input.error),
@@ -56,7 +54,6 @@ export function extractFailureSignatures(input: FailureExtractionInput): Failure
       failure_type: "test_regression",
       action_pattern: `sha256:${sha256Hex(input.test_name)}`,
       result_pattern: symptomDigest(input.error ?? "test_failed"),
-      cause_candidates: ["test_regression"],
       unknowns: commonUnknowns(),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: "high",
@@ -70,7 +67,6 @@ export function extractFailureSignatures(input: FailureExtractionInput): Failure
       failure_type: failureType,
       action_pattern: `sha256:${sha256Hex(input.workflow)}`,
       result_pattern: symptomDigest(input.error ?? "workflow_failed"),
-      cause_candidates: [failureType],
       unknowns: commonUnknowns(),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: severityForError(input.error),
@@ -83,7 +79,6 @@ export function extractFailureSignatures(input: FailureExtractionInput): Failure
       failure_type: classifyLLMFailure(input.error),
       action_pattern: `sha256:${sha256Hex(input.validator)}`,
       result_pattern: symptomDigest(input.error ?? "llm_output_validation_failed"),
-      cause_candidates: [classifyLLMFailure(input.error)],
       unknowns: commonUnknowns(),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: "medium",
@@ -97,7 +92,6 @@ export function extractFailureSignatures(input: FailureExtractionInput): Failure
       failure_type: "boundary_violation",
       action_pattern: `sha256:${sha256Hex(input.decision)}`,
       result_pattern: symptomDigest(input.reason),
-      cause_candidates: ["boundary_violation"],
       unknowns: commonUnknowns(),
       evidence_log_ids: input.evidence_log_id ? [input.evidence_log_id] : [],
       severity: "critical",
@@ -132,7 +126,6 @@ export function extractFromCompleteHistory(entry: CompleteHistoryEntry): Failure
       action_pattern: safeActionPattern,
       context_pattern: commandContextPattern({ actor: entry.actor, channel: payload.origin_channel }),
       result_pattern: symptomDigest(error),
-      cause_candidates: [failureType],
       unknowns: [
         ...commonUnknowns(),
         ...(hasConditionedPatterns ? [] : ["legacy_history_missing_conditioned_patterns"]),
@@ -156,7 +149,6 @@ export function extractFromCompleteHistory(entry: CompleteHistoryEntry): Failure
       }),
       context_pattern: commandContextPattern({ actor: payload.actor, channel: payload.channel }),
       result_pattern: symptomDigest(reason),
-      cause_candidates: [reason.includes("boundary") ? "boundary_violation" : "logic_drift"],
       unknowns: commonUnknowns(),
       evidence_log_ids: [entry.id],
       severity: reason.includes("boundary") ? "critical" : "high",
@@ -175,7 +167,6 @@ export function extractFromCompleteHistory(entry: CompleteHistoryEntry): Failure
       action_pattern: `sha256:${sha256Hex(payload.command ?? {})}`,
       context_pattern: commandContextPattern({ actor: entry.actor, channel: payload.origin_channel }),
       result_pattern: symptomDigest(reason || event),
-      cause_candidates: [reason.includes("manual_correction") ? "repeated_manual_correction" : classifyFailure(reason)],
       unknowns: commonUnknowns(),
       evidence_log_ids: [entry.id],
       severity: event.includes("denied") ? "high" : "medium",
@@ -195,7 +186,6 @@ export function extractFromCompleteHistory(entry: CompleteHistoryEntry): Failure
         output_kind_digest: `sha256:${sha256Hex(payload.output_kind)}`,
       }),
       result_pattern: symptomDigest(reason || releaseDecision),
-      cause_candidates: [classifyLLMFailure(reason)],
       unknowns: commonUnknowns(),
       evidence_log_ids: [entry.id],
       severity: releaseDecision === "block" ? "high" : "medium",
@@ -213,7 +203,6 @@ function signatureInput(input: {
   result_pattern?: string;
   context_pattern?: string;
   predicted_difference_digest?: string;
-  cause_candidates?: readonly FailureType[];
   unknowns?: readonly string[];
   evidence_log_ids?: readonly string[];
   severity?: FailureSeverity;
@@ -228,7 +217,6 @@ function signatureInput(input: {
     context_pattern: input.context_pattern ?? "{}",
     predicted_difference_digest: input.predicted_difference_digest,
     result_pattern: input.result_pattern,
-    cause_candidates: input.cause_candidates,
     unknowns: input.unknowns,
     evidence_log_ids: input.evidence_log_ids ?? [],
     confidence: input.confidence ?? 0.65,
