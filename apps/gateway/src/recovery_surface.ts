@@ -135,6 +135,8 @@ export interface RecoveryPostActionObservation {
 
 export interface RecoveryPlanRestorePointObservation {
   readonly plan_id_digest: string;
+  readonly backup_task_identity_digest?: string | null;
+  readonly backup_task_lineage_plan_scope_count?: number | null;
   readonly backup_plan_record_status: "matched" | "not_found" | "ambiguous" | "unverified";
   readonly backup_plan_integrity: "verified" | "residuals_present" | null;
   readonly backup_plan_record_count: number | null;
@@ -265,6 +267,11 @@ export interface RecoveryScopeApplicabilityInspection {
   readonly backup_id_digest: string | null;
   readonly matched_plan_id_digest: string | null;
   readonly matched_plan_scope_count: number | null;
+  /** HDS-J task lineage; correlation only, never authority. */
+  readonly backup_task_identity_digest: string | null;
+  readonly backup_task_lineage_plan_scope_count: number | null;
+  readonly backup_task_lineage_integrity: "verified" | "residuals_present" | "unverified" | "unknown";
+  readonly backup_task_lineage_dependency_status: "observed" | "residuals_present" | "unobserved" | "unknown";
   readonly store_candidate_count: number | null;
   readonly verified_store_candidate_count: number | null;
   readonly dependency_scope_status: "observed" | "residuals_present" | "unobserved" | "unknown";
@@ -324,6 +331,7 @@ export interface RecoveryBackupOperationPlanInventory {
   readonly omitted_plan_scope_count: number | null;
   readonly plan_scopes: readonly {
     readonly plan_id_digest: string;
+    readonly task_identity_digest: string | null;
     readonly request_scope_digest: string | null;
     readonly integrity: "verified" | "residuals_present";
     readonly plan_record_count: number;
@@ -1239,6 +1247,7 @@ async function inspectBackupOperationPlanInventory(
 
   const planScopes = inspected.plans.slice(0, 64).map((plan) => ({
     plan_id_digest: plan.plan_id_digest,
+    task_identity_digest: plan.task_identity_digest ?? null,
     request_scope_digest: plan.request_scope_digest,
     integrity: plan.integrity,
     plan_record_count: plan.plan_record_count,
@@ -1416,6 +1425,10 @@ function emptyRecoveryScopeApplicability(
       ? request.backup_id_digest.toLowerCase() : null,
     matched_plan_id_digest: null,
     matched_plan_scope_count: null,
+    backup_task_identity_digest: null,
+    backup_task_lineage_plan_scope_count: null,
+    backup_task_lineage_integrity: "unknown",
+    backup_task_lineage_dependency_status: "unknown",
     store_candidate_count: null,
     verified_store_candidate_count: null,
     dependency_scope_status: "unknown",
@@ -1508,6 +1521,22 @@ export async function inspectRecoveryScopeApplicability(
     };
   }
   const dependencyScope = matchingDependencyScopes[0]!;
+  const taskIdentityDigest = matchedPlan.task_identity_digest ?? null;
+  const taskLineagePlans = taskIdentityDigest
+    ? inventory.plan_scopes.filter((plan) => plan.task_identity_digest === taskIdentityDigest)
+    : [];
+  const taskLineagePlanIds = new Set(taskLineagePlans.map((plan) => plan.plan_id_digest));
+  const taskLineageDependencies = dependencies.plan_scopes.filter((scope) => taskLineagePlanIds.has(scope.plan_id_digest));
+  const taskLineageIntegrity = !taskIdentityDigest || taskLineagePlans.length === 0
+    ? "unknown"
+    : taskLineagePlans.some((plan) => plan.integrity !== "verified" || plan.plan_record_count !== 1)
+      ? "residuals_present" : "verified";
+  const taskLineageDependencyStatus = !taskIdentityDigest || taskLineagePlans.length === 0 ||
+      taskLineageDependencies.length !== taskLineagePlans.length
+    ? "unknown"
+    : taskLineageDependencies.some((scope) => scope.status === "residuals_present")
+      ? "residuals_present"
+      : taskLineageDependencies.some((scope) => scope.status === "unobserved") ? "unobserved" : "observed";
   const snapshotStatuses = new Map(backup.canonical_state_stores.map((entry) => [entry.store_key, entry.status]));
   if (snapshotStatuses.size !== 5 || backup.canonical_state_cross_store_atomic !== false) {
     return emptyRecoveryScopeApplicability("store_unverified", baseRequest);
@@ -1546,6 +1575,10 @@ export async function inspectRecoveryScopeApplicability(
     backup_id_digest: request.backup_id_digest,
     matched_plan_id_digest: matchedPlan.plan_id_digest,
     matched_plan_scope_count: 1,
+    backup_task_identity_digest: taskIdentityDigest,
+    backup_task_lineage_plan_scope_count: taskIdentityDigest ? taskLineagePlans.length : null,
+    backup_task_lineage_integrity: taskLineageIntegrity,
+    backup_task_lineage_dependency_status: taskLineageDependencyStatus,
     store_candidate_count: storeCandidates.length,
     verified_store_candidate_count: verifiedStoreCandidateCount,
     dependency_scope_status: dependencyScope.status,
@@ -1776,6 +1809,8 @@ function recoveryStoreRestoreEvidenceFromHistory(value: unknown): RecoveryStoreR
 function unverifiedPlanRestorePoint(planIdDigest: string): RecoveryPlanRestorePointObservation {
   return {
     plan_id_digest: planIdDigest,
+    backup_task_identity_digest: null,
+    backup_task_lineage_plan_scope_count: null,
     backup_plan_record_status: "unverified",
     backup_plan_integrity: null,
     backup_plan_record_count: null,
@@ -1811,6 +1846,8 @@ async function inspectRecoveryPlanRestorePoints(
     if (matches.length === 0) {
       return {
         plan_id_digest: plan.plan_id_digest,
+        backup_task_identity_digest: null,
+        backup_task_lineage_plan_scope_count: null,
         backup_plan_record_status: "not_found",
         backup_plan_integrity: null,
         backup_plan_record_count: null,
@@ -1822,6 +1859,8 @@ async function inspectRecoveryPlanRestorePoints(
     if (matches.length !== 1) {
       return {
         plan_id_digest: plan.plan_id_digest,
+        backup_task_identity_digest: null,
+        backup_task_lineage_plan_scope_count: null,
         backup_plan_record_status: "ambiguous",
         backup_plan_integrity: null,
         backup_plan_record_count: null,
@@ -1833,12 +1872,17 @@ async function inspectRecoveryPlanRestorePoints(
 
     const match = matches[0]!;
     const uniqueRecord = match.plan_record_count === 1;
+    const taskLineagePlanScopeCount = match.task_identity_digest
+      ? inventory.plan_scopes.filter((scope) => scope.task_identity_digest === match.task_identity_digest).length
+      : null;
     const dependencyMatches = dependencyInventoryComplete
       ? dependencies.plan_scopes.filter((scope) => scope.plan_id_digest === plan.plan_id_digest)
       : [];
     const dependency = uniqueRecord && dependencyMatches.length === 1 ? dependencyMatches[0] : undefined;
     return {
       plan_id_digest: plan.plan_id_digest,
+      backup_task_identity_digest: match.task_identity_digest,
+      backup_task_lineage_plan_scope_count: taskLineagePlanScopeCount,
       backup_plan_record_status: uniqueRecord ? "matched" : "ambiguous",
       backup_plan_integrity: match.integrity,
       backup_plan_record_count: match.plan_record_count,

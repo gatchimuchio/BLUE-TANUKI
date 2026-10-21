@@ -79,8 +79,8 @@ type MemoryInterpretationReviewSnapshot = {
   readonly used_for_authority: false;
 };
 
-/** Stable across plan revisions; the digests correlate a task but confer no authority. */
-function operationPlanTaskIdentityDigest(plan: PlanState): string {
+/** Stable across plan revisions; the digest correlates a task but confers no authority. */
+export function operationPlanTaskIdentityDigest(plan: PlanState): string {
   if (plan.task_identity_digest) return plan.task_identity_digest;
   const first = plan.revisions[0]!.plan;
   return operationPlanDigest({

@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
-import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import {
   buildRecoveryPostActionObservation,
@@ -695,9 +695,12 @@ describe("buildRecoveryPostActionObservation", () => {
     try {
       const stateRoot = path.join(root, "state");
       const recoveryRoot = path.join(root, "recovery");
-      const storePath = await createOperationPlanStore(stateRoot, [
-        recoveryObservationPlanState("private-correlated-plan", true),
-      ]);
+      const backupPlanCheckpoint = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [recoveryObservationPlanState("private-correlated-plan", true)],
+      });
+      const backupTaskIdentityDigest = operationPlanTaskIdentityDigest(backupPlanCheckpoint.plans[0]!);
+      const storePath = await createOperationPlanStore(stateRoot, [...backupPlanCheckpoint.plans]);
       const backup = await createRecoveryBackup({
         BLUE_TANUKI_STATE_ROOT: stateRoot,
         BLUE_TANUKI_RECOVERY_DIR: recoveryRoot,
@@ -743,6 +746,8 @@ describe("buildRecoveryPostActionObservation", () => {
         plan_restore_points: [
           {
             plan_id_digest: operationPlanDigest("private-correlated-plan"),
+            backup_task_identity_digest: backupTaskIdentityDigest,
+            backup_task_lineage_plan_scope_count: 1,
             backup_plan_record_status: "matched",
             backup_plan_integrity: "residuals_present",
             backup_plan_record_count: 1,

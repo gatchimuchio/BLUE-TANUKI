@@ -2,7 +2,7 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
-2026-10-21の`QEB-19-E03.03-BROKER-RESTORE-TASK-LINEAGE-ISOLATION`では、Broker restore後のJ/M/Broker依存holdをplan単位からJのtask lineage単位へ広げ、同一仕事の兄弟planを全件再観測まで隔離した。再起動時の既存plan単位holdもlineageへ伝播する。Operation Plan runtime 38/38、HDS standalone、HDS／Gateway typecheck・buildはPASS。仕事単位の独立restore point、store間atomicity、guarded recovery／resumeは未接続で、E03.03／QEB-03および製品全体の`BUILD_COVERED`は未成立。QE_QC／QE_QAは未開始。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+2026-10-21の`QEB-20-E03.03-BACKUP-TASK-LINEAGE-IDENTITY`では、HDS-J task identity digestと同一backup内のlineage plan数・integrity・dependency statusを、plan-scoped restore applicabilityへ接続した。Gateway/HDS typecheck・build、HDS standalone、Recovery関連5 suite 73/73はPASS。task lineage全体のrestore／resume、store間atomicity、E03.03／QEB-03および製品全体の`BUILD_COVERED`は未成立。QE_QC／QE_QAは未開始。次はL3 task identityに明示束縛されたplan／waitの選択復元consumer。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-21の`QEB-17-E03.03-BROKER-RESTORE-QUIESCENCE-OBSERVATION`では、Broker復元時の未処理Approvalを拒否し、保守lockで新規commandを止め、実行中command完了処理とExecutor taskを排出する。復元後は完全な監査履歴、restore結果・backup・state digest、Broker台帳を照合し、一致しない場合は保守holdを維持する。Recoveryの選択Broker store観測とGateway restore consumer 3 suite 20/20、Gateway typecheck/buildはPASS。Broker restore後のjob単位J/M/Broker相関による再開判断は未接続で、E03.03／QEB-03および製品全体の`BUILD_COVERED`は未成立。QE_QC／QE_QAは未開始。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 

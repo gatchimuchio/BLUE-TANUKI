@@ -2277,3 +2277,18 @@ QEB-18ではBroker restore dependencyをplan digestごとに照合していた�
 | 全workspace suite、全体QE_QC／QE_QA、provider／credential、実restore・外部作用、5OS実機 | 未実施。全体実装形状の前に品質工程へ移らない。 |
 
 同一task lineageのBroker restore isolation consumerを`WIRED`とする。仕事単位の独立restore point、全store atomicity、guarded selective recovery／resume、E03.03／QEB-03全体の`BUILD_COVERED`は未成立。次のconsumerは、J task identityとcanonical backup producerを独立した仕事復旧点へ束縛する実配線を現物から確定する。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。Git closeout SHAと復旧refはpush後のcloseoutで確認する。
+
+## 2026-10-21 QEB-20-E03.03-BACKUP-TASK-LINEAGE-IDENTITY
+
+QE_STAGE=`QE_BUILD`。開始HEAD／`origin/main`=`328790811750276a3fc89e1ae3eb07a50e2a2afd`。現行pin rev2.3、適用`AGENTS.md`、active指示、HDS task identity、canonical backup inventory／plan restore applicability consumerを再同期した。既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保全した。
+
+HDS-Jの既存task identity digest関数を共有exportし、Recoveryのcanonical Operation Plan archive inventoryへ各plan recordの非権威identityを加えた。重複plan IDでidentityが食い違う場合はtask identityを不明にしてintegrity residualへ閉じる。選択planのread-only restore applicabilityは、同じbackup内でそのidentityに属するplan scope数、inventory integrity、dependency statusを返す。post-actionのbackup restore-point観測もtask identityとbackup lineage scope数を記録する。既存L3 restore scopeとSQLite mergeは従来どおりplan-scopedのまま。task全体のrestore／resume、live側lineageとの完全性照合、複数store間atomicityは成立したと扱わない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Recovery関連focused tests | PASS、5 suites／73 tests。task lineageが共有される2つのplan recordがcanonical backup inventoryとrestore applicabilityで同一digest・scope count 2として照合されることを含む。 |
+| HDS／Gateway typecheck・build | PASS。 |
+| HDS standalone | PASS。 |
+| 全workspace suite、全体QE_QC／QE_QA、provider／credential、実restore・外部作用、5OS実機 | 未実施。全体実装形状の前に品質工程へ移らない。 |
+
+backup内のJ task identity／lineage inventoryとselected-plan applicability consumerを`WIRED`とする。task identity digestとbackup内件数は、現在の仕事全体や完全な復旧可能性を証明しない。次はL3 task identityへ明示束縛した同一lineageのplan／wait選択復元consumerを接続し、lineage外recordの保持と復元後のfail-closed holdを維持する。E03.03／QEB-03全体は`BUILD_GAP`、`cross_store_atomic=false`。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。

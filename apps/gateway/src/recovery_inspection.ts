@@ -630,13 +630,16 @@ function projectOperationPlanSummaries(
       continue;
     }
     const planIdDigest = fixedDigest(item.plan_id_digest);
+    const taskIdentityDigest = item.task_identity_digest === null || item.task_identity_digest === undefined
+      ? null : fixedDigest(item.task_identity_digest);
     const requestScopeDigest = item.request_scope_digest === null ? null : fixedDigest(item.request_scope_digest);
     const integrity = fixedEnum(item.integrity, ["verified", "residuals_present"] as const);
     const planRecordCount = item.plan_record_count;
     const bindingCount = item.binding_count;
     const residualBindingCount = item.residual_binding_count;
     const omittedBindingCount = item.omitted_binding_count;
-    if (!planIdDigest || (item.request_scope_digest !== null && !requestScopeDigest) || !integrity ||
+    if (!planIdDigest || (item.task_identity_digest !== null && item.task_identity_digest !== undefined && !taskIdentityDigest) ||
+        (item.request_scope_digest !== null && !requestScopeDigest) || !integrity ||
         !Number.isSafeInteger(planRecordCount) || (planRecordCount as number) < 1 ||
         !Number.isSafeInteger(bindingCount) || (bindingCount as number) < 0 ||
         !Number.isSafeInteger(residualBindingCount) || (residualBindingCount as number) < 0 ||
@@ -648,6 +651,7 @@ function projectOperationPlanSummaries(
     }
     rows.push({
       plan_id_digest: planIdDigest,
+      ...(item.task_identity_digest === undefined ? {} : { task_identity_digest: taskIdentityDigest }),
       request_scope_digest: requestScopeDigest,
       integrity,
       plan_record_count: planRecordCount as number,

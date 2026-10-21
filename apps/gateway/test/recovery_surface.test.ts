@@ -142,12 +142,12 @@ function recoveryPlanCheckpoint(suffix = "one"): { checkpoint: OperationPlanChec
   return { checkpoint, planScopeDigest: operationPlanDigest(plan.plan_id) };
 }
 
-function recoveryWait(planIdDigest: string, revisionDigest: string, suffix: string) {
+function recoveryWait(planIdDigest: string, revisionDigest: string, suffix: string, taskIdentityDigest?: string) {
   const digest = (label: string) => createHash("sha256").update(`${suffix}-${label}`).digest("hex");
   return {
     wait_id: digest("wait"),
     plan_id_digest: planIdDigest,
-    task_identity_digest: digest("task"),
+    task_identity_digest: taskIdentityDigest ?? digest("task"),
     revision_digest: revisionDigest,
     owner_digest: digest("owner"),
     channel_digest: digest("channel"),
@@ -447,14 +447,16 @@ describe("buildRecoverySnapshot", () => {
       livePlanStore = new OperationPlanStateStore(selectedPath);
       const requestedBackup = recoveryPlanCheckpoint("requested");
       const siblingBackup = recoveryPlanCheckpoint("sibling");
+      const taskIdentityDigest = operationPlanDigest({ schema_version: "fixture-task-identity.v1", task: "shared-recovery-task" });
       const requestedRevisionDigest = requestedBackup.checkpoint.plans[0]!.revisions[0]!.digest;
       const siblingRevisionDigest = siblingBackup.checkpoint.plans[0]!.revisions[0]!.digest;
       const checkpoint = OperationPlanCheckpointSchema.parse({
         schema_version: "operation-plan-state.v1",
-        plans: [...requestedBackup.checkpoint.plans, ...siblingBackup.checkpoint.plans],
+        plans: [...requestedBackup.checkpoint.plans, ...siblingBackup.checkpoint.plans]
+          .map((plan) => ({ ...plan, task_identity_digest: taskIdentityDigest })),
         waits: [
-          recoveryWait(requestedBackup.planScopeDigest, requestedRevisionDigest, "backup-requested"),
-          recoveryWait(siblingBackup.planScopeDigest, siblingRevisionDigest, "backup-sibling"),
+          recoveryWait(requestedBackup.planScopeDigest, requestedRevisionDigest, "backup-requested", taskIdentityDigest),
+          recoveryWait(siblingBackup.planScopeDigest, siblingRevisionDigest, "backup-sibling", taskIdentityDigest),
         ],
         shell_exec_result_observations: [recoveryUnboundShellObservation("backup")],
       });
@@ -481,7 +483,13 @@ describe("buildRecoverySnapshot", () => {
       })).rejects.toThrow("operation_plan_scope_unverified");
       expect(await readdir(recoveryDir)).toEqual(packsBeforeRejectedRestore);
       const restoreScopeInspection = await inspectRecoveryPlanRestoreScopeApplicability(env, backup.backup_id!, planScopeDigest);
-      expect(restoreScopeInspection).toMatchObject({ status: "matched", reason: null });
+      expect(restoreScopeInspection).toMatchObject({
+        status: "matched",
+        reason: null,
+        backup_task_identity_digest: taskIdentityDigest,
+        backup_task_lineage_plan_scope_count: 2,
+        backup_task_lineage_integrity: "verified",
+      });
       await writeFile(envFile, "LLM_BACKEND=changed\n", "utf8");
       const currentCheckpoint = OperationPlanCheckpointSchema.parse({
         ...checkpoint,
@@ -490,8 +498,8 @@ describe("buildRecoverySnapshot", () => {
             ? "current requested plan should be replaced"
             : "current sibling plan should be preserved" })),
         waits: [
-          recoveryWait(requestedBackup.planScopeDigest, requestedRevisionDigest, "current-requested"),
-          recoveryWait(siblingBackup.planScopeDigest, siblingRevisionDigest, "current-sibling"),
+          recoveryWait(requestedBackup.planScopeDigest, requestedRevisionDigest, "current-requested", taskIdentityDigest),
+          recoveryWait(siblingBackup.planScopeDigest, siblingRevisionDigest, "current-sibling", taskIdentityDigest),
         ],
         shell_exec_result_observations: [recoveryUnboundShellObservation("current")],
       });
@@ -511,8 +519,8 @@ describe("buildRecoverySnapshot", () => {
           ? checkpoint.plans.find((backupPlan) => backupPlan.revisions[0]!.plan.plan_id === "recovery-scope-plan-requested")!
           : plan),
         waits: [
-          recoveryWait(requestedBackup.planScopeDigest, requestedRevisionDigest, "backup-requested"),
-          recoveryWait(siblingBackup.planScopeDigest, siblingRevisionDigest, "current-sibling"),
+          recoveryWait(requestedBackup.planScopeDigest, requestedRevisionDigest, "backup-requested", taskIdentityDigest),
+          recoveryWait(siblingBackup.planScopeDigest, siblingRevisionDigest, "current-sibling", taskIdentityDigest),
         ],
         shell_exec_result_observations: [recoveryUnboundShellObservation("current")],
       });

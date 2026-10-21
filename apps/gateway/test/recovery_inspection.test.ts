@@ -448,6 +448,7 @@ describe("Gateway recovery operator projection", () => {
     } as const;
     const planSummary = {
       plan_id_digest: "a".repeat(64),
+      task_identity_digest: null,
       request_scope_digest: null,
       integrity: "residuals_present",
       plan_record_count: 1,
@@ -803,6 +804,7 @@ describe("Gateway recovery operator projection", () => {
     const update = { update_id_digest: "e".repeat(64), disposition: "blocked_j" };
     const omittedPlanSummary = {
       plan_id_digest: "a".repeat(64),
+      task_identity_digest: null,
       request_scope_digest: null,
       integrity: "verified",
       plan_record_count: 1,
