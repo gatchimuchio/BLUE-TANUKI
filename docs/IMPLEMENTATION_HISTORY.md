@@ -4,6 +4,24 @@
 
 ---
 
+### 履歴ログ：`QEB-25-E03.03-TASK-M-RESTORE-POINT-OPERATOR-PROJECTION`
+
+開始HEAD=`e20d8c7e030c72515f82717d31a3a1ce4d99993d`。owner指定rev2.3の三点セットと適用AGENTS.md、active指示、HEAD／dirty stateを再同期した。E03.03の要求は、復旧可能な仕事と破損依存仕事を分離し、確認済み復元点と残差を示すこと。QEB-24でM restore pointはHDS fresh J review gateまで接続済みで、Gateway Recovery snapshotにもdigest-only task groupが含まれていたが、Control Center formatterはOperation Plan storeのみを描画しており、M restoreのtask statusはUIで未観測として扱われていた。
+
+Control Centerのpost-action formatterをM stateにも対応させ、backup digestの短縮値、task identity digestの短縮値、task内plan数、固定statusを表示する。task/plan digestの形式・一意性・配列上限・statusを再検査し、不正値は一括して表示抑止する。raw ID、payload、credentialは表示しない。`observed`はbackup依存の観測範囲だけを示し、残差・未観測・unknownを成功や復元可能と読み替えない。表示は権限・承認・復元・再開を生成せず、HDS hold解除の判断を置き換えない。Recovery画面の説明もM task projectionを含む責務へ更新した。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| WebChat `webchat.test.ts` のM task formatter／Recovery page | PASS、2/2。digest-only表示、status、raw ID拒否、重複taskの抑止、page契約文言を確認。 |
+| WebChat typecheck／build、`git diff --check` | PASS。 |
+| WebChat全suite、QE_QC／QE_QA、実Gateway runtime／credential／外部作用 | 未実施。今回のUI consumer接続範囲に限定。 |
+
+E03.03のM restore pointをControl Centerのread-only operator consumerまで`WIRED`とする。HDS current recovery gateを含む復旧可能性の全体判定、J/Broker/M間atomicity、自動resume、E03.03/QEB-03と製品全体の`BUILD_COVERED`は未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次は現行rev2.3と最新コードから、UI表示の先に仕事を進める未接続consumerを選ぶ。QEB-24で観測された広い`execution_result_reconciliation`の2件（Windows isolation provider未導入、J commit residual rejection fixture失敗）は原因未確定のまま別記録とし、本バッチで原因帰属しない。
+
+実装commitとcloseoutのcommit／remote refsはpush後にこのログと最終報告へ照合する。保護対象untracked Linux isolation `target/`は保持する。
+
+---
+
 ### 履歴ログ：`QEB-24-E03.03-TASK-M-RESTORE-POINT-J-REOBSERVATION`
 
 開始HEAD=`9f1715542806315768224802742ce0eba0c3e1c6`。現行pinはowner指定rev2.3で、作業開始時に仕様書・工程表・施工指示書の固定hash、適用AGENTS.md、active instruction、最新HEAD／差分を照合した。QEB-23の直接依存とRecovery／HDS restore consumerだけを確認し、旧版や完了ログ全体は参照していない。作業中も保護対象untracked Linux isolation `target/`を保持し、Gitへ含めない。

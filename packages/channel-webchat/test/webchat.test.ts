@@ -547,6 +547,40 @@ describe("WebChatChannel — Control Center shell", () => {
       .toBe("未確認（表示を抑止）");
   });
 
+  it("renders task-scoped M restore points as digest-only non-authority status", () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function formatRecoveryPostActionPlanResiduals(");
+    const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
+    const end = next < 0 ? CONTROL_CENTER_SCRIPT.length : next;
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const formatter = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    const evaluate = (observation: unknown) => new Script(`${formatter}\nformatRecoveryPostActionPlanResiduals(observation)`)
+      .runInNewContext({ observation }) as string;
+    const observation = {
+      operation: "restore",
+      store_key: "m_state",
+      restore_backup_id_digest: "c".repeat(64),
+      task_memory_restore_points: [
+        { task_identity_digest: "a".repeat(64), plan_id_digests: ["b".repeat(64), "d".repeat(64)], dependency_status: "observed" },
+        { task_identity_digest: "e".repeat(64), plan_id_digests: ["f".repeat(64)], dependency_status: "residuals_present" },
+        { task_identity_digest: "1".repeat(64), plan_id_digests: ["2".repeat(64)], dependency_status: "unobserved" },
+      ],
+    };
+    const text = evaluate(observation);
+    expect(text).toContain("復元元M backup digest cccccccccccc・task別M復元点: 読取検査");
+    expect(text).toContain("タスクdigest aaaaaaaaaaaa・同一backup内plan数 2・M依存: 観測範囲内");
+    expect(text).toContain("タスクdigest eeeeeeeeeeee・同一backup内plan数 1・M依存: 残差あり");
+    expect(text).toContain("タスクdigest 111111111111・同一backup内plan数 1・M依存: 未観測あり");
+    expect(text).toContain("表示は復元・承認・実行権限ではありません。保留解除はHDSの現行判定に従います。");
+    expect(text).not.toContain("a".repeat(64));
+    expect(evaluate({ ...observation, task_memory_restore_points: null })).toContain("task別M復元点: 未観測");
+    expect(evaluate({ operation: "restore", store_key: "m_state" })).toContain("task別M復元点: 未観測");
+    expect(evaluate({ ...observation, task_memory_restore_points: [{ ...observation.task_memory_restore_points[0], task_identity_digest: "raw-task-id" }] }))
+      .toBe("未確認（表示を抑止）");
+    expect(evaluate({ ...observation, task_memory_restore_points: [observation.task_memory_restore_points[0], observation.task_memory_restore_points[0]] }))
+      .toBe("未確認（表示を抑止）");
+  });
+
   it("renders a verified result plan beside a held residual plan in one snapshot", () => {
     const helperStart = CONTROL_CENTER_SCRIPT.indexOf("function byId(");
     const helperEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function toneForBoolean(", helperStart + 1);
@@ -1545,7 +1579,7 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("load-recovery");
       expect(html).toContain("recovery-post-action-observation");
       expect(html).toContain("recovery-post-action-plan-residuals");
-      expect(html).toContain("選択store内の計画別台帳検査");
+      expect(html).toContain("選択store内のtask／計画別復元根拠");
       expect(html).toContain("復元直後の状態と一致");
       expect(html).toContain("復元後に状態変更を観測");
       expect(html).toContain("復元状態と不一致");

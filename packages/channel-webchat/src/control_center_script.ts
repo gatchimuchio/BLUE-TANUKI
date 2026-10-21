@@ -1831,7 +1831,51 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       function formatRecoveryPostActionPlanResiduals(observation) {
-        if (!observation || observation.operation !== "restore" || observation.store_key !== "operation_plans" ||
+        if (!observation || observation.operation !== "restore") return "未観測";
+        if (observation.store_key === "m_state") {
+          const restoreDigest = observation.restore_backup_id_digest ?? null;
+          const taskRestorePoints = observation.task_memory_restore_points;
+          if (restoreDigest !== null && (typeof restoreDigest !== "string" || !/^[a-f0-9]{64}$/.test(restoreDigest))) {
+            return "未確認（表示を抑止）";
+          }
+          const digestLabel = restoreDigest ? "復元元M backup digest " + restoreDigest.slice(0, 12) : "復元元M backup digest 未記録";
+          if (taskRestorePoints === null || taskRestorePoints === undefined) {
+            return digestLabel + "・task別M復元点: 未観測\\n表示は復元・承認・実行権限ではありません。保留解除はHDSの現行判定に従います。";
+          }
+          if (!restoreDigest || !Array.isArray(taskRestorePoints) || taskRestorePoints.length > 64) {
+            return "未確認（表示を抑止）";
+          }
+          if (taskRestorePoints.length === 0) {
+            return digestLabel + "・task別M復元点: 対象taskなし\\n表示は復元・承認・実行権限ではありません。保留解除はHDSの現行判定に従います。";
+          }
+          const dependencyLabels = {
+            observed: "観測範囲内",
+            residuals_present: "残差あり",
+            unobserved: "未観測あり",
+            unknown: "未確認",
+          };
+          const taskSeen = new Set();
+          const planSeen = new Set();
+          const rows = [];
+          for (const point of taskRestorePoints) {
+            if (!point || typeof point !== "object" || typeof point.task_identity_digest !== "string" ||
+                !/^[a-f0-9]{64}$/.test(point.task_identity_digest) || taskSeen.has(point.task_identity_digest) ||
+                !Object.prototype.hasOwnProperty.call(dependencyLabels, point.dependency_status) ||
+                !Array.isArray(point.plan_id_digests) || point.plan_id_digests.length === 0 ||
+                point.plan_id_digests.length > 64 || point.plan_id_digests.some((planIdDigest) =>
+                  typeof planIdDigest !== "string" || !/^[a-f0-9]{64}$/.test(planIdDigest) || planSeen.has(planIdDigest)) ||
+                new Set(point.plan_id_digests).size !== point.plan_id_digests.length) {
+              return "未確認（表示を抑止）";
+            }
+            taskSeen.add(point.task_identity_digest);
+            for (const planIdDigest of point.plan_id_digests) planSeen.add(planIdDigest);
+            rows.push("タスクdigest " + point.task_identity_digest.slice(0, 12) + "・同一backup内plan数 " +
+              point.plan_id_digests.length + "・M依存: " + dependencyLabels[point.dependency_status]);
+          }
+          return digestLabel + "・task別M復元点: 読取検査\\n" + rows.join("\\n") +
+            "\\n表示は復元・承認・実行権限ではありません。保留解除はHDSの現行判定に従います。";
+        }
+        if (observation.store_key !== "operation_plans" ||
             !Array.isArray(observation.plan_residuals) || observation.plan_residuals.length > 64) return "未観測";
         const categories = ["operation_plan", "broker", "delivery", "memory", "cron_approval"];
         const seen = new Set();

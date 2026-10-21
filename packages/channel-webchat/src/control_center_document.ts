@@ -481,8 +481,8 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <div id="recovery-path-list" class="status-grid"></div>
           <p class="muted">直近の復旧操作を実行履歴と現在の固定設定状態で読み取り再観測します。承認、実行、復旧可否の判定には使いません。工場リセットは設定部分のみ確認できても全体を確認済みにしません。</p>
-          <h3>選択store内の計画別台帳検査</h3>
-          <p class="muted">選択storeがOperation Plan台帳の場合のみ、計画digest・計画内binding残差と、復元元backup digestに一致するpack内計画記録・依存残差／未観測を読み取り表示します。raw IDは表示しません。store別snapshotは独立取得のため、これは仕事単位の復旧可能性、store間同時点、再開許可を示しません。</p>
+          <h3>選択store内のtask／計画別復元根拠</h3>
+          <p class="muted">M状態台帳ではtask digest・同一backup内plan数・task単位の依存状態を、Operation Plan台帳では計画digest・binding残差・backup内計画記録を読み取り表示します。raw IDは表示しません。これは非権威の観測であり、仕事単位の復旧可否、store間同時点、承認・再開許可を示しません。次のHDSレビューと保留状態は別に維持されます。</p>
           <pre id="recovery-post-action-plan-residuals">未確認</pre>
           <pre id="recovery-json">not loaded</pre>
           <div class="status-grid">
