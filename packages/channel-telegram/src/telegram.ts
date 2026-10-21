@@ -132,6 +132,12 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         });
         if (r.ok && Array.isArray(r.result)) {
           for (const update of r.result as TelegramUpdate[]) {
+            if (!Number.isSafeInteger(update.update_id) || update.update_id < 0) {
+              throw new Error("telegram_update_id_invalid");
+            }
+            // Telegram may repeat an update in a response or return one below
+            // the current offset. Do not pass either copy to Gateway again.
+            if (update.update_id < this.offset) continue;
             this.offset = Math.max(this.offset, update.update_id + 1);
             const inbound = this.normalize(update);
             if (!inbound) continue;
@@ -153,12 +159,17 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     if (!msg || !msg.text) return null;
     if (msg.from?.is_bot) return null;
     const chatId = String(msg.chat.id);
-    const fromId = msg.from?.id === undefined ? chatId : String(msg.from.id);
-    const username = msg.from?.username ?? [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ").trim();
+    const fromId = normalizeTelegramUserId(msg.from?.id);
+    if (!fromId) {
+      this.log("[telegram] ignored inbound message without a stable sender id");
+      return null;
+    }
     return {
       id: randomUUID(),
       channel: "telegram",
-      user: username || fromId,
+      // Usernames and display names are mutable and must not identify an actor.
+      // Keep the chat separately for reply routing and session scoping.
+      user: `telegram:${fromId}`,
       content: msg.text,
       timestamp: Date.now(),
       metadata: {
@@ -226,6 +237,14 @@ function readTelegramMessageId(value: unknown): string | null {
   if (!isRecord(value)) return null;
   const id = value.message_id;
   return typeof id === "number" || typeof id === "string" ? String(id) : null;
+}
+
+function normalizeTelegramUserId(value: number | string | undefined): string | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+  }
+  if (typeof value === "string" && /^[1-9][0-9]*$/.test(value)) return value;
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
