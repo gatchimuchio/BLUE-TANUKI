@@ -3025,3 +3025,18 @@ F16.01の画像およびF16.02の音声をsynthetic served Gateway経由のC con
 | Telegram live API／credential、実provider、外部作用、本文保持先の個別分類、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
 
 F10.02のtext attachment served consumerを部分的に`WIRED`とする。F10.02全体はcredentialed-live／二入口運用が残り`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。実Telegram API／credential／C08.03実provider／外部作用は使用せず、C08.03保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`と公開・出荷保留を維持する。次のBUILD_BATCHは`F10.02-TELEGRAM-TEXT-ATTACHMENT-WAIT-RESUME-CONSUMER`とし、合成添付入力をtopic-bound HDS waitの同一jobへ接続する。
+
+### 履歴ログ：QEB-61-F10.02-TELEGRAM-TEXT-ATTACHMENT-WAIT-RESUME-CONSUMER
+
+開始`main`／`origin/main`=`30edf1fa14d301d7e9f4b6d06161cb51c272fb70`。現行pin rev2.3のZIPと仕様／工程／指示hash一致、適用`AGENTS.md`、active instruction、F10.02該当要求・施工単位を再同期した。旧版・閉じた作業の一覧再読はせず、QEB-60記録を今回の直前依存・履歴の追記形式の確認に限って参照した。保護対象untracked Linux `target/`を保持した。開始時local復旧branchはcurrent=`30edf1f`／previous=`534b1e7`、remote backup tagも同世代。local backup tagはcurrent=`534b1e7`／previous=`d9c06b5`でremoteより旧かったため、終端でlocal tagをremoteの基準に合わせる。
+
+`apps/gateway/test/same_job_result_return.integration.test.ts`のserved process integrationを拡張した。同一Telegram `update_id`／payloadのduplicateを含む合成poll結果で、UTF-8 text attachmentのfile metadata取得とbinary取得が各1回、返信が元chat・topicへ1回であることを確認した。admitted owner/channel/sessionの待機について、seedした正確なwait ID、plan ID digest、task identity digestが一致するwaitだけが`reply`／`candidate_retained`として再開した。C fixture payloadにcaptionと`未信頼データ`としての添付本文が届き、file ID／filenameを含まない。waitと候補はauthority/execution flagsを偽のまま保持し、WebChat owner routeから同一jobの保存済みfile.search結果が返り、result再読取でproviderを追加呼出ししなかった。これは既存runtime producer/consumerをserved fixtureで接続確認する試験変更であり、production sourceは変更していない。添付本文自体の会話保持先・retentionの個別分類は実施していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm exec vitest run apps/gateway/test/same_job_result_return.integration.test.ts --reporter=verbose` | PASS、3 tests。 |
+| `pnpm --filter @blue-tanuki/gateway typecheck`／`build` | PASS。 |
+| `git diff --check` | PASS。 |
+| 実Telegram API／credential、実provider、外部作用、全workspace suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+F10.02のtext attachment→同一topic wait→同一job候補／結果返却のserved subpathを部分的に`WIRED`とする。F10.02全体はcredentialed-live残差により`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`と公開・出荷保留を維持する。次のBUILD_BATCHは`F10.03-WEBCHAT-DISCONNECT-RECONNECT-SAVED-RESULT-CONSUMER`とする。

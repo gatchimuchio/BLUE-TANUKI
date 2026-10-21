@@ -48,7 +48,7 @@ afterEach(async () => {
 });
 
 describe("served Telegram result return and request-bound media ingress", () => {
-  it("admitted Telegram wait reply reaches the shared HDS plan and WebChat returns its saved result", async () => {
+  it("deduplicates a Telegram text attachment while resuming its topic-bound HDS wait and returning the same job result", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-f1003-same-job-"));
     const auditDir = join(tempRoot, "audit");
     const stateRoot = join(tempRoot, "state");
@@ -58,18 +58,44 @@ describe("served Telegram result return and request-bound media ingress", () => 
     const fileRoot = join(auditDir, "file-root");
     const captureFile = join(tempRoot, "telegram-fixture.jsonl");
     const preloadFile = join(tempRoot, "telegram-fetch-fixture.cjs");
+    const attachmentText = "SYNTHETIC_WAIT_ATTACHMENT_SENTINEL: 青い帳面の対象を一件だけ確認してください。";
+    const attachmentBytes = Buffer.from(attachmentText, "utf8");
+    const update = {
+      update_id: TELEGRAM_UPDATE_ID,
+      message: {
+        message_id: 9001,
+        message_thread_id: TELEGRAM_THREAD_ID,
+        caption: "添付文書の依頼に沿って、同じ仕事を続けてください。",
+        document: {
+          file_id: "synthetic-wait-text-file-id",
+          file_name: "owner-private-wait-filename.txt",
+          mime_type: "text/plain; charset=utf-8",
+          file_size: attachmentBytes.byteLength,
+        },
+        chat: { id: Number(TELEGRAM_CHAT_ID), type: "supergroup" },
+        from: { id: Number(TELEGRAM_USER_ID), first_name: "Synthetic", is_bot: false },
+      },
+    };
+    const telegramFiles = {
+      "synthetic-wait-text-file-id": {
+        file_path: "documents/f1003-wait-fixture.txt",
+        bytes_base64: attachmentBytes.toString("base64"),
+      },
+    };
     mkdirSync(fileRoot, { recursive: true });
     writeFileSync(join(fileRoot, "blue.txt"), "synthetic blue result for the same Telegram task\n", "utf8");
-    seedTelegramWait(stateRoot, historyFile, fileRoot);
+    const seededWait = seedTelegramWait(stateRoot, historyFile, fileRoot);
     writeFileSync(preloadFile, telegramFetchPreload(), "utf8");
 
     let providerCalls = 0;
     let providerFailure: unknown;
     const providerRequestIds: string[] = [];
+    const providerRequestBodies: string[] = [];
     const provider = createServer((request, response) => {
       void (async () => {
         providerCalls += 1;
         const body = JSON.parse(await readRequest(request)) as { messages?: Array<{ content?: unknown }> };
+        providerRequestBodies.push(JSON.stringify(body));
         const prompt = (body.messages ?? []).flatMap((message) => typeof message.content === "string"
           ? [message.content] : []).find((content) => content.includes("固定request_id="));
         const requestId = prompt?.match(/固定request_id=([^\s。]+)/)?.[1];
@@ -90,7 +116,8 @@ describe("served Telegram result return and request-bound media ingress", () => 
     const providerPort = await listen(provider);
     const gatewayPort = await reservePort();
     const env = isolatedEnvironment(providerPort, gatewayPort, auditDir, stateRoot, memoryFile, historyFile, sessionDir,
-      captureFile, JSON.stringify([telegramUpdate()]));
+      captureFile, JSON.stringify([update, update]));
+    env.BT_F1003_TELEGRAM_FILES = JSON.stringify(telegramFiles);
     let gateway: CapturedProcess | undefined;
     let socket: WebSocket | undefined;
     const socketFrames: WebSocketFrame[] = [];
@@ -108,9 +135,11 @@ describe("served Telegram result return and request-bound media ingress", () => 
         if (providerCalls < 1) return null;
         const plans = snapshot.operation_plan_status?.plans ?? [];
         const waits = snapshot.operation_plan_status?.waits ?? [];
-        const resumed = waits.some((wait) => wait.state === "resumed" && wait.compute_outcome === "candidate_retained");
-        const candidate = plans.at(-1);
-        return resumed && candidate ? { snapshot, candidate } : null;
+        const resumedWait = waits.find((wait) => wait.wait_id === seededWait.waitId &&
+          wait.plan_id === seededWait.planIdDigest && wait.task_identity_digest === seededWait.taskIdentityDigest &&
+          wait.state === "resumed" && wait.wake_reason === "reply" && wait.compute_outcome === "candidate_retained");
+        const candidate = resumedWait && plans.find((plan) => plan.plan_id === resumedWait.candidate_plan_id);
+        return resumedWait && candidate ? { snapshot, resumedWait, candidate } : null;
       }, gateway, () => `Telegram wait reply was not reconciled into the shared HDS plan ledger; providerCalls=${providerCalls}; ` +
         `lastOperationPlanSnapshot=${JSON.stringify({ waits: lastSnapshot?.operation_plan_status?.waits,
           plans: lastSnapshot?.operation_plan_status?.plans })}; ` +
@@ -119,6 +148,15 @@ describe("served Telegram result return and request-bound media ingress", () => 
 
       expect(providerCalls).toBeGreaterThan(0);
       expect(providerRequestIds).toEqual(Array.from({ length: providerCalls }, () => `telegram-${TELEGRAM_UPDATE_ID}`));
+      const providerRequests = providerRequestBodies.join("\n");
+      expect(providerRequests).toContain("添付文書の依頼に沿って、同じ仕事を続けてください。");
+      expect(providerRequests).toContain("未信頼データ");
+      expect(providerRequests).toContain(attachmentText);
+      expect(providerRequests).not.toContain("synthetic-wait-text-file-id");
+      expect(providerRequests).not.toContain("owner-private-wait-filename.txt");
+      expect(afterReply.resumedWait).toMatchObject({ wait_id: seededWait.waitId, plan_id: seededWait.planIdDigest,
+        task_identity_digest: seededWait.taskIdentityDigest, wake_reason: "reply", used_for_authority: false,
+        may_execute: false });
       expect(JSON.stringify(afterReply.snapshot.operation_plan_status)).not.toContain(TELEGRAM_OWNER);
       const candidate = afterReply.candidate;
       expect(candidate).toMatchObject({ owner_authentication_required: true,
@@ -165,8 +203,23 @@ describe("served Telegram result return and request-bound media ingress", () => 
       expect(returnedFrame.content).toContain("検索完全性は不明です");
       expect(providerCalls).toBe(providerCallsBeforeResultRead);
       expect(providerCalls).toBeGreaterThan(0);
-      expect(readFileSync(captureFile, "utf8")).toContain('"method":"getUpdates"');
-      expect(readFileSync(captureFile, "utf8")).not.toContain(TELEGRAM_TOKEN);
+      const telegramCapture = readFileSync(captureFile, "utf8");
+      expect(telegramCapture).toContain('"method":"getUpdates"');
+      expect(telegramCapture).toContain('"method":"getFile"');
+      expect(telegramCapture).toContain('"method":"getFileBinary"');
+      expect(telegramCapture).toContain(`"byte_count":${attachmentBytes.byteLength}`);
+      expect(telegramCapture).not.toContain(TELEGRAM_TOKEN);
+      const telegramEvents = telegramCapture.split(/\r?\n/u).filter(Boolean)
+        .map((line) => JSON.parse(line) as { method?: string; update_ids?: number[];
+          chat_id?: number | string; message_thread_id?: number });
+      expect(telegramEvents.some((event) => event.method === "getUpdates" &&
+        event.update_ids?.join(",") === `${TELEGRAM_UPDATE_ID},${TELEGRAM_UPDATE_ID}`)).toBe(true);
+      expect(telegramEvents.filter((event) => event.method === "getFile")).toHaveLength(1);
+      expect(telegramEvents.filter((event) => event.method === "getFileBinary")).toHaveLength(1);
+      const telegramReplies = telegramEvents.filter((event) => event.method === "sendMessage");
+      expect(telegramReplies).toHaveLength(1);
+      expect(String(telegramReplies[0]?.chat_id)).toBe(TELEGRAM_CHAT_ID);
+      expect(telegramReplies[0]?.message_thread_id).toBe(TELEGRAM_THREAD_ID);
     } finally {
       if (socket?.readyState === WebSocket.OPEN) socket.close();
       if (gateway) await stopChild(gateway);
@@ -379,7 +432,11 @@ describe("served Telegram result return and request-bound media ingress", () => 
   }, 45_000);
 });
 
-function seedTelegramWait(stateRoot: string, historyFile: string, fileRoot: string): void {
+function seedTelegramWait(stateRoot: string, historyFile: string, fileRoot: string): {
+  readonly waitId: string;
+  readonly planIdDigest: string;
+  readonly taskIdentityDigest: string;
+} {
   const plan = operationPlanCandidate("telegram-prior-750", fileRoot);
   const owner = TELEGRAM_OWNER;
   const goal = "Continue the same synthetic Telegram task and inspect one blue line.";
@@ -407,6 +464,7 @@ function seedTelegramWait(stateRoot: string, historyFile: string, fileRoot: stri
   history.append({ kind: "audit_history", actor: "synthetic-fixture", source: "f1003-initial-state",
     timestamp: Date.now(), payload: { synthetic: true, used_for_authority: false } });
   if (!history.verify()) throw new Error("synthetic complete-history seed did not verify");
+  return { waitId, planIdDigest, taskIdentityDigest };
 }
 
 function operationPlanCandidate(requestId: string, fileRoot: string): OperationPlan {
@@ -441,13 +499,6 @@ function operationPlanCandidate(requestId: string, fileRoot: string): OperationP
   };
 }
 
-function telegramUpdate() {
-  return { update_id: TELEGRAM_UPDATE_ID, message: { message_id: 9001, message_thread_id: TELEGRAM_THREAD_ID,
-    text: "同じ仕事の続きです。synthetic blue result を1件だけ読み取り確認してください。",
-    chat: { id: Number(TELEGRAM_CHAT_ID), type: "supergroup" },
-    from: { id: Number(TELEGRAM_USER_ID), first_name: "Synthetic", is_bot: false } } };
-}
-
 function telegramFetchPreload(): string {
   return `
 const fs = require("node:fs");
@@ -480,7 +531,7 @@ globalThis.fetch = async (input, init) => {
       return new Response(JSON.stringify({ ok: true, result }), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (method === "sendMessage") {
-      append({ method, chat_id: body.chat_id, text: body.text });
+      append({ method, chat_id: body.chat_id, message_thread_id: body.message_thread_id, text: body.text });
       return new Response(JSON.stringify({ ok: true, result: { message_id: 9002 } }),
         { status: 200, headers: { "content-type": "application/json" } });
     }
