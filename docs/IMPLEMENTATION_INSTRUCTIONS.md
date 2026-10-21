@@ -12,8 +12,12 @@ D05.02は停止signal→Executor→toolの取消伝播、およびlocal shell wo
 
 検査済み：Executor dispatch focused suite 17 tests、Windows shell process-tree cancellation test 1件、core typecheck/build、Gateway typecheck。全workspace suite、実provider／credential、外部業務作用、5OS実機、QE_QC／QE_QAは未実施。これらを現行実装の完成証拠へ昇格しない。
 
+## 直近再確認
+
+`QEB-39-D05.03-AUDIT-FAILURE-EMERGENCY-STOP`は現HEADで既存実装により成立済みだったため、製品コードを重複変更せず閉じた。専用SQLite deny-only latchをHDS authority auditから独立して保存し、audit保存失敗時もexecutionを止め、回復後に元のevent ID・発生時刻で欠損eventを補記する。補記とpersistent auditの検証前はstopを解除できない。Gateway producerからrunning executionのabortとactive-state gateへ接続済み。`emergency_stop_control.test.ts` 4 testsとGateway typecheckが現HEADでPASS。これはD05.02のCompleteHistory証拠回復とは別経路であり、そのgapを閉じた扱いにしない。
+
 ## 次のBUILD_BATCH
 
-`QEB-39-D05.03-AUDIT-FAILURE-EMERGENCY-STOP`。rev2.3 D05.03（`BT-R-D05-05`）に沿い、現物の独立停止・audit保存・Gateway/Executor境界を再調査して、「audit保存不能を理由に緊急停止を妨げない」producer→consumerを接続する。回復後の欠損記録は、既存の保存先・回復経路を調査した上で扱い、永続記録が未成立なら明示的`BUILD_GAP`として残す。D05.02の未解決事項を閉じた扱いにせず、D05.03作業中に実consumerとして必要になれば同じBUILD_BATCHで接続する。
+`QEB-40-D05.02-COMPLETE-HISTORY-GAP-RECOVERY`。rev2.3 D05.02の未解決producer→consumerを再確認する。対象は取消・停止自体をCompleteHistoryの可用性へ依存させず、記録先が未設定または保存失敗した場合に、回復後の欠損事実・時点を実consumerで残せるかである。D05.03のHDS authority-audit recoveryと混同せず、既存のdurable state／hash-chain境界を先に調べ、機構を重複作成しない。現物で既に成立していれば限定確認のみで記録し、未成立箇所があればそこだけ接続する。
 
 HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closed、ownerの最終権限を維持する。実provider／credential、外部業務作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は含めない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。Gitはmainとremoteを照合し、意味あるBUILD_BATCH終端で限定commit/pushと復元ref／作業ツリーを確認する。

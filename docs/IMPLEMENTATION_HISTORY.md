@@ -2607,3 +2607,17 @@ Gatewayのowner emergency stopとshutdownから届くAbortSignalがExecutorのto
 | remote provider／credential、外部業務作用、5OS実機、全workspace suite、QE_QC／QE_QA | 未実施。 |
 
 Gateway停止・shutdown→Executor→tool signal→shell native workerのlocal停止観測を部分的にWIREDとする。取消受付・local process停止・remote provider処理停止は別結果である。remote provider停止確認、generic non-cooperative toolの強制停止、audit保存故障から回復後に欠損事実を記録する経路は未成立。今回確認したGateway callsiteにtask単位cancelは見つからなかった。D05.02全体と製品全体SYSTEM_SHAPED／BUILD_COVEREDは未成立。C08.03保留、D4Pocket／ミニドラ別repo変更なし、P13=PENDING_OWNER_GO／public_claim_allowed=falseを維持する。次はD05.03のaudit保存故障下の緊急停止consumer。
+
+### 履歴ログ：QEB-39-D05.03-AUDIT-FAILURE-EMERGENCY-STOP-RECHECK
+
+開始HEAD／`main`／`origin/main`=`7e1814753a759b8164a5bd9b3a07a9f91b2b167d`。現行pin rev2.3、適用AGENTS／作業標準、active指示、D05.03の停止・監査保存要件、Gateway emergency-stop producer／consumerを再照合した。既存untracked Linux `target/`を保持した。
+
+D05.03は既存の専用SQLite deny-only latch、Gatewayの実行中controller abort・新規実行拒否、HDS authority auditへのactivation記録と復旧後の欠損補記で既に接続済みだった。補記前はclearを拒否し、元event ID・activation時刻・`audit_gap_recovered=true`を保持する。現HEADに重複実装を加えず、この範囲を`WIRED`と再確認した。D05.02のCompleteHistory cancellation evidence回復は別の未解決経路として維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `emergency_stop_control.test.ts` | PASS、4 tests。監査保存失敗中の停止維持、再起動後の補記、監査復旧前の解除拒否を確認。 |
+| Gateway typecheck | PASS。 |
+| 全workspace suite、provider／credential、外部作用、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+次consumerはD05.02のCompleteHistory保存失敗・未設定から回復後に取消証拠の欠損事実を記録する経路。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。
