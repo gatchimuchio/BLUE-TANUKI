@@ -4,6 +4,23 @@
 
 ---
 
+### 履歴ログ：`QEB-12-E03.03-OPERATION-PLAN-SCOPED-RECOVERY`
+
+開始HEAD／`main`／`origin/main`=`30e8171294a93d211afd83664b0d6fa930c825e1`。現行正本は`QE_CURRENT_AUTHORITY.md`固定のrev2.3。適用AGENTS、active指示、E03.03の関係節、Recovery／Operation Planのproducer・consumerを照合した。Linux isolation `target/`は保護対象untrackedとして変更・stageしていない。
+
+目的は、L3承認済みOperation Plan scopeをRecovery backupの同じplanへ結び、計画単位の復元を兄弟planや他のshell結果へ波及させないこと。旧来のOperation Plan store全体置換から、固定enum `restore_scope_mode=plan_scoped_merge_v1`付きのplan／同planに束縛されたwaitのみのmergeへ変更した。現在の兄弟plan／waitとunbound shell observationを保持し、HDSの選択・attempt失効とrecovery hold更新も対象planだけに限定した。旧modeなし履歴は従来の全store復元証拠として扱い、曖昧な範囲はfail-closedを維持する。
+
+Recoveryはread-onlyで検証済みのbackup checkpointとpre-action checkpointを読み、digest・target・SQLite CASを照合してから書く。archive変更、pre-action状態との競合、scope不一致、schema不正、wait上限超過、重複wait IDは選択storeの変更前に拒否する。hold CASは旧形式レコードを検証した上で実保存値のdigestを比較し、parse defaultの正規化で誤って競合とみなす不具合も修正した。`cross_store_atomic=false`、HDS-J／Approval／L3／Broker／M非権限／監査／fail-closedを維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| 選択復元、HDS refresh、Recovery observation／evidence | 4 focused files、68/68 PASS。兄弟plan・wait・unbound observation・他plan hold保持、旧履歴区別、scope容量超過とpre-action競合の書込み前拒否を確認。 |
+| `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `pnpm docs:check`／`git diff --check` | 両方PASS。日本語基底の移行負債76件は継続管理。 |
+| 全workspace suite、実provider／credential、owner実承認、外部作用、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+選択Operation Plan復元からHDS対象plan再評価までのconsumerを`WIRED`とする。E03.03／QEB-03全体は`BUILD_GAP`。常駐launcherの仕事単位再入・復帰と、他storeにまたがるjob-level recoveryは次の未接続consumerとして保持し、別途現行producer／callsiteから施工範囲を確定する。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`819b6ab024ddcf308a3e1b3b27a8821719441116`。
+
 ### 履歴ログ：`QEB-11-E03.03-CANONICAL-STORE-INVENTORY-RECOVERY-BARRIER`
 
 開始HEAD／`main`／`origin/main`=`9f22aa49a08a82e603f303dd83f402ebbcbe3a77`。owner指定rev2.3の三点pinとE03.03「回復可能な仕事と破損依存仕事を分け、確認済み復元点と残差を示す」、適用AGENTSのQE_BUILD・安全・Git条項、現行capture／Recovery consumerを関係範囲で確認した。tracked worktreeはcleanで、Linux `target/`は保護対象untracked。

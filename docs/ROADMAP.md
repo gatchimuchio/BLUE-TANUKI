@@ -261,6 +261,8 @@ C01～C08.02、D01.01～D01.02などは現行Gitに局所成果を持つが、AG
 
 J0は日本語基底規定成立として完了。J1（活正文書）、J2（UI/installer）、J3（コード散文）、J4（strict closure）は未承認・未着手。J0通常gateの成功をJ4の証明にしない。
 
+2026-10-21の`QEB-12-E03.03-OPERATION-PLAN-SCOPED-RECOVERY`で、L3選択されたOperation PlanとそのwaitだけをRecovery backupからSQLite CASで復元し、兄弟plan・wait・現在のunbound shell observation・他planのholdを保ったままHDS再評価へ接続した。新履歴は`plan_scoped_merge_v1`、旧whole-store履歴は従来どおりfail-closedで区別する。Focused 68/68、typecheck、15 workspace build、docs gateはPASS。これはJ Operation Plan選択復元の接続であり、job全体の復旧・全consumer・E03.03／QEB-03全体の`BUILD_COVERED`を示さない。E03.03は`BUILD_GAP`を維持し、次の未接続先は常駐launcherの仕事単位復帰consumer。
+
 ## 正本
 
 AGENTS.mdがQE方法と保護、docs/作業標準要領.mdが運用、docs/IMPLEMENTATION_INSTRUCTIONS.mdが限定task、docs/開発進捗.mdが観測済み履歴、docs/STRATEGY_FRAME.mdが競合と外殻の戦略、docs/PRODUCT_ROADMAP.mdが旧v1 RCのrelease境界を扱う。現在のowner開発委任と内部正本の再照合に基づきQE_BUILDを継続する。
