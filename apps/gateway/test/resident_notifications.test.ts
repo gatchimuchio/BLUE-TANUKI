@@ -6,6 +6,69 @@ import {
 } from "../src/resident_notifications.js";
 
 describe("buildResidentNotificationsSnapshot", () => {
+  it("surfaces unknown operation outcomes as digest-only read-only recovery notices", () => {
+    const projection = {
+      schema_version: "operation-plan-projection.v1",
+      used_for_authority: false as const,
+      raw_payload_exposed: false as const,
+      recovery_refresh_status: "ready" as const,
+      plans: [{
+        plan_id: "a".repeat(64),
+        request_id: "RAW_REQUEST_SENTINEL",
+        steps: [
+          { step_id: "b".repeat(64), status: "outcome_unknown" },
+          { step_id: "c".repeat(64), status: "verified" },
+        ],
+      }],
+    };
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 100,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [],
+      operation_plan_projection: projection,
+    });
+
+    expect(notifications).toContainEqual(expect.objectContaining({
+      kind: "operation_outcome_unknown",
+      severity: "warning",
+      source: "operation_plan_recovery",
+      read_only: true,
+      authority: "display_only",
+      timestamp: 100,
+      id: expect.stringMatching(/^operation-outcome-unknown:[a-f0-9]{32}$/),
+      message: expect.stringContaining("No result was inferred and no action was repeated"),
+      next_action: expect.stringContaining("submit a fresh request"),
+    }));
+    const serialized = JSON.stringify(notifications);
+    expect(serialized).not.toContain("RAW_REQUEST_SENTINEL");
+    expect(serialized).not.toContain("a".repeat(64));
+    expect(serialized).not.toContain("b".repeat(64));
+  });
+
+  it("does not notify for verified outcomes or a pending recovery refresh", () => {
+    const base = {
+      schema_version: "operation-plan-projection.v1",
+      used_for_authority: false as const,
+      raw_payload_exposed: false as const,
+      plans: [{ plan_id: "a".repeat(64), request_id: "request-1", steps: [
+        { step_id: "b".repeat(64), status: "verified" },
+      ] }],
+    };
+    const input = { audit_chain_valid: true, pending_approvals: [], authority_trace: [] } as const;
+    expect(buildResidentNotificationsSnapshot({ ...input, operation_plan_projection: { ...base, recovery_refresh_status: "ready" } })).toEqual([]);
+    expect(buildResidentNotificationsSnapshot({
+      ...input,
+      operation_plan_projection: {
+        ...base,
+        recovery_refresh_status: "pending",
+        plans: [{ plan_id: "a".repeat(64), request_id: "request-1", steps: [
+          { step_id: "b".repeat(64), status: "outcome_unknown" },
+        ] }],
+      },
+    })).toEqual([]);
+  });
+
   it("surfaces only prior unresolved approval lifecycles without restoring a token", () => {
     const lifecycle = (command_id: string, phase: string, timestamp: number) => ({
       kind: "command_lifecycle", command_id, phase, request_id: `request-${command_id}`, timestamp,

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   WebChatApprovalQueueItem,
   WebChatCronResultCorrelationStatus,
@@ -15,9 +16,12 @@ interface OperationPlanCorrelationProjection {
   readonly schema_version: string;
   readonly used_for_authority: false;
   readonly raw_payload_exposed: false;
+  readonly recovery_refresh_status?: "ready" | "pending";
   readonly plans: readonly {
+    readonly plan_id?: string;
     readonly request_id: string;
     readonly steps?: readonly {
+      readonly step_id?: string;
       readonly status: string;
       readonly external_receipt_observation?: string;
       readonly external_receipt?: {
@@ -167,6 +171,9 @@ export function buildResidentNotificationsSnapshot(
       next_action: "Stop normal operation, preserve the audit store, and run audit verification before continuing.",
     });
   }
+
+  const outcomeUnknown = operationOutcomeUnknownNotification(input.operation_plan_projection, now);
+  if (outcomeUnknown) notifications.push(outcomeUnknown);
 
   for (const failure of input.cron_state_read_failures ?? []) {
     if (failure !== "unresolved_events" && failure !== "unresolved_events_partial" &&
@@ -371,6 +378,50 @@ export function buildResidentNotificationsSnapshot(
   return dedupe(notifications)
     .sort((a, b) => b.timestamp - a.timestamp || a.id.localeCompare(b.id))
     .slice(0, input.limit ?? 50);
+}
+
+/** Surface unresolved plan results without exposing request, plan, step, or command identifiers. */
+function operationOutcomeUnknownNotification(
+  projection: OperationPlanCorrelationProjection | undefined,
+  now: number,
+): WebChatNotificationItem | undefined {
+  if (!projection || projection.schema_version !== "operation-plan-projection.v1" ||
+      projection.used_for_authority !== false || projection.raw_payload_exposed !== false ||
+      projection.recovery_refresh_status !== "ready" || !Array.isArray(projection.plans)) return undefined;
+
+  const unresolvedScopes: Array<readonly [string, string]> = [];
+  for (const plan of projection.plans) {
+    if (!plan || !Array.isArray(plan.steps)) return undefined;
+    const steps = plan.steps as NonNullable<OperationPlanCorrelationProjection["plans"][number]["steps"]>;
+    const unresolvedSteps = steps.filter((step) => step.status === "outcome_unknown");
+    if (unresolvedSteps.length === 0) continue;
+    if (typeof plan.plan_id !== "string" || !/^[a-f0-9]{64}$/.test(plan.plan_id)) return undefined;
+    for (const step of unresolvedSteps) {
+      if (typeof step.step_id !== "string" || !/^[a-f0-9]{64}$/.test(step.step_id)) return undefined;
+      unresolvedScopes.push([plan.plan_id, step.step_id]);
+    }
+  }
+  const scopes = [...new Map(unresolvedScopes.map((scope) => [`${scope[0]}:${scope[1]}`, scope])).values()]
+    .sort((left, right) => {
+      const leftKey = `${left[0]}:${left[1]}`;
+      const rightKey = `${right[0]}:${right[1]}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
+  if (scopes.length === 0) return undefined;
+
+  const evidenceDigest = createHash("sha256").update(JSON.stringify(scopes), "utf8").digest("hex");
+  return {
+    id: `operation-outcome-unknown:${evidenceDigest.slice(0, 32)}`,
+    kind: "operation_outcome_unknown",
+    severity: "warning",
+    title: "Operation outcome is unknown",
+    message: `${scopes.length} operation-plan step(s) have an unknown outcome. No result was inferred and no action was repeated.`,
+    timestamp: now,
+    source: "operation_plan_recovery",
+    read_only: true,
+    authority: "display_only",
+    next_action: "Open Control Center Operation Plans and read-only Recovery inspection. Verify each affected target independently before repeating any action. If work is still needed, submit a fresh request and review its current target.",
+  };
 }
 
 function cronResultCorrelation(

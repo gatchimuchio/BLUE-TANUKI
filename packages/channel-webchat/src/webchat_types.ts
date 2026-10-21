@@ -465,6 +465,7 @@ export interface WebChatAuthoritySurface {
 export type WebChatNotificationKind =
   | "approval_required"
   | "approval_interrupted"
+  | "operation_outcome_unknown"
   | "schedule_fired"
   | "schedule_delivery_unknown"
   | "cron_recovery_state_unavailable"
