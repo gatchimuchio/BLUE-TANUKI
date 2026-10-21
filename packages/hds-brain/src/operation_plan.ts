@@ -4,6 +4,7 @@ import {
   GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
+  type OperationPlanResultReturnControl,
   type OperationPlanComputeSourceObservation, type OperationPlanComputeSourceObservationReference,
   OperationPlanShellExecResultObservationSchema, type OperationPlanShellExecResultObservation,
   type OperationCommandExecutionResult,
@@ -42,6 +43,25 @@ import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
+
+export interface OperationPlanSavedResultReturnProjection {
+  readonly schema_version: "operation-plan-saved-result-return.v1";
+  readonly plan_id_digest: string;
+  readonly revision_digest: string;
+  readonly step_id_digest: string;
+  readonly command_digest: string;
+  readonly result_digest: string;
+  readonly record_digest: string;
+  readonly memory_revision: number;
+  readonly memory_receipt_digest: string;
+  readonly observed_at_ms: number;
+  readonly visited_files: number;
+  readonly search_completeness: "unknown";
+  readonly matches: readonly { readonly path: string; readonly line_number: number; readonly line: string }[];
+  readonly used_as_world_truth: false;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+};
 
 type MemoryInterpretationReviewSnapshot = {
   readonly record: {
@@ -554,6 +574,8 @@ export class OperationPlanLedger {
   private memoryQuiesced = false;
   private memoryReady = true;
   private readonly reflections = new Map<string, { command_digest: string; control: OperationPlanReflectionControl;
+    caller: InboundRequest; projection_digest: string }>();
+  private readonly savedResultReturns = new Map<string, { command_digest: string; control: OperationPlanResultReturnControl;
     caller: InboundRequest; projection_digest: string }>();
   private readonly receiptReconciliations = new Map<string, {
     command_digest: string;
@@ -1882,6 +1904,89 @@ export class OperationPlanLedger {
       return !!record?.exists && operationPlanDigest(record.value) === operationPlanDigest(change.value);
     } catch { return false; }
   }
+  /** Read only the owner's current, M-receipted file.search result; this never reruns the action or grants authority. */
+  inspectSavedResultForReturn(control: OperationPlanResultReturnControl, caller: InboundRequest): OperationPlanSavedResultReturnProjection {
+    if (this.recoveryRefreshPending || !this.resultMemory || !this.port ||
+        operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+      throw new Error("plan_saved_result_memory_unavailable");
+    }
+    const plan = this.ownedPlan(control.plan_id, caller);
+    const current = plan.revisions.at(-1)!;
+    if (current.digest !== control.revision_digest) throw new Error("plan_saved_result_revision_stale");
+    const steps = current.plan.steps.filter((step) => step.step_id === control.step_id ||
+      operationPlanDigest(step.step_id) === control.step_id);
+    if (steps.length !== 1) throw new Error("plan_saved_result_step_identity_mismatch");
+    const step = steps[0]!;
+    const bindings = plan.bindings.filter((binding) => binding.step_id === step.step_id && binding.revision_digest === current.digest);
+    const binding = bindings.at(-1);
+    if (bindings.length !== 1 || !binding || binding.status !== "verified" || binding.operation !== "file.search" ||
+        binding.step_digest !== stepDigest(step) || !resultMemoryEligible(binding) || !binding.memory_commit || !binding.memory_receipt ||
+        !this.resultMemoryReceiptConfirmed(binding.command_id)) throw new Error("plan_saved_result_not_verified");
+    const results = plan.results.filter((result) => result.plan_id === current.plan.plan_id &&
+      result.request_id === current.plan.request_id && result.step_id === step.step_id &&
+      result.operation === "file.search" && result.status === "succeeded");
+    if (results.length !== 1) throw new Error("plan_saved_result_result_unavailable");
+    const result = results[0]!;
+    const change = binding.memory_commit.changes[0];
+    if (!change || change.operation !== "upsert") throw new Error("plan_saved_result_memory_commit_invalid");
+    const identity = resultMemoryIdentity(binding);
+    const stored = this.resultMemory.readMemoryRecord(identity.record_id);
+    if (!stored?.exists || operationPlanDigest(stored.value) !== operationPlanDigest(change.value)) {
+      throw new Error("plan_saved_result_record_mismatch");
+    }
+    const committedObservation = change.value as unknown as Record<string, unknown>;
+    if (operationPlanDigest(committedObservation.result) !== operationPlanDigest(result)) {
+      throw new Error("plan_saved_result_observation_mismatch");
+    }
+    const parsedOutput = OperationJsonValueSchema.parse(result.output);
+    if (!parsedOutput || typeof parsedOutput !== "object" || Array.isArray(parsedOutput)) {
+      throw new Error("plan_saved_result_output_invalid");
+    }
+    const output = parsedOutput as Record<string, unknown>;
+    if (!Number.isSafeInteger(output.visited_files) || (output.visited_files as number) < 0 ||
+        !Array.isArray(output.matches) || output.matches.length > 100) throw new Error("plan_saved_result_output_invalid");
+    const matches = output.matches.map((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("plan_saved_result_output_invalid");
+      const match = value as Record<string, unknown>;
+      if (typeof match.path !== "string" || match.path.length === 0 || match.path.startsWith("/") || match.path.startsWith("\\") ||
+          /^[a-z]:/i.test(match.path) || match.path.split(/[\\/]/).includes("..") ||
+          !Number.isSafeInteger(match.line_number) || (match.line_number as number) < 1 ||
+          typeof match.line !== "string" || match.line.length > 240) throw new Error("plan_saved_result_output_invalid");
+      return { path: match.path, line_number: match.line_number as number, line: match.line };
+    });
+    if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+      throw new Error("plan_saved_result_state_changed");
+    }
+    return {
+      schema_version: "operation-plan-saved-result-return.v1",
+      plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+      step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+      result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+      memory_revision: binding.memory_receipt.revision, memory_receipt_digest: binding.memory_receipt.receipt_digest,
+      observed_at_ms: result.observed_at_ms, visited_files: output.visited_files as number,
+      search_completeness: "unknown", matches, used_as_world_truth: false, used_for_authority: false, may_execute: false,
+    };
+  }
+  bindSavedResultReturn(control: OperationPlanResultReturnControl, caller: InboundRequest, command: ExecuteCommand,
+    projection: OperationPlanSavedResultReturnProjection): void {
+    if (this.savedResultReturns.size >= 32 || command.type !== "noop" ||
+        command.payload.control_event !== "operation_plan_result_return" ||
+        command.payload.result_projection_digest !== operationPlanDigest(projection) ||
+        operationPlanDigest(this.inspectSavedResultForReturn(control, caller)) !== operationPlanDigest(projection)) {
+      throw new Error("plan_saved_result_return_binding_failed");
+    }
+    this.savedResultReturns.set(command.id, { command_digest: operationPlanDigest(command),
+      control: structuredClone(control), caller: structuredClone(caller), projection_digest: operationPlanDigest(projection) });
+  }
+  readSavedResultReturn(command: ExecuteCommand): OperationPlanSavedResultReturnProjection | undefined {
+    try {
+      const binding = this.savedResultReturns.get(command.id);
+      if (!binding || operationPlanDigest(command) !== binding.command_digest) return undefined;
+      const current = this.inspectSavedResultForReturn(binding.control, binding.caller);
+      return operationPlanDigest(current) === binding.projection_digest ? current : undefined;
+    } catch { return undefined; }
+  }
+  forgetSavedResultReturn(command_id: string): void { this.savedResultReturns.delete(command_id); }
   receiptObservationMemoryIsDurable(evidence_digest: string): boolean {
     try {
       if (!this.resultMemory || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return false;

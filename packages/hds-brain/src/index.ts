@@ -9,7 +9,7 @@ export { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, 
   type OperationPlanRecoveryEvidence, type OperationPlanRecoveryEvidenceProvenance,
   type OperationPlanRecoveryHoldState, type OperationPlanRecoveryHoldProvenance,
   type OperationPlanReceiptReconciliationAuthorization,
-  type OperationPlanGoalPurposeRelationReviewContent } from "./operation_plan.js";
+  type OperationPlanGoalPurposeRelationReviewContent, type OperationPlanSavedResultReturnProjection } from "./operation_plan.js";
 export { verifyResultMemoryCommit, receiptForResultCommit } from "./operation_result_memory.js";
 export {
   DOCUMENT_ORGANIZATION_MAX_CYCLES,

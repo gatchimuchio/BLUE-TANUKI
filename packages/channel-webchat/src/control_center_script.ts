@@ -593,6 +593,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "J step review request accepted");
       }
 
+      async function invokeOperationPlanResult(planId, revisionDigest, stepId) {
+        state.chatToken = byId("chat-token").value.trim();
+        state.chatUser = byId("chat-user").value.trim() || "owner";
+        if (!state.chatToken) throw new Error("webchat token is required");
+        const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+        if (!isDigest(planId) || !isDigest(revisionDigest) || !isDigest(stepId)) {
+          throw new Error("current plan and step digests are unavailable");
+        }
+        const content = "plan:result " + JSON.stringify({ plan_id: planId, revision_digest: revisionDigest, step_id: stepId });
+        const result = await postJson("/operators/developer/invoke", state.chatToken,
+          { user: state.chatUser, content });
+        appendChat("owner", content);
+        appendChat("accepted", result.request_id || "saved result read request accepted");
+      }
+
       function syncInputs() {
         byId("runtime-token").value = state.runtimeToken;
         byId("approval-token").value = state.approvalToken;
@@ -1154,6 +1169,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const binding = isObject(step.binding) ? step.binding : {};
               const unknown = step.status === "outcome_unknown";
               const reconciliationStepReady = reconciliationPlanReady && typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id);
+              const savedResultReady = !refreshPending && !recoveryHold && reconciliationStepReady &&
+                step.operation === "file.search" && step.status === "verified" &&
+                binding.memory_status === "receipt_confirmed" && /^[a-f0-9]{64}$/.test(binding.command_digest || "") &&
+                /^[a-f0-9]{64}$/.test(binding.result_digest || "") && /^[a-f0-9]{64}$/.test(binding.delivery_digest || "");
+              const savedResultButton = savedResultReady
+                ? '<button type="button" class="secondary" data-operation-plan-result="true" data-plan-id="' +
+                  escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) +
+                  '" data-step-id="' + escapeHtml(step.step_id) + '">保存済み検索結果を読む</button>' +
+                  '<p class="muted">J/M receipt確認済みの保存結果を表示します。保存時点の観測であり、現在状態の再検索や検索完全性を示しません。</p>'
+                : '';
               const receiptLabels = {
                 not_applicable: "対象外",
                 not_recorded: "Jに外部receipt観測未記録",
@@ -1198,6 +1223,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 (unknown && reconciliationStepReady ? '<button type="button" class="secondary" data-operation-plan-reconcile="true" data-plan-id="' +
                   escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) + '" data-step-id="' +
                   escapeHtml(step.step_id) + '">loopbackで読取照合</button>' : '') +
+                savedResultButton +
                 stepReviewButton +
                 '</div>';
             }).join("") +
@@ -3944,6 +3970,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           target.disabled = true;
           try {
             await invokeReceiptReconciliation(target.dataset.planId || "", target.dataset.revisionDigest || "", target.dataset.stepId || "");
+          } catch (error) {
+            appendChat("error", error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
+        if (target.dataset.operationPlanResult === "true") {
+          target.disabled = true;
+          try {
+            await invokeOperationPlanResult(target.dataset.planId || "", target.dataset.revisionDigest || "",
+              target.dataset.stepId || "");
           } catch (error) {
             appendChat("error", error.message);
           } finally {

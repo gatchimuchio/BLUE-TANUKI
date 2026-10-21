@@ -18,6 +18,10 @@ export function renderCommandOutput(
       isRecord(feedback.result) && typeof feedback.result.content === "string") {
     return truncate(feedback.result.content, maxChars);
   }
+  if (cmd.type === "noop" && cmd.payload.control_event === "operation_plan_result_return" &&
+      isRecord(feedback.result) && typeof feedback.result.content === "string") {
+    return truncate(feedback.result.content, maxChars);
+  }
 
   if (feedback.status === "failed") {
     return truncate(

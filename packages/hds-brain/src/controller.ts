@@ -58,6 +58,7 @@ import {
 import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
   type OperationPlanRecoveryEvidence, type OperationPlanReceiptReconciliationAuthorization,
   type OperationPlanCanonicalMemoryRestoreObservation, type OperationPlanGoalPurposeRelationReviewContent,
+  type OperationPlanSavedResultReturnProjection,
   operationPlanGoalPurposeRelationReviewAuditDigest } from "./operation_plan.js";
 import { reviewResultReflection, type ResultObservationProjection } from "./operation_result_reflection.js";
 import type {
@@ -923,6 +924,7 @@ export class HDSUpperController {
     let failureReviewControlFailure: string | undefined;
     let failureReviewProjection: FailureReviewProjection | undefined;
     let reflection: ResultObservationProjection | undefined;
+    let savedResultReturn: OperationPlanSavedResultReturnProjection | undefined;
     const controlCaller = req;
     const planPrefix = /^plan:([^\s]+)(?:\s+([\s\S]*))?$/i.exec(req.content.trim());
     let planComputeRequested = false;
@@ -1010,6 +1012,12 @@ ${planControl.question}`,
             metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1",
               "blue_tanuki.operation_plan.control_event": "wait_register",
               "blue_tanuki.operation_plan.wait_id": wait.wait_id } });
+        } else if (planControl.action === "result") {
+          savedResultReturn = this.operationPlans.inspectSavedResultForReturn(planControl, req);
+          req = createGatewayInternalInboundRequest({ ...req, content: "plan:result",
+            metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1",
+              "blue_tanuki.operation_plan.control_event": "result_return",
+              "blue_tanuki.operation_plan.result_projection_digest": operationPlanDigest(savedResultReturn) } });
         } else {
         const selection = this.operationPlans.inspectControl(planControl, req);
         if (selection.step) {
@@ -1059,8 +1067,8 @@ ${planControl.question}`,
           "plan_receipt_reconciliation_operation_unsupported", "plan_receipt_reconciliation_binding_invalid",
           "plan_receipt_reconciliation_capacity_reached", "plan_state_changed", "plan_wait_state_not_durable",
           "plan_wait_deadline_invalid", "plan_wait_execution_unresolved", "plan_wait_already_active",
-          "plan_wait_resume_input_too_large"]
-          .includes(reason) ? reason : "plan_control_rejected";
+          "plan_wait_resume_input_too_large"].includes(reason) || reason.startsWith("plan_saved_result_")
+          ? reason : "plan_control_rejected";
       }
     } else if (planPrefix?.[1]?.toLowerCase() === "compute") {
       if (!isGatewayInternalInboundRequest(req) || req.metadata?.["blue_tanuki.operator_surface"] !== "developer" ||
@@ -1354,6 +1362,11 @@ ${planControl.question}`,
           for (const id of invalidated) this.onCommandLifecycle(id, "approval_cancelled", { reason: "plan_revision_invalidated" });
         } else if (planControl.action === "reconcile") {
           this.operationPlans.bindReceiptReconciliation(planControl, controlCaller, command);
+        } else if (planControl.action === "result") {
+          if (!savedResultReturn || command.type !== "noop" || command.payload.control_event !== "operation_plan_result_return") {
+            throw new Error("plan_saved_result_return_binding_failed");
+          }
+          this.operationPlans.bindSavedResultReturn(planControl, controlCaller, command, savedResultReturn);
         } else {
           this.operationPlans.bindReflection(planControl, controlCaller, command, reflection!);
           this.audit.append({ kind: "operation_plan", event: "reflection_projection_selected", request_id: req.id,
@@ -3240,6 +3253,24 @@ ${planControl.question}`,
   operationPlanResultReadyForReturn(command_id: string): boolean {
     return this.operationPlans.resultMemoryReceiptConfirmed(command_id);
   }
+  /** Consume the exact HDS-issued saved-result read command without treating the projection as executor feedback. */
+  takeOperationPlanSavedResultReturn(command: ExecuteCommand): OperationPlanSavedResultReturnProjection | undefined {
+    const issued = this.issuedExecutionCommandsById.get(command.id);
+    const source = this.inflight.get(command.id);
+    if (!issued || issued.command !== command || !source || command.type !== "noop" ||
+        command.payload.control_event !== "operation_plan_result_return") return undefined;
+    const projection = this.operationPlans.readSavedResultReturn(command);
+    this.operationPlans.forgetSavedResultReturn(command.id);
+    this.issuedExecutionCommands.delete(command);
+    this.issuedExecutionCommandsById.delete(command.id);
+    this.inflight.delete(command.id);
+    this.audit.append({ kind: "operation_plan", event: projection ? "saved_result_return_selected" : "saved_result_return_withheld",
+      request_id: source.request_id, command_id: command.id,
+      projection_digest: operationPlanDigest(projection ?? { schema_version: "operation-plan-saved-result-return-withheld.v1",
+        command_digest: operationPlanDigest(command), used_for_authority: false }),
+      used_for_authority: false, timestamp: Date.now() });
+    return projection;
+  }
   operationPlanReceiptObservationMemoryIsDurable(evidence_digest: string): boolean {
     return this.operationPlans.receiptObservationMemoryIsDurable(evidence_digest);
   }
@@ -3701,6 +3732,16 @@ ${planControl.question}`,
         throw new Error("plan_wait_control_binding_invalid");
       }
       return { id: randomUUID(), type: "noop", payload: { control_event: "operation_plan_wait_registered", wait_id: waitId }, upstream_decision };
+    }
+    if (req.metadata?.["blue_tanuki.operation_plan.control_event"] === "result_return") {
+      const projectionDigest = req.metadata["blue_tanuki.operation_plan.result_projection_digest"];
+      if (!isGatewayInternalInboundRequest(req) || req.metadata["blue_tanuki.operator_surface"] !== "developer" ||
+          req.content.trim() !== "plan:result" || typeof projectionDigest !== "string" || !/^[a-f0-9]{64}$/.test(projectionDigest)) {
+        throw new Error("plan_saved_result_return_binding_failed");
+      }
+      return { id: randomUUID(), type: "noop", payload: {
+        control_event: "operation_plan_result_return", result_projection_digest: projectionDigest,
+      }, upstream_decision };
     }
     if (req.content.trim() === "plan:reconcile") {
       return { id: randomUUID(), type: "noop", payload: { control_event: "operation_plan_receipt_reconciliation" }, upstream_decision };

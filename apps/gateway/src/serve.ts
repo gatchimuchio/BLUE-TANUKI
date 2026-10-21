@@ -21,6 +21,7 @@ import type {
   OutputAuditLog,
   PeriodicVerificationTrigger,
   OperationPlanGoalPurposeRelationReviewContent,
+  OperationPlanSavedResultReturnProjection,
   MeaningUpdateAdoptionArguments,
   MemoryJudgmentReassessmentArguments,
   OwnerMemoryJudgmentReassessmentProposal,
@@ -271,6 +272,32 @@ export interface GatewayInboundBoundaryPlan extends GatewayInboundBoundaryResult
 function replyTarget(req: InboundRequest): string {
   const m = req.metadata?.["reply_to"];
   return typeof m === "string" && m.length > 0 ? m : req.user;
+}
+
+function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProjection | undefined): string {
+  if (!projection) {
+    return "保存済み結果を現在のJ/M状態と照合できませんでした。結果本文は返していません。Operation Plan／Recoveryから現在の状態を確認してください。";
+  }
+  const observedDate = new Date(projection.observed_at_ms);
+  const header = [
+    "保存時点のfile.search結果です。現在のファイル状態は再検索していません。検索完全性は不明です。",
+    `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+    `観測ファイル数: ${projection.visited_files}`,
+    `一致行数: ${projection.matches.length}`,
+  ];
+  const limit = 3_400;
+  const lines: string[] = [];
+  let length = header.join("\n").length;
+  for (const match of projection.matches) {
+    const line = `- ${JSON.stringify(match.path)}:${match.line_number}: ${JSON.stringify(match.line)}`;
+    if (length + line.length + 1 > limit) break;
+    lines.push(line);
+    length += line.length + 1;
+  }
+  const omitted = projection.matches.length - lines.length;
+  if (omitted > 0) lines.push(`表示上限により ${omitted} 件を省略しました。`);
+  if (projection.matches.length === 0) lines.push("一致行はこの検索結果にありませんでした。");
+  return [...header, ...lines].join("\n");
 }
 
 function cronApprovalEventReference(request: InboundRequest): { event_id: string; payload_digest: string } | undefined {
@@ -4113,6 +4140,21 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           upstream_commit_hash: result.upstream_commit_hash,
         });
       }
+      return;
+    }
+
+    if (command?.type === "noop" && command.payload.control_event === "operation_plan_result_return") {
+      const projection = hds.takeOperationPlanSavedResultReturn(command);
+      const feedback: ExecuteFeedback = { command_id: command.id, status: "success",
+        result: { content: savedResultReturnMessage(projection) }, metrics: { duration_ms: 0 } };
+      const reviewed = hds.reviewMemoryCitations(command, feedback);
+      const rendered_output = renderCommandOutput(command, reviewed);
+      const output_audit = hds.onOutputAudit({ command, feedback, rendered_output, target_surface: "channel",
+        request_id: log.request_id });
+      recordFinalOutputHistory(log, authorityReq, authorityReq.user, output_audit, command);
+      if (rendered_output) await dispatcher.dispatch({ channel: authorityReq.channel,
+        target: replyTarget(authorityReq), content: rendered_output },
+      { command_id: command.id, upstream_commit_hash: log.commit.hash });
       return;
     }
 

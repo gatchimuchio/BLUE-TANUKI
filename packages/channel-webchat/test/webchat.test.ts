@@ -446,6 +446,37 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(messages).toEqual([["owner", body.content], ["accepted", "request-review-1"]]);
   });
 
+  it("sends a saved-result read through the authenticated Developer invoke path", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanResult(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    const calls: Array<{ path: string; token: string; body: unknown }> = [];
+    const messages: Array<[string, string]> = [];
+    const nodes = { "chat-token": { value: "owner-token" }, "chat-user": { value: "fixture-owner" } };
+    await new Script(`${helper}\ninvokeOperationPlanResult(planId, revisionDigest, stepId)`)
+      .runInNewContext({
+        state: {},
+        planId: "a".repeat(64), revisionDigest: "b".repeat(64), stepId: "c".repeat(64),
+        byId: (id: keyof typeof nodes) => nodes[id],
+        postJson: async (path: string, token: string, body: unknown) => {
+          calls.push({ path, token, body }); return { request_id: "request-result-1" };
+        },
+        appendChat: (kind: string, content: string) => messages.push([kind, content]),
+      });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: "/operators/developer/invoke", token: "owner-token" });
+    const body = calls[0]!.body as { user: string; content: string };
+    expect(body.user).toBe("fixture-owner");
+    expect(body.content.startsWith("plan:result ")).toBe(true);
+    expect(JSON.parse(body.content.slice("plan:result ".length))).toEqual({
+      plan_id: "a".repeat(64), revision_digest: "b".repeat(64), step_id: "c".repeat(64),
+    });
+    expect(messages).toEqual([["owner", body.content], ["accepted", "request-result-1"]]);
+  });
+
   it("renders only bounded Operation Plan digests, fixed statuses, and residual counts after selected-store restore", () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("function formatRecoveryPostActionPlanResiduals(");
     const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
@@ -537,9 +568,11 @@ describe("WebChatChannel — Control Center shell", () => {
           state: "resumed", deadline_at_ms: nowMs + 60_000, resumed_at_ms: nowMs, wake_reason: "reply",
           compute_outcome: "candidate_retained", compute_result_digest: "6".repeat(64),
           candidate_plan_id: "5".repeat(64), compute_completed_at_ms: nowMs + 1,
+          resource_review_required: false,
           used_for_authority: false, may_execute: false, private_goal: "PRIVATE WAIT GOAL MUST NOT RENDER" },
         { wait_id: "4".repeat(64), plan_id: "3".repeat(64), task_identity_digest: "2".repeat(64),
           state: "waiting", deadline_at_ms: nowMs + 120_000, compute_outcome: "not_started",
+          resource_review_required: false,
           used_for_authority: false, may_execute: false },
       ],
       goal_purpose_options: [{ goal_ref: "goal_0123456789abcdef", goal_kind: "delegated", purpose_version: 2,
@@ -555,7 +588,8 @@ describe("WebChatChannel — Control Center shell", () => {
             shellResultObservation],
           steps: [
             { step_id: "c".repeat(64), operation: "file.search", status: "verified",
-              binding: { command_digest: "d".repeat(64), result_digest: "e".repeat(64), delivery_digest: "f".repeat(64) } },
+              binding: { command_digest: "d".repeat(64), result_digest: "e".repeat(64), delivery_digest: "f".repeat(64),
+                memory_status: "receipt_confirmed" } },
             { step_id: "1".repeat(64), operation: "file.search", status: "verified",
               binding: { command_digest: "2".repeat(64), result_digest: "3".repeat(64), delivery_digest: "4".repeat(64) } },
           ],
@@ -616,6 +650,9 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("一致候補 2件、訪問 7件、検索完全性=unknown");
     expect(rendered).toContain("shell.exec：adapter成功報告と結果digestのみ（raw出力・終了状態・目的達成は未確認）");
     expect(rendered.match(/data-operation-plan-review="true"/g)).toHaveLength(1);
+    expect(rendered.match(/data-operation-plan-result="true"/g)).toHaveLength(1);
+    expect(rendered).toContain("保存済み検索結果を読む");
+    expect(rendered).toContain("保存時点の観測であり、現在状態の再検索や検索完全性を示しません。");
     expect(rendered).toContain('data-plan-id="' + "e".repeat(64) + '" data-revision-digest="' + "f".repeat(64) + '"');
     expect(rendered).toContain('data-step-id="' + "9".repeat(64) + '"');
     expect(rendered).toContain("Jが現在のrevision・依存・対象を再確認します。");

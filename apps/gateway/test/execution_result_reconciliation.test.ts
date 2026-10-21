@@ -852,6 +852,11 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(c.hds.operationPlanResultReadyForReturn(c.cmd.id)).toBe(false);
     expect(inspectMemory(c)).toMatchObject({ revision: 0, records: [], receipts: [] });
     expect(c.invoke).toHaveBeenCalledTimes(1);
+    const current = c.j.load()!.plans[0]!;
+    const withheld = c.hds.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: current.revisions.at(-1)!.digest, step_id: "search" })}`));
+    expect(withheld.command).toBeNull();
+    expect(withheld.log.commit.reason).toContain("plan_control_denied:plan_saved_result_");
   }));
 
   it("J/M restore hold clears only at a fresh review after digest-exact dependencies are verified", async () => fixture(async (c) => {
@@ -1176,6 +1181,17 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     c.hds.closeOperationPlanMemory(); const restarted = c.createHds();
     expect(restarted.reconcileOperationPlanMemory()).toBe(true); expect(inspectMemory(c)).toEqual(before);
     expect(review(restarted, c.plan, "dependent")?.type).toBe("tool_call");
+    const currentPlan = c.j.load()!.plans[0]!;
+    const resultRead = restarted.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: currentPlan.revisions.at(-1)!.digest, step_id: "search" })}`));
+    expect(resultRead.command).toMatchObject({ type: "noop", payload: { control_event: "operation_plan_result_return" } });
+    const returned = restarted.takeOperationPlanSavedResultReturn(resultRead.command!);
+    expect(returned).toMatchObject({ schema_version: "operation-plan-saved-result-return.v1",
+      visited_files: 1, search_completeness: "unknown", matches: [{ path: "blue.txt", line_number: 1, line: "blue" }],
+      used_as_world_truth: false, used_for_authority: false, may_execute: false });
+    expect(JSON.stringify(returned)).not.toContain(c.workspace);
+    expect(restarted.takeOperationPlanSavedResultReturn(resultRead.command!)).toBeUndefined();
+    expect(c.invoke).toHaveBeenCalledTimes(1);
     const projection = JSON.stringify(restarted.getRuntimeSnapshot().operation_plans);
     for (const raw of [c.workspace, '"matches"', '"memory_commit"', c.admission.ticket_id]) expect(projection).not.toContain(raw);
 

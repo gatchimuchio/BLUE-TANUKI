@@ -63,6 +63,14 @@ describe("renderCommandOutput", () => {
     expect(renderCommandOutput(noop, failed)).toBe("[failed:noop] boom");
   });
 
+  it("renders the audited saved Operation Plan result projection", () => {
+    const command: ExecuteCommand = { id: "cmd", type: "noop",
+      payload: { control_event: "operation_plan_result_return", result_projection_digest: "a".repeat(64) },
+      upstream_decision: upstream };
+    expect(renderCommandOutput(command, feedback({ content: "保存時点の結果。検索完全性は不明です。" })))
+      .toBe("保存時点の結果。検索完全性は不明です。");
+  });
+
   it("does not echo channel_send commands and truncates output", () => {
     const channel: ExecuteCommand = {
       id: "cmd",
