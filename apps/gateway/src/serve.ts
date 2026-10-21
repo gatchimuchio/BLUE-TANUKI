@@ -163,7 +163,11 @@ import { OperationPlanStateStore } from "./operation_plan_store.js";
 import { EmergencyStopControl } from "./emergency_stop_control.js";
 import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
 import { OperationPlanWaitDeadlineScheduler } from "./operation_plan_wait_scheduler.js";
-import { operationPlanRecoveryEvidenceFromObservation } from "./operation_plan_recovery_evidence.js";
+import {
+  brokerRestorePlanDependencyIsCurrent,
+  operationPlanBrokerRestoreDependencyEvidenceFromObservation,
+  operationPlanRecoveryEvidenceFromObservation,
+} from "./operation_plan_recovery_evidence.js";
 import type { CanonicalStateStoreKey } from "./canonical_state_backup.js";
 import {
   commandOperation,
@@ -602,6 +606,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   let startupOperationPlanHoldObservation = await buildRecoveryPostActionObservation(startupRecoveryHistory, process.env, {
     mode: "startup_operation_plan_hold",
   });
+  let startupBrokerRestoreObservation = await buildRecoveryPostActionObservation(startupRecoveryHistory, process.env, {
+    mode: "startup_broker_restore_hold",
+  });
   const startupHistoryStable = startupHistorySize === completeHistory.size() &&
     startupHistorySkippedCount === completeHistory.skippedCount() && startupHistoryChainValid === completeHistory.verify();
   if (!startupHistoryStable) {
@@ -617,7 +624,34 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     startupOperationPlanHoldObservation = await buildRecoveryPostActionObservation(unstableHistory, process.env, {
       mode: "startup_operation_plan_hold",
     });
+    startupBrokerRestoreObservation = await buildRecoveryPostActionObservation(unstableHistory, process.env, {
+      mode: "startup_broker_restore_hold",
+    });
   }
+  let recoveryInspectionModule: typeof import("./recovery_inspection.js") | null = null;
+  const loadRecoveryInspectionModule = async () => {
+    recoveryInspectionModule ??= await import("./recovery_inspection.js");
+    return recoveryInspectionModule;
+  };
+  const currentRecoveryProjection = async () => {
+    const module = await loadRecoveryInspectionModule();
+    return module.projectGatewayRecoveryInspectionForOperator(module.inspectGatewayRecoveryState(process.env));
+  };
+  const verifyBrokerRestoreDependenciesForFreshReview = (
+    planIdDigest: string,
+    provenance: import("@blue-tanuki/hds-brain").OperationPlanRecoveryHoldProvenance,
+  ): boolean => {
+    if (provenance.source !== "recovery_restore" || provenance.restore_store_key !== "broker" ||
+        !recoveryInspectionModule) return false;
+    try {
+      const projection = recoveryInspectionModule.projectGatewayRecoveryInspectionForOperator(
+        recoveryInspectionModule.inspectGatewayRecoveryState(process.env),
+      );
+      return brokerRestorePlanDependencyIsCurrent(projection, planIdDigest);
+    } catch {
+      return false;
+    }
+  };
   const canonicalStoreRestoreNeedsOperationPlanHold = startupRecoveryObservation.operation === "restore" &&
     (startupRecoveryObservation.store_key === null ||
       ((startupRecoveryObservation.store_key === "j_control" || startupRecoveryObservation.store_key === "m_state" ||
@@ -633,12 +667,33 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     history_complete: !!completeHistoryFile && startupHistoryStable && startupHistoryChainValid && startupHistorySkippedCount === 0 &&
       !startupHistoryAtCapacity && !(operationPlanCheckpointAtStartup?.plans.length && startupHistorySize === 0),
   });
+  let startupBrokerRestoreProjection = null;
+  if (startupBrokerRestoreObservation.operation === "restore" && startupBrokerRestoreObservation.store_key === "broker" &&
+      startupBrokerRestoreObservation.status === "matched" &&
+      startupBrokerRestoreObservation.store_ledger_status === "verified" &&
+      startupBrokerRestoreObservation.store_ledger_residual_count === 0) {
+    try {
+      startupBrokerRestoreProjection = await currentRecoveryProjection();
+    } catch {
+      startupBrokerRestoreProjection = null;
+    }
+  }
+  const startupBrokerRestoreDependencyEvidence = operationPlanBrokerRestoreDependencyEvidenceFromObservation({
+    observation: startupBrokerRestoreObservation,
+    checkpoint: operationPlanCheckpointAtStartup,
+    history_complete: !!completeHistoryFile && startupHistoryStable && startupHistoryChainValid &&
+      startupHistorySkippedCount === 0 && !startupHistoryAtCapacity &&
+      !(operationPlanCheckpointAtStartup?.plans.length && startupHistorySize === 0),
+    recovery_projection: startupBrokerRestoreProjection,
+  });
   const hds = new HDSUpperController({
     operation_plan_state: operationPlanState,
     operation_plan_memory: operationResultMemoryStorage(),
     goal_purpose_memory: goalPurposeMemoryStorage(),
     meaning_update_memory: meaningUpdateMemoryStorage(),
     operation_plan_recovery_evidence: startupOperationPlanRecoveryEvidence,
+    operation_plan_broker_restore_dependency_evidence: startupBrokerRestoreDependencyEvidence,
+    operation_plan_broker_restore_dependency_verifier: verifyBrokerRestoreDependenciesForFreshReview,
     audit: buildAuditLog(),
     memory: buildHDSMemoryStore(process.env),
     llm_route: buildLLMCommandRouteFromEnv(),
@@ -1830,11 +1885,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         ? recoveryStoreRestoreHistoryEvidence(fb.result)
         : null;
       let observationVerified = false;
+      let brokerRestoreObservation: Awaited<ReturnType<typeof buildRecoveryPostActionObservation>> | null = null;
+      let brokerRestoreHistorySnapshot: {
+        readonly size: number;
+        readonly skipped_count: number;
+        readonly chain_valid: boolean;
+        readonly incomplete: boolean;
+      } | null = null;
       if (executionHistory && finalOutputRecorded && restoreResultEvidence?.store_key === "broker") {
         const historySize = completeHistory.size();
         const historySkippedCount = completeHistory.skippedCount();
         const historyChainValid = completeHistory.verify();
         const historyIncompleteAtStart = recoveryObservationHistoryIncomplete;
+        brokerRestoreHistorySnapshot = { size: historySize, skipped_count: historySkippedCount,
+          chain_valid: historyChainValid, incomplete: historyIncompleteAtStart };
         const historyAtCapacity = completeHistoryMaxEntries !== undefined && historySize >= completeHistoryMaxEntries;
         const historyEntries = completeHistory.replay().filter(
           (entry): entry is CompleteHistoryEntry & { kind: "execution_history" | "final_output" } =>
@@ -1854,6 +1918,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
               mode: "in_process_restore",
               expected_command_id: cmd.id,
             });
+            brokerRestoreObservation = observation;
             const historyStable = historySize === completeHistory.size() &&
               historySkippedCount === completeHistory.skippedCount() && historyChainValid === completeHistory.verify() &&
               historyIncompleteAtStart === recoveryObservationHistoryIncomplete;
@@ -1868,7 +1933,34 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           }
         }
       }
-      if (observationVerified && !gatewayShuttingDown &&
+      let planRecoveryEvidenceApplied = false;
+      if (observationVerified && brokerRestoreObservation) {
+        try {
+          const checkpoint = operationPlanState.load();
+          if (!checkpoint || checkpoint.plans.length === 0) {
+            planRecoveryEvidenceApplied = true;
+          } else {
+            const recoveryProjection = await currentRecoveryProjection();
+            const historyStable = !!brokerRestoreHistorySnapshot && !!completeHistoryFile &&
+              brokerRestoreHistorySnapshot.size === completeHistory.size() &&
+              brokerRestoreHistorySnapshot.skipped_count === completeHistory.skippedCount() &&
+              brokerRestoreHistorySnapshot.chain_valid && completeHistory.verify() &&
+              brokerRestoreHistorySnapshot.incomplete === recoveryObservationHistoryIncomplete &&
+              brokerRestoreHistorySnapshot.skipped_count === 0 && !recoveryObservationHistoryIncomplete &&
+              (completeHistoryMaxEntries === undefined || completeHistory.size() < completeHistoryMaxEntries);
+            const evidence = operationPlanBrokerRestoreDependencyEvidenceFromObservation({
+              observation: brokerRestoreObservation,
+              checkpoint,
+              history_complete: historyStable,
+              recovery_projection: recoveryProjection,
+            });
+            planRecoveryEvidenceApplied = !!evidence && hds.recordBrokerRestoreDependencyEvidence(cmd, evidence);
+          }
+        } catch {
+          planRecoveryEvidenceApplied = false;
+        }
+      }
+      if (observationVerified && planRecoveryEvidenceApplied && !gatewayShuttingDown &&
           canonicalStoreRestoreMaintenanceCommandId === cmd.id) {
         brokerRestoreStoreQuiesced = false;
         brokerRestoreQuiesced = false;
@@ -1877,6 +1969,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         gatewayLog.warn("Broker restore remains held after post-action observation", {
           command_id: cmd.id,
           observation_verified: observationVerified,
+          plan_recovery_evidence_applied: planRecoveryEvidenceApplied,
           restore_result_verified: restoreResultEvidence?.store_key === "broker",
         });
       }

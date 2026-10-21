@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 import type { RecoveryPostActionObservation } from "../src/recovery_surface.js";
-import { operationPlanRecoveryEvidenceFromObservation } from "../src/operation_plan_recovery_evidence.js";
+import type { GatewayRecoveryOperatorProjection } from "../src/recovery_inspection.js";
+import { brokerRestorePlanDependencyIsCurrent, operationPlanBrokerRestoreDependencyEvidenceFromObservation,
+  operationPlanRecoveryEvidenceFromObservation } from "../src/operation_plan_recovery_evidence.js";
 
 const planIds = ["plan-restored-clean", "plan-restored-residual"] as const;
 const checkpoint = {
@@ -35,6 +37,40 @@ function observation(overrides: Partial<RecoveryPostActionObservation> = {}): Re
     may_execute: false,
     ...overrides,
   };
+}
+
+function brokerProjection(input: {
+  readonly scopes: readonly { plan_id_digest: string; status: "observed" | "residuals_present" | "unobserved";
+    binding_count: number; inspected_binding_count: number; omitted_binding_count: number;
+    residual_dependencies: readonly string[]; unobserved_dependencies: readonly string[] }[];
+  readonly correlations: readonly { plan_id_digest: string; broker_correlation: "matched" | "not_admitted" | "not_found" }[];
+}): GatewayRecoveryOperatorProjection {
+  return {
+    schema_version: 12,
+    surface: "recovery_inspection_operator",
+    mode: "read_only",
+    boundary_valid: true,
+    used_for_authority: false,
+    may_execute: false,
+    omitted_plan_dependency_scope_count: 0,
+    plan_dependency_scopes: input.scopes.map((scope) => ({
+      plan_id_digest: scope.plan_id_digest,
+      request_scope_digest: null,
+      integrity: "verified",
+      plan_record_count: 1,
+      binding_count: scope.binding_count,
+      residual_binding_count: 0,
+      omitted_binding_count: scope.omitted_binding_count,
+      inspected_binding_count: scope.inspected_binding_count,
+      status: scope.status,
+      residual_dependencies: scope.residual_dependencies,
+      unobserved_dependencies: scope.unobserved_dependencies,
+    })),
+    operation_plan_correlations: input.correlations.map((correlation) => ({
+      plan_id_digest: correlation.plan_id_digest,
+      broker_correlation: correlation.broker_correlation,
+    })),
+  } as unknown as GatewayRecoveryOperatorProjection;
 }
 
 describe("Recovery observationからHDS計画保留を導出", () => {
@@ -170,5 +206,79 @@ describe("Recovery observationからHDS計画保留を導出", () => {
         expect(verified).toBeUndefined();
       }
     }
+  });
+
+  it("Broker復元後は計画ごとの相関を分類し、別計画の未観測を混ぜない", () => {
+    const brokerRestore = observation({
+      store_key: "broker",
+      restore_scope_plan_digest: null,
+      plan_restore_points: null,
+    });
+    const affected = operationPlanDigest(planIds[0]);
+    const unrelated = operationPlanDigest(planIds[1]);
+    const projection = brokerProjection({
+      scopes: [
+        { plan_id_digest: affected, status: "observed", binding_count: 1, inspected_binding_count: 1,
+          omitted_binding_count: 0, residual_dependencies: [], unobserved_dependencies: [] },
+        { plan_id_digest: unrelated, status: "observed", binding_count: 1, inspected_binding_count: 1,
+          omitted_binding_count: 0, residual_dependencies: [], unobserved_dependencies: [] },
+      ],
+      correlations: [
+        { plan_id_digest: affected, broker_correlation: "matched" },
+        { plan_id_digest: unrelated, broker_correlation: "not_admitted" },
+      ],
+    });
+    const evidence = operationPlanBrokerRestoreDependencyEvidenceFromObservation({
+      observation: brokerRestore, checkpoint, history_complete: true, recovery_projection: projection,
+    });
+    expect(evidence).toMatchObject({
+      restore_observation: "verified",
+      plans: [
+        { plan_id_digest: affected, status: "observed" },
+        { plan_id_digest: unrelated, status: "unaffected" },
+      ],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(brokerRestorePlanDependencyIsCurrent(projection, affected)).toBe(true);
+    expect(brokerRestorePlanDependencyIsCurrent(projection, unrelated)).toBe(true);
+  });
+
+  it("Broker相関の未観測・残差と無効なprojectionはfail-closedで計画holdへ送る", () => {
+    const brokerRestore = observation({ store_key: "broker", restore_scope_plan_digest: null, plan_restore_points: null });
+    const affected = operationPlanDigest(planIds[0]);
+    const unrelated = operationPlanDigest(planIds[1]);
+    const projection = brokerProjection({
+      scopes: [
+        { plan_id_digest: affected, status: "residuals_present", binding_count: 1, inspected_binding_count: 1,
+          omitted_binding_count: 0, residual_dependencies: ["memory"], unobserved_dependencies: [] },
+        { plan_id_digest: unrelated, status: "unobserved", binding_count: 1, inspected_binding_count: 0,
+          omitted_binding_count: 1, residual_dependencies: [], unobserved_dependencies: ["broker"] },
+      ],
+      correlations: [
+        { plan_id_digest: affected, broker_correlation: "not_admitted" },
+      ],
+    });
+    const evidence = operationPlanBrokerRestoreDependencyEvidenceFromObservation({
+      observation: brokerRestore, checkpoint, history_complete: true, recovery_projection: projection,
+    });
+    expect(evidence?.plans).toEqual([
+      { plan_id_digest: affected, status: "residuals_present" },
+      { plan_id_digest: unrelated, status: "unobserved" },
+    ]);
+    expect(brokerRestorePlanDependencyIsCurrent(projection, affected)).toBe(false);
+    expect(brokerRestorePlanDependencyIsCurrent(projection, unrelated)).toBe(false);
+
+    const unavailable = operationPlanBrokerRestoreDependencyEvidenceFromObservation({
+      observation: brokerRestore, checkpoint, history_complete: true,
+    });
+    expect(unavailable?.plans.every((entry) => entry.status === "unverified")).toBe(true);
+    const incompleteHistory = operationPlanBrokerRestoreDependencyEvidenceFromObservation({
+      observation: brokerRestore, checkpoint, history_complete: false, recovery_projection: projection,
+    });
+    expect(incompleteHistory).toMatchObject({
+      restore_observation: "unverified",
+      plans: checkpoint.plans.map((plan) => ({ plan_id_digest: operationPlanDigest(plan.revisions[0]!.plan.plan_id), status: "unverified" })),
+    });
   });
 });

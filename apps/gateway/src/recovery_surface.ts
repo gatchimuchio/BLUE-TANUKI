@@ -161,7 +161,8 @@ export interface RecoveryHistoryEvidence {
 
 export interface RecoveryPostActionObservationOptions {
   /** Startup observations require the mutation to predate this process. In-process restore checks are explicit and command-bound. */
-  readonly mode?: "after_restart" | "in_process_restore" | "startup_operation_plan_hold" | "startup_canonical_store_hold";
+  readonly mode?: "after_restart" | "in_process_restore" | "startup_operation_plan_hold" | "startup_canonical_store_hold" |
+    "startup_broker_restore_hold";
   readonly expected_command_id?: string;
 }
 
@@ -1873,7 +1874,10 @@ function noRecoveryActionObservation(
 }
 
 /** An invalid history can only restrict the identified store; it can never confirm restore or authorize work. */
-function unverifiedRecoveryStoreHoldCandidate(history: RecoveryHistoryEvidence): RecoveryPostActionObservation {
+function unverifiedRecoveryStoreHoldCandidate(
+  history: RecoveryHistoryEvidence,
+  storeKeyFilter?: CanonicalStateStoreKey,
+): RecoveryPostActionObservation {
   let latest: { index: number; storeKey: CanonicalStateStoreKey | null; backupIdDigest: string | null } | undefined;
   for (const entry of history.entries) {
     if (entry.kind !== "execution_history" || entry.used_for_authority !== false ||
@@ -1892,6 +1896,7 @@ function unverifiedRecoveryStoreHoldCandidate(history: RecoveryHistoryEvidence):
       .filter((value): value is CanonicalStateStoreKey => value !== undefined && value !== null);
     const distinctStoreKeys = [...new Set(candidateStoreKeys)];
     const storeKey = distinctStoreKeys.length === 1 ? distinctStoreKeys[0]! : null;
+    if (storeKeyFilter && storeKey !== storeKeyFilter) continue;
     const candidateBackupDigests = [attempt?.backup_id_digest, completed?.restored_backup_id_digest]
       .filter((value): value is string => value !== undefined && value !== null);
     const distinctBackupDigests = [...new Set(candidateBackupDigests)];
@@ -1919,8 +1924,9 @@ export async function buildRecoveryPostActionObservation(
   options: RecoveryPostActionObservationOptions = {},
 ): Promise<RecoveryPostActionObservation> {
   if (!history.chain_valid || history.skipped_count !== 0) {
-    return options.mode === "startup_canonical_store_hold"
-      ? unverifiedRecoveryStoreHoldCandidate(history)
+    return options.mode === "startup_canonical_store_hold" || options.mode === "startup_broker_restore_hold"
+      ? unverifiedRecoveryStoreHoldCandidate(history,
+        options.mode === "startup_broker_restore_hold" ? "broker" : undefined)
       : noRecoveryActionObservation("unverified");
   }
 
@@ -1952,6 +1958,9 @@ export async function buildRecoveryPostActionObservation(
     if (options.mode === "startup_operation_plan_hold" && operation !== "recovery.restore") continue;
     if (options.mode === "startup_operation_plan_hold" && restoreEvidence && restoreEvidence.store_key !== "operation_plans") continue;
     if (options.mode === "startup_operation_plan_hold" && !restoreEvidence && restoreAttempt?.store_key !== "operation_plans") continue;
+    if (options.mode === "startup_broker_restore_hold" && operation !== "recovery.restore") continue;
+    if (options.mode === "startup_broker_restore_hold" && restoreEvidence && restoreEvidence.store_key !== "broker") continue;
+    if (options.mode === "startup_broker_restore_hold" && !restoreEvidence && restoreAttempt?.store_key !== "broker") continue;
     if (options.mode === "startup_canonical_store_hold" && operation !== "recovery.restore") continue;
     const argumentsDigest = recoveryObservationDigest(command.payload.arguments_digest);
     if (!argumentsDigest) {
@@ -1992,7 +2001,7 @@ export async function buildRecoveryPostActionObservation(
   const unverified: RecoveryPostActionObservation = {
     status: "unverified",
     operation: latest.action,
-    store_key: null,
+    store_key: latest.restoreEvidence?.store_key ?? latest.restoreAttempt?.store_key ?? null,
     operation_digest: operationDigest,
     result_digest: latest.resultDigest,
     command_id_digest: latest.commandIdDigest,
@@ -2000,7 +2009,7 @@ export async function buildRecoveryPostActionObservation(
     store_ledger_status: null,
     store_ledger_residual_count: null,
     plan_residuals: null,
-    restore_backup_id_digest: null,
+    restore_backup_id_digest: latest.restoreEvidence?.restored_backup_id_digest ?? latest.restoreAttempt?.backup_id_digest ?? null,
     restore_scope_plan_digest: latest.restoreEvidence?.restore_scope_plan_digest ?? null,
     ...(latest.restoreEvidence?.restore_scope_mode === "plan_scoped_merge_v1"
       ? { restore_scope_mode: latest.restoreEvidence.restore_scope_mode }
@@ -2017,7 +2026,8 @@ export async function buildRecoveryPostActionObservation(
     return unverified;
   }
   if (options.mode !== "in_process_restore" && options.expected_command_id !== undefined) return unverified;
-  if ((options.mode === "startup_operation_plan_hold" || options.mode === "startup_canonical_store_hold") &&
+  if ((options.mode === "startup_operation_plan_hold" || options.mode === "startup_canonical_store_hold" ||
+      options.mode === "startup_broker_restore_hold") &&
       (latest.action !== "restore" || latest.entry.timestamp >= (history.not_before_timestamp_ms ?? Number.POSITIVE_INFINITY))) {
     return unverified;
   }

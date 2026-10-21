@@ -2252,3 +2252,13 @@ Operation Plan recovery inspectorの生command ID digestとCron approval handoff
 | 全suite、live/provider、credential、実承認・復旧操作、外部作用、5OS実機、QE_QC／QE_QA | 未実施。 |
 
 E03.03=`BUILD_GAP`。canonical全store snapshot、job単位の依存隔離、独立restore point、guarded selective recoveryは未接続。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。次回は三点正本・適用AGENTS・active指示・現物・HEAD／差分を再同期してから、これらの未接続consumerのうち次の一つをBUILD_BATCHとして確定する。復旧・承認・再開の実操作は今回の完了状態に含めない。
+
+## 2026-10-21 QEB-18-E03.03-BROKER-RESTORE-PLAN-DEPENDENCY-REOBSERVATION
+
+QE_STAGE=`QE_BUILD`。開始HEAD／`origin/main`=`946b6b043d208cbef43658b93b79613c6f426294`、開始worktreeは保護対象の既存untracked `packages/blue-tanuki/native/linux-isolation/target/`のみ。owner指定の現行rev2.3三点、適用`AGENTS.md`、active指示、Recovery／J／M／Brokerの現行consumerを確認した。D4 Pocket等の別repo、実credential、provider、外部作用、公開・出荷判断は対象外。
+
+QEB-17まではBroker全体のquiescenceと復元後Broker台帳照合を行うが、復元されたBroker ledgerを現存J Operation Planへ結び直すconsumerがなかった。今回、完全な履歴・復元結果・backup/state digest・Broker台帳の一致後にread-only Recovery projectionを取得し、各planのJ/M/Broker依存を`unaffected`／`observed`／`residuals_present`／`unobserved`／`unverified`へ分類した。HDSは復元コマンドとcheckpoint digestを束縛してholdを永続化し、影響対象のselected bindingを失効、`intent_committed`を`outcome_unknown`へ閉じる。Broker保留の解除は、その後の新しいJ plan review内で完全な現行依存相関が再観測された場合だけ許可する。相関不足・履歴変化・保存失敗時は保留し、復元後処理のmaintenance lockも維持する。起動時はBroker restore専用履歴窓で別storeの新しいrestoreに埋もれないようにし、現プロセス開始後のrecordは未確認保留へ閉じる。
+
+`operation_plan_recovery_evidence.test.ts`／`operation_plan_runtime.test.ts`／`recovery_post_action_observation.test.ts`は62/62 PASS。合成CompleteHistoryを使うGateway起動試験で、失敗したBroker restoreが既存planのfail-closed holdとして永続化されることを1/1 PASS。`@blue-tanuki/hds-brain`とGatewayのtypecheck／build、`pnpm hds:standalone`もPASS。全workspace suite、全体QE_QC／QE_QA、5OS実機、provider／credential、実restore・実業務作用は未実施。
+
+QEB-18のplan別復元依存相関consumerを`WIRED`とする。ただしこれは仕事ID／独立restore point／全store間atomicity／job単位のrecoverability／自動または実際のresumeを成立させない。E03.03／QEB-03全体は`BUILD_GAP`。次は最新版rev2.3に残るjob単位復旧identity、restore point、隔離経路から現物上の次consumerを一つ選ぶ。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。

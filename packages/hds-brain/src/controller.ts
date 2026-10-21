@@ -58,6 +58,7 @@ import {
 } from "@blue-tanuki/protocol";
 import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
   type OperationPlanRecoveryEvidence, type OperationPlanReceiptReconciliationAuthorization,
+  type OperationPlanBrokerRestoreDependencyEvidence, type OperationPlanBrokerRestoreDependencyVerifier,
   type OperationPlanCanonicalMemoryRestoreObservation, type OperationPlanGoalPurposeRelationReviewContent,
   type OperationPlanSavedResultReturnProjection,
   operationPlanGoalPurposeRelationReviewAuditDigest } from "./operation_plan.js";
@@ -271,6 +272,10 @@ export interface ControllerOptions {
   operation_plan_memory?: OperationPlanMemoryStorage;
   /** Verified startup evidence can only hold existing plan selection; it never grants or resumes authority. */
   operation_plan_recovery_evidence?: OperationPlanRecoveryEvidence;
+  /** Broker restore correlation can only hold existing plan selection pending a fresh J review. */
+  operation_plan_broker_restore_dependency_evidence?: OperationPlanBrokerRestoreDependencyEvidence;
+  /** Live read-only J/M/Broker dependency observation used only to gate a fresh J review. */
+  operation_plan_broker_restore_dependency_verifier?: OperationPlanBrokerRestoreDependencyVerifier;
 }
 
 export interface LLMCommandRoute {
@@ -800,7 +805,9 @@ export class HDSUpperController {
       (goalRef, version) => this.readGoalPurposeContent(goalRef, version),
       (evidence) => this.operationPlanGoalPurposeRelationReviewAuditEventExists(evidence),
       (lineageId) => this.meaningUpdateMemory?.readInterpretation(lineageId) ?? null,
-      (dependency) => this.verifyCurrentMemoryCitationJudgment(dependency));
+      (dependency) => this.verifyCurrentMemoryCitationJudgment(dependency),
+      opts.operation_plan_broker_restore_dependency_evidence,
+      opts.operation_plan_broker_restore_dependency_verifier);
     const llmRoute = opts.llm_route ?? {};
     this.llm_route = {
       ...llmRoute,
@@ -3040,6 +3047,16 @@ ${planControl.question}`,
       throw error;
     }
     return checkpointDigest;
+  }
+  recordBrokerRestoreDependencyEvidence(
+    command: ExecuteCommand,
+    evidence: OperationPlanBrokerRestoreDependencyEvidence,
+  ): boolean {
+    try {
+      return this.operationPlans.recordBrokerRestoreDependencyEvidence(command, evidence);
+    } catch {
+      return false;
+    }
   }
   isOperationPlanCommand(command_id: string): boolean { return this.operationPlans.isBound(command_id); }
   /** Current J-selected plan provenance for Broker target binding; this digest never grants authority. */

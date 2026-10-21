@@ -1,6 +1,89 @@
-import { operationPlanDigest, type OperationPlanRecoveryEvidence } from "@blue-tanuki/hds-brain";
+import { operationPlanDigest, type OperationPlanBrokerRestoreDependencyEvidence,
+  type OperationPlanBrokerRestoreDependencyStatus, type OperationPlanRecoveryEvidence } from "@blue-tanuki/hds-brain";
 import type { OperationPlanCheckpoint } from "@blue-tanuki/protocol";
+import type { GatewayRecoveryOperatorProjection } from "./recovery_inspection.js";
 import type { RecoveryPostActionObservation } from "./recovery_surface.js";
+
+const DIGEST = /^[a-f0-9]{64}$/;
+
+function brokerRestorePlanStatus(
+  projection: GatewayRecoveryOperatorProjection | null | undefined,
+  planIdDigest: string,
+): OperationPlanBrokerRestoreDependencyStatus {
+  if (!projection || projection.schema_version !== 12 || projection.surface !== "recovery_inspection_operator" ||
+      projection.mode !== "read_only" || projection.boundary_valid !== true ||
+      projection.used_for_authority !== false || projection.may_execute !== false ||
+      !Array.isArray(projection.operation_plan_correlations) || !Array.isArray(projection.plan_dependency_scopes) ||
+      projection.omitted_plan_dependency_scope_count !== 0) return "unverified";
+  const scopes = projection.plan_dependency_scopes.filter((scope) => scope.plan_id_digest === planIdDigest);
+  if (scopes.length !== 1) return "unverified";
+  const scope = scopes[0]!;
+  const rows = projection.operation_plan_correlations.filter((row) => row.plan_id_digest === planIdDigest);
+  if (scope.omitted_binding_count > 0 || scope.inspected_binding_count !== scope.binding_count ||
+      rows.length !== scope.binding_count) return "unobserved";
+  if (scope.status === "residuals_present" || scope.residual_dependencies.length > 0) return "residuals_present";
+  if (scope.status === "unobserved" || scope.unobserved_dependencies.length > 0) return "unobserved";
+  if (scope.binding_count === 0 || rows.every((row) => row.broker_correlation === "not_admitted")) return "unaffected";
+  if (rows.some((row) => !["matched", "not_admitted"].includes(row.broker_correlation))) {
+    return "unverified";
+  }
+  if (scope.status !== "observed") return "unverified";
+  return "observed";
+}
+
+/** Re-observe the current J/M/Broker dependency scope. A positive result only permits a fresh J review. */
+export function brokerRestorePlanDependencyIsCurrent(
+  projection: GatewayRecoveryOperatorProjection | null | undefined,
+  planIdDigest: string,
+): boolean {
+  return DIGEST.test(planIdDigest) && ["observed", "unaffected"].includes(brokerRestorePlanStatus(projection, planIdDigest));
+}
+
+/** Build plan-scoped holds from a matched Broker restore and a read-only cross-ledger inspection. */
+export function operationPlanBrokerRestoreDependencyEvidenceFromObservation(input: {
+  readonly observation: RecoveryPostActionObservation;
+  readonly checkpoint: OperationPlanCheckpoint | null;
+  readonly history_complete: boolean;
+  readonly recovery_projection?: GatewayRecoveryOperatorProjection | null;
+}): OperationPlanBrokerRestoreDependencyEvidence | undefined {
+  const observation = input.observation;
+  if (observation.operation !== "restore" || observation.store_key !== "broker" || !input.checkpoint) return undefined;
+  const restoreObservationVerified = input.history_complete && observation.status === "matched" &&
+    observation.store_ledger_status === "verified" && observation.store_ledger_residual_count === 0 &&
+    observation.command_id_digest !== null && DIGEST.test(observation.command_id_digest) &&
+    observation.operation_digest !== null && DIGEST.test(observation.operation_digest) &&
+    observation.result_digest !== null && DIGEST.test(observation.result_digest) &&
+    observation.restore_backup_id_digest !== null && DIGEST.test(observation.restore_backup_id_digest) &&
+    observation.restored_state_digest !== null && DIGEST.test(observation.restored_state_digest);
+  const recoveryProjection = input.recovery_projection;
+  const plans = input.checkpoint.plans.map((planState) => {
+    const planIdDigest = operationPlanDigest(planState.revisions[0]!.plan.plan_id);
+    return {
+      plan_id_digest: planIdDigest,
+      status: restoreObservationVerified
+        ? brokerRestorePlanStatus(recoveryProjection, planIdDigest)
+        : "unverified" as const,
+    };
+  });
+  return {
+    schema_version: "operation-plan-broker-restore-dependency-evidence.v1",
+    checkpoint_digest: operationPlanDigest(input.checkpoint),
+    restore_observation: restoreObservationVerified ? "verified" : "unverified",
+    provenance: {
+      source: "recovery_restore",
+      command_id_digest: observation.command_id_digest,
+      operation_digest: observation.operation_digest,
+      result_digest: observation.result_digest,
+      restore_store_key: "broker",
+      restore_backup_id_digest: observation.restore_backup_id_digest,
+      restore_scope_plan_digest: null,
+      restored_state_digest: observation.restored_state_digest,
+    },
+    plans,
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
 
 function unverifiedHistoryEvidence(
   checkpointDigest: string,

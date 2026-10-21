@@ -404,6 +404,78 @@ describe("Recovery mutation HDS L3 entry", () => {
     }
   }, 30_000);
 
+  it("reconstructs a failed Broker restore as a fail-closed Operation Plan hold during Gateway startup", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-startup-broker-hold-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
+    const port = await reserveLoopbackPort();
+    writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const runtimeEnv = isolatedRuntimeEnvironment(root, envFile, historyFile, port);
+    const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
+    const seededPlan = seedOperationPlanState(planStatePath);
+    const restoreCommand = {
+      type: "tool_call",
+      payload: { tool_name: "recovery.restore", arguments: { backup_id: "synthetic-broker-backup", store_key: "broker" } },
+    };
+    const restoreAttempt = recoveryStoreRestoreAttemptHistoryEvidence(restoreCommand);
+    expect(restoreAttempt).toMatchObject({ schema_version: 1, store_key: "broker" });
+    const commandId = "synthetic-failed-broker-restore";
+    const resultDigest = createHash("sha256").update("synthetic failed Broker restore result").digest("hex");
+    const timestamp = Date.now() - 10_000;
+    const history = new CompleteHistoryStore({ filepath: historyFile });
+    history.append({
+      kind: "execution_history",
+      command_id: commandId,
+      actor: "synthetic-test-fixture",
+      source: "recovery-startup-test",
+      timestamp,
+      payload: {
+        command: {
+          operation: "recovery.restore",
+          payload: { tool_name: "recovery.restore", arguments_digest: createHash("sha256")
+            .update("synthetic Broker restore arguments").digest("hex") },
+        },
+        status: "failed",
+        result_present: true,
+        result_digest: resultDigest,
+        recovery_store_restore_attempt: restoreAttempt,
+      },
+    });
+    history.append({
+      kind: "final_output",
+      command_id: commandId,
+      actor: "synthetic-test-fixture",
+      source: "recovery-startup-test",
+      timestamp: timestamp + 1,
+      payload: { status: "failed", result_present: true, result_digest: resultDigest, used_for_authority: false },
+    });
+    expect(history.verify()).toBe(true);
+
+    let gateway: ReturnType<typeof spawnGateway> | undefined;
+    try {
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(port, gateway);
+      const runtime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(runtime.body.hds.operation_plans.plans, gateway.output.join("")).toMatchObject([
+        { plan_id: seededPlan.plan_id_digest, recovery_hold_reason: "held_unverified" },
+      ]);
+      const persistedStore = new OperationPlanStateStore(planStatePath);
+      try {
+        expect(persistedStore.loadRecoveryHoldState()).toMatchObject({
+          holds: [{ plan_id_digest: seededPlan.plan_id_digest, reason: "held_unverified",
+            provenance: { source: "recovery_restore", restore_store_key: "broker" } }],
+          used_for_authority: false,
+          may_execute: false,
+        });
+      } finally {
+        persistedStore.close();
+      }
+    } finally {
+      if (gateway) await stopChild(gateway.child);
+    }
+  }, 30_000);
+
   it("quiesces, restores, reopens, and reobserves the Cron event store under L3", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-restore-l3-"));
     temporaryRoots.push(root);

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
+  type OperationPlanBrokerRestoreDependencyEvidence } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
   ToolRegistry, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservationSchema, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
@@ -29,6 +30,13 @@ function operationPlanRestoreCommand(): ExecuteCommand {
   return {
     id: randomUUID(), type: "tool_call",
     payload: { tool_name: "recovery.restore", arguments: { backup_id: "fixture", store_key: "operation_plans", confirm: "RESTORE" } },
+    upstream_decision: { request_id: randomUUID(), commit_hash: "a".repeat(64), commit_decision: "ASSERT" },
+  } as unknown as ExecuteCommand;
+}
+function brokerRestoreCommand(): ExecuteCommand {
+  return {
+    id: randomUUID(), type: "tool_call",
+    payload: { tool_name: "recovery.restore", arguments: { backup_id: "fixture", store_key: "broker", confirm: "RESTORE" } },
     upstream_decision: { request_id: randomUUID(), commit_hash: "a".repeat(64), commit_decision: "ASSERT" },
   } as unknown as ExecuteCommand;
 }
@@ -1356,6 +1364,84 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         .toMatchObject({ recovery_hold_reason: "held_residual" });
       expect(hds.getAudit().verify()).toBe(true);
     } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("Broker復元後は計画別holdを永続化し、新しいJレビューと再観測が揃うまで解除しない", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-broker-restore-hold-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const privateRoot = join(root, "private-state");
+    const resultMemoryRoot = join(privateRoot, "result-memory");
+    await mkdir(resultMemoryRoot, { recursive: true });
+    const target = plan("broker-restored-target", root);
+    const unrelated = plan("broker-restored-unrelated", root);
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [target, unrelated].map((candidate) => ({ owner: "fixture-owner", channel: "webchat",
+        goal: "synthetic Broker recovery test", request_goal_criteria: noRequestCriteria("synthetic Broker recovery test", candidate.request_id),
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] })),
+    });
+    store.compareAndSet(null, checkpoint);
+    let dependencyCurrent = false;
+    let hds: HDSUpperController | undefined;
+    try {
+      hds = new HDSUpperController({
+        operation_plan_state: store,
+        operation_plan_memory: {
+          private_state_root: privateRoot,
+          database_path: join(resultMemoryRoot, "j-control.sqlite"),
+          memory_database_path: join(resultMemoryRoot, "m-state.sqlite"),
+        },
+        operation_plan_broker_restore_dependency_verifier: (planIdDigest, provenance) =>
+          planIdDigest === operationPlanDigest(target.plan_id) && provenance.restore_store_key === "broker" && dependencyCurrent,
+      });
+      const restoreCommand = brokerRestoreCommand();
+      const evidence: OperationPlanBrokerRestoreDependencyEvidence = {
+        schema_version: "operation-plan-broker-restore-dependency-evidence.v1",
+        checkpoint_digest: operationPlanDigest(checkpoint),
+        restore_observation: "verified",
+        provenance: {
+          source: "recovery_restore",
+          command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+          operation_digest: "a".repeat(64),
+          result_digest: "b".repeat(64),
+          restore_store_key: "broker",
+          restore_backup_id_digest: "c".repeat(64),
+          restore_scope_plan_digest: null,
+          restored_state_digest: "d".repeat(64),
+        },
+        plans: [
+          { plan_id_digest: operationPlanDigest(target.plan_id), status: "unobserved" },
+          { plan_id_digest: operationPlanDigest(unrelated.plan_id), status: "unaffected" },
+        ],
+        used_for_authority: false,
+        may_execute: false,
+      };
+      expect(hds.recordBrokerRestoreDependencyEvidence(restoreCommand, evidence)).toBe(true);
+      expect(hds.getRuntimeSnapshot().operation_plans.plans).toMatchObject([
+        { plan_id: operationPlanDigest(target.plan_id), recovery_hold_reason: "held_unobserved" },
+        { plan_id: operationPlanDigest(unrelated.plan_id) },
+      ]);
+      expect(store.loadRecoveryHoldState()).toMatchObject({
+        holds: [{ plan_id_digest: operationPlanDigest(target.plan_id), reason: "held_unobserved",
+          provenance: { restore_store_key: "broker", command_id_digest: recoveryCommandIdDigest(restoreCommand.id) } }],
+        used_for_authority: false,
+        may_execute: false,
+      });
+
+      const held = review(hds, target, "search");
+      expect(held.command).toBeNull();
+      expect(held.log.commit.reason).toBe("plan_control_denied:plan_recovery_unobserved_hold");
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unobserved" });
+
+      dependencyCurrent = true;
+      expect(review(hds, target, "search").command?.type).toBe("tool_call");
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.recovery_hold_reason).toBeUndefined();
+      expect(review(hds, unrelated, "search").command?.type).toBe("tool_call");
+    } finally {
+      hds?.closeOperationPlanMemory();
       store.close();
       await rm(root, { recursive: true, force: true });
     }

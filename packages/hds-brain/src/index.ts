@@ -8,6 +8,8 @@ export {
 export { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
   operationPlanCheckpointPlanIdDigest, partitionOperationPlanCheckpointForRuntime, type OperationPlanCheckpointRuntimePartition,
   type OperationPlanRecoveryEvidence, type OperationPlanRecoveryEvidenceProvenance,
+  type OperationPlanBrokerRestoreDependencyEvidence, type OperationPlanBrokerRestoreDependencyStatus,
+  type OperationPlanBrokerRestoreDependencyVerifier,
   type OperationPlanRecoveryHoldState, type OperationPlanRecoveryHoldProvenance,
   type OperationPlanReceiptReconciliationAuthorization,
   type OperationPlanGoalPurposeRelationReviewContent, type OperationPlanSavedResultReturnProjection } from "./operation_plan.js";

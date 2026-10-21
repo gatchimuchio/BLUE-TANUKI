@@ -520,6 +520,52 @@ describe("buildRecoveryPostActionObservation", () => {
     expect(canonicalHold).toMatchObject({ operation: "restore", store_key: "m_state", status: "failed" });
   });
 
+  it("Broker startup holdは後続の別store復元に上書きされない", async () => {
+    const brokerAttempt = recoveryStoreRestoreAttemptHistoryEvidence({
+      type: "tool_call",
+      payload: {
+        tool_name: "recovery.restore",
+        arguments: { backup_id: "broker-backup", store_key: "broker" },
+      },
+    });
+    const planAttempt = recoveryStoreRestoreAttemptHistoryEvidence({
+      type: "tool_call",
+      payload: {
+        tool_name: "recovery.restore",
+        arguments: { backup_id: "plan-backup", store_key: "operation_plans" },
+      },
+    });
+    expect(brokerAttempt).toMatchObject({ schema_version: 1, store_key: "broker" });
+    expect(planAttempt).toMatchObject({ schema_version: 1, store_key: "operation_plans" });
+    const brokerEntries = historyFor("recovery.restore", "failed", null, null, "broker-restore", 4);
+    const planEntries = historyFor("recovery.restore", "failed", null, null, "plan-restore", 6);
+    const brokerPayload = brokerEntries[0]!.payload as Record<string, unknown>;
+    const planPayload = planEntries[0]!.payload as Record<string, unknown>;
+    const history = {
+      entries: [
+        { ...brokerEntries[0]!, payload: { ...brokerPayload, recovery_store_restore_attempt: brokerAttempt } },
+        brokerEntries[1]!,
+        { ...planEntries[0]!, payload: { ...planPayload, recovery_store_restore_attempt: planAttempt } },
+        planEntries[1]!,
+      ],
+      chain_valid: true,
+      skipped_count: 0,
+    };
+
+    const brokerHold = await buildRecoveryPostActionObservation(history, {}, { mode: "startup_broker_restore_hold" });
+    const planHold = await buildRecoveryPostActionObservation(history, {}, { mode: "startup_operation_plan_hold" });
+    const currentProcessRestore = await buildRecoveryPostActionObservation({
+      ...history,
+      not_before_timestamp_ms: history.entries[0]!.timestamp - 1,
+    }, {}, { mode: "startup_broker_restore_hold" });
+
+    expect(brokerHold).toMatchObject({ operation: "restore", store_key: "broker", status: "failed" });
+    expect(planHold).toMatchObject({ operation: "restore", store_key: "operation_plans", status: "failed" });
+    expect(currentProcessRestore).toMatchObject({ operation: "restore", store_key: "broker", status: "unverified" });
+    expect(currentProcessRestore.used_for_authority).toBe(false);
+    expect(currentProcessRestore.may_execute).toBe(false);
+  });
+
   it("does not confirm a reset while provider keys remain in process environment", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-observation-"));
     try {
