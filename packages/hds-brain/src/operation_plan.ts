@@ -894,6 +894,11 @@ export class OperationPlanLedger {
         checkedBrokerRestoreEvidence.checkpoint_digest === loadedCheckpointDigest);
       if (this.recoveryHolds.size > 0) this.persistRecoveryHoldState();
     }
+    const holdStateBeforeTaskPropagation = operationPlanDigest([...this.recoveryHolds.entries()]);
+    this.propagateBrokerRestoreHoldsAcrossTaskLineage();
+    if (operationPlanDigest([...this.recoveryHolds.entries()]) !== holdStateBeforeTaskPropagation) {
+      this.persistRecoveryHoldState();
+    }
   }
 
   beginRecoveryRefresh(): boolean {
@@ -1242,8 +1247,11 @@ export class OperationPlanLedger {
     this.applyBrokerRestoreDependencyEvidence(checked, true);
     this.persistRecoveryHoldState();
     const statusByPlan = new Map(checked.plans.map((plan) => [plan.plan_id_digest, plan.status]));
-    const affectedPlanIds = new Set(this.state.plans.filter((plan) =>
+    const affectedTaskIdentityDigests = new Set(this.state.plans.filter((plan) =>
       statusByPlan.get(operationPlanDigest(plan.revisions[0]!.plan.plan_id)) !== "unaffected")
+      .map((plan) => operationPlanTaskIdentityDigest(plan)));
+    const affectedPlanIds = new Set(this.state.plans.filter((plan) =>
+      affectedTaskIdentityDigests.has(operationPlanTaskIdentityDigest(plan)))
       .map((plan) => operationPlanDigest(plan.revisions[0]!.plan.plan_id)));
     if (affectedPlanIds.size > 0) {
       this.change((state) => {
@@ -1467,15 +1475,37 @@ export class OperationPlanLedger {
       return;
     }
     const byPlan = new Map(evidence.plans.map((plan) => [plan.plan_id_digest, plan.status]));
+    const plansByTaskIdentity = new Map<string, PlanState[]>();
     for (const plan of this.state.plans) {
-      const planIdDigest = operationPlanDigest(plan.revisions[0]!.plan.plan_id);
-      const status = byPlan.get(planIdDigest) ?? "unverified";
-      if (status === "unaffected" || status === "observed") continue;
-      this.addRecoveryHold(planIdDigest,
-        status === "residuals_present" ? "held_residual"
-          : status === "unobserved" ? "held_unobserved" : "held_unverified",
-        provenance,
-      );
+      const taskIdentityDigest = operationPlanTaskIdentityDigest(plan);
+      plansByTaskIdentity.set(taskIdentityDigest, [...(plansByTaskIdentity.get(taskIdentityDigest) ?? []), plan]);
+    }
+    for (const plans of plansByTaskIdentity.values()) {
+      const statuses = plans.map((plan) => byPlan.get(operationPlanDigest(plan.revisions[0]!.plan.plan_id)) ?? "unverified");
+      const reason: OperationPlanRecoveryHoldReason | null = statuses.includes("residuals_present") ? "held_residual"
+        : statuses.includes("unverified") ? "held_unverified"
+        : statuses.includes("unobserved") ? "held_unobserved" : null;
+      if (!reason) continue;
+      for (const plan of plans) this.addRecoveryHold(
+        operationPlanDigest(plan.revisions[0]!.plan.plan_id), reason, provenance);
+    }
+  }
+
+  /** Older persisted Broker holds are expanded to the current J-owned task lineage on restart. */
+  private propagateBrokerRestoreHoldsAcrossTaskLineage(): void {
+    const plansById = new Map(this.state.plans.map((plan) =>
+      [operationPlanDigest(plan.revisions[0]!.plan.plan_id), plan] as const));
+    const brokerHolds = [...this.recoveryHolds.entries()].filter(([, hold]) =>
+      hold.provenance.source === "recovery_restore" && hold.provenance.restore_store_key === "broker");
+    for (const [heldPlanId, hold] of brokerHolds) {
+      const heldPlan = plansById.get(heldPlanId);
+      if (!heldPlan) continue;
+      const taskIdentityDigest = operationPlanTaskIdentityDigest(heldPlan);
+      for (const plan of this.state.plans) {
+        if (operationPlanTaskIdentityDigest(plan) !== taskIdentityDigest) continue;
+        this.addRecoveryHold(operationPlanDigest(plan.revisions[0]!.plan.plan_id), hold.reason,
+          hold.provenance, hold.restore_scope_relation);
+      }
     }
   }
 
@@ -1538,8 +1568,17 @@ export class OperationPlanLedger {
         const record = this.resultMemory!.readMemoryRecord(resultMemoryIdentity(binding).record_id);
         return !!record?.exists && operationPlanDigest(record.value) === operationPlanDigest(commit.changes[0]!.value);
       });
-      return memoryBindingsVerified && (!brokerRestoreHold ||
-        this.brokerRestoreDependencyVerifier!(operationPlanDigest(plan.revisions[0]!.plan.plan_id), provenance));
+      if (!memoryBindingsVerified) return false;
+      if (!brokerRestoreHold) return true;
+      if (!this.brokerRestoreDependencyVerifier) return false;
+      const taskIdentityDigest = operationPlanTaskIdentityDigest(plan);
+      const taskPlans = this.state.plans.filter((candidate) => operationPlanTaskIdentityDigest(candidate) === taskIdentityDigest);
+      return taskPlans.length > 0 && taskPlans.every((candidate) => {
+        const candidatePlanIdDigest = operationPlanDigest(candidate.revisions[0]!.plan.plan_id);
+        const candidateHold = this.recoveryHolds.get(candidatePlanIdDigest);
+        if (candidateHold && candidateHold.provenance.restore_store_key !== "broker") return false;
+        return this.brokerRestoreDependencyVerifier!(candidatePlanIdDigest, candidateHold?.provenance ?? provenance);
+      });
     } catch {
       return false;
     }

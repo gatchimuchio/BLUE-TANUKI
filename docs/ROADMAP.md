@@ -2,6 +2,8 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-21の`QEB-19-E03.03-BROKER-RESTORE-TASK-LINEAGE-ISOLATION`では、Broker restore後のJ/M/Broker依存holdをplan単位からJのtask lineage単位へ広げ、同一仕事の兄弟planを全件再観測まで隔離した。再起動時の既存plan単位holdもlineageへ伝播する。Operation Plan runtime 38/38、HDS standalone、HDS／Gateway typecheck・buildはPASS。仕事単位の独立restore point、store間atomicity、guarded recovery／resumeは未接続で、E03.03／QEB-03および製品全体の`BUILD_COVERED`は未成立。QE_QC／QE_QAは未開始。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+
 2026-10-21の`QEB-17-E03.03-BROKER-RESTORE-QUIESCENCE-OBSERVATION`では、Broker復元時の未処理Approvalを拒否し、保守lockで新規commandを止め、実行中command完了処理とExecutor taskを排出する。復元後は完全な監査履歴、restore結果・backup・state digest、Broker台帳を照合し、一致しない場合は保守holdを維持する。Recoveryの選択Broker store観測とGateway restore consumer 3 suite 20/20、Gateway typecheck/buildはPASS。Broker restore後のjob単位J/M/Broker相関による再開判断は未接続で、E03.03／QEB-03および製品全体の`BUILD_COVERED`は未成立。QE_QC／QE_QAは未開始。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-21の`QEB-16-E03.03-J-PLAN-SCHEMA-RESIDUAL-ISOLATION`では、checkpoint全体digestと共有state schemaが有効な範囲で、schema-invalidなJ plan itemだけを実行viewから隔離し、raw recordを保持したままclean sibling planの判断・保存更新を継続できるようにした。RecoveryとOperator Control Centerはrecord digestおよび取得可能なplan ID digestだけを示し、識別可能な対象に限りplan-scoped restoreを可能にする。digest不一致と共有state破損は全体fail-closed。Recovery 3 suite 48/48、WebChat consumer 1件、typecheck、15-project build、HDS standaloneはPASS。既定5秒制限の既存runtimeテスト2件はこのWindows実行でtimeoutし、全体suiteのPASSとは扱っていない。E03.03／QEB-03と製品全体の`BUILD_COVERED`は未成立。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。

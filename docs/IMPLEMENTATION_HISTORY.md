@@ -2262,3 +2262,18 @@ QEB-17まではBroker全体のquiescenceと復元後Broker台帳照合を行う�
 `operation_plan_recovery_evidence.test.ts`／`operation_plan_runtime.test.ts`／`recovery_post_action_observation.test.ts`は62/62 PASS。合成CompleteHistoryを使うGateway起動試験で、失敗したBroker restoreが既存planのfail-closed holdとして永続化されることを1/1 PASS。`@blue-tanuki/hds-brain`とGatewayのtypecheck／build、`pnpm hds:standalone`もPASS。全workspace suite、全体QE_QC／QE_QA、5OS実機、provider／credential、実restore・実業務作用は未実施。
 
 QEB-18のplan別復元依存相関consumerを`WIRED`とする。ただしこれは仕事ID／独立restore point／全store間atomicity／job単位のrecoverability／自動または実際のresumeを成立させない。E03.03／QEB-03全体は`BUILD_GAP`。次は最新版rev2.3に残るjob単位復旧identity、restore point、隔離経路から現物上の次consumerを一つ選ぶ。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+
+## 2026-10-21 QEB-19-E03.03-BROKER-RESTORE-TASK-LINEAGE-ISOLATION
+
+QE_STAGE=`QE_BUILD`。開始HEAD／`origin/main`=`d028c34930bad59a2d22c0a5541594e1d5260384`。現行pin rev2.3、適用`AGENTS.md`、active指示、J Operation Planのtask identity、Broker restore evidence／hold／fresh-review consumerを再同期した。既存の未追跡`packages/blue-tanuki/native/linux-isolation/target/`を保全しGit対象から除外した。
+
+QEB-18ではBroker restore dependencyをplan digestごとに照合していたため、同じJ task lineageに属する兄弟planに未観測依存が残っても別planが先にfresh reviewへ進める隙間があった。Broker restore evidenceをJ所有のtask identity digestで集約し、兄弟planのいずれかに`residuals_present`／`unverified`／`unobserved`があれば同じlineage全体に同等以上のholdを永続化する。影響lineage内のselected bindingを失効し、`intent_committed`を`outcome_unknown`へ閉じる。fresh J review前には同じlineageに属する全planのBroker依存をread-only verifierで再確認し、解除は各plan単位で個別に行う。既存の永続plan単位Broker holdも起動時に同じlineageへ拡張する。J内部identity以外の公開projectionや権限を追加せず、holdは非権威・実行不可のまま維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `apps/gateway/test/operation_plan_runtime.test.ts` | PASS、38/38。lineage全件のhold、兄弟の未再観測時の拒否、再観測後の個別fresh review解除、無関係taskの継続、再起動時の既存hold拡張を確認。 |
+| Broker recovery evidence／失敗restore起動consumer | PASS、`operation_plan_recovery_evidence.test.ts` 10/10、`recovery_mutation_entry.test.ts`の対象1/1。 |
+| HDS standalone、HDS／Gateway typecheck・build | PASS。 |
+| 全workspace suite、全体QE_QC／QE_QA、provider／credential、実restore・外部作用、5OS実機 | 未実施。全体実装形状の前に品質工程へ移らない。 |
+
+同一task lineageのBroker restore isolation consumerを`WIRED`とする。仕事単位の独立restore point、全store atomicity、guarded selective recovery／resume、E03.03／QEB-03全体の`BUILD_COVERED`は未成立。次のconsumerは、J task identityとcanonical backup producerを独立した仕事復旧点へ束縛する実配線を現物から確定する。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。Git closeout SHAと復旧refはpush後のcloseoutで確認する。

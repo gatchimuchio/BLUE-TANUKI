@@ -1369,22 +1369,27 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     }
   });
 
-  it("Broker復元後は計画別holdを永続化し、新しいJレビューと再観測が揃うまで解除しない", async () => {
+  it("Broker復元後は同じtask lineageの計画を隔離し、全計画の再観測後だけ個別レビューを許す", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-broker-restore-hold-"));
     const store = new OperationPlanStateStore(join(root, "state.sqlite"));
     const privateRoot = join(root, "private-state");
     const resultMemoryRoot = join(privateRoot, "result-memory");
     await mkdir(resultMemoryRoot, { recursive: true });
     const target = plan("broker-restored-target", root);
+    const sameTaskSibling = plan("broker-restored-sibling", root);
     const unrelated = plan("broker-restored-unrelated", root);
+    const sharedTaskIdentityDigest = "e".repeat(64);
     const checkpoint = OperationPlanCheckpointSchema.parse({
       schema_version: "operation-plan-state.v1",
-      plans: [target, unrelated].map((candidate) => ({ owner: "fixture-owner", channel: "webchat",
+      plans: [target, sameTaskSibling, unrelated].map((candidate) => ({ owner: "fixture-owner", channel: "webchat",
         goal: "synthetic Broker recovery test", request_goal_criteria: noRequestCriteria("synthetic Broker recovery test", candidate.request_id),
+        ...(candidate === target || candidate === sameTaskSibling ? { task_identity_digest: sharedTaskIdentityDigest } : {}),
         revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] })),
     });
     store.compareAndSet(null, checkpoint);
-    let dependencyCurrent = false;
+    const targetPlanIdDigest = operationPlanDigest(target.plan_id);
+    const siblingPlanIdDigest = operationPlanDigest(sameTaskSibling.plan_id);
+    const dependencyCurrentPlanIds = new Set<string>();
     let hds: HDSUpperController | undefined;
     try {
       hds = new HDSUpperController({
@@ -1395,7 +1400,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
           memory_database_path: join(resultMemoryRoot, "m-state.sqlite"),
         },
         operation_plan_broker_restore_dependency_verifier: (planIdDigest, provenance) =>
-          planIdDigest === operationPlanDigest(target.plan_id) && provenance.restore_store_key === "broker" && dependencyCurrent,
+          [targetPlanIdDigest, siblingPlanIdDigest].includes(planIdDigest) &&
+          provenance.restore_store_key === "broker" && dependencyCurrentPlanIds.has(planIdDigest),
       });
       const restoreCommand = brokerRestoreCommand();
       const evidence: OperationPlanBrokerRestoreDependencyEvidence = {
@@ -1413,7 +1419,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
           restored_state_digest: "d".repeat(64),
         },
         plans: [
-          { plan_id_digest: operationPlanDigest(target.plan_id), status: "unobserved" },
+          { plan_id_digest: targetPlanIdDigest, status: "unobserved" },
+          { plan_id_digest: siblingPlanIdDigest, status: "unaffected" },
           { plan_id_digest: operationPlanDigest(unrelated.plan_id), status: "unaffected" },
         ],
         used_for_authority: false,
@@ -1421,12 +1428,21 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       };
       expect(hds.recordBrokerRestoreDependencyEvidence(restoreCommand, evidence)).toBe(true);
       expect(hds.getRuntimeSnapshot().operation_plans.plans).toMatchObject([
-        { plan_id: operationPlanDigest(target.plan_id), recovery_hold_reason: "held_unobserved" },
+        { plan_id: targetPlanIdDigest, recovery_hold_reason: "held_unobserved" },
+        { plan_id: siblingPlanIdDigest, recovery_hold_reason: "held_unobserved" },
         { plan_id: operationPlanDigest(unrelated.plan_id) },
       ]);
-      expect(store.loadRecoveryHoldState()).toMatchObject({
-        holds: [{ plan_id_digest: operationPlanDigest(target.plan_id), reason: "held_unobserved",
-          provenance: { restore_store_key: "broker", command_id_digest: recoveryCommandIdDigest(restoreCommand.id) } }],
+      const persistedHolds = store.loadRecoveryHoldState() as { holds: { plan_id_digest: string; reason: string }[] };
+      expect(persistedHolds.holds).toHaveLength(2);
+      expect(persistedHolds.holds).toEqual(expect.arrayContaining([
+        { plan_id_digest: targetPlanIdDigest, reason: "held_unobserved",
+          restore_scope_relation: "unknown", provenance: expect.objectContaining({
+            restore_store_key: "broker", command_id_digest: recoveryCommandIdDigest(restoreCommand.id) }) },
+        { plan_id_digest: siblingPlanIdDigest, reason: "held_unobserved",
+          restore_scope_relation: "unknown", provenance: expect.objectContaining({
+            restore_store_key: "broker", command_id_digest: recoveryCommandIdDigest(restoreCommand.id) }) },
+      ]));
+      expect(persistedHolds).toMatchObject({
         used_for_authority: false,
         may_execute: false,
       });
@@ -1436,12 +1452,63 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(held.log.commit.reason).toBe("plan_control_denied:plan_recovery_unobserved_hold");
       expect(hds.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unobserved" });
 
-      dependencyCurrent = true;
+      dependencyCurrentPlanIds.add(targetPlanIdDigest);
+      const siblingNotReobserved = review(hds, target, "search");
+      expect(siblingNotReobserved.command).toBeNull();
+      expect(siblingNotReobserved.log.commit.reason).toBe("plan_control_denied:plan_recovery_unobserved_hold");
+
+      dependencyCurrentPlanIds.add(siblingPlanIdDigest);
       expect(review(hds, target, "search").command?.type).toBe("tool_call");
-      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.recovery_hold_reason).toBeUndefined();
+      expect(hds.getRuntimeSnapshot().operation_plans.plans.find((entry) => entry.plan_id === targetPlanIdDigest)
+        ?.recovery_hold_reason).toBeUndefined();
+      expect(hds.getRuntimeSnapshot().operation_plans.plans.find((entry) => entry.plan_id === siblingPlanIdDigest))
+        .toMatchObject({ recovery_hold_reason: "held_unobserved" });
+      expect(review(hds, sameTaskSibling, "search").command?.type).toBe("tool_call");
       expect(review(hds, unrelated, "search").command?.type).toBe("tool_call");
     } finally {
       hds?.closeOperationPlanMemory();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("起動時に既存のplan単位Broker holdを同じtask lineageの計画へ拡張する", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-broker-restore-lineage-restart-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const target = plan("broker-lineage-legacy-hold", root);
+    const sibling = plan("broker-lineage-legacy-sibling", root);
+    const unrelated = plan("broker-lineage-legacy-unrelated", root);
+    const sharedTaskIdentityDigest = "f".repeat(64);
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [target, sibling, unrelated].map((candidate) => ({ owner: "fixture-owner", channel: "webchat",
+        goal: "synthetic persisted Broker hold lineage test",
+        ...(candidate === target || candidate === sibling ? { task_identity_digest: sharedTaskIdentityDigest } : {}),
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }],
+        receipt_observations: [], bindings: [], results: [] })),
+    });
+    const targetPlanIdDigest = operationPlanDigest(target.plan_id);
+    store.compareAndSet(null, checkpoint);
+    store.compareAndSetRecoveryHoldState(null, {
+      schema_version: "operation-plan-recovery-holds.v1",
+      holds: [{ plan_id_digest: targetPlanIdDigest, reason: "held_unobserved", restore_scope_relation: "unknown",
+        provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest("legacy-broker-restore"),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64), restore_store_key: "broker",
+          restore_backup_id_digest: "c".repeat(64), restore_scope_plan_digest: null,
+          restored_state_digest: "d".repeat(64), checkpoint_digest: operationPlanDigest(checkpoint) } }],
+      used_for_authority: false, may_execute: false,
+    });
+    try {
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      expect(hds.getRuntimeSnapshot().operation_plans.plans).toMatchObject([
+        { plan_id: targetPlanIdDigest, recovery_hold_reason: "held_unobserved" },
+        { plan_id: operationPlanDigest(sibling.plan_id), recovery_hold_reason: "held_unobserved" },
+        { plan_id: operationPlanDigest(unrelated.plan_id) },
+      ]);
+      expect((store.loadRecoveryHoldState() as { holds: { plan_id_digest: string }[] }).holds.map((hold) => hold.plan_id_digest))
+        .toEqual(expect.arrayContaining([targetPlanIdDigest, operationPlanDigest(sibling.plan_id)]));
+      expect((store.loadRecoveryHoldState() as { holds: unknown[] }).holds).toHaveLength(2);
+    } finally {
       store.close();
       await rm(root, { recursive: true, force: true });
     }

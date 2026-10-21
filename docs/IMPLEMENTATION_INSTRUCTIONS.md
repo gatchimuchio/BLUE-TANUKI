@@ -4,10 +4,10 @@
 
 ## 現行状態
 
-QE_STAGE=`QE_BUILD`。現行pinはrev2.3、backup ref移行=`MIGRATION_COMPLETE`。`QEB-18-E03.03-BROKER-RESTORE-PLAN-DEPENDENCY-REOBSERVATION`で、Broker全体復元後のJ/M/Broker計画別相関をread-only観測へ接続した。影響・未観測計画のholdを保存し、現行依存を再観測した新しいJレビューだけがholdを解除できる。E03.03/QEB-03全体のjob単位復旧は引き続き`BUILD_GAP`。以前のBUILD_BATCH詳細は`IMPLEMENTATION_HISTORY.md`と`開発進捗.md`を必要時のみ参照する。証拠と境界は同ファイルのQEB-18記録にある。
+QE_STAGE=`QE_BUILD`。現行pinはrev2.3、backup ref移行=`MIGRATION_COMPLETE`。`QEB-19-E03.03-BROKER-RESTORE-TASK-LINEAGE-ISOLATION`で、Broker復元holdとfresh dependency re-observationをJが保持する同一task lineageへ拡張した。同一仕事の兄弟planは全て未観測なら隔離され、全planの現行依存をread-only再観測した後も新しいJレビューごとに個別解除する。再起動時に残るplan単位Broker holdも同じtask lineageへ広げる。仕事単位の独立restore point、store間atomicity、guarded recovery／resumeは未接続で、E03.03/QEB-03全体は引き続き`BUILD_GAP`。詳細は`IMPLEMENTATION_HISTORY.md`のQEB-19記録にある。
 
 ## 次の接続
 
-次のBUILD_BATCHでは、固定済みrev2.3のE03.03に残るjob単位の復旧identity／restore point／隔離経路から、現行producerとconsumerで一つの縦断接続を選ぶ。計画相関やstore復元成功を仕事の復旧・再開可能性へ昇格させない。開始時に三点セット全文・適用AGENTS.md・owner指示・active指示・HEAD／差分を再同期して対象を確定し、旧ログの「次」は現行指示として使わない。全体実装形状の成立前にQE_QC／QE_QAを開始しない。
+次のBUILD_BATCHでは、現行producer／consumerを再照合し、E03.03に残る仕事identityと独立restore pointをcanonical backupへ結ぶ次の実consumerを一つ選ぶ。計画相関やstore復元成功を仕事の復旧・再開可能性へ昇格させない。開始時は最新三点セット・適用AGENTS.md・owner指示・active指示・HEAD／差分を再同期し、旧ログの「次」は現行指示として使わない。全体実装形状の成立前にQE_QC／QE_QAを開始しない。
 
 HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closed、`cross_store_atomic=false`を維持する。provider実試験、実credential、外部作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は対象外。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
