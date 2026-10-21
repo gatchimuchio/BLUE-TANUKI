@@ -33,16 +33,33 @@ interface AcceptedMutation {
 interface InspectionFixture {
   server: Server;
   endpoint: Promise<string>;
-  status: () => { effects: number; read_queries: number; accepted: AcceptedMutation[] };
+  status: () => { effects: number; read_queries: number; llm_requests: number; accepted: AcceptedMutation[] };
 }
 
 function inspectionFixture(): InspectionFixture {
   const accepted: AcceptedMutation[] = [];
   let effects = 0;
   let readQueries = 0;
+  let llmRequests = 0;
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request as IncomingMessage) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+          messages?: Array<{ content?: unknown }>;
+        };
+        const prompt = (payload.messages ?? []).map((message) => typeof message.content === "string" ? message.content : "").join("\n");
+        const requestId = /固定request_id=([^\s。]+)/.exec(prompt)?.[1];
+        if (!requestId) { response.writeHead(400).end(); return; }
+        llmRequests += 1;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: `fixture-${llmRequests}`, model: "blue-tanuki-local-fixture",
+          choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: JSON.stringify(candidate(requestId)) } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+        return;
+      }
       if (request.method === "GET" && /^\/reconcile\/[a-f0-9]{64}$/.test(url.pathname)) {
         readQueries += 1;
         const key = url.pathname.slice("/reconcile/".length);
@@ -82,7 +99,7 @@ function inspectionFixture(): InspectionFixture {
       resolve(`http://127.0.0.1:${address.port}`);
     });
   });
-  return { server, endpoint, status: () => ({ effects, read_queries: readQueries, accepted: [...accepted] }) };
+  return { server, endpoint, status: () => ({ effects, read_queries: readQueries, llm_requests: llmRequests, accepted: [...accepted] }) };
 }
 
 function internalRequest(content: string): InboundRequest {
@@ -164,7 +181,10 @@ async function seedOutcomeUnknown(stateRoot: string, inspectionEndpoint: string,
     if (!compute || compute.type !== "llm_call") throw new Error("fixture_plan_candidate_not_requested");
     const computeBinding = hds.createExecutionAuthorityBinding(compute);
     const computeFeedback = await executor.execute(approvedFixture(compute, authority, computeBinding));
-    if (computeFeedback.result?.operation_core?.status !== "valid_plan") throw new Error("fixture_plan_candidate_rejected");
+    const operationCore = computeFeedback.result && typeof computeFeedback.result === "object"
+      ? (computeFeedback.result as { operation_core?: { status?: unknown } }).operation_core
+      : undefined;
+    if (operationCore?.status !== "valid_plan") throw new Error("fixture_plan_candidate_rejected");
     finalizeCommandOutput({ hds, command: compute, feedback: computeFeedback, request_id: source.id, target_surface: "channel" });
 
     const saved = hds.getRuntimeSnapshot().operation_plans.plans[0];
@@ -215,8 +235,16 @@ async function freePort(): Promise<number> {
 }
 
 type RuntimeSnapshot = {
-  hds: { operation_plans: { plans: Array<{ plan_id: string; revision_digest: string; status: string;
-    steps: Array<{ step_id: string; status: string; external_receipt_observation?: string }> }> } };
+  hds: {
+    operation_plans: {
+      plans: Array<{
+        plan_id: string;
+        revision_digest: string;
+        status: string;
+        steps: Array<{ step_id: string; operation?: string; status: string; external_receipt_observation?: string }>;
+      }>;
+    };
+  };
 };
 
 async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
@@ -240,7 +268,18 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
     BLUE_TANUKI_AUDIT_DIR: join(root, "audit"), BLUE_TANUKI_SCHEDULES_DIR: join(root, "schedules"),
     BLUE_TANUKI_SESSION_DIR: join(root, "sessions"), BLUE_TANUKI_MEMORY_DIR: join(root, "memory"),
     BLUE_TANUKI_FAILURE_MEMORY_DIR: join(root, "failure-memory"), BLUE_TANUKI_COMPLETE_HISTORY_FILE: join(root, "history.jsonl") });
-  if (name === "matched") env.BLUE_TANUKI_LOCAL_INSPECTION_ENDPOINT = inspectionEndpoint;
+  if (name === "matched") {
+    env.BLUE_TANUKI_LOCAL_INSPECTION_ENDPOINT = inspectionEndpoint;
+    env.BLUE_TANUKI_FIXTURE_GMAIL_ENDPOINT = inspectionEndpoint;
+    env.BLUE_TANUKI_FIXTURE_GMAIL_TOKEN = FIXTURE_TOKEN;
+    env.GMAIL_ACCESS_TOKEN = FIXTURE_TOKEN;
+    env.LLM_BACKEND = "fixture-candidate";
+    env.LLM_PROVIDERS_JSON = JSON.stringify([{ name: "fixture-candidate",
+      endpoint: `${inspectionEndpoint}/v1/chat/completions`, model: "blue-tanuki-local-fixture", api_key: FIXTURE_TOKEN }]);
+    env.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON = JSON.stringify({ "fixture-candidate": {
+      capabilities: ["llm_compute_candidate"], max_cost_per_attempt: { amount: 0, currency: "USD" } } });
+    env.BLUE_TANUKI_LLM_RETRY_ATTEMPTS = "1";
+  }
   const received: string[] = [];
 
   async function stopChild(): Promise<void> {
@@ -255,7 +294,7 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
     if (timeoutHandle) clearTimeout(timeoutHandle);
     if (result === null) {
       activeChild.kill();
-      await closed;
+      await Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, 2_000))]);
       child = undefined;
       throw new Error("gateway_fixture_graceful_shutdown_timed_out");
     }
@@ -285,15 +324,24 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
     await waitFor(async () => received.some(predicate), `${name} chat result`);
     return received.find(predicate)!;
   }
+  async function closeSocket(): Promise<void> {
+    const activeSocket = socket;
+    socket = undefined;
+    if (!activeSocket || activeSocket.readyState === WebSocket.CLOSED) return;
+    const closed = once(activeSocket, "close").then(() => undefined);
+    activeSocket.terminate();
+    await Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, 1_000))]);
+  }
 
   try {
     await mkdir(join(root, "workspace"), { recursive: true });
-    await seedOutcomeUnknown(stateRoot, inspectionEndpoint, env);
-    assert.equal(inspection.status().effects, 1, "the seed should create exactly one synthetic local effect");
+    if (name === "endpoint-unset") await seedOutcomeUnknown(stateRoot, inspectionEndpoint, env);
+    assert.equal(inspection.status().effects, name === "matched" ? 0 : 1,
+      "only the served L3 path should create the matched scenario's synthetic local effect");
     assert.equal(inspection.status().read_queries, 0);
 
     child = fork(GATEWAY_WORKER_PATH, [],
-      { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true });
+      { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe", "ipc"] });
     for (const stream of [child.stdout, child.stderr]) stream?.on("data", (data) => {
       diagnostics = (diagnostics + String(data)).slice(-12000);
     });
@@ -308,6 +356,77 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
       } catch { /* ignore non-JSON socket frames */ }
     });
     await once(socket, "open");
+
+    if (name === "matched") {
+      await requestJson("/operators/developer/invoke", { user: "fixture-owner",
+        content: "plan:compute 合成宛先へ一件だけ送信し、受理状態を読取照合する" });
+      await waitFor(async () => (await snapshot()).hds.operation_plans.plans.length === 1,
+        "served plan:compute candidate retention");
+      assert.ok(inspection.status().llm_requests > 0 && inspection.status().llm_requests <= 5,
+        "all bounded C/delegated requests must stay inside the local fixture provider");
+      let state = await snapshot();
+      let plan = state.hds.operation_plans.plans[0];
+      assert.ok(plan, "the served C candidate must be retained in the HDS plan projection");
+
+      await requestJson("/operators/developer/invoke", { user: "fixture-owner", content: `plan:review ${JSON.stringify({
+        plan_id: plan!.plan_id, revision_digest: plan!.revision_digest, step_id: operationPlanDigest("send-one") })}` });
+      type PendingApproval = { command_id: string; operation: string; approval_level: string; final_review_required: boolean;
+        content_review_required: boolean; approval_token?: string };
+      type ApprovalQueue = { pending_approvals: PendingApproval[] };
+      await waitFor(async () => (await requestJson<ApprovalQueue>("/approval", undefined, true)).pending_approvals.length === 1,
+        "served plan:review L3 owner approval");
+      const queue = await requestJson<ApprovalQueue>("/approval", undefined, true);
+      const pending = queue.pending_approvals[0]!;
+      assert.equal(pending.approval_level, "L3_final_review");
+      assert.equal(pending.final_review_required, true);
+      assert.equal(pending.content_review_required, true);
+      assert.ok(pending.approval_token, "the WebChat resume route must issue its one-use approval token");
+      const contentReview = await requestJson<{ command_id: string; command_digest: string; operation: string;
+        to: string; subject: string; body_text: string; used_for_authority: false }>(
+        `/approval/${encodeURIComponent(pending.command_id)}/content`, {}, true);
+      assert.equal(contentReview.command_id, pending.command_id);
+      assert.equal(contentReview.operation, "gmail.write.message.send");
+      assert.equal(contentReview.to, "inspection@example.invalid");
+      assert.equal(contentReview.subject, "synthetic D08.01");
+      assert.equal(contentReview.body_text, "local inspection fixture only");
+      assert.equal(contentReview.used_for_authority, false);
+      await requestJson(`/approval/${encodeURIComponent(pending.command_id)}`, {
+        verdict: "approve", approval_token: pending.approval_token, content_review_digest: contentReview.command_digest,
+      }, true);
+      await waitFor(async () => (await snapshot()).hds.operation_plans.plans[0]?.steps[0]?.status === "outcome_unknown",
+        "served Broker action with accepted response loss");
+      assert.equal(inspection.status().effects, 1, "the L3-approved Broker action must make one local effect");
+      assert.equal(inspection.status().read_queries, 0, "reconciliation starts only after the action result is unknown");
+      assert.ok(inspection.status().llm_requests <= 5, "C and bounded delegated requests must remain local");
+
+      await closeSocket();
+      await stopChild();
+      for (let restart = 0; restart < 2; restart += 1) {
+        child = fork(GATEWAY_WORKER_PATH, [],
+          { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe", "ipc"] });
+        for (const stream of [child.stdout, child.stderr]) stream?.on("data", (data) => {
+          diagnostics = (diagnostics + String(data)).slice(-12000);
+        });
+        await waitFor(async () => { try { return (await fetch(`${base}/healthz`)).ok; } catch { return false; } },
+          `Gateway health after restart ${restart + 1}`);
+        const restartedTicket = await requestJson<{ ticket: string }>("/ws-ticket", { user: "fixture-owner" });
+        socket = new WebSocket(`ws://127.0.0.1:${port}/ws?ticket=${encodeURIComponent(restartedTicket.ticket)}`);
+        socket.on("message", (data) => {
+          try {
+            const message = JSON.parse(String(data)) as { kind?: string; content?: string };
+            if (message.kind === "channel_send" && typeof message.content === "string") received.push(message.content);
+          } catch { /* ignore non-JSON socket frames */ }
+        });
+        await once(socket, "open");
+        state = await snapshot();
+        plan = state.hds.operation_plans.plans[0];
+        assert.equal(plan?.steps[0]?.status, "outcome_unknown", `restart ${restart + 1} must restore the uncertain J/M result`);
+        if (restart < 1) {
+          await closeSocket();
+          await stopChild();
+        }
+      }
+    }
 
     const current = await snapshot();
     const plan = current.hds.operation_plans.plans[0];
@@ -335,6 +454,8 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
       assert.ok(!JSON.stringify(state).includes(inspection.status().accepted[0]!.receipt_id));
       assert.equal(inspection.status().effects, 1, "receipt reconciliation must not repeat the external effect");
       assert.equal(inspection.status().read_queries, 1, "one owner request must issue one loopback read");
+      if (name === "matched") assert.ok(inspection.status().llm_requests > 0 && inspection.status().llm_requests <= 5);
+      else assert.equal(inspection.status().llm_requests, 0);
     } else {
       const message = await waitForChat((text) => text.includes("local_inspection_endpoint_not_configured"));
       assert.ok(message.includes("照合は未実施です"));
@@ -346,10 +467,11 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
     }
   } catch (error) {
     const safeDiagnostics = diagnostics.replaceAll(FIXTURE_TOKEN, "[redacted]");
-    throw new Error(`${name} Gateway receipt reconciliation smoke failed: ${String(error)}\n${safeDiagnostics}`);
+    throw new Error(`${name} Gateway receipt reconciliation smoke failed: ${String(error)}\nfixture=${JSON.stringify(inspection.status())}\n` +
+      `message_count=${received.length} message_digest=${digest(received.join("\n"))}\n${safeDiagnostics}`);
   } finally {
-    socket?.terminate();
-    try { await stopChild(); }
+    await closeSocket();
+    try { await stopChild(); } catch (error) { diagnostics += `\nfixture cleanup: ${String(error)}`; }
     finally {
       await new Promise<void>((resolve, reject) => inspection.server.close((error) => error ? reject(error) : resolve()));
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -359,4 +481,4 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
 
 await runScenario("matched");
 await runScenario("endpoint-unset");
-console.log("PASS: build済みGatewayのDeveloper HTTP→HDS→loopback GET→digest-only status projection。endpoint未設定は通信なし。synthetic effectは1回のままで結果不明を維持。");
+console.log("PASS: served Developer HTTP→local C→HDS/J→WebChat L3 content review→loopback Gmail adapter。応答喪失後2回再起動してoutcome_unknownを回復し、read-only照合1回／synthetic effect 1回を確認。endpoint未設定時は通信なし。");
