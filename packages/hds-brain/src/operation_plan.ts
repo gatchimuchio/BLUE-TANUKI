@@ -1861,6 +1861,27 @@ export class OperationPlanLedger {
       return !this.resultMemory || !resultMemoryEligible(match.b) || verifyResultMemoryCommit(match.p, match.b);
     } catch { return false; }
   }
+  /** A user-visible plan result is released only after its exact M receipt and record are durable. */
+  resultMemoryReceiptConfirmed(command_id: string): boolean {
+    try {
+      if (this.port && operationPlanDigest(this.port.load()) !== this.savedDigest) return false;
+      const match = this.binding(command_id);
+      if (!match) return false;
+      if (!this.resultMemory || !resultMemoryEligible(match.b)) return true;
+      const commit = match.b.memory_commit;
+      const savedReceipt = match.b.memory_receipt;
+      if (!commit || !savedReceipt || !verifyResultMemoryCommit(match.p, match.b) ||
+          !receiptForResultCommit(savedReceipt, commit)) return false;
+      const current = this.resultMemory.reconcile(commit.update_id);
+      if (!current.ok || current.status !== "ready" ||
+          operationPlanDigest(current.receipt) !== operationPlanDigest(savedReceipt) ||
+          !receiptForResultCommit(current.receipt, commit)) return false;
+      const change = commit.changes[0];
+      if (!change || change.operation !== "upsert") return false;
+      const record = this.resultMemory.readMemoryRecord(resultMemoryIdentity(match.b).record_id);
+      return !!record?.exists && operationPlanDigest(record.value) === operationPlanDigest(change.value);
+    } catch { return false; }
+  }
   receiptObservationMemoryIsDurable(evidence_digest: string): boolean {
     try {
       if (!this.resultMemory || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return false;

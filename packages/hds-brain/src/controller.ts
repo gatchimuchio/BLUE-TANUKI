@@ -3237,6 +3237,9 @@ ${planControl.question}`,
     this.operationPlans.inspectReceiptReconciliationForControl(control, caller);
   }
   reconcileOperationPlanMemory(): boolean { return this.operationPlans.reconcileMemory(); }
+  operationPlanResultReadyForReturn(command_id: string): boolean {
+    return this.operationPlans.resultMemoryReceiptConfirmed(command_id);
+  }
   operationPlanReceiptObservationMemoryIsDurable(evidence_digest: string): boolean {
     return this.operationPlans.receiptObservationMemoryIsDurable(evidence_digest);
   }

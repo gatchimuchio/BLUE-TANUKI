@@ -833,6 +833,27 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(c.execution.pendingResults()).toHaveLength(0);
   }, (id, root) => fileWriteCandidate(id, root, 1)));
 
+  it("withholds a plan result while a failed M commit has no confirmed receipt", async () => fixture(async (c) => {
+    const db = new DatabaseSync(c.memory.memory_database_path);
+    db.exec(`CREATE TRIGGER fixture_operation_result_memory_failure BEFORE INSERT ON m_records
+      BEGIN SELECT RAISE(ABORT,'fixture M result persistence failure'); END;`);
+    try {
+      expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+      await c.executor.execute(c.approved, { save_result_delivery: true });
+      expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toMatchObject({ adopted: 1 });
+      expect(c.j.load()?.plans[0]?.bindings[0]?.memory_commit).toBeDefined();
+      expect(c.j.load()?.plans[0]?.bindings[0]?.memory_receipt).toBeUndefined();
+      expect(c.hds.operationPlanResultReadyForReturn(c.cmd.id)).toBe(false);
+      expect(inspectMemory(c)).toMatchObject({ revision: 0, records: [], receipts: [] });
+    } finally {
+      db.exec("DROP TRIGGER fixture_operation_result_memory_failure");
+      db.close();
+    }
+    expect(c.hds.operationPlanResultReadyForReturn(c.cmd.id)).toBe(false);
+    expect(inspectMemory(c)).toMatchObject({ revision: 0, records: [], receipts: [] });
+    expect(c.invoke).toHaveBeenCalledTimes(1);
+  }));
+
   it("J/M restore hold clears only at a fresh review after digest-exact dependencies are verified", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
@@ -841,6 +862,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       target_surface: "channel" });
     expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toMatchObject({ adopted: 1, deferred: 0 });
     expect(c.j.load()?.plans[0]?.bindings[0]?.memory_receipt).toBeDefined();
+    expect(c.hds.operationPlanResultReadyForReturn(c.cmd.id)).toBe(true);
 
     const staleSelection = review(c.hds, c.plan, "dependent")!;
     const restoreCommand = canonicalMemoryRestoreCommand();

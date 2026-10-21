@@ -32,3 +32,25 @@ export function finalizeCommandOutput(input: {
   });
   return { reviewed_feedback, rendered_output, output_audit };
 }
+
+/** Audit and return a fixed status when a durable Operation Plan result is not ready for release. */
+export function finalizeCommandStatusOutput(input: {
+  hds: HDSUpperController;
+  command: ExecuteCommand;
+  feedback: ExecuteFeedback;
+  status_message: string;
+  target_surface: OutputTargetSurface;
+  request_id: string | null;
+}): FinalizedCommandOutput {
+  const reviewed_feedback = input.hds.reviewMemoryCitations(input.command, input.feedback);
+  input.hds.onFeedback(input.feedback);
+  const rendered_output = input.status_message;
+  const output_audit = input.hds.onOutputAudit({
+    command: input.command,
+    feedback: input.feedback,
+    rendered_output,
+    target_surface: input.target_surface,
+    request_id: input.request_id,
+  });
+  return { reviewed_feedback, rendered_output, output_audit };
+}

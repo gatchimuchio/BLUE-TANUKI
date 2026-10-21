@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
 import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
-import { finalizeCommandOutput } from "../src/finalize_command_output.js";
+import { finalizeCommandOutput, finalizeCommandStatusOutput } from "../src/finalize_command_output.js";
 
 function inbound(content: string, id: string): InboundRequest {
   return { id, channel: "test", user: "gateway-fixture", content, timestamp: Date.now() };
@@ -69,6 +69,40 @@ describe("finalizeCommandOutput", () => {
     const outputIndex = entries.findIndex((entry) => "kind" in entry.log && entry.log.kind === "output_audit");
     expect(reviewIndex).toBeGreaterThan(-1);
     expect(reviewIndex).toBeLessThan(feedbackIndex);
+    expect(feedbackIndex).toBeGreaterThan(-1);
+    expect(feedbackIndex).toBeLessThan(outputIndex);
+    expect(hds.getAudit().verify()).toBe(true);
+  });
+
+  it("audits a fixed pending status without returning result content", () => {
+    const hds = new HDSUpperController({ memory: new LongTermMemoryStore() });
+    const decision = hds.decide(inbound("compute a result", "gateway-pending-result"));
+    if (!decision.command) throw new Error("expected a command");
+    const rawSentinel = "private-result-content-sentinel";
+    const statusMessage = "結果のM receiptが未確定のため、内容はまだ返していません。";
+    const finalized = finalizeCommandStatusOutput({
+      hds,
+      command: decision.command,
+      feedback: success(decision.command.id, rawSentinel),
+      status_message: statusMessage,
+      target_surface: "channel",
+      request_id: decision.log.request_id,
+    });
+
+    expect(finalized.rendered_output).toBe(statusMessage);
+    expect(finalized.rendered_output).not.toContain(rawSentinel);
+    expect(finalized.output_audit).toMatchObject({
+      command_id: decision.command.id,
+      request_id: decision.log.request_id,
+      target_surface: "channel",
+      user_visible_output: true,
+      result_present: true,
+      used_for_authority: false,
+    });
+    const entries = hds.getAudit().list();
+    const feedbackIndex = entries.findIndex((entry) => "kind" in entry.log && entry.log.kind === "executor_feedback");
+    const outputIndex = entries.findIndex((entry) => "kind" in entry.log && entry.log.kind === "output_audit");
+    expect(feedbackIndex).toBeGreaterThan(-1);
     expect(feedbackIndex).toBeLessThan(outputIndex);
     expect(hds.getAudit().verify()).toBe(true);
   });

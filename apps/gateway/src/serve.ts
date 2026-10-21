@@ -98,7 +98,7 @@ import type {
   WebChatResumeContext,
 } from "@blue-tanuki/channel-webchat";
 import { renderCommandOutput } from "./result_render.js";
-import { finalizeCommandOutput } from "./finalize_command_output.js";
+import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createWebChatSettingsSurface } from "./settings_surface.js";
@@ -1615,6 +1615,27 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       runFailureMemoryVerification("post_failure");
     }
     coreLog.info("command", { command: cmd.id.slice(0, 8), status: fb.status, duration_ms: fb.metrics.duration_ms });
+    if (planBound && !hds.operationPlanResultReadyForReturn(cmd.id)) {
+      const pending = finalizeCommandStatusOutput({
+        hds,
+        command: cmd,
+        feedback: fb,
+        status_message: "実行結果の永続化・照合が未完了のため、結果内容はまだ返していません。操作を再実行せず、Recovery／Operation Planの状態を確認してください。",
+        target_surface: "channel",
+        request_id: log.request_id,
+      });
+      const finalOutputRecorded = recordFinalOutputHistory(log, origin, actor, pending.output_audit, cmd);
+      gatewayLog.warn("operation-plan result withheld pending persistence reconciliation", {
+        command_id_digest: digestString(cmd.id),
+        output_audit_digest: pending.output_audit.rendered_output_digest,
+        final_output_recorded: finalOutputRecorded,
+      });
+      if (pending.rendered_output) await dispatcher.dispatch(
+        { channel: origin.channel, target: replyTarget(origin), content: pending.rendered_output },
+        { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
+      );
+      return { status: "operation_plan_result_memory_pending" };
+    }
     const finalized = finalizeCommandOutput({
       hds,
       command: cmd,
