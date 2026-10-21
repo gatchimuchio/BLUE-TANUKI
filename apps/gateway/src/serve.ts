@@ -35,6 +35,7 @@ import {
   captureExecutorCommandForApproval,
   executorCommandDigest,
   createLogger,
+  type AgentWorkerLifecycleEvent,
   type ExecutionIntentReceipt,
 } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
@@ -4239,6 +4240,36 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     llm,
     compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
     tools,
+    on_agent_worker_lifecycle: (event: AgentWorkerLifecycleEvent) => {
+      const entry = recordCompleteHistory({
+        kind: "audit_history",
+        command_id: event.parent_command_id,
+        actor: "executor",
+        source: "executor_agent_worker",
+        timestamp: event.observed_at_ms,
+        payload: {
+          schema_version: event.schema_version,
+          parent_command_digest: event.parent_command_digest,
+          child_task_digest: event.child_task_digest,
+          role: event.role,
+          state: event.state,
+          observed_at_ms: event.observed_at_ms,
+          ...(event.output_observed ? { output_observed: true } : {}),
+          ...(event.output_characters !== undefined ? { output_characters: event.output_characters } : {}),
+          ...(event.resource_use_digest ? { resource_use_digest: event.resource_use_digest } : {}),
+          used_for_authority: false,
+          may_execute: false,
+        },
+      });
+      if (!entry) {
+        gatewayLog.error("agent worker lifecycle evidence unavailable", {
+          command_id: event.parent_command_id,
+          child_task_digest: event.child_task_digest,
+          state: event.state,
+        });
+      }
+      return entry !== null;
+    },
     approval_authority: executorApproval,
     file_search_worker: createFileSearchWorker({ execution_epoch: ownerLease.executionEpoch,
       host_audience_digest: ownerLease.hostAudienceDigest, env: process.env }),

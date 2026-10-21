@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { CompleteHistoryStore } from "@blue-tanuki/hds-brain";
 import type { ComputeResourceUse, ExecuteCommand } from "@blue-tanuki/protocol";
 import { Executor, createExecutorApprovalAuthority } from "../src/executor.js";
-import type { ComputeBackend, ComputeBudgetPort, ComputeRequest } from "../src/llm/compute.js";
+import type { AgentWorkerLifecycleEvent } from "../src/executor.js";
+import type { ComputeBackend, ComputeBudgetPort, ComputeRequest, ComputeResult } from "../src/llm/compute.js";
 import { LLMComputeAdapter, LLMComputeResourceFailure } from "../src/llm/compute.js";
 import { LLMProviderError, type LLMBackend, type LLMRequest, type LLMResponse } from "../src/llm/base.js";
 import { LLMRegistry } from "../src/llm/registry.js";
@@ -70,6 +72,91 @@ function resourceUse(commandId: string): ComputeResourceUse {
     used_for_authority: false,
     may_execute: false,
   };
+}
+
+function agentDelegationCommand(id: string, timeoutMs = 5_000): ExecuteCommand {
+  const value = command(id, true, timeoutMs);
+  if (value.type !== "llm_call" || !value.payload.compute_context) throw new Error("fixture command was not a contextual LLM call");
+  const taskDigest = "c".repeat(64);
+  const budgetDigest = "b".repeat(64);
+  delete value.payload.session_id;
+  value.payload.compute_context = {
+    ...value.payload.compute_context,
+    local_p_version: "blue-tanuki.plan-compute-agent-delegation.v1",
+    budget_scope: { parent_task_identity_digest: budgetDigest, task_identity_digest: taskDigest },
+  };
+  value.payload.agent_delegation = {
+    schema_version: "blue-tanuki.agent-delegation.v1",
+    parent_goal_digest: "a".repeat(64),
+    parent_task_identity_digest: taskDigest,
+    parent_budget_identity_digest: budgetDigest,
+    criteria_digest: "d".repeat(64),
+    termination_digest: "e".repeat(64),
+    roles: ["division", "independent_comparison", "audit", "redundancy"],
+    max_child_tasks: 4,
+    max_delegation_depth: 1,
+    parent_resource_limits: { timeout_ms: 1_000 },
+    child_resource_limits: { max_tokens: 16, timeout_ms: 1_000 },
+    capabilities: ["llm_compute_candidate"],
+    may_delegate: false,
+    may_execute: false,
+    used_for_authority: false,
+  };
+  return value;
+}
+
+function computeResult(request: ComputeRequest<LLMRequest>, content: string): ComputeResult<LLMResponse> {
+  const outputDigest = createHash("sha256").update(content).digest("hex");
+  return {
+    content,
+    provider: "fixture-provider",
+    model: "fixture-model-v1",
+    execution_identity: {
+      request_id: request.request_id,
+      current_projection_digest: request.current_projection_digest,
+      input_digest: request.input_digest,
+      output_digest: outputDigest,
+      c_profile: { ...request.c_profile },
+      local_p_version: request.local_p_version,
+      provider: { requested: request.data_exposure_scope.requested_egress_provider,
+        actual: "fixture-provider", fallback: { used: false } },
+      model: { requested: request.input.model ?? null, actual: "fixture-model-v1" },
+      data_exposure_scope: { input_sources: [...request.data_exposure_scope.input_sources],
+        requested_egress_provider: request.data_exposure_scope.requested_egress_provider },
+      resource_limits: { max_tokens: request.resource_limits.max_tokens ?? null,
+        timeout_ms: request.resource_limits.timeout_ms ?? null },
+    },
+    cost: { status: "unknown", reason: "fixture" },
+    compute_resource_use: resourceUse(request.request_id),
+    authority_boundary: {
+      compute_output_used_for_authority: false,
+      provider_metadata_used_for_authority: false,
+      used_for_authority: false,
+    },
+  };
+}
+
+function appendAgentWorkerLifecycle(history: CompleteHistoryStore, event: AgentWorkerLifecycleEvent): boolean {
+  return history.append({
+    kind: "audit_history",
+    command_id: event.parent_command_id,
+    actor: "executor",
+    source: "executor_agent_worker",
+    timestamp: event.observed_at_ms,
+    payload: {
+      schema_version: event.schema_version,
+      parent_command_digest: event.parent_command_digest,
+      child_task_digest: event.child_task_digest,
+      role: event.role,
+      state: event.state,
+      observed_at_ms: event.observed_at_ms,
+      ...(event.output_observed ? { output_observed: true } : {}),
+      ...(event.output_characters !== undefined ? { output_characters: event.output_characters } : {}),
+      ...(event.resource_use_digest ? { resource_use_digest: event.resource_use_digest } : {}),
+      used_for_authority: false,
+      may_execute: false,
+    },
+  }) !== null;
 }
 
 class CapturingBackend implements LLMBackend {
@@ -177,8 +264,9 @@ describe("Executor compute boundary", () => {
       settle() {},
     };
     const compute = new LLMComputeAdapter(registry, budget);
+    const lifecycle: AgentWorkerLifecycleEvent[] = [];
     const executor = new Executor({ approval_authority: authority, llm: backend,
-      compute, tools: new ToolRegistry() });
+      compute, tools: new ToolRegistry(), on_agent_worker_lifecycle: (event) => { lifecycle.push(event); return true; } });
     const taskDigest = "c".repeat(64);
     const budgetDigest = "b".repeat(64);
     const planCommand = command("agent-parent-task", true, 5_000);
@@ -231,6 +319,61 @@ describe("Executor compute boundary", () => {
     expect(backend.seen[4]?.messages.at(-1)?.content).toContain("blue-tanuki.agent-candidate-set.v1");
     expect(backend.seen[4]?.messages.at(-1)?.content).toContain("role candidate");
     expect(JSON.stringify(result.result)).not.toContain("agent-candidate-set");
+    expect(lifecycle.filter((event) => event.state === "started")).toHaveLength(4);
+    expect(lifecycle.filter((event) => event.state === "settled")).toHaveLength(4);
+    expect(lifecycle.every((event) => event.used_for_authority === false && event.may_execute === false)).toBe(true);
+  });
+
+  it("cancels child computes, discards late results, and records a residual worker without starting later children", async () => {
+    let releaseChildren!: () => void;
+    const childRelease = new Promise<void>((resolve) => { releaseChildren = resolve; });
+    const requests: ComputeRequest<LLMRequest>[] = [];
+    const signals: AbortSignal[] = [];
+    const lifecycle: AgentWorkerLifecycleEvent[] = [];
+    const history = new CompleteHistoryStore();
+    let parentComputeCalls = 0;
+    const compute: ComputeBackend<LLMRequest, LLMResponse> = {
+      budget_reservations_enabled: true,
+      async compute(request, signal) {
+        requests.push(request);
+        if (request.request_id.includes(":agent:")) {
+          if (signal) signals.push(signal);
+          await childRelease;
+          return computeResult(request, "late private child candidate");
+        }
+        parentComputeCalls += 1;
+        return computeResult(request, "parent result");
+      },
+    };
+    const backend = new CapturingBackend();
+    const executor = new Executor({ approval_authority: authority, llm: backend, compute,
+      tools: new ToolRegistry(), on_agent_worker_lifecycle: (event) => {
+        lifecycle.push(event);
+        return appendAgentWorkerLifecycle(history, event);
+      } });
+    const controller = new AbortController();
+    const pending = executor.execute(approved(agentDelegationCommand("agent-cancel-parent")), { signal: controller.signal });
+    await vi.waitFor(() => expect(requests.filter((request) => request.request_id.includes(":agent:")).length).toBe(2));
+
+    controller.abort();
+    const feedback = await pending;
+    expect(feedback.status).toBe("failed");
+    expect(feedback.llm_failure).toMatchObject({ kind: "cancelled", retryable: false });
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    await vi.waitFor(() => expect(lifecycle.filter((event) => event.state === "residual_worker_observed")).toHaveLength(2),
+      { timeout: 2_000 });
+
+    releaseChildren();
+    await vi.waitFor(() => expect(lifecycle.filter((event) => event.state === "late_result_discarded")).toHaveLength(2));
+    expect(requests).toHaveLength(2);
+    expect(parentComputeCalls).toBe(0);
+    expect(backend.seen).toHaveLength(0);
+    expect(JSON.stringify(lifecycle)).not.toContain("late private child candidate");
+    expect(history.verify()).toBe(true);
+    expect(history.replay({ kind: "audit_history" })).toHaveLength(8);
+    expect(JSON.stringify(history.replay({ kind: "audit_history" }))).not.toContain("late private child candidate");
+    expect(lifecycle.filter((event) => event.state === "late_result_discarded")
+      .every((event) => event.output_observed === true && (event.output_characters ?? 0) > 0)).toBe(true);
   });
 
   it("preserves conservative C resource settlement when provider failure returns through Executor", async () => {

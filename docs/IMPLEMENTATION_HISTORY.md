@@ -2573,3 +2573,21 @@ Executorの承認済みtool dispatch前にprocess-local keyed resource lockを�
 E07.02のfile target mutationと既存Gmail write targetについて、Executor→resource lock→version-checking adapterを`WIRED`とする。lockはprocess-localであり別process間排他の証拠ではない。任意shell commandおよび未接続adapterの共有target coverageは`BUILD_GAP`。E07親要求全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はE07.03「親取消と子processの収束」。
 
 ---
+
+### 履歴ログ：`QEB-37-E07.03-PARENT-CANCELLATION-CONVERGENCE`
+
+開始HEAD／`main`／`origin/main`=`8953c9849899cf64aa6e58a8cddef39dbde75779`。現行rev2.3三点セット、適用`AGENTS.md`、active指示、E07.03とHDS→Executor子Compute呼出しを同期した。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持し、変更・stageしていない。
+
+Executorは各child computeに個別AbortControllerを渡し、親signalを受けると全実行中childへabortを送り、後続child batchと親Computeを開始しない。cancel後にComputeBackendが遅れて返した出力は子候補へ採用せず、本文や本文digestを保存しない。child role、親／子の相関digest、結果有無・文字数、resource-use digest、状態、時刻だけを非権威イベントとしてGatewayのCompleteHistory `audit_history`へ追加する。1秒の観測猶予後も未settleなら`residual_worker_observed`を記録し、後着時は`late_result_discarded`を記録する。CompleteHistoryへの記録不能時はGateway error logへ状態を出し、開始イベントを記録できない場合は子providerを起動しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `executor_compute.test.ts` | PASS、9 tests。cancel signalの伝播、後続child／親computeの不起動、残留観測、後着出力の非採用、hash-chain記録と本文非保存を確認。Computeは制御fixture。 |
+| core `typecheck`／`build` | PASS。 |
+| Gateway `typecheck` | PASS。 |
+| `git diff --check` | PASS。 |
+| 実provider／credential、外部業務作用、5OS実機、全workspace suite、QE_QC／QE_QA | 未実施。全体実装形状成立後へ保持。 |
+
+親signal→child Compute abort→Gateway CompleteHistory lifecycle recordを`WIRED`とする。signalを無視するComputeBackendの強制kill、provider側の停止確認、CompleteHistory file未設定時の再起動後保持は`BUILD_GAP`。子promiseのsettlementはremote provider停止の証拠ではない。E07親要求全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+---

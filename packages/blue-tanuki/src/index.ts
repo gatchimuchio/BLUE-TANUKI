@@ -16,6 +16,8 @@ export {
   type ChannelDispatcher,
   type FileSearchWorker,
   type FileSearchWorkerRequest,
+  type AgentWorkerLifecycleEvent,
+  type AgentWorkerLifecycleObserver,
 } from "./executor.js";
 export {
   createLogger,

@@ -116,6 +116,8 @@ export interface ExecutorDeps {
    * through to the backend unchanged and nothing is persisted.
    */
   session_store?: SessionStore;
+  /** 子Cの開始・取消・遅延結果・残留状態を非権威記録へ接続する。 */
+  on_agent_worker_lifecycle?: AgentWorkerLifecycleObserver;
   /**
    * Optional. Maximum history messages to retrieve per llm_call. When
    * omitted, all retained history is prepended. Useful when the cap on
@@ -123,6 +125,24 @@ export interface ExecutorDeps {
    */
   history_limit?: number;
 }
+
+export interface AgentWorkerLifecycleEvent {
+  schema_version: "blue-tanuki.agent-worker-lifecycle.v1";
+  parent_command_id: string;
+  parent_command_digest: string;
+  child_task_digest: string;
+  role: AgentWorkerRole;
+  state: "started" | "cancel_requested" | "cancelled_before_dispatch" | "settled" |
+    "settled_after_abort" | "late_result_discarded" | "residual_worker_observed";
+  observed_at_ms: number;
+  output_observed?: true;
+  output_characters?: number;
+  resource_use_digest?: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export type AgentWorkerLifecycleObserver = (event: AgentWorkerLifecycleEvent) => boolean;
 
 export interface FileSearchWorkerRequest {
   command: Extract<ExecuteCommand, { type: "tool_call" }>;
@@ -846,6 +866,7 @@ export class Executor {
                   contract: payload.agent_delegation,
                   context: payload.compute_context,
                   provider_request: providerRequest,
+                  lifecycle_observer: this.deps.on_agent_worker_lifecycle,
                   max_tokens: constraints?.max_tokens,
                   timeout_ms: constraints?.timeout_ms,
                   session_id,
@@ -853,6 +874,7 @@ export class Executor {
                   signal,
                 })
               : providerRequest;
+            if (signal.aborted) throw createLLMAbortError(requestedProvider, signal);
             const request = buildComputeRequest({
               request_id: id,
               context: payload.compute_context,
@@ -1492,6 +1514,8 @@ function buildComputeRequest(input: {
   };
 }
 
+const AGENT_WORKER_CANCEL_OBSERVATION_GRACE_MS = 1_000;
+
 const AGENT_ROLE_INSTRUCTIONS: Readonly<Record<AgentWorkerRole, string>> = Object.freeze({
   division: "親taskを有限な下位課題へ分解し、依存順と未解決点だけを候補として返してください。計画や実行を確定しないでください。",
   independent_comparison: "親taskを独立に解釈し、別の候補方針・相違点・不足条件だけを返してください。他roleの出力は見ず、独立性を保ってください。",
@@ -1505,6 +1529,7 @@ async function withAgentDelegationCandidates(input: {
   contract: AgentDelegationContract;
   context: LLMCallPayload["compute_context"];
   provider_request: LLMRequest;
+  lifecycle_observer?: AgentWorkerLifecycleObserver;
   max_tokens?: number;
   timeout_ms?: number;
   session_id?: string;
@@ -1514,6 +1539,7 @@ async function withAgentDelegationCandidates(input: {
   if (input.compute.budget_reservations_enabled !== true) {
     throw new Error("agent_delegation_budget_reservations_unavailable");
   }
+  if (!input.lifecycle_observer) throw new Error("agent_delegation_lifecycle_observer_unavailable");
   const parsed = AgentDelegationContractSchema.safeParse(input.contract);
   if (!parsed.success) throw new Error("agent_delegation_contract_invalid");
   const contract = parsed.data;
@@ -1538,7 +1564,32 @@ async function withAgentDelegationCandidates(input: {
   }
 
   const childResults: Array<{ role: AgentWorkerRole; content: string }> = [];
+  const parentCommandDigest = createHash("sha256")
+    .update("blue-tanuki.agent.parent-command.v1\0").update(input.command_id).digest("hex");
+  const provider = safeProviderLabel(input.provider_request.backend_hint ?? "configured-provider");
+  const reportLifecycle = (event: Pick<AgentWorkerLifecycleEvent, "child_task_digest" | "role" | "state"> &
+    Partial<Pick<AgentWorkerLifecycleEvent, "output_observed" | "output_characters" | "resource_use_digest">>): boolean => {
+    try {
+      return input.lifecycle_observer!({
+        schema_version: "blue-tanuki.agent-worker-lifecycle.v1",
+        parent_command_id: input.command_id,
+        parent_command_digest: parentCommandDigest,
+        child_task_digest: event.child_task_digest,
+        role: event.role,
+        state: event.state,
+        observed_at_ms: Date.now(),
+        ...(event.output_observed ? { output_observed: true as const } : {}),
+        ...(event.output_characters !== undefined ? { output_characters: event.output_characters } : {}),
+        ...(event.resource_use_digest ? { resource_use_digest: event.resource_use_digest } : {}),
+        used_for_authority: false,
+        may_execute: false,
+      }) === true;
+    } catch {
+      return false;
+    }
+  };
   for (let index = 0; index < contract.roles.length; index += 2) {
+    if (input.signal?.aborted) throw createLLMAbortError(provider, input.signal);
     const batch = contract.roles.slice(index, index + 2);
     const settled = await Promise.allSettled(batch.map(async (role) => {
       const childTaskDigest = createHash("sha256")
@@ -1575,17 +1626,77 @@ async function withAgentDelegationCandidates(input: {
         session_history_applied: false,
       });
       const childTimeout = AbortSignal.timeout(contract.child_resource_limits.timeout_ms);
-      const childSignal = input.signal ? AbortSignal.any([input.signal, childTimeout]) : childTimeout;
-      const result = await input.compute.compute(request, childSignal);
-      if (!result.compute_resource_use) throw new Error("agent_delegation_child_budget_receipt_missing");
-      const content = typeof result.content === "string" ? result.content.trim() : "";
-      if (!content || content.length > 16_000) throw new Error("agent_delegation_child_output_invalid");
-      return { role, content };
+      const childController = new AbortController();
+      const childSignal = AbortSignal.any([childController.signal, childTimeout]);
+      let computeStarted = false;
+      let computeSettled = false;
+      let residualTimer: ReturnType<typeof setTimeout> | undefined;
+      const resourceUseDigest = (resourceUse: ComputeResourceUse | undefined): string | undefined => resourceUse
+        ? createHash("sha256").update("blue-tanuki.agent.worker-resource-use.v1\0")
+            .update(JSON.stringify(resourceUse)).digest("hex")
+        : undefined;
+      const onParentCancel = (): void => {
+        if (computeSettled || childController.signal.aborted) return;
+        reportLifecycle({ child_task_digest: childTaskDigest, role, state: "cancel_requested" });
+        childController.abort(input.signal?.reason ?? LLM_EXECUTION_CANCELLED_REASON);
+        if (computeStarted) {
+          residualTimer = setTimeout(() => {
+            if (!computeSettled) {
+              reportLifecycle({ child_task_digest: childTaskDigest, role, state: "residual_worker_observed" });
+            }
+          }, AGENT_WORKER_CANCEL_OBSERVATION_GRACE_MS);
+        }
+      };
+      if (input.signal?.aborted) throw createLLMAbortError(provider, input.signal);
+      if (!reportLifecycle({ child_task_digest: childTaskDigest, role, state: "started" })) {
+        throw new Error("agent_delegation_lifecycle_evidence_unavailable");
+      }
+      input.signal?.addEventListener("abort", onParentCancel, { once: true });
+      if (input.signal?.aborted) onParentCancel();
+      try {
+        if (input.signal?.aborted) throw createLLMAbortError(provider, input.signal);
+        computeStarted = true;
+        const result = await input.compute.compute(request, childSignal);
+        computeSettled = true;
+        const content = typeof result.content === "string" ? result.content.trim() : "";
+        const usageDigest = resourceUseDigest(result.compute_resource_use);
+        if (childSignal.aborted || input.signal?.aborted) {
+          reportLifecycle({ child_task_digest: childTaskDigest, role, state: "late_result_discarded",
+            ...(typeof result.content === "string" ? { output_observed: true as const,
+              output_characters: result.content.length } : {}),
+            ...(usageDigest ? { resource_use_digest: usageDigest } : {}) });
+          throw createLLMAbortError(provider, childSignal);
+        }
+        if (!reportLifecycle({ child_task_digest: childTaskDigest, role, state: "settled",
+          ...(typeof result.content === "string" ? { output_observed: true as const,
+            output_characters: result.content.length } : {}),
+          ...(usageDigest ? { resource_use_digest: usageDigest } : {}) })) {
+          throw new Error("agent_delegation_lifecycle_evidence_unavailable");
+        }
+        if (!result.compute_resource_use) throw new Error("agent_delegation_child_budget_receipt_missing");
+        if (!content || content.length > 16_000) throw new Error("agent_delegation_child_output_invalid");
+        return { role, content };
+      } catch (error) {
+        if (!computeSettled) {
+          computeSettled = true;
+          const state = !computeStarted ? "cancelled_before_dispatch"
+            : childSignal.aborted || input.signal?.aborted ? "settled_after_abort" : "settled";
+          const resourceUse = error instanceof LLMComputeResourceFailure ? error.compute_resource_use : undefined;
+          reportLifecycle({ child_task_digest: childTaskDigest, role, state,
+            ...(resourceUseDigest(resourceUse) ? { resource_use_digest: resourceUseDigest(resourceUse) } : {}) });
+        }
+        throw error;
+      } finally {
+        if (residualTimer) clearTimeout(residualTimer);
+        input.signal?.removeEventListener("abort", onParentCancel);
+      }
     }));
+    if (input.signal?.aborted) throw createLLMAbortError(provider, input.signal);
     const failed = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected");
     if (failed) throw failed.reason;
     childResults.push(...settled.map((entry) => (entry as PromiseFulfilledResult<{ role: AgentWorkerRole; content: string }>).value));
   }
+  if (input.signal?.aborted) throw createLLMAbortError(provider, input.signal);
 
   const candidateMessage = {
     role: "user" as const,
