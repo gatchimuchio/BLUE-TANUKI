@@ -1,5 +1,7 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
+2026-10-22の`QEB-57-F10.03-CROSS-ENTRY-OWNER-CONTROL`で、Telegram由来計画のWebChat owner再認証付きreview／result gate／interrupted wait resumeを接続し、WebChat切断とjob取消を分離した。served WebChat endpoint→Gateway inbound boundary→HDS reviewの合成経路で誤origin拒否と正しいdigestの到達を確認。F10.03全体は同じTelegram-admitted仕事のserved共有・保存結果実読取・credentialed-liveが未成立のため`BUILD_GAP`。型検査、直列workspace build、対象fixtureはPASS。実credential／実provider／外部作用／QE_QC／QE_QAは未実施。次は合成Telegram admissionから同じHDS jobのWebChat復帰・保存結果consumerまでをserved経路で結ぶ。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+
 2026-10-22。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
 2026-10-22の`QEB-55`ではTelegram inboundを数値`user_id`・`chat_id`・`message_thread_id`完全一致のowner設定grantでadmitし、grantなしをdeny-allとした。`QEB-56-F10.02-TELEGRAM-TOPIC-WAIT-RESUME`ではadmitted updateをTelegram adapter→Gateway boundary→HDS wait consumerへfixture接続し、同一owner・chatの別topicからは待機jobを再開せず、登録元topicの返信だけを再開することを確認した。Developer限定の`plan:`制御、Approval／L3境界は変えていない。対象Gateway fixture、Gateway typecheck/buildはPASS。実Telegram API／credential／実provider／外部作用は未使用。F10.02全体、製品全体の結合形状、QE_QC／QE_QAは未成立。次はF10.03の二入口・切断経路を合成入力で接続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。

@@ -2943,3 +2943,26 @@ Gateway operation-plan runtime fixtureへTelegram adapter ingressを追加した
 | 実Telegram API／credential、実provider、外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
 
 F10.02のtopic-bound wait/resume producer→consumerを部分的に`WIRED`とする。F10.02全体は未接続mediaおよびlive／二入口運用が残り`BUILD_GAP`。F16.03=`BLOCKED_AUTHORITY`（D4-Pocket側のnative producer変更は別repo委任が必要）。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次のBUILD_BATCHは`F10.03`の二入口・切断経路を合成入力で接続する。
+
+---
+
+### 履歴ログ：QEB-57-F10.03-CROSS-ENTRY-OWNER-CONTROL
+
+開始`main`／`origin/main`=`e1a6dcc485a190e73543d9ef20ac71f7d0798b94`。owner指定rev2.3の現行pinと、配布ZIPのSHA-256=`779452AC46ED2E42040AFDCBB5F4E918B71B6FCCF436C194A69ED16D07F5E249`を照合した。適用`AGENTS.md`、active instruction、F10.03施工単位を再同期し、閉じた記録は依存確認に必要なQEB-56だけ参照した。編集開始時のlocal recovery branch／remote backup tagはcurrent=`e1a6dcc`、previous=`8e610ab`で一致。保護対象untracked Linux `target/`を保持した。
+
+OperationPlan projectionにchannel identity digestを加え、cross-channel plan／waitのowner reauthentication bindingをWebChatへ投影する。HDSは既存の厳密なowner/channel一致を維持し、別入口の場合はtrusted internal WebChat Developer GUI、owner credential class、process kind、および計画起源owner/channel digestの一致を要求する。review／read-only resultには`tool` process、interrupted waitへの新しいowner応答には`chat` processを固定し、応答はC計算候補に限る。Memoryやhistoryを権限へ使わず、HDSの採否・Approval Gate・L3・Executor境界も変更しない。
+
+WebChat Control Centerはreview／result／resume controlsで必要時にowner-task tokenを使用し、送信後にtoken入力を消去する。cross-channel bindingはdigest二項だけを送る。fresh wait reply本文をchat historyへechoしない。WebChat owner-token routeはparse済みの厳密な`plan:review`／`plan:result`／`plan:resume_wait`に限定し、review/resultは`tool`、resume waitは`chat`としてcanonical inboundへ渡す。その他owner-token operator入力は引き続き拒否する。disconnectはWebSocketを閉じ、generationを更新するだけで、task cancellation APIを呼ばない。cancellation、local worker settlement、外部provider停止は別状態であり、disconnectから停止済みを推論しない。
+
+Gateway testは合成Telegram由来planに対し、実WebChat HTTP owner endpoint→`planGatewayInboundBoundary`→HDS decisionを接続した。誤owner digestは拒否され、正しいorigin digestだけがcurrentなstep review candidateへ届く。別HDS fixtureではcross-channel waitを正しいbindingで再開し、fresh responseが`llm_call`候補へ入る一方、J wait state・auditへ保存されないことを確認した。これはserved Gateway process全体やTelegram adapterを通じた同一job実運転ではなく、credentialed-live証拠でもない。saved-result controlの認証要求は接続したが、今回のfixtureに保存結果がなく、実result returnまでは未確認。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm exec vitest run apps/gateway/test/operation_plan_runtime.test.ts -t 'Telegram由来の計画|別入口の中断wait|served WebChat owner endpoint' --reporter=dot` | PASS、3 tests。 |
+| `pnpm exec vitest run packages/channel-webchat/test/webchat.test.ts -t 'cross-channel|saved-result|interrupted wait|disconnects only|renders only bounded|lists active executions and requests cancellation only for the exact resume-authenticated command|uses fixed owner identity for owner-token plan review' --reporter=dot` | PASS、8 tests。 |
+| `pnpm typecheck`／`pnpm -r --workspace-concurrency=1 build` | PASS。直列buildは15 workspace projects。 |
+| `git diff --check` | PASS。 |
+| `apps/gateway/test/execution_result_reconciliation.test.ts`の補助確認 | setupのfixture LLMが計画作成前に`The LLM request failed`となりresult consumerへ到達しなかった。このテストファイルへの一時編集は撤回し、PASSとして数えない。保存結果の成功返却は次batchでfixture producerと接続する。 |
+| 実Telegram API／credential／実provider／外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+F10.03のcross-channel reauthentication／WebChat owner controlを部分的に`WIRED`とする。Telegram-admitted同一jobのserved共有、保存結果をWebChatへ返すconsumer、credentialed-live profileは未接続／未検証のためF10.03全体=`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。実装commit=`c5b8f50`。次のBUILD_BATCHは`F10.03-SERVED-SAME-JOB-RESULT-RETURN`として、合成Telegram admission→共有HDS plan/wait→WebChat owner control→保存結果consumerを一つのserved経路へ接続する。
