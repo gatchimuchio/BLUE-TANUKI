@@ -4,6 +4,23 @@
 
 ---
 
+### 履歴ログ：`QEB-14-E03.03-BROKER-RESULT-RECOVERY-HOLD`
+
+開始HEAD／`main`／`origin/main`=`acb85ab2fa99d2fd71d0104730751a9e2d03c1ab`。現行三点pinは`QE_CURRENT_AUTHORITY.md`固定のrev2.3、関係単位E03.03。起動時・実行後の`reconcileExecutionResults`からJ/M、保存結果のowner返却までを追跡した。
+
+編集前復元refはlocal branch／remote tagを照合して二世代を更新した。現世代=`acb85ab2fa99d2fd71d0104730751a9e2d03c1ab`、前世代=`b2c0428cdfa4e85f1636d6e8d1856d2c6972e8fc`。旧前世代=`53e95ff1a33b2f50e5ab923412120b55a138de8a`を世代外へ移した。
+
+復元hold中のOperation Planは再選択・作用・ユーザーへの保存結果返却を止める。pending Broker結果は、canonical J/M restore observationが一致し、再open後のMが検証済みである場合に限り、J承認済みの観測としてMへ照合・永続化できる。照合後もholdを解除せず、fresh J reviewで依存receiptを確認して初めてholdが解ける。復元hold確認前のJ/M更新を避けていたためpending resultが全Gateway起動を止め得る経路と、すでに保存済みのfile.search resultをhold中に返せる経路を塞いだ。外部provider・credential・業務作用・他repo変更は行っていない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `apps/gateway/test/execution_result_reconciliation.test.ts` | 46/46 PASS。pending Broker result→startup→J/M receipt、hold継続、result返却拒否、fresh review後解放を含む。呼出し後unknown用fixtureにWorker契約どおりplan/task digestを追加し、dispatch前拒否との混同も解消。 |
+| `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `pnpm docs:check`／`git diff --check` | 両方PASS。日本語基底の移行負債76件は既存。 |
+| 全suite、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+このhold中の保存結果producer→J/M→owner result consumerを`WIRED`とする。E03.03／QEB-03全体は`BUILD_GAP`で、回復可能な仕事と破損依存仕事のjob単位隔離に必要な次consumerは未特定。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
 ### 履歴ログ：`QEB-13-E03.03-WAIT-RECOVERY-HOLD-ROUTING`
 
 開始HEAD／`main`／`origin/main`=`b2c0428cdfa4e85f1636d6e8d1856d2c6972e8fc`。現行三点pinはrev2.3、関係単位E03.03。常駐GatewayのOperation Plan restore evidence→J recovery hold→永続wait launcher／owner projectionを現物で追跡した。

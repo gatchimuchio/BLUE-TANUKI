@@ -1852,6 +1852,20 @@ export class OperationPlanLedger {
     return true;
   }
 
+  private recoveryHoldAllowsResultMemoryReconciliation(hold: {
+    readonly reason: OperationPlanRecoveryHoldReason;
+    readonly provenance: OperationPlanRecoveryHoldProvenance;
+  }): boolean {
+    const provenance = hold.provenance;
+    if (hold.reason !== "held_unverified" || provenance.source !== "recovery_restore" ||
+        (provenance.restore_store_key !== "j_control" && provenance.restore_store_key !== "m_state") ||
+        !provenance.command_id_digest || !provenance.operation_digest || !provenance.result_digest ||
+        !provenance.restore_backup_id_digest || !provenance.restored_state_digest ||
+        !/^[a-f0-9]{64}$/.test(provenance.checkpoint_digest) || this.memoryQuiesced || !this.resultMemory) return false;
+    const lifecycle = this.resultMemory.snapshot();
+    return !!lifecycle && lifecycle.status === "ready" && this.resultMemory.verify();
+  }
+
   /** 保存済みの同内容だけをJ→Mへ配送。作用・意味更新・承認復元は呼ばない。 */
   reconcileMemory(): boolean {
     if (this.recoveryRefreshPending) return false;
@@ -1912,7 +1926,8 @@ export class OperationPlanLedger {
         }
       }
       for (const p of this.state.plans) {
-        if (this.recoveryHolds.has(operationPlanDigest(p.revisions[0]!.plan.plan_id))) continue;
+        const recoveryHold = this.recoveryHolds.get(operationPlanDigest(p.revisions[0]!.plan.plan_id));
+        if (recoveryHold && !this.recoveryHoldAllowsResultMemoryReconciliation(recoveryHold)) continue;
         for (const original of p.bindings) {
           if (!resultMemoryEligible(original)) continue;
           if (!original.execution_admission || !original.delivery_digest) return false;
@@ -2031,6 +2046,7 @@ export class OperationPlanLedger {
       if (this.port && operationPlanDigest(this.port.load()) !== this.savedDigest) return false;
       const match = this.binding(command_id);
       if (!match) return false;
+      if (this.recoveryHolds.has(operationPlanDigest(match.p.revisions[0]!.plan.plan_id))) return false;
       if (!this.resultMemory || !resultMemoryEligible(match.b)) return true;
       const commit = match.b.memory_commit;
       const savedReceipt = match.b.memory_receipt;
@@ -2048,11 +2064,16 @@ export class OperationPlanLedger {
   }
   /** Read only the owner's current, M-receipted file.search result; this never reruns the action or grants authority. */
   inspectSavedResultForReturn(control: OperationPlanResultReturnControl, caller: InboundRequest): OperationPlanSavedResultReturnProjection {
-    if (this.recoveryRefreshPending || !this.resultMemory || !this.port ||
-        operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
-      throw new Error("plan_saved_result_memory_unavailable");
+    if (this.recoveryRefreshPending) {
+      throw new Error("plan_recovery_refresh_hold");
     }
     const plan = this.ownedPlan(control.plan_id, caller);
+    const recoveryHold = this.recoveryHolds.get(operationPlanDigest(plan.revisions[0]!.plan.plan_id));
+    if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
+    if (!this.resultMemory || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest ||
+        this.resultMemory.snapshot()?.status !== "ready") {
+      throw new Error("plan_saved_result_memory_unavailable");
+    }
     const current = plan.revisions.at(-1)!;
     if (current.digest !== control.revision_digest) throw new Error("plan_saved_result_revision_stale");
     const steps = current.plan.steps.filter((step) => step.step_id === control.step_id ||

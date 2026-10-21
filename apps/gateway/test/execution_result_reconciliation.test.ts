@@ -893,6 +893,13 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(c.hds.recordOperationPlanMemoryRestoreObservation(unrelatedRestore, observation(unrelatedRestore))).toBe(false);
     expect(c.hds.recordOperationPlanMemoryRestoreObservation(restoreCommand, observation(restoreCommand))).toBe(true);
     expect(c.hds.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unverified" });
+    expect(c.hds.operationPlanResultReadyForReturn(c.cmd.id)).toBe(false);
+
+    const heldPlan = c.hds.getRuntimeSnapshot().operation_plans.plans[0]!;
+    const heldResult = c.hds.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: heldPlan.revision_digest, step_id: "search" })}`));
+    expect(heldResult.command).toBeNull();
+    expect(heldResult.log.commit.reason).toBe("plan_control_denied:plan_recovery_unverified_hold");
 
     const currentPlan = c.hds.getRuntimeSnapshot().operation_plans.plans[0]!;
     const staleReview = c.hds.decide(request(`plan:review ${JSON.stringify({ plan_id: currentPlan.plan_id,
@@ -906,7 +913,61 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(freshSelection.id).not.toBe(staleSelection.id);
     expect(c.hds.beginOperationPlanAttempt(staleSelection)).toBe(false);
     expect(c.hds.getRuntimeSnapshot().operation_plans.plans[0]).not.toHaveProperty("recovery_hold_reason");
+    expect(c.hds.operationPlanResultReadyForReturn(c.cmd.id)).toBe(true);
+    const releasedResult = c.hds.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: currentPlan.revision_digest, step_id: "search" })}`));
+    expect(releasedResult.command).toMatchObject({ type: "noop", payload: { control_event: "operation_plan_result_return" } });
+    expect(c.hds.takeOperationPlanSavedResultReturn(releasedResult.command!)).toMatchObject({
+      matches: [{ path: "blue.txt", line_number: 1, line: "blue" }], used_for_authority: false, may_execute: false,
+    });
     expect(c.hds.getAudit().verify()).toBe(true);
+  }));
+
+  it("startup reconciles a pending Broker result into M under an observed restore hold without releasing the plan", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    expect(c.execution.pendingResults()).toHaveLength(1);
+
+    c.hds.closeOperationPlanMemory();
+    const restarted = c.createHds();
+    const restoreCommand = canonicalMemoryRestoreCommand();
+    expect(restarted.quiesceOperationPlanMemoryForCanonicalRestore()).toBe(true);
+    expect(restarted.holdOperationPlansForCanonicalMemoryRestore(restoreCommand)).toBe(true);
+    expect(restarted.reopenOperationPlanMemoryAfterCanonicalRestore()).toBe(true);
+    const observation = {
+      status: "matched" as const,
+      operation: "restore" as const,
+      store_key: "m_state" as const,
+      command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+      operation_digest: hash("pending-result-restore-operation"),
+      result_digest: hash("pending-result-restore-result"),
+      restore_backup_id_digest: hash("pending-result-restore-backup"),
+      restored_state_digest: hash("pending-result-restored-state"),
+      store_ledger_status: "verified" as const,
+      store_ledger_residual_count: 0 as const,
+    };
+    expect(restarted.recordOperationPlanMemoryRestoreObservation(restoreCommand, observation)).toBe(true);
+
+    expect(reconcileStartupExecutionState(restarted, c.execution, c.admission.execution_epoch)).toMatchObject({
+      ready: true, adopted: 1, deferred: 0, stale_generation_archived: 0,
+      memory_ready: true, result_store_readable: true, wait_compute_reconciliation_ready: true,
+    });
+    expect(c.execution.pendingResults()).toHaveLength(0);
+    expect(inspectMemory(c)).toMatchObject({ revision: 1, records: expect.any(Array) });
+    expect(restarted.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unverified" });
+    expect(restarted.operationPlanResultReadyForReturn(c.cmd.id)).toBe(false);
+    const heldPlan = restarted.getRuntimeSnapshot().operation_plans.plans[0]!;
+    const heldResult = restarted.decide(request(`plan:result ${JSON.stringify({ plan_id: c.plan.plan_id,
+      revision_digest: heldPlan.revision_digest, step_id: "search" })}`));
+    expect(heldResult.command).toBeNull();
+    expect(heldResult.log.commit.reason).toBe("plan_control_denied:plan_recovery_unverified_hold");
+
+    const freshSelection = review(restarted, c.plan, "dependent");
+    expect(freshSelection?.type).toBe("tool_call");
+    expect(restarted.getRuntimeSnapshot().operation_plans.plans[0]).not.toHaveProperty("recovery_hold_reason");
+    expect(restarted.operationPlanResultReadyForReturn(c.cmd.id)).toBe(true);
+    expect(c.invoke).toHaveBeenCalledTimes(1);
   }));
 
   it("J/M receipt-backed plan hold survives a closed-store restart and releases only at a fresh review", async () => {
@@ -1092,7 +1153,10 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const privateFailure = "synthetic response lost after dispatch";
     c.invoke.mockImplementationOnce(async (workerRequest) => {
       const identity = { worker_id: randomUUID(), worker_pid: process.pid,
-        worker_platform: process.platform, worker_started_at_ms: Date.now() };
+        worker_platform: process.platform, worker_started_at_ms: Date.now(),
+        ...(workerRequest.operation_plan_binding_digest
+          ? { operation_plan_binding_digest: workerRequest.operation_plan_binding_digest } : {}),
+        ...(workerRequest.task_identity_digest ? { task_identity_digest: workerRequest.task_identity_digest } : {}) };
       workerRequest.on_started(identity);
       workerRequest.before_dispatch();
       workerRequest.on_exit(identity, Date.now());
