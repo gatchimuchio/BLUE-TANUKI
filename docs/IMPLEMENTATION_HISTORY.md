@@ -4,6 +4,27 @@
 
 ---
 
+### 履歴ログ：`QEB-16-E03.03-J-PLAN-SCHEMA-RESIDUAL-ISOLATION`
+
+開始HEAD／`main`／`origin/main`=`a1d5d2e28848046e5b59cd32fd0e415ea8d8bde6`。現行pinはrev2.3、関係単位E03.03。開始時の復旧refはcurrent=`a1d5d2e28848046e5b59cd32fd0e415ea8d8bde6`、previous=`f43d83aff5214e2036274dfb38384857e779626d`。保護対象untracked Linux isolation `target/`を保持し、Gitへ含めない。
+
+SQLite全体digestが一致し、checkpoint共有部のschemaが有効な場合に限り、plan recordを個別schema検査して不正項目だけJ runtime viewから隔離する。clean sibling planは通常のJ判断とCAS保存を続けられ、隔離raw recordは別plan更新時も保持する。隔離planに安全に取得できるplan IDがある場合、Recovery inspection／Operator projection／WebChat Control Centerへrecord digestとplan ID digestだけを接続し、検証済みarchiveからのplan-scoped restoreで対象だけを置換する。IDを取得できない残差はdigest-only表示に留める。全体digest不一致と共有checkpoint schema破損は引き続き全体fail-closed。Recovery schemaは10、operator projectionは12へ進めた。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| schema-invalid plan／clean siblingの実consumer・保存・plan-scoped restore | `operation_plan_runtime.test.ts`のQEB-16関連2件PASS。raw invalid record保持、clean siblingのJ review／write継続、該当planだけの復旧を確認。共有checkpoint schema不正は全体fail-closed。 |
+| Recovery inspection／operator projection／Recovery surface | `operation_plan_recovery_inspection.test.ts`、`recovery_inspection.test.ts`、`recovery_surface.test.ts`の48/48 PASS。 |
+| WebChat schema 12 Recovery consumer | 保守token付きRecovery経路の対象1件PASS（103件中102件未選択）。digest-only schema residual projectionを検証・返却。 |
+| `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | workspaceでPASS、15 project build。最後のWebChat境界整合修正後も該当packageのtypecheck／build PASS。 |
+| `operation_plan_runtime.test.ts`の全36件 | 34 PASS／2 FAIL。2件は既定5秒test timeoutで終了しassertion結果なし。原因は未確定。timeoutや製品挙動は変更していない。 |
+| 全workspace suite、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後へ配置。 |
+
+schema-invalid plan isolationからJ／Recovery／Operator consumerまでの限定経路を`WIRED`とする。plan IDを復元できない残差は個別復旧不可。E03.03／QEB-03の仕事単位Recovery、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。全体digest／共有state破損は全体fail-closedを維持。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+実装commit=`35f2dbb`。
+
+---
+
 ### 履歴ログ：`QEB-15-E03.03-J-PLAN-RESIDUAL-ISOLATION`
 
 開始HEAD／`main`／`origin/main`=`f43d83aff5214e2036274dfb38384857e779626d`。現行pinはrev2.3、関係単位E03.03。開始時の復元refは現世代=`f43d83aff5214e2036274dfb38384857e779626d`、前世代=`acb85ab2fa99d2fd71d0104730751a9e2d03c1ab`で、local branch／remote tagを一致確認した。

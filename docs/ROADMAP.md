@@ -2,7 +2,7 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
-2026-10-21の`QEB-15-E03.03-J-PLAN-RESIDUAL-ISOLATION`では、checkpoint全体digestとschemaが有効な範囲で、意味的不整合のあるJ planを実行viewから隔離し、raw recordを保全したまま正常planの判断・保存更新を接続した。plan指定restoreは選択scopeだけを置換し、兄弟planを保持する。Recovery／J focused 63/63、typecheck、15-project build、HDS standaloneはPASS。plan itemのschema-invalidとcheckpoint全体digest不一致は依然全体fail-closedで、E03.03／QEB-03および製品全体の`BUILD_COVERED`は未成立。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+2026-10-21の`QEB-16-E03.03-J-PLAN-SCHEMA-RESIDUAL-ISOLATION`では、checkpoint全体digestと共有state schemaが有効な範囲で、schema-invalidなJ plan itemだけを実行viewから隔離し、raw recordを保持したままclean sibling planの判断・保存更新を継続できるようにした。RecoveryとOperator Control Centerはrecord digestおよび取得可能なplan ID digestだけを示し、識別可能な対象に限りplan-scoped restoreを可能にする。digest不一致と共有state破損は全体fail-closed。Recovery 3 suite 48/48、WebChat consumer 1件、typecheck、15-project build、HDS standaloneはPASS。既定5秒制限の既存runtimeテスト2件はこのWindows実行でtimeoutし、全体suiteのPASSとは扱っていない。E03.03／QEB-03と製品全体の`BUILD_COVERED`は未成立。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-21の`QEB-11-E03.03-CANONICAL-STORE-INVENTORY-RECOVERY-BARRIER`では、Recovery snapshot capture中のcanonical store出現／消失を終了時に再照合し、source inventoryが変わった場合は全storeのarchiveを破棄して未確認へ閉じる。recovery_surface focused 15/15、typecheck、15-project buildはPASS。共同atomicity、job-level restore point、E03.03全体、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。
 
