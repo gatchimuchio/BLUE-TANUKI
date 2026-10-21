@@ -16,6 +16,7 @@ import type {
   OperationPlanMemoryInterpretationDependency,
   OperationPlanWaitState,
   MeaningUpdateProposalV3,
+  FailureLearningDevelopmentHandoff,
 } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
@@ -108,6 +109,7 @@ import { assessCandidateGoalCriteria } from "./candidate_criteria.js";
 import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
 import {
   assessFailureReviewCandidate,
+  buildFailureLearningDevelopmentHandoff,
   buildFailureLearningLineageRecord,
   failureReviewDerivationDigest,
   failureReviewExperienceDigest,
@@ -2770,7 +2772,7 @@ ${planControl.question}`,
    * Phase 1: feedback is recorded but cannot transition state away from a
    * SUSPENDED entry — that boundary is enforced by design.
    */
-  onFeedback(fb: ExecuteFeedback): void {
+  onFeedback(fb: ExecuteFeedback): FailureLearningDevelopmentHandoff | undefined {
     const llmFailure = fb.llm_failure === undefined
       ? undefined
       : LLMCallFailureSchema.parse(fb.llm_failure);
@@ -2876,6 +2878,7 @@ ${planControl.question}`,
       ? "not_present" as const
       : failureReviewTrace.status === "recorded" ? "passed" as const : "failed" as const;
     let failureLearningLineage: FailureLearningLineageAuditTrace | undefined;
+    let developmentHandoff: FailureLearningDevelopmentHandoff | undefined;
     if (failureReviewTrace) {
       const projection = issued?.failure_review_projection;
       const base = {
@@ -2909,6 +2912,11 @@ ${planControl.question}`,
             learning_action_status: "candidate_derivation_recorded", c_result_binding_status: "request_bound",
             record_digest: prior.record_digest,
             derivation_digest: derivationDigest, memory_application_status: "stored_for_future_reference" };
+          const priorRecord = this.failureMemoryStore?.getLearningLineage(prior.record_digest);
+          if (priorRecord) {
+            try { developmentHandoff = buildFailureLearningDevelopmentHandoff(priorRecord, candidate); }
+            catch { /* A non-matching replay stays out of the development inbox. */ }
+          }
         } else if (!this.failureMemoryStore) {
           failureLearningLineage = { ...base, status: "store_unavailable", derivation_digest: derivationDigest };
         } else {
@@ -2921,11 +2929,15 @@ ${planControl.question}`,
                 learning_action_status: "candidate_derivation_recorded", c_result_binding_status: "request_bound",
                 record_digest: appended.record.record_id,
                 derivation_digest: record.derivation_digest, memory_application_status: "stored_for_future_reference" };
+              try { developmentHandoff = buildFailureLearningDevelopmentHandoff(appended.record, candidate); }
+              catch { /* Invalid handoff material is withheld from the development inbox. */ }
             } else if (appended.status === "replayed") {
               failureLearningLineage = { ...base, status: "replayed_prior_derivation",
                 learning_action_status: "candidate_derivation_recorded", c_result_binding_status: "request_bound",
                 record_digest: appended.record.record_id,
                 derivation_digest: appended.record.derivation_digest, memory_application_status: "stored_for_future_reference" };
+              try { developmentHandoff = buildFailureLearningDevelopmentHandoff(appended.record, candidate); }
+              catch { /* A non-matching replay stays out of the development inbox. */ }
             } else {
               failureLearningLineage = { ...base, status: appended.status, derivation_digest: derivationDigest };
             }
@@ -3085,6 +3097,7 @@ ${planControl.question}`,
     if (sourceLog) {
       this.inflight.delete(fb.command_id);
     }
+    return developmentHandoff;
   }
 
   operationPlanCommandIsCurrent(command: ExecuteCommand): boolean {

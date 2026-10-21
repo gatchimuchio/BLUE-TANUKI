@@ -2470,3 +2470,20 @@ FailureLearningLineage recordと次回C向けlineage referenceに、`candidate_d
 | 全workspace suite、provider／credential、外部作用、QE_QC／QE_QA、5OS実機 | 未実施。全体実装形状成立後の工程に保持。 |
 
 E05.02のFailureMemory→次回C projection→projection-bound C response→J auditの接続を`WIRED`とする。candidate recordは学習の妥当性、改善、汎化を証明せず、内部導出帰属は未確立、外部変更寄与は未評価。E05.02親要求の全範囲と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はrev2.3 E05.03「版候補の開発系への移譲」で、現行コードから実際の次consumerを特定する。
+
+---
+
+### 履歴ログ：`QEB-31-E05.03-VERSION-CANDIDATE-TO-DEVELOPMENT-PRINCIPAL`
+
+開始HEAD／`main`／`origin/main`=`4581b059b53af8fb13ea8c3eaba07e2b43d18c7f`。rev2.3の現行三点正本、適用`AGENTS.md`、active指示、E05.03、FailureReview producer／HDS feedback／Developer surface consumerを再同期した。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持し、変更対象に含めていない。
+
+request-boundかつ保存済みlineageと候補content digestが一致するFailureReview候補だけを、HDS `onFeedback`からGatewayへ開発引き渡しprojectionとして返す。Gatewayはruntime FailureMemoryとは別の`DevelopmentHandoffStore`へ候補・source digest・未評価状態を保存し、Developer surface snapshotとControl Centerの読み取り専用inboxへ渡す。永続Failure Memoryのfile／dirがある場合は隣にsidecarを置き、個別file指定も可能。inbox未設定時はmemory-only。重複IDは冪等、内容改変は拒否し、破損fileは上書きせずunavailableにする。候補本文はこの専用inbox以外のHDS lineage／auditへ追加しない。表示されたruntime learning signalは未評価のまま保持し、承認・実行・code／P版昇格には使わない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| HDS controller／Gateway FailureReview・handoff store／WebChat Control Center focused suites | PASS、4 suites／190 tests。request-bound候補の別storeへの引き渡し、再読込、重複、改変拒否、破損時保護、UI接続を確認。 |
+| workspace `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| `pnpm docs:check` | PASS。日本語基底gateは移行負債76件を報告、licensing pass。 |
+| 全workspace suite、live provider／credential、外部作用、QE_QC／QE_QA、5OS実機 | 未実施。全体実装形状成立後の工程に配置。 |
+
+E05.03のFailureReview producer→独立DevelopmentHandoffStore→Developer read-only inboxを`WIRED`とする。人間の開発主体が候補を採否し、code／P変更へ変換するレビューworkflowはこのhandoff機能に含めず、runtime candidateは権限・承認・版昇格ではない。E05.03親要求全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立／未開始。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はrev2.3 E06.01「関係を辿る全体帰還」。

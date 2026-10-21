@@ -46,6 +46,7 @@ import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMe
 import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
+import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { buildAuditLog } from "./audit_config.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
@@ -690,6 +691,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     recovery_projection: startupBrokerRestoreProjection,
   });
   const failureMemory = buildFailureMemoryStore(process.env);
+  const developmentHandoffStore = developmentHandoffStoreFromEnvironment(process.env);
+  const developerSurfaceWithHandoffInbox = (): OperatorSnapshot => ({
+    ...developerSurfaceSnapshot(),
+    development_handoff_inbox: developmentHandoffStore.snapshot(),
+  });
   const hds = new HDSUpperController({
     operation_plan_state: operationPlanState,
     operation_plan_memory: operationResultMemoryStorage(),
@@ -1209,6 +1215,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         feedback,
         target_surface: "channel",
         request_id: log.request_id,
+        development_handoff_store: developmentHandoffStore,
       });
       recordApprovalHistory("recovery_restore_blocked", cmd, log, origin, actor, null, {
         blocking_consumers: restoreConsumersNotQuiesced,
@@ -1505,7 +1512,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
                 : cmd.type === "tool_call" && cmd.payload.tool_name === "shell.exec"
                   ? "shell_exec_target_version_unavailable" : "broker_target_version_unavailable";
       const feedback: ExecuteFeedback = { command_id: cmd.id, status: "failed", error: reason, metrics: { duration_ms: 0 } };
-      const finalized = finalizeCommandOutput({ hds, command: cmd, feedback, target_surface: "channel", request_id: log.request_id });
+      const finalized = finalizeCommandOutput({ hds, command: cmd, feedback, target_surface: "channel", request_id: log.request_id,
+        development_handoff_store: developmentHandoffStore });
       recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
         used_for_authority: false, may_execute: false,
       });
@@ -1765,6 +1773,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         status_message: "実行結果の永続化・照合が未完了のため、結果内容はまだ返していません。操作を再実行せず、Recovery／Operation Planの状態を確認してください。",
         target_surface: "channel",
         request_id: log.request_id,
+        development_handoff_store: developmentHandoffStore,
       });
       const finalOutputRecorded = recordFinalOutputHistory(log, origin, actor, pending.output_audit, cmd);
       gatewayLog.warn("operation-plan result withheld pending persistence reconciliation", {
@@ -1784,6 +1793,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       feedback: fb,
       target_surface: "channel",
       request_id: log.request_id,
+      development_handoff_store: developmentHandoffStore,
     });
     const content = finalized.rendered_output;
     const output = finalized.output_audit;
@@ -2673,7 +2683,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
                 scheduled_tasks: scheduledTasks,
                 runtime_schedules: runtimeScheduleSnapshot,
               }),
-              developer: developerSurfaceSnapshot(),
+              developer: developerSurfaceWithHandoffInbox(),
               writing: writingSurfaceSnapshot(),
             },
             runtime_schedules_count: runtimeSchedulesCount,
@@ -2855,7 +2865,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           }),
         },
         developer: {
-          getSnapshot: async () => developerSurfaceSnapshot(),
+          getSnapshot: async () => developerSurfaceWithHandoffInbox(),
         },
         writing: {
           getSnapshot: async () => writingSurfaceSnapshot(),
@@ -4393,7 +4403,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         ...(result.status === "observed" ? {} : { error: result.reason }),
         metrics: { duration_ms: Math.max(0, Date.now() - startedAt) },
       };
-      const finalized = finalizeCommandOutput({ hds, command, feedback, target_surface: "channel", request_id: log.request_id });
+      const finalized = finalizeCommandOutput({ hds, command, feedback, target_surface: "channel", request_id: log.request_id,
+        development_handoff_store: developmentHandoffStore });
       recordFinalOutputHistory(log, authorityReq, authorityReq.user, finalized.output_audit);
       if (finalized.rendered_output) await dispatcher.dispatch({
         channel: authorityReq.channel, target: replyTarget(authorityReq), content: finalized.rendered_output,
@@ -4410,7 +4421,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       const content = `この仕事の返信／期限待機をJの永続状態へ登録しました。期限: ${new Date(wait.deadline_at_ms).toISOString()}。待機中にLLMは呼び出しません。`;
       const feedback: ExecuteFeedback = { command_id: command.id, status: "success", result: { content },
         metrics: { duration_ms: 0 } };
-      const finalized = finalizeCommandOutput({ hds, command, feedback, target_surface: "channel", request_id: log.request_id });
+      const finalized = finalizeCommandOutput({ hds, command, feedback, target_surface: "channel", request_id: log.request_id,
+        development_handoff_store: developmentHandoffStore });
       recordFinalOutputHistory(log, authorityReq, authorityReq.user, finalized.output_audit, command);
       if (finalized.rendered_output) await dispatcher.dispatch({ channel: authorityReq.channel,
         target: replyTarget(authorityReq), content: finalized.rendered_output },

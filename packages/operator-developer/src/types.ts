@@ -1,4 +1,4 @@
-import type { OperationCoreProjection, ToolCapability } from "@blue-tanuki/protocol";
+import type { FailureLearningDevelopmentHandoff, OperationCoreProjection, ToolCapability } from "@blue-tanuki/protocol";
 
 export type DeveloperOperationKind =
   | "file.read"
@@ -46,6 +46,7 @@ export interface DeveloperSurfaceSnapshot {
   browser_preview: DeveloperBrowserPreviewBoundary;
   operations: readonly DeveloperOperationSpec[];
   operation_core_projection: OperationCoreProjection;
+  development_handoff_inbox?: DeveloperHandoffInboxSnapshot;
   next_recommended_action: string;
 }
 
@@ -54,4 +55,10 @@ export interface DeveloperInvocation {
   input_digest: string;
   source: "prompt" | "selected_file" | "repository_context";
   target?: string;
+}
+
+export interface DeveloperHandoffInboxSnapshot {
+  status: "persistent" | "memory_only" | "unavailable";
+  count: number;
+  items: readonly FailureLearningDevelopmentHandoff[];
 }

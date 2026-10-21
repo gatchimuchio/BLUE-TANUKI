@@ -4,10 +4,10 @@
 
 ## 現行状態
 
-QE_STAGE=`QE_BUILD`。rev2.3 pinとbackup ref移行=`MIGRATION_COMPLETE`。`QEB-30-E05.02-LEARNING-IMPROVEMENT-EXTERNAL-CHANGE-SEPARATION`でFailureMemory lineageのcandidate記録、妥当性、改善、汎化、C結果受領、内部導出帰属、外部改修、教師入力の状態を分離し、次回C projectionとHDS auditまで接続した。focused tests 100/100、workspace typecheck/buildはPASS。候補記録は学習効果を証明せず、内部導出帰属は未確立、外部改修寄与は未評価。全workspace suite、QE_QC／QE_QAは未実施。製品全体は`BUILD_GAP`で、`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。
+QE_STAGE=`QE_BUILD`。rev2.3 pinとbackup ref移行=`MIGRATION_COMPLETE`。`QEB-31-E05.03-VERSION-CANDIDATE-TO-DEVELOPMENT-PRINCIPAL`で、request-boundのFailureLearning候補をruntime FailureMemoryから分離したDevelopmentHandoffStoreへ渡し、認証済みno-storeのDeveloper surface／Control Center inboxで表示する実producer→consumerを接続した。候補は未評価の開発検討資料であり、実行・承認・コード／P版昇格はしない。関連focused tests 190/190、workspace typecheck/build、`docs:check`はPASS。全workspace suite、QE_QC／QE_QAは未実施。製品全体は`BUILD_GAP`で、`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。
 
 ## 次のBUILD_BATCH
 
-`QEB-31-E05.03-VERSION-CANDIDATE-TO-DEVELOPMENT-PRINCIPAL`として、コード／Pの次版候補をruntime状態から分け、開発主体へ渡す実producer→consumerを現物から特定する。Jが推薦した次版を無審査昇格させない。E05.03の範囲、次consumer、変更対象、停止条件は作業開始時に現行三点セットと最新コードから再構成する。
+`QEB-32-E06.01-RELATION-TRACED-RETURN`として、結果から影響relationを辿る帰還対象集合を作り、採用・非採用候補と目的へ戻す実producer→consumerを現物から特定する。無影響と判断した範囲にも保持理由を残す。E06.01の要求、次consumer、変更対象、停止条件は作業開始時に現行三点セットと最新コードから再構成する。
 
 HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closedを維持する。実provider／credential、外部業務作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は含めない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。全体実装形状の前に詳細QC／QAへ進まない。

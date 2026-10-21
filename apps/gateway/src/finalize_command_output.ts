@@ -1,6 +1,10 @@
 import type { ExecuteCommand, ExecuteFeedback } from "@blue-tanuki/protocol";
+import { createLogger } from "@blue-tanuki/core";
 import { HDSUpperController, type OutputTargetSurface } from "@blue-tanuki/hds-brain";
 import { renderCommandOutput } from "./result_render.js";
+import type { DevelopmentHandoffStore } from "./development_handoff_store.js";
+
+const developmentHandoffLog = createLogger({ scope: "gateway.development-handoff" });
 
 export interface FinalizedCommandOutput {
   reviewed_feedback: ExecuteFeedback;
@@ -19,10 +23,11 @@ export function finalizeCommandOutput(input: {
   feedback: ExecuteFeedback;
   target_surface: OutputTargetSurface;
   request_id: string | null;
+  development_handoff_store?: DevelopmentHandoffStore;
 }): FinalizedCommandOutput {
   const reviewed_feedback = input.hds.reviewMemoryCitations(input.command, input.feedback);
   const rendered_output = renderCommandOutput(input.command, reviewed_feedback);
-  input.hds.onFeedback(input.feedback);
+  deliverDevelopmentHandoff(input.hds.onFeedback(input.feedback), input.development_handoff_store);
   const output_audit = input.hds.onOutputAudit({
     command: input.command,
     feedback: input.feedback,
@@ -41,9 +46,10 @@ export function finalizeCommandStatusOutput(input: {
   status_message: string;
   target_surface: OutputTargetSurface;
   request_id: string | null;
+  development_handoff_store?: DevelopmentHandoffStore;
 }): FinalizedCommandOutput {
   const reviewed_feedback = input.hds.reviewMemoryCitations(input.command, input.feedback);
-  input.hds.onFeedback(input.feedback);
+  deliverDevelopmentHandoff(input.hds.onFeedback(input.feedback), input.development_handoff_store);
   const rendered_output = input.status_message;
   const output_audit = input.hds.onOutputAudit({
     command: input.command,
@@ -53,4 +59,29 @@ export function finalizeCommandStatusOutput(input: {
     request_id: input.request_id,
   });
   return { reviewed_feedback, rendered_output, output_audit };
+}
+
+function deliverDevelopmentHandoff(
+  handoff: ReturnType<HDSUpperController["onFeedback"]>,
+  store?: DevelopmentHandoffStore,
+): void {
+  if (!handoff) return;
+  if (!store) {
+    developmentHandoffLog.warn("learning candidate has no development inbox consumer", {
+      handoff_id_digest: handoff.handoff_id.slice(0, 16),
+    });
+    return;
+  }
+  const result = store.receive(handoff);
+  if (result.status === "stored" || result.status === "replayed") {
+    developmentHandoffLog.info("learning candidate delivered to development inbox", {
+      handoff_id_digest: handoff.handoff_id.slice(0, 16),
+      status: result.status,
+    });
+  } else {
+    developmentHandoffLog.warn("learning candidate was not delivered to development inbox", {
+      handoff_id_digest: handoff.handoff_id.slice(0, 16),
+      status: result.status,
+    });
+  }
 }

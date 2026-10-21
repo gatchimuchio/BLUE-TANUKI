@@ -862,6 +862,50 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         );
       }
 
+      function renderDevelopmentHandoffInbox(operatorSurfaces) {
+        const developer = isObject(operatorSurfaces) && isObject(operatorSurfaces.developer)
+          ? operatorSurfaces.developer : {};
+        const inbox = isObject(developer.development_handoff_inbox)
+          ? developer.development_handoff_inbox : null;
+        if (!inbox) {
+          setText("development-handoff-status", "not available");
+          setText("development-handoff-json", "Developer handoff inbox is not connected.");
+          return;
+        }
+        const items = Array.isArray(inbox.items) ? inbox.items : [];
+        const tone = inbox.status === "unavailable" ? "bad" : items.length > 0 ? "warn" : "good";
+        setText("development-handoff-status", String(inbox.status || "unknown") + " / " + items.length + " pending");
+        byId("development-handoff-status").className = "badge " + tone;
+        setText("development-handoff-json", compactJson({
+          status: inbox.status,
+          count: items.length,
+          items: items.map(function (item) {
+            const candidate = isObject(item.candidate) ? item.candidate : {};
+            return {
+              handoff_id: item.handoff_id,
+              source_record_digest: item.source_record_digest,
+              source_signature_digest: item.source_signature_digest,
+              source_derivation_digest: item.source_derivation_digest,
+              source_state: item.source_state,
+              development_status: item.development_status,
+              candidate_proposals: {
+                cause_hypotheses: candidate.cause_hypotheses,
+                alternative_hypotheses: candidate.alternative_hypotheses,
+                observation_error_hypotheses: candidate.observation_error_hypotheses,
+                scope_assessment: candidate.scope_assessment,
+                counterexamples: candidate.counterexamples,
+                resume_conditions: candidate.resume_conditions,
+                additional_observations: candidate.additional_observations,
+              },
+              may_promote_version: item.may_promote_version,
+              used_for_authority: item.used_for_authority,
+              may_execute: item.may_execute,
+            };
+          }),
+          boundary: "candidate-only; development review required; no automatic code/P promotion or execution",
+        }));
+      }
+
       function operationCoreExecutionStatusTone(status) {
         if (status === "success") return "good";
         if (status === "failed" || status === "error") return "bad";
@@ -1295,6 +1339,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         updatePermanentUseStatus(body);
         renderSchedules(body);
         renderOperationCoreProjections(body.operator_surfaces);
+        renderDevelopmentHandoffInbox(body.operator_surfaces);
         renderOperationCoreExecution(body.operation_core_execution);
         renderOperationPlanStatus(body.operation_plan_status);
         const mascotState = aotanuStateFromRuntime(body);

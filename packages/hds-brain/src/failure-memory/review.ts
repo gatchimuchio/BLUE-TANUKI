@@ -3,10 +3,12 @@ import {
   FailureReviewIndependentObservationSchema,
   FailureReviewLineageReferenceSchema,
   FailureReviewProjectionSchema,
+  FailureLearningDevelopmentHandoffSchema,
   type FailureReviewCandidate,
   type FailureReviewIndependentObservation,
   type FailureReviewLineageReference,
   type FailureReviewProjection,
+  type FailureLearningDevelopmentHandoff,
 } from "@blue-tanuki/protocol";
 import { sha256Hex, stableJson } from "../complete-history/codec.js";
 import { FailureLearningLineageRecordSchema, type FailureLearningLineageRecord, type FailureSignature, type FailureType } from "./types.js";
@@ -189,6 +191,50 @@ export function buildFailureLearningLineageRecord(input: {
   return FailureLearningLineageRecordSchema.parse({
     ...content,
     record_id: sha256Hex(stableJson(content)),
+  });
+}
+
+/** Separate a J-reviewed runtime learning candidate into a development-only inbox record. */
+export function buildFailureLearningDevelopmentHandoff(
+  recordInput: FailureLearningLineageRecord,
+  candidateInput: FailureReviewCandidate,
+): FailureLearningDevelopmentHandoff {
+  const record = FailureLearningLineageRecordSchema.parse(recordInput);
+  const candidate = FailureReviewCandidateSchema.parse(candidateInput);
+  const candidateDigest = sha256Hex(stableJson(candidate));
+  if (candidate.signature_id.length === 0 ||
+      sha256Hex(candidate.signature_id) !== record.signature_id_digest ||
+      candidate.signature_digest !== record.signature_digest ||
+      candidate.projection_digest !== record.projection_digest ||
+      record.candidate_content_digest !== candidateDigest ||
+      record.derivation_digest !== failureReviewDerivationDigest(candidate)) {
+    throw new Error("failure learning development handoff is not bound to its stored candidate");
+  }
+  return FailureLearningDevelopmentHandoffSchema.parse({
+    schema_version: "blue-tanuki.failure-learning-development-handoff.v1",
+    handoff_id: sha256Hex(`blue-tanuki.failure-learning-development-handoff.v1:${record.record_id}`),
+    source_record_digest: record.record_id,
+    source_signature_digest: record.signature_digest,
+    source_projection_digest: record.projection_digest,
+    source_derivation_digest: record.derivation_digest,
+    candidate_content_digest: candidateDigest,
+    candidate_kind: "runtime_learning_signal",
+    candidate,
+    source_state: {
+      learning_action_status: record.learning_action_status ?? "candidate_derivation_recorded",
+      validity_status: record.validity_status ?? "not_assessed",
+      improvement_status: record.improvement_status ?? "not_measured",
+      generalization_status: record.generalization_status ?? "not_assessed",
+      c_result_binding_status: record.c_result_binding_status ?? "request_bound",
+      internal_derivation_attribution_status: record.internal_derivation_attribution_status ?? "not_established",
+      external_change_contribution_status: record.external_change_contribution_status ?? "not_assessed",
+      teacher_input_contribution_status: record.teacher_input_contribution_status ?? "excluded_from_c_projection",
+    },
+    created_at: record.derived_at,
+    development_status: "awaiting_development_review",
+    may_promote_version: false,
+    used_for_authority: false,
+    may_execute: false,
   });
 }
 

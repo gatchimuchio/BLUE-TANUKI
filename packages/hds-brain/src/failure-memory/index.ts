@@ -67,6 +67,7 @@ export {
 } from "./verifier.js";
 export {
   assessFailureReviewCandidate,
+  buildFailureLearningDevelopmentHandoff,
   buildFailureLearningLineageRecord,
   createFailureReviewProjection,
   failureLearningLineageReference,

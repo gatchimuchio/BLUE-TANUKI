@@ -1001,7 +1001,27 @@ describe("HDSUpperController.onFeedback()", () => {
     expect(JSON.stringify(reviewed.result)).toContain("cause_adoption");
     expect(JSON.stringify(reviewed.result)).toContain("unverified_candidate_only");
 
-    c.onFeedback(rawFeedback);
+    const developmentHandoff = c.onFeedback(rawFeedback);
+    expect(developmentHandoff).toMatchObject({
+      candidate_kind: "runtime_learning_signal",
+      candidate_content_digest: expect.any(String),
+      source_state: {
+        learning_action_status: "candidate_derivation_recorded",
+        validity_status: "not_assessed",
+        improvement_status: "not_measured",
+        generalization_status: "not_assessed",
+        internal_derivation_attribution_status: "not_established",
+        external_change_contribution_status: "not_assessed",
+        teacher_input_contribution_status: "excluded_from_c_projection",
+      },
+      development_status: "awaiting_development_review",
+      may_promote_version: false,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(developmentHandoff?.candidate).toEqual(candidate);
+    expect(JSON.stringify(developmentHandoff)).toContain(rationale);
+    expect(JSON.stringify(developmentHandoff)).not.toContain("FAILURE_REVIEW_RAW_GOAL_SENTINEL");
     const feedbackEntry = c.getAudit().list().find((entry) => "kind" in entry.log && entry.log.kind === "executor_feedback")?.log;
     expect(feedbackEntry && "kind" in feedbackEntry && feedbackEntry.kind === "executor_feedback"
       ? feedbackEntry.feedback.failure_review : undefined).toMatchObject({
@@ -1080,7 +1100,8 @@ describe("HDSUpperController.onFeedback()", () => {
     expect(JSON.stringify(replayDecision.command.payload.messages)).toContain("外部改修");
     expect(JSON.stringify(replayDecision.command.payload.messages)).toContain("教師入力");
     const replayCandidate = { ...candidate, projection_digest: failureReviewProjectionDigest(replayProjection) };
-    replayController.onFeedback(feedback(replayDecision.command.id, { content: JSON.stringify(replayCandidate) }));
+    const replayHandoff = replayController.onFeedback(feedback(replayDecision.command.id, { content: JSON.stringify(replayCandidate) }));
+    expect(replayHandoff).toBeUndefined();
     const replayFeedbackEntry = replayController.getAudit().list().find((entry) =>
       "kind" in entry.log && entry.log.kind === "executor_feedback")?.log;
     expect(replayFeedbackEntry && "kind" in replayFeedbackEntry && replayFeedbackEntry.kind === "executor_feedback"

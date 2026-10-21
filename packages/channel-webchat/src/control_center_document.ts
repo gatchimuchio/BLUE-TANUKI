@@ -549,6 +549,15 @@ ${CONTROL_CENTER_STYLE}    </style>
 
         <section class="card" data-screen-group="developer">
           <div class="row">
+            <h2>Development Handoff Inbox</h2>
+            <span id="development-handoff-status" class="badge warn">not loaded</span>
+          </div>
+          <p class="muted">Runtime learning candidates are shown here for development review. This inbox does not approve, execute, or promote a code or P version.</p>
+          <pre id="development-handoff-json">not loaded</pre>
+        </section>
+
+        <section class="card" data-screen-group="developer">
+          <div class="row">
             <h2>Developer / Evidence</h2>
             <span id="evidence-export-status" class="badge warn">not exported</span>
           </div>

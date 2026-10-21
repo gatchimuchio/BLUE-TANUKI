@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CompleteHistoryStore, FailureMemoryStore, HDSUpperController, extractFailureSignatures } from "@blue-tanuki/hds-brain";
-import { createGatewayInternalInboundRequest, isGatewayInternalInboundRequest, type InboundRequest } from "@blue-tanuki/protocol";
+import { CompleteHistoryStore, FailureMemoryStore, HDSUpperController, extractFailureSignatures, failureReviewProjectionDigest } from "@blue-tanuki/hds-brain";
+import { createGatewayInternalInboundRequest, FailureReviewProjectionSchema, isGatewayInternalInboundRequest, type ExecuteFeedback, type InboundRequest } from "@blue-tanuki/protocol";
 import { prepareFailureReviewInbound } from "../src/failure_review_runtime.js";
+import { DevelopmentHandoffStore } from "../src/development_handoff_store.js";
+import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 
 function developerRequest(content: string): InboundRequest {
   return createGatewayInternalInboundRequest({
@@ -192,6 +194,74 @@ describe("prepareFailureReviewInbound", () => {
     expect(command?.type).toBe("llm_call");
     expect(JSON.stringify(command)).not.toContain("INTEGRATION_RAW_");
     expect(hds.getAudit().list().some((entry) => "kind" in entry.log && entry.log.kind === "executor_feedback")).toBe(false);
+  });
+
+  it("delivers a request-bound learning candidate to the separate Developer inbox without promoting it", () => {
+    const failureMemory = new FailureMemoryStore();
+    const signature = failureMemory.addSignature({
+      scope: "repo", failure_type: "logic_drift", input_pattern: "a", action_pattern: "b", context_pattern: "c",
+    });
+    const prepared = prepareFailureReviewInbound(developerRequest(`failure:review ${signature.id}`), failureMemory) as InboundRequest;
+    const projection = FailureReviewProjectionSchema.parse(
+      JSON.parse(String(prepared.metadata?.["blue_tanuki.failure_review.projection_json"])),
+    );
+    const hds = new HDSUpperController({ failure_memory_store: failureMemory });
+    const { log, command } = hds.decide(prepared);
+    expect(log.commit.decision).toBe("ASSERT");
+    expect(command?.type).toBe("llm_call");
+    if (!command || command.type !== "llm_call") return;
+
+    const candidate = {
+      schema_version: "blue-tanuki.failure-review-candidate.v1",
+      signature_id: projection.signature_id,
+      signature_digest: projection.signature_digest,
+      projection_digest: failureReviewProjectionDigest(projection),
+      cause_hypotheses: [{ category: "logic_drift", rationale: "unverified development candidate" }],
+      alternative_hypotheses: ["unverified alternative"],
+      observation_error_hypotheses: ["observation may be incomplete"],
+      scope_assessment: "uncertain",
+      counterexamples: ["candidate counterexample"],
+      resume_conditions: ["collect an independent observation"],
+      additional_observations: ["inspect another case"],
+      authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+    };
+    const feedback: ExecuteFeedback = {
+      command_id: command.id,
+      status: "success",
+      result: { content: JSON.stringify(candidate) },
+      metrics: { duration_ms: 1 },
+    };
+    const developmentInbox = new DevelopmentHandoffStore();
+    const finalized = finalizeCommandOutput({
+      hds,
+      command,
+      feedback,
+      target_surface: "channel",
+      request_id: log.request_id,
+      development_handoff_store: developmentInbox,
+    });
+
+    expect(finalized.rendered_output).toContain("unverified development candidate");
+    expect(developmentInbox.snapshot()).toMatchObject({
+      status: "memory_only",
+      count: 1,
+      items: [{
+        candidate_kind: "runtime_learning_signal",
+        development_status: "awaiting_development_review",
+        source_state: {
+          validity_status: "not_assessed",
+          improvement_status: "not_measured",
+          generalization_status: "not_assessed",
+          external_change_contribution_status: "not_assessed",
+        },
+        may_promote_version: false,
+        used_for_authority: false,
+        may_execute: false,
+      }],
+    });
+    expect(developmentInbox.snapshot().items[0]?.candidate).toEqual(candidate);
+    expect(failureMemory.listLearningLineageForSignature(signature.id)).toHaveLength(1);
+    expect(hds.getAudit().verify()).toBe(true);
   });
 
   it("does not manufacture internal review metadata for external or non-Developer input", () => {

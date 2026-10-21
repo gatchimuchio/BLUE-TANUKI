@@ -239,6 +239,7 @@ export {
   decodeCompleteHistoryEntry,
   encodeCompleteHistoryEntry,
   sha256Hex,
+  stableJson,
   type CompleteHistoryAppendInput,
   type CompleteHistoryEntry,
   type CompleteHistoryExport,
@@ -250,6 +251,7 @@ export {
 export {
   FailureMemoryStore,
   assessFailureReviewCandidate,
+  buildFailureLearningDevelopmentHandoff,
   buildFailureLearningLineageRecord,
   createFailureReviewProjection,
   failureLearningLineageReference,

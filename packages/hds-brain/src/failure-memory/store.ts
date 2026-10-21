@@ -229,6 +229,11 @@ export class FailureMemoryStore {
       .map(cloneLearningLineageRecord);
   }
 
+  getLearningLineage(recordId: string): FailureLearningLineageRecord | null {
+    const record = this.learningLineageRecords.find((item) => item.record_id === recordId);
+    return record ? cloneLearningLineageRecord(record) : null;
+  }
+
   /** J-reviewed candidate evidence only; this record is never consulted by evaluateGate. */
   appendLearningLineage(recordInput: FailureLearningLineageRecord):
     | { readonly status: "stored" | "replayed"; readonly record: FailureLearningLineageRecord }

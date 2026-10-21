@@ -1505,6 +1505,11 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("operation-core-default-runtime");
       expect(html).toContain("operation-core-execution-results");
       expect(html).toContain("operation-core-execution-list");
+      expect(html).toContain("Development Handoff Inbox");
+      expect(html).toContain("development-handoff-status");
+      expect(html).toContain("development-handoff-json");
+      expect(html).toContain("renderDevelopmentHandoffInbox");
+      expect(html).toContain("no automatic code/P promotion or execution");
       expect(html).toContain("operation-plan-state-summary");
       expect(html).toContain("operation-plan-state-list");
       expect(html).toContain("recovery_refresh_status");

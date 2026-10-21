@@ -48,6 +48,7 @@ import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { reconcileStartupExecutionState } from "./reconcile_execution_results.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
+import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -196,6 +197,7 @@ async function runCliWithExecutionStore(
   const session_store = buildSessionStore(plugins);
 
   const failureMemory = buildFailureMemoryStore(process.env);
+  const developmentHandoffStore = developmentHandoffStoreFromEnvironment(process.env);
   const approval = buildApprovalRuntime(process.env);
   const executorApproval = createExecutorApprovalAuthority({
     execution_store: executionStore,
@@ -474,6 +476,7 @@ async function runCliWithExecutionStore(
     feedback,
     target_surface: "cli",
     request_id: inbound.id,
+    development_handoff_store: developmentHandoffStore,
   });
   const output = finalized.rendered_output;
 

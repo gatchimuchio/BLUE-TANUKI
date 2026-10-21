@@ -40,6 +40,12 @@ Complete Log
 
 signatureはevidence log id、state、confidence、severity、suppression policy、probe policy、再検証予定、TTL／decayを持つ。retired ruleも削除せず履歴として保持する。
 
+## E05.03：開発系への候補引き渡し
+
+明示されたDeveloperのfailure reviewからHDSがrequest-boundで保持した候補は、`DevelopmentHandoffStore`へ別ファイルで渡し、Developer surfaceの読み取り専用inboxに表示する。保存先は`BLUE_TANUKI_DEVELOPMENT_HANDOFF_FILE`で個別指定できる。未指定でFailure Memoryのfile／dirが永続設定されている場合は、その隣の`development-handoffs.json`を使う。いずれも未設定ならin-memoryに留まり、再起動後の保持はしない。
+
+このinboxはFailure Memoryの実行前gate、HDS-J、Approval Gate、Brokerから独立した開発レビュー資料である。候補本文はruntime storeやauditへ追加せず、inboxの専用fileと認証済み・no-storeのDeveloper snapshotにだけ含める。妥当性・改善・汎化・内部導出帰属はそれぞれ未評価のまま表示し、候補の承認、実行、コード／Pの版昇格を行わない。開発主体による別の確認・実装判断が必要となる。
+
 ## E04.01：条件付き署名
 
 新たに抽出するcommand failureは、目的本文・引数・LLM message・channel宛先／本文・errorをfailure memoryへ保存せず、SHA-256 digestと固定の分類値だけを保持する。署名は`input_pattern`（goal digestとJ decision）、`action_pattern`（operation、制約、target／arguments digest）、`context_pattern`（actor digestとchannel）、`result_pattern`（症状digest）に分ける。`cause_candidates`はerror分類から得た未確定候補、`unknowns`は未観測の原因・予測差などを明示し、原因確定や予測差を捏造しない。

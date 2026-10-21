@@ -492,6 +492,38 @@ export const FailureReviewCandidateSchema = z.object({
 }).strict();
 export type FailureReviewCandidate = z.infer<typeof FailureReviewCandidateSchema>;
 
+/**
+ * Read-only handoff of a validated runtime learning candidate to the separate
+ * development review path. It is never a code change, version decision, or authority.
+ */
+export const FailureLearningDevelopmentHandoffSchema = z.object({
+  schema_version: z.literal("blue-tanuki.failure-learning-development-handoff.v1"),
+  handoff_id: FailureReviewSha256Schema,
+  source_record_digest: FailureReviewSha256Schema,
+  source_signature_digest: FailureReviewSha256Schema,
+  source_projection_digest: FailureReviewSha256Schema,
+  source_derivation_digest: FailureReviewSha256Schema,
+  candidate_content_digest: FailureReviewSha256Schema,
+  candidate_kind: z.literal("runtime_learning_signal"),
+  candidate: FailureReviewCandidateSchema,
+  source_state: z.object({
+    learning_action_status: z.literal("candidate_derivation_recorded"),
+    validity_status: z.literal("not_assessed"),
+    improvement_status: z.literal("not_measured"),
+    generalization_status: z.literal("not_assessed"),
+    c_result_binding_status: z.literal("request_bound"),
+    internal_derivation_attribution_status: z.literal("not_established"),
+    external_change_contribution_status: z.literal("not_assessed"),
+    teacher_input_contribution_status: z.literal("excluded_from_c_projection"),
+  }).strict(),
+  created_at: z.string().datetime(),
+  development_status: z.literal("awaiting_development_review"),
+  may_promote_version: z.literal(false),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+export type FailureLearningDevelopmentHandoff = z.infer<typeof FailureLearningDevelopmentHandoffSchema>;
+
 /** Measured C resource consumption. It is evidence for J review, never authority. */
 export const ComputeResourceUseSchema = z.object({
   schema_version: z.literal("blue-tanuki.compute-resource-use.v1"),
