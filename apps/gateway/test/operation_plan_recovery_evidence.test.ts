@@ -332,12 +332,57 @@ describe("Recovery observationからHDS計画保留を導出", () => {
         restore_scope_mode: "task_scoped_merge_v1",
       },
       plans: [
-        { plan_id_digest: affected, status: "unobserved" },
+        { plan_id_digest: affected, status: "observed" },
         { plan_id_digest: unrelated, status: "unaffected" },
       ],
       used_for_authority: false,
       may_execute: false,
     });
+
+    const residualProjection = brokerProjection({
+      scopes: [
+        { plan_id_digest: affected, status: "residuals_present", binding_count: 1, inspected_binding_count: 1,
+          omitted_binding_count: 0, residual_dependencies: ["memory"], unobserved_dependencies: [] },
+        { plan_id_digest: unrelated, status: "observed", binding_count: 1, inspected_binding_count: 1,
+          omitted_binding_count: 0, residual_dependencies: [], unobserved_dependencies: [] },
+      ],
+      correlations: [
+        { plan_id_digest: affected, broker_correlation: "matched" },
+        { plan_id_digest: unrelated, broker_correlation: "not_admitted" },
+      ],
+    });
+    const residualEvidence = operationPlanBrokerRestoreDependencyEvidenceFromObservation({
+      observation: observation({
+        store_key: "broker",
+        restore_scope_plan_digest: null,
+        restore_scope_task_digest: taskIdentityDigest,
+        restore_scope_mode: "task_scoped_merge_v1",
+        plan_restore_points: null,
+      }),
+      checkpoint: taskCheckpoint,
+      history_complete: true,
+      recovery_projection: residualProjection,
+    });
+    expect(residualEvidence?.plans).toEqual([
+      { plan_id_digest: affected, status: "residuals_present" },
+      { plan_id_digest: unrelated, status: "unaffected" },
+    ]);
+
+    const unavailableProjectionEvidence = operationPlanBrokerRestoreDependencyEvidenceFromObservation({
+      observation: observation({
+        store_key: "broker",
+        restore_scope_plan_digest: null,
+        restore_scope_task_digest: taskIdentityDigest,
+        restore_scope_mode: "task_scoped_merge_v1",
+        plan_restore_points: null,
+      }),
+      checkpoint: taskCheckpoint,
+      history_complete: true,
+    });
+    expect(unavailableProjectionEvidence?.plans).toEqual([
+      { plan_id_digest: affected, status: "unobserved" },
+      { plan_id_digest: unrelated, status: "unaffected" },
+    ]);
   });
 
   it("Broker相関の未観測・残差と無効なprojectionはfail-closedで計画holdへ送る", () => {

@@ -66,7 +66,9 @@ export function operationPlanBrokerRestoreDependencyEvidenceFromObservation(inpu
       status: taskScopedRestore
         ? operationPlanTaskIdentityDigest(planState) !== taskIdentityDigest
           ? "unaffected" as const
-          : restoreObservationVerified ? "unobserved" as const : "unverified" as const
+          : restoreObservationVerified
+            ? recoveryProjection ? brokerRestorePlanStatus(recoveryProjection, planIdDigest) : "unobserved" as const
+            : "unverified" as const
         : restoreObservationVerified ? brokerRestorePlanStatus(recoveryProjection, planIdDigest) : "unverified" as const,
     };
   });

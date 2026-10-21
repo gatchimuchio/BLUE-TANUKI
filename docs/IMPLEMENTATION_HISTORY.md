@@ -4,6 +4,22 @@
 
 ---
 
+### 履歴ログ：`QEB-23-E03.03-TASK-LINEAGE-BROKER-RESTORE-M-DEPENDENCY-REOBSERVATION`
+
+開始HEAD=`921a1a153204512b2127641f1c564ba0419dd5e7`。現行pinはowner指定rev2.3、backup ref移行は`MIGRATION_COMPLETE`。最新三点セット、適用AGENTS.md、active指示、QEB-22の直接依存とBroker restore後の現行J/M/Broker Recovery consumerを照合した。旧版や完了ログ全体は参照していない。保護対象untracked Linux isolation `target/`は保持しGitへ含めない。
+
+QEB-22のtask-scoped Broker merge後は完全なread-only Recovery projectionを取得し、各planのJ binding／M receipt／Broker相関を分類していたが、task-scoped evidence builderは選択taskを常に`unobserved`としてprojectionを捨てていた。今回、復元結果・historyの完全性が検証済みの場合は、選択task内のplanごとに既存の完全性・residual・J/M/Broker相関分類を実消費する。正確な照合は`observed`、M等の残差は`residuals_present`、不足は`unobserved`／`unverified`となる。projection自体がない場合は従来どおり`unobserved`を維持し、scope外taskは`unaffected`。HDSへのprojectionはdigest-only/non-authorityのまま、選択済みbindingを失効し、残差・未観測はholdへ閉じる。正の観測も承認や実行を生成せず、通常の新しいJ reviewから進める。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `apps/gateway/test/operation_plan_recovery_evidence.test.ts` | PASS、11/11。task-scoped clean J/M/Broker dependency、M residualの伝播、projection欠落時の保留、無関係taskの分離を確認。 |
+| Gateway typecheck／build、`git diff --check` | すべてPASS。 |
+| 全workspace suite、QE_QC／QE_QA、実provider／credential、実restore・外部作用、5OS実機 | 未実施。全体実装形状前のQE_BUILD範囲に限る。 |
+
+task-scoped Broker restore後の現在J/M/Broker dependency re-observation consumerを限定範囲で`WIRED`とする。task-scoped M-state restore point producer、cross-store atomicity、自動resume、E03.03／QEB-03、製品全体の`BUILD_COVERED`は未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はtask-scoped M-state restore pointとJ binding／M receiptの実consumer接続を現物から確定する。
+
+---
+
 ### 履歴ログ：`QEB-22-E03.03-TASK-LINEAGE-SCOPED-BROKER-MERGE`
 
 開始HEAD／`main`／`origin/main`=`6a099c72bc9e8b701a2586a43817d3d0f3a77d9c`。現行pinはrev2.3。今回必要なE03.03のJ task-lineage restore、Broker receipt identity、Recovery observation、fresh J review境界を現行三点と対象consumerから再同期した。完了済み旧作業ログはQEB-21の直近依存だけを参照した。保護対象untracked Linux isolation `target/`は保持しGitへ含めない。
