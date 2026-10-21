@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
 
 const repositoryRoot = process.cwd();
@@ -314,7 +315,9 @@ describe("delegated goal purpose owner review", () => {
     const historyFile = join(tempRoot, "complete-history.jsonl");
     const sessionDir = join(tempRoot, "sessions");
     const stateRoot = join(tempRoot, "state");
+    const fileRoot = join(auditDir, "file-root");
     const privateState = join(stateRoot, "private-state");
+    mkdirSync(fileRoot, { recursive: true });
     mkdirSync(privateState, { recursive: true });
     const goalRef = "goal_0000000000000042";
     const initialPurpose = "Initial delegated purpose";
@@ -334,15 +337,61 @@ describe("delegated goal purpose owner review", () => {
     }), "utf8");
 
     let providerCalls = 0;
-    const provider = createServer((_request, response) => {
+    let providerFailure: unknown;
+    const taskText = "Prepare one bounded read-only search plan.";
+    const provider = createServer((request, response) => {
       providerCalls += 1;
-      response.writeHead(503).end();
+      void readPrompt(request).then((prompt) => {
+        if (!prompt.includes(taskText)) throw new Error("owner task intent was not passed to the local C fixture");
+        const requestId = /固定request_id=([^\s。]+)/.exec(prompt)?.[1];
+        if (!requestId) throw new Error("J operation request id was not bound into the planner prompt");
+        const target = { kind: "directory", id: fileRoot };
+        const expected = { root: fileRoot, sandbox_root: fileRoot, query: "fixture", visited_files: 0, matches: [] };
+        const content = JSON.stringify({
+          plan: {
+            version: "operation-core.v1",
+            plan_id: `owner-task-plan:${requestId}`,
+            request_id: requestId,
+            state: "planned",
+            steps: [{
+              step_id: "synthetic-search",
+              operation: "file.search",
+              target,
+              state: "planned",
+              effects: ["read"],
+              permission: { risk: "low", approval_level: "L1_observe", final_review_required: false,
+                hds_brain_authority_required: true, approval_gate_required: true },
+              adapter: "internal_runtime",
+              adapter_is_authority: false,
+              command_generated_by_adapter_only: false,
+              parameters: { root: fileRoot, query: "fixture", max_results: 1 },
+              preparation: { depends_on: [], bindings: [], preconditions: [],
+                validation: [{ check_id: "synthetic-search-observed", method: "result_equals", target, expected }],
+                compensation: { available: false, reason: "read-only" } },
+            }],
+            rollback: { available: false },
+            raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+            planner_output_used_for_authority: false,
+            hds_brain_authority_required: true,
+          },
+          goal_purpose_relation: { outcome: "supports", evidence: [{ task_quote: taskText, purpose_quote: proposedPurpose }] },
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: "c0802-owner-task-fixture", object: "chat.completion", created: 1,
+          model: "c0802-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+      }).catch((error: unknown) => {
+        providerFailure = error;
+        if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "synthetic_owner_task_fixture_failed" }));
+      });
     });
     const providerPort = await listenOnLoopback(provider);
     const gatewayPort = await reserveLoopbackPort();
     const runtimeEnv = isolatedRuntimeEnvironment(providerPort, gatewayPort, auditDir, historyFile, sessionDir);
     runtimeEnv.BLUE_TANUKI_STATE_ROOT = stateRoot;
     let gateway: CapturedProcess | undefined;
+    let taskWebSocket: WebSocket | undefined;
     const proposedPurpose = "新しい委任目的\n未確定条件を保持する。";
     const proposedDigest = createHash("sha256").update(Buffer.from(proposedPurpose, "utf8")).digest("hex");
 
@@ -470,6 +519,132 @@ describe("delegated goal purpose owner review", () => {
       gateway = undefined;
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
+      const taskGoals = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-goals`, {
+        headers: { authorization: `Bearer ${ownerToken}` },
+      });
+      expect(taskGoals.status).toBe(200);
+      expect(taskGoals.headers.get("cache-control")).toBe("no-store");
+      const taskGoalBody = await taskGoals.json() as { goals?: Array<Record<string, unknown>> };
+      expect(taskGoalBody.goals).toEqual([{ goal_ref: goalRef, purpose_version: 2,
+        purpose_preview: proposedPurpose }]);
+      expect(JSON.stringify(taskGoalBody)).not.toContain(proposedDigest);
+      const unauthorizedTask = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task: taskText, goal_ref: goalRef }),
+      });
+      expect(unauthorizedTask.status).toBe(401);
+      const wsTicketResponse = await fetch(`http://127.0.0.1:${gatewayPort}/ws-ticket`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner" }),
+      });
+      expect(wsTicketResponse.status).toBe(200);
+      const { ticket } = await wsTicketResponse.json() as { ticket: string };
+      taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+      await once(taskWebSocket, "open");
+      const taskReply = waitForWebChatSend(taskWebSocket);
+      const taskSubmission = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task: taskText, goal_ref: goalRef,
+          actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
+      });
+      expect(taskSubmission.status).toBe(202);
+      const taskAccepted = await taskSubmission.json() as { accepted?: boolean; request_id?: string; status?: string };
+      expect(taskAccepted).toMatchObject({ accepted: true, status: "queued_for_hds_decision" });
+      expect(taskAccepted.request_id).toBeTruthy();
+      const taskReplyText = await taskReply;
+      expect(taskReplyText.length).toBeGreaterThan(0);
+      const runtimeSnapshotResponse = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(runtimeSnapshotResponse.status).toBe(200);
+      const runtimeSnapshot = await runtimeSnapshotResponse.json() as {
+        operation_plan_status?: { status?: string; used_for_authority?: boolean; plans?: Array<Record<string, unknown>> };
+      };
+      expect(runtimeSnapshot.operation_plan_status).toMatchObject({ status: "available", used_for_authority: false });
+      expect(runtimeSnapshot.operation_plan_status?.plans).toHaveLength(1);
+      const selectedPlan = runtimeSnapshot.operation_plan_status?.plans?.[0] as {
+        plan_id?: string;
+        revision_digest?: string;
+        owner_authentication_required?: boolean;
+        goal_purpose_binding_status?: string;
+        goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string };
+        goal_purpose_relation?: { status?: string; candidate_outcome?: string };
+        steps?: Array<{ step_id?: string; status?: string }>;
+      } | undefined;
+      expect(selectedPlan).toMatchObject({ owner_authentication_required: true, goal_purpose_binding_status: "current",
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "supports" } });
+      expect(providerCalls).toBeGreaterThan(0);
+      expect(providerFailure).toBeUndefined();
+
+      const relationReviewProposalResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/goal-purpose-relation-review`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ plan_id_digest: selectedPlan?.plan_id, revision_digest: selectedPlan?.revision_digest,
+          outcome: "supports" }),
+      });
+      expect(relationReviewProposalResponse.status).toBe(202);
+      const relationReviewProposal = await relationReviewProposalResponse.json() as {
+        accepted?: boolean; status?: string; command_id?: string;
+      };
+      expect(relationReviewProposal).toMatchObject({ accepted: true, status: "approval_required" });
+      const relationQueue = await loadQueue();
+      const relationPending = relationQueue.pending_approvals.find((item) => item.command_id === relationReviewProposal.command_id);
+      expect(relationPending).toMatchObject({ content_review_required: true, approval_level: "L3_final_review",
+        final_review_required: true, goal_purpose_relation_review: { outcome: "supports", review_status: "required",
+          used_for_authority: false, may_execute: false } });
+      const relationContentResponse = await fetch(`http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(relationReviewProposal.command_id))}/content`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}` },
+      });
+      expect(relationContentResponse.status).toBe(200);
+      const relationContent = await relationContentResponse.json() as Record<string, unknown>;
+      expect(relationContent).toMatchObject({ kind: "goal_purpose_relation", task: taskText,
+        purpose_text: proposedPurpose, candidate_outcome: "supports", used_for_authority: false, may_execute: false });
+      const relationApprovalResponse = await fetch(`http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(relationReviewProposal.command_id))}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: relationPending?.approval_token,
+          content_review_digest: relationContent.command_digest }),
+      });
+      expect(relationApprovalResponse.status).toBe(200);
+      expect(await relationApprovalResponse.json()).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_relation_review_committed", outcome: "supports",
+      } });
+
+      const step = selectedPlan?.steps?.[0];
+      expect(step?.step_id).toMatch(/^[a-f0-9]{64}$/);
+      const stepReviewReply = waitForWebChatSend(taskWebSocket);
+      const stepReviewResponse = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", content: `plan:review ${JSON.stringify({
+          plan_id: selectedPlan?.plan_id, revision_digest: selectedPlan?.revision_digest, step_id: step?.step_id,
+          goal_purpose_binding: selectedPlan?.goal_purpose_binding,
+        })}` }),
+      });
+      expect(stepReviewResponse.status).toBe(202);
+      expect((await stepReviewReply).length).toBeGreaterThan(0);
+      const completedSnapshotResponse = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(completedSnapshotResponse.status).toBe(200);
+      const completedSnapshot = await completedSnapshotResponse.json() as {
+        operation_plan_status?: { plans?: Array<Record<string, unknown>> };
+      };
+      expect(completedSnapshot.operation_plan_status?.plans).toMatchObject([{
+        plan_id: selectedPlan?.plan_id,
+        status: "results_verified",
+        goal_purpose_relation: { status: "owner_reviewed_supports", owner_review_outcome: "supports" },
+        steps: [expect.objectContaining({ operation: "file.search", status: "verified",
+          binding: expect.objectContaining({ memory_status: "receipt_confirmed" }) })],
+      }]);
+
+      taskWebSocket.close();
+      taskWebSocket = undefined;
+      const providerCallsBeforeRejectedReview = providerCalls;
       const secondPurpose = "目的変更後の再起動時に確認する次の提案。";
       const secondDigest = createHash("sha256").update(Buffer.from(secondPurpose, "utf8")).digest("hex");
       const secondResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/goal-purpose-change`, {
@@ -493,8 +668,9 @@ describe("delegated goal purpose owner review", () => {
         body: JSON.stringify({ verdict: "reject", approval_token: secondPending?.approval_token }),
       });
       expect(rejected.status).toBe(200);
-      expect(providerCalls).toBe(0);
+      expect(providerCalls).toBe(providerCallsBeforeRejectedReview);
     } finally {
+      taskWebSocket?.close();
       if (gateway) await stopChild(gateway.child);
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
@@ -565,6 +741,10 @@ function isolatedRuntimeEnvironment(upstreamPort: number, gatewayPort: number, a
     BLUE_TANUKI_AUDIT_DIR: auditDir,
     BLUE_TANUKI_COMPLETE_HISTORY_FILE: historyFile,
     BLUE_TANUKI_SESSION_DIR: sessionDir,
+    BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+    BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({
+      "c0801-local": { capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0, currency: "USD" } },
+    }),
     LLM_BACKEND: "c0801-local",
     LLM_PROVIDERS_JSON: JSON.stringify([{
       name: "c0801-local",

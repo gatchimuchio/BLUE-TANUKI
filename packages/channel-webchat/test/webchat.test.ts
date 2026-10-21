@@ -104,6 +104,12 @@ async function setup(
         request_id?: string;
         command_id?: string;
       }>;
+      onOwnerTaskGoalOptions?: (input: { actor: string }) => Promise<readonly {
+        goal_ref: string;
+        purpose_version: number;
+        purpose_preview: string;
+        purpose_digest: string;
+      }[]>;
       resume_token?: string;
       owner_token?: string;
       webhook_token?: string;
@@ -144,6 +150,7 @@ async function setup(
     onGoalPurposeChangeProposal: opts.onGoalPurposeChangeProposal,
     onGoalPurposeChangeCandidates: opts.onGoalPurposeChangeCandidates,
     onGoalPurposeRelationReviewProposal: opts.onGoalPurposeRelationReviewProposal,
+    onOwnerTaskGoalOptions: opts.onOwnerTaskGoalOptions,
     resume_approval_tokens: opts.resume_approval_tokens,
     resume_approval_token_ttl_ms: opts.resume_approval_token_ttl_ms,
     ws_ticket_ttl_ms: opts.ws_ticket_ttl_ms,
@@ -2975,6 +2982,83 @@ describe("WebChatChannel — HTTP inbound", () => {
     }
   });
 
+  it("routes explicit task intent through owner-authenticated internal J planning with a current delegated purpose", async () => {
+    const goal = { goal_ref: `goal_${"a".repeat(16)}`, purpose_version: 2,
+      purpose_preview: "Read-only maintenance", purpose_digest: "b".repeat(64) };
+    const observedActors: string[] = [];
+    const ownerCtx = await setup({
+      owner_token: OWNER_TOKEN,
+      onOwnerTaskGoalOptions: async ({ actor }) => {
+        observedActors.push(actor);
+        return [goal];
+      },
+    });
+    try {
+      await ownerCtx.ch.start(async (request) => { ownerCtx.received.push(request); });
+      const publicGoals = await getRaw(ownerCtx.port, "/owner/task-goals", {
+        authorization: `Bearer ${OWNER_TOKEN}`,
+      });
+      expect(publicGoals.status).toBe(200);
+      expect(publicGoals.headers.get("cache-control")).toBe("no-store");
+      expect(JSON.parse(publicGoals.text)).toEqual({
+        goals: [{ goal_ref: goal.goal_ref, purpose_version: goal.purpose_version,
+          purpose_preview: goal.purpose_preview }],
+      });
+      expect(publicGoals.text).not.toContain(goal.purpose_digest);
+      expect((await getRaw(ownerCtx.port, "/owner/task-goals", {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+
+      const requestBody = {
+        user: "untrusted-reply-destination",
+        task: "Plan one bounded synthetic observation.",
+        goal_ref: goal.goal_ref,
+        actor: "owner",
+        metadata: { "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner" },
+      };
+      expect((await postJson(ownerCtx.port, "/owner/task-compute", requestBody, {
+        authorization: `Bearer ${TOKEN}`,
+      })).status).toBe(401);
+      const queued = await postJson(ownerCtx.port, "/owner/task-compute", requestBody, {
+        authorization: `Bearer ${OWNER_TOKEN}`,
+      });
+      expect(queued.status).toBe(202);
+      expect(queued.body).toMatchObject({ accepted: true, status: "queued_for_hds_decision" });
+      expect(ownerCtx.received).toHaveLength(1);
+      const request = ownerCtx.received[0]!;
+      expect(isGatewayInternalInboundRequest(request)).toBe(true);
+      expect(request.user).toBe("webchat-owner-token-holder");
+      expect(request.channel).toBe("webchat");
+      expect(request.session_id).toMatch(/^webchat-owner-task:/);
+      expect(request.metadata).toMatchObject({
+        reply_to: "untrusted-reply-destination",
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.used_for_authority": false,
+        "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+      });
+      expect(request.content.startsWith("plan:compute ")).toBe(true);
+      expect(JSON.parse(request.content.slice("plan:compute ".length))).toEqual({
+        task: requestBody.task,
+        goal_purpose_binding: { goal_ref: goal.goal_ref, purpose_version: goal.purpose_version,
+          purpose_digest: goal.purpose_digest },
+      });
+      expect(observedActors).toEqual([
+        "webchat-owner-token-holder",
+        "webchat-owner-token-holder",
+      ]);
+
+      const stale = await postJson(ownerCtx.port, "/owner/task-compute", {
+        ...requestBody, goal_ref: `goal_${"c".repeat(16)}`,
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(stale.status).toBe(409);
+      expect(ownerCtx.received).toHaveLength(1);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
   it("/healthz needs no auth", async () => {
     const r = await getRaw(ctx.port, "/healthz");
     expect(r.status).toBe(200);
@@ -5212,6 +5296,67 @@ describe("WebChatChannel - Developer Operator API", () => {
       expect(ctx.received[0]?.metadata?.["blue_tanuki.operation_core.request_id"]).toBe(
         `operation-request:${ctx.received[0]?.id}`,
       );
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
+  it("uses fixed owner identity for owner-token plan review and denies other owner-token operator input", async () => {
+    const ctx = await setup({
+      owner_token: OWNER_TOKEN,
+      operators: {
+        developer: { getSnapshot: async () => ({ surface: "developer" }) },
+        writing: { getSnapshot: async () => ({ surface: "writing" }) },
+      },
+    });
+    await ctx.ch.start(async (request) => { ctx.received.push(request); });
+    try {
+      const control = { plan_id: "a".repeat(64), revision_digest: "b".repeat(64), step_id: "c".repeat(64),
+        goal_purpose_binding: { goal_ref: `goal_${"d".repeat(16)}`, purpose_version: 2, purpose_digest: "e".repeat(64) } };
+      const accepted = await postJson(ctx.port, "/operators/developer/invoke", {
+        user: "owner-webchat-session", content: `plan:review ${JSON.stringify(control)}`,
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(accepted.status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(ctx.received).toHaveLength(1);
+      expect(isGatewayInternalInboundRequest(ctx.received[0]!)).toBe(true);
+      expect(ctx.received[0]).toMatchObject({
+        channel: "webchat",
+        user: "webchat-owner-token-holder",
+        content: `plan:review ${JSON.stringify(control)}`,
+      });
+      expect(ctx.received[0]?.metadata).toMatchObject({
+        reply_to: "owner-webchat-session",
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "tool",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.used_for_authority": false,
+      });
+      const inboundReview = await postJson(ctx.port, "/operators/developer/invoke", {
+        user: "ordinary-webchat-user", content: `plan:review ${JSON.stringify(control)}`,
+      }, { authorization: `Bearer ${TOKEN}` });
+      expect(inboundReview.status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(ctx.received).toHaveLength(2);
+      expect(ctx.received[1]).toMatchObject({
+        user: "ordinary-webchat-user",
+        content: `plan:review ${JSON.stringify(control)}`,
+      });
+      expect(ctx.received[1]?.metadata?.["blue_tanuki.process_kind"]).toBeUndefined();
+      expect((await getRaw(ctx.port, "/operators/developer", {
+        authorization: `Bearer ${OWNER_TOKEN}`,
+      })).status).toBe(403);
+      expect((await postJson(ctx.port, "/operators/developer/invoke", {
+        user: "owner-webchat-session", content: "plan:compute arbitrary",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(403);
+      expect((await postJson(ctx.port, "/operators/developer/invoke", {
+        user: "owner-webchat-session", content: "plan:review {}",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(403);
+      expect((await postJson(ctx.port, "/operators/writing/invoke", {
+        user: "owner-webchat-session", content: "draft this",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(401);
+      expect(ctx.received).toHaveLength(2);
     } finally {
       await ctx.teardown();
     }

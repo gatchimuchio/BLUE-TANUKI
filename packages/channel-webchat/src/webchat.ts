@@ -93,6 +93,27 @@ const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
 const AOTANU_ASSET_ROOT = findAotanuAssetRoot();
 
+function isOperationPlanReviewContent(content: string): boolean {
+  const match = /^plan:review\s+(\{[\s\S]*\})$/.exec(content);
+  if (!match) return false;
+  let value: unknown;
+  try { value = JSON.parse(match[1] ?? ""); } catch { return false; }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const control = value as Record<string, unknown>;
+  if (Object.keys(control).some((key) => !["plan_id", "revision_digest", "step_id", "goal_purpose_binding"].includes(key)) ||
+      ![control.plan_id, control.revision_digest, control.step_id].every((digest) =>
+        typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest))) return false;
+  if (control.goal_purpose_binding === undefined) return true;
+  const binding = control.goal_purpose_binding;
+  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return false;
+  const valueBinding = binding as Record<string, unknown>;
+  return Object.keys(valueBinding).length === 3 &&
+    Object.keys(valueBinding).every((key) => ["goal_ref", "purpose_version", "purpose_digest"].includes(key)) &&
+    typeof valueBinding.goal_ref === "string" && /^goal_[a-f0-9]{16,64}$/.test(valueBinding.goal_ref) &&
+    Number.isSafeInteger(valueBinding.purpose_version) && (valueBinding.purpose_version as number) >= 1 &&
+    typeof valueBinding.purpose_digest === "string" && /^[a-f0-9]{64}$/.test(valueBinding.purpose_digest);
+}
+
 function bearerTokenMatches(candidate: string | undefined, expected: string | undefined): boolean {
   if (candidate === undefined || expected === undefined) return false;
   const candidateBytes = Buffer.from(candidate, "utf8");
@@ -674,6 +695,39 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    if (url.pathname === "/owner/task-goals") {
+      if (req.method !== "GET") {
+        res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.opts.owner_token || !this.opts.onOwnerTaskGoalOptions) {
+        res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "owner_task_goals_not_configured" }));
+        return;
+      }
+      if (!this.checkAuth(req, "owner")) {
+        res.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
+      try {
+        const goals = await this.opts.onOwnerTaskGoalOptions({ actor: OWNER_TOKEN_ACTOR });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify({ goals: goals.map(({ goal_ref, purpose_version, purpose_preview }) =>
+          ({ goal_ref, purpose_version, purpose_preview })) }));
+      } catch {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "owner_task_goals_unavailable" }));
+      }
+      return;
+    }
+
     if (req.method !== "POST") {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "not_found" }));
@@ -684,6 +738,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       url.pathname === "/resume"
         ? "resume"
         : url.pathname === "/owner/inbound" || url.pathname === "/owner/goal-purpose-change" ||
+          url.pathname === "/owner/task-compute" ||
           url.pathname === "/owner/goal-purpose-relation-review"
         ? "owner"
         : url.pathname === "/webhook"
@@ -721,6 +776,77 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
 
     const body = await readJson(req);
+
+    if (url.pathname === "/owner/task-compute") {
+      if (!this.opts.onOwnerTaskGoalOptions) {
+        res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "owner_task_compute_not_configured" }));
+        return;
+      }
+      const replyTo = typeof body?.user === "string" ? body.user.trim() : "";
+      const task = typeof body?.task === "string" ? body.task.trim() : "";
+      const goalRef = typeof body?.goal_ref === "string" ? body.goal_ref : "";
+      if (!replyTo || replyTo.length > 200 || !task || task.length > 20_000 || !isWellFormedUnicode(task) ||
+          !/^goal_[a-f0-9]{16,64}$/.test(goalRef)) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_input" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
+      try {
+        const goals = await this.opts.onOwnerTaskGoalOptions({ actor: OWNER_TOKEN_ACTOR });
+        const goal = goals.find((candidate) => candidate.goal_ref === goalRef);
+        if (!goal) {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ accepted: false, status: "delegated_task_purpose_unavailable" }));
+          return;
+        }
+        const requestId = randomUUID();
+        const binding = {
+          goal_ref: goal.goal_ref,
+          purpose_version: goal.purpose_version,
+          purpose_digest: goal.purpose_digest,
+        };
+        const inboundReq: InboundRequest = createGatewayInternalInboundRequest({
+          id: requestId,
+          channel: "webchat",
+          user: OWNER_TOKEN_ACTOR,
+          content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: binding })}`,
+          timestamp: Date.now(),
+          session_id: `webchat-owner-task:${requestId}`,
+          metadata: {
+            reply_to: replyTo,
+            "blue_tanuki.authority_context": "gateway_internal_v1",
+            "blue_tanuki.actor_kind": "owner",
+            "blue_tanuki.trust_level": "owner",
+            "blue_tanuki.process_kind": "chat",
+            "blue_tanuki.operator_surface": "developer",
+            "blue_tanuki.operation_core.version": "operation-core.v1",
+            "blue_tanuki.operation_core.request_id": `operation-request:${requestId}`,
+            "blue_tanuki.operation_core.projection_id": "owner-task:operation-plan",
+            "blue_tanuki.operation_core.source_interface": "gui",
+            "blue_tanuki.operation_core.used_for_authority": false,
+            "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+            "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
+          },
+        });
+        this.handler?.(inboundReq).catch(() => {
+          // Avoid logging owner task content or reply identity.
+          // eslint-disable-next-line no-console
+          console.error("[webchat] owner task handler error");
+        });
+        res.writeHead(202, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify({ accepted: true, request_id: requestId, status: "queued_for_hds_decision" }));
+      } catch {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "owner_task_compute_unavailable" }));
+      }
+      return;
+    }
 
     if (url.pathname === "/runtime/intent") {
       const parsed = RuntimeIntentInputSchema.safeParse(body);
@@ -1678,9 +1804,15 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: `${surfaceName}_operator_not_configured` }));
       return;
     }
-    if (!this.checkAuth(req, "inbound")) {
+    const ownerAuthenticated = surfaceName === "developer" && this.checkAuth(req, "owner");
+    if (!this.checkAuth(req, "inbound") && !ownerAuthenticated) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (ownerAuthenticated && (req.method !== "POST" || url.pathname !== "/operators/developer/invoke")) {
+      res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "owner_token_operator_scope_denied" }));
       return;
     }
 
@@ -1703,17 +1835,30 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "user and content are required strings" }));
         return;
       }
-      if (!this.rateLimitOr429(this.buckets.inbound, `operator:${surfaceName}:${user}`, res)) return;
+      const operationPlanReview = isOperationPlanReviewContent(content);
+      if (ownerAuthenticated && !operationPlanReview) {
+        res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "owner_token_operator_scope_denied" }));
+        return;
+      }
+      const rateLimitKey = ownerAuthenticated ? `operator:${surfaceName}:owner-token-holder`
+        : `operator:${surfaceName}:${user}`;
+      if (!this.rateLimitOr429(this.buckets.inbound, rateLimitKey, res)) return;
       const requestId = randomUUID();
       const inboundReq: InboundRequest = createGatewayInternalInboundRequest({
         id: requestId,
         channel: "webchat",
-        user,
+        user: ownerAuthenticated ? OWNER_TOKEN_ACTOR : user,
         content,
         timestamp: Date.now(),
         metadata: {
           reply_to: user,
           "blue_tanuki.authority_context": "gateway_internal_v1",
+          ...(ownerAuthenticated ? {
+            "blue_tanuki.actor_kind": "owner",
+            "blue_tanuki.trust_level": "owner",
+          } : {}),
+          ...(ownerAuthenticated && operationPlanReview ? { "blue_tanuki.process_kind": "tool" } : {}),
           "blue_tanuki.operator_surface": surfaceName,
           "blue_tanuki.operation_core.version": "operation-core.v1",
           "blue_tanuki.operation_core.request_id": `operation-request:${requestId}`,

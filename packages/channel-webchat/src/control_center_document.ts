@@ -155,6 +155,22 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="lane"><h3>Running / Blocked</h3><p class="muted">Runtime work that is executing, suspended, failed, or waiting on recovery preconditions.</p><span class="badge warn">observed only</span></div>
             <div class="lane"><h3>Completed / Audited</h3><p class="muted">Finished work is shown with digest, command id, audit state, and replay metadata.</p><span class="badge good">evidence only</span></div>
           </div>
+          <div class="task-start-panel">
+            <h3>委任目的に沿った計画を作成</h3>
+            <p class="muted">専用owner tokenで現在の委任目的に沿った計画をHDS/Jへ依頼します。選択肢には目的の先頭部分を表示します。下のチャット名は返信先だけを指定します。依頼は計画候補の作成であり、tool権限や実行承認を与えません。各作用には個別のJ判断と必要なL3最終確認が残ります。</p>
+            <div class="row">
+              <input id="owner-task-token" type="password" autocomplete="off" placeholder="owner token" />
+              <button id="load-owner-task-goals" type="button">委任目的を読込</button>
+              <select id="owner-task-goal-ref" aria-label="Current delegated purpose">
+                <option value="">現在の委任目的を読み込んでください</option>
+              </select>
+            </div>
+            <textarea id="owner-task-intent" rows="4" autocomplete="off" placeholder="計画してほしい仕事を記述してください"></textarea>
+            <div class="row">
+              <button id="submit-owner-task" class="primary" type="button">計画作成を依頼</button>
+              <span id="owner-task-status" class="badge warn" aria-live="polite">未送信</span>
+            </div>
+          </div>
         </section>
 
         <section class="card" data-screen-group="memory">

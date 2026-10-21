@@ -13,6 +13,7 @@ export {
   type WebChatApprovalContentReviewValidation,
   type WebChatGoalPurposeChangeContentReview,
   type WebChatGoalPurposeChangeCandidate,
+  type WebChatTaskGoalOption,
   type WebChatMeaningUpdateContentReview,
   type WebChatMemoryJudgmentReassessmentContentReview,
   type WebChatGoalPurposeRelationContentReview,

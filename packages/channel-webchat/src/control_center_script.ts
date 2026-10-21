@@ -558,6 +558,47 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "request accepted");
       }
 
+      async function loadOwnerTaskGoals() {
+        const ownerToken = byId("owner-task-token").value.trim();
+        const status = byId("owner-task-status");
+        if (!ownerToken) throw new Error("owner tokenを入力してください");
+        const response = await fetchJson("/owner/task-goals", ownerToken, { cache: "no-store" });
+        const goals = Array.isArray(response.goals) ? response.goals : [];
+        const select = byId("owner-task-goal-ref");
+        select.replaceChildren(new Option(goals.length ? "委任目的を選択" : "利用できる委任目的がありません", ""));
+        goals.forEach(function (goal) {
+          if (!isObject(goal) || typeof goal.goal_ref !== "string" || !/^goal_[a-f0-9]{16,64}$/.test(goal.goal_ref) ||
+              !Number.isSafeInteger(goal.purpose_version) || goal.purpose_version < 2 ||
+              typeof goal.purpose_preview !== "string" || goal.purpose_preview.length > 500) return;
+          const option = new Option(goal.goal_ref + " · v" + goal.purpose_version + " · " + goal.purpose_preview,
+            goal.goal_ref);
+          select.add(option);
+        });
+        status.textContent = goals.length ? "現在の委任目的を読み込みました" : "利用できる委任目的がありません";
+        status.className = goals.length ? "badge good" : "badge warn";
+      }
+
+      async function submitOwnerTask() {
+        const ownerTokenInput = byId("owner-task-token");
+        const ownerToken = ownerTokenInput.value.trim();
+        const task = byId("owner-task-intent").value.trim();
+        const goalRef = byId("owner-task-goal-ref").value;
+        const replyTo = byId("chat-user").value.trim() || "owner";
+        const status = byId("owner-task-status");
+        if (!ownerToken) throw new Error("owner tokenを入力してください");
+        if (!state.chatSocket || state.chatSocket.readyState !== WebSocket.OPEN) {
+          throw new Error("返信を受け取るため、WebChatへ接続してから仕事を開始してください");
+        }
+        if (!task || !goalRef) throw new Error("計画する仕事の内容と現在の委任目的を指定してください");
+        const result = await postJson("/owner/task-compute", ownerToken, { user: replyTo, task, goal_ref: goalRef });
+        ownerTokenInput.value = "";
+        byId("owner-task-intent").value = "";
+        appendChat("owner", task);
+        appendChat("accepted", result.request_id || "HDSへ計画作成を依頼しました");
+        status.textContent = "HDSへ依頼済み。計画候補・作用は未承認です";
+        status.className = "badge good";
+      }
+
       async function invokeReceiptReconciliation(planId, revisionDigest, stepId) {
         state.chatToken = byId("chat-token").value.trim();
         state.chatUser = byId("chat-user").value.trim() || "owner";
@@ -568,10 +609,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "read-only reconciliation accepted");
       }
 
-      async function invokeOperationPlanReview(planId, revisionDigest, stepId, rawGoalPurposeBinding) {
-        state.chatToken = byId("chat-token").value.trim();
+      async function invokeOperationPlanReview(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerAuthenticationRequired) {
         state.chatUser = byId("chat-user").value.trim() || "owner";
-        if (!state.chatToken) throw new Error("webchat token is required");
+        const ownerTokenInput = ownerAuthenticationRequired ? byId("owner-task-token") : null;
+        const authToken = ownerAuthenticationRequired ? ownerTokenInput.value.trim() : byId("chat-token").value.trim();
+        if (!authToken) throw new Error(ownerAuthenticationRequired
+          ? "この計画のstep審査にはowner tokenを入力してください"
+          : "webchat tokenを入力してください");
         const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
         if (!isDigest(planId) || !isDigest(revisionDigest) || !isDigest(stepId)) {
           throw new Error("current plan and step digests are unavailable");
@@ -588,8 +632,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             purpose_digest: binding.purpose_digest };
         }
         const content = "plan:review " + JSON.stringify(control);
-        const result = await postJson("/operators/developer/invoke", state.chatToken,
-          { user: state.chatUser, content });
+        let result;
+        try {
+          result = await postJson("/operators/developer/invoke", authToken, { user: state.chatUser, content });
+        } finally {
+          if (ownerTokenInput) ownerTokenInput.value = "";
+        }
         appendChat("owner", content);
         appendChat("accepted", result.request_id || "J step review request accepted");
       }
@@ -1294,7 +1342,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '" data-step-id="' + escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
                   escapeHtml(purposeBinding ? JSON.stringify({ goal_ref: purposeBinding.goal_ref,
                     purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest }) : '') +
-                  '">Jでstep審査を開始</button><p class="muted">Jが現在のrevision・依存・対象を再確認します。L1/L2はowner設定により実行へ進む場合があり、L3はApproval待ちです。</p>'
+                  '" data-owner-authentication-required="' + String(plan.owner_authentication_required === true) +
+                  '">Jでstep審査を開始</button><p class="muted">' +
+                  (plan.owner_authentication_required === true
+                    ? 'この計画はowner tokenで開始されています。step審査にもTasks欄へowner tokenを入力してください。Jが現在のrevision・依存・対象を再確認し、必要なL3はApproval待ちです。'
+                    : 'Jが現在のrevision・依存・対象を再確認します。L1/L2はowner設定により実行へ進む場合があり、L3はApproval待ちです。') + '</p>'
                 : '';
               return '<div class="trace-item"><div class="row"><h4>' + escapeHtml(step.operation || "operation") + '</h4>' +
                 badge(unknown ? "結果不明" : step.status || "unknown", operationPlanStatusTone(step.status)) + '</div>' +
@@ -4330,7 +4382,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           target.disabled = true;
           try {
             await invokeOperationPlanReview(target.dataset.planId || "", target.dataset.revisionDigest || "",
-              target.dataset.stepId || "", target.dataset.goalPurposeBinding || "");
+              target.dataset.stepId || "", target.dataset.goalPurposeBinding || "",
+              target.dataset.ownerAuthenticationRequired === "true");
           } catch (error) {
             appendChat("error", error.message);
           } finally {
@@ -4438,6 +4491,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("load-runtime").addEventListener("click", loadRuntime);
       byId("load-notifications").addEventListener("click", loadNotifications);
       byId("load-approvals").addEventListener("click", loadApprovals);
+      byId("load-owner-task-goals").addEventListener("click", function () {
+        loadOwnerTaskGoals().catch(function (error) {
+          const status = byId("owner-task-status");
+          status.textContent = error.message || "委任目的を読み込めませんでした";
+          status.className = "badge bad";
+          byId("owner-task-token").value = "";
+        });
+      });
+      byId("submit-owner-task").addEventListener("click", function () {
+        submitOwnerTask().catch(function (error) {
+          const status = byId("owner-task-status");
+          status.textContent = error.message || "仕事を送信できませんでした";
+          status.className = "badge bad";
+          byId("owner-task-token").value = "";
+        });
+      });
       byId("load-goal-purpose-candidates").addEventListener("click", function () {
         loadGoalPurposeCandidates().catch(function () {
           const status = byId("goal-purpose-submit-status");

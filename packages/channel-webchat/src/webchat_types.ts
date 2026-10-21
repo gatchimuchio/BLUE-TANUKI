@@ -238,6 +238,14 @@ export interface WebChatGoalPurposeChangeCandidate {
   may_execute: false;
 }
 
+/** Non-authority metadata for a current owner-delegated task purpose. */
+export interface WebChatTaskGoalOption {
+  goal_ref: string;
+  purpose_version: number;
+  purpose_preview: string;
+  purpose_digest: string;
+}
+
 export interface WebChatGoalPurposeRelationContentReview {
   kind: "goal_purpose_relation";
   command_id: string;
@@ -723,6 +731,8 @@ export interface WebChatOptions {
   }>;
   /** Read owner-only, unverified C candidates for an explicit owner-selected L3 proposal. */
   onGoalPurposeChangeCandidates?: (input: { actor: string }) => Promise<readonly WebChatGoalPurposeChangeCandidate[]>;
+  /** Read only current, materialized owner-delegated task purposes for explicit task submission. */
+  onOwnerTaskGoalOptions?: (input: { actor: string }) => Promise<readonly WebChatTaskGoalOption[]>;
   /** Dedicated owner endpoint for an exact, one-plan task-purpose relation review. */
   onGoalPurposeRelationReviewProposal?: (input: {
     plan_id_digest: string;

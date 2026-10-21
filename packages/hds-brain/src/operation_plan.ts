@@ -3182,7 +3182,7 @@ export class OperationPlanLedger {
         const currentRevision = p.revisions.at(-1)!;
         const planIdDigest = operationPlanDigest(p.revisions[0]!.plan.plan_id);
         const recoveryHold = this.recoveryHolds.get(planIdDigest);
-        return { plan_id: planIdDigest,
+        return { plan_id: planIdDigest, owner_identity_digest: operationPlanDigest(p.owner),
         request_id: p.revisions[0]!.plan.request_id, revision: p.revisions.length,
         revision_digest: currentRevision.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),
         ...(p.goal_purpose_binding ? { goal_purpose_binding: structuredClone(p.goal_purpose_binding) } : {}),

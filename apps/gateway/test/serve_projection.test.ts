@@ -348,6 +348,7 @@ describe("Operation Core execution projection", () => {
       raw_payload_exposed: false,
       plans: [{
         plan_id: "a".repeat(64),
+        owner_identity_digest: "7".repeat(64),
         request_id: "SECRET-REQUEST-ID",
         goal: "SECRET-GOAL",
         revision: 2,
@@ -391,7 +392,7 @@ describe("Operation Core execution projection", () => {
 
     const observed = projectOperationPlanStatus({
       schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false,
-      plans: [{ plan_id: "a".repeat(64), revision: 2, revision_digest: "b".repeat(64), status: "awaiting_step_review",
+      plans: [{ plan_id: "a".repeat(64), owner_identity_digest: "7".repeat(64), revision: 2, revision_digest: "b".repeat(64), status: "awaiting_step_review",
         steps: [{ step_id: "c".repeat(64), definition_digest: "d".repeat(64), operation: "gmail.write",
           status: "outcome_unknown", external_receipt_observation: "matched", external_receipt: {
             source: "local_inspection", match_count: 1, evidence_digest: "e".repeat(64), receipt_digest: "f".repeat(64),

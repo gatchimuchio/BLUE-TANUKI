@@ -29,11 +29,13 @@ import {
   type OperationPlanComputeSourceObservation,
   type ComputeResourceUse,
 } from "@blue-tanuki/protocol";
-import { commandFailurePatterns } from "@blue-tanuki/hds-brain";
+import { commandFailurePatterns, operationPlanDigest } from "@blue-tanuki/hds-brain";
 
 export function metadataKeys(meta: Record<string, unknown> | undefined): string[] {
   return Object.keys(meta ?? {}).sort();
 }
+
+const WEBCHAT_OWNER_TOKEN_ACTOR_IDENTITY_DIGEST = operationPlanDigest("webchat-owner-token-holder");
 
 export function hdsDecisionHistoryPayload(
   log: DecisionLog,
@@ -247,6 +249,7 @@ export interface OperationPlanStatusProjection {
     revision: number;
     revision_digest: string;
     status: "awaiting_step_review" | "results_verified";
+    owner_authentication_required: boolean;
     goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string };
     goal_purpose_binding_status: "not_configured" | "required" | "current" | "stale";
     goal_purpose_relation?: {
@@ -459,6 +462,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           ((goalPurposeRelation.status === "owner_reviewed_supports" && goalPurposeRelation.owner_review_outcome === "supports") ||
             (goalPurposeRelation.status === "owner_reviewed_unknown" && goalPurposeRelation.owner_review_outcome === "unknown")))));
     if (!isDigest(plan.plan_id) || !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
+        !isDigest(plan.owner_identity_digest) ||
         !goalPurposeBindingValid || !goalPurposeRelationValid ||
         !["not_configured", "required", "current", "stale"].includes(String(plan.goal_purpose_binding_status ??
           (goalPurposeBinding === undefined ? "not_configured" : "current"))) ||
@@ -530,6 +534,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       });
     }
     plans.push({ plan_id: plan.plan_id, revision: revision!, revision_digest: plan.revision_digest,
+      owner_authentication_required: plan.owner_identity_digest === WEBCHAT_OWNER_TOKEN_ACTOR_IDENTITY_DIGEST,
       ...(isRecord(goalPurposeBinding) ? { goal_purpose_binding: {
         goal_ref: goalPurposeBinding.goal_ref as string, purpose_version: goalPurposeBinding.purpose_version as number,
         purpose_digest: goalPurposeBinding.purpose_digest as string,

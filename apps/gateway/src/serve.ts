@@ -94,6 +94,7 @@ import type {
   WebChatApprovalContentReviewValidation,
   WebChatGoalPurposeRelationContentReview,
   WebChatGoalPurposeChangeCandidate,
+  WebChatTaskGoalOption,
   WebChatMeaningUpdateContentReview,
   WebChatMemoryJudgmentReassessmentContentReview,
   WebChatEmergencyStopSnapshot,
@@ -2791,6 +2792,23 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           .filter((sourceCommandId): sourceCommandId is string => Boolean(sourceCommandId)));
         return hds.getSkepticalReviewGoalPurposeChangeCandidatesForOwnerReview()
           .filter((candidate) => !alreadySubmitted.has(candidate.source_command_id)) as WebChatGoalPurposeChangeCandidate[];
+      },
+      onOwnerTaskGoalOptions: async (input: { actor: string }) => {
+        if (input.actor !== "webchat-owner-token-holder") return [];
+        const projection = hds.getGoalGovernanceProjection();
+        if (!projection || projection.used_for_authority !== false) return [];
+        return projection.goals.flatMap((goal): WebChatTaskGoalOption[] => {
+          if (goal.goal_kind !== "delegated" || goal.parent_alignment_status === "requires_review" ||
+              goal.current_version < 2) return [];
+          const purpose = hds.readGoalPurposeContent(goal.goal_ref, goal.current_version);
+          if (!purpose || purpose.used_for_authority !== false || purpose.goal_ref !== goal.goal_ref ||
+              purpose.version !== goal.current_version || purpose.purpose_digest !== goal.current_purpose_digest ||
+              createHash("sha256").update(purpose.purpose_text, "utf8").digest("hex") !== goal.current_purpose_digest) return [];
+          const purposeCharacters = Array.from(purpose.purpose_text);
+          const purpose_preview = purposeCharacters.slice(0, 240).join("") + (purposeCharacters.length > 240 ? "…" : "");
+          return [{ goal_ref: goal.goal_ref, purpose_version: goal.current_version,
+            purpose_preview, purpose_digest: goal.current_purpose_digest }];
+        });
       },
       onGoalPurposeRelationReviewProposal: async (input: { plan_id_digest: string; revision_digest: string;
         outcome: "supports" | "conflicts" | "unknown"; actor: string }) => submitGoalPurposeRelationReviewProposal(input),
