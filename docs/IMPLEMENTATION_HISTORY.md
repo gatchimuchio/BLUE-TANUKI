@@ -2884,4 +2884,6 @@ fixture疎通はTelegram adapter→canonical Gateway boundary／context選択→
 
 F16.01のTelegram画像producer→C consumerは部分的に`WIRED`。provider modelの実能力、served runtimeでの全経路、他media／channel接続は未確認または未接続の`BUILD_GAP`として残す。F10.02全体=`BUILD_GAP`、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次は現行工程表の`F16.02 音声要求・文字化と承認`。
 
+実装commit=`f9ff4c0c64a1561505a307b21b6e993720a28e3f`を`main`へfast-forward pushし、push直後のremote `main` SHA一致を確認した。復旧branch／tagの二世代と保護対象untracked Linux `target/`は維持した。
+
 ---
