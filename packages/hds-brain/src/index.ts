@@ -274,6 +274,8 @@ export {
   normalizeFailurePattern,
   runPeriodicFailureMemoryVerification,
   type FailureExtractionInput,
+  type FailureConditionChangeMatch,
+  type FailureConditionDimension,
   type FailureGateCandidate,
   type FailureGateDecision,
   type FailureGateMatch,

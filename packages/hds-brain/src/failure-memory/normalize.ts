@@ -1,6 +1,6 @@
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import { sha256Hex, stableJson } from "../complete-history/codec.js";
-import type { FailureGateCandidate, FailureScope } from "./types.js";
+import type { FailureConditionDimension, FailureGateCandidate, FailureScope, FailureSignature } from "./types.js";
 
 const COMMAND_ACTION_PATTERN_VERSION = "failure-command-action-v1";
 const COMMAND_INPUT_PATTERN_VERSION = "failure-command-input-v1";
@@ -122,6 +122,45 @@ export function commandPatternsMatch(
   return isCommandInputPattern(inputPattern) &&
     isCommandActionPattern(actionPattern) &&
     isCommandContextPattern(contextPattern);
+}
+
+/**
+ * Detect only a new HDS ASSERT for the same exact action whose goal or actor/channel
+ * condition fingerprints changed. This is a re-observation candidate, not proof that
+ * the external condition is resolved or permission to execute.
+ */
+export function changedCommandConditionDimensions(
+  signature: Pick<FailureSignature, "scope" | "input_pattern" | "action_pattern" | "context_pattern">,
+  candidate: FailureGateCandidate,
+): FailureConditionDimension[] | null {
+  if (!candidate.command || signature.scope !== candidate.scope ||
+      signature.action_pattern !== candidate.action_pattern ||
+      candidate.command.upstream_decision.commit_decision !== "ASSERT" ||
+      !commandPatternsMatch(signature.input_pattern, signature.action_pattern, signature.context_pattern) ||
+      !commandPatternsMatch(candidate.input_pattern, candidate.action_pattern, candidate.context_pattern)) {
+    return null;
+  }
+
+  const current = candidateFromCommand(candidate.command, candidate.context);
+  if (current.scope !== candidate.scope || current.input_pattern !== candidate.input_pattern ||
+      current.action_pattern !== candidate.action_pattern || current.context_pattern !== candidate.context_pattern) {
+    return null;
+  }
+
+  const previousInput = parseJsonObject(signature.input_pattern);
+  const currentInput = parseJsonObject(candidate.input_pattern);
+  const previousContext = parseJsonObject(signature.context_pattern);
+  const currentContext = parseJsonObject(candidate.context_pattern);
+  if (!previousInput || !currentInput || !previousContext || !currentContext ||
+      previousInput.upstream_decision !== "ASSERT" || currentInput.upstream_decision !== "ASSERT") {
+    return null;
+  }
+
+  const changed: FailureConditionDimension[] = [];
+  if (previousInput.frame_goal_digest !== currentInput.frame_goal_digest) changed.push("goal");
+  if (previousContext.actor_digest !== currentContext.actor_digest) changed.push("actor");
+  if (previousContext.channel !== currentContext.channel) changed.push("channel");
+  return changed.length > 0 ? changed : null;
 }
 
 export function failureSignatureIdentityKey(input: {

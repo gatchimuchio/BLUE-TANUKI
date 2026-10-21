@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   candidateFromCommand,
+  changedCommandConditionDimensions,
   commandPatternsMatch,
   failureSignatureIdentityKey,
   normalizeFailurePattern,
@@ -22,6 +23,7 @@ import {
   stateAppliesInShadow,
 } from "./policy.js";
 import type {
+  FailureConditionChangeMatch,
   FailureGateCandidate,
   FailureGateDecision,
   FailureGateMatch,
@@ -217,10 +219,26 @@ export class FailureMemoryStore {
 
   evaluateGate(candidate: FailureGateCandidate): FailureGateResult {
     const matches: FailureGateMatch[] = [];
+    const conditionChangeMatches: FailureConditionChangeMatch[] = [];
     for (const signature of this.signatures) {
       if (!stateAppliesInShadow(signature.state)) continue;
       const level = matchSignature(signature, candidate);
-      if (level === null) continue;
+      if (level === null) {
+        if (signature.state === "active" &&
+            (signature.suppression_policy === "block" || signature.suppression_policy === "require_approval")) {
+          const changedConditions = changedCommandConditionDimensions(signature, candidate);
+          if (changedConditions) {
+            conditionChangeMatches.push({
+              signature_id: signature.id,
+              changed_conditions: changedConditions,
+              decision: signature.suppression_policy === "block" && signature.probe_policy === "never"
+                ? "block"
+                : "require_approval",
+            });
+          }
+        }
+        continue;
+      }
       const policy = effectivePolicyForState(signature, level);
       const enforced = enforceableState(signature.state);
       matches.push({
@@ -235,25 +253,35 @@ export class FailureMemoryStore {
       });
     }
     const enforced = matches.filter((match) => match.enforced);
-    if (enforced.length === 0) {
+    if (enforced.length === 0 && conditionChangeMatches.length === 0) {
       return {
         decision: "allow",
         matches,
+        condition_change_matches: conditionChangeMatches,
         highest_match_level: matches[0]?.match_level,
         applied_signature_ids: [],
         requires_human_review: false,
         reason: matches.length > 0 ? "shadow_or_probation_only" : "no_failure_memory_match",
       };
     }
-    const decision = strongestDecision(enforced.map((match) => policyToGateDecision(match.policy)));
+    const decision = strongestDecision([
+      ...enforced.map((match) => policyToGateDecision(match.policy)),
+      ...conditionChangeMatches.map((match) => match.decision),
+    ]);
+    const conditionChangeReasons = conditionChangeMatches.map((match) =>
+      `condition_changed:${match.changed_conditions.join("+")}:${match.decision}`);
     return {
       decision,
       matches,
+      condition_change_matches: conditionChangeMatches,
       highest_match_level: enforced.reduce<MatchLevel | undefined>((best, match) => best === undefined || match.match_level < best ? match.match_level : best, undefined),
-      applied_signature_ids: enforced.map((match) => match.signature_id),
+      applied_signature_ids: [...new Set([
+        ...enforced.map((match) => match.signature_id),
+        ...conditionChangeMatches.map((match) => match.signature_id),
+      ])],
       requires_human_review: decision === "require_approval" || decision === "block",
       rewritten_candidate: decision === "rewrite" ? candidate : undefined,
-      reason: enforced.map((match) => match.reason).join("; "),
+      reason: [...enforced.map((match) => match.reason), ...conditionChangeReasons].join("; "),
     };
   }
 

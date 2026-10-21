@@ -18,9 +18,13 @@ import {
 
 const noCompute = { name: "not-used", call: async () => { throw new Error("C is not used in this work"); } };
 
-function toolDecision(hds: HDSUpperController, args: Record<string, unknown> = { text: "blue" }) {
+function toolDecision(
+  hds: HDSUpperController,
+  args: Record<string, unknown> = { text: "blue" },
+  request: { id?: string; channel?: string; user?: string } = {},
+) {
   const tool = "root" in args ? "file.search" : "echo";
-  const decision = hds.decide({ id: "result-request", channel: "test", user: "fixture-owner",
+  const decision = hds.decide({ id: request.id ?? "result-request", channel: request.channel ?? "test", user: request.user ?? "fixture-owner",
     timestamp: Date.now(), content: `tool:${tool} ${JSON.stringify(args)}` });
   if (!decision.command || decision.command.type !== "tool_call") throw new Error("expected governed tool command");
   return { ...decision, command: decision.command };
@@ -125,7 +129,7 @@ describe("実Executor結果から既存監査・履歴projectionへの接続", (
     expect(signatures[0]?.unknowns).toContain("predicted_difference_not_observed");
 
     const store = new FailureMemoryStore();
-    store.addSignature({
+    const savedSignature = store.addSignature({
       ...signatures[0]!,
       state: "active",
       suppression_policy: "require_approval",
@@ -138,12 +142,29 @@ describe("実Executor結果から既存監査・履歴projectionへの接続", (
     const sameCondition = store.evaluateCommandGate(retry, {
       actor: "fixture-owner", channel: "test", request_id: "retry-request",
     });
+    const changedContext = toolDecision(new HDSUpperController(), { root: secretTarget, query: "blue" }, {
+      id: "changed-condition-request", channel: "webchat",
+    }).command;
+    expect(changedContext.upstream_decision.commit_decision).toBe("ASSERT");
+    expect(changedContext.id).not.toBe(command.id);
+    expect(changedContext.upstream_decision.request_id).not.toBe(command.upstream_decision.request_id);
+    const changedConditions = store.evaluateCommandGate(changedContext, {
+      actor: "fixture-owner", channel: "webchat", request_id: "changed-condition-request",
+    });
     const otherTarget = toolDecision(new HDSUpperController(), { root: "different-target", query: "blue" }).command;
     const differentCondition = store.evaluateCommandGate(otherTarget, {
       actor: "fixture-owner", channel: "test", request_id: "other-request",
     });
     expect(sameCondition.decision).toBe("require_approval");
+    expect(changedConditions.decision).toBe("require_approval");
+    expect(changedConditions.condition_change_matches).toMatchObject([{
+      signature_id: savedSignature.id,
+      changed_conditions: ["goal", "channel"],
+      decision: "require_approval",
+    }]);
+    expect(store.get(savedSignature.id)?.evidence_log_ids).toEqual(signatures[0]!.evidence_log_ids);
     expect(differentCondition.decision).toBe("allow");
+    expect(differentCondition.condition_change_matches).toEqual([]);
   });
 
   it("能力拒否は未呼出し、呼出し後の失敗は作用結果不明として記録する", async () => {

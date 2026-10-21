@@ -1,6 +1,8 @@
 export {
   FAILURE_MEMORY_SCHEMA_VERSION,
   type FailureExtractionInput,
+  type FailureConditionChangeMatch,
+  type FailureConditionDimension,
   type FailureGateCandidate,
   type FailureGateDecision,
   type FailureGateMatch,

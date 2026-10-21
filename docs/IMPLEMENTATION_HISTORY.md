@@ -2423,3 +2423,18 @@ GatewayはCompleteHistory chainを検証し、FailureMemory署名が参照する
 | live provider、実credential、外部作用、全workspace suite、QE_QC／QE_QA | 未実施。 |
 
 E04.02のFailureReview scope bindingと条件候補保持を`WIRED`とする。これはCompleteHistory source recordに対する限定照合であり、原因の真因証明、counterexampleの意味的成立、resume condition成立、実再試行許可、E04.02の対象別QAではない。次はrev2.3のE04.03に従い、条件変化の再観測を新しいJ判断へ接続する。製品全体は`BUILD_GAP`、QE_QC／QE_QA未開始。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+## 2026-10-21 QEB-28-E04.03-CONDITION-CHANGE-REOBSERVATION
+
+QE_STAGE=`QE_BUILD`。開始HEAD／`origin/main`=`a7c197116e4f7c621cacacd3110a645c639e5a82`。rev2.3三点正本、適用AGENTS.md、active instruction、最新HEAD／差分とE04.03の条件変化後限定再試行要求を再同期した。開始時の作業差分は保護対象の未追跡`packages/blue-tanuki/native/linux-isolation/target/`のみ。C08.03実provider、実credential、外部業務作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は対象外。
+
+FailureMemoryのpre-execution gateで、同じscopeと完全一致`action_pattern`（operation／target・引数digest・constraints）のまま、新しいHDS `ASSERT`に伴ってgoal／actor／channel fingerprintが変わった場合を条件変化候補として観測する。activeな`block`／`require_approval`署名は不変のまま保持し、`block`かつ`probe_policy=never`は継続block、それ以外はGatewayの既存Fresh Approval経路へrequire-approvalで渡す。request/command ID、元の失敗record、signature状態は書き換えず、違うaction／targetへ拡張しない。fingerprint差は環境条件の解消、原因確定、実行権限を意味しない。新しいHDS request/commandのDecisionとApprovalはそれぞれ現在のcommandへ結び、以前の承認を再利用しない。CLIのrequire-approvalは既存どおりfail-closed。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| FailureMemory focused test | PASS、17/17。goal／actor／channel差はfresh approvalを要求し、別targetはruleを引き継がず、never-probe blockと元signature/evidenceは保持。 |
+| Gateway `operation_execution_result.test.ts` | PASS、7/7。chain検証済みfailure recordから同じactionの新HDS ASSERTをgateへ接続し、条件変更候補のdigest-only分類と別targetの非適用を確認。 |
+| HDS／Gateway typecheck・build、`pnpm docs:check`、`git diff --check` | PASS。日本語基底の既存移行負債76件は継続。 |
+| 全workspace suite、Gateway serveのlive approval往復、C08.03 provider／credential、外部作用、全体QE_QC／QE_QA、5OS実機 | 未実施。 |
+
+E04.03の同一action条件変更→fresh approval gateを`WIRED`とする。これで再試行が無条件に許可されたわけではなく、condition fingerprint差だけでは実環境の修復を証明しない。E04.03の対象別QC／QAと製品全体の`BUILD_COVERED`／QE_QC／QE_QAは未成立。次はrev2.3のE05.01でFailureMemory保持・C導出・J採否・M反映の系譜producer／consumerを現物から確定して接続する。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。

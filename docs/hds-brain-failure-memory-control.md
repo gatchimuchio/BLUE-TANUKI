@@ -44,7 +44,11 @@ signatureはevidence log id、state、confidence、severity、suppression policy
 
 新たに抽出するcommand failureは、目的本文・引数・LLM message・channel宛先／本文・errorをfailure memoryへ保存せず、SHA-256 digestと固定の分類値だけを保持する。署名は`input_pattern`（goal digestとJ decision）、`action_pattern`（operation、制約、target／arguments digest）、`context_pattern`（actor digestとchannel）、`result_pattern`（症状digest）に分ける。`cause_candidates`はerror分類から得た未確定候補、`unknowns`は未観測の原因・予測差などを明示し、原因確定や予測差を捏造しない。
 
-command gateは保存済み署名と新候補の目的・action・actor／channel条件がすべて一致した場合だけ照合する。request ID、command ID、surfaceは条件から除く。commandではpath／hashの正規化、operation名だけのLevel 2一致、Level 3の意味類似を使わず、異なるtargetやgoalへfailure ruleを広げない。Complete Historyの`failure_patterns`は同じhelperが作るdigest-only投影であり、履歴自体は引き続きreference／evidenceに留まる。
+command gateは保存済み署名と新候補の目的・action・actor／channel条件がすべて一致した場合に通常照合する。request ID、command ID、surfaceは条件から除く。commandではpath／hashの正規化、operation名だけのLevel 2一致、Level 3の意味類似を使わず、異なるaction／targetへfailure ruleを広げない。
+
+同じ完全一致`action_pattern`で現在のHDS判断が新たに`ASSERT`し、goal／actor／channelのfingerprintだけが変わった場合、activeな`block`／`require_approval`署名は条件変化の再観測候補として扱う。通常のApproval Gateにfresh approvalを要求し、旧承認は再利用しない。`block`かつ`probe_policy=never`なら引き続きblockする。失敗署名と元の証拠は変更・削除せず、fingerprint差分だけで外部条件の解消を証明したり自動実行したりしない。異なるaction／targetは候補にしない。
+
+Complete Historyの`failure_patterns`は同じhelperが作るdigest-only投影であり、履歴自体は引き続きreference／evidenceに留まる。
 
 `failure-memory-v2`の既存snapshotは読み込み互換を維持し、自動書換え・破棄をしない。旧command signatureに条件付きpatternがない場合、新command gateでは適用せず、`legacy_history_missing_conditioned_patterns`等のunknownを保持する。既存snapshotのraw値をこの変更が遡及消去したとは扱わない。
 

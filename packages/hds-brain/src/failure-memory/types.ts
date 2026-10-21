@@ -171,9 +171,19 @@ export type FailureGateMatch = {
   reason: string;
 };
 
+export type FailureConditionDimension = "goal" | "actor" | "channel";
+
+/** Same exact action under changed task/actor/channel conditions; never authority by itself. */
+export type FailureConditionChangeMatch = {
+  signature_id: string;
+  changed_conditions: FailureConditionDimension[];
+  decision: "require_approval" | "block";
+};
+
 export type FailureGateResult = {
   decision: FailureGateDecision;
   matches: FailureGateMatch[];
+  condition_change_matches: FailureConditionChangeMatch[];
   highest_match_level?: MatchLevel;
   applied_signature_ids: string[];
   requires_human_review: boolean;

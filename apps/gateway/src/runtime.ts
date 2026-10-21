@@ -369,6 +369,11 @@ async function runCliWithExecutionStore(
       command: command.id.slice(0, 8),
       decision: failureGate.decision,
       matches: failureGate.applied_signature_ids.join(", "),
+      condition_changes: failureGate.condition_change_matches.map((match) => ({
+        signature_id: match.signature_id,
+        changed_conditions: match.changed_conditions,
+        decision: match.decision,
+      })),
       reason: failureGate.reason,
     });
     auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });

@@ -217,7 +217,7 @@ describe("Pre-execution failure gate", () => {
     expect(result.matches).toHaveLength(0);
   });
 
-  it("matches the same target and goal across request ids while retaining actor and channel conditions", () => {
+  it("requires fresh approval when the same exact action is re-observed under changed goal/actor/channel conditions", () => {
     const command = toolCommand("cmd-a", "req-a", "file.search", { path: "/tmp/a/input.txt" });
     const sourceContext = { actor: "fixture-owner", channel: "webchat", request_id: "req-a", surface: "webchat" };
     const extracted = extractFailureSignatures({
@@ -251,9 +251,70 @@ describe("Pre-execution failure gate", () => {
 
     expect(sameConditions.decision).toBe("require_approval");
     expect(sameConditions.matches[0]?.match_level).toBe(1);
-    expect(store.evaluateCommandGate(differentGoal, sourceContext).decision).toBe("allow");
-    expect(differentActor.decision).toBe("allow");
-    expect(differentChannel.decision).toBe("allow");
+    const changedGoal = store.evaluateCommandGate(differentGoal, sourceContext);
+    expect(changedGoal.decision).toBe("require_approval");
+    expect(changedGoal.condition_change_matches).toMatchObject([{
+      signature_id: expect.any(String), changed_conditions: ["goal"], decision: "require_approval",
+    }]);
+    expect(differentActor.decision).toBe("require_approval");
+    expect(differentActor.condition_change_matches[0]?.changed_conditions).toEqual(["actor"]);
+    expect(differentChannel.decision).toBe("require_approval");
+    expect(differentChannel.condition_change_matches[0]?.changed_conditions).toEqual(["channel"]);
+  });
+
+  it("keeps never-probe blocks and the old failure signature intact across changed conditions", () => {
+    const original = toolCommand("cmd-before", "req-before", "file.search", { path: "/tmp/a/input.txt" });
+    original.upstream_decision.frame_goal = "original goal";
+    const prior = candidateFromCommand(original, { actor: "fixture-owner", channel: "webchat" });
+    const changed = toolCommand("cmd-after", "req-after", "file.search", { path: "/tmp/a/input.txt" });
+    changed.upstream_decision.frame_goal = "new goal";
+
+    const sandboxStore = new FailureMemoryStore();
+    const sandboxSignature = sandboxStore.addSignature({
+      scope: prior.scope,
+      failure_type: "wrong_file",
+      input_pattern: prior.input_pattern,
+      action_pattern: prior.action_pattern,
+      context_pattern: prior.context_pattern,
+      evidence_log_ids: ["sandbox-failure-entry"],
+      state: "active",
+      suppression_policy: "block",
+      severity: "high",
+      confidence: 0.95,
+      match_level: 0,
+      probe_policy: "sandbox",
+    });
+    expect(sandboxStore.evaluateCommandGate(changed, { actor: "fixture-owner", channel: "webchat" }).decision)
+      .toBe("require_approval");
+    expect(sandboxStore.get(sandboxSignature.id)).toMatchObject({
+      state: "active", suppression_policy: "block", evidence_log_ids: ["sandbox-failure-entry"],
+    });
+
+    const store = new FailureMemoryStore();
+    const signature = store.addSignature({
+      scope: prior.scope,
+      failure_type: "boundary_violation",
+      input_pattern: prior.input_pattern,
+      action_pattern: prior.action_pattern,
+      context_pattern: prior.context_pattern,
+      evidence_log_ids: ["original-failure-entry"],
+      state: "active",
+      suppression_policy: "block",
+      severity: "critical",
+      confidence: 1,
+      match_level: 0,
+      probe_policy: "never",
+      notes: "permanent_block_justification:authority-boundary remains blocked",
+    });
+
+    const result = store.evaluateCommandGate(changed, { actor: "fixture-owner", channel: "webchat" });
+
+    expect(result.decision).toBe("block");
+    expect(result.condition_change_matches[0]?.changed_conditions).toEqual(["goal"]);
+    expect(store.get(signature.id)).toMatchObject({
+      state: "active", suppression_policy: "block", probe_policy: "never",
+      evidence_log_ids: ["original-failure-entry"],
+    });
   });
 
   it("persists digest-only command failure observations and keeps v2 optional fields backward compatible", () => {

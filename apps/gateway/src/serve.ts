@@ -1265,6 +1265,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       gate_decision: failureGate.decision,
       gate_reason: failureGate.reason,
       matched_signature_ids: failureGate.applied_signature_ids,
+      condition_change_matches: failureGate.condition_change_matches,
       requires_human_review: failureGate.requires_human_review,
     });
     if (failureGate.decision === "block") {
@@ -1396,6 +1397,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         recordApprovalHistory("approval_pending", cmd, log, origin, actor, evaluation, {
           failure_memory_required: failureMemoryRequiresApproval,
           failure_memory_reason: failureMemoryRequiresApproval ? failureGate.reason : undefined,
+          failure_memory_condition_change_matches: failureMemoryRequiresApproval
+            ? failureGate.condition_change_matches : undefined,
           approval_token_issued: Boolean(issued?.token),
           approval_token_expires_at_ms: issued?.expires_at_ms,
         });
