@@ -25,7 +25,7 @@ import {
   type FileDeleteTargetVersionObservation,
   type FileEditTargetVersionObservation,
 } from "@blue-tanuki/protocol";
-import { echoTool, type FileEditDiffContentReview, type Tool } from "./registry.js";
+import { assertToolExecutionNotCancelled, echoTool, type FileEditDiffContentReview, type Tool } from "./registry.js";
 import {
   gmailReadTool,
   googleCalendarReadTool,
@@ -824,6 +824,7 @@ async function defaultHttpRequest(
   target: HttpFetchTarget,
   method: "GET" | "HEAD",
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<HttpFetchResponse> {
   return await new Promise((resolve, reject) => {
     const url = target.url;
@@ -855,6 +856,7 @@ async function defaultHttpRequest(
         lookup,
         servername: target.hostname,
         timeout: HTTP_FETCH_TIMEOUT_MS,
+        signal,
       },
       (res) => {
         const status = res.statusCode ?? 0;
@@ -926,6 +928,7 @@ async function defaultHttpRequest(
 
 async function defaultGitHubReadRequest(
   target: GitHubReadTarget,
+  signal?: AbortSignal,
 ): Promise<GitHubReadResponse> {
   return await new Promise((resolve, reject) => {
     let finished = false;
@@ -951,6 +954,7 @@ async function defaultGitHubReadRequest(
           "X-GitHub-Api-Version": "2022-11-28",
         },
         timeout: HTTP_FETCH_TIMEOUT_MS,
+        signal,
       },
       (res) => {
         const status = res.statusCode ?? 0;
@@ -1009,6 +1013,7 @@ async function defaultGitHubReadRequest(
 
 async function defaultGitHubWriteRequest(
   target: GitHubWriteTarget,
+  signal?: AbortSignal,
 ): Promise<GitHubWriteResponse> {
   return await new Promise((resolve, reject) => {
     const requestBody = Buffer.from(JSON.stringify(target.body), "utf8");
@@ -1038,6 +1043,7 @@ async function defaultGitHubWriteRequest(
           "X-GitHub-Api-Version": "2022-11-28",
         },
         timeout: HTTP_FETCH_TIMEOUT_MS,
+        signal,
       },
       (res) => {
         const status = res.statusCode ?? 0;
@@ -1119,8 +1125,10 @@ export async function invokeHttpFetch(
   let url = parseHttpUrl(rawUrl);
 
   for (let redirects = 0; ; redirects += 1) {
+    assertToolExecutionNotCancelled(opts.signal, "http.fetch");
     const target = await resolvePublicTarget(url, env, resolveHost);
-    const res = await request(target, method, maxBytes);
+    assertToolExecutionNotCancelled(opts.signal, "http.fetch");
+    const res = await request(target, method, maxBytes, opts.signal);
     if (isRedirect(res.status) && res.location) {
       if (redirects >= HTTP_REDIRECT_LIMIT) {
         throw new Error(`http.fetch redirect limit exceeded (${HTTP_REDIRECT_LIMIT})`);
@@ -1183,10 +1191,11 @@ export async function invokeGitHubRead(
   const maxBytes = positiveIntArg(args, "max_bytes", 128_000, 512_000);
   const route = githubPath(args);
   const request = opts.request ?? defaultGitHubReadRequest;
+  assertToolExecutionNotCancelled(opts.signal, "github.read");
   const response = await request({
     path: route.path,
     maxBytes,
-  });
+  }, opts.signal);
   if (!response.ok) {
     throw new Error(`github.read returned HTTP ${response.status}`);
   }
@@ -1212,13 +1221,14 @@ export async function invokeGitHubWrite(
   assertGitHubRepoAllowed(env, route.repo);
   const token = githubWriteToken(env);
   const request = opts.request ?? defaultGitHubWriteRequest;
+  assertToolExecutionNotCancelled(opts.signal, "github.write");
   const response = await request({
     method: route.method,
     path: route.path,
     body: route.body,
     maxBytes,
     token,
-  });
+  }, opts.signal);
   const data = parseJsonOrText(response.body);
   if (!response.ok) {
     const message = typeof data === "object" && data !== null && !Array.isArray(data)
@@ -2275,8 +2285,8 @@ export const httpFetchTool: Tool = {
   name: "http.fetch",
   description: "GET or HEAD an HTTP(S) URL and return a bounded response body.",
   required_capabilities: requireToolOperationDescriptor("http.fetch").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeHttpFetch(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeHttpFetch(args, { signal: context.signal });
   },
 };
 
@@ -2284,8 +2294,8 @@ export const webSearchTool: Tool = {
   name: "web.search",
   description: "Provider-neutral web search via BLUE_TANUKI_WEB_SEARCH_ENDPOINT.",
   required_capabilities: requireToolOperationDescriptor("web.search").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeWebSearch(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeWebSearch(args, { signal: context.signal });
   },
 };
 
@@ -2293,8 +2303,8 @@ export const githubReadTool: Tool = {
   name: "github.read",
   description: "Read public GitHub repo, issue, and pull request metadata from api.github.com.",
   required_capabilities: requireToolOperationDescriptor("github.read").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeGitHubRead(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeGitHubRead(args, { signal: context.signal });
   },
 };
 
@@ -2302,8 +2312,8 @@ export const githubWriteTool: Tool = {
   name: "github.write",
   description: "Create/update GitHub issues, pull requests, and comments on allowlisted repositories.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeGitHubWrite(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeGitHubWrite(args, { signal: context.signal });
   },
 };
 
@@ -2311,8 +2321,8 @@ export const browserReadTool: Tool = {
   name: "browser.read",
   description: "Fetch a public web page through the SSRF guard and extract bounded readable text.",
   required_capabilities: requireToolOperationDescriptor("browser.read").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeBrowserRead(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeBrowserRead(args, { signal: context.signal });
   },
 };
 

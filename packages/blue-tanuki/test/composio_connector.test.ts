@@ -196,6 +196,57 @@ describe("Composio connector", () => {
     expect(JSON.stringify(result)).not.toContain("composio-secret-value");
   });
 
+  it("passes cancellation to the Composio request and never returns a success after abort", async () => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    let called = false;
+    await expect(invokeComposioExecute(
+      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", payload: { title: "fixture" } },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-test-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+          COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+          COMPOSIO_USER_ID: "owner-local",
+          COMPOSIO_DRY_RUN: "false",
+          COMPOSIO_LIVE_EXECUTION: "true",
+        },
+        signal: controller.signal,
+        request: async (_target, signal) => {
+          called = true;
+          seenSignal = signal;
+          controller.abort();
+          throw new Error("request aborted; mutation_status=not_confirmed");
+        },
+      },
+    )).rejects.toThrow(/mutation_status=not_confirmed/);
+    expect(called).toBe(true);
+    expect(seenSignal).toBe(controller.signal);
+
+    const alreadyCancelled = new AbortController();
+    alreadyCancelled.abort();
+    let dispatchedAfterCancel = false;
+    await expect(invokeComposioExecute(
+      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", payload: { title: "fixture" } },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-test-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+          COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+          COMPOSIO_USER_ID: "owner-local",
+          COMPOSIO_DRY_RUN: "false",
+          COMPOSIO_LIVE_EXECUTION: "true",
+        },
+        signal: alreadyCancelled.signal,
+        request: async () => {
+          dispatchedAfterCancel = true;
+          throw new Error("unexpected request");
+        },
+      },
+    )).rejects.toThrow(/cancelled before request dispatch/);
+    expect(dispatchedAfterCancel).toBe(false);
+  });
+
   it("registers Composio tools and their capability envelopes", () => {
     const registry = new ToolRegistry();
     registerBuiltinTools(registry);

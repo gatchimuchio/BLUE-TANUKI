@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
 import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
-import type { Tool } from "./registry.js";
+import { assertToolExecutionNotCancelled, type Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -53,7 +53,8 @@ export interface ComposioExecuteResponse {
 
 export interface ComposioOptions {
   env?: Env;
-  request?: (target: ComposioExecuteTarget) => Promise<ComposioExecuteResponse>;
+  signal?: AbortSignal;
+  request?: (target: ComposioExecuteTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
 }
 
 const DEFAULT_DRY_RUN = true;
@@ -287,6 +288,7 @@ function composioResponseError(toolName: string, response: ComposioExecuteRespon
 
 async function defaultComposioExecuteRequest(
   target: ComposioExecuteTarget,
+  signal?: AbortSignal,
 ): Promise<ComposioExecuteResponse> {
   const endpoint = new URL(target.path, `${target.api_base_url}/`);
   return await new Promise((resolve, reject) => {
@@ -317,6 +319,7 @@ async function defaultComposioExecuteRequest(
           "x-api-key": target.api_key,
         },
         timeout: COMPOSIO_EXECUTE_TIMEOUT_MS,
+        signal,
       },
       (res) => {
         const status = res.statusCode ?? 0;
@@ -474,6 +477,7 @@ export async function invokeComposioExecute(
   }
   const apiBaseUrl = composioApiBaseUrl(env);
   const request = opts.request ?? defaultComposioExecuteRequest;
+  assertToolExecutionNotCancelled(opts.signal, "composio.execute");
   const response = await request({
     api_base_url: apiBaseUrl,
     path: `/api/${COMPOSIO_API_VERSION}/tools/execute/${encodeURIComponent(tool)}`,
@@ -486,7 +490,7 @@ export async function invokeComposioExecute(
     },
     api_key: apiKey,
     maxBytes,
-  });
+  }, opts.signal);
   const data = parseJsonOrText(response.body);
   if (!response.ok) throw composioResponseError(tool, response);
   return {
@@ -522,7 +526,7 @@ export const composioExecuteTool: Tool = {
   description:
     "Executes Composio external tools only after explicit toolkit/action allowlists, live opt-in, capability, approval, and audit boundaries.",
   required_capabilities: requireToolOperationDescriptor("composio.execute").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeComposioExecute(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeComposioExecute(args, { signal: context.signal });
   },
 };

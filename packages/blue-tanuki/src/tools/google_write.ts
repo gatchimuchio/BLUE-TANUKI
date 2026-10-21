@@ -3,7 +3,7 @@ import * as https from "node:https";
 import { GmailWriteTargetVersionObservationSchema, requireToolOperationDescriptor,
   type GmailWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
-import type { GmailDraftContentReview, Tool } from "./registry.js";
+import { assertToolExecutionNotCancelled, type GmailDraftContentReview, type Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -35,7 +35,8 @@ export interface GoogleWriteResponse {
 
 export interface GoogleWriteOptions {
   env?: Env;
-  request?: (target: GoogleWriteTarget) => Promise<GoogleWriteResponse>;
+  signal?: AbortSignal;
+  request?: (target: GoogleWriteTarget, signal?: AbortSignal) => Promise<GoogleWriteResponse>;
   idempotency_key?: string;
   command_digest?: string;
 }
@@ -275,6 +276,7 @@ function googleToken(
 
 async function defaultGoogleWriteRequest(
   target: GoogleWriteTarget,
+  signal?: AbortSignal,
 ): Promise<GoogleWriteResponse> {
   return await new Promise((resolve, reject) => {
     const requestBody = target.body === undefined ? null : Buffer.from(target.body, "utf8");
@@ -308,6 +310,7 @@ async function defaultGoogleWriteRequest(
         method: target.method,
         headers,
         timeout: GOOGLE_WRITE_TIMEOUT_MS,
+        signal,
       },
       (res) => {
         const status = res.statusCode ?? 0;
@@ -385,9 +388,13 @@ async function readGmailDraftSnapshot(
   const get = async (path: string): Promise<unknown> => {
     let response: GoogleWriteResponse;
     try {
+      assertToolExecutionNotCancelled(options.signal, "gmail.write draft review");
       response = await request({ service: "gmail", hostname: "gmail.googleapis.com", path, method: "GET",
-        maxBytes, token });
+        maxBytes, token }, options.signal);
     } catch {
+      if (options.signal?.aborted) {
+        throw new Error("gmail_draft_read_cancelled; request_status=not_confirmed; mutation_sent=false");
+      }
       throw new Error("gmail_draft_read_unavailable; request_sent=false; mutation_sent=false");
     }
     if (!response.ok || response.truncated) {
@@ -591,7 +598,8 @@ export async function invokeGmailWrite(
     body,
     ...executionRequestIdentity(opts),
   };
-  const response = await sendRequest(target);
+  assertToolExecutionNotCancelled(opts.signal, "gmail.write");
+  const response = await sendRequest(target, opts.signal);
   if (!response.ok) throw googleWriteResponseError("gmail.write", response);
   return mutationResult("gmail.write", "gmail", operation, target, response);
 }
@@ -762,7 +770,8 @@ export async function invokeGoogleCalendarWrite(
     token,
     body,
   };
-  const response = await request(target);
+  assertToolExecutionNotCancelled(opts.signal, "google.calendar.write");
+  const response = await request(target, opts.signal);
   if (!response.ok) throw googleWriteResponseError("google.calendar.write", response);
   return mutationResult("google.calendar.write", "calendar", operation, target, response, fallback);
 }
@@ -861,7 +870,8 @@ export async function invokeGoogleDriveWrite(
     body,
     contentType,
   };
-  const response = await request(target);
+  assertToolExecutionNotCancelled(opts.signal, "google.drive.write");
+  const response = await request(target, opts.signal);
   if (!response.ok) throw googleWriteResponseError("google.drive.write", response);
   return mutationResult("google.drive.write", "drive", operation, target, response);
 }
@@ -893,7 +903,7 @@ export function createGmailWriteTool(options: Omit<GoogleWriteOptions, "idempote
       const operation = operationArg(args, ["draft.create", "message.send", "draft.send"]);
       const observation = assertGmailWriteTargetVersion(args, context.target_version_observation);
       return await invokeGmailWrite(args, { ...options, idempotency_key: context.idempotency_key,
-        command_digest: context.command_digest }, operation === "draft.send" ? observation : undefined);
+        command_digest: context.command_digest, signal: context.signal }, operation === "draft.send" ? observation : undefined);
     },
   };
 }
@@ -904,8 +914,8 @@ export const googleCalendarWriteTool: Tool = {
   name: "google.calendar.write",
   description: "Create, update, or delete Google Calendar events with an operator-provided OAuth token.",
   required_capabilities: requireToolOperationDescriptor("google.calendar.write").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeGoogleCalendarWrite(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeGoogleCalendarWrite(args, { signal: context.signal });
   },
 };
 
@@ -913,7 +923,7 @@ export const googleDriveWriteTool: Tool = {
   name: "google.drive.write",
   description: "Create or update bounded Google Drive text files with an operator-provided OAuth token.",
   required_capabilities: requireToolOperationDescriptor("google.drive.write").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeGoogleDriveWrite(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeGoogleDriveWrite(args, { signal: context.signal });
   },
 };

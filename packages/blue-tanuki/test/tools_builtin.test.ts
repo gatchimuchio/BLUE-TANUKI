@@ -555,6 +555,82 @@ describe("built-in tools", () => {
     ).rejects.toThrow(/GET or HEAD/);
   });
 
+  it("propagates cancellation to HTTP, GitHub, and Google request adapters", async () => {
+    const httpController = new AbortController();
+    let httpSignal: AbortSignal | undefined;
+    const http = fakeHttp({ "example.test": { address: "93.184.216.34", family: 4 } },
+      async (_target, _method, _maxBytes, signal) => {
+        httpSignal = signal;
+        httpController.abort();
+        throw new Error("request aborted");
+      });
+    await expect(invokeHttpFetch({ url: "https://example.test/" },
+      { ...http, signal: httpController.signal })).rejects.toThrow("request aborted");
+    expect(httpSignal).toBe(httpController.signal);
+
+    const githubController = new AbortController();
+    let githubSignal: AbortSignal | undefined;
+    await expect(invokeGitHubWrite({ operation: "issue.create", owner: "gatchimuchio", repo: "blue-tanuki",
+      title: "cancel fixture", body: "no external request" }, {
+      ...fakeGitHubWrite(async (_target, signal) => {
+      githubSignal = signal;
+      githubController.abort();
+      throw new Error("request aborted");
+    }, { GITHUB_TOKEN: "ghp_fixture", BLUE_TANUKI_GITHUB_REPOS: "gatchimuchio/blue-tanuki" }),
+      signal: githubController.signal,
+    })).rejects.toThrow("request aborted");
+    expect(githubSignal).toBe(githubController.signal);
+
+    const googleController = new AbortController();
+    let googleSignal: AbortSignal | undefined;
+    await expect(invokeGoogleCalendarWrite({ operation: "event.create", summary: "cancel fixture",
+      start: "2026-10-22T09:00:00Z", end: "2026-10-22T09:15:00Z" }, {
+      ...fakeGoogleWrite(async (_target, signal) => {
+        googleSignal = signal;
+        googleController.abort();
+        throw new Error("request aborted");
+      }),
+      signal: googleController.signal,
+    })).rejects.toThrow("request aborted");
+    expect(googleSignal).toBe(googleController.signal);
+
+    const githubReadController = new AbortController();
+    let githubReadSignal: AbortSignal | undefined;
+    await expect(invokeGitHubRead({ resource: "repo", owner: "gatchimuchio", repo: "blue-tanuki" }, {
+      ...fakeGitHub(async (_target, signal) => {
+        githubReadSignal = signal;
+        githubReadController.abort();
+        throw new Error("request aborted");
+      }),
+      signal: githubReadController.signal,
+    })).rejects.toThrow("request aborted");
+    expect(githubReadSignal).toBe(githubReadController.signal);
+
+    const googleReadController = new AbortController();
+    let googleReadSignal: AbortSignal | undefined;
+    await expect(invokeGoogleCalendarRead({ calendar_id: "primary" }, {
+      ...fakeGoogle(async (_target, signal) => {
+        googleReadSignal = signal;
+        googleReadController.abort();
+        throw new Error("request aborted");
+      }, { GOOGLE_ACCESS_TOKEN: "google-read-fixture" }),
+      signal: googleReadController.signal,
+    })).rejects.toThrow("request aborted");
+    expect(googleReadSignal).toBe(googleReadController.signal);
+  });
+
+  it("does not convert a cancelled Google daily brief into a successful unavailable summary", async () => {
+    const controller = new AbortController();
+    const options = fakeGoogle(async (_target, signal) => {
+      expect(signal).toBe(controller.signal);
+      controller.abort();
+      throw new Error("request aborted");
+    }, { GOOGLE_ACCESS_TOKEN: "google-read-fixture" });
+
+    await expect(buildGoogleDailyBriefContent({ ...options, signal: controller.signal, services: ["gmail"] }))
+      .rejects.toThrow(/cancelled; result is incomplete/);
+  });
+
   it.each([
     ["loopback", "loopback.test", "127.0.0.1"],
     ["private", "private.test", "10.12.0.4"],

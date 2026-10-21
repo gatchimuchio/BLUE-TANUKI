@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import * as https from "node:https";
 import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
-import type { Tool } from "./registry.js";
+import { assertToolExecutionNotCancelled, type Tool } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -27,7 +27,8 @@ export interface GoogleReadResponse {
 export interface GoogleReadOptions {
   env?: Env;
   now?: () => Date;
-  request?: (target: GoogleReadTarget) => Promise<GoogleReadResponse>;
+  signal?: AbortSignal;
+  request?: (target: GoogleReadTarget, signal?: AbortSignal) => Promise<GoogleReadResponse>;
 }
 
 export interface GoogleDailyBriefOptions extends GoogleReadOptions {
@@ -171,6 +172,7 @@ function googleToken(
 
 async function defaultGoogleReadRequest(
   target: GoogleReadTarget,
+  signal?: AbortSignal,
 ): Promise<GoogleReadResponse> {
   return await new Promise((resolve, reject) => {
     let finished = false;
@@ -196,6 +198,7 @@ async function defaultGoogleReadRequest(
           "User-Agent": `BLUE-TANUKI/0.1 ${target.service}.read`,
         },
         timeout: GOOGLE_READ_TIMEOUT_MS,
+        signal,
       },
       (res) => {
         const status = res.statusCode ?? 0;
@@ -310,13 +313,14 @@ export async function invokeGmailRead(
   const listPath =
     `/gmail/v1/users/me/messages?maxResults=${maxResults}` +
     `&q=${encodeURIComponent(query)}`;
+  assertToolExecutionNotCancelled(opts.signal, "gmail.read");
   const listResponse = await request({
     service: "gmail",
     hostname: "gmail.googleapis.com",
     path: listPath,
     maxBytes,
     token,
-  });
+  }, opts.signal);
   if (!listResponse.ok) throw googleResponseError("gmail.read", listResponse);
 
   const listJson = parseJson(listResponse.body, "gmail.read");
@@ -324,6 +328,7 @@ export async function invokeGmailRead(
   const messages: GmailReadMessage[] = [];
   let truncated = listResponse.truncated;
   for (const id of ids) {
+    assertToolExecutionNotCancelled(opts.signal, "gmail.read");
     const path =
       `/gmail/v1/users/me/messages/${encodeURIComponent(id)}` +
       "?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date";
@@ -333,7 +338,7 @@ export async function invokeGmailRead(
       path,
       maxBytes,
       token,
-    });
+    }, opts.signal);
     if (!detailResponse.ok) throw googleResponseError("gmail.read", detailResponse);
     truncated = truncated || detailResponse.truncated;
     const message = gmailMessageFromJson(parseJson(detailResponse.body, "gmail.read"));
@@ -406,13 +411,14 @@ export async function invokeGoogleCalendarRead(
     timeMax,
   });
   const path = `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
+  assertToolExecutionNotCancelled(opts.signal, "google.calendar.read");
   const response = await request({
     service: "calendar",
     hostname: "www.googleapis.com",
     path,
     maxBytes,
     token,
-  });
+  }, opts.signal);
   if (!response.ok) throw googleResponseError("google.calendar.read", response);
   const events = calendarEvents(parseJson(response.body, "google.calendar.read"), maxResults);
   return {
@@ -477,13 +483,14 @@ export async function invokeGoogleDriveRead(
   const pageToken = stringArg(args, "page_token", false);
   if (pageToken) params.set("pageToken", pageToken);
   const path = `/drive/v3/files?${params}`;
+  assertToolExecutionNotCancelled(opts.signal, "google.drive.read");
   const response = await request({
     service: "drive",
     hostname: "www.googleapis.com",
     path,
     maxBytes,
     token,
-  });
+  }, opts.signal);
   if (!response.ok) throw googleResponseError("google.drive.read", response);
   const result = driveFiles(parseJson(response.body, "google.drive.read"), maxResults);
   return {
@@ -530,6 +537,7 @@ export async function buildGoogleDailyBriefContent(
   ];
 
   for (const service of services) {
+    assertToolExecutionNotCancelled(opts.signal, "google.daily_brief");
     if (service === "gmail") {
       try {
         const result = resultRecord(await invokeGmailRead(
@@ -545,6 +553,7 @@ export async function buildGoogleDailyBriefContent(
           lines.push(`- ${briefItem(message.subject, "(no subject)")} / ${briefItem(message.from, "unknown sender")}`);
         }
       } catch (e) {
+        if (opts.signal?.aborted) throw new Error("google.daily_brief cancelled; result is incomplete");
         lines.push(`Gmail: unavailable; ${safeBriefError(e)}`);
       }
       continue;
@@ -565,6 +574,7 @@ export async function buildGoogleDailyBriefContent(
           lines.push(`- ${briefItem(event.start, "time unknown")} / ${briefItem(event.summary, "(no title)")}`);
         }
       } catch (e) {
+        if (opts.signal?.aborted) throw new Error("google.daily_brief cancelled; result is incomplete");
         lines.push(`Calendar: unavailable; ${safeBriefError(e)}`);
       }
       continue;
@@ -584,6 +594,7 @@ export async function buildGoogleDailyBriefContent(
           lines.push(`- ${briefItem(file.name, "(unnamed file)")} / ${briefItem(file.modified_time, "modified time unknown")}`);
         }
       } catch (e) {
+        if (opts.signal?.aborted) throw new Error("google.daily_brief cancelled; result is incomplete");
         lines.push(`Drive: unavailable; ${safeBriefError(e)}`);
       }
     }
@@ -596,8 +607,8 @@ export const gmailReadTool: Tool = {
   name: "gmail.read",
   description: "Read a bounded Gmail metadata summary with an operator-provided OAuth token.",
   required_capabilities: requireToolOperationDescriptor("gmail.read").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeGmailRead(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeGmailRead(args, { signal: context.signal });
   },
 };
 
@@ -605,8 +616,8 @@ export const googleCalendarReadTool: Tool = {
   name: "google.calendar.read",
   description: "Read a bounded Google Calendar event summary with an operator-provided OAuth token.",
   required_capabilities: requireToolOperationDescriptor("google.calendar.read").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeGoogleCalendarRead(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeGoogleCalendarRead(args, { signal: context.signal });
   },
 };
 
@@ -614,7 +625,7 @@ export const googleDriveReadTool: Tool = {
   name: "google.drive.read",
   description: "Read a bounded Google Drive metadata summary with an operator-provided OAuth token.",
   required_capabilities: requireToolOperationDescriptor("google.drive.read").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeGoogleDriveRead(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeGoogleDriveRead(args, { signal: context.signal });
   },
 };

@@ -26,11 +26,13 @@ export interface HttpFetchResponse {
 
 export interface HttpFetchOptions {
   env?: Env;
+  signal?: AbortSignal;
   resolveHost?: (hostname: string) => Promise<ResolvedAddress[]>;
   request?: (
     target: HttpFetchTarget,
     method: "GET" | "HEAD",
     maxBytes: number,
+    signal?: AbortSignal,
   ) => Promise<HttpFetchResponse>;
 }
 
@@ -57,7 +59,8 @@ export interface GitHubReadResponse {
 }
 
 export interface GitHubReadOptions {
-  request?: (target: GitHubReadTarget) => Promise<GitHubReadResponse>;
+  signal?: AbortSignal;
+  request?: (target: GitHubReadTarget, signal?: AbortSignal) => Promise<GitHubReadResponse>;
 }
 
 export type GitHubWriteMethod = "POST" | "PATCH";
@@ -82,7 +85,8 @@ export interface GitHubWriteResponse {
 
 export interface GitHubWriteOptions {
   env?: Env;
-  request?: (target: GitHubWriteTarget) => Promise<GitHubWriteResponse>;
+  signal?: AbortSignal;
+  request?: (target: GitHubWriteTarget, signal?: AbortSignal) => Promise<GitHubWriteResponse>;
 }
 
 export interface BrowserReadOptions extends HttpFetchOptions {}

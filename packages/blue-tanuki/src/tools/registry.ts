@@ -77,6 +77,11 @@ export interface ToolContext {
   on_execution_lifecycle?: (event: ToolExecutionLifecycleObservation) => void;
 }
 
+/** Keep an already-cancelled Executor request from dispatching a new adapter request. */
+export function assertToolExecutionNotCancelled(signal: AbortSignal | undefined, toolName: string): void {
+  if (signal?.aborted) throw new Error(`${toolName} cancelled before request dispatch`);
+}
+
 export type ToolCapability = string;
 
 export interface Tool {
