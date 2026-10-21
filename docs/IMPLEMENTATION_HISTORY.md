@@ -2785,3 +2785,20 @@ D08.01全体=`BUILD_GAP`。F10.02=`BUILD_GAP`。このconsumer接続は製品全
 | workspace全suite、実provider／資格／業務送信、browser UI操作、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後へ保持。 |
 
 D08.01の該当served synthetic subpathを`WIRED`とする。fixtureはHDS、Executor、Approval Gate、Broker、Memory／再起動の接続を示すだけで、実provider／実owner操作／対象製品環境を証明しないためD08.01全体=`BUILD_GAP`、F10.02=`BUILD_GAP`、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、D4-Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。code commit=`59037181e6f42fc136ffd13ac394a92abf3f24b9`。次のBUILD_BATCHは未選定。
+
+---
+
+### 履歴ログ：QEB-49-F10.02-TELEGRAM-IDENTITY-AND-POLL-DEDUP
+
+開始HEAD／`main`／`origin/main`=`8b37f54d1244f5b20817295c84b43480320bcc58`。現行pin rev2.3の三点セットと適用`AGENTS.md`、active instruction、F10.01／F10.02施工索引、WebChat/Telegram inboundのhandler接続を再同期した。旧版・閉じた記録は再読せず、F10.01依存状態の有無を特定するため現行進捗と該当履歴だけを検索した。F10.01のserved job縦断証拠は見つからず、statusは未確定のまま扱った。保護対象untracked Linux `target/`を維持した。
+
+Telegram adapterがactor identityへ可変username/display nameを使っていた経路を、安定したTelegram sender IDの`telegram:<id>`へ変更した。chat IDは返信先・session scope用metadataに分離し、安定sender IDを欠くmessageはhandlerへ渡さない。poll resultのupdate IDを検査し、同一process内でcurrent offset未満のduplicate/stale updateをGateway handlerへ再度渡さない。外部Telegram APIは呼ばず、注入fetch fixtureを通して既存handlerまで接続した。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/channel-telegram test` | PASS、3 tests。username変更後のactor安定、同一poll内duplicate抑止、sender ID欠落時の拒否を確認。 |
+| `pnpm --filter @blue-tanuki/channel-telegram typecheck`／`build` | PASS。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語移行負債76件は継続。 |
+| Gateway served job縦断、process restart後のduplicate防止、複数入口での権限再評価、attachment／長文分割、workspace全suite、実資格／Telegram API、QE_QC／QE_QA | 未実施。 |
+
+F10.02のTelegram identityと同一process poll handoffを部分的に`WIRED`とする。永続inbox／Gateway admissionの重複防止がないため、process restart後の再配信で同じ仕事が再生成されない証拠はなく、F10.02全体=`BUILD_GAP`。F10.01のWebChat実serve→HDS/J→job consumerも未確定である。次のBUILD_BATCHは`F10.01-WEBCHAT-TO-GOVERNED-JOB`とし、現行依存を含むserved local fixture経路を接続する。code commit=`8fe3913f0866e890b9b416d134c58008c2bd8354`。D4-Pocket／ミニドラ変更、実provider／資格／業務作用、GitHub Actions、公開／出荷判断はなし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
