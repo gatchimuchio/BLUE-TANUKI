@@ -2591,7 +2591,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const cronApprovalCorrelationResidualCount = recoveryInspectionCount(source.cron_approval_correlation_residual_count);
         const executionArchiveEvidence = projectRecoveryExecutionArchiveEvidence(source.execution_archive_evidence);
         const unboundExecutionEvidence = projectRecoveryUnboundExecutionEvidence(source.unbound_execution_evidence);
-        const initialBoundaryOk = source.schema_version === 11 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && executionArchiveEvidence !== null && unboundExecutionEvidence !== null && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null;
+        const schemaResidualSource = Array.isArray(source.operation_plan_schema_residuals) ? source.operation_plan_schema_residuals : null;
+        const schemaResidualReferences = new Set();
+        let schemaResidualsValid = schemaResidualSource !== null && schemaResidualSource.length <= 64;
+        const operationPlanSchemaResiduals = (schemaResidualSource || []).slice(0, 64).map(function (item) {
+          const value = item && typeof item === "object" ? item : {};
+          const planIdDigest = value.plan_id_digest === null ? null : recoveryInspectionDigest(value.plan_id_digest);
+          const recordDigest = recoveryInspectionDigest(value.record_digest);
+          if ((value.plan_id_digest !== null && !planIdDigest) || !recordDigest || schemaResidualReferences.has(recordDigest)) {
+            schemaResidualsValid = false;
+            return null;
+          }
+          schemaResidualReferences.add(recordDigest);
+          return { plan_id_digest: planIdDigest, record_digest: recordDigest };
+        }).filter(function (item) { return item !== null; });
+        if (operationPlanSchemaResiduals.length !== (schemaResidualSource || []).length) schemaResidualsValid = false;
+        const omittedOperationPlanSchemaResidualCount = recoveryInspectionCount(source.omitted_operation_plan_schema_residual_count);
+        const initialBoundaryOk = source.schema_version === 12 && source.surface === "recovery_inspection_operator" && source.mode === "read_only" && source.used_for_authority === false && source.may_execute === false && source.boundary_valid === true && executionArchiveEvidence !== null && unboundExecutionEvidence !== null && cronSummaryValid && cronLedgerStatus === cronStatus && source.cron_event_residual_count === cronResidualCount && documentCheckpointSummaryValid && documentCheckpointLedgerStatus === documentCheckpointStatus && source.document_organization_checkpoint_residual_count === documentCheckpointResidualCount && cronApprovalCorrelationResidualCount !== null && schemaResidualsValid && omittedOperationPlanSchemaResidualCount === 0;
         const ledgerStatuses = {
           j: recoveryInspectionLedgerStatus(ledgers.j, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
           m: recoveryInspectionLedgerStatus(ledgers.m, ["verified", "projection_mismatch", "residuals_present", "corrupt", "unavailable", "schema_mismatch"]),
@@ -2600,6 +2616,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           cron_events: cronLedgerStatus,
           document_organization_checkpoints: documentCheckpointLedgerStatus
         };
+        const operationPlanSchemaResidualsConsistent =
+          (operationPlanSchemaResiduals.length === 0 || ledgerStatuses.operation_plans === "residuals_present") &&
+          operationPlanSchemaResiduals.every(function (residual) {
+            return residual.plan_id_digest === null || planDependencyScopes.some(function (scope) {
+              return scope.plan_id_digest === residual.plan_id_digest && scope.status === "residuals_present" &&
+                scope.residual_dependencies.indexOf("operation_plan") >= 0;
+            });
+          });
         const unboundEvidenceConsistent = unboundExecutionEvidence !== null &&
           (unboundExecutionEvidence.status !== "available" ||
             (ledgerStatuses.broker === "verified" && ledgerStatuses.operation_plans === "verified" &&
@@ -2769,7 +2793,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         };
         const requestScopeCorrelationValid = source.request_scope_correlation && typeof source.request_scope_correlation === "object" &&
           JSON.stringify(source.request_scope_correlation) === JSON.stringify(expectedRequestScopeCorrelation);
-        const boundaryOk = initialBoundaryOk && unboundEvidenceConsistent && planDependencyScopesValid && requestScopeCorrelationValid;
+        const boundaryOk = initialBoundaryOk && operationPlanSchemaResidualsConsistent && unboundEvidenceConsistent && planDependencyScopesValid && requestScopeCorrelationValid;
         const status = boundaryOk
           ? recoveryInspectionEnum(source.status, ["verified", "residuals_present", "invalid_report"])
           : "invalid_report";
@@ -2801,6 +2825,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             omitted_record_count: null, records: []
           },
           operation_plan_residual_count: recoveryInspectionCount(source.operation_plan_residual_count),
+          operation_plan_schema_residuals: boundaryOk ? operationPlanSchemaResiduals : [],
+          omitted_operation_plan_schema_residual_count: boundaryOk ? 0 : omittedOperationPlanSchemaResidualCount,
           cron_event_residual_count: recoveryInspectionCount(source.cron_event_residual_count),
           cron_approval_correlation_residual_count: cronApprovalCorrelationResidualCount,
           document_organization_checkpoint_residual_count: recoveryInspectionCount(source.document_organization_checkpoint_residual_count),

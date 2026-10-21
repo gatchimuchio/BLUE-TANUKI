@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   getOperationDescriptor, inspectOperationCommandExecutionResult,
-  GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
+  GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointEnvelopeSchema,
+  OperationPlanCheckpointPlanSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
   type OperationPlanResultReturnControl, type OperationPlanWaitResumeControl, type OperationPlanWaitState,
@@ -507,14 +508,74 @@ export interface OperationPlanCheckpointRuntimePartition {
   readonly checkpoint: OperationPlanCheckpoint;
   readonly quarantined_plan_indices: readonly number[];
   readonly quarantined_wait_indices: readonly number[];
+  readonly quarantined_plans: readonly {
+    readonly index: number;
+    readonly plan_id_digest: string | null;
+    readonly record_digest: string;
+    readonly schema_valid: boolean;
+  }[];
 }
 
-/** 意味的不整合のあるplanを実行対象から隔離し、保存済みrecordは破棄しない。 */
+function isCheckpointRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function checkpointPlanId(value: unknown): string | null {
+  if (!isCheckpointRecord(value) || !Array.isArray(value.revisions)) return null;
+  const firstRevision = value.revisions[0];
+  if (!isCheckpointRecord(firstRevision) || !isCheckpointRecord(firstRevision.plan)) return null;
+  const planId = firstRevision.plan.plan_id;
+  return typeof planId === "string" && planId.length > 0 && planId.length <= 200 ? planId : null;
+}
+
+/** Schema-invalid plan identities are exposed only as digests, never as raw plan content. */
+export function operationPlanCheckpointPlanIdDigest(value: unknown): string | null {
+  const planId = checkpointPlanId(value);
+  return planId === null ? null : operationPlanDigest(planId);
+}
+
+function recordRawPlanIdentityOwners(
+  value: unknown,
+  index: number,
+  planOwners: Map<string, number[]>,
+  commandOwners: Map<string, number[]>,
+  ticketOwners: Map<string, number[]>,
+): void {
+  const recordOwner = (owners: Map<string, number[]>, id: string) => {
+    owners.set(id, [...(owners.get(id) ?? []), index]);
+  };
+  const planId = checkpointPlanId(value);
+  if (planId !== null) recordOwner(planOwners, planId);
+  if (!isCheckpointRecord(value) || !Array.isArray(value.bindings)) return;
+  for (const binding of value.bindings) {
+    if (!isCheckpointRecord(binding)) continue;
+    if (typeof binding.command_id === "string" && binding.command_id.length > 0 && binding.command_id.length <= 200) {
+      recordOwner(commandOwners, binding.command_id);
+    }
+    const admission = binding.execution_admission;
+    if (isCheckpointRecord(admission) && typeof admission.ticket_id === "string" &&
+        admission.ticket_id.length > 0 && admission.ticket_id.length <= 200) {
+      recordOwner(ticketOwners, admission.ticket_id);
+    }
+  }
+}
+
+/** Isolate an invalid plan record after envelope integrity and shared-state schema checks. */
 export function partitionOperationPlanCheckpointForRuntime(
   value: unknown,
   memoryAvailable: boolean,
 ): OperationPlanCheckpointRuntimePartition {
-  const state = OperationPlanCheckpointSchema.parse(value);
+  const envelope = OperationPlanCheckpointEnvelopeSchema.parse(value);
+  const state = OperationPlanCheckpointSchema.parse({ ...envelope, plans: [] });
+  const rawPlans = envelope.plans;
+  const validPlans: { readonly index: number; readonly plan: OperationPlanCheckpoint["plans"][number] }[] = [];
+  const schemaInvalidPlanIndices = new Set<number>();
+  for (const [index, rawPlan] of rawPlans.entries()) {
+    const parsed = OperationPlanCheckpointPlanSchema.safeParse(rawPlan);
+    if (parsed.success) validPlans.push({ index, plan: parsed.data });
+    else schemaInvalidPlanIndices.add(index);
+  }
+
   const quarantinedPlans = new Set<number>();
   const planOwners = new Map<string, number[]>();
   const commandOwners = new Map<string, number[]>();
@@ -522,28 +583,22 @@ export function partitionOperationPlanCheckpointForRuntime(
   const waitOwners = new Map<string, number[]>();
   const waitCounts = new Map<string, number>();
 
-  const recordOwner = (owners: Map<string, number[]>, id: string, index: number) => {
-    owners.set(id, [...(owners.get(id) ?? []), index]);
-  };
   const quarantineDuplicateOwners = (owners: Map<string, number[]>) => {
     for (const indexes of owners.values()) {
       if (indexes.length > 1) for (const index of indexes) quarantinedPlans.add(index);
     }
   };
 
-  for (const [index, plan] of state.plans.entries()) {
-    const first = plan.revisions[0]!.plan;
-    recordOwner(planOwners, first.plan_id, index);
-    for (const binding of plan.bindings) {
-      recordOwner(commandOwners, binding.command_id, index);
-      if (binding.execution_admission) recordOwner(ticketOwners, binding.execution_admission.ticket_id, index);
-    }
-  }
+  for (const index of schemaInvalidPlanIndices) quarantinedPlans.add(index);
+  rawPlans.forEach((plan, index) => recordRawPlanIdentityOwners(
+    plan, index, planOwners, commandOwners, ticketOwners,
+  ));
   quarantineDuplicateOwners(planOwners);
   quarantineDuplicateOwners(commandOwners);
   quarantineDuplicateOwners(ticketOwners);
 
-  for (const [index, plan] of state.plans.entries()) {
+  for (const { index, plan } of validPlans) {
+    if (quarantinedPlans.has(index)) continue;
     try {
       const planIdDigest = operationPlanDigest(plan.revisions[0]!.plan.plan_id);
       validateOperationPlanCheckpoint({ ...state, plans: [plan],
@@ -555,15 +610,19 @@ export function partitionOperationPlanCheckpointForRuntime(
   }
 
   const planIndexesByDigest = new Map<string, number[]>();
-  for (const [index, plan] of state.plans.entries()) {
-    const digest = operationPlanDigest(plan.revisions[0]!.plan.plan_id);
-    recordOwner(planIndexesByDigest, digest, index);
+  for (const [index, plan] of rawPlans.entries()) {
+    const planId = checkpointPlanId(plan);
+    if (planId === null) continue;
+    const digest = operationPlanDigest(planId);
+    planIndexesByDigest.set(digest, [...(planIndexesByDigest.get(digest) ?? []), index]);
   }
   if (state.waits) {
     for (const wait of state.waits) {
       waitCounts.set(wait.wait_id, (waitCounts.get(wait.wait_id) ?? 0) + 1);
       const planIndexes = planIndexesByDigest.get(wait.plan_id_digest) ?? [];
-      if (planIndexes.length === 1) recordOwner(waitOwners, wait.wait_id, planIndexes[0]!);
+      if (planIndexes.length === 1) {
+        waitOwners.set(wait.wait_id, [...(waitOwners.get(wait.wait_id) ?? []), planIndexes[0]!]);
+      }
       else if (planIndexes.length > 1) for (const planIndex of planIndexes) quarantinedPlans.add(planIndex);
     }
     for (const [waitId, count] of waitCounts) {
@@ -571,9 +630,10 @@ export function partitionOperationPlanCheckpointForRuntime(
     }
   }
 
-  const cleanPlanIndices = state.plans.map((_plan, index) => index).filter((index) => !quarantinedPlans.has(index));
+  const validPlansByIndex = new Map(validPlans.map(({ index, plan }) => [index, plan] as const));
+  const cleanPlanIndices = validPlans.map(({ index }) => index).filter((index) => !quarantinedPlans.has(index));
   const cleanPlanDigests = new Set(cleanPlanIndices.map((index) =>
-    operationPlanDigest(state.plans[index]!.revisions[0]!.plan.plan_id)));
+    operationPlanDigest(validPlansByIndex.get(index)!.revisions[0]!.plan.plan_id)));
   const cleanWaitIndices = (state.waits ?? []).map((_wait, index) => index).filter((index) => {
     const wait = state.waits![index]!;
     const owners = planIndexesByDigest.get(wait.plan_id_digest) ?? [];
@@ -583,16 +643,23 @@ export function partitionOperationPlanCheckpointForRuntime(
   const cleanWaitSet = new Set(cleanWaitIndices);
   const cleanCheckpoint = OperationPlanCheckpointSchema.parse({
     ...state,
-    plans: cleanPlanIndices.map((index) => state.plans[index]!),
+    plans: cleanPlanIndices.map((index) => validPlansByIndex.get(index)!),
     ...(state.waits === undefined ? {} : { waits: state.waits.filter((_wait, index) => cleanWaitSet.has(index)) }),
   });
 
   // plan別残差の隔離後にcheckpoint共有状態を再検査し、共有破損は全体fail-closedにする。
   const checked = validateOperationPlanCheckpoint(cleanCheckpoint, memoryAvailable);
+  const quarantinedPlanIndices = [...quarantinedPlans].sort((a, b) => a - b);
   return {
     checkpoint: checked,
-    quarantined_plan_indices: [...quarantinedPlans].sort((a, b) => a - b),
+    quarantined_plan_indices: quarantinedPlanIndices,
     quarantined_wait_indices: (state.waits ?? []).map((_wait, index) => index).filter((index) => !cleanWaitSet.has(index)),
+    quarantined_plans: quarantinedPlanIndices.map((index) => ({
+      index,
+      plan_id_digest: operationPlanCheckpointPlanIdDigest(rawPlans[index]),
+      record_digest: operationPlanDigest(rawPlans[index]),
+      schema_valid: !schemaInvalidPlanIndices.has(index),
+    })),
   };
 }
 

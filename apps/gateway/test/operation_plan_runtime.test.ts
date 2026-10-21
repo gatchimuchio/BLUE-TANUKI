@@ -9,6 +9,7 @@ import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmail
   ToolRegistry, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservationSchema, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
   OperationPlanCheckpointSchema,
+  OperationPlanCheckpointEnvelopeSchema,
   type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
@@ -580,6 +581,127 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       store.restorePlanScope(archivedResidual, operationPlanDigest(residualCandidate.plan_id), current);
       expect(store.load()?.plans.map((entry) => entry.revisions[0]!.plan.plan_id).sort())
         .toEqual([cleanCandidate.plan_id, residualCandidate.plan_id].sort());
+    } finally {
+      store.close(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("isolates a schema-invalid plan record, keeps its raw payload, and restores only that plan scope", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-schema-isolation-"));
+    const databasePath = join(root, "state.sqlite");
+    const store = new OperationPlanStateStore(databasePath);
+    const invalidCandidate = plan("schema-isolation-invalid", root);
+    const cleanCandidate = plan("schema-isolation-clean", root);
+    const invalidGoal = "schema-invalid synthetic task";
+    const cleanGoal = "schema-clean synthetic task";
+    const invalidPlanState = {
+      owner: "fixture-owner", channel: "webchat", goal: invalidGoal,
+      request_goal_criteria: noRequestCriteria(invalidGoal, invalidCandidate.request_id),
+      revisions: [{ digest: operationPlanDigest(invalidCandidate), plan: invalidCandidate }],
+      receipt_observations: [], bindings: [], results: [],
+    };
+    const cleanPlanState = {
+      owner: "fixture-owner", channel: "webchat", goal: cleanGoal,
+      request_goal_criteria: noRequestCriteria(cleanGoal, cleanCandidate.request_id),
+      revisions: [{ digest: operationPlanDigest(cleanCandidate), plan: cleanCandidate }],
+      receipt_observations: [], bindings: [], results: [],
+    };
+    try {
+      store.compareAndSet(null, OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1", plans: [invalidPlanState, cleanPlanState],
+      }));
+      const database = new DatabaseSync(databasePath);
+      try {
+        const row = database.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id=1").get() as {
+          checkpoint_json: string;
+        };
+        const raw = JSON.parse(row.checkpoint_json) as { plans: Array<Record<string, unknown>> };
+        raw.plans[0]!.owner = null;
+        database.prepare("UPDATE operation_plan_state SET checkpoint_json=?,digest=? WHERE id=1")
+          .run(JSON.stringify(raw), operationPlanDigest(raw));
+      } finally { database.close(); }
+
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      try {
+        expect(hds.getRuntimeSnapshot().operation_plans.plans.map((entry) => entry.plan_id))
+          .toEqual([operationPlanDigest(cleanCandidate.plan_id)]);
+        expect(review(hds, cleanCandidate, "search").command?.type).toBe("tool_call");
+      } finally { hds.close(); }
+
+      const persistedDatabase = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        const row = persistedDatabase.prepare("SELECT checkpoint_json,digest FROM operation_plan_state WHERE id=1").get() as {
+          checkpoint_json: string; digest: string;
+        };
+        const raw: unknown = JSON.parse(row.checkpoint_json);
+        expect(operationPlanDigest(raw)).toBe(row.digest);
+        expect(OperationPlanCheckpointEnvelopeSchema.parse(raw).plans).toHaveLength(2);
+        expect(() => OperationPlanCheckpointSchema.parse(raw)).toThrow();
+        const rawPlans = (raw as { plans: Array<Record<string, unknown>> }).plans;
+        const storedInvalid = rawPlans.find((entry) => {
+          const revisions = entry.revisions as Array<{ plan: OperationPlan }>;
+          return revisions[0]?.plan.plan_id === invalidCandidate.plan_id;
+        });
+        const storedClean = rawPlans.find((entry) => {
+          const revisions = entry.revisions as Array<{ plan: OperationPlan }>;
+          return revisions[0]?.plan.plan_id === cleanCandidate.plan_id;
+        });
+        expect(storedInvalid?.owner).toBeNull();
+        expect(storedClean?.bindings).toHaveLength(1);
+      } finally { persistedDatabase.close(); }
+
+      const archivedInvalidPlan = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1", plans: [invalidPlanState],
+      });
+      const current = store.load();
+      if (!current) throw new Error("missing schema-isolated checkpoint");
+      store.restorePlanScope(archivedInvalidPlan, operationPlanDigest(invalidCandidate.plan_id), current);
+      const restored = store.load();
+      expect(restored?.plans.map((entry) => entry.revisions[0]!.plan.plan_id).sort())
+        .toEqual([cleanCandidate.plan_id, invalidCandidate.plan_id].sort());
+
+      const restoredDatabase = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        const row = restoredDatabase.prepare("SELECT checkpoint_json,digest FROM operation_plan_state WHERE id=1").get() as {
+          checkpoint_json: string; digest: string;
+        };
+        expect(operationPlanDigest(JSON.parse(row.checkpoint_json))).toBe(row.digest);
+        const parsed = OperationPlanCheckpointSchema.parse(JSON.parse(row.checkpoint_json));
+        expect(parsed.plans.find((entry) => entry.revisions[0]!.plan.plan_id === invalidCandidate.plan_id)?.owner)
+          .toBe("fixture-owner");
+        expect(parsed.plans.find((entry) => entry.revisions[0]!.plan.plan_id === cleanCandidate.plan_id)?.bindings)
+          .toHaveLength(1);
+      } finally { restoredDatabase.close(); }
+    } finally {
+      store.close(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on invalid shared checkpoint state even when the top-level digest matches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-shared-schema-fail-closed-"));
+    const databasePath = join(root, "state.sqlite");
+    const store = new OperationPlanStateStore(databasePath);
+    const candidate = plan("shared-schema-fail-closed", root);
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal: "shared schema fixture",
+        request_goal_criteria: noRequestCriteria("shared schema fixture", candidate.request_id),
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }],
+        receipt_observations: [], bindings: [], results: [] }],
+    });
+    try {
+      store.compareAndSet(null, checkpoint);
+      const database = new DatabaseSync(databasePath);
+      try {
+        const row = database.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id=1").get() as {
+          checkpoint_json: string;
+        };
+        const raw = JSON.parse(row.checkpoint_json) as Record<string, unknown>;
+        raw.shell_exec_result_observations = [{ untrusted: true }];
+        database.prepare("UPDATE operation_plan_state SET checkpoint_json=?,digest=? WHERE id=1")
+          .run(JSON.stringify(raw), operationPlanDigest(raw));
+      } finally { database.close(); }
+      expect(() => store.load()).toThrow();
     } finally {
       store.close(); await rm(root, { recursive: true, force: true });
     }

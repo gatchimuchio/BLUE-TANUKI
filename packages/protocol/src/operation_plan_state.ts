@@ -363,11 +363,14 @@ export const OperationPlanReflectionCandidateSchema = z.object({
     interpretation: z.string().trim().min(1).max(800), uncertainty: z.string().trim().min(1).max(800) }).strict()).min(1).max(8),
 }).strict();
 
-export const OperationPlanCheckpointSchema = z.object({
+const OperationPlanCheckpointSharedShape = {
   schema_version: z.literal("operation-plan-state.v1"),
   waits: z.array(OperationPlanWaitStateSchema).max(256).optional(),
   shell_exec_result_observations: z.array(OperationPlanShellExecResultObservationSchema).max(256).optional(),
-  plans: z.array(z.object({
+};
+
+/** The validated schema for one plan record inside the J checkpoint. */
+export const OperationPlanCheckpointPlanSchema = z.object({
     owner: Id, channel: Id, goal: z.string().min(1).max(200_000),
     /** Stable task lineage across J-authorized wait/resume plan candidates; non-authority identity only. */
     task_identity_digest: Digest.optional(),
@@ -398,6 +401,18 @@ export const OperationPlanCheckpointSchema = z.object({
       observed_at_ms: z.number().finite().nonnegative(),
       expires_at_ms: z.number().finite().nonnegative(),
     }).strict()).max(100),
-  }).strict()).max(64),
+}).strict();
+export type OperationPlanCheckpointPlan = z.infer<typeof OperationPlanCheckpointPlanSchema>;
+
+/** A checkpoint envelope validates shared state while leaving plan records for per-item parsing. */
+export const OperationPlanCheckpointEnvelopeSchema = z.object({
+  ...OperationPlanCheckpointSharedShape,
+  plans: z.array(z.unknown()).max(64),
+}).strict();
+export type OperationPlanCheckpointEnvelope = z.infer<typeof OperationPlanCheckpointEnvelopeSchema>;
+
+export const OperationPlanCheckpointSchema = z.object({
+  ...OperationPlanCheckpointSharedShape,
+  plans: z.array(OperationPlanCheckpointPlanSchema).max(64),
 }).strict();
 export type OperationPlanCheckpoint = z.infer<typeof OperationPlanCheckpointSchema>;

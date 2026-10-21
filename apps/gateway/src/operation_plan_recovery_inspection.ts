@@ -3,8 +3,10 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
-import { operationPlanDigest, receiptForResultCommit, verifyResultMemoryCommit } from "@blue-tanuki/hds-brain";
-import { OperationPlanCheckpointSchema, type ExecutionAdmission, type OperationPlanCheckpoint } from "@blue-tanuki/protocol";
+import { operationPlanCheckpointPlanIdDigest, operationPlanDigest, partitionOperationPlanCheckpointForRuntime,
+  receiptForResultCommit, verifyResultMemoryCommit } from "@blue-tanuki/hds-brain";
+import { OperationPlanCheckpointEnvelopeSchema, OperationPlanCheckpointPlanSchema, OperationPlanCheckpointSchema,
+  type ExecutionAdmission, type OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 import { executionAdmissionDigest } from "./execution_intent_store.js";
 import { operationPlanRequestScopeDigest } from "./recovery_request_scope.js";
 
@@ -45,6 +47,11 @@ export interface OperationPlanRecoveryInspection {
   readonly unverified_memory_link_count: number;
   readonly omitted_binding_count: number;
   readonly plans: readonly OperationPlanRecoveryPlanSummary[];
+  readonly schema_invalid_plan_count: number;
+  readonly schema_invalid_plans: readonly {
+    readonly plan_id_digest: string | null;
+    readonly record_digest: string;
+  }[];
   readonly bindings: readonly {
     readonly plan_id_digest: string;
     readonly step_id_digest: string;
@@ -73,7 +80,7 @@ function unavailablePlanInspection(
   return {
     owner: "J", status, reason, plan_count: 0, plan_integrity_residual_count: 0, binding_count: 0,
     verified_binding_count: 0, residual_binding_count: 0, unverified_memory_link_count: 0, omitted_binding_count: 0,
-    plans: [], bindings: [], used_for_authority: false, may_execute: false,
+    plans: [], schema_invalid_plan_count: 0, schema_invalid_plans: [], bindings: [], used_for_authority: false, may_execute: false,
   };
 }
 
@@ -177,14 +184,13 @@ export function readOperationPlanRecoveryCheckpointSnapshot(options: {
     try { raw = JSON.parse(row.checkpoint_json); }
     catch { throw new Error("operation_plan_checkpoint_unverified"); }
     if (operationPlanDigest(raw) !== row.digest) throw new Error("operation_plan_checkpoint_unverified");
-    const parsed = OperationPlanCheckpointSchema.safeParse(raw);
-    if (!parsed.success) throw new Error("operation_plan_checkpoint_unverified");
+    const partition = partitionOperationPlanCheckpointForRuntime(raw, true);
     database.exec("COMMIT");
     transactionStarted = false;
     if (["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${databasePath}${suffix}`))) {
       throw new Error("operation_plan_checkpoint_unavailable");
     }
-    return parsed.data;
+    return partition.checkpoint;
   } catch {
     if (transactionStarted) {
       try { database?.exec("ROLLBACK"); } catch { /* Keep the fixed recovery error. */ }
@@ -400,34 +406,60 @@ export function inspectOperationPlanRecoveryLedger(options: {
     try {
       if (operationPlanDigest(raw) !== row.digest) return { ...unavailablePlanInspection("corrupt", "checkpoint_integrity_mismatch"), plan_integrity_residual_count: 1 };
     } catch { return { ...unavailablePlanInspection("corrupt", "checkpoint_integrity_mismatch"), plan_integrity_residual_count: 1 }; }
-    const parsed = OperationPlanCheckpointSchema.safeParse(raw);
-    if (!parsed.success) return { ...unavailablePlanInspection("schema_mismatch", "schema_mismatch"), plan_integrity_residual_count: 1 };
-
-    const checkpoint = parsed.data;
+    const envelope = OperationPlanCheckpointEnvelopeSchema.safeParse(raw);
+    if (!envelope.success) return { ...unavailablePlanInspection("schema_mismatch", "schema_mismatch"), plan_integrity_residual_count: 1 };
+    const base = OperationPlanCheckpointSchema.parse({ ...envelope.data, plans: [] });
+    const schemaInvalidPlans: { plan_id_digest: string | null; record_digest: string }[] = [];
+    const schemaValidPlans: OperationPlanCheckpoint["plans"][number][] = [];
+    for (const rawPlan of envelope.data.plans) {
+      const parsedPlan = OperationPlanCheckpointPlanSchema.safeParse(rawPlan);
+      if (parsedPlan.success) schemaValidPlans.push(parsedPlan.data);
+      else schemaInvalidPlans.push({
+        plan_id_digest: operationPlanCheckpointPlanIdDigest(rawPlan),
+        record_digest: operationPlanDigest(rawPlan),
+      });
+    }
+    const checkpoint = OperationPlanCheckpointSchema.parse({ ...base, plans: schemaValidPlans });
     const inspected = inspectCheckpointBindings(checkpoint);
+    const summaries = new Map(inspected.plans.map((plan) => [plan.plan_id_digest, plan] as const));
+    for (const residualPlan of schemaInvalidPlans) {
+      if (!residualPlan.plan_id_digest) continue;
+      const existing = summaries.get(residualPlan.plan_id_digest);
+      summaries.set(residualPlan.plan_id_digest, {
+        plan_id_digest: residualPlan.plan_id_digest,
+        request_scope_digest: null,
+        integrity: "residuals_present",
+        plan_record_count: (existing?.plan_record_count ?? 0) + 1,
+        binding_count: existing?.binding_count ?? 0,
+        residual_binding_count: existing?.residual_binding_count ?? 0,
+      });
+    }
     const capped = inspected.bindings.slice(0, 200);
     const inspectedBindingsByPlan = new Map<string, number>();
     for (const binding of capped) {
       inspectedBindingsByPlan.set(binding.plan_id_digest, (inspectedBindingsByPlan.get(binding.plan_id_digest) ?? 0) + 1);
     }
-    const residual = inspected.residualCount > 0 || inspected.residualPlanCount > 0 || inspected.unverifiedMemoryLinkCount > 0;
+    const residual = inspected.residualCount > 0 || inspected.residualPlanCount > 0 || inspected.unverifiedMemoryLinkCount > 0 ||
+      schemaInvalidPlans.length > 0;
     return {
       owner: "J",
       status: residual ? "residuals_present" : "verified",
-      reason: inspected.residualCount > 0 || inspected.residualPlanCount > 0
-        ? "binding_mismatch"
+      reason: schemaInvalidPlans.length > 0 ? "schema_mismatch"
+        : inspected.residualCount > 0 || inspected.residualPlanCount > 0 ? "binding_mismatch"
         : inspected.unverifiedMemoryLinkCount > 0 ? "cross_ledger_unverified" : null,
-      plan_count: checkpoint.plans.length,
-      plan_integrity_residual_count: inspected.residualPlanCount,
+      plan_count: envelope.data.plans.length,
+      plan_integrity_residual_count: inspected.residualPlanCount + schemaInvalidPlans.length,
       binding_count: inspected.bindings.length,
       verified_binding_count: inspected.verifiedCount,
       residual_binding_count: inspected.residualCount,
       unverified_memory_link_count: inspected.unverifiedMemoryLinkCount,
       omitted_binding_count: Math.max(0, inspected.bindings.length - capped.length),
-      plans: inspected.plans.map((plan) => ({
+      plans: [...summaries.values()].map((plan) => ({
         ...plan,
         omitted_binding_count: Math.max(0, plan.binding_count - (inspectedBindingsByPlan.get(plan.plan_id_digest) ?? 0)),
       })),
+      schema_invalid_plan_count: schemaInvalidPlans.length,
+      schema_invalid_plans: schemaInvalidPlans,
       bindings: capped,
       used_for_authority: false,
       may_execute: false,

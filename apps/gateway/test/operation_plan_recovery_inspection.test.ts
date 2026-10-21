@@ -537,6 +537,59 @@ describe("J OperationPlan recovery inspection", () => {
     }
   });
 
+  it("displays a digest-valid schema-invalid plan as a scoped non-authoritative residual", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-plan-schema-residual-"));
+    const { stateRoot, privateRoot } = await createPlanState(temporaryRoot, 1);
+    const planPath = path.join(privateRoot, "operation-plans", "j-state.sqlite");
+    const database = new DatabaseSync(planPath);
+    let rawPlan: Record<string, unknown>;
+    try {
+      const row = database.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id=1").get() as {
+        checkpoint_json: string;
+      };
+      const checkpoint = JSON.parse(row.checkpoint_json) as {
+        plans: Array<Record<string, unknown>>;
+      };
+      checkpoint.plans[0]!.owner = null;
+      rawPlan = checkpoint.plans[0]!;
+      database.prepare("UPDATE operation_plan_state SET checkpoint_json=?,digest=? WHERE id=1")
+        .run(JSON.stringify(checkpoint), operationPlanDigest(checkpoint));
+    } finally { database.close(); }
+
+    const planIdDigest = operationPlanDigest("private-plan-id");
+    const recordDigest = operationPlanDigest(rawPlan);
+    const inspection = inspectOperationPlanRecoveryLedger({ private_state_root: privateRoot, database_path: planPath });
+    expect(inspection).toMatchObject({
+      status: "residuals_present",
+      reason: "schema_mismatch",
+      plan_count: 1,
+      plan_integrity_residual_count: 1,
+      binding_count: 0,
+      schema_invalid_plan_count: 1,
+      schema_invalid_plans: [{ plan_id_digest: planIdDigest, record_digest: recordDigest }],
+      plans: [{
+        plan_id_digest: planIdDigest,
+        integrity: "residuals_present",
+        plan_record_count: 1,
+      }],
+      used_for_authority: false,
+      may_execute: false,
+    });
+
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
+    const projection = projectGatewayRecoveryInspectionForOperator(report);
+    expect(projection).toMatchObject({
+      schema_version: 12,
+      boundary_valid: true,
+      operation_plan_schema_residuals: [{ plan_id_digest: planIdDigest, record_digest: recordDigest }],
+      omitted_operation_plan_schema_residual_count: 0,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(JSON.stringify(projection)).not.toContain("private-plan-id");
+    expect(JSON.stringify(projection)).not.toContain("private-owner");
+  });
+
   it("correlates a verified plan and document checkpoint by the exact inbound request scope digest", async () => {
     temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-request-scope-"));
     const { stateRoot } = await createPlanState(temporaryRoot, 1);
