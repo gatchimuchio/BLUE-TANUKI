@@ -1,14 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { fork, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, gmailWriteTool, LLMComputeAdapter,
-  ToolRegistry, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
+  LLMRegistry, ToolRegistry, type AgentWorkerLifecycleEvent, type ComputeBudgetPort, type LLMRequest,
+  type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, type InboundRequest, type OperationPlan } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -22,6 +23,7 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
 const commandKey = (commandId: string): string => digest(JSON.stringify(["gateway-executor-command.v1", commandId]));
 const FIXTURE_TOKEN = "local-inspection-only-token";
+const INSPECTION_SERVER_PATH = fileURLToPath(new URL("./fixtures/local_inspection_server.mjs", import.meta.url));
 
 interface AcceptedMutation {
   idempotency_key: string;
@@ -30,70 +32,58 @@ interface AcceptedMutation {
   receipt_id: string;
 }
 
+interface InspectionStatus {
+  effects: number;
+  read_queries: number;
+  accepted: AcceptedMutation[];
+}
+
 function inspectionServer(): {
-  server: Server;
+  process: ChildProcess;
   url: Promise<string>;
-  status: () => { effects: number; read_queries: number; accepted: AcceptedMutation[] };
+  status: () => Promise<InspectionStatus>;
 } {
-  const accepted: AcceptedMutation[] = [];
-  let effects = 0;
-  let readQueries = 0;
-  let dropNextResponse = true;
-  const server = createServer((request, response) => {
-    void (async () => {
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      if (request.method === "GET" && /^\/reconcile\/[a-f0-9]{64}$/.test(url.pathname)) {
-        readQueries += 1;
-        const key = decodeURIComponent(url.pathname.slice("/reconcile/".length));
-        const matches = accepted.filter((record) => record.idempotency_key === key);
-        const status = matches.length === 0 ? "not_found" : matches.length === 1 ? "accepted" : "ambiguous";
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ status, matches }));
-        return;
-      }
-      if (request.method !== "POST" || url.pathname !== "/send" ||
-          request.headers.authorization !== `Bearer ${FIXTURE_TOKEN}` ||
-          request.headers["x-google-path"] !== "/gmail/v1/users/me/messages/send") {
-        response.writeHead(404).end();
-        return;
-      }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request as IncomingMessage) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      const body = Buffer.concat(chunks).toString("utf8");
-      const key = request.headers["idempotency-key"];
-      const commandDigest = request.headers["x-command-digest"];
-      if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key) ||
-          typeof commandDigest !== "string" || !/^[a-f0-9]{64}$/.test(commandDigest) || !body) {
-        response.writeHead(400).end();
-        return;
-      }
-      // Deliberately non-idempotent: every POST creates another effect, even when its key repeats.
-      effects += 1;
-      const record = {
-        idempotency_key: key,
-        command_digest: commandDigest,
-        payload_digest: digest(body),
-        receipt_id: `inspection-receipt-${effects}`,
-      };
-      accepted.push(record);
-      if (dropNextResponse) {
-        dropNextResponse = false;
-        response.destroy();
-        return;
-      }
-      response.writeHead(202, { "content-type": "application/json", "x-request-id": record.receipt_id });
-      response.end(JSON.stringify({ id: record.receipt_id, status: "accepted" }));
-    })().catch(() => { if (!response.destroyed) response.destroy(); });
+  const child = fork(INSPECTION_SERVER_PATH, [], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  const pendingStatus = new Map<string, { resolve: (status: InspectionStatus) => void; reject: (error: Error) => void }>();
+  let resolveUrl!: (url: string) => void;
+  let rejectUrl!: (error: Error) => void;
+  let ready = false;
+  const url = new Promise<string>((resolve, reject) => { resolveUrl = resolve; rejectUrl = reject; });
+  child.on("message", (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    const message = value as Record<string, unknown>;
+    if (message.type === "ready" && typeof message.url === "string") {
+      ready = true;
+      resolveUrl(message.url);
+      return;
+    }
+    if (message.type === "status" && typeof message.request_id === "string") {
+      const pending = pendingStatus.get(message.request_id);
+      if (!pending || !message.snapshot || typeof message.snapshot !== "object") return;
+      pendingStatus.delete(message.request_id);
+      pending.resolve(message.snapshot as InspectionStatus);
+    }
   });
-  const url = new Promise<string>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.removeListener("error", reject);
-      const address = server.address() as AddressInfo;
-      resolve(`http://127.0.0.1:${address.port}`);
-    });
+  child.once("error", (error) => { if (!ready) rejectUrl(error); });
+  child.once("exit", (code, signal) => {
+    if (!ready) rejectUrl(new Error(`inspection_server_exit_before_ready:${code ?? signal ?? "unknown"}`));
+    for (const pending of pendingStatus.values()) pending.reject(new Error("inspection_server_exited"));
+    pendingStatus.clear();
   });
-  return { server, url, status: () => ({ effects, read_queries: readQueries, accepted: [...accepted] }) };
+  return {
+    process: child,
+    url,
+    status: () => new Promise<InspectionStatus>((resolve, reject) => {
+      if (!child.connected) { reject(new Error("inspection_server_unavailable")); return; }
+      const request_id = randomUUID();
+      pendingStatus.set(request_id, { resolve, reject });
+      child.send({ type: "status", request_id }, (error) => {
+        if (!error) return;
+        pendingStatus.delete(request_id);
+        reject(error);
+      });
+    }),
+  };
 }
 
 function request(content: string, user = "fixture-owner", operatorSurface = "developer", channel = "webchat"): InboundRequest {
@@ -140,9 +130,18 @@ function reviewedSend(hds: HDSUpperController, plan: OperationPlan) {
     revision_digest: saved.revision_digest, step_id: operationPlanDigest("send-one") })}`));
 }
 
-async function closeServer(server: Server): Promise<void> {
-  if (!server.listening) return;
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+async function closeServer(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  if (child.connected) child.send({ type: "shutdown" });
+  else child.kill();
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([exited, new Promise<void>((resolve) => { timeoutHandle = setTimeout(resolve, 2_000); })]);
+  if (timeoutHandle) clearTimeout(timeoutHandle);
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill();
+    await exited;
+  }
 }
 
 describe("C候補→J選択→単回Broker作用→結果不明の読取照合", () => {
@@ -186,12 +185,26 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       const authority = createExecutorApprovalAuthority({ execution_store: executionStore, execution_epoch: initialExecutionEpoch });
       const source = request("plan:compute 合成宛先へ一件送信し、受理状態を読取照合する");
       const plan = candidate(source.id);
-      const executor = new Executor({ approval_authority: authority, tools,
-        llm: { name: "fixture-candidate-only", call: async () => ({ content: JSON.stringify(plan), model: "fixture", tokens_used: 0 }) } });
+      const candidateBackend = { name: "fixture-candidate-only", call: async () => ({
+        content: JSON.stringify(plan), model: "fixture", tokens_used: 0,
+      }) };
+      const candidateRegistry = new LLMRegistry({ defaultName: candidateBackend.name }).register(candidateBackend, [], {
+        capabilities: ["llm_compute_candidate"], max_cost_per_attempt: { amount: 0, currency: "USD" },
+      });
+      const computeBudget: ComputeBudgetPort = {
+        reserve: (input) => ({ reservation_id: `fixture:${input.request_id}`, reserved_tokens: input.reserved_tokens,
+          reserved_compute_ms: input.reserved_compute_ms, reserved_cost: { ...input.reserved_cost } }),
+        settle: () => {},
+      };
+      const candidateLifecycleEvents: AgentWorkerLifecycleEvent[] = [];
+      const executor = new Executor({ approval_authority: authority, tools, llm: candidateRegistry,
+        compute: new LLMComputeAdapter(candidateRegistry, computeBudget),
+        on_agent_worker_lifecycle: (event) => { candidateLifecycleEvents.push(event); return true; } });
 
       const computeCommand = hds.decide(source).command;
       if (!computeCommand || computeCommand.type !== "llm_call") throw new Error("C candidate request was not issued");
       const computeFeedback = await executor.execute(approvedByFixture(computeCommand, authority));
+      expect(computeFeedback.status, computeFeedback.error).toBe("success");
       expect(computeFeedback.result).toMatchObject({ operation_core: { status: "valid_plan" } });
       finalizeCommandOutput({ hds, command: computeCommand, feedback: computeFeedback, request_id: source.id, target_surface: "channel" });
       expect(hds.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
@@ -226,9 +239,9 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       finalizeCommandOutput({ hds, command, feedback, target_surface: "channel", request_id: review.log.request_id });
       expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("outcome_unknown");
       expect(hds.getAudit().verify()).toBe(true);
-      expect(inspection.status().effects).toBe(1);
+      expect((await inspection.status()).effects).toBe(1);
 
-      const originalReceiptId = inspection.status().accepted[0]?.receipt_id;
+      const originalReceiptId = (await inspection.status()).accepted[0]?.receipt_id;
       const currentEpoch = randomUUID();
       for (let restart = 0; restart < 3; restart += 1) {
         hds.closeOperationPlanMemory();
@@ -267,7 +280,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
           if (!missingEndpointCommand) throw new Error("J did not issue the explicit reconciliation control");
           expect(await runLocalInspectionReconciliation({ hds, command: missingEndpointCommand,
             caller: missingEndpointRequest })).toMatchObject({ status: "not_run", reason: "local_inspection_endpoint_not_configured" });
-          expect(inspection.status().read_queries).toBe(0);
+          expect((await inspection.status()).read_queries).toBe(0);
 
           const expiredRequest = request(`plan:reconcile ${JSON.stringify(control)}`);
           const expiredCommand = hds.decide(expiredRequest).command;
@@ -278,7 +291,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
           expect(localInspectionReconciliationMessage(expiredResult)).toContain("期限切れまたは古くなったため未実施");
           expect(localInspectionReconciliationMessage(expiredResult)).toContain("outcome_unknownのままです");
           expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("outcome_unknown");
-          expect(inspection.status().read_queries).toBe(0);
+          expect((await inspection.status()).read_queries).toBe(0);
         }
         const reconciliationRequest = request(`plan:reconcile ${JSON.stringify({ plan_id: currentPlan.plan_id,
           revision_digest: currentPlan.revision_digest, step_id: currentPlan.steps[0]!.step_id })}`);
@@ -296,7 +309,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         if (restart === 0) {
           expect(await runLocalInspectionReconciliation({ hds, command: reconciliationCommand,
             caller: reconciliationRequest, endpoint })).toMatchObject({ status: "rejected" });
-          expect(inspection.status().read_queries).toBe(1);
+          expect((await inspection.status()).read_queries).toBe(1);
         }
         finalizeCommandOutput({ hds, command: reconciliationCommand,
           feedback: { command_id: reconciliationCommand.id, status: "success", result: { content: "digest-only receipt observed; outcome_unknown retained" },
@@ -378,7 +391,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
         expect(reflectionOutput.rendered_output).not.toContain(originalReceiptId!);
         expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]?.status).toBe("outcome_unknown");
         expect(hds.operationPlanReceiptObservationMemoryIsDurable(observation.evidence_digest)).toBe(true);
-        expect(inspection.status().effects).toBe(1);
+        expect((await inspection.status()).effects).toBe(1);
         const memoryDb = new DatabaseSync(memory.memory_database_path);
         try {
           const records = memoryDb.prepare("SELECT value_json FROM m_records").all()
@@ -393,10 +406,11 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
           expect(JSON.stringify(receiptRecord)).not.toContain(originalReceiptId);
         } finally { memoryDb.close(); }
         expect((await executor.execute(approved)).error).toMatch(/already consumed/);
-        expect(inspection.status().effects).toBe(1);
+        expect((await inspection.status()).effects).toBe(1);
       }
-      expect(inspection.status().effects).toBe(1);
-      expect(inspection.status().read_queries).toBe(3);
+      const finalStatus = await inspection.status();
+      expect(finalStatus.effects).toBe(1);
+      expect(finalStatus.read_queries).toBe(3);
       expect(JSON.stringify(executionStore.snapshot())).not.toContain(FIXTURE_TOKEN);
       expect(JSON.stringify(hds.getAudit().list())).not.toContain(FIXTURE_TOKEN);
       expect(executionStore.verifyEvents()).toBe(true);
@@ -404,7 +418,7 @@ describe("C候補→J選択→単回Broker作用→結果不明の読取照合",
       closeMemory?.();
       executionStore?.close();
       planStore?.close();
-      await closeServer(inspection.server);
+      await closeServer(inspection.process);
       vi.restoreAllMocks(); vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }

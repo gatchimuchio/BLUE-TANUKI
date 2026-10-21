@@ -2734,3 +2734,20 @@ Gateway runtimeはdispatcherを登録するが、dispatcherを構成しないCLI
 | 全workspace suite、実provider／credential／外部送信、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後へ保持。 |
 
 code commit=`0533867`。QE_BUILDのこの接続補正以外に実provider、credential、外部作用を使わず、D4-Pocket／ミニドラ変更、GitHub Actions、公開／出荷判断もなし。D08.01／F10.02、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、C08.03実provider、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`は未成立・保留のまま。closeout内容はこの履歴記録とactive instructionへ反映した。
+
+---
+
+### 履歴ログ：QEB-46-D08.01-LOCAL-INSPECTION-PROCESS
+
+開始HEAD／`main`／`origin/main`=`67739e3b7e16f2b9a9cd4c4fadddbbf83064ff30`。現行pin rev2.3、適用AGENTS、作業標準、active instruction、D08.01のlocal-integration要件と結果照合consumerを再同期した。変更系譜として直前QEB-45の関連箇所のみ参照し、旧版・完了ログ全体は再読しなかった。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持した。
+
+既存のHDS→Executor→built-in Gmail adapter→local inspection reconciliation→M receiptの経路は検査serverが同一process内にあり、rev2.3の分離local inspection service条件を満たしていなかった。合成の非冪等inspection APIを別Node processとして起動し、loopbackだけで到達させた。HDS選択済みの合成`gmail.write`をExecutorから一度送信し、server受理後にresponseを破棄して結果を`outcome_unknown`にする。3回のGateway state再起動後、Jの明示的・単回read-only reconciliation controlで同一receiptを照合し、raw receiptを出さずdigest-only observation／M receiptへ記録する。再実行は拒否され、外部作用件数は1のまま。候補計算fixtureは現行delegation contractの`LLMRegistry`、合成予算予約、lifecycle observerを使う。実provider、実credential、実業務送信はない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `external_action_reconciliation.test.ts` | PASS、1/1。分離process、非冪等作用1件、3 state restart、照合3回、Jの単回照合、Mへのdigest-only receiptを確認。 |
+| Gateway typecheck | PASS。 |
+| `node --check apps/gateway/test/fixtures/local_inspection_server.mjs`／`git diff --check` | PASS。 |
+| Gateway実serve ingress／owner-facing確認画面を含む製品runtime経路、全workspace suite、実provider／credential、外部送信、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+この結果はD08.01の合成local subpathの接続を示す。製品runtimeのGateway ingressからowner-facing確認まで含むD08.01全体は`BUILD_GAP`であり、F10.02も`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。C08.03実provider保留、D4-Pocket／ミニドラ変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次のBUILD_BATCHは未選定。次回独立作業では現行三点セットと適用AGENTSを読み直し、実際のGateway ingressと今回の合成Executor経路の接続を現物から確定する。

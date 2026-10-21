@@ -16,9 +16,11 @@ QEB-44はcloseout済み。`Executor channel_send → OutboundDispatcher → chan
 
 QEB-45をcloseout済み。dispatcher未設定時の`channel_send`は`failed`／`not_delivered`となり、実行結果は`not_invoked`／`not_attempted`を保持する。本文はconsoleへ出力しない。code commit=`0533867`。D08.01=`BUILD_GAP`（検査server経由の一作用・結果照合は未接続）、F10.02=`BUILD_GAP`（全channel運用の受入は未成立）。今回の拒否経路は両単位の完了を意味しない。詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)と[`開発進捗.md`](開発進捗.md)のQEB-45記録を参照。
 
+QEB-46ではD08.01のlocal-integration経路を一部接続した。HDSで選択された`gmail.write`をbuilt-in adapterとExecutorへ渡し、非冪等な検査serverを別processで稼働させた。受理後の応答喪失、結果不明、J発行の一回限り照合、Mへのdigest-only記録までを、実ファイル／SQLiteを使う合成runtimeで接続し、3回のGateway状態再起動を通じて作用1件・照合3回を確認した。C候補計算には現行のdelegation契約に沿うfixture `LLMRegistry`、予約予算、lifecycle observerを接続した。D08.01全体は`BUILD_GAP`のまま。実際のGateway ingress／owner-facing確認画面を含む製品runtime縦断は未成立。F10.02も`BUILD_GAP`のまま。詳細はQEB-46履歴を参照。
+
 ## 次のBUILD_BATCH
 
-現時点で次のBUILD_BATCHは選定していない。次の独立した作業・切替・再開時は`QE_CURRENT_AUTHORITY.md`が固定する三点セットの全文を読み直す。適用`AGENTS.md`も読み直す。最新HEAD／dirty state／実装と照合し、rev2.3の未接続producer→consumerから対象を選ぶ。QE_BUILDを維持し、全体の結合形状成立前にQC／QAを開始しない。旧版と完了履歴はログとして保持し、依存・変更系譜・矛盾の解消に必要な箇所だけ参照する。
+次のBUILD_BATCHは未選定。次の独立した作業・切替・再開時は`QE_CURRENT_AUTHORITY.md`が固定する三点セットの全文を読み直す。適用`AGENTS.md`も読み直す。最新HEAD／dirty state／実装を照合して、残るproducer→consumerを一つ選ぶ。D08.01は、今回接続した合成Executor経路と実際のGateway ingress／owner-facing確認経路の間に不足があるかを現物から判断する。QE_BUILDを維持し、全体の結合形状成立前にQC／QAを開始しない。旧版と完了履歴はログとして保持し、依存・変更系譜・矛盾の解消に必要な箇所だけ参照する。
 
 ## 共通の保護とGit
 
