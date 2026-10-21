@@ -3061,6 +3061,24 @@ F10.02のtext attachment served consumerを部分的に`WIRED`とする。F10.02
 
 F10.02のtext attachment→同一topic wait→同一job候補／結果返却のserved subpathを部分的に`WIRED`とする。F10.02全体はcredentialed-live残差により`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`と公開・出荷保留を維持する。次のBUILD_BATCHは`F10.03-WEBCHAT-DISCONNECT-RECONNECT-SAVED-RESULT-CONSUMER`とする。
 
+### QEB-64-F11.02-SLACK-REPLY-RECOVERY-CONSUMER
+
+開始`main`／`origin/main`=`4404a1391514298d4895b3755834acd6eef022dd`。現行pin rev2.3の三点セット、`AGENTS.md`、F11.02実装要求、Slack adapter／Gateway durable Inbox・outbox consumerを再同期した。保護対象untracked Linux `target/`は保持した。
+
+Slack inboundのroot／thread返信先を元messageへ束縛し、Gateway private SQLite outboxをserved Gateway→Slack transportへ接続した。handler例外はinbox成功として扱わず`outcome_unknown`で再送を抑止する。明示的に未配送と確定した429だけ`Retry-After`に従う永続waitを行い、process再起動後に同じthread replyを再開する。timeout／通信例外／dispatch途中停止は結果不明として自動再送しない。Retry-Afterが不正またはsafe integerの日時範囲外の場合は送信を再試行せず終端化する。outboxはpending時だけraw reply target／text／threadを保持し、terminal settlementで消去する。claim後・外部送信前にtask cancellationとなった場合も明示的未配送として閉じる。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/protocol typecheck`／`build` | PASS。 |
+| `pnpm --filter @blue-tanuki/channel-slack typecheck`／`build`／`test` | PASS、26 tests。 |
+| `pnpm --filter @blue-tanuki/gateway typecheck`／`build` | PASS。 |
+| `pnpm --filter @blue-tanuki/gateway exec vitest run test/slack_event_store.test.ts` | PASS、9 tests。 |
+| `pnpm --filter @blue-tanuki/gateway exec vitest run test/serve_boundary.test.ts test/active_task_execution_webchat_integration.test.ts` | PASS、10 tests。 |
+| `git diff --check` | PASS。 |
+| 実Slack API／credential／Socket Mode／実HDS runtime、外部作用、全workspace suite、QE_QC／QE_QA | 未実施。 |
+
+Slack admission→handler→thread-bound reply／durable retry consumerをsynthetic fixture範囲で部分`WIRED`とする。Slack remains `first-party-preview`; live運転、実資格、実provider証拠がなく、F11.02／channel全体は`BUILD_GAP`。製品全体`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03 provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
 ### 履歴ログ：QEB-62-F10.03-WEBCHAT-DISCONNECT-RECONNECT-SAVED-RESULT-CONSUMER
 
 開始`main`／`origin/main`=`fd737fa55f5aae8611484d67e6ca90e0247b7ac1`。現行pin rev2.3の三点セットhash、適用`AGENTS.md`、active instruction、F10.03の実装対象とWebChat／Gateway consumerを再同期した。旧版・完了記録は直前依存QEB-61の履歴形式と保存結果経路の確認に限って参照した。開始時local復旧branch／remote backup tag二世代はcurrent=`fd737fa`、previous=`30edf1f`で一致。保護対象untracked Linux `target/`を維持した。

@@ -71,6 +71,7 @@ import {
   type OutboundChannel,
 } from "@blue-tanuki/channel-base";
 import type {
+  ChannelSendPayload,
   ExecuteCommand,
   ExecuteFeedback,
   InboundRequest,
@@ -300,6 +301,18 @@ export interface GatewayInboundBoundaryPlan extends GatewayInboundBoundaryResult
 function replyTarget(req: InboundRequest): string {
   const m = req.metadata?.["reply_to"];
   return typeof m === "string" && m.length > 0 ? m : req.user;
+}
+
+function replyPayload(req: InboundRequest, content: string): ChannelSendPayload {
+  const replyThread = req.channel === "slack" ? req.metadata?.["slack_reply_thread_ts"] : undefined;
+  return {
+    channel: req.channel,
+    target: replyTarget(req),
+    content,
+    ...(typeof replyThread === "string" && /^(?:0|[1-9]\d{0,19})\.\d{1,20}$/u.test(replyThread)
+      ? { thread_ts: replyThread }
+      : {}),
+  };
 }
 
 function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProjection | undefined): string {
@@ -772,8 +785,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     },
   });
   const router = new InboundRouter({
-    propagateHandlerErrorsForChannels: ["cron", "telegram"],
-    redactHandlerErrorsForChannels: ["telegram"],
+    propagateHandlerErrorsForChannels: ["cron", "telegram", "slack"],
+    redactHandlerErrorsForChannels: ["telegram", "slack"],
   });
   const dispatcher = new OutboundDispatcher();
 
@@ -1388,7 +1401,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason });
       if (finalized.rendered_output) {
         await dispatcher.dispatch(
-          { channel: origin.channel, target: replyTarget(origin), content: finalized.rendered_output },
+          replyPayload(origin, finalized.rendered_output),
           { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
         );
       }
@@ -1413,9 +1426,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       });
       await dispatcher.dispatch(
         {
-          channel: origin.channel,
-          target: replyTarget(origin),
-          content: `[emergency-stop-active] command_id=${cmd.id} executed=false next_action=Clear emergency stop from Control Center approvals only after reviewing the stop reason.`,
+          ...replyPayload(origin, `[emergency-stop-active] command_id=${cmd.id} executed=false next_action=Clear emergency stop from Control Center approvals only after reviewing the stop reason.`),
         },
         {
           command_id: `emergency-stop-blocked-${cmd.id}`,
@@ -1444,7 +1455,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       });
       const content = `[blocked] Failure memory gate blocked execution. command_id=${cmd.id} reason=${failureGate.reason}`;
       await dispatcher.dispatch(
-        { channel: origin.channel, target: replyTarget(origin), content },
+        replyPayload(origin, content),
         { command_id: `failure-memory-blocked-${cmd.id}`, upstream_commit_hash: log.commit.hash },
       );
       return { status: "failure_memory_blocked" };
@@ -1461,7 +1472,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         const content = renderCommandOutput(cmd, fb);
         const output = hds.onOutputAudit({ command: cmd, feedback: fb, rendered_output: content, target_surface: "channel", request_id: log.request_id });
         recordFinalOutputHistory(log, origin, actor, output);
-        if (content) await dispatcher.dispatch({ channel: origin.channel, target: replyTarget(origin), content }, { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
+        if (content) await dispatcher.dispatch(replyPayload(origin, content), { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
         return { status: "approval_denied" };
       }
       if (isGoalPurposeChangeCommand(cmd) &&
@@ -1505,7 +1516,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             reason: approvalAdmission.reason,
           });
           await dispatcher.dispatch(
-            { channel: origin.channel, target: replyTarget(origin), content: "[busy] approval queue is full; no action was approved or executed. Retry after pending approvals are resolved." },
+            replyPayload(origin, "[busy] approval queue is full; no action was approved or executed. Retry after pending approvals are resolved."),
             { command_id: `approval-capacity-${cmd.id}`, upstream_commit_hash: log.commit.hash },
           );
           return { status: "approval_queue_backpressure" };
@@ -1526,7 +1537,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
               schedule_rejection_reason: prepared.message,
             });
             await dispatcher.dispatch(
-              { channel: origin.channel, target: replyTarget(origin), content: prepared.message },
+              replyPayload(origin, prepared.message),
               { command_id: `schedule-rejected-${cmd.id}`, upstream_commit_hash: log.commit.hash },
             );
             return { status: "schedule_rejected" };
@@ -1592,7 +1603,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           ? `${approvalRequiredMessage(evaluation, cmd.id, issued?.token)} failure_memory_gate=${failureGate.reason}`
           : approvalRequiredMessage(evaluation, cmd.id, issued?.token);
         if (!opts.quiet_approval_notice) await dispatcher.dispatch(
-          { channel: origin.channel, target: replyTarget(origin), content: approvalContent },
+          replyPayload(origin, approvalContent),
           { command_id: `approval-${cmd.id}`, upstream_commit_hash: log.commit.hash },
         );
         return { status: "approval_required" };
@@ -1681,7 +1692,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       recordFinalOutputHistory(log, origin, actor, finalized.output_audit, cmd);
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason });
       if (finalized.rendered_output) await dispatcher.dispatch(
-        { channel: origin.channel, target: replyTarget(origin), content: finalized.rendered_output },
+        replyPayload(origin, finalized.rendered_output),
         { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
       );
       return { status: reason };
@@ -1952,7 +1963,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         final_output_recorded: finalOutputRecorded,
       });
       if (pending.rendered_output) await dispatcher.dispatch(
-        { channel: origin.channel, target: replyTarget(origin), content: pending.rendered_output },
+        replyPayload(origin, pending.rendered_output),
         { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
       );
       return { status: "operation_plan_result_memory_pending" };
@@ -2334,7 +2345,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         });
       }
     }
-    if (content) await dispatcher.dispatch({ channel: origin.channel, target: replyTarget(origin), content }, { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
+    if (content) await dispatcher.dispatch(replyPayload(origin, content), { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
     return { status: finalized.reviewed_feedback.status };
   }
 
@@ -2427,9 +2438,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         emergency_stop_reason: emergencyStop.reason,
       });
       await dispatcher.dispatch({
-        channel: pending.origin.channel,
-        target: replyTarget(pending.origin),
-        content: `[emergency-stop-active] command_id=${command_id} approval=approve executed=false pending=true next_action=Clear emergency stop only after reviewing the stop reason, then reload approvals for a fresh token.`,
+        ...replyPayload(pending.origin, `[emergency-stop-active] command_id=${command_id} approval=approve executed=false pending=true next_action=Clear emergency stop only after reviewing the stop reason, then reload approvals for a fresh token.`),
       }, {
         command_id: `emergency-stop-approval-blocked-${command_id}`,
         upstream_commit_hash: pending.log.commit.hash,
@@ -2454,7 +2463,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         verdict,
         token_kind: ctx.token_kind,
       });
-      await dispatcher.dispatch({ channel: pending.origin.channel, target: replyTarget(pending.origin), content: `[approval-${verdict}] command_id=${command_id}` }, { command_id: `approval-${verdict}-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
+      await dispatcher.dispatch(replyPayload(pending.origin, `[approval-${verdict}] command_id=${command_id}`), { command_id: `approval-${verdict}-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
       return { approval: verdict, executed: false };
     }
     if (runtimeScheduleMutationCommand(pending.command) && !runtimeSchedules.hasPending(command_id)) {
@@ -2466,7 +2475,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         verdict,
         token_kind: ctx.token_kind,
       });
-      await dispatcher.dispatch({ channel: pending.origin.channel, target: replyTarget(pending.origin), content }, { command_id: `schedule-expired-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
+      await dispatcher.dispatch(replyPayload(pending.origin, content), { command_id: `schedule-expired-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
       return { approval: "approve", executed: false, status: "schedule_approval_expired" };
     }
     resolveCronApprovalHandoff(pending, "consumed");
@@ -4400,6 +4409,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       app_token: slackAppToken,
       inbound_grants: slackInboundGrants,
       ...(slackEventStore ? { inbox: slackEventStore } : {}),
+      ...(slackEventStore ? { delivery_store: slackEventStore } : {}),
       log: (line: string) => slackLog.info(line),
     }),
     optionalPreviewChannel("@blue-tanuki/channel-discord", [
@@ -4642,9 +4652,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       });
       if (result.rendered_output) {
         await dispatcher.dispatch({
-          channel: authorityReq.channel,
-          target: replyTarget(authorityReq),
-          content: result.rendered_output,
+          ...replyPayload(authorityReq, result.rendered_output),
         }, {
           command_id: `notify-${authorityReq.id}`,
           upstream_commit_hash: log.commit.hash,
@@ -4715,9 +4723,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       }
       if (result.rendered_output) {
         await dispatcher.dispatch({
-          channel: authorityReq.channel,
-          target: replyTarget(authorityReq),
-          content: result.rendered_output,
+          ...replyPayload(authorityReq, result.rendered_output),
         }, {
           command_id: result.command_id ?? `notify-${authorityReq.id}`,
           upstream_commit_hash: result.upstream_commit_hash,
@@ -4735,8 +4741,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       const output_audit = hds.onOutputAudit({ command, feedback, rendered_output, target_surface: "channel",
         request_id: log.request_id });
       recordFinalOutputHistory(log, authorityReq, authorityReq.user, output_audit, command);
-      if (rendered_output) await dispatcher.dispatch({ channel: authorityReq.channel,
-        target: replyTarget(authorityReq), content: rendered_output },
+      if (rendered_output) await dispatcher.dispatch(replyPayload(authorityReq, rendered_output),
       { command_id: command.id, upstream_commit_hash: log.commit.hash });
       return;
     }
@@ -4760,9 +4765,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       const finalized = finalizeCommandOutput({ hds, command, feedback, target_surface: "channel", request_id: log.request_id,
         development_handoff_store: developmentHandoffStore });
       recordFinalOutputHistory(log, authorityReq, authorityReq.user, finalized.output_audit);
-      if (finalized.rendered_output) await dispatcher.dispatch({
-        channel: authorityReq.channel, target: replyTarget(authorityReq), content: finalized.rendered_output,
-      }, { command_id: command.id, upstream_commit_hash: log.commit.hash });
+      if (finalized.rendered_output) await dispatcher.dispatch(replyPayload(authorityReq, finalized.rendered_output),
+        { command_id: command.id, upstream_commit_hash: log.commit.hash });
       return;
     }
 
@@ -4778,8 +4782,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       const finalized = finalizeCommandOutput({ hds, command, feedback, target_surface: "channel", request_id: log.request_id,
         development_handoff_store: developmentHandoffStore });
       recordFinalOutputHistory(log, authorityReq, authorityReq.user, finalized.output_audit, command);
-      if (finalized.rendered_output) await dispatcher.dispatch({ channel: authorityReq.channel,
-        target: replyTarget(authorityReq), content: finalized.rendered_output },
+      if (finalized.rendered_output) await dispatcher.dispatch(replyPayload(authorityReq, finalized.rendered_output),
       { command_id: command.id, upstream_commit_hash: log.commit.hash });
       return;
     }
@@ -4805,7 +4808,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       issued?.token,
     );
     await dispatcher.dispatch(
-      { channel: authorityReq.channel, target: replyTarget(authorityReq), content: human },
+      replyPayload(authorityReq, human),
       { command_id: `notify-${authorityReq.id}`, upstream_commit_hash: log.commit.hash },
     );
   };
@@ -4839,9 +4842,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       activeTaskExecutions.abortAll();
       await router.stop();
       telegramUpdateStore?.close();
-      slackEventStore?.close();
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);
+      slackEventStore?.close();
       cronEventStore.close();
       computeBudget.close();
       documentOrganizationCheckpointStore?.close();

@@ -57,6 +57,10 @@ export type SlackInboundHandler = (m: SlackInboundMessage) => Promise<void>;
 
 export interface SlackPostResult {
   ok: boolean;
+  /** Whether the provider definitely rejected the request or the result is ambiguous. */
+  delivery_status?: "not_delivered" | "unknown";
+  /** The provider supplied a malformed or unsafe Retry-After hint; do not retry early. */
+  retry_after_invalid?: boolean;
   /** Native Slack message ts on success. */
   ts?: string;
   error?: string;
@@ -68,6 +72,61 @@ export interface SlackPostResult {
    * milliseconds. The SlackChannel uses this to schedule a backoff retry.
    */
   retry_after_ms?: number;
+}
+
+export type SlackOutboundDeliveryState =
+  | "queued"
+  | "dispatching"
+  | "retry_wait"
+  | "delivered"
+  | "not_delivered"
+  | "outcome_unknown"
+  | "retry_exhausted";
+
+export interface SlackOutboundDeliveryInput {
+  readonly delivery_id: string;
+  readonly channel: string;
+  readonly target: string;
+  readonly text: string;
+  readonly thread_ts?: string;
+}
+
+export interface SlackOutboundDeliveryClaim extends SlackOutboundDeliveryInput {
+  readonly payload_digest: string;
+  readonly attempt_count: number;
+}
+
+export interface SlackPendingDelivery {
+  readonly delivery_id: string;
+  readonly delivery_state: "queued" | "retry_wait";
+  readonly not_before_ms: number;
+}
+
+export interface SlackOutboundDeliveryStatus {
+  readonly delivery_id: string;
+  readonly payload_digest: string;
+  readonly delivery_state: SlackOutboundDeliveryState;
+  readonly attempt_count: number;
+  readonly not_before_ms: number;
+  readonly retry_after_ms?: number;
+  readonly external_ts?: string;
+  readonly error_code?: string;
+}
+
+/** Gateway-owned durable wait state; pending payload is retained only until terminal settlement. */
+export interface SlackOutboundDeliveryStore {
+  enqueue(input: SlackOutboundDeliveryInput, now_ms?: number): void;
+  pending(): readonly SlackPendingDelivery[];
+  claimDelivery(delivery_id: string, now_ms?: number): SlackOutboundDeliveryClaim | null;
+  scheduleRetry(delivery_id: string, not_before_ms: number, retry_after_ms: number, now_ms?: number): void;
+  settleDelivery(
+    delivery_id: string,
+    state: "delivered" | "not_delivered" | "outcome_unknown" | "retry_exhausted",
+    result?: { readonly external_ts?: string; readonly error_code?: string; readonly retry_after_ms?: number },
+    now_ms?: number,
+  ): void;
+  cancelPending(delivery_id: string, now_ms?: number): void;
+  status(delivery_id: string): SlackOutboundDeliveryStatus | null;
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   type SlackInboundHandler,
   type SlackEventInbox,
   type SlackInboundMessage,
+  type SlackOutboundDeliveryStore,
   type SlackPostResult,
 } from "../src/index.js";
 import { readSlackEventEnvelopeIdentity } from "../src/bolt_transport.js";
@@ -160,6 +161,7 @@ describe("SlackChannel — active mode (fake transport)", () => {
     expect(r.metadata?.slack_team_id).toBe("T1");
     expect(r.metadata?.slack_user_id).toBe("U7");
     expect(r.metadata?.slack_thread_ts).toBeNull();
+    expect(r.metadata?.slack_reply_thread_ts).toBe("111.222");
     expect(r.metadata).not.toHaveProperty("slack_event_id");
     expect(r.metadata?.is_mention).toBe(true);
     expect(r.metadata?.is_dm).toBe(false);
@@ -197,6 +199,19 @@ describe("SlackChannel — active mode (fake transport)", () => {
     await ch.stop();
   });
 
+  it("preserves an originating Slack thread in the outbound transport request", async () => {
+    const t = new FakeSlackTransport();
+    const ch = new SlackChannel({ transport: t, log: () => {} });
+    await ch.start(async () => {});
+    const r = await ch.send(
+      { channel: "slack", target: "C100", content: "thread reply", thread_ts: "123.456" },
+      { command_id: "thread-cmd", upstream_commit_hash: "h" },
+    );
+    expect(r.delivered).toBe(true);
+    expect(t.posted).toEqual([{ channel: "C100", text: "thread reply", thread_ts: "123.456" }]);
+    await ch.stop();
+  });
+
   it("send() surfaces transport failure as delivered=false with error", async () => {
     const t = new FakeSlackTransport();
     t.nextPostFails = "channel_not_found";
@@ -204,7 +219,7 @@ describe("SlackChannel — active mode (fake transport)", () => {
     await ch.start(async () => {});
 
     const r = await ch.send(
-      { channel: "slack", target: "Cbad", content: "x" },
+      { channel: "slack", target: "CBAD", content: "x" },
       { command_id: "cmd-2", upstream_commit_hash: "h" },
     );
     expect(r.delivered).toBe(false);
@@ -294,6 +309,17 @@ describe("SlackChannel — active mode (fake transport)", () => {
     expect(lines.some((l) => l.includes("auth_test_failed"))).toBe(true);
     await ch.stop();
   });
+
+  it("closes the transport when durable outbox recovery fails during startup", async () => {
+    const transport = new FakeSlackTransport();
+    const deliveryStore = {
+      pending: () => { throw new Error("private store failure"); },
+    } as unknown as SlackOutboundDeliveryStore;
+    const ch = new SlackChannel({ transport, delivery_store: deliveryStore, log: () => {} });
+    await ch.start(async () => {});
+    expect(ch.isSilent()).toBe(true);
+    expect(transport.stopCalls).toBe(1);
+  });
 });
 
 describe("SlackChannel — retry/backoff on rate limits", () => {
@@ -320,6 +346,7 @@ describe("SlackChannel — retry/backoff on rate limits", () => {
         this.failsLeft -= 1;
         return {
           ok: false,
+          delivery_status: "not_delivered",
           error: this.errorString,
           retry_after_ms: this.retry_after_ms,
         };
@@ -418,6 +445,25 @@ describe("SlackChannel — retry/backoff on rate limits", () => {
     await ch.stop();
   });
 
+  it("does not retry an ambiguous transport timeout", async () => {
+    const t = new FakeSlackTransport();
+    let calls = 0;
+    t.postMessage = async () => {
+      calls += 1;
+      throw new Error("request timed out after dispatch");
+    };
+    const ch = new SlackChannel({ transport: t, log: () => {} });
+    await ch.start(async () => {});
+    const result = await ch.send(
+      { channel: "slack", target: "C100", content: "possibly delivered" },
+      { command_id: "ambiguous-timeout", upstream_commit_hash: "h" },
+    );
+    expect(result.delivered).toBe(false);
+    expect(result.delivery_status).toBe("unknown");
+    expect(calls).toBe(1);
+    await ch.stop();
+  });
+
   it("retry: false disables retry entirely", async () => {
     const t = new FlakeyRateLimitTransport(undefined, 5, "ratelimited");
     const ch = new SlackChannel({ transport: t, log: () => {}, retry: false });
@@ -469,7 +515,7 @@ describe("SlackChannel — retry / backoff", () => {
     t.postMessage = async (args): Promise<SlackPostResult> => {
       calls++;
       if (calls < 3) {
-        return { ok: false, error: "ratelimited", retry_after_ms: 200 };
+        return { ok: false, delivery_status: "not_delivered", error: "ratelimited", retry_after_ms: 200 };
       }
       return { ok: true, ts: `ts-${calls}` };
     };
@@ -500,6 +546,30 @@ describe("SlackChannel — retry / backoff", () => {
     await ch.stop();
   });
 
+  it("does not retry when Retry-After is explicitly unsafe or exceeds the safe scheduling range", async () => {
+    const t = new FakeSlackTransport();
+    let calls = 0;
+    t.postMessage = async (): Promise<SlackPostResult> => {
+      calls++;
+      return {
+        ok: false,
+        delivery_status: "not_delivered",
+        error: "ratelimited",
+        retry_after_ms: Number.MAX_SAFE_INTEGER,
+      };
+    };
+    const ch = new SlackChannel({ transport: t, log: () => {} });
+    await ch.start(async () => {});
+    const result = await ch.send(
+      { channel: "slack", target: "C1", content: "x" },
+      { command_id: "c", upstream_commit_hash: "h" },
+    );
+    expect(result.delivered).toBe(false);
+    expect(result.error_code).toBe("invalid_retry_after");
+    expect(calls).toBe(1);
+    await ch.stop();
+  });
+
   it("does not retry permanent errors (e.g. channel_not_found)", async () => {
     const t = new FakeSlackTransport();
     let calls = 0;
@@ -521,7 +591,7 @@ describe("SlackChannel — retry / backoff", () => {
     });
     await ch.start(async () => {});
     const r = await ch.send(
-      { channel: "slack", target: "Cbad", content: "x" },
+      { channel: "slack", target: "CBAD", content: "x" },
       { command_id: "c", upstream_commit_hash: "h" },
     );
     expect(r.delivered).toBe(false);
@@ -534,7 +604,7 @@ describe("SlackChannel — retry / backoff", () => {
     let calls = 0;
     t.postMessage = async (): Promise<SlackPostResult> => {
       calls++;
-      return { ok: false, error: "ratelimited", retry_after_ms: 100 };
+      return { ok: false, delivery_status: "not_delivered", error: "ratelimited", retry_after_ms: 100 };
     };
     const ch = new SlackChannel({ transport: t, log: () => {}, retry: false });
     await ch.start(async () => {});
@@ -552,7 +622,7 @@ describe("SlackChannel — retry / backoff", () => {
     let calls = 0;
     t.postMessage = async (): Promise<SlackPostResult> => {
       calls++;
-      return { ok: false, error: "ratelimited", retry_after_ms: 50 };
+      return { ok: false, delivery_status: "not_delivered", error: "ratelimited", retry_after_ms: 50 };
     };
     const ch = new SlackChannel({
       transport: t,
@@ -583,7 +653,7 @@ describe("SlackChannel — retry / backoff", () => {
     t.postMessage = async (): Promise<SlackPostResult> => {
       calls++;
       controller.abort();
-      return { ok: false, error: "ratelimited", retry_after_ms: 1 };
+      return { ok: false, delivery_status: "not_delivered", error: "ratelimited", retry_after_ms: 1 };
     };
     const ch = new SlackChannel({ transport: t, log: () => {}, retry: {
       max_retries: 3, base_delay_ms: 0, max_delay_ms: 1, jitter_ratio: 0,

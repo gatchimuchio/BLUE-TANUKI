@@ -23,3 +23,9 @@
 許可判定はBolt Socket Modeの認証済み外側イベントから取得したworkspace IDと、messageのchannel／user／threadをすべて照合する。SlackはSocket Modeの接続を事前認証済みとして扱い、Events APIのworkspace ID・event IDは[Slack Events API](https://docs.slack.dev/apis/events-api/)に定義されている。イベントIDと内容digestはGatewayのprivate Inboxで重複・競合・中断を処理するために使い、イベント本文、イベントIDそのもの、tokenはInboxへ保存しない。grant不一致、永続Inboxの利用不能、同一event IDの内容競合はGateway consumerへ渡さない。中断後に作用結果を確認できないイベントも自動再実行しない。
 
 eventごとのdigest記録は再送抑止のため保持する。長期運転で必要となる容量上限・記録回転は、Slack運転量と再送条件を含む製品全体QE_QCで確定する。この設定は現在のSlack `first-party-preview`受信境界を定める。実Slack credential／Socket Mode運転、live smoke、機能昇格の証拠ではない。
+
+## 返信と障害復旧
+
+Gatewayからadmitted messageへ返信する場合、root投稿にはそのmessageの`ts`を`thread_ts`として渡し、thread replyには元threadの`thread_ts`を引き継ぐ。返信本文・target・threadはGateway private SQLite outboxでpending中だけ保持し、配送が終端状態になったらpayloadを消去する。終端状態に残るのはdigest・配送状態・必要な結果metadataである。
+
+providerが未配送と明示した429は`Retry-After`をdurable waitとして保存し、Gateway再起動後も同じ返信をwait後に再開できる。不正または安全に日時へ変換できない`Retry-After`は早期再送せず終端化する。timeout、通信例外、dispatch中のprocess停止など結果が曖昧な場合は`outcome_unknown`として本文を消去し、自動再送しない。handler errorもInboxの受信成功へ偽装せず、同じく結果不明で再実行を抑止する。これらはsynthetic fixtureでの実装接続であり、実Slack運転・credential・live smokeではない。Slackの状態は`first-party-preview`のままとする。

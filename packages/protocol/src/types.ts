@@ -262,6 +262,8 @@ export const ChannelSendPayloadSchema = z.object({
   channel: z.string(),
   target: z.string(),
   content: z.string(),
+  /** Optional provider-native reply thread, used only by channels that support it. */
+  thread_ts: z.string().optional(),
 });
 export type ChannelSendPayload = z.infer<typeof ChannelSendPayloadSchema>;
 

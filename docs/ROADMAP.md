@@ -1,5 +1,7 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
+2026-10-22の`QEB-64-F11.02-SLACK-REPLY-RECOVERY-CONSUMER`で、Slackのadmitted inboundからroot/thread返信を元messageへ束縛し、Gateway private SQLite outboxへ接続した。pending中のみ本文を保持し、明示的な未配送429は`Retry-After`まで永続待機して再起動後に同じ返信を再開する。結果不明のhandler failure／timeout／中断は自動再実行せず、payloadを消去する。不正／安全範囲外のRetry-Afterも早期再送しない。served synthetic fixtureと対象境界で確認し、Slack実credential/API、実Socket Mode、実HDS runtime、外部作用は未実施。F11.02は部分`WIRED`、Slackは`first-party-preview`、QE_BUILD継続。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+
 2026-10-22の`QEB-63-F11.01-SLACK-TEAM-CHANNEL-USER-THREAD-ADMISSION-CONSUMER`で、Bolt Socket Modeの外側イベントからworkspace／event identityを取り、owner設定のteam・channel・user・thread完全一致grantを通ったイベントだけGateway inboundへ渡す経路を接続した。event IDとpayload digestのdurable InboxはGateway private SQLiteへ保持し、重複・内容競合を拒否、処理中断後は結果不明として再実行しない。actorはworkspace／user／channel／thread境界に束縛した。合成fixtureのみで、Slack実credential／API、実HDS運転、provider、外部作用は未実施。F11.01はadapter→inbound consumerの部分`WIRED`、Slackは引き続き`first-party-preview`。次はF11.02のSlack受信・返信・障害復旧経路。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-22。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。

@@ -18,10 +18,9 @@ import { classifyChannelDeliveryError } from "@blue-tanuki/channel-base";
  *
  * Outbound: chat.postMessage.
  *
- * NOT covered here (deferred to Phase 4+):
- *   - rate limiting / backoff
- *   - reaction-based interaction
- *   - block kit / threading replies beyond a passthrough thread_ts
+ * Rate-limit responses are classified here; the SlackChannel/Gateway outbox
+ * owns the durable wait and bounded retry. Reaction and Block Kit interaction
+ * remain outside this transport contract.
  */
 export class BoltTransport implements SlackTransport {
   private app: unknown = null;
@@ -147,12 +146,19 @@ export class BoltTransport implements SlackTransport {
       if (r.ok) return { ok: true, ts: r.ts };
       const error = r.error ?? "unknown_error";
       const details = classifyChannelDeliveryError({ error });
-      return { ok: false, error, ...details };
+      return { ok: false, delivery_status: "not_delivered", error, ...details };
     } catch (e) {
       const error = slackErrorMessage(e);
-      const retry_after_ms = retryAfterMs(e);
+      const retryAfter = retryAfterHint(e);
+      const retry_after_ms = retryAfter.retry_after_ms;
       const details = classifyChannelDeliveryError({ error, retry_after_ms });
-      return { ok: false, error, ...details };
+      return {
+        ok: false,
+        delivery_status: explicitProviderRejection(e) ? "not_delivered" : "unknown",
+        ...(retryAfter.retry_after_invalid ? { retry_after_invalid: true } : {}),
+        error,
+        ...details,
+      };
     }
   }
 
@@ -208,37 +214,62 @@ function slackErrorMessage(error: unknown): string {
   return candidate || "slack_post_failed";
 }
 
-function retryAfterMs(error: unknown): number | undefined {
+function retryAfterHint(error: unknown): { retry_after_ms?: number; retry_after_invalid?: true } {
   const record = asRecord(error);
   const data = asRecord(record?.data);
   const headers = asRecord(record?.headers);
-  return (
-    positiveMs(record?.retry_after_ms) ??
-    secondsToMs(record?.retryAfter) ??
-    secondsToMs(data?.retry_after) ??
-    positiveMs(data?.retry_after_ms) ??
-    headerRetryAfterMs(headers)
-  );
+  const header = headers?.["retry-after"] ?? headers?.["Retry-After"] ?? headerRetryAfterValue(record?.headers);
+  const candidates: Array<{ value: unknown; unit: "ms" | "seconds" }> = [
+    { value: record?.retry_after_ms, unit: "ms" },
+    { value: record?.retryAfter, unit: "seconds" },
+    { value: data?.retry_after, unit: "seconds" },
+    { value: data?.retry_after_ms, unit: "ms" },
+    { value: header, unit: "seconds" },
+  ];
+  for (const candidate of candidates) {
+    if (candidate.value === undefined || candidate.value === null) continue;
+    const parsed = parseRetryAfter(candidate.value, candidate.unit);
+    if (parsed === undefined) return { retry_after_invalid: true };
+    return { retry_after_ms: parsed };
+  }
+  return {};
 }
 
-function headerRetryAfterMs(headers: Record<string, unknown> | undefined): number | undefined {
-  if (!headers) return undefined;
-  return secondsToMs(headers["retry-after"] ?? headers["Retry-After"]);
+function explicitProviderRejection(error: unknown): boolean {
+  const record = asRecord(error);
+  const data = asRecord(record?.data);
+  const status = readStatusCode(record) ?? readStatusCode(data);
+  return (typeof data?.error === "string" && data.error.length > 0) ||
+    (status !== undefined && status >= 400 && status < 500);
 }
 
-function secondsToMs(value: unknown): number | undefined {
+function readStatusCode(record: Record<string, unknown> | undefined): number | undefined {
+  const value = record?.statusCode ?? record?.status ?? record?.status_code;
+  return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599
+    ? value
+    : undefined;
+}
+
+function headerRetryAfterValue(value: unknown): unknown {
+  if (!value || typeof value !== "object") return undefined;
+  const getter = (value as { get?: unknown }).get;
+  if (typeof getter === "function") {
+    try { return getter.call(value, "retry-after") ?? undefined; } catch { return undefined; }
+  }
+  return undefined;
+}
+
+function parseRetryAfter(value: unknown, unit: "ms" | "seconds"): number | undefined {
   const n =
     typeof value === "number"
       ? value
       : typeof value === "string" && value.trim() !== ""
       ? Number(value)
       : NaN;
-  return Number.isFinite(n) && n > 0 ? Math.ceil(n * 1000) : undefined;
-}
-
-function positiveMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.ceil(value)
+  const milliseconds = unit === "seconds" ? Math.ceil(n * 1000) : Math.ceil(n);
+  return Number.isSafeInteger(milliseconds) && milliseconds > 0 &&
+    milliseconds <= Number.MAX_SAFE_INTEGER - Date.now()
+    ? milliseconds
     : undefined;
 }
 
