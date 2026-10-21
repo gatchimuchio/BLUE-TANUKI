@@ -10,7 +10,7 @@
 
 D05.02は部分的に`WIRED`だが全体は未成立。remote provider内部の停止確認とAbortSignal非協調toolの強制停止は`BUILD_GAP`として残り、未確認の停止を表示しない。閉じた取消関連BUILD_BATCHの個別説明は履歴ログに保持する。
 
-D08.01は部分的に`WIRED`。QEB-46で合成Executor→分離inspection service→結果照合→digest-only M記録を接続し、QEB-47でbuild済みGatewayのDeveloper HTTP ingressから既存`outcome_unknown`のread-only照合consumerを接続した。D08.01全体は`BUILD_GAP`であり、初期の計画・J確認・合成作用を同じGateway serve経路で通すことと、owner-facing確認経路は未成立。F10.02も`BUILD_GAP`。今回の範囲・証拠・制限は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)のQEB-47記録にある。
+D08.01は部分的に`WIRED`。QEB-46で合成Executor→分離inspection service→結果照合→digest-only M記録、QEB-47でDeveloper HTTP ingressから既存`outcome_unknown`のread-only照合consumer、QEB-48で一つのbuild済みGateway serveを通るlocal C→HDS候補保持→Jの`plan:review`→WebChat L3内容確認・単回token→Broker/Gmail adapter→結果不明→2回のGateway再起動→read-only照合を接続した。Cは最大5件のloopback fixture要求、作用は合成inspection server上の1件だけで、応答喪失後もJ/Mの`outcome_unknown`を保ち、照合GETは1回、receipt IDは非表示。endpoint未設定は通信0回。ownerの実際の操作、実provider・実資格・業務送信、browser UI経路は試していないため、D08.01全体は`BUILD_GAP`。F10.02も`BUILD_GAP`。詳細な範囲・証拠・制限は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)のQEB-48記録にある。
 
 ## 次のBUILD_BATCH
 

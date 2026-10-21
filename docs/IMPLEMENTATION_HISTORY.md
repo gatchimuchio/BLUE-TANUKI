@@ -2767,3 +2767,21 @@ code commit=`0533867`。QE_BUILDのこの接続補正以外に実provider、cred
 | 初回plan→J review→Executor作用を含むserved縦断、owner-facing確認画面、全workspace suite、実provider／credential、5OS実機、QE_QC／QE_QA | 未実施。 |
 
 D08.01全体=`BUILD_GAP`。F10.02=`BUILD_GAP`。このconsumer接続は製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を意味しない。D4-Pocket／ミニドラ変更なし、C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留。実装commit=`b9ba6ca36e158d0dec0643428557ba8ac8d7b990`。次のBUILD_BATCHは未選定。
+
+---
+
+### 履歴ログ：QEB-48-D08.01-SERVED-ORIGIN-TO-RECONCILIATION
+
+開始HEAD／`main`／`origin/main`=`8d5c99ba8483f686eca9649d8cbc9e333ffc7546`。現行pin rev2.3、適用AGENTS／作業標準、active指示、D08.01のserved ingress・J確認・owner approval・応答喪失後の再起動／照合要件、QEB-47のingress境界を再同期した。旧版・閉じた履歴全体は再読せず、必要なQEB-47記録だけを依存として参照。保護対象untracked Linux `target/`を維持し、local／remote recovery refsは編集前HEADと一致することを確認した。
+
+`smoke:receipt-reconciliation`のmatched経路をseed済み状態から開始する方式から、同一build済みGateway `serve()`を通す一仕事へ進めた。Developer HTTP `/operators/developer/invoke`から`plan:compute`し、Gatewayのlocal-only OpenAI-compatible fixtureを通してC候補を作成・HDSへ保持する。候補は最大5件のloopback要求に限定し、retryは各1 attempt、費用profileは0。続く`plan:review`をJで採否し、WebChat resume-token APIから実際のL3 content-review projectionと単回approval tokenを取得、合成review digestとともに承認APIへ返す。これはテスト主体によるowner承認経路のsimulationで、人間ownerの実操作を意味しない。Gatewayの既存Gmail adapterをfixture transportへ差し替え、別processのloopback inspection serverだけへ単一の合成message requestを送る。serverが受理してHTTP応答を破棄した後、J/Mは`outcome_unknown`を保持する。Gatewayを2回再起動して各回の復元を確認してから、Developer ingressのread-only `plan:reconcile`を通し、照合GET一回、matched observation、receipt ID非表示、作用数1のままを確認する。endpoint未設定シナリオはread 0回を保つ。実provider／実資格／業務宛先・送信／D4-Pocket／ミニドラ変更はない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm typecheck`／workspace `pnpm build` | PASS。 |
+| `pnpm exec tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext --types node scripts/smoke_receipt_reconciliation.ts` | PASS。 |
+| `pnpm smoke:receipt-reconciliation` | PASS。served local C→HDS/J→WebChat L3 review API→Gmail fixture adapter→accepted response loss→2 Gateway restarts→J/M restore→single read-only reconciliationを確認。作用1件／照合GET 1回、endpoint未設定は0回。 |
+| `node --check scripts/fixtures/gateway_serve_worker.mjs`／`git diff --check` | PASS。 |
+| workspace全suite、実provider／資格／業務送信、browser UI操作、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後へ保持。 |
+
+D08.01の該当served synthetic subpathを`WIRED`とする。fixtureはHDS、Executor、Approval Gate、Broker、Memory／再起動の接続を示すだけで、実provider／実owner操作／対象製品環境を証明しないためD08.01全体=`BUILD_GAP`、F10.02=`BUILD_GAP`、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、D4-Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。code commit=`59037181e6f42fc136ffd13ac394a92abf3f24b9`。次のBUILD_BATCHは未選定。
