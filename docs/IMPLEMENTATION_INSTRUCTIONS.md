@@ -6,8 +6,10 @@
 
 QE_STAGE=`QE_BUILD`。現行pinはrev2.3、backup ref移行=`MIGRATION_COMPLETE`。`QEB-24-E03.03-TASK-M-RESTORE-POINT-J-REOBSERVATION`でtask-scoped M restore point producerをHDS fresh J review gateへ接続し、同一taskのbackup plan集合・現在のJ binding・M receiptが揃う範囲だけを再審査へ通した。`QEB-25-E03.03-TASK-M-RESTORE-POINT-OPERATOR-PROJECTION`では、Recovery snapshotのM task restore pointをControl Centerのread-only表示へ接続した。raw IDやpayloadを出さず、不正projectionは表示を抑止し、権限や自動resumeを作らない。`QEB-26-E04.01-FAILURE-SYMPTOM-CAUSE-SEPARATION`では、FailureMemory抽出器が観測failure categoryをcause candidateとして重複記録するのをやめ、症状digestと`root_cause_unconfirmed`を保ったまま、原因候補は明示的なdigest-only C reviewに分離した。FailureMemory focused 14/14、HDS failure-review consumer 1/1、HDS typecheck/buildはPASS。全suiteは未実施。E03.03/QEB-03および製品全体は`BUILD_GAP`、QE_QC／QE_QA未開始。
 
+`QEB-27-E04.02-J-INDEPENDENT-OBSERVATION-ADOPTION`では、chain検証済みComplete HistoryからFailureMemory署名が参照するrecordだけをfailure category／scopeとdigestへ限定射影し、HDS-JのFailureReview consumerに接続した。参照集合全件と分類が一致し、Cのscope提案も`same_scope`の場合だけscope reviewをobservation-boundとし、counterexample／resume conditionは事実・許可ではなく将来の観測対象として保持する。原因は未採用、実行・再試行権限なし。HDS focused 92/92、Gateway focused 6/6、protocol/HDS/Gateway typecheckとHDS/Gateway buildはPASS。E04.02の全品質保証、製品全体の`BUILD_COVERED`、QE_QC／QE_QAは未開始。
+
 ## 次の接続
 
-次の`BUILD_BATCH`は`QEB-27-E04.02-J-INDEPENDENT-OBSERVATION-ADOPTION`とし、現行rev2.3のE04.02要求とFailureReviewの実consumerを接続する。Cのdigest-only仮説は候補に留まり、現在の`assessFailureReviewCandidate`は`held_for_independent_observation`／`not_adopted`を返す。独立観測をJが範囲・反例・再開条件へ結ぶ実consumerを特定し、C出力だけで原因を採用したり再試行権限を発行したりしない。型・fixtureだけで完了扱いせず、全体実装形状の成立前にQE_QC／QE_QAを開始しない。開始時は現行三点セット・適用AGENTS.md・owner指示・active指示・HEAD／差分を再同期し、旧ログは依存・系譜・矛盾の解決時だけ参照する。
+次の`BUILD_BATCH`は`QEB-28-E04.03-CONDITION-CHANGE-REOBSERVATION`とし、現行rev2.3の「条件変化後の限定再試行」をFailureMemoryとJの実consumerへ接続する。失敗記録を維持し、変化条件を再観測して、新しいJ判断と新しい権限が成立する場合だけ限定再試行できる形を作る。旧承認の再利用、条件未確認時の再試行、E04.03のQC/QA先行を行わない。開始時は現行三点セット・適用AGENTS.md・owner指示・active指示・HEAD／差分を再同期し、旧ログは依存・系譜・矛盾の解決時だけ参照する。
 
 HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closed、`cross_store_atomic=false`を維持する。provider実試験、実credential、外部作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は対象外。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。

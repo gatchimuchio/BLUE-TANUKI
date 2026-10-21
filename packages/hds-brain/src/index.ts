@@ -238,6 +238,7 @@ export {
   completeHistoryEntryHash,
   decodeCompleteHistoryEntry,
   encodeCompleteHistoryEntry,
+  sha256Hex,
   type CompleteHistoryAppendInput,
   type CompleteHistoryEntry,
   type CompleteHistoryExport,

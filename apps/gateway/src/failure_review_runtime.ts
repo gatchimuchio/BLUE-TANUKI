@@ -1,23 +1,31 @@
 import {
+  CompleteHistoryStore,
   createFailureReviewProjection,
+  extractFailureSignatures,
   resolveActor,
+  sha256Hex,
   type FailureMemoryStore,
 } from "@blue-tanuki/hds-brain";
 import {
   createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
   type InboundRequest,
+  type FailureReviewIndependentObservation,
 } from "@blue-tanuki/protocol";
 
 const FAILURE_REVIEW_PREFIX = /^failure:review(?:\s|$)/i;
 const FAILURE_REVIEW_COMMAND = /^failure:review\s+(\S+)$/i;
 
 /**
- * Attach a digest-only saved-failure projection to an explicit Developer
- * review request. This never issues the compute command itself; HDS remains
- * the only component that decides whether a C command is emitted.
+ * Attach a digest-only saved-failure and linked-history projection to an
+ * explicit Developer review request. This never issues the compute command
+ * itself; HDS remains the only component that decides whether C is called.
  */
-export function prepareFailureReviewInbound(input: unknown, store: FailureMemoryStore): unknown {
+export function prepareFailureReviewInbound(
+  input: unknown,
+  store: FailureMemoryStore,
+  completeHistory?: CompleteHistoryStore,
+): unknown {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const request = input as InboundRequest;
   if (!FAILURE_REVIEW_PREFIX.test(request.content.trim())) return input;
@@ -36,7 +44,15 @@ export function prepareFailureReviewInbound(input: unknown, store: FailureMemory
   if (!signature) return input;
 
   try {
-    const projection = createFailureReviewProjection(signature);
+    const chainValid = completeHistory?.verify() ?? false;
+    const independentObservations = chainValid
+      ? linkedIndependentObservations(signature.evidence_log_ids, completeHistory!)
+      : [];
+    const projection = createFailureReviewProjection(
+      signature,
+      independentObservations,
+      chainValid ? "verified" : completeHistory ? "invalid" : "unavailable",
+    );
     return createGatewayInternalInboundRequest({
       ...request,
       metadata: {
@@ -52,6 +68,25 @@ export function prepareFailureReviewInbound(input: unknown, store: FailureMemory
     // see the explicit control command without a projection and fail closed.
     return input;
   }
+}
+
+function linkedIndependentObservations(
+  evidenceLogIds: readonly string[],
+  completeHistory: CompleteHistoryStore,
+): FailureReviewIndependentObservation[] {
+  const evidence = new Set(evidenceLogIds);
+  if (evidence.size === 0) return [];
+  return completeHistory.all()
+    .filter((entry) => evidence.has(entry.id))
+    .map((entry) => ({
+      source: "complete_history" as const,
+      entry_id_digest: sha256Hex(entry.id),
+      entry_hash: entry.entry_hash,
+      payload_digest: entry.payload_digest,
+      entry_kind: entry.kind,
+      observed_failures: extractFailureSignatures({ kind: "complete_history", entry })
+        .map(({ scope, failure_type }) => ({ scope, failure_type })),
+    }));
 }
 
 function latestFailureSignature(store: FailureMemoryStore) {

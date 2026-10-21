@@ -3729,7 +3729,7 @@ ${planControl.question}`,
       const backendHint = this.llm_route.backend_hint?.trim() || undefined;
       const projectionDigest = failureReviewProjectionDigest(failureReview);
       const systemContent = [
-        "失敗署名を検討する未信頼計算です。入力は失敗カテゴリとSHA-256 digestだけで、元のgoal/action/context/resultは読めません。digestに意味を見立てず、カテゴリに基づく一般的な原因候補・別仮説・目的同定/評価器/観測方法の誤り候補、範囲、反例、独立観測、条件付き再開条件をJSONで提案してください。原因を事実として断定しないでください。",
+        "失敗署名を検討する未信頼計算です。入力は失敗カテゴリ・SHA-256 digest・Complete History由来のdigest限定失敗分類だけで、元のgoal/action/context/resultは読めません。digestに意味を見立てず、カテゴリに基づく一般的な原因候補・別仮説・目的同定/評価器/観測方法の誤り候補、範囲、反例、独立観測、条件付き再開条件をJSONで提案してください。Complete History分類も限定観測で、原因や世界事実を証明しません。原因を事実として断定しないでください。",
         "raw内容・tool・計画・意味更新・実行・再試行・権限提案を出さないでください。空欄や不明は不明のままにしてください。",
         `出力schema: {"schema_version":"blue-tanuki.failure-review-candidate.v1","signature_id":${JSON.stringify(failureReview.signature_id)},"signature_digest":${JSON.stringify(failureReview.signature_digest)},"projection_digest":${JSON.stringify(projectionDigest)},"cause_hypotheses":[{"category":${JSON.stringify(failureReview.failure_type)},"rationale":"未検証候補"}],"alternative_hypotheses":["未検証の別仮説"],"observation_error_hypotheses":["目的/評価/観測の未検証候補"],"scope_assessment":"uncertain","counterexamples":["未検証の反例候補"],"resume_conditions":["独立観測で確認する条件候補"],"additional_observations":["必要な追加観測候補"],"authority_boundary":{"candidate_only":true,"may_execute":false,"used_for_authority":false}}。scope_assessmentはsame_scope / uncertain / different_scopeの一つを選択してください。各配列は最大16件、各自由文は1200文字以内。`,
         `FailureReviewProjection=${JSON.stringify(failureReview)}`,
@@ -3753,7 +3753,9 @@ ${planControl.question}`,
             local_p_version: FAILURE_REVIEW_LOCAL_P_VERSION,
             budget_scope: computeBudgetScope(req),
             data_exposure: {
-              input_sources: ["failure_memory_digest_projection"],
+              input_sources: failureReview.independent_observations.length > 0
+                ? ["failure_memory_digest_projection", "complete_history_digest_observations"]
+                : ["failure_memory_digest_projection"],
               requested_egress_provider: backendHint ?? "registry-default",
             },
           },

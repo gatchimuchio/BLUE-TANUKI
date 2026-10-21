@@ -2406,3 +2406,20 @@ J restore後、対象lineageのselected bindingを`invalidated`、`intent_commit
 | 全workspace suite、全体QE_QC／QE_QA、実provider／credential、実restore／外部作用、5OS実機 | 未実施。 |
 
 E03.03のtask単位J-store restore consumerを`WIRED`とする。`cross_store_atomic=false`を維持し、同一taskのJ/M/Broker/Cron復元点、guarded recovery／resume、親E03.03／QEB-03と製品全体の`BUILD_COVERED`は未成立。次batchではcurrent pinに基づき同一task依存と復元点を担う実consumerを一つ選ぶ。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+
+## 2026-10-21 QEB-27-E04.02-J-INDEPENDENT-OBSERVATION-ADOPTION
+
+QE_STAGE=`QE_BUILD`。開始HEAD／`origin/main`=`2aaa2cf8ce8f9f1bc0edfe5ca961ee9a6738b271`。現行pin rev2.3、適用`AGENTS.md`、active instruction、FailureReviewのproducer／consumerを再同期した。既存untracked `packages/blue-tanuki/native/linux-isolation/target/`を保全し、Git対象へ含めていない。
+
+GatewayはCompleteHistory chainを検証し、FailureMemory署名が参照するrecordに限定してentry ID digest、entry／payload hash、record kind、既存extractorが導くscope／failure categoryをFailureReview projectionへ渡す。raw payload、error、request／command IDはC projectionへ渡さない。HDS-Jは全evidence ID digestへのcoverage、重複の不存在、derived scope／categoryとの一致、およびrequest-bound C candidateを確認する。全てが一致しcandidateのscope提案が`same_scope`の場合だけscope reviewを`bound_to_independent_observation`とし、counterexample／resume conditionは将来の観測対象としてdigest-only auditへ保持する。それらを事実またはpermissionとして採用せず、原因も`not_adopted`、実行・再試行は不可。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Protocol typecheck/build | PASS。FailureReview observation contractとCompute data-exposure sourceを反映。 |
+| HDS typecheck/build | PASS。FailureReviewのsource binding、scope disposition、review-target dispositionを実装。 |
+| HDS FailureMemory／controller focused tests | PASS、2 suites／92 tests。no-observation hold、observation-bound scope、cause non-adoptionを確認。 |
+| Gateway FailureReview focused test | PASS、6/6。CompleteHistoryからのdigest-only projection、実HDS decision／feedback consumer、raw sentinel非露出をfixtureで確認。 |
+| Gateway typecheck/build、`git diff --check` | PASS。 |
+| live provider、実credential、外部作用、全workspace suite、QE_QC／QE_QA | 未実施。 |
+
+E04.02のFailureReview scope bindingと条件候補保持を`WIRED`とする。これはCompleteHistory source recordに対する限定照合であり、原因の真因証明、counterexampleの意味的成立、resume condition成立、実再試行許可、E04.02の対象別QAではない。次はrev2.3のE04.03に従い、条件変化の再観測を新しいJ判断へ接続する。製品全体は`BUILD_GAP`、QE_QC／QE_QA未開始。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。

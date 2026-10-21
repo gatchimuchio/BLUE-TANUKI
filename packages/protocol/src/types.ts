@@ -157,6 +157,7 @@ export const LLMComputeContextSchema = z.object({
       "selected_memory_references",
       "failure_memory_digest_projection",
       "selected_operation_result_observations",
+      "complete_history_digest_observations",
     ])).min(1).max(3),
     requested_egress_provider: z.string().trim().min(1).max(120),
   }).strict(),
@@ -359,11 +360,30 @@ const FailureReviewTypeSchema = z.enum([
   "repeated_manual_correction",
 ]);
 
-/** Gatewayが失敗署名から作るC向けのdigest-only入力。権限や世界事実ではない。 */
+/** A digest-only Complete History observation linked to a saved failure signature. */
+export const FailureReviewIndependentObservationSchema = z.object({
+  source: z.literal("complete_history"),
+  entry_id_digest: FailureReviewSha256Schema,
+  entry_hash: FailureReviewSha256Schema,
+  payload_digest: FailureReviewSha256Schema,
+  entry_kind: z.enum([
+    "user_input", "llm_history", "hds_decision", "approval_history", "execution_history", "audit_history", "final_output",
+  ]),
+  observed_failures: z.array(z.object({
+    scope: FailureReviewScopeSchema,
+    failure_type: FailureReviewTypeSchema,
+  }).strict()).max(16),
+}).strict();
+export type FailureReviewIndependentObservation = z.infer<typeof FailureReviewIndependentObservationSchema>;
+
+/** Gatewayが失敗署名と参照済みComplete Historyから作るdigest-only入力。権限や世界事実ではない。 */
 export const FailureReviewProjectionSchema = z.object({
   schema_version: z.literal("blue-tanuki.failure-review-projection.v1"),
   signature_id: z.string().uuid(),
   signature_digest: FailureReviewSha256Schema,
+  evidence_log_id_digests: z.array(FailureReviewSha256Schema).max(256),
+  independent_observation_source_status: z.enum(["verified", "unavailable", "invalid"]),
+  independent_observations: z.array(FailureReviewIndependentObservationSchema).max(256),
   scope: FailureReviewScopeSchema,
   failure_type: FailureReviewTypeSchema,
   cause_candidates: z.array(FailureReviewTypeSchema).max(16),

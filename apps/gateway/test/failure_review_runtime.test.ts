@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FailureMemoryStore, HDSUpperController } from "@blue-tanuki/hds-brain";
+import { CompleteHistoryStore, FailureMemoryStore, HDSUpperController, extractFailureSignatures } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest, isGatewayInternalInboundRequest, type InboundRequest } from "@blue-tanuki/protocol";
 import { prepareFailureReviewInbound } from "../src/failure_review_runtime.js";
 
@@ -57,6 +57,106 @@ describe("prepareFailureReviewInbound", () => {
     const result = prepareFailureReviewInbound(developerRequest("failure:review latest"), store) as InboundRequest;
     expect(result.metadata?.["blue_tanuki.failure_review.signature_id"]).toBe(latest.id);
     expect(result.metadata?.["blue_tanuki.failure_review.signature_id"]).not.toBe(earlier.id);
+  });
+
+  it("binds a digest-only independent observation from the referenced verified history entry", () => {
+    const history = new CompleteHistoryStore();
+    const entry = history.append({
+      kind: "execution_history",
+      request_id: "private-request",
+      command_id: "private-command",
+      actor: "owner",
+      source: "executor",
+      timestamp: 1,
+      payload: {
+        status: "failed",
+        command: { type: "tool_call", operation: "file.search" },
+        origin_channel: "webchat",
+        error: "PRIVATE_FAILURE_REVIEW_ERROR",
+      },
+    })!;
+    const signatureInput = extractFailureSignatures({ kind: "complete_history", entry })[0]!;
+    const store = new FailureMemoryStore();
+    const signature = store.addSignature(signatureInput);
+
+    const result = prepareFailureReviewInbound(
+      developerRequest("failure:review " + signature.id),
+      store,
+      history,
+    ) as InboundRequest;
+    const projection = JSON.parse(String(result.metadata?.["blue_tanuki.failure_review.projection_json"])) as {
+      signature_id: string;
+      signature_digest: string;
+      evidence_log_id_digests: string[];
+      independent_observation_source_status: string;
+      independent_observations: Array<{
+        entry_hash: string;
+        payload_digest: string;
+        observed_failures: Array<{ scope: string; failure_type: string }>;
+      }>;
+    };
+
+    expect(projection.independent_observation_source_status).toBe("verified");
+    expect(projection.evidence_log_id_digests).toHaveLength(1);
+    expect(projection.independent_observations).toHaveLength(1);
+    expect(projection.independent_observations[0]).toMatchObject({
+      entry_hash: entry.entry_hash,
+      payload_digest: entry.payload_digest,
+      observed_failures: [{ scope: signature.scope, failure_type: signature.failure_type }],
+    });
+    expect(JSON.stringify(projection)).not.toContain("PRIVATE_FAILURE_REVIEW_ERROR");
+    expect(JSON.stringify(projection)).not.toContain("private-request");
+
+    const hds = new HDSUpperController();
+    const { command } = hds.decide(result);
+    expect(command?.type).toBe("llm_call");
+    if (!command || command.type !== "llm_call") return;
+    expect(command.payload.compute_context?.data_exposure.input_sources).toContain(
+      "complete_history_digest_observations",
+    );
+    const candidate = {
+      schema_version: "blue-tanuki.failure-review-candidate.v1",
+      signature_id: projection.signature_id,
+      signature_digest: projection.signature_digest,
+      projection_digest: command.payload.compute_context.projection_digest,
+      cause_hypotheses: [{ category: signature.failure_type, rationale: "unverified cause" }],
+      alternative_hypotheses: ["alternative"],
+      observation_error_hypotheses: ["observation error"],
+      scope_assessment: "same_scope",
+      counterexamples: ["candidate counterexample"],
+      resume_conditions: ["candidate resume condition"],
+      additional_observations: ["additional observation"],
+      authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+    };
+    const rawFeedback = {
+      command_id: command.id,
+      status: "success" as const,
+      result: { content: JSON.stringify(candidate) },
+      metrics: { duration_ms: 1 },
+    };
+    const reviewed = hds.reviewMemoryCitations(command, rawFeedback);
+    const reviewedResult = reviewed.result as { content?: string };
+    const reviewedContent = JSON.parse(String(reviewedResult.content)) as {
+      review: Record<string, unknown>;
+      review_targets: { counterexamples: string; resume_conditions: string };
+      counterexamples_adopted_as_facts: boolean;
+      resume_conditions_adopted_as_permissions: boolean;
+    };
+    expect(reviewedContent.review).toMatchObject({
+      scope_disposition: "bound_to_independent_observation",
+      counterexample_review_target_status: "retained_for_future_observation",
+      resume_condition_review_target_status: "retained_for_future_observation",
+      cause_adoption: "not_adopted",
+      may_execute: false,
+      used_for_authority: false,
+    });
+    expect(reviewedContent.review_targets).toEqual({
+      counterexamples: "retained_for_future_observation",
+      resume_conditions: "retained_for_future_observation",
+    });
+    expect(reviewedContent.counterexamples_adopted_as_facts).toBe(false);
+    expect(reviewedContent.resume_conditions_adopted_as_permissions).toBe(false);
+    hds.onFeedback(rawFeedback);
   });
 
   it("connects an explicit projection to an HDS-issued compute command without executing it", () => {

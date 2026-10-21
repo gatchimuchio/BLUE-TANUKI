@@ -4207,7 +4207,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           : documentCoordinator.buildComputePrompt(),
       }
       : boundary.boundary_ok
-        ? prepareFailureReviewInbound(hdsBoundaryInput, failureMemory)
+        ? prepareFailureReviewInbound(hdsBoundaryInput, failureMemory, completeHistory)
         : hdsBoundaryInput;
     const { log, command } = hds.decide(decisionInput, documentCoordinator
       ? { transient_content: "document_organization" }

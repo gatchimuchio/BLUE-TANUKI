@@ -6,9 +6,12 @@ import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import {
   CompleteHistoryStore,
   FailureMemoryStore,
+  assessFailureReviewCandidate,
   candidateFromCommand,
   createFailureReviewProjection,
   extractFailureSignatures,
+  failureReviewProjectionDigest,
+  sha256Hex,
   runPeriodicFailureMemoryVerification,
 } from "../src/index.js";
 
@@ -85,6 +88,85 @@ describe("FailureMemoryStore", () => {
     expect(store.staleRules().map((rule) => rule.id)).toContain(signature.id);
     const decayed = store.decayOldRules();
     expect(decayed[0]?.confidence).toBeLessThan(0.8);
+  });
+});
+
+describe("FailureReview independent observation binding", () => {
+  it("binds only scope review to complete-history evidence and keeps cause unadopted", () => {
+    const signature = new FailureMemoryStore().addSignature({
+      scope: "repo",
+      failure_type: "logic_drift",
+      input_pattern: "input",
+      action_pattern: "action",
+      context_pattern: "context",
+      evidence_log_ids: ["history-entry-1"],
+    });
+    const projection = createFailureReviewProjection(signature, [{
+      source: "complete_history",
+      entry_id_digest: sha256Hex("history-entry-1"),
+      entry_hash: "e".repeat(64),
+      payload_digest: "f".repeat(64),
+      entry_kind: "execution_history",
+      observed_failures: [{ scope: "repo", failure_type: "logic_drift" }],
+    }], "verified");
+    const candidate = {
+      schema_version: "blue-tanuki.failure-review-candidate.v1",
+      signature_id: projection.signature_id,
+      signature_digest: projection.signature_digest,
+      projection_digest: failureReviewProjectionDigest(projection),
+      cause_hypotheses: [{ category: "logic_drift", rationale: "unverified cause" }],
+      alternative_hypotheses: ["alternative"],
+      observation_error_hypotheses: ["observation error"],
+      scope_assessment: "same_scope",
+      counterexamples: ["counterexample candidate"],
+      resume_conditions: ["resume condition candidate"],
+      additional_observations: ["more evidence"],
+      authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+    };
+
+    const trace = assessFailureReviewCandidate({ projection, candidate, source_bound: true });
+    expect(trace).toMatchObject({
+      status: "recorded",
+      scope_disposition: "bound_to_independent_observation",
+      independent_observation_count: 1,
+      counterexample_review_target_status: "retained_for_future_observation",
+      resume_condition_review_target_status: "retained_for_future_observation",
+      cause_adoption: "not_adopted",
+      may_execute: false,
+      used_for_authority: false,
+    });
+  });
+
+  it("holds scope review when linked history observations are missing", () => {
+    const signature = new FailureMemoryStore().addSignature({
+      scope: "repo",
+      failure_type: "logic_drift",
+      input_pattern: "input",
+      action_pattern: "action",
+      context_pattern: "context",
+      evidence_log_ids: ["history-entry-1"],
+    });
+    const projection = createFailureReviewProjection(signature, [], "verified");
+    const candidate = {
+      schema_version: "blue-tanuki.failure-review-candidate.v1",
+      signature_id: projection.signature_id,
+      signature_digest: projection.signature_digest,
+      projection_digest: failureReviewProjectionDigest(projection),
+      cause_hypotheses: [],
+      alternative_hypotheses: [],
+      observation_error_hypotheses: [],
+      scope_assessment: "same_scope",
+      counterexamples: [],
+      resume_conditions: [],
+      additional_observations: [],
+      authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+    };
+
+    expect(assessFailureReviewCandidate({ projection, candidate, source_bound: true })).toMatchObject({
+      scope_disposition: "held_for_independent_observation",
+      cause_adoption: "not_adopted",
+      may_execute: false,
+    });
   });
 });
 

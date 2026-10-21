@@ -2,6 +2,8 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-21の`QEB-27-E04.02-J-INDEPENDENT-OBSERVATION-ADOPTION`では、chain検証済みComplete HistoryからFailureMemory署名の参照recordだけをdigest限定で再分類し、HDS-Jへscope reviewの実consumerを接続した。全参照と失敗scope/categoryが一致し、C候補も`same_scope`の場合だけ範囲をobservation-boundとし、counterexample／resume conditionは将来の観測対象として保持する。原因採用・事実採用・再試行許可は生成しない。HDS focused 92/92、Gateway focused 6/6、protocol/HDS/Gateway typecheck、HDS/Gateway buildはPASS。E04.02の全QA、製品全体の`BUILD_COVERED`、QE_QC／QE_QAは未成立。次はE04.03で条件変化の再観測を既存consumerへ接続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+
 2026-10-21の`QEB-26-E04.01-FAILURE-SYMPTOM-CAUSE-SEPARATION`では、FailureMemoryが観測failure categoryを未確認の原因候補として重複記録しないようにし、症状digest・対象／作用／前提の署名と`root_cause_unconfirmed`を保持した。原因仮説は明示的なdigest-only C reviewから候補として生成し、独立観測までは非権威のままとする。FailureMemory focused 14/14、HDS failure-review consumer 1/1、HDS typecheck／buildはPASS。QE_BUILDの限定接続であり、E04.02のJによる独立観測・範囲採否、E03.03/QEB-03、製品全体の`BUILD_COVERED`、QE_QC／QE_QAは未成立。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-21の`QEB-25-E03.03-TASK-M-RESTORE-POINT-OPERATOR-PROJECTION`では、既存Recovery snapshotに届いていたM restore後のtask-scoped restore pointをControl Centerへread-only表示した。backup/task digestは短縮し、task内plan数と`observed`／`residuals_present`／`unobserved`／`unknown`を表示する。raw ID・payloadを表示せず、不正projectionは抑止し、権限・復元可否・再開を生成しない。WebChat focused 2/2、typecheck、buildはPASS。全suiteは未実施。QE_BUILDのoperator consumer接続であり、E03.03/QEB-03と製品全体の`BUILD_COVERED`、QE_QC／QE_QAは未成立。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。

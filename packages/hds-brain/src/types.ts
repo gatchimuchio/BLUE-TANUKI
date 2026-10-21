@@ -460,7 +460,11 @@ export interface FailureReviewAuditTrace {
   signature_digest: string;
   projection_digest: string;
   proposed_scope_assessment: "same_scope" | "uncertain" | "different_scope" | "not_assessed";
-  scope_disposition: "held_for_independent_observation";
+  scope_disposition: "held_for_independent_observation" | "bound_to_independent_observation";
+  independent_observation_count: number;
+  independent_observation_digest: string;
+  counterexample_review_target_status: "not_present" | "held_for_scope" | "retained_for_future_observation";
+  resume_condition_review_target_status: "not_present" | "held_for_scope" | "retained_for_future_observation";
   cause_hypothesis_count: number;
   cause_hypothesis_categories: import("./failure-memory/types.js").FailureType[];
   cause_hypothesis_digests: string[];
