@@ -1531,6 +1531,132 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     }
   });
 
+  it("再起動後に結果未記録waitを中断へ分類し、ownerの新しい返信でのみC計算を再開する", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-wait-interrupted-"));
+    const databasePath = join(root, "state.sqlite");
+    const goal = "Wait for an owner reply and compute a candidate without granting authority";
+    const seed = plan(randomUUID(), "synthetic-root");
+    const seedCheckpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal,
+        revisions: [{ digest: operationPlanDigest(seed), plan: seed }], receipt_observations: [], bindings: [], results: [] }],
+    });
+    let store = new OperationPlanStateStore(databasePath);
+    let hds = new HDSUpperController({ operation_plan_state: store });
+    const previousReply = "PRIVATE PRE-RESTART REPLY MUST NOT BE SAVED";
+    try {
+      store.compareAndSet(null, seedCheckpoint);
+      hds.close();
+      store.close();
+      store = new OperationPlanStateStore(databasePath);
+      hds = new HDSUpperController({ operation_plan_state: store });
+      const deadlineAt = Date.now() + 60_000;
+      expect(hds.decide(request(`plan:wait ${JSON.stringify({ plan_id: seed.plan_id,
+        revision_digest: operationPlanDigest(seed), deadline_at_ms: deadlineAt })}`)).command?.type).toBe("noop");
+      const wait = hds.listOperationPlanWaits()[0]!;
+      const firstCompute = hds.decide(request(previousReply));
+      expect(firstCompute.command?.type).toBe("llm_call");
+      expect(hds.listOperationPlanWaits().find((entry) => entry.wait_id === wait.wait_id))
+        .toMatchObject({ state: "resumed", compute_outcome: "pending" });
+      hds.close();
+      store.close();
+
+      store = new OperationPlanStateStore(databasePath);
+      hds = new HDSUpperController({ operation_plan_state: store });
+      expect(hds.reconcileOperationPlanWaitComputations()).toEqual({ candidate_reconciled: 0, interrupted: 1 });
+      const interrupted = store.load()?.waits?.find((entry) => entry.wait_id === wait.wait_id);
+      expect(interrupted).toMatchObject({ state: "resumed", compute_outcome: "interrupted",
+        wake_reason: "reply", used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(store.load())).not.toContain(previousReply);
+
+      const newReply = "NEW OWNER RESPONSE AFTER RESTART";
+      const resumeControl = `plan:resume_wait ${JSON.stringify({ wait_id: wait.wait_id, response: newReply })}`;
+      const wrongOwner = hds.decide(request(resumeControl, "different-user"));
+      expect(wrongOwner.command).toBeNull();
+      expect(wrongOwner.log.frame.goal).not.toContain(newReply);
+      expect(JSON.stringify(hds.getAudit().list())).not.toContain(newReply);
+      expect(hds.listOperationPlanWaits().find((entry) => entry.wait_id === wait.wait_id))
+        .toMatchObject({ compute_outcome: "interrupted" });
+      const resumeRequest = request(resumeControl);
+      const resumed = hds.decide(resumeRequest);
+      expect(resumed.command?.type).toBe("llm_call");
+      expect(JSON.stringify(resumed.command?.payload)).toContain(newReply);
+      expect(JSON.stringify(resumed.command?.payload)).not.toContain(previousReply);
+      expect(store.load()?.waits?.find((entry) => entry.wait_id === wait.wait_id))
+        .toMatchObject({ state: "resumed", wake_reason: "recovery", compute_outcome: "pending",
+          used_for_authority: false, may_execute: false });
+
+      const next = plan(resumeRequest.id, "synthetic-root");
+      hds.onFeedback({ command_id: resumed.command!.id, status: "success",
+        result: { operation_core: { status: "valid_plan", plan: next } }, metrics: { duration_ms: 1 } });
+      expect(hds.listOperationPlanWaits().find((entry) => entry.wait_id === wait.wait_id))
+        .toMatchObject({ compute_outcome: "candidate_retained", candidate_plan_id_digest: operationPlanDigest(next.plan_id),
+          used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(store.load())).not.toContain(newReply);
+      expect(JSON.stringify(hds.getAudit().list())).not.toContain(newReply);
+      expect(JSON.stringify(hds.getRuntimeSnapshot().operation_plans)).not.toContain(newReply);
+      expect(hds.getAudit().verify()).toBe(true);
+    } finally {
+      hds.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("起動時に保存済みの同一候補だけをwait結果へ結び直す", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-wait-candidate-reconcile-"));
+    const databasePath = join(root, "state.sqlite");
+    const goal = "Retain the exact candidate if its checkpoint completed before the wait receipt";
+    const seed = plan(randomUUID(), "synthetic-root");
+    const seedCheckpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal,
+        revisions: [{ digest: operationPlanDigest(seed), plan: seed }], receipt_observations: [], bindings: [], results: [] }],
+    });
+    let store = new OperationPlanStateStore(databasePath);
+    let hds = new HDSUpperController({ operation_plan_state: store });
+    try {
+      store.compareAndSet(null, seedCheckpoint);
+      hds.close();
+      store.close();
+      store = new OperationPlanStateStore(databasePath);
+      hds = new HDSUpperController({ operation_plan_state: store });
+      const deadlineAt = Date.now() + 60_000;
+      hds.decide(request(`plan:wait ${JSON.stringify({ plan_id: seed.plan_id,
+        revision_digest: operationPlanDigest(seed), deadline_at_ms: deadlineAt })}`));
+      const wait = hds.listOperationPlanWaits()[0]!;
+      const reply = request("synthetic owner reply for exact candidate recovery");
+      const firstCompute = hds.decide(reply);
+      const candidate = plan(reply.id, "synthetic-root");
+      hds.onFeedback({ command_id: firstCompute.command!.id, status: "success",
+        result: { operation_core: { status: "valid_plan", plan: candidate } }, metrics: { duration_ms: 1 } });
+      const retained = store.load()!;
+      const waitPending = structuredClone(retained);
+      const pendingWait = waitPending.waits!.find((entry) => entry.wait_id === wait.wait_id)!;
+      pendingWait.compute_outcome = "pending";
+      delete pendingWait.compute_result_digest;
+      delete pendingWait.candidate_plan_id_digest;
+      delete pendingWait.compute_completed_at_ms;
+      delete pendingWait.compute_resource_use;
+      store.compareAndSet(operationPlanDigest(retained), waitPending);
+      hds.close();
+      store.close();
+
+      store = new OperationPlanStateStore(databasePath);
+      hds = new HDSUpperController({ operation_plan_state: store });
+      expect(hds.reconcileOperationPlanWaitComputations()).toEqual({ candidate_reconciled: 1, interrupted: 0 });
+      expect(hds.listOperationPlanWaits().find((entry) => entry.wait_id === wait.wait_id))
+        .toMatchObject({ compute_outcome: "candidate_retained", candidate_plan_id_digest: operationPlanDigest(candidate.plan_id),
+          used_for_authority: false, may_execute: false });
+      expect(hds.getRuntimeSnapshot().operation_plans.plans).toHaveLength(2);
+      expect(hds.getAudit().verify()).toBe(true);
+    } finally {
+      hds.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("SUSPENDした計画選択はresumeで未結合commandへ変わらない", async () => {
     const hds = new HDSUpperController(); const origin = request("plan:compute fixture"); const candidate = plan(origin.id, "synthetic-root");
     candidate.steps[0]!.parameters!.query = "rm -rf foo";

@@ -228,11 +228,12 @@ export interface OperationPlanStatusProjection {
     state: "waiting" | "resumed";
     deadline_at_ms: number;
     resumed_at_ms?: number;
-    wake_reason?: "reply" | "deadline";
-    compute_outcome: "not_started" | "pending" | "candidate_retained" | "candidate_rejected" | "failed" | "not_recorded";
+    wake_reason?: "reply" | "deadline" | "recovery";
+    compute_outcome: "not_started" | "pending" | "interrupted" | "candidate_retained" | "candidate_rejected" | "failed" | "not_recorded";
     compute_result_digest?: string;
     candidate_plan_id?: string;
     compute_completed_at_ms?: number;
+    compute_interrupted_at_ms?: number;
     compute_resource_use?: Pick<ComputeResourceUse,
       "charged_compute_ms" | "charged_tokens" | "tokens_usage_status" | "cost_status" |
       "charged_cost_amount" | "currency" | "charge_basis" | "used_for_authority" | "may_execute">;
@@ -339,12 +340,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
   for (const wait of rawWaits as Record<string, unknown>[]) {
     const allowedKeys = new Set(["wait_id", "plan_id", "task_identity_digest", "state", "deadline_at_ms",
       "resumed_at_ms", "wake_reason", "compute_outcome", "compute_result_digest", "candidate_plan_id",
-      "compute_completed_at_ms", "compute_resource_use", "used_for_authority", "may_execute"]);
+      "compute_completed_at_ms", "compute_interrupted_at_ms", "compute_resource_use", "used_for_authority", "may_execute"]);
     const state = wait.state;
     const outcome = wait.compute_outcome;
     const resumed = state === "resumed";
     const resumedAt = wait.resumed_at_ms;
     const completedAt = wait.compute_completed_at_ms;
+    const interruptedAt = wait.compute_interrupted_at_ms;
     const parsedResourceUse = wait.compute_resource_use === undefined
       ? undefined : ComputeResourceUseSchema.safeParse(wait.compute_resource_use);
     const resourceUse = parsedResourceUse?.success ? parsedResourceUse.data : undefined;
@@ -353,20 +355,23 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         !Number.isSafeInteger(wait.deadline_at_ms) || (wait.deadline_at_ms as number) < 0 ||
         wait.used_for_authority !== false || wait.may_execute !== false ||
         (resumed && (!Number.isSafeInteger(resumedAt) || (resumedAt as number) < 0 ||
-          !["reply", "deadline"].includes(String(wait.wake_reason)))) ||
+          !["reply", "deadline", "recovery"].includes(String(wait.wake_reason)))) ||
         (!resumed && (resumedAt !== undefined || wait.wake_reason !== undefined)) ||
-        (outcome !== "not_started" && outcome !== "pending" && outcome !== "candidate_retained" &&
+        (outcome !== "not_started" && outcome !== "pending" && outcome !== "interrupted" && outcome !== "candidate_retained" &&
           outcome !== "candidate_rejected" && outcome !== "failed" && outcome !== "not_recorded") ||
         (state === "waiting" && outcome !== "not_started") ||
         (resumed && outcome === "not_started") ||
         (wait.compute_result_digest !== undefined && !isDigest(wait.compute_result_digest)) ||
         (wait.candidate_plan_id !== undefined && !isDigest(wait.candidate_plan_id)) ||
         (completedAt !== undefined && (!Number.isSafeInteger(completedAt) || (completedAt as number) < (resumedAt as number))) ||
+        (interruptedAt !== undefined && (!Number.isSafeInteger(interruptedAt) || (interruptedAt as number) < (resumedAt as number))) ||
+        ((outcome === "interrupted") !== (interruptedAt !== undefined)) ||
         ((outcome === "candidate_retained" || outcome === "candidate_rejected" || outcome === "failed") !== (completedAt !== undefined)) ||
         ((outcome === "candidate_retained") !== (wait.candidate_plan_id !== undefined)) ||
         (outcome === "pending" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined)) ||
+        (outcome === "interrupted" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined)) ||
         ((outcome === "not_started" || outcome === "not_recorded") &&
-          (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined)) ||
+          (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined || interruptedAt !== undefined)) ||
         (wait.compute_resource_use !== undefined && (!resourceUse || completedAt === undefined))) {
       return invalidOperationPlanStatusProjection();
     }
@@ -377,11 +382,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       task_identity_digest: wait.task_identity_digest as string, state: state as "waiting" | "resumed",
       deadline_at_ms: wait.deadline_at_ms as number,
       ...(typeof resumedAt === "number" ? { resumed_at_ms: resumedAt } : {}),
-      ...(wait.wake_reason === "reply" || wait.wake_reason === "deadline" ? { wake_reason: wait.wake_reason } : {}),
+      ...(wait.wake_reason === "reply" || wait.wake_reason === "deadline" || wait.wake_reason === "recovery"
+        ? { wake_reason: wait.wake_reason } : {}),
       compute_outcome: outcome as OperationPlanStatusProjection["waits"][number]["compute_outcome"],
       ...(typeof wait.compute_result_digest === "string" ? { compute_result_digest: wait.compute_result_digest } : {}),
       ...(typeof wait.candidate_plan_id === "string" ? { candidate_plan_id: wait.candidate_plan_id } : {}),
       ...(typeof completedAt === "number" ? { compute_completed_at_ms: completedAt } : {}),
+      ...(typeof interruptedAt === "number" ? { compute_interrupted_at_ms: interruptedAt } : {}),
       ...(resourceUse ? { compute_resource_use: {
         charged_compute_ms: resourceUse.charged_compute_ms,
         charged_tokens: resourceUse.charged_tokens,

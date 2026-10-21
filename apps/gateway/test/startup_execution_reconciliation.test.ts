@@ -26,6 +26,7 @@ function fixture(deliveryEpoch?: string) {
       return {
         reconcileOperationPlanResult: vi.fn(() => resultForAttempt(++attempts)),
         reconcileOperationPlanMemory: vi.fn(memoryReady),
+        reconcileOperationPlanWaitComputations: vi.fn(() => ({ candidate_reconciled: 0, interrupted: 0 })),
       } as unknown as HDSUpperController;
     },
   };
@@ -38,7 +39,9 @@ describe("Gateway startup execution reconciliation", () => {
 
     const status = reconcileStartupExecutionState(hds, f.store, f.currentEpoch);
 
-    expect(status).toEqual({ ready: true, adopted: 1, deferred: 0, stale_generation_archived: 0, memory_ready: true, result_store_readable: true });
+    expect(status).toEqual({ ready: true, adopted: 1, deferred: 0, stale_generation_archived: 0,
+      memory_ready: true, result_store_readable: true, wait_compute_candidate_reconciled: 0,
+      wait_compute_interrupted: 0, wait_compute_reconciliation_ready: true });
     expect(f.attempts).toBe(2);
     expect(f.store.acknowledgeResult).toHaveBeenCalledTimes(1);
   });
@@ -49,7 +52,9 @@ describe("Gateway startup execution reconciliation", () => {
 
     const status = reconcileStartupExecutionState(hds, f.store, f.currentEpoch);
 
-    expect(status).toEqual({ ready: false, adopted: 0, deferred: 1, stale_generation_archived: 0, memory_ready: true, result_store_readable: true });
+    expect(status).toEqual({ ready: false, adopted: 0, deferred: 1, stale_generation_archived: 0,
+      memory_ready: true, result_store_readable: true, wait_compute_candidate_reconciled: 0,
+      wait_compute_interrupted: 0, wait_compute_reconciliation_ready: true });
     expect(f.attempts).toBe(2);
     expect(f.store.acknowledgeResult).not.toHaveBeenCalled();
   });
@@ -60,7 +65,9 @@ describe("Gateway startup execution reconciliation", () => {
 
     const status = reconcileStartupExecutionState(hds, f.store, f.currentEpoch);
 
-    expect(status).toEqual({ ready: false, adopted: 0, deferred: 1, stale_generation_archived: 0, memory_ready: false, result_store_readable: true });
+    expect(status).toEqual({ ready: false, adopted: 0, deferred: 1, stale_generation_archived: 0,
+      memory_ready: false, result_store_readable: true, wait_compute_candidate_reconciled: 0,
+      wait_compute_interrupted: 0, wait_compute_reconciliation_ready: true });
     expect(f.attempts).toBe(1);
     expect(f.store.acknowledgeResult).not.toHaveBeenCalled();
   });
@@ -72,9 +79,24 @@ describe("Gateway startup execution reconciliation", () => {
 
     const status = reconcileStartupExecutionState(hds, f.store, f.currentEpoch);
 
-    expect(status).toEqual({ ready: false, adopted: 0, deferred: 0, stale_generation_archived: 0, memory_ready: true, result_store_readable: false });
+    expect(status).toEqual({ ready: false, adopted: 0, deferred: 0, stale_generation_archived: 0,
+      memory_ready: true, result_store_readable: false, wait_compute_candidate_reconciled: 0,
+      wait_compute_interrupted: 0, wait_compute_reconciliation_ready: true });
     expect(f.store.acknowledgeResult).not.toHaveBeenCalled();
     expect(f.attempts).toBe(0);
+  });
+
+  it("fails startup closed when an interrupted wait cannot be reconciled", () => {
+    const f = fixture();
+    const hds = f.controller(() => true, () => true);
+    vi.mocked(hds.reconcileOperationPlanWaitComputations).mockImplementation(() => {
+      throw new Error("wait checkpoint unavailable");
+    });
+
+    const status = reconcileStartupExecutionState(hds, f.store, f.currentEpoch);
+
+    expect(status).toMatchObject({ ready: false, memory_ready: true, result_store_readable: true,
+      wait_compute_reconciliation_ready: false });
   });
 
   it("fails startup closed when a stale-generation result cannot be archived", () => {
@@ -84,7 +106,8 @@ describe("Gateway startup execution reconciliation", () => {
     const status = reconcileStartupExecutionState(hds, f.store, f.currentEpoch);
 
     expect(status).toEqual({ ready: false, adopted: 0, deferred: 1, stale_generation_archived: 0,
-      memory_ready: true, result_store_readable: true });
+      memory_ready: true, result_store_readable: true, wait_compute_candidate_reconciled: 0,
+      wait_compute_interrupted: 0, wait_compute_reconciliation_ready: true });
     expect(f.store.archiveStaleGenerationResult).toHaveBeenCalled();
     expect(hds.reconcileOperationPlanResult).not.toHaveBeenCalled();
   });

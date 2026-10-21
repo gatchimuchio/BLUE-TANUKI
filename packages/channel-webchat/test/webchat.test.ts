@@ -477,6 +477,38 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(messages).toEqual([["owner", body.content], ["accepted", "request-result-1"]]);
   });
 
+  it("sends a fresh owner response for an interrupted wait without echoing the response into the chat", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeInterruptedOperationPlanWait(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    const calls: Array<{ path: string; token: string; body: unknown }> = [];
+    const messages: Array<[string, string]> = [];
+    const nodes = { "chat-token": { value: "owner-token" }, "chat-user": { value: "fixture-owner" } };
+    await new Script(`${helper}\ninvokeInterruptedOperationPlanWait(waitId, response)`)
+      .runInNewContext({
+        state: {}, waitId: "a".repeat(64), response: "fresh owner response",
+        byId: (id: keyof typeof nodes) => nodes[id],
+        postJson: async (path: string, token: string, body: unknown) => {
+          calls.push({ path, token, body }); return { request_id: "request-wait-recovery-1" };
+        },
+        appendChat: (kind: string, content: string) => messages.push([kind, content]),
+      });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: "/operators/developer/invoke", token: "owner-token" });
+    const body = calls[0]!.body as { user: string; content: string };
+    expect(body.user).toBe("fixture-owner");
+    expect(body.content.startsWith("plan:resume_wait ")).toBe(true);
+    expect(JSON.parse(body.content.slice("plan:resume_wait ".length))).toEqual({
+      wait_id: "a".repeat(64), response: "fresh owner response",
+    });
+    expect(JSON.stringify(messages)).not.toContain("fresh owner response");
+    expect(messages).toEqual([["owner", "復旧した待機へ新しい返信を送信しました。"],
+      ["accepted", "request-wait-recovery-1"]]);
+  });
+
   it("renders only bounded Operation Plan digests, fixed statuses, and residual counts after selected-store restore", () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("function formatRecoveryPostActionPlanResiduals(");
     const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
@@ -574,6 +606,10 @@ describe("WebChatChannel — Control Center shell", () => {
           state: "waiting", deadline_at_ms: nowMs + 120_000, compute_outcome: "not_started",
           resource_review_required: false,
           used_for_authority: false, may_execute: false },
+        { wait_id: "1".repeat(64), plan_id: "0".repeat(64), task_identity_digest: "f".repeat(64),
+          state: "resumed", deadline_at_ms: nowMs - 30_000, resumed_at_ms: nowMs - 60_000, wake_reason: "reply",
+          compute_outcome: "interrupted", compute_interrupted_at_ms: nowMs - 30_000,
+          resource_review_required: false, used_for_authority: false, may_execute: false },
       ],
       goal_purpose_options: [{ goal_ref: "goal_0123456789abcdef", goal_kind: "delegated", purpose_version: 2,
         purpose_digest: "c".repeat(64), parent_alignment_status: "not_applicable" }],
@@ -630,6 +666,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain('<span class="badge good">results_verified</span>');
     expect(rendered).toContain("計画候補をJ台帳へ保存（採用・実行未許可）");
     expect(rendered).toContain("返信／期限待機中");
+    expect(rendered).toContain("C計算中断・新しい返信が必要");
+    expect(rendered).toContain('data-operation-plan-resume-wait="true"');
+    expect(rendered).toContain('data-operation-plan-resume-input="true"');
+    expect(rendered).toContain("以前の返信本文は保存されていません。");
     expect(rendered).toContain("C結果digest");
     expect(rendered).toContain("保存候補digest");
     expect(rendered).toContain("J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。");

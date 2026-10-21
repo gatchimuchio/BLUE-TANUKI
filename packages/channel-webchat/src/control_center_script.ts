@@ -608,6 +608,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "saved result read request accepted");
       }
 
+      async function invokeInterruptedOperationPlanWait(waitId, response) {
+        state.chatToken = byId("chat-token").value.trim();
+        state.chatUser = byId("chat-user").value.trim() || "owner";
+        if (!state.chatToken) throw new Error("webchat token is required");
+        if (typeof waitId !== "string" || !/^[a-f0-9]{64}$/.test(waitId)) {
+          throw new Error("interrupted wait identity is unavailable");
+        }
+        if (typeof response !== "string" || response.trim().length === 0 || response.length > 200000) {
+          throw new Error("enter a new response of at most 200000 characters");
+        }
+        const content = "plan:resume_wait " + JSON.stringify({ wait_id: waitId, response: response.trim() });
+        const result = await postJson("/operators/developer/invoke", state.chatToken,
+          { user: state.chatUser, content });
+        appendChat("owner", "復旧した待機へ新しい返信を送信しました。");
+        appendChat("accepted", result.request_id || "interrupted wait recovery request accepted");
+      }
+
       function syncInputs() {
         byId("runtime-token").value = state.runtimeToken;
         byId("approval-token").value = state.approvalToken;
@@ -1035,6 +1052,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const outcomeLabels = {
             not_started: "返信／期限待機中",
             pending: "J再開済み・C結果未記録",
+            interrupted: "C計算中断・新しい返信が必要",
             candidate_retained: "計画候補をJ台帳へ保存（採用・実行未許可）",
             candidate_rejected: "C候補はJへ保存されず",
             failed: "C計算失敗",
@@ -1046,6 +1064,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const resourceUse = wait.compute_resource_use;
           if ((resultDigest !== undefined && !/^[a-f0-9]{64}$/.test(resultDigest)) ||
               (candidateDigest !== undefined && !/^[a-f0-9]{64}$/.test(candidateDigest)) ||
+              (wait.compute_outcome === "interrupted" && !Number.isSafeInteger(wait.compute_interrupted_at_ms)) ||
+              (wait.compute_outcome !== "interrupted" && wait.compute_interrupted_at_ms !== undefined) ||
               typeof wait.resource_review_required !== "boolean" ||
               (resourceUse !== undefined && (!isObject(resourceUse) ||
                 !Number.isSafeInteger(resourceUse.charged_compute_ms) || resourceUse.charged_compute_ms < 0 ||
@@ -1053,10 +1073,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 !Number.isFinite(resourceUse.charged_cost_amount) || resourceUse.charged_cost_amount < 0 ||
                 !/^[A-Z]{3}$/.test(resourceUse.currency || "") || resourceUse.used_for_authority !== false ||
                 resourceUse.may_execute !== false))) return "";
-          const wakeReason = wait.wake_reason === "reply" ? "返信" : wait.wake_reason === "deadline" ? "期限" : "未記録";
+          const wakeReason = wait.wake_reason === "reply" ? "返信" : wait.wake_reason === "deadline" ? "期限"
+            : wait.wake_reason === "recovery" ? "ownerの新しい返信" : "未記録";
           const deadlineDate = new Date(wait.deadline_at_ms);
           const deadline = Number.isNaN(deadlineDate.getTime())
             ? String(wait.deadline_at_ms) + " ms" : deadlineDate.toISOString();
+          const recoveryInput = wait.compute_outcome === "interrupted"
+            ? '<label>復旧後の新しい返信<textarea data-operation-plan-resume-input="true" maxlength="200000"></textarea></label>' +
+              '<button type="button" class="secondary" data-operation-plan-resume-wait="true" data-wait-id="' +
+              escapeHtml(wait.wait_id) + '">新しい返信を送って候補計算を再開</button>' +
+              '<p class="muted">以前の返信本文は保存されていません。ownerの新しい入力だけで候補計算を行います。</p>'
+            : '';
           return '<article class="trace-item"><div class="row"><h3>返信／期限wait ' +
             escapeHtml(shortDigest(wait.wait_id)) + '</h3>' + badge(outcomeLabels[wait.compute_outcome], "review") + '</div>' +
             '<dl class="kv"><dt>task digest</dt><dd class="mono">' + escapeHtml(shortDigest(wait.task_identity_digest)) +
@@ -1071,7 +1098,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             (candidateDigest ? '<dt>保存候補digest</dt><dd class="mono">' + escapeHtml(shortDigest(candidateDigest)) + '</dd>' : '') +
             '</dl><p class="muted">' + (wait.resource_review_required
               ? '計画候補の保存に至らず資源消費がありました。次のJ再検討で進捗を確認します。'
-              : 'J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。') + '</p></article>';
+              : 'J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。') + '</p>' + recoveryInput + '</article>';
         }).join("");
         if (projection.plans.length === 0) {
           setHtml("operation-plan-state-list", refreshNotice + goalPurposeGuide + waitCards +
@@ -3970,6 +3997,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           target.disabled = true;
           try {
             await invokeReceiptReconciliation(target.dataset.planId || "", target.dataset.revisionDigest || "", target.dataset.stepId || "");
+          } catch (error) {
+            appendChat("error", error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
+        if (target.dataset.operationPlanResumeWait === "true") {
+          target.disabled = true;
+          const container = target.closest(".trace-item");
+          const responseInput = container && container.querySelector("[data-operation-plan-resume-input]");
+          try {
+            await invokeInterruptedOperationPlanWait(target.dataset.waitId || "", responseInput?.value || "");
+            if (responseInput) responseInput.value = "";
           } catch (error) {
             appendChat("error", error.message);
           } finally {

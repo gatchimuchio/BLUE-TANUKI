@@ -4,7 +4,26 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
 
-### 最新BUILD_BATCH：`QEB-09-E03.02-RECOVERED-SAVED-RESULT-RETURN`
+### 最新BUILD_BATCH：`QEB-10-E03.02-INTERRUPTED-WAIT-COMPUTE-RECOVERY`
+
+開始HEAD／`main`／`origin/main`=`25402c330eccbb5896e6b3d58eb97da3b2cd3128`。owner指定rev2.3三点の現行pinとE03.02の「未決作用を照合し、旧世代結果を履歴保存」、適用AGENTS／作業標準のBUILD・安全・Git条項を今回の対象範囲で再確認した。開始worktreeはtracked clean、既存のLinux `target/`は保護対象untracked。
+
+対象はJに`resumed / compute_outcome=pending`で永続化された返信／期限waitの再起動後consumer。起動時に既に保存された同一request/taskの候補が一つだけある場合はJ checkpointへ結果状態を結び直し、候補がない場合は`interrupted`として残して、認証済みDeveloper画面からownerが新しい返信を明示投入できるようにする。過去の返信本文を復元・再送・永続保存せず、自動でCを再実行せず、HDS採否・Approval・実作用を発行しない。新返信からの候補計算だけを既存のJ-issued C経路へ接続する。
+
+再起動consumerを接続した。起動時には同一event／task／owner／channelに合う保存候補が一件だけならJ waitへ結果を結び直し、候補なし・曖昧なら`interrupted`として固定する。後者はDeveloper Control Centerからの新しいowner返信でのみ、既存J-issued C経路へ接続する。返信本文はwait state・candidate task goal・audit・status projectionへ残さず、以前の本文も復元・再送しない。起動時reconcile失敗はGateway開始をfail-closedする。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| durable wait／restart／exact candidate照合／owner fresh reply | `operation_plan_runtime.test.ts`の関連3件PASS。保存候補の回復、中断分類、owner不一致拒否、新返信からの単回候補保持を確認。 |
+| Developer画面／HTTP invoke | `webchat.test.ts`のInterrupted表示・返信送信2件PASS。古い本文を表示せず、認証済みDeveloper invokeを使う。 |
+| startup／旧generation分離 | startup reconciliation 6件PASS。旧generation結果の隔離テスト1件PASS。 |
+| `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `git diff --check`／`pnpm docs:check` | 両方PASS。日本語基底の移行負債76件は継続管理。 |
+| 実LLM／credential／外部作用、全workspace suite、実Gateway再起動、QE_QC／QE_QA | 未実施。実物全体の形状成立後の工程に置く。 |
+
+このInterrupted wait restart consumerを`WIRED`とする。E03.02 durable job lifecycleの全producer／consumerおよび製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider、実外部作用、D4Pocket／ミニドラ別repo変更、P13公開・出荷GOは保留。commit／push後にremote mainとbackup refを記録する。
+
+### 履歴ログ：`QEB-09-E03.02-RECOVERED-SAVED-RESULT-RETURN`
 
 開始HEAD／`main`／`origin/main`=`e61de60e2b8f6da9aa0a18cb2968471ac072c71a`。owner指定のrev2.3三点は[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)に固定済み。E03.02のRecovery後の結果取得節、適用AGENTS／作業標準のBUILD・安全・Git条項、既存Operation Plan→M receipt→Gateway→WebChat consumerを今回分だけ再照合した。Windows localでBLUE-TANUKIのみ変更し、保護対象untracked Linux `target/`は保持してGitへ含めない。
 

@@ -286,13 +286,14 @@ export const OperationPlanWaitStateSchema = z.object({
   created_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   state: z.enum(["waiting", "resumed"]),
   resumed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
-  wake_reason: z.enum(["reply", "deadline"]).optional(),
+  wake_reason: z.enum(["reply", "deadline", "recovery"]).optional(),
   wake_event_id_digest: Digest.optional(),
   resume_command_id_digest: Digest.optional(),
-  compute_outcome: z.enum(["pending", "candidate_retained", "candidate_rejected", "failed"]).optional(),
+  compute_outcome: z.enum(["pending", "interrupted", "candidate_retained", "candidate_rejected", "failed"]).optional(),
   compute_result_digest: Digest.optional(),
   candidate_plan_id_digest: Digest.optional(),
   compute_completed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  compute_interrupted_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   compute_resource_use: ComputeResourceUseSchema.optional(),
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),
@@ -301,7 +302,7 @@ export const OperationPlanWaitStateSchema = z.object({
     wait.wake_event_id_digest !== undefined;
   const computeOutcomeFieldsPresent = wait.resume_command_id_digest !== undefined || wait.compute_outcome !== undefined ||
     wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined || wait.compute_completed_at_ms !== undefined ||
-    wait.compute_resource_use !== undefined;
+    wait.compute_interrupted_at_ms !== undefined || wait.compute_resource_use !== undefined;
   if (wait.deadline_at_ms <= wait.created_at_ms) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_deadline_must_follow_creation" });
   }
@@ -313,7 +314,10 @@ export const OperationPlanWaitStateSchema = z.object({
       (wait.compute_outcome === undefined && (wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined ||
         wait.compute_completed_at_ms !== undefined || wait.compute_resource_use !== undefined)) ||
       (wait.compute_outcome === "pending" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined ||
-        wait.compute_completed_at_ms !== undefined || wait.compute_resource_use !== undefined)) ||
+        wait.compute_completed_at_ms !== undefined || wait.compute_interrupted_at_ms !== undefined || wait.compute_resource_use !== undefined)) ||
+      (wait.compute_outcome === "interrupted" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined ||
+        wait.compute_completed_at_ms !== undefined || wait.compute_interrupted_at_ms === undefined || wait.compute_resource_use !== undefined)) ||
+      (wait.compute_outcome !== "interrupted" && wait.compute_interrupted_at_ms !== undefined) ||
       ((wait.compute_outcome === "candidate_retained" || wait.compute_outcome === "candidate_rejected" || wait.compute_outcome === "failed") &&
         wait.compute_completed_at_ms === undefined) ||
       (wait.compute_outcome === "candidate_retained" && wait.candidate_plan_id_digest === undefined) ||
@@ -327,6 +331,10 @@ export const OperationPlanWaitStateSchema = z.object({
       (wait.resumed_at_ms === undefined || wait.compute_completed_at_ms < wait.resumed_at_ms)) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_compute_completion_precedes_resume" });
   }
+  if (wait.compute_interrupted_at_ms !== undefined &&
+      (wait.resumed_at_ms === undefined || wait.compute_interrupted_at_ms < wait.resumed_at_ms)) {
+    context.addIssue({ code: "custom", message: "operation_plan_wait_compute_interruption_precedes_resume" });
+  }
 });
 export type OperationPlanWaitState = z.infer<typeof OperationPlanWaitStateSchema>;
 
@@ -337,6 +345,7 @@ export const OperationPlanControlSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("revise"), plan_id: Id, expected_revision_digest: Digest, plan: OperationPlanSchema }).strict(),
   z.object({ action: z.literal("wait"), plan_id: Id, revision_digest: Digest,
     deadline_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict(),
+  z.object({ action: z.literal("resume_wait"), wait_id: Digest, response: z.string().trim().min(1).max(200_000) }).strict(),
   z.object({ action: z.literal("reflect"), plan_id: Id, revision_digest: Digest,
     step_ids: z.array(Id).min(1).max(8), question: z.string().trim().min(1).max(4000) }).strict(),
   z.object({ action: z.literal("result"), plan_id: Id, revision_digest: Digest, step_id: Id }).strict(),
@@ -345,6 +354,7 @@ export type OperationPlanControl = z.infer<typeof OperationPlanControlSchema>;
 export type OperationPlanReflectionControl = Extract<OperationPlanControl, { action: "reflect" }>;
 export type OperationPlanReceiptReconciliationControl = Extract<OperationPlanControl, { action: "reconcile" }>;
 export type OperationPlanResultReturnControl = Extract<OperationPlanControl, { action: "result" }>;
+export type OperationPlanWaitResumeControl = Extract<OperationPlanControl, { action: "resume_wait" }>;
 export const OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION = "blue-tanuki.result-reflection.v2";
 /** Cの解釈候補。形状・引用一致は意味採用や実行許可を表さない。 */
 export const OperationPlanReflectionCandidateSchema = z.object({

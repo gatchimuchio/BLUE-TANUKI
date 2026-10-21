@@ -4,7 +4,7 @@ import {
   GoalCriteriaProjectionSchema, OperationJsonValueSchema, OperationPlanCheckpointSchema, OperationPlanSchema, prepareOperationPlan,
   type ExecuteCommand, type ExecuteFeedback, type InboundRequest, type OperationPlan,
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
-  type OperationPlanResultReturnControl,
+  type OperationPlanResultReturnControl, type OperationPlanWaitResumeControl, type OperationPlanWaitState,
   type OperationPlanComputeSourceObservation, type OperationPlanComputeSourceObservationReference,
   OperationPlanShellExecResultObservationSchema, type OperationPlanShellExecResultObservation,
   type OperationCommandExecutionResult,
@@ -25,7 +25,6 @@ import {
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
   type OperationPlanMemoryInterpretationDependency,
   type OperationPlanReceiptReconciliationControl,
-  type OperationPlanWaitState,
   type ComputeResourceUse,
   canonicalExecutorCommandBytes,
   isGatewayInternalInboundRequest,
@@ -801,6 +800,103 @@ export class OperationPlanLedger {
     return structuredClone(updated);
   }
 
+  /** Startup reconciliation: bind an already-retained exact candidate or expose an interrupted C computation. */
+  reconcilePendingWaitComputations(nowMs = Date.now()): readonly {
+    readonly disposition: "candidate_reconciled" | "interrupted";
+    readonly wait: OperationPlanWaitState;
+  }[] {
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("plan_wait_compute_recovery_time_invalid");
+    if (!this.port || !(this.state.waits ?? []).some((wait) => wait.state === "resumed" && wait.compute_outcome === "pending")) {
+      return [];
+    }
+    if (this.recoveryRefreshPending || this.activePlanAttempts.size > 0 || !this.savedDigest ||
+        operationPlanDigest(this.port.load()) !== this.savedDigest) throw new Error("plan_wait_compute_recovery_state_unavailable");
+    const updates = (this.state.waits ?? []).filter((wait) => wait.state === "resumed" && wait.compute_outcome === "pending")
+      .map((wait) => {
+        const candidates = this.state.plans.filter((candidate) => {
+          const first = candidate.revisions[0]?.plan;
+          return first !== undefined &&
+            operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: first.request_id }) === wait.wake_event_id_digest &&
+            operationPlanTaskIdentityDigest(candidate) === wait.task_identity_digest &&
+            operationPlanDigest(candidate.owner) === wait.owner_digest &&
+            operationPlanDigest(candidate.channel) === wait.channel_digest;
+        });
+        const updated = structuredClone(wait);
+        const terminalAt = Math.max(nowMs, wait.resumed_at_ms!);
+        if (candidates.length === 1) {
+          updated.compute_outcome = "candidate_retained";
+          updated.candidate_plan_id_digest = operationPlanDigest(candidates[0]!.revisions[0]!.plan.plan_id);
+          updated.compute_completed_at_ms = terminalAt;
+          return { disposition: "candidate_reconciled" as const, wait: OperationPlanWaitStateSchema.parse(updated) };
+        }
+        updated.compute_outcome = "interrupted";
+        updated.compute_interrupted_at_ms = terminalAt;
+        return { disposition: "interrupted" as const, wait: OperationPlanWaitStateSchema.parse(updated) };
+      });
+    this.change((state) => {
+      for (const update of updates) {
+        const index = (state.waits ?? []).findIndex((wait) => wait.wait_id === update.wait.wait_id &&
+          wait.state === "resumed" && wait.compute_outcome === "pending" &&
+          wait.resume_command_id_digest === update.wait.resume_command_id_digest);
+        if (index < 0) throw new Error("plan_wait_compute_recovery_state_changed");
+        state.waits![index] = update.wait;
+      }
+    });
+    return updates.map((update) => ({ disposition: update.disposition, wait: structuredClone(update.wait) }));
+  }
+
+  inspectInterruptedWaitForResume(control: OperationPlanWaitResumeControl, caller: InboundRequest): {
+    readonly wait_id: string;
+    readonly task_identity_digest: string;
+    readonly goal: string;
+  } {
+    if (this.recoveryRefreshPending || !this.port) throw new Error("plan_wait_state_not_durable");
+    const wait = (this.state.waits ?? []).find((candidate) => candidate.wait_id === control.wait_id &&
+      candidate.state === "resumed" && candidate.compute_outcome === "interrupted");
+    if (!wait) throw new Error("plan_wait_resume_stale");
+    const plan = this.state.plans.find((candidate) =>
+      operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
+    if (!plan || plan.revisions.at(-1)?.digest !== wait.revision_digest ||
+        operationPlanTaskIdentityDigest(plan) !== wait.task_identity_digest ||
+        operationPlanDigest(plan.owner) !== wait.owner_digest || operationPlanDigest(plan.channel) !== wait.channel_digest ||
+        caller.user !== plan.owner || caller.channel !== plan.channel) throw new Error("plan_wait_resume_stale");
+    return { wait_id: wait.wait_id, task_identity_digest: wait.task_identity_digest, goal: plan.goal };
+  }
+
+  /** Bind a fresh explicit owner reply to an interrupted wait without retaining the reply in J state. */
+  resumeInterruptedWait(control: OperationPlanWaitResumeControl, caller: InboundRequest, commandId: string,
+    nowMs = Date.now()): OperationPlanWaitState {
+    if (!caller.id.trim() || !commandId.trim() || !Number.isSafeInteger(nowMs) || nowMs < 0) {
+      throw new Error("plan_wait_resume_invalid");
+    }
+    const inspected = this.inspectInterruptedWaitForResume(control, caller);
+    const current = (this.state.waits ?? []).find((wait) => wait.wait_id === inspected.wait_id &&
+      wait.state === "resumed" && wait.compute_outcome === "interrupted");
+    if (!current) throw new Error("plan_wait_resume_stale");
+    const resumed = structuredClone(current);
+    delete resumed.compute_result_digest;
+    delete resumed.candidate_plan_id_digest;
+    delete resumed.compute_completed_at_ms;
+    delete resumed.compute_interrupted_at_ms;
+    delete resumed.compute_resource_use;
+    resumed.resumed_at_ms = Math.max(nowMs, current.compute_interrupted_at_ms!);
+    resumed.wake_reason = "recovery";
+    resumed.wake_event_id_digest = operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: caller.id });
+    resumed.resume_command_id_digest = operationPlanDigest(commandId);
+    resumed.compute_outcome = "pending";
+    const checked = OperationPlanWaitStateSchema.parse(resumed);
+    this.change((state) => {
+      const waits = state.waits ?? [];
+      const index = waits.findIndex((wait) => wait.wait_id === current.wait_id && wait.state === "resumed" &&
+        wait.compute_outcome === "interrupted" && wait.compute_interrupted_at_ms === current.compute_interrupted_at_ms &&
+        wait.revision_digest === current.revision_digest);
+      if (index < 0) throw new Error("plan_wait_resume_state_changed");
+      waits[index] = checked;
+      state.waits = waits;
+    });
+    return structuredClone(checked);
+  }
+
   listWaits(): readonly OperationPlanWaitState[] {
     return structuredClone(this.state.waits ?? []);
   }
@@ -1177,6 +1273,7 @@ export class OperationPlanLedger {
     }
     const parentWaitId = origin.metadata?.["blue_tanuki.operation_core.parent_wait_id"];
     let parentTaskIdentityDigest: string | undefined;
+    let retainedTaskGoal = origin.content;
     if (parentWaitId !== undefined) {
       if (!isGatewayInternalInboundRequest(origin) || typeof parentWaitId !== "string") {
         throw new Error("plan_wait_resume_origin_invalid");
@@ -1186,6 +1283,20 @@ export class OperationPlanLedger {
           origin.metadata?.["blue_tanuki.operation_core.parent_task_identity_digest"] !== parentTaskIdentityDigest) {
         throw new Error("plan_wait_resume_binding_invalid");
       }
+      const eventDigest = operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: origin.id });
+      const parentWait = (this.state.waits ?? []).find((wait) => wait.wait_id === parentWaitId && wait.state === "resumed" &&
+        wait.wake_event_id_digest === eventDigest && wait.compute_outcome === "pending" &&
+        wait.task_identity_digest === parentTaskIdentityDigest);
+      const parentPlan = parentWait && this.state.plans.find((candidate) =>
+        operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === parentWait.plan_id_digest);
+      if (!parentWait || !parentPlan || parentPlan.revisions.at(-1)?.digest !== parentWait.revision_digest ||
+          operationPlanTaskIdentityDigest(parentPlan) !== parentTaskIdentityDigest ||
+          operationPlanDigest(parentPlan.owner) !== parentWait.owner_digest ||
+          operationPlanDigest(parentPlan.channel) !== parentWait.channel_digest ||
+          origin.user !== parentPlan.owner || origin.channel !== parentPlan.channel) {
+        throw new Error("plan_wait_resume_binding_invalid");
+      }
+      retainedTaskGoal = parentPlan.goal;
     }
     const rawGoalPurposeBinding = origin.metadata?.["blue_tanuki.operation_core.goal_purpose_binding"];
     let goalPurposeBinding: OperationPlanGoalPurposeBinding | undefined;
@@ -1220,11 +1331,11 @@ export class OperationPlanLedger {
         new Set((parsedMemoryDependencies ?? []).map((dependency) => dependency.judgment_ref)).size !==
           (parsedMemoryDependencies?.length ?? 0)) throw new Error("plan_memory_interpretation_dependency_invalid");
     const goalPurposeRelation = goalPurposeBinding
-      ? this.recordGoalPurposeRelation(plan, origin.content, goalPurposeBinding, rawPurposeRelationCandidate)
+      ? this.recordGoalPurposeRelation(plan, retainedTaskGoal, goalPurposeBinding, rawPurposeRelationCandidate)
       : undefined;
     const requestGoalCriteria = GoalCriteriaProjectionSchema.parse(projectRequestGoalCriteria(
-      { ...origin, id: expected }, origin.content));
-    this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: origin.content,
+      { ...origin, id: expected, content: retainedTaskGoal }, retainedTaskGoal));
+    this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: retainedTaskGoal,
       ...(parentTaskIdentityDigest ? { task_identity_digest: parentTaskIdentityDigest } : {}),
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
       ...(goalPurposeRelation ? { goal_purpose_relation: goalPurposeRelation } : {}),
@@ -2423,6 +2534,7 @@ export class OperationPlanLedger {
         ...(wait.compute_result_digest ? { compute_result_digest: wait.compute_result_digest } : {}),
         ...(wait.candidate_plan_id_digest ? { candidate_plan_id: wait.candidate_plan_id_digest } : {}),
         ...(wait.compute_completed_at_ms !== undefined ? { compute_completed_at_ms: wait.compute_completed_at_ms } : {}),
+        ...(wait.compute_interrupted_at_ms !== undefined ? { compute_interrupted_at_ms: wait.compute_interrupted_at_ms } : {}),
         ...(wait.compute_resource_use ? { compute_resource_use: structuredClone(wait.compute_resource_use) } : {}),
         used_for_authority: false as const, may_execute: false as const,
       })),

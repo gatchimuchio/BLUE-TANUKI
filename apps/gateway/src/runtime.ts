@@ -169,12 +169,16 @@ async function runCliWithExecutionStore(
     stale_generation_archived: startupRecovery.stale_generation_archived,
     memory_ready: startupRecovery.memory_ready,
     result_store_readable: startupRecovery.result_store_readable,
+    wait_compute_candidate_reconciled: startupRecovery.wait_compute_candidate_reconciled,
+    wait_compute_interrupted: startupRecovery.wait_compute_interrupted,
+    wait_compute_reconciliation_ready: startupRecovery.wait_compute_reconciliation_ready,
   });
   if (!startupRecovery.ready) {
-    gatewayLog.error("CLI startup blocked before processing the request: saved result or memory reconciliation is unavailable or pending", {
+    gatewayLog.error("CLI startup blocked before processing the request: saved result, memory, or wait-compute reconciliation is unavailable or pending", {
       deferred: startupRecovery.deferred,
       memory_ready: startupRecovery.memory_ready,
       result_store_readable: startupRecovery.result_store_readable,
+      wait_compute_reconciliation_ready: startupRecovery.wait_compute_reconciliation_ready,
     });
     hds.closeOperationPlanMemory();
     throw new Error("gateway_startup_reconciliation_unresolved");

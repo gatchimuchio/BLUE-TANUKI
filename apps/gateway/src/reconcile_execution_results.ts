@@ -52,6 +52,9 @@ export function reconcileStartupExecutionState(
   readonly stale_generation_archived: number;
   readonly memory_ready: boolean;
   readonly result_store_readable: boolean;
+  readonly wait_compute_candidate_reconciled: number;
+  readonly wait_compute_interrupted: number;
+  readonly wait_compute_reconciliation_ready: boolean;
 } {
   let resultStoreReadable = true;
   const reconcile = () => {
@@ -77,7 +80,23 @@ export function reconcileStartupExecutionState(
     memoryReady = reconcileMemory();
   }
 
-  return { ready: resultStoreReadable && deferred === 0 && memoryReady, adopted, deferred,
+  let waitComputeCandidateReconciled = 0;
+  let waitComputeInterrupted = 0;
+  let waitComputeReconciliationReady = false;
+  try {
+    const recoveredWaitComputations = hds.reconcileOperationPlanWaitComputations();
+    waitComputeCandidateReconciled = recoveredWaitComputations.candidate_reconciled;
+    waitComputeInterrupted = recoveredWaitComputations.interrupted;
+    waitComputeReconciliationReady = true;
+  } catch {
+    waitComputeReconciliationReady = false;
+  }
+
+  return { ready: resultStoreReadable && deferred === 0 && memoryReady && waitComputeReconciliationReady, adopted, deferred,
     stale_generation_archived: staleGenerationArchived,
-    memory_ready: memoryReady, result_store_readable: resultStoreReadable };
+    memory_ready: memoryReady, result_store_readable: resultStoreReadable,
+    wait_compute_candidate_reconciled: waitComputeCandidateReconciled,
+    wait_compute_interrupted: waitComputeInterrupted,
+    wait_compute_reconciliation_ready: waitComputeReconciliationReady,
+  };
 }

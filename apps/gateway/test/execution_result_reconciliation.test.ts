@@ -224,7 +224,8 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
 
     expect(reconcileStartupExecutionState(restarted, c.execution, currentEpoch)).toEqual({
       ready: true, adopted: 0, deferred: 0, stale_generation_archived: 1,
-      memory_ready: true, result_store_readable: true,
+      memory_ready: true, result_store_readable: true, wait_compute_candidate_reconciled: 0,
+      wait_compute_interrupted: 0, wait_compute_reconciliation_ready: true,
     });
     expect(reconcileResult).not.toHaveBeenCalled();
     expect(c.j.load()?.plans[0]?.results).toHaveLength(0);
