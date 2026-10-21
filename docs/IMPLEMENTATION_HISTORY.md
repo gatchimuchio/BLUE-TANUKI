@@ -2751,3 +2751,19 @@ code commit=`0533867`。QE_BUILDのこの接続補正以外に実provider、cred
 | Gateway実serve ingress／owner-facing確認画面を含む製品runtime経路、全workspace suite、実provider／credential、外部送信、5OS実機、QE_QC／QE_QA | 未実施。 |
 
 この結果はD08.01の合成local subpathの接続を示す。製品runtimeのGateway ingressからowner-facing確認まで含むD08.01全体は`BUILD_GAP`であり、F10.02も`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。C08.03実provider保留、D4-Pocket／ミニドラ変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。実装commit=`b8d3a2e64bfade30d7e67976b4f971a1d021be88`。次のBUILD_BATCHは未選定。次回独立作業では現行三点セットと適用AGENTSを読み直し、実際のGateway ingressと今回の合成Executor経路の接続を現物から確定する。
+
+---
+
+### 履歴ログ：QEB-47-D08.01-SERVED-RECONCILIATION
+
+開始HEAD／`main`／`origin/main`=`8d13a5a53af39c6af6897135c652e6fbb54e89c6`。現行pin rev2.3の三点セット、適用AGENTS、active instruction、D08.01結果照合consumerと実Gateway ingressを再同期した。閉じたQEB-46記録だけを依存として参照し、旧版・完了ログ全体は読み直していない。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`を維持した。
+
+`smoke:receipt-reconciliation`を、別processで起動するbuild済みGateway `serve()`のDeveloper HTTP `/operators/developer/invoke`から`plan:reconcile`を受ける経路へ更新した。GatewayはIPCのgraceful shutdownを受け、shutdown後にSQLite fixtureを削除する。照合対象の`outcome_unknown`はGateway起動前に親側の合成HDS／Executorでseedされるため、このsmokeは初回計画生成・J確認・Gmail作用をserved Gateway経由で証明しない。loopback inspection serverはGatewayとは別processである。照合一致時はread-only照合1回、合成作用1件維持、状態`outcome_unknown`維持、receipt ID非表示を確認する。endpoint未設定時はinspection serverへ接続せずread 0回。owner epochをseedへ渡し、C候補fixtureを`LLMRegistry`／compute budget／lifecycle observerの現行委任契約へ合わせた。実provider、credential、業務宛先は使用しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm smoke:receipt-reconciliation` | PASS。build済みGateway Developer HTTP→HDS→loopback照合→WebSocket／snapshot投影、endpoint未設定時通信なし、作用1件のままを確認。 |
+| `node --check scripts/fixtures/gateway_serve_worker.mjs`／`git diff --check` | PASS。 |
+| 初回plan→J review→Executor作用を含むserved縦断、owner-facing確認画面、全workspace suite、実provider／credential、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+D08.01全体=`BUILD_GAP`。F10.02=`BUILD_GAP`。このconsumer接続は製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を意味しない。D4-Pocket／ミニドラ変更なし、C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留。実装commit=`b9ba6ca36e158d0dec0643428557ba8ac8d7b990`。次のBUILD_BATCHは未選定。
