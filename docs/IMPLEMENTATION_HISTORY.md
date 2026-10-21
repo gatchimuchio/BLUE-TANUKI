@@ -18,6 +18,8 @@ QEB-22のtask-scoped Broker merge後は完全なread-only Recovery projectionを
 
 task-scoped Broker restore後の現在J/M/Broker dependency re-observation consumerを限定範囲で`WIRED`とする。task-scoped M-state restore point producer、cross-store atomicity、自動resume、E03.03／QEB-03、製品全体の`BUILD_COVERED`は未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はtask-scoped M-state restore pointとJ binding／M receiptの実consumer接続を現物から確定する。
 
+実装commit=`21478a9d940b0d024d8e7d329b76d11233cea832`を`main`へatomic pushした。push直後のremote main／backup current tag／backup previous tagは`21478a9d940b0d024d8e7d329b76d11233cea832`／`21478a9d940b0d024d8e7d329b76d11233cea832`／`921a1a153204512b2127641f1c564ba0419dd5e7`で一致し、local recovery branch二世代もcurrent=`21478a9d940b0d024d8e7d329b76d11233cea832`、previous=`921a1a153204512b2127641f1c564ba0419dd5e7`。保護対象untracked Linux isolation `target/`は保持した。
+
 ---
 
 ### 履歴ログ：`QEB-22-E03.03-TASK-LINEAGE-SCOPED-BROKER-MERGE`
