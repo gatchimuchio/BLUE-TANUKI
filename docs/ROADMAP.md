@@ -2,6 +2,8 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-21の`QEB-15-E03.03-J-PLAN-RESIDUAL-ISOLATION`では、checkpoint全体digestとschemaが有効な範囲で、意味的不整合のあるJ planを実行viewから隔離し、raw recordを保全したまま正常planの判断・保存更新を接続した。plan指定restoreは選択scopeだけを置換し、兄弟planを保持する。Recovery／J focused 63/63、typecheck、15-project build、HDS standaloneはPASS。plan itemのschema-invalidとcheckpoint全体digest不一致は依然全体fail-closedで、E03.03／QEB-03および製品全体の`BUILD_COVERED`は未成立。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+
 2026-10-21の`QEB-11-E03.03-CANONICAL-STORE-INVENTORY-RECOVERY-BARRIER`では、Recovery snapshot capture中のcanonical store出現／消失を終了時に再照合し、source inventoryが変わった場合は全storeのarchiveを破棄して未確認へ閉じる。recovery_surface focused 15/15、typecheck、15-project buildはPASS。共同atomicity、job-level restore point、E03.03全体、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。
 
 2026-10-21の`QEB-10-E03.02-INTERRUPTED-WAIT-COMPUTE-RECOVERY`では、J checkpoint後・C結果記録前のGateway停止を再起動時に調停するconsumerを接続した。同一候補が一件だけならwaitへ結果を結び直し、候補なし／曖昧ならinterruptedとして、認証済みDeveloper画面からownerの新しい返信がある時だけC候補計算へ進む。返信本文はwait state・candidate task goal・audit・projectionへ残さず、旧返信を復元・再送しない。関連Gateway／WebChat tests、workspace typecheck、15-project buildはPASS。全workspace suite、実Gateway再起動、実provider、E03.02全体および製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。

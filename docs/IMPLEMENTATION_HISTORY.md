@@ -4,6 +4,22 @@
 
 ---
 
+### 履歴ログ：`QEB-15-E03.03-J-PLAN-RESIDUAL-ISOLATION`
+
+開始HEAD／`main`／`origin/main`=`f43d83aff5214e2036274dfb38384857e779626d`。現行pinはrev2.3、関係単位E03.03。開始時の復元refは現世代=`f43d83aff5214e2036274dfb38384857e779626d`、前世代=`acb85ab2fa99d2fd71d0104730751a9e2d03c1ab`で、local branch／remote tagを一致確認した。
+
+Recovery Inspectionはplan単位の意味的不整合を区別できる一方、J永続storeの起動・CASがcheckpoint全体を一括検証していた。`OperationPlanCheckpoint`のplanとwaitを単位ごとに検査し、意味検証に失敗したplanとそれに属するwaitをHDS実行viewから隔離する。正常planは通常のJ判断・保存更新を続行し、隔離したraw recordは既存checkpoint内に保持する。plan指定restoreは選択scopeだけを置換し、同じcheckpointの残差planを保つ。隔離identityとの衝突は書込みを拒否する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| J plan semantic residual／別planのJ review・checkpoint更新 | PASS。invalid goal-criteria linkageのplanをJ runtime snapshotから除外し、raw entryを保存したままclean planのselection bindingを書き戻す。 |
+| plan-scoped restore | PASS。合成archiveから残差planだけを置換し、正常な兄弟planを保持。 |
+| `operation_plan_runtime.test.ts`／`operation_plan_recovery_inspection.test.ts`／`recovery_surface.test.ts` | 63/63 PASS。型検査後の初回worker testはbuild artifact削除により起動失敗したため、`pnpm build`後に再実行しPASSを確認。 |
+| `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | すべてPASS。buildは15 workspace projects。 |
+| top-level digest mismatch、checkpoint schema不一致、全suite、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。top-level integrity／schema failureは引き続き全体fail-closed。 |
+
+plan-local semantic residualからclean sibling J consumerへの経路を限定的に`WIRED`とする。checkpoint全体digest不一致とplan itemのschema-invalidはまだ隔離されず、Recovery／Jによるjob全体の独立復旧も未成立。E03.03／QEB-03全体は`BUILD_GAP`、C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commitはGit履歴で追跡する。
+
 ### 履歴ログ：`QEB-14-E03.03-BROKER-RESULT-RECOVERY-HOLD`
 
 開始HEAD／`main`／`origin/main`=`acb85ab2fa99d2fd71d0104730751a9e2d03c1ab`。現行三点pinは`QE_CURRENT_AUTHORITY.md`固定のrev2.3、関係単位E03.03。起動時・実行後の`reconcileExecutionResults`からJ/M、保存結果のowner返却までを追跡した。

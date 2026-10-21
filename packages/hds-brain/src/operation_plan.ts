@@ -110,8 +110,8 @@ type OperationPlanGoalPurposeRelationReviewVerifier = (input: {
 }) => boolean;
 /** 私有の回復状態。保存内容は現在の承認・実行権限ではない。 */
 export interface OperationPlanStatePort {
-  load(): unknown | null;
-  compareAndSet(expected_digest: string | null, checkpoint: OperationPlanCheckpoint): void;
+  load(memory_available?: boolean): unknown | null;
+  compareAndSet(expected_digest: string | null, checkpoint: OperationPlanCheckpoint, memory_available?: boolean): void;
   loadRecoveryHoldState(): unknown | null;
   compareAndSetRecoveryHoldState(expected_digest: string | null, state: OperationPlanRecoveryHoldState): void;
 }
@@ -503,6 +503,99 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
   return state;
 }
 
+export interface OperationPlanCheckpointRuntimePartition {
+  readonly checkpoint: OperationPlanCheckpoint;
+  readonly quarantined_plan_indices: readonly number[];
+  readonly quarantined_wait_indices: readonly number[];
+}
+
+/** 意味的不整合のあるplanを実行対象から隔離し、保存済みrecordは破棄しない。 */
+export function partitionOperationPlanCheckpointForRuntime(
+  value: unknown,
+  memoryAvailable: boolean,
+): OperationPlanCheckpointRuntimePartition {
+  const state = OperationPlanCheckpointSchema.parse(value);
+  const quarantinedPlans = new Set<number>();
+  const planOwners = new Map<string, number[]>();
+  const commandOwners = new Map<string, number[]>();
+  const ticketOwners = new Map<string, number[]>();
+  const waitOwners = new Map<string, number[]>();
+  const waitCounts = new Map<string, number>();
+
+  const recordOwner = (owners: Map<string, number[]>, id: string, index: number) => {
+    owners.set(id, [...(owners.get(id) ?? []), index]);
+  };
+  const quarantineDuplicateOwners = (owners: Map<string, number[]>) => {
+    for (const indexes of owners.values()) {
+      if (indexes.length > 1) for (const index of indexes) quarantinedPlans.add(index);
+    }
+  };
+
+  for (const [index, plan] of state.plans.entries()) {
+    const first = plan.revisions[0]!.plan;
+    recordOwner(planOwners, first.plan_id, index);
+    for (const binding of plan.bindings) {
+      recordOwner(commandOwners, binding.command_id, index);
+      if (binding.execution_admission) recordOwner(ticketOwners, binding.execution_admission.ticket_id, index);
+    }
+  }
+  quarantineDuplicateOwners(planOwners);
+  quarantineDuplicateOwners(commandOwners);
+  quarantineDuplicateOwners(ticketOwners);
+
+  for (const [index, plan] of state.plans.entries()) {
+    try {
+      const planIdDigest = operationPlanDigest(plan.revisions[0]!.plan.plan_id);
+      validateOperationPlanCheckpoint({ ...state, plans: [plan],
+        ...(state.waits === undefined ? {} : { waits: state.waits.filter((wait) => wait.plan_id_digest === planIdDigest) }),
+      }, memoryAvailable);
+    } catch {
+      quarantinedPlans.add(index);
+    }
+  }
+
+  const planIndexesByDigest = new Map<string, number[]>();
+  for (const [index, plan] of state.plans.entries()) {
+    const digest = operationPlanDigest(plan.revisions[0]!.plan.plan_id);
+    recordOwner(planIndexesByDigest, digest, index);
+  }
+  if (state.waits) {
+    for (const wait of state.waits) {
+      waitCounts.set(wait.wait_id, (waitCounts.get(wait.wait_id) ?? 0) + 1);
+      const planIndexes = planIndexesByDigest.get(wait.plan_id_digest) ?? [];
+      if (planIndexes.length === 1) recordOwner(waitOwners, wait.wait_id, planIndexes[0]!);
+      else if (planIndexes.length > 1) for (const planIndex of planIndexes) quarantinedPlans.add(planIndex);
+    }
+    for (const [waitId, count] of waitCounts) {
+      if (count > 1) for (const index of waitOwners.get(waitId) ?? []) quarantinedPlans.add(index);
+    }
+  }
+
+  const cleanPlanIndices = state.plans.map((_plan, index) => index).filter((index) => !quarantinedPlans.has(index));
+  const cleanPlanDigests = new Set(cleanPlanIndices.map((index) =>
+    operationPlanDigest(state.plans[index]!.revisions[0]!.plan.plan_id)));
+  const cleanWaitIndices = (state.waits ?? []).map((_wait, index) => index).filter((index) => {
+    const wait = state.waits![index]!;
+    const owners = planIndexesByDigest.get(wait.plan_id_digest) ?? [];
+    return owners.length === 1 && !quarantinedPlans.has(owners[0]!) && cleanPlanDigests.has(wait.plan_id_digest) &&
+      waitCounts.get(wait.wait_id) === 1;
+  });
+  const cleanWaitSet = new Set(cleanWaitIndices);
+  const cleanCheckpoint = OperationPlanCheckpointSchema.parse({
+    ...state,
+    plans: cleanPlanIndices.map((index) => state.plans[index]!),
+    ...(state.waits === undefined ? {} : { waits: state.waits.filter((_wait, index) => cleanWaitSet.has(index)) }),
+  });
+
+  // plan別残差の隔離後にcheckpoint共有状態を再検査し、共有破損は全体fail-closedにする。
+  const checked = validateOperationPlanCheckpoint(cleanCheckpoint, memoryAvailable);
+  return {
+    checkpoint: checked,
+    quarantined_plan_indices: [...quarantinedPlans].sort((a, b) => a - b),
+    quarantined_wait_indices: (state.waits ?? []).map((_wait, index) => index).filter((index) => !cleanWaitSet.has(index)),
+  };
+}
+
 /** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
@@ -613,7 +706,7 @@ export class OperationPlanLedger {
     this.memoryStorage = memoryStorage;
     const checkedRecoveryEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
     let loadedCheckpointDigest: string | null = null;
-    const saved = port?.load();
+    const saved = port?.load(Boolean(memoryStorage));
     if (saved != null) {
     this.state = validateOperationPlanCheckpoint(saved, Boolean(memoryStorage));
     this.savedDigest = operationPlanDigest(this.state);
@@ -1086,7 +1179,7 @@ export class OperationPlanLedger {
         throw new Error("plan_recovery_evidence_command_mismatch");
       }
     }
-    const saved = this.port?.load();
+    const saved = this.port?.load(Boolean(this.memoryStorage));
     const checked = saved == null
       ? { schema_version: "operation-plan-state.v1" as const, plans: [] }
       : validateOperationPlanCheckpoint(saved, Boolean(this.resultMemory));
@@ -2919,7 +3012,7 @@ export class OperationPlanLedger {
     mutate(next);
     const checked = OperationPlanCheckpointSchema.parse(next);
     if (JSON.stringify(checked).length > 4_000_000) throw new Error("plan_checkpoint_capacity_reached");
-    this.port?.compareAndSet(this.savedDigest, checked);
+    this.port?.compareAndSet(this.savedDigest, checked, Boolean(this.memoryStorage));
     this.state = checked;
     this.savedDigest = operationPlanDigest(checked);
   }

@@ -510,21 +510,76 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     }
   });
 
-  it("rejects restored criteria projected from a different request identity", async () => {
-    const root = await mkdtemp(join(tmpdir(), "blue-plan-goal-criteria-source-mismatch-"));
-    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
-    const candidate = plan("criteria-source-mismatch", root);
-    const projection = noRequestCriteria("synthetic request", candidate.request_id);
-    const checkpoint = OperationPlanCheckpointSchema.parse({
-      schema_version: "operation-plan-state.v1",
-      plans: [{ owner: "fixture-owner", channel: "webchat", goal: "synthetic request",
-        request_goal_criteria: { ...projection, request_id: "another-request" },
-        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] }],
+  it("quarantines one plan-local residual, keeps an unrelated J plan writable, and restores only the residual scope", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-goal-criteria-isolation-"));
+    const databasePath = join(root, "state.sqlite");
+    const store = new OperationPlanStateStore(databasePath);
+    const cleanCandidate = plan("criteria-isolation-clean", root);
+    const residualCandidate = plan("criteria-isolation-residual", root);
+    const cleanGoal = "clean synthetic task";
+    const residualGoal = "residual synthetic task";
+    const cleanPlanState = {
+      owner: "fixture-owner", channel: "webchat", goal: cleanGoal,
+      request_goal_criteria: noRequestCriteria(cleanGoal, cleanCandidate.request_id),
+      revisions: [{ digest: operationPlanDigest(cleanCandidate), plan: cleanCandidate }],
+      receipt_observations: [], bindings: [], results: [],
+    };
+    const cleanCheckpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1", plans: [cleanPlanState],
     });
     try {
-      store.compareAndSet(null, checkpoint);
-      expect(() => new HDSUpperController({ operation_plan_state: store }))
-        .toThrow("plan_checkpoint_goal_criteria_source_mismatch");
+      store.compareAndSet(null, cleanCheckpoint);
+      const residualCheckpoint = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [
+          { owner: "fixture-owner", channel: "webchat", goal: residualGoal,
+            request_goal_criteria: { ...noRequestCriteria(residualGoal, residualCandidate.request_id), request_id: "another-request" },
+            revisions: [{ digest: operationPlanDigest(residualCandidate), plan: residualCandidate }],
+            receipt_observations: [], bindings: [], results: [] },
+          cleanPlanState,
+        ],
+      });
+      const database = new DatabaseSync(databasePath);
+      try {
+        database.prepare("UPDATE operation_plan_state SET checkpoint_json=?,digest=? WHERE id=1")
+          .run(JSON.stringify(residualCheckpoint), operationPlanDigest(residualCheckpoint));
+      } finally { database.close(); }
+
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      try {
+        expect(hds.getRuntimeSnapshot().operation_plans.plans.map((entry) => entry.plan_id))
+          .toEqual([operationPlanDigest(cleanCandidate.plan_id)]);
+        const selected = review(hds, cleanCandidate, "search");
+        expect(selected.command?.type).toBe("tool_call");
+
+        expect(store.load()?.plans.map((entry) => entry.revisions[0]!.plan.plan_id))
+          .toEqual([cleanCandidate.plan_id]);
+        const persistedDatabase = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+          const row = persistedDatabase.prepare("SELECT checkpoint_json,digest FROM operation_plan_state WHERE id=1").get() as
+            { checkpoint_json: string; digest: string };
+          const persisted = OperationPlanCheckpointSchema.parse(JSON.parse(row.checkpoint_json));
+          expect(operationPlanDigest(JSON.parse(row.checkpoint_json))).toBe(row.digest);
+          expect(persisted.plans).toHaveLength(2);
+          expect(persisted.plans.find((entry) => entry.revisions[0]!.plan.plan_id === residualCandidate.plan_id))
+            .toMatchObject({ request_goal_criteria: { request_id: "another-request" } });
+          expect(persisted.plans.find((entry) => entry.revisions[0]!.plan.plan_id === cleanCandidate.plan_id)?.bindings)
+            .toHaveLength(1);
+        } finally { persistedDatabase.close(); }
+      } finally { hds.close(); }
+
+      const archivedResidual = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [{ owner: "fixture-owner", channel: "webchat", goal: residualGoal,
+          request_goal_criteria: noRequestCriteria(residualGoal, residualCandidate.request_id),
+          revisions: [{ digest: operationPlanDigest(residualCandidate), plan: residualCandidate }],
+          receipt_observations: [], bindings: [], results: [] }],
+      });
+      const current = store.load();
+      if (!current) throw new Error("missing isolated J checkpoint");
+      store.restorePlanScope(archivedResidual, operationPlanDigest(residualCandidate.plan_id), current);
+      expect(store.load()?.plans.map((entry) => entry.revisions[0]!.plan.plan_id).sort())
+        .toEqual([cleanCandidate.plan_id, residualCandidate.plan_id].sort());
     } finally {
       store.close(); await rm(root, { recursive: true, force: true });
     }

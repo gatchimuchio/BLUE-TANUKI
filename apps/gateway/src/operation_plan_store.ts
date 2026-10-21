@@ -2,7 +2,8 @@ import { mkdirSync, realpathSync, lstatSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
-import { operationPlanDigest, type OperationPlanRecoveryHoldState, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
+import { operationPlanDigest, partitionOperationPlanCheckpointForRuntime,
+  type OperationPlanRecoveryHoldState, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema, type OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -31,22 +32,47 @@ export class OperationPlanStateStore implements OperationPlanStatePort {
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     return new OperationPlanStateStore(filepath);
   }
-  load(): OperationPlanCheckpoint | null {
-    const row = this.db.prepare("SELECT checkpoint_json, digest FROM operation_plan_state WHERE id=1").get() as
-      { checkpoint_json: string; digest: string } | undefined;
-    if (!row) return null;
-    const raw: unknown = JSON.parse(row.checkpoint_json);
-    if (operationPlanDigest(raw) !== row.digest) throw new Error("plan_checkpoint_integrity_failed");
-    return OperationPlanCheckpointSchema.parse(raw);
+  load(memoryAvailable = true): OperationPlanCheckpoint | null {
+    return this.readCheckpoint(memoryAvailable)?.partition.checkpoint ?? null;
   }
-  compareAndSet(expected_digest: string | null, checkpoint: OperationPlanCheckpoint): void {
+  compareAndSet(expected_digest: string | null, checkpoint: OperationPlanCheckpoint, memoryAvailable = true): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const current = this.load();
-      if ((current ? operationPlanDigest(current) : null) !== expected_digest) throw new Error("plan_checkpoint_concurrent_update");
-      const checked = OperationPlanCheckpointSchema.parse(checkpoint);
-      this.db.prepare("INSERT INTO operation_plan_state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET checkpoint_json=excluded.checkpoint_json,digest=excluded.digest")
-        .run(JSON.stringify(checked), operationPlanDigest(checked));
+      const current = this.readCheckpoint(memoryAvailable);
+      const currentCheckpoint = current?.partition.checkpoint ?? null;
+      if ((currentCheckpoint ? operationPlanDigest(currentCheckpoint) : null) !== expected_digest) {
+        throw new Error("plan_checkpoint_concurrent_update");
+      }
+      const incoming = OperationPlanCheckpointSchema.parse(checkpoint);
+      const incomingPartition = partitionOperationPlanCheckpointForRuntime(incoming, memoryAvailable);
+      if (incomingPartition.quarantined_plan_indices.length > 0 || incomingPartition.quarantined_wait_indices.length > 0) {
+        throw new Error("plan_checkpoint_residual_write_rejected");
+      }
+
+      const quarantinedPlanIndices = current?.partition.quarantined_plan_indices ?? [];
+      const quarantinedPlans = quarantinedPlanIndices.map((index) => current!.raw.plans[index]!);
+      const quarantinedPlanDigests = new Set(quarantinedPlanIndices.map((index) =>
+        operationPlanDigest(current!.parsed.plans[index]!.revisions[0]!.plan.plan_id)));
+      const incomingPlanDigests = new Set(incoming.plans.map((plan) =>
+        operationPlanDigest(plan.revisions[0]!.plan.plan_id)));
+      if ([...incomingPlanDigests].some((digest) => quarantinedPlanDigests.has(digest))) {
+        throw new Error("plan_checkpoint_quarantined_identity_conflict");
+      }
+
+      const quarantinedWaitIndices = current?.partition.quarantined_wait_indices ?? [];
+      const quarantinedWaits = quarantinedWaitIndices.map((index) => current!.raw.waits![index]!);
+      const quarantinedWaitIds = new Set(quarantinedWaits.map((wait) => wait.wait_id));
+      if ((incoming.waits ?? []).some((wait) => quarantinedWaitIds.has(wait.wait_id))) {
+        throw new Error("plan_checkpoint_quarantined_wait_identity_conflict");
+      }
+      const merged = {
+        ...incoming,
+        plans: [...incoming.plans, ...quarantinedPlans],
+        ...(incoming.waits !== undefined || quarantinedWaits.length > 0
+          ? { waits: [...(incoming.waits ?? []), ...quarantinedWaits] } : {}),
+      };
+      OperationPlanCheckpointSchema.parse(merged);
+      this.writeCheckpoint(merged);
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* 元の保存失敗を保持する。 */ }
@@ -58,13 +84,58 @@ export class OperationPlanStateStore implements OperationPlanStatePort {
     planIdDigest: string,
     expectedCurrent: OperationPlanCheckpoint | null,
   ): void {
-    const current = this.load();
-    const expectedDigest = expectedCurrent ? operationPlanDigest(expectedCurrent) : null;
-    if ((current ? operationPlanDigest(current) : null) !== expectedDigest) {
-      throw new Error("operation_plan_restore_scope_target_changed");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.readCheckpoint(true);
+      const currentCheckpoint = current?.partition.checkpoint ?? null;
+      const expectedDigest = expectedCurrent ? operationPlanDigest(expectedCurrent) : null;
+      if ((currentCheckpoint ? operationPlanDigest(currentCheckpoint) : null) !== expectedDigest) {
+        throw new Error("operation_plan_restore_scope_target_changed");
+      }
+      const archived = OperationPlanCheckpointSchema.parse(checkpoint);
+      const archivePartition = partitionOperationPlanCheckpointForRuntime(archived, true);
+      const archiveMatches = archived.plans.map((plan, index) => ({ plan, index })).filter(({ plan }) =>
+        operationPlanDigest(plan.revisions[0]!.plan.plan_id) === planIdDigest.toLowerCase());
+      if (archiveMatches.length !== 1 || archivePartition.quarantined_plan_indices.includes(archiveMatches[0]!.index)) {
+        throw new Error("operation_plan_restore_scope_archive_unverified");
+      }
+      const merged = mergeOperationPlanCheckpointScope(current?.parsed ?? null, archived, planIdDigest);
+      const mergedPartition = partitionOperationPlanCheckpointForRuntime(merged, true);
+      const restoredIndex = merged.plans.findIndex((plan) =>
+        operationPlanDigest(plan.revisions[0]!.plan.plan_id) === planIdDigest.toLowerCase());
+      if (restoredIndex < 0 || mergedPartition.quarantined_plan_indices.includes(restoredIndex)) {
+        throw new Error("operation_plan_restore_scope_target_unverified");
+      }
+      this.writeCheckpoint(merged);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* 元の保存失敗を保持する。 */ }
+      throw error;
     }
-    const merged = mergeOperationPlanCheckpointScope(current, checkpoint, planIdDigest);
-    this.compareAndSet(expectedDigest, merged);
+  }
+  private readCheckpoint(memoryAvailable: boolean): {
+    readonly raw: OperationPlanCheckpoint;
+    readonly parsed: OperationPlanCheckpoint;
+    readonly partition: ReturnType<typeof partitionOperationPlanCheckpointForRuntime>;
+  } | null {
+    const row = this.db.prepare("SELECT checkpoint_json, digest FROM operation_plan_state WHERE id=1").get() as
+      { checkpoint_json: string; digest: string } | undefined;
+    if (!row) return null;
+    let raw: unknown;
+    try { raw = JSON.parse(row.checkpoint_json); }
+    catch { throw new Error("plan_checkpoint_integrity_failed"); }
+    if (operationPlanDigest(raw) !== row.digest) throw new Error("plan_checkpoint_integrity_failed");
+    const parsed = OperationPlanCheckpointSchema.parse(raw);
+    return {
+      raw: raw as OperationPlanCheckpoint,
+      parsed,
+      partition: partitionOperationPlanCheckpointForRuntime(parsed, memoryAvailable),
+    };
+  }
+  private writeCheckpoint(value: unknown): void {
+    OperationPlanCheckpointSchema.parse(value);
+    this.db.prepare("INSERT INTO operation_plan_state VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET checkpoint_json=excluded.checkpoint_json,digest=excluded.digest")
+      .run(JSON.stringify(value), operationPlanDigest(value));
   }
   loadRecoveryHoldState(): unknown | null {
     this.ensureRecoveryHoldTable();

@@ -6,6 +6,7 @@ export {
   type PersistenceLedgerInspectionUpdate,
 } from "./保存取引.js";
 export { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, type OperationPlanMemoryStorage,
+  partitionOperationPlanCheckpointForRuntime, type OperationPlanCheckpointRuntimePartition,
   type OperationPlanRecoveryEvidence, type OperationPlanRecoveryEvidenceProvenance,
   type OperationPlanRecoveryHoldState, type OperationPlanRecoveryHoldProvenance,
   type OperationPlanReceiptReconciliationAuthorization,
