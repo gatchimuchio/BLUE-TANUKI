@@ -4,7 +4,26 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
 
-### 最新BUILD_BATCH：`QEB-04-E02.02-RESOURCE-BACKPRESSURE-STOP-RESERVE-CONSUMER`
+### 最新BUILD_BATCH：`QEB-04-E02.03-C-RESOURCE-NO-PROGRESS-J-REOPEN-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`10d2b1cb0a2e312282640cca0b69ddd42a507bf0`。現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) に固定したrev2.3。E02.03の該当要求と、C計算→Executor feedback→HDS wait台帳→owner projection→既存`plan:review`のconsumerだけを再確認し、Windows localでBLUE-TANUKIのみ変更した。保護対象untracked Linux `target/`は保持しGitへ含めない。
+
+予算台帳でsettleされたC資源量をdigest付きの非権威receiptにし、成功・provider失敗後のExecutor feedbackへ載せた。receiptは通常の`result`本文から除き、HDSはcommand IDとのrequest digest一致を検証して、完了したwaitのJ所有状態へ保存する。計画候補が保存されず（reject／failure）、正の資源消費がある場合はdigest-only audit eventを記録し、Operation Plan projectionへ課金基準・量と「J再検討が必要」の固定状態を出す。同じplan revision・task identityの次`plan:review`では、この資源観測をHDS入力の先頭へ渡す。Jは進捗を見て独立観測・別方式・保留を判断できるが、記録自体は再計算指示・承認・作用許可にならない。provider予算台帳未接続時はreceiptを捏造しない。実provider／credential／外部作用は使用していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `llm_compute.test.ts`／`executor_compute.test.ts`／`serve_projection.test.ts` | PASS、3 files／22 tests。settled／unknown費用の保守的receipt、Executor success/failure feedback、raw C結果との分離、非権威projectionを確認。 |
+| Gateway Operation Plan wait integration | 対象wait test PASS。wait再起動・reply/deadline一回消費、失敗時receiptの永続化、owner projection、次J review入力を確認。全28件では26 PASS、2件は既存5秒test timeoutに到達。test/product timeoutは変更していない。 |
+| `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `pnpm smoke:serve` | PASS。Gateway起動、WebChat→Executor→channel_send、audit永続化・chain verification。stubのみ。 |
+| `git diff --check`／`pnpm docs:check` | 両方PASS。日本語基底の既存移行負債76件は継続管理。 |
+| 全workspace suite、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。QE_BUILDの全体形状成立後に配置。 |
+
+E02.03の「資源消費が進捗へつながらない場合にJへ戻す」を、このwait→receipt→J re-review consumer範囲で`WIRED`とする。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider試験、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留する。次はrev2.3工程表順のE02.04を対象に、必要節と現物consumerを同期してQE_BUILDを続ける。
+
+実装commit=`9a62f8fbb663177fe5d0f5c307ec31613555ecca`を`main`へatomic push済み。push後のremote `main`／backup current=`9a62f8fbb663177fe5d0f5c307ec31613555ecca`、backup previous=`10d2b1cb0a2e312282640cca0b69ddd42a507bf0`をlocal recovery branch・remote tag双方で照合した。closeout文書commitをpush後、currentをその文書commit、previousをこの実装commitへ回転して再照合する。保護対象Linux `target/`はcommit対象外。
+
+### 履歴ログ：`QEB-04-E02.02-RESOURCE-BACKPRESSURE-STOP-RESERVE-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`00a59fdc727039156a543c5c6c3b3a96163b1b44`。rev2.3三点正本の現行ピンは [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。適用AGENTS／作業標準と、現行工程表のE02.02にある資源上限・停止用余白・provider queue要件だけを対象にした。既存のHDS→Executor、Gateway CLI／serve、LLMComputeAdapter、setup/recovery設定経路を確認し、Windows localでBLUE-TANUKIのみ変更した。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持し、Git対象へ含めない。
 
