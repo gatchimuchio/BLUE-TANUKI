@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { requireToolOperationDescriptor, ShellExecTargetVersionObservationSchema,
   type ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
-import type { Tool, ToolContext } from "./registry.js";
+import type { Tool, ToolContext, ToolExecutionLifecycleObservation } from "./registry.js";
 import { isSecretLikeRelativePath } from "./file_safety.js";
 
 type Env = Record<string, string | undefined>;
@@ -16,6 +16,7 @@ export interface ShellExecOptions {
   /** Native test seam; production uses the package-local, built helper. */
   nativeProviderPath?: string;
   targetVersionObservation?: ShellExecTargetVersionObservation;
+  onExecutionLifecycle?: (event: ToolExecutionLifecycleObservation) => void;
 }
 
 export interface ShellOperationAdapterMetadata {
@@ -99,6 +100,7 @@ export async function invokeShellExec(
     safeEnv,
     opts.signal,
     process.platform,
+    opts.onExecutionLifecycle,
   );
 
   return {
@@ -157,7 +159,8 @@ export const shellExecTool: Tool = {
     if (ctx.target_version_observation?.schema_version !== "blue-tanuki.shell-exec-target-version.v1") {
       throw new Error("shell.exec requires Broker target version evidence; no process was started");
     }
-    return await invokeShellExec(args, { signal: ctx.signal, targetVersionObservation: ctx.target_version_observation });
+    return await invokeShellExec(args, { signal: ctx.signal, targetVersionObservation: ctx.target_version_observation,
+      onExecutionLifecycle: ctx.on_execution_lifecycle });
   },
 };
 
@@ -300,6 +303,7 @@ function invokeNativeProvider(
   env: NodeJS.ProcessEnv,
   signal?: AbortSignal,
   platform: NodeJS.Platform = process.platform,
+  onExecutionLifecycle?: (event: ToolExecutionLifecycleObservation) => void,
 ): Promise<NativeShellResult> {
   const child = spawn(
     providerPath,
@@ -325,14 +329,31 @@ function invokeNativeProvider(
     },
   );
 
+  const report = (event: Omit<ToolExecutionLifecycleObservation, "schema_version" | "source" | "used_for_authority" | "may_execute">): void => {
+    try {
+      onExecutionLifecycle?.({ schema_version: "blue-tanuki.tool-execution-lifecycle.v1",
+        source: "native_shell_process_provider", ...event, used_for_authority: false, may_execute: false });
+    } catch { /* lifecycle evidence must never delay or suppress process cancellation */ }
+  };
+
   return new Promise((resolve, reject) => {
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
+    let closeObserved = false;
+    let processTreeConfirmed = false;
+    let providerStateUnknownReported = false;
     let watchdog: NodeJS.Timeout | undefined;
     let cancelFallback: NodeJS.Timeout | undefined;
+
+    const reportProviderStateUnknown = (): void => {
+      if (providerStateUnknownReported || processTreeConfirmed) return;
+      providerStateUnknownReported = true;
+      report({ state: "provider_state_unknown", observed_at_ms: Date.now(), worker_pid: child.pid,
+        worker_platform: platform, signal: signal?.aborted ? "aborted" : null });
+    };
 
     const cleanup = (): void => {
       signal?.removeEventListener("abort", onAbort);
@@ -352,9 +373,21 @@ function invokeNativeProvider(
       } catch {
         child.kill();
       }
-      cancelFallback = setTimeout(() => child.kill(), PROCESS_TREE_SHUTDOWN_GRACE_MS);
+      cancelFallback = setTimeout(() => {
+        if (!closeObserved) {
+          child.kill();
+          reportProviderStateUnknown();
+        }
+      }, PROCESS_TREE_SHUTDOWN_GRACE_MS);
     };
-    const onAbort = (): void => cancel();
+    const onAbort = (): void => {
+      cancel();
+      report({ state: "cancel_requested", observed_at_ms: Date.now(), worker_pid: child.pid, worker_platform: platform,
+        signal: "aborted" });
+    };
+
+    child.once("spawn", () => report({ state: "worker_started", observed_at_ms: Date.now(),
+      worker_pid: child.pid, worker_platform: platform }));
 
     child.stdout?.on("data", (chunk: Buffer | string) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -377,10 +410,16 @@ function invokeNativeProvider(
     });
     child.on("error", () => fail(new Error("shell.exec native isolation provider could not start")));
     child.on("close", (code) => {
-      if (settled) return;
+      closeObserved = true;
+      report({ state: "worker_exit_observed", observed_at_ms: Date.now(), worker_pid: child.pid, worker_platform: platform });
+      if (settled) {
+        reportProviderStateUnknown();
+        return;
+      }
       settled = true;
       cleanup();
       if (code !== 0) {
+        reportProviderStateUnknown();
         const diagnostic = Buffer.concat(stderr).toString("utf8").trim();
         const safeDiagnostic = /^[a-zA-Z0-9_:.-]{1,256}$/.test(diagnostic) ? ` (${diagnostic})` : "";
         reject(new Error(`shell.exec ${isolationPlatformLabel(platform)} isolation failed before a verified result was produced${safeDiagnostic}`));
@@ -390,12 +429,18 @@ function invokeNativeProvider(
       try {
         parsed = JSON.parse(Buffer.concat(stdout).toString("utf8"));
       } catch {
+        reportProviderStateUnknown();
         reject(new Error("shell.exec Windows isolation returned an invalid result"));
         return;
       }
       try {
-        resolve(validateNativeResult(parsed));
+        const validated = validateNativeResult(parsed);
+        processTreeConfirmed = validated.process_tree_empty;
+        report({ state: "process_tree_empty_confirmed", observed_at_ms: Date.now(), worker_pid: child.pid,
+          worker_platform: platform, signal: validated.signal, descendants_terminated: validated.descendants_terminated });
+        resolve(validated);
       } catch (error) {
+        reportProviderStateUnknown();
         reject(error instanceof Error ? error : new Error("shell.exec Windows isolation result was invalid"));
       }
     });

@@ -1690,6 +1690,7 @@ describe("built-in tools", () => {
       let cancelTimer: NodeJS.Timeout | undefined;
       try {
         const controller = new AbortController();
+        const lifecycle: Array<{ state: string }> = [];
         cancelTimer = setTimeout(() => controller.abort(), 400);
         const result = await invokeShellExec(
           {
@@ -1697,10 +1698,15 @@ describe("built-in tools", () => {
             args: ["-NoProfile", "-Command", "Start-Sleep -Seconds 15; Set-Content -Path late.txt -Value late"],
             timeout_ms: 30_000,
           },
-          { env, nativeProviderPath: providerPath, signal: controller.signal },
+          { env, nativeProviderPath: providerPath, signal: controller.signal,
+            onExecutionLifecycle: (event) => lifecycle.push(event) },
         ) as Record<string, unknown>;
         expect(result.signal).toBe("aborted");
         expect(result.process_tree_empty).toBe(true);
+        expect(lifecycle.map((event) => event.state)).toEqual(expect.arrayContaining([
+          "worker_started", "cancel_requested", "worker_exit_observed", "process_tree_empty_confirmed",
+        ]));
+        expect(lifecycle.map((event) => event.state)).not.toContain("provider_state_unknown");
         await new Promise((resolve) => setTimeout(resolve, 100));
         await expect(fs.access(lateMarker)).rejects.toThrow();
 

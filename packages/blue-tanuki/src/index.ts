@@ -18,6 +18,7 @@ export {
   type FileSearchWorkerRequest,
   type AgentWorkerLifecycleEvent,
   type AgentWorkerLifecycleObserver,
+  type ExecutorToolExecutionLifecycleEvent,
 } from "./executor.js";
 export {
   createLogger,

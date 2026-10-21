@@ -40,6 +40,21 @@ export interface FileEditDiffContentReview {
 
 export type ToolContentReview = GmailDraftContentReview | FileEditDiffContentReview;
 
+/** Non-authority observations for an existing tool worker and its local stop result. */
+export interface ToolExecutionLifecycleObservation {
+  schema_version: "blue-tanuki.tool-execution-lifecycle.v1";
+  source: "executor_tool_adapter" | "native_shell_process_provider";
+  state: "cancel_requested" | "worker_started" | "worker_exit_observed" |
+    "process_tree_empty_confirmed" | "provider_state_unknown" | "late_result_discarded";
+  observed_at_ms: number;
+  worker_pid?: number;
+  worker_platform?: string;
+  signal?: "timeout" | "aborted" | null;
+  descendants_terminated?: boolean;
+  used_for_authority: false;
+  may_execute: false;
+}
+
 /**
  * Tool registry.
  *
@@ -58,6 +73,8 @@ export interface ToolContext {
   /** 実行権限を与えず、HDS発行commandへ結ぶBroker観測。 */
   target_version_observation?: BrokerTargetVersionObservation;
   signal?: AbortSignal;
+  /** Local worker lifecycle only; the observer cannot authorize or complete a command. */
+  on_execution_lifecycle?: (event: ToolExecutionLifecycleObservation) => void;
 }
 
 export type ToolCapability = string;

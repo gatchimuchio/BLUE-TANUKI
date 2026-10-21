@@ -4,6 +4,7 @@ export {
   type Tool,
   type ToolCapability,
   type ToolContext,
+  type ToolExecutionLifecycleObservation,
   type FileEditDiffContentReview,
   type ToolContentReview,
 } from "./registry.js";

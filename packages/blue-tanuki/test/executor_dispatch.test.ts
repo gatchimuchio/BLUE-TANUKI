@@ -323,6 +323,53 @@ describe("Executor.executeToolCall - permission envelope", () => {
     expect(fb.error).toContain("timeout after 10ms");
   });
 
+  it("propagates caller cancellation to a running tool and discards its late result", async () => {
+    let observedSignal: AbortSignal | undefined;
+    let toolStarted!: () => void;
+    const started = new Promise<void>((resolve) => { toolStarted = resolve; });
+    const lateSentinel = "late-tool-result-must-not-be-used";
+    const slowTool: Tool = {
+      name: "slow",
+      description: "settles with a late result when cancelled",
+      required_capabilities: ["tool:slow"],
+      async invoke(_args, ctx) {
+        observedSignal = ctx.signal;
+        toolStarted();
+        return await new Promise((resolve) => {
+          ctx.signal?.addEventListener("abort", () => resolve({ content: lateSentinel }), { once: true });
+        });
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register(slowTool);
+    const lifecycle: Array<{ state: string; source: string }> = [];
+    const exec = new Executor({ approval_authority: executorApproval, llm: new StubBackend(), tools,
+      on_tool_execution_lifecycle: (event) => { lifecycle.push(event); return true; } });
+    const controller = new AbortController();
+    const command: ExecuteCommand = {
+      id: "cmd-slow-cancelled",
+      type: "tool_call",
+      payload: { tool_name: "slow", arguments: {} },
+      constraints: { allowed_tools: ["slow"], allowed_capabilities: ["tool:slow"] },
+      upstream_decision: stubUpstream,
+    };
+
+    const pending = exec.execute(approved(command), { signal: controller.signal });
+    await started;
+    controller.abort();
+    const feedback = await pending;
+
+    expect(observedSignal?.aborted).toBe(true);
+    expect(feedback.status).toBe("failed");
+    expect(feedback.error).toContain("result discarded and outcome unknown");
+    expect(feedback.result).toBeUndefined();
+    expect(JSON.stringify(feedback)).not.toContain(lateSentinel);
+    expect(lifecycle.map((event) => [event.source, event.state])).toEqual([
+      ["executor_tool_adapter", "cancel_requested"],
+      ["executor_tool_adapter", "late_result_discarded"],
+    ]);
+  });
+
   it("fails closed when raw ExecuteCommand is passed without an approval proof", async () => {
     const tools = new ToolRegistry();
     tools.register(echoTool);

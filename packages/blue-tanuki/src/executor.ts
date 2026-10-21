@@ -53,7 +53,8 @@ import {
   type ComputeInputSource,
   type ComputeRequest,
 } from "./llm/compute.js";
-import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolContentReview, ToolRegistry } from "./tools/registry.js";
+import type { BrokerTargetVersionObservation, GmailDraftContentReview, ToolContentReview, ToolRegistry,
+  ToolExecutionLifecycleObservation } from "./tools/registry.js";
 import { brokerFileResourceLockDigest, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool,
   shellExecTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
@@ -118,6 +119,8 @@ export interface ExecutorDeps {
   session_store?: SessionStore;
   /** 子Cの開始・取消・遅延結果・残留状態を非権威記録へ接続する。 */
   on_agent_worker_lifecycle?: AgentWorkerLifecycleObserver;
+  /** Local tool worker lifecycle is non-authority evidence only. */
+  on_tool_execution_lifecycle?: (event: ExecutorToolExecutionLifecycleEvent) => boolean;
   /**
    * Optional. Maximum history messages to retrieve per llm_call. When
    * omitted, all retained history is prepended. Useful when the cap on
@@ -143,6 +146,10 @@ export interface AgentWorkerLifecycleEvent {
 }
 
 export type AgentWorkerLifecycleObserver = (event: AgentWorkerLifecycleEvent) => boolean;
+
+export interface ExecutorToolExecutionLifecycleEvent extends ToolExecutionLifecycleObservation {
+  command_id: string;
+}
 
 export interface FileSearchWorkerRequest {
   command: Extract<ExecuteCommand, { type: "tool_call" }>;
@@ -1102,6 +1109,16 @@ export class Executor {
     }
     const record = APPROVED_COMMAND_RECORDS.get(command)!;
     const controller = new AbortController();
+    const observeLifecycle = (event: ToolExecutionLifecycleObservation): void => {
+      try { this.deps.on_tool_execution_lifecycle?.({ ...event, command_id: id }); } catch { /* evidence failure cannot block the worker */ }
+    };
+    const abortFromCaller = (): void => {
+      controller.abort(signal?.reason);
+      observeLifecycle({ schema_version: "blue-tanuki.tool-execution-lifecycle.v1", source: "executor_tool_adapter",
+        state: "cancel_requested", observed_at_ms: Date.now(), used_for_authority: false, may_execute: false });
+    };
+    signal?.addEventListener("abort", abortFromCaller, { once: true });
+    if (signal?.aborted) abortFromCaller();
     const remainingTimeoutMs = (): number | undefined => {
       if (constraints?.timeout_ms === undefined) return undefined;
       const remaining = constraints.timeout_ms - (Date.now() - start);
@@ -1132,6 +1149,7 @@ export class Executor {
         command_digest: record.ticket.command_digest,
         target_version_observation: record.target_version_observation,
         signal: controller.signal,
+        on_execution_lifecycle: observeLifecycle,
       }));
       if (releaseTargetLock) {
         adapterOwnsTargetLock = true;
@@ -1140,6 +1158,11 @@ export class Executor {
         void invocation.then(releaseTargetLock, releaseTargetLock);
       }
       const result = await this.withTimeout(invocation, adapterTimeout, controller);
+      if (signal?.aborted) {
+        observeLifecycle({ schema_version: "blue-tanuki.tool-execution-lifecycle.v1", source: "executor_tool_adapter",
+          state: "late_result_discarded", observed_at_ms: Date.now(), used_for_authority: false, may_execute: false });
+        throw new Error("Tool result arrived after cancellation; result discarded and outcome unknown");
+      }
       const targetVersion = record.target_version_observation;
       const publicResult = targetVersion?.schema_version === "blue-tanuki.file-search-target-version.v1"
         ? stripFileSearchTargetVersionObservation(result, targetVersion) : result;
@@ -1150,6 +1173,7 @@ export class Executor {
         metrics: { duration_ms: Date.now() - start, tool_calls: 1 },
       };
     } finally {
+      signal?.removeEventListener("abort", abortFromCaller);
       if (!adapterOwnsTargetLock) releaseTargetLock?.();
     }
   }

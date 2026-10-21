@@ -2591,3 +2591,19 @@ Executorは各child computeに個別AbortControllerを渡し、親signalを受�
 親signal→child Compute abort→Gateway CompleteHistory lifecycle recordを`WIRED`とする。signalを無視するComputeBackendの強制kill、provider側の停止確認、CompleteHistory file未設定時の再起動後保持は`BUILD_GAP`。子promiseのsettlementはremote provider停止の証拠ではない。E07親要求全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
 
 ---
+
+### 履歴ログ：QEB-38-D05.02-PROCESS-CANCEL-CONSUMER
+
+開始HEAD／main／origin/main=9245441121bab0ff5a5ce373d6aabafff22815e1。rev2.3の現行pinとD05.02、適用AGENTS、active指示、停止signalのGateway→Executor→tool経路を再同期した。保護対象untracked packages/blue-tanuki/native/linux-isolation/target/は保持し、変更・stageしていない。
+
+Gatewayのowner emergency stopとshutdownから届くAbortSignalがExecutorのtool adapter内controllerへ伝わっていなかったため、親signalの伝播を追加した。取消後に返るtool結果は本文を返さず破棄し、失敗・結果不明として扱う。既存shell native providerへsignalを渡し、worker start／cancel request／worker exit／検証済みprocess tree emptyまたはprovider state unknownを、CompleteHistory hash-chain上のaudit_historyへ非権威metadataとして記録する。証拠記録失敗は取消自体を妨げない。既存file.search workerのdurable PID start/exit trackingは変更していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| pnpm exec vitest run packages/blue-tanuki/test/executor_dispatch.test.ts | PASS、17 tests。parent cancel伝播、signalを受けたtool、遅延結果の非採用を確認。 |
+| Windows shell process-tree cancellation test | PASS、対象1 test。取消signal、検証済みprocess tree empty、遅延marker不生成を確認。 |
+| core typecheck／build、Gateway typecheck | PASS。 |
+| `git diff --check`／`pnpm docs:check` | PASS。日本語基底の既存移行負債76件は継続注意。 |
+| remote provider／credential、外部業務作用、5OS実機、全workspace suite、QE_QC／QE_QA | 未実施。 |
+
+Gateway停止・shutdown→Executor→tool signal→shell native workerのlocal停止観測を部分的にWIREDとする。取消受付・local process停止・remote provider処理停止は別結果である。remote provider停止確認、generic non-cooperative toolの強制停止、audit保存故障から回復後に欠損事実を記録する経路は未成立。今回確認したGateway callsiteにtask単位cancelは見つからなかった。D05.02全体と製品全体SYSTEM_SHAPED／BUILD_COVEREDは未成立。C08.03保留、D4Pocket／ミニドラ別repo変更なし、P13=PENDING_OWNER_GO／public_claim_allowed=falseを維持する。次はD05.03のaudit保存故障下の緊急停止consumer。
