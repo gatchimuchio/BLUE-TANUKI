@@ -3535,6 +3535,84 @@ describe("WebChatChannel — authority trace API", () => {
 });
 
 describe("WebChatChannel — approval API", () => {
+  it("lists active executions and requests cancellation only for the exact resume-authenticated command", async () => {
+    const calls: Array<{ command_id: string; actor: string; token_kind: string }> = [];
+    const activeExecution = {
+      command_id: "cmd-task-1",
+      started_at_ms: 100,
+      cancel_requested_at_ms: null,
+      execution_signal_aborted: false,
+      executor_state: "running" as const,
+      local_worker_stop: "not_observed" as const,
+      external_processing_stop: "unknown" as const,
+      used_for_authority: false as const,
+    };
+    const ctx = await setup({
+      approval: {
+        list: async () => [],
+        activeExecutions: async () => [activeExecution],
+        cancelExecution: async (command_id, context) => {
+          calls.push({ command_id, actor: context.actor, token_kind: context.token_kind });
+          if (command_id !== activeExecution.command_id) return null;
+          return {
+            ...activeExecution,
+            cancel_requested_at_ms: 200,
+            execution_signal_aborted: true,
+            executor_state: "cancel_requested",
+            status: "cancel_requested",
+            cancel_request_accepted: true,
+            executor_settled: false,
+          };
+        },
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      expect((await postJson(ctx.port, "/approval/executions/cmd-task-1/cancel", {})).status).toBe(401);
+      expect(calls).toHaveLength(0);
+
+      const app = await getRaw(ctx.port, "/app");
+      expect(app.text).toContain("active-executions-list");
+      expect(app.text).toContain("/approval/executions/");
+
+      const snapshot = await getRaw(ctx.port, "/approval", {
+        authorization: `Bearer ${RESUME_TOKEN}`,
+      });
+      expect(snapshot.status).toBe(200);
+      expect(JSON.parse(snapshot.text).active_executions).toEqual([activeExecution]);
+
+      const wrongTarget = await postJson(ctx.port, "/approval/executions/cmd-other/cancel", {}, {
+        authorization: `Bearer ${RESUME_TOKEN}`,
+      });
+      expect(wrongTarget.status).toBe(404);
+      expect(wrongTarget.body).toMatchObject({ error: "execution_not_active" });
+
+      const accepted = await postJson(ctx.port, "/approval/executions/cmd-task-1/cancel", {
+        actor: "spoofed-actor",
+        reason: "caller supplied labels are ignored",
+      }, {
+        authorization: `Bearer ${RESUME_TOKEN}`,
+      });
+      expect(accepted.status).toBe(200);
+      expect(accepted.body).toMatchObject({
+        ok: true,
+        cancellation: {
+          command_id: "cmd-task-1",
+          status: "cancel_requested",
+          cancel_request_accepted: true,
+          executor_settled: false,
+          external_processing_stop: "unknown",
+        },
+      });
+      expect(calls).toEqual([
+        { command_id: "cmd-other", actor: "webchat-resume-token-holder", token_kind: "resume" },
+        { command_id: "cmd-task-1", actor: "webchat-resume-token-holder", token_kind: "resume" },
+      ]);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
   it("reveals pending content only through the explicit resume-authenticated review route", async () => {
     let reviewCalls = 0;
     const ctx = await setup({

@@ -623,6 +623,13 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="activate-emergency-stop" class="danger" type="button">Emergency Stop</button>
             <button id="clear-emergency-stop" type="button">Clear Stop</button>
           </div>
+          <h3>Active executions</h3>
+          <p class="muted">Cancel requests signal the matching command only. Request acceptance, executor settlement, local process-tree evidence, and external-provider stop are separate observations.</p>
+          <div class="status-grid">
+            <div class="metric"><span>Executing</span><span id="active-execution-count">not loaded</span></div>
+          </div>
+          <div id="execution-cancel-status" class="badge warn" aria-live="polite">No task cancellation requested.</div>
+          <div id="active-executions-list" class="queue-list"></div>
           <section class="approval-content-review">
             <h3>Delegated goal purpose proposal</h3>
             <p class="muted">C proposals are unverified candidates. Select one explicitly, inspect its conflict scope and exact text, then submit it for a separate L3 review. Submission does not change the delegated goal.</p>

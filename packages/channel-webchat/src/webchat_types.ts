@@ -379,9 +379,34 @@ export interface WebChatApprovalControlContext {
   reason?: string;
 }
 
+export interface WebChatActiveExecutionSnapshot {
+  command_id: string;
+  started_at_ms: number;
+  cancel_requested_at_ms: number | null;
+  execution_signal_aborted: boolean;
+  executor_state: "running" | "cancel_requested";
+  local_worker_stop: "not_observed" | "worker_exit_observed" |
+    "process_tree_empty_confirmed" | "provider_state_unknown";
+  external_processing_stop: "unknown";
+  used_for_authority: false;
+}
+
+export interface WebChatExecutionCancellationResult extends WebChatActiveExecutionSnapshot {
+  status: "cancel_requested" | "already_requested";
+  cancel_request_accepted: true;
+  executor_settled: false;
+}
+
 export interface WebChatApprovalSurface {
   /** Return pending human approval work for the local console. */
   list: () => Promise<readonly WebChatApprovalQueueItem[]>;
+  /** Return redacted metadata for currently executing commands. */
+  activeExecutions?: () => Promise<readonly WebChatActiveExecutionSnapshot[]>;
+  /** Request cancellation by exact active command identity; null means no current match. */
+  cancelExecution?: (
+    command_id: string,
+    context: WebChatApprovalControlContext,
+  ) => Promise<WebChatExecutionCancellationResult | null>;
   /** Explicitly reveal supported content for one current pending approval. */
   reviewContent?: (command_id: string) => Promise<WebChatApprovalContentReview | null>;
   /** Validate the digest returned by reviewContent before consuming the approval token. */

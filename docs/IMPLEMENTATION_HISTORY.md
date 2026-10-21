@@ -2639,3 +2639,21 @@ D05.03は既存の専用SQLite deny-only latch、Gatewayの実行中controller a
 | 全workspace suite／QE_QC／QE_QA／実provider・credential／外部業務作用／5OS実機 | 未実施。全体形状成立後へ保持。 |
 
 D05.02のCompleteHistory欠損回復producer→consumerを`WIRED`とする。D05.02全体は未成立。task単位cancel callsite、remote provider内部停止確認、AbortSignal非協調generic toolの強制停止は`BUILD_GAP`。全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次consumerはGateway owner-facing task単位cancel callsite。
+
+---
+
+### 履歴ログ：QEB-41-D05.02-TASK-SCOPE-CANCEL-CALLSITE
+
+開始HEAD／`main`／`origin/main`=`ef136ae564b0389e6b7f1745aa96306b508370d8`。現行rev2.3の三点セット、適用`AGENTS.md`と作業標準、active指示、D05.02の取消受付／worker停止／外部取消境界を再同期した。protected untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持した。
+
+既存WebChat Approval／Control Centerにactive execution一覧とresume-token認証済みtask cancel APIを接続した。取消対象はexact `command_id`で照合し、一致時だけ該当AbortControllerへsignalを送る。request acceptance、Executor settlement、native shell worker／process-tree observation、external processing stopを別状態として返し、external stopは`unknown`のまま保持する。emergency-stop／shutdownの既存一括abortもregistry経由へ統合した。履歴記録失敗は明示error logに残し、取消signal自体は止めない。取消・settlement eventのCompleteHistory保存失敗後のdurable recoveryは次consumerに残す。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `active_task_execution_registry.test.ts` | PASS、1 test。exact command照合、誤対象不作用、重複cancel、native worker observation、external stop unknownを確認。 |
+| `active_task_execution_webchat_integration.test.ts` | PASS、1 test。loopback WebChat API→registry→AbortSignalの経路、resume認証、誤対象拒否、対象外taskの継続を確認。 |
+| WebChat `webchat.test.ts -t "lists active executions and requests cancellation only"` | PASS、対象1 test。105件はfilterでskip。 |
+| Gateway／WebChat typecheck、Gateway build、`git diff --check` | PASS。 |
+| 全workspace suite、実provider／credential、外部業務作用、5OS実機、QE_QC／QE_QA | 未実施。全体形状成立後へ保持。 |
+
+owner-facing task cancel producer→consumerをWindows／WebChatの範囲で`WIRED`とする。取消受付だけでは停止済みとしない。remote provider内の停止は証拠がない限り不明であり、AbortSignal非協調toolはsettleするまでactiveになり得る。D05.02全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次consumerはtask cancel request／Executor settlementの監査証拠を既存private execution-ledger recoveryへ接続すること。

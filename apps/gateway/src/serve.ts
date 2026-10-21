@@ -169,6 +169,7 @@ import { DocumentOrganizationCheckpointStore } from "./document_organization_che
 import { OperationPlanStateStore } from "./operation_plan_store.js";
 import { EmergencyStopControl } from "./emergency_stop_control.js";
 import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
+import { ActiveTaskExecutionRegistry } from "./active_task_execution_registry.js";
 import { OperationPlanWaitDeadlineScheduler } from "./operation_plan_wait_scheduler.js";
 import {
   brokerRestorePlanDependencyIsCurrent,
@@ -739,7 +740,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   for (const tool of runtimeSchedules.tools()) tools.register(tool);
   const approval = buildApprovalRuntime(process.env);
   const pendingApprovals = new Map<string, PendingApproval>();
-  const executionControllers = new Set<AbortController>();
+  const activeTaskExecutions = new ActiveTaskExecutionRegistry();
   const executionTasks = new Set<Promise<ExecuteFeedback>>();
   const activeCommandFinalizations = new Set<Promise<void>>();
   const emergencyStopStateStore = EmergencyStopStateStore.fromEnvironment(process.env);
@@ -747,7 +748,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     store: emergencyStopStateStore,
     authority: hds,
     abortRunningExecutions: () => {
-      for (const controller of executionControllers) controller.abort();
+      activeTaskExecutions.abortAll();
     },
   });
   const router = new InboundRouter({ propagateHandlerErrorsForChannels: ["cron"] });
@@ -986,8 +987,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     event: string,
     actor: string,
     extra: Record<string, unknown> = {},
-  ): void {
-    recordCompleteHistory({
+  ): boolean {
+    return recordCompleteHistory({
       kind: "approval_history",
       request_id: typeof extra.request_id === "string" ? extra.request_id : null,
       command_id: typeof extra.command_id === "string" ? extra.command_id : null,
@@ -1000,7 +1001,77 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         used_for_authority: false,
         ...extra,
       },
-    });
+    }) !== null;
+  }
+
+  function requestTaskExecutionCancellation(
+    command_id: string,
+    ctx: WebChatApprovalControlContext,
+  ) {
+    const cancellation = activeTaskExecutions.requestCancel(command_id, ctx.actor);
+    if (!cancellation) return null;
+    if (cancellation.status === "cancel_requested") {
+      try {
+        const recorded = recordApprovalControlHistory("execution_cancel_requested", ctx.actor, {
+          command_id,
+          reason: "cancel request accepted; executor_settled=false; local_worker_stop=unknown; external_processing_stop=unknown",
+          token_kind: ctx.token_kind,
+          cancel_request_accepted: true,
+          executor_settled: false,
+          local_worker_stop: "not_observed",
+          external_processing_stop: "unknown",
+          used_for_authority: false,
+        });
+        if (!recorded) {
+          gatewayLog.error("task cancellation request was not added to complete history; cancellation signal remains delivered", {
+            command_id,
+            used_for_authority: false,
+          });
+        }
+      } catch {
+        gatewayLog.error("task cancellation history unavailable; cancellation signal remains delivered", {
+          command_id,
+          used_for_authority: false,
+        });
+      }
+    }
+    return cancellation;
+  }
+
+  function recordTaskExecutionCancellationSettlement(
+    finished: ReturnType<ActiveTaskExecutionRegistry["finish"]>,
+  ): void {
+    if (!finished) return;
+    try {
+      const recorded = recordApprovalControlHistory("execution_cancel_observed", finished.cancel_requested_by, {
+        command_id: finished.command_id,
+        reason: `executor_settled=${finished.executor_settled}; executor_status=${finished.executor_status}; local_worker_stop=${finished.local_worker_stop}; external_processing_stop=${finished.external_processing_stop}`,
+        token_kind: "resume",
+        cancel_request_accepted: true,
+        executor_settled: finished.executor_settled,
+        executor_status: finished.executor_status,
+        local_worker_stop: finished.local_worker_stop,
+        external_processing_stop: finished.external_processing_stop,
+        used_for_authority: false,
+      });
+      if (!recorded) {
+        gatewayLog.error("task cancellation settlement was not added to complete history", {
+          command_id: finished.command_id,
+          executor_settled: finished.executor_settled,
+          local_worker_stop: finished.local_worker_stop,
+          external_processing_stop: finished.external_processing_stop,
+          used_for_authority: false,
+        });
+      }
+    } catch {
+      gatewayLog.error("task cancellation settlement history unavailable", {
+        command_id: finished.command_id,
+        executor_settled: finished.executor_settled,
+        local_worker_stop: finished.local_worker_stop,
+        external_processing_stop: finished.external_processing_stop,
+        used_for_authority: false,
+      });
+    }
   }
 
   function emergencyStopSnapshot(): WebChatEmergencyStopSnapshot { return emergencyStop.snapshot(); }
@@ -1691,7 +1762,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     let fb: ExecuteFeedback;
     const executionController = new AbortController();
     if (emergencyStop.active) executionController.abort();
-    executionControllers.add(executionController);
+    activeTaskExecutions.register(cmd.id, executionController);
     let executionTask: Promise<ExecuteFeedback> | undefined;
     let executionAdmissionLease: { release(): void } | undefined;
     try {
@@ -1718,7 +1789,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       executionTasks.add(executionTask);
       try {
         fb = await executionTask;
+        activeTaskExecutions.markExecutorSettled(cmd.id, fb.status);
       } catch (error) {
+        activeTaskExecutions.markExecutorSettled(cmd.id, "unknown");
         try {
           reopenCronEventStoreAfterRestore();
           await finishCronEventRestore(false);
@@ -1728,7 +1801,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         throw error;
       }
     } finally {
-      executionControllers.delete(executionController);
+      recordTaskExecutionCancellationSettlement(activeTaskExecutions.finish(cmd.id));
       if (executionTask) executionTasks.delete(executionTask);
       executionAdmissionLease?.release();
     }
@@ -2737,6 +2810,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       },
       approval: {
         list: async () => pendingApprovalSnapshot(),
+        activeExecutions: async () => activeTaskExecutions.snapshot(),
+        cancelExecution: async (command_id: string, ctx: WebChatApprovalControlContext) =>
+          requestTaskExecutionCancellation(command_id, ctx),
         reviewContent: async (command_id: string) => pendingApprovalContentReview(command_id),
         validateContentReview: async (command_id: string, content_review_digest: string | undefined) =>
           validatePendingApprovalContentReview(command_id, content_review_digest),
@@ -4288,6 +4364,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     on_tool_execution_lifecycle: (event: ExecutorToolExecutionLifecycleEvent) => {
       const lifecycleEventId = randomUUID();
       const { command_id: commandId, ...observation } = event;
+      activeTaskExecutions.observeToolLifecycle(commandId, observation);
       let durable = false;
       try {
         executionStore.recordToolLifecycleEvidence(lifecycleEventId, commandId, observation);
@@ -4642,7 +4719,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       gatewayShuttingDown = true;
       waitDeadlineScheduler.stop();
       clearInterval(failureMemoryVerificationTimer);
-      for (const controller of executionControllers) controller.abort();
+      activeTaskExecutions.abortAll();
       await router.stop();
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);

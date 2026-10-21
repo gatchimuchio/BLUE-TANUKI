@@ -1351,6 +1351,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const pending = Array.isArray(body.pending_approvals) ? body.pending_approvals : Array.isArray(body.pending) ? body.pending : [];
         const grants = Array.isArray(body.grants) ? body.grants : [];
         const approvalHistory = Array.isArray(body.approval_history) ? body.approval_history : [];
+        const activeExecutions = Array.isArray(body.active_executions) ? body.active_executions : [];
         const emergencyStop = body.emergency_stop || null;
         const finalReviewCount = pending.filter((item) => item.final_review_required).length;
         const levels = Array.from(new Set(pending.map((item) => item.approval_level || "unknown")));
@@ -1374,10 +1375,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("approval-emergency-status").className = "badge " + (emergencyStopActive ? "bad" : "good");
         setText("approval-grant-count", grants.length);
         setText("approval-history-count", approvalHistory.length);
+        setText("active-execution-count", activeExecutions.length);
         state.approvalTokens = Object.create(null);
         state.approvalContentDigests = Object.create(null);
         renderApprovalGrants(grants);
         renderApprovalHistory(approvalHistory);
+        renderActiveExecutions(activeExecutions);
 
         if (pending.length === 0) {
           setHtml("approval-list", '<div class="queue-item muted">no pending approvals</div>');
@@ -1494,6 +1497,41 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             })
             .join("")
         );
+      }
+
+      function renderActiveExecutions(executions) {
+        const visible = executions.filter(function (item) {
+          return isObject(item) && typeof item.command_id === "string" &&
+            item.command_id.length > 0 && item.command_id.length <= 200 &&
+            Number.isSafeInteger(item.started_at_ms) &&
+            (item.cancel_requested_at_ms === null || Number.isSafeInteger(item.cancel_requested_at_ms)) &&
+            typeof item.execution_signal_aborted === "boolean" &&
+            (item.executor_state === "running" || item.executor_state === "cancel_requested") &&
+            ["not_observed", "worker_exit_observed", "process_tree_empty_confirmed", "provider_state_unknown"]
+              .includes(item.local_worker_stop) &&
+            item.external_processing_stop === "unknown" && item.used_for_authority === false;
+        });
+        if (visible.length === 0) {
+          setHtml("active-executions-list", '<div class="queue-item muted">no active executions</div>');
+          return;
+        }
+        setHtml("active-executions-list", visible.map(function (item) {
+          const cancelRequested = item.cancel_requested_at_ms !== null;
+          const signalState = item.execution_signal_aborted ? "aborted" : "active";
+          return '<article class="queue-item" data-active-command="' + escapeHtml(item.command_id) + '">' +
+            '<div class="row"><h3>Command ' + escapeHtml(item.command_id) + '</h3>' +
+            badge(cancelRequested ? "Cancel requested" : "Running", cancelRequested ? "warn" : "good") + '</div>' +
+            '<dl class="kv">' +
+            '<dt>started</dt><dd>' + escapeHtml(formatDate(item.started_at_ms)) + '</dd>' +
+            '<dt>Executor</dt><dd>' + escapeHtml(item.executor_state) + '</dd>' +
+            '<dt>execution signal</dt><dd>' + escapeHtml(signalState) + '</dd>' +
+            '<dt>local worker</dt><dd>' + escapeHtml(item.local_worker_stop) + '</dd>' +
+            '<dt>external processing stop</dt><dd>unknown</dd>' +
+            '</dl>' +
+            '<button class="danger" data-cancel-execution="' + escapeHtml(item.command_id) + '"' +
+              (cancelRequested ? ' disabled' : '') + '>Cancel task</button>' +
+            '</article>';
+        }).join(""));
       }
 
       function renderApprovalGrants(grants) {
@@ -3761,6 +3799,26 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         await loadApprovals();
       }
 
+      async function requestTaskCancellation(commandId) {
+        const token = byId("approval-token").value.trim();
+        const status = byId("execution-cancel-status");
+        status.textContent = "Sending cancellation request…";
+        status.className = "badge warn";
+        const response = await fetch("/approval/executions/" + encodeURIComponent(commandId) + "/cancel", {
+          method: "POST",
+          headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
+          body: JSON.stringify({})
+        });
+        const body = await response.json().catch(function () { return {}; });
+        if (!response.ok || !body || !body.cancellation || body.cancellation.cancel_request_accepted !== true) {
+          throw new Error("task cancellation failed: HTTP " + response.status + " " + (body && body.error || "invalid response"));
+        }
+        const cancellation = body.cancellation;
+        status.textContent = "Cancel request accepted for " + cancellation.command_id + ". Executor settlement, local worker stop, and external processing stop remain separate; external stop is unknown.";
+        status.className = "badge warn";
+        await loadApprovals();
+      }
+
       async function reviewApprovalContent(commandId, button) {
         const token = byId("approval-token").value.trim();
         delete state.approvalContentDigests[commandId];
@@ -4326,8 +4384,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           return;
         }
         const verdict = target.dataset.verdict;
+        const cancelExecutionId = target.dataset.cancelExecution;
         const reviewCommandId = target.dataset.reviewContent;
         const revokeGrantId = target.dataset.revokeGrant;
+        if (cancelExecutionId) {
+          target.disabled = true;
+          try {
+            await requestTaskCancellation(cancelExecutionId);
+          } catch (error) {
+            const status = byId("execution-cancel-status");
+            status.textContent = error.message;
+            status.className = "badge bad";
+            alert(error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
         if (revokeGrantId) {
           target.disabled = true;
           try {

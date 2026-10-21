@@ -134,6 +134,7 @@ function findAotanuAssetRoot(): string {
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
  *   POST /resume     body:{request_id, verdict, approval_token}  auth:Bearer  rate-limited (global)
  *   GET  /approval   auth:Bearer resume-token
+ *   POST /approval/executions/:id/cancel auth:Bearer resume-token
  *   POST /approval/:id/content auth:Bearer resume-token (explicit content review)
  *   POST /approval/:id body:{verdict, approval_token} auth:Bearer resume-token
  *   GET  /approval/grants auth:Bearer resume-token
@@ -1222,6 +1223,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const emergency_stop = this.opts.approval.emergencyStop
         ? await this.opts.approval.emergencyStop.getSnapshot()
         : undefined;
+      const active_executions = this.opts.approval.activeExecutions
+        ? await this.opts.approval.activeExecutions()
+        : undefined;
       res.writeHead(200, {
         "content-type": "application/json",
         "cache-control": "no-store",
@@ -1231,7 +1235,51 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         ...(grants ? { grants } : {}),
         ...(approval_history ? { approval_history } : {}),
         ...(emergency_stop ? { emergency_stop } : {}),
+        ...(active_executions ? { active_executions } : {}),
       }));
+      return;
+    }
+
+    const cancelExecutionMatch = /^\/approval\/executions\/([^/]+)\/cancel$/.exec(url.pathname);
+    if (cancelExecutionMatch) {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.opts.approval?.cancelExecution) {
+        res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "execution_cancellation_not_configured" }));
+        return;
+      }
+      if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res)) return;
+      let command_id: string;
+      try {
+        command_id = decodeURIComponent(cancelExecutionMatch[1] ?? "");
+      } catch {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "execution_id_invalid" }));
+        return;
+      }
+      if (!command_id || command_id.length > 200 || command_id.trim() !== command_id) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "execution_id_invalid" }));
+        return;
+      }
+      const cancellation = await this.opts.approval.cancelExecution(
+        command_id,
+        { actor: "webchat-resume-token-holder", token_kind: "resume" },
+      );
+      if (!cancellation) {
+        res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "execution_not_active" }));
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify({ ok: true, cancellation }));
       return;
     }
 
