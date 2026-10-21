@@ -147,6 +147,44 @@ export const LLMFallbackAuthorizationSchema = z.object({
 });
 export type LLMFallbackAuthorization = z.infer<typeof LLMFallbackAuthorizationSchema>;
 
+export const AgentWorkerRoleSchema = z.enum([
+  "division",
+  "independent_comparison",
+  "audit",
+  "redundancy",
+]);
+export type AgentWorkerRole = z.infer<typeof AgentWorkerRoleSchema>;
+
+/** C-only child work contract. It carries bounded resource scope, never authority. */
+export const AgentDelegationContractSchema = z.object({
+  schema_version: z.literal("blue-tanuki.agent-delegation.v1"),
+  parent_goal_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  parent_task_identity_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  parent_budget_identity_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  criteria_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  termination_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  roles: z.tuple([
+    z.literal("division"),
+    z.literal("independent_comparison"),
+    z.literal("audit"),
+    z.literal("redundancy"),
+  ]),
+  max_child_tasks: z.literal(4),
+  max_delegation_depth: z.literal(1),
+  parent_resource_limits: z.object({
+    timeout_ms: z.number().int().positive().max(180_000),
+  }).strict(),
+  child_resource_limits: z.object({
+    max_tokens: z.number().int().positive().max(100_000),
+    timeout_ms: z.number().int().positive().max(180_000),
+  }).strict(),
+  capabilities: z.array(z.literal("llm_compute_candidate")).length(1),
+  may_delegate: z.literal(false),
+  may_execute: z.literal(false),
+  used_for_authority: z.literal(false),
+}).strict();
+export type AgentDelegationContract = z.infer<typeof AgentDelegationContractSchema>;
+
 export const LLMComputeContextSchema = z.object({
   schema_version: z.literal("blue-tanuki.compute-context.v1"),
   projection_digest: z.string().regex(/^[a-f0-9]{64}$/),
@@ -188,6 +226,8 @@ export const LLMCallPayloadSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   /** Non-authority binding for the current HDS projection and requested data route. */
   compute_context: LLMComputeContextSchema.optional(),
+  /** Bounded C-only child analysis, available only on an HDS-issued request. */
+  agent_delegation: AgentDelegationContractSchema.optional(),
   /**
    * Optional session identifier. When set, the executor's SessionStore
    * (if configured) will (a) prepend retained history before calling the

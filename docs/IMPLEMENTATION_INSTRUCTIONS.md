@@ -4,11 +4,11 @@
 
 ## 現行状態
 
-QE_STAGE=`QE_BUILD`。rev2.3 pinとbackup ref移行=`MIGRATION_COMPLETE`。`QEB-34-E06.03-GOAL-CHANGE-PROPOSAL-BOUNDED-REOPEN`では、Cの未信頼目的変更提案を実発行済みLLM command・成功feedback・監査鎖・一致したconflict scope・現行delegated goalへ照合し、条件を満たすものだけowner候補として保持する。owner専用no-store入口から候補と完全一致する内容を明示選択した場合だけ既存goal変更のL3 reviewへ送る。L3前にJ/Mの目的正本を変更せず、自動再計算・実行もしない。raw提案文はHDS auditに保存せず、候補はprocess-localで64件に制限し、goal版・audit・source traceの変化で無効化する。この限定経路を`WIRED`とするが、E06親全体と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+QE_STAGE=`QE_BUILD`。owner指定rev2.3三点セットのpinとbackup ref移行は維持。`QEB-35-E07.01-PARENT-GOAL-DELEGATION`では、開発者の内部plan:computeだけに固定4 role（division／independent comparison／audit／redundancy）を発行し、親task・criteria・termination digestへ束縛した。ExecutorはC計算経路で子要求を最大2件ずつ処理し、各子を固有task digest・個別token/time上限・共有parent budget digestへ予約する。budget reservation能力がないC実装はprovider呼出し前に拒否する。子にtool・再委任・実行・権限能力はなく、出力は候補として親計算へ渡す。親のplan候補は既存HDS inspectionと採否経路に留まる。これを当該consumer経路の`WIRED`とするが、E07親全体と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
 
-workspace `pnpm typecheck`／`pnpm build`、HDS goal governance 15 tests、Executor/OpenAI 23 tests、WebChat 105 tests、Gateway owner L3経路1 testはPASS。Gateway fileの残る3 testsは今回の対象filterで未実行。全workspace suite、実provider／credential／外部業務作用、5OS実機、QE_QC／QE_QAは未実施。製品全体は`BUILD_GAP`のまま。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+HDS `goal_governance.test.ts` 15 tests、Executor `executor_compute.test.ts` 8 tests、workspace `pnpm typecheck`／`pnpm build`はPASS。実provider／credential、全workspace suite、外部業務作用、5OS実機、QE_QC／QE_QAは未実施。製品全体は`BUILD_GAP`のまま。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
 ## 次のBUILD_BATCH
 
-`QEB-35-E07.01-PARENT-GOAL-DELEGATION`として、agent分担・比較・監査roleを親goal・criteria・終了条件へ結ぶ実consumerを調査・接続する。child budgetと再帰深度は親へ予約したresource/capability契約で制御し、agent出力はC候補に留める。対象・現consumer・停止条件は最新版三点セットのE07.01と現行コードから組み立てる。
+`QEB-36-E07.02-SHARED-TARGET-SERIALIZATION`として、同じ実体への作用をresource lockと期待版で直列確定するconsumerを現行Broker／operation-plan経路から調査・接続する。既存target identityとversion preconditionを再利用し、未接続をschemaだけで閉じない。対象・consumer・停止条件は次batch開始時に現行rev2.3三点セットとE07.02から再同期する。
 
 HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closedを維持する。実provider／credential、外部業務作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は含めない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。全体実装形状の前に詳細QC／QAへ進まない。

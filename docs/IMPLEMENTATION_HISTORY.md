@@ -2538,3 +2538,20 @@ LLM由来の目的変更提案を表示結果から分離してHDSへ渡し、�
 E06.03のC proposal→HDS検証→owner選択→既存L3 queueという限定経路をコード接続済みとする。E06親要求全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。Gateway ordinary C08 cases 3件は先行実行でprovider呼出し前の`cycle_failed`を観測済みで、今回の変更対象外として再実行していない。次はrev2.3 E07.01「親目的付きAgent分担」。
 
 ---
+
+### 履歴ログ：`QEB-35-E07.01-PARENT-GOAL-DELEGATION`
+
+開始HEAD／`main`／`origin/main`=`ff0caa910b6b3f93de31ef52e37a0b10b7db171f`。現行rev2.3三点セット、適用`AGENTS.md`、active指示、E07.01とHDS／Compute／Executorの現行producer・consumerを同期した。旧履歴は再読せず、保護対象untracked Linux `target/`は保持し変更しない。
+
+HDSの開発者向け内部plan:computeが、親task・current purpose・plan criteria・有限termination digestに束縛された固定4 role（division、independent comparison、audit、redundancy）とresource/capability contractを発行する。Executorは各子を最大2件ずつC compute経路へ送り、個別token/time上限、固有task digest、親と共有するbudget digestを使う。provider前の通常budget reservationが各子を保護し、予約能力を持たないC実装はprovider呼出し前に停止する。総量は既存parent/system limitsに集約される。session historyは使わず、子にはLLM計算以外のcapabilityを渡さず、recursive delegation、tool、execute、authorityを禁止する。子本文は未信頼C候補として親計算へ戻り、最終OperationPlan候補は既存HDS inspection／採否経路に残す。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| HDS `goal_governance.test.ts` | PASS、15 tests。plan:compute時の親digest、4 role、criteria/termination、個別resource contractの発行と既存目的結合を確認。 |
+| Executor `executor_compute.test.ts` | PASS、8 tests。4子要求のbounded dispatch、parent scope共有・child task分離、budget receipt必須、予算reservationなしではpre-provider拒否、候補本文の親入力化を確認。providerはfixture backend。 |
+| workspace `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| 実provider／credential、全workspace suite、外部業務作用、5OS実機、QE_QC／QE_QA | 未実施。C08.03実provider保留を維持し、全体形状成立後へ保持。 |
+
+E07.01のHDS producer→Executor C child compute→親candidate入力を`WIRED`とする。子roleの内容は権威・独立監査証明ではなく、各roleの効果・耐久・費用・provider差は未評価。E07親要求全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はE07.02「共有targetの直列確定」。
+
+---

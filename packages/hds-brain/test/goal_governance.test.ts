@@ -572,11 +572,25 @@ describe("HDS goal governance consumer", () => {
         },
       });
       const decision = controller.decide(compute);
-      expect(decision.log.commit.decision).toBe("ASSERT");
+      expect(decision.log.commit.decision, JSON.stringify(decision.log.commit)).toBe("ASSERT");
       expect(decision.command?.type).toBe("llm_call");
       if (decision.command?.type !== "llm_call") throw new Error("plan computation did not produce a C request");
       expect(decision.command.payload.session_id).toBeUndefined();
-      expect(decision.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-purpose-relation.v1");
+      expect(decision.command.payload.compute_context?.local_p_version).toBe("blue-tanuki.plan-compute-agent-delegation.v1");
+      expect(decision.command.payload.agent_delegation).toMatchObject({
+        schema_version: "blue-tanuki.agent-delegation.v1",
+        parent_task_identity_digest: decision.command.payload.compute_context?.budget_scope?.task_identity_digest,
+        parent_budget_identity_digest: decision.command.payload.compute_context?.budget_scope?.parent_task_identity_digest,
+        roles: ["division", "independent_comparison", "audit", "redundancy"],
+        max_child_tasks: 4,
+        max_delegation_depth: 1,
+        parent_resource_limits: { timeout_ms: 7_500 },
+        child_resource_limits: { max_tokens: 256, timeout_ms: 7_500 },
+        capabilities: ["llm_compute_candidate"],
+        may_delegate: false,
+        may_execute: false,
+        used_for_authority: false,
+      });
       expect(decision.command.payload.messages.at(-1)).toEqual({ role: "user", content: task });
       expect(decision.command.payload.messages.some((message) => message.role === "system" &&
         message.content.includes(purposeText))).toBe(true);

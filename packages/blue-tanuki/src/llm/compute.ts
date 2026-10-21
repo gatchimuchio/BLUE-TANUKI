@@ -195,16 +195,22 @@ export interface ComputeBackend<
   TInput extends object = Record<string, never>,
   TOutput extends object = Record<string, never>,
 > {
+  /** True only when every call reserves its resource bound before invoking the provider. */
+  readonly budget_reservations_enabled?: boolean;
   compute(request: ComputeRequest<TInput>, signal?: AbortSignal): Promise<ComputeResult<TOutput>>;
 }
 
 /** 既存のLLM providerを共通Compute契約へ接続するadapter。 */
 export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse> {
+  readonly budget_reservations_enabled: boolean;
+
   constructor(
     private readonly backend: LLMBackend,
     private readonly budget?: ComputeBudgetPort,
     private readonly capacity?: ComputeCapacityPort,
-  ) {}
+  ) {
+    this.budget_reservations_enabled = budget !== undefined;
+  }
 
   async compute(request: ComputeRequest<LLMRequest>, signal?: AbortSignal): Promise<ComputeResult<LLMResponse>> {
     const fallbackAuthorization = validateComputeRequest(request);

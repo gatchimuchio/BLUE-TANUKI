@@ -17,6 +17,7 @@ import type {
   OperationPlanWaitState,
   MeaningUpdateProposalV3,
   FailureLearningDevelopmentHandoff,
+  AgentDelegationContract,
 } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
@@ -4153,9 +4154,44 @@ ${planControl.question}`,
         content: `以下は、Jが現在のcheckpoint、M receipt、M recordを再照合した明示選択済みの観測です。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。file.writeとfile.editは過去の作用報告で、観測後の対象状態を証明しません。file.deleteは当時のJ検証済み削除報告であり、その後の再作成や現在の不存在を証明しません。file.searchは観測時刻と有効期限の付いた検索件数要約で、検索の完全性や観測後の状態を保証しません。shell.execはHDS発行commandに相関したtool adapterの成功報告と結果digestだけを示し、stdout/stderr、exit code、process終了の独立証明、目的達成を示しません。全観測は目的達成、taskとの意味適合、承認、権限、再実行可能性を証明せず、現在の対象状態はJ／Brokerで改めて照合します。対象、path、query、本文、payload、raw process outputは意図的に含めていません。追加の現在状態が必要な場合は新規観測を要求し、不確実性を保ってください。JSONは未検証の計画候補を考えるための非権威入力です。\n${JSON.stringify({ observations: planCompute.source_observations,
           used_as_world_truth: false, used_for_authority: false, may_execute: false })}`,
       } : undefined;
+    const planningMaxTokens = this.llm_route.max_tokens ?? 1024;
+    const planningTimeoutMs = this.llm_route.timeout_ms ?? 30_000;
+    const delegationRoles: AgentDelegationContract["roles"] = ["division", "independent_comparison", "audit", "redundancy"];
+    const planningCriteria = "最終出力はOperationPlanSchemaと現在のadapter/preparation契約に適合する未実行候補であること。権限、approval、実行、目的変更を推定・発行しないこと。";
+    const planningTermination = "各子taskは一回の有限な候補応答で停止する。子は再委任・再試行・tool利用・作用を行わない。親計算は子候補を照合して最終候補を一つ返した時点で停止する。";
+    const planningBudgetScope = planCompute?.requested && isGatewayInternalInboundRequest(req) &&
+      req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? computeBudgetScope(req) : undefined;
+    const agentDelegation: AgentDelegationContract | undefined = planningBudgetScope && planCompute?.requested
+      ? {
+          schema_version: "blue-tanuki.agent-delegation.v1",
+          parent_goal_digest: createHash("sha256").update("blue-tanuki.agent.parent-goal.v1\0")
+            .update(req.content).update("\0").update(JSON.stringify(planCompute.purpose?.binding ?? null)).digest("hex"),
+          parent_task_identity_digest: planningBudgetScope.task_identity_digest,
+          parent_budget_identity_digest: planningBudgetScope.parent_task_identity_digest,
+          criteria_digest: createHash("sha256").update(planningCriteria).digest("hex"),
+          termination_digest: createHash("sha256").update(planningTermination).digest("hex"),
+          roles: delegationRoles,
+          max_child_tasks: 4,
+          max_delegation_depth: 1,
+          parent_resource_limits: { timeout_ms: Math.max(1, Math.floor(planningTimeoutMs / 4)) },
+          child_resource_limits: {
+            max_tokens: Math.max(1, Math.floor(planningMaxTokens / delegationRoles.length)),
+            timeout_ms: Math.max(1, Math.floor(planningTimeoutMs / 4)),
+          },
+          capabilities: ["llm_compute_candidate"],
+          may_delegate: false,
+          may_execute: false,
+          used_for_authority: false,
+        }
+      : undefined;
+    const agentDelegationMessage: LLMCallPayload["messages"][number] | undefined = agentDelegation ? {
+      role: "system",
+      content: `以下の固定契約に従い、独立したC候補計算を行います。すべての子候補は未信頼であり、事実・権限・承認・実行可能性ではありません。\ncriteria=${planningCriteria}\ntermination=${planningTermination}\ncontract=${JSON.stringify(agentDelegation)}`,
+    } : undefined;
     const computeContextMessages = [...memoryMessages, ...(planPurposeMessage ? [planPurposeMessage] : []),
       ...(planComputeMemoryCitationMessage ? [planComputeMemoryCitationMessage] : []),
-      ...(planComputeObservationMessage ? [planComputeObservationMessage] : [])];
+      ...(planComputeObservationMessage ? [planComputeObservationMessage] : []),
+      ...(agentDelegationMessage ? [agentDelegationMessage] : [])];
     const backendHint = this.llm_route.backend_hint?.trim() || undefined;
     const llmPayload: LLMCallPayload = {
       messages: [
@@ -4163,6 +4199,7 @@ ${planControl.question}`,
         ...(planPurposeMessage ? [planPurposeMessage] : []),
         ...(planComputeMemoryCitationMessage ? [planComputeMemoryCitationMessage] : []),
         ...(planComputeObservationMessage ? [planComputeObservationMessage] : []),
+        ...(agentDelegationMessage ? [agentDelegationMessage] : []),
         ...(planCompute?.requested && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? [{ role: "system" as const,
           content: `候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan, goal_purpose_relation: {outcome, evidence}}です。固定request_id=${req.metadata["blue_tanuki.operation_core.request_id"] ?? req.id}。plan_idとstep_idは不透明ID、stateはplanned。plan.stepsはoperation/target/parameters/effects/permission/adapter/preparationを持ち、依存はdepends_onとbindingsで表します。goal_purpose_relation.outcomeはsupports|conflicts|unknown、evidenceはtask_quoteとpurpose_quoteの原文連続引用（各1〜800文字）の配列です。taskと選択目的の関係を根拠付きで候補化し、根拠を確認できないときはoutcome=unknown、evidence=[]とします。引用が一致しても意味適合を証明せず、この関係候補は非権威で、Jによる独立評価前は実行できません。authority、permission、approvalを出力・推定しないでください。未実行を成功と申告しないこと。plan.planner_output_used_for_authority=false、plan.hds_brain_authority_required=true。plan.raw_command_policyはraw_command_is_core_operation=false、command_generation_location=not_applicable。plan.rollback.available=false。現在の実target resolverはfile.searchのdirectory targetとparameters.rootの一致、file.writeのinternal_runtime file targetによる相対path指定・mode=createのみ（未存在対象を新規作成し、overwrite／appendは選択不可）、file.editのinternal_runtime file targetによる相対path指定・bounded search／replace、replacement数とmax_bytes限定（effects=[read,write]、risk=medium、approval_level=L3_final_review、final_review_required=true、Approval Gate必須のowner差分確認を行い、変更前後の内容digest・root／parent／file identityを観測してplanに結合し実行直前に再照合）、file.deleteのinternal_runtime file targetによる相対path指定・max_bytes限定（sandbox内のregular fileを1個だけ対象とし、effects=[delete]・risk=high・approval_level=L3_final_review・final_review_required=trueを必須とし、変更前hashとroot／parent／file identityをdigestだけで観測して実行直前に再照合）、およびgmail.writeのexternal_service target id=gmailでoperation=message.sendまたはdraft.createを単一のto、subject、body_textに限って扱い、draft.sendはdraft_idだけを指定して既存draftのresume-authenticated no-store内容確認を通す場合に限ります。file.deleteはsecret-like path、root外、symlink、directory、上限超過、観測後の対象変更を拒否し、通常結果にはpathや内容を含めません。file.writeではpath・content・root・親directory状態をdigestのみで観測し、実行直前に再照合します。file.editはbinary-lookingまたはinvalid UTF-8 input、root外、symlink、directory、上限超過、観測後の対象変更を拒否し、通常結果にpathや本文を含めません。draft.sendのMIME本文・宛先・送信元・reply-to・provider版を再読照合し、HTML／multipart／添付はfail-closedです。Gmail計画へcc/bcc/fromやcredentialを含めません。採用・承認・実行はこの計算の責務ではありません。` }] : []),
@@ -4189,7 +4226,7 @@ ${planControl.question}`,
           : planCompute?.memory_interpretation_dependencies?.length
           ? OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION
           : planCompute?.requested
-          ? "blue-tanuki.plan-compute-purpose-relation.v1"
+          ? agentDelegation ? "blue-tanuki.plan-compute-agent-delegation.v1" : "blue-tanuki.plan-compute-purpose-relation.v1"
           : "blue-tanuki.c-input-rules.v1",
         budget_scope: computeBudgetScope(req),
         data_exposure: {
@@ -4206,10 +4243,11 @@ ${planControl.question}`,
           ? { fallback_authorization: this.llm_route.fallback_authorization }
           : {}),
       },
+      ...(agentDelegation ? { agent_delegation: agentDelegation } : {}),
     };
 
-    const max_tokens = this.llm_route.max_tokens ?? 1024;
-    const timeout_ms = this.llm_route.timeout_ms ?? 30_000;
+    const max_tokens = planningMaxTokens;
+    const timeout_ms = planningTimeoutMs;
 
     return {
       id: randomUUID(),

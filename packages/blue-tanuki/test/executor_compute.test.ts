@@ -161,6 +161,78 @@ describe("Executor compute boundary", () => {
     expect(backend.seen[0]).toEqual(expectedRequest);
   });
 
+  it("runs fixed C child roles inside the parent budget and returns them only as candidates", async () => {
+    const backend = new CapturingBackend({ content: "role candidate", tokens_used: 2, model: "fixture-model-v1" });
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 } }).register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const reservations: Array<Parameters<ComputeBudgetPort["reserve"]>[0]> = [];
+    const budget: ComputeBudgetPort = {
+      reserve(input) {
+        reservations.push(structuredClone(input));
+        return { reservation_id: createHash("sha256").update(input.request_id).digest("hex"),
+          reserved_tokens: input.reserved_tokens, reserved_compute_ms: input.reserved_compute_ms,
+          reserved_cost: input.reserved_cost };
+      },
+      settle() {},
+    };
+    const compute = new LLMComputeAdapter(registry, budget);
+    const executor = new Executor({ approval_authority: authority, llm: backend,
+      compute, tools: new ToolRegistry() });
+    const taskDigest = "c".repeat(64);
+    const budgetDigest = "b".repeat(64);
+    const planCommand = command("agent-parent-task", true, 5_000);
+    if (planCommand.type !== "llm_call") throw new Error("fixture command was not an LLM call");
+    delete planCommand.payload.session_id;
+    planCommand.payload.compute_context = {
+      ...planCommand.payload.compute_context!,
+      local_p_version: "blue-tanuki.plan-compute-agent-delegation.v1",
+      budget_scope: { parent_task_identity_digest: budgetDigest, task_identity_digest: taskDigest },
+    };
+    planCommand.payload.agent_delegation = {
+      schema_version: "blue-tanuki.agent-delegation.v1",
+      parent_goal_digest: "a".repeat(64),
+      parent_task_identity_digest: taskDigest,
+      parent_budget_identity_digest: budgetDigest,
+      criteria_digest: "d".repeat(64),
+      termination_digest: "e".repeat(64),
+      roles: ["division", "independent_comparison", "audit", "redundancy"],
+      max_child_tasks: 4,
+      max_delegation_depth: 1,
+      parent_resource_limits: { timeout_ms: 1_000 },
+      child_resource_limits: { max_tokens: 16, timeout_ms: 1_000 },
+      capabilities: ["llm_compute_candidate"],
+      may_delegate: false,
+      may_execute: false,
+      used_for_authority: false,
+    };
+
+    const unbudgetedBackend = new CapturingBackend();
+    const unbudgetedExecutor = new Executor({ approval_authority: authority, llm: unbudgetedBackend,
+      compute: new LLMComputeAdapter(unbudgetedBackend), tools: new ToolRegistry() });
+    const unbudgetedResult = await unbudgetedExecutor.execute(approved(structuredClone(planCommand)));
+    expect(unbudgetedResult.status).toBe("failed");
+    expect(unbudgetedBackend.seen).toHaveLength(0);
+
+    const result = await executor.execute(approved(planCommand));
+
+    expect(result.status).toBe("success");
+    expect(reservations).toHaveLength(5);
+    const childReservations = reservations.slice(0, 4);
+    expect(childReservations.every((reservation) =>
+      reservation.scope.parent_task_identity_digest === budgetDigest &&
+      reservation.scope.task_identity_digest !== taskDigest &&
+      reservation.reserved_tokens === 16 && reservation.reserved_compute_ms === 1_000)).toBe(true);
+    expect(new Set(childReservations.map((reservation) => reservation.scope.task_identity_digest)).size).toBe(4);
+    expect(reservations[4]?.scope).toEqual({ parent_task_identity_digest: budgetDigest, task_identity_digest: taskDigest });
+    expect(backend.seen).toHaveLength(5);
+    expect(backend.seen.slice(0, 4).flatMap((request) => request.messages.map((message) => message.content))
+      .join("\n")).toContain("C child role=");
+    expect(backend.seen[4]?.messages.at(-1)?.content).toContain("blue-tanuki.agent-candidate-set.v1");
+    expect(backend.seen[4]?.messages.at(-1)?.content).toContain("role candidate");
+    expect(JSON.stringify(result.result)).not.toContain("agent-candidate-set");
+  });
+
   it("preserves conservative C resource settlement when provider failure returns through Executor", async () => {
     class FailingBackend implements LLMBackend {
       readonly name = "fixture-provider";
