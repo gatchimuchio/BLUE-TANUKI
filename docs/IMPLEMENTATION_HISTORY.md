@@ -2691,3 +2691,27 @@ D05.02のtask cancellation evidence recovery producer→consumerをこの範囲�
 | 全workspace suite、実provider／credential、外部業務作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後へ保持。 |
 
 first-party adapter cancellation producer→request consumerをこの範囲で`WIRED`とする。これはlocal request cancellationの確認であり、remote providerの停止証拠ではない。外部処理状態は`unknown`のまま。C08.03実provider試験、AbortSignal非協調toolの強制停止、D05.02全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。実装commit=`b0623921ea071b3b23b332232a5ca5edd3c6f0c0`。C08.03保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+---
+
+### 履歴ログ：QEB-44-D05.02-CHANNEL-SEND-CANCELLATION
+
+開始HEAD／`main`／`origin/main`=`2145abc84cbadf46cd995338482d169a4c02d458`。QE_CURRENT_AUTHORITYのrev2.3三点セットhash、適用AGENTS／作業標準、active instruction、D05.02、task cancellation signalのGateway→Executor callsiteを再同期した。過去ログ全体は読み直さず、QEB-41〜43の取消経路に必要な記録だけを参照した。保護対象untracked Linux `target/`を保持した。
+
+Executorの`channel_send`がtask AbortSignalを無視していたため、ephemeral `SendContext`をExecutor→OutboundDispatcher→OutboundChannelへ接続した。signalはSendMeta／監査payloadへ入れない。dispatch前取消は送信を開始せず、外部処理へdispatch後に送信確認を得られない取消は配信結果`unknown`とし、宛先側の状態を確認してから再送を判断する案内を返す。LINE／Teams／TelegramのHTTP requestはtask signalと既存timeoutを結合し、Slack／Discordは取消後のretryを開始しない。WebChatはdispatch前取消を拒否する。送信成功応答が得られた場合は成功を保持する。
+
+これはlocal request中断・取消伝播の接続であり、remote serviceが処理を停止した証拠ではない。Slack／Discord SDKのin-flight requestを強制停止する機構、generic non-cooperative toolの強制停止は未成立。D05.02全体および製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm build` | PASS、15 workspace projects。CoreとGatewayを含む。 |
+| 関連package typecheck／Telegram build | PASS。Core、channel-base、LINE、Teams、Slack、Discord、WebChat typecheckとTelegram build。 |
+| Executor `executor_dispatch.test.ts -t "channel_send"` | PASS、2 tests。pre-dispatch cancellation拒否とExecutor→dispatcher signal／unknown deliveryを確認。 |
+| channel-base `router_dispatcher.test.ts` | PASS、14 tests。signalをSendMetaへ混入させず、cancelled deliveryをunknownへ投影する経路を確認。 |
+| LINE／Teams tests | PASS、各8 tests。HTTP request abortと取消後retry抑止を確認。 |
+| Slack／Discord tests | PASS、各18／10 tests。取消後retry抑止を確認。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語移行負債76件は継続。 |
+| Executor dispatch全19 tests | 18 PASS、既存timeout assertion 1 FAIL。`timeout_ms=10`の表示を期待する箇所で実測`timeout after 9ms`となった。今回のchannel cancellation変更とは別の既存期限計算で、timeoutや期待値は変更していない。対象取消2 testsはfilter実行で再確認PASS。 |
+| 実provider／credential／外部送信／全workspace suite／5OS実機／QE_QC／QE_QA | 未実施。実装全体の結合形状成立後へ保持。 |
+
+QEB-44実装commit=`542989b`を作成し、docs closeout commitと合わせてmainへpushする。D4-Pocket／ミニドラ変更、GitHub Actions、実送信、実資格利用はなし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開・出荷判断保留を維持する。
