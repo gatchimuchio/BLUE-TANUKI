@@ -4,5 +4,9 @@ export {
   type SlackInboundMessage,
   type SlackInboundHandler,
   type SlackPostResult,
+  type SlackInboundGrant,
+  type SlackEventInbox,
+  type SlackEventClaim,
+  type SlackEventDeliveryState,
 } from "./transport.js";
 export { BoltTransport } from "./bolt_transport.js";

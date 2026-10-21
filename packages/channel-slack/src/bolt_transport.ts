@@ -51,7 +51,7 @@ export class BoltTransport implements SlackTransport {
       socketMode: true,
       logLevel: "warn",
     }) as {
-      message: (fn: (ctx: { message: SlackRawMessage }) => Promise<void>) => void;
+      message: (fn: (ctx: { message: SlackRawMessage; body: unknown }) => Promise<void>) => void;
       event: (
         name: string,
         fn: (ctx: { event: SlackRawAppMention }) => Promise<void>,
@@ -76,12 +76,14 @@ export class BoltTransport implements SlackTransport {
       );
     }
 
-    app.message(async ({ message }) => {
+    app.message(async ({ message, body }) => {
       // Slack types are loose. Defensive narrowing.
       if (!message || typeof message !== "object") return;
       if ("subtype" in message && message.subtype) return; // edits, joins, etc.
       const m = message as SlackRawMessage;
       if (!m.text || !m.user || !m.channel || !m.ts) return;
+      const identity = readSlackEventEnvelopeIdentity(body);
+      if (!identity) return;
       const isDm = m.channel.startsWith("D");
       // Plain `message` events fire for both DM and channel posts.
       // Channel-without-mention is handled by the early return below.
@@ -90,12 +92,13 @@ export class BoltTransport implements SlackTransport {
       if (!isDm && !isMention) return;
       const cleanText = mentionTag ? m.text.replace(mentionTag, "").trim() : m.text;
       await handler({
+        ...identity,
         channel_id: m.channel,
         user_id: m.user,
         user_display: m.user, // Resolving display name requires users.info; deferred.
         text: cleanText,
         ts: m.ts,
-        thread_ts: m.thread_ts,
+        thread_ts: m.thread_ts ?? null,
         is_dm: isDm,
         is_mention: isMention,
       });
@@ -160,6 +163,17 @@ export class BoltTransport implements SlackTransport {
   private log(line: string): void {
     (this.opts.log ?? console.log)(line);
   }
+}
+
+/** Extract identity only from Bolt's authenticated outer Events API payload. */
+export function readSlackEventEnvelopeIdentity(
+  body: unknown,
+): { team_id: string; event_id: string } | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const record = body as Record<string, unknown>;
+  return typeof record.team_id === "string" && typeof record.event_id === "string"
+    ? { team_id: record.team_id, event_id: record.event_id }
+    : null;
 }
 
 /** Minimal shape of the Slack `message` event we care about. */

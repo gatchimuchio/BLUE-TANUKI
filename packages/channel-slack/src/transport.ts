@@ -10,6 +10,10 @@
 import type { ChannelDeliveryErrorKind } from "@blue-tanuki/channel-base";
 
 export interface SlackInboundMessage {
+  /** Authenticated Slack workspace identity from the outer Events API payload. */
+  team_id: string;
+  /** Slack Events API identity used only for durable replay suppression. */
+  event_id: string;
   /** Slack channel id, e.g. "C12345" or "D12345" (DM). */
   channel_id: string;
   /** Slack user id of the sender, e.g. "U12345". */
@@ -20,12 +24,33 @@ export interface SlackInboundMessage {
   text: string;
   /** Slack ts of the message (ordering / dedup key). */
   ts: string;
-  /** Parent thread ts, if this is a threaded reply. */
-  thread_ts?: string;
+  /** Parent thread ts, if this is a threaded reply; null means channel root. */
+  thread_ts: string | null;
   /** True iff received via DM (channel id starts with "D"). */
   is_dm: boolean;
   /** True iff the bot was @-mentioned in the text. */
   is_mention: boolean;
+}
+
+/** Exact owner-configured Slack message admission scope. */
+export interface SlackInboundGrant {
+  readonly team_id: string;
+  readonly channel_id: string;
+  readonly user_id: string;
+  readonly thread_ts: string | null;
+}
+
+export type SlackEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown";
+
+export type SlackEventClaim =
+  | { readonly status: "accepted" }
+  | { readonly status: "duplicate"; readonly delivery_state: SlackEventDeliveryState }
+  | { readonly status: "identity_conflict" };
+
+/** Gateway-owned durable store; implementations persist digests, never event bodies. */
+export interface SlackEventInbox {
+  claim(event_id: string, payload_digest: string): SlackEventClaim;
+  settle(event_id: string, payload_digest: string, state: "handler_returned" | "outcome_unknown"): void;
 }
 
 export type SlackInboundHandler = (m: SlackInboundMessage) => Promise<void>;

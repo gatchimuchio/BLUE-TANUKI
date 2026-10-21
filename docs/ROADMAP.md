@@ -1,6 +1,6 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
-2026-10-22の`QEB-62-F10.03-WEBCHAT-DISCONNECT-RECONNECT-SAVED-RESULT-CONSUMER`で、WebChat socketを切断した状態でも同じserved Gateway jobのread-only検索がverified／M receiptまで進み、同じowner identityで再接続した後に保存済み結果を返す経路を接続した。socket切断からtask cancellationは起きず、保存結果の再読取でもC providerを追加呼出ししないことを確認した。合成Telegram／provider fixtureのみを使い、実Telegram API／credential／実provider／外部作用は未実施。F10.03全体はcredentialed-live残差があり`BUILD_GAP`、QE_QC／QE_QAは未開始。次は既存Slack adapterのteam/channel/user/thread認証・再送境界を合成入力からconsumerへ接続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+2026-10-22の`QEB-63-F11.01-SLACK-TEAM-CHANNEL-USER-THREAD-ADMISSION-CONSUMER`で、Bolt Socket Modeの外側イベントからworkspace／event identityを取り、owner設定のteam・channel・user・thread完全一致grantを通ったイベントだけGateway inboundへ渡す経路を接続した。event IDとpayload digestのdurable InboxはGateway private SQLiteへ保持し、重複・内容競合を拒否、処理中断後は結果不明として再実行しない。actorはworkspace／user／channel／thread境界に束縛した。合成fixtureのみで、Slack実credential／API、実HDS運転、provider、外部作用は未実施。F11.01はadapter→inbound consumerの部分`WIRED`、Slackは引き続き`first-party-preview`。次はF11.02のSlack受信・返信・障害復旧経路。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-22。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 

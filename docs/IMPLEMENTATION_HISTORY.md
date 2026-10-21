@@ -4,6 +4,24 @@
 
 ---
 
+### 履歴ログ：`QEB-63-F11.01-SLACK-TEAM-CHANNEL-USER-THREAD-ADMISSION-CONSUMER`
+
+開始`main`／`origin/main`=`28da277025dd12716ce160d08f5bcdeb10847ce0`。owner指定rev2.3現行三点セットのpin/hash、適用AGENTS、active instruction、Slack identity/admissionの関係節を再同期した。旧版と完了ログは再読せず、Slack adapter・Gateway inbound wiring・既存Telegram durable admission契約を必要範囲だけ照合した。保護対象untracked Linux isolation `target/`を維持。
+
+Slack Socket ModeのBolt authenticated outer Events API bodyから`team_id`／`event_id`を取り出す。ownerの`SLACK_INBOUND_GRANTS_JSON`はteam、channel、user、threadを完全一致で許可し、欠落・不正・未登録は拒否する。通過後もactorはteam／channel／user／threadの組digestで束縛し、mutable display nameをidentityに使わない。Gateway private SQLiteのdurable Inboxはtoken scope、event ID、payloadを各digestで保持し、dispatching／handler_returned／outcome_unknownのみを保存する。同一eventの再送・payload競合を拒否し、再起動時にdispatchingだったeventは結果不明として抑止する。raw event ID／本文／credentialを保存しない。許可・metadataはHDS authorityやApprovalを生成せず、L3・Broker境界を変更しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| channel-slack `slack.test.ts` | PASS、22 tests。 |
+| Gateway `slack_inbound_grants.test.ts`／`slack_event_store.test.ts` | PASS、5 tests。Inbox永続性とSlack adapter consumerの再起動後抑止を含む。 |
+| channel-slack／Gateway typecheck | PASS。 |
+| channel-slack／Gateway build | PASS。 |
+| `git diff --check` | PASS。 |
+| `pnpm docs:check` | 文書形状検査PASS。日本語基底gateは、今回未変更の`docs/CHANNEL_READINESS_MATRIX.md`移行hash不整合でFAILし、licensing gateへ未到達。 |
+| 実Slack credential／Socket Mode／API、実HDS runtime、provider、外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+F11.01の合成Slack admission→Gateway inbound consumerを部分的に`WIRED`とする。Socket Modeの実運転と実HDS実行は未確認であり、Slack channelの`first-party-preview`およびowner-run live smoke保留を維持する。Inboxの長期容量・回転条件は全体実装後のQE_QC候補として残す。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。次はF11.02（Slackの受信・返信・障害復旧実行）。
+
 ### 履歴ログ：`QEB-26-E04.01-FAILURE-SYMPTOM-CAUSE-SEPARATION`
 
 開始HEAD／`origin/main`=`37795d4243181543b5cefc62a3d7fda47bd6ad80`。owner指定rev2.3三点セットの現行pin・SHA、適用AGENTS、active指示、dirty stateを再同期し、配布ZIP SHAがpinと一致することを確認した。作業前のlocal復旧branch二世代とremote backup tag二世代はそれぞれmain／前mainと一致。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持した。

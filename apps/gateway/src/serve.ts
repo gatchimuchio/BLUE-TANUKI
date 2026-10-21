@@ -51,6 +51,8 @@ import { localInspectionReconciliationMessage, runLocalInspectionReconciliation 
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
 import { parseTelegramInboundGrants } from "./telegram_inbound_grants.js";
+import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
+import { GatewaySlackEventStore } from "./slack_event_store.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -4365,6 +4367,15 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const telegramUpdateStore = telegramBotToken
     ? GatewayTelegramUpdateStore.fromEnvironment(process.env, telegramBotToken)
     : null;
+  const slackBotToken = process.env.SLACK_BOT_TOKEN;
+  const slackAppToken = process.env.SLACK_APP_TOKEN;
+  const slackLiveConfigured = Boolean(slackBotToken && slackAppToken);
+  const slackInboundGrants = slackLiveConfigured
+    ? parseSlackInboundGrants(process.env.SLACK_INBOUND_GRANTS_JSON)
+    : [];
+  const slackEventStore = slackLiveConfigured && slackBotToken
+    ? GatewaySlackEventStore.fromEnvironment(process.env, slackBotToken)
+    : null;
   const telegram = plugins.createChannel<InboundChannel & OutboundChannel>({
     package_name: "@blue-tanuki/channel-telegram",
     required_permissions: telegramPermissions,
@@ -4385,8 +4396,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       "secrets:SLACK_BOT_TOKEN",
       "secrets:SLACK_APP_TOKEN",
     ], "register slack channel", {
-      bot_token: process.env.SLACK_BOT_TOKEN,
-      app_token: process.env.SLACK_APP_TOKEN,
+      bot_token: slackBotToken,
+      app_token: slackAppToken,
+      inbound_grants: slackInboundGrants,
+      ...(slackEventStore ? { inbox: slackEventStore } : {}),
       log: (line: string) => slackLog.info(line),
     }),
     optionalPreviewChannel("@blue-tanuki/channel-discord", [
@@ -4826,6 +4839,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       activeTaskExecutions.abortAll();
       await router.stop();
       telegramUpdateStore?.close();
+      slackEventStore?.close();
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);
       cronEventStore.close();

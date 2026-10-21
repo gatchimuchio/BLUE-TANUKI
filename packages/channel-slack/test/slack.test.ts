@@ -4,9 +4,48 @@ import {
   SlackChannel,
   type SlackTransport,
   type SlackInboundHandler,
+  type SlackEventInbox,
   type SlackInboundMessage,
   type SlackPostResult,
 } from "../src/index.js";
+import { readSlackEventEnvelopeIdentity } from "../src/bolt_transport.js";
+
+const slackGrant = { team_id: "T1", channel_id: "C100", user_id: "U7", thread_ts: null } as const;
+
+class MemorySlackEventInbox implements SlackEventInbox {
+  readonly records = new Map<string, { payload_digest: string; state: "dispatching" | "handler_returned" | "outcome_unknown" }>();
+  claim(event_id: string, payload_digest: string) {
+    const current = this.records.get(event_id);
+    if (current) return current.payload_digest === payload_digest
+      ? { status: "duplicate", delivery_state: current.state } as const
+      : { status: "identity_conflict" } as const;
+    this.records.set(event_id, { payload_digest, state: "dispatching" });
+    return { status: "accepted" } as const;
+  }
+  settle(event_id: string, payload_digest: string, state: "handler_returned" | "outcome_unknown") {
+    const current = this.records.get(event_id);
+    if (!current || current.payload_digest !== payload_digest || current.state !== "dispatching") {
+      throw new Error("fixture_settlement_conflict");
+    }
+    current.state = state;
+  }
+}
+
+function inboundMessage(overrides: Partial<SlackInboundMessage> = {}): SlackInboundMessage {
+  return {
+    team_id: "T1",
+    event_id: "Ev1",
+    channel_id: "C100",
+    user_id: "U7",
+    user_display: "alice",
+    text: "hello bot",
+    ts: "111.222",
+    thread_ts: null,
+    is_dm: false,
+    is_mention: true,
+    ...overrides,
+  };
+}
 
 /**
  * In-memory fake transport for Slack tests. Mirrors the production
@@ -90,12 +129,18 @@ describe("SlackChannel — silent mode (no token, no transport)", () => {
     expect(ch.isSilent()).toBe(true);
     await ch.stop();
   });
+
+  it("requires a durable inbox before starting a credentialed Bolt transport", async () => {
+    const ch = new SlackChannel({ bot_token: "xoxb-fixture", app_token: "xapp-fixture" });
+    await expect(ch.start(async () => {})).rejects.toThrow("slack_durable_inbox_required_for_live_events");
+  });
 });
 
 describe("SlackChannel — active mode (fake transport)", () => {
   it("starts the transport and delivers inbound through the handler", async () => {
     const t = new FakeSlackTransport();
-    const ch = new SlackChannel({ transport: t, log: () => {} });
+    const inbox = new MemorySlackEventInbox();
+    const ch = new SlackChannel({ transport: t, inbound_grants: [slackGrant], inbox, log: () => {} });
     const received: InboundRequest[] = [];
     await ch.start(async (req) => {
       received.push(req);
@@ -104,28 +149,36 @@ describe("SlackChannel — active mode (fake transport)", () => {
     expect(t.startCalls).toBe(1);
     expect(ch.isSilent()).toBe(false);
 
-    await t.emitInbound({
-      channel_id: "C100",
-      user_id: "U7",
-      user_display: "alice",
-      text: "hello bot",
-      ts: "111.222",
-      is_dm: false,
-      is_mention: true,
-    });
+    await t.emitInbound(inboundMessage());
 
     expect(received).toHaveLength(1);
     const r = received[0]!;
     expect(r.channel).toBe("slack");
-    expect(r.user).toBe("alice");
+    expect(r.user).toMatch(/^slack:[a-f0-9]{64}$/u);
     expect(r.content).toBe("hello bot");
     expect(r.metadata?.reply_to).toBe("C100");
+    expect(r.metadata?.slack_team_id).toBe("T1");
     expect(r.metadata?.slack_user_id).toBe("U7");
+    expect(r.metadata?.slack_thread_ts).toBeNull();
+    expect(r.metadata).not.toHaveProperty("slack_event_id");
     expect(r.metadata?.is_mention).toBe(true);
     expect(r.metadata?.is_dm).toBe(false);
 
     await ch.stop();
     expect(t.stopCalls).toBe(1);
+  });
+
+  it("defaults to denying inbound and reports that state when grants are empty", async () => {
+    const t = new FakeSlackTransport();
+    const inbox = new MemorySlackEventInbox();
+    const lines: string[] = [];
+    const ch = new SlackChannel({ transport: t, inbox, log: (line) => lines.push(line) });
+    let handlerCalls = 0;
+    await ch.start(async () => { handlerCalls += 1; });
+    await t.emitInbound(inboundMessage());
+    expect(handlerCalls).toBe(0);
+    expect(lines.some((line) => line.includes("inbound messages are rejected"))).toBe(true);
+    await ch.stop();
   });
 
   it("send() routes to transport.postMessage and reports the ts", async () => {
@@ -171,25 +224,58 @@ describe("SlackChannel — active mode (fake transport)", () => {
   it("inbound handler error does not break listener (logs only)", async () => {
     const lines: string[] = [];
     const t = new FakeSlackTransport();
-    const ch = new SlackChannel({ transport: t, log: (l) => lines.push(l) });
+    const inbox = new MemorySlackEventInbox();
+    const ch = new SlackChannel({ transport: t, inbound_grants: [slackGrant], inbox, log: (l) => lines.push(l) });
     await ch.start(async () => {
       throw new Error("downstream-fail");
     });
 
     await expect(
-      t.emitInbound({
-        channel_id: "C1",
-        user_id: "U1",
-        user_display: "u",
-        text: "x",
-        ts: "1",
-        is_dm: true,
-        is_mention: false,
-      }),
+      t.emitInbound(inboundMessage()),
     ).resolves.toBeUndefined();
 
-    expect(lines.some((l) => l.includes("downstream-fail"))).toBe(true);
+    expect(lines.some((l) => l.includes("outcome is unknown"))).toBe(true);
+    expect(inbox.records.get("Ev1")?.state).toBe("outcome_unknown");
     await ch.stop();
+  });
+
+  it("admits only exact team/channel/user/thread grants and suppresses duplicate or conflicting events", async () => {
+    const t = new FakeSlackTransport();
+    const inbox = new MemorySlackEventInbox();
+    const received: InboundRequest[] = [];
+    const ch = new SlackChannel({
+      transport: t,
+      inbound_grants: [slackGrant, { ...slackGrant, thread_ts: "111.222" }],
+      inbox,
+      log: () => {},
+    });
+    await ch.start(async (request) => { received.push(request); });
+
+    await t.emitInbound(inboundMessage({ team_id: "T2" }));
+    await t.emitInbound(inboundMessage({ channel_id: "C101" }));
+    await t.emitInbound(inboundMessage({ user_id: "U8" }));
+    await t.emitInbound(inboundMessage({ thread_ts: "999.000" }));
+    expect(received).toHaveLength(0);
+    expect(inbox.records.size).toBe(0);
+
+    await t.emitInbound(inboundMessage());
+    await t.emitInbound(inboundMessage());
+    await t.emitInbound(inboundMessage({ text: "changed payload" }));
+    expect(received).toHaveLength(1);
+    expect(inbox.records.get("Ev1")?.state).toBe("handler_returned");
+
+    const thread = inboundMessage({ event_id: "Ev2", thread_ts: "111.222" });
+    await t.emitInbound(thread);
+    expect(received).toHaveLength(2);
+    expect(received[1]?.user).not.toBe(received[0]?.user);
+    await ch.stop();
+  });
+
+  it("extracts team and event identity only from the authenticated outer Bolt payload", () => {
+    expect(readSlackEventEnvelopeIdentity({ team_id: "T1", event_id: "Ev1", event: {} }))
+      .toEqual({ team_id: "T1", event_id: "Ev1" });
+    expect(readSlackEventEnvelopeIdentity({ event: { team_id: "T1", event_id: "Ev1" } })).toBeNull();
+    expect(readSlackEventEnvelopeIdentity(null)).toBeNull();
   });
 
   it("transport.start failure falls back to silent (does not throw)", async () => {

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   InboundRequest,
   ChannelSendPayload,
@@ -15,7 +15,13 @@ import {
   type SendMeta,
   type SendResult,
 } from "@blue-tanuki/channel-base";
-import type { SlackTransport, SlackPostResult } from "./transport.js";
+import type {
+  SlackEventInbox,
+  SlackInboundGrant,
+  SlackInboundMessage,
+  SlackTransport,
+  SlackPostResult,
+} from "./transport.js";
 import { BoltTransport } from "./bolt_transport.js";
 
 export interface SlackRetryConfig {
@@ -46,6 +52,10 @@ export interface SlackOptions {
    * When provided, takes precedence over bot_token/app_token defaults.
    */
   transport?: SlackTransport;
+  /** Exact owner-configured inbound grants. Empty or absent rejects all messages. */
+  inbound_grants?: readonly SlackInboundGrant[];
+  /** Gateway-owned durable event replay boundary; required for the live Bolt transport. */
+  inbox?: SlackEventInbox;
   /**
    * Outbound retry/backoff for rate-limit-style failures. The Slack SDK
    * already queues internally on 429; this is a *fallback* that gives a
@@ -119,11 +129,11 @@ export class SlackChannel implements InboundChannel, OutboundChannel {
 
   async start(handler: InboundHandler): Promise<void> {
     if (this.started) return;
-    this.started = true;
 
     if (this.opts.transport) {
       this.transport = this.opts.transport;
     } else if (this.opts.bot_token && this.opts.app_token) {
+      if (!this.opts.inbox) throw new Error("slack_durable_inbox_required_for_live_events");
       this.transport = new BoltTransport({
         bot_token: this.opts.bot_token,
         app_token: this.opts.app_token,
@@ -137,18 +147,56 @@ export class SlackChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    if (!this.opts.inbound_grants?.length) {
+      this.log("[slack] WARN SLACK_INBOUND_GRANTS_JSON unset/empty — inbound messages are rejected");
+    }
+
+    this.started = true;
     try {
       await this.transport.start(async (m) => {
+        if (!isValidSlackInboundMessage(m)) {
+          this.log("[slack] rejected inbound event with invalid identity");
+          return;
+        }
+        const grant = this.opts.inbound_grants?.some((candidate) =>
+          candidate.team_id === m.team_id &&
+          candidate.channel_id === m.channel_id &&
+          candidate.user_id === m.user_id &&
+          candidate.thread_ts === m.thread_ts
+        );
+        if (!grant) return;
+        const inbox = this.opts.inbox;
+        if (!inbox) {
+          this.log("[slack] rejected inbound event because durable admission is unavailable");
+          return;
+        }
+        const payloadDigest = slackInboundPayloadDigest(m);
+        let claim;
+        try {
+          claim = inbox.claim(m.event_id, payloadDigest);
+        } catch {
+          this.log("[slack] rejected inbound event because durable admission failed");
+          return;
+        }
+        if (claim.status !== "accepted") {
+          this.log(`[slack] suppressed inbound event status=${claim.status}`);
+          return;
+        }
+
+        let deliveryState: "handler_returned" | "outcome_unknown" = "outcome_unknown";
         const inbound: InboundRequest = {
           id: randomUUID(),
           channel: "slack",
-          user: m.user_display,
+          // Scope HDS owner/channel matching to this exact workspace, sender,
+          // conversation, and thread. Display names are mutable labels only.
+          user: slackActorIdentity(m),
           content: m.text,
           timestamp: Date.now(),
           metadata: {
             // reply_to is the Slack channel id; this is what the gateway
             // must hand back as ChannelSendPayload.target on outbound.
             reply_to: m.channel_id,
+            slack_team_id: m.team_id,
             slack_user_id: m.user_id,
             slack_channel_id: m.channel_id,
             slack_ts: m.ts,
@@ -159,11 +207,17 @@ export class SlackChannel implements InboundChannel, OutboundChannel {
         };
         try {
           await handler(inbound);
-        } catch (e) {
-          // Inbound handler errors must not break the listener.
-          this.log(
-            `[slack] inbound handler threw: ${e instanceof Error ? e.message : String(e)}`,
-          );
+          deliveryState = "handler_returned";
+        } catch {
+          // The handler may already have crossed a durable boundary. Suppress
+          // replay and expose only a redacted outcome state.
+          this.log("[slack] inbound handler failed; delivery outcome is unknown");
+        } finally {
+          try {
+            inbox.settle(m.event_id, payloadDigest, deliveryState);
+          } catch {
+            this.log("[slack] inbound delivery settlement failed; replay remains blocked");
+          }
         }
       });
       this.log("[slack] active");
@@ -329,6 +383,49 @@ export class SlackChannel implements InboundChannel, OutboundChannel {
   private log(line: string): void {
     (this.opts.log ?? console.log)(line);
   }
+}
+
+function isValidSlackInboundMessage(value: unknown): value is SlackInboundMessage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const message = value as Record<string, unknown>;
+  return isSlackIdentifier(message.team_id, /^T[A-Z0-9]{1,31}$/u) &&
+    isSlackIdentifier(message.channel_id, /^(?:C|D|G)[A-Z0-9]{1,31}$/u) &&
+    isSlackIdentifier(message.user_id, /^(?:U|W)[A-Z0-9]{1,31}$/u) &&
+    typeof message.event_id === "string" && /^[A-Za-z0-9_-]{1,128}$/u.test(message.event_id) &&
+    typeof message.text === "string" && message.text.length <= 1_000_000 &&
+    typeof message.ts === "string" && /^(?:0|[1-9]\d{0,19})\.\d{1,20}$/u.test(message.ts) &&
+    (message.thread_ts === null ||
+      (typeof message.thread_ts === "string" && /^(?:0|[1-9]\d{0,19})\.\d{1,20}$/u.test(message.thread_ts))) &&
+    message.is_dm === message.channel_id.startsWith("D") &&
+    typeof message.is_mention === "boolean" &&
+    typeof message.user_display === "string";
+}
+
+function isSlackIdentifier(value: unknown, pattern: RegExp): value is string {
+  return typeof value === "string" && pattern.test(value);
+}
+
+function slackInboundPayloadDigest(message: SlackInboundMessage): string {
+  return createHash("sha256").update(JSON.stringify([
+    message.team_id,
+    message.channel_id,
+    message.user_id,
+    message.thread_ts,
+    message.ts,
+    message.text,
+    message.is_dm,
+    message.is_mention,
+  ])).digest("hex");
+}
+
+function slackActorIdentity(message: SlackInboundMessage): string {
+  const digest = createHash("sha256").update(JSON.stringify([
+    message.team_id,
+    message.channel_id,
+    message.user_id,
+    message.thread_ts,
+  ])).digest("hex");
+  return `slack:${digest}`;
 }
 
 function truncate(s: string, n: number): string {
