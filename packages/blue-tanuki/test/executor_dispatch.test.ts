@@ -193,7 +193,7 @@ describe("Executor.executeChannelSend — dispatcher path", () => {
     });
   });
 
-  it("falls back to console.log when no dispatcher (backward compat)", async () => {
+  it("fails closed without a dispatcher and does not log the channel payload", async () => {
     const original = console.log;
     const lines: string[] = [];
     console.log = (...args: unknown[]) => {
@@ -205,9 +205,10 @@ describe("Executor.executeChannelSend — dispatcher path", () => {
         llm: new StubBackend(),
         tools: new ToolRegistry(),
       });
-      const fb = await exec.execute(approved(channelSendCmd("legacy")));
-      expect(fb.status).toBe("success");
-      expect(lines.some((l) => l.includes("[channel:legacy]"))).toBe(true);
+      const fb = await exec.execute(approved(channelSendCmd("legacy", "private message")));
+      expect(fb).toMatchObject({ status: "failed", error: "channel_dispatcher_unavailable",
+        result: { sent: false, delivery_status: "not_delivered", error_code: "channel_dispatcher_unavailable" } });
+      expect(lines).toEqual([]);
     } finally {
       console.log = original;
     }

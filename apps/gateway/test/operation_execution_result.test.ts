@@ -208,7 +208,7 @@ describe("実Executor結果から既存監査・履歴projectionへの接続", (
     finish?.({ completed_after_timeout: true });
   });
 
-  it("console fallbackは配送成功の証拠にしない", async () => {
+  it("dispatcherがないchannel_sendは未呼出しとして記録し、本文をconsoleへ出さない", async () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       const command: ExecuteCommand = { id: "channel-command", type: "channel_send",
@@ -217,8 +217,11 @@ describe("実Executor結果から既存監査・履歴projectionへの接続", (
           request_id: "channel-request", commit_hash: "fixture-hash" } };
       const exec = executor(new ToolRegistry());
       const feedback = await exec.instance.execute(exec.approve(command));
-      expect(feedback.operation_core_result).toMatchObject({ execution_boundary: "console_preview", action_outcome: "preview_only" });
-      expect(operationCoreResultHistoryProjection(command, feedback)?.action_outcome).toBe("preview_only");
+      expect(feedback).toMatchObject({ status: "failed", error: "channel_dispatcher_unavailable",
+        result: { sent: false, delivery_status: "not_delivered" } });
+      expect(feedback.operation_core_result).toMatchObject({ execution_boundary: "not_invoked", action_outcome: "not_attempted" });
+      expect(operationCoreResultHistoryProjection(command, feedback)?.action_outcome).toBe("not_attempted");
+      expect(spy).not.toHaveBeenCalled();
     } finally { spy.mockRestore(); }
   });
 

@@ -104,9 +104,8 @@ export interface ExecutorDeps {
    */
   approval_authority: ExecutorApprovalAuthority;
   /**
-   * Optional. When omitted, channel_send falls back to console.log
-   * (Phase 0/1 behavior). When present, channel_send is routed via the
-   * dispatcher and translates the result into ExecuteFeedback.
+   * Optional for non-channel commands. When omitted, channel_send fails
+   * without invoking an adapter or exposing its payload to console output.
    */
   dispatcher?: ChannelDispatcher;
   /**
@@ -1237,16 +1236,18 @@ export class Executor {
       };
     }
 
-    // Fallback: Phase 0/1 behavior — log only.
-    markInvoked("console_preview");
-    // eslint-disable-next-line no-console
-    console.log(
-      `[channel:${payload.channel}] -> ${payload.target}: ${payload.content}`,
-    );
     return {
       command_id: id,
-      status: "success",
-      result: { sent: true, channel: payload.channel, target: payload.target },
+      status: "failed",
+      error: "channel_dispatcher_unavailable",
+      result: {
+        sent: false,
+        delivery_status: "not_delivered",
+        error_code: "channel_dispatcher_unavailable",
+        next_action: "Configure an approved channel dispatcher before attempting delivery.",
+        used_for_authority: false,
+        may_execute: false,
+      },
       metrics: { duration_ms: Date.now() - start },
     };
   }
