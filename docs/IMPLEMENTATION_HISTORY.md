@@ -2715,3 +2715,22 @@ Executorの`channel_send`がtask AbortSignalを無視していたため、epheme
 | 実provider／credential／外部送信／全workspace suite／5OS実機／QE_QC／QE_QA | 未実施。実装全体の結合形状成立後へ保持。 |
 
 QEB-44実装commit=`542989b`を作成し、docs closeout commitと合わせてmainへpushする。D4-Pocket／ミニドラ変更、GitHub Actions、実送信、実資格利用はなし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開・出荷判断保留を維持する。
+
+---
+
+### 履歴ログ：QEB-45-D08.01-F10.02-DISPATCH-UNAVAILABLE-FAIL-CLOSED
+
+開始HEAD／`main`／`origin/main`=`872066dbc0b72053b467412b164f9d2b3fc899f6`。現行pinのrev2.3三点セットと各文書hash、適用`AGENTS.md`／作業標準、active指示、Executorのchannel dispatcher有無による分岐、実行結果consumerを再同期した。変更系譜では隣接するQEB-44記録だけを参照。開始時のlocal復旧branch／remote tagは`backup-main=872066d`、`backup-main-prev=2145abc`。保護対象untracked Linux `target/`を維持した。
+
+Gateway runtimeはdispatcherを登録するが、dispatcherを構成しないCLI runtimeも同じExecutorを生成する。旧no-dispatch経路はchannel本文をconsoleへ出し、外部送信していないのに`sent: true`と実行成功を返していた。no-dispatch時は`channel_dispatcher_unavailable`／`sent: false`／`delivery_status: not_delivered`を返し、invocationを記録せず、payloadをconsoleへ出さない。operation resultは`not_invoked`／`not_attempted`として投影される。dispatcher未設定時のchannel送信が実行されないことを表す範囲のみで、D08.01／F10.02全体の完了や実provider送信を示さない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Core `executor_dispatch.test.ts -t "dispatcher"` | PASS、6 tests。dispatcher経由、取消・unknown delivery、未設定時拒否を確認。残り13 testsはfilterでskip。 |
+| Gateway `operation_execution_result.test.ts` | PASS、7 tests。未設定時の`not_invoked`／`not_attempted`と履歴projectionを確認。 |
+| `pnpm build` | PASS、15 of 16 workspace projects。CoreとGatewayを含む。 |
+| `pnpm docs:check` | PASS。初回checkでactive指示の再読条件欠落を検出し、現行運用規則を戻して再実行。日本語移行負債76件は継続。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite、実provider／credential／外部送信、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後へ保持。 |
+
+code commit=`0533867`。QE_BUILDのこの接続補正以外に実provider、credential、外部作用を使わず、D4-Pocket／ミニドラ変更、GitHub Actions、公開／出荷判断もなし。D08.01／F10.02、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、C08.03実provider、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`は未成立・保留のまま。closeout内容はこの履歴記録とactive instructionへ反映した。

@@ -14,11 +14,11 @@ QEB-44はcloseout済み。`Executor channel_send → OutboundDispatcher → chan
 
 ## 次のBUILD_BATCH
 
-`QEB-45-D08.01-F10.02-DISPATCH-UNAVAILABLE-FAIL-CLOSED`を実施する。dispatcher未設定時の`channel_send`を実送信と誤認させず、payloadをconsoleへ出さず、`not_invoked`／`not_attempted`として後続consumerへ渡す。対象はExecutorのno-dispatch分岐、実行結果投影の関連試験、必要なactive/history記録に限定する。実provider、実credential、外部送信、dispatcher追加、D08.01／F10.02全体の完了判定は対象外。次consumerはoperation result／execution intentが未呼出しを保持する経路。QE_BUILDを維持し、全体の結合形状成立前にQC／QAを開始しない。
+QEB-45をcloseout済み。dispatcher未設定時の`channel_send`は`failed`／`not_delivered`となり、実行結果は`not_invoked`／`not_attempted`を保持する。本文はconsoleへ出力しない。code commit=`0533867`。D08.01=`BUILD_GAP`（検査server経由の一作用・結果照合は未接続）、F10.02=`BUILD_GAP`（全channel運用の受入は未成立）。今回の拒否経路は両単位の完了を意味しない。詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)と[`開発進捗.md`](開発進捗.md)のQEB-45記録を参照。
 
-単位状態：D08.01=`BUILD_GAP`（検査server経由の一作用・結果照合は未接続）、F10.02=`BUILD_GAP`（全channel運用の受入は未成立）。今回のno-dispatch拒否はこの残差の一部を安全に明示するもので、単位完了を意味しない。旧版と完了履歴はログとして保持し、依存・変更系譜・矛盾の解消に必要な箇所だけ参照する。
+## 次のBUILD_BATCH
 
-次の独立した作業・切替・再開時は、`QE_CURRENT_AUTHORITY.md`が固定する現行三点セットの全文を読み直す。同一BUILD_BATCH内の連続作業では関係する節と現物を再同期する。
+現時点で次のBUILD_BATCHは選定していない。次の独立した作業・切替・再開時は`QE_CURRENT_AUTHORITY.md`が固定する三点セットの全文を読み直す。適用`AGENTS.md`も読み直す。最新HEAD／dirty state／実装と照合し、rev2.3の未接続producer→consumerから対象を選ぶ。QE_BUILDを維持し、全体の結合形状成立前にQC／QAを開始しない。旧版と完了履歴はログとして保持し、依存・変更系譜・矛盾の解消に必要な箇所だけ参照する。
 
 ## 共通の保護とGit
 
