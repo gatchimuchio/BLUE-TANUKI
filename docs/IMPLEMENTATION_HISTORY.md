@@ -18,7 +18,7 @@ Control Centerのpost-action formatterをM stateにも対応させ、backup dige
 
 E03.03のM restore pointをControl Centerのread-only operator consumerまで`WIRED`とする。HDS current recovery gateを含む復旧可能性の全体判定、J/Broker/M間atomicity、自動resume、E03.03/QEB-03と製品全体の`BUILD_COVERED`は未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次は現行rev2.3と最新コードから、UI表示の先に仕事を進める未接続consumerを選ぶ。QEB-24で観測された広い`execution_result_reconciliation`の2件（Windows isolation provider未導入、J commit residual rejection fixture失敗）は原因未確定のまま別記録とし、本バッチで原因帰属しない。
 
-実装commitとcloseoutのcommit／remote refsはpush後にこのログと最終報告へ照合する。保護対象untracked Linux isolation `target/`は保持する。
+実装commit=`19dcfabed4a632ed9d37dab32b8961e52a79098e`を`main`とbackup tag二本へatomic pushした。直後のremote main／backup current tag／backup previous tagは`19dcfabed4a632ed9d37dab32b8961e52a79098e`／`19dcfabed4a632ed9d37dab32b8961e52a79098e`／`e20d8c7e030c72515f82717d31a3a1ce4d99993d`で一致し、local recovery branch二世代もcurrent=`19dcfabed4a632ed9d37dab32b8961e52a79098e`、previous=`e20d8c7e030c72515f82717d31a3a1ce4d99993d`。保護対象untracked Linux isolation `target/`は保持した。
 
 ---
 
