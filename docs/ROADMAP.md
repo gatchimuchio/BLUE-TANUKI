@@ -2,6 +2,8 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-21の`QEB-11-E03.03-CANONICAL-STORE-INVENTORY-RECOVERY-BARRIER`では、Recovery snapshot capture中のcanonical store出現／消失を終了時に再照合し、source inventoryが変わった場合は全storeのarchiveを破棄して未確認へ閉じる。recovery_surface focused 15/15、typecheck、15-project buildはPASS。共同atomicity、job-level restore point、E03.03全体、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。
+
 2026-10-21の`QEB-10-E03.02-INTERRUPTED-WAIT-COMPUTE-RECOVERY`では、J checkpoint後・C結果記録前のGateway停止を再起動時に調停するconsumerを接続した。同一候補が一件だけならwaitへ結果を結び直し、候補なし／曖昧ならinterruptedとして、認証済みDeveloper画面からownerの新しい返信がある時だけC候補計算へ進む。返信本文はwait state・candidate task goal・audit・projectionへ残さず、旧返信を復元・再送しない。関連Gateway／WebChat tests、workspace typecheck、15-project buildはPASS。全workspace suite、実Gateway再起動、実provider、E03.02全体および製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。
 
 2026-10-21の`QEB-09-E03.02-RECOVERED-SAVED-RESULT-RETURN`では、Recovery後にJ/Mへ保存済みのverified `file.search`観測を、current plan／revision・receipt・recordまで再照合した単回read-only consumerから取得し、認証済みDeveloper Control Centerへ返す経路を接続した。再検索・再実行はせず、保存時点の結果と検索完全性不明を明示する。Gateway focused tests、WebChat導線、typecheck、buildはPASS。実Gateway process smoke、E03.02 durable job lifecycle、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。

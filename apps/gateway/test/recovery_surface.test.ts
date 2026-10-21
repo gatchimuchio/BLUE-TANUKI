@@ -720,6 +720,51 @@ describe("buildRecoverySnapshot", () => {
     }
   }, 15_000);
 
+  it("rejects the combined snapshot when a previously absent canonical store appears during capture", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-canonical-new-store-during-capture-"));
+    try {
+      const stateRoot = path.join(root, "state");
+      const packDirectory = path.join(root, "pack");
+      await mkdir(packDirectory);
+      for (const [key, relativePath] of CANONICAL_DATABASES) {
+        if (key !== "m_state") await createCanonicalDatabase(stateRoot, relativePath, `initial-${key}`);
+      }
+
+      const capture = captureCanonicalStateSnapshots(stateRoot, packDirectory);
+      const firstArchive = path.join(packDirectory, "canonical-state", "j_control.sqlite");
+      let appeared = false;
+      for (let attempt = 0; attempt < 5_000; attempt += 1) {
+        if (await exists(firstArchive)) {
+          appeared = true;
+          break;
+        }
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+      }
+      expect(appeared).toBe(true);
+
+      const newlyCreatedStore = CANONICAL_DATABASES.find(([key]) => key === "m_state")!;
+      const newStorePath = await createCanonicalDatabase(stateRoot, newlyCreatedStore[1], "created-during-capture");
+      const manifest = await capture;
+
+      expect(manifest.entries).toHaveLength(5);
+      expect(manifest.entries.every((entry) => entry.status === "snapshot_failed")).toBe(true);
+      expect(await readdir(path.join(packDirectory, "canonical-state"))).toEqual([]);
+      expect(readCanonicalDatabase(newStorePath)).toEqual(["created-during-capture"]);
+
+      const inspection = await inspectCanonicalStateSnapshots(packDirectory, manifest);
+      expect(inspection).toMatchObject({
+        coverage: "partial",
+        captured_store_count: 0,
+        verified_store_count: 0,
+        missing_store_count: 0,
+        unverified_store_count: 5,
+        cross_store_atomic: false,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("keeps missing and corrupt canonical stores isolated in partial snapshot coverage", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-canonical-partial-"));
     try {

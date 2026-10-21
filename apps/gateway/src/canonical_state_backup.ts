@@ -466,6 +466,16 @@ export async function captureCanonicalStateSnapshots(
       sourceChangedDuringCapture = true;
     }
   }
+  try {
+    const finalSources = resolveStoreSources(stateRoot);
+    const finalByKey = new Map(finalSources.map((source) => [source.key, source]));
+    if (finalSources.length !== sources.length || sources.some((source) =>
+      finalByKey.get(source.key)?.present !== source.present)) {
+      sourceChangedDuringCapture = true;
+    }
+  } catch {
+    sourceChangedDuringCapture = true;
+  }
   for (const observation of observations.values()) {
     try { observation.database.close(); } catch { /* 観測結果を保持する。 */ }
   }
@@ -476,16 +486,14 @@ export async function captureCanonicalStateSnapshots(
       if (entry.archive_rel_path !== null) {
         await fs.rm(join(packDirectory, entry.archive_rel_path), { force: true });
       }
-      if (entry.status !== "not_present") {
-        entries[index] = {
-          store_key: entry.store_key,
-          status: "snapshot_failed",
-          archive_rel_path: null,
-          bytes: 0,
-          sha256: null,
-          integrity_check: "not_run",
-        };
-      }
+      entries[index] = {
+        store_key: entry.store_key,
+        status: "snapshot_failed",
+        archive_rel_path: null,
+        bytes: 0,
+        sha256: null,
+        integrity_check: "not_run",
+      };
     }
   }
 
