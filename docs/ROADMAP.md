@@ -2,6 +2,8 @@
 
 2026-10-22。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-22の`QEB-51-F10.02-TELEGRAM-DURABLE-ENTRY-REPLY`では、Telegram updateをGateway private SQLite cursorへdigest-onlyで受付し、再起動後の再配信を抑止した。処理途中で停止したupdateは`outcome_unknown`として再実行しない。private account actorは安定IDを保ち、group chatとforum topicはentry actor／返信先を分離する。4096 UTF-16単位の返信分割を接続し、途中失敗は配送結果不明とする。添付は未読取案内と種類metadataをGatewayへ渡すが、添付本文はまだInbound consumerへ接続されていない。channel-base 14、Telegram 12、Gateway inbox 3 tests、対象package buildとGateway typecheck/buildはPASS。実Telegram API／資格／業務作用、workspace全suite、QE_QC／QE_QAは未実施。F10.02は引き続き`BUILD_GAP`で、次は添付内容consumerを接続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+
 2026-10-22の`QEB-50-F10.01-OWNER-WEBCHAT-TO-GOVERNED-JOB`では、owner-only WebChat task入口からlocal C fixture、HDS/J計画とL3関係審査、隔離領域のread-only実行、M receipt、WebChat返信までのserved経路を接続した。通常inbound tokenのplan reviewはtool processへ昇格しない。WebChat 108 tests、Gateway served 4 tests、projection 5 tests、workspace typecheck/buildはPASS。実provider・実資格・実業務作用、browser UI操作はなし。該当経路を`WIRED`とし、製品全体の結合形状とQE_QC／QE_QAは未成立／未開始。次はF10.02のrestart後重複防止、複数入口の権限再評価、添付・分割返信を実consumerへ接続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-21の`QEB-30-E05.02-LEARNING-IMPROVEMENT-EXTERNAL-CHANGE-SEPARATION`では、C候補の記録・後続projectionへの接続と、妥当性・改善・汎化を別状態で保持した。C結果はrequest-bound受領として記録し、内部導出帰属は未確立、外部改修寄与は未評価、教師入力はC projectionから除外する。次回C候補が同じprojectionへ結び付いたことと参照lineage digestをHDS監査へ残す。focused tests 100/100、workspace typecheck/buildはPASS。全workspace suite、QE_QC／QE_QAは未実施。次はE05.03「版候補の開発系への移譲」。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。

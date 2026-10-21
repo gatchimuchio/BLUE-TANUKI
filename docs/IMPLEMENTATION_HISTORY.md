@@ -2827,3 +2827,23 @@ served Gatewayの一仕事をlocal loopback C fixtureで確認した。owner tas
 F10.01の今回接続したowner WebChat served pathを`WIRED`とする。これはF10.01全要求の品質保証ではない。D08.01全体と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。F10.02はrestart後のpersistent dedupe、複数入口の権限再評価、attachment／分割返信が残り`BUILD_GAP`。C08.03実provider保留、D4-Pocket／ミニドラ変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。code commit=`635cb237874207272586c6a10da04784984c8683`。次のBUILD_BATCHは`F10.02-TELEGRAM-REPLY-DUPLICATE-MULTI-ENTRY`。
 
 ---
+
+### 履歴ログ：QEB-51-F10.02-TELEGRAM-DURABLE-ENTRY-REPLY
+
+開始`main`／`origin/main`=`e726a2c2e76d2d12e2b6b9baf2dc89be0063c537`。owner指定rev2.3三点正本、適用`AGENTS.md`、現行active指示、F10.02のTelegram adapter・Gateway inbound consumerを再同期した。旧版・完了履歴は依存確認に必要なQEB-49／50だけを参照し、保護対象untracked Linux `target/`を維持した。
+
+Gateway private SQLite cursorをTelegram update admissionへ注入した。credential本文は保存せず、bot token scope hash・update ID・payload digest・delivery stateだけを保持する。成功settlement後の再送はGateway handlerへ再投入しない。処理中に停止したupdateは起動時に`outcome_unknown`として保持し、再実行せず次offsetへ進む。RouterはTelegram handler例外をinboxへ伝え、consoleにはdetailを出さない。private chatでは既存account actor、group chat／forum topicではentry単位のactorと返信先を用い、別chat/topicが同一ownerとして扱われない形にした。
+
+長文返信を4096 UTF-16単位で分割し、Unicode文字・空白・改行を保つ。分割中に失敗した送信は`delivery_status=unknown`とし、状態確認前の再送を促さない。添付は種類のみを渡し、file ID／filenameを保持しない。既存Inbound contractに添付bytes consumerがないため、未読取案内をGatewayへ渡すところまでとし、添付本文の実消費は`BUILD_GAP`に残した。実Telegram API／資格／外部業務作用は使用していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| channel-base `router_dispatcher.test.ts` | PASS、14 tests。Telegram handler error propagation／redaction。 |
+| channel-telegram `telegram.test.ts` | PASS、12 tests。stable actor、duplicate admission、group/topic entry、attachment notice、long text chunks、topic reply、partial-send unknown、silent log redaction。 |
+| Gateway `telegram_update_store.test.ts` | PASS、3 tests。SQLite persistence、token scoping、payload non-retention、restart dedupe。 |
+| channel-base／channel-telegram／Gateway build、Gateway typecheck | PASS。 |
+| Workspace全suite、実Telegram API／資格／業務作用、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+F10.02のdurable admission・entry-scoped identity・返信分割経路を部分的に`WIRED`とするが、添付本文consumer未接続のためF10.02全体=`BUILD_GAP`、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、D4-Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。実装commit=`58371e3`。次は`F10.02-TELEGRAM-ATTACHMENT-CONTENT-CONSUMER`。
+
+---
