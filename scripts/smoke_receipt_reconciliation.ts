@@ -1,22 +1,26 @@
 /** 開発専用。実providerを使わず、build済みGatewayの結果不明照合をloopbackだけで通す。 */
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { spawn, type ChildProcess } from "node:child_process";
+import { fork, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { strict as assert } from "node:assert";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { HDSUpperController, evaluateApproval, operationPlanDigest } from "../packages/hds-brain/dist/index.js";
-import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, executorCommandDigest, ToolRegistry } from "../packages/blue-tanuki/dist/index.js";
+import { createGmailWriteTool, Executor, createExecutorApprovalAuthority, executorCommandDigest, LLMComputeAdapter,
+  LLMRegistry, ToolRegistry, type AgentWorkerLifecycleEvent, type ComputeBudgetPort } from "../packages/blue-tanuki/dist/index.js";
 import { createGatewayInternalInboundRequest, type ExecuteCommand, type InboundRequest, type OperationPlan } from "../packages/protocol/dist/index.js";
 import { GatewayExecutionIntentStore } from "../apps/gateway/src/execution_intent_store.js";
+import { GatewayRuntimeOwnerLease } from "../apps/gateway/src/runtime_owner_lease.js";
 import { OperationPlanStateStore } from "../apps/gateway/src/operation_plan_store.js";
 import { finalizeCommandOutput } from "../apps/gateway/src/finalize_command_output.js";
 import { executionAdmissionForCommand } from "../apps/gateway/src/reconcile_execution_results.js";
 
 const FIXTURE_TOKEN = "receipt-smoke-local-fixture-only";
+const GATEWAY_WORKER_PATH = fileURLToPath(new URL("./fixtures/gateway_serve_worker.mjs", import.meta.url));
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
 
 interface AcceptedMutation {
@@ -117,10 +121,14 @@ function approvedFixture(command: ExecuteCommand, authority: FixtureAuthority,
   }, executorCommandDigest(command), hdsBinding, targetVersion);
 }
 
-async function seedOutcomeUnknown(stateRoot: string, inspectionEndpoint: string): Promise<void> {
-  const planStore = new OperationPlanStateStore(join(stateRoot, "private-state", "operation-plans", "j-state.sqlite"));
-  const executionStore = new GatewayExecutionIntentStore(join(stateRoot, "private-state", "execution-intents", "executor.sqlite"));
+async function seedOutcomeUnknown(stateRoot: string, inspectionEndpoint: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const ownerLease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+  let planStore: OperationPlanStateStore | undefined;
+  let executionStore: GatewayExecutionIntentStore | undefined;
   try {
+    planStore = new OperationPlanStateStore(join(stateRoot, "private-state", "operation-plans", "j-state.sqlite"));
+    executionStore = new GatewayExecutionIntentStore(
+      join(stateRoot, "private-state", "execution-intents", "executor.sqlite"), ownerLease.executionEpoch);
     const hds = new HDSUpperController({ operation_plan_state: planStore });
     const tools = new ToolRegistry();
     const gmailTool = createGmailWriteTool({ env: { GMAIL_ACCESS_TOKEN: FIXTURE_TOKEN }, request: async (target) => {
@@ -132,11 +140,25 @@ async function seedOutcomeUnknown(stateRoot: string, inspectionEndpoint: string)
         body: await response.text(), truncated: false, request_id: response.headers.get("x-request-id") };
     } });
     tools.register(gmailTool);
-    const authority = createExecutorApprovalAuthority({ execution_store: executionStore, require_hds_execution_binding: true });
+    const authority = createExecutorApprovalAuthority({ execution_store: executionStore,
+      execution_epoch: ownerLease.executionEpoch, require_hds_execution_binding: true });
     const source = internalRequest("plan:compute send one synthetic message and retain its uncertain outcome");
     const plan = candidate(source.id);
-    const executor = new Executor({ approval_authority: authority, tools,
-      llm: { name: "fixture-candidate-only", call: async () => ({ content: JSON.stringify(plan), model: "fixture", tokens_used: 0 }) } });
+    const candidateBackend = { name: "fixture-candidate-only", call: async () => ({
+      content: JSON.stringify(plan), model: "fixture", tokens_used: 0,
+    }) };
+    const candidateRegistry = new LLMRegistry({ defaultName: candidateBackend.name }).register(candidateBackend, [], {
+      capabilities: ["llm_compute_candidate"], max_cost_per_attempt: { amount: 0, currency: "USD" },
+    });
+    const computeBudget: ComputeBudgetPort = {
+      reserve: (input) => ({ reservation_id: `fixture:${input.request_id}`, reserved_tokens: input.reserved_tokens,
+        reserved_compute_ms: input.reserved_compute_ms, reserved_cost: { ...input.reserved_cost } }),
+      settle: () => {},
+    };
+    const candidateLifecycleEvents: AgentWorkerLifecycleEvent[] = [];
+    const executor = new Executor({ approval_authority: authority, tools, llm: candidateRegistry,
+      compute: new LLMComputeAdapter(candidateRegistry, computeBudget),
+      on_agent_worker_lifecycle: (event) => { candidateLifecycleEvents.push(event); return true; } });
 
     const compute = hds.decide(source).command;
     if (!compute || compute.type !== "llm_call") throw new Error("fixture_plan_candidate_not_requested");
@@ -175,8 +197,9 @@ async function seedOutcomeUnknown(stateRoot: string, inspectionEndpoint: string)
       throw new Error("fixture_hds_did_not_retain_outcome_unknown");
     }
   } finally {
-    executionStore.close();
-    planStore.close();
+    executionStore?.close();
+    planStore?.close();
+    ownerLease.close();
   }
 }
 
@@ -221,10 +244,24 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
   const received: string[] = [];
 
   async function stopChild(): Promise<void> {
-    if (child && child.exitCode === null && child.signalCode === null) {
-      const closed = once(child, "close"); child.kill(); await closed;
+    if (!child || child.exitCode !== null || child.signalCode !== null) { child = undefined; return; }
+    const activeChild = child;
+    const closed = once(activeChild, "close") as Promise<[number | null, NodeJS.Signals | null]>;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => { timeoutHandle = setTimeout(() => resolve(null), 10_000); });
+    if (activeChild.connected) activeChild.send({ type: "shutdown" }, (error) => { if (error) activeChild.kill(); });
+    else activeChild.kill();
+    const result = await Promise.race([closed, timeout]);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (result === null) {
+      activeChild.kill();
+      await closed;
+      child = undefined;
+      throw new Error("gateway_fixture_graceful_shutdown_timed_out");
     }
+    const [code, signal] = result;
     child = undefined;
+    if (code !== 0) throw new Error(`gateway_fixture_shutdown_failed:${code ?? signal ?? "unknown"}`);
   }
   async function waitFor(check: () => Promise<boolean>, label: string): Promise<void> {
     const deadline = Date.now() + 20_000;
@@ -251,12 +288,12 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
 
   try {
     await mkdir(join(root, "workspace"), { recursive: true });
-    await seedOutcomeUnknown(stateRoot, inspectionEndpoint);
+    await seedOutcomeUnknown(stateRoot, inspectionEndpoint, env);
     assert.equal(inspection.status().effects, 1, "the seed should create exactly one synthetic local effect");
     assert.equal(inspection.status().read_queries, 0);
 
-    child = spawn(process.execPath, ["apps/gateway/dist/main.js", "--serve"],
-      { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    child = fork(GATEWAY_WORKER_PATH, [],
+      { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true });
     for (const stream of [child.stdout, child.stderr]) stream?.on("data", (data) => {
       diagnostics = (diagnostics + String(data)).slice(-12000);
     });
@@ -312,9 +349,11 @@ async function runScenario(name: "matched" | "endpoint-unset"): Promise<void> {
     throw new Error(`${name} Gateway receipt reconciliation smoke failed: ${String(error)}\n${safeDiagnostics}`);
   } finally {
     socket?.terminate();
-    await stopChild();
-    await new Promise<void>((resolve, reject) => inspection.server.close((error) => error ? reject(error) : resolve()));
-    await rm(root, { recursive: true, force: true });
+    try { await stopChild(); }
+    finally {
+      await new Promise<void>((resolve, reject) => inspection.server.close((error) => error ? reject(error) : resolve()));
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   }
 }
 
