@@ -4,7 +4,22 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
 
-### 最新BUILD_BATCH：`QEB-04-E02.03-C-RESOURCE-NO-PROGRESS-J-REOPEN-CONSUMER`
+### 最新BUILD_BATCH：`QEB-05-E03.01-CLI-STARTUP-RECOVERY-BARRIER`
+
+開始HEAD／`main`／`origin/main`=`2dd943a01d896053b81732da65426d8932128f0c`。現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) に固定したrev2.3。E03.01の単一writer・execution epoch・起動整合と、Gateway CLI／serveの実owner lease・execution storeだけを照合した。Windows localでBLUE-TANUKIのみ変更し、保護対象untracked Linux `target/`は保持してGitへ含めない。
+
+常駐serveには既にowner lease確認後の起動時結果/M照合がある一方、一回実行CLIは新世代を取得した後、その回復consumerを通らず新しい依頼へ進んでいた。CLIにも同じ`reconcileStartupExecutionState`を接続し、active lease確認・HDS状態初期化後、tool登録・scheduler/provider準備・依頼処理の前に未決結果とMを照合する。照合が未成立なら集計値だけを記録して`gateway_startup_reconciliation_unresolved`でfail-closedする。owner lease／execution epoch／Executor作用直前のfencingは既存の実経路を再利用し、実provider・資格情報・外部作用は使用していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| CLI startup gate／`startup_execution_reconciliation.test.ts` | PASS、2 files／6 tests。未解決状態ではtool登録と依頼処理へ進まず、既存起動consumerの復旧判定5件もPASS。 |
+| workspace `pnpm typecheck`／`pnpm build`、変更後Gateway typecheck/build | PASS。root buildは15 workspace projects。 |
+| `document_organization_entry.test.ts` | 4件中1件PASS、3件FAIL。CLIの合成LLM要求がlocal endpointへ到達せず（`upstreamCallCount=0`）、依存する再開ケースも停止した。C08.01は回復ゲートを一時除外し元の初期化順へ戻した比較でも同じ失敗を再現し、本変更の回帰とは確認されていない。 |
+| 全workspace suite、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後に配置。 |
+
+E03.01の既存owner single-writer／epoch fencingに、一回実行CLIの起動回復barrierを接続した範囲を`WIRED`とする。未決の`issued`／`invocation_attempted`作用とM pendingの回復はE03.02の`BUILD_GAP`として残す。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。実装commit=`ce8ca5f1fcb133fa43848719c67c8f6b4406461a`は`main`へpush済み。文書closeoutを別push後にcurrent／previous backup refsを照合する。保護対象Linux `target/`はcommit対象外。
+
+### 履歴ログ：`QEB-04-E02.03-C-RESOURCE-NO-PROGRESS-J-REOPEN-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`10d2b1cb0a2e312282640cca0b69ddd42a507bf0`。現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) に固定したrev2.3。E02.03の該当要求と、C計算→Executor feedback→HDS wait台帳→owner projection→既存`plan:review`のconsumerだけを再確認し、Windows localでBLUE-TANUKIのみ変更した。保護対象untracked Linux `target/`は保持しGitへ含めない。
 
@@ -19,9 +34,7 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 | `git diff --check`／`pnpm docs:check` | 両方PASS。日本語基底の既存移行負債76件は継続管理。 |
 | 全workspace suite、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。QE_BUILDの全体形状成立後に配置。 |
 
-E02.03の「資源消費が進捗へつながらない場合にJへ戻す」を、このwait→receipt→J re-review consumer範囲で`WIRED`とする。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider試験、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留する。次はrev2.3工程表順のE02.04を対象に、必要節と現物consumerを同期してQE_BUILDを続ける。
-
-実装commit=`9a62f8fbb663177fe5d0f5c307ec31613555ecca`とcloseout文書commitを`main`へatomic push済み。closeout push後のremote HEAD／backup currentをlocal recovery branch・remote tag双方で照合し、previousにはこのBUILD_BATCHの実装commitを保持した。保護対象Linux `target/`はcommit対象外。
+E02.03の「資源消費が進捗へつながらない場合にJへ戻す」を、このwait→receipt→J re-review consumer範囲で`WIRED`とする。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider試験、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留する。実装commit=`9a62f8fbb663177fe5d0f5c307ec31613555ecca`とcloseout文書commitを`main`へatomic push済み。closeout push後のremote HEAD／backup currentをlocal recovery branch・remote tag双方で照合し、previousにはこのBUILD_BATCHの実装commitを保持した。保護対象Linux `target/`はcommit対象外。
 
 ### 履歴ログ：`QEB-04-E02.02-RESOURCE-BACKPRESSURE-STOP-RESERVE-CONSUMER`
 
