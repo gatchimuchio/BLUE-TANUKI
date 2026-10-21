@@ -48,6 +48,24 @@ describe("Recovery observationからHDS計画保留を導出", () => {
         integrity: "verified", dependency_status: "observed" })) });
   });
 
+  it("plan-scoped mergeは要求planだけを復元済みにし、兄弟planを未変更として示す", () => {
+    const evidence = operationPlanRecoveryEvidenceFromObservation({
+      observation: observation({ restore_scope_mode: "plan_scoped_merge_v1", status: "changed" }),
+      checkpoint,
+      history_complete: true,
+    });
+    expect(evidence).toMatchObject({
+      scope: "restored_operation_plans",
+      provenance: { restore_scope_mode: "plan_scoped_merge_v1", restore_store_key: "operation_plans" },
+      plans: [
+        { plan_id_digest: operationPlanDigest(planIds[0]), restore_scope_relation: "requested", restore_membership: "restored" },
+        { plan_id_digest: operationPlanDigest(planIds[1]), restore_scope_relation: "collateral", restore_membership: "not_restored" },
+      ],
+      used_for_authority: false,
+      may_execute: false,
+    });
+  });
+
   it("残差と未観測をdigest単位に保ち、未対応planはunknownに閉じる", () => {
     const current = observation({
       plan_residuals: [

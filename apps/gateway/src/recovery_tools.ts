@@ -186,6 +186,7 @@ function operatorSafeRecoveryResult(result: RecoveryActionResult): Record<string
     ...(result.restored_store_state_digest ? { restored_store_state_digest: result.restored_store_state_digest } : {}),
     ...(result.restore_scope_kind ? { restore_scope_kind: result.restore_scope_kind } : {}),
     ...(result.restore_scope_digest ? { restore_scope_digest: result.restore_scope_digest } : {}),
+    ...(result.restore_scope_mode ? { restore_scope_mode: result.restore_scope_mode } : {}),
     ...(result.canonical_state_cross_store_atomic !== undefined
       ? { canonical_state_cross_store_atomic: result.canonical_state_cross_store_atomic }
       : {}),

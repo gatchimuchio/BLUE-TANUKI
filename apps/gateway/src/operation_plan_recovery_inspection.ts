@@ -141,6 +141,60 @@ function verifyOperationPlanRecoverySchema(database: DatabaseType): boolean {
   return true;
 }
 
+/** Read a verified checkpoint from a fixed canonical store or recovery archive without mutating it. */
+export function readOperationPlanRecoveryCheckpointSnapshot(options: {
+  readonly private_state_root: string;
+  readonly database_path: string;
+}): OperationPlanCheckpoint {
+  const databasePath = safeOperationPlanRecoveryPath(options.private_state_root, options.database_path);
+  if (!databasePath || ["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${databasePath}${suffix}`))) {
+    throw new Error("operation_plan_checkpoint_unavailable");
+  }
+  let database: DatabaseType | undefined;
+  let transactionStarted = false;
+  try {
+    database = new DatabaseSync(databasePath, {
+      readOnly: true,
+      enableForeignKeyConstraints: true,
+      allowExtension: false,
+    });
+    database.enableLoadExtension(false);
+    database.exec("PRAGMA busy_timeout = 0; PRAGMA query_only = ON; BEGIN");
+    transactionStarted = true;
+    const mode = database.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined;
+    if (typeof mode?.journal_mode !== "string" || mode.journal_mode.toLowerCase() !== "delete" ||
+        !verifyOperationPlanRecoverySchema(database)) {
+      throw new Error("operation_plan_checkpoint_unverified");
+    }
+    const rows = database.prepare("SELECT id,checkpoint_json,digest FROM operation_plan_state ORDER BY id")
+      .all() as { id: number; checkpoint_json: string; digest: string }[];
+    const row = rows[0];
+    if (rows.length !== 1 || !row || row.id !== 1 || typeof row.checkpoint_json !== "string" ||
+        typeof row.digest !== "string") {
+      throw new Error("operation_plan_checkpoint_unverified");
+    }
+    let raw: unknown;
+    try { raw = JSON.parse(row.checkpoint_json); }
+    catch { throw new Error("operation_plan_checkpoint_unverified"); }
+    if (operationPlanDigest(raw) !== row.digest) throw new Error("operation_plan_checkpoint_unverified");
+    const parsed = OperationPlanCheckpointSchema.safeParse(raw);
+    if (!parsed.success) throw new Error("operation_plan_checkpoint_unverified");
+    database.exec("COMMIT");
+    transactionStarted = false;
+    if (["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${databasePath}${suffix}`))) {
+      throw new Error("operation_plan_checkpoint_unavailable");
+    }
+    return parsed.data;
+  } catch {
+    if (transactionStarted) {
+      try { database?.exec("ROLLBACK"); } catch { /* Keep the fixed recovery error. */ }
+    }
+    throw new Error("operation_plan_checkpoint_unverified");
+  } finally {
+    try { database?.close(); } catch { /* Read-only inspection has no open transaction after close. */ }
+  }
+}
+
 function stepDefinitionDigest(step: OperationPlanCheckpoint["plans"][number]["revisions"][number]["plan"]["steps"][number]): string {
   const { state: _state, result_digest: _result, ...definition } = step;
   return operationPlanDigest(definition);

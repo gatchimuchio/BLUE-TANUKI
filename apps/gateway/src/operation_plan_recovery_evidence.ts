@@ -56,6 +56,7 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
   if (!observation.restore_scope_plan_digest || !/^[a-f0-9]{64}$/.test(observation.restore_scope_plan_digest)) {
     return unverifiedHistoryEvidence(checkpointDigest, observation);
   }
+  const selectivelyRestored = observation.restore_scope_mode === "plan_scoped_merge_v1";
 
   const evidencePlans = plans.map((planState) => {
     const planIdDigest = operationPlanDigest(planState.revisions[0]!.plan.plan_id);
@@ -64,7 +65,8 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
     const currentPlan = currentMatches.length === 1 ? currentMatches[0] : undefined;
     const backupPlan = backupMatches.length === 1 ? backupMatches[0] : undefined;
     const restoreMembership: OperationPlanRecoveryEvidence["plans"][number]["restore_membership"] =
-      observation.status === "changed" && currentPlan && backupPlan?.backup_plan_record_status === "not_found"
+      selectivelyRestored && planIdDigest !== observation.restore_scope_plan_digest ? "not_restored"
+        : observation.status === "changed" && currentPlan && backupPlan?.backup_plan_record_status === "not_found"
         ? "not_restored"
         : ["matched", "changed"].includes(observation.status) && currentPlan &&
           backupPlan?.backup_plan_record_status === "matched" ? "restored" : "unknown";
@@ -109,6 +111,7 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
       restore_store_key: observation.store_key,
       restore_backup_id_digest: observation.restore_backup_id_digest,
       restore_scope_plan_digest: observation.restore_scope_plan_digest,
+      ...(selectivelyRestored ? { restore_scope_mode: "plan_scoped_merge_v1" as const } : {}),
       restored_state_digest: observation.restored_state_digest,
     },
     plans: evidencePlans,

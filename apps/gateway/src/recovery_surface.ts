@@ -15,7 +15,12 @@ import {
   type CanonicalStateSnapshotManifest,
   type CanonicalStateStoreKey,
 } from "./canonical_state_backup.js";
-import { inspectOperationPlanRecoveryLedger, type OperationPlanRecoveryInspection } from "./operation_plan_recovery_inspection.js";
+import {
+  inspectOperationPlanRecoveryLedger,
+  readOperationPlanRecoveryCheckpointSnapshot,
+  type OperationPlanRecoveryInspection,
+} from "./operation_plan_recovery_inspection.js";
+import { OperationPlanStateStore } from "./operation_plan_store.js";
 import {
   inspectCanonicalStateStoreLedger,
   inspectGatewayRecoveryCanonicalArchive,
@@ -114,8 +119,9 @@ export interface RecoveryPostActionObservation {
   store_ledger_residual_count: number | null;
   plan_residuals: readonly RecoverySelectedPlanResidualObservation[] | null;
   restore_backup_id_digest: string | null;
-  /** Digest of the operation plan requested by L3; restore still applies to the full selected SQLite store. */
+  /** Digest of the operation plan requested by L3. */
   restore_scope_plan_digest: string | null;
+  readonly restore_scope_mode?: "plan_scoped_merge_v1";
   plan_restore_points: readonly RecoveryPlanRestorePointObservation[] | null;
   configuration_state:
     | "provider_stub"
@@ -171,6 +177,7 @@ export interface RecoveryStoreRestoreHistoryEvidence {
   readonly restored_store_state_digest: string;
   readonly restored_backup_id_digest?: string;
   readonly restore_scope_plan_digest?: string;
+  readonly restore_scope_mode?: "plan_scoped_merge_v1";
 }
 
 export interface RecoveryActionResult {
@@ -186,6 +193,7 @@ export interface RecoveryActionResult {
   restored_store_state_digest?: string;
   restore_scope_kind?: "operation_plan";
   restore_scope_digest?: string;
+  restore_scope_mode?: "plan_scoped_merge_v1";
   canonical_state_cross_store_atomic?: false;
   restored_items_count?: number;
   removed_paths_count?: number;
@@ -1701,9 +1709,11 @@ export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoverySto
   if (!archiveDigest || !stateDigest || !backupIdDigest) return undefined;
   const scopeKind = value.restore_scope_kind;
   const scopeDigest = recoveryObservationDigest(value.restore_scope_digest);
+  const scopeMode = value.restore_scope_mode;
   if (storeKey === "operation_plans") {
-    if (scopeKind !== "operation_plan" || !scopeDigest) return undefined;
-  } else if (scopeKind !== undefined || value.restore_scope_digest !== undefined) {
+    if (scopeKind !== "operation_plan" || !scopeDigest ||
+        (scopeMode !== undefined && scopeMode !== "plan_scoped_merge_v1")) return undefined;
+  } else if (scopeKind !== undefined || value.restore_scope_digest !== undefined || scopeMode !== undefined) {
     return undefined;
   }
   return {
@@ -1712,6 +1722,7 @@ export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoverySto
     restored_store_state_digest: stateDigest,
     restored_backup_id_digest: backupIdDigest,
     ...(storeKey === "operation_plans" ? { restore_scope_plan_digest: scopeDigest! } : {}),
+    ...(scopeMode === "plan_scoped_merge_v1" ? { restore_scope_mode: scopeMode } : {}),
   };
 }
 
@@ -1744,16 +1755,20 @@ function recoveryStoreRestoreEvidenceFromHistory(value: unknown): RecoveryStoreR
   const backupIdDigest = recoveryObservationDigest(value.restored_backup_id_digest);
   const hasScopeDigest = value.restore_scope_plan_digest !== undefined;
   const scopeDigest = recoveryObservationDigest(value.restore_scope_plan_digest);
+  const hasScopeMode = value.restore_scope_mode !== undefined;
+  const scopeMode = value.restore_scope_mode;
   if (typeof storeKey !== "string" || !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === storeKey) ||
       !stateDigest || (value.restored_backup_id_digest !== undefined && !backupIdDigest) ||
       (hasScopeDigest && !scopeDigest) ||
-      (storeKey !== "operation_plans" && hasScopeDigest)) return null;
+      (storeKey !== "operation_plans" && (hasScopeDigest || hasScopeMode)) ||
+      (hasScopeMode && (scopeMode !== "plan_scoped_merge_v1" || !scopeDigest))) return null;
   return {
     schema_version: 1,
     store_key: storeKey as CanonicalStateStoreKey,
     restored_store_state_digest: stateDigest,
     ...(backupIdDigest ? { restored_backup_id_digest: backupIdDigest } : {}),
     ...(scopeDigest ? { restore_scope_plan_digest: scopeDigest } : {}),
+    ...(scopeMode === "plan_scoped_merge_v1" ? { restore_scope_mode: scopeMode } : {}),
   };
 }
 
@@ -1987,6 +2002,9 @@ export async function buildRecoveryPostActionObservation(
     plan_residuals: null,
     restore_backup_id_digest: null,
     restore_scope_plan_digest: latest.restoreEvidence?.restore_scope_plan_digest ?? null,
+    ...(latest.restoreEvidence?.restore_scope_mode === "plan_scoped_merge_v1"
+      ? { restore_scope_mode: latest.restoreEvidence.restore_scope_mode }
+      : {}),
     plan_restore_points: null,
     configuration_state: "not_observed",
     evidence_source: "COMPLETE_HISTORY",
@@ -2128,6 +2146,9 @@ export async function buildRecoveryPostActionObservation(
       plan_residuals: restoreEvidence.store_key === "operation_plans" ? storeLedger.plan_residuals : null,
       restore_backup_id_digest: restoreEvidence.restored_backup_id_digest ?? null,
       restore_scope_plan_digest: restoreEvidence.restore_scope_plan_digest ?? null,
+      ...(restoreEvidence.restore_scope_mode === "plan_scoped_merge_v1"
+        ? { restore_scope_mode: restoreEvidence.restore_scope_mode }
+        : {}),
       plan_restore_points: planRestorePoints,
       evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
     };
@@ -2320,9 +2341,30 @@ export async function restoreRecoveryBackup(
     const preRestorePackDir = path.dirname(preRestore.manifest_path);
     await inspectCanonicalStateSnapshots(preRestorePackDir, preSnapshot);
     const preEntry = preSnapshot.entries.find((entry) => entry.store_key === options.store_key);
-    const acceptableBefore = targetExists
-      ? preEntry?.status === "verified" || preEntry?.status === "captured_unverified"
-      : preEntry?.status === "not_present";
+    let preRestorePlanCheckpoint: ReturnType<typeof readOperationPlanRecoveryCheckpointSnapshot> | null = null;
+    if (options.store_key === "operation_plans" && targetExists) {
+      if (preEntry?.status !== "verified" || !preEntry.archive_rel_path || !preEntry.sha256) {
+        throw new Error("pre_restore_store_unverified");
+      }
+      const preArchivePath = path.resolve(preRestorePackDir, preEntry.archive_rel_path);
+      const preArchiveBefore = await sha256Path(preArchivePath, "file").catch(() => null);
+      if (!preArchiveBefore || preArchiveBefore.bytes !== preEntry.bytes || preArchiveBefore.sha256 !== preEntry.sha256) {
+        throw new Error("pre_restore_store_unverified");
+      }
+      preRestorePlanCheckpoint = readOperationPlanRecoveryCheckpointSnapshot({
+        private_state_root: preRestorePackDir,
+        database_path: preArchivePath,
+      });
+      const preArchiveAfter = await sha256Path(preArchivePath, "file").catch(() => null);
+      if (!preArchiveAfter || preArchiveAfter.bytes !== preEntry.bytes || preArchiveAfter.sha256 !== preEntry.sha256) {
+        throw new Error("pre_restore_store_unverified");
+      }
+    }
+    const acceptableBefore = options.store_key === "operation_plans"
+      ? targetExists ? preEntry?.status === "verified" : preEntry?.status === "not_present"
+      : targetExists
+        ? preEntry?.status === "verified" || preEntry?.status === "captured_unverified"
+        : preEntry?.status === "not_present";
     if (!acceptableBefore) throw new Error("pre_restore_store_unverified");
     if (targetExists) {
       if (!preEntry?.archive_rel_path || !preEntry.sha256) throw new Error("pre_restore_store_unverified");
@@ -2355,6 +2397,58 @@ export async function restoreRecoveryBackup(
         throw new Error("canonical_state_restore_target_unverified");
       }
       restored = { bytes: selected.bytes, sha256: selected.sha256, restoredStateSha256: target.sha256 };
+    } else if (options.store_key === "operation_plans") {
+      const archivePath = path.resolve(packDir, selected.archive_rel_path);
+      const archiveBefore = await sha256Path(archivePath, "file").catch(() => null);
+      if (!archiveBefore || archiveBefore.bytes !== selected.bytes || archiveBefore.sha256 !== selected.sha256) {
+        throw new Error("canonical_state_restore_archive_changed");
+      }
+      const archivedCheckpoint = readOperationPlanRecoveryCheckpointSnapshot({
+        private_state_root: packDir,
+        database_path: archivePath,
+      });
+      const archiveAfterRead = await sha256Path(archivePath, "file").catch(() => null);
+      if (!archiveAfterRead || archiveAfterRead.bytes !== selected.bytes || archiveAfterRead.sha256 !== selected.sha256) {
+        throw new Error("canonical_state_restore_archive_changed");
+      }
+      const targetExistsNow = await fs.lstat(targetPath).then((stat) => {
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("canonical_state_restore_target_unavailable");
+        return true;
+      }).catch((error: unknown) => {
+        const code = error instanceof Error && "code" in error ? String(error.code) : "";
+        if (code === "ENOENT") return false;
+        throw error;
+      });
+      if (targetExistsNow !== targetExists) throw new Error("canonical_state_restore_target_changed");
+      if (targetExists) {
+        const latestTargetDigest = await sha256Path(targetPath, "file").catch(() => null);
+        if (!preEntry?.sha256 || !latestTargetDigest || latestTargetDigest.bytes !== preEntry.bytes ||
+            latestTargetDigest.sha256 !== preEntry.sha256) {
+          throw new Error("canonical_state_restore_target_changed");
+        }
+      }
+      const operationPlanStore = new OperationPlanStateStore(targetPath);
+      try {
+        operationPlanStore.restorePlanScope(
+          archivedCheckpoint,
+          planScopeInspection!.scope_digest!,
+          preRestorePlanCheckpoint,
+        );
+      } finally {
+        operationPlanStore.close();
+      }
+      const archiveAfterWrite = await sha256Path(archivePath, "file").catch(() => null);
+      if (!archiveAfterWrite || archiveAfterWrite.bytes !== selected.bytes || archiveAfterWrite.sha256 !== selected.sha256) {
+        throw new Error("canonical_state_restore_archive_changed");
+      }
+      const target = await inspectCanonicalStateStoreTarget(
+        env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+        options.store_key,
+      );
+      if (target.status !== "verified" || target.sha256 === null || target.bytes === null) {
+        throw new Error("canonical_state_restore_target_unverified");
+      }
+      restored = { bytes: selected.bytes, sha256: selected.sha256, restoredStateSha256: target.sha256 };
     } else {
       restored = await restoreCanonicalStateSnapshotStore(
         env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
@@ -2371,6 +2465,7 @@ export async function restoreRecoveryBackup(
       ...(planScopeInspection ? {
         restore_scope_kind: "operation_plan" as const,
         restore_scope_digest: planScopeInspection.scope_digest!,
+        restore_scope_mode: "plan_scoped_merge_v1" as const,
       } : {}),
       canonical_state_cross_store_atomic: false,
       pre_action_backup_id: preRestore.backup_id,

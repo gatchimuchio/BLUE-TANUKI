@@ -1,28 +1,23 @@
 # BLUE-TANUKI 現行QE_BUILD指示
 
-ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し、`SYSTEM_SHAPED`／`BUILD_COVERED`成立後に実物のQE_QC、改善・再検査、対象別QE_QAへ進む。構築中は前進に必要な型・接続・build確認と、安全欠陥を止める確認に限る。小単位ごとに全体品質を追跡・最適化しない。
+ownerの2026-10-21再確認：QE_BUILDで全体の一気通貫接続を進め、`SYSTEM_SHAPED`／`BUILD_COVERED`の後に実物QE_QC、改善・再検査、対象別QE_QAを行う。現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) が固定するrev2.3三点。各バッチで関係節、適用AGENTS、HEAD・差分、今回の要求と対象consumerだけを確認する。完了履歴は [`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md) に保持し、依存・系譜・矛盾の確認時だけ読む。
 
-現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
+### 最新BUILD_BATCH：`QEB-12-E03.03-OPERATION-PLAN-SCOPED-RECOVERY`
 
-### 最新BUILD_BATCH：`QEB-11-E03.03-CANONICAL-STORE-INVENTORY-RECOVERY-BARRIER`
+開始HEAD／`main`／`origin/main`=`30e8171294a93d211afd83664b0d6fa930c825e1`。tracked worktreeはclean。`packages/blue-tanuki/native/linux-isolation/target/`は保護対象の既存untrackedであり、変更・stage・削除しない。local recovery branch／tag二世代を確認済みで、backup ref移行状態=`MIGRATION_COMPLETE`。E03.03／QEB-12対象consumerは`BUILD_GAP`。
 
-開始HEAD／`main`／`origin/main`=`9f22aa49a08a82e603f303dd83f402ebbcbe3a77`。owner指定rev2.3の三点pinとE03.03「回復可能な仕事と破損依存仕事を分け、確認済み復元点と残差を示す」、適用AGENTSのQE_BUILD・安全・Git条項、現行capture／Recovery consumerを関係範囲で確認した。tracked worktreeはcleanで、Linux `target/`は保護対象untracked。
+対象単位はE03.03「破損範囲の隔離復旧」。RecoveryのL3承認済み `operation_plan` scope digestを、archiveから同じplanのcheckpointへ結び付け、単一SQLite CASで当該planとそのplan_id_digestに束縛されたwaitだけを復元する。非対象plan、非対象wait、現在のunbound shell observation、他planのrecovery holdを保持し、復元後HDS refreshも要求planだけを変更・再評価する。
 
-対象はcanonical SQLite snapshot作成中のsource inventory変化を見落とさないこと。既存DBのcommitだけでなく、開始時に不在だったstoreの出現も捕捉終了時に再照合し、変化を検出した場合は全storeのarchiveを破棄して共同captureを未確認へ閉じる。変化がなければ既存の個別snapshot結果を保持する。Recovery inspection／restore preflightが既存statusから未確認を消費する。
+新しい成功結果は固定enum `restore_scope_mode=plan_scoped_merge_v1`で履歴に記録し、旧履歴の全store置換と区別する。旧または範囲不明の履歴は従来どおり全対象をfail-closedに扱う。schema／digest／target相関／CAS／容量のいずれかが確認できなければ選択storeを書き換えず停止する。選択planの依存残差・復元pointは既存のdigest-only evidenceでHDS holdへ接続し、復元を自動再開・承認・実行の根拠にしない。
 
-境界：`cross_store_atomic=false`を維持し、atomicity、job-level restore point、復旧可能性、権限、復元・再開許可を生成しない。復元操作、HDS判断、Approval、J/M/Brokerのruntime状態、外部作用、秘密、別repoは変更しない。対象は`apps/gateway/src/canonical_state_backup.ts`とそのRecovery surface focused test。E03.03のjob-level依存隔離、独立restore point、guarded selective recoveryは引き続き`BUILD_GAP`。
+境界：HDS-J、Approval Gate、L3、監査、M非権限、Broker、fail-closedを維持。J/M/Broker/cronの他store、provider、credential、実外部作用、D4Pocket・ミニドラ別repo、公開・出荷判断は変更しない。`cross_store_atomic=false`を維持し、job全体のatomicityや自動resumeを主張しない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
 
-source inventoryをcapture終了時に再照合し、canonical storeの出現／消失または再照合失敗時は全archiveを破棄して全storeを`snapshot_failed`へ閉じる。stableなsource inventoryと既存DB状態を保持できた場合だけ既存の個別snapshot statusを残す。Recovery inspection／restore preflightは既存statusを通じて未確認を消費する。これで新規storeの未観測による古い部分snapshotの有効化を止めるが、共同atomicity・job-level復旧点は主張しない。
+主な対象はGateway Recovery restore、Operation Plan SQLite store、Recovery post-action evidence、HDS recovery refreshと、それらの直接consumer test。受入は合成DBで、requested planだけarchive値へ戻り、兄弟plan/wait/unbound観測/holdが不変であること、古い全store履歴が新方式扱いされないこと、無効scope・破損archive・CAS競合・容量超過が書込み前に拒否されること。
 
-| QE_BUILDの必要最小確認 | 結果 |
-|---|---|
-| source store新規出現中のcapture | `recovery_surface.test.ts` 15/15 PASS。新規storeを再現しarchive全削除・5 store全件`snapshot_failed`を確認。 |
-| `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
-| `git diff --check`／`pnpm docs:check` | 両方PASS。日本語基底の移行負債76件は継続管理。 |
-| restore実操作、全workspace suite、実provider／credential／外部作用、5OS実機、QE_QC／QE_QA | 未実施。 |
+### QE_BUILDの必要最小確認
 
-このcanonical source inventory fail-closed consumerを`WIRED`とする。E03.03のjob-level依存隔離、独立restore point、guarded selective recoveryと製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`e5b3f18de7869d04a114bd4b453b8c9c3f71ec5b`、closeout commit=`002873ee0674aac195f60fcd6e1ba22c05e5c7ac`。確認済みremote main／current backup tagは`002873ee0674aac195f60fcd6e1ba22c05e5c7ac`、previous backup tagは`9f22aa49a08a82e603f303dd83f402ebbcbe3a77`。local recovery branch／tagとremote tagの二世代が一致し、backup ref移行状態=`MIGRATION_COMPLETE`を確認済み。
+対象focused tests、`pnpm typecheck`、`pnpm build`、`git diff --check`を実行する。既存のdocs・repo-health gateが影響する場合のみ追加する。全workspace suite、QE_QC／QE_QA、実provider・credential・外部作用、5OS実機は本バッチで実施しない。
 
 ### 履歴参照
 
-閉じたBUILD_BATCHの詳細は必要時のみ[IMPLEMENTATION_HISTORY.md](IMPLEMENTATION_HISTORY.md)から参照する。ここには最新BUILD_BATCHだけを置き、旧版・完了記録を現行指示として併読しない。
+閉じたBUILD_BATCHの詳細は必要時のみ[IMPLEMENTATION_HISTORY.md](IMPLEMENTATION_HISTORY.md)から参照する。

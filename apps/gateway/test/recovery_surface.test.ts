@@ -60,9 +60,9 @@ function readCanonicalDatabase(filepath: string): string[] {
   }
 }
 
-function recoveryPlanCheckpoint(): { checkpoint: OperationPlanCheckpoint; planScopeDigest: string } {
+function recoveryPlanCheckpoint(suffix = "one"): { checkpoint: OperationPlanCheckpoint; planScopeDigest: string } {
   const step: OperationPlan["steps"][number] = {
-    step_id: "recovery-scope-step",
+    step_id: `recovery-scope-step-${suffix}`,
     operation: "file.search",
     target: { kind: "directory", id: "fixture-workspace" },
     state: "planned",
@@ -83,7 +83,7 @@ function recoveryPlanCheckpoint(): { checkpoint: OperationPlanCheckpoint; planSc
       bindings: [],
       preconditions: [],
       validation: [{
-        check_id: "recovery-scope-check",
+        check_id: `recovery-scope-check-${suffix}`,
         method: "result_equals",
         target: { kind: "directory", id: "fixture-workspace" },
         expected: { count: 0 },
@@ -93,8 +93,8 @@ function recoveryPlanCheckpoint(): { checkpoint: OperationPlanCheckpoint; planSc
   };
   const plan: OperationPlan = {
     version: "operation-core.v1",
-    plan_id: "recovery-scope-plan",
-    request_id: "recovery-scope-request",
+    plan_id: `recovery-scope-plan-${suffix}`,
+    request_id: `recovery-scope-request-${suffix}`,
     state: "planned",
     steps: [step],
     rollback: { available: false },
@@ -104,12 +104,12 @@ function recoveryPlanCheckpoint(): { checkpoint: OperationPlanCheckpoint; planSc
   };
   const revisionDigest = operationPlanDigest(plan);
   const { state: _state, result_digest: _result, ...stepDefinition } = step;
-  const commandId = "recovery-scope-command";
+  const commandId = `recovery-scope-command-${suffix}`;
   const admission: ExecutionAdmission = {
     ticket_id: randomUUID(),
     command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", commandId])).digest("hex"),
-    command_digest: createHash("sha256").update("recovery-scope-command-digest").digest("hex"),
-    proof_digest: createHash("sha256").update("recovery-scope-proof").digest("hex"),
+    command_digest: createHash("sha256").update(`recovery-scope-command-digest-${suffix}`).digest("hex"),
+    proof_digest: createHash("sha256").update(`recovery-scope-proof-${suffix}`).digest("hex"),
     execution_epoch: randomUUID(),
     issued_at_ms: 10_000,
     expires_at_ms: 20_000,
@@ -119,7 +119,7 @@ function recoveryPlanCheckpoint(): { checkpoint: OperationPlanCheckpoint; planSc
     plans: [{
       owner: "fixture-owner",
       channel: "webchat",
-      goal: "fixture recovery scope",
+      goal: `fixture recovery scope ${suffix}`,
       revisions: [{ digest: revisionDigest, plan }],
       receipt_observations: [],
       bindings: [{
@@ -129,8 +129,8 @@ function recoveryPlanCheckpoint(): { checkpoint: OperationPlanCheckpoint; planSc
         prepared_step: step,
         command_id: commandId,
         request_id: plan.request_id,
-        commit_hash: createHash("sha256").update("recovery-scope-commit").digest("hex"),
-        payload_digest: createHash("sha256").update("recovery-scope-payload").digest("hex"),
+        commit_hash: createHash("sha256").update(`recovery-scope-commit-${suffix}`).digest("hex"),
+        payload_digest: createHash("sha256").update(`recovery-scope-payload-${suffix}`).digest("hex"),
         command_digest: admission.command_digest,
         operation: step.operation,
         status: "intent_committed",
@@ -140,6 +140,47 @@ function recoveryPlanCheckpoint(): { checkpoint: OperationPlanCheckpoint; planSc
     }],
   });
   return { checkpoint, planScopeDigest: operationPlanDigest(plan.plan_id) };
+}
+
+function recoveryWait(planIdDigest: string, revisionDigest: string, suffix: string) {
+  const digest = (label: string) => createHash("sha256").update(`${suffix}-${label}`).digest("hex");
+  return {
+    wait_id: digest("wait"),
+    plan_id_digest: planIdDigest,
+    task_identity_digest: digest("task"),
+    revision_digest: revisionDigest,
+    owner_digest: digest("owner"),
+    channel_digest: digest("channel"),
+    session_id_digest: digest("session"),
+    deadline_at_ms: 20_000,
+    created_at_ms: 10_000,
+    state: "waiting" as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+}
+
+function recoveryUnboundShellObservation(suffix: string) {
+  const digest = (label: string) => createHash("sha256").update(`${suffix}-${label}`).digest("hex");
+  return {
+    schema_version: "operation-plan-shell-exec-result.v1" as const,
+    owner_digest: digest("owner"),
+    channel_digest: digest("channel"),
+    request_id_digest: digest("request"),
+    command_id_digest: digest("command"),
+    upstream_commit_hash_digest: digest("commit"),
+    command_payload_digest: digest("payload"),
+    result_id_digest: digest("result-id"),
+    result_contract_digest: digest("contract"),
+    result_digest: digest("result"),
+    execution_status: "succeeded" as const,
+    execution_boundary: "tool_adapter" as const,
+    action_outcome: "reported_success" as const,
+    plan_step_binding: "unbound" as const,
+    observed_at_ms: 10_000,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
 }
 
 describe("buildRecoverySnapshot", () => {
@@ -404,7 +445,20 @@ describe("buildRecoverySnapshot", () => {
       );
       const unrelatedBefore = await readFile(unrelatedPath);
       livePlanStore = new OperationPlanStateStore(selectedPath);
-      const { checkpoint, planScopeDigest } = recoveryPlanCheckpoint();
+      const requestedBackup = recoveryPlanCheckpoint("requested");
+      const siblingBackup = recoveryPlanCheckpoint("sibling");
+      const requestedRevisionDigest = requestedBackup.checkpoint.plans[0]!.revisions[0]!.digest;
+      const siblingRevisionDigest = siblingBackup.checkpoint.plans[0]!.revisions[0]!.digest;
+      const checkpoint = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [...requestedBackup.checkpoint.plans, ...siblingBackup.checkpoint.plans],
+        waits: [
+          recoveryWait(requestedBackup.planScopeDigest, requestedRevisionDigest, "backup-requested"),
+          recoveryWait(siblingBackup.planScopeDigest, siblingRevisionDigest, "backup-sibling"),
+        ],
+        shell_exec_result_observations: [recoveryUnboundShellObservation("backup")],
+      });
+      const planScopeDigest = requestedBackup.planScopeDigest;
       livePlanStore.compareAndSet(null, checkpoint);
       const env = {
         BLUE_TANUKI_ENV_FILE: envFile,
@@ -429,8 +483,19 @@ describe("buildRecoverySnapshot", () => {
       const restoreScopeInspection = await inspectRecoveryPlanRestoreScopeApplicability(env, backup.backup_id!, planScopeDigest);
       expect(restoreScopeInspection).toMatchObject({ status: "matched", reason: null });
       await writeFile(envFile, "LLM_BACKEND=changed\n", "utf8");
-      const emptyCheckpoint = OperationPlanCheckpointSchema.parse({ schema_version: "operation-plan-state.v1", plans: [] });
-      livePlanStore.compareAndSet(operationPlanDigest(checkpoint), emptyCheckpoint);
+      const currentCheckpoint = OperationPlanCheckpointSchema.parse({
+        ...checkpoint,
+        plans: checkpoint.plans.map((plan) => ({ ...plan,
+          goal: plan.revisions[0]!.plan.plan_id === "recovery-scope-plan-requested"
+            ? "current requested plan should be replaced"
+            : "current sibling plan should be preserved" })),
+        waits: [
+          recoveryWait(requestedBackup.planScopeDigest, requestedRevisionDigest, "current-requested"),
+          recoveryWait(siblingBackup.planScopeDigest, siblingRevisionDigest, "current-sibling"),
+        ],
+        shell_exec_result_observations: [recoveryUnboundShellObservation("current")],
+      });
+      livePlanStore.compareAndSet(operationPlanDigest(checkpoint), currentCheckpoint);
 
       const restored = await restoreRecoveryBackup(env, {
         backup_id: backup.backup_id,
@@ -440,7 +505,18 @@ describe("buildRecoverySnapshot", () => {
         confirm: "RESTORE",
       });
 
-      expect(livePlanStore.load()).toEqual(checkpoint);
+      const expectedCheckpoint = OperationPlanCheckpointSchema.parse({
+        ...currentCheckpoint,
+        plans: currentCheckpoint.plans.map((plan) => plan.revisions[0]!.plan.plan_id === "recovery-scope-plan-requested"
+          ? checkpoint.plans.find((backupPlan) => backupPlan.revisions[0]!.plan.plan_id === "recovery-scope-plan-requested")!
+          : plan),
+        waits: [
+          recoveryWait(requestedBackup.planScopeDigest, requestedRevisionDigest, "backup-requested"),
+          recoveryWait(siblingBackup.planScopeDigest, siblingRevisionDigest, "current-sibling"),
+        ],
+        shell_exec_result_observations: [recoveryUnboundShellObservation("current")],
+      });
+      expect(livePlanStore.load()).toEqual(expectedCheckpoint);
       expect(await readFile(unrelatedPath)).toEqual(unrelatedBefore);
       expect(await readFile(envFile, "utf8")).toBe("LLM_BACKEND=changed\n");
       expect(restored).toMatchObject({
@@ -449,6 +525,7 @@ describe("buildRecoverySnapshot", () => {
         restored_store_key: "operation_plans",
         restore_scope_kind: "operation_plan",
         restore_scope_digest: planScopeDigest,
+        restore_scope_mode: "plan_scoped_merge_v1",
         canonical_state_cross_store_atomic: false,
       });
       expect(restored.restored_store_archive_digest).toMatch(/^[a-f0-9]{64}$/);
@@ -466,6 +543,48 @@ describe("buildRecoverySnapshot", () => {
       expect(JSON.stringify(restored)).not.toContain(unrelatedPath);
     } finally {
       try { livePlanStore?.close(); } catch { /* test cleanup */ }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects selective recovery capacity overflow and stale pre-action state without mutation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-selective-restore-guards-"));
+    const store = new OperationPlanStateStore(path.join(root, "state.sqlite"));
+    try {
+      const requested = recoveryPlanCheckpoint("guard-requested");
+      const sibling = recoveryPlanCheckpoint("guard-sibling");
+      const requestedPlan = requested.checkpoint.plans[0]!;
+      const siblingPlan = sibling.checkpoint.plans[0]!;
+      const requestedRevision = requestedPlan.revisions[0]!.digest;
+      const siblingRevision = siblingPlan.revisions[0]!.digest;
+      const current = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [requestedPlan, siblingPlan],
+        waits: Array.from({ length: 100 }, (_, index) =>
+          recoveryWait(sibling.planScopeDigest, siblingRevision, `current-sibling-${index}`)),
+      });
+      const archived = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [requestedPlan],
+        waits: Array.from({ length: 200 }, (_, index) =>
+          recoveryWait(requested.planScopeDigest, requestedRevision, `archive-requested-${index}`)),
+      });
+      store.compareAndSet(null, current);
+
+      expect(() => store.restorePlanScope(archived, requested.planScopeDigest, current))
+        .toThrow("operation_plan_restore_scope_wait_capacity");
+      expect(store.load()).toEqual(current);
+
+      const changed = OperationPlanCheckpointSchema.parse({
+        ...current,
+        plans: current.plans.map((plan) => ({ ...plan, goal: "concurrent writer update" })),
+      });
+      store.compareAndSet(operationPlanDigest(current), changed);
+      expect(() => store.restorePlanScope(archived, requested.planScopeDigest, current))
+        .toThrow("operation_plan_restore_scope_target_changed");
+      expect(store.load()).toEqual(changed);
+    } finally {
+      store.close();
       await rm(root, { recursive: true, force: true });
     }
   });

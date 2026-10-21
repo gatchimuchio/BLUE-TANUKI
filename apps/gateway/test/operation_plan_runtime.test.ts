@@ -839,6 +839,81 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     }
   });
 
+  it("plan-scoped restore refresh preserves sibling plan state and existing holds", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-selective-restore-holds-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const target = plan("selective-restore-target", root);
+    const sibling = plan("selective-restore-sibling", root);
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [target, sibling].map((candidate) => ({ owner: "fixture-owner", channel: "webchat", goal: "selective restore fixture",
+        request_goal_criteria: noRequestCriteria("selective restore fixture", candidate.request_id),
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] })),
+    });
+    const targetDigest = operationPlanDigest(target.plan_id);
+    const siblingDigest = operationPlanDigest(sibling.plan_id);
+    const holdProvenance = {
+      source: "recovery_restore" as const,
+      command_id_digest: recoveryCommandIdDigest("prior-scoped-restore"),
+      operation_digest: "a".repeat(64),
+      result_digest: "b".repeat(64),
+      restore_scope_plan_digest: targetDigest,
+      restore_backup_id_digest: "c".repeat(64),
+      restored_state_digest: "d".repeat(64),
+      checkpoint_digest: operationPlanDigest(checkpoint),
+    };
+    store.compareAndSet(null, checkpoint);
+    store.compareAndSetRecoveryHoldState(null, {
+      schema_version: "operation-plan-recovery-holds.v1",
+      holds: [
+        { plan_id_digest: targetDigest, reason: "held_unverified", restore_scope_relation: "requested", provenance: holdProvenance },
+        { plan_id_digest: siblingDigest, reason: "held_residual", restore_scope_relation: "collateral", provenance: holdProvenance },
+      ],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    try {
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      const restoreCommand = operationPlanRestoreCommand();
+      expect(hds.beginOperationPlanRecoveryRefresh(restoreCommand)).toBe(true);
+      hds.refreshOperationPlansAfterRecoveryRestore(restoreCommand, {
+        schema_version: "operation-plan-recovery-evidence.v1",
+        scope: "restored_operation_plans",
+        checkpoint_digest: operationPlanDigest(checkpoint),
+        provenance: {
+          source: "recovery_restore",
+          command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+          operation_digest: "e".repeat(64),
+          result_digest: "f".repeat(64),
+          restore_store_key: "operation_plans",
+          restore_backup_id_digest: "1".repeat(64),
+          restore_scope_plan_digest: targetDigest,
+          restore_scope_mode: "plan_scoped_merge_v1",
+          restored_state_digest: "2".repeat(64),
+        },
+        plans: [
+          { plan_id_digest: targetDigest, restore_scope_relation: "requested", restore_membership: "restored",
+            integrity: "verified", dependency_status: "observed" },
+          { plan_id_digest: siblingDigest, restore_scope_relation: "collateral", restore_membership: "not_restored",
+            integrity: "unverified", dependency_status: "unknown" },
+        ],
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(store.load()).toEqual(checkpoint);
+      expect(store.loadRecoveryHoldState()).toMatchObject({
+        holds: [{ plan_id_digest: siblingDigest, reason: "held_residual", restore_scope_relation: "collateral" }],
+      });
+      expect(hds.getRuntimeSnapshot().operation_plans.plans).toMatchObject([
+        { plan_id: targetDigest },
+        { plan_id: siblingDigest, recovery_hold_reason: "held_residual", recovery_hold_scope_relation: "collateral" },
+      ]);
+    } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects restore evidence from another command without replacing durable plan holds", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-live-restore-command-mismatch-"));
     const store = new OperationPlanStateStore(join(root, "state.sqlite"));

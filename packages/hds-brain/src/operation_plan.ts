@@ -140,6 +140,7 @@ export interface OperationPlanRecoveryEvidenceProvenance {
   readonly restore_store_key?: "j_control" | "m_state" | "broker" | "operation_plans" | "cron_events" | null;
   readonly restore_backup_id_digest: string | null;
   readonly restore_scope_plan_digest: string | null;
+  readonly restore_scope_mode?: "plan_scoped_merge_v1";
   readonly restored_state_digest: string | null;
 }
 
@@ -199,13 +200,14 @@ function recoveryEvidenceProvenance(value: unknown): OperationPlanRecoveryEviden
     (typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest));
   if (!raw || typeof raw !== "object" || Array.isArray(raw) ||
       Object.keys(raw).some((key) => !["source", "command_id_digest", "operation_digest", "result_digest",
-        "restore_store_key", "restore_backup_id_digest", "restore_scope_plan_digest", "restored_state_digest"].includes(key)) ||
+        "restore_store_key", "restore_backup_id_digest", "restore_scope_plan_digest", "restore_scope_mode", "restored_state_digest"].includes(key)) ||
       !["recovery_restore", "unverified_history"].includes(String(raw.source)) ||
       !digestOrNull(raw.command_id_digest) || !digestOrNull(raw.operation_digest) ||
       !digestOrNull(raw.result_digest) || !digestOrNull(raw.restore_backup_id_digest) ||
       (raw.restore_store_key !== undefined && raw.restore_store_key !== null &&
         !["j_control", "m_state", "broker", "operation_plans", "cron_events"].includes(String(raw.restore_store_key))) ||
       (raw.restore_scope_plan_digest !== undefined && !digestOrNull(raw.restore_scope_plan_digest)) ||
+      (raw.restore_scope_mode !== undefined && raw.restore_scope_mode !== "plan_scoped_merge_v1") ||
       !digestOrNull(raw.restored_state_digest)) throw new Error("plan_recovery_evidence_invalid");
   return {
     source: raw.source as OperationPlanRecoveryEvidenceProvenance["source"],
@@ -216,6 +218,7 @@ function recoveryEvidenceProvenance(value: unknown): OperationPlanRecoveryEviden
       ? null : raw.restore_store_key as NonNullable<OperationPlanRecoveryEvidenceProvenance["restore_store_key"]>,
     restore_backup_id_digest: raw.restore_backup_id_digest,
     restore_scope_plan_digest: raw.restore_scope_plan_digest ?? null,
+    ...(raw.restore_scope_mode === "plan_scoped_merge_v1" ? { restore_scope_mode: raw.restore_scope_mode } : {}),
     restored_state_digest: raw.restored_state_digest,
   };
 }
@@ -255,10 +258,11 @@ function parseOperationPlanRecoveryHoldState(value: unknown): OperationPlanRecov
       restore_store_key: provenance.restore_store_key,
       restore_backup_id_digest: provenance.restore_backup_id_digest,
       restore_scope_plan_digest: provenance.restore_scope_plan_digest,
+      restore_scope_mode: provenance.restore_scope_mode,
       restored_state_digest: provenance.restored_state_digest,
     });
     if (Object.keys(provenance).some((key) => !["source", "command_id_digest", "operation_digest", "result_digest",
-      "restore_store_key", "restore_backup_id_digest", "restore_scope_plan_digest", "restored_state_digest", "checkpoint_digest"].includes(key)) ||
+      "restore_store_key", "restore_backup_id_digest", "restore_scope_plan_digest", "restore_scope_mode", "restored_state_digest", "checkpoint_digest"].includes(key)) ||
         typeof provenance.checkpoint_digest !== "string" || !/^[a-f0-9]{64}$/.test(provenance.checkpoint_digest)) {
       throw new Error("plan_recovery_hold_state_invalid");
     }
@@ -314,6 +318,15 @@ function parseOperationPlanRecoveryEvidence(value: OperationPlanRecoveryEvidence
       dependency_status: plan.dependency_status as OperationPlanRecoveryEvidence["plans"][number]["dependency_status"] };
   });
   if (raw.scope === "unverified_history" && plans.length !== 0) throw new Error("plan_recovery_evidence_invalid");
+  if (provenance?.restore_scope_mode === "plan_scoped_merge_v1") {
+    const scopeDigest = provenance.restore_scope_plan_digest;
+    const requested = plans.filter((plan) => plan.plan_id_digest === scopeDigest);
+    if (raw.scope !== "restored_operation_plans" || provenance.restore_store_key !== "operation_plans" ||
+        !scopeDigest || requested.length !== 1 ||
+        plans.some((plan) => plan.plan_id_digest !== scopeDigest && plan.restore_membership !== "not_restored")) {
+      throw new Error("plan_recovery_evidence_invalid");
+    }
+  }
   return { schema_version: "operation-plan-recovery-evidence.v1", scope: raw.scope as OperationPlanRecoveryEvidence["scope"],
     checkpoint_digest: raw.checkpoint_digest,
     ...(provenance === undefined ? {} : { provenance }),
@@ -1080,15 +1093,22 @@ export class OperationPlanLedger {
     this.savedDigest = restoredCheckpointDigest;
     this.reflections.clear();
     this.receiptReconciliations.clear();
+    const scopedRestorePlanDigest = checkedEvidence?.provenance?.restore_scope_mode === "plan_scoped_merge_v1"
+      ? checkedEvidence.provenance.restore_scope_plan_digest
+      : null;
     // Restore changes only plan history. Any selection or started attempt from
     // the restored checkpoint must be revoked or represented as uncertain.
     this.change((state) => {
-      for (const plan of state.plans) for (const binding of plan.bindings) {
-        if (binding.status === "selected") binding.status = "invalidated";
-        if (binding.status === "intent_committed") binding.status = "outcome_unknown";
+      for (const plan of state.plans) {
+        if (scopedRestorePlanDigest && operationPlanDigest(plan.revisions[0]!.plan.plan_id) !== scopedRestorePlanDigest) continue;
+        for (const binding of plan.bindings) {
+          if (binding.status === "selected") binding.status = "invalidated";
+          if (binding.status === "intent_committed") binding.status = "outcome_unknown";
+        }
       }
     });
-    this.recoveryHolds.clear();
+    if (scopedRestorePlanDigest) this.recoveryHolds.delete(scopedRestorePlanDigest);
+    else this.recoveryHolds.clear();
     if (checkedEvidence) {
       this.applyRecoveryEvidence(checkedEvidence, checkedEvidence.checkpoint_digest === restoredCheckpointDigest);
     } else {
@@ -1120,6 +1140,10 @@ export class OperationPlanLedger {
   private applyRecoveryEvidence(evidence: OperationPlanRecoveryEvidence, checkpointMatches: boolean): void {
     const provenance = this.provenanceForEvidence(evidence);
     if (!checkpointMatches || evidence.scope === "unverified_history") {
+      if (provenance.restore_scope_mode === "plan_scoped_merge_v1" && provenance.restore_scope_plan_digest) {
+        this.addRecoveryHold(provenance.restore_scope_plan_digest, "held_unverified", provenance, "requested");
+        return;
+      }
       for (const plan of this.state.plans) this.addRecoveryHold(
         operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified", provenance, "unknown");
       return;
@@ -1249,8 +1273,11 @@ export class OperationPlanLedger {
   private persistRecoveryHoldState(): void {
     if (!this.port) return;
     const rawCurrent = this.port.loadRecoveryHoldState();
-    const current = rawCurrent === null || rawCurrent === undefined
-      ? null : parseOperationPlanRecoveryHoldState(rawCurrent);
+    if (rawCurrent !== null && rawCurrent !== undefined) parseOperationPlanRecoveryHoldState(rawCurrent);
+    // CAS must compare against the exact persisted bytes' canonical JSON value.
+    // Parsing may add defaults to legacy hold records, so hashing the parsed
+    // projection would spuriously look like a concurrent writer.
+    const currentDigest = rawCurrent === null || rawCurrent === undefined ? null : operationPlanDigest(rawCurrent);
     const state: OperationPlanRecoveryHoldState = {
       schema_version: "operation-plan-recovery-holds.v1",
       holds: [...this.recoveryHolds.entries()].map(([plan_id_digest, hold]) => ({
@@ -1259,7 +1286,7 @@ export class OperationPlanLedger {
       used_for_authority: false,
       may_execute: false,
     };
-    this.port.compareAndSetRecoveryHoldState(current ? operationPlanDigest(current) : null, state);
+    this.port.compareAndSetRecoveryHoldState(currentDigest, state);
   }
 
   retainCandidate(value: unknown, origin: InboundRequest, rawPurposeRelationCandidate?: unknown,

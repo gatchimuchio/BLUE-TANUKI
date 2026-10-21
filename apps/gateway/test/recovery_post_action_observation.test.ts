@@ -71,6 +71,7 @@ function selectedStoreRestoreHistory(
   commandId = "recovery-command-1",
   firstIndex = 4,
   scopePlanDigest: string | null = operationPlanDigest("private-clean-plan"),
+  scopeMode?: "plan_scoped_merge_v1",
 ): RecoveryHistoryEvidenceEntry[] {
   const entries = historyFor("recovery.restore", "success", digest("b"), digest("b"), commandId, firstIndex);
   const execution = entries[0]!;
@@ -86,6 +87,7 @@ function selectedStoreRestoreHistory(
           restored_store_state_digest: stateDigest,
           restored_backup_id_digest: backupIdDigest,
           ...(scopePlanDigest ? { restore_scope_plan_digest: scopePlanDigest } : {}),
+          ...(scopeMode ? { restore_scope_mode: scopeMode } : {}),
         },
       },
     },
@@ -178,6 +180,7 @@ describe("buildRecoveryPostActionObservation", () => {
       restored_store_state_digest: digest("b"),
       restore_scope_kind: "operation_plan",
       restore_scope_digest: operationPlanDigest("private-correlated-plan"),
+      restore_scope_mode: "plan_scoped_merge_v1",
       backup_manifest_path: "private/path/manifest.json",
     });
 
@@ -187,6 +190,7 @@ describe("buildRecoveryPostActionObservation", () => {
       restored_store_state_digest: digest("b"),
       restored_backup_id_digest: createHash("sha256").update("private-backup-id").digest("hex"),
       restore_scope_plan_digest: operationPlanDigest("private-correlated-plan"),
+      restore_scope_mode: "plan_scoped_merge_v1",
     });
     expect(JSON.stringify(evidence)).not.toContain("private-backup-id");
     expect(JSON.stringify(evidence)).not.toContain("private/path");
@@ -206,6 +210,13 @@ describe("buildRecoveryPostActionObservation", () => {
       action: "restore", status: "completed", used_for_authority: false,
       canonical_state_cross_store_atomic: false, restored_store_key: "operation_plans",
       restored_store_archive_digest: digest("a"), restored_store_state_digest: digest("b"),
+    })).toBeUndefined();
+    expect(recoveryStoreRestoreHistoryEvidence({
+      action: "restore", status: "completed", used_for_authority: false,
+      canonical_state_cross_store_atomic: false, restored_store_key: "operation_plans",
+      restored_store_archive_digest: digest("a"), restored_store_state_digest: digest("b"),
+      restored_backup_id: "private-backup-id", restore_scope_kind: "operation_plan",
+      restore_scope_digest: operationPlanDigest("private-correlated-plan"), restore_scope_mode: "unknown",
     })).toBeUndefined();
   });
 
@@ -541,7 +552,8 @@ describe("buildRecoveryPostActionObservation", () => {
       await writeFile(path.join(stateRoot, "private-state", "execution-intents"), "unselected sibling store", "utf8");
       const restoredStateDigest = await sha256File(storePath);
       const history = {
-        entries: selectedStoreRestoreHistory(restoredStateDigest),
+        entries: selectedStoreRestoreHistory(restoredStateDigest, digest("e"), "recovery-command-1", 4,
+          operationPlanDigest("private-clean-plan"), "plan_scoped_merge_v1"),
         chain_valid: true,
         skipped_count: 0,
         not_before_timestamp_ms: Date.now() + 10_000,
@@ -560,6 +572,7 @@ describe("buildRecoveryPostActionObservation", () => {
         operation: "restore",
         store_key: "operation_plans",
         restore_scope_plan_digest: operationPlanDigest("private-clean-plan"),
+        restore_scope_mode: "plan_scoped_merge_v1",
         evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
         store_ledger_status: "residuals_present",
         store_ledger_residual_count: 1,
