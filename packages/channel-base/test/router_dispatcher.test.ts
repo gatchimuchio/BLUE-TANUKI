@@ -123,10 +123,15 @@ describe("InboundRouter", () => {
 
   it("propagates failures only for explicitly configured channels and hides details from scheduler errors", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const router = new InboundRouter({ propagateHandlerErrorsForChannels: ["cron"] });
+    const router = new InboundRouter({
+      propagateHandlerErrorsForChannels: ["cron", "telegram"],
+      redactHandlerErrorsForChannels: ["telegram"],
+    });
     const cron = new FakeInbound("cron");
+    const telegram = new FakeInbound("telegram");
     const webchat = new FakeInbound("webchat");
     router.register(cron);
+    router.register(telegram);
     router.register(webchat);
     await router.start(async () => {
       throw new Error("private synthetic failure detail");
@@ -135,7 +140,10 @@ describe("InboundRouter", () => {
     try {
       await expect(webchat.push(inbound("webchat", "safe"))).resolves.toBeUndefined();
       await expect(cron.push(inbound("cron", "safe"))).rejects.toThrow("inbound_handler_failed");
-      expect(errorSpy).toHaveBeenCalledTimes(2);
+      await expect(telegram.push(inbound("telegram", "safe"))).rejects.toThrow("inbound_handler_failed");
+      expect(errorSpy).toHaveBeenCalledTimes(3);
+      expect(errorSpy.mock.calls[2]?.join(" ")).not.toContain("private synthetic failure detail");
+      expect(errorSpy.mock.calls[2]?.join(" ")).toContain("details redacted");
     } finally {
       await router.stop();
       errorSpy.mockRestore();

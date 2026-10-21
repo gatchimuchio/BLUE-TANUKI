@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { ChannelSendPayload, InboundRequest } from "@blue-tanuki/protocol";
 import type { InboundChannel, InboundHandler, OutboundChannel, SendContext, SendMeta, SendResult } from "@blue-tanuki/channel-base";
 
@@ -16,6 +16,19 @@ export interface TelegramOptions {
   /** Per-request HTTP timeout. Defaults to long-poll timeout + 5s for polling and 15s for sends. */
   request_timeout_ms?: number;
   log?: (line: string) => void;
+  /** Durable Gateway-owned dedupe cursor. Required when a live bot token is configured. */
+  inbox?: TelegramUpdateInbox;
+}
+
+export interface TelegramUpdateInbox {
+  latestUpdateId(): number | null;
+  claim(updateId: number, payloadDigest: string):
+    | { readonly status: "accepted" }
+    | { readonly status: "duplicate"; readonly delivery_state: "dispatching" | "handler_returned" | "outcome_unknown" }
+    | { readonly status: "stale" }
+    | { readonly status: "blocked_unresolved"; readonly delivery_state: "dispatching" | "handler_returned" | "outcome_unknown" }
+    | { readonly status: "identity_conflict" };
+  settle(updateId: number, payloadDigest: string, state: "handler_returned" | "outcome_unknown"): void;
 }
 
 interface TelegramUpdate {
@@ -26,7 +39,17 @@ interface TelegramUpdate {
 
 interface TelegramMessage {
   message_id: number;
+  message_thread_id?: number;
   text?: string;
+  caption?: string;
+  photo?: Array<{ file_id: string; file_unique_id?: string; file_size?: number }>;
+  document?: { file_id: string; file_unique_id?: string; file_name?: string; file_size?: number };
+  audio?: { file_id: string; file_unique_id?: string; file_name?: string; file_size?: number };
+  voice?: { file_id: string; file_unique_id?: string; file_size?: number };
+  video?: { file_id: string; file_unique_id?: string; file_name?: string; file_size?: number };
+  video_note?: { file_id: string; file_unique_id?: string; file_size?: number };
+  animation?: { file_id: string; file_unique_id?: string; file_name?: string; file_size?: number };
+  sticker?: { file_id: string; file_unique_id?: string; file_size?: number; is_animated?: boolean; is_video?: boolean };
   chat: { id: number | string; type?: string; title?: string; username?: string };
   from?: { id: number | string; username?: string; first_name?: string; last_name?: string; is_bot?: boolean };
 }
@@ -63,13 +86,18 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
 
   async start(handler: InboundHandler): Promise<void> {
     if (this.started) return;
-    this.started = true;
-    this.stopped = false;
     if (!this.opts.bot_token) {
+      this.started = true;
+      this.stopped = false;
       this.silent = true;
       this.log("[telegram] WARN TELEGRAM_BOT_TOKEN unset — running in silent mode");
       return;
     }
+    if (!this.opts.inbox) throw new Error("telegram_durable_inbox_required_for_live_polling");
+    this.started = true;
+    this.stopped = false;
+    const latestUpdateId = this.opts.inbox.latestUpdateId();
+    this.offset = latestUpdateId === null ? 0 : latestUpdateId + 1;
     this.loop = this.pollLoop(handler);
     this.log("[telegram] polling started");
   }
@@ -92,31 +120,62 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     if (this.silent || !this.opts.bot_token) {
       const external_id = `telegram-silent-${meta.command_id}-${this.counter}`;
       this.history.push({ payload, meta, at, external_id, ok: false, error: "silent_mode" });
-      this.log(`[telegram:silent] would-send target=${payload.target} commit=${meta.upstream_commit_hash.slice(0, 8)}… content="${truncate(payload.content, 80)}"`);
+      this.log(`[telegram:silent] would-send commit=${meta.upstream_commit_hash.slice(0, 8)}… content_chars=${payload.content.length}`);
       return { delivered: false, error: "silent_mode" };
     }
-
-    const body = {
-      chat_id: payload.target,
-      text: payload.content,
-      disable_web_page_preview: true,
-    };
-    try {
-      const r = await this.call("sendMessage", body, context?.signal);
-      if (!r.ok) {
-        const err = r.description ?? "telegram_send_failed";
-        this.history.push({ payload, meta, at, external_id: `telegram-failed-${meta.command_id}-${this.counter}`, ok: false, error: err });
-        return { delivered: false, error: err };
+    const target = parseTelegramTarget(payload.target);
+    if (!target) return { delivered: false, delivery_status: "not_delivered", error: "telegram_target_invalid",
+      error_kind: "non_recoverable", error_code: "invalid_target" };
+    if (payload.content.length === 0) return { delivered: false, delivery_status: "not_delivered",
+      error: "telegram_empty_message_rejected", error_kind: "non_recoverable", error_code: "empty_message" };
+    const chunks = splitTelegramText(payload.content);
+    const sentIds: string[] = [];
+    for (let index = 0; index < chunks.length; index += 1) {
+      if (context?.signal?.aborted) {
+        return sentIds.length === 0
+          ? { delivered: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
+              error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" }
+          : { delivered: false, delivery_status: "unknown", error: "telegram_partial_delivery_unknown",
+              error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
+              next_action: "Check the destination's delivered messages before deciding whether to resend." };
       }
-      const messageId = readTelegramMessageId(r.result) ?? `${this.counter}`;
-      const external_id = `telegram-${messageId}`;
-      this.history.push({ payload, meta, at, external_id, ok: true });
-      return { delivered: true, external_id };
-    } catch (e) {
-      const err = e instanceof Error ? e.message : String(e);
-      this.history.push({ payload, meta, at, external_id: `telegram-error-${meta.command_id}-${this.counter}`, ok: false, error: err });
-      return { delivered: false, error: err };
+      try {
+        const r = await this.call("sendMessage", {
+          chat_id: target.chat_id,
+          ...(target.message_thread_id !== undefined ? { message_thread_id: target.message_thread_id } : {}),
+          text: chunks[index],
+          disable_web_page_preview: true,
+        }, context?.signal);
+        if (!r.ok) {
+          const err = r.description ?? "telegram_send_failed";
+          const external_id = `telegram-failed-${meta.command_id}-${this.counter}-${index + 1}`;
+          this.history.push({ payload: { ...payload, content: chunks[index]! }, meta, at, external_id, ok: false, error: err });
+          if (context?.signal?.aborted || /^telegram_sendMessage_timeout_/u.test(err)) {
+            return { delivered: false, delivery_status: "unknown", error: "telegram_delivery_outcome_unknown",
+              error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
+              next_action: "Check the destination's delivered messages before deciding whether to resend." };
+          }
+          return sentIds.length === 0
+            ? { delivered: false, delivery_status: "not_delivered", error: err }
+            : { delivered: false, delivery_status: "unknown", error: "telegram_partial_delivery_unknown",
+                error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
+                next_action: "Check the destination's delivered messages before deciding whether to resend." };
+        }
+        const messageId = readTelegramMessageId(r.result) ?? `${this.counter}-${index + 1}`;
+        const external_id = `telegram-${messageId}`;
+        sentIds.push(external_id);
+        this.history.push({ payload: { ...payload, content: chunks[index]! }, meta, at, external_id, ok: true });
+      } catch (e) {
+        const err = e instanceof Error ? e.message : String(e);
+        this.history.push({ payload: { ...payload, content: chunks[index]! }, meta, at,
+          external_id: `telegram-error-${meta.command_id}-${this.counter}-${index + 1}`, ok: false, error: err });
+        return { delivered: false, delivery_status: "unknown",
+          error: sentIds.length === 0 ? "telegram_delivery_outcome_unknown" : "telegram_partial_delivery_unknown",
+          error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
+          next_action: "Check the destination's delivered messages before deciding whether to resend." };
+      }
     }
+    return { delivered: true, delivery_status: "delivered", external_id: sentIds.at(-1) };
   }
 
   getHistory(): readonly SentRecord[] { return [...this.history]; }
@@ -132,16 +191,35 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         });
         if (r.ok && Array.isArray(r.result)) {
           for (const update of r.result as TelegramUpdate[]) {
-            if (!Number.isSafeInteger(update.update_id) || update.update_id < 0) {
+            if (!Number.isSafeInteger(update.update_id) || update.update_id < 0 || update.update_id >= Number.MAX_SAFE_INTEGER) {
               throw new Error("telegram_update_id_invalid");
             }
-            // Telegram may repeat an update in a response or return one below
-            // the current offset. Do not pass either copy to Gateway again.
-            if (update.update_id < this.offset) continue;
-            this.offset = Math.max(this.offset, update.update_id + 1);
+            const payloadDigest = digestUpdate(update);
+            const claim = this.opts.inbox?.claim(update.update_id, payloadDigest);
+            if (claim && claim.status !== "accepted") {
+              this.log(`[telegram] update admission suppressed id=${update.update_id} status=${claim.status}`);
+              if (claim.status === "blocked_unresolved") {
+                await sleep(this.opts.poll_interval_ms ?? 1500);
+                break;
+              }
+              this.offset = Math.max(this.offset, update.update_id + 1);
+              continue;
+            }
+            if (!claim && update.update_id < this.offset) continue;
             const inbound = this.normalize(update);
-            if (!inbound) continue;
-            await handler(inbound);
+            if (!inbound) {
+              this.opts.inbox?.settle(update.update_id, payloadDigest, "handler_returned");
+              this.offset = Math.max(this.offset, update.update_id + 1);
+              continue;
+            }
+            try {
+              await handler(inbound);
+              this.opts.inbox?.settle(update.update_id, payloadDigest, "handler_returned");
+            } catch (error) {
+              this.opts.inbox?.settle(update.update_id, payloadDigest, "outcome_unknown");
+              this.log(`[telegram] inbound handler failed; outcome unknown id=${update.update_id}`);
+            }
+            this.offset = Math.max(this.offset, update.update_id + 1);
           }
         } else if (!r.ok) {
           this.log(`[telegram] getUpdates failed: ${r.description ?? "unknown"}`);
@@ -156,28 +234,50 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
 
   private normalize(update: TelegramUpdate): InboundRequest | null {
     const msg = update.message ?? update.edited_message;
-    if (!msg || !msg.text) return null;
+    if (!msg) return null;
     if (msg.from?.is_bot) return null;
-    const chatId = String(msg.chat.id);
+    const chatId = normalizeTelegramChatId(msg.chat?.id);
+    if (!chatId || !Number.isSafeInteger(msg.message_id) || msg.message_id < 0) {
+      this.log("[telegram] ignored inbound message with invalid chat or message identity");
+      return null;
+    }
+    const threadId = normalizeTelegramThreadId(msg.message_thread_id);
+    if (msg.message_thread_id !== undefined && threadId === null) {
+      this.log("[telegram] ignored inbound message with invalid topic identity");
+      return null;
+    }
     const fromId = normalizeTelegramUserId(msg.from?.id);
     if (!fromId) {
       this.log("[telegram] ignored inbound message without a stable sender id");
       return null;
     }
+    const attachmentKinds = telegramAttachmentKinds(msg);
+    const text = typeof msg.text === "string" ? msg.text : typeof msg.caption === "string" ? msg.caption : "";
+    if (!text && attachmentKinds.length === 0) return null;
     return {
-      id: randomUUID(),
+      id: `telegram-${update.update_id}`,
       channel: "telegram",
       // Usernames and display names are mutable and must not identify an actor.
       // Keep the chat separately for reply routing and session scoping.
-      user: `telegram:${fromId}`,
-      content: msg.text,
+      // Telegram private chats keep the stable account actor. Group chats get
+      // an entry-scoped actor so a plan from one group is not transferable to
+      // another chat merely because the same account posted the command.
+      user: msg.chat.type === "private" && threadId === null
+        ? `telegram:${fromId}`
+        : `telegram:${fromId}:chat:${chatId}${threadId === null ? "" : `:thread:${threadId}`}`,
+      content: text || "Telegramで添付ファイルを受信しましたが、この経路では添付内容を読み取れません。テキストで内容を送ってください。",
       timestamp: Date.now(),
       metadata: {
-        reply_to: chatId,
+        reply_to: threadId === null ? chatId : `${chatId}|${threadId}`,
         telegram_chat_id: chatId,
         telegram_user_id: fromId,
         telegram_message_id: msg.message_id,
         telegram_update_id: update.update_id,
+        ...(threadId !== null ? { telegram_message_thread_id: threadId } : {}),
+        ...(attachmentKinds.length > 0 ? {
+          telegram_attachment_kinds: attachmentKinds,
+          telegram_attachment_content_available: false,
+        } : {}),
       },
     };
   }
@@ -239,12 +339,82 @@ function readTelegramMessageId(value: unknown): string | null {
   return typeof id === "number" || typeof id === "string" ? String(id) : null;
 }
 
+function digestUpdate(update: TelegramUpdate): string {
+  return createHash("sha256").update(JSON.stringify(update)).digest("hex");
+}
+
+function telegramAttachmentKinds(message: TelegramMessage): string[] {
+  const kinds: string[] = [];
+  if (message.photo?.length) kinds.push("photo");
+  if (message.document) kinds.push("document");
+  if (message.audio) kinds.push("audio");
+  if (message.voice) kinds.push("voice");
+  if (message.video) kinds.push("video");
+  if (message.video_note) kinds.push("video_note");
+  if (message.animation) kinds.push("animation");
+  if (message.sticker) kinds.push(message.sticker.is_animated ? "animated_sticker" : message.sticker.is_video ? "video_sticker" : "sticker");
+  return kinds;
+}
+
+/** Splits by Unicode code point while preserving every character and preference for line boundaries. */
+export function splitTelegramText(text: string, maxUtf16Units = 4096): string[] {
+  if (!Number.isSafeInteger(maxUtf16Units) || maxUtf16Units < 1) throw new Error("telegram_message_limit_invalid");
+  if (text.length <= maxUtf16Units) return [text];
+  const points = Array.from(text);
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < points.length) {
+    let end = start;
+    let units = 0;
+    while (end < points.length && units + points[end]!.length <= maxUtf16Units) {
+      units += points[end]!.length;
+      end += 1;
+    }
+    if (end < points.length) {
+      const minPreferred = Math.floor(maxUtf16Units * 0.6);
+      let preferred = end;
+      for (let index = end - 1, currentUnits = units; index > start && currentUnits >= minPreferred; index -= 1) {
+        const point = points[index]!;
+        if (/\s/u.test(point)) { preferred = index + 1; break; }
+        currentUnits -= point.length;
+      }
+      end = preferred;
+    }
+    if (end <= start) throw new Error("telegram_message_split_failed");
+    chunks.push(points.slice(start, end).join(""));
+    start = end;
+  }
+  return chunks;
+}
+
 function normalizeTelegramUserId(value: number | string | undefined): string | null {
   if (typeof value === "number") {
     return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
   }
   if (typeof value === "string" && /^[1-9][0-9]*$/.test(value)) return value;
   return null;
+}
+
+function normalizeTelegramChatId(value: number | string | undefined): string | null {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value !== 0 ? String(value) : null;
+  if (typeof value === "string" && /^-?[1-9][0-9]*$/u.test(value)) return value;
+  return null;
+}
+
+function normalizeTelegramThreadId(value: number | undefined): number | null {
+  return value === undefined ? null : Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function parseTelegramTarget(value: string): { chat_id: string; message_thread_id?: number } | null {
+  const match = /^(-?[1-9][0-9]*)(?:\|([1-9][0-9]*))?$/u.exec(value);
+  if (!match) return null;
+  const chat_id = normalizeTelegramChatId(match[1]);
+  if (!chat_id) return null;
+  if (match[2] === undefined) return { chat_id };
+  const message_thread_id = Number(match[2]);
+  return Number.isSafeInteger(message_thread_id) && message_thread_id > 0
+    ? { chat_id, message_thread_id }
+    : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -261,4 +431,3 @@ function isAbortError(error: unknown): boolean {
 }
 
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
-function truncate(s: string, n: number): string { return s.length <= n ? s : s.slice(0, Math.max(0, n - 1)) + "…"; }

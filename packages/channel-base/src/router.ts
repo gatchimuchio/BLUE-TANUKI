@@ -4,6 +4,8 @@ import type { InboundChannel, InboundHandler } from "./types.js";
 export interface InboundRouterOptions {
   /** Channels whose scheduler must observe handler failure to persist an unknown outcome. */
   readonly propagateHandlerErrorsForChannels?: readonly string[];
+  /** Channels whose handler error details may contain external provider or user data. */
+  readonly redactHandlerErrorsForChannels?: readonly string[];
 }
 
 /**
@@ -18,11 +20,13 @@ export interface InboundRouterOptions {
 export class InboundRouter {
   private readonly channels = new Map<string, InboundChannel>();
   private readonly propagateHandlerErrorsForChannels: ReadonlySet<string>;
+  private readonly redactHandlerErrorsForChannels: ReadonlySet<string>;
   private started = false;
   private handler: InboundHandler | null = null;
 
   constructor(options: InboundRouterOptions = {}) {
     this.propagateHandlerErrorsForChannels = new Set(options.propagateHandlerErrorsForChannels ?? []);
+    this.redactHandlerErrorsForChannels = new Set(options.redactHandlerErrorsForChannels ?? []);
   }
 
   register(channel: InboundChannel): void {
@@ -51,7 +55,9 @@ export class InboundRouter {
       try {
         await handler(req);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = this.redactHandlerErrorsForChannels.has(req.channel)
+          ? "details redacted"
+          : e instanceof Error ? e.message : String(e);
         // eslint-disable-next-line no-console
         console.error(`[inbound-router] handler threw on ${req.channel}/${req.id}: ${msg}`);
         if (this.propagateHandlerErrorsForChannels.has(req.channel)) {

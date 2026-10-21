@@ -1,1 +1,7 @@
-export { TelegramChannel, type TelegramOptions, type TelegramFetch } from "./telegram.js";
+export {
+  TelegramChannel,
+  splitTelegramText,
+  type TelegramOptions,
+  type TelegramFetch,
+  type TelegramUpdateInbox,
+} from "./telegram.js";

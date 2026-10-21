@@ -171,6 +171,7 @@ import { DocumentOrganizationCheckpointStore } from "./document_organization_che
 import { OperationPlanStateStore } from "./operation_plan_store.js";
 import { EmergencyStopControl } from "./emergency_stop_control.js";
 import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
+import { GatewayTelegramUpdateStore } from "./telegram_update_store.js";
 import { ActiveTaskExecutionRegistry } from "./active_task_execution_registry.js";
 import { OperationPlanWaitDeadlineScheduler } from "./operation_plan_wait_scheduler.js";
 import {
@@ -753,7 +754,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       activeTaskExecutions.abortAll();
     },
   });
-  const router = new InboundRouter({ propagateHandlerErrorsForChannels: ["cron"] });
+  const router = new InboundRouter({
+    propagateHandlerErrorsForChannels: ["cron", "telegram"],
+    redactHandlerErrorsForChannels: ["telegram"],
+  });
   const dispatcher = new OutboundDispatcher();
 
   const port = parseInt(process.env.WEBCHAT_PORT ?? "8787", 10);
@@ -4330,12 +4334,17 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     telegramPermissions,
     "read/register telegram channel",
   );
+  const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramUpdateStore = telegramBotToken
+    ? GatewayTelegramUpdateStore.fromEnvironment(process.env, telegramBotToken)
+    : null;
   const telegram = plugins.createChannel<InboundChannel & OutboundChannel>({
     package_name: "@blue-tanuki/channel-telegram",
     required_permissions: telegramPermissions,
     action: "register telegram channel",
     constructor_args: [{
-      bot_token: process.env.TELEGRAM_BOT_TOKEN,
+      bot_token: telegramBotToken,
+      ...(telegramUpdateStore ? { inbox: telegramUpdateStore } : {}),
       poll_interval_ms: parsePositiveInt(process.env.TELEGRAM_POLL_INTERVAL_MS),
       poll_timeout_sec: parsePositiveInt(process.env.TELEGRAM_POLL_TIMEOUT_SEC),
       log: (line: string) => telegramLog.info(line),
@@ -4780,6 +4789,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       clearInterval(failureMemoryVerificationTimer);
       activeTaskExecutions.abortAll();
       await router.stop();
+      telegramUpdateStore?.close();
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);
       cronEventStore.close();
