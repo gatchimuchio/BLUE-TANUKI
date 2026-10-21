@@ -3,11 +3,15 @@ import {
   type LLMCallFailureKind,
   type LLMToolCallCandidate,
   type TransientImageInput,
+  type TransientAudioInput,
 } from "@blue-tanuki/protocol";
 
 export const LLM_IMAGE_INPUT_CAPABILITY = "llm.image.input";
+export const LLM_AUDIO_TRANSCRIPTION_CAPABILITY = "llm.audio.transcription";
 export const MAX_LLM_IMAGE_INPUTS = 4;
 export const MAX_LLM_IMAGE_BYTES = 5 * 1024 * 1024;
+export const MAX_LLM_AUDIO_INPUTS = 1;
+export const MAX_LLM_AUDIO_BYTES = 20 * 1024 * 1024;
 
 /**
  * LLM backend abstraction.
@@ -33,6 +37,8 @@ export interface LLMRequest {
    * into session messages, audit payloads, or ordinary request metadata.
    */
   ephemeral_images?: readonly TransientImageInput[];
+  /** Volatile inbound audio, consumed only by an explicitly configured transcription model. */
+  ephemeral_audio?: readonly TransientAudioInput[];
   backend_hint?: string;
   max_tokens?: number;
   temperature?: number;
@@ -126,6 +132,39 @@ export function validateLLMImageInputs(images: readonly TransientImageInput[] | 
     if (!isJpeg && !isPng) throw new Error("llm_image_input_media_mismatch");
   }
   return images;
+}
+
+/** Reject malformed or oversized audio before it reaches a provider adapter. */
+export function validateLLMAudioInputs(audioInputs: readonly TransientAudioInput[] | undefined): readonly TransientAudioInput[] {
+  if (audioInputs === undefined || audioInputs.length === 0) return [];
+  if (!Array.isArray(audioInputs) || audioInputs.length > MAX_LLM_AUDIO_INPUTS) {
+    throw new Error("llm_audio_input_count_invalid");
+  }
+  const formats = new Set(["flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"]);
+  for (const audio of audioInputs) {
+    if (!audio || Object.getPrototypeOf(audio) !== Object.prototype ||
+        Object.keys(audio).sort().join(",") !== "data,format" ||
+        !formats.has(audio.format) || !(audio.data instanceof Uint8Array) ||
+        audio.data.byteLength === 0 || audio.data.byteLength > MAX_LLM_AUDIO_BYTES) {
+      throw new Error("llm_audio_input_invalid");
+    }
+    const bytes = audio.data;
+    const matches = audio.format === "flac"
+      ? bytes.length >= 4 && bytes[0] === 0x66 && bytes[1] === 0x4c && bytes[2] === 0x61 && bytes[3] === 0x43
+      : audio.format === "wav"
+        ? bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+          bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45
+        : audio.format === "ogg"
+          ? bytes.length >= 4 && bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53
+          : audio.format === "webm"
+            ? bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3
+            : audio.format === "mp4" || audio.format === "m4a"
+              ? bytes.length >= 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70
+              : bytes.length >= 3 && ((bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) ||
+                (bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0 && (bytes[1]! & 0x06) !== 0));
+    if (!matches) throw new Error("llm_audio_input_format_mismatch");
+  }
+  return audioInputs;
 }
 
 export type LLMErrorKind = LLMCallFailureKind;

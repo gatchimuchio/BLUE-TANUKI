@@ -2,12 +2,15 @@ import { Buffer } from "node:buffer";
 import {
   LLMProviderError,
   createLLMToolCallCandidate,
+  LLM_AUDIO_TRANSCRIPTION_CAPABILITY,
   LLM_IMAGE_INPUT_CAPABILITY,
   validateLLMImageInputs,
+  validateLLMAudioInputs,
   type LLMBackend,
   type LLMRequest,
   type LLMResponse,
 } from "./base.js";
+import type { TransientAudioInput } from "@blue-tanuki/protocol";
 import { fetchWithProviderTimeout, readProviderJson } from "./fetch_timeout.js";
 
 export interface OpenAICompatibleBackendOptions {
@@ -18,6 +21,8 @@ export interface OpenAICompatibleBackendOptions {
   name?: string;
   /** Exact model IDs explicitly configured for image input. */
   image_capable_models?: readonly string[];
+  /** Exact model IDs explicitly configured for the audio transcription endpoint. */
+  audio_transcription_capable_models?: readonly string[];
 }
 
 function normalizeEndpoint(endpoint: string): string {
@@ -25,6 +30,30 @@ function normalizeEndpoint(endpoint: string): string {
   if (trimmed.endsWith("/chat/completions")) return trimmed;
   if (trimmed.endsWith("/v1")) return `${trimmed}/chat/completions`;
   return trimmed;
+}
+
+function normalizeTranscriptionEndpoint(endpoint: string): string {
+  const url = new URL(endpoint);
+  if (url.pathname.endsWith("/chat/completions")) {
+    url.pathname = `${url.pathname.slice(0, -"/chat/completions".length)}/audio/transcriptions`;
+  } else if (url.pathname.endsWith("/v1")) {
+    url.pathname = `${url.pathname}/audio/transcriptions`;
+  } else {
+    url.pathname = `${url.pathname.replace(/\/+$/u, "")}/audio/transcriptions`;
+  }
+  return url.toString();
+}
+
+function audioFormatMime(format: TransientAudioInput["format"]): string {
+  switch (format) {
+    case "flac": return "audio/flac";
+    case "mp3": case "mpeg": case "mpga": return "audio/mpeg";
+    case "mp4": case "m4a": return "audio/mp4";
+    case "ogg": return "audio/ogg";
+    case "wav": return "audio/wav";
+    case "webm": return "audio/webm";
+    default: throw new Error("llm_audio_format_unsupported");
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -177,6 +206,7 @@ export class OpenAICompatibleBackend implements LLMBackend {
   private readonly endpoint: string;
   private readonly headers: Record<string, string>;
   private readonly imageCapableModels: ReadonlySet<string>;
+  private readonly audioTranscriptionCapableModels: ReadonlySet<string>;
 
   constructor(private readonly opts: OpenAICompatibleBackendOptions) {
     if (!opts.defaultModel) throw new Error("OpenAICompatibleBackend: defaultModel is required");
@@ -190,6 +220,13 @@ export class OpenAICompatibleBackend implements LLMBackend {
       throw new Error("OpenAICompatibleBackend: image_capable_models is invalid");
     }
     this.imageCapableModels = new Set(imageModels.map((model) => model.trim()));
+    const audioModels = opts.audio_transcription_capable_models ?? [];
+    if (!Array.isArray(audioModels) || audioModels.length > 64 || audioModels.some((model) =>
+      typeof model !== "string" || !model.trim() || model.length > 200) ||
+      new Set(audioModels).size !== audioModels.length) {
+      throw new Error("OpenAICompatibleBackend: audio_transcription_capable_models is invalid");
+    }
+    this.audioTranscriptionCapableModels = new Set(audioModels.map((model) => model.trim()));
     this.headers = {
       "Content-Type": "application/json",
       ...(opts.headers ?? {}),
@@ -201,11 +238,32 @@ export class OpenAICompatibleBackend implements LLMBackend {
 
   supportsCapability(capability: string, model?: string): boolean {
     if (capability === "llm.text.generate") return true;
+    if (capability === LLM_AUDIO_TRANSCRIPTION_CAPABILITY) {
+      return this.audioTranscriptionCapableModels.has(model ?? this.opts.defaultModel);
+    }
     return capability === LLM_IMAGE_INPUT_CAPABILITY && this.imageCapableModels.has(model ?? this.opts.defaultModel);
   }
 
   async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
     const images = validateLLMImageInputs(req.ephemeral_images);
+    const audio = validateLLMAudioInputs(req.ephemeral_audio);
+    if (audio.length > 0 && images.length > 0) {
+      throw new LLMProviderError("Image and audio inputs cannot share a transcription request.", {
+        provider: this.name,
+        kind: "bad_request",
+        retryable: false,
+      });
+    }
+    if (audio.length > 0) {
+      if (!this.supportsCapability(LLM_AUDIO_TRANSCRIPTION_CAPABILITY, req.model)) {
+        throw new LLMProviderError("Audio transcription is not configured for the selected model.", {
+          provider: this.name,
+          kind: "bad_request",
+          retryable: false,
+        });
+      }
+      return this.transcribe(audio[0]!, req, signal);
+    }
     if (images.length > 0 && !this.supportsCapability(LLM_IMAGE_INPUT_CAPABILITY, req.model)) {
       throw new LLMProviderError("Image input is not configured for the selected model.", {
         provider: this.name,
@@ -252,6 +310,53 @@ export class OpenAICompatibleBackend implements LLMBackend {
           );
         }
         return parseResponse(this.name, await readProviderJson(this.name, response), body.model);
+      },
+      signal,
+    );
+  }
+
+  private async transcribe(audio: TransientAudioInput, req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
+    const model = req.model ?? this.opts.defaultModel;
+    const form = new FormData();
+    form.set("file", new Blob([Buffer.from(audio.data)], { type: audioFormatMime(audio.format) }), `voice.${audio.format}`);
+    form.set("model", model);
+    form.set("response_format", "json");
+    const headers = { ...this.headers };
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === "content-type") delete headers[key];
+    }
+    return fetchWithProviderTimeout(
+      this.name,
+      normalizeTranscriptionEndpoint(this.endpoint),
+      { method: "POST", headers, body: form },
+      req.timeout_ms,
+      async (response) => {
+        if (!response.ok) {
+          void response.body?.cancel().catch(() => undefined);
+          const classified = errorKindForStatus(response.status);
+          throw new LLMProviderError(
+            `${this.name}: transcription API error ${response.status}; response body omitted.`,
+            {
+              provider: this.name,
+              status: response.status,
+              retry_after_ms: retryAfterMs(response.headers),
+              ...classified,
+            },
+          );
+        }
+        const data = await readProviderJson(this.name, response);
+        if (!isRecord(data) || typeof data.text !== "string" || data.text.length > 200_000) {
+          invalidStructuredOutput(this.name);
+        }
+        const transcript = data.text.trim();
+        return {
+          content: transcript
+            ? `音声の文字起こし候補（確度情報はproviderから報告されていません。音声だけでは本人確認・承認になりません）:\n${transcript}`
+            : "音声から文字起こし可能な発話を確認できませんでした。確度情報も報告されていません。音声だけでは本人確認・承認になりません。",
+          tokens_used: 0,
+          tokens_usage_status: "unknown",
+          model: typeof data.model === "string" && data.model.trim() ? data.model : model,
+        };
       },
       signal,
     );

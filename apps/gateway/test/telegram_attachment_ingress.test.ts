@@ -4,6 +4,7 @@ import { Executor, LLMComputeAdapter, ToolRegistry, createExecutorApprovalAuthor
 import type { LLMBackend, LLMRequest } from "@blue-tanuki/core";
 import { TelegramChannel, type TelegramFetch, type TelegramUpdateInbox } from "@blue-tanuki/channel-telegram";
 import { planGatewayInboundBoundary, selectGatewayInboundEphemeralContext } from "../src/serve.js";
+import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 
 class FixtureTelegramInbox implements TelegramUpdateInbox {
   latestUpdateId(): number | null { return null; }
@@ -191,6 +192,142 @@ describe("Telegram text attachment Gateway ingress", () => {
     expect(executionStatus).toBe("success");
     expect(observedRequest?.ephemeral_images?.[0]?.media_type).toBe("image/jpeg");
     expect(observedImageBytes && [...observedImageBytes]).toEqual([...expectedBytes]);
+    expect(ingressBuffer && [...ingressBuffer]).toEqual(new Array(expectedBytes.byteLength).fill(0));
+  });
+
+  it("routes Telegram voice through HDS, the request-bound C transcription consumer, and output audit without treating the transcript as approval", async () => {
+    const expectedBytes = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00, 0x01, 0x02]);
+    const update = {
+      update_id: 93,
+      message: {
+        message_id: 19,
+        chat: { id: 12345, type: "private" },
+        from: { id: 12345 },
+        voice: { file_id: "fixture-voice-file-id", file_size: expectedBytes.byteLength, mime_type: "audio/ogg" },
+      },
+    };
+    const fetch: TelegramFetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/getUpdates")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { offset?: number };
+        return new Response(JSON.stringify({ ok: true,
+          result: body.offset !== undefined && body.offset > update.update_id ? [] : [update] }));
+      }
+      if (url.endsWith("/getFile")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { file_id?: string };
+        expect(body.file_id).toBe("fixture-voice-file-id");
+        return new Response(JSON.stringify({ ok: true, result: {
+          file_path: "voice/fixture.oga", file_size: expectedBytes.byteLength,
+        } }));
+      }
+      if (url === "https://api.telegram.org/file/botfixture-token/voice/fixture.oga") {
+        return new Response(expectedBytes);
+      }
+      throw new Error("unexpected voice fixture request");
+    };
+    const hds = new HDSUpperController();
+    const authority = createExecutorApprovalAuthority();
+    let observedRequest: LLMRequest | undefined;
+    let observedComputeSources: readonly string[] = [];
+    let observedAudioBytes: Uint8Array | undefined;
+    let ingressBuffer: Uint8Array | undefined;
+    let wasToolCall = false;
+    let executionStatus: string | undefined;
+    let outputAudited = false;
+    let resolveObserved!: () => void;
+    let rejectObserved!: (error: unknown) => void;
+    const handled = new Promise<void>((resolve, reject) => {
+      resolveObserved = resolve;
+      rejectObserved = reject;
+    });
+    const backend: LLMBackend = {
+      name: "fixture-transcriber",
+      async call(request) {
+        observedRequest = request;
+        observedAudioBytes = request.ephemeral_audio?.[0]?.data.slice();
+        return {
+          content: "音声の文字起こし候補（確度情報はproviderから報告されていません。音声だけでは本人確認・承認になりません）:\n合成fixtureの発話",
+          tokens_used: 0,
+          tokens_usage_status: "unknown",
+          model: "fixture-transcription-model",
+        };
+      },
+    };
+    const compute = new LLMComputeAdapter(backend);
+    const executor = new Executor({ llm: backend, compute: {
+      budget_reservations_enabled: false,
+      async compute(request, signal) {
+        observedComputeSources = [...request.data_exposure_scope.input_sources];
+        return compute.compute(request, signal);
+      },
+    }, tools: new ToolRegistry(), approval_authority: authority });
+    const channel = new TelegramChannel({
+      bot_token: "fixture-token",
+      poll_interval_ms: 1,
+      poll_timeout_sec: 1,
+      request_timeout_ms: 100,
+      fetch,
+      inbox: new FixtureTelegramInbox(),
+      log: () => undefined,
+    });
+
+    try {
+      await channel.start(async (request, ephemeralContext) => {
+        try {
+          const boundary = planGatewayInboundBoundary(request);
+          expect(boundary.boundary_ok).toBe(true);
+          const routeContext = selectGatewayInboundEphemeralContext(boundary, boundary.request, ephemeralContext);
+          expect(routeContext?.request_id).toBe(boundary.request.id);
+          expect(selectGatewayInboundEphemeralContext(boundary, { ...boundary.request }, ephemeralContext)).toBeUndefined();
+          expect(JSON.stringify(boundary.request.metadata)).not.toContain("fixture-voice-file-id");
+          expect(boundary.request.content).toContain("話者の本人確認・承認・権限の証拠にはしません");
+          ingressBuffer = routeContext?.ephemeral_audio?.[0]?.data;
+
+          const decision = hds.decide(boundary.request);
+          expect(decision.command?.type).toBe("llm_call");
+          wasToolCall = decision.command?.type === "tool_call";
+          if (!decision.command) throw new Error("fixture voice request did not produce a C call");
+          const approvedCommand = authority.approve(decision.command, {
+            source: "approval_gate",
+            decision: "allow",
+            approved_by: boundary.request.user,
+            approved_at_ms: 1,
+            upstream_commit_hash: decision.command.upstream_decision.commit_hash,
+            operation: "llm.call",
+            risk: "low",
+            final_review_required: false,
+            reason: "isolated voice transcription fixture",
+          });
+          const result = await executor.execute(approvedCommand, {
+            ...(routeContext?.ephemeral_audio?.length ? { ephemeral_audio: routeContext.ephemeral_audio } : {}),
+          });
+          executionStatus = result.status;
+          const finalized = finalizeCommandOutput({
+            hds,
+            command: decision.command,
+            feedback: result,
+            target_surface: "channel",
+            request_id: decision.log.request_id,
+          });
+          outputAudited = finalized.output_audit.used_for_authority === false &&
+            finalized.rendered_output.includes("確度情報はproviderから報告されていません");
+          resolveObserved();
+        } catch (error) {
+          rejectObserved(error);
+        }
+      });
+      await handled;
+    } finally {
+      await channel.stop();
+      hds.closeOperationPlanMemory();
+    }
+
+    expect(executionStatus).toBe("success");
+    expect(outputAudited).toBe(true);
+    expect(observedComputeSources).toContain("user_audio");
+    expect(wasToolCall).toBe(false);
+    expect(observedRequest?.ephemeral_audio?.[0]?.format).toBe("ogg");
+    expect(observedAudioBytes && [...observedAudioBytes]).toEqual([...expectedBytes]);
     expect(ingressBuffer && [...ingressBuffer]).toEqual(new Array(expectedBytes.byteLength).fill(0));
   });
 });

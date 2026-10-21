@@ -27,7 +27,8 @@ export type ComputeInputSource =
   | "failure_memory_digest_projection"
   | "complete_history_digest_observations"
   | "session_history"
-  | "user_image";
+  | "user_image"
+  | "user_audio";
 
 export interface ComputeDataExposureScope {
   input_sources: readonly ComputeInputSource[];

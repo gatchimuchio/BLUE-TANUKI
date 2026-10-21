@@ -33,6 +33,7 @@ import type {
   ComputeResourceUse,
   ChannelSendPayload,
   ToolCapability,
+  TransientAudioInput,
   TransientImageInput,
 } from "@blue-tanuki/protocol";
 import {
@@ -42,6 +43,7 @@ import {
   LLM_EXECUTION_CANCELLED_REASON,
   LLM_EXECUTION_TIMEOUT_REASON,
   validateLLMImageInputs,
+  validateLLMAudioInputs,
   normalizeLLMToolCallCandidates,
   type LLMBackend,
   type LLMErrorKind,
@@ -172,6 +174,7 @@ export interface ExecutorExecutionContext {
   signal?: AbortSignal;
   /** One-call image bytes; kept outside command payloads and session history. */
   ephemeral_images?: readonly TransientImageInput[];
+  ephemeral_audio?: readonly TransientAudioInput[];
   /** Synchronous resource admission after ticket validation but before any command work. */
   before_execute?: () => void;
   /** worker起動待ち後にもGatewayの現在停止条件を同期検査する。 */
@@ -756,7 +759,7 @@ export class Executor {
       switch (cmd.type) {
         case "llm_call":
           feedback = await this.executeLLMCall(cmd.id, cmd.payload, cmd.constraints, start, context.signal,
-            context.ephemeral_images, markInvoked);
+            context.ephemeral_images, context.ephemeral_audio, markInvoked);
           break;
         case "tool_call":
           feedback = await this.executeToolCall(cmd, start, markInvoked, context.signal, context.before_tool_dispatch);
@@ -830,11 +833,16 @@ export class Executor {
     start: number,
     callerSignal?: AbortSignal,
     transientImages?: readonly TransientImageInput[],
+    transientAudio?: readonly TransientAudioInput[],
     markInvoked?: (boundary: ExecutionInvocationBoundary) => void,
   ): Promise<ExecuteFeedback> {
     const ephemeralImages = validateLLMImageInputs(transientImages);
-    if (ephemeralImages.length > 0 && payload.agent_delegation) {
-      throw new Error("llm_image_agent_delegation_unsupported");
+    const ephemeralAudio = validateLLMAudioInputs(transientAudio);
+    if (ephemeralImages.length > 0 && ephemeralAudio.length > 0) {
+      throw new Error("llm_mixed_media_input_unsupported");
+    }
+    if ((ephemeralImages.length > 0 || ephemeralAudio.length > 0) && payload.agent_delegation) {
+      throw new Error("llm_media_agent_delegation_unsupported");
     }
     // History merge: when a session_store is configured AND the payload
     // declares a session_id, prepend retained history before invoking
@@ -847,7 +855,7 @@ export class Executor {
 
     let effectiveMessages = payload.messages;
     let sessionHistoryApplied = false;
-    if (session_store && session_id) {
+    if (session_store && session_id && ephemeralAudio.length === 0) {
       const history = await session_store.getMessages(session_id, {
         limit: this.deps.history_limit,
       });
@@ -863,6 +871,7 @@ export class Executor {
     const providerRequest: LLMRequest = {
       messages: effectiveMessages,
       ...(ephemeralImages.length > 0 ? { ephemeral_images: ephemeralImages } : {}),
+      ...(ephemeralAudio.length > 0 ? { ephemeral_audio: ephemeralAudio } : {}),
       ...(payload.backend_hint !== undefined ? { backend_hint: payload.backend_hint } : {}),
       ...(payload.model !== undefined ? { model: payload.model } : {}),
       ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
@@ -1545,6 +1554,9 @@ function buildComputeRequest(input: {
   if (input.provider_request.ephemeral_images?.length && !input_sources.includes("user_image")) {
     input_sources.push("user_image");
   }
+  if (input.provider_request.ephemeral_audio?.length && !input_sources.includes("user_audio")) {
+    input_sources.push("user_audio");
+  }
   return {
     request_id: input.request_id,
     current_projection_digest: context.projection_digest,
@@ -1568,13 +1580,19 @@ function buildComputeRequest(input: {
 }
 
 function digestLLMRequest(request: LLMRequest): string {
-  const { ephemeral_images: images, ...textRequest } = request;
+  const { ephemeral_images: images, ephemeral_audio: audio, ...textRequest } = request;
   const digest = createHash("sha256").update(JSON.stringify(textRequest));
   for (const image of images ?? []) {
     digest.update("\0blue-tanuki.llm-image.v1\0");
     digest.update(image.media_type);
     digest.update("\0");
     digest.update(image.data);
+  }
+  for (const input of audio ?? []) {
+    digest.update("\0blue-tanuki.llm-audio.v1\0");
+    digest.update(input.format);
+    digest.update("\0");
+    digest.update(input.data);
   }
   return digest.digest("hex");
 }

@@ -4,6 +4,7 @@ import {
   createLLMToolCallCandidate,
   LLM_IMAGE_INPUT_CAPABILITY,
   validateLLMImageInputs,
+  validateLLMAudioInputs,
   type LLMBackend,
   type LLMRequest,
   type LLMResponse,
@@ -130,6 +131,14 @@ export class AnthropicBackend implements LLMBackend {
 
   async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
     const images = validateLLMImageInputs(req.ephemeral_images);
+    const audio = validateLLMAudioInputs(req.ephemeral_audio);
+    if (audio.length > 0) {
+      throw new LLMProviderError("Audio transcription is not configured for this provider.", {
+        provider: this.name,
+        kind: "bad_request",
+        retryable: false,
+      });
+    }
     if (images.length > 0 && !this.supportsCapability(LLM_IMAGE_INPUT_CAPABILITY, req.model)) {
       throw new LLMProviderError("Image input is not configured for the selected model.", {
         provider: this.name,

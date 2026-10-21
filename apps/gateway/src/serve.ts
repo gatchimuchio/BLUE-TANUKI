@@ -461,7 +461,7 @@ export function selectGatewayInboundEphemeralContext(
 ): InboundEphemeralContext | undefined {
   return boundary.boundary_ok && boundary.request.channel === "telegram" &&
     decisionInput === boundary.request && ephemeralContext?.request_id === boundary.request.id &&
-    ephemeralContext.ephemeral_images.length > 0
+    (ephemeralContext.ephemeral_images.length > 0 || (ephemeralContext.ephemeral_audio?.length ?? 0) > 0)
     ? ephemeralContext
     : undefined;
 }
@@ -1830,8 +1830,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       try {
         executionTask = executor.execute(approvedCommand, { save_result_delivery: planBound,
           ...(cmd.type === "llm_call" && ephemeralContext?.request_id === log.request_id &&
-            ephemeralContext.ephemeral_images.length > 0
-            ? { ephemeral_images: ephemeralContext.ephemeral_images }
+            (ephemeralContext.ephemeral_images.length > 0 || (ephemeralContext.ephemeral_audio?.length ?? 0) > 0)
+            ? {
+              ...(ephemeralContext.ephemeral_images.length > 0 ? { ephemeral_images: ephemeralContext.ephemeral_images } : {}),
+              ...(ephemeralContext.ephemeral_audio?.length ? { ephemeral_audio: ephemeralContext.ephemeral_audio } : {}),
+            }
             : {}),
           signal: executionController.signal,
           before_execute: () => {

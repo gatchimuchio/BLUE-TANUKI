@@ -2887,3 +2887,23 @@ F16.01のTelegram画像producer→C consumerは部分的に`WIRED`。provider mo
 実装commit=`f9ff4c0c64a1561505a307b21b6e993720a28e3f`を`main`へfast-forward pushし、push直後のremote `main` SHA一致を確認した。復旧branch／tagの二世代と保護対象untracked Linux `target/`は維持した。
 
 ---
+
+### 履歴ログ：QEB-54-F16.02-TELEGRAM-AUDIO-TRANSCRIPTION-CONSUMER
+
+開始`main`／`origin/main`=`8c346e76f2e7d27ded512731c65cbce14521a810`。現行pin rev2.3の三点セット、適用`AGENTS.md`、active instruction、F16.02要求、Telegram producer→Gateway→HDS→Executor→Cのmedia pathを再同期した。保護対象untracked Linux `target/`を維持した。D4-Pocket／ミニドラには触れていない。
+
+Telegramの音声／voice添付をサイズ上限20 MiB・signature・宣言MIME照合後、要求IDだけを伴う一時音声contextでGatewayへ渡す。file ID／filename／raw bytesを通常metadataへ置かない。Router／channel handler終了後にcontext bytesをzeroizeする。Gatewayはcanonical Telegram request・同一request object・request IDを再照合し、直接の`llm_call`に限ってExecutorへ渡す。Executor／Cは音声を`user_audio`入力源とし、計算digestへformatとbytesを束縛する。Stub、Anthropic、未許可modelは拒否する。OpenAI-compatible providerの文字起こしendpointは、正確なprovider／model単位の`BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON`設定で既定offから明示有効化する。fallbackはHDS-issued provider・`user_audio`・`llm.audio.transcription`・費用範囲の全条件を要求する。
+
+Cの文字起こし結果は確度情報がproviderから返っていない候補として明示し、Output Auditを経て利用者へ返す。音声の一回処理では既存session historyをLLMへ合流させない。transcriptはHDSへ再投入せず、tool candidateや承認へ変換しない。したがって音声だけで本人確認、操作実行、L3 approvalは成立しない。操作・承認が必要な場合はownerが通常の独立入力経路を用いる。実provider／資格／Telegram API呼出しは行わず、C08.03保留を維持した。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| protocol／channel-base／Telegram／core／Gateway typecheck | PASS。 |
+| Telegram／OpenAI-compatible transcription／LLM registry・fallback／Gateway config／Gateway ingress→HDS→Executor→C→Output Audit fixture／音声要求時のsession history分離 | PASS、6 files／74 tests。protocolの`user_audio` fallback schema追加試験もPASS。 |
+| `BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON` default-off・exact-model config | PASS。実provider対応を証明しない。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の既存移行負債76件は継続。 |
+| 実provider／credential／Telegram API、実served Gateway、transcriptからのHDS再投入／operation、全workspace suite、5OS、QE_QC／QE_QA | 未実施。 |
+
+`packages/protocol/test/types.test.ts`全体を含む広いfixture runでは、今回変更していない`ExecuteFeedback skeptical review boundary > rejects malformed or unbounded review fields`が失敗した。現行schemaの該当fieldは`z.unknown().optional()`であり、このbatchの音声schema変更とは無関係。新規`user_audio` fallback schema試験は個別にPASSした。この既存契約／test不整合は全体QE_QC候補として保持し、本BUILD_BATCHの範囲外実装修正は行っていない。
+
+F16.02のTelegram音声→C transcription→Output Audit経路をsynthetic fixture範囲で部分的に`WIRED`とする。exact model capabilityの実endpoint対応・実provider／served runtime、別channel、transcriptを使う後続HDS要求経路は未確認／非実装。F10.02全体=`BUILD_GAP`、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03保留、D4-Pocket／ミニドラ変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留。次のBUILD_BATCHは現行工程表の`F16.03`。

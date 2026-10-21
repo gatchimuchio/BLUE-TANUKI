@@ -3,6 +3,7 @@ import {
   classifyLLMError,
   createLLMAbortError,
   LLM_IMAGE_INPUT_CAPABILITY,
+  LLM_AUDIO_TRANSCRIPTION_CAPABILITY,
   LLMProviderError,
   LLM_ROUTING_TRACE,
   type LLMBackend,
@@ -300,6 +301,14 @@ export class LLMRegistry implements LLMBackend {
         retryable: false,
       });
     }
+    if (req.ephemeral_audio?.length &&
+        !backendSupportsCapability(selected.backend, LLM_AUDIO_TRANSCRIPTION_CAPABILITY, req.model)) {
+      throw new LLMProviderError("Audio transcription is not configured for the selected provider and model.", {
+        provider: selected.name,
+        kind: "bad_request",
+        retryable: false,
+      });
+    }
     try {
       const response = await this.callWithRetry(selected.backend, selected.name, req, signal);
       return withoutRoutingTrace(response);
@@ -356,6 +365,15 @@ export class LLMRegistry implements LLMBackend {
           !fallbackProfile.capabilities.includes(LLM_IMAGE_INPUT_CAPABILITY) ||
           !fallbackBackend ||
           !backendSupportsCapability(fallbackBackend, LLM_IMAGE_INPUT_CAPABILITY, request.model)) {
+        return undefined;
+      }
+    }
+    if (request.ephemeral_audio?.length) {
+      const fallbackBackend = this.backends.get(fallbackName);
+      if (!authorization.required_capabilities.includes(LLM_AUDIO_TRANSCRIPTION_CAPABILITY) ||
+          !fallbackProfile.capabilities.includes(LLM_AUDIO_TRANSCRIPTION_CAPABILITY) ||
+          !fallbackBackend ||
+          !backendSupportsCapability(fallbackBackend, LLM_AUDIO_TRANSCRIPTION_CAPABILITY, request.model)) {
         return undefined;
       }
     }

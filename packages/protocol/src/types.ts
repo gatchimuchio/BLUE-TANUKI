@@ -128,6 +128,7 @@ export const LLMFallbackAuthorizationSchema = z.object({
     "selected_operation_result_observations",
     "session_history",
     "user_image",
+    "user_audio",
   ])).min(1).max(5),
   required_capabilities: z.array(z.string().trim().min(1).max(120)).min(1).max(16),
   max_total_cost: z.object({
@@ -198,6 +199,7 @@ export const LLMComputeContextSchema = z.object({
       "selected_operation_result_observations",
       "complete_history_digest_observations",
       "user_image",
+      "user_audio",
     ])).min(1).max(3),
     requested_egress_provider: z.string().trim().min(1).max(120),
   }).strict(),
@@ -639,6 +641,12 @@ export type InboundRequest = z.infer<typeof InboundRequestSchema>;
  */
 export interface TransientImageInput {
   readonly media_type: "image/jpeg" | "image/png";
+  readonly data: Uint8Array;
+}
+
+/** In-process audio bytes used only for one downstream transcription call. */
+export interface TransientAudioInput {
+  readonly format: "flac" | "mp3" | "mp4" | "mpeg" | "mpga" | "m4a" | "ogg" | "wav" | "webm";
   readonly data: Uint8Array;
 }
 

@@ -98,16 +98,16 @@ function parseFallbackProfilesJson(raw: string | undefined): Array<[string, LLMF
     .map(([provider, profile]) => [provider, profile as LLMFallbackProfile]);
 }
 
-function parseImageCapableModelsJson(raw: string | undefined): Map<string, string[]> {
+function parseModelCapabilitiesJson(raw: string | undefined, variableName: string): Map<string, string[]> {
   if (!raw) return new Map();
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw) as unknown;
   } catch {
-    throw new Error("BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON must be valid JSON");
+    throw new Error(`${variableName} must be valid JSON`);
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON must be a provider object");
+    throw new Error(`${variableName} must be a provider object`);
   }
   const models = new Map<string, string[]>();
   for (const [providerName, providerModels] of Object.entries(parsed as Record<string, unknown>)) {
@@ -115,12 +115,20 @@ function parseImageCapableModelsJson(raw: string | undefined): Map<string, strin
     if (!provider || !Array.isArray(providerModels) || providerModels.length === 0 || providerModels.length > 64 ||
         providerModels.some((model) => typeof model !== "string" || !model.trim() || model.length > 200) ||
         new Set(providerModels).size !== providerModels.length) {
-      throw new Error("BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON has an invalid provider model list");
+      throw new Error(`${variableName} has an invalid provider model list`);
     }
-    if (models.has(provider)) throw new Error("BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON provider names must be unique");
+    if (models.has(provider)) throw new Error(`${variableName} provider names must be unique`);
     models.set(provider, providerModels.map((model) => (model as string).trim()));
   }
   return models;
+}
+
+function parseImageCapableModelsJson(raw: string | undefined): Map<string, string[]> {
+  return parseModelCapabilitiesJson(raw, "BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON");
+}
+
+function parseAudioTranscriptionCapableModelsJson(raw: string | undefined): Map<string, string[]> {
+  return parseModelCapabilitiesJson(raw, "BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON");
 }
 
 function parseFallbackAuthorizationJson(raw: string | undefined): LLMCommandRoute["fallback_authorization"] {
@@ -247,7 +255,11 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
   const imageCapableModels = parseImageCapableModelsJson(
     envValue(resolvedEnv, "BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON"),
   );
+  const audioTranscriptionCapableModels = parseAudioTranscriptionCapableModelsJson(
+    envValue(resolvedEnv, "BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON"),
+  );
   const imageModelsFor = (provider: string): readonly string[] => imageCapableModels.get(provider) ?? [];
+  const audioModelsFor = (provider: string): readonly string[] => audioTranscriptionCapableModels.get(provider) ?? [];
   const registry = new LLMRegistry({
     retry: buildLLMRetryPolicyFromEnv(resolvedEnv),
   });
@@ -325,6 +337,7 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
           ),
         ),
         image_capable_models: imageModelsFor("openai-compatible"),
+        audio_transcription_capable_models: audioModelsFor("openai-compatible"),
       }),
       ["openai"],
     );
@@ -356,6 +369,7 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
         apiKey: openrouterKey,
         headers: openrouterHeaders,
         image_capable_models: imageModelsFor("openrouter"),
+        audio_transcription_capable_models: audioModelsFor("openrouter"),
       }),
     );
   }
@@ -372,6 +386,7 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
         apiKey: provider.apiKey,
         headers: provider.headers,
         image_capable_models: imageModelsFor(provider.name.trim().toLowerCase()),
+        audio_transcription_capable_models: audioModelsFor(provider.name.trim().toLowerCase()),
       }),
       provider.aliases,
     );
@@ -389,6 +404,15 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
   for (const provider of imageCapableModels.keys()) {
     if (!registeredProviders.has(provider)) {
       throw new Error(`BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON provider '${provider}' is not registered`);
+    }
+  }
+  for (const [provider, models] of audioTranscriptionCapableModels) {
+    if (!registeredProviders.has(provider)) {
+      throw new Error(`BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON provider '${provider}' is not registered`);
+    }
+    const backend = registry.resolve(provider);
+    if (models.some((model) => backend.supportsCapability?.("llm.audio.transcription", model) !== true)) {
+      throw new Error(`BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON provider '${provider}' does not support audio transcription`);
     }
   }
   registry.setFallback(envValue(resolvedEnv, "BLUE_TANUKI_LLM_FALLBACK_BACKEND"));

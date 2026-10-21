@@ -58,6 +58,59 @@ describe("OpenAICompatibleBackend", () => {
     });
   });
 
+  it("keeps transcription disabled by default and uses only the explicitly configured exact model", async () => {
+    let requests = 0;
+    globalThis.fetch = (async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ text: "fixture transcript" }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const audio = { format: "ogg" as const, data: new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x01]) };
+    const defaultOff = new OpenAICompatibleBackend({
+      endpoint: "https://example.test/v1",
+      defaultModel: "transcribe-v1",
+    });
+    await expect(defaultOff.call({ messages: [{ role: "user", content: "transcribe" }], ephemeral_audio: [audio] }))
+      .rejects.toMatchObject({ kind: "bad_request", retryable: false });
+    expect(requests).toBe(0);
+
+    let seen: { url: string; init: RequestInit } | undefined;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      seen = { url: String(input), init: init ?? {} };
+      return new Response(JSON.stringify({ text: "fixture transcript" }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const enabled = new OpenAICompatibleBackend({
+      endpoint: "https://example.test/v1/chat/completions",
+      defaultModel: "transcribe-v1",
+      apiKey: "secret",
+      audio_transcription_capable_models: ["transcribe-v1"],
+    });
+    const result = await enabled.call({
+      messages: [{ role: "user", content: "transcribe" }],
+      ephemeral_audio: [audio],
+    });
+    expect(result).toMatchObject({
+      content: expect.stringContaining("確度情報はproviderから報告されていません"),
+      tokens_used: 0,
+      tokens_usage_status: "unknown",
+      model: "transcribe-v1",
+    });
+    expect(result.content).toContain("fixture transcript");
+    expect(seen?.url).toBe("https://example.test/v1/audio/transcriptions");
+    expect(seen?.init.headers).toMatchObject({ Authorization: "Bearer secret" });
+    expect(Object.keys(seen?.init.headers as Record<string, string>).some((key) => key.toLowerCase() === "content-type")).toBe(false);
+    const form = seen?.init.body as FormData;
+    expect(form.get("model")).toBe("transcribe-v1");
+    expect(form.get("response_format")).toBe("json");
+    const file = form.get("file") as File;
+    expect(file.name).toBe("voice.ogg");
+    expect(file.type).toBe("audio/ogg");
+    expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([...audio.data]);
+  });
+
   it("does not treat a missing usage object as reported zero tokens", async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({
       model: "provider-model",

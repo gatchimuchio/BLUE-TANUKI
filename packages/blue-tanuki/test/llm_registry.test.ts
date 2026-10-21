@@ -4,6 +4,7 @@ import {
   LLM_ROUTING_TRACE,
   LLMProviderError,
   LLM_IMAGE_INPUT_CAPABILITY,
+  LLM_AUDIO_TRANSCRIPTION_CAPABILITY,
   type LLMBackend,
   type LLMRequest,
   type LLMResponse,
@@ -84,7 +85,67 @@ class ImageCapableBackend extends NamedBackend {
   }
 }
 
+class AudioCapableBackend extends NamedBackend {
+  supportsCapability(capability: string, model?: string): boolean {
+    return capability === "llm.text.generate" ||
+      (capability === LLM_AUDIO_TRANSCRIPTION_CAPABILITY && model === "audio-v1");
+  }
+}
+
+class AudioCapableFailingBackend extends FailingBackend {
+  supportsCapability(capability: string, model?: string): boolean {
+    return capability === "llm.text.generate" ||
+      (capability === LLM_AUDIO_TRANSCRIPTION_CAPABILITY && model === "audio-v1");
+  }
+}
+
 describe("LLMRegistry", () => {
+  it("refuses audio input unless the selected provider declares transcription capability", async () => {
+    const backend = new NamedBackend("text-only");
+    const registry = new LLMRegistry().register(backend).setDefault("text-only");
+    await expect(registry.call({
+      messages: [{ role: "user", content: "transcribe" }],
+      ephemeral_audio: [{ format: "ogg", data: new Uint8Array([0x4f, 0x67, 0x67, 0x53]) }],
+    })).rejects.toMatchObject({ kind: "bad_request", retryable: false });
+    expect(backend.seen).toHaveLength(0);
+    expect(LLM_AUDIO_TRANSCRIPTION_CAPABILITY).toBe("llm.audio.transcription");
+  });
+
+  it("requires explicit audio source, capability, and cost authorization before a fallback receives audio", async () => {
+    const primary = new AudioCapableFailingBackend("primary", "remote_service_unavailable", true);
+    const fallback = new AudioCapableBackend("backup");
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 } })
+      .register(primary)
+      .register(fallback)
+      .setDefault("primary")
+      .setFallback("backup")
+      .setFallbackProfile("primary", {
+        capabilities: ["llm.text.generate", LLM_AUDIO_TRANSCRIPTION_CAPABILITY],
+        max_cost_per_attempt: { amount: 0.2, currency: "USD" },
+      })
+      .setFallbackProfile("backup", {
+        capabilities: ["llm.text.generate", LLM_AUDIO_TRANSCRIPTION_CAPABILITY],
+        max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+      });
+    const audio = [{ format: "ogg" as const, data: new Uint8Array([0x4f, 0x67, 0x67, 0x53]) }];
+
+    const response = await registry.callWithFallbackAuthorization({
+      model: "audio-v1",
+      messages: [{ role: "user", content: "transcribe" }],
+      ephemeral_audio: audio,
+    }, undefined, {
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request", "user_audio"],
+      required_capabilities: [LLM_AUDIO_TRANSCRIPTION_CAPABILITY],
+      max_total_cost: { amount: 0.3, currency: "USD" },
+    });
+
+    expect(response.content).toBe("from:backup");
+    expect(primary.seen).toHaveLength(1);
+    expect(fallback.seen).toHaveLength(1);
+    expect(fallback.seen[0]?.ephemeral_audio).toEqual(audio);
+  });
+
   it("allows image fallback only when the input, authorization, profile, and exact model capability agree", async () => {
     const image = { media_type: "image/png" as const,
       data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) };

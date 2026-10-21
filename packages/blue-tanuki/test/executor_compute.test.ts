@@ -237,6 +237,40 @@ describe("Executor compute boundary", () => {
     expect(JSON.stringify(stored)).not.toContain("ephemeral_images");
   });
 
+  it("routes one-call audio without prior session history", async () => {
+    const backend = new CapturingBackend();
+    const compute = new CapturingCompute(new LLMComputeAdapter(backend));
+    const sessions = new MemorySessionStore();
+    await sessions.append("test-session", { role: "user", content: "private prior conversation", timestamp: 1 });
+    const executor = new Executor({ approval_authority: authority, llm: backend, compute,
+      tools: new ToolRegistry(), session_store: sessions });
+    const audio = { format: "ogg" as const, data: new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00]) };
+
+    const result = await executor.execute(approved(command("audio-compute")), { ephemeral_audio: [audio] });
+    const request = compute.requests[0]!;
+    const textOnlyRequest = {
+      messages: [{ role: "user", content: "current request" }],
+      backend_hint: "fixture-provider",
+      max_tokens: 64,
+      timeout_ms: 1_500,
+    };
+    const expectedDigest = createHash("sha256")
+      .update(JSON.stringify(textOnlyRequest))
+      .update("\0blue-tanuki.llm-audio.v1\0")
+      .update(audio.format)
+      .update("\0")
+      .update(audio.data)
+      .digest("hex");
+
+    expect(result.status).toBe("success");
+    expect(request.input.messages).toEqual(textOnlyRequest.messages);
+    expect(request.data_exposure_scope.input_sources).toEqual(["accepted_inbound_request", "user_audio"]);
+    expect(request.input.ephemeral_audio).toEqual([audio]);
+    expect(request.input_digest).toBe(expectedDigest);
+    expect(backend.seen[0]?.ephemeral_audio).toEqual([audio]);
+    expect(backend.seen[0]?.messages).toEqual(textOnlyRequest.messages);
+  });
+
   it("hashes effective provider input and records local resource and history scope", async () => {
     const backend = new CapturingBackend();
     const receipt = resourceUse("compute-1");

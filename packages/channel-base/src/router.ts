@@ -66,6 +66,7 @@ export class InboundRouter {
         }
       } finally {
         for (const image of context?.ephemeral_images ?? []) image.data.fill(0);
+        for (const audio of context?.ephemeral_audio ?? []) audio.data.fill(0);
       }
     };
     this.started = true;

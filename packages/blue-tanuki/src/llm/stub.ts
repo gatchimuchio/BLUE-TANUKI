@@ -9,8 +9,8 @@ export class StubBackend implements LLMBackend {
   readonly capabilities = ["llm.text.generate"] as const;
 
   async call(req: LLMRequest): Promise<LLMResponse> {
-    if (req.ephemeral_images?.length) {
-      throw new LLMProviderError("Stub backend does not consume image input.", {
+    if (req.ephemeral_images?.length || req.ephemeral_audio?.length) {
+      throw new LLMProviderError("Stub backend does not consume media input.", {
         provider: this.name,
         kind: "bad_request",
         retryable: false,

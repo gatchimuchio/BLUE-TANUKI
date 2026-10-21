@@ -190,6 +190,23 @@ describe("LLMComputeContextSchema fallback authorization", () => {
     expect(parsed.fallback_authorization?.allowed_providers).toEqual(["backup"]);
   });
 
+  it("can scope a fallback authorization to volatile user audio and its transcription capability", () => {
+    const parsed = LLMComputeContextSchema.parse({
+      ...context,
+      data_exposure: {
+        input_sources: ["accepted_inbound_request", "user_audio"],
+        requested_egress_provider: "primary",
+      },
+      fallback_authorization: {
+        allowed_providers: ["backup"],
+        allowed_input_sources: ["accepted_inbound_request", "user_audio"],
+        required_capabilities: ["llm.text.generate", "llm.audio.transcription"],
+        max_total_cost: { amount: 0.5, currency: "USD" },
+      },
+    });
+    expect(parsed.fallback_authorization?.allowed_input_sources).toContain("user_audio");
+  });
+
   it("rejects duplicate, empty, unbounded, or unknown fallback authorization data", () => {
     for (const authorization of [
       { allowed_providers: ["backup", "BACKUP"], allowed_input_sources: ["accepted_inbound_request"], required_capabilities: ["llm.text.generate"], max_total_cost: { amount: 1, currency: "USD" } },

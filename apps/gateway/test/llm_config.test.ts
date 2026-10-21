@@ -156,6 +156,37 @@ describe("buildLLMBackendFromEnv", () => {
     })).toThrow(/provider 'missing' is not registered/);
   });
 
+  it("enables audio transcription only for an explicitly listed provider and exact model", () => {
+    const llm = buildLLMBackendFromEnv({
+      LLM_BACKEND: "stub",
+      LLM_PROVIDERS_JSON: JSON.stringify([{
+        name: "local-audio",
+        type: "openai-compatible",
+        endpoint: "http://localhost:11434/v1",
+        model: "transcribe-v1",
+      }]),
+      BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON: JSON.stringify({ "local-audio": ["transcribe-v1"] }),
+    }) as LLMRegistry;
+    expect(llm.resolve("local-audio").supportsCapability?.("llm.audio.transcription", "transcribe-v1")).toBe(true);
+    expect(llm.resolve("local-audio").supportsCapability?.("llm.audio.transcription", "other-model")).toBe(false);
+
+    const defaultOff = buildLLMBackendFromEnv({
+      LLM_BACKEND: "stub",
+      LLM_PROVIDERS_JSON: JSON.stringify([{
+        name: "local-text",
+        endpoint: "http://localhost:11434/v1",
+        model: "text-v1",
+      }]),
+    }) as LLMRegistry;
+    expect(defaultOff.resolve("local-text").supportsCapability?.("llm.audio.transcription", "text-v1")).toBe(false);
+  });
+
+  it("rejects audio capability configuration for an unregistered provider", () => {
+    expect(() => buildLLMBackendFromEnv({
+      BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON: JSON.stringify({ missing: ["transcribe-v1"] }),
+    })).toThrow(/provider 'missing' is not registered/);
+  });
+
   it("configures explicit LLM retry and fallback without making health authority", () => {
     const llm = buildLLMBackendFromEnv({
       LLM_BACKEND: "openai-compatible",

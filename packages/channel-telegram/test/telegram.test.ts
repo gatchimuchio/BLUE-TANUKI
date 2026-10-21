@@ -13,6 +13,8 @@ interface FixtureUpdate {
     chat: { id: number | string; type?: string };
     from?: { id: number | string; username?: string; first_name?: string; is_bot?: boolean };
     photo?: Array<{ file_id: string; file_unique_id?: string; file_size?: number; width?: number; height?: number }>;
+    audio?: { file_id: string; file_size?: number; mime_type?: string };
+    voice?: { file_id: string; file_size?: number; mime_type?: string };
     document?: { file_id: string; file_unique_id?: string; file_name?: string; file_size?: number; mime_type?: string };
   };
 }
@@ -24,6 +26,10 @@ async function receiveOnePoll(updates: FixtureUpdate[], telegramFile?: { file_pa
     request_id: string;
     ephemeral_images: Array<{ media_type: string; data: number[] }>;
   }>;
+  audioSnapshots: Array<{
+    request_id: string;
+    ephemeral_audio: Array<{ format: string; data: number[] }>;
+  }>;
   offsets: Array<number | null>;
   inbox: MemoryTelegramInbox;
   fileRequests: string[];
@@ -34,6 +40,10 @@ async function receiveOnePoll(updates: FixtureUpdate[], telegramFile?: { file_pa
   const imageSnapshots: Array<{
     request_id: string;
     ephemeral_images: Array<{ media_type: string; data: number[] }>;
+  }> = [];
+  const audioSnapshots: Array<{
+    request_id: string;
+    ephemeral_audio: Array<{ format: string; data: number[] }>;
   }> = [];
   const offsets: Array<number | null> = [];
   const fileRequests: string[] = [];
@@ -90,11 +100,20 @@ async function receiveOnePoll(updates: FixtureUpdate[], telegramFile?: { file_pa
           data: Array.from(image.data),
         })),
       });
+      if (context.ephemeral_audio?.length) {
+        audioSnapshots.push({
+          request_id: context.request_id,
+          ephemeral_audio: context.ephemeral_audio.map((audio) => ({
+            format: audio.format,
+            data: Array.from(audio.data),
+          })),
+        });
+      }
     }
   });
   await secondPoll;
   await channel.stop();
-  return { received, ephemeralContexts, imageSnapshots, offsets, inbox, fileRequests, fileDownloads };
+  return { received, ephemeralContexts, imageSnapshots, audioSnapshots, offsets, inbox, fileRequests, fileDownloads };
 }
 
 class MemoryTelegramInbox implements TelegramUpdateInbox {
@@ -232,6 +251,27 @@ describe("Telegram inbound identity and update handoff", () => {
     expect(ephemeralContexts).toHaveLength(0);
     expect(JSON.stringify(received[0])).not.toContain("private-image-capability");
     expect(JSON.stringify(received[0])).not.toContain("private.png");
+  });
+
+  it("passes verified Telegram voice bytes only in a request-scoped ephemeral context and clears them", async () => {
+    const bytes = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00, 0x01, 0x02]);
+    const { received, ephemeralContexts, audioSnapshots, fileRequests } = await receiveOnePoll([
+      { update_id: 223, message: { message_id: 93, chat: { id: 12345, type: "private" }, from: { id: 12345 },
+        voice: { file_id: "private-voice-capability", file_size: bytes.byteLength, mime_type: "audio/ogg" } } },
+    ], { file_path: "voice/file_93.oga", bytes });
+
+    expect(received[0]?.content).toContain("文字起こし候補");
+    expect(received[0]?.content).toContain("承認・権限の証拠にはしません");
+    expect(received[0]?.metadata?.telegram_attachment_audio_available).toBe(true);
+    expect(received[0]?.metadata?.telegram_attachment_processing_status).toBe("read");
+    expect(audioSnapshots).toEqual([{
+      request_id: "telegram-223",
+      ephemeral_audio: [{ format: "ogg", data: Array.from(bytes) }],
+    }]);
+    expect(fileRequests).toEqual(["private-voice-capability"]);
+    expect(JSON.stringify(received[0])).not.toContain("private-voice-capability");
+    expect(JSON.stringify(received[0])).not.toContain("file_93.oga");
+    expect(ephemeralContexts[0]?.ephemeral_audio?.[0]?.data.every((byte) => byte === 0)).toBe(true);
   });
 
   it("does not download declared text attachments above the local byte limit", async () => {
