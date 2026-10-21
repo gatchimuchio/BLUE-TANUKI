@@ -2,7 +2,12 @@ import {
   LLMToolCallCandidateSchema,
   type LLMCallFailureKind,
   type LLMToolCallCandidate,
+  type TransientImageInput,
 } from "@blue-tanuki/protocol";
+
+export const LLM_IMAGE_INPUT_CAPABILITY = "llm.image.input";
+export const MAX_LLM_IMAGE_INPUTS = 4;
+export const MAX_LLM_IMAGE_BYTES = 5 * 1024 * 1024;
 
 /**
  * LLM backend abstraction.
@@ -23,6 +28,11 @@ export interface LLMMessage {
 
 export interface LLMRequest {
   messages: LLMMessage[];
+  /**
+   * Volatile inbound image bytes for this call only. Never persist or merge
+   * into session messages, audit payloads, or ordinary request metadata.
+   */
+  ephemeral_images?: readonly TransientImageInput[];
   backend_hint?: string;
   max_tokens?: number;
   temperature?: number;
@@ -75,9 +85,47 @@ export interface LLMResponse {
 
 export interface LLMBackend {
   readonly name: string;
+  /** Static capabilities for custom backends. Provider adapters may make this model-specific below. */
+  readonly capabilities?: readonly string[];
+  supportsCapability?(capability: string, model?: string): boolean;
   /** Set only by a local registry that stamps its selected canonical backend on responses. */
   readonly canonical_provider_identity?: true;
   call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>;
+}
+
+export function backendSupportsCapability(
+  backend: LLMBackend,
+  capability: string,
+  model?: string,
+): boolean {
+  return backend.supportsCapability
+    ? backend.supportsCapability(capability, model)
+    : backend.capabilities?.includes(capability) ?? false;
+}
+
+/** Reject malformed, unsupported, or oversized transient image bytes before provider serialization. */
+export function validateLLMImageInputs(images: readonly TransientImageInput[] | undefined): readonly TransientImageInput[] {
+  if (images === undefined || images.length === 0) return [];
+  if (!Array.isArray(images) || images.length > MAX_LLM_IMAGE_INPUTS) {
+    throw new Error("llm_image_input_count_invalid");
+  }
+  for (const image of images) {
+    if (!image || Object.getPrototypeOf(image) !== Object.prototype ||
+        Object.keys(image).sort().join(",") !== "data,media_type" ||
+        (image.media_type !== "image/jpeg" && image.media_type !== "image/png") ||
+        !(image.data instanceof Uint8Array) || image.data.byteLength === 0 ||
+        image.data.byteLength > MAX_LLM_IMAGE_BYTES) {
+      throw new Error("llm_image_input_invalid");
+    }
+    const bytes = image.data;
+    const isJpeg = image.media_type === "image/jpeg" && bytes.byteLength >= 3 &&
+      bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    const isPng = image.media_type === "image/png" && bytes.byteLength >= pngSignature.length &&
+      pngSignature.every((byte, index) => bytes[index] === byte);
+    if (!isJpeg && !isPng) throw new Error("llm_image_input_media_mismatch");
+  }
+  return images;
 }
 
 export type LLMErrorKind = LLMCallFailureKind;

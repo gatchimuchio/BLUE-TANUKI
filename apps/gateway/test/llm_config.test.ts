@@ -124,6 +124,38 @@ describe("buildLLMBackendFromEnv", () => {
     });
   });
 
+  it("enables image input only for an explicitly listed provider model", () => {
+    const llm = buildLLMBackendFromEnv({
+      LLM_BACKEND: "stub",
+      LLM_PROVIDERS_JSON: JSON.stringify([{
+        name: "local-vision",
+        type: "openai-compatible",
+        endpoint: "http://localhost:11434/v1",
+        model: "vision-v1",
+      }]),
+      BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON: JSON.stringify({ "local-vision": ["vision-v1"] }),
+    }) as LLMRegistry;
+
+    expect(llm.resolve("local-vision").supportsCapability?.("llm.image.input", "vision-v1")).toBe(true);
+    expect(llm.resolve("local-vision").supportsCapability?.("llm.image.input", "other-model")).toBe(false);
+
+    const defaultOff = buildLLMBackendFromEnv({
+      LLM_BACKEND: "stub",
+      LLM_PROVIDERS_JSON: JSON.stringify([{
+        name: "local-text",
+        endpoint: "http://localhost:11434/v1",
+        model: "text-v1",
+      }]),
+    }) as LLMRegistry;
+    expect(defaultOff.resolve("local-text").supportsCapability?.("llm.image.input", "text-v1")).toBe(false);
+  });
+
+  it("rejects image capability configuration for an unregistered provider", () => {
+    expect(() => buildLLMBackendFromEnv({
+      BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON: JSON.stringify({ missing: ["vision-v1"] }),
+    })).toThrow(/provider 'missing' is not registered/);
+  });
+
   it("configures explicit LLM retry and fallback without making health authority", () => {
     const llm = buildLLMBackendFromEnv({
       LLM_BACKEND: "openai-compatible",

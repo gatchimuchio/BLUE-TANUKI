@@ -1,6 +1,9 @@
+import { Buffer } from "node:buffer";
 import {
   LLMProviderError,
   createLLMToolCallCandidate,
+  LLM_IMAGE_INPUT_CAPABILITY,
+  validateLLMImageInputs,
   type LLMBackend,
   type LLMRequest,
   type LLMResponse,
@@ -13,6 +16,8 @@ export interface OpenAICompatibleBackendOptions {
   endpoint: string;
   headers?: Record<string, string>;
   name?: string;
+  /** Exact model IDs explicitly configured for image input. */
+  image_capable_models?: readonly string[];
 }
 
 function normalizeEndpoint(endpoint: string): string {
@@ -168,14 +173,23 @@ function errorKindForStatus(status: number): {
  */
 export class OpenAICompatibleBackend implements LLMBackend {
   readonly name: string;
+  readonly capabilities = ["llm.text.generate"] as const;
   private readonly endpoint: string;
   private readonly headers: Record<string, string>;
+  private readonly imageCapableModels: ReadonlySet<string>;
 
   constructor(private readonly opts: OpenAICompatibleBackendOptions) {
     if (!opts.defaultModel) throw new Error("OpenAICompatibleBackend: defaultModel is required");
     if (!opts.endpoint) throw new Error("OpenAICompatibleBackend: endpoint is required");
     this.name = opts.name ?? "openai-compatible";
     this.endpoint = normalizeEndpoint(opts.endpoint);
+    const imageModels = opts.image_capable_models ?? [];
+    if (!Array.isArray(imageModels) || imageModels.length > 64 || imageModels.some((model) =>
+      typeof model !== "string" || !model.trim() || model.length > 200) ||
+      new Set(imageModels).size !== imageModels.length) {
+      throw new Error("OpenAICompatibleBackend: image_capable_models is invalid");
+    }
+    this.imageCapableModels = new Set(imageModels.map((model) => model.trim()));
     this.headers = {
       "Content-Type": "application/json",
       ...(opts.headers ?? {}),
@@ -185,15 +199,31 @@ export class OpenAICompatibleBackend implements LLMBackend {
     }
   }
 
+  supportsCapability(capability: string, model?: string): boolean {
+    if (capability === "llm.text.generate") return true;
+    return capability === LLM_IMAGE_INPUT_CAPABILITY && this.imageCapableModels.has(model ?? this.opts.defaultModel);
+  }
+
   async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
+    const images = validateLLMImageInputs(req.ephemeral_images);
+    if (images.length > 0 && !this.supportsCapability(LLM_IMAGE_INPUT_CAPABILITY, req.model)) {
+      throw new LLMProviderError("Image input is not configured for the selected model.", {
+        provider: this.name,
+        kind: "bad_request",
+        retryable: false,
+      });
+    }
+    const messages = images.length > 0
+      ? openAICompatibleMessages(req.messages, images)
+      : req.messages;
     const body: {
       model: string;
-      messages: LLMRequest["messages"];
+      messages: unknown;
       max_tokens?: number;
       temperature?: number;
     } = {
       model: req.model ?? this.opts.defaultModel,
-      messages: req.messages,
+      messages,
     };
     if (req.max_tokens !== undefined) body.max_tokens = req.max_tokens;
     if (req.temperature !== undefined) body.temperature = req.temperature;
@@ -226,4 +256,28 @@ export class OpenAICompatibleBackend implements LLMBackend {
       signal,
     );
   }
+}
+
+function openAICompatibleMessages(
+  messages: LLMRequest["messages"],
+  images: NonNullable<LLMRequest["ephemeral_images"]>,
+): unknown[] {
+  let lastUserIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index]?.role === "user") lastUserIndex = index;
+  }
+  if (lastUserIndex < 0) throw new Error("llm_image_input_user_message_missing");
+  return messages.map((message, index) => index !== lastUserIndex ? message : {
+    role: "user",
+    content: [
+      { type: "text", text: message.content },
+      ...images.map((image) => ({
+        type: "image_url",
+        image_url: {
+          url: `data:${image.media_type};base64,${Buffer.from(image.data).toString("base64")}`,
+          detail: "auto",
+        },
+      })),
+    ],
+  });
 }

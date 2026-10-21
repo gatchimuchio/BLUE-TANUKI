@@ -127,7 +127,8 @@ export const LLMFallbackAuthorizationSchema = z.object({
     "selected_memory_references",
     "selected_operation_result_observations",
     "session_history",
-  ])).min(1).max(4),
+    "user_image",
+  ])).min(1).max(5),
   required_capabilities: z.array(z.string().trim().min(1).max(120)).min(1).max(16),
   max_total_cost: z.object({
     amount: z.number().finite().nonnegative(),
@@ -196,6 +197,7 @@ export const LLMComputeContextSchema = z.object({
       "failure_memory_digest_projection",
       "selected_operation_result_observations",
       "complete_history_digest_observations",
+      "user_image",
     ])).min(1).max(3),
     requested_egress_provider: z.string().trim().min(1).max(120),
   }).strict(),
@@ -630,6 +632,15 @@ export const InboundRequestSchema = z.object({
   metadata: z.record(DangerousObjectKeySchema, JsonValueSchema.optional()).optional(),
 }).strict();
 export type InboundRequest = z.infer<typeof InboundRequestSchema>;
+
+/**
+ * In-process image bytes used only for one downstream C request. This type is
+ * deliberately not part of InboundRequest or any persisted protocol schema.
+ */
+export interface TransientImageInput {
+  readonly media_type: "image/jpeg" | "image/png";
+  readonly data: Uint8Array;
+}
 
 const RegisteredRuntimeReferenceSchema = z.string()
   .min(1)

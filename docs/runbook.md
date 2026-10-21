@@ -97,6 +97,7 @@ a stop-ship event and inspect the workspace before distributing an archive.
 | `LLM_API_KEY`               | optional     | Generic bearer token for OpenAI-compatible providers  | none               |
 | `LLM_HEADERS_JSON`          | optional     | Extra OpenAI-compatible HTTP headers as a JSON object  | none               |
 | `LLM_PROVIDERS_JSON`        | optional     | Additional named provider catalog                     | none               |
+| `BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON` | optional | Exact provider model IDs explicitly enabled for image input | none (image input disabled) |
 | `ANTHROPIC_API_KEY`         | `anthropic`  | API key when `LLM_BACKEND=anthropic`                  | none               |
 | `ANTHROPIC_MODEL`           | optional     | Override default Anthropic model name                 | `claude-opus-4-7`  |
 | `ANTHROPIC_ENDPOINT`        | optional     | Override Anthropic messages endpoint                  | Anthropic API      |
@@ -154,6 +155,8 @@ touching disk.
 計算予算の既定値は、有限のoffline上限と金銭費用`0 USD`である。有償providerはownerが明示上限とprovider最大費用profileを設定するまで保留する。上書き値は`window_ms`、`currency`、`system`／`parent`／`task`を持つstrict JSONで、各scopeに`max_tokens`、`max_compute_ms`、`max_cost: { amount, currency }`を指定する。各LLM providerには`BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON`で1 attemptあたりの最大費用を設定する。この値は予約上限であり請求実額ではない。有限なprovider費用上限がない呼出しはnetworkへ出る前に保留する。実額が不明なprovider呼出しは、そのaccounting window内では予約上限全額を消費として残す。
 
 provider profileはcanonical provider名をkeyとし、valueを`{ "capabilities": ["llm.text.generate"], "max_cost_per_attempt": { "amount": <ownerが確認した上限>, "currency": "USD" } }`とする。上限は1 attemptを覆う必要があり、retryと承認済みfallbackのattempt数は予約時に乗算する。setupはこの設定を保持するが、provider価格の決定や請求照合は行わない。
+
+画像入力を許可するmodelは、providerのcanonical nameからmodel IDの配列へのJSON mapで明示する。例：`{"openai-compatible":["vision-model-v1"],"anthropic":["claude-vision-model"],"openrouter":["provider/vision-model"]}`。未記載のmodelは画像入力を拒否する。providerやmodelの対応状況はこの設定だけでは検証されず、実provider呼出しを行った証拠にもならない。画像を使うfallbackはfallback profileに`llm.image.input`を含め、fallback authorizationで同能力と`user_image`入力源を明示している場合に限る。Telegram画像のraw bytesは一回の計算に限る揮発入力であり、session履歴・監査本文・通常metadataへ保存しない。
 
 ---
 

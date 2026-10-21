@@ -64,6 +64,7 @@ import {
   InboundRouter,
   OutboundDispatcher,
   type InboundChannel,
+  type InboundEphemeralContext,
   type OutboundChannel,
 } from "@blue-tanuki/channel-base";
 import type {
@@ -451,6 +452,18 @@ export function planGatewayInboundBoundary(raw: unknown): GatewayInboundBoundary
     ...boundary,
     hdsBoundaryInput: boundary.boundary_ok ? boundary.request : raw,
   };
+}
+
+export function selectGatewayInboundEphemeralContext(
+  boundary: GatewayInboundBoundaryPlan,
+  decisionInput: unknown,
+  ephemeralContext?: InboundEphemeralContext,
+): InboundEphemeralContext | undefined {
+  return boundary.boundary_ok && boundary.request.channel === "telegram" &&
+    decisionInput === boundary.request && ephemeralContext?.request_id === boundary.request.id &&
+    ephemeralContext.ephemeral_images.length > 0
+    ? ephemeralContext
+    : undefined;
 }
 
 export function buildObservationAcquisitionRecord(
@@ -1291,6 +1304,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     log: DecisionLog,
     origin: InboundRequest,
     opts: ExecuteAndEchoOptions = {},
+    ephemeralContext?: InboundEphemeralContext,
   ): Promise<{ status: string }> {
     const isBrokerRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       cmd.payload.arguments.store_key === "broker" && cmd.payload.arguments.confirm === "RESTORE";
@@ -1298,7 +1312,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
     if (!isBrokerRestore) activeCommandFinalizations.add(finalization);
     try {
-      return await executeAndEchoCore(cmd, log, origin, opts);
+      return await executeAndEchoCore(cmd, log, origin, opts, ephemeralContext);
     } finally {
       if (!isBrokerRestore) activeCommandFinalizations.delete(finalization);
       resolveFinalization();
@@ -1310,6 +1324,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     log: DecisionLog,
     origin: InboundRequest,
     opts: ExecuteAndEchoOptions = {},
+    ephemeralContext?: InboundEphemeralContext,
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
     if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
@@ -1814,6 +1829,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     try {
       try {
         executionTask = executor.execute(approvedCommand, { save_result_delivery: planBound,
+          ...(cmd.type === "llm_call" && ephemeralContext?.request_id === log.request_id &&
+            ephemeralContext.ephemeral_images.length > 0
+            ? { ephemeral_images: ephemeralContext.ephemeral_images }
+            : {}),
           signal: executionController.signal,
           before_execute: () => {
             const resourceAdmission = resourceBackpressure.tryAcquireExecution();
@@ -4472,7 +4491,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     return documentOrganizationCheckpointStore;
   };
 
-  const handleInbound = async (req: InboundRequest): Promise<void> => {
+  const handleInbound = async (
+    req: InboundRequest,
+    ephemeralContext?: InboundEphemeralContext,
+  ): Promise<void> => {
     const boundary = planGatewayInboundBoundary(req);
     const authorityReq = boundary.request;
     // Gateway history, reply, and execution paths use only authorityReq, which
@@ -4736,7 +4758,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
 
     if (command) {
-      await executeAndEcho(command, log, authorityReq);
+      const commandEphemeralContext = selectGatewayInboundEphemeralContext(boundary, decisionInput, ephemeralContext);
+      await executeAndEcho(command, log, authorityReq, {}, commandEphemeralContext);
       return;
     }
 
@@ -4770,8 +4793,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     dispatch: handleInbound,
     log: (message, waitId) => gatewayLog.warn(message, { wait_id: waitId }),
   });
-  await router.start(async (req) => {
-    try { await handleInbound(req); }
+  await router.start(async (req, ephemeralContext) => {
+    try { await handleInbound(req, ephemeralContext); }
     finally { waitDeadlineScheduler.refresh(); }
   });
   waitDeadlineScheduler.start();

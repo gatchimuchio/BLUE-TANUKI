@@ -2866,3 +2866,22 @@ channel fixtureは添付本文がGateway inbound callbackへ届くことを確�
 F10.02のテキスト添付producer→Gateway→HDS入力を部分的に`WIRED`とする。画像／音声／他形式のC media consumer、live Telegram経路、複数入口のlive運用は残り、F10.02全体=`BUILD_GAP`。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、D4-Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次は`F16.01-IMAGE-PRODUCER-TO-C-CONSUMER`。
 
 ---
+
+### 履歴ログ：QEB-53-F16.01-IMAGE-PRODUCER-TO-C-CONSUMER
+
+開始`main`／`origin/main`=`ad957fdb1166b27c764dae5d2dc5d2087ec9936f`。現行rev2.3のpinと三点セット、適用`AGENTS.md`、active指示、F16.01要求を再同期した。GitHub側`main`は作業開始時点で一致。復旧branch／remote tagも開始HEADと直前世代の二SHAで一致していたため、その復旧二世代を保全した。保護対象untracked Linux `target/`を維持し、D4-Pocket／ミニドラには触れていない。
+
+Telegram photoとJPEG／PNG documentを、最大5 MiBの原画像bytesと要求IDだけを持つ一時contextとしてchannel adapterから渡す。filename／file ID／credential／raw image bytesは通常metadata、command、session historyへ格納しない。Gatewayは正規化済みのTelegram request、同じrequest object、context内request IDを照合し、直接の`llm_call`以外へcontextを渡さない。Router／Telegram handler完了時にbytesをzeroizeする。C image capabilityはprovider・model単位の明示allowlistで既定off。OpenAI-compatible／Anthropic adapterは原画像をnative image blockとして送信し、Stubや能力不明backendは画像を受け取らない。fallbackにもHDS authorizationと能力条件を適用する。
+
+fixture疎通はTelegram adapter→canonical Gateway boundary／context選択→HDSの`llm_call`→Executor→C adapterまで通し、画像bytesがCへ届き、request-only bufferがhandler終了後に消去されることを確認した。Gatewayの実served process、実provider、実Telegram API／資格、外部業務作用は未実施。C08.03実provider検証を行わないowner指示を維持する。モデルallowlistとfixture serializationは実providerの画像対応証拠ではない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Telegram／LLM provider／registry／Executor／Gateway fixture、Gateway config tests | PASS、6 files／71 tests。画像とtext attachmentの限定経路を確認。 |
+| protocol／channel-base／channel-telegram／core／Gateway typecheckとbuild | PASS。 |
+| `pnpm docs:check`、`git diff --check` | PASS。移行負債76件は維持。 |
+| 実served Gateway、実provider／Telegram API、資格、外部業務作用、全workspace suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+F16.01のTelegram画像producer→C consumerは部分的に`WIRED`。provider modelの実能力、served runtimeでの全経路、他media／channel接続は未確認または未接続の`BUILD_GAP`として残す。F10.02全体=`BUILD_GAP`、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次は現行工程表の`F16.02 音声要求・文字化と承認`。
+
+---

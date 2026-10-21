@@ -26,7 +26,8 @@ export type ComputeInputSource =
   | "selected_operation_result_observations"
   | "failure_memory_digest_projection"
   | "complete_history_digest_observations"
-  | "session_history";
+  | "session_history"
+  | "user_image";
 
 export interface ComputeDataExposureScope {
   input_sources: readonly ComputeInputSource[];

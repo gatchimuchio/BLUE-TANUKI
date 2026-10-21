@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { InboundEphemeralContext } from "@blue-tanuki/channel-base";
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import { TelegramChannel, splitTelegramText, type TelegramFetch, type TelegramUpdateInbox } from "../src/telegram.js";
 
@@ -8,20 +9,32 @@ interface FixtureUpdate {
     message_id: number;
     message_thread_id?: number;
     text?: string;
+    caption?: string;
     chat: { id: number | string; type?: string };
     from?: { id: number | string; username?: string; first_name?: string; is_bot?: boolean };
+    photo?: Array<{ file_id: string; file_unique_id?: string; file_size?: number; width?: number; height?: number }>;
     document?: { file_id: string; file_unique_id?: string; file_name?: string; file_size?: number; mime_type?: string };
   };
 }
 
 async function receiveOnePoll(updates: FixtureUpdate[], telegramFile?: { file_path: string; bytes: Uint8Array; reported_size?: number }): Promise<{
   received: InboundRequest[];
+  ephemeralContexts: InboundEphemeralContext[];
+  imageSnapshots: Array<{
+    request_id: string;
+    ephemeral_images: Array<{ media_type: string; data: number[] }>;
+  }>;
   offsets: Array<number | null>;
   inbox: MemoryTelegramInbox;
   fileRequests: string[];
   fileDownloads: string[];
 }> {
   const received: InboundRequest[] = [];
+  const ephemeralContexts: InboundEphemeralContext[] = [];
+  const imageSnapshots: Array<{
+    request_id: string;
+    ephemeral_images: Array<{ media_type: string; data: number[] }>;
+  }> = [];
   const offsets: Array<number | null> = [];
   const fileRequests: string[] = [];
   const fileDownloads: string[] = [];
@@ -66,10 +79,22 @@ async function receiveOnePoll(updates: FixtureUpdate[], telegramFile?: { file_pa
     fetch,
     inbox,
   });
-  await channel.start(async (request) => { received.push(request); });
+  await channel.start(async (request, context) => {
+    received.push(request);
+    if (context) {
+      ephemeralContexts.push(context);
+      imageSnapshots.push({
+        request_id: context.request_id,
+        ephemeral_images: context.ephemeral_images.map((image) => ({
+          media_type: image.media_type,
+          data: Array.from(image.data),
+        })),
+      });
+    }
+  });
   await secondPoll;
   await channel.stop();
-  return { received, offsets, inbox, fileRequests, fileDownloads };
+  return { received, ephemeralContexts, imageSnapshots, offsets, inbox, fileRequests, fileDownloads };
 }
 
 class MemoryTelegramInbox implements TelegramUpdateInbox {
@@ -169,6 +194,44 @@ describe("Telegram inbound identity and update handoff", () => {
     expect(fileRequests).toEqual(["private-file-capability"]);
     expect(JSON.stringify(received[0])).not.toContain("private-file-capability");
     expect(JSON.stringify(received[0])).not.toContain("secret.txt");
+  });
+
+  it("passes verified Telegram image bytes only through a request-scoped ephemeral context", async () => {
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0x01, 0x02]);
+    const { received, ephemeralContexts, imageSnapshots, fileRequests } = await receiveOnePoll([
+      { update_id: 221, message: { message_id: 91, caption: "この画像を説明して", chat: { id: 12345, type: "private" }, from: { id: 12345 },
+        photo: [{ file_id: "private-photo-capability", file_size: bytes.byteLength, width: 2, height: 2 }] } },
+    ], { file_path: "photos/file_91.jpg", bytes });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.content).toContain("Telegram画像添付があります");
+    expect(received[0]?.content).toContain("この画像を説明して");
+    expect(received[0]?.metadata?.telegram_attachment_image_available).toBe(true);
+    expect(imageSnapshots).toEqual([{
+      request_id: "telegram-221",
+      ephemeral_images: [{ media_type: "image/jpeg", data: Array.from(bytes) }],
+    }]);
+    expect(fileRequests).toEqual(["private-photo-capability"]);
+    expect(JSON.stringify(received[0])).not.toContain("private-photo-capability");
+    expect(JSON.stringify(received[0])).not.toContain("file_91.jpg");
+    expect(ephemeralContexts[0]?.request_id).toBe(received[0]?.id);
+    expect(ephemeralContexts[0]?.ephemeral_images[0]?.data.every((byte) => byte === 0)).toBe(true);
+  });
+
+  it("fails closed when an image document's declared MIME disagrees with its bytes", async () => {
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0x01]);
+    const { received, ephemeralContexts } = await receiveOnePoll([
+      { update_id: 222, message: { message_id: 92, chat: { id: 12345, type: "private" }, from: { id: 12345 },
+        document: { file_id: "private-image-capability", file_name: "private.png", file_size: bytes.byteLength,
+          mime_type: "image/png" } } },
+    ], { file_path: "documents/file_92.png", bytes });
+
+    expect(received[0]?.metadata?.telegram_attachment_processing_status).toBe("invalid_content");
+    expect(received[0]?.metadata?.telegram_attachment_image_available).toBe(false);
+    expect(received[0]?.content).toContain("画像データを渡しませんでした");
+    expect(ephemeralContexts).toHaveLength(0);
+    expect(JSON.stringify(received[0])).not.toContain("private-image-capability");
+    expect(JSON.stringify(received[0])).not.toContain("private.png");
   });
 
   it("does not download declared text attachments above the local byte limit", async () => {

@@ -10,11 +10,11 @@
 
 D05.02は部分的に`WIRED`だが全体は未成立。remote provider内部の停止確認とAbortSignal非協調toolの強制停止は`BUILD_GAP`として残り、未確認の停止を表示しない。閉じた取消関連BUILD_BATCHの個別説明は履歴ログに保持する。
 
-D08.01は部分的に`WIRED`。合成served経路から結果不明・再起動後照合までのlocal subpathを接続したが、実providerやowner実操作を含む全体は`BUILD_GAP`。F10.01 owner WebChat入口とF10.02 Telegram durable admission・entry identity・返信分割・UTF-8 text attachment consumerはそれぞれ局所経路を部分的に`WIRED`とする。F10.02は画像／音声／他形式のmedia consumer、live経路、複数入口運用が未接続のため`BUILD_GAP`。接続範囲と検査証拠の詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)の該当QEB履歴を参照する。閉じたBUILD_BATCHの個別手順・試験結果はactive指示に複製しない。
+D08.01は部分的に`WIRED`。合成served経路から結果不明・再起動後照合までのlocal subpathを接続したが、実providerやowner実操作を含む全体は`BUILD_GAP`。F10.01 owner WebChat入口とF10.02 Telegram durable admission・entry identity・返信分割・UTF-8 text attachment consumerはそれぞれ局所経路を部分的に`WIRED`とする。F16.01でTelegramのJPEG／PNG原画像を要求限定の一時contextとしてGatewayからCの画像対応provider adapterまで運ぶ経路を部分的に`WIRED`とする。画像consumerのfixtureはcanonical Gateway boundary→HDS→Executor→C adapterを通した。実served Gateway／実providerは未試験。F10.02全体は音声・他形式のmedia consumer、live経路、複数入口運用が未接続のため`BUILD_GAP`。C08.03実provider試験は保留であり、モデル能力の明示設定とfixture serializationは実providerの対応証拠ではない。接続範囲と検査証拠の詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)の該当QEB履歴を参照する。閉じたBUILD_BATCHの個別手順・試験結果はactive指示に複製しない。
 
 ## 次のBUILD_BATCH
 
-次のBUILD_BATCHは`F16.01-IMAGE-PRODUCER-TO-C-CONSUMER`。現行のmedia ingress、Cの画像対応契約・provider capability、原画像と解釈の分離を実コードから追い、隔離fixtureの範囲でimage dataをCへ安全に渡す実consumerを接続する。Telegramからの画像添付は本経路へ統合できるか確認する。raw media／credential／file ID／filenameを監査や通常metadataへ持ち込まず、未対応形式／サイズ／解析失敗を成功扱いしない。実provider・実資格・外部業務作用は使わない。F10.02はテキスト添付consumerの接続を部分的に`WIRED`とするが、他media形式とF16関連経路の未接続が残るため`BUILD_GAP`。依存の完成QAや全workspace suiteを先行条件にせず、QE_BUILDを維持して製品全体の結合形状成立前に詳細QC／QAを開始しない。次の独立した作業・切替・再開時は`QE_CURRENT_AUTHORITY.md`の現行pinが固定する仕様書・工程表・施工指示書の三点セットの全文を読み直す。適用`AGENTS.md`も読み直す。旧版・完了記録は依存・変更系譜・矛盾の解消に必要な箇所だけ参照する。
+次のBUILD_BATCHは`F16.02 音声要求・文字化と承認`。音声原媒体と文字起こし候補の区別、要求・承認・後続consumerを実コードから追い、F16.01および既存HDS／Approval境界を維持した一気通貫consumerを接続する。実provider・実資格・外部業務作用は使わない。F10.02はテキスト添付consumerを部分的に`WIRED`とするが、音声／他形式、live経路、複数入口運用は`BUILD_GAP`。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。依存の完成QAや全workspace suiteを先行条件にせず、QE_BUILDを維持して製品全体の結合形状成立前に詳細QC／QAを開始しない。次の独立した作業・切替・再開時は`QE_CURRENT_AUTHORITY.md`の現行pinが固定する仕様書・工程表・施工指示書の三点セットの全文を読み直す。適用`AGENTS.md`も読み直す。旧版・完了記録は依存・変更系譜・矛盾の解消に必要な箇所だけ参照する。
 
 ## 共通の保護とGit
 

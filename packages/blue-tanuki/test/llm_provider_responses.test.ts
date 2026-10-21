@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LLMRequest } from "../src/llm/base.js";
 import { AnthropicBackend } from "../src/llm/anthropic.js";
@@ -26,11 +27,80 @@ function anthropicBackend(): AnthropicBackend {
   return new AnthropicBackend("fixture-key-not-a-credential", "fixture-model", "https://fixture.invalid/v1/messages");
 }
 
+const fixturePng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02]);
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe("LLM provider structured responses", () => {
+  it("rejects image input before network access when the exact OpenAI-compatible model is not enabled", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(openAIBackend().call({
+      ...request,
+      ephemeral_images: [{ media_type: "image/png", data: fixturePng }],
+    })).rejects.toMatchObject({ kind: "bad_request", retryable: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends transient OpenAI-compatible image data only as an image content block", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      model: "fixture-vision-v1",
+      choices: [{ finish_reason: "stop", message: { content: "observed" } }],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const backend = new OpenAICompatibleBackend({
+      defaultModel: "fixture-vision-v1",
+      endpoint: "https://fixture.invalid/v1",
+      image_capable_models: ["fixture-vision-v1"],
+    });
+
+    const response = await backend.call({ ...request,
+      ephemeral_images: [{ media_type: "image/png", data: fixturePng }] });
+    const sent = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      messages: Array<{ content: Array<{ type: string; text?: string; image_url?: { url: string; detail: string } }> }>;
+    };
+
+    expect(response.content).toBe("observed");
+    expect(sent.messages[0]?.content).toEqual([
+      { type: "text", text: "fixture request" },
+      { type: "image_url", image_url: {
+        url: `data:image/png;base64,${Buffer.from(fixturePng).toString("base64")}`,
+        detail: "auto",
+      } },
+    ]);
+  });
+
+  it("sends transient Anthropic image data only for explicitly configured models", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      model: "fixture-vision-v1",
+      stop_reason: "end_turn",
+      content: [{ type: "text", text: "observed" }],
+      usage: { input_tokens: 2, output_tokens: 1 },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const backend = new AnthropicBackend("fixture-key-not-a-credential", "fixture-vision-v1",
+      "https://fixture.invalid/v1/messages", "2023-06-01", ["fixture-vision-v1"]);
+
+    const response = await backend.call({ ...request,
+      ephemeral_images: [{ media_type: "image/png", data: fixturePng }] });
+    const sent = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      messages: Array<{ content: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> }>;
+    };
+
+    expect(response.content).toBe("observed");
+    expect(sent.messages[0]?.content).toEqual([
+      { type: "text", text: "fixture request" },
+      { type: "image", source: {
+        type: "base64",
+        media_type: "image/png",
+        data: Buffer.from(fixturePng).toString("base64"),
+      } },
+    ]);
+  });
+
   it("returns OpenAI-compatible tool_calls as non-authority candidates", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
       model: "fixture-model-v2",

@@ -1,6 +1,7 @@
 import type {
   InboundRequest,
   ChannelSendPayload,
+  TransientImageInput,
 } from "@blue-tanuki/protocol";
 import type { ChannelDeliveryErrorKind } from "./delivery_error.js";
 
@@ -9,7 +10,13 @@ import type { ChannelDeliveryErrorKind } from "./delivery_error.js";
  * The handler is supplied by InboundRouter and ultimately wires to
  * HDS-BRAIN's `decide()`.
  */
-export type InboundHandler = (req: InboundRequest) => Promise<void>;
+/** Volatile adapter bytes correlated to exactly one canonical inbound request. */
+export interface InboundEphemeralContext {
+  readonly request_id: string;
+  readonly ephemeral_images: readonly TransientImageInput[];
+}
+
+export type InboundHandler = (req: InboundRequest, context?: InboundEphemeralContext) => Promise<void>;
 
 /**
  * Inbound channel (e.g. Slack RTM, Discord gateway, WebChat HTTP/WS).

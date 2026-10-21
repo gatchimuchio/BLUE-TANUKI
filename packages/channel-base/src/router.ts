@@ -1,5 +1,5 @@
 import type { InboundRequest } from "@blue-tanuki/protocol";
-import type { InboundChannel, InboundHandler } from "./types.js";
+import type { InboundChannel, InboundEphemeralContext, InboundHandler } from "./types.js";
 
 export interface InboundRouterOptions {
   /** Channels whose scheduler must observe handler failure to persist an unknown outcome. */
@@ -50,10 +50,10 @@ export class InboundRouter {
       throw new Error("InboundRouter: already started");
     }
     this.handler = handler;
-    const wrapped: InboundHandler = async (req: InboundRequest) => {
+    const wrapped: InboundHandler = async (req: InboundRequest, context?: InboundEphemeralContext) => {
       // Defensive: never let one inbound throw take down a channel listener.
       try {
-        await handler(req);
+        await handler(req, context);
       } catch (e) {
         const msg = this.redactHandlerErrorsForChannels.has(req.channel)
           ? "details redacted"
@@ -64,6 +64,8 @@ export class InboundRouter {
           // Keep the router's existing exception detail out of scheduler logs/cursors.
           throw new Error("inbound_handler_failed");
         }
+      } finally {
+        for (const image of context?.ephemeral_images ?? []) image.data.fill(0);
       }
     };
     this.started = true;

@@ -1,6 +1,9 @@
 import {
+  backendSupportsCapability,
   classifyLLMError,
   createLLMAbortError,
+  LLM_IMAGE_INPUT_CAPABILITY,
+  LLMProviderError,
   LLM_ROUTING_TRACE,
   type LLMBackend,
   type LLMFallbackCostBound,
@@ -289,6 +292,14 @@ export class LLMRegistry implements LLMBackend {
   ): Promise<LLMResponse> {
     const selected = this.resolveWithName(req.backend_hint);
     if (signal?.aborted) throw createLLMAbortError(selected.name, signal);
+    if (req.ephemeral_images?.length &&
+        !backendSupportsCapability(selected.backend, LLM_IMAGE_INPUT_CAPABILITY, req.model)) {
+      throw new LLMProviderError("Image input is not configured for the selected provider and model.", {
+        provider: selected.name,
+        kind: "bad_request",
+        retryable: false,
+      });
+    }
     try {
       const response = await this.callWithRetry(selected.backend, selected.name, req, signal);
       return withoutRoutingTrace(response);
@@ -339,6 +350,15 @@ export class LLMRegistry implements LLMBackend {
     const primaryProfile = this.fallbackProfiles.get(primaryName);
     const fallbackProfile = this.fallbackProfiles.get(fallbackName);
     if (!primaryProfile || !fallbackProfile) return undefined;
+    if (request.ephemeral_images?.length) {
+      const fallbackBackend = this.backends.get(fallbackName);
+      if (!authorization.required_capabilities.includes(LLM_IMAGE_INPUT_CAPABILITY) ||
+          !fallbackProfile.capabilities.includes(LLM_IMAGE_INPUT_CAPABILITY) ||
+          !fallbackBackend ||
+          !backendSupportsCapability(fallbackBackend, LLM_IMAGE_INPUT_CAPABILITY, request.model)) {
+        return undefined;
+      }
+    }
     if (request.max_tokens !== undefined && request.max_tokens <= 0) return undefined;
     if (authorization.required_capabilities.some(
       (capability) => !fallbackProfile.capabilities.includes(capability),

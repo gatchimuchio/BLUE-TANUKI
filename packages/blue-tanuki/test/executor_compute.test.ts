@@ -198,6 +198,45 @@ class CapturingCompute implements ComputeBackend<LLMRequest, LLMResponse> {
 }
 
 describe("Executor compute boundary", () => {
+  it("routes one-call image bytes to C, declares their exposure, and keeps them out of session history", async () => {
+    const backend = new CapturingBackend();
+    const compute = new CapturingCompute(new LLMComputeAdapter(backend));
+    const sessions = new MemorySessionStore();
+    const executor = new Executor({ approval_authority: authority, llm: backend, compute,
+      tools: new ToolRegistry(), session_store: sessions });
+    const image = { media_type: "image/png" as const,
+      data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]) };
+
+    const result = await executor.execute(approved(command("image-compute")), { ephemeral_images: [image] });
+    const request = compute.requests[0]!;
+    const textOnlyRequest = {
+      messages: [{ role: "user", content: "current request" }],
+      backend_hint: "fixture-provider",
+      max_tokens: 64,
+      timeout_ms: 1_500,
+    };
+    const expectedDigest = createHash("sha256")
+      .update(JSON.stringify(textOnlyRequest))
+      .update("\0blue-tanuki.llm-image.v1\0")
+      .update(image.media_type)
+      .update("\0")
+      .update(image.data)
+      .digest("hex");
+    const stored = await sessions.getMessages("test-session");
+
+    expect(result.status).toBe("success");
+    expect(request.data_exposure_scope.input_sources).toContain("user_image");
+    expect(request.input.ephemeral_images).toEqual([image]);
+    expect(request.input_digest).toBe(expectedDigest);
+    expect(backend.seen[0]?.ephemeral_images).toEqual([image]);
+    expect(stored.map(({ role, content }) => ({ role, content }))).toEqual([
+      { role: "user", content: "current request" },
+      { role: "assistant", content: "fixture reply" },
+    ]);
+    expect(JSON.stringify(stored)).not.toContain("image/png");
+    expect(JSON.stringify(stored)).not.toContain("ephemeral_images");
+  });
+
   it("hashes effective provider input and records local resource and history scope", async () => {
     const backend = new CapturingBackend();
     const receipt = resourceUse("compute-1");

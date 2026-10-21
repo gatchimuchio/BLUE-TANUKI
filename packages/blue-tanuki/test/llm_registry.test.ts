@@ -3,6 +3,7 @@ import { LLMRegistry } from "../src/llm/registry.js";
 import {
   LLM_ROUTING_TRACE,
   LLMProviderError,
+  LLM_IMAGE_INPUT_CAPABILITY,
   type LLMBackend,
   type LLMRequest,
   type LLMResponse,
@@ -69,7 +70,81 @@ class FailingBackend implements LLMBackend {
   }
 }
 
+class ImageCapableFailingBackend extends FailingBackend {
+  supportsCapability(capability: string, model?: string): boolean {
+    return capability === "llm.text.generate" ||
+      (capability === LLM_IMAGE_INPUT_CAPABILITY && model === "vision-v1");
+  }
+}
+
+class ImageCapableBackend extends NamedBackend {
+  supportsCapability(capability: string, model?: string): boolean {
+    return capability === "llm.text.generate" ||
+      (capability === LLM_IMAGE_INPUT_CAPABILITY && model === "vision-v1");
+  }
+}
+
 describe("LLMRegistry", () => {
+  it("allows image fallback only when the input, authorization, profile, and exact model capability agree", async () => {
+    const image = { media_type: "image/png" as const,
+      data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) };
+    const primary = new ImageCapableFailingBackend("primary", "remote_service_unavailable", true);
+    const fallback = new ImageCapableBackend("backup");
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 }, sleep: async () => undefined })
+      .register(primary)
+      .register(fallback)
+      .setFallback("backup")
+      .setFallbackProfile("primary", {
+        capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.2, currency: "USD" },
+      })
+      .setFallbackProfile("backup", {
+        capabilities: ["llm.text.generate", LLM_IMAGE_INPUT_CAPABILITY],
+        max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+      });
+
+    const response = await registry.callWithFallbackAuthorization({
+      backend_hint: "primary", model: "vision-v1", messages: [{ role: "user", content: "inspect" }],
+      ephemeral_images: [image],
+    }, undefined, {
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request", "selected_memory_references",
+        "selected_operation_result_observations", "session_history", "user_image"],
+      required_capabilities: ["llm.text.generate", LLM_IMAGE_INPUT_CAPABILITY],
+      max_total_cost: { amount: 0.3, currency: "USD" },
+    });
+
+    expect(response.provider).toBe("backup");
+    expect(fallback.seen[0]?.ephemeral_images).toEqual([image]);
+  });
+
+  it("blocks image fallback when the fallback backend lacks the exact model capability", async () => {
+    const image = { media_type: "image/png" as const,
+      data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) };
+    const primary = new ImageCapableFailingBackend("primary", "remote_service_unavailable", true);
+    const fallback = new NamedBackend("backup");
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 }, sleep: async () => undefined })
+      .register(primary)
+      .register(fallback)
+      .setFallback("backup")
+      .setFallbackProfile("primary", {
+        capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0, currency: "USD" },
+      })
+      .setFallbackProfile("backup", {
+        capabilities: ["llm.text.generate", LLM_IMAGE_INPUT_CAPABILITY],
+        max_cost_per_attempt: { amount: 0, currency: "USD" },
+      });
+
+    await expect(registry.callWithFallbackAuthorization({
+      backend_hint: "primary", model: "vision-v1", messages: [{ role: "user", content: "inspect" }],
+      ephemeral_images: [image],
+    }, undefined, {
+      allowed_providers: ["backup"], allowed_input_sources: ["accepted_inbound_request", "user_image"],
+      required_capabilities: ["llm.text.generate", LLM_IMAGE_INPUT_CAPABILITY],
+      max_total_cost: { amount: 0, currency: "USD" },
+    })).rejects.toMatchObject({ provider: "primary", kind: "remote_service_unavailable" });
+    expect(fallback.seen).toHaveLength(0);
+  });
+
   it("does not accept a provider-supplied routing trace as registry evidence", async () => {
     const provider = new NamedBackend("primary");
     const untrusted = new LLMRegistry().register({

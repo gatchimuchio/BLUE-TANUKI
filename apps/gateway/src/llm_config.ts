@@ -98,6 +98,31 @@ function parseFallbackProfilesJson(raw: string | undefined): Array<[string, LLMF
     .map(([provider, profile]) => [provider, profile as LLMFallbackProfile]);
 }
 
+function parseImageCapableModelsJson(raw: string | undefined): Map<string, string[]> {
+  if (!raw) return new Map();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON must be valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON must be a provider object");
+  }
+  const models = new Map<string, string[]>();
+  for (const [providerName, providerModels] of Object.entries(parsed as Record<string, unknown>)) {
+    const provider = providerName.trim().toLowerCase();
+    if (!provider || !Array.isArray(providerModels) || providerModels.length === 0 || providerModels.length > 64 ||
+        providerModels.some((model) => typeof model !== "string" || !model.trim() || model.length > 200) ||
+        new Set(providerModels).size !== providerModels.length) {
+      throw new Error("BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON has an invalid provider model list");
+    }
+    if (models.has(provider)) throw new Error("BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON provider names must be unique");
+    models.set(provider, providerModels.map((model) => (model as string).trim()));
+  }
+  return models;
+}
+
 function parseFallbackAuthorizationJson(raw: string | undefined): LLMCommandRoute["fallback_authorization"] {
   if (!raw) return undefined;
   let parsed: unknown;
@@ -219,6 +244,10 @@ function parseTemperatureEnv(env: Env): number | undefined {
 
 export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
   const resolvedEnv = resolveLLMSecretRefs(env);
+  const imageCapableModels = parseImageCapableModelsJson(
+    envValue(resolvedEnv, "BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON"),
+  );
+  const imageModelsFor = (provider: string): readonly string[] => imageCapableModels.get(provider) ?? [];
   const registry = new LLMRegistry({
     retry: buildLLMRetryPolicyFromEnv(resolvedEnv),
   });
@@ -244,6 +273,7 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
         envValue(resolvedEnv, "ANTHROPIC_ENDPOINT") ??
           "https://api.anthropic.com/v1/messages",
         envValue(resolvedEnv, "ANTHROPIC_API_VERSION") ?? "2023-06-01",
+        imageModelsFor("anthropic"),
       ),
       ["claude"],
     );
@@ -294,6 +324,7 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
             "LLM_HEADERS_JSON",
           ),
         ),
+        image_capable_models: imageModelsFor("openai-compatible"),
       }),
       ["openai"],
     );
@@ -324,6 +355,7 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
         defaultModel: openrouterModel,
         apiKey: openrouterKey,
         headers: openrouterHeaders,
+        image_capable_models: imageModelsFor("openrouter"),
       }),
     );
   }
@@ -339,6 +371,7 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
         defaultModel: provider.model,
         apiKey: provider.apiKey,
         headers: provider.headers,
+        image_capable_models: imageModelsFor(provider.name.trim().toLowerCase()),
       }),
       provider.aliases,
     );
@@ -351,6 +384,12 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
     envValue(resolvedEnv, "BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON"),
   )) {
     registry.setFallbackProfile(provider, profile);
+  }
+  const registeredProviders = new Set(registry.list());
+  for (const provider of imageCapableModels.keys()) {
+    if (!registeredProviders.has(provider)) {
+      throw new Error(`BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON provider '${provider}' is not registered`);
+    }
   }
   registry.setFallback(envValue(resolvedEnv, "BLUE_TANUKI_LLM_FALLBACK_BACKEND"));
   return registry;

@@ -1,6 +1,9 @@
+import { Buffer } from "node:buffer";
 import {
   LLMProviderError,
   createLLMToolCallCandidate,
+  LLM_IMAGE_INPUT_CAPABILITY,
+  validateLLMImageInputs,
   type LLMBackend,
   type LLMRequest,
   type LLMResponse,
@@ -101,21 +104,64 @@ function errorKindForStatus(status: number): {
 /** Anthropic raw-fetch adapter. Returned tool_use blocks remain candidates. */
 export class AnthropicBackend implements LLMBackend {
   readonly name = "anthropic";
+  readonly capabilities = ["llm.text.generate"] as const;
+  private readonly imageCapableModels: ReadonlySet<string>;
 
   constructor(
     private readonly apiKey: string,
     private readonly defaultModel: string = "claude-opus-4-7",
     private readonly endpoint: string = "https://api.anthropic.com/v1/messages",
     private readonly apiVersion: string = "2023-06-01",
+    imageCapableModels: readonly string[] = [],
   ) {
     if (!apiKey) throw new Error("AnthropicBackend: apiKey is required");
+    if (!Array.isArray(imageCapableModels) || imageCapableModels.length > 64 ||
+        imageCapableModels.some((model) => typeof model !== "string" || !model.trim() || model.length > 200) ||
+        new Set(imageCapableModels).size !== imageCapableModels.length) {
+      throw new Error("AnthropicBackend: imageCapableModels is invalid");
+    }
+    this.imageCapableModels = new Set(imageCapableModels.map((model) => model.trim()));
+  }
+
+  supportsCapability(capability: string, model?: string): boolean {
+    if (capability === "llm.text.generate") return true;
+    return capability === LLM_IMAGE_INPUT_CAPABILITY && this.imageCapableModels.has(model ?? this.defaultModel);
   }
 
   async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
+    const images = validateLLMImageInputs(req.ephemeral_images);
+    if (images.length > 0 && !this.supportsCapability(LLM_IMAGE_INPUT_CAPABILITY, req.model)) {
+      throw new LLMProviderError("Image input is not configured for the selected model.", {
+        provider: this.name,
+        kind: "bad_request",
+        retryable: false,
+      });
+    }
     const system = req.messages.find((message) => message.role === "system")?.content;
+    let lastUserIndex = -1;
+    for (let index = 0; index < req.messages.length; index += 1) {
+      if (req.messages[index]?.role === "user") lastUserIndex = index;
+    }
+    if (images.length > 0 && lastUserIndex < 0) throw new Error("llm_image_input_user_message_missing");
     const messages = req.messages
-      .filter((message) => message.role !== "system")
-      .map((message) => ({ role: message.role, content: message.content }));
+      .map((message, index) => ({ message, index }))
+      .filter(({ message }) => message.role !== "system")
+      .map(({ message, index }) => ({
+        role: message.role,
+        content: index === lastUserIndex && images.length > 0
+          ? [
+              { type: "text", text: message.content },
+              ...images.map((image) => ({
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: image.media_type,
+                  data: Buffer.from(image.data).toString("base64"),
+                },
+              })),
+            ]
+          : message.content,
+      }));
 
     const body: Record<string, unknown> = {
       model: req.model ?? this.defaultModel,

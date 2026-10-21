@@ -1,4 +1,4 @@
-import type { LLMBackend, LLMRequest, LLMResponse } from "./base.js";
+import { LLMProviderError, type LLMBackend, type LLMRequest, type LLMResponse } from "./base.js";
 
 /**
  * StubBackend: deterministic echo. Used for Phase 0 smoke tests
@@ -6,8 +6,16 @@ import type { LLMBackend, LLMRequest, LLMResponse } from "./base.js";
  */
 export class StubBackend implements LLMBackend {
   readonly name = "stub";
+  readonly capabilities = ["llm.text.generate"] as const;
 
   async call(req: LLMRequest): Promise<LLMResponse> {
+    if (req.ephemeral_images?.length) {
+      throw new LLMProviderError("Stub backend does not consume image input.", {
+        provider: this.name,
+        kind: "bad_request",
+        retryable: false,
+      });
+    }
     const last = req.messages[req.messages.length - 1];
     const echo = last ? last.content : "(empty)";
     return {
