@@ -20,7 +20,7 @@ QEB-23でtask-scoped Broker restore後のJ/M/Broker dependency observationは接
 
 task-scoped M restore point producerからHDS J/M dependency gateまでを限定範囲で`WIRED`とする。E03.03/QEB-03、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、store間atomicity、自動resume、QE_QC／QE_QAは未成立／未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次は現行rev2.3の未接続consumerを最新コードと照合し、次の縦断実装を選ぶ。
 
-実装と工程記録の限定commitを`main`へpushした後、remote mainと二世代backup tag、local recovery branchのSHAを記録する（閉包commit後に値を追記）。保護対象untracked Linux isolation `target/`は保持する。
+実装commit=`4b56a795988ef821487b7ce4cfc7a03d206cac32`を`main`とbackup tag二本へatomic pushした。直後のremote main／backup current tag／backup previous tagは`4b56a795988ef821487b7ce4cfc7a03d206cac32`／`4b56a795988ef821487b7ce4cfc7a03d206cac32`／`9f1715542806315768224802742ce0eba0c3e1c6`で一致し、local recovery branch二世代もcurrent=`4b56a795988ef821487b7ce4cfc7a03d206cac32`、previous=`9f1715542806315768224802742ce0eba0c3e1c6`。保護対象untracked Linux isolation `target/`は保持した。
 
 ---
 
