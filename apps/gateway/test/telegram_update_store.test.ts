@@ -74,7 +74,8 @@ describe("GatewayTelegramUpdateStore", () => {
     const firstRequests: number[] = [];
     const firstFetch = repeatedUpdateFetch(update, firstRequests);
     const firstChannel = new TelegramChannel({ bot_token: "fixture-bot-token", inbox: store, fetch: firstFetch.fetch,
-      poll_interval_ms: 1, poll_timeout_sec: 1, request_timeout_ms: 50 });
+      poll_interval_ms: 1, poll_timeout_sec: 1, request_timeout_ms: 50,
+      inbound_grants: [{ user_id: "54321", chat_id: "12345", message_thread_id: null }] });
     const firstPolls = firstFetch.secondPoll;
     let firstHandlerCalls = 0;
     await firstChannel.start(async () => { firstHandlerCalls += 1; });
@@ -89,7 +90,8 @@ describe("GatewayTelegramUpdateStore", () => {
     const restartedRequests: number[] = [];
     const restartedFetch = repeatedUpdateFetch(update, restartedRequests);
     const restartedChannel = new TelegramChannel({ bot_token: "fixture-bot-token", inbox: reopened,
-      fetch: restartedFetch.fetch, poll_interval_ms: 1, poll_timeout_sec: 1, request_timeout_ms: 50 });
+      fetch: restartedFetch.fetch, poll_interval_ms: 1, poll_timeout_sec: 1, request_timeout_ms: 50,
+      inbound_grants: [{ user_id: "54321", chat_id: "12345", message_thread_id: null }] });
     const restartedPolls = restartedFetch.secondPoll;
     let replayedHandlerCalls = 0;
     try {

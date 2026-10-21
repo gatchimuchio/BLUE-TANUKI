@@ -50,6 +50,7 @@ import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMe
 import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
+import { parseTelegramInboundGrants } from "./telegram_inbound_grants.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -4357,6 +4358,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     "read/register telegram channel",
   );
   const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramInboundGrants = telegramBotToken
+    ? parseTelegramInboundGrants(process.env.TELEGRAM_INBOUND_GRANTS_JSON)
+    : [];
   const telegramUpdateStore = telegramBotToken
     ? GatewayTelegramUpdateStore.fromEnvironment(process.env, telegramBotToken)
     : null;
@@ -4366,6 +4370,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     action: "register telegram channel",
     constructor_args: [{
       bot_token: telegramBotToken,
+      inbound_grants: telegramInboundGrants,
       ...(telegramUpdateStore ? { inbox: telegramUpdateStore } : {}),
       poll_interval_ms: parsePositiveInt(process.env.TELEGRAM_POLL_INTERVAL_MS),
       poll_timeout_sec: parsePositiveInt(process.env.TELEGRAM_POLL_TIMEOUT_SEC),

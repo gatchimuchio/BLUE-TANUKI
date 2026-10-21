@@ -58,6 +58,7 @@ describe("Telegram text attachment Gateway ingress", () => {
       request_timeout_ms: 100,
       fetch,
       inbox: new FixtureTelegramInbox(),
+      inbound_grants: [{ user_id: "12345", chat_id: "12345", message_thread_id: null }],
       log: () => undefined,
     });
 
@@ -142,6 +143,7 @@ describe("Telegram text attachment Gateway ingress", () => {
       request_timeout_ms: 100,
       fetch,
       inbox: new FixtureTelegramInbox(),
+      inbound_grants: [{ user_id: "12345", chat_id: "12345", message_thread_id: null }],
       log: () => undefined,
     });
 
@@ -268,6 +270,7 @@ describe("Telegram text attachment Gateway ingress", () => {
       request_timeout_ms: 100,
       fetch,
       inbox: new FixtureTelegramInbox(),
+      inbound_grants: [{ user_id: "12345", chat_id: "12345", message_thread_id: null }],
       log: () => undefined,
     });
 

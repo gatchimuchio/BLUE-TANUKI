@@ -123,10 +123,13 @@ Telegram は v1.0 RC first-party channel だが、WebChat の初回成功とは�
 
 ```bash
 export TELEGRAM_BOT_TOKEN="123456:telegram-bot-token"
+export TELEGRAM_INBOUND_GRANTS_JSON='[{"user_id":"12345","chat_id":"12345","message_thread_id":null}]'
 pnpm gateway:serve
 ```
 
-BotFather で作った bot に `/start` を送り、Bot API long polling が動くことを確認する。outbound target は Telegram `chat_id`。
+`TELEGRAM_INBOUND_GRANTS_JSON` はownerが実際の数値IDへ置き換えて設定する。`user_id`・`chat_id`・`message_thread_id`の完全一致が必要で、省略時はTelegram inboundをすべて拒否する。topicを使わない入口は`message_thread_id: null`、topic入口はそのtopic IDを指定する。ユーザー名や表示名はgrantに使わない。
+
+grantはTelegramからGatewayへ入れる入口の限定であり、本人確認・owner承認・HDS判断・操作許可ではない。HDS-J／Approval Gate／L3 final reviewは引き続き各操作で独立に適用する。BotFatherで作ったbotに `/start` を送り、許可したchatからのBot API long pollingを確認する。outbound targetはTelegram `chat_id`。
 
 ## 7. Approval Gate Smoke
 

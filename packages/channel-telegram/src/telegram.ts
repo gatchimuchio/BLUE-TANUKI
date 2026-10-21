@@ -4,6 +4,13 @@ import type { InboundChannel, InboundEphemeralContext, InboundHandler, OutboundC
 
 export type TelegramFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
+/** Owner-configured inbound admission for one Telegram account, chat, and topic. */
+export interface TelegramInboundGrant {
+  readonly user_id: string;
+  readonly chat_id: string;
+  readonly message_thread_id: number | null;
+}
+
 export interface TelegramOptions {
   /** Telegram bot token. Env: TELEGRAM_BOT_TOKEN. Absent -> silent mode. */
   bot_token?: string;
@@ -18,6 +25,8 @@ export interface TelegramOptions {
   log?: (line: string) => void;
   /** Durable Gateway-owned dedupe cursor. Required when a live bot token is configured. */
   inbox?: TelegramUpdateInbox;
+  /** Exact owner-configured inbound grants. Empty or absent rejects all inbound messages. */
+  inbound_grants?: readonly TelegramInboundGrant[];
 }
 
 export interface TelegramUpdateInbox {
@@ -119,6 +128,9 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
       return;
     }
     if (!this.opts.inbox) throw new Error("telegram_durable_inbox_required_for_live_polling");
+    if (!this.opts.inbound_grants?.length) {
+      this.log("[telegram] WARN TELEGRAM_INBOUND_GRANTS_JSON unset/empty — inbound messages are rejected");
+    }
     this.started = true;
     this.stopped = false;
     const latestUpdateId = this.opts.inbox.latestUpdateId();
@@ -279,6 +291,12 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
       this.log("[telegram] ignored inbound message without a stable sender id");
       return null;
     }
+    if (!this.opts.inbound_grants?.some((grant) =>
+      grant.user_id === fromId &&
+      grant.chat_id === chatId &&
+      grant.message_thread_id === threadId
+    )) return null;
+
     const attachmentKinds = telegramAttachmentKinds(msg);
     const text = typeof msg.text === "string" ? msg.text : typeof msg.caption === "string" ? msg.caption : "";
     if (!text && attachmentKinds.length === 0) return null;

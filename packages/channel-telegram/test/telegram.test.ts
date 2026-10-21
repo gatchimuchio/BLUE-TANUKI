@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { InboundEphemeralContext } from "@blue-tanuki/channel-base";
 import type { InboundRequest } from "@blue-tanuki/protocol";
-import { TelegramChannel, splitTelegramText, type TelegramFetch, type TelegramUpdateInbox } from "../src/telegram.js";
+import {
+  TelegramChannel,
+  splitTelegramText,
+  type TelegramFetch,
+  type TelegramInboundGrant,
+  type TelegramUpdateInbox,
+} from "../src/telegram.js";
 
 interface FixtureUpdate {
   update_id: number;
@@ -19,7 +25,11 @@ interface FixtureUpdate {
   };
 }
 
-async function receiveOnePoll(updates: FixtureUpdate[], telegramFile?: { file_path: string; bytes: Uint8Array; reported_size?: number }): Promise<{
+async function receiveOnePoll(
+  updates: FixtureUpdate[],
+  telegramFile?: { file_path: string; bytes: Uint8Array; reported_size?: number },
+  inboundGrants?: readonly TelegramInboundGrant[],
+): Promise<{
   received: InboundRequest[];
   ephemeralContexts: InboundEphemeralContext[];
   imageSnapshots: Array<{
@@ -81,6 +91,16 @@ async function receiveOnePoll(updates: FixtureUpdate[], telegramFile?: { file_pa
   };
 
   const inbox = new MemoryTelegramInbox();
+  const testGrants = inboundGrants ?? updates.flatMap(({ message }) => {
+    const userId = message?.from?.id;
+    const chatId = message?.chat.id;
+    if (userId === undefined || chatId === undefined) return [];
+    return [{
+      user_id: String(userId),
+      chat_id: String(chatId),
+      message_thread_id: message.message_thread_id ?? null,
+    }];
+  });
   const channel = new TelegramChannel({
     bot_token: "fixture-token",
     poll_interval_ms: 1,
@@ -88,6 +108,7 @@ async function receiveOnePoll(updates: FixtureUpdate[], telegramFile?: { file_pa
     request_timeout_ms: 50,
     fetch,
     inbox,
+    inbound_grants: testGrants,
   });
   await channel.start(async (request, context) => {
     received.push(request);
@@ -164,6 +185,29 @@ describe("Telegram inbound identity and update handoff", () => {
     expect(received.map((request) => request.user)).toEqual(["telegram:12345", "telegram:12345"]);
     expect(received.map((request) => request.metadata?.reply_to)).toEqual(["12345", "12345"]);
     expect(received.map((request) => request.metadata?.telegram_user_id)).toEqual(["12345", "12345"]);
+  });
+
+  it("admits only the exact owner-granted user, chat, and topic tuple", async () => {
+    const { received } = await receiveOnePoll([
+      { update_id: 101, message: { message_id: 1, message_thread_id: 41, text: "allowed", chat: { id: -1001 }, from: { id: 12345 } } },
+      { update_id: 102, message: { message_id: 2, message_thread_id: 42, text: "wrong topic", chat: { id: -1001 }, from: { id: 12345 } } },
+      { update_id: 103, message: { message_id: 3, message_thread_id: 41, text: "wrong user", chat: { id: -1001 }, from: { id: 54321 } } },
+      { update_id: 104, message: { message_id: 4, message_thread_id: 41, text: "wrong chat", chat: { id: -1002 }, from: { id: 12345 } } },
+    ], undefined, [{ user_id: "12345", chat_id: "-1001", message_thread_id: 41 }]);
+
+    expect(received.map((request) => request.content)).toEqual(["allowed"]);
+    expect(received[0]?.user).toContain(":chat:-1001:thread:41");
+  });
+
+  it("rejects ungranted attachments before requesting or downloading their files", async () => {
+    const { received, fileRequests, fileDownloads } = await receiveOnePoll([
+      { update_id: 105, message: { message_id: 5, chat: { id: 12345, type: "private" }, from: { id: 12345 },
+        document: { file_id: "untrusted-file-capability", file_name: "private.txt", file_size: 8, mime_type: "text/plain" } } },
+    ], { file_path: "documents/file_5.txt", bytes: new TextEncoder().encode("private") }, []);
+
+    expect(received).toHaveLength(0);
+    expect(fileRequests).toEqual([]);
+    expect(fileDownloads).toEqual([]);
   });
 
   it("hands a repeated update id to Gateway only once in one polling process", async () => {
@@ -349,7 +393,8 @@ describe("Telegram inbound identity and update handoff", () => {
       return new Response(JSON.stringify({ ok: true, result: [] }));
     };
     const channel = new TelegramChannel({ bot_token: "fixture-token", poll_interval_ms: 1, poll_timeout_sec: 1,
-      request_timeout_ms: 50, fetch, inbox });
+      request_timeout_ms: 50, fetch, inbox,
+      inbound_grants: [{ user_id: "12345", chat_id: "12345", message_thread_id: null }] });
     await channel.start(async () => { throw new Error("synthetic handler failure"); });
     await secondPoll;
     await channel.stop();
