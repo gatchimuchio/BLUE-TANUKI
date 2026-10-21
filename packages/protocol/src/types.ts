@@ -376,12 +376,69 @@ export const FailureReviewIndependentObservationSchema = z.object({
 }).strict();
 export type FailureReviewIndependentObservation = z.infer<typeof FailureReviewIndependentObservationSchema>;
 
+/** A retained, non-authoritative reference to an earlier C derivation. */
+export const FailureReviewLineageReferenceSchema = z.object({
+  record_digest: FailureReviewSha256Schema,
+  signature_digest: FailureReviewSha256Schema,
+  pre_state_digest: FailureReviewSha256Schema,
+  experience_digest: FailureReviewSha256Schema,
+  derivation_digest: FailureReviewSha256Schema,
+  derived_at: z.string().datetime(),
+  candidate_categories: z.array(FailureReviewTypeSchema).max(16),
+  adoption_status: z.literal("not_adopted"),
+  approval_status: z.literal("not_requested"),
+  memory_application_status: z.literal("stored_for_future_reference"),
+  follow_up_action_status: z.literal("unconfirmed"),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+export type FailureReviewLineageReference = z.infer<typeof FailureReviewLineageReferenceSchema>;
+
+/** Retained digest-only C derivation bound to FailureMemory; never an enforceable rule. */
+export const FailureLearningLineageRecordSchema = z.object({
+  schema_version: z.literal("blue-tanuki.failure-learning-lineage.v1"),
+  record_id: FailureReviewSha256Schema,
+  signature_id_digest: FailureReviewSha256Schema,
+  signature_digest: FailureReviewSha256Schema,
+  pre_state_digest: FailureReviewSha256Schema,
+  scope: FailureReviewScopeSchema,
+  retention_period: z.object({
+    first_observed_at: z.string().min(1).max(64),
+    last_observed_at: z.string().min(1).max(64),
+  }).strict(),
+  experience_reference_digests: z.array(FailureReviewSha256Schema).max(256),
+  experience_digest: FailureReviewSha256Schema,
+  prior_lineage_record_digests: z.array(FailureReviewSha256Schema).max(32),
+  request_id_digest: FailureReviewSha256Schema,
+  command_id_digest: FailureReviewSha256Schema,
+  projection_digest: FailureReviewSha256Schema,
+  candidate_content_digest: FailureReviewSha256Schema,
+  derivation_digest: FailureReviewSha256Schema,
+  application_target: z.literal("failure-memory.learning-lineage.v1"),
+  derivation_categories: z.array(FailureReviewTypeSchema).max(16),
+  derived_at: z.string().datetime(),
+  adoption_status: z.literal("not_adopted"),
+  approval_status: z.literal("not_requested"),
+  memory_application_status: z.literal("stored_for_future_reference"),
+  follow_up_action_status: z.literal("unconfirmed"),
+  cross_store_atomic: z.literal(false),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+export type FailureLearningLineageRecord = z.infer<typeof FailureLearningLineageRecordSchema>;
+
 /** Gatewayが失敗署名と参照済みComplete Historyから作るdigest-only入力。権限や世界事実ではない。 */
 export const FailureReviewProjectionSchema = z.object({
   schema_version: z.literal("blue-tanuki.failure-review-projection.v1"),
   signature_id: z.string().uuid(),
   signature_digest: FailureReviewSha256Schema,
+  pre_state_digest: FailureReviewSha256Schema,
+  retention_period: z.object({
+    first_observed_at: z.string().min(1).max(64),
+    last_observed_at: z.string().min(1).max(64),
+  }).strict(),
   evidence_log_id_digests: z.array(FailureReviewSha256Schema).max(256),
+  prior_learning_lineages: z.array(FailureReviewLineageReferenceSchema).max(32),
   independent_observation_source_status: z.enum(["verified", "unavailable", "invalid"]),
   independent_observations: z.array(FailureReviewIndependentObservationSchema).max(256),
   scope: FailureReviewScopeSchema,

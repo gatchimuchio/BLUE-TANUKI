@@ -1,13 +1,15 @@
 import {
   FailureReviewCandidateSchema,
   FailureReviewIndependentObservationSchema,
+  FailureReviewLineageReferenceSchema,
   FailureReviewProjectionSchema,
   type FailureReviewCandidate,
   type FailureReviewIndependentObservation,
+  type FailureReviewLineageReference,
   type FailureReviewProjection,
 } from "@blue-tanuki/protocol";
 import { sha256Hex, stableJson } from "../complete-history/codec.js";
-import type { FailureSignature, FailureType } from "./types.js";
+import { FailureLearningLineageRecordSchema, type FailureLearningLineageRecord, type FailureSignature, type FailureType } from "./types.js";
 import type { FailureReviewAuditTrace } from "../types.js";
 
 const SAFE_UNKNOWNS = new Set([
@@ -24,6 +26,7 @@ export function createFailureReviewProjection(
   signature: FailureSignature,
   independentObservations: readonly FailureReviewIndependentObservation[] = [],
   independentObservationSourceStatus: FailureReviewProjection["independent_observation_source_status"] = "unavailable",
+  priorLearningLineages: readonly FailureReviewLineageReference[] = [],
 ): FailureReviewProjection {
   const causeCandidates = [...new Set(signature.cause_candidates ?? [])];
   const unknowns = [...new Set((signature.unknowns ?? []).filter((item) => SAFE_UNKNOWNS.has(item)))];
@@ -34,23 +37,24 @@ export function createFailureReviewProjection(
   if (parsedObservations.some((observation) => !allowedEvidenceIds.has(observation.entry_id_digest))) {
     throw new Error("failure review observation is not bound to signature evidence");
   }
-  const identity = {
-    id: signature.id,
-    scope: signature.scope,
-    failure_type: signature.failure_type,
-    input_pattern: signature.input_pattern,
-    action_pattern: signature.action_pattern,
-    context_pattern: signature.context_pattern,
-    result_pattern: signature.result_pattern ?? null,
-    cause_candidates: causeCandidates,
-    unknowns,
-    evidence_log_id_digests: evidenceLogIdDigests,
-  };
+  const signatureDigest = failureSignatureDigest(signature);
+  const preStateDigest = failureSignaturePreStateDigest(signature);
+  const parsedLineages = priorLearningLineages.map((lineage) => FailureReviewLineageReferenceSchema.parse(lineage));
+  if (parsedLineages.some((lineage) => lineage.signature_digest !== signatureDigest) ||
+      new Set(parsedLineages.map((lineage) => lineage.record_digest)).size !== parsedLineages.length) {
+    throw new Error("failure review lineage reference is not bound to signature");
+  }
   return FailureReviewProjectionSchema.parse({
     schema_version: "blue-tanuki.failure-review-projection.v1",
     signature_id: signature.id,
-    signature_digest: sha256Hex(stableJson(identity)),
+    signature_digest: signatureDigest,
+    pre_state_digest: preStateDigest,
+    retention_period: {
+      first_observed_at: signature.created_at ?? "unavailable",
+      last_observed_at: signature.last_seen_at ?? "unavailable",
+    },
     evidence_log_id_digests: evidenceLogIdDigests,
+    prior_learning_lineages: parsedLineages,
     independent_observation_source_status: independentObservationSourceStatus,
     independent_observations: parsedObservations,
     scope: signature.scope,
@@ -64,6 +68,42 @@ export function createFailureReviewProjection(
   });
 }
 
+export function failureSignatureDigest(signature: FailureSignature): string {
+  return sha256Hex(stableJson({
+    id: signature.id,
+    scope: signature.scope,
+    failure_type: signature.failure_type,
+    input_pattern: signature.input_pattern,
+    action_pattern: signature.action_pattern,
+    context_pattern: signature.context_pattern,
+    result_pattern: signature.result_pattern ?? null,
+    cause_candidates: [...new Set(signature.cause_candidates ?? [])],
+    unknowns: [...new Set((signature.unknowns ?? []).filter((item) => SAFE_UNKNOWNS.has(item)))],
+    evidence_log_id_digests: [...new Set(signature.evidence_log_ids.map((id) => sha256Hex(id)))].sort(),
+  }));
+}
+
+export function failureSignaturePreStateDigest(signature: FailureSignature): string {
+  return sha256Hex(stableJson({
+    signature_digest: failureSignatureDigest(signature),
+    state: signature.state,
+    match_level: signature.match_level,
+    suppression_policy: signature.suppression_policy,
+    confidence: signature.confidence,
+    severity: signature.severity,
+    probe_policy: signature.probe_policy,
+    allow_probe: signature.allow_probe,
+    created_at: signature.created_at,
+    updated_at: signature.updated_at,
+    last_seen_at: signature.last_seen_at,
+    last_validated_at: signature.last_validated_at ?? null,
+    next_revalidation_at: signature.next_revalidation_at ?? null,
+    hit_count: signature.hit_count,
+    ttl_days: signature.ttl_days ?? null,
+    decay_rate: signature.decay_rate ?? null,
+  }));
+}
+
 export function failureReviewProjectionDigest(projection: FailureReviewProjection): string {
   return sha256Hex(stableJson(projection));
 }
@@ -75,6 +115,92 @@ export function parseFailureReviewCandidate(value: unknown): FailureReviewCandid
   }
   const parsed = FailureReviewCandidateSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
+}
+
+/** Hash the C derivation body separately from its request/projection binding. */
+export function failureReviewDerivationDigest(candidate: FailureReviewCandidate): string {
+  return sha256Hex(stableJson({
+    cause_hypotheses: candidate.cause_hypotheses,
+    alternative_hypotheses: candidate.alternative_hypotheses,
+    observation_error_hypotheses: candidate.observation_error_hypotheses,
+    scope_assessment: candidate.scope_assessment,
+    counterexamples: candidate.counterexamples,
+    resume_conditions: candidate.resume_conditions,
+    additional_observations: candidate.additional_observations,
+  }));
+}
+
+export function failureReviewExperienceDigest(projection: FailureReviewProjection): string {
+  return sha256Hex(stableJson({
+    evidence_log_id_digests: projection.evidence_log_id_digests,
+    independent_observation_source_status: projection.independent_observation_source_status,
+    independent_observations: projection.independent_observations,
+  }));
+}
+
+/** Build a digest-only M record for a J-reviewed, still-unadopted C derivation. */
+export function buildFailureLearningLineageRecord(input: {
+  projection: FailureReviewProjection;
+  candidate: FailureReviewCandidate;
+  request_id: string;
+  command_id: string;
+  derived_at?: Date;
+}): FailureLearningLineageRecord {
+  const projection = FailureReviewProjectionSchema.parse(input.projection);
+  const candidate = FailureReviewCandidateSchema.parse(input.candidate);
+  if (candidate.signature_id !== projection.signature_id || candidate.signature_digest !== projection.signature_digest ||
+      candidate.projection_digest !== failureReviewProjectionDigest(projection)) {
+    throw new Error("failure learning candidate is not bound to current projection");
+  }
+  const content = {
+    schema_version: "blue-tanuki.failure-learning-lineage.v1" as const,
+    signature_id_digest: sha256Hex(projection.signature_id),
+    signature_digest: projection.signature_digest,
+    pre_state_digest: projection.pre_state_digest,
+    scope: projection.scope,
+    retention_period: projection.retention_period,
+    experience_reference_digests: projection.evidence_log_id_digests,
+    experience_digest: failureReviewExperienceDigest(projection),
+    prior_lineage_record_digests: projection.prior_learning_lineages.map((lineage) => lineage.record_digest),
+    request_id_digest: sha256Hex(input.request_id),
+    command_id_digest: sha256Hex(input.command_id),
+    projection_digest: failureReviewProjectionDigest(projection),
+    candidate_content_digest: sha256Hex(stableJson(candidate)),
+    derivation_digest: failureReviewDerivationDigest(candidate),
+    application_target: "failure-memory.learning-lineage.v1" as const,
+    derivation_categories: [...new Set(candidate.cause_hypotheses.map((hypothesis) => hypothesis.category))].sort() as FailureType[],
+    derived_at: (input.derived_at ?? new Date()).toISOString(),
+    adoption_status: "not_adopted" as const,
+    approval_status: "not_requested" as const,
+    memory_application_status: "stored_for_future_reference" as const,
+    follow_up_action_status: "unconfirmed" as const,
+    cross_store_atomic: false as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+  };
+  return FailureLearningLineageRecordSchema.parse({
+    ...content,
+    record_id: sha256Hex(stableJson(content)),
+  });
+}
+
+export function failureLearningLineageReference(record: FailureLearningLineageRecord): FailureReviewLineageReference {
+  const parsed = FailureLearningLineageRecordSchema.parse(record);
+  return FailureReviewLineageReferenceSchema.parse({
+    record_digest: parsed.record_id,
+    signature_digest: parsed.signature_digest,
+    pre_state_digest: parsed.pre_state_digest,
+    experience_digest: parsed.experience_digest,
+    derivation_digest: parsed.derivation_digest,
+    derived_at: parsed.derived_at,
+    candidate_categories: parsed.derivation_categories,
+    adoption_status: parsed.adoption_status,
+    approval_status: parsed.approval_status,
+    memory_application_status: parsed.memory_application_status,
+    follow_up_action_status: parsed.follow_up_action_status,
+    used_for_authority: false,
+    may_execute: false,
+  });
 }
 
 /** Cの提案をJのdigest-only、非権威レビューへ結合する。提案自体は採用しない。 */
@@ -106,6 +232,7 @@ export function assessFailureReviewCandidate(input: {
       : "held_for_independent_observation",
     independent_observation_count: observation.count,
     independent_observation_digest: observation.digest,
+    prior_learning_lineage_count: input.projection.prior_learning_lineages.length,
     counterexample_review_target_status: candidate.counterexamples.length === 0
       ? "not_present"
       : scopeBound ? "retained_for_future_observation" : "held_for_scope",
@@ -185,6 +312,7 @@ function emptyFailureReviewTrace(
     scope_disposition: "held_for_independent_observation",
     independent_observation_count: observation.count,
     independent_observation_digest: observation.digest,
+    prior_learning_lineage_count: projection.prior_learning_lineages.length,
     counterexample_review_target_status: "not_present",
     resume_condition_review_target_status: "not_present",
     cause_hypothesis_count: 0,

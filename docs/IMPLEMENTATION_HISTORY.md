@@ -2438,3 +2438,19 @@ FailureMemoryのpre-execution gateで、同じscopeと完全一致`action_patter
 | 全workspace suite、Gateway serveのlive approval往復、C08.03 provider／credential、外部作用、全体QE_QC／QE_QA、5OS実機 | 未実施。 |
 
 E04.03の同一action条件変更→fresh approval gateを`WIRED`とする。これで再試行が無条件に許可されたわけではなく、condition fingerprint差だけでは実環境の修復を証明しない。E04.03の対象別QC／QAと製品全体の`BUILD_COVERED`／QE_QC／QE_QAは未成立。次はrev2.3のE05.01でFailureMemory保持・C導出・J採否・M反映の系譜producer／consumerを現物から確定して接続する。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+### 履歴ログ：`QEB-29-E05.01-RETENTION-DERIVATION-APPLICATION-LINEAGE`
+
+開始HEAD／`main`／`origin/main`=`438ec7486523f96ae3048ac5ba3ca0d1092981e9`。owner指定rev2.3三点セットの現行pin、適用AGENTS、active指示、E05.01の保持・導出・反映要求と現行FailureMemory／HDS／Gateway consumerを再同期した。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持しGitへ含めない。
+
+GatewayがFailureMemory signatureからdigest-only projectionを作り、HDSがrequest-bound C候補を非権威レビューした後、未採用候補のlineageをFailureMemoryへ追記する。記録はsignature／pre-state digest、retention period、experience references/digest、C derivation digest、application target、別々のadoption／approval／memory-application／follow-up状態を保持し、raw candidate本文やIDを複製しない。次回の同署名FailureReviewでは最大32件の過去lineageをCへ参照として返す。再表示は同じsignature・experience・derivationの組だけreplay扱いにする。lineageは`evaluateGate`から分離され、Approval、adoption、retry、execution、HDS policyを変更しない。既存failure-memory-v2 snapshotのoptional fieldなし読込を維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| FailureMemory store persistence/redaction/gate isolation | PASS、18/18。保存・再読込、lineage recordのdigest-only形状、FailureGateからの分離を確認。 |
+| HDS controller lineage/replay | PASS、76/76。J-reviewed未採用状態の保存と同じ導出の重複抑止を確認。 |
+| Gateway FailureReview producer→next-consumer | PASS、6/6。C候補feedback後の次projectionへ非権威prior lineageが届くことを確認。 |
+| workspace `pnpm typecheck`／`pnpm build`、`git diff --check` | PASS。buildは15 workspace projects。 |
+| 全workspace suite、live provider／credential、外部作用、QE_QC／QE_QA、5OS実機 | 未実施。完成した全体形状成立後の工程に配置。 |
+
+E05.01のFailureMemory→C→J→M→後続C参照のこのproducer→consumerを`WIRED`とする。E05.01親要求の全範囲、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立／未開始。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はrev2.3 E05.02「学習成立と改善・外部改修の分離」の実consumerを再同期後に選ぶ。

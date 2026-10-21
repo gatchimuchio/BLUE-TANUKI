@@ -340,6 +340,7 @@ export interface ExecutorFeedbackAuditTrace {
   skeptical_review?: SkepticalReviewAuditTrace;
   failure_review_contract_status: "not_present" | "passed" | "failed";
   failure_review?: FailureReviewAuditTrace;
+  failure_learning_lineage?: FailureLearningLineageAuditTrace;
   meaning_update_proposal_contract_status: "not_present" | "passed" | "failed";
   meaning_update_proposal_digest?: string;
   meaning_update_proposal_reference_review: {
@@ -463,6 +464,7 @@ export interface FailureReviewAuditTrace {
   scope_disposition: "held_for_independent_observation" | "bound_to_independent_observation";
   independent_observation_count: number;
   independent_observation_digest: string;
+  prior_learning_lineage_count: number;
   counterexample_review_target_status: "not_present" | "held_for_scope" | "retained_for_future_observation";
   resume_condition_review_target_status: "not_present" | "held_for_scope" | "retained_for_future_observation";
   cause_hypothesis_count: number;
@@ -477,6 +479,21 @@ export interface FailureReviewAuditTrace {
   follow_up_required: "none" | "independent_observation";
   may_execute: false;
   used_for_authority: false;
+}
+
+export interface FailureLearningLineageAuditTrace {
+  status: "stored" | "replayed_prior_derivation" | "not_recorded" | "store_unavailable" | "source_unavailable" |
+    "pre_state_changed" | "record_conflict" | "write_failed";
+  record_digest?: string;
+  derivation_digest?: string;
+  prior_reference_count: number;
+  adoption_status: "not_adopted";
+  approval_status: "not_requested";
+  memory_application_status: "stored_for_future_reference" | "not_applied";
+  follow_up_action_status: "unconfirmed";
+  cross_store_atomic: false;
+  used_for_authority: false;
+  may_execute: false;
 }
 
 /**

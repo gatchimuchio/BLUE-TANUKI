@@ -2,6 +2,8 @@ import {
   CompleteHistoryStore,
   createFailureReviewProjection,
   extractFailureSignatures,
+  failureLearningLineageReference,
+  failureSignatureDigest,
   resolveActor,
   sha256Hex,
   type FailureMemoryStore,
@@ -48,10 +50,16 @@ export function prepareFailureReviewInbound(
     const independentObservations = chainValid
       ? linkedIndependentObservations(signature.evidence_log_ids, completeHistory!)
       : [];
+    const signatureDigest = failureSignatureDigest(signature);
+    const priorLearningLineages = store.listLearningLineageForSignature(signature.id)
+      .filter((record) => record.signature_digest === signatureDigest)
+      .slice(-32)
+      .map(failureLearningLineageReference);
     const projection = createFailureReviewProjection(
       signature,
       independentObservations,
       chainValid ? "verified" : completeHistory ? "invalid" : "unavailable",
+      priorLearningLineages,
     );
     return createGatewayInternalInboundRequest({
       ...request,

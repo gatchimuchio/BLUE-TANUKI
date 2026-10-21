@@ -2,11 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import { FailureReviewCandidateSchema, type ExecuteCommand } from "@blue-tanuki/protocol";
 import {
   CompleteHistoryStore,
   FailureMemoryStore,
   assessFailureReviewCandidate,
+  buildFailureLearningLineageRecord,
   candidateFromCommand,
   createFailureReviewProjection,
   extractFailureSignatures,
@@ -66,6 +67,57 @@ describe("FailureMemoryStore", () => {
       expect(loaded?.hit_count).toBe(2);
       expect(loaded?.state).toBe("retired");
       expect(loaded?.evidence_log_ids).toEqual(["log-1", "log-2"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists digest-only learning lineage while keeping it outside the failure gate", () => {
+    const dir = mkdtempSync(join(tmpdir(), "failure-memory-lineage-"));
+    const file = join(dir, "failure-memory.json");
+    try {
+      const store = new FailureMemoryStore({ filepath: file });
+      const signature = store.addSignature({
+        scope: "repo",
+        failure_type: "logic_drift",
+        input_pattern: "raw input sentinel",
+        action_pattern: "raw action sentinel",
+        context_pattern: "raw context sentinel",
+        result_pattern: "raw result sentinel",
+        evidence_log_ids: ["private-evidence-id"],
+      });
+      const projection = createFailureReviewProjection(signature);
+      const candidate = FailureReviewCandidateSchema.parse({
+        schema_version: "blue-tanuki.failure-review-candidate.v1",
+        signature_id: projection.signature_id,
+        signature_digest: projection.signature_digest,
+        projection_digest: failureReviewProjectionDigest(projection),
+        cause_hypotheses: [{ category: "logic_drift", rationale: "private candidate text" }],
+        alternative_hypotheses: ["private alternative"],
+        observation_error_hypotheses: ["private observation"],
+        scope_assessment: "uncertain",
+        counterexamples: ["private counterexample"],
+        resume_conditions: ["private condition"],
+        additional_observations: ["private observation request"],
+        authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+      });
+      const record = buildFailureLearningLineageRecord({
+        projection,
+        candidate,
+        request_id: "private-request-id",
+        command_id: "private-command-id",
+        derived_at: new Date("2026-10-21T00:00:00.000Z"),
+      });
+      expect(store.appendLearningLineage(record)).toMatchObject({ status: "stored" });
+
+      const saved = JSON.parse(readFileSync(file, "utf8")) as { learning_lineage_records: unknown[] };
+      const savedLineages = JSON.stringify(saved.learning_lineage_records);
+      for (const raw of ["raw input sentinel", "private-evidence-id", "private candidate text", "private-request-id"]) {
+        expect(savedLineages).not.toContain(raw);
+      }
+      const reloaded = new FailureMemoryStore({ filepath: file });
+      expect(reloaded.listLearningLineageForSignature(signature.id)).toEqual([record]);
+      expect(reloaded.evaluateGate(candidateFromCommand(toolCommand())).decision).toBe("allow");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

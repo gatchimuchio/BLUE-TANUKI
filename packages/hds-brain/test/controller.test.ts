@@ -10,7 +10,8 @@ import {
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
-import { createFailureReviewProjection, FailureMemoryStore, failureReviewProjectionDigest } from "../src/failure-memory/index.js";
+import { createFailureReviewProjection, FailureMemoryStore, failureLearningLineageReference,
+  failureReviewProjectionDigest } from "../src/failure-memory/index.js";
 import { AuditLog, type AuditEntry } from "../src/audit.js";
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition } from "../src/policy.js";
 import type { PolicyConfig } from "../src/types.js";
@@ -948,7 +949,7 @@ describe("HDSUpperController.onFeedback()", () => {
       notes: "FAILURE_REVIEW_RAW_NOTE_SENTINEL",
     });
     const projection = createFailureReviewProjection(signature);
-    const c = new HDSUpperController();
+    const c = new HDSUpperController({ failure_memory_store: store });
     const { log, command } = c.decide(createGatewayInternalInboundRequest({
       id: "failure-review-controller-request",
       channel: "webchat",
@@ -1010,9 +1011,65 @@ describe("HDSUpperController.onFeedback()", () => {
       may_execute: false,
       used_for_authority: false,
     });
+    expect(feedbackEntry && "kind" in feedbackEntry && feedbackEntry.kind === "executor_feedback"
+      ? feedbackEntry.feedback.failure_learning_lineage : undefined).toMatchObject({
+      status: "stored",
+      adoption_status: "not_adopted",
+      approval_status: "not_requested",
+      memory_application_status: "stored_for_future_reference",
+      follow_up_action_status: "unconfirmed",
+      cross_store_atomic: false,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    const retainedLineages = store.listLearningLineageForSignature(signature.id);
+    expect(retainedLineages).toHaveLength(1);
+    expect(retainedLineages[0]).toMatchObject({
+      signature_digest: projection.signature_digest,
+      pre_state_digest: projection.pre_state_digest,
+      experience_reference_digests: projection.evidence_log_id_digests,
+      derivation_categories: ["logic_drift"],
+      application_target: "failure-memory.learning-lineage.v1",
+      adoption_status: "not_adopted",
+      approval_status: "not_requested",
+      memory_application_status: "stored_for_future_reference",
+      follow_up_action_status: "unconfirmed",
+    });
+    expect(JSON.stringify(retainedLineages)).not.toContain(rationale);
     expect(JSON.stringify(feedbackEntry)).not.toContain(rationale);
     expect(c.getAudit().list().some((entry) => "kind" in entry.log && entry.log.kind === "operation_plan")).toBe(false);
     expect(c.getAudit().verify()).toBe(true);
+
+    const replayProjection = createFailureReviewProjection(signature, [], "unavailable",
+      retainedLineages.map(failureLearningLineageReference));
+    expect(replayProjection.prior_learning_lineages).toHaveLength(1);
+    const replayController = new HDSUpperController({ failure_memory_store: store });
+    const replayDecision = replayController.decide(createGatewayInternalInboundRequest({
+      id: "failure-review-replay-request",
+      channel: "webchat",
+      user: "u1",
+      content: `failure:review ${signature.id}`,
+      timestamp: Date.now(),
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.failure_review.version": "blue-tanuki.failure-review.v1",
+        "blue_tanuki.failure_review.signature_id": replayProjection.signature_id,
+        "blue_tanuki.failure_review.projection_json": JSON.stringify(replayProjection),
+      },
+    }));
+    expect(replayDecision.command?.type).toBe("llm_call");
+    if (!replayDecision.command || replayDecision.command.type !== "llm_call") return;
+    const replayCandidate = { ...candidate, projection_digest: failureReviewProjectionDigest(replayProjection) };
+    replayController.onFeedback(feedback(replayDecision.command.id, { content: JSON.stringify(replayCandidate) }));
+    const replayFeedbackEntry = replayController.getAudit().list().find((entry) =>
+      "kind" in entry.log && entry.log.kind === "executor_feedback")?.log;
+    expect(replayFeedbackEntry && "kind" in replayFeedbackEntry && replayFeedbackEntry.kind === "executor_feedback"
+      ? replayFeedbackEntry.feedback.failure_learning_lineage : undefined).toMatchObject({
+      status: "replayed_prior_derivation",
+      memory_application_status: "stored_for_future_reference",
+    });
+    expect(store.listLearningLineageForSignature(signature.id)).toHaveLength(1);
   });
 
   it("fails closed for external or malformed failure review commands", () => {

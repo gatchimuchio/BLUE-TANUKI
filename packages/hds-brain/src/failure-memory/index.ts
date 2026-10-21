@@ -1,5 +1,6 @@
 export {
   FAILURE_MEMORY_SCHEMA_VERSION,
+  type FailureLearningLineageRecord,
   type FailureExtractionInput,
   type FailureConditionChangeMatch,
   type FailureConditionDimension,
@@ -66,8 +67,14 @@ export {
 } from "./verifier.js";
 export {
   assessFailureReviewCandidate,
+  buildFailureLearningLineageRecord,
   createFailureReviewProjection,
+  failureLearningLineageReference,
+  failureReviewDerivationDigest,
+  failureReviewExperienceDigest,
   failureReviewProjectionDigest,
+  failureSignatureDigest,
+  failureSignaturePreStateDigest,
   failureReviewResultContent,
   invalidFailureReviewTrace,
   parseFailureReviewCandidate,

@@ -2,7 +2,10 @@ import type {
   ExecuteCommand,
   ExecuteFeedback,
 } from "@blue-tanuki/protocol";
+import { FailureLearningLineageRecordSchema, type FailureLearningLineageRecord } from "@blue-tanuki/protocol";
 import type { CompleteHistoryEntry } from "../complete-history/index.js";
+
+export { FailureLearningLineageRecordSchema, type FailureLearningLineageRecord };
 
 export const FAILURE_MEMORY_SCHEMA_VERSION = "failure-memory-v2";
 
@@ -140,6 +143,8 @@ export type FailureMemorySnapshot = {
   schema_version: typeof FAILURE_MEMORY_SCHEMA_VERSION;
   exported_at: string;
   signatures: FailureSignature[];
+  /** Optional on load for backward compatibility with existing v2 snapshots. */
+  learning_lineage_records?: FailureLearningLineageRecord[];
 };
 
 export type FailureGateDecision =

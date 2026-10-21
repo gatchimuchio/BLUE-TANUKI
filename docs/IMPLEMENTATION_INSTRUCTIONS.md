@@ -10,8 +10,10 @@ QE_STAGE=`QE_BUILD`。現行pinはrev2.3、backup ref移行=`MIGRATION_COMPLETE`
 
 `QEB-28-E04.03-CONDITION-CHANGE-REOBSERVATION`では、同じ完全一致action／targetに対し、新しいHDS `ASSERT`のgoal／actor／channel fingerprint差をFailureMemory gateで検出する。activeなblock／require-approval署名は旧記録のまま保持し、通常のfresh Approval Gateへ渡す。`probe_policy=never`のblockは解除せず、異なるaction／targetへ適用を広げない。fingerprint差は外部条件の解消証明や実行権限ではない。FailureMemory focused 17/17、Gateway operation-result focused 7/7、HDS／Gateway typecheck/buildはPASS。全suite、実provider／credential／外部作用、E04.03の対象別QC／QA、製品全体の`BUILD_COVERED`とQE_QC／QE_QAは未実施。
 
+`QEB-29-E05.01-RETENTION-DERIVATION-APPLICATION-LINEAGE`では、Jがrequest-bound C候補を非採用のまま確認した後、FailureMemoryへdigest-only lineageとして保存し、次回のFailureReview projectionからCへ参照を返すproducer→consumerを接続した。署名・pre-state・保持期間・経験digest・導出digest・適用先を一つの記録へ束ね、採用・承認・M参照保存・follow-upを別状態で保持する。同じ署名・経験・導出の再表示だけをreplay扱いとし、FailureGateはlineageを参照しない。旧v2 snapshotとの互換を維持。FailureMemory／HDS controller／Gateway focused 100/100、workspace typecheck/buildはPASS。全workspace suite、provider／credential／外部作用、QE_QC／QE_QAは未実施。
+
 ## 次の接続
 
-次の`BUILD_BATCH`は`QEB-29-E05.01-RETENTION-DERIVATION-APPLICATION-LINEAGE`とし、FailureMemory保持・C導出・J採否・M反映の系譜producer／consumerを現物から確定して接続する。現在のE04.03は、同一action／target下の新しいHDS ASSERTとgoal／actor／channel fingerprint差を条件変化候補として検出し、fresh Approval Gateへ渡すまで接続した。差分だけでは外部条件の解消を証明しない。旧失敗署名とnever-probe blockを維持し、旧承認の再利用をしない。開始時に現行三点セット・適用AGENTS.md・owner指示・active指示・HEAD／差分を再同期し、旧ログは依存・系譜・矛盾の解決時だけ参照する。
+次の`BUILD_BATCH`は`QEB-30-E05.02-LEARNING-IMPROVEMENT-EXTERNAL-CHANGE-SEPARATION`とし、E05.01の保持済みlineageを踏まえ、学習候補の成立と通常の改善・外部改修作用を分離する実consumerを現物から特定して接続する。開始時に現行三点セット・適用AGENTS.md・owner指示・active指示・HEAD／差分を再同期し、E05.02の該当要求・対象コード・次consumerを確定する。旧ログは依存・系譜・矛盾の解決時だけ参照する。
 
 HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closed、`cross_store_atomic=false`を維持する。provider実試験、実credential、外部作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は対象外。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。

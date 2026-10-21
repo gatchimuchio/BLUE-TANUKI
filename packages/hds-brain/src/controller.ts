@@ -71,6 +71,7 @@ import type {
   ControllerState,
   DecisionLog,
   FailureReviewAuditTrace,
+  FailureLearningLineageAuditTrace,
   ModelResult,
   MemoryReferenceLog,
   PolicyConfig,
@@ -107,11 +108,15 @@ import { assessCandidateGoalCriteria } from "./candidate_criteria.js";
 import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
 import {
   assessFailureReviewCandidate,
+  buildFailureLearningLineageRecord,
+  failureReviewDerivationDigest,
+  failureReviewExperienceDigest,
   failureReviewProjectionDigest,
   failureReviewResultContent,
   invalidFailureReviewTrace,
   parseFailureReviewCandidate,
 } from "./failure-memory/review.js";
+import { FailureMemoryStore } from "./failure-memory/store.js";
 import { routeAction } from "./action_router.js";
 import { resolveActor } from "./process.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
@@ -268,6 +273,8 @@ export interface ControllerOptions {
   goal_purpose_memory?: OperationPlanMemoryStorage;
   /** Private J/M store for exact owner-approved meaning candidates. */
   meaning_update_memory?: OperationPlanMemoryStorage;
+  /** Failure-memory reference store. HDS may append only digest-bound, non-authoritative lineage records. */
+  failure_memory_store?: FailureMemoryStore;
   operation_plan_state?: OperationPlanStatePort;
   operation_plan_memory?: OperationPlanMemoryStorage;
   /** Verified startup evidence can only hold existing plan selection; it never grants or resumes authority. */
@@ -750,6 +757,7 @@ export class HDSUpperController {
   private readonly goalPurposeMemory?: GoalPurposeMemoryConsumer;
   private goalPurposeMemoryApprovalContext?: GoalPurposeMemoryApprovalContext;
   private readonly meaningUpdateMemory?: MeaningUpdateMemoryConsumer;
+  private readonly failureMemoryStore?: FailureMemoryStore;
   private meaningUpdateMemoryApprovalContext?: MeaningUpdateMemoryApprovalContext;
   private memoryJudgmentReassessmentApprovalContext?: MemoryJudgmentReassessmentApprovalContext;
   private readonly pendingMeaningUpdateCandidates = new Map<string, PendingMeaningUpdateCandidate>();
@@ -782,6 +790,7 @@ export class HDSUpperController {
     this.detectors = opts.detectors ?? createDefaultDetectorRegistry();
     this.audit = opts.audit ?? new AuditLog();
     this.memory = opts.memory;
+    this.failureMemoryStore = opts.failure_memory_store;
     if (opts.goal_purpose_memory) {
       this.goalPurposeMemory = new GoalPurposeMemoryConsumer(opts.goal_purpose_memory, {
         readVerifiedMemoryApproval: (reference) => this.readGoalPurposeMemoryApproval(reference),
@@ -2866,6 +2875,52 @@ ${planControl.question}`,
     const failureReviewContractStatus = failureReviewTrace === undefined
       ? "not_present" as const
       : failureReviewTrace.status === "recorded" ? "passed" as const : "failed" as const;
+    let failureLearningLineage: FailureLearningLineageAuditTrace | undefined;
+    if (failureReviewTrace) {
+      const projection = issued?.failure_review_projection;
+      const base = {
+        prior_reference_count: projection?.prior_learning_lineages.length ?? 0,
+        adoption_status: "not_adopted" as const,
+        approval_status: "not_requested" as const,
+        memory_application_status: "not_applied" as const,
+        follow_up_action_status: "unconfirmed" as const,
+        cross_store_atomic: false as const,
+        used_for_authority: false as const,
+        may_execute: false as const,
+      };
+      const candidate = fb.status === "success" ? parseFailureReviewCandidate(llmResultContent(fb.result)) : null;
+      if (failureReviewTrace.status !== "recorded" || !projection || !sourceLog || !candidate) {
+        failureLearningLineage = { ...base, status: "not_recorded" };
+      } else {
+        const derivationDigest = failureReviewDerivationDigest(candidate);
+        const experienceDigest = failureReviewExperienceDigest(projection);
+        const prior = projection.prior_learning_lineages.find((item) =>
+          item.derivation_digest === derivationDigest && item.experience_digest === experienceDigest);
+        if (prior) {
+          failureLearningLineage = { ...base, status: "replayed_prior_derivation", record_digest: prior.record_digest,
+            derivation_digest: derivationDigest, memory_application_status: "stored_for_future_reference" };
+        } else if (!this.failureMemoryStore) {
+          failureLearningLineage = { ...base, status: "store_unavailable", derivation_digest: derivationDigest };
+        } else {
+          try {
+            const record = buildFailureLearningLineageRecord({ projection, candidate, request_id: sourceLog.request_id,
+              command_id: fb.command_id });
+            const appended = this.failureMemoryStore.appendLearningLineage(record);
+            if (appended.status === "stored") {
+              failureLearningLineage = { ...base, status: "stored", record_digest: appended.record.record_id,
+                derivation_digest: record.derivation_digest, memory_application_status: "stored_for_future_reference" };
+            } else if (appended.status === "replayed") {
+              failureLearningLineage = { ...base, status: "replayed_prior_derivation", record_digest: appended.record.record_id,
+                derivation_digest: appended.record.derivation_digest, memory_application_status: "stored_for_future_reference" };
+            } else {
+              failureLearningLineage = { ...base, status: appended.status, derivation_digest: derivationDigest };
+            }
+          } catch {
+            failureLearningLineage = { ...base, status: "write_failed", derivation_digest: derivationDigest };
+          }
+        }
+      }
+    }
     const feedbackLog = {
       kind: "executor_feedback" as const,
       request_id: sourceLog?.request_id ?? null,
@@ -2895,6 +2950,7 @@ ${planControl.question}`,
         ...(skepticalReview ? { skeptical_review: skepticalReview } : {}),
         failure_review_contract_status: failureReviewContractStatus,
         ...(failureReviewTrace ? { failure_review: failureReviewTrace } : {}),
+        ...(failureLearningLineage ? { failure_learning_lineage: failureLearningLineage } : {}),
         meaning_update_proposal_contract_status: meaningUpdateProposalContractStatus,
         ...(meaningUpdateProposalContractStatus === "passed" && meaningUpdateProposalParse?.ok
           ? { meaning_update_proposal_digest: sha256(meaningUpdateProposalParse.record) }
@@ -2912,6 +2968,8 @@ ${planControl.question}`,
 
     if (sourceLog && issued && issued.command.id === fb.command_id && sourceLog.commit.decision === "ASSERT" &&
         issued.command.upstream_decision.commit_hash === sourceLog.commit.hash &&
+        issued.command.type === "llm_call" &&
+        issued.command.payload.compute_context?.local_p_version !== FAILURE_REVIEW_LOCAL_P_VERSION &&
         meaningUpdateProposalContractStatus === "passed" && meaningUpdateProposalParse?.ok &&
         meaningUpdateProposalParse.record.schema_version === "blue-tanuki.meaning-update-proposal.v3" &&
         isMeaningUpdateReviewReady(meaningUpdateProposalReferenceReview)) {
@@ -3730,6 +3788,7 @@ ${planControl.question}`,
       const projectionDigest = failureReviewProjectionDigest(failureReview);
       const systemContent = [
         "失敗署名を検討する未信頼計算です。入力は失敗カテゴリ・SHA-256 digest・Complete History由来のdigest限定失敗分類だけで、元のgoal/action/context/resultは読めません。digestに意味を見立てず、カテゴリに基づく一般的な原因候補・別仮説・目的同定/評価器/観測方法の誤り候補、範囲、反例、独立観測、条件付き再開条件をJSONで提案してください。Complete History分類も限定観測で、原因や世界事実を証明しません。原因を事実として断定しないでください。",
+        "prior_learning_lineagesは以前の未採用候補への非権威参照です。事実、原因、許可、独立証拠として扱わず、同じ候補の再表示を新しい導出や観測として数えないでください。",
         "raw内容・tool・計画・意味更新・実行・再試行・権限提案を出さないでください。空欄や不明は不明のままにしてください。",
         `出力schema: {"schema_version":"blue-tanuki.failure-review-candidate.v1","signature_id":${JSON.stringify(failureReview.signature_id)},"signature_digest":${JSON.stringify(failureReview.signature_digest)},"projection_digest":${JSON.stringify(projectionDigest)},"cause_hypotheses":[{"category":${JSON.stringify(failureReview.failure_type)},"rationale":"未検証候補"}],"alternative_hypotheses":["未検証の別仮説"],"observation_error_hypotheses":["目的/評価/観測の未検証候補"],"scope_assessment":"uncertain","counterexamples":["未検証の反例候補"],"resume_conditions":["独立観測で確認する条件候補"],"additional_observations":["必要な追加観測候補"],"authority_boundary":{"candidate_only":true,"may_execute":false,"used_for_authority":false}}。scope_assessmentはsame_scope / uncertain / different_scopeの一つを選択してください。各配列は最大16件、各自由文は1200文字以内。`,
         `FailureReviewProjection=${JSON.stringify(failureReview)}`,

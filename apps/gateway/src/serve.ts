@@ -689,11 +689,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       !(operationPlanCheckpointAtStartup?.plans.length && startupHistorySize === 0),
     recovery_projection: startupBrokerRestoreProjection,
   });
+  const failureMemory = buildFailureMemoryStore(process.env);
   const hds = new HDSUpperController({
     operation_plan_state: operationPlanState,
     operation_plan_memory: operationResultMemoryStorage(),
     goal_purpose_memory: goalPurposeMemoryStorage(),
     meaning_update_memory: meaningUpdateMemoryStorage(),
+    failure_memory_store: failureMemory,
     operation_plan_recovery_evidence: startupOperationPlanRecoveryEvidence,
     operation_plan_broker_restore_dependency_evidence: startupBrokerRestoreDependencyEvidence,
     operation_plan_broker_restore_dependency_verifier: verifyRecoveryDependenciesForFreshReview,
@@ -704,7 +706,6 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     self_health: runtimeSelfHealth,
   });
   const startupAuditEntryCount = hds.getAudit().list().length;
-  const failureMemory = buildFailureMemoryStore(process.env);
   gatewayLog.info("complete history", {
     persistence: completeHistoryFile ? "jsonl" : "memory",
     entries: completeHistory.size(),

@@ -107,7 +107,7 @@ describe("prepareFailureReviewInbound", () => {
     expect(JSON.stringify(projection)).not.toContain("PRIVATE_FAILURE_REVIEW_ERROR");
     expect(JSON.stringify(projection)).not.toContain("private-request");
 
-    const hds = new HDSUpperController();
+    const hds = new HDSUpperController({ failure_memory_store: store });
     const { command } = hds.decide(result);
     expect(command?.type).toBe("llm_call");
     if (!command || command.type !== "llm_call") return;
@@ -157,6 +157,15 @@ describe("prepareFailureReviewInbound", () => {
     expect(reviewedContent.counterexamples_adopted_as_facts).toBe(false);
     expect(reviewedContent.resume_conditions_adopted_as_permissions).toBe(false);
     hds.onFeedback(rawFeedback);
+    const next = prepareFailureReviewInbound(developerRequest("failure:review " + signature.id), store) as InboundRequest;
+    const nextProjection = JSON.parse(String(next.metadata?.["blue_tanuki.failure_review.projection_json"])) as {
+      prior_learning_lineages: Array<{ derivation_digest: string; adoption_status: string; may_execute: boolean }>;
+    };
+    expect(nextProjection.prior_learning_lineages).toHaveLength(1);
+    expect(nextProjection.prior_learning_lineages[0]).toMatchObject({
+      adoption_status: "not_adopted",
+      may_execute: false,
+    });
   });
 
   it("connects an explicit projection to an HDS-issued compute command without executing it", () => {

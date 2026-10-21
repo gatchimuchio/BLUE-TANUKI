@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { sha256Hex, stableJson } from "../complete-history/codec.js";
 import {
   candidateFromCommand,
   changedCommandConditionDimensions,
@@ -28,6 +29,7 @@ import type {
   FailureGateDecision,
   FailureGateMatch,
   FailureGateResult,
+  FailureLearningLineageRecord,
   FailureMemorySnapshot,
   FailureRuleState,
   FailureSignature,
@@ -40,7 +42,9 @@ import type {
 } from "./types.js";
 import {
   FAILURE_MEMORY_SCHEMA_VERSION,
+  FailureLearningLineageRecordSchema,
 } from "./types.js";
+import { failureSignatureDigest, failureSignaturePreStateDigest } from "./review.js";
 
 export interface FailureMemoryStoreOptions {
   filepath?: string;
@@ -65,6 +69,7 @@ export class FailureMemoryStore {
   private readonly filepath?: string;
   private readonly now: () => Date;
   private signatures: FailureSignature[] = [];
+  private learningLineageRecords: FailureLearningLineageRecord[] = [];
 
   constructor(opts: FailureMemoryStoreOptions = {}) {
     this.filepath = opts.filepath;
@@ -215,6 +220,41 @@ export class FailureMemoryStore {
     return this.signatures
       .filter((signature) => filter.state === undefined || signature.state === filter.state)
       .map(cloneSignature);
+  }
+
+  listLearningLineageForSignature(signatureId: string): FailureLearningLineageRecord[] {
+    const signatureIdDigest = sha256Hex(signatureId);
+    return this.learningLineageRecords
+      .filter((record) => record.signature_id_digest === signatureIdDigest)
+      .map(cloneLearningLineageRecord);
+  }
+
+  /** J-reviewed candidate evidence only; this record is never consulted by evaluateGate. */
+  appendLearningLineage(recordInput: FailureLearningLineageRecord):
+    | { readonly status: "stored" | "replayed"; readonly record: FailureLearningLineageRecord }
+    | { readonly status: "source_unavailable" | "pre_state_changed" | "record_conflict" } {
+    const parsed = FailureLearningLineageRecordSchema.safeParse(recordInput);
+    if (!parsed.success || !hasValidLearningLineageRecordId(parsed.data)) return { status: "record_conflict" };
+    const record = parsed.data;
+    const signature = this.signatures.find((item) => sha256Hex(item.id) === record.signature_id_digest);
+    if (!signature) return { status: "source_unavailable" };
+    if (failureSignatureDigest(signature) !== record.signature_digest ||
+        failureSignaturePreStateDigest(signature) !== record.pre_state_digest) {
+      return { status: "pre_state_changed" };
+    }
+    const existing = this.learningLineageRecords.find((item) => item.record_id === record.record_id);
+    if (existing) {
+      return canonicalJson(existing) === canonicalJson(record)
+        ? { status: "replayed", record: cloneLearningLineageRecord(existing) }
+        : { status: "record_conflict" };
+    }
+    const priorDerivation = this.learningLineageRecords.find((item) =>
+      item.signature_id_digest === record.signature_id_digest && item.signature_digest === record.signature_digest &&
+      item.experience_digest === record.experience_digest && item.derivation_digest === record.derivation_digest);
+    if (priorDerivation) return { status: "replayed", record: cloneLearningLineageRecord(priorDerivation) };
+    this.learningLineageRecords.push(cloneLearningLineageRecord(record));
+    this.persist();
+    return { status: "stored", record: cloneLearningLineageRecord(record) };
   }
 
   evaluateGate(candidate: FailureGateCandidate): FailureGateResult {
@@ -379,6 +419,7 @@ export class FailureMemoryStore {
       schema_version: FAILURE_MEMORY_SCHEMA_VERSION,
       exported_at: opts.exported_at ?? this.now().toISOString(),
       signatures: this.list(),
+      learning_lineage_records: this.learningLineageRecords.map(cloneLearningLineageRecord),
     };
   }
 
@@ -409,6 +450,7 @@ export class FailureMemoryStore {
       throw new Error(`FailureMemoryStore: malformed snapshot ${this.filepath}`);
     }
     this.signatures = parsed.signatures.map((signature) => ({ ...signature }));
+    this.learningLineageRecords = (parsed.learning_lineage_records ?? []).map(cloneLearningLineageRecord);
   }
 
   private persist(): void {
@@ -521,5 +563,24 @@ function cloneSignature(signature: FailureSignature): FailureSignature {
 function isSnapshot(value: unknown): value is FailureMemorySnapshot {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const snapshot = value as Partial<FailureMemorySnapshot>;
-  return snapshot.schema_version === FAILURE_MEMORY_SCHEMA_VERSION && Array.isArray(snapshot.signatures);
+  return snapshot.schema_version === FAILURE_MEMORY_SCHEMA_VERSION && Array.isArray(snapshot.signatures) &&
+    (snapshot.learning_lineage_records === undefined ||
+      (Array.isArray(snapshot.learning_lineage_records) && snapshot.learning_lineage_records.every((record) => {
+        const parsed = FailureLearningLineageRecordSchema.safeParse(record);
+        return parsed.success && hasValidLearningLineageRecordId(parsed.data);
+      }) && new Set(snapshot.learning_lineage_records.map((record) => (record as FailureLearningLineageRecord).record_id)).size ===
+        snapshot.learning_lineage_records.length));
+}
+
+function hasValidLearningLineageRecordId(record: FailureLearningLineageRecord): boolean {
+  const { record_id, ...content } = record;
+  return sha256Hex(stableJson(content)) === record_id;
+}
+
+function cloneLearningLineageRecord(record: FailureLearningLineageRecord): FailureLearningLineageRecord {
+  return structuredClone(record);
+}
+
+function canonicalJson(value: unknown): string {
+  return stableJson(value);
 }
