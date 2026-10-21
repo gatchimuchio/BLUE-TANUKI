@@ -558,10 +558,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   let gatewayShuttingDown = false;
   let cronEventsStoreQuiesced = false;
   let jMRestoreStoreQuiesced: "j_control" | "m_state" | null = null;
+  let brokerRestoreStoreQuiesced = false;
   let canonicalStoreRestoreMaintenanceCommandId: string | null = null;
   for (const tool of createRecoveryMutationTools(process.env, () => recoveryExecutionStore, {
     canonicalStoreRestoreQuiesced: (storeKey: CanonicalStateStoreKey) =>
-      storeKey === "cron_events" ? cronEventsStoreQuiesced : storeKey === jMRestoreStoreQuiesced,
+      storeKey === "cron_events" ? cronEventsStoreQuiesced
+        : storeKey === "broker" ? brokerRestoreStoreQuiesced
+          : storeKey === jMRestoreStoreQuiesced,
   })) tools.register(tool);
   plugins.registerTools(tools);
   const llm = buildLLMBackendFromEnv();
@@ -661,6 +664,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const pendingApprovals = new Map<string, PendingApproval>();
   const executionControllers = new Set<AbortController>();
   const executionTasks = new Set<Promise<ExecuteFeedback>>();
+  const activeCommandFinalizations = new Set<Promise<void>>();
   const emergencyStopStateStore = EmergencyStopStateStore.fromEnvironment(process.env);
   const emergencyStop = new EmergencyStopControl({
     store: emergencyStopStateStore,
@@ -1062,23 +1066,43 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
    * Run a command through the executor, then mirror user-visible command
    * output back to the originating channel as a channel_send.
    */
+  type ExecuteAndEchoOptions = {
+    skip_approval?: boolean;
+    actor?: string;
+    approval_evaluation?: ApprovalEvaluation;
+    command_digest?: string;
+    expected_gmail_draft_provider_state_digest?: string;
+    expected_file_edit_target_version_digest?: string;
+    goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
+    goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
+    meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
+    memory_judgment_reassessment_proposal?: PendingApproval["memory_judgment_reassessment_proposal"];
+    quiet_approval_notice?: boolean;
+  };
   async function executeAndEcho(
     cmd: ExecuteCommand,
     log: DecisionLog,
     origin: InboundRequest,
-    opts: {
-      skip_approval?: boolean;
-      actor?: string;
-      approval_evaluation?: ApprovalEvaluation;
-      command_digest?: string;
-      expected_gmail_draft_provider_state_digest?: string;
-      expected_file_edit_target_version_digest?: string;
-      goal_purpose_proposal?: PendingApproval["goal_purpose_proposal"];
-      goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
-      meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
-      memory_judgment_reassessment_proposal?: PendingApproval["memory_judgment_reassessment_proposal"];
-      quiet_approval_notice?: boolean;
-    } = {},
+    opts: ExecuteAndEchoOptions = {},
+  ): Promise<{ status: string }> {
+    const isBrokerRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
+      cmd.payload.arguments.store_key === "broker" && cmd.payload.arguments.confirm === "RESTORE";
+    let resolveFinalization!: () => void;
+    const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
+    if (!isBrokerRestore) activeCommandFinalizations.add(finalization);
+    try {
+      return await executeAndEchoCore(cmd, log, origin, opts);
+    } finally {
+      if (!isBrokerRestore) activeCommandFinalizations.delete(finalization);
+      resolveFinalization();
+    }
+  }
+
+  async function executeAndEchoCore(
+    cmd: ExecuteCommand,
+    log: DecisionLog,
+    origin: InboundRequest,
+    opts: ExecuteAndEchoOptions = {},
   ): Promise<{ status: string }> {
     const actor = opts.actor ?? origin.user;
     if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
@@ -1099,6 +1123,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const jMRestoreStoreKey = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       (cmd.payload.arguments.store_key === "j_control" || cmd.payload.arguments.store_key === "m_state") &&
       cmd.payload.arguments.confirm === "RESTORE" ? cmd.payload.arguments.store_key : null;
+    const brokerRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
+      cmd.payload.arguments.store_key === "broker" && cmd.payload.arguments.confirm === "RESTORE";
     let executionEvaluation = opts.approval_evaluation ?? null;
     if (!hds.operationPlanCommandIsCurrent(cmd)) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_binding_stale" });
@@ -1431,6 +1457,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
     const observedGmailDraftStateDigest = targetVersionObservation?.schema_version ===
       "blue-tanuki.gmail-write-target-version.v1" ? targetVersionObservation.provider_state_digest : undefined;
+    if (canonicalStoreRestoreMaintenanceCommandId && canonicalStoreRestoreMaintenanceCommandId !== cmd.id) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
+        actor,
+        reason: "canonical_state_restore_in_progress",
+      });
+      return { status: "canonical_state_restore_in_progress" };
+    }
     if (opts.expected_gmail_draft_provider_state_digest &&
         observedGmailDraftStateDigest !== opts.expected_gmail_draft_provider_state_digest) {
       const reason = "gmail_draft_content_review_stale";
@@ -1543,6 +1576,22 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       if (!hds.holdOperationPlansForCanonicalMemoryRestore(cmd)) {
         throw new Error("j_m_operation_plan_hold_unavailable");
       }
+    }
+    let brokerRestoreQuiesced = false;
+    if (brokerRestore) {
+      if (pendingApprovals.size > 0) {
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "broker_restore_pending_approvals" });
+        return { status: "broker_restore_pending_approvals" };
+      }
+      canonicalStoreRestoreMaintenanceCommandId = cmd.id;
+      while (activeCommandFinalizations.size > 0 || executionTasks.size > 0) {
+        await Promise.allSettled([
+          ...Array.from(activeCommandFinalizations),
+          ...Array.from(executionTasks),
+        ]);
+      }
+      brokerRestoreStoreQuiesced = true;
+      brokerRestoreQuiesced = true;
     }
     let fb: ExecuteFeedback;
     const executionController = new AbortController();
@@ -1773,6 +1822,62 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         gatewayLog.warn("J/M restore remains held after post-action observation", {
           command_id: cmd.id,
           reason: "restore_result_unverified",
+        });
+      }
+    }
+    if (brokerRestoreQuiesced) {
+      const restoreResultEvidence = fb.status === "success"
+        ? recoveryStoreRestoreHistoryEvidence(fb.result)
+        : null;
+      let observationVerified = false;
+      if (executionHistory && finalOutputRecorded && restoreResultEvidence?.store_key === "broker") {
+        const historySize = completeHistory.size();
+        const historySkippedCount = completeHistory.skippedCount();
+        const historyChainValid = completeHistory.verify();
+        const historyIncompleteAtStart = recoveryObservationHistoryIncomplete;
+        const historyAtCapacity = completeHistoryMaxEntries !== undefined && historySize >= completeHistoryMaxEntries;
+        const historyEntries = completeHistory.replay().filter(
+          (entry): entry is CompleteHistoryEntry & { kind: "execution_history" | "final_output" } =>
+            entry.kind === "execution_history" || entry.kind === "final_output",
+        );
+        const historyEvidence = {
+          entries: historyEntries,
+          chain_valid: historyChainValid,
+          skipped_count: historySkippedCount + (historyAtCapacity || historyIncompleteAtStart ? 1 : 0),
+          not_before_timestamp_ms: recoveryObservationStartedAtMs,
+        };
+        const historyComplete = !!completeHistoryFile && historyChainValid && historySkippedCount === 0 &&
+          !historyAtCapacity && !historyIncompleteAtStart;
+        if (historyComplete) {
+          try {
+            const observation = await buildRecoveryPostActionObservation(historyEvidence, process.env, {
+              mode: "in_process_restore",
+              expected_command_id: cmd.id,
+            });
+            const historyStable = historySize === completeHistory.size() &&
+              historySkippedCount === completeHistory.skippedCount() && historyChainValid === completeHistory.verify() &&
+              historyIncompleteAtStart === recoveryObservationHistoryIncomplete;
+            observationVerified = historyStable && observation.status === "matched" &&
+              observation.operation === "restore" && observation.store_key === "broker" &&
+              observation.command_id_digest === createHash("sha256").update(cmd.id).digest("hex") &&
+              observation.store_ledger_status === "verified" && observation.store_ledger_residual_count === 0 &&
+              observation.restore_backup_id_digest === restoreResultEvidence.restored_backup_id_digest &&
+              observation.restored_state_digest === restoreResultEvidence.restored_store_state_digest;
+          } catch {
+            observationVerified = false;
+          }
+        }
+      }
+      if (observationVerified && !gatewayShuttingDown &&
+          canonicalStoreRestoreMaintenanceCommandId === cmd.id) {
+        brokerRestoreStoreQuiesced = false;
+        brokerRestoreQuiesced = false;
+        canonicalStoreRestoreMaintenanceCommandId = null;
+      } else {
+        gatewayLog.warn("Broker restore remains held after post-action observation", {
+          command_id: cmd.id,
+          observation_verified: observationVerified,
+          restore_result_verified: restoreResultEvidence?.store_key === "broker",
         });
       }
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -16,6 +16,7 @@ import {
   type RecoveryHistoryEvidenceEntry,
 } from "../src/recovery_surface.js";
 import { operationPlanRecoveryEvidenceFromObservation } from "../src/operation_plan_recovery_evidence.js";
+import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -72,6 +73,7 @@ function selectedStoreRestoreHistory(
   firstIndex = 4,
   scopePlanDigest: string | null = operationPlanDigest("private-clean-plan"),
   scopeMode?: "plan_scoped_merge_v1",
+  storeKey: "operation_plans" | "broker" = "operation_plans",
 ): RecoveryHistoryEvidenceEntry[] {
   const entries = historyFor("recovery.restore", "success", digest("b"), digest("b"), commandId, firstIndex);
   const execution = entries[0]!;
@@ -83,7 +85,7 @@ function selectedStoreRestoreHistory(
         ...payload,
         recovery_store_restore: {
           schema_version: 1,
-          store_key: "operation_plans",
+          store_key: storeKey,
           restored_store_state_digest: stateDigest,
           restored_backup_id_digest: backupIdDigest,
           ...(scopePlanDigest ? { restore_scope_plan_digest: scopePlanDigest } : {}),
@@ -785,6 +787,51 @@ describe("buildRecoveryPostActionObservation", () => {
           dependency_status: "unknown",
         }],
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("re-observes a Broker restore against the selected live store before accepting it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-broker-observation-"));
+    try {
+      const stateRoot = path.join(root, "state");
+      const recoveryRoot = path.join(root, "recovery");
+      const brokerPath = path.join(stateRoot, "private-state", "execution-intents", "executor.sqlite");
+      await mkdir(path.dirname(brokerPath), { recursive: true });
+      const store = new GatewayExecutionIntentStore(brokerPath, randomUUID());
+      store.close();
+      const backup = await createRecoveryBackup({
+        BLUE_TANUKI_STATE_ROOT: stateRoot,
+        BLUE_TANUKI_RECOVERY_DIR: recoveryRoot,
+      });
+      const stateDigest = await sha256File(brokerPath);
+      const backupDigest = createHash("sha256").update(backup.backup_id!).digest("hex");
+      const entries = selectedStoreRestoreHistory(stateDigest, backupDigest, "broker-restore-command", 4,
+        null, undefined, "broker");
+      const observation = await buildRecoveryPostActionObservation({
+        entries,
+        chain_valid: true,
+        skipped_count: 0,
+        not_before_timestamp_ms: entries[0]!.timestamp - 1,
+      }, { BLUE_TANUKI_STATE_ROOT: stateRoot, BLUE_TANUKI_RECOVERY_DIR: recoveryRoot }, {
+        mode: "in_process_restore",
+        expected_command_id: "broker-restore-command",
+      });
+
+      expect(observation).toMatchObject({
+        status: "matched",
+        operation: "restore",
+        store_key: "broker",
+        restore_backup_id_digest: backupDigest,
+        restored_state_digest: stateDigest,
+        store_ledger_status: "verified",
+        store_ledger_residual_count: 0,
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(JSON.stringify(observation)).not.toContain(backup.backup_id);
+      expect(JSON.stringify(observation)).not.toContain(brokerPath);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

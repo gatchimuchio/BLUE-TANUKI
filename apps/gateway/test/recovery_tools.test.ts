@@ -103,8 +103,16 @@ describe("Recovery mutation tool boundary", () => {
       .find((tool) => tool.name === "recovery.restore");
     const arguments_ = { backup_id: "fixture", store_key: "broker", confirm: "RESTORE" };
     await expect(restore?.invoke(arguments_))
-      .rejects.toThrow("broker_restore_execution_context_missing");
+      .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
     await expect(restore?.invoke(arguments_, {
+      command_id: "fixture-restore",
+      upstream_commit_hash: "fixture-commit",
+      idempotency_key: "a".repeat(64),
+    })).rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
+    const quiescedRestore = createRecoveryMutationTools({}, undefined, {
+      canonicalStoreRestoreQuiesced: (storeKey) => storeKey === "broker",
+    }).find((tool) => tool.name === "recovery.restore");
+    await expect(quiescedRestore?.invoke(arguments_, {
       command_id: "fixture-restore",
       upstream_commit_hash: "fixture-commit",
       idempotency_key: "a".repeat(64),

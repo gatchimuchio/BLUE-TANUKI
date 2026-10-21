@@ -108,7 +108,8 @@ export function createRecoveryMutationTools(
       if (canonicalStoreRestoreConsumersNotQuiesced(args.store_key).length > 0) {
         throw new Error("canonical_state_restore_consumers_not_quiesced");
       }
-      if ((args.store_key === "j_control" || args.store_key === "m_state" || args.store_key === "cron_events") &&
+      if ((args.store_key === "j_control" || args.store_key === "m_state" || args.store_key === "broker" ||
+           args.store_key === "cron_events") &&
           options.canonicalStoreRestoreQuiesced?.(args.store_key) !== true) {
         throw new Error("canonical_state_restore_consumers_not_quiesced");
       }

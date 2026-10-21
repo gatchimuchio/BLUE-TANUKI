@@ -102,7 +102,9 @@ describe("Broker canonical snapshot restore transaction", () => {
       // Add a completed entry after the selected point; full-store restore must remove it.
       completedFixtureReceipt(store, "post-snapshot-fixture", epoch);
 
-      const restoreTool = createRecoveryMutationTools(env, () => store).find((tool) => tool.name === "recovery.restore");
+      const restoreTool = createRecoveryMutationTools(env, () => store, {
+        canonicalStoreRestoreQuiesced: (storeKey) => storeKey === "broker",
+      }).find((tool) => tool.name === "recovery.restore");
       expect(restoreTool).toBeDefined();
       const tools = new ToolRegistry();
       tools.register(restoreTool!);
