@@ -19,7 +19,7 @@
 | `pnpm docs:check`／`git diff --check` | 両方PASS。日本語基底の移行負債76件は既存。 |
 | 全suite、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。 |
 
-このhold中の保存結果producer→J/M→owner result consumerを`WIRED`とする。E03.03／QEB-03全体は`BUILD_GAP`で、回復可能な仕事と破損依存仕事のjob単位隔離に必要な次consumerは未特定。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+実装commit=`72f8b2833c3a850a04d978f55d73fa7276b5a5b0`。このhold中の保存結果producer→J/M→owner result consumerを`WIRED`とする。E03.03／QEB-03全体は`BUILD_GAP`で、回復可能な仕事と破損依存仕事のjob単位隔離に必要な次consumerは未特定。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
 
 ### 履歴ログ：`QEB-13-E03.03-WAIT-RECOVERY-HOLD-ROUTING`
 
