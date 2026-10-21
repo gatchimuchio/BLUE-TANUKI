@@ -2802,3 +2802,28 @@ Telegram adapterがactor identityへ可変username/display nameを使ってい�
 | Gateway served job縦断、process restart後のduplicate防止、複数入口での権限再評価、attachment／長文分割、workspace全suite、実資格／Telegram API、QE_QC／QE_QA | 未実施。 |
 
 F10.02のTelegram identityと同一process poll handoffを部分的に`WIRED`とする。永続inbox／Gateway admissionの重複防止がないため、process restart後の再配信で同じ仕事が再生成されない証拠はなく、F10.02全体=`BUILD_GAP`。F10.01のWebChat実serve→HDS/J→job consumerも未確定である。次のBUILD_BATCHは`F10.01-WEBCHAT-TO-GOVERNED-JOB`とし、現行依存を含むserved local fixture経路を接続する。code commit=`8fe3913f0866e890b9b416d134c58008c2bd8354`。D4-Pocket／ミニドラ変更、実provider／資格／業務作用、GitHub Actions、公開／出荷判断はなし。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+---
+
+### 履歴ログ：QEB-50-F10.01-OWNER-WEBCHAT-TO-GOVERNED-JOB
+
+開始HEAD／`main`／`origin/main`=`02f7b21f72f391091eda54d157db03ac6c9f76a0`。現行rev2.3 pin、適用`AGENTS.md`、active instruction、F10.01／F10.02の現行要求とWebChat→Gateway→HDS/J→OperationPlan consumerを再同期した。閉じた作業の全履歴は読み直さず、依存確認に必要なQEB-49記録だけ参照した。ownerの最新三点セットを現行正本として維持し、旧版は履歴ログとして扱った。保護対象untracked Linux `target/`を保持した。
+
+WebChatへowner token専用の委任目的取得とtask開始経路を追加した。`GET /owner/task-goals`は現在のdelegated purposeの参照・版と先頭240文字までの表示previewを返し、digestと完全な目的本文は返さない。previewは候補を識別するための表示情報で、task作成時のserver-side purpose bindingが現在のprivate M版・digestを再検査する。`POST /owner/task-compute`は固定owner-token actorの内部inbound requestとしてHDSへ渡し、利用者入力の`user`は返信先だけに使用する。Control Centerではtask start前にWebChatを接続し、owner tokenを送信後に消去する。
+
+owner tokenはDeveloper operatorの`plan:review`形式だけを許し、GETや他の入力は拒否する。plan review内容は固定digestと許可keyだけを持つ形で検証する。owner認証済みのreviewだけが内部`tool` processとしてHDSへ届くことを明示し、通常inbound tokenで送られたreviewへはprocess kindを付けない。HDS OperationPlan projectionのowner identity digestは内部でのみ比較し、WebChatには認証要否のbooleanだけを投影する。
+
+served Gatewayの一仕事をlocal loopback C fixtureで確認した。owner taskからOperationPlan候補を保持し、purpose relation candidateをテスト内L3 approval simulationで審査後、所有者が一致するplanの`file.search`を空の一時directoryに対して実行した。結果検証、M receipt、WebChat返信まで届いた。これはowner本人の操作を示さず、実provider／実資格／Telegram API／外部業務作用も使用していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/channel-webchat test -- webchat.test.ts` | PASS、108 tests。 |
+| `pnpm typecheck`／`pnpm build` | PASS。 |
+| `pnpm exec vitest run apps/gateway/test/document_organization_entry.test.ts --reporter=dot` | PASS、4 tests。 |
+| `pnpm exec vitest run apps/gateway/test/serve_projection.test.ts --reporter=dot` | PASS、5 tests。 |
+| `git diff --check` | PASS。 |
+| workspace全suite、live provider／credential、実Telegram、browser UI操作、実業務作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後に扱う。 |
+
+F10.01の今回接続したowner WebChat served pathを`WIRED`とする。これはF10.01全要求の品質保証ではない。D08.01全体と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。F10.02はrestart後のpersistent dedupe、複数入口の権限再評価、attachment／分割返信が残り`BUILD_GAP`。C08.03実provider保留、D4-Pocket／ミニドラ変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。code commit=`635cb237874207272586c6a10da04784984c8683`。次のBUILD_BATCHは`F10.02-TELEGRAM-REPLY-DUPLICATE-MULTI-ENTRY`。
+
+---
