@@ -2292,3 +2292,21 @@ HDS-Jの既存task identity digest関数を共有exportし、Recoveryのcanonica
 | 全workspace suite、全体QE_QC／QE_QA、provider／credential、実restore・外部作用、5OS実機 | 未実施。全体実装形状の前に品質工程へ移らない。 |
 
 backup内のJ task identity／lineage inventoryとselected-plan applicability consumerを`WIRED`とする。task identity digestとbackup内件数は、現在の仕事全体や完全な復旧可能性を証明しない。次はL3 task identityへ明示束縛した同一lineageのplan／wait選択復元consumerを接続し、lineage外recordの保持と復元後のfail-closed holdを維持する。E03.03／QEB-03全体は`BUILD_GAP`、`cross_store_atomic=false`。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。
+
+## 2026-10-21 QEB-21-E03.03-TASK-LINEAGE-SCOPED-RESTORE
+
+QE_STAGE=`QE_BUILD`。現行pin rev2.3、適用AGENTS.md、active指示、HEAD／差分を照合した。開始HEAD=`b08e680a0bb53185416c0e935049d461f457702a`。既存untracked `packages/blue-tanuki/native/linux-isolation/target/`は保全し、Git対象へ含めていない。
+
+QEB-20でbackup内task identityとlineage inventoryを照合できたが、restore consumerは1 planのみを置換するplan-scoped mergeのままだった。今回はL3 approval targetとHDS command bindingをtask identity digestへ束縛し、exact backup内の完全・verifiedな同一task lineageに限るJ-store restore scopeを追加した。SQLite transaction内で同じtaskの全plan／waitをarchiveから戻し、現在のlineage外plan／waitとunbound shell observationは現在値のまま保持する。duplicate、scope残差、wait mismatch、capacity超過、stale writerはmutation前に拒否する。
+
+J restore後、対象lineageのselected bindingを`invalidated`、`intent_committed`を`outcome_unknown`にし、全対象planを`held_unobserved`／`held_residual`／`held_unverified`へ閉じる。次のJ reviewはtask内全planの現在dependencyを再観測し、J/Mの解釈依存とlive Broker correlationが検証できる場合に限り対象plan自身のholdを解放する。別taskとそのholdは変えない。restore成功は自動resume、過去承認の再利用、cross-store atomicity、仕事全体のrecoverabilityを意味しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Task-scoped restoreの5 focused test suite | PASS、7 tests。L3/task scope mapping、backup内lineage applicability、task内plan／wait置換、lineage外state保持、J holdと現行dependency再観測を確認。 |
+| 既存task-purpose testの単独再実行 | PASS。より広い同一file runではWindows 5秒test timeoutが1件発生したが、他の実行失敗はなく、このtestは単独でPASS。 |
+| HDS／Gateway typecheck、workspace build | PASS。buildは15 workspace projects。 |
+| HDS standalone | PASS。 |
+| 全workspace suite、全体QE_QC／QE_QA、実provider／credential、実restore／外部作用、5OS実機 | 未実施。 |
+
+E03.03のtask単位J-store restore consumerを`WIRED`とする。`cross_store_atomic=false`を維持し、同一taskのJ/M/Broker/Cron復元点、guarded recovery／resume、親E03.03／QEB-03と製品全体の`BUILD_COVERED`は未成立。次batchではcurrent pinに基づき同一task依存と復元点を担う実consumerを一つ選ぶ。C08.03実provider保留、P13=`PENDING_OWNER_GO`、`public_claim_allowed=false`を維持する。

@@ -507,6 +507,8 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
       const planScope = storeKey === "operation_plans"
         ? scopeKind === "operation_plan" && scopeDigest
           ? `:effect:whole_store:scope:operation_plan:${scopeDigest}`
+          : scopeKind === "task_identity" && scopeDigest
+            ? `:effect:task_lineage:scope:task_identity:${scopeDigest}`
           : ":effect:whole_store:scope:missing_or_invalid"
         : "";
       return {

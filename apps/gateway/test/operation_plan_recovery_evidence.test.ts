@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import type { OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 import type { RecoveryPostActionObservation } from "../src/recovery_surface.js";
 import type { GatewayRecoveryOperatorProjection } from "../src/recovery_inspection.js";
@@ -102,6 +102,62 @@ describe("Recovery observationからHDS計画保留を導出", () => {
     });
   });
 
+  it("task-scoped mergeは同じtask lineageの全計画だけを復元対象にし、別taskを保持対象として示す", () => {
+    const taskDigest = "e".repeat(64);
+    const unrelatedTaskDigest = "f".repeat(64);
+    const ids = ["task-first", "task-sibling", "task-unrelated"] as const;
+    const taskCheckpoint = {
+      schema_version: "operation-plan-state.v1",
+      plans: ids.map((plan_id, index) => ({
+        task_identity_digest: index < 2 ? taskDigest : unrelatedTaskDigest,
+        revisions: [{ plan: { plan_id } }],
+      })),
+    } as unknown as OperationPlanCheckpoint;
+    const taskObservation = observation({
+      status: "changed",
+      restore_scope_plan_digest: null,
+      restore_scope_task_digest: taskDigest,
+      restore_scope_mode: "task_scoped_merge_v1",
+      plan_residuals: ids.map((plan_id) => ({ plan_id_digest: operationPlanDigest(plan_id), status: "verified" as const,
+        binding_count: 0, residual_binding_count: 0, omitted_binding_count: 0 })),
+      plan_restore_points: ids.map((plan_id, index) => ({
+        plan_id_digest: operationPlanDigest(plan_id),
+        backup_task_identity_digest: index < 2 ? taskDigest : unrelatedTaskDigest,
+        backup_task_lineage_plan_scope_count: index < 2 ? 2 : 1,
+        backup_plan_record_status: "matched" as const,
+        backup_plan_integrity: "verified" as const,
+        backup_plan_record_count: 1,
+        dependency_status: "observed" as const,
+        residual_dependencies: [],
+        unobserved_dependencies: [],
+      })),
+    });
+    const evidence = operationPlanRecoveryEvidenceFromObservation({
+      observation: taskObservation,
+      checkpoint: taskCheckpoint,
+      history_complete: true,
+    });
+    expect(evidence).toMatchObject({
+      scope: "restored_operation_plans",
+      provenance: {
+        restore_store_key: "operation_plans",
+        restore_scope_plan_digest: null,
+        restore_scope_task_digest: taskDigest,
+        restore_scope_mode: "task_scoped_merge_v1",
+      },
+      plans: [
+        { plan_id_digest: operationPlanDigest(ids[0]), task_identity_digest: taskDigest,
+          restore_scope_relation: "requested", restore_membership: "restored", dependency_status: "unobserved" },
+        { plan_id_digest: operationPlanDigest(ids[1]), task_identity_digest: taskDigest,
+          restore_scope_relation: "requested", restore_membership: "restored", dependency_status: "unobserved" },
+        { plan_id_digest: operationPlanDigest(ids[2]), task_identity_digest: unrelatedTaskDigest,
+          restore_scope_relation: "collateral", restore_membership: "not_restored" },
+      ],
+      used_for_authority: false,
+      may_execute: false,
+    });
+  });
+
   it("残差と未観測をdigest単位に保ち、未対応planはunknownに閉じる", () => {
     const current = observation({
       plan_residuals: [
@@ -117,14 +173,17 @@ describe("Recovery observationからHDS計画保留を導出", () => {
     });
     const evidence = operationPlanRecoveryEvidenceFromObservation({ observation: current, checkpoint, history_complete: true });
     expect(evidence?.plans).toEqual([
-      { plan_id_digest: operationPlanDigest(planIds[0]), restore_scope_relation: "requested", restore_membership: "restored", integrity: "verified", dependency_status: "unobserved" },
-      { plan_id_digest: operationPlanDigest(planIds[1]), restore_scope_relation: "collateral", restore_membership: "restored", integrity: "residuals_present", dependency_status: "residuals_present" },
+      { plan_id_digest: operationPlanDigest(planIds[0]), task_identity_digest: operationPlanTaskIdentityDigest(checkpoint.plans[0]!),
+        restore_scope_relation: "requested", restore_membership: "restored", integrity: "verified", dependency_status: "unobserved" },
+      { plan_id_digest: operationPlanDigest(planIds[1]), task_identity_digest: operationPlanTaskIdentityDigest(checkpoint.plans[1]!),
+        restore_scope_relation: "collateral", restore_membership: "restored", integrity: "residuals_present", dependency_status: "residuals_present" },
     ]);
 
     const incomplete = operationPlanRecoveryEvidenceFromObservation({
       observation: observation({ plan_restore_points: null }), checkpoint, history_complete: true,
     });
     expect(incomplete?.plans).toEqual(planIds.map((plan_id, index) => ({ plan_id_digest: operationPlanDigest(plan_id),
+      task_identity_digest: operationPlanTaskIdentityDigest(checkpoint.plans[index]!),
       restore_scope_relation: index === 0 ? "requested" : "collateral", restore_membership: "unknown",
       integrity: "unverified", dependency_status: "unknown" })));
   });

@@ -46,6 +46,19 @@ describe("Recovery mutation tool boundary", () => {
       scope_digest: "a".repeat(64),
       confirm: "RESTORE",
     });
+    expect(normalizeRecoveryMutationArguments("recovery.restore", {
+      backup_id: "2026-10-18.backup.abc",
+      store_key: "operation_plans",
+      scope_kind: "task_identity",
+      scope_digest: "b".repeat(64),
+      confirm: "RESTORE",
+    })).toEqual({
+      backup_id: "2026-10-18.backup.abc",
+      store_key: "operation_plans",
+      scope_kind: "task_identity",
+      scope_digest: "b".repeat(64),
+      confirm: "RESTORE",
+    });
     expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
       backup_id: "2026-10-18.backup.abc",
       store_key: "operation_plans",
@@ -58,6 +71,13 @@ describe("Recovery mutation tool boundary", () => {
       scope_digest: "not-a-digest",
       confirm: "RESTORE",
     })).toThrow("operation_plan_scope_invalid");
+    expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
+      backup_id: "2026-10-18.backup.abc",
+      store_key: "operation_plans",
+      scope_kind: "task_identity",
+      scope_digest: "not-a-digest",
+      confirm: "RESTORE",
+    })).toThrow("operation_plan_task_scope_invalid");
     expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
       backup_id: "2026-10-18.backup.abc",
       store_key: "j_control",

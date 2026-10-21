@@ -2,7 +2,7 @@ import { mkdirSync, realpathSync, lstatSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
-import { operationPlanDigest, partitionOperationPlanCheckpointForRuntime,
+import { operationPlanDigest, operationPlanTaskIdentityDigest, partitionOperationPlanCheckpointForRuntime,
   type OperationPlanRecoveryHoldState, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointEnvelopeSchema, OperationPlanCheckpointSchema,
   type OperationPlanCheckpoint, type OperationPlanCheckpointEnvelope } from "@blue-tanuki/protocol";
@@ -128,6 +128,87 @@ export class OperationPlanStateStore implements OperationPlanStatePort {
       throw error;
     }
   }
+  restoreTaskScope(
+    checkpoint: OperationPlanCheckpoint,
+    taskIdentityDigest: string,
+    expectedCurrent: OperationPlanCheckpoint | null,
+  ): void {
+    if (!/^[a-f0-9]{64}$/i.test(taskIdentityDigest)) {
+      throw new Error("operation_plan_restore_task_scope_invalid");
+    }
+    const scopeDigest = taskIdentityDigest.toLowerCase();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.readCheckpoint(true);
+      const currentCheckpoint = current?.partition.checkpoint ?? null;
+      const expectedDigest = expectedCurrent ? operationPlanDigest(expectedCurrent) : null;
+      if ((currentCheckpoint ? operationPlanDigest(currentCheckpoint) : null) !== expectedDigest) {
+        throw new Error("operation_plan_restore_task_scope_target_changed");
+      }
+      const archived = OperationPlanCheckpointEnvelopeSchema.parse(checkpoint);
+      const archivePartition = partitionOperationPlanCheckpointForRuntime(archived, true);
+      const archivePlans = archivePartition.checkpoint.plans.filter((plan) =>
+        operationPlanTaskIdentityDigest(plan) === scopeDigest);
+      if (archivePlans.length === 0 || new Set(archivePlans.map((plan) =>
+        operationPlanDigest(plan.revisions[0]!.plan.plan_id))).size !== archivePlans.length) {
+        throw new Error("operation_plan_restore_task_scope_archive_unverified");
+      }
+      const archivePlanIds = new Set(archivePlans.map((plan) => operationPlanDigest(plan.revisions[0]!.plan.plan_id)));
+      const archiveResidualForScope = archivePartition.quarantined_plans.some(({ index }) =>
+        checkpointPlanTaskIdentityDigest(archived.plans[index]) === scopeDigest);
+      const archiveWaitResidualForScope = archivePartition.quarantined_wait_indices.some((index) =>
+        archived.waits?.[index]?.task_identity_digest === scopeDigest);
+      if (archiveResidualForScope || archiveWaitResidualForScope) {
+        throw new Error("operation_plan_restore_task_scope_archive_residuals");
+      }
+      const archiveScopeWaits = (archivePartition.checkpoint.waits ?? []).filter((wait) =>
+        wait.task_identity_digest === scopeDigest);
+      if (archiveScopeWaits.some((wait) => !archivePlanIds.has(wait.plan_id_digest))) {
+        throw new Error("operation_plan_restore_task_scope_archive_wait_unverified");
+      }
+
+      const currentRaw = current?.raw;
+      const currentResidualForScope = (current?.partition.quarantined_plans ?? []).some(({ index }) =>
+        checkpointPlanTaskIdentityDigest(currentRaw?.plans[index]) === scopeDigest);
+      const currentWaitResidualForScope = (current?.partition.quarantined_wait_indices ?? []).some((index) =>
+        currentRaw?.waits?.[index]?.task_identity_digest === scopeDigest);
+      if (currentResidualForScope || currentWaitResidualForScope) {
+        throw new Error("operation_plan_restore_task_scope_target_residuals");
+      }
+      const merged = mergeOperationPlanCheckpointTaskScope(currentCheckpoint, archivePartition.checkpoint, scopeDigest);
+      const residualPlanIndexes = new Set((current?.partition.quarantined_plans ?? [])
+        .filter(({ index }) => checkpointPlanTaskIdentityDigest(currentRaw?.plans[index]) !== scopeDigest)
+        .map(({ index }) => index));
+      const residualPlans = [...residualPlanIndexes].map((index) => currentRaw!.plans[index]!);
+      const residualWaits = (current?.partition.quarantined_wait_indices ?? [])
+        .map((index) => currentRaw?.waits?.[index])
+        .filter((wait): wait is NonNullable<OperationPlanCheckpointEnvelope["waits"]>[number] =>
+          wait !== undefined && wait.task_identity_digest !== scopeDigest);
+      const persistedWaits = [...(merged.waits ?? []), ...residualWaits];
+      if (new Set(persistedWaits.map((wait) => wait.wait_id)).size !== persistedWaits.length) {
+        throw new Error("operation_plan_restore_task_scope_wait_ambiguous");
+      }
+      const persisted = {
+        ...merged,
+        plans: [...merged.plans, ...residualPlans],
+        ...(merged.waits !== undefined || residualWaits.length > 0
+          ? { waits: persistedWaits } : {}),
+      };
+      const persistedEnvelope = OperationPlanCheckpointEnvelopeSchema.parse(persisted);
+      const mergedPartition = partitionOperationPlanCheckpointForRuntime(persistedEnvelope, true);
+      const restoredPlans = mergedPartition.checkpoint.plans.filter((plan) =>
+        operationPlanTaskIdentityDigest(plan) === scopeDigest);
+      if (restoredPlans.length !== archivePlans.length ||
+          restoredPlans.some((plan) => !archivePlanIds.has(operationPlanDigest(plan.revisions[0]!.plan.plan_id)))) {
+        throw new Error("operation_plan_restore_task_scope_target_unverified");
+      }
+      this.writeCheckpoint(persistedEnvelope);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* 元の保存失敗を保持する。 */ }
+      throw error;
+    }
+  }
   private readCheckpoint(memoryAvailable: boolean): {
     readonly raw: OperationPlanCheckpointEnvelope;
     readonly partition: ReturnType<typeof partitionOperationPlanCheckpointForRuntime>;
@@ -187,6 +268,16 @@ export class OperationPlanStateStore implements OperationPlanStatePort {
   close(): void { this.db.close(); }
 }
 
+function checkpointPlanTaskIdentityDigest(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  try {
+    const digest = operationPlanTaskIdentityDigest(value as OperationPlanCheckpoint["plans"][number]);
+    return /^[a-f0-9]{64}$/.test(digest) ? digest : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Replace one archived plan and its wait records while retaining every unrelated checkpoint field. */
 export function mergeOperationPlanCheckpointScope(
   currentValue: OperationPlanCheckpoint | null,
@@ -243,5 +334,82 @@ export function mergeOperationPlanCheckpointScope(
     return OperationPlanCheckpointSchema.parse(merged);
   } catch {
     throw new Error("operation_plan_restore_scope_checkpoint_invalid");
+  }
+}
+
+/** Replace one archived task lineage, including all its plans and waits, while retaining unrelated state. */
+export function mergeOperationPlanCheckpointTaskScope(
+  currentValue: OperationPlanCheckpoint | null,
+  archivedValue: OperationPlanCheckpoint,
+  requestedTaskIdentityDigest: string,
+): OperationPlanCheckpoint {
+  if (!/^[a-f0-9]{64}$/i.test(requestedTaskIdentityDigest)) {
+    throw new Error("operation_plan_restore_task_scope_invalid");
+  }
+  const scopeDigest = requestedTaskIdentityDigest.toLowerCase();
+  const current = currentValue === null ? null : OperationPlanCheckpointSchema.parse(currentValue);
+  const archived = OperationPlanCheckpointSchema.parse(archivedValue);
+  const taskIdentity = (plan: OperationPlanCheckpoint["plans"][number]) => operationPlanTaskIdentityDigest(plan);
+  const planIdDigest = (plan: OperationPlanCheckpoint["plans"][number]) =>
+    operationPlanDigest(plan.revisions[0]!.plan.plan_id);
+  const archivedPlans = archived.plans.filter((plan) => taskIdentity(plan) === scopeDigest);
+  if (archivedPlans.length === 0 || new Set(archivedPlans.map(planIdDigest)).size !== archivedPlans.length) {
+    throw new Error("operation_plan_restore_task_scope_archive_ambiguous");
+  }
+
+  const currentPlans = current?.plans ?? [];
+  const retainedPlans = currentPlans.filter((plan) => taskIdentity(plan) !== scopeDigest);
+  const retainedPlanIds = new Set(retainedPlans.map(planIdDigest));
+  if (archivedPlans.some((plan) => retainedPlanIds.has(planIdDigest(plan)))) {
+    throw new Error("operation_plan_restore_task_scope_plan_identity_conflict");
+  }
+  const plans: OperationPlanCheckpoint["plans"] = [];
+  let insertedArchivedPlans = false;
+  for (const plan of currentPlans) {
+    if (taskIdentity(plan) === scopeDigest) {
+      if (!insertedArchivedPlans) {
+        plans.push(...archivedPlans);
+        insertedArchivedPlans = true;
+      }
+    } else {
+      plans.push(plan);
+    }
+  }
+  if (!insertedArchivedPlans) plans.push(...archivedPlans);
+
+  const archivedPlanIds = new Set(archivedPlans.map(planIdDigest));
+  const archivedScopeWaits = (archived.waits ?? []).filter((wait) => wait.task_identity_digest === scopeDigest);
+  if (archivedScopeWaits.some((wait) => !archivedPlanIds.has(wait.plan_id_digest))) {
+    throw new Error("operation_plan_restore_task_scope_archive_wait_unverified");
+  }
+  const waits: NonNullable<OperationPlanCheckpoint["waits"]> = [];
+  let insertedArchivedWaits = false;
+  for (const wait of current?.waits ?? []) {
+    if (wait.task_identity_digest === scopeDigest) {
+      if (!insertedArchivedWaits) {
+        waits.push(...archivedScopeWaits);
+        insertedArchivedWaits = true;
+      }
+    } else {
+      waits.push(wait);
+    }
+  }
+  if (!insertedArchivedWaits) waits.push(...archivedScopeWaits);
+  if (waits.length > 256) throw new Error("operation_plan_restore_task_scope_wait_capacity");
+  if (new Set(waits.map((wait) => wait.wait_id)).size !== waits.length) {
+    throw new Error("operation_plan_restore_task_scope_wait_ambiguous");
+  }
+
+  const base = current ?? { schema_version: "operation-plan-state.v1" as const, plans: [] };
+  const merged = {
+    ...base,
+    plans,
+    ...(current?.waits !== undefined || archivedScopeWaits.length > 0 ? { waits } : {}),
+    // Shell results are deliberately unbound to a plan and retain the current set.
+  };
+  try {
+    return OperationPlanCheckpointSchema.parse(merged);
+  } catch {
+    throw new Error("operation_plan_restore_task_scope_checkpoint_invalid");
   }
 }

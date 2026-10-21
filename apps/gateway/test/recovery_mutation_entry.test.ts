@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { CompleteHistoryStore, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { CompleteHistoryStore, operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -1236,9 +1236,108 @@ describe("Recovery mutation HDS L3 entry", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("binds task-lineage restore to its exact L3 scope and identifies the selected effect", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-recovery-task-l3-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
+    const port = await reserveLoopbackPort();
+    writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const runtimeEnv = isolatedRuntimeEnvironment(root, envFile, historyFile, port);
+    const planStatePath = join(root, "state", "private-state", "operation-plans", "j-state.sqlite");
+    const { task_identity_digest: taskIdentityDigest } = seedOperationPlanState(planStatePath);
+    const gateway = spawnGateway(runtimeEnv);
+
+    try {
+      await waitForHealth(port, gateway);
+      const backup = await requestJson(port, "/recovery/backup", {
+        method: "POST",
+        token: maintenanceToken,
+        body: {},
+      });
+      expect(backup.status).toBe(200);
+      const backupId = (backup.body.result as Record<string, unknown>).backup_id as string;
+      const before = readFileSync(planStatePath);
+
+      const unverified = await requestJson(port, "/recovery/restore", {
+        method: "POST",
+        token: maintenanceToken,
+        body: {
+          backup_id: backupId,
+          store_key: "operation_plans",
+          scope_kind: "task_identity",
+          scope_digest: "f".repeat(64),
+          confirm: "RESTORE",
+        },
+      });
+      expect(unverified.body).toMatchObject({
+        ok: true,
+        result: {
+          status: "blocked_unverified_scope",
+          executed: false,
+          restore_effect_scope: "selected_task_lineage",
+          used_for_authority: false,
+          may_execute: false,
+        },
+      });
+
+      const queued = await requestJson(port, "/recovery/restore", {
+        method: "POST",
+        token: maintenanceToken,
+        body: {
+          backup_id: backupId,
+          store_key: "operation_plans",
+          scope_kind: "task_identity",
+          scope_digest: taskIdentityDigest,
+          confirm: "RESTORE",
+        },
+      });
+      const expectedTarget =
+        `recovery.restore:${backupId}:store:operation_plans:effect:task_lineage:scope:task_identity:${taskIdentityDigest}`;
+      expect(queued.status, `${JSON.stringify(queued.body)}\n${gateway.output.join("")}`).toBe(202);
+      expect(queued.body).toMatchObject({
+        ok: true,
+        result: {
+          status: "approval_required",
+          executed: false,
+          operation: "recovery.restore",
+          target: expectedTarget,
+          restore_effect_scope: "selected_task_lineage",
+          scope_applicability: {
+            status: "matched",
+            scope_kind: "task_identity",
+            scope_digest: taskIdentityDigest,
+            used_for_authority: false,
+            may_execute: false,
+          },
+          risk: "high",
+          approval_level: "L3_final_review",
+          final_review_required: true,
+        },
+      });
+      const approvalQueue = await requestJson(port, "/approval", { token: resumeToken });
+      expect(approvalQueue.body.pending_approvals).toEqual([
+        expect.objectContaining({
+          operation: "recovery.restore",
+          target: expectedTarget,
+          risk: "high",
+          approval_level: "L3_final_review",
+          final_review_required: true,
+        }),
+      ]);
+      expect(readFileSync(planStatePath)).toEqual(before);
+    } finally {
+      await stopChild(gateway.child);
+    }
+  }, 30_000);
 });
 
-function seedOperationPlanState(filepath: string): { plan_id_digest: string; revision_digest: string } {
+function seedOperationPlanState(filepath: string): {
+  plan_id_digest: string;
+  revision_digest: string;
+  task_identity_digest: string;
+} {
   mkdirSync(dirname(filepath), { recursive: true });
   const plan = syntheticOperationPlan("restore-review-request", "restore-review-plan", "restore-review-step");
   const revisionDigest = operationPlanDigest(plan);
@@ -1255,12 +1354,17 @@ function seedOperationPlanState(filepath: string): { plan_id_digest: string; rev
     }],
   });
   const store = new OperationPlanStateStore(filepath);
+  let taskIdentityDigest: string | undefined;
   try {
     store.compareAndSet(null, checkpoint);
+    const persisted = OperationPlanCheckpointSchema.parse(store.load());
+    taskIdentityDigest = operationPlanTaskIdentityDigest(persisted.plans[0]!);
   } finally {
     store.close();
   }
-  return { plan_id_digest: operationPlanDigest(plan.plan_id), revision_digest: revisionDigest };
+  if (!taskIdentityDigest) throw new Error("fixture_task_identity_digest_missing");
+  return { plan_id_digest: operationPlanDigest(plan.plan_id), revision_digest: revisionDigest,
+    task_identity_digest: taskIdentityDigest };
 }
 
 function seedMixedOperationPlanRestoreState(filepath: string, cleanSearch: SyntheticFileSearchFixture): {

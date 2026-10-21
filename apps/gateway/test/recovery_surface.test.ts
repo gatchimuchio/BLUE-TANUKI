@@ -20,6 +20,7 @@ import {
   factoryResetRecovery,
   inspectLatestRecoveryBackup,
   inspectRecoveryPlanRestoreScopeApplicability,
+  inspectRecoveryTaskRestoreScopeApplicability,
   resetRecoveryConnector,
   resetRecoveryProvider,
   restoreRecoveryBackup,
@@ -549,6 +550,108 @@ describe("buildRecoverySnapshot", () => {
         .toBe("verified");
       expect(JSON.stringify(restored)).not.toContain(selectedPath);
       expect(JSON.stringify(restored)).not.toContain(unrelatedPath);
+    } finally {
+      try { livePlanStore?.close(); } catch { /* test cleanup */ }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("restores one complete task lineage while retaining unrelated plans, waits, and live shell observations", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-task-scope-restore-"));
+    let livePlanStore: OperationPlanStateStore | undefined;
+    try {
+      const envFile = path.join(root, "product.env");
+      const recoveryDir = path.join(root, "recovery");
+      const stateRoot = path.join(root, "state");
+      await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+      const selectedPath = path.join(stateRoot, "private-state", "operation-plans", "j-state.sqlite");
+      await mkdir(path.dirname(selectedPath), { recursive: true });
+      const firstBackup = recoveryPlanCheckpoint("task-first");
+      const siblingBackup = recoveryPlanCheckpoint("task-sibling");
+      const unrelatedBackup = recoveryPlanCheckpoint("task-unrelated");
+      const taskIdentityDigest = operationPlanDigest({ schema_version: "fixture-task-identity.v1", task: "shared-task-scope" });
+      const unrelatedTaskDigest = operationPlanDigest({ schema_version: "fixture-task-identity.v1", task: "unrelated-task-scope" });
+      const firstPlan = { ...firstBackup.checkpoint.plans[0]!, task_identity_digest: taskIdentityDigest };
+      const siblingPlan = { ...siblingBackup.checkpoint.plans[0]!, task_identity_digest: taskIdentityDigest };
+      const unrelatedPlan = { ...unrelatedBackup.checkpoint.plans[0]!, task_identity_digest: unrelatedTaskDigest };
+      const archived = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [firstPlan, siblingPlan, unrelatedPlan],
+        waits: [
+          recoveryWait(firstBackup.planScopeDigest, firstPlan.revisions[0]!.digest, "archive-first", taskIdentityDigest),
+          recoveryWait(siblingBackup.planScopeDigest, siblingPlan.revisions[0]!.digest, "archive-sibling", taskIdentityDigest),
+          recoveryWait(unrelatedBackup.planScopeDigest, unrelatedPlan.revisions[0]!.digest, "archive-unrelated", unrelatedTaskDigest),
+        ],
+        shell_exec_result_observations: [recoveryUnboundShellObservation("archive")],
+      });
+      livePlanStore = new OperationPlanStateStore(selectedPath);
+      livePlanStore.compareAndSet(null, archived);
+      const env = {
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+        BLUE_TANUKI_STATE_ROOT: stateRoot,
+      };
+      const backup = await createRecoveryBackup(env);
+      const scope = await inspectRecoveryTaskRestoreScopeApplicability(env, backup.backup_id!, taskIdentityDigest);
+      expect(scope).toMatchObject({
+        status: "matched",
+        reason: null,
+        scope_kind: "task_identity",
+        scope_digest: taskIdentityDigest,
+        matched_plan_id_digest: null,
+        matched_plan_scope_count: 2,
+        matched_plan_id_digests: [firstBackup.planScopeDigest, siblingBackup.planScopeDigest].sort(),
+        backup_task_identity_digest: taskIdentityDigest,
+        backup_task_lineage_plan_scope_count: 2,
+        backup_task_lineage_integrity: "verified",
+        cross_store_atomic: false,
+        used_for_authority: false,
+        may_execute: false,
+      });
+
+      const current = OperationPlanCheckpointSchema.parse({
+        ...archived,
+        plans: archived.plans.map((plan) => ({ ...plan,
+          goal: `current:${plan.revisions[0]!.plan.plan_id}` })),
+        waits: [
+          recoveryWait(firstBackup.planScopeDigest, firstPlan.revisions[0]!.digest, "current-first", taskIdentityDigest),
+          recoveryWait(siblingBackup.planScopeDigest, siblingPlan.revisions[0]!.digest, "current-sibling", taskIdentityDigest),
+          recoveryWait(unrelatedBackup.planScopeDigest, unrelatedPlan.revisions[0]!.digest, "current-unrelated", unrelatedTaskDigest),
+        ],
+        shell_exec_result_observations: [recoveryUnboundShellObservation("current")],
+      });
+      livePlanStore.compareAndSet(operationPlanDigest(archived), current);
+
+      const restored = await restoreRecoveryBackup(env, {
+        backup_id: backup.backup_id,
+        store_key: "operation_plans",
+        scope_kind: "task_identity",
+        scope_digest: taskIdentityDigest,
+        confirm: "RESTORE",
+      });
+      const expected = OperationPlanCheckpointSchema.parse({
+        ...current,
+        plans: [firstPlan, siblingPlan, current.plans.find((plan) =>
+          plan.revisions[0]!.plan.plan_id === unrelatedPlan.revisions[0]!.plan.plan_id)!],
+        waits: [
+          recoveryWait(firstBackup.planScopeDigest, firstPlan.revisions[0]!.digest, "archive-first", taskIdentityDigest),
+          recoveryWait(siblingBackup.planScopeDigest, siblingPlan.revisions[0]!.digest, "archive-sibling", taskIdentityDigest),
+          recoveryWait(unrelatedBackup.planScopeDigest, unrelatedPlan.revisions[0]!.digest, "current-unrelated", unrelatedTaskDigest),
+        ],
+        shell_exec_result_observations: [recoveryUnboundShellObservation("current")],
+      });
+      expect(livePlanStore.load()).toEqual(expected);
+      expect(restored).toMatchObject({
+        action: "restore",
+        restored_store_key: "operation_plans",
+        restore_scope_kind: "task_identity",
+        restore_scope_digest: taskIdentityDigest,
+        restore_scope_mode: "task_scoped_merge_v1",
+        canonical_state_cross_store_atomic: false,
+      });
+      expect(restored.restored_store_state_digest).toBe(
+        createHash("sha256").update(await readFile(selectedPath)).digest("hex"),
+      );
     } finally {
       try { livePlanStore?.close(); } catch { /* test cleanup */ }
       await rm(root, { recursive: true, force: true });

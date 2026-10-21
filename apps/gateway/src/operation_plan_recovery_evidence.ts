@@ -1,4 +1,4 @@
-import { operationPlanDigest, type OperationPlanBrokerRestoreDependencyEvidence,
+import { operationPlanDigest, operationPlanTaskIdentityDigest, type OperationPlanBrokerRestoreDependencyEvidence,
   type OperationPlanBrokerRestoreDependencyStatus, type OperationPlanRecoveryEvidence } from "@blue-tanuki/hds-brain";
 import type { OperationPlanCheckpoint } from "@blue-tanuki/protocol";
 import type { GatewayRecoveryOperatorProjection } from "./recovery_inspection.js";
@@ -101,6 +101,8 @@ function unverifiedHistoryEvidence(
       restore_store_key: observation?.store_key ?? null,
       restore_backup_id_digest: observation?.restore_backup_id_digest ?? null,
       restore_scope_plan_digest: observation?.restore_scope_plan_digest ?? null,
+      restore_scope_task_digest: observation?.restore_scope_task_digest ?? null,
+      ...(observation?.restore_scope_mode ? { restore_scope_mode: observation.restore_scope_mode } : {}),
       restored_state_digest: observation?.restored_state_digest ?? null,
     },
     plans: [],
@@ -136,19 +138,24 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
     }
     return observation.store_key === null ? unverifiedHistoryEvidence(checkpointDigest, observation) : undefined;
   }
-  if (!observation.restore_scope_plan_digest || !/^[a-f0-9]{64}$/.test(observation.restore_scope_plan_digest)) {
+  const taskScopedRestore = observation.restore_scope_mode === "task_scoped_merge_v1";
+  const scopeDigest = taskScopedRestore ? observation.restore_scope_task_digest : observation.restore_scope_plan_digest;
+  if (!scopeDigest || !/^[a-f0-9]{64}$/.test(scopeDigest)) {
     return unverifiedHistoryEvidence(checkpointDigest, observation);
   }
-  const selectivelyRestored = observation.restore_scope_mode === "plan_scoped_merge_v1";
+  const selectivelyRestored = observation.restore_scope_mode === "plan_scoped_merge_v1" || taskScopedRestore;
 
   const evidencePlans = plans.map((planState) => {
     const planIdDigest = operationPlanDigest(planState.revisions[0]!.plan.plan_id);
+    const taskIdentityDigest = operationPlanTaskIdentityDigest(planState);
+    const selectedByScope = taskScopedRestore ? taskIdentityDigest === scopeDigest : planIdDigest === scopeDigest;
     const currentMatches = observation.plan_residuals?.filter((entry) => entry.plan_id_digest === planIdDigest) ?? [];
     const backupMatches = observation.plan_restore_points?.filter((entry) => entry.plan_id_digest === planIdDigest) ?? [];
     const currentPlan = currentMatches.length === 1 ? currentMatches[0] : undefined;
     const backupPlan = backupMatches.length === 1 ? backupMatches[0] : undefined;
     const restoreMembership: OperationPlanRecoveryEvidence["plans"][number]["restore_membership"] =
-      selectivelyRestored && planIdDigest !== observation.restore_scope_plan_digest ? "not_restored"
+      selectivelyRestored && !selectedByScope ? "not_restored"
+        : taskScopedRestore && selectedByScope && backupPlan?.backup_task_identity_digest !== scopeDigest ? "unknown"
         : observation.status === "changed" && currentPlan && backupPlan?.backup_plan_record_status === "not_found"
         ? "not_restored"
         : ["matched", "changed"].includes(observation.status) && currentPlan &&
@@ -171,12 +178,15 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
       dependencyStatus = "unobserved";
     } else if (backupPlan?.dependency_status === "observed" && backupPlan.residual_dependencies.length === 0 &&
         backupPlan.unobserved_dependencies.length === 0 && observation.status === "matched") {
-      dependencyStatus = "observed";
+      dependencyStatus = taskScopedRestore && selectedByScope ? "unobserved" : "observed";
+    } else if (taskScopedRestore && selectedByScope && backupPlan?.backup_plan_record_status === "matched") {
+      dependencyStatus = "unobserved";
     }
 
     return {
       plan_id_digest: planIdDigest,
-      restore_scope_relation: planIdDigest === observation.restore_scope_plan_digest ? "requested" as const : "collateral" as const,
+      task_identity_digest: taskIdentityDigest,
+      restore_scope_relation: selectedByScope ? "requested" as const : "collateral" as const,
       restore_membership: restoreMembership,
       integrity,
       dependency_status: dependencyStatus,
@@ -193,8 +203,10 @@ export function operationPlanRecoveryEvidenceFromObservation(input: {
       result_digest: observation.result_digest,
       restore_store_key: observation.store_key,
       restore_backup_id_digest: observation.restore_backup_id_digest,
-      restore_scope_plan_digest: observation.restore_scope_plan_digest,
-      ...(selectivelyRestored ? { restore_scope_mode: "plan_scoped_merge_v1" as const } : {}),
+      restore_scope_plan_digest: taskScopedRestore ? null : observation.restore_scope_plan_digest,
+      restore_scope_task_digest: taskScopedRestore ? observation.restore_scope_task_digest ?? null : null,
+      ...(selectivelyRestored ? { restore_scope_mode: taskScopedRestore
+        ? "task_scoped_merge_v1" as const : "plan_scoped_merge_v1" as const } : {}),
       restored_state_digest: observation.restored_state_digest,
     },
     plans: evidencePlans,

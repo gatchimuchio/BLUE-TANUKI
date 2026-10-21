@@ -66,9 +66,9 @@ export function normalizeRecoveryMutationArguments(
   const scopeKind = raw.scope_kind;
   const scopeDigest = raw.scope_digest;
   if (storeKey === "operation_plans") {
-    if (scopeKind !== "operation_plan") throw new Error("operation_plan_scope_required");
+    if (scopeKind !== "operation_plan" && scopeKind !== "task_identity") throw new Error("operation_plan_scope_required");
     if (typeof scopeDigest !== "string" || !/^[a-f0-9]{64}$/i.test(scopeDigest)) {
-      throw new Error("operation_plan_scope_invalid");
+      throw new Error(scopeKind === "task_identity" ? "operation_plan_task_scope_invalid" : "operation_plan_scope_invalid");
     }
   } else if (scopeKind !== undefined || scopeDigest !== undefined) {
     throw new Error("invalid_recovery_request");
@@ -87,8 +87,8 @@ export function normalizeRecoveryMutationArguments(
   return {
     backup_id: backupId,
     ...(typeof storeKey === "string" ? { store_key: storeKey } : {}),
-    ...(scopeKind === "operation_plan" && typeof scopeDigest === "string"
-      ? { scope_kind: "operation_plan", scope_digest: scopeDigest.toLowerCase() }
+    ...((scopeKind === "operation_plan" || scopeKind === "task_identity") && typeof scopeDigest === "string"
+      ? { scope_kind: scopeKind, scope_digest: scopeDigest.toLowerCase() }
       : {}),
     confirm: CONFIRMATION[toolName],
   };
@@ -123,8 +123,8 @@ export function createRecoveryMutationTools(
       const result = await invokeRecoverySafely(() => restoreRecoveryBackup(env, {
         backup_id: args.backup_id,
         ...(args.store_key ? { store_key: args.store_key as CanonicalStateStoreKey } : {}),
-        ...(args.scope_kind === "operation_plan" && args.scope_digest
-          ? { scope_kind: "operation_plan" as const, scope_digest: args.scope_digest }
+        ...((args.scope_kind === "operation_plan" || args.scope_kind === "task_identity") && args.scope_digest
+          ? { scope_kind: args.scope_kind as "operation_plan" | "task_identity", scope_digest: args.scope_digest }
           : {}),
         ...(args.store_key === "broker" && ctx?.idempotency_key
           ? { executor_command_key: ctx.idempotency_key }

@@ -88,7 +88,8 @@ function selectedStoreRestoreHistory(
           store_key: storeKey,
           restored_store_state_digest: stateDigest,
           restored_backup_id_digest: backupIdDigest,
-          ...(scopePlanDigest ? { restore_scope_plan_digest: scopePlanDigest } : {}),
+          ...(scopePlanDigest ? { restore_scope_plan_digest: scopePlanDigest,
+            restore_scope_mode: scopeMode ?? "plan_scoped_merge_v1" } : {}),
           ...(scopeMode ? { restore_scope_mode: scopeMode } : {}),
         },
       },
@@ -219,6 +220,27 @@ describe("buildRecoveryPostActionObservation", () => {
       restored_store_archive_digest: digest("a"), restored_store_state_digest: digest("b"),
       restored_backup_id: "private-backup-id", restore_scope_kind: "operation_plan",
       restore_scope_digest: operationPlanDigest("private-correlated-plan"), restore_scope_mode: "unknown",
+    })).toBeUndefined();
+    expect(recoveryStoreRestoreHistoryEvidence({
+      action: "restore", status: "completed", used_for_authority: false,
+      canonical_state_cross_store_atomic: false, restored_store_key: "operation_plans",
+      restored_store_archive_digest: digest("a"), restored_store_state_digest: digest("b"),
+      restored_backup_id: "private-backup-id", restore_scope_kind: "task_identity",
+      restore_scope_digest: digest("c"), restore_scope_mode: "task_scoped_merge_v1",
+    })).toEqual({
+      schema_version: 1,
+      store_key: "operation_plans",
+      restored_store_state_digest: digest("b"),
+      restored_backup_id_digest: createHash("sha256").update("private-backup-id").digest("hex"),
+      restore_scope_task_digest: digest("c"),
+      restore_scope_mode: "task_scoped_merge_v1",
+    });
+    expect(recoveryStoreRestoreHistoryEvidence({
+      action: "restore", status: "completed", used_for_authority: false,
+      canonical_state_cross_store_atomic: false, restored_store_key: "operation_plans",
+      restored_store_archive_digest: digest("a"), restored_store_state_digest: digest("b"),
+      restored_backup_id: "private-backup-id", restore_scope_kind: "task_identity",
+      restore_scope_digest: digest("c"), restore_scope_mode: "plan_scoped_merge_v1",
     })).toBeUndefined();
   });
 

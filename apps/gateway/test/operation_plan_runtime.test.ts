@@ -1267,6 +1267,111 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     }
   });
 
+  it("task-scoped restore refresh holds every restored sibling and leaves other tasks untouched", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-task-scoped-restore-refresh-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const privateRoot = join(root, "private-state");
+    const resultMemoryRoot = join(privateRoot, "result-memory");
+    await mkdir(resultMemoryRoot, { recursive: true });
+    const target = plan("task-restore-target", root);
+    const sibling = plan("task-restore-sibling", root);
+    const unrelated = plan("task-restore-unrelated", root);
+    const taskIdentityDigest = "a".repeat(64);
+    const unrelatedTaskIdentityDigest = "b".repeat(64);
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [target, sibling, unrelated].map((candidate) => ({
+        owner: "fixture-owner", channel: "webchat", goal: "task scoped restore fixture",
+        request_goal_criteria: noRequestCriteria("task scoped restore fixture", candidate.request_id),
+        ...(candidate === target || candidate === sibling
+          ? { task_identity_digest: taskIdentityDigest }
+          : { task_identity_digest: unrelatedTaskIdentityDigest }),
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }],
+        receipt_observations: [], bindings: [], results: [],
+      })),
+    });
+    store.compareAndSet(null, checkpoint);
+    const baseRestoreCommand = operationPlanRestoreCommand();
+    const restoreCommand = {
+      ...baseRestoreCommand,
+      payload: { ...baseRestoreCommand.payload, arguments: {
+        ...baseRestoreCommand.payload.arguments,
+        scope_kind: "task_identity",
+        scope_digest: taskIdentityDigest,
+      } },
+    } as ExecuteCommand;
+    const verifiedPlanIds = new Set<string>();
+    let hds: HDSUpperController | undefined;
+    try {
+      hds = new HDSUpperController({
+        operation_plan_state: store,
+        operation_plan_memory: {
+          private_state_root: privateRoot,
+          database_path: join(resultMemoryRoot, "j-control.sqlite"),
+          memory_database_path: join(resultMemoryRoot, "m-state.sqlite"),
+        },
+        operation_plan_broker_restore_dependency_verifier: (planIdDigest, provenance) => {
+          if (provenance.restore_store_key !== "operation_plans" ||
+              provenance.restore_scope_mode !== "task_scoped_merge_v1" ||
+              provenance.restore_scope_task_digest !== taskIdentityDigest) return false;
+          verifiedPlanIds.add(planIdDigest);
+          return true;
+        },
+      });
+      expect(hds.beginOperationPlanRecoveryRefresh(restoreCommand)).toBe(true);
+      hds.refreshOperationPlansAfterRecoveryRestore(restoreCommand, {
+        schema_version: "operation-plan-recovery-evidence.v1",
+        scope: "restored_operation_plans",
+        checkpoint_digest: operationPlanDigest(checkpoint),
+        provenance: {
+          source: "recovery_restore",
+          command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+          operation_digest: "c".repeat(64),
+          result_digest: "d".repeat(64),
+          restore_store_key: "operation_plans",
+          restore_backup_id_digest: "e".repeat(64),
+          restore_scope_plan_digest: null,
+          restore_scope_task_digest: taskIdentityDigest,
+          restore_scope_mode: "task_scoped_merge_v1",
+          restored_state_digest: "f".repeat(64),
+        },
+        plans: [target, sibling, unrelated].map((candidate, index) => {
+          const planTaskIdentityDigest = index < 2 ? taskIdentityDigest : unrelatedTaskIdentityDigest;
+          return {
+            plan_id_digest: operationPlanDigest(candidate.plan_id),
+            task_identity_digest: planTaskIdentityDigest,
+            restore_scope_relation: index < 2 ? "requested" as const : "collateral" as const,
+            restore_membership: index < 2 ? "restored" as const : "not_restored" as const,
+            integrity: "verified" as const,
+            dependency_status: index < 2 ? "unobserved" as const : "unknown" as const,
+          };
+        }),
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(hds.getRuntimeSnapshot().operation_plans.plans).toMatchObject([
+        { plan_id: operationPlanDigest(target.plan_id), recovery_hold_reason: "held_unobserved" },
+        { plan_id: operationPlanDigest(sibling.plan_id), recovery_hold_reason: "held_unobserved" },
+        { plan_id: operationPlanDigest(unrelated.plan_id) },
+      ]);
+      const persisted = store.loadRecoveryHoldState() as { holds: { plan_id_digest: string; provenance: Record<string, unknown> }[] };
+      expect(persisted.holds).toHaveLength(2);
+      expect(persisted.holds.every((hold) => hold.provenance.restore_scope_task_digest === taskIdentityDigest &&
+        hold.provenance.restore_scope_mode === "task_scoped_merge_v1")).toBe(true);
+      expect(persisted.used_for_authority).toBe(false);
+      expect(persisted.may_execute).toBe(false);
+      expect(review(hds, target, "search").command?.type).toBe("tool_call");
+      expect(verifiedPlanIds).toEqual(new Set([operationPlanDigest(target.plan_id), operationPlanDigest(sibling.plan_id)]));
+      expect(store.loadRecoveryHoldState()).toMatchObject({
+        holds: [{ plan_id_digest: operationPlanDigest(sibling.plan_id), reason: "held_unobserved" }],
+      });
+    } finally {
+      hds?.closeOperationPlanMemory();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects restore evidence from another command without replacing durable plan holds", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-live-restore-command-mismatch-"));
     const store = new OperationPlanStateStore(join(root, "state.sqlite"));

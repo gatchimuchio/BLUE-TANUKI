@@ -110,8 +110,10 @@ import {
   createRecoveryBackup,
   inspectLatestRecoveryBackup,
   inspectRecoveryPlanRestoreScopeApplicability,
+  inspectRecoveryTaskRestoreScopeApplicability,
   inspectRecoveryScopeApplicability,
   isVerifiedRecoveryPlanRestoreScope,
+  isVerifiedRecoveryTaskRestoreScope,
   recoveryStoreRestoreAttemptHistoryEvidence,
   recoveryStoreRestoreHistoryEvidence,
 } from "./recovery_surface.js";
@@ -637,11 +639,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const module = await loadRecoveryInspectionModule();
     return module.projectGatewayRecoveryInspectionForOperator(module.inspectGatewayRecoveryState(process.env));
   };
-  const verifyBrokerRestoreDependenciesForFreshReview = (
+  const verifyRecoveryDependenciesForFreshReview = (
     planIdDigest: string,
     provenance: import("@blue-tanuki/hds-brain").OperationPlanRecoveryHoldProvenance,
   ): boolean => {
-    if (provenance.source !== "recovery_restore" || provenance.restore_store_key !== "broker" ||
+    if (provenance.source !== "recovery_restore" ||
+        (provenance.restore_store_key !== "broker" && provenance.restore_store_key !== "operation_plans") ||
         !recoveryInspectionModule) return false;
     try {
       const projection = recoveryInspectionModule.projectGatewayRecoveryInspectionForOperator(
@@ -693,7 +696,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     meaning_update_memory: meaningUpdateMemoryStorage(),
     operation_plan_recovery_evidence: startupOperationPlanRecoveryEvidence,
     operation_plan_broker_restore_dependency_evidence: startupBrokerRestoreDependencyEvidence,
-    operation_plan_broker_restore_dependency_verifier: verifyBrokerRestoreDependenciesForFreshReview,
+    operation_plan_broker_restore_dependency_verifier: verifyRecoveryDependenciesForFreshReview,
     audit: buildAuditLog(),
     memory: buildHDSMemoryStore(process.env),
     llm_route: buildLLMCommandRouteFromEnv(),
@@ -2022,7 +2025,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             } else if (observation.status !== "matched" || observation.operation !== "restore" ||
                 observation.store_key !== "operation_plans" ||
                 observation.restore_backup_id_digest !== restoreResultEvidence.restored_backup_id_digest ||
-                observation.restore_scope_plan_digest !== restoreResultEvidence.restore_scope_plan_digest ||
+                (observation.restore_scope_plan_digest ?? null) !== (restoreResultEvidence.restore_scope_plan_digest ?? null) ||
+                (observation.restore_scope_task_digest ?? null) !== (restoreResultEvidence.restore_scope_task_digest ?? null) ||
                 observation.restore_scope_mode !== restoreResultEvidence.restore_scope_mode ||
                 observation.plan_residuals === null || observation.plan_restore_points === null) {
               gatewayLog.warn("operation-plan restore refresh remains held", {
@@ -2042,6 +2046,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
                   reason: "restore_plan_dependency_evidence_missing",
                 });
               } else {
+                await loadRecoveryInspectionModule();
                 hds.refreshOperationPlansAfterRecoveryRestore(cmd, recoveryEvidence);
               }
             }
@@ -2440,6 +2445,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ? snapshot.recovery_backups.latest_backup_id
       : null;
     const arguments_ = normalizeRecoveryMutationArguments(toolName, rawArguments, { latestBackupId });
+    const restoreEffectScope = arguments_.scope_kind === "task_identity"
+      ? "selected_task_lineage"
+      : "entire_selected_store";
     if (toolName === "recovery.restore" && arguments_.store_key === "cron_events" &&
         Array.from(pendingApprovals.values()).some((pending) => pending.cron_event !== undefined)) {
       return {
@@ -2464,7 +2472,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         status: "blocked_consumers_not_quiesced",
         executed: false,
         operation: toolName,
-        restore_effect_scope: "entire_selected_store",
+        restore_effect_scope: restoreEffectScope,
         store_key: arguments_.store_key,
         blocking_consumers: restoreConsumersNotQuiesced,
         reason: "canonical_state_restore_consumers_not_quiesced",
@@ -2475,16 +2483,19 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       };
     }
     const planScopeInspection = toolName === "recovery.restore" && arguments_.store_key === "operation_plans"
-      ? await inspectRecoveryPlanRestoreScopeApplicability(process.env, arguments_.backup_id!, arguments_.scope_digest!)
+      ? arguments_.scope_kind === "task_identity"
+        ? await inspectRecoveryTaskRestoreScopeApplicability(process.env, arguments_.backup_id!, arguments_.scope_digest!)
+        : await inspectRecoveryPlanRestoreScopeApplicability(process.env, arguments_.backup_id!, arguments_.scope_digest!)
       : null;
-    if (planScopeInspection && !isVerifiedRecoveryPlanRestoreScope(
-      planScopeInspection, arguments_.backup_id!, arguments_.scope_digest!,
-    )) {
+    const planScopeVerified = planScopeInspection && (arguments_.scope_kind === "task_identity"
+      ? isVerifiedRecoveryTaskRestoreScope(planScopeInspection, arguments_.backup_id!, arguments_.scope_digest!)
+      : isVerifiedRecoveryPlanRestoreScope(planScopeInspection, arguments_.backup_id!, arguments_.scope_digest!));
+    if (planScopeInspection && !planScopeVerified) {
       return {
         status: "blocked_unverified_scope",
         executed: false,
         operation: toolName,
-        restore_effect_scope: "entire_selected_store",
+        restore_effect_scope: restoreEffectScope,
         scope_applicability: planScopeInspection,
         used_for_authority: false,
         may_execute: false,
@@ -2597,7 +2608,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       approval_level: evaluation.approval_level,
       final_review_required: true,
       ...(planScopeInspection ? {
-        restore_effect_scope: "entire_selected_store",
+        restore_effect_scope: restoreEffectScope,
         scope_applicability: planScopeInspection,
       } : {}),
       next_action: "Review this exact operation and target in the owner approval queue. A fresh owner L3 approval token is required; this request has not executed.",

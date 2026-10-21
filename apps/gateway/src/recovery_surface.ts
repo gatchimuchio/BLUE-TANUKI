@@ -121,7 +121,9 @@ export interface RecoveryPostActionObservation {
   restore_backup_id_digest: string | null;
   /** Digest of the operation plan requested by L3. */
   restore_scope_plan_digest: string | null;
-  readonly restore_scope_mode?: "plan_scoped_merge_v1";
+  /** Digest of the HDS-J task lineage requested by L3. */
+  restore_scope_task_digest?: string | null;
+  readonly restore_scope_mode?: "plan_scoped_merge_v1" | "task_scoped_merge_v1";
   plan_restore_points: readonly RecoveryPlanRestorePointObservation[] | null;
   configuration_state:
     | "provider_stub"
@@ -180,7 +182,8 @@ export interface RecoveryStoreRestoreHistoryEvidence {
   readonly restored_store_state_digest: string;
   readonly restored_backup_id_digest?: string;
   readonly restore_scope_plan_digest?: string;
-  readonly restore_scope_mode?: "plan_scoped_merge_v1";
+  readonly restore_scope_task_digest?: string;
+  readonly restore_scope_mode?: "plan_scoped_merge_v1" | "task_scoped_merge_v1";
 }
 
 export interface RecoveryActionResult {
@@ -194,9 +197,9 @@ export interface RecoveryActionResult {
   restored_store_key?: CanonicalStateStoreKey;
   restored_store_archive_digest?: string;
   restored_store_state_digest?: string;
-  restore_scope_kind?: "operation_plan";
+  restore_scope_kind?: "operation_plan" | "task_identity";
   restore_scope_digest?: string;
-  restore_scope_mode?: "plan_scoped_merge_v1";
+  restore_scope_mode?: "plan_scoped_merge_v1" | "task_scoped_merge_v1";
   canonical_state_cross_store_atomic?: false;
   restored_items_count?: number;
   removed_paths_count?: number;
@@ -242,7 +245,7 @@ export interface RecoveryBackupInspection {
 
 export interface RecoveryScopeApplicabilityRequest {
   readonly backup_id_digest: string;
-  readonly scope_kind: "request_scope" | "operation_plan";
+  readonly scope_kind: "request_scope" | "operation_plan" | "task_identity";
   readonly scope_digest: string;
   readonly store_candidates: readonly CanonicalStateStoreKey[];
 }
@@ -267,6 +270,7 @@ export interface RecoveryScopeApplicabilityInspection {
   readonly backup_id_digest: string | null;
   readonly matched_plan_id_digest: string | null;
   readonly matched_plan_scope_count: number | null;
+  readonly matched_plan_id_digests: readonly string[];
   /** HDS-J task lineage; correlation only, never authority. */
   readonly backup_task_identity_digest: string | null;
   readonly backup_task_lineage_plan_scope_count: number | null;
@@ -347,7 +351,7 @@ export interface RecoveryBackupOperationPlanInventory {
 export interface RestoreRecoveryOptions {
   backup_id?: string;
   store_key?: CanonicalStateStoreKey;
-  scope_kind?: "operation_plan";
+  scope_kind?: "operation_plan" | "task_identity";
   scope_digest?: string;
   /** Private Executor context; never accepted from recovery tool arguments. */
   executor_command_key?: string;
@@ -1418,13 +1422,15 @@ function emptyRecoveryScopeApplicability(
     mode: "read_only",
     status: "unverified",
     reason,
-    scope_kind: request.scope_kind === "request_scope" || request.scope_kind === "operation_plan" ? request.scope_kind : null,
+    scope_kind: request.scope_kind === "request_scope" || request.scope_kind === "operation_plan" ||
+      request.scope_kind === "task_identity" ? request.scope_kind : null,
     scope_digest: typeof request.scope_digest === "string" && RECOVERY_SCOPE_DIGEST.test(request.scope_digest)
       ? request.scope_digest.toLowerCase() : null,
     backup_id_digest: typeof request.backup_id_digest === "string" && RECOVERY_SCOPE_DIGEST.test(request.backup_id_digest)
       ? request.backup_id_digest.toLowerCase() : null,
     matched_plan_id_digest: null,
     matched_plan_scope_count: null,
+    matched_plan_id_digests: [],
     backup_task_identity_digest: null,
     backup_task_lineage_plan_scope_count: null,
     backup_task_lineage_integrity: "unknown",
@@ -1446,7 +1452,7 @@ function normalizeRecoveryScopeApplicabilityRequest(value: unknown): RecoverySco
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const input = value as Record<string, unknown>;
   if (typeof input.backup_id_digest !== "string" || !RECOVERY_SCOPE_DIGEST.test(input.backup_id_digest) ||
-      (input.scope_kind !== "request_scope" && input.scope_kind !== "operation_plan") ||
+      (input.scope_kind !== "request_scope" && input.scope_kind !== "operation_plan" && input.scope_kind !== "task_identity") ||
       typeof input.scope_digest !== "string" || !RECOVERY_SCOPE_DIGEST.test(input.scope_digest) ||
       !Array.isArray(input.store_candidates) || input.store_candidates.length < 1 || input.store_candidates.length > 5) return null;
   const allowedStores = new Set<CanonicalStateStoreKey>(CANONICAL_STATE_STORE_PATHS.map((item) => item.key));
@@ -1499,29 +1505,39 @@ export async function inspectRecoveryScopeApplicability(
 
   const matchingPlans = inventory.plan_scopes.filter((plan) => request.scope_kind === "operation_plan"
     ? plan.plan_id_digest === request.scope_digest
-    : plan.request_scope_digest === request.scope_digest);
+    : request.scope_kind === "task_identity"
+      ? plan.task_identity_digest === request.scope_digest
+      : plan.request_scope_digest === request.scope_digest);
   if (matchingPlans.length === 0) return emptyRecoveryScopeApplicability("scope_not_found", baseRequest);
-  if (matchingPlans.length !== 1) {
+  if ((request.scope_kind !== "task_identity" && matchingPlans.length !== 1) ||
+      new Set(matchingPlans.map((plan) => plan.plan_id_digest)).size !== matchingPlans.length) {
     return {
       ...emptyRecoveryScopeApplicability("scope_ambiguous", baseRequest),
       matched_plan_scope_count: matchingPlans.length,
+      matched_plan_id_digests: matchingPlans.map((plan) => plan.plan_id_digest).sort(),
     };
   }
 
   const matchedPlan = matchingPlans[0]!;
-  if (matchedPlan.integrity !== "verified") {
+  const scopedPlans = request.scope_kind === "task_identity" ? matchingPlans : [matchedPlan];
+  if (scopedPlans.some((plan) => plan.integrity !== "verified" || plan.plan_record_count !== 1)) {
     return emptyRecoveryScopeApplicability("dependency_unverified", baseRequest);
   }
-  const matchingDependencyScopes = dependencies.plan_scopes.filter((scope) => scope.plan_id_digest === matchedPlan.plan_id_digest);
-  if (matchingDependencyScopes.length !== 1) {
+  const scopedPlanIds = new Set(scopedPlans.map((plan) => plan.plan_id_digest));
+  const matchingDependencyScopes = dependencies.plan_scopes.filter((scope) => scopedPlanIds.has(scope.plan_id_digest));
+  if (matchingDependencyScopes.length !== scopedPlans.length ||
+      new Set(matchingDependencyScopes.map((scope) => scope.plan_id_digest)).size !== scopedPlans.length) {
     return {
       ...emptyRecoveryScopeApplicability("dependency_unverified", baseRequest),
-      matched_plan_id_digest: matchedPlan.plan_id_digest,
-      matched_plan_scope_count: 1,
+      matched_plan_id_digest: request.scope_kind === "task_identity" ? null : matchedPlan.plan_id_digest,
+      matched_plan_scope_count: scopedPlans.length,
+      matched_plan_id_digests: scopedPlans.map((plan) => plan.plan_id_digest).sort(),
     };
   }
-  const dependencyScope = matchingDependencyScopes[0]!;
-  const taskIdentityDigest = matchedPlan.task_identity_digest ?? null;
+  const dependencyScope = matchingDependencyScopes.find((scope) => scope.plan_id_digest === matchedPlan.plan_id_digest)!;
+  const taskIdentityDigest = request.scope_kind === "task_identity"
+    ? request.scope_digest
+    : matchedPlan.task_identity_digest ?? null;
   const taskLineagePlans = taskIdentityDigest
     ? inventory.plan_scopes.filter((plan) => plan.task_identity_digest === taskIdentityDigest)
     : [];
@@ -1537,11 +1553,30 @@ export async function inspectRecoveryScopeApplicability(
     : taskLineageDependencies.some((scope) => scope.status === "residuals_present")
       ? "residuals_present"
       : taskLineageDependencies.some((scope) => scope.status === "unobserved") ? "unobserved" : "observed";
+  if (request.scope_kind === "task_identity" &&
+      (taskLineagePlans.length !== scopedPlans.length || taskLineageIntegrity !== "verified" ||
+        taskLineageDependencyStatus === "unknown")) {
+    return {
+      ...emptyRecoveryScopeApplicability("dependency_unverified", baseRequest),
+      backup_task_identity_digest: taskIdentityDigest,
+      backup_task_lineage_plan_scope_count: taskLineagePlans.length,
+      backup_task_lineage_integrity: taskLineageIntegrity,
+      backup_task_lineage_dependency_status: taskLineageDependencyStatus,
+      matched_plan_scope_count: scopedPlans.length,
+      matched_plan_id_digests: scopedPlans.map((plan) => plan.plan_id_digest).sort(),
+    };
+  }
   const snapshotStatuses = new Map(backup.canonical_state_stores.map((entry) => [entry.store_key, entry.status]));
   if (snapshotStatuses.size !== 5 || backup.canonical_state_cross_store_atomic !== false) {
     return emptyRecoveryScopeApplicability("store_unverified", baseRequest);
   }
 
+  const scopeResidualDependencies = request.scope_kind === "task_identity"
+    ? [...new Set(matchingDependencyScopes.flatMap((scope) => scope.residual_dependencies))]
+    : dependencyScope.residual_dependencies;
+  const scopeUnobservedDependencies = request.scope_kind === "task_identity"
+    ? [...new Set(matchingDependencyScopes.flatMap((scope) => scope.unobserved_dependencies))]
+    : dependencyScope.unobserved_dependencies;
   const storeCandidates = request.store_candidates.map((storeKey) => {
     const relatedDependencies = RECOVERY_SCOPE_DEPENDENCIES[storeKey];
     const snapshotStatus: CanonicalStateSnapshotEntryStatus | "unknown" = snapshotStatuses.get(storeKey) ?? "unknown";
@@ -1550,18 +1585,20 @@ export async function inspectRecoveryScopeApplicability(
       snapshot_status: snapshotStatus,
       dependency_status: recoveryScopeDependencyStatus(
         relatedDependencies,
-        dependencyScope.residual_dependencies,
-        dependencyScope.unobserved_dependencies,
+        scopeResidualDependencies,
+        scopeUnobservedDependencies,
       ),
       related_dependencies: [...relatedDependencies],
     };
   });
   const verifiedStoreCandidateCount = storeCandidates.filter((item) => item.snapshot_status === "verified").length;
-  const unverifiedDependency = storeCandidates.some((item) =>
-    item.dependency_status === "unobserved" || item.dependency_status === "not_mapped" || item.dependency_status === "unknown");
+  const unverifiedDependency = request.scope_kind === "task_identity"
+    ? storeCandidates.some((item) => item.dependency_status === "not_mapped" || item.dependency_status === "unknown")
+    : storeCandidates.some((item) =>
+      item.dependency_status === "unobserved" || item.dependency_status === "not_mapped" || item.dependency_status === "unknown");
   const unverifiedStore = verifiedStoreCandidateCount !== storeCandidates.length;
   const reason = unverifiedStore ? "store_unverified"
-    : unverifiedDependency ? (storeCandidates.some((item) => item.dependency_status === "not_mapped")
+      : unverifiedDependency ? (storeCandidates.some((item) => item.dependency_status === "not_mapped")
       ? "dependency_not_mapped" : "dependency_unverified")
       : null;
   return {
@@ -1573,17 +1610,18 @@ export async function inspectRecoveryScopeApplicability(
     scope_kind: request.scope_kind,
     scope_digest: request.scope_digest,
     backup_id_digest: request.backup_id_digest,
-    matched_plan_id_digest: matchedPlan.plan_id_digest,
-    matched_plan_scope_count: 1,
+    matched_plan_id_digest: request.scope_kind === "task_identity" ? null : matchedPlan.plan_id_digest,
+    matched_plan_scope_count: scopedPlans.length,
+    matched_plan_id_digests: scopedPlans.map((plan) => plan.plan_id_digest).sort(),
     backup_task_identity_digest: taskIdentityDigest,
     backup_task_lineage_plan_scope_count: taskIdentityDigest ? taskLineagePlans.length : null,
     backup_task_lineage_integrity: taskLineageIntegrity,
     backup_task_lineage_dependency_status: taskLineageDependencyStatus,
     store_candidate_count: storeCandidates.length,
     verified_store_candidate_count: verifiedStoreCandidateCount,
-    dependency_scope_status: dependencyScope.status,
-    residual_dependencies: [...dependencyScope.residual_dependencies],
-    unobserved_dependencies: [...dependencyScope.unobserved_dependencies],
+    dependency_scope_status: request.scope_kind === "task_identity" ? taskLineageDependencyStatus : dependencyScope.status,
+    residual_dependencies: [...scopeResidualDependencies],
+    unobserved_dependencies: [...scopeUnobservedDependencies],
     store_candidates: storeCandidates,
     cross_store_atomic: false,
     external_backup_restore_point: "not_examined",
@@ -1616,6 +1654,30 @@ export async function inspectRecoveryPlanRestoreScopeApplicability(
   });
 }
 
+/** Bind one complete, verified task lineage to one exact backup without exposing its backup ID. */
+export async function inspectRecoveryTaskRestoreScopeApplicability(
+  env: NodeJS.ProcessEnv,
+  backupId: string,
+  taskIdentityDigest: string,
+): Promise<RecoveryScopeApplicabilityInspection> {
+  if (!/^[A-Za-z0-9_.-]{1,128}$/u.test(backupId) || backupId === "latest" ||
+      !RECOVERY_SCOPE_DIGEST.test(taskIdentityDigest)) {
+    return emptyRecoveryScopeApplicability("invalid_request", {
+      ...( /^[A-Za-z0-9_.-]{1,128}$/u.test(backupId) && backupId !== "latest"
+        ? { backup_id_digest: createHash("sha256").update(backupId).digest("hex") }
+        : {}),
+      scope_kind: "task_identity",
+      scope_digest: taskIdentityDigest,
+    });
+  }
+  return inspectRecoveryScopeApplicability(env, {
+    backup_id_digest: createHash("sha256").update(backupId).digest("hex"),
+    scope_kind: "task_identity",
+    scope_digest: taskIdentityDigest.toLowerCase(),
+    store_candidates: ["operation_plans"],
+  });
+}
+
 export function isVerifiedRecoveryPlanRestoreScope(
   inspection: RecoveryScopeApplicabilityInspection,
   backupId: string,
@@ -1633,6 +1695,29 @@ export function isVerifiedRecoveryPlanRestoreScope(
     store.related_dependencies.length === 1 && store.related_dependencies[0] === "operation_plan";
 }
 
+export function isVerifiedRecoveryTaskRestoreScope(
+  inspection: RecoveryScopeApplicabilityInspection,
+  backupId: string,
+  taskIdentityDigest: string,
+): boolean {
+  const store = inspection.store_candidates[0];
+  return inspection.status === "matched" && inspection.reason === null &&
+    inspection.scope_kind === "task_identity" && inspection.scope_digest === taskIdentityDigest.toLowerCase() &&
+    inspection.backup_id_digest === createHash("sha256").update(backupId).digest("hex") &&
+    inspection.matched_plan_id_digest === null && inspection.matched_plan_scope_count !== null &&
+    inspection.matched_plan_scope_count > 0 && inspection.matched_plan_id_digests.length === inspection.matched_plan_scope_count &&
+    new Set(inspection.matched_plan_id_digests).size === inspection.matched_plan_scope_count &&
+    inspection.backup_task_identity_digest === taskIdentityDigest.toLowerCase() &&
+    inspection.backup_task_lineage_plan_scope_count === inspection.matched_plan_scope_count &&
+    inspection.backup_task_lineage_integrity === "verified" &&
+    inspection.backup_task_lineage_dependency_status !== "unknown" &&
+    inspection.store_candidate_count === 1 && inspection.verified_store_candidate_count === 1 &&
+    inspection.cross_store_atomic === false && inspection.used_for_authority === false && inspection.may_execute === false &&
+    store?.store_key === "operation_plans" && store.snapshot_status === "verified" &&
+    ["no_residual_recorded", "residuals_present", "unobserved"].includes(store.dependency_status) &&
+    store.related_dependencies.length === 1 && store.related_dependencies[0] === "operation_plan";
+}
+
 async function requireVerifiedRecoveryPlanRestoreScope(
   env: NodeJS.ProcessEnv,
   backupId: string,
@@ -1647,6 +1732,36 @@ async function requireVerifiedRecoveryPlanRestoreScope(
     throw new Error("operation_plan_scope_unverified");
   }
   return inspection;
+}
+
+async function requireVerifiedRecoveryTaskRestoreScope(
+  env: NodeJS.ProcessEnv,
+  backupId: string,
+  scopeDigest: string | undefined,
+): Promise<RecoveryScopeApplicabilityInspection> {
+  if (typeof scopeDigest !== "string" || !RECOVERY_SCOPE_DIGEST.test(scopeDigest)) {
+    throw new Error("operation_plan_task_scope_required");
+  }
+  const inspection = await inspectRecoveryTaskRestoreScopeApplicability(env, backupId, scopeDigest);
+  if (!isVerifiedRecoveryTaskRestoreScope(inspection, backupId, scopeDigest)) {
+    throw new Error("operation_plan_task_scope_unverified");
+  }
+  return inspection;
+}
+
+async function requireVerifiedRecoveryRestoreScope(
+  env: NodeJS.ProcessEnv,
+  backupId: string,
+  scopeKind: string | undefined,
+  scopeDigest: string | undefined,
+): Promise<RecoveryScopeApplicabilityInspection> {
+  if (scopeKind === "operation_plan") {
+    return requireVerifiedRecoveryPlanRestoreScope(env, backupId, scopeKind, scopeDigest);
+  }
+  if (scopeKind === "task_identity") {
+    return requireVerifiedRecoveryTaskRestoreScope(env, backupId, scopeDigest);
+  }
+  throw new Error("operation_plan_scope_required");
 }
 
 async function restoreManifest(
@@ -1745,8 +1860,9 @@ export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoverySto
   const scopeDigest = recoveryObservationDigest(value.restore_scope_digest);
   const scopeMode = value.restore_scope_mode;
   if (storeKey === "operation_plans") {
-    if (scopeKind !== "operation_plan" || !scopeDigest ||
-        (scopeMode !== undefined && scopeMode !== "plan_scoped_merge_v1")) return undefined;
+    if ((scopeKind !== "operation_plan" && scopeKind !== "task_identity") || !scopeDigest ||
+        (scopeKind === "operation_plan" && scopeMode !== "plan_scoped_merge_v1") ||
+        (scopeKind === "task_identity" && scopeMode !== "task_scoped_merge_v1")) return undefined;
   } else if (scopeKind !== undefined || value.restore_scope_digest !== undefined || scopeMode !== undefined) {
     return undefined;
   }
@@ -1755,8 +1871,9 @@ export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoverySto
     store_key: storeKey as CanonicalStateStoreKey,
     restored_store_state_digest: stateDigest,
     restored_backup_id_digest: backupIdDigest,
-    ...(storeKey === "operation_plans" ? { restore_scope_plan_digest: scopeDigest! } : {}),
-    ...(scopeMode === "plan_scoped_merge_v1" ? { restore_scope_mode: scopeMode } : {}),
+    ...(storeKey === "operation_plans" && scopeKind === "operation_plan" ? { restore_scope_plan_digest: scopeDigest! } : {}),
+    ...(storeKey === "operation_plans" && scopeKind === "task_identity" ? { restore_scope_task_digest: scopeDigest! } : {}),
+    ...(scopeMode === "plan_scoped_merge_v1" || scopeMode === "task_scoped_merge_v1" ? { restore_scope_mode: scopeMode } : {}),
   };
 }
 
@@ -1789,20 +1906,27 @@ function recoveryStoreRestoreEvidenceFromHistory(value: unknown): RecoveryStoreR
   const backupIdDigest = recoveryObservationDigest(value.restored_backup_id_digest);
   const hasScopeDigest = value.restore_scope_plan_digest !== undefined;
   const scopeDigest = recoveryObservationDigest(value.restore_scope_plan_digest);
+  const hasTaskScopeDigest = value.restore_scope_task_digest !== undefined;
+  const taskScopeDigest = recoveryObservationDigest(value.restore_scope_task_digest);
   const hasScopeMode = value.restore_scope_mode !== undefined;
   const scopeMode = value.restore_scope_mode;
   if (typeof storeKey !== "string" || !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === storeKey) ||
       !stateDigest || (value.restored_backup_id_digest !== undefined && !backupIdDigest) ||
-      (hasScopeDigest && !scopeDigest) ||
-      (storeKey !== "operation_plans" && (hasScopeDigest || hasScopeMode)) ||
-      (hasScopeMode && (scopeMode !== "plan_scoped_merge_v1" || !scopeDigest))) return null;
+      (hasScopeDigest && !scopeDigest) || (hasTaskScopeDigest && !taskScopeDigest) ||
+      (hasScopeDigest && hasTaskScopeDigest) ||
+      (hasScopeDigest && scopeMode !== "plan_scoped_merge_v1") ||
+      (hasTaskScopeDigest && scopeMode !== "task_scoped_merge_v1") ||
+      (storeKey !== "operation_plans" && (hasScopeDigest || hasTaskScopeDigest || hasScopeMode)) ||
+      (hasScopeMode && (scopeMode === "plan_scoped_merge_v1" ? !scopeDigest || hasTaskScopeDigest
+        : scopeMode === "task_scoped_merge_v1" ? !taskScopeDigest || hasScopeDigest : true))) return null;
   return {
     schema_version: 1,
     store_key: storeKey as CanonicalStateStoreKey,
     restored_store_state_digest: stateDigest,
     ...(backupIdDigest ? { restored_backup_id_digest: backupIdDigest } : {}),
     ...(scopeDigest ? { restore_scope_plan_digest: scopeDigest } : {}),
-    ...(scopeMode === "plan_scoped_merge_v1" ? { restore_scope_mode: scopeMode } : {}),
+    ...(taskScopeDigest ? { restore_scope_task_digest: taskScopeDigest } : {}),
+    ...(scopeMode === "plan_scoped_merge_v1" || scopeMode === "task_scoped_merge_v1" ? { restore_scope_mode: scopeMode } : {}),
   };
 }
 
@@ -1909,6 +2033,7 @@ function noRecoveryActionObservation(
     plan_residuals: null,
     restore_backup_id_digest: null,
     restore_scope_plan_digest: null,
+    restore_scope_task_digest: null,
     plan_restore_points: null,
     configuration_state: "not_observed",
     evidence_source: "NONE",
@@ -2055,7 +2180,9 @@ export async function buildRecoveryPostActionObservation(
     plan_residuals: null,
     restore_backup_id_digest: latest.restoreEvidence?.restored_backup_id_digest ?? latest.restoreAttempt?.backup_id_digest ?? null,
     restore_scope_plan_digest: latest.restoreEvidence?.restore_scope_plan_digest ?? null,
-    ...(latest.restoreEvidence?.restore_scope_mode === "plan_scoped_merge_v1"
+    restore_scope_task_digest: latest.restoreEvidence?.restore_scope_task_digest ?? null,
+    ...(latest.restoreEvidence?.restore_scope_mode === "plan_scoped_merge_v1" ||
+        latest.restoreEvidence?.restore_scope_mode === "task_scoped_merge_v1"
       ? { restore_scope_mode: latest.restoreEvidence.restore_scope_mode }
       : {}),
     plan_restore_points: null,
@@ -2140,7 +2267,8 @@ export async function buildRecoveryPostActionObservation(
         restore_backup_id_digest: restoreEvidence.restored_backup_id_digest ?? null,
       };
     }
-    if (restoreEvidence.store_key === "operation_plans" && !restoreEvidence.restore_scope_plan_digest) {
+    if (restoreEvidence.store_key === "operation_plans" &&
+        !(restoreEvidence.restore_scope_plan_digest || restoreEvidence.restore_scope_task_digest)) {
       return {
         ...unverified,
         store_key: restoreEvidence.store_key,
@@ -2201,7 +2329,9 @@ export async function buildRecoveryPostActionObservation(
       plan_residuals: restoreEvidence.store_key === "operation_plans" ? storeLedger.plan_residuals : null,
       restore_backup_id_digest: restoreEvidence.restored_backup_id_digest ?? null,
       restore_scope_plan_digest: restoreEvidence.restore_scope_plan_digest ?? null,
-      ...(restoreEvidence.restore_scope_mode === "plan_scoped_merge_v1"
+      restore_scope_task_digest: restoreEvidence.restore_scope_task_digest ?? null,
+      ...(restoreEvidence.restore_scope_mode === "plan_scoped_merge_v1" ||
+          restoreEvidence.restore_scope_mode === "task_scoped_merge_v1"
         ? { restore_scope_mode: restoreEvidence.restore_scope_mode }
         : {}),
       plan_restore_points: planRestorePoints,
@@ -2357,7 +2487,7 @@ export async function restoreRecoveryBackup(
   if (!id) throw new Error("backup_not_found");
   let planScopeInspection: RecoveryScopeApplicabilityInspection | undefined;
   if (options.store_key === "operation_plans") {
-    planScopeInspection = await requireVerifiedRecoveryPlanRestoreScope(env, id, options.scope_kind, options.scope_digest);
+    planScopeInspection = await requireVerifiedRecoveryRestoreScope(env, id, options.scope_kind, options.scope_digest);
   }
   const manifest = await readManifest(env, id);
   if (options.store_key) {
@@ -2430,7 +2560,7 @@ export async function restoreRecoveryBackup(
     }
 
     if (options.store_key === "operation_plans") {
-      planScopeInspection = await requireVerifiedRecoveryPlanRestoreScope(env, id, options.scope_kind, options.scope_digest);
+      planScopeInspection = await requireVerifiedRecoveryRestoreScope(env, id, options.scope_kind, options.scope_digest);
     }
     let restored: { readonly bytes: number; readonly sha256: string; readonly restoredStateSha256: string };
     if (options.store_key === "broker") {
@@ -2484,11 +2614,11 @@ export async function restoreRecoveryBackup(
       }
       const operationPlanStore = new OperationPlanStateStore(targetPath);
       try {
-        operationPlanStore.restorePlanScope(
-          archivedCheckpoint,
-          planScopeInspection!.scope_digest!,
-          preRestorePlanCheckpoint,
-        );
+        if (planScopeInspection!.scope_kind === "task_identity") {
+          operationPlanStore.restoreTaskScope(archivedCheckpoint, planScopeInspection!.scope_digest!, preRestorePlanCheckpoint);
+        } else {
+          operationPlanStore.restorePlanScope(archivedCheckpoint, planScopeInspection!.scope_digest!, preRestorePlanCheckpoint);
+        }
       } finally {
         operationPlanStore.close();
       }
@@ -2518,9 +2648,10 @@ export async function restoreRecoveryBackup(
       restored_store_archive_digest: restored.sha256,
       restored_store_state_digest: restored.restoredStateSha256,
       ...(planScopeInspection ? {
-        restore_scope_kind: "operation_plan" as const,
+        restore_scope_kind: planScopeInspection.scope_kind === "task_identity" ? "task_identity" as const : "operation_plan" as const,
         restore_scope_digest: planScopeInspection.scope_digest!,
-        restore_scope_mode: "plan_scoped_merge_v1" as const,
+        restore_scope_mode: planScopeInspection.scope_kind === "task_identity"
+          ? "task_scoped_merge_v1" as const : "plan_scoped_merge_v1" as const,
       } : {}),
       canonical_state_cross_store_atomic: false,
       pre_action_backup_id: preRestore.backup_id,
