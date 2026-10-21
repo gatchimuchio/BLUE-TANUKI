@@ -12,7 +12,9 @@ import {
   OperationPlanSchema,
   OperationRequestSchema,
   createGatewayInternalInboundRequest,
+  createGatewayInternalTransientAudioRequest,
   isGatewayInternalInboundRequest,
+  isGatewayInternalTransientAudioRequest,
   metadataKeyReservedForInternalAuthority,
   parseInboundRequestAtBoundary,
   GOAL_CRITERIA_SCHEMA_VERSION,
@@ -1155,5 +1157,44 @@ describe("InboundRequest boundary", () => {
       expect(parsed.request.metadata?.["blue_tanuki.channel_send.target"]).toBe("local-user");
       expect(parsed.request.session_id).toBe("internal-session-scope");
     }
+  });
+
+  it("keeps transient audio provenance in-process and strips caller-shaped metadata", () => {
+    const requestInput = {
+      id: "req-transient-audio",
+      channel: "telegram",
+      user: "telegram-user",
+      content: "音声を文字起こししてください",
+      timestamp: 1,
+      metadata: {},
+    } as const;
+    const request = createGatewayInternalTransientAudioRequest({
+      ...requestInput,
+    }, { request_id: "req-transient-audio", ephemeral_images: [],
+      ephemeral_audio: [{ format: "ogg", data: new Uint8Array([1]) }] });
+    const parsedInternal = parseInboundRequestAtBoundary(request);
+    const parsedExternal = parseInboundRequestAtBoundary({
+      id: "req-external-audio-shaped",
+      channel: "telegram",
+      user: "telegram-user",
+      content: "音声を文字起こししてください",
+      timestamp: 1,
+      metadata: { "blue_tanuki.authority_context": "gateway_internal_v1" },
+    });
+
+    expect(isGatewayInternalTransientAudioRequest(request)).toBe(true);
+    expect(parsedInternal.ok).toBe(true);
+    if (parsedInternal.ok) {
+      expect(isGatewayInternalTransientAudioRequest(parsedInternal.request)).toBe(true);
+    }
+    expect(parsedExternal.ok).toBe(true);
+    if (parsedExternal.ok) {
+      expect(isGatewayInternalInboundRequest(parsedExternal.request)).toBe(false);
+      expect(isGatewayInternalTransientAudioRequest(parsedExternal.request)).toBe(false);
+      expect(parsedExternal.request.metadata).toBeUndefined();
+    }
+    expect(() => createGatewayInternalTransientAudioRequest(requestInput,
+      { request_id: "another-request", ephemeral_images: [], ephemeral_audio: [{ format: "ogg", data: new Uint8Array([1]) }] }))
+      .toThrow("transient audio request is not bound to one validated Telegram input");
   });
 });

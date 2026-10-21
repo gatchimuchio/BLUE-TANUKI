@@ -12,6 +12,7 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [key:
 export type MetadataObject = Record<string, JsonValue | undefined>;
 
 const GATEWAY_INTERNAL_AUTHORITY_BRAND: unique symbol = Symbol("blue_tanuki.gateway_internal_authority.v1");
+const GATEWAY_INTERNAL_TRANSIENT_AUDIO_REQUESTS = new WeakSet<object>();
 
 export const RESERVED_EXTERNAL_METADATA_KEYS = [
   "blue_tanuki.authority_context",
@@ -692,11 +693,15 @@ export function parseInboundRequestAtBoundary(raw: unknown): InboundRequestBound
     };
   }
   try {
+    const request = normalizeInboundRequestForAuthority(parsed.data, {
+      internal_authority_metadata: isGatewayInternalInboundRequest(raw),
+    });
+    if (isGatewayInternalTransientAudioRequest(raw)) {
+      GATEWAY_INTERNAL_TRANSIENT_AUDIO_REQUESTS.add(request);
+    }
     return {
       ok: true,
-      request: normalizeInboundRequestForAuthority(parsed.data, {
-        internal_authority_metadata: isGatewayInternalInboundRequest(raw),
-      }),
+      request,
     };
   } catch (error) {
     return {
@@ -728,9 +733,12 @@ export function normalizeInboundRequestForAuthority(
     ...(request.goal_criteria ? { goal_criteria: GoalCriteriaSchema.parse(request.goal_criteria) } : {}),
     ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
-  return opts.internal_authority_metadata === true
-    ? markGatewayInternalInboundRequest(normalized)
-    : normalized;
+  if (opts.internal_authority_metadata !== true) return normalized;
+  markGatewayInternalInboundRequest(normalized);
+  if (isGatewayInternalTransientAudioRequest(request)) {
+    GATEWAY_INTERNAL_TRANSIENT_AUDIO_REQUESTS.add(normalized);
+  }
+  return normalized;
 }
 
 export function createGatewayInternalInboundRequest(
@@ -739,6 +747,41 @@ export function createGatewayInternalInboundRequest(
   return normalizeInboundRequestForAuthority(request, {
     internal_authority_metadata: true,
   });
+}
+
+/**
+ * Bind a Gateway-validated, one-request audio input to its HDS decision without
+ * adding media bytes or a caller-forgeable marker to the persisted request.
+ */
+export function createGatewayInternalTransientAudioRequest(
+  request: InboundRequest,
+  context: {
+    readonly request_id: string;
+    readonly ephemeral_images: readonly TransientImageInput[];
+    readonly ephemeral_audio?: readonly TransientAudioInput[];
+  },
+): InboundRequest {
+  const audio = context.ephemeral_audio;
+  const input = audio?.length === 1 ? audio[0] : undefined;
+  if (request.channel !== "telegram" || context.request_id !== request.id ||
+      context.ephemeral_images.length !== 0 || !input ||
+      !["flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"].includes(input.format) ||
+      !(input.data instanceof Uint8Array) || input.data.byteLength === 0) {
+    throw new Error("transient audio request is not bound to one validated Telegram input");
+  }
+  const internal = createGatewayInternalInboundRequest({
+    ...request,
+    metadata: {
+      ...(request.metadata ?? {}),
+      "blue_tanuki.authority_context": "gateway_internal_v1",
+    },
+  });
+  GATEWAY_INTERNAL_TRANSIENT_AUDIO_REQUESTS.add(internal);
+  return internal;
+}
+
+export function isGatewayInternalTransientAudioRequest(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && GATEWAY_INTERNAL_TRANSIENT_AUDIO_REQUESTS.has(value));
 }
 
 export function isGatewayInternalInboundRequest(value: unknown): boolean {

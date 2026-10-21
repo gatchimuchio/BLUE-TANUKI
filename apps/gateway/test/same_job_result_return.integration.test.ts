@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -47,7 +47,7 @@ afterEach(async () => {
   await Promise.all([...childProcesses].map(stopChild));
 });
 
-describe("F10.03 served Telegram same-job result return", () => {
+describe("served Telegram result return and request-bound media ingress", () => {
   it("admitted Telegram wait reply reaches the shared HDS plan and WebChat returns its saved result", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-f1003-same-job-"));
     const auditDir = join(tempRoot, "audit");
@@ -174,6 +174,108 @@ describe("F10.03 served Telegram same-job result return", () => {
       rmSync(tempRoot, { recursive: true, force: true });
     }
   }, 45_000);
+
+  it("serves Telegram image and voice media through the shared C consumer and returns both responses", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-telegram-media-served-"));
+    const auditDir = join(tempRoot, "audit");
+    const stateRoot = join(tempRoot, "state");
+    const memoryFile = join(tempRoot, "memory.jsonl");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const sessionDir = join(tempRoot, "sessions");
+    const captureFile = join(tempRoot, "telegram-media-fixture.jsonl");
+    const preloadFile = join(tempRoot, "telegram-media-fetch-fixture.cjs");
+    const imageBytes = Buffer.from([0xff, 0xd8, 0xff, 0x01, 0x02, 0xff, 0xd9]);
+    const audioBytes = Buffer.from([0x4f, 0x67, 0x67, 0x53, 0x00, 0x01, 0x02]);
+    const telegramFiles = {
+      "synthetic-image-file-id": { file_path: "photos/synthetic.jpg", bytes_base64: imageBytes.toString("base64") },
+      "synthetic-voice-file-id": { file_path: "voice/synthetic.oga", bytes_base64: audioBytes.toString("base64") },
+    };
+    const updates = [
+      { update_id: 761, message: { message_id: 761, message_thread_id: TELEGRAM_THREAD_ID,
+        caption: "この画像について要点を一つ教えてください。", photo: [{ file_id: "synthetic-image-file-id",
+          file_size: imageBytes.byteLength }], chat: { id: Number(TELEGRAM_CHAT_ID), type: "supergroup" },
+        from: { id: Number(TELEGRAM_USER_ID), first_name: "Synthetic", is_bot: false } } },
+      { update_id: 762, message: { message_id: 762, message_thread_id: TELEGRAM_THREAD_ID,
+        text: "この音声を文字起こししてください。", voice: { file_id: "synthetic-voice-file-id",
+          file_size: audioBytes.byteLength, mime_type: "audio/ogg" },
+        chat: { id: Number(TELEGRAM_CHAT_ID), type: "supergroup" },
+        from: { id: Number(TELEGRAM_USER_ID), first_name: "Synthetic", is_bot: false } } },
+    ];
+    writeFileSync(preloadFile, telegramFetchPreload(), "utf8");
+    const providerRequests: Array<{ readonly path: string; readonly content_type: string; readonly body: Buffer }> = [];
+    let providerFailure: unknown;
+    const provider = createServer((request, response) => {
+      void (async () => {
+        const body = await readRequestBytes(request);
+        const path = request.url ?? "";
+        providerRequests.push({ path, content_type: request.headers["content-type"] ?? "", body });
+        response.writeHead(200, { "content-type": "application/json" });
+        if (path.endsWith("/audio/transcriptions")) {
+          response.end(JSON.stringify({ text: "synthetic spoken words", model: "f1003-local-fixture" }));
+        } else if (path.endsWith("/chat/completions")) {
+          response.end(JSON.stringify({ id: "f1003-media-fixture", object: "chat.completion", created: 1,
+            model: "f1003-local-fixture", choices: [{ index: 0, message: { role: "assistant",
+              content: "synthetic image description" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } }));
+        } else {
+          throw new Error(`unexpected local provider endpoint: ${path}`);
+        }
+      })().catch((error: unknown) => {
+        providerFailure = error;
+        if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "synthetic_media_provider_fixture_failed" }));
+      });
+    });
+    const providerPort = await listen(provider);
+    const gatewayPort = await reservePort();
+    const env = isolatedEnvironment(providerPort, gatewayPort, auditDir, stateRoot, memoryFile, historyFile,
+      sessionDir, captureFile, JSON.stringify(updates));
+    env.BT_F1003_TELEGRAM_FILES = JSON.stringify(telegramFiles);
+    env.BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON = JSON.stringify({ "f1003-local-fixture": ["f1003-local-fixture"] });
+    env.BLUE_TANUKI_LLM_AUDIO_TRANSCRIPTION_CAPABLE_MODELS_JSON = JSON.stringify({
+      "f1003-local-fixture": ["f1003-local-fixture"],
+    });
+    let gateway: CapturedProcess | undefined;
+    try {
+      gateway = spawnGateway(env, preloadFile);
+      await waitForHealth(gatewayPort, gateway);
+      const delivered = await waitFor(() => {
+        if (providerFailure) throw providerFailure;
+        const events = readFileSync(captureFile, "utf8").split(/\r?\n/u).filter(Boolean)
+          .map((line) => JSON.parse(line) as { method?: string; text?: string });
+        const replies = events.filter((event) => event.method === "sendMessage");
+        return replies.length >= 2 && providerRequests.length === 2 ? { events, replies } : null;
+      }, gateway, () => `served Telegram media did not reach C and return; providerRequests=${providerRequests.map(({ path }) => path)}; ` +
+        `capture=${readFileSync(captureFile, "utf8")}; stderr=${gateway?.stderr.join("")}`);
+
+      const imageRequest = providerRequests.find((item) => item.path.endsWith("/chat/completions"));
+      const audioRequest = providerRequests.find((item) => item.path.endsWith("/audio/transcriptions"));
+      expect(imageRequest).toBeDefined();
+      expect(audioRequest).toBeDefined();
+      expect(imageRequest?.content_type).toContain("application/json");
+      expect(imageRequest?.body.toString("utf8")).toContain("data:image/jpeg;base64," + imageBytes.toString("base64"));
+      expect(imageRequest?.body.toString("utf8")).toContain("この画像について要点を一つ教えてください。");
+      expect(audioRequest?.content_type).toContain("multipart/form-data");
+      expect(audioRequest?.body.indexOf(audioBytes)).toBeGreaterThanOrEqual(0);
+      expect(audioRequest?.body.toString("utf8")).toContain("name=\"model\"");
+      expect(delivered.replies.map((event) => event.text ?? "").join("\n")).toContain("synthetic image description");
+      expect(delivered.replies.map((event) => event.text ?? "").join("\n")).toContain("synthetic spoken words");
+      expect(delivered.replies).toHaveLength(2);
+
+      const persisted = readTreeBytes(tempRoot);
+      expect(persisted.toString("utf8")).toContain('"memory_retrieval_suppressed_for":"transient_audio_transcription"');
+      expect(persisted.includes(Buffer.from(TELEGRAM_TOKEN, "utf8"))).toBe(false);
+      expect(persisted.includes(Buffer.from("synthetic-image-file-id", "utf8"))).toBe(false);
+      expect(persisted.includes(Buffer.from("synthetic-voice-file-id", "utf8"))).toBe(false);
+      expect(persisted.includes(Buffer.from(telegramFiles["synthetic-image-file-id"].bytes_base64, "utf8"))).toBe(false);
+      expect(persisted.includes(imageBytes)).toBe(false);
+      expect(persisted.includes(audioBytes)).toBe(false);
+    } finally {
+      if (gateway) await stopChild(gateway);
+      await closeServer(provider);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 45_000);
 });
 
 function seedTelegramWait(stateRoot: string, historyFile: string, fileRoot: string): void {
@@ -257,6 +359,16 @@ globalThis.fetch = async (input, init) => {
   if (url.hostname === "api.telegram.org") {
     const method = url.pathname.split("/").at(-1);
     const body = init && typeof init.body === "string" ? JSON.parse(init.body) : {};
+    const filePrefix = "/file/bot" + process.env.TELEGRAM_BOT_TOKEN + "/";
+    if (url.pathname.startsWith(filePrefix)) {
+      const requestedPath = decodeURIComponent(url.pathname.slice(filePrefix.length));
+      const files = JSON.parse(process.env.BT_F1003_TELEGRAM_FILES || "{}" );
+      const file = Object.values(files).find((entry) => entry.file_path === requestedPath);
+      if (!file) throw new Error("synthetic Telegram fixture rejected an unconfigured media file");
+      const bytes = Buffer.from(file.bytes_base64, "base64");
+      append({ method: "getFileBinary", path: requestedPath, byte_count: bytes.byteLength });
+      return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream" } });
+    }
     if (method === "getUpdates") {
       await new Promise((resolve) => setTimeout(resolve, 25));
       const configuredUpdates = JSON.parse(process.env.BT_F1003_TELEGRAM_UPDATES || "[]");
@@ -269,6 +381,15 @@ globalThis.fetch = async (input, init) => {
     if (method === "sendMessage") {
       append({ method, chat_id: body.chat_id, text: body.text });
       return new Response(JSON.stringify({ ok: true, result: { message_id: 9002 } }),
+        { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (method === "getFile") {
+      const files = JSON.parse(process.env.BT_F1003_TELEGRAM_FILES || "{}");
+      const file = typeof body.file_id === "string" ? files[body.file_id] : undefined;
+      if (!file) throw new Error("synthetic Telegram fixture rejected an unconfigured getFile request");
+      const byteLength = Buffer.from(file.bytes_base64, "base64").byteLength;
+      append({ method, byte_count: byteLength });
+      return new Response(JSON.stringify({ ok: true, result: { file_path: file.file_path, file_size: byteLength } }),
         { status: 200, headers: { "content-type": "application/json" } });
     }
     throw new Error("synthetic Telegram fixture rejected an unconfigured API method");
@@ -430,9 +551,23 @@ async function stopChild(gateway: CapturedProcess): Promise<void> {
 }
 
 async function readRequest(request: IncomingMessage): Promise<string> {
+  return (await readRequestBytes(request)).toString("utf8");
+}
+
+async function readRequestBytes(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+function readTreeBytes(root: string): Buffer {
+  const contents: Buffer[] = [];
+  for (const name of readdirSync(root)) {
+    const path = join(root, name);
+    if (statSync(path).isDirectory()) contents.push(readTreeBytes(path));
+    else contents.push(readFileSync(path));
+  }
+  return Buffer.concat(contents);
 }
 
 function requiredString(value: unknown, label: string): string {

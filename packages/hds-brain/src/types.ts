@@ -317,7 +317,7 @@ export interface DecisionLog {
   model: ModelResult;
   commit: CommitResult;
   timestamp: number;
-  memory_retrieval_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
+  memory_retrieval_suppressed_for?: "transient_document_organization" | "transient_audio_transcription" | "operation_result_reflection" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
   memory_capture_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
   session_history_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
 }

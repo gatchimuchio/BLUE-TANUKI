@@ -81,6 +81,7 @@ import {
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   createGatewayInternalInboundRequest,
+  createGatewayInternalTransientAudioRequest,
   MEANING_UPDATE_PROPOSAL_V3_SCHEMA_VERSION,
   meaningUpdateProposalAuditProjection,
   parseInboundRequestAtBoundary,
@@ -4558,7 +4559,12 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       : boundary.boundary_ok
         ? prepareFailureReviewInbound(hdsBoundaryInput, failureMemory, completeHistory)
         : hdsBoundaryInput;
-    const { log, command } = hds.decide(decisionInput, documentCoordinator
+    const commandEphemeralContext = selectGatewayInboundEphemeralContext(boundary, decisionInput, ephemeralContext);
+    const hdsDecisionInput = commandEphemeralContext?.ephemeral_audio?.length &&
+      commandEphemeralContext.ephemeral_images.length === 0
+      ? createGatewayInternalTransientAudioRequest(authorityReq, commandEphemeralContext)
+      : decisionInput;
+    const { log, command } = hds.decide(hdsDecisionInput, documentCoordinator
       ? { transient_content: "document_organization" }
       : undefined);
     recordCompleteHistory({
@@ -4766,7 +4772,6 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     }
 
     if (command) {
-      const commandEphemeralContext = selectGatewayInboundEphemeralContext(boundary, decisionInput, ephemeralContext);
       await executeAndEcho(command, log, authorityReq, {}, commandEphemeralContext);
       return;
     }

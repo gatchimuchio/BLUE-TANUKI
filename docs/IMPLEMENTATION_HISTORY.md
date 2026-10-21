@@ -2987,3 +2987,25 @@ F10.03のcross-channel reauthentication／WebChat owner controlを部分的に`W
 | 実Telegram API／credential／実provider／外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
 
 F10.03の合成served同一job共有・保存結果consumerを部分的に`WIRED`とする。credentialed-live操作と実provider証拠は未実施のためF10.03全体=`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。実装・本履歴は同一BUILD_BATCH閉鎖commitに同梱する。次のBUILD_BATCHは`F10.02-TELEGRAM-MEDIA-SERVED-CONSUMER`とし、合成Telegram admissionからrequest-bound画像／音声をserved Gateway経由でC consumerへ接続する。
+
+---
+
+### 履歴ログ：QEB-59-F10.02-TELEGRAM-MEDIA-SERVED-CONSUMER
+
+開始`main`／`origin/main`=`d9c06b59fa66699c7a08bfca20b9249c0a8a8aac`。owner指定rev2.3の現行pin・三点セット、適用`AGENTS.md`、active指示とF10.02／F16.01／F16.02の今回のproducer・consumerを照合した。開始時のlocal復旧branch／remote backup tag二世代はcurrent=`d9c06b5`、previous=`1ed3b6c`で一致。保護対象untracked Linux `target/`を保持した。
+
+隔離されたserved Gateway processへ合成Telegram photo／voice更新とローカルproviderを接続し、photoのJPEG bytesがCのchat-completion画像入力へ、voiceのOGG bytesがCのtranscription入力へ届き、両結果が返信されることを確認した。file ID、Telegram credential、raw media bytesは一時test領域の永続内容にも残らない。文字起こしはproviderから確度情報が返らない候補として保持する。
+
+served経路で音声返信がmemory-citation envelopeとして誤検査されることを発見した。Gatewayはcanonical Telegram requestとrequest IDが一致し、画像を含まない単一音声の揮発contextを選んだ時だけ、HDSへ渡すrequestへprocess-local WeakSet印を結び付ける。metadata値だけの外部偽装では印を作れず、境界parse後にもin-processの印を保持する。HDSはその音声文字起こし経路に限り無関係なM検索を行わず、suppression reasonを記録する。authority、Output Audit、出力後段、owner approvalは迂回しない。transcriptはHDS要求や承認へ再投入しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `apps/gateway/test/same_job_result_return.integration.test.ts` | PASS、2/2 served integration tests。既存のTelegram同一job結果返却と、画像／音声request-bound consumerから返信までを実Gatewayで確認。音声応答のHDS M検索抑止記録も確認。 |
+| protocol `types.test.ts` のtransient audio provenance test | PASS、対象1件。request ID結合、parse後のprocess-local印維持、external metadataのみでは印を偽装できないことを確認。 |
+| protocol／HDS-BRAIN／Gateway build | PASS。 |
+| protocol `types.test.ts` 全36 tests | 35 PASS、1既存不整合FAIL：`rejects malformed or unbounded review fields`。`ExecuteFeedbackSchema.skeptical_review`は現行で`z.unknown().optional()`のため該当fixtureを拒否しない。今回変更外の既存test/schema不整合として記録し、修正・PASS計上しない。 |
+| `git diff --check` | PASS。 |
+| `pnpm docs:check` | 文書形状検査PASS。日本語基底gate FAIL。未変更の`docs/CHANNEL_READINESS_MATRIX.md`で移行台帳の期待SHA-256 `4017e75214bb9095db3d366f6c69a478cc962d5a1dc3033bbd1133a58e201439`と現物`8ca8706c173aefd774bdecd60b378288222a53b3ea19f327ced42665433f0268`が不一致。今回差分外のため変更していない。licensing gate未到達。 |
+| 実Telegram API／credential／実provider／外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。C08.03実provider保留、製品全体`BUILD_COVERED`前の全体品質工程は開始しない。 |
+
+F16.01の画像およびF16.02の音声をsynthetic served Gateway経由のC consumerとHDS出力監査まで部分的に`WIRED`とする。実provider／実Telegram API能力、F10.02のserved text attachmentとlive／二入口運用は未確認または未接続であるためF10.02全体=`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03保留、F16.03のD4-Pocket側native変更は`BLOCKED_AUTHORITY`、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次のBUILD_BATCHは`F10.02-TELEGRAM-TEXT-ATTACHMENT-SERVED-CONSUMER`とし、既存UTF-8 text attachment inputを合成admissionからserved Gateway／HDS／C／replyへ接続する。

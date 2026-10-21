@@ -22,6 +22,7 @@ import type {
 import {
   createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
+  isGatewayInternalTransientAudioRequest,
   parseInboundRequestAtBoundary,
   LLMCallFailureSchema,
   LLMToolCallCandidateSchema,
@@ -1263,6 +1264,10 @@ ${planControl.question}`,
       : failureReviewControlRequested ? "failure_review" as const : undefined;
     const input = normalizeForDetection(req.content);
     const authorityReq = requestWithNormalizedContent(req, input.normalized_content);
+    // Gateway marks only a request already matched to one volatile Telegram audio input.
+    // The transcription consumer does not use retrieved memory, so do not create citation
+    // candidates that its transcript-only response cannot meaningfully cite.
+    const transientAudioTranscript = isGatewayInternalTransientAudioRequest(raw) && req.channel === "telegram";
     const decisionTraceInput = isolatedContextReason
       ? {
           ...input,
@@ -1276,7 +1281,7 @@ ${planControl.question}`,
     const goalGovernanceProjection = this.goal_governance?.project(Date.now());
     const initialFrame = frame(authorityReq, {
       default_policy: this.policy,
-      ...(isolatedContextReason ? {} : { memory_reader: this.memory }),
+      ...(isolatedContextReason || transientAudioTranscript ? {} : { memory_reader: this.memory }),
       original_content: req.content,
       ...(this.goal_relation_tree ? { goal_relation_tree: this.goal_relation_tree } : {}),
       ...(goalGovernanceProjection ? { goal_governance: goalGovernanceProjection } : {}),
@@ -1315,7 +1320,7 @@ ${planControl.question}`,
           memory_retrieval_suppressed_for: isolatedContextReason,
           memory_capture_suppressed_for: isolatedContextReason,
           session_history_suppressed_for: isolatedContextReason,
-        } : {}),
+        } : transientAudioTranscript ? { memory_retrieval_suppressed_for: "transient_audio_transcription" as const } : {}),
       };
       this.audit.append(log);
       this.state = "SUSPENDED";
@@ -1360,7 +1365,7 @@ ${planControl.question}`,
         memory_retrieval_suppressed_for: isolatedContextReason,
         memory_capture_suppressed_for: isolatedContextReason,
         session_history_suppressed_for: isolatedContextReason,
-      } : {}),
+      } : transientAudioTranscript ? { memory_retrieval_suppressed_for: "transient_audio_transcription" as const } : {}),
     };
 
     let command: ExecuteCommand | null = null;
