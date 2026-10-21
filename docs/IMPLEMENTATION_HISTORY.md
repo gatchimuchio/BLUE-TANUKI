@@ -3009,3 +3009,19 @@ served経路で音声返信がmemory-citation envelopeとして誤検査され�
 | 実Telegram API／credential／実provider／外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。C08.03実provider保留、製品全体`BUILD_COVERED`前の全体品質工程は開始しない。 |
 
 F16.01の画像およびF16.02の音声をsynthetic served Gateway経由のC consumerとHDS出力監査まで部分的に`WIRED`とする。実provider／実Telegram API能力、F10.02のserved text attachmentとlive／二入口運用は未確認または未接続であるためF10.02全体=`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03保留、F16.03のD4-Pocket側native変更は`BLOCKED_AUTHORITY`、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次のBUILD_BATCHは`F10.02-TELEGRAM-TEXT-ATTACHMENT-SERVED-CONSUMER`とし、既存UTF-8 text attachment inputを合成admissionからserved Gateway／HDS／C／replyへ接続する。
+
+### 履歴ログ：QEB-60-F10.02-TELEGRAM-TEXT-ATTACHMENT-SERVED-CONSUMER
+
+開始`main`／`origin/main`=`534b1e724dc2a75420311aced464eab0bef91b06`。現行rev2.3三点セットpin、適用`AGENTS.md`、active instructionとF10.02の今回の添付producer→served consumerを再同期した。編集開始時のlocal復旧branch／remote backup tag二世代はcurrent=`534b1e7`、previous=`d9c06b5`で一致。保護対象untracked Linux `target/`を維持した。
+
+`apps/gateway/test/same_job_result_return.integration.test.ts`へserved process integration fixtureを追加した。合成Telegram `text/plain; charset=utf-8`文書をGatewayのTelegram ingressで取得し、canonical Gateway/HDS decision、local loopback C fixture、HDS output audit、Telegram返信へ接続する。provider payloadに依頼captionと未信頼添付本文が含まれ、synthetic file ID／filenameを含まず、output auditの`source=output_audit`および`used_for_authority=false`が保存され、Cの応答が一返信で届くことを確認した。保存fixtureからsynthetic token／file ID／filenameは見つからなかった。添付本文そのものは通常の依頼contentとしてCへ渡り、temporary test stateに存在した。これは本文を別添付blobとして保持しない証拠ではなく、保存先・retentionの個別分類も未実施である。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm exec vitest run apps/gateway/test/same_job_result_return.integration.test.ts -t 'serves Telegram UTF-8 text attachment' --reporter=verbose` | PASS、served Gateway経路1件。 |
+| `pnpm --filter @blue-tanuki/gateway typecheck`／`build` | PASS。 |
+| `git diff --check` | PASS。 |
+| `pnpm docs:check` | docs shape PASS後、日本語基底gateが既存`docs/CHANNEL_READINESS_MATRIX.md`の移行hash不整合でFAIL。この対象は未変更。licensing gateには未到達。 |
+| Telegram live API／credential、実provider、外部作用、本文保持先の個別分類、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+F10.02のtext attachment served consumerを部分的に`WIRED`とする。F10.02全体はcredentialed-live／二入口運用が残り`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。実Telegram API／credential／C08.03実provider／外部作用は使用せず、C08.03保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`と公開・出荷保留を維持する。次のBUILD_BATCHは`F10.02-TELEGRAM-TEXT-ATTACHMENT-WAIT-RESUME-CONSUMER`とし、合成添付入力をtopic-bound HDS waitの同一jobへ接続する。

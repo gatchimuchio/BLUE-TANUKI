@@ -276,6 +276,107 @@ describe("served Telegram result return and request-bound media ingress", () => 
       rmSync(tempRoot, { recursive: true, force: true });
     }
   }, 45_000);
+
+  it("serves Telegram UTF-8 text attachment through the shared C consumer and returns its response", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-telegram-text-served-"));
+    const auditDir = join(tempRoot, "audit");
+    const stateRoot = join(tempRoot, "state");
+    const memoryFile = join(tempRoot, "memory.jsonl");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const sessionDir = join(tempRoot, "sessions");
+    const captureFile = join(tempRoot, "telegram-text-fixture.jsonl");
+    const preloadFile = join(tempRoot, "telegram-text-fetch-fixture.cjs");
+    const attachmentText = "SYNTHETIC_TEXT_ATTACHMENT_SENTINEL: 青い帳面には数字の42が記載されています。";
+    const attachmentBytes = Buffer.from(attachmentText, "utf8");
+    const update = {
+      update_id: 763,
+      message: {
+        message_id: 763,
+        message_thread_id: TELEGRAM_THREAD_ID,
+        caption: "添付文書の内容を要約してください。",
+        document: {
+          file_id: "synthetic-text-file-id",
+          file_name: "owner-private-filename.txt",
+          mime_type: "text/plain; charset=utf-8",
+          file_size: attachmentBytes.byteLength,
+        },
+        chat: { id: Number(TELEGRAM_CHAT_ID), type: "supergroup" },
+        from: { id: Number(TELEGRAM_USER_ID), first_name: "Synthetic", is_bot: false },
+      },
+    };
+    const telegramFiles = {
+      "synthetic-text-file-id": {
+        file_path: "documents/f1003-text-fixture.txt",
+        bytes_base64: attachmentBytes.toString("base64"),
+      },
+    };
+    writeFileSync(preloadFile, telegramFetchPreload(), "utf8");
+
+    const providerRequests: Array<{ readonly path: string; readonly content_type: string; readonly body: Buffer }> = [];
+    let providerFailure: unknown;
+    const provider = createServer((request, response) => {
+      void (async () => {
+        const body = await readRequestBytes(request);
+        const path = request.url ?? "";
+        providerRequests.push({ path, content_type: request.headers["content-type"] ?? "", body });
+        if (!path.endsWith("/chat/completions")) throw new Error(`unexpected text attachment provider endpoint: ${path}`);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: "f1003-text-fixture", object: "chat.completion", created: 1,
+          model: "f1003-local-fixture", choices: [{ index: 0, message: { role: "assistant",
+            content: "合成添付文書の要約: 青い帳面には42と記載されています。" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } }));
+      })().catch((error: unknown) => {
+        providerFailure = error;
+        if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "synthetic_text_attachment_provider_fixture_failed" }));
+      });
+    });
+    const providerPort = await listen(provider);
+    const gatewayPort = await reservePort();
+    const env = isolatedEnvironment(providerPort, gatewayPort, auditDir, stateRoot, memoryFile, historyFile,
+      sessionDir, captureFile, JSON.stringify([update]));
+    env.BT_F1003_TELEGRAM_FILES = JSON.stringify(telegramFiles);
+    let gateway: CapturedProcess | undefined;
+
+    try {
+      gateway = spawnGateway(env, preloadFile);
+      await waitForHealth(gatewayPort, gateway);
+      const delivered = await waitFor(() => {
+        if (providerFailure) throw providerFailure;
+        const events = readFileSync(captureFile, "utf8").split(/\r?\n/u).filter(Boolean)
+          .map((line) => JSON.parse(line) as { method?: string; text?: string; path?: string; byte_count?: number });
+        const replies = events.filter((event) => event.method === "sendMessage");
+        const fetched = events.some((event) => event.method === "getFile") &&
+          events.some((event) => event.method === "getFileBinary" && event.byte_count === attachmentBytes.byteLength);
+        return replies.length >= 1 && fetched && providerRequests.length === 1 ? { events, replies } : null;
+      }, gateway, () => `served Telegram text attachment did not reach C and return; providerRequests=${providerRequests.map(({ path }) => path)}; ` +
+        `capture=${readFileSync(captureFile, "utf8")}; stderr=${gateway?.stderr.join("")}`);
+
+      const providerRequest = providerRequests[0];
+      expect(providerRequest?.path).toMatch(/\/chat\/completions$/u);
+      expect(providerRequest?.content_type).toContain("application/json");
+      expect(providerRequest?.body.toString("utf8")).toContain("添付文書の内容を要約してください。");
+      expect(providerRequest?.body.toString("utf8")).toContain("未信頼データ");
+      expect(providerRequest?.body.toString("utf8")).toContain(attachmentText);
+      expect(providerRequest?.body.toString("utf8")).not.toContain("synthetic-text-file-id");
+      expect(providerRequest?.body.toString("utf8")).not.toContain("owner-private-filename.txt");
+      expect(delivered.replies).toHaveLength(1);
+      expect(delivered.replies[0]?.text).toContain("合成添付文書の要約");
+      expect(readFileSync(captureFile, "utf8")).not.toContain(TELEGRAM_TOKEN);
+
+      const persisted = readTreeBytes(tempRoot);
+      const persistedText = persisted.toString("utf8");
+      expect(persistedText).toContain('"source":"output_audit"');
+      expect(persistedText).toContain('"used_for_authority":false');
+      expect(persisted.includes(Buffer.from(TELEGRAM_TOKEN, "utf8"))).toBe(false);
+      expect(persisted.includes(Buffer.from("synthetic-text-file-id", "utf8"))).toBe(false);
+      expect(persisted.includes(Buffer.from("owner-private-filename.txt", "utf8"))).toBe(false);
+    } finally {
+      if (gateway) await stopChild(gateway);
+      await closeServer(provider);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 45_000);
 });
 
 function seedTelegramWait(stateRoot: string, historyFile: string, fileRoot: string): void {

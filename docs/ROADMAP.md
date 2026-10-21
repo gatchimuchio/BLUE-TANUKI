@@ -1,6 +1,6 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
-2026-10-22の`QEB-59-F10.02-TELEGRAM-MEDIA-SERVED-CONSUMER`で、合成Telegram admissionから画像／音声のrequest-bound入力を隔離Gateway内のC consumerへ渡し、HDS出力監査を経た返信まで接続した。音声経路はHDSのmemory-citation reviewが文字起こしだけの応答を誤拒否しないよう、Gatewayが実media contextとrequest identityを照合したin-process印のある場合だけM取得を抑止する。実Telegram API／credential／実provider／外部作用は未実施。F10.02はserved text attachmentとlive／二入口運用が残るため`BUILD_GAP`、QE_BUILDの局所接続でありQE_QC／QE_QAは未開始。次は既存UTF-8 text attachment consumerをserved Gateway経路へ接続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+2026-10-22の`QEB-60-F10.02-TELEGRAM-TEXT-ATTACHMENT-SERVED-CONSUMER`で、合成Telegram text attachment取得結果をserved Gateway→HDS→C→HDS output audit→Telegram返信まで接続した。C payloadに未信頼添付本文が含まれ、返信が返ること、合成file ID／filename／tokenが保存物とprovider payloadへ漏れないことを確認した。添付本文は通常依頼contentとして会話保持領域に現れ得る。実Telegram API／credential／実provider／外部作用は未実施。F10.02はcredentialed-live／二入口運用の残差があり`BUILD_GAP`、QE_QC／QE_QAは未開始。次は合成添付入力をtopic-bound HDS waitの同一job consumerへ接続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-22。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
