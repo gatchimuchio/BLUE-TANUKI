@@ -4,6 +4,25 @@
 
 ---
 
+### 履歴ログ：`QEB-26-E04.01-FAILURE-SYMPTOM-CAUSE-SEPARATION`
+
+開始HEAD／`origin/main`=`37795d4243181543b5cefc62a3d7fda47bd6ad80`。owner指定rev2.3三点セットの現行pin・SHA、適用AGENTS、active指示、dirty stateを再同期し、配布ZIP SHAがpinと一致することを確認した。作業前のlocal復旧branch二世代とremote backup tag二世代はそれぞれmain／前mainと一致。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持した。
+
+E04.01のFailureMemory抽出器は、エラーから分類した観測failure categoryをそのまま`cause_candidates`にも格納していた。`root_cause_unconfirmed`と矛盾し、症状と原因仮説を分ける要求を弱めていたため、command/tool/test/workflow/LLM/authority/complete-historyの抽出経路すべてで自動cause candidateを作らないようにした。観測カテゴリ、action/input/context pattern、症状digest、未確認事項は維持する。原因仮説は明示的なdigest-only `failure:review`のC候補へ分離され、独立観測とJ採否まで権限・実行・再試行へ昇格しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| HDS `failure_memory.test.ts` | PASS、14/14。原因候補を合成しないこと、症状分類と根因未確認の保持、digest-only review projectionを確認。 |
+| HDS `controller.test.ts` のfailure review consumer | PASS、対象1件。Cへdigest-only非権威projectionを渡す経路を確認。残り75件はfilterで未実行。 |
+| HDS typecheck／build、`git diff --check` | PASS。 |
+| 全HDS/Gateway suite、全体QE_QC／QE_QA、provider／credential、外部作用、5OS実機 | 未実施。 |
+
+E04.01のfailure observation producerから明示C reviewへの入力を、症状と原因候補を混同しない形で`WIRED`とする。FailureReviewのC提案をJが独立観測で採否し、対象・反例・再開条件へ結ぶE04.02 consumerは`BUILD_GAP`。E03.03/QEB-03および製品全体の`BUILD_COVERED`は未成立。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、外部作用・他repo変更なしを維持する。次は`QEB-27-E04.02-J-INDEPENDENT-OBSERVATION-ADOPTION`で、C提案を独立証拠なしに採用せず、Jが観測と再開条件を正本化する実consumerを接続する。
+
+実装commit=`6a5f2f493978013b1aa0dd27832228b9ba5c8092`。closeout後のmain／remote tag二世代とlocal recovery branch二世代のSHAはGit閉包時に照合する。保護対象untracked Linux isolation `target/`はcommit／push対象外。
+
+---
+
 ### 履歴ログ：`QEB-25-E03.03-TASK-M-RESTORE-POINT-OPERATOR-PROJECTION`
 
 開始HEAD=`e20d8c7e030c72515f82717d31a3a1ce4d99993d`。owner指定rev2.3の三点セットと適用AGENTS.md、active指示、HEAD／dirty stateを再同期した。E03.03の要求は、復旧可能な仕事と破損依存仕事を分離し、確認済み復元点と残差を示すこと。QEB-24でM restore pointはHDS fresh J review gateまで接続済みで、Gateway Recovery snapshotにもdigest-only task groupが含まれていたが、Control Center formatterはOperation Plan storeのみを描画しており、M restoreのtask statusはUIで未観測として扱われていた。
