@@ -2503,3 +2503,19 @@ Downstreamのskeptical-review報告をsource feedbackへ結合し、報告criter
 | 全workspace suite、provider／credential、外部作用、QE_QC／QE_QA、5OS実機 | 未実施。全体実装形状成立後の工程に保持。 |
 
 E06.01の限定feedback→goal-criterion→candidate impact returnを監査記録まで`WIRED`とする。候補の採否・目的の意味変更・記憶更新は別consumerとして未接続であり、E06親要求全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はrev2.3 E06.02「意味復元と外部作用の分離」。
+
+---
+
+### 履歴ログ：`QEB-33-E06.02-SEMANTIC-RESTORE-SEPARATE-FROM-EXTERNAL-EFFECT`
+
+開始HEAD／`main`／`origin/main`=`112989856b3894e44eebd7828c6620515769debd`。現行rev2.3 pin、適用規定、active指示、E06.02と意味更新・OperationPlanの現行consumerを照合した。保護対象untracked Linux `target/`は保持し、変更対象に含めていない。
+
+既存のowner L3後の意味更新経路を通し、訂正によるM解釈履歴`quarantined → restored → reassessed`を生成する。事前に完了済みとして保持した合成`gmail.write`結果をJ OperationPlanへfixtureとして置き、意味復元とcontroller再構築の前後でJ projectionの外部作用状態が`verified`のまま維持されることをfocused testに接続した。fixtureはprovider・credential・実送信を行わない。意味適用結果の`follow_up_action_status=unconfirmed`と、J側送信状態`verified`は別の責務として保持する。Mの意味履歴から送信取消・再送・実行許可は生成しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `meaning_update_memory.test.ts` | PASS、1 test。owner L3後の意味訂正・復元・再評価と、再起動後もJの完了済み合成送信状態が`verified`で残ることを確認。 |
+| `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| 全workspace suite、provider／credential、実送信、5OS実機、QE_QC／QE_QA | 未実施。外部作用・全体品質判定は含めず、親scenarioのQC候補へ保持。 |
+
+E06.02の意味復元consumerとJの外部作用状態projectionの分離を、実controller経路の合成fixtureで`WIRED`とする。これは実送信証拠やE06親全体の受入ではない。E06.03の限定再開放consumer、E06親要求全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はrev2.3 E06.03「目的変更提案と限定再開放」。

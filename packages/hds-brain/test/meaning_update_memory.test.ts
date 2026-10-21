@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executorCommandDigest } from "@blue-tanuki/core";
-import { createGatewayInternalInboundRequest, meaningUpdateCandidateDigest, type OperationPlan } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, meaningUpdateCandidateDigest, OperationPlanCheckpointSchema,
+  type OperationPlan, type OperationPlanCheckpoint, type OperationStep } from "@blue-tanuki/protocol";
 import { HDSUpperController, memoryCitationReviewAuditDigest } from "../src/controller.js";
 import { AuditLog } from "../src/audit.js";
 import { evaluateApproval, meaningUpdateAdoptionApprovalTarget,
@@ -12,7 +13,7 @@ import { LongTermMemoryStore } from "../src/long-term-memory/index.js";
 import { buildMeaningUpdateMemoryRecord, MeaningUpdateMemoryConsumer, meaningUpdateInterpretationId,
   meaningUpdateMemoryRecordId } from "../src/meaning_update_memory.js";
 import { operationPlanDigest } from "../src/operation_plan.js";
-import type { OperationPlanMemoryStorage } from "../src/operation_plan.js";
+import type { OperationPlanMemoryStorage, OperationPlanRecoveryHoldState, OperationPlanStatePort } from "../src/operation_plan.js";
 
 const temporaryRoots: string[] = [];
 
@@ -33,6 +34,58 @@ function citedMemoryPlan(requestId: string): OperationPlan {
     planner_output_used_for_authority: false, hds_brain_authority_required: true };
 }
 
+function completedExternalSendCheckpoint(): OperationPlanCheckpoint {
+  const requestId = "meaning-restore-completed-send-fixture";
+  const target = { kind: "external_service" as const, id: "gmail" };
+  const output = { mutation_status: "confirmed" };
+  const step: OperationStep = { step_id: "send", operation: "gmail.write", target, state: "planned",
+    effects: ["external_send", "write", "credential_access"],
+    permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+      hds_brain_authority_required: true, approval_gate_required: true },
+    adapter: "external_api", adapter_is_authority: false, command_generated_by_adapter_only: false,
+    parameters: { operation: "message.send", to: "inspection@example.invalid", subject: "fixture", body_text: "fixture only" },
+    preparation: { depends_on: [], bindings: [], preconditions: [],
+      validation: [{ check_id: "send-confirmed", method: "result_equals", target, expected: output }],
+      compensation: { available: false, reason: "an external send cannot be recalled" } } };
+  const plan: OperationPlan = { version: "operation-core.v1", plan_id: "meaning-restore-completed-send-plan",
+    request_id: requestId, state: "planned", steps: [step], rollback: { available: false },
+    raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+    planner_output_used_for_authority: false, hds_brain_authority_required: true };
+  const { state: _state, result_digest: _resultDigest, ...stepDefinition } = step;
+  const revisionDigest = operationPlanDigest(plan);
+  return OperationPlanCheckpointSchema.parse({
+    schema_version: "operation-plan-state.v1",
+    plans: [{ owner: "fixture-owner", channel: "test", goal: "synthetic Gmail send completed before meaning restoration",
+      revisions: [{ digest: revisionDigest, plan }], receipt_observations: [],
+      bindings: [{ step_id: step.step_id, revision_digest: revisionDigest, step_digest: operationPlanDigest(stepDefinition),
+        prepared_step: step, command_id: "fixture-completed-send-command", request_id: requestId,
+        commit_hash: "a".repeat(64), payload_digest: "b".repeat(64), command_digest: "c".repeat(64),
+        operation: step.operation, status: "verified", result_digest: operationPlanDigest(output) }],
+      results: [{ plan_id: plan.plan_id, request_id: requestId, step_id: step.step_id,
+        result_id: "fixture-completed-send-result", operation: step.operation, status: "succeeded",
+        target, output, observed_at_ms: 1, expires_at_ms: 600_001 }] }],
+  });
+}
+
+class FixtureOperationPlanStatePort implements OperationPlanStatePort {
+  private checkpoint: OperationPlanCheckpoint;
+  private recoveryHolds: OperationPlanRecoveryHoldState | null = null;
+
+  constructor(checkpoint: OperationPlanCheckpoint) { this.checkpoint = structuredClone(checkpoint); }
+
+  load(): unknown { return structuredClone(this.checkpoint); }
+  compareAndSet(expectedDigest: string | null, checkpoint: OperationPlanCheckpoint): void {
+    if (expectedDigest !== operationPlanDigest(this.checkpoint)) throw new Error("fixture_plan_state_conflict");
+    this.checkpoint = structuredClone(checkpoint);
+  }
+  loadRecoveryHoldState(): unknown { return this.recoveryHolds ? structuredClone(this.recoveryHolds) : null; }
+  compareAndSetRecoveryHoldState(expectedDigest: string | null, state: OperationPlanRecoveryHoldState): void {
+    const currentDigest = this.recoveryHolds ? operationPlanDigest(this.recoveryHolds) : null;
+    if (expectedDigest !== currentDigest) throw new Error("fixture_recovery_hold_conflict");
+    this.recoveryHolds = structuredClone(state);
+  }
+}
+
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -49,13 +102,19 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
       memory_database_path: join(privateRoot, "m-state.sqlite"),
     };
     const auditPath = join(root, "hds-audit.jsonl");
+    // This digest-bound J fixture represents a completed synthetic send. The test never calls a provider.
+    const operationPlanState = new FixtureOperationPlanStatePort(completedExternalSendCheckpoint());
     let hds = new HDSUpperController({
       audit: new AuditLog({ filepath: auditPath }),
       memory: new LongTermMemoryStore(),
       meaning_update_memory: storage,
+      operation_plan_state: operationPlanState,
     });
 
     try {
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]).toMatchObject({
+        operation: "gmail.write", status: "verified",
+      });
       hds.decide({ id: "citation-support", channel: "test", user: "fixture-user", content: "first source fact",
         timestamp: 1 });
       hds.decide({ id: "citation-counter", channel: "test", user: "fixture-user", content: "second source counterpoint",
@@ -400,7 +459,7 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
 
       hds.close();
       hds = new HDSUpperController({ audit: new AuditLog({ filepath: auditPath }),
-        memory: new LongTermMemoryStore(), meaning_update_memory: storage });
+        memory: new LongTermMemoryStore(), meaning_update_memory: storage, operation_plan_state: operationPlanState });
       expect(hds.getAudit().verify()).toBe(true);
       hds.close();
       const persisted = new MeaningUpdateMemoryConsumer(storage, {
@@ -424,6 +483,12 @@ describe("C meaning update to owner L3 and J/M consumer", () => {
           used_for_authority: false, may_execute: false });
         expect(correctedInterpretation?.record?.events.map((event) => event.kind))
           .toEqual(["quarantined", "restored", "reassessed"]);
+        expect(correctedInterpretation?.record?.events.find((event) => event.kind === "restored"))
+          .toMatchObject({ kind: "restored", resulting_interpretation_id: nextInterpretationId });
+        expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.steps[0]).toMatchObject({
+          operation: "gmail.write", status: "verified",
+        });
+        expect(hds.getRuntimeSnapshot().operation_plans.plans[0]?.recovery_hold_reason).toBeUndefined();
         expect(correctedInterpretation?.record?.events.at(-1)).toMatchObject({ kind: "reassessed",
           reassessment_judgment_ref: reassessmentProposal.args.judgment_ref,
           affected_judgment_refs: citationJudgmentRefs });

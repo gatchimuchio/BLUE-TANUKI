@@ -4,10 +4,10 @@
 
 ## 現行状態
 
-QE_STAGE=`QE_BUILD`。rev2.3 pinとbackup ref移行=`MIGRATION_COMPLETE`。`QEB-32-E06.01-RELATION-TRACED-RETURN`で、request-boundの結果反証を現行目的criterion digestへ返し、同じcriterionを参照する採用候補・非採用候補への関係経路と、影響しない候補の理由をexecutor-feedback監査記録へ接続した。報告本文はdigest化し、観測claimsは未検証のまま保持する。これは監査上の限定帰還であり、目的変更、M更新、実行許可は行わない。HDS controller focused tests 76/76、workspace typecheck/buildはPASS。全workspace suite、QE_QC／QE_QAは未実施。製品全体は`BUILD_GAP`で、`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。
+QE_STAGE=`QE_BUILD`。rev2.3 pinとbackup ref移行=`MIGRATION_COMPLETE`。`QEB-33-E06.02-SEMANTIC-RESTORE-SEPARATE-FROM-EXTERNAL-EFFECT`では、owner L3後の意味候補訂正からMの`quarantined → restored → reassessed`まで進める実HDS経路を検査し、事前に完了済みとして保持した合成Gmail送信のJ `OperationPlan`状態が意味復元・再起動後も`verified`のまま残ることを接続確認した。外部送信状態はJのOperationPlan projection、意味状態はMの解釈履歴として別々に保持され、provider・credential・実送信は使っていない。focused test 1/1、workspace typecheck/buildはPASS。全workspace suite、QE_QC／QE_QAは未実施。製品全体は`BUILD_GAP`で、`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。
 
 ## 次のBUILD_BATCH
 
-`QEB-33-E06.02-SEMANTIC-RESTORE-SEPARATE-FROM-EXTERNAL-EFFECT`として、内部記憶の意味復元要求と既に起きた外部作用の状態を分離して帰還させる。E06.02の要求、実consumer、変更対象、停止条件は次の独立作業開始時に現行三点セットと最新コードから再構成する。
+`QEB-34-E06.03-GOAL-CHANGE-PROPOSAL-BOUNDED-REOPEN`として、反証による影響範囲から必要な対象だけを再開放し、目的変更が必要な場合も提案に留めて上位承認へ送る実consumerを接続する。対象・現consumer・停止条件は最新版三点セットのE06.03と現行コードから組み立てる。
 
 HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closedを維持する。実provider／credential、外部業務作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は含めない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。全体実装形状の前に詳細QC／QAへ進まない。
