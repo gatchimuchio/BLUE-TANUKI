@@ -4,7 +4,26 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
 
-### 最新BUILD_BATCH：`QEB-06-E03.02-OPERATION-OUTCOME-UNKNOWN-NOTICE`
+### 最新BUILD_BATCH：`QEB-07-E03.02-UNBOUND-BROKER-RECEIPT-RECOVERY-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`af30324dabec08bf7c3920292b1ca2b1702c985b`。owner指定rev2.3三点は[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)に固定し、今回必要なE03.02節だけを参照した。既存Recovery inspectorはBroker ledger全体のchainをread-only検証し、Operation Planに結合したreceiptはadmission digestで相関するが、Planに未束縛のBroker未決receiptを操作者へ分けて見せるconsumerがなかった。
+
+Recovery operator projectionをschema 11へ進め、BrokerとOperation Plan双方の台帳・全相関が検証できる場合に限り、admission digestとplan bindingを照合して未束縛receiptを抽出する。結果不明とJ/M配送待ちをdigest限定でRecovery画面へ表示し、最大200件の検査上限と省略数を示す。台帳不整合・省略されたplan binding・未知状態では未確認に閉じる。承認復元、結果の成功／失敗推定、再送、状態変更は行わない。併せてAGENTS／作業標準の毎回再同期を現行pin確認＋関係節だけの読解へ統一した。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `recovery_inspection.test.ts` | PASS、18/18。未束縛結果不明のdigest-only表示と、admission digest一致のplan-bound receipt除外を確認。 |
+| WebChat Recovery surface | PASS、対象1件。 |
+| workspace `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `git diff --check` | PASS。 |
+| 同時実行した`webchat.test.ts`全体 | 99/100。別経路のOperation Plan表示テストが期待文字列を見つけられず失敗。このBUILD_BATCHでは修正していない。 |
+| 全workspace suite、実Gateway再起動、実provider／credential／外部作用、5OS実機、QE_QC／QE_QA | 未実施。全体実装形状成立後に配置。 |
+
+Operation Planに未束縛のBroker未決receiptをRecoveryのread-only consumerへ接続し、この範囲を`WIRED`とする。E03.02全体のM pending回復・durable job lifecycleと製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。次はBroker receiptの未決状態からM pending回復・後続consumerへ接続する。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。
+
+実装commit=`11f2417e12e811dc850c9833c079936ed09c018e`を`main`へatomic pushした。push直後のremote main／backup current tag／backup previous tagは`11f2417e12e811dc850c9833c079936ed09c018e`／`11f2417e12e811dc850c9833c079936ed09c018e`／`af30324dabec08bf7c3920292b1ca2b1702c985b`で一致を確認。保護対象Linux `target/`はuntrackedのまま保持し、Gitへ含めない。
+
+### 履歴ログ：`QEB-06-E03.02-OPERATION-OUTCOME-UNKNOWN-NOTICE`
 
 開始HEAD／`main`／`origin/main`=`871e3a27a4e1d040519f2bd260380631c0b695ba`。owner指定rev2.3三点正本は[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)に固定済み。E03.02の未決結果・M pending回復節と、HDS Operation Plan projection→Gateway resident notification→Control Center表示の現行consumerを対象にした。Windows localでBLUE-TANUKIのみ変更し、保護対象untracked Linux `target/`は保持してGitへ含めない。
 

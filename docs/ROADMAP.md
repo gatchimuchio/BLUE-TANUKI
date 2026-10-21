@@ -2,6 +2,8 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-21の`QEB-07-E03.02-UNBOUND-BROKER-RECEIPT-RECOVERY-CONSUMER`では、BrokerとOperation Planの両台帳・全相関をread-onlyで検証できる場合に限り、Operation Planに未束縛の未決receiptをRecovery画面へdigest限定で表示する。成功／失敗を推定せず、再送・承認復元を行わない。Gateway focused 18/18、WebChat Recovery surface 1件、workspace typecheck／15-project buildはPASS。E03.02のM pending回復・durable job lifecycleと製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。
+
 2026-10-21のQEB-03-E01.02-INTERVAL-CADENCE-RESTART-CONSUMERでは、Cron interval taskのrestart後も永続event cursorからscheduled cadenceを継続し、停止中に過ぎた時間枠を一括dispatchしない経路を接続した。Gateway focused 14/14、typecheck、buildはPASS。これはintervalの限定consumerであり、daily時刻変更・DST・clock-jump方針を含むE01.02全体、製品全体のSYSTEM_SHAPED／BUILD_COVERED、QE_QC／QE_QAの証拠ではない。詳細は[開発進捗](開発進捗.md)。
 
 2026-10-21の`QEB-03-E01.01-E03.02-CRON-REQUEST-CORRELATION-RECOVERY-CONSUMER`では、Cron由来Operation Planのrequest digestをCronの現在cursorへつなぎ、read-only Recovery inspector／CLI／Control Centerへ配送状態を渡した。current cursorにない場合は過去イベントの不存在と断定せず、`handler_returned`も仕事成功と扱わない。Gateway focused 31/31、WebChat focused 99/99、Gateway／WebChat typecheckとbuildはPASS。E01.01／E03.02全体、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、全体QE_QC／QE_QAは未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。
