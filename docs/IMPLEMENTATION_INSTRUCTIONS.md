@@ -20,7 +20,7 @@ Recovery後、Jのcurrent plan／revision／owner・channel、verified `file.sea
 
 Recovery後の保存済み結果取得・返却consumerをこの範囲で`WIRED`とする。E03.02 durable job lifecycleと製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。次はrev2.3工程表の未接続producer／consumerを再同期し、E03.02のdurable job lifecycleを前進させる。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。
 
-実装commit=`2b305aa`。source commitはこのBUILD_BATCHのcloseout後に`main`へpushする。
+実装commit=`2b305aa`、closeout commit=`3744d44`。両commitを`main`へatomic pushし、remote main／backup current／backup previous=`3744d44`／`3744d44`／`e61de60e2b8f6da9aa0a18cb2968471ac072c71a`を照合した。保護対象Linux `target/`は未追跡のまま保持した。
 
 ### 履歴ログ：`QEB-08-E03.02-RESULT-M-RETURN-BARRIER`
 
