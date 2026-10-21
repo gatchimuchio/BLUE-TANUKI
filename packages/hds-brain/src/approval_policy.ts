@@ -511,10 +511,16 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
             ? `:effect:task_lineage:scope:task_identity:${scopeDigest}`
           : ":effect:whole_store:scope:missing_or_invalid"
         : "";
+      const brokerScope = storeKey !== "broker" ? ""
+        : scopeKind === "task_identity" && scopeDigest
+          ? `:effect:task_lineage:scope:task_identity:${scopeDigest}`
+          : scopeKind === undefined && args.scope_digest === undefined
+            ? ""
+            : ":effect:task_lineage:scope:missing_or_invalid";
       return {
         target_scope: "task_type",
         target: backupId
-          ? storeKey ? `recovery.restore:${backupId}:store:${storeKey}${planScope}` : `recovery.restore:${backupId}`
+          ? storeKey ? `recovery.restore:${backupId}:store:${storeKey}${planScope}${brokerScope}` : `recovery.restore:${backupId}`
           : "recovery.restore:missing-backup-id",
       };
     }

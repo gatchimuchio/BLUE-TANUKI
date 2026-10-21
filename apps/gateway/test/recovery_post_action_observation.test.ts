@@ -72,8 +72,9 @@ function selectedStoreRestoreHistory(
   commandId = "recovery-command-1",
   firstIndex = 4,
   scopePlanDigest: string | null = operationPlanDigest("private-clean-plan"),
-  scopeMode?: "plan_scoped_merge_v1",
+  scopeMode?: "plan_scoped_merge_v1" | "task_scoped_merge_v1",
   storeKey: "operation_plans" | "broker" = "operation_plans",
+  scopeTaskDigest?: string,
 ): RecoveryHistoryEvidenceEntry[] {
   const entries = historyFor("recovery.restore", "success", digest("b"), digest("b"), commandId, firstIndex);
   const execution = entries[0]!;
@@ -90,6 +91,7 @@ function selectedStoreRestoreHistory(
           restored_backup_id_digest: backupIdDigest,
           ...(scopePlanDigest ? { restore_scope_plan_digest: scopePlanDigest,
             restore_scope_mode: scopeMode ?? "plan_scoped_merge_v1" } : {}),
+          ...(scopeTaskDigest ? { restore_scope_task_digest: scopeTaskDigest } : {}),
           ...(scopeMode ? { restore_scope_mode: scopeMode } : {}),
         },
       },
@@ -230,6 +232,20 @@ describe("buildRecoveryPostActionObservation", () => {
     })).toEqual({
       schema_version: 1,
       store_key: "operation_plans",
+      restored_store_state_digest: digest("b"),
+      restored_backup_id_digest: createHash("sha256").update("private-backup-id").digest("hex"),
+      restore_scope_task_digest: digest("c"),
+      restore_scope_mode: "task_scoped_merge_v1",
+    });
+    expect(recoveryStoreRestoreHistoryEvidence({
+      action: "restore", status: "completed", used_for_authority: false,
+      canonical_state_cross_store_atomic: false, restored_store_key: "broker",
+      restored_store_archive_digest: digest("a"), restored_store_state_digest: digest("b"),
+      restored_backup_id: "private-backup-id", restore_scope_kind: "task_identity",
+      restore_scope_digest: digest("c"), restore_scope_mode: "task_scoped_merge_v1",
+    })).toEqual({
+      schema_version: 1,
+      store_key: "broker",
       restored_store_state_digest: digest("b"),
       restored_backup_id_digest: createHash("sha256").update("private-backup-id").digest("hex"),
       restore_scope_task_digest: digest("c"),
@@ -880,8 +896,9 @@ describe("buildRecoveryPostActionObservation", () => {
       });
       const stateDigest = await sha256File(brokerPath);
       const backupDigest = createHash("sha256").update(backup.backup_id!).digest("hex");
+      const taskIdentityDigest = digest("f");
       const entries = selectedStoreRestoreHistory(stateDigest, backupDigest, "broker-restore-command", 4,
-        null, undefined, "broker");
+        null, "task_scoped_merge_v1", "broker", taskIdentityDigest);
       const observation = await buildRecoveryPostActionObservation({
         entries,
         chain_valid: true,
@@ -898,6 +915,8 @@ describe("buildRecoveryPostActionObservation", () => {
         store_key: "broker",
         restore_backup_id_digest: backupDigest,
         restored_state_digest: stateDigest,
+        restore_scope_task_digest: taskIdentityDigest,
+        restore_scope_mode: "task_scoped_merge_v1",
         store_ledger_status: "verified",
         store_ledger_residual_count: 0,
         used_for_authority: false,

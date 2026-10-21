@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,6 +14,7 @@ import {
 } from "@blue-tanuki/protocol";
 import { captureCanonicalStateSnapshots, inspectCanonicalStateSnapshots } from "../src/canonical_state_backup.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
+import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import {
   buildRecoverySnapshot,
   createRecoveryBackup,
@@ -27,6 +28,30 @@ import {
 } from "../src/recovery_surface.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+const brokerCommandKey = (id: string): string => createHash("sha256")
+  .update(JSON.stringify(["gateway-executor-command.v1", id])).digest("hex");
+
+function seedBrokerReceipt(
+  store: GatewayExecutionIntentStore,
+  id: string,
+  epoch: string,
+  taskIdentityDigest?: string,
+): void {
+  const now = Date.now();
+  const ticket = {
+    ticket_id: randomUUID(),
+    command_key: brokerCommandKey(id),
+    command_digest: createHash("sha256").update(`${id}-command`).digest("hex"),
+    proof_digest: createHash("sha256").update(`${id}-proof`).digest("hex"),
+    ...(taskIdentityDigest ? { task_identity_digest: taskIdentityDigest } : {}),
+    execution_epoch: epoch,
+    issued_at_ms: now,
+    expires_at_ms: now + 60_000,
+  };
+  store.issue(ticket);
+  store.consume(ticket, now + 1);
+  store.complete(ticket, { state: "not_attempted", feedback_status: "failed", observed_at_ms: now + 2 });
+}
 
 const CANONICAL_DATABASES = [
   ["j_control", path.join("result-memory", "j-control.sqlite")],
@@ -654,6 +679,99 @@ describe("buildRecoverySnapshot", () => {
       );
     } finally {
       try { livePlanStore?.close(); } catch { /* test cleanup */ }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("restores Broker receipts for one verified task lineage without replacing current or unrelated history", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-broker-task-scope-restore-"));
+    let planStore: OperationPlanStateStore | undefined;
+    let brokerStore: GatewayExecutionIntentStore | undefined;
+    try {
+      const envFile = path.join(root, "product.env");
+      const recoveryDir = path.join(root, "recovery");
+      const stateRoot = path.join(root, "state");
+      await writeFile(envFile, "LLM_BACKEND=stub\n", "utf8");
+      const env = { BLUE_TANUKI_ENV_FILE: envFile, BLUE_TANUKI_RECOVERY_DIR: recoveryDir, BLUE_TANUKI_STATE_ROOT: stateRoot };
+      const taskIdentityDigest = operationPlanDigest({ schema_version: "fixture-task-identity.v1", task: "broker-restore-target" });
+      const unrelatedTaskDigest = operationPlanDigest({ schema_version: "fixture-task-identity.v1", task: "broker-restore-unrelated" });
+      const baseCheckpoint = recoveryPlanCheckpoint("broker-task-restore").checkpoint;
+      const taskPlan = { ...baseCheckpoint.plans[0]!, task_identity_digest: taskIdentityDigest };
+      const checkpoint = OperationPlanCheckpointSchema.parse({ ...baseCheckpoint, plans: [taskPlan] });
+      const planPath = path.join(stateRoot, "private-state", "operation-plans", "j-state.sqlite");
+      planStore = new OperationPlanStateStore(planPath);
+      planStore.compareAndSet(null, checkpoint);
+
+      const archivedEpoch = randomUUID();
+      brokerStore = GatewayExecutionIntentStore.fromEnvironment(archivedEpoch, env);
+      seedBrokerReceipt(brokerStore, "archived-selected-task", archivedEpoch, taskIdentityDigest);
+      seedBrokerReceipt(brokerStore, "archived-unrelated-task", archivedEpoch, unrelatedTaskDigest);
+      const backup = await createRecoveryBackup(env);
+      const brokerPath = path.join(stateRoot, "private-state", "execution-intents", "executor.sqlite");
+      brokerStore.close();
+      brokerStore = undefined;
+
+      // Simulate a current Broker ledger that no longer contains the archived selected receipt.
+      await unlink(brokerPath);
+      const currentEpoch = randomUUID();
+      brokerStore = GatewayExecutionIntentStore.fromEnvironment(currentEpoch, env);
+      seedBrokerReceipt(brokerStore, "current-selected-task", currentEpoch, taskIdentityDigest);
+      seedBrokerReceipt(brokerStore, "current-unrelated-task", currentEpoch, unrelatedTaskDigest);
+      const restoreCommandId = "fixture-task-scoped-broker-restore";
+      const restoreTicket = {
+        ticket_id: randomUUID(),
+        command_key: brokerCommandKey(restoreCommandId),
+        command_digest: createHash("sha256").update("restore-command").digest("hex"),
+        proof_digest: createHash("sha256").update("restore-proof").digest("hex"),
+        task_identity_digest: taskIdentityDigest,
+        execution_epoch: currentEpoch,
+        issued_at_ms: Date.now(),
+        expires_at_ms: Date.now() + 60_000,
+      };
+      brokerStore.issue(restoreTicket);
+      brokerStore.consume(restoreTicket, restoreTicket.issued_at_ms + 1);
+      brokerStore.markInvocation(restoreTicket, "tool_adapter", restoreTicket.issued_at_ms + 2);
+
+      const applicability = await inspectRecoveryTaskRestoreScopeApplicability(
+        env, backup.backup_id!, taskIdentityDigest, "broker",
+      );
+      expect(applicability).toMatchObject({
+        status: "matched",
+        scope_kind: "task_identity",
+        scope_digest: taskIdentityDigest,
+        store_candidate_count: 1,
+        verified_store_candidate_count: 1,
+        store_candidates: [{ store_key: "broker", snapshot_status: "verified", related_dependencies: ["broker", "delivery"] }],
+        used_for_authority: false,
+        may_execute: false,
+      });
+
+      const restored = await restoreRecoveryBackup(env, {
+        backup_id: backup.backup_id,
+        store_key: "broker",
+        scope_kind: "task_identity",
+        scope_digest: taskIdentityDigest,
+        executor_command_key: restoreTicket.command_key,
+        broker_execution_store: brokerStore,
+        confirm: "RESTORE",
+      });
+
+      expect(restored).toMatchObject({
+        restored_store_key: "broker",
+        restore_scope_kind: "task_identity",
+        restore_scope_digest: taskIdentityDigest,
+        restore_scope_mode: "task_scoped_merge_v1",
+        restored_items_count: 1,
+        canonical_state_cross_store_atomic: false,
+      });
+      expect(brokerStore.lookupCommand(brokerCommandKey("archived-selected-task"))?.state).toBe("not_attempted");
+      expect(brokerStore.lookupCommand(brokerCommandKey("archived-unrelated-task"))).toBeNull();
+      expect(brokerStore.lookupCommand(brokerCommandKey("current-selected-task"))?.state).toBe("not_attempted");
+      expect(brokerStore.lookupCommand(brokerCommandKey("current-unrelated-task"))?.state).toBe("not_attempted");
+      expect(brokerStore.verifyEvents()).toBe(true);
+    } finally {
+      try { planStore?.close(); } catch { /* test cleanup */ }
+      try { brokerStore?.close(); } catch { /* test cleanup */ }
       await rm(root, { recursive: true, force: true });
     }
   });

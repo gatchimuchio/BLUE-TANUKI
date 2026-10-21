@@ -1659,6 +1659,7 @@ export async function inspectRecoveryTaskRestoreScopeApplicability(
   env: NodeJS.ProcessEnv,
   backupId: string,
   taskIdentityDigest: string,
+  storeKey: CanonicalStateStoreKey = "operation_plans",
 ): Promise<RecoveryScopeApplicabilityInspection> {
   if (!/^[A-Za-z0-9_.-]{1,128}$/u.test(backupId) || backupId === "latest" ||
       !RECOVERY_SCOPE_DIGEST.test(taskIdentityDigest)) {
@@ -1674,7 +1675,7 @@ export async function inspectRecoveryTaskRestoreScopeApplicability(
     backup_id_digest: createHash("sha256").update(backupId).digest("hex"),
     scope_kind: "task_identity",
     scope_digest: taskIdentityDigest.toLowerCase(),
-    store_candidates: ["operation_plans"],
+    store_candidates: [storeKey],
   });
 }
 
@@ -1699,6 +1700,7 @@ export function isVerifiedRecoveryTaskRestoreScope(
   inspection: RecoveryScopeApplicabilityInspection,
   backupId: string,
   taskIdentityDigest: string,
+  storeKey: CanonicalStateStoreKey = "operation_plans",
 ): boolean {
   const store = inspection.store_candidates[0];
   return inspection.status === "matched" && inspection.reason === null &&
@@ -1713,9 +1715,10 @@ export function isVerifiedRecoveryTaskRestoreScope(
     inspection.backup_task_lineage_dependency_status !== "unknown" &&
     inspection.store_candidate_count === 1 && inspection.verified_store_candidate_count === 1 &&
     inspection.cross_store_atomic === false && inspection.used_for_authority === false && inspection.may_execute === false &&
-    store?.store_key === "operation_plans" && store.snapshot_status === "verified" &&
+    store?.store_key === storeKey && store.snapshot_status === "verified" &&
     ["no_residual_recorded", "residuals_present", "unobserved"].includes(store.dependency_status) &&
-    store.related_dependencies.length === 1 && store.related_dependencies[0] === "operation_plan";
+    store.related_dependencies.length === RECOVERY_SCOPE_DEPENDENCIES[storeKey].length &&
+    store.related_dependencies.every((dependency, index) => dependency === RECOVERY_SCOPE_DEPENDENCIES[storeKey][index]);
 }
 
 async function requireVerifiedRecoveryPlanRestoreScope(
@@ -1738,12 +1741,13 @@ async function requireVerifiedRecoveryTaskRestoreScope(
   env: NodeJS.ProcessEnv,
   backupId: string,
   scopeDigest: string | undefined,
+  storeKey: CanonicalStateStoreKey = "operation_plans",
 ): Promise<RecoveryScopeApplicabilityInspection> {
   if (typeof scopeDigest !== "string" || !RECOVERY_SCOPE_DIGEST.test(scopeDigest)) {
     throw new Error("operation_plan_task_scope_required");
   }
-  const inspection = await inspectRecoveryTaskRestoreScopeApplicability(env, backupId, scopeDigest);
-  if (!isVerifiedRecoveryTaskRestoreScope(inspection, backupId, scopeDigest)) {
+  const inspection = await inspectRecoveryTaskRestoreScopeApplicability(env, backupId, scopeDigest, storeKey);
+  if (!isVerifiedRecoveryTaskRestoreScope(inspection, backupId, scopeDigest, storeKey)) {
     throw new Error("operation_plan_task_scope_unverified");
   }
   return inspection;
@@ -1754,12 +1758,13 @@ async function requireVerifiedRecoveryRestoreScope(
   backupId: string,
   scopeKind: string | undefined,
   scopeDigest: string | undefined,
+  storeKey: CanonicalStateStoreKey = "operation_plans",
 ): Promise<RecoveryScopeApplicabilityInspection> {
   if (scopeKind === "operation_plan") {
     return requireVerifiedRecoveryPlanRestoreScope(env, backupId, scopeKind, scopeDigest);
   }
   if (scopeKind === "task_identity") {
-    return requireVerifiedRecoveryTaskRestoreScope(env, backupId, scopeDigest);
+    return requireVerifiedRecoveryTaskRestoreScope(env, backupId, scopeDigest, storeKey);
   }
   throw new Error("operation_plan_scope_required");
 }
@@ -1863,6 +1868,9 @@ export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoverySto
     if ((scopeKind !== "operation_plan" && scopeKind !== "task_identity") || !scopeDigest ||
         (scopeKind === "operation_plan" && scopeMode !== "plan_scoped_merge_v1") ||
         (scopeKind === "task_identity" && scopeMode !== "task_scoped_merge_v1")) return undefined;
+  } else if (storeKey === "broker" &&
+      (scopeKind !== undefined || value.restore_scope_digest !== undefined || scopeMode !== undefined)) {
+    if (scopeKind !== "task_identity" || !scopeDigest || scopeMode !== "task_scoped_merge_v1") return undefined;
   } else if (scopeKind !== undefined || value.restore_scope_digest !== undefined || scopeMode !== undefined) {
     return undefined;
   }
@@ -1872,7 +1880,8 @@ export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoverySto
     restored_store_state_digest: stateDigest,
     restored_backup_id_digest: backupIdDigest,
     ...(storeKey === "operation_plans" && scopeKind === "operation_plan" ? { restore_scope_plan_digest: scopeDigest! } : {}),
-    ...(storeKey === "operation_plans" && scopeKind === "task_identity" ? { restore_scope_task_digest: scopeDigest! } : {}),
+    ...((storeKey === "operation_plans" || storeKey === "broker") && scopeKind === "task_identity"
+      ? { restore_scope_task_digest: scopeDigest! } : {}),
     ...(scopeMode === "plan_scoped_merge_v1" || scopeMode === "task_scoped_merge_v1" ? { restore_scope_mode: scopeMode } : {}),
   };
 }
@@ -1916,7 +1925,10 @@ function recoveryStoreRestoreEvidenceFromHistory(value: unknown): RecoveryStoreR
       (hasScopeDigest && hasTaskScopeDigest) ||
       (hasScopeDigest && scopeMode !== "plan_scoped_merge_v1") ||
       (hasTaskScopeDigest && scopeMode !== "task_scoped_merge_v1") ||
-      (storeKey !== "operation_plans" && (hasScopeDigest || hasTaskScopeDigest || hasScopeMode)) ||
+      (storeKey !== "operation_plans" && storeKey !== "broker" && (hasScopeDigest || hasTaskScopeDigest || hasScopeMode)) ||
+      (storeKey === "broker" && (hasScopeDigest ||
+        (hasTaskScopeDigest && scopeMode !== "task_scoped_merge_v1") ||
+        (hasScopeMode && (scopeMode !== "task_scoped_merge_v1" || !taskScopeDigest)))) ||
       (hasScopeMode && (scopeMode === "plan_scoped_merge_v1" ? !scopeDigest || hasTaskScopeDigest
         : scopeMode === "task_scoped_merge_v1" ? !taskScopeDigest || hasScopeDigest : true))) return null;
   return {
@@ -2485,9 +2497,16 @@ export async function restoreRecoveryBackup(
   assertConfirmation(options.confirm, "RESTORE");
   const id = options.backup_id ?? (await latestBackupId(env));
   if (!id) throw new Error("backup_not_found");
-  let planScopeInspection: RecoveryScopeApplicabilityInspection | undefined;
-  if (options.store_key === "operation_plans") {
-    planScopeInspection = await requireVerifiedRecoveryRestoreScope(env, id, options.scope_kind, options.scope_digest);
+  if (options.store_key === "broker" &&
+      (options.scope_kind !== undefined || options.scope_digest !== undefined) && options.scope_kind !== "task_identity") {
+    throw new Error("broker_restore_task_scope_required");
+  }
+  let scopeApplicabilityInspection: RecoveryScopeApplicabilityInspection | undefined;
+  if (options.store_key === "operation_plans" ||
+      (options.store_key === "broker" && (options.scope_kind !== undefined || options.scope_digest !== undefined))) {
+    scopeApplicabilityInspection = await requireVerifiedRecoveryRestoreScope(
+      env, id, options.scope_kind, options.scope_digest, options.store_key,
+    );
   }
   const manifest = await readManifest(env, id);
   if (options.store_key) {
@@ -2559,17 +2578,27 @@ export async function restoreRecoveryBackup(
       }
     }
 
-    if (options.store_key === "operation_plans") {
-      planScopeInspection = await requireVerifiedRecoveryRestoreScope(env, id, options.scope_kind, options.scope_digest);
+    if (options.store_key === "operation_plans" ||
+        (options.store_key === "broker" && (options.scope_kind !== undefined || options.scope_digest !== undefined))) {
+      scopeApplicabilityInspection = await requireVerifiedRecoveryRestoreScope(
+        env, id, options.scope_kind, options.scope_digest, options.store_key,
+      );
     }
     let restored: { readonly bytes: number; readonly sha256: string; readonly restoredStateSha256: string };
+    let restoredItemsCount: number | undefined;
     if (options.store_key === "broker") {
       const archivePath = path.resolve(packDir, selected.archive_rel_path);
       const archiveBefore = await sha256Path(archivePath, "file").catch(() => null);
       if (!archiveBefore || archiveBefore.bytes !== selected.bytes || archiveBefore.sha256 !== selected.sha256) {
         throw new Error("canonical_state_restore_archive_changed");
       }
-      options.broker_execution_store!.restoreFromCanonicalSnapshot(archivePath, options.executor_command_key!);
+      if (scopeApplicabilityInspection?.scope_kind === "task_identity") {
+        restoredItemsCount = options.broker_execution_store!.restoreTaskScopeFromCanonicalSnapshot(
+          archivePath, options.executor_command_key!, scopeApplicabilityInspection.scope_digest!,
+        );
+      } else {
+        options.broker_execution_store!.restoreFromCanonicalSnapshot(archivePath, options.executor_command_key!);
+      }
       const archiveAfter = await sha256Path(archivePath, "file").catch(() => null);
       if (!archiveAfter || archiveAfter.bytes !== selected.bytes || archiveAfter.sha256 !== selected.sha256) {
         throw new Error("canonical_state_restore_archive_changed");
@@ -2614,10 +2643,10 @@ export async function restoreRecoveryBackup(
       }
       const operationPlanStore = new OperationPlanStateStore(targetPath);
       try {
-        if (planScopeInspection!.scope_kind === "task_identity") {
-          operationPlanStore.restoreTaskScope(archivedCheckpoint, planScopeInspection!.scope_digest!, preRestorePlanCheckpoint);
+        if (scopeApplicabilityInspection!.scope_kind === "task_identity") {
+          operationPlanStore.restoreTaskScope(archivedCheckpoint, scopeApplicabilityInspection!.scope_digest!, preRestorePlanCheckpoint);
         } else {
-          operationPlanStore.restorePlanScope(archivedCheckpoint, planScopeInspection!.scope_digest!, preRestorePlanCheckpoint);
+          operationPlanStore.restorePlanScope(archivedCheckpoint, scopeApplicabilityInspection!.scope_digest!, preRestorePlanCheckpoint);
         }
       } finally {
         operationPlanStore.close();
@@ -2647,17 +2676,20 @@ export async function restoreRecoveryBackup(
       restored_store_key: options.store_key,
       restored_store_archive_digest: restored.sha256,
       restored_store_state_digest: restored.restoredStateSha256,
-      ...(planScopeInspection ? {
-        restore_scope_kind: planScopeInspection.scope_kind === "task_identity" ? "task_identity" as const : "operation_plan" as const,
-        restore_scope_digest: planScopeInspection.scope_digest!,
-        restore_scope_mode: planScopeInspection.scope_kind === "task_identity"
+      ...(restoredItemsCount === undefined ? {} : { restored_items_count: restoredItemsCount }),
+      ...(scopeApplicabilityInspection ? {
+        restore_scope_kind: scopeApplicabilityInspection.scope_kind === "task_identity" ? "task_identity" as const : "operation_plan" as const,
+        restore_scope_digest: scopeApplicabilityInspection.scope_digest!,
+        restore_scope_mode: scopeApplicabilityInspection.scope_kind === "task_identity"
           ? "task_scoped_merge_v1" as const : "plan_scoped_merge_v1" as const,
       } : {}),
       canonical_state_cross_store_atomic: false,
       pre_action_backup_id: preRestore.backup_id,
       pre_action_backup_manifest_path: preRestore.manifest_path,
       next_safe_action: options.store_key === "broker"
-        ? "The restored-state digest marks the atomic import boundary while this restore's Executor receipt is still in progress; Executor then finalizes that receipt in Broker. Inspect cross-store residuals before resuming affected work. Only this selected SQLite store was restored; cross-store atomicity is false, and job recovery or automatic resume is not implied."
+        ? scopeApplicabilityInspection?.scope_kind === "task_identity"
+          ? "This task-scoped Broker merge appended only missing receipts for the selected task to the current ledger; current Broker history and unrelated tasks were preserved. The restored-state digest marks the import boundary while Executor finalizes this restore receipt. Re-observe J/M/Broker dependencies and require a fresh J review before any continuation; cross-store atomicity and automatic resume are false."
+          : "The restored-state digest marks the atomic import boundary while this restore's Executor receipt is still in progress; Executor then finalizes that receipt in Broker. Inspect cross-store residuals before resuming affected work. Only this selected SQLite store was restored; cross-store atomicity is false, and job recovery or automatic resume is not implied."
         : "Restart BLUE-TANUKI, then inspect the restored store and all cross-store residuals. Only this selected SQLite store was restored; snapshots are independent, cross-store atomicity is false, and job recovery or automatic resume is not implied.",
     });
   }

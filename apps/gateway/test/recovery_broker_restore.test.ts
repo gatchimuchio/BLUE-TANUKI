@@ -13,13 +13,19 @@ import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 const hash = (value: string): string => createHash("sha256").update(value).digest("hex");
 const commandKey = (id: string): string => hash(JSON.stringify(["gateway-executor-command.v1", id]));
 
-function completedFixtureReceipt(store: GatewayExecutionIntentStore, id: string, executionEpoch: string): void {
+function completedFixtureReceipt(
+  store: GatewayExecutionIntentStore,
+  id: string,
+  executionEpoch: string,
+  taskIdentityDigest?: string,
+): void {
   const now = Date.now();
   const ticket = {
     ticket_id: randomUUID(),
     command_key: commandKey(id),
     command_digest: "a".repeat(64),
     proof_digest: "b".repeat(64),
+    ...(taskIdentityDigest ? { task_identity_digest: taskIdentityDigest } : {}),
     execution_epoch: executionEpoch,
     issued_at_ms: now,
     expires_at_ms: now + 60_000,
@@ -29,13 +35,19 @@ function completedFixtureReceipt(store: GatewayExecutionIntentStore, id: string,
   store.complete(ticket, { state: "not_attempted", feedback_status: "failed", observed_at_ms: now + 2 });
 }
 
-function activeFixtureReceipt(store: GatewayExecutionIntentStore, id: string, executionEpoch: string) {
+function activeFixtureReceipt(
+  store: GatewayExecutionIntentStore,
+  id: string,
+  executionEpoch: string,
+  taskIdentityDigest?: string,
+) {
   const now = Date.now();
   const ticket = {
     ticket_id: randomUUID(),
     command_key: commandKey(id),
     command_digest: "c".repeat(64),
     proof_digest: "d".repeat(64),
+    ...(taskIdentityDigest ? { task_identity_digest: taskIdentityDigest } : {}),
     execution_epoch: executionEpoch,
     issued_at_ms: now,
     expires_at_ms: now + 60_000,
@@ -176,6 +188,43 @@ describe("Broker canonical snapshot restore transaction", () => {
       expect(live.verifyEvents()).toBe(true);
     } finally {
       try { archive.close(); } catch { /* already closed before snapshot use */ }
+      live.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("merges only missing receipts for one task and keeps current and unrelated Broker history", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-broker-task-restore-"));
+    const epoch = randomUUID();
+    const archivedEpoch = randomUUID();
+    const taskDigest = "e".repeat(64);
+    const unrelatedTaskDigest = "f".repeat(64);
+    const archive = new GatewayExecutionIntentStore(join(root, "selected.sqlite"), archivedEpoch);
+    const live = new GatewayExecutionIntentStore(join(root, "live.sqlite"), epoch);
+    try {
+      completedFixtureReceipt(archive, "archived-task-receipt", archivedEpoch, taskDigest);
+      activeFixtureReceipt(archive, "archived-uncertain-task-receipt", archivedEpoch, taskDigest);
+      completedFixtureReceipt(archive, "archived-unrelated-receipt", archivedEpoch, unrelatedTaskDigest);
+      archive.close();
+
+      completedFixtureReceipt(live, "current-task-receipt", epoch, taskDigest);
+      completedFixtureReceipt(live, "current-unrelated-receipt", epoch, unrelatedTaskDigest);
+      const restore = activeFixtureReceipt(live, "task-restore-fixture", epoch, taskDigest);
+
+      const restoredCount = live.restoreTaskScopeFromCanonicalSnapshot(
+        join(root, "selected.sqlite"), restore.command_key, taskDigest,
+      );
+
+      expect(restoredCount).toBe(2);
+      expect(live.lookupCommand(commandKey("archived-task-receipt"))?.state).toBe("not_attempted");
+      expect(live.lookupCommand(commandKey("archived-uncertain-task-receipt"))?.state).toBe("outcome_unknown");
+      expect(live.lookupCommand(commandKey("archived-unrelated-receipt"))).toBeNull();
+      expect(live.lookupCommand(commandKey("current-task-receipt"))?.state).toBe("not_attempted");
+      expect(live.lookupCommand(commandKey("current-unrelated-receipt"))?.state).toBe("not_attempted");
+      expect(live.lookup(restore.ticket_id)?.state).toBe("invocation_attempted");
+      expect(live.verifyEvents()).toBe(true);
+    } finally {
+      try { archive.close(); } catch { /* archive already closed */ }
       live.close();
       await rm(root, { recursive: true, force: true });
     }

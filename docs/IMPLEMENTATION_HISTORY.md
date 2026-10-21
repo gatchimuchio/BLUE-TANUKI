@@ -4,6 +4,27 @@
 
 ---
 
+### 履歴ログ：`QEB-22-E03.03-TASK-LINEAGE-SCOPED-BROKER-MERGE`
+
+開始HEAD／`main`／`origin/main`=`6a099c72bc9e8b701a2586a43817d3d0f3a77d9c`。現行pinはrev2.3。今回必要なE03.03のJ task-lineage restore、Broker receipt identity、Recovery observation、fresh J review境界を現行三点と対象consumerから再同期した。完了済み旧作業ログはQEB-21の直近依存だけを参照した。保護対象untracked Linux isolation `target/`は保持しGitへ含めない。
+
+`recovery.restore`のBroker対象に、任意のtask identity scopeを追加した。L3 approval targetはbackup ID・Broker store・task digestへ結び付く。不正scopeはwhole-store restore targetへ曖昧化せずinvalid scopeとして識別する。適用時はverified archiveの全体整合性とHDS-J task lineageを確認し、選択task digestに一致する不足receiptとそのarchive event rowsだけを、現行event historyを保ちながらBroker hash chain末尾へ追記する。現行ticket／command receiptと異なるarchive衝突、選択taskに属する同epochの未完了処理は拒否する。旧epochの`intent_committed`／`invocation_attempted`はarchive event rowsの後に`outcome_unknown`を追記して閉じる。別taskのarchive receiptを取り込まず、既存の現行receipt・履歴は削除・巻戻ししない。取り込んだ結果receipt数を非権威の結果projectionへ渡す。
+
+復元後はselected task lineageのJ planをholdし、現在のJ/M/Broker依存が再観測され、各計画へのfresh J reviewが通るまで再開させない。task-scoped restore履歴とHDS hold provenanceにはscope digestを保存し、startup observationからも同じ範囲を復元する。未確認時は選択task内を保留し、無関係taskは変更しない。全storeのatomicity、仕事全体のrestore point、自動resume、実Brokerの外部作用は成立させない。C08.03実provider保留、実credential、外部作用、D4Pocket／ミニドラ別repo変更、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Recovery/Broker/approval/observation focused suites | 5 Gateway suites 51/51 PASS。task scope applicability、追加merge、current/unrelated receipt保持、stale in-flightの`outcome_unknown`化、scope digestのL3 target、restore holdとfresh-review gateを確認。HDS `approval_policy.test.ts` 21/21 PASS。 |
+| HDS／Gateway typecheck、workspace build、HDS standalone | すべてPASS。workspace buildは15 projects。 |
+| Operation Plan runtime suite | 40件中39 PASS。別既存task-purpose test 1件は5秒timeout。該当testのみ単独再実行1/1 PASS。product timeout・実装は変更せず、全suite PASSとは扱わない。 |
+| 全workspace suite、QE_QC／QE_QA、実provider／credential、実外部作用、5OS実機 | 未実施。実装形状成立前の全体品質・対象QAとして扱わない。 |
+
+task-scoped Broker receipt restore consumerをこの範囲で`WIRED`とする。J/M/Broker/Cronを含む仕事単位の整合復旧、E03.03／QEB-03、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。次は同一taskのM-state依存と復元点をJ binding／M receiptの実consumerへ接続する。QE_QC／QE_QAは全体実装形状成立後に開始する。
+
+実装commit／push先remote main／backup refの照合結果はcloseout後にこの記録へ追記する。
+
+---
+
 ### 履歴ログ：`QEB-17-E03.03-BROKER-RESTORE-QUIESCENCE-OBSERVATION`
 
 開始HEAD／`main`／`origin/main`=`2cb309ed329e793b7a4155ef420adef4969e0247`。開始時のlocal recovery branchとremote tagはcurrent=`2cb309ed329e793b7a4155ef420adef4969e0247`、previous=`a1d5d2e28848046e5b59cd32fd0e415ea8d8bde6`で一致。現行pinはrev2.3、関係単位E03.03。保護対象untracked Linux isolation `target/`は未変更・未追跡のまま保持。

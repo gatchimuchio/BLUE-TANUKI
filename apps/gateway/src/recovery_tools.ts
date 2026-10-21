@@ -70,6 +70,13 @@ export function normalizeRecoveryMutationArguments(
     if (typeof scopeDigest !== "string" || !/^[a-f0-9]{64}$/i.test(scopeDigest)) {
       throw new Error(scopeKind === "task_identity" ? "operation_plan_task_scope_invalid" : "operation_plan_scope_invalid");
     }
+  } else if (storeKey === "broker") {
+    if ((scopeKind !== undefined && scopeKind !== "task_identity") ||
+        (scopeKind === undefined && scopeDigest !== undefined)) throw new Error("broker_restore_task_scope_required");
+    if (scopeKind === "task_identity" &&
+        (typeof scopeDigest !== "string" || !/^[a-f0-9]{64}$/i.test(scopeDigest))) {
+      throw new Error("broker_restore_task_scope_invalid");
+    }
   } else if (scopeKind !== undefined || scopeDigest !== undefined) {
     throw new Error("invalid_recovery_request");
   }

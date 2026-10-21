@@ -301,6 +301,43 @@ describe("Recovery observationからHDS計画保留を導出", () => {
     });
     expect(brokerRestorePlanDependencyIsCurrent(projection, affected)).toBe(true);
     expect(brokerRestorePlanDependencyIsCurrent(projection, unrelated)).toBe(true);
+
+    const taskIdentityDigest = "e".repeat(64);
+    const unrelatedTaskDigest = "f".repeat(64);
+    const taskCheckpoint = {
+      ...checkpoint,
+      plans: checkpoint.plans.map((plan, index) => ({
+        ...plan,
+        task_identity_digest: index === 0 ? taskIdentityDigest : unrelatedTaskDigest,
+      })),
+    } as unknown as OperationPlanCheckpoint;
+    const taskScopedEvidence = operationPlanBrokerRestoreDependencyEvidenceFromObservation({
+      observation: observation({
+        store_key: "broker",
+        restore_scope_plan_digest: null,
+        restore_scope_task_digest: taskIdentityDigest,
+        restore_scope_mode: "task_scoped_merge_v1",
+        plan_restore_points: null,
+      }),
+      checkpoint: taskCheckpoint,
+      history_complete: true,
+      recovery_projection: projection,
+    });
+    expect(taskScopedEvidence).toMatchObject({
+      restore_observation: "verified",
+      provenance: {
+        restore_store_key: "broker",
+        restore_scope_plan_digest: null,
+        restore_scope_task_digest: taskIdentityDigest,
+        restore_scope_mode: "task_scoped_merge_v1",
+      },
+      plans: [
+        { plan_id_digest: affected, status: "unobserved" },
+        { plan_id_digest: unrelated, status: "unaffected" },
+      ],
+      used_for_authority: false,
+      may_execute: false,
+    });
   });
 
   it("Broker相関の未観測・残差と無効なprojectionはfail-closedで計画holdへ送る", () => {

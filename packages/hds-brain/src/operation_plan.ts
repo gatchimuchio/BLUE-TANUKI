@@ -200,7 +200,7 @@ export type OperationPlanBrokerRestoreDependencyStatus =
   | "unobserved"
   | "unverified";
 
-/** Per-plan, digest-only J/M/Broker re-observation after a whole Broker-store restore. */
+/** Per-plan, digest-only J/M/Broker re-observation after a Broker-store restore. */
 export interface OperationPlanBrokerRestoreDependencyEvidence {
   readonly schema_version: "operation-plan-broker-restore-dependency-evidence.v1";
   readonly checkpoint_digest: string;
@@ -402,8 +402,12 @@ function parseOperationPlanBrokerRestoreDependencyEvidence(
     throw new Error("plan_broker_restore_evidence_invalid");
   }
   const provenance = recoveryEvidenceProvenance(raw.provenance);
+  const taskScopedRestore = provenance.restore_scope_mode === "task_scoped_merge_v1" &&
+    !!provenance.restore_scope_task_digest;
   if (provenance.source !== "recovery_restore" || provenance.restore_store_key !== "broker" ||
-        provenance.restore_scope_plan_digest !== null || provenance.restore_scope_task_digest !== null || provenance.restore_scope_mode !== undefined ||
+        provenance.restore_scope_plan_digest !== null ||
+        (taskScopedRestore ? !provenance.restore_scope_task_digest :
+          provenance.restore_scope_task_digest !== null || provenance.restore_scope_mode !== undefined) ||
       (raw.restore_observation === "verified" &&
         (!provenance.command_id_digest || !provenance.operation_digest || !provenance.result_digest ||
           !provenance.restore_backup_id_digest || !provenance.restored_state_digest))) {
@@ -423,7 +427,8 @@ function parseOperationPlanBrokerRestoreDependencyEvidence(
     return { plan_id_digest: plan.plan_id_digest,
       status: plan.status as OperationPlanBrokerRestoreDependencyStatus };
   });
-  if (raw.restore_observation === "unverified" && plans.some((plan) => plan.status !== "unverified")) {
+  if (raw.restore_observation === "unverified" && plans.some((plan) =>
+      plan.status !== "unverified" && !(taskScopedRestore && plan.status === "unaffected"))) {
     throw new Error("plan_broker_restore_evidence_invalid");
   }
   return {
@@ -1542,9 +1547,13 @@ export class OperationPlanLedger {
       ...evidence.provenance,
       checkpoint_digest: evidence.checkpoint_digest,
     };
+    const scopedTaskDigest = provenance.restore_scope_mode === "task_scoped_merge_v1"
+      ? provenance.restore_scope_task_digest ?? null : null;
     if (!checkpointMatches || evidence.restore_observation !== "verified") {
-      for (const plan of this.state.plans) this.addRecoveryHold(
-        operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified", provenance, "unknown");
+      for (const plan of this.state.plans) {
+        if (scopedTaskDigest && operationPlanTaskIdentityDigest(plan) !== scopedTaskDigest) continue;
+        this.addRecoveryHold(operationPlanDigest(plan.revisions[0]!.plan.plan_id), "held_unverified", provenance, "unknown");
+      }
       return;
     }
     const byPlan = new Map(evidence.plans.map((plan) => [plan.plan_id_digest, plan.status]));
@@ -1554,13 +1563,17 @@ export class OperationPlanLedger {
       plansByTaskIdentity.set(taskIdentityDigest, [...(plansByTaskIdentity.get(taskIdentityDigest) ?? []), plan]);
     }
     for (const plans of plansByTaskIdentity.values()) {
+      const taskIdentityDigest = operationPlanTaskIdentityDigest(plans[0]!);
+      if (scopedTaskDigest && taskIdentityDigest !== scopedTaskDigest) continue;
       const statuses = plans.map((plan) => byPlan.get(operationPlanDigest(plan.revisions[0]!.plan.plan_id)) ?? "unverified");
       const reason: OperationPlanRecoveryHoldReason | null = statuses.includes("residuals_present") ? "held_residual"
         : statuses.includes("unverified") ? "held_unverified"
-        : statuses.includes("unobserved") ? "held_unobserved" : null;
+        : scopedTaskDigest ? "held_unobserved"
+          : statuses.includes("unobserved") ? "held_unobserved" : null;
       if (!reason) continue;
       for (const plan of plans) this.addRecoveryHold(
-        operationPlanDigest(plan.revisions[0]!.plan.plan_id), reason, provenance);
+        operationPlanDigest(plan.revisions[0]!.plan.plan_id), reason, provenance,
+        scopedTaskDigest ? "unknown" : undefined);
     }
   }
 
@@ -1593,13 +1606,13 @@ export class OperationPlanLedger {
   ): boolean {
     try {
       const provenance = hold.provenance;
-      const brokerRestoreHold = provenance.restore_store_key === "broker";
-      const taskPlanRestoreHold = provenance.restore_store_key === "operation_plans" &&
+      const brokerRestoreHold = provenance.restore_store_key === "broker" && provenance.restore_scope_mode !== "task_scoped_merge_v1";
+      const taskScopedRestoreHold = (provenance.restore_store_key === "operation_plans" || provenance.restore_store_key === "broker") &&
         provenance.restore_scope_mode === "task_scoped_merge_v1" && !!provenance.restore_scope_task_digest;
-      if (taskPlanRestoreHold && hold.reason === "held_residual") return false;
-      if ((!brokerRestoreHold && !taskPlanRestoreHold && hold.reason !== "held_unverified") || provenance.source !== "recovery_restore" ||
-          ((brokerRestoreHold || taskPlanRestoreHold) && !this.brokerRestoreDependencyVerifier) ||
-          (!brokerRestoreHold && !taskPlanRestoreHold && provenance.restore_store_key !== "j_control" && provenance.restore_store_key !== "m_state") ||
+      if (taskScopedRestoreHold && hold.reason === "held_residual") return false;
+      if ((!brokerRestoreHold && !taskScopedRestoreHold && hold.reason !== "held_unverified") || provenance.source !== "recovery_restore" ||
+          ((brokerRestoreHold || taskScopedRestoreHold) && !this.brokerRestoreDependencyVerifier) ||
+          (!brokerRestoreHold && !taskScopedRestoreHold && provenance.restore_store_key !== "j_control" && provenance.restore_store_key !== "m_state") ||
           !provenance.command_id_digest || !provenance.operation_digest || !provenance.result_digest ||
           !provenance.restore_backup_id_digest || !provenance.restored_state_digest ||
           !/^[a-f0-9]{64}$/.test(provenance.checkpoint_digest) || !this.port || !this.resultMemory ||
@@ -1612,7 +1625,7 @@ export class OperationPlanLedger {
           binding.status === "intent_committed" || binding.status === "outcome_unknown")) {
         return false;
       }
-      if (taskPlanRestoreHold && plan.bindings.some((binding) =>
+      if (taskScopedRestoreHold && plan.bindings.some((binding) =>
         !["verified", "invalidated", "not_attempted"].includes(binding.status))) return false;
       const verified = plan.bindings.filter((binding) => binding.status === "verified");
       if (verified.length === 0 && (plan.results.length > 0 || plan.bindings.some((binding) =>
@@ -1646,7 +1659,7 @@ export class OperationPlanLedger {
         return !!record?.exists && operationPlanDigest(record.value) === operationPlanDigest(commit.changes[0]!.value);
       });
       if (!memoryBindingsVerified) return false;
-      if (taskPlanRestoreHold) {
+      if (taskScopedRestoreHold) {
         const taskIdentityDigest = provenance.restore_scope_task_digest!;
         if (operationPlanTaskIdentityDigest(plan) !== taskIdentityDigest) return false;
         const taskPlans = this.state.plans.filter((candidate) => operationPlanTaskIdentityDigest(candidate) === taskIdentityDigest);

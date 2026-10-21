@@ -48,6 +48,9 @@ export function operationPlanBrokerRestoreDependencyEvidenceFromObservation(inpu
 }): OperationPlanBrokerRestoreDependencyEvidence | undefined {
   const observation = input.observation;
   if (observation.operation !== "restore" || observation.store_key !== "broker" || !input.checkpoint) return undefined;
+  const taskScopedRestore = observation.restore_scope_mode === "task_scoped_merge_v1" &&
+    observation.restore_scope_task_digest !== null && DIGEST.test(observation.restore_scope_task_digest ?? "");
+  const taskIdentityDigest = taskScopedRestore ? observation.restore_scope_task_digest! : null;
   const restoreObservationVerified = input.history_complete && observation.status === "matched" &&
     observation.store_ledger_status === "verified" && observation.store_ledger_residual_count === 0 &&
     observation.command_id_digest !== null && DIGEST.test(observation.command_id_digest) &&
@@ -60,9 +63,11 @@ export function operationPlanBrokerRestoreDependencyEvidenceFromObservation(inpu
     const planIdDigest = operationPlanDigest(planState.revisions[0]!.plan.plan_id);
     return {
       plan_id_digest: planIdDigest,
-      status: restoreObservationVerified
-        ? brokerRestorePlanStatus(recoveryProjection, planIdDigest)
-        : "unverified" as const,
+      status: taskScopedRestore
+        ? operationPlanTaskIdentityDigest(planState) !== taskIdentityDigest
+          ? "unaffected" as const
+          : restoreObservationVerified ? "unobserved" as const : "unverified" as const
+        : restoreObservationVerified ? brokerRestorePlanStatus(recoveryProjection, planIdDigest) : "unverified" as const,
     };
   });
   return {
@@ -77,6 +82,8 @@ export function operationPlanBrokerRestoreDependencyEvidenceFromObservation(inpu
       restore_store_key: "broker",
       restore_backup_id_digest: observation.restore_backup_id_digest,
       restore_scope_plan_digest: null,
+      restore_scope_task_digest: taskIdentityDigest,
+      ...(taskScopedRestore ? { restore_scope_mode: "task_scoped_merge_v1" as const } : {}),
       restored_state_digest: observation.restored_state_digest,
     },
     plans,

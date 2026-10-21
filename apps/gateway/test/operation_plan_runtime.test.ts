@@ -1577,6 +1577,91 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     }
   });
 
+  it("task-scoped Broker復元は選択lineageだけを保留し、無関係な計画を保つ", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-broker-task-restore-hold-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const privateRoot = join(root, "private-state");
+    const resultMemoryRoot = join(privateRoot, "result-memory");
+    await mkdir(resultMemoryRoot, { recursive: true });
+    const target = plan("broker-task-restored-target", root);
+    const sibling = plan("broker-task-restored-sibling", root);
+    const unrelated = plan("broker-task-restored-unrelated", root);
+    const taskIdentityDigest = "d".repeat(64);
+    const unrelatedTaskIdentityDigest = "c".repeat(64);
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [target, sibling, unrelated].map((candidate) => ({ owner: "fixture-owner", channel: "webchat",
+        goal: "synthetic task-scoped Broker recovery test",
+        request_goal_criteria: noRequestCriteria("synthetic task-scoped Broker recovery test", candidate.request_id),
+        task_identity_digest: candidate === unrelated ? unrelatedTaskIdentityDigest : taskIdentityDigest,
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] })),
+    });
+    store.compareAndSet(null, checkpoint);
+    const targetPlanIdDigest = operationPlanDigest(target.plan_id);
+    const siblingPlanIdDigest = operationPlanDigest(sibling.plan_id);
+    const unrelatedPlanIdDigest = operationPlanDigest(unrelated.plan_id);
+    const dependencyCurrentPlanIds = new Set<string>();
+    let hds: HDSUpperController | undefined;
+    try {
+      hds = new HDSUpperController({
+        operation_plan_state: store,
+        operation_plan_memory: {
+          private_state_root: privateRoot,
+          database_path: join(resultMemoryRoot, "j-control.sqlite"),
+          memory_database_path: join(resultMemoryRoot, "m-state.sqlite"),
+        },
+        operation_plan_broker_restore_dependency_verifier: (planIdDigest, provenance) =>
+          [targetPlanIdDigest, siblingPlanIdDigest].includes(planIdDigest) &&
+          provenance.restore_store_key === "broker" &&
+          provenance.restore_scope_mode === "task_scoped_merge_v1" &&
+          provenance.restore_scope_task_digest === taskIdentityDigest && dependencyCurrentPlanIds.has(planIdDigest),
+      });
+      const restoreCommand = brokerRestoreCommand();
+      const evidence: OperationPlanBrokerRestoreDependencyEvidence = {
+        schema_version: "operation-plan-broker-restore-dependency-evidence.v1",
+        checkpoint_digest: operationPlanDigest(checkpoint),
+        restore_observation: "verified",
+        provenance: {
+          source: "recovery_restore",
+          command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+          operation_digest: "a".repeat(64),
+          result_digest: "b".repeat(64),
+          restore_store_key: "broker",
+          restore_backup_id_digest: "c".repeat(64),
+          restore_scope_plan_digest: null,
+          restore_scope_task_digest: taskIdentityDigest,
+          restore_scope_mode: "task_scoped_merge_v1",
+          restored_state_digest: "d".repeat(64),
+        },
+        plans: [
+          { plan_id_digest: targetPlanIdDigest, status: "unobserved" },
+          { plan_id_digest: siblingPlanIdDigest, status: "unobserved" },
+          { plan_id_digest: unrelatedPlanIdDigest, status: "unaffected" },
+        ],
+        used_for_authority: false,
+        may_execute: false,
+      };
+      expect(hds.recordBrokerRestoreDependencyEvidence(restoreCommand, evidence)).toBe(true);
+      expect(hds.getRuntimeSnapshot().operation_plans.plans).toMatchObject([
+        { plan_id: targetPlanIdDigest, recovery_hold_reason: "held_unobserved" },
+        { plan_id: siblingPlanIdDigest, recovery_hold_reason: "held_unobserved" },
+        { plan_id: unrelatedPlanIdDigest },
+      ]);
+      expect((store.loadRecoveryHoldState() as { holds: unknown[] }).holds).toHaveLength(2);
+      expect(review(hds, target, "search").command).toBeNull();
+
+      dependencyCurrentPlanIds.add(targetPlanIdDigest);
+      expect(review(hds, target, "search").command).toBeNull();
+      dependencyCurrentPlanIds.add(siblingPlanIdDigest);
+      expect(review(hds, target, "search").command?.type).toBe("tool_call");
+      expect(review(hds, unrelated, "search").command?.type).toBe("tool_call");
+    } finally {
+      hds?.closeOperationPlanMemory();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("起動時に既存のplan単位Broker holdを同じtask lineageの計画へ拡張する", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-broker-restore-lineage-restart-"));
     const store = new OperationPlanStateStore(join(root, "state.sqlite"));

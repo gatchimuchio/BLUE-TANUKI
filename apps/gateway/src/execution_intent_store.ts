@@ -341,6 +341,121 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       try { source?.close(); } catch { /* preserve the restore result */ }
     }
   }
+  /** Add one archived task lineage without replacing current Broker history or other tasks. */
+  restoreTaskScopeFromCanonicalSnapshot(
+    snapshotPath: string,
+    executionCommandKey: string,
+    taskIdentityDigest: string,
+  ): number {
+    if (!/^[a-f0-9]{64}$/.test(executionCommandKey)) throw new Error("broker_restore_execution_context_invalid");
+    if (!/^[a-f0-9]{64}$/.test(taskIdentityDigest)) throw new Error("broker_restore_task_scope_invalid");
+    const resolvedSnapshot = resolve(snapshotPath);
+    let source: DatabaseType | undefined;
+    try {
+      const stat = lstatSync(resolvedSnapshot);
+      if (!stat.isFile() || stat.isSymbolicLink() || realpathSync(resolvedSnapshot) !== resolvedSnapshot ||
+          resolvedSnapshot === this.filepath ||
+          ["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${resolvedSnapshot}${suffix}`))) {
+        throw new Error("broker_restore_archive_unavailable");
+      }
+      if (["-journal", "-wal", "-shm"].some((suffix) => existsSync(`${this.filepath}${suffix}`))) {
+        throw new Error("broker_restore_store_busy");
+      }
+      source = new DatabaseSync(resolvedSnapshot, {
+        readOnly: true,
+        enableForeignKeyConstraints: true,
+        allowExtension: false,
+      });
+      source.enableLoadExtension(false);
+      source.exec("PRAGMA busy_timeout = 0; PRAGMA query_only = ON; BEGIN");
+      const integrity = source.prepare("PRAGMA integrity_check").get() as { integrity_check?: unknown } | undefined;
+      const journal = source.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined;
+      if (integrity?.integrity_check !== "ok" || journal?.journal_mode !== "delete" ||
+          !verifyExecutionIntentDatabase(source, true)) {
+        throw new Error("broker_restore_archive_invalid");
+      }
+
+      let restoredCount = 0;
+      this.transaction(() => {
+        const currentRow = this.db.prepare("SELECT ticket_id FROM execution_intents WHERE command_key=?")
+          .get(executionCommandKey) as { ticket_id: string } | undefined;
+        const current = currentRow ? this.lookup(currentRow.ticket_id) : null;
+        if (!current || current.command_key !== executionCommandKey || current.state !== "invocation_attempted" ||
+            current.invocation_boundary !== "tool_adapter" || current.execution_epoch !== this.executionEpoch) {
+          throw new Error("broker_restore_active_executor_receipt_required");
+        }
+
+        const activeStates = new Set<ExecutionIntentReceipt["state"]>(["issued", "intent_committed", "invocation_attempted"]);
+        const currentActive = executionReceipts(this.db).filter((receipt) =>
+          receipt.execution_epoch === current.execution_epoch && activeStates.has(receipt.state));
+        if (currentActive.length !== 1 || currentActive[0]?.ticket_id !== current.ticket_id) {
+          throw new Error("broker_restore_other_current_epoch_execution_active");
+        }
+
+        const archivedTaskReceipts = executionReceipts(source!)
+          .filter((receipt) => receipt.task_identity_digest === taskIdentityDigest);
+        if (archivedTaskReceipts.some((receipt) =>
+          receipt.execution_epoch === current.execution_epoch && activeStates.has(receipt.state))) {
+          throw new Error("broker_restore_archive_current_epoch_execution_active");
+        }
+        const currentByTicket = new Map(executionReceipts(this.db).map((receipt) => [receipt.ticket_id, receipt]));
+        const currentByCommand = new Map([...currentByTicket.values()].map((receipt) => [receipt.command_key, receipt]));
+        const selected = archivedTaskReceipts.map((archived) => {
+          const byTicket = currentByTicket.get(archived.ticket_id);
+          const byCommand = currentByCommand.get(archived.command_key);
+          if (byTicket || byCommand) {
+            if (!byTicket || byTicket.command_key !== archived.command_key || byCommand?.ticket_id !== archived.ticket_id ||
+                JSON.stringify(Object.entries(byTicket).sort()) !== JSON.stringify(Object.entries(archived).sort())) {
+              throw new Error("broker_restore_task_receipt_conflict");
+            }
+            return null;
+          }
+          const receipt: ExecutionIntentReceipt = { ...archived };
+          const archivedInFlight = receipt.state === "intent_committed" || receipt.state === "invocation_attempted";
+          if (archivedInFlight) {
+            receipt.state = "outcome_unknown";
+          }
+          validateReceipt(receipt);
+          return { receipt, archived_in_flight: archivedInFlight };
+        }).filter((entry): entry is { receipt: ExecutionIntentReceipt; archived_in_flight: boolean } => entry !== null)
+          .sort((left, right) => left.receipt.ticket_id.localeCompare(right.receipt.ticket_id));
+
+        const insertDelivery = this.db.prepare(
+          "INSERT INTO execution_result_outbox(ticket_id,delivery_json,delivery_digest) VALUES(?,?,?)",
+        );
+        for (const { receipt } of selected) this.save(receipt, true);
+        const selectedTicketIds = new Set(selected.map(({ receipt }) => receipt.ticket_id));
+        const appendArchivedEvent = this.db.prepare(
+          "INSERT INTO execution_events(ticket_id,event_json,previous_hash,event_hash) VALUES(?,?,?,?)",
+        );
+        const previousRow = this.db.prepare("SELECT event_hash FROM execution_events ORDER BY sequence DESC LIMIT 1")
+          .get() as { event_hash: string } | undefined;
+        let previousHash = previousRow?.event_hash ?? "0".repeat(64);
+        for (const row of source!.prepare("SELECT ticket_id,event_json FROM execution_events ORDER BY sequence")
+          .iterate() as Iterable<{ ticket_id: string; event_json: string }>) {
+          if (!selectedTicketIds.has(row.ticket_id)) continue;
+          appendArchivedEvent.run(row.ticket_id, row.event_json, previousHash, digest(previousHash + row.event_json));
+          previousHash = digest(previousHash + row.event_json);
+        }
+        const archivedDeliveries = new Map((source!.prepare(
+          "SELECT ticket_id,delivery_json,delivery_digest FROM execution_result_outbox ORDER BY rowid",
+        ).all() as { ticket_id: string; delivery_json: string; delivery_digest: string }[])
+          .filter((row) => selectedTicketIds.has(row.ticket_id))
+          .map((row) => [row.ticket_id, row]));
+        for (const { receipt, archived_in_flight } of selected) {
+          if (archived_in_flight) this.appendEvent(receipt, Date.now());
+          const delivery = archivedDeliveries.get(receipt.ticket_id);
+          if (delivery) insertDelivery.run(delivery.ticket_id, delivery.delivery_json, delivery.delivery_digest);
+          restoredCount++;
+        }
+        if (!this.verifyEvents()) throw new Error("broker_restore_result_integrity_failed");
+      });
+      return restoredCount;
+    } finally {
+      try { source?.exec("ROLLBACK"); } catch { /* preserve the restore result */ }
+      try { source?.close(); } catch { /* preserve the restore result */ }
+    }
+  }
   close(): void { this.db.close(); }
   private current(ticket: Readonly<ExecutionIntentTicket>, now_ms: number): ExecutionIntentReceipt {
     const receipt = this.lookup(ticket.ticket_id);
