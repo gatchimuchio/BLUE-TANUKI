@@ -45,6 +45,7 @@ import {
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
+import { reconcileStartupExecutionState } from "./reconcile_execution_results.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 
@@ -153,6 +154,32 @@ async function runCliWithExecutionStore(
   plugins.enforceSessionConfig(process.env);
   plugins.enforceAuditConfig(process.env);
 
+  ownerLease.assertActive();
+  const hds = new HDSUpperController({
+    audit: buildAuditLog(),
+    memory: buildHDSMemoryStore(process.env),
+    llm_route: buildLLMCommandRouteFromEnv(),
+    goal_governance: goalGovernanceConfigFromEnvironment(process.env),
+  });
+  ownerLease.assertActive();
+  const startupRecovery = reconcileStartupExecutionState(hds, executionStore, ownerLease.executionEpoch);
+  gatewayLog.info("CLI startup saved-result reconciliation", {
+    adopted: startupRecovery.adopted,
+    deferred: startupRecovery.deferred,
+    stale_generation_archived: startupRecovery.stale_generation_archived,
+    memory_ready: startupRecovery.memory_ready,
+    result_store_readable: startupRecovery.result_store_readable,
+  });
+  if (!startupRecovery.ready) {
+    gatewayLog.error("CLI startup blocked before processing the request: saved result or memory reconciliation is unavailable or pending", {
+      deferred: startupRecovery.deferred,
+      memory_ready: startupRecovery.memory_ready,
+      result_store_readable: startupRecovery.result_store_readable,
+    });
+    hds.closeOperationPlanMemory();
+    throw new Error("gateway_startup_reconciliation_unresolved");
+  }
+
   gatewayLog.info("BLUE-TANUKI starting (CLI one-shot)");
   gatewayLog.info("LLM config", describeLLMConfig());
   gatewayLog.info("LLM command route", describeLLMCommandRoute());
@@ -164,12 +191,6 @@ async function runCliWithExecutionStore(
   const llm = buildLLMBackendFromEnv();
   const session_store = buildSessionStore(plugins);
 
-  const hds = new HDSUpperController({
-    audit: buildAuditLog(),
-    memory: buildHDSMemoryStore(process.env),
-    llm_route: buildLLMCommandRouteFromEnv(),
-    goal_governance: goalGovernanceConfigFromEnvironment(process.env),
-  });
   const failureMemory = buildFailureMemoryStore(process.env);
   const approval = buildApprovalRuntime(process.env);
   const executorApproval = createExecutorApprovalAuthority({
