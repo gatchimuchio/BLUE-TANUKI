@@ -206,7 +206,7 @@
 
 2026-10-18のQEB-03-E03.01-GATEWAY-OWNER-LEASE-EXECUTION-EPOCHでは、常駐serveとCLIが共有state rootのSQLite exclusive leaseを保持し、永続generation／UUID execution epochをExecutionIntentとExecutorの作用境界へ接続した。別Node processの同時owner拒否、再取得時の世代更新、lease喪失後の合成tool非dispatchを限定testで確認。Windows ACL、network filesystem、実行中に既に渡された作用の停止、旧世代receiptの分離は未確認で、E03.01／QEB-03全体は`BUILD_GAP`。
 
-198小単位（旧192＋Android/iOS各3）は実装索引であり、個別のQC/QAを198回行うための工程ではない。各作業では [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の現行版・hash、適用AGENTS.md、active指示、HEAD・差分を確認し、三点セットは今回に関係する節を読む。三点全文の再読は新版指定、工程・対象の切替、依存・矛盾の解消時に行う。旧版・完了ログは必要時のみ参照し、実際の仕事を先へつなぐBUILD_BATCHで施工・限定技術確認・Git保全を行う。
+198小単位（旧192＋Android/iOS各3）は実装索引であり、個別のQC/QAを198回行うための工程ではない。独立した各作業の開始・切替・再開時に [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の現行版・hash、適用AGENTS.md、active指示、HEAD・差分を確認し、固定された現行三点セット全文を読み直す。同一作業内の小単位では関係節を再同期する。旧版・完了ログは必要時のみ参照し、実際の仕事を先へつなぐBUILD_BATCHで施工・限定技術確認・Git保全を行う。
 
 2026-10-18のQEB-03-E03.03-OPERATOR-RECOVERY-INSPECTIONでは、既存Recovery面にmaintenance-token保護のread-only `GET /recovery/inspection`を追加し、J/M/Broker/OperationPlan診断の固定状態・残差件数をallowlistで表示した。続くQEB-03-E03.03-OPERATOR-RESIDUAL-ISOLATIONでは、plan／step／commandとupdateの参照をSHA-256 digest、固定enum、最大200件のoperator projectionへ限定した。raw IDや内容を出さず、invalid boundaryでは明細を抑止する。両接続とも権限・実行・復旧actionを行わず、再生checkpointをbackupと誤認させず、外部backup restore pointは`not_examined`のまま示す。仕事別復旧操作、独立backupの確認・restore、E03.03／QEB-03全体は`BUILD_GAP`。
 

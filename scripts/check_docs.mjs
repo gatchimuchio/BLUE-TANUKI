@@ -139,11 +139,12 @@ if (!troubleshooting.includes("FIRST_RUN_CHECKLIST.md")) {
 // QE規定の現行文書間の構造的一致を確認する。
 // 文書整合だけを確認し、製品のQC/QAや実機成功は証明しない。
 const qeGovernanceRequired = {
-  "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
-  "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
-  "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["QE_BUILD", "BUILD_BATCH", "BUILD_GAP", "PENDING_OWNER_GO", "MIGRATION_COMPLETE"],
-  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "J4", "Android", "iOS", "MIGRATION_COMPLETE", "refs/tags/codex/backup-main"],
-  "docs/DEVELOPMENT_PRACTICE.md": ["QE_CURRENT_AUTHORITY.md", "作業標準要領.md", "履歴ログ"],
+  "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "三文書すべてと適用AGENTS.mdを読み直す", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
+  "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_BATCH", "三文書すべてと適用AGENTS.mdを読み直す", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
+  "docs/QE_CURRENT_AUTHORITY.md": ["現行ピン", "三文書すべてと適用AGENTS.md", "履歴ログ"],
+  "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["QE_BUILD", "BUILD_BATCH", "BUILD_GAP", "三点セットの全文を読み直す", "PENDING_OWNER_GO", "MIGRATION_COMPLETE"],
+  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "固定された現行三点セット全文を読み直す", "J4", "Android", "iOS", "MIGRATION_COMPLETE", "refs/tags/codex/backup-main"],
+  "docs/DEVELOPMENT_PRACTICE.md": ["QE_CURRENT_AUTHORITY.md", "作業標準要領.md", "履歴ログ", "最新の三点正本全文を読み直す"],
   "docs/STRATEGY_FRAME.md": ["OpenClaw", "Muse", "D4Pocket", "QC", "QA"],
   "docs/NON_GOALS.md": ["ClawHub", "BUILD_GAP", "PENDING_OWNER_GO", "Android", "iOS"],
   "docs/OPENCLAW_REJECTION_AUDIT.md": ["ClawHub", "BUILD_GAP", "QC"],
@@ -162,7 +163,7 @@ const qeGovernanceForbidden = {
   "docs/作業標準要領.md": ["一作業単位をmainへ一commit", "現行remote backupの正本はrefs/heads"],
   "docs/IMPLEMENTATION_INSTRUCTIONS.md": ["D01.02だけを実施する", "検証後に二世代backup branchを回す"],
   "docs/ROADMAP.md": ["一単位ずつ有限受入とGit完結を行う"],
-  "docs/DEVELOPMENT_PRACTICE.md": ["三点セット（仕様書・工程表・施工指示書）すべてと適用AGENTS.mdを読み直す", "現行二世代remote backupの正本はrefs/heads"],
+  "docs/DEVELOPMENT_PRACTICE.md": ["三点正本は今回に必要な節だけ読む", "三点全文の再読は新版指定", "現行二世代remote backupの正本はrefs/heads"],
   "docs/NON_GOALS.md": ["- No ClawHub compatibility"],
   "docs/STRATEGY_FRAME.md": [
     "does not modify GUI Shell, depend on GUI Shell at runtime",
