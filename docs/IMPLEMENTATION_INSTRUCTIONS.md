@@ -19,6 +19,8 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 plan-bound unknown outcomeの操作者通知consumerをこの範囲で`WIRED`とする。E03.02の未決作用全体と製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。次はOperation Planに結び付かないBroker未決receiptを既存Control Center／Recovery表示から確認し、重複しないoperator consumerの不足だけを選ぶ。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。
 
+実装commit=`00adb8dd9ed66b61542a98433e2ce507ed8b05b7`を`main`へatomic pushし、remote main一致を確認した。実装push後のlocal復旧branch／remote backup tag二世代はcurrent=`00adb8dd9ed66b61542a98433e2ce507ed8b05b7`、previous=`871e3a27a4e1d040519f2bd260380631c0b695ba`。保護対象Linux `target/`はuntrackedのまま保持しcommitへ含めていない。
+
 ### 履歴ログ：`QEB-05-E03.01-CLI-STARTUP-RECOVERY-BARRIER`
 
 開始HEAD／`main`／`origin/main`=`2dd943a01d896053b81732da65426d8932128f0c`。現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) に固定したrev2.3。E03.01の単一writer・execution epoch・起動整合と、Gateway CLI／serveの実owner lease・execution storeだけを照合した。Windows localでBLUE-TANUKIのみ変更し、保護対象untracked Linux `target/`は保持してGitへ含めない。
