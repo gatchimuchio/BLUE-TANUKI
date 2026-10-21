@@ -4,10 +4,10 @@
 
 ## 現行状態
 
-`QEB-12-E03.03-OPERATION-PLAN-SCOPED-RECOVERY` は完了し、詳細をIMPLEMENTATION_HISTORY.mdへ移した。選択Operation Plan復元からHDS対象plan再評価までのconsumerは`WIRED`。E03.03／QEB-03全体は`BUILD_GAP`。現行ピンrev2.3、backup ref移行状態=`MIGRATION_COMPLETE`。
+`QEB-13-E03.03-WAIT-RECOVERY-HOLD-ROUTING` は完了し、詳細をIMPLEMENTATION_HISTORY.mdへ移した。復元holdは常駐waitの期限起動、中断後再開、遅延C候補のJ保存を止め、owner projectionへ理由を渡す。選択Operation Plan復元からHDS対象plan再評価までのconsumerも`WIRED`。E03.03／QEB-03全体は`BUILD_GAP`。現行ピンrev2.3、backup ref移行状態=`MIGRATION_COMPLETE`。
 
 ## 次の接続
 
-次のBUILD_BATCHはE03.03の常駐launcherが、復元後の仕事単位状態・残差をどのproducerから受け取り、どの既存consumerへ戻すかを現行コードから特定する。新しいバッチ開始時にQE_CURRENT_AUTHORITYのE03.03関連節と実callsiteを確認して範囲を固定する。旧ログに残る過去の「次」は現行指示として使わない。
+次のBUILD_BATCHはE03.03のBroker execution intent/resultを対象にする。起動時・実行後の`reconcileExecutionResults`がJへ結果を戻す経路と、復元hold中の仕事が再開・再選択されない境界を、現行producer・callsiteから特定する。新しいバッチ開始時にQE_CURRENT_AUTHORITYのE03.03関連節、適用AGENTS.md、HEAD／差分を再同期して範囲を固定する。旧ログに残る過去の「次」は現行指示として使わない。
 
 HDS-J、Approval Gate、L3、Broker、監査、M非権限、fail-closed、`cross_store_atomic=false`を維持する。provider実試験、実credential、外部作用、D4Pocket／ミニドラ別repo変更、公開・出荷判断は対象外。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。

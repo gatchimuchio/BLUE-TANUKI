@@ -4,6 +4,22 @@
 
 ---
 
+### 履歴ログ：`QEB-13-E03.03-WAIT-RECOVERY-HOLD-ROUTING`
+
+開始HEAD／`main`／`origin/main`=`b2c0428cdfa4e85f1636d6e8d1856d2c6972e8fc`。現行三点pinはrev2.3、関係単位E03.03。常駐GatewayのOperation Plan restore evidence→J recovery hold→永続wait launcher／owner projectionを現物で追跡した。
+
+復元holdがある仕事のwait期限eventをJのwait contextで停止し、中断後のowner再開と復元前に開始して遅れて返ったC候補のJ保存も拒否する。wait projectionへhold理由を渡し、Control Centerでは該当waitの再開フォームを隠して停止理由と次の操作を示す。hold解除後にGateway refreshが来れば、期限済みwaitを再armできる。既存Approval、L3、Broker、M非権限、監査、fail-closedを維持し、外部作用・実credential・provider試験は行わない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| 復元hold対象の期限起動・遅延C候補・中断wait再開・owner projection／Control Center | 4 files、7 focused tests PASS。waitの停止・解除後再armと候補不保存を確認。 |
+| `pnpm typecheck` | PASS。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| `git diff --check` | PASS。 |
+| 全workspace suite、実provider／credential、owner実承認、外部作用、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+復元holdから常駐wait launcherへのこのconsumerを`WIRED`とする。E03.03／QEB-03全体は`BUILD_GAP`。次の接続先は保存済みBroker execution intent/resultから起動時・実行後の`reconcileExecutionResults`を経てJへ戻るconsumerで、復元holdとの相互作用を現行callsiteから調べる。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`06a50e5ebae51db5ae5216cc59d6fc85b873dcec`。
+
 ### 履歴ログ：`QEB-12-E03.03-OPERATION-PLAN-SCOPED-RECOVERY`
 
 開始HEAD／`main`／`origin/main`=`30e8171294a93d211afd83664b0d6fa930c825e1`。現行正本は`QE_CURRENT_AUTHORITY.md`固定のrev2.3。適用AGENTS、active指示、E03.03の関係節、Recovery／Operation Planのproducer・consumerを照合した。Linux isolation `target/`は保護対象untrackedとして変更・stageしていない。
