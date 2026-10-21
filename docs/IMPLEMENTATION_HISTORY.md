@@ -18,7 +18,7 @@ Recovery Inspectionはplan単位の意味的不整合を区別できる一方、
 | `pnpm typecheck`／`pnpm build`／`pnpm hds:standalone` | すべてPASS。buildは15 workspace projects。 |
 | top-level digest mismatch、checkpoint schema不一致、全suite、実provider／credential、実外部作用、5OS実機、QE_QC／QE_QA | 未実施。top-level integrity／schema failureは引き続き全体fail-closed。 |
 
-plan-local semantic residualからclean sibling J consumerへの経路を限定的に`WIRED`とする。checkpoint全体digest不一致とplan itemのschema-invalidはまだ隔離されず、Recovery／Jによるjob全体の独立復旧も未成立。E03.03／QEB-03全体は`BUILD_GAP`、C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commitはGit履歴で追跡する。
+plan-local semantic residualからclean sibling J consumerへの経路を限定的に`WIRED`とする。checkpoint全体digest不一致とplan itemのschema-invalidはまだ隔離されず、Recovery／Jによるjob全体の独立復旧も未成立。E03.03／QEB-03全体は`BUILD_GAP`、C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`1b22f8a601ac8bc7a5acbe83200ce9d682b2d359`。
 
 ### 履歴ログ：`QEB-14-E03.03-BROKER-RESULT-RECOVERY-HOLD`
 
