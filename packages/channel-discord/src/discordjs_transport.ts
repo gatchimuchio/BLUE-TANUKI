@@ -76,10 +76,8 @@ export class DiscordJsTransport implements DiscordTransport {
 
     client.on(djs.Events.MessageCreate, (...args: unknown[]) => {
       const msg = args[0] as DiscordRawMessage;
-      void this.handleMessage(msg, handler).catch((e) => {
-        this.log(
-          `[discord] inbound dispatch failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
+      void this.handleMessage(msg, handler).catch(() => {
+        this.log("[discord] inbound dispatch failed; replay remains blocked");
       });
     });
 

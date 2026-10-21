@@ -1,5 +1,7 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
+2026-10-22の`QEB-66-F12.01-DISCORD-INBOUND-IDENTITY-ADMISSION-CONSUMER`で、Discord Gateway eventのguild／channel／user／message identityをowner設定の完全一致grantとGateway durable replay boundaryへ接続した。display nameをactor identityに使わず、synthetic fixtureで確認した。実credential／接続／HDS運転は未実施のためDiscordは`first-party-preview`、F12.01全体は未成立。次はF12.02 Discord inbound／reply／persistent retry consumer。QE_BUILDを継続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+
 2026-10-22の`QEB-65-F11.03-SLACK-SETUP-STATUS-CONSUMER`で、Control Center ConnectionsにSlack plugin・credential有無・inbound grant状態と次行動のread-only投影を接続した。資格値・grant対象は表示せず、接続試験は行わない。Slack `first-party-preview`とし、OD-03条件を含むF11.03全体のlive受入／昇格判定は未成立。QE_BUILDを継続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-22の`QEB-64-F11.02-SLACK-REPLY-RECOVERY-CONSUMER`で、Slackのadmitted inboundからroot/thread返信を元messageへ束縛し、Gateway private SQLite outboxへ接続した。pending中のみ本文を保持し、明示的な未配送429は`Retry-After`まで永続待機して再起動後に同じ返信を再開する。結果不明のhandler failure／timeout／中断は自動再実行せず、payloadを消去する。不正／安全範囲外のRetry-Afterも早期再送しない。served synthetic fixtureと対象境界で確認し、Slack実credential/API、実Socket Mode、実HDS runtime、外部作用は未実施。F11.02は部分`WIRED`、Slackは`first-party-preview`、QE_BUILD継続。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。

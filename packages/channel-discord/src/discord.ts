@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   InboundRequest,
   ChannelSendPayload,
@@ -15,7 +15,13 @@ import {
   type SendMeta,
   type SendResult,
 } from "@blue-tanuki/channel-base";
-import type { DiscordTransport, DiscordPostResult } from "./transport.js";
+import type {
+  DiscordEventInbox,
+  DiscordInboundGrant,
+  DiscordInboundMessage,
+  DiscordTransport,
+  DiscordPostResult,
+} from "./transport.js";
 import { DiscordJsTransport } from "./discordjs_transport.js";
 
 export interface DiscordRetryConfig {
@@ -32,6 +38,10 @@ export interface DiscordOptions {
   bot_token?: string;
   /** Inject a fake transport for tests. */
   transport?: DiscordTransport;
+  /** Exact owner-configured inbound grants; missing or empty rejects all messages. */
+  inbound_grants?: readonly DiscordInboundGrant[];
+  /** Gateway-owned durable message replay boundary; required for the live transport. */
+  inbox?: DiscordEventInbox;
   /**
    * Outbound retry/backoff for rate-limit failures. discord.js itself
    * queues internally on 429; this is a *fallback* layer for the rare
@@ -91,11 +101,11 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
 
   async start(handler: InboundHandler): Promise<void> {
     if (this.started) return;
-    this.started = true;
 
     if (this.opts.transport) {
       this.transport = this.opts.transport;
     } else if (this.opts.bot_token) {
+      if (!this.opts.inbox) throw new Error("discord_durable_inbox_required_for_live_events");
       this.transport = new DiscordJsTransport({
         bot_token: this.opts.bot_token,
         log: this.opts.log,
@@ -108,12 +118,48 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    if (!this.opts.inbound_grants?.length) {
+      this.log("[discord] WARN DISCORD_INBOUND_GRANTS_JSON unset/empty — inbound messages are rejected");
+    }
+
+    this.started = true;
     try {
       await this.transport.start(async (m) => {
+        if (!isValidDiscordInboundMessage(m)) {
+          this.log("[discord] rejected inbound event with invalid identity");
+          return;
+        }
+        const guildId = m.guild_id ?? null;
+        const grant = this.opts.inbound_grants?.some((candidate) =>
+          candidate.guild_id === guildId &&
+          candidate.channel_id === m.channel_id &&
+          candidate.user_id === m.user_id
+        );
+        if (!grant) return;
+
+        const inbox = this.opts.inbox;
+        if (!inbox) {
+          this.log("[discord] rejected inbound event because durable admission is unavailable");
+          return;
+        }
+        const payloadDigest = discordInboundPayloadDigest(m);
+        let claim;
+        try {
+          claim = inbox.claim(m.message_id, payloadDigest);
+        } catch {
+          this.log("[discord] rejected inbound event because durable admission failed");
+          return;
+        }
+        if (claim.status !== "accepted") {
+          this.log(`[discord] suppressed inbound event status=${claim.status}`);
+          return;
+        }
+
         const inbound: InboundRequest = {
           id: randomUUID(),
           channel: "discord",
-          user: m.user_display,
+          // Display names are mutable labels, never the HDS actor identity.
+          user: discordActorIdentity(m),
           content: m.text,
           timestamp: Date.now(),
           metadata: {
@@ -121,17 +167,21 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
             discord_user_id: m.user_id,
             discord_channel_id: m.channel_id,
             discord_message_id: m.message_id,
-            discord_guild_id: m.guild_id,
+            discord_guild_id: guildId,
             is_dm: m.is_dm,
             is_mention: m.is_mention,
           },
         };
+        let deliveryState: "handler_returned" | "outcome_unknown" = "outcome_unknown";
         try {
           await handler(inbound);
-        } catch (e) {
-          this.log(
-            `[discord] inbound handler threw: ${e instanceof Error ? e.message : String(e)}`,
-          );
+          deliveryState = "handler_returned";
+        } finally {
+          try {
+            inbox.settle(m.message_id, payloadDigest, deliveryState);
+          } catch {
+            this.log("[discord] inbound settlement failed; replay remains blocked");
+          }
         }
       });
       this.log("[discord] active");
@@ -290,6 +340,56 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
   private log(line: string): void {
     (this.opts.log ?? console.log)(line);
   }
+}
+
+const UINT64_MAX = 18_446_744_073_709_551_615n;
+
+function isDiscordSnowflake(value: unknown): value is string {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d{0,19})$/u.test(value)) return false;
+  try {
+    return BigInt(value) <= UINT64_MAX;
+  } catch {
+    return false;
+  }
+}
+
+function isValidDiscordInboundMessage(message: unknown): message is DiscordInboundMessage {
+  if (!message || typeof message !== "object" || Array.isArray(message)) return false;
+  const m = message as Record<string, unknown>;
+  const guildId = m.guild_id;
+  return isDiscordSnowflake(m.message_id) &&
+    isDiscordSnowflake(m.channel_id) &&
+    isDiscordSnowflake(m.user_id) &&
+    (guildId === undefined || guildId === null || isDiscordSnowflake(guildId)) &&
+    typeof m.text === "string" &&
+    typeof m.user_display === "string" &&
+    typeof m.is_dm === "boolean" &&
+    typeof m.is_mention === "boolean" &&
+    m.is_dm === (guildId === undefined || guildId === null) &&
+    (m.is_dm || m.is_mention);
+}
+
+function discordInboundPayloadDigest(message: DiscordInboundMessage): string {
+  return createHash("sha256").update(JSON.stringify([
+    "discord-inbound-event.v1",
+    message.message_id,
+    message.guild_id ?? null,
+    message.channel_id,
+    message.user_id,
+    message.text,
+    message.is_dm,
+    message.is_mention,
+  ])).digest("hex");
+}
+
+function discordActorIdentity(message: DiscordInboundMessage): string {
+  const digest = createHash("sha256").update(JSON.stringify([
+    "discord-actor.v1",
+    message.guild_id ?? null,
+    message.channel_id,
+    message.user_id,
+  ])).digest("hex");
+  return `discord:${digest}`;
 }
 
 function truncate(s: string, n: number): string {

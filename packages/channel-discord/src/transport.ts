@@ -19,13 +19,32 @@ export interface DiscordInboundMessage {
   message_id: string;
   /** True iff received via DM channel. */
   is_dm: boolean;
-  /** True iff the bot was mentioned (or message arrived via DM). */
+  /** True iff the bot was mentioned in a guild message. */
   is_mention: boolean;
   /** Optional guild snowflake; absent for DMs. */
-  guild_id?: string;
+  guild_id?: string | null;
 }
 
 export type DiscordInboundHandler = (m: DiscordInboundMessage) => Promise<void>;
+
+/** Exact owner-maintained admission scope; a null guild id means a DM. */
+export interface DiscordInboundGrant {
+  readonly guild_id: string | null;
+  readonly channel_id: string;
+  readonly user_id: string;
+}
+
+export type DiscordEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown";
+export type DiscordEventClaim =
+  | { readonly status: "accepted" }
+  | { readonly status: "duplicate"; readonly delivery_state: DiscordEventDeliveryState }
+  | { readonly status: "identity_conflict" };
+
+/** Gateway-owned durable replay boundary, scoped to one bot installation. */
+export interface DiscordEventInbox {
+  claim(message_id: string, payload_digest: string): DiscordEventClaim;
+  settle(message_id: string, payload_digest: string, state: "handler_returned" | "outcome_unknown"): void;
+}
 
 export interface DiscordPostResult {
   ok: boolean;

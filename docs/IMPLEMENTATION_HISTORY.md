@@ -4,6 +4,24 @@
 
 ---
 
+### 履歴ログ：`QEB-66-F12.01-DISCORD-INBOUND-IDENTITY-ADMISSION-CONSUMER`
+
+開始HEAD／`main`／`origin/main`=`bd3d662b0104eed7c009e2ec1be23afff98129aa`。現行pin rev2.3の三点セットと適用`AGENTS.md`、active instruction、F12.01のDiscord admission要求を再同期した。旧版・完了ログは通常参照せず、今回のadapter／Gateway境界とDiscord authenticated Gateway event契約だけを照合した。保護対象untracked Linux isolation `target/`を維持した。
+
+discord.js authenticated Gateway sessionから得たguild／channel／user／message identityをdecimal uint64 snowflakeとして検証し、owner設定`DISCORD_INBOUND_GRANTS_JSON`のguild／channel／user完全一致がない入力はdeny-allとする。HDS actorはguild／channel／user組のdigestで安定化し、mutable display nameはidentityに使わない。Gateway private SQLite Inboxはbot token scope、message ID、payloadをdigest化してdelivery stateだけを保持し、重複・同一message IDのpayload競合を拒否する。再起動時に`dispatching`だったeventは`outcome_unknown`として再実行しない。通常のGateway serve経路でgrant parserとInboxをpreview Discord adapterへ渡す。live smokeは送信専用の将来経路としてInboxを渡し、受信grantを空に固定する。実Discord接続・外部送信は行っていない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm --filter @blue-tanuki/channel-discord exec vitest run test/discord.test.ts` | PASS、13 tests。exact grant、stable actor、invalid snowflake、duplicate/conflict、handler failure outcome unknown。 |
+| `pnpm --filter @blue-tanuki/gateway exec vitest run test/discord_inbound_grants.test.ts test/discord_event_store.test.ts` | PASS、4 tests。deny-all、厳密なgrant parse、bot-scope分離、digest-only persistence、crash recovery。 |
+| Discord／Gateway typecheck・build、`git diff --check` | PASS。 |
+| `pnpm docs:check` | docs形状検査PASS。既存・未変更の`docs/CHANNEL_READINESS_MATRIX.md`移行hash不整合が日本語基底gateを止めた。licensing gate未到達。 |
+| 実Discord credential／Gateway／HDS、provider、外部送信、workspace全suite、OS別実機 | 未実施。 |
+
+F12.01のadapter admission→Gateway durable replay boundaryをsynthetic fixture範囲で部分的に`WIRED`とする。credentialed-liveおよび実HDSの受入は未成立のためDiscordは`first-party-preview`。inbox保持期間・容量・回転は全体実装後のQE_QC候補とする。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開・出荷保留を維持する。次のBUILD_BATCHはF12.02のDiscord inbound／reply／persistent retry consumer。
+
+---
+
 ### 履歴ログ：`QEB-65-F11.03-SLACK-SETUP-STATUS-CONSUMER`
 
 開始`main`／`origin/main`=`7e8bc20119d0fa2be6f801fdb39acd2751d23cb8`。owner指定rev2.3の現行pin、適用`AGENTS.md`、active instruction、F11.03の設定／運用案内consumerだけを再同期した。旧版・完了ログは参照せず、現行工程表の直後F12.01依存条件だけを確認した。保護対象untracked Linux isolation `target/`を維持した。

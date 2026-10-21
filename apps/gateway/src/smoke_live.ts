@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { InboundChannel, OutboundChannel } from "@blue-tanuki/channel-base";
 import { buildLLMBackendFromEnv, describeLLMConfig } from "./llm_config.js";
+import { GatewayDiscordEventStore } from "./discord_event_store.js";
 import { loadPluginRuntime, type PluginRuntime } from "./plugin_loader.js";
 
 const LIVE_REQUIRED = process.env.BLUE_TANUKI_LIVE_REQUIRED === "1";
@@ -172,16 +173,21 @@ async function smokeDiscord(plugins: PluginRuntime): Promise<string | null> {
   const botToken = process.env.DISCORD_BOT_TOKEN;
   if (!botToken || !target) return null;
 
-  const discord = plugins.createChannel<InboundChannel & OutboundChannel>({
-    package_name: DISCORD_PACKAGE,
-    required_permissions: DISCORD_LIVE_PERMISSIONS,
-    action: "live smoke discord",
-    constructor_args: [{
-      bot_token: botToken,
-      log: (line: string) => console.log(`[live:discord:transport] ${line}`),
-    }],
-  });
+  const inbox = GatewayDiscordEventStore.fromEnvironment(process.env, botToken);
+  let discord: (InboundChannel & OutboundChannel) | null = null;
   try {
+    discord = plugins.createChannel<InboundChannel & OutboundChannel>({
+      package_name: DISCORD_PACKAGE,
+      required_permissions: DISCORD_LIVE_PERMISSIONS,
+      action: "live smoke discord",
+      constructor_args: [{
+        bot_token: botToken,
+        // This smoke only sends a message; never admit inbound events here.
+        inbound_grants: [],
+        inbox,
+        log: (line: string) => console.log(`[live:discord:transport] ${line}`),
+      }],
+    });
     await withTimeout("discord start", discord.start(async () => undefined), TIMEOUT_MS);
     const result = await withTimeout(
       "discord send",
@@ -203,7 +209,11 @@ async function smokeDiscord(plugins: PluginRuntime): Promise<string | null> {
     }
     return `target=${target} external_id=${result.external_id ?? "unknown"}`;
   } finally {
-    await discord.stop();
+    try {
+      await discord?.stop();
+    } finally {
+      inbox.close();
+    }
   }
 }
 

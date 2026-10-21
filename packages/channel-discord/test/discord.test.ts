@@ -3,6 +3,7 @@ import type { InboundRequest } from "@blue-tanuki/protocol";
 import {
   DiscordChannel,
   type DiscordTransport,
+  type DiscordEventInbox,
   type DiscordInboundHandler,
   type DiscordInboundMessage,
   type DiscordPostResult,
@@ -48,6 +49,29 @@ class FakeDiscordTransport implements DiscordTransport {
   }
 }
 
+class MemoryDiscordEventInbox implements DiscordEventInbox {
+  readonly events = new Map<string, { payload_digest: string; delivery_state: "dispatching" | "handler_returned" | "outcome_unknown" }>();
+
+  claim(messageId: string, payloadDigest: string) {
+    const current = this.events.get(messageId);
+    if (current) {
+      return current.payload_digest === payloadDigest
+        ? { status: "duplicate" as const, delivery_state: current.delivery_state }
+        : { status: "identity_conflict" as const };
+    }
+    this.events.set(messageId, { payload_digest: payloadDigest, delivery_state: "dispatching" });
+    return { status: "accepted" as const };
+  }
+
+  settle(messageId: string, payloadDigest: string, state: "handler_returned" | "outcome_unknown"): void {
+    const current = this.events.get(messageId);
+    if (!current || current.payload_digest !== payloadDigest || current.delivery_state !== "dispatching") {
+      throw new Error("memory_discord_inbox_settlement_conflict");
+    }
+    current.delivery_state = state;
+  }
+}
+
 describe("DiscordChannel — silent mode", () => {
   it("starts silently when no token / no transport", async () => {
     const lines: string[] = [];
@@ -77,7 +101,13 @@ describe("DiscordChannel — silent mode", () => {
 describe("DiscordChannel — active mode (fake transport)", () => {
   it("delivers DM inbound through handler with metadata.reply_to", async () => {
     const t = new FakeDiscordTransport();
-    const ch = new DiscordChannel({ transport: t, log: () => {} });
+    const inbox = new MemoryDiscordEventInbox();
+    const ch = new DiscordChannel({
+      transport: t,
+      inbound_grants: [{ guild_id: null, channel_id: "777", user_id: "888" }],
+      inbox,
+      log: () => {},
+    });
     const received: InboundRequest[] = [];
     await ch.start(async (req) => {
       received.push(req);
@@ -88,7 +118,7 @@ describe("DiscordChannel — active mode (fake transport)", () => {
       user_id: "888",
       user_display: "bob",
       text: "hi",
-      message_id: "m1",
+      message_id: "999",
       is_dm: true,
       is_mention: false,
     });
@@ -96,9 +126,84 @@ describe("DiscordChannel — active mode (fake transport)", () => {
     expect(received).toHaveLength(1);
     const r = received[0]!;
     expect(r.channel).toBe("discord");
-    expect(r.user).toBe("bob");
+    expect(r.user).toMatch(/^discord:[a-f0-9]{64}$/u);
+    expect(r.user).not.toBe("bob");
     expect(r.metadata?.reply_to).toBe("777");
     expect(r.metadata?.is_dm).toBe(true);
+    expect(r.metadata?.discord_user_id).toBe("888");
+    expect(r.metadata?.discord_message_id).toBe("999");
+    expect(inbox.events.get("999")?.delivery_state).toBe("handler_returned");
+    await ch.stop();
+  });
+
+  it("admits only exact guild/channel/user grants and suppresses duplicate or conflicting message IDs", async () => {
+    const t = new FakeDiscordTransport();
+    const inbox = new MemoryDiscordEventInbox();
+    const ch = new DiscordChannel({
+      transport: t,
+      inbound_grants: [{ guild_id: "444", channel_id: "777", user_id: "888" }],
+      inbox,
+      log: () => {},
+    });
+    const received: InboundRequest[] = [];
+    await ch.start(async (req) => { received.push(req); });
+
+    const message: DiscordInboundMessage = {
+      guild_id: "444",
+      channel_id: "777",
+      user_id: "888",
+      user_display: "mutable-name",
+      text: "hello",
+      message_id: "999",
+      is_dm: false,
+      is_mention: true,
+    };
+    await t.emitInbound(message);
+    await t.emitInbound(message);
+    await t.emitInbound({ ...message, text: "changed payload for same id" });
+    await t.emitInbound({ ...message, channel_id: "778", message_id: "1000" });
+    await t.emitInbound({ ...message, message_id: "invalid-id" });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.metadata?.discord_guild_id).toBe("444");
+    expect(inbox.events.get("999")?.delivery_state).toBe("handler_returned");
+    expect(inbox.events.has("1000")).toBe(false);
+    await ch.stop();
+  });
+
+  it("keeps a message outcome unknown when the Gateway handler throws", async () => {
+    const t = new FakeDiscordTransport();
+    const inbox = new MemoryDiscordEventInbox();
+    const ch = new DiscordChannel({
+      transport: t,
+      inbound_grants: [{ guild_id: null, channel_id: "777", user_id: "888" }],
+      inbox,
+      log: () => {},
+    });
+    await ch.start(async () => { throw new Error("synthetic handler failure"); });
+    await expect(t.emitInbound({
+      channel_id: "777",
+      user_id: "888",
+      user_display: "bob",
+      text: "hi",
+      message_id: "1001",
+      is_dm: true,
+      is_mention: false,
+    })).rejects.toThrow("synthetic handler failure");
+    expect(inbox.events.get("1001")?.delivery_state).toBe("outcome_unknown");
+    await ch.stop();
+  });
+
+  it("rejects inbound delivery when owner grants or durable admission are absent", async () => {
+    const t = new FakeDiscordTransport();
+    let received = 0;
+    const ch = new DiscordChannel({ transport: t, log: () => {} });
+    await ch.start(async () => { received++; });
+    await t.emitInbound({
+      channel_id: "777", user_id: "888", user_display: "bob", text: "hi", message_id: "1002",
+      is_dm: true, is_mention: false,
+    });
+    expect(received).toBe(0);
     await ch.stop();
   });
 

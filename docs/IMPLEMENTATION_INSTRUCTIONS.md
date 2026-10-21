@@ -20,9 +20,11 @@ F11.02は部分的に`WIRED`。Slack inbound handlerがGateway consumerで失敗
 
 F11.03の設定consumerを部分的に`WIRED`。Control Center ConnectionsはSlack plugin有無、Bot／App tokenの有無、inbound grantのdeny-all／invalid／configuredを値や対象IDを漏らさず表示し、状態別の次行動を案内する。これはprocess設定の投影だけで、接続・受信・返信・障害回復・切断のlive受入を行わず、preview状態・権限・承認を変えない。専用Slack試験workspaceの資格・recipient・scope・budget等のOD-03条件がないため、実credential/API受入と昇格判定は未実施で、Slackは`first-party-preview`、F11.03全体は`BUILD_GAP`を維持する。
 
+F12.01 Discord inbound identity/admissionは、authenticated Gateway eventのguild/channel/user/message identity、owner設定の完全一致grant、Gateway durable Inboxを通す局所consumerまで部分的に`WIRED`。stable actorにmutable display nameを使わず、Inboxにはidentity／payload digestとdelivery stateのみを保持する。Discord実credential／Gateway接続／HDS運転は未実施のため、Discordは`first-party-preview`、F12.01全体の実環境受入は未成立。受入結果の詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)に記録する。
+
 ## 次のBUILD_BATCH
 
-QEB-62ではWebChat切断中の同一job検索と再接続後の保存結果consumer、QEB-63ではSlack authenticated Socket Mode identity→完全一致grant→digest-only durable Inbox→Gateway inbound consumer、QEB-64ではSlack thread reply／durable outbox retry、QEB-65ではSlack設定状態・次行動のread-only Connections consumerをfixture／process設定範囲で接続した。実Telegram／Slack credential・API、実provider、外部作用は使用していない。F10.03／F10.02およびSlack F11.03全体は必要な実環境証拠がなく`BUILD_GAP`、Slack `first-party-preview`を維持する。次は現行工程表で独立依存が成立しているF12.01 Discord入口consumerの実装へ進み、F11.03 live受入はOD-03条件が明示された場合だけ別途実施する。F16.03はD4-Pocket側native producer変更を要するため`BLOCKED_AUTHORITY`とし、別repoへ書き込まない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。QE_BUILDを維持し、製品全体の結合形状成立前に詳細QC／QAを開始しない。次の独立作業・切替・再開時は`QE_CURRENT_AUTHORITY.md`の現行pinと現行三点セットを再同期する。旧版・完了記録は必要な依存・変更系譜・矛盾の解消時だけ参照する。
+F12.01のDiscord inbound admission consumerはsynthetic fixtureで部分的に`WIRED`だが、実credential／Gateway接続／HDS運転を含む全体受入は未成立で、Discordは`first-party-preview`を維持する。次のBUILD_BATCHは現行工程表の`F12.02 Discord inbound／reply／persistent retry consumer`とし、admitted messageからGateway仕事処理・返信・永続待機までを接続する。F11.03 Slack live受入はOD-03条件が明示された場合だけ別途実施し、F16.03はD4-Pocket側native producer変更を要するため`BLOCKED_AUTHORITY`のまま別repoへ書き込まない。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。QE_BUILDを維持し、製品全体の結合形状成立前に詳細QC／QAを開始しない。次の独立作業・切替・再開時は`QE_CURRENT_AUTHORITY.md`の現行pinと現行三点セットを再同期する。旧版・完了記録は必要な依存・変更系譜・矛盾の解消時だけ参照する。
 
 ## 共通の保護とGit
 

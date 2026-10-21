@@ -53,6 +53,8 @@ import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from 
 import { parseTelegramInboundGrants } from "./telegram_inbound_grants.js";
 import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
 import { GatewaySlackEventStore } from "./slack_event_store.js";
+import { parseDiscordInboundGrants } from "./discord_inbound_grants.js";
+import { GatewayDiscordEventStore } from "./discord_event_store.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -4385,6 +4387,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const slackEventStore = slackLiveConfigured && slackBotToken
     ? GatewaySlackEventStore.fromEnvironment(process.env, slackBotToken)
     : null;
+  const discordBotToken = process.env.DISCORD_BOT_TOKEN;
+  const discordInboundGrants = discordBotToken
+    ? parseDiscordInboundGrants(process.env.DISCORD_INBOUND_GRANTS_JSON)
+    : [];
+  const discordEventStore = discordBotToken
+    ? GatewayDiscordEventStore.fromEnvironment(process.env, discordBotToken)
+    : null;
   const telegram = plugins.createChannel<InboundChannel & OutboundChannel>({
     package_name: "@blue-tanuki/channel-telegram",
     required_permissions: telegramPermissions,
@@ -4416,7 +4425,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       "network:discord.com",
       "secrets:DISCORD_BOT_TOKEN",
     ], "register discord channel", {
-      bot_token: process.env.DISCORD_BOT_TOKEN,
+      bot_token: discordBotToken,
+      inbound_grants: discordInboundGrants,
+      ...(discordEventStore ? { inbox: discordEventStore } : {}),
       log: (line: string) => discordLog.info(line),
     }),
     optionalPreviewChannel("@blue-tanuki/channel-teams", [
@@ -4845,6 +4856,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);
       slackEventStore?.close();
+      discordEventStore?.close();
       cronEventStore.close();
       computeBudget.close();
       documentOrganizationCheckpointStore?.close();
