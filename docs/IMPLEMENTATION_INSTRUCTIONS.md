@@ -4,7 +4,26 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
 
-### 最新BUILD_BATCH：`QEB-07-E03.02-UNBOUND-BROKER-RECEIPT-RECOVERY-CONSUMER`
+### 最新BUILD_BATCH：`QEB-08-E03.02-RESULT-M-RETURN-BARRIER`
+
+開始HEAD／`main`／`origin/main`=`db1d18c8be0aeb95d50cf1deaaef20eeaf9e568c`。owner指定rev2.3の現行ピンとE03.02の未決作用・M pending回復に関する節、適用AGENTS／作業標準のQE_BUILD・Git条項を照合した。Windows localでBLUE-TANUKIのみ変更し、保護対象untracked Linux `target/`は保持してGitへ含めない。
+
+Operation Planに結び付いた結果の通常返却経路で、J checkpointとbinding、memory commit／receipt、M reconcile receipt、保存済みrecordの値を同一commitとして確認できるまで結果本文を返さないconsumerをGatewayへ接続した。未確認時は固定文をHDS output auditへ通して返し、digestだけを記録する。成功・失敗を推定せず、結果本文を表示せず、実行を再試行しない。M保存失敗はfail-closedのままRecovery／Operation Planでの確認へ案内する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| 対象Gateway／HDS focused tests | 選択4件PASS、43件skip。M receipt未確定時のreturn readiness拒否、確認済みreceiptの受理、固定pending文のoutput auditを確認。 |
+| 実Gatewayの未確定結果dispatch smoke | 未実施。return readinessと固定status finalizerを別々に確認し、Gateway実配信までは確認していない。 |
+| `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `git diff --check` | PASS。 |
+| 変更2 test fileの広いrun | 47件中41 PASS／6 FAIL。5件は5秒timeout、1件はこのgate到達前の既存worker-outcome assertion不一致。根因は未確定で、このbatchでは修正していない。全体合格とは扱わない。 |
+| 実Gateway再起動、全workspace suite、実provider／credential／外部作用、5OS実機、QE_QC／QE_QA | 未実施。完成した全体形状後の工程に置く。 |
+
+plan-bound実行結果をM receipt／record確認前に外部へ返さないconsumerをこの範囲で`WIRED`とする。E03.02のdurable job lifecycleと、Recovery後に保存済み結果を再実行せず取得・返却するconsumerは未接続。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`も未成立。次は回復完了後の保存済み結果取得・返却を既存Recovery／Operation Plan経路へ接続する。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。
+
+実装commit=`0f4a35faef8fb7914e79680b011cf575e3bc6acb`。
+
+### 履歴ログ：`QEB-07-E03.02-UNBOUND-BROKER-RECEIPT-RECOVERY-CONSUMER`
 
 開始HEAD／`main`／`origin/main`=`af30324dabec08bf7c3920292b1ca2b1702c985b`。owner指定rev2.3三点は[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)に固定し、今回必要なE03.02節だけを参照した。既存Recovery inspectorはBroker ledger全体のchainをread-only検証し、Operation Planに結合したreceiptはadmission digestで相関するが、Planに未束縛のBroker未決receiptを操作者へ分けて見せるconsumerがなかった。
 
