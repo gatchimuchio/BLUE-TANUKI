@@ -2487,3 +2487,19 @@ request-boundかつ保存済みlineageと候補content digestが一致するFail
 | 全workspace suite、live provider／credential、外部作用、QE_QC／QE_QA、5OS実機 | 未実施。全体実装形状成立後の工程に配置。 |
 
 E05.03のFailureReview producer→独立DevelopmentHandoffStore→Developer read-only inboxを`WIRED`とする。人間の開発主体が候補を採否し、code／P変更へ変換するレビューworkflowはこのhandoff機能に含めず、runtime candidateは権限・承認・版昇格ではない。E05.03親要求全体、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立／未開始。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はrev2.3 E06.01「関係を辿る全体帰還」。
+
+---
+
+### 履歴ログ：`QEB-32-E06.01-RELATION-TRACED-RETURN`
+
+開始HEAD／`main`／`origin/main`=`65304ae51530098aea86f30eb9bdc80409218abd`。現行rev2.3三点セット、適用`AGENTS.md`、作業標準、active指示、E06.01とfeedback／候補criteriaの現行callsiteを再同期した。保護対象untracked Linux `target/`は保持し、変更対象に含めていない。
+
+Downstreamのskeptical-review報告をsource feedbackへ結合し、報告criterion digestを現在request-bound goal criteriaへ照合した。影響する候補には報告digest→criterion digest→候補の関係経路と前回／再評価後のdispositionを記録し、非影響候補には関係がない理由を残す。報告本文・目的文は監査記録へ保存せず、report relationは`assumed`のまま。既存基準の一致範囲に不明点があれば候補を一律に保留し、その理由を記録する。帰還はHDS executor-feedback監査イベント内のnon-authority evidenceであり、Jの目的正本、M、Approval、実行状態を変更しない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| HDS controller focused suite | PASS、1 suite／76 tests。共有criterion経由で候補の関係先へ帰還し、既存の非採用候補を含めdispositionと無影響理由を保持することを確認。 |
+| workspace `pnpm typecheck`／`pnpm build` | PASS。buildは15 workspace projects。 |
+| 全workspace suite、provider／credential、外部作用、QE_QC／QE_QA、5OS実機 | 未実施。全体実装形状成立後の工程に保持。 |
+
+E06.01の限定feedback→goal-criterion→candidate impact returnを監査記録まで`WIRED`とする。候補の採否・目的の意味変更・記憶更新は別consumerとして未接続であり、E06親要求全体と製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次はrev2.3 E06.02「意味復元と外部作用の分離」。

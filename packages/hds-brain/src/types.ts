@@ -425,6 +425,8 @@ export interface SkepticalReviewAuditTrace {
   affected_criterion_ref_digests: string[];
   conflicting_report_criterion_ref_digests: string[];
   unmatched_criterion_ref_digests: string[];
+  /** Digest-only return from each reported criterion to its request-scoped purpose projection. */
+  goal_scope_returns: SkepticalReviewGoalScopeReturn[];
   alternative_hypothesis_count: number;
   alternative_hypothesis_digests: string[];
   frame_correction: {
@@ -440,9 +442,30 @@ export interface SkepticalReviewAuditTrace {
   used_for_authority: false;
 }
 
+export interface SkepticalReviewGoalScopeReturn {
+  criterion_ref_digest: string;
+  scope_basis: "current_request_goal_criteria" | "proposed_unverified_goal_criteria" | "unmatched" | "source_scope_unavailable";
+  criterion_kind?: "objective" | "safety";
+  observation_report_digests: string[];
+  reported_relations: Array<"supports" | "conflicts" | "unclear">;
+}
+
 export interface SkepticalReviewCandidateTrace {
   candidate_digest: string;
   scope_status: "affected" | "preserved";
+  scope_reason_code:
+    | "reported_current_goal_criterion_relation"
+    | "reported_proposed_goal_criterion_relation"
+    | "no_candidate_goal_criterion_relation"
+    | "no_candidate_relation_to_reported_scope"
+    | "source_scope_unavailable"
+    | "review_scope_unmatched"
+    | "proposed_criteria_invalid";
+  scope_relation_paths: Array<{
+    criterion_ref_digest: string;
+    observation_report_digests: string[];
+    relation_source: "current_request_goal_criteria" | "proposed_unverified_goal_criteria";
+  }>;
   prior_adoption_disposition: CandidateAdoptionDisposition;
   review_disposition: CandidateAdoptionDisposition;
   retained_checks: {

@@ -1464,7 +1464,10 @@ describe("HDSUpperController.onFeedback()", () => {
           {
             criterion_ref: affectedRef,
             criterion_kind: "safety",
-            tool_relations: [{ tool_name: "file.search", relation: "supports" }],
+            tool_relations: [
+              { tool_name: "file.search", relation: "supports" },
+              { tool_name: "unregistered.skeptical-probe", relation: "conflicts" },
+            ],
           },
         ],
       },
@@ -1489,6 +1492,13 @@ describe("HDSUpperController.onFeedback()", () => {
           arguments: { root: ".", query: "synthetic", max_results: 1 },
           authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
         },
+        {
+          schema_version: "blue-tanuki.llm-tool-call-candidate.v1",
+          call_id: "call-c06-skeptical-unregistered",
+          tool_name: "unregistered.skeptical-probe",
+          arguments: { value: "synthetic" },
+          authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+        },
       ],
       skeptical_review: {
         schema_version: "blue-tanuki.skeptical-review.v1",
@@ -1510,6 +1520,13 @@ describe("HDSUpperController.onFeedback()", () => {
       observation_claim_status: "assumed",
       affected_criterion_ref_digests: [expect.stringMatching(/^[a-f0-9]{64}$/)],
       conflicting_report_criterion_ref_digests: [expect.stringMatching(/^[a-f0-9]{64}$/)],
+      goal_scope_returns: [{
+        criterion_ref_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        scope_basis: "current_request_goal_criteria",
+        criterion_kind: "safety",
+        observation_report_digests: expect.arrayContaining([expect.stringMatching(/^[a-f0-9]{64}$/)]),
+        reported_relations: ["conflicts", "supports"],
+      }],
       alternative_hypothesis_count: 1,
       follow_up_required: "independent_observation",
       frame_correction: {
@@ -1521,9 +1538,11 @@ describe("HDSUpperController.onFeedback()", () => {
       may_execute: false,
       used_for_authority: false,
     });
-    expect(entry.feedback.skeptical_review?.candidate_reviews).toHaveLength(2);
+    expect(entry.feedback.skeptical_review?.candidate_reviews).toHaveLength(3);
     expect(entry.feedback.skeptical_review?.candidate_reviews[0]).toMatchObject({
       scope_status: "preserved",
+      scope_reason_code: "no_candidate_relation_to_reported_scope",
+      scope_relation_paths: [],
       prior_adoption_disposition: "held",
       review_disposition: "held",
       retained_checks: {
@@ -1533,12 +1552,25 @@ describe("HDSUpperController.onFeedback()", () => {
     });
     expect(entry.feedback.skeptical_review?.candidate_reviews[1]).toMatchObject({
       scope_status: "affected",
+      scope_reason_code: "reported_current_goal_criterion_relation",
+      scope_relation_paths: [{
+        criterion_ref_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        observation_report_digests: expect.arrayContaining([expect.stringMatching(/^[a-f0-9]{64}$/)]),
+        relation_source: "current_request_goal_criteria",
+      }],
       prior_adoption_disposition: "held",
       review_disposition: "held",
       retained_checks: {
         mechanical_contract: { outcome: "pass", evidence_status: "observed" },
         domain_validation: { outcome: "pass", evidence_status: "observed" },
       },
+    });
+    expect(entry.feedback.skeptical_review?.candidate_reviews[2]).toMatchObject({
+      scope_status: "affected",
+      scope_reason_code: "reported_current_goal_criterion_relation",
+      prior_adoption_disposition: "rejected",
+      review_disposition: "held",
+      scope_relation_paths: [expect.objectContaining({ relation_source: "current_request_goal_criteria" })],
     });
     const auditJson = JSON.stringify(c.getAudit().list());
     expect(auditJson).not.toContain(rawFindingA);
@@ -1584,7 +1616,7 @@ describe("HDSUpperController.onFeedback()", () => {
         proposed_goal_criteria: {
           schema_version: "blue-tanuki.goal-criteria.v1",
           criteria: [{
-            criterion_ref: criterionRef,
+            criterion_ref: "criterion-c06-proposed-unreported",
             criterion_kind: "objective",
             tool_relations: [{ tool_name: "file.search", relation: "supports" }],
           }],
@@ -1610,18 +1642,16 @@ describe("HDSUpperController.onFeedback()", () => {
     });
     expect(entry.feedback.skeptical_review?.candidate_reviews[0]).toMatchObject({
       scope_status: "affected",
+      scope_reason_code: "reported_current_goal_criterion_relation",
       prior_adoption_disposition: "rejected",
       review_disposition: "held",
-      proposed_goal_criteria: {
-        outcome: "supports",
-        evidence_status: "assumed",
-        risk_status: "unverified",
-      },
+      scope_relation_paths: [expect.objectContaining({ relation_source: "current_request_goal_criteria" })],
       retained_checks: {
         mechanical_contract: { outcome: "pass", evidence_status: "observed" },
         domain_validation: { outcome: "pass", evidence_status: "observed" },
       },
     });
+    expect(entry.feedback.skeptical_review?.candidate_reviews[0]).not.toHaveProperty("proposed_goal_criteria");
     const auditJson = JSON.stringify(c.getAudit().list());
     expect(auditJson).not.toContain(rawFinding);
     expect(auditJson).not.toContain(rawHypothesis);
