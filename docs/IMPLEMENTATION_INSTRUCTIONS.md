@@ -21,7 +21,7 @@ source inventoryをcapture終了時に再照合し、canonical storeの出現／
 | `git diff --check`／`pnpm docs:check` | 両方PASS。日本語基底の移行負債76件は継続管理。 |
 | restore実操作、全workspace suite、実provider／credential／外部作用、5OS実機、QE_QC／QE_QA | 未実施。 |
 
-このcanonical source inventory fail-closed consumerを`WIRED`とする。E03.03のjob-level依存隔離、独立restore point、guarded selective recoveryと製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+このcanonical source inventory fail-closed consumerを`WIRED`とする。E03.03のjob-level依存隔離、独立restore point、guarded selective recoveryと製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`e5b3f18de7869d04a114bd4b453b8c9c3f71ec5b`。closeout push後にremote main／backup refsを照合する。
 
 ### 履歴ログ：`QEB-10-E03.02-INTERRUPTED-WAIT-COMPUTE-RECOVERY`
 
