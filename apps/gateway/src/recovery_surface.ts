@@ -24,6 +24,7 @@ import { OperationPlanStateStore } from "./operation_plan_store.js";
 import {
   inspectCanonicalStateStoreLedger,
   inspectGatewayRecoveryCanonicalArchive,
+  inspectGatewayRecoveryState,
   type RecoveryPlanDependencyCategory,
   type RecoverySelectedPlanResidualObservation,
   type RecoverySelectedStoreLedgerStatus,
@@ -125,6 +126,7 @@ export interface RecoveryPostActionObservation {
   restore_scope_task_digest?: string | null;
   readonly restore_scope_mode?: "plan_scoped_merge_v1" | "task_scoped_merge_v1";
   plan_restore_points: readonly RecoveryPlanRestorePointObservation[] | null;
+  task_memory_restore_points: readonly RecoveryTaskMemoryRestorePointObservation[] | null;
   configuration_state:
     | "provider_stub"
     | "connector_dry_run"
@@ -145,6 +147,67 @@ export interface RecoveryPlanRestorePointObservation {
   readonly dependency_status: "observed" | "residuals_present" | "unobserved" | "unknown";
   readonly residual_dependencies: readonly RecoveryPlanDependencyCategory[];
   readonly unobserved_dependencies: readonly RecoveryPlanDependencyCategory[];
+}
+
+/** Digest-only task lineage membership and M dependency status at the selected backup. */
+export interface RecoveryTaskMemoryRestorePointObservation {
+  readonly task_identity_digest: string;
+  readonly plan_id_digests: readonly string[];
+  readonly dependency_status: "observed" | "residuals_present" | "unobserved" | "unknown";
+}
+
+export function correlateTaskMemoryRestorePoints(
+  currentPlans: readonly { readonly plan_id_digest: string; readonly task_identity_digest?: string | null }[],
+  inventory: RecoveryBackupOperationPlanInventory,
+  dependencies: RecoveryBackupOperationPlanDependencyInventory,
+): readonly RecoveryTaskMemoryRestorePointObservation[] | null {
+  if ((inventory.status !== "verified" && inventory.status !== "residuals_present") ||
+      inventory.omitted_plan_scope_count !== 0 || inventory.plan_scope_count === null ||
+      inventory.plan_scopes.length !== inventory.plan_scope_count ||
+      !["correlated", "residuals_present", "unobserved", "no_plan_scopes"].includes(dependencies.status) ||
+      dependencies.omitted_plan_scope_count !== 0 || dependencies.plan_scope_count === null ||
+      dependencies.plan_scopes.length !== dependencies.plan_scope_count ||
+      currentPlans.some((plan) => !plan.task_identity_digest)) return null;
+
+  const dependencyByPlan = new Map(dependencies.plan_scopes.map((scope) => [scope.plan_id_digest, scope]));
+  const archivedByTask = new Map<string, typeof inventory.plan_scopes>();
+  for (const plan of inventory.plan_scopes) {
+    if (!plan.task_identity_digest) continue;
+    archivedByTask.set(plan.task_identity_digest, [
+      ...(archivedByTask.get(plan.task_identity_digest) ?? []), plan,
+    ]);
+  }
+  const currentByTask = new Map<string, typeof currentPlans>();
+  for (const plan of currentPlans) {
+    const taskDigest = plan.task_identity_digest;
+    if (!taskDigest) continue;
+    currentByTask.set(taskDigest, [...(currentByTask.get(taskDigest) ?? []), plan]);
+  }
+
+  return [...currentByTask.entries()].map(([taskDigest, taskPlans]): RecoveryTaskMemoryRestorePointObservation => {
+    const currentPlanIds = taskPlans.map((plan) => plan.plan_id_digest).sort();
+    const archivedPlans = archivedByTask.get(taskDigest) ?? [];
+    const archivedPlanIds = archivedPlans.map((plan) => plan.plan_id_digest).sort();
+    let dependencyStatus: RecoveryTaskMemoryRestorePointObservation["dependency_status"] = "unobserved";
+    if (currentPlanIds.length === archivedPlanIds.length &&
+        currentPlanIds.every((planId, index) => planId === archivedPlanIds[index])) {
+      const taskDependencies = archivedPlanIds.map((planId) => dependencyByPlan.get(planId));
+      if (taskDependencies.some((scope) => !scope)) dependencyStatus = "unknown";
+      else if (archivedPlans.some((plan) => plan.integrity !== "verified") ||
+          taskDependencies.some((scope) => scope!.residual_dependencies.includes("memory"))) {
+        dependencyStatus = "residuals_present";
+      } else if (taskDependencies.some((scope) => scope!.unobserved_dependencies.includes("memory"))) {
+        dependencyStatus = "unobserved";
+      } else {
+        dependencyStatus = "observed";
+      }
+    }
+    return {
+      task_identity_digest: taskDigest,
+      plan_id_digests: currentPlanIds,
+      dependency_status: dependencyStatus,
+    };
+  });
 }
 
 export interface RecoveryHistoryEvidenceEntry {
@@ -2029,6 +2092,33 @@ async function inspectRecoveryPlanRestorePoints(
   });
 }
 
+async function inspectRecoveryTaskMemoryRestorePoints(
+  env: NodeJS.ProcessEnv,
+  backupIdDigest: string,
+): Promise<readonly RecoveryTaskMemoryRestorePointObservation[] | null> {
+  const backup = await inspectRecoveryBackup(env, () => backupIdForDigest(env, backupIdDigest));
+  if (backup.status !== "verified" || backup.backup_id_digest !== backupIdDigest ||
+      backup.canonical_state_stores.find((store) => store.store_key === "m_state")?.status !== "verified") return null;
+  const stateRoot = env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki";
+  const before = await Promise.all([
+    inspectCanonicalStateStoreTarget(stateRoot, "j_control"),
+    inspectCanonicalStateStoreTarget(stateRoot, "operation_plans"),
+  ]);
+  if (before.some((target) => target.status !== "verified" || !target.sha256)) return null;
+  const current = inspectGatewayRecoveryState(env);
+  const plans = current.ledgers.operation_plans;
+  const after = await Promise.all([
+    inspectCanonicalStateStoreTarget(stateRoot, "j_control"),
+    inspectCanonicalStateStoreTarget(stateRoot, "operation_plans"),
+  ]);
+  if (after.some((target, index) => target.status !== "verified" ||
+      target.sha256 !== before[index]?.sha256 || target.bytes !== before[index]?.bytes) ||
+      current.ledgers.j.status !== "verified" || plans.status !== "verified" || plans.omitted_binding_count !== 0 ||
+      plans.plans.some((plan) => !plan.task_identity_digest)) return null;
+  return correlateTaskMemoryRestorePoints(plans.plans, backup.operation_plan_archive_inventory,
+    backup.operation_plan_archive_dependencies);
+}
+
 function noRecoveryActionObservation(
   status: RecoveryPostActionObservation["status"],
 ): RecoveryPostActionObservation {
@@ -2047,6 +2137,7 @@ function noRecoveryActionObservation(
     restore_scope_plan_digest: null,
     restore_scope_task_digest: null,
     plan_restore_points: null,
+    task_memory_restore_points: null,
     configuration_state: "not_observed",
     evidence_source: "NONE",
     used_for_authority: false,
@@ -2198,6 +2289,7 @@ export async function buildRecoveryPostActionObservation(
       ? { restore_scope_mode: latest.restoreEvidence.restore_scope_mode }
       : {}),
     plan_restore_points: null,
+    task_memory_restore_points: null,
     configuration_state: "not_observed",
     evidence_source: "COMPLETE_HISTORY",
     used_for_authority: false,
@@ -2319,6 +2411,11 @@ export async function buildRecoveryPostActionObservation(
           storeLedger.plan_residuals,
         )
       : null;
+    const taskMemoryRestorePoints = restoreEvidence.store_key === "m_state" &&
+      target.sha256 === restoreEvidence.restored_store_state_digest && storeLedger.status === "verified" &&
+      storeLedger.residual_count === 0 && restoreEvidence.restored_backup_id_digest
+      ? await inspectRecoveryTaskMemoryRestorePoints(env, restoreEvidence.restored_backup_id_digest)
+      : null;
     const afterLedgerInspection = await inspectCanonicalStateStoreTarget(
       env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
       restoreEvidence.store_key,
@@ -2347,6 +2444,7 @@ export async function buildRecoveryPostActionObservation(
         ? { restore_scope_mode: restoreEvidence.restore_scope_mode }
         : {}),
       plan_restore_points: planRestorePoints,
+      task_memory_restore_points: taskMemoryRestorePoints,
       evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME",
     };
   }

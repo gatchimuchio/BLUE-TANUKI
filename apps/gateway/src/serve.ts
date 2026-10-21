@@ -1837,6 +1837,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
                   restored_state_digest: observation.restored_state_digest!,
                   store_ledger_status: "verified",
                   store_ledger_residual_count: 0,
+                  task_memory_restore_points: observation.task_memory_restore_points,
                 });
                 if (observationVerified) {
                   jMRestoreStoreQuiesced = null;

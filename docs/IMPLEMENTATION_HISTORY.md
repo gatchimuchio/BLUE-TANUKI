@@ -4,6 +4,26 @@
 
 ---
 
+### 履歴ログ：`QEB-24-E03.03-TASK-M-RESTORE-POINT-J-REOBSERVATION`
+
+開始HEAD=`9f1715542806315768224802742ce0eba0c3e1c6`。現行pinはowner指定rev2.3で、作業開始時に仕様書・工程表・施工指示書の固定hash、適用AGENTS.md、active instruction、最新HEAD／差分を照合した。QEB-23の直接依存とRecovery／HDS restore consumerだけを確認し、旧版や完了ログ全体は参照していない。作業中も保護対象untracked Linux isolation `target/`を保持し、Gitへ含めない。
+
+QEB-23でtask-scoped Broker restore後のJ/M/Broker dependency observationは接続済みだったが、task-scoped M stateの復元点と現在のJ binding／M receiptを同一task単位で突き合わせるproducer／consumerがなかった。Gateway Recoveryは検証済みM backup、実際に一致した選択store restore、M ledger残差なし、読取中に変化していない完全なJ／Operation Plan ledgerを確認した場合だけ、task plan集合のdigest-only observationを生成する。HDSはtaskの現在plan集合と一致し、全planのJ binding／M receiptが検証済みである場合に限りfresh J reviewを許可する。M残差、task相関の欠落・不一致、古いbackup、検証不足は`residuals_present`／`unobserved`等の保留状態に閉じる。別taskを変更せず、observationは権限ではない。同一restore identityの起動時再適用で有効なtask相関を失わないようにしたが、別restore identityへは引き継がない。M全体の既存復元経路と保守lockは維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `recovery_surface.test.ts` | PASS、19/19。M復元点の相関、task lineage分離、M残差／backup欠落を含む。 |
+| Gateway `operation_plan_runtime.test.ts` | PASS、40/40。最新HDS hold／fresh review gateを含む。 |
+| `execution_result_reconciliation.test.ts` のQEB-24関連5件 | PASS、5/5。clean dependency、M残差、起動時Broker結果調停、同一restore再起動、M依存のない未実行planを確認。 |
+| Gateway／HDS typecheck・build、`git diff --check` | PASS。 |
+| 同suiteの広い全件実行、QE_QC／QE_QA、provider／実credential、外部作用、5OS実機 | 完了扱いしない。探索的な全件実行ではWindows isolation provider未導入でプロセス未起動となるテストと、J commit residual rejection fixtureの失敗が残った。後者は単独再実行でも同じfixture領域で再現したが、今回の原因とは確定していない。今回の5 focused testsは合格したが、suite全件のPASSを主張しない。 |
+
+task-scoped M restore point producerからHDS J/M dependency gateまでを限定範囲で`WIRED`とする。E03.03/QEB-03、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、store間atomicity、自動resume、QE_QC／QE_QAは未成立／未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次は現行rev2.3の未接続consumerを最新コードと照合し、次の縦断実装を選ぶ。
+
+実装と工程記録の限定commitを`main`へpushした後、remote mainと二世代backup tag、local recovery branchのSHAを記録する（閉包commit後に値を追記）。保護対象untracked Linux isolation `target/`は保持する。
+
+---
+
 ### 履歴ログ：`QEB-23-E03.03-TASK-LINEAGE-BROKER-RESTORE-M-DEPENDENCY-REOBSERVATION`
 
 開始HEAD=`921a1a153204512b2127641f1c564ba0419dd5e7`。現行pinはowner指定rev2.3、backup ref移行は`MIGRATION_COMPLETE`。最新三点セット、適用AGENTS.md、active指示、QEB-22の直接依存とBroker restore後の現行J/M/Broker Recovery consumerを照合した。旧版や完了ログ全体は参照していない。保護対象untracked Linux isolation `target/`は保持しGitへ含めない。

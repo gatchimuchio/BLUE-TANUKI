@@ -17,6 +17,7 @@ import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import {
   buildRecoverySnapshot,
+  correlateTaskMemoryRestorePoints,
   createRecoveryBackup,
   factoryResetRecovery,
   inspectLatestRecoveryBackup,
@@ -25,6 +26,8 @@ import {
   resetRecoveryConnector,
   resetRecoveryProvider,
   restoreRecoveryBackup,
+  type RecoveryBackupOperationPlanDependencyInventory,
+  type RecoveryBackupOperationPlanInventory,
 } from "../src/recovery_surface.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -60,6 +63,52 @@ const CANONICAL_DATABASES = [
   ["operation_plans", path.join("operation-plans", "j-state.sqlite")],
   ["cron_events", path.join("cron-events", "cron-events.sqlite")],
 ] as const;
+
+describe("task-scoped M restore-point correlation", () => {
+  it("keeps task lineages isolated and reports missing backup membership as unobserved", () => {
+    const inventory: RecoveryBackupOperationPlanInventory = {
+      status: "verified", reason: null, plan_scope_count: 3, plan_count: 3,
+      plan_integrity_residual_count: 0, binding_count: 0, verified_binding_count: 0,
+      residual_binding_count: 0, unverified_memory_link_count: 0, omitted_binding_count: 0,
+      omitted_plan_scope_count: 0,
+      plan_scopes: [
+        { plan_id_digest: "a".repeat(64), task_identity_digest: "1".repeat(64), request_scope_digest: null,
+          integrity: "verified", plan_record_count: 1, binding_count: 1, residual_binding_count: 0, omitted_binding_count: 0 },
+        { plan_id_digest: "b".repeat(64), task_identity_digest: "1".repeat(64), request_scope_digest: null,
+          integrity: "verified", plan_record_count: 1, binding_count: 1, residual_binding_count: 0, omitted_binding_count: 0 },
+        { plan_id_digest: "c".repeat(64), task_identity_digest: "2".repeat(64), request_scope_digest: null,
+          integrity: "verified", plan_record_count: 1, binding_count: 1, residual_binding_count: 0, omitted_binding_count: 0 },
+      ],
+      cross_ledger_correlation: "not_performed", used_for_authority: false, may_execute: false,
+    };
+    const dependencies: RecoveryBackupOperationPlanDependencyInventory = {
+      status: "residuals_present", reason: null, plan_scope_count: 3, residual_plan_scope_count: 1,
+      unobserved_plan_scope_count: 0, omitted_plan_scope_count: 0,
+      plan_scopes: [
+        { plan_id_digest: "a".repeat(64), status: "observed", residual_dependencies: [], unobserved_dependencies: [] },
+        { plan_id_digest: "b".repeat(64), status: "residuals_present", residual_dependencies: ["memory"], unobserved_dependencies: [] },
+        { plan_id_digest: "c".repeat(64), status: "observed", residual_dependencies: [], unobserved_dependencies: [] },
+      ],
+      cross_store_consistency: "independent_sqlite_online_snapshots", cross_store_atomic: false,
+      external_backup_restore_point: "not_examined", used_for_authority: false, may_execute: false,
+    };
+
+    expect(correlateTaskMemoryRestorePoints([
+      { plan_id_digest: "a".repeat(64), task_identity_digest: "1".repeat(64) },
+      { plan_id_digest: "b".repeat(64), task_identity_digest: "1".repeat(64) },
+      { plan_id_digest: "c".repeat(64), task_identity_digest: "2".repeat(64) },
+      { plan_id_digest: "d".repeat(64), task_identity_digest: "3".repeat(64) },
+    ], inventory, dependencies)).toEqual([
+      { task_identity_digest: "1".repeat(64), plan_id_digests: ["a".repeat(64), "b".repeat(64)],
+        dependency_status: "residuals_present" },
+      { task_identity_digest: "2".repeat(64), plan_id_digests: ["c".repeat(64)], dependency_status: "observed" },
+      { task_identity_digest: "3".repeat(64), plan_id_digests: ["d".repeat(64)], dependency_status: "unobserved" },
+    ]);
+    expect(correlateTaskMemoryRestorePoints([
+      { plan_id_digest: "a".repeat(64), task_identity_digest: "1".repeat(64) },
+    ], inventory, dependencies)?.[0]?.dependency_status).toBe("unobserved");
+  });
+});
 
 async function exists(filePath: string): Promise<boolean> {
   return stat(filePath)

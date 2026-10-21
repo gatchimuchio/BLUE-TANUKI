@@ -4,7 +4,8 @@ import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
-import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
+  operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool, LLMComputeAdapter, type LLMRequest, type LLMResponse } from "@blue-tanuki/core";
 import { createGatewayInternalInboundRequest, memoryCommitContentDigest, type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
@@ -34,6 +35,20 @@ function request(content: string): InboundRequest {
     metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer" } });
 }
 function recoveryCommandIdDigest(commandId: string): string { return createHash("sha256").update(commandId).digest("hex"); }
+function taskMemoryRestorePoints(state: OperationPlanStateStore,
+  dependencyStatus: "observed" | "residuals_present" | "unobserved" | "unknown" = "observed") {
+  const plans = state.load()?.plans ?? [];
+  const groups = new Map<string, string[]>();
+  for (const plan of plans) {
+    const taskDigest = operationPlanTaskIdentityDigest(plan);
+    groups.set(taskDigest, [...(groups.get(taskDigest) ?? []), operationPlanDigest(plan.revisions[0]!.plan.plan_id)]);
+  }
+  return [...groups.entries()].map(([task_identity_digest, plan_id_digests]) => ({
+    task_identity_digest,
+    plan_id_digests: plan_id_digests.sort(),
+    dependency_status: dependencyStatus,
+  }));
+}
 function canonicalMemoryRestoreCommand(): ExecuteCommand {
   return { id: randomUUID(), type: "tool_call",
     payload: { tool_name: "recovery.restore", arguments: { backup_id: "fixture", store_key: "m_state", confirm: "RESTORE" } },
@@ -888,6 +903,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       restored_state_digest: createHash("sha256").update("restored-state").digest("hex"),
       store_ledger_status: "verified" as const,
       store_ledger_residual_count: 0 as const,
+      task_memory_restore_points: taskMemoryRestorePoints(c.j),
     });
     const unrelatedRestore = canonicalMemoryRestoreCommand();
     expect(c.hds.recordOperationPlanMemoryRestoreObservation(unrelatedRestore, observation(unrelatedRestore))).toBe(false);
@@ -923,6 +939,37 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     expect(c.hds.getAudit().verify()).toBe(true);
   }));
 
+  it("task-scoped M restore residual keeps a receipt-backed plan held through fresh J review", async () => fixture(async (c) => {
+    expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
+    const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
+    expect(feedback.status).toBe("success");
+    finalizeCommandOutput({ hds: c.hds, command: c.cmd, feedback, request_id: c.plan.request_id,
+      target_surface: "channel" });
+    expect(reconcileExecutionResults(c.hds, c.execution, c.admission.execution_epoch)).toMatchObject({ adopted: 1, deferred: 0 });
+
+    const staleSelection = review(c.hds, c.plan, "dependent")!;
+    const restoreCommand = canonicalMemoryRestoreCommand();
+    expect(c.hds.quiesceOperationPlanMemoryForCanonicalRestore()).toBe(true);
+    expect(c.hds.holdOperationPlansForCanonicalMemoryRestore(restoreCommand)).toBe(true);
+    expect(c.hds.beginOperationPlanAttempt(staleSelection)).toBe(false);
+    expect(c.hds.reopenOperationPlanMemoryAfterCanonicalRestore()).toBe(true);
+    expect(c.hds.recordOperationPlanMemoryRestoreObservation(restoreCommand, {
+      status: "matched", operation: "restore", store_key: "m_state",
+      command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+      operation_digest: hash("residual-task-restore-operation"),
+      result_digest: hash("residual-task-restore-result"),
+      restore_backup_id_digest: hash("residual-task-restore-backup"),
+      restored_state_digest: hash("residual-task-restored-state"),
+      store_ledger_status: "verified", store_ledger_residual_count: 0,
+      task_memory_restore_points: taskMemoryRestorePoints(c.j, "residuals_present"),
+    })).toBe(true);
+
+    const held = review(c.hds, c.plan, "dependent");
+    expect(held).toBeNull();
+    expect(c.hds.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unverified" });
+    expect(c.hds.beginOperationPlanAttempt(staleSelection)).toBe(false);
+  }));
+
   it("startup reconciles a pending Broker result into M under an observed restore hold without releasing the plan", async () => fixture(async (c) => {
     expect(c.hds.beginOperationPlanAttempt(c.cmd, c.admission)).toBe(true);
     const feedback = await c.executor.execute(c.approved, { save_result_delivery: true });
@@ -946,6 +993,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       restored_state_digest: hash("pending-result-restored-state"),
       store_ledger_status: "verified" as const,
       store_ledger_residual_count: 0 as const,
+      task_memory_restore_points: taskMemoryRestorePoints(c.j),
     };
     expect(restarted.recordOperationPlanMemoryRestoreObservation(restoreCommand, observation)).toBe(true);
 
@@ -1005,6 +1053,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
         restored_state_digest: createHash("sha256").update("restart-restored-state").digest("hex"),
         store_ledger_status: "verified" as const,
         store_ledger_residual_count: 0 as const,
+        task_memory_restore_points: taskMemoryRestorePoints(c.j),
       };
       expect(c.hds.recordOperationPlanMemoryRestoreObservation(restoreCommand, observation)).toBe(true);
       const checkpointBeforeRestart = c.j.load();
@@ -1086,6 +1135,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
       restored_state_digest: createHash("sha256").update("no-dependency-restored-state").digest("hex"),
       store_ledger_status: "verified" as const,
       store_ledger_residual_count: 0 as const,
+      task_memory_restore_points: taskMemoryRestorePoints(c.j),
     };
     expect(c.hds.recordOperationPlanMemoryRestoreObservation(restoreCommand, observation)).toBe(true);
     expect(c.hds.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_unverified" });
