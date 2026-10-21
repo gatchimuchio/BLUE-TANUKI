@@ -195,6 +195,41 @@ describe("TeamsChannel", () => {
     }
   });
 
+  it("aborts the local Graph HTTP request when the execution is cancelled", async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const requestStarted = new Promise<void>((resolve) => { started = resolve; });
+    const channel = new TeamsChannel({
+      access_token: "secret-graph-token",
+      retry: false,
+      log: () => undefined,
+      fetch: async (_input, init) => {
+        requestSignal = init?.signal as AbortSignal | undefined;
+        started();
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          }, { once: true });
+        });
+      },
+    });
+    await channel.start(async () => undefined);
+    try {
+      const sending = channel.send({ channel: "teams", target: teamsChannelTarget("team-1", "channel-1"), content: "hello" },
+        { command_id: "cmd", upstream_commit_hash: "hash" }, { signal: controller.signal });
+      await requestStarted;
+      controller.abort();
+      const result = await sending;
+      expect(requestSignal?.aborted).toBe(true);
+      expect(result.delivered).toBe(false);
+    } finally {
+      await channel.stop();
+    }
+  });
+
   it("retries recoverable rate-limit responses", async () => {
     const transport = new FakeTeamsTransport();
     let calls = 0;
@@ -227,6 +262,30 @@ describe("TeamsChannel", () => {
       expect(result).toMatchObject({ delivered: true, external_id: "done" });
       expect(calls).toBe(3);
       expect(sleeps).toEqual([25, 25]);
+    } finally {
+      await channel.stop();
+    }
+  });
+
+  it("does not retry after task cancellation", async () => {
+    const transport = new FakeTeamsTransport();
+    const controller = new AbortController();
+    let calls = 0;
+    transport.postMessage = async (): Promise<TeamsPostResult> => {
+      calls++;
+      controller.abort();
+      return { ok: false, error: "rate_limited", retry_after_ms: 1 };
+    };
+    const channel = new TeamsChannel({ transport, log: () => {}, retry: {
+      max_retries: 3, base_delay_ms: 0, max_delay_ms: 1, jitter_ratio: 0,
+      sleep: async () => {}, random: () => 0.5,
+    } });
+    await channel.start(async () => undefined);
+    try {
+      const result = await channel.send({ channel: "teams", target: teamsChannelTarget("team-1", "channel-1"), content: "hello" },
+        { command_id: "cmd", upstream_commit_hash: "hash" }, { signal: controller.signal });
+      expect(result.delivered).toBe(false);
+      expect(calls).toBe(1);
     } finally {
       await channel.stop();
     }

@@ -241,4 +241,25 @@ describe("DiscordChannel — retry / backoff", () => {
     expect(r.next_action).toContain("recoverable");
     await ch.stop();
   });
+
+  it("does not retry after task cancellation", async () => {
+    const t = new FakeDiscordTransport();
+    const controller = new AbortController();
+    let calls = 0;
+    t.postMessage = async (): Promise<DiscordPostResult> => {
+      calls++;
+      controller.abort();
+      return { ok: false, error: "rate_limited", retry_after_ms: 1 };
+    };
+    const ch = new DiscordChannel({ transport: t, log: () => {}, retry: {
+      max_retries: 3, base_delay_ms: 0, max_delay_ms: 1, jitter_ratio: 0,
+      sleep: async () => {}, random: () => 0.5,
+    } });
+    await ch.start(async () => {});
+    const r = await ch.send({ channel: "discord", target: "777", content: "x" },
+      { command_id: "c", upstream_commit_hash: "h" }, { signal: controller.signal });
+    expect(r.delivered).toBe(false);
+    expect(calls).toBe(1);
+    await ch.stop();
+  });
 });

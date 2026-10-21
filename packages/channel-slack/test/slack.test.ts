@@ -489,4 +489,25 @@ describe("SlackChannel — retry / backoff", () => {
     expect(calls).toBe(3); // 1 initial + 2 retries
     await ch.stop();
   });
+
+  it("does not retry after task cancellation", async () => {
+    const t = new FakeSlackTransport();
+    const controller = new AbortController();
+    let calls = 0;
+    t.postMessage = async (): Promise<SlackPostResult> => {
+      calls++;
+      controller.abort();
+      return { ok: false, error: "ratelimited", retry_after_ms: 1 };
+    };
+    const ch = new SlackChannel({ transport: t, log: () => {}, retry: {
+      max_retries: 3, base_delay_ms: 0, max_delay_ms: 1, jitter_ratio: 0,
+      sleep: async () => {}, random: () => 0.5,
+    } });
+    await ch.start(async () => {});
+    const r = await ch.send({ channel: "slack", target: "C1", content: "x" },
+      { command_id: "c", upstream_commit_hash: "h" }, { signal: controller.signal });
+    expect(r.delivered).toBe(false);
+    expect(calls).toBe(1);
+    await ch.stop();
+  });
 });

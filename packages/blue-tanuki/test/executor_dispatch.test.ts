@@ -128,6 +128,41 @@ describe("Executor.executeChannelSend — dispatcher path", () => {
     expect(result.external_id).toBe("ext-1");
   });
 
+  it("keeps a pre-dispatch cancellation from invoking channel_send", async () => {
+    let dispatchCalled = false;
+    const dispatcher: ChannelDispatcher = {
+      async dispatch() { dispatchCalled = true; return { delivered: true }; },
+    };
+    const exec = new Executor({ approval_authority: executorApproval, llm: new StubBackend(),
+      tools: new ToolRegistry(), dispatcher });
+    const controller = new AbortController();
+    controller.abort();
+    const feedback = await exec.execute(approved(channelSendCmd("webchat")), { signal: controller.signal });
+    expect(dispatchCalled).toBe(false);
+    expect(feedback).toMatchObject({ status: "failed", result: { delivery_status: "not_delivered" } });
+  });
+
+  it("passes task cancellation to the dispatcher and does not turn unknown delivery into success", async () => {
+    let finishDispatch!: (value: { delivered: boolean; delivery_status: "unknown" }) => void;
+    let signalSeen: AbortSignal | undefined;
+    const dispatcher: ChannelDispatcher = {
+      dispatch: async (_payload, _meta, context) => {
+        signalSeen = context?.signal;
+        return await new Promise((resolve) => { finishDispatch = resolve; });
+      },
+    };
+    const exec = new Executor({ approval_authority: executorApproval, llm: new StubBackend(),
+      tools: new ToolRegistry(), dispatcher });
+    const controller = new AbortController();
+    const running = exec.execute(approved(channelSendCmd("webchat")), { signal: controller.signal });
+    expect(signalSeen).toBe(controller.signal);
+    controller.abort();
+    finishDispatch({ delivered: false, delivery_status: "unknown" });
+    const feedback = await running;
+    expect(feedback).toMatchObject({ status: "failed", error: "channel_send_delivery_outcome_unknown",
+      result: { delivery_status: "unknown", external_processing: "unknown", may_execute: false } });
+  });
+
   it("returns failed when dispatcher reports undelivered", async () => {
     const dispatcher: ChannelDispatcher = {
       async dispatch() {

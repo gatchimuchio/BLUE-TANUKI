@@ -40,11 +40,18 @@ export interface SendMeta {
   upstream_commit_hash: string;
 }
 
+/** Ephemeral execution controls, kept separate from correlation/audit metadata. */
+export interface SendContext {
+  signal?: AbortSignal;
+}
+
 /**
  * Result of a channel send attempt.
  */
 export interface SendResult {
   delivered: boolean;
+  /** A cancelled request may have reached the remote service before its reply was lost. */
+  delivery_status?: "delivered" | "not_delivered" | "unknown";
   /** Native message identifier (e.g. Slack ts, Discord message id). */
   external_id?: string;
   error?: string;
@@ -64,5 +71,5 @@ export interface SendResult {
  */
 export interface OutboundChannel {
   readonly name: string;
-  send(payload: ChannelSendPayload, meta: SendMeta): Promise<SendResult>;
+  send(payload: ChannelSendPayload, meta: SendMeta, context?: SendContext): Promise<SendResult>;
 }

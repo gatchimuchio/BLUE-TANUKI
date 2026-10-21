@@ -77,8 +77,10 @@ export interface ChannelDispatcher {
   dispatch(
     payload: ChannelSendPayload,
     meta: { command_id: string; upstream_commit_hash: string },
+    context?: { signal?: AbortSignal },
   ): Promise<{
     delivered: boolean;
+    delivery_status?: "delivered" | "not_delivered" | "unknown";
     external_id?: string;
     error?: string;
     error_kind?: "recoverable" | "non_recoverable";
@@ -756,7 +758,8 @@ export class Executor {
           feedback = await this.executeToolCall(cmd, start, markInvoked, context.signal, context.before_tool_dispatch);
           break;
         case "channel_send":
-          feedback = await this.executeChannelSend(cmd.id, cmd.payload, start, cmd.upstream_decision.commit_hash, markInvoked);
+          feedback = await this.executeChannelSend(cmd.id, cmd.payload, start, cmd.upstream_decision.commit_hash,
+            markInvoked, context.signal);
           break;
         case "noop":
           {
@@ -1184,13 +1187,26 @@ export class Executor {
     start: number,
     commit_hash: string,
     markInvoked: (boundary: ExecutionInvocationBoundary) => void,
+    signal?: AbortSignal,
   ): Promise<ExecuteFeedback> {
+    if (signal?.aborted) {
+      return { command_id: id, status: "failed", error: "channel_send_cancelled_before_dispatch",
+        result: { delivery_status: "not_delivered", used_for_authority: false, may_execute: false },
+        metrics: { duration_ms: Date.now() - start } };
+    }
     if (this.deps.dispatcher) {
       markInvoked("channel_adapter");
       const r = await this.deps.dispatcher.dispatch(payload, {
         command_id: id,
         upstream_commit_hash: commit_hash,
-      });
+      }, { ...(signal ? { signal } : {}) });
+      if (r.delivery_status === "unknown") {
+        return { command_id: id, status: "failed", error: "channel_send_delivery_outcome_unknown",
+          result: { delivery_status: "unknown", external_processing: "unknown",
+            next_action: "Check the destination's delivery status before deciding whether to send again.",
+            used_for_authority: false, may_execute: false },
+          metrics: { duration_ms: Date.now() - start } };
+      }
       if (r.delivered) {
         return {
           command_id: id,

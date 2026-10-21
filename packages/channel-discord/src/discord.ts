@@ -11,6 +11,7 @@ import {
   type InboundChannel,
   type InboundHandler,
   type OutboundChannel,
+  type SendContext,
   type SendMeta,
   type SendResult,
 } from "@blue-tanuki/channel-base";
@@ -159,7 +160,10 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
   async send(
     payload: ChannelSendPayload,
     meta: SendMeta,
+    context?: SendContext,
   ): Promise<SendResult> {
+    if (context?.signal?.aborted) return { delivered: false, delivery_status: "not_delivered",
+      error: "channel_send_cancelled_before_dispatch", error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
     this.counter += 1;
     const at = Date.now();
     if (this.silent || !this.transport) {
@@ -192,11 +196,13 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
     const transport = this.transport;
     const retryCfg = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
 
-    const callOnce = (): Promise<DiscordPostResult> =>
-      transport.postMessage({
+    const callOnce = (): Promise<DiscordPostResult> => {
+      if (context?.signal?.aborted) return Promise.reject(new Error("channel_send_cancelled_before_transport_dispatch"));
+      return transport.postMessage({
         channel: payload.target,
         text: payload.content,
       });
+    };
 
     let r: DiscordPostResult;
     if (!retryCfg) {
@@ -210,6 +216,7 @@ export class DiscordChannel implements InboundChannel, OutboundChannel {
         sleep: retryCfg.sleep,
         random: retryCfg.random,
         is_retryable: (signal) => {
+          if (context?.signal?.aborted) return false;
           if (signal.kind === "throw") return true;
           const v = signal.value;
           if (v.ok) return false;

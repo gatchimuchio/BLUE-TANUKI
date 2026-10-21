@@ -28,7 +28,7 @@ export interface LinePostResult {
 export interface LineTransport {
   start(handler: LineInboundHandler): Promise<void>;
   stop(): Promise<void>;
-  postMessage(args: { target: string; text: string }): Promise<LinePostResult>;
+  postMessage(args: { target: string; text: string }, signal?: AbortSignal): Promise<LinePostResult>;
 }
 
 interface LineMessagingTransportOptions {
@@ -52,7 +52,7 @@ export class LineMessagingTransport implements LineTransport {
     // No persistent LINE connection is opened by this transport.
   }
 
-  async postMessage(args: { target: string; text: string }): Promise<LinePostResult> {
+  async postMessage(args: { target: string; text: string }, callerSignal?: AbortSignal): Promise<LinePostResult> {
     if (!args.target.trim()) {
       return {
         ok: false,
@@ -86,7 +86,7 @@ export class LineMessagingTransport implements LineTransport {
           to: args.target,
           messages: [{ type: "text", text: args.text }],
         }),
-        signal: controller.signal,
+        signal: callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal,
       });
     } catch (error) {
       if (isAbortError(error)) {

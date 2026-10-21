@@ -218,4 +218,40 @@ describe("OutboundDispatcher", () => {
     );
     expect(slack.sent[0]!.meta.upstream_commit_hash).toBe("deadbeef");
   });
+
+  it("keeps cancellation out of SendMeta and reports uncertain delivery after dispatch", async () => {
+    const d = new OutboundDispatcher();
+    let receivedSignal: AbortSignal | undefined;
+    let complete!: (result: SendResult) => void;
+    const channel: OutboundChannel = {
+      name: "test",
+      async send(_payload, _meta, context) {
+        receivedSignal = context?.signal;
+        return await new Promise((resolve) => { complete = resolve; });
+      },
+    };
+    d.register(channel);
+    const controller = new AbortController();
+    const resultPromise = d.dispatch({ channel: "test", target: "u1", content: "hello" }, baseMeta,
+      { signal: controller.signal });
+    expect(receivedSignal).toBe(controller.signal);
+    controller.abort();
+    complete({ delivered: false, error: "request aborted" });
+    const result = await resultPromise;
+    expect(result).toMatchObject({ delivered: false, delivery_status: "unknown", error_code: "delivery_outcome_unknown",
+      next_action: expect.stringContaining("before deciding whether to send again") });
+    expect(Object.keys(baseMeta)).toEqual(["command_id", "upstream_commit_hash"]);
+  });
+
+  it("does not dispatch when cancellation already happened", async () => {
+    const d = new OutboundDispatcher();
+    const channel = new FakeOutbound("test");
+    d.register(channel);
+    const controller = new AbortController();
+    controller.abort();
+    const result = await d.dispatch({ channel: "test", target: "u1", content: "hello" }, baseMeta,
+      { signal: controller.signal });
+    expect(result).toMatchObject({ delivered: false, delivery_status: "not_delivered", error_code: "cancelled_before_dispatch" });
+    expect(channel.sent).toHaveLength(0);
+  });
 });

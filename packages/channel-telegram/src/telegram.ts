@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ChannelSendPayload, InboundRequest } from "@blue-tanuki/protocol";
-import type { InboundChannel, InboundHandler, OutboundChannel, SendMeta, SendResult } from "@blue-tanuki/channel-base";
+import type { InboundChannel, InboundHandler, OutboundChannel, SendContext, SendMeta, SendResult } from "@blue-tanuki/channel-base";
 
 export type TelegramFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -84,7 +84,9 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     }
   }
 
-  async send(payload: ChannelSendPayload, meta: SendMeta): Promise<SendResult> {
+  async send(payload: ChannelSendPayload, meta: SendMeta, context?: SendContext): Promise<SendResult> {
+    if (context?.signal?.aborted) return { delivered: false, delivery_status: "not_delivered",
+      error: "channel_send_cancelled_before_dispatch", error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
     this.counter += 1;
     const at = Date.now();
     if (this.silent || !this.opts.bot_token) {
@@ -100,7 +102,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
       disable_web_page_preview: true,
     };
     try {
-      const r = await this.call("sendMessage", body);
+      const r = await this.call("sendMessage", body, context?.signal);
       if (!r.ok) {
         const err = r.description ?? "telegram_send_failed";
         this.history.push({ payload, meta, at, external_id: `telegram-failed-${meta.command_id}-${this.counter}`, ok: false, error: err });
@@ -169,7 +171,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     };
   }
 
-  private async call(method: string, body: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; description?: string }> {
+  private async call(method: string, body: Record<string, unknown>, callerSignal?: AbortSignal): Promise<{ ok: boolean; result?: unknown; description?: string }> {
     const token = this.opts.bot_token;
     if (!token) return { ok: false, description: "missing_bot_token" };
     const fetchImpl = this.opts.fetch ?? globalThis.fetch;
@@ -188,7 +190,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(stripUndefined(body)),
-        signal: controller.signal,
+        signal: callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal,
       });
     } catch (error) {
       if (isAbortError(error)) {

@@ -1,5 +1,5 @@
 import type { ChannelSendPayload } from "@blue-tanuki/protocol";
-import type { OutboundChannel, SendMeta, SendResult } from "./types.js";
+import type { OutboundChannel, SendContext, SendMeta, SendResult } from "./types.js";
 import { classifyChannelDeliveryError } from "./delivery_error.js";
 
 /**
@@ -22,7 +22,12 @@ export class OutboundDispatcher {
   async dispatch(
     payload: ChannelSendPayload,
     meta: SendMeta,
+    context?: SendContext,
   ): Promise<SendResult> {
+    if (context?.signal?.aborted) {
+      return { delivered: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
+        error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+    }
     const ch = this.channels.get(payload.channel);
     if (!ch) {
       return {
@@ -34,7 +39,13 @@ export class OutboundDispatcher {
       };
     }
     try {
-      return await ch.send(payload, meta);
+      const result = await ch.send(payload, meta, context);
+      if (context?.signal?.aborted && !result.delivered && result.delivery_status !== "not_delivered") {
+        return { ...result, delivery_status: "unknown", error: "channel_send_cancelled; delivery outcome unknown",
+          error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
+          next_action: "Check the destination's delivery status before deciding whether to send again." };
+      }
+      return result;
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
       const details = classifyChannelDeliveryError({ error });
@@ -42,10 +53,12 @@ export class OutboundDispatcher {
         delivered: false,
         error,
         ...details,
-        next_action:
-          details.error_kind === "recoverable"
-            ? "Retry after the channel transport recovers."
-            : "Inspect the channel configuration before retrying.",
+        ...(context?.signal?.aborted
+          ? { delivery_status: "unknown" as const, error_code: "delivery_outcome_unknown",
+              next_action: "Check the destination's delivery status before deciding whether to send again." }
+          : { next_action: details.error_kind === "recoverable"
+              ? "Retry after the channel transport recovers."
+              : "Inspect the channel configuration before retrying." }),
       };
     }
   }

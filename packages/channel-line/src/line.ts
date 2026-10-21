@@ -11,6 +11,7 @@ import {
   type InboundChannel,
   type InboundHandler,
   type OutboundChannel,
+  type SendContext,
   type SendMeta,
   type SendResult,
 } from "@blue-tanuki/channel-base";
@@ -126,7 +127,9 @@ export class LineChannel implements InboundChannel, OutboundChannel {
     }
   }
 
-  async send(payload: ChannelSendPayload, meta: SendMeta): Promise<SendResult> {
+  async send(payload: ChannelSendPayload, meta: SendMeta, context?: SendContext): Promise<SendResult> {
+    if (context?.signal?.aborted) return { delivered: false, delivery_status: "not_delivered",
+      error: "channel_send_cancelled_before_dispatch", error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
     this.counter += 1;
     const at = Date.now();
     if (this.silent || !this.transport) {
@@ -157,9 +160,11 @@ export class LineChannel implements InboundChannel, OutboundChannel {
     }
 
     const retryCfg = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
-    const callOnce = (): Promise<LinePostResult> =>
-      this.transport!.postMessage({ target: payload.target, text: payload.content });
-    const r = retryCfg ? await withLineRetry(callOnce, retryCfg, this.opts.log, payload.target) : await callOnce();
+    const callOnce = (): Promise<LinePostResult> => {
+      if (context?.signal?.aborted) return Promise.reject(new Error("channel_send_cancelled_before_transport_dispatch"));
+      return this.transport!.postMessage({ target: payload.target, text: payload.content }, context?.signal);
+    };
+    const r = retryCfg ? await withLineRetry(callOnce, retryCfg, this.opts.log, payload.target, context?.signal) : await callOnce();
 
     const details = r.ok
       ? null
@@ -234,6 +239,7 @@ async function withLineRetry(
   retryCfg: LineRetryConfig,
   log: ((line: string) => void) | undefined,
   target: string,
+  cancelSignal?: AbortSignal,
 ): Promise<LinePostResult> {
   const opts: BackoffOptions<LinePostResult> = {
     max_retries: retryCfg.max_retries,
@@ -243,6 +249,7 @@ async function withLineRetry(
     sleep: retryCfg.sleep,
     random: retryCfg.random,
     is_retryable: (signal) => {
+      if (cancelSignal?.aborted) return false;
       if (signal.kind === "throw") {
         return isRecoverableChannelDeliveryError({
           error: signal.error instanceof Error ? signal.error.message : String(signal.error),

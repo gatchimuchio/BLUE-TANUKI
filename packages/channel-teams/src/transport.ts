@@ -29,7 +29,7 @@ export interface TeamsPostResult {
 export interface TeamsTransport {
   start(handler: TeamsInboundHandler): Promise<void>;
   stop(): Promise<void>;
-  postMessage(args: { target: string; text: string }): Promise<TeamsPostResult>;
+  postMessage(args: { target: string; text: string }, signal?: AbortSignal): Promise<TeamsPostResult>;
 }
 
 interface TeamsGraphTransportOptions {
@@ -60,7 +60,7 @@ export class TeamsGraphTransport implements TeamsTransport {
     // No persistent Graph connection is opened by this transport.
   }
 
-  async postMessage(args: { target: string; text: string }): Promise<TeamsPostResult> {
+  async postMessage(args: { target: string; text: string }, callerSignal?: AbortSignal): Promise<TeamsPostResult> {
     const target = parseTeamsTarget(args.target);
     if (!target.ok) {
       return {
@@ -98,7 +98,7 @@ export class TeamsGraphTransport implements TeamsTransport {
             content: args.text,
           },
         }),
-        signal: controller.signal,
+        signal: callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal,
       });
     } catch (error) {
       if (isAbortError(error)) {

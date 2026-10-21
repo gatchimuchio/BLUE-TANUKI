@@ -11,6 +11,7 @@ import {
   type InboundChannel,
   type InboundHandler,
   type OutboundChannel,
+  type SendContext,
   type SendMeta,
   type SendResult,
 } from "@blue-tanuki/channel-base";
@@ -191,7 +192,10 @@ export class SlackChannel implements InboundChannel, OutboundChannel {
   async send(
     payload: ChannelSendPayload,
     meta: SendMeta,
+    context?: SendContext,
   ): Promise<SendResult> {
+    if (context?.signal?.aborted) return { delivered: false, delivery_status: "not_delivered",
+      error: "channel_send_cancelled_before_dispatch", error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
     this.counter += 1;
     const at = Date.now();
     if (this.silent || !this.transport) {
@@ -224,11 +228,13 @@ export class SlackChannel implements InboundChannel, OutboundChannel {
     const transport = this.transport;
     const retryCfg = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
 
-    const callOnce = (): Promise<SlackPostResult> =>
-      transport.postMessage({
+    const callOnce = (): Promise<SlackPostResult> => {
+      if (context?.signal?.aborted) return Promise.reject(new Error("channel_send_cancelled_before_transport_dispatch"));
+      return transport.postMessage({
         channel: payload.target,
         text: payload.content,
       });
+    };
 
     let r: SlackPostResult;
     if (!retryCfg) {
@@ -242,6 +248,7 @@ export class SlackChannel implements InboundChannel, OutboundChannel {
         sleep: retryCfg.sleep,
         random: retryCfg.random,
         is_retryable: (signal) => {
+          if (context?.signal?.aborted) return false;
           if (signal.kind === "throw") {
             // Network-ish exceptions are retryable; the transport normally
             // catches and converts to {ok:false}, but defensively treat

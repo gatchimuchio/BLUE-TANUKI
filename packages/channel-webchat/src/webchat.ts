@@ -21,6 +21,7 @@ import {
   type InboundChannel,
   type InboundHandler,
   type OutboundChannel,
+  type SendContext,
   type SendMeta,
   type SendResult,
 } from "@blue-tanuki/channel-base";
@@ -444,7 +445,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
   async send(
     payload: ChannelSendPayload,
     meta: SendMeta,
+    context?: SendContext,
   ): Promise<SendResult> {
+    if (context?.signal?.aborted) return { delivered: false, delivery_status: "not_delivered",
+      error: "channel_send_cancelled_before_dispatch", error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
     const set = this.conns.get(payload.target);
     if (!set || set.size === 0) {
       return { delivered: false, error: "no_active_connection" };
