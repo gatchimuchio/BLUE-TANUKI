@@ -469,6 +469,33 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(messages).toEqual([["owner", body.content], ["accepted", "request-review-1"]]);
   });
 
+  it("sends cross-channel plan review with the exact source identity and fresh owner token", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanReview(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
+    const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    const calls: Array<{ path: string; token: string; body: unknown }> = [];
+    const nodes = { "chat-token": { value: "webchat-token" }, "owner-task-token": { value: "owner-token" },
+      "chat-user": { value: "owner-session" } };
+    const ownerReauthenticationBinding = { owner_identity_digest: "f".repeat(64), channel_identity_digest: "e".repeat(64) };
+    await new Script(`${helper}\ninvokeOperationPlanReview(planId, revisionDigest, stepId, "", true, ownerBindingText)`)
+      .runInNewContext({
+        state: {}, planId: "a".repeat(64), revisionDigest: "b".repeat(64), stepId: "c".repeat(64),
+        ownerBindingText: JSON.stringify(ownerReauthenticationBinding),
+        byId: (id: keyof typeof nodes) => nodes[id],
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+        postJson: async (path: string, token: string, body: unknown) => {
+          calls.push({ path, token, body }); return { request_id: "request-cross-channel-review" };
+        },
+        appendChat: () => undefined,
+      });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: "/operators/developer/invoke", token: "owner-token" });
+    expect(JSON.parse((calls[0]!.body as { content: string }).content.slice("plan:review ".length)))
+      .toMatchObject({ owner_reauthentication: ownerReauthenticationBinding });
+    expect(nodes["owner-task-token"].value).toBe("");
+  });
+
   it("sends a saved-result read through the authenticated Developer invoke path", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanResult(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
@@ -498,6 +525,35 @@ describe("WebChatChannel — Control Center shell", () => {
       plan_id: "a".repeat(64), revision_digest: "b".repeat(64), step_id: "c".repeat(64),
     });
     expect(messages).toEqual([["owner", body.content], ["accepted", "request-result-1"]]);
+  });
+
+  it("re-authenticates an owner before reading a saved result from another entry", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanResult(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    const calls: Array<{ path: string; token: string; body: unknown }> = [];
+    const binding = { owner_identity_digest: "f".repeat(64), channel_identity_digest: "e".repeat(64) };
+    const nodes = { "chat-token": { value: "webchat-token" }, "owner-task-token": { value: "owner-token" },
+      "chat-user": { value: "owner-session" } };
+    await new Script(`${helper}\ninvokeOperationPlanResult(planId, revisionDigest, stepId, true, bindingText)`)
+      .runInNewContext({
+        state: {}, planId: "a".repeat(64), revisionDigest: "b".repeat(64), stepId: "c".repeat(64),
+        bindingText: JSON.stringify(binding),
+        byId: (id: keyof typeof nodes) => nodes[id],
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+        postJson: async (path: string, token: string, body: unknown) => {
+          calls.push({ path, token, body }); return { request_id: "request-cross-channel-result" };
+        },
+        appendChat: () => undefined,
+      });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: "/operators/developer/invoke", token: "owner-token" });
+    expect(JSON.parse((calls[0]!.body as { content: string }).content.slice("plan:result ".length)))
+      .toMatchObject({ owner_reauthentication: binding });
+    expect(nodes["owner-task-token"].value).toBe("");
   });
 
   it("sends a fresh owner response for an interrupted wait without echoing the response into the chat", async () => {
@@ -530,6 +586,59 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(JSON.stringify(messages)).not.toContain("fresh owner response");
     expect(messages).toEqual([["owner", "復旧した待機へ新しい返信を送信しました。"],
       ["accepted", "request-wait-recovery-1"]]);
+  });
+
+  it("re-authenticates an owner before resuming an interrupted wait from another entry", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeInterruptedOperationPlanWait(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    const calls: Array<{ path: string; token: string; body: unknown }> = [];
+    const binding = { owner_identity_digest: "f".repeat(64), channel_identity_digest: "e".repeat(64) };
+    const nodes = { "chat-token": { value: "webchat-token" }, "owner-task-token": { value: "owner-token" },
+      "chat-user": { value: "owner-session" } };
+    await new Script(`${helper}\ninvokeInterruptedOperationPlanWait(waitId, response, true, bindingText)`)
+      .runInNewContext({
+        state: {}, waitId: "a".repeat(64), response: "fresh synthetic owner response", bindingText: JSON.stringify(binding),
+        byId: (id: keyof typeof nodes) => nodes[id],
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+        postJson: async (path: string, token: string, body: unknown) => {
+          calls.push({ path, token, body }); return { request_id: "request-cross-channel-wait" };
+        },
+        appendChat: () => undefined,
+      });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: "/operators/developer/invoke", token: "owner-token" });
+    expect(JSON.parse((calls[0]!.body as { content: string }).content.slice("plan:resume_wait ".length)))
+      .toMatchObject({ owner_reauthentication: binding, response: "fresh synthetic owner response" });
+    expect(nodes["owner-task-token"].value).toBe("");
+  });
+
+  it("disconnects only the WebChat socket and leaves task cancellation to its separate route", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function disconnectChat()");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n\n      async function connectChat()", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    let closeCount = 0;
+    let fetchCount = 0;
+    let postCount = 0;
+    const close = () => { closeCount += 1; };
+    const fetch = () => { fetchCount += 1; };
+    const postJson = () => { postCount += 1; };
+    const statuses: Array<[string, string | undefined]> = [];
+    const state = { chatConnectionGeneration: 3, chatSocket: { close } };
+    new Script(`${helper}\ndisconnectChat()`).runInNewContext({ state,
+      setChatStatus: (value: string, tone?: string) => statuses.push([value, tone]), fetch, postJson });
+
+    expect(closeCount).toBe(1);
+    expect(state.chatConnectionGeneration).toBe(4);
+    expect(state.chatSocket).toBeNull();
+    expect(fetchCount).toBe(0);
+    expect(postCount).toBe(0);
+    expect(statuses).toEqual([["WebChat disconnected", "warn"]]);
   });
 
   it("renders only bounded Operation Plan digests, fixed statuses, and residual counts after selected-store restore", () => {
@@ -671,6 +780,8 @@ describe("WebChatChannel — Control Center shell", () => {
         { wait_id: "2".repeat(64), plan_id: "3".repeat(64), task_identity_digest: "4".repeat(64),
           state: "resumed", deadline_at_ms: nowMs - 30_000, resumed_at_ms: nowMs - 60_000, wake_reason: "reply",
           compute_outcome: "interrupted", compute_interrupted_at_ms: nowMs - 30_000,
+          owner_authentication_required: true,
+          owner_reauthentication_binding: { owner_identity_digest: "b".repeat(64), channel_identity_digest: "c".repeat(64) },
           resource_review_required: false, used_for_authority: false, may_execute: false },
       ],
       goal_purpose_options: [{ goal_ref: "goal_0123456789abcdef", goal_kind: "delegated", purpose_version: 2,
@@ -727,6 +838,8 @@ describe("WebChatChannel — Control Center shell", () => {
     const rendered = nodes["operation-plan-state-list"]?.innerHTML ?? "";
     expect(rendered).toContain('<span class="badge good">results_verified</span>');
     expect(rendered).toContain("計画候補をJ台帳へ保存（採用・実行未許可）");
+    expect(rendered).toContain('data-owner-authentication-required="true"');
+    expect(rendered).toContain("別入口のwaitはowner tokenを再入力し");
     expect(rendered).toContain("返信／期限待機中");
     expect(rendered).toContain("C計算中断・新しい返信が必要");
     expect(rendered).toContain('data-operation-plan-resume-wait="true"');
@@ -5333,17 +5446,37 @@ describe("WebChatChannel - Developer Operator API", () => {
         "blue_tanuki.operator_surface": "developer",
         "blue_tanuki.operation_core.used_for_authority": false,
       });
+      const sourceIdentity = { owner_identity_digest: "f".repeat(64), channel_identity_digest: "e".repeat(64) };
+      const savedResultControl = { plan_id: "a".repeat(64), revision_digest: "b".repeat(64), step_id: "c".repeat(64),
+        owner_reauthentication: sourceIdentity };
+      expect((await postJson(ctx.port, "/operators/developer/invoke", {
+        user: "owner-webchat-session", content: `plan:result ${JSON.stringify(savedResultControl)}`,
+      }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(ctx.received[1]?.metadata?.["blue_tanuki.process_kind"]).toBe("tool");
+      const resumeControl = { wait_id: "c".repeat(64), response: "fresh synthetic response",
+        owner_reauthentication: sourceIdentity };
+      expect((await postJson(ctx.port, "/operators/developer/invoke", {
+        user: "owner-webchat-session", content: `plan:resume_wait ${JSON.stringify(resumeControl)}`,
+      }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(ctx.received[2]?.metadata).toMatchObject({
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "chat",
+      });
+      expect(ctx.received[2]?.content).toBe(`plan:resume_wait ${JSON.stringify(resumeControl)}`);
       const inboundReview = await postJson(ctx.port, "/operators/developer/invoke", {
         user: "ordinary-webchat-user", content: `plan:review ${JSON.stringify(control)}`,
       }, { authorization: `Bearer ${TOKEN}` });
       expect(inboundReview.status).toBe(202);
       await new Promise((resolve) => setTimeout(resolve, 30));
-      expect(ctx.received).toHaveLength(2);
-      expect(ctx.received[1]).toMatchObject({
+      expect(ctx.received).toHaveLength(4);
+      expect(ctx.received[3]).toMatchObject({
         user: "ordinary-webchat-user",
         content: `plan:review ${JSON.stringify(control)}`,
       });
-      expect(ctx.received[1]?.metadata?.["blue_tanuki.process_kind"]).toBeUndefined();
+      expect(ctx.received[3]?.metadata?.["blue_tanuki.process_kind"]).toBeUndefined();
       expect((await getRaw(ctx.port, "/operators/developer", {
         authorization: `Bearer ${OWNER_TOKEN}`,
       })).status).toBe(403);
@@ -5356,7 +5489,7 @@ describe("WebChatChannel - Developer Operator API", () => {
       expect((await postJson(ctx.port, "/operators/writing/invoke", {
         user: "owner-webchat-session", content: "draft this",
       }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(401);
-      expect(ctx.received).toHaveLength(2);
+      expect(ctx.received).toHaveLength(4);
     } finally {
       await ctx.teardown();
     }

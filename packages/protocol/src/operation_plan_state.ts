@@ -340,15 +340,18 @@ export type OperationPlanWaitState = z.infer<typeof OperationPlanWaitStateSchema
 
 export const OperationPlanControlSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("review"), plan_id: Id, revision_digest: Digest, step_id: Id,
-    goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional() }).strict(),
+    goal_purpose_binding: OperationPlanGoalPurposeBindingSchema.optional(),
+    owner_reauthentication: z.object({ owner_identity_digest: Digest, channel_identity_digest: Digest }).strict().optional() }).strict(),
   z.object({ action: z.literal("reconcile"), plan_id: Id, revision_digest: Digest, step_id: Id }).strict(),
   z.object({ action: z.literal("revise"), plan_id: Id, expected_revision_digest: Digest, plan: OperationPlanSchema }).strict(),
   z.object({ action: z.literal("wait"), plan_id: Id, revision_digest: Digest,
     deadline_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict(),
-  z.object({ action: z.literal("resume_wait"), wait_id: Digest, response: z.string().trim().min(1).max(200_000) }).strict(),
+  z.object({ action: z.literal("resume_wait"), wait_id: Digest, response: z.string().trim().min(1).max(200_000),
+    owner_reauthentication: z.object({ owner_identity_digest: Digest, channel_identity_digest: Digest }).strict().optional() }).strict(),
   z.object({ action: z.literal("reflect"), plan_id: Id, revision_digest: Digest,
     step_ids: z.array(Id).min(1).max(8), question: z.string().trim().min(1).max(4000) }).strict(),
-  z.object({ action: z.literal("result"), plan_id: Id, revision_digest: Digest, step_id: Id }).strict(),
+  z.object({ action: z.literal("result"), plan_id: Id, revision_digest: Digest, step_id: Id,
+    owner_reauthentication: z.object({ owner_identity_digest: Digest, channel_identity_digest: Digest }).strict().optional() }).strict(),
 ]);
 export type OperationPlanControl = z.infer<typeof OperationPlanControlSchema>;
 export type OperationPlanReflectionControl = Extract<OperationPlanControl, { action: "reflect" }>;

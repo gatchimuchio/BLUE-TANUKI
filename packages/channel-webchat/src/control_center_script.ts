@@ -609,7 +609,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "read-only reconciliation accepted");
       }
 
-      async function invokeOperationPlanReview(planId, revisionDigest, stepId, rawGoalPurposeBinding, ownerAuthenticationRequired) {
+      async function invokeOperationPlanReview(planId, revisionDigest, stepId, rawGoalPurposeBinding,
+        ownerAuthenticationRequired, rawOwnerReauthenticationBinding) {
         state.chatUser = byId("chat-user").value.trim() || "owner";
         const ownerTokenInput = ownerAuthenticationRequired ? byId("owner-task-token") : null;
         const authToken = ownerAuthenticationRequired ? ownerTokenInput.value.trim() : byId("chat-token").value.trim();
@@ -631,6 +632,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           control.goal_purpose_binding = { goal_ref: binding.goal_ref, purpose_version: binding.purpose_version,
             purpose_digest: binding.purpose_digest };
         }
+        if (rawOwnerReauthenticationBinding) {
+          let binding;
+          try { binding = JSON.parse(rawOwnerReauthenticationBinding); } catch (_) { throw new Error("owner reauthentication binding is invalid"); }
+          if (!isObject(binding) || !isDigest(binding.owner_identity_digest) || !isDigest(binding.channel_identity_digest)) {
+            throw new Error("owner reauthentication binding is invalid");
+          }
+          control.owner_reauthentication = { owner_identity_digest: binding.owner_identity_digest,
+            channel_identity_digest: binding.channel_identity_digest };
+        }
         const content = "plan:review " + JSON.stringify(control);
         let result;
         try {
@@ -642,34 +652,73 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "J step review request accepted");
       }
 
-      async function invokeOperationPlanResult(planId, revisionDigest, stepId) {
+      async function invokeOperationPlanResult(planId, revisionDigest, stepId, ownerAuthenticationRequired,
+        rawOwnerReauthenticationBinding) {
         state.chatToken = byId("chat-token").value.trim();
         state.chatUser = byId("chat-user").value.trim() || "owner";
-        if (!state.chatToken) throw new Error("webchat token is required");
+        const ownerTokenInput = ownerAuthenticationRequired ? byId("owner-task-token") : null;
+        const authToken = ownerAuthenticationRequired ? ownerTokenInput.value.trim() : state.chatToken;
+        if (!authToken) throw new Error(ownerAuthenticationRequired
+          ? "保存済み結果の読取にはowner tokenを入力してください"
+          : "webchat token is required");
         const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
         if (!isDigest(planId) || !isDigest(revisionDigest) || !isDigest(stepId)) {
           throw new Error("current plan and step digests are unavailable");
         }
-        const content = "plan:result " + JSON.stringify({ plan_id: planId, revision_digest: revisionDigest, step_id: stepId });
-        const result = await postJson("/operators/developer/invoke", state.chatToken,
-          { user: state.chatUser, content });
+        const control = { plan_id: planId, revision_digest: revisionDigest, step_id: stepId };
+        if (rawOwnerReauthenticationBinding) {
+          let binding;
+          try { binding = JSON.parse(rawOwnerReauthenticationBinding); } catch (_) { throw new Error("owner reauthentication binding is invalid"); }
+          if (!isObject(binding) || !isDigest(binding.owner_identity_digest) || !isDigest(binding.channel_identity_digest)) {
+            throw new Error("owner reauthentication binding is invalid");
+          }
+          control.owner_reauthentication = { owner_identity_digest: binding.owner_identity_digest,
+            channel_identity_digest: binding.channel_identity_digest };
+        }
+        const content = "plan:result " + JSON.stringify(control);
+        let result;
+        try {
+          result = await postJson("/operators/developer/invoke", authToken, { user: state.chatUser, content });
+        } finally {
+          if (ownerTokenInput) ownerTokenInput.value = "";
+        }
         appendChat("owner", content);
         appendChat("accepted", result.request_id || "saved result read request accepted");
       }
 
-      async function invokeInterruptedOperationPlanWait(waitId, response) {
+      async function invokeInterruptedOperationPlanWait(waitId, response, ownerAuthenticationRequired,
+        rawOwnerReauthenticationBinding) {
         state.chatToken = byId("chat-token").value.trim();
         state.chatUser = byId("chat-user").value.trim() || "owner";
-        if (!state.chatToken) throw new Error("webchat token is required");
+        const ownerTokenInput = ownerAuthenticationRequired ? byId("owner-task-token") : null;
+        const authToken = ownerAuthenticationRequired ? ownerTokenInput.value.trim() : state.chatToken;
+        if (!authToken) throw new Error(ownerAuthenticationRequired
+          ? "待機の再開にはowner tokenを入力してください"
+          : "webchat token is required");
         if (typeof waitId !== "string" || !/^[a-f0-9]{64}$/.test(waitId)) {
           throw new Error("interrupted wait identity is unavailable");
         }
         if (typeof response !== "string" || response.trim().length === 0 || response.length > 200000) {
           throw new Error("enter a new response of at most 200000 characters");
         }
-        const content = "plan:resume_wait " + JSON.stringify({ wait_id: waitId, response: response.trim() });
-        const result = await postJson("/operators/developer/invoke", state.chatToken,
-          { user: state.chatUser, content });
+        const control = { wait_id: waitId, response: response.trim() };
+        if (rawOwnerReauthenticationBinding) {
+          let binding;
+          try { binding = JSON.parse(rawOwnerReauthenticationBinding); } catch (_) { throw new Error("owner reauthentication binding is invalid"); }
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          if (!isObject(binding) || !isDigest(binding.owner_identity_digest) || !isDigest(binding.channel_identity_digest)) {
+            throw new Error("owner reauthentication binding is invalid");
+          }
+          control.owner_reauthentication = { owner_identity_digest: binding.owner_identity_digest,
+            channel_identity_digest: binding.channel_identity_digest };
+        }
+        const content = "plan:resume_wait " + JSON.stringify(control);
+        let result;
+        try {
+          result = await postJson("/operators/developer/invoke", authToken, { user: state.chatUser, content });
+        } finally {
+          if (ownerTokenInput) ownerTokenInput.value = "";
+        }
         appendChat("owner", "復旧した待機へ新しい返信を送信しました。");
         appendChat("accepted", result.request_id || "interrupted wait recovery request accepted");
       }
@@ -1183,8 +1232,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const recoveryInput = wait.compute_outcome === "interrupted" && !recoveryHold
             ? '<label>復旧後の新しい返信<textarea data-operation-plan-resume-input="true" maxlength="200000"></textarea></label>' +
               '<button type="button" class="secondary" data-operation-plan-resume-wait="true" data-wait-id="' +
-              escapeHtml(wait.wait_id) + '">新しい返信を送って候補計算を再開</button>' +
-              '<p class="muted">以前の返信本文は保存されていません。ownerの新しい入力だけで候補計算を行います。</p>'
+              escapeHtml(wait.wait_id) + '" data-owner-authentication-required="' +
+              String(wait.owner_authentication_required === true) + '" data-owner-reauthentication-binding="' +
+              escapeHtml(isObject(wait.owner_reauthentication_binding) ? JSON.stringify(wait.owner_reauthentication_binding) : '') +
+              '">新しい返信を送って候補計算を再開</button>' +
+              '<p class="muted">以前の返信本文は保存されていません。ownerの新しい入力だけで候補計算を行います。' +
+              (isObject(wait.owner_reauthentication_binding) ? '別入口のwaitはowner tokenを再入力し、元owner・channelを照合します。' : '') + '</p>'
             : '';
           return '<article class="trace-item"><div class="row"><h3>返信／期限wait ' +
             escapeHtml(shortDigest(wait.wait_id)) + '</h3>' + badge(recoveryHold || outcomeLabels[wait.compute_outcome], "review") + '</div>' +
@@ -1308,8 +1361,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const savedResultButton = savedResultReady
                 ? '<button type="button" class="secondary" data-operation-plan-result="true" data-plan-id="' +
                   escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) +
-                  '" data-step-id="' + escapeHtml(step.step_id) + '">保存済み検索結果を読む</button>' +
-                  '<p class="muted">J/M receipt確認済みの保存結果を表示します。保存時点の観測であり、現在状態の再検索や検索完全性を示しません。</p>'
+                  '" data-step-id="' + escapeHtml(step.step_id) + '" data-owner-authentication-required="' +
+                  String(plan.owner_authentication_required === true) + '" data-owner-reauthentication-binding="' +
+                  escapeHtml(isObject(plan.owner_reauthentication_binding) ? JSON.stringify(plan.owner_reauthentication_binding) : '') +
+                  '">保存済み検索結果を読む</button>' +
+                  '<p class="muted">J/M receipt確認済みの保存結果を表示します。保存時点の観測であり、現在状態の再検索や検索完全性を示しません。' +
+                  (isObject(plan.owner_reauthentication_binding) ? '別入口の計画ではowner tokenを再入力し、元owner・channelを照合します。' : '') + '</p>'
                 : '';
               const receiptLabels = {
                 not_applicable: "対象外",
@@ -1342,10 +1399,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '" data-step-id="' + escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
                   escapeHtml(purposeBinding ? JSON.stringify({ goal_ref: purposeBinding.goal_ref,
                     purpose_version: purposeBinding.purpose_version, purpose_digest: purposeBinding.purpose_digest }) : '') +
+                  '" data-owner-reauthentication-binding="' +
+                  escapeHtml(isObject(plan.owner_reauthentication_binding) ? JSON.stringify(plan.owner_reauthentication_binding) : '') +
                   '" data-owner-authentication-required="' + String(plan.owner_authentication_required === true) +
                   '">Jでstep審査を開始</button><p class="muted">' +
                   (plan.owner_authentication_required === true
-                    ? 'この計画はowner tokenで開始されています。step審査にもTasks欄へowner tokenを入力してください。Jが現在のrevision・依存・対象を再確認し、必要なL3はApproval待ちです。'
+                    ? (isObject(plan.owner_reauthentication_binding)
+                      ? '別入口で作成された計画です。step審査ではTasks欄へowner tokenを再入力し、Jが元のowner・channel・revisionを照合します。必要なL3はApproval待ちです。'
+                      : 'この計画はowner tokenで開始されています。step審査にもTasks欄へowner tokenを入力してください。Jが現在のrevision・依存・対象を再確認し、必要なL3はApproval待ちです。')
                     : 'Jが現在のrevision・依存・対象を再確認します。L1/L2はowner設定により実行へ進む場合があり、L3はApproval待ちです。') + '</p>'
                 : '';
               return '<div class="trace-item"><div class="row"><h4>' + escapeHtml(step.operation || "operation") + '</h4>' +
@@ -4357,7 +4418,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const container = target.closest(".trace-item");
           const responseInput = container && container.querySelector("[data-operation-plan-resume-input]");
           try {
-            await invokeInterruptedOperationPlanWait(target.dataset.waitId || "", responseInput?.value || "");
+            await invokeInterruptedOperationPlanWait(target.dataset.waitId || "", responseInput?.value || "",
+              target.dataset.ownerAuthenticationRequired === "true", target.dataset.ownerReauthenticationBinding || "");
             if (responseInput) responseInput.value = "";
           } catch (error) {
             appendChat("error", error.message);
@@ -4370,7 +4432,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           target.disabled = true;
           try {
             await invokeOperationPlanResult(target.dataset.planId || "", target.dataset.revisionDigest || "",
-              target.dataset.stepId || "");
+              target.dataset.stepId || "", target.dataset.ownerAuthenticationRequired === "true",
+              target.dataset.ownerReauthenticationBinding || "");
           } catch (error) {
             appendChat("error", error.message);
           } finally {
@@ -4383,7 +4446,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           try {
             await invokeOperationPlanReview(target.dataset.planId || "", target.dataset.revisionDigest || "",
               target.dataset.stepId || "", target.dataset.goalPurposeBinding || "",
-              target.dataset.ownerAuthenticationRequired === "true");
+              target.dataset.ownerAuthenticationRequired === "true", target.dataset.ownerReauthenticationBinding || "");
           } catch (error) {
             appendChat("error", error.message);
           } finally {

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
@@ -9,6 +10,7 @@ import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDige
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
   ToolRegistry, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "@blue-tanuki/core";
 import { TelegramChannel, type TelegramFetch } from "@blue-tanuki/channel-telegram";
+import { WebChatChannel } from "@blue-tanuki/channel-webchat";
 import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservationSchema, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
   OperationPlanCheckpointSchema,
   OperationPlanCheckpointEnvelopeSchema,
@@ -22,6 +24,18 @@ import { finalizeCommandOutput } from "../src/finalize_command_output.js";
 import { projectOperationPlanStatus } from "../src/serve_projection.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+
+async function allocateTestPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("test server did not allocate a port");
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return address.port;
+}
 
 function request(content: string, user = "fixture-owner", goal_criteria?: InboundRequest["goal_criteria"]): InboundRequest {
   return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user, timestamp: Date.now(), content,
@@ -135,6 +149,150 @@ function goalGovernanceConfig() {
 }
 
 describe("計画候補→明示step選択→実結果→改訂・復帰", () => {
+  it("Telegram由来の計画はWebChat owner再認証と元identity束縛なしにstep審査できない", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-cross-channel-owner-review-"));
+    const workspace = join(root, "workspace");
+    await mkdir(workspace);
+    await writeFile(join(workspace, "blue.txt"), "synthetic blue fixture\n", "utf8");
+    vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const candidate = plan("telegram-owner-review", workspace);
+    const originOwner = "telegram:telegram:12345:chat:-1001:thread:41";
+    const originChannel = "telegram";
+    const originGoal = "Review one synthetic Telegram task through WebChat.";
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: originOwner, channel: originChannel, goal: originGoal,
+        request_goal_criteria: noRequestCriteria(originGoal, candidate.request_id),
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }],
+        receipt_observations: [], bindings: [], results: [] }],
+    });
+    store.compareAndSet(null, checkpoint);
+    const hds = new HDSUpperController({ operation_plan_state: store });
+    try {
+      const planProjection = projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).plans[0];
+      expect(planProjection).toMatchObject({ owner_authentication_required: true, owner_reauthentication_binding: {
+        owner_identity_digest: operationPlanDigest(originOwner), channel_identity_digest: operationPlanDigest(originChannel),
+      } });
+      const reviewControl = { plan_id: planProjection!.plan_id, revision_digest: planProjection!.revision_digest,
+        step_id: operationPlanDigest("search") };
+      const ordinaryWebChat = hds.decide(request(`plan:review ${JSON.stringify(reviewControl)}`, "unrelated-webchat-user"));
+      expect(ordinaryWebChat.command).toBeNull();
+      expect(ordinaryWebChat.log.commit.reason).toContain("plan_control_denied:plan_owner_or_identity_mismatch");
+
+      const wrongOrigin = hds.decide(createGatewayInternalInboundRequest({
+        id: randomUUID(), channel: "webchat", user: "webchat-owner-token-holder",
+        content: `plan:review ${JSON.stringify({ ...reviewControl, owner_reauthentication: {
+          owner_identity_digest: "0".repeat(64), channel_identity_digest: operationPlanDigest(originChannel),
+        } })}`,
+        timestamp: Date.now(), metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "tool",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui" },
+      }));
+      expect(wrongOrigin.command).toBeNull();
+      expect(wrongOrigin.log.commit.reason).toContain("plan_control_denied:plan_owner_or_identity_mismatch");
+
+      const ownerReauthenticated = hds.decide(createGatewayInternalInboundRequest({
+        id: randomUUID(), channel: "webchat", user: "webchat-owner-token-holder",
+        content: `plan:review ${JSON.stringify({ ...reviewControl, owner_reauthentication: planProjection!.owner_reauthentication_binding })}`,
+        timestamp: Date.now(), metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "tool",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui" },
+      }));
+      expect(ownerReauthenticated.command?.type, ownerReauthenticated.log.commit.reason).toBe("tool_call");
+      expect(hds.operationPlanCommandIsCurrent(ownerReauthenticated.command!)).toBe(true);
+
+      const resultControl = { plan_id: planProjection!.plan_id, revision_digest: planProjection!.revision_digest,
+        step_id: operationPlanDigest("search") };
+      const unauthenticatedResultRead = hds.decide(request(`plan:result ${JSON.stringify(resultControl)}`, "unrelated-webchat-user"));
+      expect(unauthenticatedResultRead.command).toBeNull();
+      expect(unauthenticatedResultRead.log.commit.reason)
+        .toContain("plan_control_denied:plan_owner_or_identity_mismatch");
+      const reauthenticatedResultRead = hds.decide(createGatewayInternalInboundRequest({
+        id: randomUUID(), channel: "webchat", user: "webchat-owner-token-holder",
+        content: `plan:result ${JSON.stringify({ ...resultControl, owner_reauthentication: planProjection!.owner_reauthentication_binding })}`,
+        timestamp: Date.now(), metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "tool",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui" },
+      }));
+      expect(reauthenticatedResultRead.command).toBeNull();
+      expect(reauthenticatedResultRead.log.commit.reason)
+        .toContain("plan_control_denied:plan_saved_result_memory_unavailable");
+      expect(JSON.stringify(hds.getRuntimeSnapshot().operation_plans)).not.toContain("Review one synthetic Telegram task through WebChat.");
+    } finally {
+      hds.close(); store.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("served WebChat owner endpointは元identity再認証をGateway boundary経由でHDSへ渡す", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-cross-channel-served-owner-review-"));
+    const workspace = join(root, "workspace");
+    await mkdir(workspace);
+    await writeFile(join(workspace, "blue.txt"), "synthetic blue fixture\n", "utf8");
+    vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const candidate = plan("telegram-served-owner-review", workspace);
+    const owner = "telegram:telegram:12345:chat:-1001:thread:41";
+    const channelIdentity = "telegram";
+    const goal = "Review one synthetic Telegram task through the served WebChat owner endpoint.";
+    store.compareAndSet(null, OperationPlanCheckpointSchema.parse({ schema_version: "operation-plan-state.v1",
+      plans: [{ owner, channel: channelIdentity, goal, request_goal_criteria: noRequestCriteria(goal, candidate.request_id),
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }], receipt_observations: [], bindings: [], results: [] }] }));
+    const hds = new HDSUpperController({ operation_plan_state: store });
+    const port = await allocateTestPort();
+    const channel = new WebChatChannel({ host: "127.0.0.1", port, token: "synthetic-inbound-token",
+      owner_token: "synthetic-owner-token-123456",
+      operators: { developer: { getSnapshot: async () => ({ surface: "developer" }) } } });
+    let deliverDecision: ((decision: ReturnType<HDSUpperController["decide"]>) => void) | undefined;
+    await channel.start(async (incoming) => {
+      const boundary = planGatewayInboundBoundary(incoming);
+      if (!boundary.boundary_ok) return;
+      const decision = hds.decide(boundary.request);
+      deliverDecision?.(decision);
+      deliverDecision = undefined;
+    });
+    const projection = projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).plans[0]!;
+    const sourceBinding = projection.owner_reauthentication_binding!;
+    const control = { plan_id: projection.plan_id, revision_digest: projection.revision_digest,
+      step_id: operationPlanDigest("search"), owner_reauthentication: sourceBinding };
+    try {
+      const requestDecision = async (payload: unknown) => {
+        const decisionPromise = new Promise<ReturnType<HDSUpperController["decide"]>>((resolve) => {
+          deliverDecision = resolve;
+        });
+        const response = await fetch(`http://127.0.0.1:${port}/operators/developer/invoke`, {
+          method: "POST", headers: { authorization: "Bearer synthetic-owner-token-123456", "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (response.status !== 202) {
+          deliverDecision = undefined;
+          throw new Error(`WebChat developer invoke returned ${response.status}: ${await response.text()}`);
+        }
+        return { response, decision: await decisionPromise };
+      };
+
+      const wrong = await requestDecision({ user: "webchat-owner-session", content:
+        `plan:review ${JSON.stringify({ ...control, owner_reauthentication: {
+          owner_identity_digest: "0".repeat(64), channel_identity_digest: sourceBinding.channel_identity_digest,
+        } })}` });
+      expect(wrong.response.status).toBe(202);
+      expect(wrong.decision.command).toBeNull();
+      expect(wrong.decision.log.commit.reason).toContain("plan_control_denied:plan_owner_or_identity_mismatch");
+
+      const accepted = await requestDecision({ user: "webchat-owner-session", content: `plan:review ${JSON.stringify(control)}` });
+      expect(accepted.response.status).toBe(202);
+      expect(accepted.decision.command?.type, accepted.decision.log.commit.reason).toBe("tool_call");
+      expect(hds.operationPlanCommandIsCurrent(accepted.decision.command!)).toBe(true);
+      expect(JSON.stringify(hds.getAudit().list())).not.toContain(owner);
+    } finally {
+      await channel.stop();
+      hds.close();
+      store.close();
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("期限切れfile.search観測をJの再審査・実行・source bindingで拒否する", async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date(1_000));
     const root = await mkdtemp(join(tmpdir(), "blue-plan-source-expiry-"));
@@ -2361,6 +2519,74 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(JSON.stringify(hds.getAudit().list())).not.toContain(newReply);
       expect(JSON.stringify(hds.getRuntimeSnapshot().operation_plans)).not.toContain(newReply);
       expect(hds.getAudit().verify()).toBe(true);
+    } finally {
+      hds.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("別入口の中断waitはowner再認証と元identity束縛後だけ新しい返信を候補計算へ渡す", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-cross-channel-wait-resume-"));
+    const databasePath = join(root, "state.sqlite");
+    const owner = "telegram:telegram:12345:chat:-1001:thread:41";
+    const channel = "telegram";
+    const goal = "Resume one synthetic interrupted task through its authenticated WebChat entry.";
+    const seed = plan(randomUUID(), "synthetic-root");
+    const taskIdentityDigest = operationPlanDigest({
+      schema_version: "blue-tanuki.operation-plan-task-identity.v1",
+      owner_digest: operationPlanDigest(owner), channel_digest: operationPlanDigest(channel),
+      task_digest: operationPlanDigest(goal), plan_id_digest: operationPlanDigest(seed.plan_id),
+      request_id_digest: operationPlanDigest(seed.request_id),
+    });
+    const now = Date.now();
+    const waitId = operationPlanDigest("telegram-interrupted-wait");
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner, channel, goal,
+        revisions: [{ digest: operationPlanDigest(seed), plan: seed }], receipt_observations: [], bindings: [], results: [] }],
+      waits: [{ wait_id: waitId, plan_id_digest: operationPlanDigest(seed.plan_id), task_identity_digest: taskIdentityDigest,
+        revision_digest: operationPlanDigest(seed), owner_digest: operationPlanDigest(owner), channel_digest: operationPlanDigest(channel),
+        session_id_digest: operationPlanDigest("telegram-source-session"), deadline_at_ms: now - 60_000,
+        created_at_ms: now - 120_000, state: "resumed", resumed_at_ms: now - 30_000, wake_reason: "reply",
+        wake_event_id_digest: operationPlanDigest("previous-wake-event"),
+        resume_command_id_digest: operationPlanDigest("previous-resume-command"), compute_outcome: "interrupted",
+        compute_interrupted_at_ms: now - 10_000, used_for_authority: false, may_execute: false }],
+    });
+    const store = new OperationPlanStateStore(databasePath);
+    store.compareAndSet(null, checkpoint);
+    const hds = new HDSUpperController({ operation_plan_state: store });
+    const ownerReauthentication = { owner_identity_digest: operationPlanDigest(owner),
+      channel_identity_digest: operationPlanDigest(channel) };
+    try {
+      expect(projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).waits[0])
+        .toMatchObject({ owner_authentication_required: true, owner_reauthentication_binding: ownerReauthentication });
+      const reply = "SYNTHETIC NEW OWNER RESPONSE";
+      const baseControl = { wait_id: waitId, response: reply };
+      const unauthenticated = hds.decide(request(`plan:resume_wait ${JSON.stringify(baseControl)}`));
+      expect(unauthenticated.command).toBeNull();
+      expect(unauthenticated.log.commit.reason).toBe("plan_control_denied:plan_wait_resume_stale");
+
+      const webChatOwnerRequest = (control: Record<string, unknown>, processKind: "chat" | "tool" = "tool") => createGatewayInternalInboundRequest({
+        id: randomUUID(), channel: "webchat", user: "webchat-owner-token-holder",
+        content: `plan:resume_wait ${JSON.stringify(control)}`, timestamp: Date.now(),
+        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": processKind,
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui" },
+      });
+      const wrongOrigin = hds.decide(webChatOwnerRequest({ ...baseControl, owner_reauthentication: {
+        owner_identity_digest: "0".repeat(64), channel_identity_digest: ownerReauthentication.channel_identity_digest,
+      } }, "chat"));
+      expect(wrongOrigin.command).toBeNull();
+      expect(wrongOrigin.log.commit.reason).toBe("plan_control_denied:plan_wait_resume_stale");
+
+      const resumed = hds.decide(webChatOwnerRequest({ ...baseControl, owner_reauthentication: ownerReauthentication }, "chat"));
+      expect(resumed.command?.type, resumed.log.commit.reason).toBe("llm_call");
+      expect(JSON.stringify(resumed.command?.payload)).toContain(reply);
+      expect(store.load()?.waits?.find((wait) => wait.wait_id === waitId))
+        .toMatchObject({ compute_outcome: "pending", wake_reason: "recovery", used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(store.load())).not.toContain(reply);
+      expect(JSON.stringify(hds.getAudit().list())).not.toContain(reply);
     } finally {
       hds.close();
       store.close();

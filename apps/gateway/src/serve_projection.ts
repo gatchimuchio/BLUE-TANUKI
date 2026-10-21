@@ -36,6 +36,7 @@ export function metadataKeys(meta: Record<string, unknown> | undefined): string[
 }
 
 const WEBCHAT_OWNER_TOKEN_ACTOR_IDENTITY_DIGEST = operationPlanDigest("webchat-owner-token-holder");
+const WEBCHAT_CHANNEL_IDENTITY_DIGEST = operationPlanDigest("webchat");
 
 export function hdsDecisionHistoryPayload(
   log: DecisionLog,
@@ -227,6 +228,8 @@ export interface OperationPlanStatusProjection {
     wait_id: string;
     plan_id: string;
     task_identity_digest: string;
+    owner_authentication_required: boolean;
+    owner_reauthentication_binding?: { owner_identity_digest: string; channel_identity_digest: string };
     state: "waiting" | "resumed";
     deadline_at_ms: number;
     recovery_hold_reason?: "held_residual" | "held_unobserved" | "held_unverified";
@@ -250,6 +253,7 @@ export interface OperationPlanStatusProjection {
     revision_digest: string;
     status: "awaiting_step_review" | "results_verified";
     owner_authentication_required: boolean;
+    owner_reauthentication_binding?: { owner_identity_digest: string; channel_identity_digest: string };
     goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string };
     goal_purpose_binding_status: "not_configured" | "required" | "current" | "stale";
     goal_purpose_relation?: {
@@ -342,7 +346,8 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
   }
   const waits: OperationPlanStatusProjection["waits"] = [];
   for (const wait of rawWaits as Record<string, unknown>[]) {
-    const allowedKeys = new Set(["wait_id", "plan_id", "task_identity_digest", "state", "deadline_at_ms",
+    const allowedKeys = new Set(["wait_id", "plan_id", "task_identity_digest", "owner_authentication_required",
+      "owner_reauthentication_binding", "state", "deadline_at_ms",
       "recovery_hold_reason", "resumed_at_ms", "wake_reason", "compute_outcome", "compute_result_digest", "candidate_plan_id",
       "compute_completed_at_ms", "compute_interrupted_at_ms", "compute_resource_use", "used_for_authority", "may_execute"]);
     const state = wait.state;
@@ -354,8 +359,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     const parsedResourceUse = wait.compute_resource_use === undefined
       ? undefined : ComputeResourceUseSchema.safeParse(wait.compute_resource_use);
     const resourceUse = parsedResourceUse?.success ? parsedResourceUse.data : undefined;
+    const ownerReauthenticationBinding = wait.owner_reauthentication_binding;
     if (Object.keys(wait).some((key) => !allowedKeys.has(key)) || !isDigest(wait.wait_id) || !isDigest(wait.plan_id) ||
         !isDigest(wait.task_identity_digest) || (state !== "waiting" && !resumed) ||
+        (wait.owner_authentication_required !== undefined && typeof wait.owner_authentication_required !== "boolean") ||
+        (ownerReauthenticationBinding !== undefined && (!isRecord(ownerReauthenticationBinding) ||
+          Object.keys(ownerReauthenticationBinding).some((key) => !["owner_identity_digest", "channel_identity_digest"].includes(key)) ||
+          !isDigest(ownerReauthenticationBinding.owner_identity_digest) || !isDigest(ownerReauthenticationBinding.channel_identity_digest))) ||
         !Number.isSafeInteger(wait.deadline_at_ms) || (wait.deadline_at_ms as number) < 0 ||
         (wait.recovery_hold_reason !== undefined &&
           !["held_residual", "held_unobserved", "held_unverified"].includes(String(wait.recovery_hold_reason))) ||
@@ -386,6 +396,11 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       (resourceUse.charged_compute_ms > 0 || resourceUse.charged_tokens > 0 || resourceUse.charged_cost_amount > 0));
     waits.push({ wait_id: wait.wait_id as string, plan_id: wait.plan_id as string,
       task_identity_digest: wait.task_identity_digest as string, state: state as "waiting" | "resumed",
+      owner_authentication_required: wait.owner_authentication_required === true,
+      ...(isRecord(ownerReauthenticationBinding) ? { owner_reauthentication_binding: {
+        owner_identity_digest: ownerReauthenticationBinding.owner_identity_digest as string,
+        channel_identity_digest: ownerReauthenticationBinding.channel_identity_digest as string,
+      } } : {}),
       deadline_at_ms: wait.deadline_at_ms as number,
       ...(wait.recovery_hold_reason === "held_residual" || wait.recovery_hold_reason === "held_unobserved" ||
         wait.recovery_hold_reason === "held_unverified" ? { recovery_hold_reason: wait.recovery_hold_reason } : {}),
@@ -462,7 +477,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           ((goalPurposeRelation.status === "owner_reviewed_supports" && goalPurposeRelation.owner_review_outcome === "supports") ||
             (goalPurposeRelation.status === "owner_reviewed_unknown" && goalPurposeRelation.owner_review_outcome === "unknown")))));
     if (!isDigest(plan.plan_id) || !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
-        !isDigest(plan.owner_identity_digest) ||
+        !isDigest(plan.owner_identity_digest) || !isDigest(plan.channel_identity_digest) ||
         !goalPurposeBindingValid || !goalPurposeRelationValid ||
         !["not_configured", "required", "current", "stale"].includes(String(plan.goal_purpose_binding_status ??
           (goalPurposeBinding === undefined ? "not_configured" : "current"))) ||
@@ -533,8 +548,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         } } : {}),
       });
     }
+    const crossChannelOwnerReview = plan.channel_identity_digest !== WEBCHAT_CHANNEL_IDENTITY_DIGEST;
     plans.push({ plan_id: plan.plan_id, revision: revision!, revision_digest: plan.revision_digest,
-      owner_authentication_required: plan.owner_identity_digest === WEBCHAT_OWNER_TOKEN_ACTOR_IDENTITY_DIGEST,
+      owner_authentication_required: crossChannelOwnerReview || plan.owner_identity_digest === WEBCHAT_OWNER_TOKEN_ACTOR_IDENTITY_DIGEST,
+      ...(crossChannelOwnerReview ? { owner_reauthentication_binding: {
+        owner_identity_digest: plan.owner_identity_digest as string,
+        channel_identity_digest: plan.channel_identity_digest as string,
+      } } : {}),
       ...(isRecord(goalPurposeBinding) ? { goal_purpose_binding: {
         goal_ref: goalPurposeBinding.goal_ref as string, purpose_version: goalPurposeBinding.purpose_version as number,
         purpose_digest: goalPurposeBinding.purpose_digest as string,

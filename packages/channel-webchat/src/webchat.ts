@@ -12,6 +12,7 @@ import { URL } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   createGatewayInternalInboundRequest,
+  OperationPlanControlSchema,
   RuntimeIntentInputSchema,
   type InboundRequest,
   type ChannelSendPayload,
@@ -93,25 +94,15 @@ const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
 const AOTANU_ASSET_ROOT = findAotanuAssetRoot();
 
-function isOperationPlanReviewContent(content: string): boolean {
-  const match = /^plan:review\s+(\{[\s\S]*\})$/.exec(content);
-  if (!match) return false;
+function ownerOperationPlanControlAction(content: string): "review" | "result" | "resume_wait" | null {
+  const match = /^plan:(review|result|resume_wait)\s+(\{[\s\S]*\})$/.exec(content);
+  if (!match) return null;
   let value: unknown;
-  try { value = JSON.parse(match[1] ?? ""); } catch { return false; }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const control = value as Record<string, unknown>;
-  if (Object.keys(control).some((key) => !["plan_id", "revision_digest", "step_id", "goal_purpose_binding"].includes(key)) ||
-      ![control.plan_id, control.revision_digest, control.step_id].every((digest) =>
-        typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest))) return false;
-  if (control.goal_purpose_binding === undefined) return true;
-  const binding = control.goal_purpose_binding;
-  if (typeof binding !== "object" || binding === null || Array.isArray(binding)) return false;
-  const valueBinding = binding as Record<string, unknown>;
-  return Object.keys(valueBinding).length === 3 &&
-    Object.keys(valueBinding).every((key) => ["goal_ref", "purpose_version", "purpose_digest"].includes(key)) &&
-    typeof valueBinding.goal_ref === "string" && /^goal_[a-f0-9]{16,64}$/.test(valueBinding.goal_ref) &&
-    Number.isSafeInteger(valueBinding.purpose_version) && (valueBinding.purpose_version as number) >= 1 &&
-    typeof valueBinding.purpose_digest === "string" && /^[a-f0-9]{64}$/.test(valueBinding.purpose_digest);
+  try { value = JSON.parse(match[2] ?? ""); } catch { return null; }
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.hasOwn(value, "action")) return null;
+  const parsed = OperationPlanControlSchema.safeParse({ ...(value as Record<string, unknown>), action: match[1] });
+  return parsed.success && (parsed.data.action === "review" || parsed.data.action === "result" ||
+    parsed.data.action === "resume_wait") ? parsed.data.action : null;
 }
 
 function bearerTokenMatches(candidate: string | undefined, expected: string | undefined): boolean {
@@ -1835,8 +1826,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "user and content are required strings" }));
         return;
       }
-      const operationPlanReview = isOperationPlanReviewContent(content);
-      if (ownerAuthenticated && !operationPlanReview) {
+      const ownerOperationPlanAction = ownerOperationPlanControlAction(content);
+      if (ownerAuthenticated && !ownerOperationPlanAction) {
         res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "owner_token_operator_scope_denied" }));
         return;
@@ -1858,7 +1849,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             "blue_tanuki.actor_kind": "owner",
             "blue_tanuki.trust_level": "owner",
           } : {}),
-          ...(ownerAuthenticated && operationPlanReview ? { "blue_tanuki.process_kind": "tool" } : {}),
+          ...(ownerAuthenticated && ownerOperationPlanAction
+            ? { "blue_tanuki.process_kind": ownerOperationPlanAction === "resume_wait" ? "chat" : "tool" } : {}),
           "blue_tanuki.operator_surface": surfaceName,
           "blue_tanuki.operation_core.version": "operation-core.v1",
           "blue_tanuki.operation_core.request_id": `operation-request:${requestId}`,

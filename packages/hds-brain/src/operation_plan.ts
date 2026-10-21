@@ -1186,8 +1186,14 @@ export class OperationPlanLedger {
       operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
     if (!plan || plan.revisions.at(-1)?.digest !== wait.revision_digest ||
         operationPlanTaskIdentityDigest(plan) !== wait.task_identity_digest ||
-        operationPlanDigest(plan.owner) !== wait.owner_digest || operationPlanDigest(plan.channel) !== wait.channel_digest ||
-        caller.user !== plan.owner || caller.channel !== plan.channel) throw new Error("plan_wait_resume_stale");
+        operationPlanDigest(plan.owner) !== wait.owner_digest || operationPlanDigest(plan.channel) !== wait.channel_digest) {
+      throw new Error("plan_wait_resume_stale");
+    }
+    try {
+      this.ownedPlanForOwnerReauthentication(plan.revisions[0]!.plan.plan_id, control.owner_reauthentication, caller, "chat");
+    } catch {
+      throw new Error("plan_wait_resume_stale");
+    }
     const recoveryHold = this.recoveryHolds.get(wait.plan_id_digest);
     if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
     return { wait_id: wait.wait_id, task_identity_digest: wait.task_identity_digest, goal: plan.goal };
@@ -2030,7 +2036,9 @@ export class OperationPlanLedger {
     resource_use_review?: { wait_id: string; resource_use: ComputeResourceUse };
   } {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
-    const p = this.ownedPlan(control.plan_id, caller);
+    const p = control.action === "review"
+      ? this.ownedPlanForReview(control, caller)
+      : this.ownedPlan(control.plan_id, caller);
     let recoveryHoldReleased = false;
     const recoveryHold = control.action === "review"
       ? this.recoveryHolds.get(operationPlanDigest(p.revisions[0]!.plan.plan_id)) : undefined;
@@ -2653,7 +2661,7 @@ export class OperationPlanLedger {
     if (this.recoveryRefreshPending) {
       throw new Error("plan_recovery_refresh_hold");
     }
-    const plan = this.ownedPlan(control.plan_id, caller);
+    const plan = this.ownedPlanForOwnerReauthentication(control.plan_id, control.owner_reauthentication, caller);
     const recoveryHold = this.recoveryHolds.get(operationPlanDigest(plan.revisions[0]!.plan.plan_id));
     if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
     if (!this.resultMemory || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest ||
@@ -3165,6 +3173,11 @@ export class OperationPlanLedger {
         used_for_authority: false as const },
       waits: (this.state.waits ?? []).slice(-256).reverse().map((wait) => ({
         wait_id: wait.wait_id, plan_id: wait.plan_id_digest, task_identity_digest: wait.task_identity_digest,
+        owner_authentication_required: wait.channel_digest !== operationPlanDigest("webchat") ||
+          wait.owner_digest === operationPlanDigest("webchat-owner-token-holder"),
+        ...(wait.channel_digest !== operationPlanDigest("webchat") ? { owner_reauthentication_binding: {
+          owner_identity_digest: wait.owner_digest, channel_identity_digest: wait.channel_digest,
+        } } : {}),
         state: wait.state, deadline_at_ms: wait.deadline_at_ms,
         ...(this.recoveryHolds.has(wait.plan_id_digest)
           ? { recovery_hold_reason: this.recoveryHolds.get(wait.plan_id_digest)!.reason } : {}),
@@ -3183,6 +3196,7 @@ export class OperationPlanLedger {
         const planIdDigest = operationPlanDigest(p.revisions[0]!.plan.plan_id);
         const recoveryHold = this.recoveryHolds.get(planIdDigest);
         return { plan_id: planIdDigest, owner_identity_digest: operationPlanDigest(p.owner),
+        channel_identity_digest: operationPlanDigest(p.channel),
         request_id: p.revisions[0]!.plan.request_id, revision: p.revisions.length,
         revision_digest: currentRevision.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),
         ...(p.goal_purpose_binding ? { goal_purpose_binding: structuredClone(p.goal_purpose_binding) } : {}),
@@ -3440,6 +3454,35 @@ export class OperationPlanLedger {
     const p = matches[0];
     if (matches.length !== 1 || !p || p.owner !== caller.user || p.channel !== caller.channel) throw new Error("plan_owner_or_identity_mismatch");
     return p;
+  }
+
+  private ownedPlanForReview(control: Extract<OperationPlanControl, { action: "review" }>, caller: InboundRequest): PlanState {
+    return this.ownedPlanForOwnerReauthentication(control.plan_id, control.owner_reauthentication, caller);
+  }
+
+  private ownedPlanForOwnerReauthentication(planId: string,
+    ownerReauthentication: { owner_identity_digest: string; channel_identity_digest: string } | undefined,
+    caller: InboundRequest, processKind: "chat" | "tool" = "tool"): PlanState {
+    const matches = this.state.plans.filter((p) => p.revisions[0]!.plan.plan_id === planId ||
+      operationPlanDigest(p.revisions[0]!.plan.plan_id) === planId);
+    const plan = matches[0];
+    if (matches.length !== 1 || !plan) throw new Error("plan_owner_or_identity_mismatch");
+    if (plan.owner === caller.user && plan.channel === caller.channel) {
+      if (ownerReauthentication !== undefined) throw new Error("plan_owner_or_identity_mismatch");
+      return plan;
+    }
+
+    const metadata = caller.metadata ?? {};
+    const ownerReauthenticated = ownerReauthentication !== undefined &&
+      isGatewayInternalInboundRequest(caller) && caller.channel === "webchat" && caller.user === "webchat-owner-token-holder" &&
+      metadata["blue_tanuki.authority_context"] === "gateway_internal_v1" &&
+      metadata["blue_tanuki.actor_kind"] === "owner" && metadata["blue_tanuki.trust_level"] === "owner" &&
+      metadata["blue_tanuki.process_kind"] === processKind && metadata["blue_tanuki.operator_surface"] === "developer" &&
+      metadata["blue_tanuki.operation_core.source_interface"] === "gui" &&
+      ownerReauthentication.owner_identity_digest === operationPlanDigest(plan.owner) &&
+      ownerReauthentication.channel_identity_digest === operationPlanDigest(plan.channel);
+    if (!ownerReauthenticated) throw new Error("plan_owner_or_identity_mismatch");
+    return plan;
   }
 
   private inspectReceiptReconciliation(control: OperationPlanReceiptReconciliationControl, caller: InboundRequest): {
