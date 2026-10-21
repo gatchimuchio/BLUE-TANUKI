@@ -22,6 +22,8 @@ Slack Socket ModeのBolt authenticated outer Events API bodyから`team_id`／`e
 
 F11.01の合成Slack admission→Gateway inbound consumerを部分的に`WIRED`とする。Socket Modeの実運転と実HDS実行は未確認であり、Slack channelの`first-party-preview`およびowner-run live smoke保留を維持する。Inboxの長期容量・回転条件は全体実装後のQE_QC候補として残す。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。次はF11.02（Slackの受信・返信・障害復旧実行）。
 
+実装commit=`e4d19561643081da474ae0003966eaa1b52ea82b`。
+
 ### 履歴ログ：`QEB-26-E04.01-FAILURE-SYMPTOM-CAUSE-SEPARATION`
 
 開始HEAD／`origin/main`=`37795d4243181543b5cefc62a3d7fda47bd6ad80`。owner指定rev2.3三点セットの現行pin・SHA、適用AGENTS、active指示、dirty stateを再同期し、配布ZIP SHAがpinと一致することを確認した。作業前のlocal復旧branch二世代とremote backup tag二世代はそれぞれmain／前mainと一致。保護対象untracked `packages/blue-tanuki/native/linux-isolation/target/`は保持した。
