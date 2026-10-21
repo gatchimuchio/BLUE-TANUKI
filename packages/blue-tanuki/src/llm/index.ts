@@ -25,6 +25,7 @@ export {
 } from "./registry.js";
 export {
   LLMComputeAdapter,
+  LLMComputeResourceFailure,
   LLM_COMPUTE_PROFILE,
   DEFAULT_COMPUTE_BUDGET_POLICY,
 } from "./compute.js";

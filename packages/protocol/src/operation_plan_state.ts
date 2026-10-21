@@ -3,6 +3,7 @@ import { OperationPlanSchema, OperationJsonValueSchema, OperationTargetSchema, O
 import { ExecutionAdmissionSchema } from "./execution_result_delivery.js";
 import { MemoryCommitV2Schema, MemoryUpdateReceiptV1Schema } from "./状態更新契約.js";
 import { GoalCriteriaProjectionSchema } from "./goal_criteria.js";
+import { ComputeResourceUseSchema } from "./types.js";
 
 const Id = z.string().min(1).max(200);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -292,13 +293,15 @@ export const OperationPlanWaitStateSchema = z.object({
   compute_result_digest: Digest.optional(),
   candidate_plan_id_digest: Digest.optional(),
   compute_completed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  compute_resource_use: ComputeResourceUseSchema.optional(),
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),
 }).strict().superRefine((wait, context) => {
   const resumedFieldsPresent = wait.resumed_at_ms !== undefined && wait.wake_reason !== undefined &&
     wait.wake_event_id_digest !== undefined;
   const computeOutcomeFieldsPresent = wait.resume_command_id_digest !== undefined || wait.compute_outcome !== undefined ||
-    wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined || wait.compute_completed_at_ms !== undefined;
+    wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined || wait.compute_completed_at_ms !== undefined ||
+    wait.compute_resource_use !== undefined;
   if (wait.deadline_at_ms <= wait.created_at_ms) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_deadline_must_follow_creation" });
   }
@@ -308,9 +311,9 @@ export const OperationPlanWaitStateSchema = z.object({
   }
   if ((wait.compute_outcome !== undefined) !== (wait.resume_command_id_digest !== undefined) ||
       (wait.compute_outcome === undefined && (wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined ||
-        wait.compute_completed_at_ms !== undefined)) ||
+        wait.compute_completed_at_ms !== undefined || wait.compute_resource_use !== undefined)) ||
       (wait.compute_outcome === "pending" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined ||
-        wait.compute_completed_at_ms !== undefined)) ||
+        wait.compute_completed_at_ms !== undefined || wait.compute_resource_use !== undefined)) ||
       ((wait.compute_outcome === "candidate_retained" || wait.compute_outcome === "candidate_rejected" || wait.compute_outcome === "failed") &&
         wait.compute_completed_at_ms === undefined) ||
       (wait.compute_outcome === "candidate_retained" && wait.candidate_plan_id_digest === undefined) ||

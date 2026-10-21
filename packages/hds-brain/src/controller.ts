@@ -28,6 +28,7 @@ import {
   LLMFallbackAuthorizationSchema,
   inspectOperationCommandExecutionResult,
   OperationPlanExternalReceiptObservationSchema,
+  ComputeResourceUseSchema,
   FileSearchTargetVersionObservationSchema,
   FileWriteTargetVersionObservationSchema,
   FileDeleteTargetVersionObservationSchema,
@@ -1013,8 +1014,20 @@ ${planControl.question}`,
         const selection = this.operationPlans.inspectControl(planControl, req);
         if (selection.step) {
           const descriptor = getOperationDescriptor(selection.step.operation)!;
+          const resourceUseReview = selection.resource_use_review?.resource_use;
+          const resourceUseNote = resourceUseReview
+            ? `資源消費記録（待機再開時、計画候補はJ台帳へ保存されず）: ${JSON.stringify({
+                charged_compute_ms: resourceUseReview.charged_compute_ms,
+                charged_tokens: resourceUseReview.charged_tokens,
+                tokens_usage_status: resourceUseReview.tokens_usage_status,
+                charged_cost_amount: resourceUseReview.charged_cost_amount,
+                currency: resourceUseReview.currency,
+                cost_status: resourceUseReview.cost_status,
+                charge_basis: resourceUseReview.charge_basis,
+              })}。これは観測であり、再計算や作用の指示・許可ではない。今回のJ再検討で進捗を評価し、必要なら独立観測、別方式、保留を判断する。`
+            : "";
           req = createGatewayInternalInboundRequest({ ...req,
-            content: `${selection.goal}\n今回選択した作用候補: ${JSON.stringify({ operation: descriptor.operation_id, target: selection.step.target, parameters: selection.step.parameters })}`,
+            content: `${resourceUseNote}${resourceUseNote ? "\n" : ""}${selection.goal}\n今回選択した作用候補: ${JSON.stringify({ operation: descriptor.operation_id, target: selection.step.target, parameters: selection.step.parameters })}`,
             metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1",
               "blue_tanuki.tool_call": { tool_name: descriptor.tool_name!, arguments: selection.step.parameters! } },
           });
@@ -2713,6 +2726,17 @@ ${planControl.question}`,
       : parseMeaningUpdateProposal(fb.meaning_update_proposal);
     const sourceLog = this.inflight.get(fb.command_id);
     const issued = this.issuedLLM.get(fb.command_id);
+    const rawResourceUse = fb.compute_resource_use;
+    const resourceUseParse = rawResourceUse === undefined
+      ? undefined : ComputeResourceUseSchema.safeParse(rawResourceUse);
+    const expectedResourceRequestDigest = rawResourceUse === undefined ? undefined : createHash("sha256")
+      .update("blue-tanuki.compute-resource-use.request.v1\0").update(fb.command_id).digest("hex");
+    const computeResourceUse = resourceUseParse?.success &&
+      expectedResourceRequestDigest !== undefined && resourceUseParse.data.request_digest === expectedResourceRequestDigest
+      ? resourceUseParse.data : undefined;
+    const computeResourceUseContractStatus = rawResourceUse === undefined
+      ? "not_present" as const
+      : computeResourceUse ? "passed" as const : "failed" as const;
     let waitComputeOutcome: "candidate_retained" | "candidate_rejected" | "failed" | undefined = issued?.wait_resume
       ? fb.status === "success" ? "candidate_rejected" : "failed"
       : undefined;
@@ -2827,6 +2851,8 @@ ${planControl.question}`,
         meaning_update_proposal_reference_review: meaningUpdateProposalReferenceReview,
         meaning_update_proposal_used_for_authority: false as const,
         meaning_update_proposal_applied: false as const,
+        compute_resource_use_contract_status: computeResourceUseContractStatus,
+        ...(computeResourceUse ? { compute_resource_use_digest: sha256(computeResourceUse) } : {}),
         metrics: fb.metrics,
       },
       timestamp: Date.now(),
@@ -2890,13 +2916,22 @@ ${planControl.question}`,
     }
     if (issued?.wait_resume && waitComputeOutcome) {
       const recorded = this.operationPlans.recordWaitComputeOutcome(issued.wait_resume.wait_id, fb.command_id,
-        waitComputeOutcome, resultAudit.digest, waitCandidatePlanIdDigest);
+        waitComputeOutcome, resultAudit.digest, waitCandidatePlanIdDigest, computeResourceUse);
       this.audit.append({ kind: "operation_plan", event: "wait_compute_outcome_recorded",
         request_id: sourceLog?.request_id ?? null, command_id: fb.command_id,
         projection_digest: operationPlanDigest(recorded), proposal_digest: recorded.compute_result_digest,
         candidate_digest: recorded.task_identity_digest,
         target_digest: recorded.candidate_plan_id_digest ?? recorded.plan_id_digest,
         reason: waitComputeOutcome, used_for_authority: false, timestamp: Date.now() });
+      if (computeResourceUse && waitComputeOutcome !== "candidate_retained" &&
+          (computeResourceUse.charged_compute_ms > 0 || computeResourceUse.charged_tokens > 0 ||
+            computeResourceUse.charged_cost_amount > 0)) {
+        this.audit.append({ kind: "operation_plan", event: "wait_resource_consumed_without_progress",
+          request_id: sourceLog?.request_id ?? null, command_id: fb.command_id,
+          projection_digest: operationPlanDigest(recorded), proposal_digest: sha256(computeResourceUse),
+          candidate_digest: recorded.task_identity_digest, target_digest: recorded.wait_id,
+          reason: waitComputeOutcome, used_for_authority: false, timestamp: Date.now() });
+      }
     }
     if (planCandidateEvent) this.planEvent(planCandidateEvent, fb.command_id);
     if (sourceLog && this.operationPlans.isBound(fb.command_id)) {

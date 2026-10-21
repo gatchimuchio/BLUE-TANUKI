@@ -27,6 +27,7 @@ import type {
   FileSearchTargetVersionObservation,
   LLMCallFailure,
   LLMCallPayload,
+  ComputeResourceUse,
   ChannelSendPayload,
   ToolCapability,
 } from "@blue-tanuki/protocol";
@@ -44,6 +45,7 @@ import {
 } from "./llm/base.js";
 import {
   LLM_COMPUTE_PROFILE,
+  LLMComputeResourceFailure,
   type ComputeBackend,
   type ComputeInputSource,
   type ComputeRequest,
@@ -795,6 +797,7 @@ export class Executor {
     };
     const requestedProvider = safeProviderLabel(payload.backend_hint ?? this.deps.llm.name);
     let resp: LLMResponse;
+    let computeResourceUse: ComputeResourceUse | undefined;
     try {
       resp = await withLLMCallGuard(
         requestedProvider,
@@ -811,14 +814,20 @@ export class Executor {
               session_history_applied: sessionHistoryApplied,
             });
             markInvoked?.("llm_adapter");
-            return this.deps.compute.compute(request, signal);
+            const computed = await this.deps.compute.compute(request, signal);
+            computeResourceUse = computed.compute_resource_use;
+            const { compute_resource_use: _resourceUse, ...response } = computed;
+            return response;
           }
           markInvoked?.("llm_adapter");
           return this.deps.llm.call(providerRequest, signal);
         },
       );
     } catch (error) {
-      return buildLLMFailureFeedback(id, error, requestedProvider, Date.now() - start);
+      return buildLLMFailureFeedback(id,
+        error instanceof LLMComputeResourceFailure ? error.original_error : error,
+        requestedProvider, Date.now() - start,
+        error instanceof LLMComputeResourceFailure ? error.compute_resource_use : undefined);
     }
 
     // Provider adapters and custom backends may attach raw diagnostic payloads.
@@ -850,7 +859,7 @@ export class Executor {
       );
       if (toolCandidates) resp = { ...resp, tool_calls: toolCandidates };
     } catch (error) {
-      return buildLLMFailureFeedback(id, error, requestedProvider, Date.now() - start);
+      return buildLLMFailureFeedback(id, error, requestedProvider, Date.now() - start, computeResourceUse);
     }
 
     const plannerInspection = inspectOperationCorePlannerOutput(resp.content);
@@ -867,6 +876,7 @@ export class Executor {
           authority_boundary: { used_for_authority: false },
         },
         result: { operation_core: { status: "rejected", planner_output_used_for_authority: false } },
+        ...(computeResourceUse ? { compute_resource_use: computeResourceUse } : {}),
         metrics: {
           duration_ms: Date.now() - start,
           tokens_used: resp.tokens_used,
@@ -903,6 +913,7 @@ export class Executor {
         : resp,
       ...(toolCandidates?.length ? { llm_tool_candidates: toolCandidates } : {}),
       ...(meaningUpdateProposalPresent ? { meaning_update_proposal: meaningUpdateProposal } : {}),
+      ...(computeResourceUse ? { compute_resource_use: computeResourceUse } : {}),
       metrics: {
         duration_ms: Date.now() - start,
         tokens_used: resp.tokens_used,
@@ -1195,6 +1206,7 @@ function buildLLMFailureFeedback(
   error: unknown,
   requestedProvider: string,
   durationMs: number,
+  computeResourceUse?: ComputeResourceUse,
 ): ExecuteFeedback {
   const classification = classifyLLMError(error);
   const provider = error instanceof LLMProviderError
@@ -1216,6 +1228,7 @@ function buildLLMFailureFeedback(
     status: "failed",
     error: safeLLMLocalError(error) ?? safeLLMFailureMessage(classification.kind),
     llm_failure: failure,
+    ...(computeResourceUse ? { compute_resource_use: computeResourceUse } : {}),
     metrics: { duration_ms: durationMs },
   };
 }

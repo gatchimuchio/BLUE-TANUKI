@@ -1496,10 +1496,33 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === deadlineWait!.wait_id))
           .toMatchObject({ state: "resumed", wake_reason: "deadline" });
         hds.onFeedback({ command_id: deadlineResume.command!.id, status: "failed",
-          error: "synthetic planner failure", metrics: { duration_ms: 1 } });
+          error: "synthetic planner failure", compute_resource_use: {
+            schema_version: "blue-tanuki.compute-resource-use.v1",
+            request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0")
+              .update(deadlineResume.command!.id).digest("hex"),
+            charged_compute_ms: 2_000, charged_tokens: 128, tokens_usage_status: "unknown",
+            cost_status: "unknown", charged_cost_amount: 0.25, currency: "USD",
+            charge_basis: "reserved_upper_bound", used_for_authority: false, may_execute: false,
+          }, metrics: { duration_ms: 1 } });
       } finally { deadlineClock.mockRestore(); }
       expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === deadlineWait!.wait_id))
-        .toMatchObject({ state: "resumed", compute_outcome: "failed", used_for_authority: false, may_execute: false });
+        .toMatchObject({ state: "resumed", compute_outcome: "failed", used_for_authority: false, may_execute: false,
+          compute_resource_use: { charged_compute_ms: 2_000, charged_tokens: 128,
+            charged_cost_amount: 0.25, charge_basis: "reserved_upper_bound" } });
+      expect(store.load()?.waits?.find((candidate) => candidate.wait_id === deadlineWait!.wait_id)?.compute_resource_use)
+        .toMatchObject({ request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0")
+          .update(deadlineResume.command!.id).digest("hex"), used_for_authority: false, may_execute: false });
+      const noProgressProjection = projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans);
+      expect(noProgressProjection.waits.find((candidate) => candidate.wait_id === deadlineWait!.wait_id))
+        .toMatchObject({ resource_review_required: true, compute_resource_use: {
+          charged_compute_ms: 2_000, charged_tokens: 128, cost_status: "unknown", currency: "USD",
+          used_for_authority: false, may_execute: false,
+        } });
+      const nextReview = review(hds, next, "search");
+      expect(nextReview.log.frame.goal).toContain("資源消費記録");
+      expect(nextReview.log.frame.goal).toContain("charged_compute_ms");
+      expect(nextReview.command?.type).toBe("tool_call");
+      expect(hds.getAudit().verify()).toBe(true);
       expect(hds.decide(duplicateDeadline).command).toBeNull();
     } finally {
       hds.close();

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { LLMFallbackAuthorizationSchema, type LLMFallbackAuthorization } from "@blue-tanuki/protocol";
+import { LLMFallbackAuthorizationSchema, type ComputeResourceUse, type LLMFallbackAuthorization } from "@blue-tanuki/protocol";
 import {
   LLM_ROUTING_TRACE,
   normalizeLLMToolCallCandidates,
@@ -172,7 +172,22 @@ export type ComputeResult<TOutput extends object = Record<string, never>> = TOut
     provider_metadata_used_for_authority: false;
     used_for_authority: false;
   };
+  /** Persisted budget settlement evidence for J; omitted when no budget ledger is connected. */
+  compute_resource_use?: ComputeResourceUse;
 };
+
+/** Provider failure with its conservative resource settlement kept alongside the original error. */
+export class LLMComputeResourceFailure extends Error {
+  readonly original_error: unknown;
+  readonly compute_resource_use: ComputeResourceUse;
+
+  constructor(originalError: unknown, computeResourceUse: ComputeResourceUse) {
+    super(originalError instanceof Error ? originalError.message : "LLM compute failed after resource use");
+    this.name = "LLMComputeResourceFailure";
+    this.original_error = originalError;
+    this.compute_resource_use = computeResourceUse;
+  }
+}
 
 /** Cの計算契約。権限・承認・操作発行はこの境界に含めない。 */
 export interface ComputeBackend<
@@ -239,28 +254,73 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
         ? await this.backend.callWithFallbackAuthorization(request.input, signal, fallbackAuthorization)
         : await this.backend.call(request.input, signal);
     } catch (error) {
+      const computeMs = Math.max(0, Date.now() - startedAt);
+      let computeResourceUse: ComputeResourceUse | undefined;
       if (reservation) {
         await this.budget!.settle(reservation.reservation_id, {
           state: "unknown",
           tokens_used: 0,
           tokens_usage_status: "unknown",
-          compute_ms: Math.max(0, Date.now() - startedAt),
+          compute_ms: computeMs,
           cost: { status: "unknown", reason: "provider_call_outcome_unknown" },
         });
+        computeResourceUse = buildComputeResourceUse(request.request_id, {
+          reserved_tokens: reservation.reserved_tokens,
+          reserved_compute_ms: reservation.reserved_compute_ms,
+          reserved_cost: reservation.reserved_cost,
+        }, {
+          state: "unknown",
+          tokens_used: 0,
+          tokens_usage_status: "unknown",
+          compute_ms: computeMs,
+          cost: { status: "unknown", reason: "provider_call_outcome_unknown" },
+        }, true);
       }
-      throw error;
+      throw computeResourceUse ? new LLMComputeResourceFailure(error, computeResourceUse) : error;
     }
     const fallbackTrace = this.backend instanceof LLMRegistry
       ? response[LLM_ROUTING_TRACE]
       : undefined;
-    const provider = this.backend.canonical_provider_identity === true
-      ? (response.provider ?? "").trim()
-      : this.backend.name.trim();
-    const model = response.model.trim();
-    if (!provider) throw new Error("compute backend returned no provider identity");
-    if (!model) throw new Error("compute backend returned no model identity");
-    const toolCalls = normalizeLLMToolCallCandidates(provider, response.tool_calls);
-    const tokensUsageStatus = response.tokens_usage_status ?? "unknown";
+    const measuredTokensValid = Number.isSafeInteger(response.tokens_used) && response.tokens_used >= 0;
+    const tokensUsageStatus = measuredTokensValid &&
+      (response.tokens_usage_status === undefined || response.tokens_usage_status === "provider_reported" ||
+        response.tokens_usage_status === "unknown")
+      ? response.tokens_usage_status ?? "unknown" : "unknown";
+    const settlementTokens = measuredTokensValid ? response.tokens_used : 0;
+    const cost: ComputeCost = fallbackTrace
+      ? { status: "estimated", ...fallbackTrace.estimated_total_cost }
+      : { status: "unknown", reason: "provider_did_not_report_monetary_cost" };
+    let computeResourceUse: ComputeResourceUse | undefined;
+    if (reservation) {
+      const settlement: ComputeBudgetSettlement = {
+        state: "settled",
+        tokens_used: settlementTokens,
+        tokens_usage_status: maximumCalls === 1 && measuredTokensValid ? tokensUsageStatus : "unknown",
+        compute_ms: Math.max(0, Date.now() - startedAt),
+        cost,
+      };
+      await this.budget!.settle(reservation.reservation_id, settlement);
+      computeResourceUse = buildComputeResourceUse(request.request_id, {
+        reserved_tokens: reservation.reserved_tokens,
+        reserved_compute_ms: reservation.reserved_compute_ms,
+        reserved_cost: reservation.reserved_cost,
+      }, settlement, false);
+    }
+
+    let provider: string;
+    let model: string;
+    let toolCalls: ReturnType<typeof normalizeLLMToolCallCandidates>;
+    try {
+      provider = this.backend.canonical_provider_identity === true
+        ? (response.provider ?? "").trim()
+        : this.backend.name.trim();
+      model = response.model.trim();
+      if (!provider) throw new Error("compute backend returned no provider identity");
+      if (!model) throw new Error("compute backend returned no model identity");
+      toolCalls = normalizeLLMToolCallCandidates(provider, response.tool_calls);
+    } catch (error) {
+      throw computeResourceUse ? new LLMComputeResourceFailure(error, computeResourceUse) : error;
+    }
     const normalizedResponse = { ...response };
     delete normalizedResponse.raw;
     delete normalizedResponse.tokens_usage_status;
@@ -270,19 +330,6 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
       model,
       ...(toolCalls !== undefined ? { tool_calls: toolCalls } : {}),
     });
-
-    const cost: ComputeCost = fallbackTrace
-      ? { status: "estimated", ...fallbackTrace.estimated_total_cost }
-      : { status: "unknown", reason: "provider_did_not_report_monetary_cost" };
-    if (reservation) {
-      await this.budget!.settle(reservation.reservation_id, {
-        state: "settled",
-        tokens_used: response.tokens_used,
-        tokens_usage_status: maximumCalls === 1 ? tokensUsageStatus : "unknown",
-        compute_ms: Math.max(0, Date.now() - startedAt),
-        cost,
-      });
-    }
 
     return {
       ...normalizedResponse,
@@ -322,6 +369,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
         },
       },
       cost,
+      ...(computeResourceUse ? { compute_resource_use: computeResourceUse } : {}),
       authority_boundary: {
         compute_output_used_for_authority: false,
         provider_metadata_used_for_authority: false,
@@ -329,6 +377,41 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
       },
     };
   }
+}
+
+function buildComputeResourceUse(
+  requestId: string,
+  reservation: Pick<ComputeBudgetReservation, "reserved_tokens" | "reserved_compute_ms" | "reserved_cost">,
+  settlement: ComputeBudgetSettlement,
+  forceUpperBound: boolean,
+): ComputeResourceUse {
+  const unknownSettlement = forceUpperBound || settlement.state === "unknown";
+  const tokenUsageKnown = !unknownSettlement && settlement.tokens_usage_status === "provider_reported";
+  const costStatus = !unknownSettlement && settlement.cost.status !== "unknown" &&
+      settlement.cost.currency === reservation.reserved_cost.currency
+    ? settlement.cost.status : "unknown" as const;
+  const costKnown = costStatus !== "unknown";
+  const digest = createHash("sha256")
+    .update("blue-tanuki.compute-resource-use.request.v1\0")
+    .update(requestId)
+    .digest("hex");
+  return {
+    schema_version: "blue-tanuki.compute-resource-use.v1",
+    request_digest: digest,
+    charged_compute_ms: unknownSettlement
+      ? Math.max(reservation.reserved_compute_ms, settlement.compute_ms)
+      : settlement.compute_ms,
+    charged_tokens: tokenUsageKnown ? settlement.tokens_used : reservation.reserved_tokens,
+    tokens_usage_status: tokenUsageKnown ? "provider_reported" : "unknown",
+    cost_status: costStatus,
+    charged_cost_amount: costKnown && settlement.cost.status !== "unknown"
+      ? settlement.cost.amount : reservation.reserved_cost.amount,
+    currency: reservation.reserved_cost.currency,
+    charge_basis: costStatus === "actual" ? "provider_reported"
+      : costStatus === "estimated" ? "configured_estimate" : "reserved_upper_bound",
+    used_for_authority: false,
+    may_execute: false,
+  };
 }
 
 function validateComputeRequest(request: ComputeRequest<LLMRequest>): LLMFallbackAuthorization | undefined {

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import type { ComputeResourceUse, ExecuteCommand } from "@blue-tanuki/protocol";
 import { Executor, createExecutorApprovalAuthority } from "../src/executor.js";
-import type { ComputeBackend, ComputeRequest } from "../src/llm/compute.js";
-import { LLMComputeAdapter } from "../src/llm/compute.js";
-import type { LLMBackend, LLMRequest, LLMResponse } from "../src/llm/base.js";
+import type { ComputeBackend, ComputeBudgetPort, ComputeRequest } from "../src/llm/compute.js";
+import { LLMComputeAdapter, LLMComputeResourceFailure } from "../src/llm/compute.js";
+import { LLMProviderError, type LLMBackend, type LLMRequest, type LLMResponse } from "../src/llm/base.js";
+import { LLMRegistry } from "../src/llm/registry.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { MemorySessionStore } from "../src/sessions/index.js";
 
@@ -55,6 +56,22 @@ function approved(cmd: ExecuteCommand) {
   });
 }
 
+function resourceUse(commandId: string): ComputeResourceUse {
+  return {
+    schema_version: "blue-tanuki.compute-resource-use.v1",
+    request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0").update(commandId).digest("hex"),
+    charged_compute_ms: 3,
+    charged_tokens: 64,
+    tokens_usage_status: "provider_reported",
+    cost_status: "estimated",
+    charged_cost_amount: 0.1,
+    currency: "USD",
+    charge_basis: "configured_estimate",
+    used_for_authority: false,
+    may_execute: false,
+  };
+}
+
 class CapturingBackend implements LLMBackend {
   readonly name = "fixture-provider";
   readonly seen: LLMRequest[] = [];
@@ -85,17 +102,19 @@ class HangingBackend implements LLMBackend {
 
 class CapturingCompute implements ComputeBackend<LLMRequest, LLMResponse> {
   readonly requests: ComputeRequest<LLMRequest>[] = [];
-  constructor(private readonly adapter: LLMComputeAdapter) {}
-  compute(request: ComputeRequest<LLMRequest>) {
+  constructor(private readonly adapter: LLMComputeAdapter, private readonly receipt?: ComputeResourceUse) {}
+  async compute(request: ComputeRequest<LLMRequest>, signal?: AbortSignal) {
     this.requests.push(request);
-    return this.adapter.compute(request);
+    const result = await this.adapter.compute(request, signal);
+    return this.receipt ? { ...result, compute_resource_use: this.receipt } : result;
   }
 }
 
 describe("Executor compute boundary", () => {
   it("hashes effective provider input and records local resource and history scope", async () => {
     const backend = new CapturingBackend();
-    const compute = new CapturingCompute(new LLMComputeAdapter(backend));
+    const receipt = resourceUse("compute-1");
+    const compute = new CapturingCompute(new LLMComputeAdapter(backend), receipt);
     const sessions = new MemorySessionStore();
     await sessions.append("test-session", { role: "user", content: "prior request", timestamp: 1 });
     const executor = new Executor({
@@ -119,6 +138,8 @@ describe("Executor compute boundary", () => {
     };
 
     expect(result.status).toBe("success");
+    expect(result.compute_resource_use).toEqual(receipt);
+    expect(result.result).not.toHaveProperty("compute_resource_use");
     expect(request.input_digest).toBe(
       createHash("sha256").update(JSON.stringify(expectedRequest)).digest("hex"),
     );
@@ -138,6 +159,64 @@ describe("Executor compute boundary", () => {
       },
     });
     expect(backend.seen[0]).toEqual(expectedRequest);
+  });
+
+  it("preserves conservative C resource settlement when provider failure returns through Executor", async () => {
+    class FailingBackend implements LLMBackend {
+      readonly name = "fixture-provider";
+      async call(): Promise<LLMResponse> {
+        throw new LLMProviderError("fixture unavailable", {
+          provider: this.name, kind: "remote_service_unavailable", retryable: false, status: 503,
+        });
+      }
+    }
+    const backend = new FailingBackend();
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 } }).register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+    let reserved = false;
+    let resourceFailureSeen = false;
+    const budget: ComputeBudgetPort = {
+      reserve(input) {
+        reserved = true;
+        return { reservation_id: "a".repeat(64), reserved_tokens: input.reserved_tokens,
+          reserved_compute_ms: input.reserved_compute_ms, reserved_cost: input.reserved_cost };
+      },
+      settle(_id, settlement) { expect(settlement.state).toBe("unknown"); },
+    };
+    const adapter = new LLMComputeAdapter(registry, budget);
+    const compute: ComputeBackend<LLMRequest, LLMResponse> = {
+      async compute(input, signal) {
+        try { return await adapter.compute(input, signal); }
+        catch (error) {
+          resourceFailureSeen = error instanceof LLMComputeResourceFailure;
+          throw error;
+        }
+      },
+    };
+    const executor = new Executor({ approval_authority: authority, llm: backend,
+      compute, tools: new ToolRegistry() });
+
+    const failureCommand = command("compute-provider-failure");
+    if (failureCommand.type !== "llm_call") throw new Error("fixture command was not an LLM call");
+    failureCommand.payload.compute_context = {
+      ...failureCommand.payload.compute_context!,
+      budget_scope: { parent_task_identity_digest: "b".repeat(64), task_identity_digest: "c".repeat(64) },
+    };
+    const result = await executor.execute(approved(failureCommand));
+
+    expect(reserved).toBe(true);
+    expect(resourceFailureSeen).toBe(true);
+    expect(result, JSON.stringify(result)).toMatchObject({ status: "failed", llm_failure: {
+      kind: "remote_service_unavailable", status: 503,
+    }, compute_resource_use: {
+      request_digest: createHash("sha256")
+        .update("blue-tanuki.compute-resource-use.request.v1\0compute-provider-failure").digest("hex"),
+      charged_compute_ms: 1_500, charged_tokens: 64, tokens_usage_status: "unknown",
+      cost_status: "unknown", charged_cost_amount: 0.25, currency: "USD",
+      charge_basis: "reserved_upper_bound", used_for_authority: false, may_execute: false,
+    } });
+    expect(result.result).toBeUndefined();
   });
 
   it("blocks configured compute before the provider when HDS context is absent", async () => {

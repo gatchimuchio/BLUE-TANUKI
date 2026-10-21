@@ -17,6 +17,7 @@ import {
   OperationCorePlannerExecutionProjectionSchema,
   OperationPlanSchema,
   OperationPlanComputeSourceObservationSchema,
+  ComputeResourceUseSchema,
   prepareOperationPlan,
   inspectOperationCommandExecutionResult,
   type ExecuteCommand,
@@ -26,6 +27,7 @@ import {
   type OperationCorePlannerExecutionProjection,
   type OperationCommandExecutionResult,
   type OperationPlanComputeSourceObservation,
+  type ComputeResourceUse,
 } from "@blue-tanuki/protocol";
 import { commandFailurePatterns } from "@blue-tanuki/hds-brain";
 
@@ -231,6 +233,10 @@ export interface OperationPlanStatusProjection {
     compute_result_digest?: string;
     candidate_plan_id?: string;
     compute_completed_at_ms?: number;
+    compute_resource_use?: Pick<ComputeResourceUse,
+      "charged_compute_ms" | "charged_tokens" | "tokens_usage_status" | "cost_status" |
+      "charged_cost_amount" | "currency" | "charge_basis" | "used_for_authority" | "may_execute">;
+    resource_review_required: boolean;
     used_for_authority: false;
     may_execute: false;
   }>;
@@ -333,12 +339,15 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
   for (const wait of rawWaits as Record<string, unknown>[]) {
     const allowedKeys = new Set(["wait_id", "plan_id", "task_identity_digest", "state", "deadline_at_ms",
       "resumed_at_ms", "wake_reason", "compute_outcome", "compute_result_digest", "candidate_plan_id",
-      "compute_completed_at_ms", "used_for_authority", "may_execute"]);
+      "compute_completed_at_ms", "compute_resource_use", "used_for_authority", "may_execute"]);
     const state = wait.state;
     const outcome = wait.compute_outcome;
     const resumed = state === "resumed";
     const resumedAt = wait.resumed_at_ms;
     const completedAt = wait.compute_completed_at_ms;
+    const parsedResourceUse = wait.compute_resource_use === undefined
+      ? undefined : ComputeResourceUseSchema.safeParse(wait.compute_resource_use);
+    const resourceUse = parsedResourceUse?.success ? parsedResourceUse.data : undefined;
     if (Object.keys(wait).some((key) => !allowedKeys.has(key)) || !isDigest(wait.wait_id) || !isDigest(wait.plan_id) ||
         !isDigest(wait.task_identity_digest) || (state !== "waiting" && !resumed) ||
         !Number.isSafeInteger(wait.deadline_at_ms) || (wait.deadline_at_ms as number) < 0 ||
@@ -357,9 +366,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         ((outcome === "candidate_retained") !== (wait.candidate_plan_id !== undefined)) ||
         (outcome === "pending" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined)) ||
         ((outcome === "not_started" || outcome === "not_recorded") &&
-          (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined))) {
+          (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined)) ||
+        (wait.compute_resource_use !== undefined && (!resourceUse || completedAt === undefined))) {
       return invalidOperationPlanStatusProjection();
     }
+    const resourceReviewRequired = Boolean(resourceUse &&
+      (outcome === "candidate_rejected" || outcome === "failed") &&
+      (resourceUse.charged_compute_ms > 0 || resourceUse.charged_tokens > 0 || resourceUse.charged_cost_amount > 0));
     waits.push({ wait_id: wait.wait_id as string, plan_id: wait.plan_id as string,
       task_identity_digest: wait.task_identity_digest as string, state: state as "waiting" | "resumed",
       deadline_at_ms: wait.deadline_at_ms as number,
@@ -369,6 +382,18 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       ...(typeof wait.compute_result_digest === "string" ? { compute_result_digest: wait.compute_result_digest } : {}),
       ...(typeof wait.candidate_plan_id === "string" ? { candidate_plan_id: wait.candidate_plan_id } : {}),
       ...(typeof completedAt === "number" ? { compute_completed_at_ms: completedAt } : {}),
+      ...(resourceUse ? { compute_resource_use: {
+        charged_compute_ms: resourceUse.charged_compute_ms,
+        charged_tokens: resourceUse.charged_tokens,
+        tokens_usage_status: resourceUse.tokens_usage_status,
+        cost_status: resourceUse.cost_status,
+        charged_cost_amount: resourceUse.charged_cost_amount,
+        currency: resourceUse.currency,
+        charge_basis: resourceUse.charge_basis,
+        used_for_authority: false as const,
+        may_execute: false as const,
+      } } : {}),
+      resource_review_required: resourceReviewRequired,
       used_for_authority: false, may_execute: false });
   }
   const inputPlans = value.plans;

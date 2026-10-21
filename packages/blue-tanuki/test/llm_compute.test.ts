@@ -191,8 +191,57 @@ describe("LLMComputeAdapter", () => {
     };
 
     await expect(new LLMComputeAdapter(registry, budget).compute(request))
-      .rejects.toMatchObject({ kind: "remote_service_unavailable" });
+      .rejects.toMatchObject({
+        original_error: { kind: "remote_service_unavailable" },
+        compute_resource_use: {
+          schema_version: "blue-tanuki.compute-resource-use.v1",
+          request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0request-1").digest("hex"),
+          charged_compute_ms: 2_000,
+          charged_tokens: 128,
+          tokens_usage_status: "unknown",
+          cost_status: "unknown",
+          charged_cost_amount: 0.25,
+          currency: "USD",
+          charge_basis: "reserved_upper_bound",
+          used_for_authority: false,
+          may_execute: false,
+        },
+      });
     expect(events).toEqual(["reserve", "settle"]);
+  });
+
+  it("returns budget-settled resource evidence with the provider result", async () => {
+    const request = computeRequest();
+    request.budget_scope = { parent_task_identity_digest: "c".repeat(64), task_identity_digest: "d".repeat(64) };
+    let settled = false;
+    const budget: ComputeBudgetPort = {
+      reserve(input) {
+        return { reservation_id: "a".repeat(64), reserved_tokens: input.reserved_tokens,
+          reserved_compute_ms: input.reserved_compute_ms, reserved_cost: input.reserved_cost };
+      },
+      settle(_id, settlement) {
+        settled = true;
+        expect(settlement.state).toBe("settled");
+        expect(settlement.tokens_usage_status).toBe("unknown");
+      },
+    };
+    const registry = new LLMRegistry().register(new CapturingBackend(), [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.4, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const result = await new LLMComputeAdapter(registry, budget).compute(request);
+    expect(settled).toBe(true);
+    expect(result.compute_resource_use).toMatchObject({
+      request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0request-1").digest("hex"),
+      charged_compute_ms: expect.any(Number),
+      charged_tokens: 128,
+      tokens_usage_status: "unknown",
+      cost_status: "unknown",
+      charged_cost_amount: 0.4,
+      currency: "USD",
+      charge_basis: "reserved_upper_bound",
+      used_for_authority: false,
+      may_execute: false,
+    });
   });
 
   it("binds provider execution identity and keeps compute metadata local", async () => {

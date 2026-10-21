@@ -25,6 +25,7 @@ import {
   type OperationPlanMemoryInterpretationDependency,
   type OperationPlanReceiptReconciliationControl,
   type OperationPlanWaitState,
+  type ComputeResourceUse,
   canonicalExecutorCommandBytes,
   isGatewayInternalInboundRequest,
 } from "@blue-tanuki/protocol";
@@ -726,7 +727,7 @@ export class OperationPlanLedger {
   /** Bind the returned C candidate or failure to the exact resumed wait in J's durable state. */
   recordWaitComputeOutcome(waitId: string, commandId: string,
     outcome: "candidate_retained" | "candidate_rejected" | "failed", resultDigest?: string,
-    candidatePlanIdDigest?: string, nowMs = Date.now()): OperationPlanWaitState {
+    candidatePlanIdDigest?: string, computeResourceUse?: ComputeResourceUse, nowMs = Date.now()): OperationPlanWaitState {
     if (!/^[a-f0-9]{64}$/.test(waitId) || !commandId.trim() ||
         (resultDigest !== undefined && !/^[a-f0-9]{64}$/.test(resultDigest)) ||
         (candidatePlanIdDigest !== undefined && !/^[a-f0-9]{64}$/.test(candidatePlanIdDigest)) ||
@@ -735,9 +736,17 @@ export class OperationPlanLedger {
     if (!current || current.state !== "resumed" || current.resume_command_id_digest !== operationPlanDigest(commandId)) {
       throw new Error("plan_wait_compute_binding_mismatch");
     }
+    if (computeResourceUse && computeResourceUse.request_digest !== createHash("sha256")
+        .update("blue-tanuki.compute-resource-use.request.v1\0").update(commandId).digest("hex")) {
+      throw new Error("plan_wait_compute_resource_binding_mismatch");
+    }
     if (current.compute_outcome !== "pending") {
       if (current.compute_outcome === outcome && current.compute_result_digest === resultDigest &&
-          current.candidate_plan_id_digest === candidatePlanIdDigest) return structuredClone(current);
+          current.candidate_plan_id_digest === candidatePlanIdDigest &&
+          (computeResourceUse === undefined ||
+            operationPlanDigest(current.compute_resource_use ?? null) === operationPlanDigest(computeResourceUse))) {
+        return structuredClone(current);
+      }
       throw new Error("plan_wait_compute_state_changed");
     }
     if ((outcome === "candidate_retained") !== (candidatePlanIdDigest !== undefined)) {
@@ -757,6 +766,7 @@ export class OperationPlanLedger {
     const updated = OperationPlanWaitStateSchema.parse({ ...current, compute_outcome: outcome,
       ...(resultDigest ? { compute_result_digest: resultDigest } : {}),
       ...(candidatePlanIdDigest ? { candidate_plan_id_digest: candidatePlanIdDigest } : {}),
+      ...(computeResourceUse ? { compute_resource_use: structuredClone(computeResourceUse) } : {}),
       compute_completed_at_ms: nowMs });
     this.change((state) => {
       const waits = state.waits ?? [];
@@ -1283,6 +1293,7 @@ export class OperationPlanLedger {
   inspectControl(control: Extract<OperationPlanControl, { action: "review" | "revise" }>, caller: InboundRequest): {
     plan_id: string; revision_digest: string; step?: OperationStep; goal: string; recovery_hold_released: boolean;
     goal_purpose_binding?: OperationPlanGoalPurposeBinding;
+    resource_use_review?: { wait_id: string; resource_use: ComputeResourceUse };
   } {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const p = this.ownedPlan(control.plan_id, caller);
@@ -1330,8 +1341,22 @@ export class OperationPlanLedger {
       throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
     }
     recoveryHoldReleased = recoveryHold !== undefined;
+    const planIdDigest = operationPlanDigest(current.plan.plan_id);
+    const failedResourceWaits = (this.state.waits ?? []).filter((wait) =>
+      wait.plan_id_digest === planIdDigest && wait.revision_digest === current.digest &&
+      (wait.compute_outcome === "candidate_rejected" || wait.compute_outcome === "failed") &&
+      wait.compute_resource_use !== undefined &&
+      (wait.compute_resource_use.charged_compute_ms > 0 || wait.compute_resource_use.charged_tokens > 0 ||
+        wait.compute_resource_use.charged_cost_amount > 0));
+    const currentTaskIdentityDigest = failedResourceWaits.length > 0 ? operationPlanTaskIdentityDigest(p) : undefined;
+    const resourceUseReview = failedResourceWaits.filter((wait) =>
+      wait.task_identity_digest === currentTaskIdentityDigest)
+      .sort((a, b) => (b.compute_completed_at_ms ?? 0) - (a.compute_completed_at_ms ?? 0))[0];
     return { plan_id: current.plan.plan_id, revision_digest: expected, step, goal: p.goal,
       recovery_hold_released: recoveryHoldReleased,
+      ...(resourceUseReview?.compute_resource_use
+        ? { resource_use_review: { wait_id: resourceUseReview.wait_id,
+          resource_use: structuredClone(resourceUseReview.compute_resource_use) } } : {}),
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}) };
   }
 
@@ -2272,6 +2297,7 @@ export class OperationPlanLedger {
         ...(wait.compute_result_digest ? { compute_result_digest: wait.compute_result_digest } : {}),
         ...(wait.candidate_plan_id_digest ? { candidate_plan_id: wait.candidate_plan_id_digest } : {}),
         ...(wait.compute_completed_at_ms !== undefined ? { compute_completed_at_ms: wait.compute_completed_at_ms } : {}),
+        ...(wait.compute_resource_use ? { compute_resource_use: structuredClone(wait.compute_resource_use) } : {}),
         used_for_authority: false as const, may_execute: false as const,
       })),
       plans: this.state.plans.map((p) => {

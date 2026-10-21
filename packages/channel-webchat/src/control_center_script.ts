@@ -1028,8 +1028,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (!Object.prototype.hasOwnProperty.call(outcomeLabels, wait.compute_outcome)) return "";
           const resultDigest = wait.compute_result_digest;
           const candidateDigest = wait.candidate_plan_id;
+          const resourceUse = wait.compute_resource_use;
           if ((resultDigest !== undefined && !/^[a-f0-9]{64}$/.test(resultDigest)) ||
-              (candidateDigest !== undefined && !/^[a-f0-9]{64}$/.test(candidateDigest))) return "";
+              (candidateDigest !== undefined && !/^[a-f0-9]{64}$/.test(candidateDigest)) ||
+              typeof wait.resource_review_required !== "boolean" ||
+              (resourceUse !== undefined && (!isObject(resourceUse) ||
+                !Number.isSafeInteger(resourceUse.charged_compute_ms) || resourceUse.charged_compute_ms < 0 ||
+                !Number.isSafeInteger(resourceUse.charged_tokens) || resourceUse.charged_tokens < 0 ||
+                !Number.isFinite(resourceUse.charged_cost_amount) || resourceUse.charged_cost_amount < 0 ||
+                !/^[A-Z]{3}$/.test(resourceUse.currency || "") || resourceUse.used_for_authority !== false ||
+                resourceUse.may_execute !== false))) return "";
           const wakeReason = wait.wake_reason === "reply" ? "返信" : wait.wake_reason === "deadline" ? "期限" : "未記録";
           const deadlineDate = new Date(wait.deadline_at_ms);
           const deadline = Number.isNaN(deadlineDate.getTime())
@@ -1040,9 +1048,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             '</dd><dt>元計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(wait.plan_id)) +
             '</dd><dt>期限</dt><dd>' + escapeHtml(deadline) + '</dd>' +
             (wait.state === "resumed" ? '<dt>再開理由</dt><dd>' + escapeHtml(wakeReason) + '</dd>' : '') +
+            (resourceUse ? '<dt>C資源消費</dt><dd>' + escapeHtml(String(resourceUse.charged_compute_ms) + ' ms / ' +
+              String(resourceUse.charged_tokens) + ' tokens (' + resourceUse.tokens_usage_status + ') / ' +
+              String(resourceUse.charged_cost_amount) + ' ' + resourceUse.currency + ' (' +
+              resourceUse.cost_status + ', ' + resourceUse.charge_basis + ')') + '</dd>' : '') +
             (resultDigest ? '<dt>C結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(resultDigest)) + '</dd>' : '') +
             (candidateDigest ? '<dt>保存候補digest</dt><dd class="mono">' + escapeHtml(shortDigest(candidateDigest)) + '</dd>' : '') +
-            '</dl><p class="muted">J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。</p></article>';
+            '</dl><p class="muted">' + (wait.resource_review_required
+              ? '計画候補の保存に至らず資源消費がありました。次のJ再検討で進捗を確認します。'
+              : 'J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。') + '</p></article>';
         }).join("");
         if (projection.plans.length === 0) {
           setHtml("operation-plan-state-list", refreshNotice + goalPurposeGuide + waitCards +

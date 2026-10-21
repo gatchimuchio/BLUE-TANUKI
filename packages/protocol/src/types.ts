@@ -399,12 +399,35 @@ export const FailureReviewCandidateSchema = z.object({
 }).strict();
 export type FailureReviewCandidate = z.infer<typeof FailureReviewCandidateSchema>;
 
+/** Measured C resource consumption. It is evidence for J review, never authority. */
+export const ComputeResourceUseSchema = z.object({
+  schema_version: z.literal("blue-tanuki.compute-resource-use.v1"),
+  request_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  charged_compute_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  charged_tokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  tokens_usage_status: z.enum(["provider_reported", "unknown"]),
+  cost_status: z.enum(["actual", "estimated", "unknown"]),
+  charged_cost_amount: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  charge_basis: z.enum(["provider_reported", "configured_estimate", "reserved_upper_bound"]),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().superRefine((observation, context) => {
+  const expectedBasis = observation.cost_status === "actual" ? "provider_reported"
+    : observation.cost_status === "estimated" ? "configured_estimate" : "reserved_upper_bound";
+  if (observation.charge_basis !== expectedBasis) {
+    context.addIssue({ code: "custom", message: "compute_resource_use_charge_basis_mismatch" });
+  }
+});
+export type ComputeResourceUse = z.infer<typeof ComputeResourceUseSchema>;
+
 export const ExecuteFeedbackSchema = z.object({
   command_id: z.string(),
   status: z.enum(["success", "failed", "suspended"]),
   result: z.unknown().optional(),
   error: z.string().optional(),
   llm_failure: LLMCallFailureSchema.optional(),
+  compute_resource_use: ComputeResourceUseSchema.optional(),
   llm_tool_candidates: z.array(LLMToolCallCandidateSchema).max(32).optional(),
   skeptical_review: SkepticalReviewRequestSchema.optional(),
   /** C由来の未信頼出力。提案を記録する前にHDS-BRAINが検証する。 */
