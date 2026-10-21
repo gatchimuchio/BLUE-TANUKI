@@ -40,6 +40,7 @@ import {
   type ExecutionIntentReceipt,
 } from "@blue-tanuki/core";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
+import { recoverPendingToolLifecycleHistory, toolLifecycleHistoryInput } from "./tool_lifecycle_history.js";
 import { GatewayComputeBudgetStore } from "./compute_budget_store.js";
 import { GatewayResourceBackpressure } from "./resource_backpressure.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
@@ -843,6 +844,19 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   let executor: Executor;
   const executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
   recoveryExecutionStore = executionStore;
+  try {
+    const recovery = recoverPendingToolLifecycleHistory({ execution_store: executionStore, complete_history: completeHistory,
+      complete_history_persistent: Boolean(completeHistoryFile), append_history: recordCompleteHistory });
+    for (const issue of recovery.issues) gatewayLog.error("tool lifecycle history recovery incomplete", { ...issue });
+    if (recovery.recovered > 0 || recovery.still_pending > 0) gatewayLog.info("tool lifecycle history recovery", {
+      recovered: recovery.recovered, still_pending: recovery.still_pending,
+      history_persistence: completeHistoryFile ? "file" : "memory", used_for_authority: false,
+    });
+  } catch (error) {
+    gatewayLog.error("tool lifecycle history recovery unavailable", {
+      error: error instanceof Error ? error.message : String(error), used_for_authority: false,
+    });
+  }
   const executorApproval = createExecutorApprovalAuthority({
     execution_store: executionStore,
     execution_epoch: ownerLease.executionEpoch,
@@ -4272,19 +4286,32 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       return entry !== null;
     },
     on_tool_execution_lifecycle: (event: ExecutorToolExecutionLifecycleEvent) => {
-      const entry = recordCompleteHistory({ kind: "audit_history", command_id: event.command_id, actor: "executor",
-        source: "executor_tool_process", timestamp: event.observed_at_ms,
-        payload: { schema_version: event.schema_version, source: event.source, state: event.state,
-          observed_at_ms: event.observed_at_ms,
-          ...(event.worker_pid !== undefined ? { worker_pid: event.worker_pid } : {}),
-          ...(event.worker_platform ? { worker_platform: event.worker_platform } : {}),
-          ...(event.signal !== undefined ? { signal: event.signal } : {}),
-          ...(event.descendants_terminated !== undefined ? { descendants_terminated: event.descendants_terminated } : {}),
-          used_for_authority: false, may_execute: false },
+      const lifecycleEventId = randomUUID();
+      const { command_id: commandId, ...observation } = event;
+      let durable = false;
+      try {
+        executionStore.recordToolLifecycleEvidence(lifecycleEventId, commandId, observation);
+        durable = true;
+      } catch (error) {
+        gatewayLog.error("tool process lifecycle durable evidence unavailable", {
+          lifecycle_event_id: lifecycleEventId, source: event.source, state: event.state,
+          error: error instanceof Error ? error.message : String(error), used_for_authority: false,
+        });
+      }
+      const input = toolLifecycleHistoryInput({ lifecycle_event_id: lifecycleEventId, command_id: commandId, observation });
+      const entry = recordCompleteHistory(input);
+      if (!entry) gatewayLog.error("tool process lifecycle history projection unavailable", {
+        lifecycle_event_id: lifecycleEventId, source: event.source, state: event.state, used_for_authority: false,
       });
-      if (!entry) gatewayLog.error("tool process lifecycle evidence unavailable", {
-        command_id: event.command_id, source: event.source, state: event.state,
-      });
+      else if (durable && completeHistoryFile) {
+        try { executionStore.acknowledgeToolLifecycleHistory(lifecycleEventId, entry.id, Date.now()); }
+        catch (error) {
+          gatewayLog.error("tool process lifecycle history acknowledgement unavailable", {
+            lifecycle_event_id: lifecycleEventId, source: event.source, state: event.state,
+            error: error instanceof Error ? error.message : String(error), used_for_authority: false,
+          });
+        }
+      }
       return entry !== null;
     },
     approval_authority: executorApproval,

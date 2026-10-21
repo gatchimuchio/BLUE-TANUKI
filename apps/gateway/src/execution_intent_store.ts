@@ -1,15 +1,40 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, lstatSync, chmodSync } from "node:fs";
 import { createRequire } from "node:module";
+import { isDeepStrictEqual } from "node:util";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
-import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary, ExecutionWorkerIdentity } from "@blue-tanuki/core";
+import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary, ExecutionWorkerIdentity,
+  ToolExecutionLifecycleObservation } from "@blue-tanuki/core";
 import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
   parseBoundaryExchangeAtBoundary, inspectExecutionResultDelivery, inspectOperationCommandExecutionResult,
   getOperationDescriptor, type ExecutionAdmission, type ExecutionResultDelivery } from "@blue-tanuki/protocol";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
+const MAX_PENDING_TOOL_LIFECYCLE_EVENTS = 1_000;
+const MAX_PENDING_TOOL_LIFECYCLE_BYTES = 8_388_608;
+interface ToolLifecycleEvidenceEvent {
+  lifecycle_event_id: string;
+  command_id: string;
+  observation: ToolExecutionLifecycleObservation;
+}
+interface ToolLifecycleHistoryAcknowledgement {
+  lifecycle_event_id: string;
+  history_entry_id: string;
+  observed_at_ms: number;
+  used_for_authority: false;
+  may_execute: false;
+}
+type ExecutionLedgerContent =
+  | { profile: "executor-intent-event.v1"; receipt: ExecutionIntentReceipt }
+  | { profile: "executor-tool-lifecycle-event.v1"; event: ToolLifecycleEvidenceEvent }
+  | { profile: "executor-tool-lifecycle-history-ack.v1"; acknowledgement: ToolLifecycleHistoryAcknowledgement };
+export interface PendingToolLifecycleEvidence {
+  lifecycle_event_id: string;
+  command_id: string;
+  observation: ToolExecutionLifecycleObservation;
+}
 /** JのadmissionとBroker receiptを結ぶ非権威digest。旧ticket形式も維持する。 */
 export function executionAdmissionDigest(admission: ExecutionAdmission): string {
   return admission.task_identity_digest
@@ -121,6 +146,72 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
       }
       receipt.worker_exit_observed_at_ms = now_ms;
       this.save(receipt); this.appendEvent(receipt, now_ms);
+    });
+  }
+  /** 非権威のtool process観測を既存の私有hash chainへ保存し、後続の履歴配送へ渡す。 */
+  recordToolLifecycleEvidence(
+    lifecycle_event_id: string,
+    command_id: string,
+    observation: ToolExecutionLifecycleObservation,
+  ): void {
+    const event: ToolLifecycleEvidenceEvent = { lifecycle_event_id, command_id, observation: { ...observation } };
+    validateToolLifecycleEvidenceEvent(event);
+    const commandKey = digest(JSON.stringify(["gateway-executor-command.v1", command_id]));
+    this.transaction(() => {
+      const row = this.db.prepare("SELECT ticket_id FROM execution_intents WHERE command_key=?").get(commandKey) as
+        { ticket_id: string } | undefined;
+      const receipt = row ? this.lookup(row.ticket_id) : null;
+      if (!row || !receipt || receipt.command_key !== commandKey) throw new Error("execution_lifecycle_receipt_missing");
+
+      const state = collectToolLifecycleEvidence(this.db);
+      const prior = state.events.get(lifecycle_event_id);
+      if (prior) {
+        if (prior.ticket_id === row.ticket_id && isDeepStrictEqual(prior.event, event)) return;
+        throw new Error("execution_lifecycle_event_conflict");
+      }
+      const pending = [...state.events.entries()].filter(([id]) => !state.acknowledgements.has(id));
+      const pendingBytes = pending.reduce((sum, [, record]) => sum + Buffer.byteLength(JSON.stringify(record.event)), 0);
+      if (pending.length >= MAX_PENDING_TOOL_LIFECYCLE_EVENTS ||
+          pendingBytes + Buffer.byteLength(JSON.stringify(event)) > MAX_PENDING_TOOL_LIFECYCLE_BYTES) {
+        throw new Error("execution_lifecycle_evidence_store_full");
+      }
+      this.appendLedgerContent(row.ticket_id, { profile: "executor-tool-lifecycle-event.v1", event }, observation.observed_at_ms);
+    });
+  }
+  /** 保留記録は非権威の回復入力。consumerは永続化後にだけacknowledgeする。 */
+  pendingToolLifecycleEvidence(limit = MAX_PENDING_TOOL_LIFECYCLE_EVENTS): PendingToolLifecycleEvidence[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PENDING_TOOL_LIFECYCLE_EVENTS) {
+      throw new Error("execution_lifecycle_evidence_limit_invalid");
+    }
+    let pending: PendingToolLifecycleEvidence[] = [];
+    this.transaction(() => {
+      const state = collectToolLifecycleEvidence(this.db);
+      pending = [...state.events.entries()]
+        .filter(([id]) => !state.acknowledgements.has(id))
+        .slice(0, limit)
+        .map(([, record]) => ({ ...record.event }));
+    });
+    return pending;
+  }
+  acknowledgeToolLifecycleHistory(lifecycle_event_id: string, history_entry_id: string, observed_at_ms: number): void {
+    if (!isUuid(lifecycle_event_id) || !isUuid(history_entry_id) || !isSafeTimestamp(observed_at_ms)) {
+      throw new Error("execution_lifecycle_history_ack_invalid");
+    }
+    this.transaction(() => {
+      const state = collectToolLifecycleEvidence(this.db);
+      const event = state.events.get(lifecycle_event_id);
+      if (!event) throw new Error("execution_lifecycle_event_missing");
+      const prior = state.acknowledgements.get(lifecycle_event_id);
+      if (prior) {
+        if (prior.ticket_id === event.ticket_id && prior.history_entry_id === history_entry_id) return;
+        throw new Error("execution_lifecycle_history_ack_conflict");
+      }
+      const acknowledgement: ToolLifecycleHistoryAcknowledgement = {
+        lifecycle_event_id, history_entry_id, observed_at_ms, used_for_authority: false, may_execute: false,
+      };
+      this.appendLedgerContent(event.ticket_id, {
+        profile: "executor-tool-lifecycle-history-ack.v1", acknowledgement,
+      }, observed_at_ms);
     });
   }
   complete(ticket: Readonly<ExecutionIntentTicket>, result: Pick<ExecutionIntentReceipt,
@@ -476,16 +567,19 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
     else this.db.prepare("UPDATE execution_intents SET receipt_json=?,receipt_digest=? WHERE ticket_id=?").run(json, digest(json), receipt.ticket_id);
   }
   private appendEvent(receipt: ExecutionIntentReceipt, now_ms: number): void {
+    this.appendLedgerContent(receipt.ticket_id, { profile: "executor-intent-event.v1", receipt }, now_ms);
+  }
+  private appendLedgerContent(ticket_id: string, content: ExecutionLedgerContent, now_ms: number): void {
     const row = this.db.prepare("SELECT event_hash FROM execution_events ORDER BY sequence DESC LIMIT 1").get() as { event_hash: string } | undefined;
     const previous = row?.event_hash ?? "0".repeat(64);
     const parsed = parseBoundaryExchangeAtBoundary(new TextEncoder().encode(JSON.stringify({
       schema_version: BOUNDARY_EXCHANGE_SCHEMA_VERSION, canonicalization_version: BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
-      issued_at_utc: new Date(now_ms).toISOString(), content: { profile: "executor-intent-event.v1", receipt },
+      issued_at_utc: new Date(now_ms).toISOString(), content,
     })));
     if (!parsed.ok) throw new Error("execution_event_canonicalization_failed");
     const json = new TextDecoder().decode(parsed.canonical_bytes);
     this.db.prepare("INSERT INTO execution_events(ticket_id,event_json,previous_hash,event_hash) VALUES(?,?,?,?)")
-      .run(receipt.ticket_id, json, previous, digest(previous + json));
+      .run(ticket_id, json, previous, digest(previous + json));
   }
   private transaction(operation: () => void): void {
     this.db.exec("BEGIN IMMEDIATE");
@@ -512,22 +606,153 @@ function executionReceipts(database: DatabaseType): ExecutionIntentReceipt[] {
   });
 }
 
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value);
+}
+
+function isSafeTimestamp(value: unknown): value is number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) return false;
+  try { return Number.isFinite(new Date(value).getTime()); } catch { return false; }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+function validateToolLifecycleObservation(value: unknown): asserts value is ToolExecutionLifecycleObservation {
+  const observation = asRecord(value);
+  const allowedKeys = ["schema_version", "source", "state", "observed_at_ms", "worker_pid", "worker_platform",
+    "signal", "descendants_terminated", "used_for_authority", "may_execute"] as const;
+  if (!observation || !hasOnlyKeys(observation, allowedKeys) ||
+      observation.schema_version !== "blue-tanuki.tool-execution-lifecycle.v1" ||
+      !["executor_tool_adapter", "native_shell_process_provider"].includes(String(observation.source)) ||
+      !["cancel_requested", "worker_started", "worker_exit_observed", "process_tree_empty_confirmed",
+        "provider_state_unknown", "late_result_discarded"].includes(String(observation.state)) ||
+      !isSafeTimestamp(observation.observed_at_ms) || observation.used_for_authority !== false || observation.may_execute !== false ||
+      (observation.worker_pid !== undefined && (!Number.isSafeInteger(observation.worker_pid) || Number(observation.worker_pid) <= 0)) ||
+      (observation.worker_platform !== undefined && (typeof observation.worker_platform !== "string" ||
+        !/^[a-zA-Z0-9._-]{1,32}$/.test(observation.worker_platform))) ||
+      (observation.signal !== undefined && observation.signal !== null &&
+        observation.signal !== "timeout" && observation.signal !== "aborted") ||
+      (observation.descendants_terminated !== undefined && typeof observation.descendants_terminated !== "boolean")) {
+    throw new Error("execution_lifecycle_observation_invalid");
+  }
+}
+
+function validateToolLifecycleEvidenceEvent(value: unknown): asserts value is ToolLifecycleEvidenceEvent {
+  const event = asRecord(value);
+  if (!event || !hasOnlyKeys(event, ["lifecycle_event_id", "command_id", "observation"]) || !isUuid(event.lifecycle_event_id) ||
+      typeof event.command_id !== "string" || !/^[^\u0000-\u001f\u007f]{1,256}$/.test(event.command_id)) {
+    throw new Error("execution_lifecycle_event_invalid");
+  }
+  validateToolLifecycleObservation(event.observation);
+}
+
+function validateToolLifecycleHistoryAcknowledgement(value: unknown): asserts value is ToolLifecycleHistoryAcknowledgement {
+  const acknowledgement = asRecord(value);
+  if (!acknowledgement || !hasOnlyKeys(acknowledgement,
+      ["lifecycle_event_id", "history_entry_id", "observed_at_ms", "used_for_authority", "may_execute"]) ||
+      !isUuid(acknowledgement.lifecycle_event_id) || !isUuid(acknowledgement.history_entry_id) ||
+      !isSafeTimestamp(acknowledgement.observed_at_ms) || acknowledgement.used_for_authority !== false ||
+      acknowledgement.may_execute !== false) {
+    throw new Error("execution_lifecycle_history_ack_invalid");
+  }
+}
+
+function parseExecutionLedgerContent(event_json: string): ExecutionLedgerContent | null {
+  try {
+    const envelope = asRecord(JSON.parse(event_json));
+    const content = asRecord(envelope?.content);
+    if (!content || typeof content.profile !== "string") return null;
+    switch (content.profile) {
+      case "executor-intent-event.v1": {
+        if (!hasOnlyKeys(content, ["profile", "receipt"])) return null;
+        const receipt = content.receipt as ExecutionIntentReceipt;
+        validateReceipt(receipt);
+        return { profile: "executor-intent-event.v1", receipt };
+      }
+      case "executor-tool-lifecycle-event.v1": {
+        if (!hasOnlyKeys(content, ["profile", "event"])) return null;
+        const event = content.event as ToolLifecycleEvidenceEvent;
+        validateToolLifecycleEvidenceEvent(event);
+        return { profile: "executor-tool-lifecycle-event.v1", event };
+      }
+      case "executor-tool-lifecycle-history-ack.v1": {
+        if (!hasOnlyKeys(content, ["profile", "acknowledgement"])) return null;
+        const acknowledgement = content.acknowledgement as ToolLifecycleHistoryAcknowledgement;
+        validateToolLifecycleHistoryAcknowledgement(acknowledgement);
+        return { profile: "executor-tool-lifecycle-history-ack.v1", acknowledgement };
+      }
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+interface ToolLifecycleEvidenceLedgerState {
+  events: Map<string, { ticket_id: string; event: ToolLifecycleEvidenceEvent }>;
+  acknowledgements: Map<string, { ticket_id: string; history_entry_id: string }>;
+}
+
+function collectToolLifecycleEvidence(database: DatabaseType): ToolLifecycleEvidenceLedgerState {
+  const state: ToolLifecycleEvidenceLedgerState = { events: new Map(), acknowledgements: new Map() };
+  const rows = database.prepare("SELECT ticket_id,event_json FROM execution_events ORDER BY sequence")
+    .all() as { ticket_id: string; event_json: string }[];
+  for (const row of rows) {
+    const content = parseExecutionLedgerContent(row.event_json);
+    if (!content) throw new Error("execution_event_integrity_failed");
+    if (content.profile === "executor-tool-lifecycle-event.v1") {
+      if (state.events.has(content.event.lifecycle_event_id)) throw new Error("execution_lifecycle_event_conflict");
+      state.events.set(content.event.lifecycle_event_id, { ticket_id: row.ticket_id, event: content.event });
+    } else if (content.profile === "executor-tool-lifecycle-history-ack.v1") {
+      const id = content.acknowledgement.lifecycle_event_id;
+      const event = state.events.get(id);
+      if (!event || event.ticket_id !== row.ticket_id || state.acknowledgements.has(id)) {
+        throw new Error("execution_lifecycle_history_ack_conflict");
+      }
+      state.acknowledgements.set(id, { ticket_id: row.ticket_id,
+        history_entry_id: content.acknowledgement.history_entry_id });
+    }
+  }
+  return state;
+}
+
 function verifyExecutionIntentDatabase(database: DatabaseType, checkSchema: boolean): boolean {
   try {
     if (checkSchema && !verifyExecutionRecoverySchema(database)) return false;
     let previous = "0".repeat(64);
     let sequence = 0;
     const latest = new Map<string, ExecutionIntentReceipt>();
+    const lifecycleEvents = new Map<string, { ticket_id: string; event: ToolLifecycleEvidenceEvent }>();
+    const lifecycleAcknowledgements = new Set<string>();
     const rows = database.prepare("SELECT sequence,ticket_id,event_json,previous_hash,event_hash FROM execution_events ORDER BY sequence").all() as
       { sequence: number; ticket_id: string; event_json: string; previous_hash: string; event_hash: string }[];
     for (const row of rows) {
-      if (row.sequence !== ++sequence || row.previous_hash !== previous || digest(previous + row.event_json) !== row.event_hash) return false;
-      try {
-        const receipt = JSON.parse(row.event_json).content.receipt as ExecutionIntentReceipt;
-        validateReceipt(receipt);
-        if (receipt.ticket_id !== row.ticket_id) return false;
-        latest.set(row.ticket_id, receipt);
-      } catch { return false; }
+      if (row.sequence !== ++sequence || row.previous_hash !== previous || digest(previous + row.event_json) !== row.event_hash ||
+          typeof row.ticket_id !== "string") return false;
+      const content = parseExecutionLedgerContent(row.event_json);
+      if (!content) return false;
+      if (content.profile === "executor-intent-event.v1") {
+        if (content.receipt.ticket_id !== row.ticket_id) return false;
+        latest.set(row.ticket_id, content.receipt);
+      } else if (content.profile === "executor-tool-lifecycle-event.v1") {
+        const receipt = latest.get(row.ticket_id);
+        if (!receipt || receipt.command_key !== digest(JSON.stringify(["gateway-executor-command.v1", content.event.command_id])) ||
+            lifecycleEvents.has(content.event.lifecycle_event_id)) return false;
+        lifecycleEvents.set(content.event.lifecycle_event_id, { ticket_id: row.ticket_id, event: content.event });
+      } else {
+        const eventId = content.acknowledgement.lifecycle_event_id;
+        const event = lifecycleEvents.get(eventId);
+        if (!event || event.ticket_id !== row.ticket_id || lifecycleAcknowledgements.has(eventId)) return false;
+        lifecycleAcknowledgements.add(eventId);
+      }
       previous = row.event_hash;
     }
     const receipts = executionReceipts(database);
@@ -703,6 +928,8 @@ export function inspectExecutionIntentRecoveryLedger(options: {
     const rows = database.prepare("SELECT sequence,ticket_id,event_json,previous_hash,event_hash FROM execution_events ORDER BY sequence")
       .all() as { sequence: number; ticket_id: string; event_json: string; previous_hash: string; event_hash: string }[];
     const latest = new Map<string, VerifiedExecutionEvent>();
+    const lifecycleEvents = new Map<string, { ticket_id: string; event: ToolLifecycleEvidenceEvent }>();
+    const lifecycleAcknowledgements = new Set<string>();
     let previous = "0".repeat(64);
     let verifiedEventCount = 0;
     for (const row of rows) {
@@ -711,16 +938,24 @@ export function inspectExecutionIntentRecoveryLedger(options: {
           typeof row.previous_hash !== "string" || typeof row.event_hash !== "string" ||
           row.previous_hash !== previous || digest(previous + row.event_json) !== row.event_hash) break;
       try {
-        const parsed: unknown = JSON.parse(row.event_json);
-        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) ||
-            typeof (parsed as { content?: unknown }).content !== "object" ||
-            (parsed as { content?: { profile?: unknown } }).content?.profile !== "executor-intent-event.v1") break;
-        const receipt = (parsed as { content: { receipt?: unknown } }).content.receipt as ExecutionIntentReceipt;
-        validateReceipt(receipt);
-        if (receipt.ticket_id !== row.ticket_id) break;
+        const content = parseExecutionLedgerContent(row.event_json);
+        if (!content) break;
+        if (content.profile === "executor-intent-event.v1") {
+          if (content.receipt.ticket_id !== row.ticket_id) break;
+          latest.set(row.ticket_id, { receipt: content.receipt, event_hash: row.event_hash, sequence: row.sequence });
+        } else if (content.profile === "executor-tool-lifecycle-event.v1") {
+          const receipt = latest.get(row.ticket_id)?.receipt;
+          if (!receipt || receipt.command_key !== digest(JSON.stringify(["gateway-executor-command.v1", content.event.command_id])) ||
+              lifecycleEvents.has(content.event.lifecycle_event_id)) break;
+          lifecycleEvents.set(content.event.lifecycle_event_id, { ticket_id: row.ticket_id, event: content.event });
+        } else {
+          const eventId = content.acknowledgement.lifecycle_event_id;
+          const event = lifecycleEvents.get(eventId);
+          if (!event || event.ticket_id !== row.ticket_id || lifecycleAcknowledgements.has(eventId)) break;
+          lifecycleAcknowledgements.add(eventId);
+        }
         verifiedEventCount++;
         previous = row.event_hash;
-        latest.set(row.ticket_id, { receipt, event_hash: row.event_hash, sequence: row.sequence });
       } catch {
         break;
       }

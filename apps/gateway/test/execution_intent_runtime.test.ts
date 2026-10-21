@@ -3,14 +3,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
+import { approvalContextFromCommand, CompleteHistoryStore, finalReviewRequired } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, ToolRegistry, fileSearchTool, type ExecutorApprovalClock,
   type ExecutionIntentStore } from "@blue-tanuki/core";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
-import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
+import { GatewayExecutionIntentStore, inspectExecutionIntentRecoveryLedger } from "../src/execution_intent_store.js";
+import { recoverPendingToolLifecycleHistory } from "../src/tool_lifecycle_history.js";
 
 function command(id = "synthetic-command"): Extract<ExecuteCommand, { type: "tool_call" }> {
   return { id, type: "tool_call", payload: { tool_name: "synthetic.read", arguments: { target: "青" } },
@@ -40,8 +42,76 @@ async function temporary(run: (store: GatewayExecutionIntentStore, root: string)
   try { await run(store, root); } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 }
 const key = (id: string): string => createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", id])).digest("hex");
+const executionIntentWorkerFixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "execution_intent_worker.ts");
 
 describe("固定承認→永続消費・開始意思→実呼出し→receipt", () => {
+  it("CompleteHistory未設定・保存失敗時のtool lifecycleを回復し、永続確認後だけ配送済みにする", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-lifecycle-recovery-"));
+    const filepath = join(root, "execution-intents", "executor.sqlite");
+    const epoch = randomUUID();
+    let store = new GatewayExecutionIntentStore(filepath, epoch);
+    try {
+      const source = command();
+      const { authority } = rig(store);
+      authority.approve(source, proof(source));
+      const lifecycleEventId = randomUUID();
+      const observation = {
+        schema_version: "blue-tanuki.tool-execution-lifecycle.v1" as const,
+        source: "executor_tool_adapter" as const,
+        state: "cancel_requested" as const,
+        observed_at_ms: Date.now(),
+        signal: "aborted" as const,
+        used_for_authority: false as const,
+        may_execute: false as const,
+      };
+      store.recordToolLifecycleEvidence(lifecycleEventId, source.id, observation);
+      expect(store.pendingToolLifecycleEvidence()).toEqual([{ lifecycle_event_id: lifecycleEventId,
+        command_id: source.id, observation }]);
+      expect(() => store.recordToolLifecycleEvidence(randomUUID(), "unmatched-command", observation))
+        .toThrow(/execution_lifecycle_receipt_missing/);
+      const failedHistoryPath = join(root, "unwritable-history.jsonl");
+      const failedHistory = new CompleteHistoryStore({ filepath: failedHistoryPath });
+      mkdirSync(failedHistoryPath);
+      const failedProjection = recoverPendingToolLifecycleHistory({ execution_store: store, complete_history: failedHistory,
+        complete_history_persistent: true, append_history: (input) => {
+          try { return failedHistory.append(input); } catch { return null; }
+        } });
+      expect(failedProjection).toMatchObject({ recovered: 0, still_pending: 1,
+        issues: [{ lifecycle_event_id: lifecycleEventId, reason: "append_failed" }] });
+      expect(failedHistory.size()).toBe(0);
+      expect(store.pendingToolLifecycleEvidence()).toHaveLength(1);
+      store.close();
+
+      store = new GatewayExecutionIntentStore(filepath, epoch);
+      const pending = store.pendingToolLifecycleEvidence();
+      expect(pending).toEqual([{ lifecycle_event_id: lifecycleEventId, command_id: source.id, observation }]);
+      const memoryHistory = new CompleteHistoryStore();
+      expect(recoverPendingToolLifecycleHistory({ execution_store: store, complete_history: memoryHistory,
+        complete_history_persistent: false, append_history: (input) => memoryHistory.append(input) }))
+        .toMatchObject({ recovered: 0, still_pending: 1, issues: [] });
+      expect(memoryHistory.all()).toHaveLength(1);
+      expect(store.pendingToolLifecycleEvidence()).toHaveLength(1);
+
+      const historyFile = join(root, "complete-history.jsonl");
+      const history = new CompleteHistoryStore({ filepath: historyFile });
+      expect(recoverPendingToolLifecycleHistory({ execution_store: store, complete_history: history,
+        complete_history_persistent: true, append_history: (input) => history.append(input) }))
+        .toMatchObject({ recovered: 1, still_pending: 0, issues: [] });
+      expect(store.pendingToolLifecycleEvidence()).toEqual([]);
+      expect(store.verifyEvents()).toBe(true);
+      expect(new CompleteHistoryStore({ filepath: historyFile }).all()).toMatchObject([
+        { kind: "audit_history", command_id: source.id, payload: { lifecycle_event_id: lifecycleEventId,
+          state: "cancel_requested", used_for_authority: false, may_execute: false } },
+      ]);
+      expect(inspectExecutionIntentRecoveryLedger({ private_state_root: root, database_path: filepath })).toMatchObject({
+        status: "verified", used_for_authority: false, execution_eligible: false,
+      });
+    } finally {
+      try { store.close(); } catch { /* closed before reopening */ }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("実builtin file.searchを単回で通し、同IDの再brand・別内容・別authorityから再作用しない", async () => temporary(async (store, root) => {
     const workspace = join(root, "workspace"); mkdirSync(workspace); writeFileSync(join(workspace, "blue.txt"), "blue\n");
     const prior = process.env.BLUE_TANUKI_FILE_ROOT; process.env.BLUE_TANUKI_FILE_ROOT = workspace;
@@ -172,7 +242,7 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
     for (const name of ["PATH", "Path", "SystemRoot", "SYSTEMROOT", "ComSpec", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA"])
       if (process.env[name]) env[name] = process.env[name];
     const spawnWorker = (id: string, mode: string) => {
-      const child = fork(join(process.cwd(), "apps/gateway/test/fixtures/execution_intent_worker.ts"), [root, id, mode, executionEpoch],
+      const child = fork(executionIntentWorkerFixture, [root, id, mode, executionEpoch],
         { execArgv: ["--import", "tsx"], env, windowsHide: true, stdio: ["ignore", "ignore", "ignore", "ipc"] });
       children.push(child); return child;
     };

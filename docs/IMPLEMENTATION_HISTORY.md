@@ -2621,3 +2621,21 @@ D05.03は既存の専用SQLite deny-only latch、Gatewayの実行中controller a
 | 全workspace suite、provider／credential、外部作用、5OS実機、QE_QC／QE_QA | 未実施。 |
 
 次consumerはD05.02のCompleteHistory保存失敗・未設定から回復後に取消証拠の欠損事実を記録する経路。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。
+
+---
+
+### 履歴ログ：QEB-40-D05.02-COMPLETE-HISTORY-GAP-RECOVERY
+
+開始HEAD／`main`／`origin/main`=`725c2baef8f89167f32a59f600f63557932a7625`。現行pin rev2.3とZIP hash、適用AGENTS、active指示、D05.02、Executor lifecycle producer、Gateway CompleteHistory consumer、既存私有実行記録を照合した。既存untracked Linux `target/`は保持した。旧版・完了ログは今回の変更系譜に必要なD05.02／QEB-38／QEB-39の該当記録だけを参照した。
+
+取消lifecycle観測を既存`GatewayExecutionIntentStore`のprivate `execution_events` hash-chainへ、ticket-bound・非権威eventとして記録するよう接続した。CompleteHistoryへの書込み失敗または未設定時は未ack eventを保持し、起動時にlifecycle event IDで既存entryを照合して重複を避ける。永続CompleteHistory entryを得た場合だけhash-chain ackを追記し、memory-only projectionでは保留を維持する。entry payloadはworker lifecycle metadataだけで、command本文やtool結果を保存しない。未配送は1000 event／8 MiBに制限し、容量超過や保存故障は記録しても取消結果を成功へ変えない。
+
+実行記録のhash-chain検証とread-only recovery inspectionは、新しいlifecycle event／ack profileを検証し、existing receipt projectionは従来どおり維持する。既存cross-processテストのfixture pathがpackage cwdに依存していたため、`import.meta.url`相対へ直し、テスト自体の実行を回復した。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Gateway `execution_intent_runtime.test.ts` | PASS、8 tests。保存先未設定・CompleteHistory append失敗後の保留、再起動後の再投影、永続保存後のack、recovery inspection、既存process競合／kill経路を確認。 |
+| Gateway typecheck／build | PASS。 |
+| 全workspace suite／QE_QC／QE_QA／実provider・credential／外部業務作用／5OS実機 | 未実施。全体形状成立後へ保持。 |
+
+D05.02のCompleteHistory欠損回復producer→consumerを`WIRED`とする。D05.02全体は未成立。task単位cancel callsite、remote provider内部停止確認、AbortSignal非協調generic toolの強制停止は`BUILD_GAP`。全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立。C08.03実provider保留、D4Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。次consumerはGateway owner-facing task単位cancel callsite。
