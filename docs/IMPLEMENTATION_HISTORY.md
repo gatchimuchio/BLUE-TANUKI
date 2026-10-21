@@ -2925,3 +2925,21 @@ Telegram inboundの入口に、`TELEGRAM_INBOUND_GRANTS_JSON`から読む厳密�
 | 実Telegram API／credential、実provider、owner実操作、全workspace suite、全OS、`pnpm docs:check`、QE_QC／QE_QA | 未実施。C08.03実provider保留を維持。 |
 
 F10.02のTelegram exact owner entry gateを部分的に`WIRED`とするが、F10.02全体は他media・live経路・job/sessionの複数入口再評価が残るため`BUILD_GAP`。F16.03=`BLOCKED_AUTHORITY`（別repoのnative producer変更に限定委任なし）。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留。実装commit=`78f1a5cd9e50e3d09fe8e47ae1b48d447c7be3ab`。次のBLUE内BUILD_BATCHはF10.02を続け、admitted Telegram requestから実job/session consumerを結び、別user/chat/topicの参照・作用権限を各入口で再評価する。復旧branchとremote backup tag二世代、保護対象untrackedを維持した。
+
+---
+
+### 履歴ログ：QEB-56-F10.02-TELEGRAM-TOPIC-WAIT-RESUME
+
+開始`main`／`origin/main`=`8e610abe667dda14be876d22c13088b542fc669e`。現行rev2.3のpin・三点セットと適用`AGENTS.md`、active instruction、F10.02 Telegram adapter→Gateway→HDS wait consumerを再同期した。旧版・完了記録は参照せず、直前状態との依存確認にQEB-55だけを参照。保護対象untracked Linux `target/`を保持した。編集前にlocal recovery branch二世代を`8e610ab`／`c7ec14c`へ回転し、GitHub backup tag二世代も期待SHA付きatomic push後に照合した。
+
+Gateway operation-plan runtime fixtureへTelegram adapter ingressを追加した。owner／channel／entry topic 41に登録済みのOperationPlan waitに対し、同一user・chatでもtopic 42からの返信はwaitを再開せず、別の通常C sessionへ流れる。topic 41からの返信だけがGateway canonical boundaryとHDS inbound consumerを通って当該waitを再開し、Cのplan候補計算を要求する。候補計算には通常session historyを合流しない。Telegram grantは入口admissionに限り、Developer限定`plan:`制御、Approval Gate、L3 final reviewへ昇格させない。Telegram API／credential／provider／外部作用は使用していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| 対象Gateway runtime fixture | PASS、1件。topic 42はwaitを再開せず、topic 41だけが正しいwaitを消費。 |
+| Gateway typecheck／build | PASS。 |
+| `git diff --check` | PASS。 |
+| `pnpm docs:check` | FAIL。文書形状検査はPASSしたが、日本語基底gateが未変更の`docs/CHANNEL_READINESS_MATRIX.md`で移行台帳の期待SHA `4017e752…`と現行SHA `8CA8706C…`の不一致を報告。これは今回差分外で、移行台帳は改変していない。licensing gateには到達していない。 |
+| 実Telegram API／credential、実provider、外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+F10.02のtopic-bound wait/resume producer→consumerを部分的に`WIRED`とする。F10.02全体は未接続mediaおよびlive／二入口運用が残り`BUILD_GAP`。F16.03=`BLOCKED_AUTHORITY`（D4-Pocket側のnative producer変更は別repo委任が必要）。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次のBUILD_BATCHは`F10.03`の二入口・切断経路を合成入力で接続する。

@@ -2,6 +2,8 @@
 
 2026-10-22。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-22の`QEB-55`ではTelegram inboundを数値`user_id`・`chat_id`・`message_thread_id`完全一致のowner設定grantでadmitし、grantなしをdeny-allとした。`QEB-56-F10.02-TELEGRAM-TOPIC-WAIT-RESUME`ではadmitted updateをTelegram adapter→Gateway boundary→HDS wait consumerへfixture接続し、同一owner・chatの別topicからは待機jobを再開せず、登録元topicの返信だけを再開することを確認した。Developer限定の`plan:`制御、Approval／L3境界は変えていない。対象Gateway fixture、Gateway typecheck/buildはPASS。実Telegram API／credential／実provider／外部作用は未使用。F10.02全体、製品全体の結合形状、QE_QC／QE_QAは未成立。次はF10.03の二入口・切断経路を合成入力で接続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+
 2026-10-22の`QEB-52-F10.02-TELEGRAM-TEXT-ATTACHMENT-CONSUMER`では、UTF-8 `text/plain`添付を64 KiB以下で取得し、未信頼データとしてGateway境界からHDSへ渡す経路をfixtureで接続した。filename／file ID／credentialを通常metadataや専用diskへ保存しない。画像・音声・他形式、live Telegram API／資格、外部作用は未実施。channel-telegram 16 tests、Gateway ingress 1 test、対象typecheck／buildはPASS。F10.02全体は引き続き`BUILD_GAP`。次はF16.01の画像producer→C consumer接続を確認する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-22の`QEB-51-F10.02-TELEGRAM-DURABLE-ENTRY-REPLY`では、Telegram updateをGateway private SQLite cursorへdigest-onlyで受付し、再起動後の再配信を抑止した。処理途中で停止したupdateは`outcome_unknown`として再実行しない。private account actorは安定IDを保ち、group chatとforum topicはentry actor／返信先を分離する。4096 UTF-16単位の返信分割を接続し、途中失敗は配送結果不明とする。添付は未読取案内と種類metadataをGatewayへ渡すが、添付本文はまだInbound consumerへ接続されていない。channel-base 14、Telegram 12、Gateway inbox 3 tests、対象package buildとGateway typecheck/buildはPASS。実Telegram API／資格／業務作用、workspace全suite、QE_QC／QE_QAは未実施。F10.02は引き続き`BUILD_GAP`で、次は添付内容consumerを接続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。

@@ -8,11 +8,13 @@ import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDige
   type OperationPlanBrokerRestoreDependencyEvidence } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
   ToolRegistry, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "@blue-tanuki/core";
+import { TelegramChannel, type TelegramFetch } from "@blue-tanuki/channel-telegram";
 import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservationSchema, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
   OperationPlanCheckpointSchema,
   OperationPlanCheckpointEnvelopeSchema,
   type ExecuteCommand, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
+import { planGatewayInboundBoundary } from "../src/serve.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { executionAdmissionForCommand } from "../src/reconcile_execution_results.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
@@ -2448,6 +2450,94 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     const now = Date.now(); const clock = vi.spyOn(Date, "now").mockReturnValue(now + 600_001);
     try { expect(hds.beginOperationPlanAttempt(pending)).toBe(false); }
     finally { clock.mockRestore(); }
+  });
+
+  it("Telegramの返信は元のtopicのHDS job waitだけを再開する", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-telegram-wait-entry-scope-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const owner = "telegram:12345:chat:-1001:thread:41";
+    const otherTopic = "telegram:12345:chat:-1001:thread:42";
+    const candidate = plan("telegram-wait-task", "synthetic-root");
+    const goal = "Wait for a reply in the originating Telegram topic";
+    store.compareAndSet(null, OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner, channel: "telegram", goal,
+        revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }],
+        receipt_observations: [], bindings: [], results: [] }],
+    }));
+    const hds = new HDSUpperController({ operation_plan_state: store });
+    const deadlineAt = Date.now() + 60_000;
+    const registration = hds.decide(createGatewayInternalInboundRequest({
+      id: randomUUID(), channel: "telegram", user: owner,
+      content: `plan:wait ${JSON.stringify({ plan_id: candidate.plan_id,
+        revision_digest: operationPlanDigest(candidate), deadline_at_ms: deadlineAt })}`,
+      timestamp: Date.now(),
+      metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer" },
+    }));
+    expect(registration.command?.type).toBe("noop");
+    const input = "このtopicでの合成返信です。";
+    const updates = [
+      { update_id: 910, message: { message_id: 1, message_thread_id: 42, text: input,
+        chat: { id: -1001, type: "supergroup" }, from: { id: 12345 } } },
+      { update_id: 911, message: { message_id: 2, message_thread_id: 41, text: input,
+        chat: { id: -1001, type: "supergroup" }, from: { id: 12345 } } },
+    ];
+    const fetch: TelegramFetch = async (input, init) => {
+      if (!String(input).endsWith("/getUpdates")) throw new Error("unexpected fixture request");
+      const body = JSON.parse(String(init?.body ?? "{}")) as { offset?: number };
+      return new Response(JSON.stringify({ ok: true,
+        result: updates.filter((update) => body.offset === undefined || update.update_id >= body.offset) }));
+    };
+    const channel = new TelegramChannel({
+      bot_token: "fixture-token",
+      poll_interval_ms: 1,
+      poll_timeout_sec: 1,
+      request_timeout_ms: 100,
+      fetch,
+      inbox: { latestUpdateId: () => null, claim: () => ({ status: "accepted" }), settle: () => undefined },
+      inbound_grants: [
+        { user_id: "12345", chat_id: "-1001", message_thread_id: 41 },
+        { user_id: "12345", chat_id: "-1001", message_thread_id: 42 },
+      ],
+      log: () => undefined,
+    });
+    const decisions: Array<{ readonly actor: string; readonly commandType: string | null;
+      readonly sessionId: string | null; readonly computeVersion: string | null }> = [];
+    let resolveHandled!: () => void;
+    let rejectHandled!: (error: unknown) => void;
+    const handled = new Promise<void>((resolve, reject) => { resolveHandled = resolve; rejectHandled = reject; });
+    try {
+      await channel.start(async (inbound) => {
+        try {
+          const boundary = planGatewayInboundBoundary(inbound);
+          if (!boundary.boundary_ok) throw new Error("telegram_gateway_boundary_rejected_fixture");
+          const decision = hds.decide(boundary.request);
+          decisions.push({ actor: boundary.request.user, commandType: decision.command?.type ?? null,
+            sessionId: decision.command?.type === "llm_call" ? decision.command.payload.session_id ?? null : null,
+            computeVersion: decision.command?.type === "llm_call"
+              ? decision.command.payload.compute_context?.local_p_version ?? null : null });
+          if (decisions.length === updates.length) resolveHandled();
+        } catch (error) {
+          rejectHandled(error);
+          throw error;
+        }
+      });
+      await handled;
+      await channel.stop();
+
+      expect(decisions).toHaveLength(2);
+      expect(decisions.map((decision) => decision.actor)).toEqual([otherTopic, owner]);
+      expect(decisions.map((decision) => decision.commandType)).toEqual(["llm_call", "llm_call"]);
+      expect(decisions.map((decision) => decision.sessionId)).toEqual([`telegram:${otherTopic}`, null]);
+      expect(decisions[0]?.computeVersion).toBe("blue-tanuki.c-input-rules.v1");
+      expect(decisions[1]?.computeVersion).toBe("blue-tanuki.plan-compute-agent-delegation.v1");
+      expect(hds.listOperationPlanWaits()).toMatchObject([{ state: "resumed", wake_reason: "reply" }]);
+    } finally {
+      await channel.stop();
+      hds.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("内容差替え・crash窓・別writerを実行前に遮断", async () => {
