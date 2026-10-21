@@ -2750,4 +2750,4 @@ code commit=`0533867`。QE_BUILDのこの接続補正以外に実provider、cred
 | `node --check apps/gateway/test/fixtures/local_inspection_server.mjs`／`git diff --check` | PASS。 |
 | Gateway実serve ingress／owner-facing確認画面を含む製品runtime経路、全workspace suite、実provider／credential、外部送信、5OS実機、QE_QC／QE_QA | 未実施。 |
 
-この結果はD08.01の合成local subpathの接続を示す。製品runtimeのGateway ingressからowner-facing確認まで含むD08.01全体は`BUILD_GAP`であり、F10.02も`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。C08.03実provider保留、D4-Pocket／ミニドラ変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次のBUILD_BATCHは未選定。次回独立作業では現行三点セットと適用AGENTSを読み直し、実際のGateway ingressと今回の合成Executor経路の接続を現物から確定する。
+この結果はD08.01の合成local subpathの接続を示す。製品runtimeのGateway ingressからowner-facing確認まで含むD08.01全体は`BUILD_GAP`であり、F10.02も`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。C08.03実provider保留、D4-Pocket／ミニドラ変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。実装commit=`b8d3a2e64bfade30d7e67976b4f971a1d021be88`。次のBUILD_BATCHは未選定。次回独立作業では現行三点セットと適用AGENTSを読み直し、実際のGateway ingressと今回の合成Executor経路の接続を現物から確定する。
