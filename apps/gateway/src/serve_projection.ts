@@ -227,6 +227,7 @@ export interface OperationPlanStatusProjection {
     task_identity_digest: string;
     state: "waiting" | "resumed";
     deadline_at_ms: number;
+    recovery_hold_reason?: "held_residual" | "held_unobserved" | "held_unverified";
     resumed_at_ms?: number;
     wake_reason?: "reply" | "deadline" | "recovery";
     compute_outcome: "not_started" | "pending" | "interrupted" | "candidate_retained" | "candidate_rejected" | "failed" | "not_recorded";
@@ -339,7 +340,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
   const waits: OperationPlanStatusProjection["waits"] = [];
   for (const wait of rawWaits as Record<string, unknown>[]) {
     const allowedKeys = new Set(["wait_id", "plan_id", "task_identity_digest", "state", "deadline_at_ms",
-      "resumed_at_ms", "wake_reason", "compute_outcome", "compute_result_digest", "candidate_plan_id",
+      "recovery_hold_reason", "resumed_at_ms", "wake_reason", "compute_outcome", "compute_result_digest", "candidate_plan_id",
       "compute_completed_at_ms", "compute_interrupted_at_ms", "compute_resource_use", "used_for_authority", "may_execute"]);
     const state = wait.state;
     const outcome = wait.compute_outcome;
@@ -353,6 +354,8 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     if (Object.keys(wait).some((key) => !allowedKeys.has(key)) || !isDigest(wait.wait_id) || !isDigest(wait.plan_id) ||
         !isDigest(wait.task_identity_digest) || (state !== "waiting" && !resumed) ||
         !Number.isSafeInteger(wait.deadline_at_ms) || (wait.deadline_at_ms as number) < 0 ||
+        (wait.recovery_hold_reason !== undefined &&
+          !["held_residual", "held_unobserved", "held_unverified"].includes(String(wait.recovery_hold_reason))) ||
         wait.used_for_authority !== false || wait.may_execute !== false ||
         (resumed && (!Number.isSafeInteger(resumedAt) || (resumedAt as number) < 0 ||
           !["reply", "deadline", "recovery"].includes(String(wait.wake_reason)))) ||
@@ -381,6 +384,8 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     waits.push({ wait_id: wait.wait_id as string, plan_id: wait.plan_id as string,
       task_identity_digest: wait.task_identity_digest as string, state: state as "waiting" | "resumed",
       deadline_at_ms: wait.deadline_at_ms as number,
+      ...(wait.recovery_hold_reason === "held_residual" || wait.recovery_hold_reason === "held_unobserved" ||
+        wait.recovery_hold_reason === "held_unverified" ? { recovery_hold_reason: wait.recovery_hold_reason } : {}),
       ...(typeof resumedAt === "number" ? { resumed_at_ms: resumedAt } : {}),
       ...(wait.wake_reason === "reply" || wait.wake_reason === "deadline" || wait.wake_reason === "recovery"
         ? { wake_reason: wait.wake_reason } : {}),

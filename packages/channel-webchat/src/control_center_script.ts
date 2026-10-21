@@ -1049,6 +1049,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               !/^[a-f0-9]{64}$/.test(wait.plan_id || "") || !/^[a-f0-9]{64}$/.test(wait.task_identity_digest || "") ||
               wait.used_for_authority !== false || wait.may_execute !== false ||
               !Number.isSafeInteger(wait.deadline_at_ms) || !["waiting", "resumed"].includes(wait.state)) return "";
+          if (wait.recovery_hold_reason !== undefined &&
+              !["held_residual", "held_unobserved", "held_unverified"].includes(wait.recovery_hold_reason)) return "";
           const outcomeLabels = {
             not_started: "返信／期限待機中",
             pending: "J再開済み・C結果未記録",
@@ -1075,17 +1077,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 resourceUse.may_execute !== false))) return "";
           const wakeReason = wait.wake_reason === "reply" ? "返信" : wait.wake_reason === "deadline" ? "期限"
             : wait.wake_reason === "recovery" ? "ownerの新しい返信" : "未記録";
+          const recoveryHoldLabels = {
+            held_residual: "復元残差あり（wait再開停止中）",
+            held_unobserved: "復元依存未観測（wait再開停止中）",
+            held_unverified: "復元履歴未確認（wait再開停止中）",
+          };
+          const recoveryHold = Object.prototype.hasOwnProperty.call(recoveryHoldLabels, wait.recovery_hold_reason)
+            ? recoveryHoldLabels[wait.recovery_hold_reason] : null;
           const deadlineDate = new Date(wait.deadline_at_ms);
           const deadline = Number.isNaN(deadlineDate.getTime())
             ? String(wait.deadline_at_ms) + " ms" : deadlineDate.toISOString();
-          const recoveryInput = wait.compute_outcome === "interrupted"
+          const recoveryInput = wait.compute_outcome === "interrupted" && !recoveryHold
             ? '<label>復旧後の新しい返信<textarea data-operation-plan-resume-input="true" maxlength="200000"></textarea></label>' +
               '<button type="button" class="secondary" data-operation-plan-resume-wait="true" data-wait-id="' +
               escapeHtml(wait.wait_id) + '">新しい返信を送って候補計算を再開</button>' +
               '<p class="muted">以前の返信本文は保存されていません。ownerの新しい入力だけで候補計算を行います。</p>'
             : '';
           return '<article class="trace-item"><div class="row"><h3>返信／期限wait ' +
-            escapeHtml(shortDigest(wait.wait_id)) + '</h3>' + badge(outcomeLabels[wait.compute_outcome], "review") + '</div>' +
+            escapeHtml(shortDigest(wait.wait_id)) + '</h3>' + badge(recoveryHold || outcomeLabels[wait.compute_outcome], "review") + '</div>' +
             '<dl class="kv"><dt>task digest</dt><dd class="mono">' + escapeHtml(shortDigest(wait.task_identity_digest)) +
             '</dd><dt>元計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(wait.plan_id)) +
             '</dd><dt>期限</dt><dd>' + escapeHtml(deadline) + '</dd>' +
@@ -1096,7 +1105,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               resourceUse.cost_status + ', ' + resourceUse.charge_basis + ')') + '</dd>' : '') +
             (resultDigest ? '<dt>C結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(resultDigest)) + '</dd>' : '') +
             (candidateDigest ? '<dt>保存候補digest</dt><dd class="mono">' + escapeHtml(shortDigest(candidateDigest)) + '</dd>' : '') +
-            '</dl><p class="muted">' + (wait.resource_review_required
+            '</dl><p class="muted">' + (recoveryHold
+              ? '復元hold中のため、このwaitからの期限起動と候補計算を停止しています。状態表示は権限ではありません。' +
+                '残差を確認し、続ける場合は新しい依頼から新規計画を作成してください。'
+              : wait.resource_review_required
               ? '計画候補の保存に至らず資源消費がありました。次のJ再検討で進捗を確認します。'
               : 'J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。') + '</p>' + recoveryInput + '</article>';
         }).join("");

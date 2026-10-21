@@ -873,6 +873,8 @@ export class OperationPlanLedger {
         operationPlanTaskIdentityDigest(plan) !== wait.task_identity_digest ||
         operationPlanDigest(plan.owner) !== wait.owner_digest || operationPlanDigest(plan.channel) !== wait.channel_digest ||
         caller.user !== plan.owner || caller.channel !== plan.channel) throw new Error("plan_wait_resume_stale");
+    const recoveryHold = this.recoveryHolds.get(wait.plan_id_digest);
+    if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
     return { wait_id: wait.wait_id, task_identity_digest: wait.task_identity_digest, goal: plan.goal };
   }
 
@@ -925,7 +927,7 @@ export class OperationPlanLedger {
   waitContext(wait: OperationPlanWaitState): { readonly goal: string; readonly owner: string; readonly channel: string } | null {
     const plan = this.state.plans.find((candidate) => operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
     if (wait.state !== "waiting" || !plan || operationPlanTaskIdentityDigest(plan) !== wait.task_identity_digest ||
-        plan.revisions.at(-1)?.digest !== wait.revision_digest) return null;
+        plan.revisions.at(-1)?.digest !== wait.revision_digest || this.recoveryHolds.has(wait.plan_id_digest)) return null;
     return { goal: plan.goal, owner: plan.owner, channel: plan.channel };
   }
 
@@ -1323,6 +1325,8 @@ export class OperationPlanLedger {
           origin.user !== parentPlan.owner || origin.channel !== parentPlan.channel) {
         throw new Error("plan_wait_resume_binding_invalid");
       }
+      const recoveryHold = this.recoveryHolds.get(parentWait.plan_id_digest);
+      if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
       retainedTaskGoal = parentPlan.goal;
     }
     const rawGoalPurposeBinding = origin.metadata?.["blue_tanuki.operation_core.goal_purpose_binding"];
@@ -2555,6 +2559,8 @@ export class OperationPlanLedger {
       waits: (this.state.waits ?? []).slice(-256).reverse().map((wait) => ({
         wait_id: wait.wait_id, plan_id: wait.plan_id_digest, task_identity_digest: wait.task_identity_digest,
         state: wait.state, deadline_at_ms: wait.deadline_at_ms,
+        ...(this.recoveryHolds.has(wait.plan_id_digest)
+          ? { recovery_hold_reason: this.recoveryHolds.get(wait.plan_id_digest)!.reason } : {}),
         ...(wait.resumed_at_ms !== undefined ? { resumed_at_ms: wait.resumed_at_ms } : {}),
         ...(wait.wake_reason ? { wake_reason: wait.wake_reason } : {}),
         compute_outcome: wait.compute_outcome ?? (wait.state === "waiting" ? "not_started" as const : "not_recorded" as const),

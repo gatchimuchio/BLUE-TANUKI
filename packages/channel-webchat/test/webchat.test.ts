@@ -609,6 +609,11 @@ describe("WebChatChannel — Control Center shell", () => {
         { wait_id: "1".repeat(64), plan_id: "0".repeat(64), task_identity_digest: "f".repeat(64),
           state: "resumed", deadline_at_ms: nowMs - 30_000, resumed_at_ms: nowMs - 60_000, wake_reason: "reply",
           compute_outcome: "interrupted", compute_interrupted_at_ms: nowMs - 30_000,
+          recovery_hold_reason: "held_residual",
+          resource_review_required: false, used_for_authority: false, may_execute: false },
+        { wait_id: "2".repeat(64), plan_id: "3".repeat(64), task_identity_digest: "4".repeat(64),
+          state: "resumed", deadline_at_ms: nowMs - 30_000, resumed_at_ms: nowMs - 60_000, wake_reason: "reply",
+          compute_outcome: "interrupted", compute_interrupted_at_ms: nowMs - 30_000,
           resource_review_required: false, used_for_authority: false, may_execute: false },
       ],
       goal_purpose_options: [{ goal_ref: "goal_0123456789abcdef", goal_kind: "delegated", purpose_version: 2,
@@ -670,6 +675,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain('data-operation-plan-resume-wait="true"');
     expect(rendered).toContain('data-operation-plan-resume-input="true"');
     expect(rendered).toContain("以前の返信本文は保存されていません。");
+    expect(rendered).toContain("復元残差あり（wait再開停止中）");
+    expect(rendered).toContain("期限起動と候補計算を停止しています");
+    expect(rendered).not.toContain('data-wait-id="' + "1".repeat(64) + '"');
+    expect(rendered).toContain('data-wait-id="' + "2".repeat(64) + '"');
     expect(rendered).toContain("C結果digest");
     expect(rendered).toContain("保存候補digest");
     expect(rendered).toContain("J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。");

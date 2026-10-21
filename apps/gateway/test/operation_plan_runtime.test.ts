@@ -602,6 +602,174 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     }
   });
 
+  it("復元hold対象の永続waitは期限起動を止め、状態を非権威projectionへ渡す", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-wait-recovery-hold-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    let hds: HDSUpperController | undefined;
+    try {
+      const goal = "Recover a synthetic plan without replaying a held wait";
+      const seed = plan(randomUUID(), root);
+      store.compareAndSet(null, OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [{ owner: "fixture-owner", channel: "webchat", goal,
+          request_goal_criteria: noRequestCriteria(goal, seed.request_id),
+          revisions: [{ digest: operationPlanDigest(seed), plan: seed }], receipt_observations: [], bindings: [], results: [] }],
+      }));
+      const controller = hds = new HDSUpperController({ operation_plan_state: store });
+      const deadlineAt = Date.now() + 60_000;
+      expect(controller.decide(request(`plan:wait ${JSON.stringify({ plan_id: seed.plan_id,
+        revision_digest: operationPlanDigest(seed), deadline_at_ms: deadlineAt })}`)).command?.type).toBe("noop");
+      const wait = controller.listOperationPlanWaits()[0]!;
+      const restoreCommand = operationPlanRestoreCommand();
+      const checkpoint = store.load();
+      if (!checkpoint) throw new Error("missing plan checkpoint before restore refresh");
+      expect(controller.beginOperationPlanRecoveryRefresh(restoreCommand)).toBe(true);
+      controller.refreshOperationPlansAfterRecoveryRestore(restoreCommand, {
+        schema_version: "operation-plan-recovery-evidence.v1",
+        scope: "restored_operation_plans",
+        checkpoint_digest: operationPlanDigest(checkpoint),
+        provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64),
+          restore_store_key: "operation_plans",
+          restore_scope_plan_digest: operationPlanDigest(seed.plan_id), restore_scope_mode: "plan_scoped_merge_v1",
+          restore_backup_id_digest: "c".repeat(64), restored_state_digest: "d".repeat(64) },
+        plans: [{ plan_id_digest: operationPlanDigest(seed.plan_id), restore_scope_relation: "requested",
+          restore_membership: "restored", integrity: "residuals_present", dependency_status: "residuals_present" }],
+        used_for_authority: false, may_execute: false,
+      });
+
+      expect(controller.operationPlanWaitContext(wait.wait_id)).toBeNull();
+      expect(projectOperationPlanStatus(controller.getRuntimeSnapshot().operation_plans).waits)
+        .toMatchObject([{ wait_id: wait.wait_id, recovery_hold_reason: "held_residual" }]);
+      const now = vi.spyOn(Date, "now").mockReturnValue(deadlineAt);
+      try {
+        const deadlineEvent = createGatewayInternalInboundRequest({
+          id: `plan-wait-deadline-${wait.wait_id}`, channel: "webchat", user: "fixture-owner",
+          content: "Persistent operation-plan wait deadline event", timestamp: deadlineAt,
+          metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "system",
+            "blue_tanuki.trust_level": "trusted", "blue_tanuki.process_kind": "cron",
+            "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_plan.wait_deadline_id": wait.wait_id },
+        });
+        expect(controller.decide(deadlineEvent).command).toBeNull();
+        expect(controller.listOperationPlanWaits().find((candidate) => candidate.wait_id === wait.wait_id)?.state).toBe("waiting");
+      } finally { now.mockRestore(); }
+    } finally {
+      hds?.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("復元hold前に起動したC計算の遅延候補をJへ保存しない", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-stale-wait-candidate-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    let hds: HDSUpperController | undefined;
+    try {
+      const goal = "Do not retain an in-flight candidate after a recovery hold";
+      const seed = plan(randomUUID(), root);
+      store.compareAndSet(null, OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [{ owner: "fixture-owner", channel: "webchat", goal,
+          request_goal_criteria: noRequestCriteria(goal, seed.request_id),
+          revisions: [{ digest: operationPlanDigest(seed), plan: seed }], receipt_observations: [], bindings: [], results: [] }],
+      }));
+      const controller = hds = new HDSUpperController({ operation_plan_state: store });
+      const deadlineAt = Date.now() + 60_000;
+      expect(controller.decide(request(`plan:wait ${JSON.stringify({ plan_id: seed.plan_id,
+        revision_digest: operationPlanDigest(seed), deadline_at_ms: deadlineAt })}`)).command?.type).toBe("noop");
+      const wait = controller.listOperationPlanWaits()[0]!;
+      const computeRequest = request("synthetic owner reply before scoped recovery");
+      const compute = controller.decide(computeRequest).command;
+      expect(compute?.type).toBe("llm_call");
+
+      const restoreCommand = operationPlanRestoreCommand();
+      const checkpoint = store.load();
+      if (!checkpoint) throw new Error("missing pending wait checkpoint before restore refresh");
+      expect(controller.beginOperationPlanRecoveryRefresh(restoreCommand)).toBe(true);
+      controller.refreshOperationPlansAfterRecoveryRestore(restoreCommand, {
+        schema_version: "operation-plan-recovery-evidence.v1", scope: "restored_operation_plans",
+        checkpoint_digest: operationPlanDigest(checkpoint),
+        provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64), restore_store_key: "operation_plans",
+          restore_scope_plan_digest: operationPlanDigest(seed.plan_id), restore_scope_mode: "plan_scoped_merge_v1",
+          restore_backup_id_digest: "c".repeat(64), restored_state_digest: "d".repeat(64) },
+        plans: [{ plan_id_digest: operationPlanDigest(seed.plan_id), restore_scope_relation: "requested",
+          restore_membership: "restored", integrity: "residuals_present", dependency_status: "residuals_present" }],
+        used_for_authority: false, may_execute: false,
+      });
+
+      const delayedCandidate = plan(computeRequest.id, root);
+      controller.onFeedback({ command_id: compute!.id, status: "success",
+        result: { operation_core: { status: "valid_plan", plan: delayedCandidate } }, metrics: { duration_ms: 1 } });
+      expect(controller.listOperationPlanWaits().find((candidate) => candidate.wait_id === wait.wait_id))
+        .toMatchObject({ compute_outcome: "candidate_rejected", used_for_authority: false, may_execute: false });
+      expect(controller.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
+      expect(controller.getRuntimeSnapshot().operation_plans.plans[0]).toMatchObject({ recovery_hold_reason: "held_residual" });
+    } finally {
+      hds?.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("復元hold対象の中断waitはowner返信があってもCへ再開しない", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-interrupted-recovery-hold-"));
+    const databasePath = join(root, "state.sqlite");
+    const goal = "Recover a synthetic task with a held interrupted wait";
+    const seed = plan(randomUUID(), root);
+    const checkpoint = OperationPlanCheckpointSchema.parse({
+      schema_version: "operation-plan-state.v1",
+      plans: [{ owner: "fixture-owner", channel: "webchat", goal,
+        request_goal_criteria: noRequestCriteria(goal, seed.request_id),
+        revisions: [{ digest: operationPlanDigest(seed), plan: seed }], receipt_observations: [], bindings: [], results: [] }],
+    });
+    let store = new OperationPlanStateStore(databasePath);
+    store.compareAndSet(null, checkpoint);
+    let hds = new HDSUpperController({ operation_plan_state: store });
+    try {
+      const deadlineAt = Date.now() + 60_000;
+      expect(hds.decide(request(`plan:wait ${JSON.stringify({ plan_id: seed.plan_id,
+        revision_digest: operationPlanDigest(seed), deadline_at_ms: deadlineAt })}`)).command?.type).toBe("noop");
+      const wait = hds.listOperationPlanWaits()[0]!;
+      expect(hds.decide(request("synthetic owner reply before process restart")).command?.type).toBe("llm_call");
+      hds.close();
+      store.close();
+
+      store = new OperationPlanStateStore(databasePath);
+      hds = new HDSUpperController({ operation_plan_state: store });
+      expect(hds.reconcileOperationPlanWaitComputations()).toEqual({ candidate_reconciled: 0, interrupted: 1 });
+      const restoreCommand = operationPlanRestoreCommand();
+      const restoredCheckpoint = store.load();
+      if (!restoredCheckpoint) throw new Error("missing interrupted wait checkpoint");
+      expect(hds.beginOperationPlanRecoveryRefresh(restoreCommand)).toBe(true);
+      hds.refreshOperationPlansAfterRecoveryRestore(restoreCommand, {
+        schema_version: "operation-plan-recovery-evidence.v1",
+        scope: "restored_operation_plans",
+        checkpoint_digest: operationPlanDigest(restoredCheckpoint),
+        provenance: { source: "recovery_restore", command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+          operation_digest: "a".repeat(64), result_digest: "b".repeat(64),
+          restore_store_key: "operation_plans",
+          restore_scope_plan_digest: operationPlanDigest(seed.plan_id), restore_scope_mode: "plan_scoped_merge_v1",
+          restore_backup_id_digest: "c".repeat(64), restored_state_digest: "d".repeat(64) },
+        plans: [{ plan_id_digest: operationPlanDigest(seed.plan_id), restore_scope_relation: "requested",
+          restore_membership: "restored", integrity: "residuals_present", dependency_status: "residuals_present" }],
+        used_for_authority: false, may_execute: false,
+      });
+      const resume = hds.decide(request(`plan:resume_wait ${JSON.stringify({ wait_id: wait.wait_id,
+        response: "new synthetic owner reply after recovery" })}`));
+      expect(resume.command).toBeNull();
+      expect(resume.log.commit.reason).toBe("plan_control_denied:plan_recovery_residual_hold");
+      expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === wait.wait_id))
+        .toMatchObject({ compute_outcome: "interrupted" });
+      expect(projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).waits)
+        .toMatchObject([{ wait_id: wait.wait_id, recovery_hold_reason: "held_residual" }]);
+    } finally {
+      hds.close();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("refuses to start selected-store restore while a plan action is in flight", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-live-restore-busy-"));
     const store = new OperationPlanStateStore(join(root, "state.sqlite"));

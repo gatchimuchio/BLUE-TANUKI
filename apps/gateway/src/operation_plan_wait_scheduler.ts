@@ -62,12 +62,12 @@ export class OperationPlanWaitDeadlineScheduler {
         this.arm(current);
         return;
       }
-      this.attempted.add(wait.wait_id);
       const context = this.options.wait_context(wait.wait_id);
       if (!context) {
         this.options.log?.("operation plan wait deadline has no current J context", wait.wait_id);
         return;
       }
+      this.attempted.add(wait.wait_id);
       const request = createGatewayInternalInboundRequest({
         id: `plan-wait-deadline-${wait.wait_id}`,
         channel: context.channel,
