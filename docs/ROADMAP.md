@@ -2,6 +2,8 @@
 
 2026-10-21。owner指定の最新版である内部QE rev2.3三点正本を設計・要求・198施工単位（旧192＋Android/iOS各3）の根拠とする。今後もowner指定の最新版を正本とする。本書はPublicに出せる順序・状態の概要であり、内部原典を転載しない。
 
+2026-10-21の`QEB-09-E03.02-RECOVERED-SAVED-RESULT-RETURN`では、Recovery後にJ/Mへ保存済みのverified `file.search`観測を、current plan／revision・receipt・recordまで再照合した単回read-only consumerから取得し、認証済みDeveloper Control Centerへ返す経路を接続した。再検索・再実行はせず、保存時点の結果と検索完全性不明を明示する。Gateway focused tests、WebChat導線、typecheck、buildはPASS。実Gateway process smoke、E03.02 durable job lifecycle、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。
+
 2026-10-21の`QEB-08-E03.02-RESULT-M-RETURN-BARRIER`では、plan-bound実行結果をGatewayの通常出力へ返す前に、J binding・M receipt・保存recordの一致を確認するconsumerを接続した。M未確定時は結果本文を返さず、監査済み固定pending文を表示する。focused tests、typecheck、buildはPASS。変更2 test fileの広いrunはtimeout等6失敗が残り、全体合格とは扱っていない。Recovery後の結果取得・返却とE03.02全体、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。
 
 2026-10-21の`QEB-07-E03.02-UNBOUND-BROKER-RECEIPT-RECOVERY-CONSUMER`では、BrokerとOperation Planの両台帳・全相関をread-onlyで検証できる場合に限り、Operation Planに未束縛の未決receiptをRecovery画面へdigest限定で表示する。成功／失敗を推定せず、再送・承認復元を行わない。Gateway focused 18/18、WebChat Recovery surface 1件、workspace typecheck／15-project buildはPASS。E03.02のM pending回復・durable job lifecycleと製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。詳細は[`docs/開発進捗.md`](開発進捗.md)。

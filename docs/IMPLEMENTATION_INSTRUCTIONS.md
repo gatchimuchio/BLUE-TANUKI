@@ -4,7 +4,25 @@ ownerの2026-10-21再確認：まずQE_BUILDで全体を一気通貫に接続し
 
 現行正本は [`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md) の三点だけとする。各作業では現行三点の該当節、適用AGENTS、ここにある最新BUILD_BATCH、今回に直接関係する要求・コードを確認する。旧版と閉じたBUILD_BATCHは履歴として保持し、依存・変更系譜・矛盾の解決に必要な場合だけ読む。
 
-### 最新BUILD_BATCH：`QEB-08-E03.02-RESULT-M-RETURN-BARRIER`
+### 最新BUILD_BATCH：`QEB-09-E03.02-RECOVERED-SAVED-RESULT-RETURN`
+
+開始HEAD／`main`／`origin/main`=`e61de60e2b8f6da9aa0a18cb2968471ac072c71a`。owner指定のrev2.3三点は[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)に固定済み。E03.02のRecovery後の結果取得節、適用AGENTS／作業標準のBUILD・安全・Git条項、既存Operation Plan→M receipt→Gateway→WebChat consumerを今回分だけ再照合した。Windows localでBLUE-TANUKIのみ変更し、保護対象untracked Linux `target/`は保持してGitへ含めない。
+
+Recovery後、Jのcurrent plan／revision／owner・channel、verified `file.search` binding、M commit／receipt／reconcile状態、canonical M recordとJ resultの一致をHDSが再確認してから、保存済み観測を読み取り専用で返す経路を接続した。認証済みDeveloper Control Centerだけに操作を表示し、結果本文を再検索・再実行せず、保存時点の観測と検索完全性不明を明示する。失効・receipt未確認・state不一致時は本文を返さず固定応答とdigest監査に閉じる。GatewayはExecutor／LLMを呼ばず、output auditと通常dispatchへ接続する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Recovery後のJ/M結果取得・単回消費 | focused reconciliation testsでPASS。保存結果の一致、再取得不可、M receipt不成立時の拒否を確認。 |
+| Developer Control Center／結果描画 | focused WebChat helper・renderer testsでPASS。authenticated Developer invoke、receipt確認済みの限定表示、保存時点表示を確認。 |
+| workspace `pnpm typecheck`／`pnpm build` | 両方PASS。buildは15 workspace projects。 |
+| `git diff --check`／`pnpm docs:check` | 両方PASS。docs:checkでは日本語基底移行負債76件を確認。 |
+| Gateway実process dispatch smoke、全workspace suite、実provider／credential／外部作用、5OS実機、QE_QC／QE_QA | 未実施。実物全体の形状成立後に配置。 |
+
+Recovery後の保存済み結果取得・返却consumerをこの範囲で`WIRED`とする。E03.02 durable job lifecycleと製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立。次はrev2.3工程表の未接続producer／consumerを再同期し、E03.02のdurable job lifecycleを前進させる。C08.03実provider、D4Pocket／ミニドラ別repo変更、実外部作用、P13公開・出荷GOは保留。
+
+実装commit=`2b305aa`。source commitはこのBUILD_BATCHのcloseout後に`main`へpushする。
+
+### 履歴ログ：`QEB-08-E03.02-RESULT-M-RETURN-BARRIER`
 
 開始HEAD／`main`／`origin/main`=`db1d18c8be0aeb95d50cf1deaaef20eeaf9e568c`。owner指定rev2.3の現行ピンとE03.02の未決作用・M pending回復に関する節、適用AGENTS／作業標準のQE_BUILD・Git条項を照合した。Windows localでBLUE-TANUKIのみ変更し、保護対象untracked Linux `target/`は保持してGitへ含めない。
 
