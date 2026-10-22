@@ -98,6 +98,17 @@ describe("setup_config", () => {
     expect(renderSetupEnvFile(config)).toContain("BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON=");
   });
 
+  it("rejects provider cost profiles that do not match the runtime reservation contract", () => {
+    const config = createDefaultSetupConfig();
+    config.llm.provider_cost_profiles_json = JSON.stringify({
+      "openai-compatible": {
+        capabilities: [],
+        max_cost_per_attempt: { amount: -1, currency: "usd" },
+      },
+    });
+    expect(() => validateSetupConfig(config)).toThrow(/provider cost profile object/);
+  });
+
   it("renders OpenRouter and Composio settings into runtime env", () => {
     const config = createDefaultSetupConfig();
     config.llm = {

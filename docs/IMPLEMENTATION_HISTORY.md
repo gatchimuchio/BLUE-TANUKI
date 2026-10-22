@@ -3384,3 +3384,22 @@ CR-0は危険なinstall／uninstall対象を非破壊fixtureで拒否できる�
 | GitHub Actions実行、workspace全test、GA／bundle／verify、QE_QC／QE_QA、live provider／credential／外部作用 | 未実施。Actionsは今回のvalidator改修に不要。 |
 
 CR-1はI-02の二gateと関連する運用文書・testを現行`AGENTS.md`の手動Actions条件へ同期した。プロダクトの利用者仕事の実行経路は今回前進していない。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider、OD-03 live作用、D4-Pocket／ミニドラ別repo変更、P13 owner GOと公開・出荷保留を維持する。次のBUILD_BATCHはCR-2：GUIで設定されたprovider疎通と費用profile／budgetを通常Executorへ接続し、合成Cの一仕事をJ→合成Broker→receipt→M→返信・再計画／復帰へ進める。
+
+### QEB-73-CR2-GUI-COMPUTE-RESERVATION-SERVED-JOB
+
+開始`main`／`origin/main`=`e46166916636ca9904108513bfe36552efab7916`。現行pin rev2.4のZIP／仕様／工程／指示hash、root`AGENTS.md`、作業標準、active instruction、dirty差分と復旧refを再確認した。現行pinは今回owner指定したrev2.4と一致し、改訂は不要だった。保護対象untrackedの`.codex-remote-attachments/`とLinux `target/`は保持した。
+
+Control Center／WebChat Settingsへowner指定のprovider当たり上限profileとCompute budget policyの保存欄を追加し、設定snapshotが保存済みenv-fileを再読込するようにした。provider connectivityの結果と通常Computeの設定readinessを分離し、readinessは最大一要求のtoken／time／cost予約可能性をCONFIG根拠で表示する。現在windowの使用量はここで確認せず、実予約はdurable runtime ledgerに残す。保存時にprovider profileの形・capability・通貨・有限非負金額を検証し、不正値は設定として受理しない。
+
+設定画面の保存関数でloopback provider・費用上限・budgetをenv-fileへ保存した後、実Gateway serve processをそのenv-fileから起動するserved integrationを追加した。seed済みwaitからの同一job再開で、C候補計算→J review→合成`file.search`→receipt／M保存→WebChat切断・再接続後の保存結果返却が通り、結果再読取でproviderを追加呼出ししない。別のsettings testは保存envから通常`LLMComputeAdapter`／durable Compute budget storeへ通し、provider reported tokenと設定上限costのreserved-upper-bound計上を確認する。実credential、外部provider、業務宛先、実外部作用は使用していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm exec vitest run apps/gateway/test/settings_surface.test.ts apps/gateway/test/setup_config.test.ts apps/gateway/test/same_job_result_return.integration.test.ts --reporter=verbose` | PASS、3 files／30 tests。 |
+| `pnpm typecheck` | PASS、exit code 0。 |
+| `pnpm build` | PASS、全workspace build。 |
+| `git diff --check` | PASS。 |
+| `pnpm docs:check` | PASS。日本語基底の76移行負債はwarningとして残る。 |
+| 実provider／credential、GitHub Actions、workspace全test、5OS実機、QE_QC／QE_QA | 未実施。今回の合成経路から証明・昇格しない。 |
+
+CR-2でGUI保存設定から通常Compute予約およびserved同一job再開の合成subpathを接続した。seed済みwaitから開始した試験であり、新規owner task全体や全要求機能群の成立を示さない。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider、OD-03 live作用、D4-Pocket／ミニドラ変更、P13 owner GO、公開／出荷保留を維持する。次のBUILD_BATCHはCR-3：このconsumerを止めると現行正本が指定するfixture causeを現HEADで再現し、対象causeを修復して同じconsumerへ戻す。旧83 FAILは現HEADの結果として扱わない。

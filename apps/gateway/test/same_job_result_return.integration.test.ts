@@ -11,6 +11,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { CompleteHistoryStore, operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema, type OperationPlan, type OperationPlanCheckpointPlan } from "@blue-tanuki/protocol";
+import { createDefaultSetupConfig, renderSetupEnvFile } from "../src/setup_config.js";
+import { updateSettingsEnvFile } from "../src/settings_surface.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 const ROOT = process.cwd();
 const WEBCHAT_TOKEN = "f1003-synthetic-inbound-token";
@@ -117,6 +119,33 @@ describe("served Telegram result return and request-bound media ingress", () => 
     const gatewayPort = await reservePort();
     const env = isolatedEnvironment(providerPort, gatewayPort, auditDir, stateRoot, memoryFile, historyFile, sessionDir,
       captureFile, JSON.stringify([update, update]));
+    const envFile = join(tempRoot, "blue-tanuki.env");
+    writeFileSync(envFile, renderSetupEnvFile(createDefaultSetupConfig({ base_dir: tempRoot })), "utf8");
+    env.BLUE_TANUKI_ENV_FILE = envFile;
+    delete env.LLM_BACKEND;
+    delete env.LLM_PROVIDERS_JSON;
+    delete env.BLUE_TANUKI_LLM_BACKEND_HINT;
+    delete env.BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON;
+    delete env.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON;
+    const computeBudgetPolicy = JSON.stringify({
+      window_ms: 86_400_000,
+      currency: "USD",
+      system: { max_tokens: 1_000_000, max_compute_ms: 86_400_000, max_cost: { amount: 10, currency: "USD" } },
+      parent: { max_tokens: 100_000, max_compute_ms: 3_600_000, max_cost: { amount: 1, currency: "USD" } },
+      task: { max_tokens: 10_000, max_compute_ms: 300_000, max_cost: { amount: 0.1, currency: "USD" } },
+    });
+    const providerCostProfiles = JSON.stringify({ "openai-compatible": {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.02, currency: "USD" },
+    } });
+    await updateSettingsEnvFile({ llm: {
+      provider: "openai-compatible",
+      endpoint: `http://127.0.0.1:${providerPort}/v1`,
+      model: "f1003-local-fixture",
+      max_tokens: "1024",
+      timeout_ms: "30000",
+      provider_cost_profiles_json: providerCostProfiles,
+      compute_budget_policy_json: computeBudgetPolicy,
+    } }, env);
     env.BT_F1003_TELEGRAM_FILES = JSON.stringify(telegramFiles);
     let gateway: CapturedProcess | undefined;
     let socket: WebSocket | undefined;

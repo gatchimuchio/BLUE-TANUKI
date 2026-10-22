@@ -14,13 +14,15 @@ F14.02では、LINE admitted inboundからGateway reply、SQLite durable outbox�
 
 製品全体は`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開・出荷保留を維持する。
 
-## 次のBUILD_BATCH：rev2.4 CR-2
+## 現行BUILD_BATCH：rev2.4 CR-3
 
 CR-0でI-01 Unix install／uninstall対象ガードを共通実装し、配布物へ含めた。物理親解決、二重slash／dot traversal／広域root／親子重複の拒否を各入口へ接続した。I-06 Windows開発用Force installは、広域・source/data重複・reparse対象を変更前に拒否し、処理計画確認と`-WhatIf`を追加した。Windows fixtureとWSL Unix fixtureで非破壊確認済み。詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)の`QEB-73-CR0-UNIX-WINDOWS-INSTALL-TARGET-SAFETY`に記録する。root／HOME等への実削除・実OS導入は行っていない。
 
 CR-1で`release_hardening_gate`と`validate:packaging`を同一のfail-closed workflow検査へ接続した。許可条件はblock形式の`workflow_dispatch`一つ、明示的なworkflow-level `read`／`none`権限、job-level権限上書きなし。既存workflowを維持し、自動trigger・write権限・未対応YAML形状を拒否する。release／packaging gate、関連10 tests、docs監査、変更対象strict型検査、強制project-reference型検査、workspace buildはPASS。詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)の`QEB-73-CR1-MANUAL-ACTIONS-GATE-SYNC`に記録する。GitHub Actions自体は未実行。
 
-次のCR-2ではGUIのprovider疎通・費用profile／budgetと通常Executorを同じ条件で接続する。QE_BUILDの主経路はGUIで設定した合成Cから、費用予約、J採否、合成Broker作用、receipt、M、返信・再計画／復帰までのproduction consumerをつなぐこと。既知fixtureはこのconsumerを止める原因群に限ってCR-3で修復し、旧83 FAILを現HEADの結果として転記しない。
+CR-2でGUIのprovider設定・費用profile／budgetをenv-fileへ保存し、設定再読込後の通常Compute予約へ接続した。provider疎通と通常Compute準備状態を分け、Computeの準備表示は設定根拠だけとし、現在window使用量を確認したとは示さない。loopback合成providerのserved jobは、保存設定でGatewayを再起動し、待機job再開→C候補→J review→合成file.search→receipt／M→WebChat再接続後の保存結果返却まで通る。費用予約・上限計上は通常Compute adapterでも別途確認した。詳細と未確認範囲は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)の`QEB-73-CR2-GUI-COMPUTE-RESERVATION-SERVED-JOB`に記録する。
+
+CR-3では、このproduction consumerを止める原因として現行正本が指定するfixture群を現HEAD上で再現し、原因だけを修復して同じconsumerへ戻す。旧83 FAILを現HEADの試験結果として転記しない。CR-2はseed済みwaitからの合成再開served subpathであり、ownerの新規仕事全体、全機能群、全体`SYSTEM_SHAPED`を成立したとは扱わない。
 
 以前のF15.03予定とComposio／PostHogの詳細は作業履歴に残し、現batchの開始点とはしない。F15の具体的なconsumer実装は、CR-0～CR-3および一仕事のSYSTEM_SHAPED候補を前進させた後に工程表へ戻る。C08.03実provider、OD-03 live、D4-Pocket／ミニドラの別repo変更、P13公開GOは保留。製品全体は`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始のまま維持する。
 

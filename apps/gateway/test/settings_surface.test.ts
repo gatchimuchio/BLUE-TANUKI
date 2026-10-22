@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { LLMComputeAdapter, LLM_COMPUTE_PROFILE, type ComputeRequest, type LLMRequest } from "@blue-tanuki/core";
 import { PluginRuntime } from "../src/plugin_loader.js";
+import { GatewayComputeBudgetStore } from "../src/compute_budget_store.js";
+import { parseEnvFile } from "../src/env_file.js";
+import { buildLLMBackendFromEnv } from "../src/llm_config.js";
 import {
   buildSettingsSnapshot,
   createWebChatSettingsSurface,
@@ -10,7 +14,7 @@ import {
   settingsSurfaceAllowed,
   updateSettingsEnvFile,
 } from "../src/settings_surface.js";
-import { verifyLlmProvisioning } from "../src/control_center/setup/api_settings.js";
+import { assessLlmComputeReadiness, verifyLlmProvisioning } from "../src/control_center/setup/api_settings.js";
 import {
   createDefaultSetupConfig,
   renderSetupEnvFile,
@@ -62,7 +66,7 @@ function runtime(): PluginRuntime {
         kind: "core",
         entry: "./dist/index.js",
         exports: {},
-        permissions: ["network:llm-provider"],
+        permissions: ["network:llm-provider", "secrets:OPENAI_COMPAT_API_KEY"],
       },
     },
     {
@@ -370,6 +374,165 @@ describe("settings surface", () => {
     expect(result.changed).toBe(false);
     expect(result.secret_exposed).toBe(false);
     expect(result.detail).not.toContain("settings-token-123456");
+    expect(result.compute_readiness.status).toBe("ready");
+    expect(result.compute_readiness.current_window_usage_checked).toBe(false);
+  });
+
+  it("keeps provider connectivity separate from normal Compute readiness", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      id: "fixture-verify",
+      object: "chat.completion",
+      model: "fixture-model",
+      choices: [{ index: 0, message: { role: "assistant", content: "BLUE-TANUKI-SETUP-OK" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    try {
+      const result = await verifyLlmProvisioning(
+        { llm: { provider: "openai-compatible", model: "fixture-model", endpoint: "https://fixture.invalid/v1", api_key: "candidate-secret-123456" } },
+        {
+          WEBCHAT_TOKEN: "webchat-token-123456",
+          WEBCHAT_RESUME_TOKEN: "resume-token-123456",
+          BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456",
+        },
+        runtime(),
+      );
+      expect(result.status, result.detail).toBe("pass");
+      expect(result.detail).toContain("provider responded");
+      expect(result.compute_readiness.status).toBe("blocked");
+      expect(result.compute_readiness.detail).toContain("maximum cost profile");
+      expect(result.next_action).toContain("normal Compute is blocked");
+      expect(JSON.stringify(result)).not.toContain("candidate-secret-123456");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("persists GUI cost profiles and budgets for the normal Compute route", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-settings-compute-"));
+    const profileJson = JSON.stringify({
+      "openai-compatible": {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.02, currency: "USD" },
+      },
+    });
+    const policy = {
+      window_ms: 86_400_000,
+      currency: "USD",
+      system: { max_tokens: 1_000_000, max_compute_ms: 86_400_000, max_cost: { amount: 1, currency: "USD" } },
+      parent: { max_tokens: 10_000, max_compute_ms: 3_600_000, max_cost: { amount: 0.5, currency: "USD" } },
+      task: { max_tokens: 1_000, max_compute_ms: 300_000, max_cost: { amount: 0.1, currency: "USD" } },
+    };
+    const policyJson = JSON.stringify(policy);
+    try {
+      const envFile = path.join(dir, "blue-tanuki.env");
+      await fs.writeFile(envFile, renderSetupEnvFile(createDefaultSetupConfig({ base_dir: path.join(dir, "data") })), "utf8");
+      await updateSettingsEnvFile({
+        llm: {
+          provider: "openai-compatible",
+          endpoint: "https://fixture.invalid/v1",
+          model: "fixture-model",
+          api_key: "fixture-key-only",
+          max_tokens: "128",
+          timeout_ms: "5000",
+          provider_cost_profiles_json: profileJson,
+          compute_budget_policy_json: policyJson,
+        },
+      }, { BLUE_TANUKI_ENV_FILE: envFile }, { platform: "linux" });
+
+      const surface = createWebChatSettingsSurface({
+        env: { BLUE_TANUKI_ENV_FILE: envFile, BLUE_TANUKI_SETTINGS_TOKEN: "settings-token-123456" },
+        plugins: runtime(),
+      });
+      expect(surface).toBeDefined();
+      const snapshot = await surface!.getSnapshot();
+      expect(snapshot.llm.provider_cost_profiles_json).toBe(profileJson);
+      expect(snapshot.llm.compute_budget_policy_json).toBe(policyJson);
+      expect(snapshot.llm.compute_readiness).toMatchObject({
+        status: "ready",
+        max_tokens: 128,
+        max_compute_ms: 5_000,
+        max_cost_amount: 0.02,
+        currency: "USD",
+        maximum_provider_attempts: 1,
+        current_window_usage_checked: false,
+        evidence_source: ["CONFIG"],
+      });
+      expect(renderSettingsHtml()).toContain("llm-provider-cost-profiles");
+      expect(renderSettingsHtml()).toContain("llm-compute-budget-policy");
+
+      const runtimeEnv = {
+        ...parseEnvFile(await fs.readFile(envFile, "utf8")).values,
+        BLUE_TANUKI_STATE_ROOT: path.join(dir, "state"),
+      };
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
+        id: "fixture-compute",
+        object: "chat.completion",
+        model: "fixture-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "saved GUI settings reached normal Compute" },
+          finish_reason: "stop" }],
+        usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+      const budget = GatewayComputeBudgetStore.fromEnvironment(runtimeEnv);
+      try {
+        const request: ComputeRequest<LLMRequest> = {
+          request_id: "settings-saved-normal-compute",
+          current_projection_digest: "a".repeat(64),
+          input_digest: "b".repeat(64),
+          c_profile: LLM_COMPUTE_PROFILE,
+          local_p_version: "blue-tanuki.c-input-rules.v1",
+          data_exposure_scope: {
+            input_sources: ["accepted_inbound_request"],
+            requested_egress_provider: "openai-compatible",
+          },
+          budget_scope: {
+            parent_task_identity_digest: "c".repeat(64),
+            task_identity_digest: "d".repeat(64),
+          },
+          resource_limits: { max_tokens: 128, timeout_ms: 5_000 },
+          input: {
+            backend_hint: "openai-compatible",
+            model: "fixture-model",
+            max_tokens: 128,
+            messages: [{ role: "user", content: "synthetic saved GUI settings" }],
+          },
+        };
+        const result = await new LLMComputeAdapter(buildLLMBackendFromEnv(runtimeEnv), budget).compute(request);
+        expect(result.content).toBe("saved GUI settings reached normal Compute");
+        expect(result.compute_resource_use).toMatchObject({
+          charged_tokens: 4,
+          tokens_usage_status: "provider_reported",
+          cost_status: "unknown",
+          charged_cost_amount: 0.02,
+          currency: "USD",
+          charge_basis: "reserved_upper_bound",
+          used_for_authority: false,
+          may_execute: false,
+        });
+      } finally {
+        budget.close();
+        globalThis.fetch = originalFetch;
+      }
+
+      const blocked = assessLlmComputeReadiness({
+        LLM_BACKEND: "openai-compatible",
+        OPENAI_COMPAT_ENDPOINT: "https://fixture.invalid/v1",
+        OPENAI_COMPAT_MODEL: "fixture-model",
+        OPENAI_COMPAT_API_KEY: "fixture-key-only",
+        BLUE_TANUKI_LLM_MAX_TOKENS: "128",
+        BLUE_TANUKI_LLM_TIMEOUT_MS: "5000",
+        BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: profileJson,
+        BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify({
+          ...policy,
+          task: { ...policy.task, max_cost: { amount: 0.01, currency: "USD" } },
+        }),
+      });
+      expect(blocked.status).toBe("blocked");
+      expect(blocked.detail).toContain("task cost limit");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("reports LLM verification failures as safe non-mutating results", async () => {

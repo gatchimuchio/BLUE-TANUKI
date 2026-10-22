@@ -98,6 +98,32 @@ function parseFallbackProfilesJson(raw: string | undefined): Array<[string, LLMF
     .map(([provider, profile]) => [provider, profile as LLMFallbackProfile]);
 }
 
+/** Validate the owner-supplied per-provider reservation bounds without making a provider call. */
+export function validateLLMFallbackProfilesJson(raw: string | undefined): void {
+  for (const [provider, profile] of parseFallbackProfilesJson(raw)) {
+    if (!provider.trim() || !isValidConfiguredFallbackProfile(profile)) {
+      throw new Error("BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON has an invalid provider cost profile");
+    }
+  }
+}
+
+function isValidConfiguredFallbackProfile(profile: unknown): profile is LLMFallbackProfile {
+  if (!profile || typeof profile !== "object" || Array.isArray(profile) ||
+      Object.getPrototypeOf(profile) !== Object.prototype) return false;
+  const value = profile as Record<string, unknown>;
+  if (Object.keys(value).sort().join(",") !== "capabilities,max_cost_per_attempt") return false;
+  const capabilities = value.capabilities;
+  const cost = value.max_cost_per_attempt;
+  if (!Array.isArray(capabilities) || capabilities.length === 0 || capabilities.length > 16 ||
+      capabilities.some((item) => typeof item !== "string" || !item.trim() || item.length > 120) ||
+      new Set(capabilities).size !== capabilities.length || !cost || typeof cost !== "object" ||
+      Array.isArray(cost) || Object.getPrototypeOf(cost) !== Object.prototype) return false;
+  const bound = cost as Record<string, unknown>;
+  return Object.keys(bound).sort().join(",") === "amount,currency" &&
+    typeof bound.amount === "number" && Number.isFinite(bound.amount) && bound.amount >= 0 &&
+    typeof bound.currency === "string" && /^[A-Z]{3}$/.test(bound.currency);
+}
+
 function parseModelCapabilitiesJson(raw: string | undefined, variableName: string): Map<string, string[]> {
   if (!raw) return new Map();
   let parsed: unknown;

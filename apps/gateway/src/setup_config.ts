@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import type { ApprovalMode } from "@blue-tanuki/hds-brain";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
+import { validateLLMFallbackProfilesJson } from "./llm_config.js";
 import { parseComputeBudgetPolicy } from "./compute_budget_store.js";
 import { DEFAULT_GATEWAY_RESOURCE_BACKPRESSURE_POLICY, parseGatewayResourceBackpressurePolicy } from "./resource_backpressure.js";
 
@@ -244,8 +245,8 @@ export function validateSetupConfig(
     if (!isNonEmptyString(config.llm.provider_cost_profiles_json) || config.llm.provider_cost_profiles_json.length > 16_384) {
       throw new Error("llm.provider_cost_profiles_json must be a non-empty JSON string up to 16384 characters");
     }
-    try { JSON.parse(config.llm.provider_cost_profiles_json) as unknown; }
-    catch { throw new Error("llm.provider_cost_profiles_json must be valid JSON"); }
+    try { validateLLMFallbackProfilesJson(config.llm.provider_cost_profiles_json); }
+    catch { throw new Error("llm.provider_cost_profiles_json must be a valid provider cost profile object"); }
   }
 
   if (provider === "anthropic") {

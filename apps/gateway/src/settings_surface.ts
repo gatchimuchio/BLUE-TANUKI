@@ -16,7 +16,9 @@ import {
 import type { PluginRuntime } from "./plugin_loader.js";
 import {
   applySettingsPatch,
+  assessLlmComputeReadiness,
   protectLlmApiKeyForEnvFile,
+  type LlmComputeReadiness,
   type SettingsSecretStorageOptions,
   type SettingsSecretStorageResult,
   verifyLlmProvisioning,
@@ -52,6 +54,9 @@ export interface SettingsSnapshot {
     temperature: number | null;
     max_tokens: number | null;
     timeout_ms: number | null;
+    compute_budget_policy_json: string;
+    provider_cost_profiles_json: string;
+    compute_readiness: LlmComputeReadiness;
     site_url: string | null;
     app_title: string | null;
     configured_providers: string[];
@@ -246,6 +251,9 @@ export function buildSettingsSnapshot(
       temperature: config.llm.temperature ?? null,
       max_tokens: config.llm.max_tokens ?? null,
       timeout_ms: config.llm.timeout_ms ?? null,
+      compute_budget_policy_json: config.llm.compute_budget_policy_json ?? "",
+      provider_cost_profiles_json: config.llm.provider_cost_profiles_json ?? "",
+      compute_readiness: assessLlmComputeReadiness(env),
       site_url: config.llm.site_url ?? null,
       app_title: config.llm.app_title ?? null,
       configured_providers: describeLLMConfig(env).configured_providers,
@@ -349,7 +357,10 @@ export function createWebChatSettingsSurface(
   return {
     token,
     html: renderSettingsHtml,
-    getSnapshot: async () => buildSettingsSnapshot(env, opts.plugins),
+    getSnapshot: async () => {
+      const persistedEnv = await readEnvFileEnv(envFilePath(env));
+      return buildSettingsSnapshot({ ...env, ...persistedEnv }, opts.plugins);
+    },
     update: async (body) => updateSettingsEnvFile(body, env),
     verifyLlm: async (body) => verifyLlmProvisioning(body, env, opts.plugins),
   };
@@ -496,6 +507,29 @@ export function renderSettingsHtml(): string {
       color: var(--ink);
       font: inherit;
     }
+    textarea {
+      width: 100%;
+      min-height: 150px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fff;
+      color: var(--ink);
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    textarea:focus {
+      outline: 2px solid #b9d6cc;
+      border-color: var(--accent);
+    }
+    .grid .wide { grid-column: 1 / -1; }
+    .muted {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.5;
+    }
     input:focus, select:focus {
       outline: 2px solid #b9d6cc;
       border-color: var(--accent);
@@ -632,6 +666,15 @@ export function renderSettingsHtml(): string {
                 <option value="full_access">full_access</option>
               </select>
             </label>
+            <label class="wide">Provider maximum-cost profiles (JSON)
+              <textarea id="llm-provider-cost-profiles" spellcheck="false" maxlength="16384"></textarea>
+              <span class="muted">Owner-configured upper bound per provider attempt, not a fetched price. Example: {"openai-compatible":{"capabilities":["llm.text.generate"],"max_cost_per_attempt":{"amount":0.02,"currency":"USD"}}}. Use the selected provider's exact maximum and currency; an empty value clears profiles.</span>
+            </label>
+            <label class="wide">Compute budget policy (JSON)
+              <textarea id="llm-compute-budget-policy" spellcheck="false" maxlength="16384"></textarea>
+              <span class="muted">The configured window must cover one normal request in system, parent, and task scopes. The runtime ledger still checks current usage. An empty value restores the offline default, which sets monetary limits to zero.</span>
+            </label>
+            <p id="llm-compute-readiness" class="notice warn wide" role="status"></p>
           </div>
         </section>
         <section id="tab-connections">
@@ -742,6 +785,9 @@ export function renderSettingsHtml(): string {
       temperature: document.querySelector("#llm-temperature"),
       maxTokens: document.querySelector("#llm-max-tokens"),
       timeoutMs: document.querySelector("#llm-timeout-ms"),
+      providerCostProfiles: document.querySelector("#llm-provider-cost-profiles"),
+      computeBudgetPolicy: document.querySelector("#llm-compute-budget-policy"),
+      computeReadiness: document.querySelector("#llm-compute-readiness"),
       siteUrl: document.querySelector("#llm-site-url"),
       appTitle: document.querySelector("#llm-app-title"),
       approvalMode: document.querySelector("#approval-mode"),
@@ -812,6 +858,9 @@ export function renderSettingsHtml(): string {
       fields.temperature.value = snapshot.llm.temperature ?? "";
       fields.maxTokens.value = snapshot.llm.max_tokens ?? "";
       fields.timeoutMs.value = snapshot.llm.timeout_ms ?? "";
+      fields.providerCostProfiles.value = snapshot.llm.provider_cost_profiles_json || "";
+      fields.computeBudgetPolicy.value = snapshot.llm.compute_budget_policy_json || "";
+      showComputeReadiness(snapshot.llm.compute_readiness);
       fields.siteUrl.value = snapshot.llm.site_url || "";
       fields.appTitle.value = snapshot.llm.app_title || "";
       fields.approvalMode.value = snapshot.approval?.mode || "full_access";
@@ -883,7 +932,9 @@ export function renderSettingsHtml(): string {
         endpoint: fields.endpoint.value,
         temperature: fields.temperature.value,
         max_tokens: fields.maxTokens.value,
-        timeout_ms: fields.timeoutMs.value
+        timeout_ms: fields.timeoutMs.value,
+        provider_cost_profiles_json: fields.providerCostProfiles.value,
+        compute_budget_policy_json: fields.computeBudgetPolicy.value,
       };
       if (fields.apiKey.value.trim()) llm.api_key = fields.apiKey.value.trim();
       if (fields.siteUrl.value.trim()) llm.site_url = fields.siteUrl.value.trim();
@@ -918,11 +969,26 @@ export function renderSettingsHtml(): string {
           body: JSON.stringify(buildPayload())
         });
         const result = body.result;
-        const kind = result.status === "pass" ? "ok" : "bad";
-        setNotice("LLM verify " + result.status + ": " + result.detail + " Next: " + result.next_action, kind);
+        showComputeReadiness(result.compute_readiness);
+        const kind = result.status === "fail" ? "bad" : result.compute_readiness.status === "blocked" ? "warn" : "ok";
+        setNotice("Provider connectivity " + result.status + "; normal Compute " + result.compute_readiness.status + ". " + result.detail + " " + result.compute_readiness.detail + " Next: " + result.next_action, kind);
       } catch (e) {
         setNotice(e.message, "bad");
       }
+    }
+    function showComputeReadiness(readiness) {
+      fields.computeReadiness.textContent = "Normal Compute configuration: " + readiness.status + ". " + readiness.detail + " Current window usage is not checked here.";
+      fields.computeReadiness.className = "notice wide " + (readiness.status === "ready" ? "ok" : "warn");
+    }
+    for (const field of [fields.provider, fields.model, fields.endpoint, fields.maxTokens, fields.timeoutMs, fields.providerCostProfiles, fields.computeBudgetPolicy]) {
+      field.addEventListener("input", () => {
+        fields.computeReadiness.textContent = "LLM or budget settings changed. Run Verify LLM to reassess normal Compute configuration.";
+        fields.computeReadiness.className = "notice wide warn";
+      });
+      field.addEventListener("change", () => {
+        fields.computeReadiness.textContent = "LLM or budget settings changed. Run Verify LLM to reassess normal Compute configuration.";
+        fields.computeReadiness.className = "notice wide warn";
+      });
     }
     document.querySelector("#load-btn").addEventListener("click", load);
     document.querySelector("#verify-llm-btn").addEventListener("click", verifyLlm);
