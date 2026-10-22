@@ -32,6 +32,13 @@ CONFIG_ROOT=$(safe_container_target "$CONFIG_ROOT" "CONFIG_ROOT")
 BIN_ROOT=$(safe_user_bin_target "$HOME/.local/bin" "BIN_ROOT")
 assert_not_same_target "$INSTALL_ROOT" "$DATA_ROOT" "INSTALL_ROOT" "DATA_ROOT"
 assert_not_same_target "$INSTALL_ROOT" "$CONFIG_ROOT" "INSTALL_ROOT" "CONFIG_ROOT"
+assert_not_ancestor_target "$INSTALL_ROOT" "$DATA_ROOT" "INSTALL_ROOT" "DATA_ROOT"
+assert_not_ancestor_target "$INSTALL_ROOT" "$CONFIG_ROOT" "INSTALL_ROOT" "CONFIG_ROOT"
+assert_no_overlap_target "$DATA_ROOT" "$CONFIG_ROOT" "DATA_ROOT" "CONFIG_ROOT"
+assert_no_overlap_target "$BIN_ROOT" "$INSTALL_ROOT" "BIN_ROOT" "INSTALL_ROOT"
+assert_no_overlap_target "$BIN_ROOT" "$DATA_ROOT" "BIN_ROOT" "DATA_ROOT"
+assert_no_overlap_target "$BIN_ROOT" "$CONFIG_ROOT" "BIN_ROOT" "CONFIG_ROOT"
+LAUNCHER=$(safe_file_target "$BIN_ROOT/blue-tanuki" "LAUNCHER")
 
 need node "Install Node.js 22.14.0 or newer."
 node -e "const v=process.versions.node.split('.').map(Number); const ok=v[0]>22 || (v[0]===22 && (v[1]>14 || (v[1]===14 && v[2]>=0))); process.exit(ok?0:1)" \
@@ -55,7 +62,6 @@ pnpm_run() {
 
 SOURCE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 ENV_FILE="$CONFIG_ROOT/blue-tanuki.env"
-LAUNCHER="$BIN_ROOT/blue-tanuki"
 CONTROL_CENTER_URL="${BLUE_TANUKI_CONTROL_CENTER_URL:-http://127.0.0.1:8787/app}"
 
 if [ -d "$INSTALL_ROOT" ] && [ "$FORCE" != "1" ]; then

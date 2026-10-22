@@ -216,6 +216,7 @@ export async function copyAppLayout(appRoot: string): Promise<void> {
   await copyDir(path.join(root, "scripts"), path.join(appRoot, "scripts"));
   await copyDir(path.join(root, "install/linux"), path.join(appRoot, "install/linux"));
   await copyDir(path.join(root, "install/macos"), path.join(appRoot, "install/macos"));
+  await copyFileIfExists("install/unix/safe-target.sh", appRoot);
   await copyDir(path.join(root, "install/resident"), path.join(appRoot, "install/resident"));
   await copyDir(path.join(root, "install/windows"), path.join(appRoot, "install/windows"));
   await copyFileIfExists("install/README.md", appRoot);

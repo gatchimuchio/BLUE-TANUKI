@@ -1,4 +1,4 @@
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$InstallRoot = "$env:LOCALAPPDATA\BlueTanuki\app",
   [string]$DataRoot = "$env:APPDATA\BlueTanuki",
@@ -9,6 +9,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "safe-target.ps1")
 
 function Fail($Message) {
   Write-Error $Message
@@ -46,6 +47,9 @@ function Invoke-Pnpm {
 
 function Copy-App {
   param([string]$SourceRoot, [string]$TargetRoot)
+  $safeTargets = Assert-SafeInstallTargets -InstallRoot $TargetRoot -DataRoot $dataRootResolved -SourceRoot $SourceRoot
+  $TargetRoot = $safeTargets.InstallRoot
+  $SourceRoot = $safeTargets.SourceRoot
   if ((Test-Path -LiteralPath $TargetRoot) -and -not $Force) {
     Fail "$TargetRoot already exists. Re-run with -Force to replace the app. Add -ResetConfig only if you also want to regenerate the env file."
   }
@@ -112,14 +116,29 @@ function Invoke-PostInstallDoctor {
   }
 }
 
-$sourceRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$installRootResolved = [System.IO.Path]::GetFullPath($InstallRoot)
-$dataRootResolved = [System.IO.Path]::GetFullPath($DataRoot)
+$sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+$safeTargets = Assert-SafeInstallTargets -InstallRoot $InstallRoot -DataRoot $DataRoot -SourceRoot $sourceRoot
+$sourceRoot = $safeTargets.SourceRoot
+$installRootResolved = $safeTargets.InstallRoot
+$dataRootResolved = $safeTargets.DataRoot
 $envFile = Join-Path $dataRootResolved "blue-tanuki.env"
 $dataDir = Join-Path $dataRootResolved "data"
 $binRoot = Join-Path $dataRootResolved "bin"
 $launcher = Join-Path $binRoot "blue-tanuki.ps1"
 $cmdLauncher = Join-Path $binRoot "blue-tanuki.cmd"
+
+if ((Test-Path -LiteralPath $installRootResolved) -and -not $Force) {
+  Fail "$installRootResolved already exists. Re-run with -Force to replace the app. Add -ResetConfig only if you also want to regenerate the env file."
+}
+
+Write-Host "Install plan:"
+Write-Host "  App target: $installRootResolved"
+Write-Host "  User data:  $dataRootResolved"
+Write-Host "  Replace existing app: $([bool]$Force)"
+if (-not $PSCmdlet.ShouldProcess($installRootResolved, "Install BLUE-TANUKI and preserve user data at $dataRootResolved")) {
+  Write-Host "No changes made."
+  exit 0
+}
 
 Test-NodeVersion
 if (Get-Command "corepack" -ErrorAction SilentlyContinue) {

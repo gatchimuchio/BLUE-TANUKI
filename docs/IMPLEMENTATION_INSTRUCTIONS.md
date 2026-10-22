@@ -14,11 +14,11 @@ F14.02では、LINE admitted inboundからGateway reply、SQLite durable outbox�
 
 製品全体は`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開・出荷保留を維持する。
 
-## 次のBUILD_BATCH：rev2.4 CR-0
+## 次のBUILD_BATCH：rev2.4 CR-1
 
-rev2.4の現物優先順に従い、最初にI-01 Unix installer／updater／uninstallerの危険対象判定とI-06 Windows開発用Force installの安全境界を照合・修復する。root、HOME、data root、symlink、二重slash、相対化、未生成先の親を実体同一性に基づいて扱い、危険な作用口は確認が終わるまで無効にする。検証は非破壊の拒否確認と安全な隔離対象に限定し、rootやHOME等への実削除・実導入は行わない。I-06の実Windows証拠が得られない場合は静的所見と未実証を分けて記録する。
+CR-0でI-01 Unix install／uninstall対象ガードを共通実装し、配布物へ含めた。物理親解決、二重slash／dot traversal／広域root／親子重複の拒否を各入口へ接続した。I-06 Windows開発用Force installは、広域・source/data重複・reparse対象を変更前に拒否し、処理計画確認と`-WhatIf`を追加した。Windows fixtureとWSL Unix fixtureで非破壊確認済み。詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)の`QEB-73-CR0-UNIX-WINDOWS-INSTALL-TARGET-SAFETY`に記録する。root／HOME等への実削除・実OS導入は行っていない。
 
-続いてCR-1でrelease hardening／packaging gateを`workflow_dispatch`限定許可と自動trigger禁止へ同期し、その後CR-2でGUIのprovider疎通・費用profile・budget・通常Executorを同じ条件で接続する。QE_BUILDの主経路はGUIで設定した合成Cから、費用予約、J採否、合成Broker作用、receipt、M、返信・再計画／復帰までのproduction consumerをつなぐこと。既知fixtureはこのconsumerを止める原因群に限ってCR-3で修復し、旧83 FAILを現HEADの結果として転記しない。
+CR-1ではrelease hardening／packaging gateと関連docs/testsを、現行`AGENTS.md`が許可する手動`workflow_dispatch`だけを認め、自動trigger・無断権限を拒否する意味へ同期する。実在workflowを削除してPASSへ見せない。直近の`pnpm validate:packaging`は`.github/workflows/temporary-linux-workspace-quota.yml`を「workflowは存在してはならない」として拒否したため、現行Actions条件との矛盾を解消する。続くCR-2ではGUIのprovider疎通・費用profile・budget・通常Executorを同じ条件で接続する。QE_BUILDの主経路はGUIで設定した合成Cから、費用予約、J採否、合成Broker作用、receipt、M、返信・再計画／復帰までのproduction consumerをつなぐこと。既知fixtureはこのconsumerを止める原因群に限ってCR-3で修復し、旧83 FAILを現HEADの結果として転記しない。
 
 以前のF15.03予定とComposio／PostHogの詳細は作業履歴に残し、現batchの開始点とはしない。F15の具体的なconsumer実装は、CR-0～CR-3および一仕事のSYSTEM_SHAPED候補を前進させた後に工程表へ戻る。C08.03実provider、OD-03 live、D4-Pocket／ミニドラの別repo変更、P13公開GOは保留。製品全体は`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始のまま維持する。
 

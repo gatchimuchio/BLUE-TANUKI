@@ -169,7 +169,8 @@ describe("source and release-bundle install entrypoints", () => {
 
   it("rejects broad Unix installer roots before destructive setup", () => {
     if (process.platform === "win32") {
-      expect(read("install/unix/product/BlueTanukiSetup.sh")).toContain("safe_destructive_target");
+      expect(read("install/unix/product/BlueTanukiSetup.sh")).toContain('"$PACKAGE_ROOT/safe-target.sh"');
+      expect(read("install/unix/safe-target.sh")).toContain("assert_not_ancestor_target");
       return;
     }
 
@@ -228,6 +229,17 @@ describe("source and release-bundle install entrypoints", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("resolves Unix targets through symlinked and nonexistent parents before overlap checks", () => {
+    if (process.platform === "win32") return;
+
+    const result = spawnSync("sh", [join(root, "install/installer/test/safe_target_unix.sh")], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(`${result.stdout}\n${result.stderr}`).toContain("unix_target_guard=pass");
+    expect(result.status).toBe(0);
   });
 
   it("includes OS-specific root entrypoints in release-bundle policy", () => {

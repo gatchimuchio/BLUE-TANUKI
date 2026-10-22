@@ -95,6 +95,7 @@ const REQUIRED_ENTRIES = [
   "app/node_modules/@blue-tanuki/operator-developer/package.json",
   "app/node_modules/ws/package.json",
   "app/node_modules/zod/package.json",
+  "app/install/unix/safe-target.sh",
   "app/docs/WINDOWS_INSTALLER_GUIDE.md",
   "app/docs/WINDOWS_FIRST_RUN.md",
   "app/docs/WINDOWS_PACKAGING_AUDIT.md",

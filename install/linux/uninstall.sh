@@ -1,11 +1,14 @@
 #!/usr/bin/env sh
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../unix/safe-target.sh"
+
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.local/share/blue-tanuki/app}"
 DATA_ROOT="${DATA_ROOT:-$HOME/.local/share/blue-tanuki}"
 CONFIG_ROOT="${CONFIG_ROOT:-$HOME/.config/blue-tanuki}"
 BIN_ROOT="${BIN_ROOT:-$HOME/.local/bin}"
-LAUNCHER="$BIN_ROOT/blue-tanuki"
 ENV_FILE="$CONFIG_ROOT/blue-tanuki.env"
 RESIDENT_SCRIPT="$INSTALL_ROOT/install/resident/blue-tanuki-resident.sh"
 PURGE="${PURGE:-0}"
@@ -16,22 +19,8 @@ fail() {
   exit 1
 }
 
-abs_path() {
-  case "$1" in
-    /*) printf '%s\n' "$1" ;;
-    *) printf '%s\n' "$(pwd)/$1" ;;
-  esac
-}
-
 safe_target() {
-  target=$(abs_path "$1")
-  case "$target" in
-    "/"|"."|"") fail "$2 points to an unsafe path: $target" ;;
-    "$HOME"|"$HOME/"|"$HOME/.local"|"$HOME/.local/share"|"$HOME/.local/bin"|"$HOME/.config")
-      fail "$2 points to a broad user directory: $target"
-      ;;
-  esac
-  printf '%s\n' "$target"
+  safe_destructive_target "$1" "$2"
 }
 
 remove_target() {
@@ -49,7 +38,7 @@ remove_target() {
 }
 
 remove_file() {
-  target=$(abs_path "$1")
+  target=$(safe_file_target "$1" "$2")
   if [ ! -e "$target" ]; then
     echo "Skip missing $2: $target"
     return
@@ -61,6 +50,21 @@ remove_file() {
   rm -f -- "$target"
   echo "Removed $2: $target"
 }
+
+# Resolve every target and validate destructive overlaps before any stop or removal action.
+INSTALL_ROOT=$(safe_destructive_target "$INSTALL_ROOT" "INSTALL_ROOT")
+DATA_ROOT=$(safe_container_target "$DATA_ROOT" "DATA_ROOT")
+CONFIG_ROOT=$(safe_container_target "$CONFIG_ROOT" "CONFIG_ROOT")
+BIN_ROOT=$(safe_user_bin_target "$BIN_ROOT" "BIN_ROOT")
+assert_not_ancestor_target "$INSTALL_ROOT" "$DATA_ROOT" "INSTALL_ROOT" "DATA_ROOT"
+assert_not_ancestor_target "$INSTALL_ROOT" "$CONFIG_ROOT" "INSTALL_ROOT" "CONFIG_ROOT"
+assert_no_overlap_target "$DATA_ROOT" "$CONFIG_ROOT" "DATA_ROOT" "CONFIG_ROOT"
+assert_no_overlap_target "$BIN_ROOT" "$INSTALL_ROOT" "BIN_ROOT" "INSTALL_ROOT"
+assert_no_overlap_target "$BIN_ROOT" "$DATA_ROOT" "BIN_ROOT" "DATA_ROOT"
+assert_no_overlap_target "$BIN_ROOT" "$CONFIG_ROOT" "BIN_ROOT" "CONFIG_ROOT"
+LAUNCHER=$(safe_file_target "$BIN_ROOT/blue-tanuki" "LAUNCHER")
+ENV_FILE="$CONFIG_ROOT/blue-tanuki.env"
+RESIDENT_SCRIPT="$INSTALL_ROOT/install/resident/blue-tanuki-resident.sh"
 
 if [ -f "$RESIDENT_SCRIPT" ]; then
   if [ "$DRY_RUN" = "1" ]; then

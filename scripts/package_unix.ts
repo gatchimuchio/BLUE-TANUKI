@@ -155,6 +155,9 @@ async function downloadNodeRuntime(
 async function copyUnixLaunchers(packageRoot: string, target: UnixTarget): Promise<void> {
   const sourceRoot = path.join(root, "install/unix/product");
   await cp(path.join(sourceRoot, "BlueTanukiSetup.sh"), path.join(packageRoot, "BlueTanukiSetup.sh"), { force: true });
+  const safeTarget = path.join(packageRoot, "safe-target.sh");
+  await cp(path.join(root, "install/unix/safe-target.sh"), safeTarget, { force: true });
+  await chmod(safeTarget, 0o644);
   await chmod(path.join(packageRoot, "BlueTanukiSetup.sh"), 0o755);
   if (target.platform === "macos") {
     await writeFile(

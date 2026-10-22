@@ -2,6 +2,16 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -f "$SCRIPT_DIR/install/unix/safe-target.sh" ]; then
+  SAFE_TARGET_LIB="$SCRIPT_DIR/install/unix/safe-target.sh"
+elif [ -f "$SCRIPT_DIR/../safe-target.sh" ]; then
+  SAFE_TARGET_LIB="$SCRIPT_DIR/../safe-target.sh"
+else
+  echo "error: shared Unix target guard is missing; refusing uninstall" >&2
+  exit 2
+fi
+# shellcheck disable=SC1090
+. "$SAFE_TARGET_LIB"
 INSTALL_ENV="$SCRIPT_DIR/blue-tanuki-install.env"
 
 if [ -f "$INSTALL_ENV" ]; then
@@ -54,22 +64,8 @@ fail() {
   exit 2
 }
 
-abs_path() {
-  case "$1" in
-    /*) printf '%s\n' "$1" ;;
-    *) printf '%s\n' "$(pwd)/$1" ;;
-  esac
-}
-
 safe_target() {
-  target=$(abs_path "$1")
-  case "$target" in
-    "/"|"."|"") fail "$2 points to an unsafe path: $target" ;;
-    "$HOME"|"$HOME/"|"$HOME/.local"|"$HOME/.local/share"|"$HOME/.local/bin"|"$HOME/.config"|"$HOME/Library"|"$HOME/Library/Application Support")
-      fail "$2 points to a broad user directory: $target"
-      ;;
-  esac
-  printf '%s\n' "$target"
+  safe_destructive_target "$1" "$2"
 }
 
 remove_target() {
@@ -87,7 +83,7 @@ remove_target() {
 }
 
 remove_file() {
-  target=$(abs_path "$1")
+  target=$(safe_file_target "$1" "$2")
   if [ ! -e "$target" ]; then
     say "Skip missing $2: $target"
     return
@@ -100,7 +96,23 @@ remove_file() {
   say "Removed $2: $target"
 }
 
-launcher="$INSTALL_ROOT/BlueTanukiLauncher.sh"
+INSTALL_ROOT=$(safe_destructive_target "$INSTALL_ROOT" "INSTALL_ROOT")
+DATA_ROOT=$(safe_container_target "$DATA_ROOT" "DATA_ROOT")
+CONFIG_ROOT=$(safe_container_target "$CONFIG_ROOT" "CONFIG_ROOT")
+RUNTIME_ROOT=$(safe_destructive_target "$RUNTIME_ROOT" "RUNTIME_ROOT")
+BIN_ROOT=$(safe_user_bin_target "$BIN_ROOT" "BIN_ROOT")
+assert_not_ancestor_target "$INSTALL_ROOT" "$DATA_ROOT" "INSTALL_ROOT" "DATA_ROOT"
+assert_not_ancestor_target "$INSTALL_ROOT" "$CONFIG_ROOT" "INSTALL_ROOT" "CONFIG_ROOT"
+assert_no_overlap_target "$INSTALL_ROOT" "$RUNTIME_ROOT" "INSTALL_ROOT" "RUNTIME_ROOT"
+assert_not_ancestor_target "$RUNTIME_ROOT" "$DATA_ROOT" "RUNTIME_ROOT" "DATA_ROOT"
+assert_not_ancestor_target "$RUNTIME_ROOT" "$CONFIG_ROOT" "RUNTIME_ROOT" "CONFIG_ROOT"
+assert_same_or_disjoint_target "$DATA_ROOT" "$CONFIG_ROOT" "DATA_ROOT" "CONFIG_ROOT"
+assert_no_overlap_target "$BIN_ROOT" "$INSTALL_ROOT" "BIN_ROOT" "INSTALL_ROOT"
+assert_no_overlap_target "$BIN_ROOT" "$DATA_ROOT" "BIN_ROOT" "DATA_ROOT"
+assert_no_overlap_target "$BIN_ROOT" "$CONFIG_ROOT" "BIN_ROOT" "CONFIG_ROOT"
+assert_no_overlap_target "$BIN_ROOT" "$RUNTIME_ROOT" "BIN_ROOT" "RUNTIME_ROOT"
+launcher=$(safe_file_target "$INSTALL_ROOT/BlueTanukiLauncher.sh" "launcher")
+BIN_LAUNCHER=$(safe_file_target "$BIN_ROOT/blue-tanuki" "BIN_LAUNCHER")
 if [ -f "$launcher" ]; then
   if [ "$DRY_RUN" = "1" ]; then
     say "Would stop resident gateway and disable resident autostart."
@@ -121,7 +133,7 @@ case "$PLATFORM" in
     ;;
 esac
 
-remove_file "$BIN_ROOT/blue-tanuki" "launcher"
+remove_file "$BIN_LAUNCHER" "launcher"
 cd /
 remove_target "$INSTALL_ROOT" "app"
 remove_target "$RUNTIME_ROOT" "runtime"

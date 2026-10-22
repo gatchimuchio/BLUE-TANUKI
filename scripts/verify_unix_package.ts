@@ -82,6 +82,7 @@ const REQUIRED_APP_ENTRIES = [
   "app/node_modules/zod/package.json",
   "app/install/linux/install.sh",
   "app/install/macos/install.sh",
+  "app/install/unix/safe-target.sh",
   "app/install/resident/blue-tanuki-resident.sh",
 ] as const;
 
@@ -287,6 +288,7 @@ export function verifyUnixPackage(
   for (const entry of entries) assertSafeEntry(entry);
   for (const required of [
     "BlueTanukiSetup.sh",
+    "safe-target.sh",
     "unix-installer-manifest.json",
     requiredRuntime(platform, arch),
     "launcher/BlueTanukiLauncher.sh",
@@ -303,6 +305,8 @@ export function verifyUnixPackage(
 
   requireSourceText("install/unix/product/BlueTanukiSetup.sh", [
     "This setup script must be run from the packaged",
+    '"$PACKAGE_ROOT/safe-target.sh"',
+    "assert_not_ancestor_target",
     "user_requires_node_pnpm_git=false",
     "Autostart: not enabled by installer",
     "Existing env file retained",
@@ -319,6 +323,8 @@ export function verifyUnixPackage(
   ]);
   requireSourceText("install/unix/product/BlueTanukiUninstall.sh", [
     "safe_target",
+    "install/unix/safe-target.sh",
+    "assert_not_ancestor_target",
     "Data retained",
     "Config retained",
     "uninstall_result=pass",

@@ -3345,3 +3345,23 @@ Slack admission→handler→thread-bound reply／durable retry consumerをsynthe
 | 実Telegram API／credential、実provider、外部作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。C08.03 provider保留、製品全体`BUILD_COVERED`前の全体QC／QAは開始しない。 |
 
 F10.03のWebChat切断・再接続から同一jobの保存結果をownerへ返すserved synthetic subpathを部分的に`WIRED`とする。切断とtask cancellationを分離し、保存結果の再読取でC providerを追加呼出ししない。F10.03全体はcredentialed-live残差により`BUILD_GAP`。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷判断保留を維持する。次のBUILD_BATCHは`F11.01-SLACK-TEAM-CHANNEL-USER-THREAD-ADMISSION-CONSUMER`とする。
+
+### QEB-73-CR0-UNIX-WINDOWS-INSTALL-TARGET-SAFETY
+
+開始`main`／`origin/main`=`a1d37f37910d5a4586f2ddc1a65fd5c1bb26ef00`。現行pin rev2.4の三点セット、適用`AGENTS.md`、active instruction、全Unix配布／uninstall入口とWindows開発用`Copy-App`を再照合した。local recovery branchとremote backup tagの正本二世代はcurrent=`a1d37f3`／previous=`7c0baa7`。保護対象の`.codex-remote-attachments/`とLinux `target/`は変更・stageせず保持した。
+
+`install/unix/safe-target.sh`を実体基準の共有guardへ更新した。絶対パス要件、曖昧な二重slashとdot traversalの拒否、最終symlink拒否、最深existing parentの`cd -P`解決により、未生成先も物理親へ正規化する。root／HOMEとその親、HOME配下の広域data/config領域、ユーザーbin領域への危険な置換を拒否し、path component境界を使った親子重複判定を追加した。Linux／macOS source installerとuninstaller、配布用`BlueTanukiSetup.sh`／`BlueTanukiUninstall.sh`が同じhelperを使用する。Unix package rootとinstalled appへhelperを含め、package verifierでも存在を要求する。通常の`DATA_ROOT/app`と`DATA_ROOT/runtime`配置、およびmacOSの同一`DATA_ROOT`／`CONFIG_ROOT`は許可し、削除対象が保持データ領域を包含する組合せは拒否する。
+
+Windows開発用`install/windows/install.ps1`は、reparse pointを経由する書込み先、filesystem／profile／AppDataの広域対象、InstallRoot・DataRoot・source treeの重複を拒否する共通PowerShell guardを使用する。既存アプリの置換は全target preflight後にInstall planを表示して`ShouldProcess`を通し、`-WhatIf`ではNode確認・Corepack準備・ファイル変更へ進まない。`Copy-App`内でも削除直前に対象を再検査する。Windows package verifierにはUnix helperの配布要件を追加した。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm typecheck` | PASS、exit code 0。dist生成物をcleanするため後続buildで再生成した。 |
+| `pnpm build` | PASS、全workspace build、exit code 0。 |
+| `pnpm exec vitest run install/installer/test/source_entrypoints.test.ts install/installer/test/windows_safe_target.test.ts` | PASS、11 tests。Windowsでは一時junction拒否、profile／重複対象拒否、未生成先、通常installとForce置換の`-WhatIf`無変更を確認。 |
+| `wsl -d Ubuntu-24.04 -- bash -lc 'sh install/installer/test/safe_target_unix.sh'` | PASS、WSL fixture。symlink alias、未生成parent、二重slash、dot traversal、広域／親子重複、6 Unix入口の拒否、3 uninstallerのPURGE dry-run無変更を確認。Linux native／macOSの証拠ではない。 |
+| 関連shell filesの`sh -n`／`git diff --check` | PASS。 |
+| `pnpm validate:packaging` | FAIL、exit code 1。現行`AGENTS.md`は条件付き`workflow_dispatch`を許すが、`scripts/validate_packaging.ts`がworkflow全体を禁止し、`.github/workflows/temporary-linux-workspace-quota.yml`を拒否した。これは次のCR-1で直す既知不整合であり、このファイルやworkflowを削除してPASSにしていない。 |
+| 実削除、実OS導入、Linux native／macOS実機、workspace全suite、live provider、QE_QC／QE_QA | 未実施。 |
+
+CR-0は危険なinstall／uninstall対象を非破壊fixtureで拒否できる状態として閉じる。製品の利用者仕事の実行経路は前進しておらず`SYSTEM_SHAPED`／`BUILD_COVERED`未成立のまま。C08.03 provider、OD-03 live作用、別repo変更、P13 owner GOと公開・出荷保留を維持する。次はCR-1のrelease hardening／packaging gate同期。
