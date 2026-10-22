@@ -8,7 +8,11 @@
   },
   "permissions": [
     "network:graph.microsoft.com",
-    "secrets:MICROSOFT_GRAPH_ACCESS_TOKEN"
+    "network:listen",
+    "network:login.botframework.com",
+    "network:login.microsoftonline.com",
+    "secrets:MICROSOFT_GRAPH_ACCESS_TOKEN",
+    "secrets:TEAMS_AGENT_CLIENT_SECRET"
   ],
-  "description": "Microsoft Teams preview channel via Microsoft Graph chatMessage send. Silent fallback, adapter retry/backoff, and typed delivery errors."
+  "description": "Microsoft Teams preview adapter with authenticated Microsoft 365 Agents SDK ingress, exact owner admission grants, durable replay suppression, and Microsoft Graph message send."
 }

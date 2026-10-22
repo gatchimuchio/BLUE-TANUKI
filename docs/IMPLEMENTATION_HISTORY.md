@@ -4,6 +4,22 @@
 
 ---
 
+### 履歴ログ：`QEB-68-F13.01-TEAMS-ENTRY-IDENTITY-ADMISSION-CONSUMER`
+
+開始`main`／`origin/main`=`df979e8bce490bc46a7e477d833ec516e7120435`。現行pin rev2.3、適用`AGENTS.md`、active指示とF13.01のTeams ingress identity/admission要求を再同期し、今回必要なTeams adapterとGateway plugin境界だけを参照した。保護対象untracked Linux isolation `target/`を保持した。
+
+Microsoft 365 Agents SDKのJWT endpointをTeams pluginに接続し、application audience、issuer、serviceUrl validationを設定した。listener bindをloopback addressに限定し、bounded JSON body、tenant／conversation／conversation type／user／team／channelのidentity validation、owner exact grant、Gateway private digest-only replay inboxをつないだ。raw activity本文・display name・platform identityをinboxへ保存せず、未許可、重複、payload conflict、処理中断後のeventはGateway inboundへ再実行しない。Teams plugin公開面から生transport／mapperを直接公開せず、TeamChannel内のadmission経路を使う。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Teams adapter focused tests | PASS、11 tests。未認証HTTP拒否、loopback制約、identity mapping、grant／重複／競合を確認。 |
+| Gateway Teams boundary focused tests | PASS、6 tests。設定／grant、digest-only replay inbox、再起動時unknown固定、Gateway inbound boundaryを確認。 |
+| Teams／Gateway typecheck・build | PASS。 |
+| bundled plugin review、`pnpm docs:check`、`git diff --check` | PASS。日本語基底は移行中の未解消負債76件を報告、licensing gate PASS。 |
+| valid JWTのpositive tenant route、実tenant／credential／Teams API／実HDS／返信、外部業務作用 | 未実施。 |
+
+F13.01 local synthetic admission→Gateway inbound subpathは部分的に`WIRED`。実tenant route・credentialed positive JWT・HDS運転は未確認でTeamsは`first-party-preview`を維持する。F13.01全体、F13.02 reply/outbox、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立／未開始。C08.03保留、D4-Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
 ### 履歴ログ：`QEB-67-F12.02-DISCORD-REPLY-PERSISTENT-OUTBOX-CONSUMER`
 
 開始`main`／`origin/main`=`f4ccdc7d542143df4709e2e403272183b06ae27b`。現行pin rev2.3の三点セットと適用`AGENTS.md`、active指示、F12.02のreply／persistent delivery consumerを再同期した。旧版・完了ログは通常参照せず、今回のDiscord adapter、Gateway outbox、直前F12.01 admissionとの接続だけを照合した。保護対象untracked Linux isolation `target/`を維持した。

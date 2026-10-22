@@ -55,6 +55,9 @@ import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
 import { GatewaySlackEventStore } from "./slack_event_store.js";
 import { parseDiscordInboundGrants } from "./discord_inbound_grants.js";
 import { GatewayDiscordEventStore } from "./discord_event_store.js";
+import { parseTeamsInboundGrants } from "./teams_inbound_grants.js";
+import { teamsAgentCredentialsFromEnvironment } from "./teams_agent_config.js";
+import { GatewayTeamsEventStore } from "./teams_event_store.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -792,8 +795,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     },
   });
   const router = new InboundRouter({
-    propagateHandlerErrorsForChannels: ["cron", "telegram", "slack"],
-    redactHandlerErrorsForChannels: ["telegram", "slack"],
+    propagateHandlerErrorsForChannels: ["cron", "telegram", "slack", "teams"],
+    redactHandlerErrorsForChannels: ["telegram", "slack", "teams"],
   });
   const dispatcher = new OutboundDispatcher();
 
@@ -4399,6 +4402,16 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const discordEventStore = discordBotToken
     ? GatewayDiscordEventStore.fromEnvironment(process.env, discordBotToken)
     : null;
+  const teamsAgentCredentials = teamsAgentCredentialsFromEnvironment(process.env);
+  const teamsIngressConfigured = Boolean(
+    teamsAgentCredentials && plugins.has("@blue-tanuki/channel-teams"),
+  );
+  const teamsInboundGrants = teamsIngressConfigured
+    ? parseTeamsInboundGrants(process.env.TEAMS_INBOUND_GRANTS_JSON)
+    : [];
+  const teamsEventStore = teamsIngressConfigured && teamsAgentCredentials
+    ? GatewayTeamsEventStore.fromEnvironment(process.env, teamsAgentCredentials.client_id)
+    : null;
   const telegram = plugins.createChannel<InboundChannel & OutboundChannel>({
     package_name: "@blue-tanuki/channel-telegram",
     required_permissions: telegramPermissions,
@@ -4439,8 +4452,21 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     optionalPreviewChannel("@blue-tanuki/channel-teams", [
       "network:graph.microsoft.com",
       "secrets:MICROSOFT_GRAPH_ACCESS_TOKEN",
+      ...(teamsIngressConfigured ? [
+        "network:listen",
+        "network:login.botframework.com",
+        "network:login.microsoftonline.com",
+        "secrets:TEAMS_AGENT_CLIENT_SECRET",
+      ] : []),
     ], "register teams channel", {
       access_token: process.env.MICROSOFT_GRAPH_ACCESS_TOKEN,
+      ...(teamsIngressConfigured && teamsAgentCredentials ? {
+        agent_auth: teamsAgentCredentials,
+        inbound_grants: teamsInboundGrants,
+        inbox: teamsEventStore,
+        agent_port: parsePositiveInt(process.env.TEAMS_AGENT_PORT),
+        agent_route: process.env.TEAMS_AGENT_ROUTE,
+      } : {}),
       log: (line: string) => teamsLog.info(line),
     }),
     optionalPreviewChannel("@blue-tanuki/channel-line", [
@@ -4863,6 +4889,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       await Promise.allSettled([...executionTasks]);
       slackEventStore?.close();
       discordEventStore?.close();
+      teamsEventStore?.close();
       cronEventStore.close();
       computeBudget.close();
       documentOrganizationCheckpointStore?.close();

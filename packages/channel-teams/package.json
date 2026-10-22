@@ -3,7 +3,7 @@
   "version": "1.0.0-rc.1",
   "private": true,
   "license": "Apache-2.0",
-  "description": "Microsoft Teams channel adapter (Graph chatMessage send, preview)",
+  "description": "Microsoft Teams preview channel with authenticated Agents SDK ingress and Microsoft Graph message send",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -22,7 +22,13 @@
     "test": "node ../../node_modules/vitest/vitest.mjs run"
   },
   "dependencies": {
+    "@blue-tanuki/channel-base": "workspace:*",
     "@blue-tanuki/protocol": "workspace:*",
-    "@blue-tanuki/channel-base": "workspace:*"
+    "@microsoft/agents-hosting": "1.9.1",
+    "@microsoft/agents-hosting-express": "1.9.1",
+    "express": "5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6"
   }
 }

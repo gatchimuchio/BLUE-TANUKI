@@ -1,6 +1,6 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
-2026-10-22の`QEB-67-F12.02-DISCORD-REPLY-PERSISTENT-OUTBOX-CONSUMER`で、admitted Discord inputからGateway inbound boundary、native reply builder、OutboundDispatcher、durable outbox consumerまでをsynthetic fixtureで接続した。確認済みrate-limit rejectionだけをRetry-Afterに従い永続待機し、曖昧な送信結果は自動再送しない。実Discord API／credential／HDS運転は未実施のためDiscordは`first-party-preview`、F12.02全体とF12.03 live受入は未成立。製品実装先行を維持し、次は依存が独立したF13.01 Teams entry identity/admission consumerへ進む。QE_BUILDを継続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+2026-10-22の`QEB-68-F13.01-TEAMS-ENTRY-IDENTITY-ADMISSION-CONSUMER`で、Microsoft 365 Agents SDKのJWT endpoint、loopback限定listener、tenant／conversation／user／team／channel identity mapping、owner exact grant、Gateway private digest-only replay inboxをTeams adapterへ接続した。未認証HTTP拒否、synthetic identity/admission、Gateway inbound boundaryを確認したが、有効JWTのtenant受信・実Teams API／credential／HDS運転は未実施。F13.01は部分的に`WIRED`、Teamsは`first-party-preview`を維持する。次は`F13.02 Teams inbound→reply/outbox consumer`。QE_BUILDを継続し、詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-22の`QEB-65-F11.03-SLACK-SETUP-STATUS-CONSUMER`で、Control Center ConnectionsにSlack plugin・credential有無・inbound grant状態と次行動のread-only投影を接続した。資格値・grant対象は表示せず、接続試験は行わない。Slack `first-party-preview`とし、OD-03条件を含むF11.03全体のlive受入／昇格判定は未成立。QE_BUILDを継続する。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 

@@ -2,16 +2,40 @@ import type { ChannelDeliveryErrorKind } from "@blue-tanuki/channel-base";
 
 export type TeamsFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
+export type TeamsConversationType = "personal" | "groupChat" | "channel";
+
 export interface TeamsInboundMessage {
   team_id?: string;
   channel_id?: string;
-  chat_id?: string;
+  conversation_id: string;
+  conversation_type: TeamsConversationType;
   user_id: string;
-  user_display: string;
   text: string;
   message_id: string;
   reply_to_message_id?: string;
-  tenant_id?: string;
+  tenant_id: string;
+}
+
+/** Exact owner-maintained Teams admission scope. Missing grants reject all messages. */
+export interface TeamsInboundGrant {
+  readonly tenant_id: string;
+  readonly conversation_id: string;
+  readonly conversation_type: TeamsConversationType;
+  readonly user_id: string;
+  readonly team_id: string | null;
+  readonly channel_id: string | null;
+}
+
+export type TeamsEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown";
+export type TeamsEventClaim =
+  | { readonly status: "accepted" }
+  | { readonly status: "duplicate"; readonly delivery_state: TeamsEventDeliveryState }
+  | { readonly status: "identity_conflict" };
+
+/** Gateway-owned durable replay boundary; implementations persist digests, never event bodies. */
+export interface TeamsEventInbox {
+  claim(event_id: string, payload_digest: string): TeamsEventClaim;
+  settle(event_id: string, payload_digest: string, state: "handler_returned" | "outcome_unknown"): void;
 }
 
 export type TeamsInboundHandler = (m: TeamsInboundMessage) => Promise<void>;

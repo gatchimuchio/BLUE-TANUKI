@@ -21,7 +21,7 @@
     "teams": {
       "status": "first-party-preview",
       "target_release": "v1.0-preview",
-      "notes": "Preview adapter using Microsoft Graph chatMessage send. Conformance tests, silent fail-closed mode, retry/backoff, and live smoke skip path are implemented. Remains preview until owner-run Microsoft Graph credentials, Teams targets, validate:channels promotion evidence, and gateway-owned inbound listener closure are verified."
+      "notes": "Preview adapter combines Microsoft Graph chatMessage send with a loopback-only Microsoft 365 Agents SDK JWT ingress, exact owner admission grants, and a Gateway-owned digest-only replay inbox. Synthetic auth-rejection/admission tests do not establish a valid JWT tenant route, HDS runtime, or Teams API operation. Remains preview pending the next inbound-to-reply consumer, owner-run tenant evidence, and validate:channels promotion evidence."
     },
     "line": {
       "status": "first-party-preview",

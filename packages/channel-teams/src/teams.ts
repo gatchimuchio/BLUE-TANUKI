@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ChannelSendPayload,
   InboundRequest,
@@ -22,9 +22,12 @@ import {
   teamsChatTarget,
   type TeamsFetch,
   type TeamsInboundMessage,
+  type TeamsInboundGrant,
+  type TeamsEventInbox,
   type TeamsPostResult,
   type TeamsTransport,
 } from "./transport.js";
+import { TeamsAgentsTransport, type TeamsAgentCredentials } from "./agents_transport.js";
 
 export interface TeamsRetryConfig {
   max_retries: number;
@@ -40,6 +43,18 @@ export interface TeamsOptions {
   access_token?: string;
   /** Test or future webhook/subscription transport injection. */
   transport?: TeamsTransport;
+  /** Microsoft 365 Agents SDK credentials. When present, starts an authenticated local ingress. */
+  agent_auth?: TeamsAgentCredentials;
+  /** Exact owner-maintained ingress grants. Missing or empty rejects all messages. */
+  inbound_grants?: readonly TeamsInboundGrant[];
+  /** Gateway-owned durable inbound replay boundary; required when agent_auth is configured. */
+  inbox?: TeamsEventInbox;
+  /** Authenticated ingress bind address. Defaults to loopback. */
+  agent_host?: string;
+  /** Authenticated ingress port. Defaults to 3978. */
+  agent_port?: number;
+  /** Authenticated ingress route. Defaults to /api/messages. */
+  agent_route?: string;
   /** Fetch injection for the built-in Graph transport. */
   fetch?: TeamsFetch;
   /** Per-request Microsoft Graph HTTP timeout. Default: 15000ms. */
@@ -80,10 +95,25 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
 
   async start(handler: InboundHandler): Promise<void> {
     if (this.started) return;
-    this.started = true;
 
+    if (this.opts.transport && this.opts.agent_auth) {
+      throw new Error("teams_transport_and_agent_auth_conflict");
+    }
+    if (this.opts.agent_auth && !this.opts.inbox) {
+      throw new Error("teams_durable_inbox_required_for_authenticated_ingress");
+    }
     if (this.opts.transport) {
       this.transport = this.opts.transport;
+    } else if (this.opts.agent_auth) {
+      this.transport = new TeamsAgentsTransport({
+        credentials: this.opts.agent_auth,
+        graph_access_token: this.opts.access_token,
+        fetch: this.opts.fetch,
+        host: this.opts.agent_host,
+        port: this.opts.agent_port,
+        route: this.opts.agent_route,
+        log: this.opts.log,
+      });
     } else if (this.opts.access_token) {
       this.transport = new TeamsGraphTransport({
         access_token: this.opts.access_token,
@@ -96,24 +126,66 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    this.started = true;
+    if (!this.opts.inbound_grants?.length) {
+      this.log("[teams] WARN TEAMS_INBOUND_GRANTS_JSON unset/empty - inbound messages are rejected");
+    }
     try {
       await this.transport.start(async (m) => {
+        if (!isValidTeamsInboundMessage(m)) {
+          this.log("[teams] rejected inbound event with invalid identity");
+          return;
+        }
+        const grant = this.opts.inbound_grants?.some((candidate) => teamsGrantMatches(candidate, m));
+        if (!grant) return;
+
+        const inbox = this.opts.inbox;
+        if (!inbox) {
+          this.log("[teams] rejected inbound event because durable admission is unavailable");
+          return;
+        }
+        const eventId = teamsEventIdentity(m);
+        const payloadDigest = teamsInboundPayloadDigest(m);
+        let claim;
+        try {
+          claim = inbox.claim(eventId, payloadDigest);
+        } catch {
+          this.log("[teams] rejected inbound event because durable admission failed");
+          return;
+        }
+        if (claim.status !== "accepted") {
+          this.log(`[teams] suppressed inbound event status=${claim.status}`);
+          return;
+        }
+
         const inbound = normalizeTeamsInbound(m);
+        let deliveryState: "handler_returned" | "outcome_unknown" = "outcome_unknown";
         try {
           await handler(inbound);
-        } catch (e) {
-          this.log(
-            `[teams] inbound handler threw: ${e instanceof Error ? e.message : String(e)}`,
-          );
+          deliveryState = "handler_returned";
+        } finally {
+          try {
+            inbox.settle(eventId, payloadDigest, deliveryState);
+          } catch {
+            this.log("[teams] inbound settlement failed; replay remains blocked");
+          }
         }
       });
+      this.silent = false;
       this.log("[teams] active");
     } catch (e) {
       this.silent = true;
+      this.started = false;
+      const transport = this.transport;
+      this.transport = null;
+      if (this.opts.agent_auth) {
+        try { await transport?.stop(); } catch { /* startup failure remains fail-closed */ }
+        this.log("[teams] authenticated ingress failed to start");
+        throw new Error("teams_authenticated_ingress_start_failed");
+      }
       this.log(
         `[teams] WARN transport start failed (${e instanceof Error ? e.message : String(e)}); falling back to silent`,
       );
-      this.transport = null;
     }
   }
 
@@ -223,13 +295,11 @@ function normalizeTeamsInbound(m: TeamsInboundMessage): InboundRequest {
       ? teamsChannelReplyTarget(m.team_id, m.channel_id, m.reply_to_message_id)
       : m.team_id && m.channel_id
         ? teamsChannelTarget(m.team_id, m.channel_id)
-        : m.chat_id
-          ? teamsChatTarget(m.chat_id)
-          : "teams:unknown";
+      : teamsChatTarget(m.conversation_id);
   return {
     id: randomUUID(),
     channel: "teams",
-    user: m.user_display || m.user_id,
+    user: teamsActorIdentity(m),
     content: m.text,
     timestamp: Date.now(),
     metadata: {
@@ -237,11 +307,72 @@ function normalizeTeamsInbound(m: TeamsInboundMessage): InboundRequest {
       teams_user_id: m.user_id,
       teams_team_id: m.team_id,
       teams_channel_id: m.channel_id,
-      teams_chat_id: m.chat_id,
       teams_message_id: m.message_id,
       teams_tenant_id: m.tenant_id,
+      teams_conversation_id: m.conversation_id,
+      teams_conversation_type: m.conversation_type,
     },
   };
+}
+
+function isValidTeamsInboundMessage(message: TeamsInboundMessage): boolean {
+  return isTenantId(message.tenant_id) &&
+    isSafeTeamsId(message.conversation_id) &&
+    isSafeTeamsId(message.user_id) &&
+    isSafeTeamsId(message.message_id) &&
+    typeof message.text === "string" && Boolean(message.text.trim()) &&
+    (message.conversation_type === "personal" || message.conversation_type === "groupChat" || message.conversation_type === "channel") &&
+    (message.conversation_type === "channel"
+      ? isSafeTeamsId(message.team_id) && isSafeTeamsId(message.channel_id)
+      : message.team_id === undefined && message.channel_id === undefined);
+}
+
+function teamsGrantMatches(grant: TeamsInboundGrant, message: TeamsInboundMessage): boolean {
+  return grant.tenant_id.toLowerCase() === message.tenant_id.toLowerCase() &&
+    grant.conversation_type === message.conversation_type &&
+    grant.conversation_id === message.conversation_id &&
+    grant.user_id === message.user_id &&
+    grant.team_id === (message.team_id ?? null) &&
+    grant.channel_id === (message.channel_id ?? null);
+}
+
+function teamsEventIdentity(message: TeamsInboundMessage): string {
+  return createHash("sha256").update(JSON.stringify([
+    "teams-event-identity.v1",
+    message.tenant_id.toLowerCase(),
+    message.conversation_id,
+    message.message_id,
+  ])).digest("hex");
+}
+
+function teamsInboundPayloadDigest(message: TeamsInboundMessage): string {
+  return createHash("sha256").update(JSON.stringify([
+    "teams-inbound-payload.v1",
+    message.tenant_id.toLowerCase(),
+    message.conversation_type,
+    message.conversation_id,
+    message.user_id,
+    message.team_id ?? null,
+    message.channel_id ?? null,
+    message.text,
+  ])).digest("hex");
+}
+
+function teamsActorIdentity(message: TeamsInboundMessage): string {
+  const digest = createHash("sha256").update(JSON.stringify([
+    "teams-actor.v1",
+    message.tenant_id.toLowerCase(),
+    message.user_id,
+  ])).digest("hex");
+  return `teams:${digest}`;
+}
+
+function isTenantId(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value);
+}
+
+function isSafeTeamsId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 async function withTeamsRetry(

@@ -1,4 +1,5 @@
 export { TeamsChannel, type TeamsOptions, type TeamsRetryConfig } from "./teams.js";
+export type { TeamsAgentCredentials } from "./agents_transport.js";
 export {
   TeamsGraphTransport,
   teamsChannelTarget,
@@ -8,5 +9,10 @@ export {
   type TeamsTransport,
   type TeamsInboundMessage,
   type TeamsInboundHandler,
+  type TeamsInboundGrant,
+  type TeamsEventInbox,
+  type TeamsEventClaim,
+  type TeamsEventDeliveryState,
+  type TeamsConversationType,
   type TeamsPostResult,
 } from "./transport.js";

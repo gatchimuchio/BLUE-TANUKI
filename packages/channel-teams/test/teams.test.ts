@@ -2,12 +2,71 @@ import { describe, expect, it } from "vitest";
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import {
   TeamsChannel,
+  teamsChannelReplyTarget,
   teamsChannelTarget,
   type TeamsInboundHandler,
+  type TeamsInboundGrant,
   type TeamsInboundMessage,
+  type TeamsEventInbox,
   type TeamsPostResult,
   type TeamsTransport,
 } from "../src/index.js";
+import type { TurnContext } from "@microsoft/agents-hosting";
+import {
+  TeamsAgentsTransport,
+  createTeamsAuthConfiguration,
+  teamsMessageFromActivity,
+} from "../src/agents_transport.js";
+
+const TENANT_ID = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+const BOT_ID = "11111111-2222-4333-8444-555555555555";
+const credentials = {
+  client_id: BOT_ID,
+  client_secret: "synthetic-agent-secret",
+  tenant_id: TENANT_ID,
+};
+
+const inboundMessage: TeamsInboundMessage = {
+  tenant_id: TENANT_ID,
+  conversation_id: "19:conversation@thread.v2",
+  conversation_type: "channel",
+  team_id: "19:team@thread.tacv2",
+  channel_id: "19:channel@thread.tacv2",
+  user_id: "29:stable-user-id",
+  text: "hello teams",
+  message_id: "message-1",
+  reply_to_message_id: "message-1",
+};
+
+const inboundGrant: TeamsInboundGrant = {
+  tenant_id: TENANT_ID,
+  conversation_id: inboundMessage.conversation_id,
+  conversation_type: "channel",
+  team_id: inboundMessage.team_id!,
+  channel_id: inboundMessage.channel_id!,
+  user_id: inboundMessage.user_id,
+};
+
+class MemoryTeamsInbox implements TeamsEventInbox {
+  readonly rows = new Map<string, { digest: string; state: "dispatching" | "handler_returned" | "outcome_unknown" }>();
+  claim(eventId: string, payloadDigest: string) {
+    expect(eventId).toMatch(/^[a-f0-9]{64}$/u);
+    expect(payloadDigest).toMatch(/^[a-f0-9]{64}$/u);
+    const current = this.rows.get(eventId);
+    if (current) return current.digest === payloadDigest
+      ? { status: "duplicate" as const, delivery_state: current.state }
+      : { status: "identity_conflict" as const };
+    this.rows.set(eventId, { digest: payloadDigest, state: "dispatching" });
+    return { status: "accepted" as const };
+  }
+  settle(eventId: string, payloadDigest: string, state: "handler_returned" | "outcome_unknown"): void {
+    const current = this.rows.get(eventId);
+    if (!current || current.digest !== payloadDigest || current.state !== "dispatching") {
+      throw new Error("fixture_settlement_conflict");
+    }
+    current.state = state;
+  }
+}
 
 class FakeTeamsTransport implements TeamsTransport {
   handler: TeamsInboundHandler | null = null;
@@ -59,35 +118,115 @@ describe("TeamsChannel", () => {
     }
   });
 
-  it("normalizes injected inbound messages without authority metadata", async () => {
+  it("admits only an exact owner grant, deduplicates durably, and uses a stable actor instead of display text", async () => {
     const transport = new FakeTeamsTransport();
-    const channel = new TeamsChannel({ transport, log: () => undefined });
+    const inbox = new MemoryTeamsInbox();
+    const channel = new TeamsChannel({ transport, inbox, inbound_grants: [inboundGrant], log: () => undefined });
     const received: InboundRequest[] = [];
     await channel.start(async (req) => {
       received.push(req);
     });
     try {
-      await transport.emit({
-        team_id: "team-1",
-        channel_id: "19:channel@thread.tacv2",
-        user_id: "user-1",
-        user_display: "alice",
-        text: "hello teams",
-        message_id: "msg-1",
-        tenant_id: "tenant-1",
-      });
+      await transport.emit(inboundMessage);
+      await transport.emit(inboundMessage);
+      await transport.emit({ ...inboundMessage, text: "changed payload with same message identity" });
       expect(received).toHaveLength(1);
       expect(received[0]).toMatchObject({
         channel: "teams",
-        user: "alice",
+        user: expect.stringMatching(/^teams:[a-f0-9]{64}$/u),
         content: "hello teams",
       });
       expect(received[0]!.metadata?.reply_to).toBe(
-        teamsChannelTarget("team-1", "19:channel@thread.tacv2"),
+        teamsChannelReplyTarget(inboundMessage.team_id!, inboundMessage.channel_id!, inboundMessage.message_id),
       );
+      expect(received[0]!.metadata?.teams_user_id).toBe(inboundMessage.user_id);
+      expect(received[0]!.user).not.toBe("alice");
       expect(received[0]!.metadata).not.toHaveProperty("blue_tanuki.authority_context");
+      expect([...inbox.rows.values()][0]?.state).toBe("handler_returned");
     } finally {
       await channel.stop();
+    }
+  });
+
+  it("rejects injected events without a grant before touching the replay inbox", async () => {
+    const transport = new FakeTeamsTransport();
+    const inbox = new MemoryTeamsInbox();
+    const channel = new TeamsChannel({ transport, inbox, inbound_grants: [], log: () => undefined });
+    let calls = 0;
+    await channel.start(async () => { calls += 1; });
+    try {
+      await transport.emit(inboundMessage);
+      expect(calls).toBe(0);
+      expect(inbox.rows.size).toBe(0);
+    } finally {
+      await channel.stop();
+    }
+  });
+
+  it("maps only authenticated Teams message identity fields and rejects ambiguous context", () => {
+    const activity = {
+      type: "message",
+      channelId: "msteams",
+      id: "activity-1",
+      text: "hello",
+      from: { id: "29:stable-user-id", name: "mutable display", role: "user", tenantId: TENANT_ID },
+      recipient: { id: BOT_ID, role: "bot" },
+      conversation: { id: "19:conversation@thread.v2", conversationType: "channel", tenantId: TENANT_ID },
+      channelData: {
+        tenant: { id: TENANT_ID },
+        team: { id: "19:team@thread.tacv2" },
+        channel: { id: "19:channel@thread.tacv2" },
+      },
+    } as unknown as TurnContext["activity"];
+    expect(teamsMessageFromActivity(activity)).toEqual({
+      tenant_id: TENANT_ID,
+      conversation_id: "19:conversation@thread.v2",
+      conversation_type: "channel",
+      user_id: "29:stable-user-id",
+      team_id: "19:team@thread.tacv2",
+      channel_id: "19:channel@thread.tacv2",
+      text: "hello",
+      message_id: "activity-1",
+      reply_to_message_id: "activity-1",
+    });
+    expect(teamsMessageFromActivity({ ...activity, conversation: { ...activity.conversation!, tenantId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } })).toBeNull();
+    expect(teamsMessageFromActivity({ ...activity, from: { ...activity.from!, role: "bot" } })).toBeNull();
+    expect(teamsMessageFromActivity({ ...activity, channelData: { tenant: { id: TENANT_ID } }, conversation: { ...activity.conversation!, conversationType: "channel" } })).toBeNull();
+    expect(teamsMessageFromActivity({ ...activity, attachments: [{ contentType: "text/plain" } as never] })).toBeNull();
+  });
+
+  it("pins SDK JWT validation to the configured audience and rejects unauthenticated HTTP ingress", async () => {
+    const auth = createTeamsAuthConfiguration(credentials);
+    expect(auth.connectionsMap).toEqual([{
+      serviceUrl: "*",
+      audience: BOT_ID,
+      connection: "blueTanukiTeamsService",
+    }]);
+    expect(auth.connections?.get("blueTanukiTeamsService")).toMatchObject({
+      clientId: BOT_ID,
+      tenantId: TENANT_ID,
+      validateIssuer: true,
+    });
+
+    expect(() => new TeamsAgentsTransport({ credentials, host: "0.0.0.0" })).toThrow(
+      "teams_agent_listener_host_must_be_loopback",
+    );
+
+    const transport = new TeamsAgentsTransport({ credentials, host: "127.0.0.1", port: 0, log: () => undefined });
+    let accepted = 0;
+    await transport.start(async () => { accepted += 1; });
+    try {
+      const port = transport.getListeningPort();
+      expect(port).toBeGreaterThan(0);
+      const response = await fetch(`http://127.0.0.1:${port}/api/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "message", channelId: "msteams" }),
+      });
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(accepted).toBe(0);
+    } finally {
+      await transport.stop();
     }
   });
 
