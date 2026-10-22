@@ -16,7 +16,7 @@ F14.02では、LINE admitted inboundからGateway reply、SQLite durable outbox�
 
 ## 次のBUILD_BATCH
 
-QEB-72でA03.01の公開source identityとA03.02の比較基準面を[競合能力基準面](競合能力基準面.md)へ接続した。QEB-73のA03.03では基準面の固定61 IDすべてに担当consumer群または明示的な未確認理由・次consumerを割り当てた。既存入口はF10–F14、未収容入口とMuse固有serviceはF15.01–.03、extensionはF07–F09、browserはF06、形式・設定移行はF19／G01／対象OS consumer、横断要求はC/D/E系列と後段のG系列へ送る。OpenClaw provider/plugin catalog、Museの全in-app connector、format／migrationの未分解項目には個別の次作業を付した。ID別の内部割当表とservice別子作業票は非公開作業記録に保持し、Public Gitへ内部QE全要求対応表を置かない。割当はconsumer計画であり、実装・互換・優位性の証拠ではない。未確認catalogは`BUILD_GAP`を維持する。次はF15.01で未収容要求を正式な差分登録へ渡し、F15.02の公式契約・scope確認とF15.03の有限実装単位化へ接続する。F14.03のOD-03 live条件を実装の代わりに用いない。
+QEB-73のA03.03で比較基準面の固定61 IDを担当consumer群または未確認理由・次consumerへ割り当て、未収容要求の子作業を作成した。QEB-74のF15.01では未収容43件（OpenClaw入口23、Muse入口2、Muse service18）をowner管理の非公開差分登録へ接続した。個別IDとサービス別scope候補は非公開記録に保持し、Public Gitには内部QE全要求対応表を置かない。F15.01は登録consumerまでの`WIRED`であり、service API実装・互換・runtime受入を意味しない。動的provider/plugin/Muse catalogと形式移行は`BUILD_GAP`を維持する。次はF15.02で公式契約・地域・account・権限scope・接続境界を確認し、F15.03へ有限実装単位を渡す。実資格や実外部作用、P13公開GOは含まない。
 
 ## 保護とGit
 

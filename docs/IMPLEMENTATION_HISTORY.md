@@ -4,6 +4,23 @@
 
 ---
 
+### 履歴ログ：`QEB-74-F15.01-GAP-REGISTRATION`
+
+開始`main`／`origin/main`=`e28a73f330cb155f46aea00e58cffd3a6b005ae8`。QE現行pin rev2.3の仕様・工程・施工指示、適用`AGENTS.md`、active instruction、F15要求とF15.01単位を再同期した。過去の別版や閉じた履歴全体は再読せず、直接のproducerであるA03.03非公開割当だけを参照した。
+
+A03.03が発行した未収容43 item-level要求を、ID・用途・候補対象境界・次consumer F15.02・実装展開先F15.03を持つowner管理の非公開F15.01登録へ接続した。内訳はOpenClaw入口23、Muse入口2、Muse固有service18。既存F10–F14 consumerへ割り当て済みの6件は重複登録しない。dynamic provider/plugin/Muse connector/format catalogはF15の有限43件と混ぜず、各既存consumerの`BUILD_GAP`として保持した。
+
+F15.01はprivate registration consumerまで`WIRED`。公式API・契約・地域・account eligibility・権限scope、service実装、runtime受入、互換性を確認したものではない。実資格・外部送信・書込み・購入・公開・D4／ミニドラ変更は未実施。C08.03、P13 owner GO、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAの保留を維持する。詳細なID別registerはPublic Git外に保存した。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| F15.01 register coverage | PASS。43 unique IDs（23 OpenClaw channel、2 Muse entry、18 Muse service）。 |
+| Public Gitへのprivate ID露出 | PASS。変更対象4文書を検索し、個別CB ID・private child keyなし。 |
+| `git diff --check` | PASS。 |
+| `pnpm docs:check` | PASS。日本語基底監査`規定成立・移行中`、移行負債76件、licensing gate PASS。 |
+
+---
+
 ### 履歴ログ：`QEB-73-A03.03-COMPETITOR-REQUIREMENT-ALLOCATION`
 
 開始`main`／`origin/main`=`d767d0cd2c21a0caf49e8beca7269001efd1733b`。rev2.3現行pinのhash、適用`AGENTS.md`、active instruction、A03.03／F15要求を再確認した。A03.03の入力は`docs/競合能力基準面.md`の`CB-2026-10-22.1`に固定された12 capability groupと49個別ID。全61 IDをconsumer familyまたは未確認理由・次consumerへ割り当てた。
