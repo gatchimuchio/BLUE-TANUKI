@@ -4,6 +4,22 @@
 
 ---
 
+### 履歴ログ：`QEB-73-A03.03-COMPETITOR-REQUIREMENT-ALLOCATION`
+
+開始`main`／`origin/main`=`d767d0cd2c21a0caf49e8beca7269001efd1733b`。rev2.3現行pinのhash、適用`AGENTS.md`、active instruction、A03.03／F15要求を再確認した。A03.03の入力は`docs/競合能力基準面.md`の`CB-2026-10-22.1`に固定された12 capability groupと49個別ID。全61 IDをconsumer familyまたは未確認理由・次consumerへ割り当てた。
+
+既存のF10–F14 channel consumer、未収容のchannel／Muse service向けF15.01–.03、F07–F09 extension、F06 browser、C/D/E横断経路、F19／G migration・OS経路を割当先として特定。OpenClaw provider catalogをC05（mediaはF16）、plugin catalogsをF09、Muse app内connector一覧をF15、形式・migration条件をF19および該当するF09/C05/G01へ分離した。動的directory件数は個別能力または互換証拠とせず、未確認は`BUILD_GAP`に保持した。
+
+ID単位の対応表、43 item-level F15 child work order、動的catalog用5子作業票をowner管理の非公開作業記録（Public Git外）へ置いた。Public Gitには内部QE全要求対応表を追加せず、公開可能なfamily-level状態のみ現行指示・基準面・ロードマップ・進捗へ記録した。既存198 top-level単位、QE pin、support boundaryを変更していない。実API・資格・送信・購入・公開・D4／ミニドラ変更、互換試験、QE_QC／QE_QAは未実施。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| baseline→private allocation ID coverage | PASS。61 unique ID全件、missing 0／extra 0。 |
+| `pnpm docs:check` | PASS。日本語基底監査`規定成立・移行中`、未解消移行負債76件を維持、licensing gate PASS。 |
+| `git diff --check` | PASS。 |
+
+---
+
 ### 履歴ログ：`QEB-72-A03.01-A03.02-COMPETITOR-CAPABILITY-BASELINE`
 
 開始`main`／`origin/main`=`8798e25d8ee1e728c2e65eb0a636d93d652a6481`。現行pin rev2.3と適用`AGENTS.md`を再同期し、依存するA03.01 source identityとA03.02 capability/comparison criteriaだけを今回の基準面作成に必要な範囲で確認した。保護対象untracked Linux isolation `target/`を保持した。
