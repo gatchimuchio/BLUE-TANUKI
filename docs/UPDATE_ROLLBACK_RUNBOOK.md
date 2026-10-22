@@ -10,8 +10,9 @@ uninstall/purge guidance, and release bundle checks remain present. Treat a
 scripts, then rerun `pnpm run doctor` and `pnpm validate:packaging`.
 
 Run `pnpm validate:release-hardening` for release-path work. It verifies that
-GitHub Actions workflows are absent, that local release validation commands
-remain available, that the signed native installer boundary remains explicit,
+any GitHub Actions workflow uses only manual `workflow_dispatch`, has explicit
+read-only workflow-level token permissions without job overrides, that local
+release validation commands remain available, that the signed native installer boundary remains explicit,
 and that updater state remains
 `manual_update_only` with `runtime_auto_apply_available=false`. For a future
 signed release, `pnpm validate:release-hardening -- --require-signing` must

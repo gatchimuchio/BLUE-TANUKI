@@ -9,19 +9,21 @@ path ではない。
 
 - 現在の RC は signed native installer ではない。
 - 現在の RC は automatic updater を持たない。
-- GitHub Actions workflows are intentionally absent.
+- GitHub Actions is a manually dispatched auxiliary for eligible OS builds, artifacts, or heavy tests.
 - runtime_auto_apply_available=false。
 - 更新は manual_update_only。
 - installer / updater / release metadata は authority として使わない。
 
 ## GitHub Actions boundary
 
-GitHub Actions / CI workflow はこのリポジトリの品質判定経路ではない。
-`.github/workflows` 配下に YAML workflow が存在する場合、
-`pnpm validate:release-hardening` と `pnpm validate:packaging` は fail する。
+GitHub Actions は自動CIや完成判定の経路ではなく、ローカルにないOSのbuild、artifact生成、
+またはローカル検査だけでは不足する重い検査・testの補助に限る。目的はactive instructionかROADMAPに記録する。
 
-push / pull_request / schedule / workflow_dispatch による自動テストは使わない。
-品質判定は owner が明示的に走らせる local release validation と実機 evidence を正とする。
+`.github/workflows` のYAMLは、triggerがblock形式の `workflow_dispatch` 一つだけ（workflow_dispatch only）で、
+workflow-level `permissions` が明示的な `read`／`none` の組合せであり、job-levelの権限上書きがない場合に限って許可する。
+push / pull_request / schedule / merge_group等の自動trigger、write token権限、必須status checkは使わない。
+release-hardeningとpackagingの両gateは同じ検査器を呼び、構文が許可subset外ならfail-closedする。
+Actionsの成功は対象commitの補助証拠に限り、CI greenや製品完成を意味しない。品質判定はownerが明示的に行うlocal validationと対象実機evidenceを正とする。
 
 ## Local release validation
 
@@ -101,7 +103,7 @@ update surface は候補 bundle の検証と rollback evidence 作成までで�
 ## Evidence source
 
 この gate の evidence source は `CONFIG`。
-GitHub Actions workflow 不在、docs、package scripts、installer manifest boundary、
+manual-only workflow policy、docs、package scripts、installer manifest boundary、
 update surface boundary を読むだけで、live installed product の動作成功や署名の
 成立は証明しない。実機検証、extracted bundle verification、credentialed live smoke は
 別の `LIVE_RUNTIME` / `EXTERNAL_EVIDENCE` として実行・報告する。
@@ -110,7 +112,8 @@ Expected normal output:
 
 ```text
 release_hardening=pass_pre_signing_blocked
-github_actions_workflows_present=false
+github_actions_workflows_present=true
+github_actions_workflows_manual_dispatch_only=true
 local_release_validation_commands_present=true
 signed_native_installer_status=blocked_missing_credentials
 automatic_updater_status=manual_update_only

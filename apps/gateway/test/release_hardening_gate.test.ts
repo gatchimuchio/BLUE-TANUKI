@@ -21,7 +21,8 @@ function releaseHardeningDoc(): string {
     "runtime_auto_apply_available=false",
     "signed native installer",
     "automatic updater",
-    "GitHub Actions workflows are intentionally absent",
+    "GitHub Actions is a manually dispatched auxiliary",
+    "workflow_dispatch only",
     "local release validation",
     "--require-signing",
     "BLUE_TANUKI_WINDOWS_SIGNING_CERT_PFX",
@@ -39,6 +40,7 @@ function releaseHardeningDoc(): string {
 async function writeFixture(opts: {
   updateSurface?: string;
   env?: Record<string, string>;
+  workflow?: string;
 } = {}): Promise<Record<string, string>> {
   await writeFile(
     "package.json",
@@ -91,6 +93,9 @@ async function writeFixture(opts: {
     ].join("\n"),
   );
   await writeFile("docs/RELEASE_HARDENING.md", releaseHardeningDoc());
+  if (opts.workflow !== undefined) {
+    await writeFile(".github/workflows/manual.yml", opts.workflow);
+  }
   await writeFile(
     "scripts/create_release_bundle.ts",
     [
@@ -126,6 +131,7 @@ describe("release hardening gate", () => {
 
     expect(report).toMatchObject({
       github_actions_workflows_present: false,
+      github_actions_workflows_manual_dispatch_only: true,
       local_release_validation_commands_present: true,
       signed_native_installer_status: "blocked_missing_credentials",
       automatic_updater_status: "manual_update_only",
@@ -133,12 +139,38 @@ describe("release hardening gate", () => {
     });
   });
 
-  it("rejects GitHub Actions workflows", async () => {
-    await writeFixture();
-    await writeFile(".github/workflows/ci.yml", "name: CI\non: [push]\n");
+  it("allows the manual read-only workflow policy", async () => {
+    const env = await writeFixture({
+      workflow: [
+        "name: Native Linux helper",
+        "on:",
+        "  workflow_dispatch:",
+        "permissions:",
+        "  contents: read",
+        "jobs:",
+        "  verify:",
+        "    runs-on: ubuntu-24.04",
+      ].join("\n"),
+    });
+
+    expect(validateReleaseHardeningGate(root, { env })).toMatchObject({
+      github_actions_workflows_present: true,
+      github_actions_workflows_manual_dispatch_only: true,
+    });
+  });
+
+  it.each([
+    ["automatic push trigger", "name: CI\non:\n  push:\npermissions:\n  contents: read\n"],
+    ["mixed manual and automatic triggers", "name: CI\non:\n  workflow_dispatch:\n  pull_request:\npermissions:\n  contents: read\n"],
+    ["flow-style trigger list", "name: CI\non: [workflow_dispatch, push]\npermissions:\n  contents: read\n"],
+    ["missing permissions", "name: CI\non:\n  workflow_dispatch:\njobs:\n  verify:\n    runs-on: ubuntu-24.04\n"],
+    ["write permission", "name: CI\non:\n  workflow_dispatch:\npermissions:\n  contents: write\n"],
+    ["job-level permission override", "name: CI\non:\n  workflow_dispatch:\npermissions:\n  contents: read\njobs:\n  verify:\n    permissions:\n      contents: write\n"],
+  ])("rejects unsafe workflow policy: %s", async (_name, workflow) => {
+    await writeFixture({ workflow });
 
     expect(() => validateReleaseHardeningGate(root, { env: {} })).toThrow(
-      /GitHub Actions workflows must be absent/,
+      /GitHub Actions workflow policy failed/,
     );
   });
 

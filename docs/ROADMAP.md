@@ -6,7 +6,7 @@
 
 ## 次のBUILD_BATCH
 
-rev2.4 CR-0のUnix全install／uninstall入口とWindows開発用Force installに対する対象安全ガードを実装し、Windows・WSLの非破壊fixtureで確認した。実削除・実OS導入は行っていない。詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)に記録する。次はCR-1でmanual `workflow_dispatch`だけを許可し自動triggerと無断権限を拒否するよう、release／packaging gateを現行AGENTSへ同期する。現在のpackaging gateが全workflow禁止として不整合を出しているため、実在workflowを維持したまま許可条件を一致させる。続いてCR-2でGUI設定LLMの費用profile／budgetと通常Executorを結び、一仕事をJ→合成Broker→receipt→M→返信・再計画／復帰へ通す。QE_BUILDは継続し、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QC／QAは未開始。
+rev2.4 CR-0ではUnix全install／uninstall入口とWindows開発用Force installに対象安全ガードを実装し、Windows・WSLの非破壊fixtureで確認した。実削除・実OS導入は行っていない。CR-1ではrelease hardening／packaging gateを共通のworkflow検査へ接続し、既存の手動Linux補助workflowを残したまま、`workflow_dispatch`一つ・明示read-only権限・job-level上書きなしだけを許可した。release gate、packaging、関連10 tests、docs監査、変更対象strict型検査、project-reference型検査、workspace buildが通った。Actions自体は未実行。詳細は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)に記録する。次はCR-2でGUI設定LLMの費用profile／budgetと通常Executorを結び、一仕事をJ→合成Broker→receipt→M→返信・再計画／復帰へ通す。QE_BUILDは継続し、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QC／QAは未開始。
 
 F15.03とComposio／PostHogの既存作業は履歴に保持する。具体consumerへの展開は、rev2.4の安全是正と一仕事の統合形状を前進させた後に戻る。
 

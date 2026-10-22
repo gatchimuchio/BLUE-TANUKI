@@ -435,8 +435,11 @@ the container healthcheck probes `/healthz`.
 
 ## 4.2 Local Validation
 
-GitHub Actions workflows are intentionally absent. Do not add
-`.github/workflows/*.yml` as a quality gate.
+GitHub Actions is not an automatic CI or product-completion gate. A workflow may
+exist only for an eligible missing-OS build, artifact, or heavy test, and must
+use `workflow_dispatch` as its sole trigger with explicit read-only token
+permissions. Record its purpose in the active instruction or roadmap; do not
+add push / pull_request / schedule triggers or required status checks.
 
 For release or deployment work, run the local validation commands explicitly
 from the target workspace or target OS. The normal local set installs with the
@@ -444,8 +447,9 @@ checked-in lockfile, then runs typecheck, build, tests, docs check,
 repo/package/release gates, scoped smoke checks, `doctor`, release bundle
 generation, and release verification.
 
-Quality judgment comes from local command output and owner-run evidence packs,
-not from GitHub runner status.
+Quality judgment comes from local command output and owner-run evidence packs.
+A manually dispatched Actions run is supplementary evidence for its fixed
+commit and scope; a green run does not establish product completion.
 
 ---
 

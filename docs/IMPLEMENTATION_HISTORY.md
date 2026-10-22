@@ -3365,3 +3365,22 @@ Windows開発用`install/windows/install.ps1`は、reparse pointを経由する�
 | 実削除、実OS導入、Linux native／macOS実機、workspace全suite、live provider、QE_QC／QE_QA | 未実施。 |
 
 CR-0は危険なinstall／uninstall対象を非破壊fixtureで拒否できる状態として閉じる。製品の利用者仕事の実行経路は前進しておらず`SYSTEM_SHAPED`／`BUILD_COVERED`未成立のまま。C08.03 provider、OD-03 live作用、別repo変更、P13 owner GOと公開・出荷保留を維持する。次はCR-1のrelease hardening／packaging gate同期。
+
+### QEB-73-CR1-MANUAL-ACTIONS-GATE-SYNC
+
+開始`main`／`origin/main`=`5ae8fdd2c8daea0e7575c00cb63491ce14ba2c32`。rev2.4三点セットとZIP／各文書SHA、root`AGENTS.md`、作業標準、active instruction、現行main／dirty差分／recovery refsを再照合した。rev2.4はすでに唯一の公開pinであり、今回指定されたZIPとpinのSHAは一致している。保護対象untrackedの`.codex-remote-attachments/`とLinux `target/`は保持した。
+
+`release_hardening_gate.ts`と`validate_packaging.ts`から共有するworkflow policy validatorを実装した。既存YAMLを消さず、許可形式をblock形式の単一`workflow_dispatch`、workflow-levelで明示する`read`／`none` token permission、job-level permission overrideなしに限定する。複数trigger、flow形式、権限欠落、write scope、job override、許可subset外構文はfail-closedする。実在する`.github/workflows/temporary-linux-workspace-quota.yml`はmanual-onlyで`contents: read`のため維持された。release hardening reportはworkflow存在数とmanual-only policyを別fieldで示す。release hardening docs、通常runbook、update/rollback runbookを同期し、日本語移行台帳にrunbook二件の承認済みSHAを反映した。Actionsは起動していない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm exec vitest run apps/gateway/test/release_hardening_gate.test.ts` | PASS、10 tests。manual read-only workflow許可とautomatic/mixed trigger、flow syntax、permissions欠落／write scope、job overrideの拒否を確認。 |
+| `pnpm validate:release-hardening` | PASS。既存manual workflowを認識し、`github_actions_workflows_present=true`と`github_actions_workflows_manual_dispatch_only=true`を出力。署名資格情報は不在のため`blocked_missing_credentials`。 |
+| `pnpm validate:packaging` | PASS。両gateは同じvalidatorを使用。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の76移行負債はwarningとして残る。 |
+| 変更対象strict TypeScript検査 | PASS。gate、packaging validator、gate testを直接検査。 |
+| `pnpm exec tsc -b --force` | PASS。workspace project-reference型検査。 |
+| `pnpm build` | PASS。project-referenceを強制再生成した後の全workspace build。直前の`pnpm typecheck` cleanupはWindows `EBUSY`を出したが、scriptの終了codeがcleanup失敗を反映しなかったため同コマンドをPASS根拠にせず、強制型検査とbuildを別々に確認した。 |
+| GitHub Actions実行、workspace全test、GA／bundle／verify、QE_QC／QE_QA、live provider／credential／外部作用 | 未実施。Actionsは今回のvalidator改修に不要。 |
+
+CR-1はI-02の二gateと関連する運用文書・testを現行`AGENTS.md`の手動Actions条件へ同期した。プロダクトの利用者仕事の実行経路は今回前進していない。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider、OD-03 live作用、D4-Pocket／ミニドラ別repo変更、P13 owner GOと公開・出荷保留を維持する。次のBUILD_BATCHはCR-2：GUIで設定されたprovider疎通と費用profile／budgetを通常Executorへ接続し、合成Cの一仕事をJ→合成Broker→receipt→M→返信・再計画／復帰へ進める。

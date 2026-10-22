@@ -1,5 +1,6 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { validateGitHubActionsWorkflows } from "./release_hardening_gate.ts";
 
 const root = process.cwd();
 
@@ -29,21 +30,8 @@ function requireNotMatches(file: string, text: string, pattern: RegExp, label: s
   }
 }
 
-function requireNoGithubWorkflowFiles(): void {
-  const workflowsDir = join(root, ".github", "workflows");
-  if (!existsSync(workflowsDir)) return;
-  const workflowFiles = readdirSync(workflowsDir)
-    .filter((name) => /\.ya?ml$/i.test(name))
-    .sort();
-  if (workflowFiles.length > 0) {
-    throw new Error(
-      `.github/workflows: GitHub Actions workflows must be absent; found ${workflowFiles.join(", ")}`,
-    );
-  }
-}
-
 function main(): void {
-  requireNoGithubWorkflowFiles();
+  validateGitHubActionsWorkflows(root);
 
   const installReadme = read("install/README.md");
   requireIncludes("install/README.md", installReadme, "Windows");
@@ -700,7 +688,8 @@ function main(): void {
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "blocked_missing_credentials");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "manual_update_only");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "runtime_auto_apply_available=false");
-  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "GitHub Actions workflows are intentionally absent");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "GitHub Actions is a manually dispatched auxiliary");
+  requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "workflow_dispatch only");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "local release validation");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "--require-signing");
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "BLUE_TANUKI_WINDOWS_SIGNING_CERT_PFX");
@@ -708,7 +697,9 @@ function main(): void {
   requireIncludes("docs/RELEASE_HARDENING.md", releaseHardening, "BLUE_TANUKI_LINUX_GPG_KEY_ID");
 
   const releaseHardeningGate = read("scripts/release_hardening_gate.ts");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "validateGitHubActionsWorkflows");
   requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "github_actions_workflows_present");
+  requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "github_actions_workflows_manual_dispatch_only");
   requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "local_release_validation_commands_present");
   requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "blocked_missing_credentials");
   requireIncludes("scripts/release_hardening_gate.ts", releaseHardeningGate, "manual_update_only");
