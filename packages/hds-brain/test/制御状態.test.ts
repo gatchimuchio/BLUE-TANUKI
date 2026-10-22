@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -214,6 +215,89 @@ describe("J制御状態とM receipt再照合", () => {
     checked.close();
   });
 
+  it("legacy J pending payloadは同一承認内容の再提示時だけ新outboxへ移行する", () => {
+    const commit = makeCommit("legacy-pending-envelope", "synthetic-value");
+    const coordinator = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    expect(coordinator.stage(commit).ok).toBe(true);
+    coordinator.close();
+    downgradePendingEventToLegacyV1(databasePath);
+
+    const reopened = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    expect(reopened.snapshot()).toMatchObject({
+      revision: 1,
+      status: "memory_commit_pending",
+      active_update_id: commit.update_id,
+      pending: [{ update_id: commit.update_id, status: "pending" }],
+    });
+    expect(reopened.stage(makeCommit(commit.update_id, "different-value"))).toEqual({
+      ok: false,
+      reason: "update_id_content_conflict",
+    });
+    const beforeResubmit: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(beforeResubmit.prepare("SELECT COUNT(*) AS count FROM j_commit_outbox").get()?.count).toBe(0);
+    beforeResubmit.close();
+
+    expect(reopened.stage(commit)).toMatchObject({ ok: true, status: "memory_commit_pending", revision: 1 });
+    const migratedOutbox: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    const outboxRow = migratedOutbox.prepare("SELECT content_digest, commit_json FROM j_commit_outbox WHERE update_id = ?")
+      .get(commit.update_id) as { content_digest: string; commit_json: string } | undefined;
+    expect(outboxRow?.content_digest).toBe(commit.content_digest);
+    expect(JSON.parse(outboxRow?.commit_json ?? "null")).toEqual(commit);
+    migratedOutbox.close();
+
+    expect(reopened.recoverPending(commit.update_id)).toMatchObject({
+      ok: true,
+      status: "ready",
+      update_id: commit.update_id,
+    });
+    expect(reopened.verify()).toBe(true);
+    reopened.close();
+
+    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    const event = JSON.parse(checked.prepare("SELECT event_payload_json FROM j_events WHERE revision = 1").get()?.event_payload_json as string) as Record<string, unknown>;
+    expect(event.schema_version).toBe("blue-tanuki.j-control-event.v1");
+    expect(checked.prepare("SELECT COUNT(*) AS count FROM j_events").get()?.count).toBe(2);
+    expect(checked.prepare("SELECT COUNT(*) AS count FROM m_events").get()?.count).toBe(1);
+    checked.close();
+  });
+
+  it("破損したlegacy ledgerはschema migration前に停止し、元のschemaを保つ", () => {
+    const coordinator = createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    });
+    const commit = makeCommit("legacy-corrupt-ledger", "synthetic-value");
+    expect(coordinator.stage(commit).ok).toBe(true);
+    coordinator.close();
+    downgradePendingEventToLegacyV1(databasePath);
+
+    const damaged: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+    damaged.prepare("UPDATE j_events SET event_payload_json = ? WHERE revision = 1").run("{torn");
+    damaged.close();
+    expect(() => createCoordinator({
+      private_state_root: directory,
+      database_path: databasePath,
+      j_approval_reader: approvingReader(),
+    })).toThrow("ledger_corrupt");
+
+    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(checked.prepare("SELECT schema_version FROM j_schema WHERE singleton = 1").get()?.schema_version).toBe(1);
+    expect(checked.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'j_commit_outbox'").get()?.count)
+      .toBe(0);
+    expect(checked.prepare("SELECT event_payload_json FROM j_events WHERE revision = 1").get()?.event_payload_json)
+      .toBe("{torn");
+    checked.close();
+  });
+
   it("Mの既存receiptがJ pendingのdigestと異なる場合は進行を止める", () => {
     const previousCommit = makeCommit("reused-id", "previous-value");
     const previousM = new MemoryUpdateLedger({
@@ -343,7 +427,7 @@ describe("J制御状態とM receipt再照合", () => {
     coordinator.close();
   });
 
-  it("Jの状態projectionがevent chainと合わなければ復帰・反映を開始しない", () => {
+  it("Jの破損projectionを検証済みevent chainから再構成し、未許可のM反映を始めない", () => {
     const coordinator = new JMemoryCommitCoordinator({
       private_state_root: directory,
       database_path: databasePath,
@@ -354,18 +438,33 @@ describe("J制御状態とM receipt再照合", () => {
     coordinator.close();
 
     const database: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
-    database.prepare("UPDATE j_state SET status = 'ready', active_update_id = NULL WHERE singleton = 1").run();
+    const canonicalBefore = database.prepare(
+      "SELECT event_id, revision, previous_event_digest, event_digest, event_payload_json FROM j_events ORDER BY revision",
+    ).all();
+    database.exec("UPDATE j_state SET revision = 0, event_digest = 'GENESIS', status = 'ready', active_update_id = NULL");
+    database.exec("DELETE FROM j_pending");
     database.close();
 
-    expect(() => new JMemoryCommitCoordinator({
+    const reopened = createCoordinator({
       private_state_root: directory,
       database_path: databasePath,
       j_approval_reader: approvingReader(),
-    })).toThrow("projection_mismatch");
+    });
+    expect(reopened.snapshot()).toMatchObject({
+      revision: 1,
+      status: "memory_commit_pending",
+      active_update_id: commit.update_id,
+      pending: [{ update_id: commit.update_id, status: "pending" }],
+    });
+    expect(reopened.verify()).toBe(true);
+    reopened.close();
 
     const check: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
     expect(check.prepare("SELECT COUNT(*) AS count FROM m_events").get()?.count).toBe(0);
     expect(check.prepare("SELECT COUNT(*) AS count FROM j_events").get()?.count).toBe(1);
+    expect(check.prepare(
+      "SELECT event_id, revision, previous_event_digest, event_digest, event_payload_json FROM j_events ORDER BY revision",
+    ).all()).toEqual(canonicalBefore);
     check.close();
   });
 
@@ -584,6 +683,32 @@ function makeCommit(updateId: string, value: unknown, expectedVersion = 0) {
     changes: [{ operation: "upsert" as const, record_id: "synthetic-fact", value }],
   };
   return { ...content, content_digest: memoryCommitContentDigest(content) };
+}
+
+function downgradePendingEventToLegacyV1(databasePath: string): void {
+  const database: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath);
+  const payload = database.prepare("SELECT event_payload_json FROM j_events WHERE revision = 1").get()?.event_payload_json;
+  if (typeof payload !== "string") throw new Error("legacy fixture event is missing");
+  const current = JSON.parse(payload) as Record<string, unknown>;
+  const body = { ...current, schema_version: "blue-tanuki.j-control-event.v1" };
+  delete body.event_digest;
+  delete body.delivery_envelope_digest;
+  const digest = createHash("sha256").update(canonicalJsonForTest(body)).digest("hex");
+  const stored = { ...body, event_digest: digest };
+  database.prepare("UPDATE j_events SET event_digest = ?, event_payload_json = ? WHERE revision = 1")
+    .run(digest, canonicalJsonForTest(stored));
+  database.prepare("UPDATE j_state SET event_digest = ? WHERE singleton = 1").run(digest);
+  database.exec("DROP TABLE j_commit_outbox");
+  database.exec("UPDATE j_schema SET schema_version = 1 WHERE singleton = 1");
+  database.close();
+}
+
+function canonicalJsonForTest(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonForTest).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) =>
+    `${JSON.stringify(key)}:${canonicalJsonForTest(record[key])}`).join(",")}}`;
 }
 
 function approvingReader(): JMemoryApprovalReader {

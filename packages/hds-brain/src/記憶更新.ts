@@ -1,5 +1,7 @@
 import {
   MTransactionStore,
+  PersistenceStoreError,
+  rebuildMemoryDerivedProjection,
   type JMemoryApprovalReader,
   type PersistenceHealth,
   type MemoryStoreSnapshot,
@@ -22,11 +24,24 @@ export class MemoryUpdateLedger {
     readonly j_approval_reader: JMemoryApprovalReader;
     readonly now?: () => Date;
   }) {
-    this.store = new MTransactionStore({
+    const storeOptions = {
       private_state_root: options.private_state_root,
       database_path: options.database_path,
       now: options.now,
-    });
+    };
+    try {
+      this.store = new MTransactionStore(storeOptions);
+    } catch (error) {
+      if (!(error instanceof PersistenceStoreError) || error.owner !== "M" || error.reason !== "projection_mismatch") {
+        throw error;
+      }
+      const rebuilt = rebuildMemoryDerivedProjection({
+        private_state_root: options.private_state_root,
+        database_path: options.database_path,
+      });
+      if (!rebuilt.ok) throw new PersistenceStoreError("M", rebuilt.reason);
+      this.store = new MTransactionStore(storeOptions);
+    }
     this.jApprovalReader = options.j_approval_reader;
   }
 

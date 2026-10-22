@@ -14,9 +14,9 @@
 | 最終出力 | `finalize_command_output.ts` → citation確認／J feedback／output audit。表示・history・audit projectionを第二のauthorityにしない。 |
 | 環境作用の状態 | Brokerのintent／invocation／receipt／outboxは環境実行の状態を所有する。Jの採否とは別に、現在のPermission・対象・承認・期限を検査する。 |
 
-Jのpending・制御状態は`制御状態.ts`、M内容の通常保存は`保存取引.ts`に集約される。`inspectControl`等の観測APIにも既存の承認済みpending更新をreconcileする経路があるため、名前だけでread-onlyと判断してRust shadowから呼び出さない。projection再構築・schema migration・backup restoreも保存入口として区別し、shadowへ渡すのは作用・正本書込みを持たない入力に限る。
+Jのpending・制御状態は`制御状態.ts`、M内容の通常保存は`保存取引.ts`に集約される。`inspectControl`等の観測APIにも既存の承認済みpending更新をreconcileする経路があるため、名前だけでread-onlyと判断してRust shadowから呼び出さない。J/Mの再open経路はcanonical event ledgerが完全に検証できた場合に限り、破損した派生行をledgerから再構成する。J schema v1の移行は書込み前と排他transaction内で旧ledger・projectionを再検証し、破損時は元schemaのまま停止する。旧pendingのpayloadは同一commit内容と現在検証済みのJ承認が再提示されるまでoutboxへ移さない。event ledger、Approval Gate、Jのwriter authorityはこの復旧で新規生成・変更しない。
 
-K-B2では、Jが明示選択・再照合した有限なoperation-result observationをdigestでC候補へ拘束し、J再照合→owner L3→専用M解釈版→次task再評価へ接続した。これはsyntheticな限定経路であり、`plan:reflect`は採用候補入力から除外した。meaning-update専用J/M storeはcanonical snapshot inventoryとinspectionへ追加済みだが、restore前quiescenceとrestore後のHDS hold／再観測consumerが未接続のため、これらのstoreを含むrestoreはfail-closedに保つ。旧5-store archiveはpartial inspectionだけを許し、7-store状態を証明できないためrestoreを拒否する。cross-store snapshotは独立取得でatomicではなく、全体復旧可能性の証拠ではない。次のBUILD_BATCHでは当該restore consumerを接続し、通常処理・復旧・projection再構築・migrationを含むwriter境界を再照合する。
+K-B2では、Jが明示選択・再照合した有限なoperation-result observationをdigestでC候補へ拘束し、J再照合→owner L3→専用M解釈版→次task再評価へ接続した。`plan:reflect`は採用候補入力から除外し、意味更新候補から採用・権限を自動生成しない。meaning-update専用J/M storeを含む7-store snapshot、restore前quiescence、HDS plan hold、restore後のComplete History再観測とJ/M reopen／reconcileはGateway経路に接続済み。旧5-store archiveはpartial inspectionだけを許し、restoreを拒否する。cross-store snapshotは独立取得でatomicではなく、全体復旧可能性の証拠ではない。QEB-KB03では、J/M適用後・最終監査記録前の停止窓について、同一proposal／candidate／source-observation digestと既存L3 lifecycleを照合して完了markerを再構成するconsumerを接続した。次のK-B3施工は、現行TypeScriptのC結果→意味更新候補のproducer/consumerを再観測し、意味計算とI/O・J/M確定のうち実際に結合した一辺を責任境界で抽出する。Rust shadowに作用権限やM writerを持たせない。
 
 ## 1. 目的
 

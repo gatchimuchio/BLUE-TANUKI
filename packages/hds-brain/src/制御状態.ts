@@ -171,14 +171,15 @@ export class JMemoryCommitCoordinator {
       now: options.now,
     });
     try {
-      store = new JControlStateStore({
+      const storeOptions = {
         private_state_root: options.private_state_root,
         database_path: options.database_path,
         shared_memory_database: options.memory_database_path === undefined ||
           resolvePrivateStateDatabasePath(options.private_state_root, options.memory_database_path) ===
             resolvePrivateStateDatabasePath(options.private_state_root, options.database_path),
         now: options.now,
-      });
+      };
+      store = openJControlStateStore(storeOptions);
       this.store = store;
     } catch (error) {
       this.memoryLedger.close();
@@ -279,6 +280,23 @@ export class JMemoryCommitCoordinator {
     this.closed = true;
     this.store.close();
     this.memoryLedger.close();
+  }
+}
+
+/** Rebuild only derived J rows when the canonical event ledger verifies. */
+function openJControlStateStore(options: ConstructorParameters<typeof JControlStateStore>[0]): JControlStateStore {
+  try {
+    return new JControlStateStore(options);
+  } catch (error) {
+    if (!(error instanceof PersistenceStoreError) || error.owner !== "J" || error.reason !== "projection_mismatch") {
+      throw error;
+    }
+    const rebuilt = rebuildJControlProjection({
+      private_state_root: options.private_state_root,
+      database_path: options.database_path,
+    });
+    if (!rebuilt.ok) throw new PersistenceStoreError("J", rebuilt.reason);
+    return new JControlStateStore(options);
   }
 }
 
@@ -1065,9 +1083,15 @@ function initializeJStorageSchema(database: DatabaseSyncType): void {
   if (schemaExists) {
     if (verifyJTableSchema(database)) return;
     if (!verifyLegacyJTableSchema(database)) throw new PersistenceStoreError("J", "schema_mismatch");
+    if (!verifyNoJRecoveryTriggers(database)) throw new PersistenceStoreError("J", "schema_mismatch");
+    const legacyInspection = inspectJDatabase(database);
+    if (!legacyInspection.ok) throw new PersistenceStoreError("J", legacyInspection.reason);
     database.exec("BEGIN EXCLUSIVE");
     try {
       if (!verifyLegacyJTableSchema(database)) throw new PersistenceStoreError("J", "schema_mismatch");
+      const lockedInspection = inspectJDatabase(database);
+      if (!lockedInspection.ok) throw new PersistenceStoreError("J", lockedInspection.reason);
+      if (!verifyNoJRecoveryTriggers(database)) throw new PersistenceStoreError("J", "schema_mismatch");
       database.exec("CREATE TABLE j_commit_outbox (update_id TEXT PRIMARY KEY, content_digest TEXT NOT NULL CHECK (length(content_digest) = 64), commit_json TEXT NOT NULL)");
       database.prepare("UPDATE j_schema SET schema_version = ? WHERE singleton = 1").run(J_STORAGE_SCHEMA_VERSION);
       database.exec("COMMIT");

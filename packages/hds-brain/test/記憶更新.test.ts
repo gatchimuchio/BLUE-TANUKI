@@ -177,14 +177,6 @@ describe("M記憶更新取引", () => {
     damaged.exec("DELETE FROM m_updates");
     damaged.close();
 
-    expect(rebuildMemoryDerivedProjection({
-      private_state_root: directory,
-      database_path: databasePath,
-    })).toEqual({ ok: true, revision: 2, event_count: 2 });
-    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
-    expect(checked.prepare("SELECT event_payload_json FROM m_events ORDER BY revision").all()).toEqual(canonicalBefore);
-    checked.close();
-
     const reopened = new MemoryUpdateLedger({
       private_state_root: directory,
       database_path: databasePath,
@@ -198,6 +190,9 @@ describe("M記憶更新取引", () => {
     });
     expect(reopened.receipt("repair-m-2")).toMatchObject({ revision: 2 });
     reopened.close();
+    const checked: InstanceType<typeof DatabaseSync> = new DatabaseSync(databasePath, { readOnly: true });
+    expect(checked.prepare("SELECT event_payload_json FROM m_events ORDER BY revision").all()).toEqual(canonicalBefore);
+    checked.close();
   });
 
   it("Mの破損末尾は再構築せず、破損payloadをそのまま保つ", () => {
