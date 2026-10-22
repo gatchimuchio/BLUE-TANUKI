@@ -10,9 +10,9 @@
 
 K-B0／K-B1で現行入口、通常・復旧writer、I-01対象guard、I-03 main appから通常Computeへのbudget設定を照合・接続した。E2E-01とK-B2では、合成仕事のC→J→L3→M→次task再評価を限定接続し、meaning-update専用J/Mを7-store復旧経路へ接続した。これらは部分経路の証拠であり、製品全体の結合形状を示さない。
 
-K-B3では`meaning_update_candidate.ts`に続き、承認済み候補からM record／interpretationを作る純粋処理を`meaning_update_semantics.ts`へ、解釈のJSON正規化・検査・content digestを`memory_interpretation_semantics.ts`へ分離した。永続writer、Approval Gate、監査、現在M再読込はTypeScript HDS-BRAINの現行境界に残す。content review→L3→proposal／candidate／target／source-observation digest照合→J/M適用のコード経路は接続済みと確認した。HDS 5 files／10 tests、HDS／Gateway typecheck、HDS build、standalone smokeはPASS。Gateway smokeはWindows実行で15秒以内にhealthへ到達せず、Gateway統合経路は未確認のまま保持する。Rust shadow、C08.03 provider、OD-03 live、他repo変更、P13 owner GOは開始していない。
+K-B3ではC候補評価を`meaning_update_candidate.ts`、承認済み候補からM record／interpretationを作る純粋処理を`meaning_update_semantics.ts`へ、解釈JSON正規化・検査・content digestを`memory_interpretation_semantics.ts`へ分離した。今回、引用レビューからM解釈依存を組み立て、現在Mと検証済み監査履歴から再評価候補を導出する意味処理を`memory_judgment_reassessment_candidate.ts`へ移した。controllerが監査・現在Mを取得し、Approval Gate／L3／監査書込／J-M writerはTypeScript HDS-BRAINに残る。HDS focused 3 files／5 tests、HDS typecheck/build/standalone、Gateway typecheck/buildはPASS。Gateway process smokeは前バッチでhealth readyに至らず統合実行未確認。今回の抽出で新しい利用者仕事や全体`SYSTEM_SHAPED`／`BUILD_COVERED`は成立しない。K-B3全体の責任抽出完了、C08.03、OD-03、他repo変更、P13 GOは未成立／保留。
 
-次のBUILD_BATCHは、controller内のmemory-judgment reassessment候補導出を純粋意味関数へ分離し、検証済み監査・現在Mの取得と、L3／J writerを現行controllerに保持すること。各局所経路の確認をQE_QC／QE_QAや全体完了へ昇格させない。
+次のBUILD_BATCHはK-B4のRust最小Runtime J/M processと認証IPCを無作用shadowとして実接続する。現行TypeScript HDS-BRAINを唯一のauthority／writerとして保ち、Rustはeffect・正本M書込みを行わない。各局所経路の確認をQE_QC／QE_QAや全体完了へ昇格させない。
 
 ## 維持する境界
 

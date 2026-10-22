@@ -20,9 +20,9 @@ I-01のroot直下の二重slashによる広域対象ガードの抜けを修正�
 
 K-B2では、Jが明示選択・再照合した有限なoperation-result observationをdigestでC候補へ拘束し、owner L3、M解釈更新、次taskの再評価までを限定接続した。`plan:reflect`は採用候補入力から除外する。meaning-update専用J/M storeを含む7-store復旧境界、restore前quiescence、HDS plan hold、restore後の再観測とreconcileも接続済みで、旧5-store snapshotからのrestoreは拒否する。
 
-K-B3では、C意味更新候補のparse・発行元契約・digest・M参照評価・owner-review適格性を`meaning_update_candidate.ts`へ分離した。今回、承認済み候補からMレコード／解釈投影／根拠参照を作る純粋変換を`meaning_update_semantics.ts`へ、解釈content digestとJSON正規化・検査を`memory_interpretation_semantics.ts`へ分離し、M writerとcontrollerはこれらの意味関数を呼ぶ構造にした。新しい意味モジュールはGateway、SQLite、J/M coordinatorをimportしない。L3、監査、pending候補、J/M writerは現行TypeScript HDS-BRAINに保持する。
+K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_update_candidate.ts`、承認候補からMレコード／解釈投影を作る処理を`meaning_update_semantics.ts`、解釈content digestとJSON正規化・検査を`memory_interpretation_semantics.ts`へ分離した。今回、引用レビューからM解釈依存を組み立て、現在J判断と過去監査・M履歴の整合を評価してowner再評価候補を作る処理を`memory_judgment_reassessment_candidate.ts`へ分離した。controllerは監査検証とM／audit snapshot取得を担当し、候補の意味評価は供給された値だけで行う。L3、監査の書込、J/M writerは現行TypeScript HDS-BRAINに保持する。これらの純粋意味モジュールはGateway／SQLiteをruntime importせず、新processや第二authorityを作らない。
 
-コード上、Gatewayのno-store content reviewからL3承認、同一proposal／candidate／target／source-observation digestの再照合、M適用、最終監査markerまでの接続を追跡した。HDS 5 files／10 tests、HDS／Gateway typecheck、HDS build、standalone smokeはPASS。Gatewayのmeaning-update smokeは起動後15秒以内にhealthへ到達せず、統合経路の実行証拠は未成立。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。次のBUILD_BATCHではcontroller内のmemory-judgment reassessment候補導出を純粋意味処理として分離し、監査・現在Mの読取、L3、writer境界を維持する。
+コード上、Gatewayのno-store content reviewからL3承認、同一proposal／candidate／target／source-observation digestの再照合、M適用、最終監査markerまでの既存接続を維持した。HDS 3 files／5 tests、HDS typecheck/build、HDS standalone smoke、Gateway typecheck/buildはPASS。`pnpm docs:check`はこの記録更新後に実行する。Gateway meaning-update process smokeは前バッチで起動後15秒以内にhealthへ到達せず、統合実行の証拠は未成立のまま。今回の経路抽出は既存責任境界の整理であり、新しい利用者仕事や製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。K-B3全体の抽出完了は未確定、QE_QC／QE_QAは未開始。次のBUILD_BATCHはK-B4の無作用Rust J/M最小核と認証IPCを、現行TypeScript単独writerを保ったshadow境界として実接続する。
 
 旧Jの現writerは確認なしに二重化・移管しない。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラ別repo変更、P13公開・出荷GOは保留する。試験用一仕事は製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を自動成立させず、限定testを全suiteや実機の成功へ転記しない。
 
