@@ -148,12 +148,19 @@ function routeInternalMeaningUpdateAdoption(req: InboundRequest, args: Record<st
       req.content !== "Owner submitted a C meaning-update candidate for L3 review.") {
     return { type: "noop", reason: "meaning update adoption requires a trusted Gateway approval request" };
   }
-  const expectedKeys = ["proposal_digest", "candidate_digest", "target_record_id", "target_version"];
-  if (Object.keys(args).length !== expectedKeys.length || expectedKeys.some((key) => !Object.hasOwn(args, key)) ||
+  const requiredKeys = ["proposal_digest", "candidate_digest", "target_record_id", "target_version"];
+  const keys = Object.keys(args).sort();
+  if (keys.join(",") !== [...requiredKeys].sort().join(",") &&
+      keys.join(",") !== [...requiredKeys, "source_observation_digest"].sort().join(",")) {
+    return { type: "noop", reason: "meaning update adoption arguments are invalid" };
+  }
+  if (requiredKeys.some((key) => !Object.hasOwn(args, key)) ||
       typeof args.proposal_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.proposal_digest) ||
       typeof args.candidate_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.candidate_digest) ||
       typeof args.target_record_id !== "string" || !/^F:[A-Za-z0-9_.:-]{1,96}$/.test(args.target_record_id) ||
-      typeof args.target_version !== "string" || !/^[a-f0-9]{64}$/.test(args.target_version)) {
+      typeof args.target_version !== "string" || !/^[a-f0-9]{64}$/.test(args.target_version) ||
+      (args.source_observation_digest !== undefined &&
+        (typeof args.source_observation_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.source_observation_digest)))) {
     return { type: "noop", reason: "meaning update adoption arguments are invalid" };
   }
   return { type: "tool_call", tool_name: "memory.meaning.adopt", arguments: { ...args },

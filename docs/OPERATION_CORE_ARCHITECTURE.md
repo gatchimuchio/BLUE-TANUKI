@@ -1,6 +1,6 @@
 # BLUE-TANUKI Operation Core Architecture
 
-## 現行の責任境界（2026-10-22再照合）
+## 現行の責任境界（2026-10-23再照合）
 
 現行工程は[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)が指す正本に従う。Operation Coreは操作を表す下流契約であり、上位のHDSの意味責務やJ/Mの状態所有を代行しない。以下は現在のTypeScript実装の呼出し・保存入口をコードで対応付けた記録であり、Rust移管、全体実行、対象別QAの証拠ではない。後段の移行設計は成立済み機能と区別する。
 
@@ -16,7 +16,7 @@
 
 Jのpending・制御状態は`制御状態.ts`、M内容の通常保存は`保存取引.ts`に集約される。`inspectControl`等の観測APIにも既存の承認済みpending更新をreconcileする経路があるため、名前だけでread-onlyと判断してRust shadowから呼び出さない。projection再構築・schema migration・backup restoreも保存入口として区別し、shadowへ渡すのは作用・正本書込みを持たない入力に限る。
 
-残る接続点は、有限な観測からの意味更新候補を既存L3・M解釈版・次の仕事へつなぐ経路と、目的／意味専用J/M storeを含む復旧の収容範囲である。既存`plan:reflect`の非採用・非権限境界を自動更新へ変更しない。現行backup indexが持つ結果M／Broker／操作計画／cronの保存だけから、意味状態全体の復旧を成立済みとは扱わない。
+K-B2では、Jが明示選択・再照合した有限なoperation-result observationをdigestでC候補へ拘束し、J再照合→owner L3→専用M解釈版→次task再評価へ接続した。これはsyntheticな限定経路であり、`plan:reflect`は採用候補入力から除外した。meaning-update専用J/M storeはcanonical snapshot inventoryとinspectionへ追加済みだが、restore前quiescenceとrestore後のHDS hold／再観測consumerが未接続のため、これらのstoreを含むrestoreはfail-closedに保つ。旧5-store archiveはpartial inspectionだけを許し、7-store状態を証明できないためrestoreを拒否する。cross-store snapshotは独立取得でatomicではなく、全体復旧可能性の証拠ではない。次のBUILD_BATCHでは当該restore consumerを接続し、通常処理・復旧・projection再構築・migrationを含むwriter境界を再照合する。
 
 ## 1. 目的
 

@@ -25,6 +25,8 @@ const CANONICAL_STORE_RESTORE_CONSUMERS: Record<CanonicalStateStoreKey, readonly
   broker: [],
   operation_plans: [],
   cron_events: [],
+  meaning_update_j_control: ["MeaningUpdateMemoryConsumer J state reader/writer"],
+  meaning_update_m_state: ["MeaningUpdateMemoryConsumer M state reader/writer"],
 };
 
 /**

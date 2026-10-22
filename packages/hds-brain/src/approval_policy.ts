@@ -176,9 +176,12 @@ export function meaningUpdateAdoptionApprovalTarget(input: {
   candidate_digest: string;
   target_record_id: string;
   target_version: string;
+  source_observation_digest?: string;
 }): string {
-  return ["memory.meaning.adopt", input.proposal_digest, input.candidate_digest,
-    input.target_record_id, input.target_version].join(":");
+  const fields = ["memory.meaning.adopt", input.proposal_digest, input.candidate_digest,
+    input.target_record_id, input.target_version];
+  if (input.source_observation_digest !== undefined) fields.push(input.source_observation_digest);
+  return fields.join(":");
 }
 
 export function memoryJudgmentReassessmentApprovalTarget(input: {
@@ -443,8 +446,13 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
         ? args.target_record_id : "invalid-target-record";
       const target_version = typeof args.target_version === "string" && /^[a-f0-9]{64}$/.test(args.target_version)
         ? args.target_version : "invalid-target-version";
+      const sourceObservationDigest = Object.hasOwn(args, "source_observation_digest")
+        ? typeof args.source_observation_digest === "string" && /^[a-f0-9]{64}$/.test(args.source_observation_digest)
+          ? args.source_observation_digest : "invalid-source-observation-digest"
+        : undefined;
       return { target_scope: "task_type", target: meaningUpdateAdoptionApprovalTarget({
         proposal_digest, candidate_digest, target_record_id, target_version,
+        ...(sourceObservationDigest !== undefined ? { source_observation_digest: sourceObservationDigest } : {}),
       }) };
     }
     if (command.payload.tool_name === "memory.citation.reassess") {

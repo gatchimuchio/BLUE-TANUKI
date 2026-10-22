@@ -1348,6 +1348,8 @@ const RECOVERY_SCOPE_DEPENDENCIES: Readonly<Record<CanonicalStateStoreKey, reado
   broker: ["broker", "delivery"],
   operation_plans: ["operation_plan"],
   cron_events: ["cron_approval"],
+  meaning_update_j_control: ["memory"],
+  meaning_update_m_state: ["memory"],
 };
 
 async function backupIdForDigest(env: NodeJS.ProcessEnv, requestedDigest: string): Promise<string | null> {
@@ -1630,7 +1632,7 @@ export async function inspectRecoveryScopeApplicability(
     };
   }
   const snapshotStatuses = new Map(backup.canonical_state_stores.map((entry) => [entry.store_key, entry.status]));
-  if (snapshotStatuses.size !== 5 || backup.canonical_state_cross_store_atomic !== false) {
+  if (snapshotStatuses.size !== CANONICAL_STATE_STORE_PATHS.length || backup.canonical_state_cross_store_atomic !== false) {
     return emptyRecoveryScopeApplicability("store_unverified", baseRequest);
   }
 

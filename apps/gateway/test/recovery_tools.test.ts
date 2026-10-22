@@ -144,6 +144,10 @@ describe("Recovery mutation tool boundary", () => {
     expect(canonicalStoreRestoreConsumersNotQuiesced("broker")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("cron_events")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("operation_plans")).toEqual([]);
+    expect(canonicalStoreRestoreConsumersNotQuiesced("meaning_update_j_control")).toContain(
+      "MeaningUpdateMemoryConsumer J state reader/writer");
+    expect(canonicalStoreRestoreConsumersNotQuiesced("meaning_update_m_state")).toContain(
+      "MeaningUpdateMemoryConsumer M state reader/writer");
     expect(canonicalStoreRestoreConsumersNotQuiesced(undefined)).toEqual([]);
 
     const restore = createRecoveryMutationTools({}, undefined, { canonicalStoreRestoreQuiesced: () => false })

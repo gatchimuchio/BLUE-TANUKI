@@ -709,6 +709,7 @@ export type AuditRecord =
   | { kind: "operation_plan"; event: string; request_id: string | null; command_id: string; projection_digest: string;
       used_for_authority: false; timestamp: number; proposal_digest?: string; candidate_digest?: string;
       target_digest?: string; review_status?: string; approval_status?: "approved";
+      source_observation_digest?: string;
       memory_application_status?: "applied" | "blocked"; follow_up_action_status?: "unconfirmed"; reason?: string;
       citation_request_id?: string; citation_command_id?: string; citation_audit_digest?: string;
       target_record_id?: string; target_version?: string; interpretation_id?: string; judgment_ref?: string;

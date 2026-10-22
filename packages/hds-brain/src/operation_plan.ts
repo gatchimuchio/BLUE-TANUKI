@@ -144,7 +144,8 @@ export interface OperationPlanRecoveryEvidenceProvenance {
   readonly command_id_digest: string | null;
   readonly operation_digest: string | null;
   readonly result_digest: string | null;
-  readonly restore_store_key?: "j_control" | "m_state" | "broker" | "operation_plans" | "cron_events" | null;
+  readonly restore_store_key?: "j_control" | "m_state" | "meaning_update_j_control" | "meaning_update_m_state" |
+    "broker" | "operation_plans" | "cron_events" | null;
   readonly restore_backup_id_digest: string | null;
   readonly restore_scope_plan_digest: string | null;
   readonly restore_scope_task_digest?: string | null;
@@ -253,7 +254,8 @@ function recoveryEvidenceProvenance(value: unknown): OperationPlanRecoveryEviden
       !digestOrNull(raw.command_id_digest) || !digestOrNull(raw.operation_digest) ||
       !digestOrNull(raw.result_digest) || !digestOrNull(raw.restore_backup_id_digest) ||
       (raw.restore_store_key !== undefined && raw.restore_store_key !== null &&
-        !["j_control", "m_state", "broker", "operation_plans", "cron_events"].includes(String(raw.restore_store_key))) ||
+        !["j_control", "m_state", "meaning_update_j_control", "meaning_update_m_state", "broker", "operation_plans", "cron_events"]
+          .includes(String(raw.restore_store_key))) ||
       (raw.restore_scope_plan_digest !== undefined && !digestOrNull(raw.restore_scope_plan_digest)) ||
       (raw.restore_scope_task_digest !== undefined && !digestOrNull(raw.restore_scope_task_digest)) ||
       (raw.restore_scope_mode !== undefined && !["plan_scoped_merge_v1", "task_scoped_merge_v1"].includes(String(raw.restore_scope_mode))) ||
@@ -1437,7 +1439,9 @@ export class OperationPlanLedger {
       const hold = this.recoveryHolds.get(operationPlanDigest(plan.revisions[0]!.plan.plan_id));
       if (!hold) return false;
       if (hold.reason !== "held_unverified" || hold.provenance.source !== "recovery_restore") return true;
-      return hold.provenance.restore_store_key !== "j_control" && hold.provenance.restore_store_key !== "m_state";
+      return hold.provenance.restore_store_key !== "j_control" && hold.provenance.restore_store_key !== "m_state" &&
+        hold.provenance.restore_store_key !== "meaning_update_j_control" &&
+        hold.provenance.restore_store_key !== "meaning_update_m_state";
     });
     const previous = new Map(this.recoveryHolds);
     this.recoveryHolds.clear();

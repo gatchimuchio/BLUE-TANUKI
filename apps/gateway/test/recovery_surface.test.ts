@@ -12,7 +12,12 @@ import {
   type OperationPlan,
   type OperationPlanCheckpoint,
 } from "@blue-tanuki/protocol";
-import { captureCanonicalStateSnapshots, inspectCanonicalStateSnapshots } from "../src/canonical_state_backup.js";
+import {
+  captureCanonicalStateSnapshots,
+  inspectCanonicalStateSnapshots,
+  inspectCanonicalStateStoreTarget,
+  restoreCanonicalStateSnapshotStore,
+} from "../src/canonical_state_backup.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import {
@@ -62,6 +67,8 @@ const CANONICAL_DATABASES = [
   ["broker", path.join("execution-intents", "executor.sqlite")],
   ["operation_plans", path.join("operation-plans", "j-state.sqlite")],
   ["cron_events", path.join("cron-events", "cron-events.sqlite")],
+  ["meaning_update_j_control", path.join("meaning-update-memory", "j-control.sqlite")],
+  ["meaning_update_m_state", path.join("meaning-update-memory", "m-state.sqlite")],
 ] as const;
 
 describe("task-scoped M restore-point correlation", () => {
@@ -258,6 +265,72 @@ function recoveryUnboundShellObservation(suffix: string) {
   };
 }
 
+describe("canonical state target inspection", () => {
+  it("reports a missing nested store directory as absent without creating it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-missing-canonical-store-"));
+    try {
+      await mkdir(path.join(root, "private-state"), { recursive: true });
+      expect(await inspectCanonicalStateStoreTarget(root, "meaning_update_j_control")).toEqual({
+        status: "not_present",
+        bytes: null,
+        sha256: null,
+      });
+      expect(await exists(path.join(root, "private-state", "meaning-update-memory"))).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a symlinked store directory unverified", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-symlinked-canonical-store-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-outside-canonical-store-"));
+    try {
+      await mkdir(path.join(root, "private-state"), { recursive: true });
+      await symlink(outside, path.join(root, "private-state", "meaning-update-memory"), "dir");
+      expect(await inspectCanonicalStateStoreTarget(root, "meaning_update_j_control")).toEqual({
+        status: "unverified",
+        bytes: null,
+        sha256: null,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("legacy canonical snapshot inspection", () => {
+  it("keeps five-store archives inspectable as partial and blocks restoration", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-legacy-canonical-snapshot-"));
+    const pack = path.join(root, "pack");
+    const target = path.join(root, "target");
+    try {
+      await mkdir(pack);
+      await mkdir(path.join(target, "private-state"), { recursive: true });
+      await createCanonicalDatabase(root, CANONICAL_DATABASES[0]![1], "legacy-j-control");
+      const captured = await captureCanonicalStateSnapshots(root, pack);
+      const legacy = {
+        ...captured,
+        expected_store_count: 5 as const,
+        entries: captured.entries.slice(0, 5),
+      };
+
+      await expect(inspectCanonicalStateSnapshots(pack, legacy)).resolves.toMatchObject({
+        coverage: "partial",
+        expected_store_count: 7,
+        captured_store_count: 1,
+        verified_store_count: 1,
+        missing_store_count: 4,
+        unverified_store_count: 2,
+      });
+      await expect(restoreCanonicalStateSnapshotStore(target, pack, legacy, "j_control"))
+        .rejects.toThrow("canonical_state_restore_store_unverified");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("buildRecoverySnapshot", () => {
   it("reports env backup inventory and recovery control boundaries without exposing env contents", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-"));
@@ -430,10 +503,10 @@ describe("buildRecoverySnapshot", () => {
         backup_id_digest: createHash("sha256").update(backup.backup_id!).digest("hex"),
         coverage: "complete_for_configured_targets",
         canonical_state_coverage: "none_present",
-        canonical_state_expected_store_count: 5,
+        canonical_state_expected_store_count: 7,
         canonical_state_snapshot_count: 0,
         canonical_state_verified_store_count: 0,
-        canonical_state_missing_store_count: 5,
+        canonical_state_missing_store_count: 7,
         canonical_state_unverified_store_count: 0,
         canonical_state_store_consistency: "independent_sqlite_online_snapshots",
         canonical_state_cross_store_atomic: false,
@@ -443,6 +516,8 @@ describe("buildRecoverySnapshot", () => {
           { store_key: "broker", status: "not_present" },
           { store_key: "operation_plans", status: "not_present" },
           { store_key: "cron_events", status: "not_present" },
+          { store_key: "meaning_update_j_control", status: "not_present" },
+          { store_key: "meaning_update_m_state", status: "not_present" },
         ],
         used_for_authority: false,
         may_execute: false,
@@ -956,6 +1031,8 @@ describe("buildRecoverySnapshot", () => {
         ["broker", "not_present"],
         ["operation_plans", "not_present"],
         ["cron_events", "not_present"],
+        ["meaning_update_j_control", "not_present"],
+        ["meaning_update_m_state", "not_present"],
       ]);
       expect(await readFile(manifestPath, "utf8")).toBe(manifestBefore);
       expect(await readFile(archive!.archive_path!, "utf8")).toBe(originalArchive);
@@ -1019,7 +1096,7 @@ describe("buildRecoverySnapshot", () => {
         store_consistency: "independent_sqlite_online_snapshots",
         cross_store_atomic: false,
       });
-      expect(manifest.canonical_state_snapshot.entries).toHaveLength(5);
+      expect(manifest.canonical_state_snapshot.entries).toHaveLength(7);
       expect(manifest.canonical_state_snapshot.entries.every((entry) => entry.status === "verified")).toBe(true);
       const snapshotPaths = manifest.canonical_state_snapshot.entries.map((entry) => path.join(packDir, entry.archive_rel_path!));
       const snapshotBytesBefore = await Promise.all(snapshotPaths.map((filepath) => readFile(filepath)));
@@ -1028,9 +1105,9 @@ describe("buildRecoverySnapshot", () => {
       expect(inspection).toMatchObject({
         status: "verified",
         canonical_state_coverage: "complete",
-        canonical_state_expected_store_count: 5,
-        canonical_state_snapshot_count: 5,
-        canonical_state_verified_store_count: 5,
+        canonical_state_expected_store_count: 7,
+        canonical_state_snapshot_count: 7,
+        canonical_state_verified_store_count: 7,
         canonical_state_missing_store_count: 0,
         canonical_state_unverified_store_count: 0,
         canonical_state_store_consistency: "independent_sqlite_online_snapshots",
@@ -1042,6 +1119,8 @@ describe("buildRecoverySnapshot", () => {
         ["broker", "verified"],
         ["operation_plans", "verified"],
         ["cron_events", "verified"],
+        ["meaning_update_j_control", "verified"],
+        ["meaning_update_m_state", "verified"],
       ]);
       for (let index = 0; index < snapshotPaths.length; index += 1) {
         expect(await readFile(snapshotPaths[index]!)).toEqual(snapshotBytesBefore[index]);
@@ -1096,7 +1175,7 @@ describe("buildRecoverySnapshot", () => {
 
       const manifest = await capture;
       expect(manifest.cross_store_atomic).toBe(false);
-      expect(manifest.entries).toHaveLength(5);
+      expect(manifest.entries).toHaveLength(7);
       expect(manifest.entries.every((entry) => entry.status === "snapshot_failed")).toBe(true);
       expect(await readdir(path.join(packDirectory, "canonical-state"))).toEqual([]);
       expect(readCanonicalDatabase(memoryPath)).toEqual(["before-m_state", "changed-during-capture"]);
@@ -1108,7 +1187,7 @@ describe("buildRecoverySnapshot", () => {
         captured_store_count: 0,
         verified_store_count: 0,
         missing_store_count: 0,
-        unverified_store_count: 5,
+        unverified_store_count: 7,
         store_consistency: "independent_sqlite_online_snapshots",
         cross_store_atomic: false,
       });
@@ -1143,7 +1222,7 @@ describe("buildRecoverySnapshot", () => {
       const newStorePath = await createCanonicalDatabase(stateRoot, newlyCreatedStore[1], "created-during-capture");
       const manifest = await capture;
 
-      expect(manifest.entries).toHaveLength(5);
+      expect(manifest.entries).toHaveLength(7);
       expect(manifest.entries.every((entry) => entry.status === "snapshot_failed")).toBe(true);
       expect(await readdir(path.join(packDirectory, "canonical-state"))).toEqual([]);
       expect(readCanonicalDatabase(newStorePath)).toEqual(["created-during-capture"]);
@@ -1154,7 +1233,7 @@ describe("buildRecoverySnapshot", () => {
         captured_store_count: 0,
         verified_store_count: 0,
         missing_store_count: 0,
-        unverified_store_count: 5,
+        unverified_store_count: 7,
         cross_store_atomic: false,
       });
     } finally {
@@ -1185,10 +1264,10 @@ describe("buildRecoverySnapshot", () => {
       expect(inspection).toMatchObject({
         status: "verified",
         canonical_state_coverage: "partial",
-        canonical_state_expected_store_count: 5,
+        canonical_state_expected_store_count: 7,
         canonical_state_snapshot_count: 2,
         canonical_state_verified_store_count: 2,
-        canonical_state_missing_store_count: 2,
+        canonical_state_missing_store_count: 4,
         canonical_state_unverified_store_count: 1,
         canonical_state_cross_store_atomic: false,
       });
@@ -1198,6 +1277,8 @@ describe("buildRecoverySnapshot", () => {
         ["broker", "verified"],
         ["operation_plans", "not_present"],
         ["cron_events", "not_present"],
+        ["meaning_update_j_control", "not_present"],
+        ["meaning_update_m_state", "not_present"],
       ]);
       expect(JSON.stringify(inspection)).not.toContain(corruptPath);
       expect(JSON.stringify(inspection)).not.toContain("not a SQLite database");

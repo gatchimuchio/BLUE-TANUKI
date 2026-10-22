@@ -12,7 +12,7 @@ rev3.0 K-B0／K-B1のコード再照合で、現在の入口とJ/Mの通常・�
 
 E2E-01の同一owner WebChat synthetic経路は、委任目的のL3確認・J/M反映、再起動後の再読込、検索・receipt/M、同一taskの返信・再計画まで局所確認した。K-B2では現行M引用付き`plan:compute`から、固定4 worker＋親C計算、Jの未実行計画、別L3確認、隔離file.delete、結果receipt/Mまでのconsumer接続を加えた。Executorは選択済み引用／観測のlocal P版を保持して有限agent delegationを実行する。これは合成fixtureによる一経路の証拠で、実Provider・製品全体の結合形状・品質保証を示さない。
 
-次は有限なoperation-result observationを意味更新候補へ結び、既存L3採否→M解釈版→次の仕事へ通す。`plan:reflect`の非採用境界を維持し、反映候補から意味更新採用や権限を生成しない。目的／意味専用J/M storeのbackup収容と、観測APIにも含まれるpending reconcileは未解消の接続・移管条件として扱う。Rustのsingle-writer cutoverは比較、停止、未決作用、rollback、権限境界が成立するまで行わない。
+K-B2では、Jが明示選択・再照合した有限なoperation-result observationから、digest拘束されたC意味更新候補、J再照合、owner L3、M解釈更新、次taskの再評価までを限定接続した。`plan:reflect`は除外し、意味更新候補から採用や権限を自動生成しない。meaning-update専用J/M storeを7-store canonical snapshot inventoryへ加えたが、restore前quiescence・restore後のHDS hold／再観測consumerは未接続で、復元時はfail-closedの`BUILD_GAP`。従来の5-store snapshotはpartial inspectionに限り、復元を拒否する。次のBUILD_BATCHはこのrestore consumer接続を対象とし、観測APIのpending reconcile、projection再構築、migration writerを含む単独writerの網羅を確認する。Rustのsingle-writer cutoverは比較、停止、未決作用、rollback、権限境界が成立するまで行わない。
 
 ## 維持する境界
 

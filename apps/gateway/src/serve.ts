@@ -399,13 +399,19 @@ function getMeaningUpdateAdoptionArguments(command: ExecuteCommand): MeaningUpda
   if (command.type !== "tool_call" || command.payload.tool_name !== "memory.meaning.adopt") return null;
   const args = command.payload.arguments;
   const keys = Object.keys(args).sort();
-  if (keys.join(",") !== ["candidate_digest", "proposal_digest", "target_record_id", "target_version"].join(",") ||
+  const requiredKeys = ["candidate_digest", "proposal_digest", "target_record_id", "target_version"].sort();
+  if (keys.join(",") !== requiredKeys.join(",") &&
+      keys.join(",") !== [...requiredKeys, "source_observation_digest"].sort().join(",")) return null;
+  if (
       typeof args.proposal_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.proposal_digest) ||
       typeof args.candidate_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.candidate_digest) ||
       typeof args.target_record_id !== "string" || !/^F:[A-Za-z0-9_.:-]{1,96}$/.test(args.target_record_id) ||
-      typeof args.target_version !== "string" || !/^[a-f0-9]{64}$/.test(args.target_version)) return null;
+      typeof args.target_version !== "string" || !/^[a-f0-9]{64}$/.test(args.target_version) ||
+      (args.source_observation_digest !== undefined &&
+        (typeof args.source_observation_digest !== "string" || !/^[a-f0-9]{64}$/.test(args.source_observation_digest)))) return null;
   return { proposal_digest: args.proposal_digest, candidate_digest: args.candidate_digest,
-    target_record_id: args.target_record_id, target_version: args.target_version };
+    target_record_id: args.target_record_id, target_version: args.target_version,
+    ...(typeof args.source_observation_digest === "string" ? { source_observation_digest: args.source_observation_digest } : {}) };
 }
 
 function getMemoryJudgmentReassessmentArguments(command: ExecuteCommand): MemoryJudgmentReassessmentArguments | null {
@@ -716,6 +722,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   };
   const canonicalStoreRestoreNeedsOperationPlanHold = startupRecoveryObservation.operation === "restore" &&
     (startupRecoveryObservation.store_key === null ||
+      startupRecoveryObservation.store_key === "meaning_update_j_control" ||
+      startupRecoveryObservation.store_key === "meaning_update_m_state" ||
       ((startupRecoveryObservation.store_key === "j_control" || startupRecoveryObservation.store_key === "m_state" ||
         startupRecoveryObservation.store_key === "cron_events") &&
         (startupRecoveryObservation.status !== "matched" ||
@@ -2522,6 +2530,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       const current = hds.getMeaningUpdateProposalForOwnerReview(proposal.source_command_id);
       if (!args || !current || current.proposal_digest !== proposal.proposal_digest ||
           args.proposal_digest !== proposal.proposal_digest || args.candidate_digest !== current.proposal.candidate_digest ||
+          args.source_observation_digest !== current.source_observation_binding?.digest ||
           args.target_record_id !== current.proposal.target_reference.record_id ||
           args.target_version !== current.proposal.target_reference.version ||
           validateMeaningUpdateContentReview(pending, ctx.content_review_digest) !== "valid") {
@@ -3129,7 +3138,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const current = hds.getMeaningUpdateProposalForOwnerReview(input.source_command_id);
     if (!current) return { accepted: false, status: "meaning_update_candidate_stale_or_unavailable" };
     const duplicate = Array.from(pendingApprovals.values()).find((pending) =>
-      pending.meaning_update_proposal?.proposal_digest === current.proposal_digest);
+      pending.meaning_update_proposal?.proposal_digest === current.proposal_digest &&
+      getMeaningUpdateAdoptionArguments(pending.command)?.source_observation_digest ===
+        current.source_observation_binding?.digest);
     if (duplicate) return { accepted: true, status: "approval_required", proposal_digest: current.proposal_digest,
       candidate_digest: current.proposal.candidate_digest, request_id: duplicate.log.request_id,
       command_id: duplicate.command.id };
@@ -3143,6 +3154,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       candidate_digest: current.proposal.candidate_digest,
       target_record_id: current.proposal.target_reference.record_id,
       target_version: current.proposal.target_reference.version,
+      ...(current.source_observation_binding ? { source_observation_digest: current.source_observation_binding.digest } : {}),
     };
     const inbound = createGatewayInternalInboundRequest({
       id: randomUUID(), channel: "webchat", user: "webchat-owner-token-holder",
@@ -3630,7 +3642,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     if (!proposal) return "not_required";
     if (executorCommandDigest(pending.command) !== pending.command_digest ||
         getMeaningUpdateAdoptionArguments(pending.command)?.proposal_digest !== proposal.proposal_digest ||
-        !hds.getMeaningUpdateProposalForOwnerReview(proposal.source_command_id)) return "stale";
+        getMeaningUpdateAdoptionArguments(pending.command)?.source_observation_digest !==
+          hds.getMeaningUpdateProposalForOwnerReview(proposal.source_command_id)?.source_observation_binding?.digest) return "stale";
     if (!content_review_digest || !pending.content_review_digest) return "required";
     return content_review_digest === pending.command_digest && pending.content_review_digest === pending.command_digest
       ? "valid" : "stale";
@@ -3728,6 +3741,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       const current = hds.getMeaningUpdateProposalForOwnerReview(pending.meaning_update_proposal.source_command_id);
       if (!args || !current || current.proposal_digest !== pending.meaning_update_proposal.proposal_digest ||
           current.proposal.candidate_digest !== args.candidate_digest ||
+          current.source_observation_binding?.digest !== args.source_observation_digest ||
           current.proposal.target_reference.record_id !== args.target_record_id ||
           current.proposal.target_reference.version !== args.target_version) return null;
       if (current.reference_review.review_status !== "prior_version_unverified" &&
@@ -3750,6 +3764,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         counterevidence_review: current.proposal.counterevidence_review,
         applicability_scope: current.proposal.applicability_scope,
         reflection_target_ref: current.proposal.reflection_target_ref,
+        ...(current.source_observation_binding ? { source_observation_review: {
+          digest: current.source_observation_binding.digest,
+          count: current.source_observation_binding.count,
+          observations: current.source_observation_summary ?? [],
+          used_as_world_truth: false as const,
+          used_for_authority: false as const,
+          may_execute: false as const,
+        } } : {}),
         reference_review_status: current.reference_review.review_status,
         semantic_relation_status: "not_assessed",
         adoption_status: "not_adopted",

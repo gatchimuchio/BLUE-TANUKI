@@ -292,6 +292,21 @@ export interface WebChatMeaningUpdateContentReview {
   };
   applicability_scope: { reference: string; digest: string };
   reflection_target_ref: string;
+  source_observation_review?: {
+    digest: string;
+    count: number;
+    observations: readonly {
+      source: "verified_file_write_result" | "verified_file_delete_result" | "verified_file_edit_result" |
+        "verified_file_search_result" | "verified_shell_exec_result";
+      operation: "file.write" | "file.delete" | "file.edit" | "file.search" | "shell.exec";
+      observed_at_ms: number;
+      record_digest: string;
+      memory_receipt_digest: string;
+    }[];
+    used_as_world_truth: false;
+    used_for_authority: false;
+    may_execute: false;
+  };
   reference_review_status: "prior_version_unverified" | "counterevidence_absence_unverified";
   semantic_relation_status: "not_assessed";
   adoption_status: "not_adopted";

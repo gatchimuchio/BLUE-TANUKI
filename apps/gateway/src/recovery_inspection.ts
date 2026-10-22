@@ -1528,7 +1528,8 @@ export function inspectCanonicalStateStoreLedger(
   }
 
   switch (storeKey) {
-    case "j_control": {
+    case "j_control":
+    case "meaning_update_j_control": {
       const inspection = inspectJControlRecoveryLedger({ private_state_root: privateRoot, database_path: databasePath });
       const outstandingUpdates = inspection.updates.filter((update) => update.phase !== "committed").length;
       const residualCount = inspection.status === "unavailable" ? null
@@ -1536,7 +1537,8 @@ export function inspectCanonicalStateStoreLedger(
           inspection.status === "projection_mismatch" || inspection.status === "corrupt" ? 1 : 0);
       return selectedLedgerObservation(inspection.status, inspection.reason, residualCount);
     }
-    case "m_state": {
+    case "m_state":
+    case "meaning_update_m_state": {
       const inspection = inspectMemoryRecoveryLedger({ private_state_root: privateRoot, database_path: databasePath });
       const residualCount = inspection.status === "unavailable" ? null
         : Math.max(inspection.unverified_event_count,

@@ -13,6 +13,8 @@ export const CANONICAL_STATE_STORE_PATHS = [
   { key: "broker", relative_path: join("execution-intents", "executor.sqlite") },
   { key: "operation_plans", relative_path: join("operation-plans", "j-state.sqlite") },
   { key: "cron_events", relative_path: join("cron-events", "cron-events.sqlite") },
+  { key: "meaning_update_j_control", relative_path: join("meaning-update-memory", "j-control.sqlite") },
+  { key: "meaning_update_m_state", relative_path: join("meaning-update-memory", "m-state.sqlite") },
 ] as const;
 
 export type CanonicalStateStoreKey = typeof CANONICAL_STATE_STORE_PATHS[number]["key"];
@@ -31,13 +33,14 @@ export interface CanonicalStateSnapshotManifest {
   readonly schema_version: 1;
   readonly store_consistency: "independent_sqlite_online_snapshots";
   readonly cross_store_atomic: false;
-  readonly expected_store_count: 5;
+  /** Five-store manifests are accepted for inspection only; new captures always contain seven stores. */
+  readonly expected_store_count: 5 | 7;
   readonly entries: readonly CanonicalStateSnapshotEntry[];
 }
 
 export interface CanonicalStateSnapshotInspection {
   readonly coverage: "complete" | "partial" | "none_present";
-  readonly expected_store_count: 5;
+  readonly expected_store_count: 7;
   readonly captured_store_count: number;
   readonly verified_store_count: number;
   readonly missing_store_count: number;
@@ -195,7 +198,22 @@ export function resolveCanonicalStateStoreInspectionPath(
   const privateRoot = join(realStateRoot, "private-state");
   if (!safeDirectory(privateRoot)) throw new Error("canonical_state_restore_target_unavailable");
   const targetPath = join(privateRoot, store.relative_path);
-  if (!safeDirectory(dirname(targetPath))) throw new Error("canonical_state_restore_target_unavailable");
+  const targetDirectory = dirname(targetPath);
+  try {
+    const directoryStat = lstatSync(targetDirectory);
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+      throw new Error("canonical_state_restore_target_unavailable");
+    }
+    const resolvedDirectory = realpathSync(targetDirectory);
+    const directoryRel = relative(privateRoot, resolvedDirectory);
+    if (directoryRel.startsWith(`..${sep}`) || directoryRel === ".." ||
+        resolve(privateRoot, directoryRel) !== resolvedDirectory) {
+      throw new Error("canonical_state_restore_target_unavailable");
+    }
+  } catch (error) {
+    if (isMissing(error)) return targetPath;
+    throw new Error("canonical_state_restore_target_unavailable");
+  }
   try {
     const stat = lstatSync(targetPath);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("canonical_state_restore_target_unavailable");
@@ -352,15 +370,21 @@ function checkedManifest(value: unknown): value is CanonicalStateSnapshotManifes
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const source = value as Record<string, unknown>;
   if (source.schema_version !== 1 || source.store_consistency !== "independent_sqlite_online_snapshots" ||
-      source.cross_store_atomic !== false || source.expected_store_count !== CANONICAL_STATE_STORE_PATHS.length ||
-      !Array.isArray(source.entries) || source.entries.length !== CANONICAL_STATE_STORE_PATHS.length) return false;
+      source.cross_store_atomic !== false || !Array.isArray(source.entries)) return false;
+  const legacyKeys = new Set<string>(["j_control", "m_state", "broker", "operation_plans", "cron_events"]);
+  const legacy = source.expected_store_count === 5 && source.entries.length === legacyKeys.size;
+  const current = source.expected_store_count === CANONICAL_STATE_STORE_PATHS.length &&
+    source.entries.length === CANONICAL_STATE_STORE_PATHS.length;
+  if (!legacy && !current) return false;
   const keys = new Set<string>();
   for (const entry of source.entries) {
     if (!checkedEntry(entry)) return false;
     if (keys.has(entry.store_key)) return false;
+    if (legacy && !legacyKeys.has(entry.store_key)) return false;
     keys.add(entry.store_key);
   }
-  return CANONICAL_STATE_STORE_PATHS.every((store) => keys.has(store.key));
+  return legacy ? [...legacyKeys].every((key) => keys.has(key))
+    : CANONICAL_STATE_STORE_PATHS.every((store) => keys.has(store.key));
 }
 
 export async function captureCanonicalStateSnapshots(
@@ -569,6 +593,8 @@ export async function inspectCanonicalStateSnapshots(
     if (isValid) verified += 1;
     else unverified += 1;
   }
+  // A pre-K-B2 pack cannot prove that either meaning-update ledger was absent at capture time.
+  unverified += CANONICAL_STATE_STORE_PATHS.length - value.entries.length;
 
   return {
     coverage: verified === CANONICAL_STATE_STORE_PATHS.length
@@ -591,6 +617,10 @@ export async function restoreCanonicalStateSnapshotStore(
   storeKey: CanonicalStateStoreKey,
 ): Promise<{ readonly bytes: number; readonly sha256: string; readonly restoredStateSha256: string }> {
   await inspectCanonicalStateSnapshots(packDirectory, snapshot);
+  if (snapshot.expected_store_count !== CANONICAL_STATE_STORE_PATHS.length ||
+      snapshot.entries.length !== CANONICAL_STATE_STORE_PATHS.length) {
+    throw new Error("canonical_state_restore_store_unverified");
+  }
   const entry = snapshot.entries.find((item) => item.store_key === storeKey);
   if (!entry || entry.status !== "verified" || !entry.archive_rel_path || !entry.sha256) {
     throw new Error("canonical_state_restore_store_unverified");
