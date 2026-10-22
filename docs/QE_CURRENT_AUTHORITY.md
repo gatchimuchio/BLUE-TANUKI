@@ -4,16 +4,16 @@
 
 ## 現行セット
 
-- 指定版：BLUE-TANUKI QE施工パッケージ rev2.4（2026-10-22整合性是正版）
-- 配布ZIP SHA-256：`FBAEE297B6EB2F225594F1418E6F0C50DBE90D2D6E587EB1C8018C6C1B6BF00B`
-- 仕様書 `01_BLUE-TANUKI_QE統合実装仕様書_rev2_4.md` SHA-256：`0DA2123ED26174511A7CFCF14E210A56E50548068088ADB9B239846B633682A9`
-- 工程表 `02_BLUE-TANUKI_QE工程表_rev2_4.md` SHA-256：`38F7FB3057D0BC97545A349D4DEA668A51DD3E20714409D128D2C36254CE040E`
-- 施工指示書 `03_BLUE-TANUKI_Codex_QE施工指示書_rev2_4.md` SHA-256：`957525A05AF25A5FCDE65A913410893B22E88EE10F9CD1ACF14B374A5584C602`
+- owner指定版：BLUE-TANUKI HDSカーネル主導再構築・QE施工パッケージ rev3.0（2026-10-22）
+- 配布ZIP SHA-256：`E757FC0D091910A28589BDF1C59E63CA379DB82CAFADAD5E5227F4131B6BA3E0`
+- 仕様書 `01_BLUE-TANUKI_HDSカーネル統合仕様書_rev3_0.md` SHA-256：`C71FD4B5983911752F523780BB52B15B01784D1B0B4F7AE3DBF678C8B2211085`
+- 工程表 `02_BLUE-TANUKI_HDSカーネル再構築工程表_rev3_0.md` SHA-256：`14B2185C36D1F191948C7DE8D9F5B1D4D4E410A3C86DA244EE4164232D314B39`
+- 施工指示書 `03_BLUE-TANUKI_HDSカーネルCodex施工指示書_rev3_0.md` SHA-256：`32E26B062DFB0A2FA1AB6F2125C1BF1AB13C7A605BA5E41DB581AC3444F4082F`
 
-配布ZIP内manifestの293資産を照合し、不足・hash不一致がないことを確認した。ZIPの観測main SHAや過去工程の状態は現行repoのHEAD・active指示を置き換えない。rev2.4のowner指定により本pinを切り替えた。
+rev3.0内のSHA-256 manifestは296資産すべてを照合し、不足・余分・hash不一致がないことを確認した。パッケージ記載の観測main SHA `e28a73f330cb155f46aea00e58cffd3a6b005ae8` は作成時点の記録であり、ownerが本版を指定した時点の実HEAD／remote HEAD `2964db41dc11ddc3057f47447a85f8a49395c377` を置き換えない。ownerの2026-10-22の明示指定によりrev3.0を現行正本へ採用した。内部文書本文・原典・全要求対応表はPublic Gitへ転載していない。
 
 ## 更新と参照
 
-ownerが新しい仕様書・工程表・施工指示書を指定した場合、三文書とmanifestの整合を確認し、このページの現行値を新しい三点へ置き換える。旧セットと完了済み施工の記録は履歴ログとして保持し、現行正本として併読しない。
+ownerがさらに新しい三点一組を指定した場合、配布manifestと三文書それぞれのSHA-256を照合し、この唯一の現行ピンを置き換える。旧セットと完了済み施工記録は履歴ログとして保持し、通常作業では現行正本として再読しない。
 
-独立した作業の開始・切替・再開時は、この現行ピンが示す仕様書・工程表・施工指示書の三文書すべてと適用AGENTS.mdを読み、active instruction、最新HEAD・差分も確認する。同一作業内の連続した小単位切替では、今回に関係する要求・契約・コード・文書節を再同期する。過去の三点セット、閉じたBUILD_BATCH、進捗履歴全体はログとして保持し、現行の依存・変更系譜・矛盾を解く必要がある場合だけ該当箇所を参照する。
+独立した作業の開始・切替・再開時は、この現行ピンが示す三文書すべてと適用AGENTS.mdを読み、active instruction、最新HEAD・差分も確認する。パッケージに記録された古い観測HEADや旧工程状態を現行repoへ書き戻さない。

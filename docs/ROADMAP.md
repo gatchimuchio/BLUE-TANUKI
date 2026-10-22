@@ -2,18 +2,18 @@
 
 ## 現在の位置
 
-`QE_STAGE=QE_BUILD`。Windows-firstで全体の実consumer接続を進めている。最終対象OSはWindows／Linux／macOS／Android／iOSの5OSであり、現時点で対応済みという意味ではない。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。
+`QE_STAGE=QE_BUILD`。2026-10-22にowner指定の現行正本をrev3.0へ切り替えた。HDS Framework Kernelの意味責務とBLUE HDS Runtime Kernelの有限J/M制御を区別し、Runtime核は段階移管する。現行TypeScript HDS-BRAINは明示的なsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
+
+製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
 ## 次のBUILD_BATCH
 
-rev2.4 CR-0ではUnix全install／uninstall入口とWindows開発用Force installに対象安全ガードを実装し、Windows・WSLの非破壊fixtureで確認した。実削除・実OS導入は行っていない。CR-1ではrelease hardening／packaging gateを共通のworkflow検査へ接続し、既存の手動Linux補助workflowを残したまま、`workflow_dispatch`一つ・明示read-only権限・job-level上書きなしだけを許可した。Actions自体は未実行。CR-2ではGUI保存env-fileから再起動したGatewayで、loopback合成providerの待機job再開→C→J→合成file.search→receipt／M→再接続後の結果返却を接続し、通常Compute費用予約も別のadapter試験で確認した。CR-3ではCompute／budget／delegationの現行47 testsと5 channel-grant consumerを再観測し、I-04の現行失敗を再現しなかった。LINEではcaller cancel／timeout／unknown／未配送／successを区別し、取消後のunknownをdurable outboxへ保存して再送を止める合成経路を確認した。次はE2E-01で同一WebChat taskの目的→C→J→合成作用→receipt／M→返信→再計画・復帰をつなぐ。詳細と試験射程は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)に記録する。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QC／QAは未開始。
+rev3.0 K-B0／K-B1で、実際の最新HEADを基準にCR-0～CR-3とI-01～I-06の残りを再照合し、HDS Frameworkの意味処理、J/M writer、Gateway／Executor、Approval／Brokerのproducer→consumerと所有境界を一仕事に沿って対応付ける。既存のCR-0～CR-3完了記録を引き継ぐが、パッケージ作成時の`e28a73f`を現行HEADとして使わず、現HEADで成立済みの変更は重複実装しない。削除・外部作用の危険を見つけた場合はその作用口を止め、非破壊の安全修正を優先する。
 
-F15.03とComposio／PostHogの既存作業は履歴に保持する。具体consumerへの展開は、rev2.4の安全是正と一仕事の統合形状を前進させた後に戻る。
+次にCR-2の実利用条件とE2E-01の同一WebChat仕事（目的→C→J→安全な合成作用→結果／M→返信・再計画・復帰）を前進させ、CR-3の現行consumer状態を再照合する。その後rev3.0 K-B2以降のFramework意味契約・責任抽出・Rust shadow・比較へ進む。順序は工程表に従い、実物の現状と未解決の危険に応じて再同期する。Rustのsingle-writer cutoverは比較、停止、未決作用、rollback、権限境界が成立するまで行わない。
 
 ## 維持する境界
 
-独立作業の開始・切替・再開では、固定された現行三点セット全文を読み直す。J4 strict closureは通常のdocs gateから推定しない。Git復旧refsは`MIGRATION_COMPLETE`で、local二世代branch／remote二世代tagを使う（例：`refs/tags/codex/backup-main`）。
+独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。
 
-HDS-BRAINの判断・Approval Gate L3、Broker permission、M非権限、監査、秘密保護、fail-closedを維持する。C08.03実provider試験は保留、P13は`PENDING_OWNER_GO`／`public_claim_allowed=false`。実装完了後に全体QC、対象別QA、ownerの独立した公開・出荷判断へ進む。
-
-詳細な完了バッチと観測証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)および[`開発進捗.md`](開発進捗.md)に保存する。完了ログや旧版仕様は、現行の依存・変更系譜・矛盾を解く場合だけ参照する。
+Approval Gate／L3、Brokerの現在権限、Mの非権限性、監査、秘密、停止・復旧、fail-closedを維持する。Gitはmain一本、Windows通常開発、単一writer、local復旧branch二世代／remote backup tag二世代。backup-ref migrationは`MIGRATION_COMPLETE`で、closeout時はremoteの`refs/tags/codex/backup-main`と`refs/tags/codex/backup-main-prev`を実SHAで照合する。意味あるBUILD_BATCHの末に限定commit／pushとremote/ref照合を行う。

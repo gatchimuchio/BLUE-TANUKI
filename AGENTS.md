@@ -14,6 +14,8 @@
 
 owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程表」「BLUE-TANUKI Codex QE施工指示書」は、技術完成形・実装順・施工運転の三点正本である。現行版の固定情報は [`docs/QE_CURRENT_AUTHORITY.md`](docs/QE_CURRENT_AUTHORITY.md) 一か所だけで管理する。ownerが新しい三点一組を指定したら、配布manifestと三文書それぞれのhashを照合し、この唯一の現行ピンを新版へ置き換える。旧版の三点・旧pin・完了した作業や実装は履歴ログとして保持するが、通常作業では旧版群や完了ログを列挙・再読せず、現行正本として併読しない。依存・変更系譜・矛盾の解消に必要な場合に限り、該当部分を参照する。内部原典や全要求対応表はPublicリポジトリへ転載しない。作業時に内部正本へアクセスできなければ推測で補わず、現行repoの実物と公開可能な要求から作業可能範囲を確定し、欠落条件を明記する。
 
+2026-10-22にowner指定された現行rev3.0は、HDS Framework Kernelの意味責務と言語非依存契約、およびBLUE HDS Runtime Kernelの有限なJ/M制御を分離し、Runtime核を段階移管する。現在実動するTypeScript HDS-BRAINは、移管条件の成立までは唯一の実行authority／状態writerとして扱う。Rust shadowに作用権限・正本M書込みを持たせない。将来のcutoverはrev3.0の比較・停止・rollback・single-writer条件を満たす時だけ行い、その時点で旧TSの第二権限経路を閉じる。以下のHDS-BRAIN実装参照は、現行資産または移管前の段階を指す。
+
 本書は「共通基底規律 → BLUE-TANUKI固有規律 → 現行QE施工規律」の順に読む。D4PocketのAGENTS.mdからは安全・証拠・責任境界・通常経路最小化・環境区分・実行主体一本化・Git保全の汎用規律だけを採用する。D4固有のFlutter/Rust/macOSの実装条件、機能状態、完了証拠は自動移植しない。
 
 規定改修だけでは製品実装を再開しない。現行ownerの開発委任に従い、最新正本と現物を再照合してBLUE本体のQE_BUILDを進める。C08.03の実provider検証保留、D4Pocket／ミニドラの別repo変更に必要な別途許可、P13の公開保留を維持する。
@@ -36,14 +38,14 @@ owner指定の「BLUE-TANUKI QE統合実装仕様書」「BLUE-TANUKI QE工程�
 BLUE-TANUKIの目標は、目的を持つ仕事を計算・判断・作用・観測・記憶・帰還まで統治するAGIエージェントシステムの成立である。既存HDS-BRAINの独立した制御・認可資産を維持し、C（計算）、J（HDS判断）、M（可変記憶）、作用能力境界、環境帰還を一気通貫の実経路へ接続する。HDSの基底理論とC/J/Mの実装上の責任分離を同一視しない。
 
 - Cは候補生成・推論・計画・計算を担当する。既存LLMを使用でき、同じ計算契約でミニドラへ交換できる。Cの出力は権限ではない。
-- J／HDS-BRAINは委任された目的の保持、候補の採否、進行・停止、記憶更新の判断を担当する。上位委任そのものを勝手に変更しない。
+- J／BLUE HDS Runtime Kernelは委任された目的の保持、候補の採否、進行・停止、記憶更新の判断を担当する。移管前の現行writerはTypeScript HDS-BRAINであり、rev3.0の明示条件が成立するまでは単独authorityを保つ。上位委任そのものを勝手に変更しない。
 - Mは記憶・根拠・失敗・解釈版・残差の保持を担う。Jの判断根拠に利用できるが、過去承認を現在の権限に復活させない。
 - 作用能力境界はHDS採否とは独立に、現在の実行環境Permission、対象同一性、期限、単回消費、必要なowner承認を検査する。
 - D4Pocket（旧GUI-Shell）は汎用GUI／Runtime／Brokerの外殻として接続する設計対象。BLUE固有のJ／HDS意味機構をD4の汎用Shell Coreへ埋め込まず、認証されたAdapter境界を使う。D4側コードの変更には別repoの限定委任を要する。
 
 **一つの仕事が「目的 → C → J → 環境権限 → 作用 → 結果 → M → 継続・復旧・終了」を通ることを実装目標とする。** 型・schema・fixtureだけで当該仕事が完遂したと報告しない。
 
-判断・権限はHDS-BRAINにあり、人間ownerは最終責任と明示的GOを保持する。LLM、tool、channel、plugin、skill、operator、installer、外部API、memory、history、UI、schedulerは下流装置である。HDS-BRAINのstandalone、Approval Gate、L3最終レビュー、hash-chain audit、Runtime Invariants、capability envelope、Layer A/B、fail-closedは維持する。
+判断・権限は移管前の現行実装ではHDS-BRAINに一元化し、人間ownerは最終責任と明示的GOを保持する。rev3.0の条件付きcutover後もRuntime Kernelを唯一のJ authority／writerとし、二重経路を残さない。LLM、tool、channel、plugin、skill、operator、installer、外部API、memory、history、UI、schedulerは下流装置である。HDS-BRAINのstandalone、Approval Gate、L3最終レビュー、hash-chain audit、Runtime Invariants、capability envelope、Layer A/B、fail-closedは移管中も維持する。
 
 ## 3. 規則の優先順位と現物照合
 
@@ -153,14 +155,14 @@ BLUE-TANUKI は local owner operation を前提とする。
 Full access may be the default.
 Final-review remains non-bypassable.
 No black box exists in the HDS authority path.
-HDS-BRAIN is a standalone authority control kernel.
+HDS-BRAIN is the standalone current authority kernel until an explicit verified single-writer cutover.
 ```
 
 owner-operated や自己責任を堅牢性低下の理由にしない。first-run success を製品完成とみなさない。
 
 ### Standalone
 
-`packages/hds-brain` は `apps/gateway`、`@blue-tanuki/core`、channel/operator packages、plugin loader、Control Center、LLM/browser/GitHub/Google client なしに import、instantiate、test できなければならない。許容依存は Node built-ins、`@blue-tanuki/protocol`、local pure HDS-BRAIN modules に限る。
+`packages/hds-brain` は移管前の現行authority／migration assetとして、`apps/gateway`、`@blue-tanuki/core`、channel/operator packages、plugin loader、Control Center、LLM/browser/GitHub/Google client なしに import、instantiate、test できなければならない。許容依存は Node built-ins、`@blue-tanuki/protocol`、local pure HDS-BRAIN modules に限る。rev3.0のtarget Runtime KernelもGatewayや下流toolなしに独立起動・決定論的再生・安全停止できる必要があり、shadow期間は作用・正本更新を行わない。
 
 ### 下流装置
 
