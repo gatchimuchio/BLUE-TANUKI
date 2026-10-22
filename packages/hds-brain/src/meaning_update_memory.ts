@@ -4,10 +4,15 @@ import {
   memoryCommitContentDigest,
   parseMeaningUpdateProposal,
   type MeaningUpdateProposalV3,
-  type OperationPlanComputeSourceObservation,
   type MemoryCommitJsonValue,
   type MemoryCommitV2,
 } from "@blue-tanuki/protocol";
+import {
+  canonicalMeaningUpdateJson,
+  isMeaningUpdateSourceObservationBinding,
+  meaningUpdateProposalDigest,
+  type MeaningUpdateSourceObservationBinding,
+} from "./meaning_update_candidate.js";
 import type { OperationPlanMemoryStorage } from "./operation_plan.js";
 import { JMemoryCommitCoordinator, type JMemoryCommitReconciliationResult } from "./制御状態.js";
 import type { JMemoryApprovalReference, JMemoryApprovalReader } from "./保存取引.js";
@@ -16,30 +21,6 @@ import { buildInitialMemoryInterpretationCommit, buildMemoryInterpretationCommit
   type MemoryInterpretationEvidenceReference, type MemoryInterpretationRecord } from "./記憶再解釈.js";
 
 export const MEANING_UPDATE_MEMORY_SCHEMA_VERSION = "blue-tanuki.meaning-update-memory.v1" as const;
-
-export interface MeaningUpdateSourceObservationBinding {
-  readonly schema_version: "blue-tanuki.meaning-update-source-observation-binding.v1";
-  readonly digest: string;
-  readonly count: number;
-  readonly used_as_world_truth: false;
-  readonly used_for_authority: false;
-  readonly may_execute: false;
-}
-
-/** Bind only J-selected, bounded observation metadata; never retain C's raw result here. */
-export function buildMeaningUpdateSourceObservationBinding(
-  observations: readonly OperationPlanComputeSourceObservation[],
-): MeaningUpdateSourceObservationBinding | undefined {
-  if (observations.length < 1 || observations.length > 8) return undefined;
-  return Object.freeze({
-    schema_version: "blue-tanuki.meaning-update-source-observation-binding.v1",
-    digest: createHash("sha256").update(canonicalJson(observations), "utf8").digest("hex"),
-    count: observations.length,
-    used_as_world_truth: false,
-    used_for_authority: false,
-    may_execute: false,
-  });
-}
 
 export interface MeaningUpdateMemoryRecord {
   readonly schema_version: typeof MEANING_UPDATE_MEMORY_SCHEMA_VERSION;
@@ -99,7 +80,7 @@ export class MeaningUpdateMemoryConsumer {
     const existing = this.coordinator.readMemoryRecord(record.record_id);
     if (!existing) return { ok: false, reason: "meaning_update_store_unavailable" };
     if (existing.exists) {
-      if (canonicalJson(existing.value) !== canonicalJson(record)) {
+      if (canonicalMeaningUpdateJson(existing.value) !== canonicalMeaningUpdateJson(record)) {
         return { ok: false, reason: "meaning_update_record_conflict" };
       }
       const snapshot = this.interpretations.read(record.proposal.target_reference.record_id);
@@ -303,10 +284,6 @@ export function meaningUpdateMemoryRecordId(proposalDigest: string): string {
   return `meaning-update:${proposalDigest}`;
 }
 
-export function meaningUpdateProposalDigest(proposal: MeaningUpdateProposalV3): string {
-  return createHash("sha256").update(canonicalJson(proposal), "utf8").digest("hex");
-}
-
 export function isMeaningUpdateMemoryRecord(value: unknown): value is MeaningUpdateMemoryRecord {
   const requiredKeys = ["schema_version", "record_type", "record_id", "proposal_digest", "candidate_digest", "proposal",
     "approval_status", "memory_application_status", "follow_up_action_status", "semantic_relation_status",
@@ -322,15 +299,6 @@ export function isMeaningUpdateMemoryRecord(value: unknown): value is MeaningUpd
     value.candidate_digest === parsed.record.candidate_digest && value.approval_status === "approved" &&
     value.memory_application_status === "applied" && value.follow_up_action_status === "unconfirmed" &&
     value.semantic_relation_status === "not_assessed" && value.used_for_authority === false && value.may_execute === false;
-}
-
-function isMeaningUpdateSourceObservationBinding(value: unknown): value is MeaningUpdateSourceObservationBinding {
-  return isRecord(value) && hasExactKeys(value, ["schema_version", "digest", "count", "used_as_world_truth",
-      "used_for_authority", "may_execute"]) &&
-    value.schema_version === "blue-tanuki.meaning-update-source-observation-binding.v1" &&
-    typeof value.digest === "string" && /^[a-f0-9]{64}$/.test(value.digest) &&
-    typeof value.count === "number" && Number.isSafeInteger(value.count) && value.count >= 1 && value.count <= 8 &&
-    value.used_as_world_truth === false && value.used_for_authority === false && value.may_execute === false;
 }
 
 export function buildMeaningUpdateMemoryRecord(
@@ -399,12 +367,6 @@ function meaningUpdateInterpretationReasonDigest(proposalDigest: string, sourceO
   return createHash("sha256").update("approved-meaning-update-reinterpretation:" + proposalDigest + source, "utf8").digest("hex");
 }
 
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  return `{${Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined)
-    .sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
-}
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

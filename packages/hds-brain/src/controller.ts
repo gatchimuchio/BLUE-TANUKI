@@ -27,7 +27,6 @@ import {
   parseInboundRequestAtBoundary,
   LLMCallFailureSchema,
   LLMToolCallCandidateSchema,
-  parseMeaningUpdateProposal,
   SkepticalReviewRequestSchema,
   LLMFallbackAuthorizationSchema,
   inspectOperationCommandExecutionResult,
@@ -100,9 +99,16 @@ import { commit } from "./commit.js";
 import { AuditLog, type AuditEntry } from "./audit.js";
 import { GoalPurposeMemoryConsumer, type GoalPurposeMemoryApprovalContext } from "./goal_purpose_memory.js";
 import { buildMeaningUpdateMemoryRecord, isMeaningUpdateMemoryRecord, meaningUpdateMemoryRecordId,
-  meaningUpdateInterpretationForRecord, meaningUpdateInterpretationId, meaningUpdateProposalDigest,
-  buildMeaningUpdateSourceObservationBinding, MeaningUpdateMemoryConsumer, type MeaningUpdateMemoryRecord,
-  type MeaningUpdateSourceObservationBinding } from "./meaning_update_memory.js";
+  meaningUpdateInterpretationForRecord, meaningUpdateInterpretationId, MeaningUpdateMemoryConsumer,
+  type MeaningUpdateMemoryRecord } from "./meaning_update_memory.js";
+import {
+  assessMeaningUpdateProposalReferences,
+  buildMeaningUpdateOwnerReviewCandidate,
+  buildMeaningUpdateSourceObservationBinding,
+  completeMeaningUpdateProposalAssessment,
+  prepareMeaningUpdateProposalAssessment,
+  type MeaningUpdateSourceObservationBinding,
+} from "./meaning_update_candidate.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
 import { normalizeForDetection } from "./normalization.js";
 import {
@@ -152,7 +158,6 @@ import type { CurrentMemoryReferenceVersionSnapshot } from "./long-term-memory/s
 import {
   buildMemoryCitationSystemMessages,
   redactUnverifiedReferences,
-  reviewMeaningUpdateProposalReferences,
   type MeaningUpdateProposalReferenceReview,
   reviewMemoryCitationOutput,
 } from "./memory_citation_review.js";
@@ -675,28 +680,6 @@ function memoryJudgmentReassessmentApprovalEvidence(
 
 function memoryJudgmentRefsDigest(references: readonly string[]): string {
   return createHash("sha256").update(JSON.stringify([...references].sort()), "utf8").digest("hex");
-}
-
-function isMeaningUpdateReviewReady(review: {
-  readonly review_status: string;
-  readonly supporting_reference_count: number;
-  readonly supporting_references_verified: number;
-  readonly counterevidence_reference_count: number;
-  readonly counterevidence_references_verified: number;
-  readonly scope_digests_verified: boolean;
-  readonly target_reference_matches_current_projection: boolean;
-  readonly candidate_content_digest_status: string;
-  readonly used_for_authority: boolean;
-  readonly may_apply: boolean;
-  readonly adoption_status: string;
-  readonly semantic_relation_status: string;
-}): boolean {
-  return (review.review_status === "prior_version_unverified" || review.review_status === "counterevidence_absence_unverified") &&
-    review.supporting_reference_count > 0 && review.supporting_reference_count === review.supporting_references_verified &&
-    review.counterevidence_reference_count === review.counterevidence_references_verified &&
-    review.scope_digests_verified && review.target_reference_matches_current_projection &&
-    review.candidate_content_digest_status === "verified" && review.used_for_authority === false &&
-    review.may_apply === false && review.adoption_status === "not_adopted" && review.semantic_relation_status === "not_assessed";
 }
 
 function replayGoalPurposeChanges(
@@ -2062,12 +2045,16 @@ ${planControl.question}`,
         return null;
       }
     }
-    const review = reviewMeaningUpdateProposalReferences(pending.proposal, pending.memory_trace,
-      this.currentMemoryReferenceVersions(pending.memory_trace));
-    if (!isMeaningUpdateReviewReady(review)) {
+    const currentAssessment = assessMeaningUpdateProposalReferences({
+      proposal: pending.proposal,
+      memory_trace: pending.memory_trace,
+      current_reference_versions: this.currentMemoryReferenceVersions(pending.memory_trace),
+    });
+    if (!currentAssessment.owner_review_ready) {
       this.pendingMeaningUpdateCandidates.delete(sourceCommandId);
       return null;
     }
+    const review = currentAssessment.reference_review;
     return Object.freeze({ request_id: pending.request_id, source_command_id: pending.source_command_id,
       proposal: structuredClone(pending.proposal), proposal_digest: pending.proposal_digest, reference_review: review,
       ...(pending.source_observation_binding ? {
@@ -2990,9 +2977,6 @@ ${planControl.question}`,
     const skepticalReviewParse = fb.skeptical_review === undefined
       ? undefined
       : SkepticalReviewRequestSchema.safeParse(fb.skeptical_review);
-    const meaningUpdateProposalParse = fb.meaning_update_proposal === undefined
-      ? undefined
-      : parseMeaningUpdateProposal(fb.meaning_update_proposal);
     const sourceLog = this.inflight.get(fb.command_id);
     const issued = this.issuedLLM.get(fb.command_id);
     const rawResourceUse = fb.compute_resource_use;
@@ -3021,48 +3005,26 @@ ${planControl.question}`,
       upstream_commit_hash: sourceLog.commit.hash,
       status: fb.status,
     }) : undefined;
-    const meaningUpdateSourceObservationBinding = issued?.compute_source_observations?.length
-      ? buildMeaningUpdateSourceObservationBinding(issued.compute_source_observations) : undefined;
-    const meaningUpdateProposalContractStatus = fb.meaning_update_proposal === undefined
-      ? "not_present" as const
-      : fb.status === "success" && sourceLog !== undefined && meaningUpdateProposalParse?.ok &&
-        issued?.command.type === "llm_call" &&
-        issued.command.payload.compute_context?.local_p_version !== OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION &&
-        (!issued?.compute_source_observations?.length || meaningUpdateSourceObservationBinding !== undefined)
-        ? "passed" as const
-        : "failed" as const;
-    const meaningUpdateProposalReferenceReview = fb.meaning_update_proposal === undefined
-      ? { review_status: "not_present" as const, supporting_reference_count: 0, supporting_references_verified: 0,
-          counterevidence_reference_count: 0, counterevidence_references_verified: 0,
-          applicability_scope_matches_current: false, counterevidence_scope_matches_current: false,
-          applicability_scope_digest_matches_current: false, counterevidence_scope_digest_matches_current: false,
-          counterevidence_claim_status: "not_present" as const, scope_digests_verified: false as const,
-          target_reference_matches_current_projection: false as const,
-          candidate_content_digest_status: "not_present" as const,
-          target_and_prior_version_verified: false as const, semantic_relation_status: "not_assessed" as const,
-          adoption_status: "not_adopted" as const, may_apply: false as const, used_for_authority: false as const }
-      : meaningUpdateProposalParse?.ok
-        ? meaningUpdateProposalContractStatus === "passed"
-          ? reviewMeaningUpdateProposalReferences(meaningUpdateProposalParse.record, sourceLog?.frame.memory_trace,
-            sourceLog ? this.currentMemoryReferenceVersions(sourceLog.frame.memory_trace) : undefined)
-          : { review_status: "not_reviewed" as const, supporting_reference_count: 0, supporting_references_verified: 0,
-              counterevidence_reference_count: 0, counterevidence_references_verified: 0,
-              applicability_scope_matches_current: false, counterevidence_scope_matches_current: false,
-              applicability_scope_digest_matches_current: false, counterevidence_scope_digest_matches_current: false,
-              counterevidence_claim_status: "not_reviewed" as const, scope_digests_verified: false as const,
-              target_reference_matches_current_projection: false as const,
-              candidate_content_digest_status: "unavailable" as const,
-              target_and_prior_version_verified: false as const, semantic_relation_status: "not_assessed" as const,
-              adoption_status: "not_adopted" as const, may_apply: false as const, used_for_authority: false as const }
-        : { review_status: "invalid_contract" as const, supporting_reference_count: 0, supporting_references_verified: 0,
-            counterevidence_reference_count: 0, counterevidence_references_verified: 0,
-            applicability_scope_matches_current: false, counterevidence_scope_matches_current: false,
-            applicability_scope_digest_matches_current: false, counterevidence_scope_digest_matches_current: false,
-            counterevidence_claim_status: "invalid_contract" as const, scope_digests_verified: false as const,
-            target_reference_matches_current_projection: false as const,
-            candidate_content_digest_status: "invalid" as const,
-            target_and_prior_version_verified: false as const, semantic_relation_status: "not_assessed" as const,
-            adoption_status: "not_adopted" as const, may_apply: false as const, used_for_authority: false as const };
+    const meaningUpdateProposalPrepared = prepareMeaningUpdateProposalAssessment({
+      proposal: fb.meaning_update_proposal,
+      feedback_succeeded: fb.status === "success",
+      source_available: sourceLog !== undefined,
+      eligible_llm_compute: issued?.command.type === "llm_call" &&
+        issued.command.payload.compute_context?.local_p_version !== OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
+      source_observations: issued?.compute_source_observations,
+    });
+    const meaningUpdateCurrentReferenceVersions = meaningUpdateProposalPrepared.contract_status === "passed" &&
+      meaningUpdateProposalPrepared.proposal_parse?.ok && sourceLog
+      ? this.currentMemoryReferenceVersions(sourceLog.frame.memory_trace)
+      : undefined;
+    const meaningUpdateProposalAssessment = completeMeaningUpdateProposalAssessment({
+      prepared: meaningUpdateProposalPrepared,
+      memory_trace: sourceLog?.frame.memory_trace,
+      current_reference_versions: meaningUpdateCurrentReferenceVersions,
+    });
+    const meaningUpdateProposalParse = meaningUpdateProposalAssessment.proposal_parse;
+    const meaningUpdateProposalContractStatus = meaningUpdateProposalAssessment.contract_status;
+    const meaningUpdateProposalReferenceReview = meaningUpdateProposalAssessment.reference_review;
     const candidateAssessments = toolCandidates
       ? assessLLMToolCandidates(toolCandidates, sourceLog)
       : [];
@@ -3296,13 +3258,14 @@ ${planControl.question}`,
       this.pendingSkepticalReviewGoalPurposeChangeCandidates.delete(fb.command_id);
     }
 
-    if (sourceLog && issued && issued.command.id === fb.command_id && sourceLog.commit.decision === "ASSERT" &&
-        issued.command.upstream_decision.commit_hash === sourceLog.commit.hash &&
+    const pendingMeaningUpdateCandidate = buildMeaningUpdateOwnerReviewCandidate({
+      assessment: meaningUpdateProposalAssessment,
+      source_is_verified_asserted_compute: Boolean(sourceLog && issued && issued.command.id === fb.command_id &&
+        sourceLog.commit.decision === "ASSERT" && issued.command.upstream_decision.commit_hash === sourceLog.commit.hash &&
         issued.command.type === "llm_call" &&
-        issued.command.payload.compute_context?.local_p_version !== FAILURE_REVIEW_LOCAL_P_VERSION &&
-        meaningUpdateProposalContractStatus === "passed" && meaningUpdateProposalParse?.ok &&
-        meaningUpdateProposalParse.record.schema_version === "blue-tanuki.meaning-update-proposal.v3" &&
-        isMeaningUpdateReviewReady(meaningUpdateProposalReferenceReview)) {
+        issued.command.payload.compute_context?.local_p_version !== FAILURE_REVIEW_LOCAL_P_VERSION),
+    });
+    if (pendingMeaningUpdateCandidate && sourceLog && issued) {
       while (this.pendingMeaningUpdateCandidates.size >= 64) {
         const oldest = this.pendingMeaningUpdateCandidates.keys().next().value as string | undefined;
         if (!oldest) break;
@@ -3311,11 +3274,11 @@ ${planControl.question}`,
       this.pendingMeaningUpdateCandidates.set(fb.command_id, {
         request_id: sourceLog.request_id,
         source_command_id: fb.command_id,
-        proposal: structuredClone(meaningUpdateProposalParse.record),
-        proposal_digest: meaningUpdateProposalDigest(meaningUpdateProposalParse.record),
+        proposal: pendingMeaningUpdateCandidate.proposal,
+        proposal_digest: pendingMeaningUpdateCandidate.proposal_digest,
         memory_trace: structuredClone(sourceLog.frame.memory_trace),
-        ...(meaningUpdateSourceObservationBinding && issued.compute_source_observations?.length ? {
-          source_observation_binding: meaningUpdateSourceObservationBinding,
+        ...(pendingMeaningUpdateCandidate.source_observation_binding && issued.compute_source_observations?.length ? {
+          source_observation_binding: pendingMeaningUpdateCandidate.source_observation_binding,
           source_observations: structuredClone(issued.compute_source_observations),
           source_origin: structuredClone(issued.origin),
         } : {}),

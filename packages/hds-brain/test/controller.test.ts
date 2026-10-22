@@ -1199,7 +1199,17 @@ describe("HDSUpperController.onFeedback()", () => {
 
   it("BT-U-C07.01-P: validates and digest-audits a meaning proposal without adopting it", () => {
     const c = new HDSUpperController();
-    const { command } = c.decide(inbound("hello proposal", "r-c07-positive"));
+    const { command } = c.decide(createGatewayInternalInboundRequest({
+      id: "r-c07-positive",
+      channel: "webchat",
+      user: "u1",
+      content: "hello proposal",
+      timestamp: Date.now(),
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.operator_surface": "developer",
+      },
+    }));
     expect(command?.type).toBe("llm_call");
 
     c.onFeedback({
