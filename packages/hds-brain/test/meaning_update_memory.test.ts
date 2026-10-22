@@ -10,8 +10,9 @@ import { AuditLog } from "../src/audit.js";
 import { evaluateApproval, meaningUpdateAdoptionApprovalTarget,
   memoryJudgmentReassessmentApprovalTarget } from "../src/approval_policy.js";
 import { LongTermMemoryStore } from "../src/long-term-memory/index.js";
-import { buildMeaningUpdateMemoryRecord, MeaningUpdateMemoryConsumer, meaningUpdateInterpretationId,
-  meaningUpdateMemoryRecordId } from "../src/meaning_update_memory.js";
+import { MeaningUpdateMemoryConsumer } from "../src/meaning_update_memory.js";
+import { buildMeaningUpdateMemoryRecord, meaningUpdateInterpretationId,
+  meaningUpdateMemoryRecordId } from "../src/meaning_update_semantics.js";
 import { operationPlanDigest } from "../src/operation_plan.js";
 import type { OperationPlanMemoryStorage, OperationPlanRecoveryHoldState, OperationPlanStatePort } from "../src/operation_plan.js";
 

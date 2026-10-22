@@ -98,9 +98,10 @@ import { model } from "./model.js";
 import { commit } from "./commit.js";
 import { AuditLog, type AuditEntry } from "./audit.js";
 import { GoalPurposeMemoryConsumer, type GoalPurposeMemoryApprovalContext } from "./goal_purpose_memory.js";
+import { MeaningUpdateMemoryConsumer } from "./meaning_update_memory.js";
 import { buildMeaningUpdateMemoryRecord, isMeaningUpdateMemoryRecord, meaningUpdateMemoryRecordId,
-  meaningUpdateInterpretationForRecord, meaningUpdateInterpretationId, MeaningUpdateMemoryConsumer,
-  type MeaningUpdateMemoryRecord } from "./meaning_update_memory.js";
+  meaningUpdateInterpretationForRecord, meaningUpdateInterpretationId,
+  type MeaningUpdateMemoryRecord } from "./meaning_update_semantics.js";
 import {
   assessMeaningUpdateProposalReferences,
   buildMeaningUpdateOwnerReviewCandidate,

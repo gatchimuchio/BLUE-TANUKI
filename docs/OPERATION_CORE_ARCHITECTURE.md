@@ -10,13 +10,15 @@
 | 操作の採用と進行 | `controller.ts` → `OperationPlanLedger`のbind／revise／beginAttempt。現在の目的束縛・版・承認を照合し、Executorは発行済みticketを単回消費する。 |
 | 操作状態の正本 | `operation_plan.ts`の`change` → `OperationPlanStateStore.compareAndSet` → SQLite checkpoint。復旧holdとscope restoreは専用の保存入口を持ち、通常の進行と区別する。 |
 | 結果とMへの帰還 | Executorのreceipt／outbox → Gatewayの`reconcile_execution_results.ts` → Jの`reconcileMemory` → `JMemoryCommitCoordinator` → `保存取引.ts`。承認済み更新と期待revisionを照合してMを保存し、Gatewayは必要なM receiptを確認する。 |
-| 目的・意味の更新 | Jの`commitGoalPurposeChangeAfterL3`／`commitMeaningUpdateAfterL3`等 → 専用M consumer → 同じ制御状態・保存取引の調停。提案・観測・過去の記憶自体には更新権限がない。 |
+| 目的・意味の更新 | controllerが現在M・監査・L3を照合 → `meaning_update_candidate.ts`／`meaning_update_semantics.ts`の純粋評価・投影 → `MeaningUpdateMemoryConsumer` → 同じ制御状態・保存取引の調停。`memory_interpretation_semantics.ts`は解釈の正規化・検査・digestを担う。提案・観測・過去の記憶自体には更新権限がない。 |
 | 最終出力 | `finalize_command_output.ts` → citation確認／J feedback／output audit。表示・history・audit projectionを第二のauthorityにしない。 |
 | 環境作用の状態 | Brokerのintent／invocation／receipt／outboxは環境実行の状態を所有する。Jの採否とは別に、現在のPermission・対象・承認・期限を検査する。 |
 
 Jのpending・制御状態は`制御状態.ts`、M内容の通常保存は`保存取引.ts`に集約される。`inspectControl`等の観測APIにも既存の承認済みpending更新をreconcileする経路があるため、名前だけでread-onlyと判断してRust shadowから呼び出さない。J/Mの再open経路はcanonical event ledgerが完全に検証できた場合に限り、破損した派生行をledgerから再構成する。J schema v1の移行は書込み前と排他transaction内で旧ledger・projectionを再検証し、破損時は元schemaのまま停止する。旧pendingのpayloadは同一commit内容と現在検証済みのJ承認が再提示されるまでoutboxへ移さない。event ledger、Approval Gate、Jのwriter authorityはこの復旧で新規生成・変更しない。
 
-K-B2では、Jが明示選択・再照合した有限なoperation-result observationをdigestでC候補へ拘束し、J再照合→owner L3→専用M解釈版→次task再評価へ接続した。`plan:reflect`は採用候補入力から除外し、意味更新候補から採用・権限を自動生成しない。meaning-update専用J/M storeを含む7-store snapshot、restore前quiescence、HDS plan hold、restore後のComplete History再観測とJ/M reopen／reconcileはGateway経路に接続済み。旧5-store archiveはpartial inspectionだけを許し、restoreを拒否する。cross-store snapshotは独立取得でatomicではなく、全体復旧可能性の証拠ではない。QEB-KB03では、J/M適用後・最終監査記録前の停止窓について、同一proposal／candidate／source-observation digestと既存L3 lifecycleを照合して完了markerを再構成するconsumerを接続した。K-B3では`meaning_update_candidate.ts`へ提案parse、C結果契約、M参照評価、owner-review適格性、canonical digestを分離した。controllerは現在Mと選択観測をI/Oで再取得し、同じ純粋評価をowner review直前にも再利用する。監査、pending候補保持、Approval Gate／L3、J/M writerはcontrollerの既存境界に残り、候補評価は承認・適用・権限にならない。Rust shadowに作用権限やM writerを持たせない。次はcontent reviewからL3対象・J/M適用までの候補識別子とdigest拘束を同じ境界で再観測し、実装未接続を先に潰す。
+K-B2では、Jが明示選択・再照合した有限なoperation-result observationをdigestでC候補へ拘束し、J再照合→owner L3→専用M解釈版→次task再評価へ接続した。`plan:reflect`は採用候補入力から除外し、意味更新候補から採用・権限を自動生成しない。meaning-update専用J/M storeを含む7-store復旧経路、restore前quiescence、HDS plan hold、restore後の再観測とreconcileを接続した。旧5-store archiveはpartial inspectionだけを許しrestoreを拒否する。cross-store snapshotは独立取得でatomicではない。
+
+K-B3では提案parse・候補評価に加え、承認済み候補からM record／interpretation／evidenceを構成する純粋関数を`meaning_update_semantics.ts`へ分離し、解釈content digestとcanonical JSON検査を`memory_interpretation_semantics.ts`へ切り出した。両moduleはGateway、SQLite、J/M coordinatorをimportしない。controllerは現在M・選択観測・監査・L3を再読し、既存J/M writerが承認後に意味projectionを保存する。content review→L3→digest照合→J/M適用の経路はコード上で接続を確認した。HDS 5 files／10 tests、HDS／Gateway typecheck、HDS build、standalone smokeはPASS。Gateway smokeはWindows上で15秒以内のhealth成立に至らず、統合経路の実行証拠は未成立。Rust shadowに作用権限・M writerを持たせない。次はcontroller内のmemory-judgment reassessment候補導出を純粋意味処理として抽出する。
 
 ## 1. 目的
 

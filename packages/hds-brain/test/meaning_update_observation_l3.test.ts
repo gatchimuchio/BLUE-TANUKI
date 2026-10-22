@@ -11,7 +11,8 @@ import { evaluateApproval, meaningUpdateAdoptionApprovalTarget } from "../src/ap
 import { HDSUpperController } from "../src/controller.js";
 import { goalGovernanceEventDigest } from "../src/goal_governance.js";
 import { LongTermMemoryStore } from "../src/long-term-memory/index.js";
-import { buildMeaningUpdateMemoryRecord, MeaningUpdateMemoryConsumer, meaningUpdateMemoryRecordId } from "../src/meaning_update_memory.js";
+import { MeaningUpdateMemoryConsumer } from "../src/meaning_update_memory.js";
+import { buildMeaningUpdateMemoryRecord, meaningUpdateMemoryRecordId } from "../src/meaning_update_semantics.js";
 import { operationPlanDigest, type OperationPlanMemoryStorage, type OperationPlanStatePort } from "../src/operation_plan.js";
 
 const roots: string[] = [];
