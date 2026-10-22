@@ -2,12 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import {
   TeamsChannel,
+  TeamsGraphTransport,
   teamsChannelReplyTarget,
   teamsChannelTarget,
   type TeamsInboundHandler,
   type TeamsInboundGrant,
   type TeamsInboundMessage,
   type TeamsEventInbox,
+  type TeamsOutboundDeliveryInput,
+  type TeamsOutboundDeliveryClaim,
+  type TeamsOutboundDeliveryState,
+  type TeamsOutboundDeliveryStatus,
+  type TeamsOutboundDeliveryStore,
+  type TeamsPendingDelivery,
   type TeamsPostResult,
   type TeamsTransport,
 } from "../src/index.js";
@@ -68,6 +75,65 @@ class MemoryTeamsInbox implements TeamsEventInbox {
   }
 }
 
+class MemoryTeamsOutbox implements TeamsOutboundDeliveryStore {
+  private readonly rows = new Map<string, {
+    input: TeamsOutboundDeliveryInput;
+    state: TeamsOutboundDeliveryState;
+    attempt_count: number;
+    not_before_ms: number;
+    retry_after_ms?: number;
+    external_message_id?: string;
+    error_code?: string;
+  }>();
+  enqueue(input: TeamsOutboundDeliveryInput, nowMs = Date.now()): void {
+    const current = this.rows.get(input.delivery_id);
+    if (current) {
+      if (JSON.stringify(current.input) !== JSON.stringify(input)) throw new Error("payload_conflict");
+      return;
+    }
+    this.rows.set(input.delivery_id, { input, state: "queued", attempt_count: 0, not_before_ms: nowMs });
+  }
+  pending(): readonly TeamsPendingDelivery[] {
+    return [...this.rows.values()].flatMap((row) => row.state === "queued" || row.state === "retry_wait"
+      ? [{ delivery_id: row.input.delivery_id, delivery_state: row.state, not_before_ms: row.not_before_ms }]
+      : []);
+  }
+  claimDelivery(deliveryId: string, nowMs = Date.now()): TeamsOutboundDeliveryClaim | null {
+    const row = this.rows.get(deliveryId);
+    if (!row || (row.state !== "queued" && row.state !== "retry_wait") || row.not_before_ms > nowMs) return null;
+    row.state = "dispatching";
+    row.attempt_count += 1;
+    return { ...row.input, payload_digest: "a".repeat(64), attempt_count: row.attempt_count };
+  }
+  scheduleRetry(deliveryId: string, notBeforeMs: number, retryAfterMs: number): void {
+    const row = this.rows.get(deliveryId);
+    if (!row || row.state !== "dispatching") throw new Error("invalid_state");
+    row.state = "retry_wait"; row.not_before_ms = notBeforeMs; row.retry_after_ms = retryAfterMs; row.error_code = "rate_limited";
+  }
+  settleDelivery(deliveryId: string, state: "delivered" | "not_delivered" | "outcome_unknown" | "retry_exhausted",
+    result: { readonly external_message_id?: string; readonly error_code?: string; readonly retry_after_ms?: number } = {}): void {
+    const row = this.rows.get(deliveryId);
+    if (!row) throw new Error("missing_delivery");
+    row.state = state; row.external_message_id = result.external_message_id; row.error_code = result.error_code;
+    if (result.retry_after_ms !== undefined) row.retry_after_ms = result.retry_after_ms;
+    row.input = { ...row.input, target: "", text: "" };
+  }
+  cancelPending(deliveryId: string): void {
+    const row = this.rows.get(deliveryId);
+    if (!row || (row.state !== "queued" && row.state !== "retry_wait")) throw new Error("not_pending");
+    row.state = "not_delivered"; row.input = { ...row.input, target: "", text: "" }; row.error_code = "cancelled_before_retry";
+  }
+  status(deliveryId: string): TeamsOutboundDeliveryStatus | null {
+    const row = this.rows.get(deliveryId);
+    if (!row) return null;
+    return { delivery_id: deliveryId, payload_digest: "a".repeat(64), delivery_state: row.state,
+      attempt_count: row.attempt_count, not_before_ms: row.not_before_ms,
+      ...(row.retry_after_ms === undefined ? {} : { retry_after_ms: row.retry_after_ms }),
+      ...(row.external_message_id === undefined ? {} : { external_message_id: row.external_message_id }),
+      ...(row.error_code === undefined ? {} : { error_code: row.error_code }) };
+  }
+}
+
 class FakeTeamsTransport implements TeamsTransport {
   handler: TeamsInboundHandler | null = null;
   posted: Array<{ target: string; text: string }> = [];
@@ -118,10 +184,16 @@ describe("TeamsChannel", () => {
     }
   });
 
+  it("requires a Gateway outbox before activating any Teams sender", async () => {
+    const channel = new TeamsChannel({ transport: new FakeTeamsTransport(), log: () => undefined });
+    await expect(channel.start(async () => undefined)).rejects.toThrow("teams_durable_delivery_store_required_for_live_sends");
+  });
+
   it("admits only an exact owner grant, deduplicates durably, and uses a stable actor instead of display text", async () => {
     const transport = new FakeTeamsTransport();
     const inbox = new MemoryTeamsInbox();
-    const channel = new TeamsChannel({ transport, inbox, inbound_grants: [inboundGrant], log: () => undefined });
+    const channel = new TeamsChannel({ transport, inbox, delivery_store: new MemoryTeamsOutbox(),
+      inbound_grants: [inboundGrant], log: () => undefined });
     const received: InboundRequest[] = [];
     await channel.start(async (req) => {
       received.push(req);
@@ -151,7 +223,8 @@ describe("TeamsChannel", () => {
   it("rejects injected events without a grant before touching the replay inbox", async () => {
     const transport = new FakeTeamsTransport();
     const inbox = new MemoryTeamsInbox();
-    const channel = new TeamsChannel({ transport, inbox, inbound_grants: [], log: () => undefined });
+    const channel = new TeamsChannel({ transport, inbox, delivery_store: new MemoryTeamsOutbox(),
+      inbound_grants: [], log: () => undefined });
     let calls = 0;
     await channel.start(async () => { calls += 1; });
     try {
@@ -230,9 +303,16 @@ describe("TeamsChannel", () => {
     }
   });
 
+  it("reports missing Graph send credentials as confirmed non-delivery", async () => {
+    const transport = new TeamsAgentsTransport({ credentials });
+    await expect(transport.postMessage({ target: "chat/19%3Achat%40thread.v2", text: "hello" })).resolves.toMatchObject({
+      ok: false, delivery_status: "not_delivered", error_code: "teams_not_configured",
+    });
+  });
+
   it("sends through transport and classifies permanent failures", async () => {
     const transport = new FakeTeamsTransport();
-    const channel = new TeamsChannel({ transport, log: () => undefined });
+    const channel = new TeamsChannel({ transport, delivery_store: new MemoryTeamsOutbox(), log: () => undefined });
     await channel.start(async () => undefined);
     try {
       const target = teamsChannelTarget("team-1", "channel-1");
@@ -260,6 +340,7 @@ describe("TeamsChannel", () => {
     const calls: Array<{ url: string; body: unknown; auth: string | null; has_signal: boolean }> = [];
     const channel = new TeamsChannel({
       access_token: "secret-graph-token",
+      delivery_store: new MemoryTeamsOutbox(),
       log: () => undefined,
       fetch: async (input, init) => {
         calls.push({
@@ -299,9 +380,93 @@ describe("TeamsChannel", () => {
     }
   });
 
-  it("classifies Microsoft Graph HTTP timeout as recoverable", async () => {
+  it("maps channel replies and chats to their distinct Microsoft Graph consumers", async () => {
+    const urls: string[] = [];
+    const transport = new TeamsGraphTransport({
+      access_token: "fixture-token",
+      fetch: async (input) => {
+        urls.push(String(input));
+        return new Response(JSON.stringify({ id: `sent-${urls.length}` }), { status: 201 });
+      },
+    });
+    const channelResult = await transport.postMessage({
+      target: teamsChannelReplyTarget("team/one", "channel:one", "message@one"), text: "reply",
+    });
+    const chatResult = await transport.postMessage({ target: "chat/19%3Achat%40thread.v2", text: "chat" });
+    expect(channelResult).toMatchObject({ ok: true, delivery_status: "delivered" });
+    expect(chatResult).toMatchObject({ ok: true, delivery_status: "delivered" });
+    expect(urls).toEqual([
+      "https://graph.microsoft.com/v1.0/teams/team%2Fone/channels/channel%3Aone/messages/message%40one/replies",
+      "https://graph.microsoft.com/v1.0/chats/19%3Achat%40thread.v2/messages",
+    ]);
+  });
+
+  it("accepts only an explicit Graph 429 with a valid Retry-After as retryable", async () => {
+    const response = (retryAfter?: string) => new TeamsGraphTransport({
+      access_token: "fixture-token",
+      fetch: async () => new Response(JSON.stringify({ error: { code: "TooManyRequests", message: "slow down" } }), {
+        status: 429,
+        headers: retryAfter === undefined ? {} : { "Retry-After": retryAfter },
+      }),
+    });
+    const target = "chat/19%3Achat%40thread.v2";
+    let invalidTargetFetches = 0;
+    const invalidTarget = await new TeamsGraphTransport({
+      access_token: "fixture-token",
+      fetch: async () => { invalidTargetFetches += 1; return new Response("unexpected", { status: 201 }); },
+    }).postMessage({ target: "invalid", text: "hello" });
+    expect(invalidTarget).toMatchObject({ ok: false, delivery_status: "not_delivered", error_code: "invalid_teams_target" });
+    expect(invalidTargetFetches).toBe(0);
+    await expect(response("2").postMessage({ target, text: "hello" })).resolves.toMatchObject({
+      ok: false, delivery_status: "not_delivered", rate_limit_rejected: true, retry_after_ms: 2000,
+    });
+    await expect(response("not-a-date").postMessage({ target, text: "hello" })).resolves.toMatchObject({
+      ok: false, delivery_status: "not_delivered", rate_limit_rejected: true, retry_after_invalid: true,
+    });
+    await expect(response().postMessage({ target, text: "hello" })).resolves.toMatchObject({
+      ok: false, delivery_status: "not_delivered", rate_limit_rejected: true,
+    });
+    await expect(new TeamsGraphTransport({
+      access_token: "fixture-token",
+      fetch: async () => new Response("service unavailable", { status: 503 }),
+    }).postMessage({ target, text: "hello" })).resolves.toMatchObject({
+      ok: false, delivery_status: "unknown", error_code: "graph_http_503",
+    });
+  });
+
+  it("does not automatically retry a Graph 429 without a usable Retry-After", async () => {
+    let calls = 0;
+    const channel = new TeamsChannel({
+      access_token: "fixture-token",
+      delivery_store: new MemoryTeamsOutbox(),
+      log: () => undefined,
+      fetch: async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ error: { code: "TooManyRequests" } }), { status: 429 });
+      },
+    });
+    await channel.start(async () => undefined);
+    try {
+      const result = await channel.send(
+        { channel: "teams", target: "chat/19%3Achat%40thread.v2", content: "hello" },
+        { command_id: "cmd", upstream_commit_hash: "hash" },
+      );
+      expect(result).toMatchObject({
+        delivered: false,
+        delivery_status: "not_delivered",
+        error_code: "retry_after_missing",
+      });
+      expect(result.next_action).toContain("Automatic retry was suppressed");
+      expect(calls).toBe(1);
+    } finally {
+      await channel.stop();
+    }
+  });
+
+  it("keeps Microsoft Graph HTTP timeout outcome unknown and does not retry", async () => {
     const channel = new TeamsChannel({
       access_token: "secret-graph-token",
+      delivery_store: new MemoryTeamsOutbox(),
       request_timeout_ms: 1,
       retry: false,
       log: () => undefined,
@@ -326,9 +491,11 @@ describe("TeamsChannel", () => {
       );
       expect(result).toMatchObject({
         delivered: false,
-        error_kind: "recoverable",
-        error_code: "teams_timeout",
+        delivery_status: "unknown",
+        error_kind: "non_recoverable",
+        error_code: "delivery_outcome_unknown",
       });
+      expect(result.next_action).toContain("Inspect the Teams conversation");
     } finally {
       await channel.stop();
     }
@@ -341,6 +508,7 @@ describe("TeamsChannel", () => {
     const requestStarted = new Promise<void>((resolve) => { started = resolve; });
     const channel = new TeamsChannel({
       access_token: "secret-graph-token",
+      delivery_store: new MemoryTeamsOutbox(),
       retry: false,
       log: () => undefined,
       fetch: async (_input, init) => {
@@ -369,27 +537,26 @@ describe("TeamsChannel", () => {
     }
   });
 
-  it("retries recoverable rate-limit responses", async () => {
+  it("retries only explicit rate-limit rejections with a valid Retry-After", async () => {
     const transport = new FakeTeamsTransport();
     let calls = 0;
     transport.postMessage = async (): Promise<TeamsPostResult> => {
       calls += 1;
-      if (calls < 3) return { ok: false, error: "rate_limited", retry_after_ms: 25 };
+      if (calls < 3) return { ok: false, delivery_status: "not_delivered", rate_limit_rejected: true,
+        error: "rate_limited", retry_after_ms: 25 };
       return { ok: true, message_id: "done" };
     };
     const sleeps: number[] = [];
     const channel = new TeamsChannel({
       transport,
+      delivery_store: new MemoryTeamsOutbox(),
       log: () => undefined,
       retry: {
         max_retries: 3,
-        base_delay_ms: 10,
-        max_delay_ms: 1000,
-        jitter_ratio: 0,
         sleep: async (ms) => {
           sleeps.push(ms);
+          await new Promise((resolve) => setTimeout(resolve, ms));
         },
-        random: () => 0.5,
       },
     });
     await channel.start(async () => undefined);
@@ -415,9 +582,8 @@ describe("TeamsChannel", () => {
       controller.abort();
       return { ok: false, error: "rate_limited", retry_after_ms: 1 };
     };
-    const channel = new TeamsChannel({ transport, log: () => {}, retry: {
-      max_retries: 3, base_delay_ms: 0, max_delay_ms: 1, jitter_ratio: 0,
-      sleep: async () => {}, random: () => 0.5,
+    const channel = new TeamsChannel({ transport, delivery_store: new MemoryTeamsOutbox(), log: () => {}, retry: {
+      max_retries: 3, sleep: async () => {},
     } });
     await channel.start(async () => undefined);
     try {

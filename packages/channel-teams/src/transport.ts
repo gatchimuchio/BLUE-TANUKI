@@ -42,12 +42,63 @@ export type TeamsInboundHandler = (m: TeamsInboundMessage) => Promise<void>;
 
 export interface TeamsPostResult {
   ok: boolean;
+  delivery_status?: "delivered" | "not_delivered" | "unknown";
   message_id?: string;
   request_id?: string;
   error?: string;
   error_kind?: ChannelDeliveryErrorKind;
   error_code?: string;
   retry_after_ms?: number;
+  rate_limit_rejected?: true;
+  retry_after_invalid?: true;
+}
+
+export type TeamsOutboundDeliveryState = "queued" | "dispatching" | "retry_wait" | "delivered" |
+  "not_delivered" | "outcome_unknown" | "retry_exhausted";
+
+export interface TeamsOutboundDeliveryInput {
+  readonly delivery_id: string;
+  readonly channel: "teams";
+  readonly target: string;
+  readonly text: string;
+}
+
+export interface TeamsOutboundDeliveryClaim extends TeamsOutboundDeliveryInput {
+  readonly payload_digest: string;
+  readonly attempt_count: number;
+}
+
+export interface TeamsPendingDelivery {
+  readonly delivery_id: string;
+  readonly delivery_state: "queued" | "retry_wait";
+  readonly not_before_ms: number;
+}
+
+export interface TeamsOutboundDeliveryStatus {
+  readonly delivery_id: string;
+  readonly payload_digest: string;
+  readonly delivery_state: TeamsOutboundDeliveryState;
+  readonly attempt_count: number;
+  readonly not_before_ms: number;
+  readonly retry_after_ms?: number;
+  readonly external_message_id?: string;
+  readonly error_code?: string;
+}
+
+/** Gateway-owned durable outbox. Raw reply payloads exist only while delivery is pending. */
+export interface TeamsOutboundDeliveryStore {
+  enqueue(input: TeamsOutboundDeliveryInput, now_ms?: number): void;
+  pending(): readonly TeamsPendingDelivery[];
+  claimDelivery(delivery_id: string, now_ms?: number): TeamsOutboundDeliveryClaim | null;
+  scheduleRetry(delivery_id: string, not_before_ms: number, retry_after_ms: number, now_ms?: number): void;
+  settleDelivery(
+    delivery_id: string,
+    state: "delivered" | "not_delivered" | "outcome_unknown" | "retry_exhausted",
+    result?: { readonly external_message_id?: string; readonly error_code?: string; readonly retry_after_ms?: number },
+    now_ms?: number,
+  ): void;
+  cancelPending(delivery_id: string, now_ms?: number): void;
+  status(delivery_id: string): TeamsOutboundDeliveryStatus | null;
 }
 
 export interface TeamsTransport {
@@ -89,6 +140,7 @@ export class TeamsGraphTransport implements TeamsTransport {
     if (!target.ok) {
       return {
         ok: false,
+        delivery_status: "not_delivered",
         error: target.error,
         error_kind: "non_recoverable",
         error_code: "invalid_teams_target",
@@ -99,6 +151,7 @@ export class TeamsGraphTransport implements TeamsTransport {
     if (!fetchImpl) {
       return {
         ok: false,
+        delivery_status: "not_delivered",
         error: "fetch_unavailable",
         error_kind: "non_recoverable",
         error_code: "fetch_unavailable",
@@ -108,6 +161,7 @@ export class TeamsGraphTransport implements TeamsTransport {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res: Response;
+    let text: string;
     try {
       res = await fetchImpl(`${GRAPH_ROOT}${path}`, {
         method: "POST",
@@ -122,22 +176,21 @@ export class TeamsGraphTransport implements TeamsTransport {
             content: args.text,
           },
         }),
+        redirect: "error",
         signal: callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal,
       });
+      text = await res.text();
     } catch (error) {
-      if (isAbortError(error)) {
-        return {
-          ok: false,
-          error: `teams_timeout_${timeoutMs}ms`,
-          error_kind: "recoverable",
-          error_code: "teams_timeout",
-        };
-      }
-      throw error;
+      return {
+        ok: false,
+        delivery_status: "unknown",
+        error: isAbortError(error) ? `teams_timeout_${timeoutMs}ms` : "teams_transport_outcome_unknown",
+        error_kind: "non_recoverable",
+        error_code: "delivery_outcome_unknown",
+      };
     } finally {
       clearTimeout(timer);
     }
-    const text = await res.text();
     const parsed = parseJsonObject(text);
     const requestId =
       res.headers.get("request-id") ??
@@ -146,15 +199,34 @@ export class TeamsGraphTransport implements TeamsTransport {
     if (res.status >= 200 && res.status < 300) {
       return {
         ok: true,
+        delivery_status: "delivered",
         message_id: readString(parsed, "id") ?? requestId,
         request_id: requestId,
       };
     }
+    const graphCode = `graph_http_${res.status}`;
+    if (res.status === 429) {
+      const header = res.headers.get("retry-after");
+      const retryAfter = parseRetryAfterMs(header);
+      return {
+        ok: false,
+        delivery_status: "not_delivered",
+        rate_limit_rejected: true,
+        request_id: requestId,
+        error: graphError(res.status, parsed),
+        error_kind: "recoverable",
+        error_code: "rate_limited",
+        ...(retryAfter.retry_after_ms === undefined ? {} : { retry_after_ms: retryAfter.retry_after_ms }),
+        ...(retryAfter.invalid ? { retry_after_invalid: true } : {}),
+      };
+    }
     return {
       ok: false,
+      delivery_status: res.status >= 400 && res.status < 500 ? "not_delivered" : "unknown",
       request_id: requestId,
       error: graphError(res.status, parsed),
-      retry_after_ms: retryAfterMs(res.headers.get("retry-after")),
+      error_kind: "non_recoverable",
+      error_code: graphCode,
     };
   }
 }
@@ -181,32 +253,43 @@ function parseTeamsTarget(
   const parts = raw.split("/");
   try {
     if (parts[0] === "channel" && parts.length === 3) {
+      const teamId = decodeURIComponent(parts[1]!);
+      const channelId = decodeURIComponent(parts[2]!);
+      if (!isSafeTeamsIdentifier(teamId) || !isSafeTeamsIdentifier(channelId)) throw new Error("invalid target id");
       return {
         ok: true,
         value: {
           kind: "channel",
-          team_id: decodeURIComponent(parts[1]!),
-          channel_id: decodeURIComponent(parts[2]!),
+          team_id: teamId,
+          channel_id: channelId,
         },
       };
     }
     if (parts[0] === "reply" && parts.length === 4) {
+      const teamId = decodeURIComponent(parts[1]!);
+      const channelId = decodeURIComponent(parts[2]!);
+      const messageId = decodeURIComponent(parts[3]!);
+      if (!isSafeTeamsIdentifier(teamId) || !isSafeTeamsIdentifier(channelId) || !isSafeTeamsIdentifier(messageId)) {
+        throw new Error("invalid target id");
+      }
       return {
         ok: true,
         value: {
           kind: "channel_reply",
-          team_id: decodeURIComponent(parts[1]!),
-          channel_id: decodeURIComponent(parts[2]!),
-          message_id: decodeURIComponent(parts[3]!),
+          team_id: teamId,
+          channel_id: channelId,
+          message_id: messageId,
         },
       };
     }
     if (parts[0] === "chat" && parts.length === 2) {
+      const chatId = decodeURIComponent(parts[1]!);
+      if (!isSafeTeamsIdentifier(chatId)) throw new Error("invalid target id");
       return {
         ok: true,
         value: {
           kind: "chat",
-          chat_id: decodeURIComponent(parts[1]!),
+          chat_id: chatId,
         },
       };
     }
@@ -256,16 +339,29 @@ function graphError(status: number, body: Record<string, unknown>): string {
   return message ? `graph_${status}: ${message}` : `graph_http_${status}`;
 }
 
-function retryAfterMs(value: string | null): number | undefined {
-  if (!value) return undefined;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds * 1000);
-  const time = Date.parse(value);
+function parseRetryAfterMs(value: string | null): { retry_after_ms?: number; invalid: boolean } {
+  if (value === null) return { invalid: false };
+  const trimmed = value.trim();
+  if (!trimmed) return { invalid: true };
+  if (/^\d+$/u.test(trimmed)) {
+    const seconds = Number(trimmed);
+    const delay = seconds * 1000;
+    return Number.isSafeInteger(seconds) && seconds > 0 && Number.isSafeInteger(delay)
+      ? { retry_after_ms: delay, invalid: false }
+      : { invalid: true };
+  }
+  const time = Date.parse(trimmed);
   if (!Number.isNaN(time)) {
     const delta = time - Date.now();
-    return delta > 0 ? delta : undefined;
+    return Number.isSafeInteger(delta) && delta > 0
+      ? { retry_after_ms: delta, invalid: false }
+      : { invalid: true };
   }
-  return undefined;
+  return { invalid: true };
+}
+
+function isSafeTeamsIdentifier(value: string): boolean {
+  return value.length > 0 && value.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 function readString(obj: Record<string, unknown>, key: string): string | undefined {

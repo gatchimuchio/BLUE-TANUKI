@@ -144,6 +144,7 @@ export class TeamsAgentsTransport implements TeamsTransport {
     if (!this.graph) {
       return {
         ok: false,
+        delivery_status: "not_delivered",
         error: "teams_graph_access_token_unset",
         error_kind: "non_recoverable",
         error_code: "teams_not_configured",

@@ -4409,8 +4409,14 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const teamsInboundGrants = teamsIngressConfigured
     ? parseTeamsInboundGrants(process.env.TEAMS_INBOUND_GRANTS_JSON)
     : [];
-  const teamsEventStore = teamsIngressConfigured && teamsAgentCredentials
-    ? GatewayTeamsEventStore.fromEnvironment(process.env, teamsAgentCredentials.client_id)
+  const teamsSenderConfigured = Boolean(process.env.MICROSOFT_GRAPH_ACCESS_TOKEN?.trim());
+  const teamsStoreConfigured = plugins.has("@blue-tanuki/channel-teams") &&
+    (teamsIngressConfigured || teamsSenderConfigured);
+  const teamsEventStore = teamsStoreConfigured
+    ? GatewayTeamsEventStore.fromEnvironment(
+        process.env,
+        teamsAgentCredentials?.client_id ?? `graph-token:${createHash("sha256").update(process.env.MICROSOFT_GRAPH_ACCESS_TOKEN!).digest("hex")}`,
+      )
     : null;
   const telegram = plugins.createChannel<InboundChannel & OutboundChannel>({
     package_name: "@blue-tanuki/channel-telegram",
@@ -4463,10 +4469,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ...(teamsIngressConfigured && teamsAgentCredentials ? {
         agent_auth: teamsAgentCredentials,
         inbound_grants: teamsInboundGrants,
-        inbox: teamsEventStore,
+        inbox: teamsIngressConfigured ? teamsEventStore : undefined,
         agent_port: parsePositiveInt(process.env.TEAMS_AGENT_PORT),
         agent_route: process.env.TEAMS_AGENT_ROUTE,
       } : {}),
+      ...(teamsEventStore ? { delivery_store: teamsEventStore } : {}),
       log: (line: string) => teamsLog.info(line),
     }),
     optionalPreviewChannel("@blue-tanuki/channel-line", [

@@ -5,9 +5,6 @@ import type {
 } from "@blue-tanuki/protocol";
 import {
   classifyChannelDeliveryError,
-  isRecoverableChannelDeliveryError,
-  withRetryBackoff,
-  type BackoffOptions,
   type InboundChannel,
   type InboundHandler,
   type OutboundChannel,
@@ -24,6 +21,7 @@ import {
   type TeamsInboundMessage,
   type TeamsInboundGrant,
   type TeamsEventInbox,
+  type TeamsOutboundDeliveryStore,
   type TeamsPostResult,
   type TeamsTransport,
 } from "./transport.js";
@@ -31,11 +29,7 @@ import { TeamsAgentsTransport, type TeamsAgentCredentials } from "./agents_trans
 
 export interface TeamsRetryConfig {
   max_retries: number;
-  base_delay_ms: number;
-  max_delay_ms: number;
-  jitter_ratio: number;
   sleep?: (ms: number) => Promise<void>;
-  random?: () => number;
 }
 
 export interface TeamsOptions {
@@ -49,6 +43,8 @@ export interface TeamsOptions {
   inbound_grants?: readonly TeamsInboundGrant[];
   /** Gateway-owned durable inbound replay boundary; required when agent_auth is configured. */
   inbox?: TeamsEventInbox;
+  /** Gateway-owned durable outbound queue; required for every active transport. */
+  delivery_store?: TeamsOutboundDeliveryStore;
   /** Authenticated ingress bind address. Defaults to loopback. */
   agent_host?: string;
   /** Authenticated ingress port. Defaults to 3978. */
@@ -65,9 +61,6 @@ export interface TeamsOptions {
 
 const DEFAULT_RETRY: TeamsRetryConfig = {
   max_retries: 3,
-  base_delay_ms: 500,
-  max_delay_ms: 30_000,
-  jitter_ratio: 0.2,
 };
 
 interface SentRecord {
@@ -90,6 +83,7 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
   private started = false;
   private counter = 0;
   private transport: TeamsTransport | null = null;
+  private lifecycleAbort = new AbortController();
 
   constructor(private readonly opts: TeamsOptions = {}) {}
 
@@ -102,6 +96,10 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
     if (this.opts.agent_auth && !this.opts.inbox) {
       throw new Error("teams_durable_inbox_required_for_authenticated_ingress");
     }
+    if ((this.opts.transport || this.opts.access_token || this.opts.agent_auth) && !this.opts.delivery_store) {
+      throw new Error("teams_durable_delivery_store_required_for_live_sends");
+    }
+    if (this.opts.transport || this.opts.access_token || this.opts.agent_auth) validateRetryConfig(this.opts.retry);
     if (this.opts.transport) {
       this.transport = this.opts.transport;
     } else if (this.opts.agent_auth) {
@@ -126,6 +124,7 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
       return;
     }
 
+    this.lifecycleAbort = new AbortController();
     this.started = true;
     if (!this.opts.inbound_grants?.length) {
       this.log("[teams] WARN TEAMS_INBOUND_GRANTS_JSON unset/empty - inbound messages are rejected");
@@ -173,6 +172,11 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
       });
       this.silent = false;
       this.log("[teams] active");
+      for (const pending of this.opts.delivery_store?.pending() ?? []) {
+        void this.dispatchPersistedDelivery(pending.delivery_id).then((result) => {
+          this.log(`[teams] recovered outbound delivery state=${result.ok ? "delivered" : result.delivery_status ?? "unknown"}`);
+        }).catch(() => this.log("[teams] recovered outbound delivery remains unresolved"));
+      }
     } catch (e) {
       this.silent = true;
       this.started = false;
@@ -192,6 +196,7 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
+    this.lifecycleAbort.abort();
     if (this.transport) {
       try {
         await this.transport.stop();
@@ -234,12 +239,35 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
       };
     }
 
-    const retryCfg = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
-    const callOnce = (): Promise<TeamsPostResult> => {
-      if (context?.signal?.aborted) return Promise.reject(new Error("channel_send_cancelled_before_transport_dispatch"));
-      return this.transport!.postMessage({ target: payload.target, text: payload.content }, context?.signal);
-    };
-    const r = retryCfg ? await withTeamsRetry(callOnce, retryCfg, this.opts.log, payload.target, context?.signal) : await callOnce();
+    let r: TeamsPostResult = { ok: false, delivery_status: "not_delivered",
+      error: "teams_send_not_started", error_kind: "non_recoverable", error_code: "send_not_started" };
+    if (this.opts.delivery_store) {
+      const deliveryId = randomUUID();
+      let enqueued = false;
+      try {
+        this.opts.delivery_store.enqueue({
+          delivery_id: deliveryId,
+          channel: "teams",
+          target: payload.target,
+          text: payload.content,
+        });
+        enqueued = true;
+      } catch {
+        r = { ok: false, delivery_status: "not_delivered", error: "teams_delivery_store_unavailable",
+          error_kind: "non_recoverable", error_code: "delivery_store_unavailable" };
+      }
+      if (enqueued) {
+        try {
+          r = await this.dispatchPersistedDelivery(deliveryId, context?.signal);
+        } catch {
+          r = { ok: false, delivery_status: "unknown", error: "teams_delivery_state_unavailable",
+            error_kind: "non_recoverable", error_code: "delivery_state_unavailable" };
+        }
+      }
+    } else {
+      r = { ok: false, delivery_status: "not_delivered", error: "teams_delivery_store_unavailable",
+        error_kind: "non_recoverable", error_code: "delivery_store_unavailable" };
+    }
 
     const details = r.ok
       ? null
@@ -264,10 +292,11 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
       this.log(
         `[teams] sent target=${payload.target} id=${external_id} commit=${meta.upstream_commit_hash.slice(0, 8)}`,
       );
-      return { delivered: true, external_id };
+      return { delivered: true, delivery_status: "delivered", external_id };
     }
     return {
       delivered: false,
+      delivery_status: r.delivery_status ?? "unknown",
       error: r.error ?? "teams_send_failed",
       error_kind: r.error_kind ?? details!.error_kind,
       error_code: r.error_code ?? details!.error_code,
@@ -286,6 +315,89 @@ export class TeamsChannel implements InboundChannel, OutboundChannel {
 
   private log(line: string): void {
     (this.opts.log ?? console.log)(line);
+  }
+
+  private async dispatchPersistedDelivery(deliveryId: string, callerSignal?: AbortSignal): Promise<TeamsPostResult> {
+    const store = this.opts.delivery_store!;
+    const retry = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
+    while (true) {
+      if (callerSignal?.aborted) {
+        try { store.cancelPending(deliveryId); } catch { /* already claimed or settled */ }
+        return { ...cancelledBeforeDispatch(), error: "cancelled_before_retry", error_code: "cancelled_before_retry" };
+      }
+      const pending = store.pending().find((row) => row.delivery_id === deliveryId);
+      if (!pending) {
+        const status = store.status(deliveryId);
+        if (status?.delivery_state === "delivered") return { ok: true, delivery_status: "delivered", message_id: status.external_message_id };
+        const delivery_status = status?.delivery_state === "not_delivered" || status?.delivery_state === "retry_exhausted"
+          ? "not_delivered" : "unknown";
+        return { ok: false, delivery_status, error: status?.error_code ?? "teams_delivery_state_unavailable",
+          error_code: status?.error_code, ...(status?.retry_after_ms ? { retry_after_ms: status.retry_after_ms } : {}) };
+      }
+      const delay = Math.max(0, pending.not_before_ms - Date.now());
+      const lifecycleSignal = this.lifecycleAbort.signal;
+      const waitSignal = callerSignal ? AbortSignal.any([callerSignal, lifecycleSignal]) : lifecycleSignal;
+      if (delay > 0 && !await sleepWithSignal(delay, waitSignal, retry?.sleep)) {
+        if (callerSignal?.aborted) {
+          try { store.cancelPending(deliveryId); } catch { /* already claimed or settled */ }
+          return { ...cancelledBeforeDispatch(), error: "cancelled_before_retry", error_code: "cancelled_before_retry" };
+        }
+        return { ok: false, delivery_status: "not_delivered", error: "teams_delivery_wait_interrupted",
+          error_code: "delivery_wait_interrupted", retry_after_ms: delay };
+      }
+      if (callerSignal?.aborted) {
+        try { store.cancelPending(deliveryId); } catch { /* already claimed or settled */ }
+        return cancelledBeforeDispatch();
+      }
+      if (lifecycleSignal.aborted) {
+        return { ok: false, delivery_status: "not_delivered", error: "teams_delivery_wait_interrupted",
+          error_code: "delivery_wait_interrupted", ...(delay > 0 ? { retry_after_ms: delay } : {}) };
+      }
+      const claim = store.claimDelivery(deliveryId);
+      if (!claim) continue;
+      if (callerSignal?.aborted) {
+        store.settleDelivery(deliveryId, "not_delivered", { error_code: "cancelled_before_dispatch" });
+        return cancelledBeforeDispatch();
+      }
+      let result: TeamsPostResult;
+      try {
+        result = await this.transport!.postMessage({ target: claim.target, text: claim.text },
+          callerSignal ? AbortSignal.any([callerSignal, lifecycleSignal]) : lifecycleSignal);
+      } catch {
+        result = { ok: false, delivery_status: "unknown", error: "teams_transport_outcome_unknown",
+          error_kind: "non_recoverable", error_code: "delivery_outcome_unknown" };
+      }
+      if (result.ok) {
+        store.settleDelivery(deliveryId, "delivered", { ...(result.message_id ? { external_message_id: result.message_id } : {}) });
+        return { ...result, delivery_status: "delivered" };
+      }
+      if (isExplicitRateLimitRejection(result)) {
+        const retryAfter = validRetryAfter(result);
+        if (result.retry_after_invalid) {
+          store.settleDelivery(deliveryId, "retry_exhausted", { error_code: "retry_after_invalid" });
+          return { ...result, delivery_status: "not_delivered", error_code: "retry_after_invalid" };
+        }
+        if (retryAfter === null) {
+          store.settleDelivery(deliveryId, "not_delivered", { error_code: "retry_after_missing" });
+          return { ...result, delivery_status: "not_delivered", error_code: "retry_after_missing" };
+        }
+        if (retry && claim.attempt_count <= retry.max_retries && retryAfter <= Number.MAX_SAFE_INTEGER - Date.now()) {
+          store.scheduleRetry(deliveryId, Date.now() + retryAfter, retryAfter);
+          if (callerSignal?.aborted) {
+            try { store.cancelPending(deliveryId); } catch { /* already settled */ }
+            return { ...result, delivery_status: "not_delivered", retry_after_ms: retryAfter };
+          }
+          if (lifecycleSignal.aborted) return { ...result, delivery_status: "not_delivered", retry_after_ms: retryAfter };
+          this.log(`[teams] persisted retry attempt=${claim.attempt_count} delay_ms=${retryAfter} target=${claim.target}`);
+          continue;
+        }
+        store.settleDelivery(deliveryId, "retry_exhausted", { error_code: "rate_limited", retry_after_ms: retryAfter });
+        return { ...result, delivery_status: "not_delivered", error_code: "rate_limited", retry_after_ms: retryAfter };
+      }
+      store.settleDelivery(deliveryId, result.delivery_status === "not_delivered" ? "not_delivered" : "outcome_unknown",
+        { ...(result.error_code ? { error_code: result.error_code } : {}) });
+      return result;
+    }
   }
 }
 
@@ -375,44 +487,66 @@ function isSafeTeamsId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
-async function withTeamsRetry(
-  callOnce: () => Promise<TeamsPostResult>,
-  retryCfg: TeamsRetryConfig,
-  log: ((line: string) => void) | undefined,
-  target: string,
-  cancelSignal?: AbortSignal,
-): Promise<TeamsPostResult> {
-  const opts: BackoffOptions<TeamsPostResult> = {
-    max_retries: retryCfg.max_retries,
-    base_delay_ms: retryCfg.base_delay_ms,
-    max_delay_ms: retryCfg.max_delay_ms,
-    jitter_ratio: retryCfg.jitter_ratio,
-    sleep: retryCfg.sleep,
-    random: retryCfg.random,
-    is_retryable: (signal) => {
-      if (cancelSignal?.aborted) return false;
-      if (signal.kind === "throw") {
-        return isRecoverableChannelDeliveryError({
-          error: signal.error instanceof Error ? signal.error.message : String(signal.error),
-        });
-      }
-      if (signal.value.ok) return false;
-      return isRecoverableChannelDeliveryError({
-        error: signal.value.error,
-        retry_after_ms: signal.value.retry_after_ms,
-      });
-    },
-    extract_retry_after_ms: (signal) =>
-      signal.kind === "value" ? (signal.value.retry_after_ms ?? null) : null,
-    on_retry: ({ attempt, delay_ms }) => {
-      log?.(`[teams] retry attempt=${attempt} delay_ms=${delay_ms} target=${target}`);
-    },
-  };
-  return await withRetryBackoff(callOnce, opts);
+function isExplicitRateLimitRejection(result: TeamsPostResult): boolean {
+  return !result.ok && result.delivery_status === "not_delivered" && result.rate_limit_rejected === true;
+}
+
+function validRetryAfter(result: TeamsPostResult): number | null {
+  const retryAfter = result.retry_after_ms;
+  return Number.isSafeInteger(retryAfter) && retryAfter! > 0 && retryAfter! <= Number.MAX_SAFE_INTEGER - Date.now()
+    ? retryAfter!
+    : null;
+}
+
+function validateRetryConfig(retry: TeamsRetryConfig | false | undefined): void {
+  if (retry === false || retry === undefined) return;
+  if (!Number.isSafeInteger(retry.max_retries) || retry.max_retries < 0 || retry.max_retries > 100) {
+    throw new Error("teams_retry_config_invalid");
+  }
+}
+
+function cancelledBeforeDispatch(): TeamsPostResult {
+  return { ok: false, delivery_status: "not_delivered", error: "cancelled_before_dispatch",
+    error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+}
+
+async function sleepWithSignal(ms: number, signal?: AbortSignal, injectedSleep?: (ms: number) => Promise<void>): Promise<boolean> {
+  if (!Number.isSafeInteger(ms) || ms < 0 || signal?.aborted) return false;
+  if (ms === 0) return true;
+  if (injectedSleep) {
+    await injectedSleep(ms);
+    return !signal?.aborted;
+  }
+  let remaining = ms;
+  while (remaining > 0) {
+    if (signal?.aborted) return false;
+    const chunk = Math.min(remaining, 2_147_000_000);
+    const began = Date.now();
+    const completed = await new Promise<boolean>((resolve) => {
+      const finish = (value: boolean): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+        resolve(value);
+      };
+      const abort = (): void => finish(false);
+      const timer = setTimeout(() => finish(true), chunk);
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+    });
+    if (!completed) return false;
+    remaining -= Math.max(1, Date.now() - began);
+  }
+  return true;
 }
 
 function teamsNextAction(result: TeamsPostResult): string {
   const error = result.error ?? "teams_send_failed";
+  if (result.delivery_status === "unknown") {
+    return "Microsoft Graph did not confirm whether the reply was delivered. Inspect the Teams conversation before deciding on a manual retry; automatic replay was suppressed.";
+  }
+  if (result.error_code === "retry_after_missing" || result.error_code === "retry_after_invalid" || result.retry_after_invalid) {
+    return "Microsoft Graph confirmed the reply was not delivered but did not provide a usable Retry-After. Automatic retry was suppressed; wait for rate limiting to clear before a deliberate retry.";
+  }
   const details = classifyChannelDeliveryError({
     error,
     retry_after_ms: result.retry_after_ms,
