@@ -66,6 +66,19 @@ export interface ComposioAccountsTarget {
   maxBytes: number;
 }
 
+export interface ComposioScopesTarget {
+  api_base_url: string;
+  path: string;
+  method: "POST";
+  toolkit: string;
+  tools: string[];
+  toolkit_version: string;
+  auth_scheme: string;
+  body: Record<string, unknown>;
+  api_key: string;
+  maxBytes: number;
+}
+
 export interface ComposioExecuteResponse {
   status: number;
   ok: boolean;
@@ -81,6 +94,7 @@ export interface ComposioOptions {
   request?: (target: ComposioExecuteTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   searchRequest?: (target: ComposioSearchTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   accountsRequest?: (target: ComposioAccountsTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+  scopesRequest?: (target: ComposioScopesTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
 }
 
 const DEFAULT_DRY_RUN = true;
@@ -324,7 +338,7 @@ interface ComposioHttpRequestTarget {
   body?: Record<string, unknown>;
   api_key: string;
   maxBytes: number;
-  operation: "search" | "execute" | "accounts";
+  operation: "search" | "execute" | "accounts" | "scopes";
 }
 
 async function defaultComposioApiRequest(
@@ -416,7 +430,9 @@ async function defaultComposioApiRequest(
         ? "mutation_status"
         : target.operation === "accounts"
           ? "account_status"
-          : "catalog_status";
+          : target.operation === "scopes"
+            ? "scope_status"
+            : "catalog_status";
       req.destroy(
         new Error(
           `composio.${target.operation} timed out after ${COMPOSIO_EXECUTE_TIMEOUT_MS}ms; ${outcomeLabel}=not_confirmed`,
@@ -461,6 +477,16 @@ async function defaultComposioAccountsRequest(
   }, signal);
 }
 
+async function defaultComposioScopesRequest(
+  target: ComposioScopesTarget,
+  signal?: AbortSignal,
+): Promise<ComposioExecuteResponse> {
+  return await defaultComposioApiRequest({
+    ...target,
+    operation: "scopes",
+  }, signal);
+}
+
 function catalogResponseError(response: ComposioExecuteResponse): Error {
   const requestId = response.request_id ? `; request_id=${response.request_id}` : "";
   return new Error(
@@ -473,6 +499,231 @@ function accountsResponseError(response: ComposioExecuteResponse): Error {
   return new Error(
     `composio.accounts returned HTTP ${response.status}; account_status=not_confirmed${requestId}; next_action=check the Composio connection before retrying`,
   );
+}
+
+function scopesResponseError(response: ComposioExecuteResponse): Error {
+  const requestId = response.request_id ? `; request_id=${response.request_id}` : "";
+  return new Error(
+    `composio.scopes returned HTTP ${response.status}; scope_status=not_confirmed${requestId}; next_action=check the Composio toolkit scope contract before retrying`,
+  );
+}
+
+const COMPOSIO_SCOPE_AUTH_SCHEMES = [
+  "OAUTH2",
+  "OAUTH1",
+  "API_KEY",
+  "BASIC",
+  "BILLCOM_AUTH",
+  "BEARER_TOKEN",
+  "GOOGLE_SERVICE_ACCOUNT",
+  "NO_AUTH",
+  "BASIC_WITH_JWT",
+  "CALCOM_AUTH",
+  "SERVICE_ACCOUNT",
+  "SAML",
+  "DCR_OAUTH",
+  "CIMD_OAUTH",
+  "S2S_OAUTH2",
+] as const;
+
+function boundedScopeList(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new Error(`Composio scope recommendation has an invalid ${field}; scope_status=not_confirmed`);
+  }
+  const scopes: string[] = [];
+  for (const item of value) {
+    if (
+      typeof item !== "string" ||
+      item.length === 0 ||
+      item.length > 512 ||
+      item.trim() !== item ||
+      /[\u0000-\u001f\u007f]/.test(item)
+    ) {
+      throw new Error(`Composio scope recommendation has an invalid ${field}; scope_status=not_confirmed`);
+    }
+    if (!scopes.includes(item)) scopes.push(item);
+  }
+  return scopes;
+}
+
+function boundedScopeCondition(value: unknown): Record<string, string | number | boolean | null | Array<string | number | boolean | null>> | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || Object.keys(value).length > 20) {
+    throw new Error("Composio scope recommendation has an invalid conditional requirement; scope_status=not_confirmed");
+  }
+  const result: Record<string, string | number | boolean | null | Array<string | number | boolean | null>> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (!/^[A-Za-z0-9_.-]{1,120}$/.test(key)) {
+      throw new Error("Composio scope recommendation has an invalid conditional requirement; scope_status=not_confirmed");
+    }
+    const items = Array.isArray(raw) ? raw : [raw];
+    if (items.length > 20) {
+      throw new Error("Composio scope recommendation has an oversized conditional requirement; scope_status=not_confirmed");
+    }
+    const bounded = items.map((item) => {
+      if (
+        item === null ||
+        typeof item === "boolean" ||
+        (typeof item === "number" && Number.isFinite(item)) ||
+        (typeof item === "string" && item.length <= 256 && !/[\u0000-\u001f\u007f]/.test(item))
+      ) return item;
+      throw new Error("Composio scope recommendation has an invalid conditional requirement; scope_status=not_confirmed");
+    });
+    result[key] = Array.isArray(raw) ? bounded : bounded[0]!;
+  }
+  return result;
+}
+
+function scopeRecommendationProjection(
+  value: unknown,
+  toolkit: string,
+  tools: readonly string[],
+  authScheme: typeof COMPOSIO_SCOPE_AUTH_SCHEMES[number],
+  requestedToolkitVersion: string,
+): Record<string, unknown> {
+  if (!isRecord(value) || !isRecord(value.scopes)) {
+    throw new Error("Composio scope recommendation did not contain scope data; scope_status=not_confirmed");
+  }
+  if (
+    typeof value.toolkit_version !== "string" ||
+    value.toolkit_version.length === 0 ||
+    value.toolkit_version.length > 80 ||
+    value.toolkit_version.trim() !== value.toolkit_version ||
+    (requestedToolkitVersion !== "latest" && value.toolkit_version !== requestedToolkitVersion) ||
+    (value.auth_scheme !== undefined && value.auth_scheme !== authScheme)
+  ) {
+    throw new Error("Composio scope recommendation did not confirm its toolkit version or auth scheme; scope_status=not_confirmed");
+  }
+  const scopes = value.scopes;
+  const conditionalRaw = scopes.conditional ?? [];
+  if (!Array.isArray(conditionalRaw) || conditionalRaw.length > 100) {
+    throw new Error("Composio scope recommendation has an invalid conditional scope list; scope_status=not_confirmed");
+  }
+  const conditional = conditionalRaw.map((item) => {
+    if (
+      !isRecord(item) ||
+      typeof item.scope !== "string" ||
+      item.scope.length === 0 ||
+      item.scope.length > 512 ||
+      item.scope.trim() !== item.scope ||
+      /[\u0000-\u001f\u007f]/.test(item.scope) ||
+      !Array.isArray(item.for)
+    ) {
+      throw new Error("Composio scope recommendation has an invalid conditional scope entry; scope_status=not_confirmed");
+    }
+    if (item.for.length > tools.length) {
+      throw new Error("Composio scope recommendation has too many conditional action entries; scope_status=not_confirmed");
+    }
+    const forTools = item.for.filter((tool): tool is string => typeof tool === "string" && tools.includes(tool));
+    if (forTools.length !== item.for.length) {
+      throw new Error("Composio scope recommendation references an unrequested tool; scope_status=not_confirmed");
+    }
+    return {
+      scope: boundedScopeList([item.scope], "conditional")[0],
+      for: forTools,
+      when: boundedScopeCondition(item.when),
+    };
+  });
+  return {
+    provider: "composio",
+    operation: "scopes",
+    toolkit,
+    tools: [...tools],
+    auth_scheme: authScheme,
+    toolkit_version: value.toolkit_version,
+    least_privilege: boundedScopeList(scopes.least_privilege, "least_privilege"),
+    fewest: boundedScopeList(scopes.fewest, "fewest"),
+    conditional,
+  };
+}
+
+export async function invokeComposioScopes(
+  args: Record<string, unknown>,
+  opts: ComposioOptions = {},
+): Promise<unknown> {
+  const env = opts.env ?? process.env;
+  const apiKey = assertConfigured(env);
+  const toolkit = stringArg(args, "toolkit")!.toLowerCase();
+  assertToolkitAllowed(toolkit, composioAllowedToolkits(env));
+  if (!Array.isArray(args.tools) || args.tools.length < 1 || args.tools.length > 20) {
+    throw new Error("tools must contain between 1 and 20 explicitly allowed Composio action slugs");
+  }
+  const tools = args.tools.map((value) => {
+    if (typeof value !== "string" || !/^[A-Za-z0-9_]{1,160}$/.test(value)) {
+      throw new Error("tools must contain valid Composio action slugs");
+    }
+    return value;
+  });
+  if (new Set(tools.map((tool) => tool.toLowerCase())).size !== tools.length) {
+    throw new Error("tools must not contain duplicate Composio action slugs");
+  }
+  const allowedActions = composioAllowedActions(env);
+  const revokedActions = composioRevokedActions(env);
+  for (const tool of tools) assertActionAllowed(toolkit, tool, allowedActions, revokedActions);
+  const toolkitVersionArg = stringArg(args, "toolkit_version", false);
+  if (args.toolkit_version !== undefined && toolkitVersionArg === undefined) {
+    throw new Error("toolkit_version must be a string when supplied");
+  }
+  const toolkitVersion = toolkitVersionArg ?? "latest";
+  if (!/^(latest|\d{8}_\d{2})$/.test(toolkitVersion)) {
+    throw new Error("toolkit_version must be latest or a pinned YYYYMMDD_NN version");
+  }
+  const authSchemeArg = stringArg(args, "auth_scheme", false);
+  if (args.auth_scheme !== undefined && authSchemeArg === undefined) {
+    throw new Error("auth_scheme must be a string when supplied");
+  }
+  const authSchemeRaw = authSchemeArg ?? "OAUTH2";
+  if (!(COMPOSIO_SCOPE_AUTH_SCHEMES as readonly string[]).includes(authSchemeRaw)) {
+    throw new Error("auth_scheme is not supported by the Composio scope recommendation contract");
+  }
+  const authScheme = authSchemeRaw as typeof COMPOSIO_SCOPE_AUTH_SCHEMES[number];
+  const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
+  const apiBaseUrl = composioApiBaseUrl(env);
+  const path = `/api/${COMPOSIO_API_VERSION}/toolkits/${encodeURIComponent(toolkit)}/scopes/recommended`;
+  assertToolExecutionNotCancelled(opts.signal, "composio.scopes");
+  const response = await (opts.scopesRequest ?? defaultComposioScopesRequest)({
+    api_base_url: apiBaseUrl,
+    path,
+    method: "POST",
+    toolkit,
+    tools,
+    toolkit_version: toolkitVersion,
+    auth_scheme: authScheme,
+    body: { tools, toolkit_version: toolkitVersion, auth_scheme: authScheme },
+    api_key: apiKey,
+    maxBytes,
+  }, opts.signal);
+  if (!response.ok) throw scopesResponseError(response);
+  if (response.truncated) {
+    throw new Error("Composio scope recommendation exceeded the configured limit; scope_status=not_confirmed");
+  }
+  const projection = scopeRecommendationProjection(
+    parseJsonOrText(response.body),
+    toolkit,
+    tools,
+    authScheme,
+    toolkitVersion,
+  );
+  return {
+    ...projection,
+    requested_toolkit_version: toolkitVersion,
+    auth_scheme_source: authSchemeArg ? "owner_input" : "default_OAUTH2",
+    contract_status: "experimental_beta",
+    external_call_performed: true,
+    external_mutation_sent: false,
+    permission_granted: false,
+    granted_scopes_observed: false,
+    scope_recommendation_used_for_authority: false,
+    used_for_authority: false,
+    metadata_used_for_authority: false,
+    api_base_url: apiBaseUrl,
+    api_version: COMPOSIO_API_VERSION,
+    status: response.status,
+    composio_request_id: response.request_id,
+    result_digest: jsonDigest(projection),
+    next_action:
+      "Review the least-privilege scopes with the owner. This experimental recommendation does not show scopes already granted to a connected account, create a connection, or authorize execution; keep HDS-BRAIN and Approval Gate L3 in the execution path.",
+  };
 }
 
 interface ComposioConnectedAccountProjection {
@@ -862,6 +1113,16 @@ export const composioAccountsTool: Tool = {
   required_capabilities: requireToolOperationDescriptor("composio.accounts").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeComposioAccounts(args, { signal: context.signal });
+  },
+};
+
+export const composioScopesTool: Tool = {
+  name: "composio.scopes",
+  description:
+    "Returns a bounded, experimental least-privilege scope recommendation for explicitly allowed Composio actions. It does not observe granted scopes or grant authority.",
+  required_capabilities: requireToolOperationDescriptor("composio.scopes").required_capabilities,
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeComposioScopes(args, { signal: context.signal });
   },
 };
 

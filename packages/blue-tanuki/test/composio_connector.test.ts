@@ -3,11 +3,13 @@ import {
   composioStatus,
   invokeComposioAccounts,
   invokeComposioExecute,
+  invokeComposioScopes,
   invokeComposioSearch,
   registerBuiltinTools,
   ToolRegistry,
   type ComposioExecuteTarget,
   type ComposioAccountsTarget,
+  type ComposioScopesTarget,
   type ComposioSearchTarget,
 } from "../src/tools/index.js";
 
@@ -167,6 +169,100 @@ describe("Composio connector", () => {
     expect(JSON.stringify(result)).not.toContain("must-not-escape");
     expect(JSON.stringify(result)).not.toContain("owner-local");
     expect(JSON.stringify(result)).not.toContain("composio-secret-value");
+  });
+
+  it("returns a bounded experimental least-privilege scope recommendation without treating it as a grant", async () => {
+    let seen: ComposioScopesTarget | null = null;
+    const result = await invokeComposioScopes(
+      {
+        toolkit: "github",
+        tools: ["GITHUB_CREATE_AN_ISSUE"],
+        toolkit_version: "20261001_00",
+      },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+          COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+        },
+        scopesRequest: async (target) => {
+          seen = target;
+          return {
+            status: 200,
+            ok: true,
+            content_type: "application/json",
+            body: JSON.stringify({
+              auth_scheme: "OAUTH2",
+              toolkit_version: "20261001_00",
+              scopes: {
+                least_privilege: ["repo", "user:email"],
+                fewest: ["repo"],
+                conditional: [{ scope: "user:email", for: ["GITHUB_CREATE_AN_ISSUE"], when: { parameter: "fixture" } }],
+              },
+            }),
+            truncated: false,
+            request_id: "req_scope_fixture",
+          };
+        },
+      },
+    );
+
+    expect(seen).toMatchObject({
+      api_base_url: "https://backend.composio.dev",
+      path: "/api/v3.1/toolkits/github/scopes/recommended",
+      method: "POST",
+      toolkit: "github",
+      tools: ["GITHUB_CREATE_AN_ISSUE"],
+      toolkit_version: "20261001_00",
+      auth_scheme: "OAUTH2",
+      body: {
+        tools: ["GITHUB_CREATE_AN_ISSUE"],
+        toolkit_version: "20261001_00",
+        auth_scheme: "OAUTH2",
+      },
+    });
+    expect(result).toMatchObject({
+      operation: "scopes",
+      toolkit: "github",
+      toolkit_version: "20261001_00",
+      requested_toolkit_version: "20261001_00",
+      auth_scheme_source: "default_OAUTH2",
+      least_privilege: ["repo", "user:email"],
+      fewest: ["repo"],
+      conditional: [{
+        scope: "user:email",
+        for: ["GITHUB_CREATE_AN_ISSUE"],
+        when: { parameter: "fixture" },
+      }],
+      contract_status: "experimental_beta",
+      external_call_performed: true,
+      external_mutation_sent: false,
+      permission_granted: false,
+      granted_scopes_observed: false,
+      scope_recommendation_used_for_authority: false,
+      used_for_authority: false,
+      metadata_used_for_authority: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("composio-secret-value");
+  });
+
+  it("does not request scope recommendations for an action outside the explicit action allowlist", async () => {
+    let dispatched = false;
+    await expect(invokeComposioScopes(
+      { toolkit: "github", tools: ["GITHUB_CREATE_AN_ISSUE"] },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+          COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_LIST_ISSUES",
+        },
+        scopesRequest: async () => {
+          dispatched = true;
+          throw new Error("unexpected scope request");
+        },
+      },
+    )).rejects.toThrow(/action not allowed/);
+    expect(dispatched).toBe(false);
   });
 
   it("rejects connected account rows outside the configured owner and toolkit", async () => {
@@ -563,6 +659,11 @@ describe("Composio connector", () => {
     ]);
     expect(registry.get("composio.accounts")?.required_capabilities).toEqual([
       "tool:composio.accounts",
+      "network:composio.dev",
+      "secrets:COMPOSIO_API_KEY",
+    ]);
+    expect(registry.get("composio.scopes")?.required_capabilities).toEqual([
+      "tool:composio.scopes",
       "network:composio.dev",
       "secrets:COMPOSIO_API_KEY",
     ]);

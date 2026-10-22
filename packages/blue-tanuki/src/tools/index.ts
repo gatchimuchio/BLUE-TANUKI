@@ -19,9 +19,11 @@ export {
   classifyComposioAction,
   composioSearchTool,
   composioAccountsTool,
+  composioScopesTool,
   composioExecuteTool,
   invokeComposioSearch,
   invokeComposioAccounts,
+  invokeComposioScopes,
   invokeComposioExecute,
   type ComposioActionIntent,
   type ComposioConnectorStatus,
@@ -29,6 +31,7 @@ export {
   type ComposioExecuteTarget,
   type ComposioSearchTarget,
   type ComposioAccountsTarget,
+  type ComposioScopesTarget,
   type ComposioOptions,
 } from "./composio.js";
 export {

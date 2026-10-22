@@ -44,6 +44,35 @@ describe("Composio authority boundary", () => {
     expect(approval.decision).toBe("ask");
   });
 
+  it("routes scope recommendations as non-authoritative metadata through HDS and L3 review", () => {
+    const hds = new HDSUpperController();
+    const { command } = hds.decide(
+      inbound("check permission scopes", {
+        "blue_tanuki.tool_call": {
+          tool_name: "composio.scopes",
+          arguments: { toolkit: "github", tools: ["GITHUB_CREATE_AN_ISSUE"] },
+        },
+      }),
+    );
+
+    expect(command?.type).toBe("tool_call");
+    if (command?.type !== "tool_call") throw new Error("expected tool_call");
+    expect(command.payload.tool_name).toBe("composio.scopes");
+    expect(command.constraints?.allowed_capabilities).toEqual([
+      "tool:composio.scopes",
+      "network:composio.dev",
+      "secrets:COMPOSIO_API_KEY",
+    ]);
+    const approval = evaluateApproval(command, [], {
+      actor: "owner",
+      default_mode: "full_access",
+      now: 1,
+    });
+    expect(approval.risk).toBe("high");
+    expect(approval.approval_level).toBe("L3_final_review");
+    expect(approval.decision).toBe("ask");
+  });
+
   it("routes Composio execute through capability and L3 approval boundaries", () => {
     const hds = new HDSUpperController();
     const { log, command } = hds.decide(

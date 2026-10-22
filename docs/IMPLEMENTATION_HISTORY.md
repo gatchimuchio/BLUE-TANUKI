@@ -4,6 +4,26 @@
 
 ---
 
+### 履歴ログ：`QEB-77-F15.02-COMPOSIO-SCOPE-BOUNDARY`
+
+開始時`main`／`origin/main`=`e7afeb604ea7eab3171c625ae5b25723470c8f4a`、tracked差分なし（保護対象untracked Linux isolation `target/`は保持）。現行pin rev2.3、適用`AGENTS.md`、active instruction、F15.02/F15.03の現行単位、Composioのscope/execute consumerを再同期した。旧版・閉じた履歴全体は参照していない。
+
+Composioの公式`POST /api/v3.1/toolkits/{toolkit_slug}/scopes/recommended`を使う読取経路`composio.scopes`を実装した。明示allowlist toolkitに加え、要求actionごとにallowlist/revocationを検査し、1〜20件のaction slugとauth scheme／toolkit versionをbounded入力として送る。返却は`least_privilege`、`fewest`、条件付きscopeと適用actionに射影し、上限外・不整合・未要求actionの応答をnot-confirmedとして拒否する。HDS tool process、operation descriptor、built-in registryへ接続し、COMPOSIO API key／network capabilityを保持した。HDS authority testでfull-access設定でもL3 final reviewが維持されることを確認した。
+
+scope推薦APIとgrant-context APIはComposio公式資料でexperimental/betaと記載されるため、その状態を結果に明示する。推奨scopeは実connected accountに付与済みのscope、owner consent、地域、実行権限の証拠ではない。scope recommendation consumerのfixture試験のみで、実Composio API／実資格／外部業務作用は未実施。F15.02全体、地域別接続とscope付与確認、未収容43要求の解消、SYSTEM_SHAPED／BUILD_COVEREDを意味しない。
+
+公式契約: [recommended scopes v3.1](https://docs.composio.dev/reference/api-reference/toolkits/recommendToolkitScopes)、[grant contexts v3.1](https://docs.composio.dev/reference/api-reference/toolkits/recommendToolkitScopesGrantContext)、[connected accounts v3.1](https://docs.composio.dev/reference/api-reference/connected-accounts/getConnectedAccounts?explorer=true)。PostHogの地域はComposio上でconnection単位とする更新があるが、BLUEの安全なaccount projectionはprovider `state`を破棄しており地域を観測しない。[Composio changelog](https://next.docs.composio.dev/reference/changelog)。次consumerはowner接続導線でaction scope・auth scheme・provider別region/consentを観測可能にし、非対応や不明な条件を実行可能と誤認しない境界。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| 対象テスト（Composio connector、built-in registry、operation catalog、HDS authority） | PASS、4 files／90 passed／6 skipped。allowlist/revocation、bounded scope projection、非権威性、HDS L3をfixtureで確認。 |
+| `pnpm typecheck` | PASS。 |
+| `pnpm build` | PASS。全15 workspace project。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底移行負債76件を維持。 |
+| 実provider／実資格／外部業務作用／全workspace suite／QE_QC・QE_QA | 未実施。 |
+
+---
+
 ### 履歴ログ：`QEB-76-F15.02-COMPOSIO-ACCOUNT-PATH`
 
 開始時`main`／`origin/main`=`857ad30d987c710f5aa6b945eff39f9aa97be304`、tracked差分なし（保護対象untracked Linux isolation `target/`は保持）。現行pin rev2.3、適用`AGENTS.md`、active指示、F15.02、既存Composio catalog／execute consumerを再同期した。旧版・閉じた履歴全体は再読していない。

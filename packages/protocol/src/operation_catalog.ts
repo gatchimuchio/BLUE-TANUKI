@@ -258,6 +258,18 @@ export const OPERATION_DESCRIPTOR_REGISTRY: readonly OperationDescriptor[] = Obj
     15_000,
   ),
   toolDescriptor(
+    "composio.scopes",
+    "packages/blue-tanuki/src/tools/composio.ts#composioScopesTool",
+    "composio",
+    ["external_send", "read", "credential_access"],
+    [
+      "tool:composio.scopes",
+      "network:composio.dev",
+      "secrets:COMPOSIO_API_KEY",
+    ],
+    15_000,
+  ),
+  toolDescriptor(
     "composio.execute",
     "packages/blue-tanuki/src/tools/composio.ts#composioExecuteTool",
     "composio",

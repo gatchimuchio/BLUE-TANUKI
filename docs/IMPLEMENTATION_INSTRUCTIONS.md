@@ -16,7 +16,7 @@ F14.02では、LINE admitted inboundからGateway reply、SQLite durable outbox�
 
 ## 次のBUILD_BATCH
 
-QEB-73のA03.03で比較基準面の固定61 IDを担当consumer群または未確認理由・次consumerへ割り当て、未収容要求の子作業を作成した。QEB-74のF15.01では未収容43件（OpenClaw入口23、Muse入口2、Muse service18）をowner管理の非公開差分登録へ接続した。個別IDとサービス別scope候補は非公開記録に保持し、Public Gitには内部QE全要求対応表を置かない。F15.01は登録consumerまでの`WIRED`であり、service API実装・互換・runtime受入を意味しない。QEB-75では既存Composio consumerのtool catalog読取`composio.search`を接続した。QEB-76では所有者のprivate account一覧`composio.accounts`を秘密を含まない投影として接続し、ライブ実行に必須の明示account IDを直前に所有者・toolkit・PRIVATE・ACTIVE・未無効化条件で照合してからComposioへ渡す。両経路はComposio公式v3.1 API契約を使用するが、実API／実資格は呼び出していない。F15.02全体や43件のservice実装ではない。引き続き公式契約・地域・権限scope・接続境界の未確認をF15.02で整理し、有限実装へF15.03で展開する。動的provider/plugin/Muse catalogと形式移行は`BUILD_GAP`を維持する。実資格や実外部作用、P13公開GOは含まない。
+QEB-73のA03.03で比較基準面の固定61 IDを担当consumer群または未確認理由・次consumerへ割り当て、QEB-74のF15.01で未収容43件（OpenClaw入口23、Muse入口2、Muse service18）をowner管理の非公開差分登録consumerへ接続した。個別IDとサービス別scope候補は非公開記録に保持し、Public Gitには内部QE全要求対応表を置かない。QEB-75／76ではComposioのtool catalog `composio.search`、owner private account一覧`composio.accounts`、live execution前の明示account再照合を既存consumerへ接続した。QEB-77ではowner allowlist内actionについて公式v3.1のbeta scope recommendationを`composio.scopes`としてHDS／operation catalog／tool registryへ接続した。推薦scopeは既存accountの付与済みscopeを観測せず、権限にもならない。いずれもfixture限定で、実provider／実資格／外部業務作用は未実施。F15.02全体、Composio地域境界、付与済みscope確認、43件のservice実装は未成立。次は公式契約で確認できた未収容要求を有限なF15.03実装consumerへ展開し、接続setup側で必要なscope・region・owner consentの観測を続ける。動的provider/plugin/Muse catalogと形式移行は`BUILD_GAP`を維持する。P13公開GOは含まない。
 
 ## 保護とGit
 

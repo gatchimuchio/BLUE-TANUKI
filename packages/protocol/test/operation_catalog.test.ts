@@ -27,6 +27,7 @@ describe("BT-U-D01.01-P operation descriptor catalog", () => {
       "google.drive.write",
       "composio.search",
       "composio.accounts",
+      "composio.scopes",
       "composio.execute",
       "browser.read",
       "browser.snapshot",
