@@ -22,7 +22,7 @@ LINE adapterへloopback限定HTTP listenerを追加し、raw bodyのHMAC署名�
 | bundled LINE plugin review | PASS、authority=`used_for_authority=false`。 |
 | 実LINE callback／credential／Messaging API／実HDS運転／外部送信／5OS実機／QE_QC／QE_QA | 未実施。 |
 
-F14.01のsynthetic local ingress→Gateway inbound subpathだけを部分的に`WIRED`とする。実provider callback、credential、HDS運転は未確認。全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。次consumerはF14.02 inbound→reply/outbox。C08.03 provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷保留を維持する。
+F14.01のsynthetic local ingress→Gateway inbound subpathだけを部分的に`WIRED`とする。実provider callback、credential、HDS運転は未確認。全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。次consumerはF14.02 inbound→reply/outbox。C08.03 provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷保留を維持する。実装commit=`3a876a45a77a3b59c909dec654f893ec7ea7917b`。
 
 ### 履歴ログ：`QEB-69-F13.02-TEAMS-REPLY-PERSISTENT-OUTBOX-CONSUMER`
 
