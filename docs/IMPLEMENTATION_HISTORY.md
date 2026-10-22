@@ -4,6 +4,25 @@
 
 ---
 
+### 履歴ログ：`QEB-76-F15.02-COMPOSIO-ACCOUNT-PATH`
+
+開始時`main`／`origin/main`=`857ad30d987c710f5aa6b945eff39f9aa97be304`、tracked差分なし（保護対象untracked Linux isolation `target/`は保持）。現行pin rev2.3、適用`AGENTS.md`、active指示、F15.02、既存Composio catalog／execute consumerを再同期した。旧版・閉じた履歴全体は再読していない。
+
+Composio公式v3.1 connected account list APIを利用する`composio.accounts`を追加し、明示allowlist toolkitと`COMPOSIO_USER_ID`に限定してPRIVATE account一覧を取得する。provider応答の`state`、`data`、owner ID等は投影せず、boundedなaccount ID・toolkit・状態・disabled・account typeだけを返す。全ページを取得できない応答、秘密領域、owner/toolkit外、shared／分類不明はfail-closedとする。Composio公式tool execute APIへはlive mode時に明示connected account IDのみを渡す。`instant_account`、ID欠落、設定owner／toolkit外、PRIVATEでない、ACTIVEでない、disabledまたは状態不明を送信前に拒否する。実行直前に同じGET APIで選択accountを照合し、選択IDを維持してからPOSTする。HDS process allowlist／operation descriptorに接続し、credentialとnetwork capabilityを通じL3 final reviewを維持した。API key・実アカウント・実provider／外部作用は使っていない。
+
+参照した公式契約: [Composio connected account list v3.1](https://docs.composio.dev/reference/api-reference/connected-accounts/getConnectedAccounts?explorer=true)、[Composio tool execute v3.1](https://docs.composio.dev/reference/api-reference/tools/postToolsExecuteByToolSlug)。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `@blue-tanuki/protocol`, `@blue-tanuki/hds-brain`, `@blue-tanuki/core` build | PASS。coreのWindows isolation buildとTypeScript buildを含む。 |
+| operation catalog／Composio connector／HDS authority／built-in tools targeted tests | PASS、4 files／87 passed／6 skipped。account secret projection、owner/toolkit/private scope、明示account選択、ACTIVE再照合、非送信拒否、HDS L3をfixtureで確認。 |
+| `pnpm docs:check` | PASS。日本語基底移行負債76件を維持。 |
+| 実provider／実資格／実外部作用／全workspace suite／QE_QC・QE_QA | 未実施。 |
+
+F15.02のComposio接続経路におけるaccount選択とconsumer接続までの部分`WIRED`であり、Composioの実接続受入、F15.02全体、未収容43要求の解消、全体`SYSTEM_SHAPED`／`BUILD_COVERED`を意味しない。C08.03 provider検証保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+
+---
+
 ### 履歴ログ：`QEB-75-F15.02-COMPOSIO-CATALOG-PATH`
 
 開始・編集前の`main`／`origin/main`=`f981311a024501a41328297d23cb2a8619b46d46`、tracked差分なし（保護対象untracked Linux isolation `target/`は保持）。現行pin rev2.3、適用`AGENTS.md`、active instruction、F15.02の関係箇所とComposio producer／consumerを再同期した。過去版・閉じた作業は全体を再読せず、現行consumerの直接コードだけ確認した。

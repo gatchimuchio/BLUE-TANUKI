@@ -37,6 +37,7 @@ import {
   googleDriveWriteTool,
 } from "./google_write.js";
 import {
+  composioAccountsTool,
   composioExecuteTool,
   composioSearchTool,
 } from "./composio.js";
@@ -2363,6 +2364,7 @@ export function registerBuiltinTools(registry: {
   registry.register(googleCalendarWriteTool);
   registry.register(googleDriveWriteTool);
   registry.register(composioSearchTool);
+  registry.register(composioAccountsTool);
   registry.register(composioExecuteTool);
   registry.register(browserReadTool);
   registry.register(browserSnapshotTool);

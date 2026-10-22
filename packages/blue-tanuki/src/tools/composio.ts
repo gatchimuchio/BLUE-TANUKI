@@ -54,6 +54,18 @@ export interface ComposioSearchTarget {
   maxBytes: number;
 }
 
+export interface ComposioAccountsTarget {
+  api_base_url: string;
+  path: string;
+  method: "GET";
+  toolkit: string;
+  user_id: string;
+  connected_account_id?: string;
+  limit: number;
+  api_key: string;
+  maxBytes: number;
+}
+
 export interface ComposioExecuteResponse {
   status: number;
   ok: boolean;
@@ -68,6 +80,7 @@ export interface ComposioOptions {
   signal?: AbortSignal;
   request?: (target: ComposioExecuteTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   searchRequest?: (target: ComposioSearchTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+  accountsRequest?: (target: ComposioAccountsTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
 }
 
 const DEFAULT_DRY_RUN = true;
@@ -79,6 +92,8 @@ const MAX_MAX_BYTES = 512_000;
 const DEFAULT_SEARCH_LIMIT = 20;
 const MAX_SEARCH_LIMIT = 50;
 const MAX_SEARCH_QUERY_LENGTH = 500;
+const DEFAULT_ACCOUNT_LIMIT = 20;
+const MAX_ACCOUNT_LIMIT = 50;
 
 function envValue(env: Env, name: string): string | undefined {
   const value = env[name];
@@ -309,7 +324,7 @@ interface ComposioHttpRequestTarget {
   body?: Record<string, unknown>;
   api_key: string;
   maxBytes: number;
-  operation: "search" | "execute";
+  operation: "search" | "execute" | "accounts";
 }
 
 async function defaultComposioApiRequest(
@@ -397,9 +412,14 @@ async function defaultComposioApiRequest(
       },
     );
     req.on("timeout", () => {
+      const outcomeLabel = target.operation === "execute"
+        ? "mutation_status"
+        : target.operation === "accounts"
+          ? "account_status"
+          : "catalog_status";
       req.destroy(
         new Error(
-          `composio.${target.operation} timed out after ${COMPOSIO_EXECUTE_TIMEOUT_MS}ms; ${target.operation === "execute" ? "mutation_status" : "catalog_status"}=not_confirmed`,
+          `composio.${target.operation} timed out after ${COMPOSIO_EXECUTE_TIMEOUT_MS}ms; ${outcomeLabel}=not_confirmed`,
         ),
       );
     });
@@ -431,11 +451,165 @@ async function defaultComposioSearchRequest(
   }, signal);
 }
 
+async function defaultComposioAccountsRequest(
+  target: ComposioAccountsTarget,
+  signal?: AbortSignal,
+): Promise<ComposioExecuteResponse> {
+  return await defaultComposioApiRequest({
+    ...target,
+    operation: "accounts",
+  }, signal);
+}
+
 function catalogResponseError(response: ComposioExecuteResponse): Error {
   const requestId = response.request_id ? `; request_id=${response.request_id}` : "";
   return new Error(
     `composio.search returned HTTP ${response.status}; catalog_status=not_confirmed${requestId}; next_action=check Composio connection before retrying`,
   );
+}
+
+function accountsResponseError(response: ComposioExecuteResponse): Error {
+  const requestId = response.request_id ? `; request_id=${response.request_id}` : "";
+  return new Error(
+    `composio.accounts returned HTTP ${response.status}; account_status=not_confirmed${requestId}; next_action=check the Composio connection before retrying`,
+  );
+}
+
+interface ComposioConnectedAccountProjection {
+  connected_account_id: string;
+  toolkit: string;
+  status: string;
+  is_disabled: boolean | null;
+  account_type: "PRIVATE" | "SHARED" | "UNKNOWN";
+}
+
+function connectedAccountProjection(
+  value: unknown,
+  expectedToolkit: string,
+  expectedUserId: string,
+): ComposioConnectedAccountProjection {
+  if (!isRecord(value) || !isRecord(value.toolkit)) {
+    throw new Error("Composio account list returned an invalid entry; account_status=not_confirmed");
+  }
+  const id = typeof value.id === "string" ? value.id : "";
+  const toolkit = typeof value.toolkit.slug === "string" ? value.toolkit.slug.toLowerCase() : "";
+  if (!id || id !== id.trim() || id.length > 256 || toolkit !== expectedToolkit.toLowerCase() || value.user_id !== expectedUserId) {
+    throw new Error("Composio account list returned an out-of-scope entry; account_status=not_confirmed");
+  }
+  const experimental = isRecord(value.experimental) ? value.experimental : {};
+  const accountTypeRaw = experimental.account_type;
+  const accountType = accountTypeRaw === undefined
+    ? "PRIVATE"
+    : accountTypeRaw === "PRIVATE" || accountTypeRaw === "SHARED"
+      ? accountTypeRaw
+      : "UNKNOWN";
+  if (accountType !== "PRIVATE") {
+    throw new Error("Composio account list returned a non-private or unclassified entry; account_status=not_confirmed");
+  }
+  const status = typeof value.status === "string" && /^[A-Za-z_]{1,40}$/.test(value.status)
+    ? value.status.toUpperCase()
+    : "UNKNOWN";
+  return {
+    connected_account_id: id,
+    toolkit,
+    status,
+    is_disabled: typeof value.is_disabled === "boolean" ? value.is_disabled : null,
+    account_type: accountType,
+  };
+}
+
+async function readComposioAccounts(
+  params: {
+    apiBaseUrl: string;
+    apiKey: string;
+    toolkit: string;
+    userId: string;
+    connectedAccountId?: string;
+    limit: number;
+    maxBytes: number;
+    request: (target: ComposioAccountsTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+    signal?: AbortSignal;
+  },
+): Promise<{ accounts: ComposioConnectedAccountProjection[]; response: ComposioExecuteResponse }> {
+  const path = new URL("/api/v3.1/connected_accounts", `${params.apiBaseUrl}/`);
+  path.searchParams.set("toolkit_slugs", params.toolkit.toLowerCase());
+  path.searchParams.set("user_ids", params.userId);
+  path.searchParams.set("account_type", "PRIVATE");
+  path.searchParams.set("limit", String(params.limit));
+  if (params.connectedAccountId) path.searchParams.set("connected_account_ids", params.connectedAccountId);
+  assertToolExecutionNotCancelled(params.signal, "composio.accounts");
+  const response = await params.request({
+    api_base_url: params.apiBaseUrl,
+    path: `${path.pathname}${path.search}`,
+    method: "GET",
+    toolkit: params.toolkit.toLowerCase(),
+    user_id: params.userId,
+    ...(params.connectedAccountId ? { connected_account_id: params.connectedAccountId } : {}),
+    limit: params.limit,
+    api_key: params.apiKey,
+    maxBytes: params.maxBytes,
+  }, params.signal);
+  if (!response.ok) throw accountsResponseError(response);
+  if (response.truncated) {
+    throw new Error("Composio account list exceeded the configured limit; account_status=not_confirmed");
+  }
+  const data = parseJsonOrText(response.body);
+  if (!isRecord(data) || !Array.isArray(data.items)) {
+    throw new Error("Composio account list did not contain an accounts list; account_status=not_confirmed");
+  }
+  if (
+    data.items.length > params.limit ||
+    (data.next_cursor !== undefined && data.next_cursor !== null && data.next_cursor !== "")
+  ) {
+    throw new Error("Composio account list is incomplete; account_status=not_confirmed");
+  }
+  const accounts = data.items.map((item) =>
+    connectedAccountProjection(item, params.toolkit, params.userId));
+  return { accounts, response };
+}
+
+export async function invokeComposioAccounts(
+  args: Record<string, unknown>,
+  opts: ComposioOptions = {},
+): Promise<unknown> {
+  const env = opts.env ?? process.env;
+  const apiKey = assertConfigured(env);
+  const userId = envValue(env, "COMPOSIO_USER_ID");
+  if (!userId) throw new Error("COMPOSIO_USER_ID is required for Composio account lookup; external_call_performed=false");
+  const toolkit = stringArg(args, "toolkit")!.toLowerCase();
+  assertToolkitAllowed(toolkit, composioAllowedToolkits(env));
+  const limit = positiveIntArg(args, "limit", DEFAULT_ACCOUNT_LIMIT, MAX_ACCOUNT_LIMIT);
+  const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
+  const apiBaseUrl = composioApiBaseUrl(env);
+  const result = await readComposioAccounts({
+    apiBaseUrl,
+    apiKey,
+    toolkit,
+    userId,
+    limit,
+    maxBytes,
+    request: opts.accountsRequest ?? defaultComposioAccountsRequest,
+    signal: opts.signal,
+  });
+  const accounts = result.accounts;
+  return {
+    provider: "composio",
+    operation: "accounts",
+    toolkit,
+    account_count: accounts.length,
+    accounts,
+    external_call_performed: true,
+    external_mutation_sent: false,
+    api_base_url: apiBaseUrl,
+    api_version: COMPOSIO_API_VERSION,
+    status: result.response.status,
+    truncated: result.response.truncated,
+    composio_request_id: result.response.request_id,
+    result_digest: jsonDigest(accounts),
+    used_for_authority: false,
+    metadata_used_for_authority: false,
+    next_action: "Select a PRIVATE ACTIVE account for an explicit task. Account status and metadata do not grant permission.",
+  };
 }
 
 function catalogToolProjection(value: unknown, expectedToolkit: string): Record<string, unknown> {
@@ -552,6 +726,13 @@ export async function invokeComposioExecute(
   const intent = classifyComposioAction(
     stringArg(args, "intent", false) ?? tool,
   );
+  const connectedAccountId = stringArg(args, "connected_account_id", false);
+  if (args.connected_account_id !== undefined && !connectedAccountId) {
+    throw new Error("connected_account_id must be a non-empty string; external_call_performed=false");
+  }
+  if (connectedAccountId?.toLowerCase() === "instant_account") {
+    throw new Error("connected_account_id must identify an explicit owner connection; external_call_performed=false");
+  }
   const dryRun = composioDryRun(env);
   const userId = envValue(env, "COMPOSIO_USER_ID");
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
@@ -571,6 +752,8 @@ export async function invokeComposioExecute(
     toolkit_allowlist_boundary: "COMPOSIO_ALLOWED_TOOLKITS",
     action_allowlist_boundary: "COMPOSIO_ALLOWED_ACTIONS",
     revoke_boundary: "COMPOSIO_REVOKED_ACTIONS",
+    account_selection_boundary: "explicit PRIVATE account owned by COMPOSIO_USER_ID and matching toolkit",
+    connected_account_id: connectedAccountId ?? null,
     audit_required: true,
     used_for_authority: false,
     metadata_used_for_authority: false,
@@ -597,8 +780,35 @@ export async function invokeComposioExecute(
       "COMPOSIO_USER_ID is required for Composio live execution; mutation_sent=false",
     );
   }
+  if (!connectedAccountId) {
+    throw new Error(
+      "connected_account_id is required for Composio live execution; mutation_sent=false",
+    );
+  }
   const apiBaseUrl = composioApiBaseUrl(env);
   const request = opts.request ?? defaultComposioExecuteRequest;
+  const accounts = await readComposioAccounts({
+    apiBaseUrl,
+    apiKey,
+    toolkit,
+    userId,
+    connectedAccountId,
+    limit: 2,
+    maxBytes,
+    request: opts.accountsRequest ?? defaultComposioAccountsRequest,
+    signal: opts.signal,
+  });
+  if (
+    accounts.accounts.length !== 1 ||
+    accounts.accounts[0]!.connected_account_id !== connectedAccountId ||
+    accounts.accounts[0]!.status !== "ACTIVE" ||
+    accounts.accounts[0]!.is_disabled !== false ||
+    accounts.accounts[0]!.account_type !== "PRIVATE"
+  ) {
+    throw new Error(
+      "Composio connected account is missing, not PRIVATE ACTIVE, disabled, or outside the configured owner/toolkit; mutation_sent=false",
+    );
+  }
   assertToolExecutionNotCancelled(opts.signal, "composio.execute");
   const response = await request({
     api_base_url: apiBaseUrl,
@@ -609,6 +819,7 @@ export async function invokeComposioExecute(
     user_id: userId,
     body: {
       user_id: userId,
+      connected_account_id: connectedAccountId,
       arguments: argumentsBody,
     },
     api_key: apiKey,
@@ -641,6 +852,16 @@ export const composioSearchTool: Tool = {
   required_capabilities: requireToolOperationDescriptor("composio.search").required_capabilities,
   async invoke(args: Record<string, unknown>): Promise<unknown> {
     return await invokeComposioSearch(args);
+  },
+};
+
+export const composioAccountsTool: Tool = {
+  name: "composio.accounts",
+  description:
+    "Lists bounded Composio account projections for the configured owner and an explicitly allowed toolkit. Account metadata is never authority.",
+  required_capabilities: requireToolOperationDescriptor("composio.accounts").required_capabilities,
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeComposioAccounts(args, { signal: context.signal });
   },
 };
 

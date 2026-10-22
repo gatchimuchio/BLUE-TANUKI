@@ -372,7 +372,7 @@ function operationTargetForCommand(command: ExecuteCommand): OperationTarget {
     }
     if (tool.startsWith("schedule.")) return { kind: "service", id: "runtime_schedule", scope: "internal_runtime" };
     if (
-      tool === "composio.execute" ||
+      tool.startsWith("composio.") ||
       tool === "web.search" ||
       tool.startsWith("github.") ||
       tool.startsWith("google.") ||

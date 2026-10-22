@@ -1,13 +1,37 @@
 import { describe, expect, it } from "vitest";
 import {
   composioStatus,
+  invokeComposioAccounts,
   invokeComposioExecute,
   invokeComposioSearch,
   registerBuiltinTools,
   ToolRegistry,
   type ComposioExecuteTarget,
+  type ComposioAccountsTarget,
   type ComposioSearchTarget,
 } from "../src/tools/index.js";
+
+const activeAccount = {
+  id: "conn_owner_github_1",
+  toolkit: { slug: "github" },
+  user_id: "owner-local",
+  status: "ACTIVE",
+  is_disabled: false,
+  experimental: { account_type: "PRIVATE" },
+  state: { val: { oauth_token: "must-not-escape" } },
+  data: { secret: "must-not-escape-either" },
+};
+
+function accountResponse(account: Record<string, unknown> = activeAccount) {
+  return {
+    status: 200,
+    ok: true,
+    content_type: "application/json",
+    body: JSON.stringify({ items: [account], next_cursor: null }),
+    truncated: false,
+    request_id: "req_accounts_fixture",
+  };
+}
 
 describe("Composio connector", () => {
   it("is disabled by default and reports non-authority status", () => {
@@ -98,6 +122,102 @@ describe("Composio connector", () => {
     expect(JSON.stringify(result)).toContain("GITHUB_LIST_ISSUES");
     expect(JSON.stringify(result)).toContain("repo");
     expect(JSON.stringify(result)).not.toContain("composio-secret-value");
+  });
+
+  it("lists bounded owner accounts without exposing provider credential fields", async () => {
+    let seen: ComposioAccountsTarget | null = null;
+    const result = await invokeComposioAccounts(
+      { toolkit: "github" },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github,gmail",
+          COMPOSIO_USER_ID: "owner-local",
+        },
+        accountsRequest: async (target) => {
+          seen = target;
+          return accountResponse();
+        },
+      },
+    );
+
+    expect(seen).toMatchObject({
+      path: expect.stringContaining("/api/v3.1/connected_accounts?toolkit_slugs=github&user_ids=owner-local&account_type=PRIVATE&limit=20"),
+      method: "GET",
+      toolkit: "github",
+      user_id: "owner-local",
+      limit: 20,
+    });
+    expect(result).toMatchObject({
+      operation: "accounts",
+      toolkit: "github",
+      account_count: 1,
+      external_call_performed: true,
+      external_mutation_sent: false,
+      accounts: [{
+        connected_account_id: "conn_owner_github_1",
+        toolkit: "github",
+        status: "ACTIVE",
+        is_disabled: false,
+        account_type: "PRIVATE",
+      }],
+      used_for_authority: false,
+      metadata_used_for_authority: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("must-not-escape");
+    expect(JSON.stringify(result)).not.toContain("owner-local");
+    expect(JSON.stringify(result)).not.toContain("composio-secret-value");
+  });
+
+  it("rejects connected account rows outside the configured owner and toolkit", async () => {
+    await expect(invokeComposioAccounts(
+      { toolkit: "github" },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+          COMPOSIO_USER_ID: "owner-local",
+        },
+        accountsRequest: async () => accountResponse({
+          ...activeAccount,
+          user_id: "different-user",
+        }),
+      },
+    )).rejects.toThrow(/out-of-scope/);
+  });
+
+  it("rejects shared accounts even when the provider returns one for a private-only query", async () => {
+    await expect(invokeComposioAccounts(
+      { toolkit: "github" },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+          COMPOSIO_USER_ID: "owner-local",
+        },
+        accountsRequest: async () => accountResponse({
+          ...activeAccount,
+          experimental: { account_type: "SHARED" },
+        }),
+      },
+    )).rejects.toThrow(/non-private/);
+  });
+
+  it("does not return a partial account inventory when the provider indicates another page", async () => {
+    await expect(invokeComposioAccounts(
+      { toolkit: "github", limit: 1 },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+          COMPOSIO_USER_ID: "owner-local",
+        },
+        accountsRequest: async () => ({
+          ...accountResponse(),
+          body: JSON.stringify({ items: [activeAccount], next_cursor: "page-2" }),
+        }),
+      },
+    )).rejects.toThrow(/incomplete/);
   });
 
   it("does not dispatch a catalog lookup without an explicit toolkit allowlist", async () => {
@@ -235,6 +355,58 @@ describe("Composio connector", () => {
     ).rejects.toThrow(/COMPOSIO_LIVE_EXECUTION/);
   });
 
+  it("requires a concrete owner account and rejects the provider instant account", async () => {
+    let dispatched = false;
+    const env = {
+      COMPOSIO_API_KEY: "composio-secret-value",
+      COMPOSIO_ALLOWED_TOOLKITS: "github",
+      COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+      COMPOSIO_USER_ID: "owner-local",
+      COMPOSIO_DRY_RUN: "false",
+      COMPOSIO_LIVE_EXECUTION: "true",
+    };
+    const request = async () => {
+      dispatched = true;
+      return accountResponse();
+    };
+    await expect(invokeComposioExecute(
+      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE" },
+      { env, accountsRequest: request },
+    )).rejects.toThrow(/connected_account_id is required/);
+    await expect(invokeComposioExecute(
+      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "instant_account" },
+      { env, accountsRequest: request },
+    )).rejects.toThrow(/explicit owner connection/);
+    expect(dispatched).toBe(false);
+  });
+
+  it("blocks execution when the selected owner account is not active", async () => {
+    let executeDispatched = false;
+    await expect(invokeComposioExecute(
+      {
+        toolkit: "github",
+        tool: "GITHUB_CREATE_AN_ISSUE",
+        connected_account_id: "conn_owner_github_1",
+      },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+          COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+          COMPOSIO_USER_ID: "owner-local",
+          COMPOSIO_DRY_RUN: "false",
+          COMPOSIO_LIVE_EXECUTION: "true",
+        },
+        accountsRequest: async () => accountResponse({ ...activeAccount, status: "EXPIRED" }),
+        request: async () => {
+          executeDispatched = true;
+          return accountResponse();
+        },
+      },
+    )).rejects.toThrow(/not PRIVATE ACTIVE/);
+    expect(executeDispatched).toBe(false);
+  });
+
   it("blocks revoked action scopes before live execution", async () => {
     await expect(
       invokeComposioExecute(
@@ -256,10 +428,12 @@ describe("Composio connector", () => {
 
   it("executes live through the bounded Composio API adapter when all gates are explicit", async () => {
     let seen: ComposioExecuteTarget | null = null;
+    let accountLookup: ComposioAccountsTarget | null = null;
     const result = await invokeComposioExecute(
       {
         toolkit: "github",
         tool: "GITHUB_CREATE_AN_ISSUE",
+        connected_account_id: "conn_owner_github_1",
         payload: { title: "hello" },
       },
       {
@@ -282,9 +456,20 @@ describe("Composio connector", () => {
             request_id: "req_fixture",
           };
         },
+        accountsRequest: async (target) => {
+          accountLookup = target;
+          return accountResponse();
+        },
       },
     );
 
+    expect(accountLookup).toMatchObject({
+      path: expect.stringContaining("connected_account_ids=conn_owner_github_1"),
+      toolkit: "github",
+      user_id: "owner-local",
+      connected_account_id: "conn_owner_github_1",
+      limit: 2,
+    });
     expect(seen).toMatchObject({
       api_base_url: "https://backend.composio.dev",
       path: "/api/v3.1/tools/execute/GITHUB_CREATE_AN_ISSUE",
@@ -292,6 +477,7 @@ describe("Composio connector", () => {
       user_id: "owner-local",
       body: {
         user_id: "owner-local",
+        connected_account_id: "conn_owner_github_1",
         arguments: { title: "hello" },
       },
     });
@@ -318,7 +504,7 @@ describe("Composio connector", () => {
     let seenSignal: AbortSignal | undefined;
     let called = false;
     await expect(invokeComposioExecute(
-      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", payload: { title: "fixture" } },
+      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1", payload: { title: "fixture" } },
       {
         env: {
           COMPOSIO_API_KEY: "composio-test-value",
@@ -335,6 +521,7 @@ describe("Composio connector", () => {
           controller.abort();
           throw new Error("request aborted; mutation_status=not_confirmed");
         },
+        accountsRequest: async () => accountResponse(),
       },
     )).rejects.toThrow(/mutation_status=not_confirmed/);
     expect(called).toBe(true);
@@ -344,7 +531,7 @@ describe("Composio connector", () => {
     alreadyCancelled.abort();
     let dispatchedAfterCancel = false;
     await expect(invokeComposioExecute(
-      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", payload: { title: "fixture" } },
+      { toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1", payload: { title: "fixture" } },
       {
         env: {
           COMPOSIO_API_KEY: "composio-test-value",
@@ -359,6 +546,7 @@ describe("Composio connector", () => {
           dispatchedAfterCancel = true;
           throw new Error("unexpected request");
         },
+        accountsRequest: async () => accountResponse(),
       },
     )).rejects.toThrow(/cancelled before request dispatch/);
     expect(dispatchedAfterCancel).toBe(false);
@@ -370,6 +558,11 @@ describe("Composio connector", () => {
 
     expect(registry.get("composio.search")?.required_capabilities).toEqual([
       "tool:composio.search",
+      "network:composio.dev",
+      "secrets:COMPOSIO_API_KEY",
+    ]);
+    expect(registry.get("composio.accounts")?.required_capabilities).toEqual([
+      "tool:composio.accounts",
       "network:composio.dev",
       "secrets:COMPOSIO_API_KEY",
     ]);

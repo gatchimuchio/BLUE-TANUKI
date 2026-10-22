@@ -71,6 +71,7 @@ describe("built-in tools", () => {
     expect(registry.get("browser.automation")).toBeDefined();
     expect(registry.get("shell.exec")).toBeDefined();
     expect(registry.get("composio.search")).toBeDefined();
+    expect(registry.get("composio.accounts")).toBeDefined();
     expect(registry.get("composio.execute")).toBeDefined();
     expect(registry.listCapabilities()).toEqual([
       "browser:act",
@@ -103,6 +104,7 @@ describe("built-in tools", () => {
       "tool:browser.automation",
       "tool:browser.read",
       "tool:browser.snapshot",
+      "tool:composio.accounts",
       "tool:composio.execute",
       "tool:composio.search",
       "tool:echo",

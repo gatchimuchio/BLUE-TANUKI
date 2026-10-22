@@ -18,14 +18,17 @@ export {
   composioStatus,
   classifyComposioAction,
   composioSearchTool,
+  composioAccountsTool,
   composioExecuteTool,
   invokeComposioSearch,
+  invokeComposioAccounts,
   invokeComposioExecute,
   type ComposioActionIntent,
   type ComposioConnectorStatus,
   type ComposioExecuteResponse,
   type ComposioExecuteTarget,
   type ComposioSearchTarget,
+  type ComposioAccountsTarget,
   type ComposioOptions,
 } from "./composio.js";
 export {

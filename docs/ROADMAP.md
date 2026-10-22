@@ -1,6 +1,6 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
-2026-10-22の`QEB-75-F15.02-COMPOSIO-CATALOG-PATH`で、既存のComposio実行consumerにつながるtool catalog検索を、明示allowlist内の単一toolkitに限定したv3.1読取へ接続した。tool識別子・schema・version・scopeは外部metadataとして返し、HDS-BRAIN L3 final reviewを維持する。fixture試験のみで実API／実資格は未使用。これはF15.02のComposio接続境界一部であり、F15全体の要求調査・実装・runtime受入を意味しない。次はF15.02の未確認契約・地域・account・scopeを整理してF15.03の有限実装へ接続する。製品全体は`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
+2026-10-22の`QEB-76-F15.02-COMPOSIO-ACCOUNT-PATH`で、ownerのprivate Composio account一覧とlive executionの明示account選択・実行直前再照合を既存consumerへ接続した。返却値はaccount ID・toolkit・状態・private分類に限り、providerのcredential-bearing state/data等を破棄する。live executionは設定ownerとtoolkitに一致するPRIVATE・ACTIVE・未無効化accountを再照合できなければ送信しない。Composio公式v3.1 contractのfixture試験のみで、実API／実資格／外部業務作用は未実施。これはF15.02のComposio接続境界一部であり、F15全体の要求調査・実装・runtime受入を意味しない。次は未確認契約・地域・scope境界を整理してF15.03の有限実装へ接続する。製品全体は`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
 2026-10-22の`QEB-74-F15.01-GAP-REGISTRATION`で、A03.03の未収容要求43件（OpenClaw入口23、Muse入口2、Muse service18）をowner管理の非公開差分登録consumerへ接続した。個別要求・対象scopeはPublic Gitへ載せず、非公開登録に保持する。F15.01は要求登録の`WIRED`であり、service APIの実装・互換・runtime受入は未成立。dynamic provider/plugin/Muse connector catalogとformat/migrationは`BUILD_GAP`。次はF15.02の公式契約・提供条件・scope確認からF15.03の有限実装へ接続する。製品全体は`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。詳細は[`docs/IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)。
 
