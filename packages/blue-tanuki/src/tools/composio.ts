@@ -732,6 +732,42 @@ interface ComposioConnectedAccountProjection {
   status: string;
   is_disabled: boolean | null;
   account_type: "PRIVATE" | "SHARED" | "UNKNOWN";
+  auth_scheme: string;
+  provider_region: "us" | "eu" | "unknown" | null;
+}
+
+const COMPOSIO_AUTH_SCHEMES = new Set([
+  "API_KEY",
+  "BASIC",
+  "BEARER",
+  "CUSTOM",
+  "DCR_OAUTH",
+  "NO_AUTH",
+  "OAUTH1",
+  "OAUTH2",
+]);
+
+function connectedAccountAuthScheme(value: Record<string, unknown>): string {
+  const authConfig = isRecord(value.auth_config) ? value.auth_config : {};
+  const state = isRecord(value.state) ? value.state : {};
+  const candidates = [value.authScheme, authConfig.auth_scheme, state.authScheme]
+    .filter((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0)
+    .map((candidate) => candidate.trim().toUpperCase());
+  if (candidates.length === 0 || candidates.some((candidate) => !COMPOSIO_AUTH_SCHEMES.has(candidate))) {
+    return "UNKNOWN";
+  }
+  return new Set(candidates).size === 1 ? candidates[0]! : "UNKNOWN";
+}
+
+function connectedProviderRegion(
+  value: Record<string, unknown>,
+  toolkit: string,
+): "us" | "eu" | "unknown" | null {
+  if (toolkit !== "posthog") return null;
+  const state = isRecord(value.state) ? value.state : {};
+  const stateValue = isRecord(state.val) ? state.val : {};
+  const region = typeof stateValue.region === "string" ? stateValue.region.trim().toLowerCase() : "";
+  return region === "us" || region === "eu" ? region : "unknown";
 }
 
 function connectedAccountProjection(
@@ -766,6 +802,8 @@ function connectedAccountProjection(
     status,
     is_disabled: typeof value.is_disabled === "boolean" ? value.is_disabled : null,
     account_type: accountType,
+    auth_scheme: connectedAccountAuthScheme(value),
+    provider_region: connectedProviderRegion(value, toolkit),
   };
 }
 
@@ -859,7 +897,8 @@ export async function invokeComposioAccounts(
     result_digest: jsonDigest(accounts),
     used_for_authority: false,
     metadata_used_for_authority: false,
-    next_action: "Select a PRIVATE ACTIVE account for an explicit task. Account status and metadata do not grant permission.",
+    next_action:
+      "Select a PRIVATE ACTIVE account for an explicit task. For PostHog, require an observed us/eu region and API_KEY auth scheme; unknown connection metadata blocks live execution. Account status and metadata do not grant task consent or permission; keep the owner-reviewed HDS-BRAIN Approval Gate L3.",
   };
 }
 
@@ -977,6 +1016,15 @@ export async function invokeComposioExecute(
   const intent = classifyComposioAction(
     stringArg(args, "intent", false) ?? tool,
   );
+  const isPostHog = toolkit.toLowerCase() === "posthog";
+  const expectedProviderRegionInput = stringArg(args, "expected_provider_region", false);
+  const expectedProviderRegion = expectedProviderRegionInput?.toLowerCase();
+  if (expectedProviderRegion !== undefined && expectedProviderRegion !== "us" && expectedProviderRegion !== "eu") {
+    throw new Error("expected_provider_region must be us or eu; mutation_sent=false");
+  }
+  if (!isPostHog && expectedProviderRegion !== undefined) {
+    throw new Error("expected_provider_region is only valid for the PostHog toolkit; mutation_sent=false");
+  }
   const connectedAccountId = stringArg(args, "connected_account_id", false);
   if (args.connected_account_id !== undefined && !connectedAccountId) {
     throw new Error("connected_account_id must be a non-empty string; external_call_performed=false");
@@ -1004,6 +1052,7 @@ export async function invokeComposioExecute(
     action_allowlist_boundary: "COMPOSIO_ALLOWED_ACTIONS",
     revoke_boundary: "COMPOSIO_REVOKED_ACTIONS",
     account_selection_boundary: "explicit PRIVATE account owned by COMPOSIO_USER_ID and matching toolkit",
+    ...(isPostHog ? { expected_provider_region: expectedProviderRegion ?? null } : {}),
     connected_account_id: connectedAccountId ?? null,
     audit_required: true,
     used_for_authority: false,
@@ -1036,6 +1085,11 @@ export async function invokeComposioExecute(
       "connected_account_id is required for Composio live execution; mutation_sent=false",
     );
   }
+  if (isPostHog && expectedProviderRegion === undefined) {
+    throw new Error(
+      "expected_provider_region=us|eu is required for PostHog live execution; mutation_sent=false",
+    );
+  }
   const apiBaseUrl = composioApiBaseUrl(env);
   const request = opts.request ?? defaultComposioExecuteRequest;
   const accounts = await readComposioAccounts({
@@ -1049,15 +1103,21 @@ export async function invokeComposioExecute(
     request: opts.accountsRequest ?? defaultComposioAccountsRequest,
     signal: opts.signal,
   });
+  const selectedAccount = accounts.accounts[0];
   if (
     accounts.accounts.length !== 1 ||
-    accounts.accounts[0]!.connected_account_id !== connectedAccountId ||
-    accounts.accounts[0]!.status !== "ACTIVE" ||
-    accounts.accounts[0]!.is_disabled !== false ||
-    accounts.accounts[0]!.account_type !== "PRIVATE"
+    !selectedAccount ||
+    selectedAccount.connected_account_id !== connectedAccountId ||
+    selectedAccount.status !== "ACTIVE" ||
+    selectedAccount.is_disabled !== false ||
+    selectedAccount.account_type !== "PRIVATE" ||
+    (isPostHog && (
+      selectedAccount.auth_scheme !== "API_KEY" ||
+      selectedAccount.provider_region !== expectedProviderRegion
+    ))
   ) {
     throw new Error(
-      "Composio connected account is missing, not PRIVATE ACTIVE, disabled, or outside the configured owner/toolkit; mutation_sent=false",
+      "Composio connected account is missing, not PRIVATE ACTIVE, disabled, outside the configured owner/toolkit, or has unknown/mismatched PostHog auth scheme or region; mutation_sent=false",
     );
   }
   assertToolExecutionNotCancelled(opts.signal, "composio.execute");
@@ -1092,6 +1152,11 @@ export async function invokeComposioExecute(
     composio_request_id: response.request_id,
     response_digest: jsonDigest(data),
     result_digest: jsonDigest(data),
+    ...(isPostHog ? {
+      provider_region: selectedAccount.provider_region,
+      provider_auth_scheme: selectedAccount.auth_scheme,
+      connection_context_used_for_authority: false,
+    } : {}),
     result: data,
   };
 }
@@ -1129,7 +1194,7 @@ export const composioScopesTool: Tool = {
 export const composioExecuteTool: Tool = {
   name: "composio.execute",
   description:
-    "Executes Composio external tools only after explicit toolkit/action allowlists, live opt-in, capability, approval, and audit boundaries.",
+    "Executes Composio external tools only after explicit toolkit/action allowlists, live opt-in, capability, approval, and audit boundaries. PostHog live execution also requires an explicit expected_provider_region matching the connected account's observed us/eu region and API_KEY auth scheme.",
   required_capabilities: requireToolOperationDescriptor("composio.execute").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeComposioExecute(args, { signal: context.signal });

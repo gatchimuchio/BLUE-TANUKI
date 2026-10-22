@@ -25,6 +25,8 @@ References:
 Current implementation is a dry-run-default connector with explicit live opt-in:
 
 - `composio.search`
+- `composio.accounts`
+- `composio.scopes`
 - `composio.execute`
 
 `COMPOSIO_DRY_RUN` defaults to `true`. In that mode `composio.execute` returns
@@ -97,6 +99,14 @@ only after owner review. Missing key/user id/allowlist, dry-run mode, live opt-i
 absence, revoked action, Approval Gate rejection, executor approval proof
 absence, timeout, or Composio API failure all fail closed before claiming a
 confirmed mutation.
+
+## PostHogの接続region
+
+`composio.accounts`はcredential-bearing connection state全体を返さず、認証方式とPostHogのregionだけを限定して投影する。PostHogのlive `composio.execute`では、ownerが確認対象として指定した`expected_provider_region=us|eu`と、実行直前にconnected accountから観測したregionが一致し、認証方式が`API_KEY`の場合だけComposioへ送信する。値の欠落・不明・不一致は送信前に拒否する。その他toolkitにregion引数を流用しない。
+
+Composioの接続region更新記録とKBには、cloud regionおよびsubdomain／self-hosted接続について異なる記述がある。この実装が扱うのはconnected accountから明示観測できた`us`／`eu`だけで、subdomainやself-hostedを対応済みと推定しない。account状態やscope推薦はtask consent・実行権限ではなく、HDS-BRAIN Approval Gate L3の独立したowner reviewを維持する。
+
+参照：[Composio connected accounts API](https://docs.composio.dev/reference/api-reference/connected-accounts/getConnectedAccounts?explorer=true)、[Composio changelog](https://next.docs.composio.dev/reference/changelog)、[PostHog API region overview](https://posthog.com/docs/api)。
 
 ## Authority Boundary
 

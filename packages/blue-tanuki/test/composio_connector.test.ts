@@ -24,6 +24,22 @@ const activeAccount = {
   data: { secret: "must-not-escape-either" },
 };
 
+const activePostHogAccount = {
+  id: "conn_owner_posthog_1",
+  toolkit: { slug: "posthog" },
+  user_id: "owner-local",
+  status: "ACTIVE",
+  is_disabled: false,
+  authScheme: "API_KEY",
+  auth_config: { auth_scheme: "API_KEY" },
+  experimental: { account_type: "PRIVATE" },
+  state: {
+    authScheme: "API_KEY",
+    val: { region: "eu", generic_api_key: "must-not-escape-posthog-secret" },
+  },
+  data: { secret: "must-not-escape-posthog-data" },
+};
+
 function accountResponse(account: Record<string, unknown> = activeAccount) {
   return {
     status: 200,
@@ -169,6 +185,35 @@ describe("Composio connector", () => {
     expect(JSON.stringify(result)).not.toContain("must-not-escape");
     expect(JSON.stringify(result)).not.toContain("owner-local");
     expect(JSON.stringify(result)).not.toContain("composio-secret-value");
+  });
+
+  it("projects only the documented PostHog region and auth scheme from connection metadata", async () => {
+    const result = await invokeComposioAccounts(
+      { toolkit: "posthog" },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "posthog",
+          COMPOSIO_USER_ID: "owner-local",
+        },
+        accountsRequest: async () => accountResponse(activePostHogAccount),
+      },
+    );
+
+    expect(result).toMatchObject({
+      accounts: [{
+        connected_account_id: "conn_owner_posthog_1",
+        auth_scheme: "API_KEY",
+        provider_region: "eu",
+      }],
+      used_for_authority: false,
+      metadata_used_for_authority: false,
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("must-not-escape-posthog-secret");
+    expect(serialized).not.toContain("must-not-escape-posthog-data");
+    expect(serialized).not.toContain("owner-local");
+    expect(serialized).not.toContain("composio-secret-value");
   });
 
   it("returns a bounded experimental least-privilege scope recommendation without treating it as a grant", async () => {
@@ -501,6 +546,160 @@ describe("Composio connector", () => {
       },
     )).rejects.toThrow(/not PRIVATE ACTIVE/);
     expect(executeDispatched).toBe(false);
+  });
+
+  it("requires the observed PostHog region and API-key auth scheme to match before live execution", async () => {
+    let executeDispatched = false;
+    const env = {
+      COMPOSIO_API_KEY: "composio-secret-value",
+      COMPOSIO_ALLOWED_TOOLKITS: "posthog",
+      COMPOSIO_ALLOWED_ACTIONS: "posthog:POSTHOG_CREATE_INSIGHT",
+      COMPOSIO_USER_ID: "owner-local",
+      COMPOSIO_DRY_RUN: "false",
+      COMPOSIO_LIVE_EXECUTION: "true",
+    };
+    const request = async (target: ComposioExecuteTarget) => {
+      executeDispatched = true;
+      expect(target.body).not.toHaveProperty("expected_provider_region");
+      return {
+        status: 200,
+        ok: true,
+        content_type: "application/json",
+        body: JSON.stringify({ data: { id: "fixture-insight" } }),
+        truncated: false,
+        request_id: "req_posthog_fixture",
+      };
+    };
+
+    const result = await invokeComposioExecute(
+      {
+        toolkit: "posthog",
+        tool: "POSTHOG_CREATE_INSIGHT",
+        connected_account_id: "conn_owner_posthog_1",
+        expected_provider_region: "eu",
+        payload: { name: "fixture" },
+      },
+      {
+        env,
+        accountsRequest: async () => accountResponse(activePostHogAccount),
+        request,
+      },
+    );
+    expect(result).toMatchObject({
+      provider_region: "eu",
+      provider_auth_scheme: "API_KEY",
+      connection_context_used_for_authority: false,
+    });
+    expect(executeDispatched).toBe(true);
+
+    executeDispatched = false;
+    await expect(invokeComposioExecute(
+      {
+        toolkit: "posthog",
+        tool: "POSTHOG_CREATE_INSIGHT",
+        connected_account_id: "conn_owner_posthog_1",
+      },
+      {
+        env,
+        accountsRequest: async () => accountResponse(activePostHogAccount),
+        request,
+      },
+    )).rejects.toThrow(/expected_provider_region=us\|eu is required/);
+    expect(executeDispatched).toBe(false);
+
+    await expect(invokeComposioExecute(
+      {
+        toolkit: "posthog",
+        tool: "POSTHOG_CREATE_INSIGHT",
+        connected_account_id: "conn_owner_posthog_1",
+        expected_provider_region: "us",
+      },
+      {
+        env,
+        accountsRequest: async () => accountResponse(activePostHogAccount),
+        request,
+      },
+    )).rejects.toThrow(/unknown\/mismatched PostHog auth scheme or region/);
+    expect(executeDispatched).toBe(false);
+
+    await expect(invokeComposioExecute(
+      {
+        toolkit: "posthog",
+        tool: "POSTHOG_CREATE_INSIGHT",
+        connected_account_id: "conn_owner_posthog_1",
+        expected_provider_region: "eu",
+      },
+      {
+        env,
+        accountsRequest: async () => accountResponse({
+          ...activePostHogAccount,
+          auth_config: { auth_scheme: "OAUTH2" },
+        }),
+        request,
+      },
+    )).rejects.toThrow(/unknown\/mismatched PostHog auth scheme or region/);
+    expect(executeDispatched).toBe(false);
+
+    await expect(invokeComposioExecute(
+      {
+        toolkit: "posthog",
+        tool: "POSTHOG_CREATE_INSIGHT",
+        connected_account_id: "conn_owner_posthog_1",
+        expected_provider_region: "eu",
+      },
+      {
+        env,
+        accountsRequest: async () => accountResponse({
+          ...activePostHogAccount,
+          state: { authScheme: "API_KEY", val: { region: "https://eu.posthog.com" } },
+        }),
+        request,
+      },
+    )).rejects.toThrow(/unknown\/mismatched PostHog auth scheme or region/);
+    expect(executeDispatched).toBe(false);
+  });
+
+  it("rejects an unknown or non-PostHog expected region before a provider call", async () => {
+    let accountLookupDispatched = false;
+    const env = {
+      COMPOSIO_API_KEY: "composio-secret-value",
+      COMPOSIO_ALLOWED_TOOLKITS: "github,posthog",
+      COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE,posthog:POSTHOG_CREATE_INSIGHT",
+      COMPOSIO_USER_ID: "owner-local",
+      COMPOSIO_DRY_RUN: "false",
+      COMPOSIO_LIVE_EXECUTION: "true",
+    };
+    await expect(invokeComposioExecute(
+      {
+        toolkit: "posthog",
+        tool: "POSTHOG_CREATE_INSIGHT",
+        connected_account_id: "conn_owner_posthog_1",
+        expected_provider_region: "https://eu.posthog.com",
+      },
+      {
+        env,
+        accountsRequest: async () => {
+          accountLookupDispatched = true;
+          return accountResponse(activePostHogAccount);
+        },
+      },
+    )).rejects.toThrow(/expected_provider_region must be us or eu/);
+    await expect(invokeComposioExecute(
+      {
+        toolkit: "github",
+        tool: "GITHUB_CREATE_AN_ISSUE",
+        connected_account_id: "conn_owner_github_1",
+        expected_provider_region: "eu",
+      },
+      {
+        env,
+        accountsRequest: async () => {
+          accountLookupDispatched = true;
+          return accountResponse();
+        },
+      },
+    )).rejects.toThrow(/only valid for the PostHog toolkit/);
+    expect(accountLookupDispatched).toBe(false);
   });
 
   it("blocks revoked action scopes before live execution", async () => {

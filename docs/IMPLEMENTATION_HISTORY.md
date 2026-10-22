@@ -4,6 +4,26 @@
 
 ---
 
+### 履歴ログ：`QEB-78-F15.02-POSTHOG-REGION-PREFLIGHT`
+
+開始時`main`／`origin/main`=`77bccbb88f012afcf898c74c5ff3832111969cc0`、tracked差分なし（保護対象untracked Linux isolation `target/`は保持）。現行pin rev2.3の三点セット、適用`AGENTS.md`、active指示、F15.02／F15.03、Composio account／execute consumerを同期した。
+
+Composio v3.1 connected-account projectionから`auth_scheme`を列挙値に限定し、PostHogだけ`state.val.region`を`us`／`eu`／`unknown`へ射影する。認証方式・地域以外のstate/dataは出力しない。live PostHog executionには`expected_provider_region=us|eu`を必須とし、実行直前に同じprivate owner accountのstatus・disabled・account type・API_KEY auth scheme・regionを再照合する。欠落・未知・競合・不一致時は外部POST前に拒否する。region/auth metadataはnon-authorityで、task consentやowner承認に使わずHDS Approval Gate L3を維持した。
+
+一次資料：Composio connected accounts v3.1 schemaは`authScheme`、`auth_config.auth_scheme`、`state.val.region`を提示する。Composio changelogはPostHog regionを接続単位の`us`／`eu`として説明する一方、同社KBにはsubdomain／self-hostedを示す記事が残る。資料間の契約差を解消できないためこの実装は観測可能な`us`／`eu`以外を有効化しない。PostHog API overviewはUS／EUの異なるendpointを示す。参照：[connected accounts](https://docs.composio.dev/reference/api-reference/connected-accounts/getConnectedAccounts?explorer=true)、[Composio changelog](https://next.docs.composio.dev/reference/changelog)、[PostHog API](https://posthog.com/docs/api)、[Composio PostHog KB](https://docs.composio.dev/kb/guide/toolkits-posthog)。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Composio connector／HDS authority focused tests | PASS、2 files／29 tests。PostHog region match・mismatch・unknown・auth scheme conflict、non-PostHog引数拒否、credential projection抑止、HDS L3をfixtureで確認。 |
+| `pnpm typecheck` | PASS。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底移行負債76件は維持。 |
+| 実Composio／PostHog API、実資格、外部業務作用、全workspace suite、QE_QC／QE_QA | 未実施。 |
+
+F15.02 Composio経路の限定consumerであり、接続setup、scope付与、owner consent、self-hosted接続、43要求実装、`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。次はF15.03で非公開登録済み要求から公式契約が有限化できる実consumerを選ぶ。C08.03実provider保留、P13 owner GO保留、製品全体`QE_BUILD`を維持する。
+
+---
+
 ### 履歴ログ：`QEB-77-F15.02-COMPOSIO-SCOPE-BOUNDARY`
 
 開始時`main`／`origin/main`=`e7afeb604ea7eab3171c625ae5b25723470c8f4a`、tracked差分なし（保護対象untracked Linux isolation `target/`は保持）。現行pin rev2.3、適用`AGENTS.md`、active instruction、F15.02/F15.03の現行単位、Composioのscope/execute consumerを再同期した。旧版・閉じた履歴全体は参照していない。

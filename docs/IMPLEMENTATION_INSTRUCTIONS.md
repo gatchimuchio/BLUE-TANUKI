@@ -16,7 +16,9 @@ F14.02では、LINE admitted inboundからGateway reply、SQLite durable outbox�
 
 ## 次のBUILD_BATCH
 
-QEB-73のA03.03で比較基準面の固定61 IDを担当consumer群または未確認理由・次consumerへ割り当て、QEB-74のF15.01で未収容43件（OpenClaw入口23、Muse入口2、Muse service18）をowner管理の非公開差分登録consumerへ接続した。個別IDとサービス別scope候補は非公開記録に保持し、Public Gitには内部QE全要求対応表を置かない。QEB-75／76ではComposioのtool catalog `composio.search`、owner private account一覧`composio.accounts`、live execution前の明示account再照合を既存consumerへ接続した。QEB-77ではowner allowlist内actionについて公式v3.1のbeta scope recommendationを`composio.scopes`としてHDS／operation catalog／tool registryへ接続した。推薦scopeは既存accountの付与済みscopeを観測せず、権限にもならない。いずれもfixture限定で、実provider／実資格／外部業務作用は未実施。F15.02全体、Composio地域境界、付与済みscope確認、43件のservice実装は未成立。次は公式契約で確認できた未収容要求を有限なF15.03実装consumerへ展開し、接続setup側で必要なscope・region・owner consentの観測を続ける。動的provider/plugin/Muse catalogと形式移行は`BUILD_GAP`を維持する。P13公開GOは含まない。
+F15.01は未収容43要求の非公開登録consumerまで`WIRED`。Composioの`search`／`accounts`／`scopes`／`execute`はHDS・operation catalog・tool registryに接続済みだが、実provider・実資格・外部業務作用は未使用。PostHogは`accounts`の限定projectionからauth schemeと接続regionを観測し、live `execute`で明示`expected_provider_region=us|eu`との一致と`API_KEY`を再照合する。欠落・不明・競合は送信前に拒否する。Composio公式資料間にregion／subdomain／self-hosted接続契約の記述差が残るため、この経路は観測できた`us`／`eu`だけを扱い、その他を対応済みとしない。接続状態・scope推薦・provider metadataはtask consentや権限の証拠ではなく、HDS Approval Gate L3を維持する。
+
+次はF15.03として、非公開登録済み要求から公式契約で有限化できる実consumerを選び、目的→判断→既存制御／作用→結果観測へ接続する。動的provider/plugin/Muse catalogと形式移行は具体的なconsumerが成立するまで`BUILD_GAP`。F15.02全体、接続setup上のowner consent、付与済みscopeの観測、43件のservice実装は未成立。C08.03実provider保留、P13公開GO保留、QE_QC／QE_QA未開始を維持する。
 
 ## 保護とGit
 
