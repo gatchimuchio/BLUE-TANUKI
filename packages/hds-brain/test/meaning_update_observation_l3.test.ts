@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -172,12 +172,35 @@ describe("selected operation observations through meaning-update L3", () => {
       expect(approvalEntry.log.evaluation).toMatchObject({ approval_level: "L3_final_review", final_review_required: true });
       hds.onCommandLifecycle(approval.command.id, "approval_approved", { actor: "fixture-reviewer",
         reason: "human_approval:approve", request_id: approvalRequestId });
-      expect(hds.commitMeaningUpdateAfterL3({ source_command_id: compute.command.id, args,
+      const audit = hds.getAudit();
+      const append = audit.append.bind(audit);
+      const interruptedMarker = vi.spyOn(audit, "append").mockImplementation((log) => {
+        if ("kind" in log && log.kind === "operation_plan" && log.event === "meaning_update_adoption_committed") {
+          throw new Error("simulated process interruption after J/M apply");
+        }
+        return append(log);
+      });
+      expect(() => hds.commitMeaningUpdateAfterL3({ source_command_id: compute.command.id, args,
         request_id: approvalRequestId, command_id: approval.command.id, command_digest: commandDigest,
         content_review_digest: commandDigest, proposal_actor: "fixture-owner", reviewer_actor: "fixture-reviewer",
-        evaluation: approvalEntry.log.evaluation })).toMatchObject({ ok: true, approval_status: "approved",
-          memory_application_status: "applied", follow_up_action_status: "unconfirmed" });
+        evaluation: approvalEntry.log.evaluation })).toThrow("simulated process interruption after J/M apply");
+      interruptedMarker.mockRestore();
       expect(meaningUpdateAdoptionApprovalTarget(args)).toContain(review!.source_observation_binding!.digest);
+
+      hds.closeOperationPlanMemory();
+      hds.close();
+      hds = new HDSUpperController({ audit: new AuditLog({ filepath: auditPath }), memory: new LongTermMemoryStore(),
+        meaning_update_memory: meaningStorage, goal_purpose_memory: purposeStorage,
+        goal_governance: testGoalGovernance(), operation_plan_state: new FixtureOperationPlanState(),
+        operation_plan_memory: resultStorage });
+      const recoveredMarkers = hds.getAudit().list().filter(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+        log.event === "meaning_update_adoption_committed" && log.request_id === approvalRequestId);
+      expect(recoveredMarkers).toHaveLength(1);
+      expect(recoveredMarkers[0]?.log).toMatchObject({ proposal_digest: review!.proposal_digest,
+        candidate_digest: review!.proposal.candidate_digest,
+        source_observation_digest: review!.source_observation_binding!.digest,
+        approval_status: "approved", memory_application_status: "applied", used_for_authority: false });
+      expect(hds.getAudit().verify()).toBe(true);
 
       const persisted = new MeaningUpdateMemoryConsumer(meaningStorage, { readVerifiedMemoryApproval: (reference) => ({ ...reference }) });
       try {
@@ -186,6 +209,32 @@ describe("selected operation observations through meaning-update L3", () => {
         expect(record?.source_observation_binding?.digest).toBe(review!.source_observation_binding!.digest);
         expect(persisted.verify()).toBe(true);
       } finally { persisted.close(); }
+
+      const orphanDirectory = join(privateRoot, "orphan-meaning");
+      mkdirSync(orphanDirectory, { recursive: true });
+      const orphanStorage = storage(orphanDirectory);
+      const orphanMeaning = "Persisted fixture without an L3 approval must not be promoted.";
+      const orphanProposal = { ...review!.proposal, proposal_ref: "proposal:unapproved-orphan",
+        candidate_ref: "candidate:unapproved-orphan", candidate_digest: meaningUpdateCandidateDigest(orphanMeaning),
+        candidate_meaning: orphanMeaning,
+        target_reference: { record_id: "F:orphan-target", version: "f".repeat(64) } };
+      const orphanRecord = buildMeaningUpdateMemoryRecord(orphanProposal);
+      const orphanSeeder = new MeaningUpdateMemoryConsumer(orphanStorage, {
+        readVerifiedMemoryApproval: (reference) => ({ ...reference }),
+      });
+      try { expect(orphanSeeder.commit(orphanRecord, () => {}).ok).toBe(true); }
+      finally { orphanSeeder.close(); }
+      const orphanAudit = new AuditLog({ filepath: join(root, "orphan-audit.jsonl") });
+      const orphanTarget = meaningUpdateAdoptionApprovalTarget({ proposal_digest: orphanRecord.proposal_digest,
+        candidate_digest: orphanRecord.candidate_digest, target_record_id: orphanProposal.target_reference.record_id,
+        target_version: orphanProposal.target_reference.version });
+      orphanAudit.append({ kind: "operation_plan", event: "meaning_update_content_reviewed",
+        request_id: "orphan-content-review", command_id: "orphan-approval-command", projection_digest: "a".repeat(64),
+        proposal_digest: orphanRecord.proposal_digest, candidate_digest: orphanRecord.candidate_digest,
+        target_digest: createHash("sha256").update(orphanTarget, "utf8").digest("hex"),
+        review_status: "prior_version_unverified", used_for_authority: false, timestamp: 20 });
+      expect(() => new HDSUpperController({ audit: orphanAudit, memory: new LongTermMemoryStore(),
+        meaning_update_memory: orphanStorage })).toThrow("persisted meaning update record lacks one unambiguous L3 approval");
     } finally {
       hds.closeOperationPlanMemory();
       hds.close();

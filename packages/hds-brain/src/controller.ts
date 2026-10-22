@@ -557,6 +557,96 @@ function meaningUpdateAdoptionApprovalEvidence(
   return approved ? { timestamp: approved.log.timestamp, evaluation: ask.log.evaluation } : null;
 }
 
+/** Complete only a previously approved J/M commit whose final audit marker was interrupted. */
+function reconcilePendingMeaningUpdateCommitMarkers(audit: AuditLog, memory: MeaningUpdateMemoryConsumer): void {
+  let entries = audit.list();
+  const reviews = entries.filter(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+    log.event === "meaning_update_content_reviewed");
+  for (const reviewEntry of reviews) {
+    const review = reviewEntry.log;
+    if (!("kind" in review) || review.kind !== "operation_plan" || review.event !== "meaning_update_content_reviewed" ||
+        typeof review.request_id !== "string" || typeof review.command_id !== "string" ||
+        typeof review.proposal_digest !== "string" || !/^[a-f0-9]{64}$/.test(review.proposal_digest)) continue;
+
+    const record = memory.read(meaningUpdateMemoryRecordId(review.proposal_digest));
+    if (!record) continue;
+    if (!audit.isPersistent() || !audit.verify()) {
+      throw new Error("meaning update commit marker recovery requires a persistent verified audit chain");
+    }
+
+    const sameTransaction = (log: unknown): log is { kind: string; event: string; request_id?: string | null;
+      command_id?: string; proposal_digest?: string } => typeof log === "object" && log !== null &&
+      "kind" in log && "event" in log && log.kind === "operation_plan" &&
+      typeof log.event === "string" && "request_id" in log && "command_id" in log &&
+      "proposal_digest" in log && log.request_id === review.request_id && log.command_id === review.command_id &&
+      log.proposal_digest === review.proposal_digest;
+    const existingCommits = entries.filter(({ log }) => sameTransaction(log) &&
+      log.event === "meaning_update_adoption_committed");
+    if (existingCommits.length > 1) throw new Error("persisted meaning update commit marker is duplicated");
+    if (existingCommits.length === 1) continue;
+    if (entries.some(({ log }) => sameTransaction(log) && log.event === "meaning_update_commit_blocked")) {
+      throw new Error("persisted meaning update record conflicts with a blocked commit marker");
+    }
+
+    const sourceObservationDigest = record.source_observation_binding?.digest;
+    const target = meaningUpdateAdoptionApprovalTarget({ proposal_digest: record.proposal_digest,
+      candidate_digest: record.candidate_digest, target_record_id: record.proposal.target_reference.record_id,
+      target_version: record.proposal.target_reference.version,
+      ...(sourceObservationDigest ? { source_observation_digest: sourceObservationDigest } : {}) });
+    const targetDigest = createHash("sha256").update(target, "utf8").digest("hex");
+    if (review.proposal_digest !== record.proposal_digest || review.candidate_digest !== record.candidate_digest ||
+        review.source_observation_digest !== sourceObservationDigest || review.target_digest !== targetDigest ||
+        typeof review.projection_digest !== "string" || !/^[a-f0-9]{64}$/.test(review.projection_digest) ||
+        (review.review_status !== "prior_version_unverified" &&
+          review.review_status !== "counterevidence_absence_unverified") || review.used_for_authority !== false) {
+      throw new Error("persisted meaning update record does not match its content review");
+    }
+
+    const asks = entries.filter(({ log }) => "kind" in log && log.kind === "approval_gate" &&
+      log.request_id === review.request_id && log.command_id === review.command_id &&
+      log.evaluation.decision === "ask" && log.evaluation.context.operation === "tool.call" &&
+      log.evaluation.context.command_id === review.command_id && log.evaluation.context.target === target &&
+      log.evaluation.risk === "high" && log.evaluation.approval_level === "L3_final_review" &&
+      log.evaluation.final_review_required);
+    const approvals = entries.filter(({ index, log }) => index > reviewEntry.index &&
+      "kind" in log && log.kind === "command_lifecycle" && log.request_id === review.request_id &&
+      log.command_id === review.command_id && log.phase === "approval_approved" &&
+      log.reason === "human_approval:approve");
+    if (asks.length !== 1 || approvals.length !== 1) {
+      throw new Error("persisted meaning update record lacks one unambiguous L3 approval");
+    }
+    const ask = asks[0]!.log;
+    const approval = approvals[0]!.log;
+    if (!("kind" in ask) || ask.kind !== "approval_gate" || !("kind" in approval) ||
+        approval.kind !== "command_lifecycle") {
+      throw new Error("persisted meaning update approval evidence is malformed");
+    }
+    const evidence = meaningUpdateAdoptionApprovalEvidence(entries, {
+      request_id: review.request_id, command_id: review.command_id,
+      proposal_actor: ask.evaluation.context.actor, reviewer_actor: approval.actor, target,
+      command_digest: review.projection_digest, proposal_digest: record.proposal_digest,
+      candidate_digest: record.candidate_digest,
+      review_status: review.review_status as MeaningUpdateProposalReferenceReview["review_status"],
+      source_observation_digest: sourceObservationDigest,
+    });
+    if (!evidence || evidence.timestamp !== approval.timestamp ||
+        JSON.stringify(evidence.evaluation) !== JSON.stringify(ask.evaluation)) {
+      throw new Error("persisted meaning update record lacks matching content review and L3 approval");
+    }
+
+    audit.append({ kind: "operation_plan", event: "meaning_update_adoption_committed",
+      request_id: review.request_id, command_id: review.command_id,
+      projection_digest: review.projection_digest, proposal_digest: record.proposal_digest,
+      candidate_digest: record.candidate_digest, target_digest: targetDigest,
+      ...(sourceObservationDigest ? { source_observation_digest: sourceObservationDigest } : {}),
+      review_status: review.review_status as MeaningUpdateProposalReferenceReview["review_status"],
+      approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed",
+      used_for_authority: false, timestamp: evidence.timestamp });
+    if (!audit.verify()) throw new Error("meaning update audit marker recovery failed");
+    entries = audit.list();
+  }
+}
+
 function memoryJudgmentReassessmentApprovalEvidence(
   entries: readonly AuditEntry[],
   input: { request_id: string; command_id: string; proposal_actor: string; reviewer_actor: string;
@@ -3700,6 +3790,7 @@ ${planControl.question}`,
       if (!memory.recoverPending() || !memory.readyForCanonicalRestore()) {
         throw new Error("meaning update J/M recovery is not verified");
       }
+      reconcilePendingMeaningUpdateCommitMarkers(this.audit, memory);
       replayMeaningUpdateMemoryCommits(this.audit, memory);
       replayMemoryJudgmentReassessments(this.audit, memory);
       return memory;

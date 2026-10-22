@@ -4,6 +4,18 @@
 
 ---
 
+### 履歴ログ：`QEB-KB03-MEANING-UPDATE-COMMIT-RECONCILIATION`
+
+現行QE pin rev3.0、適用AGENTS、active instruction、HEAD／remote／dirty state、意味更新J/Mとsource-observation consumerを再同期した。開始`main`／`origin/main`=`4b3babce9e8f152c2cd6094fd8a0d7206ddfc6b0`。保護対象untracked `.codex-remote-attachments/` とLinux isolation `target/` は保持した。
+
+意味更新のM適用は成功したが、直後の`meaning_update_adoption_committed` audit append前にプロセスが終了した場合、既存の再起動検証は適用済みprivate M recordとL3承認履歴を監査上つなぐ最終markerを補完しなかった。HDS起動時にpending markerを照合・再構成するconsumerを追加した。既存content-review、同一request／commandのhigh-risk L3 ask、human approval lifecycle、proposal／candidate／target／source-observation digest、適用済みM recordを照合し、一致時にだけ監査完了markerを追記する。M記録のない未完了承認はそのまま保留し、承認・候補・作用を復元しない。M記録とblocked markerの衝突、複数承認等の曖昧な状態は起動をfail-closedにする。
+
+`meaning_update_observation_l3.test.ts`で、Jが選択した合成結果観測から作ったC候補をowner L3で承認・適用した後、audit append直前の停止を注入し、file-backed J/Mとauditを再openして完了markerをちょうど1件再構成し、chain verifyを維持することを確認した。別fixtureではL3 lifecycleのない適用済みM recordからmarkerを作らずfail-closedする。HDS typecheckと`meaning_update_memory.test.ts`／`meaning_update_observation_l3.test.ts`はPASS。`memory_citation_review.test.ts`は16件中8件FAILし、期待されたproposal contract／scope review結果に対し実値が`failed`／`not_reviewed`となる。失敗testはmeaning-update J/M storeを構成せず、追加consumerの起動条件外。全suite／QE_QC・QE_QAは未実施。実provider、credential、外部作用は未使用。
+
+この単一writer監査consumerを`WIRED`とする。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、Rust authority cutover、5OS実機、QC／QA、P13公開・出荷GOは成立していない。次consumerはprojection再構築とmigration writerの欠落を同一single-writer境界で接続する。
+
+---
+
 ### 履歴ログ：`QEB-KB02-K-CITATION-TO-DELEGATED-PLAN-CONSUMER`
 
 rev3.0 pin、現行AGENTS、active指示、対象コードを再同期した。開始`main`／`origin/main`=`88091b177807cfdda7c68e2037f47b27964f0384`。local recovery branchは`codex/backup-main`=`88091b177807cfdda7c68e2037f47b27964f0384`、`codex/backup-main-prev`=`7e163b0b8fbf50582875e4f3d9493c7ee4a45ce7`。remote backup tag二世代もこの二SHAを指すことを確認した。保護対象untracked `.codex-remote-attachments/` とLinux isolation `target/` は保持し、公開Gitへ追加しない。
