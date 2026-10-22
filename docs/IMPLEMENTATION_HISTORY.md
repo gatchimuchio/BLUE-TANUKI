@@ -18,7 +18,7 @@ Microsoft 365 Agents SDKのJWT endpointをTeams pluginに接続し、application
 | bundled plugin review、`pnpm docs:check`、`git diff --check` | PASS。日本語基底は移行中の未解消負債76件を報告、licensing gate PASS。 |
 | valid JWTのpositive tenant route、実tenant／credential／Teams API／実HDS／返信、外部業務作用 | 未実施。 |
 
-F13.01 local synthetic admission→Gateway inbound subpathは部分的に`WIRED`。実tenant route・credentialed positive JWT・HDS運転は未確認でTeamsは`first-party-preview`を維持する。F13.01全体、F13.02 reply/outbox、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立／未開始。C08.03保留、D4-Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。
+F13.01 local synthetic admission→Gateway inbound subpathは部分的に`WIRED`。実tenant route・credentialed positive JWT・HDS運転は未確認でTeamsは`first-party-preview`を維持する。F13.01全体、F13.02 reply/outbox、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立／未開始。C08.03保留、D4-Pocket／ミニドラ別repo変更なし、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`b106921d451588fc470730c4d5279c0bb26998f1`。
 
 ### 履歴ログ：`QEB-67-F12.02-DISCORD-REPLY-PERSISTENT-OUTBOX-CONSUMER`
 
