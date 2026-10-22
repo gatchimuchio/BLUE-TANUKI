@@ -2380,7 +2380,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       const resumed = hds.decide(reply);
       expect(resumed.command?.type).toBe("llm_call");
       expect(resumed.command?.type === "llm_call" && resumed.command.payload.compute_context?.local_p_version)
-        .toBe("blue-tanuki.plan-compute-purpose-relation.v1");
+        .toBe("blue-tanuki.plan-compute-agent-delegation.v1");
       expect(hds.listOperationPlanWaits()[0]).toMatchObject({ state: "resumed", wake_reason: "reply" });
 
       const next = plan(reply.id, "synthetic-root");

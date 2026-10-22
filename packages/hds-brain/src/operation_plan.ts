@@ -1179,6 +1179,7 @@ export class OperationPlanLedger {
     readonly wait_id: string;
     readonly task_identity_digest: string;
     readonly goal: string;
+    readonly goal_purpose_binding?: OperationPlanGoalPurposeBinding;
   } {
     if (this.recoveryRefreshPending || !this.port) throw new Error("plan_wait_state_not_durable");
     const wait = (this.state.waits ?? []).find((candidate) => candidate.wait_id === control.wait_id &&
@@ -1198,7 +1199,8 @@ export class OperationPlanLedger {
     }
     const recoveryHold = this.recoveryHolds.get(wait.plan_id_digest);
     if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
-    return { wait_id: wait.wait_id, task_identity_digest: wait.task_identity_digest, goal: plan.goal };
+    return { wait_id: wait.wait_id, task_identity_digest: wait.task_identity_digest, goal: plan.goal,
+      ...(plan.goal_purpose_binding ? { goal_purpose_binding: structuredClone(plan.goal_purpose_binding) } : {}) };
   }
 
   /** Bind a fresh explicit owner reply to an interrupted wait without retaining the reply in J state. */
@@ -1247,11 +1249,35 @@ export class OperationPlanLedger {
     return wait?.task_identity_digest ?? null;
   }
 
-  waitContext(wait: OperationPlanWaitState): { readonly goal: string; readonly owner: string; readonly channel: string } | null {
+  waitContext(wait: OperationPlanWaitState): { readonly goal: string; readonly owner: string; readonly channel: string;
+    readonly goal_purpose_binding?: OperationPlanGoalPurposeBinding } | null {
     const plan = this.state.plans.find((candidate) => operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
     if (wait.state !== "waiting" || !plan || operationPlanTaskIdentityDigest(plan) !== wait.task_identity_digest ||
-        plan.revisions.at(-1)?.digest !== wait.revision_digest || this.recoveryHolds.has(wait.plan_id_digest)) return null;
-    return { goal: plan.goal, owner: plan.owner, channel: plan.channel };
+        plan.revisions.at(-1)?.digest !== wait.revision_digest || operationPlanDigest(plan.owner) !== wait.owner_digest ||
+        operationPlanDigest(plan.channel) !== wait.channel_digest || this.recoveryHolds.has(wait.plan_id_digest) ||
+        !this.goalPurposeBindingIsCurrent(plan.goal_purpose_binding)) return null;
+    return { goal: plan.goal, owner: plan.owner, channel: plan.channel,
+      ...(plan.goal_purpose_binding ? { goal_purpose_binding: structuredClone(plan.goal_purpose_binding) } : {}) };
+  }
+
+  /** Read only the exact current purpose version bound to this durable wait. */
+  computePurposeForWait(waitId: string): { readonly binding: OperationPlanGoalPurposeBinding; readonly purpose_text: string } | null {
+    const wait = (this.state.waits ?? []).find((candidate) => candidate.wait_id === waitId &&
+      ((candidate.state === "waiting") || (candidate.state === "resumed" && candidate.compute_outcome === "interrupted")));
+    if (!wait || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return null;
+    const plan = this.state.plans.find((candidate) => operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
+    const binding = plan?.goal_purpose_binding;
+    if (!plan || !binding || plan.revisions.at(-1)?.digest !== wait.revision_digest ||
+        operationPlanTaskIdentityDigest(plan) !== wait.task_identity_digest || operationPlanDigest(plan.owner) !== wait.owner_digest ||
+        operationPlanDigest(plan.channel) !== wait.channel_digest || !this.goalPurposeBindingIsCurrent(binding)) return null;
+    let purpose: OperationPlanGoalPurposeContent | undefined;
+    try { purpose = this.goalPurposeContentReader?.(binding.goal_ref, binding.purpose_version) ?? undefined; }
+    catch { return null; }
+    if (!purpose || purpose.used_for_authority !== false || purpose.goal_ref !== binding.goal_ref ||
+        purpose.version !== binding.purpose_version || purpose.purpose_digest !== binding.purpose_digest ||
+        createHash("sha256").update(purpose.purpose_text, "utf8").digest("hex") !== binding.purpose_digest ||
+        purpose.purpose_text.length > 20_000) return null;
+    return { binding: structuredClone(binding), purpose_text: purpose.purpose_text };
   }
 
   private currentRevisionDigest(planIdDigest: string): string | null {
@@ -3177,6 +3203,7 @@ export class OperationPlanLedger {
         used_for_authority: false as const },
       waits: (this.state.waits ?? []).slice(-256).reverse().map((wait) => ({
         wait_id: wait.wait_id, plan_id: wait.plan_id_digest, task_identity_digest: wait.task_identity_digest,
+        revision_digest: wait.revision_digest,
         owner_authentication_required: wait.channel_digest !== operationPlanDigest("webchat") ||
           wait.owner_digest === operationPlanDigest("webchat-owner-token-holder"),
         ...(wait.channel_digest !== operationPlanDigest("webchat") ? { owner_reauthentication_binding: {
@@ -3199,7 +3226,8 @@ export class OperationPlanLedger {
         const currentRevision = p.revisions.at(-1)!;
         const planIdDigest = operationPlanDigest(p.revisions[0]!.plan.plan_id);
         const recoveryHold = this.recoveryHolds.get(planIdDigest);
-        return { plan_id: planIdDigest, owner_identity_digest: operationPlanDigest(p.owner),
+        return { plan_id: planIdDigest, task_identity_digest: operationPlanTaskIdentityDigest(p),
+        owner_identity_digest: operationPlanDigest(p.owner),
         channel_identity_digest: operationPlanDigest(p.channel),
         request_id: p.revisions[0]!.plan.request_id, revision: p.revisions.length,
         revision_digest: currentRevision.digest, previous_revision_digests: p.revisions.slice(0, -1).map((r) => r.digest),

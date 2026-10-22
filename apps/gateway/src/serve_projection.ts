@@ -227,6 +227,7 @@ export interface OperationPlanStatusProjection {
   waits: Array<{
     wait_id: string;
     plan_id: string;
+    revision_digest?: string;
     task_identity_digest: string;
     owner_authentication_required: boolean;
     owner_reauthentication_binding?: { owner_identity_digest: string; channel_identity_digest: string };
@@ -249,6 +250,7 @@ export interface OperationPlanStatusProjection {
   }>;
   plans: Array<{
     plan_id: string;
+    task_identity_digest?: string;
     revision: number;
     revision_digest: string;
     status: "awaiting_step_review" | "results_verified";
@@ -346,7 +348,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
   }
   const waits: OperationPlanStatusProjection["waits"] = [];
   for (const wait of rawWaits as Record<string, unknown>[]) {
-    const allowedKeys = new Set(["wait_id", "plan_id", "task_identity_digest", "owner_authentication_required",
+    const allowedKeys = new Set(["wait_id", "plan_id", "revision_digest", "task_identity_digest", "owner_authentication_required",
       "owner_reauthentication_binding", "state", "deadline_at_ms",
       "recovery_hold_reason", "resumed_at_ms", "wake_reason", "compute_outcome", "compute_result_digest", "candidate_plan_id",
       "compute_completed_at_ms", "compute_interrupted_at_ms", "compute_resource_use", "used_for_authority", "may_execute"]);
@@ -361,7 +363,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     const resourceUse = parsedResourceUse?.success ? parsedResourceUse.data : undefined;
     const ownerReauthenticationBinding = wait.owner_reauthentication_binding;
     if (Object.keys(wait).some((key) => !allowedKeys.has(key)) || !isDigest(wait.wait_id) || !isDigest(wait.plan_id) ||
-        !isDigest(wait.task_identity_digest) || (state !== "waiting" && !resumed) ||
+        (wait.revision_digest !== undefined && !isDigest(wait.revision_digest)) || !isDigest(wait.task_identity_digest) || (state !== "waiting" && !resumed) ||
         (wait.owner_authentication_required !== undefined && typeof wait.owner_authentication_required !== "boolean") ||
         (ownerReauthenticationBinding !== undefined && (!isRecord(ownerReauthenticationBinding) ||
           Object.keys(ownerReauthenticationBinding).some((key) => !["owner_identity_digest", "channel_identity_digest"].includes(key)) ||
@@ -395,6 +397,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       (outcome === "candidate_rejected" || outcome === "failed") &&
       (resourceUse.charged_compute_ms > 0 || resourceUse.charged_tokens > 0 || resourceUse.charged_cost_amount > 0));
     waits.push({ wait_id: wait.wait_id as string, plan_id: wait.plan_id as string,
+      ...(typeof wait.revision_digest === "string" ? { revision_digest: wait.revision_digest } : {}),
       task_identity_digest: wait.task_identity_digest as string, state: state as "waiting" | "resumed",
       owner_authentication_required: wait.owner_authentication_required === true,
       ...(isRecord(ownerReauthenticationBinding) ? { owner_reauthentication_binding: {
@@ -476,7 +479,8 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         (goalPurposeRelation.owner_review_status === "verified" &&
           ((goalPurposeRelation.status === "owner_reviewed_supports" && goalPurposeRelation.owner_review_outcome === "supports") ||
             (goalPurposeRelation.status === "owner_reviewed_unknown" && goalPurposeRelation.owner_review_outcome === "unknown")))));
-    if (!isDigest(plan.plan_id) || !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
+    if (!isDigest(plan.plan_id) || (plan.task_identity_digest !== undefined && !isDigest(plan.task_identity_digest)) ||
+        !Number.isInteger(revision) || revision! < 1 || !isDigest(plan.revision_digest) ||
         !isDigest(plan.owner_identity_digest) || !isDigest(plan.channel_identity_digest) ||
         !goalPurposeBindingValid || !goalPurposeRelationValid ||
         !["not_configured", "required", "current", "stale"].includes(String(plan.goal_purpose_binding_status ??
@@ -549,7 +553,9 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       });
     }
     const crossChannelOwnerReview = plan.channel_identity_digest !== WEBCHAT_CHANNEL_IDENTITY_DIGEST;
-    plans.push({ plan_id: plan.plan_id, revision: revision!, revision_digest: plan.revision_digest,
+    plans.push({ plan_id: plan.plan_id, ...(typeof plan.task_identity_digest === "string"
+      ? { task_identity_digest: plan.task_identity_digest } : {}),
+      revision: revision!, revision_digest: plan.revision_digest,
       owner_authentication_required: crossChannelOwnerReview || plan.owner_identity_digest === WEBCHAT_OWNER_TOKEN_ACTOR_IDENTITY_DIGEST,
       ...(crossChannelOwnerReview ? { owner_reauthentication_binding: {
         owner_identity_digest: plan.owner_identity_digest as string,

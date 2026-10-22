@@ -94,15 +94,29 @@ const RESUME_GLOBAL_KEY = "*";
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
 const AOTANU_ASSET_ROOT = findAotanuAssetRoot();
 
-function ownerOperationPlanControlAction(content: string): "review" | "result" | "resume_wait" | null {
-  const match = /^plan:(review|result|resume_wait)\s+(\{[\s\S]*\})$/.exec(content);
+function ownerOperationPlanControlAction(content: string): {
+  readonly action: "review" | "result" | "resume_wait" | "wait";
+  readonly plan_id?: string;
+  readonly revision_digest?: string;
+} | null {
+  const match = /^plan:(review|result|resume_wait|wait)\s+(\{[\s\S]*\})$/.exec(content);
   if (!match) return null;
   let value: unknown;
   try { value = JSON.parse(match[2] ?? ""); } catch { return null; }
   if (typeof value !== "object" || value === null || Array.isArray(value) || Object.hasOwn(value, "action")) return null;
   const parsed = OperationPlanControlSchema.safeParse({ ...(value as Record<string, unknown>), action: match[1] });
   return parsed.success && (parsed.data.action === "review" || parsed.data.action === "result" ||
-    parsed.data.action === "resume_wait") ? parsed.data.action : null;
+    parsed.data.action === "resume_wait" || parsed.data.action === "wait")
+    ? { action: parsed.data.action,
+        ...(parsed.data.action === "wait" ? {
+          plan_id: parsed.data.plan_id,
+          revision_digest: parsed.data.revision_digest,
+        } : {}) }
+    : null;
+}
+
+function ownerPlanWaitSessionId(planId: string, revisionDigest: string): string {
+  return `webchat-owner-plan:${planId}:${revisionDigest}`;
 }
 
 function bearerTokenMatches(candidate: string | undefined, expected: string | undefined): boolean {
@@ -1048,9 +1062,17 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     if (url.pathname === "/owner/inbound") {
       const replyTo = typeof body?.user === "string" ? body.user : null;
       const content = typeof body?.content === "string" ? body.content : null;
+      const planId = typeof body?.plan_id === "string" ? body.plan_id : undefined;
+      const revisionDigest = typeof body?.revision_digest === "string" ? body.revision_digest : undefined;
       if (!replyTo || !content) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "user and content are required strings" }));
+        return;
+      }
+      if ((planId === undefined) !== (revisionDigest === undefined) ||
+          (planId !== undefined && (!/^[a-f0-9]{64}$/.test(planId) || !/^[a-f0-9]{64}$/.test(revisionDigest!)))) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "invalid_owner_wait_binding" }));
         return;
       }
       if (!this.rateLimitOr429(this.buckets.inbound, "owner-token-holder", res)) return;
@@ -1063,15 +1085,37 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         }));
         return;
       }
-      const inboundReq: InboundRequest = {
-        id: randomUUID(),
+      const requestId = randomUUID();
+      const inboundRequest: InboundRequest = {
+        id: requestId,
         channel: "webchat",
         // Credential possession marks source class only; HDS still decides and authorizes.
         user: OWNER_TOKEN_ACTOR,
         content,
         timestamp: Date.now(),
+        ...(planId && revisionDigest ? { session_id: ownerPlanWaitSessionId(planId, revisionDigest) } : {}),
         metadata: { reply_to: replyTo },
       };
+      const inboundReq: InboundRequest = planId && revisionDigest
+        ? createGatewayInternalInboundRequest({
+            ...inboundRequest,
+            metadata: {
+              reply_to: replyTo,
+              "blue_tanuki.authority_context": "gateway_internal_v1",
+              "blue_tanuki.actor_kind": "owner",
+              "blue_tanuki.trust_level": "owner",
+              "blue_tanuki.process_kind": "chat",
+              "blue_tanuki.operator_surface": "developer",
+              "blue_tanuki.operation_core.version": "operation-core.v1",
+              "blue_tanuki.operation_core.request_id": `operation-request:${requestId}`,
+              "blue_tanuki.operation_core.projection_id": "owner-plan-wait:operation-core",
+              "blue_tanuki.operation_core.source_interface": "gui",
+              "blue_tanuki.operation_core.used_for_authority": false,
+              "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+              "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
+            },
+          })
+        : inboundRequest;
       this.handler?.(inboundReq).catch((e: unknown) => {
         // eslint-disable-next-line no-console
         console.error("[webchat] owner inbound handler error:", e);
@@ -1850,7 +1894,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             "blue_tanuki.trust_level": "owner",
           } : {}),
           ...(ownerAuthenticated && ownerOperationPlanAction
-            ? { "blue_tanuki.process_kind": ownerOperationPlanAction === "resume_wait" ? "chat" : "tool" } : {}),
+            ? { "blue_tanuki.process_kind": ownerOperationPlanAction.action === "resume_wait" ? "chat" : "tool" } : {}),
           "blue_tanuki.operator_surface": surfaceName,
           "blue_tanuki.operation_core.version": "operation-core.v1",
           "blue_tanuki.operation_core.request_id": `operation-request:${requestId}`,
@@ -1860,6 +1904,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           "blue_tanuki.operation_core.planner_output_used_for_authority": false,
           "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
         },
+        ...(ownerAuthenticated && ownerOperationPlanAction?.action === "wait" &&
+          ownerOperationPlanAction.plan_id && ownerOperationPlanAction.revision_digest
+          ? { session_id: ownerPlanWaitSessionId(ownerOperationPlanAction.plan_id, ownerOperationPlanAction.revision_digest) }
+          : {}),
       });
       this.handler?.(inboundReq).catch((e: unknown) => {
         // eslint-disable-next-line no-console

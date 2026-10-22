@@ -338,13 +338,37 @@ describe("delegated goal purpose owner review", () => {
 
     let providerCalls = 0;
     let providerFailure: unknown;
+    const providerRequestIds: string[] = [];
+    const plannerPrompts: string[] = [];
     const taskText = "Prepare one bounded read-only search plan.";
     const provider = createServer((request, response) => {
       providerCalls += 1;
       void readPrompt(request).then((prompt) => {
+        const childRole = /C child role=([a-z_]+)/.exec(prompt)?.[1];
+        if (childRole) {
+          const content = JSON.stringify({ role: childRole, candidate: "bounded read-only planning observation",
+            used_for_authority: false, may_execute: false });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ id: `c0802-${childRole}-fixture`, object: "chat.completion", created: 1,
+            model: "c0802-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+          return;
+        }
+        const isPlanPrompt = prompt.includes("候補だけをJSON wrapperで返してください。形は{plan: operation-core.v1のOperationPlan");
+        if (!isPlanPrompt && prompt.includes("blue-tanuki.memory-citation-response.v1")) {
+          const content = JSON.stringify({ schema_version: "blue-tanuki.memory-citation-response.v1",
+            answer: "", citations: [] });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ id: "c0802-memory-citation-fixture", object: "chat.completion", created: 1,
+            model: "c0802-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+          return;
+        }
         if (!prompt.includes(taskText)) throw new Error("owner task intent was not passed to the local C fixture");
         const requestId = /固定request_id=([^\s。]+)/.exec(prompt)?.[1];
         if (!requestId) throw new Error("J operation request id was not bound into the planner prompt");
+        providerRequestIds.push(requestId);
+        plannerPrompts.push(prompt);
         const target = { kind: "directory", id: fileRoot };
         const expected = { root: fileRoot, sandbox_root: fileRoot, query: "fixture", visited_files: 0, matches: [] };
         const content = JSON.stringify({
@@ -543,7 +567,7 @@ describe("delegated goal purpose owner review", () => {
       const { ticket } = await wsTicketResponse.json() as { ticket: string };
       taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
       await once(taskWebSocket, "open");
-      const taskReply = waitForWebChatSend(taskWebSocket);
+      const taskReply = waitForWebChatSend(taskWebSocket, "owner task compute");
       const taskSubmission = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
         method: "POST",
         headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
@@ -556,6 +580,9 @@ describe("delegated goal purpose owner review", () => {
       expect(taskAccepted.request_id).toBeTruthy();
       const taskReplyText = await taskReply;
       expect(taskReplyText.length).toBeGreaterThan(0);
+      const initialComputeRequestId = `operation-request:${taskAccepted.request_id}`;
+      expect(providerRequestIds.length).toBeGreaterThan(0);
+      expect(providerRequestIds.every((requestId) => requestId === initialComputeRequestId)).toBe(true);
       const runtimeSnapshotResponse = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
         headers: { authorization: `Bearer ${token}` },
       });
@@ -572,10 +599,12 @@ describe("delegated goal purpose owner review", () => {
         goal_purpose_binding_status?: string;
         goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string };
         goal_purpose_relation?: { status?: string; candidate_outcome?: string };
+        task_identity_digest?: string;
         steps?: Array<{ step_id?: string; status?: string }>;
       } | undefined;
       expect(selectedPlan).toMatchObject({ owner_authentication_required: true, goal_purpose_binding_status: "current",
         goal_purpose_relation: { status: "unverified", candidate_outcome: "supports" } });
+      expect(selectedPlan?.task_identity_digest).toMatch(/^[a-f0-9]{64}$/);
       expect(providerCalls).toBeGreaterThan(0);
       expect(providerFailure).toBeUndefined();
 
@@ -616,7 +645,7 @@ describe("delegated goal purpose owner review", () => {
 
       const step = selectedPlan?.steps?.[0];
       expect(step?.step_id).toMatch(/^[a-f0-9]{64}$/);
-      const stepReviewReply = waitForWebChatSend(taskWebSocket);
+      const stepReviewReply = waitForWebChatSend(taskWebSocket, "plan step review");
       const stepReviewResponse = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
         method: "POST",
         headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
@@ -626,7 +655,8 @@ describe("delegated goal purpose owner review", () => {
         })}` }),
       });
       expect(stepReviewResponse.status).toBe(202);
-      expect((await stepReviewReply).length).toBeGreaterThan(0);
+      const stepReviewReplyText = await stepReviewReply;
+      expect(stepReviewReplyText.length).toBeGreaterThan(0);
       const completedSnapshotResponse = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
         headers: { authorization: `Bearer ${token}` },
       });
@@ -636,11 +666,83 @@ describe("delegated goal purpose owner review", () => {
       };
       expect(completedSnapshot.operation_plan_status?.plans).toMatchObject([{
         plan_id: selectedPlan?.plan_id,
+        task_identity_digest: selectedPlan?.task_identity_digest,
+        revision_digest: selectedPlan?.revision_digest,
         status: "results_verified",
         goal_purpose_relation: { status: "owner_reviewed_supports", owner_review_outcome: "supports" },
         steps: [expect.objectContaining({ operation: "file.search", status: "verified",
           binding: expect.objectContaining({ memory_status: "receipt_confirmed" }) })],
       }]);
+
+      const waitControl = { plan_id: selectedPlan?.plan_id, revision_digest: selectedPlan?.revision_digest,
+        deadline_at_ms: Date.now() + 10 * 60_000 };
+      const waitRegisteredReply = waitForWebChatSend(taskWebSocket, "wait registration");
+      const waitRegistration = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", content: `plan:wait ${JSON.stringify(waitControl)}` }),
+      });
+      expect(waitRegistration.status).toBe(202);
+      expect((await waitRegisteredReply).length).toBeGreaterThan(0);
+      const registeredWaitSnapshot = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(registeredWaitSnapshot.status).toBe(200);
+      const registeredWaitBody = await registeredWaitSnapshot.json() as {
+        operation_plan_status?: { waits?: Array<Record<string, unknown>> };
+      };
+      const registeredWait = registeredWaitBody.operation_plan_status?.waits?.find((wait) =>
+        wait.plan_id === selectedPlan?.plan_id && wait.revision_digest === selectedPlan?.revision_digest && wait.state === "waiting");
+      expect(registeredWait).toMatchObject({ task_identity_digest: selectedPlan?.task_identity_digest,
+        used_for_authority: false, may_execute: false });
+
+      const replanReply = waitForWebChatSend(taskWebSocket, "wait reply replan");
+      const ownerReply = await fetch(`http://127.0.0.1:${gatewayPort}/owner/inbound`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", plan_id: selectedPlan?.plan_id,
+          revision_digest: selectedPlan?.revision_digest, content: "The first result is received; keep the same task and propose the next safe observation." }),
+      });
+      expect(ownerReply.status).toBe(202);
+      const ownerReplyBody = await ownerReply.json() as { request_id?: string };
+      expect(ownerReplyBody.request_id).toBeTruthy();
+      const replanReplyText = await replanReply;
+      expect(replanReplyText.length).toBeGreaterThan(0);
+
+      const replanned = await waitFor(async () => {
+        if (providerFailure) throw providerFailure;
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) return null;
+        const body = await response.json() as { operation_plan_status?: {
+          waits?: Array<Record<string, unknown>>; plans?: Array<Record<string, unknown>>;
+        } };
+        const resumedWait = body.operation_plan_status?.waits?.find((wait) =>
+          wait.plan_id === selectedPlan?.plan_id && wait.revision_digest === selectedPlan?.revision_digest &&
+          wait.state === "resumed" && wait.wake_reason === "reply" && wait.compute_outcome === "candidate_retained");
+        const candidate = resumedWait && body.operation_plan_status?.plans?.find((plan) =>
+          plan.plan_id === resumedWait.candidate_plan_id);
+        return resumedWait && candidate ? { wait: resumedWait, candidate } : null;
+      }, gateway, "same-task reply did not retain a new J candidate");
+      expect(providerRequestIds).toHaveLength(2);
+      expect(providerRequestIds).toEqual([initialComputeRequestId, ownerReplyBody.request_id]);
+      expect(plannerPrompts[1]).toContain(JSON.stringify(proposedPurpose).slice(1, -1));
+      expect(replanned.wait).toMatchObject({ task_identity_digest: selectedPlan?.task_identity_digest,
+        used_for_authority: false, may_execute: false });
+      expect(replanned.candidate).toMatchObject({
+        task_identity_digest: selectedPlan?.task_identity_digest,
+        goal_purpose_binding: selectedPlan?.goal_purpose_binding,
+        goal_purpose_binding_status: "current",
+        goal_purpose_relation: { status: "unverified", candidate_outcome: "supports" },
+      });
+      expect(replanned.candidate.plan_id).not.toBe(selectedPlan?.plan_id);
+      expect(replanned.candidate.revision).toBe(1);
+      expect(replanned.candidate.revision_digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(new Set(providerRequestIds)).toEqual(new Set([initialComputeRequestId,
+        ownerReplyBody.request_id]));
+      expect(plannerPrompts[providerRequestIds.indexOf(ownerReplyBody.request_id)])
+        .toContain(JSON.stringify(proposedPurpose).slice(1, -1));
 
       taskWebSocket.close();
       taskWebSocket = undefined;
@@ -821,6 +923,18 @@ async function waitForSignal(signal: Promise<void>, processRun: CapturedProcess,
   ]);
 }
 
+async function waitFor<T>(probe: () => Promise<T | null> | T | null, gateway: CapturedProcess,
+  failureMessage: string): Promise<T> {
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    if (gateway.child.exitCode !== null) throw new Error(`Gateway exited: ${gateway.stderr.join("")}`);
+    const value = await probe();
+    if (value !== null) return value;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`${failureMessage}\nGateway stderr:\n${gateway.stderr.join("")}`);
+}
+
 async function forceStopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (!children.has(child)) return;
   const closed = once(child, "close");
@@ -887,9 +1001,9 @@ async function waitForHealth(port: number, gateway: CapturedProcess): Promise<vo
   throw new Error(`gateway health timed out\n${gateway.stderr.join("")}`);
 }
 
-function waitForWebChatSend(webSocket: WebSocket): Promise<string> {
+function waitForWebChatSend(webSocket: WebSocket, label = "operator request"): Promise<string> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("WebChat organization result timed out")), 15_000);
+    const timeout = setTimeout(() => reject(new Error(`WebChat ${label} result timed out`)), 15_000);
     webSocket.on("message", (data) => {
       let message: unknown;
       try {

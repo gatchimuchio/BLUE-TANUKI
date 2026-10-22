@@ -762,22 +762,26 @@ describe("WebChatChannel — Control Center shell", () => {
       displayed_count: 3,
       plan_count: 3,
       waits: [
-        { wait_id: "9".repeat(64), plan_id: "8".repeat(64), task_identity_digest: "7".repeat(64),
+        { wait_id: "9".repeat(64), plan_id: "8".repeat(64), revision_digest: "d".repeat(64),
+          task_identity_digest: "7".repeat(64),
           state: "resumed", deadline_at_ms: nowMs + 60_000, resumed_at_ms: nowMs, wake_reason: "reply",
           compute_outcome: "candidate_retained", compute_result_digest: "6".repeat(64),
           candidate_plan_id: "5".repeat(64), compute_completed_at_ms: nowMs + 1,
           resource_review_required: false,
           used_for_authority: false, may_execute: false, private_goal: "PRIVATE WAIT GOAL MUST NOT RENDER" },
-        { wait_id: "4".repeat(64), plan_id: "3".repeat(64), task_identity_digest: "2".repeat(64),
+        { wait_id: "4".repeat(64), plan_id: "3".repeat(64), revision_digest: "e".repeat(64),
+          task_identity_digest: "2".repeat(64), owner_authentication_required: true,
           state: "waiting", deadline_at_ms: nowMs + 120_000, compute_outcome: "not_started",
           resource_review_required: false,
           used_for_authority: false, may_execute: false },
-        { wait_id: "1".repeat(64), plan_id: "0".repeat(64), task_identity_digest: "f".repeat(64),
+        { wait_id: "1".repeat(64), plan_id: "0".repeat(64), revision_digest: "c".repeat(64),
+          task_identity_digest: "f".repeat(64),
           state: "resumed", deadline_at_ms: nowMs - 30_000, resumed_at_ms: nowMs - 60_000, wake_reason: "reply",
           compute_outcome: "interrupted", compute_interrupted_at_ms: nowMs - 30_000,
           recovery_hold_reason: "held_residual",
           resource_review_required: false, used_for_authority: false, may_execute: false },
-        { wait_id: "2".repeat(64), plan_id: "3".repeat(64), task_identity_digest: "4".repeat(64),
+        { wait_id: "2".repeat(64), plan_id: "3".repeat(64), revision_digest: "a".repeat(64),
+          task_identity_digest: "4".repeat(64),
           state: "resumed", deadline_at_ms: nowMs - 30_000, resumed_at_ms: nowMs - 60_000, wake_reason: "reply",
           compute_outcome: "interrupted", compute_interrupted_at_ms: nowMs - 30_000,
           owner_authentication_required: true,
@@ -790,6 +794,7 @@ describe("WebChatChannel — Control Center shell", () => {
       plans: [
         {
           plan_id: "a".repeat(64), revision: 3, revision_digest: "b".repeat(64),
+          owner_authentication_required: true,
           goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "c".repeat(64) },
           goal_purpose_binding_status: "current",
           status: "results_verified", step_count: 2,
@@ -823,6 +828,13 @@ describe("WebChatChannel — Control Center shell", () => {
           steps: [{ step_id: "9".repeat(64), operation: "file.search", status: "not_selected",
             external_receipt_observation: "not_applicable" }],
         },
+        {
+          plan_id: "g".repeat(64), revision: 1, revision_digest: "h".repeat(64),
+          owner_authentication_required: true, goal_purpose_binding_status: "required",
+          status: "results_verified", step_count: 1,
+          steps: [{ step_id: "i".repeat(64), operation: "file.search", status: "verified",
+            binding: { command_digest: "j".repeat(64), result_digest: "k".repeat(64), delivery_digest: "l".repeat(64) } }],
+        },
       ],
     };
     const script = [
@@ -851,6 +863,8 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain('data-wait-id="' + "2".repeat(64) + '"');
     expect(rendered).toContain("C結果digest");
     expect(rendered).toContain("保存候補digest");
+    expect(rendered).toContain('data-operation-plan-wait-reply="true"');
+    expect(rendered.match(/data-operation-plan-wait="true"/g)).toHaveLength(1);
     expect(rendered).toContain("J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。");
     expect(rendered).not.toContain("PRIVATE WAIT GOAL MUST NOT RENDER");
     expect(rendered).toContain('<span class="badge review">held_residual</span>');
@@ -2929,8 +2943,10 @@ describe("WebChatChannel — HTTP inbound", () => {
         {
           user: "owner-ui",
           content: "Review this task",
+          plan_id: "a".repeat(64),
+          revision_digest: "b".repeat(64),
           actor: "owner",
-          metadata: { trust_level: "owner", authority: "bypass" },
+          metadata: { trust_level: "system", authority: "bypass" },
         },
         { authorization: `Bearer ${OWNER_TOKEN}` },
       );
@@ -2941,10 +2957,36 @@ describe("WebChatChannel — HTTP inbound", () => {
         channel: "webchat",
         user: "webchat-owner-token-holder",
         content: "Review this task",
-        metadata: { reply_to: "owner-ui" },
+        session_id: `webchat-owner-plan:${"a".repeat(64)}:${"b".repeat(64)}`,
+        metadata: {
+          reply_to: "owner-ui",
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner",
+          "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.operator_surface": "developer",
+          "blue_tanuki.operation_core.version": "operation-core.v1",
+          "blue_tanuki.operation_core.request_id": expect.stringMatching(/^operation-request:/),
+          "blue_tanuki.operation_core.used_for_authority": false,
+          "blue_tanuki.operation_core.planner_output_used_for_authority": false,
+          "blue_tanuki.operation_core.ui_projection_used_for_authority": false,
+        },
       });
-      expect(ownerCtx.received[0]?.metadata).not.toHaveProperty("actor");
-      expect(ownerCtx.received[0]?.metadata).not.toHaveProperty("trust_level");
+      expect(isGatewayInternalInboundRequest(ownerCtx.received[0])).toBe(true);
+      expect(ownerCtx.received[0]?.metadata).not.toHaveProperty("authority");
+      expect((await postJson(ownerCtx.port, "/owner/inbound", {
+        user: "owner-ui", content: "not a wait reply", plan_id: "a".repeat(64),
+      }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(400);
+      expect(ownerCtx.received).toHaveLength(1);
+
+      const ordinaryOwnerInput = await postJson(ownerCtx.port, "/owner/inbound", {
+        user: "owner-ui", content: "General owner input",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(ordinaryOwnerInput.status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(ownerCtx.received).toHaveLength(2);
+      expect(isGatewayInternalInboundRequest(ownerCtx.received[1])).toBe(false);
+      expect(ownerCtx.received[1]).not.toHaveProperty("session_id");
     } finally {
       await ownerCtx.teardown();
     }
@@ -5466,17 +5508,29 @@ describe("WebChatChannel - Developer Operator API", () => {
         "blue_tanuki.process_kind": "chat",
       });
       expect(ctx.received[2]?.content).toBe(`plan:resume_wait ${JSON.stringify(resumeControl)}`);
+      const waitControl = { plan_id: "a".repeat(64), revision_digest: "b".repeat(64), deadline_at_ms: Date.now() + 60_000 };
+      const waitAccepted = await postJson(ctx.port, "/operators/developer/invoke", {
+        user: "owner-webchat-session", content: `plan:wait ${JSON.stringify(waitControl)}`,
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(waitAccepted.status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(ctx.received[3]).toMatchObject({
+        user: "webchat-owner-token-holder",
+        session_id: `webchat-owner-plan:${"a".repeat(64)}:${"b".repeat(64)}`,
+        content: `plan:wait ${JSON.stringify(waitControl)}`,
+        metadata: { "blue_tanuki.process_kind": "tool" },
+      });
       const inboundReview = await postJson(ctx.port, "/operators/developer/invoke", {
         user: "ordinary-webchat-user", content: `plan:review ${JSON.stringify(control)}`,
       }, { authorization: `Bearer ${TOKEN}` });
       expect(inboundReview.status).toBe(202);
       await new Promise((resolve) => setTimeout(resolve, 30));
-      expect(ctx.received).toHaveLength(4);
-      expect(ctx.received[3]).toMatchObject({
+      expect(ctx.received).toHaveLength(5);
+      expect(ctx.received[4]).toMatchObject({
         user: "ordinary-webchat-user",
         content: `plan:review ${JSON.stringify(control)}`,
       });
-      expect(ctx.received[3]?.metadata?.["blue_tanuki.process_kind"]).toBeUndefined();
+      expect(ctx.received[4]?.metadata?.["blue_tanuki.process_kind"]).toBeUndefined();
       expect((await getRaw(ctx.port, "/operators/developer", {
         authorization: `Bearer ${OWNER_TOKEN}`,
       })).status).toBe(403);
@@ -5489,7 +5543,7 @@ describe("WebChatChannel - Developer Operator API", () => {
       expect((await postJson(ctx.port, "/operators/writing/invoke", {
         user: "owner-webchat-session", content: "draft this",
       }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(401);
-      expect(ctx.received).toHaveLength(4);
+      expect(ctx.received).toHaveLength(5);
     } finally {
       await ctx.teardown();
     }
