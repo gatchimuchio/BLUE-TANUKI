@@ -272,6 +272,12 @@ export class MeaningUpdateMemoryConsumer {
   }
 
   verify(): boolean { return this.coordinator.verify(); }
+  readyForCanonicalRestore(): boolean {
+    const lifecycle = this.coordinator.snapshot();
+    return !!lifecycle && this.coordinator.verify() && lifecycle.status === "ready" &&
+      ["idle", "effect_confirmed"].includes(lifecycle.lifecycle_state) &&
+      lifecycle.pending.every((item) => item.lifecycle_state === "effect_confirmed");
+  }
   close(): void { this.coordinator.close(); }
 }
 

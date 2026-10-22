@@ -2360,8 +2360,9 @@ export async function buildRecoveryPostActionObservation(
       latest.entry.timestamp < history.not_before_timestamp_ms;
     if (options.mode === "in_process_restore") {
       if ((restoreEvidence.store_key !== "operation_plans" && restoreEvidence.store_key !== "broker" &&
-          restoreEvidence.store_key !== "cron_events" &&
-          restoreEvidence.store_key !== "j_control" && restoreEvidence.store_key !== "m_state") ||
+          restoreEvidence.store_key !== "cron_events" && restoreEvidence.store_key !== "j_control" &&
+          restoreEvidence.store_key !== "m_state" && restoreEvidence.store_key !== "meaning_update_j_control" &&
+          restoreEvidence.store_key !== "meaning_update_m_state") ||
           history.not_before_timestamp_ms === undefined || predatesCurrentProcess) {
         return { ...unverified, store_key: restoreEvidence.store_key,
           restore_backup_id_digest: restoreEvidence.restored_backup_id_digest ?? null };

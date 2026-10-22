@@ -809,7 +809,9 @@ export class HDSUpperController {
   private goal_governance?: GoalGovernanceLedger;
   private readonly goalPurposeMemory?: GoalPurposeMemoryConsumer;
   private goalPurposeMemoryApprovalContext?: GoalPurposeMemoryApprovalContext;
-  private readonly meaningUpdateMemory?: MeaningUpdateMemoryConsumer;
+  private meaningUpdateMemory?: MeaningUpdateMemoryConsumer;
+  private meaningUpdateMemoryStorage?: OperationPlanMemoryStorage;
+  private meaningUpdateMemoryQuiesced = false;
   private readonly failureMemoryStore?: FailureMemoryStore;
   private meaningUpdateMemoryApprovalContext?: MeaningUpdateMemoryApprovalContext;
   private memoryJudgmentReassessmentApprovalContext?: MemoryJudgmentReassessmentApprovalContext;
@@ -854,13 +856,8 @@ export class HDSUpperController {
       if (!this.goalPurposeMemory.recoverPending()) throw new Error("goal purpose J/M recovery is not verified");
     }
     if (opts.meaning_update_memory) {
-      this.meaningUpdateMemory = new MeaningUpdateMemoryConsumer(opts.meaning_update_memory, {
-        readVerifiedMemoryApproval: (reference) => this.readMeaningUpdateMemoryApproval(reference) ??
-          this.readMemoryJudgmentReassessmentApproval(reference),
-      });
-      if (!this.meaningUpdateMemory.recoverPending()) throw new Error("meaning update J/M recovery is not verified");
-      replayMeaningUpdateMemoryCommits(this.audit, this.meaningUpdateMemory);
-      replayMemoryJudgmentReassessments(this.audit, this.meaningUpdateMemory);
+      this.meaningUpdateMemoryStorage = opts.meaning_update_memory;
+      this.meaningUpdateMemory = this.openMeaningUpdateMemoryConsumer();
     } else if (this.audit.list().some(({ log }) => "kind" in log && log.kind === "operation_plan" &&
         (log.event === "meaning_update_adoption_committed" || log.event === "memory_judgment_reassessment_committed"))) {
       throw new Error("persisted meaning updates require their private M store");
@@ -872,7 +869,8 @@ export class HDSUpperController {
       (lineageId) => this.meaningUpdateMemory?.readInterpretation(lineageId) ?? null,
       (dependency) => this.verifyCurrentMemoryCitationJudgment(dependency),
       opts.operation_plan_broker_restore_dependency_evidence,
-      opts.operation_plan_broker_restore_dependency_verifier);
+      opts.operation_plan_broker_restore_dependency_verifier,
+      () => this.meaningUpdateMemory?.readyForCanonicalRestore() === true);
     const llmRoute = opts.llm_route ?? {};
     this.llm_route = {
       ...llmRoute,
@@ -3662,6 +3660,53 @@ ${planControl.question}`,
     observation: OperationPlanCanonicalMemoryRestoreObservation,
   ): boolean {
     return this.operationPlans.recordCanonicalMemoryRestoreObservation(command, observation);
+  }
+  quiesceMeaningUpdateMemoryForCanonicalRestore(): boolean {
+    const memory = this.meaningUpdateMemory;
+    if (!memory || this.meaningUpdateMemoryQuiesced || !memory.readyForCanonicalRestore()) return false;
+    memory.close();
+    this.meaningUpdateMemory = undefined;
+    this.meaningUpdateMemoryQuiesced = true;
+    return true;
+  }
+  reopenMeaningUpdateMemoryAfterCanonicalRestore(): boolean {
+    if (!this.meaningUpdateMemoryQuiesced || !this.meaningUpdateMemoryStorage) return false;
+    try {
+      const memory = this.openMeaningUpdateMemoryConsumer();
+      if (!memory.readyForCanonicalRestore()) {
+        memory.close();
+        return false;
+      }
+      this.meaningUpdateMemory = memory;
+      this.meaningUpdateMemoryQuiesced = false;
+      return true;
+    } catch {
+      this.meaningUpdateMemory = undefined;
+      return false;
+    }
+  }
+  closeMeaningUpdateMemoryAfterCanonicalRestore(): void {
+    this.meaningUpdateMemory?.close();
+    this.meaningUpdateMemory = undefined;
+    this.meaningUpdateMemoryQuiesced = true;
+  }
+  private openMeaningUpdateMemoryConsumer(): MeaningUpdateMemoryConsumer {
+    if (!this.meaningUpdateMemoryStorage) throw new Error("meaning update J/M storage is unavailable");
+    const memory = new MeaningUpdateMemoryConsumer(this.meaningUpdateMemoryStorage, {
+      readVerifiedMemoryApproval: (reference) => this.readMeaningUpdateMemoryApproval(reference) ??
+        this.readMemoryJudgmentReassessmentApproval(reference),
+    });
+    try {
+      if (!memory.recoverPending() || !memory.readyForCanonicalRestore()) {
+        throw new Error("meaning update J/M recovery is not verified");
+      }
+      replayMeaningUpdateMemoryCommits(this.audit, memory);
+      replayMemoryJudgmentReassessments(this.audit, memory);
+      return memory;
+    } catch (error) {
+      memory.close();
+      throw error;
+    }
   }
   quiesceOperationPlanMemoryForCanonicalRestore(): boolean {
     return this.operationPlans.quiesceMemoryForCanonicalRestore();

@@ -629,12 +629,15 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   let gatewayShuttingDown = false;
   let cronEventsStoreQuiesced = false;
   let jMRestoreStoreQuiesced: "j_control" | "m_state" | null = null;
+  let meaningUpdateRestoreStoreQuiesced: "meaning_update_j_control" | "meaning_update_m_state" | null = null;
   let brokerRestoreStoreQuiesced = false;
   let canonicalStoreRestoreMaintenanceCommandId: string | null = null;
   for (const tool of createRecoveryMutationTools(process.env, () => recoveryExecutionStore, {
     canonicalStoreRestoreQuiesced: (storeKey: CanonicalStateStoreKey) =>
       storeKey === "cron_events" ? cronEventsStoreQuiesced
         : storeKey === "broker" ? brokerRestoreStoreQuiesced
+          : storeKey === "meaning_update_j_control" || storeKey === "meaning_update_m_state"
+            ? storeKey === meaningUpdateRestoreStoreQuiesced
           : storeKey === jMRestoreStoreQuiesced,
   })) tools.register(tool);
   plugins.registerTools(tools);
@@ -1382,6 +1385,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const jMRestoreStoreKey = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       (cmd.payload.arguments.store_key === "j_control" || cmd.payload.arguments.store_key === "m_state") &&
       cmd.payload.arguments.confirm === "RESTORE" ? cmd.payload.arguments.store_key : null;
+    const meaningUpdateRestoreStoreKey = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
+      (cmd.payload.arguments.store_key === "meaning_update_j_control" ||
+       cmd.payload.arguments.store_key === "meaning_update_m_state") &&
+      cmd.payload.arguments.confirm === "RESTORE" ? cmd.payload.arguments.store_key : null;
     const brokerRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       cmd.payload.arguments.store_key === "broker" && cmd.payload.arguments.confirm === "RESTORE";
     let executionEvaluation = opts.approval_evaluation ?? null;
@@ -1839,6 +1846,26 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         throw new Error("j_m_operation_plan_hold_unavailable");
       }
     }
+    let meaningUpdateRestoreQuiesced = false;
+    if (meaningUpdateRestoreStoreKey) {
+      canonicalStoreRestoreMaintenanceCommandId = cmd.id;
+      while (activeCommandFinalizations.size > 1 || executionTasks.size > 0) {
+        await Promise.allSettled([
+          ...Array.from(activeCommandFinalizations),
+          ...Array.from(executionTasks),
+        ]);
+      }
+      if (!hds.quiesceMeaningUpdateMemoryForCanonicalRestore()) {
+        canonicalStoreRestoreMaintenanceCommandId = null;
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "meaning_update_store_not_quiescent" });
+        return { status: "meaning_update_store_not_quiescent" };
+      }
+      meaningUpdateRestoreQuiesced = true;
+      meaningUpdateRestoreStoreQuiesced = meaningUpdateRestoreStoreKey;
+      if (!hds.holdOperationPlansForCanonicalMemoryRestore(cmd)) {
+        throw new Error("meaning_update_operation_plan_hold_unavailable");
+      }
+    }
     let brokerRestoreQuiesced = false;
     if (brokerRestore) {
       if (pendingApprovals.size > 0) {
@@ -2094,6 +2121,101 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         }
       } else {
         gatewayLog.warn("J/M restore remains held after post-action observation", {
+          command_id: cmd.id,
+          reason: "restore_result_unverified",
+        });
+      }
+    }
+    if (meaningUpdateRestoreQuiesced && meaningUpdateRestoreStoreKey) {
+      const restoreResultEvidence = fb.status === "success"
+        ? recoveryStoreRestoreHistoryEvidence(fb.result)
+        : null;
+      let observationVerified = false;
+      if (executionHistory && finalOutputRecorded && restoreResultEvidence?.store_key === meaningUpdateRestoreStoreKey) {
+        const historySize = completeHistory.size();
+        const historySkippedCount = completeHistory.skippedCount();
+        const historyChainValid = completeHistory.verify();
+        const historyIncompleteAtStart = recoveryObservationHistoryIncomplete;
+        const historyAtCapacity = completeHistoryMaxEntries !== undefined && historySize >= completeHistoryMaxEntries;
+        const historyEntries = completeHistory.replay().filter(
+          (entry): entry is CompleteHistoryEntry & { kind: "execution_history" | "final_output" } =>
+            entry.kind === "execution_history" || entry.kind === "final_output",
+        );
+        const historyEvidence = {
+          entries: historyEntries,
+          chain_valid: historyChainValid,
+          skipped_count: historySkippedCount + (historyAtCapacity || historyIncompleteAtStart ? 1 : 0),
+          not_before_timestamp_ms: recoveryObservationStartedAtMs,
+        };
+        const historyComplete = !!completeHistoryFile && historyChainValid && historySkippedCount === 0 &&
+          !historyAtCapacity && !historyIncompleteAtStart;
+        if (historyComplete) {
+          try {
+            const observation = await buildRecoveryPostActionObservation(historyEvidence, process.env, {
+              mode: "in_process_restore",
+              expected_command_id: cmd.id,
+            });
+            const historyStable = historySize === completeHistory.size() &&
+              historySkippedCount === completeHistory.skippedCount() && historyChainValid === completeHistory.verify() &&
+              historyIncompleteAtStart === recoveryObservationHistoryIncomplete;
+            observationVerified = historyStable && observation.status === "matched" &&
+              observation.operation === "restore" && observation.store_key === meaningUpdateRestoreStoreKey &&
+              observation.command_id_digest === createHash("sha256").update(cmd.id).digest("hex") &&
+              observation.store_ledger_status === "verified" && observation.store_ledger_residual_count === 0 &&
+              observation.restore_backup_id_digest === restoreResultEvidence.restored_backup_id_digest &&
+              observation.restored_state_digest === restoreResultEvidence.restored_store_state_digest;
+            if (observationVerified && !gatewayShuttingDown) {
+              observationVerified = hds.reopenMeaningUpdateMemoryAfterCanonicalRestore();
+              if (observationVerified) {
+                observationVerified = hds.recordOperationPlanMemoryRestoreObservation(cmd, {
+                  status: "matched",
+                  operation: "restore",
+                  store_key: observation.store_key as "meaning_update_j_control" | "meaning_update_m_state",
+                  command_id_digest: observation.command_id_digest!,
+                  operation_digest: observation.operation_digest!,
+                  result_digest: observation.result_digest!,
+                  restore_backup_id_digest: observation.restore_backup_id_digest!,
+                  restored_state_digest: observation.restored_state_digest!,
+                  store_ledger_status: "verified",
+                  store_ledger_residual_count: 0,
+                });
+                if (observationVerified) {
+                  meaningUpdateRestoreStoreQuiesced = null;
+                  meaningUpdateRestoreQuiesced = false;
+                  canonicalStoreRestoreMaintenanceCommandId = null;
+                } else {
+                  hds.closeMeaningUpdateMemoryAfterCanonicalRestore();
+                }
+              }
+            }
+            if (!observationVerified) {
+              gatewayLog.warn("meaning-update J/M restore remains held after post-action observation", {
+                command_id: cmd.id,
+                history_stable: historyStable,
+                observation_status: observation.status,
+                observation_store_key: observation.store_key,
+                store_ledger_status: observation.store_ledger_status,
+                store_ledger_residual_count: observation.store_ledger_residual_count,
+                restore_backup_id_digest_matches:
+                  observation.restore_backup_id_digest === restoreResultEvidence.restored_backup_id_digest,
+                restored_state_digest_matches:
+                  observation.restored_state_digest === restoreResultEvidence.restored_store_state_digest,
+              });
+            }
+          } catch {
+            gatewayLog.warn("meaning-update J/M restore remains held after post-action observation", {
+              command_id: cmd.id,
+              reason: "restore_observation_or_reopen_failed",
+            });
+          }
+        } else {
+          gatewayLog.warn("meaning-update J/M restore remains held after post-action observation", {
+            command_id: cmd.id,
+            reason: "restore_history_incomplete",
+          });
+        }
+      } else {
+        gatewayLog.warn("meaning-update J/M restore remains held after post-action observation", {
           command_id: cmd.id,
           reason: "restore_result_unverified",
         });

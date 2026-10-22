@@ -57,7 +57,8 @@ function brokerRestoreCommand(): ExecuteCommand {
     upstream_decision: { request_id: randomUUID(), commit_hash: "a".repeat(64), commit_decision: "ASSERT" },
   } as unknown as ExecuteCommand;
 }
-function canonicalMemoryRestoreCommand(store_key: "j_control" | "m_state" = "j_control"): ExecuteCommand {
+function canonicalMemoryRestoreCommand(store_key: "j_control" | "m_state" | "meaning_update_j_control" |
+  "meaning_update_m_state" = "j_control"): ExecuteCommand {
   return {
     id: randomUUID(), type: "tool_call",
     payload: { tool_name: "recovery.restore", arguments: { backup_id: "fixture", store_key, confirm: "RESTORE" } },
@@ -1181,6 +1182,72 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(hds.beginOperationPlanAttempt(selected)).toBe(false);
     } finally {
       hds?.closeOperationPlanMemory();
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("holds meaning-update J/M consumers through restore observation and a fresh J review", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-meaning-update-restore-lifecycle-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const privateRoot = join(root, "private-state");
+    const meaningDirectory = join(privateRoot, "meaning-update-memory");
+    const resultDirectory = join(privateRoot, "result-memory");
+    await mkdir(meaningDirectory, { recursive: true });
+    await mkdir(resultDirectory, { recursive: true });
+    const meaningMemory = {
+      private_state_root: privateRoot,
+      database_path: join(meaningDirectory, "j-control.sqlite"),
+      memory_database_path: join(meaningDirectory, "m-state.sqlite"),
+    };
+    const resultMemory = {
+      private_state_root: privateRoot,
+      database_path: join(resultDirectory, "j-control.sqlite"),
+      memory_database_path: join(resultDirectory, "m-state.sqlite"),
+    };
+    let hds: HDSUpperController | undefined;
+    try {
+      hds = new HDSUpperController({ operation_plan_state: store, operation_plan_memory: resultMemory,
+        meaning_update_memory: meaningMemory });
+      const origin = request("plan:compute synthetic task before meaning-update store restore");
+      const candidate = plan(origin.id, root);
+      await rig(hds, candidate).run(hds.decide(origin).command!);
+      const selected = review(hds, candidate, "search").command!;
+      const restoreCommand = canonicalMemoryRestoreCommand("meaning_update_j_control");
+
+      expect(hds.quiesceMeaningUpdateMemoryForCanonicalRestore()).toBe(true);
+      expect(hds.holdOperationPlansForCanonicalMemoryRestore(restoreCommand)).toBe(true);
+      expect(hds.operationPlanCommandIsCurrent(selected)).toBe(false);
+      const blockedWhileQuiesced = review(hds, candidate, "independent");
+      expect(blockedWhileQuiesced.command).toBeNull();
+      expect(blockedWhileQuiesced.log.commit.reason).toBe("plan_control_denied:plan_recovery_unverified_hold");
+
+      expect(hds.reopenMeaningUpdateMemoryAfterCanonicalRestore()).toBe(true);
+      expect(hds.recordOperationPlanMemoryRestoreObservation(restoreCommand, {
+        status: "matched",
+        operation: "restore",
+        store_key: "meaning_update_j_control",
+        command_id_digest: recoveryCommandIdDigest(restoreCommand.id),
+        operation_digest: "e".repeat(64),
+        result_digest: "f".repeat(64),
+        restore_backup_id_digest: "1".repeat(64),
+        restored_state_digest: "2".repeat(64),
+        store_ledger_status: "verified",
+        store_ledger_residual_count: 0,
+      })).toBe(true);
+
+      hds.closeMeaningUpdateMemoryAfterCanonicalRestore();
+      const blockedWithoutReopenedLedger = review(hds, candidate, "independent");
+      expect(blockedWithoutReopenedLedger.command).toBeNull();
+      expect(blockedWithoutReopenedLedger.log.commit.reason).toBe("plan_control_denied:plan_recovery_unverified_hold");
+      expect(hds.reopenMeaningUpdateMemoryAfterCanonicalRestore()).toBe(true);
+
+      const freshReview = review(hds, candidate, "independent");
+      expect(freshReview.command).not.toBeNull();
+      expect(hds.getRuntimeSnapshot().operation_plans.plans[0]).not.toHaveProperty("recovery_hold_reason");
+    } finally {
+      hds?.closeOperationPlanMemory();
+      hds?.close();
       store.close();
       await rm(root, { recursive: true, force: true });
     }

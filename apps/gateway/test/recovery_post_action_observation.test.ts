@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
-import { operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
+import { HDSUpperController, operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import {
   buildRecoveryPostActionObservation,
@@ -723,6 +723,63 @@ describe("buildRecoveryPostActionObservation", () => {
         store_ledger_residual_count: 1,
         plan_residuals: null,
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a live post-restore observation for either meaning-update J/M database", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-meaning-store-restore-reobserve-"));
+    const stateRoot = path.join(root, "state");
+    const privateRoot = path.join(stateRoot, "private-state");
+    const meaningDirectory = path.join(privateRoot, "meaning-update-memory");
+    await mkdir(meaningDirectory, { recursive: true });
+    const hds = new HDSUpperController({ meaning_update_memory: {
+      private_state_root: privateRoot,
+      database_path: path.join(meaningDirectory, "j-control.sqlite"),
+      memory_database_path: path.join(meaningDirectory, "m-state.sqlite"),
+    } });
+    hds.close();
+    try {
+      for (const [storeKey, fileName] of [
+        ["meaning_update_j_control", "j-control.sqlite"],
+        ["meaning_update_m_state", "m-state.sqlite"],
+      ] as const) {
+        const commandId = `restore-${storeKey}`;
+        const stateDigest = await sha256File(path.join(meaningDirectory, fileName));
+        const restoreEvidence = recoveryStoreRestoreHistoryEvidence({
+          action: "restore",
+          status: "completed",
+          used_for_authority: false,
+          canonical_state_cross_store_atomic: false,
+          restored_store_key: storeKey,
+          restored_store_archive_digest: digest("a"),
+          restored_store_state_digest: stateDigest,
+          restored_backup_id: `backup-${storeKey}`,
+        });
+        expect(restoreEvidence?.store_key).toBe(storeKey);
+        const entries = historyFor("recovery.restore", "success", digest("b"), digest("b"), commandId);
+        const execution = entries[0]!;
+        const payload = execution.payload as Record<string, unknown>;
+        entries[0] = { ...execution, payload: { ...payload, recovery_store_restore: restoreEvidence } };
+        const observation = await buildRecoveryPostActionObservation({
+          entries,
+          chain_valid: true,
+          skipped_count: 0,
+          not_before_timestamp_ms: entries[0]!.timestamp - 1,
+        }, { BLUE_TANUKI_STATE_ROOT: stateRoot }, { mode: "in_process_restore", expected_command_id: commandId });
+
+        expect(observation).toMatchObject({
+          status: "matched",
+          operation: "restore",
+          store_key: storeKey,
+          restored_state_digest: stateDigest,
+          store_ledger_status: "verified",
+          store_ledger_residual_count: 0,
+          used_for_authority: false,
+          may_execute: false,
+        });
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

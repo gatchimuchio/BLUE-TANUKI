@@ -144,10 +144,8 @@ describe("Recovery mutation tool boundary", () => {
     expect(canonicalStoreRestoreConsumersNotQuiesced("broker")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("cron_events")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced("operation_plans")).toEqual([]);
-    expect(canonicalStoreRestoreConsumersNotQuiesced("meaning_update_j_control")).toContain(
-      "MeaningUpdateMemoryConsumer J state reader/writer");
-    expect(canonicalStoreRestoreConsumersNotQuiesced("meaning_update_m_state")).toContain(
-      "MeaningUpdateMemoryConsumer M state reader/writer");
+    expect(canonicalStoreRestoreConsumersNotQuiesced("meaning_update_j_control")).toEqual([]);
+    expect(canonicalStoreRestoreConsumersNotQuiesced("meaning_update_m_state")).toEqual([]);
     expect(canonicalStoreRestoreConsumersNotQuiesced(undefined)).toEqual([]);
 
     const restore = createRecoveryMutationTools({}, undefined, { canonicalStoreRestoreQuiesced: () => false })
@@ -174,5 +172,12 @@ describe("Recovery mutation tool boundary", () => {
       .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
     await expect(restore?.invoke({ backup_id: "fixture", store_key: "m_state", confirm: "RESTORE" }))
       .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
+    await expect(restore?.invoke({ backup_id: "fixture", store_key: "meaning_update_j_control", confirm: "RESTORE" }))
+      .rejects.toThrow("canonical_state_restore_consumers_not_quiesced");
+    const meaningRestore = createRecoveryMutationTools({}, undefined, {
+      canonicalStoreRestoreQuiesced: (storeKey) => storeKey === "meaning_update_j_control",
+    }).find((tool) => tool.name === "recovery.restore");
+    await expect(meaningRestore?.invoke({ backup_id: "fixture", store_key: "meaning_update_j_control", confirm: "RESTORE" }))
+      .rejects.toThrow("recovery_mutation_failed");
   });
 });

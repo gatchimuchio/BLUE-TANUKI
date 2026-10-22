@@ -176,7 +176,7 @@ export interface OperationPlanRecoveryHoldState {
 export interface OperationPlanCanonicalMemoryRestoreObservation {
   readonly status: "matched";
   readonly operation: "restore";
-  readonly store_key: "j_control" | "m_state";
+  readonly store_key: "j_control" | "m_state" | "meaning_update_j_control" | "meaning_update_m_state";
   readonly command_id_digest: string;
   readonly operation_digest: string;
   readonly result_digest: string;
@@ -915,7 +915,8 @@ export class OperationPlanLedger {
     private readonly memoryInterpretationReader?: (lineageId: string) => MemoryInterpretationReviewSnapshot | null | undefined,
     private readonly memoryCitationJudgmentVerifier?: (dependency: OperationPlanMemoryInterpretationDependency) => boolean,
     brokerRestoreEvidence?: OperationPlanBrokerRestoreDependencyEvidence,
-    private readonly brokerRestoreDependencyVerifier?: OperationPlanBrokerRestoreDependencyVerifier) {
+    private readonly brokerRestoreDependencyVerifier?: OperationPlanBrokerRestoreDependencyVerifier,
+    private readonly meaningUpdateMemoryRestoreVerifier?: () => boolean) {
     if (memoryStorage && !port) throw new Error("plan_memory_requires_durable_j_state");
     this.memoryStorage = memoryStorage;
     const checkedRecoveryEvidence = recoveryEvidence ? parseOperationPlanRecoveryEvidence(recoveryEvidence) : undefined;
@@ -1290,12 +1291,12 @@ export class OperationPlanLedger {
   /** Persist a non-authority hold before restoring either J or M as a whole store. */
   holdForCanonicalMemoryRestore(command: ExecuteCommand): boolean {
     if (command.type !== "tool_call" || command.payload.tool_name !== "recovery.restore" ||
-        !["j_control", "m_state"].includes(String(command.payload.arguments.store_key)) ||
+        !["j_control", "m_state", "meaning_update_j_control", "meaning_update_m_state"].includes(String(command.payload.arguments.store_key)) ||
         command.payload.arguments.confirm !== "RESTORE" || command.upstream_decision.commit_decision !== "ASSERT") return false;
     if (!this.port || this.recoveryRefreshPending || this.activePlanAttempts.size > 0) return false;
     if (this.state.plans.length === 0) return true;
     if (!this.savedDigest) return false;
-    const restoreStoreKey = command.payload.arguments.store_key as "j_control" | "m_state";
+    const restoreStoreKey = command.payload.arguments.store_key as NonNullable<OperationPlanRecoveryEvidenceProvenance["restore_store_key"]>;
     const evidence = parseOperationPlanRecoveryEvidence({
       schema_version: "operation-plan-recovery-evidence.v1",
       scope: "unverified_history",
@@ -1378,7 +1379,7 @@ export class OperationPlanLedger {
         command.payload.arguments.store_key !== observation.store_key || command.payload.arguments.confirm !== "RESTORE" ||
         command.upstream_decision.commit_decision !== "ASSERT" ||
         observation.status !== "matched" || observation.operation !== "restore" ||
-        !["j_control", "m_state"].includes(observation.store_key) ||
+        !["j_control", "m_state", "meaning_update_j_control", "meaning_update_m_state"].includes(observation.store_key) ||
         observation.store_ledger_status !== "verified" || observation.store_ledger_residual_count !== 0 ||
         !digest(observation.command_id_digest) || observation.command_id_digest !== recoveryCommandIdDigest(command.id) ||
         !digest(observation.operation_digest) || !digest(observation.result_digest) ||
@@ -1711,7 +1712,9 @@ export class OperationPlanLedger {
       if (taskScopedRestoreHold && hold.reason === "held_residual") return false;
       if ((!brokerRestoreHold && !taskScopedRestoreHold && hold.reason !== "held_unverified") || provenance.source !== "recovery_restore" ||
           ((brokerRestoreHold || taskScopedRestoreHold) && !this.brokerRestoreDependencyVerifier) ||
-          (!brokerRestoreHold && !taskScopedRestoreHold && provenance.restore_store_key !== "j_control" && provenance.restore_store_key !== "m_state") ||
+          (!brokerRestoreHold && !taskScopedRestoreHold && provenance.restore_store_key !== "j_control" &&
+            provenance.restore_store_key !== "m_state" && provenance.restore_store_key !== "meaning_update_j_control" &&
+            provenance.restore_store_key !== "meaning_update_m_state") ||
           !provenance.command_id_digest || !provenance.operation_digest || !provenance.result_digest ||
           !provenance.restore_backup_id_digest || !provenance.restored_state_digest ||
           !/^[a-f0-9]{64}$/.test(provenance.checkpoint_digest) || !this.port || !this.resultMemory ||
@@ -1763,6 +1766,12 @@ export class OperationPlanLedger {
           this.assertMemoryInterpretationDependenciesCurrent(candidate);
           return this.recoveryPlanMemoryBindingsVerified(candidate);
         });
+      }
+      if (provenance.restore_store_key === "meaning_update_j_control" ||
+          provenance.restore_store_key === "meaning_update_m_state") {
+        if (!this.meaningUpdateMemoryRestoreVerifier?.()) return false;
+        this.assertMemoryInterpretationDependenciesCurrent(plan);
+        return true;
       }
       if (taskScopedRestoreHold) {
         const taskIdentityDigest = provenance.restore_scope_task_digest!;
@@ -1857,9 +1866,11 @@ export class OperationPlanLedger {
       { reason, restore_scope_relation: restoreScopeRelation, provenance });
     else if (reason === existing.reason && reason === "held_unverified" &&
         provenance.source === "recovery_restore" && provenance.command_id_digest !== null &&
-        (provenance.restore_store_key === "j_control" || provenance.restore_store_key === "m_state") &&
+        (["j_control", "m_state", "meaning_update_j_control", "meaning_update_m_state"] as const)
+          .includes(provenance.restore_store_key as "j_control" | "m_state" | "meaning_update_j_control" | "meaning_update_m_state") &&
         existing.provenance.source === "recovery_restore" &&
-        (existing.provenance.restore_store_key === "j_control" || existing.provenance.restore_store_key === "m_state")) {
+        (["j_control", "m_state", "meaning_update_j_control", "meaning_update_m_state"] as const)
+          .includes(existing.provenance.restore_store_key as "j_control" | "m_state" | "meaning_update_j_control" | "meaning_update_m_state")) {
       // A new whole-store restore supersedes the earlier pending observation for
       // this same kind of hold; its result still has to be observed afterwards.
       const sameObservedMRestore = provenance.restore_store_key === "m_state" &&

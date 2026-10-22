@@ -562,9 +562,9 @@ describe("Recovery mutation HDS L3 entry", () => {
         children.delete(gateway);
       }
     }
-  });
+  }, 30_000);
 
-  it("quiesces J/M for selected restore, verifies the reopened pair, and keeps existing plans held", async () => {
+  it("quiesces J/M and meaning-update consumers for selected restore, verifies reopened stores, and keeps existing plans held", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-jm-restore-l3-"));
     temporaryRoots.push(root);
     const envFile = join(root, "product.env");
@@ -579,7 +579,7 @@ describe("Recovery mutation HDS L3 entry", () => {
       await waitForHealth(port, gateway);
       const backup = await requestJson(port, "/recovery/backup", { method: "POST", token: maintenanceToken, body: {} });
       const backupId = (backup.body.result as Record<string, unknown>).backup_id as string;
-      for (const store_key of ["j_control", "m_state"] as const) {
+      for (const store_key of ["j_control", "m_state", "meaning_update_j_control", "meaning_update_m_state"] as const) {
         const queued = await requestJson(port, "/recovery/restore", {
           method: "POST",
           token: maintenanceToken,
