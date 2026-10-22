@@ -25,6 +25,7 @@ export {
   type ComposioConnectorStatus,
   type ComposioExecuteResponse,
   type ComposioExecuteTarget,
+  type ComposioSearchTarget,
   type ComposioOptions,
 } from "./composio.js";
 export {

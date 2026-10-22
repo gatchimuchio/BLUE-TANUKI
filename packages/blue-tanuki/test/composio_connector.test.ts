@@ -6,6 +6,7 @@ import {
   registerBuiltinTools,
   ToolRegistry,
   type ComposioExecuteTarget,
+  type ComposioSearchTarget,
 } from "../src/tools/index.js";
 
 describe("Composio connector", () => {
@@ -35,6 +36,7 @@ describe("Composio connector", () => {
   });
 
   it("does not let search metadata grant permission", async () => {
+    let seen: ComposioSearchTarget | null = null;
     const result = await invokeComposioSearch(
       {
         toolkit: "github",
@@ -46,19 +48,133 @@ describe("Composio connector", () => {
           COMPOSIO_API_KEY: "composio-secret-value",
           COMPOSIO_ALLOWED_TOOLKITS: "github,gmail",
         },
+        searchRequest: async (target) => {
+          seen = target;
+          return {
+            status: 200,
+            ok: true,
+            content_type: "application/json",
+            body: JSON.stringify({
+              items: [{
+                slug: "GITHUB_LIST_ISSUES",
+                name: "List issues",
+                toolkit: { slug: "github", name: "GitHub" },
+                description: "Lists issues in a repository",
+                version: "20261001_00",
+                no_auth: false,
+                is_deprecated: false,
+                scopes: ["repo"],
+                input_parameters: { repo: { type: "string", required: true } },
+                output_parameters: { issues: { type: "array" } },
+              }],
+              next_cursor: null,
+            }),
+            truncated: false,
+            request_id: "req_fixture",
+          };
+        },
       },
     );
 
+    expect(seen).toMatchObject({
+      api_base_url: "https://backend.composio.dev",
+      path: expect.stringContaining("/api/v3.1/tools?toolkit_slug=github&query=admin+permission"),
+      method: "GET",
+      toolkit: "github",
+      query: "admin permission",
+      limit: 20,
+    });
     expect(result).toMatchObject({
       provider: "composio",
       operation: "search",
       toolkit: "github",
-      external_call_performed: false,
+      tool_count: 1,
+      external_call_performed: true,
+      external_mutation_sent: false,
       permission_granted: false,
       used_for_authority: false,
       metadata_used_for_authority: false,
     });
+    expect(JSON.stringify(result)).toContain("GITHUB_LIST_ISSUES");
+    expect(JSON.stringify(result)).toContain("repo");
     expect(JSON.stringify(result)).not.toContain("composio-secret-value");
+  });
+
+  it("does not dispatch a catalog lookup without an explicit toolkit allowlist", async () => {
+    let dispatched = false;
+    await expect(invokeComposioSearch(
+      { toolkit: "github", query: "issues" },
+      {
+        env: { COMPOSIO_API_KEY: "composio-secret-value" },
+        searchRequest: async () => {
+          dispatched = true;
+          throw new Error("unexpected catalog request");
+        },
+      },
+    )).rejects.toThrow(/COMPOSIO_ALLOWED_TOOLKITS/);
+    expect(dispatched).toBe(false);
+  });
+
+  it("bounds the search query before dispatch", async () => {
+    let dispatched = false;
+    await expect(invokeComposioSearch(
+      { toolkit: "github", query: "x".repeat(501) },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+        },
+        searchRequest: async () => {
+          dispatched = true;
+          throw new Error("unexpected catalog request");
+        },
+      },
+    )).rejects.toThrow(/500 characters or fewer/);
+    expect(dispatched).toBe(false);
+  });
+
+  it("rejects catalog entries outside the requested toolkit", async () => {
+    await expect(invokeComposioSearch(
+      { toolkit: "github", query: "issues" },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+        },
+        searchRequest: async () => ({
+          status: 200,
+          ok: true,
+          content_type: "application/json",
+          body: JSON.stringify({ items: [{
+            slug: "SLACK_POST_MESSAGE",
+            name: "Post message",
+            toolkit: { slug: "slack" },
+          }] }),
+          truncated: false,
+          request_id: "req_fixture",
+        }),
+      },
+    )).rejects.toThrow(/out-of-scope/);
+  });
+
+  it("fails closed on truncated catalog metadata instead of returning partial schemas", async () => {
+    await expect(invokeComposioSearch(
+      { toolkit: "github", query: "issues" },
+      {
+        env: {
+          COMPOSIO_API_KEY: "composio-secret-value",
+          COMPOSIO_ALLOWED_TOOLKITS: "github",
+        },
+        searchRequest: async () => ({
+          status: 200,
+          ok: true,
+          content_type: "application/json",
+          body: "{\"items\":[",
+          truncated: true,
+          request_id: "req_fixture",
+        }),
+      },
+    )).rejects.toThrow(/exceeded the configured limit/);
   });
 
   it("enforces explicit toolkit allowlists", async () => {
@@ -172,6 +288,7 @@ describe("Composio connector", () => {
     expect(seen).toMatchObject({
       api_base_url: "https://backend.composio.dev",
       path: "/api/v3.1/tools/execute/GITHUB_CREATE_AN_ISSUE",
+      method: "POST",
       user_id: "owner-local",
       body: {
         user_id: "owner-local",

@@ -4,6 +4,23 @@
 
 ---
 
+### 履歴ログ：`QEB-75-F15.02-COMPOSIO-CATALOG-PATH`
+
+開始・編集前の`main`／`origin/main`=`f981311a024501a41328297d23cb2a8619b46d46`、tracked差分なし（保護対象untracked Linux isolation `target/`は保持）。現行pin rev2.3、適用`AGENTS.md`、active instruction、F15.02の関係箇所とComposio producer／consumerを再同期した。過去版・閉じた作業は全体を再読せず、現行consumerの直接コードだけ確認した。
+
+既存`composio.search`はAPI接続せずallowlist状態だけを返していた。明示allowlist内の単一toolkitに対するv3.1 catalog GETへ接続し、tool identifier、input/output schema、version、scope、descriptionを外部metadataとして返す。queryと結果サイズを上限管理し、HTTP失敗・取消・truncated response・対象toolkit不一致はfail-closedとする。metadataとscopeはpermissionへ昇格せず、Composio searchに必要な既存capabilityからHDS-BRAIN L3 final review boundaryを検証した。F15.02全体の完了ではなく、43要求の各公式API・地域・account eligibility・scope調査およびF15.03実装は継続中。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `@blue-tanuki/core` typecheck | PASS。 |
+| `@blue-tanuki/core` build | PASS。Windows isolation release buildとTypeScript build。 |
+| `composio_connector.test.ts` | PASS、14 tests。fixture requestでcatalog method/path・toolkit allowlist・query/response bounds・out-of-scope/truncation fail-closed・metadata projectionを確認。 |
+| `composio_authority.test.ts` | PASS、2 tests。searchとexecuteのcapabilityおよびL3 final review境界を確認。 |
+| `docs:check`／`git diff --check` | PASS。英語移行負債`docs/COMPOSIO_CONNECTOR.md`は変更せず、日本語active/history文書へ観測結果を記録。日本語基底監査の移行負債76件を維持。 |
+| Composio live API／credential／外部業務作用 | 未実施。 |
+
+---
+
 ### 履歴ログ：`QEB-74-F15.01-GAP-REGISTRATION`
 
 開始`main`／`origin/main`=`e28a73f330cb155f46aea00e58cffd3a6b005ae8`。QE現行pin rev2.3の仕様・工程・施工指示、適用`AGENTS.md`、active instruction、F15要求とF15.01単位を再同期した。過去の別版や閉じた履歴全体は再読せず、直接のproducerであるA03.03非公開割当だけを参照した。

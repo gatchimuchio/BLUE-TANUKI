@@ -75,5 +75,14 @@ describe("Composio authority boundary", () => {
     ]);
     expect(command.constraints?.allowed_capabilities).not.toContain("settings:write");
     expect(command.constraints?.allowed_capabilities).not.toContain("full_access");
+    const approval = evaluateApproval(command, [], {
+      actor: "owner",
+      default_mode: "full_access",
+      now: 1,
+    });
+    expect(approval.risk).toBe("high");
+    expect(approval.approval_level).toBe("L3_final_review");
+    expect(approval.final_review_required).toBe(true);
+    expect(approval.decision).toBe("ask");
   });
 });
