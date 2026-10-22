@@ -23,6 +23,8 @@ No black box in BLUE-TANUKI's HDS authority path.
 
 Development-scope note (2026-10-12): the currently released v1.0 RC does not claim a working D4Pocket (formerly GUI-Shell) runtime integration. Separately, the new AGI/QE engineering architecture plans D4Pocket as an authenticated GUI/runtime/OS broker shell. BLUE-TANUKI retains HDS decision authority, and D4Pocket retains independent current Permission and owner-bound approvals. A future integration plan is not evidence that this dependency exists in the current installed product.
 
+版付きの[公開競合能力基準面](docs/競合能力基準面.md)は、OpenClawとMeta Museの公表能力を比較入力として整理した開発範囲の資料である。実装、互換性、RC対応、公開上の主張を成立させる証拠ではない。
+
 Meaning:
 
 - actor is resolved as structured data

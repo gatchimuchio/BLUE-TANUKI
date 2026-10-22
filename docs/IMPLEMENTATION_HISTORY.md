@@ -4,6 +4,23 @@
 
 ---
 
+### 履歴ログ：`QEB-72-A03.01-A03.02-COMPETITOR-CAPABILITY-BASELINE`
+
+開始`main`／`origin/main`=`8798e25d8ee1e728c2e65eb0a636d93d652a6481`。現行pin rev2.3と適用`AGENTS.md`を再同期し、依存するA03.01 source identityとA03.02 capability/comparison criteriaだけを今回の基準面作成に必要な範囲で確認した。保護対象untracked Linux isolation `target/`を保持した。
+
+OpenClaw `2026.10.5`（2026-10-18 release）とMeta Muse（2026-09-08 announcement、2026-10-08 Small Business expansion）を公式一次資料で識別し、公開主張・資料時点・未確認を区別した`docs/競合能力基準面.md`を追加した。取得時点のOpenClaw 29 channel名、Metaが明示したMuse入口とSmall Business連携先を個別ID化し、仕事、形式、OS、拡張、background、memory、migration、authorization、価格・資源の比較入力を記録した。OpenClaw model/provider・plugin catalog、Muse全in-app connector、format／migration技術条件は未分解gapとして残し、動的catalogの掲載数を完全包含の証拠にしない。
+
+`README.md`、`CLAIM.md`、`docs/SUPPORT_BOUNDARY.md`、`docs/KNOWN_LIMITATIONS.md`、`docs/STRATEGY_FRAME.md`、`docs/INDEX.md`を基準面へ接続し、RCの現在の境界と将来の実装要求を分けた。実競合製品の操作、実資格、送信・購入・公開、比較試験は未実施。次のproducer/consumerはA03.03の各`CB-*`要求と未分解gapからF系列への具体的割当である。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| `pnpm docs:check` | PASS。日本語基底監査は`規定成立・移行中`、未解消移行負債76件を維持、licensing gate PASS。 |
+| `git diff --check` | PASS。 |
+| 基準面IDの重複と個別件数 | PASS。ID重複なし、OpenClaw channel 29、Muse入口2、Muse service連携18。 |
+| 競合実機比較／実資格／外部作用／性能・価格測定／QE_QC／QE_QA | 未実施。 |
+
+---
+
 ### 履歴ログ：`QEB-71-F14.02-LINE-REPLY-PERSISTENT-OUTBOX-CONSUMER`
 
 開始`main`／`origin/main`=`c86fd08a2d9c2abc1f9cdb651d5752eba77e50e8`。現行pin rev2.3、適用`AGENTS.md`、F14.02要求とF14.01 inbound→Gateway consumerだけを依存として再同期した。保護対象untracked Linux isolation `target/`を保持した。

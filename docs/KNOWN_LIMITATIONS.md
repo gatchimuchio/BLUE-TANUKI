@@ -10,6 +10,8 @@ support and release-claim boundary, not a defect waiver and not authority:
 - `public_claim_allowed=false` until explicit owner GO.
 - Public complete-superiority claims remain blocked until P13.
 - `pnpm validate:ga` can report pre-GO readiness, but that is not owner GO.
+- [版付き競合能力基準面](競合能力基準面.md)は提供元の公開説明に基づく。OpenClawと
+  Meta Museを使った独立の実機比較は未実施である。
 
 ## Platform Evidence Limitations
 

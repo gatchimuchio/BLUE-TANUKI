@@ -15,6 +15,9 @@ BLUE-TANUKI is currently `1.0.0-rc.1`.
 - LLMs, tools, channels, UI, update flows, plugins, skills, memory, history,
   scheduler, and external APIs remain downstream devices.
 
+このv1.0 RC境界は公開候補の範囲を示す。[版付き競合能力基準面](競合能力基準面.md)
+は将来の開発用比較範囲を記録する資料であり、RCの対応範囲や互換性を拡張しない。
+
 ## Supported First-Party RC Surface
 
 The supported first-party RC surface is the scope that BLUE-TANUKI owns,

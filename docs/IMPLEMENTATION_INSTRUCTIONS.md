@@ -16,7 +16,7 @@ F14.02では、LINE admitted inboundからGateway reply、SQLite durable outbox�
 
 ## 次のBUILD_BATCH
 
-工程表ではF15.01がA03.03に依存する。現行repoのactive指示・履歴にA03.03の接続証拠が見当たらないため、次のbatch開始時は現行QE pinを再同期した上で、A03.03の要求と現物producer／consumerを照合する。実際に不足しているconsumerがあれば、依存を形式だけで完了扱いせず、次のQE_BUILD接続単位として施工する。A03.03が現物で成立済みなら、その証拠を確認して工程表の次の依存充足済み単位を選ぶ。F14.03のOD-03 live条件を実装の代わりに用いない。
+QEB-72でA03.01の公開source identityとA03.02の比較基準面を[競合能力基準面](競合能力基準面.md)へ接続し、README／CLAIM／SUPPORT_BOUNDARY／KNOWN_LIMITATIONSから参照した。A03.02のsource-backedな能力群と個別channel／Muse接続先は識別したが、OpenClawのmodel/provider・plugin catalog、Muse app内の全connector、技術的なformat／migration条件は未分解のBUILD_GAPとして残る。次batchのA03.03では各`CB-*`要求とこれらの未分解catalog gapを既存F系列consumerへ割り当て、割当がない要求に具体的な理由・次consumerを記録し、必要な子施工を発行する。catalog件数や公表文だけで実装・互換・優位性を完了扱いしない。工程表でF15.01がA03.03に依存するため、その依存を形式だけで満たさない。F14.03のOD-03 live条件を実装の代わりに用いない。
 
 ## 保護とGit
 

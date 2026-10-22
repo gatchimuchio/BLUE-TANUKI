@@ -50,6 +50,8 @@ Dimension 1 is the engineering posture. BLUE-TANUKI rejects hidden authority, un
 
 Dimension 2 is the capability inventory. The target includes all observed OpenClaw and Muse user-facing functions and operational capabilities. Each item remains implemented and connected, an explicit BUILD_GAP, or a precisely justified owner-scoped deferral; the former selected-scope v1.0 RC strategy does not delete targets from the AGI engineering inventory.
 
+日付付きの公開情報と比較入力は[公開競合能力基準面](競合能力基準面.md)に記録する。この基準面は実装網羅性や互換性を証明しない。
+
 A reviewed Layer B adapter can safely implement a capability without making it Layer A. An unsafe marketplace runtime or unreviewed ClawHub code path stays disallowed, while an independently verified equivalent adapter is a candidate. WhatsApp first-party core remains outside the current v1.0 RC but the user-facing capability cannot silently disappear from the later AGI inventory.
 
 The number of channels, schemas, or test cases does not prove parity. QE_BUILD wires the actual capability, QE_QC measures it under comparable conditions, QE_QA states any warranted range, and owner GO is separate.

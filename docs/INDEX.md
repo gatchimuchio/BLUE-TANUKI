@@ -24,6 +24,7 @@
 - [作業標準要領](作業標準要領.md) — QE_BUILDとBUILD_BATCH、QC/QA後段、移行完了済みのremote tag正本
 - [現行QE_BUILD指示](IMPLEMENTATION_INSTRUCTIONS.md) — 承認内容・永続実行・専用worker・保存結果の再起動J調停とM受領確認、次のBUILD_GAP
 - [Roadmap](ROADMAP.md) — QE全体工程と独立した旧J/P13境界
+- [競合能力基準面](競合能力基準面.md) — OpenClaw／Meta Museの公開情報を版付き比較条件へ分解。実装・比較結果・公開claimではない
 
 ## 現行の開発記録
 

@@ -124,6 +124,8 @@ pnpm gateway:serve
 
 現行QE開発のAndroid／iOS対象は将来の製品完成スコープです。以下のVoice／Mobile／rich Canvasに関する境界は**旧RCのGA基準**を記したものです。
 
+OpenClaw／Meta Museの公開機能を版付きの比較条件へ分解した[競合能力基準面](docs/競合能力基準面.md)は、将来の開発要求を整理する資料です。現行RCの対応や比較試験の成立を意味しません。
+
 
 - WhatsApp は `reserved-third-party`、`core_supported=false` で first-party core ではない。
 - preview adapter / tool は owner-run evidence なしに first-party へ昇格しない。
