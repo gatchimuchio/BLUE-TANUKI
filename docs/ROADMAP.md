@@ -10,7 +10,9 @@
 
 rev3.0 K-B0／K-B1のコード再照合で、現在の入口とJ/Mの通常・復旧writerを一仕事に沿って対応付けた。責任対応は[`OPERATION_CORE_ARCHITECTURE.md`](OPERATION_CORE_ARCHITECTURE.md)。I-01のUnix root直下のガード欠陥を修正し、I-03のメイン`/app`から費用・予算・timeoutの設定を通常Computeの既存consumerへ渡す。これは限定した接続と静的な責任対応であり、全体実行や全OSの成立ではない。
 
-次にCR-2の実利用条件とE2E-01の同一WebChat仕事（目的→C→J→安全な合成作用→結果／M→返信・再計画・復帰）を前進させる。その後K-B2の観測→意味更新候補→既存L3採否→M解釈版→次の仕事、責任抽出、Rust shadow・比較へ進む。目的／意味専用J/M storeのbackup収容と、観測APIにも含まれるpending reconcileは未解消の接続・移管条件として扱う。Rustのsingle-writer cutoverは比較、停止、未決作用、rollback、権限境界が成立するまで行わない。
+E2E-01の同一owner WebChat synthetic経路は、委任目的のL3確認・J/M反映、再起動後の再読込、検索・receipt/M、同一taskの返信・再計画まで局所確認した。K-B2では現行M引用付き`plan:compute`から、固定4 worker＋親C計算、Jの未実行計画、別L3確認、隔離file.delete、結果receipt/Mまでのconsumer接続を加えた。Executorは選択済み引用／観測のlocal P版を保持して有限agent delegationを実行する。これは合成fixtureによる一経路の証拠で、実Provider・製品全体の結合形状・品質保証を示さない。
+
+次は有限なoperation-result observationを意味更新候補へ結び、既存L3採否→M解釈版→次の仕事へ通す。`plan:reflect`の非採用境界を維持し、反映候補から意味更新採用や権限を生成しない。目的／意味専用J/M storeのbackup収容と、観測APIにも含まれるpending reconcileは未解消の接続・移管条件として扱う。Rustのsingle-writer cutoverは比較、停止、未決作用、rollback、権限境界が成立するまで行わない。
 
 ## 維持する境界
 

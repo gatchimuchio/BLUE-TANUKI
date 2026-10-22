@@ -18,7 +18,7 @@ K-B0／K-B1で現行入口と一仕事のproducer／consumer、J/Mの通常・�
 
 I-01のroot直下の二重slashによる広域対象ガードの抜けを修正し、I-03のメイン`/app`にも費用profile・予算policy・timeoutの保存／Verifyを接続した。provider疎通と通常Computeの設定準備を別に表示し、設定変更後の古い準備判定を破棄する。現在の予算消費は仕事ごとの実行時照合が必要であり、設定のreadyは実行許可ではない。I-04の共通試験fixtureには現行Compute／予算／worker lifecycleの依存を渡し、候補生成前の拒否を本番guardの緩和で隠さない。
 
-次はCR-2・E2E-01の同一WebChat仕事を目的→C→J→隔離作用→結果／M→返信・再計画・復帰まで進め、残る未接続を具体化する。続くK-B2では有限な観測から意味更新候補を作り、既存L3採否→M解釈版→次の仕事へ接続する。`plan:reflect`の非採用境界は維持する。目的／意味専用J/M storeが現行backup indexに未収容である点も`BUILD_GAP`として残す。読み取り名のAPIにあるpending reconcile、復旧・projection再構築・migrationのwriterを無視してRust shadowを接続しない。
+E2E-01の同一owner WebChat試験では、委任目的のL3確認・J/M反映、再起動後の再読込、safe synthetic search、receipt/M、同一taskの返信・再計画まで局所経路を確認した。K-B2の現接続では、Jが選択・再照合した現行M引用を持つ`plan:compute`が、4件の有限なC worker候補計算と親計算を通り、Jの未実行計画・L3確認、隔離されたsynthetic file.delete、結果receiptとM観測まで進む。Executorは引用／観測のlocal P版をCompute receiptへ保ち、agent delegation契約を独立に適用する。Gateway統合smokeと3 context版のExecutor testで確認した範囲であり、bounded operation-result observationから意味更新候補を生成するproducerは未接続の`BUILD_GAP`である。`plan:reflect`の非採用境界を維持し、reflection出力を採用候補や権限へ変換しない。次は有限な結果観測→専用の意味更新候補→既存L3採否→M解釈版→次taskを接続する。目的／意味専用J/M storeが現行backup indexに未収容である点も`BUILD_GAP`として残す。読み取り名のAPIにあるpending reconcile、復旧・projection再構築・migrationのwriterを無視してRust shadowを接続しない。
 
 旧Jの現writerは確認なしに二重化・移管しない。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラ別repo変更、P13公開・出荷GOは保留する。試験用一仕事は製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を自動成立させず、限定testを全suiteや実機の成功へ転記しない。
 

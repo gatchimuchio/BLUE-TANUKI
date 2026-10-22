@@ -4,6 +4,27 @@
 
 ---
 
+### 履歴ログ：`QEB-KB02-K-CITATION-TO-DELEGATED-PLAN-CONSUMER`
+
+rev3.0 pin、現行AGENTS、active指示、対象コードを再同期した。開始`main`／`origin/main`=`88091b177807cfdda7c68e2037f47b27964f0384`。local recovery branchは`codex/backup-main`=`88091b177807cfdda7c68e2037f47b27964f0384`、`codex/backup-main-prev`=`7e163b0b8fbf50582875e4f3d9493c7ee4a45ce7`。remote backup tag二世代もこの二SHAを指すことを確認した。保護対象untracked `.codex-remote-attachments/` とLinux isolation `target/` は保持し、公開Gitへ追加しない。
+
+HDSはM引用・結果観測などの選択済みplan-compute contextへそれぞれの`local_p_version`を付けながら、同じbudget identityで固定4-role agent delegationを発行する。Executorはagent専用版だけを確認していたため、M引用付き計画をprovider呼出し前に拒否していた。Executorの限定allowlistへagent delegation／M引用／結果観測の3つのcontext版を入れ、各版・親task identity・親budget identity・resource bounds・lifecycle receipt・子のbudget receiptを保持した。任意のlocal P版へ広げていない。結果観測版についてはExecutor単体で接続前提を検査し、Gatewayでの結果観測→意味候補生成はこのbatchでは確認・実装していない。
+
+Gateway synthetic smokeでは、現行MのJ受理済み引用をplan:computeへ渡し、4件のbounded C worker候補計算と親計算から未実行planを作り、J／Approval Gateの別L3確認を経て一時file-rootの合成`file.delete`を実行し、結果receipt・Mのobservation-only記録へ届いた。M引用は意味の真実・権限として扱わず、削除対象も隔離fixtureに限定した。`plan:reflect`の`memory_adoption=false`境界は変更していない。
+
+| QE_BUILDの限定確認 | 結果・射程 |
+|---|---|
+| `pnpm --filter @blue-tanuki/core typecheck`／`build` | PASS。Windows package build。 |
+| `packages/blue-tanuki/test/executor_compute.test.ts` | PASS、13 tests。agent-only／M citation／source-observationの3 contextで固定worker、budget、非権威候補を確認。 |
+| `packages/hds-brain/test/goal_governance.test.ts -t "plan computation"` | PASS、1 selected test。目的束縛・current purposeのplan-compute入力を確認。 |
+| `apps/gateway/test/meaning_update_gateway_smoke.test.ts` | PASS、1 test。引用→delegated C→未実行plan→別L3→隔離作用→receipt／Mのsynthetic経路。 |
+| `git diff --check` | PASS。 |
+| 実provider／資格、外部業務作用、全workspace suite、5OS実機、QE_QC／QE_QA | 未実施。C08.03、OD-03、P13をこの合成証拠から昇格しない。 |
+
+M引用→delegated plan compute→J/L3→result/M consumerをこの限定経路で`WIRED`とする。bounded result observation→意味更新候補→既存L3→M解釈版のproducerは`BUILD_GAP`であり、`plan:reflect`を採用経路に転用しない。目的／意味専用J/M storeのbackup収容とpending reconcileも未解消。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。次consumerは有限な結果観測から意味更新候補を作る専用のowner-reviewed経路。実装commit=`19c959cbd5ea955f6a8e37900feedbe0a11671c6`。
+
+---
+
 ### 履歴ログ：`QEB-KB01-BASELINE-CONSUMERS`
 
 現行pin rev3.0三点全文・適用AGENTS・active指示・現物を同期し、`main`／`origin/main`=`7e163b0b8fbf50582875e4f3d9493c7ee4a45ce7`を基点にK-B0／K-B1を再照合した。コードの入口・J/M保存責任は`BASELINE_OBSERVED`／`RESPONSIBILITY_MAPPED`の静的範囲であり、全体実行の完成を示さない。親agentを単一writerとし、subagent二つはread-onlyで入口・writerを対応付けた。
