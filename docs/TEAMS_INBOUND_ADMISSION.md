@@ -31,4 +31,6 @@ Gatewayのprivate stateにはevent identity digest、payload digest、処理状�
 
 受信口は`127.0.0.1`固定のloopback bindで、`TEAMS_AGENT_PORT`は`3978`、`TEAMS_AGENT_ROUTE`は`/api/messages`。他のbind addressは拒否する。この実装はtunnel、proxy、公開network exposureを作らない。Teams serviceから到達する配置にはownerが管理する外部routingと、そのnetwork exposureに必要な個別承認が別途必要となる。受信を構成してもMicrosoft Graph送信資格`MICROSOFT_GRAPH_ACCESS_TOKEN`は別途必要である。
 
-本施工で確認するのはローカル合成activity／認証拒否／owner grant／永続重複抑止／Gateway boundaryまで。Teams tenantの実資格・live endpoint・実conversation、HDS実運転、返信API、Teams昇格判定は含まない。Teamsは`first-party-preview`を維持する。
+Gateway private SQLite outboxはTeamsの返信payload digestと状態を持ち、本文とreply targetはqueued／dispatching／retry_wait中だけ保存してterminal settlementで消去する。再起動時にdispatchingだった送信は`outcome_unknown`へ固定して本文・targetを消し、自動再送しない。Microsoft Graphが明示的な429拒否と有効な`Retry-After`を返した場合だけ同じ返信を永続待機後に再送する。timeout／通信例外／5xxは結果不明として再送せず、他の4xxも自動再送しない。channel replyは元messageへの`/replies`、personal／groupChatはconversationのchat message consumerを使う。reply destinationは検証済みtenant／conversation／team／channel／message identityから組み立て、これらのmetadataからHDS判断・権限・承認を生まない。
+
+ローカル合成fixtureで確認するのはactivity拒否・identity/admission・Gateway boundary・native reply route・durable outbox・明示429 Retry-After・再起動時のunknown固定まで。実Teams tenantの有効JWT、credential、実conversation、実Graph API／返信、HDS実運転、Teams昇格判定は未確認で、Teamsは`first-party-preview`を維持する。F13.03のlive受入は製品全体の実装成立後、OD-03条件を満たしてから別途判断する。

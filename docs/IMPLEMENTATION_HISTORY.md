@@ -4,6 +4,23 @@
 
 ---
 
+### 履歴ログ：`QEB-69-F13.02-TEAMS-REPLY-PERSISTENT-OUTBOX-CONSUMER`
+
+開始`main`／`origin/main`=`8e9ec57c76ad18955dbecf307826a4838fc06e3d`。現行pin rev2.3、適用`AGENTS.md`、active instruction、F13.02のTeams reply／persistent retry要求を再同期した。直前のF13.01 inboxとGateway Teams plugin wiringだけを接続根拠として参照し、保護対象untracked Linux isolation `target/`を保持した。
+
+admitted Teams messageのreply targetを既存`replyPayload`／OutboundDispatcherへ渡し、Gateway private SQLite outbox、Teams adapter、Microsoft Graph request builderまでをsynthetic fixtureで接続した。channel replyは元messageのGraph `/replies` endpoint、personal／groupChatはchat messages endpointを使う。outboxはpayload digestとdelivery stateを保持し、本文・targetはqueued／dispatching／retry_wait中だけ保存してterminal settlement時に消去する。dispatchingの再起動中断は`outcome_unknown`へ移し、payloadを消して再送しない。明示的429 rejectionと正の有効`Retry-After`だけをdurable waitし、timeout／communication failure／5xxは結果不明、他の4xxは未配送として自動再送しない。credential、実Graph API、外部業務作用は使っていない。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Teams adapter focused tests | PASS、16 tests。channel reply/chat route、Graph 429 Retry-Afterのvalid／invalid／missing、Retry-Afterなしの非再送、5xx／timeoutのoutcome-unknown、invalid target／missing Graph credentialの未配送分類、全active senderの必須outboxを確認。 |
+| Gateway Teams outbox／served synthetic fixture | PASS、6 tests。admission→Gateway boundary→reply builder→dispatcher→Teams sender、明示429再試行、retry_waitの再起動復帰、duplicate suppression、terminal payload消去、結果不明の再送抑止。 |
+| Teams／Gateway typecheck、Teams／Gateway build | PASS。 |
+| `pnpm docs:check` | PASS。日本語基底の移行負債76件は既知継続、licensing gate PASS。 |
+| bundled Teams plugin review／`git diff --check` | PASS。authority=`used_for_authority=false`。 |
+| 有効JWT、実Teams／Graph credential・API、実HDS、外部送信、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+F13.02のsynthetic reply/outbox subpathを部分的に`WIRED`とする。実tenant／credential／Graph API／実HDSは未確認でTeams=`first-party-preview`を維持する。F13.03 live受入は製品全体の実装成立とOD-03条件まで延期し、次の実装batchは独立依存のF14.01 LINE入口認証・同一性とする。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03 provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`を維持する。実装commit=`d4737d0834c54d3bb9322cb2dcae2d6f3044e088`。
+
 ### 履歴ログ：`QEB-68-F13.01-TEAMS-ENTRY-IDENTITY-ADMISSION-CONSUMER`
 
 開始`main`／`origin/main`=`df979e8bce490bc46a7e477d833ec516e7120435`。現行pin rev2.3、適用`AGENTS.md`、active指示とF13.01のTeams ingress identity/admission要求を再同期し、今回必要なTeams adapterとGateway plugin境界だけを参照した。保護対象untracked Linux isolation `target/`を保持した。
