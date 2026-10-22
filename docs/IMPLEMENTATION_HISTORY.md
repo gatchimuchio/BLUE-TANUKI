@@ -4,6 +4,23 @@
 
 ---
 
+### 履歴ログ：`QEB-71-F14.02-LINE-REPLY-PERSISTENT-OUTBOX-CONSUMER`
+
+開始`main`／`origin/main`=`c86fd08a2d9c2abc1f9cdb651d5752eba77e50e8`。現行pin rev2.3、適用`AGENTS.md`、F14.02要求とF14.01 inbound→Gateway consumerだけを依存として再同期した。保護対象untracked Linux isolation `target/`を保持した。
+
+admitted LINE inboundからGateway reply/outbox consumerまでをsynthetic served経路で接続した。private SQLite outboxはpayload digestと状態を保持し、送信pending中だけtarget／本文を持つ。最初のpush requestから同じUUID retry keyを使用し、明示的429と有効`Retry-After`はdurable wait、timeout／HTTP 500はLINE仕様に従い24時間内に同一key／同一payloadで再試行、その他の5xxは結果不明で自動再送しない。409と`x-line-accepted-request-id`は先行accepted requestとして配送済みに照合する。再起動後もretry keyとpayloadを復旧し、期限切れ・credential scope変更・terminal settlementではtarget／本文を消去する。raw access tokenは保持しない。LINE公式仕様は[Retry failed API requests](https://developers.line.biz/en/docs/messaging-api/retrying-api-request/)を参照した。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| channel-line focused tests | PASS、18 tests。retry key、409 accepted request ID、429 retry、HTTP 502の非再送、ambiguous timeout、cancel後の結果不明を確認。 |
+| Gateway LINE inbound／outbox tests | PASS、5 tests。署名済みsynthetic inbound→Gateway reply/outbox、429→500→409、restart recovery、duplicate suppression、terminal payload scrub、expiry／credential rotationを確認。 |
+| channel-line／Gateway typecheck、workspace `pnpm typecheck` | PASS。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の既知移行負債76件を継続管理、licensing gate PASS。 |
+| 実LINE credential／API送信／実HDS／外部作用／全suite／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+F14.02のsynthetic served reply/outbox subpathだけを部分`WIRED`とする。LINEは`first-party-preview`。F14.03 credentialed-liveはOD-03条件が整うまで実施しない。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03 provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開・出荷保留を維持する。実装commit=`1461f4d`。
+
 ### 履歴ログ：`QEB-70-F14.01-LINE-ENTRY-IDENTITY-ADMISSION-CONSUMER`
 
 開始`main`／`origin/main`=`6c59822373bae00f51d0a923fec8676934238b14`。現行pin rev2.3、適用`AGENTS.md`、active指示とF14.01要求を再同期した。参照は現行LINE adapter／Gateway inbound callsiteと前batchの依存に限定し、保護対象untracked Linux isolation `target/`を保持した。
