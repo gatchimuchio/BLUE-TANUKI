@@ -14,11 +14,13 @@ F14.02では、LINE admitted inboundからGateway reply、SQLite durable outbox�
 
 製品全体は`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開・出荷保留を維持する。
 
-## 次のBUILD_BATCH
+## 次のBUILD_BATCH：rev2.4 CR-0
 
-F15.01は未収容43要求の非公開登録consumerまで`WIRED`。Composioの`search`／`accounts`／`scopes`／`execute`はHDS・operation catalog・tool registryに接続済みだが、実provider・実資格・外部業務作用は未使用。PostHogは`accounts`の限定projectionからauth schemeと接続regionを観測し、live `execute`で明示`expected_provider_region=us|eu`との一致と`API_KEY`を再照合する。欠落・不明・競合は送信前に拒否する。Composio公式資料間にregion／subdomain／self-hosted接続契約の記述差が残るため、この経路は観測できた`us`／`eu`だけを扱い、その他を対応済みとしない。接続状態・scope推薦・provider metadataはtask consentや権限の証拠ではなく、HDS Approval Gate L3を維持する。
+rev2.4の現物優先順に従い、最初にI-01 Unix installer／updater／uninstallerの危険対象判定とI-06 Windows開発用Force installの安全境界を照合・修復する。root、HOME、data root、symlink、二重slash、相対化、未生成先の親を実体同一性に基づいて扱い、危険な作用口は確認が終わるまで無効にする。検証は非破壊の拒否確認と安全な隔離対象に限定し、rootやHOME等への実削除・実導入は行わない。I-06の実Windows証拠が得られない場合は静的所見と未実証を分けて記録する。
 
-次はF15.03として、非公開登録済み要求から公式契約で有限化できる実consumerを選び、目的→判断→既存制御／作用→結果観測へ接続する。動的provider/plugin/Muse catalogと形式移行は具体的なconsumerが成立するまで`BUILD_GAP`。F15.02全体、接続setup上のowner consent、付与済みscopeの観測、43件のservice実装は未成立。C08.03実provider保留、P13公開GO保留、QE_QC／QE_QA未開始を維持する。
+続いてCR-1でrelease hardening／packaging gateを`workflow_dispatch`限定許可と自動trigger禁止へ同期し、その後CR-2でGUIのprovider疎通・費用profile・budget・通常Executorを同じ条件で接続する。QE_BUILDの主経路はGUIで設定した合成Cから、費用予約、J採否、合成Broker作用、receipt、M、返信・再計画／復帰までのproduction consumerをつなぐこと。既知fixtureはこのconsumerを止める原因群に限ってCR-3で修復し、旧83 FAILを現HEADの結果として転記しない。
+
+以前のF15.03予定とComposio／PostHogの詳細は作業履歴に残し、現batchの開始点とはしない。F15の具体的なconsumer実装は、CR-0～CR-3および一仕事のSYSTEM_SHAPED候補を前進させた後に工程表へ戻る。C08.03実provider、OD-03 live、D4-Pocket／ミニドラの別repo変更、P13公開GOは保留。製品全体は`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始のまま維持する。
 
 ## 保護とGit
 

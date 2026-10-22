@@ -4,11 +4,11 @@
 
 `QE_STAGE=QE_BUILD`。Windows-firstで全体の実consumer接続を進めている。最終対象OSはWindows／Linux／macOS／Android／iOSの5OSであり、現時点で対応済みという意味ではない。製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。
 
-## 次の接続
+## 次のBUILD_BATCH
 
-Composioの`search`／`accounts`／`scopes`／`execute`を既存のHDS・operation catalog・tool registryへ接続済み。PostHogではconnected accountから限定投影した認証方式とregionを実行直前に照合し、明示された`us`／`eu`と一致しない場合は外部POSTを止める。provider metadata、scope推薦、connection stateはtask consentや権限にならない。実provider・実資格・外部業務作用は未使用。
+rev2.4のCR-0を最優先し、Unixの全install／update／uninstall入口とWindows開発用Force installで、root／HOME／data root等の危険対象を実体同一性で拒否する。危険な作用口は修復・非破壊確認が終わるまで無効にする。次にCR-1でmanual `workflow_dispatch`許可と自動trigger拒否をrelease／packaging gateへ同期し、CR-2でGUI設定LLMの費用profile／budgetと通常Executorを結んで、一仕事をJ→合成Broker→receipt→M→返信・再計画／復帰へ通す。QE_BUILDは継続し、製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QC／QAは未開始。
 
-次はF15.03として、非公開登録済みの未包含要求から公式契約に基づく有限な実consumerを展開する。Composio資料間にsubdomain／self-hosted契約の記述差が残るため、観測不能な接続条件は実行可能と推測しない。dynamic provider/plugin catalogと形式移行は`BUILD_GAP`。
+F15.03とComposio／PostHogの既存作業は履歴に保持する。具体consumerへの展開は、rev2.4の安全是正と一仕事の統合形状を前進させた後に戻る。
 
 ## 維持する境界
 
