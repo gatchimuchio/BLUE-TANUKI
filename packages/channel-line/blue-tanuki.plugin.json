@@ -8,7 +8,9 @@
   },
   "permissions": [
     "network:api.line.me",
-    "secrets:LINE_CHANNEL_ACCESS_TOKEN"
+    "network:listen",
+    "secrets:LINE_CHANNEL_ACCESS_TOKEN",
+    "secrets:LINE_CHANNEL_SECRET"
   ],
-  "description": "LINE Messaging API preview channel. Push send, silent fallback, adapter retry/backoff, and typed delivery errors."
+  "description": "LINE Messaging API preview channel with signed webhook ingress, exact identity grants, durable replay suppression, push send, and typed delivery errors."
 }

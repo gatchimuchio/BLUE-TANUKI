@@ -131,7 +131,22 @@ LINE_LIVE_TARGET=<line-user-or-group-or-room-id>
 BLUE_TANUKI_LIVE_TIMEOUT_MS=30000
 ```
 
-Teams target forms are `channel/<team_id>/<channel_id>`, `reply/<team_id>/<channel_id>/<message_id>`, or `chat/<chat_id>` with URL-encoded ids. LINE targets are LINE userId, groupId, or roomId values reachable by the bot. Teams and LINE inbound webhook/subscription listeners are not release-complete yet; injected transports cover adapter conformance and future listener work.
+Teams target forms are `channel/<team_id>/<channel_id>`, `reply/<team_id>/<channel_id>/<message_id>`, or `chat/<chat_id>` with URL-encoded ids. LINE outbound targets are LINE userId, groupId, or roomId values reachable by the bot.
+
+LINE inbound preview uses the signed webhook path below. Keep the channel secret in the protected local secret store; never commit or print it.
+
+```bash
+LINE_CHANNEL_SECRET=<protected-secret>
+LINE_CHANNEL_DESTINATION=<exact-line-official-account-user-id>
+LINE_INBOUND_GRANTS_JSON='[{"destination":"<exact-line-official-account-user-id>","source_type":"group","source_id":"<exact-group-id>","user_id":"<exact-line-user-id>"}]'
+LINE_WEBHOOK_HOST=127.0.0.1
+LINE_WEBHOOK_PORT=3980
+LINE_WEBHOOK_ROUTE=/webhooks/line
+```
+
+`LINE_CHANNEL_SECRET` and `LINE_CHANNEL_DESTINATION` must be set together. Missing or empty grants deny all inbound messages. Grants match destination, source type, source ID, and user ID exactly; wildcards and role grants are not supported. The listener accepts only loopback hosts (`127.0.0.1` or `::1`), defaults to port `3980` and route `/webhooks/line`, and verifies LINE's HMAC signature over the exact raw body before parsing. External delivery therefore needs an owner-managed HTTPS reverse proxy; BLUE-TANUKI does not expose a public listener automatically. Only text messages with complete identity are forwarded. LINE reply tokens and attachment content are not forwarded or stored. The local signed route is covered by synthetic tests; no LINE credential, provider callback, or live API has been exercised.
+
+Teams and LINE remain `first-party-preview`; their inbound wiring does not establish live provider operation or promotion readiness.
 
 Delivery failures include `error_kind` (`recoverable` / `non_recoverable`), `error_code`, optional `retry_after_ms`, and `next_action`. `recoverable` normally means provider rate limit or transient transport failure; `non_recoverable` means token, target, permission, or app configuration must be fixed before retry.
 

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ChannelSendPayload,
   InboundRequest,
@@ -23,6 +23,23 @@ import {
   type LineTransport,
 } from "./transport.js";
 
+export interface LineInboundGrant {
+  readonly destination: string;
+  readonly source_type: "user" | "group" | "room";
+  readonly source_id: string;
+  readonly user_id: string;
+}
+
+export type LineEventClaim =
+  | { readonly status: "accepted" }
+  | { readonly status: "duplicate"; readonly delivery_state: "dispatching" | "handler_returned" | "outcome_unknown" }
+  | { readonly status: "identity_conflict" };
+
+export interface LineInboundEventInbox {
+  claim(eventId: string, payloadDigest: string, nowMs?: number): LineEventClaim;
+  settle(eventId: string, payloadDigest: string, state: "handler_returned" | "outcome_unknown", nowMs?: number): void;
+}
+
 export interface LineRetryConfig {
   max_retries: number;
   base_delay_ms: number;
@@ -35,6 +52,17 @@ export interface LineRetryConfig {
 export interface LineOptions {
   /** LINE Messaging API channel access token. Env: LINE_CHANNEL_ACCESS_TOKEN. */
   channel_access_token?: string;
+  /** Channel secret used only to authenticate raw webhook bodies. */
+  channel_secret?: string;
+  /** Exact LINE Official Account user ID from the signed webhook envelope. */
+  channel_destination?: string;
+  /** Exact identity grants; absent or empty configuration denies all inbound messages. */
+  inbound_grants?: readonly LineInboundGrant[];
+  /** Gateway-owned digest-only replay inbox; inbound is disabled without it. */
+  inbox?: LineInboundEventInbox;
+  webhook_host?: string;
+  webhook_port?: number;
+  webhook_route?: string;
   /** Test or future webhook transport injection. */
   transport?: LineTransport;
   /** Fetch injection for the built-in Messaging API transport. */
@@ -81,11 +109,17 @@ export class LineChannel implements InboundChannel, OutboundChannel {
 
     if (this.opts.transport) {
       this.transport = this.opts.transport;
-    } else if (this.opts.channel_access_token) {
+    } else if (this.opts.channel_access_token || (this.opts.channel_secret && this.opts.channel_destination)) {
       this.transport = new LineMessagingTransport({
         channel_access_token: this.opts.channel_access_token,
+        channel_secret: this.opts.channel_secret,
+        channel_destination: this.opts.channel_destination,
+        webhook_host: this.opts.webhook_host,
+        webhook_port: this.opts.webhook_port,
+        webhook_route: this.opts.webhook_route,
         fetch: this.opts.fetch,
         request_timeout_ms: this.opts.request_timeout_ms,
+        log: this.opts.log,
       });
     } else {
       this.silent = true;
@@ -95,13 +129,46 @@ export class LineChannel implements InboundChannel, OutboundChannel {
 
     try {
       await this.transport.start(async (m) => {
-        const inbound = normalizeLineInbound(m);
+        if (!isValidInboundMessage(m) || m.destination !== this.opts.channel_destination) {
+          this.log("[line] rejected inbound event with invalid identity");
+          return;
+        }
+        if (!this.opts.inbound_grants?.some((grant) => lineGrantMatches(grant, m))) {
+          this.log("[line] rejected inbound event without an exact owner grant");
+          return;
+        }
+        const inbox = this.opts.inbox;
+        if (!inbox) {
+          this.log("[line] rejected inbound event because durable admission is unavailable");
+          return;
+        }
+        const eventId = m.webhook_event_id;
+        const payloadDigest = lineInboundPayloadDigest(m);
+        let claim: LineEventClaim;
         try {
-          await handler(inbound);
-        } catch (e) {
-          this.log(
-            `[line] inbound handler threw: ${e instanceof Error ? e.message : String(e)}`,
-          );
+          claim = inbox.claim(eventId, payloadDigest);
+        } catch {
+          this.log("[line] rejected inbound event because durable admission failed");
+          return;
+        }
+        if (claim.status !== "accepted") {
+          this.log(`[line] suppressed inbound event status=${claim.status}`);
+          return;
+        }
+
+        let deliveryState: "handler_returned" | "outcome_unknown" = "handler_returned";
+        try {
+          await handler(normalizeLineInbound(m));
+        } catch {
+          deliveryState = "outcome_unknown";
+          throw new Error("line_inbound_handler_failed");
+        } finally {
+          try {
+            inbox.settle(eventId, payloadDigest, deliveryState);
+          } catch {
+            this.log("[line] inbound settlement failed; replay remains blocked");
+            throw new Error("line_inbound_settlement_failed");
+          }
         }
       });
       this.log("[line] active");
@@ -218,20 +285,65 @@ function normalizeLineInbound(m: LineInboundMessage): InboundRequest {
   return {
     id: randomUUID(),
     channel: "line",
-    user: m.user_display || m.user_id || m.source_id,
+    user: `line:${lineActorDigest(m.destination, m.user_id!)}`,
     content: m.text,
-    timestamp: Date.now(),
+    timestamp: m.event_timestamp_ms,
     metadata: {
       reply_to: m.source_id,
+      line_destination: m.destination,
       line_source_type: m.source_type,
       line_source_id: m.source_id,
       line_user_id: m.user_id,
       line_message_id: m.message_id,
-      line_reply_token: m.reply_token,
       line_webhook_event_id: m.webhook_event_id,
       line_is_redelivery: m.is_redelivery,
+      line_event_timestamp_ms: m.event_timestamp_ms,
     },
   };
+}
+
+function isValidInboundMessage(message: LineInboundMessage): boolean {
+  return Boolean(message) &&
+    isSafeLineIdentifier(message.destination) &&
+    (message.source_type === "user" || message.source_type === "group" || message.source_type === "room") &&
+    isSafeLineIdentifier(message.source_id) &&
+    isSafeLineIdentifier(message.user_id) &&
+    isSafeLineIdentifier(message.message_id) &&
+    /^[0-9A-HJKMNPQRSTVWXYZ]{26}$/iu.test(message.webhook_event_id) &&
+    Number.isSafeInteger(message.event_timestamp_ms) && message.event_timestamp_ms > 0 &&
+    typeof message.is_redelivery === "boolean" &&
+    typeof message.text === "string" && message.text.length > 0 && message.text.length <= 5000 &&
+    (message.source_type !== "user" || message.source_id === message.user_id);
+}
+
+function lineGrantMatches(grant: LineInboundGrant, message: LineInboundMessage): boolean {
+  return grant.destination === message.destination &&
+    grant.source_type === message.source_type &&
+    grant.source_id === message.source_id &&
+    grant.user_id === message.user_id;
+}
+
+function lineInboundPayloadDigest(message: LineInboundMessage): string {
+  return createHash("sha256").update(JSON.stringify([
+    "line-inbound-payload.v1",
+    message.destination,
+    message.source_type,
+    message.source_id,
+    message.user_id,
+    message.message_id,
+    message.webhook_event_id,
+    message.event_timestamp_ms,
+    message.text,
+  ])).digest("hex");
+}
+
+function lineActorDigest(destination: string, userId: string): string {
+  return createHash("sha256").update(JSON.stringify(["line-actor.v1", destination, userId])).digest("hex");
+}
+
+function isSafeLineIdentifier(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 512 &&
+    value.trim() === value && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 async function withLineRetry(

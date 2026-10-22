@@ -1,6 +1,14 @@
-export { LineChannel, type LineOptions, type LineRetryConfig } from "./line.js";
+export {
+  LineChannel,
+  type LineOptions,
+  type LineRetryConfig,
+  type LineInboundGrant,
+  type LineEventClaim,
+  type LineInboundEventInbox,
+} from "./line.js";
 export {
   LineMessagingTransport,
+  verifyLineSignature,
   type LineFetch,
   type LineTransport,
   type LineInboundMessage,

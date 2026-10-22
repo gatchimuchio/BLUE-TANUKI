@@ -4,6 +4,8 @@ import {
   LineChannel,
   type LineInboundHandler,
   type LineInboundMessage,
+  type LineInboundEventInbox,
+  type LineInboundGrant,
   type LinePostResult,
   type LineTransport,
 } from "../src/index.js";
@@ -37,6 +39,38 @@ class FakeLineTransport implements LineTransport {
   }
 }
 
+class FakeLineInbox implements LineInboundEventInbox {
+  readonly settled: Array<{ eventId: string; payloadDigest: string; state: "handler_returned" | "outcome_unknown" }> = [];
+  claim(): { status: "accepted" } { return { status: "accepted" }; }
+  settle(eventId: string, payloadDigest: string, state: "handler_returned" | "outcome_unknown"): void {
+    this.settled.push({ eventId, payloadDigest, state });
+  }
+}
+
+const LINE_DESTINATION = "Ubot-destination";
+const LINE_EVENT_ID = "01FZ74A0TDDPYRVKNK77XKC3ZR";
+const LINE_GRANT: LineInboundGrant = {
+  destination: LINE_DESTINATION,
+  source_type: "user",
+  source_id: "U123",
+  user_id: "U123",
+};
+
+function lineMessage(overrides: Partial<LineInboundMessage> = {}): LineInboundMessage {
+  return {
+    destination: LINE_DESTINATION,
+    source_type: "user",
+    source_id: "U123",
+    user_id: "U123",
+    text: "hello line",
+    message_id: "msg-1",
+    webhook_event_id: LINE_EVENT_ID,
+    event_timestamp_ms: 1_700_000_000_000,
+    is_redelivery: false,
+    ...overrides,
+  };
+}
+
 describe("LineChannel", () => {
   it("starts silently and fails closed when no token or transport is configured", async () => {
     const channel = new LineChannel({ log: () => undefined });
@@ -60,30 +94,72 @@ describe("LineChannel", () => {
 
   it("normalizes injected inbound messages without authority metadata", async () => {
     const transport = new FakeLineTransport();
-    const channel = new LineChannel({ transport, log: () => undefined });
+    const inbox = new FakeLineInbox();
+    const channel = new LineChannel({
+      transport,
+      channel_destination: LINE_DESTINATION,
+      inbound_grants: [LINE_GRANT],
+      inbox,
+      log: () => undefined,
+    });
     const received: InboundRequest[] = [];
     await channel.start(async (req) => {
       received.push(req);
     });
     try {
-      await transport.emit({
-        source_type: "user",
-        source_id: "U123",
-        user_id: "U123",
-        user_display: "alice",
-        text: "hello line",
-        message_id: "msg-1",
-        reply_token: "reply-token",
-        webhook_event_id: "event-1",
-      });
+      await transport.emit(lineMessage());
       expect(received).toHaveLength(1);
       expect(received[0]).toMatchObject({
         channel: "line",
-        user: "alice",
+        user: expect.stringMatching(/^line:[a-f0-9]{64}$/u),
         content: "hello line",
+        timestamp: 1_700_000_000_000,
       });
       expect(received[0]!.metadata?.reply_to).toBe("U123");
       expect(received[0]!.metadata).not.toHaveProperty("blue_tanuki.authority_context");
+      expect(received[0]!.metadata).not.toHaveProperty("line_reply_token");
+      expect(inbox.settled).toMatchObject([{ eventId: LINE_EVENT_ID, state: "handler_returned" }]);
+    } finally {
+      await channel.stop();
+    }
+  });
+
+  it("does not forward an ungranted identity or a group event with no user identity", async () => {
+    const transport = new FakeLineTransport();
+    const inbox = new FakeLineInbox();
+    const received: InboundRequest[] = [];
+    const channel = new LineChannel({
+      transport,
+      channel_destination: LINE_DESTINATION,
+      inbound_grants: [LINE_GRANT],
+      inbox,
+      log: () => undefined,
+    });
+    await channel.start(async (request) => { received.push(request); });
+    try {
+      await transport.emit(lineMessage({ user_id: "U999", source_id: "U999" }));
+      await transport.emit(lineMessage({ source_type: "group", source_id: "Cgroup", user_id: undefined }));
+      expect(received).toEqual([]);
+      expect(inbox.settled).toEqual([]);
+    } finally {
+      await channel.stop();
+    }
+  });
+
+  it("settles a failed Gateway consumer as outcome-unknown and propagates a redacted error", async () => {
+    const transport = new FakeLineTransport();
+    const inbox = new FakeLineInbox();
+    const channel = new LineChannel({
+      transport,
+      channel_destination: LINE_DESTINATION,
+      inbound_grants: [LINE_GRANT],
+      inbox,
+      log: () => undefined,
+    });
+    await channel.start(async () => { throw new Error("private handler details"); });
+    try {
+      await expect(transport.emit(lineMessage())).rejects.toThrow("line_inbound_handler_failed");
+      expect(inbox.settled).toMatchObject([{ eventId: LINE_EVENT_ID, state: "outcome_unknown" }]);
     } finally {
       await channel.stop();
     }

@@ -4,6 +4,26 @@
 
 ---
 
+### 履歴ログ：`QEB-70-F14.01-LINE-ENTRY-IDENTITY-ADMISSION-CONSUMER`
+
+開始`main`／`origin/main`=`6c59822373bae00f51d0a923fec8676934238b14`。現行pin rev2.3、適用`AGENTS.md`、active指示とF14.01要求を再同期した。参照は現行LINE adapter／Gateway inbound callsiteと前batchの依存に限定し、保護対象untracked Linux isolation `target/`を保持した。
+
+LINE adapterへloopback限定HTTP listenerを追加し、raw bodyのHMAC署名をJSON parse前に検証する。configured destination、event ID／timestamp、text message、source type／ID／user IDを確認し、ownerのdestination／source type／source ID／user ID完全一致grantを通ったeventのみGateway inboundへ渡す。Gateway private SQLite inboxはscope／event／payload digestとdelivery stateのみを保持し、重複、同一event IDの内容競合、dispatch中断後の再実行を抑止する。LINE replyTokenと添付本文は転送しない。`network:listen`とchannel secret permissionはingress設定時だけpluginへ渡す。LINEは`first-party-preview`を維持する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| channel-line typecheck／build | PASS。 |
+| channel-line focused tests | PASS、15 tests。raw-body署名、loopback bind拒否、destination、text event、grant、handler failureを確認。 |
+| Gateway typecheck／build | PASS。 |
+| `pnpm typecheck` | PASS、全workspace型検査。 |
+| `pnpm build` | PASS、15 workspace projects。 |
+| Gateway LINE grant／served ingress tests | PASS、4 tests。署名HTTP→grant→digest-only inbox→Gateway inbound boundary、重複／内容競合、再起動時のoutcome_unknownを確認。 |
+| `pnpm docs:check`／`git diff --check` | PASS。日本語基底の既知移行負債76件を継続管理し、licensing gate PASS。 |
+| bundled LINE plugin review | PASS、authority=`used_for_authority=false`。 |
+| 実LINE callback／credential／Messaging API／実HDS運転／外部送信／5OS実機／QE_QC／QE_QA | 未実施。 |
+
+F14.01のsynthetic local ingress→Gateway inbound subpathだけを部分的に`WIRED`とする。実provider callback、credential、HDS運転は未確認。全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。次consumerはF14.02 inbound→reply/outbox。C08.03 provider保留、P13=`PENDING_OWNER_GO`／`public_claim_allowed=false`、公開／出荷保留を維持する。
+
 ### 履歴ログ：`QEB-69-F13.02-TEAMS-REPLY-PERSISTENT-OUTBOX-CONSUMER`
 
 開始`main`／`origin/main`=`8e9ec57c76ad18955dbecf307826a4838fc06e3d`。現行pin rev2.3、適用`AGENTS.md`、active instruction、F13.02のTeams reply／persistent retry要求を再同期した。直前のF13.01 inboxとGateway Teams plugin wiringだけを接続根拠として参照し、保護対象untracked Linux isolation `target/`を保持した。

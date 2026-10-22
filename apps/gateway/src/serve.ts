@@ -58,6 +58,8 @@ import { GatewayDiscordEventStore } from "./discord_event_store.js";
 import { parseTeamsInboundGrants } from "./teams_inbound_grants.js";
 import { teamsAgentCredentialsFromEnvironment } from "./teams_agent_config.js";
 import { GatewayTeamsEventStore } from "./teams_event_store.js";
+import { parseLineInboundGrants } from "./line_inbound_grants.js";
+import { GatewayLineEventStore } from "./line_event_store.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import { buildAuditLog } from "./audit_config.js";
@@ -795,8 +797,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     },
   });
   const router = new InboundRouter({
-    propagateHandlerErrorsForChannels: ["cron", "telegram", "slack", "teams"],
-    redactHandlerErrorsForChannels: ["telegram", "slack", "teams"],
+    propagateHandlerErrorsForChannels: ["cron", "telegram", "slack", "teams", "line"],
+    redactHandlerErrorsForChannels: ["telegram", "slack", "teams", "line"],
   });
   const dispatcher = new OutboundDispatcher();
 
@@ -4418,6 +4420,20 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         teamsAgentCredentials?.client_id ?? `graph-token:${createHash("sha256").update(process.env.MICROSOFT_GRAPH_ACCESS_TOKEN!).digest("hex")}`,
       )
     : null;
+  const lineChannelSecret = process.env.LINE_CHANNEL_SECRET;
+  const lineDestination = process.env.LINE_CHANNEL_DESTINATION;
+  if (Boolean(lineChannelSecret) !== Boolean(lineDestination)) {
+    throw new Error("LINE_CHANNEL_SECRET and LINE_CHANNEL_DESTINATION must be configured together");
+  }
+  const lineIngressConfigured = Boolean(
+    lineChannelSecret && lineDestination && plugins.has("@blue-tanuki/channel-line"),
+  );
+  const lineInboundGrants = lineIngressConfigured
+    ? parseLineInboundGrants(process.env.LINE_INBOUND_GRANTS_JSON)
+    : [];
+  const lineEventStore = lineIngressConfigured && lineDestination
+    ? GatewayLineEventStore.fromEnvironment(process.env, lineDestination)
+    : null;
   const telegram = plugins.createChannel<InboundChannel & OutboundChannel>({
     package_name: "@blue-tanuki/channel-telegram",
     required_permissions: telegramPermissions,
@@ -4479,8 +4495,18 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     optionalPreviewChannel("@blue-tanuki/channel-line", [
       "network:api.line.me",
       "secrets:LINE_CHANNEL_ACCESS_TOKEN",
+      ...(lineIngressConfigured ? ["network:listen", "secrets:LINE_CHANNEL_SECRET"] : []),
     ], "register line channel", {
       channel_access_token: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+      ...(lineIngressConfigured ? {
+        channel_secret: lineChannelSecret,
+        channel_destination: lineDestination,
+        inbound_grants: lineInboundGrants,
+        inbox: lineEventStore,
+        webhook_host: process.env.LINE_WEBHOOK_HOST,
+        webhook_port: parsePositiveInt(process.env.LINE_WEBHOOK_PORT),
+        webhook_route: process.env.LINE_WEBHOOK_ROUTE,
+      } : {}),
       log: (lineText: string) => lineLog.info(lineText),
     }),
   ].filter((channel): channel is InboundChannel & OutboundChannel => channel !== null);
@@ -4897,6 +4923,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       slackEventStore?.close();
       discordEventStore?.close();
       teamsEventStore?.close();
+      lineEventStore?.close();
       cronEventStore.close();
       computeBudget.close();
       documentOrganizationCheckpointStore?.close();
