@@ -175,6 +175,62 @@ describe("LINE durable outbound consumer", () => {
     }
   });
 
+  it("persists a caller cancellation after dispatch as unknown without retrying", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-line-outbox-cancel-"));
+    const filepath = path.join(dir, "line.sqlite");
+    const store = new GatewayLineEventStore(filepath, DESTINATION, ACCESS_TOKEN);
+    const controller = new AbortController();
+    let started!: () => void;
+    const requestStarted = new Promise<void>((resolve) => { started = resolve; });
+    let calls = 0;
+    let retryKey: string | null = null;
+    let requestSignal: AbortSignal | undefined;
+    const transport = new LineMessagingTransport({
+      channel_access_token: ACCESS_TOKEN,
+      fetch: async (_input, init) => {
+        calls += 1;
+        retryKey = new Headers(init?.headers).get("x-line-retry-key");
+        requestSignal = init?.signal as AbortSignal | undefined;
+        started();
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          }, { once: true });
+        });
+      },
+    });
+    const channel = new LineChannel({
+      transport,
+      delivery_store: store,
+      retry: { max_retries: 1, sleep: async () => undefined },
+      log: () => undefined,
+    });
+    try {
+      await channel.start(async () => undefined);
+      const sending = channel.send({ channel: "line", target: USER_ID, content: "synthetic reply" },
+        { command_id: "cmd-caller-cancel", upstream_commit_hash: "hash" }, { signal: controller.signal });
+      await requestStarted;
+      controller.abort();
+      const result = await sending;
+
+      expect(requestSignal?.aborted).toBe(true);
+      expect(calls).toBe(1);
+      expect(result).toMatchObject({ delivered: false, delivery_status: "unknown",
+        error_code: "caller_cancelled_after_ambiguous_send" });
+      expect(retryKey).toBeTruthy();
+      expect(store.status(retryKey!)).toMatchObject({ delivery_state: "outcome_unknown",
+        error_code: "caller_cancelled_after_ambiguous_send" });
+      const raw = await fs.readFile(filepath);
+      expect(raw.includes(Buffer.from("synthetic reply"))).toBe(false);
+    } finally {
+      await channel.stop();
+      store.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("expires queued bodies and clears a previous credential scope", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-line-outbox-expiry-"));
     const filepath = path.join(dir, "line.sqlite");

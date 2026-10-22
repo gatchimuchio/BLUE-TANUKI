@@ -306,6 +306,26 @@ describe("LineChannel", () => {
     }
   });
 
+  it("keeps an HTTP-confirmed success delivered when the response body cannot be read", async () => {
+    const channel = new LineChannel({
+      channel_access_token: "secret-line-token",
+      delivery_store: new FakeLineDeliveryStore(),
+      log: () => undefined,
+      fetch: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.error(new Error("synthetic body read failure")); },
+      }), { status: 200, headers: { "x-line-request-id": "REQ-BODY-READ-FAILED" } }),
+    });
+    await channel.start(async () => undefined);
+    try {
+      const result = await channel.send({ channel: "line", target: "U123", content: "hello" },
+        { command_id: "cmd-body-read-failure", upstream_commit_hash: "hash" });
+      expect(result).toMatchObject({ delivered: true, delivery_status: "delivered",
+        external_id: "REQ-BODY-READ-FAILED" });
+    } finally {
+      await channel.stop();
+    }
+  });
+
   it("treats the accepted-request id on a retry-key 409 as the original delivery", async () => {
     const channel = new LineChannel({
       channel_access_token: "secret-line-token",
@@ -334,9 +354,10 @@ describe("LineChannel", () => {
   });
 
   it("classifies Messaging API HTTP timeout as recoverable", async () => {
+    const store = new FakeLineDeliveryStore();
     const channel = new LineChannel({
       channel_access_token: "secret-line-token",
-      delivery_store: new FakeLineDeliveryStore(),
+      delivery_store: store,
       request_timeout_ms: 1,
       retry: false,
       log: () => undefined,
@@ -357,7 +378,12 @@ describe("LineChannel", () => {
       );
       expect(result).toMatchObject({
         delivered: false,
+        delivery_status: "unknown",
         error_kind: "recoverable",
+        error_code: "line_timeout",
+      });
+      expect(store.status(store.lastDeliveryId!)).toMatchObject({
+        delivery_state: "outcome_unknown",
         error_code: "line_timeout",
       });
     } finally {
@@ -389,12 +415,13 @@ describe("LineChannel", () => {
 
   it("aborts the local LINE HTTP request when the execution is cancelled", async () => {
     const controller = new AbortController();
+    const store = new FakeLineDeliveryStore();
     let requestSignal: AbortSignal | undefined;
     let started!: () => void;
     const requestStarted = new Promise<void>((resolve) => { started = resolve; });
     const channel = new LineChannel({
       channel_access_token: "secret-line-token",
-      delivery_store: new FakeLineDeliveryStore(),
+      delivery_store: store,
       retry: false,
       log: () => undefined,
       fetch: async (_input, init) => {
@@ -402,9 +429,7 @@ describe("LineChannel", () => {
         started();
         return await new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => {
-            const error = new Error("aborted");
-            error.name = "AbortError";
-            reject(error);
+            reject(new TypeError("fetch aborted"));
           }, { once: true });
         });
       },
@@ -417,7 +442,12 @@ describe("LineChannel", () => {
       controller.abort();
       const result = await sending;
       expect(requestSignal?.aborted).toBe(true);
-      expect(result.delivered).toBe(false);
+      expect(result).toMatchObject({ delivered: false, delivery_status: "unknown",
+        error_code: "caller_cancelled_after_ambiguous_send" });
+      expect(store.status(store.lastDeliveryId!)).toMatchObject({
+        delivery_state: "outcome_unknown",
+        error_code: "caller_cancelled_after_ambiguous_send",
+      });
     } finally {
       await channel.stop();
     }
@@ -505,10 +535,11 @@ describe("LineChannel", () => {
       await requestStarted;
       controller.abort();
       const result = await sending;
-      expect(result).toMatchObject({ delivered: false, delivery_status: "unknown", error_code: "cancelled_after_ambiguous_send" });
+      expect(result).toMatchObject({ delivered: false, delivery_status: "unknown",
+        error_code: "caller_cancelled_after_ambiguous_send" });
       expect(store.status(store.lastDeliveryId!)).toMatchObject({
         delivery_state: "outcome_unknown",
-        error_code: "cancelled_after_ambiguous_send",
+        error_code: "caller_cancelled_after_ambiguous_send",
       });
     } finally {
       await channel.stop();

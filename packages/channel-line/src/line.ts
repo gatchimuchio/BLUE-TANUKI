@@ -403,8 +403,8 @@ export class LineChannel implements InboundChannel, OutboundChannel {
 
       if (result.idempotent_retryable && retry) {
         if (callerSignal?.aborted) {
-          store.settleDelivery(deliveryId, "outcome_unknown", { error_code: "cancelled_after_ambiguous_send" });
-          return { ...result, delivery_status: "unknown", error_code: "cancelled_after_ambiguous_send" };
+          store.settleDelivery(deliveryId, "outcome_unknown", { error_code: "caller_cancelled_after_ambiguous_send" });
+          return { ...result, delivery_status: "unknown", error_code: "caller_cancelled_after_ambiguous_send" };
         }
         if (claim.attempt_count > retry.max_retries) {
           store.settleDelivery(deliveryId, "outcome_unknown", { error_code: "retry_exhausted" });
@@ -418,8 +418,9 @@ export class LineChannel implements InboundChannel, OutboundChannel {
         }
         store.scheduleRetry(deliveryId, notBefore, undefined, Date.now(), "server_retry");
         if (callerSignal?.aborted) {
-          try { store.abandonPending(deliveryId, "outcome_unknown", "cancelled_after_ambiguous_send"); } catch { /* already settled */ }
-          return { ...result, delivery_status: "unknown" };
+          try { store.abandonPending(deliveryId, "outcome_unknown", "caller_cancelled_after_ambiguous_send"); } catch { /* already settled */ }
+          return { ...result, delivery_status: "unknown", error: "caller_cancelled_after_ambiguous_send",
+            error_code: "caller_cancelled_after_ambiguous_send" };
         }
         if (lifecycleSignal.aborted) return { ...result, delivery_status: "unknown" };
         this.log(`[line] persisted idempotent retry attempt=${claim.attempt_count} delay_ms=${backoff} delivery=${deliveryId.slice(0, 8)}`);
@@ -521,9 +522,9 @@ function cancelledBeforeDispatch(): LinePostResult {
 function stopPendingAfterCallerCancellation(store: LineOutboundDeliveryStore, deliveryId: string): LinePostResult {
   const status = store.status(deliveryId);
   if (status?.delivery_state === "retry_wait" && status.error_code === "server_retry") {
-    store.abandonPending(deliveryId, "outcome_unknown", "cancelled_after_ambiguous_send");
-    return { ok: false, delivery_status: "unknown", error: "cancelled_after_ambiguous_send",
-      error_code: "cancelled_after_ambiguous_send" };
+    store.abandonPending(deliveryId, "outcome_unknown", "caller_cancelled_after_ambiguous_send");
+    return { ok: false, delivery_status: "unknown", error: "caller_cancelled_after_ambiguous_send",
+      error_code: "caller_cancelled_after_ambiguous_send" };
   }
   store.cancelPending(deliveryId);
   return cancelledBeforeDispatch();

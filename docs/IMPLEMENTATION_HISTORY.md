@@ -3403,3 +3403,23 @@ Control Center／WebChat Settingsへowner指定のprovider当たり上限profile
 | 実provider／credential、GitHub Actions、workspace全test、5OS実機、QE_QC／QE_QA | 未実施。今回の合成経路から証明・昇格しない。 |
 
 CR-2でGUI保存設定から通常Compute予約およびserved同一job再開の合成subpathを接続した。seed済みwaitから開始した試験であり、新規owner task全体や全要求機能群の成立を示さない。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03実provider、OD-03 live作用、D4-Pocket／ミニドラ変更、P13 owner GO、公開／出荷保留を維持する。次のBUILD_BATCHはCR-3：このconsumerを止めると現行正本が指定するfixture causeを現HEADで再現し、対象causeを修復して同じconsumerへ戻す。旧83 FAILは現HEADの結果として扱わない。
+
+### QEB-73-CR3-COMPUTE-REOBSERVATION-LINE-CANCEL-CLASSIFICATION
+
+開始`main`／`origin/main`=`8bcc1a36a97d2908f9db899941c16ebc1a12591c`。現行pin rev2.4の三点セット、root`AGENTS.md`、作業標準、active instruction、HEAD／dirty差分、CR-2 Compute consumerとI-04／I-05対象を再同期した。保護対象untrackedの`.codex-remote-attachments/`とLinux isolation `target/`は保持した。
+
+I-04は旧c86時点の83 FAILを再実行せず、現HEADにあるCompute／budget／Executor delegationの5関連test filesを選び直して実行した。47 testsはすべてPASSし、今回の対象consumerでfixtureと現行contractの不一致は再現しなかった。LINE／Telegram／Slack／Discord／Teamsの5 inbound-grant consumerも各current testでPASSしたため、I-04を理由にコードを変更していない。旧83 FAILは歴史上の診断値のままであり、現HEADの全suite結果ではない。
+
+I-05では`LineMessagingTransport`にcaller Abortと内部timeoutの発生元を分ける中断制御を追加した。dispatch前のcaller cancelは明示的`not_delivered`／`cancelled_before_dispatch`、dispatch後のcaller cancelは`unknown`／`caller_cancelled_after_ambiguous_send`として返し、idempotent retry対象にしない。内部timeoutは`unknown`／`line_timeout`として維持し、既存の同一durable delivery IDをLINE retry keyとして使う限定再送だけを残す。取消がretry wait中に到着した場合も、Gateway outboxと返却結果が同じunknown分類になるよう揃えた。2xxと認証済み409のdelivery successはresponse body読取に依存させず、本文読取失敗で既知のHTTP成功をunknownへ落とさない。result不明を成功・未配送へ補完せず、payloadはterminal settlementで従来どおり消去する。
+
+| QE_BUILDの必要最小確認 | 結果 |
+|---|---|
+| Compute／budget／delegation: `pnpm exec vitest run packages/blue-tanuki/test/llm_compute.test.ts packages/blue-tanuki/test/executor_compute.test.ts packages/blue-tanuki/test/llm_registry.test.ts apps/gateway/test/compute_budget_store.test.ts apps/gateway/test/compute_identity.test.ts --maxWorkers=1 --minWorkers=1 --reporter=verbose` | PASS、5 files／47 tests。 |
+| LINE／Gateway／5 channel-grant files targeted Vitest | PASS、7 files／28 tests。LINE transport・durable SQLite outbox・caller cancel後のunknown保存／再送なし・body-read failure後のHTTP-confirmed successを含む。 |
+| `pnpm typecheck` | PASS、exit code 0。 |
+| `pnpm build` | PASS、全workspace build。 |
+| `pnpm docs:check` | PASS。日本語基底の移行負債76件はwarningとして残る。 |
+| `git diff --check` | PASS。 |
+| 実LINE API／credential、他channelのlive作用、workspace全suite、5OS実機、QE_QC／QE_QA | 未実施。 |
+
+CR-3ではI-04対象consumerの現HEAD不一致は再現せず、I-05のLINE取消・timeout・配送結果分類をtransportからdurable Gateway outboxまで接続した。LINE live運転や他channelへの一般化は主張しない。製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`未成立、QE_QC／QE_QA未開始。C08.03 provider、OD-03 live作用、D4-Pocket／ミニドラ別repo変更、P13 owner GO、公開／出荷保留を維持する。次のBUILD_BATCHはrev2.4 E2E-01：同一WebChat taskの目的→C→J→安全な合成Approval／Broker作用→receipt→M→結果返信→再計画・復帰をつなぐ。

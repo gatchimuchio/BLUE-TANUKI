@@ -217,8 +217,30 @@ export class LineMessagingTransport implements LineTransport {
       };
     }
     const timeoutMs = this.opts.request_timeout_ms ?? DEFAULT_LINE_REQUEST_TIMEOUT_MS;
+    if (callerSignal?.aborted) {
+      return { ok: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
+        error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+    }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let abortSource: "caller" | "timeout" | undefined;
+    const abortForCaller = (): void => {
+      if (abortSource !== undefined) return;
+      abortSource = "caller";
+      controller.abort();
+    };
+    if (callerSignal) {
+      callerSignal.addEventListener("abort", abortForCaller, { once: true });
+      if (callerSignal.aborted) {
+        callerSignal.removeEventListener("abort", abortForCaller);
+        return { ok: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
+          error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+      }
+    }
+    const timer = setTimeout(() => {
+      if (abortSource !== undefined) return;
+      abortSource = "timeout";
+      controller.abort();
+    }, timeoutMs);
     let res: Response;
     try {
       res = await fetchImpl(LINE_PUSH_URL, {
@@ -233,10 +255,14 @@ export class LineMessagingTransport implements LineTransport {
           to: args.target,
           messages: [{ type: "text", text: args.text }],
         }),
-        signal: callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal,
+        signal: controller.signal,
       });
     } catch (error) {
-      if (isAbortError(error)) {
+      if (abortSource === "caller") {
+        return { ok: false, delivery_status: "unknown", error: "caller_cancelled_after_ambiguous_send",
+          error_kind: "non_recoverable", error_code: "caller_cancelled_after_ambiguous_send" };
+      }
+      if (abortSource === "timeout") {
         return {
           ok: false,
           delivery_status: "unknown",
@@ -246,13 +272,16 @@ export class LineMessagingTransport implements LineTransport {
           idempotent_retryable: true,
         };
       }
+      if (isAbortError(error)) {
+        return { ok: false, delivery_status: "unknown", error: "line_abort_outcome_unknown",
+          error_kind: "non_recoverable", error_code: "line_abort_outcome_unknown" };
+      }
       return { ok: false, delivery_status: "unknown", error: "line_network_outcome_unknown",
         error_kind: "recoverable", error_code: "line_network_error", idempotent_retryable: true };
     } finally {
       clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", abortForCaller);
     }
-    const text = await res.text();
-    const parsed = parseJsonObject(text);
     const requestId =
       res.headers.get("x-line-request-id") ??
       res.headers.get("x-request-id") ??
@@ -263,6 +292,12 @@ export class LineMessagingTransport implements LineTransport {
     const acceptedRequestId = res.headers.get("x-line-accepted-request-id") ?? undefined;
     if (res.status === 409 && acceptedRequestId && isSafeRequestId(acceptedRequestId)) {
       return { ok: true, delivery_status: "delivered", request_id: acceptedRequestId };
+    }
+    let parsed: Record<string, unknown> = {};
+    try {
+      parsed = parseJsonObject(await res.text());
+    } catch {
+      // HTTP status and headers already establish the delivery classification.
     }
     const retryAfterHeader = res.status === 429 ? res.headers.get("retry-after") : null;
     const retryAfter = parseRetryAfter(retryAfterHeader);
