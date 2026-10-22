@@ -37,6 +37,7 @@ describe("LINE signed webhook to Gateway inbound consumer", () => {
       channel_destination: DESTINATION,
       inbound_grants: [grant],
       inbox: store,
+      delivery_store: store,
       log: () => undefined,
     });
     const router = new InboundRouter({

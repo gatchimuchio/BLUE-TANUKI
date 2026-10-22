@@ -5,9 +5,6 @@ import type {
 } from "@blue-tanuki/protocol";
 import {
   classifyChannelDeliveryError,
-  isRecoverableChannelDeliveryError,
-  withRetryBackoff,
-  type BackoffOptions,
   type InboundChannel,
   type InboundHandler,
   type OutboundChannel,
@@ -19,6 +16,7 @@ import {
   LineMessagingTransport,
   type LineFetch,
   type LineInboundMessage,
+  type LineOutboundDeliveryStore,
   type LinePostResult,
   type LineTransport,
 } from "./transport.js";
@@ -42,11 +40,9 @@ export interface LineInboundEventInbox {
 
 export interface LineRetryConfig {
   max_retries: number;
-  base_delay_ms: number;
-  max_delay_ms: number;
-  jitter_ratio: number;
+  base_delay_ms?: number;
+  max_delay_ms?: number;
   sleep?: (ms: number) => Promise<void>;
-  random?: () => number;
 }
 
 export interface LineOptions {
@@ -60,6 +56,10 @@ export interface LineOptions {
   inbound_grants?: readonly LineInboundGrant[];
   /** Gateway-owned digest-only replay inbox; inbound is disabled without it. */
   inbox?: LineInboundEventInbox;
+  /** Gateway-owned durable outbox required for every active transport. */
+  delivery_store?: LineOutboundDeliveryStore;
+  /** Pending reply payload expiry. Default: 24 hours. */
+  delivery_ttl_ms?: number;
   webhook_host?: string;
   webhook_port?: number;
   webhook_route?: string;
@@ -77,8 +77,8 @@ const DEFAULT_RETRY: LineRetryConfig = {
   max_retries: 3,
   base_delay_ms: 500,
   max_delay_ms: 30_000,
-  jitter_ratio: 0.2,
 };
+const DEFAULT_DELIVERY_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface SentRecord {
   payload: ChannelSendPayload;
@@ -100,12 +100,12 @@ export class LineChannel implements InboundChannel, OutboundChannel {
   private started = false;
   private counter = 0;
   private transport: LineTransport | null = null;
+  private lifecycleAbort = new AbortController();
 
   constructor(private readonly opts: LineOptions = {}) {}
 
   async start(handler: InboundHandler): Promise<void> {
     if (this.started) return;
-    this.started = true;
 
     if (this.opts.transport) {
       this.transport = this.opts.transport;
@@ -124,8 +124,14 @@ export class LineChannel implements InboundChannel, OutboundChannel {
     } else {
       this.silent = true;
       this.log("[line] WARN LINE_CHANNEL_ACCESS_TOKEN unset - running in silent mode");
+      this.started = true;
       return;
     }
+
+    if (!this.opts.delivery_store) throw new Error("line_durable_delivery_store_required_for_active_transport");
+    validateRetryConfig(this.opts.retry, this.opts.delivery_ttl_ms);
+    this.lifecycleAbort = new AbortController();
+    this.started = true;
 
     try {
       await this.transport.start(async (m) => {
@@ -171,7 +177,13 @@ export class LineChannel implements InboundChannel, OutboundChannel {
           }
         }
       });
+      this.silent = false;
       this.log("[line] active");
+      for (const pending of this.opts.delivery_store.pending()) {
+        void this.dispatchPersistedDelivery(pending.delivery_id).then((result) => {
+          this.log(`[line] recovered outbound delivery state=${result.ok ? "delivered" : result.delivery_status ?? "unknown"}`);
+        }).catch(() => this.log("[line] recovered outbound delivery remains unresolved"));
+      }
     } catch (e) {
       this.silent = true;
       this.log(
@@ -184,6 +196,7 @@ export class LineChannel implements InboundChannel, OutboundChannel {
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
+    this.lifecycleAbort.abort();
     if (this.transport) {
       try {
         await this.transport.stop();
@@ -226,12 +239,23 @@ export class LineChannel implements InboundChannel, OutboundChannel {
       };
     }
 
-    const retryCfg = this.opts.retry === false ? null : (this.opts.retry ?? DEFAULT_RETRY);
-    const callOnce = (): Promise<LinePostResult> => {
-      if (context?.signal?.aborted) return Promise.reject(new Error("channel_send_cancelled_before_transport_dispatch"));
-      return this.transport!.postMessage({ target: payload.target, text: payload.content }, context?.signal);
-    };
-    const r = retryCfg ? await withLineRetry(callOnce, retryCfg, this.opts.log, payload.target, context?.signal) : await callOnce();
+    const deliveryId = randomUUID();
+    const now = Date.now();
+    const ttl = this.opts.delivery_ttl_ms ?? DEFAULT_DELIVERY_TTL_MS;
+    let r: LinePostResult;
+    try {
+      this.opts.delivery_store!.enqueue({
+        delivery_id: deliveryId,
+        channel: "line",
+        target: payload.target,
+        text: payload.content,
+        expires_at_ms: now + ttl,
+      }, now);
+      r = await this.dispatchPersistedDelivery(deliveryId, context?.signal);
+    } catch {
+      r = { ok: false, delivery_status: "unknown", error: "line_delivery_state_unavailable",
+        error_kind: "non_recoverable", error_code: "delivery_state_unavailable" };
+    }
 
     const details = r.ok
       ? null
@@ -256,10 +280,11 @@ export class LineChannel implements InboundChannel, OutboundChannel {
       this.log(
         `[line] sent target=${payload.target} request_id=${external_id} commit=${meta.upstream_commit_hash.slice(0, 8)}`,
       );
-      return { delivered: true, external_id };
+      return { delivered: true, delivery_status: "delivered", external_id };
     }
     return {
       delivered: false,
+      delivery_status: r.delivery_status ?? "unknown",
       error: r.error ?? "line_send_failed",
       error_kind: r.error_kind ?? details!.error_kind,
       error_code: r.error_code ?? details!.error_code,
@@ -278,6 +303,134 @@ export class LineChannel implements InboundChannel, OutboundChannel {
 
   private log(line: string): void {
     (this.opts.log ?? console.log)(line);
+  }
+
+  private async dispatchPersistedDelivery(deliveryId: string, callerSignal?: AbortSignal): Promise<LinePostResult> {
+    const store = this.opts.delivery_store!;
+    const retry = this.opts.retry === false ? null : { ...DEFAULT_RETRY, ...this.opts.retry };
+    while (true) {
+      if (callerSignal?.aborted) {
+        try { return stopPendingAfterCallerCancellation(store, deliveryId); }
+        catch { return { ok: false, delivery_status: "unknown", error: "line_delivery_state_unavailable",
+          error_code: "delivery_state_unavailable" }; }
+      }
+      const pending = store.pending().find((row) => row.delivery_id === deliveryId);
+      if (!pending) {
+        const status = store.status(deliveryId);
+        if (status?.delivery_state === "delivered") return {
+          ok: true, delivery_status: "delivered", request_id: status.external_request_id,
+        };
+        const delivery_status = status?.delivery_state === "not_delivered" || status?.delivery_state === "retry_exhausted"
+          ? "not_delivered" : "unknown";
+        return { ok: false, delivery_status, error: status?.error_code ?? "line_delivery_state_unavailable",
+          error_code: status?.error_code,
+          ...(status?.retry_after_ms === undefined ? {} : { retry_after_ms: status.retry_after_ms }) };
+      }
+
+      const delay = Math.max(0, pending.not_before_ms - Date.now());
+      const lifecycleSignal = this.lifecycleAbort.signal;
+      const waitSignal = callerSignal ? AbortSignal.any([callerSignal, lifecycleSignal]) : lifecycleSignal;
+      if (delay > 0 && !await sleepWithSignal(delay, waitSignal, retry?.sleep)) {
+        if (callerSignal?.aborted) {
+          try { return stopPendingAfterCallerCancellation(store, deliveryId); }
+          catch { return { ok: false, delivery_status: "unknown", error: "line_delivery_state_unavailable",
+            error_code: "delivery_state_unavailable" }; }
+        }
+        return { ok: false, delivery_status: "not_delivered", error: "line_delivery_wait_interrupted",
+          error_code: "delivery_wait_interrupted", retry_after_ms: delay };
+      }
+      if (callerSignal?.aborted) {
+        try { return stopPendingAfterCallerCancellation(store, deliveryId); }
+        catch { return { ok: false, delivery_status: "unknown", error: "line_delivery_state_unavailable",
+          error_code: "delivery_state_unavailable" }; }
+      }
+      if (lifecycleSignal.aborted) return { ok: false, delivery_status: "not_delivered",
+        error: "line_delivery_wait_interrupted", error_code: "delivery_wait_interrupted",
+        ...(delay > 0 ? { retry_after_ms: delay } : {}) };
+
+      const claim = store.claimDelivery(deliveryId);
+      if (!claim) continue;
+      if (callerSignal?.aborted) {
+        store.settleDelivery(deliveryId, "not_delivered", { error_code: "cancelled_before_dispatch" });
+        return cancelledBeforeDispatch();
+      }
+      let result: LinePostResult;
+      try {
+        result = await this.transport!.postMessage({ target: claim.target, text: claim.text, retry_key: claim.delivery_id },
+          callerSignal ? AbortSignal.any([callerSignal, lifecycleSignal]) : lifecycleSignal);
+      } catch {
+        result = { ok: false, delivery_status: "unknown", error: "line_transport_outcome_unknown",
+          error_kind: "non_recoverable", error_code: "delivery_outcome_unknown" };
+      }
+      if (result.ok) {
+        store.settleDelivery(deliveryId, "delivered", {
+          ...(result.request_id ? { external_request_id: result.request_id } : {}),
+        });
+        return { ...result, delivery_status: "delivered" };
+      }
+
+      if (result.rate_limit_rejected) {
+        if (result.retry_after_invalid) {
+          store.settleDelivery(deliveryId, "retry_exhausted", { error_code: "retry_after_invalid" });
+          return { ...result, delivery_status: "not_delivered", error_code: "retry_after_invalid" };
+        }
+        if (result.retry_after_ms === undefined) {
+          store.settleDelivery(deliveryId, "not_delivered", { error_code: "retry_after_missing" });
+          return { ...result, delivery_status: "not_delivered", error_code: "retry_after_missing" };
+        }
+        if (!retry || claim.attempt_count > retry.max_retries) {
+          store.settleDelivery(deliveryId, "retry_exhausted", {
+            error_code: "rate_limited", retry_after_ms: result.retry_after_ms,
+          });
+          return { ...result, delivery_status: "not_delivered", error_code: "rate_limited" };
+        }
+        const notBefore = Date.now() + result.retry_after_ms;
+        if (!Number.isSafeInteger(notBefore) || notBefore >= claim.expires_at_ms) {
+          store.settleDelivery(deliveryId, "retry_exhausted", {
+            error_code: "delivery_expired", retry_after_ms: result.retry_after_ms,
+          });
+          return { ...result, delivery_status: "not_delivered", error_code: "delivery_expired" };
+        }
+        store.scheduleRetry(deliveryId, notBefore, result.retry_after_ms);
+        if (callerSignal?.aborted) {
+          try { store.cancelPending(deliveryId); } catch { /* already settled */ }
+          return { ...result, delivery_status: "not_delivered" };
+        }
+        if (lifecycleSignal.aborted) return { ...result, delivery_status: "not_delivered" };
+        this.log(`[line] persisted rate-limit retry attempt=${claim.attempt_count} delay_ms=${result.retry_after_ms} delivery=${deliveryId.slice(0, 8)}`);
+        continue;
+      }
+
+      if (result.idempotent_retryable && retry) {
+        if (callerSignal?.aborted) {
+          store.settleDelivery(deliveryId, "outcome_unknown", { error_code: "cancelled_after_ambiguous_send" });
+          return { ...result, delivery_status: "unknown", error_code: "cancelled_after_ambiguous_send" };
+        }
+        if (claim.attempt_count > retry.max_retries) {
+          store.settleDelivery(deliveryId, "outcome_unknown", { error_code: "retry_exhausted" });
+          return { ...result, delivery_status: "unknown", error_code: "retry_exhausted" };
+        }
+        const backoff = Math.min(retry.max_delay_ms!, retry.base_delay_ms! * (2 ** (claim.attempt_count - 1)));
+        const notBefore = Date.now() + backoff;
+        if (!Number.isSafeInteger(notBefore) || notBefore >= claim.expires_at_ms) {
+          store.settleDelivery(deliveryId, "outcome_unknown", { error_code: "delivery_expired" });
+          return { ...result, delivery_status: "unknown", error_code: "delivery_expired" };
+        }
+        store.scheduleRetry(deliveryId, notBefore, undefined, Date.now(), "server_retry");
+        if (callerSignal?.aborted) {
+          try { store.abandonPending(deliveryId, "outcome_unknown", "cancelled_after_ambiguous_send"); } catch { /* already settled */ }
+          return { ...result, delivery_status: "unknown" };
+        }
+        if (lifecycleSignal.aborted) return { ...result, delivery_status: "unknown" };
+        this.log(`[line] persisted idempotent retry attempt=${claim.attempt_count} delay_ms=${backoff} delivery=${deliveryId.slice(0, 8)}`);
+        continue;
+      }
+
+      store.settleDelivery(deliveryId,
+        result.delivery_status === "not_delivered" ? "not_delivered" : "outcome_unknown",
+        { ...(result.error_code ? { error_code: result.error_code } : {}) });
+      return result;
+    }
   }
 }
 
@@ -346,43 +499,69 @@ function isSafeLineIdentifier(value: unknown): value is string {
     value.trim() === value && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
-async function withLineRetry(
-  callOnce: () => Promise<LinePostResult>,
-  retryCfg: LineRetryConfig,
-  log: ((line: string) => void) | undefined,
-  target: string,
-  cancelSignal?: AbortSignal,
-): Promise<LinePostResult> {
-  const opts: BackoffOptions<LinePostResult> = {
-    max_retries: retryCfg.max_retries,
-    base_delay_ms: retryCfg.base_delay_ms,
-    max_delay_ms: retryCfg.max_delay_ms,
-    jitter_ratio: retryCfg.jitter_ratio,
-    sleep: retryCfg.sleep,
-    random: retryCfg.random,
-    is_retryable: (signal) => {
-      if (cancelSignal?.aborted) return false;
-      if (signal.kind === "throw") {
-        return isRecoverableChannelDeliveryError({
-          error: signal.error instanceof Error ? signal.error.message : String(signal.error),
-        });
-      }
-      if (signal.value.ok) return false;
-      return isRecoverableChannelDeliveryError({
-        error: signal.value.error,
-        retry_after_ms: signal.value.retry_after_ms,
-      });
-    },
-    extract_retry_after_ms: (signal) =>
-      signal.kind === "value" ? (signal.value.retry_after_ms ?? null) : null,
-    on_retry: ({ attempt, delay_ms }) => {
-      log?.(`[line] retry attempt=${attempt} delay_ms=${delay_ms} target=${target}`);
-    },
-  };
-  return await withRetryBackoff(callOnce, opts);
+function validateRetryConfig(retry: LineRetryConfig | false | undefined, ttl: number | undefined): void {
+  if (retry !== undefined && retry !== false && (!Number.isSafeInteger(retry.max_retries) || retry.max_retries < 0 ||
+      retry.max_retries > 10 || (retry.base_delay_ms !== undefined &&
+        (!Number.isSafeInteger(retry.base_delay_ms) || retry.base_delay_ms <= 0 || retry.base_delay_ms > 60_000)) ||
+      (retry.max_delay_ms !== undefined &&
+        (!Number.isSafeInteger(retry.max_delay_ms) || retry.max_delay_ms <= 0 || retry.max_delay_ms > 60_000)) ||
+      (retry.base_delay_ms !== undefined && retry.max_delay_ms !== undefined && retry.max_delay_ms < retry.base_delay_ms))) {
+    throw new Error("line_retry_configuration_invalid");
+  }
+  if (ttl !== undefined && (!Number.isSafeInteger(ttl) || ttl <= 0 || ttl > DEFAULT_DELIVERY_TTL_MS)) {
+    throw new Error("line_delivery_ttl_invalid");
+  }
+}
+
+function cancelledBeforeDispatch(): LinePostResult {
+  return { ok: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
+    error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+}
+
+function stopPendingAfterCallerCancellation(store: LineOutboundDeliveryStore, deliveryId: string): LinePostResult {
+  const status = store.status(deliveryId);
+  if (status?.delivery_state === "retry_wait" && status.error_code === "server_retry") {
+    store.abandonPending(deliveryId, "outcome_unknown", "cancelled_after_ambiguous_send");
+    return { ok: false, delivery_status: "unknown", error: "cancelled_after_ambiguous_send",
+      error_code: "cancelled_after_ambiguous_send" };
+  }
+  store.cancelPending(deliveryId);
+  return cancelledBeforeDispatch();
+}
+
+async function sleepWithSignal(ms: number, signal: AbortSignal, sleep?: (ms: number) => Promise<void>): Promise<boolean> {
+  if (signal.aborted) return false;
+  if (sleep) {
+    let aborted = false;
+    const onAbort = (): void => { aborted = true; };
+    signal.addEventListener("abort", onAbort, { once: true });
+    try { await sleep(ms); } finally { signal.removeEventListener("abort", onAbort); }
+    return !aborted && !signal.aborted;
+  }
+  return await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve(false);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function lineNextAction(result: LinePostResult): string {
+  if (result.delivery_status === "unknown") {
+    return "LINE delivery remains unresolved. Review the Gateway delivery record before creating a new send for the same reply.";
+  }
+  if (result.error_code === "rate_limited") {
+    return "LINE rejected the message at the rate limit and the retry budget is exhausted. Confirm delivery state before sending it again.";
+  }
+  if (result.error_code === "retry_after_missing" || result.error_code === "retry_after_invalid") {
+    return "LINE rate limiting did not provide a usable retry interval. The reply was not resent; inspect the delivery record before trying again.";
+  }
   const error = result.error ?? "line_send_failed";
   const details = classifyChannelDeliveryError({
     error,

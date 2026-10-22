@@ -20,17 +20,79 @@ export type LineInboundHandler = (m: LineInboundMessage) => Promise<void>;
 
 export interface LinePostResult {
   ok: boolean;
+  delivery_status?: "delivered" | "not_delivered" | "unknown";
   request_id?: string;
   error?: string;
   error_kind?: ChannelDeliveryErrorKind;
   error_code?: string;
   retry_after_ms?: number;
+  rate_limit_rejected?: true;
+  retry_after_invalid?: true;
+  /** The same immutable request may be retried with its X-Line-Retry-Key. */
+  idempotent_retryable?: true;
+}
+
+export type LineOutboundDeliveryState = "queued" | "dispatching" | "retry_wait" | "delivered" |
+  "not_delivered" | "outcome_unknown" | "retry_exhausted";
+
+export interface LineOutboundDeliveryInput {
+  readonly delivery_id: string;
+  readonly channel: "line";
+  readonly target: string;
+  readonly text: string;
+  readonly expires_at_ms: number;
+}
+
+export interface LineOutboundDeliveryClaim extends LineOutboundDeliveryInput {
+  readonly payload_digest: string;
+  readonly attempt_count: number;
+}
+
+export interface LinePendingDelivery {
+  readonly delivery_id: string;
+  readonly delivery_state: "queued" | "retry_wait";
+  readonly not_before_ms: number;
+}
+
+export interface LineOutboundDeliveryStatus {
+  readonly delivery_id: string;
+  readonly payload_digest: string;
+  readonly delivery_state: LineOutboundDeliveryState;
+  readonly attempt_count: number;
+  readonly not_before_ms: number;
+  readonly expires_at_ms: number;
+  readonly retry_after_ms?: number;
+  readonly external_request_id?: string;
+  readonly error_code?: string;
+}
+
+/** Gateway-owned durable outbox. Reply text is retained only while delivery is pending. */
+export interface LineOutboundDeliveryStore {
+  enqueue(input: LineOutboundDeliveryInput, now_ms?: number): void;
+  pending(now_ms?: number): readonly LinePendingDelivery[];
+  claimDelivery(delivery_id: string, now_ms?: number): LineOutboundDeliveryClaim | null;
+  scheduleRetry(delivery_id: string, not_before_ms: number, retry_after_ms?: number, now_ms?: number,
+    error_code?: "rate_limited" | "server_retry"): void;
+  settleDelivery(
+    delivery_id: string,
+    state: "delivered" | "not_delivered" | "outcome_unknown" | "retry_exhausted",
+    result?: { readonly external_request_id?: string; readonly error_code?: string; readonly retry_after_ms?: number },
+    now_ms?: number,
+  ): void;
+  cancelPending(delivery_id: string, now_ms?: number): void;
+  abandonPending(
+    delivery_id: string,
+    state: "not_delivered" | "outcome_unknown",
+    error_code: string,
+    now_ms?: number,
+  ): void;
+  status(delivery_id: string): LineOutboundDeliveryStatus | null;
 }
 
 export interface LineTransport {
   start(handler: LineInboundHandler): Promise<void>;
   stop(): Promise<void>;
-  postMessage(args: { target: string; text: string }, signal?: AbortSignal): Promise<LinePostResult>;
+  postMessage(args: { target: string; text: string; retry_key: string }, signal?: AbortSignal): Promise<LinePostResult>;
 }
 
 interface LineMessagingTransportOptions {
@@ -121,10 +183,11 @@ export class LineMessagingTransport implements LineTransport {
     return this.listeningPort;
   }
 
-  async postMessage(args: { target: string; text: string }, callerSignal?: AbortSignal): Promise<LinePostResult> {
+  async postMessage(args: { target: string; text: string; retry_key: string }, callerSignal?: AbortSignal): Promise<LinePostResult> {
     if (!args.target.trim()) {
       return {
         ok: false,
+        delivery_status: "not_delivered",
         error: "missing_line_target",
         error_kind: "non_recoverable",
         error_code: "missing_line_target",
@@ -133,15 +196,21 @@ export class LineMessagingTransport implements LineTransport {
     if (!this.opts.channel_access_token?.trim()) {
       return {
         ok: false,
+        delivery_status: "not_delivered",
         error: "line_channel_access_token_unset",
         error_kind: "non_recoverable",
         error_code: "line_not_configured",
       };
     }
+    if (!isRetryKey(args.retry_key)) {
+      return { ok: false, delivery_status: "not_delivered", error: "line_retry_key_invalid",
+        error_kind: "non_recoverable", error_code: "retry_key_invalid" };
+    }
     const fetchImpl = this.opts.fetch ?? globalThis.fetch;
     if (!fetchImpl) {
       return {
         ok: false,
+        delivery_status: "not_delivered",
         error: "fetch_unavailable",
         error_kind: "non_recoverable",
         error_code: "fetch_unavailable",
@@ -158,6 +227,7 @@ export class LineMessagingTransport implements LineTransport {
           authorization: `Bearer ${this.opts.channel_access_token}`,
           "content-type": "application/json",
           accept: "application/json",
+          "x-line-retry-key": args.retry_key,
         },
         body: JSON.stringify({
           to: args.target,
@@ -169,12 +239,15 @@ export class LineMessagingTransport implements LineTransport {
       if (isAbortError(error)) {
         return {
           ok: false,
+          delivery_status: "unknown",
           error: `line_timeout_${timeoutMs}ms`,
           error_kind: "recoverable",
           error_code: "line_timeout",
+          idempotent_retryable: true,
         };
       }
-      throw error;
+      return { ok: false, delivery_status: "unknown", error: "line_network_outcome_unknown",
+        error_kind: "recoverable", error_code: "line_network_error", idempotent_retryable: true };
     } finally {
       clearTimeout(timer);
     }
@@ -185,13 +258,28 @@ export class LineMessagingTransport implements LineTransport {
       res.headers.get("x-request-id") ??
       undefined;
     if (res.status >= 200 && res.status < 300) {
-      return { ok: true, request_id: requestId };
+      return { ok: true, delivery_status: "delivered", request_id: requestId };
     }
+    const acceptedRequestId = res.headers.get("x-line-accepted-request-id") ?? undefined;
+    if (res.status === 409 && acceptedRequestId && isSafeRequestId(acceptedRequestId)) {
+      return { ok: true, delivery_status: "delivered", request_id: acceptedRequestId };
+    }
+    const retryAfterHeader = res.status === 429 ? res.headers.get("retry-after") : null;
+    const retryAfter = parseRetryAfter(retryAfterHeader);
     return {
       ok: false,
+      delivery_status: res.status === 429 || res.status < 500 ? "not_delivered" : "unknown",
       request_id: requestId,
       error: lineError(res.status, parsed),
-      retry_after_ms: retryAfterMs(res.headers.get("retry-after")),
+      ...(res.status === 429 ? {
+        rate_limit_rejected: true as const,
+        ...(retryAfterHeader !== null && !retryAfter.valid ? { retry_after_invalid: true as const } : {}),
+        ...(retryAfter.valid ? { retry_after_ms: retryAfter.retry_after_ms } : {}),
+        error_code: "rate_limited",
+      } : {
+        error_code: `line_http_${res.status}`,
+        ...(res.status === 500 ? { idempotent_retryable: true as const } : {}),
+      }),
     };
   }
 
@@ -360,16 +448,28 @@ function lineError(status: number, body: Record<string, unknown>): string {
   return `line_http_${status}`;
 }
 
-function retryAfterMs(value: string | null): number | undefined {
-  if (!value) return undefined;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds * 1000);
-  const time = Date.parse(value);
-  if (!Number.isNaN(time)) {
-    const delta = time - Date.now();
-    return delta > 0 ? delta : undefined;
+function parseRetryAfter(value: string | null): { readonly valid: false } |
+  { readonly valid: true; readonly retry_after_ms: number } {
+  if (value === null) return { valid: false };
+  if (/^(?:0|[1-9]\d*)$/u.test(value)) {
+    const seconds = Number(value);
+    if (Number.isSafeInteger(seconds) && seconds <= Math.floor(Number.MAX_SAFE_INTEGER / 1000)) {
+      return { valid: true, retry_after_ms: seconds * 1000 };
+    }
+    return { valid: false };
   }
-  return undefined;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return { valid: false };
+  const delay = Math.max(0, time - Date.now());
+  return Number.isSafeInteger(delay) ? { valid: true, retry_after_ms: delay } : { valid: false };
+}
+
+function isRetryKey(value: string): boolean {
+  return /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu.test(value);
+}
+
+function isSafeRequestId(value: string): boolean {
+  return value.length > 0 && value.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 function readString(obj: Record<string, unknown>, key: string): string | undefined {

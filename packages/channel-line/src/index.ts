@@ -14,4 +14,10 @@ export {
   type LineInboundMessage,
   type LineInboundHandler,
   type LinePostResult,
+  type LineOutboundDeliveryInput,
+  type LineOutboundDeliveryClaim,
+  type LineOutboundDeliveryState,
+  type LinePendingDelivery,
+  type LineOutboundDeliveryStatus,
+  type LineOutboundDeliveryStore,
 } from "./transport.js";

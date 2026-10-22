@@ -4428,11 +4428,13 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   const lineIngressConfigured = Boolean(
     lineChannelSecret && lineDestination && plugins.has("@blue-tanuki/channel-line"),
   );
+  const lineChannelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  const lineSenderConfigured = Boolean(lineChannelAccessToken?.trim() && plugins.has("@blue-tanuki/channel-line"));
   const lineInboundGrants = lineIngressConfigured
     ? parseLineInboundGrants(process.env.LINE_INBOUND_GRANTS_JSON)
     : [];
-  const lineEventStore = lineIngressConfigured && lineDestination
-    ? GatewayLineEventStore.fromEnvironment(process.env, lineDestination)
+  const lineEventStore = (lineIngressConfigured || lineSenderConfigured)
+    ? GatewayLineEventStore.fromEnvironment(process.env, lineDestination, lineChannelAccessToken)
     : null;
   const telegram = plugins.createChannel<InboundChannel & OutboundChannel>({
     package_name: "@blue-tanuki/channel-telegram",
@@ -4497,7 +4499,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       "secrets:LINE_CHANNEL_ACCESS_TOKEN",
       ...(lineIngressConfigured ? ["network:listen", "secrets:LINE_CHANNEL_SECRET"] : []),
     ], "register line channel", {
-      channel_access_token: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+      channel_access_token: lineChannelAccessToken,
+      ...(lineEventStore ? { delivery_store: lineEventStore } : {}),
       ...(lineIngressConfigured ? {
         channel_secret: lineChannelSecret,
         channel_destination: lineDestination,
