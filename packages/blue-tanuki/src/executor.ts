@@ -19,6 +19,8 @@ import {
   canonicalExecutorCommandSnapshot,
   inspectExecutionResultDelivery,
   AgentDelegationContractSchema,
+  OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
+  OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
 } from "@blue-tanuki/protocol";
 import { approvalContextFromCommand, consumeHdsExecutionAuthorityBinding, finalReviewRequired, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import type { ApprovalOperation, ApprovalRisk, HDSExecutionAuthorityBinding } from "@blue-tanuki/hds-brain";
@@ -1599,6 +1601,15 @@ function digestLLMRequest(request: LLMRequest): string {
 
 const AGENT_WORKER_CANCEL_OBSERVATION_GRACE_MS = 1_000;
 
+// Delegation wraps an existing plan-compute context. Keep the inner context's
+// local P version in the compute receipt when citations or observations are
+// selected; the delegation contract separately binds and limits the workers.
+const AGENT_DELEGATION_LOCAL_P_VERSIONS = new Set([
+  "blue-tanuki.plan-compute-agent-delegation.v1",
+  OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
+  OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
+]);
+
 const AGENT_ROLE_INSTRUCTIONS: Readonly<Record<AgentWorkerRole, string>> = Object.freeze({
   division: "親taskを有限な下位課題へ分解し、依存順と未解決点だけを候補として返してください。計画や実行を確定しないでください。",
   independent_comparison: "親taskを独立に解釈し、別の候補方針・相違点・不足条件だけを返してください。他roleの出力は見ず、独立性を保ってください。",
@@ -1628,7 +1639,7 @@ async function withAgentDelegationCandidates(input: {
   const contract = parsed.data;
   const context = input.context;
   const parentScope = context?.budget_scope;
-  if (context?.local_p_version !== "blue-tanuki.plan-compute-agent-delegation.v1" ||
+  if (!AGENT_DELEGATION_LOCAL_P_VERSIONS.has(context?.local_p_version ?? "") ||
       !parentScope || parentScope.task_identity_digest !== contract.parent_task_identity_digest ||
       parentScope.parent_task_identity_digest !== contract.parent_budget_identity_digest) {
     throw new Error("agent_delegation_parent_binding_invalid");

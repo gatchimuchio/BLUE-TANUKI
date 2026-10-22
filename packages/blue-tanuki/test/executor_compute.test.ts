@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { CompleteHistoryStore } from "@blue-tanuki/hds-brain";
-import type { ComputeResourceUse, ExecuteCommand } from "@blue-tanuki/protocol";
+import {
+  OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
+  OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
+  type ComputeResourceUse,
+  type ExecuteCommand,
+} from "@blue-tanuki/protocol";
 import { Executor, createExecutorApprovalAuthority } from "../src/executor.js";
 import type { AgentWorkerLifecycleEvent } from "../src/executor.js";
 import type { ComputeBackend, ComputeBudgetPort, ComputeRequest, ComputeResult } from "../src/llm/compute.js";
@@ -321,7 +326,11 @@ describe("Executor compute boundary", () => {
     expect(backend.seen[0]).toEqual(expectedRequest);
   });
 
-  it("runs fixed C child roles inside the parent budget and returns them only as candidates", async () => {
+  it.each([
+    "blue-tanuki.plan-compute-agent-delegation.v1",
+    OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
+    OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
+  ])("runs fixed C child roles inside the parent budget and returns them only as candidates for %s", async (localPVersion) => {
     const backend = new CapturingBackend({ content: "role candidate", tokens_used: 2, model: "fixture-model-v1" });
     const registry = new LLMRegistry({ retry: { max_attempts: 1 } }).register(backend, [], {
       capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.1, currency: "USD" },
@@ -347,7 +356,7 @@ describe("Executor compute boundary", () => {
     delete planCommand.payload.session_id;
     planCommand.payload.compute_context = {
       ...planCommand.payload.compute_context!,
-      local_p_version: "blue-tanuki.plan-compute-agent-delegation.v1",
+      local_p_version: localPVersion,
       budget_scope: { parent_task_identity_digest: budgetDigest, task_identity_digest: taskDigest },
     };
     planCommand.payload.agent_delegation = {

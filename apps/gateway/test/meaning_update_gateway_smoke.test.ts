@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
 import { meaningUpdateCandidateDigest } from "@blue-tanuki/protocol";
 
@@ -104,7 +105,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
           may_apply: false as const,
           used_for_authority: false as const,
         } : undefined;
-        const plan = providerCalls === 5 ? {
+        const plan = providerCalls === 9 ? {
           version: "operation-core.v1",
           plan_id: `c0702-post-reassessment-plan:${planComputeRequestId ?? "missing"}`,
           request_id: planComputeRequestId,
@@ -125,7 +126,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
           planner_output_used_for_authority: false,
           hds_brain_authority_required: true,
         } : undefined;
-        if (providerCalls === 5 && (!planComputeRequestId || !context)) {
+        if (providerCalls === 9 && (!planComputeRequestId || !context)) {
           throw new Error("post-reassessment plan compute context was not available");
         }
         const content = plan ? JSON.stringify({ plan }) : JSON.stringify({ schema_version: "blue-tanuki.memory-citation-response.v1",
@@ -398,7 +399,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
         approval_level: "L3_final_review", final_review_required: true, content_review_required: false });
       expect(existsSync(join(fileRoot, "delete-target.txt"))).toBe(true);
       expect(readFileSync(join(fileRoot, "delete-target.txt"), "utf8")).toBe("synthetic pending-delete target\n");
-      expect(providerCalls).toBe(5);
+      expect(providerCalls).toBe(9);
 
       const deleteApprovalPath = `http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(pendingDeleteApproval.command_id))}`;
       const deleteApproved = await fetchRespectingRetryAfter(deleteApprovalPath, { method: "POST",
@@ -435,7 +436,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
         expect(readFileSync(persistedFile, "utf8")).not.toContain(candidateMeaning);
         expect(readFileSync(persistedFile, "utf8")).not.toContain(revisedMeaning);
       }
-      expect(providerCalls).toBe(5);
+      expect(providerCalls).toBe(9);
     } finally {
       if (gateway) await stopChild(gateway.child);
       await closeServer(provider);
@@ -555,7 +556,7 @@ async function waitForOperationPlan(port: number, gateway: CapturedProcess, prov
     if (response.ok) {
       const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
       const plan = snapshot.operation_plan_status?.plans?.[0];
-      if (providerCalls() >= 5 && plan?.status === "awaiting_step_review" && Array.isArray(plan.steps) && plan.steps.length > 0) {
+      if (providerCalls() >= 9 && plan?.status === "awaiting_step_review" && Array.isArray(plan.steps) && plan.steps.length > 0) {
         return plan;
       }
     }
@@ -643,6 +644,11 @@ function isolatedEnvironment(providerPort: number, gatewayPort: number, auditDir
     BLUE_TANUKI_FILE_ROOT: join(auditDir, "file-root"), BLUE_TANUKI_STATE_ROOT: stateRoot,
     BLUE_TANUKI_MEMORY_FILE: memoryFile, BLUE_TANUKI_AUDIT_DIR: auditDir,
     BLUE_TANUKI_COMPLETE_HISTORY_FILE: historyFile, BLUE_TANUKI_SESSION_DIR: sessionDir,
+    BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+    BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({
+      "c0702-local-fixture": { capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0, currency: "USD" } },
+    }),
     LLM_BACKEND: "c0702-local-fixture", LLM_PROVIDERS_JSON: JSON.stringify([{
       name: "c0702-local-fixture", type: "openai-compatible", endpoint: `http://127.0.0.1:${providerPort}/v1`,
       model: "c0702-local-fixture", aliases: [], headers: {},
