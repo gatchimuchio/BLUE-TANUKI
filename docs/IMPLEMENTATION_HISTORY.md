@@ -4,6 +4,29 @@
 
 ---
 
+### 履歴ログ：`QEB-KB01-BASELINE-CONSUMERS`
+
+現行pin rev3.0三点全文・適用AGENTS・active指示・現物を同期し、`main`／`origin/main`=`7e163b0b8fbf50582875e4f3d9493c7ee4a45ce7`を基点にK-B0／K-B1を再照合した。コードの入口・J/M保存責任は`BASELINE_OBSERVED`／`RESPONSIBILITY_MAPPED`の静的範囲であり、全体実行の完成を示さない。親agentを単一writerとし、subagent二つはread-onlyで入口・writerを対応付けた。
+
+- I-01：Unixの`canonical_target_path`が`/home`等を`//home`へ変換しHOME祖先照合を外す既存欠陥を、非破壊のhelper呼出しで再現した。root結合を修正し、root直下の既存・未生成対象の同一性と広域拒否を同じhelperで確認した。source／productの配布consumerは共通helperを利用する。危険な広域対象への削除は実施していない。
+- I-03：main `/app`のLLM設定にtimeout／費用profile／予算policyの読込・保存・Verifyを接続した。provider疎通PASSのみでは通常Computeをready表示せず、CONFIG判定の射程と各仕事時の予算消費照合を明示する。設定変更や非同期Verify中の編集では古い判定を破棄し、保存後のGateway再起動案内を維持する。
+- I-04：`operation_plan_runtime.test.ts`の共通rigに現在必須の`LLMComputeAdapter`／予算port／worker lifecycleを渡した。旧rigの候補生成前拒否を本番guardの緩和で隠さない。代表2件が候補生成・local file.search・依存結果の失効まで進んだ。fixtureの予算／lifecycle受付は永続live実装の証拠ではない。
+- J/Mの通常・復旧writerと一仕事のproducer→consumerを公開可能な関数・保存責任だけで記録した。観測名APIのpending reconcileをread-onlyと扱わない。目的／意味専用J/M storeは現行backup indexに未収容であり、全意味状態の復旧を完成扱いしない。Rust核・shadow・single-writer cutoverは実装していない。
+
+| QE_BUILDの限定確認 | 結果・射程 |
+|---|---|
+| `pnpm typecheck` → `pnpm build` | PASS。15 workspace projectをbuild。 |
+| WebChat／settings surface／operation plan runtimeの対象選択 | PASS、3 files／7 passed／163対象外。実scriptの設定payload・stale ready無効化・served shell、設定保存→runtime budgeted Compute、代表計画consumerを確認。全170件の結果ではない。 |
+| Unix `safe_target_unix.sh` | PASS、`unix_target_guard=pass`。WSLでsource helperとfixtureを確認。Linux native／macOS installed製品の証拠ではない。 |
+| `pnpm validate:packaging` | PASS、静的な配布consumer整合。新たな配布artifact生成・native installは未実施。 |
+| `pnpm validate:release-hardening` | `pass_pre_signing_blocked`。manual dispatch限定、署名資格不足・manual updateのみの状態を維持。出荷可の判定ではない。 |
+| `pnpm docs:check`／`git diff --check` | PASS、日本語基底移行負債76件を維持。 |
+| 全suite／実provider／live外部作用／5OS実機／QE_QC・QE_QA | 未実施。広いoperation-plan suite全体の現行失敗数は再確定していない。 |
+
+編集前のlocal復旧branch／remote backup tagは二世代とも照合済み：`codex/backup-main`=`7e163b0b8fbf50582875e4f3d9493c7ee4a45ce7`、`codex/backup-main-prev`=`ea856c819971eeb84bf8a2e1b32cde496479a7bf`。保護対象untrackedの添付資料とLinux isolation `target/`を保持し、公開Gitへ追加しない。QE_BUILD継続、SYSTEM_SHAPED／BUILD_COVERED未成立、公開・実provider・別repo変更の保留を維持する。
+
+---
+
 ### 履歴ログ：`QEB-78-F15.02-POSTHOG-REGION-PREFLIGHT`
 
 開始時`main`／`origin/main`=`77bccbb88f012afcf898c74c5ff3832111969cc0`、tracked差分なし（保護対象untracked Linux isolation `target/`は保持）。現行pin rev2.3の三点セット、適用`AGENTS.md`、active指示、F15.02／F15.03、Composio account／execute consumerを同期した。

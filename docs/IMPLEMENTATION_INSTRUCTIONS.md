@@ -12,13 +12,15 @@ rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS 
 
 ownerがrev3.0を指定した時点のlocal／remote `main`は`2964db41dc11ddc3057f47447a85f8a49395c377`だった。パッケージ内の`e28a73f330cb155f46aea00e58cffd3a6b005ae8`はパッケージ作成時の観測値であり、現行HEADではない。CR-0～CR-3の完了根拠は既存履歴にあるが、K-B0で実際の最新HEADと入口を再照合し、古い監査結果を現行状態として転記しない。既に現HEADで成立していれば再実装しない。
 
-## 次のBUILD_BATCH：rev3.0 K-B0／K-B1
+## 現行接続状態と次のBUILD_BATCH
 
-まず現行AGENTS・rev3.0正本・HEAD／dirty／他writer・保護入口・通常利用者仕事を照合する。I-01～I-06およびCR-0～CR-3の各変更が、現在のproduction入口・validator・GUI・consumerで実際に有効かをコードで確かめ、危険な削除・実外部作用は起こさない。I-01等に未保護の危険入口が見つかった場合はその作用口を止め、非破壊の範囲で修正する。
+K-B0／K-B1で現行入口と一仕事のproducer／consumer、J/Mの通常・復旧writerをコードで再照合した。公開可能な責任対応は[`OPERATION_CORE_ARCHITECTURE.md`](OPERATION_CORE_ARCHITECTURE.md)に置く。これは`BASELINE_OBSERVED`／`RESPONSIBILITY_MAPPED`の静的確認範囲であり、全OSの実行証拠や全体実装の完成ではない。
 
-続いて一つの通常仕事を起点に、`controller.ts`／`operation_plan.ts`／`制御状態.ts`／`保存取引.ts`、Gateway、Executor、Approval／Broker、Mの実producer・consumer・write入口・権限源を結び、HDS Frameworkの意味責務とJ/Mの状態所有を対応付ける。行数、型、schema、test数だけで棚卸し完了にしない。今回の成果は`BASELINE_OBSERVED`／`RESPONSIBILITY_MAPPED`の範囲で報告し、未知は`UNKNOWN`として残す。
+I-01のroot直下の二重slashによる広域対象ガードの抜けを修正し、I-03のメイン`/app`にも費用profile・予算policy・timeoutの保存／Verifyを接続した。provider疎通と通常Computeの設定準備を別に表示し、設定変更後の古い準備判定を破棄する。現在の予算消費は仕事ごとの実行時照合が必要であり、設定のreadyは実行許可ではない。I-04の共通試験fixtureには現行Compute／予算／worker lifecycleの依存を渡し、候補生成前の拒否を本番guardの緩和で隠さない。
 
-旧Jの現writerは確認なしに二重化・移管しない。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラ別repo変更、P13公開・出荷GOは保留する。CR条件を確認後、rev3.0工程順に従いCR-2・E2E-01を含む実consumer接続、CR-3の現行consumer再照合、K-B2以降へ進む。試験用一仕事は製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を自動成立させない。
+次はCR-2・E2E-01の同一WebChat仕事を目的→C→J→隔離作用→結果／M→返信・再計画・復帰まで進め、残る未接続を具体化する。続くK-B2では有限な観測から意味更新候補を作り、既存L3採否→M解釈版→次の仕事へ接続する。`plan:reflect`の非採用境界は維持する。目的／意味専用J/M storeが現行backup indexに未収容である点も`BUILD_GAP`として残す。読み取り名のAPIにあるpending reconcile、復旧・projection再構築・migrationのwriterを無視してRust shadowを接続しない。
+
+旧Jの現writerは確認なしに二重化・移管しない。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラ別repo変更、P13公開・出荷GOは保留する。試験用一仕事は製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を自動成立させず、限定testを全suiteや実機の成功へ転記しない。
 
 ## Gitと復旧
 

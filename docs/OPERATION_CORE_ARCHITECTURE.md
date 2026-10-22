@@ -1,5 +1,23 @@
 # BLUE-TANUKI Operation Core Architecture
 
+## 現行の責任境界（2026-10-22再照合）
+
+現行工程は[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)が指す正本に従う。Operation Coreは操作を表す下流契約であり、上位のHDSの意味責務やJ/Mの状態所有を代行しない。以下は現在のTypeScript実装の呼出し・保存入口をコードで対応付けた記録であり、Rust移管、全体実行、対象別QAの証拠ではない。後段の移行設計は成立済み機能と区別する。
+
+| 責務 | 現行producer → consumer／writer |
+|---|---|
+| 通常仕事の受付と計算 | WebChatのowner task → Gatewayの`hds.decide` → Approval → Executor → `LLMComputeAdapter`。Cの候補をJの`retainCandidate`へ返し、Cには実行許可を発行させない。 |
+| 操作の採用と進行 | `controller.ts` → `OperationPlanLedger`のbind／revise／beginAttempt。現在の目的束縛・版・承認を照合し、Executorは発行済みticketを単回消費する。 |
+| 操作状態の正本 | `operation_plan.ts`の`change` → `OperationPlanStateStore.compareAndSet` → SQLite checkpoint。復旧holdとscope restoreは専用の保存入口を持ち、通常の進行と区別する。 |
+| 結果とMへの帰還 | Executorのreceipt／outbox → Gatewayの`reconcile_execution_results.ts` → Jの`reconcileMemory` → `JMemoryCommitCoordinator` → `保存取引.ts`。承認済み更新と期待revisionを照合してMを保存し、Gatewayは必要なM receiptを確認する。 |
+| 目的・意味の更新 | Jの`commitGoalPurposeChangeAfterL3`／`commitMeaningUpdateAfterL3`等 → 専用M consumer → 同じ制御状態・保存取引の調停。提案・観測・過去の記憶自体には更新権限がない。 |
+| 最終出力 | `finalize_command_output.ts` → citation確認／J feedback／output audit。表示・history・audit projectionを第二のauthorityにしない。 |
+| 環境作用の状態 | Brokerのintent／invocation／receipt／outboxは環境実行の状態を所有する。Jの採否とは別に、現在のPermission・対象・承認・期限を検査する。 |
+
+Jのpending・制御状態は`制御状態.ts`、M内容の通常保存は`保存取引.ts`に集約される。`inspectControl`等の観測APIにも既存の承認済みpending更新をreconcileする経路があるため、名前だけでread-onlyと判断してRust shadowから呼び出さない。projection再構築・schema migration・backup restoreも保存入口として区別し、shadowへ渡すのは作用・正本書込みを持たない入力に限る。
+
+残る接続点は、有限な観測からの意味更新候補を既存L3・M解釈版・次の仕事へつなぐ経路と、目的／意味専用J/M storeを含む復旧の収容範囲である。既存`plan:reflect`の非採用・非権限境界を自動更新へ変更しない。現行backup indexが持つ結果M／Broker／操作計画／cronの保存だけから、意味状態全体の復旧を成立済みとは扱わない。
+
 ## 1. 目的
 
 この文書は、BLUE-TANUKI を CLI / terminal 前提の実行補助から、Operation Core 中心の操作ランタイムへ移行するための設計境界を定義する。

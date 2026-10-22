@@ -292,7 +292,7 @@ Mobileの招待・device credential等の秘密はnative境界に置き、Dart�
 
 「MobileクライアントがDesktop Brokerを経由して仕事を行う」ことと「Mobile端末単独でC/J/Mや実作用を稼働させる」ことは別能力。後者を本規定だけで実装済み・必要条件成立とは扱わない。
 
-従来F16のモバイル入出力だけではOS別製品の成立条件を満たさない。現行の非公開QE rev2.3はAndroid G09とiOS G10の各三単位を含み、旧192単位と合わせて198単位とする。全体実装後にOS別QC、対象別QAを行い、AndroidとiOSの実機証拠を相互代用しない。旧1.0 RCのMobile非搭載の記録と新5OS開発目標を区別する。公開要約はdocs/PLATFORM_TARGETS_QE.md。
+従来F16のモバイル入出力だけではOS別製品の成立条件を満たさない。現行pinが指す非公開QE正本はAndroid G09とiOS G10の各三単位を含む198単位の実装索引を保持する。全体実装後にOS別QC、対象別QAを行い、AndroidとiOSの実機証拠を相互代用しない。旧1.0 RCのMobile非搭載の記録と新5OS開発目標を区別する。公開要約はdocs/PLATFORM_TARGETS_QE.md。
 
 ## 19. 競合比較・互換性と公開境界
 

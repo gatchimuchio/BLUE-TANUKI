@@ -8,7 +8,8 @@ import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
   type OperationPlanBrokerRestoreDependencyEvidence } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
-  ToolRegistry, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool } from "@blue-tanuki/core";
+  ToolRegistry, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, gmailWriteTool, LLMComputeAdapter,
+  LLMRegistry, type AgentWorkerLifecycleEvent, type ComputeBudgetPort } from "@blue-tanuki/core";
 import { TelegramChannel, type TelegramFetch } from "@blue-tanuki/channel-telegram";
 import { WebChatChannel } from "@blue-tanuki/channel-webchat";
 import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservationSchema, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
@@ -108,7 +109,18 @@ function gmailSendPlan(id: string, parameters: OperationParameters): OperationPl
 function rig(hds: HDSUpperController, candidate: OperationPlan, tool = fileSearchTool) {
   const tools = new ToolRegistry(); tools.register(tool);
   const authority = createExecutorApprovalAuthority();
-  const executor = new Executor({ llm: { name: "fixture", call: async () => ({ content: JSON.stringify(candidate), model: "fixture", tokens_used: 0 }) },
+  const backend = { name: "fixture", call: async () => ({ content: JSON.stringify(candidate), model: "fixture", tokens_used: 0 }) };
+  const registry = new LLMRegistry({ defaultName: backend.name }).register(backend, [], {
+    capabilities: ["llm_compute_candidate"], max_cost_per_attempt: { amount: 0, currency: "USD" },
+  });
+  const budget: ComputeBudgetPort = {
+    reserve: (input) => ({ reservation_id: `fixture:${input.request_id}`, reserved_tokens: input.reserved_tokens,
+      reserved_compute_ms: input.reserved_compute_ms, reserved_cost: { ...input.reserved_cost } }),
+    settle: () => {},
+  };
+  const workerLifecycle: AgentWorkerLifecycleEvent[] = [];
+  const executor = new Executor({ llm: registry, compute: new LLMComputeAdapter(registry, budget),
+    on_agent_worker_lifecycle: (event) => { workerLifecycle.push(event); return true; },
     tools, approval_authority: authority });
   async function run(command: ExecuteCommand, begin = true) {
     const approval = evaluateApproval(command, [], { actor: "fixture-owner", default_mode: "full_access" });
@@ -120,7 +132,7 @@ function rig(hds: HDSUpperController, candidate: OperationPlan, tool = fileSearc
     finalizeCommandOutput({ hds, command, feedback, request_id: command.upstream_decision.request_id ?? null, target_surface: "channel" });
     return feedback;
   }
-  return { run };
+  return { run, workerLifecycle };
 }
 function review(hds: HDSUpperController, candidate: OperationPlan, step_id: string,
   goal_purpose_binding?: { goal_ref: string; purpose_version: number; purpose_digest: string }) {

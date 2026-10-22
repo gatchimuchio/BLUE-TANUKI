@@ -48,7 +48,8 @@ canonical_target_path() {
   done
 
   parent=$(CDPATH= cd -P -- "$cursor" && pwd -P) || safe_target_fail "$label parent cannot be resolved: $cursor"
-  trim_trailing_slashes "$parent/$suffix"
+  # 親が / でも二重 slash を生成せず、広域対象の実体同一性を保つ。
+  trim_trailing_slashes "${parent%/}/$suffix"
 }
 
 path_is_same_or_descendant() {

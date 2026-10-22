@@ -8,9 +8,9 @@
 
 ## 次のBUILD_BATCH
 
-rev3.0 K-B0／K-B1で、実際の最新HEADを基準にCR-0～CR-3とI-01～I-06の残りを再照合し、HDS Frameworkの意味処理、J/M writer、Gateway／Executor、Approval／Brokerのproducer→consumerと所有境界を一仕事に沿って対応付ける。既存のCR-0～CR-3完了記録を引き継ぐが、パッケージ作成時の`e28a73f`を現行HEADとして使わず、現HEADで成立済みの変更は重複実装しない。削除・外部作用の危険を見つけた場合はその作用口を止め、非破壊の安全修正を優先する。
+rev3.0 K-B0／K-B1のコード再照合で、現在の入口とJ/Mの通常・復旧writerを一仕事に沿って対応付けた。責任対応は[`OPERATION_CORE_ARCHITECTURE.md`](OPERATION_CORE_ARCHITECTURE.md)。I-01のUnix root直下のガード欠陥を修正し、I-03のメイン`/app`から費用・予算・timeoutの設定を通常Computeの既存consumerへ渡す。これは限定した接続と静的な責任対応であり、全体実行や全OSの成立ではない。
 
-次にCR-2の実利用条件とE2E-01の同一WebChat仕事（目的→C→J→安全な合成作用→結果／M→返信・再計画・復帰）を前進させ、CR-3の現行consumer状態を再照合する。その後rev3.0 K-B2以降のFramework意味契約・責任抽出・Rust shadow・比較へ進む。順序は工程表に従い、実物の現状と未解決の危険に応じて再同期する。Rustのsingle-writer cutoverは比較、停止、未決作用、rollback、権限境界が成立するまで行わない。
+次にCR-2の実利用条件とE2E-01の同一WebChat仕事（目的→C→J→安全な合成作用→結果／M→返信・再計画・復帰）を前進させる。その後K-B2の観測→意味更新候補→既存L3採否→M解釈版→次の仕事、責任抽出、Rust shadow・比較へ進む。目的／意味専用J/M storeのbackup収容と、観測APIにも含まれるpending reconcileは未解消の接続・移管条件として扱う。Rustのsingle-writer cutoverは比較、停止、未決作用、rollback、権限境界が成立するまで行わない。
 
 ## 維持する境界
 

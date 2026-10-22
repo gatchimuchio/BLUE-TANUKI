@@ -28,6 +28,25 @@ expect_rejection() {
   fi
 }
 
+# root 直下の既存・未生成対象も一つの slash で表し、HOME の祖先を拒否する。
+PHYSICAL_TMP_ROOT=$(CDPATH= cd -P -- "$TMP_ROOT" && pwd -P)
+TOP_COMPONENT=${PHYSICAL_TMP_ROOT#/}
+TOP_LEVEL_TARGET=/${TOP_COMPONENT%%/*}
+[ "$TOP_LEVEL_TARGET" != "/" ] || exit 18
+resolved=$(canonical_target_path "$TOP_LEVEL_TARGET" root-child)
+[ "$resolved" = "$TOP_LEVEL_TARGET" ] || {
+  echo "root child changed identity: $resolved" >&2
+  exit 19
+}
+MISSING_TOP_LEVEL="/$(basename -- "$TMP_ROOT")-not-created"
+[ ! -e "$MISSING_TOP_LEVEL" ] && [ ! -L "$MISSING_TOP_LEVEL" ] || exit 20
+resolved=$(canonical_target_path "$MISSING_TOP_LEVEL" missing-root-child)
+[ "$resolved" = "$MISSING_TOP_LEVEL" ] || exit 21
+[ ! -e "$MISSING_TOP_LEVEL" ] && [ ! -L "$MISSING_TOP_LEVEL" ] || exit 22
+expect_rejection "root-level home ancestor" safe_destructive_target "$TOP_LEVEL_TARGET" home-parent
+expect_rejection "root-level data container" safe_container_target "$TOP_LEVEL_TARGET" data-parent
+expect_rejection "root-level user bin" safe_user_bin_target "$TOP_LEVEL_TARGET" bin-parent
+
 expect_rejection "home alias" safe_destructive_target "$TMP_ROOT/home-alias/.local" alias
 expect_rejection "physical user-bin alias" safe_destructive_target "$TMP_ROOT/bin-physical" user-bin-alias
 expect_rejection "data root aliases user bin" safe_container_target "$TMP_ROOT/bin-physical" data-root-bin-alias

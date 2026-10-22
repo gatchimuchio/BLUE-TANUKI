@@ -1995,6 +1995,25 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         })));
       }
 
+      function renderSettingsComputeReadiness(readiness) {
+        const known = isObject(readiness) && ["ready", "blocked"].includes(readiness.status) &&
+          readiness.current_window_usage_checked === false && Array.isArray(readiness.evidence_source) &&
+          readiness.evidence_source.length === 1 && readiness.evidence_source[0] === "CONFIG";
+        const status = known ? readiness.status : "unknown";
+        const detail = known && typeof readiness.detail === "string" ? readiness.detail : "設定の判定結果を確認できません。Verify LLMを実行してください。";
+        setText("settings-compute-readiness", "通常Computeの設定: " + status + ". " + detail +
+          " 設定からの判定です。現在の予算消費は各仕事の実行時に照合します。");
+        byId("settings-compute-readiness").className = "badge " + (status === "ready" ? "good" : "warn");
+        return status;
+      }
+
+      function invalidateSettingsComputeReadiness() {
+        setText("settings-compute-readiness", "LLMまたは予算設定が変わりました。Verify LLMで通常Computeの設定を再確認してください。");
+        byId("settings-compute-readiness").className = "badge warn";
+        setText("settings-verify-status", "設定変更・再確認が必要");
+        byId("settings-verify-status").className = "badge warn";
+      }
+
       function renderSettingsSnapshot(snapshot) {
         const llm = snapshot.llm || {};
         const openrouter = snapshot.integrations && snapshot.integrations.openrouter ? snapshot.integrations.openrouter : {};
@@ -2010,6 +2029,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("settings-site-url").value = llm.site_url || "";
         byId("settings-app-title").value = llm.app_title || "";
         byId("settings-max-tokens").value = llm.max_tokens || "";
+        byId("settings-timeout-ms").value = llm.timeout_ms ?? "";
+        byId("settings-provider-cost-profiles").value = llm.provider_cost_profiles_json || "";
+        byId("settings-compute-budget-policy").value = llm.compute_budget_policy_json || "";
+        renderSettingsComputeReadiness(llm.compute_readiness);
         byId("settings-approval-mode").value = (snapshot.approval && snapshot.approval.mode) || "full_access";
         setText("settings-provider-status", llm.provider || "stub");
         setText("settings-model-status", llm.model || "(provider default)");
@@ -3457,7 +3480,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           endpoint: byId("settings-endpoint").value,
           site_url: byId("settings-site-url").value,
           app_title: byId("settings-app-title").value,
-          max_tokens: byId("settings-max-tokens").value
+          max_tokens: byId("settings-max-tokens").value,
+          timeout_ms: byId("settings-timeout-ms").value,
+          provider_cost_profiles_json: byId("settings-provider-cost-profiles").value,
+          compute_budget_policy_json: byId("settings-compute-budget-policy").value
         };
         const apiKey = byId("settings-api-key").value.trim();
         if (apiKey) llm.api_key = apiKey;
@@ -3492,6 +3518,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("settings-json", error.message);
           setText("settings-verify-status", "error");
           byId("settings-verify-status").className = "badge bad";
+          renderSettingsComputeReadiness(undefined);
         }
       }
 
@@ -3745,15 +3772,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state.settingsToken = token;
         sessionStorage.setItem("bt.settingsToken", token);
         try {
-          const body = await postJson("/settings/llm/verify", token, settingsPayload());
+          const submitted = settingsPayload();
+          const body = await postJson("/settings/llm/verify", token, submitted);
+          if (JSON.stringify(submitted) !== JSON.stringify(settingsPayload())) {
+            invalidateSettingsComputeReadiness();
+            return;
+          }
           const result = body.result || body;
           const status = result.status || "unknown";
-          setText("settings-verify-status", status + ": " + (result.detail || result.next_action || "done"));
-          byId("settings-verify-status").className = "badge " + (status === "pass" ? "good" : "bad");
+          const computeStatus = renderSettingsComputeReadiness(result.compute_readiness);
+          setText("settings-verify-status", "Provider疎通: " + status + "; 通常Computeの設定: " + computeStatus + ". " +
+            (result.detail || "") + (result.next_action ? " 次の操作: " + result.next_action : ""));
+          byId("settings-verify-status").className = "badge " +
+            (status !== "pass" ? "bad" : computeStatus === "ready" ? "good" : "warn");
           setText("settings-json", compactJson(redactRuntimeValue(body)));
         } catch (error) {
           setText("settings-verify-status", "error");
           byId("settings-verify-status").className = "badge bad";
+          renderSettingsComputeReadiness(undefined);
           setText("settings-json", error.message);
         }
       }
@@ -3764,10 +3800,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         sessionStorage.setItem("bt.settingsToken", token);
         try {
           const body = await postJson("/settings/config", token, settingsPayload());
-          setText("settings-verify-status", "saved; restart required");
-          byId("settings-verify-status").className = "badge warn";
           setText("settings-json", compactJson(redactRuntimeValue(body)));
           await loadSettings();
+          setText("settings-verify-status", "保存しました。通常仕事へ反映するにはGatewayを再起動してください。");
+          byId("settings-verify-status").className = "badge warn";
         } catch (error) {
           setText("settings-verify-status", "error");
           byId("settings-verify-status").className = "badge bad";
@@ -4787,6 +4823,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
       });
       byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
+      for (const id of ["settings-provider", "settings-model", "settings-endpoint", "settings-api-key",
+        "settings-site-url", "settings-app-title", "settings-max-tokens", "settings-timeout-ms",
+        "settings-provider-cost-profiles", "settings-compute-budget-policy"]) {
+        byId(id).addEventListener("input", invalidateSettingsComputeReadiness);
+        byId(id).addEventListener("change", invalidateSettingsComputeReadiness);
+      }
       byId("save-settings").addEventListener("click", saveSettings);
       byId("connect-chat").addEventListener("click", function () {
         connectChat().catch(function (error) {

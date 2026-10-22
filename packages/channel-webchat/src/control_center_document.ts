@@ -340,12 +340,22 @@ ${CONTROL_CENTER_STYLE}    </style>
             <input id="settings-site-url" type="text" autocomplete="off" placeholder="OpenRouter site URL" />
             <input id="settings-app-title" type="text" autocomplete="off" placeholder="OpenRouter app title" />
             <input id="settings-max-tokens" type="number" min="1" step="1" placeholder="max tokens" />
+            <label>計算の制限時間（ms）<input id="settings-timeout-ms" type="number" min="1" step="1" /></label>
             <select id="settings-approval-mode" aria-label="Approval mode">
               <option value="ask_every_time">ask_every_time</option>
               <option value="remember_this_decision">remember_this_decision</option>
               <option value="full_access">full_access</option>
             </select>
           </div>
+          <label>Providerごとの最大費用（JSON）
+            <textarea id="settings-provider-cost-profiles" spellcheck="false" maxlength="16384"></textarea>
+            <span class="muted">1試行の費用上限と通貨を設定します。実際の料金は自動取得しません。空欄にすると設定を解除します。</span>
+          </label>
+          <label>計算予算（JSON）
+            <textarea id="settings-compute-budget-policy" spellcheck="false" maxlength="16384"></textarea>
+            <span class="muted">system・parent・taskの各予算に通常の1要求が収まるよう設定します。空欄では金額上限0の既定値に戻ります。</span>
+          </label>
+          <p id="settings-compute-readiness" class="badge warn" role="status">通常Computeの設定は未確認です。</p>
           <div class="action-row">
             <button id="load-settings" class="primary" type="button">Load Settings</button>
             <button id="verify-llm-settings" type="button">Verify LLM</button>

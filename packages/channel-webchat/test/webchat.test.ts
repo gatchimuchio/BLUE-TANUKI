@@ -431,6 +431,91 @@ describe("WebChatChannel — construction", () => {
 });
 
 describe("WebChatChannel — Control Center shell", () => {
+  it("connects main-app LLM cost and budget settings and invalidates stale readiness", async () => {
+    const section = (startText: string, endText: string) => {
+      const start = CONTROL_CENTER_SCRIPT.indexOf(startText);
+      const end = CONTROL_CENTER_SCRIPT.indexOf(endText, start + 1);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      return CONTROL_CENTER_SCRIPT.slice(start, end);
+    };
+    const nodes = new Map<string, { value: string; checked: boolean; textContent: string; className: string;
+      placeholder: string; events: Map<string, () => void>; addEventListener: (name: string, handler: () => void) => void }>();
+    const node = (id: string) => {
+      if (!nodes.has(id)) {
+        const events = new Map<string, () => void>();
+        nodes.set(id, { value: "", checked: false, textContent: "", className: "", placeholder: "", events,
+          addEventListener: (name, handler) => events.set(name, handler) });
+      }
+      return nodes.get(id)!;
+    };
+    const profiles = JSON.stringify({ "openai-compatible": { capabilities: ["llm.text.generate"],
+      max_cost_per_attempt: { amount: 0.02, currency: "USD" } } });
+    const budget = JSON.stringify({ window_ms: 86_400_000, currency: "USD",
+      system: { max_tokens: 1000, max_compute_ms: 300_000, max_cost: { amount: 1, currency: "USD" } },
+      parent: { max_tokens: 1000, max_compute_ms: 300_000, max_cost: { amount: 1, currency: "USD" } },
+      task: { max_tokens: 1000, max_compute_ms: 300_000, max_cost: { amount: 1, currency: "USD" } } });
+    const snapshot = { llm: { provider: "openai-compatible", model: "fixture-model", endpoint: "https://fixture.invalid/v1",
+      max_tokens: "128", timeout_ms: "5000", provider_cost_profiles_json: profiles, compute_budget_policy_json: budget,
+      api_key_set: true, compute_readiness: { status: "ready", detail: "configuration admits one request",
+        current_window_usage_checked: false, evidence_source: ["CONFIG"] } } };
+    let result: Record<string, unknown> = { status: "pass", detail: "provider responded",
+      compute_readiness: { ...snapshot.llm.compute_readiness, status: "blocked", detail: "task cost limit is too small" },
+      next_action: "Configure the task budget, then verify again." };
+    const calls: Array<{ path: string; body: unknown }> = [];
+    let editDuringVerify = false;
+    const api = new Script([
+      section("function renderSettingsComputeReadiness(", "function renderAboutSnapshot("),
+      section("function settingsPayload(", "function connectorsPayload("),
+      section("async function verifyLlmSettings(", "function setRuntimeSnapshotObservation("),
+      section('for (const id of ["settings-provider"', 'byId("save-settings").addEventListener'),
+      "({ settingsPayload, renderSettingsSnapshot, verifyLlmSettings, saveSettings })",
+    ].join("\n")).runInNewContext({
+      byId: node, state: {}, sessionStorage: { setItem: () => {} },
+      isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+      setText: (id: string, value: string) => { node(id).textContent = value; },
+      compactJson: JSON.stringify, redactRuntimeValue: (value: unknown) => value,
+      loadSettings: async () => { node("settings-verify-status").textContent = "not run"; },
+      postJson: async (path: string, _token: string, body: unknown) => {
+        calls.push({ path, body });
+        if (path.endsWith("/verify") && editDuringVerify) node("settings-timeout-ms").value = "6000";
+        return { result };
+      },
+    });
+    api.renderSettingsSnapshot(snapshot);
+    expect(api.settingsPayload().llm).toMatchObject({ timeout_ms: "5000", provider_cost_profiles_json: profiles,
+      compute_budget_policy_json: budget });
+    expect(api.settingsPayload().llm).not.toHaveProperty("api_key");
+    expect(node("settings-compute-readiness").textContent).toContain("各仕事の実行時に照合");
+    await api.verifyLlmSettings();
+    expect(node("settings-verify-status").className).toBe("badge warn");
+    expect(node("settings-verify-status").textContent).toContain(String(result.next_action));
+    expect(node("settings-compute-readiness").textContent).toContain("task cost limit is too small");
+    expect(calls[0]).toMatchObject({ path: "/settings/llm/verify", body: { llm: {
+      timeout_ms: "5000", provider_cost_profiles_json: profiles, compute_budget_policy_json: budget } } });
+    result = { ...result, compute_readiness: snapshot.llm.compute_readiness };
+    await api.verifyLlmSettings();
+    expect(node("settings-verify-status").className).toBe("badge good");
+    node("settings-timeout-ms").events.get("input")!();
+    expect(node("settings-verify-status").className).toBe("badge warn");
+    result = { ...result, compute_readiness: undefined };
+    await api.verifyLlmSettings();
+    expect(node("settings-verify-status").className).toBe("badge warn");
+    result = { ...result, compute_readiness: snapshot.llm.compute_readiness };
+    editDuringVerify = true;
+    await api.verifyLlmSettings();
+    expect(node("settings-verify-status").className).toBe("badge warn");
+    expect(node("settings-verify-status").textContent).toContain("再確認");
+    editDuringVerify = false;
+    await api.saveSettings();
+    expect(calls.at(-1)).toMatchObject({ path: "/settings/config", body: { llm: { timeout_ms: "6000",
+      provider_cost_profiles_json: profiles, compute_budget_policy_json: budget } } });
+    expect(node("settings-verify-status").textContent).toContain("Gatewayを再起動");
+    node("settings-provider-cost-profiles").value = "";
+    node("settings-compute-budget-policy").value = "";
+    expect(api.settingsPayload().llm).toMatchObject({ provider_cost_profiles_json: "", compute_budget_policy_json: "" });
+  });
+
   it("sends explicit digest-bound plan step review through the existing Developer invoke path", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeOperationPlanReview(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
@@ -1715,6 +1800,10 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("save-connectors");
       expect(html).toContain("settings-token");
       expect(html).toContain("settings-provider");
+      expect(html).toContain("settings-timeout-ms");
+      expect(html).toContain("settings-provider-cost-profiles");
+      expect(html).toContain("settings-compute-budget-policy");
+      expect(html).toContain("settings-compute-readiness");
       expect(html).toContain("load-settings");
       expect(html).toContain("verify-llm-settings");
       expect(html).toContain("save-settings");
