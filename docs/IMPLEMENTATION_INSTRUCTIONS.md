@@ -14,7 +14,7 @@ ownerがrev3.0を指定した時点のlocal／remote `main`は`2964db41dc11ddc30
 
 ## CR-0割込み — I-06 Windows開発インストーラー
 
-`install/windows/install.ps1 -Force`は、既存の非reparseディレクトリ内にある開発用所有markerが、今回のinstall rootとdata rootの両方へ一致する場合だけ置換する。marker欠落・不正・対象不一致は削除前に拒否する。従来の未marker導入には自動移行経路がなく、`-Force`で拒否される。これは静的な実装状態であり、Windows上の拒否動作・既存導入からの更新を含む非破壊実行確認は`NOT_RUN`。その経路の動的安全性を検証済みと扱わず、証拠が揃うまで`-Force`による既存導入の置換は未確認として扱う。K-B5の合成shadow実装はこの安全修復と並行して続行できる。
+`install/windows/install.ps1 -Force`は、既存の非reparseディレクトリ内にある開発用所有markerが、今回のinstall rootとdata rootの両方へ一致する場合だけ置換する。marker欠落時も、既定のinstall/data rootの完全一致、BLUE workspace manifest、既存runtime／installer入口、秘密を読まないenv-file存在確認、両rootへ結び付く生成済みPowerShell／CMD launcherの一致をすべて満たす従来導入だけを認識する。途中のdirectory／fileがreparse、識別不正、対象不一致なら削除前に拒否し、custom rootへlegacy認識を広げない。既存`DataRoot`は削除しない。これは静的な実装状態であり、Windows上の拒否動作・既存導入からの更新を含む非破壊実行確認は`NOT_RUN`。その経路の動的安全性を検証済みと扱わない。K-B5の合成shadow実装はこの安全修復と並行して続行できる。
 
 ## 現行接続状態と次のBUILD_BATCH
 

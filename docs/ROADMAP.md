@@ -8,7 +8,7 @@
 
 ## 現在のBUILD_BATCH
 
-CR-0/I-06の安全割込みとしてWindows開発用`install.ps1 -Force`に既存install rootの所有marker確認を加えた。markerは現在のinstall root／data rootの双方に一致しない限り既存rootを削除しない。従来の未marker導入は自動移行されず`-Force`で拒否される。実Windowsでの非破壊拒否確認と従来導入からの更新確認は未実施（`NOT_RUN`）であり、動的安全性は未成立のまま記録する。これはK-B5の合成shadow BUILDを止める理由にはしない。
+CR-0/I-06の安全割込みとしてWindows開発用`install.ps1 -Force`に既存install rootの所有確認を加えた。markerが現在のinstall root／data rootの双方に一致する形式を優先し、marker欠落時は既定rootにあるBLUE workspace manifest・runtime／installer入口・env file存在・両rootへ結び付く生成済みlaunchersを確認できる従来導入だけを認識する。途中のreparseや識別不一致、custom rootは削除前に拒否し、既存DataRootを再帰削除しない。実Windowsでの非破壊拒否確認と従来導入からの更新確認は未実施（`NOT_RUN`）であり、動的安全性は未成立のまま記録する。これはK-B5の合成shadow BUILDを止める理由にはしない。
 
 K-B0／K-B1で現行入口、通常・復旧writer、I-01対象guard、I-03 main appから通常Computeへのbudget設定を照合・接続した。E2E-01とK-B2では、合成仕事のC→J→L3→M→次task再評価を限定接続し、meaning-update専用J/Mを7-store復旧経路へ接続した。これらは部分経路の証拠であり、製品全体の結合形状を示さない。
 
