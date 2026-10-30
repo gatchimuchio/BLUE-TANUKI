@@ -13,7 +13,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
 const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v5";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v8";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v9";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -1060,7 +1060,11 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                 {
                     Some(value.as_str())
                 }
-                Some(Value::Null) if owner_verdict != "approve" => None,
+                Some(Value::Null)
+                    if owner_verdict != "approve" || application_status == "not_applied" =>
+                {
+                    None
+                }
                 _ => return Err("projection_memory_transition_rejected"),
             };
             let semantic_relation_status = string_value(object.get("semantic_relation_status"))
@@ -1084,6 +1088,7 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                         *value,
                         "meaning_unverified"
                             | "meaning_unverified_with_reassessment_pending"
+                            | "adoption_approved_not_applied"
                             | "adoption_rejected"
                             | "adoption_blocked"
                     )
@@ -1097,29 +1102,33 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                 .get("may_execute")
                 .and_then(Value::as_bool)
                 .ok_or("projection_memory_transition_rejected")?;
-            let application_matches = if owner_verdict == "approve" {
-                application_status == "applied"
-                    && pending_count.is_some()
-                    && reference_review_status.is_some()
-            } else {
-                application_status == "not_applied"
-                    && pending_count.is_none()
-                    && reference_review_status.is_none()
+            let application_matches = match (owner_verdict, application_status) {
+                ("approve", "applied") => {
+                    pending_count.is_some() && reference_review_status.is_some()
+                }
+                ("approve", "not_applied") => pending_count.is_none(),
+                ("reject" | "block", "not_applied") => {
+                    pending_count.is_none() && reference_review_status.is_none()
+                }
+                _ => false,
             };
             let transition_matches = application_matches
                 && semantic_relation_status == "not_assessed"
                 && follow_up_action_status == "unconfirmed"
                 && !used_for_authority
                 && !may_execute;
-            let expected_residual_status = if owner_verdict == "reject" {
-                "adoption_rejected"
-            } else if owner_verdict == "block" {
-                "adoption_blocked"
-            } else if pending_count == Some(0) {
-                "meaning_unverified"
-            } else {
-                "meaning_unverified_with_reassessment_pending"
-            };
+            let expected_residual_status =
+                if owner_verdict == "approve" && application_status == "not_applied" {
+                    "adoption_approved_not_applied"
+                } else if owner_verdict == "reject" {
+                    "adoption_rejected"
+                } else if owner_verdict == "block" {
+                    "adoption_blocked"
+                } else if pending_count == Some(0) {
+                    "meaning_unverified"
+                } else {
+                    "meaning_unverified_with_reassessment_pending"
+                };
             let residual_status_matches = typescript_residual_status == expected_residual_status;
             Ok(JMemoryTransitionComparison {
                 kind: "meaning_update_adoption",
@@ -1165,12 +1174,13 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                 .and_then(Value::as_bool)
                 .ok_or("projection_memory_transition_rejected")?;
             let counts_are_consistent = reassessed_count + remaining_count == requested_count;
+            let not_applied = application_status == "not_applied"
+                && reassessed_count == 0
+                && remaining_count == requested_count;
             let application_matches = if owner_verdict == "approve" {
-                application_status == "applied" && counts_are_consistent
+                (application_status == "applied" && counts_are_consistent) || not_applied
             } else {
-                application_status == "not_applied"
-                    && reassessed_count == 0
-                    && remaining_count == requested_count
+                not_applied
             };
             let transition_matches = application_matches && !used_for_authority && !may_execute;
             let expected_residual_status =

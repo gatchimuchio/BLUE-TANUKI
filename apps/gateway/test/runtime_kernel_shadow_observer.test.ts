@@ -110,11 +110,15 @@ describe("Gateway Runtime Kernel shadow observer", () => {
     };
     const meaningAdoptionProjection = projectRuntimeKernelJMemoryTransition(firstProjectionResult, {
       kind: "meaning_update_adoption",
+      owner_verdict: "approve",
+      memory_application_status: "applied",
       reference_review_status: "prior_version_unverified",
       pending_reassessment_required_count: 2,
     });
     const memoryReassessmentProjection = projectRuntimeKernelJMemoryTransition(firstProjectionResult, {
       kind: "memory_judgment_reassessment",
+      owner_verdict: "approve",
+      memory_application_status: "applied",
       requested_judgment_count: 2,
       reassessed_judgment_count: 2,
       remaining_reassessment_required_count: 0,

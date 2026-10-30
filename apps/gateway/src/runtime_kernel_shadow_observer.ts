@@ -92,8 +92,14 @@ function memoryTransitionReceiptIsConsistent(
   let residualStatus: string;
 
   if (transition.kind === "meaning_update_adoption") {
+    const reviewStatusIsValid = transition.reference_review_status === null ||
+      transition.reference_review_status === "prior_version_unverified" ||
+      transition.reference_review_status === "counterevidence_absence_unverified";
     const applicationMatches = transition.owner_verdict === "approve"
       ? transition.memory_application_status === "applied"
+        ? transition.reference_review_status !== null && transition.pending_reassessment_required_count !== null
+        : transition.memory_application_status === "not_applied" && reviewStatusIsValid &&
+          transition.pending_reassessment_required_count === null
       : transition.memory_application_status === "not_applied" &&
         transition.reference_review_status === null &&
         transition.pending_reassessment_required_count === null;
@@ -102,8 +108,10 @@ function memoryTransitionReceiptIsConsistent(
       transition.follow_up_action_status === "unconfirmed" &&
       transition.used_for_authority === false && transition.may_execute === false;
     residualStatus = transition.owner_verdict === "approve"
-      ? transition.pending_reassessment_required_count === 0
-        ? "meaning_unverified" : "meaning_unverified_with_reassessment_pending"
+      ? transition.memory_application_status === "not_applied"
+        ? "adoption_approved_not_applied"
+        : transition.pending_reassessment_required_count === 0
+          ? "meaning_unverified" : "meaning_unverified_with_reassessment_pending"
       : transition.owner_verdict === "reject" ? "adoption_rejected" : "adoption_blocked";
   } else {
     const countsAreBounded = Number.isSafeInteger(transition.requested_judgment_count) &&
@@ -115,11 +123,12 @@ function memoryTransitionReceiptIsConsistent(
     const countsAreConsistent = countsAreBounded &&
       transition.reassessed_judgment_count + transition.remaining_reassessment_required_count ===
         transition.requested_judgment_count;
+    const notAppliedCounts = countsAreBounded && transition.reassessed_judgment_count === 0 &&
+      transition.remaining_reassessment_required_count === transition.requested_judgment_count;
     const applicationMatches = transition.owner_verdict === "approve"
-      ? transition.memory_application_status === "applied" && countsAreConsistent
-      : countsAreBounded && transition.memory_application_status === "not_applied" &&
-        transition.reassessed_judgment_count === 0 &&
-        transition.remaining_reassessment_required_count === transition.requested_judgment_count;
+      ? transition.memory_application_status === "applied" ? countsAreConsistent
+        : transition.memory_application_status === "not_applied" && notAppliedCounts
+      : transition.memory_application_status === "not_applied" && notAppliedCounts;
     transitionMatches = applicationMatches &&
       transition.used_for_authority === false && transition.may_execute === false;
     residualStatus = transition.reassessed_judgment_count === transition.requested_judgment_count &&

@@ -856,7 +856,7 @@ describe("HDSUpperController.resume()", () => {
     expect(command).not.toBeNull();
     expect(runtime_kernel_j_projection.status).toBe("comparable");
     if (runtime_kernel_j_projection.status !== "comparable") throw new Error("resume projection unavailable");
-    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v6");
+    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v9");
     expect(runtime_kernel_j_projection.projection.typescript_decision).toBe("SUSPEND");
     expect(runtime_kernel_j_projection.projection.typescript_policy_rule_id).toBe("per_axis_suspend_below");
     expect(runtime_kernel_j_projection.projection.typescript_policy_rule_axis).toBe("input_validity");
@@ -879,12 +879,14 @@ describe("HDSUpperController.resume()", () => {
     const { log } = c.decide(inbound(source, requestId));
     const adoption = c.runtimeKernelJMemoryTransitionProjection(log, {
       kind: "meaning_update_adoption",
+      owner_verdict: "approve",
+      memory_application_status: "applied",
       reference_review_status: "prior_version_unverified",
       pending_reassessment_required_count: 2,
     });
     expect(adoption.status).toBe("comparable");
     if (adoption.status !== "comparable") throw new Error("memory adoption projection unavailable");
-    expect(adoption.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v6");
+    expect(adoption.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v9");
     expect(adoption.projection.memory_transition).toMatchObject({
       kind: "meaning_update_adoption",
       semantic_relation_status: "not_assessed",
@@ -895,6 +897,8 @@ describe("HDSUpperController.resume()", () => {
     });
     const reassessment = c.runtimeKernelJMemoryTransitionProjection(log, {
       kind: "memory_judgment_reassessment",
+      owner_verdict: "approve",
+      memory_application_status: "applied",
       requested_judgment_count: 2,
       reassessed_judgment_count: 2,
       remaining_reassessment_required_count: 0,

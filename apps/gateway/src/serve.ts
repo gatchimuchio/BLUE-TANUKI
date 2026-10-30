@@ -2607,6 +2607,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
             kind: "meaning_update_adoption",
             owner_verdict: verdict,
+            memory_application_status: "not_applied",
             reference_review_status: null,
             pending_reassessment_required_count: null,
           }),
@@ -2620,6 +2621,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
             kind: "memory_judgment_reassessment",
             owner_verdict: verdict,
+            memory_application_status: "not_applied",
             requested_judgment_count: requestedCount,
             reassessed_judgment_count: 0,
             remaining_reassessment_required_count: requestedCount,
@@ -2684,17 +2686,40 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           args.target_record_id !== current.proposal.target_reference.record_id ||
           args.target_version !== current.proposal.target_reference.version ||
           validateMeaningUpdateContentReview(pending, ctx.content_review_digest) !== "valid") {
+        runtimeKernelShadowObserver?.observe({
+          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+            kind: "meaning_update_adoption",
+            owner_verdict: "approve",
+            memory_application_status: "not_applied",
+            reference_review_status: current?.reference_review.review_status ?? null,
+            pending_reassessment_required_count: null,
+          }),
+          command_present: false,
+        });
         return { approval: "approve", executed: false, status: "meaning_update_adoption_stale" };
       }
       const committed = hds.commitMeaningUpdateAfterL3({ source_command_id: proposal.source_command_id, args,
         request_id: pending.log.request_id, command_id, command_digest: pending.command_digest,
         content_review_digest: ctx.content_review_digest ?? "", proposal_actor: proposal.proposal_actor,
         reviewer_actor: approvalActor, evaluation: pending.evaluation });
-      if (!committed.ok) return { approval: "approve", executed: false, status: `meaning_update_${committed.reason}` };
+      if (!committed.ok) {
+        runtimeKernelShadowObserver?.observe({
+          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+            kind: "meaning_update_adoption",
+            owner_verdict: "approve",
+            memory_application_status: "not_applied",
+            reference_review_status: current.reference_review.review_status,
+            pending_reassessment_required_count: null,
+          }),
+          command_present: false,
+        });
+        return { approval: "approve", executed: false, status: `meaning_update_${committed.reason}` };
+      }
       runtimeKernelShadowObserver?.observe({
         j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
           kind: "meaning_update_adoption",
           owner_verdict: "approve",
+          memory_application_status: "applied",
           reference_review_status: current.reference_review.review_status,
           pending_reassessment_required_count: committed.pending_reassessment_required_count,
         }),
@@ -2711,17 +2736,44 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       if (!args || JSON.stringify(args) !== JSON.stringify(proposal.args) ||
           !memoryJudgmentReassessmentProposalIsCurrent(pending) ||
           validateMemoryJudgmentReassessmentContentReview(pending, ctx.content_review_digest) !== "valid") {
+        const requestedCount = proposal.reassesses_judgment_refs.length;
+        runtimeKernelShadowObserver?.observe({
+          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+            kind: "memory_judgment_reassessment",
+            owner_verdict: "approve",
+            memory_application_status: "not_applied",
+            requested_judgment_count: requestedCount,
+            reassessed_judgment_count: 0,
+            remaining_reassessment_required_count: requestedCount,
+          }),
+          command_present: false,
+        });
         return { approval: "approve", executed: false, status: "memory_judgment_reassessment_stale" };
       }
       const committed = hds.commitMemoryJudgmentReassessmentAfterL3({ args, request_id: pending.log.request_id,
         command_id, command_digest: pending.command_digest, content_review_digest: ctx.content_review_digest ?? "",
         proposal_actor: proposal.proposal_actor, reviewer_actor: approvalActor, evaluation: pending.evaluation });
-      if (!committed.ok) return { approval: "approve", executed: false,
-        status: `memory_judgment_reassessment_${committed.reason}` };
+      if (!committed.ok) {
+        const requestedCount = proposal.reassesses_judgment_refs.length;
+        runtimeKernelShadowObserver?.observe({
+          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+            kind: "memory_judgment_reassessment",
+            owner_verdict: "approve",
+            memory_application_status: "not_applied",
+            requested_judgment_count: requestedCount,
+            reassessed_judgment_count: 0,
+            remaining_reassessment_required_count: requestedCount,
+          }),
+          command_present: false,
+        });
+        return { approval: "approve", executed: false,
+          status: `memory_judgment_reassessment_${committed.reason}` };
+      }
       runtimeKernelShadowObserver?.observe({
         j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
           kind: "memory_judgment_reassessment",
           owner_verdict: "approve",
+          memory_application_status: "applied",
           requested_judgment_count: committed.requested_judgment_count,
           reassessed_judgment_count: committed.reassessed_judgment_count,
           remaining_reassessment_required_count: committed.remaining_reassessment_required_count,
