@@ -68,7 +68,7 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 今回、Gateway observerの比較結果でcommand有無の不一致をRust receiptの`lifecycle_matches`へ混在させていた意味上の混同を解消した。実際のlifecycle一致を独立して保持し、`command_presence_matches`を別項目として通常ログへ出す。不一致時の総合statusは`mismatched`のまま、HDS authority・command実行・Rustの`hold`／no-effect／no-M-writeに影響しない。合成入力で意図的なcommand有無不一致を実Rust processに通し、二軸が分離されることを確認した。Gateway typecheckと対象observer試験（5 tests）、`git diff --check`はPASS。全workspace suite、実provider・外部作用、QE_QC／QE_QA、5OS実機は未実施。K-B5全体比較・single-writer cutover・製品全体BUILDは継続。
 
-今回、ownerがapproveした後に非常停止が有効でM適用されなかったmeaning adoption／judgment reassessmentを、同じRust shadow observerへ接続した。M未適用・revision不変を投影し、引用判断再評価はrequested全件を残存として投影する。owner verdictは実際のapproveを保ち、停止理由をownerのblockへ誤分類しない。HDS TypeScriptが権限・唯一M writerであること、非常停止、再承認要求は変更していない。Gateway typecheck／buildはPASS。行動testと実process確認はNOT_RUNのため、動作実証は未成立。K-B5全体意味比較・cutover・製品全体BUILDは継続する。
+今回、ownerがapproveした後に非常停止が有効でM適用されなかったmeaning adoption／judgment reassessmentを、同じRust shadow observerへ接続した。owner verdictはapproveを保ち、停止理由をownerのblockへ誤分類しない。Gateway通常serveのlocalhost合成process smoke（1 test）で両停止枝を通し、M未適用・revision不変・再評価対象全件残存、停止解除後の再発行tokenによる両M更新の完了を確認した。Rust shadowの5 memory-transition eventはすべて`matched`。Gateway typecheck／smokeと`pnpm docs:check`はPASS。HDS TypeScriptが権限・唯一M writerであること、非常停止、再承認要求は変更していない。実provider・外部作用は未使用。K-B5全体意味比較・cutover・製品全体BUILD・QE_QC／QE_QAは継続する。
 
 ## Gitと復旧
 

@@ -165,6 +165,16 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
     try {
       gateway = spawnGateway(env);
       await waitForHealth(gatewayPort, gateway);
+      const setEmergencyStop = async (action: "activate" | "clear", reason: string): Promise<void> => {
+        const response = await fetchRespectingRetryAfter(`http://127.0.0.1:${gatewayPort}/approval/emergency-stop`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
+          body: JSON.stringify({ action, actor: "c0702-test-owner", reason }),
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ ok: true,
+          result: { active: action === "activate", used_for_authority: false } });
+      };
       const invocation = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
         method: "POST",
         headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
@@ -245,9 +255,38 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
       const secondReview = await secondReviewResponse.json() as Record<string, unknown>;
       expect(secondReview).toMatchObject({ kind: "meaning_update_adoption", candidate_meaning: revisedMeaning,
         used_for_authority: false, may_execute: false });
-      const secondApproved = await fetch(secondApprovalPath, { method: "POST",
+      await setEmergencyStop("activate", "synthetic K-B5 stop before M adoption");
+      const activeStopResponse = await fetch(`http://127.0.0.1:${gatewayPort}/approval/emergency-stop`, {
+        headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+      });
+      expect(activeStopResponse.status).toBe(200);
+      expect(await activeStopResponse.json()).toMatchObject({ emergency_stop: { active: true,
+        execution_blocked: true, used_for_authority: false } });
+      const secondBlockedByStop = await fetchRespectingRetryAfter(secondApprovalPath, { method: "POST",
         headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
         body: JSON.stringify({ verdict: "approve", approval_token: secondPending.approval_token,
+          content_review_digest: secondReview.command_digest }) });
+      expect(secondBlockedByStop.status).toBe(200);
+      expect(await secondBlockedByStop.json()).toMatchObject({ ok: true, result: { approval: "approve",
+        executed: false, status: "emergency_stop_active", pending: true, approval_token_reissued: true } });
+      const beforeSecondAdoption = new DatabaseSync(memoryDatabase, { readOnly: true });
+      try {
+        const row = beforeSecondAdoption.prepare("SELECT value_json FROM m_records WHERE record_id = ?")
+          .get(`meaning-update:${String(secondReview.proposal_digest)}`) as { value_json?: string } | undefined;
+        expect(row).toBeUndefined();
+      } finally { beforeSecondAdoption.close(); }
+      const secondQueueResponse = await fetch(`http://127.0.0.1:${gatewayPort}/approval`, {
+        headers: { authorization: `Bearer ${RESUME_TOKEN}` },
+      });
+      expect(secondQueueResponse.status).toBe(200);
+      const secondQueue = await secondQueueResponse.json() as { pending_approvals?: Array<Record<string, unknown>> };
+      const reissuedSecondPending = secondQueue.pending_approvals?.find((item) => item.command_id === secondPending.command_id);
+      expect(typeof reissuedSecondPending?.approval_token).toBe("string");
+      expect(reissuedSecondPending?.approval_token).not.toBe(secondPending.approval_token);
+      await setEmergencyStop("clear", "synthetic K-B5 stop reviewed and cleared");
+      const secondApproved = await fetchRespectingRetryAfter(secondApprovalPath, { method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: reissuedSecondPending!.approval_token,
           content_review_digest: secondReview.command_digest }) });
       expect(secondApproved.status).toBe(200);
       expect(await secondApproved.json()).toMatchObject({ ok: true, result: { executed: false,
@@ -295,34 +334,77 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
           expect(interpretation.dependent_judgments?.find((item) => item.judgment_ref === oldRef)?.reassessment_required).toBe(true);
         }
       } finally { beforeReassessment.close(); }
-      const reassessmentApproved = await fetchRespectingRetryAfter(reassessmentPath, { method: "POST",
+      await setEmergencyStop("activate", "synthetic K-B5 stop before citation reassessment");
+      const reassessmentBlockedByStop = await fetchRespectingRetryAfter(reassessmentPath, { method: "POST",
         headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
         body: JSON.stringify({ verdict: "approve", approval_token: reassessmentPending.approval_token,
+          content_review_digest: reassessmentReview.command_digest }) });
+      expect(reassessmentBlockedByStop.status).toBe(200);
+      expect(await reassessmentBlockedByStop.json()).toMatchObject({ ok: true, result: { approval: "approve",
+        executed: false, status: "emergency_stop_active", pending: true, approval_token_reissued: true } });
+      const whileStopped = new DatabaseSync(memoryDatabase, { readOnly: true });
+      try {
+        const row = whileStopped.prepare("SELECT value_json FROM m_records WHERE record_id = ?")
+          .get(`memory-interpretation:${support.f_reference}`) as { value_json?: string } | undefined;
+        const interpretation = JSON.parse(row?.value_json ?? "null") as {
+          dependent_judgments?: Array<{ judgment_ref: string; reassessment_required: boolean }>;
+        };
+        expect(interpretation.dependent_judgments?.find((item) => item.judgment_ref === freshJudgmentRef)).toBeUndefined();
+        for (const oldRef of reviewPriorRefs) {
+          expect(interpretation.dependent_judgments?.find((item) => item.judgment_ref === oldRef)?.reassessment_required)
+            .toBe(true);
+        }
+      } finally { whileStopped.close(); }
+      const reissuedReassessmentPending = await waitForMemoryJudgmentReassessmentApproval(gatewayPort, gateway,
+        () => providerFailure, () => providerCalls, auditDir);
+      expect(reissuedReassessmentPending.command_id).toBe(reassessmentPending.command_id);
+      expect(reissuedReassessmentPending.approval_token).not.toBe(reassessmentPending.approval_token);
+      await setEmergencyStop("clear", "synthetic K-B5 citation stop reviewed and cleared");
+      const reassessmentApproved = await fetchRespectingRetryAfter(reassessmentPath, { method: "POST",
+        headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: reissuedReassessmentPending.approval_token,
           content_review_digest: reassessmentReview.command_digest }) });
       expect(reassessmentApproved.status).toBe(200);
       expect(await reassessmentApproved.json()).toMatchObject({ ok: true, result: { approval: "approve",
         executed: false, status: "memory_judgment_reassessment_committed", judgment_ref: freshJudgmentRef,
         used_for_authority: false, may_execute: false } });
-      const memoryShadowEvents = await waitForMemoryShadowEvents(gateway, 3);
+      const memoryShadowEvents = await waitForMemoryShadowEvents(gateway, 5);
       expect(memoryShadowEvents.map((event) => event.memory_transition_kind)).toEqual([
-        "meaning_update_adoption", "meaning_update_adoption", "memory_judgment_reassessment",
+        "meaning_update_adoption", "meaning_update_adoption", "meaning_update_adoption",
+        "memory_judgment_reassessment", "memory_judgment_reassessment",
       ]);
-      expect(memoryShadowEvents.slice(0, 2)).toEqual([
-        expect.objectContaining({ comparison_kind: "memory_approval", comparison_status: "matched",
-          memory_revision_matches: true, memory_transition_matches: true, memory_reference_review_matches: true,
-          residual_status_matches: true,
-          used_for_authority: false, may_execute: false, m_written: false, effect_started: false }),
-        expect.objectContaining({ comparison_kind: "memory_approval", comparison_status: "matched",
-          memory_revision_matches: true, memory_transition_matches: true, memory_reference_review_matches: true,
-          residual_status_matches: true,
-          used_for_authority: false, may_execute: false, m_written: false, effect_started: false }),
-      ]);
+      expect(memoryShadowEvents[0]).toMatchObject({ comparison_kind: "memory_approval", comparison_status: "matched",
+        memory_revision_matches: true, memory_transition_matches: true, memory_reference_review_matches: true,
+        residual_status_matches: true,
+        used_for_authority: false, may_execute: false, m_written: false, effect_started: false });
+      expect(memoryShadowEvents[1]).toMatchObject({ comparison_kind: "memory_approval", comparison_status: "matched",
+        memory_transition_kind: "meaning_update_adoption", memory_transition_owner_verdict: "approve",
+        memory_application_status: "not_applied", memory_revision_before: null, memory_revision_after: null,
+        memory_revision_matches: null, memory_transition_matches: true, memory_reference_review_matches: true,
+        residual_status: "adoption_approved_not_applied", residual_status_matches: true,
+        used_for_authority: false, may_execute: false, m_written: false, effect_started: false });
       expect(memoryShadowEvents[2]).toMatchObject({ comparison_kind: "memory_approval", comparison_status: "matched",
+        memory_revision_matches: true, memory_transition_matches: true, memory_reference_review_matches: true,
+        residual_status_matches: true,
+        used_for_authority: false, may_execute: false, m_written: false, effect_started: false });
+      expect(memoryShadowEvents[3]).toMatchObject({ comparison_kind: "memory_approval", comparison_status: "matched",
+        memory_transition_kind: "memory_judgment_reassessment", memory_transition_owner_verdict: "approve",
+        memory_application_status: "not_applied", memory_revision_before: null, memory_revision_after: null,
+        memory_revision_matches: null, memory_transition_matches: true, memory_reference_review_matches: null,
+        residual_status: "named_judgments_pending", residual_status_matches: true,
+        used_for_authority: false, may_execute: false, m_written: false, effect_started: false });
+      expect(memoryShadowEvents[4]).toMatchObject({ comparison_kind: "memory_approval", comparison_status: "matched",
         memory_revision_matches: true, memory_transition_matches: true,
         memory_reference_review_matches: null,
         residual_status: "named_judgments_reassessed", residual_status_matches: true,
         used_for_authority: false, may_execute: false, m_written: false, effect_started: false });
-      for (const event of memoryShadowEvents) {
+      for (const [index, event] of memoryShadowEvents.entries()) {
+        if (index === 1 || index === 3) {
+          expect(event.memory_revision_before).toBeNull();
+          expect(event.memory_revision_after).toBeNull();
+          expect(event.memory_revision_matches).toBeNull();
+          continue;
+        }
         expect(typeof event.memory_revision_before).toBe("number");
         expect(typeof event.memory_revision_after).toBe("number");
         const before = event.memory_revision_before as number;
@@ -339,6 +421,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
       expect(encodedShadowEvents).not.toContain(support.f_reference);
       expect(encodedShadowEvents).not.toContain(counter.f_reference);
       expect(encodedShadowEvents).not.toContain(String(reassessmentPending.command_id));
+      expect(encodedShadowEvents).not.toContain(String(secondPending.command_id));
       const afterReassessment = new DatabaseSync(memoryDatabase, { readOnly: true });
       try {
         const row = afterReassessment.prepare("SELECT value_json FROM m_records WHERE record_id = ?")
@@ -741,7 +824,10 @@ async function waitForMemoryShadowEvents(gateway: CapturedProcess, expectedCount
         else if (fields[name] === "null") fields[name] = null;
       }
       for (const name of ["memory_revision_before", "memory_revision_after"]) {
-        if (typeof fields[name] === "string" && /^\d+$/.test(fields[name] as string)) fields[name] = Number(fields[name]);
+        if (fields[name] === "null") fields[name] = null;
+        else if (typeof fields[name] === "string" && /^\d+$/.test(fields[name] as string)) {
+          fields[name] = Number(fields[name]);
+        }
       }
       return [fields];
     });

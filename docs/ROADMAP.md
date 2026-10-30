@@ -36,7 +36,7 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 今回、通常Gateway decisionでcommand有無不一致をRust receiptの`lifecycle_matches`へ混ぜず、`command_presence_matches`として独立して記録するようにした。不一致は引き続き非権威の`mismatched`として観測し、HDS authority・実行経路・M writerへ影響しない。合成入力による実Rust process observer試験5件とGateway typecheckがPASS。全workspace suite、実provider・外部作用、QE_QC／QE_QA、5OS実機は未実施。K-B5全体比較・cutover・製品全体BUILDは未成立。
 
-今回、ownerがapproveした後に非常停止が有効でM適用されなかったmeaning adoption／judgment reassessmentを、Rust shadow observerへ接続した。M未適用・revision不変、再評価の全件残存を投影し、ownerのapproveをsystem blockと混同しない。Gateway typecheck／buildはPASS。行動test・実process確認は未実施で、この枝の動作実証は未成立。K-B5全体意味比較・cutover・製品全体BUILDは未成立。
+今回、ownerがapproveした後に非常停止が有効でM適用されなかったmeaning adoption／judgment reassessmentを、Rust shadow observerへ接続した。Gateway通常serveの合成L3 process smokeで両停止枝を通し、owner verdict `approve`を保ったままM未適用・revision不変・再評価対象全件残存となること、停止解除後に再発行tokenで両M更新を完了することを確認した。Rust shadowの5 memory-transition eventはすべて`matched`。対象Gateway smoke（1 test）、Gateway typecheck、`pnpm docs:check`がPASS。外部LLM／外部作用は未使用。K-B5全体意味比較・cutover・製品全体BUILD・QE_QC／QE_QAは未成立。
 
 ## 維持する境界
 
