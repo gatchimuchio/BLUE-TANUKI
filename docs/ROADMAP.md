@@ -12,11 +12,13 @@ K-B0／K-B1で現行入口、通常・復旧writer、I-01対象guard、I-03 main
 
 K-B3ではC候補評価を`meaning_update_candidate.ts`、承認済み候補からM record／interpretationを作る純粋処理を`meaning_update_semantics.ts`へ、解釈JSON正規化・検査・content digestを`memory_interpretation_semantics.ts`へ分離した。今回、引用レビューからM解釈依存を組み立て、現在Mと検証済み監査履歴から再評価候補を導出する意味処理を`memory_judgment_reassessment_candidate.ts`へ移した。controllerが監査・現在Mを取得し、Approval Gate／L3／監査書込／J-M writerはTypeScript HDS-BRAINに残る。HDS focused 3 files／5 tests、HDS typecheck/build/standalone、Gateway typecheck/buildはPASS。Gateway process smokeは前バッチでhealth readyに至らず統合実行未確認。今回の抽出で新しい利用者仕事や全体`SYSTEM_SHAPED`／`BUILD_COVERED`は成立しない。K-B3全体の責任抽出完了、C08.03、OD-03、他repo変更、P13 GOは未成立／保留。
 
-K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続を行った。K-B5では、数値policy採否・rule provenance、保存時purpose bindingと現行`GoalGovernanceLedger`投影との鮮度、SUSPEND後の人間復帰、L3承認後の二種のM更新遷移・残差集計をRust comparison codeへ接続した。HDS controllerはdecision／reason／triggered thresholdの一致を先に確認し、同じ出所と確認できる場合だけ数値projectionをRustへ渡す。今回追加した現行目的版比較の実process結果は未確認。Rustの操作判断は`hold`であり、作用権限・M正本writerを持たない。
+K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続を行い、K-B5では数値policy採否・rule provenance・purpose binding輸送値・SUSPEND後の人間復帰に加え、GatewayのL3承認後に発生する二種のM更新遷移と残差集計を同じRust実processへ接続した。HDS controllerはTypeScript commitのdecision・reason・triggered thresholdを通常policy評価と照合し、同じ出所と確認できる場合だけscore／weight／lifecycle／thresholdを固定小数点化してRustへ渡す。Rustは独立評価した結果を非権威receiptへ返す。purpose binding比較はobserverが同じprojectionからIPC値を設定するため、独立したcurrent-governance sourceとの比較ではなくtransport整合に限る。
 
-現行J projection v6は保存時bindingと現行bindingを別項目にし、Rust receiptとGateway observer logでIPC輸送一致と目的版鮮度を区別する。鮮度不一致は比較残差であり、TypeScript authorityの判断・実行・M writerを変更しない。raw goal ref・目的本文は渡さず、目的の意味適合は未評価。今回のコード確認は`pnpm typecheck`、Rust `cargo check`、`cargo fmt --check`がPASS。Rust実process／Gateway runtime統合／testは未実施。
+今回の実consumer修正では、Gateway observerがmemory transitionのreceiptから遷移一致・残差状態・lifecycleを元projectionより再計算して照合するようにした。相互に矛盾するreceiptは採用せずobserverをfail-closeする。今回のコード確認はHDS／Gateway typecheck・build、Rust `cargo check`、`cargo fmt --check`、差分空白検査がPASS。テストおよびこの差分のRust実processは未実行。先行する実process・test結果は先行commitの証拠としてのみ保持する。
 
-K-B5のJ/M全体意味比較とHDS Framework Kernel意味責務の実consumer、`RUST_SHADOW_WIRED`、single-writer cutover、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。次はHDS Framework Kernel意味責務を現行TypeScript authorityの実consumerへ接続し、Rustは比較用shadowのまま保つ。目的本文・task意味への適合は確認済みに昇格させず、C08.03、OD-03、別repo変更、P13公開・出荷GOも保留する。
+今回、purpose-bound computeのdigest-only bindingを`DecisionLog`へ記録し、SUSPEND／resume記録へ引き継いだ。承認済みmeaning-updateのcontent-review／commit audit markerはsource DecisionLog hashとpurpose bindingを持ち、recovery／replayは唯一のASSERT source recordと照合する。M record v1と意味digestは維持する。HDS／Gateway typecheck・buildはPASS。テスト、Rust変更、実processは未実施。これは監査上の出所連結であり、目的適合やRust authorityを成立させない。
+
+Rustの`decision`は常に`hold`、作用権限・M正本writerなし。K-B5のJ/M全体意味比較、HDS Framework意味機構の実consumer、`RUST_SHADOW_WIRED`、single-writer cutover、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。目的本文・task意味への適合は未確認であり、transport一致から推定しない。C08.03、OD-03、他repo変更、P13 GOも保留。次の施工では、保存済みpurpose bindingを現行`GoalGovernanceLedger`の独立projectionと照合し、shadow比較がIPC輸送値だけでなく現行目的版との鮮度を判別できるようにする。意味適合そのものは未評価のまま分離して扱う。
 
 ## 維持する境界
 

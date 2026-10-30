@@ -856,7 +856,7 @@ describe("HDSUpperController.resume()", () => {
     expect(command).not.toBeNull();
     expect(runtime_kernel_j_projection.status).toBe("comparable");
     if (runtime_kernel_j_projection.status !== "comparable") throw new Error("resume projection unavailable");
-    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v6");
+    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v5");
     expect(runtime_kernel_j_projection.projection.typescript_decision).toBe("SUSPEND");
     expect(runtime_kernel_j_projection.projection.typescript_policy_rule_id).toBe("per_axis_suspend_below");
     expect(runtime_kernel_j_projection.projection.typescript_policy_rule_axis).toBe("input_validity");
@@ -884,7 +884,7 @@ describe("HDSUpperController.resume()", () => {
     });
     expect(adoption.status).toBe("comparable");
     if (adoption.status !== "comparable") throw new Error("memory adoption projection unavailable");
-    expect(adoption.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v6");
+    expect(adoption.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v5");
     expect(adoption.projection.memory_transition).toMatchObject({
       kind: "meaning_update_adoption",
       semantic_relation_status: "not_assessed",

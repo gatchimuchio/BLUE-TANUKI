@@ -79,8 +79,6 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
         decision: "hold",
         comparison_status: "matched",
         purpose_binding_matches: null,
-        current_goal_purpose_binding_status: "not_bound",
-        purpose_binding_current_matches: null,
         policy_decision_matches: true,
         policy_rule_matches: true,
         typescript_decision: hdsResult.decision,
@@ -256,10 +254,6 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
     const projectionText = JSON.stringify({
       ...hdsResult.runtime_kernel_j_projection.projection,
       purpose_binding: { goal_id_digest: goalIdDigest, purpose_version: 7, purpose_digest: purposeDigest },
-      current_goal_purpose_binding: {
-        status: "available",
-        binding: { goal_id_digest: goalIdDigest, purpose_version: 7, purpose_digest: purposeDigest },
-      },
     });
     const process = startKernel(key, sessionId);
     try {
@@ -272,8 +266,6 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
         decision: "hold",
         comparison_status: "matched",
         purpose_binding_matches: true,
-        current_goal_purpose_binding_status: "available",
-        purpose_binding_current_matches: true,
         goal_id: goalId,
         goal_version: 7,
         shadow_revision: 1,
@@ -292,8 +284,6 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
         decision: "hold",
         comparison_status: "mismatched",
         purpose_binding_matches: false,
-        current_goal_purpose_binding_status: "available",
-        purpose_binding_current_matches: true,
         policy_decision_matches: true,
         goal_id: goalId,
         goal_version: 8,
@@ -312,8 +302,6 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
         decision: "hold",
         comparison_status: "mismatched",
         purpose_binding_matches: false,
-        current_goal_purpose_binding_status: "available",
-        purpose_binding_current_matches: true,
         goal_id: differentGoalId,
         goal_version: 7,
         shadow_revision: 3,

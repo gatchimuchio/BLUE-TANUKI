@@ -130,7 +130,6 @@ import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy }
 import { projectRuntimeKernelJDecision, projectRuntimeKernelJMemoryTransition, projectRuntimeKernelJResumeTransition,
   type RuntimeKernelJProjectionResult,
   type RuntimeKernelJMemoryTransitionInput,
-  type RuntimeKernelJCurrentPurposeBindingProjection,
   type RuntimeKernelJPurposeBindingProjection } from "./runtime_kernel_j_projection.js";
 import { assessCandidateGoalCriteria, digestGoalCriteriaValue } from "./candidate_criteria.js";
 import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
@@ -1004,33 +1003,10 @@ export class HDSUpperController {
   /** Return a sanitized, non-authoritative projection for the Rust shadow observer. */
   runtimeKernelJProjection(log: DecisionLog): RuntimeKernelJProjectionResult {
     try {
-      const purposeBinding = log.goal_purpose_binding ?? null;
-      return projectRuntimeKernelJDecision(log, this.policy, purposeBinding,
-        this.runtimeKernelJCurrentPurposeBinding(purposeBinding));
+      return projectRuntimeKernelJDecision(log, this.policy);
     } catch {
       return { status: "not_comparable", reason: "projection_error" };
     }
-  }
-
-  private runtimeKernelJCurrentPurposeBinding(
-    source: RuntimeKernelJPurposeBindingProjection | null,
-  ): RuntimeKernelJCurrentPurposeBindingProjection {
-    if (!source) return { status: "not_bound", binding: null };
-    const projection = this.getGoalGovernanceProjection();
-    if (!projection || projection.used_for_authority !== false) {
-      return { status: "ledger_unavailable", binding: null };
-    }
-    const goal = projection.goals.find((candidate) =>
-      createHash("sha256").update(candidate.goal_ref, "utf8").digest("hex") === source.goal_id_digest);
-    if (!goal) return { status: "goal_not_found", binding: null };
-    return {
-      status: "available",
-      binding: {
-        goal_id_digest: source.goal_id_digest,
-        purpose_version: goal.current_version,
-        purpose_digest: goal.current_purpose_digest,
-      },
-    };
   }
 
   runtimeKernelJMemoryTransitionProjection(
@@ -1753,7 +1729,7 @@ ${planControl.question}`,
         resume_allowed: resumeAllowed,
         typescript_result_decision: log.commit.decision,
         command_present: commandPresent,
-      }, this.runtimeKernelJCurrentPurposeBinding(purposeBinding));
+      });
 
     this.state = "AWAITING_RESUME";
     const selfHealth = this.evaluateSelfHealth();
