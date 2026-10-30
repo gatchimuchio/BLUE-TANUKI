@@ -365,3 +365,7 @@ Operation Core 移行が完了したと言える条件:
 - developer / recovery 互換 entrypoint の削除。
 
 これは互換を壊さない移行開始点であり、完成状態ではない。
+
+## K-B4 通常GatewayからRust shadowへの観測接続
+
+通常Gateway inboundのTypeScript hds.decide結果から、明示opt-inされた非production開発環境に限り、判断種別・command有無・非権威flagをRust shadow processへ送るobserverを接続した。user content、command arguments、credential、request identityは送らない。署名・canonical responseを検証し、hold／effectなし／M書込なし／非権威のreceiptだけを受け入れる。送信はinbound応答と並行する有界queueで、Rustの停止・失敗はTS authorityやGatewayの判断へ戻さない。接続statusはopt-in経路でWIRED。意味判断比較・Rust J意味処理はBUILD_GAPであり、production既定経路、全Gateway live request、製品全体のSYSTEM_SHAPED／BUILD_COVEREDを示す証拠ではない。

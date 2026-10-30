@@ -176,6 +176,7 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
       await process.close();
     }
   }, 120_000);
+
 });
 
 function startKernel(key: Buffer, sessionId: string) {

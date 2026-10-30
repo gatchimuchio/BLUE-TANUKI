@@ -49,6 +49,11 @@ import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStart
 import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { localInspectionReconciliationMessage, runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
+import {
+  startRuntimeKernelShadowObserver,
+  type RuntimeKernelShadowObserver,
+  type RuntimeKernelShadowObserverEvent,
+} from "./runtime_kernel_shadow_observer.js";
 import { buildFailureMemoryStore, buildHDSMemoryStore, buildSessionStore } from "./runtime.js";
 import { parseTelegramInboundGrants } from "./telegram_inbound_grants.js";
 import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
@@ -626,6 +631,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
 
   const tools = new ToolRegistry();
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
+  let runtimeKernelShadowObserver: RuntimeKernelShadowObserver | undefined;
   let gatewayShuttingDown = false;
   let cronEventsStoreQuiesced = false;
   let jMRestoreStoreQuiesced: "j_control" | "m_state" | null = null;
@@ -4813,6 +4819,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const { log, command } = hds.decide(hdsDecisionInput, documentCoordinator
       ? { transient_content: "document_organization" }
       : undefined);
+    runtimeKernelShadowObserver?.observe({
+      decision: log.commit.decision,
+      command_present: command !== undefined,
+    });
     recordCompleteHistory({
       kind: "hds_decision",
       request_id: log.request_id,
@@ -5045,10 +5055,42 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     dispatch: handleInbound,
     log: (message, waitId) => gatewayLog.warn(message, { wait_id: waitId }),
   });
-  await router.start(async (req, ephemeralContext) => {
-    try { await handleInbound(req, ephemeralContext); }
-    finally { waitDeadlineScheduler.refresh(); }
+  runtimeKernelShadowObserver = await startRuntimeKernelShadowObserver({
+    enabled: process.env.BLUE_TANUKI_RUNTIME_KERNEL_SHADOW_ENABLED === "true",
+    production: process.env.NODE_ENV === "production",
+    onEvent: (event: RuntimeKernelShadowObserverEvent) => {
+      if (event.kind === "ready") {
+        gatewayLog.info("Runtime Kernel shadow ready", {
+          capability: "shadow_only",
+          authority: "typescript_hds_brain",
+          effect_capability: false,
+          memory_writer: false,
+        });
+      } else if (event.kind === "observation") {
+        gatewayLog.info("Runtime Kernel shadow receipt", {
+          sequence: event.sequence,
+          shadow_revision: event.shadow_revision,
+          effect_started: false,
+          m_written: false,
+          used_for_authority: false,
+          may_execute: false,
+        });
+      } else if (event.kind === "dropped") {
+        gatewayLog.warn("Runtime Kernel shadow observation dropped", { reason: event.reason });
+      } else {
+        gatewayLog.warn("Runtime Kernel shadow unavailable", { reason: event.reason });
+      }
+    },
   });
+  try {
+    await router.start(async (req, ephemeralContext) => {
+      try { await handleInbound(req, ephemeralContext); }
+      finally { waitDeadlineScheduler.refresh(); }
+    });
+  } catch (error) {
+    await runtimeKernelShadowObserver?.shutdown();
+    throw error;
+  }
   waitDeadlineScheduler.start();
   gatewayLog.info("inbound channels", { channels: router.list().join(", ") });
   gatewayLog.info("outbound channels", { channels: dispatcher.list().join(", ") });
@@ -5064,6 +5106,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       clearInterval(failureMemoryVerificationTimer);
       activeTaskExecutions.abortAll();
       await router.stop();
+      await runtimeKernelShadowObserver?.shutdown();
+      runtimeKernelShadowObserver = undefined;
       telegramUpdateStore?.close();
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);
