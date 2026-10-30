@@ -30,6 +30,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 今回、HDS-BRAINが既に確定した自己健全性fail-safe `SUSPEND`をRust shadowへ限定投影するconsumerを接続した。projection v11／request v6では失敗条件名・根拠・入力本文を除外し、失敗件数と実行禁止／非権威の固定値だけを渡す。Rustは単一の`self_health`停止軸、その重みと閾値、gate形状を検証して同じ停止を再判定し、運転判断は`hold`のまま維持する。Windows上の実Rust processで一致receipt、不正件数／重みの拒否、停止時の無作用・no-M-writeを確認した。HDS controller／shadow IPC 82 tests、Gateway shadow observer 4 tests、Rust `cargo test --locked` 4 tests、`cargo fmt --check`、HDS／Gateway typecheck・build、`pnpm docs:check`、`git diff --check`はPASS。fixtureは合成入力で、実provider・外部作用・他OS実行の証拠ではない。これはfail-safe停止の比較consumer接続を示すだけであり、K-B5全体意味比較、single-writer cutover、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAを成立させない。
 
+続いて、通常Gateway decisionのRust shadow J判定とTypeScriptが実際に生成した`ExecuteCommand`の有無をobserverのconsumerで照合する接続を追加した。RustのJ判定とcommand有無が食い違う場合は、authority経路を止めず`mismatched`として記録する。今回の`git diff --check`はPASS。test、typecheck、build、実process、docs検査は未実施（NOT_RUN）。Rustは引き続き`hold`、作用・M正本書込みなし。K-B5全体意味比較とsingle-writer cutoverは未成立。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

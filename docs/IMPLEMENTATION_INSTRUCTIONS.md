@@ -62,6 +62,8 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 今回のBUILD差分では、TypeScript HDS-BRAINが既にfail-safe `SUSPEND`を確定した自己健全性停止を、Rust shadowの限定J projectionへ接続した。projection v11／request v6は、失敗条件の名前・根拠・入力本文を送らず、失敗件数と実行禁止／非権威の固定値だけを渡す。Rustは単一の停止軸・固定重み・閾値を検証して`SUSPEND`を再判定する。Windows上の実Rust processで一致receipt、条件名・入力本文の非出力、範囲外件数と不正重みの拒否、安全停止を確認した。HDS controller／shadow IPC 82 tests、Gateway shadow observer 4 tests、Rust `cargo test --locked` 4 tests、Rust `cargo fmt --check`、HDS／Gateway typecheckとbuild、`pnpm docs:check`、`git diff --check`はPASS。テストは合成fixtureと実Rust processに限定され、実provider・外部作用・他OSを通した証拠ではない。Rustは引き続き`hold`、no-effect、no-M-write。K-B5の全体J/M意味比較、single-writer cutover、製品全体BUILD、QE_QC／QE_QAは未成立。
 
+今回、通常のGateway decisionでRust shadowが独立算出したJ判定を、TypeScript HDS-BRAINが実際に生成した`ExecuteCommand`の有無へ接続した。通常decisionに限り、Rust判定が`ASSERT`であることとcommand存在が一致しない場合、observerは停止せず`mismatched`および`command_presence_mismatch`を非権威ログへ返す。resumeは既存のresume遷移比較、memory approvalは既存の非command経路を維持する。TypeScript HDS-BRAINの判断・command・実行権限、Rustの`hold`／no-effect／no-M-writeは変更しない。今回の`git diff --check`はPASS。test、typecheck、build、実process、docs検査は未実施（NOT_RUN）。K-B5の全体比較・single-writer cutoverは未成立。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

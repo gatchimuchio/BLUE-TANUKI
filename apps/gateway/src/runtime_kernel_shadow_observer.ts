@@ -74,6 +74,7 @@ export type RuntimeKernelShadowObserverEvent =
     residual_status_matches?: boolean;
     plan_step_adoption: RuntimeKernelJPlanStepAdoptionReceipt;
     plan_step_adoption_typescript_matches?: boolean;
+    command_presence_mismatch?: true;
   }
   | {
     kind: "comparison_unavailable";
@@ -417,7 +418,10 @@ export async function startRuntimeKernelShadowObserver(options: {
           planAdoption.status === "not_comparable";
         const expectedRuntimeComparisonStatus = !comparisonMatches ? "mismatched"
           : comparisonIncomplete ? "not_comparable" : "matched";
-        const comparisonStatus = planAdoption.matches === false ? "mismatched" : expectedRuntimeComparisonStatus;
+        const commandPresenceMatches = comparisonKind !== "decision" ||
+          observation.command_present === (receipt.runtime_kernel_j_decision === "ASSERT");
+        const comparisonStatus = !commandPresenceMatches || planAdoption.matches === false
+          ? "mismatched" : expectedRuntimeComparisonStatus;
         if (receipt.accepted_for_shadow !== true || runtimeComparisonStatus === undefined ||
             receipt.comparison_status !== runtimeComparisonStatus ||
             runtimeComparisonStatus !== expectedRuntimeComparisonStatus ||
@@ -464,7 +468,7 @@ export async function startRuntimeKernelShadowObserver(options: {
           current_goal_purpose_binding_status: currentPurposeBinding.status,
           purpose_binding_current_matches: purposeBindingCurrentMatches,
           policy_rule_matches: receipt.policy_rule_matches,
-          lifecycle_matches: receipt.lifecycle_matches,
+          lifecycle_matches: receipt.lifecycle_matches && commandPresenceMatches,
           typescript_decision: typescriptDecision,
           typescript_policy_rule_id: receipt.typescript_policy_rule_id as ShadowPolicyRuleId,
           ...(typeof receipt.typescript_policy_rule_axis === "string"
@@ -488,6 +492,7 @@ export async function startRuntimeKernelShadowObserver(options: {
           plan_step_adoption: planStepAdoptionReceipt,
           ...(planAdoption.status === "matched" || planAdoption.status === "mismatched"
             ? { plan_step_adoption_typescript_matches: planAdoption.matches } : {}),
+          ...(commandPresenceMatches ? {} : { command_presence_mismatch: true as const }),
         });
       } catch {
         await fail();
