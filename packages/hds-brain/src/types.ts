@@ -309,6 +309,22 @@ export interface InputNormalizationTrace {
   }>;
 }
 
+/** Digest-only reference to a governed purpose version; it does not grant authority. */
+export interface GoalPurposeBindingReference {
+  readonly goal_id_digest: string;
+  readonly purpose_version: number;
+  readonly purpose_digest: string;
+}
+
+/** Non-authoritative audit provenance from an approved M update to its source J record. */
+export interface MeaningUpdateSourceDecisionBinding {
+  readonly schema_version: "blue-tanuki.meaning-update-source-decision-binding.v1";
+  readonly decision_hash: string;
+  readonly goal_purpose_binding?: GoalPurposeBindingReference;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
 export interface DecisionLog {
   request_id: string;
   input?: InputNormalizationTrace;
@@ -317,6 +333,8 @@ export interface DecisionLog {
   model: ModelResult;
   commit: CommitResult;
   timestamp: number;
+  /** Digest-only link to the governed purpose version associated with this decision. */
+  readonly goal_purpose_binding?: GoalPurposeBindingReference;
   memory_retrieval_suppressed_for?: "transient_document_organization" | "transient_audio_transcription" | "operation_result_reflection" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
   memory_capture_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
   session_history_suppressed_for?: "transient_document_organization" | "operation_result_reflection" | "operation_plan_receipt_reconciliation" | "operation_plan_wait_resume" | "failure_review";
@@ -710,6 +728,7 @@ export type AuditRecord =
       used_for_authority: false; timestamp: number; proposal_digest?: string; candidate_digest?: string;
       target_digest?: string; review_status?: string; approval_status?: "approved";
       source_observation_digest?: string;
+      source_decision_binding?: MeaningUpdateSourceDecisionBinding;
       memory_application_status?: "applied" | "blocked"; follow_up_action_status?: "unconfirmed"; reason?: string;
       citation_request_id?: string; citation_command_id?: string; citation_audit_digest?: string;
       target_record_id?: string; target_version?: string; interpretation_id?: string; judgment_ref?: string;

@@ -42,6 +42,8 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 今回、Rust receiptの実consumerであるGateway observerを補強した。memory transition projectionから遷移一致・残差状態・lifecycleの期待値を再計算し、receiptの各結果と個別に照合する。矛盾したreceiptは`invalid_shadow_receipt`としてobserverを停止し、非権威ログへ整合した比較結果として出さない。検証はHDS／Gateway typecheck・build、Rust `cargo check`、`cargo fmt --check`、`git diff --check`がPASS。テストは未実行であり、この差分の実process結果は未確認として扱う。Rustは引き続き`hold`、no-effect、no-M-writeである。
 
+今回、検証済みpurpose-bound plan computeのSHA-256(goal_ref)・purpose version・purpose digestを、Rust shadow専用WeakMapから`DecisionLog`のdigest-only `goal_purpose_binding`へ移した。SUSPENDと人間復帰の監査記録にも同じ束縛を引き継ぐ。C結果から生成されたmeaning-update候補はsource `DecisionLog.commit.hash`と任意のpurpose bindingをL3 content-review／commit audit markerへ渡し、起動時recovery・replayで唯一のASSERT `DecisionLog`との一致を確認する。欠落・重複・不一致はcommitを拒否するか復旧をfail-closedにする。raw `goal_ref`と目的本文は保持・送信しない。M record v1、その意味内容とinterpretation digestは変更せず、purpose bindingを権限や意味適合の証拠にも使わない。HDS／Gateway typecheck・buildはPASS。テスト、Rust変更、Rust実process／Gateway統合実行は未実施。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

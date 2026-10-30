@@ -16,7 +16,9 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 今回の実consumer修正では、Gateway observerがmemory transitionのreceiptから遷移一致・残差状態・lifecycleを元projectionより再計算して照合するようにした。相互に矛盾するreceiptは採用せずobserverをfail-closeする。今回のコード確認はHDS／Gateway typecheck・build、Rust `cargo check`、`cargo fmt --check`、差分空白検査がPASS。テストおよびこの差分のRust実processは未実行。先行する実process・test結果は先行commitの証拠としてのみ保持する。
 
-Rustの`decision`は常に`hold`、作用権限・M正本writerなし。K-B5のJ/M全体意味比較、HDS Framework意味機構の実consumer、`RUST_SHADOW_WIRED`、single-writer cutover、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。目的本文・task意味への適合は未確認であり、transport一致から推定しない。C08.03、OD-03、他repo変更、P13 GOも保留。次の施工では、目的意味を保ったDecisionRecordと承認済みM更新の実consumerを接続する契約境界を現物で特定し、合成経路を前進させる。
+今回、purpose-bound computeのdigest-only bindingを`DecisionLog`へ記録し、SUSPEND／resume記録へ引き継いだ。承認済みmeaning-updateのcontent-review／commit audit markerはsource DecisionLog hashとpurpose bindingを持ち、recovery／replayは唯一のASSERT source recordと照合する。M record v1と意味digestは維持する。HDS／Gateway typecheck・buildはPASS。テスト、Rust変更、実processは未実施。これは監査上の出所連結であり、目的適合やRust authorityを成立させない。
+
+Rustの`decision`は常に`hold`、作用権限・M正本writerなし。K-B5のJ/M全体意味比較、HDS Framework意味機構の実consumer、`RUST_SHADOW_WIRED`、single-writer cutover、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。目的本文・task意味への適合は未確認であり、transport一致から推定しない。C08.03、OD-03、他repo変更、P13 GOも保留。次の施工では、保存済みpurpose bindingを現行`GoalGovernanceLedger`の独立projectionと照合し、shadow比較がIPC輸送値だけでなく現行目的版との鮮度を判別できるようにする。意味適合そのものは未評価のまま分離して扱う。
 
 ## 維持する境界
 

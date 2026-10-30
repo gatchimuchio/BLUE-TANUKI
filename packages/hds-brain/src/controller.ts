@@ -88,6 +88,7 @@ import type {
   SkepticalReviewAuditTrace,
   AuditRecord,
   MemoryCitationReviewLog,
+  MeaningUpdateSourceDecisionBinding,
 } from "./types.js";
 import { frame } from "./frame.js";
 import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
@@ -361,12 +362,74 @@ type GoalPurposeChangeCommitResult =
 interface PendingMeaningUpdateCandidate {
   readonly request_id: string;
   readonly source_command_id: string;
+  readonly source_decision_binding: MeaningUpdateSourceDecisionBinding;
   readonly proposal: MeaningUpdateProposalV3;
   readonly proposal_digest: string;
   readonly memory_trace: DecisionLog["frame"]["memory_trace"];
   readonly source_observation_binding?: MeaningUpdateSourceObservationBinding;
   readonly source_observations?: readonly OperationPlanComputeSourceObservation[];
   readonly source_origin?: InboundRequest;
+}
+
+function sourceDecisionBindingMatchesAudit(
+  entries: readonly { readonly log: AuditRecord }[],
+  binding: unknown,
+): boolean {
+  if (binding === undefined) return true;
+  if (!isMeaningUpdateSourceDecisionBinding(binding)) return false;
+  const matches: DecisionLog[] = [];
+  for (const { log } of entries) {
+    if (!("kind" in log) && log.commit.hash === binding.decision_hash) matches.push(log);
+  }
+  if (matches.length !== 1 || matches[0]!.commit.decision !== "ASSERT") return false;
+  const observed = decisionBindingForLog(matches[0]!);
+  return observed !== undefined && sourceDecisionBindingsEqual(observed, binding);
+}
+
+function decisionBindingForLog(log: DecisionLog): MeaningUpdateSourceDecisionBinding | undefined {
+  if (!/^[a-f0-9]{64}$/.test(log.commit.hash)) return undefined;
+  const purpose = log.goal_purpose_binding;
+  if (purpose && (Object.keys(purpose).length !== 3 || !/^[a-f0-9]{64}$/.test(purpose.goal_id_digest) ||
+      !Number.isSafeInteger(purpose.purpose_version) || purpose.purpose_version < 1 ||
+      !/^[a-f0-9]{64}$/.test(purpose.purpose_digest))) return undefined;
+  return Object.freeze({
+    schema_version: "blue-tanuki.meaning-update-source-decision-binding.v1",
+    decision_hash: log.commit.hash,
+    ...(purpose ? { goal_purpose_binding: Object.freeze({ ...purpose }) } : {}),
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
+function sourceDecisionBindingsEqual(
+  left: unknown,
+  right: unknown,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (!isMeaningUpdateSourceDecisionBinding(left) || !isMeaningUpdateSourceDecisionBinding(right)) return false;
+  return left.schema_version === right.schema_version && left.decision_hash === right.decision_hash &&
+    left.used_for_authority === right.used_for_authority && left.may_execute === right.may_execute &&
+    left.goal_purpose_binding?.goal_id_digest === right.goal_purpose_binding?.goal_id_digest &&
+    left.goal_purpose_binding?.purpose_version === right.goal_purpose_binding?.purpose_version &&
+    left.goal_purpose_binding?.purpose_digest === right.goal_purpose_binding?.purpose_digest;
+}
+
+function isMeaningUpdateSourceDecisionBinding(value: unknown): value is MeaningUpdateSourceDecisionBinding {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const binding = value as Record<string, unknown>;
+  if (binding.schema_version !== "blue-tanuki.meaning-update-source-decision-binding.v1" ||
+      typeof binding.decision_hash !== "string" || !/^[a-f0-9]{64}$/.test(binding.decision_hash) ||
+      binding.used_for_authority !== false || binding.may_execute !== false ||
+      Object.keys(binding).some((key) => !["schema_version", "decision_hash", "goal_purpose_binding",
+        "used_for_authority", "may_execute"].includes(key))) return false;
+  if (!Object.hasOwn(binding, "goal_purpose_binding")) return true;
+  const purpose = binding.goal_purpose_binding;
+  if (typeof purpose !== "object" || purpose === null || Array.isArray(purpose)) return false;
+  const goal = purpose as Record<string, unknown>;
+  return Object.keys(goal).length === 3 && typeof goal.goal_id_digest === "string" &&
+    /^[a-f0-9]{64}$/.test(goal.goal_id_digest) && Number.isSafeInteger(goal.purpose_version) &&
+    Number(goal.purpose_version) >= 1 && typeof goal.purpose_digest === "string" &&
+    /^[a-f0-9]{64}$/.test(goal.purpose_digest);
 }
 
 interface PendingSkepticalReviewGoalPurposeChangeCandidate {
@@ -534,6 +597,7 @@ function meaningUpdateAdoptionApprovalEvidence(
     target: string; command_digest: string; proposal_digest: string; candidate_digest: string;
     review_status: MeaningUpdateProposalReferenceReview["review_status"];
     source_observation_digest?: string;
+    source_decision_binding?: MeaningUpdateSourceDecisionBinding;
     before_index?: number },
 ): { readonly timestamp: number; readonly evaluation: ApprovalEvaluation } | null {
   const limit = input.before_index ?? Number.POSITIVE_INFINITY;
@@ -550,6 +614,7 @@ function meaningUpdateAdoptionApprovalEvidence(
     log.projection_digest === input.command_digest && log.proposal_digest === input.proposal_digest &&
     log.candidate_digest === input.candidate_digest && log.review_status === input.review_status &&
     log.source_observation_digest === input.source_observation_digest &&
+    sourceDecisionBindingsEqual(log.source_decision_binding, input.source_decision_binding) &&
     log.used_for_authority === false);
   if (!review) return null;
   const approved = entries.find(({ index, log }) => index > review.index && index < limit && "kind" in log &&
@@ -597,6 +662,7 @@ function reconcilePendingMeaningUpdateCommitMarkers(audit: AuditLog, memory: Mea
     const targetDigest = createHash("sha256").update(target, "utf8").digest("hex");
     if (review.proposal_digest !== record.proposal_digest || review.candidate_digest !== record.candidate_digest ||
         review.source_observation_digest !== sourceObservationDigest || review.target_digest !== targetDigest ||
+        !sourceDecisionBindingMatchesAudit(entries, review.source_decision_binding) ||
         typeof review.projection_digest !== "string" || !/^[a-f0-9]{64}$/.test(review.projection_digest) ||
         (review.review_status !== "prior_version_unverified" &&
           review.review_status !== "counterevidence_absence_unverified") || review.used_for_authority !== false) {
@@ -629,6 +695,7 @@ function reconcilePendingMeaningUpdateCommitMarkers(audit: AuditLog, memory: Mea
       candidate_digest: record.candidate_digest,
       review_status: review.review_status as MeaningUpdateProposalReferenceReview["review_status"],
       source_observation_digest: sourceObservationDigest,
+      source_decision_binding: review.source_decision_binding,
     });
     if (!evidence || evidence.timestamp !== approval.timestamp ||
         JSON.stringify(evidence.evaluation) !== JSON.stringify(ask.evaluation)) {
@@ -640,6 +707,8 @@ function reconcilePendingMeaningUpdateCommitMarkers(audit: AuditLog, memory: Mea
       projection_digest: review.projection_digest, proposal_digest: record.proposal_digest,
       candidate_digest: record.candidate_digest, target_digest: targetDigest,
       ...(sourceObservationDigest ? { source_observation_digest: sourceObservationDigest } : {}),
+      ...(review.source_decision_binding
+        ? { source_decision_binding: review.source_decision_binding } : {}),
       review_status: review.review_status as MeaningUpdateProposalReferenceReview["review_status"],
       approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed",
       used_for_authority: false, timestamp: evidence.timestamp });
@@ -705,7 +774,8 @@ function replayMeaningUpdateMemoryCommits(audit: AuditLog, memory: MeaningUpdate
     const record = memory.read(meaningUpdateMemoryRecordId(log.proposal_digest));
     if (!record || !isMeaningUpdateMemoryRecord(record) || record.proposal_digest !== log.proposal_digest ||
         record.candidate_digest !== log.candidate_digest ||
-        record.source_observation_binding?.digest !== log.source_observation_digest) {
+        record.source_observation_binding?.digest !== log.source_observation_digest ||
+        !sourceDecisionBindingMatchesAudit(entries, log.source_decision_binding)) {
       throw new Error("persisted meaning update commit does not match its private M record");
     }
     const interpretationSnapshot = memory.readInterpretation(record.proposal.target_reference.record_id);
@@ -743,7 +813,9 @@ function replayMeaningUpdateMemoryCommits(audit: AuditLog, memory: MeaningUpdate
       command_digest: log.projection_digest, proposal_digest: log.proposal_digest,
       candidate_digest: log.candidate_digest,
       review_status: log.review_status as MeaningUpdateProposalReferenceReview["review_status"],
-      source_observation_digest: log.source_observation_digest, before_index: index,
+      source_observation_digest: log.source_observation_digest,
+      source_decision_binding: log.source_decision_binding,
+      before_index: index,
     });
     if (!evidence || evidence.timestamp !== log.timestamp || evidence.evaluation !== ask.log.evaluation) {
       throw new Error("persisted meaning update commit lacks matching content review and L3 approval");
@@ -867,10 +939,6 @@ export class HDSUpperController {
   /** Requests halted by SUSPEND, awaiting human verdict via resume(). */
   private readonly suspended = new Map<string, SuspendedRequest>();
 
-  /** 非永続のshadow projection文脈。purpose本文とgoal_refは保持しない。 */
-  private readonly runtimeKernelProjectionPurposeBindings =
-    new WeakMap<DecisionLog, RuntimeKernelJPurposeBindingProjection>();
-
   /** Cached original requests for suspended ones, so resume() can re-emit. */
   private readonly suspendedRequests = new Map<string, InboundRequest>();
 
@@ -935,8 +1003,7 @@ export class HDSUpperController {
   /** Return a sanitized, non-authoritative projection for the Rust shadow observer. */
   runtimeKernelJProjection(log: DecisionLog): RuntimeKernelJProjectionResult {
     try {
-      return projectRuntimeKernelJDecision(log, this.policy,
-        this.runtimeKernelProjectionPurposeBindings.get(log) ?? null);
+      return projectRuntimeKernelJDecision(log, this.policy);
     } catch {
       return { status: "not_comparable", reason: "projection_error" };
     }
@@ -953,16 +1020,21 @@ export class HDSUpperController {
     }
   }
 
-  private retainRuntimeKernelProjectionPurposeBinding(
+  private retainGoalPurposeBinding(
     log: DecisionLog,
     purpose: { readonly binding: OperationPlanGoalPurposeBinding } | undefined,
   ): void {
     const binding = purpose?.binding;
     if (!binding) return;
-    this.runtimeKernelProjectionPurposeBindings.set(log, {
-      goal_id_digest: createHash("sha256").update(binding.goal_ref, "utf8").digest("hex"),
-      purpose_version: binding.purpose_version,
-      purpose_digest: binding.purpose_digest,
+    Object.defineProperty(log, "goal_purpose_binding", {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: Object.freeze({
+        goal_id_digest: createHash("sha256").update(binding.goal_ref, "utf8").digest("hex"),
+        purpose_version: binding.purpose_version,
+        purpose_digest: binding.purpose_digest,
+      }),
     });
   }
 
@@ -1435,7 +1507,7 @@ ${planControl.question}`,
           session_history_suppressed_for: isolatedContextReason,
         } : transientAudioTranscript ? { memory_retrieval_suppressed_for: "transient_audio_transcription" as const } : {}),
       };
-      this.retainRuntimeKernelProjectionPurposeBinding(log, planComputePurpose);
+      this.retainGoalPurposeBinding(log, planComputePurpose);
       this.audit.append(log);
       this.state = "SUSPENDED";
       this.suspended.set(req.id, {
@@ -1566,7 +1638,7 @@ ${planControl.question}`,
         log = { ...log, commit: c }; command = null;
       }
     }
-    this.retainRuntimeKernelProjectionPurposeBinding(log, planComputePurpose);
+    this.retainGoalPurposeBinding(log, planComputePurpose);
     this.audit.append(log);
     if (!isolatedContextReason) this.captureMemoryReference(log);
 
@@ -1650,7 +1722,7 @@ ${planControl.question}`,
       throw new Error(`resume: no suspended request with id=${request_id}`);
     }
 
-    const purposeBinding = this.runtimeKernelProjectionPurposeBindings.get(susp.log) ?? null;
+    const purposeBinding = susp.log.goal_purpose_binding ?? null;
     const projectResume = (log: DecisionLog, resumeAllowed: boolean, commandPresent: boolean) =>
       projectRuntimeKernelJResumeTransition(susp.log, this.policy, purposeBinding, {
         owner_verdict: verdict,
@@ -1688,6 +1760,8 @@ ${planControl.question}`,
         },
         frame: susp.log.frame,
         model: selfHealthModel(susp.log.frame, selfHealth),
+        ...(susp.log.goal_purpose_binding
+          ? { goal_purpose_binding: Object.freeze({ ...susp.log.goal_purpose_binding }) } : {}),
         commit: {
           decision: "SUSPEND",
           reason,
@@ -1743,6 +1817,8 @@ ${planControl.question}`,
       },
       frame: susp.log.frame,
       model: susp.log.model,
+      ...(susp.log.goal_purpose_binding
+        ? { goal_purpose_binding: Object.freeze({ ...susp.log.goal_purpose_binding }) } : {}),
       commit: {
         decision: lifted,
         reason: `human_resume:${verdict} (was SUSPEND: ${susp.reason})`,
@@ -2099,10 +2175,13 @@ ${planControl.question}`,
   }): boolean {
     try {
       const review = this.getMeaningUpdateProposalForOwnerReview(input.source_command_id);
+      const sourceDecisionBinding = this.pendingMeaningUpdateCandidates.get(input.source_command_id)?.source_decision_binding;
       const request_id = input.request_id.trim();
       const command_id = input.command_id.trim();
       const proposal_actor = input.proposal_actor.trim();
-      if (!review || !request_id || !command_id || !proposal_actor || proposal_actor === "system" ||
+      if (!review || !sourceDecisionBinding ||
+          !sourceDecisionBindingMatchesAudit(this.audit.list(), sourceDecisionBinding) ||
+          !request_id || !command_id || !proposal_actor || proposal_actor === "system" ||
           !/^[a-f0-9]{64}$/.test(input.command_digest) ||
           input.args.proposal_digest !== review.proposal_digest ||
           input.args.candidate_digest !== review.proposal.candidate_digest ||
@@ -2123,6 +2202,7 @@ ${planControl.question}`,
         candidate_digest: review.proposal.candidate_digest,
         target_digest: createHash("sha256").update(target, "utf8").digest("hex"),
         ...(review.source_observation_binding ? { source_observation_digest: review.source_observation_binding.digest } : {}),
+        source_decision_binding: sourceDecisionBinding,
         review_status: review.reference_review.review_status, used_for_authority: false, timestamp: Date.now() });
       return this.audit.verify();
     } catch { return false; }
@@ -2143,11 +2223,15 @@ ${planControl.question}`,
     if (!this.audit.isPersistent()) return { ok: false, reason: "audit_not_persistent" };
     if (!this.audit.verify()) return { ok: false, reason: "audit_invalid" };
     const review = this.getMeaningUpdateProposalForOwnerReview(input.source_command_id);
+    const sourceDecisionBinding = this.pendingMeaningUpdateCandidates.get(input.source_command_id)?.source_decision_binding;
     const request_id = input.request_id.trim();
     const command_id = input.command_id.trim();
     const proposal_actor = input.proposal_actor.trim();
     const reviewer_actor = input.reviewer_actor.trim();
-    if (!review || !request_id || !command_id || !proposal_actor || proposal_actor === "system" || !reviewer_actor ||
+    if (!review || !sourceDecisionBinding || !sourceDecisionBindingMatchesAudit(this.audit.list(), sourceDecisionBinding)) {
+      return { ok: false, reason: "source_decision_unavailable" };
+    }
+    if (!request_id || !command_id || !proposal_actor || proposal_actor === "system" || !reviewer_actor ||
         !/^[a-f0-9]{64}$/.test(input.command_digest) || input.content_review_digest !== input.command_digest ||
         input.args.proposal_digest !== review.proposal_digest || input.args.candidate_digest !== review.proposal.candidate_digest ||
         input.args.target_record_id !== review.proposal.target_reference.record_id ||
@@ -2165,6 +2249,7 @@ ${planControl.question}`,
       command_digest: input.command_digest, proposal_digest: review.proposal_digest,
       candidate_digest: review.proposal.candidate_digest, review_status: review.reference_review.review_status,
       source_observation_digest: review.source_observation_binding?.digest,
+      source_decision_binding: sourceDecisionBinding,
     });
     if (!evidence || JSON.stringify(evidence.evaluation) !== JSON.stringify(input.evaluation)) {
       return { ok: false, reason: "approval_not_verified" };
@@ -2225,6 +2310,7 @@ ${planControl.question}`,
         candidate_digest: review.proposal.candidate_digest,
         target_digest: createHash("sha256").update(meaningUpdateAdoptionApprovalTarget(input.args), "utf8").digest("hex"),
         ...(review.source_observation_binding ? { source_observation_digest: review.source_observation_binding.digest } : {}),
+        source_decision_binding: sourceDecisionBinding,
         review_status: review.reference_review.review_status,
         approval_status: "approved", memory_application_status: "blocked", follow_up_action_status: "unconfirmed",
         reason: committed.reason, used_for_authority: false, timestamp: Date.now() });
@@ -2235,6 +2321,7 @@ ${planControl.question}`,
       candidate_digest: review.proposal.candidate_digest,
       target_digest: createHash("sha256").update(meaningUpdateAdoptionApprovalTarget(input.args), "utf8").digest("hex"),
       ...(review.source_observation_binding ? { source_observation_digest: review.source_observation_binding.digest } : {}),
+      source_decision_binding: sourceDecisionBinding,
       review_status: review.reference_review.review_status,
       approval_status: "approved", memory_application_status: "applied", follow_up_action_status: "unconfirmed",
       used_for_authority: false, timestamp: evidence.timestamp });
@@ -3170,7 +3257,10 @@ ${planControl.question}`,
         issued.command.type === "llm_call" &&
         issued.command.payload.compute_context?.local_p_version !== FAILURE_REVIEW_LOCAL_P_VERSION),
     });
-    if (pendingMeaningUpdateCandidate && sourceLog && issued) {
+    const sourceDecisionBinding = sourceLog
+      ? decisionBindingForLog(sourceLog)
+      : undefined;
+    if (pendingMeaningUpdateCandidate && sourceLog && issued && sourceDecisionBinding) {
       while (this.pendingMeaningUpdateCandidates.size >= 64) {
         const oldest = this.pendingMeaningUpdateCandidates.keys().next().value as string | undefined;
         if (!oldest) break;
@@ -3179,6 +3269,7 @@ ${planControl.question}`,
       this.pendingMeaningUpdateCandidates.set(fb.command_id, {
         request_id: sourceLog.request_id,
         source_command_id: fb.command_id,
+        source_decision_binding: sourceDecisionBinding,
         proposal: pendingMeaningUpdateCandidate.proposal,
         proposal_digest: pendingMeaningUpdateCandidate.proposal_digest,
         memory_trace: structuredClone(sourceLog.frame.memory_trace),

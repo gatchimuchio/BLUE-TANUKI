@@ -1,5 +1,5 @@
 import type { Decision } from "@blue-tanuki/protocol";
-import type { DecisionLog, PolicyConfig, ResumeVerdict, ScoringResult } from "./types.js";
+import type { DecisionLog, GoalPurposeBindingReference, PolicyConfig, ResumeVerdict, ScoringResult } from "./types.js";
 import { evaluateDecision } from "./policy.js";
 
 const SCALE = 1_000_000;
@@ -27,11 +27,7 @@ export interface RuntimeKernelJThresholdProjection {
 }
 
 /** 目的本文とgoal_refを含めない、shadow比較用の目的版束縛。 */
-export interface RuntimeKernelJPurposeBindingProjection {
-  goal_id_digest: string;
-  purpose_version: number;
-  purpose_digest: string;
-}
+export type RuntimeKernelJPurposeBindingProjection = GoalPurposeBindingReference;
 
 /** Human resume input and its TS outcome; identity, request, and command are excluded. */
 export interface RuntimeKernelJResumeTransitionProjection {
@@ -122,7 +118,7 @@ export type RuntimeKernelJProjectionResult =
 export function projectRuntimeKernelJDecision(
   log: DecisionLog,
   policy: PolicyConfig,
-  purposeBinding: RuntimeKernelJPurposeBindingProjection | null = null,
+  purposeBinding: RuntimeKernelJPurposeBindingProjection | null = log.goal_purpose_binding ?? null,
 ): RuntimeKernelJProjectionResult {
   if (purposeBinding && (!/^[a-f0-9]{64}$/.test(purposeBinding.goal_id_digest) ||
       !Number.isSafeInteger(purposeBinding.purpose_version) || purposeBinding.purpose_version < 1 ||
