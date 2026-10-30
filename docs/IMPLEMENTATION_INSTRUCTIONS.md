@@ -84,6 +84,8 @@ resume shadow receiptの原因分類には固定enumのowner verdictとresume許
 
 2026-10-31のBUILD差分では、WebChat Control Centerが委任目的を読み込んだ時点の`purpose_version`を選択肢に保持して`/owner/task-compute`へ送り、Gatewayは現行の選択肢と照合するようにした。版が変わっていればInboundRequestを作らず409で拒否し、目的を再読込して選び直す案内を表示する。digest・目的本文は引き続きUIへ公開しない。版を送らない既存呼出しの互換性は維持する。channel-webchat typecheck、生成Control Center scriptの構文解析、`git diff --check`はPASS。test・Gateway実process・実providerはNOT_RUN。この接続は選択時の目的版固定であり、K-B5全体比較、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、single-writer cutoverを成立させない。
 
+続くK-B5 Gateway consumer差分では、M遷移receiptをTypeScript分類と完全一致させないとobserverが停止する結合を解消した。receiptの型・適用軸に応じたnull可否・内部lifecycle整合は検証し、意味上の差は参照レビュー／M revision／遷移／残差ごとの`*_classification_agrees`と総合`mismatched`で非権威ログへ残す。ログは固定分類と真偽値に限り、M本文・参照ID・集計数を含めない。Gateway typecheckと`git diff --check`はPASS。test、Rust実process、Gateway統合smokeは未実施（NOT_RUN）。Rustは`hold`／no-effect／no-M-write、TypeScript HDS-BRAINは唯一のauthority／M writerを維持する。K-B5全体意味比較、製品全体BUILD、QE_QC／QE_QA、single-writer cutoverは未成立。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

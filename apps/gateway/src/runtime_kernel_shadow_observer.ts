@@ -76,6 +76,10 @@ export type RuntimeKernelShadowObserverEvent =
     memory_transition_matches?: boolean;
     residual_status?: string;
     residual_status_matches?: boolean;
+    memory_reference_review_classification_agrees?: boolean;
+    memory_revision_classification_agrees?: boolean;
+    memory_transition_classification_agrees?: boolean;
+    memory_residual_status_classification_agrees?: boolean;
     plan_step_adoption: RuntimeKernelJPlanStepAdoptionReceipt;
     plan_step_adoption_typescript_matches?: boolean;
     plan_step_adoption_classification_agrees?: boolean;
@@ -93,12 +97,19 @@ export interface RuntimeKernelShadowObserver {
   shutdown(): Promise<void>;
 }
 
-function memoryTransitionReceiptIsConsistent(
+interface RuntimeKernelJMemoryTransitionClassificationAgreement {
+  memory_reference_review_classification_agrees: boolean;
+  memory_revision_classification_agrees: boolean;
+  memory_transition_classification_agrees: boolean;
+  memory_residual_status_classification_agrees: boolean;
+}
+
+function compareMemoryTransitionReceipt(
   transition: RuntimeKernelJMemoryTransitionProjection,
   receipt: JsonObject,
-): boolean {
+): RuntimeKernelJMemoryTransitionClassificationAgreement | undefined {
+  let referenceReviewMatches: boolean | null;
   let transitionMatches: boolean;
-  let residualStatus: string;
   const revisionPairValid = transition.memory_application_status === "applied"
     ? Number.isSafeInteger(transition.memory_revision_before) && transition.memory_revision_before! >= 0 &&
       Number.isSafeInteger(transition.memory_revision_after) && transition.memory_revision_after! >= 1
@@ -106,10 +117,12 @@ function memoryTransitionReceiptIsConsistent(
   const memoryRevisionMatches = transition.memory_application_status === "applied"
     ? revisionPairValid && transition.memory_revision_after === transition.memory_revision_before! + 1
     : null;
+  if (!revisionPairValid) return undefined;
 
   if (transition.kind === "meaning_update_adoption") {
     const reviewSummaryMatches = transition.reference_review === null
       ? null : meaningUpdateReferenceReviewSummaryMatches(transition.reference_review);
+    referenceReviewMatches = reviewSummaryMatches;
     const reviewStatusIsEligible = transition.reference_review?.review_status === "prior_version_unverified" ||
       transition.reference_review?.review_status === "counterevidence_absence_unverified";
     const applicationMatches = transition.owner_verdict === "approve"
@@ -121,16 +134,10 @@ function memoryTransitionReceiptIsConsistent(
         transition.reference_review === null &&
         transition.pending_reassessment_required_count === null;
     transitionMatches = applicationMatches &&
-      receipt.memory_reference_review_matches === reviewSummaryMatches &&
       transition.semantic_relation_status === "not_assessed" &&
       transition.follow_up_action_status === "unconfirmed" &&
-      transition.used_for_authority === false && transition.may_execute === false;
-    residualStatus = transition.owner_verdict === "approve"
-      ? transition.memory_application_status === "not_applied"
-        ? "adoption_approved_not_applied"
-        : transition.pending_reassessment_required_count === 0
-          ? "meaning_unverified" : "meaning_unverified_with_reassessment_pending"
-      : transition.owner_verdict === "reject" ? "adoption_rejected" : "adoption_blocked";
+      transition.used_for_authority === false && transition.may_execute === false &&
+      memoryRevisionMatches !== false;
   } else {
     const countsAreBounded = Number.isSafeInteger(transition.requested_judgment_count) &&
       transition.requested_judgment_count >= 1 && transition.requested_judgment_count <= 512 &&
@@ -147,21 +154,46 @@ function memoryTransitionReceiptIsConsistent(
       ? transition.memory_application_status === "applied" ? countsAreConsistent
         : transition.memory_application_status === "not_applied" && notAppliedCounts
       : transition.memory_application_status === "not_applied" && notAppliedCounts;
-    transitionMatches = applicationMatches &&
-      receipt.memory_reference_review_matches === null &&
-      transition.used_for_authority === false && transition.may_execute === false;
-    residualStatus = transition.reassessed_judgment_count === transition.requested_judgment_count &&
-      transition.remaining_reassessment_required_count === 0
-      ? "named_judgments_reassessed" : "named_judgments_pending";
+    referenceReviewMatches = null;
+    transitionMatches = applicationMatches && transition.used_for_authority === false &&
+      transition.may_execute === false && memoryRevisionMatches !== false;
   }
 
-  const residualStatusMatches = transition.typescript_residual_status === residualStatus;
-  return revisionPairValid && receipt.memory_revision_matches === memoryRevisionMatches &&
-    receipt.memory_transition_kind === transition.kind &&
-    receipt.memory_transition_matches === (transitionMatches && memoryRevisionMatches !== false) &&
-    receipt.residual_status === residualStatus &&
-    receipt.residual_status_matches === residualStatusMatches &&
-    receipt.lifecycle_matches === (transitionMatches && memoryRevisionMatches !== false && residualStatusMatches);
+  const receiptReferenceReviewMatches = receipt.memory_reference_review_matches;
+  const referenceReviewReceiptHasExpectedShape = referenceReviewMatches === null
+    ? receiptReferenceReviewMatches === null
+    : typeof receiptReferenceReviewMatches === "boolean";
+  const receiptRevisionMatches = receipt.memory_revision_matches;
+  const revisionReceiptHasExpectedShape = memoryRevisionMatches === null
+    ? receiptRevisionMatches === null
+    : typeof receiptRevisionMatches === "boolean";
+  const allowedResidualStatuses = transition.kind === "meaning_update_adoption"
+    ? ["meaning_unverified", "meaning_unverified_with_reassessment_pending", "adoption_approved_not_applied",
+      "adoption_rejected", "adoption_blocked"]
+    : ["named_judgments_reassessed", "named_judgments_pending"];
+  const receiptTransitionMatches = receipt.memory_transition_matches;
+  const receiptResidualStatus = receipt.residual_status;
+  const receiptResidualStatusMatches = receipt.residual_status_matches;
+  const receiptLifecycleMatches = receipt.lifecycle_matches;
+  const receiptIsWellFormed = receipt.memory_transition_kind === transition.kind &&
+    referenceReviewReceiptHasExpectedShape && revisionReceiptHasExpectedShape &&
+    typeof receiptTransitionMatches === "boolean" &&
+    (receiptReferenceReviewMatches !== false || receiptTransitionMatches === false) &&
+    (receiptRevisionMatches !== false || receiptTransitionMatches === false) &&
+    typeof receiptResidualStatus === "string" && allowedResidualStatuses.includes(receiptResidualStatus) &&
+    typeof receiptResidualStatusMatches === "boolean" &&
+    receiptResidualStatusMatches === (receiptResidualStatus === transition.typescript_residual_status) &&
+    typeof receiptLifecycleMatches === "boolean" &&
+    receiptLifecycleMatches === (receiptTransitionMatches && receiptResidualStatusMatches &&
+      receiptRevisionMatches !== false);
+  if (!receiptIsWellFormed) return undefined;
+
+  return {
+    memory_reference_review_classification_agrees: receiptReferenceReviewMatches === referenceReviewMatches,
+    memory_revision_classification_agrees: receiptRevisionMatches === memoryRevisionMatches,
+    memory_transition_classification_agrees: receiptTransitionMatches === transitionMatches,
+    memory_residual_status_classification_agrees: receiptResidualStatus === transition.typescript_residual_status,
+  };
 }
 
 function meaningUpdateReferenceReviewSummaryMatches(
@@ -462,6 +494,16 @@ export async function startRuntimeKernelShadowObserver(options: {
               planAdoption.status === planStepAdoptionReceipt.status &&
               planAdoption.matches === planStepAdoptionReceipt.matches
             : undefined;
+        const memoryTransitionClassification = projection.memory_transition
+          ? compareMemoryTransitionReceipt(projection.memory_transition, receipt)
+          : undefined;
+        const memoryTransitionClassificationAgrees = projection.memory_transition
+          ? memoryTransitionClassification !== undefined &&
+            memoryTransitionClassification.memory_reference_review_classification_agrees &&
+            memoryTransitionClassification.memory_revision_classification_agrees &&
+            memoryTransitionClassification.memory_transition_classification_agrees &&
+            memoryTransitionClassification.memory_residual_status_classification_agrees
+          : true;
         const comparisonMatches = receipt.policy_decision_matches === true &&
           (purposeBindingMatches === true || purposeBindingMatches === null) &&
           (purposeBindingCurrentMatches === true || purposeBindingCurrentMatches === null) &&
@@ -477,7 +519,7 @@ export async function startRuntimeKernelShadowObserver(options: {
             ? projection.resume_transition?.command_present === observation.command_present
             : !observation.command_present;
         const comparisonStatus = !commandPresenceMatches || planAdoption.matches === false ||
-          planStepAdoptionClassificationAgrees === false
+          planStepAdoptionClassificationAgrees === false || !memoryTransitionClassificationAgrees
           ? "mismatched" : expectedRuntimeComparisonStatus;
         if (receipt.accepted_for_shadow !== true || runtimeComparisonStatus === undefined ||
             receipt.comparison_status !== runtimeComparisonStatus ||
@@ -507,7 +549,7 @@ export async function startRuntimeKernelShadowObserver(options: {
                   receipt.memory_reference_review_matches !== null) ||
                 typeof receipt.residual_status !== "string" ||
                 typeof receipt.residual_status_matches !== "boolean" ||
-                !memoryTransitionReceiptIsConsistent(projection.memory_transition, receipt)
+                memoryTransitionClassification === undefined
               : receipt.memory_transition_kind !== null || receipt.memory_transition_matches !== null ||
                 receipt.memory_reference_review_matches !== null ||
                 receipt.memory_revision_matches !== null ||
@@ -554,6 +596,16 @@ export async function startRuntimeKernelShadowObserver(options: {
             memory_transition_matches: receipt.memory_transition_matches as boolean,
             residual_status: receipt.residual_status as string,
             residual_status_matches: receipt.residual_status_matches as boolean,
+            ...(memoryTransitionClassification ? {
+              memory_reference_review_classification_agrees:
+                memoryTransitionClassification.memory_reference_review_classification_agrees,
+              memory_revision_classification_agrees:
+                memoryTransitionClassification.memory_revision_classification_agrees,
+              memory_transition_classification_agrees:
+                memoryTransitionClassification.memory_transition_classification_agrees,
+              memory_residual_status_classification_agrees:
+                memoryTransitionClassification.memory_residual_status_classification_agrees,
+            } : {}),
           } : {}),
           plan_step_adoption: planStepAdoptionReceipt,
           ...(planAdoption.status === "matched" || planAdoption.status === "mismatched"
