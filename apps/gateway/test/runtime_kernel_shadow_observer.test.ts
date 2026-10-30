@@ -303,6 +303,8 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         runtime_kernel_j_decision: "ASSERT",
         rule_id: "human_resume_transition",
         command_present: true,
+        resume_owner_verdict: "approve",
+        resume_allowed: true,
         purpose_version: null,
         plan_step_adoption: { status: "not_applicable", matches: null },
       },
