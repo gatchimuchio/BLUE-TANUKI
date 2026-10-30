@@ -3379,6 +3379,11 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         if (pending) return pending;
         const { log, command, request, runtime_kernel_j_projection } = hds.resume(request_id, verdict,
           { actor: ctx.actor, token_kind: ctx.token_kind });
+        const resumedWithUnavailableMedia = verdict === "approve" && command !== null &&
+          suspendedRequestsWithUnavailableEphemeralMedia.has(request_id);
+        if (log.commit.decision !== "SUSPEND") {
+          suspendedRequestsWithUnavailableEphemeralMedia.delete(request_id);
+        }
         runtimeKernelShadowObserver?.observe({
           j_projection: runtime_kernel_j_projection,
           command_present: command !== null,
@@ -3398,6 +3403,33 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           },
         });
         if (command) {
+          if (resumedWithUnavailableMedia) {
+            hds.onCommandLifecycle(command.id, "approval_cancelled", {
+              actor: "gateway",
+              reason: "transient_media_unavailable_after_suspend",
+            });
+            recordCompleteHistory({
+              kind: "audit_history",
+              request_id,
+              command_id: command.id,
+              actor: ctx.actor,
+              source: "gateway.resume_input_unavailable",
+              timestamp: Date.now(),
+              payload: {
+                status: "fresh_request_required",
+                reason: "transient_media_unavailable_after_suspend",
+                used_for_authority: false,
+                may_execute: false,
+              },
+            });
+            return {
+              decision: log.commit.decision,
+              executed: false,
+              status: "fresh_request_required",
+              fresh_request_required: true,
+              message: "保留中にTelegramの添付データは破棄されたため、この依頼は実行しませんでした。添付を付けて新しい依頼として再送してください。",
+            };
+          }
           const r = await executeAndEcho(command, log, request, { actor: ctx.actor });
           return { decision: log.commit.decision, executed: true, status: r.status };
         }
@@ -4894,6 +4926,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
   });
 
   let documentOrganizationCheckpointStore: DocumentOrganizationCheckpointStore | null = null;
+  // Attachment bytes are deliberately volatile. Remember only that a suspended
+  // Telegram request depended on them so resume cannot silently run text alone.
+  const suspendedRequestsWithUnavailableEphemeralMedia = new Set<string>();
   const checkpointStoreForOrganizer = (): DocumentOrganizationCheckpointStore => {
     documentOrganizationCheckpointStore ??= DocumentOrganizationCheckpointStore.fromEnvironment(process.env);
     return documentOrganizationCheckpointStore;
@@ -4966,6 +5001,9 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
     const { log, command } = hds.decide(hdsDecisionInput, documentCoordinator
       ? { transient_content: "document_organization" }
       : undefined);
+    if (commandEphemeralContext && log.commit.decision === "SUSPEND") {
+      suspendedRequestsWithUnavailableEphemeralMedia.add(log.request_id);
+    }
     runtimeKernelShadowObserver?.observe({
       j_projection: hds.runtimeKernelJProjection(log, command),
       command_present: command !== null,
