@@ -8,6 +8,8 @@
 
 ## 現在のBUILD_BATCH
 
+CR-0/I-06の安全割込みとしてWindows開発用`install.ps1 -Force`に既存install rootの所有marker確認を加えた。markerは現在のinstall root／data rootの双方に一致しない限り既存rootを削除しない。従来の未marker導入は自動移行されず`-Force`で拒否される。実Windowsでの非破壊拒否確認と従来導入からの更新確認は未実施（`NOT_RUN`）であり、動的安全性は未成立のまま記録する。これはK-B5の合成shadow BUILDを止める理由にはしない。
+
 K-B0／K-B1で現行入口、通常・復旧writer、I-01対象guard、I-03 main appから通常Computeへのbudget設定を照合・接続した。E2E-01とK-B2では、合成仕事のC→J→L3→M→次task再評価を限定接続し、meaning-update専用J/Mを7-store復旧経路へ接続した。これらは部分経路の証拠であり、製品全体の結合形状を示さない。
 
 K-B3ではC候補評価を`meaning_update_candidate.ts`、承認済み候補からM record／interpretationを作る純粋処理を`meaning_update_semantics.ts`へ、解釈JSON正規化・検査・content digestを`memory_interpretation_semantics.ts`へ分離した。今回、引用レビューからM解釈依存を組み立て、現在Mと検証済み監査履歴から再評価候補を導出する意味処理を`memory_judgment_reassessment_candidate.ts`へ移した。controllerが監査・現在Mを取得し、Approval Gate／L3／監査書込／J-M writerはTypeScript HDS-BRAINに残る。HDS focused 3 files／5 tests、HDS typecheck/build/standalone、Gateway typecheck/buildはPASS。Gateway process smokeは前バッチでhealth readyに至らず統合実行未確認。今回の抽出で新しい利用者仕事や全体`SYSTEM_SHAPED`／`BUILD_COVERED`は成立しない。K-B3全体の責任抽出完了、C08.03、OD-03、他repo変更、P13 GOは未成立／保留。

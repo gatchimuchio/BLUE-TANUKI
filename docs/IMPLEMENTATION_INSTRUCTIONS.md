@@ -12,6 +12,10 @@ rev3.0ではHDS Framework Kernelの言語非依存な意味責務と、BLUE HDS 
 
 ownerがrev3.0を指定した時点のlocal／remote `main`は`2964db41dc11ddc3057f47447a85f8a49395c377`だった。パッケージ内の`e28a73f330cb155f46aea00e58cffd3a6b005ae8`はパッケージ作成時の観測値であり、現行HEADではない。CR-0～CR-3の完了根拠は既存履歴にあるが、K-B0で実際の最新HEADと入口を再照合し、古い監査結果を現行状態として転記しない。既に現HEADで成立していれば再実装しない。
 
+## CR-0割込み — I-06 Windows開発インストーラー
+
+`install/windows/install.ps1 -Force`は、既存の非reparseディレクトリ内にある開発用所有markerが、今回のinstall rootとdata rootの両方へ一致する場合だけ置換する。marker欠落・不正・対象不一致は削除前に拒否する。従来の未marker導入には自動移行経路がなく、`-Force`で拒否される。これは静的な実装状態であり、Windows上の拒否動作・既存導入からの更新を含む非破壊実行確認は`NOT_RUN`。その経路の動的安全性を検証済みと扱わず、証拠が揃うまで`-Force`による既存導入の置換は未確認として扱う。K-B5の合成shadow実装はこの安全修復と並行して続行できる。
+
 ## 現行接続状態と次のBUILD_BATCH
 
 K-B0／K-B1で現行入口と一仕事のproducer／consumer、J/Mの通常・復旧writerをコードで再照合した。公開可能な責任対応は[`OPERATION_CORE_ARCHITECTURE.md`](OPERATION_CORE_ARCHITECTURE.md)に置く。これは`BASELINE_OBSERVED`／`RESPONSIBILITY_MAPPED`の静的確認範囲であり、全OSの実行証拠や全体実装の完成ではない。
