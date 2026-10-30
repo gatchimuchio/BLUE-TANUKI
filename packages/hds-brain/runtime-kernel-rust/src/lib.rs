@@ -13,7 +13,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
 const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v5";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v7";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v8";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -1049,30 +1049,43 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                 .filter(|value| matches!(*value, "approve" | "reject" | "block"))
                 .ok_or("projection_memory_transition_rejected")?;
             let application_status = string_value(object.get("memory_application_status"))
-                .filter(|value| matches!(*value, "applied" | "blocked"))
+                .filter(|value| matches!(*value, "applied" | "not_applied"))
                 .ok_or("projection_memory_transition_rejected")?;
-            string_value(object.get("reference_review_status"))
-                .filter(|value| {
-                    matches!(
-                        *value,
+            let reference_review_status = match object.get("reference_review_status") {
+                Some(Value::String(value))
+                    if matches!(
+                        value.as_str(),
                         "prior_version_unverified" | "counterevidence_absence_unverified"
-                    )
-                })
-                .ok_or("projection_memory_transition_rejected")?;
+                    ) =>
+                {
+                    Some(value.as_str())
+                }
+                Some(Value::Null) if owner_verdict != "approve" => None,
+                _ => return Err("projection_memory_transition_rejected"),
+            };
             let semantic_relation_status = string_value(object.get("semantic_relation_status"))
                 .filter(|value| matches!(*value, "not_assessed" | "assessed"))
                 .ok_or("projection_memory_transition_rejected")?;
             let follow_up_action_status = string_value(object.get("follow_up_action_status"))
                 .filter(|value| matches!(*value, "unconfirmed" | "confirmed"))
                 .ok_or("projection_memory_transition_rejected")?;
-            let pending_count = integer_value(object.get("pending_reassessment_required_count"))
-                .filter(|value| (0..=MAX_MEMORY_TRANSITION_COUNT).contains(value))
-                .ok_or("projection_memory_transition_rejected")?;
+            let pending_count = match object.get("pending_reassessment_required_count") {
+                Some(Value::Null) => None,
+                Some(value) => Some(
+                    integer_value(Some(value))
+                        .filter(|value| (0..=MAX_MEMORY_TRANSITION_COUNT).contains(value))
+                        .ok_or("projection_memory_transition_rejected")?,
+                ),
+                None => return Err("projection_memory_transition_rejected"),
+            };
             let typescript_residual_status = string_value(object.get("typescript_residual_status"))
                 .filter(|value| {
                     matches!(
                         *value,
-                        "meaning_unverified" | "meaning_unverified_with_reassessment_pending"
+                        "meaning_unverified"
+                            | "meaning_unverified_with_reassessment_pending"
+                            | "adoption_rejected"
+                            | "adoption_blocked"
                     )
                 })
                 .ok_or("projection_memory_transition_rejected")?;
@@ -1084,13 +1097,25 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                 .get("may_execute")
                 .and_then(Value::as_bool)
                 .ok_or("projection_memory_transition_rejected")?;
-            let transition_matches = owner_verdict == "approve"
-                && application_status == "applied"
+            let application_matches = if owner_verdict == "approve" {
+                application_status == "applied"
+                    && pending_count.is_some()
+                    && reference_review_status.is_some()
+            } else {
+                application_status == "not_applied"
+                    && pending_count.is_none()
+                    && reference_review_status.is_none()
+            };
+            let transition_matches = application_matches
                 && semantic_relation_status == "not_assessed"
                 && follow_up_action_status == "unconfirmed"
                 && !used_for_authority
                 && !may_execute;
-            let expected_residual_status = if pending_count == 0 {
+            let expected_residual_status = if owner_verdict == "reject" {
+                "adoption_rejected"
+            } else if owner_verdict == "block" {
+                "adoption_blocked"
+            } else if pending_count == Some(0) {
                 "meaning_unverified"
             } else {
                 "meaning_unverified_with_reassessment_pending"
@@ -1111,7 +1136,7 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                 .filter(|value| matches!(*value, "approve" | "reject" | "block"))
                 .ok_or("projection_memory_transition_rejected")?;
             let application_status = string_value(object.get("memory_application_status"))
-                .filter(|value| matches!(*value, "applied" | "blocked"))
+                .filter(|value| matches!(*value, "applied" | "not_applied"))
                 .ok_or("projection_memory_transition_rejected")?;
             let requested_count = integer_value(object.get("requested_judgment_count"))
                 .filter(|value| (1..=MAX_MEMORY_TRANSITION_COUNT).contains(value))
@@ -1140,11 +1165,14 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                 .and_then(Value::as_bool)
                 .ok_or("projection_memory_transition_rejected")?;
             let counts_are_consistent = reassessed_count + remaining_count == requested_count;
-            let transition_matches = owner_verdict == "approve"
-                && application_status == "applied"
-                && counts_are_consistent
-                && !used_for_authority
-                && !may_execute;
+            let application_matches = if owner_verdict == "approve" {
+                application_status == "applied" && counts_are_consistent
+            } else {
+                application_status == "not_applied"
+                    && reassessed_count == 0
+                    && remaining_count == requested_count
+            };
+            let transition_matches = application_matches && !used_for_authority && !may_execute;
             let expected_residual_status =
                 if reassessed_count == requested_count && remaining_count == 0 {
                     "named_judgments_reassessed"

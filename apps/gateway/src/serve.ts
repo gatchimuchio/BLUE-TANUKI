@@ -2603,7 +2603,29 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       resolveCronApprovalHandoff(pending, "rejected");
       pendingApprovals.delete(command_id);
       if (pending.meaning_update_proposal) {
+        runtimeKernelShadowObserver?.observe({
+          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+            kind: "meaning_update_adoption",
+            owner_verdict: verdict,
+            reference_review_status: null,
+            pending_reassessment_required_count: null,
+          }),
+          command_present: false,
+        });
         hds.discardMeaningUpdateProposal(pending.meaning_update_proposal.source_command_id);
+      }
+      if (pending.memory_judgment_reassessment_proposal) {
+        const requestedCount = pending.memory_judgment_reassessment_proposal.reassesses_judgment_refs.length;
+        runtimeKernelShadowObserver?.observe({
+          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+            kind: "memory_judgment_reassessment",
+            owner_verdict: verdict,
+            requested_judgment_count: requestedCount,
+            reassessed_judgment_count: 0,
+            remaining_reassessment_required_count: requestedCount,
+          }),
+          command_present: false,
+        });
       }
       runtimeSchedules.rejectPending(command_id, approvalActor, `human_approval:${verdict}`);
       hds.onCommandLifecycle(command_id, "approval_rejected", { actor: approvalActor, reason: `human_approval:${verdict}` });
@@ -2672,6 +2694,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       runtimeKernelShadowObserver?.observe({
         j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
           kind: "meaning_update_adoption",
+          owner_verdict: "approve",
           reference_review_status: current.reference_review.review_status,
           pending_reassessment_required_count: committed.pending_reassessment_required_count,
         }),
@@ -2698,6 +2721,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       runtimeKernelShadowObserver?.observe({
         j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
           kind: "memory_judgment_reassessment",
+          owner_verdict: "approve",
           requested_judgment_count: committed.requested_judgment_count,
           reassessed_judgment_count: committed.reassessed_judgment_count,
           remaining_reassessment_required_count: committed.remaining_reassessment_required_count,
@@ -5109,6 +5133,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           command_present: event.command_present,
           ...(event.comparison_kind === "memory_approval" ? {
             memory_transition_kind: event.memory_transition_kind,
+            memory_transition_owner_verdict: event.memory_transition_owner_verdict,
+            memory_application_status: event.memory_application_status,
             memory_transition_matches: event.memory_transition_matches,
             residual_status: event.residual_status,
             residual_status_matches: event.residual_status_matches,

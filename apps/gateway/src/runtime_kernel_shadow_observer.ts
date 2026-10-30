@@ -64,6 +64,8 @@ export type RuntimeKernelShadowObserverEvent =
     command_present: boolean;
     purpose_version: number | null;
     memory_transition_kind?: "meaning_update_adoption" | "memory_judgment_reassessment";
+    memory_transition_owner_verdict?: "approve" | "reject" | "block";
+    memory_application_status?: "applied" | "not_applied";
     memory_transition_matches?: boolean;
     residual_status?: string;
     residual_status_matches?: boolean;
@@ -90,13 +92,19 @@ function memoryTransitionReceiptIsConsistent(
   let residualStatus: string;
 
   if (transition.kind === "meaning_update_adoption") {
-    transitionMatches = transition.owner_verdict === "approve" &&
-      transition.memory_application_status === "applied" &&
+    const applicationMatches = transition.owner_verdict === "approve"
+      ? transition.memory_application_status === "applied"
+      : transition.memory_application_status === "not_applied" &&
+        transition.reference_review_status === null &&
+        transition.pending_reassessment_required_count === null;
+    transitionMatches = applicationMatches &&
       transition.semantic_relation_status === "not_assessed" &&
       transition.follow_up_action_status === "unconfirmed" &&
       transition.used_for_authority === false && transition.may_execute === false;
-    residualStatus = transition.pending_reassessment_required_count === 0
-      ? "meaning_unverified" : "meaning_unverified_with_reassessment_pending";
+    residualStatus = transition.owner_verdict === "approve"
+      ? transition.pending_reassessment_required_count === 0
+        ? "meaning_unverified" : "meaning_unverified_with_reassessment_pending"
+      : transition.owner_verdict === "reject" ? "adoption_rejected" : "adoption_blocked";
   } else {
     const countsAreBounded = Number.isSafeInteger(transition.requested_judgment_count) &&
       transition.requested_judgment_count >= 1 && transition.requested_judgment_count <= 512 &&
@@ -107,8 +115,12 @@ function memoryTransitionReceiptIsConsistent(
     const countsAreConsistent = countsAreBounded &&
       transition.reassessed_judgment_count + transition.remaining_reassessment_required_count ===
         transition.requested_judgment_count;
-    transitionMatches = transition.owner_verdict === "approve" &&
-      transition.memory_application_status === "applied" && countsAreConsistent &&
+    const applicationMatches = transition.owner_verdict === "approve"
+      ? transition.memory_application_status === "applied" && countsAreConsistent
+      : countsAreBounded && transition.memory_application_status === "not_applied" &&
+        transition.reassessed_judgment_count === 0 &&
+        transition.remaining_reassessment_required_count === transition.requested_judgment_count;
+    transitionMatches = applicationMatches &&
       transition.used_for_authority === false && transition.may_execute === false;
     residualStatus = transition.reassessed_judgment_count === transition.requested_judgment_count &&
       transition.remaining_reassessment_required_count === 0
@@ -439,6 +451,8 @@ export async function startRuntimeKernelShadowObserver(options: {
           purpose_version: purposeBinding?.purpose_version ?? null,
           ...(projection.memory_transition ? {
             memory_transition_kind: projection.memory_transition.kind,
+            memory_transition_owner_verdict: projection.memory_transition.owner_verdict,
+            memory_application_status: projection.memory_transition.memory_application_status,
             memory_transition_matches: receipt.memory_transition_matches as boolean,
             residual_status: receipt.residual_status as string,
             residual_status_matches: receipt.residual_status_matches as boolean,

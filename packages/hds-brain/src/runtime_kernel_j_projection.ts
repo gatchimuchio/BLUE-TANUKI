@@ -124,20 +124,21 @@ export interface RuntimeKernelJResumeTransitionProjection {
 export type RuntimeKernelJMemoryTransitionProjection =
   | {
     kind: "meaning_update_adoption";
-    owner_verdict: "approve";
-    memory_application_status: "applied";
-    reference_review_status: "prior_version_unverified" | "counterevidence_absence_unverified";
+    owner_verdict: ResumeVerdict;
+    memory_application_status: "applied" | "not_applied";
+    reference_review_status: "prior_version_unverified" | "counterevidence_absence_unverified" | null;
     semantic_relation_status: "not_assessed";
     follow_up_action_status: "unconfirmed";
-    pending_reassessment_required_count: number;
-    typescript_residual_status: "meaning_unverified" | "meaning_unverified_with_reassessment_pending";
+    pending_reassessment_required_count: number | null;
+    typescript_residual_status: "meaning_unverified" | "meaning_unverified_with_reassessment_pending" |
+      "adoption_rejected" | "adoption_blocked";
     used_for_authority: false;
     may_execute: false;
   }
   | {
     kind: "memory_judgment_reassessment";
-    owner_verdict: "approve";
-    memory_application_status: "applied";
+    owner_verdict: ResumeVerdict;
+    memory_application_status: "applied" | "not_applied";
     requested_judgment_count: number;
     reassessed_judgment_count: number;
     remaining_reassessment_required_count: number;
@@ -149,11 +150,13 @@ export type RuntimeKernelJMemoryTransitionProjection =
 export type RuntimeKernelJMemoryTransitionInput =
   | {
     kind: "meaning_update_adoption";
-    reference_review_status: string;
+    owner_verdict: ResumeVerdict;
+    reference_review_status: string | null;
     pending_reassessment_required_count: number | null;
   }
   | {
     kind: "memory_judgment_reassessment";
+    owner_verdict: ResumeVerdict;
     requested_judgment_count: number;
     reassessed_judgment_count: number;
     remaining_reassessment_required_count: number;
@@ -161,7 +164,7 @@ export type RuntimeKernelJMemoryTransitionInput =
 
 /** Sanitized numeric inputs for a non-authoritative Rust J comparison. */
 export interface RuntimeKernelJProjection {
-  schema_version: "blue-tanuki.hds-runtime-j-projection.v7";
+  schema_version: "blue-tanuki.hds-runtime-j-projection.v8";
   typescript_decision: Decision;
   typescript_policy_rule_id: RuntimeKernelJPolicyRuleId;
   typescript_policy_rule_axis: string | null;
@@ -297,7 +300,7 @@ export function projectRuntimeKernelJDecision(
   return {
     status: "comparable",
     projection: {
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v7",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v8",
       typescript_decision: typescript.decision,
       typescript_policy_rule_id: typescriptPolicyRule.id,
       typescript_policy_rule_axis: typescriptPolicyRule.axis,
@@ -374,24 +377,40 @@ export function projectRuntimeKernelJMemoryTransition(
 
   let memoryTransition: RuntimeKernelJMemoryTransitionProjection;
   if (input.kind === "meaning_update_adoption") {
-    if (input.pending_reassessment_required_count === null) {
-      return { status: "not_comparable", reason: "memory_transition_unavailable" };
+    let referenceReviewStatus: "prior_version_unverified" | "counterevidence_absence_unverified" | null;
+    let pendingCount: number | null;
+    if (input.owner_verdict === "approve") {
+      if (input.pending_reassessment_required_count === null) {
+        return { status: "not_comparable", reason: "memory_transition_unavailable" };
+      }
+      if ((input.reference_review_status !== "prior_version_unverified" &&
+          input.reference_review_status !== "counterevidence_absence_unverified") ||
+          !isBoundedCount(input.pending_reassessment_required_count)) {
+        return { status: "not_comparable", reason: "memory_transition_invalid" };
+      }
+      referenceReviewStatus = input.reference_review_status;
+      pendingCount = input.pending_reassessment_required_count;
+    } else {
+      if (input.reference_review_status !== null ||
+          input.pending_reassessment_required_count !== null) {
+        return { status: "not_comparable", reason: "memory_transition_invalid" };
+      }
+      referenceReviewStatus = input.reference_review_status;
+      pendingCount = null;
     }
-    if ((input.reference_review_status !== "prior_version_unverified" &&
-        input.reference_review_status !== "counterevidence_absence_unverified") ||
-        !isBoundedCount(input.pending_reassessment_required_count)) {
-      return { status: "not_comparable", reason: "memory_transition_invalid" };
-    }
+    const residualStatus = input.owner_verdict === "approve"
+      ? pendingCount === 0
+        ? "meaning_unverified" as const : "meaning_unverified_with_reassessment_pending" as const
+      : input.owner_verdict === "reject" ? "adoption_rejected" as const : "adoption_blocked" as const;
     memoryTransition = {
       kind: input.kind,
-      owner_verdict: "approve",
-      memory_application_status: "applied",
-      reference_review_status: input.reference_review_status,
+      owner_verdict: input.owner_verdict,
+      memory_application_status: input.owner_verdict === "approve" ? "applied" : "not_applied",
+      reference_review_status: referenceReviewStatus,
       semantic_relation_status: "not_assessed",
       follow_up_action_status: "unconfirmed",
-      pending_reassessment_required_count: input.pending_reassessment_required_count,
-      typescript_residual_status: input.pending_reassessment_required_count === 0
-        ? "meaning_unverified" : "meaning_unverified_with_reassessment_pending",
+      pending_reassessment_required_count: pendingCount,
+      typescript_residual_status: residualStatus,
       used_for_authority: false,
       may_execute: false,
     };
@@ -403,10 +422,16 @@ export function projectRuntimeKernelJMemoryTransition(
     }
     const complete = input.reassessed_judgment_count === input.requested_judgment_count &&
       input.remaining_reassessment_required_count === 0;
+    const countsConsistent = input.reassessed_judgment_count + input.remaining_reassessment_required_count ===
+      input.requested_judgment_count;
+    if (input.owner_verdict === "approve" ? !countsConsistent
+      : input.reassessed_judgment_count !== 0 || input.remaining_reassessment_required_count !== input.requested_judgment_count) {
+      return { status: "not_comparable", reason: "memory_transition_invalid" };
+    }
     memoryTransition = {
       kind: input.kind,
-      owner_verdict: "approve",
-      memory_application_status: "applied",
+      owner_verdict: input.owner_verdict,
+      memory_application_status: input.owner_verdict === "approve" ? "applied" : "not_applied",
       requested_judgment_count: input.requested_judgment_count,
       reassessed_judgment_count: input.reassessed_judgment_count,
       remaining_reassessment_required_count: input.remaining_reassessment_required_count,
