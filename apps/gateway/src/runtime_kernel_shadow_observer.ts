@@ -55,6 +55,7 @@ export type RuntimeKernelShadowObserverEvent =
     purpose_binding_current_matches: boolean | null;
     policy_rule_matches: boolean;
     lifecycle_matches: boolean;
+    command_presence_matches: boolean;
     typescript_decision: ShadowDecision;
     typescript_policy_rule_id: ShadowPolicyRuleId;
     typescript_policy_rule_axis?: string;
@@ -468,7 +469,8 @@ export async function startRuntimeKernelShadowObserver(options: {
           current_goal_purpose_binding_status: currentPurposeBinding.status,
           purpose_binding_current_matches: purposeBindingCurrentMatches,
           policy_rule_matches: receipt.policy_rule_matches,
-          lifecycle_matches: receipt.lifecycle_matches && commandPresenceMatches,
+          lifecycle_matches: receipt.lifecycle_matches,
+          command_presence_matches: commandPresenceMatches,
           typescript_decision: typescriptDecision,
           typescript_policy_rule_id: receipt.typescript_policy_rule_id as ShadowPolicyRuleId,
           ...(typeof receipt.typescript_policy_rule_axis === "string"

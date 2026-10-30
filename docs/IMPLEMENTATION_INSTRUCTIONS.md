@@ -64,6 +64,8 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 今回、通常のGateway decisionでRust shadowが独立算出したJ判定を、TypeScript HDS-BRAINが実際に生成した`ExecuteCommand`の有無へ接続した。通常decisionに限り、Rust判定が`ASSERT`であることとcommand存在が一致しない場合、observerは停止せず`mismatched`および`command_presence_mismatch`を非権威ログへ返す。resumeは既存のresume遷移比較、memory approvalは既存の非command経路を維持する。TypeScript HDS-BRAINの判断・command・実行権限、Rustの`hold`／no-effect／no-M-writeは変更しない。今回の`git diff --check`はPASS。test、typecheck、build、実process、docs検査は未実施（NOT_RUN）。K-B5の全体比較・single-writer cutoverは未成立。
 
+今回、Gateway observerの比較結果でcommand有無の不一致をRust receiptの`lifecycle_matches`へ混在させていた意味上の混同を解消した。実際のlifecycle一致を独立して保持し、`command_presence_matches`を別項目として通常ログへ出す。不一致時の総合statusは`mismatched`のまま、HDS authority・command実行・Rustの`hold`／no-effect／no-M-writeに影響しない。合成入力で意図的なcommand有無不一致を実Rust processに通し、二軸が分離されることを確認した。Gateway typecheckと対象observer試験（5 tests）、`git diff --check`はPASS。全workspace suite、実provider・外部作用、QE_QC／QE_QA、5OS実機は未実施。K-B5全体比較・single-writer cutover・製品全体BUILDは継続。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

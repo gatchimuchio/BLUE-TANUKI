@@ -32,6 +32,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 続いて、通常Gateway decisionのRust shadow J判定とTypeScriptが実際に生成した`ExecuteCommand`の有無をobserverのconsumerで照合する接続を追加した。RustのJ判定とcommand有無が食い違う場合は、authority経路を止めず`mismatched`として記録する。今回の`git diff --check`はPASS。test、typecheck、build、実process、docs検査は未実施（NOT_RUN）。Rustは引き続き`hold`、作用・M正本書込みなし。K-B5全体意味比較とsingle-writer cutoverは未成立。
 
+今回、通常Gateway decisionでcommand有無不一致をRust receiptの`lifecycle_matches`へ混ぜず、`command_presence_matches`として独立して記録するようにした。不一致は引き続き非権威の`mismatched`として観測し、HDS authority・実行経路・M writerへ影響しない。合成入力による実Rust process observer試験5件とGateway typecheckがPASS。全workspace suite、実provider・外部作用、QE_QC／QE_QA、5OS実機は未実施。K-B5全体比較・cutover・製品全体BUILDは未成立。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

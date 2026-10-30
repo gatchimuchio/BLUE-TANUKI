@@ -43,6 +43,44 @@ describe("Gateway Runtime Kernel shadow observer", () => {
     expect(events).toEqual([{ kind: "disabled", reason: "production_environment" }]);
   });
 
+  it("command有無の不一致をRustのlifecycle一致と分けて記録する", async () => {
+    const events: RuntimeKernelShadowObserverEvent[] = [];
+    const result = runStandaloneHDSBrain({
+      id: "runtime-shadow-command-presence",
+      channel: "webchat",
+      user: "synthetic-owner",
+      content: "ordinary synthetic input",
+    });
+    expect(result.decision).toBe("ASSERT");
+    expect(result.runtime_kernel_j_projection.status).toBe("comparable");
+    if (result.runtime_kernel_j_projection.status !== "comparable") {
+      throw new Error("synthetic J projection unavailable");
+    }
+
+    const observer = await startRuntimeKernelShadowObserver({
+      enabled: true,
+      production: false,
+      onEvent: (event) => events.push(event),
+    });
+    expect(observer).toBeDefined();
+    try {
+      observer!.observe({ j_projection: result.runtime_kernel_j_projection, command_present: false });
+      await waitForObservedEvents(events, 1);
+    } finally {
+      await observer!.shutdown();
+    }
+
+    expect(events[1]).toMatchObject({
+      kind: "observation",
+      comparison_status: "mismatched",
+      policy_decision_matches: true,
+      lifecycle_matches: true,
+      command_present: false,
+      command_presence_matches: false,
+      command_presence_mismatch: true,
+    });
+  }, 120_000);
+
   it("同じ合成系列のJ projectionをRustで再計算し、差分と非権限receiptを返す", async () => {
     const events: RuntimeKernelShadowObserverEvent[] = [];
     const observer = await startRuntimeKernelShadowObserver({
@@ -216,6 +254,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         purpose_binding_current_matches: null,
         policy_rule_matches: true,
         lifecycle_matches: true,
+        command_presence_matches: true,
         typescript_decision: result.decision,
         typescript_policy_rule_id: ["aggregate_assert", "per_axis_fail", "per_axis_suspend_below"][index]!,
         ...(index === 1 ? { typescript_policy_rule_axis: "risk_safety" } : {}),
@@ -237,6 +276,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         purpose_binding_current_matches: null,
         policy_rule_matches: true,
         lifecycle_matches: true,
+        command_presence_matches: true,
         typescript_decision: "ASSERT",
         typescript_policy_rule_id: "per_axis_suspend_below",
         typescript_policy_rule_axis: "compliance",
@@ -255,6 +295,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         purpose_binding_current_matches: null,
         policy_rule_matches: true,
         lifecycle_matches: true,
+        command_presence_matches: true,
         typescript_decision: results[3]!.decision,
         typescript_policy_rule_id: "out_of_scope_below",
         runtime_kernel_j_decision: results[3]!.decision,
