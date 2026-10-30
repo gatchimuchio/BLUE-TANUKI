@@ -41,6 +41,78 @@ export interface RuntimeKernelJCurrentPurposeBindingProjection {
   binding: RuntimeKernelJPurposeBindingProjection | null;
 }
 
+export interface RuntimeKernelJPlanStepAdoptionAvailableProjection {
+  purpose_relation: {
+    status: "not_required" | "owner_reviewed_supports";
+    candidate_outcome: "supports" | "conflicts" | "unknown";
+    candidate_status: "present" | "missing" | "invalid";
+    evidence_status: "exact_spans_present" | "not_provided" | "citation_mismatch" | "purpose_unavailable";
+    owner_review_outcome: "supports" | null;
+  };
+  criterion_relation: {
+    outcome: "supports" | "conflicts" | "unknown";
+    evidence_status: "observed" | "inferred" | "assumed" | "unknown";
+    risk_status: "verified" | "unverified";
+    relation_count: number;
+    objective_count: number;
+    safety_count: number;
+    supports_count: number;
+    conflicts_count: number;
+    reason_code: "request_declares_criterion_support_risk_unverified" |
+      "request_declares_criterion_conflict" | "no_matching_goal_criterion" | "criteria_unavailable" |
+      "criteria_invalid";
+  };
+}
+
+export type RuntimeKernelJPlanStepAdoptionUnavailableReason = "binding_identity_unavailable" | "binding_unavailable" |
+  "binding_not_selected" | "legacy_record_unavailable" | "record_invalid";
+
+export type RuntimeKernelJPlanStepAdoptionProjection =
+  | { status: "not_applicable" }
+  | { status: "not_comparable"; reason: RuntimeKernelJPlanStepAdoptionUnavailableReason }
+  | ({ status: "available" } & RuntimeKernelJPlanStepAdoptionAvailableProjection);
+
+export type RuntimeKernelJPlanStepAdoptionReceipt =
+  | { status: "not_applicable"; matches: null }
+  | { status: "not_comparable"; reason: RuntimeKernelJPlanStepAdoptionUnavailableReason; matches: null }
+  | ({ status: "matched" | "mismatched"; matches: boolean } & RuntimeKernelJPlanStepAdoptionAvailableProjection);
+
+/** Recompute only the bounded relation-shape outcome carried by a selected step. */
+export function classifyRuntimeKernelJPlanStepAdoption(
+  projection: RuntimeKernelJPlanStepAdoptionProjection,
+): RuntimeKernelJPlanStepAdoptionReceipt {
+  if (projection.status === "not_applicable") return { status: "not_applicable", matches: null };
+  if (projection.status === "not_comparable") {
+    return { status: "not_comparable", reason: projection.reason, matches: null };
+  }
+  const purpose = projection.purpose_relation;
+  const purposeMatches = purpose.status === "not_required"
+    ? purpose.candidate_outcome === "unknown" && purpose.candidate_status === "missing" &&
+      purpose.evidence_status === "not_provided" && purpose.owner_review_outcome === null
+    : purpose.owner_review_outcome === "supports";
+  const criterion = projection.criterion_relation;
+  const countsAreConsistent = Number.isSafeInteger(criterion.relation_count) && criterion.relation_count >= 0 &&
+    criterion.relation_count <= 64 && [criterion.objective_count, criterion.safety_count,
+      criterion.supports_count, criterion.conflicts_count].every((count) =>
+      Number.isSafeInteger(count) && count >= 0 && count <= 64) &&
+    criterion.objective_count + criterion.safety_count === criterion.relation_count &&
+    criterion.supports_count + criterion.conflicts_count === criterion.relation_count;
+  const criterionMatches = countsAreConsistent && criterion.risk_status === "unverified" &&
+    ((criterion.outcome === "unknown" && criterion.evidence_status === "unknown" &&
+      criterion.relation_count === 0 && criterion.supports_count === 0 && criterion.conflicts_count === 0 &&
+      (criterion.reason_code === "criteria_unavailable" || criterion.reason_code === "no_matching_goal_criterion")) ||
+      (criterion.outcome === "supports" && criterion.evidence_status === "assumed" &&
+        criterion.supports_count > 0 && criterion.conflicts_count === 0 &&
+        criterion.reason_code === "request_declares_criterion_support_risk_unverified"));
+  const matches = purposeMatches && criterionMatches;
+  return {
+    status: matches ? "matched" : "mismatched",
+    matches,
+    purpose_relation: { ...purpose },
+    criterion_relation: { ...criterion },
+  };
+}
+
 /** Human resume input and its TS outcome; identity, request, and command are excluded. */
 export interface RuntimeKernelJResumeTransitionProjection {
   owner_verdict: ResumeVerdict;
@@ -89,12 +161,13 @@ export type RuntimeKernelJMemoryTransitionInput =
 
 /** Sanitized numeric inputs for a non-authoritative Rust J comparison. */
 export interface RuntimeKernelJProjection {
-  schema_version: "blue-tanuki.hds-runtime-j-projection.v6";
+  schema_version: "blue-tanuki.hds-runtime-j-projection.v7";
   typescript_decision: Decision;
   typescript_policy_rule_id: RuntimeKernelJPolicyRuleId;
   typescript_policy_rule_axis: string | null;
   purpose_binding: RuntimeKernelJPurposeBindingProjection | null;
   current_goal_purpose_binding: RuntimeKernelJCurrentPurposeBindingProjection;
+  plan_step_adoption: RuntimeKernelJPlanStepAdoptionProjection;
   axes: RuntimeKernelJAxisProjection[];
   thresholds: {
     aggregate_assert_micros: number;
@@ -136,6 +209,7 @@ export function projectRuntimeKernelJDecision(
     status: purposeBinding ? "ledger_unavailable" : "not_bound",
     binding: null,
   },
+  planStepAdoption: RuntimeKernelJPlanStepAdoptionProjection = { status: "not_applicable" },
 ): RuntimeKernelJProjectionResult {
   if (purposeBinding && (!/^[a-f0-9]{64}$/.test(purposeBinding.goal_id_digest) ||
       !Number.isSafeInteger(purposeBinding.purpose_version) || purposeBinding.purpose_version < 1 ||
@@ -223,7 +297,7 @@ export function projectRuntimeKernelJDecision(
   return {
     status: "comparable",
     projection: {
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v6",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v7",
       typescript_decision: typescript.decision,
       typescript_policy_rule_id: typescriptPolicyRule.id,
       typescript_policy_rule_axis: typescriptPolicyRule.axis,
@@ -232,6 +306,7 @@ export function projectRuntimeKernelJDecision(
         status: currentPurposeBinding.status,
         binding: currentPurposeBinding.binding ? { ...currentPurposeBinding.binding } : null,
       },
+      plan_step_adoption: planStepAdoption,
       axes,
       thresholds: {
         aggregate_assert_micros: aggregateAssert,

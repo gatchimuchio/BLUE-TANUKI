@@ -4842,7 +4842,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ? { transient_content: "document_organization" }
       : undefined);
     runtimeKernelShadowObserver?.observe({
-      j_projection: hds.runtimeKernelJProjection(log),
+      j_projection: hds.runtimeKernelJProjection(log, command),
       command_present: command !== null,
     });
     recordCompleteHistory({
@@ -5113,6 +5113,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
             residual_status: event.residual_status,
             residual_status_matches: event.residual_status_matches,
           } : {}),
+          plan_step_adoption: event.plan_step_adoption,
           effect_started: false,
           m_written: false,
           used_for_authority: false,

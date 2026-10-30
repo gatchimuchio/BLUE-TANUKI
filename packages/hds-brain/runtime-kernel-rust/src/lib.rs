@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v4";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v6";
+const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v5";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v7";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -46,6 +46,7 @@ struct JProjectionComparison {
     purpose_binding_matches: Option<bool>,
     current_goal_purpose_binding_status: &'static str,
     purpose_binding_current_matches: Option<bool>,
+    plan_step_adoption: JPlanStepAdoptionComparison,
     policy_decision_matches: bool,
     policy_rule_matches: bool,
     lifecycle_matches: bool,
@@ -53,6 +54,11 @@ struct JProjectionComparison {
     memory_transition_matches: Option<bool>,
     residual_status: Option<&'static str>,
     residual_status_matches: Option<bool>,
+}
+
+struct JPlanStepAdoptionComparison {
+    matches: Option<bool>,
+    receipt: Value,
 }
 
 struct JMemoryTransitionComparison {
@@ -483,6 +489,7 @@ fn decision_payload(
         "purpose_binding_matches": comparison.map(|result| result.purpose_binding_matches),
         "current_goal_purpose_binding_status": comparison.map(|result| result.current_goal_purpose_binding_status),
         "purpose_binding_current_matches": comparison.map(|result| result.purpose_binding_current_matches),
+        "plan_step_adoption": comparison.map(|result| result.plan_step_adoption.receipt.clone()),
         "policy_rule_matches": comparison.map(|result| result.policy_rule_matches),
         "lifecycle_matches": comparison.map(|result| result.lifecycle_matches),
         "memory_transition_kind": comparison.and_then(|result| result.memory_transition_kind),
@@ -541,9 +548,9 @@ fn evaluate_runtime_kernel_j_projection(
     if has_resume_transition && has_memory_transition
         || object.len()
             != if has_resume_transition || has_memory_transition {
-                9
+                10
             } else {
-                8
+                9
             }
         || string_value(object.get("schema_version")) != Some(J_PROJECTION_SCHEMA_VERSION)
     {
@@ -593,6 +600,11 @@ fn evaluate_runtime_kernel_j_projection(
             },
             _ => return Err("projection_current_purpose_binding_rejected"),
         };
+    let plan_step_adoption = compare_plan_step_adoption(
+        object
+            .get("plan_step_adoption")
+            .ok_or("projection_plan_step_adoption_rejected")?,
+    )?;
     let policy_typescript_decision = string_value(object.get("typescript_decision"))
         .filter(|value| is_shadow_decision(value))
         .ok_or("projection_decision_rejected")?
@@ -707,12 +719,14 @@ fn evaluate_runtime_kernel_j_projection(
             rule_axis: None,
             matches: purpose_binding_matches.unwrap_or(true)
                 && purpose_binding_current_matches.unwrap_or(true)
+                && plan_step_adoption.matches.unwrap_or(true)
                 && policy_decision_matches
                 && policy_rule_matches
                 && lifecycle_matches,
             purpose_binding_matches,
             current_goal_purpose_binding_status,
             purpose_binding_current_matches,
+            plan_step_adoption,
             policy_decision_matches,
             policy_rule_matches,
             lifecycle_matches,
@@ -733,11 +747,13 @@ fn evaluate_runtime_kernel_j_projection(
             rule_axis,
             matches: purpose_binding_matches.unwrap_or(true)
                 && purpose_binding_current_matches.unwrap_or(true)
+                && plan_step_adoption.matches.unwrap_or(true)
                 && policy_decision_matches
                 && policy_rule_matches,
             purpose_binding_matches,
             current_goal_purpose_binding_status,
             purpose_binding_current_matches,
+            plan_step_adoption,
             policy_decision_matches,
             policy_rule_matches,
             lifecycle_matches: true,
@@ -791,12 +807,14 @@ fn evaluate_runtime_kernel_j_projection(
         rule_axis: None,
         matches: purpose_binding_matches.unwrap_or(true)
             && purpose_binding_current_matches.unwrap_or(true)
+            && plan_step_adoption.matches.unwrap_or(true)
             && policy_decision_matches
             && policy_rule_matches
             && lifecycle_matches,
         purpose_binding_matches,
         current_goal_purpose_binding_status,
         purpose_binding_current_matches,
+        plan_step_adoption,
         policy_decision_matches,
         policy_rule_matches,
         lifecycle_matches,
@@ -805,6 +823,175 @@ fn evaluate_runtime_kernel_j_projection(
         residual_status: None,
         residual_status_matches: None,
     })
+}
+
+fn compare_plan_step_adoption(value: &Value) -> Result<JPlanStepAdoptionComparison, &'static str> {
+    let object = value
+        .as_object()
+        .ok_or("projection_plan_step_adoption_rejected")?;
+    let status =
+        string_value(object.get("status")).ok_or("projection_plan_step_adoption_rejected")?;
+    match status {
+        "not_applicable" if object.len() == 1 => Ok(JPlanStepAdoptionComparison {
+            matches: None,
+            receipt: json!({ "status": "not_applicable", "matches": null }),
+        }),
+        "not_comparable" if object.len() == 2 => {
+            let reason = string_value(object.get("reason"))
+                .filter(|reason| {
+                    matches!(
+                        *reason,
+                        "binding_identity_unavailable"
+                            | "binding_unavailable"
+                            | "binding_not_selected"
+                            | "legacy_record_unavailable"
+                            | "record_invalid"
+                    )
+                })
+                .ok_or("projection_plan_step_adoption_rejected")?;
+            Ok(JPlanStepAdoptionComparison {
+                matches: None,
+                receipt: json!({ "status": "not_comparable", "reason": reason, "matches": null }),
+            })
+        }
+        "available" if object.len() == 3 => {
+            let purpose = object
+                .get("purpose_relation")
+                .and_then(Value::as_object)
+                .filter(|purpose| purpose.len() == 5)
+                .ok_or("projection_plan_step_adoption_rejected")?;
+            let purpose_status = string_value(purpose.get("status"))
+                .filter(|status| matches!(*status, "not_required" | "owner_reviewed_supports"))
+                .ok_or("projection_plan_step_adoption_rejected")?;
+            let candidate_outcome = string_value(purpose.get("candidate_outcome"))
+                .filter(|outcome| matches!(*outcome, "supports" | "conflicts" | "unknown"))
+                .ok_or("projection_plan_step_adoption_rejected")?;
+            let candidate_status = string_value(purpose.get("candidate_status"))
+                .filter(|candidate| matches!(*candidate, "present" | "missing" | "invalid"))
+                .ok_or("projection_plan_step_adoption_rejected")?;
+            let purpose_evidence_status = string_value(purpose.get("evidence_status"))
+                .filter(|evidence| {
+                    matches!(
+                        *evidence,
+                        "exact_spans_present"
+                            | "not_provided"
+                            | "citation_mismatch"
+                            | "purpose_unavailable"
+                    )
+                })
+                .ok_or("projection_plan_step_adoption_rejected")?;
+            let owner_review_outcome = match purpose.get("owner_review_outcome") {
+                Some(Value::Null) => None,
+                Some(Value::String(outcome)) if outcome == "supports" => Some(outcome.as_str()),
+                _ => return Err("projection_plan_step_adoption_rejected"),
+            };
+
+            let criterion = object
+                .get("criterion_relation")
+                .and_then(Value::as_object)
+                .filter(|criterion| criterion.len() == 9)
+                .ok_or("projection_plan_step_adoption_rejected")?;
+            let criterion_outcome = string_value(criterion.get("outcome"))
+                .filter(|outcome| matches!(*outcome, "supports" | "conflicts" | "unknown"))
+                .ok_or("projection_plan_step_adoption_rejected")?;
+            let criterion_evidence_status = string_value(criterion.get("evidence_status"))
+                .filter(|evidence| {
+                    matches!(*evidence, "observed" | "inferred" | "assumed" | "unknown")
+                })
+                .ok_or("projection_plan_step_adoption_rejected")?;
+            let criterion_risk_status = string_value(criterion.get("risk_status"))
+                .filter(|risk| matches!(*risk, "verified" | "unverified"))
+                .ok_or("projection_plan_step_adoption_rejected")?;
+            let count = |key: &str| {
+                integer_value(criterion.get(key)).filter(|count| (0..=64).contains(count))
+            };
+            let relation_count =
+                count("relation_count").ok_or("projection_plan_step_adoption_rejected")?;
+            let objective_count =
+                count("objective_count").ok_or("projection_plan_step_adoption_rejected")?;
+            let safety_count =
+                count("safety_count").ok_or("projection_plan_step_adoption_rejected")?;
+            let supports_count =
+                count("supports_count").ok_or("projection_plan_step_adoption_rejected")?;
+            let conflicts_count =
+                count("conflicts_count").ok_or("projection_plan_step_adoption_rejected")?;
+            let criterion_reason_code = string_value(criterion.get("reason_code"))
+                .filter(|reason| {
+                    matches!(
+                        *reason,
+                        "request_declares_criterion_support_risk_unverified"
+                            | "request_declares_criterion_conflict"
+                            | "no_matching_goal_criterion"
+                            | "criteria_unavailable"
+                            | "criteria_invalid"
+                    )
+                })
+                .ok_or("projection_plan_step_adoption_rejected")?;
+
+            let purpose_matches = match purpose_status {
+                "not_required" => {
+                    candidate_outcome == "unknown"
+                        && candidate_status == "missing"
+                        && purpose_evidence_status == "not_provided"
+                        && owner_review_outcome.is_none()
+                }
+                "owner_reviewed_supports" => owner_review_outcome == Some("supports"),
+                _ => false,
+            };
+            let counts_match = objective_count + safety_count == relation_count
+                && supports_count + conflicts_count == relation_count;
+            let criteria_matches = criterion_risk_status == "unverified"
+                && counts_match
+                && match criterion_outcome {
+                    "unknown" => {
+                        criterion_evidence_status == "unknown"
+                            && relation_count == 0
+                            && (criterion_reason_code == "criteria_unavailable"
+                                || criterion_reason_code == "no_matching_goal_criterion")
+                    }
+                    "supports" => {
+                        criterion_evidence_status == "assumed"
+                            && supports_count > 0
+                            && conflicts_count == 0
+                            && criterion_reason_code
+                                == "request_declares_criterion_support_risk_unverified"
+                    }
+                    // A selected step carrying a declared conflict violates the existing J adoption gate.
+                    "conflicts" => false,
+                    _ => false,
+                };
+            let matches = purpose_matches && criteria_matches;
+            let comparison_status = if matches { "matched" } else { "mismatched" };
+            let purpose_receipt = json!({
+                "status": purpose_status,
+                "candidate_outcome": candidate_outcome,
+                "candidate_status": candidate_status,
+                "evidence_status": purpose_evidence_status,
+                "owner_review_outcome": owner_review_outcome,
+            });
+            let criterion_receipt = json!({
+                "outcome": criterion_outcome,
+                "evidence_status": criterion_evidence_status,
+                "risk_status": criterion_risk_status,
+                "relation_count": relation_count,
+                "objective_count": objective_count,
+                "safety_count": safety_count,
+                "supports_count": supports_count,
+                "conflicts_count": conflicts_count,
+                "reason_code": criterion_reason_code,
+            });
+            Ok(JPlanStepAdoptionComparison {
+                matches: Some(matches),
+                receipt: json!({
+                    "status": comparison_status,
+                    "matches": matches,
+                    "purpose_relation": purpose_receipt,
+                    "criterion_relation": criterion_receipt,
+                }),
+            })
+        }
+        _ => Err("projection_plan_step_adoption_rejected"),
+    }
 }
 
 fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionComparison, &'static str> {

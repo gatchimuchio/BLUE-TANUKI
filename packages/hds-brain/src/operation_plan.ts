@@ -44,6 +44,7 @@ import { buildReceiptMemoryCommit, receiptForReceiptMemoryCommit, receiptMemoryI
   verifyReceiptMemoryCommit } from "./operation_receipt_memory.js";
 import type { ResultObservationCitation, ResultObservationProjection } from "./operation_result_reflection.js";
 import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
+import type { RuntimeKernelJPlanStepAdoptionProjection } from "./runtime_kernel_j_projection.js";
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
@@ -2282,6 +2283,54 @@ export class OperationPlanLedger {
   }
 
   isBound(command_id: string): boolean { return this.binding(command_id) !== undefined; }
+  /** Return only categorical counts from the saved J adoption record to the non-authoritative Rust observer. */
+  runtimeKernelJPlanStepAdoptionProjection(command: ExecuteCommand | null | undefined): RuntimeKernelJPlanStepAdoptionProjection {
+    if (!command) return { status: "not_applicable" };
+    const issuedId = this.issuedBindings.get(command);
+    if (issuedId === undefined) {
+      return this.issuedBindingIds.has(command.id)
+        ? { status: "not_comparable", reason: "binding_identity_unavailable" }
+        : { status: "not_applicable" };
+    }
+    if (issuedId !== command.id) return { status: "not_comparable", reason: "binding_identity_unavailable" };
+    const match = this.binding(issuedId);
+    if (!match) return { status: "not_comparable", reason: "binding_unavailable" };
+    if (match.b.status !== "selected") return { status: "not_comparable", reason: "binding_not_selected" };
+    if (!match.b.goal_relation_adoption_assessment) {
+      return { status: "not_comparable", reason: "legacy_record_unavailable" };
+    }
+    try {
+      const assessment = OperationPlanGoalRelationAdoptionAssessmentSchema.parse(
+        match.b.goal_relation_adoption_assessment,
+      );
+      const { assessment_digest: savedDigest, ...body } = assessment;
+      if (savedDigest !== operationPlanDigest(body)) return { status: "not_comparable", reason: "record_invalid" };
+      const criteria = assessment.criterion_relation.criterion_relations;
+      return {
+        status: "available",
+        purpose_relation: {
+          status: assessment.purpose_relation.status,
+          candidate_outcome: assessment.purpose_relation.candidate_outcome,
+          candidate_status: assessment.purpose_relation.candidate_status,
+          evidence_status: assessment.purpose_relation.evidence_status,
+          owner_review_outcome: assessment.purpose_relation.status === "owner_reviewed_supports" ? "supports" : null,
+        },
+        criterion_relation: {
+          outcome: assessment.criterion_relation.outcome,
+          evidence_status: assessment.criterion_relation.evidence_status,
+          risk_status: assessment.criterion_relation.risk_status,
+          relation_count: criteria.length,
+          objective_count: criteria.filter((entry) => entry.criterion_kind === "objective").length,
+          safety_count: criteria.filter((entry) => entry.criterion_kind === "safety").length,
+          supports_count: criteria.filter((entry) => entry.relation === "supports").length,
+          conflicts_count: criteria.filter((entry) => entry.relation === "conflicts").length,
+          reason_code: assessment.criterion_relation.reason_code,
+        },
+      };
+    } catch {
+      return { status: "not_comparable", reason: "record_invalid" };
+    }
+  }
   /**
    * Produce non-authority source evidence for the exact J-selected plan step
    * that produced this command, including the explicitly selected purpose version.

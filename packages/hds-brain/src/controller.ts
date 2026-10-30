@@ -1002,11 +1002,12 @@ export class HDSUpperController {
   }
 
   /** Return a sanitized, non-authoritative projection for the Rust shadow observer. */
-  runtimeKernelJProjection(log: DecisionLog): RuntimeKernelJProjectionResult {
+  runtimeKernelJProjection(log: DecisionLog, command?: ExecuteCommand | null): RuntimeKernelJProjectionResult {
     try {
       const purposeBinding = log.goal_purpose_binding ?? null;
       return projectRuntimeKernelJDecision(log, this.policy, purposeBinding,
-        this.runtimeKernelJCurrentPurposeBinding(purposeBinding));
+        this.runtimeKernelJCurrentPurposeBinding(purposeBinding),
+        this.operationPlans.runtimeKernelJPlanStepAdoptionProjection(command));
     } catch {
       return { status: "not_comparable", reason: "projection_error" };
     }

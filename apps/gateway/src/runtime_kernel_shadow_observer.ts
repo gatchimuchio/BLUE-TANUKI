@@ -8,12 +8,15 @@ import { fileURLToPath } from "node:url";
 import { parseBoundaryExchangeAtBoundary } from "@blue-tanuki/protocol";
 import type {
   RuntimeKernelJMemoryTransitionProjection,
+  RuntimeKernelJPlanStepAdoptionProjection,
+  RuntimeKernelJPlanStepAdoptionReceipt,
   RuntimeKernelJProjectionResult,
   RuntimeKernelJProjectionUnavailableReason,
 } from "@blue-tanuki/hds-brain";
+import { classifyRuntimeKernelJPlanStepAdoption } from "@blue-tanuki/hds-brain";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v4";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v5";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const RESPONSE_TIMEOUT_MS = 1_000;
@@ -64,6 +67,7 @@ export type RuntimeKernelShadowObserverEvent =
     memory_transition_matches?: boolean;
     residual_status?: string;
     residual_status_matches?: boolean;
+    plan_step_adoption: RuntimeKernelJPlanStepAdoptionReceipt;
   }
   | {
     kind: "comparison_unavailable";
@@ -117,6 +121,52 @@ function memoryTransitionReceiptIsConsistent(
     receipt.residual_status === residualStatus &&
     receipt.residual_status_matches === residualStatusMatches &&
     receipt.lifecycle_matches === (transitionMatches && residualStatusMatches);
+}
+
+function planStepAdoptionReceiptIsConsistent(
+  projection: RuntimeKernelJPlanStepAdoptionProjection,
+  receipt: unknown,
+): RuntimeKernelJPlanStepAdoptionReceipt | undefined {
+  const expected = classifyRuntimeKernelJPlanStepAdoption(projection);
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return undefined;
+  const actual = receipt as JsonObject;
+  const keys = Object.keys(actual).sort();
+  if (expected.status === "not_applicable") {
+    return keys.join(",") === "matches,status" && actual.status === expected.status && actual.matches === null
+      ? expected : undefined;
+  }
+  if (expected.status === "not_comparable") {
+    return keys.join(",") === "matches,reason,status" && actual.status === expected.status &&
+      actual.reason === expected.reason && actual.matches === null ? expected : undefined;
+  }
+  if (keys.join(",") !== "criterion_relation,matches,purpose_relation,status" ||
+      actual.status !== expected.status || actual.matches !== expected.matches) return undefined;
+  const actualPurpose = actual.purpose_relation;
+  const actualCriteria = actual.criterion_relation;
+  if (!actualPurpose || typeof actualPurpose !== "object" || Array.isArray(actualPurpose) ||
+      !actualCriteria || typeof actualCriteria !== "object" || Array.isArray(actualCriteria)) return undefined;
+  const purpose = actualPurpose as JsonObject;
+  const criteria = actualCriteria as JsonObject;
+  const purposeKeys = Object.keys(purpose).sort();
+  const criterionKeys = Object.keys(criteria).sort();
+  const expectedPurposeKeys = ["candidate_outcome", "candidate_status", "evidence_status", "owner_review_outcome", "status"];
+  const expectedCriterionKeys = ["conflicts_count", "evidence_status", "objective_count", "outcome",
+    "reason_code", "relation_count", "risk_status", "safety_count", "supports_count"];
+  if (purposeKeys.join(",") !== expectedPurposeKeys.sort().join(",") ||
+      criterionKeys.join(",") !== expectedCriterionKeys.sort().join(",")) return undefined;
+  if (expected.status !== "matched" && expected.status !== "mismatched") return undefined;
+  const expectedPurpose = expected.purpose_relation;
+  const expectedCriteria = expected.criterion_relation;
+  if (purpose.status !== expectedPurpose.status || purpose.candidate_outcome !== expectedPurpose.candidate_outcome ||
+      purpose.candidate_status !== expectedPurpose.candidate_status ||
+      purpose.evidence_status !== expectedPurpose.evidence_status ||
+      purpose.owner_review_outcome !== expectedPurpose.owner_review_outcome ||
+      criteria.outcome !== expectedCriteria.outcome || criteria.evidence_status !== expectedCriteria.evidence_status ||
+      criteria.risk_status !== expectedCriteria.risk_status || criteria.relation_count !== expectedCriteria.relation_count ||
+      criteria.objective_count !== expectedCriteria.objective_count || criteria.safety_count !== expectedCriteria.safety_count ||
+      criteria.supports_count !== expectedCriteria.supports_count || criteria.conflicts_count !== expectedCriteria.conflicts_count ||
+      criteria.reason_code !== expectedCriteria.reason_code) return undefined;
+  return expected;
 }
 
 export async function startRuntimeKernelShadowObserver(options: {
@@ -242,6 +292,7 @@ export async function startRuntimeKernelShadowObserver(options: {
       return;
     }
     const projection = observation.j_projection.projection;
+    const planAdoption = classifyRuntimeKernelJPlanStepAdoption(projection.plan_step_adoption);
     if (projection.resume_transition &&
         projection.resume_transition.command_present !== observation.command_present) {
       emit({ kind: "comparison_unavailable", reason: "resume_command_presence_mismatch" });
@@ -321,7 +372,11 @@ export async function startRuntimeKernelShadowObserver(options: {
           (purposeBindingMatches === true || purposeBindingMatches === null) &&
           (purposeBindingCurrentMatches === true || purposeBindingCurrentMatches === null) &&
           receipt.policy_rule_matches === true &&
-          receipt.lifecycle_matches === true ? "matched" : "mismatched";
+          receipt.lifecycle_matches === true && planAdoption.matches !== false ? "matched" : "mismatched";
+        const planStepAdoptionReceipt = planStepAdoptionReceiptIsConsistent(
+          projection.plan_step_adoption,
+          receipt.plan_step_adoption,
+        );
         if (receipt.accepted_for_shadow !== true || comparisonStatus === undefined ||
             receipt.comparison_status !== comparisonStatus ||
             comparisonStatus !== expectedComparisonStatus ||
@@ -333,6 +388,7 @@ export async function startRuntimeKernelShadowObserver(options: {
             !currentPurposeBindingReceiptIsConsistent ||
             typeof receipt.policy_rule_matches !== "boolean" ||
             typeof receipt.lifecycle_matches !== "boolean" ||
+            planStepAdoptionReceipt === undefined ||
             receipt.goal_id !== goalId || receipt.goal_version !== goalVersion ||
             receipt.contract_version !== REQUEST_CONTRACT_VERSION ||
             receipt.decision !== "hold" || receipt.shadow_revision !== revision + 1 ||
@@ -382,6 +438,7 @@ export async function startRuntimeKernelShadowObserver(options: {
             residual_status: receipt.residual_status as string,
             residual_status_matches: receipt.residual_status_matches as boolean,
           } : {}),
+          plan_step_adoption: planStepAdoptionReceipt,
         });
       } catch {
         await fail();
