@@ -40,6 +40,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 今回、ownerがapproveした後に非常停止が有効でM適用されなかったmeaning adoption／judgment reassessmentを、Rust shadow observerへ接続した。Gateway通常serveの合成L3 process smokeで両停止枝を通し、owner verdict `approve`を保ったままM未適用・revision不変・再評価対象全件残存となること、停止解除後に再発行tokenで両M更新を完了することを確認した。Rust shadowの5 memory-transition eventはすべて`matched`。対象Gateway smoke（1 test）、Gateway typecheck、`pnpm docs:check`がPASS。外部LLM／外部作用は未使用。K-B5全体意味比較・cutover・製品全体BUILD・QE_QC／QE_QAは未成立。
 
+続くGateway consumer確認では、Windows上の実Gateway processへ合成の停止入力を送り、実WebSocketで返された一回限りresume tokenを使って`/resume`のowner rejectを通した。Gateway observerは実Rust processのresume receiptを`matched`として記録し、receiptにrequest ID・token・入力本文が出ないこと、provider呼出し数と外部作用が増えないことを確認した。対象Gateway smokeとGateway typecheckはPASS。これはreject resume一経路の接続証拠であり、approve後の実行、K-B5全体比較、製品全体BUILD、QE_QC／QE_QA、single-writer cutoverの証拠ではない。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

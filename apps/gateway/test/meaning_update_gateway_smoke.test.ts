@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import WebSocket from "ws";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
@@ -161,6 +162,7 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
     const gatewayPort = await reservePort();
     const env = isolatedEnvironment(providerPort, gatewayPort, auditDir, stateRoot, memoryFile, historyFile, sessionDir);
     let gateway: CapturedProcess | undefined;
+    let resumeSocket: WebSocket | undefined;
 
     try {
       gateway = spawnGateway(env);
@@ -574,8 +576,74 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
         expect(readFileSync(persistedFile, "utf8")).not.toContain(candidateMeaning);
         expect(readFileSync(persistedFile, "utf8")).not.toContain(revisedMeaning);
       }
+
+      const ticketResponse = await fetch(`http://127.0.0.1:${gatewayPort}/ws-ticket`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0702-owner" }),
+      });
+      expect(ticketResponse.ok).toBe(true);
+      const ticket = (await ticketResponse.json() as { ticket?: string }).ticket;
+      expect(ticket).toBeTruthy();
+      const resumeFrames: Array<{ kind?: string; content?: string }> = [];
+      const socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket!)}`);
+      resumeSocket = socket;
+      socket.on("message", (data) => {
+        try { resumeFrames.push(JSON.parse(data.toString("utf8")) as { kind?: string; content?: string }); }
+        catch { /* ignore malformed fixture frames */ }
+      });
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+
+      const suspendInvocation = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
+        method: "POST", headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0702-owner", content: "credit card number" }),
+      });
+      expect(suspendInvocation.status).toBe(202);
+      const suspendAccepted = await suspendInvocation.json() as { request_id?: string };
+      expect(suspendAccepted.request_id).toBeTruthy();
+      const suspendDecision = await waitForDecision(auditDir, String(suspendAccepted.request_id), gateway,
+        () => providerFailure);
+      expect(suspendDecision.commit).toMatchObject({ decision: "SUSPEND" });
+
+      const suspendedFrameDeadline = Date.now() + 10_000;
+      let suspendedFrame: { kind?: string; content?: string } | undefined;
+      while (Date.now() < suspendedFrameDeadline) {
+        suspendedFrame = resumeFrames.find((frame) => frame.kind === "channel_send" &&
+          typeof frame.content === "string" && frame.content.includes(`request_id=${suspendAccepted.request_id}`));
+        if (suspendedFrame) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(suspendedFrame?.content).toContain("[suspended]");
+      const approvalToken = suspendedFrame?.content?.match(/(?:^|\s)approval_token=([A-Za-z0-9_-]+)/)?.[1];
+      expect(approvalToken).toBeTruthy();
+
+      const resumed = await fetch(`http://127.0.0.1:${gatewayPort}/resume`, {
+        method: "POST", headers: { authorization: `Bearer ${RESUME_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ request_id: suspendAccepted.request_id, verdict: "reject", approval_token: approvalToken }),
+      });
+      expect(resumed.status).toBe(200);
+      expect(await resumed.json()).toMatchObject({ ok: true, result: { decision: "FAIL", executed: false } });
+
+      const resumeShadowDeadline = Date.now() + 10_000;
+      let resumeShadowLine = "";
+      while (Date.now() < resumeShadowDeadline) {
+        resumeShadowLine = [...gateway.stdout, ...gateway.stderr].join("").split(/\r?\n/).find((line) =>
+          line.includes("Runtime Kernel shadow J comparison") && line.includes("comparison_kind=resume") &&
+          line.includes("resume_owner_verdict=reject")) ?? "";
+        if (resumeShadowLine) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(resumeShadowLine).toContain("comparison_status=matched");
+      expect(resumeShadowLine).toContain("resume_allowed=true");
+      expect(resumeShadowLine).not.toContain(String(suspendAccepted.request_id));
+      expect(resumeShadowLine).not.toContain(approvalToken!);
+      expect(resumeShadowLine).not.toContain("credit card number");
       expect(providerCalls).toBe(9);
     } finally {
+      resumeSocket?.terminate();
       if (gateway) await stopChild(gateway.child);
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });

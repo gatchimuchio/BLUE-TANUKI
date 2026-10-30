@@ -76,7 +76,7 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 今回のBUILD差分では、通常decisionに限られていたcommand有無の不一致観測をresumeとL3 memory approvalへ広げた。実HDS結果とprojectionのcommand有無が食い違ってもRust shadow比較を破棄せず、`command_presence_matches=false`と総合`mismatched`を非権威ログへ記録する。比較自体が不可能なprojection形式の拒否は維持する。Rustの`hold`／no-effect／no-M-write、TypeScript HDS判断・command・Approval・唯一M writerは変更していない。Gateway typecheck／build、`pnpm docs:check`、`git diff --check`はPASS。日本語基底監査の移行負債76件は既存注意として残る。testとGateway実process smokeは未実施。K-B5の全体J/M比較・single-writer cutover、製品全体BUILD、QE_QC／QE_QAは未成立のまま継続する。
 
-今回、resume shadow receiptの不一致を原因分類できるよう、既存projectionに含まれる固定enumのowner verdictとresume許可状態だけをGateway非権威ログへ通す。owner identity、要求・command ID、本文、秘密は追加しない。Rustの`hold`／no-effect／no-M-write、TypeScript HDS判断・command・Approval・唯一M writerは変更しない。Gateway typecheck／buildはPASS。testとprocess smokeは未実施。K-B5全体比較とsingle-writer cutoverは未成立。
+resume shadow receiptの原因分類には固定enumのowner verdictとresume許可状態だけを使い、owner identity、要求・command ID、本文、秘密はGateway非権威ログへ出さない。今回、実Gateway processの通常入力→HDS `SUSPEND`→WebSocketの一回限りtoken→`/resume` owner rejectを合成入力で通し、同じRust processのreceiptが`matched`となることを確認した。resume比較行にrequest ID・token・入力本文は含まれず、provider呼出し数も増えていない。対象Gateway smokeとGateway typecheckはPASS。Rustは引き続き`hold`／no-effect／no-M-write、TypeScript HDS-BRAINは唯一のauthority／M writer。K-B5全体比較とsingle-writer cutoverは未成立。
 
 ## Gitと復旧
 
