@@ -16,7 +16,7 @@ import type {
 import { classifyRuntimeKernelJPlanStepAdoption } from "@blue-tanuki/hds-brain";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v5";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v6";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const RESPONSE_TIMEOUT_MS = 1_000;

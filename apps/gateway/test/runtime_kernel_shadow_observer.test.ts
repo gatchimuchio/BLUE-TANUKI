@@ -363,6 +363,58 @@ describe("Gateway Runtime Kernel shadow observer", () => {
     expect(JSON.stringify(events)).not.toContain("a".repeat(64));
   }, 120_000);
 
+  it("自己健全性fail-safeのSUSPENDをRust shadow receiptまで通し無作用で閉じる", async () => {
+    const events: RuntimeKernelShadowObserverEvent[] = [];
+    const controller = new HDSUpperController({ self_health: { hds_available: false } });
+    const { log, command } = controller.decide({
+      id: "runtime-shadow-self-health-task",
+      channel: "webchat",
+      user: "synthetic-owner",
+      content: "synthetic fail-safe observation",
+      timestamp: Date.now(),
+    });
+    expect(log.commit.decision).toBe("SUSPEND");
+    expect(command).toBeNull();
+    const projection = controller.runtimeKernelJProjection(log, command);
+    expect(projection.status).toBe("comparable");
+    if (projection.status !== "comparable") throw new Error("self-health projection unavailable");
+    expect(JSON.stringify(projection.projection)).not.toContain("hds_available");
+    expect(JSON.stringify(projection.projection)).not.toContain("synthetic fail-safe observation");
+
+    const observer = await startRuntimeKernelShadowObserver({
+      enabled: true,
+      production: false,
+      onEvent: (event) => events.push(event),
+    });
+    expect(observer).toBeDefined();
+    try {
+      observer!.observe({ j_projection: projection, command_present: false });
+      await waitForObservedEvents(events, 1);
+    } finally {
+      await observer!.shutdown();
+    }
+
+    expect(events[0]).toEqual({ kind: "ready" });
+    expect(events[1]).toMatchObject({
+      kind: "observation",
+      sequence: 1,
+      shadow_revision: 1,
+      comparison_kind: "decision",
+      comparison_status: "matched",
+      policy_decision_matches: true,
+      policy_rule_matches: true,
+      lifecycle_matches: true,
+      typescript_decision: "SUSPEND",
+      typescript_policy_rule_id: "detector_lifecycle",
+      typescript_policy_rule_axis: "self_health",
+      runtime_kernel_j_decision: "SUSPEND",
+      rule_id: "detector_lifecycle",
+      rule_axis: "self_health",
+      command_present: false,
+      purpose_version: null,
+    });
+  }, 120_000);
+
   it("選択済みplanの採否要約を実Rust processへ送り、非権威receiptで照合する", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-runtime-shadow-plan-adoption-"));
     const workspace = join(root, "workspace");

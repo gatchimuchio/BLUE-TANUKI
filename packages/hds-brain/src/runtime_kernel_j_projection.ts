@@ -172,9 +172,17 @@ export type RuntimeKernelJMemoryTransitionInput =
     remaining_reassessment_required_count: number;
   };
 
+/** Bounded self-health fail-safe summary. Failed-precondition names and evidence are excluded. */
+export interface RuntimeKernelJSelfHealthFailSafeProjection {
+  failed_precondition_count: number;
+  command_execution_allowed: false;
+  downstream_execution_allowed: false;
+  used_for_authority: false;
+}
+
 /** Sanitized numeric inputs for a non-authoritative Rust J comparison. */
 export interface RuntimeKernelJProjection {
-  schema_version: "blue-tanuki.hds-runtime-j-projection.v10";
+  schema_version: "blue-tanuki.hds-runtime-j-projection.v11";
   typescript_decision: Decision;
   typescript_policy_rule_id: RuntimeKernelJPolicyRuleId;
   typescript_policy_rule_axis: string | null;
@@ -190,6 +198,7 @@ export interface RuntimeKernelJProjection {
   };
   resume_transition?: RuntimeKernelJResumeTransitionProjection;
   memory_transition?: RuntimeKernelJMemoryTransitionProjection;
+  self_health_gate?: RuntimeKernelJSelfHealthFailSafeProjection;
 }
 
 export type RuntimeKernelJProjectionUnavailableReason =
@@ -231,6 +240,34 @@ export function projectRuntimeKernelJDecision(
   }
   if (!isCurrentPurposeBindingProjectionValid(purposeBinding, currentPurposeBinding)) {
     return { status: "not_comparable", reason: "purpose_binding_invalid" };
+  }
+
+  const selfHealthGate = projectSelfHealthFailSafe(log);
+  if (selfHealthGate === null) return { status: "not_comparable", reason: "controller_override" };
+  if (selfHealthGate) {
+    return {
+      status: "comparable",
+      projection: {
+        schema_version: "blue-tanuki.hds-runtime-j-projection.v11",
+        typescript_decision: "SUSPEND",
+        typescript_policy_rule_id: "detector_lifecycle",
+        typescript_policy_rule_axis: "self_health",
+        purpose_binding: purposeBinding ? { ...purposeBinding } : null,
+        current_goal_purpose_binding: {
+          status: currentPurposeBinding.status,
+          binding: currentPurposeBinding.binding ? { ...currentPurposeBinding.binding } : null,
+        },
+        plan_step_adoption: planStepAdoption,
+        axes: [{ axis: "self_health", score_micros: 0, weight_micros: SCALE, lifecycle_ok: false }],
+        thresholds: {
+          aggregate_assert_micros: SCALE,
+          out_of_scope_below_micros: 0,
+          per_axis_fail: [],
+          per_axis_suspend_below: [],
+        },
+        self_health_gate: selfHealthGate,
+      },
+    };
   }
 
   const scoring = log.model.scoring;
@@ -310,7 +347,7 @@ export function projectRuntimeKernelJDecision(
   return {
     status: "comparable",
     projection: {
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v10",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v11",
       typescript_decision: typescript.decision,
       typescript_policy_rule_id: typescriptPolicyRule.id,
       typescript_policy_rule_axis: typescriptPolicyRule.axis,
@@ -328,6 +365,38 @@ export function projectRuntimeKernelJDecision(
         per_axis_suspend_below: perAxisSuspendBelow,
       },
     },
+  };
+}
+
+function projectSelfHealthFailSafe(log: DecisionLog): RuntimeKernelJSelfHealthFailSafeProjection | null | undefined {
+  const prefix = "hds_fail_safe:suspend:";
+  if (!log.commit.reason.startsWith("hds_fail_safe:")) return undefined;
+  if (log.commit.decision !== "SUSPEND" || !log.commit.reason.startsWith(prefix)) return null;
+
+  const structure = log.model.structure;
+  if (!structure || typeof structure !== "object" || Array.isArray(structure)) return null;
+  const health = (structure as Record<string, unknown>).self_health;
+  if (!health || typeof health !== "object" || Array.isArray(health)) return null;
+  const value = health as Record<string, unknown>;
+  const failed = value.failed_preconditions;
+  const allowedPreconditions = new Set([
+    "hds_available", "policy_valid", "audit_chain_valid", "runtime_invariants_valid",
+    "runtime_health_observed", "approval_gate_available", "memory_chain_valid",
+  ]);
+  if (value.status !== "fail_safe" ||
+      value.command_execution_allowed !== false || value.downstream_execution_allowed !== false ||
+      value.used_for_authority !== false || !Array.isArray(failed) || failed.length < 1 || failed.length > 7 ||
+      failed.some((item) => typeof item !== "string" || !allowedPreconditions.has(item)) ||
+      new Set(failed).size !== failed.length) return null;
+
+  const expectedReason = `${prefix}${failed.join(",")}`;
+  const expectedThresholds = ["hds_fail_safe:suspend", ...failed.map((item) => `hds_fail_safe:${item}=false`)];
+  if (log.commit.reason !== expectedReason || !sameStrings(log.commit.triggered_thresholds, expectedThresholds)) return null;
+  return {
+    failed_precondition_count: failed.length,
+    command_execution_allowed: false,
+    downstream_execution_allowed: false,
+    used_for_authority: false,
   };
 }
 

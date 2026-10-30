@@ -60,6 +60,8 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 このコード経路は`WIRED`。observer試験では実Rust processのmatched／意図的不一致receiptを確認し、HDS／Gateway typecheckとGateway依存buildもPASSした。続いて既存のGateway process smokeへplan receipt確認を追加し、通常WebChat inboundのplan選択で`matched` receipt、no-effect／no-M-write、および本文・request／plan／step ID・pathの非出力を確認した。同じfixtureはlocal fake provider、隔離state、一時file rootだけを使い、planのfile.deleteは別のtest専用L3承認後にその一時root内で実行・観測した。process smokeはPASS。試験で、meaning-update J/M stageの承認readerへ`source_decision_binding`が渡らず`j_approval_not_verified`となる欠陥も検出し、Jがその出所束縛を保存直前に再照合するよう修正した。stage拒否理由コードも呼出側へ保持する。これらは限定的な実process接続証拠であり、K-B5のJ/M全体意味比較、single-writer cutover、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`の成立を示さないため継続する。
 
+今回のBUILD差分では、TypeScript HDS-BRAINが既にfail-safe `SUSPEND`を確定した自己健全性停止を、Rust shadowの限定J projectionへ接続した。projection v11／request v6は、失敗条件の名前・根拠・入力本文を送らず、失敗件数と実行禁止／非権威の固定値だけを渡す。Rustは単一の停止軸・固定重み・閾値を検証して`SUSPEND`を再判定する。Windows上の実Rust processで一致receipt、条件名・入力本文の非出力、範囲外件数と不正重みの拒否、安全停止を確認した。HDS controller／shadow IPC 82 tests、Gateway shadow observer 4 tests、Rust `cargo test --locked` 4 tests、Rust `cargo fmt --check`、HDS／Gateway typecheckとbuild、`pnpm docs:check`、`git diff --check`はPASS。テストは合成fixtureと実Rust processに限定され、実provider・外部作用・他OSを通した証拠ではない。Rustは引き続き`hold`、no-effect、no-M-write。K-B5の全体J/M意味比較、single-writer cutover、製品全体BUILD、QE_QC／QE_QAは未成立。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

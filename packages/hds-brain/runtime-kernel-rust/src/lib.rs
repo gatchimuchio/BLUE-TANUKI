@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v5";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v10";
+const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v6";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v11";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -567,17 +567,39 @@ fn evaluate_runtime_kernel_j_projection(
     let object = projection.as_object().ok_or("projection_shape_rejected")?;
     let has_resume_transition = object.contains_key("resume_transition");
     let has_memory_transition = object.contains_key("memory_transition");
+    let has_self_health_gate = object.contains_key("self_health_gate");
+    let expected_projection_fields =
+        9 + if has_resume_transition || has_memory_transition {
+            1
+        } else {
+            0
+        } + if has_self_health_gate { 1 } else { 0 };
     if has_resume_transition && has_memory_transition
-        || object.len()
-            != if has_resume_transition || has_memory_transition {
-                10
-            } else {
-                9
-            }
+        || has_self_health_gate && (has_resume_transition || has_memory_transition)
+        || object.len() != expected_projection_fields
         || string_value(object.get("schema_version")) != Some(J_PROJECTION_SCHEMA_VERSION)
     {
         return Err("projection_schema_rejected");
     }
+    let self_health_failed_precondition_count = if has_self_health_gate {
+        let gate = object
+            .get("self_health_gate")
+            .and_then(Value::as_object)
+            .filter(|gate| gate.len() == 4)
+            .ok_or("projection_self_health_gate_rejected")?;
+        if integer_value(gate.get("failed_precondition_count"))
+            .filter(|count| (1..=7).contains(count))
+            .is_none()
+            || gate.get("command_execution_allowed") != Some(&Value::Bool(false))
+            || gate.get("downstream_execution_allowed") != Some(&Value::Bool(false))
+            || gate.get("used_for_authority") != Some(&Value::Bool(false))
+        {
+            return Err("projection_self_health_gate_rejected");
+        }
+        integer_value(gate.get("failed_precondition_count"))
+    } else {
+        None
+    };
     let purpose_binding_value = object
         .get("purpose_binding")
         .ok_or("projection_purpose_binding_rejected")?;
@@ -698,6 +720,21 @@ fn evaluate_runtime_kernel_j_projection(
     let per_axis_fail = parse_projection_thresholds(thresholds.get("per_axis_fail"))?;
     let per_axis_suspend_below =
         parse_projection_thresholds(thresholds.get("per_axis_suspend_below"))?;
+
+    if self_health_failed_precondition_count.is_some()
+        && (axes.len() != 1
+            || axis_scores.get("self_health") != Some(&(0, false))
+            || axes[0]
+                .as_object()
+                .and_then(|axis| integer_value(axis.get("weight_micros")))
+                != Some(J_PROJECTION_SCALE)
+            || aggregate_assert != J_PROJECTION_SCALE
+            || out_of_scope_below != 0
+            || !per_axis_fail.is_empty()
+            || !per_axis_suspend_below.is_empty())
+    {
+        return Err("projection_self_health_gate_rejected");
+    }
 
     let (runtime_kernel_j_decision, rule_id, rule_axis) = if let Some(axis) = lifecycle_axis {
         ("SUSPEND", "detector_lifecycle", Some(axis))

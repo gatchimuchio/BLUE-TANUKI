@@ -11,7 +11,7 @@ import { HDSUpperController } from "../src/controller.js";
 import { runStandaloneHDSBrain } from "../src/standalone_harness.js";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v5";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v6";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const testDirectory = dirname(fileURLToPath(import.meta.url));
@@ -234,6 +234,116 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
       });
       expect(await process.exitCode()).toBe(0);
       expect(readFileSync(process.databasePath).includes(Buffer.from(rawInput))).toBe(false);
+    } finally {
+      await process.close();
+    }
+  }, 120_000);
+
+  it("HDS fail-safe SUSPENDをRust processが有限projectionから再判定し、停止だけを返す", async () => {
+    const key = randomBytes(32);
+    const sessionId = randomUUID();
+    const controller = new HDSUpperController({ self_health: { hds_available: false } });
+    const { log, command } = controller.decide({
+      id: "runtime-shadow-self-health-task",
+      channel: "webchat",
+      user: "synthetic-owner",
+      content: "synthetic self-health fail-safe input",
+      timestamp: Date.now(),
+    });
+    expect(log.commit.decision).toBe("SUSPEND");
+    expect(command).toBeNull();
+    const projected = controller.runtimeKernelJProjection(log, command);
+    expect(projected.status).toBe("comparable");
+    if (projected.status !== "comparable") throw new Error("synthetic self-health projection unavailable");
+    const projection = projected.projection;
+    const projectionText = JSON.stringify(projection);
+    expect(projection).toMatchObject({
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v11",
+      typescript_decision: "SUSPEND",
+      typescript_policy_rule_id: "detector_lifecycle",
+      typescript_policy_rule_axis: "self_health",
+      self_health_gate: {
+        failed_precondition_count: 1,
+        command_execution_allowed: false,
+        downstream_execution_allowed: false,
+        used_for_authority: false,
+      },
+    });
+    expect(projectionText).not.toContain("hds_available");
+    expect(projectionText).not.toContain("synthetic self-health fail-safe input");
+
+    const process = startKernel(key, sessionId);
+    try {
+      await process.nextFrame();
+      await process.send(signFrame(makeDecisionRequest(sessionId, 1, 0, projectionText), key));
+      const compared = verifyFrame(await process.nextFrame(), key);
+      expect(compared.payload).toMatchObject({
+        accepted_for_shadow: true,
+        reason: "shadow_projection_matched",
+        decision: "hold",
+        comparison_kind: "decision",
+        comparison_status: "matched",
+        policy_decision_matches: true,
+        policy_rule_matches: true,
+        lifecycle_matches: true,
+        typescript_decision: "SUSPEND",
+        runtime_kernel_j_decision: "SUSPEND",
+        rule_id: "detector_lifecycle",
+        rule_axis: "self_health",
+        effect_started: false,
+        m_written: false,
+        used_for_authority: false,
+        may_execute: false,
+        shadow_revision: 1,
+      });
+
+      const invalidProjection = JSON.stringify({
+        ...projection,
+        self_health_gate: { ...projection.self_health_gate, failed_precondition_count: 0 },
+      });
+      await process.send(signFrame(makeDecisionRequest(sessionId, 2, 1, invalidProjection), key));
+      const invalid = verifyFrame(await process.nextFrame(), key);
+      expect(invalid.payload).toMatchObject({
+        accepted_for_shadow: false,
+        reason: "projection_self_health_gate_rejected",
+        decision: "hold",
+        shadow_revision: 1,
+        effect_started: false,
+        m_written: false,
+      });
+
+      const invalidWeightProjection = JSON.stringify({
+        ...projection,
+        axes: [{ ...projection.axes[0], weight_micros: 1 }],
+      });
+      await process.send(signFrame(makeDecisionRequest(sessionId, 3, 1, invalidWeightProjection), key));
+      const invalidWeight = verifyFrame(await process.nextFrame(), key);
+      expect(invalidWeight.payload).toMatchObject({
+        accepted_for_shadow: false,
+        reason: "projection_self_health_gate_rejected",
+        decision: "hold",
+        shadow_revision: 1,
+        effect_started: false,
+        m_written: false,
+      });
+
+      await process.send(signFrame({
+        protocol_version: IPC_VERSION,
+        direction: "parent_to_kernel",
+        session_id: sessionId,
+        sequence: 4,
+        message_kind: "shutdown",
+        payload: {},
+      }, key));
+      const stopped = verifyFrame(await process.nextFrame(), key);
+      expect(stopped.payload).toMatchObject({
+        accepted_for_shadow: true,
+        reason: "safe_stop_acknowledged",
+        effect_started: false,
+        m_written: false,
+        used_for_authority: false,
+        may_execute: false,
+      });
     } finally {
       await process.close();
     }
