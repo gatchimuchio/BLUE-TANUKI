@@ -12,6 +12,7 @@ import {
   type GatewayInternalInboundRequestInput,
   type OperationPlanGoalPurposeRelationCandidate, type OperationPlanGoalPurposeRelationOwnerReview,
   type OperationPlanGoalPurposeRelationRecord, type OperationPlanGoalPurposeRelationReviewArguments, type OperationStep,
+  type OperationPlanGoalRelationAdoptionAssessment,
   type MemoryCommitV2, type MemoryUpdateReceiptV1,
   ExecutionAdmissionSchema, inspectExecutionResultDelivery, type ExecutionAdmission, type ExecutionResultDelivery,
   OperationPlanExternalReceiptObservationSchema,
@@ -21,6 +22,7 @@ import {
   OperationPlanGoalPurposeRelationCandidateSchema,
   OperationPlanGoalPurposeRelationOwnerReviewSchema,
   OperationPlanGoalPurposeRelationRecordSchema,
+  OperationPlanGoalRelationAdoptionAssessmentSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   OperationPlanMemoryInterpretationDependencySchema,
   OperationPlanWaitStateSchema,
@@ -34,7 +36,7 @@ import {
 } from "@blue-tanuki/protocol";
 import { JMemoryCommitCoordinator } from "./制御状態.js";
 import type { JMemoryApprovalReference } from "./保存取引.js";
-import { assessCandidateGoalCriteria, projectRequestGoalCriteria } from "./candidate_criteria.js";
+import { assessCandidateGoalCriteria, digestGoalCriteriaValue, projectRequestGoalCriteria } from "./candidate_criteria.js";
 import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, verifyResultMemoryCommit, receiptForResultCommit,
   buildShellExecResultMemoryCommit, shellExecResultMemoryIdentity, shellExecResultMemoryObservation,
   verifyShellExecResultMemoryCommit } from "./operation_result_memory.js";
@@ -2244,6 +2246,9 @@ export class OperationPlanLedger {
     const prepared = this.inspectControl(control, caller);
     const step = prepared.step!;
     const descriptor = getOperationDescriptor(step.operation)!;
+    const plan = this.state.plans.find((candidate) => candidate.revisions[0]!.plan.plan_id === prepared.plan_id);
+    if (!plan) throw new Error("plan_execution_source_binding_unavailable");
+    const goalRelationAdoptionAssessment = this.goalRelationAdoptionAssessment(plan, step);
     if (command.type !== "tool_call" || command.payload.tool_name !== descriptor.tool_name ||
         operationPlanDigest(command.payload.arguments) !== operationPlanDigest(step.parameters)) throw new Error("plan_command_content_changed");
     this.change((state) => {
@@ -2256,7 +2261,8 @@ export class OperationPlanLedger {
         commit_hash: command.upstream_decision.commit_hash, payload_digest: commandPayloadDigest(command),
         command_digest: operationPlanDigest(command),
         executor_command_digest: canonicalExecutorCommandDigest(command),
-        operation: descriptor.operation_id, status: "selected" });
+        operation: descriptor.operation_id, goal_relation_adoption_assessment: goalRelationAdoptionAssessment,
+        status: "selected" });
     });
     this.issuedBindings.set(command, command.id);
     this.issuedBindingIds.add(command.id);
@@ -2311,6 +2317,11 @@ export class OperationPlanLedger {
         command.upstream_decision.commit_hash !== match.b.commit_hash) {
       throw new Error("plan_execution_source_binding_stale");
     }
+    const currentGoalRelationAdoptionAssessment = this.goalRelationAdoptionAssessment(match.p, step);
+    if (match.b.goal_relation_adoption_assessment &&
+        currentGoalRelationAdoptionAssessment.assessment_digest !== match.b.goal_relation_adoption_assessment.assessment_digest) {
+      throw new Error("plan_execution_source_binding_stale");
+    }
     return operationPlanDigest({
       schema_version: "blue-tanuki.operation-plan-execution-source.v1",
       owner_digest: operationPlanDigest(match.p.owner),
@@ -2331,6 +2342,7 @@ export class OperationPlanLedger {
       goal_purpose_binding: match.p.goal_purpose_binding ?? null,
       goal_purpose_relation_digest: operationPlanDigest(match.p.goal_purpose_relation ?? null),
       request_goal_criteria_digest: operationPlanDigest(match.p.request_goal_criteria ?? null),
+      goal_relation_adoption_assessment_digest: match.b.goal_relation_adoption_assessment?.assessment_digest ?? null,
       compute_source_observations_digest: operationPlanDigest(computeSourceObservations),
       command_digest: match.b.command_digest,
     });
@@ -2382,6 +2394,11 @@ export class OperationPlanLedger {
     if (!this.computeSourceObservationsAreCurrent(p, nowMs)) return false;
     const step = p.revisions.at(-1)!.plan.steps.find((s) => s.step_id === b.step_id);
     if (!step || this.requestGoalCriteriaIssue(p, step) !== undefined) return false;
+    try {
+      const currentAssessment = this.goalRelationAdoptionAssessment(p, step);
+      if (b.goal_relation_adoption_assessment &&
+          currentAssessment.assessment_digest !== b.goal_relation_adoption_assessment.assessment_digest) return false;
+    } catch { return false; }
     const prepared = prepareOperationPlan(p.revisions.at(-1)!.plan, { now_ms: nowMs, results: p.results, observations: [] });
     const current = prepared.kind === "inspected" ? prepared.plan.steps.find((s) => s.step_id === b.step_id) : undefined;
     const currentBinding = command.id === b.command_id && b.status === "selected" && !!step && stepDigest(step) === b.step_digest &&
@@ -3475,25 +3492,101 @@ export class OperationPlanLedger {
     };
   }
 
-  /** Request-declared conflicts constrain plan selection; support remains an unverified claim. */
-  private requestGoalCriteriaIssue(p: PlanState, step: OperationStep): string | undefined {
+  /** Build the same request-bound criterion assessment used by selection and its adoption record. */
+  private requestGoalCriteriaEvaluation(p: PlanState, step: OperationStep): {
+    assessment: ReturnType<typeof assessCandidateGoalCriteria>;
+    projection_digest: string;
+    criterion_relations: { criterion_ref_digest: string; criterion_kind: "objective" | "safety";
+      relation: "supports" | "conflicts" }[];
+    issue?: string;
+  } {
     const projection = p.request_goal_criteria;
-    if (!projection) return "plan_goal_criteria_source_unavailable";
+    const projectionDigest = operationPlanDigest(projection ?? null);
+    if (!projection) return {
+      assessment: assessCandidateGoalCriteria("", undefined), projection_digest: projectionDigest,
+      criterion_relations: [],
+      issue: "plan_goal_criteria_source_unavailable",
+    };
     const requestId = p.revisions[0]!.plan.request_id;
     const contentSha256 = createHash("sha256").update(p.goal, "utf8").digest("hex");
     if (projection.request_id !== requestId || projection.content_sha256 !== contentSha256 || projection.status === "invalid") {
-      return "plan_goal_criteria_source_invalid";
+      return {
+        assessment: assessCandidateGoalCriteria("", projection, { request_id: requestId, content_sha256: contentSha256 }),
+        projection_digest: projectionDigest, criterion_relations: [], issue: "plan_goal_criteria_source_invalid",
+      };
     }
-    if (projection.status === "not_provided") return undefined;
+    if (projection.status === "not_provided") return {
+      assessment: assessCandidateGoalCriteria("", projection, { request_id: requestId, content_sha256: contentSha256 }),
+      projection_digest: projectionDigest, criterion_relations: [],
+    };
     const descriptor = getOperationDescriptor(step.operation);
-    if (!descriptor) return "plan_goal_criteria_operation_unavailable";
-    const assessment = assessCandidateGoalCriteria(descriptor.tool_name ?? descriptor.operation_id, projection, {
+    if (!descriptor) return {
+      assessment: assessCandidateGoalCriteria("", projection, { request_id: requestId, content_sha256: contentSha256 }),
+      projection_digest: projectionDigest, criterion_relations: [], issue: "plan_goal_criteria_operation_unavailable",
+    };
+    const toolName = descriptor.tool_name ?? descriptor.operation_id;
+    const assessment = assessCandidateGoalCriteria(toolName, projection, {
       request_id: requestId,
       content_sha256: contentSha256,
     });
-    if (assessment.reason_code === "criteria_invalid") return "plan_goal_criteria_source_invalid";
-    if (assessment.outcome === "conflicts") return "plan_goal_criteria_conflict";
-    return undefined;
+    const toolNameDigest = digestGoalCriteriaValue(toolName.trim().normalize("NFKC"));
+    const criterionRelations = projection.criteria.flatMap((criterion) => criterion.tool_relations
+      .filter((relation) => relation.tool_name_digest === toolNameDigest)
+      .map((relation) => ({ criterion_ref_digest: criterion.criterion_ref_digest,
+        criterion_kind: criterion.criterion_kind, relation: relation.relation })))
+      .sort((left, right) => left.criterion_ref_digest.localeCompare(right.criterion_ref_digest));
+    if (assessment.reason_code === "criteria_invalid") return { assessment, projection_digest: projectionDigest,
+      criterion_relations: criterionRelations, issue: "plan_goal_criteria_source_invalid" };
+    if (assessment.outcome === "conflicts") return { assessment, projection_digest: projectionDigest,
+      criterion_relations: criterionRelations, issue: "plan_goal_criteria_conflict" };
+    return { assessment, projection_digest: projectionDigest, criterion_relations: criterionRelations };
+  }
+
+  /** Record the exact non-text relation inputs J used before adopting a plan step. */
+  private goalRelationAdoptionAssessment(
+    p: PlanState,
+    step: OperationStep,
+  ): OperationPlanGoalRelationAdoptionAssessment {
+    const criteria = this.requestGoalCriteriaEvaluation(p, step);
+    if (criteria.issue) throw new Error(criteria.issue);
+    const relation = p.goal_purpose_relation;
+    const binding = p.goal_purpose_binding;
+    if (relation && !binding) throw new Error("plan_goal_purpose_relation_binding_missing");
+    const purposeIssue = this.goalPurposeRelationIssue(p);
+    if (purposeIssue) throw new Error(purposeIssue);
+    const ownerReviewVerified = relation !== undefined && this.goalPurposeRelationOwnerReviewIsVerified(p, relation);
+    const purposeRelation = {
+      status: binding ? "owner_reviewed_supports" as const : "not_required" as const,
+      relation_digest: operationPlanDigest(relation ?? null),
+      candidate_outcome: relation?.candidate_outcome ?? "unknown" as const,
+      candidate_status: relation?.candidate_status ?? "missing" as const,
+      evidence_status: relation?.evidence_status ?? "not_provided" as const,
+      ...(ownerReviewVerified && relation?.owner_review
+        ? { owner_review_outcome: relation.owner_review.outcome } : {}),
+    };
+    const criterionRelation = {
+      projection_digest: criteria.projection_digest,
+      outcome: criteria.assessment.outcome,
+      evidence_status: criteria.assessment.evidence_status,
+      risk_status: criteria.assessment.risk_status,
+      criterion_ref_digests: [...new Set(criteria.criterion_relations.map((relation) => relation.criterion_ref_digest))].sort(),
+      criterion_relations: criteria.criterion_relations,
+      reason_code: criteria.assessment.reason_code,
+    };
+    const body = {
+      schema_version: "operation-plan-goal-relation-adoption.v1" as const,
+      purpose_relation: purposeRelation,
+      criterion_relation: criterionRelation,
+    };
+    return OperationPlanGoalRelationAdoptionAssessmentSchema.parse({
+      ...body,
+      assessment_digest: operationPlanDigest(body),
+    });
+  }
+
+  /** Request-declared conflicts constrain plan selection; support remains an unverified claim. */
+  private requestGoalCriteriaIssue(p: PlanState, step: OperationStep): string | undefined {
+    return this.requestGoalCriteriaEvaluation(p, step).issue;
   }
 
   private ownedPlan(id: string, caller: InboundRequest): PlanState {

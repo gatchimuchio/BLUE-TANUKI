@@ -206,6 +206,70 @@ export const OperationPlanGoalPurposeRelationRecordSchema = z.object({
   }
 });
 export type OperationPlanGoalPurposeRelationRecord = z.infer<typeof OperationPlanGoalPurposeRelationRecordSchema>;
+
+/** J's per-step adoption record of the purpose candidate and request-bound criterion relation. */
+export const OperationPlanGoalRelationAdoptionAssessmentSchema = z.object({
+  schema_version: z.literal("operation-plan-goal-relation-adoption.v1"),
+  purpose_relation: z.object({
+    status: z.enum(["not_required", "owner_reviewed_supports"]),
+    relation_digest: Digest,
+    candidate_outcome: z.enum(["supports", "conflicts", "unknown"]),
+    candidate_status: z.enum(["present", "missing", "invalid"]),
+    evidence_status: z.enum(["exact_spans_present", "not_provided", "citation_mismatch", "purpose_unavailable"]),
+    owner_review_outcome: z.enum(["supports", "conflicts", "unknown"]).optional(),
+  }).strict(),
+  criterion_relation: z.object({
+    projection_digest: Digest,
+    outcome: z.enum(["supports", "conflicts", "unknown"]),
+    evidence_status: z.enum(["observed", "inferred", "assumed", "unknown"]),
+    risk_status: z.enum(["verified", "unverified"]),
+    criterion_ref_digests: z.array(Digest).max(64),
+    criterion_relations: z.array(z.object({
+      criterion_ref_digest: Digest,
+      criterion_kind: z.enum(["objective", "safety"]),
+      relation: z.enum(["supports", "conflicts"]),
+    }).strict()).max(64),
+    reason_code: z.enum([
+      "request_declares_criterion_support_risk_unverified",
+      "request_declares_criterion_conflict",
+      "no_matching_goal_criterion",
+      "criteria_unavailable",
+      "criteria_invalid",
+    ]),
+  }).strict(),
+  assessment_digest: Digest,
+}).strict().superRefine((assessment, context) => {
+  if ((assessment.purpose_relation.status === "not_required" && assessment.purpose_relation.owner_review_outcome !== undefined) ||
+      (assessment.purpose_relation.status === "owner_reviewed_supports" &&
+        assessment.purpose_relation.owner_review_outcome !== "supports")) {
+    context.addIssue({ code: "custom", message: "operation_plan_purpose_adoption_review_status_mismatch" });
+  }
+  if ((assessment.purpose_relation.candidate_status === "missing" || assessment.purpose_relation.candidate_status === "invalid") &&
+      assessment.purpose_relation.candidate_outcome !== "unknown") {
+    context.addIssue({ code: "custom", message: "operation_plan_purpose_adoption_candidate_status_mismatch" });
+  }
+  const criterionRelationRefs = assessment.criterion_relation.criterion_relations
+    .map((relation) => relation.criterion_ref_digest);
+  const criterionRefDigests = assessment.criterion_relation.criterion_ref_digests;
+  const hasCriterionConflict = assessment.criterion_relation.criterion_relations
+    .some((relation) => relation.relation === "conflicts");
+  const hasCriterionSupport = assessment.criterion_relation.criterion_relations
+    .some((relation) => relation.relation === "supports");
+  if (new Set(criterionRelationRefs).size !== criterionRelationRefs.length ||
+      criterionRelationRefs.length !== criterionRefDigests.length ||
+      criterionRelationRefs.some((ref) => !criterionRefDigests.includes(ref)) ||
+      criterionRefDigests.some((ref) => !criterionRelationRefs.includes(ref)) ||
+      (assessment.criterion_relation.evidence_status === "unknown" &&
+        (assessment.criterion_relation.outcome !== "unknown" || criterionRefDigests.length !== 0)) ||
+      (assessment.criterion_relation.evidence_status !== "unknown" &&
+        (assessment.criterion_relation.outcome === "unknown" || criterionRefDigests.length === 0)) ||
+      (assessment.criterion_relation.outcome === "conflicts" && !hasCriterionConflict) ||
+      (assessment.criterion_relation.outcome === "supports" && (hasCriterionConflict || !hasCriterionSupport))) {
+    context.addIssue({ code: "custom", message: "operation_plan_criterion_adoption_evidence_mismatch" });
+  }
+});
+export type OperationPlanGoalRelationAdoptionAssessment = z.infer<typeof OperationPlanGoalRelationAdoptionAssessmentSchema>;
+
 export const OperationPlanExternalReceiptObservationSchema = z.object({
   schema_version: z.literal("external-receipt-observation.v1"),
   source: z.literal("local_inspection"),
@@ -390,6 +454,7 @@ export const OperationPlanCheckpointPlanSchema = z.object({
       command_id: Id, request_id: Id, commit_hash: Id, payload_digest: Digest, command_digest: Digest,
       executor_command_digest: Digest.optional(),
       operation: Id,
+      goal_relation_adoption_assessment: OperationPlanGoalRelationAdoptionAssessmentSchema.optional(),
       status: z.enum(["selected", "intent_committed", "verified", "outcome_unknown", "verification_failed", "not_attempted", "invalidated"]),
       result_digest: Digest.optional(),
       execution_admission: ExecutionAdmissionSchema.optional(),
