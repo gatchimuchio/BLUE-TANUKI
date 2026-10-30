@@ -5233,6 +5233,10 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           rule_id: event.rule_id,
           rule_axis: event.rule_axis,
           command_present: event.command_present,
+          ...(event.comparison_kind === "resume" ? {
+            resume_owner_verdict: event.resume_owner_verdict,
+            resume_allowed: event.resume_allowed,
+          } : {}),
           ...(event.comparison_kind === "memory_approval" ? {
             memory_transition_kind: event.memory_transition_kind,
             memory_transition_owner_verdict: event.memory_transition_owner_verdict,

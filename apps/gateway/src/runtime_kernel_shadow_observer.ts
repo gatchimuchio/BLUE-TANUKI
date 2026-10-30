@@ -63,6 +63,8 @@ export type RuntimeKernelShadowObserverEvent =
     rule_id: ShadowRuleId;
     rule_axis?: string;
     command_present: boolean;
+    resume_owner_verdict?: "approve" | "reject" | "block";
+    resume_allowed?: boolean;
     purpose_version: number | null;
     memory_transition_kind?: "meaning_update_adoption" | "memory_judgment_reassessment";
     memory_transition_owner_verdict?: "approve" | "reject" | "block";
@@ -523,6 +525,10 @@ export async function startRuntimeKernelShadowObserver(options: {
           rule_id: receipt.rule_id,
           ...(typeof receipt.rule_axis === "string" ? { rule_axis: receipt.rule_axis } : {}),
           command_present: observation.command_present,
+          ...(projection.resume_transition ? {
+            resume_owner_verdict: projection.resume_transition.owner_verdict,
+            resume_allowed: projection.resume_transition.resume_allowed,
+          } : {}),
           purpose_version: purposeBinding?.purpose_version ?? null,
           ...(projection.memory_transition ? {
             memory_transition_kind: projection.memory_transition.kind,
