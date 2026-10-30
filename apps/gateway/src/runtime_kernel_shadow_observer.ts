@@ -48,6 +48,8 @@ export type RuntimeKernelShadowObserverEvent =
     comparison_status: "matched" | "mismatched";
     policy_decision_matches: boolean;
     purpose_binding_matches: boolean | null;
+    current_goal_purpose_binding_status: "not_bound" | "ledger_unavailable" | "goal_not_found" | "available";
+    purpose_binding_current_matches: boolean | null;
     policy_rule_matches: boolean;
     lifecycle_matches: boolean;
     typescript_decision: ShadowDecision;
@@ -304,8 +306,20 @@ export async function startRuntimeKernelShadowObserver(options: {
         const purposeBindingMatches: boolean | null | undefined = purposeBinding
           ? typeof receipt.purpose_binding_matches === "boolean" ? receipt.purpose_binding_matches : undefined
           : receipt.purpose_binding_matches === null ? null : undefined;
+        const currentPurposeBinding = projection.current_goal_purpose_binding;
+        const purposeBindingCurrentMatches: boolean | null | undefined =
+          currentPurposeBinding.status === "available" || currentPurposeBinding.status === "goal_not_found"
+            ? typeof receipt.purpose_binding_current_matches === "boolean"
+              ? receipt.purpose_binding_current_matches : undefined
+            : receipt.purpose_binding_current_matches === null ? null : undefined;
+        const currentPurposeBindingReceiptIsConsistent = currentPurposeBinding.status === "available"
+          ? typeof receipt.purpose_binding_current_matches === "boolean"
+          : currentPurposeBinding.status === "goal_not_found"
+            ? receipt.purpose_binding_current_matches === false
+            : receipt.purpose_binding_current_matches === null;
         const expectedComparisonStatus = receipt.policy_decision_matches === true &&
           (purposeBindingMatches === true || purposeBindingMatches === null) &&
+          (purposeBindingCurrentMatches === true || purposeBindingCurrentMatches === null) &&
           receipt.policy_rule_matches === true &&
           receipt.lifecycle_matches === true ? "matched" : "mismatched";
         if (receipt.accepted_for_shadow !== true || comparisonStatus === undefined ||
@@ -314,6 +328,9 @@ export async function startRuntimeKernelShadowObserver(options: {
             receipt.comparison_kind !== comparisonKind ||
             typeof receipt.policy_decision_matches !== "boolean" ||
             purposeBindingMatches === undefined ||
+            receipt.current_goal_purpose_binding_status !== currentPurposeBinding.status ||
+            purposeBindingCurrentMatches === undefined ||
+            !currentPurposeBindingReceiptIsConsistent ||
             typeof receipt.policy_rule_matches !== "boolean" ||
             typeof receipt.lifecycle_matches !== "boolean" ||
             receipt.goal_id !== goalId || receipt.goal_version !== goalVersion ||
@@ -346,6 +363,8 @@ export async function startRuntimeKernelShadowObserver(options: {
           comparison_status: comparisonStatus,
           policy_decision_matches: receipt.policy_decision_matches,
           purpose_binding_matches: purposeBindingMatches,
+          current_goal_purpose_binding_status: currentPurposeBinding.status,
+          purpose_binding_current_matches: purposeBindingCurrentMatches,
           policy_rule_matches: receipt.policy_rule_matches,
           lifecycle_matches: receipt.lifecycle_matches,
           typescript_decision: typescriptDecision,

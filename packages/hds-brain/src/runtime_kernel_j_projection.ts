@@ -29,6 +29,18 @@ export interface RuntimeKernelJThresholdProjection {
 /** 目的本文とgoal_refを含めない、shadow比較用の目的版束縛。 */
 export type RuntimeKernelJPurposeBindingProjection = GoalPurposeBindingReference;
 
+export type RuntimeKernelJCurrentPurposeBindingStatus =
+  | "not_bound"
+  | "ledger_unavailable"
+  | "goal_not_found"
+  | "available";
+
+/** Digest-only snapshot from the current GoalGovernanceLedger; never an authority input. */
+export interface RuntimeKernelJCurrentPurposeBindingProjection {
+  status: RuntimeKernelJCurrentPurposeBindingStatus;
+  binding: RuntimeKernelJPurposeBindingProjection | null;
+}
+
 /** Human resume input and its TS outcome; identity, request, and command are excluded. */
 export interface RuntimeKernelJResumeTransitionProjection {
   owner_verdict: ResumeVerdict;
@@ -77,11 +89,12 @@ export type RuntimeKernelJMemoryTransitionInput =
 
 /** Sanitized numeric inputs for a non-authoritative Rust J comparison. */
 export interface RuntimeKernelJProjection {
-  schema_version: "blue-tanuki.hds-runtime-j-projection.v5";
+  schema_version: "blue-tanuki.hds-runtime-j-projection.v6";
   typescript_decision: Decision;
   typescript_policy_rule_id: RuntimeKernelJPolicyRuleId;
   typescript_policy_rule_axis: string | null;
   purpose_binding: RuntimeKernelJPurposeBindingProjection | null;
+  current_goal_purpose_binding: RuntimeKernelJCurrentPurposeBindingProjection;
   axes: RuntimeKernelJAxisProjection[];
   thresholds: {
     aggregate_assert_micros: number;
@@ -119,10 +132,17 @@ export function projectRuntimeKernelJDecision(
   log: DecisionLog,
   policy: PolicyConfig,
   purposeBinding: RuntimeKernelJPurposeBindingProjection | null = log.goal_purpose_binding ?? null,
+  currentPurposeBinding: RuntimeKernelJCurrentPurposeBindingProjection = {
+    status: purposeBinding ? "ledger_unavailable" : "not_bound",
+    binding: null,
+  },
 ): RuntimeKernelJProjectionResult {
   if (purposeBinding && (!/^[a-f0-9]{64}$/.test(purposeBinding.goal_id_digest) ||
       !Number.isSafeInteger(purposeBinding.purpose_version) || purposeBinding.purpose_version < 1 ||
       !/^[a-f0-9]{64}$/.test(purposeBinding.purpose_digest))) {
+    return { status: "not_comparable", reason: "purpose_binding_invalid" };
+  }
+  if (!isCurrentPurposeBindingProjectionValid(purposeBinding, currentPurposeBinding)) {
     return { status: "not_comparable", reason: "purpose_binding_invalid" };
   }
 
@@ -203,11 +223,15 @@ export function projectRuntimeKernelJDecision(
   return {
     status: "comparable",
     projection: {
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v5",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v6",
       typescript_decision: typescript.decision,
       typescript_policy_rule_id: typescriptPolicyRule.id,
       typescript_policy_rule_axis: typescriptPolicyRule.axis,
       purpose_binding: purposeBinding ? { ...purposeBinding } : null,
+      current_goal_purpose_binding: {
+        status: currentPurposeBinding.status,
+        binding: currentPurposeBinding.binding ? { ...currentPurposeBinding.binding } : null,
+      },
       axes,
       thresholds: {
         aggregate_assert_micros: aggregateAssert,
@@ -229,8 +253,12 @@ export function projectRuntimeKernelJResumeTransition(
   policy: PolicyConfig,
   purposeBinding: RuntimeKernelJPurposeBindingProjection | null,
   transition: RuntimeKernelJResumeTransitionProjection,
+  currentPurposeBinding: RuntimeKernelJCurrentPurposeBindingProjection = {
+    status: purposeBinding ? "ledger_unavailable" : "not_bound",
+    binding: null,
+  },
 ): RuntimeKernelJProjectionResult {
-  const base = projectRuntimeKernelJDecision(suspendedLog, policy, purposeBinding);
+  const base = projectRuntimeKernelJDecision(suspendedLog, policy, purposeBinding, currentPurposeBinding);
   if (base.status !== "comparable") return base;
   if (base.projection.typescript_decision !== "SUSPEND") {
     return { status: "not_comparable", reason: "resume_source_not_suspended" };
@@ -242,6 +270,21 @@ export function projectRuntimeKernelJResumeTransition(
       resume_transition: { ...transition },
     },
   };
+}
+
+function isCurrentPurposeBindingProjectionValid(
+  source: RuntimeKernelJPurposeBindingProjection | null,
+  current: RuntimeKernelJCurrentPurposeBindingProjection,
+): boolean {
+  const binding = current.binding;
+  if (current.status === "not_bound") return source === null && binding === null;
+  if (current.status === "ledger_unavailable" || current.status === "goal_not_found") {
+    return source !== null && binding === null;
+  }
+  return current.status === "available" && source !== null && binding !== null &&
+    /^[a-f0-9]{64}$/.test(binding.goal_id_digest) && binding.goal_id_digest === source.goal_id_digest &&
+    Number.isSafeInteger(binding.purpose_version) && binding.purpose_version >= 1 &&
+    /^[a-f0-9]{64}$/.test(binding.purpose_digest);
 }
 
 /** Add only bounded, non-authoritative owner-memory commit outcomes to a J projection. */

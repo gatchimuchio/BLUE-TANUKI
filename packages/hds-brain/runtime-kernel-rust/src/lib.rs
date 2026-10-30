@@ -13,7 +13,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
 const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v4";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v5";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v6";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -44,6 +44,8 @@ struct JProjectionComparison {
     rule_axis: Option<String>,
     matches: bool,
     purpose_binding_matches: Option<bool>,
+    current_goal_purpose_binding_status: &'static str,
+    purpose_binding_current_matches: Option<bool>,
     policy_decision_matches: bool,
     policy_rule_matches: bool,
     lifecycle_matches: bool,
@@ -58,6 +60,13 @@ struct JMemoryTransitionComparison {
     matches: bool,
     residual_status: &'static str,
     residual_status_matches: bool,
+}
+
+#[derive(PartialEq, Eq)]
+struct GoalPurposeBinding {
+    goal_id_digest: String,
+    purpose_version: i64,
+    purpose_digest: String,
 }
 
 pub fn run() -> Result<(), &'static str> {
@@ -472,6 +481,8 @@ fn decision_payload(
         "rule_axis": comparison.and_then(|result| result.rule_axis.as_deref()),
         "policy_decision_matches": comparison.map(|result| result.policy_decision_matches),
         "purpose_binding_matches": comparison.map(|result| result.purpose_binding_matches),
+        "current_goal_purpose_binding_status": comparison.map(|result| result.current_goal_purpose_binding_status),
+        "purpose_binding_current_matches": comparison.map(|result| result.purpose_binding_current_matches),
         "policy_rule_matches": comparison.map(|result| result.policy_rule_matches),
         "lifecycle_matches": comparison.map(|result| result.lifecycle_matches),
         "memory_transition_kind": comparison.and_then(|result| result.memory_transition_kind),
@@ -484,6 +495,37 @@ fn decision_payload(
         "used_for_authority": false,
         "may_execute": false
     })
+}
+
+fn parse_goal_purpose_binding(
+    value: &Value,
+    rejection: &'static str,
+) -> Result<Option<GoalPurposeBinding>, &'static str> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Object(binding) => {
+            if binding.len() != 3 {
+                return Err(rejection);
+            }
+            let goal_id_digest = string_value(binding.get("goal_id_digest"))
+                .filter(|value| is_lowercase_sha256(value))
+                .ok_or(rejection)?
+                .to_owned();
+            let purpose_version = integer_value(binding.get("purpose_version"))
+                .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
+                .ok_or(rejection)?;
+            let purpose_digest = string_value(binding.get("purpose_digest"))
+                .filter(|value| is_lowercase_sha256(value))
+                .ok_or(rejection)?
+                .to_owned();
+            Ok(Some(GoalPurposeBinding {
+                goal_id_digest,
+                purpose_version,
+                purpose_digest,
+            }))
+        }
+        _ => Err(rejection),
+    }
 }
 
 fn evaluate_runtime_kernel_j_projection(
@@ -499,37 +541,58 @@ fn evaluate_runtime_kernel_j_projection(
     if has_resume_transition && has_memory_transition
         || object.len()
             != if has_resume_transition || has_memory_transition {
-                8
+                9
             } else {
-                7
+                8
             }
         || string_value(object.get("schema_version")) != Some(J_PROJECTION_SCHEMA_VERSION)
     {
         return Err("projection_schema_rejected");
     }
-    let purpose_binding = object
+    let purpose_binding_value = object
         .get("purpose_binding")
         .ok_or("projection_purpose_binding_rejected")?;
-    let purpose_binding_matches = match purpose_binding {
-        Value::Null => None,
-        Value::Object(binding) => {
-            if binding.len() != 3 {
-                return Err("projection_purpose_binding_rejected");
+    let purpose_binding =
+        parse_goal_purpose_binding(purpose_binding_value, "projection_purpose_binding_rejected")?;
+    let purpose_binding_matches = purpose_binding.as_ref().map(|binding| {
+        let expected_goal_id = format!("goal-{}", binding.goal_id_digest);
+        binding.purpose_version == request_goal_version && request_goal_id == expected_goal_id
+    });
+
+    let current_binding_projection = object
+        .get("current_goal_purpose_binding")
+        .and_then(Value::as_object)
+        .filter(|binding| binding.len() == 2)
+        .ok_or("projection_current_purpose_binding_rejected")?;
+    let current_binding_status = string_value(current_binding_projection.get("status"))
+        .ok_or("projection_current_purpose_binding_rejected")?;
+    let current_binding = parse_goal_purpose_binding(
+        current_binding_projection
+            .get("binding")
+            .ok_or("projection_current_purpose_binding_rejected")?,
+        "projection_current_purpose_binding_rejected",
+    )?;
+    let (current_goal_purpose_binding_status, purpose_binding_current_matches) =
+        match current_binding_status {
+            "not_bound" if purpose_binding.is_none() && current_binding.is_none() => {
+                ("not_bound", None)
             }
-            let goal_id_digest = string_value(binding.get("goal_id_digest"))
-                .filter(|value| is_lowercase_sha256(value))
-                .ok_or("projection_purpose_binding_rejected")?;
-            let purpose_version = integer_value(binding.get("purpose_version"))
-                .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
-                .ok_or("projection_purpose_binding_rejected")?;
-            string_value(binding.get("purpose_digest"))
-                .filter(|value| is_lowercase_sha256(value))
-                .ok_or("projection_purpose_binding_rejected")?;
-            let expected_goal_id = format!("goal-{goal_id_digest}");
-            Some(purpose_version == request_goal_version && request_goal_id == expected_goal_id)
-        }
-        _ => return Err("projection_purpose_binding_rejected"),
-    };
+            "ledger_unavailable" if purpose_binding.is_some() && current_binding.is_none() => {
+                ("ledger_unavailable", None)
+            }
+            "goal_not_found" if purpose_binding.is_some() && current_binding.is_none() => {
+                ("goal_not_found", Some(false))
+            }
+            "available" => match (purpose_binding.as_ref(), current_binding.as_ref()) {
+                (Some(source), Some(current))
+                    if source.goal_id_digest == current.goal_id_digest =>
+                {
+                    ("available", Some(source == current))
+                }
+                _ => return Err("projection_current_purpose_binding_rejected"),
+            },
+            _ => return Err("projection_current_purpose_binding_rejected"),
+        };
     let policy_typescript_decision = string_value(object.get("typescript_decision"))
         .filter(|value| is_shadow_decision(value))
         .ok_or("projection_decision_rejected")?
@@ -643,10 +706,13 @@ fn evaluate_runtime_kernel_j_projection(
             rule_id: "memory_approval_transition",
             rule_axis: None,
             matches: purpose_binding_matches.unwrap_or(true)
+                && purpose_binding_current_matches.unwrap_or(true)
                 && policy_decision_matches
                 && policy_rule_matches
                 && lifecycle_matches,
             purpose_binding_matches,
+            current_goal_purpose_binding_status,
+            purpose_binding_current_matches,
             policy_decision_matches,
             policy_rule_matches,
             lifecycle_matches,
@@ -666,9 +732,12 @@ fn evaluate_runtime_kernel_j_projection(
             rule_id,
             rule_axis,
             matches: purpose_binding_matches.unwrap_or(true)
+                && purpose_binding_current_matches.unwrap_or(true)
                 && policy_decision_matches
                 && policy_rule_matches,
             purpose_binding_matches,
+            current_goal_purpose_binding_status,
+            purpose_binding_current_matches,
             policy_decision_matches,
             policy_rule_matches,
             lifecycle_matches: true,
@@ -721,10 +790,13 @@ fn evaluate_runtime_kernel_j_projection(
         rule_id: "human_resume_transition",
         rule_axis: None,
         matches: purpose_binding_matches.unwrap_or(true)
+            && purpose_binding_current_matches.unwrap_or(true)
             && policy_decision_matches
             && policy_rule_matches
             && lifecycle_matches,
         purpose_binding_matches,
+        current_goal_purpose_binding_status,
+        purpose_binding_current_matches,
         policy_decision_matches,
         policy_rule_matches,
         lifecycle_matches,
