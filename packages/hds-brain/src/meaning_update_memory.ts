@@ -171,7 +171,7 @@ export class MeaningUpdateMemoryConsumer {
     }
     authorize({ update_id: commit.update_id, j_event_id: commit.j_event_id, content_digest: commit.content_digest });
     const staged = this.coordinator.stage(commit);
-    if (!staged.ok) return { ok: false, reason: "meaning_update_stage_failed" };
+    if (!staged.ok) return { ok: false, reason: staged.reason };
     const applied = this.coordinator.apply(commit);
     if (!applied.ok) return { ok: false, reason: "meaning_update_apply_failed" };
     const reconciliation = this.coordinator.reconcile(updateId);

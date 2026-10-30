@@ -430,6 +430,15 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
         () => providerFailure, auditDir);
       expect(pendingDeleteApproval).toMatchObject({ operation: "tool.file.delete", risk: "high",
         approval_level: "L3_final_review", final_review_required: true, content_review_required: false });
+      const planShadowEvent = await waitForPlanShadowAdoption(gateway);
+      expect(planShadowEvent).toMatchObject({ comparison_kind: "decision", comparison_status: "matched",
+        command_present: true, plan_step_adoption: { status: "matched", matches: true },
+        effect_started: false, m_written: false, used_for_authority: false, may_execute: false });
+      const serializedPlanShadowEvent = JSON.stringify(planShadowEvent);
+      for (const privateValue of [sourceCitationPlanTask, String(planComputeAccepted.request_id), planIdDigest,
+        revisionDigest, String(step?.step_id), "delete-target.txt"]) {
+        expect(serializedPlanShadowEvent).not.toContain(privateValue);
+      }
       expect(existsSync(join(fileRoot, "delete-target.txt"))).toBe(true);
       expect(readFileSync(join(fileRoot, "delete-target.txt"), "utf8")).toBe("synthetic pending-delete target\n");
       expect(providerCalls).toBe(9);
@@ -725,6 +734,31 @@ async function waitForMemoryShadowEvents(gateway: CapturedProcess, expectedCount
   }
   throw new Error(`Rust shadow did not observe all owner-memory transitions; stdout=${gateway.stdout.join("")}; ` +
     `stderr=${gateway.stderr.join("")}`);
+}
+
+async function waitForPlanShadowAdoption(gateway: CapturedProcess): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const event = [...gateway.stdout, ...gateway.stderr].join("").split(/\r?\n/).flatMap((line) => {
+      if (!line.includes("Runtime Kernel shadow J comparison") || !line.includes("comparison_kind=decision")) return [];
+      const fields = Object.fromEntries(line.split(/\s+/).flatMap((token) => {
+        const separator = token.indexOf("=");
+        return separator > 0 ? [[token.slice(0, separator), token.slice(separator + 1)]] : [];
+      })) as Record<string, unknown>;
+      if (typeof fields.plan_step_adoption !== "string") return [];
+      try { fields.plan_step_adoption = JSON.parse(fields.plan_step_adoption) as Record<string, unknown>; }
+      catch { return []; }
+      for (const name of ["command_present", "effect_started", "m_written", "used_for_authority", "may_execute"]) {
+        if (fields[name] === "true" || fields[name] === "false") fields[name] = fields[name] === "true";
+      }
+      const receipt = fields.plan_step_adoption as Record<string, unknown>;
+      return receipt.status === "matched" && receipt.matches === true ? [fields] : [];
+    })[0];
+    if (event) return event;
+    if (gateway.child.exitCode !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("Gateway runtime did not emit a matched plan-adoption shadow receipt");
 }
 
 async function waitForHealth(port: number, gateway: CapturedProcess): Promise<void> {

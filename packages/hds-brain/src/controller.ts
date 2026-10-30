@@ -490,6 +490,7 @@ interface MeaningUpdateMemoryApprovalContext extends JMemoryApprovalReference {
   readonly request_id: string;
   readonly command_id: string;
   readonly source_command_id: string;
+  readonly source_decision_binding: MeaningUpdateSourceDecisionBinding;
   readonly command_digest: string;
   readonly proposal_actor: string;
   readonly reviewer_actor: string;
@@ -2323,7 +2324,8 @@ ${planControl.question}`,
     try {
       committed = this.meaningUpdateMemory.commit(record, (reference) => {
         this.meaningUpdateMemoryApprovalContext = { ...reference, request_id, command_id,
-          source_command_id: input.source_command_id, command_digest: input.command_digest, proposal_actor,
+          source_command_id: input.source_command_id, source_decision_binding: sourceDecisionBinding,
+          command_digest: input.command_digest, proposal_actor,
           reviewer_actor, proposal_digest: review.proposal_digest, candidate_digest: review.proposal.candidate_digest,
           target: meaningUpdateAdoptionApprovalTarget(input.args), evaluation: input.evaluation };
       }, affectedJudgmentRefs);
@@ -2537,6 +2539,7 @@ ${planControl.question}`,
       proposal_digest: context.proposal_digest, candidate_digest: context.candidate_digest,
       review_status: review.reference_review.review_status,
       source_observation_digest: review.source_observation_binding?.digest,
+      source_decision_binding: context.source_decision_binding,
     });
     return evidence && JSON.stringify(evidence.evaluation) === JSON.stringify(context.evaluation)
       ? Object.freeze({ ...reference }) : null;
