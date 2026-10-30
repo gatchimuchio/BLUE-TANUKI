@@ -26,6 +26,8 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jのplan step採用記録を、選択commandに一致するstored bindingから取得し、ローカルでassessment digestを検証した後、目的review／criterion状態と上限64のrelation件数だけに縮約してRust shadowの同一系列へ渡すコード経路を追加した。文章・ID・purpose／criterion／assessment digestはRustへ渡さない。Rustは採否に関係する状態・件数の整合を独立分類し、Gateway observerはnested receiptと比較statusを再照合して非権威ログへ返す。旧checkpoint記録欠落は`not_comparable`、plan未選択は`not_applicable`。全体statusは不一致を優先し、比較可能な全軸の一致時だけ`matched`とする。現行目的台帳または選択済みplan記録が比較不能なら`not_comparable`を返す。この経路は`WIRED`。observer試験で実Rust processのmatched／意図的不一致receiptを確認した後、Gateway process smokeで通常WebChat inbound→選択済みplan→Rust shadow receiptの`matched`を確認した。local fake provider・隔離state・一時file rootを使い、本文・request／plan／step ID・pathがreceiptへ出ないことを確認し、file.deleteはtest専用L3承認後に一時root内だけで実行・観測した。HDS／Gateway typecheck・依存buildとprocess smokeはPASS。smokeが検出した`source_decision_binding`の承認context欠落を修正し、J/M stageで同じ束縛を再検証する。K-B5のJ/M全体意味比較、`RUST_SHADOW_WIRED`／single-writer cutover、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。C08.03、OD-03、他repo変更、P13 GOも保留する。
 
+最新のGateway observer修正では、Rustのplan adoption receiptをTypeScriptの同じ採否分類と厳密一致させて停止する挙動を除いた。receipt構造、projection echo、Rust内のstatus／matches整合は引き続き検証し、意味分類差は双方の値を非権威ログへ残して総合`mismatched`として観測する。Rust側総合statusはRust receiptから再計算して照合する。HDS／Gateway typecheck・build、Rust `cargo check --locked`はPASS。testと今回差分の実Rust process確認は未実行。K-B5、製品全体BUILD、QC／QA、cutoverは未成立のまま継続する。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

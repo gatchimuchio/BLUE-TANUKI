@@ -56,6 +56,8 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 前段のplan adoption recordをRust shadowの同一合成系列へ接続した。HDS controllerは選択中commandのstored bindingを読み、保存assessment digestを内部検証してから目的review状態とcriterionの分類・上限64のrelation件数だけをprojection v7へ渡す。個別ID・文章・assessment digest・criterion digestは送らない。Rustは条件・件数の整合を独立分類し、Gateway observerはreceiptと比較statusを再確認してログへ記録する。legacy record欠落は`not_comparable`、plan未選択は`not_applicable`。全体statusは不一致を優先し、一つも不一致がなくても現行目的台帳または選択済みplan記録が比較不能なら`not_comparable`とする。`matched`は適用対象の全比較軸が比較可能で一致した場合だけ返す。Rustの判断は引き続き`hold`、作用なし、M正本書込みなし。
 
+最新のconsumer修正では、Gateway observerがRustのplan adoption分類をTypeScript側の再計算値と一致する場合だけ受理していた欠陥を解消した。receiptの形・入力echo・`status`と`matches`の自己整合は引き続き厳密に検査するが、意味上整合した分類差は停止理由にせず、Rust receiptとTypeScript分類値を並べて非権威ログへ記録し、比較statusを`mismatched`にする。Rust側の総合statusはRust receipt群から独立に再計算して検証する。HDS／Gateway typecheck・buildとRust compileを実行し、testsと今回差分のRust実processは未実行として記録する。Rustは`hold`、no-effect、no-M-writeを維持する。
+
 このコード経路は`WIRED`。observer試験では実Rust processのmatched／意図的不一致receiptを確認し、HDS／Gateway typecheckとGateway依存buildもPASSした。続いて既存のGateway process smokeへplan receipt確認を追加し、通常WebChat inboundのplan選択で`matched` receipt、no-effect／no-M-write、および本文・request／plan／step ID・pathの非出力を確認した。同じfixtureはlocal fake provider、隔離state、一時file rootだけを使い、planのfile.deleteは別のtest専用L3承認後にその一時root内で実行・観測した。process smokeはPASS。試験で、meaning-update J/M stageの承認readerへ`source_decision_binding`が渡らず`j_approval_not_verified`となる欠陥も検出し、Jがその出所束縛を保存直前に再照合するよう修正した。stage拒否理由コードも呼出側へ保持する。これらは限定的な実process接続証拠であり、K-B5のJ/M全体意味比較、single-writer cutover、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`の成立を示さないため継続する。
 
 ## Gitと復旧

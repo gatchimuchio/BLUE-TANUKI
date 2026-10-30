@@ -73,6 +73,7 @@ export type RuntimeKernelShadowObserverEvent =
     residual_status?: string;
     residual_status_matches?: boolean;
     plan_step_adoption: RuntimeKernelJPlanStepAdoptionReceipt;
+    plan_step_adoption_typescript_matches?: boolean;
   }
   | {
     kind: "comparison_unavailable";
@@ -172,7 +173,9 @@ function planStepAdoptionReceiptIsConsistent(
       actual.reason === expected.reason && actual.matches === null ? expected : undefined;
   }
   if (keys.join(",") !== "criterion_relation,matches,purpose_relation,status" ||
-      actual.status !== expected.status || actual.matches !== expected.matches) return undefined;
+      (actual.status !== "matched" && actual.status !== "mismatched") ||
+      typeof actual.matches !== "boolean" ||
+      actual.status !== (actual.matches ? "matched" : "mismatched")) return undefined;
   const actualPurpose = actual.purpose_relation;
   const actualCriteria = actual.criterion_relation;
   if (!actualPurpose || typeof actualPurpose !== "object" || Array.isArray(actualPurpose) ||
@@ -198,7 +201,7 @@ function planStepAdoptionReceiptIsConsistent(
       criteria.objective_count !== expectedCriteria.objective_count || criteria.safety_count !== expectedCriteria.safety_count ||
       criteria.supports_count !== expectedCriteria.supports_count || criteria.conflicts_count !== expectedCriteria.conflicts_count ||
       criteria.reason_code !== expectedCriteria.reason_code) return undefined;
-  return expected;
+  return actual as unknown as RuntimeKernelJPlanStepAdoptionReceipt;
 }
 
 export async function startRuntimeKernelShadowObserver(options: {
@@ -383,7 +386,7 @@ export async function startRuntimeKernelShadowObserver(options: {
         const receipt = verifyResponse(
           await readFrame(RESPONSE_TIMEOUT_MS), key, sessionId, nextSequence, "decision_result",
         );
-        const comparisonStatus = receipt.reason === "shadow_projection_matched"
+        const runtimeComparisonStatus = receipt.reason === "shadow_projection_matched"
           ? "matched"
           : receipt.reason === "shadow_projection_mismatched" ? "mismatched"
             : receipt.reason === "shadow_projection_not_comparable" ? "not_comparable" : undefined;
@@ -401,22 +404,23 @@ export async function startRuntimeKernelShadowObserver(options: {
           : currentPurposeBinding.status === "goal_not_found"
             ? receipt.purpose_binding_current_matches === false
             : receipt.purpose_binding_current_matches === null;
-        const comparisonMatches = receipt.policy_decision_matches === true &&
-          (purposeBindingMatches === true || purposeBindingMatches === null) &&
-          (purposeBindingCurrentMatches === true || purposeBindingCurrentMatches === null) &&
-          receipt.policy_rule_matches === true &&
-          receipt.lifecycle_matches === true && planAdoption.matches !== false;
-        const comparisonIncomplete = currentPurposeBinding.status === "ledger_unavailable" ||
-          planAdoption.status === "not_comparable";
-        const expectedComparisonStatus = !comparisonMatches ? "mismatched"
-          : comparisonIncomplete ? "not_comparable" : "matched";
         const planStepAdoptionReceipt = planStepAdoptionReceiptIsConsistent(
           projection.plan_step_adoption,
           receipt.plan_step_adoption,
         );
-        if (receipt.accepted_for_shadow !== true || comparisonStatus === undefined ||
-            receipt.comparison_status !== comparisonStatus ||
-            comparisonStatus !== expectedComparisonStatus ||
+        const comparisonMatches = receipt.policy_decision_matches === true &&
+          (purposeBindingMatches === true || purposeBindingMatches === null) &&
+          (purposeBindingCurrentMatches === true || purposeBindingCurrentMatches === null) &&
+          receipt.policy_rule_matches === true &&
+          receipt.lifecycle_matches === true && planStepAdoptionReceipt?.matches !== false;
+        const comparisonIncomplete = currentPurposeBinding.status === "ledger_unavailable" ||
+          planAdoption.status === "not_comparable";
+        const expectedRuntimeComparisonStatus = !comparisonMatches ? "mismatched"
+          : comparisonIncomplete ? "not_comparable" : "matched";
+        const comparisonStatus = planAdoption.matches === false ? "mismatched" : expectedRuntimeComparisonStatus;
+        if (receipt.accepted_for_shadow !== true || runtimeComparisonStatus === undefined ||
+            receipt.comparison_status !== runtimeComparisonStatus ||
+            runtimeComparisonStatus !== expectedRuntimeComparisonStatus ||
             receipt.comparison_kind !== comparisonKind ||
             typeof receipt.policy_decision_matches !== "boolean" ||
             purposeBindingMatches === undefined ||
@@ -482,6 +486,8 @@ export async function startRuntimeKernelShadowObserver(options: {
             residual_status_matches: receipt.residual_status_matches as boolean,
           } : {}),
           plan_step_adoption: planStepAdoptionReceipt,
+          ...(planAdoption.status === "matched" || planAdoption.status === "mismatched"
+            ? { plan_step_adoption_typescript_matches: planAdoption.matches } : {}),
         });
       } catch {
         await fail();
