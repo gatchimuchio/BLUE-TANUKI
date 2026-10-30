@@ -12,7 +12,7 @@ K-B0／K-B1で現行入口、通常・復旧writer、I-01対象guard、I-03 main
 
 K-B3ではC候補評価を`meaning_update_candidate.ts`、承認済み候補からM record／interpretationを作る純粋処理を`meaning_update_semantics.ts`へ、解釈JSON正規化・検査・content digestを`memory_interpretation_semantics.ts`へ分離した。今回、引用レビューからM解釈依存を組み立て、現在Mと検証済み監査履歴から再評価候補を導出する意味処理を`memory_judgment_reassessment_candidate.ts`へ移した。controllerが監査・現在Mを取得し、Approval Gate／L3／監査書込／J-M writerはTypeScript HDS-BRAINに残る。HDS focused 3 files／5 tests、HDS typecheck/build/standalone、Gateway typecheck/buildはPASS。Gateway process smokeは前バッチでhealth readyに至らず統合実行未確認。今回の抽出で新しい利用者仕事や全体`SYSTEM_SHAPED`／`BUILD_COVERED`は成立しない。K-B3全体の責任抽出完了、C08.03、OD-03、他repo変更、P13 GOは未成立／保留。
 
-次のBUILD_BATCHはK-B4のRust最小Runtime J/M processと認証IPCを無作用shadowとして実接続する。現行TypeScript HDS-BRAINを唯一のauthority／writerとして保ち、Rustはeffect・正本M書込みを行わない。各局所経路の確認をQE_QC／QE_QAや全体完了へ昇格させない。
+現在のBUILD_BATCHはK-B4。TypeScript `runStandaloneHDSBrain()`の合成判断要約をRustの独立processへ送り、HMAC認証canonical IPCのrequest→hold decision→shadow receiptを実往復した。Rustはsequence／revision／期限／budget／digestを検査し、重複・古いrevision・期限切れを拒否、署名改ざんをfail-closed停止する。effectとM正本書込みはない。`cargo test --locked` 2/2、実process Vitest 2/2、HDS typecheck、format、metadataはPASS。これはfixtureを使ったK-B4 prototypeの`WIRED`であり、通常Gateway requestからの起動・旧TypeScript判断との意味比較は未接続。製品runtimeの`RUST_SHADOW_WIRED`、`SYSTEM_SHAPED`／`BUILD_COVERED`、cutoverは未成立。次は`apps/gateway/src/serve.ts`の通常inbound HDS decision producerからshadow processへの安全な非権威接続を進める。現行TypeScript HDS-BRAINを唯一のauthority／writerに保ち、C08.03、OD-03、他repo変更、P13 GOを保留する。
 
 ## 維持する境界
 

@@ -1,0 +1,12 @@
+[package]
+name = "blue-tanuki-runtime-kernel-shadow"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+blue_tanuki_protocol_rust_conformance = { path = "../../protocol/rust-conformance" }
+hmac = "=0.13.0"
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+serde_json = "1.0"
+sha2 = "=0.11.0"
