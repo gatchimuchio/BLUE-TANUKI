@@ -40,6 +40,8 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 この変更の限定確認は、HDS typecheck／build・shadow IPC実process 3件、Gateway typecheck／build・shadow observer 2件、Rust cargo test 2件、cargo fmt check、`pnpm docs:check`がPASS。全workspace suite、QE_QC／QE_QA、実provider、実外部作用、5OS実機の結果ではない。K-B5はJ/Mの全体意味比較とsingle-writer cutoverが未成立のため継続する。purpose版の照合値はobserverが同一projectionからIPCへ設定するため、この一致は独立したcurrent-governance sourceとの比較ではなくtransport整合性の確認に限る。目的本文・task意味との適合や目的に沿ったJ採否全体は未成立。システム全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、`RUST_SHADOW_CUTOVER`、QE_QC／QE_QAは未成立のまま扱う。
 
+今回、Rust receiptの実consumerであるGateway observerを補強した。memory transition projectionから遷移一致・残差状態・lifecycleの期待値を再計算し、receiptの各結果と個別に照合する。矛盾したreceiptは`invalid_shadow_receipt`としてobserverを停止し、非権威ログへ整合した比較結果として出さない。検証はHDS／Gateway typecheck・build、Rust `cargo check`、`cargo fmt --check`、`git diff --check`がPASS。テストは未実行であり、この差分の実process結果は未確認として扱う。Rustは引き続き`hold`、no-effect、no-M-writeである。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

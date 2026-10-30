@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseBoundaryExchangeAtBoundary } from "@blue-tanuki/protocol";
 import type {
+  RuntimeKernelJMemoryTransitionProjection,
   RuntimeKernelJProjectionResult,
   RuntimeKernelJProjectionUnavailableReason,
 } from "@blue-tanuki/hds-brain";
@@ -73,6 +74,47 @@ export type RuntimeKernelShadowObserverEvent =
 export interface RuntimeKernelShadowObserver {
   observe(observation: RuntimeKernelShadowObservation): void;
   shutdown(): Promise<void>;
+}
+
+function memoryTransitionReceiptIsConsistent(
+  transition: RuntimeKernelJMemoryTransitionProjection,
+  receipt: JsonObject,
+): boolean {
+  let transitionMatches: boolean;
+  let residualStatus: string;
+
+  if (transition.kind === "meaning_update_adoption") {
+    transitionMatches = transition.owner_verdict === "approve" &&
+      transition.memory_application_status === "applied" &&
+      transition.semantic_relation_status === "not_assessed" &&
+      transition.follow_up_action_status === "unconfirmed" &&
+      transition.used_for_authority === false && transition.may_execute === false;
+    residualStatus = transition.pending_reassessment_required_count === 0
+      ? "meaning_unverified" : "meaning_unverified_with_reassessment_pending";
+  } else {
+    const countsAreBounded = Number.isSafeInteger(transition.requested_judgment_count) &&
+      transition.requested_judgment_count >= 1 && transition.requested_judgment_count <= 512 &&
+      Number.isSafeInteger(transition.reassessed_judgment_count) &&
+      transition.reassessed_judgment_count >= 0 && transition.reassessed_judgment_count <= 512 &&
+      Number.isSafeInteger(transition.remaining_reassessment_required_count) &&
+      transition.remaining_reassessment_required_count >= 0 && transition.remaining_reassessment_required_count <= 512;
+    const countsAreConsistent = countsAreBounded &&
+      transition.reassessed_judgment_count + transition.remaining_reassessment_required_count ===
+        transition.requested_judgment_count;
+    transitionMatches = transition.owner_verdict === "approve" &&
+      transition.memory_application_status === "applied" && countsAreConsistent &&
+      transition.used_for_authority === false && transition.may_execute === false;
+    residualStatus = transition.reassessed_judgment_count === transition.requested_judgment_count &&
+      transition.remaining_reassessment_required_count === 0
+      ? "named_judgments_reassessed" : "named_judgments_pending";
+  }
+
+  const residualStatusMatches = transition.typescript_residual_status === residualStatus;
+  return receipt.memory_transition_kind === transition.kind &&
+    receipt.memory_transition_matches === transitionMatches &&
+    receipt.residual_status === residualStatus &&
+    receipt.residual_status_matches === residualStatusMatches &&
+    receipt.lifecycle_matches === (transitionMatches && residualStatusMatches);
 }
 
 export async function startRuntimeKernelShadowObserver(options: {
@@ -285,10 +327,10 @@ export async function startRuntimeKernelShadowObserver(options: {
             !isShadowPolicyRuleId(receipt.typescript_policy_rule_id) ||
             !isShadowDecision(receipt.runtime_kernel_j_decision) || !isShadowRuleId(receipt.rule_id) ||
             (projection.memory_transition
-              ? receipt.memory_transition_kind !== projection.memory_transition.kind ||
-                typeof receipt.memory_transition_matches !== "boolean" ||
+              ? typeof receipt.memory_transition_matches !== "boolean" ||
                 typeof receipt.residual_status !== "string" ||
-                typeof receipt.residual_status_matches !== "boolean"
+                typeof receipt.residual_status_matches !== "boolean" ||
+                !memoryTransitionReceiptIsConsistent(projection.memory_transition, receipt)
               : receipt.memory_transition_kind !== null || receipt.memory_transition_matches !== null ||
                 receipt.residual_status !== null || receipt.residual_status_matches !== null) ||
             (receipt.rule_axis !== null && !isShadowAxis(receipt.rule_axis))) {
