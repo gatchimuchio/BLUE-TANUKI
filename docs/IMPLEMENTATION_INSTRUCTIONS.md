@@ -86,6 +86,8 @@ resume shadow receiptの原因分類には固定enumのowner verdictとresume許
 
 続くK-B5 Gateway consumer差分では、M遷移receiptをTypeScript分類と完全一致させないとobserverが停止する結合を解消した。receiptの型・適用軸に応じたnull可否・内部lifecycle整合は検証し、意味上の差は参照レビュー／M revision／遷移／残差ごとの`*_classification_agrees`と総合`mismatched`で非権威ログへ残す。ログは固定分類と真偽値に限り、M本文・参照ID・集計数を含めない。Gateway typecheckと`git diff --check`はPASS。test、Rust実process、Gateway統合smokeは未実施（NOT_RUN）。Rustは`hold`／no-effect／no-M-write、TypeScript HDS-BRAINは唯一のauthority／M writerを維持する。K-B5全体意味比較、製品全体BUILD、QE_QC／QE_QA、single-writer cutoverは未成立。
 
+今回のK-B5 Gateway observer記録では、意味上の差があった時に原因軸を追えるよう、Rust receiptの分類とTypeScript projection側の期待分類を別々に運転ログへ残す。対象はreference-review／M revision／memory transitionの真偽値と、固定区分のresidual statusだけ。本文・参照ID・集計数・秘密は追加しない。Gateway typecheck／buildはPASS。test、Gateway統合process smoke、実provider・外部作用、K-B5全体比較、cutover、製品全体BUILD、QE_QC／QE_QAは未実施または未成立。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

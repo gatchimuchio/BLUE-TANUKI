@@ -69,6 +69,10 @@ export type RuntimeKernelShadowObserverEvent =
     memory_transition_kind?: "meaning_update_adoption" | "memory_judgment_reassessment";
     memory_transition_owner_verdict?: "approve" | "reject" | "block";
     memory_application_status?: "applied" | "not_applied";
+    typescript_memory_reference_review_matches?: boolean | null;
+    typescript_memory_revision_matches?: boolean | null;
+    typescript_memory_transition_matches?: boolean;
+    typescript_residual_status?: RuntimeKernelJMemoryTransitionProjection["typescript_residual_status"];
     memory_revision_before?: number | null;
     memory_revision_after?: number | null;
     memory_reference_review_matches?: boolean | null;
@@ -98,6 +102,10 @@ export interface RuntimeKernelShadowObserver {
 }
 
 interface RuntimeKernelJMemoryTransitionClassificationAgreement {
+  typescript_memory_reference_review_matches: boolean | null;
+  typescript_memory_revision_matches: boolean | null;
+  typescript_memory_transition_matches: boolean;
+  typescript_residual_status: RuntimeKernelJMemoryTransitionProjection["typescript_residual_status"];
   memory_reference_review_classification_agrees: boolean;
   memory_revision_classification_agrees: boolean;
   memory_transition_classification_agrees: boolean;
@@ -189,6 +197,10 @@ function compareMemoryTransitionReceipt(
   if (!receiptIsWellFormed) return undefined;
 
   return {
+    typescript_memory_reference_review_matches: referenceReviewMatches,
+    typescript_memory_revision_matches: memoryRevisionMatches,
+    typescript_memory_transition_matches: transitionMatches,
+    typescript_residual_status: transition.typescript_residual_status,
     memory_reference_review_classification_agrees: receiptReferenceReviewMatches === referenceReviewMatches,
     memory_revision_classification_agrees: receiptRevisionMatches === memoryRevisionMatches,
     memory_transition_classification_agrees: receiptTransitionMatches === transitionMatches,
@@ -589,6 +601,15 @@ export async function startRuntimeKernelShadowObserver(options: {
             memory_transition_kind: projection.memory_transition.kind,
             memory_transition_owner_verdict: projection.memory_transition.owner_verdict,
             memory_application_status: projection.memory_transition.memory_application_status,
+            ...(memoryTransitionClassification ? {
+              typescript_memory_reference_review_matches:
+                memoryTransitionClassification.typescript_memory_reference_review_matches,
+              typescript_memory_revision_matches:
+                memoryTransitionClassification.typescript_memory_revision_matches,
+              typescript_memory_transition_matches:
+                memoryTransitionClassification.typescript_memory_transition_matches,
+              typescript_residual_status: memoryTransitionClassification.typescript_residual_status,
+            } : {}),
             memory_revision_before: projection.memory_transition.memory_revision_before,
             memory_revision_after: projection.memory_transition.memory_revision_after,
             memory_reference_review_matches: receipt.memory_reference_review_matches as boolean | null,
