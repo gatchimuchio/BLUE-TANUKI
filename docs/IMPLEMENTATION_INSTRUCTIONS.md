@@ -80,6 +80,8 @@ resume shadow receiptの原因分類には固定enumのowner verdictとresume許
 
 今回、Telegramの一時画像・音声を含む入力がHDS `SUSPEND`後にowner approveされた場合、添付bytesが揮発しているのに文章だけで再実行され得るGateway resume経路を閉じた。保持するのは対象request IDの非内容印だけで、添付bytesは保存しない。該当resumeはHDS lifecycleへcancelを記録し、`fresh_request_required`と日本語の再送案内を返す。履歴は実行不可・非権威の状態と理由だけを記録する。全workspace `pnpm typecheck`と`pnpm build`はPASS、`git diff --check`はPASS。test・実process smokeは未実施（NOT_RUN）。実provider・外部作用・QE_QC／QE_QAは未実施で、K-B5全体比較・cutover・製品全体BUILDは継続する。
 
+続くobserver consumer差分では、plan step adoptionのRust receiptとTypeScript分類を同じstatusへ潰さず、`plan_step_adoption_classification_agrees`として分類一致を独立表示する。適用済みplanで両分類が同じ拒否を返した場合と、実装間で分類が割れた場合を運転ログから区別できる。比較値は非権威観測のみで、HDS判断・command・Approval・M writer・Rust `hold`／無作用に影響しない。typecheck／build／docs検査を実施し、test・Rust実processは未実施として記録する。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

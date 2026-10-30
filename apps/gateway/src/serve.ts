@@ -5290,6 +5290,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           plan_step_adoption: event.plan_step_adoption,
           ...(event.plan_step_adoption_typescript_matches !== undefined
             ? { plan_step_adoption_typescript_matches: event.plan_step_adoption_typescript_matches } : {}),
+          ...(event.plan_step_adoption_classification_agrees !== undefined
+            ? { plan_step_adoption_classification_agrees: event.plan_step_adoption_classification_agrees } : {}),
           ...(event.command_presence_mismatch ? { command_presence_mismatch: true } : {}),
           effect_started: false,
           m_written: false,

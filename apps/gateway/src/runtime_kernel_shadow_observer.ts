@@ -78,6 +78,7 @@ export type RuntimeKernelShadowObserverEvent =
     residual_status_matches?: boolean;
     plan_step_adoption: RuntimeKernelJPlanStepAdoptionReceipt;
     plan_step_adoption_typescript_matches?: boolean;
+    plan_step_adoption_classification_agrees?: boolean;
     command_presence_mismatch?: true;
   }
   | {
@@ -243,6 +244,10 @@ function planStepAdoptionReceiptIsConsistent(
   if (expected.status !== "matched" && expected.status !== "mismatched") return undefined;
   const expectedPurpose = expected.purpose_relation;
   const expectedCriteria = expected.criterion_relation;
+  // A well-formed Rust classification difference is comparison evidence. Keep
+  // the receipt when its input echo is exact and its own status/matches pair is
+  // internally consistent; the caller records the TS and Rust results side by
+  // side instead of treating semantic drift as a broken IPC receipt.
   if (purpose.status !== expectedPurpose.status || purpose.candidate_outcome !== expectedPurpose.candidate_outcome ||
       purpose.candidate_status !== expectedPurpose.candidate_status ||
       purpose.evidence_status !== expectedPurpose.evidence_status ||
@@ -450,6 +455,13 @@ export async function startRuntimeKernelShadowObserver(options: {
           projection.plan_step_adoption,
           receipt.plan_step_adoption,
         );
+        const planStepAdoptionClassificationAgrees =
+          planAdoption.status === "matched" || planAdoption.status === "mismatched"
+            ? planStepAdoptionReceipt !== undefined &&
+              (planStepAdoptionReceipt.status === "matched" || planStepAdoptionReceipt.status === "mismatched") &&
+              planAdoption.status === planStepAdoptionReceipt.status &&
+              planAdoption.matches === planStepAdoptionReceipt.matches
+            : undefined;
         const comparisonMatches = receipt.policy_decision_matches === true &&
           (purposeBindingMatches === true || purposeBindingMatches === null) &&
           (purposeBindingCurrentMatches === true || purposeBindingCurrentMatches === null) &&
@@ -464,7 +476,8 @@ export async function startRuntimeKernelShadowObserver(options: {
           : comparisonKind === "resume"
             ? projection.resume_transition?.command_present === observation.command_present
             : !observation.command_present;
-        const comparisonStatus = !commandPresenceMatches || planAdoption.matches === false
+        const comparisonStatus = !commandPresenceMatches || planAdoption.matches === false ||
+          planStepAdoptionClassificationAgrees === false
           ? "mismatched" : expectedRuntimeComparisonStatus;
         if (receipt.accepted_for_shadow !== true || runtimeComparisonStatus === undefined ||
             receipt.comparison_status !== runtimeComparisonStatus ||
@@ -545,6 +558,8 @@ export async function startRuntimeKernelShadowObserver(options: {
           plan_step_adoption: planStepAdoptionReceipt,
           ...(planAdoption.status === "matched" || planAdoption.status === "mismatched"
             ? { plan_step_adoption_typescript_matches: planAdoption.matches } : {}),
+          ...(planAdoption.status === "matched" || planAdoption.status === "mismatched"
+            ? { plan_step_adoption_classification_agrees: planStepAdoptionClassificationAgrees } : {}),
           ...(commandPresenceMatches ? {} : { command_presence_mismatch: true as const }),
         });
       } catch {
