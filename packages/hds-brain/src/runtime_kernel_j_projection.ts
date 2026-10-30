@@ -1,5 +1,6 @@
 import type { Decision } from "@blue-tanuki/protocol";
 import type { DecisionLog, GoalPurposeBindingReference, PolicyConfig, ResumeVerdict, ScoringResult } from "./types.js";
+import type { MeaningUpdateProposalReferenceReview } from "./memory_citation_review.js";
 import { evaluateDecision } from "./policy.js";
 
 const SCALE = 1_000_000;
@@ -128,7 +129,7 @@ export type RuntimeKernelJMemoryTransitionProjection =
     memory_application_status: "applied" | "not_applied";
     memory_revision_before: number | null;
     memory_revision_after: number | null;
-    reference_review_status: "prior_version_unverified" | "counterevidence_absence_unverified" | null;
+    reference_review: RuntimeKernelJMemoryReferenceReviewProjection | null;
     semantic_relation_status: "not_assessed";
     follow_up_action_status: "unconfirmed";
     pending_reassessment_required_count: number | null;
@@ -151,6 +152,15 @@ export type RuntimeKernelJMemoryTransitionProjection =
     may_execute: false;
   };
 
+/** Count-only current-M review summary. It carries no reference identity or memory content. */
+export type RuntimeKernelJMemoryReferenceReviewProjection = Pick<MeaningUpdateProposalReferenceReview,
+  "review_status" | "supporting_reference_count" | "supporting_references_verified" |
+  "counterevidence_reference_count" | "counterevidence_references_verified" |
+  "applicability_scope_matches_current" | "counterevidence_scope_matches_current" |
+  "applicability_scope_digest_matches_current" | "counterevidence_scope_digest_matches_current" |
+  "counterevidence_claim_status" | "scope_digests_verified" |
+  "target_reference_matches_current_projection" | "candidate_content_digest_status">;
+
 export type RuntimeKernelJMemoryTransitionInput =
   | {
     kind: "meaning_update_adoption";
@@ -158,7 +168,7 @@ export type RuntimeKernelJMemoryTransitionInput =
     memory_application_status: "applied" | "not_applied";
     memory_revision_before: number | null;
     memory_revision_after: number | null;
-    reference_review_status: string | null;
+    reference_review: RuntimeKernelJMemoryReferenceReviewProjection | null;
     pending_reassessment_required_count: number | null;
   }
   | {
@@ -182,7 +192,7 @@ export interface RuntimeKernelJSelfHealthFailSafeProjection {
 
 /** Sanitized numeric inputs for a non-authoritative Rust J comparison. */
 export interface RuntimeKernelJProjection {
-  schema_version: "blue-tanuki.hds-runtime-j-projection.v11";
+  schema_version: "blue-tanuki.hds-runtime-j-projection.v12";
   typescript_decision: Decision;
   typescript_policy_rule_id: RuntimeKernelJPolicyRuleId;
   typescript_policy_rule_axis: string | null;
@@ -248,7 +258,7 @@ export function projectRuntimeKernelJDecision(
     return {
       status: "comparable",
       projection: {
-        schema_version: "blue-tanuki.hds-runtime-j-projection.v11",
+        schema_version: "blue-tanuki.hds-runtime-j-projection.v12",
         typescript_decision: "SUSPEND",
         typescript_policy_rule_id: "detector_lifecycle",
         typescript_policy_rule_axis: "self_health",
@@ -347,7 +357,7 @@ export function projectRuntimeKernelJDecision(
   return {
     status: "comparable",
     projection: {
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v11",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v12",
       typescript_decision: typescript.decision,
       typescript_policy_rule_id: typescriptPolicyRule.id,
       typescript_policy_rule_axis: typescriptPolicyRule.axis,
@@ -456,7 +466,7 @@ export function projectRuntimeKernelJMemoryTransition(
 
   let memoryTransition: RuntimeKernelJMemoryTransitionProjection;
   if (input.kind === "meaning_update_adoption") {
-    let referenceReviewStatus: "prior_version_unverified" | "counterevidence_absence_unverified" | null;
+    let referenceReview: RuntimeKernelJMemoryReferenceReviewProjection | null;
     let pendingCount: number | null;
     const revisionsValid = input.memory_application_status === "applied"
       ? Number.isSafeInteger(input.memory_revision_before) && input.memory_revision_before! >= 0 &&
@@ -467,28 +477,28 @@ export function projectRuntimeKernelJMemoryTransition(
       if (input.memory_application_status === "applied" && input.pending_reassessment_required_count === null) {
         return { status: "not_comparable", reason: "memory_transition_unavailable" };
       }
-      const reviewStatusValid = input.reference_review_status === null ||
-        input.reference_review_status === "prior_version_unverified" ||
-        input.reference_review_status === "counterevidence_absence_unverified";
+      const reviewStatus = input.reference_review?.review_status ?? null;
+      const reviewStatusValid = input.reference_review === null ||
+        isRuntimeKernelJMemoryReferenceReviewProjection(input.reference_review);
       const appliedStateValid = input.memory_application_status === "applied" &&
-        input.reference_review_status !== null && input.pending_reassessment_required_count !== null &&
+        (reviewStatus === "prior_version_unverified" || reviewStatus === "counterevidence_absence_unverified") &&
+        isRuntimeKernelJMemoryReferenceReviewProjection(input.reference_review) &&
+        input.pending_reassessment_required_count !== null &&
         isBoundedCount(input.pending_reassessment_required_count);
       const notAppliedStateValid = input.memory_application_status === "not_applied" &&
         input.pending_reassessment_required_count === null;
       if (!reviewStatusValid || !(appliedStateValid || notAppliedStateValid)) {
         return { status: "not_comparable", reason: "memory_transition_invalid" };
       }
-      referenceReviewStatus = input.reference_review_status === "prior_version_unverified" ||
-        input.reference_review_status === "counterevidence_absence_unverified"
-        ? input.reference_review_status : null;
+      referenceReview = input.reference_review === null ? null : projectRuntimeKernelJMemoryReferenceReview(input.reference_review);
       pendingCount = input.memory_application_status === "applied"
         ? input.pending_reassessment_required_count : null;
     } else {
-      if (input.memory_application_status !== "not_applied" || input.reference_review_status !== null ||
+      if (input.memory_application_status !== "not_applied" || input.reference_review !== null ||
           input.pending_reassessment_required_count !== null) {
         return { status: "not_comparable", reason: "memory_transition_invalid" };
       }
-      referenceReviewStatus = input.reference_review_status;
+      referenceReview = null;
       pendingCount = null;
     }
     const residualStatus = input.owner_verdict === "approve"
@@ -503,7 +513,7 @@ export function projectRuntimeKernelJMemoryTransition(
       memory_application_status: input.memory_application_status,
       memory_revision_before: input.memory_revision_before,
       memory_revision_after: input.memory_revision_after,
-      reference_review_status: referenceReviewStatus,
+      reference_review: referenceReview,
       semantic_relation_status: "not_assessed",
       follow_up_action_status: "unconfirmed",
       pending_reassessment_required_count: pendingCount,
@@ -551,6 +561,51 @@ export function projectRuntimeKernelJMemoryTransition(
   return {
     status: "comparable",
     projection: { ...base.projection, memory_transition: memoryTransition },
+  };
+}
+
+function isRuntimeKernelJMemoryReferenceReviewProjection(
+  value: RuntimeKernelJMemoryReferenceReviewProjection | null,
+): value is RuntimeKernelJMemoryReferenceReviewProjection {
+  return value !== null && ["no_current_projection", "current_m_unverified", "evidence_version_mismatch",
+    "target_reference_unverified", "target_reference_mismatch", "prior_version_unverified",
+    "scope_reference_mismatch", "scope_digest_mismatch", "counterevidence_absence_unverified",
+    "references_verified_unadopted"].includes(value.review_status) &&
+    isBoundedCount(value.supporting_reference_count) &&
+    isBoundedCount(value.supporting_references_verified) &&
+    value.supporting_references_verified <= value.supporting_reference_count &&
+    isBoundedCount(value.counterevidence_reference_count) &&
+    isBoundedCount(value.counterevidence_references_verified) &&
+    value.counterevidence_references_verified <= value.counterevidence_reference_count &&
+    typeof value.applicability_scope_matches_current === "boolean" &&
+    typeof value.counterevidence_scope_matches_current === "boolean" &&
+    typeof value.applicability_scope_digest_matches_current === "boolean" &&
+    typeof value.counterevidence_scope_digest_matches_current === "boolean" &&
+    typeof value.scope_digests_verified === "boolean" &&
+    typeof value.target_reference_matches_current_projection === "boolean" &&
+    (value.counterevidence_claim_status === "references_verified" ||
+      value.counterevidence_claim_status === "references_unverified" ||
+      value.counterevidence_claim_status === "none_found_unverified") &&
+    (value.candidate_content_digest_status === "verified" || value.candidate_content_digest_status === "unavailable");
+}
+
+function projectRuntimeKernelJMemoryReferenceReview(
+  value: RuntimeKernelJMemoryReferenceReviewProjection,
+): RuntimeKernelJMemoryReferenceReviewProjection {
+  return {
+    review_status: value.review_status,
+    supporting_reference_count: value.supporting_reference_count,
+    supporting_references_verified: value.supporting_references_verified,
+    counterevidence_reference_count: value.counterevidence_reference_count,
+    counterevidence_references_verified: value.counterevidence_references_verified,
+    applicability_scope_matches_current: value.applicability_scope_matches_current,
+    counterevidence_scope_matches_current: value.counterevidence_scope_matches_current,
+    applicability_scope_digest_matches_current: value.applicability_scope_digest_matches_current,
+    counterevidence_scope_digest_matches_current: value.counterevidence_scope_digest_matches_current,
+    counterevidence_claim_status: value.counterevidence_claim_status,
+    scope_digests_verified: value.scope_digests_verified,
+    target_reference_matches_current_projection: value.target_reference_matches_current_projection,
+    candidate_content_digest_status: value.candidate_content_digest_status,
   };
 }
 

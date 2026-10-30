@@ -11,7 +11,7 @@ import { HDSUpperController } from "../src/controller.js";
 import { runStandaloneHDSBrain } from "../src/standalone_harness.js";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v6";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v7";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const testDirectory = dirname(fileURLToPath(import.meta.url));
@@ -258,7 +258,7 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
     const projection = projected.projection;
     const projectionText = JSON.stringify(projection);
     expect(projection).toMatchObject({
-      schema_version: "blue-tanuki.hds-runtime-j-projection.v11",
+      schema_version: "blue-tanuki.hds-runtime-j-projection.v12",
       typescript_decision: "SUSPEND",
       typescript_policy_rule_id: "detector_lifecycle",
       typescript_policy_rule_axis: "self_health",

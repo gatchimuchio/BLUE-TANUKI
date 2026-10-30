@@ -309,14 +309,17 @@ describe("C07.02 and C07.03 Gateway owner L3 and private-M consumers", () => {
       ]);
       expect(memoryShadowEvents.slice(0, 2)).toEqual([
         expect.objectContaining({ comparison_kind: "memory_approval", comparison_status: "matched",
-          memory_revision_matches: true, memory_transition_matches: true, residual_status_matches: true,
+          memory_revision_matches: true, memory_transition_matches: true, memory_reference_review_matches: true,
+          residual_status_matches: true,
           used_for_authority: false, may_execute: false, m_written: false, effect_started: false }),
         expect.objectContaining({ comparison_kind: "memory_approval", comparison_status: "matched",
-          memory_revision_matches: true, memory_transition_matches: true, residual_status_matches: true,
+          memory_revision_matches: true, memory_transition_matches: true, memory_reference_review_matches: true,
+          residual_status_matches: true,
           used_for_authority: false, may_execute: false, m_written: false, effect_started: false }),
       ]);
       expect(memoryShadowEvents[2]).toMatchObject({ comparison_kind: "memory_approval", comparison_status: "matched",
         memory_revision_matches: true, memory_transition_matches: true,
+        memory_reference_review_matches: null,
         residual_status: "named_judgments_reassessed", residual_status_matches: true,
         used_for_authority: false, may_execute: false, m_written: false, effect_started: false });
       for (const event of memoryShadowEvents) {
@@ -732,9 +735,10 @@ async function waitForMemoryShadowEvents(gateway: CapturedProcess, expectedCount
         const separator = token.indexOf("=");
         return separator > 0 ? [[token.slice(0, separator), token.slice(separator + 1)]] : [];
       })) as Record<string, unknown>;
-      for (const name of ["memory_revision_matches", "memory_transition_matches", "residual_status_matches",
+      for (const name of ["memory_reference_review_matches", "memory_revision_matches", "memory_transition_matches", "residual_status_matches",
         "used_for_authority", "may_execute", "m_written", "effect_started"]) {
         if (fields[name] === "true" || fields[name] === "false") fields[name] = fields[name] === "true";
+        else if (fields[name] === "null") fields[name] = null;
       }
       for (const name of ["memory_revision_before", "memory_revision_after"]) {
         if (typeof fields[name] === "string" && /^\d+$/.test(fields[name] as string)) fields[name] = Number(fields[name]);

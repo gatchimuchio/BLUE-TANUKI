@@ -16,7 +16,7 @@ import type {
 import { classifyRuntimeKernelJPlanStepAdoption } from "@blue-tanuki/hds-brain";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v6";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v7";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const RESPONSE_TIMEOUT_MS = 1_000;
@@ -69,6 +69,7 @@ export type RuntimeKernelShadowObserverEvent =
     memory_application_status?: "applied" | "not_applied";
     memory_revision_before?: number | null;
     memory_revision_after?: number | null;
+    memory_reference_review_matches?: boolean | null;
     memory_revision_matches?: boolean | null;
     memory_transition_matches?: boolean;
     residual_status?: string;
@@ -105,18 +106,20 @@ function memoryTransitionReceiptIsConsistent(
     : null;
 
   if (transition.kind === "meaning_update_adoption") {
-    const reviewStatusIsValid = transition.reference_review_status === null ||
-      transition.reference_review_status === "prior_version_unverified" ||
-      transition.reference_review_status === "counterevidence_absence_unverified";
+    const reviewSummaryMatches = transition.reference_review === null
+      ? null : meaningUpdateReferenceReviewSummaryMatches(transition.reference_review);
+    const reviewStatusIsEligible = transition.reference_review?.review_status === "prior_version_unverified" ||
+      transition.reference_review?.review_status === "counterevidence_absence_unverified";
     const applicationMatches = transition.owner_verdict === "approve"
       ? transition.memory_application_status === "applied"
-        ? transition.reference_review_status !== null && transition.pending_reassessment_required_count !== null
-        : transition.memory_application_status === "not_applied" && reviewStatusIsValid &&
+        ? reviewStatusIsEligible && reviewSummaryMatches === true && transition.pending_reassessment_required_count !== null
+        : transition.memory_application_status === "not_applied" && reviewSummaryMatches !== false &&
           transition.pending_reassessment_required_count === null
       : transition.memory_application_status === "not_applied" &&
-        transition.reference_review_status === null &&
+        transition.reference_review === null &&
         transition.pending_reassessment_required_count === null;
     transitionMatches = applicationMatches &&
+      receipt.memory_reference_review_matches === reviewSummaryMatches &&
       transition.semantic_relation_status === "not_assessed" &&
       transition.follow_up_action_status === "unconfirmed" &&
       transition.used_for_authority === false && transition.may_execute === false;
@@ -143,6 +146,7 @@ function memoryTransitionReceiptIsConsistent(
         : transition.memory_application_status === "not_applied" && notAppliedCounts
       : transition.memory_application_status === "not_applied" && notAppliedCounts;
     transitionMatches = applicationMatches &&
+      receipt.memory_reference_review_matches === null &&
       transition.used_for_authority === false && transition.may_execute === false;
     residualStatus = transition.reassessed_judgment_count === transition.requested_judgment_count &&
       transition.remaining_reassessment_required_count === 0
@@ -156,6 +160,50 @@ function memoryTransitionReceiptIsConsistent(
     receipt.residual_status === residualStatus &&
     receipt.residual_status_matches === residualStatusMatches &&
     receipt.lifecycle_matches === (transitionMatches && memoryRevisionMatches !== false && residualStatusMatches);
+}
+
+function meaningUpdateReferenceReviewSummaryMatches(
+  review: NonNullable<Extract<RuntimeKernelJMemoryTransitionProjection, { kind: "meaning_update_adoption" }>["reference_review"]>,
+): boolean {
+  const supportCountsMatch = Number.isSafeInteger(review.supporting_reference_count) &&
+    review.supporting_reference_count >= 0 && review.supporting_reference_count <= 512 &&
+    Number.isSafeInteger(review.supporting_references_verified) &&
+    review.supporting_references_verified >= 0 &&
+    review.supporting_references_verified <= review.supporting_reference_count;
+  const counterevidenceCountsMatch = Number.isSafeInteger(review.counterevidence_reference_count) &&
+    review.counterevidence_reference_count >= 0 && review.counterevidence_reference_count <= 512 &&
+    Number.isSafeInteger(review.counterevidence_references_verified) &&
+    review.counterevidence_references_verified >= 0 &&
+    review.counterevidence_references_verified <= review.counterevidence_reference_count;
+  const claimMatches = review.counterevidence_claim_status === "references_verified"
+    ? review.counterevidence_references_verified === review.counterevidence_reference_count
+    : review.counterevidence_claim_status === "references_unverified"
+      ? review.counterevidence_references_verified < review.counterevidence_reference_count
+      : review.counterevidence_claim_status === "none_found_unverified" &&
+        review.counterevidence_reference_count === 0 && review.counterevidence_references_verified === 0;
+  const scopeMatches = review.scope_digests_verified ===
+    (review.applicability_scope_digest_matches_current && review.counterevidence_scope_digest_matches_current);
+  const statusMatches = review.review_status === "prior_version_unverified"
+    ? review.supporting_reference_count > 0 &&
+      review.supporting_references_verified === review.supporting_reference_count &&
+      review.counterevidence_reference_count > 0 &&
+      review.counterevidence_references_verified === review.counterevidence_reference_count &&
+      review.counterevidence_claim_status === "references_verified" &&
+      review.applicability_scope_matches_current && review.counterevidence_scope_matches_current &&
+      review.applicability_scope_digest_matches_current && review.counterevidence_scope_digest_matches_current &&
+      review.scope_digests_verified && review.target_reference_matches_current_projection &&
+      review.candidate_content_digest_status === "verified"
+    : review.review_status === "counterevidence_absence_unverified"
+      ? review.supporting_reference_count > 0 &&
+        review.supporting_references_verified === review.supporting_reference_count &&
+        review.counterevidence_reference_count === 0 && review.counterevidence_references_verified === 0 &&
+        review.counterevidence_claim_status === "none_found_unverified" &&
+        review.applicability_scope_matches_current && review.counterevidence_scope_matches_current &&
+        review.applicability_scope_digest_matches_current && review.counterevidence_scope_digest_matches_current &&
+        review.scope_digests_verified &&
+        (review.target_reference_matches_current_projection || review.candidate_content_digest_status === "unavailable")
+      : true;
+  return supportCountsMatch && counterevidenceCountsMatch && claimMatches && scopeMatches && statusMatches;
 }
 
 function planStepAdoptionReceiptIsConsistent(
@@ -447,10 +495,13 @@ export async function startRuntimeKernelShadowObserver(options: {
             !isShadowDecision(receipt.runtime_kernel_j_decision) || !isShadowRuleId(receipt.rule_id) ||
             (projection.memory_transition
               ? typeof receipt.memory_transition_matches !== "boolean" ||
+                (typeof receipt.memory_reference_review_matches !== "boolean" &&
+                  receipt.memory_reference_review_matches !== null) ||
                 typeof receipt.residual_status !== "string" ||
                 typeof receipt.residual_status_matches !== "boolean" ||
                 !memoryTransitionReceiptIsConsistent(projection.memory_transition, receipt)
               : receipt.memory_transition_kind !== null || receipt.memory_transition_matches !== null ||
+                receipt.memory_reference_review_matches !== null ||
                 receipt.memory_revision_matches !== null ||
                 receipt.residual_status !== null || receipt.residual_status_matches !== null) ||
             (receipt.rule_axis !== null && !isShadowAxis(receipt.rule_axis))) {
@@ -486,6 +537,7 @@ export async function startRuntimeKernelShadowObserver(options: {
             memory_application_status: projection.memory_transition.memory_application_status,
             memory_revision_before: projection.memory_transition.memory_revision_before,
             memory_revision_after: projection.memory_transition.memory_revision_after,
+            memory_reference_review_matches: receipt.memory_reference_review_matches as boolean | null,
             memory_revision_matches: receipt.memory_revision_matches as boolean | null,
             memory_transition_matches: receipt.memory_transition_matches as boolean,
             residual_status: receipt.residual_status as string,

@@ -21,6 +21,21 @@ import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const manifestPath = join(repositoryRoot, "packages", "hds-brain", "runtime-kernel-rust", "Cargo.toml");
+const priorVersionReview = {
+  review_status: "prior_version_unverified" as const,
+  supporting_reference_count: 1,
+  supporting_references_verified: 1,
+  counterevidence_reference_count: 1,
+  counterevidence_references_verified: 1,
+  applicability_scope_matches_current: true,
+  counterevidence_scope_matches_current: true,
+  applicability_scope_digest_matches_current: true,
+  counterevidence_scope_digest_matches_current: true,
+  counterevidence_claim_status: "references_verified" as const,
+  scope_digests_verified: true,
+  target_reference_matches_current_projection: true,
+  candidate_content_digest_status: "verified" as const,
+};
 
 describe("Gateway Runtime Kernel shadow observer", () => {
   beforeAll(() => {
@@ -152,7 +167,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       memory_application_status: "applied",
       memory_revision_before: 4,
       memory_revision_after: 5,
-      reference_review_status: "prior_version_unverified",
+      reference_review: priorVersionReview,
       pending_reassessment_required_count: 2,
     });
     const memoryReassessmentProjection = projectRuntimeKernelJMemoryTransition(firstProjectionResult, {
@@ -185,13 +200,13 @@ describe("Gateway Runtime Kernel shadow observer", () => {
     }> = [
       { input: { kind: "meaning_update_adoption", owner_verdict: "reject", memory_application_status: "not_applied",
         memory_revision_before: null, memory_revision_after: null,
-        reference_review_status: null, pending_reassessment_required_count: null }, residual_status: "adoption_rejected" },
+        reference_review: null, pending_reassessment_required_count: null }, residual_status: "adoption_rejected" },
       { input: { kind: "meaning_update_adoption", owner_verdict: "block", memory_application_status: "not_applied",
         memory_revision_before: null, memory_revision_after: null,
-        reference_review_status: null, pending_reassessment_required_count: null }, residual_status: "adoption_blocked" },
+        reference_review: null, pending_reassessment_required_count: null }, residual_status: "adoption_blocked" },
       { input: { kind: "meaning_update_adoption", owner_verdict: "approve", memory_application_status: "not_applied",
         memory_revision_before: null, memory_revision_after: null,
-        reference_review_status: "prior_version_unverified", pending_reassessment_required_count: null },
+        reference_review: priorVersionReview, pending_reassessment_required_count: null },
         residual_status: "adoption_approved_not_applied" },
       { input: { kind: "memory_judgment_reassessment", owner_verdict: "reject", memory_application_status: "not_applied",
         memory_revision_before: null, memory_revision_after: null,
@@ -207,7 +222,12 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         residual_status: "named_judgments_pending" },
       { input: { kind: "meaning_update_adoption", owner_verdict: "approve", memory_application_status: "applied",
         memory_revision_before: 4, memory_revision_after: 6,
-        reference_review_status: "prior_version_unverified", pending_reassessment_required_count: 2 },
+        reference_review: priorVersionReview, pending_reassessment_required_count: 2 },
+        residual_status: "meaning_unverified_with_reassessment_pending", comparison_status: "mismatched" },
+      { input: { kind: "meaning_update_adoption", owner_verdict: "approve", memory_application_status: "applied",
+        memory_revision_before: 4, memory_revision_after: 5,
+        reference_review: { ...priorVersionReview, supporting_references_verified: 0 },
+        pending_reassessment_required_count: 2 },
         residual_status: "meaning_unverified_with_reassessment_pending", comparison_status: "mismatched" },
     ];
     const additionalMemoryTransitionProjections = additionalMemoryTransitionCases.map(({ input, residual_status, comparison_status }) => {
@@ -347,6 +367,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       command_present: false,
       memory_transition_kind: "meaning_update_adoption",
       memory_transition_matches: true,
+      memory_reference_review_matches: true,
       residual_status: "meaning_unverified_with_reassessment_pending",
       memory_revision_matches: true,
       residual_status_matches: true,
@@ -360,6 +381,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       lifecycle_matches: true,
       memory_transition_kind: "memory_judgment_reassessment",
       memory_transition_matches: true,
+      memory_reference_review_matches: null,
       residual_status: "named_judgments_reassessed",
       memory_revision_matches: true,
       residual_status_matches: true,
@@ -373,6 +395,7 @@ describe("Gateway Runtime Kernel shadow observer", () => {
       lifecycle_matches: false,
       memory_transition_kind: "meaning_update_adoption",
       memory_transition_matches: true,
+      memory_reference_review_matches: true,
       residual_status: "meaning_unverified_with_reassessment_pending",
       memory_revision_matches: true,
       residual_status_matches: false,
@@ -395,6 +418,9 @@ describe("Gateway Runtime Kernel shadow observer", () => {
         memory_application_status: transition.memory_application_status,
         memory_revision_before: transition.memory_revision_before,
         memory_revision_after: transition.memory_revision_after,
+        memory_reference_review_matches: transition.kind === "meaning_update_adoption" && transition.reference_review !== null
+          ? transition.reference_review.supporting_references_verified ===
+            transition.reference_review.supporting_reference_count : null,
         memory_revision_matches: revisionMatches,
         memory_transition_matches: isMatched,
         residual_status,

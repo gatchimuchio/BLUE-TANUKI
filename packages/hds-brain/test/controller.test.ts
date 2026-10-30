@@ -856,7 +856,7 @@ describe("HDSUpperController.resume()", () => {
     expect(command).not.toBeNull();
     expect(runtime_kernel_j_projection.status).toBe("comparable");
     if (runtime_kernel_j_projection.status !== "comparable") throw new Error("resume projection unavailable");
-    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v11");
+    expect(runtime_kernel_j_projection.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v12");
     expect(runtime_kernel_j_projection.projection.typescript_decision).toBe("SUSPEND");
     expect(runtime_kernel_j_projection.projection.typescript_policy_rule_id).toBe("per_axis_suspend_below");
     expect(runtime_kernel_j_projection.projection.typescript_policy_rule_axis).toBe("input_validity");
@@ -877,22 +877,38 @@ describe("HDSUpperController.resume()", () => {
     const source = "synthetic decision content must remain private";
     const requestId = "r-memory-shadow-projection";
     const { log } = c.decide(inbound(source, requestId));
+    const referenceReview = {
+      review_status: "prior_version_unverified" as const,
+      supporting_reference_count: 1,
+      supporting_references_verified: 1,
+      counterevidence_reference_count: 1,
+      counterevidence_references_verified: 1,
+      applicability_scope_matches_current: true,
+      counterevidence_scope_matches_current: true,
+      applicability_scope_digest_matches_current: true,
+      counterevidence_scope_digest_matches_current: true,
+      counterevidence_claim_status: "references_verified" as const,
+      scope_digests_verified: true,
+      target_reference_matches_current_projection: true,
+      candidate_content_digest_status: "verified" as const,
+    };
     const adoption = c.runtimeKernelJMemoryTransitionProjection(log, {
       kind: "meaning_update_adoption",
       owner_verdict: "approve",
       memory_application_status: "applied",
       memory_revision_before: 1,
       memory_revision_after: 2,
-      reference_review_status: "prior_version_unverified",
+      reference_review: referenceReview,
       pending_reassessment_required_count: 2,
     });
     expect(adoption.status).toBe("comparable");
     if (adoption.status !== "comparable") throw new Error("memory adoption projection unavailable");
-    expect(adoption.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v11");
+    expect(adoption.projection.schema_version).toBe("blue-tanuki.hds-runtime-j-projection.v12");
     expect(adoption.projection.memory_transition).toMatchObject({
       kind: "meaning_update_adoption",
       memory_revision_before: 1,
       memory_revision_after: 2,
+      reference_review: referenceReview,
       semantic_relation_status: "not_assessed",
       pending_reassessment_required_count: 2,
       typescript_residual_status: "meaning_unverified_with_reassessment_pending",

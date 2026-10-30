@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v6";
-const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v11";
+const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v7";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v12";
 const J_PROJECTION_SCALE: i64 = 1_000_000;
 const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -51,6 +51,7 @@ struct JProjectionComparison {
     policy_rule_matches: bool,
     lifecycle_matches: bool,
     memory_transition_kind: Option<&'static str>,
+    memory_reference_review_matches: Option<bool>,
     memory_revision_matches: Option<bool>,
     memory_transition_matches: Option<bool>,
     residual_status: Option<&'static str>,
@@ -66,6 +67,7 @@ struct JPlanStepAdoptionComparison {
 struct JMemoryTransitionComparison {
     kind: &'static str,
     matches: bool,
+    reference_review_matches: Option<bool>,
     memory_revision_matches: Option<bool>,
     residual_status: &'static str,
     residual_status_matches: bool,
@@ -514,6 +516,7 @@ fn decision_payload(
         "policy_rule_matches": comparison.map(|result| result.policy_rule_matches),
         "lifecycle_matches": comparison.map(|result| result.lifecycle_matches),
         "memory_transition_kind": comparison.and_then(|result| result.memory_transition_kind),
+        "memory_reference_review_matches": comparison.and_then(|result| result.memory_reference_review_matches),
         "memory_revision_matches": comparison.and_then(|result| result.memory_revision_matches),
         "memory_transition_matches": comparison.and_then(|result| result.memory_transition_matches),
         "residual_status": comparison.and_then(|result| result.residual_status),
@@ -798,6 +801,7 @@ fn evaluate_runtime_kernel_j_projection(
             policy_rule_matches,
             lifecycle_matches,
             memory_transition_kind: Some(memory.kind),
+            memory_reference_review_matches: memory.reference_review_matches,
             memory_revision_matches: memory.memory_revision_matches,
             memory_transition_matches: Some(memory.matches),
             residual_status: Some(memory.residual_status),
@@ -832,6 +836,7 @@ fn evaluate_runtime_kernel_j_projection(
             policy_rule_matches,
             lifecycle_matches: true,
             memory_transition_kind: None,
+            memory_reference_review_matches: None,
             memory_revision_matches: None,
             memory_transition_matches: None,
             residual_status: None,
@@ -900,6 +905,7 @@ fn evaluate_runtime_kernel_j_projection(
         policy_rule_matches,
         lifecycle_matches,
         memory_transition_kind: None,
+        memory_reference_review_matches: None,
         memory_revision_matches: None,
         memory_transition_matches: None,
         residual_status: None,
@@ -1079,6 +1085,121 @@ fn compare_plan_step_adoption(value: &Value) -> Result<JPlanStepAdoptionComparis
     }
 }
 
+fn compare_meaning_update_reference_review(value: &Value) -> Result<(bool, bool), &'static str> {
+    const MAX_MEMORY_TRANSITION_COUNT: i64 = 512;
+    let object = value
+        .as_object()
+        .ok_or("projection_memory_transition_rejected")?;
+    if object.len() != 13 {
+        return Err("projection_memory_transition_rejected");
+    }
+    let review_status = string_value(object.get("review_status"))
+        .filter(|value| {
+            matches!(
+                *value,
+                "no_current_projection"
+                    | "current_m_unverified"
+                    | "evidence_version_mismatch"
+                    | "target_reference_unverified"
+                    | "target_reference_mismatch"
+                    | "prior_version_unverified"
+                    | "scope_reference_mismatch"
+                    | "scope_digest_mismatch"
+                    | "counterevidence_absence_unverified"
+                    | "references_verified_unadopted"
+            )
+        })
+        .ok_or("projection_memory_transition_rejected")?;
+    let count = |key: &str| {
+        integer_value(object.get(key))
+            .filter(|value| (0..=MAX_MEMORY_TRANSITION_COUNT).contains(value))
+    };
+    let supporting_count =
+        count("supporting_reference_count").ok_or("projection_memory_transition_rejected")?;
+    let supporting_verified =
+        count("supporting_references_verified").ok_or("projection_memory_transition_rejected")?;
+    let counterevidence_count =
+        count("counterevidence_reference_count").ok_or("projection_memory_transition_rejected")?;
+    let counterevidence_verified = count("counterevidence_references_verified")
+        .ok_or("projection_memory_transition_rejected")?;
+    let boolean = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_bool)
+            .ok_or("projection_memory_transition_rejected")
+    };
+    let applicability_scope_matches = boolean("applicability_scope_matches_current")?;
+    let counterevidence_scope_matches = boolean("counterevidence_scope_matches_current")?;
+    let applicability_scope_digest_matches = boolean("applicability_scope_digest_matches_current")?;
+    let counterevidence_scope_digest_matches =
+        boolean("counterevidence_scope_digest_matches_current")?;
+    let scope_digests_verified = boolean("scope_digests_verified")?;
+    let target_reference_matches = boolean("target_reference_matches_current_projection")?;
+    let counterevidence_claim_status = string_value(object.get("counterevidence_claim_status"))
+        .filter(|value| {
+            matches!(
+                *value,
+                "references_verified" | "references_unverified" | "none_found_unverified"
+            )
+        })
+        .ok_or("projection_memory_transition_rejected")?;
+    let candidate_content_digest_status =
+        string_value(object.get("candidate_content_digest_status"))
+            .filter(|value| matches!(*value, "verified" | "unavailable"))
+            .ok_or("projection_memory_transition_rejected")?;
+
+    let counts_match = supporting_verified <= supporting_count
+        && counterevidence_verified <= counterevidence_count;
+    let counterevidence_claim_matches = match counterevidence_claim_status {
+        "references_verified" => counterevidence_verified == counterevidence_count,
+        "references_unverified" => counterevidence_verified < counterevidence_count,
+        "none_found_unverified" => counterevidence_count == 0 && counterevidence_verified == 0,
+        _ => false,
+    };
+    let scope_projection_matches = scope_digests_verified
+        == (applicability_scope_digest_matches && counterevidence_scope_digest_matches);
+    let status_projection_matches = match review_status {
+        "prior_version_unverified" => {
+            supporting_count > 0
+                && supporting_verified == supporting_count
+                && counterevidence_count > 0
+                && counterevidence_verified == counterevidence_count
+                && counterevidence_claim_status == "references_verified"
+                && applicability_scope_matches
+                && counterevidence_scope_matches
+                && applicability_scope_digest_matches
+                && counterevidence_scope_digest_matches
+                && scope_digests_verified
+                && target_reference_matches
+                && candidate_content_digest_status == "verified"
+        }
+        "counterevidence_absence_unverified" => {
+            supporting_count > 0
+                && supporting_verified == supporting_count
+                && counterevidence_count == 0
+                && counterevidence_verified == 0
+                && counterevidence_claim_status == "none_found_unverified"
+                && applicability_scope_matches
+                && counterevidence_scope_matches
+                && applicability_scope_digest_matches
+                && counterevidence_scope_digest_matches
+                && scope_digests_verified
+                && (target_reference_matches || candidate_content_digest_status == "unavailable")
+        }
+        _ => true,
+    };
+    let matches = counts_match
+        && counterevidence_claim_matches
+        && scope_projection_matches
+        && status_projection_matches;
+    let eligible = matches
+        && matches!(
+            review_status,
+            "prior_version_unverified" | "counterevidence_absence_unverified"
+        );
+    Ok((matches, eligible))
+}
+
 fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionComparison, &'static str> {
     const MAX_MEMORY_TRANSITION_COUNT: i64 = 512;
     let object = value
@@ -1098,22 +1219,19 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                 .ok_or("projection_memory_transition_rejected")?;
             let memory_revision_matches =
                 compare_memory_revision_transition(object, application_status)?;
-            let reference_review_status = match object.get("reference_review_status") {
-                Some(Value::String(value))
-                    if matches!(
-                        value.as_str(),
-                        "prior_version_unverified" | "counterevidence_absence_unverified"
-                    ) =>
-                {
-                    Some(value.as_str())
-                }
-                Some(Value::Null)
-                    if owner_verdict != "approve" || application_status == "not_applied" =>
-                {
-                    None
-                }
-                _ => return Err("projection_memory_transition_rejected"),
-            };
+            let (reference_review_matches, reference_review_eligible) =
+                match object.get("reference_review") {
+                    Some(Value::Null)
+                        if owner_verdict != "approve" || application_status == "not_applied" =>
+                    {
+                        (None, None)
+                    }
+                    Some(value) => {
+                        let (matches, eligible) = compare_meaning_update_reference_review(value)?;
+                        (Some(matches), Some(eligible))
+                    }
+                    _ => return Err("projection_memory_transition_rejected"),
+                };
             let semantic_relation_status = string_value(object.get("semantic_relation_status"))
                 .filter(|value| matches!(*value, "not_assessed" | "assessed"))
                 .ok_or("projection_memory_transition_rejected")?;
@@ -1151,11 +1269,13 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
                 .ok_or("projection_memory_transition_rejected")?;
             let application_matches = match (owner_verdict, application_status) {
                 ("approve", "applied") => {
-                    pending_count.is_some() && reference_review_status.is_some()
+                    pending_count.is_some() && reference_review_eligible == Some(true)
                 }
-                ("approve", "not_applied") => pending_count.is_none(),
+                ("approve", "not_applied") => {
+                    pending_count.is_none() && reference_review_matches != Some(false)
+                }
                 ("reject" | "block", "not_applied") => {
-                    pending_count.is_none() && reference_review_status.is_none()
+                    pending_count.is_none() && reference_review_matches.is_none()
                 }
                 _ => false,
             };
@@ -1181,6 +1301,7 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
             Ok(JMemoryTransitionComparison {
                 kind: "meaning_update_adoption",
                 matches: transition_matches,
+                reference_review_matches,
                 memory_revision_matches,
                 residual_status: expected_residual_status,
                 residual_status_matches,
@@ -1247,6 +1368,7 @@ fn compare_memory_transition(value: &Value) -> Result<JMemoryTransitionCompariso
             Ok(JMemoryTransitionComparison {
                 kind: "memory_judgment_reassessment",
                 matches: transition_matches,
+                reference_review_matches: None,
                 memory_revision_matches,
                 residual_status: expected_residual_status,
                 residual_status_matches,
@@ -1747,13 +1869,28 @@ mod tests {
 
     #[test]
     fn memory_transition_shadow_compares_the_m_receipt_revision() {
+        let reference_review = json!({
+            "review_status": "prior_version_unverified",
+            "supporting_reference_count": 1,
+            "supporting_references_verified": 1,
+            "counterevidence_reference_count": 1,
+            "counterevidence_references_verified": 1,
+            "applicability_scope_matches_current": true,
+            "counterevidence_scope_matches_current": true,
+            "applicability_scope_digest_matches_current": true,
+            "counterevidence_scope_digest_matches_current": true,
+            "counterevidence_claim_status": "references_verified",
+            "scope_digests_verified": true,
+            "target_reference_matches_current_projection": true,
+            "candidate_content_digest_status": "verified"
+        });
         let projection = json!({
             "kind": "meaning_update_adoption",
             "owner_verdict": "approve",
             "memory_application_status": "applied",
             "memory_revision_before": 4,
             "memory_revision_after": 5,
-            "reference_review_status": "prior_version_unverified",
+            "reference_review": reference_review.clone(),
             "semantic_relation_status": "not_assessed",
             "follow_up_action_status": "unconfirmed",
             "pending_reassessment_required_count": 2,
@@ -1763,16 +1900,24 @@ mod tests {
         });
         let matched = compare_memory_transition(&projection).expect("valid M revision transition");
         assert_eq!(matched.memory_revision_matches, Some(true));
+        assert_eq!(matched.reference_review_matches, Some(true));
         assert!(matched.matches);
         assert!(matched.residual_status_matches);
 
-        let mut skipped_revision = projection;
+        let mut skipped_revision = projection.clone();
         skipped_revision["memory_revision_after"] = json!(6);
         let mismatched =
             compare_memory_transition(&skipped_revision).expect("well-formed revision gap");
         assert_eq!(mismatched.memory_revision_matches, Some(false));
         assert!(!mismatched.matches);
         assert!(mismatched.residual_status_matches);
+
+        let mut inconsistent_review = projection;
+        inconsistent_review["reference_review"]["supporting_references_verified"] = json!(0);
+        let mismatched_review = compare_memory_transition(&inconsistent_review)
+            .expect("well-formed but inconsistent reference review counts");
+        assert_eq!(mismatched_review.reference_review_matches, Some(false));
+        assert!(!mismatched_review.matches);
     }
 
     #[test]
@@ -1783,7 +1928,7 @@ mod tests {
             "memory_application_status": "not_applied",
             "memory_revision_before": null,
             "memory_revision_after": null,
-            "reference_review_status": null,
+            "reference_review": null,
             "semantic_relation_status": "not_assessed",
             "follow_up_action_status": "unconfirmed",
             "pending_reassessment_required_count": null,
