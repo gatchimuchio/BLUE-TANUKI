@@ -78,6 +78,7 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
         reason: "shadow_projection_matched",
         decision: "hold",
         comparison_status: "matched",
+        purpose_binding_matches: null,
         policy_decision_matches: true,
         policy_rule_matches: true,
         typescript_decision: hdsResult.decision,
@@ -236,7 +237,7 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
     }
   }, 120_000);
 
-  it("Rust shadowは目的版とgoal identity digestの不一致を拒否し正本を更新しない", async () => {
+  it("Rust shadowは目的版・goal identity digestの不一致を比較残差として返し正本を更新しない", async () => {
     const key = randomBytes(32);
     const sessionId = randomUUID();
     const hdsResult = runStandaloneHDSBrain({
@@ -263,6 +264,8 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
         accepted_for_shadow: true,
         reason: "shadow_projection_matched",
         decision: "hold",
+        comparison_status: "matched",
+        purpose_binding_matches: true,
         goal_id: goalId,
         goal_version: 7,
         shadow_revision: 1,
@@ -276,12 +279,32 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
       await process.send(signFrame(makeDecisionRequest(sessionId, 2, 1, projectionText, goalId, 8), key));
       const mismatch = verifyFrame(await process.nextFrame(), key);
       expect(mismatch.payload).toMatchObject({
-        accepted_for_shadow: false,
-        reason: "projection_goal_binding_mismatch",
+        accepted_for_shadow: true,
+        reason: "shadow_projection_mismatched",
         decision: "hold",
+        comparison_status: "mismatched",
+        purpose_binding_matches: false,
+        policy_decision_matches: true,
         goal_id: goalId,
         goal_version: 8,
-        shadow_revision: 1,
+        shadow_revision: 2,
+        effect_started: false,
+        m_written: false,
+        may_execute: false,
+      });
+
+      const differentGoalId = `goal-${"c".repeat(64)}`;
+      await process.send(signFrame(makeDecisionRequest(sessionId, 3, 2, projectionText, differentGoalId, 7), key));
+      const identityMismatch = verifyFrame(await process.nextFrame(), key);
+      expect(identityMismatch.payload).toMatchObject({
+        accepted_for_shadow: true,
+        reason: "shadow_projection_mismatched",
+        decision: "hold",
+        comparison_status: "mismatched",
+        purpose_binding_matches: false,
+        goal_id: differentGoalId,
+        goal_version: 7,
+        shadow_revision: 3,
         effect_started: false,
         m_written: false,
         may_execute: false,
@@ -291,7 +314,7 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
         protocol_version: IPC_VERSION,
         direction: "parent_to_kernel",
         session_id: sessionId,
-        sequence: 3,
+        sequence: 4,
         message_kind: "shutdown",
         payload: {},
       }, key));

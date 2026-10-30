@@ -43,6 +43,7 @@ struct JProjectionComparison {
     rule_id: &'static str,
     rule_axis: Option<String>,
     matches: bool,
+    purpose_binding_matches: Option<bool>,
     policy_decision_matches: bool,
     policy_rule_matches: bool,
     lifecycle_matches: bool,
@@ -470,6 +471,7 @@ fn decision_payload(
         "rule_id": comparison.map(|result| result.rule_id),
         "rule_axis": comparison.and_then(|result| result.rule_axis.as_deref()),
         "policy_decision_matches": comparison.map(|result| result.policy_decision_matches),
+        "purpose_binding_matches": comparison.map(|result| result.purpose_binding_matches),
         "policy_rule_matches": comparison.map(|result| result.policy_rule_matches),
         "lifecycle_matches": comparison.map(|result| result.lifecycle_matches),
         "memory_transition_kind": comparison.and_then(|result| result.memory_transition_kind),
@@ -508,8 +510,8 @@ fn evaluate_runtime_kernel_j_projection(
     let purpose_binding = object
         .get("purpose_binding")
         .ok_or("projection_purpose_binding_rejected")?;
-    match purpose_binding {
-        Value::Null => {}
+    let purpose_binding_matches = match purpose_binding {
+        Value::Null => None,
         Value::Object(binding) => {
             if binding.len() != 3 {
                 return Err("projection_purpose_binding_rejected");
@@ -524,12 +526,10 @@ fn evaluate_runtime_kernel_j_projection(
                 .filter(|value| is_lowercase_sha256(value))
                 .ok_or("projection_purpose_binding_rejected")?;
             let expected_goal_id = format!("goal-{goal_id_digest}");
-            if purpose_version != request_goal_version || request_goal_id != expected_goal_id {
-                return Err("projection_goal_binding_mismatch");
-            }
+            Some(purpose_version == request_goal_version && request_goal_id == expected_goal_id)
         }
         _ => return Err("projection_purpose_binding_rejected"),
-    }
+    };
     let policy_typescript_decision = string_value(object.get("typescript_decision"))
         .filter(|value| is_shadow_decision(value))
         .ok_or("projection_decision_rejected")?
@@ -642,7 +642,11 @@ fn evaluate_runtime_kernel_j_projection(
             runtime_kernel_j_decision,
             rule_id: "memory_approval_transition",
             rule_axis: None,
-            matches: policy_decision_matches && policy_rule_matches && lifecycle_matches,
+            matches: purpose_binding_matches.unwrap_or(true)
+                && policy_decision_matches
+                && policy_rule_matches
+                && lifecycle_matches,
+            purpose_binding_matches,
             policy_decision_matches,
             policy_rule_matches,
             lifecycle_matches,
@@ -661,7 +665,10 @@ fn evaluate_runtime_kernel_j_projection(
             runtime_kernel_j_decision,
             rule_id,
             rule_axis,
-            matches: policy_decision_matches && policy_rule_matches,
+            matches: purpose_binding_matches.unwrap_or(true)
+                && policy_decision_matches
+                && policy_rule_matches,
+            purpose_binding_matches,
             policy_decision_matches,
             policy_rule_matches,
             lifecycle_matches: true,
@@ -713,7 +720,11 @@ fn evaluate_runtime_kernel_j_projection(
         runtime_kernel_j_decision,
         rule_id: "human_resume_transition",
         rule_axis: None,
-        matches: policy_decision_matches && policy_rule_matches && lifecycle_matches,
+        matches: purpose_binding_matches.unwrap_or(true)
+            && policy_decision_matches
+            && policy_rule_matches
+            && lifecycle_matches,
+        purpose_binding_matches,
         policy_decision_matches,
         policy_rule_matches,
         lifecycle_matches,

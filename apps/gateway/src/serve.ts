@@ -5095,6 +5095,7 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           comparison_kind: event.comparison_kind,
           comparison_status: event.comparison_status,
           policy_decision_matches: event.policy_decision_matches,
+          purpose_binding_matches: event.purpose_binding_matches,
           policy_rule_matches: event.policy_rule_matches,
           lifecycle_matches: event.lifecycle_matches,
           typescript_decision: event.typescript_decision,

@@ -46,6 +46,7 @@ export type RuntimeKernelShadowObserverEvent =
     comparison_kind: "decision" | "resume" | "memory_approval";
     comparison_status: "matched" | "mismatched";
     policy_decision_matches: boolean;
+    purpose_binding_matches: boolean | null;
     policy_rule_matches: boolean;
     lifecycle_matches: boolean;
     typescript_decision: ShadowDecision;
@@ -258,13 +259,19 @@ export async function startRuntimeKernelShadowObserver(options: {
         const comparisonStatus = receipt.reason === "shadow_projection_matched"
           ? "matched"
           : receipt.reason === "shadow_projection_mismatched" ? "mismatched" : undefined;
+        const purposeBindingMatches: boolean | null | undefined = purposeBinding
+          ? typeof receipt.purpose_binding_matches === "boolean" ? receipt.purpose_binding_matches : undefined
+          : receipt.purpose_binding_matches === null ? null : undefined;
         const expectedComparisonStatus = receipt.policy_decision_matches === true &&
-          receipt.policy_rule_matches === true && receipt.lifecycle_matches === true ? "matched" : "mismatched";
+          (purposeBindingMatches === true || purposeBindingMatches === null) &&
+          receipt.policy_rule_matches === true &&
+          receipt.lifecycle_matches === true ? "matched" : "mismatched";
         if (receipt.accepted_for_shadow !== true || comparisonStatus === undefined ||
             receipt.comparison_status !== comparisonStatus ||
             comparisonStatus !== expectedComparisonStatus ||
             receipt.comparison_kind !== comparisonKind ||
             typeof receipt.policy_decision_matches !== "boolean" ||
+            purposeBindingMatches === undefined ||
             typeof receipt.policy_rule_matches !== "boolean" ||
             typeof receipt.lifecycle_matches !== "boolean" ||
             receipt.goal_id !== goalId || receipt.goal_version !== goalVersion ||
@@ -296,6 +303,7 @@ export async function startRuntimeKernelShadowObserver(options: {
           comparison_kind: comparisonKind,
           comparison_status: comparisonStatus,
           policy_decision_matches: receipt.policy_decision_matches,
+          purpose_binding_matches: purposeBindingMatches,
           policy_rule_matches: receipt.policy_rule_matches,
           lifecycle_matches: receipt.lifecycle_matches,
           typescript_decision: typescriptDecision,
