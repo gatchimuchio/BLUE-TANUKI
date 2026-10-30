@@ -126,6 +126,7 @@ import {
   createDefaultDetectorRegistry,
 } from "./detectors/index.js";
 import { DEFAULT_POLICY, determineCandidateAdoptionDisposition, validatePolicy } from "./policy.js";
+import { projectRuntimeKernelJDecision, type RuntimeKernelJProjectionResult } from "./runtime_kernel_j_projection.js";
 import { assessCandidateGoalCriteria, digestGoalCriteriaValue } from "./candidate_criteria.js";
 import { assessSkepticalReview, invalidSkepticalReviewTrace } from "./skeptical_review.js";
 import {
@@ -921,6 +922,15 @@ export class HDSUpperController {
       ...STANDALONE_SELF_HEALTH_DEFAULTS,
       ...(opts.self_health ?? {}),
     };
+  }
+
+  /** Return a sanitized, non-authoritative projection for the Rust shadow observer. */
+  runtimeKernelJProjection(log: DecisionLog): RuntimeKernelJProjectionResult {
+    try {
+      return projectRuntimeKernelJDecision(log, this.policy);
+    } catch {
+      return { status: "not_comparable", reason: "projection_error" };
+    }
   }
 
   /**

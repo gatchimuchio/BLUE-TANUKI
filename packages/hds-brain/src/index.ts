@@ -64,6 +64,14 @@ export {
 export { model } from "./model.js";
 export { commit } from "./commit.js";
 export {
+  projectRuntimeKernelJDecision,
+  type RuntimeKernelJAxisProjection,
+  type RuntimeKernelJProjection,
+  type RuntimeKernelJProjectionResult,
+  type RuntimeKernelJProjectionUnavailableReason,
+  type RuntimeKernelJThresholdProjection,
+} from "./runtime_kernel_j_projection.js";
+export {
   AuditLog,
   type AuditEntry,
   type AuditOptions,

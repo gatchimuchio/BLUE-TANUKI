@@ -6,13 +6,13 @@
 
 製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`は未成立、QE_QC／QE_QAは未開始。Windows-firstを維持し、最終対象はWindows／Linux／macOS／Android／iOSの5OS。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラの別repo変更、P13 owner公開GOは保留する。
 
-## 次のBUILD_BATCH
+## 現在のBUILD_BATCH
 
 K-B0／K-B1で現行入口、通常・復旧writer、I-01対象guard、I-03 main appから通常Computeへのbudget設定を照合・接続した。E2E-01とK-B2では、合成仕事のC→J→L3→M→次task再評価を限定接続し、meaning-update専用J/Mを7-store復旧経路へ接続した。これらは部分経路の証拠であり、製品全体の結合形状を示さない。
 
 K-B3ではC候補評価を`meaning_update_candidate.ts`、承認済み候補からM record／interpretationを作る純粋処理を`meaning_update_semantics.ts`へ、解釈JSON正規化・検査・content digestを`memory_interpretation_semantics.ts`へ分離した。今回、引用レビューからM解釈依存を組み立て、現在Mと検証済み監査履歴から再評価候補を導出する意味処理を`memory_judgment_reassessment_candidate.ts`へ移した。controllerが監査・現在Mを取得し、Approval Gate／L3／監査書込／J-M writerはTypeScript HDS-BRAINに残る。HDS focused 3 files／5 tests、HDS typecheck/build/standalone、Gateway typecheck/buildはPASS。Gateway process smokeは前バッチでhealth readyに至らず統合実行未確認。今回の抽出で新しい利用者仕事や全体`SYSTEM_SHAPED`／`BUILD_COVERED`は成立しない。K-B3全体の責任抽出完了、C08.03、OD-03、他repo変更、P13 GOは未成立／保留。
 
-現在のBUILD_BATCHはK-B4。TypeScript `runStandaloneHDSBrain()`の合成判断要約をRustの独立processへ送り、HMAC認証canonical IPCのrequest→hold decision→shadow receiptを実往復した。Rustはsequence／revision／期限／budget／digestを検査し、重複・古いrevision・期限切れを拒否、署名改ざんをfail-closed停止する。effectとM正本書込みはない。`cargo test --locked` 2/2、実process Vitest 2/2、HDS typecheck、format、metadataはPASS。これはfixtureを使ったK-B4 prototypeの`WIRED`であり、通常Gateway requestからの起動・旧TypeScript判断との意味比較は未接続。製品runtimeの`RUST_SHADOW_WIRED`、`SYSTEM_SHAPED`／`BUILD_COVERED`、cutoverは未成立。次は`apps/gateway/src/serve.ts`の通常inbound HDS decision producerからshadow processへの安全な非権威接続を進める。現行TypeScript HDS-BRAINを唯一のauthority／writerに保ち、C08.03、OD-03、他repo変更、P13 GOを保留する。
+K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続を行った。現行BUILD_BATCHはK-B5の限定J projection比較である。HDS controllerはTypeScript commitのdecision・reason・triggered thresholdを通常policy評価と照合し、同じ出所と確認できる場合だけscore／weight／lifecycle／thresholdを固定小数点化してRustへ渡す。Rustはpolicy順序を独立評価し、TypeScriptとの一致／不一致とruleを非権威receiptに記録する。通常Gateway処理の返り値、Approval、実行、M writerには接続しない。合成4分岐の一致、Rust IPC receipt、要求拒否・安全停止、HDS／Gateway typecheck、Rust testは対象範囲でPASS。controller override、安全に表現できないpolicy値、固定小数点の判断境界付近は比較対象外にする。Rustは常に`hold`であり作用権限・M writerを持たない。K-B5全体の目的版・停止／復帰・owner memory approval・残差の比較、`RUST_SHADOW_WIRED`、single-writer cutover、製品全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QAは未成立。C08.03、OD-03、他repo変更、P13 GOも保留。次consumerは同じ合成系列に目的版・停止／復帰・owner memory approval・残差の比較材料を接続すること。
 
 ## 維持する境界
 

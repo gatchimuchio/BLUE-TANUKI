@@ -6,9 +6,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseBoundaryExchangeAtBoundary } from "@blue-tanuki/protocol";
+import type {
+  RuntimeKernelJProjectionResult,
+  RuntimeKernelJProjectionUnavailableReason,
+} from "@blue-tanuki/hds-brain";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v1";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v2";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const RESPONSE_TIMEOUT_MS = 1_000;
@@ -17,13 +21,33 @@ const MAX_PENDING_OBSERVATIONS = 8;
 type JsonObject = Record<string, unknown>;
 
 export interface RuntimeKernelShadowObservation {
-  decision: "ASSERT" | "SUSPEND" | "OUT_OF_SCOPE" | "FAIL";
+  j_projection: RuntimeKernelJProjectionResult;
   command_present: boolean;
 }
 
+type ShadowDecision = "ASSERT" | "SUSPEND" | "OUT_OF_SCOPE" | "FAIL";
+type ShadowRuleId =
+  | "detector_lifecycle"
+  | "per_axis_fail"
+  | "per_axis_suspend_below"
+  | "out_of_scope_below"
+  | "aggregate_assert"
+  | "default_suspend";
+
 export type RuntimeKernelShadowObserverEvent =
   | { kind: "ready" }
-  | { kind: "observation"; sequence: number; shadow_revision: number }
+  | {
+    kind: "observation";
+    sequence: number;
+    shadow_revision: number;
+    comparison_status: "matched" | "mismatched";
+    typescript_decision: ShadowDecision;
+    runtime_kernel_j_decision: ShadowDecision;
+    rule_id: ShadowRuleId;
+    rule_axis?: string;
+    command_present: boolean;
+  }
+  | { kind: "comparison_unavailable"; reason: RuntimeKernelJProjectionUnavailableReason }
   | { kind: "dropped"; reason: "queue_full" }
   | { kind: "disabled" | "stopped"; reason: "binary_missing" | "startup_failed" | "ipc_exchange_failed" | "production_environment" };
 
@@ -150,6 +174,11 @@ export async function startRuntimeKernelShadowObserver(options: {
 
   const enqueueObservation = (observation: RuntimeKernelShadowObservation): void => {
     if (!accepting || failed) return;
+    if (observation.j_projection.status !== "comparable") {
+      emit({ kind: "comparison_unavailable", reason: observation.j_projection.reason });
+      return;
+    }
+    const projection = observation.j_projection.projection;
     if (pending >= MAX_PENDING_OBSERVATIONS) {
       emit({ kind: "dropped", reason: "queue_full" });
       return;
@@ -158,13 +187,9 @@ export async function startRuntimeKernelShadowObserver(options: {
     queue = queue.then(async () => {
       if (failed) return;
       const nextSequence = sequence + 1;
-      const inputText = JSON.stringify({
-        source: "typescript_hds_brain",
-        decision: observation.decision,
-        command_present: observation.command_present,
-        memory_used_for_authority: false,
-        complete_history_used_for_authority: false,
-      });
+      let inputText: string;
+      try { inputText = JSON.stringify(projection); }
+      catch { await fail(); return; }
       const inputBytes = Buffer.byteLength(inputText, "utf8");
       if (inputBytes > 65_536) {
         await fail();
@@ -194,15 +219,32 @@ export async function startRuntimeKernelShadowObserver(options: {
         const receipt = verifyResponse(
           await readFrame(RESPONSE_TIMEOUT_MS), key, sessionId, nextSequence, "decision_result",
         );
-        if (receipt.accepted_for_shadow !== true || receipt.reason !== "shadow_observed" ||
+        const comparisonStatus = receipt.reason === "shadow_projection_matched"
+          ? "matched"
+          : receipt.reason === "shadow_projection_mismatched" ? "mismatched" : undefined;
+        if (receipt.accepted_for_shadow !== true || comparisonStatus === undefined ||
+            receipt.comparison_status !== comparisonStatus ||
             receipt.decision !== "hold" || receipt.shadow_revision !== revision + 1 ||
             receipt.memory_revision !== 0 || receipt.effect_started !== false || receipt.m_written !== false ||
-            receipt.used_for_authority !== false || receipt.may_execute !== false) {
+            receipt.used_for_authority !== false || receipt.may_execute !== false ||
+            receipt.typescript_decision !== projection.typescript_decision ||
+            !isShadowDecision(receipt.runtime_kernel_j_decision) || !isShadowRuleId(receipt.rule_id) ||
+            (receipt.rule_axis !== null && !isShadowAxis(receipt.rule_axis))) {
           throw new Error("invalid_shadow_receipt");
         }
         sequence = nextSequence;
         revision = receipt.shadow_revision as number;
-        emit({ kind: "observation", sequence, shadow_revision: revision });
+        emit({
+          kind: "observation",
+          sequence,
+          shadow_revision: revision,
+          comparison_status: comparisonStatus,
+          typescript_decision: projection.typescript_decision,
+          runtime_kernel_j_decision: receipt.runtime_kernel_j_decision,
+          rule_id: receipt.rule_id,
+          ...(typeof receipt.rule_axis === "string" ? { rule_axis: receipt.rule_axis } : {}),
+          command_present: observation.command_present,
+        });
       } catch {
         await fail();
       }
@@ -329,6 +371,19 @@ function canonicalBoundaryJson(value: unknown): string {
 
 function isObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isShadowDecision(value: unknown): value is ShadowDecision {
+  return value === "ASSERT" || value === "SUSPEND" || value === "OUT_OF_SCOPE" || value === "FAIL";
+}
+
+function isShadowRuleId(value: unknown): value is ShadowRuleId {
+  return value === "detector_lifecycle" || value === "per_axis_fail" || value === "per_axis_suspend_below" ||
+    value === "out_of_scope_below" || value === "aggregate_assert" || value === "default_suspend";
+}
+
+function isShadowAxis(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(value);
 }
 
 async function writeFrame(child: ChildProcessWithoutNullStreams, frame: string): Promise<void> {

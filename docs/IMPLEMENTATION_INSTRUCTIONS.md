@@ -24,9 +24,19 @@ K-B3のmeaning-update／引用再評価経路では、C候補評価を`meaning_u
 
 コード上、Gatewayのno-store content reviewからL3承認、同一proposal／candidate／target／source-observation digestの再照合、M適用、最終監査markerまでの既存接続を維持した。HDS 3 files／5 tests、HDS typecheck/build、HDS standalone smoke、Gateway typecheck/buildはPASS。`pnpm docs:check`はこの記録更新後に実行する。Gateway meaning-update process smokeは前バッチで起動後15秒以内にhealthへ到達せず、統合実行の証拠は未成立のまま。今回の経路抽出は既存責任境界の整理であり、新しい利用者仕事や製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を成立させない。K-B3全体の抽出完了は未確定、QE_QC／QE_QAは未開始。
 
-K-B4のRust最小核はWindowsでcompile／testされ、HMAC認証付きcanonical IPC、sequence／expected revision／期限／budget／digest検査、no-effect hold receipt、専用shadow SQLite記録を実プロセスで往復した。通常Gateway inboundのhds.decide後から、BLUE_TANUKI_RUNTIME_KERNEL_SHADOW_ENABLED=trueかつNODE_ENVがproductionでない開発環境に限り、判断種別・command有無・非権威flagだけを送るobserverを接続した。raw入力、command内容、credential、request identityは渡さず、child環境変数もOS必須項目と一時IPC値に限定する。HMAC署名・canonical responseを検証し、shadow receiptがhold／無作用／M未書込を示す場合だけ観測成功として記録する。Rustの起動・IPC失敗・queue上限は現在のTypeScript判断やGateway処理を変更しない。Rustは依然holdを返すだけで、TS/Rust意味判断比較とRust側J意味処理は未接続。Rust shadowは作用もM正本も持たない。局所test・typecheck／buildがPASSしても製品全体SYSTEM_SHAPED／BUILD_COVERED、RUST_SHADOW_CUTOVER、QE_QC／QE_QAは成立しない。C08.03実provider・OD-03・他repo書込み・P13公開GOは保留する。次consumerはRust側の限定J projectionとTS結果を同一合成系列で比較する接続。
+K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威接続まで成立した。今回のactive batchはK-B5の限定J projection比較であり、K-B5全体の完了ではない。
 
-旧Jの現writerは確認なしに二重化・移管しない。C08.03実provider、OD-03 live外部作用、D4-Pocket／ミニドラ別repo変更、P13公開・出荷GOは保留する。試験用一仕事は製品全体の`SYSTEM_SHAPED`／`BUILD_COVERED`を自動成立させず、限定testを全suiteや実機の成功へ転記しない。
+### Active batch: K-B5 — 同一合成系列のJ採否比較
+
+- **目的:** 現行TypeScript HDS-BRAINのpolicy採否をauthorityとして維持したまま、Rust Runtime Kernelが同じscore／weight／thresholdから独立に算出するJ projectionと比較する。
+- **producer／consumer:** `HDSUpperController.decide()`後にcontroller内のpolicy評価出所を照合し、有限な固定小数点projectionを作る。通常Gateway inboundの既存shadow observerからRust processへ渡し、Rustの比較receiptをGatewayの非権威ログへ返す。
+- **入力・出力:** 軸名、score、weight、lifecycle状態、policy閾値、TypeScript採否だけを送る。raw入力、detector evidence、command、credential、request identity、M内容は送らない。Rust receiptの操作上の`decision`は常に`hold`で、比較採否は参考値のみ。
+- **対象単位:** 同一合成系列でASSERT／FAIL／SUSPEND／OUT_OF_SCOPEの比較を接続する。軸／閾値を安全に表現できない場合、policy外controller override、または固定小数点化の判断境界付近は`not_comparable`として送らず、既存Gateway判断へ影響させない。
+- **継続条件:** Rust shadowは作用権限・M正本writerを持たない。Rust起動・IPC失敗・queue上限・比較不一致はTypeScript authorityへ反映しない。比較不一致は観測し、原因を次の施工へ渡す。
+- **この単位で未接続:** 実目的の版照合、停止／復帰判断、owner memory approval、残差を含むJ/M全体比較、およびsingle-writer cutover。C08.03実provider・OD-03 live外部作用・他repo書込み・P13公開／出荷GOも保留する。
+- **必要最小確認:** HDS／Gateway typecheck・build、Rust compile／test、Rust実processを通す合成4分岐、IPC拒否・無作用停止。全workspace suite・QE_QC／QE_QA・実provider・実外部作用・5OS実機の成功へ転記しない。
+
+K-B5の次consumerは、同じ合成系列に実目的版・停止／復帰・owner memory approval・残差の比較材料を接続すること。システム全体の`SYSTEM_SHAPED`／`BUILD_COVERED`、`RUST_SHADOW_CUTOVER`、QE_QC／QE_QAは未成立のまま扱う。
 
 ## Gitと復旧
 

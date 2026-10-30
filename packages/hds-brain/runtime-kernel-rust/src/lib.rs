@@ -5,13 +5,17 @@ use hmac::{Hmac, KeyInit, Mac};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
 
 const IPC_VERSION: &str = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v1";
+const REQUEST_CONTRACT_VERSION: &str = "blue-tanuki.runtime-kernel-request.v2";
+const J_PROJECTION_SCHEMA_VERSION: &str = "blue-tanuki.hds-runtime-j-projection.v1";
+const J_PROJECTION_SCALE: i64 = 1_000_000;
+const MAX_J_PROJECTION_AXES: usize = 128;
 const MAX_FRAME_BYTES: usize = 1_048_576;
 const MAX_INPUT_BYTES: usize = 65_536;
 const MAX_TTL_MILLIS: i64 = 300_000;
@@ -28,6 +32,14 @@ struct AuthenticatedMessage {
 struct Response {
     payload: Value,
     stop_after_reply: bool,
+}
+
+struct JProjectionComparison {
+    typescript_decision: String,
+    runtime_kernel_j_decision: &'static str,
+    rule_id: &'static str,
+    rule_axis: Option<String>,
+    matches: bool,
 }
 
 pub fn run() -> Result<(), &'static str> {
@@ -244,21 +256,51 @@ fn process_message(
     let (accepted, reason, payload, next_revision, stop_after_reply) =
         match message.message_kind.as_str() {
             "decision_request" => {
-                let reason = validate_decision_request(&message.payload, revision);
-                let accepted = reason.is_none();
-                let next_revision = if accepted {
-                    revision.saturating_add(1)
+                if let Some(reason) = validate_decision_request(&message.payload, revision) {
+                    (
+                        false,
+                        reason,
+                        decision_payload(&message.payload, reason, revision, None),
+                        revision,
+                        false,
+                    )
                 } else {
-                    revision
-                };
-                let reason = reason.unwrap_or("shadow_observed");
-                (
-                    accepted,
-                    reason,
-                    decision_payload(&message.payload, reason, next_revision),
-                    next_revision,
-                    false,
-                )
+                    let input_text = message
+                        .payload
+                        .as_object()
+                        .and_then(|object| object.get("input_text"))
+                        .and_then(Value::as_str)
+                        .ok_or("validated_input_missing")?;
+                    match evaluate_runtime_kernel_j_projection(input_text) {
+                        Ok(comparison) => {
+                            let reason = if comparison.matches {
+                                "shadow_projection_matched"
+                            } else {
+                                "shadow_projection_mismatched"
+                            };
+                            let next_revision = revision.saturating_add(1);
+                            (
+                                true,
+                                reason,
+                                decision_payload(
+                                    &message.payload,
+                                    reason,
+                                    next_revision,
+                                    Some(&comparison),
+                                ),
+                                next_revision,
+                                false,
+                            )
+                        }
+                        Err(reason) => (
+                            false,
+                            reason,
+                            decision_payload(&message.payload, reason, revision, None),
+                            revision,
+                            false,
+                        ),
+                    }
+                }
             }
             "shutdown" => (
                 true,
@@ -280,7 +322,7 @@ fn process_message(
             _ => (
                 false,
                 "unsupported_message_kind",
-                decision_payload(&Value::Null, "unsupported_message_kind", revision),
+                decision_payload(&Value::Null, "unsupported_message_kind", revision, None),
                 revision,
                 false,
             ),
@@ -370,10 +412,19 @@ fn validate_decision_request(payload: &Value, current_revision: i64) -> Option<&
     None
 }
 
-fn decision_payload(payload: &Value, reason: &str, shadow_revision: i64) -> Value {
+fn decision_payload(
+    payload: &Value,
+    reason: &str,
+    shadow_revision: i64,
+    comparison: Option<&JProjectionComparison>,
+) -> Value {
     let object = payload.as_object();
+    let accepted = matches!(
+        reason,
+        "shadow_projection_matched" | "shadow_projection_mismatched"
+    );
     json!({
-        "accepted_for_shadow": reason == "shadow_observed",
+        "accepted_for_shadow": accepted,
         "reason": reason,
         "decision": "hold",
         "source_id": object.and_then(|value| value.get("source_id")).and_then(Value::as_str),
@@ -385,12 +436,181 @@ fn decision_payload(payload: &Value, reason: &str, shadow_revision: i64) -> Valu
         "expires_at_utc": object.and_then(|value| value.get("expires_at_utc")).and_then(Value::as_str),
         "expected_revision": object.and_then(|value| value.get("expected_revision")).and_then(Value::as_i64),
         "shadow_revision": shadow_revision,
+        "comparison_status": comparison.map(|result| if result.matches { "matched" } else { "mismatched" }),
+        "typescript_decision": comparison.map(|result| result.typescript_decision.as_str()),
+        "runtime_kernel_j_decision": comparison.map(|result| result.runtime_kernel_j_decision),
+        "rule_id": comparison.map(|result| result.rule_id),
+        "rule_axis": comparison.and_then(|result| result.rule_axis.as_deref()),
         "memory_revision": 0,
         "effect_started": false,
         "m_written": false,
         "used_for_authority": false,
         "may_execute": false
     })
+}
+
+fn evaluate_runtime_kernel_j_projection(
+    input_text: &str,
+) -> Result<JProjectionComparison, &'static str> {
+    let projection: Value =
+        serde_json::from_str(input_text).map_err(|_| "projection_json_rejected")?;
+    let object = projection.as_object().ok_or("projection_shape_rejected")?;
+    if object.len() != 4
+        || string_value(object.get("schema_version")) != Some(J_PROJECTION_SCHEMA_VERSION)
+    {
+        return Err("projection_schema_rejected");
+    }
+    let typescript_decision = string_value(object.get("typescript_decision"))
+        .filter(|value| is_shadow_decision(value))
+        .ok_or("projection_decision_rejected")?
+        .to_owned();
+
+    let axes = object
+        .get("axes")
+        .and_then(Value::as_array)
+        .ok_or("projection_axes_rejected")?;
+    if axes.is_empty() || axes.len() > MAX_J_PROJECTION_AXES {
+        return Err("projection_axes_rejected");
+    }
+    let mut axis_scores: HashMap<String, (i64, bool)> = HashMap::new();
+    let mut lifecycle_axis = None;
+    let mut weighted_sum = 0_i128;
+    let mut weight_total = 0_i128;
+    for axis_value in axes {
+        let axis_object = axis_value.as_object().ok_or("projection_axis_rejected")?;
+        if axis_object.len() != 4 {
+            return Err("projection_axis_rejected");
+        }
+        let axis = string_value(axis_object.get("axis")).ok_or("projection_axis_rejected")?;
+        if !valid_axis_identifier(axis) {
+            return Err("projection_axis_rejected");
+        }
+        let score = integer_value(axis_object.get("score_micros"))
+            .filter(|value| (0..=J_PROJECTION_SCALE).contains(value))
+            .ok_or("projection_score_rejected")?;
+        let weight = integer_value(axis_object.get("weight_micros"))
+            .filter(|value| (0..=1_000_000_000).contains(value))
+            .ok_or("projection_weight_rejected")?;
+        let lifecycle_ok = axis_object
+            .get("lifecycle_ok")
+            .and_then(Value::as_bool)
+            .ok_or("projection_lifecycle_rejected")?;
+        if !lifecycle_ok && lifecycle_axis.is_none() {
+            lifecycle_axis = Some(axis.to_owned());
+        }
+        axis_scores.insert(axis.to_owned(), (score, lifecycle_ok));
+        weighted_sum += i128::from(score) * i128::from(weight);
+        weight_total += i128::from(weight);
+    }
+
+    let thresholds = object
+        .get("thresholds")
+        .and_then(Value::as_object)
+        .ok_or("projection_thresholds_rejected")?;
+    if thresholds.len() != 4 {
+        return Err("projection_thresholds_rejected");
+    }
+    let aggregate_assert = projection_threshold(thresholds.get("aggregate_assert_micros"))
+        .ok_or("projection_thresholds_rejected")?;
+    let out_of_scope_below = projection_threshold(thresholds.get("out_of_scope_below_micros"))
+        .ok_or("projection_thresholds_rejected")?;
+    let per_axis_fail = parse_projection_thresholds(thresholds.get("per_axis_fail"))?;
+    let per_axis_suspend_below =
+        parse_projection_thresholds(thresholds.get("per_axis_suspend_below"))?;
+
+    let (runtime_kernel_j_decision, rule_id, rule_axis) = if let Some(axis) = lifecycle_axis {
+        ("SUSPEND", "detector_lifecycle", Some(axis))
+    } else if let Some(axis) = first_threshold_match(&per_axis_fail, &axis_scores, true) {
+        ("FAIL", "per_axis_fail", Some(axis))
+    } else if let Some(axis) = first_threshold_match(&per_axis_suspend_below, &axis_scores, false) {
+        ("SUSPEND", "per_axis_suspend_below", Some(axis))
+    } else {
+        let aggregate_below_out_of_scope = if weight_total == 0 {
+            0 < out_of_scope_below
+        } else {
+            weighted_sum < i128::from(out_of_scope_below) * weight_total
+        };
+        let aggregate_asserted = if weight_total == 0 {
+            0 >= aggregate_assert
+        } else {
+            weighted_sum >= i128::from(aggregate_assert) * weight_total
+        };
+        if aggregate_below_out_of_scope {
+            ("OUT_OF_SCOPE", "out_of_scope_below", None)
+        } else if aggregate_asserted {
+            ("ASSERT", "aggregate_assert", None)
+        } else {
+            ("SUSPEND", "default_suspend", None)
+        }
+    };
+
+    Ok(JProjectionComparison {
+        matches: typescript_decision == runtime_kernel_j_decision,
+        typescript_decision,
+        runtime_kernel_j_decision,
+        rule_id,
+        rule_axis,
+    })
+}
+
+fn parse_projection_thresholds(value: Option<&Value>) -> Result<Vec<(String, i64)>, &'static str> {
+    let values = value
+        .and_then(Value::as_array)
+        .ok_or("projection_thresholds_rejected")?;
+    if values.len() > MAX_J_PROJECTION_AXES {
+        return Err("projection_thresholds_rejected");
+    }
+    let mut seen = HashSet::new();
+    let mut result = Vec::with_capacity(values.len());
+    for entry in values {
+        let object = entry.as_object().ok_or("projection_thresholds_rejected")?;
+        if object.len() != 2 {
+            return Err("projection_thresholds_rejected");
+        }
+        let axis = string_value(object.get("axis")).ok_or("projection_thresholds_rejected")?;
+        if !valid_axis_identifier(axis) || !seen.insert(axis.to_owned()) {
+            return Err("projection_thresholds_rejected");
+        }
+        let threshold = projection_threshold(object.get("threshold_micros"))
+            .ok_or("projection_thresholds_rejected")?;
+        result.push((axis.to_owned(), threshold));
+    }
+    Ok(result)
+}
+
+fn projection_threshold(value: Option<&Value>) -> Option<i64> {
+    integer_value(value)
+        .filter(|value| (-J_PROJECTION_SCALE..=2 * J_PROJECTION_SCALE).contains(value))
+}
+
+fn first_threshold_match(
+    thresholds: &[(String, i64)],
+    scores: &HashMap<String, (i64, bool)>,
+    inclusive: bool,
+) -> Option<String> {
+    thresholds.iter().find_map(|(axis, threshold)| {
+        let (score, _) = scores.get(axis)?;
+        let matched = if inclusive {
+            score <= threshold
+        } else {
+            score < threshold
+        };
+        matched.then(|| axis.clone())
+    })
+}
+
+fn valid_axis_identifier(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_alphabetic()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'.' | b'-'))
+}
+
+fn is_shadow_decision(value: &str) -> bool {
+    matches!(value, "ASSERT" | "SUSPEND" | "OUT_OF_SCOPE" | "FAIL")
 }
 
 fn rejected_response(reason: &str, revision: i64, extra: Value) -> Response {

@@ -10,7 +10,7 @@ import { parseBoundaryExchangeAtBoundary } from "@blue-tanuki/protocol";
 import { runStandaloneHDSBrain } from "../src/standalone_harness.js";
 
 const IPC_VERSION = "blue-tanuki.runtime-kernel-ipc.v1";
-const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v1";
+const REQUEST_CONTRACT_VERSION = "blue-tanuki.runtime-kernel-request.v2";
 const SCHEMA_VERSION = "blue-tanuki.boundary-exchange.v1";
 const CANONICALIZATION_VERSION = "blue-tanuki.jcs-safe-integer.v1";
 const testDirectory = dirname(fileURLToPath(import.meta.url));
@@ -49,14 +49,9 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
       user: "synthetic-owner",
       content: rawInput,
     });
-    const shadowObservation = JSON.stringify({
-      source: "typescript_hds_brain",
-      decision: hdsResult.decision,
-      command_type: hdsResult.command_type ?? null,
-      audit_chain_valid: hdsResult.audit_chain_valid,
-      memory_used_for_authority: hdsResult.memory_used_for_authority,
-      complete_history_used_for_authority: hdsResult.complete_history_used_for_authority,
-    });
+    expect(hdsResult.runtime_kernel_j_projection.status).toBe("comparable");
+    if (hdsResult.runtime_kernel_j_projection.status !== "comparable") throw new Error("synthetic J projection unavailable");
+    const shadowObservation = JSON.stringify(hdsResult.runtime_kernel_j_projection.projection);
     expect(hdsResult.audit_chain_valid).toBe(true);
     expect(shadowObservation).not.toContain(rawInput);
     const process = startKernel(key, sessionId);
@@ -79,8 +74,11 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
       expect(first.sequence).toBe(1);
       expect(first.payload).toMatchObject({
         accepted_for_shadow: true,
-        reason: "shadow_observed",
+        reason: "shadow_projection_matched",
         decision: "hold",
+        comparison_status: "matched",
+        typescript_decision: hdsResult.decision,
+        runtime_kernel_j_decision: hdsResult.decision,
         content_digest: createHash("sha256").update(shadowObservation, "utf8").digest("hex"),
         shadow_revision: 1,
         memory_revision: 0,
@@ -123,18 +121,43 @@ describe("Rust Runtime Kernelの無作用shadow IPC", () => {
       const second = verifyFrame(await process.nextFrame(), key);
       expect(second.payload).toMatchObject({
         accepted_for_shadow: true,
-        reason: "shadow_observed",
+        reason: "shadow_projection_matched",
+        comparison_status: "matched",
+        typescript_decision: hdsResult.decision,
+        runtime_kernel_j_decision: hdsResult.decision,
         shadow_revision: 2,
         memory_revision: 0,
         effect_started: false,
         m_written: false,
       });
 
+      const mismatchedDecision = hdsResult.decision === "ASSERT" ? "SUSPEND" : "ASSERT";
+      const mismatchedObservation = JSON.stringify({
+        ...hdsResult.runtime_kernel_j_projection.projection,
+        typescript_decision: mismatchedDecision,
+      });
+      await process.send(signFrame(makeDecisionRequest(sessionId, 5, 2, mismatchedObservation), key));
+      const mismatch = verifyFrame(await process.nextFrame(), key);
+      expect(mismatch.payload).toMatchObject({
+        accepted_for_shadow: true,
+        reason: "shadow_projection_mismatched",
+        decision: "hold",
+        comparison_status: "mismatched",
+        typescript_decision: mismatchedDecision,
+        runtime_kernel_j_decision: hdsResult.decision,
+        shadow_revision: 3,
+        memory_revision: 0,
+        effect_started: false,
+        m_written: false,
+        used_for_authority: false,
+        may_execute: false,
+      });
+
       await process.send(signFrame({
         protocol_version: IPC_VERSION,
         direction: "parent_to_kernel",
         session_id: sessionId,
-        sequence: 5,
+        sequence: 6,
         message_kind: "shutdown",
         payload: {},
       }, key));

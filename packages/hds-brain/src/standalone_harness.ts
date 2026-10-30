@@ -1,4 +1,5 @@
 import type { InboundRequest } from "@blue-tanuki/protocol";
+import type { PolicyConfig } from "./types.js";
 import { AuditLog } from "./audit.js";
 import { HDSUpperController, type HDSRuntimeSnapshot } from "./controller.js";
 import {
@@ -13,6 +14,7 @@ import {
   type HDSBrainHealth,
   type HDSBrainHealthOptions,
 } from "./health.js";
+import type { RuntimeKernelJProjectionResult } from "./runtime_kernel_j_projection.js";
 
 export interface StandaloneHDSBrainInput {
   id: string;
@@ -21,6 +23,8 @@ export interface StandaloneHDSBrainInput {
   content: string;
   timestamp?: number;
   metadata?: InboundRequest["metadata"];
+  /** In-memory synthetic-test policy variation; never persisted or used by Gateway. */
+  policy?: PolicyConfig;
 }
 
 export interface StandaloneHDSBrainResult {
@@ -35,6 +39,7 @@ export interface StandaloneHDSBrainResult {
   audit_chain_valid: boolean;
   memory_used_for_authority: false;
   complete_history_used_for_authority: false;
+  runtime_kernel_j_projection: RuntimeKernelJProjectionResult;
   invariants: HDSRuntimeSnapshot["invariants"];
   runtime_invariants: HDSRuntimeSnapshot["runtime_invariants"];
   runtime_snapshot: HDSRuntimeSnapshot;
@@ -52,7 +57,7 @@ export function runStandaloneHDSBrain(
   input: StandaloneHDSBrainInput,
 ): StandaloneHDSBrainResult {
   const audit = new AuditLog();
-  const controller = new HDSUpperController({ audit });
+  const controller = new HDSUpperController({ audit, ...(input.policy ? { policy: input.policy } : {}) });
   const req: InboundRequest = {
     id: input.id,
     channel: input.channel,
@@ -86,6 +91,7 @@ export function runStandaloneHDSBrain(
     audit_chain_valid: audit.verify(),
     memory_used_for_authority: false,
     complete_history_used_for_authority: false,
+    runtime_kernel_j_projection: controller.runtimeKernelJProjection(log),
     invariants: runtime_snapshot.invariants,
     runtime_invariants: runtime_snapshot.runtime_invariants,
     runtime_snapshot,

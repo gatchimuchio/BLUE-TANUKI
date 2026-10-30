@@ -4820,8 +4820,8 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
       ? { transient_content: "document_organization" }
       : undefined);
     runtimeKernelShadowObserver?.observe({
-      decision: log.commit.decision,
-      command_present: command !== undefined,
+      j_projection: hds.runtimeKernelJProjection(log),
+      command_present: command !== null,
     });
     recordCompleteHistory({
       kind: "hds_decision",
@@ -5067,14 +5067,22 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
           memory_writer: false,
         });
       } else if (event.kind === "observation") {
-        gatewayLog.info("Runtime Kernel shadow receipt", {
+        gatewayLog.info("Runtime Kernel shadow J comparison", {
           sequence: event.sequence,
           shadow_revision: event.shadow_revision,
+          comparison_status: event.comparison_status,
+          typescript_decision: event.typescript_decision,
+          runtime_kernel_j_decision: event.runtime_kernel_j_decision,
+          rule_id: event.rule_id,
+          rule_axis: event.rule_axis,
+          command_present: event.command_present,
           effect_started: false,
           m_written: false,
           used_for_authority: false,
           may_execute: false,
         });
+      } else if (event.kind === "comparison_unavailable") {
+        gatewayLog.info("Runtime Kernel shadow comparison unavailable", { reason: event.reason });
       } else if (event.kind === "dropped") {
         gatewayLog.warn("Runtime Kernel shadow observation dropped", { reason: event.reason });
       } else {
