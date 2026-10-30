@@ -791,8 +791,12 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const replyTo = typeof body?.user === "string" ? body.user.trim() : "";
       const task = typeof body?.task === "string" ? body.task.trim() : "";
       const goalRef = typeof body?.goal_ref === "string" ? body.goal_ref : "";
+      const hasPurposeVersion = body !== null && Object.prototype.hasOwnProperty.call(body, "purpose_version");
+      const requestedPurposeVersion = body?.purpose_version;
       if (!replyTo || replyTo.length > 200 || !task || task.length > 20_000 || !isWellFormedUnicode(task) ||
-          !/^goal_[a-f0-9]{16,64}$/.test(goalRef)) {
+          !/^goal_[a-f0-9]{16,64}$/.test(goalRef) ||
+          (hasPurposeVersion && (typeof requestedPurposeVersion !== "number" ||
+            !Number.isSafeInteger(requestedPurposeVersion) || requestedPurposeVersion < 2))) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_input" }));
         return;
@@ -804,6 +808,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         if (!goal) {
           res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
           res.end(JSON.stringify({ accepted: false, status: "delegated_task_purpose_unavailable" }));
+          return;
+        }
+        if (hasPurposeVersion && goal.purpose_version !== requestedPurposeVersion) {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ accepted: false, status: "delegated_task_purpose_changed" }));
           return;
         }
         const requestId = randomUUID();

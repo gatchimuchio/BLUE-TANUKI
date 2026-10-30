@@ -44,6 +44,8 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 続くobserver consumer差分では、plan step adoptionのRust receiptとTypeScript分類が一致したかを`plan_step_adoption_classification_agrees`へ独立出力し、両実装が同じ不採用判定を返した状態と分類差を運転ログで区別可能にする。値は非権威であり、HDS判断・実行・M書込みは変更しない。typecheck/build/docs検査を実施し、test・Rust実processは未実施（NOT_RUN）。K-B5全体比較・cutover・製品全体BUILDは継続する。
 
+2026-10-31のBUILD差分では、WebChat Control Centerが読み込んだ委任目的の`purpose_version`を仕事送信時に渡し、Gatewayが現行版と照合するproducer→consumer接続を追加した。版不一致は仕事をHDSへ投入する前に409で止め、目的の再読込を案内する。目的digest・本文はUIへ出さず、旧API呼出しの版省略も互換維持する。channel-webchat typecheck、生成Control Center scriptの構文解析、`git diff --check`はPASS。test／process smoke／実providerはNOT_RUN。K-B5全体、製品全体BUILD、QC／QA、cutoverの完了根拠にはしない。
+
 ## 維持する境界
 
 独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。内部三点セット・原典・全要求対応表はPublic Gitへ転載しない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。

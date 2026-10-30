@@ -572,6 +572,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               typeof goal.purpose_preview !== "string" || goal.purpose_preview.length > 500) return;
           const option = new Option(goal.goal_ref + " · v" + goal.purpose_version + " · " + goal.purpose_preview,
             goal.goal_ref);
+          option.dataset.purposeVersion = String(goal.purpose_version);
           select.add(option);
         });
         status.textContent = goals.length ? "現在の委任目的を読み込みました" : "利用できる委任目的がありません";
@@ -582,7 +583,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
         const task = byId("owner-task-intent").value.trim();
-        const goalRef = byId("owner-task-goal-ref").value;
+        const goalSelect = byId("owner-task-goal-ref");
+        const goalRef = goalSelect.value;
+        const purposeVersion = Number(goalSelect.selectedOptions[0]?.dataset.purposeVersion);
         const replyTo = byId("chat-user").value.trim() || "owner";
         const status = byId("owner-task-status");
         if (!ownerToken) throw new Error("owner tokenを入力してください");
@@ -590,7 +593,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("返信を受け取るため、WebChatへ接続してから仕事を開始してください");
         }
         if (!task || !goalRef) throw new Error("計画する仕事の内容と現在の委任目的を指定してください");
-        const result = await postJson("/owner/task-compute", ownerToken, { user: replyTo, task, goal_ref: goalRef });
+        if (!Number.isSafeInteger(purposeVersion) || purposeVersion < 2) {
+          throw new Error("委任目的を再読み込みして選び直してください");
+        }
+        const result = await postJson("/owner/task-compute", ownerToken, {
+          user: replyTo, task, goal_ref: goalRef, purpose_version: purposeVersion
+        });
         ownerTokenInput.value = "";
         byId("owner-task-intent").value = "";
         appendChat("owner", task);
@@ -4697,8 +4705,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("submit-owner-task").addEventListener("click", function () {
         submitOwnerTask().catch(function (error) {
           const status = byId("owner-task-status");
-          status.textContent = error.message || "仕事を送信できませんでした";
-          status.className = "badge bad";
+          const stalePurpose = typeof error?.message === "string" &&
+            error.message.includes("/owner/task-compute failed: HTTP 409");
+          status.textContent = stalePurpose
+            ? "委任目的が更新または利用不可です。再読み込みして選び直してください。仕事は送信されていません。"
+            : error.message || "仕事を送信できませんでした";
+          status.className = stalePurpose ? "badge warn" : "badge bad";
           byId("owner-task-token").value = "";
         });
       });
