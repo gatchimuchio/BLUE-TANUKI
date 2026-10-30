@@ -68,6 +68,8 @@ K-B4で通常Gateway inboundから開発専用Rust shadow processへの非権威
 
 今回、Gateway observerの比較結果でcommand有無の不一致をRust receiptの`lifecycle_matches`へ混在させていた意味上の混同を解消した。実際のlifecycle一致を独立して保持し、`command_presence_matches`を別項目として通常ログへ出す。不一致時の総合statusは`mismatched`のまま、HDS authority・command実行・Rustの`hold`／no-effect／no-M-writeに影響しない。合成入力で意図的なcommand有無不一致を実Rust processに通し、二軸が分離されることを確認した。Gateway typecheckと対象observer試験（5 tests）、`git diff --check`はPASS。全workspace suite、実provider・外部作用、QE_QC／QE_QA、5OS実機は未実施。K-B5全体比較・single-writer cutover・製品全体BUILDは継続。
 
+今回、ownerがapproveした後に非常停止が有効でM適用されなかったmeaning adoption／judgment reassessmentを、同じRust shadow observerへ接続した。M未適用・revision不変を投影し、引用判断再評価はrequested全件を残存として投影する。owner verdictは実際のapproveを保ち、停止理由をownerのblockへ誤分類しない。HDS TypeScriptが権限・唯一M writerであること、非常停止、再承認要求は変更していない。Gateway typecheck／buildはPASS。行動testと実process確認はNOT_RUNのため、動作実証は未成立。K-B5全体意味比較・cutover・製品全体BUILDは継続する。
+
 ## Gitと復旧
 
 main一本・単一writer・通常Windows開発を維持する。意味あるbatch終端で対象を限定してcommit／pushし、remote HEADと復旧refを照合する。local復旧branch二世代は`codex/backup-main`／`codex/backup-main-prev`、remote backup tag二世代は同名tagを使う。保護対象untrackedや他writerの差分をreset／clean／上書きで消さない。GitHub Actionsは現行`AGENTS.md`の許可条件だけで手動利用する。

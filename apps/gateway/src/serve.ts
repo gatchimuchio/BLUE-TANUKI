@@ -2585,6 +2585,39 @@ async function serveWithOwnerLease(ownerLease: GatewayRuntimeOwnerLease): Promis
         approval_token_expires_at_ms: issued?.expires_at_ms,
         emergency_stop_reason: emergencyStop.reason,
       });
+      if (pending.meaning_update_proposal) {
+        const current = hds.getMeaningUpdateProposalForOwnerReview(
+          pending.meaning_update_proposal.source_command_id,
+        );
+        runtimeKernelShadowObserver?.observe({
+          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+            kind: "meaning_update_adoption",
+            owner_verdict: "approve",
+            memory_application_status: "not_applied",
+            memory_revision_before: null,
+            memory_revision_after: null,
+            reference_review: current?.reference_review ?? null,
+            pending_reassessment_required_count: null,
+          }),
+          command_present: false,
+        });
+      }
+      if (pending.memory_judgment_reassessment_proposal) {
+        const requestedCount = pending.memory_judgment_reassessment_proposal.reassesses_judgment_refs.length;
+        runtimeKernelShadowObserver?.observe({
+          j_projection: hds.runtimeKernelJMemoryTransitionProjection(pending.log, {
+            kind: "memory_judgment_reassessment",
+            owner_verdict: "approve",
+            memory_application_status: "not_applied",
+            memory_revision_before: null,
+            memory_revision_after: null,
+            requested_judgment_count: requestedCount,
+            reassessed_judgment_count: 0,
+            remaining_reassessment_required_count: requestedCount,
+          }),
+          command_present: false,
+        });
+      }
       await dispatcher.dispatch({
         ...replyPayload(pending.origin, `[emergency-stop-active] command_id=${command_id} approval=approve executed=false pending=true next_action=Clear emergency stop only after reviewing the stop reason, then reload approvals for a fresh token.`),
       }, {
